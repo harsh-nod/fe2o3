@@ -5,15 +5,21 @@
 This is a fail-closed executor foundation. It does not yet authorize a parity
 promotion.
 
-`scripts/parity-oci-executor.py` currently implements three operations:
+The repository executor currently exposes three explicitly non-authoritative
+test operations:
 
-- `verify` authenticates a candidate request against a profile selected by a
-  protected policy.
-- `plan` stages, validates, emits, and then destroys an audit-only exact OCI
-  container creation plan. Its printed staging paths cannot be executed later.
-- `preflight` compares bounded host, Docker daemon, and loaded-image
+- `test-verify` validates test-domain inputs without granting plan authority.
+- `test-plan` stages and validates an audit-only OCI creation plan, destroys
+  both leases, and only then emits content digests and logical identifiers.
+- `test-preflight` compares bounded host, Docker daemon, and loaded-image
   observations with the protected profile. These observations are not a full
   daemon/runtime closure.
+
+Production operation exists only behind a separately installed, root-owned
+`/usr/libexec/fe2o3-oci-operator`. That launcher has `verify`, `plan`, and
+`preflight` commands, but accepts only a request ID. It loads all trust inputs
+from fixed operator configuration. Running the repository launcher directly
+fails closed, and the current host has no valid production installation.
 
 There is intentionally no `run` operation and no execution receipt. The V2
 promotion parser continues to accept only shell queue schema 3, whose closure
@@ -28,9 +34,12 @@ assertion, a successful preflight, or a signed copy of candidate data.
 The implementation has separate immutable states:
 
 ```text
-candidate Request
+fixed immutable operator config + external config digest
     |
-    | external operator anchor pins policy identity/path/size/digest/owner
+    | pins policy identity/path/size/digest/owner and queue trust
+    v
+candidate Request selected by fixed-inbox request ID
+    |
     | protected policy selects exact profile path, size, and digest
     v
 AuthorizedRequest
@@ -64,11 +73,43 @@ profile_count                       1
 profile  0000  mi300x-gfx942-v1  profiles/mi300x-gfx942-v1.tsv  SIZE  SHA256
 ```
 
-Tabs separate fields. Policy contents are not their own trust anchor. Every
-operation requires an external policy identity, relative path, exact byte size,
-SHA-256 digest, expected UID/GID, file contract, request UID/GID, and signed
-queue-authorization digest. These values must come from the protected operator
-invocation, not the candidate request or the policy being opened.
+Tabs separate fields. Policy contents are not their own trust anchor.
+Production trust is not accepted from CLI arguments, environment variables,
+the request, or the policy being opened. The fixed launcher reads the canonical
+root-owned directory `/etc/fe2o3/oci-executor`, containing
+`operator-v1.tsv` and the separate `operator-v1.sha256` digest provision. Every
+directory component must be root-owned and non-group/world writable. Both files
+must additionally be single-link regular files with the Linux immutable flag.
+The provisioned digest must exactly bind the configuration before any policy
+field is used.
+
+The operator configuration schema is:
+
+```text
+oci_operator_config_schema_version  1
+config_id                           mi300x-gfx942-production-v1
+trusted_root                        /etc/fe2o3/oci-executor/trust
+policy_path                         policy.tsv
+policy_identity                     mi300x-production-policy-v1
+policy_size                         SIZE
+policy_sha256                       SHA256
+trusted_owner_uid                   0
+trusted_owner_gid                   0
+trust_file_contract                 linux-immutable
+inbox_root                          /var/lib/fe2o3/oci-inbox
+inbox_owner_uid                     0
+inbox_owner_gid                     0
+request_owner_uid                   DEDICATED_UID
+request_owner_gid                   DEDICATED_GID
+queue_trust_sha256                  SHA256
+```
+
+The production launcher accepts only `COMMAND --request-id 64_HEX`, then opens
+`REQUEST_ID.tsv` within that fixed inbox by descriptor. The configuration pins
+the external policy identity, relative path, exact byte size, SHA-256 digest,
+expected UID/GID, immutable-file contract, request UID/GID, and queue trust
+digest. Test CLI trust flags are visibly prefixed `--test-`, require test-domain
+data, and can only produce `test-non-authoritative` state.
 
 The trusted root is opened once with `O_DIRECTORY|O_NOFOLLOW`, checked against
 the externally configured owner and non-group/world-writable mode, and retained
@@ -82,11 +123,11 @@ must match before and after the read.
 The test-only `descriptor-stable` contract provides descriptor pinning and
 race detection; it does not establish filesystem immutability. A production
 policy additionally requires the externally selected `linux-immutable`
-contract, and both policy and profile descriptors must report
-`FS_IMMUTABLE_FL`. This code does not claim that ancestors above the opened
-trusted root are protected. Production deployment must separately establish
-the operator launcher's path and mount trust. A candidate may name a profile
-ID but cannot supply the protected operator anchor.
+contract, and the config provision, config, policy, profile, installed launcher,
+and installed executor descriptors must report `FS_IMMUTABLE_FL`. The fixed
+launcher and executor must be root-owned, single-link, non-writable files at
+their exact `/usr/libexec` paths. A candidate may name a profile ID but cannot
+supply any protected operator anchor.
 
 The repository contains no production policy or profile.
 
@@ -120,8 +161,13 @@ The protected profile binds all of the following:
 
 The OCI validator follows `index -> manifest -> config/layers`, validates every
 referenced blob by size and SHA-256, validates the config rootfs diff IDs, and
-requires Linux/amd64. JSON depth, node count, strings, descriptors, counts, and
-numeric sizes are bounded. Preflight observes whether the Docker daemon reports
+requires Linux/amd64. The layout marker, index, manifest, and config are each
+opened once through an `O_NOFOLLOW|O_NONBLOCK` descriptor walk. Their regular
+file type, owner, mode, link count, size, and complete identity are checked
+before and after a bounded `MAX+1` read; FIFOs, devices, symlinks, oversized
+metadata, and replacement races fail closed. JSON depth, node count, strings,
+descriptors, counts, and numeric sizes are bounded. Preflight observes whether
+the Docker daemon reports
 the same config digest, repository manifest digest, platform, diff IDs, and
 empty inherited environment, no declared volumes, and no healthcheck. It does
 not claim to measure the complete daemon,
@@ -185,10 +231,15 @@ can still outlive the command. Git object enumeration and blob payloads have
 additional file-count, directory-count, index, per-file, and aggregate byte
 limits.
 
+All descriptor closes, path resolution, staging finalization, and filesystem
+cleanup failures are normalized to controlled executor errors. Grouped closes
+attempt every descriptor, and a cleanup failure is appended to rather than
+replacing the primary failure. The command entrypoints also contain residual
+`OSError` as a single bounded stderr line without a traceback.
+
 ## Fixed OCI Plan
 
-`plan` emits each argument as canonical hex-encoded ASCII. The protected plan
-uses:
+The protected plan constructs the following Docker arguments internally:
 
 - `--network none`;
 - `--pull=never` and `--no-healthcheck`;
@@ -218,12 +269,18 @@ The runtime control socket is never mounted. The plan never uses
 capabilities, a writable root, or a host output bind.
 
 The emitted plan is an audit artifact, not authority for another process to
-execute later. The future `run` operation must authorize, stage, preflight,
-create, stream, and clean up in one process while retaining all safe
-descriptors and the queue lock. Reopening printed paths in a later process is
-not an accepted integration path. Accordingly, `plan` removes its source and
-output leases before returning; every printed host staging path is deliberately
-nonexistent by the time a caller receives it.
+execute later. It contains only logical IDs, bounded counts, content digests,
+and a domain-separated digest of the complete internal Docker argument vector.
+It contains no Docker arguments, container name, staging path, mount source,
+lease nonce, or output path. The future `run` operation must authorize, stage,
+preflight, create, stream, and clean up in one process while retaining all safe
+descriptors and the queue lock. Reopening plan data in a later process is not an
+accepted integration path.
+
+`plan` first removes both exact source and output leases, fsyncs their parent
+roots, and verifies by descriptor that both lease names are absent. Only after
+all of those operations succeed does it perform one bounded stdout write. A
+cleanup, close, verification, or output failure emits no successful plan.
 
 Source and output staging roots are independently locked while a lease exists.
 Each dedicated root has a protected entry quota, and source bytes, files, and
@@ -294,11 +351,12 @@ implemented and tested on a provisioned runner. The reviewed schema should:
 5. Continue rejecting shell queues, unknown profiles, test-domain profiles,
    preflight-only records, and every older schema for promotable hardware.
 
-Until then, central parser wiring intentionally waits. Run the independent
-generic tests with:
+Until then, central parser wiring intentionally waits. The generic
+`parity-evidence` lane runs the executor tests through:
 
 ```sh
 scripts/tests/parity-oci-executor.sh
+scripts/tests/parity-oci-operator.sh
 ```
 
 ## Current Operator Blocker
@@ -309,17 +367,19 @@ denied. `sudo` requires an interactive password. Unprivileged user namespaces
 are unavailable, so rootless `runc`/Docker and bubblewrap network isolation
 cannot provide an alternative under this account.
 
-The host also has no production policy identity/digest/owner anchor provisioned
-by a protected launcher and no reviewed immutable production policy/profile
-files. The CLI intentionally has no defaults for these values. Therefore the
-current account cannot authorize a production request even before Docker
-access is considered.
+The host also has no immutable root-owned `operator-v1.tsv`, external
+`operator-v1.sha256` provision, fixed installed launcher/executor, production
+policy/profile, or fixed inbox authorization. Production CLI trust arguments
+do not exist. Therefore the repository script and current account cannot
+authorize a production request even before Docker access is considered.
 
 Do not add `harsh` to the general Docker group merely to unblock evidence:
 Docker daemon access is effectively root authority. Provision a dedicated
 evidence identity behind a root-owned, fixed-command service or an equivalently
-restricted operator launcher. That launcher must expose only this protected
-profile and must not accept arbitrary Docker arguments.
+restricted operator launcher. The implemented launcher boundary accepts only a
+fixed command and request ID; deployment must provision and review its immutable
+configuration, policy, profile, inbox, and installed binaries. It must not
+accept arbitrary Docker arguments.
 
 A Landlock plus seccomp launcher is a possible separate design, but it needs a
 new adversarial review. It must bind the launcher and all dynamic libraries,

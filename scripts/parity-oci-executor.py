@@ -9,6 +9,7 @@ state or substitute image, runtime, device, or isolation settings.
 from __future__ import annotations
 
 import argparse
+import configparser
 import fcntl
 import hashlib
 import json
@@ -17,7 +18,6 @@ import os
 from pathlib import Path
 import re
 import secrets
-import shutil
 import signal
 import stat
 import struct
@@ -25,6 +25,7 @@ import subprocess
 import sys
 import threading
 import time
+import zlib
 from dataclasses import dataclass
 from typing import BinaryIO
 
@@ -39,12 +40,27 @@ MAX_OCI_LAYER_BYTES = 64 * 1024**3
 MAX_OCI_IMAGE_BYTES = 256 * 1024**3
 MAX_STAGING_ROOT_ENTRIES = 64
 MAX_SOURCE_DIRECTORIES = 16384
+MAX_GIT_ROOT_ENTRIES = 258
+MAX_GIT_CONFIG_BYTES = 1024 * 1024
 MAX_CLEANUP_ENTRIES = 40000
 PROCESS_REAP_GRACE_SECONDS = 5.0
 PROCESS_PIPE_JOIN_SECONDS = 5.0
 PROCESS_FINAL_JOIN_SECONDS = 1.0
 FS_IOC_GETFLAGS = 0x80086601
 FS_IMMUTABLE_FL = 0x00000010
+OPERATOR_CONFIG_DIRECTORY = Path("/etc/fe2o3/oci-executor")
+OPERATOR_CONFIG_NAME = "operator-v1.tsv"
+OPERATOR_CONFIG_DIGEST_NAME = "operator-v1.sha256"
+OPERATOR_LAUNCHER_PATH = Path("/usr/libexec/fe2o3-oci-operator")
+OPERATOR_PYTHON_ROOT = Path("/usr/libexec/fe2o3-python")
+OPERATOR_INTERPRETER_PATH = OPERATOR_PYTHON_ROOT / "bin/python3"
+OPERATOR_EXECUTOR_PATH = Path("/usr/libexec/fe2o3-oci-executor.py")
+OPERATOR_ENVIRONMENT = {
+    "HOME": "/nonexistent",
+    "LC_ALL": "C",
+    "PATH": "/usr/bin:/bin",
+    "TZ": "UTC",
+}
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 ID_RE = re.compile(r"^[a-z][a-z0-9._-]{0,63}$")
@@ -308,6 +324,69 @@ class TrustAnchor:
     file_contract: str
 
 
+@dataclass(frozen=True)
+class OperatorConfig:
+    config_id: str
+    trusted_root: str
+    policy_path: str
+    policy_identity: str
+    policy_size: int
+    policy_digest: str
+    trusted_owner_uid: int
+    trusted_owner_gid: int
+    trust_file_contract: str
+    inbox_root: str
+    inbox_owner_uid: int
+    inbox_owner_gid: int
+    request_owner_uid: int
+    request_owner_gid: int
+    queue_trust_digest: str
+    config_digest: str
+
+
+def close_descriptors(descriptors: tuple[tuple[int, str], ...]) -> None:
+    primary = sys.exception()
+    failures: list[str] = []
+    for file_fd, label in descriptors:
+        if file_fd < 0:
+            continue
+        try:
+            os.close(file_fd)
+        except OSError as close_error:
+            failures.append(f"cannot close {label}: {close_error}")
+    if failures:
+        detail = "; ".join(failures)
+        if primary is not None:
+            raise ExecutorError(f"{primary}; additionally {detail}") from primary
+        fail(detail)
+
+
+def close_descriptor(file_fd: int, label: str = "file descriptor") -> None:
+    close_descriptors(((file_fd, label),))
+
+
+def normalized_error(error: BaseException, context: str) -> ExecutorError:
+    if isinstance(error, ExecutorError):
+        return error
+    return ExecutorError(f"{context}: {error}")
+
+
+def append_error(primary: ExecutorError | None, error: BaseException) -> ExecutorError:
+    secondary = str(error)
+    if primary is None:
+        return normalized_error(error, "filesystem operation failed")
+    if secondary.startswith(str(primary)):
+        return normalized_error(error, "filesystem operation failed")
+    return ExecutorError(f"{primary}; additionally {secondary}")
+
+
+def resolve_path(path: Path, label: str) -> Path:
+    try:
+        return path.resolve(strict=True)
+    except OSError as error:
+        fail(f"cannot resolve {label}: {error}")
+
+
 @dataclass
 class TrustedRoot:
     path: Path
@@ -316,7 +395,9 @@ class TrustedRoot:
     owner_gid: int
 
     def close(self) -> None:
-        os.close(self.fd)
+        file_fd = self.fd
+        self.fd = -1
+        close_descriptor(file_fd, "protected root")
 
 
 def stable_file_identity(info: os.stat_result) -> tuple[int, ...]:
@@ -358,11 +439,9 @@ def verify_trusted_metadata(
         )
 
 
-def verify_immutable_flag(file_fd: int, anchor: TrustAnchor, label: str) -> None:
-    if anchor.file_contract == "descriptor-stable":
+def verify_descriptor_immutable(file_fd: int, label: str, required: bool) -> None:
+    if not required:
         return
-    if anchor.file_contract != "linux-immutable":
-        fail("invalid external trust-anchor file contract")
     try:
         packed = fcntl.ioctl(file_fd, FS_IOC_GETFLAGS, struct.pack("=I", 0))
         flags = struct.unpack("=I", packed)[0]
@@ -370,6 +449,233 @@ def verify_immutable_flag(file_fd: int, anchor: TrustAnchor, label: str) -> None
         fail(f"cannot establish immutable flag for {label}: {error}")
     if not flags & FS_IMMUTABLE_FL:
         fail(f"{label} does not satisfy the external immutable-file contract")
+
+
+def verify_immutable_flag(file_fd: int, anchor: TrustAnchor, label: str) -> None:
+    if anchor.file_contract not in ("descriptor-stable", "linux-immutable"):
+        fail("invalid external trust-anchor file contract")
+    verify_descriptor_immutable(
+        file_fd, label, anchor.file_contract == "linux-immutable"
+    )
+
+
+def open_owned_directory_tree(
+    path: Path, expected_uid: int, expected_gid: int, label: str
+) -> int:
+    if not path.is_absolute() or not valid_absolute(str(path)):
+        fail(f"{label} path must be canonical absolute")
+    current_fd = -1
+    try:
+        current_fd = os.open(
+            "/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+        )
+        for component in path.parts[1:]:
+            next_fd = os.open(
+                component,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                dir_fd=current_fd,
+            )
+            close_descriptor(current_fd, f"{label} parent directory")
+            current_fd = next_fd
+            info = os.fstat(current_fd)
+            if (
+                not stat.S_ISDIR(info.st_mode)
+                or (info.st_uid, info.st_gid) != (expected_uid, expected_gid)
+                or info.st_mode & 0o022
+            ):
+                fail(f"{label} directory ownership or mode is unsafe")
+        return current_fd
+    except ExecutorError:
+        if current_fd >= 0:
+            close_descriptor(current_fd, f"{label} directory after validation failure")
+        raise
+    except OSError as error:
+        if current_fd >= 0:
+            close_descriptor(current_fd, f"{label} directory after open failure")
+        fail(f"cannot open fixed {label} directory: {error}")
+
+
+def read_owned_descriptor_file(
+    directory_fd: int,
+    name: str,
+    label: str,
+    *,
+    maximum_bytes: int,
+    expected_uid: int,
+    expected_gid: int,
+    require_immutable: bool,
+    expected_digest: str | None = None,
+) -> bytes:
+    if "/" in name or not name or maximum_bytes < 1:
+        fail(f"invalid fixed {label} name or bound")
+    file_fd = -1
+    try:
+        file_fd = os.open(
+            name,
+            os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=directory_fd,
+        )
+        before = os.fstat(file_fd)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_nlink != 1
+            or (before.st_uid, before.st_gid) != (expected_uid, expected_gid)
+            or before.st_mode & 0o022
+            or not 1 <= before.st_size <= maximum_bytes
+        ):
+            fail(f"fixed {label} metadata contract is unsafe")
+        verify_descriptor_immutable(file_fd, f"fixed {label}", require_immutable)
+        raw = read_descriptor_bound(file_fd, maximum_bytes, f"fixed {label}")
+        after = os.fstat(file_fd)
+        if (
+            stable_file_identity(before) != stable_file_identity(after)
+            or len(raw) != before.st_size
+            or expected_digest is not None
+            and sha256_bytes(raw) != expected_digest
+        ):
+            fail(f"fixed {label} changed or differs from its provisioned digest")
+        return raw
+    except ExecutorError:
+        raise
+    except OSError as error:
+        fail(f"cannot open fixed {label}: {error}")
+    finally:
+        if file_fd >= 0:
+            close_descriptor(file_fd, f"fixed {label}")
+
+
+def load_operator_config(
+    directory: Path = OPERATOR_CONFIG_DIRECTORY,
+    *,
+    provision_uid: int = 0,
+    provision_gid: int = 0,
+    require_immutable: bool = True,
+) -> OperatorConfig:
+    if require_immutable:
+        directory_fd = open_owned_directory_tree(
+            directory, provision_uid, provision_gid, "operator configuration"
+        )
+    else:
+        directory_fd = -1
+        try:
+            directory_fd = os.open(
+                directory,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            )
+            info = os.fstat(directory_fd)
+        except OSError as error:
+            failure = normalized_error(
+                error, "cannot open test operator configuration directory"
+            )
+            try:
+                close_descriptor(
+                    directory_fd, "unavailable test operator configuration directory"
+                )
+            except ExecutorError as close_error:
+                failure = append_error(failure, close_error)
+            raise failure
+        if (
+            not stat.S_ISDIR(info.st_mode)
+            or (info.st_uid, info.st_gid) != (provision_uid, provision_gid)
+            or info.st_mode & 0o022
+        ):
+            close_descriptor(
+                directory_fd, "unsafe test operator configuration directory"
+            )
+            fail("test operator configuration directory ownership or mode is unsafe")
+    try:
+        digest_raw = read_owned_descriptor_file(
+            directory_fd,
+            OPERATOR_CONFIG_DIGEST_NAME,
+            "operator configuration digest provision",
+            maximum_bytes=65,
+            expected_uid=provision_uid,
+            expected_gid=provision_gid,
+            require_immutable=require_immutable,
+        )
+        if (
+            len(digest_raw) != 65
+            or not digest_raw.endswith(b"\n")
+            or SHA256_RE.fullmatch(digest_raw[:-1].decode("ascii", errors="ignore"))
+            is None
+        ):
+            fail("fixed operator configuration digest provision is malformed")
+        config_digest = digest_raw[:-1].decode("ascii")
+        raw = read_owned_descriptor_file(
+            directory_fd,
+            OPERATOR_CONFIG_NAME,
+            "operator configuration",
+            maximum_bytes=MAX_FILE_BYTES,
+            expected_uid=provision_uid,
+            expected_gid=provision_gid,
+            require_immutable=require_immutable,
+            expected_digest=config_digest,
+        )
+    finally:
+        close_descriptor(directory_fd, "operator configuration directory")
+    cursor = Cursor(parse_rows(raw, "operator configuration"), "operator configuration")
+    if cursor.scalar("oci_operator_config_schema_version") != "1":
+        fail("operator configuration schema must be 1")
+    config_id = cursor.scalar("config_id")
+    trusted_root = cursor.scalar("trusted_root")
+    policy_path = cursor.scalar("policy_path")
+    policy_identity = cursor.scalar("policy_identity")
+    policy_size = cursor.scalar("policy_size")
+    policy_digest = cursor.scalar("policy_sha256")
+    trusted_uid = cursor.scalar("trusted_owner_uid")
+    trusted_gid = cursor.scalar("trusted_owner_gid")
+    file_contract = cursor.scalar("trust_file_contract")
+    inbox_root = cursor.scalar("inbox_root")
+    inbox_uid = cursor.scalar("inbox_owner_uid")
+    inbox_gid = cursor.scalar("inbox_owner_gid")
+    request_uid = cursor.scalar("request_owner_uid")
+    request_gid = cursor.scalar("request_owner_gid")
+    queue_digest = cursor.scalar("queue_trust_sha256")
+    cursor.done()
+    numeric = (
+        policy_size,
+        trusted_uid,
+        trusted_gid,
+        inbox_uid,
+        inbox_gid,
+        request_uid,
+        request_gid,
+    )
+    if (
+        not ID_RE.fullmatch(config_id)
+        or not valid_absolute(trusted_root)
+        or not valid_relative(policy_path)
+        or not ID_RE.fullmatch(policy_identity)
+        or any(not value.isdigit() or int(value) > 2**31 - 1 for value in numeric)
+        or not 1 <= int(policy_size) <= MAX_FILE_BYTES
+        or not SHA256_RE.fullmatch(policy_digest)
+        or trusted_uid != "0"
+        or trusted_gid != "0"
+        or file_contract != "linux-immutable"
+        or not valid_absolute(inbox_root)
+        or inbox_uid != "0"
+        or inbox_gid != "0"
+        or not SHA256_RE.fullmatch(queue_digest)
+    ):
+        fail("operator configuration contains an invalid production binding")
+    return OperatorConfig(
+        config_id,
+        trusted_root,
+        policy_path,
+        policy_identity,
+        int(policy_size),
+        policy_digest,
+        int(trusted_uid),
+        int(trusted_gid),
+        file_contract,
+        inbox_root,
+        int(inbox_uid),
+        int(inbox_gid),
+        int(request_uid),
+        int(request_gid),
+        queue_digest,
+        config_digest,
+    )
 
 
 def open_trusted_root(path: Path, anchor: TrustAnchor) -> TrustedRoot:
@@ -384,11 +690,11 @@ def open_trusted_root(path: Path, anchor: TrustAnchor) -> TrustedRoot:
         verify_trusted_metadata(info, anchor, "protected root", directory=True)
     except ExecutorError:
         if "root_fd" in locals():
-            os.close(root_fd)
+            close_descriptor(root_fd, "invalid protected root")
         raise
     except OSError as error:
         if "root_fd" in locals():
-            os.close(root_fd)
+            close_descriptor(root_fd, "unavailable protected root")
         fail(f"cannot open protected root without following links: {error}")
     return TrustedRoot(path, root_fd, anchor.owner_uid, anchor.owner_gid)
 
@@ -436,7 +742,7 @@ def read_trusted_file(
                 os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
                 dir_fd=current_fd,
             )
-            os.close(current_fd)
+            close_descriptor(current_fd, f"protected {label} parent")
             current_fd = next_fd
             verify_trusted_metadata(
                 os.fstat(current_fd), anchor, f"{label} parent", directory=True
@@ -465,18 +771,18 @@ def read_trusted_file(
     except OSError as error:
         fail(f"cannot open protected {label} without following links: {error}")
     finally:
-        if file_fd >= 0:
-            os.close(file_fd)
-        os.close(current_fd)
+        close_descriptors(
+            (
+                (file_fd, f"protected {label}"),
+                (current_fd, f"protected {label} parent"),
+            )
+        )
 
 
 def protected_path(root: Path, relative: str, label: str) -> Path:
     if not valid_relative(relative):
         fail(f"invalid protected {label} path")
-    try:
-        root = root.resolve(strict=True)
-    except OSError as error:
-        fail(f"cannot resolve protected root: {error}")
+    root = resolve_path(root, "protected root")
     current = root
     for index, component in enumerate(relative.split("/")):
         current = current / component
@@ -491,7 +797,7 @@ def protected_path(root: Path, relative: str, label: str) -> Path:
                 fail(f"protected {label} parent is not a directory")
         elif not stat.S_ISREG(info.st_mode):
             fail(f"protected {label} is not a regular file")
-    if root not in current.resolve(strict=True).parents:
+    if root not in resolve_path(current, f"protected {label}").parents:
         fail(f"protected {label} escapes protected root")
     return current
 
@@ -635,18 +941,17 @@ class Profile:
     runtime_digest: str
     runtime_version_digest: str
     runtime_info_digest: str
-    git_path: str
-    git_size: int
-    git_digest: str
-    git_version_digest: str
     git_objects_path: str
+    git_object_format: str
+    git_object_limit: int
+    git_object_bytes_limit: int
+    git_tree_depth_limit: int
     source_staging_root: str
     output_staging_root: str
     artifact_stream_protocol: str
     source_file_limit: int
     source_byte_limit: int
     source_index_limit: int
-    source_export_timeout: int
     operator_uid: int
     operator_gid: int
     layout_path: str
@@ -756,8 +1061,8 @@ def load_profile(
     )
     rows = parse_rows(raw, "OCI executor profile")
     cursor = Cursor(rows, "OCI executor profile")
-    if cursor.scalar("oci_executor_profile_schema_version") != "1":
-        fail("OCI executor profile schema must be 1")
+    if cursor.scalar("oci_executor_profile_schema_version") != "2":
+        fail("OCI executor profile schema must be 2")
     actual_id = cursor.scalar("profile_id")
     mode = cursor.scalar("execution_mode")
     target = cursor.scalar("target")
@@ -767,18 +1072,17 @@ def load_profile(
     runtime_digest = cursor.scalar("runtime_sha256")
     runtime_version_digest = cursor.scalar("runtime_version_sha256")
     runtime_info_digest = cursor.scalar("runtime_info_sha256")
-    git_path = cursor.scalar("git_path")
-    git_size = cursor.scalar("git_size")
-    git_digest = cursor.scalar("git_sha256")
-    git_version_digest = cursor.scalar("git_version_sha256")
     git_objects_path = cursor.scalar("git_objects_path")
+    git_object_format = cursor.scalar("git_object_format")
+    git_object_limit = cursor.scalar("git_object_limit")
+    git_object_bytes_limit = cursor.scalar("git_object_bytes_limit")
+    git_tree_depth_limit = cursor.scalar("git_tree_depth_limit")
     source_staging_root = cursor.scalar("source_staging_root")
     output_staging_root = cursor.scalar("output_staging_root")
     artifact_stream_protocol = cursor.scalar("artifact_stream_protocol")
     source_file_limit = cursor.scalar("source_file_limit")
     source_byte_limit = cursor.scalar("source_byte_limit")
     source_index_limit = cursor.scalar("source_index_limit")
-    source_export_timeout = cursor.scalar("source_export_timeout_seconds")
     operator_uid = cursor.scalar("operator_uid")
     operator_gid = cursor.scalar("operator_gid")
     layout_path = cursor.scalar("oci_layout_path")
@@ -806,12 +1110,14 @@ def load_profile(
     ):
         fail("malformed runtime binding")
     if (
-        not valid_absolute(git_path)
-        or not git_size.isdigit()
-        or not 1 <= int(git_size) <= 1024**3
-        or not SHA256_RE.fullmatch(git_digest)
-        or not SHA256_RE.fullmatch(git_version_digest)
-        or not valid_absolute(git_objects_path)
+        not valid_absolute(git_objects_path)
+        or git_object_format != "sha1-loose"
+        or not git_object_limit.isdigit()
+        or not 1 <= int(git_object_limit) <= 65536
+        or not git_object_bytes_limit.isdigit()
+        or not 1 <= int(git_object_bytes_limit) <= 1024**3
+        or not git_tree_depth_limit.isdigit()
+        or not 1 <= int(git_tree_depth_limit) <= 128
         or not valid_absolute(source_staging_root)
         or not valid_absolute(output_staging_root)
         or artifact_stream_protocol != "fe2o3-artifact-stream-v1"
@@ -821,8 +1127,6 @@ def load_profile(
         or not 1 <= int(source_byte_limit) <= 512 * 1024**2
         or not source_index_limit.isdigit()
         or not 1 <= int(source_index_limit) <= 64 * 1024**2
-        or not source_export_timeout.isdigit()
-        or not 1 <= int(source_export_timeout) <= 900
         or not operator_uid.isdigit()
         or not operator_gid.isdigit()
         or not 0 <= int(operator_uid) <= 2**31 - 1
@@ -971,18 +1275,17 @@ def load_profile(
         runtime_digest,
         runtime_version_digest,
         runtime_info_digest,
-        git_path,
-        int(git_size),
-        git_digest,
-        git_version_digest,
         git_objects_path,
+        git_object_format,
+        int(git_object_limit),
+        int(git_object_bytes_limit),
+        int(git_tree_depth_limit),
         source_staging_root,
         output_staging_root,
         artifact_stream_protocol,
         int(source_file_limit),
         int(source_byte_limit),
         int(source_index_limit),
-        int(source_export_timeout),
         int(operator_uid),
         int(operator_gid),
         layout_path,
@@ -1043,20 +1346,9 @@ def require_safe_oci_entry(
                 fail(f"{label} path contains a non-directory")
         elif not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
             fail(f"{label} is not a single-link regular file")
-    if layout not in current.resolve(strict=True).parents:
+    if layout not in resolve_path(current, label).parents:
         fail(f"{label} escapes OCI layout")
     return current
-
-
-def read_json_bound(path: Path, binding: Layer, label: str) -> dict[str, object]:
-    verify_regular(
-        path, str(binding.size), binding.digest.removeprefix("sha256:"), label
-    )
-    try:
-        raw = path.read_bytes()
-    except OSError:
-        fail(f"cannot read {label}")
-    return strict_json_object(raw, label)
 
 
 def strict_json_object(raw: bytes, label: str) -> dict[str, object]:
@@ -1088,32 +1380,86 @@ def strict_json_object(raw: bytes, label: str) -> dict[str, object]:
     return value
 
 
-def read_json_file(
-    path: Path,
+def read_oci_json(
+    layout_fd: int,
+    relative: tuple[str, ...],
     label: str,
     *,
     maximum_bytes: int,
+    expected_uid: int,
+    expected_gid: int,
     expected_size: int | None = None,
     expected_digest: str | None = None,
 ) -> dict[str, object]:
-    try:
-        info = path.lstat()
-        raw = path.read_bytes()
-    except OSError:
-        fail(f"cannot read {label}")
     if (
-        path.is_symlink()
-        or not stat.S_ISREG(info.st_mode)
-        or info.st_nlink != 1
-        or not 1 <= info.st_size <= maximum_bytes
-        or len(raw) != info.st_size
+        not relative
+        or any(
+            not component or "/" in component or component in (".", "..")
+            for component in relative
+        )
+        or not 1 <= maximum_bytes <= MAX_OCI_METADATA_BYTES
         or expected_size is not None
-        and info.st_size != expected_size
+        and not 1 <= expected_size <= maximum_bytes
         or expected_digest is not None
-        and sha256_bytes(raw) != expected_digest
+        and SHA256_RE.fullmatch(expected_digest) is None
     ):
-        fail(f"{label} binding or size is invalid")
-    return strict_json_object(raw, label)
+        fail(f"invalid {label} descriptor read contract")
+    current_fd = -1
+    file_fd = -1
+    try:
+        current_fd = os.dup(layout_fd)
+        for component in relative[:-1]:
+            next_fd = os.open(
+                component,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                dir_fd=current_fd,
+            )
+            close_descriptor(current_fd, f"{label} JSON parent")
+            current_fd = next_fd
+            parent = os.fstat(current_fd)
+            if (
+                not stat.S_ISDIR(parent.st_mode)
+                or (parent.st_uid, parent.st_gid) != (expected_uid, expected_gid)
+                or parent.st_mode & 0o022
+            ):
+                fail(f"{label} parent ownership or mode is unsafe")
+        file_fd = os.open(
+            relative[-1],
+            os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=current_fd,
+        )
+        before = os.fstat(file_fd)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_nlink != 1
+            or (before.st_uid, before.st_gid) != (expected_uid, expected_gid)
+            or before.st_mode & 0o022
+            or not 1 <= before.st_size <= maximum_bytes
+            or expected_size is not None
+            and before.st_size != expected_size
+        ):
+            fail(f"{label} descriptor metadata or size is invalid")
+        raw = read_descriptor_bound(file_fd, maximum_bytes, label)
+        after = os.fstat(file_fd)
+        if (
+            stable_file_identity(before) != stable_file_identity(after)
+            or len(raw) != before.st_size
+            or expected_digest is not None
+            and sha256_bytes(raw) != expected_digest
+        ):
+            fail(f"{label} changed or differs from its protected binding")
+        return strict_json_object(raw, label)
+    except ExecutorError:
+        raise
+    except OSError as error:
+        fail(f"cannot open or read {label} by descriptor: {error}")
+    finally:
+        close_descriptors(
+            (
+                (file_fd, f"{label} JSON"),
+                (current_fd, f"{label} JSON parent"),
+            )
+        )
 
 
 def validate_json_shape(value: object, label: str) -> None:
@@ -1203,78 +1549,110 @@ def validate_runtime_rootfs(value: object, expected: tuple[str, ...]) -> None:
 
 def verify_oci_image(profile: Profile) -> tuple[str, ...]:
     layout = Path(profile.layout_path)
-    if (
-        not layout.is_absolute()
-        or layout.is_symlink()
-        or not layout.is_dir()
-        or layout.resolve(strict=True) != layout
-    ):
+    if not layout.is_absolute() or not valid_absolute(str(layout)):
         fail("OCI layout is unavailable or unsafe")
-    verify_operator_owned(layout, profile, "OCI layout", directory=True)
-    layout_marker = require_safe_oci_entry(layout, ("oci-layout",), "OCI layout marker")
-    index_path = require_safe_oci_entry(layout, ("index.json",), "OCI index")
-    require_safe_oci_entry(layout, ("blobs",), "OCI blob directory", directory=True)
-    require_safe_oci_entry(
-        layout, ("blobs", "sha256"), "OCI SHA-256 directory", directory=True
-    )
-    verify_operator_owned(layout_marker, profile, "OCI layout marker", directory=False)
-    verify_operator_owned(index_path, profile, "OCI index", directory=False)
-    marker = read_json_file(layout_marker, "OCI layout marker", maximum_bytes=1024)
-    if marker != {"imageLayoutVersion": "1.0.0"}:
-        fail("unsupported OCI layout version")
-    index = read_json_file(
-        index_path,
-        "OCI index",
-        maximum_bytes=MAX_OCI_METADATA_BYTES,
-        expected_size=profile.index_size,
-        expected_digest=profile.index_digest,
-    )
-    manifests = index.get("manifests") if isinstance(index, dict) else None
-    if not isinstance(manifests, list):
-        fail("invalid OCI index manifests")
-    selected = [descriptor(value, "manifest") for value in manifests]
-    if selected.count(profile.manifest) != 1:
-        fail("protected OCI manifest is absent or ambiguous")
-    manifest_path = require_safe_oci_entry(
-        layout,
-        ("blobs", "sha256", profile.manifest.digest.removeprefix("sha256:")),
-        "OCI manifest",
-    )
-    verify_operator_owned(manifest_path, profile, "OCI manifest", directory=False)
-    manifest = read_json_bound(manifest_path, profile.manifest, "OCI manifest")
-    if descriptor(manifest.get("config"), "config") != profile.config:
-        fail("OCI config differs from protected profile")
-    layer_values = manifest.get("layers")
-    if (
-        not isinstance(layer_values, list)
-        or tuple(descriptor(value, "layer") for value in layer_values) != profile.layers
-    ):
-        fail("OCI layers differ from protected profile")
-    config_path = require_safe_oci_entry(
-        layout,
-        ("blobs", "sha256", profile.config.digest.removeprefix("sha256:")),
-        "OCI config",
-    )
-    verify_operator_owned(config_path, profile, "OCI config", directory=False)
-    config = read_json_bound(config_path, profile.config, "OCI config")
-    diff_ids = validate_oci_rootfs(config.get("rootfs"), len(profile.layers))
-    if config.get("architecture") != "amd64" or config.get("os") != "linux":
-        fail("OCI image platform must be linux/amd64")
-    validate_image_config(config.get("config"), "OCI image config")
-    for layer in profile.layers:
-        layer_path = require_safe_oci_entry(
+    layout_fd = -1
+    try:
+        layout_fd = os.open(
             layout,
-            ("blobs", "sha256", layer.digest.removeprefix("sha256:")),
-            "OCI layer",
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
         )
-        verify_operator_owned(layer_path, profile, "OCI layer", directory=False)
-        verify_regular(
-            layer_path,
-            str(layer.size),
-            layer.digest.removeprefix("sha256:"),
-            "OCI layer",
+        layout_info = os.fstat(layout_fd)
+        if (
+            not stat.S_ISDIR(layout_info.st_mode)
+            or (layout_info.st_uid, layout_info.st_gid)
+            != (profile.operator_uid, profile.operator_gid)
+            or layout_info.st_mode & 0o022
+        ):
+            fail("OCI layout descriptor ownership or mode is unsafe")
+        marker = read_oci_json(
+            layout_fd,
+            ("oci-layout",),
+            "OCI layout marker",
+            maximum_bytes=1024,
+            expected_uid=profile.operator_uid,
+            expected_gid=profile.operator_gid,
         )
-    return diff_ids
+        if marker != {"imageLayoutVersion": "1.0.0"}:
+            fail("unsupported OCI layout version")
+        index = read_oci_json(
+            layout_fd,
+            ("index.json",),
+            "OCI index",
+            maximum_bytes=MAX_OCI_METADATA_BYTES,
+            expected_uid=profile.operator_uid,
+            expected_gid=profile.operator_gid,
+            expected_size=profile.index_size,
+            expected_digest=profile.index_digest,
+        )
+        manifests = index.get("manifests") if isinstance(index, dict) else None
+        if not isinstance(manifests, list):
+            fail("invalid OCI index manifests")
+        selected = [descriptor(value, "manifest") for value in manifests]
+        if selected.count(profile.manifest) != 1:
+            fail("protected OCI manifest is absent or ambiguous")
+        manifest = read_oci_json(
+            layout_fd,
+            (
+                "blobs",
+                "sha256",
+                profile.manifest.digest.removeprefix("sha256:"),
+            ),
+            "OCI manifest",
+            maximum_bytes=MAX_OCI_METADATA_BYTES,
+            expected_uid=profile.operator_uid,
+            expected_gid=profile.operator_gid,
+            expected_size=profile.manifest.size,
+            expected_digest=profile.manifest.digest.removeprefix("sha256:"),
+        )
+        if descriptor(manifest.get("config"), "config") != profile.config:
+            fail("OCI config differs from protected profile")
+        layer_values = manifest.get("layers")
+        if (
+            not isinstance(layer_values, list)
+            or tuple(descriptor(value, "layer") for value in layer_values)
+            != profile.layers
+        ):
+            fail("OCI layers differ from protected profile")
+        config = read_oci_json(
+            layout_fd,
+            (
+                "blobs",
+                "sha256",
+                profile.config.digest.removeprefix("sha256:"),
+            ),
+            "OCI config",
+            maximum_bytes=MAX_OCI_METADATA_BYTES,
+            expected_uid=profile.operator_uid,
+            expected_gid=profile.operator_gid,
+            expected_size=profile.config.size,
+            expected_digest=profile.config.digest.removeprefix("sha256:"),
+        )
+        diff_ids = validate_oci_rootfs(config.get("rootfs"), len(profile.layers))
+        if config.get("architecture") != "amd64" or config.get("os") != "linux":
+            fail("OCI image platform must be linux/amd64")
+        validate_image_config(config.get("config"), "OCI image config")
+        for layer in profile.layers:
+            layer_path = require_safe_oci_entry(
+                layout,
+                ("blobs", "sha256", layer.digest.removeprefix("sha256:")),
+                "OCI layer",
+            )
+            verify_operator_owned(layer_path, profile, "OCI layer", directory=False)
+            verify_regular(
+                layer_path,
+                str(layer.size),
+                layer.digest.removeprefix("sha256:"),
+                "OCI layer",
+            )
+        return diff_ids
+    except ExecutorError:
+        raise
+    except OSError as error:
+        fail(f"cannot open OCI layout by descriptor: {error}")
+    finally:
+        if layout_fd >= 0:
+            close_descriptor(layout_fd, "OCI layout")
 
 
 @dataclass(frozen=True)
@@ -1386,16 +1764,34 @@ def read_request_file(path: Path, expected_uid: int, expected_gid: int) -> Reque
         fail(f"cannot open OCI execution request without following links: {error}")
     finally:
         if request_fd >= 0:
-            os.close(request_fd)
+            close_descriptor(request_fd, "OCI execution request")
 
 
-def safe_close(file_fd: int) -> None:
-    if file_fd < 0:
-        return
+def read_operator_request(config: OperatorConfig, request_id: str) -> Request:
+    if not RESULT_ID_RE.fullmatch(request_id):
+        fail("operator request identity is malformed")
+    inbox_fd = open_owned_directory_tree(
+        Path(config.inbox_root),
+        config.inbox_owner_uid,
+        config.inbox_owner_gid,
+        "operator request inbox",
+    )
     try:
-        os.close(file_fd)
-    except OSError:
-        pass
+        raw = read_owned_descriptor_file(
+            inbox_fd,
+            f"{request_id}.tsv",
+            "operator request",
+            maximum_bytes=MAX_FILE_BYTES,
+            expected_uid=config.request_owner_uid,
+            expected_gid=config.request_owner_gid,
+            require_immutable=False,
+        )
+    finally:
+        close_descriptor(inbox_fd, "operator request inbox")
+    request = parse_request(raw)
+    if request.request_id != request_id:
+        fail("operator request file identity differs from selected request")
+    return request
 
 
 def staging_lease_name(authorization_digest: str) -> str:
@@ -1427,13 +1823,13 @@ def open_staging_root(profile: Profile, path: Path, label: str) -> int:
                     fail(f"{label} exceeds the protected stale-entry quota")
         return root_fd
     except BlockingIOError:
-        safe_close(root_fd)
+        close_descriptor(root_fd, f"busy {label}")
         fail(f"{label} is busy with another staging lease")
     except ExecutorError:
-        safe_close(root_fd)
+        close_descriptor(root_fd, f"invalid {label}")
         raise
     except OSError as error:
-        safe_close(root_fd)
+        close_descriptor(root_fd, f"unavailable {label}")
         fail(f"cannot open or lock {label}: {error}")
 
 
@@ -1458,7 +1854,7 @@ def remove_directory_contents(directory_fd: int, budget: list[int], label: str) 
                 try:
                     remove_directory_contents(child_fd, budget, label)
                 finally:
-                    safe_close(child_fd)
+                    close_descriptor(child_fd, f"{label} child during cleanup")
                 os.rmdir(name, dir_fd=directory_fd)
             else:
                 os.unlink(name, dir_fd=directory_fd)
@@ -1487,8 +1883,9 @@ def cleanup_staging_lease(
         if (info.st_dev, info.st_ino) != (expected_device, expected_inode):
             fail(f"{label} lease identity changed before cleanup")
         remove_directory_contents(lease_fd, [0], label)
-        safe_close(lease_fd)
+        closing_fd = lease_fd
         lease_fd = -1
+        close_descriptor(closing_fd, f"{label} lease before removal")
         os.rmdir(name, dir_fd=root_fd)
         os.fsync(root_fd)
     except ExecutorError:
@@ -1496,7 +1893,7 @@ def cleanup_staging_lease(
     except OSError as error:
         fail(f"cannot durably remove {label}: {error}")
     finally:
-        safe_close(lease_fd)
+        close_descriptor(lease_fd, f"{label} lease")
 
 
 @dataclass
@@ -1520,17 +1917,28 @@ class SourceSnapshot:
     lease_inode: int
 
     def close(self) -> None:
-        for field in ("request_fd", "directory_fd", "root_fd", "staging_root_fd"):
-            safe_close(getattr(self, field))
+        fields = ("request_fd", "directory_fd", "root_fd", "staging_root_fd")
+        descriptors = tuple(
+            (getattr(self, field), f"source snapshot {field}") for field in fields
+        )
+        for field in fields:
             setattr(self, field, -1)
+        close_descriptors(descriptors)
 
     def cleanup(self) -> None:
-        safe_close(self.request_fd)
-        safe_close(self.directory_fd)
-        safe_close(self.root_fd)
+        descriptors = (
+            (self.request_fd, "source request snapshot"),
+            (self.directory_fd, "source snapshot directory"),
+            (self.root_fd, "source staging lease"),
+        )
         self.request_fd = -1
         self.directory_fd = -1
         self.root_fd = -1
+        failure: ExecutorError | None = None
+        try:
+            close_descriptors(descriptors)
+        except ExecutorError as error:
+            failure = error
         try:
             cleanup_staging_lease(
                 self.staging_root_fd,
@@ -1539,9 +1947,16 @@ class SourceSnapshot:
                 self.lease_inode,
                 "source staging",
             )
+        except (ExecutorError, OSError) as error:
+            failure = append_error(failure, error)
         finally:
-            safe_close(self.staging_root_fd)
+            try:
+                close_descriptor(self.staging_root_fd, "source staging root")
+            except ExecutorError as error:
+                failure = append_error(failure, error)
             self.staging_root_fd = -1
+        if failure is not None:
+            raise failure
 
 
 @dataclass
@@ -1558,17 +1973,28 @@ class OutputStage:
     lease_name: str
 
     def close(self) -> None:
-        for field in ("log_fd", "artifact_fd", "directory_fd", "root_fd"):
-            safe_close(getattr(self, field))
+        fields = ("log_fd", "artifact_fd", "directory_fd", "root_fd")
+        descriptors = tuple(
+            (getattr(self, field), f"output stage {field}") for field in fields
+        )
+        for field in fields:
             setattr(self, field, -1)
+        close_descriptors(descriptors)
 
     def cleanup(self) -> None:
-        safe_close(self.log_fd)
-        safe_close(self.artifact_fd)
-        safe_close(self.directory_fd)
+        descriptors = (
+            (self.log_fd, "output stderr stream"),
+            (self.artifact_fd, "output artifact stream"),
+            (self.directory_fd, "output staging directory"),
+        )
         self.log_fd = -1
         self.artifact_fd = -1
         self.directory_fd = -1
+        failure: ExecutorError | None = None
+        try:
+            close_descriptors(descriptors)
+        except ExecutorError as error:
+            failure = error
         try:
             cleanup_staging_lease(
                 self.root_fd,
@@ -1577,142 +2003,472 @@ class OutputStage:
                 self.inode,
                 "output staging",
             )
+        except (ExecutorError, OSError) as error:
+            failure = append_error(failure, error)
         finally:
-            safe_close(self.root_fd)
+            try:
+                close_descriptor(self.root_fd, "output staging root")
+            except ExecutorError as error:
+                failure = append_error(failure, error)
             self.root_fd = -1
+        if failure is not None:
+            raise failure
 
 
-def initialize_git_control(control: Path) -> None:
-    try:
-        (control / "objects" / "info").mkdir(mode=0o700, parents=True)
-        (control / "objects" / "pack").mkdir(mode=0o700)
-        (control / "refs" / "heads").mkdir(mode=0o700, parents=True)
-        (control / "refs" / "tags").mkdir(mode=0o700)
-        (control / "HEAD").write_text("ref: refs/heads/invalid\n", encoding="ascii")
-        (control / "config").write_text(
-            "[core]\n\trepositoryformatversion = 0\n\tbare = true\n",
-            encoding="ascii",
-        )
-    except OSError as error:
-        fail(f"cannot initialize transient Git control directory: {error}")
-
-
-def git_environment(profile: Profile, control: Path) -> dict[str, str]:
-    return {
-        "GIT_CONFIG_NOSYSTEM": "1",
-        "GIT_CONFIG_SYSTEM": "/dev/null",
-        "GIT_CONFIG_GLOBAL": "/dev/null",
-        "GIT_NO_REPLACE_OBJECTS": "1",
-        "GIT_OPTIONAL_LOCKS": "0",
-        "GIT_OBJECT_DIRECTORY": profile.git_objects_path,
-        "GIT_ALTERNATE_OBJECT_DIRECTORIES": "",
-        "GIT_DIR": str(control),
-        "GIT_WORK_TREE": "/nonexistent",
-        "HOME": "/nonexistent",
-        "LC_ALL": "C",
-        "PATH": "/nonexistent",
-        "XDG_CONFIG_HOME": "/nonexistent",
-    }
-
-
-def git_object_command(
-    profile: Profile,
-    control: Path,
-    arguments: list[str],
-    *,
-    label: str,
-    stdout_limit: int,
-    input_data: bytes | None = None,
-) -> bytes:
-    result = run_bounded(
-        [
-            profile.git_path,
-            "-c",
-            "core.fsmonitor=false",
-            "-c",
-            "core.hooksPath=/dev/null",
-            "-c",
-            "protocol.allow=never",
-            *arguments,
-        ],
-        label=label,
-        environment=git_environment(profile, control),
-        timeout_seconds=profile.source_export_timeout,
-        stdout_limit=stdout_limit,
-        stderr_limit=64 * 1024,
-        input_data=input_data,
+def verify_git_store_metadata(
+    info: os.stat_result, profile: Profile, label: str, *, directory: bool
+) -> None:
+    expected_kind = (
+        stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode)
     )
-    if result.returncode or result.stderr:
-        fail(f"{label} failed")
-    return result.stdout
+    if (
+        not expected_kind
+        or (info.st_uid, info.st_gid) != (profile.operator_uid, profile.operator_gid)
+        or info.st_mode & 0o022
+        or not directory
+        and info.st_nlink != 1
+    ):
+        fail(f"{label} ownership, mode, type, or link contract is unsafe")
 
 
-def parse_tree_index(profile: Profile, raw: bytes) -> list[tuple[str, str, str]]:
-    records = raw.split(b"\0")
-    if records[-1] != b"":
-        fail("Git tree index is not NUL terminated")
-    records.pop()
-    if not 1 <= len(records) <= profile.source_file_limit:
-        fail("Git tree file count exceeds protected limit")
-    output: list[tuple[str, str, str]] = []
-    previous = ""
-    for record in records:
+def open_git_store_directory(
+    parent_fd: int, name: str, profile: Profile, label: str
+) -> int:
+    file_fd = -1
+    try:
+        file_fd = os.open(
+            name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=parent_fd,
+        )
+        verify_git_store_metadata(os.fstat(file_fd), profile, label, directory=True)
+        return file_fd
+    except ExecutorError:
+        close_descriptor(file_fd, label)
+        raise
+    except OSError as error:
+        close_descriptor(file_fd, label)
+        fail(f"cannot open {label} without following links: {error}")
+
+
+def scan_git_directory(file_fd: int, maximum: int, label: str) -> list[str]:
+    names: list[str] = []
+    try:
+        with os.scandir(file_fd) as entries:
+            for entry in entries:
+                names.append(entry.name)
+                if len(names) > maximum:
+                    fail(f"{label} exceeds protected entry limit")
+    except ExecutorError:
+        raise
+    except OSError as error:
+        fail(f"cannot scan {label}: {error}")
+    return sorted(names)
+
+
+def git_path_exists(parent_fd: int, name: str, label: str) -> bool:
+    try:
+        os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    except OSError as error:
+        fail(f"cannot inspect {label}: {error}")
+    return True
+
+
+def read_git_control_file(
+    parent_fd: int, name: str, profile: Profile, maximum: int, label: str
+) -> bytes:
+    file_fd = -1
+    try:
+        file_fd = os.open(
+            name,
+            os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=parent_fd,
+        )
+        before = os.fstat(file_fd)
+        verify_git_store_metadata(before, profile, label, directory=False)
+        if not 1 <= before.st_size <= maximum:
+            fail(f"{label} exceeds protected size limit")
+        raw = read_descriptor_bound(file_fd, maximum, label)
+        after = os.fstat(file_fd)
+        if stable_file_identity(before) != stable_file_identity(after):
+            fail(f"{label} changed while being read")
+        return raw
+    except ExecutorError:
+        raise
+    except OSError as error:
+        fail(f"cannot read {label} without following links: {error}")
+    finally:
+        close_descriptor(file_fd, label)
+
+
+@dataclass(frozen=True)
+class GitTreeEntry:
+    name: str
+    mode: str
+    object_id: str
+    directory: bool
+
+
+@dataclass
+class GitLooseObjectStore:
+    profile: Profile
+    git_directory_fd: int
+    objects_fd: int
+    cache: dict[str, tuple[str, bytes]]
+    object_count: int = 0
+    compressed_bytes: int = 0
+    expanded_bytes: int = 0
+    tree_bytes: int = 0
+
+    @classmethod
+    def open(cls, profile: Profile) -> GitLooseObjectStore:
+        forbidden_environment = (
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_REPLACE_REF_BASE",
+            "GIT_GRAFT_FILE",
+        )
+        if any(name in os.environ for name in forbidden_environment):
+            fail("Git object-store indirection environment is forbidden")
+        objects_path = Path(profile.git_objects_path)
+        if objects_path.name != "objects":
+            fail("Git object store must be an exact repository objects directory")
+        git_fd = -1
+        objects_fd = -1
         try:
-            identity, raw_path = record.split(b"\t", 1)
-            mode, object_type, object_id = identity.decode("ascii").split(" ")
-            path = raw_path.decode("ascii")
-        except (ValueError, UnicodeDecodeError):
-            fail("Git tree index contains a malformed entry")
-        if (
-            mode not in ("100644", "100755")
-            or object_type != "blob"
-            or not COMMIT_RE.fullmatch(object_id)
-            or not valid_relative(path)
-            or any(component == ".git" for component in path.split("/"))
-            or path <= previous
-        ):
-            fail("Git tree contains an unsupported or unsorted entry")
-        output.append((path, mode, object_id))
-        previous = path
-    return output
-
-
-def parse_blob_batch(
-    profile: Profile, entries: list[tuple[str, str, str]], raw: bytes
-) -> list[bytes]:
-    position = 0
-    total = 0
-    output: list[bytes] = []
-    for _, _, expected_object in entries:
-        end = raw.find(b"\n", position, min(len(raw), position + 256))
-        if end < 0:
-            fail("Git blob batch has a malformed header")
-        try:
-            object_id, object_type, size_text = (
-                raw[position:end].decode("ascii").split(" ")
+            git_fd = os.open(
+                objects_path.parent,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
             )
-        except (ValueError, UnicodeDecodeError):
-            fail("Git blob batch has a malformed header")
-        if (
-            object_id != expected_object
-            or object_type != "blob"
-            or not size_text.isdigit()
-            or int(size_text) > profile.source_byte_limit
+            verify_git_store_metadata(
+                os.fstat(git_fd), profile, "Git repository directory", directory=True
+            )
+            objects_fd = open_git_store_directory(
+                git_fd, "objects", profile, "Git object store"
+            )
+            store = cls(profile, git_fd, objects_fd, {})
+            store.reject_repository_indirection()
+            return store
+        except (ExecutorError, OSError) as error:
+            close_descriptors(
+                (
+                    (objects_fd, "Git object store"),
+                    (git_fd, "Git repository directory"),
+                )
+            )
+            if isinstance(error, ExecutorError):
+                raise
+            fail(f"cannot open Git object store by descriptor: {error}")
+
+    def close(self) -> None:
+        descriptors = (
+            (self.objects_fd, "Git object store"),
+            (self.git_directory_fd, "Git repository directory"),
+        )
+        self.objects_fd = -1
+        self.git_directory_fd = -1
+        close_descriptors(descriptors)
+
+    def reject_repository_indirection(self) -> None:
+        names = scan_git_directory(
+            self.objects_fd, MAX_GIT_ROOT_ENTRIES, "Git object store root"
+        )
+        for name in names:
+            if name in ("info", "pack"):
+                directory_fd = open_git_store_directory(
+                    self.objects_fd, name, self.profile, f"Git objects/{name}"
+                )
+                try:
+                    if scan_git_directory(
+                        directory_fd,
+                        self.profile.git_object_limit,
+                        f"Git objects/{name}",
+                    ):
+                        fail(
+                            "Git alternates, packed objects, indexes, commit graphs, "
+                            "and promisor metadata are forbidden"
+                        )
+                finally:
+                    close_descriptor(directory_fd, f"Git objects/{name}")
+            elif re.fullmatch(r"[0-9a-f]{2}", name):
+                directory_fd = open_git_store_directory(
+                    self.objects_fd, name, self.profile, f"Git object fanout {name}"
+                )
+                close_descriptor(directory_fd, f"Git object fanout {name}")
+            else:
+                fail("Git object store contains an unsupported root entry")
+
+        if git_path_exists(
+            self.git_directory_fd, "info", "Git repository info directory"
         ):
-            fail("Git blob batch identity differs from tree index")
-        size = int(size_text)
-        position = end + 1
-        blob_end = position + size
-        if blob_end >= len(raw) or raw[blob_end : blob_end + 1] != b"\n":
-            fail("Git blob batch content is truncated")
-        output.append(raw[position:blob_end])
-        total += size
-        if total > profile.source_byte_limit:
-            fail("Git source bytes exceed protected limit")
-        position = blob_end + 1
-    if position != len(raw):
-        fail("Git blob batch has trailing output")
-    return output
+            info_fd = open_git_store_directory(
+                self.git_directory_fd,
+                "info",
+                self.profile,
+                "Git repository info directory",
+            )
+            try:
+                if "grafts" in scan_git_directory(
+                    info_fd,
+                    self.profile.git_object_limit,
+                    "Git repository info directory",
+                ):
+                    fail("Git grafts are forbidden")
+            finally:
+                close_descriptor(info_fd, "Git repository info directory")
+
+        if git_path_exists(self.git_directory_fd, "refs", "Git refs directory"):
+            refs_fd = open_git_store_directory(
+                self.git_directory_fd,
+                "refs",
+                self.profile,
+                "Git refs directory",
+            )
+            try:
+                if git_path_exists(refs_fd, "replace", "Git replace refs"):
+                    fail("Git replace refs are forbidden")
+            finally:
+                close_descriptor(refs_fd, "Git refs directory")
+
+        if git_path_exists(
+            self.git_directory_fd, "config", "Git repository configuration"
+        ):
+            raw = read_git_control_file(
+                self.git_directory_fd,
+                "config",
+                self.profile,
+                MAX_GIT_CONFIG_BYTES,
+                "Git repository configuration",
+            )
+            try:
+                text = raw.decode("utf-8")
+                parser = configparser.ConfigParser(
+                    interpolation=None, strict=True, default_section="__forbidden__"
+                )
+                parser.read_string(text)
+            except (UnicodeDecodeError, configparser.Error):
+                fail("Git repository configuration is malformed")
+            for section in parser.sections():
+                lowered = section.lower()
+                options = {name.lower() for name in parser.options(section)}
+                if lowered == "extensions" and "partialclone" in options:
+                    fail("Git partial-clone configuration is forbidden")
+                if lowered.startswith('remote "') and (
+                    "promisor" in options or "partialclonefilter" in options
+                ):
+                    fail("Git promisor configuration is forbidden")
+
+    def read_object(self, object_id: str, expected_kind: str) -> bytes:
+        if COMMIT_RE.fullmatch(object_id) is None:
+            fail("Git object ID is malformed")
+        cached = self.cache.get(object_id)
+        if cached is not None:
+            kind, payload = cached
+            if kind != expected_kind:
+                fail("Git object kind differs from tree closure")
+            return payload
+        if self.object_count >= self.profile.git_object_limit:
+            fail("Git object count exceeds protected limit")
+        payload_limits = {
+            "blob": self.profile.source_byte_limit,
+            "tree": self.profile.source_index_limit,
+            "commit": MAX_FILE_BYTES,
+        }
+        payload_limit = payload_limits.get(expected_kind)
+        if payload_limit is None:
+            fail("Git object kind is not supported")
+        compressed_remaining = (
+            self.profile.git_object_bytes_limit - self.compressed_bytes
+        )
+        compressed_limit = min(compressed_remaining, payload_limit + 64 * 1024)
+        if compressed_limit < 1:
+            fail("Git compressed object bytes exceed protected limit")
+        fanout_fd = open_git_store_directory(
+            self.objects_fd,
+            object_id[:2],
+            self.profile,
+            f"Git object fanout {object_id[:2]}",
+        )
+        object_fd = -1
+        try:
+            object_fd = os.open(
+                object_id[2:],
+                os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
+                dir_fd=fanout_fd,
+            )
+            before = os.fstat(object_fd)
+            verify_git_store_metadata(
+                before, self.profile, f"Git object {object_id}", directory=False
+            )
+            if not 1 <= before.st_size <= compressed_limit:
+                fail("Git compressed object bytes exceed protected limit")
+            compressed = read_descriptor_bound(
+                object_fd, compressed_limit, f"Git object {object_id}"
+            )
+            after = os.fstat(object_fd)
+            if stable_file_identity(before) != stable_file_identity(after):
+                fail(f"Git object {object_id} changed while being read")
+        except ExecutorError:
+            raise
+        except OSError as error:
+            fail(f"cannot read Git object {object_id} by descriptor: {error}")
+        finally:
+            close_descriptors(
+                (
+                    (object_fd, f"Git object {object_id}"),
+                    (fanout_fd, f"Git object fanout {object_id[:2]}"),
+                )
+            )
+
+        expanded_remaining = self.profile.git_object_bytes_limit - self.expanded_bytes
+        expanded_limit = min(expanded_remaining, payload_limit + 128)
+        if expanded_limit < 1:
+            fail("Git expanded object bytes exceed protected limit")
+        try:
+            decompressor = zlib.decompressobj()
+            expanded = decompressor.decompress(compressed, expanded_limit + 1)
+            if decompressor.unconsumed_tail or len(expanded) > expanded_limit:
+                fail("Git expanded object bytes exceed protected limit")
+            expanded += decompressor.flush(expanded_limit + 1 - len(expanded))
+        except zlib.error:
+            fail(f"Git object {object_id} has invalid zlib framing")
+        if (
+            len(expanded) > expanded_limit
+            or not decompressor.eof
+            or decompressor.unused_data
+            or decompressor.unconsumed_tail
+        ):
+            fail(f"Git object {object_id} has invalid or oversized zlib framing")
+        try:
+            header, payload = expanded.split(b"\0", 1)
+            kind_raw, size_raw = header.split(b" ", 1)
+            kind = kind_raw.decode("ascii")
+            size_text = size_raw.decode("ascii")
+        except (ValueError, UnicodeDecodeError):
+            fail(f"Git object {object_id} has malformed canonical framing")
+        if (
+            kind not in ("blob", "tree", "commit")
+            or kind != expected_kind
+            or not size_text.isdigit()
+            or len(size_text) > 20
+            or len(size_text) > 1
+            and size_text.startswith("0")
+            or int(size_text) != len(payload)
+            or hashlib.sha1(expanded).hexdigest() != object_id
+        ):
+            fail(f"Git object ID, kind, or size mismatch for {object_id}")
+        if len(payload) > payload_limit:
+            labels = {
+                "blob": "Git source bytes exceed protected limit",
+                "tree": "Git tree bytes exceed protected index limit",
+                "commit": "Git commit bytes exceed protected limit",
+            }
+            fail(labels[expected_kind])
+        self.object_count += 1
+        self.compressed_bytes += len(compressed)
+        self.expanded_bytes += len(expanded)
+        self.cache[object_id] = (kind, payload)
+        return payload
+
+    def commit_tree(self, commit_id: str) -> str:
+        payload = self.read_object(commit_id, "commit")
+        header_block = payload.split(b"\n\n", 1)[0]
+        lines = header_block.split(b"\n")
+        trees = [line[5:] for line in lines if line.startswith(b"tree ")]
+        if len(trees) != 1 or not lines or lines[0] != b"tree " + trees[0]:
+            fail("Git commit has malformed or ambiguous tree binding")
+        try:
+            tree_id = trees[0].decode("ascii")
+        except UnicodeDecodeError:
+            fail("Git commit tree ID is not ASCII")
+        if COMMIT_RE.fullmatch(tree_id) is None:
+            fail("Git commit tree ID is malformed")
+        return tree_id
+
+    def parse_tree(self, tree_id: str) -> list[GitTreeEntry]:
+        payload = self.read_object(tree_id, "tree")
+        self.tree_bytes += len(payload)
+        if self.tree_bytes > self.profile.source_index_limit:
+            fail("Git tree bytes exceed protected index limit")
+        output: list[GitTreeEntry] = []
+        position = 0
+        previous_key: bytes | None = None
+        seen_names: set[bytes] = set()
+        while position < len(payload):
+            space = payload.find(b" ", position, min(len(payload), position + 8))
+            nul = payload.find(b"\0", space + 1, min(len(payload), space + 258))
+            if space < 0 or nul < 0 or nul + 21 > len(payload):
+                fail("Git tree object is structurally malformed")
+            mode_raw = payload[position:space]
+            name_raw = payload[space + 1 : nul]
+            object_id = payload[nul + 1 : nul + 21].hex()
+            position = nul + 21
+            directory = mode_raw == b"40000"
+            if mode_raw not in (b"40000", b"100644", b"100755"):
+                fail("Git tree contains a symlink, submodule, or unsupported mode")
+            if (
+                not name_raw
+                or len(name_raw) > 255
+                or name_raw in (b".", b"..", b".git")
+                or b"/" in name_raw
+                or b"\n" in name_raw
+                or b"\r" in name_raw
+                or name_raw in seen_names
+            ):
+                fail("Git tree contains an unsafe or duplicate name")
+            try:
+                name = name_raw.decode("ascii")
+            except UnicodeDecodeError:
+                fail("Git tree path is not canonical ASCII")
+            if re.fullmatch(r"[A-Za-z0-9._+:-]{1,255}", name) is None:
+                fail("Git tree path contains unsupported characters")
+            ordering_key = name_raw + (b"/" if directory else b"")
+            if previous_key is not None and ordering_key <= previous_key:
+                fail("Git tree entries are not in canonical order")
+            previous_key = ordering_key
+            seen_names.add(name_raw)
+            output.append(
+                GitTreeEntry(name, mode_raw.decode("ascii"), object_id, directory)
+            )
+        return output
+
+    def export_tree(self, tree_id: str) -> list[tuple[str, str, str, bytes]]:
+        output: list[tuple[str, str, str, bytes]] = []
+        active: set[str] = set()
+        directory_count = 0
+
+        def visit(object_id: str, prefix: str, depth: int) -> None:
+            nonlocal directory_count
+            if depth > self.profile.git_tree_depth_limit:
+                fail("Git tree depth exceeds protected limit")
+            if object_id in active:
+                fail("Git tree closure contains a cycle")
+            active.add(object_id)
+            try:
+                for entry in self.parse_tree(object_id):
+                    path = entry.name if not prefix else f"{prefix}/{entry.name}"
+                    if len(path) > 512:
+                        fail("Git source path exceeds protected limit")
+                    if entry.directory:
+                        directory_count += 1
+                        if directory_count > MAX_SOURCE_DIRECTORIES:
+                            fail("Git source directory count exceeds protected limit")
+                        visit(entry.object_id, path, depth + 1)
+                    else:
+                        if len(output) >= self.profile.source_file_limit:
+                            fail("Git source file count exceeds protected limit")
+                        payload = self.read_object(entry.object_id, "blob")
+                        output.append((path, entry.mode, entry.object_id, payload))
+            finally:
+                active.remove(object_id)
+
+        visit(tree_id, "", 0)
+        output.sort(key=lambda item: item[0])
+        if not output or len({item[0] for item in output}) != len(output):
+            fail("Git source closure is empty or contains duplicate paths")
+        return output
 
 
 def open_child_directory(parent_fd: int, component: str) -> int:
@@ -1766,11 +2522,11 @@ def open_snapshot_directory(snapshot_fd: int, relative: str) -> int:
                 os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
                 dir_fd=current_fd,
             )
-            os.close(current_fd)
+            close_descriptor(current_fd, "source staging directory parent")
             current_fd = next_fd
         return current_fd
     except OSError as error:
-        os.close(current_fd)
+        close_descriptor(current_fd, "changed source staging directory")
         fail(f"source staging directory changed during finalization: {error}")
 
 
@@ -1789,7 +2545,7 @@ def finalize_source_directories(
         except OSError as error:
             fail(f"cannot durably finalize source directory {relative}: {error}")
         finally:
-            os.close(directory_fd)
+            close_descriptor(directory_fd, f"source directory {relative}")
     try:
         os.fchmod(snapshot_fd, 0o555)
         os.fsync(snapshot_fd)
@@ -1802,11 +2558,14 @@ def write_snapshot_file(
     snapshot_fd: int, path: str, mode: str, content: bytes
 ) -> tuple[int, str]:
     components = path.split("/")
-    parent_fd = os.dup(snapshot_fd)
+    try:
+        parent_fd = os.dup(snapshot_fd)
+    except OSError as error:
+        fail(f"cannot retain source staging parent for {path}: {error}")
     try:
         for component in components[:-1]:
             next_fd = open_child_directory(parent_fd, component)
-            os.close(parent_fd)
+            close_descriptor(parent_fd, f"source file {path} parent")
             parent_fd = next_fd
         try:
             file_fd = os.open(
@@ -1825,9 +2584,9 @@ def write_snapshot_file(
                 f"source file {path}",
             )
         finally:
-            os.close(file_fd)
+            close_descriptor(file_fd, f"source file {path}")
     finally:
-        os.close(parent_fd)
+        close_descriptor(parent_fd, f"source file {path} parent")
     return len(content), sha256_bytes(content)
 
 
@@ -1878,6 +2637,8 @@ def verify_retained_output(stage: OutputStage) -> None:
         by_path = stage.path.lstat()
         artifact = stage.artifact_path.lstat()
         log = stage.log_path.lstat()
+        artifact_by_fd = os.fstat(stage.artifact_fd)
+        log_by_fd = os.fstat(stage.log_fd)
     except OSError:
         fail("retained output staging path is unavailable")
     if (
@@ -1888,9 +2649,8 @@ def verify_retained_output(stage: OutputStage) -> None:
         or not stat.S_ISREG(artifact.st_mode)
         or not stat.S_ISREG(log.st_mode)
         or (artifact.st_dev, artifact.st_ino)
-        != (os.fstat(stage.artifact_fd).st_dev, os.fstat(stage.artifact_fd).st_ino)
-        or (log.st_dev, log.st_ino)
-        != (os.fstat(stage.log_fd).st_dev, os.fstat(stage.log_fd).st_ino)
+        != (artifact_by_fd.st_dev, artifact_by_fd.st_ino)
+        or (log.st_dev, log.st_ino) != (log_by_fd.st_dev, log_by_fd.st_ino)
     ):
         fail("retained output staging path was replaced")
 
@@ -1953,10 +2713,17 @@ def stage_output(profile: Profile, lease_name: str) -> OutputStage:
         verify_retained_output(stage)
         return stage
     except (ExecutorError, OSError) as error:
-        safe_close(log_fd)
-        safe_close(artifact_fd)
-        safe_close(directory_fd)
-        cleanup_error: ExecutorError | None = None
+        failure = normalized_error(error, "cannot initialize output staging")
+        try:
+            close_descriptors(
+                (
+                    (log_fd, "partial output stderr stream"),
+                    (artifact_fd, "partial output artifact stream"),
+                    (directory_fd, "partial output staging directory"),
+                )
+            )
+        except ExecutorError as close_error:
+            failure = append_error(failure, close_error)
         if created:
             try:
                 if identity is None:
@@ -1970,46 +2737,30 @@ def stage_output(profile: Profile, lease_name: str) -> OutputStage:
                     identity.st_ino,
                     "partial output staging",
                 )
-            except (ExecutorError, OSError) as failure:
-                cleanup_error = ExecutorError(str(failure))
-        safe_close(root_fd)
-        if cleanup_error is not None:
-            fail(f"output staging failed and cleanup failed: {cleanup_error}")
-        if isinstance(error, ExecutorError):
-            raise error
-        fail(f"cannot initialize output staging: {error}")
+            except (ExecutorError, OSError) as cleanup_error:
+                failure = append_error(failure, cleanup_error)
+        try:
+            close_descriptor(root_fd, "partial output staging root")
+        except ExecutorError as close_error:
+            failure = append_error(failure, close_error)
+        raise failure
 
 
 def stage_source(profile: Profile, request: Request, lease_name: str) -> SourceSnapshot:
-    verify_regular(
-        Path(profile.git_path),
-        str(profile.git_size),
-        profile.git_digest,
-        "Git executable",
-    )
-    version = run_bounded(
-        [profile.git_path, "--version"],
-        label="Git version",
-        environment={"HOME": "/nonexistent", "LC_ALL": "C", "PATH": "/nonexistent"},
-        timeout_seconds=15,
-        stdout_limit=4096,
-        stderr_limit=4096,
-    )
-    if (
-        version.returncode
-        or version.stderr
-        or sha256_bytes(version.stdout) != profile.git_version_digest
-    ):
-        fail("Git executable version differs from protected profile")
-    objects = Path(profile.git_objects_path)
     staging_root = Path(profile.source_staging_root)
-    if (
-        objects.is_symlink()
-        or not objects.is_dir()
-        or staging_root.is_symlink()
-        or not staging_root.is_dir()
-    ):
-        fail("immutable source object or staging root is unsafe")
+    if staging_root.is_symlink() or not staging_root.is_dir():
+        fail("source staging root is unsafe")
+    store = GitLooseObjectStore.open(profile)
+    try:
+        commit_tree = store.commit_tree(request.source_commit)
+        if commit_tree != request.source_tree:
+            fail("source commit/tree binding differs from authenticated object store")
+        entries = store.export_tree(request.source_tree)
+    finally:
+        store.close()
+    source_total = sum(len(content) for _, _, _, content in entries)
+    if source_total > profile.source_byte_limit:
+        fail("Git source bytes exceed protected limit")
     staging_root_fd = open_staging_root(profile, staging_root, "source staging root")
     root_fd = -1
     snapshot_fd = -1
@@ -2021,7 +2772,6 @@ def stage_source(profile: Profile, request: Request, lease_name: str) -> SourceS
     request_name = "request.tsv"
     lease_path = staging_root / lease_name
     snapshot_path = lease_path / snapshot_name
-    control = lease_path / "git-control"
     try:
         os.mkdir(lease_name, 0o700, dir_fd=staging_root_fd)
         lease_created = True
@@ -2038,37 +2788,6 @@ def stage_source(profile: Profile, request: Request, lease_name: str) -> SourceS
             os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
             dir_fd=root_fd,
         )
-        initialize_git_control(control)
-        commit = git_object_command(
-            profile,
-            control,
-            ["cat-file", "commit", request.source_commit],
-            label="Git commit read",
-            stdout_limit=MAX_FILE_BYTES,
-        )
-        first_line = commit.split(b"\n", 1)[0]
-        if first_line != f"tree {request.source_tree}".encode("ascii"):
-            fail("source commit/tree binding differs from immutable object store")
-        raw_index = git_object_command(
-            profile,
-            control,
-            ["ls-tree", "-rz", "--full-tree", "-r", request.source_tree],
-            label="Git tree index",
-            stdout_limit=profile.source_index_limit,
-        )
-        entries = parse_tree_index(profile, raw_index)
-        batch_input = b"".join(
-            f"{object_id}\n".encode("ascii") for _, _, object_id in entries
-        )
-        raw_blobs = git_object_command(
-            profile,
-            control,
-            ["cat-file", "--batch"],
-            label="Git blob batch",
-            stdout_limit=profile.source_byte_limit + len(entries) * 128,
-            input_data=batch_input,
-        )
-        blobs = parse_blob_batch(profile, entries, raw_blobs)
         manifest_lines = [
             "source_snapshot_manifest_schema_version\t1",
             f"request_id\t{request.request_id}",
@@ -2079,9 +2798,7 @@ def stage_source(profile: Profile, request: Request, lease_name: str) -> SourceS
         total = 0
         job_found = False
         directories: set[str] = set()
-        for index, ((path, mode, object_id), content) in enumerate(
-            zip(entries, blobs, strict=True)
-        ):
+        for index, (path, mode, object_id, content) in enumerate(entries):
             file_size, digest = write_snapshot_file(snapshot_fd, path, mode, content)
             total += file_size
             parent = Path(path).parent
@@ -2111,7 +2828,7 @@ def stage_source(profile: Profile, request: Request, lease_name: str) -> SourceS
             write_all(manifest_fd, manifest_raw)
             finalize_source_file(manifest_fd, 0o444, "source manifest")
         finally:
-            os.close(manifest_fd)
+            close_descriptor(manifest_fd, "source manifest")
         request_write_fd = os.open(
             request_name,
             os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
@@ -2122,16 +2839,12 @@ def stage_source(profile: Profile, request: Request, lease_name: str) -> SourceS
             write_all(request_write_fd, request.raw)
             finalize_source_file(request_write_fd, 0o444, "request snapshot")
         finally:
-            os.close(request_write_fd)
+            close_descriptor(request_write_fd, "request snapshot writer")
         request_fd = os.open(
             request_name,
             os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
             dir_fd=root_fd,
         )
-        try:
-            shutil.rmtree(control)
-        except OSError as error:
-            fail(f"cannot remove transient Git control directory: {error}")
         finalize_source_directories(snapshot_fd, directories, root_fd)
         identity = os.fstat(snapshot_fd)
         request_identity = os.fstat(request_fd)
@@ -2157,10 +2870,17 @@ def stage_source(profile: Profile, request: Request, lease_name: str) -> SourceS
         verify_retained_snapshot(snapshot)
         return snapshot
     except (ExecutorError, OSError) as error:
-        safe_close(request_fd)
-        safe_close(snapshot_fd)
-        safe_close(root_fd)
-        cleanup_error: ExecutorError | None = None
+        failure = normalized_error(error, "cannot initialize source staging")
+        try:
+            close_descriptors(
+                (
+                    (request_fd, "partial request snapshot"),
+                    (snapshot_fd, "partial source snapshot"),
+                    (root_fd, "partial source staging lease"),
+                )
+            )
+        except ExecutorError as close_error:
+            failure = append_error(failure, close_error)
         if lease_created:
             try:
                 if lease_identity is None:
@@ -2176,14 +2896,13 @@ def stage_source(profile: Profile, request: Request, lease_name: str) -> SourceS
                     lease_identity.st_ino,
                     "partial source staging",
                 )
-            except (ExecutorError, OSError) as failure:
-                cleanup_error = ExecutorError(str(failure))
-        safe_close(staging_root_fd)
-        if cleanup_error is not None:
-            fail(f"source staging failed and cleanup failed: {cleanup_error}")
-        if isinstance(error, ExecutorError):
-            raise error
-        fail(f"cannot initialize source staging: {error}")
+            except (ExecutorError, OSError) as cleanup_error:
+                failure = append_error(failure, cleanup_error)
+        try:
+            close_descriptor(staging_root_fd, "partial source staging root")
+        except ExecutorError as close_error:
+            failure = append_error(failure, close_error)
+        raise failure
 
 
 def external_trust_anchor(args: argparse.Namespace) -> TrustAnchor:
@@ -2210,12 +2929,22 @@ def authorize(args: argparse.Namespace) -> AuthorizedRequest:
     root = open_trusted_root(Path(args.trusted_root), anchor)
     try:
         policy = parse_policy(root, args.policy, anchor)
-        request = read_request_file(
-            Path(args.request), args.request_owner_uid, args.request_owner_gid
-        )
+        if args.invocation_mode == "production-operator":
+            request = read_operator_request(args.operator_config, args.request_id)
+        elif args.invocation_mode == "test":
+            request = read_request_file(
+                Path(args.request), args.request_owner_uid, args.request_owner_gid
+            )
+        else:
+            fail("unknown OCI executor invocation mode")
         profile = load_profile(root, policy, request.profile_id, anchor)
     finally:
         root.close()
+    expected_domain = (
+        "production" if args.invocation_mode == "production-operator" else "test"
+    )
+    if policy.domain != expected_domain or profile.mode != expected_domain:
+        fail(f"{args.invocation_mode} cannot authorize {policy.domain} policy data")
     verify_operator_owned(
         Path(profile.runtime_path),
         profile,
@@ -2224,14 +2953,7 @@ def authorize(args: argparse.Namespace) -> AuthorizedRequest:
         allow_root=True,
     )
     verify_operator_owned(
-        Path(profile.git_path),
-        profile,
-        "Git executable",
-        directory=False,
-        allow_root=True,
-    )
-    verify_operator_owned(
-        Path(profile.git_objects_path), profile, "Git objects", directory=True
+        Path(profile.git_objects_path), profile, "Git object store", directory=True
     )
     verify_operator_owned(
         Path(profile.source_staging_root),
@@ -2260,8 +2982,13 @@ def authorize(args: argparse.Namespace) -> AuthorizedRequest:
     )
     verify_operator_owned(seccomp, profile, "seccomp profile", directory=False)
     verify_oci_image(profile)
-    if not SHA256_RE.fullmatch(args.queue_authorization_sha256):
-        fail("external queue authorization digest is malformed")
+    queue_trust_digest = (
+        args.operator_config.queue_trust_digest
+        if args.invocation_mode == "production-operator"
+        else args.queue_authorization_sha256
+    )
+    if not SHA256_RE.fullmatch(queue_trust_digest):
+        fail("queue authorization trust digest is malformed")
     authorization_digest = sha256_bytes(
         b"fe2o3-oci-authorization-v1\0"
         + anchor.identity.encode("ascii")
@@ -2277,13 +3004,13 @@ def authorize(args: argparse.Namespace) -> AuthorizedRequest:
         + bytes.fromhex(policy.digest)
         + bytes.fromhex(profile.profile_digest)
         + bytes.fromhex(request.digest)
-        + bytes.fromhex(args.queue_authorization_sha256)
+        + bytes.fromhex(queue_trust_digest)
     )
     return AuthorizedRequest(
         policy,
         profile,
         request,
-        seccomp.resolve(strict=True),
+        resolve_path(seccomp, "protected seccomp profile"),
         authorization_digest,
     )
 
@@ -2483,6 +3210,57 @@ def docker_create_arguments(
     return arguments
 
 
+def invocation_digest(arguments: list[str]) -> str:
+    digest = hashlib.sha256(b"fe2o3-oci-create-arguments-v1\0")
+    for argument in arguments:
+        try:
+            encoded = argument.encode("ascii")
+        except UnicodeEncodeError:
+            fail("OCI invocation argument is not ASCII")
+        digest.update(struct.pack(">Q", len(encoded)))
+        digest.update(encoded)
+    return digest.hexdigest()
+
+
+def require_lease_absent(root: Path, lease_name: str, label: str) -> None:
+    root_fd = -1
+    try:
+        root_fd = os.open(
+            root,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+        )
+        try:
+            os.stat(lease_name, dir_fd=root_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return
+        fail(f"{label} lease still exists before plan output")
+    except ExecutorError:
+        raise
+    except OSError as error:
+        fail(f"cannot establish {label} lease cleanup before plan output: {error}")
+    finally:
+        if root_fd >= 0:
+            close_descriptor(root_fd, f"{label} plan-output check")
+
+
+def emit_plan_output(
+    lines: list[str],
+    lease_contracts: tuple[tuple[Path, str, str], ...],
+) -> None:
+    if not lines or any("\n" in line or "\r" in line for line in lines):
+        fail("invalid bounded plan output")
+    for root, lease_name, label in lease_contracts:
+        require_lease_absent(root, lease_name, label)
+    raw = ("\n".join(lines) + "\n").encode("ascii")
+    if len(raw) > MAX_FILE_BYTES:
+        fail("plan output exceeds protected limit")
+    try:
+        sys.stdout.write(raw.decode("ascii"))
+        sys.stdout.flush()
+    except OSError as error:
+        fail(f"cannot emit cleaned OCI plan: {error}")
+
+
 def command_plan(args: argparse.Namespace) -> None:
     authorized = authorize(args)
     profile = authorized.profile
@@ -2490,6 +3268,7 @@ def command_plan(args: argparse.Namespace) -> None:
     lease_name = staging_lease_name(authorized.authorization_digest)
     snapshot = stage_source(profile, request, lease_name)
     output: OutputStage | None = None
+    plan_lines: list[str] | None = None
     try:
         output = stage_output(profile, lease_name)
         arguments = docker_create_arguments(
@@ -2501,29 +3280,31 @@ def command_plan(args: argparse.Namespace) -> None:
         )
         verify_retained_snapshot(snapshot)
         verify_retained_output(output)
-        print("oci_execution_plan_schema_version\t1")
-        print("authorization_source\tprotected-policy")
-        print(f"policy_identity\t{args.policy_identity}")
-        print(f"authorization_sha256\t{authorized.authorization_digest}")
-        print(f"profile_id\t{profile.profile_id}")
-        print(f"profile_sha256\t{profile.profile_digest}")
-        print(f"request_id\t{request.request_id}")
-        print(f"container_name\tfe2o3-evidence-{request.request_id}")
-        print(f"source_snapshot\t{snapshot.path}")
-        print(f"source_manifest\t{snapshot.manifest_path}")
-        print(f"source_manifest_sha256\t{snapshot.manifest_digest}")
-        print(f"request_snapshot\t{snapshot.request_path}")
-        print(f"request_sha256\t{request.digest}")
-        print(f"source_file_count\t{snapshot.file_count}")
-        print(f"source_bytes\t{snapshot.byte_count}")
-        print(f"artifact_stream_protocol\t{profile.artifact_stream_protocol}")
-        print(f"artifact_stream_path\t{output.artifact_path}")
-        print(f"artifact_stream_limit\t{profile.output_limit}")
-        print(f"stderr_stream_path\t{output.log_path}")
-        print(f"stderr_stream_limit\t{profile.log_limit}")
-        print(f"argument_count\t{len(arguments)}")
-        for index, argument in enumerate(arguments):
-            print(f"argument\t{index:04d}\t{argument.encode('ascii').hex()}")
+        plan_lines = [
+            "oci_execution_plan_schema_version\t2",
+            "authorization_state\t"
+            + (
+                "operator-policy-matched"
+                if args.invocation_mode == "production-operator"
+                else "test-non-authoritative"
+            ),
+            f"policy_identity\t{args.policy_identity}",
+            f"authorization_sha256\t{authorized.authorization_digest}",
+            f"profile_id\t{profile.profile_id}",
+            f"profile_sha256\t{profile.profile_digest}",
+            f"request_id\t{request.request_id}",
+            f"request_sha256\t{request.digest}",
+            f"source_commit\t{request.source_commit}",
+            f"source_tree\t{request.source_tree}",
+            f"source_manifest_sha256\t{snapshot.manifest_digest}",
+            f"source_file_count\t{snapshot.file_count}",
+            f"source_bytes\t{snapshot.byte_count}",
+            f"artifact_stream_protocol\t{profile.artifact_stream_protocol}",
+            f"artifact_stream_limit\t{profile.output_limit}",
+            f"stderr_stream_limit\t{profile.log_limit}",
+            f"argument_count\t{len(arguments)}",
+            f"invocation_sha256\t{invocation_digest(arguments)}",
+        ]
     finally:
         cleanup_failures: list[str] = []
         if output is not None:
@@ -2537,16 +3318,32 @@ def command_plan(args: argparse.Namespace) -> None:
             cleanup_failures.append(str(error))
         if cleanup_failures:
             fail("plan staging cleanup failed: " + "; ".join(cleanup_failures))
+    assert plan_lines is not None
+    emit_plan_output(
+        plan_lines,
+        (
+            (Path(profile.source_staging_root), lease_name, "source staging"),
+            (Path(profile.output_staging_root), lease_name, "output staging"),
+        ),
+    )
 
 
 def command_preflight(args: argparse.Namespace) -> None:
     observed = observe_runtime(authorize(args))
     profile = observed.authorized.profile
     request = observed.authorized.request
-    print(f"authorized_profile\t{profile.profile_id}")
+    print(f"matched_profile\t{profile.profile_id}")
     print(f"profile_sha256\t{profile.profile_digest}")
     print(f"request_id\t{request.request_id}")
     print("observational_preflight\tpassed")
+    print(
+        "authorization_state\t"
+        + (
+            "operator-policy-matched"
+            if args.invocation_mode == "production-operator"
+            else "test-non-authoritative"
+        )
+    )
     print("execution_receipt\tnot-issued")
 
 
@@ -2554,65 +3351,232 @@ def command_verify(args: argparse.Namespace) -> None:
     authorized = authorize(args)
     profile = authorized.profile
     request = authorized.request
-    print(f"authorized_profile\t{profile.profile_id}")
+    print(f"matched_profile\t{profile.profile_id}")
     print(f"profile_sha256\t{profile.profile_digest}")
     print(f"request_id\t{request.request_id}")
     print(f"source_tree\t{request.source_tree}")
-    print("authorization_source\tprotected-policy")
-
-
-def add_authorization_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--request", required=True)
-    parser.add_argument("--request-owner-uid", required=True, type=int)
-    parser.add_argument("--request-owner-gid", required=True, type=int)
-    parser.add_argument("--queue-authorization-sha256", required=True)
-    parser.add_argument("--trusted-root", required=True)
-    parser.add_argument(
-        "--policy", required=True, help="externally pinned relative path"
+    print(
+        "authorization_state\t"
+        + (
+            "operator-policy-matched"
+            if args.invocation_mode == "production-operator"
+            else "test-non-authoritative"
+        )
     )
-    parser.add_argument("--policy-identity", required=True)
-    parser.add_argument("--policy-size", required=True, type=int)
-    parser.add_argument("--policy-sha256", required=True)
-    parser.add_argument("--trusted-owner-uid", required=True, type=int)
-    parser.add_argument("--trusted-owner-gid", required=True, type=int)
+
+
+def add_test_authorization_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--test-request", dest="request", required=True)
     parser.add_argument(
-        "--trust-file-contract",
+        "--test-request-owner-uid", dest="request_owner_uid", required=True, type=int
+    )
+    parser.add_argument(
+        "--test-request-owner-gid", dest="request_owner_gid", required=True, type=int
+    )
+    parser.add_argument(
+        "--test-queue-trust-sha256",
+        dest="queue_authorization_sha256",
         required=True,
-        choices=("descriptor-stable", "linux-immutable"),
     )
+    parser.add_argument("--test-trusted-root", dest="trusted_root", required=True)
+    parser.add_argument(
+        "--test-policy",
+        dest="policy",
+        required=True,
+        help="test-only relative policy path",
+    )
+    parser.add_argument("--test-policy-identity", dest="policy_identity", required=True)
+    parser.add_argument(
+        "--test-policy-size", dest="policy_size", required=True, type=int
+    )
+    parser.add_argument("--test-policy-sha256", dest="policy_sha256", required=True)
+    parser.add_argument(
+        "--test-trusted-owner-uid",
+        dest="trusted_owner_uid",
+        required=True,
+        type=int,
+    )
+    parser.add_argument(
+        "--test-trusted-owner-gid",
+        dest="trusted_owner_gid",
+        required=True,
+        type=int,
+    )
+    parser.add_argument(
+        "--test-trust-file-contract",
+        dest="trust_file_contract",
+        required=True,
+        choices=("descriptor-stable",),
+    )
+    parser.set_defaults(invocation_mode="test")
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
     verify = subparsers.add_parser(
-        "verify", help="verify protected authorization and immutable inputs"
+        "test-verify", help="perform non-authoritative test input validation"
     )
-    add_authorization_arguments(verify)
+    add_test_authorization_arguments(verify)
     verify.set_defaults(func=command_verify)
     plan = subparsers.add_parser(
-        "plan", help="render the fixed protected OCI invocation"
+        "test-plan", help="render a non-authoritative ephemeral test plan"
     )
-    add_authorization_arguments(plan)
+    add_test_authorization_arguments(plan)
     plan.set_defaults(func=command_plan)
     preflight = subparsers.add_parser(
-        "preflight", help="validate host, runtime daemon, and loaded image identity"
+        "test-preflight", help="perform non-authoritative runtime observations"
     )
-    add_authorization_arguments(preflight)
+    add_test_authorization_arguments(preflight)
     preflight.set_defaults(func=command_preflight)
     return parser
 
 
-def main() -> int:
-    parser = build_parser()
+def verify_installed_operator_entrypoint() -> None:
+    if (
+        Path(os.path.abspath(sys.argv[0])) != OPERATOR_EXECUTOR_PATH
+        or Path(os.path.abspath(__file__)) != OPERATOR_EXECUTOR_PATH
+        or Path(os.path.abspath(sys.executable)) != OPERATOR_INTERPRETER_PATH
+        or os.getcwd() != "/"
+        or dict(os.environ) != OPERATOR_ENVIRONMENT
+        or not sys.flags.isolated
+        or not sys.flags.no_site
+        or not sys.flags.ignore_environment
+        or not sys.flags.no_user_site
+        or any(
+            not entry
+            or not Path(entry).is_absolute()
+            or OPERATOR_PYTHON_ROOT not in Path(entry).parents
+            for entry in sys.path
+        )
+    ):
+        fail("production operator startup state is not the fixed isolated contract")
+    for path, label in (
+        (OPERATOR_LAUNCHER_PATH, "operator launcher"),
+        (OPERATOR_INTERPRETER_PATH, "operator interpreter"),
+        (OPERATOR_EXECUTOR_PATH, "operator executor"),
+    ):
+        file_fd = -1
+        try:
+            file_fd = os.open(
+                path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC
+            )
+            info = os.fstat(file_fd)
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_nlink != 1
+                or (info.st_uid, info.st_gid) != (0, 0)
+                or info.st_mode & 0o022
+            ):
+                fail(f"fixed {label} ownership, mode, or link contract is unsafe")
+            verify_descriptor_immutable(file_fd, f"fixed {label}", True)
+        except ExecutorError:
+            raise
+        except OSError as error:
+            fail(f"cannot establish fixed {label}: {error}")
+        finally:
+            if file_fd >= 0:
+                close_descriptor(file_fd, f"fixed {label}")
+    launcher_fd = -1
+    parent_fd = -1
     try:
+        launcher_fd = os.open(
+            OPERATOR_LAUNCHER_PATH,
+            os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
+        )
+        parent_fd = os.open(
+            f"/proc/{os.getppid()}/exe", os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC
+        )
+        launcher_info = os.fstat(launcher_fd)
+        parent_info = os.fstat(parent_fd)
+        if (launcher_info.st_dev, launcher_info.st_ino) != (
+            parent_info.st_dev,
+            parent_info.st_ino,
+        ):
+            fail("production operator parent is not the fixed native launcher")
+    except ExecutorError:
+        raise
+    except OSError as error:
+        fail(f"cannot establish fixed native launcher parent: {error}")
+    finally:
+        close_descriptors(
+            (
+                (parent_fd, "native launcher parent"),
+                (launcher_fd, "fixed operator launcher"),
+            )
+        )
+
+
+def operator_namespace(
+    config: OperatorConfig,
+    request_id: str,
+    func: object,
+) -> argparse.Namespace:
+    return argparse.Namespace(
+        invocation_mode="production-operator",
+        operator_config=config,
+        request_id=request_id,
+        trusted_root=config.trusted_root,
+        policy=config.policy_path,
+        policy_identity=config.policy_identity,
+        policy_size=config.policy_size,
+        policy_sha256=config.policy_digest,
+        trusted_owner_uid=config.trusted_owner_uid,
+        trusted_owner_gid=config.trusted_owner_gid,
+        trust_file_contract=config.trust_file_contract,
+        func=func,
+    )
+
+
+def report_controlled_error(prefix: str, error: BaseException) -> int:
+    detail = " ".join(str(error).splitlines())
+    if len(detail) > 2048:
+        detail = detail[:2048] + "..."
+    raw = f"{prefix}: {detail}\n"
+    try:
+        sys.stderr.write(raw)
+        sys.stderr.flush()
+    except OSError:
+        try:
+            os.write(2, raw.encode("ascii", errors="replace"))
+        except OSError:
+            pass
+    return 2
+
+
+def operator_main(argv: list[str] | None = None) -> int:
+    try:
+        verify_installed_operator_entrypoint()
+        parser = argparse.ArgumentParser(
+            description="Fixed production OCI evidence operator entrypoint"
+        )
+        parser.add_argument("command", choices=("verify", "plan", "preflight"))
+        parser.add_argument("--request-id", required=True)
+        selected = parser.parse_args(argv)
+        config = load_operator_config()
+        function = {
+            "verify": command_verify,
+            "plan": command_plan,
+            "preflight": command_preflight,
+        }[selected.command]
+        args = operator_namespace(config, selected.request_id, function)
+        function(args)
+        return 0
+    except (ExecutorError, OSError) as error:
+        return report_controlled_error("fe2o3-oci-operator", error)
+
+
+def main() -> int:
+    try:
+        parser = build_parser()
         args = parser.parse_args()
         args.func(args)
         return 0
-    except ExecutorError as error:
-        print(f"parity-oci-executor: {error}", file=sys.stderr)
-        return 2
+    except (ExecutorError, OSError) as error:
+        return report_controlled_error("parity-oci-executor", error)
 
 
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["--operator-internal"]:
+        raise SystemExit(operator_main(sys.argv[2:]))
     raise SystemExit(main())
