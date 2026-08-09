@@ -1787,6 +1787,98 @@ fn pointer_casts_cannot_forge_references_provenance_spaces_or_mutability() {
     weakens_mutability.validate().unwrap();
 }
 
+fn scalar_cast_module(
+    source_ty: MirSemanticType,
+    destination_ty: MirSemanticType,
+    kind: MirCastKind,
+) -> MirExecutableModule {
+    let mut types = vec![source_ty.clone(), destination_ty.clone()];
+    types.sort_by_key(|item| item.canonical_text().unwrap());
+    types.dedup();
+    let id = |needle: &MirSemanticType| {
+        MirTypeId(types.iter().position(|item| item == needle).unwrap() as u32)
+    };
+    let source_id = id(&source_ty);
+    let destination_id = id(&destination_ty);
+    MirExecutableModule {
+        version: MirExecutableVersion::V1,
+        target: MirExecutableTarget::gfx942(),
+        types,
+        callables: vec![],
+        functions: vec![MirFunction {
+            identity: "fixture::scalar_cast".into(),
+            span: None,
+            body: MirBody {
+                form: MirBodyForm::Places,
+                locals: vec![
+                    local(destination_id, MirLocalKind::Return, true),
+                    local(source_id, MirLocalKind::Argument, false),
+                ],
+                blocks: vec![MirBasicBlock {
+                    parameters: vec![],
+                    statements: vec![MirStatement {
+                        kind: MirStatementKind::Assign {
+                            place: MirPlace::local(MirLocalId(0), destination_id),
+                            value: MirRvalue::Cast {
+                                kind,
+                                operand: MirOperand::Copy(MirPlace::local(
+                                    MirLocalId(1),
+                                    source_id,
+                                )),
+                                ty: destination_id,
+                            },
+                        },
+                        span: None,
+                    }],
+                    terminator: terminator(MirTerminatorKind::Return),
+                }],
+                entry: MirBlockId(0),
+            },
+        }],
+    }
+}
+
+#[test]
+fn casts_cannot_create_unchecked_char_values() {
+    let char_ty = ty(MirTypeKind::Scalar(MirScalarType::Char), 4, 4);
+    let u32_ty = ty(
+        MirTypeKind::Scalar(MirScalarType::Int {
+            signed: false,
+            bits: 32,
+        }),
+        4,
+        4,
+    );
+    let f32_ty = ty(MirTypeKind::Scalar(MirScalarType::Float { bits: 32 }), 4, 4);
+    let pointer_ty = ty(
+        MirTypeKind::RawPointer {
+            pointee: Box::new(u32_ty.clone()),
+            mutability: MirMutability::Immutable,
+            address_space: MirAddressSpace(1),
+        },
+        8,
+        8,
+    );
+
+    for module in [
+        scalar_cast_module(u32_ty.clone(), char_ty.clone(), MirCastKind::IntToInt),
+        scalar_cast_module(f32_ty, char_ty.clone(), MirCastKind::FloatToInt),
+        scalar_cast_module(pointer_ty, char_ty.clone(), MirCastKind::PointerToInt),
+    ] {
+        assert!(
+            module
+                .validate()
+                .unwrap_err()
+                .reason()
+                .contains("cast kind")
+        );
+    }
+
+    scalar_cast_module(char_ty, u32_ty, MirCastKind::IntToInt)
+        .validate()
+        .unwrap();
+}
+
 #[test]
 fn references_require_storage_or_reference_provenance() {
     let (mut raw_origin, ids) = pointer_module(false);
