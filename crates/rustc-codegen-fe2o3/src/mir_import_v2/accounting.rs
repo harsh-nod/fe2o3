@@ -87,6 +87,10 @@ impl AccountingV2 {
         self.work(1)?;
         self.function(&body.function)?;
         self.span(&body.source)?;
+        self.work(body.source_scopes.len())?;
+        for scope in &body.source_scopes {
+            self.source_scope(scope)?;
+        }
         self.work(body.locals.len())?;
         for local in &body.locals {
             self.local(local)?;
@@ -168,11 +172,55 @@ impl AccountingV2 {
         self.work(1)?;
         self.text(&span.remapped_file)?;
         self.text(&span.diagnostic_debug)?;
+        self.expansion(&span.expansion)?;
         if span.source_scope_parent.is_some() {
             self.work(1)?;
         }
         if span.inlined_instance_hash.is_some() {
             self.work(1)?;
+        }
+        Ok(())
+    }
+
+    fn source_scope(&mut self, scope: &SourceScopeIdentityV2) -> Result<(), ValidationErrorV2> {
+        self.work(1)?;
+        if scope.parent.is_some() {
+            self.work(1)?;
+        }
+        if scope.inlined_parent.is_some() {
+            self.work(1)?;
+        }
+        if let Some(inlined) = &scope.inlined {
+            self.work(1)?;
+            self.function(inlined)?;
+        }
+        self.structural_span(&scope.scope_span)?;
+        if let Some(callsite) = &scope.inlined_callsite {
+            self.work(1)?;
+            self.structural_span(callsite)?;
+        }
+        Ok(())
+    }
+
+    fn structural_span(
+        &mut self,
+        span: &StructuralSpanIdentityV2,
+    ) -> Result<(), ValidationErrorV2> {
+        self.work(1)?;
+        self.expansion(&span.expansion)
+    }
+
+    fn expansion(&mut self, expansion: &MacroExpansionIdentityV2) -> Result<(), ValidationErrorV2> {
+        self.work(1)?;
+        self.work(expansion.frames.len())?;
+        for frame in &expansion.frames {
+            self.work(1)?;
+            if frame.macro_definition.is_some() {
+                self.work(1)?;
+            }
+            if frame.parent_module.is_some() {
+                self.work(1)?;
+            }
         }
         Ok(())
     }

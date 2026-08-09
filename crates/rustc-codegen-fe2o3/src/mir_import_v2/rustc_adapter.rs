@@ -11,8 +11,8 @@ use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
 use rustc_hir::def::DefKind;
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir::{
-    AggregateKind, Body, Local, NonDivergingIntrinsic, Operand, Place, ProjectionElem, Rvalue,
-    SourceInfo, SourceScope, StatementKind, TerminatorKind, UnwindAction,
+    AggregateKind, AssertKind, Body, InlineAsmOperand, Local, NonDivergingIntrinsic, Operand,
+    Place, ProjectionElem, Rvalue, SourceInfo, StatementKind, TerminatorKind, UnwindAction,
 };
 use rustc_middle::ty::{
     EarlyBinder, FloatTy, GenericArgsRef, Instance, InstanceKind, IntTy, ReifyReason, Ty, TyCtxt,
@@ -50,6 +50,7 @@ struct CaptureContextV2<'a, 'tcx> {
     body: &'a Body<'tcx>,
     limits: CaptureLimitsV2,
     budget: CaptureBudgetV2,
+    source_scopes: Vec<SourceScopeIdentityV2>,
 }
 
 pub(crate) fn capture_instance_body_v2<'tcx>(
@@ -102,7 +103,11 @@ fn capture_body_v2<'tcx>(
         body,
         limits,
         budget,
+        source_scopes: Vec::new(),
     };
+
+    let source_scopes = capture_source_scopes(&mut context)?;
+    context.source_scopes = source_scopes;
 
     let mut locals = Vec::with_capacity(body.local_decls.len());
     for (local, declaration) in body.local_decls.iter_enumerated() {
@@ -170,6 +175,7 @@ fn capture_body_v2<'tcx>(
 
     let function = function_identity(&mut context, instance)?;
     let source = span_identity(&mut context, body.span, 0)?;
+    let source_scopes = std::mem::take(&mut context.source_scopes);
     let mut captured = CapturedBodyV2 {
         schema_version: NORMALIZED_MIR_SCHEMA_V2,
         authority: CaptureAuthorityV2::CompilerObservationOnly,
@@ -178,6 +184,7 @@ fn capture_body_v2<'tcx>(
         arg_count: body.arg_count,
         capture_work_items: 0,
         capture_text_bytes: 0,
+        source_scopes,
         locals,
         blocks,
     };
@@ -243,7 +250,17 @@ fn capture_statement<'tcx>(
         StatementKind::AscribeUserType(contents, variance) => Ok(StatementKindV2::Unsupported(
             UnsupportedStatementV2::AscribeUserType {
                 place: capture_place(context, contents.0)?,
-                projection: stable_compiler_value!(context, "user type projection", &contents.1,)?,
+                projection: {
+                    ensure_bound(
+                        "user type projection",
+                        contents.1.projs.len(),
+                        context.limits.max_projection_depth,
+                    )?;
+                    context
+                        .budget
+                        .charge_work("user type projection", contents.1.projs.len())?;
+                    stable_compiler_value!(context, "user type projection", &contents.1,)?
+                },
                 variance: stable_compiler_value!(context, "user type variance", variance)?,
             },
         )),
@@ -669,13 +686,16 @@ fn capture_terminator<'tcx>(
             msg,
             target,
             unwind,
-        } => Ok(TerminatorKindV2::Assert {
-            condition: capture_operand(context, cond, source_info)?,
-            expected: *expected,
-            target: target.as_usize(),
-            message: stable_compiler_value!(context, "assert message", msg)?,
-            unwind: capture_unwind(context, unwind)?,
-        }),
+        } => {
+            preflight_assert_message(context, msg)?;
+            Ok(TerminatorKindV2::Assert {
+                condition: capture_operand(context, cond, source_info)?,
+                expected: *expected,
+                target: target.as_usize(),
+                message: stable_compiler_value!(context, "assert message", msg)?,
+                unwind: capture_unwind(context, unwind)?,
+            })
+        }
         TerminatorKind::UnwindResume => Ok(TerminatorKindV2::UnwindResume),
         TerminatorKind::UnwindTerminate(reason) => Ok(TerminatorKindV2::UnwindTerminate {
             reason: stable_compiler_value!(context, "unwind termination", reason)?,
@@ -712,15 +732,128 @@ fn capture_terminator<'tcx>(
             line_spans,
             targets,
             ..
-        } => Ok(TerminatorKindV2::Unsupported(
-            UnsupportedTerminatorV2::InlineAssembly {
-                template_pieces: template.len(),
-                operands: operands.len(),
-                line_spans: line_spans.len(),
-                targets: targets.len(),
-            },
-        )),
+        } => {
+            preflight_inline_assembly(context, operands)?;
+            Ok(TerminatorKindV2::Unsupported(
+                UnsupportedTerminatorV2::InlineAssembly {
+                    template_pieces: template.len(),
+                    operands: operands.len(),
+                    line_spans: line_spans.len(),
+                    targets: targets.len(),
+                },
+            ))
+        }
     }
+}
+
+fn preflight_assert_message<'tcx>(
+    context: &mut CaptureContextV2<'_, 'tcx>,
+    message: &AssertKind<Operand<'tcx>>,
+) -> Result<(), CaptureErrorV2> {
+    match message {
+        AssertKind::BoundsCheck { len, index }
+        | AssertKind::Overflow(_, len, index)
+        | AssertKind::MisalignedPointerDereference {
+            required: len,
+            found: index,
+        } => {
+            preflight_hash_operand(context, len)?;
+            preflight_hash_operand(context, index)
+        }
+        AssertKind::OverflowNeg(operand)
+        | AssertKind::DivisionByZero(operand)
+        | AssertKind::RemainderByZero(operand)
+        | AssertKind::InvalidEnumConstruction(operand) => preflight_hash_operand(context, operand),
+        AssertKind::ResumedAfterReturn(_)
+        | AssertKind::ResumedAfterPanic(_)
+        | AssertKind::ResumedAfterDrop(_)
+        | AssertKind::NullPointerDereference => Ok(()),
+    }
+}
+
+fn preflight_inline_assembly<'tcx>(
+    context: &mut CaptureContextV2<'_, 'tcx>,
+    operands: &[InlineAsmOperand<'tcx>],
+) -> Result<(), CaptureErrorV2> {
+    for operand in operands {
+        match operand {
+            InlineAsmOperand::In { value, .. } => preflight_hash_operand(context, value)?,
+            InlineAsmOperand::Out { place, .. } => {
+                if let Some(place) = place {
+                    preflight_hash_place(context, *place)?;
+                }
+            }
+            InlineAsmOperand::InOut {
+                in_value,
+                out_place,
+                ..
+            } => {
+                preflight_hash_operand(context, in_value)?;
+                if let Some(place) = out_place {
+                    preflight_hash_place(context, *place)?;
+                }
+            }
+            InlineAsmOperand::Const { value } | InlineAsmOperand::SymFn { value } => {
+                preflight_mir_const_v2(
+                    "inline assembly constant",
+                    value.const_,
+                    context.limits,
+                    &mut context.budget,
+                )?;
+            }
+            InlineAsmOperand::SymStatic { .. } | InlineAsmOperand::Label { .. } => {}
+        }
+    }
+    Ok(())
+}
+
+fn preflight_hash_operand<'tcx>(
+    context: &mut CaptureContextV2<'_, 'tcx>,
+    operand: &Operand<'tcx>,
+) -> Result<(), CaptureErrorV2> {
+    match operand {
+        Operand::Copy(place) | Operand::Move(place) => preflight_hash_place(context, *place),
+        Operand::Constant(constant) => preflight_mir_const_v2(
+            "hashed compiler operand",
+            constant.const_,
+            context.limits,
+            &mut context.budget,
+        )
+        .map_err(Into::into),
+        Operand::RuntimeChecks(_) => Ok(()),
+    }
+}
+
+fn preflight_hash_place<'tcx>(
+    context: &mut CaptureContextV2<'_, 'tcx>,
+    place: Place<'tcx>,
+) -> Result<(), CaptureErrorV2> {
+    ensure_bound(
+        "hashed compiler place projection",
+        place.projection.len(),
+        context.limits.max_projection_depth,
+    )?;
+    context
+        .budget
+        .charge_work("hashed compiler place projection", place.projection.len())?;
+    for projection in place.projection {
+        match projection {
+            ProjectionElem::Field(_, ty)
+            | ProjectionElem::OpaqueCast(ty)
+            | ProjectionElem::UnwrapUnsafeBinder(ty) => preflight_ty_v2(
+                "hashed compiler projection type",
+                ty,
+                context.limits,
+                &mut context.budget,
+            )?,
+            ProjectionElem::Deref
+            | ProjectionElem::Index(_)
+            | ProjectionElem::ConstantIndex { .. }
+            | ProjectionElem::Subslice { .. }
+            | ProjectionElem::Downcast(..) => {}
+        }
+    }
+    Ok(())
 }
 
 fn capture_unwind<'tcx>(
@@ -1192,6 +1325,131 @@ fn float_width(width: FloatTy) -> FloatWidthV2 {
     }
 }
 
+fn capture_source_scopes<'tcx>(
+    context: &mut CaptureContextV2<'_, 'tcx>,
+) -> Result<Vec<SourceScopeIdentityV2>, CaptureErrorV2> {
+    ensure_bound(
+        "source scopes",
+        context.body.source_scopes.len(),
+        context.limits.max_source_scopes,
+    )?;
+    if context.body.source_scopes.is_empty() {
+        return Err(CaptureErrorV2::new(
+            "the MIR body has no canonical root source scope",
+        ));
+    }
+    let mut captured = Vec::with_capacity(context.body.source_scopes.len());
+    for (scope, data) in context.body.source_scopes.iter_enumerated() {
+        let index = scope.as_usize();
+        let parent = data.parent_scope.map(|scope| scope.as_usize());
+        let inlined_parent = data.inlined_parent_scope.map(|scope| scope.as_usize());
+        for (label, parent) in [("parent", parent), ("inlined parent", inlined_parent)] {
+            if parent.is_some_and(|parent| parent >= index) {
+                return Err(CaptureErrorV2::new(format!(
+                    "source scope {index} has non-topological {label}"
+                )));
+            }
+        }
+        let (inlined, inlined_callsite) = match data.inlined {
+            Some((instance, callsite)) => (
+                Some(function_identity(context, instance)?),
+                Some(structural_span_identity(context, callsite)?),
+            ),
+            None => (None, None),
+        };
+        let scope_span = structural_span_identity(context, data.span)?;
+        let mut identity = SourceScopeIdentityV2 {
+            index,
+            compiler_hash: stable_hash!(context.tcx, data),
+            parent,
+            inlined_parent,
+            inlined,
+            scope_span,
+            inlined_callsite,
+            record_hash: [0; 32],
+        };
+        identity.record_hash = source_scope_record_hash_v2(&identity)?;
+        captured.push(identity);
+    }
+    Ok(captured)
+}
+
+fn structural_span_identity<'tcx>(
+    context: &mut CaptureContextV2<'_, 'tcx>,
+    span: Span,
+) -> Result<StructuralSpanIdentityV2, CaptureErrorV2> {
+    let frame_count = preflight_expansion_chain(context, span, "macro expansion")?;
+    let mut frames = Vec::with_capacity(frame_count);
+    let mut cursor = span;
+    for _ in 0..frame_count {
+        let data = cursor.ctxt().outer_expn_data();
+        preflight_expansion_chain(context, data.def_site, "macro definition expansion")?;
+        frames.push(MacroExpansionFrameV2 {
+            expansion_hash: stable_hash!(context.tcx, data),
+            callsite_span_hash: stable_hash!(context.tcx, data.call_site),
+            definition_site_hash: stable_hash!(context.tcx, data.def_site),
+            macro_definition: data
+                .macro_def_id
+                .map(|definition| stable_definition_key(context, definition)),
+            parent_module: data
+                .parent_module
+                .map(|definition| stable_definition_key(context, definition)),
+        });
+        cursor = cursor.parent_callsite().ok_or_else(|| {
+            CaptureErrorV2::new("macro expansion chain changed after bounded preflight")
+        })?;
+    }
+    let mut expansion = MacroExpansionIdentityV2 {
+        syntax_context_hash: stable_hash!(context.tcx, span.ctxt()),
+        frames,
+        chain_hash: [0; 32],
+    };
+    expansion.chain_hash = expansion_chain_hash_v2(&expansion)?;
+    Ok(StructuralSpanIdentityV2 {
+        original_span_hash: stable_hash!(context.tcx, span),
+        callsite_span_hash: stable_hash!(context.tcx, span.source_callsite()),
+        expansion,
+    })
+}
+
+fn preflight_expansion_chain<'tcx>(
+    context: &mut CaptureContextV2<'_, 'tcx>,
+    span: Span,
+    label: &str,
+) -> Result<usize, CaptureErrorV2> {
+    let mut count = 0usize;
+    let mut cursor = span;
+    while let Some(parent) = cursor.parent_callsite() {
+        count = count
+            .checked_add(1)
+            .ok_or_else(|| CaptureErrorV2::new("macro expansion depth overflowed"))?;
+        ensure_bound(label, count, context.limits.max_macro_expansion_depth)?;
+        let data = cursor.ctxt().outer_expn_data();
+        if let Some(features) = &data.allow_internal_unstable {
+            ensure_bound(
+                "macro expansion feature list",
+                features.len(),
+                context.limits.max_type_arity,
+            )?;
+        }
+        context.budget.charge_work(label, 1)?;
+        cursor = parent;
+    }
+    Ok(count)
+}
+
+fn stable_definition_key<'tcx>(
+    context: &CaptureContextV2<'_, 'tcx>,
+    def_id: DefId,
+) -> StableDefinitionKeyV2 {
+    let hash = context.tcx.def_path_hash(def_id);
+    StableDefinitionKeyV2 {
+        def_path_hash: hash.0.to_le_bytes(),
+        stable_crate_id: stable_hash!(context.tcx, hash.stable_crate_id()),
+        local_def_path_hash: hash.local_hash().as_u64().to_le_bytes(),
+    }
+}
+
 fn source_span<'tcx>(
     context: &mut CaptureContextV2<'_, 'tcx>,
     source_info: SourceInfo,
@@ -1204,6 +1462,7 @@ fn span_identity<'tcx>(
     span: Span,
     source_scope: usize,
 ) -> Result<SourceSpanV2, CaptureErrorV2> {
+    let structural = structural_span_identity(context, span)?;
     let canonical = span.source_callsite();
     let source_map = context.tcx.sess.source_map();
     let start = source_map.lookup_char_pos(canonical.lo());
@@ -1221,32 +1480,16 @@ fn span_identity<'tcx>(
         SourceAuthorityV2::CanonicalRemapped
     };
 
-    let (source_scope_hash, source_scope_parent, inlined_instance_hash) = if let Some(scope_data) =
-        context
-            .body
-            .source_scopes
-            .get(SourceScope::from_usize(source_scope))
-    {
-        if let Some((instance, _)) = scope_data.inlined {
-            preflight_instance_v2(
-                "inlined source-scope instance",
-                instance,
-                context.limits,
-                &mut context.budget,
-            )?;
-        }
-        (
-            stable_hash!(context.tcx, scope_data),
-            scope_data.parent_scope.map(|scope| scope.as_usize()),
-            scope_data
-                .inlined
-                .map(|(instance, _)| stable_hash!(context.tcx, instance)),
-        )
-    } else {
-        return Err(CaptureErrorV2::new(
-            "source scope index is outside the MIR scope table",
-        ));
-    };
+    let scope = context.source_scopes.get(source_scope).ok_or_else(|| {
+        CaptureErrorV2::new("source scope index is outside the canonical scope table")
+    })?;
+    let source_scope_hash = scope.compiler_hash;
+    let source_scope_parent = scope.parent;
+    let inlined_instance_hash = scope
+        .inlined
+        .as_ref()
+        .map(|inlined| inlined.instance.instance_hash);
+    let source_scope_record_hash = scope.record_hash;
     Ok(SourceSpanV2 {
         authority,
         remapped_file: context.budget.bounded_display(
@@ -1254,7 +1497,9 @@ fn span_identity<'tcx>(
             &start.file.name.prefer_remapped_unconditionally(),
         )?,
         source_file_hash: stable_hash!(context.tcx, start.file.stable_id),
-        span_hash: stable_hash!(context.tcx, canonical),
+        original_span_hash: structural.original_span_hash,
+        span_hash: structural.callsite_span_hash,
+        expansion: structural.expansion,
         start_line: start.line,
         start_column: start.col.0 + 1,
         end_line: end.line,
@@ -1263,6 +1508,7 @@ fn span_identity<'tcx>(
         source_scope_hash,
         source_scope_parent,
         inlined_instance_hash,
+        source_scope_record_hash,
         diagnostic_debug: context.budget.bounded_debug("source span", &span)?,
     })
 }
