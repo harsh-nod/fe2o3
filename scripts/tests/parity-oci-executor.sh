@@ -88,11 +88,12 @@ entrypoint	0000	/opt/fe2o3/bin/evidence-entrypoint
 command_count	2
 command	0000	--request
 command	0001	/run/fe2o3/request.tsv
-environment_count	4
+environment_count	5
 environment	0000	HOME	2f6e6f6e6578697374656e74
-environment	0001	LC_ALL	43
-environment	0002	PATH	2f6f70742f6665326f332f62696e
-environment	0003	ROCR_VISIBLE_DEVICES	30
+environment	0001	HOSTNAME	6665326f332d65766964656e6365
+environment	0002	LC_ALL	43
+environment	0003	PATH	2f6f70742f6665326f332f62696e
+environment	0004	ROCR_VISIBLE_DEVICES	30
 source_mount	/workspace
 request_mount	/run/fe2o3/request.tsv
 output_mount	/evidence
@@ -254,9 +255,35 @@ expect_failure capabilities 'drop every capability' verify
 cp "${TEST_ROOT}/profile.good" "${PROFILE}"
 write_policy
 
+sed -i 's|image_reference\texample.invalid/|image_reference\t-invalid/|' "${PROFILE}"
+write_policy
+expect_failure unsafe_image_reference 'malformed OCI image identity' verify
+cp "${TEST_ROOT}/profile.good" "${PROFILE}"
+write_policy
+
+sed -i 's|tmp_mount\t/tmp|tmp_mount\t/workspace/tmp|' "${PROFILE}"
+write_policy
+expect_failure overlapping_mount 'invalid or duplicate executor mount' verify
+cp "${TEST_ROOT}/profile.good" "${PROFILE}"
+write_policy
+
+sed -i \
+  's/environment\t0001\tHOSTNAME\t6665326f332d65766964656e6365/environment\t0001\tHOSTNAME\t77726f6e67/' \
+  "${PROFILE}"
+write_policy
+expect_failure nondeterministic_hostname 'lacks the clean GPU baseline' verify
+cp "${TEST_ROOT}/profile.good" "${PROFILE}"
+write_policy
+
 printf 'corruption\n' >>"${OCI_LAYOUT}/blobs/sha256/${layer_digest}"
 expect_failure layer_mutation 'OCI layer binding mismatch' verify
 cp "${TEST_ROOT}/layer" "${OCI_LAYOUT}/blobs/sha256/${layer_digest}"
+
+mv "${OCI_LAYOUT}/blobs/sha256" "${TEST_ROOT}/sha256.real"
+ln -s "${TEST_ROOT}/sha256.real" "${OCI_LAYOUT}/blobs/sha256"
+expect_failure oci_parent_symlink 'path contains a symlink' verify
+rm "${OCI_LAYOUT}/blobs/sha256"
+mv "${TEST_ROOT}/sha256.real" "${OCI_LAYOUT}/blobs/sha256"
 
 printf '# mutation\n' >>"${SOURCE_REPO}/scripts/evidence/jobs/row-04.sh"
 expect_failure dirty_source 'source checkout is not clean' verify

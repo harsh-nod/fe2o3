@@ -29,6 +29,10 @@ RESULT_ID_RE = re.compile(r"^[0-9a-f]{64}$")
 RELATIVE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/+:-]{0,511}$")
 ABSOLUTE_RE = re.compile(r"^/[A-Za-z0-9][A-Za-z0-9._/+:-]{0,511}$")
 OCI_DIGEST_RE = re.compile(r"^sha256:([0-9a-f]{64})$")
+IMAGE_REFERENCE_RE = re.compile(
+    r"^[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[0-9]+)?"
+    r"(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)+@sha256:[0-9a-f]{64}$"
+)
 ENV_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
 RENDER_RE = re.compile(r"^/dev/dri/renderD[0-9]+$")
 
@@ -306,8 +310,9 @@ def parse_environment(cursor: Cursor) -> tuple[tuple[str, str], ...]:
             fail("profile environment contains a control character")
         result.append((name, value))
         previous = name
-    required = {"HOME", "LC_ALL", "PATH", "ROCR_VISIBLE_DEVICES"}
-    if not required <= {name for name, _ in result}:
+    values = dict(result)
+    required = {"HOME", "HOSTNAME", "LC_ALL", "PATH", "ROCR_VISIBLE_DEVICES"}
+    if not required <= values.keys() or values["HOSTNAME"] != "fe2o3-evidence":
         fail("profile environment lacks the clean GPU baseline")
     return tuple(result)
 
@@ -373,6 +378,7 @@ def load_profile(root: Path, policy: Policy, profile_id: str) -> Profile:
         or config_match is None
         or not manifest_size.isdigit()
         or not config_size.isdigit()
+        or IMAGE_REFERENCE_RE.fullmatch(image_reference) is None
         or not image_reference.endswith("@" + manifest_digest)
     ):
         fail("malformed OCI image identity")
@@ -393,9 +399,14 @@ def load_profile(root: Path, policy: Policy, profile_id: str) -> Profile:
     output_mount = cursor.scalar("output_mount")
     tmp_mount = cursor.scalar("tmp_mount")
     mounts = (source_mount, request_mount, output_mount, tmp_mount)
-    if any(not valid_absolute(item) for item in mounts) or len(set(mounts)) != len(
-        mounts
-    ):
+    overlaps = any(
+        left == right
+        or left.startswith(right.rstrip("/") + "/")
+        or right.startswith(left.rstrip("/") + "/")
+        for index, left in enumerate(mounts)
+        for right in mounts[index + 1 :]
+    )
+    if any(not valid_absolute(item) for item in mounts) or overlaps:
         fail("invalid or duplicate executor mount")
     output_limit = parse_positive(cursor, "output_limit_bytes", 1, 16 * 1024**3)
     tmp_limit = parse_positive(cursor, "tmp_limit_bytes", 1, 16 * 1024**3)
@@ -512,11 +523,27 @@ def load_profile(root: Path, policy: Policy, profile_id: str) -> Profile:
     )
 
 
-def oci_blob(layout: Path, digest: str) -> Path:
-    match = OCI_DIGEST_RE.fullmatch(digest)
-    if match is None:
-        fail("malformed OCI digest")
-    return layout / "blobs" / "sha256" / match.group(1)
+def require_safe_oci_entry(
+    layout: Path, relative: tuple[str, ...], label: str, *, directory: bool = False
+) -> Path:
+    current = layout
+    for index, component in enumerate(relative):
+        current /= component
+        try:
+            info = current.lstat()
+        except OSError:
+            fail(f"{label} is missing")
+        if stat.S_ISLNK(info.st_mode):
+            fail(f"{label} path contains a symlink")
+        is_last = index + 1 == len(relative)
+        if not is_last or directory:
+            if not stat.S_ISDIR(info.st_mode):
+                fail(f"{label} path contains a non-directory")
+        elif not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            fail(f"{label} is not a single-link regular file")
+    if layout not in current.resolve(strict=True).parents:
+        fail(f"{label} escapes OCI layout")
+    return current
 
 
 def read_json_bound(path: Path, binding: Layer, label: str) -> dict[str, object]:
@@ -549,17 +576,26 @@ def descriptor(value: object, label: str) -> Layer:
 
 def verify_oci_image(profile: Profile) -> tuple[str, ...]:
     layout = Path(profile.layout_path)
-    if not layout.is_absolute() or layout.is_symlink() or not layout.is_dir():
+    if (
+        not layout.is_absolute()
+        or layout.is_symlink()
+        or not layout.is_dir()
+        or layout.resolve(strict=True) != layout
+    ):
         fail("OCI layout is unavailable or unsafe")
-    layout_marker = layout / "oci-layout"
-    index_path = layout / "index.json"
+    layout_marker = require_safe_oci_entry(layout, ("oci-layout",), "OCI layout marker")
+    index_path = require_safe_oci_entry(layout, ("index.json",), "OCI index")
+    require_safe_oci_entry(layout, ("blobs",), "OCI blob directory", directory=True)
+    require_safe_oci_entry(
+        layout, ("blobs", "sha256"), "OCI SHA-256 directory", directory=True
+    )
     try:
         marker = json.loads(layout_marker.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         fail("invalid OCI layout marker")
     if marker != {"imageLayoutVersion": "1.0.0"}:
         fail("unsupported OCI layout version")
-    if index_path.is_symlink() or sha256_file(index_path) != profile.index_digest:
+    if sha256_file(index_path) != profile.index_digest:
         fail("OCI index binding mismatch")
     try:
         index = json.loads(index_path.read_text(encoding="utf-8"))
@@ -571,9 +607,12 @@ def verify_oci_image(profile: Profile) -> tuple[str, ...]:
     selected = [descriptor(value, "manifest") for value in manifests]
     if selected.count(profile.manifest) != 1:
         fail("protected OCI manifest is absent or ambiguous")
-    manifest = read_json_bound(
-        oci_blob(layout, profile.manifest.digest), profile.manifest, "OCI manifest"
+    manifest_path = require_safe_oci_entry(
+        layout,
+        ("blobs", "sha256", profile.manifest.digest.removeprefix("sha256:")),
+        "OCI manifest",
     )
+    manifest = read_json_bound(manifest_path, profile.manifest, "OCI manifest")
     if descriptor(manifest.get("config"), "config") != profile.config:
         fail("OCI config differs from protected profile")
     layer_values = manifest.get("layers")
@@ -582,9 +621,12 @@ def verify_oci_image(profile: Profile) -> tuple[str, ...]:
         or tuple(descriptor(value, "layer") for value in layer_values) != profile.layers
     ):
         fail("OCI layers differ from protected profile")
-    config = read_json_bound(
-        oci_blob(layout, profile.config.digest), profile.config, "OCI config"
+    config_path = require_safe_oci_entry(
+        layout,
+        ("blobs", "sha256", profile.config.digest.removeprefix("sha256:")),
+        "OCI config",
     )
+    config = read_json_bound(config_path, profile.config, "OCI config")
     rootfs = config.get("rootfs")
     diff_ids = rootfs.get("diff_ids") if isinstance(rootfs, dict) else None
     if (
@@ -606,8 +648,13 @@ def verify_oci_image(profile: Profile) -> tuple[str, ...]:
     if not isinstance(image_config, dict) or image_config.get("Env") not in (None, []):
         fail("OCI image must not supply inherited environment")
     for layer in profile.layers:
+        layer_path = require_safe_oci_entry(
+            layout,
+            ("blobs", "sha256", layer.digest.removeprefix("sha256:")),
+            "OCI layer",
+        )
         verify_regular(
-            oci_blob(layout, layer.digest),
+            layer_path,
             str(layer.size),
             layer.digest.removeprefix("sha256:"),
             "OCI layer",
@@ -710,13 +757,21 @@ def verify_source(repo: Path, request: Request, *, require_detached: bool) -> No
             fail("source checkout must be detached")
         if symbolic_ref.returncode != 1:
             fail("cannot establish detached source checkout")
-    job = repo / request.job_path
-    try:
-        info = job.lstat()
-    except OSError:
-        fail("source job is missing")
-    if not stat.S_ISREG(info.st_mode) or job.is_symlink() or info.st_nlink != 1:
-        fail("source job is not a single-link regular file")
+    current = repo
+    for index, component in enumerate(request.job_path.split("/")):
+        current /= component
+        try:
+            info = current.lstat()
+        except OSError:
+            fail("source job is missing")
+        if stat.S_ISLNK(info.st_mode):
+            fail("source job path contains a symlink")
+        if index + 1 < len(request.job_path.split("/")):
+            if not stat.S_ISDIR(info.st_mode):
+                fail("source job parent is not a directory")
+        elif not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            fail("source job is not a single-link regular file")
+    job = current
     blob = subprocess.run(
         ["git", "-C", str(repo), "show", f"{request.source_commit}:{request.job_path}"],
         check=False,
@@ -735,6 +790,8 @@ def authorize(args: argparse.Namespace) -> AuthorizedRequest:
     root = Path(args.trusted_root)
     policy = parse_policy(root, args.policy)
     request_path = Path(args.request)
+    if not request_path.is_absolute() or not valid_absolute(str(request_path)):
+        fail("OCI execution request path must be canonical absolute")
     try:
         request_info = request_path.lstat()
     except OSError:
@@ -761,7 +818,12 @@ def authorize(args: argparse.Namespace) -> AuthorizedRequest:
         "protected seccomp profile",
     )
     verify_oci_image(profile)
-    repo = Path(args.repo).resolve(strict=True)
+    repo_input = Path(args.repo)
+    if not repo_input.is_absolute() or not valid_absolute(str(repo_input)):
+        fail("source checkout path must be canonical absolute")
+    repo = repo_input.resolve(strict=True)
+    if repo != repo_input:
+        fail("source checkout path contains a symlink")
     verify_source(repo, request, require_detached=args.require_detached)
     return AuthorizedRequest(
         policy,
@@ -823,9 +885,11 @@ def establish_runtime_ready(authorized: AuthorizedRequest) -> RuntimeReadyReques
         fail("host kernel release differs from protected profile")
     if sha256_file(kernel_notes) != profile.kernel_notes_digest:
         fail("host kernel build identity differs from protected profile")
-    verify_regular(
-        driver, str(driver.stat().st_size), profile.driver_digest, "AMDGPU module"
-    )
+    try:
+        driver_size = driver.stat().st_size
+    except OSError:
+        fail("AMDGPU module is missing")
+    verify_regular(driver, str(driver_size), profile.driver_digest, "AMDGPU module")
     for device in profile.devices:
         path = Path(device.path)
         try:

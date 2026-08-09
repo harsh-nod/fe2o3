@@ -78,8 +78,8 @@ The protected profile binds all of the following:
 - exact OCI manifest, config, and every ordered layer digest and size;
 - ordered rootfs diff IDs and an image config with no inherited environment;
 - one fixed absolute entrypoint and fixed command vector;
-- a complete, ordered environment including `HOME`, `LC_ALL`, `PATH`, and
-  `ROCR_VISIBLE_DEVICES`;
+- a complete, ordered environment including deterministic `HOSTNAME`, `HOME`,
+  `LC_ALL`, `PATH`, and `ROCR_VISIBLE_DEVICES`;
 - fixed source, request, output, and temporary mount points;
 - output, temporary-storage, log, memory, PID, and CPU ceilings;
 - container UID, GID, and one supplemental render-group GID;
