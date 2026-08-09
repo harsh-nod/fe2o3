@@ -16,7 +16,7 @@ import sys
 
 MAX_INPUT_BYTES = 8 * 1024 * 1024
 MAX_HARDWARE_SECTION_LINES = 128
-PRODUCTION_POLICY_PATH = pathlib.Path("/etc/fe2o3/s09-trust-v1.tsv")
+PRODUCTION_POLICY_PATH = pathlib.Path("/etc/fe2o3/s09-trust-v2.tsv")
 FS_IOC_GETFLAGS = 0x80086601
 FS_IMMUTABLE_FL = 0x00000010
 ADDRESS = re.compile(r"0x[0-9a-fA-F]+")
@@ -53,19 +53,45 @@ EXPECTED_OBSERVATIONS = {
 }
 HARDWARE_TEST = "gfx942_cov6_alpha_then_zeta_generated_safe_spi_with_fake_authenticator"
 S09_SOURCE_SHA256 = "a02f62a73198b493258224701c4f29e25b3eca02a738bf02c03989d45b77099e"
-MANIFEST_SCHEMA = "fe2o3-s09-protected-manifest-v1"
+S09_SOURCE_LENGTH = "3231"
+MANIFEST_SCHEMA = "fe2o3-s09-protected-manifest-v2"
+SEMANTIC_ADMISSION_SCHEMA = "fe2o3-s09-semantic-admission-v2"
+BUILD_OBSERVATION_SCHEMA = "fe2o3-s09-build-observation-v2"
 MANIFEST_FIELDS = (
     "manifest_schema",
     "trust_domain",
-    "profile",
     "claim",
-    "source_commit",
-    "source_tree",
+    "semantic_admission_schema",
     "source_path",
     "source_sha256",
+    "source_length",
+    "logical_crate",
+    "logical_module",
+    "logical_kernel",
+    "logical_export",
+    "logical_owner",
+    "owner_authentication",
+    "profile",
+    "portable_mir_sha256",
+    "portable_abi_sha256",
     "target",
     "optimization",
+    "code_object_version",
+    "target_policy",
+    "debug_policy",
+    "build_observation_schema",
+    "source_commit",
+    "source_tree",
+    "ordered_cargo_metadata_sha256",
+    "crate_binding_id",
+    "kernel_binding_id",
+    "observed_def_path",
+    "observed_symbol",
+    "rustc_mir_capture_sha256",
+    "cargo_sha256",
     "rustc_sha256",
+    "backend_sha256",
+    "llvm_sha256",
     "llvm_link_worker_sha256",
     "lld_sha256",
     "llvm_dwarfdump_sha256",
@@ -76,6 +102,7 @@ MANIFEST_FIELDS = (
     "hsaco_sha256",
     "host_executable_sha256",
     "host_executable_build_id",
+    "debug_archive_manifest_sha256",
     "artifact_facts_sha256",
     "hardware_facts_sha256",
     "dwarf_normalized_sha256",
@@ -83,33 +110,14 @@ MANIFEST_FIELDS = (
     "hardware_test",
     "execution_closure",
 )
-POLICY_SCHEMA = "fe2o3-s09-production-policy-v1"
-POLICY_FIELDS = (
+POLICY_SCHEMA = "fe2o3-s09-production-policy-v2"
+POLICY_HEADER_FIELDS = (
     "policy_schema",
     "manifest_path",
     "manifest_sha256",
-    "profile",
-    "target",
-    "source_commit",
-    "source_tree",
-    "source_sha256",
-    "rustc_sha256",
-    "llvm_link_worker_sha256",
-    "lld_sha256",
-    "llvm_dwarfdump_sha256",
-    "llvm_readobj_sha256",
-    "rocgdb_sha256",
-    "checker_sha256",
-    "harness_source_sha256",
-    "hsaco_sha256",
-    "host_executable_sha256",
-    "host_executable_build_id",
 )
-POLICY_MANIFEST_BINDINGS = tuple(
-    field
-    for field in POLICY_FIELDS
-    if field not in {"policy_schema", "manifest_path", "manifest_sha256"}
-)
+POLICY_MANIFEST_BINDINGS = MANIFEST_FIELDS
+POLICY_FIELDS = POLICY_HEADER_FIELDS + POLICY_MANIFEST_BINDINGS
 ARTIFACT_FACT_FIELDS = (
     "format",
     "object_format",
@@ -651,86 +659,151 @@ def check_rocgdb(text: str, hsaco_sha256: str, hardware_sha256: str, build_id: s
             raise CheckError(f"ROCgdb transcript contains failure marker {rejected!r}")
 
 
-def parse_protected_manifest(data: bytes, required_domain: str) -> dict[str, str]:
+def serialize_ordered_fields(
+    values: dict[str, str], fields: tuple[str, ...], label: str
+) -> bytes:
+    missing = [field for field in fields if field not in values]
+    extra = sorted(set(values).difference(fields))
+    if missing or extra:
+        raise CheckError(f"{label} fields changed: missing={missing!r} extra={extra!r}")
+    lines: list[str] = []
+    for field in fields:
+        value = values[field]
+        if (
+            not isinstance(value, str)
+            or not value
+            or value != value.strip()
+            or "\t" in value
+            or "\n" in value
+            or "\r" in value
+            or any(ord(character) < 0x20 or ord(character) == 0x7F for character in value)
+        ):
+            raise CheckError(f"{label} field {field!r} is noncanonical")
+        lines.append(f"{field}\t{value}\n")
+    return "".join(lines).encode("utf-8")
+
+
+def parse_ordered_fields(
+    data: bytes, fields: tuple[str, ...], label: str
+) -> dict[str, str]:
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError as error:
-        raise CheckError("protected manifest is not UTF-8") from error
+        raise CheckError(f"{label} is not UTF-8") from error
     if "\r" in text or not text.endswith("\n") or "\n\n" in text:
-        raise CheckError("protected manifest is not canonical LF-delimited text")
+        raise CheckError(f"{label} is not canonical LF-delimited text")
     lines = text.removesuffix("\n").split("\n")
-    if len(lines) != len(MANIFEST_FIELDS):
-        raise CheckError("protected manifest field count changed")
-    manifest: dict[str, str] = {}
-    for expected, line in zip(MANIFEST_FIELDS, lines, strict=True):
-        fields = line.split("\t")
-        if len(fields) != 2 or fields[0] != expected or not fields[1]:
-            raise CheckError(f"protected manifest field {expected!r} is absent or out of order")
-        if fields[1] != fields[1].strip() or any(ord(character) < 0x20 for character in fields[1]):
-            raise CheckError(f"protected manifest field {expected!r} is noncanonical")
-        manifest[expected] = fields[1]
+    if len(lines) != len(fields):
+        raise CheckError(f"{label} field count changed")
+    values: dict[str, str] = {}
+    for expected, line in zip(fields, lines, strict=True):
+        columns = line.split("\t")
+        if len(columns) != 2 or columns[0] != expected or not columns[1]:
+            raise CheckError(f"{label} field {expected!r} is absent or out of order")
+        if expected in values:
+            raise CheckError(f"{label} field {expected!r} is duplicated")
+        values[expected] = columns[1]
+    if serialize_ordered_fields(values, fields, label) != data:
+        raise CheckError(f"{label} serialization is not canonical")
+    return values
+
+
+def require_nonzero_sha256(values: dict[str, str], fields: tuple[str, ...], label: str) -> None:
+    for field in fields:
+        if field.endswith("_sha256"):
+            value = values[field]
+            if not HEX_SHA256.fullmatch(value) or value == "0" * 64:
+                raise CheckError(f"{label} field {field!r} is not a nonzero SHA-256 digest")
+
+
+def validate_manifest_values(manifest: dict[str, str], required_domain: str) -> None:
+    closures = {
+        "production-v2": "protected-controller-v2",
+        "test-fixture-v2": "test-fixture-v2",
+        "local-capability-v2": "local-capability-v2",
+    }
+    if required_domain not in closures:
+        raise CheckError("protected manifest trust domain is unsupported")
 
     expected_values = {
         "manifest_schema": MANIFEST_SCHEMA,
-        "profile": "s09-alpha-gfx942-o0-v1",
-        "claim": "authoritative-source-debug",
+        "claim": "source-debug-evidence-v2",
+        "semantic_admission_schema": SEMANTIC_ADMISSION_SCHEMA,
         "source_path": S09_SOURCE,
         "source_sha256": S09_SOURCE_SHA256,
+        "source_length": S09_SOURCE_LENGTH,
+        "logical_crate": "fe2o3_typed_alias_spoof",
+        "logical_module": "general_genuine",
+        "logical_kernel": "alpha",
+        "logical_export": "alpha",
+        "logical_owner": "fe2o3_typed_alias_spoof::general_genuine::alpha",
+        "owner_authentication": "collector-authenticated-kernel-owner-v1",
+        "profile": "general-scalar-slice-v3",
         "target": "gfx942:xnack-",
         "optimization": "O0",
+        "code_object_version": "6",
+        "target_policy": "gfx942:xnack-/cov6/o0/source-debug-v1",
+        "debug_policy": "s09-alpha-source-dwarf-v1",
+        "build_observation_schema": BUILD_OBSERVATION_SCHEMA,
         "hardware_test": HARDWARE_TEST,
-        "execution_closure": "protected-controller-v1",
+        "execution_closure": closures[required_domain],
     }
     for field, expected in expected_values.items():
         if manifest[field] != expected:
             raise CheckError(f"protected manifest field {field!r} changed")
     if manifest["trust_domain"] != required_domain:
         raise CheckError("protected manifest trust domain is not authorized")
+    require_nonzero_sha256(manifest, MANIFEST_FIELDS, "protected manifest")
     for field in ("source_commit", "source_tree"):
-        if not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", manifest[field]):
+        if (
+            not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", manifest[field])
+            or set(manifest[field]) == {"0"}
+        ):
             raise CheckError(f"protected manifest {field!r} is not a canonical Git object ID")
-    for field in MANIFEST_FIELDS:
-        if field.endswith("_sha256") and not HEX_SHA256.fullmatch(manifest[field]):
-            raise CheckError(f"protected manifest {field!r} is not a SHA-256 digest")
-    if not HEX_BUILD_ID.fullmatch(manifest["host_executable_build_id"]):
+    for field in ("crate_binding_id", "kernel_binding_id"):
+        if not HEX_SHA256.fullmatch(manifest[field]) or manifest[field] == "0" * 64:
+            raise CheckError(f"protected manifest {field!r} is not a nonzero binding ID")
+    generated_name = f"__fe2o3_host_kernel_v1_{manifest['kernel_binding_id']}"
+    expected_def_path = f"{manifest['logical_module']}::{generated_name}"
+    if manifest["observed_def_path"] != expected_def_path:
+        raise CheckError("observed DefPath is inconsistent with the authenticated kernel binding")
+    if (
+        len(manifest["observed_symbol"]) > 1024
+        or not re.fullmatch(r"[A-Za-z0-9_.$:@]+", manifest["observed_symbol"])
+        or generated_name not in manifest["observed_symbol"]
+    ):
+        raise CheckError("observed symbol is inconsistent with the authenticated kernel binding")
+    if (
+        not HEX_BUILD_ID.fullmatch(manifest["host_executable_build_id"])
+        or set(manifest["host_executable_build_id"]) == {"0"}
+    ):
         raise CheckError("protected manifest host executable build ID is malformed")
+
+
+def parse_protected_manifest(data: bytes, required_domain: str) -> dict[str, str]:
+    manifest = parse_ordered_fields(data, MANIFEST_FIELDS, "protected manifest")
+    validate_manifest_values(manifest, required_domain)
     return manifest
 
 
 def parse_production_policy(data: bytes) -> dict[str, str]:
-    try:
-        text = data.decode("utf-8")
-    except UnicodeDecodeError as error:
-        raise CheckError("production S09 policy is not UTF-8") from error
-    if "\r" in text or not text.endswith("\n") or "\n\n" in text:
-        raise CheckError("production S09 policy is not canonical LF-delimited text")
-    lines = text.removesuffix("\n").split("\n")
-    if len(lines) != len(POLICY_FIELDS):
-        raise CheckError("production S09 policy field count changed")
-    policy: dict[str, str] = {}
-    for expected, line in zip(POLICY_FIELDS, lines, strict=True):
-        fields = line.split("\t")
-        if len(fields) != 2 or fields[0] != expected or not fields[1]:
-            raise CheckError(f"production S09 policy field {expected!r} is absent or out of order")
-        if fields[1] != fields[1].strip() or any(ord(character) < 0x20 for character in fields[1]):
-            raise CheckError(f"production S09 policy field {expected!r} is noncanonical")
-        policy[expected] = fields[1]
+    policy = parse_ordered_fields(data, POLICY_FIELDS, "production S09 policy")
     if policy["policy_schema"] != POLICY_SCHEMA:
         raise CheckError("production S09 policy schema changed")
-    if policy["profile"] != "s09-alpha-gfx942-o0-v1" or policy["target"] != "gfx942:xnack-":
-        raise CheckError("production S09 policy profile or target changed")
-    if not HEX_SHA256.fullmatch(policy["manifest_sha256"]):
-        raise CheckError("production S09 policy manifest digest is malformed")
-    for field in POLICY_FIELDS:
-        if field.endswith("_sha256") and not HEX_SHA256.fullmatch(policy[field]):
-            raise CheckError(f"production S09 policy field {field!r} is not SHA-256")
-    for field in ("source_commit", "source_tree"):
-        if not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", policy[field]):
-            raise CheckError(f"production S09 policy field {field!r} is not a Git object ID")
-    if not HEX_BUILD_ID.fullmatch(policy["host_executable_build_id"]):
-        raise CheckError("production S09 policy host build ID is malformed")
+    require_nonzero_sha256(policy, POLICY_FIELDS, "production S09 policy")
+    validate_manifest_values(
+        {field: policy[field] for field in MANIFEST_FIELDS}, "production-v2"
+    )
     parse_fixed_manifest_path(policy["manifest_path"])
     return policy
+
+
+def validate_policy_manifest_binding(
+    policy: dict[str, str], manifest: dict[str, str]
+) -> None:
+    for field in POLICY_MANIFEST_BINDINGS:
+        if policy[field] != manifest[field]:
+            raise CheckError(f"production policy does not bind manifest field {field!r}")
 
 
 def check_evidence_bundle(
@@ -785,10 +858,8 @@ def check_production(
     manifest_bytes = read_bounded_bytes(manifest_path)
     if hashlib.sha256(manifest_bytes).hexdigest() != policy["manifest_sha256"]:
         raise CheckError("installed production manifest does not match fixed policy")
-    manifest = parse_protected_manifest(manifest_bytes, "production-v1")
-    for field in POLICY_MANIFEST_BINDINGS:
-        if policy[field] != manifest[field]:
-            raise CheckError(f"production policy does not bind manifest field {field!r}")
+    manifest = parse_protected_manifest(manifest_bytes, "production-v2")
+    validate_policy_manifest_binding(policy, manifest)
     check_evidence_bundle(manifest, artifact_path, hardware_path, dwarf_path, rocgdb_path)
 
 
@@ -805,7 +876,24 @@ def check_fixture(
     manifest_bytes = read_bounded_bytes(manifest_path)
     if hashlib.sha256(manifest_bytes).hexdigest() != expected_manifest_sha256:
         raise CheckError("fixture manifest does not match its non-authoritative test digest")
-    manifest = parse_protected_manifest(manifest_bytes, "test-fixture-v1")
+    manifest = parse_protected_manifest(manifest_bytes, "test-fixture-v2")
+    check_evidence_bundle(manifest, artifact_path, hardware_path, dwarf_path, rocgdb_path)
+
+
+def check_capability(
+    manifest_path: pathlib.Path,
+    expected_manifest_sha256: str,
+    artifact_path: pathlib.Path,
+    hardware_path: pathlib.Path,
+    dwarf_path: pathlib.Path,
+    rocgdb_path: pathlib.Path,
+) -> None:
+    if not HEX_SHA256.fullmatch(expected_manifest_sha256):
+        raise CheckError("capability manifest digest must be lowercase SHA-256")
+    manifest_bytes = read_bounded_bytes(manifest_path)
+    if hashlib.sha256(manifest_bytes).hexdigest() != expected_manifest_sha256:
+        raise CheckError("capability manifest does not match its measured digest")
+    manifest = parse_protected_manifest(manifest_bytes, "local-capability-v2")
     check_evidence_bundle(manifest, artifact_path, hardware_path, dwarf_path, rocgdb_path)
 
 
@@ -841,6 +929,10 @@ def parse_args() -> argparse.Namespace:
     command = subparsers.add_parser("check-production")
     add_evidence_arguments(command)
     command = subparsers.add_parser("check-fixture")
+    command.add_argument("--manifest", required=True, type=pathlib.Path)
+    command.add_argument("--expected-manifest-sha256", required=True)
+    add_evidence_arguments(command)
+    command = subparsers.add_parser("check-capability")
     command.add_argument("--manifest", required=True, type=pathlib.Path)
     command.add_argument("--expected-manifest-sha256", required=True)
     add_evidence_arguments(command)
@@ -888,6 +980,16 @@ def main() -> int:
             args.rocgdb,
         )
         print("S09 non-authoritative fixture checker passed")
+    elif args.command == "check-capability":
+        check_capability(
+            args.manifest,
+            args.expected_manifest_sha256,
+            args.artifact_facts,
+            args.hardware_facts,
+            args.dwarf,
+            args.rocgdb,
+        )
+        print("S09 non-authoritative capability manifest V2 accepted")
     else:
         raise AssertionError(args.command)
     return 0

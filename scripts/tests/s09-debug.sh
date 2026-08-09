@@ -13,6 +13,9 @@ readonly HARDWARE_BUILD_ID=cccccccccccccccccccccccccccccccccccccccc
 readonly RUN_NONCE=dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
 readonly HARDWARE_TEST=gfx942_cov6_alpha_then_zeta_generated_safe_spi_with_fake_authenticator
 readonly SOURCE_SHA256=a02f62a73198b493258224701c4f29e25b3eca02a738bf02c03989d45b77099e
+readonly CRATE_BINDING_ID=1111111111111111111111111111111111111111111111111111111111111111
+readonly KERNEL_BINDING_ID=2222222222222222222222222222222222222222222222222222222222222222
+readonly GENERATED_KERNEL=__fe2o3_host_kernel_v1_${KERNEL_BINDING_ID}
 TMP="$(mktemp -d)"
 readonly TMP
 trap 'rm -rf -- "${TMP}"' EXIT
@@ -73,33 +76,57 @@ dwarf_sha256="$(sha256sum "${TMP}/dwarf.one" | cut -d ' ' -f 1)"
 rocgdb_sha256="$(sha256sum "${TMP}/rocgdb.one" | cut -d ' ' -f 1)"
 readonly checker_sha256 artifact_sha256 hardware_facts_sha256 dwarf_sha256 rocgdb_sha256
 {
-  printf 'manifest_schema\tfe2o3-s09-protected-manifest-v1\n'
-  printf 'trust_domain\ttest-fixture-v1\n'
-  printf 'profile\ts09-alpha-gfx942-o0-v1\n'
-  printf 'claim\tauthoritative-source-debug\n'
-  printf 'source_commit\t1111111111111111111111111111111111111111\n'
-  printf 'source_tree\t2222222222222222222222222222222222222222\n'
+  printf 'manifest_schema\tfe2o3-s09-protected-manifest-v2\n'
+  printf 'trust_domain\ttest-fixture-v2\n'
+  printf 'claim\tsource-debug-evidence-v2\n'
+  printf 'semantic_admission_schema\tfe2o3-s09-semantic-admission-v2\n'
   printf 'source_path\tcrates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs\n'
   printf 'source_sha256\t%s\n' "${SOURCE_SHA256}"
+  printf 'source_length\t3231\n'
+  printf 'logical_crate\tfe2o3_typed_alias_spoof\n'
+  printf 'logical_module\tgeneral_genuine\n'
+  printf 'logical_kernel\talpha\n'
+  printf 'logical_export\talpha\n'
+  printf 'logical_owner\tfe2o3_typed_alias_spoof::general_genuine::alpha\n'
+  printf 'owner_authentication\tcollector-authenticated-kernel-owner-v1\n'
+  printf 'profile\tgeneral-scalar-slice-v3\n'
+  printf 'portable_mir_sha256\t%064d\n' 1
+  printf 'portable_abi_sha256\t%064d\n' 2
   printf 'target\tgfx942:xnack-\n'
   printf 'optimization\tO0\n'
-  printf 'rustc_sha256\t%064d\n' 3
-  printf 'llvm_link_worker_sha256\t%064d\n' 4
-  printf 'lld_sha256\t%064d\n' 5
-  printf 'llvm_dwarfdump_sha256\t%064d\n' 6
-  printf 'llvm_readobj_sha256\t%064d\n' 7
-  printf 'rocgdb_sha256\t%064d\n' 8
+  printf 'code_object_version\t6\n'
+  printf 'target_policy\tgfx942:xnack-/cov6/o0/source-debug-v1\n'
+  printf 'debug_policy\ts09-alpha-source-dwarf-v1\n'
+  printf 'build_observation_schema\tfe2o3-s09-build-observation-v2\n'
+  printf 'source_commit\t1111111111111111111111111111111111111111\n'
+  printf 'source_tree\t2222222222222222222222222222222222222222\n'
+  printf 'ordered_cargo_metadata_sha256\t%064d\n' 3
+  printf 'crate_binding_id\t%s\n' "${CRATE_BINDING_ID}"
+  printf 'kernel_binding_id\t%s\n' "${KERNEL_BINDING_ID}"
+  printf 'observed_def_path\tgeneral_genuine::%s\n' "${GENERATED_KERNEL}"
+  printf 'observed_symbol\t%s\n' "${GENERATED_KERNEL}"
+  printf 'rustc_mir_capture_sha256\t%064d\n' 4
+  printf 'cargo_sha256\t%064d\n' 5
+  printf 'rustc_sha256\t%064d\n' 6
+  printf 'backend_sha256\t%064d\n' 7
+  printf 'llvm_sha256\t%064d\n' 8
+  printf 'llvm_link_worker_sha256\t%064d\n' 9
+  printf 'lld_sha256\t%064d\n' 10
+  printf 'llvm_dwarfdump_sha256\t%064d\n' 11
+  printf 'llvm_readobj_sha256\t%064d\n' 12
+  printf 'rocgdb_sha256\t%064d\n' 13
   printf 'checker_sha256\t%s\n' "${checker_sha256}"
-  printf 'harness_source_sha256\t%064d\n' 9
+  printf 'harness_source_sha256\t%064d\n' 14
   printf 'hsaco_sha256\t%s\n' "${HSACO_SHA256}"
   printf 'host_executable_sha256\t%s\n' "${HARDWARE_SHA256}"
   printf 'host_executable_build_id\t%s\n' "${HARDWARE_BUILD_ID}"
+  printf 'debug_archive_manifest_sha256\t%064d\n' 15
   printf 'artifact_facts_sha256\t%s\n' "${artifact_sha256}"
   printf 'hardware_facts_sha256\t%s\n' "${hardware_facts_sha256}"
   printf 'dwarf_normalized_sha256\t%s\n' "${dwarf_sha256}"
   printf 'rocgdb_normalized_sha256\t%s\n' "${rocgdb_sha256}"
   printf 'hardware_test\t%s\n' "${HARDWARE_TEST}"
-  printf 'execution_closure\tprotected-controller-v1\n'
+  printf 'execution_closure\ttest-fixture-v2\n'
 } >"${MANIFEST}"
 manifest_sha256="$(sha256sum "${MANIFEST}" | cut -d ' ' -f 1)"
 readonly manifest_sha256
@@ -115,6 +142,20 @@ fixture_args=(
 "${fixture_args[@]}" >"${TMP}/fixture.out"
 rg -q '^S09 non-authoritative fixture checker passed$' "${TMP}/fixture.out"
 expect_fail rg -qi 'production.*accepted|authoritative.*accepted' "${TMP}/fixture.out"
+sed \
+  -e 's/^trust_domain\ttest-fixture-v2$/trust_domain\tlocal-capability-v2/' \
+  -e 's/^execution_closure\ttest-fixture-v2$/execution_closure\tlocal-capability-v2/' \
+  "${MANIFEST}" >"${TMP}/capability-manifest.tsv"
+capability_manifest_sha256="$(sha256sum "${TMP}/capability-manifest.tsv" | cut -d ' ' -f 1)"
+"${CHECKER}" check-capability \
+  --manifest "${TMP}/capability-manifest.tsv" \
+  --expected-manifest-sha256 "${capability_manifest_sha256}" \
+  --artifact-facts "${TMP}/artifact.facts" \
+  --hardware-facts "${TMP}/hardware.facts" \
+  --dwarf "${TMP}/dwarf.one" \
+  --rocgdb "${TMP}/rocgdb.one" >"${TMP}/capability.out"
+rg -q '^S09 non-authoritative capability manifest V2 accepted$' "${TMP}/capability.out"
+expect_fail rg -q '^S09 production trust policy accepted' "${TMP}/capability.out"
 "${CHECKER}" check-production --help >"${TMP}/production-help"
 expect_fail rg -q -- '--manifest|--expected-manifest-sha256' "${TMP}/production-help"
 production_evidence_args=(
@@ -148,7 +189,7 @@ expect_fail "${CHECKER}" check-fixture \
   --hardware-facts "${TMP}/hardware.facts" \
   --dwarf "${TMP}/dwarf.one" \
   --rocgdb "${TMP}/rocgdb.one"
-sed 's/^trust_domain\ttest-fixture-v1$/trust_domain\tproduction-v1/' \
+sed 's/^trust_domain\ttest-fixture-v2$/trust_domain\tproduction-v2/' \
   "${MANIFEST}" >"${TMP}/production-domain-manifest.tsv"
 production_domain_sha256="$(sha256sum "${TMP}/production-domain-manifest.tsv" | cut -d ' ' -f 1)"
 expect_fail "${CHECKER}" check-fixture \
@@ -277,7 +318,7 @@ expect_fail "${CHECKER}" hardware-facts \
 rg -q '^readonly ROCGDB=/opt/rocm/bin/rocgdb-py_3\.12$' "${RUNNER}"
 rg -q '^readonly READOBJ=/opt/rocm/llvm/bin/llvm-readobj$' "${RUNNER}"
 rg -q '^readonly READELF=/opt/rocm/llvm/bin/llvm-readobj$' "${RUNNER}"
-rg -Fq '/etc/fe2o3/s09-trust-v1.tsv' "${CHECKER}"
+rg -Fq '/etc/fe2o3/s09-trust-v2.tsv' "${CHECKER}"
 rg -q 'FS_IMMUTABLE_FL' "${CHECKER}"
 rg -q 'O_NOFOLLOW' "${CHECKER}"
 rg -q -- '--batch --nx --nh' "${RUNNER}"
