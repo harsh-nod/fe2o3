@@ -1398,6 +1398,22 @@ fn recursively_enforces_target_pointer_abi_and_address_spaces() {
             .contains("target pointer ABI")
     );
 
+    let oversized_zst_array = ty(
+        MirTypeKind::Array {
+            element: Box::new(ty(MirTypeKind::Unit, 0, 1)),
+            length: u64::from(u32::MAX) + 1,
+        },
+        0,
+        1,
+    );
+    assert!(
+        zero_sized_constant_module(oversized_zst_array)
+            .validate()
+            .unwrap_err()
+            .reason()
+            .contains("target usize width")
+    );
+
     let mut local_space = place_module();
     local_space.functions[0].body.locals[0].storage_address_space = MirAddressSpace(6);
     assert!(

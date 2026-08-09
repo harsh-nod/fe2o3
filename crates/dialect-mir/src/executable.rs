@@ -3178,7 +3178,16 @@ fn validate_target_type_abi(
                 }
                 stack.push((format!("{path}.referent"), referent));
             }
-            MirTypeKind::Slice { element } | MirTypeKind::Array { element, .. } => {
+            MirTypeKind::Slice { element } => {
+                stack.push((format!("{path}.element"), element));
+            }
+            MirTypeKind::Array { element, length } => {
+                if target.pointer_width_bits == 32 && *length > u64::from(u32::MAX) {
+                    return Err(error(
+                        &path,
+                        "array length does not fit the target usize width",
+                    ));
+                }
                 stack.push((format!("{path}.element"), element));
             }
             MirTypeKind::Tuple(aggregate) => {
