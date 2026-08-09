@@ -136,6 +136,9 @@ pub(crate) struct WorkerV2BuildObservation<'a> {
     pub(crate) executable_sha256: [u8; 32],
     pub(crate) worker_build_identity: &'a str,
     pub(crate) llvm_build_identity: &'a str,
+    pub(crate) rustc_invocation_sha256: [u8; 32],
+    pub(crate) cargo_fe2o3_executable_sha256: [u8; 32],
+    pub(crate) cargo_executable_sha256: [u8; 32],
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -242,13 +245,21 @@ impl PreparedWorkerV2Config {
         self.source_debug_profile
     }
 
-    pub(crate) fn build_observation(&self) -> WorkerV2BuildObservation<'_> {
+    pub(crate) fn build_observation(
+        &self,
+        rustc_invocation_sha256: [u8; 32],
+        cargo_fe2o3_executable_sha256: [u8; 32],
+        cargo_executable_sha256: [u8; 32],
+    ) -> WorkerV2BuildObservation<'_> {
         let measurement = self.worker.measurement();
         WorkerV2BuildObservation {
             config_identity: self.identity,
             executable_sha256: *measurement.executable().sha256(),
             worker_build_identity: measurement.worker_build_identity(),
             llvm_build_identity: measurement.llvm_build_identity(),
+            rustc_invocation_sha256,
+            cargo_fe2o3_executable_sha256,
+            cargo_executable_sha256,
         }
     }
 

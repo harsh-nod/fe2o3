@@ -93,16 +93,17 @@ pub(crate) fn publish_worker_v2_compiler_module_with_descriptors(
         let semantic = source_debug.semantic_admission();
         let observation = source_debug.build_observation();
         eprintln!(
-            "[rustc-codegen-fe2o3] S09 SemanticAdmissionV2: schema={}; identity_sha256={}; portable_mir_sha256={}",
-            "fe2o3-s09-semantic-admission-v2",
+            "[rustc-codegen-fe2o3] S09 SemanticAdmissionV2: schema=fe2o3-s09-semantic-admission-v2; identity_sha256={}; portable_mir_sha256={}",
             hex(semantic.identity_sha256()),
             hex(semantic.portable_mir_sha256()),
         );
         eprintln!(
-            "[rustc-codegen-fe2o3] S09 BuildObservationV2: schema={}; identity_sha256={}; cargo_metadata_sha256={}; observed_def_path={}; observed_symbol={}",
-            "fe2o3-s09-build-observation-v2",
+            "[rustc-codegen-fe2o3] S09 BuildObservationV2: schema=fe2o3-s09-build-observation-v2; identity_sha256={}; cargo_metadata_sha256={}; rustc_invocation_sha256={}; cargo_fe2o3_executable_sha256={}; cargo_executable_sha256={}; observed_def_path={}; observed_symbol={}",
             hex(observation.identity_sha256()),
             hex(observation.cargo_metadata_sha256()),
+            hex(observation.rustc_invocation_sha256()),
+            hex(observation.cargo_fe2o3_executable_sha256()),
+            hex(observation.cargo_executable_sha256()),
             observation.observed_def_path(),
             observation.observed_symbol(),
         );

@@ -3,6 +3,10 @@
 use crate::AmdGpuTarget;
 use crate::collector::{AuthenticatedKernelOwner, CollectionResult, TypedKernelProfile};
 use crate::mir_import::MirSemanticAdmissionInputsV2;
+use crate::s09_identity_v2::{
+    BuildObservationFieldsV2, BuildObservationV2, IdentityCodecErrorV2, IdentityHandoffV2,
+    S09_IDENTITY_SECTION_V2, SemanticAdmissionFieldsV2, SemanticAdmissionV2,
+};
 use fe2o3_artifacts::{
     AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize, Capability,
     Endianness, IdentityText, LaunchContract, Mutability, PointerWidth, ScalarType, TargetIdentity,
@@ -40,10 +44,6 @@ const S09_SOURCE_BYTES: usize = 3231;
 const S09_FUNCTION_LINE: usize = 68;
 const S09_INDEX_LINE: usize = 69;
 const S09_LOCAL_LINE: usize = 70;
-const S09_IDENTITY_SECTION_V2: &str = ".fe2o3.s09.identity.v2";
-const S09_SEMANTIC_SCHEMA_V2: &str = "fe2o3-s09-semantic-admission-v2";
-const S09_BUILD_SCHEMA_V2: &str = "fe2o3-s09-build-observation-v2";
-const S09_HANDOFF_DOMAIN_V2: &[u8] = b"FE2O3/S09-IDENTITY-HANDOFF/V2\0";
 const MAX_RUSTC_EXECUTABLE_BYTES: u64 = 256 * 1024 * 1024;
 
 const CARGO_METADATA_BUILD_OBSERVATION_ENV_V2: &str = "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2";
@@ -53,50 +53,12 @@ const WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2: &str =
     "FE2O3_WORKER_EXECUTABLE_BUILD_OBSERVATION_V2";
 const WORKER_BUILD_IDENTITY_OBSERVATION_ENV_V2: &str = "FE2O3_WORKER_BUILD_IDENTITY_OBSERVATION_V2";
 const LLVM_BUILD_IDENTITY_OBSERVATION_ENV_V2: &str = "FE2O3_LLVM_BUILD_IDENTITY_OBSERVATION_V2";
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct S09SemanticAdmissionV2 {
-    canonical_bytes: Vec<u8>,
-    identity_sha256: [u8; 32],
-    portable_mir_sha256: [u8; 32],
-}
-
-impl S09SemanticAdmissionV2 {
-    pub(crate) const fn identity_sha256(&self) -> &[u8; 32] {
-        &self.identity_sha256
-    }
-
-    pub(crate) const fn portable_mir_sha256(&self) -> &[u8; 32] {
-        &self.portable_mir_sha256
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct S09BuildObservationV2 {
-    canonical_bytes: Vec<u8>,
-    identity_sha256: [u8; 32],
-    cargo_metadata_sha256: [u8; 32],
-    observed_def_path: String,
-    observed_symbol: String,
-}
-
-impl S09BuildObservationV2 {
-    pub(crate) const fn identity_sha256(&self) -> &[u8; 32] {
-        &self.identity_sha256
-    }
-
-    pub(crate) const fn cargo_metadata_sha256(&self) -> &[u8; 32] {
-        &self.cargo_metadata_sha256
-    }
-
-    pub(crate) fn observed_def_path(&self) -> &str {
-        &self.observed_def_path
-    }
-
-    pub(crate) fn observed_symbol(&self) -> &str {
-        &self.observed_symbol
-    }
-}
+const RUSTC_INVOCATION_BUILD_OBSERVATION_ENV_V2: &str =
+    "FE2O3_RUSTC_INVOCATION_BUILD_OBSERVATION_V2";
+const CARGO_FE2O3_EXECUTABLE_BUILD_OBSERVATION_ENV_V2: &str =
+    "FE2O3_CARGO_FE2O3_EXECUTABLE_BUILD_OBSERVATION_V2";
+const CARGO_EXECUTABLE_BUILD_OBSERVATION_ENV_V2: &str =
+    "FE2O3_CARGO_EXECUTABLE_BUILD_OBSERVATION_V2";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AlphaSourceDebugV2 {
@@ -105,22 +67,22 @@ pub(crate) struct AlphaSourceDebugV2 {
     function_line: usize,
     index_line: usize,
     local_line: usize,
-    semantic_admission: S09SemanticAdmissionV2,
-    build_observation: S09BuildObservationV2,
-    identity_handoff: Vec<u8>,
+    semantic_admission: SemanticAdmissionV2,
+    build_observation: BuildObservationV2,
+    identity_handoff: IdentityHandoffV2,
 }
 
 impl AlphaSourceDebugV2 {
-    pub(crate) const fn semantic_admission(&self) -> &S09SemanticAdmissionV2 {
+    pub(crate) const fn semantic_admission(&self) -> &SemanticAdmissionV2 {
         &self.semantic_admission
     }
 
-    pub(crate) const fn build_observation(&self) -> &S09BuildObservationV2 {
+    pub(crate) const fn build_observation(&self) -> &BuildObservationV2 {
         &self.build_observation
     }
 
     pub(crate) fn identity_handoff(&self) -> &[u8] {
-        &self.identity_handoff
+        self.identity_handoff.canonical_bytes()
     }
 }
 
@@ -140,6 +102,12 @@ impl fmt::Display for SourceDebugError {
 }
 
 impl Error for SourceDebugError {}
+
+impl From<IdentityCodecErrorV2> for SourceDebugError {
+    fn from(value: IdentityCodecErrorV2) -> Self {
+        Self::new(format!("S09 identity V2 codec failed: {value}"))
+    }
+}
 
 pub(crate) fn collect_requested_profile<'tcx>(
     tcx: TyCtxt<'tcx>,
@@ -309,7 +277,7 @@ pub(crate) fn collect_requested_profile<'tcx>(
     validate_metadata_string(source_directory, "source directory")?;
     validate_metadata_string(source_file, "source file")?;
     let semantic_admission =
-        build_semantic_admission_v2(contract.abi(), contract.launch(), portable_mir_sha256);
+        build_semantic_admission_v2(contract.abi(), contract.launch(), portable_mir_sha256)?;
     let rustc_mir_capture_sha256 =
         crate::mir_import_v2::capture_observation_sha256_v2(tcx, owner.target()).map_err(
             |error| SourceDebugError::new(format!("S09 rustc MIR V2 capture failed: {error}")),
@@ -320,7 +288,8 @@ pub(crate) fn collect_requested_profile<'tcx>(
         rustc_mir_capture_sha256,
         *semantic_admission.identity_sha256(),
     )?;
-    let identity_handoff = identity_handoff_v2(&semantic_admission, &build_observation)?;
+    let identity_handoff =
+        IdentityHandoffV2::new(semantic_admission.clone(), build_observation.clone())?;
     Ok(Some(AlphaSourceDebugV2 {
         source_file: source_file.to_owned(),
         source_directory: source_directory.to_owned(),
@@ -382,34 +351,28 @@ fn build_semantic_admission_v2(
     abi: &AbiLayout,
     launch: &LaunchContract,
     portable_mir_sha256: [u8; 32],
-) -> S09SemanticAdmissionV2 {
-    let fields = [
-        ("schema", S09_SEMANTIC_SCHEMA_V2.to_owned()),
-        ("crate", S09_CRATE_NAME.to_owned()),
-        ("module", S09_MODULE_PATH.to_owned()),
-        ("logical_name", S09_LOGICAL_NAME.to_owned()),
-        ("export_name", S09_EXPORT_NAME.to_owned()),
-        ("profile", "general-scalar-slice-rustc-layout-v3".to_owned()),
-        ("source_path", S09_SOURCE_PATH.to_owned()),
-        ("source_sha256", hex(&S09_SOURCE_SHA256)),
-        ("source_bytes", S09_SOURCE_BYTES.to_string()),
-        ("target", "gfx942:xnack-".to_owned()),
-        ("target_capabilities", "atomics,amd-wave".to_owned()),
-        ("code_object_version", "6".to_owned()),
-        ("rustc_opt_level", "0".to_owned()),
-        ("rustc_debug_info", "full".to_owned()),
-        ("injected_debug_policy", "dwarf-v5-full".to_owned()),
-        ("abi_sha256", hex(&abi_policy_sha256_v2(abi))),
-        ("launch_sha256", hex(&launch_policy_sha256_v2(launch))),
-        ("portable_mir_sha256", hex(&portable_mir_sha256)),
-    ];
-    let canonical_bytes = canonical_fields(&fields);
-    let identity_sha256 = Sha256::digest(&canonical_bytes).into();
-    S09SemanticAdmissionV2 {
-        canonical_bytes,
-        identity_sha256,
-        portable_mir_sha256,
-    }
+) -> Result<SemanticAdmissionV2, SourceDebugError> {
+    Ok(SemanticAdmissionV2::from_fields(
+        SemanticAdmissionFieldsV2 {
+            crate_name: S09_CRATE_NAME,
+            module: S09_MODULE_PATH,
+            logical_name: S09_LOGICAL_NAME,
+            export_name: S09_EXPORT_NAME,
+            profile: "general-scalar-slice-rustc-layout-v3",
+            source_path: S09_SOURCE_PATH,
+            source_sha256: S09_SOURCE_SHA256,
+            source_bytes: S09_SOURCE_BYTES as u64,
+            target: "gfx942:xnack-",
+            target_capabilities: "atomics,amd-wave",
+            code_object_version: 6,
+            rustc_opt_level: 0,
+            rustc_debug_info: "full",
+            injected_debug_policy: "dwarf-v5-full",
+            abi_sha256: abi_policy_sha256_v2(abi),
+            launch_sha256: launch_policy_sha256_v2(launch),
+            portable_mir_sha256,
+        },
+    )?)
 }
 
 fn build_observation_v2(
@@ -417,7 +380,7 @@ fn build_observation_v2(
     observed_def_path: String,
     rustc_mir_capture_sha256: [u8; 32],
     semantic_identity_sha256: [u8; 32],
-) -> Result<S09BuildObservationV2, SourceDebugError> {
+) -> Result<BuildObservationV2, SourceDebugError> {
     let cargo_metadata_sha256 =
         required_digest_environment(CARGO_METADATA_BUILD_OBSERVATION_ENV_V2)?;
     let codegen_backend_sha256 =
@@ -425,6 +388,12 @@ fn build_observation_v2(
     let worker_config_sha256 = required_digest_environment(WORKER_CONFIG_BUILD_OBSERVATION_ENV_V2)?;
     let worker_executable_sha256 =
         required_digest_environment(WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2)?;
+    let rustc_invocation_sha256 =
+        required_digest_environment(RUSTC_INVOCATION_BUILD_OBSERVATION_ENV_V2)?;
+    let cargo_fe2o3_executable_sha256 =
+        required_digest_environment(CARGO_FE2O3_EXECUTABLE_BUILD_OBSERVATION_ENV_V2)?;
+    let cargo_executable_sha256 =
+        required_digest_environment(CARGO_EXECUTABLE_BUILD_OBSERVATION_ENV_V2)?;
     let worker_build_identity =
         required_text_environment(WORKER_BUILD_IDENTITY_OBSERVATION_ENV_V2)?;
     let llvm_build_identity = required_text_environment(LLVM_BUILD_IDENTITY_OBSERVATION_ENV_V2)?;
@@ -436,75 +405,24 @@ fn build_observation_v2(
         observed_text_sha256_v2(b"FE2O3/S09-LLVM-BUILD-IDENTITY/V2\0", &llvm_build_identity);
     let rustc_executable_sha256 = running_rustc_sha256()?;
     let observed_symbol = owner.observed_symbol().to_owned();
-    let fields = [
-        ("schema", S09_BUILD_SCHEMA_V2.to_owned()),
-        ("semantic_admission_sha256", hex(&semantic_identity_sha256)),
-        ("cargo_metadata_sha256", hex(&cargo_metadata_sha256)),
-        ("crate_binding", owner.crate_binding().to_hex()),
-        ("kernel_binding", owner.kernel_binding().to_hex()),
-        ("observed_def_path", observed_def_path.clone()),
-        ("observed_symbol", observed_symbol.clone()),
-        ("rustc_mir_capture_sha256", hex(&rustc_mir_capture_sha256)),
-        ("rustc_executable_sha256", hex(&rustc_executable_sha256)),
-        ("codegen_backend_sha256", hex(&codegen_backend_sha256)),
-        ("worker_config_sha256", hex(&worker_config_sha256)),
-        ("worker_executable_sha256", hex(&worker_executable_sha256)),
-        (
-            "worker_build_identity_sha256",
-            hex(&worker_build_identity_sha256),
-        ),
-        (
-            "llvm_build_identity_sha256",
-            hex(&llvm_build_identity_sha256),
-        ),
-    ];
-    let canonical_bytes = canonical_fields(&fields);
-    let identity_sha256 = Sha256::digest(&canonical_bytes).into();
-    Ok(S09BuildObservationV2 {
-        canonical_bytes,
-        identity_sha256,
+    Ok(BuildObservationV2::from_fields(BuildObservationFieldsV2 {
+        semantic_admission_sha256: semantic_identity_sha256,
         cargo_metadata_sha256,
-        observed_def_path,
-        observed_symbol,
-    })
-}
-
-fn identity_handoff_v2(
-    semantic: &S09SemanticAdmissionV2,
-    observation: &S09BuildObservationV2,
-) -> Result<Vec<u8>, SourceDebugError> {
-    let semantic_len = u32::try_from(semantic.canonical_bytes.len())
-        .map_err(|_| SourceDebugError::new("S09 semantic admission record is too large"))?;
-    let observation_len = u32::try_from(observation.canonical_bytes.len())
-        .map_err(|_| SourceDebugError::new("S09 build observation record is too large"))?;
-    let mut bytes = Vec::with_capacity(
-        S09_HANDOFF_DOMAIN_V2.len()
-            + 8
-            + semantic.canonical_bytes.len()
-            + observation.canonical_bytes.len(),
-    );
-    bytes.extend_from_slice(S09_HANDOFF_DOMAIN_V2);
-    bytes.extend_from_slice(&semantic_len.to_le_bytes());
-    bytes.extend_from_slice(&semantic.canonical_bytes);
-    bytes.extend_from_slice(&observation_len.to_le_bytes());
-    bytes.extend_from_slice(&observation.canonical_bytes);
-    if bytes.len() > 64 * 1024 {
-        return Err(SourceDebugError::new(
-            "S09 identity handoff exceeds its 64 KiB bound",
-        ));
-    }
-    Ok(bytes)
-}
-
-fn canonical_fields(fields: &[(&str, String)]) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    for (name, value) in fields {
-        bytes.extend_from_slice(name.as_bytes());
-        bytes.push(b'\t');
-        bytes.extend_from_slice(value.as_bytes());
-        bytes.push(b'\n');
-    }
-    bytes
+        crate_binding: owner.crate_binding().as_bytes(),
+        kernel_binding: owner.kernel_binding().as_bytes(),
+        observed_def_path: &observed_def_path,
+        observed_symbol: &observed_symbol,
+        rustc_mir_capture_sha256,
+        rustc_invocation_sha256,
+        rustc_executable_sha256,
+        cargo_fe2o3_executable_sha256,
+        cargo_executable_sha256,
+        codegen_backend_sha256,
+        worker_config_sha256,
+        worker_executable_sha256,
+        worker_build_identity_sha256,
+        llvm_build_identity_sha256,
+    })?)
 }
 
 fn required_digest_environment(name: &'static str) -> Result<[u8; 32], SourceDebugError> {
@@ -1606,22 +1524,47 @@ mod tests {
     ];
 
     fn profile() -> AlphaSourceDebugV2 {
-        let semantic_bytes = canonical_fields(&[("schema", S09_SEMANTIC_SCHEMA_V2.to_owned())]);
-        let semantic_admission = S09SemanticAdmissionV2 {
-            identity_sha256: Sha256::digest(&semantic_bytes).into(),
-            canonical_bytes: semantic_bytes,
+        let semantic_admission = SemanticAdmissionV2::from_fields(SemanticAdmissionFieldsV2 {
+            crate_name: S09_CRATE_NAME,
+            module: S09_MODULE_PATH,
+            logical_name: S09_LOGICAL_NAME,
+            export_name: S09_EXPORT_NAME,
+            profile: "general-scalar-slice-rustc-layout-v3",
+            source_path: S09_SOURCE_PATH,
+            source_sha256: S09_SOURCE_SHA256,
+            source_bytes: S09_SOURCE_BYTES as u64,
+            target: "gfx942:xnack-",
+            target_capabilities: "atomics,amd-wave",
+            code_object_version: 6,
+            rustc_opt_level: 0,
+            rustc_debug_info: "full",
+            injected_debug_policy: "dwarf-v5-full",
+            abi_sha256: [0x21; 32],
+            launch_sha256: [0x22; 32],
             portable_mir_sha256: [0x31; 32],
-        };
-        let build_bytes = canonical_fields(&[("schema", S09_BUILD_SCHEMA_V2.to_owned())]);
-        let build_observation = S09BuildObservationV2 {
-            identity_sha256: Sha256::digest(&build_bytes).into(),
-            canonical_bytes: build_bytes,
+        })
+        .unwrap();
+        let build_observation = BuildObservationV2::from_fields(BuildObservationFieldsV2 {
+            semantic_admission_sha256: *semantic_admission.identity_sha256(),
             cargo_metadata_sha256: [0x32; 32],
-            observed_def_path: "general_genuine::__fe2o3_host_kernel_v1_test".to_owned(),
-            observed_symbol: "__fe2o3_host_kernel_v1_test".to_owned(),
-        };
+            crate_binding: [0x33; 32],
+            kernel_binding: [0x34; 32],
+            observed_def_path: "general_genuine::__fe2o3_host_kernel_v1_test",
+            observed_symbol: "__fe2o3_host_kernel_v1_test",
+            rustc_mir_capture_sha256: [0x35; 32],
+            rustc_invocation_sha256: [0x36; 32],
+            rustc_executable_sha256: [0x37; 32],
+            cargo_fe2o3_executable_sha256: [0x38; 32],
+            cargo_executable_sha256: [0x39; 32],
+            codegen_backend_sha256: [0x3a; 32],
+            worker_config_sha256: [0x3b; 32],
+            worker_executable_sha256: [0x3c; 32],
+            worker_build_identity_sha256: [0x3d; 32],
+            llvm_build_identity_sha256: [0x3e; 32],
+        })
+        .unwrap();
         let identity_handoff =
-            identity_handoff_v2(&semantic_admission, &build_observation).unwrap();
+            IdentityHandoffV2::new(semantic_admission.clone(), build_observation.clone()).unwrap();
         AlphaSourceDebugV2 {
             source_file: "main.rs".to_owned(),
             source_directory: "crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src"

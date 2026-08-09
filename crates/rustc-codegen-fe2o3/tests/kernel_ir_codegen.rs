@@ -5,6 +5,10 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use fe2o3_artifacts::DigestAlgorithm;
 
+#[path = "../src/s09_identity_v2.rs"]
+mod s09_identity_v2;
+use s09_identity_v2::{decode_hsaco_identity_v2, identity_section_v2};
+
 const PIPELINE_ENV: &str = "FE2O3_CODEGEN_PIPELINE";
 const LLVM_AS_ENV: &str = "FE2O3_LLVM_AS";
 const LLVM_DWARFDUMP_ENV: &str = "FE2O3_LLVM_DWARFDUMP";
@@ -1111,7 +1115,104 @@ fn worker_v2_s09_alpha_o0_preserves_source_dwarf_in_hsaco() {
         "S09 alpha Worker V2 build failed:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    let stderr = String::from_utf8(output.stderr).expect("UTF-8 S09 build diagnostics");
     let bytes = assert_published_worker_v2_cov6_kernels(&target.join("fe2o3"), &["alpha", "zeta"]);
+    let section = identity_section_v2(&bytes).expect("one bounded S09 identity section");
+    let identity = decode_hsaco_identity_v2(&bytes).expect("canonical S09 identity handoff");
+    assert_eq!(
+        identity.canonical_bytes(),
+        section,
+        "decoded identity must reproduce the exact HSACO section"
+    );
+    let semantic = identity.semantic_admission();
+    assert_eq!(semantic.crate_name(), "fe2o3_typed_alias_spoof");
+    assert_eq!(semantic.module(), "general_genuine");
+    assert_eq!(semantic.logical_name(), "alpha");
+    assert_eq!(semantic.export_name(), "alpha");
+    assert_eq!(semantic.profile(), "general-scalar-slice-rustc-layout-v3");
+    assert_eq!(
+        semantic.source_path(),
+        "crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs"
+    );
+    let source_bytes = std::fs::read(workspace.join(source)).expect("read S09 source identity");
+    assert_eq!(
+        semantic.source_sha256(),
+        DigestAlgorithm::Sha256
+            .calculate(&source_bytes)
+            .bytes()
+            .as_bytes()
+    );
+    assert_eq!(semantic.source_bytes(), source_bytes.len() as u64);
+    assert_eq!(semantic.target(), "gfx942:xnack-");
+    assert_eq!(semantic.target_capabilities(), "atomics,amd-wave");
+    assert_eq!(semantic.code_object_version(), 6);
+    assert_eq!(semantic.rustc_opt_level(), 0);
+    assert_eq!(semantic.rustc_debug_info(), "full");
+    assert_eq!(semantic.injected_debug_policy(), "dwarf-v5-full");
+    assert_ne!(semantic.abi_sha256(), &[0; 32]);
+    assert_ne!(semantic.launch_sha256(), &[0; 32]);
+
+    let observation = identity.build_observation();
+    assert_eq!(
+        observation.semantic_admission_sha256(),
+        semantic.identity_sha256()
+    );
+    assert!(
+        observation
+            .observed_def_path()
+            .starts_with("general_genuine::__fe2o3_host_kernel_v1_")
+    );
+    assert!(
+        observation
+            .observed_symbol()
+            .starts_with("__fe2o3_host_kernel_v1_")
+    );
+    let wrapper_bytes =
+        std::fs::read(workspace.join("target/debug/cargo-fe2o3")).expect("read cargo-fe2o3");
+    assert_eq!(
+        observation.cargo_fe2o3_executable_sha256(),
+        DigestAlgorithm::Sha256
+            .calculate(&wrapper_bytes)
+            .bytes()
+            .as_bytes()
+    );
+    let cargo_bytes = std::fs::read(env!("CARGO")).expect("read Cargo executable");
+    assert_eq!(
+        observation.cargo_executable_sha256(),
+        DigestAlgorithm::Sha256
+            .calculate(&cargo_bytes)
+            .bytes()
+            .as_bytes()
+    );
+    for digest in [
+        observation.cargo_metadata_sha256(),
+        observation.crate_binding(),
+        observation.kernel_binding(),
+        observation.rustc_mir_capture_sha256(),
+        observation.rustc_invocation_sha256(),
+        observation.rustc_executable_sha256(),
+        observation.codegen_backend_sha256(),
+        observation.worker_config_sha256(),
+        observation.worker_executable_sha256(),
+        observation.worker_build_identity_sha256(),
+        observation.llvm_build_identity_sha256(),
+    ] {
+        assert_ne!(digest, &[0; 32]);
+    }
+    for digest in [
+        semantic.identity_sha256(),
+        semantic.portable_mir_sha256(),
+        observation.identity_sha256(),
+        observation.rustc_invocation_sha256(),
+        observation.cargo_fe2o3_executable_sha256(),
+        observation.cargo_executable_sha256(),
+    ] {
+        assert!(
+            stderr.contains(&sha256_hex(digest)),
+            "S09 build diagnostics omitted decoded identity {}:\n{stderr}",
+            sha256_hex(digest)
+        );
+    }
     let hsaco = export_s09_debug_hsaco(&bytes)
         .unwrap_or_else(|| panic!("{S09_DEBUG_HSACO_OUTPUT_ENV} is required"));
     let dwarfdump =

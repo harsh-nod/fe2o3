@@ -33,6 +33,7 @@ mod rust_type_layout;
 #[allow(dead_code)]
 mod rust_type_layout_general;
 mod rust_type_layout_v3;
+pub mod s09_identity_v2;
 mod semantic_features;
 pub mod semantic_layout_bridge;
 mod semantic_witness;

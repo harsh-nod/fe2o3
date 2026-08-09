@@ -1,6 +1,9 @@
 use std::error::Error;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
+use std::fs::File;
+use std::io::Read;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 
@@ -51,6 +54,13 @@ const WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2: &str =
     "FE2O3_WORKER_EXECUTABLE_BUILD_OBSERVATION_V2";
 const WORKER_BUILD_IDENTITY_OBSERVATION_ENV_V2: &str = "FE2O3_WORKER_BUILD_IDENTITY_OBSERVATION_V2";
 const LLVM_BUILD_IDENTITY_OBSERVATION_ENV_V2: &str = "FE2O3_LLVM_BUILD_IDENTITY_OBSERVATION_V2";
+const RUSTC_INVOCATION_BUILD_OBSERVATION_ENV_V2: &str =
+    "FE2O3_RUSTC_INVOCATION_BUILD_OBSERVATION_V2";
+const CARGO_FE2O3_EXECUTABLE_BUILD_OBSERVATION_ENV_V2: &str =
+    "FE2O3_CARGO_FE2O3_EXECUTABLE_BUILD_OBSERVATION_V2";
+const CARGO_EXECUTABLE_BUILD_OBSERVATION_ENV_V2: &str =
+    "FE2O3_CARGO_EXECUTABLE_BUILD_OBSERVATION_V2";
+const MAX_BUILD_EXECUTABLE_BYTES: u64 = 512 * 1024 * 1024;
 const BUILD_INVOCATION_DOMAIN: &[u8] = b"FE2O3/BUILD-INVOCATION/V1\0";
 const CARGO_METADATA_BUILD_OBSERVATION_DOMAIN_V2: &[u8] =
     b"FE2O3/CARGO-METADATA-BUILD-OBSERVATION/V2\0";
@@ -126,6 +136,7 @@ pub(crate) enum BindingWrapperError {
         argument_index: usize,
     },
     CurrentDirectory(std::io::Error),
+    BuildProvenance(String),
     WorkerV2Configuration(WorkerV2ConfigError),
     WorkerV2Restart(ResumeMarkerErrorV1),
     Artifact(EmitError),
@@ -197,6 +208,9 @@ impl fmt::Display for BindingWrapperError {
                     "failed to resolve rustc working directory: {error}"
                 )
             }
+            Self::BuildProvenance(error) => {
+                write!(formatter, "failed to measure build provenance: {error}")
+            }
             Self::WorkerV2Configuration(error) => {
                 write!(formatter, "Worker V2 setup failed: {error}")
             }
@@ -255,6 +269,7 @@ impl Error for BindingWrapperError {
             | Self::UninspectableRustcResponseFile { .. }
             | Self::PreexistingCodegenBackend { .. }
             | Self::UnsupportedInvocation => None,
+            Self::BuildProvenance(_) => None,
         }
     }
 }
@@ -348,12 +363,12 @@ pub(crate) fn run(argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperError
             command.env_remove(WORKER_V2_SOURCE_DEBUG_PROFILE_ENV);
         }
     }
-    configure_worker_build_observation_environment(
-        &mut command,
-        managed_attempt
-            .as_ref()
-            .and_then(ManagedAttempt::worker_build_observation),
-    );
+    let worker_build_observation = managed_attempt
+        .as_ref()
+        .map(ManagedAttempt::worker_build_observation)
+        .transpose()?
+        .flatten();
+    configure_worker_build_observation_environment(&mut command, worker_build_observation);
     let status = match command.status() {
         Ok(status) => status,
         Err(error) => {
@@ -417,11 +432,26 @@ fn configure_worker_build_observation_environment(
             LLVM_BUILD_IDENTITY_OBSERVATION_ENV_V2,
             observation.llvm_build_identity,
         );
+        command.env(
+            RUSTC_INVOCATION_BUILD_OBSERVATION_ENV_V2,
+            hex(&observation.rustc_invocation_sha256),
+        );
+        command.env(
+            CARGO_FE2O3_EXECUTABLE_BUILD_OBSERVATION_ENV_V2,
+            hex(&observation.cargo_fe2o3_executable_sha256),
+        );
+        command.env(
+            CARGO_EXECUTABLE_BUILD_OBSERVATION_ENV_V2,
+            hex(&observation.cargo_executable_sha256),
+        );
     } else {
         command.env_remove(WORKER_CONFIG_BUILD_OBSERVATION_ENV_V2);
         command.env_remove(WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2);
         command.env_remove(WORKER_BUILD_IDENTITY_OBSERVATION_ENV_V2);
         command.env_remove(LLVM_BUILD_IDENTITY_OBSERVATION_ENV_V2);
+        command.env_remove(RUSTC_INVOCATION_BUILD_OBSERVATION_ENV_V2);
+        command.env_remove(CARGO_FE2O3_EXECUTABLE_BUILD_OBSERVATION_ENV_V2);
+        command.env_remove(CARGO_EXECUTABLE_BUILD_OBSERVATION_ENV_V2);
     }
 }
 
@@ -433,6 +463,130 @@ fn hex(bytes: &[u8]) -> String {
         encoded.push(DIGITS[usize::from(byte & 0x0f)] as char);
     }
     encoded
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct BuildExecutableSnapshot {
+    device: u64,
+    inode: u64,
+    mode: u32,
+    size: u64,
+    modified_seconds: i64,
+    modified_nanoseconds: i64,
+}
+
+impl BuildExecutableSnapshot {
+    fn from_metadata(metadata: &std::fs::Metadata) -> Self {
+        Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            mode: metadata.mode(),
+            size: metadata.len(),
+            modified_seconds: metadata.mtime(),
+            modified_nanoseconds: metadata.mtime_nsec(),
+        }
+    }
+}
+
+fn measure_build_executable(
+    path: impl AsRef<Path>,
+    label: &str,
+) -> Result<[u8; 32], BindingWrapperError> {
+    let path = path.as_ref();
+    let fail = |reason: String| {
+        BindingWrapperError::BuildProvenance(format!("{label} {}: {reason}", path.display()))
+    };
+    let mut file = File::open(path).map_err(|error| fail(format!("cannot be opened: {error}")))?;
+    let initial_metadata = file
+        .metadata()
+        .map_err(|error| fail(format!("cannot be inspected: {error}")))?;
+    let initial = BuildExecutableSnapshot::from_metadata(&initial_metadata);
+    if !initial_metadata.is_file() || initial.mode & 0o111 == 0 {
+        return Err(fail("is not a regular executable file".to_owned()));
+    }
+    if initial.size == 0 || initial.size > MAX_BUILD_EXECUTABLE_BYTES {
+        return Err(fail(format!(
+            "must contain 1 through {MAX_BUILD_EXECUTABLE_BYTES} bytes; found {}",
+            initial.size
+        )));
+    }
+
+    let mut digest = Sha256::new();
+    let mut remaining = initial.size;
+    let mut buffer = [0_u8; 64 * 1024];
+    while remaining != 0 {
+        let wanted = usize::try_from(remaining.min(buffer.len() as u64))
+            .expect("bounded executable read size");
+        let read = file
+            .read(&mut buffer[..wanted])
+            .map_err(|error| fail(format!("cannot be hashed: {error}")))?;
+        if read == 0 {
+            return Err(fail(format!(
+                "was truncated while hashing with {remaining} bytes remaining"
+            )));
+        }
+        digest.update(&buffer[..read]);
+        remaining -= read as u64;
+    }
+    if file
+        .read(&mut buffer[..1])
+        .map_err(|error| fail(format!("cannot be checked for growth: {error}")))?
+        != 0
+    {
+        return Err(fail("grew while hashing".to_owned()));
+    }
+    let final_metadata = file
+        .metadata()
+        .map_err(|error| fail(format!("cannot be reinspected: {error}")))?;
+    if BuildExecutableSnapshot::from_metadata(&final_metadata) != initial {
+        return Err(fail("changed while hashing".to_owned()));
+    }
+    Ok(digest.finalize().into())
+}
+
+fn resolve_cargo_executable() -> Result<PathBuf, BindingWrapperError> {
+    let value = std::env::var_os("CARGO").ok_or_else(|| {
+        BindingWrapperError::BuildProvenance(
+            "CARGO is missing from the rustc wrapper environment".to_owned(),
+        )
+    })?;
+    if value.is_empty() {
+        return Err(BindingWrapperError::BuildProvenance(
+            "CARGO is empty in the rustc wrapper environment".to_owned(),
+        ));
+    }
+    let path = PathBuf::from(&value);
+    if path.is_absolute() || path.components().count() > 1 {
+        return if path.is_absolute() {
+            Ok(path)
+        } else {
+            std::env::current_dir()
+                .map(|directory| directory.join(path))
+                .map_err(|error| {
+                    BindingWrapperError::BuildProvenance(format!(
+                        "cannot resolve relative CARGO executable: {error}"
+                    ))
+                })
+        };
+    }
+    let search = std::env::var_os("PATH").ok_or_else(|| {
+        BindingWrapperError::BuildProvenance(
+            "PATH is missing while resolving the CARGO executable".to_owned(),
+        )
+    })?;
+    for directory in std::env::split_paths(&search) {
+        let candidate = directory.join(&path);
+        if candidate
+            .metadata()
+            .is_ok_and(|metadata| metadata.is_file() && metadata.mode() & 0o111 != 0)
+        {
+            return Ok(candidate);
+        }
+    }
+    Err(BindingWrapperError::BuildProvenance(format!(
+        "CARGO executable {:?} was not found on PATH",
+        value
+    )))
 }
 
 fn managed_rustc_args_from_environment() -> Result<Vec<OsString>, BindingWrapperError> {
@@ -655,10 +809,27 @@ impl ManagedAttempt {
         }
     }
 
-    fn worker_build_observation(&self) -> Option<WorkerV2BuildObservation<'_>> {
+    fn worker_build_observation(
+        &self,
+    ) -> Result<Option<WorkerV2BuildObservation<'_>>, BindingWrapperError> {
         match &self.worker_v2 {
-            Some(ManagedWorkerV2::Fresh { config, .. }) => Some(config.build_observation()),
-            Some(ManagedWorkerV2::Recovery { .. }) | None => None,
+            Some(ManagedWorkerV2::Fresh { config, .. })
+                if config.source_debug_profile().is_some() =>
+            {
+                let cargo_fe2o3_executable_sha256 =
+                    measure_build_executable("/proc/self/exe", "cargo-fe2o3 wrapper")?;
+                let cargo_executable = resolve_cargo_executable()?;
+                let cargo_executable_sha256 =
+                    measure_build_executable(&cargo_executable, "Cargo executable")?;
+                Ok(Some(config.build_observation(
+                    *self.attempt.invocation().as_bytes(),
+                    cargo_fe2o3_executable_sha256,
+                    cargo_executable_sha256,
+                )))
+            }
+            Some(ManagedWorkerV2::Fresh { .. }) | Some(ManagedWorkerV2::Recovery { .. }) | None => {
+                Ok(None)
+            }
         }
     }
 }
@@ -1224,12 +1395,17 @@ pub(crate) fn exit_code(status: ExitStatus) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::{
-        BindingWrapperError, CARGO_METADATA_BUILD_OBSERVATION_ENV_V2, CompileBuildObservationV2,
-        configure_build_observation_environment, decode_managed_rustc_args,
-        derive_build_invocation_with_config_identity, is_cargo_stdin_probe,
-        ordered_metadata_values, reject_uninspectable_rustc_args,
+        BindingWrapperError, CARGO_EXECUTABLE_BUILD_OBSERVATION_ENV_V2,
+        CARGO_FE2O3_EXECUTABLE_BUILD_OBSERVATION_ENV_V2, CARGO_METADATA_BUILD_OBSERVATION_ENV_V2,
+        CompileBuildObservationV2, LLVM_BUILD_IDENTITY_OBSERVATION_ENV_V2,
+        RUSTC_INVOCATION_BUILD_OBSERVATION_ENV_V2, WORKER_BUILD_IDENTITY_OBSERVATION_ENV_V2,
+        WORKER_CONFIG_BUILD_OBSERVATION_ENV_V2, WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2,
+        configure_build_observation_environment, configure_worker_build_observation_environment,
+        decode_managed_rustc_args, derive_build_invocation_with_config_identity,
+        is_cargo_stdin_probe, measure_build_executable, ordered_metadata_values,
+        reject_uninspectable_rustc_args,
     };
-    use crate::worker_v2::WorkerV2ConfigIdentity;
+    use crate::worker_v2::{WorkerV2BuildObservation, WorkerV2ConfigIdentity};
     use crate::worker_v2_restart::{
         WorkerV2PublicationKindV1, WorkerV2ResumeStoreV1,
         restart_admission_commitment_with_inputs_v1,
@@ -1379,6 +1555,69 @@ mod tests {
                 ),
                 (OsString::from(CRATE_BINDING_ID_ENV_V1), None),
             ]
+        );
+    }
+
+    #[test]
+    fn s09_worker_observation_propagates_every_exact_digest_and_clears_absence() {
+        let observation = WorkerV2BuildObservation {
+            config_identity: WorkerV2ConfigIdentity::for_test([0x11; 32]),
+            executable_sha256: [0x12; 32],
+            worker_build_identity: "worker-build-v2",
+            llvm_build_identity: "llvm-build-v2",
+            rustc_invocation_sha256: [0x13; 32],
+            cargo_fe2o3_executable_sha256: [0x14; 32],
+            cargo_executable_sha256: [0x15; 32],
+        };
+        let mut command = Command::new("rustc");
+        configure_worker_build_observation_environment(&mut command, Some(observation));
+        let environment = command
+            .get_envs()
+            .map(|(name, value)| {
+                (
+                    name.to_string_lossy().into_owned(),
+                    value
+                        .expect("configured observation value")
+                        .to_string_lossy()
+                        .into_owned(),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
+        assert_eq!(environment.len(), 7);
+        for (name, expected) in [
+            (WORKER_CONFIG_BUILD_OBSERVATION_ENV_V2, "11".repeat(32)),
+            (WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2, "12".repeat(32)),
+            (RUSTC_INVOCATION_BUILD_OBSERVATION_ENV_V2, "13".repeat(32)),
+            (
+                CARGO_FE2O3_EXECUTABLE_BUILD_OBSERVATION_ENV_V2,
+                "14".repeat(32),
+            ),
+            (CARGO_EXECUTABLE_BUILD_OBSERVATION_ENV_V2, "15".repeat(32)),
+            (
+                WORKER_BUILD_IDENTITY_OBSERVATION_ENV_V2,
+                "worker-build-v2".to_owned(),
+            ),
+            (
+                LLVM_BUILD_IDENTITY_OBSERVATION_ENV_V2,
+                "llvm-build-v2".to_owned(),
+            ),
+        ] {
+            assert_eq!(environment.get(name), Some(&expected));
+        }
+
+        let mut absent = Command::new("rustc");
+        configure_worker_build_observation_environment(&mut absent, None);
+        assert_eq!(absent.get_envs().count(), 7);
+        assert!(absent.get_envs().all(|(_, value)| value.is_none()));
+    }
+
+    #[test]
+    fn executable_observation_hashes_the_real_running_test_image() {
+        let executable = std::env::current_exe().unwrap();
+        let expected: [u8; 32] = sha2::Sha256::digest(fs::read(&executable).unwrap()).into();
+        assert_eq!(
+            measure_build_executable(&executable, "test executable").unwrap(),
+            expected
         );
     }
 
