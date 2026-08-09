@@ -119,7 +119,7 @@ expect_failure unknown_row 'claim references unknown parity row: 95' \
 
 awk -F '\t' '!($1 == "row" && $2 == "02") { print }' "${CLAIMS}" \
   >"${TEST_ROOT}/missing-row.tsv"
-expect_failure missing_row 'claim rows are missing or out of order: expected 02, found 03' \
+expect_failure missing_row 'missing evidence claim for Partial row 02' \
   "${DASHBOARD_SCRIPT}" validate --status "${STATUS}" --matrix "${MATRIX}" \
   --claims "${TEST_ROOT}/missing-row.tsv" --repo "${REPO_ROOT}"
 

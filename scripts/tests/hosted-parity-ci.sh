@@ -92,6 +92,8 @@ require_text "${PROTECTED_WORKFLOW}" 'path: protected'
 require_text "${PROTECTED_WORKFLOW}" 'path: candidate'
 require_text "${PROTECTED_WORKFLOW}" 'persist-credentials: false'
 require_text "${PROTECTED_WORKFLOW}" 'python3 protected/scripts/parity-signed-evidence.py gate'
+require_text "${PROTECTED_WORKFLOW}" '--projection-output "${transaction}"'
+require_text "${PROTECTED_WORKFLOW}" 'bash protected/scripts/parity-promotion-projections.sh'
 require_text "${PROTECTED_WORKFLOW}" '--trust-policy protected/docs/parity-evidence/trust-policy-v2.tsv'
 require_text "${PROTECTED_WORKFLOW}" '--trusted-policy protected/docs/parity-row-evidence-policy-v2.tsv'
 require_text "${PROTECTED_WORKFLOW}" '--candidate-policy candidate/docs/parity-row-evidence-policy-v2.tsv'
@@ -118,10 +120,23 @@ require_text "${PROTECTED_WORKFLOW}" 'CHANGED_FILE_COUNT: ${{ github.event.pull_
 require_text "${PROTECTED_WORKFLOW}" 'actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683'
 
 for path in \
+  docs/cuda-oxide-parity-matrix.md \
+  docs/generated/cuda-oxide-parity-dashboard.md \
+  docs/generated/cuda-oxide-parity-dashboard.tsv \
+  docs/generated/cuda-oxide-parity-signed-promotions.tsv \
+  docs/parity-signed-evidence-v2.md \
   docs/parity-evidence/trust-policy-v2.tsv \
+  docs/parity-evidence/trust-policy-v2.example.tsv \
   docs/parity-evidence/trusted-keys/** \
   scripts/parity-signed-evidence.py \
   scripts/parity-protected-change-policy.sh \
+  scripts/parity-dashboard.sh \
+  scripts/parity-matrix.sh \
+  scripts/parity-promotion-projections.sh \
+  scripts/tests/hosted-parity-ci.sh \
+  scripts/tests/parity-dashboard.sh \
+  scripts/tests/parity-promotion-projections.sh \
+  scripts/tests/parity-row-evidence.sh \
   .github/workflows/ci.yml \
   .github/workflows/parity-promotion.yml \
   .github/CODEOWNERS \
@@ -129,11 +144,20 @@ for path in \
   require_text "${PROTECTED_WORKFLOW}" "- ${path}"
 done
 for ownership in \
+  /docs/parity-signed-evidence-v2.md \
+  /docs/parity-evidence/trust-policy-v2.example.tsv \
   /docs/parity-row-evidence-policy-v2.tsv \
   /docs/parity-evidence/trust-policy-v2.tsv \
   /docs/parity-evidence/trusted-keys/ \
   /scripts/parity-signed-evidence.py \
   /scripts/parity-protected-change-policy.sh \
+  /scripts/parity-dashboard.sh \
+  /scripts/parity-matrix.sh \
+  /scripts/parity-promotion-projections.sh \
+  /scripts/tests/hosted-parity-ci.sh \
+  /scripts/tests/parity-dashboard.sh \
+  /scripts/tests/parity-promotion-projections.sh \
+  /scripts/tests/parity-row-evidence.sh \
   /.github/workflows/parity-promotion.yml \
   /.github/CODEOWNERS; do
   require_text "${CODEOWNERS}" "${ownership} @powderluv"
@@ -142,6 +166,9 @@ done
 
 require_text "${GENERIC_WORKFLOW}" 'git archive "${BASE_SHA}"'
 require_text "${GENERIC_WORKFLOW}" 'python3 "${trusted}/scripts/parity-signed-evidence.py" gate'
+require_text "${GENERIC_WORKFLOW}" '--projection-output "${transaction}"'
+require_text "${GENERIC_WORKFLOW}" 'bash "${trusted}/scripts/parity-promotion-projections.sh"'
+require_text "${GENERIC_WORKFLOW}" 'git archive "${BASE_SHA}" | tar -x -C "${trusted}"'
 require_text "${GENERIC_WORKFLOW}" '--trust-policy "${trusted}/docs/parity-evidence/trust-policy-v2.tsv"'
 require_text "${GENERIC_WORKFLOW}" '--trusted-policy "${trusted}/docs/parity-row-evidence-policy-v2.tsv"'
 require_text "${GENERIC_WORKFLOW}" 'EVENT_NAME: ${{ github.event_name }}'
@@ -231,11 +258,24 @@ FILES="${TEST_ROOT}/files.json"
 HEAD_SHA=1111111111111111111111111111111111111111
 readonly FILES HEAD_SHA
 mkdir -p \
-  "${PROTECTED}/docs" "${PROTECTED}/scripts" "${PROTECTED}/.github" \
-  "${CANDIDATE}/docs" "${CANDIDATE}/scripts" "${CANDIDATE}/.github"
+  "${PROTECTED}/docs/generated" "${PROTECTED}/scripts" "${PROTECTED}/.github" \
+  "${CANDIDATE}/docs/generated" "${CANDIDATE}/scripts" "${CANDIDATE}/.github"
 printf 'status\tMissing\n' >"${PROTECTED}/docs/cuda-oxide-parity-status.tsv"
 cp "${PROTECTED}/docs/cuda-oxide-parity-status.tsv" \
   "${CANDIDATE}/docs/cuda-oxide-parity-status.tsv"
+printf 'protected matrix prose\n' >"${PROTECTED}/docs/cuda-oxide-parity-matrix.md"
+cp "${PROTECTED}/docs/cuda-oxide-parity-matrix.md" \
+  "${CANDIDATE}/docs/cuda-oxide-parity-matrix.md"
+printf 'dashboard\n' >"${PROTECTED}/docs/generated/cuda-oxide-parity-dashboard.md"
+cp "${PROTECTED}/docs/generated/cuda-oxide-parity-dashboard.md" \
+  "${CANDIDATE}/docs/generated/cuda-oxide-parity-dashboard.md"
+printf 'dashboard-tsv\n' >"${PROTECTED}/docs/generated/cuda-oxide-parity-dashboard.tsv"
+cp "${PROTECTED}/docs/generated/cuda-oxide-parity-dashboard.tsv" \
+  "${CANDIDATE}/docs/generated/cuda-oxide-parity-dashboard.tsv"
+printf 'signed_promotion_projection_schema_version\t1\nrow_count\t0\n' \
+  >"${PROTECTED}/docs/generated/cuda-oxide-parity-signed-promotions.tsv"
+cp "${PROTECTED}/docs/generated/cuda-oxide-parity-signed-promotions.tsv" \
+  "${CANDIDATE}/docs/generated/cuda-oxide-parity-signed-promotions.tsv"
 printf 'protected verifier\n' >"${PROTECTED}/scripts/parity-signed-evidence.py"
 cp "${PROTECTED}/scripts/parity-signed-evidence.py" \
   "${CANDIDATE}/scripts/parity-signed-evidence.py"
@@ -261,6 +301,15 @@ printf 'status\tPartial\n' >"${CANDIDATE}/docs/cuda-oxide-parity-status.tsv"
 [[ "$(bash "${CHANGE_POLICY}" "${policy_args[@]}")" == promotion ]]
 cp "${PROTECTED}/docs/cuda-oxide-parity-status.tsv" \
   "${CANDIDATE}/docs/cuda-oxide-parity-status.tsv"
+
+printf 'candidate prose\n' >>"${CANDIDATE}/docs/cuda-oxide-parity-matrix.md"
+printf '%s\n' '[{"filename":"docs/cuda-oxide-parity-matrix.md"}]' >"${FILES}"
+expect_failure projection_without_status \
+  'parity projections may change only with a signed status promotion' \
+  bash "${CHANGE_POLICY}" "${policy_args[@]}"
+cp "${PROTECTED}/docs/cuda-oxide-parity-matrix.md" \
+  "${CANDIDATE}/docs/cuda-oxide-parity-matrix.md"
+printf '%s\n' '[{"filename":"scripts/parity-signed-evidence.py"}]' >"${FILES}"
 
 printf 'candidate verifier\n' >"${CANDIDATE}/scripts/parity-signed-evidence.py"
 printf '[]\n' >"${REVIEWS}"
@@ -322,6 +371,7 @@ cp "${PROTECTED}/.github/parity-trust-reviewers.txt" \
 expect_failure duplicate_designated_reviewer 'duplicate protected reviewer identity' \
   bash "${CHANGE_POLICY}" "${policy_args[@]}"
 
+bash "${ROOT}/scripts/tests/parity-promotion-projections.sh"
 
 bash -n "${BASH_SOURCE[0]}"
 shellcheck "${BASH_SOURCE[0]}"

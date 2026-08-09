@@ -336,6 +336,33 @@ set_gate_args partial.tsv "${TEST_ROOT}/partial.tsv"
 "${TOOL}" "${gate_args[@]}"
 expect_failure test_domain 'production promotion requires a production trust domain' "${TOOL}" "${gate_args[@]:0:${#gate_args[@]}-1}"
 
+TRANSACTION="${TEST_ROOT}/partial-projection.tsv"
+"${TOOL}" "${gate_args[@]}" --projection-output "${TRANSACTION}"
+partial_evidence_set="$(awk -F '\t' '$1 == "evidence_set_sha256" { print $2 }' "${ARCHIVE}/partial.tsv")"
+cat >"${TEST_ROOT}/expected-partial-projection.tsv" <<EOF
+signed_promotion_projection_schema_version	1
+row_count	1
+row	0000	04	Missing	Partial	${SOURCE}	gfx942	mi300x-gfx942-test	unit,ui	bash	results/partial-unit-Partial-unit.tsv,results/partial-ui-Partial-ui.tsv	${partial_evidence_set}
+EOF
+cmp -- "${TEST_ROOT}/expected-partial-projection.tsv" "${TRANSACTION}"
+expect_failure projection_overwrite 'promotion transaction projection output already exists' \
+  "${TOOL}" "${gate_args[@]}" --projection-output "${TRANSACTION}"
+printf 'signed_promotion_projection_schema_version\t1\nrow_count\t0\n' \
+  >"${TEST_ROOT}/empty-projection.tsv"
+"${TOOL}" merge-projections \
+  --baseline "${TEST_ROOT}/empty-projection.tsv" \
+  --transaction "${TRANSACTION}" \
+  --output "${TEST_ROOT}/merged-projection.tsv"
+cmp -- "${TRANSACTION}" "${TEST_ROOT}/merged-projection.tsv"
+cp "${TRANSACTION}" "${TEST_ROOT}/history-mismatch.tsv"
+awk -F '\t' -v OFS='\t' '$1 == "row" { $5 = "Complete" } { print }' "${TEST_ROOT}/history-mismatch.tsv" >"${TEST_ROOT}/history-mismatch.tmp"
+mv "${TEST_ROOT}/history-mismatch.tmp" "${TEST_ROOT}/history-mismatch.tsv"
+expect_failure projection_history 'promotion projection history mismatch for row 04' \
+  "${TOOL}" merge-projections \
+    --baseline "${TRANSACTION}" \
+    --transaction "${TEST_ROOT}/history-mismatch.tsv" \
+    --output "${TEST_ROOT}/history-output.tsv"
+
 for class in unit ui ir compile; do
   write_result "${class}" Complete >/dev/null
 done
@@ -425,9 +452,13 @@ cp "${TRUSTED}/keys/reviewer.pem" "${TRUST_OLD}/keys/reviewer.pem"
 {
   printf 'parity_trust_policy_schema_version\t2\n'
   printf 'trust_domain\tproduction\n'
-  printf 'metadata_path_count\t2\n'
-  printf 'metadata_path\t0000\texact\tdocs/cuda-oxide-parity-status.tsv\n'
-  printf 'metadata_path\t0001\tprefix\tdocs/parity-evidence/archive/\n'
+  printf 'metadata_path_count\t6\n'
+  printf 'metadata_path\t0000\texact\tdocs/cuda-oxide-parity-matrix.md\n'
+  printf 'metadata_path\t0001\texact\tdocs/cuda-oxide-parity-status.tsv\n'
+  printf 'metadata_path\t0002\texact\tdocs/generated/cuda-oxide-parity-dashboard.md\n'
+  printf 'metadata_path\t0003\texact\tdocs/generated/cuda-oxide-parity-dashboard.tsv\n'
+  printf 'metadata_path\t0004\texact\tdocs/generated/cuda-oxide-parity-signed-promotions.tsv\n'
+  printf 'metadata_path\t0005\tprefix\tdocs/parity-evidence/archive/\n'
   printf 'key_count\t2\n'
   printf 'key\t0000\tattestor\tproduction-attestor\tkeys/attestor.pem\t%s\ted25519\n' "$(file_sha "${TRUST_OLD}/keys/attestor.pem")"
   printf 'key\t0001\treviewer\tproduction-reviewer\tkeys/reviewer.pem\t%s\ted25519\n' "$(file_sha "${TRUST_OLD}/keys/reviewer.pem")"
@@ -449,6 +480,33 @@ trust_update_args=(
   --candidate-row-policy "${TRUST_CANDIDATE}/row-policy.tsv"
 )
 "${TOOL}" "${trust_update_args[@]}"
+
+TRUST_PREACTIVATION="${TEST_ROOT}/trust-preactivation"
+mkdir -p "${TRUST_PREACTIVATION}"
+cp "${TRUST_OLD}/row-policy.tsv" "${TRUST_PREACTIVATION}/row-policy.tsv"
+"${TOOL}" check-trust-update \
+  --protected-root "${TRUST_PREACTIVATION}" \
+  --protected-policy "${TRUST_PREACTIVATION}/missing-trust.tsv" \
+  --protected-row-policy "${TRUST_PREACTIVATION}/row-policy.tsv" \
+  --candidate-root "${TRUST_CANDIDATE}" \
+  --candidate-policy "${TRUST_CANDIDATE}/trust.tsv" \
+  --candidate-row-policy "${TRUST_CANDIDATE}/row-policy.tsv"
+cp -a "${TRUST_CANDIDATE}" "${TEST_ROOT}/legacy-activation"
+awk -F '\t' -v OFS='\t' '
+  $1 == "metadata_path_count" { $2 = 2 }
+  $1 == "metadata_path" && $4 == "docs/cuda-oxide-parity-status.tsv" { $2 = "0000"; print; next }
+  $1 == "metadata_path" && $4 == "docs/parity-evidence/archive/" { $2 = "0001"; print; next }
+  $1 != "metadata_path" { print }
+' "${TEST_ROOT}/legacy-activation/trust.tsv" >"${TEST_ROOT}/legacy-activation/trust.tmp"
+mv "${TEST_ROOT}/legacy-activation/trust.tmp" "${TEST_ROOT}/legacy-activation/trust.tsv"
+expect_failure legacy_activation 'initial trust policy activation has a non-canonical metadata allowlist' \
+  "${TOOL}" check-trust-update \
+    --protected-root "${TRUST_PREACTIVATION}" \
+    --protected-policy "${TRUST_PREACTIVATION}/missing-trust.tsv" \
+    --protected-row-policy "${TRUST_PREACTIVATION}/row-policy.tsv" \
+    --candidate-root "${TEST_ROOT}/legacy-activation" \
+    --candidate-policy "${TEST_ROOT}/legacy-activation/trust.tsv" \
+    --candidate-row-policy "${TEST_ROOT}/legacy-activation/row-policy.tsv"
 
 sed -i 's/^row_count\t2$/row_count\t1/' "${TRUST_CANDIDATE}/row-policy.tsv"
 sed -i '/^row\t0001\t05\t/d' "${TRUST_CANDIDATE}/row-policy.tsv"
