@@ -1296,6 +1296,8 @@ def open_child_directory(parent_fd: int, component: str) -> int:
         os.mkdir(component, 0o700, dir_fd=parent_fd)
     except FileExistsError:
         pass
+    except OSError as error:
+        fail(f"cannot create source staging directory: {error}")
     try:
         return os.open(
             component,
@@ -1313,6 +1315,58 @@ def write_all(file_fd: int, content: bytes) -> None:
         if written <= 0:
             fail("staging write made no progress")
         view = view[written:]
+
+
+def finalize_source_file(file_fd: int, mode: int, label: str) -> None:
+    try:
+        os.fchmod(file_fd, mode)
+        os.fsync(file_fd)
+    except OSError as error:
+        fail(f"cannot durably finalize {label}: {error}")
+
+
+def open_snapshot_directory(snapshot_fd: int, relative: str) -> int:
+    try:
+        current_fd = os.dup(snapshot_fd)
+    except OSError as error:
+        fail(f"cannot retain source staging directory: {error}")
+    try:
+        for component in relative.split("/"):
+            next_fd = os.open(
+                component,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                dir_fd=current_fd,
+            )
+            os.close(current_fd)
+            current_fd = next_fd
+        return current_fd
+    except OSError as error:
+        os.close(current_fd)
+        fail(f"source staging directory changed during finalization: {error}")
+
+
+def finalize_source_directories(
+    snapshot_fd: int, directories: set[str], root_fd: int
+) -> None:
+    ordered = sorted(
+        directories,
+        key=lambda relative: (-len(relative.split("/")), relative),
+    )
+    for relative in ordered:
+        directory_fd = open_snapshot_directory(snapshot_fd, relative)
+        try:
+            os.fchmod(directory_fd, 0o555)
+            os.fsync(directory_fd)
+        except OSError as error:
+            fail(f"cannot durably finalize source directory {relative}: {error}")
+        finally:
+            os.close(directory_fd)
+    try:
+        os.fchmod(snapshot_fd, 0o555)
+        os.fsync(snapshot_fd)
+        os.fsync(root_fd)
+    except OSError as error:
+        fail(f"cannot durably finalize source staging parents: {error}")
 
 
 def write_snapshot_file(
@@ -1336,8 +1390,11 @@ def write_snapshot_file(
             fail("source staging file changed during export")
         try:
             write_all(file_fd, content)
-            os.fsync(file_fd)
-            os.fchmod(file_fd, 0o555 if mode == "100755" else 0o444)
+            finalize_source_file(
+                file_fd,
+                0o555 if mode == "100755" else 0o444,
+                f"source file {path}",
+            )
         finally:
             os.close(file_fd)
     finally:
@@ -1524,6 +1581,7 @@ def stage_source(profile: Profile, request: Request) -> SourceSnapshot:
     request_fd = -1
     snapshot_path = staging_root / snapshot_name
     control = Path(tempfile.mkdtemp(prefix="git-control-", dir=staging_root))
+    control_removed = False
     try:
         (control / "objects" / "info").mkdir(mode=0o700, parents=True)
         (control / "objects" / "pack").mkdir(mode=0o700)
@@ -1602,8 +1660,7 @@ def stage_source(profile: Profile, request: Request) -> SourceSnapshot:
         )
         try:
             write_all(manifest_fd, manifest_raw)
-            os.fsync(manifest_fd)
-            os.fchmod(manifest_fd, 0o444)
+            finalize_source_file(manifest_fd, 0o444, "source manifest")
         finally:
             os.close(manifest_fd)
         request_write_fd = os.open(
@@ -1614,8 +1671,7 @@ def stage_source(profile: Profile, request: Request) -> SourceSnapshot:
         )
         try:
             write_all(request_write_fd, request.raw)
-            os.fsync(request_write_fd)
-            os.fchmod(request_write_fd, 0o444)
+            finalize_source_file(request_write_fd, 0o444, "request snapshot")
         finally:
             os.close(request_write_fd)
         request_fd = os.open(
@@ -1623,13 +1679,12 @@ def stage_source(profile: Profile, request: Request) -> SourceSnapshot:
             os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
             dir_fd=root_fd,
         )
-        for directory in sorted(
-            directories, key=lambda item: item.count("/"), reverse=True
-        ):
-            os.chmod(directory, 0o555, dir_fd=snapshot_fd, follow_symlinks=False)
-        os.fchmod(snapshot_fd, 0o555)
-        os.fsync(snapshot_fd)
-        os.fsync(root_fd)
+        try:
+            shutil.rmtree(control)
+        except OSError as error:
+            fail(f"cannot remove transient Git control directory: {error}")
+        control_removed = True
+        finalize_source_directories(snapshot_fd, directories, root_fd)
         identity = os.fstat(snapshot_fd)
         request_identity = os.fstat(request_fd)
         snapshot = SourceSnapshot(
@@ -1656,7 +1711,8 @@ def stage_source(profile: Profile, request: Request) -> SourceSnapshot:
         os.close(root_fd)
         raise
     finally:
-        shutil.rmtree(control, ignore_errors=True)
+        if not control_removed:
+            shutil.rmtree(control, ignore_errors=True)
 
 
 def authorize(args: argparse.Namespace) -> AuthorizedRequest:

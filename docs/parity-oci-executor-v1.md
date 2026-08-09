@@ -135,7 +135,12 @@ submodules, `.git`, unsupported modes, malformed paths, excess files, and
 excess bytes fail closed. The resulting source tree and canonical request copy
 are created beneath an operator-owned staging root, made read-only, and mounted
 without Git metadata. Open directory/file descriptors and device/inode
-identities are retained and rechecked immediately before plan emission.
+identities are retained and rechecked immediately before plan emission. Every
+regular file is fsynced after its final read-only mode is applied. Populated
+directories are then chmodded and fsynced bottom-up, followed by the snapshot
+directory and staging root. The transient Git control directory is removed
+before the final staging-root fsync. Any metadata or sync failure rejects the
+snapshot with a controlled executor error.
 
 Unknown or trailing request fields are rejected, including any closure, image,
 runtime, environment, device, command, or isolation setting.

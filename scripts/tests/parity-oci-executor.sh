@@ -347,6 +347,129 @@ finally:
     renamed_request.rename(request)
     snapshot.close()
 
+durability = root / "source-durability-fixture"
+(durability / "alpha" / "beta").mkdir(parents=True, mode=0o700)
+(durability / "alpha" / "gamma").mkdir(mode=0o700)
+(durability / "kernel.rs").write_bytes(b"fn kernel() {}\n")
+(durability / "alpha" / "beta" / "one").write_bytes(b"one\n")
+(durability / "alpha" / "gamma" / "two").write_bytes(b"two\n")
+real_fchmod = module.os.fchmod
+real_fsync = module.os.fsync
+
+
+def descriptor_name(file_fd):
+    return Path(os.readlink(f"/proc/self/fd/{file_fd}")).name
+
+
+file_events = []
+
+
+def record_file_chmod(file_fd, mode):
+    file_events.append(("chmod", descriptor_name(file_fd), mode))
+    real_fchmod(file_fd, mode)
+
+
+def record_file_fsync(file_fd):
+    file_events.append(("fsync", descriptor_name(file_fd)))
+    real_fsync(file_fd)
+
+
+kernel_fd = os.open(durability / "kernel.rs", os.O_RDONLY | os.O_NOFOLLOW)
+module.os.fchmod = record_file_chmod
+module.os.fsync = record_file_fsync
+try:
+    module.finalize_source_file(kernel_fd, 0o444, "file-order fixture")
+finally:
+    module.os.fchmod = real_fchmod
+    module.os.fsync = real_fsync
+    os.close(kernel_fd)
+assert file_events == [
+    ("chmod", "kernel.rs", 0o444),
+    ("fsync", "kernel.rs"),
+]
+assert (durability / "kernel.rs").stat().st_mode & 0o777 == 0o444
+
+directory_events = []
+
+
+def record_directory_chmod(file_fd, mode):
+    directory_events.append(("chmod", descriptor_name(file_fd), mode))
+    real_fchmod(file_fd, mode)
+
+
+def record_directory_fsync(file_fd):
+    directory_events.append(("fsync", descriptor_name(file_fd)))
+    real_fsync(file_fd)
+
+
+durability_fd = os.open(durability, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+durability_root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+module.os.fchmod = record_directory_chmod
+module.os.fsync = record_directory_fsync
+try:
+    module.finalize_source_directories(
+        durability_fd,
+        {"alpha", "alpha/beta", "alpha/gamma"},
+        durability_root_fd,
+    )
+finally:
+    module.os.fchmod = real_fchmod
+    module.os.fsync = real_fsync
+assert directory_events == [
+    ("chmod", "beta", 0o555),
+    ("fsync", "beta"),
+    ("chmod", "gamma", 0o555),
+    ("fsync", "gamma"),
+    ("chmod", "alpha", 0o555),
+    ("fsync", "alpha"),
+    ("chmod", durability.name, 0o555),
+    ("fsync", durability.name),
+    ("fsync", root.name),
+]
+
+
+def reject_file_fsync(file_fd):
+    del file_fd
+    raise OSError("injected source file fsync failure")
+
+
+kernel_fd = os.open(durability / "kernel.rs", os.O_RDONLY | os.O_NOFOLLOW)
+module.os.fsync = reject_file_fsync
+try:
+    try:
+        module.finalize_source_file(kernel_fd, 0o444, "file-failure fixture")
+    except module.ExecutorError as error:
+        assert "cannot durably finalize file-failure fixture" in str(error)
+    else:
+        raise AssertionError("source file fsync failure escaped or was accepted")
+finally:
+    module.os.fsync = real_fsync
+    os.close(kernel_fd)
+
+
+def reject_nested_fsync(file_fd):
+    if descriptor_name(file_fd) == "beta":
+        raise OSError("injected nested directory fsync failure")
+    real_fsync(file_fd)
+
+
+module.os.fsync = reject_nested_fsync
+try:
+    try:
+        module.finalize_source_directories(
+            durability_fd,
+            {"alpha", "alpha/beta", "alpha/gamma"},
+            durability_root_fd,
+        )
+    except module.ExecutorError as error:
+        assert "source directory alpha/beta" in str(error)
+    else:
+        raise AssertionError("nested source directory fsync failure escaped or was accepted")
+finally:
+    module.os.fsync = real_fsync
+    os.close(durability_root_fd)
+    os.close(durability_fd)
+
 artifact = Path(artifact_text)
 log = Path(log_text)
 output = artifact.parent
