@@ -1,3 +1,4 @@
+use super::accounting::recompute_capture_accounting_v2;
 use super::normalized::*;
 use super::rustc_adapter::{capture_instance_body_v2, capture_instance_observation_v2};
 use rustc_driver::{Callbacks, Compilation};
@@ -403,6 +404,14 @@ fn calls(body: &CapturedBodyV2) -> impl Iterator<Item = &TerminatorKindV2> {
         .filter(|kind| matches!(kind, TerminatorKindV2::Call { .. }))
 }
 
+fn refresh_capture_accounting(body: &mut CapturedBodyV2) {
+    body.capture_work_items = 0;
+    body.capture_text_bytes = 0;
+    let accounting = recompute_capture_accounting_v2(body, CaptureLimitsV2::default()).unwrap();
+    body.capture_work_items = accounting.work_items;
+    body.capture_text_bytes = accounting.text_bytes;
+}
+
 fn places(body: &CapturedBodyV2) -> Vec<&PlaceV2> {
     let mut places = Vec::new();
     for block in &body.blocks {
@@ -725,6 +734,7 @@ fn normalized_validation_rejects_cfg_projection_identity_and_bound_mutations() {
     let mut bad_cfg = original.clone();
     let block_count = bad_cfg.blocks.len();
     bad_cfg.blocks[0].terminator.successors.push(block_count);
+    refresh_capture_accounting(&mut bad_cfg);
     assert!(
         bad_cfg
             .validate(CaptureLimitsV2::default())
@@ -740,6 +750,7 @@ fn normalized_validation_rejects_cfg_projection_identity_and_bound_mutations() {
         .find(|block| matches!(block.terminator.kind, TerminatorKindV2::Goto { .. }))
         .expect("fixture must contain a goto");
     block.terminator.successors.clear();
+    refresh_capture_accounting(&mut inconsistent_cfg);
     assert!(
         inconsistent_cfg
             .validate(CaptureLimitsV2::default())
@@ -762,6 +773,7 @@ fn normalized_validation_rejects_cfg_projection_identity_and_bound_mutations() {
     destination
         .projection
         .push(ProjectionV2::Index { local: local_count });
+    refresh_capture_accounting(&mut bad_place);
     assert!(
         bad_place
             .validate(CaptureLimitsV2::default())
@@ -826,6 +838,7 @@ fn normalized_validation_enforces_call_type_and_source_scope_coherence() {
 
     let mut bad_scope = compiler_results().observed;
     bad_scope.source.source_scope_parent = Some(bad_scope.source.source_scope);
+    refresh_capture_accounting(&mut bad_scope);
     assert!(
         bad_scope
             .validate(CaptureLimitsV2::default())
@@ -840,6 +853,7 @@ fn normalized_validation_rejects_explicit_unsupported_records() {
     let mut body = compiler_results().observed;
     body.blocks[0].statements[0].kind =
         StatementKindV2::Unsupported(UnsupportedStatementV2::ConstEvalCounter);
+    refresh_capture_accounting(&mut body);
     assert!(
         body.validate(CaptureLimitsV2::default())
             .unwrap_err()
@@ -855,7 +869,54 @@ fn diagnostic_strings_do_not_define_structural_identity() {
     body.function.definition.diagnostic_def_path = "diagnostic-only-path".to_owned();
     body.locals[0].ty.diagnostic_display = "diagnostic-only-type".to_owned();
     body.locals[0].ty.diagnostic_debug = "diagnostic-only-debug".to_owned();
+    refresh_capture_accounting(&mut body);
     body.validate(CaptureLimitsV2::default()).unwrap();
+}
+
+#[test]
+fn normalized_validation_recomputes_and_exactly_matches_capture_counters() {
+    let original = compiler_results().observed;
+    for forged in [
+        original.capture_work_items - 1,
+        original.capture_work_items + 1,
+    ] {
+        let mut body = original.clone();
+        body.capture_work_items = forged;
+        let error = body
+            .validate(CaptureLimitsV2::default())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("reported work count"), "{error}");
+    }
+    for forged in [
+        original.capture_text_bytes - 1,
+        original.capture_text_bytes + 1,
+    ] {
+        let mut body = original.clone();
+        body.capture_text_bytes = forged;
+        let error = body
+            .validate(CaptureLimitsV2::default())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("reported text count"), "{error}");
+    }
+
+    let work_error = original
+        .validate(CaptureLimitsV2 {
+            max_total_work_items: original.capture_work_items - 1,
+            ..CaptureLimitsV2::default()
+        })
+        .unwrap_err()
+        .to_string();
+    assert!(work_error.contains("recomputed work bound"), "{work_error}");
+    let text_error = original
+        .validate(CaptureLimitsV2 {
+            max_total_text_bytes: original.capture_text_bytes - 1,
+            ..CaptureLimitsV2::default()
+        })
+        .unwrap_err()
+        .to_string();
+    assert!(text_error.contains("recomputed text bound"), "{text_error}");
 }
 
 #[test]

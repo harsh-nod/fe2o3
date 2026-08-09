@@ -1,3 +1,4 @@
+use super::accounting::recompute_capture_accounting_v2;
 use super::budget::{BudgetErrorV2, CaptureBudgetV2};
 use super::normalized::*;
 use super::preflight::{PreflightErrorV2, preflight_body_v2};
@@ -159,17 +160,20 @@ fn capture_body_v2<'tcx>(
 
     let function = function_identity(&mut context, instance)?;
     let source = span_identity(&mut context, body.span, 0)?;
-    let captured = CapturedBodyV2 {
+    let mut captured = CapturedBodyV2 {
         schema_version: NORMALIZED_MIR_SCHEMA_V2,
         authority: CaptureAuthorityV2::CompilerObservationOnly,
         function,
         source,
         arg_count: body.arg_count,
-        capture_work_items: context.budget.work_items(),
-        capture_text_bytes: context.budget.text_bytes(),
+        capture_work_items: 0,
+        capture_text_bytes: 0,
         locals,
         blocks,
     };
+    let accounting = recompute_capture_accounting_v2(&captured, limits)?;
+    captured.capture_work_items = accounting.work_items;
+    captured.capture_text_bytes = accounting.text_bytes;
     Ok(captured)
 }
 

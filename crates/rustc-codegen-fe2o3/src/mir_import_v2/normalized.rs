@@ -1,6 +1,8 @@
 use std::error::Error;
 use std::fmt;
 
+use super::accounting::recompute_capture_accounting_v2;
+
 pub(crate) const NORMALIZED_MIR_SCHEMA_V2: u16 = 2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -73,6 +75,25 @@ impl CapturedBodyV2 {
             return Err(ValidationErrorV2::new(
                 "authority",
                 "normalized MIR V2 is an observation and cannot grant lowering authority",
+            ));
+        }
+        let accounting = recompute_capture_accounting_v2(self, limits)?;
+        if self.capture_work_items != accounting.work_items {
+            return Err(ValidationErrorV2::new(
+                "capture_work_items",
+                format!(
+                    "reported work count {} does not equal recomputed count {}",
+                    self.capture_work_items, accounting.work_items
+                ),
+            ));
+        }
+        if self.capture_text_bytes != accounting.text_bytes {
+            return Err(ValidationErrorV2::new(
+                "capture_text_bytes",
+                format!(
+                    "reported text count {} does not equal recomputed count {}",
+                    self.capture_text_bytes, accounting.text_bytes
+                ),
             ));
         }
         validate_function_identity(&self.function, limits)?;
