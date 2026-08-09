@@ -1595,6 +1595,14 @@ def verify_promotion_archive(args: argparse.Namespace) -> None:
         args.candidate_archive, "candidate evidence archive", required=True
     )
     require_immutable_archive_history(protected, candidate)
+    manifest_match = PROMOTION_MANIFEST_RE.fullmatch(closure.manifest_path)
+    if (
+        manifest_match is None
+        or manifest_match.group(1) != closure.manifest_digest
+    ):
+        fail("promotion archive closure manifest is not content-addressed")
+    if closure.manifest_path in protected.files:
+        fail("promotion archive closure replays a protected manifest")
 
     for relative, binding in closure_by_path.items():
         if candidate.files.get(relative) != binding:

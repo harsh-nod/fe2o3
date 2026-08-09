@@ -265,6 +265,11 @@ Validate an independent shard:
 The manifest row set must equal the repeated row options. An agent cannot
 silently include another agent's row.
 
+The final aggregate manifest is append-only and content-addressed. After its
+bytes are final, its archive path must be
+`manifests/promotion-<full-file-sha256>.tsv`. Every promotion adds exactly one
+such file; prior manifests are immutable and cannot be selected again.
+
 ## Complete Authorization
 
 Complete adds exactly one reviewer-signed authorization per row:
@@ -312,14 +317,22 @@ The generic signer appends an Ed25519 trailer:
 Production signing rejects repository-contained keys and keys not owned by the
 runner with mode 0600. It never overwrites output.
 
-Hosted CI executes the verifier extracted from the protected base:
+Hosted CI first uses the verifier extracted from the protected base to derive
+the sole newly appended manifest from the protected/candidate archive delta:
+
+    manifest="$(python3 /protected/base/scripts/parity-signed-evidence.py \
+      derive-promotion-manifest \
+      --protected-archive /protected/base/docs/parity-evidence/archive \
+      --candidate-archive docs/parity-evidence/archive)"
+
+It then executes the protected gate with that derived path:
 
     python3 /protected/base/scripts/parity-signed-evidence.py gate \
       --repo . \
       --archive-root docs/parity-evidence/archive \
       --trusted-root /protected/base \
       --trust-policy /protected/base/docs/parity-evidence/trust-policy-v2.tsv \
-      --manifest manifests/promotion-v2.tsv \
+      --manifest "${manifest}" \
       --trusted-policy /protected/base/docs/parity-row-evidence-policy-v2.tsv \
       --candidate-policy docs/parity-row-evidence-policy-v2.tsv \
       --baseline-status /tmp/status-before.tsv \
@@ -337,8 +350,9 @@ The gate accepts only Missing-to-Partial, Missing-to-Complete, or
 Partial-to-Complete, requires exact policy classes, rejects test-domain
 evidence, verifies source trees, and permits only protected-policy metadata
 changes after attestation. The protected gate also emits a canonical archive
-closure bound to the transaction evidence-set digest. That closure starts at
-the promotion manifest and contains every transitively referenced signed
+closure bound to the transaction evidence-set digest. The checker independently
+requires its manifest to be newly appended and content-addressed. That closure
+contains every transitively referenced signed
 result, Complete authorization, hardware queue, log, artifact, and toolchain
 closure with its exact byte length and SHA-256 digest.
 

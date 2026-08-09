@@ -92,6 +92,10 @@ require_text "${PROTECTED_WORKFLOW}" 'path: protected'
 require_text "${PROTECTED_WORKFLOW}" 'path: candidate'
 require_text "${PROTECTED_WORKFLOW}" 'persist-credentials: false'
 require_text "${PROTECTED_WORKFLOW}" 'python3 protected/scripts/parity-signed-evidence.py gate'
+require_text "${PROTECTED_WORKFLOW}" 'derive-promotion-manifest'
+require_text "${PROTECTED_WORKFLOW}" '--protected-archive protected/docs/parity-evidence/archive'
+require_text "${PROTECTED_WORKFLOW}" '--candidate-archive candidate/docs/parity-evidence/archive'
+require_text "${PROTECTED_WORKFLOW}" '--manifest "${manifest}"'
 require_text "${PROTECTED_WORKFLOW}" '--projection-output "${transaction}"'
 require_text "${PROTECTED_WORKFLOW}" '--archive-closure-output "${archive_closure}"'
 require_text "${PROTECTED_WORKFLOW}" 'bash protected/scripts/parity-promotion-projections.sh'
@@ -167,6 +171,10 @@ done
 
 require_text "${GENERIC_WORKFLOW}" 'git archive "${BASE_SHA}"'
 require_text "${GENERIC_WORKFLOW}" 'python3 "${trusted}/scripts/parity-signed-evidence.py" gate'
+require_text "${GENERIC_WORKFLOW}" 'derive-promotion-manifest'
+require_text "${GENERIC_WORKFLOW}" '--protected-archive "${trusted}/docs/parity-evidence/archive"'
+require_text "${GENERIC_WORKFLOW}" '--candidate-archive "${archive}"'
+require_text "${GENERIC_WORKFLOW}" '--manifest "${manifest}"'
 require_text "${GENERIC_WORKFLOW}" '--projection-output "${transaction}"'
 require_text "${GENERIC_WORKFLOW}" '--archive-closure-output "${archive_closure}"'
 require_text "${GENERIC_WORKFLOW}" 'bash "${trusted}/scripts/parity-promotion-projections.sh"'
@@ -191,6 +199,10 @@ require_text "${HARDWARE_WORKFLOW}" 'actions/checkout@11bd71901bbe5b1630ceea73d2
 require_text "${ROCM_WORKFLOW}" 'actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683'
 if rg -n 'git rev-parse HEAD\^' "${GENERIC_WORKFLOW}"; then
   printf 'generic parity CI does not cover the complete push range\n' >&2
+  exit 1
+fi
+if rg -n 'manifests/promotion-v2\.tsv' "${GENERIC_WORKFLOW}" "${PROTECTED_WORKFLOW}"; then
+  printf 'hosted parity CI hardcodes a mutable promotion manifest path\n' >&2
   exit 1
 fi
 if rg -n 'BASE_SHA="\$\(git merge-base' "${GENERIC_WORKFLOW}"; then

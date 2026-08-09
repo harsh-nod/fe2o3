@@ -59,7 +59,17 @@ mkdir -p "${CANDIDATE}/docs/parity-evidence/archive/results" \
 printf 'unit evidence\n' >"${CANDIDATE}/docs/parity-evidence/archive/results/04-unit.tsv"
 printf 'ui evidence\n' >"${CANDIDATE}/docs/parity-evidence/archive/results/04-ui.tsv"
 printf 'signed manifest fixture\n' \
-  >"${CANDIDATE}/docs/parity-evidence/archive/manifests/promotion.tsv"
+  >"${CANDIDATE}/docs/parity-evidence/archive/manifests/new.tsv"
+manifest_digest="$(file_sha "${CANDIDATE}/docs/parity-evidence/archive/manifests/new.tsv")"
+MANIFEST_RELATIVE="manifests/promotion-${manifest_digest}.tsv"
+readonly MANIFEST_RELATIVE
+mv "${CANDIDATE}/docs/parity-evidence/archive/manifests/new.tsv" \
+  "${CANDIDATE}/docs/parity-evidence/archive/${MANIFEST_RELATIVE}"
+[[ "$(python3 "${PROTECTED}/scripts/parity-signed-evidence.py" \
+  derive-promotion-manifest \
+  --protected-archive "${PROTECTED}/docs/parity-evidence/archive" \
+  --candidate-archive "${CANDIDATE}/docs/parity-evidence/archive")" == \
+  "${MANIFEST_RELATIVE}" ]]
 awk -F '\t' -v OFS='\t' -v source="${SOURCE}" '
   $1 == "fe2o3_commit" { $2 = source }
   $1 == "normative" && $2 == "04" { $3 = "Partial" }
@@ -73,12 +83,11 @@ EOF
 {
   printf 'promotion_archive_closure_schema_version\t1\n'
   printf 'evidence_set_sha256\t%s\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-  printf 'manifest_path\tmanifests/promotion.tsv\n'
-  printf 'manifest_sha256\t%s\n' \
-    "$(file_sha "${CANDIDATE}/docs/parity-evidence/archive/manifests/promotion.tsv")"
+  printf 'manifest_path\t%s\n' "${MANIFEST_RELATIVE}"
+  printf 'manifest_sha256\t%s\n' "${manifest_digest}"
   printf 'file_count\t3\n'
   index=0
-  for path in manifests/promotion.tsv results/04-ui.tsv results/04-unit.tsv; do
+  for path in "${MANIFEST_RELATIVE}" results/04-ui.tsv results/04-unit.tsv; do
     printf 'file\t%04d\t%s\t%s\t%s\n' "${index}" "${path}" \
       "$(file_size "${CANDIDATE}/docs/parity-evidence/archive/${path}")" \
       "$(file_sha "${CANDIDATE}/docs/parity-evidence/archive/${path}")"
@@ -110,7 +119,7 @@ cp "${CANDIDATE}/docs/generated/cuda-oxide-parity-dashboard.md" "${TEST_ROOT}/go
 cp "${CANDIDATE}/docs/generated/cuda-oxide-parity-dashboard.tsv" "${TEST_ROOT}/good/dashboard.tsv"
 cp "${CANDIDATE}/docs/generated/cuda-oxide-parity-signed-promotions.tsv" "${TEST_ROOT}/good/ledger.tsv"
 cp "${CANDIDATE}/docs/parity-evidence/archive/history/prior.tsv" "${TEST_ROOT}/good/prior.tsv"
-cp "${CANDIDATE}/docs/parity-evidence/archive/manifests/promotion.tsv" \
+cp "${CANDIDATE}/docs/parity-evidence/archive/${MANIFEST_RELATIVE}" \
   "${TEST_ROOT}/good/promotion.tsv"
 cp "${CANDIDATE}/docs/parity-evidence/archive/results/04-unit.tsv" \
   "${TEST_ROOT}/good/04-unit.tsv"
@@ -126,7 +135,7 @@ reset_candidate() {
   rm -f "${CANDIDATE}/docs/parity-evidence/archive/history/prior.tsv"
   cp "${TEST_ROOT}/good/prior.tsv" "${CANDIDATE}/docs/parity-evidence/archive/history/prior.tsv"
   cp "${TEST_ROOT}/good/promotion.tsv" \
-    "${CANDIDATE}/docs/parity-evidence/archive/manifests/promotion.tsv"
+    "${CANDIDATE}/docs/parity-evidence/archive/${MANIFEST_RELATIVE}"
   cp "${TEST_ROOT}/good/04-unit.tsv" \
     "${CANDIDATE}/docs/parity-evidence/archive/results/04-unit.tsv"
   cp "${TEST_ROOT}/good/04-ui.tsv" \
@@ -205,8 +214,8 @@ reset_candidate
 {
   head -n 4 "${ARCHIVE_CLOSURE}"
   printf 'file_count\t2\n'
-  awk -F '\t' -v OFS='\t' '
-    $1 == "file" && $3 == "manifests/promotion.tsv" { $2 = "0000"; print }
+  awk -F '\t' -v OFS='\t' -v manifest="${MANIFEST_RELATIVE}" '
+    $1 == "file" && $3 == manifest { $2 = "0000"; print }
     $1 == "file" && $3 == "results/04-unit.tsv" { $2 = "0001"; print }
   ' "${ARCHIVE_CLOSURE}"
 } >"${TEST_ROOT}/incomplete-archive-closure.tsv"
@@ -232,7 +241,12 @@ cp -a "${PROTECTED}" "${LEGACY_CANDIDATE}"
 mkdir -p "${LEGACY_CANDIDATE}/docs/parity-evidence/archive/manifests" \
   "${LEGACY_CANDIDATE}/docs/parity-evidence/archive/results"
 printf 'legacy completion manifest\n' \
-  >"${LEGACY_CANDIDATE}/docs/parity-evidence/archive/manifests/61.tsv"
+  >"${LEGACY_CANDIDATE}/docs/parity-evidence/archive/manifests/new.tsv"
+legacy_manifest_digest="$(file_sha "${LEGACY_CANDIDATE}/docs/parity-evidence/archive/manifests/new.tsv")"
+LEGACY_MANIFEST_RELATIVE="manifests/promotion-${legacy_manifest_digest}.tsv"
+readonly LEGACY_MANIFEST_RELATIVE
+mv "${LEGACY_CANDIDATE}/docs/parity-evidence/archive/manifests/new.tsv" \
+  "${LEGACY_CANDIDATE}/docs/parity-evidence/archive/${LEGACY_MANIFEST_RELATIVE}"
 for class in unit ui ir compile verus hardware; do
   printf '%s completion evidence\n' "${class}" \
     >"${LEGACY_CANDIDATE}/docs/parity-evidence/archive/results/61-${class}.tsv"
@@ -254,13 +268,12 @@ awk -F '\t' -v OFS='\t' -v source="${SOURCE}" '
 {
   printf 'promotion_archive_closure_schema_version\t1\n'
   printf 'evidence_set_sha256\t%s\n' 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
-  printf 'manifest_path\tmanifests/61.tsv\n'
-  printf 'manifest_sha256\t%s\n' \
-    "$(file_sha "${LEGACY_CANDIDATE}/docs/parity-evidence/archive/manifests/61.tsv")"
+  printf 'manifest_path\t%s\n' "${LEGACY_MANIFEST_RELATIVE}"
+  printf 'manifest_sha256\t%s\n' "${legacy_manifest_digest}"
   printf 'file_count\t7\n'
   index=0
   for path in \
-    manifests/61.tsv \
+    "${LEGACY_MANIFEST_RELATIVE}" \
     results/61-compile.tsv \
     results/61-hardware.tsv \
     results/61-ir.tsv \

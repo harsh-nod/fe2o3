@@ -90,8 +90,11 @@ jobs:
           mkdir -p "${trusted}"
           git show "${BASE_SHA}:docs/cuda-oxide-parity-status.tsv" >"${baseline}"
           test -d "${archive}"
-          test -f "${archive}/manifests/promotion-v2.tsv"
           git archive "${BASE_SHA}" | tar -x -C "${trusted}"
+          manifest="$(python3 "${trusted}/scripts/parity-signed-evidence.py" \
+            derive-promotion-manifest \
+            --protected-archive "${trusted}/docs/parity-evidence/archive" \
+            --candidate-archive "${archive}")"
           transaction="${RUNNER_TEMP}/signed-promotion-transaction.tsv"
           archive_closure="${RUNNER_TEMP}/signed-promotion-archive-closure.tsv"
           python3 "${trusted}/scripts/parity-signed-evidence.py" gate \
@@ -99,7 +102,7 @@ jobs:
             --archive-root "${archive}" \
             --trusted-root "${trusted}" \
             --trust-policy "${trusted}/docs/parity-evidence/trust-policy-v2.tsv" \
-            --manifest manifests/promotion-v2.tsv \
+            --manifest "${manifest}" \
             --trusted-policy "${trusted}/docs/parity-row-evidence-policy-v2.tsv" \
             --candidate-policy docs/parity-row-evidence-policy-v2.tsv \
             --baseline-status "${baseline}" \

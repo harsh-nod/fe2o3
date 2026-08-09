@@ -146,7 +146,10 @@ jobs:
 
           test -f protected/docs/parity-evidence/trust-policy-v2.tsv
           test -d protected/docs/parity-evidence/trusted-keys
-          test -f candidate/docs/parity-evidence/archive/manifests/promotion-v2.tsv
+          manifest="$(python3 protected/scripts/parity-signed-evidence.py \
+            derive-promotion-manifest \
+            --protected-archive protected/docs/parity-evidence/archive \
+            --candidate-archive candidate/docs/parity-evidence/archive)"
           transaction="${RUNNER_TEMP}/signed-promotion-transaction.tsv"
           archive_closure="${RUNNER_TEMP}/signed-promotion-archive-closure.tsv"
           python3 protected/scripts/parity-signed-evidence.py gate \
@@ -154,7 +157,7 @@ jobs:
             --archive-root candidate/docs/parity-evidence/archive \
             --trusted-root protected \
             --trust-policy protected/docs/parity-evidence/trust-policy-v2.tsv \
-            --manifest manifests/promotion-v2.tsv \
+            --manifest "${manifest}" \
             --trusted-policy protected/docs/parity-row-evidence-policy-v2.tsv \
             --candidate-policy candidate/docs/parity-row-evidence-policy-v2.tsv \
             --baseline-status protected/docs/cuda-oxide-parity-status.tsv \
