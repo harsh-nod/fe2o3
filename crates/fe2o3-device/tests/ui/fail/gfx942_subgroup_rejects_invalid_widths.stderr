@@ -1,0 +1,68 @@
+error[E0277]: the trait bound `Gfx942SubgroupWidth<0>: ValidGfx942SubgroupWidth` is not satisfied
+ --> tests/ui/fail/gfx942_subgroup_rejects_invalid_widths.rs:4:39
+  |
+4 |     let _ = lane.into_subgroup_tile::<0>();
+  |                                       ^ the trait `ValidGfx942SubgroupWidth` is not implemented for `Gfx942SubgroupWidth<0>`
+  |
+  = help: the following other types implement trait `ValidGfx942SubgroupWidth`:
+            Gfx942SubgroupWidth<16>
+            Gfx942SubgroupWidth<1>
+            Gfx942SubgroupWidth<2>
+            Gfx942SubgroupWidth<32>
+            Gfx942SubgroupWidth<4>
+            Gfx942SubgroupWidth<64>
+            Gfx942SubgroupWidth<8>
+note: required by a bound in `group::<impl WaveLane<Wave64>>::into_subgroup_tile`
+ --> src/group.rs
+  |
+  |     pub fn into_subgroup_tile<const N: u32>(self) -> SubgroupTile<N>
+  |            ------------------ required by a bound in this associated function
+  |     where
+  |         Gfx942SubgroupWidth<N>: ValidGfx942SubgroupWidth,
+  |                                 ^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `group::<impl WaveLane<Wave64>>::into_subgroup_tile`
+
+error[E0277]: the trait bound `Gfx942SubgroupWidth<3>: ValidGfx942SubgroupWidth` is not satisfied
+ --> tests/ui/fail/gfx942_subgroup_rejects_invalid_widths.rs:8:39
+  |
+8 |     let _ = lane.into_subgroup_tile::<3>();
+  |                                       ^ the trait `ValidGfx942SubgroupWidth` is not implemented for `Gfx942SubgroupWidth<3>`
+  |
+  = help: the following other types implement trait `ValidGfx942SubgroupWidth`:
+            Gfx942SubgroupWidth<16>
+            Gfx942SubgroupWidth<1>
+            Gfx942SubgroupWidth<2>
+            Gfx942SubgroupWidth<32>
+            Gfx942SubgroupWidth<4>
+            Gfx942SubgroupWidth<64>
+            Gfx942SubgroupWidth<8>
+note: required by a bound in `group::<impl WaveLane<Wave64>>::into_subgroup_tile`
+ --> src/group.rs
+  |
+  |     pub fn into_subgroup_tile<const N: u32>(self) -> SubgroupTile<N>
+  |            ------------------ required by a bound in this associated function
+  |     where
+  |         Gfx942SubgroupWidth<N>: ValidGfx942SubgroupWidth,
+  |                                 ^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `group::<impl WaveLane<Wave64>>::into_subgroup_tile`
+
+error[E0277]: the trait bound `Gfx942SubgroupWidth<128>: ValidGfx942SubgroupWidth` is not satisfied
+  --> tests/ui/fail/gfx942_subgroup_rejects_invalid_widths.rs:12:39
+   |
+12 |     let _ = lane.into_subgroup_tile::<128>();
+   |                                       ^^^ the trait `ValidGfx942SubgroupWidth` is not implemented for `Gfx942SubgroupWidth<128>`
+   |
+   = help: the following other types implement trait `ValidGfx942SubgroupWidth`:
+             Gfx942SubgroupWidth<16>
+             Gfx942SubgroupWidth<1>
+             Gfx942SubgroupWidth<2>
+             Gfx942SubgroupWidth<32>
+             Gfx942SubgroupWidth<4>
+             Gfx942SubgroupWidth<64>
+             Gfx942SubgroupWidth<8>
+note: required by a bound in `group::<impl WaveLane<Wave64>>::into_subgroup_tile`
+  --> src/group.rs
+   |
+   |     pub fn into_subgroup_tile<const N: u32>(self) -> SubgroupTile<N>
+   |            ------------------ required by a bound in this associated function
+   |     where
+   |         Gfx942SubgroupWidth<N>: ValidGfx942SubgroupWidth,
+   |                                 ^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `group::<impl WaveLane<Wave64>>::into_subgroup_tile`

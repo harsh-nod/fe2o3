@@ -1,0 +1,59 @@
+error[E0277]: the trait bound `fe2o3_device::Grid<'static>: Clone` is not satisfied
+ --> tests/ui/fail/typed_group_handles_are_not_clone.rs:6:20
+  |
+6 |     assert_clone::<Grid<'static>>();
+  |                    ^^^^^^^^^^^^^ the trait `Clone` is not implemented for `fe2o3_device::Grid<'static>`
+  |
+note: required by a bound in `assert_clone`
+ --> tests/ui/fail/typed_group_handles_are_not_clone.rs:3:20
+  |
+3 | fn assert_clone<T: Clone>() {}
+  |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: the trait bound `fe2o3_device::Workgroup<'static>: Clone` is not satisfied
+ --> tests/ui/fail/typed_group_handles_are_not_clone.rs:7:20
+  |
+7 |     assert_clone::<Workgroup<'static>>();
+  |                    ^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `fe2o3_device::Workgroup<'static>`
+  |
+note: required by a bound in `assert_clone`
+ --> tests/ui/fail/typed_group_handles_are_not_clone.rs:3:20
+  |
+3 | fn assert_clone<T: Clone>() {}
+  |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: the trait bound `SubgroupTile<32>: Clone` is not satisfied
+ --> tests/ui/fail/typed_group_handles_are_not_clone.rs:8:20
+  |
+8 |     assert_clone::<SubgroupTile<32>>();
+  |                    ^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `SubgroupTile<32>`
+  |
+note: required by a bound in `assert_clone`
+ --> tests/ui/fail/typed_group_handles_are_not_clone.rs:3:20
+  |
+3 | fn assert_clone<T: Clone>() {}
+  |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: the trait bound `ActiveLaneGroup: Clone` is not satisfied
+ --> tests/ui/fail/typed_group_handles_are_not_clone.rs:9:20
+  |
+9 |     assert_clone::<ActiveLaneGroup>();
+  |                    ^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `ActiveLaneGroup`
+  |
+note: required by a bound in `assert_clone`
+ --> tests/ui/fail/typed_group_handles_are_not_clone.rs:3:20
+  |
+3 | fn assert_clone<T: Clone>() {}
+  |                    ^^^^^ required by this bound in `assert_clone`
+
+error[E0277]: the trait bound `WorkgroupConvergence<'static, 'static>: Clone` is not satisfied
+  --> tests/ui/fail/typed_group_handles_are_not_clone.rs:10:20
+   |
+10 |     assert_clone::<WorkgroupConvergence<'static, 'static>>();
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `WorkgroupConvergence<'static, 'static>`
+   |
+note: required by a bound in `assert_clone`
+  --> tests/ui/fail/typed_group_handles_are_not_clone.rs:3:20
+   |
+ 3 | fn assert_clone<T: Clone>() {}
+   |                    ^^^^^ required by this bound in `assert_clone`

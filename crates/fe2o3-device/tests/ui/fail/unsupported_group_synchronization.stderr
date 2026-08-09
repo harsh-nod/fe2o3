@@ -1,0 +1,17 @@
+error[E0599]: no method named `assume_uniform` found for reference `&fe2o3_device::Grid<'_>` in the current scope
+ --> tests/ui/fail/unsupported_group_synchronization.rs:4:19
+  |
+4 |     let _ = group.assume_uniform();
+  |                   ^^^^^^^^^^^^^^ method not found in `&fe2o3_device::Grid<'_>`
+
+error[E0599]: no method named `assume_uniform` found for reference `&SubgroupTile<32>` in the current scope
+ --> tests/ui/fail/unsupported_group_synchronization.rs:8:19
+  |
+8 |     let _ = group.assume_uniform();
+  |                   ^^^^^^^^^^^^^^ method not found in `&SubgroupTile<32>`
+
+error[E0599]: no method named `assume_uniform` found for reference `&ActiveLaneGroup` in the current scope
+  --> tests/ui/fail/unsupported_group_synchronization.rs:12:19
+   |
+12 |     let _ = group.assume_uniform();
+   |                   ^^^^^^^^^^^^^^ method not found in `&ActiveLaneGroup`
