@@ -271,6 +271,17 @@ impl Invocation3D {
         Self::checked(workitem, workgroup, workgroup_size, grid_size)
     }
 
+    #[cfg(test)]
+    // Builds checked CPU model data without asserting a current invocation.
+    pub(crate) const fn from_model_snapshot(
+        workitem: WorkitemId,
+        workgroup: WorkgroupId,
+        workgroup_size: WorkgroupSize,
+        grid_size: GridSize,
+    ) -> Option<Self> {
+        Self::checked(workitem, workgroup, workgroup_size, grid_size)
+    }
+
     const fn checked(
         workitem: WorkitemId,
         workgroup: WorkgroupId,
@@ -527,7 +538,7 @@ mod tests {
 
     #[test]
     fn invocation_derives_global_3d_coordinates() {
-        let invocation = Invocation3D::checked(
+        let invocation = Invocation3D::from_model_snapshot(
             WorkitemId::new(3, 2, 1),
             WorkgroupId::new(4, 5, 6),
             WorkgroupSize::new(8, 4, 2).unwrap(),
@@ -549,7 +560,7 @@ mod tests {
         let grid_size = GridSize::new(10, 20, 30).unwrap();
 
         assert!(
-            Invocation3D::checked(
+            Invocation3D::from_model_snapshot(
                 WorkitemId::new(8, 0, 0),
                 WorkgroupId::new(0, 0, 0),
                 workgroup_size,
@@ -558,7 +569,7 @@ mod tests {
             .is_none()
         );
         assert!(
-            Invocation3D::checked(
+            Invocation3D::from_model_snapshot(
                 WorkitemId::new(0, 0, 0),
                 WorkgroupId::new(0, 20, 0),
                 workgroup_size,

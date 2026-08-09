@@ -1,14 +1,16 @@
-//! CPU arithmetic snapshot tests only.
+//! CPU arithmetic model tests only.
 //!
 //! These tests provide no compiler lowering, codegen, Verus, or hardware
 //! evidence for typed groups or synchronization.
 
-use fe2o3_device::{
-    ActiveLaneGroup, Grid, GridSize, Group, GroupMemoryOrdering, GroupMemorySpace, GroupScope,
-    Invocation3D, SubgroupTile, SynchronizationContract, UnsupportedSynchronization,
-    ValidWave64TileWidth, Wave64, Wave64TileWidth, WaveLane, Workgroup, WorkgroupId, WorkgroupSize,
-    WorkgroupSynchronization, WorkitemId,
+use super::{
+    ActiveLaneGroup, Grid, Group, GroupMemoryOrdering, GroupMemorySpace, GroupScope, SubgroupTile,
+    SynchronizationContract, UnsupportedSynchronization, ValidWave64TileWidth, Wave64TileWidth,
+    Workgroup, WorkgroupSynchronization,
 };
+use crate::thread::{GridSize, Invocation3D, WorkgroupId, WorkgroupSize, WorkitemId};
+use crate::wave::{Wave64, WaveLane};
+use std::vec;
 
 fn invocation(
     local: [u32; 3],
@@ -19,23 +21,17 @@ fn invocation(
     let workgroup_size =
         WorkgroupSize::new(workgroup_size[0], workgroup_size[1], workgroup_size[2]).unwrap();
     let grid_size = GridSize::new(grid_size[0], grid_size[1], grid_size[2]).unwrap();
-    // SAFETY: These CPU tests explicitly assert internally consistent snapshot
-    // coordinates. They do not claim a current device invocation.
-    unsafe {
-        Invocation3D::from_raw_parts(
-            WorkitemId::new(local[0], local[1], local[2]),
-            WorkgroupId::new(workgroup[0], workgroup[1], workgroup[2]),
-            workgroup_size,
-            grid_size,
-        )
-        .unwrap()
-    }
+    Invocation3D::from_model_snapshot(
+        WorkitemId::new(local[0], local[1], local[2]),
+        WorkgroupId::new(workgroup[0], workgroup[1], workgroup[2]),
+        workgroup_size,
+        grid_size,
+    )
+    .unwrap()
 }
 
 fn wave64_lane(lane: u32) -> WaveLane<Wave64> {
-    // SAFETY: These CPU tests assert a wave64 lane snapshot solely to exercise
-    // arithmetic. This supplies no target, wave-mode, or hardware evidence.
-    unsafe { WaveLane::from_raw(lane).unwrap() }
+    WaveLane::from_model_snapshot(lane).unwrap()
 }
 
 fn inspect_group(group: &impl Group, expected_size: u64, expected_rank: u64) {
@@ -157,12 +153,8 @@ fn fixed_rank_table_is_independent_of_the_implementation_formulas() {
     assert_eq!(tile.tile_index(), 4);
 
     let lane = wave64_lane(63);
-    // SAFETY: This test explicitly asserts the fixed mask snapshot used by its
-    // table; the returned value is used only for arithmetic.
-    let active = unsafe {
-        ActiveLaneGroup::from_caller_asserted_snapshot(&lane, (1_u64 << 63) | (1 << 17) | 1)
-    }
-    .unwrap();
+    let active =
+        ActiveLaneGroup::from_model_snapshot(&lane, (1_u64 << 63) | (1 << 17) | 1).unwrap();
     inspect_group(&active, 3, 2);
 }
 
@@ -230,11 +222,7 @@ fn property_active_lane_rank_matches_bit_enumeration() {
                 _ => state | (1_u64 << lane),
             };
             let lane_snapshot = wave64_lane(lane);
-            // SAFETY: The test explicitly asserts each generated mask snapshot
-            // and uses it only for arithmetic at this source point.
-            let group =
-                unsafe { ActiveLaneGroup::from_caller_asserted_snapshot(&lane_snapshot, mask) }
-                    .unwrap();
+            let group = ActiveLaneGroup::from_model_snapshot(&lane_snapshot, mask).unwrap();
             let (expected_size, expected_rank) = enumerated_active_size_and_rank(mask, lane);
             inspect_group(&group, expected_size, expected_rank);
             assert_eq!(group.caller_asserted_mask(), mask);
@@ -246,11 +234,7 @@ fn property_active_lane_rank_matches_bit_enumeration() {
 fn active_lane_group_rejects_a_mask_that_excludes_the_lane_snapshot() {
     for lane in 0..64 {
         let lane_snapshot = wave64_lane(lane);
-        // SAFETY: The deliberately inconsistent snapshot must be rejected
-        // before an `ActiveLaneGroup` is formed.
-        let group = unsafe {
-            ActiveLaneGroup::from_caller_asserted_snapshot(&lane_snapshot, !(1_u64 << lane))
-        };
+        let group = ActiveLaneGroup::from_model_snapshot(&lane_snapshot, !(1_u64 << lane));
         assert!(group.is_none());
     }
 }

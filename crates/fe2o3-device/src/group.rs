@@ -361,12 +361,22 @@ impl<'wave> ActiveLaneGroup<'wave> {
         lane: &'wave WaveLane<Wave64>,
         asserted_mask: u64,
     ) -> Option<Self> {
-        if asserted_mask & (1_u64 << lane.get()) == 0 {
+        Self::checked_snapshot(lane, asserted_mask)
+    }
+
+    #[cfg(test)]
+    // Validates modeled mask arithmetic without asserting an EXEC observation.
+    fn from_model_snapshot(lane: &'wave WaveLane<Wave64>, model_mask: u64) -> Option<Self> {
+        Self::checked_snapshot(lane, model_mask)
+    }
+
+    fn checked_snapshot(lane: &'wave WaveLane<Wave64>, mask: u64) -> Option<Self> {
+        if mask & (1_u64 << lane.get()) == 0 {
             return None;
         }
         Some(Self {
             lane: lane.get(),
-            asserted_mask,
+            asserted_mask: mask,
             _wave_snapshot: PhantomData,
             _not_send_sync: PhantomData,
         })
@@ -420,3 +430,6 @@ const fn linear_rank_3d(x: u64, y: u64, z: u64, extent_x: u64, extent_y: u64) ->
         None => None,
     }
 }
+
+#[cfg(test)]
+mod tests;

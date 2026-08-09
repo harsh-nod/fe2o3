@@ -67,6 +67,12 @@ impl<Width: WaveWidth> WaveLane<Width> {
         Self::checked(lane)
     }
 
+    #[cfg(test)]
+    // Builds checked CPU model data without asserting a hardware lane or mode.
+    pub(crate) const fn from_model_snapshot(lane: u32) -> Option<Self> {
+        Self::checked(lane)
+    }
+
     const fn checked(lane: u32) -> Option<Self> {
         if lane >= Width::LANES {
             return None;
@@ -118,15 +124,15 @@ mod tests {
 
     #[test]
     fn lane_witnesses_validate_the_static_width() {
-        let first = WaveLane::<Wave32>::checked(0).unwrap();
-        let last = WaveLane::<Wave32>::checked(31).unwrap();
+        let first = WaveLane::<Wave32>::from_model_snapshot(0).unwrap();
+        let last = WaveLane::<Wave32>::from_model_snapshot(31).unwrap();
         assert!(first.is_first());
         assert!(last.is_last());
         assert_eq!(last.get(), 31);
         assert_eq!(last.width(), 32);
-        assert!(WaveLane::<Wave32>::checked(32).is_none());
-        assert!(WaveLane::<Wave64>::checked(63).is_some());
-        assert!(WaveLane::<Wave64>::checked(64).is_none());
+        assert!(WaveLane::<Wave32>::from_model_snapshot(32).is_none());
+        assert!(WaveLane::<Wave64>::from_model_snapshot(63).is_some());
+        assert!(WaveLane::<Wave64>::from_model_snapshot(64).is_none());
     }
 
     #[test]
