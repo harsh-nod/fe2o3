@@ -176,7 +176,7 @@ if ((dwarf_verify_status == 0 && dwarf_dump_status == 0 && dwarf_normalize_statu
       -ex 'echo FE2O3_S09_GPU_CONTEXT\n' \
       -ex 'run' \
       -ex 'info threads' \
-      -ex 'info sharedlibrary' \
+      -ex 'info sharedlibrary memory://' \
       -ex 'echo FE2O3_S09_FUNCTION\n' \
       -ex 'frame' \
       -ex 'info line *$pc' \
