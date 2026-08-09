@@ -132,6 +132,99 @@ pub struct CollectedFunction<'tcx> {
     pub(crate) dead_branches: Option<crate::monomorphization_dead::CompilerDeadBranchObservationV1>,
 }
 
+/// Collector-sealed identity of one exact typed kernel root.
+///
+/// Private fields and the absence of a public constructor ensure downstream
+/// code can only receive this value after registration, session binding,
+/// function-pointer, symbol, and unique-root validation has completed.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedKernelOwner<T> {
+    target: T,
+    crate_name: String,
+    module_path: String,
+    logical_name: String,
+    export_name: String,
+    typed_profile: TypedKernelProfile,
+    registration_path: String,
+    target_def_path: String,
+    target_def_path_hash: [u8; 16],
+    crate_binding: CrateBindingIdV1,
+    kernel_binding: KernelBindingIdV1,
+    observed_symbol: String,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct AuthenticatedKernelOwners<T> {
+    owners: Vec<AuthenticatedKernelOwner<T>>,
+}
+
+impl<T> Default for AuthenticatedKernelOwners<T> {
+    fn default() -> Self {
+        Self { owners: Vec::new() }
+    }
+}
+
+impl<T> AuthenticatedKernelOwners<T> {
+    fn push(&mut self, owner: AuthenticatedKernelOwner<T>) {
+        self.owners.push(owner);
+    }
+
+    fn as_slice(&self) -> &[AuthenticatedKernelOwner<T>] {
+        &self.owners
+    }
+}
+
+#[allow(dead_code)]
+impl<T: Copy> AuthenticatedKernelOwner<T> {
+    pub(crate) const fn target(&self) -> T {
+        self.target
+    }
+
+    pub(crate) fn crate_name(&self) -> &str {
+        &self.crate_name
+    }
+
+    pub(crate) fn module_path(&self) -> &str {
+        &self.module_path
+    }
+
+    pub(crate) fn logical_name(&self) -> &str {
+        &self.logical_name
+    }
+
+    pub(crate) fn export_name(&self) -> &str {
+        &self.export_name
+    }
+
+    pub(crate) const fn typed_profile(&self) -> TypedKernelProfile {
+        self.typed_profile
+    }
+
+    pub(crate) fn registration_path(&self) -> &str {
+        &self.registration_path
+    }
+
+    pub(crate) fn target_def_path(&self) -> &str {
+        &self.target_def_path
+    }
+
+    pub(crate) const fn target_def_path_hash(&self) -> [u8; 16] {
+        self.target_def_path_hash
+    }
+
+    pub(crate) const fn crate_binding(&self) -> CrateBindingIdV1 {
+        self.crate_binding
+    }
+
+    pub(crate) const fn kernel_binding(&self) -> KernelBindingIdV1 {
+        self.kernel_binding
+    }
+
+    pub(crate) fn observed_symbol(&self) -> &str {
+        &self.observed_symbol
+    }
+}
+
 /// Source-level kernel contract authenticated against one exact rustc instance.
 ///
 /// This is compiler evidence only. It grants no code-generation, proof, load,
@@ -208,11 +301,32 @@ impl ReachableAssemblySummaryV1 {
 #[derive(Clone, Debug, Default)]
 pub struct CollectionResult<'tcx> {
     pub functions: Vec<CollectedFunction<'tcx>>,
+    pub(crate) authenticated_kernel_owners: AuthenticatedKernelOwners<Instance<'tcx>>,
     // Private source state retained for compiler-envelope construction.
     #[allow(dead_code)]
     pub(crate) device_ffi: crate::device_ffi::DeviceFfiClosure,
     /// Inert canonical observation produced from the successfully closed graph.
     pub(crate) compiler_ffi_observation: Option<fe2o3_compiler_ffi::CompilerFfiEnvelopeV1>,
+}
+
+impl<'tcx> CollectionResult<'tcx> {
+    #[allow(dead_code)]
+    pub(crate) fn authenticated_kernel_owners(
+        &self,
+    ) -> &[AuthenticatedKernelOwner<Instance<'tcx>>] {
+        self.authenticated_kernel_owners.as_slice()
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn authenticated_kernel_owner(
+        &self,
+        instance: Instance<'tcx>,
+    ) -> Option<&AuthenticatedKernelOwner<Instance<'tcx>>> {
+        self.authenticated_kernel_owners
+            .as_slice()
+            .iter()
+            .find(|owner| owner.target == instance)
+    }
 }
 
 impl CollectedFunction<'_> {
@@ -368,8 +482,10 @@ struct RegistrationRecord<T> {
     kernel_binding: Option<KernelBindingIdV1>,
     profile_tag: Option<String>,
     generated_host_contract_identity: Option<GeneratedHostContractIdV3>,
+    target_crate_name: String,
     target_symbol: String,
     target_identity: String,
+    target_def_path_hash: [u8; 16],
     target: T,
 }
 
@@ -380,6 +496,7 @@ struct KernelRoot<T> {
     export_name: String,
     typed_profile: Option<TypedKernelProfile>,
     kernel_binding: Option<KernelBindingIdV1>,
+    authenticated_owner: Option<AuthenticatedKernelOwner<T>>,
     typed_layout_identities: Option<TypedArgumentListV1<TypeIdentity>>,
     general_typed_contract: Option<crate::rust_type_layout_v3::GeneralTypedKernelContractV3>,
     frontend_contract: Option<AuthenticatedKernelFrontendContractV1>,
@@ -494,7 +611,12 @@ fn kernel_roots<'tcx>(
         )?);
     }
 
-    let mut roots = validate_registration_records(records, session_crate_binding(tcx))?;
+    let session_crate_name = tcx.crate_name(LOCAL_CRATE).to_string();
+    let mut roots = validate_registration_records(
+        records,
+        session_crate_binding(tcx),
+        Some(&session_crate_name),
+    )?;
     let frontend_records = decode_frontend_contract_registrations(tcx, &functions_by_symbol)?;
     bind_frontend_contract_registrations(tcx, &mut roots, frontend_records)?;
     for root in &mut roots {
@@ -1011,8 +1133,10 @@ fn decode_registration_static<'tcx>(
         5
     };
     let target = registration_target(tcx, body, fields[target_index], &registration_path)?;
+    let target_crate_name = tcx.crate_name(target.def_id().krate).to_string();
     let target_symbol = tcx.symbol_name(target).name.to_string();
     let target_identity = tcx.def_path_str(target.def_id());
+    let target_def_path_hash = tcx.def_path_hash(target.def_id()).0.to_le_bytes();
     let Some(cgu_targets) = functions_by_symbol.get(&target_symbol) else {
         return Err(RegistrationError::new(
             registration_path,
@@ -1075,8 +1199,10 @@ fn decode_registration_static<'tcx>(
         kernel_binding,
         profile_tag,
         generated_host_contract_identity,
+        target_crate_name,
         target_symbol,
         target_identity,
+        target_def_path_hash,
         target,
     })
 }
@@ -1320,6 +1446,7 @@ fn is_shared_u8_slice(ty: rustc_middle::ty::Ty<'_>) -> bool {
 fn validate_registration_records<T: Copy>(
     mut records: Vec<RegistrationRecord<T>>,
     expected_crate_binding: Option<CrateBindingIdV1>,
+    expected_crate_name: Option<&str>,
 ) -> Result<Vec<KernelRoot<T>>, RegistrationError> {
     records.sort_by(|lhs, rhs| lhs.registration_path.cmp(&rhs.registration_path));
 
@@ -1430,14 +1557,34 @@ fn validate_registration_records<T: Copy>(
             )));
         }
 
+        let registration_module = owner_module_path(&record.registration_path);
+        let target_module = owner_module_path(&record.target_identity);
+        if typed_profile.is_some() {
+            let expected_crate_name = expected_crate_name.ok_or_else(|| {
+                error("typed registration has no rustc session crate identity".to_owned())
+            })?;
+            if record.target_crate_name != expected_crate_name {
+                return Err(error(format!(
+                    "target crate `{}` disagrees with rustc session crate `{expected_crate_name}`",
+                    record.target_crate_name
+                )));
+            }
+            if registration_module != target_module {
+                return Err(error(format!(
+                    "registered target module `{target_module}` disagrees with registration module `{registration_module}`"
+                )));
+            }
+        }
+
         let kernel_binding = match typed_profile {
             Some(TypedKernelProfile::VecAddRustcLayoutV2) => {
                 let crate_binding = record
                     .crate_binding
                     .ok_or_else(|| error("V2 registration has no crate binding".to_owned()))?;
-                if let Some(expected) = expected_crate_binding
-                    && crate_binding != expected
-                {
+                let expected = expected_crate_binding.ok_or_else(|| {
+                    error("V2 registration has no rustc session crate binding".to_owned())
+                })?;
+                if crate_binding != expected {
                     return Err(error(format!(
                         "crate binding {} disagrees with rustc session binding {}",
                         crate_binding.to_hex(),
@@ -1466,9 +1613,10 @@ fn validate_registration_records<T: Copy>(
                 let crate_binding = record
                     .crate_binding
                     .ok_or_else(|| error("V3 registration has no crate binding".to_owned()))?;
-                if let Some(expected) = expected_crate_binding
-                    && crate_binding != expected
-                {
+                let expected = expected_crate_binding.ok_or_else(|| {
+                    error("V3 registration has no rustc session crate binding".to_owned())
+                })?;
+                if crate_binding != expected {
                     return Err(error(format!(
                         "crate binding {} disagrees with rustc session binding {}",
                         crate_binding.to_hex(),
@@ -1541,12 +1689,34 @@ fn validate_registration_records<T: Copy>(
             "target identity",
         )?;
 
+        let authenticated_owner = match typed_profile {
+            Some(typed_profile) => Some(AuthenticatedKernelOwner {
+                target: record.target,
+                crate_name: record.target_crate_name.clone(),
+                module_path: target_module.to_owned(),
+                logical_name: record.logical_name.clone(),
+                export_name: record.export_name.clone(),
+                typed_profile,
+                registration_path: record.registration_path.clone(),
+                target_def_path: record.target_identity.clone(),
+                target_def_path_hash: record.target_def_path_hash,
+                crate_binding: record
+                    .crate_binding
+                    .expect("typed registration crate binding was validated above"),
+                kernel_binding: kernel_binding
+                    .expect("typed registration kernel binding was validated above"),
+                observed_symbol: record.target_symbol.clone(),
+            }),
+            None => None,
+        };
+
         roots.push(KernelRoot {
             target: record.target,
             logical_name: record.logical_name,
             export_name: record.export_name,
             typed_profile,
             kernel_binding,
+            authenticated_owner,
             typed_layout_identities: None,
             general_typed_contract: None,
             frontend_contract: None,
@@ -1559,6 +1729,11 @@ fn validate_registration_records<T: Copy>(
             .then_with(|| lhs.export_name.cmp(&rhs.export_name))
     });
     Ok(roots)
+}
+
+fn owner_module_path(path: &str) -> &str {
+    path.rsplit_once("::")
+        .map_or("", |(module_path, _)| module_path)
 }
 
 fn reject_duplicate(
@@ -1605,6 +1780,7 @@ struct DeviceCollector<'tcx> {
     used_export_names: BTreeSet<String>,
     worklist: VecDeque<CollectedFunction<'tcx>>,
     result: Vec<CollectedFunction<'tcx>>,
+    authenticated_kernel_owners: AuthenticatedKernelOwners<Instance<'tcx>>,
     ffi_declarations: Vec<crate::device_ffi::CollectedDeviceFfi<'tcx>>,
     reachable_ffi_imports: BTreeSet<reserved_fe2o3_symbols::DeviceFfiContractIdV1>,
     expected_target: String,
@@ -1633,6 +1809,7 @@ impl<'tcx> DeviceCollector<'tcx> {
             used_export_names: BTreeSet::new(),
             worklist: VecDeque::new(),
             result: Vec::new(),
+            authenticated_kernel_owners: AuthenticatedKernelOwners::default(),
             ffi_declarations,
             reachable_ffi_imports: BTreeSet::new(),
             expected_target: std::env::var("FE2O3_TARGET")
@@ -1682,6 +1859,7 @@ impl<'tcx> DeviceCollector<'tcx> {
             export_name,
             typed_profile,
             kernel_binding,
+            authenticated_owner,
             typed_layout_identities,
             general_typed_contract,
             frontend_contract,
@@ -1697,6 +1875,10 @@ impl<'tcx> DeviceCollector<'tcx> {
         if self.seen.insert(identity.clone()) {
             self.call_chains
                 .insert(identity.clone(), vec![self.instance_label(instance)]);
+            if let Some(owner) = authenticated_owner {
+                debug_assert_eq!(owner.target, instance);
+                self.authenticated_kernel_owners.push(owner);
+            }
             self.worklist.push_back(CollectedFunction {
                 instance,
                 role: CollectedFunctionRole::KernelEntry,
@@ -1801,6 +1983,7 @@ impl<'tcx> DeviceCollector<'tcx> {
 
         let mut collection = CollectionResult {
             functions: self.result,
+            authenticated_kernel_owners: self.authenticated_kernel_owners,
             device_ffi,
             compiler_ffi_observation: None,
         };
@@ -2631,7 +2814,8 @@ mod tests {
     fn validate_registration_records<T: Copy>(
         records: Vec<RegistrationRecord<T>>,
     ) -> Result<Vec<KernelRoot<T>>, RegistrationError> {
-        validate_records(records, None)
+        let expected_crate_binding = records.iter().find_map(|record| record.crate_binding);
+        validate_records(records, expected_crate_binding, Some("fixture"))
     }
 
     fn registration(
@@ -2640,6 +2824,13 @@ mod tests {
         export_name: &str,
         target: u8,
     ) -> RegistrationRecord<u8> {
+        let target_symbol = format!("{KERNEL_PREFIX}{export_name}");
+        let module_path = path.rsplit_once("::").map_or("", |(module, _)| module);
+        let target_identity = if module_path.is_empty() {
+            target_symbol.clone()
+        } else {
+            format!("{module_path}::{target_symbol}")
+        };
         RegistrationRecord {
             registration_path: path.to_string(),
             item_name: format!("{KERNEL_REGISTRATION_PREFIX}{logical_name}"),
@@ -2652,8 +2843,10 @@ mod tests {
             kernel_binding: None,
             profile_tag: None,
             generated_host_contract_identity: None,
-            target_symbol: format!("{KERNEL_PREFIX}{export_name}"),
-            target_identity: format!("target-{target}"),
+            target_crate_name: "fixture".to_owned(),
+            target_symbol,
+            target_identity,
+            target_def_path_hash: [target; 16],
             target,
         }
     }
@@ -2763,6 +2956,138 @@ mod tests {
     }
 
     #[test]
+    fn authenticated_kernel_owner_exposes_stable_owner_and_exact_build_observation() {
+        let registration = general_typed_registration(
+            "general_genuine::__fe2o3_kernel_registration_alpha",
+            "alpha",
+            "alpha",
+            3,
+        );
+        let expected_crate_binding = registration.crate_binding.unwrap();
+        let expected_kernel_binding = registration.kernel_binding.unwrap();
+        let expected_symbol = registration.target_symbol.clone();
+        let expected_def_path = registration.target_identity.clone();
+        let roots = validate_registration_records(vec![registration]).unwrap();
+        let owner = roots[0].authenticated_owner.as_ref().unwrap();
+
+        assert_eq!(owner.target(), 3);
+        assert_eq!(owner.crate_name(), "fixture");
+        assert_eq!(owner.module_path(), "general_genuine");
+        assert_eq!(owner.logical_name(), "alpha");
+        assert_eq!(owner.export_name(), "alpha");
+        assert!(matches!(
+            owner.typed_profile(),
+            TypedKernelProfile::GeneralScalarSliceRustcLayoutV3 {
+                generated_host_contract_identity,
+            } if generated_host_contract_identity.as_bytes() == [0x63; 32]
+        ));
+        assert_eq!(
+            owner.registration_path(),
+            "general_genuine::__fe2o3_kernel_registration_alpha"
+        );
+        assert_eq!(owner.target_def_path(), expected_def_path);
+        assert_eq!(owner.target_def_path_hash(), [3; 16]);
+        assert_eq!(owner.crate_binding(), expected_crate_binding);
+        assert_eq!(owner.kernel_binding(), expected_kernel_binding);
+        assert_eq!(owner.observed_symbol(), expected_symbol);
+    }
+
+    #[test]
+    fn authenticated_kernel_owner_rejects_owner_profile_and_build_mutations() {
+        let registration = general_typed_registration(
+            "general_genuine::__fe2o3_kernel_registration_alpha",
+            "alpha",
+            "alpha",
+            3,
+        );
+        let expected_crate_binding = registration.crate_binding.unwrap();
+
+        let error =
+            validate_records(vec![registration.clone()], None, Some("fixture")).unwrap_err();
+        assert!(error.reason.contains("no rustc session crate binding"));
+
+        let error = validate_records(
+            vec![registration.clone()],
+            Some(expected_crate_binding),
+            None,
+        )
+        .unwrap_err();
+        assert!(error.reason.contains("no rustc session crate identity"));
+
+        let mut wrong_crate = registration.clone();
+        wrong_crate.target_crate_name = "other".to_owned();
+        let error = validate_records(
+            vec![wrong_crate],
+            Some(expected_crate_binding),
+            Some("fixture"),
+        )
+        .unwrap_err();
+        assert!(error.reason.contains("target crate `other`"));
+
+        let mut wrong_module = registration.clone();
+        wrong_module.target_identity = format!("spoof::{}", wrong_module.target_symbol);
+        let error = validate_registration_records(vec![wrong_module]).unwrap_err();
+        assert!(error.reason.contains("target module `spoof`"));
+
+        let mut wrong_logical = registration.clone();
+        wrong_logical.logical_name = "beta".to_owned();
+        let error = validate_registration_records(vec![wrong_logical]).unwrap_err();
+        assert!(
+            error
+                .reason
+                .contains("inconsistent with logical name `beta`")
+        );
+
+        let mut wrong_export = registration.clone();
+        wrong_export.export_name = "beta".to_owned();
+        let error = validate_registration_records(vec![wrong_export]).unwrap_err();
+        assert!(error.reason.contains("disagrees with derived binding"));
+
+        let mut wrong_profile = registration.clone();
+        wrong_profile.profile_tag = Some("wrong-profile".to_owned());
+        let error = validate_registration_records(vec![wrong_profile]).unwrap_err();
+        assert!(
+            error
+                .reason
+                .contains("not the canonical general typed profile")
+        );
+
+        let mut wrong_crate_binding = registration.clone();
+        wrong_crate_binding.crate_binding = Some(derive_crate_binding_id_v1("other", ["metadata"]));
+        let error = validate_records(
+            vec![wrong_crate_binding],
+            Some(expected_crate_binding),
+            Some("fixture"),
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .reason
+                .contains("disagrees with rustc session binding")
+        );
+
+        let mut wrong_kernel_binding = registration.clone();
+        wrong_kernel_binding.kernel_binding = Some(KernelBindingIdV1::from_bytes([0x99; 32]));
+        let error = validate_registration_records(vec![wrong_kernel_binding]).unwrap_err();
+        assert!(error.reason.contains("disagrees with derived binding"));
+
+        let mut wrong_symbol = registration.clone();
+        wrong_symbol.target_symbol = "spoofed-symbol".to_owned();
+        let error = validate_registration_records(vec![wrong_symbol]).unwrap_err();
+        assert!(error.reason.contains("target symbol `spoofed-symbol`"));
+
+        let mut duplicate = general_typed_registration(
+            "general_genuine::__fe2o3_kernel_registration_beta",
+            "beta",
+            "beta",
+            4,
+        );
+        duplicate.target_identity = registration.target_identity.clone();
+        let error = validate_registration_records(vec![registration, duplicate]).unwrap_err();
+        assert!(error.reason.contains("duplicate target identity"));
+    }
+
+    #[test]
     fn general_v3_rejects_profile_binding_identity_and_version_mutations() {
         let registration = general_typed_registration(
             "crate::__fe2o3_kernel_registration_alpha",
@@ -2841,7 +3166,8 @@ mod tests {
             7,
         );
         let wrong_crate = derive_crate_binding_id_v1("other", ["metadata"]);
-        let error = validate_records(vec![typed.clone()], Some(wrong_crate)).unwrap_err();
+        let error =
+            validate_records(vec![typed.clone()], Some(wrong_crate), Some("fixture")).unwrap_err();
         assert!(
             error
                 .reason
@@ -3063,14 +3389,14 @@ mod tests {
             1,
         );
         let mut beta = registration("crate::__fe2o3_kernel_registration_beta", "beta", "beta", 2);
-        alpha.target_identity = "same-target".to_string();
-        beta.target_identity = "same-target".to_string();
+        alpha.target_identity = "crate::same-target".to_string();
+        beta.target_identity = "crate::same-target".to_string();
 
         let error = validate_registration_records(vec![alpha, beta]).unwrap_err();
         assert!(
             error
                 .reason
-                .contains("duplicate target identity `same-target`")
+                .contains("duplicate target identity `crate::same-target`")
         );
     }
 
