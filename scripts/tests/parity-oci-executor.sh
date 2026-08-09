@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 set -Eeuo pipefail
+umask 022
 
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly REPO_ROOT
@@ -18,6 +19,7 @@ readonly RUNTIME="${TEST_ROOT}/runtime"
 GIT="$(command -v git)"
 readonly GIT
 readonly SOURCE_STAGING="${TEST_ROOT}/staging/source"
+readonly OUTPUT_STAGING="${TEST_ROOT}/staging/output"
 
 cleanup() {
   chmod -R u+w -- "${TEST_ROOT}" 2>/dev/null || true
@@ -84,12 +86,17 @@ git_sha256	$(sha256 "${GIT}")
 git_version_sha256	$(env -i HOME=/nonexistent LC_ALL=C PATH=/nonexistent "${GIT}" --version | sha256sum | cut -d' ' -f1)
 git_objects_path	${SOURCE_REPO}/.git/objects
 source_staging_root	${SOURCE_STAGING}
+output_staging_root	${OUTPUT_STAGING}
+artifact_stream_protocol	fe2o3-artifact-stream-v1
 source_file_limit	1024
 source_byte_limit	16777216
 source_index_limit	1048576
 source_export_timeout_seconds	30
+operator_uid	$(id -u)
+operator_gid	$(id -g)
 oci_layout_path	${OCI_LAYOUT}
 oci_index_sha256	$(sha256 "${OCI_LAYOUT}/index.json")
+oci_index_size	$(size "${OCI_LAYOUT}/index.json")
 image_reference	example.invalid/fe2o3-evidence@sha256:${manifest_digest}
 image_manifest_digest	sha256:${manifest_digest}
 image_manifest_size	${manifest_size}
@@ -102,12 +109,13 @@ entrypoint	0000	/opt/fe2o3/bin/evidence-entrypoint
 command_count	2
 command	0000	--request
 command	0001	/run/fe2o3/request.tsv
-environment_count	5
-environment	0000	HOME	2f6e6f6e6578697374656e74
-environment	0001	HOSTNAME	6665326f332d65766964656e6365
-environment	0002	LC_ALL	43
-environment	0003	PATH	2f6f70742f6665326f332f62696e
-environment	0004	ROCR_VISIBLE_DEVICES	30
+environment_count	6
+environment	0000	HIP_VISIBLE_DEVICES	36636564313634376132393635343563
+environment	0001	HOME	2f6e6f6e6578697374656e74
+environment	0002	HOSTNAME	6665326f332d65766964656e6365
+environment	0003	LC_ALL	43
+environment	0004	PATH	2f6f70742f6665326f332f62696e
+environment	0005	ROCR_VISIBLE_DEVICES	36636564313634376132393635343563
 source_mount	/workspace
 request_mount	/run/fe2o3/request.tsv
 output_mount	/evidence
@@ -166,7 +174,7 @@ preflight() {
 
 mkdir -p "${TRUSTED_ROOT}/profiles" "${TRUSTED_ROOT}/seccomp" \
   "${OCI_LAYOUT}/blobs/sha256" "${SOURCE_REPO}/scripts/evidence/jobs" \
-  "${SOURCE_STAGING}"
+  "${SOURCE_STAGING}" "${OUTPUT_STAGING}"
 printf '%s\n' '#!/usr/bin/env bash' 'set -Eeuo pipefail' 'printf ok > /evidence/result.txt' \
   >"${SOURCE_REPO}/scripts/evidence/jobs/row-04.sh"
 chmod 755 "${SOURCE_REPO}/scripts/evidence/jobs/row-04.sh"
@@ -231,6 +239,10 @@ if [[ -e "${TEST_ROOT}/fsmonitor-executed" ]]; then
   exit 1
 fi
 source_snapshot="$(awk -F $'\t' '$1 == "source_snapshot" { print $2 }' <<<"${plan_output}")"
+request_snapshot="$(awk -F $'\t' '$1 == "request_snapshot" { print $2 }' <<<"${plan_output}")"
+source_manifest="$(awk -F $'\t' '$1 == "source_manifest" { print $2 }' <<<"${plan_output}")"
+artifact_stream="$(awk -F $'\t' '$1 == "artifact_stream_path" { print $2 }' <<<"${plan_output}")"
+stderr_stream="$(awk -F $'\t' '$1 == "stderr_stream_path" { print $2 }' <<<"${plan_output}")"
 if [[ -z "${source_snapshot}" || -e "${source_snapshot}/.git" ]]; then
   printf 'immutable source snapshot is missing or contains .git\n' >&2
   exit 1
@@ -240,8 +252,173 @@ if grep -F 'candidate worktree mutation' \
   printf 'source snapshot consumed candidate worktree bytes\n' >&2
   exit 1
 fi
+grep -F $'container_name\tfe2o3-evidence-3333333333333333333333333333333333333333333333333333333333333333' \
+  <<<"${plan_output}" >/dev/null
+grep -F $'artifact_stream_protocol\tfe2o3-artifact-stream-v1' \
+  <<<"${plan_output}" >/dev/null
+if [[ "${artifact_stream}" != "${OUTPUT_STAGING}/"* || \
+  "${stderr_stream}" != "${OUTPUT_STAGING}/"* || \
+  ! -f "${artifact_stream}" || ! -f "${stderr_stream}" || \
+  "$(stat -c '%a' "${artifact_stream}")" != 600 || \
+  "$(stat -c '%a' "${stderr_stream}")" != 600 ]]; then
+  printf 'durable bounded stream staging is invalid\n' >&2
+  exit 1
+fi
 git -C "${SOURCE_REPO}" -c core.fsmonitor=false checkout -q -- \
   scripts/evidence/jobs/row-04.sh
+PYTHONDONTWRITEBYTECODE=1 python3 - "${EXECUTOR}" "${source_snapshot}" "${source_manifest}" \
+  "${request_snapshot}" "${artifact_stream}" "${stderr_stream}" <<'PY'
+import importlib.util
+import os
+from pathlib import Path
+import sys
+
+(
+    module_path,
+    source_text,
+    manifest_text,
+    request_text,
+    artifact_text,
+    log_text,
+) = sys.argv[1:]
+spec = importlib.util.spec_from_file_location("parity_oci_executor", module_path)
+assert spec is not None and spec.loader is not None
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+
+source = Path(source_text)
+manifest = Path(manifest_text)
+request = Path(request_text)
+root = source.parent
+root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+source_fd = os.open(source, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+request_fd = os.open(request, os.O_RDONLY | os.O_NOFOLLOW)
+source_info = os.fstat(source_fd)
+request_info = os.fstat(request_fd)
+snapshot = module.SourceSnapshot(
+    source,
+    manifest,
+    request,
+    root_fd,
+    source_fd,
+    request_fd,
+    source_info.st_dev,
+    source_info.st_ino,
+    request_info.st_dev,
+    request_info.st_ino,
+    1,
+    1,
+    "0" * 64,
+)
+
+renamed_source = source.with_name(source.name + ".renamed")
+source.rename(renamed_source)
+source.mkdir(mode=0o700)
+try:
+    try:
+        module.verify_retained_snapshot(snapshot)
+    except module.ExecutorError as error:
+        assert "replaced" in str(error)
+    else:
+        raise AssertionError("directory rename swap was accepted")
+finally:
+    source.rmdir()
+    renamed_source.rename(source)
+
+renamed_request = request.with_name(request.name + ".renamed")
+request.rename(renamed_request)
+request.symlink_to(renamed_request)
+try:
+    try:
+        module.verify_retained_snapshot(snapshot)
+    except module.ExecutorError as error:
+        assert "replaced" in str(error)
+    else:
+        raise AssertionError("request symlink swap was accepted")
+finally:
+    request.unlink()
+    renamed_request.rename(request)
+    snapshot.close()
+
+artifact = Path(artifact_text)
+log = Path(log_text)
+output = artifact.parent
+output_root = output.parent
+output_root_fd = os.open(output_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+output_fd = os.open(output, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+artifact_fd = os.open(artifact, os.O_WRONLY | os.O_NOFOLLOW)
+log_fd = os.open(log, os.O_WRONLY | os.O_NOFOLLOW)
+output_info = os.fstat(output_fd)
+stage = module.OutputStage(
+    output,
+    artifact,
+    log,
+    output_root_fd,
+    output_fd,
+    artifact_fd,
+    log_fd,
+    output_info.st_dev,
+    output_info.st_ino,
+)
+renamed_output = output.with_name(output.name + ".renamed")
+output.rename(renamed_output)
+output.symlink_to(renamed_output, target_is_directory=True)
+try:
+    try:
+        module.verify_retained_output(stage)
+    except module.ExecutorError as error:
+        assert "replaced" in str(error)
+    else:
+        raise AssertionError("output symlink swap was accepted")
+finally:
+    output.unlink()
+    renamed_output.rename(output)
+    stage.close()
+PY
+PYTHONDONTWRITEBYTECODE=1 python3 - "${EXECUTOR}" <<'PY'
+import importlib.util
+import sys
+import time
+
+module_path = sys.argv[1]
+spec = importlib.util.spec_from_file_location("parity_oci_executor_bounds", module_path)
+assert spec is not None and spec.loader is not None
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+environment = {"HOME": "/nonexistent", "LC_ALL": "C", "PATH": "/nonexistent"}
+
+try:
+    module.run_bounded(
+        ["/bin/sh", "-c", "while :; do printf 0123456789; done"],
+        label="overflow fixture",
+        environment=environment,
+        timeout_seconds=5,
+        stdout_limit=1024,
+        stderr_limit=1024,
+    )
+except module.ExecutorError as error:
+    assert "exceeds protected limit" in str(error)
+else:
+    raise AssertionError("unbounded subprocess output was accepted")
+
+started = time.monotonic()
+try:
+    module.run_bounded(
+        ["/bin/sh", "-c", "/bin/sleep 30 & wait"],
+        label="timeout fixture",
+        environment=environment,
+        timeout_seconds=1,
+        stdout_limit=1024,
+        stderr_limit=1024,
+    )
+except module.ExecutorError as error:
+    assert "protected timeout" in str(error)
+    assert time.monotonic() - started < 5
+else:
+    raise AssertionError("subprocess timeout was accepted")
+PY
 plan_arguments="$({
   while IFS=$'\t' read -r key _ encoded; do
     if [[ "${key}" == argument ]]; then
@@ -256,8 +433,11 @@ grep -F -- $'--log-driver\nnone' <<<"${plan_arguments}" >/dev/null
 grep -F 'readonly,bind-recursive=readonly' <<<"${plan_arguments}" >/dev/null
 grep -F -- $'--device\n/dev/dri/renderD128:/dev/dri/renderD128:rwm' <<<"${plan_arguments}" >/dev/null
 grep -F -- $'--device\n/dev/kfd:/dev/kfd:rwm' <<<"${plan_arguments}" >/dev/null
+grep -F -- 'org.fe2o3.evidence.request-id=3333333333333333333333333333333333333333333333333333333333333333' \
+  <<<"${plan_arguments}" >/dev/null
 if grep -F -- '--privileged' <<<"${plan_arguments}" >/dev/null || \
-  grep -F -- '/var/run/docker.sock' <<<"${plan_arguments}" >/dev/null; then
+  grep -F -- '/var/run/docker.sock' <<<"${plan_arguments}" >/dev/null || \
+  grep -F -- 'docker cp' <<<"${plan_arguments}" >/dev/null; then
   printf 'OCI plan exposed privilege or runtime control socket\n' >&2
   exit 1
 fi
@@ -284,6 +464,10 @@ expect_failure capabilities 'drop every capability' verify
 cp "${TEST_ROOT}/profile.good" "${PROFILE}"
 write_policy
 
+chmod 775 "${TRUSTED_ROOT}"
+expect_failure writable_trusted_root 'ownership or mode is unsafe' verify
+chmod 755 "${TRUSTED_ROOT}"
+
 sed -i 's|image_reference\texample.invalid/|image_reference\t-invalid/|' "${PROFILE}"
 write_policy
 expect_failure unsafe_image_reference 'malformed OCI image identity' verify
@@ -296,11 +480,46 @@ expect_failure overlapping_mount 'invalid or duplicate executor mount' verify
 cp "${TEST_ROOT}/profile.good" "${PROFILE}"
 write_policy
 
+sed -i 's/oci_index_size\t[0-9]*/oci_index_size\t999999999999999999999/' \
+  "${PROFILE}"
+write_policy
+expect_failure numeric_bound 'malformed OCI index binding' verify
+cp "${TEST_ROOT}/profile.good" "${PROFILE}"
+write_policy
+
+cp "${OCI_LAYOUT}/index.json" "${TEST_ROOT}/index.good"
+python3 - "${OCI_LAYOUT}/index.json" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+value = {"leaf": True}
+for _ in range(40):
+    value = {"nested": value}
+Path(sys.argv[1]).write_text(json.dumps(value) + "\n", encoding="ascii")
+PY
+write_profile \
+  "${manifest_digest}" "$(size "${TEST_ROOT}/manifest.json")" \
+  "${config_digest}" "$(size "${TEST_ROOT}/config.json")" \
+  "${layer_digest}" "$(size "${TEST_ROOT}/layer")"
+expect_failure json_depth 'JSON exceeds structural limits' verify
+cp "${TEST_ROOT}/index.good" "${OCI_LAYOUT}/index.json"
+cp "${TEST_ROOT}/profile.good" "${PROFILE}"
+write_policy
+
 sed -i \
-  's/environment\t0001\tHOSTNAME\t6665326f332d65766964656e6365/environment\t0001\tHOSTNAME\t77726f6e67/' \
+  's/environment\t0002\tHOSTNAME\t6665326f332d65766964656e6365/environment\t0002\tHOSTNAME\t77726f6e67/' \
   "${PROFILE}"
 write_policy
 expect_failure nondeterministic_hostname 'lacks the clean GPU baseline' verify
+cp "${TEST_ROOT}/profile.good" "${PROFILE}"
+write_policy
+
+sed -i \
+  's/environment\t0005\tROCR_VISIBLE_DEVICES\t36636564313634376132393635343563/environment\t0005\tROCR_VISIBLE_DEVICES\t30/' \
+  "${PROFILE}"
+write_policy
+expect_failure gpu_visibility 'does not match protected GPU identity' verify
 cp "${TEST_ROOT}/profile.good" "${PROFILE}"
 write_policy
 
@@ -333,7 +552,7 @@ expect_failure request_symlink 'not a single-link regular file' \
     --trusted-root "${TRUSTED_ROOT}" \
     --policy policy.tsv
 
-# Runtime unavailability cannot cross the RuntimeReadyRequest boundary. This
+# Runtime unavailability cannot produce even an ObservedRuntimeRequest. This
 # command fails before host/image claims and cannot issue an execution receipt.
 expect_failure operator_unavailable 'OCI runtime control plane unavailable' preflight
 
