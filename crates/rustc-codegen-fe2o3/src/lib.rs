@@ -24,6 +24,8 @@ mod host_object;
 mod kernel_ir_codegen;
 mod kernel_ir_lowering;
 mod mir_import;
+#[allow(dead_code)]
+mod mir_import_v2;
 mod monomorphization_dead;
 mod record_lowering;
 #[allow(dead_code)]
