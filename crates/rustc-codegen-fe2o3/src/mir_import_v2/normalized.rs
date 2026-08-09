@@ -2,11 +2,12 @@ use std::error::Error;
 use std::fmt;
 
 use super::accounting::recompute_capture_accounting_v2;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 pub(crate) const NORMALIZED_MIR_SCHEMA_V2: u16 = 2;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct CaptureLimitsV2 {
     pub max_locals: usize,
     pub max_blocks: usize,
@@ -51,16 +52,11 @@ impl Default for CaptureLimitsV2 {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CaptureAuthorityV2 {
-    CompilerObservationOnly,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct CapturedBodyV2 {
     pub schema_version: u16,
-    pub authority: CaptureAuthorityV2,
     pub function: FunctionIdentityV2,
+    pub caller_signature: Option<FunctionSignatureIdentityV2>,
     pub source: SourceSpanV2,
     pub arg_count: usize,
     pub capture_work_items: usize,
@@ -75,7 +71,12 @@ impl CapturedBodyV2 {
         false
     }
 
-    pub(crate) fn validate(&self, limits: CaptureLimitsV2) -> Result<(), ValidationErrorV2> {
+    pub(crate) fn validate_untrusted_shape(
+        &self,
+        limits: CaptureLimitsV2,
+    ) -> Result<(), ValidationErrorV2> {
+        // This checks bounded internal consistency only. Every field, including
+        // hashes and type identities, remains attacker-controlled until rustc recapture.
         if self.schema_version != NORMALIZED_MIR_SCHEMA_V2 {
             return Err(ValidationErrorV2::new(
                 "schema_version",
@@ -83,12 +84,6 @@ impl CapturedBodyV2 {
                     "unknown normalized MIR schema {}; expected {}",
                     self.schema_version, NORMALIZED_MIR_SCHEMA_V2
                 ),
-            ));
-        }
-        if self.authority != CaptureAuthorityV2::CompilerObservationOnly {
-            return Err(ValidationErrorV2::new(
-                "authority",
-                "normalized MIR V2 is an observation and cannot grant lowering authority",
             ));
         }
         let accounting = recompute_capture_accounting_v2(self, limits)?;
@@ -112,6 +107,9 @@ impl CapturedBodyV2 {
         }
         validate_source_scopes(&self.source_scopes, limits)?;
         validate_function_identity(&self.function, limits)?;
+        if let Some(signature) = &self.caller_signature {
+            validate_signature("caller_signature", signature, limits)?;
+        }
         validate_span("source", &self.source, limits)?;
         bounded(
             "capture_work_items",
@@ -214,6 +212,7 @@ impl CapturedBodyV2 {
                 &format!("blocks[{expected}].terminator"),
                 &block.terminator,
                 &self.locals,
+                self.caller_signature.as_ref(),
                 self.blocks.len(),
                 limits,
             )?;
@@ -223,13 +222,13 @@ impl CapturedBodyV2 {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct FunctionIdentityV2 {
     pub definition: DefinitionIdentityV2,
     pub instance: InstanceIdentityV2,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct DefinitionIdentityV2 {
     pub diagnostic_crate_name: String,
     pub diagnostic_def_path: String,
@@ -238,7 +237,7 @@ pub(crate) struct DefinitionIdentityV2 {
     pub local_def_path_hash: [u8; 8],
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct IntrinsicIdentityV2 {
     pub definition: DefinitionIdentityV2,
     pub name: String,
@@ -247,7 +246,7 @@ pub(crate) struct IntrinsicIdentityV2 {
     pub binding_hash: [u8; 32],
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct FunctionSignatureIdentityV2 {
     pub stable_hash: [u8; 16],
     pub origin: FunctionSignatureOriginV2,
@@ -259,26 +258,26 @@ pub(crate) struct FunctionSignatureIdentityV2 {
     pub binding_hash: [u8; 32],
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) enum FunctionSignatureOriginV2 {
     CompilerFnSig,
     GeneratedMir,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) enum FunctionSafetyV2 {
     Safe,
     Unsafe,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct FunctionAbiIdentityV2 {
     pub stable_hash: [u8; 16],
     pub canonical_name: String,
     pub unwind_allowed: bool,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct InstanceIdentityV2 {
     pub kind: InstanceKindV2,
     pub generic_args_hash: [u8; 16],
@@ -288,7 +287,7 @@ pub(crate) struct InstanceIdentityV2 {
     pub diagnostic_debug: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) enum InstanceKindV2 {
     Item,
     Intrinsic,
@@ -331,13 +330,13 @@ pub(crate) enum InstanceKindV2 {
     },
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) enum ReifyReasonV2 {
     FunctionPointer,
     Vtable,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct SourceSpanV2 {
     pub authority: SourceAuthorityV2,
     pub remapped_file: String,
@@ -357,7 +356,7 @@ pub(crate) struct SourceSpanV2 {
     pub diagnostic_debug: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct SourceScopeIdentityV2 {
     pub index: usize,
     pub compiler_hash: [u8; 16],
@@ -369,21 +368,21 @@ pub(crate) struct SourceScopeIdentityV2 {
     pub record_hash: [u8; 32],
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct StructuralSpanIdentityV2 {
     pub original_span_hash: [u8; 16],
     pub callsite_span_hash: [u8; 16],
     pub expansion: MacroExpansionIdentityV2,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct MacroExpansionIdentityV2 {
     pub syntax_context_hash: [u8; 16],
     pub frames: Vec<MacroExpansionFrameV2>,
     pub chain_hash: [u8; 32],
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct MacroExpansionFrameV2 {
     pub expansion_hash: [u8; 16],
     pub callsite_span_hash: [u8; 16],
@@ -392,27 +391,27 @@ pub(crate) struct MacroExpansionFrameV2 {
     pub parent_module: Option<StableDefinitionKeyV2>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct StableDefinitionKeyV2 {
     pub def_path_hash: [u8; 16],
     pub stable_crate_id: [u8; 16],
     pub local_def_path_hash: [u8; 8],
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) enum SourceAuthorityV2 {
     CanonicalRemapped,
     Unauthoritative(SourceRejectionV2),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) enum SourceRejectionV2 {
     DummySpan,
     CrossFileSpan,
     InvalidPosition,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct TypeIdentityV2 {
     pub stable_hash: [u8; 16],
     pub class: TypeClassV2,
@@ -420,7 +419,7 @@ pub(crate) struct TypeIdentityV2 {
     pub diagnostic_debug: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) enum TypeClassV2 {
     Bool,
     Char,
@@ -475,7 +474,7 @@ pub(crate) enum TypeClassV2 {
     Unsupported(UnresolvedTypeClassV2),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) enum IntegerWidthV2 {
     Pointer,
     Bits8,
@@ -485,7 +484,7 @@ pub(crate) enum IntegerWidthV2 {
     Bits128,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) enum FloatWidthV2 {
     Bits16,
     Bits32,
@@ -493,7 +492,7 @@ pub(crate) enum FloatWidthV2 {
     Bits128,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) enum UnresolvedTypeClassV2 {
     Alias,
     Parameter,
@@ -503,13 +502,13 @@ pub(crate) enum UnresolvedTypeClassV2 {
     Error,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct StableCompilerValueV2 {
     pub stable_hash: [u8; 16],
     pub diagnostic: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct LocalDeclV2 {
     pub index: usize,
     pub role: LocalRoleV2,
@@ -519,14 +518,14 @@ pub(crate) struct LocalDeclV2 {
     pub diagnostic_debug: String,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) enum LocalRoleV2 {
     Return,
     Argument,
     Temporary,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct BasicBlockV2 {
     pub index: usize,
     pub cleanup: bool,
@@ -534,7 +533,7 @@ pub(crate) struct BasicBlockV2 {
     pub terminator: TerminatorV2,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct StatementV2 {
     pub index: usize,
     pub source: SourceSpanV2,
@@ -542,7 +541,7 @@ pub(crate) struct StatementV2 {
     pub kind: StatementKindV2,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) enum StatementKindV2 {
     Assign {
         destination: PlaceV2,
@@ -573,7 +572,7 @@ pub(crate) enum StatementKindV2 {
     Unsupported(UnsupportedStatementV2),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) enum UnsupportedStatementV2 {
     FakeRead {
         cause: StableCompilerValueV2,
@@ -591,7 +590,7 @@ pub(crate) enum UnsupportedStatementV2 {
     },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) enum IntrinsicStatementV2 {
     CopyNonOverlapping {
         source: Box<OperandV2>,
@@ -603,14 +602,15 @@ pub(crate) enum IntrinsicStatementV2 {
     },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct PlaceV2 {
     pub local: usize,
     pub projection: Vec<ProjectionV2>,
+    pub projection_type_hashes: Vec<[u8; 16]>,
     pub type_hash: [u8; 16],
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) enum ProjectionV2 {
     Deref,
     Field {
@@ -642,7 +642,7 @@ pub(crate) enum ProjectionV2 {
     },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) enum OperandV2 {
     Copy(PlaceV2),
     Move(PlaceV2),
@@ -656,7 +656,7 @@ pub(crate) enum OperandV2 {
     },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) enum RvalueV2 {
     Use(OperandV2),
     Repeat {
@@ -702,7 +702,7 @@ pub(crate) enum RvalueV2 {
     },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) enum AggregateKindV2 {
     Array {
         element: TypeIdentityV2,
@@ -733,7 +733,7 @@ pub(crate) enum AggregateKindV2 {
     },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct TerminatorV2 {
     pub source: SourceSpanV2,
     pub diagnostic_debug: String,
@@ -741,7 +741,7 @@ pub(crate) struct TerminatorV2 {
     pub successors: Vec<usize>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) enum TerminatorKindV2 {
     Return,
     Unreachable,
@@ -808,7 +808,7 @@ pub(crate) enum TerminatorKindV2 {
     Unsupported(UnsupportedTerminatorV2),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) enum CalleeIdentityV2 {
     Direct {
         declared: DefinitionIdentityV2,
@@ -827,7 +827,7 @@ pub(crate) enum CalleeIdentityV2 {
     },
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) enum UnsupportedTerminatorV2 {
     InlineAssembly {
         template_pieces: usize,
@@ -837,19 +837,19 @@ pub(crate) enum UnsupportedTerminatorV2 {
     },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct CallArgumentV2 {
     pub operand: OperandV2,
     pub source: SourceSpanV2,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct SwitchTargetV2 {
     pub value: u128,
     pub target: usize,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) enum UnwindActionV2 {
     Continue,
     Unreachable,
@@ -857,7 +857,7 @@ pub(crate) enum UnwindActionV2 {
     Cleanup { target: usize },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct ValidationErrorV2 {
     pub path: String,
     pub reason: String,
@@ -1169,7 +1169,10 @@ fn hash_place_binding(hasher: &mut Sha256, place: &PlaceV2) -> Result<(), Valida
     hash_usize_binding(hasher, place.local, "call.place.local")?;
     hasher.update(place.type_hash);
     hash_usize_binding(hasher, place.projection.len(), "call.place.projection")?;
-    for projection in &place.projection {
+    for (projection, projection_type_hash) in
+        place.projection.iter().zip(&place.projection_type_hashes)
+    {
+        hasher.update(projection_type_hash);
         match projection {
             ProjectionV2::Deref => hasher.update([0]),
             ProjectionV2::Field { index, ty } => {
@@ -1589,7 +1592,7 @@ fn validate_span(
     if span.authority != SourceAuthorityV2::CanonicalRemapped {
         return Err(ValidationErrorV2::new(
             format!("{path}.authority"),
-            "source identity is unauthoritative and cannot be an exact capture",
+            "raw source record does not use the canonical-remapped structural variant",
         ));
     }
     validate_text(
@@ -2108,6 +2111,7 @@ fn validate_terminator(
     path: &str,
     terminator: &TerminatorV2,
     locals: &[LocalDeclV2],
+    caller_signature: Option<&FunctionSignatureIdentityV2>,
     block_count: usize,
     limits: CaptureLimitsV2,
 ) -> Result<(), ValidationErrorV2> {
@@ -2215,6 +2219,7 @@ fn validate_terminator(
                     target: *target,
                     unwind: Some(unwind),
                     locals,
+                    caller_signature,
                 },
                 limits,
             )?;
@@ -2273,6 +2278,7 @@ fn validate_terminator(
                     target: None,
                     unwind: None,
                     locals,
+                    caller_signature,
                 },
                 limits,
             )?;
@@ -2390,6 +2396,7 @@ struct CallValidationContextV2<'a> {
     target: Option<usize>,
     unwind: Option<&'a UnwindActionV2>,
     locals: &'a [LocalDeclV2],
+    caller_signature: Option<&'a FunctionSignatureIdentityV2>,
 }
 
 fn validate_callee(
@@ -2551,6 +2558,7 @@ fn validate_callee(
         call.target,
         call.unwind,
         call.locals,
+        call.caller_signature,
     )
 }
 
@@ -2588,6 +2596,7 @@ fn validate_call_signature(
     target: Option<usize>,
     unwind: Option<&UnwindActionV2>,
     locals: &[LocalDeclV2],
+    caller_signature: Option<&FunctionSignatureIdentityV2>,
 ) -> Result<(), ValidationErrorV2> {
     if arguments.len() != signature.inputs.len() {
         return Err(ValidationErrorV2::new(
@@ -2616,14 +2625,28 @@ fn validate_call_signature(
                     "call destination place type does not exactly match the signature output",
                 ));
             }
-            let diverges = matches!(signature.output.class, TypeClassV2::Never);
-            if diverges != target.is_none() {
-                return Err(ValidationErrorV2::new(
-                    format!("{path}.target"),
-                    "normal target presence is incompatible with the signature output type",
-                ));
+            match signature.output.class {
+                TypeClassV2::Never if target.is_some() => {
+                    return Err(ValidationErrorV2::new(
+                        format!("{path}.target"),
+                        "never-returning call cannot have a normal target",
+                    ));
+                }
+                TypeClassV2::Never => {}
+                TypeClassV2::Tuple { arity: 0 } if target.is_none() => {
+                    return Err(ValidationErrorV2::new(
+                        format!("{path}.target"),
+                        "unit-returning call requires its exact unit destination and normal target",
+                    ));
+                }
+                _ if target.is_none() => {
+                    return Err(ValidationErrorV2::new(
+                        format!("{path}.target"),
+                        "value-returning call requires a normal target",
+                    ));
+                }
+                _ => {}
             }
-            let _returns_unit = matches!(signature.output.class, TypeClassV2::Tuple { arity: 0 });
         }
         None => {
             let caller_output = locals.first().ok_or_else(|| {
@@ -2633,6 +2656,22 @@ fn validate_call_signature(
                 return Err(ValidationErrorV2::new(
                     format!("{path}.output"),
                     "tail-call output does not exactly match the caller return type",
+                ));
+            }
+            let caller_signature = caller_signature.ok_or_else(|| {
+                ValidationErrorV2::new(
+                    format!("{path}.caller_signature"),
+                    "tail call requires a compiler-captured caller signature",
+                )
+            })?;
+            if signature.safety != caller_signature.safety
+                || signature.abi != caller_signature.abi
+                || signature.c_variadic != caller_signature.c_variadic
+                || signature.output.stable_hash != caller_signature.output.stable_hash
+            {
+                return Err(ValidationErrorV2::new(
+                    format!("{path}.caller_signature"),
+                    "tail-call ABI, safety, variadic, unwind, or output contract differs from the caller",
                 ));
             }
             if target.is_some() || unwind.is_some() {
@@ -2742,6 +2781,23 @@ fn validate_place(
         place.projection.len(),
         limits.max_projection_depth,
     )?;
+    if place.projection_type_hashes.len() != place.projection.len() {
+        return Err(ValidationErrorV2::new(
+            format!("{path}.projection_type_hashes"),
+            "projection type chain length does not match the place projection",
+        ));
+    }
+    for (index, hash) in place.projection_type_hashes.iter().enumerate() {
+        validate_hash(&format!("{path}.projection_type_hashes[{index}]"), hash)?;
+    }
+    if let Some(final_hash) = place.projection_type_hashes.last()
+        && *final_hash != place.type_hash
+    {
+        return Err(ValidationErrorV2::new(
+            format!("{path}.type_hash"),
+            "place type does not match the final projection type",
+        ));
+    }
     for (index, projection) in place.projection.iter().enumerate() {
         let projection_path = format!("{path}.projection[{index}]");
         match projection {

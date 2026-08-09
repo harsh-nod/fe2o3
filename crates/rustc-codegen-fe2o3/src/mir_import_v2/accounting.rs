@@ -86,6 +86,10 @@ impl AccountingV2 {
     fn body(&mut self, body: &CapturedBodyV2) -> Result<(), ValidationErrorV2> {
         self.work(1)?;
         self.function(&body.function)?;
+        if let Some(signature) = &body.caller_signature {
+            self.work(1)?;
+            self.signature(signature)?;
+        }
         self.span(&body.source)?;
         self.work(body.source_scopes.len())?;
         for scope in &body.source_scopes {
