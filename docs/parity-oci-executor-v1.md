@@ -190,8 +190,11 @@ after container exit. The protected entrypoint reserves stdout for
 the planner creates single-link `0600` artifact and stderr stream files beneath
 an operator-owned durable output directory named by the full request ID, opens
 them with `O_EXCL|O_NOFOLLOW`, retains their descriptors, and rechecks their
-inodes. A future runner must stream into those descriptors while the container
-runs and terminate the process group at the protected byte or time limit.
+inodes. Before emitting a plan, it fsyncs the artifact stream, stderr stream,
+execution directory, and protected staging root in that order; any failure
+rejects the plan. A future runner must stream into those descriptors while the
+container runs, fsync finalized content and metadata, and terminate the process
+group at the protected byte or time limit.
 
 ## Required Execution And Receipt Work
 

@@ -381,6 +381,57 @@ finally:
     output.unlink()
     renamed_output.rename(output)
     stage.close()
+
+class Fixture:
+    pass
+
+
+profile = Fixture()
+profile.output_staging_root = str(output_root)
+request = Fixture()
+request.request_id = "4" * 64
+sync_order = []
+real_fsync = module.os.fsync
+
+
+def record_fsync(file_fd):
+    sync_order.append(Path(os.readlink(f"/proc/self/fd/{file_fd}")).name)
+
+
+module.os.fsync = record_fsync
+durable_stage = module.stage_output(profile, request)
+try:
+    assert sync_order == [
+        "artifacts.stream",
+        "stderr.log",
+        f"execution-{request.request_id}",
+        output_root.name,
+    ]
+finally:
+    durable_stage.close()
+
+request.request_id = "5" * 64
+sync_calls = 0
+
+
+def fail_second_fsync(file_fd):
+    del file_fd
+    global sync_calls
+    sync_calls += 1
+    if sync_calls == 2:
+        raise OSError("fixture fsync failure")
+
+
+module.os.fsync = fail_second_fsync
+try:
+    module.stage_output(profile, request)
+except module.ExecutorError as error:
+    assert "cannot durably initialize output staging" in str(error)
+    assert sync_calls == 2
+else:
+    raise AssertionError("output fsync failure was accepted")
+finally:
+    module.os.fsync = real_fsync
 PY
 PYTHONDONTWRITEBYTECODE=1 python3 - "${EXECUTOR}" <<'PY'
 import importlib.util
