@@ -1778,6 +1778,28 @@ fn callable_namespaces_are_globally_disjoint() {
     let error = import_shadow.validate_with_registry(&registry).unwrap_err();
     assert!(error.reason().contains("trusted import namespace"));
 
+    let mut bodyless_collision = place_module();
+    bodyless_collision.callables.push(MirCallable {
+        identity: "fixture::reserved".into(),
+        authority: MirCallAuthority::DefinedFunction,
+        signature: MirCallSignature {
+            inputs: vec![],
+            output: MirCallReturn::Diverging,
+            can_unwind: false,
+        },
+    });
+    let registry = external_registry(
+        "fixture::reserved",
+        "fixture::reserved::v1",
+        vec![],
+        MirExternalCallReturn::Diverging,
+        false,
+    );
+    let error = bodyless_collision
+        .validate_with_registry(&registry)
+        .unwrap_err();
+    assert!(error.reason().contains("trusted import namespace"));
+
     let (mut intrinsic_shadow, _) = intrinsic_module();
     intrinsic_shadow.functions[0].identity = "fe2o3.volatile_load".into();
     let error = intrinsic_shadow.validate().unwrap_err();
