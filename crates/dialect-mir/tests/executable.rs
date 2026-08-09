@@ -2,12 +2,12 @@ use dialect_mir::{
     MirAddressSpace, MirAggregateLayout, MirAuthorizedDeviceImport, MirBasicBlock, MirBinaryOp,
     MirBlockId, MirBlockParameter, MirBody, MirBodyForm, MirCall, MirCallAuthority, MirCallReturn,
     MirCallSignature, MirCallable, MirCallee, MirConstant, MirConstantValue, MirEdge,
-    MirExecutableModule, MirExecutableTarget, MirExecutableVersion, MirExternalCallRegistry,
-    MirExternalCallReturn, MirExternalCallSignature, MirField, MirFunction, MirIntrinsic,
-    MirLayout, MirLocalDecl, MirLocalId, MirLocalKind, MirMutability, MirOperand, MirPlace,
-    MirProjection, MirRvalue, MirScalarType, MirSemanticType, MirSourceSpan, MirStatement,
-    MirStatementKind, MirTerminator, MirTerminatorKind, MirTypeId, MirTypeKind, MirUnwindAction,
-    MirValueId,
+    MirEnumEncoding, MirEnumType, MirExecutableModule, MirExecutableTarget, MirExecutableVersion,
+    MirExternalCallRegistry, MirExternalCallReturn, MirExternalCallSignature, MirField,
+    MirFunction, MirIntrinsic, MirLayout, MirLocalDecl, MirLocalId, MirLocalKind, MirMutability,
+    MirOperand, MirPadding, MirPlace, MirProjection, MirRvalue, MirScalarType, MirSemanticType,
+    MirSourceSpan, MirStatement, MirStatementKind, MirTerminator, MirTerminatorKind, MirTypeId,
+    MirTypeKind, MirUnwindAction, MirValueId, MirVariant,
 };
 
 fn external_registry(
@@ -884,6 +884,208 @@ fn target_controls_usize_index_and_thread_index_widths() {
             .reason()
             .contains("external range witness")
     );
+}
+
+fn zero_sized_constant_module(semantic_ty: MirSemanticType) -> MirExecutableModule {
+    MirExecutableModule {
+        version: MirExecutableVersion::V1,
+        target: MirExecutableTarget {
+            pointer_width_bits: 32,
+            thread_index_width_bits: 32,
+        },
+        types: vec![semantic_ty],
+        callables: vec![],
+        functions: vec![MirFunction {
+            identity: "fixture::zst".into(),
+            span: None,
+            body: MirBody {
+                form: MirBodyForm::Places,
+                locals: vec![local(MirTypeId(0), MirLocalKind::Return, true)],
+                blocks: vec![MirBasicBlock {
+                    parameters: vec![],
+                    statements: vec![MirStatement {
+                        kind: MirStatementKind::Assign {
+                            place: MirPlace::local(MirLocalId(0), MirTypeId(0)),
+                            value: MirRvalue::Use(MirOperand::Constant(MirConstant {
+                                ty: MirTypeId(0),
+                                value: MirConstantValue::ZeroSized,
+                            })),
+                        },
+                        span: None,
+                    }],
+                    terminator: terminator(MirTerminatorKind::Return),
+                }],
+                entry: MirBlockId(0),
+            },
+        }],
+    }
+}
+
+fn payload_enum_type() -> MirSemanticType {
+    let u32_ty = ty(
+        MirTypeKind::Scalar(MirScalarType::Int {
+            signed: false,
+            bits: 32,
+        }),
+        4,
+        4,
+    );
+    MirSemanticType {
+        layout: MirLayout::sized(8, 4),
+        kind: MirTypeKind::Enum(MirEnumType {
+            identity: "fixture::Payload".into(),
+            discriminant: MirScalarType::Int {
+                signed: false,
+                bits: 32,
+            },
+            encoding: MirEnumEncoding::Direct {
+                tag_offset: 0,
+                tag: MirScalarType::Int {
+                    signed: false,
+                    bits: 8,
+                },
+            },
+            variants: vec![
+                MirVariant {
+                    index: 0,
+                    name: "Empty".into(),
+                    discriminant: 0,
+                    aggregate: MirAggregateLayout {
+                        fields: vec![],
+                        padding: vec![MirPadding { offset: 1, size: 7 }],
+                    },
+                },
+                MirVariant {
+                    index: 1,
+                    name: "Value".into(),
+                    discriminant: 1,
+                    aggregate: MirAggregateLayout {
+                        fields: vec![MirField {
+                            name: Some("value".into()),
+                            offset: 4,
+                            ty: u32_ty,
+                        }],
+                        padding: vec![MirPadding { offset: 1, size: 3 }],
+                    },
+                },
+            ],
+        }),
+    }
+}
+
+#[test]
+fn zero_sized_constants_require_one_inhabited_value() {
+    let empty_tuple = ty(
+        MirTypeKind::Tuple(MirAggregateLayout {
+            fields: vec![],
+            padding: vec![],
+        }),
+        0,
+        1,
+    );
+    zero_sized_constant_module(empty_tuple).validate().unwrap();
+
+    let single_variant = MirSemanticType {
+        layout: MirLayout::sized(0, 1),
+        kind: MirTypeKind::Enum(MirEnumType {
+            identity: "fixture::Single".into(),
+            discriminant: MirScalarType::Int {
+                signed: false,
+                bits: 8,
+            },
+            encoding: MirEnumEncoding::Single { variant: 0 },
+            variants: vec![MirVariant {
+                index: 0,
+                name: "Only".into(),
+                discriminant: 0,
+                aggregate: MirAggregateLayout {
+                    fields: vec![],
+                    padding: vec![],
+                },
+            }],
+        }),
+    };
+    let error = zero_sized_constant_module(single_variant)
+        .validate()
+        .unwrap_err();
+    assert!(error.reason().contains("constant payload"));
+
+    let uninhabited = MirSemanticType {
+        layout: MirLayout::sized(0, 1),
+        kind: MirTypeKind::Enum(MirEnumType {
+            identity: "fixture::Never".into(),
+            discriminant: MirScalarType::Int {
+                signed: false,
+                bits: 8,
+            },
+            encoding: MirEnumEncoding::Uninhabited,
+            variants: vec![],
+        }),
+    };
+    let error = zero_sized_constant_module(uninhabited)
+        .validate()
+        .unwrap_err();
+    assert!(error.reason().contains("constant payload"));
+}
+
+#[test]
+fn set_discriminant_cannot_expose_uninitialized_payload_fields() {
+    let enum_ty = payload_enum_type();
+    let enum_id = MirTypeId(0);
+    let mut module = MirExecutableModule {
+        version: MirExecutableVersion::V1,
+        target: MirExecutableTarget {
+            pointer_width_bits: 32,
+            thread_index_width_bits: 32,
+        },
+        types: vec![enum_ty],
+        callables: vec![],
+        functions: vec![MirFunction {
+            identity: "fixture::set_discriminant".into(),
+            span: None,
+            body: MirBody {
+                form: MirBodyForm::Places,
+                locals: vec![
+                    local(enum_id, MirLocalKind::Return, true),
+                    local(enum_id, MirLocalKind::Argument, true),
+                ],
+                blocks: vec![MirBasicBlock {
+                    parameters: vec![],
+                    statements: vec![
+                        MirStatement {
+                            kind: MirStatementKind::SetDiscriminant {
+                                place: MirPlace::local(MirLocalId(1), enum_id),
+                                variant: 0,
+                            },
+                            span: None,
+                        },
+                        MirStatement {
+                            kind: MirStatementKind::Assign {
+                                place: MirPlace::local(MirLocalId(0), enum_id),
+                                value: MirRvalue::Use(MirOperand::Move(MirPlace::local(
+                                    MirLocalId(1),
+                                    enum_id,
+                                ))),
+                            },
+                            span: None,
+                        },
+                    ],
+                    terminator: terminator(MirTerminatorKind::Return),
+                }],
+                entry: MirBlockId(0),
+            },
+        }],
+    };
+    module.validate().unwrap();
+
+    let MirStatementKind::SetDiscriminant { variant, .. } =
+        &mut module.functions[0].body.blocks[0].statements[0].kind
+    else {
+        unreachable!();
+    };
+    *variant = 1;
+    let error = module.validate().unwrap_err();
+    assert!(error.reason().contains("payload fields"));
 }
 
 #[derive(Clone, Copy)]
