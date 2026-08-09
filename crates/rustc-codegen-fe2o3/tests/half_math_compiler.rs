@@ -46,12 +46,16 @@ fn rustc_authenticates_and_lowers_exact_half_math_source_forms() {
         "the fixture must stop at kernel-ir-v1's deliberately narrow kernel admission"
     );
     assert!(
-        stderr.contains("selected kernel-ir-v1: verified 1 kernel(s), 8 function(s)"),
+        stderr.contains("selected kernel-ir-v1: verified 1 kernel(s), 9 function(s)"),
         "the exact source forms did not reach verified Kernel IR:\n{stderr}"
     );
     assert!(
         stderr.contains("does not support kernel export \"half_math_kernel\""),
         "the fixture failed before the expected post-translation admission boundary:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("MIR is unavailable for a device-reachable item"),
+        "resolved genuine half operations were not authenticated:\n{stderr}"
     );
     assert!(!stderr.contains("has no classified trusted device identity"));
 }
@@ -66,6 +70,10 @@ fn rustc_half_math_source_fails_closed_on_another_target() {
     assert!(
         stderr.contains("requires the exact gfx942 floating-point profile"),
         "wrong-target source missed the target gate:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("MIR is unavailable for a device-reachable item"),
+        "wrong-target handling was preempted by unresolved half authentication:\n{stderr}"
     );
     assert!(!stderr.contains("selected kernel-ir-v1: verified"));
 }

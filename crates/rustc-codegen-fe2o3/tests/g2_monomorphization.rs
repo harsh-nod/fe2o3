@@ -375,8 +375,16 @@ fn collector_rejects_non_direct_constants_aliases_and_lookalikes() {
             "local_const_unsupported",
             "indirect function-pointer calls are not permitted",
         ),
+        (
+            "local_add_spoof",
+            "generic_add",
+            "indirect function-pointer calls are not permitted",
+        ),
     ] {
-        let args = ["-Zmir-opt-level=0", "--cfg", configuration];
+        let mut args = vec!["-Zmir-opt-level=0", "--cfg", configuration];
+        if configuration == "local_add_spoof" {
+            args.push("-Cpanic=abort");
+        }
         let result = compile_with_backend(
             &source,
             &format!("g2_{configuration}"),

@@ -13,6 +13,25 @@ fn invoke_indirect(function: fn(u32) -> u32, value: u32) -> u32 {
     function(value)
 }
 
+#[cfg(local_add_spoof)]
+struct LocalF16(u32);
+
+#[cfg(local_add_spoof)]
+impl core::ops::Add for LocalF16 {
+    type Output = Self;
+
+    #[inline(never)]
+    fn add(self, _rhs: Self) -> Self {
+        Self(invoke_indirect(identity, self.0))
+    }
+}
+
+#[cfg(local_add_spoof)]
+#[inline(never)]
+fn generic_add<T: core::ops::Add<Output = T>>(lhs: T, rhs: T) -> T {
+    lhs + rhs
+}
+
 #[inline(never)]
 fn address_space_violation(value: u32) -> u32 {
     let pointer = value as usize as *const u32;
@@ -87,6 +106,8 @@ pub fn fe2o3_kernel_dead_branches(seed: u32) -> u32 {
     return target_size(seed);
     #[cfg(local_const_address)]
     return local_const_address::<false>(seed);
+    #[cfg(local_add_spoof)]
+    return generic_add(LocalF16(seed), LocalF16(seed)).0;
     seed
 }
 
