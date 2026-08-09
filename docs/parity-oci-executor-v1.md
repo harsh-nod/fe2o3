@@ -154,10 +154,20 @@ non-group/world-writable. The launcher, interpreter, and executor must be
 root-owned, executable, single-link, non-group/world-writable, and
 Linux-immutable.
 
-After validation, the launcher calls `clearenv`, installs only `HOME`,
-`LC_ALL`, `PATH`, and `TZ` with fixed values, changes to `/`, sets umask `077`
-and `no_new_privs`, replaces stdin with `/dev/null`, and closes every inherited
-descriptor above stderr. It forks a retained native parent and executes only:
+Production execution is currently disabled after fixed-binary validation. The
+launcher requires a fixed writable cgroup v2 delegation at
+`/sys/fs/cgroup/fe2o3-oci-operator`, including trusted `cgroup.events`,
+`cgroup.kill`, and `cgroup.procs` controls. It still refuses execution when that
+root exists because Docker cgroup-parent binding and membership verification
+are not implemented. This second refusal is required: migrating the Python
+client does not migrate container processes created by the external Docker
+daemon.
+
+Test builds may explicitly define
+`FE2O3_TEST_ONLY_ALLOW_UNCONTAINED_EXECUTION=1`. That build calls `clearenv`,
+installs only `HOME`, `LC_ALL`, `PATH`, and `TZ`, changes to `/`, sets umask
+`077` and `no_new_privs`, replaces stdin with `/dev/null`, closes inherited
+descriptors, and executes only:
 
 ```text
 /usr/libexec/fe2o3-python/bin/python3 -I -S \
@@ -165,18 +175,27 @@ descriptor above stderr. It forks a retained native parent and executes only:
   COMMAND --request-id 64_LOWERCASE_HEX
 ```
 
-The native parent remains alive and binds child lifetime with `PDEATHSIG`. The
-Python executor independently requires that exact parent inode, interpreter,
-script, cwd, environment, isolated/no-site/ignore-environment flags, and Python
-search paths beneath `/usr/libexec/fe2o3-python`. Caller `PATH`, `PYTHONPATH`,
-`PYTHONHOME`, user site, startup files, and site customization are therefore
-outside the interpreter startup path.
+The test-only native parent uses `PDEATHSIG`, a child subreaper, process-group
+signaling, and bounded adopted-child draining. These controls are supplemental
+tests, not a containment boundary. `setsid`, daemon double-forking, rapid
+reforking, uninterruptible tasks, launcher death, and processes created by an
+external daemon can escape or exceed their bounded cleanup windows. No result
+from this test hook is production-authoritative.
 
-The current audit-only launcher gives its child a fixed 900-second monotonic
-deadline, followed by bounded TERM and KILL reap windows. It does not issue a
-final blocking wait. An uninterruptible kernel task can still outlive launcher
-return and is left for OS reparenting/reaping; this is not a hard real-time
-termination claim.
+A separate delegated test mode defines
+`FE2O3_TEST_ONLY_ALLOW_UNBOUND_RUNTIME=1` without enabling the uncontained
+escape. It still requires a real writable cgroup v2 root. The launcher creates
+a per-launch leaf, holds the child behind a socket gate, writes and verifies
+the child PID in `cgroup.procs`, requires `populated 1` before acknowledging
+execution, and uses `cgroup.kill` plus bounded `populated 0` observation before
+reaping and removing the leaf. This validates local process containment only;
+it does not authorize Docker use or claim daemon-created process membership.
+
+The Python executor independently requires the exact parent inode,
+interpreter, script, cwd, environment, isolated/no-site/ignore-environment
+flags, and Python search paths beneath `/usr/libexec/fe2o3-python`. Caller
+`PATH`, `PYTHONPATH`, `PYTHONHOME`, user site, startup files, and site
+customization are therefore outside the test interpreter startup path.
 
 `scripts/build-parity-oci-operator.sh /absolute/staging/path` requires compiler
 support for `-static-pie`, then rejects the result unless `readelf` reports ELF
@@ -324,15 +343,15 @@ failure rejects the snapshot with a controlled executor error.
 Unknown or trailing request fields are rejected, including any closure, image,
 runtime, environment, device, command, or isolation setting.
 
-Every current subprocess starts in a new process group with closed inherited
+Every current test subprocess starts in a new process group with closed inherited
 descriptors, a fixed environment, a protected timeout, and independent stdout
 and stderr ceilings. Overflow and timeout kill the process group. Reap polling
 and pipe-thread joins have bounded grace windows; there is no final unbounded
 `wait()`. If a process remains uninterruptible, the command returns a
 controlled failure and leaves eventual reaping to the OS/Python subprocess
-reaper. This is not a hard real-time guarantee: a kernel call or D-state task
-can still outlive the command. The native operator launcher itself waits for
-the audit-only Python child; there is still no container runtime invocation.
+reaper. This is not containment: a kernel call, detached descendant, or task
+created by the Docker daemon can outlive the command. There is still no
+production container runtime invocation.
 
 All descriptor closes, path resolution, staging finalization, and filesystem
 cleanup failures are normalized to controlled executor errors. Grouped closes
@@ -477,6 +496,39 @@ inbox, or fixed queue source authorization. Production CLI trust arguments do
 not exist. Therefore the
 repository source and current account cannot authorize a production request
 even before Docker access is considered.
+
+The host is on cgroup v2, but the current SSH session is in a root-owned
+`session-*.scope`. Neither that scope nor its parent is delegated writable to
+`harsh`, and `/sys/fs/cgroup/fe2o3-oci-operator` does not exist. Docker runs in
+the separate delegated `/system.slice/docker.service` cgroup. Therefore a
+launcher-owned process group or subreaper cannot contain Docker-created
+processes, and migrating only the Docker client would be insufficient.
+
+Production remains disabled until one reviewed change implements and tests all
+of the following as one boundary:
+
+1. Predelegate the fixed cgroup v2 root to the immutable operator identity.
+2. Create one collision-resistant leaf per request before any executor code
+   runs; hold the child behind a synchronization gate, migrate it through
+   `cgroup.procs`, and verify membership before `execve`.
+3. Pass that immutable leaf as Docker's protected cgroup parent, then inspect
+   the created container PID and verify its cgroup membership before start.
+4. On every timeout, error, signal, or normal return, write `1` to the leaf's
+   `cgroup.kill`, require bounded `cgroup.events` observation of `populated 0`,
+   reap direct/adopted children as supplemental cleanup, and remove the empty
+   leaf. Any failed write, observation, or removal is a hard failure.
+5. Run adversarial `setsid`, double-fork, rapid-refork, launcher-death, and
+   Docker-daemon-created process tests inside a real delegated cgroup. A fake
+   filesystem fixture cannot establish this claim.
+
+Ordinary SSH sessions can test the real refusal path. An ephemeral
+`systemd-run --user --scope -p Delegate=yes` scope provides a real writable
+test cgroup, so the focused suite also validates pre-exec membership, direct
+children, `setsid`, double-fork, bounded fork pressure, continuous rapid
+reforking, `cgroup.kill`, `populated 0`, and leaf removal there. This delegated
+user scope still has no Docker socket authority and cannot bind processes
+created under `/system.slice/docker.service`; it is not a production fixture.
+Production builds enable neither test escape hatch.
 
 Do not add `harsh` to the general Docker group merely to unblock evidence:
 Docker daemon access is effectively root authority. Provision a dedicated

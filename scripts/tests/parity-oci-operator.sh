@@ -13,6 +13,7 @@ readonly TEST_ROOT
 readonly CONFIG_ROOT="${TEST_ROOT}/operator"
 readonly CONFIG="${CONFIG_ROOT}/operator-v1.tsv"
 readonly CONFIG_DIGEST="${CONFIG_ROOT}/operator-v1.sha256"
+readonly DELEGATED_TEST_CGROUP_ROOT="${FE2O3_TEST_CGROUP_ROOT:-}"
 REQUEST_ID="$(printf '3%.0s' {1..64})"
 readonly REQUEST_ID
 
@@ -33,6 +34,20 @@ expect_failure() {
   fi
   if [[ "${output}" != *"${expected}"* ]]; then
     printf '%s failed for the wrong reason:\n%s\n' "${name}" "${output}" >&2
+    exit 1
+  fi
+}
+
+expect_status() {
+  local name="$1"
+  local expected_status="$2"
+  shift 2
+  local output
+  local status=0
+  output="$("$@" 2>&1)" || status=$?
+  if ((status != expected_status)); then
+    printf '%s returned status %d; expected %d:\n%s\n' \
+      "${name}" "${status}" "${expected_status}" "${output}" >&2
     exit 1
   fi
 }
@@ -72,11 +87,53 @@ assert_no_build_temporaries() {
   fi
 }
 
+assert_recorded_processes_gone() {
+  local name="$1"
+  local pid_file="$2"
+  local minimum_count="$3"
+  local -a recorded_pids=()
+  local process_id
+  if [[ ! -s "${pid_file}" ]]; then
+    printf '%s did not record any process IDs\n' "${name}" >&2
+    exit 1
+  fi
+  mapfile -t recorded_pids <"${pid_file}"
+  if ((${#recorded_pids[@]} < minimum_count)); then
+    printf '%s recorded only %d process IDs; expected at least %d\n' \
+      "${name}" "${#recorded_pids[@]}" "${minimum_count}" >&2
+    exit 1
+  fi
+  for process_id in "${recorded_pids[@]}"; do
+    if [[ ! "${process_id}" =~ ^[1-9][0-9]*$ ]]; then
+      printf '%s recorded malformed process ID: %s\n' \
+        "${name}" "${process_id}" >&2
+      exit 1
+    fi
+    if [[ -e "/proc/${process_id}" ]] || kill -0 "${process_id}" 2>/dev/null; then
+      printf '%s left process %s alive or unreaped\n' \
+        "${name}" "${process_id}" >&2
+      exit 1
+    fi
+  done
+}
+
 compile_test_launcher() {
   local output="$1"
   local interpreter="$2"
   local executor="$3"
   local timeout_seconds="${4:-30}"
+  local allow_uncontained="${5:-1}"
+  local allow_unbound_runtime="${6:-0}"
+  local cgroup_root="${7:-/sys/fs/cgroup/fe2o3-oci-operator}"
+  if [[ "${allow_uncontained}" != 0 && "${allow_uncontained}" != 1 ]]; then
+    printf 'invalid test-only containment escape value\n' >&2
+    exit 1
+  fi
+  if [[ "${allow_unbound_runtime}" != 0 && \
+    "${allow_unbound_runtime}" != 1 ]]; then
+    printf 'invalid test-only runtime binding escape value\n' >&2
+    exit 1
+  fi
   /usr/bin/cc \
     -std=c11 -O2 -fPIE -static-pie \
     -Wall -Wextra -Werror -Wconversion -Wformat=2 -Wshadow \
@@ -88,9 +145,24 @@ compile_test_launcher() {
     "-DFE2O3_EXPECTED_GID=$(id -g)" \
     -DFE2O3_REQUIRE_IMMUTABLE=0 \
     "-DFE2O3_CHILD_TIMEOUT_SECONDS=${timeout_seconds}" \
+    -DFE2O3_TERM_GRACE_MILLISECONDS=250 \
+    -DFE2O3_KILL_GRACE_MILLISECONDS=4000 \
+    "-DFE2O3_CGROUP_ROOT=\"${cgroup_root}\"" \
+    "-DFE2O3_TEST_ONLY_ALLOW_UNCONTAINED_EXECUTION=${allow_uncontained}" \
+    "-DFE2O3_TEST_ONLY_ALLOW_UNBOUND_RUNTIME=${allow_unbound_runtime}" \
     "${LAUNCHER_SOURCE}" -o "${output}"
   chmod 0555 "${output}"
   assert_static_pie "${output}"
+}
+
+compile_contained_launcher() {
+  local output="$1"
+  local interpreter="$2"
+  local executor="$3"
+  local timeout_seconds="$4"
+  compile_test_launcher \
+    "${output}" "${interpreter}" "${executor}" "${timeout_seconds}" 0 1 \
+    "${DELEGATED_TEST_CGROUP_ROOT}"
 }
 
 mkdir -m 755 "${CONFIG_ROOT}"
@@ -314,6 +386,7 @@ Path("${PROBE_OUTPUT}").write_text(
             ),
             "no_new_privs": no_new_privs,
             "parent": parent,
+            "cgroup": Path("/proc/self/cgroup").read_text(encoding="ascii"),
             "stdin_rdev": os.fstat(0).st_rdev,
             "umask": old_umask,
         }
@@ -325,6 +398,35 @@ chmod 0555 "${PROBE}"
 
 readonly TEST_LAUNCHER="${TEST_ROOT}/test-operator"
 compile_test_launcher "${TEST_LAUNCHER}" "${TEST_INTERPRETER}" "${PROBE}"
+readonly PRODUCTION_GATE_ROOT="/sys/fs/cgroup/fe2o3-oci-operator"
+readonly PRODUCTION_GATE_LAUNCHER="${TEST_ROOT}/production-gate-operator"
+if [[ -e "${PRODUCTION_GATE_ROOT}" ]]; then
+  printf 'test host unexpectedly has the production cgroup root provisioned\n' >&2
+  exit 1
+fi
+compile_test_launcher \
+  "${PRODUCTION_GATE_LAUNCHER}" "${TEST_INTERPRETER}" "${PROBE}" 30 0 0 \
+  "${PRODUCTION_GATE_ROOT}"
+expect_failure undelegated_production_cgroup \
+  'production execution disabled: predelegated cgroup v2 root is unavailable' \
+  "${PRODUCTION_GATE_LAUNCHER}" verify --request-id "${REQUEST_ID}"
+if [[ -z "${DELEGATED_TEST_CGROUP_ROOT}" ]]; then
+  CURRENT_CGROUP_ROOT="/sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup)"
+  readonly CURRENT_CGROUP_ROOT
+  readonly CURRENT_CGROUP_GATE_LAUNCHER=\
+"${TEST_ROOT}/current-cgroup-gate-operator"
+  if [[ ! -d "${CURRENT_CGROUP_ROOT}" ]] ||
+    [[ -w "${CURRENT_CGROUP_ROOT}" ]]; then
+    printf 'ordinary test session is not the expected undelegated cgroup\n' >&2
+    exit 1
+  fi
+  compile_test_launcher \
+    "${CURRENT_CGROUP_GATE_LAUNCHER}" "${TEST_INTERPRETER}" "${PROBE}" \
+    30 0 0 "${CURRENT_CGROUP_ROOT}"
+  expect_failure unwritable_session_cgroup \
+    'production execution disabled: predelegated cgroup v2 root is unavailable' \
+    "${CURRENT_CGROUP_GATE_LAUNCHER}" verify --request-id "${REQUEST_ID}"
+fi
 mkdir -m 755 "${TEST_ROOT}/malicious" "${TEST_ROOT}/fake-bin"
 readonly SITECUSTOMIZE_MARKER="${TEST_ROOT}/sitecustomize-executed"
 readonly PATH_MARKER="${TEST_ROOT}/path-python-executed"
@@ -430,6 +532,40 @@ expect_failure interpreter_symlink 'fixed executable path' \
 rm "${TEST_INTERPRETER}"
 mv "${TEST_ROOT}/python3.real" "${TEST_INTERPRETER}"
 
+if [[ -n "${DELEGATED_TEST_CGROUP_ROOT}" ]]; then
+  if [[ "${DELEGATED_TEST_CGROUP_ROOT}" != /sys/fs/cgroup/* ]] ||
+    [[ ! -d "${DELEGATED_TEST_CGROUP_ROOT}" ]] ||
+    [[ ! -w "${DELEGATED_TEST_CGROUP_ROOT}" ]]; then
+    printf 'delegated test cgroup root is not a writable cgroup v2 path\n' >&2
+    exit 1
+  fi
+
+readonly CONTAINED_SUCCESS_LAUNCHER="${TEST_ROOT}/contained-success-operator"
+readonly DELEGATED_PRODUCTION_GATE_LAUNCHER=\
+"${TEST_ROOT}/delegated-production-gate-operator"
+compile_test_launcher \
+  "${DELEGATED_PRODUCTION_GATE_LAUNCHER}" "${TEST_INTERPRETER}" "${PROBE}" \
+  5 0 0 "${DELEGATED_TEST_CGROUP_ROOT}"
+expect_failure delegated_runtime_membership_gate \
+  'production execution disabled: OCI runtime cgroup-parent binding and membership verification are not implemented' \
+  "${DELEGATED_PRODUCTION_GATE_LAUNCHER}" verify --request-id "${REQUEST_ID}"
+compile_contained_launcher \
+  "${CONTAINED_SUCCESS_LAUNCHER}" "${TEST_INTERPRETER}" "${PROBE}" 5
+"${CONTAINED_SUCCESS_LAUNCHER}" verify --request-id "${REQUEST_ID}"
+if ! PYTHONDONTWRITEBYTECODE=1 python3 - "${PROBE_OUTPUT}" <<'PY'
+import ast
+from pathlib import Path
+import re
+import sys
+
+state = ast.literal_eval(Path(sys.argv[1]).read_text(encoding="ascii"))
+if not re.fullmatch(r"0::.*/launcher-[1-9][0-9]*\n", state["cgroup"]):
+    raise SystemExit("executor did not observe its verified launcher cgroup")
+PY
+then
+  exit 1
+fi
+
 readonly HANG_PROBE="${TEST_ROOT}/hang-probe.py"
 readonly HANG_PID="${TEST_ROOT}/hang.pid"
 cat >"${HANG_PROBE}" <<EOF
@@ -446,13 +582,238 @@ while True:
 EOF
 chmod 0555 "${HANG_PROBE}"
 readonly HANG_LAUNCHER="${TEST_ROOT}/hang-operator"
-compile_test_launcher \
+compile_contained_launcher \
   "${HANG_LAUNCHER}" "${TEST_INTERPRETER}" "${HANG_PROBE}" 1
 expect_failure bounded_launcher_wait 'exceeded bounded launcher lifetime' \
   "${HANG_LAUNCHER}" verify --request-id "${REQUEST_ID}"
-if [[ ! -s "${HANG_PID}" ]] || kill -0 "$(<"${HANG_PID}")" 2>/dev/null; then
-  printf 'bounded launcher left its interruptible child alive\n' >&2
+assert_recorded_processes_gone direct_timeout "${HANG_PID}" 1
+
+readonly SETSID_PROBE="${TEST_ROOT}/setsid-probe.py"
+readonly SETSID_DIRECT_PIDS="${TEST_ROOT}/setsid-direct.pids"
+readonly SETSID_DESCENDANT_PIDS="${TEST_ROOT}/setsid-descendant.pids"
+cat >"${SETSID_PROBE}" <<EOF
+#!/usr/bin/python3
+import os
+from pathlib import Path
+import signal
+import time
+
+Path("${SETSID_DIRECT_PIDS}").write_text(f"{os.getpid()}\n", encoding="ascii")
+child = os.fork()
+if child == 0:
+    os.setsid()
+    Path("${SETSID_DESCENDANT_PIDS}").write_text(
+        f"{os.getpid()}\n", encoding="ascii"
+    )
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    while True:
+        time.sleep(1)
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+while True:
+    time.sleep(1)
+EOF
+chmod 0555 "${SETSID_PROBE}"
+readonly SETSID_LAUNCHER="${TEST_ROOT}/setsid-operator"
+compile_contained_launcher \
+  "${SETSID_LAUNCHER}" "${TEST_INTERPRETER}" "${SETSID_PROBE}" 1
+expect_failure setsid_descendant_timeout 'exceeded bounded launcher lifetime' \
+  "${SETSID_LAUNCHER}" verify --request-id "${REQUEST_ID}"
+assert_recorded_processes_gone setsid_direct "${SETSID_DIRECT_PIDS}" 1
+assert_recorded_processes_gone \
+  setsid_descendant "${SETSID_DESCENDANT_PIDS}" 1
+
+readonly ERROR_EXIT_PROBE="${TEST_ROOT}/error-exit-probe.py"
+readonly ERROR_EXIT_DIRECT_PIDS="${TEST_ROOT}/error-exit-direct.pids"
+readonly ERROR_EXIT_DESCENDANT_PIDS="${TEST_ROOT}/error-exit-descendant.pids"
+cat >"${ERROR_EXIT_PROBE}" <<EOF
+#!/usr/bin/python3
+import os
+from pathlib import Path
+import signal
+import time
+
+Path("${ERROR_EXIT_DIRECT_PIDS}").write_text(
+    f"{os.getpid()}\n", encoding="ascii"
+)
+read_fd, write_fd = os.pipe()
+child = os.fork()
+if child == 0:
+    os.close(read_fd)
+    os.setsid()
+    Path("${ERROR_EXIT_DESCENDANT_PIDS}").write_text(
+        f"{os.getpid()}\n", encoding="ascii"
+    )
+    os.write(write_fd, b"R")
+    os.close(write_fd)
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    while True:
+        time.sleep(1)
+os.close(write_fd)
+if os.read(read_fd, 1) != b"R":
+    os._exit(96)
+os.close(read_fd)
+os._exit(17)
+EOF
+chmod 0555 "${ERROR_EXIT_PROBE}"
+readonly ERROR_EXIT_LAUNCHER="${TEST_ROOT}/error-exit-operator"
+compile_contained_launcher \
+  "${ERROR_EXIT_LAUNCHER}" "${TEST_INTERPRETER}" "${ERROR_EXIT_PROBE}" 5
+expect_status descendant_after_executor_error 17 \
+  "${ERROR_EXIT_LAUNCHER}" verify --request-id "${REQUEST_ID}"
+assert_recorded_processes_gone \
+  error_exit_direct "${ERROR_EXIT_DIRECT_PIDS}" 1
+assert_recorded_processes_gone \
+  error_exit_descendant "${ERROR_EXIT_DESCENDANT_PIDS}" 1
+
+readonly DOUBLE_FORK_PROBE="${TEST_ROOT}/double-fork-probe.py"
+readonly DOUBLE_FORK_DIRECT_PIDS="${TEST_ROOT}/double-fork-direct.pids"
+readonly DOUBLE_FORK_DESCENDANT_PIDS="${TEST_ROOT}/double-fork-descendant.pids"
+cat >"${DOUBLE_FORK_PROBE}" <<EOF
+#!/usr/bin/python3
+import os
+from pathlib import Path
+import signal
+import time
+
+Path("${DOUBLE_FORK_DIRECT_PIDS}").write_text(
+    f"{os.getpid()}\n", encoding="ascii"
+)
+first = os.fork()
+if first == 0:
+    os.setsid()
+    file_fd = os.open(
+        "${DOUBLE_FORK_DESCENDANT_PIDS}",
+        os.O_WRONLY | os.O_CREAT | os.O_APPEND,
+        0o600,
+    )
+    os.write(file_fd, f"{os.getpid()}\n".encode("ascii"))
+    os.close(file_fd)
+    second = os.fork()
+    if second > 0:
+        os._exit(0)
+    file_fd = os.open(
+        "${DOUBLE_FORK_DESCENDANT_PIDS}", os.O_WRONLY | os.O_APPEND
+    )
+    os.write(file_fd, f"{os.getpid()}\n".encode("ascii"))
+    os.close(file_fd)
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    while True:
+        time.sleep(1)
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+while True:
+    time.sleep(1)
+EOF
+chmod 0555 "${DOUBLE_FORK_PROBE}"
+readonly DOUBLE_FORK_LAUNCHER="${TEST_ROOT}/double-fork-operator"
+compile_contained_launcher \
+  "${DOUBLE_FORK_LAUNCHER}" "${TEST_INTERPRETER}" \
+  "${DOUBLE_FORK_PROBE}" 1
+expect_failure double_fork_timeout 'exceeded bounded launcher lifetime' \
+  "${DOUBLE_FORK_LAUNCHER}" verify --request-id "${REQUEST_ID}"
+assert_recorded_processes_gone \
+  double_fork_direct "${DOUBLE_FORK_DIRECT_PIDS}" 1
+assert_recorded_processes_gone \
+  double_fork_descendants "${DOUBLE_FORK_DESCENDANT_PIDS}" 2
+
+readonly FORK_PRESSURE_PROBE="${TEST_ROOT}/fork-pressure-probe.py"
+readonly FORK_PRESSURE_DIRECT_PIDS="${TEST_ROOT}/fork-pressure-direct.pids"
+readonly FORK_PRESSURE_DESCENDANT_PIDS="${TEST_ROOT}/fork-pressure-descendant.pids"
+readonly FORK_PRESSURE_READY="${TEST_ROOT}/fork-pressure.ready"
+cat >"${FORK_PRESSURE_PROBE}" <<EOF
+#!/usr/bin/python3
+import os
+from pathlib import Path
+import signal
+import time
+
+Path("${FORK_PRESSURE_DIRECT_PIDS}").write_text(
+    f"{os.getpid()}\n", encoding="ascii"
+)
+for index in range(64):
+    child = os.fork()
+    if child == 0:
+        if index % 2 == 1:
+            os.setsid()
+        file_fd = os.open(
+            "${FORK_PRESSURE_DESCENDANT_PIDS}",
+            os.O_WRONLY | os.O_CREAT | os.O_APPEND,
+            0o600,
+        )
+        try:
+            os.write(file_fd, f"{os.getpid()}\n".encode("ascii"))
+        finally:
+            os.close(file_fd)
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        while True:
+            time.sleep(1)
+Path("${FORK_PRESSURE_READY}").write_text("ready\n", encoding="ascii")
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+while True:
+    time.sleep(1)
+EOF
+chmod 0555 "${FORK_PRESSURE_PROBE}"
+readonly FORK_PRESSURE_LAUNCHER="${TEST_ROOT}/fork-pressure-operator"
+compile_contained_launcher \
+  "${FORK_PRESSURE_LAUNCHER}" "${TEST_INTERPRETER}" \
+  "${FORK_PRESSURE_PROBE}" 2
+fork_pressure_start="$(date +%s%3N)"
+expect_failure fork_pressure_timeout 'exceeded bounded launcher lifetime' \
+  "${FORK_PRESSURE_LAUNCHER}" verify --request-id "${REQUEST_ID}"
+fork_pressure_elapsed=$(($(date +%s%3N) - fork_pressure_start))
+readonly fork_pressure_elapsed
+if [[ ! -s "${FORK_PRESSURE_READY}" ]] || ((fork_pressure_elapsed > 9000)); then
+  printf 'fork-pressure cleanup was incomplete or exceeded its bound: %d ms\n' \
+    "${fork_pressure_elapsed}" >&2
   exit 1
+fi
+assert_recorded_processes_gone \
+  fork_pressure_direct "${FORK_PRESSURE_DIRECT_PIDS}" 1
+assert_recorded_processes_gone \
+  fork_pressure_descendants "${FORK_PRESSURE_DESCENDANT_PIDS}" 64
+
+readonly REFORK_PROBE="${TEST_ROOT}/rapid-refork-probe.py"
+readonly REFORK_DIRECT_PIDS="${TEST_ROOT}/rapid-refork-direct.pids"
+readonly REFORK_READY="${TEST_ROOT}/rapid-refork.ready"
+cat >"${REFORK_PROBE}" <<EOF
+#!/usr/bin/python3
+import os
+from pathlib import Path
+
+Path("${REFORK_DIRECT_PIDS}").write_text(
+    f"{os.getpid()}\n", encoding="ascii"
+)
+completed = 0
+while True:
+    child = os.fork()
+    if child == 0:
+        os._exit(0)
+    os.waitpid(child, 0)
+    completed += 1
+    if completed == 64:
+        Path("${REFORK_READY}").write_text("ready\n", encoding="ascii")
+EOF
+chmod 0555 "${REFORK_PROBE}"
+readonly REFORK_LAUNCHER="${TEST_ROOT}/rapid-refork-operator"
+compile_contained_launcher \
+  "${REFORK_LAUNCHER}" "${TEST_INTERPRETER}" "${REFORK_PROBE}" 2
+refork_start="$(date +%s%3N)"
+expect_failure rapid_refork_timeout 'exceeded bounded launcher lifetime' \
+  "${REFORK_LAUNCHER}" verify --request-id "${REQUEST_ID}"
+refork_elapsed=$(($(date +%s%3N) - refork_start))
+readonly refork_elapsed
+if [[ ! -s "${REFORK_READY}" ]] || ((refork_elapsed > 9000)); then
+  printf 'rapid-refork cgroup cleanup failed or exceeded its bound: %d ms\n' \
+    "${refork_elapsed}" >&2
+  exit 1
+fi
+assert_recorded_processes_gone \
+  rapid_refork_direct "${REFORK_DIRECT_PIDS}" 1
+
+if find "${DELEGATED_TEST_CGROUP_ROOT}" -mindepth 1 -maxdepth 1 \
+  -name 'launcher-*' -print -quit | grep -q .; then
+  printf 'launcher left a delegated test cgroup behind\n' >&2
+  exit 1
+fi
 fi
 
 expect_failure production_cli_removed 'invalid choice' "${EXECUTOR}" verify
@@ -504,4 +865,4 @@ PY
 rm "${CONFIG}"
 mv "${TEST_ROOT}/config.real" "${CONFIG}"
 
-printf 'parity OCI operator boundary tests passed\n'
+printf 'parity OCI operator focused tests passed\n'
