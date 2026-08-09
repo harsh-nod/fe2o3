@@ -183,6 +183,8 @@ require_text "${GENERIC_WORKFLOW}" 'BASE_SHA="$(git rev-parse --verify "${DEFAUL
 require_text "${GENERIC_WORKFLOW}" 'git merge-base --is-ancestor "${BASE_SHA}" "${HEAD_SHA}"'
 require_text "${GENERIC_WORKFLOW}" 'non-default branch head does not contain current protected default tip'
 require_text "${GENERIC_WORKFLOW}" 'git diff --quiet "${BASE_SHA}" "${HEAD_SHA}"'
+require_text "${GENERIC_WORKFLOW}" 'docs/parity-evidence/archive/'
+require_text "${GENERIC_WORKFLOW}" 'parity evidence archive changed without a signed status promotion'
 require_text "${GENERIC_WORKFLOW}" 'missing or zero parity base SHA'
 require_text "${GENERIC_WORKFLOW}" 'actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683'
 require_text "${HARDWARE_WORKFLOW}" 'actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683'
@@ -311,6 +313,37 @@ expect_failure projection_without_status \
   bash "${CHANGE_POLICY}" "${policy_args[@]}"
 cp "${PROTECTED}/docs/cuda-oxide-parity-matrix.md" \
   "${CANDIDATE}/docs/cuda-oxide-parity-matrix.md"
+printf '%s\n' '[{"filename":"scripts/parity-signed-evidence.py"}]' >"${FILES}"
+
+mkdir -p "${PROTECTED}/docs/parity-evidence/archive/history" \
+  "${CANDIDATE}/docs/parity-evidence/archive/history"
+printf 'protected evidence\n' \
+  >"${PROTECTED}/docs/parity-evidence/archive/history/prior.tsv"
+cp "${PROTECTED}/docs/parity-evidence/archive/history/prior.tsv" \
+  "${CANDIDATE}/docs/parity-evidence/archive/history/prior.tsv"
+printf 'unbound evidence\n' \
+  >"${CANDIDATE}/docs/parity-evidence/archive/unbound.tsv"
+printf '%s\n' '[{"filename":"docs/parity-evidence/archive/unbound.tsv"}]' >"${FILES}"
+expect_failure archive_only_add \
+  'parity evidence archive may change only with a signed status promotion' \
+  bash "${CHANGE_POLICY}" "${policy_args[@]}"
+rm "${CANDIDATE}/docs/parity-evidence/archive/unbound.tsv"
+
+printf 'mutated evidence\n' \
+  >"${CANDIDATE}/docs/parity-evidence/archive/history/prior.tsv"
+printf '%s\n' '[{"filename":"docs/parity-evidence/archive/history/prior.tsv"}]' >"${FILES}"
+expect_failure archive_only_modify \
+  'parity evidence archive may change only with a signed status promotion' \
+  bash "${CHANGE_POLICY}" "${policy_args[@]}"
+cp "${PROTECTED}/docs/parity-evidence/archive/history/prior.tsv" \
+  "${CANDIDATE}/docs/parity-evidence/archive/history/prior.tsv"
+
+rm "${CANDIDATE}/docs/parity-evidence/archive/history/prior.tsv"
+expect_failure archive_only_delete \
+  'parity evidence archive may change only with a signed status promotion' \
+  bash "${CHANGE_POLICY}" "${policy_args[@]}"
+cp "${PROTECTED}/docs/parity-evidence/archive/history/prior.tsv" \
+  "${CANDIDATE}/docs/parity-evidence/archive/history/prior.tsv"
 printf '%s\n' '[{"filename":"scripts/parity-signed-evidence.py"}]' >"${FILES}"
 
 printf 'candidate verifier\n' >"${CANDIDATE}/scripts/parity-signed-evidence.py"

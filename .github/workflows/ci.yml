@@ -74,6 +74,10 @@ jobs:
             exit 2
           fi
           if git diff --quiet "${BASE_SHA}" "${HEAD_SHA}" -- docs/cuda-oxide-parity-status.tsv; then
+            if ! git diff --quiet "${BASE_SHA}" "${HEAD_SHA}" -- docs/parity-evidence/archive/; then
+              printf 'parity evidence archive changed without a signed status promotion\n' >&2
+              exit 2
+            fi
             exit 0
           fi
 

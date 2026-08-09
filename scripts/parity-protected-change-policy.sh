@@ -47,6 +47,7 @@ readonly -a TRUST_FILES=(
   .github/parity-trust-reviewers.txt
 )
 readonly TRUST_KEY_DIRECTORY=docs/parity-evidence/trusted-keys
+readonly EVIDENCE_ARCHIVE=docs/parity-evidence/archive
 readonly PROMOTION_LEDGER=docs/generated/cuda-oxide-parity-signed-promotions.tsv
 readonly -a PROMOTION_PROJECTIONS=(
   docs/cuda-oxide-parity-matrix.md
@@ -169,8 +170,15 @@ if directory_changed "${TRUST_KEY_DIRECTORY}"; then
   trust_changed=true
 fi
 
+archive_changed=false
+if directory_changed "${EVIDENCE_ARCHIVE}"; then
+  archive_changed=true
+fi
+
 if [[ "${trust_changed}" == true ]]; then
   [[ "${status_changed}" == false ]] || die 'trust changes must not include parity status changes'
+  [[ "${archive_changed}" == false ]] ||
+    die 'trust changes must not include parity evidence archive changes'
   if [[ "${projection_changed}" == true ]]; then
     [[ ! -e "${PROTECTED_ROOT}/${PROMOTION_LEDGER}" &&
       -f "${CANDIDATE_ROOT}/${PROMOTION_LEDGER}" &&
@@ -213,6 +221,8 @@ if [[ "${trust_changed}" == true ]]; then
   printf 'trust-change-approved\n'
 elif [[ "${status_changed}" == true ]]; then
   printf 'promotion\n'
+elif [[ "${archive_changed}" == true ]]; then
+  die 'parity evidence archive may change only with a signed status promotion'
 elif [[ "${projection_changed}" == true ]]; then
   die 'parity projections may change only with a signed status promotion'
 else
