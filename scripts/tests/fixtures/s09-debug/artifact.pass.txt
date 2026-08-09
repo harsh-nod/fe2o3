@@ -1,0 +1,15 @@
+File: /evidence/alpha.hsaco
+Format: elf64-amdgpu
+Arch: amdgcn
+AddressSize: 64bit
+AMDGPU Metadata: ---
+amdhsa.kernels:
+  - .name:           alpha
+    .symbol:         alpha.kd
+  - .name:           zeta
+    .symbol:         zeta.kd
+amdhsa.target:   'amdgcn-amd-amdhsa--gfx942:xnack-'
+amdhsa.version:
+  - 1
+  - 2
+...

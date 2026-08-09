@@ -1,0 +1,2087 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+umask 022
+
+REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+readonly REPO_ROOT
+readonly EXECUTOR="${REPO_ROOT}/scripts/parity-oci-executor.py"
+TEST_ROOT="$(mktemp -d)"
+readonly TEST_ROOT
+readonly TRUSTED_ROOT="${TEST_ROOT}/trusted"
+readonly SOURCE_REPO="${TEST_ROOT}/source"
+readonly OCI_LAYOUT="${TEST_ROOT}/image"
+readonly REQUEST="${TEST_ROOT}/request.tsv"
+readonly REQUEST_ID="3333333333333333333333333333333333333333333333333333333333333333"
+readonly QUEUE_AUTH_ROOT="${TEST_ROOT}/queue-authorization"
+readonly PROFILE="${TRUSTED_ROOT}/profiles/test-v1.tsv"
+readonly POLICY="${TRUSTED_ROOT}/policy.tsv"
+readonly SECCOMP="${TRUSTED_ROOT}/seccomp/default.json"
+readonly RUNTIME="${TEST_ROOT}/runtime"
+readonly SOURCE_STAGING="${TEST_ROOT}/staging/source"
+readonly OUTPUT_STAGING="${TEST_ROOT}/staging/output"
+readonly QUEUE_AUTH_SHA256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+readonly POLICY_IDENTITY="mi300x-test-policy-v1"
+
+cleanup() {
+  chmod -R u+w -- "${TEST_ROOT}" 2>/dev/null || true
+  rm -rf -- "${TEST_ROOT}"
+}
+trap cleanup EXIT
+
+sha256() {
+  sha256sum -- "$1" | cut -d' ' -f1
+}
+
+size() {
+  stat -c '%s' -- "$1"
+}
+
+write_source_authorization() {
+  local commit="$1"
+  local tree="$2"
+  python3 - \
+    "${REQUEST}" "${QUEUE_AUTH_ROOT}" "${REQUEST_ID}" \
+    "${QUEUE_AUTH_SHA256}" "${commit}" "${tree}" \
+    "${TEST_ROOT}/expected-readme" "${TEST_ROOT}/expected-job" <<'PY'
+import hashlib
+from pathlib import Path
+import sys
+
+(
+    request_text,
+    root_text,
+    request_id,
+    queue_digest,
+    commit,
+    tree,
+    readme_text,
+    job_text,
+) = sys.argv[1:]
+request = Path(request_text).read_bytes()
+entries = (
+    ("README.fixture", "100644", Path(readme_text).read_bytes()),
+    ("scripts/evidence/jobs/row-04.sh", "100755", Path(job_text).read_bytes()),
+)
+lines = [
+    "source_authorization_manifest_schema_version\t1",
+    f"source_commit\t{commit}",
+    f"source_tree\t{tree}",
+    f"file_count\t{len(entries)}",
+]
+for index, (path, mode, content) in enumerate(entries):
+    lines.append(
+        f"file\t{index:04d}\t{path}\t{mode}\t{len(content)}\t"
+        f"{hashlib.sha256(content).hexdigest()}"
+    )
+lines.append(f"source_bytes\t{sum(len(item[2]) for item in entries)}")
+body = ("\n".join(lines) + "\n").encode("ascii")
+source_root = hashlib.sha256(b"fe2o3-source-root-v1\0" + body).hexdigest()
+manifest = body + f"source_root_sha256\t{source_root}\n".encode("ascii")
+manifest_digest = hashlib.sha256(manifest).hexdigest()
+root = Path(root_text)
+root.mkdir(mode=0o755, exist_ok=True)
+(root / f"{request_id}.source.tsv").write_bytes(manifest)
+authorization = (
+    "oci_queue_source_authorization_schema_version\t1\n"
+    f"queue_trust_sha256\t{queue_digest}\n"
+    f"request_id\t{request_id}\n"
+    f"request_sha256\t{hashlib.sha256(request).hexdigest()}\n"
+    f"source_commit\t{commit}\n"
+    f"source_tree\t{tree}\n"
+    f"source_manifest_size\t{len(manifest)}\n"
+    f"source_manifest_sha256\t{manifest_digest}\n"
+    f"source_root_sha256\t{source_root}\n"
+).encode("ascii")
+(root / f"{request_id}.authorization.tsv").write_bytes(authorization)
+PY
+  chmod 644 \
+    "${QUEUE_AUTH_ROOT}/${REQUEST_ID}.authorization.tsv" \
+    "${QUEUE_AUTH_ROOT}/${REQUEST_ID}.source.tsv"
+}
+
+install_commit_object() {
+  local payload="$1"
+  python3 - "${SOURCE_REPO}/.git/objects" "${payload}" <<'PY'
+import hashlib
+from pathlib import Path
+import sys
+import zlib
+
+objects = Path(sys.argv[1])
+payload = Path(sys.argv[2]).read_bytes()
+expanded = f"commit {len(payload)}\0".encode("ascii") + payload
+object_id = hashlib.sha1(expanded).hexdigest()
+fanout = objects / object_id[:2]
+fanout.mkdir(mode=0o755, exist_ok=True)
+path = fanout / object_id[2:]
+path.write_bytes(zlib.compress(expanded))
+path.chmod(0o444)
+print(object_id)
+PY
+}
+
+write_request_for_commit() {
+  local commit="$1"
+  cat >"${REQUEST}" <<EOF
+oci_execution_request_schema_version	1
+request_id	${REQUEST_ID}
+profile_id	mi300x-test-v1
+source_commit	${commit}
+source_tree	${source_tree}
+job_id	row-04-hardware
+job_path	scripts/evidence/jobs/row-04.sh
+job_sha256	${job_digest}
+EOF
+  write_source_authorization "${commit}" "${source_tree}"
+}
+
+expect_failure() {
+  local name="$1"
+  local expected="$2"
+  shift 2
+  local output
+  if output="$("$@" 2>&1)"; then
+    printf 'expected %s to fail\n' "${name}" >&2
+    exit 1
+  fi
+  if [[ "${output}" != *"${expected}"* ]]; then
+    printf '%s failed for the wrong reason:\n%s\n' "${name}" "${output}" >&2
+    exit 1
+  fi
+}
+
+write_policy() {
+  local profile_digest
+  profile_digest="$(sha256 "${PROFILE}")"
+  {
+    printf 'oci_executor_policy_schema_version\t1\n'
+    printf 'trust_domain\ttest\n'
+    printf 'profile_count\t1\n'
+    printf 'profile\t0000\tmi300x-test-v1\tprofiles/test-v1.tsv\t%s\t%s\n' \
+      "$(size "${PROFILE}")" "${profile_digest}"
+  } >"${POLICY}"
+}
+
+write_profile() {
+  local manifest_digest="$1"
+  local manifest_size="$2"
+  local config_digest="$3"
+  local config_size="$4"
+  local layer_digest="$5"
+  local layer_size="$6"
+  cat >"${PROFILE}" <<EOF
+oci_executor_profile_schema_version	3
+profile_id	mi300x-test-v1
+execution_mode	test
+target	gfx942
+hardware_lane	mi300x-gfx942-test
+runtime_path	${RUNTIME}
+runtime_size	$(size "${RUNTIME}")
+runtime_sha256	$(sha256 "${RUNTIME}")
+runtime_version_sha256	3333333333333333333333333333333333333333333333333333333333333333
+runtime_info_sha256	4444444444444444444444444444444444444444444444444444444444444444
+git_objects_path	${SOURCE_REPO}/.git/objects
+git_object_format	sha1-loose
+git_object_limit	4096
+git_object_bytes_limit	33554432
+git_tree_depth_limit	64
+git_ancestry_limit	4096
+git_commit_depth_limit	64
+source_staging_root	${SOURCE_STAGING}
+output_staging_root	${OUTPUT_STAGING}
+artifact_stream_protocol	fe2o3-artifact-stream-v1
+source_file_limit	1024
+source_byte_limit	16777216
+source_index_limit	1048576
+operator_uid	$(id -u)
+operator_gid	$(id -g)
+oci_layout_path	${OCI_LAYOUT}
+oci_index_sha256	$(sha256 "${OCI_LAYOUT}/index.json")
+oci_index_size	$(size "${OCI_LAYOUT}/index.json")
+image_reference	example.invalid/fe2o3-evidence@sha256:${manifest_digest}
+image_manifest_digest	sha256:${manifest_digest}
+image_manifest_size	${manifest_size}
+image_config_digest	sha256:${config_digest}
+image_config_size	${config_size}
+image_layer_count	1
+image_layer	0000	sha256:${layer_digest}	${layer_size}
+entrypoint_count	1
+entrypoint	0000	/opt/fe2o3/bin/evidence-entrypoint
+command_count	2
+command	0000	--request
+command	0001	/run/fe2o3/request.tsv
+environment_count	6
+environment	0000	HIP_VISIBLE_DEVICES	36636564313634376132393635343563
+environment	0001	HOME	2f6e6f6e6578697374656e74
+environment	0002	HOSTNAME	6665326f332d65766964656e6365
+environment	0003	LC_ALL	43
+environment	0004	PATH	2f6f70742f6665326f332f62696e
+environment	0005	ROCR_VISIBLE_DEVICES	36636564313634376132393635343563
+source_mount	/workspace
+request_mount	/run/fe2o3/request.tsv
+output_mount	/evidence
+tmp_mount	/tmp
+output_limit_bytes	16777216
+tmp_limit_bytes	67108864
+shm_limit_bytes	33554432
+log_limit_bytes	4194304
+memory_limit_bytes	8589934592
+pids_limit	1024
+cpu_limit_milli	8000
+container_uid	65534
+container_gid	65534
+supplemental_gid	993
+network_mode	none
+read_only_root	true
+cap_drop	ALL
+no_new_privileges	true
+seccomp_profile_path	seccomp/default.json
+seccomp_profile_size	$(size "${SECCOMP}")
+seccomp_profile_sha256	$(sha256 "${SECCOMP}")
+device_count	2
+device	0000	/dev/dri/renderD128	226	128	rwm
+device	0001	/dev/kfd	235	0	rwm
+host_machine_id_sha256	0000000000000000000000000000000000000000000000000000000000000000
+host_kernel_release	6.8.0-test
+host_kernel_notes_sha256	1111111111111111111111111111111111111111111111111111111111111111
+amdgpu_module_path	/opt/test/amdgpu.ko
+amdgpu_module_sha256	2222222222222222222222222222222222222222222222222222222222222222
+gpu_pci_slot	0000:05:00.0
+gpu_pci_id	1002:74A1
+gpu_unique_id	6ced1647a296545c
+EOF
+  write_policy
+}
+
+install_image_config() {
+  local source="$1"
+  cp "${source}" "${TEST_ROOT}/config.json"
+  config_digest="$(sha256 "${TEST_ROOT}/config.json")"
+  cp "${TEST_ROOT}/config.json" "${OCI_LAYOUT}/blobs/sha256/${config_digest}"
+  printf '{"schemaVersion":2,"config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":"sha256:%s","size":%s},"layers":[{"mediaType":"application/vnd.oci.image.layer.v1.tar","digest":"sha256:%s","size":%s}]}\n' \
+    "${config_digest}" "$(size "${TEST_ROOT}/config.json")" \
+    "${layer_digest}" "$(size "${TEST_ROOT}/layer")" >"${TEST_ROOT}/manifest.json"
+  manifest_digest="$(sha256 "${TEST_ROOT}/manifest.json")"
+  cp "${TEST_ROOT}/manifest.json" "${OCI_LAYOUT}/blobs/sha256/${manifest_digest}"
+  printf '{"schemaVersion":2,"manifests":[{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"sha256:%s","size":%s}]}\n' \
+    "${manifest_digest}" "$(size "${TEST_ROOT}/manifest.json")" >"${OCI_LAYOUT}/index.json"
+  write_profile \
+    "${manifest_digest}" "$(size "${TEST_ROOT}/manifest.json")" \
+    "${config_digest}" "$(size "${TEST_ROOT}/config.json")" \
+    "${layer_digest}" "$(size "${TEST_ROOT}/layer")"
+}
+
+verify() {
+  "${EXECUTOR}" test-verify \
+    --test-request "${REQUEST}" \
+    --test-request-owner-uid "$(id -u)" \
+    --test-request-owner-gid "$(id -g)" \
+    --test-queue-trust-sha256 "${QUEUE_AUTH_SHA256}" \
+    --test-queue-authorization-root "${QUEUE_AUTH_ROOT}" \
+    --test-queue-authorization-owner-uid "$(id -u)" \
+    --test-queue-authorization-owner-gid "$(id -g)" \
+    --test-trusted-root "${TRUSTED_ROOT}" \
+    --test-policy policy.tsv \
+    --test-policy-identity "${POLICY_IDENTITY}" \
+    --test-policy-size "$(size "${POLICY}")" \
+    --test-policy-sha256 "$(sha256 "${POLICY}")" \
+    --test-trusted-owner-uid "$(id -u)" \
+    --test-trusted-owner-gid "$(id -g)" \
+    --test-trust-file-contract descriptor-stable
+}
+
+plan() {
+  PYTHONUNBUFFERED=1 "${EXECUTOR}" test-plan \
+    --test-request "${REQUEST}" \
+    --test-request-owner-uid "$(id -u)" \
+    --test-request-owner-gid "$(id -g)" \
+    --test-queue-trust-sha256 "${QUEUE_AUTH_SHA256}" \
+    --test-queue-authorization-root "${QUEUE_AUTH_ROOT}" \
+    --test-queue-authorization-owner-uid "$(id -u)" \
+    --test-queue-authorization-owner-gid "$(id -g)" \
+    --test-trusted-root "${TRUSTED_ROOT}" \
+    --test-policy policy.tsv \
+    --test-policy-identity "${POLICY_IDENTITY}" \
+    --test-policy-size "$(size "${POLICY}")" \
+    --test-policy-sha256 "$(sha256 "${POLICY}")" \
+    --test-trusted-owner-uid "$(id -u)" \
+    --test-trusted-owner-gid "$(id -g)" \
+    --test-trust-file-contract descriptor-stable
+}
+
+preflight() {
+  "${EXECUTOR}" test-preflight \
+    --test-request "${REQUEST}" \
+    --test-request-owner-uid "$(id -u)" \
+    --test-request-owner-gid "$(id -g)" \
+    --test-queue-trust-sha256 "${QUEUE_AUTH_SHA256}" \
+    --test-queue-authorization-root "${QUEUE_AUTH_ROOT}" \
+    --test-queue-authorization-owner-uid "$(id -u)" \
+    --test-queue-authorization-owner-gid "$(id -g)" \
+    --test-trusted-root "${TRUSTED_ROOT}" \
+    --test-policy policy.tsv \
+    --test-policy-identity "${POLICY_IDENTITY}" \
+    --test-policy-size "$(size "${POLICY}")" \
+    --test-policy-sha256 "$(sha256 "${POLICY}")" \
+    --test-trusted-owner-uid "$(id -u)" \
+    --test-trusted-owner-gid "$(id -g)" \
+    --test-trust-file-contract descriptor-stable
+}
+
+verify_request_path() {
+  local path="$1"
+  local owner_uid="${2:-$(id -u)}"
+  local owner_gid="${3:-$(id -g)}"
+  "${EXECUTOR}" test-verify \
+    --test-request "${path}" \
+    --test-request-owner-uid "${owner_uid}" \
+    --test-request-owner-gid "${owner_gid}" \
+    --test-queue-trust-sha256 "${QUEUE_AUTH_SHA256}" \
+    --test-queue-authorization-root "${QUEUE_AUTH_ROOT}" \
+    --test-queue-authorization-owner-uid "$(id -u)" \
+    --test-queue-authorization-owner-gid "$(id -g)" \
+    --test-trusted-root "${TRUSTED_ROOT}" \
+    --test-policy policy.tsv \
+    --test-policy-identity "${POLICY_IDENTITY}" \
+    --test-policy-size "$(size "${POLICY}")" \
+    --test-policy-sha256 "$(sha256 "${POLICY}")" \
+    --test-trusted-owner-uid "$(id -u)" \
+    --test-trusted-owner-gid "$(id -g)" \
+    --test-trust-file-contract descriptor-stable
+}
+
+mkdir -p "${TRUSTED_ROOT}/profiles" "${TRUSTED_ROOT}/seccomp" \
+  "${OCI_LAYOUT}/blobs/sha256" "${SOURCE_REPO}/scripts/evidence/jobs" \
+  "${SOURCE_STAGING}" "${OUTPUT_STAGING}"
+printf 'base fixture\n' >"${SOURCE_REPO}/README.fixture"
+printf '%s\n' '#!/usr/bin/env bash' 'set -Eeuo pipefail' 'printf ok > /evidence/result.txt' \
+  >"${SOURCE_REPO}/scripts/evidence/jobs/row-04.sh"
+chmod 755 "${SOURCE_REPO}/scripts/evidence/jobs/row-04.sh"
+git -C "${SOURCE_REPO}" init -q
+git -C "${SOURCE_REPO}" config user.name test
+git -C "${SOURCE_REPO}" config user.email test@example.invalid
+git -C "${SOURCE_REPO}" add README.fixture
+git -C "${SOURCE_REPO}" commit -qm base-fixture
+git -C "${SOURCE_REPO}" add scripts/evidence/jobs/row-04.sh
+git -C "${SOURCE_REPO}" commit -qm fixture
+cp "${SOURCE_REPO}/README.fixture" "${TEST_ROOT}/expected-readme"
+cp "${SOURCE_REPO}/scripts/evidence/jobs/row-04.sh" "${TEST_ROOT}/expected-job"
+printf '#!/usr/bin/env bash\nprintf executed > %q\n' "${TEST_ROOT}/fsmonitor-executed" \
+  >"${TEST_ROOT}/candidate-fsmonitor"
+chmod 755 "${TEST_ROOT}/candidate-fsmonitor"
+git -C "${SOURCE_REPO}" config core.fsmonitor "${TEST_ROOT}/candidate-fsmonitor"
+
+printf '#!/usr/bin/env bash\nprintf "fixture runtime access denied\\n" >&2\nexit 1\n' \
+  >"${RUNTIME}"
+chmod 755 "${RUNTIME}"
+printf '{"defaultAction":"SCMP_ACT_ERRNO","architectures":["SCMP_ARCH_X86_64"],"syscalls":[]}\n' \
+  >"${SECCOMP}"
+printf '{"imageLayoutVersion":"1.0.0"}\n' >"${OCI_LAYOUT}/oci-layout"
+printf 'layer-fixture\n' >"${TEST_ROOT}/layer"
+layer_digest="$(sha256 "${TEST_ROOT}/layer")"
+cp "${TEST_ROOT}/layer" "${OCI_LAYOUT}/blobs/sha256/${layer_digest}"
+printf '{"architecture":"amd64","os":"linux","rootfs":{"type":"layers","diff_ids":["sha256:%s"]},"config":{"Env":[]}}\n' \
+  "${layer_digest}" >"${TEST_ROOT}/config.base.json"
+install_image_config "${TEST_ROOT}/config.base.json"
+
+source_commit="$(git -C "${SOURCE_REPO}" rev-parse HEAD)"
+source_tree="$(git -C "${SOURCE_REPO}" rev-parse 'HEAD^{tree}')"
+job_digest="$(sha256 "${SOURCE_REPO}/scripts/evidence/jobs/row-04.sh")"
+cat >"${REQUEST}" <<EOF
+oci_execution_request_schema_version	1
+request_id	${REQUEST_ID}
+profile_id	mi300x-test-v1
+source_commit	${source_commit}
+source_tree	${source_tree}
+job_id	row-04-hardware
+job_path	scripts/evidence/jobs/row-04.sh
+job_sha256	${job_digest}
+EOF
+write_source_authorization "${source_commit}" "${source_tree}"
+
+output="$(verify)"
+grep -F $'matched_profile\tmi300x-test-v1' <<<"${output}" >/dev/null
+grep -F $'authorization_state\ttest-non-authoritative' <<<"${output}" >/dev/null
+
+printf '# candidate worktree mutation\n' >>"${SOURCE_REPO}/scripts/evidence/jobs/row-04.sh"
+plan_output="$(plan)"
+if [[ -e "${TEST_ROOT}/fsmonitor-executed" ]]; then
+  printf 'candidate Git fsmonitor executed during immutable export\n' >&2
+  exit 1
+fi
+authorization_digest="$(awk -F $'\t' '$1 == "authorization_sha256" { print $2 }' <<<"${plan_output}")"
+if [[ -z "${authorization_digest}" ]] || grep -F -- "${TEST_ROOT}" <<<"${plan_output}" >/dev/null || \
+  grep -E $'^(source_snapshot|source_manifest|request_snapshot|artifact_stream_path|stderr_stream_path|container_name|argument)\t' \
+    <<<"${plan_output}" >/dev/null; then
+  printf 'audit-only plan exposed a usable runtime or staging identity\n' >&2
+  exit 1
+fi
+if find "${SOURCE_STAGING}" "${OUTPUT_STAGING}" -mindepth 1 -print -quit | grep -q .; then
+  printf 'audit-only plan left staging entries behind\n' >&2
+  exit 1
+fi
+grep -F $'oci_execution_plan_schema_version\t2' <<<"${plan_output}" >/dev/null
+grep -F $'artifact_stream_protocol\tfe2o3-artifact-stream-v1' \
+  <<<"${plan_output}" >/dev/null
+grep -E $'^invocation_sha256\t[0-9a-f]{64}$' <<<"${plan_output}" >/dev/null
+plan >/dev/null
+if find "${SOURCE_STAGING}" "${OUTPUT_STAGING}" -mindepth 1 -print -quit | grep -q .; then
+  printf 'repeated plan retained an ephemeral staging lease\n' >&2
+  exit 1
+fi
+git -C "${SOURCE_REPO}" -c core.fsmonitor=false checkout -q -- \
+  scripts/evidence/jobs/row-04.sh
+
+mv "${QUEUE_AUTH_ROOT}/${REQUEST_ID}.source.tsv" \
+  "${TEST_ROOT}/source-manifest.missing"
+expect_failure missing_source_manifest 'cannot open fixed authorized source manifest' verify
+mv "${TEST_ROOT}/source-manifest.missing" \
+  "${QUEUE_AUTH_ROOT}/${REQUEST_ID}.source.tsv"
+
+cp "${QUEUE_AUTH_ROOT}/${REQUEST_ID}.source.tsv" \
+  "${TEST_ROOT}/source-manifest.good"
+printf '# candidate manifest mutation\n' \
+  >>"${QUEUE_AUTH_ROOT}/${REQUEST_ID}.source.tsv"
+expect_failure mutated_source_manifest \
+  'authorized source manifest differs from queue authorization' verify
+cp "${TEST_ROOT}/source-manifest.good" \
+  "${QUEUE_AUTH_ROOT}/${REQUEST_ID}.source.tsv"
+
+PYTHONDONTWRITEBYTECODE=1 python3 - \
+  "${EXECUTOR}" "${REQUEST}" "${TEST_ROOT}/expected-readme" \
+  "${TEST_ROOT}/expected-job" <<'PY'
+import hashlib
+import importlib.util
+from pathlib import Path
+import sys
+from types import SimpleNamespace
+
+module_path, request_path, readme_path, job_path = sys.argv[1:]
+spec = importlib.util.spec_from_file_location("source_manifest_collision_test", module_path)
+assert spec is not None and spec.loader is not None
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+
+request = module.parse_request(Path(request_path).read_bytes())
+readme = Path(readme_path).read_bytes()
+job = Path(job_path).read_bytes()
+expected = (
+    module.SourceManifestEntry(
+        "README.fixture", "100644", len(readme), hashlib.sha256(readme).hexdigest()
+    ),
+    module.SourceManifestEntry(
+        "scripts/evidence/jobs/row-04.sh",
+        "100755",
+        len(job),
+        hashlib.sha256(job).hexdigest(),
+    ),
+)
+manifest, root = module.canonical_source_manifest(
+    request.source_commit, request.source_tree, expected
+)
+authorization = module.SourceAuthorization(
+    len(manifest), hashlib.sha256(manifest).hexdigest(), root, manifest, expected
+)
+same_expected_sha1 = "4" * 40
+accepted = [
+    ("README.fixture", "100644", same_expected_sha1, readme),
+    ("scripts/evidence/jobs/row-04.sh", "100755", "5" * 40, job),
+]
+module.verify_exported_source(request, authorization, accepted)
+accepted[0] = (
+    "README.fixture",
+    "100644",
+    same_expected_sha1,
+    b"changed bytes with the same simulated SHA-1 object path\n",
+)
+try:
+    module.verify_exported_source(request, authorization, accepted)
+except module.ExecutorError as error:
+    assert "authorized SHA-256 manifest or root" in str(error)
+else:
+    raise AssertionError("same-SHA1-path changed bytes bypassed source SHA-256 authorization")
+
+
+def expect_manifest_rejection(raw, profile, expected_root, expected_message):
+    try:
+        module.parse_source_manifest(
+            raw,
+            profile,
+            request,
+            hashlib.sha256(raw).hexdigest(),
+            expected_root,
+        )
+    except module.ExecutorError as error:
+        assert expected_message in str(error)
+    else:
+        raise AssertionError(f"source manifest accepted: {expected_message}")
+
+
+profile = SimpleNamespace(
+    source_file_limit=len(expected),
+    source_byte_limit=sum(entry.size for entry in expected),
+)
+expect_manifest_rejection(
+    manifest,
+    SimpleNamespace(
+        source_file_limit=len(expected) - 1,
+        source_byte_limit=profile.source_byte_limit,
+    ),
+    root,
+    "metadata is malformed or mismatched",
+)
+expect_manifest_rejection(
+    manifest,
+    SimpleNamespace(
+        source_file_limit=profile.source_file_limit,
+        source_byte_limit=profile.source_byte_limit - 1,
+    ),
+    root,
+    "exceeds protected source byte limit",
+)
+unsafe_entries = (
+    module.SourceManifestEntry(
+        "../escape", "100644", len(readme), hashlib.sha256(readme).hexdigest()
+    ),
+)
+unsafe_manifest, unsafe_root = module.canonical_source_manifest(
+    request.source_commit, request.source_tree, unsafe_entries
+)
+expect_manifest_rejection(
+    unsafe_manifest,
+    profile,
+    unsafe_root,
+    "invalid file entry",
+)
+expect_manifest_rejection(
+    b"x" * (module.MAX_SOURCE_MANIFEST_BYTES + 1),
+    profile,
+    "0" * 64,
+    "invalid source authorization manifest size",
+)
+PY
+
+original_source_commit="${source_commit}"
+cat >"${TEST_ROOT}/missing-parent.commit" <<EOF
+tree ${source_tree}
+parent ffffffffffffffffffffffffffffffffffffffff
+author test <test@example.invalid> 1 +0000
+committer test <test@example.invalid> 1 +0000
+
+missing parent fixture
+EOF
+missing_parent_commit="$(install_commit_object "${TEST_ROOT}/missing-parent.commit")"
+write_request_for_commit "${missing_parent_commit}"
+expect_failure missing_parent_object 'cannot open Git object fanout ff' plan
+
+cat >"${TEST_ROOT}/malformed-parent.commit" <<EOF
+tree ${source_tree}
+parent FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
+author test <test@example.invalid> 1 +0000
+committer test <test@example.invalid> 1 +0000
+
+malformed parent fixture
+EOF
+malformed_parent_commit="$(install_commit_object "${TEST_ROOT}/malformed-parent.commit")"
+write_request_for_commit "${malformed_parent_commit}"
+expect_failure malformed_parent_id 'Git commit parent ID is malformed' plan
+
+cat >"${TEST_ROOT}/duplicate-parent.commit" <<EOF
+tree ${source_tree}
+parent ${original_source_commit}
+parent ${original_source_commit}
+author test <test@example.invalid> 1 +0000
+committer test <test@example.invalid> 1 +0000
+
+duplicate parent fixture
+EOF
+duplicate_parent_commit="$(install_commit_object "${TEST_ROOT}/duplicate-parent.commit")"
+write_request_for_commit "${duplicate_parent_commit}"
+expect_failure duplicate_parent 'Git commit contains a duplicate parent' plan
+
+cat >"${TEST_ROOT}/malformed-continuation.commit" <<EOF
+tree ${source_tree}
+author test <test@example.invalid> 1 +0000
+committer test <test@example.invalid> 1 +0000
+ orphaned continuation
+
+malformed continuation fixture
+EOF
+malformed_continuation_commit="$(
+  install_commit_object "${TEST_ROOT}/malformed-continuation.commit"
+)"
+write_request_for_commit "${malformed_continuation_commit}"
+expect_failure malformed_commit_continuation \
+  'Git commit contains a malformed header continuation' plan
+
+cat >"${TEST_ROOT}/invalid-ancestor.commit" <<EOF
+tree ${source_tree}
+author test <test@example.invalid> 1 +0000
+
+missing committer fixture
+EOF
+invalid_ancestor_commit="$(install_commit_object "${TEST_ROOT}/invalid-ancestor.commit")"
+cat >"${TEST_ROOT}/child-of-invalid.commit" <<EOF
+tree ${source_tree}
+parent ${invalid_ancestor_commit}
+author test <test@example.invalid> 1 +0000
+committer test <test@example.invalid> 1 +0000
+
+child fixture
+EOF
+child_of_invalid_commit="$(install_commit_object "${TEST_ROOT}/child-of-invalid.commit")"
+write_request_for_commit "${child_of_invalid_commit}"
+expect_failure malformed_parent_commit \
+  'Git commit committer header is missing or out of order' plan
+
+cat >"${TEST_ROOT}/deep-ancestry.commit" <<EOF
+tree ${source_tree}
+parent ${original_source_commit}
+author test <test@example.invalid> 1 +0000
+committer test <test@example.invalid> 1 +0000
+
+deep ancestry fixture
+EOF
+deep_ancestry_commit="$(install_commit_object "${TEST_ROOT}/deep-ancestry.commit")"
+write_request_for_commit "${deep_ancestry_commit}"
+cp "${PROFILE}" "${TEST_ROOT}/profile.ancestry.good"
+sed -i 's/git_commit_depth_limit	64/git_commit_depth_limit	1/' "${PROFILE}"
+write_policy
+expect_failure git_commit_depth \
+  'Git commit ancestry depth exceeds protected limit' plan
+cp "${TEST_ROOT}/profile.ancestry.good" "${PROFILE}"
+write_policy
+
+sed -i 's/git_ancestry_limit	4096/git_ancestry_limit	1/' "${PROFILE}"
+write_policy
+expect_failure git_ancestry_count \
+  'Git commit ancestry count exceeds protected limit' plan
+cp "${TEST_ROOT}/profile.ancestry.good" "${PROFILE}"
+write_policy
+write_request_for_commit "${original_source_commit}"
+plan >/dev/null
+
+job_object_id="$(git -C "${SOURCE_REPO}" rev-parse \
+  'HEAD:scripts/evidence/jobs/row-04.sh')"
+job_object="${SOURCE_REPO}/.git/objects/${job_object_id:0:2}/${job_object_id:2}"
+cp "${job_object}" "${TEST_ROOT}/job-object.good"
+chmod 644 "${job_object}"
+python3 - "${job_object}" <<'PY'
+from pathlib import Path
+import sys
+import zlib
+
+path = Path(sys.argv[1])
+expanded = zlib.decompress(path.read_bytes())
+header, payload = expanded.split(b"\0", 1)
+assert payload
+mutated = bytes([payload[0] ^ 1]) + payload[1:]
+path.write_bytes(zlib.compress(header + b"\0" + mutated))
+PY
+expect_failure git_same_oid_mutation 'Git object ID, kind, or size mismatch' plan
+cp "${TEST_ROOT}/job-object.good" "${job_object}"
+chmod 444 "${job_object}"
+
+printf '%s\n' "${TEST_ROOT}/alternate-objects" \
+  >"${SOURCE_REPO}/.git/objects/info/alternates"
+expect_failure git_alternates 'Git alternates, packed objects' plan
+rm "${SOURCE_REPO}/.git/objects/info/alternates"
+
+GIT_ALTERNATE_OBJECT_DIRECTORIES="${TEST_ROOT}/alternate-objects" \
+  expect_failure git_alternates_environment \
+    'Git object-store indirection environment is forbidden' plan
+GIT_OBJECT_DIRECTORY='' \
+  expect_failure empty_git_object_environment \
+    'Git object-store indirection environment is forbidden' plan
+
+ln "${job_object}" "${TEST_ROOT}/job-object.hardlink"
+expect_failure git_object_hardlink 'ownership, mode, type, or link contract is unsafe' plan
+rm "${TEST_ROOT}/job-object.hardlink"
+
+mv "${job_object}" "${TEST_ROOT}/job-object.real"
+ln -s "${TEST_ROOT}/job-object.real" "${job_object}"
+expect_failure git_object_symlink 'cannot read Git object' plan
+rm "${job_object}"
+mv "${TEST_ROOT}/job-object.real" "${job_object}"
+
+chmod 666 "${job_object}"
+expect_failure git_object_mode_drift 'ownership, mode, type, or link contract is unsafe' plan
+chmod 444 "${job_object}"
+
+printf 'unsafe pack\n' >"${SOURCE_REPO}/.git/objects/pack/pack-fixture.pack"
+expect_failure git_pack 'packed objects, indexes' plan
+rm "${SOURCE_REPO}/.git/objects/pack/pack-fixture.pack"
+
+printf '%s %s\n' "${source_commit}" "${source_commit}" \
+  >"${SOURCE_REPO}/.git/info/grafts"
+expect_failure git_grafts 'Git grafts are forbidden' plan
+rm "${SOURCE_REPO}/.git/info/grafts"
+
+mkdir "${SOURCE_REPO}/.git/refs/replace"
+expect_failure git_replace_refs 'Git replace refs are forbidden' plan
+rmdir "${SOURCE_REPO}/.git/refs/replace"
+
+cp "${SOURCE_REPO}/.git/config" "${TEST_ROOT}/git-config.good"
+printf '\n[extensions]\n\tpartialClone = fixture\n' \
+  >>"${SOURCE_REPO}/.git/config"
+expect_failure git_partial_clone 'Git partial-clone configuration is forbidden' plan
+cp "${TEST_ROOT}/git-config.good" "${SOURCE_REPO}/.git/config"
+
+cp "${PROFILE}" "${TEST_ROOT}/profile.object-store.good"
+sed -i 's/git_object_limit\t4096/git_object_limit\t1/' "${PROFILE}"
+write_policy
+expect_failure git_object_count 'Git object count exceeds protected limit' plan
+cp "${TEST_ROOT}/profile.object-store.good" "${PROFILE}"
+write_policy
+
+sed -i 's/git_object_bytes_limit\t33554432/git_object_bytes_limit\t1/' "${PROFILE}"
+write_policy
+expect_failure git_object_bytes 'Git compressed object bytes exceed protected limit' plan
+cp "${TEST_ROOT}/profile.object-store.good" "${PROFILE}"
+write_policy
+
+sed -i 's/source_index_limit\t1048576/source_index_limit\t1/' "${PROFILE}"
+write_policy
+expect_failure git_index_bytes 'Git tree bytes exceed protected index limit' plan
+cp "${TEST_ROOT}/profile.object-store.good" "${PROFILE}"
+write_policy
+
+sed -i 's/git_tree_depth_limit\t64/git_tree_depth_limit\t2/' "${PROFILE}"
+write_policy
+expect_failure git_tree_depth 'Git tree depth exceeds protected limit' plan
+cp "${TEST_ROOT}/profile.object-store.good" "${PROFILE}"
+write_policy
+
+PYTHONDONTWRITEBYTECODE=1 python3 - "${EXECUTOR}" "${SOURCE_STAGING}" \
+  "${OUTPUT_STAGING}" <<'PY'
+import importlib.util
+import io
+import os
+from pathlib import Path
+import sys
+
+module_path, source_root_text, output_root_text = sys.argv[1:]
+spec = importlib.util.spec_from_file_location("parity_oci_executor", module_path)
+assert spec is not None and spec.loader is not None
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+
+source_root = Path(source_root_text)
+lease_name = "plan-" + "b" * 64 + "-" + "c" * 64
+root = source_root / lease_name
+source = root / "source"
+manifest = root / "source.manifest.tsv"
+request = root / "request.tsv"
+source.mkdir(parents=True, mode=0o700)
+manifest.write_bytes(b"manifest\n")
+request.write_bytes(b"request\n")
+staging_root_fd = os.open(
+    source_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+)
+root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+source_fd = os.open(source, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+request_fd = os.open(request, os.O_RDONLY | os.O_NOFOLLOW)
+lease_info = os.fstat(root_fd)
+source_info = os.fstat(source_fd)
+request_info = os.fstat(request_fd)
+snapshot = module.SourceSnapshot(
+    source,
+    manifest,
+    request,
+    staging_root_fd,
+    root_fd,
+    source_fd,
+    request_fd,
+    source_info.st_dev,
+    source_info.st_ino,
+    request_info.st_dev,
+    request_info.st_ino,
+    1,
+    1,
+    "0" * 64,
+    lease_name,
+    lease_info.st_dev,
+    lease_info.st_ino,
+)
+
+renamed_source = source.with_name(source.name + ".renamed")
+source.rename(renamed_source)
+source.mkdir(mode=0o700)
+try:
+    try:
+        module.verify_retained_snapshot(snapshot)
+    except module.ExecutorError as error:
+        assert "replaced" in str(error)
+    else:
+        raise AssertionError("directory rename swap was accepted")
+finally:
+    source.rmdir()
+    renamed_source.rename(source)
+
+renamed_request = request.with_name(request.name + ".renamed")
+request.rename(renamed_request)
+request.symlink_to(renamed_request)
+try:
+    try:
+        module.verify_retained_snapshot(snapshot)
+    except module.ExecutorError as error:
+        assert "replaced" in str(error)
+    else:
+        raise AssertionError("request symlink swap was accepted")
+finally:
+    request.unlink()
+    renamed_request.rename(request)
+    snapshot.cleanup()
+
+durability = source_root / "source-durability-fixture"
+(durability / "alpha" / "beta").mkdir(parents=True, mode=0o700)
+(durability / "alpha" / "gamma").mkdir(mode=0o700)
+(durability / "kernel.rs").write_bytes(b"fn kernel() {}\n")
+(durability / "alpha" / "beta" / "one").write_bytes(b"one\n")
+(durability / "alpha" / "gamma" / "two").write_bytes(b"two\n")
+real_fchmod = module.os.fchmod
+real_fsync = module.os.fsync
+
+
+def descriptor_name(file_fd):
+    return Path(os.readlink(f"/proc/self/fd/{file_fd}")).name
+
+
+file_events = []
+
+
+def record_file_chmod(file_fd, mode):
+    file_events.append(("chmod", descriptor_name(file_fd), mode))
+    real_fchmod(file_fd, mode)
+
+
+def record_file_fsync(file_fd):
+    file_events.append(("fsync", descriptor_name(file_fd)))
+    real_fsync(file_fd)
+
+
+kernel_fd = os.open(durability / "kernel.rs", os.O_RDONLY | os.O_NOFOLLOW)
+module.os.fchmod = record_file_chmod
+module.os.fsync = record_file_fsync
+try:
+    module.finalize_source_file(kernel_fd, 0o444, "file-order fixture")
+finally:
+    module.os.fchmod = real_fchmod
+    module.os.fsync = real_fsync
+    os.close(kernel_fd)
+assert file_events == [
+    ("chmod", "kernel.rs", 0o444),
+    ("fsync", "kernel.rs"),
+]
+assert (durability / "kernel.rs").stat().st_mode & 0o777 == 0o444
+
+directory_events = []
+
+
+def record_directory_chmod(file_fd, mode):
+    directory_events.append(("chmod", descriptor_name(file_fd), mode))
+    real_fchmod(file_fd, mode)
+
+
+def record_directory_fsync(file_fd):
+    directory_events.append(("fsync", descriptor_name(file_fd)))
+    real_fsync(file_fd)
+
+
+durability_fd = os.open(durability, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+durability_root_fd = os.open(
+    source_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+)
+module.os.fchmod = record_directory_chmod
+module.os.fsync = record_directory_fsync
+try:
+    module.finalize_source_directories(
+        durability_fd,
+        {"alpha", "alpha/beta", "alpha/gamma"},
+        durability_root_fd,
+    )
+finally:
+    module.os.fchmod = real_fchmod
+    module.os.fsync = real_fsync
+assert directory_events == [
+    ("chmod", "beta", 0o555),
+    ("fsync", "beta"),
+    ("chmod", "gamma", 0o555),
+    ("fsync", "gamma"),
+    ("chmod", "alpha", 0o555),
+    ("fsync", "alpha"),
+    ("chmod", durability.name, 0o555),
+    ("fsync", durability.name),
+    ("fsync", source_root.name),
+]
+
+
+def reject_file_fsync(file_fd):
+    del file_fd
+    raise OSError("injected source file fsync failure")
+
+
+kernel_fd = os.open(durability / "kernel.rs", os.O_RDONLY | os.O_NOFOLLOW)
+module.os.fsync = reject_file_fsync
+try:
+    try:
+        module.finalize_source_file(kernel_fd, 0o444, "file-failure fixture")
+    except module.ExecutorError as error:
+        assert "cannot durably finalize file-failure fixture" in str(error)
+    else:
+        raise AssertionError("source file fsync failure escaped or was accepted")
+finally:
+    module.os.fsync = real_fsync
+    os.close(kernel_fd)
+
+
+def reject_nested_fsync(file_fd):
+    if descriptor_name(file_fd) == "beta":
+        raise OSError("injected nested directory fsync failure")
+    real_fsync(file_fd)
+
+
+module.os.fsync = reject_nested_fsync
+try:
+    try:
+        module.finalize_source_directories(
+            durability_fd,
+            {"alpha", "alpha/beta", "alpha/gamma"},
+            durability_root_fd,
+        )
+    except module.ExecutorError as error:
+        assert "source directory alpha/beta" in str(error)
+    else:
+        raise AssertionError("nested source directory fsync failure escaped or was accepted")
+finally:
+    module.os.fsync = real_fsync
+    os.close(durability_root_fd)
+    os.close(durability_fd)
+
+durability_fd = os.open(durability, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+durability_root_fd = os.open(
+    source_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+)
+real_close = module.os.close
+failed_directory_fd = []
+
+
+def reject_finalizer_close(file_fd):
+    if descriptor_name(file_fd) == "beta" and not failed_directory_fd:
+        failed_directory_fd.append(file_fd)
+        raise OSError("injected finalizer close failure")
+    real_close(file_fd)
+
+
+module.os.close = reject_finalizer_close
+try:
+    try:
+        module.finalize_source_directories(
+            durability_fd,
+            {"alpha", "alpha/beta", "alpha/gamma"},
+            durability_root_fd,
+        )
+    except module.ExecutorError as error:
+        assert "cannot close source directory alpha/beta" in str(error)
+    else:
+        raise AssertionError("source finalizer close OSError escaped or was accepted")
+finally:
+    module.os.close = real_close
+    for file_fd in failed_directory_fd:
+        real_close(file_fd)
+    real_close(durability_root_fd)
+    real_close(durability_fd)
+
+output_root = Path(output_root_text)
+output_lease_name = "plan-" + "d" * 64 + "-" + "e" * 64
+output = output_root / output_lease_name
+output.mkdir(mode=0o700)
+artifact = output / "artifacts.stream"
+log = output / "stderr.log"
+artifact.write_bytes(b"")
+log.write_bytes(b"")
+output_root_fd = os.open(output_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+output_fd = os.open(output, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+artifact_fd = os.open(artifact, os.O_WRONLY | os.O_NOFOLLOW)
+log_fd = os.open(log, os.O_WRONLY | os.O_NOFOLLOW)
+output_info = os.fstat(output_fd)
+stage = module.OutputStage(
+    output,
+    artifact,
+    log,
+    output_root_fd,
+    output_fd,
+    artifact_fd,
+    log_fd,
+    output_info.st_dev,
+    output_info.st_ino,
+    output_lease_name,
+)
+renamed_output = output.with_name(output.name + ".renamed")
+output.rename(renamed_output)
+output.symlink_to(renamed_output, target_is_directory=True)
+try:
+    try:
+        module.verify_retained_output(stage)
+    except module.ExecutorError as error:
+        assert "replaced" in str(error)
+    else:
+        raise AssertionError("output symlink swap was accepted")
+finally:
+    output.unlink()
+    renamed_output.rename(output)
+    stage.cleanup()
+
+class Fixture:
+    pass
+
+
+profile = Fixture()
+profile.output_staging_root = str(output_root)
+profile.operator_uid = os.getuid()
+profile.operator_gid = os.getgid()
+durable_lease = "plan-" + "1" * 64 + "-" + "2" * 64
+sync_order = []
+real_fsync = module.os.fsync
+
+
+def record_fsync(file_fd):
+    sync_order.append(Path(os.readlink(f"/proc/self/fd/{file_fd}")).name)
+
+
+module.os.fsync = record_fsync
+durable_stage = module.stage_output(profile, durable_lease)
+try:
+    assert sync_order == [
+        output_root.name,
+        "artifacts.stream",
+        "stderr.log",
+        durable_lease,
+        output_root.name,
+    ]
+finally:
+    durable_stage.cleanup()
+
+failing_lease = "plan-" + "3" * 64 + "-" + "4" * 64
+sync_calls = 0
+
+
+def fail_second_fsync(file_fd):
+    del file_fd
+    global sync_calls
+    sync_calls += 1
+    if sync_calls == 2:
+        raise OSError("fixture fsync failure")
+
+
+module.os.fsync = fail_second_fsync
+try:
+    module.stage_output(profile, failing_lease)
+except module.ExecutorError as error:
+    assert "output staging" in str(error)
+    assert sync_calls >= 2
+else:
+    raise AssertionError("output fsync failure was accepted")
+finally:
+    module.os.fsync = real_fsync
+assert not any(output_root.iterdir())
+
+read_fd, write_fd = os.pipe()
+real_write = module.os.write
+
+
+def reject_staging_write(file_fd, content):
+    del file_fd, content
+    raise OSError("injected staging write failure")
+
+
+module.os.write = reject_staging_write
+try:
+    module.write_all(write_fd, b"bounded")
+except module.ExecutorError as error:
+    assert "cannot write bounded staging content" in str(error)
+else:
+    raise AssertionError("staging write OSError escaped or was accepted")
+finally:
+    module.os.write = real_write
+    os.close(write_fd)
+    os.close(read_fd)
+
+real_output_root = profile.output_staging_root
+profile.output_staging_root = str(output_root / "missing")
+try:
+    module.stage_output(profile, "plan-" + "5" * 64 + "-" + "6" * 64)
+except module.ExecutorError as error:
+    assert "cannot open or lock output staging root" in str(error)
+else:
+    raise AssertionError("output root open failure escaped or was accepted")
+finally:
+    profile.output_staging_root = real_output_root
+
+real_mkdir = module.os.mkdir
+
+
+def reject_staging_mkdir(*args, **kwargs):
+    del args, kwargs
+    raise OSError("injected staging mkdir failure")
+
+
+module.os.mkdir = reject_staging_mkdir
+try:
+    module.stage_output(profile, "plan-" + "7" * 64 + "-" + "8" * 64)
+except module.ExecutorError as error:
+    assert "cannot initialize output staging" in str(error)
+else:
+    raise AssertionError("output mkdir OSError escaped or was accepted")
+finally:
+    module.os.mkdir = real_mkdir
+assert not any(output_root.iterdir())
+
+real_open = module.os.open
+
+
+def reject_log_open(path, *args, **kwargs):
+    if path == "stderr.log":
+        raise OSError("injected log open failure")
+    return real_open(path, *args, **kwargs)
+
+
+module.os.open = reject_log_open
+try:
+    module.stage_output(profile, "plan-" + "9" * 64 + "-" + "a" * 64)
+except module.ExecutorError as error:
+    assert "cannot initialize output staging" in str(error)
+else:
+    raise AssertionError("partial output open failure was accepted")
+finally:
+    module.os.open = real_open
+assert not any(output_root.iterdir())
+
+collision_name = "plan-" + "b" * 64 + "-" + "d" * 64
+collision = output_root / collision_name
+collision.mkdir()
+(collision / "owner-marker").write_bytes(b"unrelated")
+try:
+    module.stage_output(profile, collision_name)
+except module.ExecutorError:
+    assert (collision / "owner-marker").read_bytes() == b"unrelated"
+else:
+    raise AssertionError("pre-existing lease collision was accepted")
+(collision / "owner-marker").unlink()
+collision.rmdir()
+
+lock_fd = os.open(output_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+module.fcntl.flock(lock_fd, module.fcntl.LOCK_EX | module.fcntl.LOCK_NB)
+try:
+    module.stage_output(profile, "plan-" + "c" * 64 + "-" + "e" * 64)
+except module.ExecutorError as error:
+    assert "busy with another staging lease" in str(error)
+else:
+    raise AssertionError("concurrent staging lock was accepted")
+finally:
+    os.close(lock_fd)
+
+for index in range(module.MAX_STAGING_ROOT_ENTRIES + 1):
+    (output_root / f"stale-{index:04d}").write_bytes(b"")
+try:
+    module.stage_output(profile, "plan-" + "d" * 64 + "-" + "f" * 64)
+except module.ExecutorError as error:
+    assert "stale-entry quota" in str(error)
+else:
+    raise AssertionError("staging-root exhaustion was accepted")
+for entry in output_root.iterdir():
+    entry.unlink()
+
+cleanup_name = "plan-" + "e" * 64 + "-" + "0" * 64
+cleanup = output_root / cleanup_name
+(cleanup / "nested").mkdir(parents=True)
+(cleanup / "nested" / "file").write_bytes(b"content")
+cleanup_root_fd = os.open(
+    output_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+)
+cleanup_info = cleanup.stat()
+real_unlink = module.os.unlink
+
+
+def reject_cleanup_unlink(*args, **kwargs):
+    del args, kwargs
+    raise OSError("injected cleanup unlink failure")
+
+
+module.os.unlink = reject_cleanup_unlink
+try:
+    module.cleanup_staging_lease(
+        cleanup_root_fd,
+        cleanup_name,
+        cleanup_info.st_dev,
+        cleanup_info.st_ino,
+        "fault fixture",
+    )
+except module.ExecutorError as error:
+    assert "cannot durably clean fault fixture" in str(error)
+else:
+    raise AssertionError("cleanup OSError escaped or was accepted")
+finally:
+    module.os.unlink = real_unlink
+module.cleanup_staging_lease(
+    cleanup_root_fd,
+    cleanup_name,
+    cleanup_info.st_dev,
+    cleanup_info.st_ino,
+    "fault fixture recovery",
+)
+os.close(cleanup_root_fd)
+assert not any(output_root.iterdir())
+
+single_close_name = "plan-" + "f" * 64 + "-" + "1" * 64
+single_close_lease = output_root / single_close_name
+single_close_lease.mkdir()
+single_close_info = single_close_lease.stat()
+single_close_root_fd = os.open(
+    output_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+)
+real_close = module.os.close
+failed_lease_fds = []
+lease_close_attempts = 0
+
+
+def reject_lease_close(file_fd):
+    global lease_close_attempts
+    try:
+        name = descriptor_name(file_fd)
+    except OSError:
+        name = ""
+    if name == single_close_name:
+        lease_close_attempts += 1
+        failed_lease_fds.append(file_fd)
+        raise OSError("injected lease close failure")
+    real_close(file_fd)
+
+
+module.os.close = reject_lease_close
+try:
+    try:
+        module.cleanup_staging_lease(
+            single_close_root_fd,
+            single_close_name,
+            single_close_info.st_dev,
+            single_close_info.st_ino,
+            "single-close fixture",
+        )
+    except module.ExecutorError as error:
+        assert "cannot close single-close fixture lease before removal" in str(error)
+    else:
+        raise AssertionError("lease close failure was accepted")
+finally:
+    module.os.close = real_close
+assert lease_close_attempts == 1
+for file_fd in failed_lease_fds:
+    real_close(file_fd)
+module.cleanup_staging_lease(
+    single_close_root_fd,
+    single_close_name,
+    single_close_info.st_dev,
+    single_close_info.st_ino,
+    "single-close fixture recovery",
+)
+real_close(single_close_root_fd)
+assert not any(output_root.iterdir())
+
+emission_lease = "plan-" + "1" * 64 + "-" + "f" * 64
+
+
+class InstrumentedStdout:
+    def __init__(self):
+        self.payload = ""
+        self.write_count = 0
+
+    def write(self, value):
+        assert not (source_root / emission_lease).exists()
+        assert not (output_root / emission_lease).exists()
+        self.write_count += 1
+        self.payload += value
+
+    def flush(self):
+        return None
+
+
+instrumented = InstrumentedStdout()
+real_stdout = module.sys.stdout
+module.sys.stdout = instrumented
+try:
+    module.emit_plan_output(
+        ["oci_execution_plan_schema_version\t2", "request_sha256\t" + "a" * 64],
+        (
+            (source_root, emission_lease, "source staging"),
+            (output_root, emission_lease, "output staging"),
+        ),
+    )
+finally:
+    module.sys.stdout = real_stdout
+assert instrumented.write_count == 1
+assert instrumented.payload.endswith("\n")
+
+(source_root / emission_lease).mkdir()
+blocked_output = InstrumentedStdout()
+module.sys.stdout = blocked_output
+try:
+    try:
+        module.emit_plan_output(
+            ["oci_execution_plan_schema_version\t2"],
+            ((source_root, emission_lease, "source staging"),),
+        )
+    except module.ExecutorError as error:
+        assert "lease still exists before plan output" in str(error)
+    else:
+        raise AssertionError("plan output was emitted with a live staging lease")
+finally:
+    module.sys.stdout = real_stdout
+    (source_root / emission_lease).rmdir()
+assert blocked_output.write_count == 0
+
+
+class FailingStdout:
+    def write(self, value):
+        del value
+        raise OSError("injected plan stdout failure")
+
+    def flush(self):
+        return None
+
+
+module.sys.stdout = FailingStdout()
+try:
+    try:
+        module.emit_plan_output(
+            ["oci_execution_plan_schema_version\t2"],
+            ((source_root, emission_lease, "source staging"),),
+        )
+    except module.ExecutorError as error:
+        assert "cannot emit cleaned OCI plan" in str(error)
+    else:
+        raise AssertionError("plan stdout OSError escaped or was accepted")
+finally:
+    module.sys.stdout = real_stdout
+
+close_read, close_write = os.pipe()
+real_close = module.os.close
+close_calls = []
+
+
+def reject_one_close(file_fd):
+    close_calls.append(file_fd)
+    if file_fd == close_read:
+        raise OSError("injected descriptor close failure")
+    real_close(file_fd)
+
+
+module.os.close = reject_one_close
+try:
+    try:
+        module.close_descriptors(
+            (
+                (close_read, "first close fixture"),
+                (close_write, "second close fixture"),
+            )
+        )
+    except module.ExecutorError as error:
+        assert "cannot close first close fixture" in str(error)
+    else:
+        raise AssertionError("descriptor close OSError escaped or was accepted")
+finally:
+    module.os.close = real_close
+    real_close(close_read)
+assert close_calls == [close_read, close_write]
+
+trusted_fd = os.open(source_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+trusted_root = module.TrustedRoot(source_root, trusted_fd, os.getuid(), os.getgid())
+
+
+def reject_trusted_close(file_fd):
+    if file_fd == trusted_fd:
+        raise OSError("injected trusted-root close failure")
+    real_close(file_fd)
+
+
+module.os.close = reject_trusted_close
+try:
+    try:
+        trusted_root.close()
+    except module.ExecutorError as error:
+        assert "cannot close protected root" in str(error)
+        assert trusted_root.fd == -1
+    else:
+        raise AssertionError("TrustedRoot close OSError escaped or was accepted")
+finally:
+    module.os.close = real_close
+    real_close(trusted_fd)
+
+primary_fd = os.open(source_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+
+
+def reject_primary_close(file_fd):
+    if file_fd == primary_fd:
+        raise OSError("injected primary cleanup close failure")
+    real_close(file_fd)
+
+
+module.os.close = reject_primary_close
+try:
+    try:
+        try:
+            raise module.ExecutorError("primary staging failure")
+        except module.ExecutorError:
+            module.close_descriptor(primary_fd, "primary cleanup fixture")
+    except module.ExecutorError as error:
+        assert "primary staging failure" in str(error)
+        assert "cannot close primary cleanup fixture" in str(error)
+    else:
+        raise AssertionError("close failure masked or lost the primary error")
+finally:
+    module.os.close = real_close
+    real_close(primary_fd)
+
+real_resolve = module.Path.resolve
+
+
+def reject_resolve(self, *args, **kwargs):
+    del self, args, kwargs
+    raise OSError("injected path resolution failure")
+
+
+module.Path.resolve = reject_resolve
+try:
+    try:
+        module.resolve_path(source_root, "resolution fixture")
+    except module.ExecutorError as error:
+        assert "cannot resolve resolution fixture" in str(error)
+    else:
+        raise AssertionError("path resolution OSError escaped or was accepted")
+finally:
+    module.Path.resolve = real_resolve
+
+
+class FailingParser:
+    def parse_args(self):
+        return type(
+            "Arguments",
+            (),
+            {"func": lambda self, args: (_ for _ in ()).throw(OSError("top-level fs"))},
+        )()
+
+
+real_build_parser = module.build_parser
+real_stderr = module.sys.stderr
+captured_stderr = io.StringIO()
+module.build_parser = FailingParser
+module.sys.stderr = captured_stderr
+try:
+    assert module.main() == 2
+finally:
+    module.build_parser = real_build_parser
+    module.sys.stderr = real_stderr
+assert captured_stderr.getvalue().count("\n") == 1
+assert "parity-oci-executor: top-level fs" in captured_stderr.getvalue()
+assert "Traceback" not in captured_stderr.getvalue()
+
+captured_stderr = io.StringIO()
+module.build_parser = lambda: (_ for _ in ()).throw(OSError("entrypoint setup fs"))
+module.sys.stderr = captured_stderr
+try:
+    assert module.main() == 2
+finally:
+    module.build_parser = real_build_parser
+    module.sys.stderr = real_stderr
+assert captured_stderr.getvalue().count("\n") == 1
+assert "parity-oci-executor: entrypoint setup fs" in captured_stderr.getvalue()
+assert "Traceback" not in captured_stderr.getvalue()
+
+real_verify_entrypoint = module.verify_installed_operator_entrypoint
+captured_stderr = io.StringIO()
+module.verify_installed_operator_entrypoint = lambda: (_ for _ in ()).throw(
+    OSError("operator top-level fs")
+)
+module.sys.stderr = captured_stderr
+try:
+    assert module.operator_main(["verify", "--request-id", "a" * 64]) == 2
+finally:
+    module.verify_installed_operator_entrypoint = real_verify_entrypoint
+    module.sys.stderr = real_stderr
+assert captured_stderr.getvalue().count("\n") == 1
+assert "fe2o3-oci-operator: operator top-level fs" in captured_stderr.getvalue()
+assert "Traceback" not in captured_stderr.getvalue()
+PY
+PYTHONDONTWRITEBYTECODE=1 python3 - "${EXECUTOR}" "${OCI_LAYOUT}" "${REQUEST}" \
+  "${TRUSTED_ROOT}" "${QUEUE_AUTH_ROOT}" "${QUEUE_AUTH_SHA256}" \
+  "${POLICY_IDENTITY}" <<'PY'
+import io
+import importlib.util
+import os
+from pathlib import Path
+import sys
+import time
+
+(
+    module_path,
+    layout_text,
+    request_text,
+    trusted_text,
+    queue_root_text,
+    queue_digest,
+    policy_identity,
+) = sys.argv[1:]
+spec = importlib.util.spec_from_file_location("parity_oci_executor_bounds", module_path)
+assert spec is not None and spec.loader is not None
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+environment = {"HOME": "/nonexistent", "LC_ALL": "C", "PATH": "/nonexistent"}
+
+try:
+    module.run_bounded(
+        ["/bin/sh", "-c", "while :; do printf 0123456789; done"],
+        label="overflow fixture",
+        environment=environment,
+        timeout_seconds=5,
+        stdout_limit=1024,
+        stderr_limit=1024,
+    )
+except module.ExecutorError as error:
+    assert "exceeds protected limit" in str(error)
+else:
+    raise AssertionError("unbounded subprocess output was accepted")
+
+started = time.monotonic()
+try:
+    module.run_bounded(
+        ["/bin/sh", "-c", "/bin/sleep 30 & wait"],
+        label="timeout fixture",
+        environment=environment,
+        timeout_seconds=1,
+        stdout_limit=1024,
+        stderr_limit=1024,
+    )
+except module.ExecutorError as error:
+    assert "protected timeout" in str(error)
+    assert time.monotonic() - started < 5
+else:
+    raise AssertionError("subprocess timeout was accepted")
+
+
+class NeverWaitableProcess:
+    def __init__(self):
+        self.pid = 99999999
+        self.stdout = io.BytesIO(b"overflow")
+        self.stderr = io.BytesIO(b"")
+        self.stdin = None
+        self.returncode = None
+
+    def poll(self):
+        return None
+
+
+never_waitable = NeverWaitableProcess()
+real_popen = module.subprocess.Popen
+real_killpg = module.os.killpg
+module.subprocess.Popen = lambda *args, **kwargs: never_waitable
+module.os.killpg = lambda *args, **kwargs: None
+module.PROCESS_REAP_GRACE_SECONDS = 0.02
+module.PROCESS_PIPE_JOIN_SECONDS = 0.02
+module.PROCESS_FINAL_JOIN_SECONDS = 0.02
+started = time.monotonic()
+try:
+    module.run_bounded(
+        ["/fixture/never-waitable"],
+        label="uninterruptible fixture",
+        environment=environment,
+        timeout_seconds=1,
+        stdout_limit=0,
+        stderr_limit=0,
+    )
+except module.ExecutorError as error:
+    assert "did not become waitable" in str(error)
+    assert "reap is deferred" in str(error)
+    assert time.monotonic() - started < 0.5
+else:
+    raise AssertionError("never-waitable process was accepted")
+finally:
+    module.subprocess.Popen = real_popen
+    module.os.killpg = real_killpg
+
+diff_id = "sha256:" + "a" * 64
+module.validate_runtime_rootfs(
+    {"Type": "layers", "Layers": [diff_id]}, (diff_id,)
+)
+for malformed in (
+    None,
+    [],
+    {"Layers": [diff_id]},
+    {"Type": "layers", "Layers": diff_id},
+    {"Type": "layers", "Layers": [1]},
+):
+    try:
+        module.validate_runtime_rootfs(malformed, (diff_id,))
+    except module.ExecutorError:
+        pass
+    else:
+        raise AssertionError("malformed runtime RootFS.Layers was accepted")
+
+deep_json = b'{"nested":' * 2048 + b'{}' + b'}' * 2048
+try:
+    module.strict_json_object(deep_json, "deep fixture")
+except module.ExecutorError:
+    pass
+else:
+    raise AssertionError("recursive JSON parser input was accepted")
+
+layout = Path(layout_text)
+layout_fd = os.open(layout, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+real_read = module.read_descriptor_bound
+real_read_bytes = Path.read_bytes
+
+
+def reject_path_read(self):
+    del self
+    raise AssertionError("OCI JSON reopened through Path.read_bytes")
+
+
+Path.read_bytes = reject_path_read
+try:
+    module.read_oci_json(
+        layout_fd,
+        ("index.json",),
+        "descriptor-only fixture",
+        maximum_bytes=module.MAX_OCI_METADATA_BYTES,
+        expected_uid=os.getuid(),
+        expected_gid=os.getgid(),
+    )
+finally:
+    Path.read_bytes = real_read_bytes
+
+index = layout / "index.json"
+
+
+def mutate_index(file_fd, maximum, label):
+    raw = real_read(file_fd, maximum, label)
+    os.utime(index, None)
+    return raw
+
+
+module.read_descriptor_bound = mutate_index
+try:
+    module.read_oci_json(
+        layout_fd,
+        ("index.json",),
+        "racing OCI index",
+        maximum_bytes=module.MAX_OCI_METADATA_BYTES,
+        expected_uid=os.getuid(),
+        expected_gid=os.getgid(),
+    )
+except module.ExecutorError as error:
+    assert "changed or differs" in str(error)
+else:
+    raise AssertionError("OCI JSON metadata race was accepted")
+finally:
+    module.read_descriptor_bound = real_read
+    os.close(layout_fd)
+
+dev_fd = os.open("/dev", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+try:
+    module.read_oci_json(
+        dev_fd,
+        ("null",),
+        "device JSON fixture",
+        maximum_bytes=1024,
+        expected_uid=0,
+        expected_gid=0,
+    )
+except module.ExecutorError as error:
+    assert "descriptor metadata or size is invalid" in str(error)
+else:
+    raise AssertionError("device OCI JSON input was accepted")
+finally:
+    os.close(dev_fd)
+
+request = Path(request_text)
+trusted = Path(trusted_text)
+policy = trusted / "policy.tsv"
+parsed = module.build_parser().parse_args(
+    [
+        "test-verify",
+        "--test-request",
+        str(request),
+        "--test-request-owner-uid",
+        str(os.getuid()),
+        "--test-request-owner-gid",
+        str(os.getgid()),
+        "--test-queue-trust-sha256",
+        queue_digest,
+        "--test-queue-authorization-root",
+        queue_root_text,
+        "--test-queue-authorization-owner-uid",
+        str(os.getuid()),
+        "--test-queue-authorization-owner-gid",
+        str(os.getgid()),
+        "--test-trusted-root",
+        str(trusted),
+        "--test-policy",
+        "policy.tsv",
+        "--test-policy-identity",
+        policy_identity,
+        "--test-policy-size",
+        str(policy.stat().st_size),
+        "--test-policy-sha256",
+        module.sha256_file(policy),
+        "--test-trusted-owner-uid",
+        str(os.getuid()),
+        "--test-trusted-owner-gid",
+        str(os.getgid()),
+        "--test-trust-file-contract",
+        "descriptor-stable",
+    ]
+)
+authorized = module.authorize(parsed)
+arguments = module.docker_create_arguments(
+    authorized.profile,
+    authorized.request,
+    Path("/private/source"),
+    Path("/private/request.tsv"),
+    authorized.seccomp_path,
+)
+
+
+def has_sequence(*expected):
+    return any(
+        arguments[index : index + len(expected)] == list(expected)
+        for index in range(len(arguments) - len(expected) + 1)
+    )
+
+
+assert "--pull=never" in arguments
+assert "--no-healthcheck" in arguments
+assert "--cgroupns=private" in arguments
+assert has_sequence("--network", "none")
+assert has_sequence("--shm-size", "33554432")
+assert has_sequence("--read-only", "--cap-drop", "ALL")
+assert has_sequence("--security-opt", "no-new-privileges=true")
+assert has_sequence("--log-driver", "none")
+assert any("readonly,bind-recursive=readonly" in value for value in arguments)
+assert has_sequence(
+    "--device", "/dev/dri/renderD128:/dev/dri/renderD128:rwm"
+)
+assert has_sequence("--device", "/dev/kfd:/dev/kfd:rwm")
+assert (
+    "org.fe2o3.evidence.request-id="
+    "3333333333333333333333333333333333333333333333333333333333333333"
+) in arguments
+assert "--privileged" not in arguments
+assert "/var/run/docker.sock" not in arguments
+assert "docker cp" not in arguments
+PY
+
+cp "${REQUEST}" "${TEST_ROOT}/request.good"
+printf 'execution_closure\tverified\n' >>"${REQUEST}"
+expect_failure candidate_verified 'unexpected trailing field' verify
+cp "${TEST_ROOT}/request.good" "${REQUEST}"
+
+sed -i 's/profile_id\tmi300x-test-v1/profile_id\tcandidate-profile/' "${REQUEST}"
+expect_failure candidate_profile 'not authorized by protected policy' verify
+cp "${TEST_ROOT}/request.good" "${REQUEST}"
+
+cp "${PROFILE}" "${TEST_ROOT}/profile.good"
+sed -i 's/network_mode\tnone/network_mode\thost/' "${PROFILE}"
+write_policy
+expect_failure host_network 'network must be disabled' verify
+cp "${TEST_ROOT}/profile.good" "${PROFILE}"
+write_policy
+
+sed -i 's/cap_drop\tALL/cap_drop\tSYS_ADMIN/' "${PROFILE}"
+write_policy
+expect_failure capabilities 'drop every capability' verify
+cp "${TEST_ROOT}/profile.good" "${PROFILE}"
+write_policy
+
+chmod 775 "${TRUSTED_ROOT}"
+expect_failure writable_trusted_root 'ownership, mode, type, or link contract is unsafe' verify
+chmod 755 "${TRUSTED_ROOT}"
+
+sed -i 's|image_reference\texample.invalid/|image_reference\t-invalid/|' "${PROFILE}"
+write_policy
+expect_failure unsafe_image_reference 'malformed OCI image identity' verify
+cp "${TEST_ROOT}/profile.good" "${PROFILE}"
+write_policy
+
+sed -i 's|tmp_mount\t/tmp|tmp_mount\t/workspace/tmp|' "${PROFILE}"
+write_policy
+expect_failure overlapping_mount 'invalid or duplicate executor mount' verify
+cp "${TEST_ROOT}/profile.good" "${PROFILE}"
+write_policy
+
+sed -i 's/oci_index_size\t[0-9]*/oci_index_size\t999999999999999999999/' \
+  "${PROFILE}"
+write_policy
+expect_failure numeric_bound 'malformed OCI index binding' verify
+cp "${TEST_ROOT}/profile.good" "${PROFILE}"
+write_policy
+
+printf '{"architecture":"amd64","os":"linux","rootfs":{"type":"layers","diff_ids":["sha256:%s"]},"config":{"Env":[],"Volumes":{"/candidate":{}}}}\n' \
+  "${layer_digest}" >"${TEST_ROOT}/config.adversarial.json"
+install_image_config "${TEST_ROOT}/config.adversarial.json"
+expect_failure image_volumes 'must not declare volumes' verify
+
+printf '{"architecture":"amd64","os":"linux","rootfs":{"type":"layers","diff_ids":["sha256:%s"]},"config":{"Env":[],"Healthcheck":{"Test":["CMD","true"]}}}\n' \
+  "${layer_digest}" >"${TEST_ROOT}/config.adversarial.json"
+install_image_config "${TEST_ROOT}/config.adversarial.json"
+expect_failure image_healthcheck 'must not declare a healthcheck' verify
+
+printf '{"architecture":"amd64","os":"linux","rootfs":[],"config":{"Env":[]}}\n' \
+  >"${TEST_ROOT}/config.adversarial.json"
+install_image_config "${TEST_ROOT}/config.adversarial.json"
+expect_failure rootfs_type 'lacks a layer rootfs' verify
+
+printf '{"architecture":"amd64","os":"linux","rootfs":{"type":"layers","diff_ids":"sha256:%s"},"config":{"Env":[]}}\n' \
+  "${layer_digest}" >"${TEST_ROOT}/config.adversarial.json"
+install_image_config "${TEST_ROOT}/config.adversarial.json"
+expect_failure rootfs_layers_type 'lacks a layer rootfs' verify
+
+install_image_config "${TEST_ROOT}/config.base.json"
+cp "${TEST_ROOT}/profile.good" "${PROFILE}"
+write_policy
+
+cp "${OCI_LAYOUT}/index.json" "${TEST_ROOT}/index.good"
+python3 - "${OCI_LAYOUT}/index.json" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+value = {"leaf": True}
+for _ in range(40):
+    value = {"nested": value}
+Path(sys.argv[1]).write_text(json.dumps(value) + "\n", encoding="ascii")
+PY
+write_profile \
+  "${manifest_digest}" "$(size "${TEST_ROOT}/manifest.json")" \
+  "${config_digest}" "$(size "${TEST_ROOT}/config.json")" \
+  "${layer_digest}" "$(size "${TEST_ROOT}/layer")"
+expect_failure json_depth 'JSON exceeds structural limits' verify
+cp "${TEST_ROOT}/index.good" "${OCI_LAYOUT}/index.json"
+cp "${TEST_ROOT}/profile.good" "${PROFILE}"
+write_policy
+
+mv "${OCI_LAYOUT}/index.json" "${TEST_ROOT}/index.fifo.good"
+mkfifo "${OCI_LAYOUT}/index.json"
+expect_failure json_fifo 'descriptor metadata or size is invalid' verify
+rm "${OCI_LAYOUT}/index.json"
+mv "${TEST_ROOT}/index.fifo.good" "${OCI_LAYOUT}/index.json"
+
+mv "${OCI_LAYOUT}/index.json" "${TEST_ROOT}/index.oversize.good"
+truncate -s 4194305 "${OCI_LAYOUT}/index.json"
+expect_failure json_oversized 'descriptor metadata or size is invalid' verify
+rm "${OCI_LAYOUT}/index.json"
+mv "${TEST_ROOT}/index.oversize.good" "${OCI_LAYOUT}/index.json"
+
+printf '{"schemaVersion":2,"schemaVersion":2,"manifests":[]}\n' \
+  >"${OCI_LAYOUT}/index.json"
+write_profile \
+  "${manifest_digest}" "$(size "${TEST_ROOT}/manifest.json")" \
+  "${config_digest}" "$(size "${TEST_ROOT}/config.json")" \
+  "${layer_digest}" "$(size "${TEST_ROOT}/layer")"
+expect_failure json_duplicate 'JSON contains a duplicate key' verify
+cp "${TEST_ROOT}/index.good" "${OCI_LAYOUT}/index.json"
+cp "${TEST_ROOT}/profile.good" "${PROFILE}"
+write_policy
+
+sed -i \
+  's/environment\t0002\tHOSTNAME\t6665326f332d65766964656e6365/environment\t0002\tHOSTNAME\t77726f6e67/' \
+  "${PROFILE}"
+write_policy
+expect_failure nondeterministic_hostname 'lacks the clean GPU baseline' verify
+cp "${TEST_ROOT}/profile.good" "${PROFILE}"
+write_policy
+
+sed -i \
+  's/environment\t0005\tROCR_VISIBLE_DEVICES\t36636564313634376132393635343563/environment\t0005\tROCR_VISIBLE_DEVICES\t30/' \
+  "${PROFILE}"
+write_policy
+expect_failure gpu_visibility 'does not match protected GPU identity' verify
+cp "${TEST_ROOT}/profile.good" "${PROFILE}"
+write_policy
+
+printf 'corruption\n' >>"${OCI_LAYOUT}/blobs/sha256/${layer_digest}"
+expect_failure layer_mutation 'OCI layer binding mismatch' verify
+cp "${TEST_ROOT}/layer" "${OCI_LAYOUT}/blobs/sha256/${layer_digest}"
+
+mv "${OCI_LAYOUT}/blobs/sha256" "${TEST_ROOT}/sha256.real"
+ln -s "${TEST_ROOT}/sha256.real" "${OCI_LAYOUT}/blobs/sha256"
+expect_failure oci_parent_symlink 'cannot open or read OCI manifest by descriptor' verify
+rm "${OCI_LAYOUT}/blobs/sha256"
+mv "${TEST_ROOT}/sha256.real" "${OCI_LAYOUT}/blobs/sha256"
+
+cp "${POLICY}" "${TEST_ROOT}/policy.good"
+printf '0' >>"${PROFILE}"
+expect_failure profile_mutation 'profile size differs from its external binding' verify
+cp "${TEST_ROOT}/profile.good" "${PROFILE}"
+cp "${TEST_ROOT}/policy.good" "${POLICY}"
+
+mv "${PROFILE}" "${TEST_ROOT}/profile.real"
+ln -s "${TEST_ROOT}/profile.real" "${PROFILE}"
+expect_failure profile_symlink 'cannot open protected OCI executor profile' verify
+rm "${PROFILE}"
+mv "${TEST_ROOT}/profile.real" "${PROFILE}"
+
+chmod 664 "${PROFILE}"
+expect_failure profile_writable 'OCI executor profile ownership, mode, type, or link contract is unsafe' verify
+chmod 644 "${PROFILE}"
+
+ln "${PROFILE}" "${TEST_ROOT}/profile.hardlink"
+expect_failure profile_hardlink 'OCI executor profile ownership, mode, type, or link contract is unsafe' verify
+rm "${TEST_ROOT}/profile.hardlink"
+
+cp "${POLICY}" "${TEST_ROOT}/policy.anchor.good"
+pinned_policy_size="$(size "${POLICY}")"
+pinned_policy_digest="$(sha256 "${POLICY}")"
+printf '# mutation\n' >>"${POLICY}"
+expect_failure stale_external_policy_pin 'differs from its external binding' \
+  "${EXECUTOR}" test-verify \
+    --test-request "${REQUEST}" \
+    --test-request-owner-uid "$(id -u)" \
+    --test-request-owner-gid "$(id -g)" \
+    --test-queue-trust-sha256 "${QUEUE_AUTH_SHA256}" \
+    --test-queue-authorization-root "${QUEUE_AUTH_ROOT}" \
+    --test-queue-authorization-owner-uid "$(id -u)" \
+    --test-queue-authorization-owner-gid "$(id -g)" \
+    --test-trusted-root "${TRUSTED_ROOT}" \
+    --test-policy policy.tsv \
+    --test-policy-identity "${POLICY_IDENTITY}" \
+    --test-policy-size "${pinned_policy_size}" \
+    --test-policy-sha256 "${pinned_policy_digest}" \
+    --test-trusted-owner-uid "$(id -u)" \
+    --test-trusted-owner-gid "$(id -g)" \
+    --test-trust-file-contract descriptor-stable
+mv "${TEST_ROOT}/policy.anchor.good" "${POLICY}"
+
+chmod 664 "${POLICY}"
+expect_failure policy_writable 'OCI executor policy ownership, mode, type, or link contract is unsafe' verify
+chmod 644 "${POLICY}"
+
+ln "${POLICY}" "${TEST_ROOT}/policy.hardlink"
+expect_failure policy_hardlink 'OCI executor policy ownership, mode, type, or link contract is unsafe' verify
+rm "${TEST_ROOT}/policy.hardlink"
+
+mv "${POLICY}" "${TEST_ROOT}/policy.real"
+ln -s "${TEST_ROOT}/policy.real" "${POLICY}"
+expect_failure policy_symlink 'cannot open protected OCI executor policy' verify
+rm "${POLICY}"
+mv "${TEST_ROOT}/policy.real" "${POLICY}"
+
+cp "${POLICY}" "${TEST_ROOT}/policy.test-domain"
+sed -i 's/trust_domain\ttest/trust_domain\tproduction/' "${POLICY}"
+expect_failure production_anchor_unavailable 'requires an external Linux immutable-file contract' verify
+mv "${TEST_ROOT}/policy.test-domain" "${POLICY}"
+
+ln -s "${REQUEST}" "${TEST_ROOT}/request.link"
+expect_failure request_symlink 'cannot open OCI execution request without following links' \
+  verify_request_path "${TEST_ROOT}/request.link"
+rm "${TEST_ROOT}/request.link"
+
+ln "${REQUEST}" "${TEST_ROOT}/request.hardlink"
+expect_failure request_hardlink 'owner/mode/type/link/size contract' verify
+rm "${TEST_ROOT}/request.hardlink"
+
+chmod 666 "${REQUEST}"
+expect_failure request_writable 'owner/mode/type/link/size contract' verify
+chmod 644 "${REQUEST}"
+
+wrong_request_uid="$(( $(id -u) + 1 ))"
+expect_failure request_owner 'owner/mode/type/link/size contract' \
+  verify_request_path "${REQUEST}" "${wrong_request_uid}" "$(id -g)"
+
+cp "${REQUEST}" "${TEST_ROOT}/request.bounded"
+truncate -s 1048577 "${REQUEST}"
+expect_failure request_oversized 'owner/mode/type/link/size contract' verify
+mv "${TEST_ROOT}/request.bounded" "${REQUEST}"
+
+mkfifo "${TEST_ROOT}/request.fifo"
+expect_failure request_fifo 'owner/mode/type/link/size contract' \
+  verify_request_path "${TEST_ROOT}/request.fifo"
+rm "${TEST_ROOT}/request.fifo"
+
+PYTHONDONTWRITEBYTECODE=1 python3 - "${EXECUTOR}" "${REQUEST}" "${TRUSTED_ROOT}" <<'PY'
+import importlib.util
+import os
+from pathlib import Path
+import sys
+
+module_path, request_text, trusted_text = sys.argv[1:]
+spec = importlib.util.spec_from_file_location("parity_oci_executor_races", module_path)
+assert spec is not None and spec.loader is not None
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+
+request = Path(request_text)
+real_read = module.read_descriptor_bound
+
+
+def mutate_request(file_fd, maximum, label):
+    raw = real_read(file_fd, maximum, label)
+    os.utime(request, None)
+    return raw
+
+
+module.read_descriptor_bound = mutate_request
+try:
+    module.read_request_file(request, os.getuid(), os.getgid())
+except module.ExecutorError as error:
+    assert "changed while being read" in str(error)
+else:
+    raise AssertionError("request metadata race was accepted")
+finally:
+    module.read_descriptor_bound = real_read
+
+trusted = Path(trusted_text)
+policy = trusted / "policy.tsv"
+anchor = module.TrustAnchor(
+    "mi300x-test-policy-v1",
+    policy.stat().st_size,
+    module.sha256_file(policy),
+    os.getuid(),
+    os.getgid(),
+    "descriptor-stable",
+)
+root = module.open_trusted_root(trusted, anchor)
+
+
+def mutate_policy(file_fd, maximum, label):
+    raw = real_read(file_fd, maximum, label)
+    os.utime(policy, None)
+    return raw
+
+
+module.read_descriptor_bound = mutate_policy
+try:
+    module.read_trusted_file(
+        root,
+        "policy.tsv",
+        anchor,
+        expected_size=anchor.policy_size,
+        expected_digest=anchor.policy_digest,
+        label="race policy",
+    )
+except module.ExecutorError as error:
+    assert "changed or differs" in str(error)
+else:
+    raise AssertionError("trusted policy metadata race was accepted")
+finally:
+    module.read_descriptor_bound = real_read
+    root.close()
+PY
+
+# Runtime unavailability cannot produce even an ObservedRuntimeRequest. This
+# command fails before host/image claims and cannot issue an execution receipt.
+expect_failure operator_unavailable 'OCI runtime control plane unavailable' preflight
+
+printf 'parity OCI executor authorization tests passed\n'

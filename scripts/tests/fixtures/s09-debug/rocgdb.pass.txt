@@ -1,0 +1,56 @@
+fixed-profile setup noise
+FE2O3_S09_BEGIN
+1 Thread 0x7ffff7c006c0 (process 12345) "gfx942_two_ker" 0x7ffff7e01f16 in futex_wait () at ../sysdeps/nptl/futex-internal.c:146
+Reading symbols from /home/runner/target/debug/deps/gfx942_two_kernel_hardware
+of file /home/runner/target/debug/deps/gfx942_two_kernel_hardware.
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+FE2O3_S09_BINDING
+hsaco_sha256 = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+hardware_sha256 = bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+hardware_build_id = cccccccccccccccccccccccccccccccccccccccc
+run_nonce = dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+target = gfx942:xnack-
+optimization = O0
+FE2O3_S09_KERNEL_LOAD
+Function "alpha" not defined.
+Breakpoint 1 (alpha) pending.
+FE2O3_S09_GPU_CONTEXT
+[Switching to thread 6, lane 0 (AMDGPU Lane 1:3:1:1/0 (0,0,0)[0,0,0])]
+Thread 6 "alpha" hit Breakpoint 1, with lanes [0-63], alpha (scale=<optimized out>) at crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs:68
+  Id   Target Id                                            Frame
+* 6    AMDGPU Wave 1:3:1:1 (0,0,0)/0 "alpha"                alpha (scale=<optimized out>) at crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs:68
+0x0000000000002100  0x0000000000002400  Yes         memory://12345#offset=0x7ffff000&size=13840
+FE2O3_S09_FUNCTION
+#0 alpha () at crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs:68
+Line 68 of "crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs" starts at address 0x2100
+FE2O3_S09_BP2_ARMED
+Thread 6 "alpha" hit Breakpoint 2, with lanes [0-63], alpha () at crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs:69
+FE2O3_S09_BP2_STOP
+* 6    AMDGPU Wave 1:3:1:1 (0,0,0)/0 "alpha"                alpha () at crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs:69
+#0 alpha () at crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs:69
+FE2O3_S09_ARGUMENTS
+scale = 1.5
+input_data = (*mut f32) 0x7ffff000
+input_len = 1
+output_data = (*mut f32) 0x7fffe000
+output_len = 1
+FE2O3_S09_BP3_ARMED
+Thread 6 "alpha" hit Breakpoint 3, with lanes [0-63], alpha () at crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs:70
+FE2O3_S09_BP3_STOP
+* 6    AMDGPU Wave 1:3:1:1 (0,0,0)/0 "alpha"                alpha () at crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs:70
+#0 alpha () at crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs:70
+FE2O3_S09_LOCAL
+#0 alpha () at crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs:70
+Line 70 of "crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs" starts at address 0x21b8
+i = 0
+FE2O3_S09_RESUME
+[Thread 0x7ffff6c006c0 (LWP 12346) exited]
+FE2O3_S09_HARNESS_RESULT_V1 hsaco_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa run_nonce=dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd result=passed
+[Thread 0x7ffff64006c0 (LWP 12347) exited]
+test gfx942_cov6_alpha_then_zeta_generated_safe_spi_with_fake_authenticator ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.12s
+[Inferior 1 (process 12345) exited normally]
+FE2O3_S09_HARDWARE_PASS
+FE2O3_S09_ROCGDB_EXIT_STATUS = 0
+FE2O3_S09_END
+fixed-profile teardown noise

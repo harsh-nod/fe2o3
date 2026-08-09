@@ -24,6 +24,8 @@ mod host_object;
 mod kernel_ir_codegen;
 mod kernel_ir_lowering;
 mod mir_import;
+#[allow(dead_code)]
+mod mir_import_v2;
 mod monomorphization_dead;
 mod record_lowering;
 #[allow(dead_code)]
@@ -34,6 +36,7 @@ mod rust_type_layout_v3;
 mod semantic_features;
 pub mod semantic_layout_bridge;
 mod semantic_witness;
+mod source_debug;
 mod trusted_device_items;
 mod typed_artifact;
 mod worker_v2_producer;
@@ -457,6 +460,13 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                     "{CODEGEN_PIPELINE_ENV}=kernel-ir-worker-v2 compiler-module MIR translation failed: {errors}"
                                 )
                             })?;
+                        let source_debug = source_debug::collect_requested_profile(
+                            tcx,
+                            &collection,
+                            &mir_module,
+                            &self.config.target,
+                        )
+                        .map_err(|error| format!("source-debug profile rejected: {error}"))?;
                         eprintln!(
                             "[rustc-codegen-fe2o3] selected kernel-ir-worker-v2: verified compiler-module candidate with {} kernel(s), {} function(s)",
                             module.kernels.len(),
@@ -473,6 +483,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                 collection.compiler_ffi_observation.as_ref(),
                                 &module,
                                 &descriptor_roots,
+                                source_debug.as_ref(),
                             )
                             .map_err(|error| error.to_string())?;
                         Ok((

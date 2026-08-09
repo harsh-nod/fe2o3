@@ -446,6 +446,15 @@ fn validates_uninhabited_enums_and_rejects_narrow_direct_tags() {
             .unwrap()
             .contains("encoding=uninhabited")
     );
+    assert!(!never.is_inhabited().unwrap());
+    assert!(!never.has_single_zero_sized_value().unwrap());
+
+    let unit = MirSemanticType {
+        layout: MirLayout::sized(0, 1),
+        kind: MirTypeKind::Unit,
+    };
+    assert!(unit.is_inhabited().unwrap());
+    assert!(unit.has_single_zero_sized_value().unwrap());
 
     let narrow_tag = MirSemanticType {
         layout: MirLayout::sized(1, 1),

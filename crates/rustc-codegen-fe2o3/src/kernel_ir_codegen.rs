@@ -114,6 +114,7 @@ pub(crate) enum CompilerModuleConstructionError {
     DescriptorKernelEntryClosureMismatch,
     DescriptorSymbolClosureMismatch,
     UnsupportedFloatTarget(String),
+    SourceDebug(crate::source_debug::SourceDebugError),
     Lowering(dialect_amdgcn::LoweringErrors),
 }
 
@@ -135,9 +136,21 @@ impl fmt::Display for CompilerModuleConstructionError {
                 formatter,
                 "compiler-module float contracts require exact gfx942 lowering; found target `{target}`"
             ),
+            Self::SourceDebug(error) => {
+                write!(formatter, "source-debug metadata rejected: {error}")
+            }
             Self::Lowering(error) => write!(formatter, "{error}"),
         }
     }
+}
+
+pub(crate) fn bind_source_debug_metadata_v1(
+    mut module: InertCompilerModuleTextV1,
+    profile: &crate::source_debug::AlphaSourceDebugV1,
+) -> Result<InertCompilerModuleTextV1, CompilerModuleConstructionError> {
+    module.llvm_ir = crate::source_debug::inject_alpha_dwarf_v1(&module.llvm_ir, profile)
+        .map_err(CompilerModuleConstructionError::SourceDebug)?;
+    Ok(module)
 }
 
 impl std::error::Error for CompilerModuleConstructionError {}

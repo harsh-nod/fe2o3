@@ -25,8 +25,11 @@ pub(crate) use crate::worker_v2_restart::WorkerV2EnvelopeModeV1;
 pub(crate) const CODEGEN_PIPELINE_ENV: &str = "FE2O3_CODEGEN_PIPELINE";
 pub(crate) const WORKER_V2_CONFIG_ENV: &str = "FE2O3_WORKER_V2_CONFIG_V2";
 pub(crate) const WORKER_V2_EXPECTED_ID_ENV: &str = "FE2O3_WORKER_V2_EXPECTED_ID_V1";
+pub(crate) const WORKER_V2_SOURCE_DEBUG_PROFILE_ENV: &str =
+    "FE2O3_WORKER_V2_SOURCE_DEBUG_PROFILE_V1";
 const WORKER_V2_PIPELINE: &str = "kernel-ir-worker-v2";
 const CONFIG_FORMAT: &str = "fe2o3-worker-v2-config-v2";
+const S09_ALPHA_DEBUG_PROFILE: &str = "s09-alpha-gfx942-o0-v1";
 const MAX_CONFIG_BYTES: usize = 1024 * 1024;
 const MAX_CONFIG_PATH_BYTES: usize = 4096;
 
@@ -123,7 +126,21 @@ pub(crate) struct PreparedWorkerV2Config {
     link_options: Vec<LinkOptionV1>,
     candidate_output: WorkerOutputConstraintsV1,
     limits: WorkerExecutionLimitsV1,
+    source_debug_profile: Option<WorkerV2SourceDebugProfileV1>,
     units: Vec<ConfiguredUnit>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorkerV2SourceDebugProfileV1 {
+    S09AlphaGfx942O0,
+}
+
+impl WorkerV2SourceDebugProfileV1 {
+    pub(crate) const fn env_value(self) -> &'static str {
+        match self {
+            Self::S09AlphaGfx942O0 => S09_ALPHA_DEBUG_PROFILE,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -179,6 +196,7 @@ impl PreparedWorkerV2Config {
         let providers = prepare_providers(required_value(root, "providers", "configuration")?)?;
         let link_options =
             parse_link_options(required_value(root, "link_options", "configuration")?)?;
+        let source_debug_profile = parse_source_debug_profile(root, &link_options)?;
         let candidate_output = WorkerOutputConstraintsV1::new(required_u64(
             root,
             "candidate_output_max_bytes",
@@ -199,6 +217,7 @@ impl PreparedWorkerV2Config {
             link_options,
             candidate_output,
             limits,
+            source_debug_profile,
             units,
         })
     }
@@ -209,6 +228,10 @@ impl PreparedWorkerV2Config {
 
     pub(crate) const fn envelope_mode(&self) -> WorkerV2EnvelopeModeV1 {
         self.envelope_mode
+    }
+
+    pub(crate) const fn source_debug_profile(&self) -> Option<WorkerV2SourceDebugProfileV1> {
+        self.source_debug_profile
     }
 
     pub(crate) fn load_envelope_inputs(
@@ -513,6 +536,37 @@ fn parse_link_options(value: &Value) -> Result<Vec<LinkOptionV1>, WorkerV2Config
     Ok(options)
 }
 
+fn parse_source_debug_profile(
+    root: &Map<String, Value>,
+    options: &[LinkOptionV1],
+) -> Result<Option<WorkerV2SourceDebugProfileV1>, WorkerV2ConfigError> {
+    let Some(value) = root.get("source_debug_profile") else {
+        return Ok(None);
+    };
+    if value.as_str() != Some(S09_ALPHA_DEBUG_PROFILE) {
+        return Err(WorkerV2ConfigError::Invalid(format!(
+            "configuration.source_debug_profile must be exactly {S09_ALPHA_DEBUG_PROFILE:?}"
+        )));
+    }
+    let option = |name: &str| {
+        options
+            .iter()
+            .find(|option| option.name() == name)
+            .map(LinkOptionV1::value)
+    };
+    if option("code-object-version") != Some("6")
+        || option("opt-level") != Some("0")
+        || option("strip-debug") != Some("false")
+        || option("verify-each") != Some("true")
+    {
+        return Err(WorkerV2ConfigError::Invalid(
+            "the S09 alpha source-debug profile requires code-object-version=6, opt-level=0, strip-debug=false, and verify-each=true"
+                .to_owned(),
+        ));
+    }
+    Ok(Some(WorkerV2SourceDebugProfileV1::S09AlphaGfx942O0))
+}
+
 fn parse_limits(value: &Value) -> Result<WorkerExecutionLimitsV1, WorkerV2ConfigError> {
     let object = exact_object(value, LIMIT_KEYS, "limits")?;
     let timeout_ms = required_u64(object, "timeout_ms", "limits")?;
@@ -606,13 +660,18 @@ fn exact_root_object(value: &Value) -> Result<&Map<String, Value>, WorkerV2Confi
         WorkerV2ConfigError::Invalid("configuration must be an object".to_owned())
     })?;
     let keys = object.keys().map(String::as_str).collect::<Vec<_>>();
-    if keys != ROOT_KEYS
-        && keys != ROOT_KEYS_WITH_ENVELOPE_MODE
-        && keys != ROOT_KEYS_WITH_ENVELOPE_INPUTS
-        && keys != ROOT_KEYS_WITH_ENVELOPE
+    let keys_without_debug = keys
+        .iter()
+        .copied()
+        .filter(|key| *key != "source_debug_profile")
+        .collect::<Vec<_>>();
+    if keys_without_debug != ROOT_KEYS
+        && keys_without_debug != ROOT_KEYS_WITH_ENVELOPE_MODE
+        && keys_without_debug != ROOT_KEYS_WITH_ENVELOPE_INPUTS
+        && keys_without_debug != ROOT_KEYS_WITH_ENVELOPE
     {
         return Err(WorkerV2ConfigError::Invalid(format!(
-            "configuration contains unknown or duplicate envelope configuration fields; found {keys:?}"
+            "configuration contains unknown or duplicate configuration fields; found {keys:?}"
         )));
     }
     Ok(object)
@@ -905,6 +964,40 @@ mod tests {
         assert_eq!(first.link_options.len(), 4);
         assert!(first.selects("kernel", Path::new("src/lib.rs"), &directory.0));
         assert!(!first.selects("host", Path::new("src/lib.rs"), &directory.0));
+    }
+
+    #[test]
+    fn admits_only_the_exact_s09_o0_debug_profile() {
+        let directory = TestDirectory::new();
+        let path = manifest(&directory);
+        let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        value["source_debug_profile"] = Value::String(S09_ALPHA_DEBUG_PROFILE.to_owned());
+        value["link_options"][1]["value"] = Value::String("0".to_owned());
+        value["link_options"][2]["value"] = Value::String("false".to_owned());
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+
+        let prepared = PreparedWorkerV2Config::from_manifest(&path).unwrap();
+        assert_eq!(
+            prepared.source_debug_profile(),
+            Some(WorkerV2SourceDebugProfileV1::S09AlphaGfx942O0)
+        );
+
+        value["link_options"][1]["value"] = Value::String("1".to_owned());
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(matches!(
+            PreparedWorkerV2Config::from_manifest(&path),
+            Err(WorkerV2ConfigError::Invalid(message))
+                if message.contains("requires code-object-version=6, opt-level=0")
+        ));
+
+        value["link_options"][1]["value"] = Value::String("0".to_owned());
+        value["source_debug_profile"] = Value::String("custom-gdb-command".to_owned());
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(matches!(
+            PreparedWorkerV2Config::from_manifest(&path),
+            Err(WorkerV2ConfigError::Invalid(message))
+                if message.contains("must be exactly")
+        ));
     }
 
     #[test]

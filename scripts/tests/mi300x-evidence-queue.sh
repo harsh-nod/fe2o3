@@ -255,6 +255,23 @@ result_id="$(awk -F '\t' '$1 == "result_id" { print $2 }' "${ARCHIVE}/results/ha
 } >"${ARCHIVE}/promotion-inert.tsv"
 printf 'evidence_set_sha256\t%s\n' "$(file_sha "${ARCHIVE}/promotion-inert.tsv")" >>"${ARCHIVE}/promotion-inert.tsv"
 printf 'authorization_count\t0\n' >>"${ARCHIVE}/promotion-inert.tsv"
+INERT_ARCHIVE_CLOSURE="${TEST_ROOT}/inert-archive-closure.tsv"
+"${TOOL}" validate-manifest "${validate_args[@]}" \
+  --archive-closure-output "${INERT_ARCHIVE_CLOSURE}" promotion-inert.tsv
+grep -F $'file_count\t6' "${INERT_ARCHIVE_CLOSURE}" >/dev/null
+for path in \
+  artifacts/hardware.bin \
+  logs/hardware.log \
+  promotion-inert.tsv \
+  queues/queue.tsv \
+  results/hardware.tsv \
+  toolchains/bash.tsv; do
+  awk -F '\t' -v path="${path}" -v size="$(file_size "${ARCHIVE}/${path}")" \
+    -v digest="$(file_sha "${ARCHIVE}/${path}")" '
+      $1 == "file" && $3 == path && $4 == size && $5 == digest { found++ }
+      END { exit found == 1 ? 0 : 1 }
+    ' "${INERT_ARCHIVE_CLOSURE}"
+done
 expect_failure inert_hardware_promotion 'hardware result execution closure is inert and cannot promote parity' \
   "${TOOL}" gate "${validate_args[@]}" --manifest promotion-inert.tsv \
   --trusted-policy "${TEST_ROOT}/inert-policy.tsv" \

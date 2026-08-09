@@ -3,6 +3,8 @@ name: CI
 on:
   push:
   pull_request:
+  merge_group:
+    types: [checks_requested]
 
 permissions:
   contents: read
@@ -21,13 +23,22 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.event_name == 'merge_group' && github.event.merge_group.head_sha || github.sha }}
           fetch-depth: 0
+
+      - name: Install generic test prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ripgrep
 
       - name: Gate parity status promotions
         env:
           EVENT_NAME: ${{ github.event_name }}
           REF_NAME: ${{ github.ref_name }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          MERGE_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
           PUSH_BEFORE_SHA: ${{ github.event.before }}
           EVENT_HEAD_SHA: ${{ github.sha }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
@@ -36,7 +47,11 @@ jobs:
           case "${EVENT_NAME}" in
             pull_request)
               BASE_SHA="${PR_BASE_SHA}"
-              HEAD_SHA="${EVENT_HEAD_SHA}"
+              HEAD_SHA="${PR_HEAD_SHA}"
+              ;;
+            merge_group)
+              BASE_SHA="${MERGE_BASE_SHA}"
+              HEAD_SHA="${MERGE_HEAD_SHA}"
               ;;
             push)
               HEAD_SHA="${EVENT_HEAD_SHA}"
@@ -66,14 +81,31 @@ jobs:
             printf 'missing or zero parity head SHA\n' >&2
             exit 2
           fi
+          [[ "$(git rev-parse --verify 'HEAD^{commit}')" == "${HEAD_SHA}" ]] || {
+            printf 'checked-out revision does not match parity head SHA\n' >&2
+            exit 2
+          }
+          if [[ "${EVENT_NAME}" == merge_group && "${EVENT_HEAD_SHA}" != "${HEAD_SHA}" ]]; then
+            printf 'merge-group workflow is not bound to its exact head SHA\n' >&2
+            exit 2
+          fi
           git cat-file -e "${BASE_SHA}^{commit}"
           git cat-file -e "${HEAD_SHA}^{commit}"
+          if [[ "${EVENT_NAME}" == merge_group ]] &&
+            ! git merge-base --is-ancestor "${BASE_SHA}" "${HEAD_SHA}"; then
+            printf 'merge-group head does not contain its declared base\n' >&2
+            exit 2
+          fi
           if [[ "${EVENT_NAME}" == push && "${REF_NAME}" != "${DEFAULT_BRANCH}" ]] &&
             ! git merge-base --is-ancestor "${BASE_SHA}" "${HEAD_SHA}"; then
             printf 'non-default branch head does not contain current protected default tip\n' >&2
             exit 2
           fi
           if git diff --quiet "${BASE_SHA}" "${HEAD_SHA}" -- docs/cuda-oxide-parity-status.tsv; then
+            if ! git diff --quiet "${BASE_SHA}" "${HEAD_SHA}" -- docs/parity-evidence/archive/; then
+              printf 'parity evidence archive changed without a signed status promotion\n' >&2
+              exit 2
+            fi
             exit 0
           fi
 
@@ -86,23 +118,28 @@ jobs:
           mkdir -p "${trusted}"
           git show "${BASE_SHA}:docs/cuda-oxide-parity-status.tsv" >"${baseline}"
           test -d "${archive}"
-          test -f "${archive}/manifests/promotion-v2.tsv"
-          git archive "${BASE_SHA}" \
-            scripts/parity-signed-evidence.py \
-            docs/parity-row-evidence-policy-v2.tsv \
-            docs/parity-evidence/trust-policy-v2.tsv \
-            docs/parity-evidence/trusted-keys |
-            tar -x -C "${trusted}"
+          git archive "${BASE_SHA}" | tar -x -C "${trusted}"
+          manifest="$(python3 "${trusted}/scripts/parity-signed-evidence.py" \
+            derive-promotion-manifest \
+            --protected-archive "${trusted}/docs/parity-evidence/archive" \
+            --candidate-archive "${archive}")"
+          transaction="${RUNNER_TEMP}/signed-promotion-transaction.tsv"
+          archive_closure="${RUNNER_TEMP}/signed-promotion-archive-closure.tsv"
           python3 "${trusted}/scripts/parity-signed-evidence.py" gate \
             --repo "${GITHUB_WORKSPACE}" \
             --archive-root "${archive}" \
             --trusted-root "${trusted}" \
             --trust-policy "${trusted}/docs/parity-evidence/trust-policy-v2.tsv" \
-            --manifest manifests/promotion-v2.tsv \
+            --manifest "${manifest}" \
             --trusted-policy "${trusted}/docs/parity-row-evidence-policy-v2.tsv" \
             --candidate-policy docs/parity-row-evidence-policy-v2.tsv \
             --baseline-status "${baseline}" \
-            --candidate-status docs/cuda-oxide-parity-status.tsv
+            --candidate-status docs/cuda-oxide-parity-status.tsv \
+            --projection-output "${transaction}" \
+            --archive-closure-output "${archive_closure}"
+          bash "${trusted}/scripts/parity-promotion-projections.sh" \
+            "${trusted}" "${GITHUB_WORKSPACE}" "${transaction}" \
+            "${archive_closure}"
 
       - name: Install pinned Rust toolchain
         run: rustup show active-toolchain

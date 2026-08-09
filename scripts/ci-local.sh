@@ -2,8 +2,10 @@
 
 set -Eeuo pipefail
 
-readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-readonly REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+readonly SCRIPT_DIR
+REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+readonly REPO_ROOT
 readonly LOG_DIR="${CI_LOG_DIR:-${REPO_ROOT}/target/ci-logs}"
 readonly RUSTC_CODEGEN_TEST_PACKAGE="rustc-codegen-fe2o3"
 
@@ -47,6 +49,7 @@ Commands:
   verus           Run positive and negative Verus proof fixtures; requires Verus
   rocm-compile    Compile every example to host code and HSACO; requires ROCm
   hardware-smoke  Build and run every example; requires an AMD GPU and opt-in
+  s09-debug-hardware  Run exact gfx942 direct-link and ROCgdb evidence; explicit opt-in
 EOF
 }
 
@@ -82,6 +85,7 @@ load_example_packages() {
   )"
   destination=()
   if [[ -n "${output}" ]]; then
+    # shellcheck disable=SC2034  # The destination is written through a nameref.
     mapfile -t destination <<<"${output}"
   fi
 }
@@ -142,6 +146,8 @@ run_tests() {
     cargo check --locked -p fe2o3-core --test device_copy_derive_compile
   run_step device-copy-derive-ui \
     cargo test --locked -p fe2o3-core --test device_copy_derive_ui
+  run_step s09-debug-checker bash scripts/tests/s09-debug.sh
+  run_step s09-debug-ci-guard bash scripts/tests/s09-debug-ci.sh
 }
 
 run_rustc_codegen_tests() {
@@ -171,6 +177,10 @@ run_parity_matrix_checks() {
   run_step parity-matrix-check bash scripts/parity-matrix.sh check
   run_step parity-matrix-tests bash scripts/tests/parity-matrix.sh
   run_step parity-evidence-tests bash scripts/tests/parity-evidence.sh
+  run_step parity-oci-executor-tests \
+    bash scripts/tests/parity-oci-executor.sh
+  run_step parity-oci-operator-tests \
+    bash scripts/tests/parity-oci-operator.sh
   run_step parity-row-evidence-tests \
     bash scripts/tests/parity-row-evidence.sh
   run_step mi300x-evidence-queue-tests \
@@ -289,7 +299,7 @@ run_hardware_smoke() {
       'hardware HSACO inspection requires an explicit FE2O3_TARGET' >&2
     return 2
   fi
-  require_gpu_access
+  require_gpu_access /dev/kfd /dev/dxg
   if ! command -v rocminfo >/dev/null 2>&1; then
     printf '%s\n' 'GPU smoke requires rocminfo on PATH' >&2
     return 2
@@ -334,6 +344,15 @@ run_hardware_smoke() {
       inspects_real_generated_vecadd_hsaco -- --ignored --exact
 }
 
+run_s09_debug_hardware() {
+  if [[ -z "${FE2O3_S09_EVIDENCE_DIR:-}" ]]; then
+    printf '%s\n' 'S09 debug hardware requires FE2O3_S09_EVIDENCE_DIR' >&2
+    return 2
+  fi
+  run_step s09-debug-hardware \
+    bash scripts/s09-debug-ci.sh "${FE2O3_S09_EVIDENCE_DIR}"
+}
+
 main() {
   cd "${REPO_ROOT}"
   mkdir -p "${LOG_DIR}"
@@ -349,6 +368,7 @@ main() {
     verus) run_verus ;;
     rocm-compile) run_rocm_compile ;;
     hardware-smoke) run_hardware_smoke ;;
+    s09-debug-hardware) run_s09_debug_hardware ;;
     -h | --help | help) usage ;;
     *)
       usage >&2
