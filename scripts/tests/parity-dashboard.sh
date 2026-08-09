@@ -207,6 +207,56 @@ expect_failure unsupported_upgrade 'unsupported Complete upgrade for 02: missing
   --matrix "${TEST_ROOT}/complete-matrix.md" --claims "${TEST_ROOT}/complete-claims.tsv" \
   --repo "${REPO_ROOT}"
 
+# A protected signed Partial-to-Complete transaction may supersede an existing
+# audited Partial claim without requiring candidate-authored claim prose.
+SIGNED_REPO="${TEST_ROOT}/signed-repo"
+git clone -q --no-hardlinks "${REPO_ROOT}" "${SIGNED_REPO}"
+mkdir -p "${SIGNED_REPO}/docs/parity-evidence/archive/results"
+for class in unit ui ir compile verus hardware; do
+  printf '%s evidence\n' "${class}" >"${SIGNED_REPO}/docs/parity-evidence/archive/results/61-${class}.tsv"
+done
+awk -F '\t' -v OFS='\t' '
+  $1 == "normative" && $2 == "61" { $3 = "Complete" }
+  { print }
+' "${STATUS}" >"${TEST_ROOT}/legacy-complete-status.tsv"
+awk '
+  /^\| 61 \|/ { sub(/\| Partial \|/, "| Complete |") }
+  { print }
+' "${MATRIX}" >"${TEST_ROOT}/legacy-complete-matrix.md"
+status_commit="$(awk -F '\t' '$1 == "fe2o3_commit" { print $2 }' "${STATUS}")"
+{
+  printf 'signed_promotion_projection_schema_version\t1\n'
+  printf 'row_count\t1\n'
+  printf 'row\t0000\t61\tPartial\tComplete\t%s\tgfx942\tmi300x-gfx942-release\t' "${status_commit}"
+  printf 'unit,ui,ir,compile,verus,hardware\tbash\t'
+  printf 'results/61-unit.tsv,results/61-ui.tsv,results/61-ir.tsv,results/61-compile.tsv,results/61-verus.tsv,results/61-hardware.tsv\t%s\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+} >"${TEST_ROOT}/legacy-complete-ledger.tsv"
+"${DASHBOARD_SCRIPT}" validate \
+  --status "${TEST_ROOT}/legacy-complete-status.tsv" \
+  --matrix "${TEST_ROOT}/legacy-complete-matrix.md" \
+  --claims "${CLAIMS}" \
+  --repo "${SIGNED_REPO}" \
+  --signed-promotions "${TEST_ROOT}/legacy-complete-ledger.tsv"
+printf 'signed_promotion_projection_schema_version\t1\nrow_count\t0\n' \
+  >"${TEST_ROOT}/no-supersession-ledger.tsv"
+expect_failure missing_supersession 'unverified claim supersession for Complete row 61' \
+  "${DASHBOARD_SCRIPT}" validate \
+    --status "${TEST_ROOT}/legacy-complete-status.tsv" \
+    --matrix "${TEST_ROOT}/legacy-complete-matrix.md" \
+    --claims "${CLAIMS}" \
+    --repo "${SIGNED_REPO}" \
+    --signed-promotions "${TEST_ROOT}/no-supersession-ledger.tsv"
+sed 's/\t61\tPartial\tComplete\t/\t61\tMissing\tComplete\t/' \
+  "${TEST_ROOT}/legacy-complete-ledger.tsv" >"${TEST_ROOT}/wrong-supersession-ledger.tsv"
+expect_failure wrong_supersession \
+  'signed-promotion ledger cannot supersede claim for 61: Partial versus Missing -> Complete' \
+  "${DASHBOARD_SCRIPT}" validate \
+    --status "${TEST_ROOT}/legacy-complete-status.tsv" \
+    --matrix "${TEST_ROOT}/legacy-complete-matrix.md" \
+    --claims "${CLAIMS}" \
+    --repo "${SIGNED_REPO}" \
+    --signed-promotions "${TEST_ROOT}/wrong-supersession-ledger.tsv"
+
 printf 'drift\n' >>"${OUT_A}/dashboard.md"
 expect_failure generated_drift 'generated Markdown drift' \
   "${DASHBOARD_SCRIPT}" check --status "${STATUS}" --matrix "${MATRIX}" \

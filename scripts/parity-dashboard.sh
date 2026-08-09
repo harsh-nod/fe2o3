@@ -595,8 +595,10 @@ parse_claims() {
         [[ ! -v "CLAIM_STATUS[${id}]" ]] || die "duplicate claim for parity row: ${id}"
         [[ "${status}" == Partial || "${status}" == Complete ]] ||
           die "claim for ${id} has unsupported status: ${status}"
-        [[ "${ROW_STATUS[${id}]}" == "${status}" ]] ||
-          die "malformed status transition for ${id}: claim ${status}, source ${ROW_STATUS[${id}]}"
+        if [[ "${ROW_STATUS[${id}]}" != "${status}" ]]; then
+          [[ "${status}" == Partial && "${ROW_STATUS[${id}]}" == Complete ]] ||
+            die "malformed status transition for ${id}: claim ${status}, source ${ROW_STATUS[${id}]}"
+        fi
         [[ -v "EVIDENCE_PATHS[${evidence_id}]" ]] ||
           die "claim ${id} references unknown evidence: ${evidence_id}"
         claim_position="$(row_rank "${id}")"
@@ -689,8 +691,13 @@ parse_signed_promotions() {
           "${toolchains}" =~ ^[a-z][a-z0-9._-]{0,63}(,[a-z][a-z0-9._-]{0,63})*$ &&
           "${evidence_set}" =~ ^[0-9a-f]{64}$ ]] ||
           die "signed-promotion ledger identity is malformed for ${id}"
-        [[ ! -v "CLAIM_STATUS[${id}]" ]] ||
-          die "signed-promotion ledger overlaps built-in claim for ${id}"
+        if [[ -v "CLAIM_STATUS[${id}]" ]]; then
+          evidence_id="${CLAIM_EVIDENCE[${id}]}"
+          [[ "${CLAIM_STATUS[${id}]}" == Partial &&
+            "${from_status}" == Partial && "${to_status}" == Complete &&
+            ! -v "EVIDENCE_SIGNED[${evidence_id}]" ]] ||
+            die "signed-promotion ledger cannot supersede claim for ${id}: ${CLAIM_STATUS[${id}]} versus ${from_status} -> ${to_status}"
+        fi
 
         IFS=, read -r -a class_values <<<"${classes}"
         IFS=, read -r -a result_values <<<"${results}"
@@ -768,6 +775,8 @@ validate_claim_coverage() {
     status="${ROW_STATUS[${id}]}"
     if [[ "${status}" == Partial || "${status}" == Complete ]]; then
       [[ -v "CLAIM_STATUS[${id}]" ]] || die "missing evidence claim for ${status} row ${id}"
+      [[ "${CLAIM_STATUS[${id}]}" == "${status}" ]] ||
+        die "unverified claim supersession for ${status} row ${id}"
       evidence_id="${CLAIM_EVIDENCE[${id}]}"
       if [[ "${status}" == Complete && ! -v "EVIDENCE_SIGNED[${evidence_id}]" ]]; then
         for strengths in source-unit negative-adversarial compile-code-object local-hardware remote-hardware; do
