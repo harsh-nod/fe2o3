@@ -1,0 +1,928 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+umask 022
+
+REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+readonly REPO_ROOT
+readonly EXECUTOR="${REPO_ROOT}/scripts/parity-oci-executor.py"
+readonly LAUNCHER_SOURCE="${REPO_ROOT}/scripts/parity-oci-operator-launcher.c"
+readonly BUILD_LAUNCHER="${REPO_ROOT}/scripts/build-parity-oci-operator.sh"
+TEST_ROOT="$(mktemp -d "${HOME}/.fe2o3-oci-operator-test.XXXXXX")"
+readonly TEST_ROOT
+readonly CONFIG_ROOT="${TEST_ROOT}/operator"
+readonly CONFIG="${CONFIG_ROOT}/operator-v1.tsv"
+readonly CONFIG_DIGEST="${CONFIG_ROOT}/operator-v1.sha256"
+readonly DELEGATED_TEST_CGROUP_ROOT="${FE2O3_TEST_CGROUP_ROOT:-}"
+REQUEST_ID="$(printf '3%.0s' {1..64})"
+readonly REQUEST_ID
+
+cleanup() {
+  chmod -R u+w -- "${TEST_ROOT}" 2>/dev/null || true
+  rm -rf -- "${TEST_ROOT}"
+}
+trap cleanup EXIT
+
+expect_failure() {
+  local name="$1"
+  local expected="$2"
+  shift 2
+  local output
+  if output="$("$@" 2>&1)"; then
+    printf 'expected %s to fail\n' "${name}" >&2
+    exit 1
+  fi
+  if [[ "${output}" != *"${expected}"* ]]; then
+    printf '%s failed for the wrong reason:\n%s\n' "${name}" "${output}" >&2
+    exit 1
+  fi
+}
+
+expect_status() {
+  local name="$1"
+  local expected_status="$2"
+  shift 2
+  local output
+  local status=0
+  output="$("$@" 2>&1)" || status=$?
+  if ((status != expected_status)); then
+    printf '%s returned status %d; expected %d:\n%s\n' \
+      "${name}" "${status}" "${expected_status}" "${output}" >&2
+    exit 1
+  fi
+}
+
+write_digest() {
+  sha256sum -- "${CONFIG}" | cut -d' ' -f1 >"${CONFIG_DIGEST}"
+}
+
+assert_static_pie() {
+  local executable="$1"
+  local elf_type
+  elf_type="$(
+    /usr/bin/readelf --file-header --wide -- "${executable}" |
+      awk '$1 == "Type:" { print $2 }'
+  )"
+  [[ "${elf_type}" == DYN ]]
+  if /usr/bin/readelf --program-headers --wide -- "${executable}" |
+    grep -Eq '^[[:space:]]*INTERP[[:space:]]'; then
+    return 1
+  fi
+  if /usr/bin/readelf --dynamic --wide -- "${executable}" |
+    grep -F '(NEEDED)' >/dev/null; then
+    return 1
+  fi
+}
+
+assert_no_build_temporaries() {
+  local directory="$1"
+  local output_name="$2"
+  local leftover
+  leftover="$(
+    find "${directory}" -maxdepth 1 -name ".${output_name}.tmp.*" -print -quit
+  )"
+  if [[ -n "${leftover}" ]]; then
+    printf 'operator build left temporary output: %s\n' "${leftover}" >&2
+    exit 1
+  fi
+}
+
+assert_recorded_processes_gone() {
+  local name="$1"
+  local pid_file="$2"
+  local minimum_count="$3"
+  local -a recorded_pids=()
+  local process_id
+  if [[ ! -s "${pid_file}" ]]; then
+    printf '%s did not record any process IDs\n' "${name}" >&2
+    exit 1
+  fi
+  mapfile -t recorded_pids <"${pid_file}"
+  if ((${#recorded_pids[@]} < minimum_count)); then
+    printf '%s recorded only %d process IDs; expected at least %d\n' \
+      "${name}" "${#recorded_pids[@]}" "${minimum_count}" >&2
+    exit 1
+  fi
+  for process_id in "${recorded_pids[@]}"; do
+    if [[ ! "${process_id}" =~ ^[1-9][0-9]*$ ]]; then
+      printf '%s recorded malformed process ID: %s\n' \
+        "${name}" "${process_id}" >&2
+      exit 1
+    fi
+    if [[ -e "/proc/${process_id}" ]] || kill -0 "${process_id}" 2>/dev/null; then
+      printf '%s left process %s alive or unreaped\n' \
+        "${name}" "${process_id}" >&2
+      exit 1
+    fi
+  done
+}
+
+compile_test_launcher() {
+  local output="$1"
+  local interpreter="$2"
+  local executor="$3"
+  local timeout_seconds="${4:-30}"
+  local allow_uncontained="${5:-1}"
+  local cgroup_mechanism="${6:-0}"
+  local cgroup_root="${7:-/sys/fs/cgroup/fe2o3-oci-operator}"
+  if [[ "${allow_uncontained}" != 0 && "${allow_uncontained}" != 1 ]]; then
+    printf 'invalid test-only containment escape value\n' >&2
+    exit 1
+  fi
+  if [[ "${cgroup_mechanism}" != 0 && \
+    "${cgroup_mechanism}" != 1 ]]; then
+    printf 'invalid mechanism-only cgroup value\n' >&2
+    exit 1
+  fi
+  /usr/bin/cc \
+    -std=c11 -O2 -fPIE -static-pie \
+    -Wall -Wextra -Werror -Wconversion -Wformat=2 -Wshadow \
+    -Wstack-protector -fstack-protector-strong -D_FORTIFY_SOURCE=3 \
+    "-DFE2O3_LAUNCHER_PATH=\"${output}\"" \
+    "-DFE2O3_INTERPRETER_PATH=\"${interpreter}\"" \
+    "-DFE2O3_EXECUTOR_PATH=\"${executor}\"" \
+    "-DFE2O3_EXPECTED_UID=$(id -u)" \
+    "-DFE2O3_EXPECTED_GID=$(id -g)" \
+    -DFE2O3_REQUIRE_IMMUTABLE=0 \
+    "-DFE2O3_CHILD_TIMEOUT_SECONDS=${timeout_seconds}" \
+    -DFE2O3_TERM_GRACE_MILLISECONDS=250 \
+    -DFE2O3_KILL_GRACE_MILLISECONDS=4000 \
+    "-DFE2O3_CGROUP_ROOT=\"${cgroup_root}\"" \
+    "-DFE2O3_TEST_ONLY_ALLOW_UNCONTAINED_EXECUTION=${allow_uncontained}" \
+    "-DFE2O3_TEST_ONLY_CGROUP_MECHANISM=${cgroup_mechanism}" \
+    "${LAUNCHER_SOURCE}" -o "${output}"
+  chmod 0555 "${output}"
+  assert_static_pie "${output}"
+}
+
+compile_cgroup_mechanism_launcher() {
+  local output="$1"
+  local interpreter="$2"
+  local executor="$3"
+  local timeout_seconds="$4"
+  compile_test_launcher \
+    "${output}" "${interpreter}" "${executor}" "${timeout_seconds}" 0 1 \
+    "${DELEGATED_TEST_CGROUP_ROOT}"
+}
+
+mkdir -m 755 "${CONFIG_ROOT}"
+cat >"${CONFIG}" <<'EOF'
+oci_operator_config_schema_version	2
+config_id	mi300x-gfx942-production-v1
+trusted_root	/etc/fe2o3/oci-executor/trust
+policy_path	policy.tsv
+policy_identity	mi300x-production-policy-v1
+policy_size	4096
+policy_sha256	1111111111111111111111111111111111111111111111111111111111111111
+trusted_owner_uid	0
+trusted_owner_gid	0
+trust_file_contract	linux-immutable
+inbox_root	/var/lib/fe2o3/oci-inbox
+inbox_owner_uid	0
+inbox_owner_gid	0
+request_owner_uid	2001
+request_owner_gid	2001
+queue_authorization_root	/var/lib/fe2o3/oci-authorizations
+queue_authorization_owner_uid	0
+queue_authorization_owner_gid	0
+queue_trust_sha256	2222222222222222222222222222222222222222222222222222222222222222
+EOF
+write_digest
+
+PYTHONDONTWRITEBYTECODE=1 python3 - \
+  "${EXECUTOR}" "${CONFIG_ROOT}" "$(id -u)" "$(id -g)" <<'PY'
+import importlib.util
+import os
+from pathlib import Path
+import sys
+
+module_path, root_text, uid_text, gid_text = sys.argv[1:]
+spec = importlib.util.spec_from_file_location("parity_oci_operator_test", module_path)
+assert spec is not None and spec.loader is not None
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+
+config = module.load_operator_config(
+    Path(root_text),
+    provision_uid=int(uid_text),
+    provision_gid=int(gid_text),
+    require_immutable=False,
+)
+assert config.config_id == "mi300x-gfx942-production-v1"
+assert config.trust_file_contract == "linux-immutable"
+assert config.queue_trust_digest == "2" * 64
+assert config.queue_authorization_root == "/var/lib/fe2o3/oci-authorizations"
+
+real_fstat = module.os.fstat
+failed_fds = []
+
+
+def reject_config_fstat(file_fd):
+    failed_fds.append(file_fd)
+    raise OSError("injected operator configuration fstat failure")
+
+
+module.os.fstat = reject_config_fstat
+try:
+    try:
+        module.load_operator_config(
+            Path(root_text),
+            provision_uid=int(uid_text),
+            provision_gid=int(gid_text),
+            require_immutable=False,
+        )
+    except module.ExecutorError as error:
+        assert "cannot open test operator configuration directory" in str(error)
+    else:
+        raise AssertionError("operator configuration fstat failure was accepted")
+finally:
+    module.os.fstat = real_fstat
+assert len(failed_fds) == 1
+try:
+    os.fstat(failed_fds[0])
+except OSError:
+    pass
+else:
+    raise AssertionError("failed operator configuration descriptor was not closed")
+
+try:
+    module.load_operator_config()
+except module.ExecutorError as error:
+    assert "operator configuration" in str(error)
+else:
+    raise AssertionError("host unexpectedly supplied a production operator config")
+
+try:
+    module.verify_installed_operator_entrypoint()
+except module.ExecutorError as error:
+    assert "fixed isolated contract" in str(error)
+else:
+    raise AssertionError("repository script was accepted as installed operator")
+PY
+
+readonly BUILD_ROOT="${TEST_ROOT}/build"
+mkdir -m 700 "${BUILD_ROOT}"
+readonly DEFAULT_LAUNCHER="${BUILD_ROOT}/default-operator"
+readonly SYMLINK_VICTIM="${BUILD_ROOT}/predictable-symlink-victim"
+readonly LEGACY_LINK_RECORD="${BUILD_ROOT}/legacy-link-path"
+printf 'must remain unchanged\n' >"${SYMLINK_VICTIM}"
+/usr/bin/bash -c '
+  legacy_link="${2}.tmp.$$"
+  printf "%s\n" "${legacy_link}" >"${4}"
+  ln -s -- "${1}" "${legacy_link}"
+  exec "${3}" "${2}"
+' build-with-predictable-symlink \
+  "${SYMLINK_VICTIM}" "${DEFAULT_LAUNCHER}" "${BUILD_LAUNCHER}" \
+  "${LEGACY_LINK_RECORD}" >"${TEST_ROOT}/default.sha256"
+legacy_link="$(<"${LEGACY_LINK_RECORD}")"
+readonly LEGACY_LINK="${legacy_link}"
+if [[ ! -L "${LEGACY_LINK}" ]] ||
+  [[ "$(<"${SYMLINK_VICTIM}")" != 'must remain unchanged' ]]; then
+  printf 'predictable temporary symlink affected build output\n' >&2
+  exit 1
+fi
+rm -- "${LEGACY_LINK}"
+assert_no_build_temporaries "${BUILD_ROOT}" "${DEFAULT_LAUNCHER##*/}"
+assert_static_pie "${DEFAULT_LAUNCHER}"
+if [[ "$(stat -c '%a' -- "${DEFAULT_LAUNCHER}")" != 555 ]]; then
+  printf 'operator build did not install mode 0555\n' >&2
+  exit 1
+fi
+
+original_launcher_inode="$(stat -c '%i' -- "${DEFAULT_LAUNCHER}")"
+readonly ORIGINAL_LAUNCHER_INODE="${original_launcher_inode}"
+chmod 0644 "${DEFAULT_LAUNCHER}"
+printf 'stale launcher\n' >"${DEFAULT_LAUNCHER}"
+"${BUILD_LAUNCHER}" "${DEFAULT_LAUNCHER}" >"${TEST_ROOT}/replacement.sha256"
+if [[ "$(stat -c '%i' -- "${DEFAULT_LAUNCHER}")" == \
+  "${ORIGINAL_LAUNCHER_INODE}" ]] ||
+  [[ "$(stat -c '%a' -- "${DEFAULT_LAUNCHER}")" != 555 ]]; then
+  printf 'operator build did not atomically replace the regular output\n' >&2
+  exit 1
+fi
+assert_no_build_temporaries "${BUILD_ROOT}" "${DEFAULT_LAUNCHER##*/}"
+assert_static_pie "${DEFAULT_LAUNCHER}"
+
+readonly OUTPUT_LINK="${BUILD_ROOT}/output-link"
+ln -s -- "${SYMLINK_VICTIM}" "${OUTPUT_LINK}"
+expect_failure output_symlink 'output path must not be a symlink' \
+  "${BUILD_LAUNCHER}" "${OUTPUT_LINK}"
+if [[ "$(<"${SYMLINK_VICTIM}")" != 'must remain unchanged' ]]; then
+  printf 'output symlink collision modified its target\n' >&2
+  exit 1
+fi
+
+readonly FAILURE_ROOT="${TEST_ROOT}/compiler-failure"
+readonly FAILURE_OUTPUT="${FAILURE_ROOT}/failed-operator"
+readonly FAILURE_BUILD="${FAILURE_ROOT}/build-with-missing-source.sh"
+mkdir -m 700 "${FAILURE_ROOT}"
+cp -- "${BUILD_LAUNCHER}" "${FAILURE_BUILD}"
+chmod 0555 "${FAILURE_BUILD}"
+if "${FAILURE_BUILD}" "${FAILURE_OUTPUT}" \
+  >"${TEST_ROOT}/compiler-failure.log" 2>&1; then
+  printf 'expected missing compiler input to fail\n' >&2
+  exit 1
+fi
+if [[ -e "${FAILURE_OUTPUT}" || -L "${FAILURE_OUTPUT}" ]]; then
+  printf 'failed compiler installed an output\n' >&2
+  exit 1
+fi
+assert_no_build_temporaries "${FAILURE_ROOT}" "${FAILURE_OUTPUT##*/}"
+
+readonly UNSAFE_ROOT="${TEST_ROOT}/unsafe-build"
+mkdir -m 777 "${UNSAFE_ROOT}"
+expect_failure writable_destination 'must not be group/world-writable' \
+  "${BUILD_LAUNCHER}" "${UNSAFE_ROOT}/operator"
+readonly REAL_BUILD_ROOT="${TEST_ROOT}/real-build-root"
+readonly LINKED_BUILD_ROOT="${TEST_ROOT}/linked-build-root"
+mkdir -m 700 "${REAL_BUILD_ROOT}"
+ln -s -- "${REAL_BUILD_ROOT}" "${LINKED_BUILD_ROOT}"
+expect_failure symlink_destination 'existing non-symlink directory' \
+  "${BUILD_LAUNCHER}" "${LINKED_BUILD_ROOT}/operator"
+
+expect_failure uninstalled_default_launcher 'fixed executable path' \
+  "${DEFAULT_LAUNCHER}" verify --request-id "${REQUEST_ID}"
+
+readonly TEST_INTERPRETER="${TEST_ROOT}/python3"
+cp -- "$(readlink -f -- "$(command -v python3)")" "${TEST_INTERPRETER}"
+chmod 0555 "${TEST_INTERPRETER}"
+readonly PROBE="${TEST_ROOT}/startup-probe.py"
+readonly PROBE_OUTPUT="${TEST_ROOT}/startup-state"
+cat >"${PROBE}" <<EOF
+#!/usr/bin/python3
+import os
+from pathlib import Path
+import sys
+
+fds = []
+for item in os.listdir("/proc/self/fd"):
+    file_fd = int(item)
+    if file_fd <= 2:
+        continue
+    try:
+        os.fstat(file_fd)
+    except OSError:
+        continue
+    fds.append(file_fd)
+fds.sort()
+parent = os.readlink(f"/proc/{os.getppid()}/exe")
+old_umask = os.umask(0o077)
+os.umask(old_umask)
+status = Path("/proc/self/status").read_text(encoding="ascii")
+no_new_privs = next(line.split()[1] for line in status.splitlines() if line.startswith("NoNewPrivs:"))
+Path("${PROBE_OUTPUT}").write_text(
+    repr(
+        {
+            "argv": sys.argv,
+            "cwd": os.getcwd(),
+            "env": dict(os.environ),
+            "fds": fds,
+            "flags": (
+                sys.flags.isolated,
+                sys.flags.no_site,
+                sys.flags.ignore_environment,
+                sys.flags.no_user_site,
+            ),
+            "no_new_privs": no_new_privs,
+            "parent": parent,
+            "cgroup": Path("/proc/self/cgroup").read_text(encoding="ascii"),
+            "stdin_rdev": os.fstat(0).st_rdev,
+            "umask": old_umask,
+        }
+    ),
+    encoding="ascii",
+)
+EOF
+chmod 0555 "${PROBE}"
+
+readonly TEST_LAUNCHER="${TEST_ROOT}/test-operator"
+compile_test_launcher "${TEST_LAUNCHER}" "${TEST_INTERPRETER}" "${PROBE}"
+readonly PRODUCTION_GATE_ROOT="/sys/fs/cgroup/fe2o3-oci-operator"
+readonly PRODUCTION_GATE_LAUNCHER="${TEST_ROOT}/production-gate-operator"
+if [[ -e "${PRODUCTION_GATE_ROOT}" ]]; then
+  printf 'test host unexpectedly has the production cgroup root provisioned\n' >&2
+  exit 1
+fi
+compile_test_launcher \
+  "${PRODUCTION_GATE_LAUNCHER}" "${TEST_INTERPRETER}" "${PROBE}" 30 0 0 \
+  "${PRODUCTION_GATE_ROOT}"
+expect_failure unconditional_production_gate \
+  'production execution disabled: privilege-separated cgroup supervisor, Docker binding, and daemon cleanup are not implemented' \
+  "${PRODUCTION_GATE_LAUNCHER}" verify --request-id "${REQUEST_ID}"
+if [[ -z "${DELEGATED_TEST_CGROUP_ROOT}" ]]; then
+  CURRENT_CGROUP_ROOT="/sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup)"
+  readonly CURRENT_CGROUP_ROOT
+  readonly CURRENT_CGROUP_GATE_LAUNCHER=\
+"${TEST_ROOT}/current-cgroup-gate-operator"
+  if [[ ! -d "${CURRENT_CGROUP_ROOT}" ]] ||
+    [[ -w "${CURRENT_CGROUP_ROOT}" ]]; then
+    printf 'ordinary test session is not the expected undelegated cgroup\n' >&2
+    exit 1
+  fi
+  compile_test_launcher \
+    "${CURRENT_CGROUP_GATE_LAUNCHER}" "${TEST_INTERPRETER}" "${PROBE}" \
+    30 0 0 "${CURRENT_CGROUP_ROOT}"
+  expect_failure unwritable_session_production_gate \
+    'production execution disabled: privilege-separated cgroup supervisor, Docker binding, and daemon cleanup are not implemented' \
+    "${CURRENT_CGROUP_GATE_LAUNCHER}" verify --request-id "${REQUEST_ID}"
+fi
+mkdir -m 755 "${TEST_ROOT}/malicious" "${TEST_ROOT}/fake-bin"
+readonly SITECUSTOMIZE_MARKER="${TEST_ROOT}/sitecustomize-executed"
+readonly PATH_MARKER="${TEST_ROOT}/path-python-executed"
+readonly PRELOAD_MARKER="${TEST_ROOT}/preload-executed"
+printf 'from pathlib import Path\nPath("%s").write_text("executed")\n' \
+  "${SITECUSTOMIZE_MARKER}" >"${TEST_ROOT}/malicious/sitecustomize.py"
+printf '#!/usr/bin/env bash\nprintf executed > %q\nexit 97\n' \
+  "${PATH_MARKER}" >"${TEST_ROOT}/fake-bin/python3"
+chmod 0555 "${TEST_ROOT}/fake-bin/python3"
+cat >"${TEST_ROOT}/preload.c" <<EOF
+#include <fcntl.h>
+#include <unistd.h>
+
+__attribute__((constructor)) static void candidate_constructor(void) {
+  int fd = open("${PRELOAD_MARKER}", O_WRONLY | O_CREAT | O_TRUNC, 0600);
+  if (fd >= 0) {
+    (void)write(fd, "executed\n", 9);
+    (void)close(fd);
+  }
+}
+EOF
+/usr/bin/cc -shared -fPIC "${TEST_ROOT}/preload.c" \
+  -o "${TEST_ROOT}/candidate-preload.so"
+
+env \
+  HOME="${TEST_ROOT}/candidate-home" \
+  LC_ALL=C.UTF-8 \
+  PATH="${TEST_ROOT}/fake-bin" \
+  PYTHONHOME="${TEST_ROOT}/malicious" \
+  PYTHONPATH="${TEST_ROOT}/malicious" \
+  PYTHONSTARTUP="${TEST_ROOT}/malicious/sitecustomize.py" \
+  PYTHONUSERBASE="${TEST_ROOT}/malicious" \
+  LD_PRELOAD="${TEST_ROOT}/candidate-preload.so" \
+  TZ=Candidate/Controlled \
+  "${TEST_LAUNCHER}" verify --request-id "${REQUEST_ID}"
+
+if [[ -e "${SITECUSTOMIZE_MARKER}" || -e "${PATH_MARKER}" || \
+  -e "${PRELOAD_MARKER}" ]]; then
+  printf 'caller-controlled native or Python startup code executed\n' >&2
+  exit 1
+fi
+PYTHONDONTWRITEBYTECODE=1 python3 - \
+  "${PROBE_OUTPUT}" "${TEST_LAUNCHER}" "${PROBE}" "${REQUEST_ID}" <<'PY'
+import ast
+import os
+from pathlib import Path
+import stat
+import sys
+
+state = ast.literal_eval(Path(sys.argv[1]).read_text(encoding="ascii"))
+assert state["argv"] == [
+    sys.argv[3],
+    "--operator-internal",
+    "verify",
+    "--request-id",
+    sys.argv[4],
+]
+assert state["cwd"] == "/"
+assert state["env"] == {
+    "HOME": "/nonexistent",
+    "LC_ALL": "C",
+    "PATH": "/usr/bin:/bin",
+    "TZ": "UTC",
+}
+assert state["fds"] == []
+assert state["flags"] == (1, 1, 1, 1)
+assert state["no_new_privs"] == "1"
+assert Path(state["parent"]).samefile(sys.argv[2])
+assert stat.S_ISCHR(os.stat("/dev/null").st_mode)
+assert state["stdin_rdev"] == os.stat("/dev/null").st_rdev
+assert state["umask"] == 0o077
+PY
+
+readonly REJECTION_LAUNCHER="${TEST_ROOT}/repository-executor-operator"
+readonly REJECTION_EXECUTOR="${TEST_ROOT}/repository-executor.py"
+cp -- "${EXECUTOR}" "${REJECTION_EXECUTOR}"
+chmod 0555 "${REJECTION_EXECUTOR}"
+compile_test_launcher \
+  "${REJECTION_LAUNCHER}" "${TEST_INTERPRETER}" "${REJECTION_EXECUTOR}"
+expect_failure isolated_repository_executor 'fixed isolated contract' \
+  env PATH="${TEST_ROOT}/fake-bin" \
+    PYTHONHOME="${TEST_ROOT}/malicious" \
+    PYTHONPATH="${TEST_ROOT}/malicious" \
+    PYTHONSTARTUP="${TEST_ROOT}/malicious/sitecustomize.py" \
+    LD_PRELOAD="${TEST_ROOT}/candidate-preload.so" \
+    "${REJECTION_LAUNCHER}" verify --request-id "${REQUEST_ID}"
+if [[ -e "${SITECUSTOMIZE_MARKER}" || -e "${PATH_MARKER}" || \
+  -e "${PRELOAD_MARKER}" ]]; then
+  printf 'caller-controlled startup code ran before executor rejection\n' >&2
+  exit 1
+fi
+
+expect_failure malformed_request_id 'expected COMMAND' \
+  "${TEST_LAUNCHER}" verify --request-id ABC
+ln "${TEST_LAUNCHER}" "${TEST_ROOT}/launcher-hardlink"
+expect_failure launcher_hardlink 'fixed executable path' \
+  "${TEST_LAUNCHER}" verify --request-id "${REQUEST_ID}"
+rm "${TEST_ROOT}/launcher-hardlink"
+mv "${TEST_INTERPRETER}" "${TEST_ROOT}/python3.real"
+ln -s "${TEST_ROOT}/python3.real" "${TEST_INTERPRETER}"
+expect_failure interpreter_symlink 'fixed executable path' \
+  "${TEST_LAUNCHER}" verify --request-id "${REQUEST_ID}"
+rm "${TEST_INTERPRETER}"
+mv "${TEST_ROOT}/python3.real" "${TEST_INTERPRETER}"
+
+if [[ -n "${DELEGATED_TEST_CGROUP_ROOT}" ]]; then
+  if [[ "${DELEGATED_TEST_CGROUP_ROOT}" != /sys/fs/cgroup/* ]] ||
+    [[ ! -d "${DELEGATED_TEST_CGROUP_ROOT}" ]] ||
+    [[ ! -w "${DELEGATED_TEST_CGROUP_ROOT}" ]]; then
+    printf 'delegated test cgroup root is not a writable cgroup v2 path\n' >&2
+    exit 1
+  fi
+
+readonly CGROUP_MECHANISM_LAUNCHER="${TEST_ROOT}/cgroup-mechanism-operator"
+readonly DELEGATED_PRODUCTION_GATE_LAUNCHER=\
+"${TEST_ROOT}/delegated-production-gate-operator"
+compile_test_launcher \
+  "${DELEGATED_PRODUCTION_GATE_LAUNCHER}" "${TEST_INTERPRETER}" "${PROBE}" \
+  5 0 0 "${DELEGATED_TEST_CGROUP_ROOT}"
+expect_failure delegated_production_gate \
+  'production execution disabled: privilege-separated cgroup supervisor, Docker binding, and daemon cleanup are not implemented' \
+  "${DELEGATED_PRODUCTION_GATE_LAUNCHER}" verify --request-id "${REQUEST_ID}"
+compile_cgroup_mechanism_launcher \
+  "${CGROUP_MECHANISM_LAUNCHER}" "${TEST_INTERPRETER}" "${PROBE}" 5
+expect_failure cgroup_mechanism_non_authoritative \
+  'test-only cgroup mechanism completed; no production verdict' \
+  "${CGROUP_MECHANISM_LAUNCHER}" verify --request-id "${REQUEST_ID}"
+if ! PYTHONDONTWRITEBYTECODE=1 python3 - "${PROBE_OUTPUT}" <<'PY'
+import ast
+from pathlib import Path
+import re
+import sys
+
+state = ast.literal_eval(Path(sys.argv[1]).read_text(encoding="ascii"))
+if not re.fullmatch(r"0::.*/launcher-[1-9][0-9]*\n", state["cgroup"]):
+    raise SystemExit("executor did not observe its verified launcher cgroup")
+PY
+then
+  exit 1
+fi
+
+readonly SAME_UID_ESCAPE_PROBE="${TEST_ROOT}/same-uid-cgroup-escape.py"
+readonly SAME_UID_ESCAPE_RESULT="${TEST_ROOT}/same-uid-cgroup-escape.result"
+cat >"${SAME_UID_ESCAPE_PROBE}" <<EOF
+#!/usr/bin/python3
+import os
+from pathlib import Path
+
+cgroup_root = Path("${DELEGATED_TEST_CGROUP_ROOT}")
+before = Path("/proc/self/cgroup").read_text(encoding="ascii")
+with (cgroup_root / "cgroup.procs").open("w", encoding="ascii") as stream:
+    stream.write(f"{os.getpid()}\n")
+after = Path("/proc/self/cgroup").read_text(encoding="ascii")
+Path("${SAME_UID_ESCAPE_RESULT}").write_text(
+    repr({"before": before, "after": after}), encoding="ascii"
+)
+EOF
+chmod 0555 "${SAME_UID_ESCAPE_PROBE}"
+
+readonly SAME_UID_ESCAPE_LAUNCHER="${TEST_ROOT}/same-uid-cgroup-escape-operator"
+compile_cgroup_mechanism_launcher \
+  "${SAME_UID_ESCAPE_LAUNCHER}" "${TEST_INTERPRETER}" \
+  "${SAME_UID_ESCAPE_PROBE}" 5
+expect_failure same_uid_cgroup_escape_is_not_authority \
+  'test-only cgroup mechanism completed; no production verdict' \
+  "${SAME_UID_ESCAPE_LAUNCHER}" verify --request-id "${REQUEST_ID}"
+if ! PYTHONDONTWRITEBYTECODE=1 python3 - \
+  "${SAME_UID_ESCAPE_RESULT}" "${DELEGATED_TEST_CGROUP_ROOT}" <<'PY'
+import ast
+from pathlib import Path
+import re
+import sys
+
+state = ast.literal_eval(Path(sys.argv[1]).read_text(encoding="ascii"))
+cgroup_root = Path(sys.argv[2]).resolve()
+expected_after = f"0::{str(cgroup_root).removeprefix('/sys/fs/cgroup')}\n"
+if not re.fullmatch(r"0::.*/launcher-[1-9][0-9]*\n", state["before"]):
+    raise SystemExit("mechanism test did not begin in its launcher leaf")
+if state["after"] != expected_after or state["after"] == state["before"]:
+    raise SystemExit("same-UID child did not self-migrate to the parent cgroup")
+PY
+then
+  exit 1
+fi
+
+rm -- "${SAME_UID_ESCAPE_RESULT}"
+readonly SAME_UID_PRODUCTION_GATE_LAUNCHER=\
+"${TEST_ROOT}/same-uid-production-gate-operator"
+compile_test_launcher \
+  "${SAME_UID_PRODUCTION_GATE_LAUNCHER}" "${TEST_INTERPRETER}" \
+  "${SAME_UID_ESCAPE_PROBE}" 5 0 0 "${DELEGATED_TEST_CGROUP_ROOT}"
+expect_failure same_uid_escape_never_reaches_production \
+  'production execution disabled: privilege-separated cgroup supervisor, Docker binding, and daemon cleanup are not implemented' \
+  "${SAME_UID_PRODUCTION_GATE_LAUNCHER}" verify --request-id "${REQUEST_ID}"
+if [[ -e "${SAME_UID_ESCAPE_RESULT}" ]]; then
+  printf 'production gate executed the same-UID escape probe\n' >&2
+  exit 1
+fi
+
+readonly HANG_PROBE="${TEST_ROOT}/hang-probe.py"
+readonly HANG_PID="${TEST_ROOT}/hang.pid"
+cat >"${HANG_PROBE}" <<EOF
+#!/usr/bin/python3
+import os
+from pathlib import Path
+import signal
+import time
+
+Path("${HANG_PID}").write_text(str(os.getpid()), encoding="ascii")
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+while True:
+    time.sleep(1)
+EOF
+chmod 0555 "${HANG_PROBE}"
+readonly HANG_LAUNCHER="${TEST_ROOT}/hang-operator"
+compile_cgroup_mechanism_launcher \
+  "${HANG_LAUNCHER}" "${TEST_INTERPRETER}" "${HANG_PROBE}" 1
+expect_failure bounded_launcher_wait 'exceeded bounded launcher lifetime' \
+  "${HANG_LAUNCHER}" verify --request-id "${REQUEST_ID}"
+assert_recorded_processes_gone direct_timeout "${HANG_PID}" 1
+
+readonly SETSID_PROBE="${TEST_ROOT}/setsid-probe.py"
+readonly SETSID_DIRECT_PIDS="${TEST_ROOT}/setsid-direct.pids"
+readonly SETSID_DESCENDANT_PIDS="${TEST_ROOT}/setsid-descendant.pids"
+cat >"${SETSID_PROBE}" <<EOF
+#!/usr/bin/python3
+import os
+from pathlib import Path
+import signal
+import time
+
+Path("${SETSID_DIRECT_PIDS}").write_text(f"{os.getpid()}\n", encoding="ascii")
+child = os.fork()
+if child == 0:
+    os.setsid()
+    Path("${SETSID_DESCENDANT_PIDS}").write_text(
+        f"{os.getpid()}\n", encoding="ascii"
+    )
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    while True:
+        time.sleep(1)
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+while True:
+    time.sleep(1)
+EOF
+chmod 0555 "${SETSID_PROBE}"
+readonly SETSID_LAUNCHER="${TEST_ROOT}/setsid-operator"
+compile_cgroup_mechanism_launcher \
+  "${SETSID_LAUNCHER}" "${TEST_INTERPRETER}" "${SETSID_PROBE}" 1
+expect_failure setsid_descendant_timeout 'exceeded bounded launcher lifetime' \
+  "${SETSID_LAUNCHER}" verify --request-id "${REQUEST_ID}"
+assert_recorded_processes_gone setsid_direct "${SETSID_DIRECT_PIDS}" 1
+assert_recorded_processes_gone \
+  setsid_descendant "${SETSID_DESCENDANT_PIDS}" 1
+
+readonly ERROR_EXIT_PROBE="${TEST_ROOT}/error-exit-probe.py"
+readonly ERROR_EXIT_DIRECT_PIDS="${TEST_ROOT}/error-exit-direct.pids"
+readonly ERROR_EXIT_DESCENDANT_PIDS="${TEST_ROOT}/error-exit-descendant.pids"
+cat >"${ERROR_EXIT_PROBE}" <<EOF
+#!/usr/bin/python3
+import os
+from pathlib import Path
+import signal
+import time
+
+Path("${ERROR_EXIT_DIRECT_PIDS}").write_text(
+    f"{os.getpid()}\n", encoding="ascii"
+)
+read_fd, write_fd = os.pipe()
+child = os.fork()
+if child == 0:
+    os.close(read_fd)
+    os.setsid()
+    Path("${ERROR_EXIT_DESCENDANT_PIDS}").write_text(
+        f"{os.getpid()}\n", encoding="ascii"
+    )
+    os.write(write_fd, b"R")
+    os.close(write_fd)
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    while True:
+        time.sleep(1)
+os.close(write_fd)
+if os.read(read_fd, 1) != b"R":
+    os._exit(96)
+os.close(read_fd)
+os._exit(17)
+EOF
+chmod 0555 "${ERROR_EXIT_PROBE}"
+readonly ERROR_EXIT_LAUNCHER="${TEST_ROOT}/error-exit-operator"
+compile_cgroup_mechanism_launcher \
+  "${ERROR_EXIT_LAUNCHER}" "${TEST_INTERPRETER}" "${ERROR_EXIT_PROBE}" 5
+expect_status descendant_after_executor_error 17 \
+  "${ERROR_EXIT_LAUNCHER}" verify --request-id "${REQUEST_ID}"
+assert_recorded_processes_gone \
+  error_exit_direct "${ERROR_EXIT_DIRECT_PIDS}" 1
+assert_recorded_processes_gone \
+  error_exit_descendant "${ERROR_EXIT_DESCENDANT_PIDS}" 1
+
+readonly DOUBLE_FORK_PROBE="${TEST_ROOT}/double-fork-probe.py"
+readonly DOUBLE_FORK_DIRECT_PIDS="${TEST_ROOT}/double-fork-direct.pids"
+readonly DOUBLE_FORK_DESCENDANT_PIDS="${TEST_ROOT}/double-fork-descendant.pids"
+cat >"${DOUBLE_FORK_PROBE}" <<EOF
+#!/usr/bin/python3
+import os
+from pathlib import Path
+import signal
+import time
+
+Path("${DOUBLE_FORK_DIRECT_PIDS}").write_text(
+    f"{os.getpid()}\n", encoding="ascii"
+)
+first = os.fork()
+if first == 0:
+    os.setsid()
+    file_fd = os.open(
+        "${DOUBLE_FORK_DESCENDANT_PIDS}",
+        os.O_WRONLY | os.O_CREAT | os.O_APPEND,
+        0o600,
+    )
+    os.write(file_fd, f"{os.getpid()}\n".encode("ascii"))
+    os.close(file_fd)
+    second = os.fork()
+    if second > 0:
+        os._exit(0)
+    file_fd = os.open(
+        "${DOUBLE_FORK_DESCENDANT_PIDS}", os.O_WRONLY | os.O_APPEND
+    )
+    os.write(file_fd, f"{os.getpid()}\n".encode("ascii"))
+    os.close(file_fd)
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    while True:
+        time.sleep(1)
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+while True:
+    time.sleep(1)
+EOF
+chmod 0555 "${DOUBLE_FORK_PROBE}"
+readonly DOUBLE_FORK_LAUNCHER="${TEST_ROOT}/double-fork-operator"
+compile_cgroup_mechanism_launcher \
+  "${DOUBLE_FORK_LAUNCHER}" "${TEST_INTERPRETER}" \
+  "${DOUBLE_FORK_PROBE}" 1
+expect_failure double_fork_timeout 'exceeded bounded launcher lifetime' \
+  "${DOUBLE_FORK_LAUNCHER}" verify --request-id "${REQUEST_ID}"
+assert_recorded_processes_gone \
+  double_fork_direct "${DOUBLE_FORK_DIRECT_PIDS}" 1
+assert_recorded_processes_gone \
+  double_fork_descendants "${DOUBLE_FORK_DESCENDANT_PIDS}" 2
+
+readonly FORK_PRESSURE_PROBE="${TEST_ROOT}/fork-pressure-probe.py"
+readonly FORK_PRESSURE_DIRECT_PIDS="${TEST_ROOT}/fork-pressure-direct.pids"
+readonly FORK_PRESSURE_DESCENDANT_PIDS="${TEST_ROOT}/fork-pressure-descendant.pids"
+readonly FORK_PRESSURE_READY="${TEST_ROOT}/fork-pressure.ready"
+cat >"${FORK_PRESSURE_PROBE}" <<EOF
+#!/usr/bin/python3
+import os
+from pathlib import Path
+import signal
+import time
+
+Path("${FORK_PRESSURE_DIRECT_PIDS}").write_text(
+    f"{os.getpid()}\n", encoding="ascii"
+)
+for index in range(64):
+    child = os.fork()
+    if child == 0:
+        if index % 2 == 1:
+            os.setsid()
+        file_fd = os.open(
+            "${FORK_PRESSURE_DESCENDANT_PIDS}",
+            os.O_WRONLY | os.O_CREAT | os.O_APPEND,
+            0o600,
+        )
+        try:
+            os.write(file_fd, f"{os.getpid()}\n".encode("ascii"))
+        finally:
+            os.close(file_fd)
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        while True:
+            time.sleep(1)
+Path("${FORK_PRESSURE_READY}").write_text("ready\n", encoding="ascii")
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+while True:
+    time.sleep(1)
+EOF
+chmod 0555 "${FORK_PRESSURE_PROBE}"
+readonly FORK_PRESSURE_LAUNCHER="${TEST_ROOT}/fork-pressure-operator"
+compile_cgroup_mechanism_launcher \
+  "${FORK_PRESSURE_LAUNCHER}" "${TEST_INTERPRETER}" \
+  "${FORK_PRESSURE_PROBE}" 2
+fork_pressure_start="$(date +%s%3N)"
+expect_failure fork_pressure_timeout 'exceeded bounded launcher lifetime' \
+  "${FORK_PRESSURE_LAUNCHER}" verify --request-id "${REQUEST_ID}"
+fork_pressure_elapsed=$(($(date +%s%3N) - fork_pressure_start))
+readonly fork_pressure_elapsed
+if [[ ! -s "${FORK_PRESSURE_READY}" ]] || ((fork_pressure_elapsed > 9000)); then
+  printf 'fork-pressure cleanup was incomplete or exceeded its bound: %d ms\n' \
+    "${fork_pressure_elapsed}" >&2
+  exit 1
+fi
+assert_recorded_processes_gone \
+  fork_pressure_direct "${FORK_PRESSURE_DIRECT_PIDS}" 1
+assert_recorded_processes_gone \
+  fork_pressure_descendants "${FORK_PRESSURE_DESCENDANT_PIDS}" 64
+
+readonly REFORK_PROBE="${TEST_ROOT}/rapid-refork-probe.py"
+readonly REFORK_DIRECT_PIDS="${TEST_ROOT}/rapid-refork-direct.pids"
+readonly REFORK_READY="${TEST_ROOT}/rapid-refork.ready"
+cat >"${REFORK_PROBE}" <<EOF
+#!/usr/bin/python3
+import os
+from pathlib import Path
+
+Path("${REFORK_DIRECT_PIDS}").write_text(
+    f"{os.getpid()}\n", encoding="ascii"
+)
+completed = 0
+while True:
+    child = os.fork()
+    if child == 0:
+        os._exit(0)
+    os.waitpid(child, 0)
+    completed += 1
+    if completed == 64:
+        Path("${REFORK_READY}").write_text("ready\n", encoding="ascii")
+EOF
+chmod 0555 "${REFORK_PROBE}"
+readonly REFORK_LAUNCHER="${TEST_ROOT}/rapid-refork-operator"
+compile_cgroup_mechanism_launcher \
+  "${REFORK_LAUNCHER}" "${TEST_INTERPRETER}" "${REFORK_PROBE}" 2
+refork_start="$(date +%s%3N)"
+expect_failure rapid_refork_timeout 'exceeded bounded launcher lifetime' \
+  "${REFORK_LAUNCHER}" verify --request-id "${REQUEST_ID}"
+refork_elapsed=$(($(date +%s%3N) - refork_start))
+readonly refork_elapsed
+if [[ ! -s "${REFORK_READY}" ]] || ((refork_elapsed > 9000)); then
+  printf 'rapid-refork cgroup cleanup failed or exceeded its bound: %d ms\n' \
+    "${refork_elapsed}" >&2
+  exit 1
+fi
+assert_recorded_processes_gone \
+  rapid_refork_direct "${REFORK_DIRECT_PIDS}" 1
+
+if find "${DELEGATED_TEST_CGROUP_ROOT}" -mindepth 1 -maxdepth 1 \
+  -name 'launcher-*' -print -quit | grep -q .; then
+  printf 'launcher left a delegated test cgroup behind\n' >&2
+  exit 1
+fi
+fi
+
+expect_failure production_cli_removed 'invalid choice' "${EXECUTOR}" verify
+
+cp "${CONFIG}" "${TEST_ROOT}/config.good"
+printf '# mutation\n' >>"${CONFIG}"
+expect_failure mutated_config 'provisioned digest' \
+  env PYTHONDONTWRITEBYTECODE=1 python3 - \
+    "${EXECUTOR}" "${CONFIG_ROOT}" "$(id -u)" "$(id -g)" <<'PY'
+import importlib.util
+from pathlib import Path
+import sys
+
+spec = importlib.util.spec_from_file_location("operator_mutation", sys.argv[1])
+assert spec is not None and spec.loader is not None
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+module.load_operator_config(
+    Path(sys.argv[2]),
+    provision_uid=int(sys.argv[3]),
+    provision_gid=int(sys.argv[4]),
+    require_immutable=False,
+)
+PY
+mv "${TEST_ROOT}/config.good" "${CONFIG}"
+
+mv "${CONFIG}" "${TEST_ROOT}/config.real"
+ln -s "${TEST_ROOT}/config.real" "${CONFIG}"
+expect_failure config_symlink 'cannot open fixed operator configuration' \
+  env PYTHONDONTWRITEBYTECODE=1 python3 - \
+    "${EXECUTOR}" "${CONFIG_ROOT}" "$(id -u)" "$(id -g)" <<'PY'
+import importlib.util
+from pathlib import Path
+import sys
+
+spec = importlib.util.spec_from_file_location("operator_symlink", sys.argv[1])
+assert spec is not None and spec.loader is not None
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+module.load_operator_config(
+    Path(sys.argv[2]),
+    provision_uid=int(sys.argv[3]),
+    provision_gid=int(sys.argv[4]),
+    require_immutable=False,
+)
+PY
+rm "${CONFIG}"
+mv "${TEST_ROOT}/config.real" "${CONFIG}"
+
+printf 'parity OCI operator focused tests passed\n'
