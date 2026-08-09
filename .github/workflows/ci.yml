@@ -76,6 +76,14 @@ jobs:
             printf 'missing or zero parity head SHA\n' >&2
             exit 2
           fi
+          [[ "$(git rev-parse --verify 'HEAD^{commit}')" == "${HEAD_SHA}" ]] || {
+            printf 'checked-out revision does not match parity head SHA\n' >&2
+            exit 2
+          }
+          if [[ "${EVENT_NAME}" == merge_group && "${EVENT_HEAD_SHA}" != "${HEAD_SHA}" ]]; then
+            printf 'merge-group workflow is not bound to its exact head SHA\n' >&2
+            exit 2
+          fi
           git cat-file -e "${BASE_SHA}^{commit}"
           git cat-file -e "${HEAD_SHA}^{commit}"
           if [[ "${EVENT_NAME}" == merge_group ]] &&

@@ -3,6 +3,7 @@
 /docs/parity-evidence/trust-policy-v2.example.tsv @powderluv
 /docs/parity-evidence/trust-policy-v2.tsv @powderluv
 /docs/parity-evidence/trusted-keys/ @powderluv
+/docs/generated/cuda-oxide-parity-signed-promotions.tsv @powderluv
 /scripts/parity-dashboard.sh @powderluv
 /scripts/parity-matrix.sh @powderluv
 /scripts/parity-promotion-projections.sh @powderluv
@@ -14,5 +15,6 @@
 /scripts/tests/parity-row-evidence.sh @powderluv
 /.github/workflows/ci.yml @powderluv
 /.github/workflows/parity-promotion.yml @powderluv
+/.github/workflows/parity-review-signal.yml @powderluv
 /.github/CODEOWNERS @powderluv
 /.github/parity-trust-reviewers.txt @powderluv

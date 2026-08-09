@@ -3,12 +3,10 @@ name: Protected parity promotion
 on:
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review, edited]
-  pull_request_review:
-    types: [submitted, edited, dismissed]
   merge_group:
     types: [checks_requested]
   workflow_run:
-    workflows: [CI]
+    workflows: [CI, Parity review signal]
     types: [completed]
 
 permissions:
@@ -43,10 +41,9 @@ jobs:
     name: Protected parity verdict controller
     if: >-
       github.event_name == 'pull_request_target' ||
-      github.event_name == 'pull_request_review' ||
       (github.event_name == 'workflow_run' &&
-       github.event.workflow_run.event == 'merge_group' &&
-       github.event.workflow_run.path == '.github/workflows/ci.yml')
+       (github.event.workflow_run.event == 'merge_group' ||
+        github.event.workflow_run.event == 'pull_request_review'))
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     environment: parity-verdict
@@ -56,8 +53,11 @@ jobs:
         id: context
         env:
           EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
           WORKFLOW_SHA: ${{ github.workflow_sha }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          EXPECTED_CI_WORKFLOW_ID: ${{ vars.PARITY_GENERIC_CI_WORKFLOW_ID }}
+          EXPECTED_REVIEW_WORKFLOW_ID: ${{ vars.PARITY_REVIEW_SIGNAL_WORKFLOW_ID }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
           PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
@@ -65,19 +65,25 @@ jobs:
           PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
           PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          MERGE_BASE_REF: ${{ github.event.merge_group.base_ref }}
-          MERGE_BASE_SHA: ${{ github.event.merge_group.base_sha }}
-          MERGE_HEAD_REF: ${{ github.event.merge_group.head_ref }}
-          MERGE_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
           RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_WORKFLOW_ID: ${{ github.event.workflow_run.workflow_id }}
           RUN_EVENT: ${{ github.event.workflow_run.event }}
           RUN_PATH: ${{ github.event.workflow_run.path }}
           RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
           RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_STATUS: ${{ github.event.workflow_run.status }}
+          RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
         run: |
           set -Eeuo pipefail
+          SOURCE_ACCEPTED=true
+          SOURCE_RUN_ID=0
+          SOURCE_WORKFLOW_ID=0
+          SOURCE_PATH=''
+          SOURCE_EVENT=''
+          SOURCE_HEAD_BRANCH=''
+          SOURCE_HEAD_SHA=''
           case "${EVENT_NAME}" in
-            pull_request_target|pull_request_review)
+            pull_request_target)
               EVENT_KIND=pull-request
               BASE_REPOSITORY="${PR_BASE_REPOSITORY}"
               BASE_REF="refs/heads/${PR_BASE_REF}"
@@ -90,17 +96,82 @@ jobs:
               [[ "${PR_BASE_REF}" == "${DEFAULT_BRANCH}" ]]
               ;;
             workflow_run)
-              EVENT_KIND=merge-group
+              [[ "${RUN_ID}" =~ ^[1-9][0-9]*$ ]]
+              [[ "${RUN_WORKFLOW_ID}" =~ ^[1-9][0-9]*$ ]]
+              [[ "${RUN_HEAD_SHA}" =~ ^[0-9a-f]{40}$ && ! "${RUN_HEAD_SHA}" =~ ^0{40}$ ]]
+              git check-ref-format "refs/heads/${RUN_HEAD_BRANCH}" >/dev/null
+              SOURCE_RUN_ID="${RUN_ID}"
+              SOURCE_WORKFLOW_ID="${RUN_WORKFLOW_ID}"
+              SOURCE_PATH="${RUN_PATH}"
+              SOURCE_EVENT="${RUN_EVENT}"
+              SOURCE_HEAD_BRANCH="${RUN_HEAD_BRANCH}"
+              SOURCE_HEAD_SHA="${RUN_HEAD_SHA}"
+              source_run="${RUNNER_TEMP}/source-workflow-run.json"
+              gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" \
+                >"${source_run}"
+              case "${RUN_EVENT}" in
+                merge_group)
+                  [[ "${EXPECTED_CI_WORKFLOW_ID}" =~ ^[1-9][0-9]*$ ]]
+                  [[ "${RUN_WORKFLOW_ID}" == "${EXPECTED_CI_WORKFLOW_ID}" ]]
+                  [[ "${RUN_PATH}" == .github/workflows/ci.yml ]]
+                  EVENT_KIND=merge-group
+                  PR_NUMBER=0
+                  ;;
+                pull_request_review)
+                  [[ "${EXPECTED_REVIEW_WORKFLOW_ID}" =~ ^[1-9][0-9]*$ ]]
+                  [[ "${RUN_WORKFLOW_ID}" == "${EXPECTED_REVIEW_WORKFLOW_ID}" ]]
+                  [[ "${RUN_PATH}" == .github/workflows/parity-review-signal.yml ]]
+                  EVENT_KIND=pull-request
+                  PR_NUMBER="$(jq -er '
+                    .pull_requests | select(type == "array" and length == 1) |
+                    .[0].number | select(type == "number" and . > 0)
+                  ' "${source_run}")"
+                  current_pr="${RUNNER_TEMP}/review-signal-pr.json"
+                  gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" \
+                    >"${current_pr}"
+                  PR_BASE_REPOSITORY="$(jq -er '.base.repo.full_name' "${current_pr}")"
+                  PR_BASE_REF="$(jq -er '.base.ref' "${current_pr}")"
+                  PR_BASE_SHA="$(jq -er '.base.sha' "${current_pr}")"
+                  PR_HEAD_REPOSITORY="$(jq -er '.head.repo.full_name' "${current_pr}")"
+                  PR_HEAD_REF="$(jq -er '.head.ref' "${current_pr}")"
+                  PR_HEAD_SHA="$(jq -er '.head.sha' "${current_pr}")"
+                  [[ "${PR_BASE_REPOSITORY}" == "${GITHUB_REPOSITORY}" ]]
+                  [[ "${PR_BASE_REF}" == "${DEFAULT_BRANCH}" ]]
+                  ;;
+                *)
+                  printf 'unsupported protected source event: %s\n' "${RUN_EVENT}" >&2
+                  exit 2
+                  ;;
+              esac
+              jq -e \
+                --argjson id "${RUN_ID}" \
+                --argjson workflow_id "${RUN_WORKFLOW_ID}" \
+                --arg path "${RUN_PATH}" \
+                --arg event "${RUN_EVENT}" \
+                --arg head "${RUN_HEAD_SHA}" \
+                --arg branch "${RUN_HEAD_BRANCH}" \
+                --arg status "${RUN_STATUS}" \
+                --arg conclusion "${RUN_CONCLUSION}" \
+                '.id == $id and .workflow_id == $workflow_id and
+                  .path == $path and .event == $event and
+                  .head_sha == $head and .head_branch == $branch and
+                  .status == $status and (.conclusion // "") == $conclusion' \
+                "${source_run}" >/dev/null
+              if [[ "${RUN_STATUS}" != completed || "${RUN_CONCLUSION}" != success ]]; then
+                SOURCE_ACCEPTED=false
+              fi
               BASE_REPOSITORY="${GITHUB_REPOSITORY}"
               BASE_REF="refs/heads/${DEFAULT_BRANCH}"
               BASE_SHA="${WORKFLOW_SHA}"
-              HEAD_REPOSITORY="${GITHUB_REPOSITORY}"
-              HEAD_REF="refs/heads/${RUN_HEAD_BRANCH}"
-              HEAD_SHA="${RUN_HEAD_SHA}"
-              PR_NUMBER=0
-              [[ "${RUN_ID}" =~ ^[1-9][0-9]*$ ]]
-              [[ "${RUN_EVENT}" == merge_group ]]
-              [[ "${RUN_PATH}" == .github/workflows/ci.yml ]]
+              if [[ "${EVENT_KIND}" == merge-group ]]; then
+                HEAD_REPOSITORY="${GITHUB_REPOSITORY}"
+                HEAD_REF="refs/heads/${RUN_HEAD_BRANCH}"
+                HEAD_SHA="${RUN_HEAD_SHA}"
+              else
+                HEAD_REPOSITORY="${PR_HEAD_REPOSITORY}"
+                HEAD_REF="refs/heads/${PR_HEAD_REF}"
+                HEAD_SHA="${PR_HEAD_SHA}"
+              fi
               [[ "${BASE_REF}" == "refs/heads/${DEFAULT_BRANCH}" ]]
               ;;
             *)
@@ -123,7 +194,13 @@ jobs:
             printf 'head_ref=%s\n' "${HEAD_REF}"
             printf 'head_sha=%s\n' "${HEAD_SHA}"
             printf 'pr_number=%s\n' "${PR_NUMBER}"
-            printf 'source_run_id=%s\n' "${RUN_ID:-0}"
+            printf 'source_accepted=%s\n' "${SOURCE_ACCEPTED}"
+            printf 'source_run_id=%s\n' "${SOURCE_RUN_ID}"
+            printf 'source_workflow_id=%s\n' "${SOURCE_WORKFLOW_ID}"
+            printf 'source_path=%s\n' "${SOURCE_PATH}"
+            printf 'source_event=%s\n' "${SOURCE_EVENT}"
+            printf 'source_head_branch=%s\n' "${SOURCE_HEAD_BRANCH}"
+            printf 'source_head_sha=%s\n' "${SOURCE_HEAD_SHA}"
           } >>"${GITHUB_OUTPUT}"
 
       - name: Mint minimal verdict token
@@ -189,9 +266,19 @@ jobs:
           HEAD_REF: ${{ steps.context.outputs.head_ref }}
           HEAD_SHA: ${{ steps.context.outputs.head_sha }}
           PR_NUMBER: ${{ steps.context.outputs.pr_number }}
+          SOURCE_ACCEPTED: ${{ steps.context.outputs.source_accepted }}
           SOURCE_RUN_ID: ${{ steps.context.outputs.source_run_id }}
+          SOURCE_WORKFLOW_ID: ${{ steps.context.outputs.source_workflow_id }}
+          SOURCE_PATH: ${{ steps.context.outputs.source_path }}
+          SOURCE_EVENT: ${{ steps.context.outputs.source_event }}
+          SOURCE_HEAD_BRANCH: ${{ steps.context.outputs.source_head_branch }}
+          SOURCE_HEAD_SHA: ${{ steps.context.outputs.source_head_sha }}
         run: |
           set -Eeuo pipefail
+          [[ "${SOURCE_ACCEPTED}" == true ]] || {
+            printf 'source workflow did not complete successfully\n' >&2
+            exit 2
+          }
           REVISION_REPOSITORY="${RUNNER_TEMP}/parity-revisions.git"
           git init --bare "${REVISION_REPOSITORY}"
           auth_header="$(
@@ -234,11 +321,43 @@ jobs:
           git -C "${REVISION_REPOSITORY}" worktree add --detach \
             "${GITHUB_WORKSPACE}/candidate" "${HEAD_SHA}"
 
-          reviews="${RUNNER_TEMP}/parity-pr-reviews.json"
-          if [[ "${EVENT_KIND}" == pull-request ]]; then
+          fetch_reviews() {
+            local output="$1"
             gh api --paginate \
               "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100" |
-              jq -s 'add' >"${reviews}"
+              jq -s 'add' >"${output}"
+          }
+
+          verify_current_pr() {
+            local snapshot="$1"
+            jq -e \
+              --argjson number "${PR_NUMBER}" \
+              --arg base_sha "${BASE_SHA}" \
+              --arg head_sha "${HEAD_SHA}" \
+              --arg base_repo "${BASE_REPOSITORY}" \
+              --arg head_repo "${HEAD_REPOSITORY}" \
+              --arg base_ref "${BASE_REF#refs/heads/}" \
+              --arg head_ref "${HEAD_REF#refs/heads/}" \
+              '.number == $number and .state == "open" and .draft == false and
+                .base.sha == $base_sha and .head.sha == $head_sha and
+                .base.repo.full_name == $base_repo and
+                .head.repo.full_name == $head_repo and
+                .base.ref == $base_ref and .head.ref == $head_ref' \
+              "${snapshot}" >/dev/null
+          }
+
+          canonicalize_reviews() {
+            local input="$1"
+            local output="$2"
+            jq -cS '
+              map({id,submitted_at,state,commit_id,
+                user_login:(.user.login // null)}) | sort_by(.id)
+            ' "${input}" >"${output}"
+          }
+
+          reviews="${RUNNER_TEMP}/parity-pr-reviews.json"
+          if [[ "${EVENT_KIND}" == pull-request ]]; then
+            fetch_reviews "${reviews}"
           else
             printf '[]\n' >"${reviews}"
           fi
@@ -291,43 +410,70 @@ jobs:
               ;;
           esac
 
-          # Lock the live event immediately before permitting success. The API
-          # file list is intentionally never queried or trusted.
-          if [[ "${EVENT_KIND}" == pull-request ]]; then
-            current_pr="${RUNNER_TEMP}/current-pr.json"
-            gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" >"${current_pr}"
-            jq -e \
-              --argjson number "${PR_NUMBER}" \
-              --arg base_sha "${BASE_SHA}" \
-              --arg head_sha "${HEAD_SHA}" \
-              --arg base_repo "${BASE_REPOSITORY}" \
-              --arg head_repo "${HEAD_REPOSITORY}" \
-              --arg base_ref "${BASE_REF#refs/heads/}" \
-              --arg head_ref "${HEAD_REF#refs/heads/}" \
-              '.number == $number and .state == "open" and .draft == false and
-                .base.sha == $base_sha and .head.sha == $head_sha and
-                .base.repo.full_name == $base_repo and
-                .head.repo.full_name == $head_repo and
-                .base.ref == $base_ref and .head.ref == $head_ref' \
-              "${current_pr}" >/dev/null || {
-              printf 'pull request revision changed during protected verification\n' >&2
-              exit 2
-            }
-          else
-            source_run="${RUNNER_TEMP}/merge-group-source-run.json"
+          # Revalidate the source workflow first. A completed source with any
+          # conclusion other than success cannot authorize an App verdict.
+          if ((SOURCE_RUN_ID > 0)); then
+            source_run="${RUNNER_TEMP}/final-source-workflow-run.json"
             gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}" \
               >"${source_run}"
             jq -e \
               --argjson id "${SOURCE_RUN_ID}" \
-              --arg head "${HEAD_SHA}" \
-              --arg branch "${HEAD_REF#refs/heads/}" \
-              '.id == $id and .event == "merge_group" and
-                .path == ".github/workflows/ci.yml" and .status == "completed" and
-                .head_sha == $head and .head_branch == $branch' \
+              --argjson workflow_id "${SOURCE_WORKFLOW_ID}" \
+              --arg path "${SOURCE_PATH}" \
+              --arg event "${SOURCE_EVENT}" \
+              --arg head "${SOURCE_HEAD_SHA}" \
+              --arg branch "${SOURCE_HEAD_BRANCH}" \
+              '.id == $id and .workflow_id == $workflow_id and
+                .path == $path and .event == $event and
+                .head_sha == $head and .head_branch == $branch and
+                .status == "completed" and .conclusion == "success"' \
               "${source_run}" >/dev/null || {
-              printf 'merge-group source run changed during protected verification\n' >&2
+              printf 'source workflow no longer authorizes protected verification\n' >&2
               exit 2
             }
+          fi
+
+          # Lock the current PR and approval set immediately before permitting
+          # success. The protected classifier is rerun with freshly fetched
+          # reviews, then the approval IDs/timestamps and PR revision are read
+          # once more to detect dismissal or force-push during validation.
+          if [[ "${EVENT_KIND}" == pull-request ]]; then
+            current_pr_a="${RUNNER_TEMP}/current-pr-a.json"
+            current_pr_b="${RUNNER_TEMP}/current-pr-b.json"
+            current_reviews_a="${RUNNER_TEMP}/current-reviews-a.json"
+            current_reviews_b="${RUNNER_TEMP}/current-reviews-b.json"
+            review_snapshot_a="${RUNNER_TEMP}/review-snapshot-a.json"
+            review_snapshot_b="${RUNNER_TEMP}/review-snapshot-b.json"
+            gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" \
+              >"${current_pr_a}"
+            verify_current_pr "${current_pr_a}" || {
+              printf 'pull request revision changed during protected verification\n' >&2
+              exit 2
+            }
+            fetch_reviews "${current_reviews_a}"
+            current_mode="$(bash protected/scripts/parity-protected-change-policy.sh \
+              protected candidate docs/cuda-oxide-parity-status.tsv \
+              "${current_reviews_a}" protected/.github/parity-trust-reviewers.txt \
+              "${REVISION_REPOSITORY}" "${BASE_SHA}" "${HEAD_SHA}" \
+              "${EVENT_KIND}")"
+            [[ "${current_mode}" == "${mode}" ]] || {
+              printf 'protected change mode changed during approval revalidation\n' >&2
+              exit 2
+            }
+            canonicalize_reviews "${current_reviews_a}" "${review_snapshot_a}"
+            fetch_reviews "${current_reviews_b}"
+            canonicalize_reviews "${current_reviews_b}" "${review_snapshot_b}"
+            cmp -s -- "${review_snapshot_a}" "${review_snapshot_b}" || {
+              printf 'pull request reviews changed during approval revalidation\n' >&2
+              exit 2
+            }
+            gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" \
+              >"${current_pr_b}"
+            verify_current_pr "${current_pr_b}" || {
+              printf 'pull request revision changed during approval revalidation\n' >&2
+              exit 2
+            }
+          else
             auth_header="$(
               printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n'
             )"

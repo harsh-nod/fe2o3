@@ -101,6 +101,7 @@ readonly -a TRUST_FILES=(
   scripts/tests/parity-row-evidence.sh
   .github/workflows/ci.yml
   .github/workflows/parity-promotion.yml
+  .github/workflows/parity-review-signal.yml
   .github/CODEOWNERS
   .github/parity-trust-reviewers.txt
 )
@@ -180,7 +181,7 @@ validate_changed_paths() {
       die 'immutable revision path is malformed'
     trusted=false
     case "${path}" in
-      docs/parity-signed-evidence-v2.md|docs/parity-evidence/trust-policy-v2.example.tsv|docs/parity-row-evidence-policy-v2.tsv|docs/parity-evidence/trust-policy-v2.tsv|scripts/parity-dashboard.sh|scripts/parity-matrix.sh|scripts/parity-promotion-projections.sh|scripts/parity-signed-evidence.py|scripts/parity-protected-change-policy.sh|scripts/tests/hosted-parity-ci.sh|scripts/tests/parity-dashboard.sh|scripts/tests/parity-promotion-projections.sh|scripts/tests/parity-row-evidence.sh|.github/workflows/ci.yml|.github/workflows/parity-promotion.yml|.github/CODEOWNERS|.github/parity-trust-reviewers.txt)
+      docs/parity-signed-evidence-v2.md|docs/parity-evidence/trust-policy-v2.example.tsv|docs/parity-row-evidence-policy-v2.tsv|docs/parity-evidence/trust-policy-v2.tsv|scripts/parity-dashboard.sh|scripts/parity-matrix.sh|scripts/parity-promotion-projections.sh|scripts/parity-signed-evidence.py|scripts/parity-protected-change-policy.sh|scripts/tests/hosted-parity-ci.sh|scripts/tests/parity-dashboard.sh|scripts/tests/parity-promotion-projections.sh|scripts/tests/parity-row-evidence.sh|.github/workflows/ci.yml|.github/workflows/parity-promotion.yml|.github/workflows/parity-review-signal.yml|.github/CODEOWNERS|.github/parity-trust-reviewers.txt)
         trusted=true
         ;;
       "${PROMOTION_LEDGER}")
@@ -194,6 +195,34 @@ validate_changed_paths() {
       die "trust changes must be isolated from arbitrary paths: ${path}"
   done <"${CHANGED_PATHS}"
   ((actual_count > 0)) || die 'immutable revisions contain no changed paths'
+}
+
+validate_changed_path_ownership() {
+  local codeowners="${PROTECTED_ROOT}/.github/CODEOWNERS"
+  local owner="@$1"
+  local path
+  local pattern
+  [[ -f "${codeowners}" && ! -L "${codeowners}" ]] ||
+    die 'protected CODEOWNERS policy is missing'
+  while IFS= read -r -d '' path; do
+    case "${path}" in
+      docs/parity-evidence/trusted-keys/*)
+        pattern=/docs/parity-evidence/trusted-keys/
+        ;;
+      *)
+        pattern="/${path}"
+        ;;
+    esac
+    awk -v pattern="${pattern}" -v owner="${owner}" '
+      $1 == pattern {
+        for (field_index = 2; field_index <= NF; field_index++) {
+          if (tolower($field_index) == tolower(owner)) found = 1
+        }
+      }
+      END { exit found ? 0 : 1 }
+    ' "${codeowners}" ||
+      die "designated reviewer is not CODEOWNER for changed trust path: ${path}"
+  done <"${CHANGED_PATHS}"
 }
 
 status_changed=false
@@ -258,6 +287,7 @@ if [[ "${trust_changed}" == true ]]; then
     [[ -z "${seen_reviewers[${reviewer}]:-}" ]] || die 'duplicate protected reviewer identity'
     seen_reviewers["${reviewer}"]=1
     ((reviewer_count += 1))
+    validate_changed_path_ownership "${reviewer}"
     review="$(jq -cer --arg reviewer "${reviewer}" '
       [ .[] | select(.user.login? and ((.user.login | ascii_downcase) == $reviewer)) ]
       | sort_by([.submitted_at, .id])

@@ -8,6 +8,7 @@ readonly TEST_DIR
 ROOT="$(cd -- "${TEST_DIR}/../.." && pwd)"
 readonly ROOT
 readonly PROTECTED_WORKFLOW="${ROOT}/.github/workflows/parity-promotion.yml"
+readonly REVIEW_WORKFLOW="${ROOT}/.github/workflows/parity-review-signal.yml"
 readonly GENERIC_WORKFLOW="${ROOT}/.github/workflows/ci.yml"
 readonly HARDWARE_WORKFLOW="${ROOT}/.github/workflows/hardware-smoke.yml"
 readonly ROCM_WORKFLOW="${ROOT}/.github/workflows/rocm-compile.yml"
@@ -91,16 +92,24 @@ require_text "${PROTECTED_WORKFLOW}" 'pull_request_target:'
 require_text "${PROTECTED_WORKFLOW}" 'merge_group:'
 require_text "${PROTECTED_WORKFLOW}" 'types: [checks_requested]'
 require_text "${PROTECTED_WORKFLOW}" 'workflow_run:'
-require_text "${PROTECTED_WORKFLOW}" 'workflows: [CI]'
+require_text "${PROTECTED_WORKFLOW}" 'workflows: [CI, Parity review signal]'
 require_text "${PROTECTED_WORKFLOW}" 'types: [completed]'
 require_text "${PROTECTED_WORKFLOW}" "github.event_name == 'workflow_run'"
 require_text "${PROTECTED_WORKFLOW}" "github.event.workflow_run.event == 'merge_group'"
-require_text "${PROTECTED_WORKFLOW}" "github.event.workflow_run.path == '.github/workflows/ci.yml'"
+require_text "${PROTECTED_WORKFLOW}" "github.event.workflow_run.event == 'pull_request_review'"
 require_text "${PROTECTED_WORKFLOW}" 'WORKFLOW_SHA: ${{ github.workflow_sha }}'
+require_text "${PROTECTED_WORKFLOW}" 'EXPECTED_CI_WORKFLOW_ID: ${{ vars.PARITY_GENERIC_CI_WORKFLOW_ID }}'
+require_text "${PROTECTED_WORKFLOW}" 'EXPECTED_REVIEW_WORKFLOW_ID: ${{ vars.PARITY_REVIEW_SIGNAL_WORKFLOW_ID }}'
+require_text "${PROTECTED_WORKFLOW}" 'RUN_WORKFLOW_ID: ${{ github.event.workflow_run.workflow_id }}'
 require_text "${PROTECTED_WORKFLOW}" 'RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}'
 require_text "${PROTECTED_WORKFLOW}" 'RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}'
+require_text "${PROTECTED_WORKFLOW}" 'RUN_STATUS: ${{ github.event.workflow_run.status }}'
+require_text "${PROTECTED_WORKFLOW}" 'RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}'
+require_text "${PROTECTED_WORKFLOW}" 'if [[ "${RUN_STATUS}" != completed || "${RUN_CONCLUSION}" != success ]]; then'
+require_text "${PROTECTED_WORKFLOW}" '.status == "completed" and .conclusion == "success"'
+require_text "${PROTECTED_WORKFLOW}" 'source workflow did not complete successfully'
 require_text "${PROTECTED_WORKFLOW}" 'gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}"'
-require_text "${PROTECTED_WORKFLOW}" 'merge-group source run changed during protected verification'
+require_text "${PROTECTED_WORKFLOW}" 'source workflow no longer authorizes protected verification'
 require_text "${PROTECTED_WORKFLOW}" 'REVISION_REPOSITORY="${RUNNER_TEMP}/parity-revisions.git"'
 require_text "${PROTECTED_WORKFLOW}" 'git init --bare "${REVISION_REPOSITORY}"'
 require_text "${PROTECTED_WORKFLOW}" '"+${BASE_REF}:refs/parity/base"'
@@ -128,8 +137,6 @@ require_text "${PROTECTED_WORKFLOW}" 'trust-change-approved'
 require_text "${PROTECTED_WORKFLOW}" 'python3 protected/scripts/parity-signed-evidence.py check-trust-update'
 require_text "${PROTECTED_WORKFLOW}" '--protected-row-policy protected/docs/parity-row-evidence-policy-v2.tsv'
 require_text "${PROTECTED_WORKFLOW}" '--candidate-row-policy candidate/docs/parity-row-evidence-policy-v2.tsv'
-require_text "${PROTECTED_WORKFLOW}" 'pull_request_review:'
-require_text "${PROTECTED_WORKFLOW}" 'types: [submitted, edited, dismissed]'
 require_text "${PROTECTED_WORKFLOW}" 'PR_BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}'
 require_text "${PROTECTED_WORKFLOW}" '[[ "${BASE_REPOSITORY}" == "${GITHUB_REPOSITORY}" ]]'
 require_text "${PROTECTED_WORKFLOW}" '[[ "${BASE_REF}" == "refs/heads/${DEFAULT_BRANCH}" ]]'
@@ -138,10 +145,13 @@ require_text "${PROTECTED_WORKFLOW}" 'FETCHED_HEAD_SHA="$(git -C "${REVISION_REP
 require_text "${PROTECTED_WORKFLOW}" '[[ "${FETCHED_BASE_SHA}" == "${BASE_SHA}" ]]'
 require_text "${PROTECTED_WORKFLOW}" '[[ "${FETCHED_HEAD_SHA}" == "${HEAD_SHA}" ]]'
 require_text "${PROTECTED_WORKFLOW}" 'PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}'
-require_text "${PROTECTED_WORKFLOW}" 'MERGE_BASE_SHA: ${{ github.event.merge_group.base_sha }}'
-require_text "${PROTECTED_WORKFLOW}" 'MERGE_HEAD_SHA: ${{ github.event.merge_group.head_sha }}'
+require_text "${PROTECTED_WORKFLOW}" 'HEAD_SHA: ${{ github.event.merge_group.head_sha }}'
 require_text "${PROTECTED_WORKFLOW}" 'merge-base --is-ancestor'
 require_text "${PROTECTED_WORKFLOW}" 'pull request revision changed during protected verification'
+require_text "${PROTECTED_WORKFLOW}" 'pull request reviews changed during approval revalidation'
+require_text "${PROTECTED_WORKFLOW}" 'canonicalize_reviews'
+require_text "${PROTECTED_WORKFLOW}" 'current_mode="$(bash protected/scripts/parity-protected-change-policy.sh'
+require_text "${PROTECTED_WORKFLOW}" 'cmp -s -- "${review_snapshot_a}" "${review_snapshot_b}"'
 require_text "${PROTECTED_WORKFLOW}" 'gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}"'
 require_text "${PROTECTED_WORKFLOW}" '.base.sha == $base_sha and .head.sha == $head_sha'
 require_text "${PROTECTED_WORKFLOW}" '"+${HEAD_REF}:refs/parity/final-head"'
@@ -166,6 +176,24 @@ require_text "${CHANGE_POLICY}" 'git -C "${REVISION_REPOSITORY}" diff --no-ext-d
 require_text "${CHANGE_POLICY}" '--name-only -z "${BASE_SHA}" "${CANDIDATE_HEAD}"'
 require_text "${CHANGE_POLICY}" 'revision worktree does not match declared commit'
 require_text "${CHANGE_POLICY}" 'merge-group head does not descend from its base'
+require_text "${CHANGE_POLICY}" 'designated reviewer is not CODEOWNER for changed trust path'
+
+if rg -n '^  pull_request_review:' "${PROTECTED_WORKFLOW}"; then
+  printf 'privileged protected workflow listens directly for review events\n' >&2
+  exit 1
+fi
+require_text "${REVIEW_WORKFLOW}" 'name: Parity review signal'
+require_text "${REVIEW_WORKFLOW}" 'pull_request_review:'
+require_text "${REVIEW_WORKFLOW}" 'types: [submitted, edited, dismissed]'
+require_text "${REVIEW_WORKFLOW}" 'contents: read'
+require_text "${REVIEW_WORKFLOW}" 'pull-requests: read'
+require_text "${REVIEW_WORKFLOW}" 'runs-on: ubuntu-24.04'
+require_text "${REVIEW_WORKFLOW}" 'cancel-in-progress: false'
+if rg -n 'environment:|secrets\.|self-hosted|create-github-app-token|checks: write' \
+  "${REVIEW_WORKFLOW}"; then
+  printf 'review signal workflow has privileged execution authority\n' >&2
+  exit 1
+fi
 
 if rg -n '^\s+paths:' "${PROTECTED_WORKFLOW}"; then
   printf 'required protected verdict is incorrectly path-filtered\n' >&2
@@ -177,6 +205,7 @@ for ownership in \
   /docs/parity-row-evidence-policy-v2.tsv \
   /docs/parity-evidence/trust-policy-v2.tsv \
   /docs/parity-evidence/trusted-keys/ \
+  /docs/generated/cuda-oxide-parity-signed-promotions.tsv \
   /scripts/parity-signed-evidence.py \
   /scripts/parity-protected-change-policy.sh \
   /scripts/parity-dashboard.sh \
@@ -187,6 +216,7 @@ for ownership in \
   /scripts/tests/parity-promotion-projections.sh \
   /scripts/tests/parity-row-evidence.sh \
   /.github/workflows/parity-promotion.yml \
+  /.github/workflows/parity-review-signal.yml \
   /.github/CODEOWNERS; do
   require_text "${CODEOWNERS}" "${ownership} @powderluv"
 done
@@ -215,6 +245,8 @@ require_text "${GENERIC_WORKFLOW}" 'types: [checks_requested]'
 require_text "${GENERIC_WORKFLOW}" 'BASE_SHA="${MERGE_BASE_SHA}"'
 require_text "${GENERIC_WORKFLOW}" 'HEAD_SHA="${MERGE_HEAD_SHA}"'
 require_text "${GENERIC_WORKFLOW}" 'merge-group head does not contain its declared base'
+require_text "${GENERIC_WORKFLOW}" 'checked-out revision does not match parity head SHA'
+require_text "${GENERIC_WORKFLOW}" 'merge-group workflow is not bound to its exact head SHA'
 require_text "${GENERIC_WORKFLOW}" 'REF_NAME: ${{ github.ref_name }}'
 require_text "${GENERIC_WORKFLOW}" 'git fetch --no-tags --prune --force origin'
 require_text "${GENERIC_WORKFLOW}" '"+refs/heads/${DEFAULT_BRANCH}:${DEFAULT_REMOTE_REF}"'
@@ -376,16 +408,22 @@ expect_failure force_push_current_pr 'pull request snapshot mismatch' verify_pr_
 expect_failure base_advanced_current_pr 'pull request snapshot mismatch' verify_pr_snapshot \
   "${PR_SNAPSHOT}" dddddddddddddddddddddddddddddddddddddddd "${PR_HEAD}"
 
-verify_merge_source_run() {
+verify_source_run() {
   local snapshot="$1"
-  local expected_head="$2"
-  local expected_branch="$3"
-  jq -e --arg head "${expected_head}" --arg branch "${expected_branch}" \
-    '.id == 91 and .event == "merge_group" and
-      .path == ".github/workflows/ci.yml" and .status == "completed" and
+  local expected_workflow_id="$2"
+  local expected_path="$3"
+  local expected_event="$4"
+  local expected_head="$5"
+  local expected_branch="$6"
+  jq -e --argjson workflow_id "${expected_workflow_id}" \
+    --arg path "${expected_path}" --arg event "${expected_event}" \
+    --arg head "${expected_head}" --arg branch "${expected_branch}" \
+    '.id == 91 and .workflow_id == $workflow_id and
+      .event == $event and .path == $path and
+      .status == "completed" and .conclusion == "success" and
       .head_sha == $head and .head_branch == $branch' \
     "${snapshot}" >/dev/null || {
-    printf 'merge-group source run mismatch\n' >&2
+    printf 'source workflow run mismatch\n' >&2
     return 2
   }
 }
@@ -394,20 +432,72 @@ MERGE_SOURCE="${TEST_ROOT}/merge-source-run.json"
 MERGE_HEAD=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
 MERGE_BRANCH=gh-readonly-queue/main/pr-17-abcdef
 jq -n --arg head "${MERGE_HEAD}" --arg branch "${MERGE_BRANCH}" \
-  '{id:91,event:"merge_group",path:".github/workflows/ci.yml",
-    status:"completed",head_sha:$head,head_branch:$branch}' >"${MERGE_SOURCE}"
-verify_merge_source_run "${MERGE_SOURCE}" "${MERGE_HEAD}" "${MERGE_BRANCH}"
-expect_failure merge_source_wrong_head 'merge-group source run mismatch' \
-  verify_merge_source_run "${MERGE_SOURCE}" \
-  ffffffffffffffffffffffffffffffffffffffff "${MERGE_BRANCH}"
-expect_failure merge_source_wrong_ref 'merge-group source run mismatch' \
-  verify_merge_source_run "${MERGE_SOURCE}" "${MERGE_HEAD}" \
-  gh-readonly-queue/main/pr-18-fedcba
+  '{id:91,workflow_id:31337,event:"merge_group",
+    path:".github/workflows/ci.yml",status:"completed",conclusion:"success",
+    head_sha:$head,head_branch:$branch}' >"${MERGE_SOURCE}"
+verify_source_run "${MERGE_SOURCE}" 31337 .github/workflows/ci.yml \
+  merge_group "${MERGE_HEAD}" "${MERGE_BRANCH}"
+expect_failure merge_source_wrong_head 'source workflow run mismatch' \
+  verify_source_run "${MERGE_SOURCE}" 31337 .github/workflows/ci.yml \
+  merge_group ffffffffffffffffffffffffffffffffffffffff "${MERGE_BRANCH}"
+expect_failure merge_source_wrong_ref 'source workflow run mismatch' \
+  verify_source_run "${MERGE_SOURCE}" 31337 .github/workflows/ci.yml \
+  merge_group "${MERGE_HEAD}" gh-readonly-queue/main/pr-18-fedcba
+expect_failure merge_source_wrong_id 'source workflow run mismatch' \
+  verify_source_run "${MERGE_SOURCE}" 31338 .github/workflows/ci.yml \
+  merge_group "${MERGE_HEAD}" "${MERGE_BRANCH}"
 jq '.path = ".github/workflows/spoof.yml"' "${MERGE_SOURCE}" \
   >"${TEST_ROOT}/merge-source-spoof.json"
-expect_failure merge_source_wrong_path 'merge-group source run mismatch' \
-  verify_merge_source_run "${TEST_ROOT}/merge-source-spoof.json" \
-  "${MERGE_HEAD}" "${MERGE_BRANCH}"
+expect_failure merge_source_wrong_path 'source workflow run mismatch' \
+  verify_source_run "${TEST_ROOT}/merge-source-spoof.json" 31337 \
+  .github/workflows/ci.yml merge_group "${MERGE_HEAD}" "${MERGE_BRANCH}"
+for conclusion in failure cancelled skipped neutral timed_out action_required stale; do
+  jq --arg conclusion "${conclusion}" '.conclusion = $conclusion' \
+    "${MERGE_SOURCE}" >"${TEST_ROOT}/source-${conclusion}.json"
+  expect_failure "source_${conclusion}" 'source workflow run mismatch' \
+    verify_source_run "${TEST_ROOT}/source-${conclusion}.json" 31337 \
+    .github/workflows/ci.yml merge_group "${MERGE_HEAD}" "${MERGE_BRANCH}"
+done
+jq '.status = "in_progress"' "${MERGE_SOURCE}" \
+  >"${TEST_ROOT}/source-in-progress.json"
+expect_failure source_not_completed 'source workflow run mismatch' \
+  verify_source_run "${TEST_ROOT}/source-in-progress.json" 31337 \
+  .github/workflows/ci.yml merge_group "${MERGE_HEAD}" "${MERGE_BRANCH}"
+
+REVIEW_SOURCE="${TEST_ROOT}/review-source-run.json"
+jq -n --arg head 9999999999999999999999999999999999999999 \
+  '{id:91,workflow_id:41414,event:"pull_request_review",
+    path:".github/workflows/parity-review-signal.yml",status:"completed",
+    conclusion:"success",head_sha:$head,head_branch:"promotion"}' \
+  >"${REVIEW_SOURCE}"
+verify_source_run "${REVIEW_SOURCE}" 41414 \
+  .github/workflows/parity-review-signal.yml pull_request_review \
+  9999999999999999999999999999999999999999 promotion
+
+# A newer same-App/name/SHA check is the authoritative replacement for a prior
+# failed approval, and dismissal creates a still-newer failure on that SHA.
+CHECK_HISTORY="${TEST_ROOT}/check-history.json"
+jq -n --arg name "${CHECK_NAME}" --arg head "${CHECK_HEAD}" \
+  --argjson app_id "${CHECK_APP_ID}" \
+  '[{id:7,name:$name,head_sha:$head,app:{id:$app_id},conclusion:"failure"},
+    {id:8,name:$name,head_sha:$head,app:{id:$app_id},conclusion:"success"}]' \
+  >"${CHECK_HISTORY}"
+[[ "$(jq -r 'max_by(.id).conclusion' "${CHECK_HISTORY}")" == success ]]
+jq '. + [{id:9,name:.[0].name,head_sha:.[0].head_sha,app:.[0].app,
+  conclusion:"failure"}]' "${CHECK_HISTORY}" >"${TEST_ROOT}/dismissed-history.json"
+[[ "$(jq -r 'max_by(.id).conclusion' \
+  "${TEST_ROOT}/dismissed-history.json")" == failure ]]
+
+APPROVAL_A="${TEST_ROOT}/approval-a.json"
+APPROVAL_B="${TEST_ROOT}/approval-b.json"
+jq -n '[{id:5,submitted_at:"2026-01-01T00:00:00Z",state:"APPROVED",
+  commit_id:"1111111111111111111111111111111111111111",
+  user:{login:"powderluv"}}]' >"${APPROVAL_A}"
+jq '.[] .state = "DISMISSED"' "${APPROVAL_A}" >"${APPROVAL_B}"
+if cmp -s -- "${APPROVAL_A}" "${APPROVAL_B}"; then
+  printf 'review dismissal did not change canonical approval snapshot\n' >&2
+  exit 1
+fi
 
 # A strengthened default policy invalidates a stale non-default branch. Once
 # updated, the branch is checked against and archives trust from the exact tip.
@@ -478,6 +568,8 @@ printf 'signed_promotion_projection_schema_version\t1\nrow_count\t0\n' \
   >"${SEED_REPOSITORY}/docs/generated/cuda-oxide-parity-signed-promotions.tsv"
 printf 'protected verifier\n' >"${SEED_REPOSITORY}/scripts/parity-signed-evidence.py"
 printf 'powderluv\n' >"${SEED_REPOSITORY}/.github/parity-trust-reviewers.txt"
+printf '/scripts/parity-signed-evidence.py @powderluv\n/docs/parity-evidence/trusted-keys/ @powderluv\n' \
+  >"${SEED_REPOSITORY}/.github/CODEOWNERS"
 printf 'protected evidence\n' \
   >"${SEED_REPOSITORY}/docs/parity-evidence/archive/history/prior.tsv"
 printf 'key one\n' \
@@ -565,6 +657,15 @@ rm "${CANDIDATE}/docs/parity-evidence/archive/history/prior.tsv"
 commit_candidate 'archive-only delete'
 expect_failure archive_only_delete \
   'parity evidence archive may change only with a signed status promotion' \
+  bash "${CHANGE_POLICY}" "${policy_args[@]}"
+reset_candidate
+
+mkdir -p "${CANDIDATE}/.github/workflows"
+printf 'unowned review signal\n' \
+  >"${CANDIDATE}/.github/workflows/parity-review-signal.yml"
+commit_candidate 'unowned trust workflow'
+expect_failure missing_codeowner \
+  'designated reviewer is not CODEOWNER for changed trust path' \
   bash "${CHANGE_POLICY}" "${policy_args[@]}"
 reset_candidate
 
