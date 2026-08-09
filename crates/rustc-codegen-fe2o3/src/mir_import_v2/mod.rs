@@ -1,3 +1,4 @@
+mod budget;
 mod normalized;
 mod rustc_adapter;
 

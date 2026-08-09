@@ -13,6 +13,8 @@ pub(crate) struct CaptureLimitsV2 {
     pub max_projection_depth: usize,
     pub max_successors: usize,
     pub max_text_bytes: usize,
+    pub max_total_text_bytes: usize,
+    pub max_total_work_items: usize,
 }
 
 impl Default for CaptureLimitsV2 {
@@ -26,6 +28,8 @@ impl Default for CaptureLimitsV2 {
             max_projection_depth: 64,
             max_successors: 65_536,
             max_text_bytes: 16_384,
+            max_total_text_bytes: 16 * 1_048_576,
+            max_total_work_items: 8 * 1_048_576,
         }
     }
 }
