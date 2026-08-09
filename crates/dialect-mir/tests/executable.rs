@@ -1,15 +1,16 @@
 use dialect_mir::{
-    MirAddressSpace, MirAggregateKind, MirAggregateLayout, MirAuthorizedDeviceImport,
-    MirBasicBlock, MirBinaryOp, MirBlockId, MirBlockParameter, MirBody, MirBodyForm, MirCall,
-    MirCallAuthority, MirCallReturn, MirCallSignature, MirCallable, MirCallee, MirCastKind,
-    MirConstant, MirConstantValue, MirEdge, MirEnumEncoding, MirEnumType, MirExecutableModule,
-    MirExecutableTarget, MirExecutableVersion, MirExternalCallRegistry, MirExternalCallReturn,
-    MirExternalCallSignature, MirField, MirFunction, MirIntrinsic, MirLayout, MirLocalDecl,
-    MirLocalId, MirLocalKind, MirMutability, MirOperand, MirPadding, MirPlace, MirProjection,
-    MirRvalue, MirScalarType, MirSemanticType, MirSourceSpan, MirStatement, MirStatementKind,
-    MirStructType, MirTerminator, MirTerminatorKind, MirTypeId, MirTypeKind, MirUnwindAction,
-    MirValueId, MirVariant,
+    GFX942_TARGET_DATA_LAYOUT, MirAddressSpace, MirAggregateKind, MirAggregateLayout,
+    MirAuthorizedDeviceImport, MirBasicBlock, MirBinaryOp, MirBlockId, MirBlockParameter, MirBody,
+    MirBodyForm, MirCall, MirCallAuthority, MirCallReturn, MirCallSignature, MirCallable,
+    MirCallee, MirCastKind, MirConstant, MirConstantValue, MirEdge, MirEnumEncoding, MirEnumType,
+    MirExecutableModule, MirExecutableTarget, MirExecutableVersion, MirExternalCallRegistry,
+    MirExternalCallReturn, MirExternalCallSignature, MirField, MirFunction, MirIntrinsic,
+    MirLayout, MirLocalDecl, MirLocalId, MirLocalKind, MirMutability, MirOperand, MirPadding,
+    MirPlace, MirProjection, MirRvalue, MirScalarType, MirSemanticType, MirSourceSpan,
+    MirStatement, MirStatementKind, MirStructType, MirTerminator, MirTerminatorKind, MirTypeId,
+    MirTypeKind, MirUnwindAction, MirValueId, MirVariant,
 };
+use fe2o3_compiler_ffi::EXTERNAL_DEVICE_LIBRARY_GFX942_DATA_LAYOUT_V1;
 
 fn external_registry(
     identity: &str,
@@ -2052,6 +2053,17 @@ fn recursively_enforces_target_pointer_abi_and_address_spaces() {
 
 #[test]
 fn gfx942_target_identity_and_pointer_map_are_exact() {
+    place_module().validate().unwrap();
+    assert_eq!(
+        MirExecutableTarget::gfx942().data_layout,
+        GFX942_TARGET_DATA_LAYOUT
+    );
+    assert_eq!(
+        GFX942_TARGET_DATA_LAYOUT,
+        EXTERNAL_DEVICE_LIBRARY_GFX942_DATA_LAYOUT_V1
+    );
+    assert!(GFX942_TARGET_DATA_LAYOUT.contains("p8:128:128:128:48"));
+
     let mut wrong_triple = place_module();
     wrong_triple.target.triple = "amdgcn-unknown-amdhsa".into();
     assert!(
@@ -2080,6 +2092,17 @@ fn gfx942_target_identity_and_pointer_map_are_exact() {
     wrong_layout.target.data_layout = "e-p:64:64-p3:64:64".into();
     assert!(
         wrong_layout
+            .validate()
+            .unwrap_err()
+            .path()
+            .contains("data_layout")
+    );
+
+    let mut shortened_layout = place_module();
+    shortened_layout.target.data_layout =
+        GFX942_TARGET_DATA_LAYOUT.replace("p8:128:128:128:48", "p8:128:128");
+    assert!(
+        shortened_layout
             .validate()
             .unwrap_err()
             .path()
