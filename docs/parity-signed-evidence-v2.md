@@ -27,6 +27,39 @@ requires either moving the repository to an organization that can enforce a
 protected required workflow or deploying an independent App/external
 controller with equivalent immutable-source guarantees.
 
+### Native Protection Activation Gate
+
+Before native CODEOWNER enforcement or branch protection is activated for
+`harsh-nod/fe2o3`, `@powderluv` must accept pending write invitation
+`328510321` from a `gh` session authenticated as `@powderluv`:
+
+    gh api --method PATCH /user/repository_invitations/328510321
+
+No token belongs in this command or in the repository; `gh` must obtain the
+credential from its authenticated session. After acceptance, verify the live
+repository permission rather than inferring it from the invitation:
+
+    permission="$(
+      gh api repos/harsh-nod/fe2o3/collaborators/powderluv/permission \
+        --jq '.role_name // .permission'
+    )"
+    case "${permission}" in
+      write|maintain|admin)
+        printf 'native-protection-permission\t%s\n' "${permission}"
+        ;;
+      *)
+        printf 'native protection blocked: permission=%s\n' "${permission:-missing}" >&2
+        exit 1
+        ;;
+    esac
+
+The expected result is `native-protection-permission` followed by `write`,
+`maintain`, or `admin`. The current `read` permission, an empty response, or
+any API failure is a hard blocker. Do not enable or claim native CODEOWNER
+enforcement, required reviews, stale-approval dismissal, or branch protection
+until this live check passes. A repository administrator must perform the
+actual protection configuration.
+
 ## Operator Provisioning
 
 1. Generate separate Ed25519 attestor and reviewer keys outside the repository.
