@@ -2076,6 +2076,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     manifest = subparsers.add_parser("validate-manifest")
     common_trust(manifest)
+    manifest.add_argument("--archive-closure-output", type=Path)
     manifest.add_argument("manifest")
 
     shard = subparsers.add_parser("validate-shard")
@@ -2156,6 +2157,16 @@ def main() -> None:
             args.manifest,
             trust,
         )
+        if args.archive_closure_output is not None:
+            write_new_file(
+                args.archive_closure_output,
+                promotion_archive_closure_bytes(
+                    build_promotion_archive_closure(
+                        args.archive_root.resolve(strict=True), manifest
+                    )
+                ),
+                "promotion archive closure",
+            )
         print(f"signed promotion manifest is valid: {len(manifest.results)} result(s)")
     elif args.command == "validate-shard":
         trust = parse_trust_policy(args.trusted_root, args.trust_policy)
