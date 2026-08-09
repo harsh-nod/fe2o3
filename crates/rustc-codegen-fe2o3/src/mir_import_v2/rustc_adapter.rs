@@ -6,12 +6,15 @@ use super::type_preflight::{
     TypePreflightErrorV2, preflight_generic_args_v2, preflight_mir_const_v2, preflight_ty_const_v2,
     preflight_ty_v2,
 };
+use rustc_abi::ExternAbi;
 use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
+use rustc_hir::Safety;
+use rustc_hir::def::DefKind;
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir::{
-    AggregateKind, Body, NonDivergingIntrinsic, Operand, Place, ProjectionElem, Rvalue, SourceInfo,
-    SourceScope, StatementKind, TerminatorKind, UnwindAction,
+    AggregateKind, AssertKind, Body, InlineAsmOperand, Local, NonDivergingIntrinsic, Operand,
+    Place, ProjectionElem, Rvalue, SourceInfo, StatementKind, TerminatorKind, UnwindAction,
 };
 use rustc_middle::ty::{
     EarlyBinder, FloatTy, GenericArgsRef, Instance, InstanceKind, IntTy, ReifyReason, Ty, TyCtxt,
@@ -49,6 +52,7 @@ struct CaptureContextV2<'a, 'tcx> {
     body: &'a Body<'tcx>,
     limits: CaptureLimitsV2,
     budget: CaptureBudgetV2,
+    source_scopes: Vec<SourceScopeIdentityV2>,
 }
 
 pub(crate) fn capture_instance_body_v2<'tcx>(
@@ -101,7 +105,11 @@ fn capture_body_v2<'tcx>(
         body,
         limits,
         budget,
+        source_scopes: Vec::new(),
     };
+
+    let source_scopes = capture_source_scopes(&mut context)?;
+    context.source_scopes = source_scopes;
 
     let mut locals = Vec::with_capacity(body.local_decls.len());
     for (local, declaration) in body.local_decls.iter_enumerated() {
@@ -169,6 +177,7 @@ fn capture_body_v2<'tcx>(
 
     let function = function_identity(&mut context, instance)?;
     let source = span_identity(&mut context, body.span, 0)?;
+    let source_scopes = std::mem::take(&mut context.source_scopes);
     let mut captured = CapturedBodyV2 {
         schema_version: NORMALIZED_MIR_SCHEMA_V2,
         authority: CaptureAuthorityV2::CompilerObservationOnly,
@@ -177,6 +186,7 @@ fn capture_body_v2<'tcx>(
         arg_count: body.arg_count,
         capture_work_items: 0,
         capture_text_bytes: 0,
+        source_scopes,
         locals,
         blocks,
     };
@@ -242,7 +252,17 @@ fn capture_statement<'tcx>(
         StatementKind::AscribeUserType(contents, variance) => Ok(StatementKindV2::Unsupported(
             UnsupportedStatementV2::AscribeUserType {
                 place: capture_place(context, contents.0)?,
-                projection: stable_compiler_value!(context, "user type projection", &contents.1,)?,
+                projection: {
+                    ensure_bound(
+                        "user type projection",
+                        contents.1.projs.len(),
+                        context.limits.max_projection_depth,
+                    )?;
+                    context
+                        .budget
+                        .charge_work("user type projection", contents.1.projs.len())?;
+                    stable_compiler_value!(context, "user type projection", &contents.1,)?
+                },
                 variance: stable_compiler_value!(context, "user type variance", variance)?,
             },
         )),
@@ -518,9 +538,11 @@ fn capture_place<'tcx>(
     for element in place.projection {
         projection.push(capture_projection(context, element)?);
     }
+    let ty = place.ty(&context.body.local_decls, context.tcx).ty;
     Ok(PlaceV2 {
         local: place.local.as_usize(),
         projection,
+        type_hash: normalized_type_hash(context, ty, "place type")?,
     })
 }
 
@@ -604,6 +626,7 @@ fn capture_terminator<'tcx>(
         } => {
             ensure_bound("call arguments", args.len(), context.limits.max_operands)?;
             let callee = capture_callee_identity(context, func)?;
+            let function = capture_operand(context, func, source_info)?;
             let mut arguments = Vec::with_capacity(args.len());
             for argument in args {
                 arguments.push(CallArgumentV2 {
@@ -611,15 +634,27 @@ fn capture_terminator<'tcx>(
                     source: span_identity(context, argument.span, source_info.scope.as_usize())?,
                 });
             }
+            let destination = capture_place(context, *destination)?;
+            let target = target.map(|target| target.as_usize());
+            let unwind = capture_unwind(context, unwind)?;
+            let contract_hash = call_contract_hash_v2(
+                &function,
+                &callee,
+                &arguments,
+                Some(&destination),
+                target,
+                Some(&unwind),
+            )?;
             Ok(TerminatorKindV2::Call {
-                function: capture_operand(context, func, source_info)?,
+                function,
                 callee,
                 arguments,
-                destination: capture_place(context, *destination)?,
-                target: target.map(|target| target.as_usize()),
-                unwind: capture_unwind(context, unwind)?,
+                destination,
+                target,
+                unwind,
                 call_source: stable_compiler_value!(context, "call source", call_source)?,
                 function_span: span_identity(context, *fn_span, source_info.scope.as_usize())?,
+                contract_hash,
             })
         }
         TerminatorKind::TailCall {
@@ -633,6 +668,7 @@ fn capture_terminator<'tcx>(
                 context.limits.max_operands,
             )?;
             let callee = capture_callee_identity(context, func)?;
+            let function = capture_operand(context, func, source_info)?;
             let mut arguments = Vec::with_capacity(args.len());
             for argument in args {
                 arguments.push(CallArgumentV2 {
@@ -640,11 +676,14 @@ fn capture_terminator<'tcx>(
                     source: span_identity(context, argument.span, source_info.scope.as_usize())?,
                 });
             }
+            let contract_hash =
+                call_contract_hash_v2(&function, &callee, &arguments, None, None, None)?;
             Ok(TerminatorKindV2::TailCall {
-                function: capture_operand(context, func, source_info)?,
+                function,
                 callee,
                 arguments,
                 function_span: span_identity(context, *fn_span, source_info.scope.as_usize())?,
+                contract_hash,
             })
         }
         TerminatorKind::Drop {
@@ -668,13 +707,16 @@ fn capture_terminator<'tcx>(
             msg,
             target,
             unwind,
-        } => Ok(TerminatorKindV2::Assert {
-            condition: capture_operand(context, cond, source_info)?,
-            expected: *expected,
-            target: target.as_usize(),
-            message: stable_compiler_value!(context, "assert message", msg)?,
-            unwind: capture_unwind(context, unwind)?,
-        }),
+        } => {
+            preflight_assert_message(context, msg)?;
+            Ok(TerminatorKindV2::Assert {
+                condition: capture_operand(context, cond, source_info)?,
+                expected: *expected,
+                target: target.as_usize(),
+                message: stable_compiler_value!(context, "assert message", msg)?,
+                unwind: capture_unwind(context, unwind)?,
+            })
+        }
         TerminatorKind::UnwindResume => Ok(TerminatorKindV2::UnwindResume),
         TerminatorKind::UnwindTerminate(reason) => Ok(TerminatorKindV2::UnwindTerminate {
             reason: stable_compiler_value!(context, "unwind termination", reason)?,
@@ -711,15 +753,128 @@ fn capture_terminator<'tcx>(
             line_spans,
             targets,
             ..
-        } => Ok(TerminatorKindV2::Unsupported(
-            UnsupportedTerminatorV2::InlineAssembly {
-                template_pieces: template.len(),
-                operands: operands.len(),
-                line_spans: line_spans.len(),
-                targets: targets.len(),
-            },
-        )),
+        } => {
+            preflight_inline_assembly(context, operands)?;
+            Ok(TerminatorKindV2::Unsupported(
+                UnsupportedTerminatorV2::InlineAssembly {
+                    template_pieces: template.len(),
+                    operands: operands.len(),
+                    line_spans: line_spans.len(),
+                    targets: targets.len(),
+                },
+            ))
+        }
     }
+}
+
+fn preflight_assert_message<'tcx>(
+    context: &mut CaptureContextV2<'_, 'tcx>,
+    message: &AssertKind<Operand<'tcx>>,
+) -> Result<(), CaptureErrorV2> {
+    match message {
+        AssertKind::BoundsCheck { len, index }
+        | AssertKind::Overflow(_, len, index)
+        | AssertKind::MisalignedPointerDereference {
+            required: len,
+            found: index,
+        } => {
+            preflight_hash_operand(context, len)?;
+            preflight_hash_operand(context, index)
+        }
+        AssertKind::OverflowNeg(operand)
+        | AssertKind::DivisionByZero(operand)
+        | AssertKind::RemainderByZero(operand)
+        | AssertKind::InvalidEnumConstruction(operand) => preflight_hash_operand(context, operand),
+        AssertKind::ResumedAfterReturn(_)
+        | AssertKind::ResumedAfterPanic(_)
+        | AssertKind::ResumedAfterDrop(_)
+        | AssertKind::NullPointerDereference => Ok(()),
+    }
+}
+
+fn preflight_inline_assembly<'tcx>(
+    context: &mut CaptureContextV2<'_, 'tcx>,
+    operands: &[InlineAsmOperand<'tcx>],
+) -> Result<(), CaptureErrorV2> {
+    for operand in operands {
+        match operand {
+            InlineAsmOperand::In { value, .. } => preflight_hash_operand(context, value)?,
+            InlineAsmOperand::Out { place, .. } => {
+                if let Some(place) = place {
+                    preflight_hash_place(context, *place)?;
+                }
+            }
+            InlineAsmOperand::InOut {
+                in_value,
+                out_place,
+                ..
+            } => {
+                preflight_hash_operand(context, in_value)?;
+                if let Some(place) = out_place {
+                    preflight_hash_place(context, *place)?;
+                }
+            }
+            InlineAsmOperand::Const { value } | InlineAsmOperand::SymFn { value } => {
+                preflight_mir_const_v2(
+                    "inline assembly constant",
+                    value.const_,
+                    context.limits,
+                    &mut context.budget,
+                )?;
+            }
+            InlineAsmOperand::SymStatic { .. } | InlineAsmOperand::Label { .. } => {}
+        }
+    }
+    Ok(())
+}
+
+fn preflight_hash_operand<'tcx>(
+    context: &mut CaptureContextV2<'_, 'tcx>,
+    operand: &Operand<'tcx>,
+) -> Result<(), CaptureErrorV2> {
+    match operand {
+        Operand::Copy(place) | Operand::Move(place) => preflight_hash_place(context, *place),
+        Operand::Constant(constant) => preflight_mir_const_v2(
+            "hashed compiler operand",
+            constant.const_,
+            context.limits,
+            &mut context.budget,
+        )
+        .map_err(Into::into),
+        Operand::RuntimeChecks(_) => Ok(()),
+    }
+}
+
+fn preflight_hash_place<'tcx>(
+    context: &mut CaptureContextV2<'_, 'tcx>,
+    place: Place<'tcx>,
+) -> Result<(), CaptureErrorV2> {
+    ensure_bound(
+        "hashed compiler place projection",
+        place.projection.len(),
+        context.limits.max_projection_depth,
+    )?;
+    context
+        .budget
+        .charge_work("hashed compiler place projection", place.projection.len())?;
+    for projection in place.projection {
+        match projection {
+            ProjectionElem::Field(_, ty)
+            | ProjectionElem::OpaqueCast(ty)
+            | ProjectionElem::UnwrapUnsafeBinder(ty) => preflight_ty_v2(
+                "hashed compiler projection type",
+                ty,
+                context.limits,
+                &mut context.budget,
+            )?,
+            ProjectionElem::Deref
+            | ProjectionElem::Index(_)
+            | ProjectionElem::ConstantIndex { .. }
+            | ProjectionElem::Subslice { .. }
+            | ProjectionElem::Downcast(..) => {}
+        }
+    }
+    Ok(())
 }
 
 fn capture_unwind<'tcx>(
@@ -771,37 +926,266 @@ fn capture_callee_identity<'tcx>(
             args,
         ))?;
         let declared = definition_identity(context, *def_id)?;
-        let intrinsic = if let Some(intrinsic) = context.tcx.intrinsic(*def_id) {
-            Some(IntrinsicIdentityV2 {
-                definition: declared.clone(),
-                name: context
-                    .budget
-                    .bounded_str("intrinsic name", intrinsic.name.as_str())?,
-                must_be_overridden: intrinsic.must_be_overridden,
-                const_stable: intrinsic.const_stable,
-            })
-        } else {
-            None
+        let declared_generic_args_hash =
+            generic_args_hash(context, "declared callee arguments", args)?;
+        let declared_generic_arg_count = args.len();
+        let declared_signature =
+            function_signature_identity(context, *def_id, args, "declared callee signature")?;
+        let resolved_signature =
+            resolved_signature_identity(context, resolved, &declared_signature)?;
+        let resolved_identity = function_identity(context, resolved)?;
+        let intrinsic = match resolved.def {
+            InstanceKind::Intrinsic(def_id) => {
+                let metadata = context.tcx.intrinsic(def_id).ok_or_else(|| {
+                    CaptureErrorV2::new(
+                        "resolved intrinsic instance has no compiler intrinsic metadata",
+                    )
+                })?;
+                let mut captured = IntrinsicIdentityV2 {
+                    definition: definition_identity(context, def_id)?,
+                    name: context
+                        .budget
+                        .bounded_str("intrinsic name", metadata.name.as_str())?,
+                    must_be_overridden: metadata.must_be_overridden,
+                    const_stable: metadata.const_stable,
+                    binding_hash: [0; 32],
+                };
+                captured.binding_hash = intrinsic_binding_hash_v2(&captured)?;
+                Some(Box::new(captured))
+            }
+            _ => None,
         };
+        let callable_type = type_identity_normalized(context, callable_ty)?;
+        let resolution_binding_hash = resolution_binding_hash_v2(
+            &callable_type,
+            &declared,
+            &declared_generic_args_hash,
+            declared_generic_arg_count,
+            &declared_signature,
+            &resolved_identity,
+            &resolved_signature,
+            intrinsic.as_deref(),
+        )?;
         return Ok(CalleeIdentityV2::Direct {
             declared,
-            declared_generic_args_hash: generic_args_hash(
-                context,
-                "declared callee arguments",
-                args,
-            )?,
-            resolved: Box::new(function_identity(context, resolved)?),
+            declared_generic_args_hash,
+            declared_generic_arg_count,
+            declared_signature,
+            resolved: Box::new(resolved_identity),
+            resolved_signature: Box::new(resolved_signature),
             intrinsic,
+            resolution_binding_hash,
         });
     }
-    if !matches!(callable_ty.kind(), TyKind::FnPtr(..)) {
+    let TyKind::FnPtr(signature, header) = callable_ty.kind() else {
         return Err(CaptureErrorV2::new(
             "a non-FnDef call operand was not a legitimate function pointer",
         ));
-    }
+    };
+    let signature = signature_identity_from_rustc(
+        context,
+        stable_hash!(context.tcx, callable_ty),
+        FunctionSignatureOriginV2::CompilerFnSig,
+        signature.skip_binder().inputs_and_output,
+        header.safety,
+        header.abi,
+        header.c_variadic,
+        "indirect callable signature",
+    )?;
+    let callable_type = type_identity_normalized(context, callable_ty)?;
+    let callable_binding_hash = indirect_callable_binding_hash_v2(&callable_type, &signature)?;
     Ok(CalleeIdentityV2::Indirect {
-        callable_type: type_identity_normalized(context, callable_ty)?,
+        callable_type,
+        signature: Box::new(signature),
+        callable_binding_hash,
     })
+}
+
+fn function_signature_identity<'tcx>(
+    context: &mut CaptureContextV2<'_, 'tcx>,
+    def_id: DefId,
+    args: GenericArgsRef<'tcx>,
+    label: &str,
+) -> Result<FunctionSignatureIdentityV2, CaptureErrorV2> {
+    preflight_generic_args_v2(label, args, context.limits, &mut context.budget)?;
+    if !matches!(context.tcx.def_kind(def_id), DefKind::Fn | DefKind::AssocFn) {
+        return Err(CaptureErrorV2::new(format!(
+            "{label} does not refer to a function-signature DefId"
+        )));
+    }
+    let raw = context.tcx.fn_sig(def_id);
+    preflight_signature_types(
+        context,
+        raw.skip_binder().inputs_and_output().skip_binder(),
+        label,
+    )?;
+    let normalized = context
+        .tcx
+        .try_instantiate_and_normalize_erasing_regions(args, TypingEnv::fully_monomorphized(), raw)
+        .map_err(|_| CaptureErrorV2::normalization(label))?;
+    let signature = context
+        .tcx
+        .instantiate_bound_regions_with_erased(normalized);
+    preflight_signature_types(context, signature.inputs_and_output, label)?;
+    signature_identity_from_rustc(
+        context,
+        stable_hash!(context.tcx, signature),
+        FunctionSignatureOriginV2::CompilerFnSig,
+        signature.inputs_and_output,
+        signature.safety,
+        signature.abi,
+        signature.c_variadic,
+        label,
+    )
+}
+
+fn resolved_signature_identity<'tcx>(
+    context: &mut CaptureContextV2<'_, 'tcx>,
+    instance: Instance<'tcx>,
+    declared: &FunctionSignatureIdentityV2,
+) -> Result<FunctionSignatureIdentityV2, CaptureErrorV2> {
+    if matches!(
+        context.tcx.def_kind(instance.def_id()),
+        DefKind::Fn | DefKind::AssocFn
+    ) {
+        return function_signature_identity(
+            context,
+            instance.def_id(),
+            instance.args,
+            "resolved callee signature",
+        );
+    }
+    preflight_instance_v2(
+        "generated resolved signature",
+        instance,
+        context.limits,
+        &mut context.budget,
+    )?;
+    let body = context.tcx.instance_mir(instance.def);
+    let interface_count = body
+        .arg_count
+        .checked_add(1)
+        .ok_or_else(|| CaptureErrorV2::new("generated signature arity overflowed"))?;
+    ensure_bound(
+        "generated signature type arity",
+        interface_count,
+        context.limits.max_type_arity,
+    )?;
+    if interface_count > body.local_decls.len() {
+        return Err(CaptureErrorV2::new(
+            "generated signature does not fit in its MIR local table",
+        ));
+    }
+    let mut types = Vec::with_capacity(interface_count);
+    for index in (1..=body.arg_count).chain(std::iter::once(0)) {
+        let raw = body.local_decls[Local::from_usize(index)].ty;
+        preflight_ty_v2(
+            "generated signature type",
+            raw,
+            context.limits,
+            &mut context.budget,
+        )?;
+        let normalized = instance
+            .try_instantiate_mir_and_normalize_erasing_regions(
+                context.tcx,
+                TypingEnv::fully_monomorphized(),
+                EarlyBinder::bind(raw),
+            )
+            .map_err(|_| CaptureErrorV2::normalization("generated signature type"))?;
+        preflight_ty_v2(
+            "normalized generated signature type",
+            normalized,
+            context.limits,
+            &mut context.budget,
+        )?;
+        types.push(normalized);
+    }
+    let stable_hash = stable_hash!(context.tcx, (&instance, &types));
+    signature_identity_from_types(
+        context,
+        stable_hash,
+        FunctionSignatureOriginV2::GeneratedMir,
+        &types,
+        declared.safety,
+        declared.abi.clone(),
+        declared.c_variadic,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn signature_identity_from_rustc<'tcx>(
+    context: &mut CaptureContextV2<'_, 'tcx>,
+    stable_hash: [u8; 16],
+    origin: FunctionSignatureOriginV2,
+    types: &[Ty<'tcx>],
+    safety: Safety,
+    abi: ExternAbi,
+    c_variadic: bool,
+    label: &str,
+) -> Result<FunctionSignatureIdentityV2, CaptureErrorV2> {
+    preflight_signature_types(context, types, label)?;
+    let safety = match safety {
+        Safety::Safe => FunctionSafetyV2::Safe,
+        Safety::Unsafe => FunctionSafetyV2::Unsafe,
+    };
+    let abi_name = abi.as_str();
+    let abi = FunctionAbiIdentityV2 {
+        stable_hash: stable_hash!(context.tcx, abi),
+        canonical_name: context.budget.bounded_str("function ABI", abi_name)?,
+        unwind_allowed: abi.is_rustic_abi() || abi_name.ends_with("-unwind"),
+    };
+    signature_identity_from_types(context, stable_hash, origin, types, safety, abi, c_variadic)
+}
+
+fn signature_identity_from_types<'tcx>(
+    context: &mut CaptureContextV2<'_, 'tcx>,
+    stable_hash: [u8; 16],
+    origin: FunctionSignatureOriginV2,
+    types: &[Ty<'tcx>],
+    safety: FunctionSafetyV2,
+    abi: FunctionAbiIdentityV2,
+    c_variadic: bool,
+) -> Result<FunctionSignatureIdentityV2, CaptureErrorV2> {
+    let (output, inputs) = types
+        .split_last()
+        .ok_or_else(|| CaptureErrorV2::new("function signature has no output type"))?;
+    ensure_bound(
+        "function signature inputs",
+        inputs.len(),
+        context.limits.max_type_arity,
+    )?;
+    let mut captured_inputs = Vec::with_capacity(inputs.len());
+    for input in inputs {
+        captured_inputs.push(type_identity_normalized(context, *input)?);
+    }
+    let mut signature = FunctionSignatureIdentityV2 {
+        stable_hash,
+        origin,
+        inputs: captured_inputs,
+        output: Box::new(type_identity_normalized(context, *output)?),
+        safety,
+        abi,
+        c_variadic,
+        binding_hash: [0; 32],
+    };
+    signature.binding_hash = function_signature_binding_hash_v2(&signature)?;
+    Ok(signature)
+}
+
+fn preflight_signature_types<'tcx>(
+    context: &mut CaptureContextV2<'_, 'tcx>,
+    types: &[Ty<'tcx>],
+    label: &str,
+) -> Result<(), CaptureErrorV2> {
+    ensure_bound(
+        "signature type arity",
+        types.len(),
+        context.limits.max_type_arity,
+    )?;
+    for ty in types {
+        preflight_ty_v2(label, *ty, context.limits, &mut context.budget)?;
+    }
+    Ok(())
 }
 
 fn require_direct_resolution<T, E>(result: Result<Option<T>, E>) -> Result<T, CaptureErrorV2> {
@@ -939,6 +1323,24 @@ fn type_identity<'tcx>(
     type_identity_normalized(context, normalized)
 }
 
+fn normalized_type_hash<'tcx>(
+    context: &mut CaptureContextV2<'_, 'tcx>,
+    ty: Ty<'tcx>,
+    label: &str,
+) -> Result<[u8; 16], CaptureErrorV2> {
+    preflight_ty_v2(label, ty, context.limits, &mut context.budget)?;
+    let normalized = context
+        .instance
+        .try_instantiate_mir_and_normalize_erasing_regions(
+            context.tcx,
+            TypingEnv::fully_monomorphized(),
+            EarlyBinder::bind(ty),
+        )
+        .map_err(|_| CaptureErrorV2::normalization(label))?;
+    preflight_ty_v2(label, normalized, context.limits, &mut context.budget)?;
+    Ok(stable_hash!(context.tcx, normalized))
+}
+
 fn type_identity_normalized<'tcx>(
     context: &mut CaptureContextV2<'_, 'tcx>,
     ty: Ty<'tcx>,
@@ -970,6 +1372,7 @@ fn type_identity_normalized<'tcx>(
         TyKind::FnDef(def_id, args) => TypeClassV2::FunctionDefinition {
             definition: definition_identity(context, *def_id)?,
             generic_args_hash: generic_args_hash(context, "function type arguments", args)?,
+            generic_arg_count: args.len(),
         },
         TyKind::FnPtr(..) => TypeClassV2::FunctionPointer,
         TyKind::UnsafeBinder(_) => TypeClassV2::UnsafeBinder,
@@ -1046,6 +1449,131 @@ fn float_width(width: FloatTy) -> FloatWidthV2 {
     }
 }
 
+fn capture_source_scopes<'tcx>(
+    context: &mut CaptureContextV2<'_, 'tcx>,
+) -> Result<Vec<SourceScopeIdentityV2>, CaptureErrorV2> {
+    ensure_bound(
+        "source scopes",
+        context.body.source_scopes.len(),
+        context.limits.max_source_scopes,
+    )?;
+    if context.body.source_scopes.is_empty() {
+        return Err(CaptureErrorV2::new(
+            "the MIR body has no canonical root source scope",
+        ));
+    }
+    let mut captured = Vec::with_capacity(context.body.source_scopes.len());
+    for (scope, data) in context.body.source_scopes.iter_enumerated() {
+        let index = scope.as_usize();
+        let parent = data.parent_scope.map(|scope| scope.as_usize());
+        let inlined_parent = data.inlined_parent_scope.map(|scope| scope.as_usize());
+        for (label, parent) in [("parent", parent), ("inlined parent", inlined_parent)] {
+            if parent.is_some_and(|parent| parent >= index) {
+                return Err(CaptureErrorV2::new(format!(
+                    "source scope {index} has non-topological {label}"
+                )));
+            }
+        }
+        let (inlined, inlined_callsite) = match data.inlined {
+            Some((instance, callsite)) => (
+                Some(function_identity(context, instance)?),
+                Some(structural_span_identity(context, callsite)?),
+            ),
+            None => (None, None),
+        };
+        let scope_span = structural_span_identity(context, data.span)?;
+        let mut identity = SourceScopeIdentityV2 {
+            index,
+            compiler_hash: stable_hash!(context.tcx, data),
+            parent,
+            inlined_parent,
+            inlined,
+            scope_span,
+            inlined_callsite,
+            record_hash: [0; 32],
+        };
+        identity.record_hash = source_scope_record_hash_v2(&identity)?;
+        captured.push(identity);
+    }
+    Ok(captured)
+}
+
+fn structural_span_identity<'tcx>(
+    context: &mut CaptureContextV2<'_, 'tcx>,
+    span: Span,
+) -> Result<StructuralSpanIdentityV2, CaptureErrorV2> {
+    let frame_count = preflight_expansion_chain(context, span, "macro expansion")?;
+    let mut frames = Vec::with_capacity(frame_count);
+    let mut cursor = span;
+    for _ in 0..frame_count {
+        let data = cursor.ctxt().outer_expn_data();
+        preflight_expansion_chain(context, data.def_site, "macro definition expansion")?;
+        frames.push(MacroExpansionFrameV2 {
+            expansion_hash: stable_hash!(context.tcx, data),
+            callsite_span_hash: stable_hash!(context.tcx, data.call_site),
+            definition_site_hash: stable_hash!(context.tcx, data.def_site),
+            macro_definition: data
+                .macro_def_id
+                .map(|definition| stable_definition_key(context, definition)),
+            parent_module: data
+                .parent_module
+                .map(|definition| stable_definition_key(context, definition)),
+        });
+        cursor = cursor.parent_callsite().ok_or_else(|| {
+            CaptureErrorV2::new("macro expansion chain changed after bounded preflight")
+        })?;
+    }
+    let mut expansion = MacroExpansionIdentityV2 {
+        syntax_context_hash: stable_hash!(context.tcx, span.ctxt()),
+        frames,
+        chain_hash: [0; 32],
+    };
+    expansion.chain_hash = expansion_chain_hash_v2(&expansion)?;
+    Ok(StructuralSpanIdentityV2 {
+        original_span_hash: stable_hash!(context.tcx, span),
+        callsite_span_hash: stable_hash!(context.tcx, span.source_callsite()),
+        expansion,
+    })
+}
+
+fn preflight_expansion_chain<'tcx>(
+    context: &mut CaptureContextV2<'_, 'tcx>,
+    span: Span,
+    label: &str,
+) -> Result<usize, CaptureErrorV2> {
+    let mut count = 0usize;
+    let mut cursor = span;
+    while let Some(parent) = cursor.parent_callsite() {
+        count = count
+            .checked_add(1)
+            .ok_or_else(|| CaptureErrorV2::new("macro expansion depth overflowed"))?;
+        ensure_bound(label, count, context.limits.max_macro_expansion_depth)?;
+        let data = cursor.ctxt().outer_expn_data();
+        if let Some(features) = &data.allow_internal_unstable {
+            ensure_bound(
+                "macro expansion feature list",
+                features.len(),
+                context.limits.max_type_arity,
+            )?;
+        }
+        context.budget.charge_work(label, 1)?;
+        cursor = parent;
+    }
+    Ok(count)
+}
+
+fn stable_definition_key<'tcx>(
+    context: &CaptureContextV2<'_, 'tcx>,
+    def_id: DefId,
+) -> StableDefinitionKeyV2 {
+    let hash = context.tcx.def_path_hash(def_id);
+    StableDefinitionKeyV2 {
+        def_path_hash: hash.0.to_le_bytes(),
+        stable_crate_id: stable_hash!(context.tcx, hash.stable_crate_id()),
+        local_def_path_hash: hash.local_hash().as_u64().to_le_bytes(),
+    }
+}
+
 fn source_span<'tcx>(
     context: &mut CaptureContextV2<'_, 'tcx>,
     source_info: SourceInfo,
@@ -1058,6 +1586,7 @@ fn span_identity<'tcx>(
     span: Span,
     source_scope: usize,
 ) -> Result<SourceSpanV2, CaptureErrorV2> {
+    let structural = structural_span_identity(context, span)?;
     let canonical = span.source_callsite();
     let source_map = context.tcx.sess.source_map();
     let start = source_map.lookup_char_pos(canonical.lo());
@@ -1075,32 +1604,16 @@ fn span_identity<'tcx>(
         SourceAuthorityV2::CanonicalRemapped
     };
 
-    let (source_scope_hash, source_scope_parent, inlined_instance_hash) = if let Some(scope_data) =
-        context
-            .body
-            .source_scopes
-            .get(SourceScope::from_usize(source_scope))
-    {
-        if let Some((instance, _)) = scope_data.inlined {
-            preflight_instance_v2(
-                "inlined source-scope instance",
-                instance,
-                context.limits,
-                &mut context.budget,
-            )?;
-        }
-        (
-            stable_hash!(context.tcx, scope_data),
-            scope_data.parent_scope.map(|scope| scope.as_usize()),
-            scope_data
-                .inlined
-                .map(|(instance, _)| stable_hash!(context.tcx, instance)),
-        )
-    } else {
-        return Err(CaptureErrorV2::new(
-            "source scope index is outside the MIR scope table",
-        ));
-    };
+    let scope = context.source_scopes.get(source_scope).ok_or_else(|| {
+        CaptureErrorV2::new("source scope index is outside the canonical scope table")
+    })?;
+    let source_scope_hash = scope.compiler_hash;
+    let source_scope_parent = scope.parent;
+    let inlined_instance_hash = scope
+        .inlined
+        .as_ref()
+        .map(|inlined| inlined.instance.instance_hash);
+    let source_scope_record_hash = scope.record_hash;
     Ok(SourceSpanV2 {
         authority,
         remapped_file: context.budget.bounded_display(
@@ -1108,7 +1621,9 @@ fn span_identity<'tcx>(
             &start.file.name.prefer_remapped_unconditionally(),
         )?,
         source_file_hash: stable_hash!(context.tcx, start.file.stable_id),
-        span_hash: stable_hash!(context.tcx, canonical),
+        original_span_hash: structural.original_span_hash,
+        span_hash: structural.callsite_span_hash,
+        expansion: structural.expansion,
         start_line: start.line,
         start_column: start.col.0 + 1,
         end_line: end.line,
@@ -1117,6 +1632,7 @@ fn span_identity<'tcx>(
         source_scope_hash,
         source_scope_parent,
         inlined_instance_hash,
+        source_scope_record_hash,
         diagnostic_debug: context.budget.bounded_debug("source span", &span)?,
     })
 }

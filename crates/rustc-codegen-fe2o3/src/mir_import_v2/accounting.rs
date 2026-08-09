@@ -87,6 +87,10 @@ impl AccountingV2 {
         self.work(1)?;
         self.function(&body.function)?;
         self.span(&body.source)?;
+        self.work(body.source_scopes.len())?;
+        for scope in &body.source_scopes {
+            self.source_scope(scope)?;
+        }
         self.work(body.locals.len())?;
         for local in &body.locals {
             self.local(local)?;
@@ -114,6 +118,19 @@ impl AccountingV2 {
         self.work(1)?;
         self.definition(&intrinsic.definition)?;
         self.text(&intrinsic.name)
+    }
+
+    fn signature(
+        &mut self,
+        signature: &FunctionSignatureIdentityV2,
+    ) -> Result<(), ValidationErrorV2> {
+        self.work(1)?;
+        self.work(signature.inputs.len())?;
+        for input in &signature.inputs {
+            self.ty(input)?;
+        }
+        self.ty(&signature.output)?;
+        self.text(&signature.abi.canonical_name)
     }
 
     fn instance(&mut self, instance: &InstanceIdentityV2) -> Result<(), ValidationErrorV2> {
@@ -161,11 +178,55 @@ impl AccountingV2 {
         self.work(1)?;
         self.text(&span.remapped_file)?;
         self.text(&span.diagnostic_debug)?;
+        self.expansion(&span.expansion)?;
         if span.source_scope_parent.is_some() {
             self.work(1)?;
         }
         if span.inlined_instance_hash.is_some() {
             self.work(1)?;
+        }
+        Ok(())
+    }
+
+    fn source_scope(&mut self, scope: &SourceScopeIdentityV2) -> Result<(), ValidationErrorV2> {
+        self.work(1)?;
+        if scope.parent.is_some() {
+            self.work(1)?;
+        }
+        if scope.inlined_parent.is_some() {
+            self.work(1)?;
+        }
+        if let Some(inlined) = &scope.inlined {
+            self.work(1)?;
+            self.function(inlined)?;
+        }
+        self.structural_span(&scope.scope_span)?;
+        if let Some(callsite) = &scope.inlined_callsite {
+            self.work(1)?;
+            self.structural_span(callsite)?;
+        }
+        Ok(())
+    }
+
+    fn structural_span(
+        &mut self,
+        span: &StructuralSpanIdentityV2,
+    ) -> Result<(), ValidationErrorV2> {
+        self.work(1)?;
+        self.expansion(&span.expansion)
+    }
+
+    fn expansion(&mut self, expansion: &MacroExpansionIdentityV2) -> Result<(), ValidationErrorV2> {
+        self.work(1)?;
+        self.work(expansion.frames.len())?;
+        for frame in &expansion.frames {
+            self.work(1)?;
+            if frame.macro_definition.is_some() {
+                self.work(1)?;
+            }
+            if frame.parent_module.is_some() {
+                self.work(1)?;
+            }
         }
         Ok(())
     }
@@ -461,6 +522,7 @@ impl AccountingV2 {
                 callee,
                 arguments,
                 function_span,
+                ..
             } => {
                 self.operand(function)?;
                 self.callee(callee)?;
@@ -528,19 +590,30 @@ impl AccountingV2 {
         match callee {
             CalleeIdentityV2::Direct {
                 declared,
+                declared_signature,
                 resolved,
+                resolved_signature,
                 intrinsic,
                 ..
             } => {
                 self.definition(declared)?;
+                self.signature(declared_signature)?;
                 self.function(resolved)?;
+                self.signature(resolved_signature)?;
                 if let Some(intrinsic) = intrinsic {
                     self.work(1)?;
                     self.intrinsic(intrinsic)?;
                 }
                 Ok(())
             }
-            CalleeIdentityV2::Indirect { callable_type } => self.ty(callable_type),
+            CalleeIdentityV2::Indirect {
+                callable_type,
+                signature,
+                ..
+            } => {
+                self.ty(callable_type)?;
+                self.signature(signature)
+            }
         }
     }
 
