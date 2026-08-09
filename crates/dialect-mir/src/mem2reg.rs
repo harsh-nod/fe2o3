@@ -4,9 +4,9 @@ use std::fmt;
 use crate::executable::terminator_edges;
 use crate::{
     MirBasicBlock, MirBlockId, MirBlockParameter, MirBody, MirBodyForm, MirCall, MirEdge,
-    MirExecutableModule, MirLocalId, MirLocalKind, MirMutability, MirOperand, MirPlace,
-    MirProjection, MirRvalue, MirStatement, MirStatementKind, MirTerminatorKind, MirTypeKind,
-    MirUnwindAction, MirValueId,
+    MirExecutableModule, MirExternalCallRegistry, MirLocalId, MirLocalKind, MirMutability,
+    MirOperand, MirPlace, MirProjection, MirRvalue, MirStatement, MirStatementKind,
+    MirTerminatorKind, MirTypeKind, MirUnwindAction, MirValueId, ValidatedMirExecutableModule,
 };
 
 pub const MAX_MEM2REG_OUTPUT_ITEMS: usize = 65_536;
@@ -86,12 +86,10 @@ impl std::error::Error for MirMem2RegError {}
 /// with projections, address-taking, storage markers, call destinations,
 /// drops, or non-entry initialization remain slots.
 pub fn promote_module_to_ssa(
-    module: &MirExecutableModule,
-) -> Result<(MirExecutableModule, MirMem2RegReport), MirMem2RegError> {
-    module
-        .validate()
-        .map_err(|error| MirMem2RegError::new(error.path(), error.reason()))?;
-    let mut output = module.clone();
+    module: &ValidatedMirExecutableModule,
+) -> Result<(ValidatedMirExecutableModule, MirMem2RegReport), MirMem2RegError> {
+    let source = module.as_module();
+    let mut output = source.clone();
     let mut reports = Vec::with_capacity(output.functions.len());
     let mut output_items = 0_usize;
 
@@ -103,7 +101,7 @@ pub fn promote_module_to_ssa(
             ));
         }
         let original = function.body.clone();
-        let promoted = eligible_locals(module, function_index, &original);
+        let promoted = eligible_locals(source, function_index, &original);
         let function_items = projected_output_items(function_index, &original, &promoted)?;
         output_items = output_items
             .checked_add(function_items)
@@ -127,16 +125,30 @@ pub fn promote_module_to_ssa(
         });
     }
 
-    output.validate().map_err(|error| {
-        MirMem2RegError::new(
-            error.path(),
-            format!(
-                "mem2reg produced invalid executable MIR: {}",
-                error.reason()
-            ),
-        )
-    })?;
+    let output = output
+        .validate_with_registry(module.registry())
+        .map_err(|error| {
+            MirMem2RegError::new(
+                error.path(),
+                format!(
+                    "mem2reg produced invalid executable MIR: {}",
+                    error.reason()
+                ),
+            )
+        })?;
     Ok((output, MirMem2RegReport { functions: reports }))
+}
+
+/// Compatibility constructor that validates untrusted data and immediately
+/// delegates to the validated-only transform.
+pub fn promote_module_to_ssa_with_registry(
+    module: &MirExecutableModule,
+    registry: &MirExternalCallRegistry,
+) -> Result<(ValidatedMirExecutableModule, MirMem2RegReport), MirMem2RegError> {
+    let validated = module
+        .validate_with_registry(registry)
+        .map_err(|error| MirMem2RegError::new(error.path(), error.reason()))?;
+    promote_module_to_ssa(&validated)
 }
 
 fn projected_output_items(

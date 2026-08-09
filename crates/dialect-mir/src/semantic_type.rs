@@ -221,6 +221,73 @@ impl MirSemanticType {
         Ok(output)
     }
 
+    /// Returns whether the validated Rust type has at least one valid value.
+    pub fn is_inhabited(&self) -> Result<bool, MirTypeValidationError> {
+        self.validate()?;
+        Ok(self.is_inhabited_unchecked())
+    }
+
+    /// Returns whether `ZeroSized` denotes the type's sole valid value.
+    /// Enums are deliberately excluded even when their current layout is zero
+    /// sized because their validity depends on variant state.
+    pub fn has_single_zero_sized_value(&self) -> Result<bool, MirTypeValidationError> {
+        self.validate()?;
+        Ok(self.has_single_zero_sized_value_unchecked())
+    }
+
+    fn is_inhabited_unchecked(&self) -> bool {
+        match &self.kind {
+            MirTypeKind::Unit | MirTypeKind::Scalar(_) | MirTypeKind::RawPointer { .. } => true,
+            MirTypeKind::Reference { referent, .. } => referent.is_inhabited_unchecked(),
+            MirTypeKind::Slice { .. } => true,
+            MirTypeKind::Tuple(aggregate) => aggregate
+                .fields
+                .iter()
+                .all(|field| field.ty.is_inhabited_unchecked()),
+            MirTypeKind::Array { element, length } => {
+                *length == 0 || element.is_inhabited_unchecked()
+            }
+            MirTypeKind::Struct(structure) => structure
+                .aggregate
+                .fields
+                .iter()
+                .all(|field| field.ty.is_inhabited_unchecked()),
+            MirTypeKind::Enum(enum_ty) => enum_ty.variants.iter().any(|variant| {
+                variant
+                    .aggregate
+                    .fields
+                    .iter()
+                    .all(|field| field.ty.is_inhabited_unchecked())
+            }),
+        }
+    }
+
+    fn has_single_zero_sized_value_unchecked(&self) -> bool {
+        if self.layout.size != Some(0) || !self.is_inhabited_unchecked() {
+            return false;
+        }
+        match &self.kind {
+            MirTypeKind::Unit => true,
+            MirTypeKind::Tuple(aggregate) => aggregate
+                .fields
+                .iter()
+                .all(|field| field.ty.has_single_zero_sized_value_unchecked()),
+            MirTypeKind::Array { element, length } => {
+                *length == 0 || element.has_single_zero_sized_value_unchecked()
+            }
+            MirTypeKind::Struct(structure) => structure
+                .aggregate
+                .fields
+                .iter()
+                .all(|field| field.ty.has_single_zero_sized_value_unchecked()),
+            MirTypeKind::Scalar(_)
+            | MirTypeKind::RawPointer { .. }
+            | MirTypeKind::Reference { .. }
+            | MirTypeKind::Slice { .. }
+            | MirTypeKind::Enum(_) => false,
+        }
+    }
+
     fn validate_at(&self, path: &str) -> Result<(), MirTypeValidationError> {
         validate_layout(self.layout, path)?;
         match &self.kind {

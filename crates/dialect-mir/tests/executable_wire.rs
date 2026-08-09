@@ -1,11 +1,14 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use dialect_mir::{
-    MAX_EXECUTABLE_TYPE_DEPTH, MAX_EXECUTABLE_WIRE_BYTES, MirAddressSpace, MirBasicBlock,
-    MirBlockId, MirBody, MirBodyForm, MirExecutableDecodeError, MirExecutableModule,
-    MirExecutableTarget, MirExecutableVersion, MirFunction, MirLayout, MirLocalDecl, MirLocalId,
-    MirLocalKind, MirMutability, MirOperand, MirPlace, MirRvalue, MirScalarType, MirSemanticType,
-    MirStatement, MirStatementKind, MirTerminator, MirTerminatorKind, MirTypeId, MirTypeKind,
+    MAX_EXECUTABLE_TYPE_DEPTH, MAX_EXECUTABLE_WIRE_BYTES, MirAddressSpace,
+    MirAuthorizedDeviceImport, MirBasicBlock, MirBlockId, MirBody, MirBodyForm, MirCallAuthority,
+    MirCallReturn, MirCallSignature, MirCallable, MirExecutableDecodeError, MirExecutableModule,
+    MirExecutableTarget, MirExecutableVersion, MirExternalCallRegistry, MirExternalCallReturn,
+    MirExternalCallSignature, MirFunction, MirLayout, MirLocalDecl, MirLocalId, MirLocalKind,
+    MirMutability, MirOperand, MirPlace, MirRvalue, MirScalarType, MirSemanticType, MirStatement,
+    MirStatementKind, MirTerminator, MirTerminatorKind, MirTypeId, MirTypeKind,
+    ValidatedMirExecutableModule,
 };
 
 fn scalar_u32() -> MirSemanticType {
@@ -89,8 +92,62 @@ fn canonical_wire_roundtrips_with_a_versioned_envelope() {
         u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]) as usize,
         bytes.len() - 16
     );
-    assert_eq!(MirExecutableModule::from_bytes(&bytes).unwrap(), module);
+    let decoded: ValidatedMirExecutableModule = MirExecutableModule::from_bytes(&bytes).unwrap();
+    assert_eq!(decoded, module);
     assert_eq!(module.to_bytes().unwrap(), bytes);
+}
+
+#[test]
+fn serde_data_remains_unvalidated_and_validation_is_owning() {
+    let mut untrusted = module();
+    let json = serde_json::to_vec(&untrusted).unwrap();
+    let decoded: MirExecutableModule = serde_json::from_slice(&json).unwrap();
+    let validated = decoded.validate().unwrap();
+
+    untrusted.functions[0].body.blocks[0].statements.clear();
+    assert!(untrusted.validate().is_err());
+    assert!(validated.to_bytes().is_ok());
+    assert_eq!(validated.as_module(), &module());
+
+    let recovered_data = validated.into_unvalidated();
+    assert_eq!(recovered_data, module());
+}
+
+#[test]
+fn wire_device_imports_resolve_only_against_external_authority() {
+    let mut module = module();
+    let semantic_u32 = module.types[0].clone();
+    module.callables.push(MirCallable {
+        identity: "wire::trusted".into(),
+        authority: MirCallAuthority::DeviceImport {
+            contract: "wire::trusted::v1".into(),
+        },
+        signature: MirCallSignature {
+            inputs: vec![MirTypeId(0)],
+            output: MirCallReturn::Value(MirTypeId(0)),
+            can_unwind: false,
+        },
+    });
+    let registry = MirExternalCallRegistry::try_new(vec![MirAuthorizedDeviceImport {
+        identity: "wire::trusted".into(),
+        contract: "wire::trusted::v1".into(),
+        signature: MirExternalCallSignature {
+            inputs: vec![semantic_u32.clone()],
+            output: MirExternalCallReturn::Value(semantic_u32),
+            can_unwind: false,
+        },
+    }])
+    .unwrap();
+
+    let bytes = module.to_bytes_with_registry(&registry).unwrap();
+    assert!(matches!(
+        MirExecutableModule::from_bytes(&bytes),
+        Err(MirExecutableDecodeError::Validation(_))
+    ));
+    assert_eq!(
+        MirExecutableModule::from_bytes_with_registry(&bytes, &registry).unwrap(),
+        module
+    );
 }
 
 #[test]

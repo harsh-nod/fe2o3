@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
+use std::ops::Deref;
 
 use serde::{Deserialize, Serialize};
 
@@ -28,6 +29,8 @@ pub const MAX_EXECUTABLE_TYPE_NODES: usize = 65_536;
 pub const MAX_EXECUTABLE_TYPE_ITEMS: usize = 65_536;
 pub const MAX_EXECUTABLE_FIELDS: usize = 4_096;
 pub const MAX_EXECUTABLE_VARIANTS: usize = 1_024;
+/// Closed AMDGPU address-space range supported by executable MIR V1.
+pub const MAX_EXECUTABLE_ADDRESS_SPACE: u32 = 5;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum MirExecutableVersion {
@@ -113,6 +116,112 @@ pub struct MirCallSignature {
     pub can_unwind: bool,
 }
 
+/// A trusted device import signature expressed independently of a module's
+/// attacker-controlled type table.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MirExternalCallSignature {
+    pub inputs: Vec<MirSemanticType>,
+    pub output: MirExternalCallReturn,
+    pub can_unwind: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MirExternalCallReturn {
+    Diverging,
+    Value(MirSemanticType),
+}
+
+/// One device import authorized by the embedding process's trust policy.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MirAuthorizedDeviceImport {
+    pub identity: String,
+    pub contract: String,
+    pub signature: MirExternalCallSignature,
+}
+
+/// An external trust root. This registry is deliberately absent from the
+/// executable MIR wire format; module declarations can only reference it.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct MirExternalCallRegistry {
+    entries: Vec<MirAuthorizedDeviceImport>,
+}
+
+impl MirExternalCallRegistry {
+    pub fn try_new(
+        entries: Vec<MirAuthorizedDeviceImport>,
+    ) -> Result<Self, MirExecutableValidationError> {
+        bounded_len(
+            "external_registry.entries",
+            entries.len(),
+            0,
+            MAX_EXECUTABLE_CALLABLES,
+        )?;
+        let mut previous: Option<&str> = None;
+        let mut signature_types = 0_usize;
+        for (index, entry) in entries.iter().enumerate() {
+            let path = format!("external_registry.entries[{index}]");
+            validate_identity(&format!("{path}.identity"), &entry.identity)?;
+            validate_identity(&format!("{path}.contract"), &entry.contract)?;
+            if is_intrinsic_identity(&entry.identity) {
+                return Err(error(
+                    format!("{path}.identity"),
+                    "external imports cannot claim the compiler intrinsic namespace",
+                ));
+            }
+            if previous.is_some_and(|value| value >= entry.identity.as_str()) {
+                return Err(error(
+                    format!("{path}.identity"),
+                    "external registry entries must be strictly sorted by identity",
+                ));
+            }
+            previous = Some(&entry.identity);
+            bounded_len(
+                &format!("{path}.signature.inputs"),
+                entry.signature.inputs.len(),
+                0,
+                MAX_EXECUTABLE_CALL_ARGUMENTS,
+            )?;
+            signature_types = signature_types
+                .checked_add(entry.signature.inputs.len())
+                .and_then(|count| {
+                    count.checked_add(usize::from(matches!(
+                        &entry.signature.output,
+                        MirExternalCallReturn::Value(_)
+                    )))
+                })
+                .ok_or_else(|| error(&path, "external signature type count overflow"))?;
+            if signature_types > MAX_EXECUTABLE_TYPE_ITEMS {
+                return Err(error(
+                    &path,
+                    format!(
+                        "external registry exceeds {MAX_EXECUTABLE_TYPE_ITEMS} signature types"
+                    ),
+                ));
+            }
+            validate_type_budget_at(&entry.signature.inputs, &format!("{path}.signature.inputs"))?;
+            for (type_index, ty) in entry.signature.inputs.iter().enumerate() {
+                let type_path = format!("{path}.signature.inputs[{type_index}]");
+                ty.validate()
+                    .map_err(|source| map_type_error(&type_path, source))?;
+            }
+            if let MirExternalCallReturn::Value(ty) = &entry.signature.output {
+                let type_path = format!("{path}.signature.output");
+                validate_type_budget_at(std::slice::from_ref(ty), &type_path)?;
+                ty.validate()
+                    .map_err(|source| map_type_error(&type_path, source))?;
+            }
+        }
+        Ok(Self { entries })
+    }
+
+    fn find(&self, identity: &str) -> Option<&MirAuthorizedDeviceImport> {
+        self.entries
+            .binary_search_by(|entry| entry.identity.as_str().cmp(identity))
+            .ok()
+            .map(|index| &self.entries[index])
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MirCallable {
     pub identity: String,
@@ -131,6 +240,55 @@ pub struct MirExecutableModule {
     pub callables: Vec<MirCallable>,
     /// Functions are sorted by monomorphized identity.
     pub functions: Vec<MirFunction>,
+}
+
+/// An executable module whose complete structure and external authorities
+/// were validated together. The authority context is retained privately so
+/// verified transformations can revalidate their output.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ValidatedMirExecutableModule {
+    module: MirExecutableModule,
+    registry: MirExternalCallRegistry,
+}
+
+impl ValidatedMirExecutableModule {
+    pub fn as_module(&self) -> &MirExecutableModule {
+        &self.module
+    }
+
+    pub fn into_unvalidated(self) -> MirExecutableModule {
+        self.module
+    }
+
+    pub(crate) fn registry(&self) -> &MirExternalCallRegistry {
+        &self.registry
+    }
+}
+
+impl Deref for ValidatedMirExecutableModule {
+    type Target = MirExecutableModule;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_module()
+    }
+}
+
+impl AsRef<MirExecutableModule> for ValidatedMirExecutableModule {
+    fn as_ref(&self) -> &MirExecutableModule {
+        self.as_module()
+    }
+}
+
+impl PartialEq<MirExecutableModule> for ValidatedMirExecutableModule {
+    fn eq(&self, other: &MirExecutableModule) -> bool {
+        self.module == *other
+    }
+}
+
+impl PartialEq<ValidatedMirExecutableModule> for MirExecutableModule {
+    fn eq(&self, other: &ValidatedMirExecutableModule) -> bool {
+        self == &other.module
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -223,6 +381,8 @@ pub enum MirProjection {
     },
     ConstantIndex {
         offset: u64,
+        /// Canonical rustc metadata. Verification requires equality with the
+        /// statically derived base-array length and never trusts it as a bound.
         min_length: u64,
         from_end: bool,
     },
@@ -230,7 +390,8 @@ pub enum MirProjection {
         from: u64,
         to: u64,
         from_end: bool,
-        /// Importer-provided lower bound for dynamically sized slices.
+        /// Canonical rustc metadata, not authority. V1 supports only static
+        /// arrays and requires this to equal the base-array length.
         min_length: u64,
     },
     Downcast {
@@ -497,7 +658,16 @@ impl fmt::Display for MirExecutableValidationError {
 impl std::error::Error for MirExecutableValidationError {}
 
 impl MirExecutableModule {
-    pub fn validate(&self) -> Result<(), MirExecutableValidationError> {
+    pub fn validate(&self) -> Result<ValidatedMirExecutableModule, MirExecutableValidationError> {
+        self.validate_with_registry(&MirExternalCallRegistry::default())
+    }
+
+    /// Validates this module against a process-supplied device import trust
+    /// root. The registry must never be populated from this module's bytes.
+    pub fn validate_with_registry(
+        &self,
+        registry: &MirExternalCallRegistry,
+    ) -> Result<ValidatedMirExecutableModule, MirExecutableValidationError> {
         if self.version.number() != EXECUTABLE_MIR_VERSION {
             return Err(error(
                 "module.version",
@@ -530,6 +700,7 @@ impl MirExecutableModule {
             let path = format!("module.types[{index}]");
             ty.validate()
                 .map_err(|source| map_type_error(&path, source))?;
+            validate_target_type_abi(&path, ty, self.target)?;
             let canonical = ty
                 .canonical_text()
                 .map_err(|source| map_type_error(&path, source))?;
@@ -545,7 +716,8 @@ impl MirExecutableModule {
             previous_type = Some(canonical);
         }
 
-        self.validate_callables()?;
+        self.validate_namespace(registry)?;
+        self.validate_callables(registry)?;
 
         let mut previous_identity: Option<&str> = None;
         for (index, function) in self.functions.iter().enumerate() {
@@ -561,10 +733,79 @@ impl MirExecutableModule {
             validate_span_opt(&format!("{path}.span"), function.span.as_ref())?;
             Verifier::new(self, function, path).verify()?;
         }
+        Ok(ValidatedMirExecutableModule {
+            module: self.clone(),
+            registry: registry.clone(),
+        })
+    }
+
+    fn validate_namespace(
+        &self,
+        registry: &MirExternalCallRegistry,
+    ) -> Result<(), MirExecutableValidationError> {
+        bounded_len(
+            "module.callables",
+            self.callables.len(),
+            0,
+            MAX_EXECUTABLE_CALLABLES,
+        )?;
+        let mut previous_callable: Option<&str> = None;
+        for (index, callable) in self.callables.iter().enumerate() {
+            let path = format!("module.callables[{index}].identity");
+            validate_identity(&path, &callable.identity)?;
+            if previous_callable.is_some_and(|value| value >= callable.identity.as_str()) {
+                return Err(error(
+                    path,
+                    "callable identities must be globally unique and strictly sorted",
+                ));
+            }
+            previous_callable = Some(&callable.identity);
+        }
+
+        let mut previous_function: Option<&str> = None;
+        for (index, function) in self.functions.iter().enumerate() {
+            let path = format!("module.functions[{index}].identity");
+            validate_identity(&path, &function.identity)?;
+            if previous_function.is_some_and(|value| value >= function.identity.as_str()) {
+                return Err(error(
+                    path,
+                    "defined function identities must be globally unique and strictly sorted",
+                ));
+            }
+            previous_function = Some(&function.identity);
+            if is_intrinsic_identity(&function.identity) {
+                return Err(error(
+                    path,
+                    "defined function collides with the compiler intrinsic namespace",
+                ));
+            }
+            if registry.find(&function.identity).is_some() {
+                return Err(error(
+                    path,
+                    "defined function collides with the trusted import namespace",
+                ));
+            }
+            if let Ok(callable_index) = self
+                .callables
+                .binary_search_by(|callable| callable.identity.cmp(&function.identity))
+                && !matches!(
+                    self.callables[callable_index].authority,
+                    MirCallAuthority::DefinedFunction
+                )
+            {
+                return Err(error(
+                    path,
+                    "defined function cannot shadow an import or intrinsic declaration",
+                ));
+            }
+        }
         Ok(())
     }
 
-    fn validate_callables(&self) -> Result<(), MirExecutableValidationError> {
+    fn validate_callables(
+        &self,
+        registry: &MirExternalCallRegistry,
+    ) -> Result<(), MirExecutableValidationError> {
         bounded_len(
             "module.callables",
             self.callables.len(),
@@ -635,9 +876,30 @@ impl MirExecutableModule {
                             "defined callable signature does not match its body",
                         ));
                     }
+                    if !callable.signature.can_unwind && self.body_may_unwind(function) {
+                        return Err(error(
+                            format!("{path}.signature.can_unwind"),
+                            "defined callable body may unwind but its signature forbids unwinding",
+                        ));
+                    }
                 }
                 MirCallAuthority::DeviceImport { contract } => {
                     validate_identity(&format!("{path}.authority.contract"), contract)?;
+                    let authorized = registry.find(&callable.identity).ok_or_else(|| {
+                        error(
+                            &path,
+                            "device import is absent from the external authority registry",
+                        )
+                    })?;
+                    if authorized.contract != *contract
+                        || !self
+                            .signature_matches_external(&callable.signature, &authorized.signature)
+                    {
+                        return Err(error(
+                            &path,
+                            "device import declaration does not exactly match its external authority",
+                        ));
+                    }
                 }
                 MirCallAuthority::Intrinsic(intrinsic) => {
                     if callable.identity != intrinsic.identity() {
@@ -646,6 +908,7 @@ impl MirExecutableModule {
                             "intrinsic identity does not match its closed authority",
                         ));
                     }
+                    self.validate_intrinsic_signature(&path, callable, intrinsic)?;
                 }
             }
         }
@@ -654,6 +917,261 @@ impl MirExecutableModule {
 
     pub fn type_at(&self, id: MirTypeId) -> Option<&MirSemanticType> {
         self.types.get(id.0 as usize)
+    }
+
+    fn signature_matches_external(
+        &self,
+        declared: &MirCallSignature,
+        authorized: &MirExternalCallSignature,
+    ) -> bool {
+        declared.can_unwind == authorized.can_unwind
+            && declared.inputs.len() == authorized.inputs.len()
+            && declared
+                .inputs
+                .iter()
+                .zip(&authorized.inputs)
+                .all(|(id, ty)| self.type_at(*id) == Some(ty))
+            && match (&declared.output, &authorized.output) {
+                (MirCallReturn::Diverging, MirExternalCallReturn::Diverging) => true,
+                (MirCallReturn::Value(id), MirExternalCallReturn::Value(ty)) => {
+                    self.type_at(*id) == Some(ty)
+                }
+                _ => false,
+            }
+    }
+
+    fn body_may_unwind(&self, function: &MirFunction) -> bool {
+        function
+            .body
+            .blocks
+            .iter()
+            .any(|block| match &block.terminator.kind {
+                MirTerminatorKind::Call(call) => {
+                    let identity = match &call.callee {
+                        MirCallee::Direct(identity) | MirCallee::Intrinsic(identity) => identity,
+                    };
+                    self.callables
+                        .binary_search_by(|callable| callable.identity.as_str().cmp(identity))
+                        .ok()
+                        .and_then(|index| self.callables.get(index))
+                        .is_none_or(|callable| callable.signature.can_unwind)
+                        || unwind_action_may_unwind(&call.unwind)
+                }
+                MirTerminatorKind::Drop { .. } | MirTerminatorKind::Assert { .. } => true,
+                MirTerminatorKind::Goto(_)
+                | MirTerminatorKind::SwitchInt { .. }
+                | MirTerminatorKind::Return
+                | MirTerminatorKind::Unreachable => false,
+            })
+    }
+
+    fn validate_intrinsic_signature(
+        &self,
+        path: &str,
+        callable: &MirCallable,
+        intrinsic: &MirIntrinsic,
+    ) -> Result<(), MirExecutableValidationError> {
+        if callable.signature.can_unwind {
+            return Err(error(
+                format!("{path}.signature.can_unwind"),
+                "intrinsics cannot unwind",
+            ));
+        }
+
+        match intrinsic {
+            MirIntrinsic::CopyNonOverlapping => {
+                self.require_intrinsic_arity(path, callable, 3)?;
+                self.require_intrinsic_unit_output(path, callable)?;
+                let source = self.require_intrinsic_raw_pointer(
+                    &format!("{path}.signature.inputs[0]"),
+                    callable.signature.inputs[0],
+                    MirMutability::Immutable,
+                )?;
+                let destination = self.require_intrinsic_raw_pointer(
+                    &format!("{path}.signature.inputs[1]"),
+                    callable.signature.inputs[1],
+                    MirMutability::Mutable,
+                )?;
+                if source != destination {
+                    return Err(error(
+                        format!("{path}.signature.inputs"),
+                        "copy_nonoverlapping pointers must have the same pointee type",
+                    ));
+                }
+                self.require_intrinsic_integer(
+                    &format!("{path}.signature.inputs[2]"),
+                    callable.signature.inputs[2],
+                    false,
+                    self.target.pointer_width_bits,
+                )
+            }
+            MirIntrinsic::PointerDistance => {
+                self.require_intrinsic_arity(path, callable, 2)?;
+                let left = self.require_intrinsic_raw_pointer(
+                    &format!("{path}.signature.inputs[0]"),
+                    callable.signature.inputs[0],
+                    MirMutability::Immutable,
+                )?;
+                let right = self.require_intrinsic_raw_pointer(
+                    &format!("{path}.signature.inputs[1]"),
+                    callable.signature.inputs[1],
+                    MirMutability::Immutable,
+                )?;
+                if left != right
+                    || self.type_at(callable.signature.inputs[0])
+                        != self.type_at(callable.signature.inputs[1])
+                {
+                    return Err(error(
+                        format!("{path}.signature.inputs"),
+                        "pointer_distance requires identical pointer input types",
+                    ));
+                }
+                let MirCallReturn::Value(output) = callable.signature.output else {
+                    return Err(error(
+                        format!("{path}.signature.output"),
+                        "pointer_distance must return target isize",
+                    ));
+                };
+                self.require_intrinsic_integer(
+                    &format!("{path}.signature.output"),
+                    output,
+                    true,
+                    self.target.pointer_width_bits,
+                )
+            }
+            MirIntrinsic::VolatileLoad => {
+                self.require_intrinsic_arity(path, callable, 1)?;
+                let pointee = self.require_intrinsic_raw_pointer(
+                    &format!("{path}.signature.inputs[0]"),
+                    callable.signature.inputs[0],
+                    MirMutability::Immutable,
+                )?;
+                let MirCallReturn::Value(output) = callable.signature.output else {
+                    return Err(error(
+                        format!("{path}.signature.output"),
+                        "volatile_load must return its pointee type",
+                    ));
+                };
+                if self.type_at(output) != Some(pointee) {
+                    return Err(error(
+                        format!("{path}.signature.output"),
+                        "volatile_load output must exactly match its pointee type",
+                    ));
+                }
+                Ok(())
+            }
+            MirIntrinsic::VolatileStore => {
+                self.require_intrinsic_arity(path, callable, 2)?;
+                self.require_intrinsic_unit_output(path, callable)?;
+                let pointee = self.require_intrinsic_raw_pointer(
+                    &format!("{path}.signature.inputs[0]"),
+                    callable.signature.inputs[0],
+                    MirMutability::Mutable,
+                )?;
+                if self.type_at(callable.signature.inputs[1]) != Some(pointee) {
+                    return Err(error(
+                        format!("{path}.signature.inputs[1]"),
+                        "volatile_store value must exactly match its pointee type",
+                    ));
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn require_intrinsic_arity(
+        &self,
+        path: &str,
+        callable: &MirCallable,
+        expected: usize,
+    ) -> Result<(), MirExecutableValidationError> {
+        if callable.signature.inputs.len() != expected {
+            return Err(error(
+                format!("{path}.signature.inputs"),
+                format!("{} requires exactly {expected} inputs", callable.identity),
+            ));
+        }
+        Ok(())
+    }
+
+    fn require_intrinsic_unit_output(
+        &self,
+        path: &str,
+        callable: &MirCallable,
+    ) -> Result<(), MirExecutableValidationError> {
+        let MirCallReturn::Value(output) = callable.signature.output else {
+            return Err(error(
+                format!("{path}.signature.output"),
+                "intrinsic must return unit",
+            ));
+        };
+        if !matches!(
+            self.type_at(output).map(|ty| &ty.kind),
+            Some(MirTypeKind::Unit)
+        ) {
+            return Err(error(
+                format!("{path}.signature.output"),
+                "intrinsic must return unit",
+            ));
+        }
+        Ok(())
+    }
+
+    fn require_intrinsic_raw_pointer(
+        &self,
+        path: &str,
+        id: MirTypeId,
+        expected_mutability: MirMutability,
+    ) -> Result<&MirSemanticType, MirExecutableValidationError> {
+        let ty = self
+            .type_at(id)
+            .expect("callable type references were checked before intrinsic authority");
+        let MirTypeKind::RawPointer {
+            pointee,
+            mutability,
+            ..
+        } = &ty.kind
+        else {
+            return Err(error(path, "intrinsic input must be a raw pointer"));
+        };
+        if *mutability != expected_mutability {
+            return Err(error(
+                path,
+                "intrinsic pointer input has the wrong mutability",
+            ));
+        }
+        if ty.layout.size != Some(u64::from(self.target.pointer_width_bits / 8)) {
+            return Err(error(
+                path,
+                "intrinsic pointer input does not match the target pointer width",
+            ));
+        }
+        Ok(pointee)
+    }
+
+    fn require_intrinsic_integer(
+        &self,
+        path: &str,
+        id: MirTypeId,
+        signed: bool,
+        bits: u16,
+    ) -> Result<(), MirExecutableValidationError> {
+        if !matches!(
+            self.type_at(id).map(|ty| &ty.kind),
+            Some(MirTypeKind::Scalar(MirScalarType::Int {
+                signed: actual_signed,
+                bits: actual_bits,
+            })) if *actual_signed == signed && *actual_bits == bits
+        ) {
+            return Err(error(
+                path,
+                format!(
+                    "intrinsic requires target {}{bits}",
+                    if signed { 'i' } else { 'u' }
+                ),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -725,6 +1243,16 @@ impl<'a> Verifier<'a> {
         for (index, local) in self.function.body.locals.iter().enumerate() {
             let path = format!("{}.body.locals[{index}]", self.path);
             self.require_type(&format!("{path}.ty"), local.ty)?;
+            if self.type_at(local.ty).layout.size.is_none() {
+                return Err(error(
+                    format!("{path}.ty"),
+                    "executable MIR local storage types must be Sized",
+                ));
+            }
+            validate_executable_address_space(
+                &format!("{path}.storage_address_space"),
+                local.storage_address_space,
+            )?;
             validate_name_opt(&format!("{path}.name"), local.name.as_deref())?;
             validate_span_opt(&format!("{path}.span"), local.span.as_ref())?;
             if index == 0 {
@@ -923,8 +1451,16 @@ impl<'a> Verifier<'a> {
                     let MirTypeKind::Enum(enum_type) = &self.type_at(ty).kind else {
                         return Err(error(path, "set-discriminant place is not an enum"));
                     };
-                    if !enum_type.variants.iter().any(|item| item.index == *variant) {
-                        return Err(error(path, "set-discriminant variant does not exist"));
+                    let variant = enum_type
+                        .variants
+                        .iter()
+                        .find(|item| item.index == *variant)
+                        .ok_or_else(|| error(&path, "set-discriminant variant does not exist"))?;
+                    if !variant.aggregate.fields.is_empty() {
+                        return Err(error(
+                            path,
+                            "set-discriminant cannot select a variant with payload fields",
+                        ));
                     }
                 }
                 MirStatementKind::StorageLive(local) | MirStatementKind::StorageDead(local) => {
@@ -1392,7 +1928,7 @@ impl<'a> Verifier<'a> {
                 MirConstantValue::FloatBits(bits),
                 MirTypeKind::Scalar(MirScalarType::Float { bits: width }),
             ) => *width == 128 || *bits < (1_u128 << *width),
-            (MirConstantValue::ZeroSized, _) => ty.layout.size == Some(0),
+            (MirConstantValue::ZeroSized, _) => ty.has_single_zero_sized_value().unwrap_or(false),
             _ => false,
         };
         if !valid {
@@ -1509,54 +2045,52 @@ impl<'a> Verifier<'a> {
                     })
                     .ok_or_else(|| error(path, "field projection index is out of bounds"))
             }
-            MirProjection::Index { local } => {
-                self.require_local(&format!("{path}.local"), *local)?;
-                if self.promoted.contains(local) {
-                    return Err(error(path, "projection index cannot name a promoted local"));
-                }
-                let index_ty = &self.type_at(self.local(*local).ty).kind;
-                if !matches!(
-                    index_ty,
-                    MirTypeKind::Scalar(MirScalarType::Int {
-                        signed: false,
-                        bits,
-                    }) if *bits == self.module.target.pointer_width_bits
-                ) {
-                    return Err(error(path, "index local must have the target usize type"));
-                }
-                self.sequence_element(path, current)
-            }
+            MirProjection::Index { .. } => Err(error(
+                path,
+                "dynamic index projections require an external range witness and are unsupported",
+            )),
             MirProjection::ConstantIndex {
                 offset,
                 min_length,
                 from_end,
             } => {
                 self.require_target_usize(&format!("{path}.offset"), *offset)?;
-                self.require_target_usize(&format!("{path}.min_length"), *min_length)?;
                 let ProjectionType::Type(ty) = current.ty else {
-                    return Err(error(path, "constant index requires an array or slice"));
+                    return Err(error(path, "constant index requires a static array"));
                 };
-                match &ty.kind {
-                    MirTypeKind::Array { length, .. } => {
-                        if *from_end {
-                            return Err(error(path, "arrays cannot be constant-indexed from end"));
-                        }
-                        if *length < *min_length {
-                            return Err(error(path, "constant-index minimum exceeds array length"));
-                        }
-                    }
-                    MirTypeKind::Slice { .. } => {}
-                    _ => return Err(error(path, "constant index requires an array or slice")),
+                let MirTypeKind::Array { element, length } = &ty.kind else {
+                    return Err(error(
+                        path,
+                        match &ty.kind {
+                            MirTypeKind::Slice { .. } => {
+                                "slice constant-index projections require an external bound witness"
+                            }
+                            _ => "constant index requires a static array",
+                        },
+                    ));
+                };
+                if min_length != length {
+                    return Err(error(
+                        format!("{path}.min_length"),
+                        "constant-index metadata must equal the static array length",
+                    ));
                 }
                 let in_bounds = if *from_end {
-                    *offset > 0 && *offset <= *min_length
+                    *offset > 0 && *offset <= *length
                 } else {
-                    *offset < *min_length
+                    *offset < *length
                 };
                 if !in_bounds {
-                    return Err(error(path, "constant index is outside its minimum length"));
+                    return Err(error(
+                        path,
+                        "constant index is outside the static array bounds",
+                    ));
                 }
-                self.sequence_element(path, current)
+                Ok(ProjectionState {
+                    ty: ProjectionType::Type(element),
+                    writable: current.writable,
+                    address_space: current.address_space,
+                })
             }
             MirProjection::Subslice {
                 from,
@@ -1566,52 +2100,48 @@ impl<'a> Verifier<'a> {
             } => {
                 self.require_target_usize(&format!("{path}.from"), *from)?;
                 self.require_target_usize(&format!("{path}.to"), *to)?;
-                self.require_target_usize(&format!("{path}.min_length"), *min_length)?;
                 let ProjectionType::Type(ty) = current.ty else {
-                    return Err(error(path, "subslice requires an array or slice"));
+                    return Err(error(path, "subslice requires a static array"));
                 };
-                match &ty.kind {
-                    MirTypeKind::Array { element, length } => {
-                        if *from_end {
-                            return Err(error(path, "arrays cannot be subsliced from end"));
-                        }
-                        if *min_length != *length {
-                            return Err(error(
-                                path,
-                                "array subslice minimum must equal the array length",
-                            ));
-                        }
-                        if *from > *to || *to > *length {
-                            return Err(error(path, "subslice bounds exceed array length"));
-                        }
-                        self.find_array_semantic_type(path, element, *to - *from)
-                            .map(|ty| ProjectionState {
-                                ty: ProjectionType::Type(ty),
-                                writable: current.writable,
-                                address_space: current.address_space,
-                            })
-                    }
-                    MirTypeKind::Slice { .. } => {
-                        if !from_end {
-                            return Err(error(path, "slices must be subsliced from end"));
-                        }
-                        if from
-                            .checked_add(*to)
-                            .is_none_or(|extent| extent > *min_length)
-                        {
-                            return Err(error(
-                                path,
-                                "subslice bounds exceed the imported minimum length",
-                            ));
-                        }
-                        Ok(ProjectionState {
-                            ty: ProjectionType::Type(ty),
-                            writable: current.writable,
-                            address_space: current.address_space,
-                        })
-                    }
-                    _ => Err(error(path, "subslice requires an array or slice")),
+                let MirTypeKind::Array { element, length } = &ty.kind else {
+                    return Err(error(
+                        path,
+                        match &ty.kind {
+                            MirTypeKind::Slice { .. } => {
+                                "slice subslice projections require an external bound witness"
+                            }
+                            _ => "subslice requires a static array",
+                        },
+                    ));
+                };
+                if min_length != length {
+                    return Err(error(
+                        format!("{path}.min_length"),
+                        "subslice metadata must equal the static array length",
+                    ));
                 }
+                let result_length = if *from_end {
+                    let removed = from.checked_add(*to).ok_or_else(|| {
+                        error(path, "subslice bounds overflow the static array length")
+                    })?;
+                    length.checked_sub(removed).ok_or_else(|| {
+                        error(path, "subslice bounds exceed the static array length")
+                    })?
+                } else {
+                    if *from > *to || *to > *length {
+                        return Err(error(
+                            path,
+                            "subslice bounds exceed the static array length",
+                        ));
+                    }
+                    *to - *from
+                };
+                self.find_array_semantic_type(path, element, result_length)
+                    .map(|ty| ProjectionState {
+                        ty: ProjectionType::Type(ty),
+                        writable: current.writable,
+                        address_space: current.address_space,
+                    })
             }
             MirProjection::Downcast { variant } => {
                 let ProjectionType::Type(ty) = current.ty else {
@@ -1633,26 +2163,6 @@ impl<'a> Verifier<'a> {
                     address_space: current.address_space,
                 })
             }
-        }
-    }
-
-    fn sequence_element<'b>(
-        &'b self,
-        path: &str,
-        current: ProjectionState<'b>,
-    ) -> Result<ProjectionState<'b>, MirExecutableValidationError> {
-        let ProjectionType::Type(ty) = current.ty else {
-            return Err(error(path, "index projection requires an array or slice"));
-        };
-        match &ty.kind {
-            MirTypeKind::Array { element, .. } | MirTypeKind::Slice { element } => {
-                Ok(ProjectionState {
-                    ty: ProjectionType::Type(element),
-                    writable: current.writable,
-                    address_space: current.address_space,
-                })
-            }
-            _ => Err(error(path, "index projection requires an array or slice")),
         }
     }
 
@@ -2341,6 +2851,23 @@ struct ProjectionState<'a> {
     address_space: MirAddressSpace,
 }
 
+fn is_intrinsic_identity(identity: &str) -> bool {
+    matches!(
+        identity,
+        "fe2o3.copy_nonoverlapping"
+            | "fe2o3.pointer_distance"
+            | "fe2o3.volatile_load"
+            | "fe2o3.volatile_store"
+    )
+}
+
+fn unwind_action_may_unwind(action: &MirUnwindAction) -> bool {
+    matches!(
+        action,
+        MirUnwindAction::Continue | MirUnwindAction::Cleanup(_)
+    )
+}
+
 pub(crate) fn terminator_edges(terminator: &MirTerminatorKind) -> Vec<&MirEdge> {
     let mut edges = Vec::new();
     match terminator {
@@ -2555,11 +3082,118 @@ fn map_type_error(path: &str, source: MirTypeValidationError) -> MirExecutableVa
     )
 }
 
+fn validate_executable_address_space(
+    path: &str,
+    address_space: MirAddressSpace,
+) -> Result<(), MirExecutableValidationError> {
+    if address_space.0 > MAX_EXECUTABLE_ADDRESS_SPACE {
+        return Err(error(
+            path,
+            format!(
+                "address space {} is outside the executable MIR V1 policy 0..={MAX_EXECUTABLE_ADDRESS_SPACE}",
+                address_space.0
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_target_type_abi(
+    root: &str,
+    ty: &MirSemanticType,
+    target: MirExecutableTarget,
+) -> Result<(), MirExecutableValidationError> {
+    let pointer_bytes = u64::from(target.pointer_width_bits / 8);
+    let mut stack = vec![(root.to_owned(), ty)];
+    while let Some((path, ty)) = stack.pop() {
+        match &ty.kind {
+            MirTypeKind::RawPointer {
+                pointee,
+                address_space,
+                ..
+            } => {
+                if ty.layout.size != Some(pointer_bytes) || ty.layout.align != pointer_bytes {
+                    return Err(error(
+                        &path,
+                        "raw-pointer size and alignment must exactly match the target pointer ABI",
+                    ));
+                }
+                validate_executable_address_space(
+                    &format!("{path}.address_space"),
+                    *address_space,
+                )?;
+                if pointee.layout.size.is_none() {
+                    return Err(error(
+                        format!("{path}.pointee"),
+                        "thin raw pointers require a Sized pointee",
+                    ));
+                }
+                stack.push((format!("{path}.pointee"), pointee));
+            }
+            MirTypeKind::Reference {
+                referent,
+                address_space,
+                ..
+            } => {
+                if ty.layout.size != Some(pointer_bytes) || ty.layout.align != pointer_bytes {
+                    return Err(error(
+                        &path,
+                        "reference size and alignment must exactly match the target pointer ABI",
+                    ));
+                }
+                validate_executable_address_space(
+                    &format!("{path}.address_space"),
+                    *address_space,
+                )?;
+                if referent.layout.size.is_none() {
+                    return Err(error(
+                        format!("{path}.referent"),
+                        "thin references require a Sized referent",
+                    ));
+                }
+                stack.push((format!("{path}.referent"), referent));
+            }
+            MirTypeKind::Slice { element } | MirTypeKind::Array { element, .. } => {
+                stack.push((format!("{path}.element"), element));
+            }
+            MirTypeKind::Tuple(aggregate) => {
+                for (index, field) in aggregate.fields.iter().enumerate() {
+                    stack.push((format!("{path}.fields[{index}].type"), &field.ty));
+                }
+            }
+            MirTypeKind::Struct(structure) => {
+                for (index, field) in structure.aggregate.fields.iter().enumerate() {
+                    stack.push((format!("{path}.fields[{index}].type"), &field.ty));
+                }
+            }
+            MirTypeKind::Enum(enum_ty) => {
+                for (variant_index, variant) in enum_ty.variants.iter().enumerate() {
+                    for (field_index, field) in variant.aggregate.fields.iter().enumerate() {
+                        stack.push((
+                            format!("{path}.variants[{variant_index}].fields[{field_index}].type"),
+                            &field.ty,
+                        ));
+                    }
+                }
+            }
+            MirTypeKind::Unit | MirTypeKind::Scalar(_) => {}
+        }
+    }
+    Ok(())
+}
+
 fn validate_type_budget(types: &[MirSemanticType]) -> Result<(), MirExecutableValidationError> {
+    validate_type_budget_at(types, "module.types")
+}
+
+fn validate_type_budget_at(
+    types: &[MirSemanticType],
+    root: &str,
+) -> Result<(), MirExecutableValidationError> {
     let mut stack = types
         .iter()
         .enumerate()
-        .map(|(index, ty)| (format!("module.types[{index}]"), ty, 1_usize))
+        .map(|(index, ty)| (format!("{root}[{index}]"), ty, 1_usize))
         .collect::<Vec<_>>();
     let mut nodes = 0_usize;
     let mut items = types.len();

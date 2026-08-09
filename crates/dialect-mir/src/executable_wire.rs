@@ -1,7 +1,8 @@
 use std::fmt;
 
 use crate::{
-    EXECUTABLE_MIR_VERSION, MirExecutableModule, MirExecutableValidationError, MirExecutableVersion,
+    EXECUTABLE_MIR_VERSION, MirExecutableModule, MirExecutableValidationError,
+    MirExecutableVersion, MirExternalCallRegistry, ValidatedMirExecutableModule,
 };
 
 const MAGIC: &[u8; 8] = b"F2MEXE01";
@@ -79,31 +80,31 @@ impl MirExecutableModule {
     /// integers only. No map iteration or floating-point text formatting is
     /// involved; floating constants are represented by their raw bits.
     pub fn to_bytes(&self) -> Result<Vec<u8>, MirExecutableValidationError> {
-        self.validate()?;
-        let payload = serde_json::to_vec(self)
-            .expect("validated executable MIR consists only of serializable in-memory values");
-        let total = HEADER_BYTES
-            .checked_add(payload.len())
-            .ok_or_else(|| MirExecutableValidationError::new("module", "wire size overflow"))?;
-        if total > MAX_EXECUTABLE_WIRE_BYTES || payload.len() > u32::MAX as usize {
-            return Err(MirExecutableValidationError::new(
-                "module",
-                "canonical wire representation exceeds its byte bound",
-            ));
-        }
+        self.to_bytes_with_registry(&MirExternalCallRegistry::default())
+    }
 
-        let mut bytes = Vec::with_capacity(total);
-        bytes.extend_from_slice(MAGIC);
-        bytes.extend_from_slice(&EXECUTABLE_MIR_VERSION.to_le_bytes());
-        bytes.extend_from_slice(&FLAGS.to_le_bytes());
-        bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
-        bytes.extend_from_slice(&payload);
-        Ok(bytes)
+    /// Encodes after validating device imports against an external trust root.
+    pub fn to_bytes_with_registry(
+        &self,
+        registry: &MirExternalCallRegistry,
+    ) -> Result<Vec<u8>, MirExecutableValidationError> {
+        self.validate_with_registry(registry)?.to_bytes()
     }
 
     /// Decodes only the exact canonical V1 representation. The envelope and
     /// byte bound are checked before invoking the payload parser.
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, MirExecutableDecodeError> {
+    pub fn from_bytes(
+        bytes: &[u8],
+    ) -> Result<ValidatedMirExecutableModule, MirExecutableDecodeError> {
+        Self::from_bytes_with_registry(bytes, &MirExternalCallRegistry::default())
+    }
+
+    /// Decodes while resolving device import declarations exclusively through
+    /// a process-supplied external trust root.
+    pub fn from_bytes_with_registry(
+        bytes: &[u8],
+        registry: &MirExternalCallRegistry,
+    ) -> Result<ValidatedMirExecutableModule, MirExecutableDecodeError> {
         if bytes.len() > MAX_EXECUTABLE_WIRE_BYTES {
             return Err(MirExecutableDecodeError::InputTooLarge);
         }
@@ -136,14 +137,39 @@ impl MirExecutableModule {
                 ),
             ));
         }
-        module.validate()?;
-        if module
+        let validated = module.validate_with_registry(registry)?;
+        if validated
             .to_bytes()
             .map_err(MirExecutableDecodeError::Validation)?
             != bytes
         {
             return Err(MirExecutableDecodeError::NonCanonical);
         }
-        Ok(module)
+        Ok(validated)
+    }
+}
+
+impl ValidatedMirExecutableModule {
+    /// Encodes without accepting a mutable or deserializable authority token.
+    pub fn to_bytes(&self) -> Result<Vec<u8>, MirExecutableValidationError> {
+        let payload = serde_json::to_vec(self.as_module())
+            .expect("validated executable MIR consists only of serializable in-memory values");
+        let total = HEADER_BYTES
+            .checked_add(payload.len())
+            .ok_or_else(|| MirExecutableValidationError::new("module", "wire size overflow"))?;
+        if total > MAX_EXECUTABLE_WIRE_BYTES || payload.len() > u32::MAX as usize {
+            return Err(MirExecutableValidationError::new(
+                "module",
+                "canonical wire representation exceeds its byte bound",
+            ));
+        }
+
+        let mut bytes = Vec::with_capacity(total);
+        bytes.extend_from_slice(MAGIC);
+        bytes.extend_from_slice(&EXECUTABLE_MIR_VERSION.to_le_bytes());
+        bytes.extend_from_slice(&FLAGS.to_le_bytes());
+        bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&payload);
+        Ok(bytes)
     }
 }
