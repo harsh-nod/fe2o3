@@ -23,7 +23,16 @@ impl TestDirectory {
                 "cargo-fe2o3-pinned-executable-{}-{id}",
                 std::process::id()
             ));
-            match fs::create_dir(&path) {
+            #[cfg(unix)]
+            let mut builder = fs::DirBuilder::new();
+            #[cfg(not(unix))]
+            let builder = fs::DirBuilder::new();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::DirBuilderExt;
+                builder.mode(0o700);
+            }
+            match builder.create(&path) {
                 Ok(()) => return Self(path),
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
                 Err(error) => panic!(
@@ -63,6 +72,19 @@ mod tests {
     use super::*;
     use std::collections::HashSet;
     use std::sync::{Arc, Barrier};
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_is_private_to_the_current_user() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = TestDirectory::new();
+        let mode = fs::metadata(directory.path())
+            .expect("read test directory metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o077, 0);
+    }
 
     #[test]
     fn duplicate_module_counters_allocate_unique_directories_under_concurrency() {
