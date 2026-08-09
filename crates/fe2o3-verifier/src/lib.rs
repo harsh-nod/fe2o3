@@ -14,6 +14,7 @@ mod authenticated_proof_binding;
 mod control_flow_binding;
 mod executor;
 mod model;
+mod monomorphization_dead_binding;
 mod multi_kernel_proof;
 mod persistent_freshness;
 mod plan;
@@ -72,6 +73,11 @@ pub use model::{
     MAX_CONFIGURATION_ENTRIES, MAX_PROPERTIES, MAX_TEXT_BYTES, MAX_TRUSTED_ITEMS,
     MeasuredToolIdentity, ModelError, ProofOutcome, ProofProperty, ProofRequestV1,
     ProofTargetIdentity, Text, TrustedItem, VerificationModelIdentity,
+};
+pub use monomorphization_dead_binding::{
+    MONOMORPHIZATION_DEAD_BINDING_DOMAIN_V1, MONOMORPHIZATION_DEAD_BINDING_VERSION_V1,
+    MonomorphizationDeadBindingErrorV1, MonomorphizationDeadClaimV1,
+    MonomorphizationDeadIdentityBindingV1, reconcile_monomorphization_dead_evidence_v1,
 };
 pub use multi_kernel_proof::{
     KernelProofAdmissionIdentityV1, KernelProofAdmissionRequestV1,
