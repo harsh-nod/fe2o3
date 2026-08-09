@@ -22,6 +22,10 @@ use fe2o3_worker_v2_bundle::{ExactRawHsacoV1, WorkerV2EnvelopeInputsV1};
 #[path = "../../src/worker_v2_artifact_container.rs"]
 mod worker_v2_artifact_container;
 
+#[allow(dead_code)]
+#[path = "../../src/worker_v2_restart.rs"]
+mod worker_v2_restart;
+
 fn main() -> Result<(), Box<dyn Error>> {
     let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
     if !(3..=4).contains(&arguments.len()) {

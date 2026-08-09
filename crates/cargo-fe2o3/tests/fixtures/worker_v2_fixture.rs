@@ -24,7 +24,8 @@ mod worker_v2_artifact_container;
 
 #[allow(dead_code)]
 #[path = "../../src/worker_v2_restart.rs"]
-mod restart_support;
+mod worker_v2_restart;
+use worker_v2_restart as restart_support;
 
 const WORKER_ID: &str = "cargo-fe2o3-fixture-worker-v1";
 const OUTPUT: &[u8] = b"cargo-fe2o3-fixture-output";
