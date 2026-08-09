@@ -674,13 +674,14 @@ fn compiler_capture_preserves_generated_callable_and_intrinsic_def_ids() {
             .all(|local| !matches!(local.ty.class, TypeClassV2::Unsupported(_)))
     );
     assert!(!results.closure_once_shim.is_authorized_for_lowering());
+    let unauthoritative_error = results
+        .closure_once_shim
+        .validate(CaptureLimitsV2::default())
+        .unwrap_err()
+        .to_string();
     assert!(
-        results
-            .closure_once_shim
-            .validate(CaptureLimitsV2::default())
-            .unwrap_err()
-            .to_string()
-            .contains("source identity is unauthoritative")
+        unauthoritative_error.contains("source identity is unauthoritative"),
+        "{unauthoritative_error}"
     );
     let call_spans = calls(&results.invoke_once).find_map(|kind| match kind {
         TerminatorKindV2::Call {
@@ -913,6 +914,155 @@ fn normalized_validation_enforces_call_type_and_source_scope_coherence() {
             .to_string()
             .contains("source scope")
     );
+}
+
+#[test]
+fn normalized_validation_rejects_direct_call_substitution_and_signature_mutation() {
+    let replacement = calls(&compiler_results().observed)
+        .find_map(|kind| match kind {
+            TerminatorKindV2::Call {
+                callee: CalleeIdentityV2::Direct { resolved, .. },
+                ..
+            } => Some(resolved.as_ref().clone()),
+            _ => None,
+        })
+        .expect("observed fixture must have a direct call replacement");
+    let mut substituted = compiler_results().invoke_once;
+    let direct = substituted
+        .blocks
+        .iter_mut()
+        .find_map(|block| match &mut block.terminator.kind {
+            TerminatorKindV2::Call {
+                callee: CalleeIdentityV2::Direct { resolved, .. },
+                ..
+            } => Some(resolved),
+            _ => None,
+        })
+        .expect("invoke_once fixture must have a direct call");
+    **direct = replacement;
+    refresh_capture_accounting(&mut substituted);
+    let substitution_error = substituted
+        .validate(CaptureLimitsV2::default())
+        .unwrap_err()
+        .to_string();
+    assert!(
+        substitution_error.contains("resolution_binding_hash"),
+        "{substitution_error}"
+    );
+
+    let mut bad_signature = compiler_results().invoke_once;
+    let signature = bad_signature
+        .blocks
+        .iter_mut()
+        .find_map(|block| match &mut block.terminator.kind {
+            TerminatorKindV2::Call {
+                callee:
+                    CalleeIdentityV2::Direct {
+                        resolved_signature, ..
+                    },
+                ..
+            } => Some(resolved_signature),
+            _ => None,
+        })
+        .expect("invoke_once fixture must have a resolved signature");
+    signature.stable_hash[0] ^= 1;
+    let signature_error = bad_signature
+        .validate(CaptureLimitsV2::default())
+        .unwrap_err()
+        .to_string();
+    assert!(
+        signature_error.contains("resolution_binding_hash"),
+        "{signature_error}"
+    );
+}
+
+#[test]
+fn normalized_validation_binds_intrinsic_presence_name_flags_and_definition() {
+    let original = compiler_results().intrinsic;
+
+    let mut removed = original.clone();
+    let intrinsic = removed
+        .blocks
+        .iter_mut()
+        .find_map(|block| match &mut block.terminator.kind {
+            TerminatorKindV2::Call {
+                callee: CalleeIdentityV2::Direct { intrinsic, .. },
+                ..
+            } if intrinsic.is_some() => Some(intrinsic),
+            _ => None,
+        })
+        .expect("intrinsic fixture must have intrinsic metadata");
+    *intrinsic = None;
+    refresh_capture_accounting(&mut removed);
+    let removed_error = removed
+        .validate(CaptureLimitsV2::default())
+        .unwrap_err()
+        .to_string();
+    assert!(removed_error.contains("if and only if"), "{removed_error}");
+
+    for mutate in [
+        |intrinsic: &mut IntrinsicIdentityV2| intrinsic.name = "white_box".to_owned(),
+        |intrinsic: &mut IntrinsicIdentityV2| {
+            intrinsic.must_be_overridden = !intrinsic.must_be_overridden;
+        },
+        |intrinsic: &mut IntrinsicIdentityV2| intrinsic.definition.def_path_hash[0] ^= 1,
+    ] {
+        let mut body = original.clone();
+        let intrinsic = body
+            .blocks
+            .iter_mut()
+            .find_map(|block| match &mut block.terminator.kind {
+                TerminatorKindV2::Call {
+                    callee:
+                        CalleeIdentityV2::Direct {
+                            intrinsic: Some(intrinsic),
+                            ..
+                        },
+                    ..
+                } => Some(intrinsic),
+                _ => None,
+            })
+            .expect("intrinsic fixture must have intrinsic metadata");
+        mutate(intrinsic);
+        let error = body
+            .validate(CaptureLimitsV2::default())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("intrinsic identity binding"), "{error}");
+    }
+
+    let metadata = calls(&original)
+        .find_map(|kind| match kind {
+            TerminatorKindV2::Call {
+                callee:
+                    CalleeIdentityV2::Direct {
+                        intrinsic: Some(intrinsic),
+                        ..
+                    },
+                ..
+            } => Some(intrinsic.clone()),
+            _ => None,
+        })
+        .unwrap();
+    let mut added = compiler_results().observed;
+    let target = added
+        .blocks
+        .iter_mut()
+        .find_map(|block| match &mut block.terminator.kind {
+            TerminatorKindV2::Call {
+                callee: CalleeIdentityV2::Direct { intrinsic, .. },
+                ..
+            } if intrinsic.is_none() => Some(intrinsic),
+            _ => None,
+        })
+        .expect("observed fixture must have a non-intrinsic direct call");
+    *target = Some(metadata);
+    refresh_capture_accounting(&mut added);
+    let added_error = added
+        .validate(CaptureLimitsV2::default())
+        .unwrap_err()
+        .to_string();
+    assert!(added_error.contains("if and only if"), "{added_error}");
 }
 
 #[test]

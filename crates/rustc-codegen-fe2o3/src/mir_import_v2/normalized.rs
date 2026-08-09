@@ -2,6 +2,7 @@ use std::error::Error;
 use std::fmt;
 
 use super::accounting::recompute_capture_accounting_v2;
+use sha2::{Digest, Sha256};
 
 pub(crate) const NORMALIZED_MIR_SCHEMA_V2: u16 = 2;
 
@@ -236,6 +237,14 @@ pub(crate) struct IntrinsicIdentityV2 {
     pub name: String,
     pub must_be_overridden: bool,
     pub const_stable: bool,
+    pub binding_hash: [u8; 32],
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FunctionSignatureIdentityV2 {
+    pub stable_hash: [u8; 16],
+    pub shape_hash: [u8; 16],
+    pub input_count: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -362,6 +371,7 @@ pub(crate) enum TypeClassV2 {
     FunctionDefinition {
         definition: DefinitionIdentityV2,
         generic_args_hash: [u8; 16],
+        generic_arg_count: usize,
     },
     FunctionPointer,
     UnsafeBinder,
@@ -724,8 +734,12 @@ pub(crate) enum CalleeIdentityV2 {
     Direct {
         declared: DefinitionIdentityV2,
         declared_generic_args_hash: [u8; 16],
+        declared_generic_arg_count: usize,
+        declared_signature: FunctionSignatureIdentityV2,
         resolved: Box<FunctionIdentityV2>,
+        resolved_signature: FunctionSignatureIdentityV2,
         intrinsic: Option<IntrinsicIdentityV2>,
+        resolution_binding_hash: [u8; 32],
     },
     Indirect {
         callable_type: TypeIdentityV2,
@@ -788,6 +802,167 @@ impl fmt::Display for ValidationErrorV2 {
 }
 
 impl Error for ValidationErrorV2 {}
+
+pub(super) fn intrinsic_binding_hash_v2(
+    intrinsic: &IntrinsicIdentityV2,
+) -> Result<[u8; 32], ValidationErrorV2> {
+    let mut hasher = Sha256::new();
+    hasher.update(b"fe2o3.mir-v2.intrinsic-binding.v1\0");
+    hash_definition_binding(&mut hasher, &intrinsic.definition);
+    hash_usize_binding(&mut hasher, intrinsic.name.len(), "intrinsic.name")?;
+    hasher.update(intrinsic.name.as_bytes());
+    hasher.update([u8::from(intrinsic.must_be_overridden)]);
+    hasher.update([u8::from(intrinsic.const_stable)]);
+    Ok(hasher.finalize().into())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn resolution_binding_hash_v2(
+    callable_type: &TypeIdentityV2,
+    declared: &DefinitionIdentityV2,
+    declared_generic_args_hash: &[u8; 16],
+    declared_generic_arg_count: usize,
+    declared_signature: &FunctionSignatureIdentityV2,
+    resolved: &FunctionIdentityV2,
+    resolved_signature: &FunctionSignatureIdentityV2,
+    intrinsic: Option<&IntrinsicIdentityV2>,
+) -> Result<[u8; 32], ValidationErrorV2> {
+    let mut hasher = Sha256::new();
+    hasher.update(b"fe2o3.mir-v2.direct-call-binding.v1\0");
+    hasher.update(callable_type.stable_hash);
+    hash_definition_binding(&mut hasher, declared);
+    hasher.update(declared_generic_args_hash);
+    hash_usize_binding(
+        &mut hasher,
+        declared_generic_arg_count,
+        "callee.declared_generic_arg_count",
+    )?;
+    hash_signature_binding(&mut hasher, declared_signature)?;
+    hash_definition_binding(&mut hasher, &resolved.definition);
+    hasher.update(resolved.instance.generic_args_hash);
+    hash_usize_binding(
+        &mut hasher,
+        resolved.instance.generic_arg_count,
+        "callee.resolved.generic_arg_count",
+    )?;
+    hasher.update(resolved.instance.instance_hash);
+    hash_instance_kind_binding(&mut hasher, &resolved.instance.kind)?;
+    hash_signature_binding(&mut hasher, resolved_signature)?;
+    match intrinsic {
+        Some(intrinsic) => {
+            hasher.update([1]);
+            hasher.update(intrinsic.binding_hash);
+        }
+        None => hasher.update([0]),
+    }
+    Ok(hasher.finalize().into())
+}
+
+fn hash_definition_binding(hasher: &mut Sha256, definition: &DefinitionIdentityV2) {
+    hasher.update(definition.def_path_hash);
+    hasher.update(definition.stable_crate_id);
+    hasher.update(definition.local_def_path_hash);
+}
+
+fn hash_signature_binding(
+    hasher: &mut Sha256,
+    signature: &FunctionSignatureIdentityV2,
+) -> Result<(), ValidationErrorV2> {
+    hasher.update(signature.stable_hash);
+    hasher.update(signature.shape_hash);
+    hash_usize_binding(
+        hasher,
+        signature.input_count,
+        "callee.signature.input_count",
+    )
+}
+
+fn hash_instance_kind_binding(
+    hasher: &mut Sha256,
+    kind: &InstanceKindV2,
+) -> Result<(), ValidationErrorV2> {
+    match kind {
+        InstanceKindV2::Item => hasher.update([0]),
+        InstanceKindV2::Intrinsic => hasher.update([1]),
+        InstanceKindV2::VTableShim => hasher.update([2]),
+        InstanceKindV2::ReifyShim { reason } => {
+            hasher.update([3]);
+            hasher.update([match reason {
+                None => 0,
+                Some(ReifyReasonV2::FunctionPointer) => 1,
+                Some(ReifyReasonV2::Vtable) => 2,
+            }]);
+        }
+        InstanceKindV2::FnPtrShim { fn_pointer } => {
+            hasher.update([4]);
+            hasher.update(fn_pointer.stable_hash);
+        }
+        InstanceKindV2::Virtual { vtable_index } => {
+            hasher.update([5]);
+            hash_usize_binding(hasher, *vtable_index, "callee.resolved.vtable_index")?;
+        }
+        InstanceKindV2::ClosureOnceShim { track_caller } => {
+            hasher.update([6]);
+            hasher.update([u8::from(*track_caller)]);
+        }
+        InstanceKindV2::ConstructCoroutineInClosureShim {
+            coroutine_closure,
+            receiver_by_ref,
+        } => {
+            hasher.update([7]);
+            hash_definition_binding(hasher, coroutine_closure);
+            hasher.update([u8::from(*receiver_by_ref)]);
+        }
+        InstanceKindV2::ThreadLocalShim => hasher.update([8]),
+        InstanceKindV2::FutureDropPollShim {
+            proxy_coroutine,
+            implementation_coroutine,
+        } => {
+            hasher.update([9]);
+            hasher.update(proxy_coroutine.stable_hash);
+            hasher.update(implementation_coroutine.stable_hash);
+        }
+        InstanceKindV2::DropGlue { ty } => {
+            hasher.update([10]);
+            match ty {
+                Some(ty) => {
+                    hasher.update([1]);
+                    hasher.update(ty.stable_hash);
+                }
+                None => hasher.update([0]),
+            }
+        }
+        InstanceKindV2::CloneShim { ty } => {
+            hasher.update([11]);
+            hasher.update(ty.stable_hash);
+        }
+        InstanceKindV2::FnPtrAddrShim { ty } => {
+            hasher.update([12]);
+            hasher.update(ty.stable_hash);
+        }
+        InstanceKindV2::AsyncDropGlueCtorShim { ty } => {
+            hasher.update([13]);
+            hasher.update(ty.stable_hash);
+        }
+        InstanceKindV2::AsyncDropGlue { ty } => {
+            hasher.update([14]);
+            hasher.update(ty.stable_hash);
+        }
+    }
+    Ok(())
+}
+
+fn hash_usize_binding(
+    hasher: &mut Sha256,
+    value: usize,
+    path: &str,
+) -> Result<(), ValidationErrorV2> {
+    let value = u64::try_from(value).map_err(|_| {
+        ValidationErrorV2::new(path, "value cannot be represented canonically as u64")
+    })?;
+    hasher.update(value.to_le_bytes());
+    Ok(())
+}
 
 fn validate_function_identity(
     identity: &FunctionIdentityV2,
@@ -972,12 +1147,24 @@ fn validate_type(
         TypeClassV2::Adt {
             definition,
             generic_args_hash,
+        } => {
+            validate_definition(&format!("{path}.definition"), definition, limits)?;
+            validate_hash(&format!("{path}.generic_args_hash"), generic_args_hash)
         }
-        | TypeClassV2::FunctionDefinition {
+        TypeClassV2::FunctionDefinition {
             definition,
             generic_args_hash,
+            generic_arg_count,
+        } => {
+            validate_definition(&format!("{path}.definition"), definition, limits)?;
+            validate_hash(&format!("{path}.generic_args_hash"), generic_args_hash)?;
+            bounded(
+                format!("{path}.generic_arg_count"),
+                *generic_arg_count,
+                limits.max_generic_args,
+            )
         }
-        | TypeClassV2::Closure {
+        TypeClassV2::Closure {
             definition,
             generic_args_hash,
         }
@@ -1437,15 +1624,34 @@ fn validate_callee(
         CalleeIdentityV2::Direct {
             declared,
             declared_generic_args_hash,
+            declared_generic_arg_count,
+            declared_signature,
             resolved,
+            resolved_signature,
             intrinsic,
+            resolution_binding_hash,
         } => {
             validate_definition(&format!("{path}.declared"), declared, limits)?;
             validate_hash(
                 &format!("{path}.declared_generic_args_hash"),
                 declared_generic_args_hash,
             )?;
+            bounded(
+                format!("{path}.declared_generic_arg_count"),
+                *declared_generic_arg_count,
+                limits.max_generic_args,
+            )?;
+            validate_signature(
+                &format!("{path}.declared_signature"),
+                declared_signature,
+                limits,
+            )?;
             validate_function_identity(resolved, limits)?;
+            validate_signature(
+                &format!("{path}.resolved_signature"),
+                resolved_signature,
+                limits,
+            )?;
             let OperandV2::Constant { ty, .. } = function else {
                 return Err(ValidationErrorV2::new(
                     path,
@@ -1455,6 +1661,7 @@ fn validate_callee(
             let TypeClassV2::FunctionDefinition {
                 definition,
                 generic_args_hash,
+                generic_arg_count,
             } = &ty.class
             else {
                 return Err(ValidationErrorV2::new(
@@ -1462,25 +1669,50 @@ fn validate_callee(
                     "direct callee operand does not have a function-definition type",
                 ));
             };
-            if definition != declared || generic_args_hash != declared_generic_args_hash {
+            if definition != declared
+                || generic_args_hash != declared_generic_args_hash
+                || generic_arg_count != declared_generic_arg_count
+            {
                 return Err(ValidationErrorV2::new(
                     path,
                     "declared callee identity disagrees with its operand type",
                 ));
             }
+            let resolved_is_intrinsic = matches!(resolved.instance.kind, InstanceKindV2::Intrinsic);
+            if intrinsic.is_some() != resolved_is_intrinsic {
+                return Err(ValidationErrorV2::new(
+                    format!("{path}.intrinsic"),
+                    "intrinsic metadata must be present if and only if the resolved instance is intrinsic",
+                ));
+            }
             if let Some(intrinsic) = intrinsic {
-                validate_definition(
-                    &format!("{path}.intrinsic.definition"),
-                    &intrinsic.definition,
-                    limits,
-                )?;
-                validate_text(&format!("{path}.intrinsic.name"), &intrinsic.name, limits)?;
-                if intrinsic.definition != *declared || resolved.definition != *declared {
+                validate_intrinsic(&format!("{path}.intrinsic"), intrinsic, limits)?;
+                if intrinsic.definition != resolved.definition {
                     return Err(ValidationErrorV2::new(
                         path,
-                        "intrinsic, declared, and resolved DefId identities disagree",
+                        "intrinsic definition disagrees with the resolved instance",
                     ));
                 }
+            }
+            validate_hash32(
+                &format!("{path}.resolution_binding_hash"),
+                resolution_binding_hash,
+            )?;
+            let expected_binding = resolution_binding_hash_v2(
+                ty,
+                declared,
+                declared_generic_args_hash,
+                *declared_generic_arg_count,
+                declared_signature,
+                resolved,
+                resolved_signature,
+                intrinsic.as_ref(),
+            )?;
+            if *resolution_binding_hash != expected_binding {
+                return Err(ValidationErrorV2::new(
+                    format!("{path}.resolution_binding_hash"),
+                    "direct-call identity binding does not match its captured fields",
+                ));
             }
             Ok(())
         }
@@ -1633,11 +1865,52 @@ fn validate_stable_value(
     validate_text(&format!("{path}.diagnostic"), &value.diagnostic, limits)
 }
 
+fn validate_signature(
+    path: &str,
+    signature: &FunctionSignatureIdentityV2,
+    limits: CaptureLimitsV2,
+) -> Result<(), ValidationErrorV2> {
+    validate_hash(&format!("{path}.stable_hash"), &signature.stable_hash)?;
+    validate_hash(&format!("{path}.shape_hash"), &signature.shape_hash)?;
+    bounded(
+        format!("{path}.input_count"),
+        signature.input_count,
+        limits.max_type_arity,
+    )
+}
+
+fn validate_intrinsic(
+    path: &str,
+    intrinsic: &IntrinsicIdentityV2,
+    limits: CaptureLimitsV2,
+) -> Result<(), ValidationErrorV2> {
+    validate_definition(&format!("{path}.definition"), &intrinsic.definition, limits)?;
+    validate_text(&format!("{path}.name"), &intrinsic.name, limits)?;
+    validate_hash32(&format!("{path}.binding_hash"), &intrinsic.binding_hash)?;
+    if intrinsic.binding_hash != intrinsic_binding_hash_v2(intrinsic)? {
+        return Err(ValidationErrorV2::new(
+            format!("{path}.binding_hash"),
+            "intrinsic identity binding does not match its captured fields",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_hash(path: &str, hash: &[u8; 16]) -> Result<(), ValidationErrorV2> {
     if hash.iter().all(|byte| *byte == 0) {
         return Err(ValidationErrorV2::new(
             path,
             "stable identity hash must not be the reserved zero value",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_hash32(path: &str, hash: &[u8; 32]) -> Result<(), ValidationErrorV2> {
+    if hash.iter().all(|byte| *byte == 0) {
+        return Err(ValidationErrorV2::new(
+            path,
+            "structural identity hash must not be the reserved zero value",
         ));
     }
     Ok(())

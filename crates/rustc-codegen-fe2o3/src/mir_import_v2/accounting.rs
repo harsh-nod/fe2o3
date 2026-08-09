@@ -116,6 +116,13 @@ impl AccountingV2 {
         self.text(&intrinsic.name)
     }
 
+    fn signature(
+        &mut self,
+        _signature: &FunctionSignatureIdentityV2,
+    ) -> Result<(), ValidationErrorV2> {
+        self.work(1)
+    }
+
     fn instance(&mut self, instance: &InstanceIdentityV2) -> Result<(), ValidationErrorV2> {
         self.work(1)?;
         self.instance_kind(&instance.kind)?;
@@ -528,12 +535,16 @@ impl AccountingV2 {
         match callee {
             CalleeIdentityV2::Direct {
                 declared,
+                declared_signature,
                 resolved,
+                resolved_signature,
                 intrinsic,
                 ..
             } => {
                 self.definition(declared)?;
+                self.signature(declared_signature)?;
                 self.function(resolved)?;
+                self.signature(resolved_signature)?;
                 if let Some(intrinsic) = intrinsic {
                     self.work(1)?;
                     self.intrinsic(intrinsic)?;
