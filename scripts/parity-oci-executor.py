@@ -3221,12 +3221,12 @@ def report_controlled_error(prefix: str, error: BaseException) -> int:
 
 
 def operator_main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description="Fixed production OCI evidence operator entrypoint"
-    )
-    parser.add_argument("command", choices=("verify", "plan", "preflight"))
-    parser.add_argument("--request-id", required=True)
     try:
+        parser = argparse.ArgumentParser(
+            description="Fixed production OCI evidence operator entrypoint"
+        )
+        parser.add_argument("command", choices=("verify", "plan", "preflight"))
+        parser.add_argument("--request-id", required=True)
         selected = parser.parse_args(argv)
         verify_installed_operator_entrypoint()
         config = load_operator_config()
@@ -3243,8 +3243,8 @@ def operator_main(argv: list[str] | None = None) -> int:
 
 
 def main() -> int:
-    parser = build_parser()
     try:
+        parser = build_parser()
         args = parser.parse_args()
         args.func(args)
         return 0

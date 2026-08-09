@@ -1003,6 +1003,18 @@ assert captured_stderr.getvalue().count("\n") == 1
 assert "parity-oci-executor: top-level fs" in captured_stderr.getvalue()
 assert "Traceback" not in captured_stderr.getvalue()
 
+captured_stderr = io.StringIO()
+module.build_parser = lambda: (_ for _ in ()).throw(OSError("entrypoint setup fs"))
+module.sys.stderr = captured_stderr
+try:
+    assert module.main() == 2
+finally:
+    module.build_parser = real_build_parser
+    module.sys.stderr = real_stderr
+assert captured_stderr.getvalue().count("\n") == 1
+assert "parity-oci-executor: entrypoint setup fs" in captured_stderr.getvalue()
+assert "Traceback" not in captured_stderr.getvalue()
+
 real_verify_entrypoint = module.verify_installed_operator_entrypoint
 captured_stderr = io.StringIO()
 module.verify_installed_operator_entrypoint = lambda: (_ for _ in ()).throw(
