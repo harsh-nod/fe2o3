@@ -15,11 +15,14 @@ test operations:
   observations with the protected profile. These observations are not a full
   daemon/runtime closure.
 
-Production operation exists only behind a separately installed, root-owned
-`/usr/libexec/fe2o3-oci-operator`. That launcher has `verify`, `plan`, and
-`preflight` commands, but accepts only a request ID. It loads all trust inputs
-from fixed operator configuration. Running the repository launcher directly
-fails closed, and the current host has no valid production installation.
+Production operation exists only behind a separately installed, root-owned,
+Linux-immutable static ELF `/usr/libexec/fe2o3-oci-operator`. That launcher has
+`verify`, `plan`, and `preflight` commands, but accepts only a request ID. It
+clears inherited process state before starting a fixed isolated Python
+distribution and loads all trust inputs from fixed operator configuration. The
+repository contains launcher source and non-authoritative tests, not an
+installed production launcher, and the current host has no valid production
+installation.
 
 There is intentionally no `run` operation and no execution receipt. The V2
 promotion parser continues to accept only shell queue schema 3, whose closure
@@ -43,7 +46,7 @@ candidate Request selected by fixed-inbox request ID
     | protected policy selects exact profile path, size, and digest
     v
 AuthorizedRequest
-    +-- protected Git objects --> ephemeral SourceSnapshot
+    +-- authenticated loose Git closure --> ephemeral SourceSnapshot
     +-- protected staging ----> ephemeral OutputStage
     +-- bounded observations -> ObservedRuntimeRequest
     |
@@ -124,20 +127,81 @@ The test-only `descriptor-stable` contract provides descriptor pinning and
 race detection; it does not establish filesystem immutability. A production
 policy additionally requires the externally selected `linux-immutable`
 contract, and the config provision, config, policy, profile, installed launcher,
-and installed executor descriptors must report `FS_IMMUTABLE_FL`. The fixed
-launcher and executor must be root-owned, single-link, non-writable files at
-their exact `/usr/libexec` paths. A candidate may name a profile ID but cannot
-supply any protected operator anchor.
+installed interpreter, and installed executor descriptors must report
+`FS_IMMUTABLE_FL`. The fixed launcher, interpreter, and executor must be
+root-owned, single-link, executable, non-writable files at their exact
+`/usr/libexec` paths. A candidate may name a profile ID but cannot supply any
+protected operator anchor.
 
 The repository contains no production policy or profile.
+
+## Native Startup And Install Contract
+
+The production launcher is built from
+`scripts/parity-oci-operator-launcher.c` as a static PIE. A dynamic launcher is
+not accepted because a caller-controlled loader environment such as
+`LD_PRELOAD` would run before the launcher could clear it. The launcher verifies
+its live `/proc/self/exe` identity against its fixed path and walks every fixed
+path component with `O_NOFOLLOW`. Directories must be root-owned and
+non-group/world-writable. The launcher, interpreter, and executor must be
+root-owned, executable, single-link, non-group/world-writable, and
+Linux-immutable.
+
+After validation, the launcher calls `clearenv`, installs only `HOME`,
+`LC_ALL`, `PATH`, and `TZ` with fixed values, changes to `/`, sets umask `077`
+and `no_new_privs`, replaces stdin with `/dev/null`, and closes every inherited
+descriptor above stderr. It forks a retained native parent and executes only:
+
+```text
+/usr/libexec/fe2o3-python/bin/python3 -I -S \
+  /usr/libexec/fe2o3-oci-executor.py --operator-internal \
+  COMMAND --request-id 64_LOWERCASE_HEX
+```
+
+The native parent remains alive and binds child lifetime with `PDEATHSIG`. The
+Python executor independently requires that exact parent inode, interpreter,
+script, cwd, environment, isolated/no-site/ignore-environment flags, and Python
+search paths beneath `/usr/libexec/fe2o3-python`. Caller `PATH`, `PYTHONPATH`,
+`PYTHONHOME`, user site, startup files, and site customization are therefore
+outside the interpreter startup path.
+
+The current audit-only launcher gives its child a fixed 900-second monotonic
+deadline, followed by bounded TERM and KILL reap windows. It does not issue a
+final blocking wait. An uninterruptible kernel task can still outlive launcher
+return and is left for OS reparenting/reaping; this is not a hard real-time
+termination claim.
+
+`scripts/build-parity-oci-operator.sh /absolute/staging/path` performs the
+reviewable static build and rejects a dynamically linked result. Production
+installation must separately:
+
+1. Provision a dedicated self-contained CPython tree at
+   `/usr/libexec/fe2o3-python`, including its standard library and dynamic
+   dependencies, from a reviewed digest manifest.
+2. Recursively require root ownership, no symlinks or hardlinked regular files,
+   and no group/world-writable components in that interpreter closure.
+3. Install the reviewed executor as
+   `/usr/libexec/fe2o3-oci-executor.py` and the static launcher as
+   `/usr/libexec/fe2o3-oci-operator`, then apply and verify the Linux immutable
+   flag to all three fixed executable files.
+4. Provision the external immutable operator config digest, config, trust root,
+   policy, profiles, and fixed inbox independently of candidate source.
+5. Run the focused operator test and an operator-owned installation audit before
+   enabling the fixed-command service identity.
+
+The repository does not install files, set immutable flags, provision a Python
+closure, or grant Docker access. A test build compiled with explicit test-only
+paths and without immutable enforcement is non-authoritative and cannot pass
+the Python production boundary.
 
 The protected profile binds all of the following:
 
 - trust domain, target `gfx942`, and MI300X lane;
 - absolute Docker client path, size, digest, canonical client/server version
   observation digest, and canonical daemon-info observation digest;
-- exact Git executable and version, protected Git object directory, immutable
-  source staging root, source file/byte/index limits, and export timeout;
+- protected loose Git object directory, object format, object count/byte/tree
+  depth limits, immutable source staging root, and source
+  file/byte/index limits;
 - operator UID/GID, protected source/output roots, and non-writable ownership
   policy; these profile values do not authorize the policy/profile root;
 - absolute OCI layout path and exact bounded `index.json` size/digest;
@@ -197,13 +261,22 @@ races. The request digest is combined with the external queue-authorization
 digest, policy anchor identity, policy digest, and profile digest to derive the
 staging authorization identity.
 
-The candidate checkout is never queried or mounted. In particular, the
-executor never runs `git status`, so candidate repository configuration,
-hooks, and fsmonitor commands are outside the execution path. It creates a
-synthetic bare Git control directory with no candidate config, disables system
-and global config, hooks, fsmonitor, replacement objects, optional locks, and
-Git protocols, then reads the commit/tree/blob objects from the protected
-object directory.
+The candidate checkout is never queried or mounted, and no Git executable is
+invoked. The profile names one exact operator-owned `objects` directory. The
+executor opens the repository and object store by retained `O_NOFOLLOW`
+descriptors, rejects object alternates, replace refs, grafts, promisor or
+partial-clone configuration, and every pack/index/commit-graph entry, and
+supports only canonical SHA-1 loose objects. Environment-based object,
+alternate, replace, and graft indirection is also rejected.
+
+The requested commit, its exact tree, every reachable subtree, and every
+reachable blob are parsed structurally. Each loose object must be a regular
+single-link file with the protected owner and mode. Its bounded zlib stream,
+canonical kind/size header, payload length, and recomputed object ID must all
+agree with the name referenced by its parent. Commit/tree linkage, Git tree
+ordering, duplicate names, cycles, depth, object count, compressed and expanded
+bytes, tree index bytes, source files, directories, and source bytes are all
+bounded. Packed stores are deliberately unsupported rather than trusted.
 
 Only ASCII regular executable/non-executable Git blobs are admitted. Symlinks,
 submodules, `.git`, unsupported modes, malformed paths, excess files, and
@@ -213,9 +286,8 @@ digest plus 256 bits of operator randomness. The tree is made read-only and
 contains no Git metadata. Open directory/file descriptors and device/inode
 identities are retained and rechecked immediately before plan emission. Every
 regular file is fsynced after its final read-only mode is applied. Populated
-directories are then chmodded and fsynced bottom-up. The transient Git control
-directory is removed before the final lease fsync. Any metadata or sync failure
-rejects the snapshot with a controlled executor error.
+directories are then chmodded and fsynced bottom-up. Any metadata or sync
+failure rejects the snapshot with a controlled executor error.
 
 Unknown or trailing request fields are rejected, including any closure, image,
 runtime, environment, device, command, or isolation setting.
@@ -227,9 +299,8 @@ and pipe-thread joins have bounded grace windows; there is no final unbounded
 `wait()`. If a process remains uninterruptible, the command returns a
 controlled failure and leaves eventual reaping to the OS/Python subprocess
 reaper. This is not a hard real-time guarantee: a kernel call or D-state task
-can still outlive the command. Git object enumeration and blob payloads have
-additional file-count, directory-count, index, per-file, and aggregate byte
-limits.
+can still outlive the command. The native operator launcher itself waits for
+the audit-only Python child; there is still no container runtime invocation.
 
 All descriptor closes, path resolution, staging finalization, and filesystem
 cleanup failures are normalized to controlled executor errors. Grouped closes
@@ -368,10 +439,11 @@ are unavailable, so rootless `runc`/Docker and bubblewrap network isolation
 cannot provide an alternative under this account.
 
 The host also has no immutable root-owned `operator-v1.tsv`, external
-`operator-v1.sha256` provision, fixed installed launcher/executor, production
-policy/profile, or fixed inbox authorization. Production CLI trust arguments
-do not exist. Therefore the repository script and current account cannot
-authorize a production request even before Docker access is considered.
+`operator-v1.sha256` provision, static installed launcher, self-contained fixed
+Python closure, installed executor, production policy/profile, or fixed inbox
+authorization. Production CLI trust arguments do not exist. Therefore the
+repository source and current account cannot authorize a production request
+even before Docker access is considered.
 
 Do not add `harsh` to the general Docker group merely to unblock evidence:
 Docker daemon access is effectively root authority. Provision a dedicated
@@ -403,5 +475,9 @@ profile identity or claim OCI-equivalent closure without that review.
   creation and record the created container's image identity.
 - The seccomp profile in the protected profile still requires syscall-level
   review against the exact ROCm workload.
+- The launcher source constrains Python startup, but production remains disabled
+  until the complete fixed Python standard-library/dynamic-library closure is
+  digest-manifested, installed, recursively audited, and protected from the
+  candidate identity.
 - No production image, policy, profile, key, receipt, or hardware result exists
   in this branch.
