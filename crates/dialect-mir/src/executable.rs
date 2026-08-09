@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 use crate::{MirMutability, MirScalarType, MirSemanticType, MirTypeKind, MirTypeValidationError};
 
 pub const EXECUTABLE_MIR_VERSION: u16 = 1;
@@ -17,8 +19,12 @@ pub const MAX_EXECUTABLE_CALL_ARGUMENTS: usize = 256;
 pub const MAX_EXECUTABLE_SWITCH_TARGETS: usize = 1_024;
 pub const MAX_EXECUTABLE_IDENTITY_BYTES: usize = 4_096;
 pub const MAX_EXECUTABLE_SOURCE_FILE_BYTES: usize = 4_096;
+pub const MAX_EXECUTABLE_TYPE_DEPTH: usize = 64;
+pub const MAX_EXECUTABLE_TYPE_NODES: usize = 65_536;
+pub const MAX_EXECUTABLE_FIELDS: usize = 4_096;
+pub const MAX_EXECUTABLE_VARIANTS: usize = 1_024;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum MirExecutableVersion {
     V1,
 }
@@ -31,19 +37,19 @@ impl MirExecutableVersion {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct MirTypeId(pub u32);
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct MirLocalId(pub u32);
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct MirBlockId(pub u32);
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct MirValueId(pub u32);
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MirSourceSpan {
     pub file: String,
     pub byte_start: u32,
@@ -52,7 +58,7 @@ pub struct MirSourceSpan {
     pub column: u32,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MirExecutableModule {
     pub version: MirExecutableVersion,
     /// Types are sorted by their canonical semantic representation. All type
@@ -62,14 +68,14 @@ pub struct MirExecutableModule {
     pub functions: Vec<MirFunction>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MirFunction {
     pub identity: String,
     pub body: MirBody,
     pub span: Option<MirSourceSpan>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MirBody {
     pub form: MirBodyForm,
     pub locals: Vec<MirLocalDecl>,
@@ -77,7 +83,7 @@ pub struct MirBody {
     pub entry: MirBlockId,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum MirBodyForm {
     Places,
     /// A mixed slot/SSA form. Promoted locals may appear only as parameter
@@ -87,7 +93,7 @@ pub enum MirBodyForm {
     },
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum MirLocalKind {
     Return,
     Argument,
@@ -95,7 +101,7 @@ pub enum MirLocalKind {
     Temporary,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MirLocalDecl {
     pub ty: MirTypeId,
     pub kind: MirLocalKind,
@@ -104,14 +110,14 @@ pub struct MirLocalDecl {
     pub span: Option<MirSourceSpan>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MirBasicBlock {
     pub parameters: Vec<MirBlockParameter>,
     pub statements: Vec<MirStatement>,
     pub terminator: MirTerminator,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MirBlockParameter {
     pub value: MirValueId,
     pub ty: MirTypeId,
@@ -120,7 +126,7 @@ pub struct MirBlockParameter {
     pub origin: Option<MirLocalId>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MirPlace {
     pub local: MirLocalId,
     pub projection: Vec<MirProjection>,
@@ -139,7 +145,7 @@ impl MirPlace {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum MirProjection {
     Deref,
     Field {
@@ -163,13 +169,13 @@ pub enum MirProjection {
     },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MirConstant {
     pub ty: MirTypeId,
     pub value: MirConstantValue,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum MirConstantValue {
     Unit,
     Bool(bool),
@@ -180,7 +186,7 @@ pub enum MirConstantValue {
     ZeroSized,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum MirOperand {
     Copy(MirPlace),
     Move(MirPlace),
@@ -188,7 +194,7 @@ pub enum MirOperand {
     Value(MirValueId),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum MirBinaryOp {
     Add,
     Sub,
@@ -217,13 +223,13 @@ impl MirBinaryOp {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum MirUnaryOp {
     Not,
     Neg,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum MirCastKind {
     IntToInt,
     IntToFloat,
@@ -234,14 +240,14 @@ pub enum MirCastKind {
     IntToPointer,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum MirAggregateKind {
     Tuple,
     Array,
     Adt { identity: String, variant: u32 },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum MirRvalue {
     Use(MirOperand),
     BinaryOp {
@@ -284,13 +290,13 @@ pub enum MirRvalue {
     ThreadIndex1d,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MirStatement {
     pub kind: MirStatementKind,
     pub span: Option<MirSourceSpan>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum MirStatementKind {
     Assign {
         place: MirPlace,
@@ -311,13 +317,13 @@ pub enum MirStatementKind {
     Nop,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MirTerminator {
     pub kind: MirTerminatorKind,
     pub span: Option<MirSourceSpan>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MirEdge {
     pub target: MirBlockId,
     pub arguments: Vec<MirOperand>,
@@ -332,13 +338,13 @@ impl MirEdge {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum MirCallee {
     Direct(String),
     Intrinsic(String),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum MirUnwindAction {
     Continue,
     Unreachable,
@@ -346,7 +352,7 @@ pub enum MirUnwindAction {
     Cleanup(MirEdge),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MirCall {
     pub callee: MirCallee,
     pub arguments: Vec<MirOperand>,
@@ -355,7 +361,7 @@ pub struct MirCall {
     pub unwind: MirUnwindAction,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum MirAssertMessage {
     BoundsCheck,
     Overflow,
@@ -363,7 +369,7 @@ pub enum MirAssertMessage {
     User(String),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum MirTerminatorKind {
     Goto(MirEdge),
     SwitchInt {
@@ -435,6 +441,7 @@ impl MirExecutableModule {
             MAX_EXECUTABLE_FUNCTIONS,
         )?;
 
+        validate_type_budget(&self.types)?;
         let mut previous_type = None;
         for (index, ty) in self.types.iter().enumerate() {
             let path = format!("module.types[{index}]");
@@ -1694,6 +1701,105 @@ fn map_type_error(path: &str, source: MirTypeValidationError) -> MirExecutableVa
         format!("{path}.{}", source.path()),
         source.reason().to_owned(),
     )
+}
+
+fn validate_type_budget(types: &[MirSemanticType]) -> Result<(), MirExecutableValidationError> {
+    let mut stack = types
+        .iter()
+        .enumerate()
+        .map(|(index, ty)| (format!("module.types[{index}]"), ty, 1_usize))
+        .collect::<Vec<_>>();
+    let mut nodes = 0_usize;
+    while let Some((path, ty, depth)) = stack.pop() {
+        nodes = nodes
+            .checked_add(1)
+            .ok_or_else(|| error(&path, "semantic type node count overflow"))?;
+        if nodes > MAX_EXECUTABLE_TYPE_NODES {
+            return Err(error(
+                path,
+                format!("semantic type graph exceeds {MAX_EXECUTABLE_TYPE_NODES} nodes"),
+            ));
+        }
+        if depth > MAX_EXECUTABLE_TYPE_DEPTH {
+            return Err(error(
+                path,
+                format!("semantic type graph exceeds depth {MAX_EXECUTABLE_TYPE_DEPTH}"),
+            ));
+        }
+        match &ty.kind {
+            MirTypeKind::RawPointer { pointee, .. } => {
+                stack.push((format!("{path}.pointee"), pointee, depth + 1));
+            }
+            MirTypeKind::Reference { referent, .. } => {
+                stack.push((format!("{path}.referent"), referent, depth + 1));
+            }
+            MirTypeKind::Slice { element } | MirTypeKind::Array { element, .. } => {
+                stack.push((format!("{path}.element"), element, depth + 1));
+            }
+            MirTypeKind::Tuple(aggregate) => {
+                push_aggregate_types(&path, aggregate, depth, &mut stack)?;
+            }
+            MirTypeKind::Struct(structure) => {
+                validate_identity(&format!("{path}.identity"), &structure.identity)?;
+                push_aggregate_types(&path, &structure.aggregate, depth, &mut stack)?;
+            }
+            MirTypeKind::Enum(enum_ty) => {
+                validate_identity(&format!("{path}.identity"), &enum_ty.identity)?;
+                bounded_len(
+                    &format!("{path}.variants"),
+                    enum_ty.variants.len(),
+                    0,
+                    MAX_EXECUTABLE_VARIANTS,
+                )?;
+                for (variant_index, variant) in enum_ty.variants.iter().enumerate() {
+                    validate_name(
+                        &format!("{path}.variants[{variant_index}].name"),
+                        &variant.name,
+                    )?;
+                    push_aggregate_types(
+                        &format!("{path}.variants[{variant_index}]"),
+                        &variant.aggregate,
+                        depth,
+                        &mut stack,
+                    )?;
+                }
+            }
+            MirTypeKind::Unit | MirTypeKind::Scalar(_) => {}
+        }
+    }
+    Ok(())
+}
+
+fn push_aggregate_types<'a>(
+    path: &str,
+    aggregate: &'a crate::MirAggregateLayout,
+    depth: usize,
+    stack: &mut Vec<(String, &'a MirSemanticType, usize)>,
+) -> Result<(), MirExecutableValidationError> {
+    bounded_len(
+        &format!("{path}.fields"),
+        aggregate.fields.len(),
+        0,
+        MAX_EXECUTABLE_FIELDS,
+    )?;
+    bounded_len(
+        &format!("{path}.padding"),
+        aggregate.padding.len(),
+        0,
+        MAX_EXECUTABLE_FIELDS,
+    )?;
+    for (field_index, field) in aggregate.fields.iter().enumerate() {
+        validate_name_opt(
+            &format!("{path}.fields[{field_index}].name"),
+            field.name.as_deref(),
+        )?;
+        stack.push((
+            format!("{path}.fields[{field_index}].type"),
+            &field.ty,
+            depth + 1,
+        ));
+    }
+    Ok(())
 }
 
 fn error(path: impl Into<String>, reason: impl Into<String>) -> MirExecutableValidationError {
