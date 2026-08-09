@@ -2413,12 +2413,17 @@ impl<'a> Verifier<'a> {
                 MirStatementKind::Assign { place, value } => {
                     self.check_variant_place(&format!("{path}.place"), place, &state, strict)?;
                     self.check_variant_rvalue(&format!("{path}.value"), value, &state, strict)?;
+                    let next_variant = self.variant_state_from_rvalue(place.ty, value, &state);
+                    let next_discriminant = self.discriminant_source_from_rvalue(value);
+                    if let Some(borrowed) = self.mutably_borrowed_enum_local(value) {
+                        invalidate_discriminant_observations(&mut state, borrowed);
+                        state.variants[borrowed.0 as usize] = EnumVariantState::Unknown;
+                    }
                     if place.projection.is_empty() {
                         let local = place.local.0 as usize;
-                        state.variants[local] =
-                            self.variant_state_from_rvalue(place.ty, value, &state);
-                        state.discriminant_sources[local] =
-                            self.discriminant_source_from_rvalue(value);
+                        invalidate_discriminant_observations(&mut state, place.local);
+                        state.variants[local] = next_variant;
+                        state.discriminant_sources[local] = next_discriminant;
                     }
                 }
                 MirStatementKind::Define { rvalue, .. } => {
@@ -2432,6 +2437,7 @@ impl<'a> Verifier<'a> {
                             "set-discriminant requires a direct local until field-sensitive variant state is modeled",
                         ));
                     }
+                    invalidate_discriminant_observations(&mut state, place.local);
                     state.variants[place.local.0 as usize] = EnumVariantState::Active {
                         variant: *variant,
                         payload_initialized: true,
@@ -2439,6 +2445,7 @@ impl<'a> Verifier<'a> {
                 }
                 MirStatementKind::StorageLive(local) | MirStatementKind::StorageDead(local) => {
                     let index = local.0 as usize;
+                    invalidate_discriminant_observations(&mut state, *local);
                     state.variants[index] = match self.type_at(self.local(*local).ty).kind {
                         MirTypeKind::Enum(_) => EnumVariantState::Unknown,
                         _ => EnumVariantState::NotEnum,
@@ -2449,6 +2456,7 @@ impl<'a> Verifier<'a> {
                     self.check_variant_place(&format!("{path}.place"), place, &state, strict)?;
                     if place.projection.is_empty() {
                         let local = place.local.0 as usize;
+                        invalidate_discriminant_observations(&mut state, place.local);
                         if matches!(self.type_at(place.ty).kind, MirTypeKind::Enum(_)) {
                             state.variants[local] = EnumVariantState::Unknown;
                         }
@@ -2518,6 +2526,7 @@ impl<'a> Verifier<'a> {
                         && destination.projection.is_empty()
                     {
                         let local = destination.local.0 as usize;
+                        invalidate_discriminant_observations(&mut normal, destination.local);
                         normal.variants[local] = match self.type_at(destination.ty).kind {
                             MirTypeKind::Enum(_) => EnumVariantState::Unknown,
                             _ => EnumVariantState::NotEnum,
@@ -2535,9 +2544,16 @@ impl<'a> Verifier<'a> {
                 unwind,
             } => {
                 self.check_variant_place(&format!("{path}.place"), place, &state, strict)?;
-                self.check_variant_edge(&format!("{path}.target"), target, &state, strict)?;
-                output.push((target.target, state.clone()));
-                self.push_variant_unwind(&path, unwind, &state, strict, &mut output)?;
+                let mut after_drop = state;
+                if place.projection.is_empty() {
+                    invalidate_discriminant_observations(&mut after_drop, place.local);
+                    if matches!(self.type_at(place.ty).kind, MirTypeKind::Enum(_)) {
+                        after_drop.variants[place.local.0 as usize] = EnumVariantState::Unknown;
+                    }
+                }
+                self.check_variant_edge(&format!("{path}.target"), target, &after_drop, strict)?;
+                output.push((target.target, after_drop.clone()));
+                self.push_variant_unwind(&path, unwind, &after_drop, strict, &mut output)?;
             }
             MirTerminatorKind::Assert {
                 condition,
@@ -2730,6 +2746,23 @@ impl<'a> Verifier<'a> {
             MirRvalue::Discriminant(place) if place.projection.is_empty() => Some(place.local),
             _ => None,
         }
+    }
+
+    fn mutably_borrowed_enum_local(&self, rvalue: &MirRvalue) -> Option<MirLocalId> {
+        let place = match rvalue {
+            MirRvalue::Ref {
+                mutability: MirMutability::Mutable,
+                place,
+                ..
+            }
+            | MirRvalue::AddressOf {
+                mutability: MirMutability::Mutable,
+                place,
+                ..
+            } if place.projection.is_empty() => place,
+            _ => return None,
+        };
+        matches!(self.type_at(place.ty).kind, MirTypeKind::Enum(_)).then_some(place.local)
     }
 
     fn discriminant_source_from_operand(
@@ -3485,6 +3518,14 @@ fn merge_variant_state(current: &mut VariantFlowState, incoming: &VariantFlowSta
         }
     }
     changed
+}
+
+fn invalidate_discriminant_observations(state: &mut VariantFlowState, source: MirLocalId) {
+    for observed_source in &mut state.discriminant_sources {
+        if *observed_source == Some(source) {
+            *observed_source = None;
+        }
+    }
 }
 
 struct ProjectionState<'a> {
