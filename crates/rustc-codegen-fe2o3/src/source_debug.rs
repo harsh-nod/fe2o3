@@ -20,6 +20,7 @@ const S09_SOURCE_SHA256: [u8; 32] = [
     0xa0, 0x2f, 0x62, 0xa7, 0x31, 0x98, 0xb4, 0x93, 0x25, 0x82, 0x24, 0x70, 0x1c, 0x4f, 0x29, 0xe2,
     0x5b, 0x3e, 0xca, 0x02, 0xa7, 0x38, 0xbf, 0x02, 0xc0, 0x39, 0x89, 0xd4, 0x5b, 0x77, 0x09, 0x9e,
 ];
+const S09_SOURCE_BYTES: usize = 3231;
 const S09_FUNCTION_LINE: usize = 68;
 const S09_INDEX_LINE: usize = 69;
 const S09_LOCAL_LINE: usize = 70;
@@ -111,7 +112,15 @@ pub(crate) fn collect_requested_profile<'tcx>(
     validate_alpha_mir_body(mir_alpha)?;
     let body = tcx.instance_mir(alpha.instance.def);
     validate_alpha_arguments(body)?;
-    validate_debug_names(body)?;
+    validate_debug_schema(
+        body.var_debug_info.iter().map(|variable| {
+            (
+                variable.name.as_str(),
+                variable.argument_index.map(usize::from),
+            )
+        }),
+        body.arg_count,
+    )?;
 
     let function = source_location(tcx, body.span)?;
     validate_source_identity(
@@ -135,11 +144,10 @@ pub(crate) fn collect_requested_profile<'tcx>(
             "S09 alpha local `i` is not represented by a MIR place",
         ));
     };
-    if !place.projection.is_empty()
-        || !matches!(
-            body.local_decls[place.local].ty.kind(),
-            TyKind::Uint(UintTy::Usize)
-        )
+    let local_decl = body.local_decls.get(place.local).ok_or_else(|| {
+        SourceDebugError::new("S09 alpha local `i` references an out-of-range MIR local")
+    })?;
+    if !place.projection.is_empty() || !matches!(local_decl.ty.kind(), TyKind::Uint(UintTy::Usize))
     {
         return Err(SourceDebugError::new(
             "S09 alpha local `i` must be an unprojected usize place",
@@ -469,19 +477,61 @@ fn validate_alpha_arguments(body: &Body<'_>) -> Result<(), SourceDebugError> {
     Ok(())
 }
 
-fn validate_debug_names(body: &Body<'_>) -> Result<(), SourceDebugError> {
-    let mut names = vec![None; body.arg_count];
-    for variable in &body.var_debug_info {
-        if let Some(argument) = variable.argument_index {
-            let index = usize::from(argument.saturating_sub(1));
-            if index < names.len() && names[index].is_none() {
-                names[index] = Some(variable.name.as_str());
+fn validate_debug_schema<'a>(
+    records: impl IntoIterator<Item = (&'a str, Option<usize>)>,
+    argument_count: usize,
+) -> Result<(), SourceDebugError> {
+    const EXPECTED_ARGUMENTS: [&str; 3] = ["scale", "input", "output"];
+    const EXPECTED_LOCALS: [&str; 2] = ["i", "index"];
+
+    if argument_count != EXPECTED_ARGUMENTS.len() {
+        return Err(SourceDebugError::new(format!(
+            "S09 alpha requires exactly three argument debug records; MIR declares {argument_count} arguments"
+        )));
+    }
+
+    let mut argument_names = [None; EXPECTED_ARGUMENTS.len()];
+    let mut local_counts = [0_usize; EXPECTED_LOCALS.len()];
+    for (name, argument_index) in records {
+        if let Some(argument_index) = argument_index {
+            if argument_index == 0 || argument_index > argument_count {
+                return Err(SourceDebugError::new(format!(
+                    "S09 alpha debug record {name:?} has invalid one-based argument index {argument_index}"
+                )));
+            }
+            let slot = argument_index - 1;
+            if argument_names[slot].replace(name).is_some() {
+                return Err(SourceDebugError::new(format!(
+                    "S09 alpha has duplicate debug records for argument {argument_index}"
+                )));
+            }
+            continue;
+        }
+
+        if let Some(slot) = EXPECTED_LOCALS
+            .iter()
+            .position(|expected| name == *expected)
+        {
+            local_counts[slot] = local_counts[slot].checked_add(1).ok_or_else(|| {
+                SourceDebugError::new("S09 alpha local debug record count overflow")
+            })?;
+            if local_counts[slot] > 1 {
+                return Err(SourceDebugError::new(format!(
+                    "S09 alpha has duplicate source local debug records named {name:?}"
+                )));
             }
         }
     }
-    if names != [Some("scale"), Some("input"), Some("output")] {
+
+    let expected_argument_names = EXPECTED_ARGUMENTS.map(Some);
+    if argument_names != expected_argument_names {
         return Err(SourceDebugError::new(format!(
-            "S09 alpha argument debug names changed: found {names:?}"
+            "S09 alpha argument debug names changed: expected {expected_argument_names:?}; found {argument_names:?}"
+        )));
+    }
+    if local_counts != [1, 1] {
+        return Err(SourceDebugError::new(format!(
+            "S09 alpha requires exactly one debug record for each source local {EXPECTED_LOCALS:?}; found counts {local_counts:?}"
         )));
     }
     Ok(())
@@ -510,11 +560,22 @@ fn source_location(tcx: TyCtxt<'_>, span: Span) -> Result<SourceLocation, Source
     let source = location.file.src.as_ref().ok_or_else(|| {
         SourceDebugError::new("S09 alpha source text is unavailable for identity binding")
     })?;
+    let source_sha256 = bounded_source_sha256(source.as_bytes())?;
     Ok(SourceLocation {
         file,
         line: location.line,
-        source_sha256: Sha256::digest(source.as_bytes()).into(),
+        source_sha256,
     })
+}
+
+fn bounded_source_sha256(source: &[u8]) -> Result<[u8; 32], SourceDebugError> {
+    if source.len() != S09_SOURCE_BYTES {
+        return Err(SourceDebugError::new(format!(
+            "S09 alpha source must contain exactly {S09_SOURCE_BYTES} bytes; found {}",
+            source.len()
+        )));
+    }
+    Ok(Sha256::digest(source).into())
 }
 
 fn validate_source_identity(
@@ -567,9 +628,18 @@ pub(crate) fn inject_alpha_dwarf_v1(
     for forbidden in [
         "!llvm.dbg.cu",
         "!llvm.module.flags",
+        "!llvm.ident",
         "@llvm.dbg.",
+        "!dbg",
         "!DICompileUnit",
+        "!DIFile",
         "!DISubprogram",
+        "!DISubroutineType",
+        "!DIBasicType",
+        "!DIDerivedType",
+        "!DILocalVariable",
+        "!DILocation",
+        "!DIExpression",
     ] {
         if llvm.contains(forbidden) {
             return Err(SourceDebugError::new(format!(
@@ -603,25 +673,37 @@ pub(crate) fn inject_alpha_dwarf_v1(
     let first_metadata = next_metadata_id(llvm)?;
     let ids = DebugIds::new(first_metadata)?;
 
-    let mut rewritten_function = function.replacen(
+    let debug_attachment = format!(" !dbg !{} !reqd_work_group_size ", ids.subprogram);
+    let mut rewritten_function = replace_exactly_once(
+        function,
         " !reqd_work_group_size ",
-        &format!(" !dbg !{} !reqd_work_group_size ", ids.subprogram),
-        1,
-    );
+        &debug_attachment,
+        "function metadata attachment",
+    )?;
+    if rewritten_function.matches(&debug_attachment).count() != 1 {
+        return Err(SourceDebugError::new(
+            "S09 alpha function debug attachment was not inserted exactly once",
+        ));
+    }
     let argument_records = format!("bb0:\n{}", argument_debug_records(ids));
-    rewritten_function = rewritten_function.replacen("bb0:\n", &argument_records, 1);
+    rewritten_function = replace_exactly_once(
+        &rewritten_function,
+        "bb0:\n",
+        &argument_records,
+        "entry block debug records",
+    )?;
     let local_definition =
         format!("  {local_value} = add i64 {local_value}.base, {local_value}.local");
     let local_record = format!(
         "{local_definition}\n  call void @llvm.dbg.value(metadata i64 {local_value}, metadata !{}, metadata !DIExpression()), !dbg !{}\n  call void asm sideeffect \"s_nop 0\", \"v,~{{memory}}\"(i64 {local_value}), !dbg !{}",
         ids.local, ids.local_location, ids.local_location,
     );
-    if rewritten_function.matches(&local_definition).count() != 1 {
-        return Err(SourceDebugError::new(
-            "S09 alpha global-index definition changed before local binding",
-        ));
-    }
-    rewritten_function = rewritten_function.replacen(&local_definition, &local_record, 1);
+    rewritten_function = replace_exactly_once(
+        &rewritten_function,
+        &local_definition,
+        &local_record,
+        "global-index local binding",
+    )?;
 
     let mut output = String::with_capacity(llvm.len() + 4096);
     let declaration_point = llvm
@@ -635,6 +717,21 @@ pub(crate) fn inject_alpha_dwarf_v1(
     output.push_str(&llvm[function_end..]);
     write_debug_metadata(&mut output, profile, ids)?;
     Ok(output)
+}
+
+fn replace_exactly_once(
+    input: &str,
+    needle: &str,
+    replacement: &str,
+    subject: &str,
+) -> Result<String, SourceDebugError> {
+    let count = input.matches(needle).count();
+    if count != 1 {
+        return Err(SourceDebugError::new(format!(
+            "S09 alpha requires exactly one {subject}; found {count}"
+        )));
+    }
+    Ok(input.replacen(needle, replacement, 1))
 }
 
 fn argument_debug_records(ids: DebugIds) -> String {
@@ -914,6 +1011,17 @@ attributes #0 = { nounwind }
 "#
     }
 
+    fn valid_debug_records() -> Vec<(&'static str, Option<usize>)> {
+        vec![
+            ("scale", Some(1)),
+            ("input", Some(2)),
+            ("output", Some(3)),
+            ("i", None),
+            ("index", None),
+            ("unrelated", None),
+        ]
+    }
+
     #[test]
     fn injects_exact_physical_arguments_and_source_local() {
         let first = inject_alpha_dwarf_v1(module(), &profile()).unwrap();
@@ -965,12 +1073,6 @@ attributes #0 = { nounwind }
                 .contains("global-index")
         );
         assert!(
-            inject_alpha_dwarf_v1(&format!("{}!llvm.dbg.cu = !{{!9}}\n", module()), &profile())
-                .unwrap_err()
-                .to_string()
-                .contains("pre-existing")
-        );
-        assert!(
             inject_alpha_dwarf_v1(
                 &module().replace(
                     "ret void",
@@ -982,6 +1084,202 @@ attributes #0 = { nounwind }
             .to_string()
             .contains("inline assembly")
         );
+
+        let no_attachment_anchor = module().replace(" #0 !reqd_work_group_size !0 {", " #0 {");
+        assert!(
+            inject_alpha_dwarf_v1(&no_attachment_anchor, &profile())
+                .unwrap_err()
+                .to_string()
+                .contains("function metadata attachment")
+        );
+        let duplicate_attachment_anchor = module().replace(
+            " !reqd_work_group_size !0 {",
+            " !reqd_work_group_size !0 !reqd_work_group_size !0 {",
+        );
+        assert!(
+            inject_alpha_dwarf_v1(&duplicate_attachment_anchor, &profile())
+                .unwrap_err()
+                .to_string()
+                .contains("found 2")
+        );
+    }
+
+    #[test]
+    fn rejects_every_preexisting_injected_metadata_family() {
+        for forbidden in [
+            "!llvm.dbg.cu = !{!9}",
+            "!llvm.module.flags = !{!9}",
+            "!llvm.ident = !{!9}",
+            "declare void @llvm.dbg.value(metadata, metadata, metadata)",
+            "!9 = !DICompileUnit()",
+            "!9 = !DIFile(filename: \"main.rs\", directory: \".\")",
+            "!9 = !DISubprogram()",
+            "!9 = !DISubroutineType(types: !10)",
+            "!9 = !DIBasicType(name: \"f32\")",
+            "!9 = !DIDerivedType(tag: DW_TAG_pointer_type)",
+            "!9 = !DILocalVariable(name: \"i\")",
+            "!9 = !DILocation(line: 1, scope: !10)",
+            "!9 = !DIExpression()",
+        ] {
+            let decorated = format!("{}\n{forbidden}\n", module());
+            let error = inject_alpha_dwarf_v1(&decorated, &profile()).unwrap_err();
+            assert!(
+                error.to_string().contains("pre-existing"),
+                "construct {forbidden:?} was not rejected as pre-existing: {error}"
+            );
+        }
+
+        let attached = module().replace(
+            " #0 !reqd_work_group_size !0 {",
+            " #0 !dbg !9 !reqd_work_group_size !0 {",
+        );
+        assert!(
+            inject_alpha_dwarf_v1(&attached, &profile())
+                .unwrap_err()
+                .to_string()
+                .contains("pre-existing")
+        );
+    }
+
+    #[test]
+    fn debug_schema_requires_exact_argument_and_local_records() {
+        validate_debug_schema(valid_debug_records(), 3).unwrap();
+
+        for (description, records, expected) in [
+            (
+                "zero argument index",
+                vec![
+                    ("scale", Some(0)),
+                    ("input", Some(2)),
+                    ("output", Some(3)),
+                    ("i", None),
+                    ("index", None),
+                ],
+                "invalid one-based argument index 0",
+            ),
+            (
+                "out-of-range argument index",
+                vec![
+                    ("scale", Some(1)),
+                    ("input", Some(2)),
+                    ("output", Some(4)),
+                    ("i", None),
+                    ("index", None),
+                ],
+                "invalid one-based argument index 4",
+            ),
+            (
+                "duplicate argument",
+                vec![
+                    ("scale", Some(1)),
+                    ("scale-again", Some(1)),
+                    ("input", Some(2)),
+                    ("output", Some(3)),
+                    ("i", None),
+                    ("index", None),
+                ],
+                "duplicate debug records for argument 1",
+            ),
+            (
+                "wrong argument name",
+                vec![
+                    ("spoof", Some(1)),
+                    ("input", Some(2)),
+                    ("output", Some(3)),
+                    ("i", None),
+                    ("index", None),
+                ],
+                "argument debug names changed",
+            ),
+            (
+                "missing argument",
+                vec![
+                    ("scale", Some(1)),
+                    ("input", Some(2)),
+                    ("i", None),
+                    ("index", None),
+                ],
+                "argument debug names changed",
+            ),
+            (
+                "duplicate i",
+                vec![
+                    ("scale", Some(1)),
+                    ("input", Some(2)),
+                    ("output", Some(3)),
+                    ("i", None),
+                    ("i", None),
+                    ("index", None),
+                ],
+                "duplicate source local",
+            ),
+            (
+                "duplicate index",
+                vec![
+                    ("scale", Some(1)),
+                    ("input", Some(2)),
+                    ("output", Some(3)),
+                    ("i", None),
+                    ("index", None),
+                    ("index", None),
+                ],
+                "duplicate source local",
+            ),
+            (
+                "missing i",
+                vec![
+                    ("scale", Some(1)),
+                    ("input", Some(2)),
+                    ("output", Some(3)),
+                    ("index", None),
+                ],
+                "exactly one debug record",
+            ),
+            (
+                "missing index",
+                vec![
+                    ("scale", Some(1)),
+                    ("input", Some(2)),
+                    ("output", Some(3)),
+                    ("i", None),
+                ],
+                "exactly one debug record",
+            ),
+        ] {
+            let error = validate_debug_schema(records, 3).unwrap_err();
+            assert!(
+                error.to_string().contains(expected),
+                "{description} produced unexpected error: {error}"
+            );
+        }
+
+        assert!(
+            validate_debug_schema(valid_debug_records(), 2)
+                .unwrap_err()
+                .to_string()
+                .contains("exactly three")
+        );
+        assert!(
+            validate_debug_schema(valid_debug_records(), 4)
+                .unwrap_err()
+                .to_string()
+                .contains("exactly three")
+        );
+    }
+
+    #[test]
+    fn source_hash_requires_exact_canonical_byte_length() {
+        let source = include_bytes!("../tests/fixtures/typed-alias-spoof/src/main.rs");
+        assert_eq!(source.len(), S09_SOURCE_BYTES);
+        assert_eq!(bounded_source_sha256(source).unwrap(), S09_SOURCE_SHA256);
+
+        for size in [S09_SOURCE_BYTES - 1, S09_SOURCE_BYTES + 1] {
+            let error = bounded_source_sha256(&vec![b'x'; size]).unwrap_err();
+            assert!(
+                error.to_string().contains("exactly 3231 bytes"),
+                "unexpected boundary error for {size} bytes: {error}"
+            );
+        }
     }
 
     #[test]
