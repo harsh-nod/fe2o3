@@ -8,15 +8,14 @@ use fe2o3_artifacts::{
 };
 
 use crate::{
-    ArtifactRecordConversionError, AuthenticatedExecutionError,
-    AuthenticatedVerusExecutionEvidenceV1, BoundExecutionPayloadV1, Digest,
-    ExecutableMeasurementV1, ExecutableRole, PersistentFreshnessIdentityV1,
-    PersistentFreshnessLedgerErrorV1, PersistentFreshnessReceiptV1,
+    ArtifactRecordConversionError, AuthenticatedExecutionError, AuthenticatedRecorderOutputV1,
+    BoundExecutionPayloadV1, Digest, ExecutableMeasurementV1, ExecutableRole,
+    PersistentFreshnessIdentityV1, PersistentFreshnessLedgerErrorV1, PersistentFreshnessReceiptV1,
     PersistentProofFreshnessLedgerV1, ReviewedInvocationIdentityV1, VerifierPolicy,
     canonical_invocation_digest, convert_to_artifact_proof_record,
 };
 
-/// Domain and schema version for measured proof-to-executable bridge identities.
+/// Domain and schema version for recorder-report-to-executable bridge identities.
 pub const AUTHENTICATED_PROOF_EXECUTABLE_BINDING_DOMAIN_V1: [u8; 8] = *b"FE2APXB\0";
 pub const PERSISTENT_AUTHENTICATED_PROOF_EXECUTABLE_BINDING_DOMAIN_V1: [u8; 8] = *b"FE2PPXB\0";
 pub const AUTHENTICATED_PROOF_EXECUTABLE_BINDING_VERSION_V1: u16 = 1;
@@ -91,7 +90,7 @@ impl AuthenticatedProofExecutablePolicyV1 {
     }
 }
 
-/// One process-local replay ledger for authenticated proof executions.
+/// One process-local replay ledger for authenticated recorder reports.
 ///
 /// The ledger is deliberately neither `Clone` nor serializable. A successful
 /// bridge consumes both the challenge and transcript identity. Production
@@ -163,7 +162,10 @@ impl AuthenticatedPayloadIdentityV1 {
     }
 }
 
-/// Every measured and retained identity from the sealed Verus transaction.
+/// Every measured identity retained from one sealed recorder transaction.
+///
+/// The verifier and solver measurements are policy claims passed to the
+/// recorder. They do not establish that either image was executed.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AuthenticatedProofExecutionIdentityV1 {
     challenge: Digest,
@@ -196,16 +198,31 @@ impl AuthenticatedProofExecutionIdentityV1 {
         self.request_digest
     }
 
-    pub const fn verus(&self) -> &ExecutableMeasurementV1 {
+    pub const fn claimed_verifier(&self) -> &ExecutableMeasurementV1 {
         &self.verus
     }
 
-    pub const fn solver(&self) -> &ExecutableMeasurementV1 {
+    pub const fn claimed_solver(&self) -> &ExecutableMeasurementV1 {
         &self.solver
     }
 
-    pub const fn evidence_recorder(&self) -> &ExecutableMeasurementV1 {
+    pub const fn recorder(&self) -> &ExecutableMeasurementV1 {
         &self.evidence_recorder
+    }
+
+    #[deprecated(note = "use claimed_verifier(); this measurement does not show execution")]
+    pub const fn verus(&self) -> &ExecutableMeasurementV1 {
+        self.claimed_verifier()
+    }
+
+    #[deprecated(note = "use claimed_solver(); this measurement does not show execution")]
+    pub const fn solver(&self) -> &ExecutableMeasurementV1 {
+        self.claimed_solver()
+    }
+
+    #[deprecated(note = "use recorder(); the recorder is the only image executed here")]
+    pub const fn evidence_recorder(&self) -> &ExecutableMeasurementV1 {
+        self.recorder()
     }
 
     pub const fn stdout(&self) -> AuthenticatedPayloadIdentityV1 {
@@ -225,13 +242,13 @@ impl AuthenticatedProofExecutionIdentityV1 {
     }
 }
 
-/// Inert evidence joining one measured Verus transaction to one exact
+/// Inert evidence joining one authenticated recorder report to one exact
 /// `ProofExecutableBindingV1`.
 ///
-/// Construction is private to the fail-closed bridge. The complete measured
-/// evidence is retained so auditors can recover the exact request/result and
-/// stdout/stderr transcript bytes. This type still grants no load or launch
-/// authority.
+/// Construction retains the recorder transcript plus the measured images that
+/// policy labels as verifier and solver. It does not establish that those
+/// images ran or that the recorder's `proved` report is correct. This type
+/// grants no proof, load, or launch authority.
 ///
 /// ```compile_fail
 /// # fn cannot_launch(binding: fe2o3_verifier::AuthenticatedProofExecutableBindingV1) {
@@ -240,7 +257,7 @@ impl AuthenticatedProofExecutionIdentityV1 {
 /// ```
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AuthenticatedProofExecutableBindingV1 {
-    execution_evidence: AuthenticatedVerusExecutionEvidenceV1,
+    execution_evidence: AuthenticatedRecorderOutputV1,
     execution_identity: AuthenticatedProofExecutionIdentityV1,
     executable_binding: ProofExecutableBindingV1,
     binding_identity: Digest,
@@ -251,7 +268,7 @@ impl AuthenticatedProofExecutableBindingV1 {
         AUTHENTICATED_PROOF_EXECUTABLE_BINDING_VERSION_V1
     }
 
-    pub const fn execution_evidence(&self) -> &AuthenticatedVerusExecutionEvidenceV1 {
+    pub const fn execution_evidence(&self) -> &AuthenticatedRecorderOutputV1 {
         &self.execution_evidence
     }
 
@@ -292,17 +309,17 @@ impl AuthenticatedProofExecutableBindingV1 {
         require_equal(
             &expected.verus,
             &actual_execution.verus,
-            "Verus measurement",
+            "claimed verifier measurement",
         )?;
         require_equal(
             &expected.solver,
             &actual_execution.solver,
-            "solver measurement",
+            "claimed solver measurement",
         )?;
         require_equal(
             &expected.evidence_recorder,
             &actual_execution.evidence_recorder,
-            "recorder measurement",
+            "executed recorder measurement",
         )?;
         require_equal(
             expected.stdout,
@@ -381,7 +398,7 @@ impl PersistentlyFreshProofExecutableIdentityV1 {
     }
 }
 
-/// Non-clone evidence that an exact authenticated proof/executable binding was
+/// Non-clone evidence that an exact recorder-report/executable binding was
 /// durably consumed by one named freshness ledger state.
 ///
 /// Construction is private to the persistent bridge. The receipt and canonical
@@ -447,13 +464,15 @@ impl PersistentlyFreshProofExecutableBindingV1 {
     }
 }
 
-/// Authenticates, policy-matches, and binds one exact measured proof execution.
+/// Validates, policy-matches, and binds one authenticated recorder report.
 ///
 /// The evidence is consumed, all retained bytes and identities are recomputed,
 /// and freshness is consumed only after the complete executable binding has
-/// succeeded. Neither this function nor its output grants runtime authority.
+/// succeeded. The recorder's claimed verifier and solver measurements do not
+/// establish that either image ran. Neither this function nor its output grants
+/// proof or runtime authority.
 pub fn bind_authenticated_proof_executable_v1(
-    evidence: AuthenticatedVerusExecutionEvidenceV1,
+    evidence: AuthenticatedRecorderOutputV1,
     policy: &AuthenticatedProofExecutablePolicyV1,
     freshness: &mut AuthenticatedExecutionFreshnessV1,
 ) -> Result<AuthenticatedProofExecutableBindingV1, AuthenticatedProofExecutableBindingError> {
@@ -468,21 +487,22 @@ pub fn bind_authenticated_proof_executable_v1(
     Ok(binding)
 }
 
-/// Authenticates and binds one proof only after durably consuming its exact
-/// challenge, transcript, and sealed-result identities.
+/// Binds one authenticated recorder report only after durably consuming its
+/// exact challenge, transcript, and sealed-result identities.
 ///
-/// All proof, policy, result, and executable checks complete before the ledger
-/// transaction begins. The durable transaction completes before this function
-/// returns the inert binding. An I/O failure after intent publication may
+/// All recorder-report, policy, result-envelope, and executable checks complete
+/// before the ledger transaction begins. The durable transaction completes
+/// before this function returns the inert binding. It does not establish that
+/// a verifier or solver ran. An I/O failure after intent publication may
 /// conservatively consume the evidence; recovery will never make it replayable.
 pub fn bind_authenticated_proof_executable_persistent_v1(
-    evidence: AuthenticatedVerusExecutionEvidenceV1,
+    evidence: AuthenticatedRecorderOutputV1,
     policy: &AuthenticatedProofExecutablePolicyV1,
     freshness: &mut PersistentProofFreshnessLedgerV1,
 ) -> Result<PersistentlyFreshProofExecutableBindingV1, AuthenticatedProofExecutableBindingError> {
     validate_authenticated_binding_input(&evidence, policy)?;
     let binding = finish_authenticated_proof_executable_binding(evidence, policy)?;
-    let receipt = freshness.consume_authenticated_execution(binding.execution_identity())?;
+    let receipt = freshness.consume_authenticated_recorder_output(binding.execution_identity())?;
     persistently_fresh_binding(binding, receipt)
 }
 
@@ -544,7 +564,7 @@ fn persistent_binding_identity(
 }
 
 fn validate_authenticated_binding_input(
-    evidence: &AuthenticatedVerusExecutionEvidenceV1,
+    evidence: &AuthenticatedRecorderOutputV1,
     policy: &AuthenticatedProofExecutablePolicyV1,
 ) -> Result<(), AuthenticatedProofExecutableBindingError> {
     if policy.binding_digest_algorithm != DigestAlgorithm::Sha256 {
@@ -554,7 +574,7 @@ fn validate_authenticated_binding_input(
 }
 
 fn finish_authenticated_proof_executable_binding(
-    evidence: AuthenticatedVerusExecutionEvidenceV1,
+    evidence: AuthenticatedRecorderOutputV1,
     policy: &AuthenticatedProofExecutablePolicyV1,
 ) -> Result<AuthenticatedProofExecutableBindingV1, AuthenticatedProofExecutableBindingError> {
     let plan = evidence.invocation_plan();
@@ -562,7 +582,8 @@ fn finish_authenticated_proof_executable_binding(
         plan.request().correlation_id(),
         evidence.canonical_invocation_digest(),
     );
-    let artifact_evidence = convert_to_artifact_proof_record(plan, evidence.result(), reviewed)?;
+    let artifact_evidence =
+        convert_to_artifact_proof_record(plan, evidence.recorder_report(), reviewed)?;
     let matched = policy.proof_match_policy.match_record(
         artifact_evidence.record().clone(),
         policy.binding_digest_algorithm,
@@ -590,7 +611,7 @@ fn finish_authenticated_proof_executable_binding(
 }
 
 fn validate_authenticated_execution(
-    evidence: &AuthenticatedVerusExecutionEvidenceV1,
+    evidence: &AuthenticatedRecorderOutputV1,
     policy: &VerifierPolicy,
 ) -> Result<(), AuthenticatedProofExecutableBindingError> {
     if evidence
@@ -655,17 +676,17 @@ fn validate_authenticated_execution(
 
     for (measurement, role, expected) in [
         (
-            evidence.verus(),
+            evidence.claimed_verifier(),
             ExecutableRole::Verus,
             policy.expected_tools().verifier(),
         ),
         (
-            evidence.solver(),
+            evidence.claimed_solver(),
             ExecutableRole::Solver,
             policy.expected_tools().solver(),
         ),
         (
-            evidence.evidence_recorder(),
+            evidence.recorder(),
             ExecutableRole::EvidenceRecorder,
             policy.expected_tools().evidence_recorder(),
         ),
@@ -693,24 +714,24 @@ fn validate_authenticated_execution(
         }
     }
 
-    let reparsed = evidence.revalidate_authenticated_result()?;
-    if &reparsed != evidence.result() {
+    let reparsed = evidence.revalidate_recorder_report()?;
+    if &reparsed != evidence.recorder_report() {
         return Err(AuthenticatedProofExecutableBindingError::ResultIdentityMismatch);
     }
     Ok(())
 }
 
 fn execution_identity(
-    evidence: &AuthenticatedVerusExecutionEvidenceV1,
+    evidence: &AuthenticatedRecorderOutputV1,
 ) -> AuthenticatedProofExecutionIdentityV1 {
     AuthenticatedProofExecutionIdentityV1 {
         challenge: evidence.challenge(),
         canonical_invocation_digest: evidence.canonical_invocation_digest(),
         policy_digest: evidence.policy_digest(),
         request_digest: evidence.request_digest(),
-        verus: evidence.verus().clone(),
-        solver: evidence.solver().clone(),
-        evidence_recorder: evidence.evidence_recorder().clone(),
+        verus: evidence.claimed_verifier().clone(),
+        solver: evidence.claimed_solver().clone(),
+        evidence_recorder: evidence.recorder().clone(),
         stdout: payload_identity(evidence.stdout()),
         stderr: payload_identity(evidence.stderr()),
         result: payload_identity(evidence.result_bytes()),
@@ -867,7 +888,7 @@ impl fmt::Display for AuthenticatedProofExecutableBindingError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UnsupportedDigestAlgorithm => {
-                formatter.write_str("authenticated proof binding requires SHA-256")
+                formatter.write_str("authenticated recorder-output binding requires SHA-256")
             }
             Self::InvalidChallenge => formatter.write_str("execution challenge is invalid"),
             Self::ChallengeReplay => {
@@ -910,21 +931,32 @@ impl fmt::Display for AuthenticatedProofExecutableBindingError {
                 )
             }
             Self::ResultIdentityMismatch => {
-                formatter.write_str("reparsed result does not match authenticated result")
+                formatter.write_str("reparsed recorder result does not match authenticated output")
             }
             Self::IdentityMismatch { field } => write!(formatter, "{field} does not match"),
             Self::AuthenticatedResult(error) => {
-                write!(formatter, "cannot revalidate authenticated result: {error}")
+                write!(
+                    formatter,
+                    "cannot revalidate authenticated recorder result: {error}"
+                )
             }
             Self::ArtifactRecord(error) => {
                 write!(formatter, "cannot construct artifact proof record: {error}")
             }
-            Self::ProofMatch(error) => write!(formatter, "proof policy rejected result: {error}"),
+            Self::ProofMatch(error) => {
+                write!(formatter, "record policy rejected recorder result: {error}")
+            }
             Self::ExecutableBinding(error) => {
-                write!(formatter, "cannot bind proof to executable: {error}")
+                write!(
+                    formatter,
+                    "cannot bind recorder report to executable record: {error}"
+                )
             }
             Self::PersistentFreshness(error) => {
-                write!(formatter, "cannot persist proof freshness: {error}")
+                write!(
+                    formatter,
+                    "cannot persist recorder-report freshness: {error}"
+                )
             }
         }
     }

@@ -15,7 +15,7 @@ use crate::{
     ProofProperty, ProofResultV1, ProofTargetIdentity, TrustedItem, VerificationModelIdentity,
 };
 
-/// Independently reviewed identity of the verifier invocation being recorded.
+/// Independently reviewed identity of the recorder invocation being recorded.
 ///
 /// Requiring this value prevents conversion from silently blessing whichever
 /// plan happens to be in memory. The expected digest must come from the review
@@ -52,12 +52,13 @@ impl ReviewedInvocationIdentityV1 {
     }
 }
 
-/// Reviewed conversion output containing descriptive proof evidence only.
+/// Reviewed conversion output containing descriptive recorder claims only.
 ///
 /// The correlation is retained for audit lookup and is also committed by the
 /// canonical invocation digest stored in the artifact record. This type grants
-/// no module-loading or kernel-launch authority and makes no claim that Verus
-/// semantics refine compiler IR or emitted machine code.
+/// no proof, module-loading, or kernel-launch authority. It does not establish
+/// that the claimed verifier or solver ran, or that Verus semantics refine
+/// compiler IR or emitted machine code.
 ///
 /// ```compile_fail
 /// # fn cannot_launch(evidence: fe2o3_verifier::ArtifactProofEvidenceV1) {
@@ -101,12 +102,13 @@ pub fn canonical_invocation_digest(plan: &InvocationPlan) -> Digest {
     Digest::from_bytes(*digest.bytes().as_bytes())
 }
 
-/// Converts a strict parsed verifier result into artifact proof evidence.
+/// Converts a strict parsed recorder result into an artifact record.
 ///
 /// This boundary revalidates the result against the full request and plan even
 /// though the recorder parser already performed those checks. Every identity is
-/// copied without inference. A successful conversion is still only evidence;
-/// artifact matching and runtime launch authorization remain separate steps.
+/// copied without inference. It does not establish that the claimed verifier or
+/// solver ran. A successful conversion remains descriptive; proof authority,
+/// artifact matching, and runtime launch authorization are separate concerns.
 pub fn convert_to_artifact_proof_record(
     plan: &InvocationPlan,
     result: &ProofResultV1,
@@ -145,10 +147,12 @@ pub fn convert_to_artifact_proof_record(
     )?;
 
     match result.outcome() {
-        ProofOutcome::Proved if result.proved_properties() != request.properties() => {
+        ProofOutcome::Proved if result.recorder_reported_properties() != request.properties() => {
             return Err(ArtifactRecordConversionError::PropertyMismatch);
         }
-        ProofOutcome::Failed | ProofOutcome::TimedOut if !result.proved_properties().is_empty() => {
+        ProofOutcome::Failed | ProofOutcome::TimedOut
+            if !result.recorder_reported_properties().is_empty() =>
+        {
             return Err(ArtifactRecordConversionError::ClaimsOnIncompleteProof);
         }
         ProofOutcome::Proved | ProofOutcome::Failed | ProofOutcome::TimedOut => {}
@@ -174,7 +178,7 @@ pub fn convert_to_artifact_proof_record(
         payload(invocation_digest),
     );
     let properties = result
-        .proved_properties()
+        .recorder_reported_properties()
         .iter()
         .copied()
         .map(artifact_property)
@@ -378,13 +382,13 @@ impl fmt::Display for ArtifactRecordConversionError {
             Self::PropertyMismatch => {
                 write!(
                     formatter,
-                    "proved properties do not exactly match the request"
+                    "recorder-reported properties do not exactly match the request"
                 )
             }
             Self::ClaimsOnIncompleteProof => {
                 write!(
                     formatter,
-                    "incomplete proof contains proved-property claims"
+                    "failed or timed-out recorder result contains property claims"
                 )
             }
             Self::UnmeasuredIdentity(field) => write!(formatter, "{field} is not measured"),

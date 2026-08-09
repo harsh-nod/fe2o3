@@ -172,6 +172,11 @@ impl MeasuredToolIdentity {
     }
 }
 
+/// Identities recorded for a claimed verifier, claimed solver, and recorder.
+///
+/// These values describe bytes and configuration. They do not by themselves
+/// show that any tool ran. The authenticated recorder path launches only the
+/// recorder; verifier and solver identities remain caller-policy claims.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExecutionTools {
     verifier: MeasuredToolIdentity,
@@ -268,6 +273,10 @@ impl ProofProperty {
     }
 }
 
+/// Outcome vocabulary accepted from recorder result envelopes.
+///
+/// `Proved` means that the recorder reported `proved`; this enum does not
+/// establish that a verifier or solver ran or that a proof was checked.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ProofOutcome {
     Proved,

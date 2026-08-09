@@ -23,14 +23,14 @@ use fe2o3_verifier::{
     AUTHENTICATED_CONTROL_FLOW_EXECUTABLE_BINDING_DOMAIN_V1,
     AUTHENTICATED_PROOF_EXECUTABLE_BINDING_DOMAIN_V1,
     AUTHENTICATED_PROOF_EXECUTABLE_BINDING_VERSION_V1, AuthenticatedControlFlowExecutableBindingV1,
-    AuthenticatedExecutionFreshnessV1, AuthenticatedExecutionProgramsV1,
-    AuthenticatedProofExecutableBindingError, AuthenticatedProofExecutablePolicyV1,
-    AuthenticatedVerusExecutionEvidenceV1, AxiomPolicy, Configuration, ConfigurationEntry,
-    ControlFlowBindingErrorV1, ControlFlowClaimsV1, ControlFlowIntegerSwitchCaseClaimV1,
-    ControlFlowIntegerSwitchClaimV1, ControlFlowLoopClaimV1, CorrelationId, Digest,
-    ExecutionLimits, ExecutionTools, KernelProofAdmissionIdentityV1, KernelProofAdmissionRequestV1,
-    MULTI_KERNEL_PROOF_ADMISSION_DOMAIN_V1, MULTI_KERNEL_PROOF_ADMISSION_VERSION_V1,
-    MeasuredToolIdentity, MultiKernelProofAdmissionErrorV1, MultiKernelProofAdmissionV1,
+    AuthenticatedExecutionFreshnessV1, AuthenticatedProofExecutableBindingError,
+    AuthenticatedProofExecutablePolicyV1, AuthenticatedRecorderOutputV1, AxiomPolicy,
+    Configuration, ConfigurationEntry, ControlFlowBindingErrorV1, ControlFlowClaimsV1,
+    ControlFlowIntegerSwitchCaseClaimV1, ControlFlowIntegerSwitchClaimV1, ControlFlowLoopClaimV1,
+    CorrelationId, Digest, ExecutionLimits, ExecutionTools, KernelProofAdmissionIdentityV1,
+    KernelProofAdmissionRequestV1, MULTI_KERNEL_PROOF_ADMISSION_DOMAIN_V1,
+    MULTI_KERNEL_PROOF_ADMISSION_VERSION_V1, MeasuredRecorderInputsV1, MeasuredToolIdentity,
+    MultiKernelProofAdmissionErrorV1, MultiKernelProofAdmissionV1,
     PERSISTENT_AUTHENTICATED_CONTROL_FLOW_EXECUTABLE_BINDING_DOMAIN_V1,
     PERSISTENT_AUTHENTICATED_PROOF_EXECUTABLE_BINDING_DOMAIN_V1,
     PERSISTENT_MULTI_KERNEL_PROOF_ADMISSION_DOMAIN_V1,
@@ -51,7 +51,7 @@ use fe2o3_verifier::{
     bind_control_flow_proof_request_v1,
     bind_persistently_fresh_authenticated_control_flow_executable_v1,
     bind_static_view_proof_evidence_v1, derive_control_flow_functional_specification_digest_v1,
-    derive_static_view_functional_specification_digest_v1, execute_authenticated_verus,
+    derive_static_view_functional_specification_digest_v1, execute_authenticated_recorder,
     reconcile_control_flow_source_v1,
 };
 
@@ -96,7 +96,7 @@ fn name(value: &str) -> Name {
     Name::new(value).unwrap()
 }
 
-fn fixture_program() -> &'static str {
+fn synthetic_recorder_fixture() -> &'static str {
     env!("CARGO_BIN_EXE_fe2o3-verifier-test-recorder")
 }
 
@@ -417,16 +417,18 @@ fn measured_tool(name: &str, executable_digest: Digest, config: u8) -> MeasuredT
     MeasuredToolIdentity::new(name, "test-v1", executable_digest, digest(config)).unwrap()
 }
 
-fn execution_tools() -> ExecutionTools {
-    execution_tools_with_verifier_configuration(0x71)
+fn synthetic_claimed_tools() -> ExecutionTools {
+    synthetic_claimed_tools_with_verifier_configuration(0x71)
 }
 
-fn execution_tools_with_verifier_configuration(verifier_configuration: u8) -> ExecutionTools {
-    let executable_digest = sha256(&fs::read(fixture_program()).unwrap());
+fn synthetic_claimed_tools_with_verifier_configuration(
+    verifier_configuration: u8,
+) -> ExecutionTools {
+    let executable_digest = sha256(&fs::read(synthetic_recorder_fixture()).unwrap());
     ExecutionTools::new(
-        measured_tool("verus", executable_digest, verifier_configuration),
-        measured_tool("z3", executable_digest, 0x72),
-        measured_tool("fe2o3-recorder", executable_digest, 0x73),
+        measured_tool("claimed-verus", executable_digest, verifier_configuration),
+        measured_tool("claimed-z3", executable_digest, 0x72),
+        measured_tool("synthetic-recorder", executable_digest, 0x73),
     )
 }
 
@@ -441,33 +443,34 @@ fn make_verifier_policy(tools: ExecutionTools, max_timeout_seconds: u32) -> Veri
     .unwrap()
 }
 
-fn measured_execution(
+fn synthetic_recorder_output(
     target: ArtifactTarget,
-) -> (AuthenticatedVerusExecutionEvidenceV1, VerifierPolicy) {
-    measured_execution_with_tools(target, execution_tools())
+) -> (AuthenticatedRecorderOutputV1, VerifierPolicy) {
+    synthetic_recorder_output_with_tools(target, synthetic_claimed_tools())
 }
 
-fn measured_execution_with_tools(
+fn synthetic_recorder_output_with_tools(
     target: ArtifactTarget,
     tools: ExecutionTools,
-) -> (AuthenticatedVerusExecutionEvidenceV1, VerifierPolicy) {
-    measured_execution_with_tools_and_limits(target, tools, 10, 10)
+) -> (AuthenticatedRecorderOutputV1, VerifierPolicy) {
+    synthetic_recorder_output_with_tools_and_limits(target, tools, 10, 10)
 }
 
-fn measured_execution_with_tools_and_limits(
+fn synthetic_recorder_output_with_tools_and_limits(
     target: ArtifactTarget,
     tools: ExecutionTools,
     policy_timeout_seconds: u32,
     invocation_timeout_seconds: u32,
-) -> (AuthenticatedVerusExecutionEvidenceV1, VerifierPolicy) {
-    static MEASURED_EXECUTION: Mutex<()> = Mutex::new(());
+) -> (AuthenticatedRecorderOutputV1, VerifierPolicy) {
+    static SYNTHETIC_RECORDER_EXECUTION: Mutex<()> = Mutex::new(());
 
-    // The debug recorder is roughly 17 MiB and deliberately self-hashes before
-    // producing evidence. Its wall-clock runtime is scheduler-sensitive under
-    // concurrent test load, so success fixtures serialize that expensive work
-    // and use the policy's existing 10-second ceiling. Focused one-second
-    // timeout coverage remains in the executor tests.
-    let _execution = MEASURED_EXECUTION.lock().unwrap();
+    // The synthetic debug recorder is roughly 17 MiB and deliberately
+    // self-hashes before emitting a claimed result. It never executes the
+    // supplied verifier or solver paths. Its wall-clock runtime is
+    // scheduler-sensitive under concurrent test load, so fixtures serialize
+    // that work and use the policy's existing 10-second ceiling. Focused
+    // one-second timeout coverage remains in the executor tests.
+    let _execution = SYNTHETIC_RECORDER_EXECUTION.lock().unwrap();
     let verifier_policy = make_verifier_policy(tools, policy_timeout_seconds);
     let request = ProofRequestV1::new(
         CorrelationId::from_bytes([51; 16]),
@@ -478,15 +481,15 @@ fn measured_execution_with_tools_and_limits(
         vec![],
     )
     .unwrap();
-    let programs = AuthenticatedExecutionProgramsV1::new(
-        fixture_program(),
-        fixture_program(),
-        fixture_program(),
+    let inputs = MeasuredRecorderInputsV1::new(
+        synthetic_recorder_fixture(),
+        synthetic_recorder_fixture(),
+        synthetic_recorder_fixture(),
     )
     .unwrap();
-    let evidence = execute_authenticated_verus(
+    let evidence = execute_authenticated_recorder(
         request,
-        programs,
+        inputs,
         invocation_timeout_seconds,
         &verifier_policy,
         ExecutionLimits::default(),
@@ -495,7 +498,7 @@ fn measured_execution_with_tools_and_limits(
     (evidence, verifier_policy)
 }
 
-fn artifact_execution(evidence: &AuthenticatedVerusExecutionEvidenceV1) -> ProofExecutionIdentity {
+fn artifact_execution(evidence: &AuthenticatedRecorderOutputV1) -> ProofExecutionIdentity {
     let tools = evidence.invocation_plan().tools();
     ProofExecutionIdentity::new(
         ArtifactModel::new(text(model().version().as_str()), payload(0x70)),
@@ -517,7 +520,7 @@ fn artifact_execution_tool(tool: &MeasuredToolIdentity) -> ArtifactMeasuredToolI
 
 fn proof_policy(
     target: ArtifactTarget,
-    evidence: &AuthenticatedVerusExecutionEvidenceV1,
+    evidence: &AuthenticatedRecorderOutputV1,
 ) -> ProofMatchPolicy {
     ProofMatchPolicy::new(
         target,
@@ -531,7 +534,7 @@ fn proof_policy(
 fn binding_policy(
     manifest: ManifestV1,
     target: ArtifactTarget,
-    evidence: &AuthenticatedVerusExecutionEvidenceV1,
+    evidence: &AuthenticatedRecorderOutputV1,
     verifier_policy: VerifierPolicy,
 ) -> AuthenticatedProofExecutablePolicyV1 {
     binding_policy_with_bundle(
@@ -550,7 +553,7 @@ fn binding_policy(
 fn binding_policy_with_bundle(
     manifest: ManifestV1,
     target: ArtifactTarget,
-    evidence: &AuthenticatedVerusExecutionEvidenceV1,
+    evidence: &AuthenticatedRecorderOutputV1,
     verifier_policy: VerifierPolicy,
     finalized_executable_digest: PayloadDigest,
     code_object_version: ExecutableCodeObjectVersionV1,
@@ -573,7 +576,7 @@ fn binding_policy_with_bundle(
 #[derive(Clone)]
 struct PersistentControlFlowBlueprint {
     request_binding: fe2o3_verifier::ControlFlowProofRequestBindingV1,
-    evidence: AuthenticatedVerusExecutionEvidenceV1,
+    evidence: AuthenticatedRecorderOutputV1,
     policy: AuthenticatedProofExecutablePolicyV1,
 }
 
@@ -640,7 +643,7 @@ fn persistent_control_flow_blueprint_with_policy_limits(
         &compiler,
         &producer,
     );
-    let (evidence, verifier_policy) = measured_execution_with_tools_and_limits(
+    let (evidence, verifier_policy) = synthetic_recorder_output_with_tools_and_limits(
         target,
         tools,
         policy_timeout_seconds,
@@ -717,7 +720,7 @@ fn persistent_multi_kernel_blueprints() -> &'static PersistentMultiKernelBluepri
                 payload(0x44),
                 base_compiler.clone(),
                 base_producer.clone(),
-                execution_tools(),
+                synthetic_claimed_tools(),
             )
         };
         let second = || {
@@ -731,7 +734,7 @@ fn persistent_multi_kernel_blueprints() -> &'static PersistentMultiKernelBluepri
                 payload(0x44),
                 base_compiler.clone(),
                 base_producer.clone(),
-                execution_tools(),
+                synthetic_claimed_tools(),
             )
         };
         PersistentMultiKernelBlueprints {
@@ -748,7 +751,7 @@ fn persistent_multi_kernel_blueprints() -> &'static PersistentMultiKernelBluepri
                 payload(0x45),
                 base_compiler.clone(),
                 base_producer.clone(),
-                execution_tools(),
+                synthetic_claimed_tools(),
             ),
             target_mismatch: persistent_control_flow_blueprint(
                 manifest_for_processor("gfx941"),
@@ -760,7 +763,7 @@ fn persistent_multi_kernel_blueprints() -> &'static PersistentMultiKernelBluepri
                 payload(0x44),
                 base_compiler.clone(),
                 base_producer.clone(),
-                execution_tools(),
+                synthetic_claimed_tools(),
             ),
             compiler_mismatch: persistent_control_flow_blueprint(
                 base_manifest.clone(),
@@ -772,7 +775,7 @@ fn persistent_multi_kernel_blueprints() -> &'static PersistentMultiKernelBluepri
                 payload(0x44),
                 artifact_tool("rustc", "1.94.0", 0x68),
                 base_producer.clone(),
-                execution_tools(),
+                synthetic_claimed_tools(),
             ),
             verifier_mismatch: persistent_control_flow_blueprint(
                 base_manifest.clone(),
@@ -784,7 +787,7 @@ fn persistent_multi_kernel_blueprints() -> &'static PersistentMultiKernelBluepri
                 payload(0x44),
                 base_compiler.clone(),
                 base_producer.clone(),
-                execution_tools_with_verifier_configuration(0x79),
+                synthetic_claimed_tools_with_verifier_configuration(0x79),
             ),
             policy_mismatch: persistent_control_flow_blueprint_with_policy_limits(
                 base_manifest,
@@ -796,7 +799,7 @@ fn persistent_multi_kernel_blueprints() -> &'static PersistentMultiKernelBluepri
                 payload(0x44),
                 base_compiler,
                 base_producer,
-                execution_tools(),
+                synthetic_claimed_tools(),
                 20,
                 10,
             ),
@@ -877,7 +880,7 @@ fn authenticated_control_flow_fixture(
         executable_digest,
         source_contracts_with_functional(payload_from_digest(functional_specification)),
     );
-    let (evidence, verifier_policy) = measured_execution(target);
+    let (evidence, verifier_policy) = synthetic_recorder_output(target);
     let request_binding = bind_control_flow_proof_request_v1(
         evidence.invocation_plan().request(),
         base_functional_specification,
@@ -1325,7 +1328,7 @@ fn persistent_multi_kernel_admission_rejects_duplicate_kernel_identities() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn persistent_multi_kernel_admission_rejects_mixed_executable_target_and_toolchain() {
+fn persistent_multi_kernel_admission_rejects_mixed_executable_target_and_claimed_tools() {
     let blueprints = persistent_multi_kernel_blueprints();
     for (field, second) in [
         (
@@ -1335,7 +1338,7 @@ fn persistent_multi_kernel_admission_rejects_mixed_executable_target_and_toolcha
         ("target", blueprints.target_mismatch.clone()),
         ("compiler", blueprints.compiler_mismatch.clone()),
         (
-            "measured verifier toolchain",
+            "claimed verifier/solver identities",
             blueprints.verifier_mismatch.clone(),
         ),
         ("verifier policy digest", blueprints.policy_mismatch.clone()),
@@ -1349,10 +1352,10 @@ fn persistent_multi_kernel_admission_rejects_mixed_executable_target_and_toolcha
 }
 
 #[test]
-fn exact_measured_transaction_binds_every_proof_and_executable_axis() {
+fn exact_synthetic_recorder_transaction_binds_every_proof_and_executable_axis() {
     let manifest = manifest();
     let target = artifact_target(&manifest);
-    let (evidence, verifier_policy) = measured_execution(target);
+    let (evidence, verifier_policy) = synthetic_recorder_output(target);
     let policy = binding_policy(manifest.clone(), target, &evidence, verifier_policy);
     let replay = evidence.clone();
     let mut freshness = AuthenticatedExecutionFreshnessV1::new();
@@ -1423,7 +1426,7 @@ fn persistent_binding_projects_exact_capsule_and_rejects_substitutions_and_repla
     let directory = PersistentLedgerDirectory::new();
     let manifest = manifest();
     let target = artifact_target(&manifest);
-    let (evidence, verifier_policy) = measured_execution(target);
+    let (evidence, verifier_policy) = synthetic_recorder_output(target);
     let projection_policy = verifier_policy.clone();
     let replay = evidence.clone();
     let policy = binding_policy(manifest, target, &evidence, verifier_policy);
@@ -1516,7 +1519,7 @@ fn persistent_binding_projects_exact_capsule_and_rejects_substitutions_and_repla
         .parse_validate_and_record(&capsule.to_bytes(), exact_expectation)
         .unwrap();
 
-    let substituted_policy = make_verifier_policy(execution_tools(), 9);
+    let substituted_policy = make_verifier_policy(synthetic_claimed_tools(), 9);
     assert_eq!(
         ProofCapsuleV1::project_inert_from_persistently_fresh(
             capsule_target.clone(),
@@ -1615,7 +1618,7 @@ fn persistent_control_flow_binding_retains_the_ledger_identity() {
         &manifest,
         source_contracts_with_functional(payload_from_digest(functional_specification)),
     );
-    let (evidence, verifier_policy) = measured_execution(target);
+    let (evidence, verifier_policy) = synthetic_recorder_output(target);
     let request_binding = bind_control_flow_proof_request_v1(
         evidence.invocation_plan().request(),
         base_functional_specification,
@@ -1671,7 +1674,7 @@ fn exact_control_flow_identity_reaches_measured_result_and_final_executable() {
         &manifest,
         source_contracts_with_functional(payload_from_digest(functional_specification)),
     );
-    let (evidence, verifier_policy) = measured_execution(target);
+    let (evidence, verifier_policy) = synthetic_recorder_output(target);
     let request_binding = bind_control_flow_proof_request_v1(
         evidence.invocation_plan().request(),
         base_functional_specification,
@@ -1731,7 +1734,7 @@ fn exact_control_flow_identity_reaches_measured_result_and_final_executable() {
     assert!(!binding.grants_load_authority());
     assert!(!binding.grants_launch_authority());
 
-    let (second_evidence, second_verifier_policy) = measured_execution(target);
+    let (second_evidence, second_verifier_policy) = synthetic_recorder_output(target);
     let second_policy = binding_policy(manifest, target, &second_evidence, second_verifier_policy);
     let second_proof = bind_authenticated_proof_executable_v1(
         second_evidence,
@@ -1757,7 +1760,7 @@ fn exact_control_flow_identity_reaches_measured_result_and_final_executable() {
 fn verifier_policy_and_source_effect_substitution_fail_without_consuming_freshness() {
     let manifest = manifest();
     let target = artifact_target(&manifest);
-    let (evidence, verifier_policy) = measured_execution(target);
+    let (evidence, verifier_policy) = synthetic_recorder_output(target);
     let mut freshness = AuthenticatedExecutionFreshnessV1::new();
 
     let changed_verifier_policy = make_verifier_policy(
@@ -1845,11 +1848,11 @@ fn verifier_policy_and_source_effect_substitution_fail_without_consuming_freshne
 }
 
 #[test]
-fn independent_measured_runs_cannot_be_substituted_for_each_other() {
+fn independent_synthetic_recorder_runs_cannot_be_substituted_for_each_other() {
     let manifest = manifest();
     let target = artifact_target(&manifest);
-    let (first_evidence, first_verifier_policy) = measured_execution(target);
-    let (second_evidence, second_verifier_policy) = measured_execution(target);
+    let (first_evidence, first_verifier_policy) = synthetic_recorder_output(target);
+    let (second_evidence, second_verifier_policy) = synthetic_recorder_output(target);
     let first_policy = binding_policy(
         manifest.clone(),
         target,
@@ -1933,13 +1936,16 @@ fn caller_selected_recorder_and_alternate_ledgers_remain_non_authoritative() {
         payload(0x44),
         compiler(),
         producer(),
-        execution_tools(),
+        synthetic_claimed_tools(),
     );
     assert_eq!(
         blueprint.evidence.invocation_plan().request().properties(),
         STATIC_VIEW_PROOF_REQUIRED_PROPERTIES_V1
     );
-    assert_eq!(blueprint.evidence.result().outcome(), ProofOutcome::Proved);
+    assert_eq!(
+        blueprint.evidence.recorder_report().outcome(),
+        ProofOutcome::Proved
+    );
     let static_evidence = bind_static_view_proof_evidence_v1(
         blueprint.evidence.invocation_plan().request(),
         blueprint.request_binding.clone(),

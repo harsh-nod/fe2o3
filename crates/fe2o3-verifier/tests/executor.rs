@@ -120,7 +120,7 @@ fn successful_execution_is_hermetic_and_strictly_parsed() {
     assert_eq!(success.result().target(), target());
     assert_eq!(success.result().tools(), &tools());
     assert_eq!(
-        success.result().proved_properties(),
+        success.result().recorder_reported_properties(),
         &[ProofProperty::Bounds, ProofProperty::RaceFreedom]
     );
     assert!(success.output().stdout().is_empty());
@@ -133,7 +133,7 @@ fn failed_envelope_is_evidence_without_proof_claims() {
     let temp = TempDirectory::new();
     let success = execute_recorder(&plan(&temp, "failed", 2), ExecutionLimits::default()).unwrap();
     assert_eq!(success.result().outcome(), ProofOutcome::Failed);
-    assert!(success.result().proved_properties().is_empty());
+    assert!(success.result().recorder_reported_properties().is_empty());
 }
 
 #[test]

@@ -1,3 +1,9 @@
+//! Synthetic recorder fixture used by verifier-crate tests.
+//!
+//! The fixture validates its arguments and emits canonical result bytes. It
+//! never invokes the supplied verifier or solver paths, so a reported `proved`
+//! outcome is synthetic and must not be described as a Verus result.
+
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::Path;
@@ -14,7 +20,7 @@ const COMPLETE_PROPERTIES: &str = "bounds,address-overflow-freedom,memory-safety
 fn main() {
     let arguments: Vec<_> = std::env::args().collect();
     if arguments.len() == 25 {
-        authenticated_execution(&arguments);
+        synthetic_authenticated_recorder(&arguments);
         return;
     }
     if arguments.get(1).map(String::as_str) == Some("--pipe-holder") {
@@ -104,7 +110,7 @@ fn main() {
     }
 }
 
-fn authenticated_execution(arguments: &[String]) {
+fn synthetic_authenticated_recorder(arguments: &[String]) {
     for (index, expected) in [
         (1, "--request"),
         (3, "--result"),
@@ -151,9 +157,10 @@ fn authenticated_execution(arguments: &[String]) {
     if hex_digest(&request) != arguments[18] {
         process::exit(88);
     }
-    // Keep this independent check: authenticated tests must prove the exact
-    // sealed recorder image was executed. In debug builds this image is about
-    // 17 MiB, so the SHA-256 pass consumes substantial CPU under contention.
+    // Keep this independent check: tests must show that the exact sealed
+    // recorder image was executed. This synthetic fixture does not execute the
+    // claimed verifier or solver. In debug builds the recorder is about 17 MiB,
+    // so the SHA-256 pass consumes substantial CPU under contention.
     let executable = fs::read("/proc/self/exe").unwrap();
     let executable_digest = hex_digest(&executable);
     if [&arguments[20], &arguments[22], &arguments[24]]
@@ -171,6 +178,8 @@ fn authenticated_execution(arguments: &[String]) {
     } else {
         envelope(CORRELATION, "proved")
     };
+    // The magic and field names are legacy V1 wire compatibility markers, not
+    // claims that Verus or the solver executed.
     let result = format!(
         "FE2O3-VERUS-AUTH-RESULT-V1\nchallenge={}\ninvocation={}\npolicy={}\nrequest={}\nverus={}\nsolver={}\nrecorder={}\nresult-bytes={}\n{}",
         arguments[12],

@@ -236,8 +236,10 @@ impl ProofCapsuleTargetV1 {
     }
 }
 
-/// Exact verification model, measured Verus and solver identities, approved
+/// Exact verification model, claimed verifier and solver identities, approved
 /// axiom policy, requested axioms, and requested proof properties.
+///
+/// Tool identities are descriptive and do not establish that either image ran.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProofCapsulePolicyV1 {
     model: VerificationModelIdentity,
@@ -280,12 +282,22 @@ impl ProofCapsulePolicyV1 {
         &self.model
     }
 
-    pub const fn verus(&self) -> &MeasuredToolIdentity {
+    pub const fn claimed_verifier(&self) -> &MeasuredToolIdentity {
         &self.verus
     }
 
-    pub const fn solver(&self) -> &MeasuredToolIdentity {
+    pub const fn claimed_solver(&self) -> &MeasuredToolIdentity {
         &self.solver
+    }
+
+    #[deprecated(note = "use claimed_verifier(); this identity does not show execution")]
+    pub const fn verus(&self) -> &MeasuredToolIdentity {
+        self.claimed_verifier()
+    }
+
+    #[deprecated(note = "use claimed_solver(); this identity does not show execution")]
+    pub const fn solver(&self) -> &MeasuredToolIdentity {
+        self.claimed_solver()
     }
 
     pub const fn approved_axioms(&self) -> &AxiomPolicy {
@@ -415,7 +427,10 @@ impl ProofCapsuleFreshnessIdentityV1 {
     }
 }
 
-/// Correlation and exact identities from one sealed verifier execution.
+/// Correlation and exact identities projected from one recorder report.
+///
+/// The retained measurements and result digest do not establish that a
+/// verifier or solver ran or that the report is correct.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProofCapsuleExecutionV1 {
     correlation_id: CorrelationId,
@@ -493,7 +508,7 @@ impl ProofCapsuleExecutionV1 {
         let execution = proof.execution_identity();
         let freshness = ProofCapsuleFreshnessIdentityV1::project_from_persistent(binding);
         Ok(Self {
-            correlation_id: evidence.result().correlation_id(),
+            correlation_id: evidence.recorder_report().correlation_id(),
             canonical_invocation_identity: execution.canonical_invocation_digest(),
             policy_identity: execution.policy_digest(),
             request_identity: execution.request_digest(),
@@ -540,6 +555,10 @@ impl ProofCapsuleExecutionV1 {
     }
 }
 
+/// Inert outcome and property claims retained in a capsule.
+///
+/// `Proved` and the listed properties preserve recorder vocabulary. They are
+/// not independently authenticated proof facts.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProofCapsuleResultV1 {
     outcome: ProofOutcome,
@@ -565,8 +584,13 @@ impl ProofCapsuleResultV1 {
         self.outcome
     }
 
-    pub fn proved_properties(&self) -> &[ProofProperty] {
+    pub fn reported_properties(&self) -> &[ProofProperty] {
         &self.proved_properties
+    }
+
+    #[deprecated(note = "use reported_properties(); capsule properties are descriptive claims")]
+    pub fn proved_properties(&self) -> &[ProofProperty] {
+        self.reported_properties()
     }
 }
 
@@ -604,10 +628,11 @@ impl ProofCapsuleV1 {
         Ok(capsule)
     }
 
-    /// Projects a proved, inert capsule from an existing persistent binding.
+    /// Projects an inert capsule from a persistent recorder-report binding.
     ///
-    /// The policy digest, proof target, model, measured Verus/solver identities,
-    /// requested properties, and requested axioms are rejoined here. Additional
+    /// The policy digest, proof target, model, claimed verifier/solver
+    /// identities, requested properties, and requested axioms are rejoined here.
+    /// This projection does not show that either claimed tool ran. Additional
     /// target axes remain inert caller inputs and require a future production
     /// authenticator and compiler-refinement evidence.
     pub fn project_inert_from_persistently_fresh(
@@ -618,7 +643,7 @@ impl ProofCapsuleV1 {
         let proof = binding.proof_binding();
         let evidence = proof.execution_evidence();
         let plan = evidence.invocation_plan();
-        let proof_result = evidence.result();
+        let proof_result = evidence.recorder_report();
         if sha256(&verifier_policy.to_canonical_bytes()) != evidence.policy_digest() {
             return Err(ProofCapsuleBuildErrorV1::PolicyIdentityMismatch);
         }
@@ -650,7 +675,7 @@ impl ProofCapsuleV1 {
         let execution = ProofCapsuleExecutionV1::project_from_persistent(binding)?;
         let result = ProofCapsuleResultV1::new(
             proof_result.outcome(),
-            proof_result.proved_properties().to_vec(),
+            proof_result.recorder_reported_properties().to_vec(),
         )?;
         Self::new_inert(target, policy, execution, result)
     }
@@ -1958,26 +1983,27 @@ impl fmt::Display for ProofCapsuleBuildErrorV1 {
                 )
             }
             Self::ClaimsOnIncompleteProof => {
-                formatter.write_str("failed or timed-out result carries proved-property claims")
+                formatter.write_str("failed or timed-out recorder result carries property claims")
             }
             Self::IncompleteProof => {
-                formatter.write_str("proved result does not claim exactly every requested property")
+                formatter.write_str("recorder-reported proved outcome omits requested properties")
             }
             Self::MissingPersistentFreshness => {
-                formatter.write_str("proved result lacks persistent one-history freshness")
+                formatter.write_str("recorder-reported proved outcome lacks persistent freshness")
             }
-            Self::UnexpectedPersistentFreshness => formatter
-                .write_str("failed or timed-out result must not claim persistent proof freshness"),
+            Self::UnexpectedPersistentFreshness => {
+                formatter.write_str("failed or timed-out recorder result must not carry freshness")
+            }
             Self::PolicyIdentityMismatch => {
-                formatter.write_str("verifier policy identity does not match sealed execution")
+                formatter.write_str("policy identity does not match the recorder transaction")
             }
             Self::ProofTargetMismatch => {
-                formatter.write_str("capsule proof target does not match proof result")
+                formatter.write_str("capsule target does not match the recorder result")
             }
             Self::FinalizedPayloadMismatch => formatter
                 .write_str("capsule finalized payload does not match proof/executable binding"),
             Self::VerifierPolicyMismatch => formatter
-                .write_str("verifier policy model or tool identities do not match execution"),
+                .write_str("policy model or claimed tool identities do not match recorder output"),
         }
     }
 }
@@ -2185,9 +2211,8 @@ impl fmt::Display for ProofCapsuleContextErrorV1 {
             Self::CapsuleDuplicate => {
                 formatter.write_str("proof capsule was already recorded in this process")
             }
-            Self::ExecutionDuplicate => {
-                formatter.write_str("proof execution was already recorded in this process")
-            }
+            Self::ExecutionDuplicate => formatter
+                .write_str("recorder execution identity was already recorded in this process"),
             Self::PersistentProofDuplicate => {
                 formatter.write_str("persistent proof was already recorded in this process")
             }

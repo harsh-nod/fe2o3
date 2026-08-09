@@ -333,13 +333,14 @@ impl ControlFlowProofRequestBindingV1 {
     }
 }
 
-/// Inert evidence joining exact source control flow to one measured proof and
-/// finalized executable identity.
+/// Inert evidence joining exact source control flow to one authenticated
+/// recorder report and finalized executable identity.
 ///
-/// Construction requires the private-construction authenticated Verus bridge;
-/// a source declaration or request binding alone cannot create this value. The
-/// result is still evidence only and deliberately grants no compiler, module,
-/// or launch authority.
+/// Construction requires the private-construction recorder-output bridge; a
+/// source declaration or request binding alone cannot create this value. The
+/// bridge does not establish that the claimed verifier or solver ran. The
+/// result is still evidence only and deliberately grants no proof, compiler,
+/// module, or launch authority.
 ///
 /// ```compile_fail
 /// # fn cannot_launch(value: fe2o3_verifier::AuthenticatedControlFlowExecutableBindingV1) {
@@ -626,7 +627,7 @@ fn validate_authenticated_control_flow_executable(
         return Err(ControlFlowBindingErrorV1::ProofExecutionRequestMismatch);
     }
 
-    let result = evidence.result();
+    let result = evidence.recorder_report();
     if result.target() != request_binding.target {
         return Err(ControlFlowBindingErrorV1::ProofResultTargetMismatch);
     }
@@ -634,7 +635,11 @@ fn validate_authenticated_control_flow_executable(
         return Err(ControlFlowBindingErrorV1::ProofNotProved);
     }
     for property in [ProofProperty::Bounds, ProofProperty::FunctionalCorrectness] {
-        if result.proved_properties().binary_search(&property).is_err() {
+        if result
+            .recorder_reported_properties()
+            .binary_search(&property)
+            .is_err()
+        {
             return Err(ControlFlowBindingErrorV1::MissingProvedProperty { property });
         }
     }
@@ -1065,21 +1070,19 @@ impl fmt::Display for ControlFlowBindingErrorV1 {
                 "proof request functional specification does not bind the control-flow source",
             ),
             Self::ProofRequestMismatch => formatter
-                .write_str("authenticated proof request does not match the control-flow request"),
+                .write_str("recorder-bound request does not match the control-flow request"),
             Self::ProofTargetMismatch => formatter
-                .write_str("authenticated proof target does not match the control-flow request"),
-            Self::ProofExecutionRequestMismatch => formatter.write_str(
-                "authenticated proof execution did not retain the control-flow request identity",
-            ),
-            Self::ProofResultTargetMismatch => formatter.write_str(
-                "authenticated proof result target does not match the control-flow request",
-            ),
+                .write_str("recorder-reported target does not match the control-flow request"),
+            Self::ProofExecutionRequestMismatch => formatter
+                .write_str("recorder transaction did not retain the control-flow request identity"),
+            Self::ProofResultTargetMismatch => formatter
+                .write_str("recorder result target does not match the control-flow request"),
             Self::ProofNotProved => {
-                formatter.write_str("authenticated control-flow proof did not succeed")
+                formatter.write_str("recorder did not report a proved control-flow outcome")
             }
             Self::MissingProvedProperty { property } => write!(
                 formatter,
-                "authenticated result did not prove {}",
+                "recorder did not report property {}",
                 property.as_str()
             ),
             Self::UnsupportedExecutableDigestAlgorithm => formatter
@@ -1090,7 +1093,7 @@ impl fmt::Display for ControlFlowBindingErrorV1 {
             Self::IdentityMismatch { field } => write!(formatter, "{field} does not match"),
             Self::AuthenticatedExecutableBinding(error) => write!(
                 formatter,
-                "authenticated proof executable binding does not match: {error}"
+                "authenticated recorder-report executable binding does not match: {error}"
             ),
         }
     }

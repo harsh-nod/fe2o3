@@ -98,7 +98,7 @@ fn policy() -> ProofCapsulePolicyV1 {
     let axiom = TrustedItem::new("gpu_integer_model", digest(36)).unwrap();
     ProofCapsulePolicyV1::new(
         VerificationModelIdentity::new("gpu-model-v1", digest(30)).unwrap(),
-        tool("verus", 31),
+        tool("claimed-verus", 31),
         tool("z3", 33),
         AxiomPolicy::allow_list(vec![axiom.clone()]).unwrap(),
         vec![axiom],
@@ -147,7 +147,7 @@ fn execution_with(
     .unwrap()
 }
 
-fn proved_result() -> ProofCapsuleResultV1 {
+fn reported_proved_result() -> ProofCapsuleResultV1 {
     ProofCapsuleResultV1::new(
         ProofOutcome::Proved,
         vec![ProofProperty::RaceFreedom, ProofProperty::Bounds],
@@ -164,7 +164,7 @@ fn capsule_with(
         target,
         policy(),
         execution_with(correlation_seed, Some(freshness)),
-        proved_result(),
+        reported_proved_result(),
     )
     .unwrap()
 }
@@ -228,8 +228,11 @@ fn canonical_round_trip_binds_every_axis_without_authority() {
     );
     assert_eq!(decoded.target().artifact_identity(), digest(61));
     assert_eq!(decoded.policy().model().version().as_str(), "gpu-model-v1");
-    assert_eq!(decoded.policy().verus().name().as_str(), "verus");
-    assert_eq!(decoded.policy().solver().name().as_str(), "z3");
+    assert_eq!(
+        decoded.policy().claimed_verifier().name().as_str(),
+        "claimed-verus"
+    );
+    assert_eq!(decoded.policy().claimed_solver().name().as_str(), "z3");
     assert_eq!(decoded.policy().approved_axioms().allowed().len(), 1);
     assert_eq!(decoded.policy().requested_axioms().len(), 1);
     assert_eq!(
@@ -237,7 +240,7 @@ fn canonical_round_trip_binds_every_axis_without_authority() {
         &[ProofProperty::Bounds, ProofProperty::RaceFreedom]
     );
     assert_eq!(
-        decoded.result().proved_properties(),
+        decoded.result().reported_properties(),
         &[ProofProperty::Bounds, ProofProperty::RaceFreedom]
     );
     assert_eq!(decoded.execution().sealed_result(), result_payload(47));
@@ -272,13 +275,13 @@ fn failed_and_timed_out_capsules_are_honest_non_proofs() {
         .unwrap();
         let decoded = ProofCapsuleV1::from_bytes(&capsule.to_bytes()).unwrap();
         assert_eq!(decoded.result().outcome(), outcome);
-        assert!(decoded.result().proved_properties().is_empty());
+        assert!(decoded.result().reported_properties().is_empty());
         assert_eq!(decoded.execution().freshness(), None);
     }
 }
 
 #[test]
-fn proved_capsules_require_exact_claims_and_persistent_freshness() {
+fn reported_proved_capsules_require_exact_claims_and_persistent_freshness() {
     let partial =
         ProofCapsuleResultV1::new(ProofOutcome::Proved, vec![ProofProperty::Bounds]).unwrap();
     assert_eq!(
@@ -295,7 +298,7 @@ fn proved_capsules_require_exact_claims_and_persistent_freshness() {
             target(),
             policy(),
             execution_with(44, None),
-            proved_result(),
+            reported_proved_result(),
         ),
         Err(ProofCapsuleBuildErrorV1::MissingPersistentFreshness)
     );
@@ -668,7 +671,7 @@ fn process_local_detector_only_records_duplicates() {
         target_with(proof_target(), 81, 61),
         policy(),
         rebound_execution,
-        proved_result(),
+        reported_proved_result(),
     )
     .unwrap();
     assert_eq!(
@@ -735,7 +738,7 @@ fn process_local_detector_is_hard_bounded_and_fails_closed_when_full() {
         target_with(proof_target(), 81, 82),
         policy(),
         second_execution,
-        proved_result(),
+        reported_proved_result(),
     )
     .unwrap();
 
@@ -758,7 +761,7 @@ fn constructors_reject_duplicate_and_oversized_collections() {
     assert_eq!(
         ProofCapsulePolicyV1::new(
             VerificationModelIdentity::new("gpu-model-v1", digest(30)).unwrap(),
-            tool("verus", 31),
+            tool("claimed-verus", 31),
             tool("z3", 33),
             AxiomPolicy::allow_list(vec![zero_axiom]).unwrap(),
             vec![],

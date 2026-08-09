@@ -16,7 +16,12 @@ pub enum RecorderTermination {
     Signaled(i32),
 }
 
-/// Validated proof evidence. This value does not grant load or launch authority.
+/// Structurally validated recorder result envelope.
+///
+/// Parsing checks canonical shape and agreement with an invocation plan. It
+/// does not execute or observe a verifier or solver. A `Proved` outcome and the
+/// associated properties are recorder claims, not independently authenticated
+/// proof facts. This value grants no proof, load, or launch authority.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProofResultV1 {
     correlation_id: CorrelationId,
@@ -55,8 +60,13 @@ impl ProofResultV1 {
         self.outcome
     }
 
-    pub fn proved_properties(&self) -> &[ProofProperty] {
+    pub fn recorder_reported_properties(&self) -> &[ProofProperty] {
         &self.proved_properties
+    }
+
+    #[deprecated(note = "use recorder_reported_properties(); these are recorder claims")]
+    pub fn proved_properties(&self) -> &[ProofProperty] {
+        self.recorder_reported_properties()
     }
 
     pub fn trusted_items(&self) -> &[TrustedItem] {
@@ -72,6 +82,8 @@ impl ProofResultV1 {
 ///
 /// Exactly six newline-terminated lines are accepted:
 /// magic, correlation, outcome, properties, trusted items, and hex diagnostic.
+/// Successful parsing authenticates no tool execution; it only validates the
+/// recorder-supplied bytes against the caller-provided invocation plan.
 pub fn parse_recorder_result(
     bytes: &[u8],
     plan: &InvocationPlan,
@@ -254,12 +266,15 @@ impl fmt::Display for ResultError {
             Self::InvalidDiagnostic => write!(formatter, "diagnostic is not canonical hex text"),
             Self::TrustedItemsMismatch => write!(formatter, "trusted items do not match request"),
             Self::IncompleteProof => {
-                write!(formatter, "proved result does not establish every request")
+                write!(
+                    formatter,
+                    "recorder-reported proved outcome omits requested properties"
+                )
             }
             Self::ClaimsOnIncompleteProof => {
                 write!(
                     formatter,
-                    "incomplete result contains proved-property claims"
+                    "failed or timed-out recorder result contains property claims"
                 )
             }
             Self::Model(error) => error.fmt(formatter),

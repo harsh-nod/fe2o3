@@ -367,7 +367,10 @@ fn proved_result_binds_all_requested_evidence() {
     assert_eq!(result.target(), target());
     assert_eq!(result.configuration(), &configuration());
     assert_eq!(result.tools(), &tools());
-    assert_eq!(result.proved_properties(), plan.request().properties());
+    assert_eq!(
+        result.recorder_reported_properties(),
+        plan.request().properties()
+    );
     assert_eq!(result.trusted_items(), &[axiom]);
     assert_eq!(result.diagnostic().unwrap().as_str(), "verified");
 }
@@ -381,7 +384,7 @@ fn failed_and_timed_out_results_are_evidence_without_claims() {
             result.outcome(),
             ProofOutcome::Failed | ProofOutcome::TimedOut
         ));
-        assert!(result.proved_properties().is_empty());
+        assert!(result.recorder_reported_properties().is_empty());
         assert!(result.diagnostic().is_none());
     }
 }

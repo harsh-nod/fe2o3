@@ -1,10 +1,12 @@
 //! Bounded planning and result records for an external GPU-kernel verifier.
 //!
 //! This crate constructs canonical proof requests and executes an evidence
-//! recorder through a bounded, shell-free process boundary. The authenticated
-//! Linux path measures Verus, solver, and recorder bytes into sealed executable
-//! snapshots and returns descriptive, challenge-bound execution evidence. The
-//! legacy planning path retains caller-supplied identities for compatibility.
+//! recorder through a bounded, shell-free process boundary. The Linux path
+//! measures and seals recorder, claimed-verifier, and claimed-solver images,
+//! but launches only the recorder. Its challenge-bound output does not prove
+//! that the claimed verifier or solver ran. A recorder-reported `proved`
+//! outcome remains a report, not independently authenticated proof evidence.
+//! The legacy planning path retains caller-supplied identities for compatibility.
 
 mod artifact_record;
 mod authenticated_execution;
@@ -24,10 +26,18 @@ pub use artifact_record::{
     canonical_invocation_digest, convert_to_artifact_proof_record,
 };
 pub use authenticated_execution::{
-    AuthenticatedBindingField, AuthenticatedExecutionError, AuthenticatedExecutionProgramsV1,
-    AuthenticatedResultError, AuthenticatedVerusExecutionEvidenceV1, BoundExecutionPayloadV1,
-    DataOperation, ExecutableMeasurementV1, ExecutableOperation, ExecutableRole,
-    MAX_EXECUTABLE_BYTES, execute_authenticated_verus,
+    AuthenticatedBindingField, AuthenticatedExecutionError, AuthenticatedRecorderOutputV1,
+    AuthenticatedResultError, BoundExecutionPayloadV1, DataOperation, ExecutableMeasurementV1,
+    ExecutableOperation, ExecutableRole, MAX_EXECUTABLE_BYTES, MeasuredRecorderInputsV1,
+    execute_authenticated_recorder,
+};
+// Deprecated compatibility exports. Despite their Verus-oriented names, these
+// authenticate and execute only the recorder; they do not show that Verus or a
+// solver ran.
+#[allow(deprecated)]
+pub use authenticated_execution::{
+    AuthenticatedExecutionProgramsV1, AuthenticatedVerusExecutionEvidenceV1,
+    execute_authenticated_verus,
 };
 pub use authenticated_proof_binding::{
     AUTHENTICATED_PROOF_EXECUTABLE_BINDING_DOMAIN_V1,

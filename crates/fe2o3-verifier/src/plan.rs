@@ -8,6 +8,11 @@ use crate::{
 pub const MAX_PATH_BYTES: usize = 4096;
 pub const MAX_TIMEOUT_SECONDS: u32 = 86_400;
 
+/// Paths embedded in a recorder invocation plan.
+///
+/// The recorder program is the command that the execution API launches. The
+/// verifier and solver paths are only passed to that command as arguments;
+/// this record does not establish that either program ran.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InvocationPaths {
     verifier_program: String,
@@ -71,6 +76,10 @@ impl CommandSpec {
     }
 }
 
+/// Caller-selected expectations used to construct and validate recorder input.
+///
+/// This policy is not pinned by a trust root. Matching it establishes agreement
+/// with caller claims, not that a verifier or solver ran.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VerifierPolicy {
     expected_tools: ExecutionTools,
@@ -122,7 +131,7 @@ impl VerifierPolicy {
         self.max_timeout_seconds
     }
 
-    /// Canonical policy bytes committed by authenticated verifier evidence.
+    /// Canonical policy bytes committed by authenticated recorder output.
     pub fn to_canonical_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(1024);
         put_bytes(&mut bytes, b"FE2O3VPL");
@@ -157,6 +166,10 @@ impl VerifierPolicy {
     }
 }
 
+/// Canonical plan for launching a recorder with claimed tool identities.
+///
+/// `command().program()` is the recorder. Verifier and solver paths are command
+/// arguments and carry no execution claim.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InvocationPlan {
     request: ProofRequestV1,
@@ -234,6 +247,10 @@ impl InvocationPlan {
     }
 }
 
+/// Builds a recorder command after matching caller-supplied policy records.
+///
+/// This function performs no process execution and does not authenticate that
+/// the verifier or solver named in the plan ran.
 pub fn build_invocation_plan(
     request: ProofRequestV1,
     measured_tools: ExecutionTools,

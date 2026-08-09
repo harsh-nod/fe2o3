@@ -89,11 +89,12 @@ impl KernelProofAdmissionRequestV1 {
 
 /// Canonical collection of per-kernel proofs for one finalized executable.
 ///
-/// Each input has already passed authenticated execution, proof/executable,
-/// source-contract, and freshness admission. This layer prevents those valid
+/// Each input has already passed recorder-output, proof/executable-record,
+/// source-contract, and freshness admission. Those checks do not establish
+/// that the claimed verifier or solver ran. This layer prevents the resulting
 /// per-kernel records from becoming interchangeable when they share a code
-/// object and toolchain. It remains inert evidence and grants no runtime
-/// authority.
+/// object and claimed tool identities. It remains inert evidence and grants no
+/// proof or runtime authority.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MultiKernelProofAdmissionV1 {
     finalized_executable_digest: PayloadDigest,
@@ -492,7 +493,7 @@ impl PersistentlyFreshMultiKernelProofAdmissionV1 {
             require_persistent_equal(
                 first_plan.tools(),
                 plan.tools(),
-                "measured verifier toolchain",
+                "claimed verifier/solver identities",
             )?;
             require_persistent_equal(
                 first_plan.request().configuration(),

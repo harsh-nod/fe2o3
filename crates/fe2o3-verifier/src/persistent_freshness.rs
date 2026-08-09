@@ -68,7 +68,7 @@ impl PersistentFreshnessIdentityV1 {
         Ok(())
     }
 
-    fn from_authenticated_execution(
+    fn from_recorder_report_identity(
         identity: &AuthenticatedProofExecutionIdentityV1,
     ) -> Result<Self, PersistentFreshnessLedgerErrorV1> {
         let value = Self {
@@ -264,11 +264,25 @@ impl PersistentProofFreshnessLedgerV1 {
         }
     }
 
-    pub fn consume_authenticated_execution(
+    /// Durably consumes the replay identity of an authenticated recorder report.
+    ///
+    /// This records challenge/transcript/result digests only. It does not show
+    /// that a verifier or solver ran and grants no proof authority.
+    pub fn consume_authenticated_recorder_output(
         &mut self,
         identity: &AuthenticatedProofExecutionIdentityV1,
     ) -> Result<PersistentFreshnessReceiptV1, PersistentFreshnessLedgerErrorV1> {
         self.try_begin_exclusive()?.consume(identity)
+    }
+
+    #[deprecated(
+        note = "use consume_authenticated_recorder_output(); the identity is a recorder report"
+    )]
+    pub fn consume_authenticated_execution(
+        &mut self,
+        identity: &AuthenticatedProofExecutionIdentityV1,
+    ) -> Result<PersistentFreshnessReceiptV1, PersistentFreshnessLedgerErrorV1> {
+        self.consume_authenticated_recorder_output(identity)
     }
 
     pub fn inspect(
@@ -314,11 +328,14 @@ impl PersistentProofFreshnessTransactionV1<'_> {
         }
     }
 
+    /// Consumes one recorder-report replay identity in this transaction.
+    ///
+    /// The input does not authenticate verifier or solver execution.
     pub fn consume(
         &mut self,
         identity: &AuthenticatedProofExecutionIdentityV1,
     ) -> Result<PersistentFreshnessReceiptV1, PersistentFreshnessLedgerErrorV1> {
-        let identity = PersistentFreshnessIdentityV1::from_authenticated_execution(identity)?;
+        let identity = PersistentFreshnessIdentityV1::from_recorder_report_identity(identity)?;
         #[cfg(target_os = "linux")]
         {
             self.inner.consume(identity)

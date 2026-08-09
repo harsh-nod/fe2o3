@@ -98,8 +98,8 @@ impl ExecutionSuccess {
 ///
 /// The child receives exactly the planned argv, an empty environment, `/` as its
 /// working directory, and null stdin. Only a bounded result file accepted by
-/// `parse_recorder_result` can produce a proof result; stdout is never parsed as
-/// proof evidence.
+/// `parse_recorder_result` can produce a recorder result record; stdout is never
+/// parsed as a result. Parsing does not establish that a verifier or solver ran.
 pub fn execute_recorder(
     plan: &InvocationPlan,
     limits: ExecutionLimits,

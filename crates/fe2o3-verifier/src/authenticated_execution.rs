@@ -1,3 +1,12 @@
+//! Measured, sealed execution of an external evidence recorder.
+//!
+//! This module launches only the recorder snapshot. It measures and seals the
+//! caller-policy-selected verifier and solver images, then passes their paths
+//! and digests to the recorder. It does not observe either image being run and
+//! does not establish that Verus, a solver, or any proof toolchain executed.
+//! A `proved` result is the recorder's authenticated report, not an
+//! independently authenticated proof result.
+
 use std::fmt;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -22,6 +31,7 @@ use crate::{
 };
 
 pub const MAX_EXECUTABLE_BYTES: u64 = 1024 * 1024 * 1024;
+// Legacy V1 wire marker. It authenticates recorder output, not Verus execution.
 const AUTH_RESULT_MAGIC: &str = "FE2O3-VERUS-AUTH-RESULT-V1";
 const AUTH_TRANSCRIPT_MAGIC: &[u8; 8] = b"FE2O3VXE";
 const RANDOM_SOURCE: &str = "/dev/urandom";
@@ -30,8 +40,11 @@ const CANONICAL_RESULT_PATH: &str = "/fe2o3-authenticated/result-v1";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExecutableRole {
+    /// Image claimed by policy to be Verus; measured but not launched here.
     Verus,
+    /// Image claimed by policy to be the solver; measured but not launched here.
     Solver,
+    /// Measured recorder image that this module actually launches.
     EvidenceRecorder,
 }
 
@@ -45,44 +58,71 @@ impl ExecutableRole {
     }
 }
 
-/// Source paths for executables admitted by a trusted verifier policy.
+/// Source paths measured for one recorder invocation.
+///
+/// `claimed_verifier` and `claimed_solver` are sealed and passed to the
+/// recorder, but this API does not execute them. The policy that supplies their
+/// expected identities is caller-selected and is not a trust root.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AuthenticatedExecutionProgramsV1 {
-    verus: String,
-    solver: String,
-    evidence_recorder: String,
+pub struct MeasuredRecorderInputsV1 {
+    claimed_verifier: String,
+    claimed_solver: String,
+    recorder: String,
 }
 
-impl AuthenticatedExecutionProgramsV1 {
+impl MeasuredRecorderInputsV1 {
     pub fn new(
-        verus: impl Into<String>,
-        solver: impl Into<String>,
-        evidence_recorder: impl Into<String>,
+        claimed_verifier: impl Into<String>,
+        claimed_solver: impl Into<String>,
+        recorder: impl Into<String>,
     ) -> Result<Self, AuthenticatedExecutionError> {
         Ok(Self {
-            verus: checked_program_path(ExecutableRole::Verus, verus.into())?,
-            solver: checked_program_path(ExecutableRole::Solver, solver.into())?,
-            evidence_recorder: checked_program_path(
-                ExecutableRole::EvidenceRecorder,
-                evidence_recorder.into(),
-            )?,
+            claimed_verifier: checked_program_path(ExecutableRole::Verus, claimed_verifier.into())?,
+            claimed_solver: checked_program_path(ExecutableRole::Solver, claimed_solver.into())?,
+            recorder: checked_program_path(ExecutableRole::EvidenceRecorder, recorder.into())?,
         })
     }
 
+    pub fn claimed_verifier(&self) -> &str {
+        &self.claimed_verifier
+    }
+
+    pub fn claimed_solver(&self) -> &str {
+        &self.claimed_solver
+    }
+
+    pub fn recorder(&self) -> &str {
+        &self.recorder
+    }
+
+    #[deprecated(note = "use claimed_verifier(); this path is not executed by this API")]
     pub fn verus(&self) -> &str {
-        &self.verus
+        self.claimed_verifier()
     }
 
+    #[deprecated(note = "use claimed_solver(); this path is not executed by this API")]
     pub fn solver(&self) -> &str {
-        &self.solver
+        self.claimed_solver()
     }
 
+    #[deprecated(note = "use recorder(); only the recorder is executed by this API")]
     pub fn evidence_recorder(&self) -> &str {
-        &self.evidence_recorder
+        self.recorder()
     }
 }
 
+/// Compatibility name for [`MeasuredRecorderInputsV1`].
+///
+/// The claimed verifier and solver paths are not executed by this API.
+#[deprecated(
+    note = "use MeasuredRecorderInputsV1; verifier and solver images are not executed here"
+)]
+pub type AuthenticatedExecutionProgramsV1 = MeasuredRecorderInputsV1;
+
 /// Identity and size of bytes copied into an immutable executable snapshot.
+///
+/// A measurement says nothing about whether the snapshot was executed. Check
+/// [`ExecutableRole`] and the producing API's execution semantics separately.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExecutableMeasurementV1 {
     role: ExecutableRole,
@@ -126,27 +166,31 @@ impl BoundExecutionPayloadV1 {
     }
 }
 
-/// Descriptive evidence from one measured Verus execution.
+/// Authenticated output from one measured recorder execution.
 ///
 /// The type has no public constructor. Its transcript commits to the immutable
-/// executable snapshots, policy, request, fresh challenge, stdout, stderr, and
-/// strict result envelope. It grants no module-load or kernel-launch authority.
+/// recorder snapshot, claimed verifier and solver snapshots, caller-selected
+/// policy, request, fresh challenge, recorder stdout/stderr, and strict result
+/// envelope. Only the recorder is launched. This type does not establish that
+/// the claimed verifier or solver ran, and `ProofOutcome::Proved` means only
+/// that the recorder reported that outcome. It grants no proof, module-load,
+/// or kernel-launch authority.
 ///
 /// ```compile_fail
-/// # fn cannot_launch(evidence: fe2o3_verifier::AuthenticatedVerusExecutionEvidenceV1) {
+/// # fn cannot_launch(evidence: fe2o3_verifier::AuthenticatedRecorderOutputV1) {
 /// evidence.launch();
 /// # }
 /// ```
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AuthenticatedVerusExecutionEvidenceV1 {
+pub struct AuthenticatedRecorderOutputV1 {
     invocation_plan: InvocationPlan,
     challenge: Digest,
     canonical_invocation_digest: Digest,
     policy_digest: Digest,
     request_digest: Digest,
-    verus: ExecutableMeasurementV1,
-    solver: ExecutableMeasurementV1,
-    evidence_recorder: ExecutableMeasurementV1,
+    claimed_verifier: ExecutableMeasurementV1,
+    claimed_solver: ExecutableMeasurementV1,
+    recorder: ExecutableMeasurementV1,
     stdout: BoundExecutionPayloadV1,
     stderr: BoundExecutionPayloadV1,
     result_bytes: BoundExecutionPayloadV1,
@@ -154,7 +198,7 @@ pub struct AuthenticatedVerusExecutionEvidenceV1 {
     transcript_digest: Digest,
 }
 
-impl AuthenticatedVerusExecutionEvidenceV1 {
+impl AuthenticatedRecorderOutputV1 {
     pub const fn invocation_plan(&self) -> &InvocationPlan {
         &self.invocation_plan
     }
@@ -175,16 +219,31 @@ impl AuthenticatedVerusExecutionEvidenceV1 {
         self.request_digest
     }
 
+    pub const fn claimed_verifier(&self) -> &ExecutableMeasurementV1 {
+        &self.claimed_verifier
+    }
+
+    pub const fn claimed_solver(&self) -> &ExecutableMeasurementV1 {
+        &self.claimed_solver
+    }
+
+    pub const fn recorder(&self) -> &ExecutableMeasurementV1 {
+        &self.recorder
+    }
+
+    #[deprecated(note = "use claimed_verifier(); this image was not executed by this API")]
     pub const fn verus(&self) -> &ExecutableMeasurementV1 {
-        &self.verus
+        self.claimed_verifier()
     }
 
+    #[deprecated(note = "use claimed_solver(); this image was not executed by this API")]
     pub const fn solver(&self) -> &ExecutableMeasurementV1 {
-        &self.solver
+        self.claimed_solver()
     }
 
+    #[deprecated(note = "use recorder(); this is the image executed by this API")]
     pub const fn evidence_recorder(&self) -> &ExecutableMeasurementV1 {
-        &self.evidence_recorder
+        self.recorder()
     }
 
     pub const fn stdout(&self) -> &BoundExecutionPayloadV1 {
@@ -199,8 +258,25 @@ impl AuthenticatedVerusExecutionEvidenceV1 {
         &self.result_bytes
     }
 
-    pub const fn result(&self) -> &ProofResultV1 {
+    pub const fn recorder_report(&self) -> &ProofResultV1 {
         &self.result
+    }
+
+    #[deprecated(note = "use recorder_report(); the result is a recorder claim")]
+    pub const fn result(&self) -> &ProofResultV1 {
+        self.recorder_report()
+    }
+
+    pub const fn authenticates_claimed_verifier_execution(&self) -> bool {
+        false
+    }
+
+    pub const fn authenticates_claimed_solver_execution(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_proof_authority(&self) -> bool {
+        false
     }
 
     pub const fn transcript_digest(&self) -> Digest {
@@ -208,22 +284,23 @@ impl AuthenticatedVerusExecutionEvidenceV1 {
     }
 
     /// Canonical descriptive transcript. Parsing these bytes cannot recreate
-    /// this authenticated type; only a measured execution can construct it.
+    /// this authenticated type; only the measured recorder path can construct
+    /// it. The transcript does not show that the claimed verifier or solver ran.
     pub fn to_canonical_bytes(&self) -> Vec<u8> {
         canonical_transcript_bytes(
             self.challenge,
             self.canonical_invocation_digest,
             self.policy_digest,
             self.request_digest,
-            [&self.verus, &self.solver, &self.evidence_recorder],
+            [&self.claimed_verifier, &self.claimed_solver, &self.recorder],
             [&self.stdout, &self.stderr, &self.result_bytes],
         )
     }
 
-    pub(crate) fn revalidate_authenticated_result(
+    pub(crate) fn revalidate_recorder_report(
         &self,
     ) -> Result<ProofResultV1, AuthenticatedExecutionError> {
-        parse_authenticated_result(
+        parse_authenticated_recorder_report(
             self.result_bytes.bytes(),
             &self.invocation_plan,
             AuthenticatedResultBindings {
@@ -231,31 +308,39 @@ impl AuthenticatedVerusExecutionEvidenceV1 {
                 invocation_digest: self.canonical_invocation_digest,
                 policy_digest: self.policy_digest,
                 request_digest: self.request_digest,
-                verus_digest: self.verus.identity.executable_digest(),
-                solver_digest: self.solver.identity.executable_digest(),
-                recorder_digest: self.evidence_recorder.identity.executable_digest(),
+                verus_digest: self.claimed_verifier.identity.executable_digest(),
+                solver_digest: self.claimed_solver.identity.executable_digest(),
+                recorder_digest: self.recorder.identity.executable_digest(),
             },
         )
     }
 }
 
-/// Measures, snapshots, and executes the policy-approved verifier toolchain.
+/// Compatibility name for [`AuthenticatedRecorderOutputV1`].
 ///
-/// Caller-supplied tool identities are not accepted. Each program is copied
-/// into a sealed anonymous file while SHA-256 is computed, and that same sealed
-/// file is used for execution. The request is sealed before launch and the
-/// result file is sealed immediately after the recorder exits.
-pub fn execute_authenticated_verus(
+/// Despite the legacy name, the value authenticates only recorder execution.
+#[deprecated(note = "use AuthenticatedRecorderOutputV1; this API executes only the recorder")]
+pub type AuthenticatedVerusExecutionEvidenceV1 = AuthenticatedRecorderOutputV1;
+
+/// Measures three images and executes only the evidence recorder.
+///
+/// Each image is copied into a sealed anonymous file while SHA-256 is computed
+/// and compared with the caller-selected policy. The recorder snapshot is
+/// launched with the sealed claimed-verifier and claimed-solver paths as
+/// arguments. This process does not observe the recorder launching either
+/// image and therefore does not authenticate that Verus, a solver, or a proof
+/// toolchain ran. The returned result is an authenticated recorder report.
+pub fn execute_authenticated_recorder(
     request: ProofRequestV1,
-    programs: AuthenticatedExecutionProgramsV1,
+    inputs: MeasuredRecorderInputsV1,
     timeout_seconds: u32,
     policy: &VerifierPolicy,
     limits: ExecutionLimits,
-) -> Result<AuthenticatedVerusExecutionEvidenceV1, AuthenticatedExecutionError> {
+) -> Result<AuthenticatedRecorderOutputV1, AuthenticatedExecutionError> {
     let challenge = random_challenge()?;
-    execute_authenticated_verus_with_challenge(
+    execute_authenticated_recorder_with_challenge(
         request,
-        programs,
+        inputs,
         timeout_seconds,
         policy,
         limits,
@@ -263,31 +348,46 @@ pub fn execute_authenticated_verus(
     )
 }
 
-fn execute_authenticated_verus_with_challenge(
+/// Compatibility wrapper for [`execute_authenticated_recorder`].
+///
+/// Despite the legacy name, this function launches only the recorder and does
+/// not authenticate that Verus or a solver ran.
+#[deprecated(note = "use execute_authenticated_recorder; this function executes only the recorder")]
+pub fn execute_authenticated_verus(
     request: ProofRequestV1,
-    programs: AuthenticatedExecutionProgramsV1,
+    inputs: MeasuredRecorderInputsV1,
+    timeout_seconds: u32,
+    policy: &VerifierPolicy,
+    limits: ExecutionLimits,
+) -> Result<AuthenticatedRecorderOutputV1, AuthenticatedExecutionError> {
+    execute_authenticated_recorder(request, inputs, timeout_seconds, policy, limits)
+}
+
+fn execute_authenticated_recorder_with_challenge(
+    request: ProofRequestV1,
+    inputs: MeasuredRecorderInputsV1,
     timeout_seconds: u32,
     policy: &VerifierPolicy,
     limits: ExecutionLimits,
     challenge: Digest,
-) -> Result<AuthenticatedVerusExecutionEvidenceV1, AuthenticatedExecutionError> {
+) -> Result<AuthenticatedRecorderOutputV1, AuthenticatedExecutionError> {
     if challenge.as_bytes().iter().all(|byte| *byte == 0) {
         return Err(AuthenticatedExecutionError::InvalidChallenge);
     }
 
-    let verus = SealedExecutable::measure(
+    let claimed_verifier = SealedExecutable::measure(
         ExecutableRole::Verus,
-        programs.verus(),
+        inputs.claimed_verifier(),
         policy.expected_tools().verifier(),
     )?;
-    let solver = SealedExecutable::measure(
+    let claimed_solver = SealedExecutable::measure(
         ExecutableRole::Solver,
-        programs.solver(),
+        inputs.claimed_solver(),
         policy.expected_tools().solver(),
     )?;
     let recorder = SealedExecutable::measure(
         ExecutableRole::EvidenceRecorder,
-        programs.evidence_recorder(),
+        inputs.recorder(),
         policy.expected_tools().evidence_recorder(),
     )?;
 
@@ -295,9 +395,9 @@ fn execute_authenticated_verus_with_challenge(
         request,
         policy.expected_tools().clone(),
         InvocationPaths::new(
-            programs.verus,
-            programs.solver,
-            programs.evidence_recorder,
+            inputs.claimed_verifier,
+            inputs.claimed_solver,
+            inputs.recorder,
             CANONICAL_REQUEST_PATH,
             CANONICAL_RESULT_PATH,
         )?,
@@ -315,8 +415,8 @@ fn execute_authenticated_verus_with_challenge(
         invocation_digest,
         policy_digest,
         request_digest,
-        verus_digest: verus.measurement.identity.executable_digest(),
-        solver_digest: solver.measurement.identity.executable_digest(),
+        verus_digest: claimed_verifier.measurement.identity.executable_digest(),
+        solver_digest: claimed_solver.measurement.identity.executable_digest(),
         recorder_digest: recorder.measurement.identity.executable_digest(),
     };
     let mut command = Command::new(recorder.proc_path());
@@ -327,9 +427,9 @@ fn execute_authenticated_verus_with_challenge(
             "--result",
             &result_file.proc_path(),
             "--verifier",
-            &verus.proc_path(),
+            &claimed_verifier.proc_path(),
             "--solver",
-            &solver.proc_path(),
+            &claimed_solver.proc_path(),
             "--timeout-seconds",
             &timeout_seconds.to_string(),
             "--auth-challenge",
@@ -359,7 +459,7 @@ fn execute_authenticated_verus_with_challenge(
     let output = supervise_child(child, timeout_seconds, limits)
         .map_err(AuthenticatedExecutionError::Execution)?;
     let result_bytes = result_file.seal_and_read(MAX_RESULT_BYTES)?;
-    let result = parse_authenticated_result(&result_bytes, &plan, bindings)?;
+    let result = parse_authenticated_recorder_report(&result_bytes, &plan, bindings)?;
 
     Ok(build_evidence(EvidenceParts {
         invocation_plan: plan,
@@ -367,9 +467,9 @@ fn execute_authenticated_verus_with_challenge(
         canonical_invocation_digest: invocation_digest,
         policy_digest,
         request_digest,
-        verus: verus.measurement,
-        solver: solver.measurement,
-        evidence_recorder: recorder.measurement,
+        claimed_verifier: claimed_verifier.measurement,
+        claimed_solver: claimed_solver.measurement,
+        recorder: recorder.measurement,
         output,
         result_bytes,
         result,
@@ -382,15 +482,15 @@ struct EvidenceParts {
     canonical_invocation_digest: Digest,
     policy_digest: Digest,
     request_digest: Digest,
-    verus: ExecutableMeasurementV1,
-    solver: ExecutableMeasurementV1,
-    evidence_recorder: ExecutableMeasurementV1,
+    claimed_verifier: ExecutableMeasurementV1,
+    claimed_solver: ExecutableMeasurementV1,
+    recorder: ExecutableMeasurementV1,
     output: ProcessOutput,
     result_bytes: Vec<u8>,
     result: ProofResultV1,
 }
 
-fn build_evidence(parts: EvidenceParts) -> AuthenticatedVerusExecutionEvidenceV1 {
+fn build_evidence(parts: EvidenceParts) -> AuthenticatedRecorderOutputV1 {
     let stdout = BoundExecutionPayloadV1::new(parts.output.stdout().to_vec());
     let stderr = BoundExecutionPayloadV1::new(parts.output.stderr().to_vec());
     let result_bytes = BoundExecutionPayloadV1::new(parts.result_bytes);
@@ -399,18 +499,22 @@ fn build_evidence(parts: EvidenceParts) -> AuthenticatedVerusExecutionEvidenceV1
         parts.canonical_invocation_digest,
         parts.policy_digest,
         parts.request_digest,
-        [&parts.verus, &parts.solver, &parts.evidence_recorder],
+        [
+            &parts.claimed_verifier,
+            &parts.claimed_solver,
+            &parts.recorder,
+        ],
         [&stdout, &stderr, &result_bytes],
     );
-    AuthenticatedVerusExecutionEvidenceV1 {
+    AuthenticatedRecorderOutputV1 {
         invocation_plan: parts.invocation_plan,
         challenge: parts.challenge,
         canonical_invocation_digest: parts.canonical_invocation_digest,
         policy_digest: parts.policy_digest,
         request_digest: parts.request_digest,
-        verus: parts.verus,
-        solver: parts.solver,
-        evidence_recorder: parts.evidence_recorder,
+        claimed_verifier: parts.claimed_verifier,
+        claimed_solver: parts.claimed_solver,
+        recorder: parts.recorder,
         stdout,
         stderr,
         result_bytes,
@@ -464,7 +568,7 @@ struct AuthenticatedResultBindings {
     recorder_digest: Digest,
 }
 
-fn parse_authenticated_result(
+fn parse_authenticated_recorder_report(
     bytes: &[u8],
     plan: &InvocationPlan,
     expected: AuthenticatedResultBindings,
@@ -791,7 +895,7 @@ fn create_memfd(name: &str) -> io::Result<File> {
 fn create_memfd(_name: &str) -> io::Result<File> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
-        "authenticated execution requires Linux memfd sealing",
+        "authenticated recorder execution requires Linux memfd sealing",
     ))
 }
 
@@ -812,7 +916,7 @@ fn seal(file: &File) -> io::Result<()> {
 fn seal(_file: &File) -> io::Result<()> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
-        "authenticated execution requires Linux memfd sealing",
+        "authenticated recorder execution requires Linux memfd sealing",
     ))
 }
 
@@ -895,11 +999,15 @@ pub enum AuthenticatedBindingField {
     Invocation,
     Policy,
     Request,
+    /// Legacy wire field containing the claimed verifier image digest.
     Verus,
+    /// Legacy wire field containing the claimed solver image digest.
     Solver,
+    /// Wire field containing the recorder image digest that was executed.
     EvidenceRecorder,
 }
 
+/// Failure while parsing or binding an authenticated recorder result envelope.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum AuthenticatedResultError {
@@ -914,6 +1022,10 @@ pub enum AuthenticatedResultError {
     ProofResult(ResultError),
 }
 
+/// Failure while measuring inputs or executing the sealed recorder snapshot.
+///
+/// Verifier and solver roles in these errors concern measurements only; this
+/// execution path does not launch either image.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum AuthenticatedExecutionError {
@@ -950,7 +1062,10 @@ pub enum AuthenticatedExecutionError {
 
 impl fmt::Display for AuthenticatedExecutionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "authenticated Verus execution failed: {self:?}")
+        write!(
+            formatter,
+            "authenticated recorder execution failed: {self:?}"
+        )
     }
 }
 
@@ -1110,12 +1225,12 @@ mod tests {
         let expected = bindings(40);
         let payload = proof_payload();
         let valid = auth_envelope(expected, &payload);
-        assert!(parse_authenticated_result(&valid, &plan, expected).is_ok());
+        assert!(parse_authenticated_recorder_report(&valid, &plan, expected).is_ok());
 
         let mut malformed = valid.clone();
         malformed[0] = b'X';
         assert_eq!(
-            parse_authenticated_result(&malformed, &plan, expected),
+            parse_authenticated_recorder_report(&malformed, &plan, expected),
             Err(AuthenticatedExecutionError::Result(
                 AuthenticatedResultError::MalformedEnvelope
             ))
@@ -1152,7 +1267,7 @@ mod tests {
             }
             let substituted = auth_envelope(substituted_bindings, &payload);
             assert_eq!(
-                parse_authenticated_result(&substituted, &plan, expected),
+                parse_authenticated_recorder_report(&substituted, &plan, expected),
                 Err(AuthenticatedExecutionError::Result(
                     AuthenticatedResultError::BindingMismatch { field }
                 ))
@@ -1165,7 +1280,7 @@ mod tests {
             1,
         );
         assert_eq!(
-            parse_authenticated_result(uppercase.as_bytes(), &plan, expected),
+            parse_authenticated_recorder_report(uppercase.as_bytes(), &plan, expected),
             Err(AuthenticatedExecutionError::Result(
                 AuthenticatedResultError::MalformedDigest {
                     field: AuthenticatedBindingField::Challenge
@@ -1182,7 +1297,7 @@ mod tests {
         replay_target.challenge = digest(90);
         let replay = auth_envelope(first, &proof_payload());
         assert_eq!(
-            parse_authenticated_result(&replay, &plan, replay_target),
+            parse_authenticated_recorder_report(&replay, &plan, replay_target),
             Err(AuthenticatedExecutionError::Result(
                 AuthenticatedResultError::BindingMismatch {
                     field: AuthenticatedBindingField::Challenge
@@ -1202,14 +1317,14 @@ mod tests {
             &format!("result-bytes=0{}", payload.len()),
         );
         assert_eq!(
-            parse_authenticated_result(leading_zero.as_bytes(), &plan, expected),
+            parse_authenticated_recorder_report(leading_zero.as_bytes(), &plan, expected),
             Err(AuthenticatedExecutionError::Result(
                 AuthenticatedResultError::MalformedLength
             ))
         );
         let reordered = valid.replacen("challenge=", "policy=", 1);
         assert_eq!(
-            parse_authenticated_result(reordered.as_bytes(), &plan, expected),
+            parse_authenticated_recorder_report(reordered.as_bytes(), &plan, expected),
             Err(AuthenticatedExecutionError::Result(
                 AuthenticatedResultError::UnexpectedField {
                     expected: "challenge"
@@ -1223,11 +1338,11 @@ mod tests {
         let plan = plan();
         let expected = bindings(70);
         let valid = auth_envelope(expected, &proof_payload());
-        assert!(parse_authenticated_result(&valid, &plan, expected).is_ok());
+        assert!(parse_authenticated_recorder_report(&valid, &plan, expected).is_ok());
 
         for prefix_len in 0..valid.len() {
             assert!(
-                parse_authenticated_result(&valid[..prefix_len], &plan, expected).is_err(),
+                parse_authenticated_recorder_report(&valid[..prefix_len], &plan, expected).is_err(),
                 "truncated prefix of {prefix_len} bytes was accepted"
             );
         }
@@ -1236,7 +1351,7 @@ mod tests {
             let mut changed = valid.clone();
             changed.push(trailing);
             assert!(
-                parse_authenticated_result(&changed, &plan, expected).is_err(),
+                parse_authenticated_recorder_report(&changed, &plan, expected).is_err(),
                 "trailing byte {trailing:#04x} was accepted"
             );
         }
