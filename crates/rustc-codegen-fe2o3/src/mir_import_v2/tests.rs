@@ -317,6 +317,36 @@ fn compile_observed(crate_name: &str, metadata: &str) -> CapturedBodyV2 {
     callbacks.body.expect("single capture callback did not run")
 }
 
+struct LimitedCaptureCallbacks {
+    limits: CaptureLimitsV2,
+    error: Option<String>,
+}
+
+impl Callbacks for LimitedCaptureCallbacks {
+    fn after_analysis<'tcx>(&mut self, _compiler: &Compiler, tcx: TyCtxt<'tcx>) -> Compilation {
+        let instance = Instance::mono(tcx, local_function(tcx, "observed"));
+        self.error = Some(
+            capture_instance_body_v2(tcx, instance, self.limits)
+                .expect_err("adversarial type must exceed its configured preflight bound")
+                .to_string(),
+        );
+        Compilation::Stop
+    }
+}
+
+fn compile_capture_error(source: &str, limits: CaptureLimitsV2) -> String {
+    let fixture = CompilerFixture::create(source);
+    let args = compiler_args(&fixture, "fe2o3_mir_v2_type_bound", "type-bound");
+    let mut callbacks = LimitedCaptureCallbacks {
+        limits,
+        error: None,
+    };
+    run_compiler_serialized(&args, &mut callbacks);
+    callbacks
+        .error
+        .expect("limited capture callback did not run")
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct CanonicalSpanKey {
     authority: SourceAuthorityV2,
@@ -724,6 +754,43 @@ fn compiler_capture_enforces_bounds_before_normalized_validation() {
         results.unsupported_error.contains("unsupported terminator"),
         "{}",
         results.unsupported_error
+    );
+}
+
+#[test]
+fn compiler_capture_iteratively_rejects_deep_and_wide_types_before_hashing() {
+    let mut nested = "u8".to_owned();
+    for _ in 0..96 {
+        nested = format!("({nested},)");
+    }
+    let deep_source = format!(
+        "#![recursion_limit = \"512\"]\n#[inline(never)]\nfn observed(value: {nested}) -> {nested} {{ value }}\n"
+    );
+    let depth_error = compile_capture_error(
+        &deep_source,
+        CaptureLimitsV2 {
+            max_type_depth: 16,
+            ..CaptureLimitsV2::default()
+        },
+    );
+    assert!(
+        depth_error.contains("type depth bound exceeded"),
+        "{depth_error}"
+    );
+
+    let fields = std::iter::repeat_n("u8", 64).collect::<Vec<_>>().join(", ");
+    let wide_source =
+        format!("#[inline(never)]\nfn observed(value: ({fields})) -> ({fields}) {{ value }}\n");
+    let arity_error = compile_capture_error(
+        &wide_source,
+        CaptureLimitsV2 {
+            max_type_arity: 8,
+            ..CaptureLimitsV2::default()
+        },
+    );
+    assert!(
+        arity_error.contains("type arity bound exceeded"),
+        "{arity_error}"
     );
 }
 
