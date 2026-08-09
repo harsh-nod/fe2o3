@@ -1814,6 +1814,141 @@ fn gfx942_target_identity_and_pointer_map_are_exact() {
     );
 }
 
+fn array_storage_module(length: u64, address_space: MirAddressSpace) -> MirExecutableModule {
+    let u8_ty = ty(
+        MirTypeKind::Scalar(MirScalarType::Int {
+            signed: false,
+            bits: 8,
+        }),
+        1,
+        1,
+    );
+    let array_ty = ty(
+        MirTypeKind::Array {
+            element: Box::new(u8_ty.clone()),
+            length,
+        },
+        length,
+        1,
+    );
+    let mut types = vec![u8_ty, array_ty.clone()];
+    types.sort_by_key(|item| item.canonical_text().unwrap());
+    let array_id = MirTypeId(types.iter().position(|item| item == &array_ty).unwrap() as u32);
+    let mut return_local = local(array_id, MirLocalKind::Return, true);
+    return_local.storage_address_space = address_space;
+    let mut argument = local(array_id, MirLocalKind::Argument, false);
+    argument.storage_address_space = address_space;
+    MirExecutableModule {
+        version: MirExecutableVersion::V1,
+        target: MirExecutableTarget::gfx942(),
+        types,
+        callables: vec![],
+        functions: vec![MirFunction {
+            identity: "fixture::array_offset_range".into(),
+            span: None,
+            body: MirBody {
+                form: MirBodyForm::Places,
+                locals: vec![return_local, argument],
+                blocks: vec![MirBasicBlock {
+                    parameters: vec![],
+                    statements: vec![MirStatement {
+                        kind: MirStatementKind::Assign {
+                            place: MirPlace::local(MirLocalId(0), array_id),
+                            value: MirRvalue::Use(MirOperand::Move(MirPlace::local(
+                                MirLocalId(1),
+                                array_id,
+                            ))),
+                        },
+                        span: None,
+                    }],
+                    terminator: terminator(MirTerminatorKind::Return),
+                }],
+                entry: MirBlockId(0),
+            },
+        }],
+    }
+}
+
+#[test]
+fn aggregate_layouts_fit_the_relevant_signed_pointer_offset_range() {
+    let local_limit_plus_one = i32::MAX as u64 + 1;
+    array_storage_module(local_limit_plus_one, MirAddressSpace(0))
+        .validate()
+        .unwrap();
+    assert!(
+        array_storage_module(local_limit_plus_one, MirAddressSpace(3))
+            .validate()
+            .unwrap_err()
+            .reason()
+            .contains("signed pointer-offset range for address space 3")
+    );
+
+    let pointee = ty(
+        MirTypeKind::Array {
+            element: Box::new(ty(
+                MirTypeKind::Scalar(MirScalarType::Int {
+                    signed: false,
+                    bits: 8,
+                }),
+                1,
+                1,
+            )),
+            length: local_limit_plus_one,
+        },
+        local_limit_plus_one,
+        1,
+    );
+    let local_pointer = ty(
+        MirTypeKind::RawPointer {
+            pointee: Box::new(pointee),
+            mutability: MirMutability::Immutable,
+            address_space: MirAddressSpace(3),
+        },
+        4,
+        4,
+    );
+    assert!(
+        zero_sized_constant_module(local_pointer)
+            .validate()
+            .unwrap_err()
+            .reason()
+            .contains("signed pointer-offset range for address space 3")
+    );
+
+    let default_limit_plus_one = i64::MAX as u64 + 1;
+    assert!(
+        array_storage_module(default_limit_plus_one, MirAddressSpace(0))
+            .validate()
+            .unwrap_err()
+            .reason()
+            .contains("signed pointer-offset range for address space 0")
+    );
+
+    let u64_ty = ty(
+        MirTypeKind::Scalar(MirScalarType::Int {
+            signed: false,
+            bits: 64,
+        }),
+        8,
+        8,
+    );
+    let overflowing_array = ty(
+        MirTypeKind::Array {
+            element: Box::new(u64_ty),
+            length: u64::MAX,
+        },
+        0,
+        8,
+    );
+    assert!(
+        zero_sized_constant_module(overflowing_array)
+            .validate()
+            .unwrap_err()
+            .reason()
+            .contains("overflows u64")
+    );
+}
+
 #[derive(Clone, Copy)]
 struct IntrinsicTypes {
     unit: MirTypeId,
