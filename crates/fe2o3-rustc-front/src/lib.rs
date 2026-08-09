@@ -7,6 +7,7 @@ mod encode;
 mod error;
 mod kernel_contract_v1;
 mod model;
+mod monomorphization_dead_v1;
 
 pub use control_flow_v1::{
     CONTROL_FLOW_CONTRACT_MAGIC_V1, CONTROL_FLOW_CONTRACT_VERSION_V1,
@@ -44,4 +45,12 @@ pub use model::{
     MAX_PARAMETERS_PER_FUNCTION_V1, MAX_SUCCESSORS_PER_BLOCK_V1, MAX_TOTAL_BLOCKS_V1,
     MAX_UNIT_BYTES_V1, MonomorphizedFunctionV1, SourceFileIdentityV1, SourceLocationV1,
     StableTypeIdentityV1, TypedSignatureV1,
+};
+pub use monomorphization_dead_v1::{
+    CONSTANT_FOLD_POLICY_VERSION_V1, ConstantFoldBinaryOpV1, ConstantFoldFailureV1,
+    ConstantFoldInputV1, ConstantSwitchCaseV1, ConstantSwitchV1, DeadBranchContextV1,
+    DeadBranchDecisionV1, FixedWidthIntegerV1, MAX_DEAD_BRANCH_DECISIONS_V1,
+    MAX_DEAD_SUCCESSORS_PER_BRANCH_V1, MonomorphizationDeadEvidenceErrorV1,
+    MonomorphizationDeadEvidenceIdentityV1, MonomorphizationDeadEvidenceV1, fold_binary_v1,
+    prove_constant_switch_v1,
 };
