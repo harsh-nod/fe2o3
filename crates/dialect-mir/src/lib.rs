@@ -1,6 +1,21 @@
+mod executable;
 mod semantic_constant;
 mod semantic_memory;
 mod semantic_type;
+
+pub use executable::{
+    EXECUTABLE_MIR_VERSION, MAX_EXECUTABLE_BLOCK_PARAMETERS, MAX_EXECUTABLE_BLOCKS,
+    MAX_EXECUTABLE_CALL_ARGUMENTS, MAX_EXECUTABLE_EDGE_ARGUMENTS, MAX_EXECUTABLE_FUNCTIONS,
+    MAX_EXECUTABLE_IDENTITY_BYTES, MAX_EXECUTABLE_LOCALS, MAX_EXECUTABLE_PROJECTIONS,
+    MAX_EXECUTABLE_SOURCE_FILE_BYTES, MAX_EXECUTABLE_STATEMENTS,
+    MAX_EXECUTABLE_STATEMENTS_PER_BLOCK, MAX_EXECUTABLE_SWITCH_TARGETS, MAX_EXECUTABLE_TYPES,
+    MirAggregateKind, MirAssertMessage, MirBasicBlock, MirBinaryOp, MirBlockId, MirBlockParameter,
+    MirBody, MirBodyForm, MirCall, MirCallee, MirCastKind, MirConstant, MirConstantValue, MirEdge,
+    MirExecutableModule, MirExecutableValidationError, MirExecutableVersion, MirFunction,
+    MirLocalDecl, MirLocalId, MirLocalKind, MirOperand, MirPlace, MirProjection, MirRvalue,
+    MirSourceSpan, MirStatement, MirStatementKind, MirTerminator, MirTerminatorKind, MirTypeId,
+    MirUnaryOp, MirUnwindAction, MirValueId,
+};
 
 pub use semantic_constant::{
     MAX_CONSTANT_ALLOCATION_BYTES, MAX_CONSTANT_ALLOCATIONS, MAX_CONSTANT_GRAPH_DEPTH,
