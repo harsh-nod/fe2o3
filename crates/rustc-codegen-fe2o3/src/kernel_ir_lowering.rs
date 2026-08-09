@@ -973,7 +973,20 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
             MirRvalueKind::Binary(MirBinaryOp::Mul) => Err(diagnostic(
                 TranslationDiagnosticCode::UnsupportedRvalue,
                 location,
-                "f32 multiply requires an exact General V3 alpha/zeta kernel context",
+                format!(
+                    "f32 multiply requires an exact General V3 alpha/zeta kernel context and supported assignment; found export {:?}, kind {:?}, profile {:?}, argument shapes {:?}, destination {:?}, operands {:?}",
+                    self.function.export_name,
+                    self.function.kind,
+                    self.function.typed_profile,
+                    self.function
+                        .locals
+                        .iter()
+                        .filter(|local| local.role == crate::mir_import::MirLocalRole::Arg)
+                        .map(|local| (local.index, &local.ty.shape))
+                        .collect::<Vec<_>>(),
+                    destination,
+                    statement.operands,
+                ),
             )),
             unsupported => Err(diagnostic(
                 TranslationDiagnosticCode::UnsupportedRvalue,
