@@ -824,6 +824,7 @@ dependencies = [
  "fe2o3-rustc-front",
  "reserved-fe2o3-symbols",
  "serde",
+ "serde_json",
  "sha2",
 ]
 

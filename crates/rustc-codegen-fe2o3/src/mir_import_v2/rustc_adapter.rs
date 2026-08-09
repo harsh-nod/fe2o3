@@ -22,8 +22,10 @@ use rustc_middle::ty::{
     TyKind, TypingEnv, UintTy,
 };
 use rustc_span::Span;
+use std::convert::Infallible;
 use std::error::Error;
 use std::fmt;
+use std::marker::PhantomData;
 
 macro_rules! stable_hash {
     ($tcx:expr, $value:expr) => {{
@@ -60,18 +62,28 @@ mod sealed {
     pub trait Sealed {}
 }
 
-pub(crate) trait RustcAuthenticCaptureV2: sealed::Sealed {
+pub(crate) trait RustcAuthenticCaptureV2<'tcx>: sealed::Sealed {
     fn data(&self) -> &CapturedBodyV2;
 }
 
 #[derive(Debug)]
-pub(crate) struct CompilerCapturedBodyV2 {
+pub(crate) struct CompilerCapturedBodyV2<'tcx> {
     data: CapturedBodyV2,
+    instance: Instance<'tcx>,
+    invariant_session: PhantomData<fn(&'tcx ()) -> &'tcx ()>,
 }
 
-impl CompilerCapturedBodyV2 {
-    fn new(data: CapturedBodyV2) -> Self {
-        Self { data }
+impl<'tcx> CompilerCapturedBodyV2<'tcx> {
+    fn new(_tcx: TyCtxt<'tcx>, instance: Instance<'tcx>, data: CapturedBodyV2) -> Self {
+        Self {
+            data,
+            instance,
+            invariant_session: PhantomData,
+        }
+    }
+
+    fn instance(&self) -> Instance<'tcx> {
+        self.instance
     }
 
     pub(crate) fn is_authorized_for_lowering(&self) -> bool {
@@ -79,40 +91,52 @@ impl CompilerCapturedBodyV2 {
     }
 }
 
-impl sealed::Sealed for CompilerCapturedBodyV2 {}
+impl sealed::Sealed for CompilerCapturedBodyV2<'_> {}
 
-impl RustcAuthenticCaptureV2 for CompilerCapturedBodyV2 {
+impl<'tcx> RustcAuthenticCaptureV2<'tcx> for CompilerCapturedBodyV2<'tcx> {
     fn data(&self) -> &CapturedBodyV2 {
         &self.data
     }
 }
 
 #[derive(Debug)]
-pub(crate) struct ValidatedRustcCaptureV2 {
-    recaptured: CompilerCapturedBodyV2,
+pub(crate) struct ValidatedRustcCaptureV2<'tcx> {
+    recaptured: CompilerCapturedBodyV2<'tcx>,
+    invariant_session: PhantomData<fn(&'tcx ()) -> &'tcx ()>,
 }
 
-impl ValidatedRustcCaptureV2 {
-    fn new(recaptured: CompilerCapturedBodyV2) -> Self {
-        Self { recaptured }
+impl<'tcx> ValidatedRustcCaptureV2<'tcx> {
+    fn new(
+        _tcx: TyCtxt<'tcx>,
+        _instance: Instance<'tcx>,
+        recaptured: CompilerCapturedBodyV2<'tcx>,
+    ) -> Self {
+        Self {
+            recaptured,
+            invariant_session: PhantomData,
+        }
     }
 
     pub(crate) fn is_authorized_for_lowering(&self) -> bool {
         false
     }
+
+    fn instance(&self) -> Instance<'tcx> {
+        self.recaptured.instance()
+    }
 }
 
-impl sealed::Sealed for ValidatedRustcCaptureV2 {}
+impl sealed::Sealed for ValidatedRustcCaptureV2<'_> {}
 
-impl RustcAuthenticCaptureV2 for ValidatedRustcCaptureV2 {
+impl<'tcx> RustcAuthenticCaptureV2<'tcx> for ValidatedRustcCaptureV2<'tcx> {
     fn data(&self) -> &CapturedBodyV2 {
         self.recaptured.data()
     }
 }
 
-pub(crate) fn rustc_authentic_capture_data_v2(
-    capture: &impl RustcAuthenticCaptureV2,
-) -> &CapturedBodyV2 {
+pub(crate) fn rustc_authentic_capture_data_v2<'capture, 'tcx>(
+    capture: &'capture impl RustcAuthenticCaptureV2<'tcx>,
+) -> &'capture CapturedBodyV2 {
     capture.data()
 }
 
@@ -120,10 +144,10 @@ pub(crate) fn capture_instance_body_v2<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
     limits: CaptureLimitsV2,
-) -> Result<CompilerCapturedBodyV2, CaptureErrorV2> {
+) -> Result<CompilerCapturedBodyV2<'tcx>, CaptureErrorV2> {
     let captured = capture_instance_data_v2(tcx, instance, limits)?;
     captured.validate_untrusted_shape(limits)?;
-    Ok(CompilerCapturedBodyV2::new(captured))
+    Ok(CompilerCapturedBodyV2::new(tcx, instance, captured))
 }
 
 #[cfg(test)]
@@ -165,15 +189,32 @@ pub(crate) fn recapture_against_rustc_v2<'tcx>(
     instance: Instance<'tcx>,
     limits: CaptureLimitsV2,
     untrusted_data: &CapturedBodyV2,
-) -> Result<ValidatedRustcCaptureV2, CaptureErrorV2> {
-    untrusted_data.validate_untrusted_shape(limits)?;
+) -> Result<ValidatedRustcCaptureV2<'tcx>, CaptureErrorV2> {
+    let untrusted_semantic = canonical_semantic_bytes_v2(untrusted_data, limits)?;
     let recaptured = capture_instance_body_v2(tcx, instance, limits)?;
-    if recaptured.data() != untrusted_data {
+    let recaptured_semantic = canonical_semantic_bytes_v2(recaptured.data(), limits)?;
+    if recaptured_semantic != untrusted_semantic {
         return Err(CaptureErrorV2::new(
             "untrusted MIR V2 data differs from bounded canonical rustc recapture",
         ));
     }
-    Ok(ValidatedRustcCaptureV2::new(recaptured))
+    Ok(ValidatedRustcCaptureV2::new(tcx, instance, recaptured))
+}
+
+pub(crate) fn verify_and_authorize_v2<'tcx>(
+    _tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    capture: &ValidatedRustcCaptureV2<'tcx>,
+) -> Result<Infallible, CaptureErrorV2> {
+    if capture.instance() != instance {
+        return Err(CaptureErrorV2::new(
+            "validated MIR V2 capture belongs to a different rustc Instance",
+        ));
+    }
+    let _ = capture.data();
+    Err(CaptureErrorV2::new(
+        "MIR V2 verifier authorization is not implemented; lowering remains disabled",
+    ))
 }
 
 fn capture_body_v2<'tcx>(

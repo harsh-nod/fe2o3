@@ -4,7 +4,7 @@ use super::preflight::preflight_body_v2;
 use super::rustc_adapter::{
     CompilerCapturedBodyV2, RustcAuthenticCaptureV2, ValidatedRustcCaptureV2,
     capture_instance_body_v2, capture_instance_observation_v2, recapture_against_rustc_v2,
-    rustc_authentic_capture_data_v2,
+    rustc_authentic_capture_data_v2, verify_and_authorize_v2,
 };
 use rustc_driver::{Callbacks, Compilation};
 use rustc_hir::def::DefKind;
@@ -22,15 +22,15 @@ trait AmbiguousIfDeserializeV2<A> {
     fn assert_not_implemented() {}
 }
 
-impl<T: ?Sized> AmbiguousIfDeserializeV2<()> for T {}
-impl<T: ?Sized> AmbiguousIfDeserializeV2<u8> for T where for<'de> T: Deserialize<'de> {}
+impl<T> AmbiguousIfDeserializeV2<()> for T {}
+impl<T> AmbiguousIfDeserializeV2<u8> for T where for<'de> T: Deserialize<'de> {}
 
-trait AmbiguousIfAuthenticCaptureV2<A> {
+trait AmbiguousIfAuthenticCaptureV2<'tcx, A> {
     fn assert_not_implemented() {}
 }
 
-impl<T: ?Sized> AmbiguousIfAuthenticCaptureV2<()> for T {}
-impl<T: ?Sized + RustcAuthenticCaptureV2> AmbiguousIfAuthenticCaptureV2<u8> for T {}
+impl<'tcx, T> AmbiguousIfAuthenticCaptureV2<'tcx, ()> for T {}
+impl<'tcx, T: RustcAuthenticCaptureV2<'tcx>> AmbiguousIfAuthenticCaptureV2<'tcx, u8> for T {}
 
 const FIXTURE_SOURCE: &str = r#"
 #![feature(core_intrinsics)]
@@ -119,6 +119,7 @@ struct DriverResults {
     switch_bound_error: String,
     unsupported_error: String,
     recapture_errors: Vec<String>,
+    diagnostic_recapture_succeeded: bool,
 }
 
 #[derive(Default)]
@@ -174,6 +175,24 @@ impl Callbacks for CaptureCallbacks {
             .expect("canonical data must pass exact rustc recapture");
         assert!(!recaptured.is_authorized_for_lowering());
         assert_eq!(rustc_authentic_capture_data_v2(&recaptured), &observed);
+        let authorization_error = verify_and_authorize_v2(tcx, observed_instance, &recaptured)
+            .expect_err("the future authorization boundary must remain disabled")
+            .to_string();
+        assert!(authorization_error.contains("lowering remains disabled"));
+        let substitution_error = verify_and_authorize_v2(tcx, invoke_instance, &recaptured)
+            .expect_err("a branded capture cannot cross rustc instances")
+            .to_string();
+        assert!(substitution_error.contains("different rustc Instance"));
+        let mut diagnostic_only = observed.clone();
+        mutate_diagnostic_observation(&mut diagnostic_only);
+        refresh_capture_accounting(&mut diagnostic_only);
+        let diagnostic_recapture =
+            recapture_against_rustc_v2(tcx, observed_instance, limits, &diagnostic_only)
+                .expect("diagnostic-only changes must preserve rustc semantic authenticity");
+        assert_ne!(
+            rustc_authentic_capture_data_v2(&diagnostic_recapture),
+            &diagnostic_only
+        );
         let recapture_errors =
             adversarial_recapture_errors(tcx, observed_instance, limits, &observed);
 
@@ -231,6 +250,7 @@ impl Callbacks for CaptureCallbacks {
                 .expect_err("inline assembly must remain an explicit unsupported record")
                 .to_string(),
             recapture_errors,
+            diagnostic_recapture_succeeded: true,
         });
         Compilation::Stop
     }
@@ -531,6 +551,40 @@ fn refresh_capture_accounting(body: &mut CapturedBodyV2) {
     body.capture_text_bytes = accounting.text_bytes;
 }
 
+fn mutate_diagnostic_observation(body: &mut CapturedBodyV2) {
+    body.function.definition.diagnostic_crate_name = "DIAGNOSTIC_CRATE_SENTINEL".to_owned();
+    body.function.definition.diagnostic_def_path = "DIAGNOSTIC_PATH_SENTINEL".to_owned();
+    body.function.instance.diagnostic_generic_args = "DIAGNOSTIC_ARGS_SENTINEL".to_owned();
+    body.function.instance.diagnostic_debug = "DIAGNOSTIC_INSTANCE_SENTINEL".to_owned();
+    body.source.remapped_file = "/diagnostic/path/sentinel.rs".to_owned();
+    body.source.diagnostic_debug = "DIAGNOSTIC_SPAN_SENTINEL".to_owned();
+
+    let local = body.locals.first_mut().expect("fixture return local");
+    local.ty.diagnostic_display = "DIAGNOSTIC_TYPE_DISPLAY_SENTINEL".to_owned();
+    local.ty.diagnostic_debug = "DIAGNOSTIC_TYPE_DEBUG_SENTINEL".to_owned();
+    local.diagnostic_debug = "DIAGNOSTIC_LOCAL_SENTINEL".to_owned();
+
+    let block = body.blocks.first_mut().expect("fixture entry block");
+    if let Some(statement) = block.statements.first_mut() {
+        statement.diagnostic_debug = "DIAGNOSTIC_STATEMENT_SENTINEL".to_owned();
+        statement.source.remapped_file = "/diagnostic/statement/sentinel.rs".to_owned();
+        statement.source.diagnostic_debug = "DIAGNOSTIC_STATEMENT_SPAN_SENTINEL".to_owned();
+    }
+    block.terminator.diagnostic_debug = "DIAGNOSTIC_TERMINATOR_SENTINEL".to_owned();
+    block.terminator.source.remapped_file = "/diagnostic/terminator/sentinel.rs".to_owned();
+    block.terminator.source.diagnostic_debug = "DIAGNOSTIC_TERMINATOR_SPAN_SENTINEL".to_owned();
+
+    if let Some(call_source) = body.blocks.iter_mut().find_map(|block| {
+        if let TerminatorKindV2::Call { call_source, .. } = &mut block.terminator.kind {
+            Some(call_source)
+        } else {
+            None
+        }
+    }) {
+        call_source.diagnostic = "DIAGNOSTIC_COMPILER_VALUE_SENTINEL".to_owned();
+    }
+}
+
 fn refresh_call_bindings(kind: &mut TerminatorKindV2) {
     match kind {
         TerminatorKindV2::Call {
@@ -825,21 +879,23 @@ fn push_operand_place<'a>(operand: &'a OperandV2, places: &mut Vec<&'a PlaceV2>)
 }
 
 #[test]
-fn raw_data_is_serializable_but_cannot_satisfy_the_authentic_capture_api() {
-    fn assert_serializable<T: Serialize + for<'de> Deserialize<'de>>() {}
-    fn assert_authentic<T: RustcAuthenticCaptureV2>() {}
+fn raw_data_is_serialize_only_and_cannot_satisfy_the_authentic_capture_api() {
+    fn assert_serializable<T: Serialize>() {}
+    fn assert_authentic<'tcx, T: RustcAuthenticCaptureV2<'tcx>>() {}
 
     assert_serializable::<CapturedBodyV2>();
-    assert_authentic::<CompilerCapturedBodyV2>();
-    assert_authentic::<ValidatedRustcCaptureV2>();
-    <CapturedBodyV2 as AmbiguousIfAuthenticCaptureV2<_>>::assert_not_implemented();
-    <CompilerCapturedBodyV2 as AmbiguousIfDeserializeV2<_>>::assert_not_implemented();
-    <ValidatedRustcCaptureV2 as AmbiguousIfDeserializeV2<_>>::assert_not_implemented();
+    assert_authentic::<CompilerCapturedBodyV2<'static>>();
+    assert_authentic::<ValidatedRustcCaptureV2<'static>>();
+    <CapturedBodyV2 as AmbiguousIfDeserializeV2<_>>::assert_not_implemented();
+    <CapturedBodyV2 as AmbiguousIfAuthenticCaptureV2<'static, _>>::assert_not_implemented();
+    <CompilerCapturedBodyV2<'static> as AmbiguousIfDeserializeV2<_>>::assert_not_implemented();
+    <ValidatedRustcCaptureV2<'static> as AmbiguousIfDeserializeV2<_>>::assert_not_implemented();
 }
 
 #[test]
 fn exact_rustc_recapture_rejects_refreshed_structural_forgeries() {
     let results = compiler_results();
+    assert!(results.diagnostic_recapture_succeeded);
     assert_eq!(results.recapture_errors.len(), 4);
     assert!(
         results
@@ -1675,14 +1731,30 @@ fn normalized_validation_rejects_explicit_unsupported_records() {
 
 #[test]
 fn diagnostic_strings_do_not_define_structural_identity() {
-    let mut body = compiler_results().observed;
-    body.function.definition.diagnostic_crate_name = "diagnostic-only-crate".to_owned();
-    body.function.definition.diagnostic_def_path = "diagnostic-only-path".to_owned();
-    body.locals[0].ty.diagnostic_display = "diagnostic-only-type".to_owned();
-    body.locals[0].ty.diagnostic_debug = "diagnostic-only-debug".to_owned();
-    refresh_capture_accounting(&mut body);
-    body.validate_untrusted_shape(CaptureLimitsV2::default())
-        .unwrap();
+    let limits = CaptureLimitsV2::default();
+    let original = compiler_results().observed;
+    let original_bytes = canonical_semantic_bytes_v2(&original, limits).unwrap();
+
+    let mut diagnostic_only = original.clone();
+    mutate_diagnostic_observation(&mut diagnostic_only);
+    refresh_capture_accounting(&mut diagnostic_only);
+    diagnostic_only.validate_untrusted_shape(limits).unwrap();
+    let diagnostic_bytes = canonical_semantic_bytes_v2(&diagnostic_only, limits).unwrap();
+    assert_eq!(diagnostic_bytes, original_bytes);
+    assert!(
+        !String::from_utf8(diagnostic_bytes)
+            .unwrap()
+            .contains("DIAGNOSTIC_")
+    );
+
+    let mut structural = original;
+    structural.function.definition.def_path_hash[0] ^= 1;
+    refresh_capture_accounting(&mut structural);
+    structural.validate_untrusted_shape(limits).unwrap();
+    assert_ne!(
+        canonical_semantic_bytes_v2(&structural, limits).unwrap(),
+        original_bytes
+    );
 }
 
 #[test]
