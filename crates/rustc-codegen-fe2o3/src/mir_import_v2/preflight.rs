@@ -10,11 +10,46 @@ pub(super) fn preflight_body_v2(
 ) -> Result<usize, PreflightErrorV2> {
     bounded("locals", body.local_decls.len(), limits.max_locals)?;
     bounded("blocks", body.basic_blocks.len(), limits.max_blocks)?;
+    bounded(
+        "source scopes",
+        body.source_scopes.len(),
+        limits.max_source_scopes,
+    )?;
+    if body.source_scopes.is_empty() {
+        return Err(PreflightErrorV2::new(
+            "the MIR body has no canonical root source scope",
+        ));
+    }
 
     let mut work = WorkCounter::new(limits.max_total_work_items);
     work.add("body", 1)?;
     work.add("locals", body.local_decls.len())?;
     work.add("blocks", body.basic_blocks.len())?;
+    work.add("source scope entries", body.source_scopes.len())?;
+    for (scope, data) in body.source_scopes.iter_enumerated() {
+        let index = scope.as_usize();
+        work.add("source scope span", 1)?;
+        if let Some(parent) = data.parent_scope {
+            work.add("source scope parent", 1)?;
+            if parent.as_usize() >= index {
+                return Err(PreflightErrorV2::new(format!(
+                    "source scope {index} has non-topological parent"
+                )));
+            }
+        }
+        if let Some(parent) = data.inlined_parent_scope {
+            work.add("source scope inlined parent", 1)?;
+            if parent.as_usize() >= index {
+                return Err(PreflightErrorV2::new(format!(
+                    "source scope {index} has non-topological inlined parent"
+                )));
+            }
+        }
+        if data.inlined.is_some() {
+            work.add("source scope inlined instance", 1)?;
+            work.add("source scope inlined callsite", 1)?;
+        }
+    }
 
     let mut total_statements = 0usize;
     for (block_index, block) in body.basic_blocks.iter_enumerated() {
