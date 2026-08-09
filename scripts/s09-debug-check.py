@@ -12,10 +12,17 @@ import pathlib
 import re
 import stat
 import string
+import struct
 import sys
 
-MAX_INPUT_BYTES = 8 * 1024 * 1024
+MAX_INPUT_BYTES = 16 * 1024 * 1024
 MAX_HARDWARE_SECTION_LINES = 128
+MAX_IDENTITY_HANDOFF_BYTES = 64 * 1024
+MAX_IDENTITY_RECORD_BYTES = 16 * 1024
+MAX_IDENTITY_FIELD_NAME_BYTES = 64
+MAX_IDENTITY_FIELD_VALUE_BYTES = 4096
+MAX_ELF_SECTIONS = 4096
+MAX_ELF_STRING_TABLE_BYTES = 1024 * 1024
 PRODUCTION_POLICY_PATH = pathlib.Path("/etc/fe2o3/s09-trust-v2.tsv")
 FS_IOC_GETFLAGS = 0x80086601
 FS_IMMUTABLE_FL = 0x00000010
@@ -57,48 +64,57 @@ S09_SOURCE_LENGTH = "3231"
 MANIFEST_SCHEMA = "fe2o3-s09-protected-manifest-v2"
 SEMANTIC_ADMISSION_SCHEMA = "fe2o3-s09-semantic-admission-v2"
 BUILD_OBSERVATION_SCHEMA = "fe2o3-s09-build-observation-v2"
-MANIFEST_FIELDS = (
-    "manifest_schema",
-    "trust_domain",
-    "claim",
-    "semantic_admission_schema",
+S09_IDENTITY_SECTION = ".fe2o3.s09.identity.v2"
+S09_IDENTITY_HANDOFF_DOMAIN = b"FE2O3/S09-IDENTITY-HANDOFF/V2\0"
+SEMANTIC_RECORD_FIELDS = (
+    "schema",
+    "crate",
+    "module",
+    "logical_name",
+    "export_name",
+    "profile",
     "source_path",
     "source_sha256",
-    "source_length",
-    "logical_crate",
-    "logical_module",
-    "logical_kernel",
-    "logical_export",
-    "logical_owner",
-    "owner_authentication",
-    "profile",
-    "portable_mir_sha256",
-    "portable_abi_sha256",
+    "source_bytes",
     "target",
-    "optimization",
+    "target_capabilities",
     "code_object_version",
-    "target_policy",
-    "debug_policy",
-    "build_observation_schema",
-    "source_commit",
-    "source_tree",
-    "ordered_cargo_metadata_sha256",
-    "crate_binding_id",
-    "kernel_binding_id",
+    "rustc_opt_level",
+    "rustc_debug_info",
+    "injected_debug_policy",
+    "abi_sha256",
+    "launch_sha256",
+    "portable_mir_sha256",
+)
+BUILD_RECORD_FIELDS = (
+    "schema",
+    "semantic_admission_sha256",
+    "cargo_metadata_sha256",
+    "crate_binding",
+    "kernel_binding",
     "observed_def_path",
     "observed_symbol",
     "rustc_mir_capture_sha256",
-    "cargo_sha256",
-    "rustc_sha256",
-    "backend_sha256",
-    "llvm_sha256",
-    "llvm_link_worker_sha256",
-    "lld_sha256",
-    "llvm_dwarfdump_sha256",
-    "llvm_readobj_sha256",
-    "rocgdb_sha256",
-    "checker_sha256",
-    "harness_source_sha256",
+    "rustc_invocation_sha256",
+    "rustc_executable_sha256",
+    "cargo_fe2o3_executable_sha256",
+    "cargo_executable_sha256",
+    "codegen_backend_sha256",
+    "worker_config_sha256",
+    "worker_executable_sha256",
+    "worker_build_identity_sha256",
+    "llvm_build_identity_sha256",
+)
+IDENTITY_MANIFEST_FIELDS = (
+    "identity_section",
+    "semantic_admission_sha256",
+    *(f"semantic_{field}" for field in SEMANTIC_RECORD_FIELDS),
+    "build_observation_sha256",
+    *(f"build_{field}" for field in BUILD_RECORD_FIELDS),
+)
+EVIDENCE_MANIFEST_FIELDS = (
+    "source_commit",
+    "source_tree",
     "hsaco_sha256",
     "host_executable_sha256",
     "host_executable_build_id",
@@ -107,8 +123,13 @@ MANIFEST_FIELDS = (
     "hardware_facts_sha256",
     "dwarf_normalized_sha256",
     "rocgdb_normalized_sha256",
-    "hardware_test",
-    "execution_closure",
+)
+MANIFEST_FIELDS = (
+    "manifest_schema",
+    "trust_domain",
+    "claim",
+    *IDENTITY_MANIFEST_FIELDS,
+    *EVIDENCE_MANIFEST_FIELDS,
 )
 POLICY_SCHEMA = "fe2o3-s09-production-policy-v2"
 POLICY_HEADER_FIELDS = (
@@ -185,6 +206,249 @@ def read_bounded(path: pathlib.Path) -> str:
 
 def file_sha256(path: pathlib.Path) -> str:
     return hashlib.sha256(read_bounded_bytes(path)).hexdigest()
+
+
+def checked_slice(data: bytes, offset: int, size: int, label: str) -> bytes:
+    if offset < 0 or size < 0 or offset > len(data) or size > len(data) - offset:
+        raise CheckError(f"{label} is truncated or outside its bounded input")
+    return data[offset : offset + size]
+
+
+def unpack_from(data: bytes, offset: int, encoding: str, label: str) -> int:
+    size = struct.calcsize(encoding)
+    return int(struct.unpack(encoding, checked_slice(data, offset, size, label))[0])
+
+
+def elf_string(strings: bytes, offset: int) -> bytes:
+    if offset >= len(strings):
+        raise CheckError("ELF section name offset is outside the bounded string table")
+    end = strings.find(b"\0", offset)
+    if end < 0:
+        raise CheckError("ELF section name is unterminated")
+    return strings[offset:end]
+
+
+def identity_section_v2(hsaco: bytes) -> bytes:
+    if not 1 <= len(hsaco) <= MAX_INPUT_BYTES:
+        raise CheckError(f"HSACO must contain 1 through {MAX_INPUT_BYTES} bytes")
+    if (
+        len(hsaco) < 64
+        or hsaco[:4] != b"\x7fELF"
+        or hsaco[4] != 2
+        or hsaco[5] != 1
+        or hsaco[6] != 1
+    ):
+        raise CheckError("HSACO is not a supported ELF64 little-endian object")
+
+    section_offset = unpack_from(hsaco, 40, "<Q", "ELF section table offset")
+    section_entry_size = unpack_from(hsaco, 58, "<H", "ELF section entry size")
+    section_count = unpack_from(hsaco, 60, "<H", "ELF section count")
+    string_index = unpack_from(hsaco, 62, "<H", "ELF string-table index")
+    if section_entry_size != 64:
+        raise CheckError("ELF section entry size is not canonical ELF64")
+    if not 1 <= section_count <= MAX_ELF_SECTIONS:
+        raise CheckError(f"ELF section count must be 1 through {MAX_ELF_SECTIONS}")
+    if string_index == 0 or string_index >= section_count or string_index == 0xFFFF:
+        raise CheckError("ELF section-name string-table index is invalid or extended")
+    checked_slice(
+        hsaco,
+        section_offset,
+        section_entry_size * section_count,
+        "ELF section table",
+    )
+
+    def section_header(index: int) -> bytes:
+        return checked_slice(
+            hsaco,
+            section_offset + index * section_entry_size,
+            section_entry_size,
+            "ELF section header",
+        )
+
+    string_header = section_header(string_index)
+    if unpack_from(string_header, 4, "<I", "ELF string-table type") != 3:
+        raise CheckError("ELF section-name table is not SHT_STRTAB")
+    string_offset = unpack_from(string_header, 24, "<Q", "ELF string-table offset")
+    string_size = unpack_from(string_header, 32, "<Q", "ELF string-table size")
+    if not 1 <= string_size <= MAX_ELF_STRING_TABLE_BYTES:
+        raise CheckError(
+            "ELF section-name table must contain 1 through "
+            f"{MAX_ELF_STRING_TABLE_BYTES} bytes"
+        )
+    strings = checked_slice(
+        hsaco, string_offset, string_size, "ELF section-name string table"
+    )
+    if strings[0] != 0:
+        raise CheckError("ELF section-name table has no leading NUL")
+
+    found: bytes | None = None
+    for index in range(section_count):
+        header = section_header(index)
+        name_offset = unpack_from(header, 0, "<I", "ELF section name offset")
+        if elf_string(strings, name_offset) != S09_IDENTITY_SECTION.encode("ascii"):
+            continue
+        if found is not None:
+            raise CheckError("HSACO contains duplicate S09 identity sections")
+        if unpack_from(header, 4, "<I", "S09 identity section type") != 1:
+            raise CheckError("S09 identity section is not SHT_PROGBITS")
+        offset = unpack_from(header, 24, "<Q", "S09 identity section offset")
+        size = unpack_from(header, 32, "<Q", "S09 identity section size")
+        if not 1 <= size <= MAX_IDENTITY_HANDOFF_BYTES:
+            raise CheckError(
+                "S09 identity section must contain 1 through "
+                f"{MAX_IDENTITY_HANDOFF_BYTES} bytes"
+            )
+        found = checked_slice(hsaco, offset, size, "S09 identity section")
+    if found is None:
+        raise CheckError("HSACO has no S09 identity section")
+    return found
+
+
+def decode_identity_digest(value: str, field: str) -> None:
+    if not HEX_SHA256.fullmatch(value) or value == "0" * 64:
+        raise CheckError(f"{field} must be a nonzero lowercase SHA-256 digest")
+
+
+def decode_identity_decimal(
+    value: str, field: str, maximum: int, allow_zero: bool
+) -> None:
+    if (
+        not value.isascii()
+        or not value.isdecimal()
+        or (len(value) > 1 and value.startswith("0"))
+    ):
+        raise CheckError(f"{field} is not a canonical decimal")
+    decoded = int(value)
+    if decoded > maximum:
+        raise CheckError(f"{field} exceeds its codec bound")
+    if decoded == 0 and not allow_zero:
+        raise CheckError(f"{field} must not be zero")
+
+
+def decode_identity_record(
+    record: bytes, expected: tuple[str, ...], label: str
+) -> dict[str, str]:
+    if not 1 <= len(record) <= MAX_IDENTITY_RECORD_BYTES:
+        raise CheckError(
+            f"{label} record must contain 1 through {MAX_IDENTITY_RECORD_BYTES} bytes"
+        )
+    if not record.endswith(b"\n"):
+        raise CheckError(f"{label} record is truncated or has trailing data")
+    lines = record[:-1].split(b"\n")
+    if len(lines) != len(expected):
+        raise CheckError(
+            f"{label} record has {len(lines)} fields; expected exactly {len(expected)}"
+        )
+    values: dict[str, str] = {}
+    for index, (wanted, line) in enumerate(zip(expected, lines, strict=True)):
+        columns = line.split(b"\t")
+        if len(columns) != 2:
+            raise CheckError(f"{label} field has a missing or duplicate separator")
+        name_bytes, value_bytes = columns
+        try:
+            name = name_bytes.decode("utf-8")
+            value = value_bytes.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise CheckError(f"{label} field is not UTF-8") from error
+        if (
+            not 1 <= len(name_bytes) <= MAX_IDENTITY_FIELD_NAME_BYTES
+            or any(
+                not (byte == ord("_") or ord("0") <= byte <= ord("9") or ord("a") <= byte <= ord("z"))
+                for byte in name_bytes
+            )
+        ):
+            raise CheckError(f"{label} field name is noncanonical")
+        if (
+            not 1 <= len(value_bytes) <= MAX_IDENTITY_FIELD_VALUE_BYTES
+            or any(byte < 0x21 or byte > 0x7E for byte in value_bytes)
+        ):
+            raise CheckError(f"{label} field {name!r} is noncanonical")
+        if name != wanted:
+            raise CheckError(
+                f"{label} field {index} must be {wanted}; found unknown, duplicate, "
+                f"missing, or reordered field {name}"
+            )
+        values[name] = value
+    return values
+
+
+def take_identity_record(data: bytes, offset: int, label: str) -> tuple[bytes, int]:
+    length = unpack_from(data, offset, "<I", f"{label} length")
+    offset += 4
+    if not 1 <= length <= MAX_IDENTITY_RECORD_BYTES:
+        raise CheckError(
+            f"{label} length must be 1 through {MAX_IDENTITY_RECORD_BYTES}"
+        )
+    return checked_slice(data, offset, length, label), offset + length
+
+
+def decode_hsaco_identity_v2(
+    hsaco: bytes,
+) -> tuple[bytes, dict[str, str], bytes, dict[str, str]]:
+    handoff = identity_section_v2(hsaco)
+    if not 1 <= len(handoff) <= MAX_IDENTITY_HANDOFF_BYTES:
+        raise CheckError(
+            "identity handoff must contain 1 through "
+            f"{MAX_IDENTITY_HANDOFF_BYTES} bytes"
+        )
+    if not handoff.startswith(S09_IDENTITY_HANDOFF_DOMAIN):
+        raise CheckError("identity handoff has a missing or unknown domain")
+    offset = len(S09_IDENTITY_HANDOFF_DOMAIN)
+    semantic_record, offset = take_identity_record(handoff, offset, "semantic admission")
+    build_record, offset = take_identity_record(handoff, offset, "build observation")
+    if offset != len(handoff):
+        raise CheckError("identity handoff has trailing bytes or records")
+
+    semantic = decode_identity_record(
+        semantic_record, SEMANTIC_RECORD_FIELDS, "semantic admission"
+    )
+    build = decode_identity_record(build_record, BUILD_RECORD_FIELDS, "build observation")
+    if semantic["schema"] != SEMANTIC_ADMISSION_SCHEMA:
+        raise CheckError("semantic schema is missing or unknown")
+    if build["schema"] != BUILD_OBSERVATION_SCHEMA:
+        raise CheckError("build schema is missing or unknown")
+    for field in ("source_sha256", "abi_sha256", "launch_sha256", "portable_mir_sha256"):
+        decode_identity_digest(semantic[field], f"semantic admission {field}")
+    for field in (
+        "semantic_admission_sha256",
+        "cargo_metadata_sha256",
+        "crate_binding",
+        "kernel_binding",
+        "rustc_mir_capture_sha256",
+        "rustc_invocation_sha256",
+        "rustc_executable_sha256",
+        "cargo_fe2o3_executable_sha256",
+        "cargo_executable_sha256",
+        "codegen_backend_sha256",
+        "worker_config_sha256",
+        "worker_executable_sha256",
+        "worker_build_identity_sha256",
+        "llvm_build_identity_sha256",
+    ):
+        decode_identity_digest(build[field], f"build observation {field}")
+    decode_identity_decimal(semantic["source_bytes"], "source_bytes", 2**64 - 1, False)
+    decode_identity_decimal(
+        semantic["code_object_version"], "code_object_version", 2**16 - 1, False
+    )
+    decode_identity_decimal(semantic["rustc_opt_level"], "rustc_opt_level", 255, True)
+    semantic_digest = hashlib.sha256(semantic_record).hexdigest()
+    if build["semantic_admission_sha256"] != semantic_digest:
+        raise CheckError("build observation does not bind the semantic admission identity")
+    return semantic_record, semantic, build_record, build
+
+
+def identity_manifest_values(hsaco: bytes) -> dict[str, str]:
+    semantic_record, semantic, build_record, build = decode_hsaco_identity_v2(hsaco)
+    values = {
+        "identity_section": S09_IDENTITY_SECTION,
+        "semantic_admission_sha256": hashlib.sha256(semantic_record).hexdigest(),
+        **{f"semantic_{field}": semantic[field] for field in SEMANTIC_RECORD_FIELDS},
+        "build_observation_sha256": hashlib.sha256(build_record).hexdigest(),
+        **{f"build_{field}": build[field] for field in BUILD_RECORD_FIELDS},
+    }
+    if tuple(values) != IDENTITY_MANIFEST_FIELDS:
+        raise AssertionError("identity manifest field construction changed")
+    return values
 
 
 def descriptor_identity(value: os.stat_result) -> tuple[int, int, int, int, int]:
@@ -643,7 +907,7 @@ def check_rocgdb(text: str, hsaco_sha256: str, hardware_sha256: str, build_id: s
         if line.startswith("FE2O3_S09_HARNESS_RESULT_V1")
     ]
     if result_lines != [result_marker]:
-        raise CheckError("ROCgdb transcript lacks the exact bound harness result marker")
+        raise CheckError("ROCgdb transcript lacks the exact bound runner result marker")
     normal_exits = [
         match.start()
         for match in re.finditer(
@@ -651,8 +915,8 @@ def check_rocgdb(text: str, hsaco_sha256: str, hardware_sha256: str, build_id: s
             hardware_section,
         )
     ]
-    if len(normal_exits) != 1 or hardware_section.index(result_marker) >= normal_exits[0]:
-        raise CheckError("ROCgdb inferior did not exit normally after the harness result")
+    if len(normal_exits) != 1 or normal_exits[0] >= hardware_section.index(result_marker):
+        raise CheckError("ROCgdb runner result was not conditional on a normal inferior exit")
 
     for rejected in ("No symbol", "Cannot access memory", "The program is not being run"):
         if rejected.lower() in text.lower():
@@ -717,36 +981,29 @@ def require_nonzero_sha256(values: dict[str, str], fields: tuple[str, ...], labe
 
 
 def validate_manifest_values(manifest: dict[str, str], required_domain: str) -> None:
-    closures = {
-        "production-v2": "protected-controller-v2",
-        "test-fixture-v2": "test-fixture-v2",
-        "local-capability-v2": "local-capability-v2",
-    }
-    if required_domain not in closures:
+    if required_domain not in {"production-v2", "test-fixture-v2", "local-capability-v2"}:
         raise CheckError("protected manifest trust domain is unsupported")
 
     expected_values = {
         "manifest_schema": MANIFEST_SCHEMA,
         "claim": "source-debug-evidence-v2",
-        "semantic_admission_schema": SEMANTIC_ADMISSION_SCHEMA,
-        "source_path": S09_SOURCE,
-        "source_sha256": S09_SOURCE_SHA256,
-        "source_length": S09_SOURCE_LENGTH,
-        "logical_crate": "fe2o3_typed_alias_spoof",
-        "logical_module": "general_genuine",
-        "logical_kernel": "alpha",
-        "logical_export": "alpha",
-        "logical_owner": "fe2o3_typed_alias_spoof::general_genuine::alpha",
-        "owner_authentication": "collector-authenticated-kernel-owner-v1",
-        "profile": "general-scalar-slice-v3",
-        "target": "gfx942:xnack-",
-        "optimization": "O0",
-        "code_object_version": "6",
-        "target_policy": "gfx942:xnack-/cov6/o0/source-debug-v1",
-        "debug_policy": "s09-alpha-source-dwarf-v1",
-        "build_observation_schema": BUILD_OBSERVATION_SCHEMA,
-        "hardware_test": HARDWARE_TEST,
-        "execution_closure": closures[required_domain],
+        "identity_section": S09_IDENTITY_SECTION,
+        "semantic_schema": SEMANTIC_ADMISSION_SCHEMA,
+        "semantic_crate": "fe2o3_typed_alias_spoof",
+        "semantic_module": "general_genuine",
+        "semantic_logical_name": "alpha",
+        "semantic_export_name": "alpha",
+        "semantic_profile": "general-scalar-slice-rustc-layout-v3",
+        "semantic_source_path": S09_SOURCE,
+        "semantic_source_sha256": S09_SOURCE_SHA256,
+        "semantic_source_bytes": S09_SOURCE_LENGTH,
+        "semantic_target": "gfx942:xnack-",
+        "semantic_target_capabilities": "atomics,amd-wave",
+        "semantic_code_object_version": "6",
+        "semantic_rustc_opt_level": "0",
+        "semantic_rustc_debug_info": "full",
+        "semantic_injected_debug_policy": "dwarf-v5-full",
+        "build_schema": BUILD_OBSERVATION_SCHEMA,
     }
     for field, expected in expected_values.items():
         if manifest[field] != expected:
@@ -754,25 +1011,23 @@ def validate_manifest_values(manifest: dict[str, str], required_domain: str) -> 
     if manifest["trust_domain"] != required_domain:
         raise CheckError("protected manifest trust domain is not authorized")
     require_nonzero_sha256(manifest, MANIFEST_FIELDS, "protected manifest")
+    if manifest["build_semantic_admission_sha256"] != manifest["semantic_admission_sha256"]:
+        raise CheckError("protected manifest build observation does not bind semantic admission")
     for field in ("source_commit", "source_tree"):
         if (
             not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", manifest[field])
             or set(manifest[field]) == {"0"}
         ):
             raise CheckError(f"protected manifest {field!r} is not a canonical Git object ID")
-    for field in ("crate_binding_id", "kernel_binding_id"):
+    for field in ("build_crate_binding", "build_kernel_binding"):
         if not HEX_SHA256.fullmatch(manifest[field]) or manifest[field] == "0" * 64:
             raise CheckError(f"protected manifest {field!r} is not a nonzero binding ID")
-    generated_name = f"__fe2o3_host_kernel_v1_{manifest['kernel_binding_id']}"
-    expected_def_path = f"{manifest['logical_module']}::{generated_name}"
-    if manifest["observed_def_path"] != expected_def_path:
-        raise CheckError("observed DefPath is inconsistent with the authenticated kernel binding")
-    if (
-        len(manifest["observed_symbol"]) > 1024
-        or not re.fullmatch(r"[A-Za-z0-9_.$:@]+", manifest["observed_symbol"])
-        or generated_name not in manifest["observed_symbol"]
-    ):
-        raise CheckError("observed symbol is inconsistent with the authenticated kernel binding")
+    for field in ("build_observed_def_path", "build_observed_symbol"):
+        value = manifest[field]
+        if not 1 <= len(value.encode("utf-8")) <= MAX_IDENTITY_FIELD_VALUE_BYTES or any(
+            ord(character) < 0x21 or ord(character) > 0x7E for character in value
+        ):
+            raise CheckError(f"protected manifest {field!r} is not a canonical observation")
     if (
         not HEX_BUILD_ID.fullmatch(manifest["host_executable_build_id"])
         or set(manifest["host_executable_build_id"]) == {"0"}
@@ -808,12 +1063,14 @@ def validate_policy_manifest_binding(
 
 def check_evidence_bundle(
     manifest: dict[str, str],
+    hsaco_path: pathlib.Path,
     artifact_path: pathlib.Path,
     hardware_path: pathlib.Path,
     dwarf_path: pathlib.Path,
     rocgdb_path: pathlib.Path,
 ) -> None:
     evidence = {
+        "hsaco_sha256": hsaco_path,
         "artifact_facts_sha256": artifact_path,
         "hardware_facts_sha256": hardware_path,
         "dwarf_normalized_sha256": dwarf_path,
@@ -822,9 +1079,10 @@ def check_evidence_bundle(
     for digest_field, path in evidence.items():
         if file_sha256(path) != manifest[digest_field]:
             raise CheckError(f"evidence file does not match {digest_field!r}")
-    checker_path = pathlib.Path(__file__).resolve(strict=True)
-    if file_sha256(checker_path) != manifest["checker_sha256"]:
-        raise CheckError("protected manifest does not bind this exact checker")
+    observed_identity = identity_manifest_values(read_bounded_bytes(hsaco_path))
+    for field in IDENTITY_MANIFEST_FIELDS:
+        if manifest[field] != observed_identity[field]:
+            raise CheckError(f"protected manifest does not match HSACO identity field {field!r}")
 
     artifact = read_bounded(artifact_path)
     hardware = read_bounded(hardware_path)
@@ -848,6 +1106,7 @@ def check_evidence_bundle(
 
 
 def check_production(
+    hsaco_path: pathlib.Path,
     artifact_path: pathlib.Path,
     hardware_path: pathlib.Path,
     dwarf_path: pathlib.Path,
@@ -860,12 +1119,15 @@ def check_production(
         raise CheckError("installed production manifest does not match fixed policy")
     manifest = parse_protected_manifest(manifest_bytes, "production-v2")
     validate_policy_manifest_binding(policy, manifest)
-    check_evidence_bundle(manifest, artifact_path, hardware_path, dwarf_path, rocgdb_path)
+    check_evidence_bundle(
+        manifest, hsaco_path, artifact_path, hardware_path, dwarf_path, rocgdb_path
+    )
 
 
 def check_fixture(
     manifest_path: pathlib.Path,
     expected_manifest_sha256: str,
+    hsaco_path: pathlib.Path,
     artifact_path: pathlib.Path,
     hardware_path: pathlib.Path,
     dwarf_path: pathlib.Path,
@@ -877,12 +1139,15 @@ def check_fixture(
     if hashlib.sha256(manifest_bytes).hexdigest() != expected_manifest_sha256:
         raise CheckError("fixture manifest does not match its non-authoritative test digest")
     manifest = parse_protected_manifest(manifest_bytes, "test-fixture-v2")
-    check_evidence_bundle(manifest, artifact_path, hardware_path, dwarf_path, rocgdb_path)
+    check_evidence_bundle(
+        manifest, hsaco_path, artifact_path, hardware_path, dwarf_path, rocgdb_path
+    )
 
 
 def check_capability(
     manifest_path: pathlib.Path,
     expected_manifest_sha256: str,
+    hsaco_path: pathlib.Path,
     artifact_path: pathlib.Path,
     hardware_path: pathlib.Path,
     dwarf_path: pathlib.Path,
@@ -894,7 +1159,9 @@ def check_capability(
     if hashlib.sha256(manifest_bytes).hexdigest() != expected_manifest_sha256:
         raise CheckError("capability manifest does not match its measured digest")
     manifest = parse_protected_manifest(manifest_bytes, "local-capability-v2")
-    check_evidence_bundle(manifest, artifact_path, hardware_path, dwarf_path, rocgdb_path)
+    check_evidence_bundle(
+        manifest, hsaco_path, artifact_path, hardware_path, dwarf_path, rocgdb_path
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -902,6 +1169,7 @@ def parse_args() -> argparse.Namespace:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     def add_evidence_arguments(command: argparse.ArgumentParser) -> None:
+        command.add_argument("--hsaco", required=True, type=pathlib.Path)
         command.add_argument("--artifact-facts", required=True, type=pathlib.Path)
         command.add_argument("--hardware-facts", required=True, type=pathlib.Path)
         command.add_argument("--dwarf", required=True, type=pathlib.Path)
@@ -925,6 +1193,9 @@ def parse_args() -> argparse.Namespace:
     command = subparsers.add_parser("hardware-facts")
     command.add_argument("--input", required=True, type=pathlib.Path)
     command.add_argument("--sha256", required=True)
+    command.add_argument("--output", required=True, type=pathlib.Path)
+    command = subparsers.add_parser("identity-fields")
+    command.add_argument("--hsaco", required=True, type=pathlib.Path)
     command.add_argument("--output", required=True, type=pathlib.Path)
     command = subparsers.add_parser("check-production")
     add_evidence_arguments(command)
@@ -962,8 +1233,17 @@ def main() -> int:
     elif args.command == "hardware-facts":
         facts, _ = hardware_facts(read_bounded(args.input), args.sha256)
         write_new(args.output, facts)
+    elif args.command == "identity-fields":
+        values = identity_manifest_values(read_bounded_bytes(args.hsaco))
+        write_new(
+            args.output,
+            serialize_ordered_fields(
+                values, IDENTITY_MANIFEST_FIELDS, "S09 identity manifest fields"
+            ).decode("ascii"),
+        )
     elif args.command == "check-production":
         check_production(
+            args.hsaco,
             args.artifact_facts,
             args.hardware_facts,
             args.dwarf,
@@ -974,6 +1254,7 @@ def main() -> int:
         check_fixture(
             args.manifest,
             args.expected_manifest_sha256,
+            args.hsaco,
             args.artifact_facts,
             args.hardware_facts,
             args.dwarf,
@@ -984,6 +1265,7 @@ def main() -> int:
         check_capability(
             args.manifest,
             args.expected_manifest_sha256,
+            args.hsaco,
             args.artifact_facts,
             args.hardware_facts,
             args.dwarf,

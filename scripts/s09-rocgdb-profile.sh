@@ -159,7 +159,7 @@ if ((dwarf_verify_status == 0 && dwarf_dump_status == 0 && dwarf_normalize_statu
       FE2O3_GFX942_ALPHA_ZETA_HSACO="${HSACO}" \
       FE2O3_GFX942_ALPHA_ZETA_SHA256="${HSACO_SHA256}" \
       FE2O3_S09_RUN_NONCE="${RUN_NONCE}" \
-      "${ROCGDB}" --batch --nx --nh \
+      "${ROCGDB}" --batch --nx --nh --return-child-result \
       -ex 'set confirm off' \
       -ex 'set pagination off' \
       -ex 'set width 0' \
@@ -211,6 +211,9 @@ if ((dwarf_verify_status == 0 && dwarf_dump_status == 0 && dwarf_normalize_statu
       -ex 'disable 3' \
       -ex 'echo FE2O3_S09_RESUME\n' \
       -ex 'continue' \
+      -ex 'if $_exitcode == 0' \
+      -ex "echo FE2O3_S09_HARNESS_RESULT_V1 hsaco_sha256=${HSACO_SHA256} run_nonce=${RUN_NONCE} result=passed\\n" \
+      -ex 'end' \
       -ex 'echo FE2O3_S09_HARDWARE_PASS\n' \
       --args "${HARDWARE_TEST}" \
         gfx942_cov6_alpha_then_zeta_generated_safe_spi_with_fake_authenticator \

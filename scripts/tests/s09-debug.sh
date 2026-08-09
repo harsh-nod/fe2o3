@@ -7,18 +7,27 @@ readonly ROOT
 readonly CHECKER="${ROOT}/scripts/s09-debug-check.py"
 readonly RUNNER="${ROOT}/scripts/s09-rocgdb-profile.sh"
 readonly FIXTURES="${ROOT}/scripts/tests/fixtures/s09-debug"
-readonly HSACO_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+readonly IDENTITY_FIXTURE="${ROOT}/scripts/tests/s09-debug-identity-fixture.py"
+readonly ROCGDB_HSACO_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 readonly HARDWARE_SHA256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 readonly HARDWARE_BUILD_ID=cccccccccccccccccccccccccccccccccccccccc
 readonly RUN_NONCE=dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
-readonly HARDWARE_TEST=gfx942_cov6_alpha_then_zeta_generated_safe_spi_with_fake_authenticator
-readonly SOURCE_SHA256=a02f62a73198b493258224701c4f29e25b3eca02a738bf02c03989d45b77099e
-readonly CRATE_BINDING_ID=1111111111111111111111111111111111111111111111111111111111111111
-readonly KERNEL_BINDING_ID=2222222222222222222222222222222222222222222222222222222222222222
-readonly GENERATED_KERNEL=__fe2o3_host_kernel_v1_${KERNEL_BINDING_ID}
 TMP="$(mktemp -d)"
 readonly TMP
 trap 'rm -rf -- "${TMP}"' EXIT
+readonly ROCGDB_FIXTURE="${TMP}/rocgdb.pass.txt"
+awk '
+  /^FE2O3_S09_HARNESS_RESULT_V1 / { result = $0; next }
+  /^\[Inferior [1-9][0-9]* \(process [0-9]+\) exited normally\]$/ {
+    print
+    if (result == "") exit 2
+    print result
+    result = ""
+    next
+  }
+  { print }
+  END { if (result != "") exit 2 }
+' "${FIXTURES}/rocgdb.pass.txt" >"${ROCGDB_FIXTURE}"
 
 expect_fail() {
   if "$@" >/dev/null 2>&1; then
@@ -32,13 +41,13 @@ expect_fail() {
 check_rocgdb() {
   "${CHECKER}" check-rocgdb \
     --input "$1" \
-    --hsaco-sha256 "${HSACO_SHA256}" \
+    --hsaco-sha256 "${ROCGDB_HSACO_SHA256}" \
     --hardware-sha256 "${HARDWARE_SHA256}" \
     --hardware-build-id "${HARDWARE_BUILD_ID}"
 }
 
 "${CHECKER}" check-dwarf --input "${FIXTURES}/dwarf.pass.txt"
-check_rocgdb "${FIXTURES}/rocgdb.pass.txt"
+check_rocgdb "${ROCGDB_FIXTURE}"
 "${CHECKER}" artifact-facts \
   --metadata "${FIXTURES}/artifact.pass.txt" \
   --dwarf "${FIXTURES}/dwarf.pass.txt" \
@@ -57,9 +66,9 @@ rg -q "^build_id=${HARDWARE_BUILD_ID}$" "${TMP}/hardware.facts"
   --input "${FIXTURES}/dwarf.pass.txt" --output "${TMP}/dwarf.two"
 cmp "${TMP}/dwarf.one" "${TMP}/dwarf.two"
 "${CHECKER}" normalize-rocgdb \
-  --input "${FIXTURES}/rocgdb.pass.txt" --output "${TMP}/rocgdb.one"
+  --input "${ROCGDB_FIXTURE}" --output "${TMP}/rocgdb.one"
 "${CHECKER}" normalize-rocgdb \
-  --input "${FIXTURES}/rocgdb.pass.txt" --output "${TMP}/rocgdb.two"
+  --input "${ROCGDB_FIXTURE}" --output "${TMP}/rocgdb.two"
 cmp "${TMP}/rocgdb.one" "${TMP}/rocgdb.two"
 rg -q "AMDGPU Wave <WAVE>.*alpha.*crates/.+main\.rs:68" "${TMP}/rocgdb.one"
 rg -q 'memory://<PID>#offset=0x<ADDR>&size=<SIZE>' "${TMP}/rocgdb.one"
@@ -69,54 +78,28 @@ rg -q "^run_nonce = ${RUN_NONCE}$" "${TMP}/rocgdb.one"
 expect_fail rg -q 'sysdeps|\.\./' "${TMP}/rocgdb.one"
 
 readonly MANIFEST="${TMP}/protected-manifest.tsv"
-checker_sha256="$(sha256sum "${CHECKER}" | cut -d ' ' -f 1)"
+readonly HSACO="${TMP}/identity.hsaco"
+readonly IDENTITY_FIELDS="${TMP}/identity-fields.tsv"
+"${IDENTITY_FIXTURE}" --output "${HSACO}"
+"${CHECKER}" identity-fields --hsaco "${HSACO}" --output "${IDENTITY_FIELDS}"
+HSACO_SHA256="$(sha256sum "${HSACO}" | cut -d ' ' -f 1)"
+readonly HSACO_SHA256
+sed "s/${ROCGDB_HSACO_SHA256}/${HSACO_SHA256}/g" \
+  "${ROCGDB_FIXTURE}" >"${TMP}/rocgdb.bundle.raw"
+"${CHECKER}" normalize-rocgdb \
+  --input "${TMP}/rocgdb.bundle.raw" --output "${TMP}/rocgdb.bundle"
 artifact_sha256="$(sha256sum "${TMP}/artifact.facts" | cut -d ' ' -f 1)"
 hardware_facts_sha256="$(sha256sum "${TMP}/hardware.facts" | cut -d ' ' -f 1)"
 dwarf_sha256="$(sha256sum "${TMP}/dwarf.one" | cut -d ' ' -f 1)"
-rocgdb_sha256="$(sha256sum "${TMP}/rocgdb.one" | cut -d ' ' -f 1)"
-readonly checker_sha256 artifact_sha256 hardware_facts_sha256 dwarf_sha256 rocgdb_sha256
+rocgdb_sha256="$(sha256sum "${TMP}/rocgdb.bundle" | cut -d ' ' -f 1)"
+readonly artifact_sha256 hardware_facts_sha256 dwarf_sha256 rocgdb_sha256
 {
   printf 'manifest_schema\tfe2o3-s09-protected-manifest-v2\n'
   printf 'trust_domain\ttest-fixture-v2\n'
   printf 'claim\tsource-debug-evidence-v2\n'
-  printf 'semantic_admission_schema\tfe2o3-s09-semantic-admission-v2\n'
-  printf 'source_path\tcrates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs\n'
-  printf 'source_sha256\t%s\n' "${SOURCE_SHA256}"
-  printf 'source_length\t3231\n'
-  printf 'logical_crate\tfe2o3_typed_alias_spoof\n'
-  printf 'logical_module\tgeneral_genuine\n'
-  printf 'logical_kernel\talpha\n'
-  printf 'logical_export\talpha\n'
-  printf 'logical_owner\tfe2o3_typed_alias_spoof::general_genuine::alpha\n'
-  printf 'owner_authentication\tcollector-authenticated-kernel-owner-v1\n'
-  printf 'profile\tgeneral-scalar-slice-v3\n'
-  printf 'portable_mir_sha256\t%064d\n' 1
-  printf 'portable_abi_sha256\t%064d\n' 2
-  printf 'target\tgfx942:xnack-\n'
-  printf 'optimization\tO0\n'
-  printf 'code_object_version\t6\n'
-  printf 'target_policy\tgfx942:xnack-/cov6/o0/source-debug-v1\n'
-  printf 'debug_policy\ts09-alpha-source-dwarf-v1\n'
-  printf 'build_observation_schema\tfe2o3-s09-build-observation-v2\n'
+  cat -- "${IDENTITY_FIELDS}"
   printf 'source_commit\t1111111111111111111111111111111111111111\n'
   printf 'source_tree\t2222222222222222222222222222222222222222\n'
-  printf 'ordered_cargo_metadata_sha256\t%064d\n' 3
-  printf 'crate_binding_id\t%s\n' "${CRATE_BINDING_ID}"
-  printf 'kernel_binding_id\t%s\n' "${KERNEL_BINDING_ID}"
-  printf 'observed_def_path\tgeneral_genuine::%s\n' "${GENERATED_KERNEL}"
-  printf 'observed_symbol\t%s\n' "${GENERATED_KERNEL}"
-  printf 'rustc_mir_capture_sha256\t%064d\n' 4
-  printf 'cargo_sha256\t%064d\n' 5
-  printf 'rustc_sha256\t%064d\n' 6
-  printf 'backend_sha256\t%064d\n' 7
-  printf 'llvm_sha256\t%064d\n' 8
-  printf 'llvm_link_worker_sha256\t%064d\n' 9
-  printf 'lld_sha256\t%064d\n' 10
-  printf 'llvm_dwarfdump_sha256\t%064d\n' 11
-  printf 'llvm_readobj_sha256\t%064d\n' 12
-  printf 'rocgdb_sha256\t%064d\n' 13
-  printf 'checker_sha256\t%s\n' "${checker_sha256}"
-  printf 'harness_source_sha256\t%064d\n' 14
   printf 'hsaco_sha256\t%s\n' "${HSACO_SHA256}"
   printf 'host_executable_sha256\t%s\n' "${HARDWARE_SHA256}"
   printf 'host_executable_build_id\t%s\n' "${HARDWARE_BUILD_ID}"
@@ -125,8 +108,6 @@ readonly checker_sha256 artifact_sha256 hardware_facts_sha256 dwarf_sha256 rocgd
   printf 'hardware_facts_sha256\t%s\n' "${hardware_facts_sha256}"
   printf 'dwarf_normalized_sha256\t%s\n' "${dwarf_sha256}"
   printf 'rocgdb_normalized_sha256\t%s\n' "${rocgdb_sha256}"
-  printf 'hardware_test\t%s\n' "${HARDWARE_TEST}"
-  printf 'execution_closure\ttest-fixture-v2\n'
 } >"${MANIFEST}"
 manifest_sha256="$(sha256sum "${MANIFEST}" | cut -d ' ' -f 1)"
 readonly manifest_sha256
@@ -134,71 +115,77 @@ fixture_args=(
   "${CHECKER}" check-fixture
   --manifest "${MANIFEST}"
   --expected-manifest-sha256 "${manifest_sha256}"
+  --hsaco "${HSACO}"
   --artifact-facts "${TMP}/artifact.facts"
   --hardware-facts "${TMP}/hardware.facts"
   --dwarf "${TMP}/dwarf.one"
-  --rocgdb "${TMP}/rocgdb.one"
+  --rocgdb "${TMP}/rocgdb.bundle"
 )
 "${fixture_args[@]}" >"${TMP}/fixture.out"
 rg -q '^S09 non-authoritative fixture checker passed$' "${TMP}/fixture.out"
 expect_fail rg -qi 'production.*accepted|authoritative.*accepted' "${TMP}/fixture.out"
 sed \
   -e 's/^trust_domain\ttest-fixture-v2$/trust_domain\tlocal-capability-v2/' \
-  -e 's/^execution_closure\ttest-fixture-v2$/execution_closure\tlocal-capability-v2/' \
   "${MANIFEST}" >"${TMP}/capability-manifest.tsv"
 capability_manifest_sha256="$(sha256sum "${TMP}/capability-manifest.tsv" | cut -d ' ' -f 1)"
 "${CHECKER}" check-capability \
   --manifest "${TMP}/capability-manifest.tsv" \
   --expected-manifest-sha256 "${capability_manifest_sha256}" \
+  --hsaco "${HSACO}" \
   --artifact-facts "${TMP}/artifact.facts" \
   --hardware-facts "${TMP}/hardware.facts" \
   --dwarf "${TMP}/dwarf.one" \
-  --rocgdb "${TMP}/rocgdb.one" >"${TMP}/capability.out"
+  --rocgdb "${TMP}/rocgdb.bundle" >"${TMP}/capability.out"
 rg -q '^S09 non-authoritative capability manifest V2 accepted$' "${TMP}/capability.out"
 expect_fail rg -q '^S09 production trust policy accepted' "${TMP}/capability.out"
 "${CHECKER}" check-production --help >"${TMP}/production-help"
 expect_fail rg -q -- '--manifest|--expected-manifest-sha256' "${TMP}/production-help"
 production_evidence_args=(
   "${CHECKER}" check-production
+  --hsaco "${HSACO}"
   --artifact-facts "${TMP}/artifact.facts"
   --hardware-facts "${TMP}/hardware.facts"
   --dwarf "${TMP}/dwarf.one"
-  --rocgdb "${TMP}/rocgdb.one"
+  --rocgdb "${TMP}/rocgdb.bundle"
 )
 expect_fail "${production_evidence_args[@]}"
 expect_fail "${CHECKER}" check-production \
   --manifest "${MANIFEST}" \
   --expected-manifest-sha256 "${manifest_sha256}" \
+  --hsaco "${HSACO}" \
   --artifact-facts "${TMP}/artifact.facts" \
   --hardware-facts "${TMP}/hardware.facts" \
   --dwarf "${TMP}/dwarf.one" \
-  --rocgdb "${TMP}/rocgdb.one"
+  --rocgdb "${TMP}/rocgdb.bundle"
 expect_fail "${CHECKER}" check-fixture \
   --manifest "${TMP}/absent-manifest.tsv" \
   --expected-manifest-sha256 "${manifest_sha256}" \
+  --hsaco "${HSACO}" \
   --artifact-facts "${TMP}/artifact.facts" \
   --hardware-facts "${TMP}/hardware.facts" \
   --dwarf "${TMP}/dwarf.one" \
-  --rocgdb "${TMP}/rocgdb.one"
+  --rocgdb "${TMP}/rocgdb.bundle"
 cp "${TMP}/artifact.facts" "${TMP}/artifact-mutated.facts"
 printf 'mutation=true\n' >>"${TMP}/artifact-mutated.facts"
 expect_fail "${CHECKER}" check-fixture \
   --manifest "${MANIFEST}" \
   --expected-manifest-sha256 "${manifest_sha256}" \
+  --hsaco "${HSACO}" \
   --artifact-facts "${TMP}/artifact-mutated.facts" \
   --hardware-facts "${TMP}/hardware.facts" \
   --dwarf "${TMP}/dwarf.one" \
-  --rocgdb "${TMP}/rocgdb.one"
+  --rocgdb "${TMP}/rocgdb.bundle"
 sed 's/^trust_domain\ttest-fixture-v2$/trust_domain\tproduction-v2/' \
   "${MANIFEST}" >"${TMP}/production-domain-manifest.tsv"
 production_domain_sha256="$(sha256sum "${TMP}/production-domain-manifest.tsv" | cut -d ' ' -f 1)"
 expect_fail "${CHECKER}" check-fixture \
   --manifest "${TMP}/production-domain-manifest.tsv" \
   --expected-manifest-sha256 "${production_domain_sha256}" \
+  --hsaco "${HSACO}" \
   --artifact-facts "${TMP}/artifact.facts" \
   --hardware-facts "${TMP}/hardware.facts" \
   --dwarf "${TMP}/dwarf.one" \
-  --rocgdb "${TMP}/rocgdb.one"
+  --rocgdb "${TMP}/rocgdb.bundle"
 expect_fail "${CHECKER}" normalize-dwarf \
   --input "${FIXTURES}/dwarf.pass.txt" --output "${TMP}/dwarf.one"
 
@@ -233,74 +220,74 @@ sed '/DW_TAG_compile_unit/a private_source](/home/harsh/private.rs)' \
   "${FIXTURES}/dwarf.pass.txt" >"${TMP}/dwarf-delimiter-absolute"
 expect_fail "${CHECKER}" check-dwarf --input "${TMP}/dwarf-delimiter-absolute"
 
-sed '/^i = /d' "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-missing-local"
+sed '/^i = /d' "${ROCGDB_FIXTURE}" >"${TMP}/rocgdb-missing-local"
 expect_fail check_rocgdb "${TMP}/rocgdb-missing-local"
-sed '/hit Breakpoint 2/d' "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-missing-bp2-hit"
+sed '/hit Breakpoint 2/d' "${ROCGDB_FIXTURE}" >"${TMP}/rocgdb-missing-bp2-hit"
 expect_fail check_rocgdb "${TMP}/rocgdb-missing-bp2-hit"
-sed '/hit Breakpoint 3/d' "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-missing-bp3-hit"
+sed '/hit Breakpoint 3/d' "${ROCGDB_FIXTURE}" >"${TMP}/rocgdb-missing-bp3-hit"
 expect_fail check_rocgdb "${TMP}/rocgdb-missing-bp3-hit"
-sed '/AMDGPU Wave .*main.rs:69/d' "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-missing-bp2-wave"
+sed '/AMDGPU Wave .*main.rs:69/d' "${ROCGDB_FIXTURE}" >"${TMP}/rocgdb-missing-bp2-wave"
 expect_fail check_rocgdb "${TMP}/rocgdb-missing-bp2-wave"
-sed '/AMDGPU Wave .*main.rs:70/d' "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-missing-bp3-wave"
+sed '/AMDGPU Wave .*main.rs:70/d' "${ROCGDB_FIXTURE}" >"${TMP}/rocgdb-missing-bp3-wave"
 expect_fail check_rocgdb "${TMP}/rocgdb-missing-bp3-wave"
 sed 's/scale = 1.5/scale = <optimized out>/' \
-  "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-optimized"
+  "${ROCGDB_FIXTURE}" >"${TMP}/rocgdb-optimized"
 expect_fail check_rocgdb "${TMP}/rocgdb-optimized"
 sed 's/input_len = 1/input_len = 2/' \
-  "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-wrong-length"
+  "${ROCGDB_FIXTURE}" >"${TMP}/rocgdb-wrong-length"
 expect_fail check_rocgdb "${TMP}/rocgdb-wrong-length"
 sed 's/AMDGPU Wave/CPU Thread/' \
-  "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-host-alpha"
+  "${ROCGDB_FIXTURE}" >"${TMP}/rocgdb-host-alpha"
 expect_fail check_rocgdb "${TMP}/rocgdb-host-alpha"
 sed '/Breakpoint 1 (alpha) pending[.]/d' \
-  "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-no-kernel-load"
+  "${ROCGDB_FIXTURE}" >"${TMP}/rocgdb-no-kernel-load"
 expect_fail check_rocgdb "${TMP}/rocgdb-no-kernel-load"
 sed '/FE2O3_S09_HARNESS_RESULT_V1/d' \
-  "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-no-hardware-pass"
+  "${ROCGDB_FIXTURE}" >"${TMP}/rocgdb-no-hardware-pass"
 expect_fail check_rocgdb "${TMP}/rocgdb-no-hardware-pass"
 sed '/^test .* \.\.\. ok$/d; /^test result: /d' \
-  "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-no-cargo-status"
+  "${ROCGDB_FIXTURE}" >"${TMP}/rocgdb-no-cargo-status"
 check_rocgdb "${TMP}/rocgdb-no-cargo-status"
 sed '/FE2O3_S09_HARNESS_RESULT_V1/s/result=passed/result=failed/' \
-  "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-forged-result"
+  "${ROCGDB_FIXTURE}" >"${TMP}/rocgdb-forged-result"
 expect_fail check_rocgdb "${TMP}/rocgdb-forged-result"
 sed '/FE2O3_S09_HARNESS_RESULT_V1/s/run_nonce=[0-9a-f]*/run_nonce=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee/' \
-  "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-forged-nonce"
+  "${ROCGDB_FIXTURE}" >"${TMP}/rocgdb-forged-nonce"
 expect_fail check_rocgdb "${TMP}/rocgdb-forged-nonce"
 sed '/FE2O3_S09_HARNESS_RESULT_V1/s/hsaco_sha256=[0-9a-f]*/hsaco_sha256=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee/' \
-  "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-forged-result-hsaco"
+  "${ROCGDB_FIXTURE}" >"${TMP}/rocgdb-forged-result-hsaco"
 expect_fail check_rocgdb "${TMP}/rocgdb-forged-result-hsaco"
 sed '/FE2O3_S09_ROCGDB_EXIT_STATUS = 0/d' \
-  "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-no-exit-status"
+  "${ROCGDB_FIXTURE}" >"${TMP}/rocgdb-no-exit-status"
 expect_fail check_rocgdb "${TMP}/rocgdb-no-exit-status"
-sed "s/${HSACO_SHA256}/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd/" \
-  "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-substitute-hsaco"
+sed "s/${ROCGDB_HSACO_SHA256}/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd/" \
+  "${ROCGDB_FIXTURE}" >"${TMP}/rocgdb-substitute-hsaco"
 expect_fail check_rocgdb "${TMP}/rocgdb-substitute-hsaco"
 sed "s/${HARDWARE_BUILD_ID}/dddddddddddddddddddddddddddddddddddddddd/" \
-  "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-substitute-host"
+  "${ROCGDB_FIXTURE}" >"${TMP}/rocgdb-substitute-host"
 expect_fail check_rocgdb "${TMP}/rocgdb-substitute-host"
 sed 's#crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs#/other-root/crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs#' \
-  "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-cross-root"
+  "${ROCGDB_FIXTURE}" >"${TMP}/rocgdb-cross-root"
 expect_fail check_rocgdb "${TMP}/rocgdb-cross-root"
 sed '/FE2O3_S09_BINDING/a leak = /home/harsh/private/build.rs' \
-  "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-posix-leak"
+  "${ROCGDB_FIXTURE}" >"${TMP}/rocgdb-posix-leak"
 expect_fail check_rocgdb "${TMP}/rocgdb-posix-leak"
 sed '/FE2O3_S09_BINDING/a leak = C:\\private\\build.rs' \
-  "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-windows-leak"
+  "${ROCGDB_FIXTURE}" >"${TMP}/rocgdb-windows-leak"
 expect_fail check_rocgdb "${TMP}/rocgdb-windows-leak"
 sed '/FE2O3_S09_BINDING/a leak = file:\/\/\/C:\\private\\build.rs' \
-  "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-windows-file-uri"
+  "${ROCGDB_FIXTURE}" >"${TMP}/rocgdb-windows-file-uri"
 expect_fail check_rocgdb "${TMP}/rocgdb-windows-file-uri"
 sed '/FE2O3_S09_BINDING/a leak = \\\\server\\share\\build.rs' \
-  "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-unc-leak"
+  "${ROCGDB_FIXTURE}" >"${TMP}/rocgdb-unc-leak"
 expect_fail check_rocgdb "${TMP}/rocgdb-unc-leak"
 sed '/FE2O3_S09_BINDING/a leak = \\\\?\\C:\\private\\build.rs' \
-  "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-device-leak"
+  "${ROCGDB_FIXTURE}" >"${TMP}/rocgdb-device-leak"
 expect_fail check_rocgdb "${TMP}/rocgdb-device-leak"
 sed '/FE2O3_S09_BEGIN/a FE2O3_S09_BEGIN' \
-  "${FIXTURES}/rocgdb.pass.txt" >"${TMP}/rocgdb-duplicate-marker"
+  "${ROCGDB_FIXTURE}" >"${TMP}/rocgdb-duplicate-marker"
 expect_fail check_rocgdb "${TMP}/rocgdb-duplicate-marker"
-ln -s "${FIXTURES}/rocgdb.pass.txt" "${TMP}/rocgdb-link"
+ln -s "${ROCGDB_FIXTURE}" "${TMP}/rocgdb-link"
 expect_fail check_rocgdb "${TMP}/rocgdb-link"
 
 sed "s/gfx942:xnack-/gfx90a:xnack-/" \
@@ -322,8 +309,10 @@ rg -Fq '/etc/fe2o3/s09-trust-v2.tsv' "${CHECKER}"
 rg -q 'FS_IMMUTABLE_FL' "${CHECKER}"
 rg -q 'O_NOFOLLOW' "${CHECKER}"
 rg -q -- '--batch --nx --nh' "${RUNNER}"
+rg -q -- '--return-child-result' "${RUNNER}"
 rg -q 'FE2O3_S09_HARDWARE_PASS' "${RUNNER}"
-rg -q 'FE2O3_S09_HARNESS_RESULT_V1' \
+rg -q 'FE2O3_S09_HARNESS_RESULT_V1' "${RUNNER}"
+expect_fail rg -q 'FE2O3_S09_HARNESS_RESULT_V1' \
   "${ROOT}/crates/fe2o3-hsa-runtime/tests/gfx942_two_kernel_hardware.rs"
 rg -q 'FE2O3_S09_RUN_NONCE' "${RUNNER}"
 rg -q 'FE2O3_S09_ROCGDB_EXIT_STATUS' "${RUNNER}"

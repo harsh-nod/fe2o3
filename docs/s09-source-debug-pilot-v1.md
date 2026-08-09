@@ -8,19 +8,21 @@ configuration value `s09-alpha-gfx942-o0-v1`, which requires COV6, `O0`,
 The profile is deliberately closed, but it does not treat a Cargo/rustc symbol
 as stable source identity. Manifest V2 separates `SemanticAdmissionV2` from
 `BuildObservationV2`. Semantic admission binds the canonical source path,
-3,231-byte length, source SHA-256, collector-authenticated logical owner
-`fe2o3_typed_alias_spoof::general_genuine::alpha`, General Scalar/Slice V3
-profile, nonzero portable MIR and ABI digests, and the exact gfx942/COV6/O0
-debug policy. Cargo metadata, crate and kernel binding IDs, observed DefPath,
-and observed symbol are exact build observations. They are recorded and bound
-by evidence policy, never used as fixed admission allowlist values.
+3,231-byte length, source SHA-256, logical crate/module/name/export, General
+Scalar/Slice rustc-layout V3 profile, portable MIR, ABI, launch shape, and the
+exact gfx942/COV6/O0 debug policy. Cargo metadata, crate and kernel bindings,
+observed DefPath and symbol, the exact rustc invocation and executable, Cargo
+and `cargo-fe2o3`, backend, Worker V2, and LLVM identities are build
+observations. They are recorded and bound by evidence policy, never used as
+fixed semantic-admission values.
 
-The observed DefPath and symbol must be internally consistent with the
-collector-authenticated kernel binding recorded by the same build. Their exact
-values may change when ordered Cargo `-C metadata`, the dependency graph,
-toolchain, profile, or checkout context changes. Such changes produce a new
-`BuildObservationV2`; they do not alter `SemanticAdmissionV2` when source,
-portable MIR semantics, ABI, owner, and target policy are unchanged.
+The observed DefPath and symbol are opaque, canonical build observations.
+Their exact values may change when Cargo `-C metadata`, the dependency graph,
+toolchain, profile, or checkout context changes. The harness does not derive
+either value from a binding ID and does not admit a build by matching a fixed
+DefPath or symbol. Such changes produce a new `BuildObservationV2`; they do not
+alter `SemanticAdmissionV2` when source, portable MIR semantics, ABI, launch
+shape, and target policy are unchanged.
 
 Absolute paths and paths containing `.` or `..` components are rejected and
 the checkout root is not emitted into DWARF. The compiler also requires the
@@ -74,14 +76,16 @@ The normalized transcript is segmented around every debugger continuation.
 The checker requires an exact BP2 line-69 hit followed by an AMDGPU-wave frame
 and all physical argument observations before BP3 is armed. It then requires
 an exact BP3 line-70 hit, another AMDGPU-wave frame, and local `i` before the
-final continuation. After all hardware checks and unload complete, the bound
-Rust harness emits one exact `FE2O3_S09_HARNESS_RESULT_V1` marker carrying the
-HSACO digest, a runner-generated 256-bit nonce, and `result=passed`. The checker
-does not depend on Cargo status-line adjacency: it accepts bounded debugger
-thread-exit interleaving, then requires the harness marker, normal inferior
-exit, debugger hardware-pass marker, and zero ROCgdb exit status in that order.
-Removing or forging the harness marker fails closed, as do reordered stops, a
-substitute host `alpha`, digest/build-ID mismatch, or unavailable observation.
+final continuation. ROCgdb runs with `--return-child-result`. Only after the
+hardware test exits normally with child status zero does a literal conditional
+ROCgdb command emit one `FE2O3_S09_HARNESS_RESULT_V1` marker carrying the HSACO
+digest, a runner-generated 256-bit nonce, and `result=passed`. The checker does
+not depend on Cargo status-line adjacency: it accepts bounded debugger
+thread-exit interleaving, then requires normal inferior exit, the conditional
+runner marker, debugger hardware-pass marker, and zero ROCgdb exit status in
+that order. Removing, moving, or forging the marker fails closed, as do
+reordered stops, a substitute host `alpha`, digest/build-ID mismatch, or an
+unavailable observation.
 
 Normalized DWARF, transcript, and facts files use ordered field schemas and
 strict value grammars. They reject file URIs, URIs carrying paths,
@@ -99,33 +103,35 @@ fails closed. The policy binds the canonical installed manifest path and
 digest plus every SemanticAdmissionV2 and BuildObservationV2 field.
 
 The installed manifest uses ordered schema
-`fe2o3-s09-protected-manifest-v2`. Its stable `SemanticAdmissionV2` section
-binds:
+`fe2o3-s09-protected-manifest-v2` and has exactly 51 fields. Three envelope
+fields are followed by 38 identity fields and ten evidence fields. The identity
+fields are namespaced, exact copies of:
 
-- source path, source SHA-256, and exact source length;
-- authenticated logical crate, module, kernel, export, and owner;
-- General Scalar/Slice V3 profile and nonzero portable MIR and ABI digests;
-- exact gfx942 target, COV6, O0, ABI, and source-debug policy.
+- the section name and SHA-256 of the canonical 18-field
+  `SemanticAdmissionV2` record;
+- every semantic record field in codec order;
+- the SHA-256 of the canonical 17-field `BuildObservationV2` record; and
+- every build record field in codec order.
 
-Its exact `BuildObservationV2` section records:
-
-- source commit/tree and the digest of ordered Cargo `-C metadata`;
-- crate/kernel bindings plus observed DefPath and symbol;
-- exact rustc MIR capture, Cargo, rustc, backend, LLVM, Worker V2, and LLD
-  digests;
-- exact dwarfdump, readobj, ROCgdb, checker, and hardware-harness digests;
-- exact HSACO, host executable/build ID, local archive-manifest, artifact,
-  hardware, normalized DWARF, and normalized ROCgdb digests.
+The final ten fields bind the source commit/tree, exact HSACO, host executable
+and build ID, archive manifest, artifact facts, hardware facts, normalized
+DWARF, and normalized ROCgdb transcript. The checker reads the HSACO itself,
+requires exactly one `.fe2o3.s09.identity.v2` `SHT_PROGBITS` section, decodes
+both bounded records, verifies the build-to-semantic digest edge, and compares
+all 38 derived identity fields against the protected manifest. Identity values
+are never accepted from environment variables or command-line field values.
 
 Every digest is lowercase, nonzero SHA-256. Serialization is one UTF-8,
 LF-terminated `field<TAB>value` line per field in fixed order. Missing,
-duplicate, reordered, empty, zero, or noncanonical fields fail closed. The
-installed immutable policy repeats and binds every manifest field, while its
-own manifest digest binds the complete serialized byte sequence.
+duplicate, reordered, empty, truncated, oversized, trailing, unknown, zero
+digest, or noncanonical fields fail closed. ELF size, section count, string
+table, handoff, record, field-name, and field-value sizes are explicitly
+bounded. The installed immutable policy repeats and binds every manifest
+field, while its own manifest digest binds the complete serialized byte
+sequence.
 
-Production accepts only `trust_domain=production-v2` and
-`execution_closure=protected-controller-v2`. `check-fixture` is a separate,
-explicitly non-authoritative test command. It accepts only
+Production accepts only `trust_domain=production-v2`. `check-fixture` is a
+separate, explicitly non-authoritative test command. It accepts only
 `trust_domain=test-fixture-v2`, cannot read production trust, and never emits a
 production-success message. A caller-supplied manifest or digest cannot reach
 the production command. A future protected controller and administrator must
@@ -139,19 +145,6 @@ FE2O3_ALLOW_S09_DEBUG=1 \
 FE2O3_LLVM_LINK_WORKER=/absolute/fe2o3-llvm-link-worker \
 FE2O3_LLVM_LINK_WORKER_BUILD_ID=<measured-worker-id> \
 FE2O3_LLVM_BUILD_ID=<measured-llvm-id> \
-FE2O3_S09_PORTABLE_MIR_SHA256=<portable-mir-sha256> \
-FE2O3_S09_PORTABLE_ABI_SHA256=<portable-abi-sha256> \
-FE2O3_S09_ORDERED_CARGO_METADATA_SHA256=<ordered-metadata-sha256> \
-FE2O3_S09_CRATE_BINDING_ID=<crate-binding-id> \
-FE2O3_S09_KERNEL_BINDING_ID=<kernel-binding-id> \
-FE2O3_S09_OBSERVED_DEF_PATH=<observed-def-path> \
-FE2O3_S09_OBSERVED_SYMBOL=<observed-symbol> \
-FE2O3_S09_RUSTC_MIR_CAPTURE_SHA256=<exact-capture-sha256> \
-FE2O3_S09_CARGO_SHA256=<cargo-sha256> \
-FE2O3_S09_RUSTC_SHA256=<rustc-sha256> \
-FE2O3_S09_BACKEND_SHA256=<backend-sha256> \
-FE2O3_S09_LLVM_SHA256=<llvm-sha256> \
-FE2O3_S09_LLD_SHA256=<lld-sha256> \
 FE2O3_S09_EVIDENCE_DIR=/absolute/new-evidence-directory \
   scripts/ci-local.sh s09-debug-hardware
 ```
@@ -159,15 +152,15 @@ FE2O3_S09_EVIDENCE_DIR=/absolute/new-evidence-directory \
 This lane performs the genuine direct LLVM/LLD compile, builds the hardware
 test in a fresh isolated target directory, runs native ROCgdb, emits a
 deterministic `s09-evidence-manifest-v2.tsv`, and validates its local evidence
-bundle. Its `trust_domain=local-capability-v2` and
-`execution_closure=local-capability-v2` prevent promotion: local selection of
-the checkout, observations, and host executable is not an evidence-grade
-provenance boundary. A future protected controller must derive the same
-fields from immutable inputs, select the GPU runner, and install a separately
-measured `production-v2` manifest and policy. Generic CI continues to run
-field-by-field mutation, missing, zero, duplicate, deterministic
-serialization, and lane-guard tests; neither those tests nor a local pilot
-archive can satisfy production debug evidence.
+bundle. The lane derives both identity records exclusively from the emitted
+HSACO. Its `trust_domain=local-capability-v2` prevents promotion: local
+selection of the checkout and host executable is not an evidence-grade
+provenance boundary. A future protected controller must select immutable
+inputs and the GPU runner, then install a separately measured `production-v2`
+manifest and policy. Generic CI continues to run field-by-field mutation,
+missing, zero-digest, duplicate, reorder, truncation, oversize, trailing-data,
+unknown-field, deterministic-serialization, and lane-guard tests; neither
+those tests nor a local pilot archive can satisfy production debug evidence.
 
 Pilot evidence classes are:
 

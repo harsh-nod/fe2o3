@@ -39,8 +39,6 @@ use reserved_fe2o3_symbols::{
 };
 #[cfg(feature = "hardware-test-hooks")]
 use std::cell::Cell;
-#[cfg(feature = "hardware-test-hooks")]
-use std::io::Write;
 
 const WORKGROUP_SIZE: usize = 256;
 #[cfg(feature = "hardware-test-hooks")]
@@ -779,31 +777,6 @@ fn parse_sha256(hex: &str) -> Result<[u8; 32], BoxError> {
 }
 
 #[cfg(feature = "hardware-test-hooks")]
-fn emit_s09_harness_result(hsaco_sha256: &str) -> Result<(), BoxError> {
-    let run_nonce =
-        std::env::var("FE2O3_S09_RUN_NONCE").map_err(|_| "FE2O3_S09_RUN_NONCE is not set")?;
-    let is_lower_hex = |value: &str| {
-        value.len() == 64
-            && value
-                .bytes()
-                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
-    };
-    require(
-        is_lower_hex(hsaco_sha256),
-        "the S09 result HSACO digest must be lowercase SHA-256",
-    )?;
-    require(
-        is_lower_hex(&run_nonce),
-        "the S09 result run nonce must be 64 lowercase hex digits",
-    )?;
-    println!(
-        "FE2O3_S09_HARNESS_RESULT_V1 hsaco_sha256={hsaco_sha256} run_nonce={run_nonce} result=passed"
-    );
-    std::io::stdout().flush()?;
-    Ok(())
-}
-
-#[cfg(feature = "hardware-test-hooks")]
 fn device_region_pointer(buffer: &DeviceBuffer<f32>, body_len: usize) -> Result<u64, BoxError> {
     require(
         buffer.len() == GUARD_PREFIX_ELEMENTS + body_len + GUARD_SUFFIX_ELEMENTS,
@@ -1176,7 +1149,7 @@ fn run_generated_safe_length_case(
 ///
 /// The environment must set `FE2O3_RUN_GFX942_TWO_KERNEL=1`,
 /// `FE2O3_GFX942_ALPHA_ZETA_HSACO`, and
-/// `FE2O3_GFX942_ALPHA_ZETA_SHA256`, and `FE2O3_S09_RUN_NONCE`.
+/// `FE2O3_GFX942_ALPHA_ZETA_SHA256`.
 #[cfg(feature = "hardware-test-hooks")]
 #[test]
 #[ignore = "requires a pinned alpha/zeta COV6 HSACO, gfx942:xnack-, and uses a fake prerequisite authenticator"]
@@ -1248,9 +1221,6 @@ fn gfx942_cov6_alpha_then_zeta_generated_safe_spi_with_fake_authenticator() -> R
         "generated-safe unload did not release the executable",
     )?;
     drop(publication_directory);
-    let hsaco_sha256 = std::env::var("FE2O3_GFX942_ALPHA_ZETA_SHA256")
-        .map_err(|_| "FE2O3_GFX942_ALPHA_ZETA_SHA256 is not set")?;
-    emit_s09_harness_result(&hsaco_sha256)?;
     Ok(())
 }
 
