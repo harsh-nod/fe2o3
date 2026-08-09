@@ -1,5 +1,6 @@
 mod executable;
 mod executable_wire;
+mod mem2reg;
 mod semantic_constant;
 mod semantic_memory;
 mod semantic_type;
@@ -19,6 +20,9 @@ pub use executable::{
     MirUnaryOp, MirUnwindAction, MirValueId,
 };
 pub use executable_wire::{MAX_EXECUTABLE_WIRE_BYTES, MirExecutableDecodeError};
+pub use mem2reg::{
+    MirMem2RegError, MirMem2RegFunctionReport, MirMem2RegReport, promote_module_to_ssa,
+};
 
 pub use semantic_constant::{
     MAX_CONSTANT_ALLOCATION_BYTES, MAX_CONSTANT_ALLOCATIONS, MAX_CONSTANT_GRAPH_DEPTH,
