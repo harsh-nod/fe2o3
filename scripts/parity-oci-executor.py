@@ -39,6 +39,9 @@ MAX_OCI_LAYER_BYTES = 64 * 1024**3
 MAX_OCI_IMAGE_BYTES = 256 * 1024**3
 MAX_STAGING_ROOT_ENTRIES = 64
 MAX_CLEANUP_ENTRIES = 20000
+PROCESS_REAP_GRACE_SECONDS = 5.0
+PROCESS_PIPE_JOIN_SECONDS = 5.0
+PROCESS_FINAL_JOIN_SECONDS = 1.0
 FS_IOC_GETFLAGS = 0x80086601
 FS_IMMUTABLE_FL = 0x00000010
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -84,6 +87,24 @@ class ProcessOutput:
     stdout: bytes
     stderr: bytes
     returncode: int
+
+
+def poll_process_exit(process: subprocess.Popen[bytes], timeout_seconds: float) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    while process.poll() is None:
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.01)
+    return True
+
+
+def join_threads_bound(threads: list[threading.Thread], timeout_seconds: float) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    for thread in threads:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        thread.join(timeout=remaining)
 
 
 def run_bounded(
@@ -169,28 +190,31 @@ def run_bounded(
                 pass
             break
         time.sleep(0.01)
-    try:
-        process.wait(timeout=5)
-    except subprocess.TimeoutExpired:
+    reaped = process.returncode is not None
+    if not reaped:
+        reaped = poll_process_exit(process, PROCESS_REAP_GRACE_SECONDS)
+    if not reaped:
         try:
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-        process.wait()
-    for reader in readers:
-        reader.join(timeout=5)
-    if writer is not None:
-        writer.join(timeout=5)
-    if any(reader.is_alive() for reader in readers) or (writer and writer.is_alive()):
+        reaped = poll_process_exit(process, PROCESS_REAP_GRACE_SECONDS)
+    threads = [*readers, *([writer] if writer is not None else [])]
+    join_threads_bound(threads, PROCESS_PIPE_JOIN_SECONDS)
+    if any(thread.is_alive() for thread in threads):
         try:
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-        for reader in readers:
-            reader.join(timeout=1)
-        if writer is not None:
-            writer.join(timeout=1)
+        if not reaped:
+            reaped = poll_process_exit(process, PROCESS_FINAL_JOIN_SECONDS)
+        join_threads_bound(threads, PROCESS_FINAL_JOIN_SECONDS)
         fail(f"bounded subprocess pipe did not close for {label}")
+    if not reaped or process.returncode is None:
+        fail(
+            f"{label} did not become waitable after bounded SIGKILL grace; "
+            "reap is deferred"
+        )
     if overflow:
         try:
             os.killpg(process.pid, signal.SIGKILL)
@@ -1562,9 +1586,7 @@ def initialize_git_control(control: Path) -> None:
         (control / "objects" / "pack").mkdir(mode=0o700)
         (control / "refs" / "heads").mkdir(mode=0o700, parents=True)
         (control / "refs" / "tags").mkdir(mode=0o700)
-        (control / "HEAD").write_text(
-            "ref: refs/heads/invalid\n", encoding="ascii"
-        )
+        (control / "HEAD").write_text("ref: refs/heads/invalid\n", encoding="ascii")
         (control / "config").write_text(
             "[core]\n\trepositoryformatversion = 0\n\tbare = true\n",
             encoding="ascii",

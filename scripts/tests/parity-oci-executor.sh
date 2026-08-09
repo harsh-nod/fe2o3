@@ -789,6 +789,7 @@ os.close(cleanup_root_fd)
 assert not any(output_root.iterdir())
 PY
 PYTHONDONTWRITEBYTECODE=1 python3 - "${EXECUTOR}" <<'PY'
+import io
 import importlib.util
 import sys
 import time
@@ -830,6 +831,47 @@ except module.ExecutorError as error:
     assert time.monotonic() - started < 5
 else:
     raise AssertionError("subprocess timeout was accepted")
+
+
+class NeverWaitableProcess:
+    def __init__(self):
+        self.pid = 99999999
+        self.stdout = io.BytesIO(b"overflow")
+        self.stderr = io.BytesIO(b"")
+        self.stdin = None
+        self.returncode = None
+
+    def poll(self):
+        return None
+
+
+never_waitable = NeverWaitableProcess()
+real_popen = module.subprocess.Popen
+real_killpg = module.os.killpg
+module.subprocess.Popen = lambda *args, **kwargs: never_waitable
+module.os.killpg = lambda *args, **kwargs: None
+module.PROCESS_REAP_GRACE_SECONDS = 0.02
+module.PROCESS_PIPE_JOIN_SECONDS = 0.02
+module.PROCESS_FINAL_JOIN_SECONDS = 0.02
+started = time.monotonic()
+try:
+    module.run_bounded(
+        ["/fixture/never-waitable"],
+        label="uninterruptible fixture",
+        environment=environment,
+        timeout_seconds=1,
+        stdout_limit=0,
+        stderr_limit=0,
+    )
+except module.ExecutorError as error:
+    assert "did not become waitable" in str(error)
+    assert "reap is deferred" in str(error)
+    assert time.monotonic() - started < 0.5
+else:
+    raise AssertionError("never-waitable process was accepted")
+finally:
+    module.subprocess.Popen = real_popen
+    module.os.killpg = real_killpg
 
 diff_id = "sha256:" + "a" * 64
 module.validate_runtime_rootfs(
