@@ -337,7 +337,10 @@ set_gate_args partial.tsv "${TEST_ROOT}/partial.tsv"
 expect_failure test_domain 'production promotion requires a production trust domain' "${TOOL}" "${gate_args[@]:0:${#gate_args[@]}-1}"
 
 TRANSACTION="${TEST_ROOT}/partial-projection.tsv"
-"${TOOL}" "${gate_args[@]}" --projection-output "${TRANSACTION}"
+ARCHIVE_CLOSURE="${TEST_ROOT}/partial-archive-closure.tsv"
+"${TOOL}" "${gate_args[@]}" \
+  --projection-output "${TRANSACTION}" \
+  --archive-closure-output "${ARCHIVE_CLOSURE}"
 partial_evidence_set="$(awk -F '\t' '$1 == "evidence_set_sha256" { print $2 }' "${ARCHIVE}/partial.tsv")"
 cat >"${TEST_ROOT}/expected-partial-projection.tsv" <<EOF
 signed_promotion_projection_schema_version	1
@@ -345,8 +348,34 @@ row_count	1
 row	0000	04	Missing	Partial	${SOURCE}	gfx942	mi300x-gfx942-test	unit,ui	bash	results/partial-unit-Partial-unit.tsv,results/partial-ui-Partial-ui.tsv	${partial_evidence_set}
 EOF
 cmp -- "${TEST_ROOT}/expected-partial-projection.tsv" "${TRANSACTION}"
+{
+  printf 'promotion_archive_closure_schema_version\t1\n'
+  printf 'evidence_set_sha256\t%s\n' "${partial_evidence_set}"
+  printf 'manifest_path\tpartial.tsv\n'
+  printf 'manifest_sha256\t%s\n' "$(file_sha "${ARCHIVE}/partial.tsv")"
+  printf 'file_count\t6\n'
+  index=0
+  for path in \
+    logs/partial-ui.log \
+    logs/partial-unit.log \
+    partial.tsv \
+    results/partial-ui-Partial-ui.tsv \
+    results/partial-unit-Partial-unit.tsv \
+    toolchains/bash.tsv; do
+    printf 'file\t%04d\t%s\t%s\t%s\n' "${index}" "${path}" \
+      "$(file_size "${ARCHIVE}/${path}")" "$(file_sha "${ARCHIVE}/${path}")"
+    ((index += 1))
+  done
+} >"${TEST_ROOT}/expected-partial-archive-closure.tsv"
+cmp -- "${TEST_ROOT}/expected-partial-archive-closure.tsv" "${ARCHIVE_CLOSURE}"
 expect_failure projection_overwrite 'promotion transaction projection output already exists' \
-  "${TOOL}" "${gate_args[@]}" --projection-output "${TRANSACTION}"
+  "${TOOL}" "${gate_args[@]}" \
+    --projection-output "${TRANSACTION}" \
+    --archive-closure-output "${ARCHIVE_CLOSURE}"
+expect_failure unpaired_closure \
+  'promotion archive closure output requires a projection output' \
+  "${TOOL}" "${gate_args[@]}" \
+    --archive-closure-output "${TEST_ROOT}/unpaired-closure.tsv"
 printf 'signed_promotion_projection_schema_version\t1\nrow_count\t0\n' \
   >"${TEST_ROOT}/empty-projection.tsv"
 "${TOOL}" merge-projections \
@@ -374,6 +403,22 @@ mv "${ARCHIVE}/complete-prefix.tsv" "${ARCHIVE}/complete.tsv"
 finish_manifest "${ARCHIVE}/complete.tsv" authorizations/review.tsv
 set_gate_args complete.tsv "${TEST_ROOT}/complete.tsv" "${TEST_ROOT}/baseline-partial.tsv"
 "${TOOL}" "${gate_args[@]}"
+COMPLETE_TRANSACTION="${TEST_ROOT}/complete-projection.tsv"
+COMPLETE_ARCHIVE_CLOSURE="${TEST_ROOT}/complete-archive-closure.tsv"
+"${TOOL}" "${gate_args[@]}" \
+  --projection-output "${COMPLETE_TRANSACTION}" \
+  --archive-closure-output "${COMPLETE_ARCHIVE_CLOSURE}"
+for path in \
+  authorizations/review.tsv \
+  artifacts/complete-compile.bin \
+  complete.tsv \
+  results/complete-compile-Complete-compile.tsv; do
+  awk -F '\t' -v path="${path}" -v size="$(file_size "${ARCHIVE}/${path}")" \
+    -v digest="$(file_sha "${ARCHIVE}/${path}")" '
+      $1 == "file" && $3 == path && $4 == size && $5 == digest { found++ }
+      END { exit found == 1 ? 0 : 1 }
+    ' "${COMPLETE_ARCHIVE_CLOSURE}"
+done
 
 # Signature mutation.
 cp "${ARCHIVE}/results/partial-unit-Partial-unit.tsv" "${ARCHIVE}/results/signature-mutated.tsv"

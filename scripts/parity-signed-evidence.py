@@ -22,6 +22,7 @@ from typing import Iterable
 
 MAX_BYTES = 4 * 1024 * 1024
 MAX_ITEMS = 256
+MAX_ARCHIVE_ENTRIES = 16384
 CLASSES = ("unit", "ui", "ir", "compile", "verus", "hardware", "debug")
 CLASS_RANK = {value: index for index, value in enumerate(CLASSES)}
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -967,9 +968,9 @@ def parse_result(
         execution_closure,
         executors,
         environment,
-        queue_id,
         queue_path,
         queue_digest,
+        queue_id,
         int(timeout_text),
         toolchains,
         commands,
@@ -993,6 +994,7 @@ class Authorization:
     evidence_set: str
     mode: str
     digest: str
+    relative_path: str
 
 
 def parse_authorization(
@@ -1046,6 +1048,7 @@ def parse_authorization(
         evidence_set,
         mode,
         digest,
+        relative,
     )
 
 
@@ -1059,6 +1062,8 @@ class PromotionManifest:
     evidence_set: str
     results: list[ResultRecord]
     authorizations: list[Authorization]
+    digest: str
+    relative_path: str
 
 
 def parse_manifest(
@@ -1068,7 +1073,7 @@ def parse_manifest(
     trust: TrustPolicy,
 ) -> PromotionManifest:
     path = archive_path(root, relative)
-    _, raw_lines, rows = read_raw(path)
+    raw, raw_lines, rows = read_raw(path)
     cursor = Cursor(rows, "promotion manifest")
     if cursor.scalar("promotion_manifest_schema_version") != "2":
         fail("promotion manifest schema must be 2")
@@ -1170,6 +1175,8 @@ def parse_manifest(
         evidence_set,
         results,
         authorizations,
+        sha256_bytes(raw),
+        relative,
     )
 
 
@@ -1352,6 +1359,244 @@ def promotion_projection_bytes(rows: Iterable[PromotionProjectionRow]) -> bytes:
     return ("\n".join(lines) + "\n").encode("ascii")
 
 
+@dataclass(frozen=True)
+class ArchiveClosureFile:
+    path: str
+    size: int
+    digest: str
+
+
+@dataclass(frozen=True)
+class PromotionArchiveClosure:
+    evidence_set: str
+    manifest_path: str
+    manifest_digest: str
+    files: tuple[ArchiveClosureFile, ...]
+
+
+def build_promotion_archive_closure(
+    root: Path, manifest: PromotionManifest
+) -> PromotionArchiveClosure:
+    files: dict[str, ArchiveClosureFile] = {}
+
+    def add(relative: str, size: int, digest: str) -> None:
+        if not valid_relative(relative) or size < 0 or not SHA256_RE.fullmatch(digest):
+            fail(f"invalid promotion archive binding: {relative}")
+        path = archive_path(root, relative)
+        if path.stat().st_size != size or sha256_file(path) != digest:
+            fail(f"promotion archive binding mismatch: {relative}")
+        binding = ArchiveClosureFile(relative, size, digest)
+        previous = files.get(relative)
+        if previous is not None and previous != binding:
+            fail(f"conflicting promotion archive binding: {relative}")
+        files[relative] = binding
+
+    manifest_path = archive_path(root, manifest.relative_path)
+    add(manifest.relative_path, manifest_path.stat().st_size, manifest.digest)
+    for result in manifest.results:
+        result_path = archive_path(root, result.relative_path)
+        add(result.relative_path, result_path.stat().st_size, result.digest)
+        for _, relative, size, digest in result.toolchains:
+            add(relative, size, digest)
+        log_path, log_size, log_digest = result.log
+        add(log_path, log_size, log_digest)
+        for _, relative, size, digest in result.artifacts:
+            add(relative, size, digest)
+        if result.queue_path != "-":
+            queue_path = archive_path(root, result.queue_path)
+            add(result.queue_path, queue_path.stat().st_size, result.queue_digest)
+    for authorization in manifest.authorizations:
+        authorization_path = archive_path(root, authorization.relative_path)
+        add(
+            authorization.relative_path,
+            authorization_path.stat().st_size,
+            authorization.digest,
+        )
+    if len(files) > MAX_ARCHIVE_ENTRIES:
+        fail("promotion archive closure has too many files")
+    return PromotionArchiveClosure(
+        manifest.evidence_set,
+        manifest.relative_path,
+        manifest.digest,
+        tuple(sorted(files.values(), key=lambda value: value.path)),
+    )
+
+
+def promotion_archive_closure_bytes(closure: PromotionArchiveClosure) -> bytes:
+    lines = [
+        "promotion_archive_closure_schema_version\t1",
+        f"evidence_set_sha256\t{closure.evidence_set}",
+        f"manifest_path\t{closure.manifest_path}",
+        f"manifest_sha256\t{closure.manifest_digest}",
+        f"file_count\t{len(closure.files)}",
+    ]
+    for index, binding in enumerate(closure.files):
+        lines.append(
+            f"file\t{index:04d}\t{binding.path}\t{binding.size}\t{binding.digest}"
+        )
+    return ("\n".join(lines) + "\n").encode("ascii")
+
+
+def parse_promotion_archive_closure(path: Path) -> PromotionArchiveClosure:
+    _, _, rows = read_raw(path)
+    cursor = Cursor(rows, "promotion archive closure")
+    if cursor.scalar("promotion_archive_closure_schema_version") != "1":
+        fail("promotion archive closure schema must be 1")
+    evidence_set = cursor.scalar("evidence_set_sha256")
+    manifest_path = cursor.scalar("manifest_path")
+    manifest_digest = cursor.scalar("manifest_sha256")
+    count_text = cursor.scalar("file_count")
+    if (
+        not SHA256_RE.fullmatch(evidence_set)
+        or not valid_relative(manifest_path)
+        or not SHA256_RE.fullmatch(manifest_digest)
+        or not re.fullmatch(r"[1-9][0-9]*", count_text)
+        or int(count_text) > MAX_ARCHIVE_ENTRIES
+    ):
+        fail("promotion archive closure identity is malformed")
+    files: list[ArchiveClosureFile] = []
+    previous = ""
+    for index in range(int(count_text)):
+        item = cursor.record("file", 5, index)
+        relative, size_text, digest = item[2:]
+        if (
+            not valid_relative(relative)
+            or relative <= previous
+            or not re.fullmatch(r"0|[1-9][0-9]*", size_text)
+            or not SHA256_RE.fullmatch(digest)
+        ):
+            fail(f"malformed promotion archive closure file {index:04d}")
+        files.append(ArchiveClosureFile(relative, int(size_text), digest))
+        previous = relative
+    cursor.done()
+    by_path = {value.path: value for value in files}
+    manifest = by_path.get(manifest_path)
+    if manifest is None or manifest.digest != manifest_digest:
+        fail("promotion archive closure does not bind its manifest")
+    return PromotionArchiveClosure(
+        evidence_set, manifest_path, manifest_digest, tuple(files)
+    )
+
+
+@dataclass
+class ArchiveTree:
+    directories: set[str]
+    files: dict[str, ArchiveClosureFile]
+
+
+def scan_archive_tree(root: Path, label: str, *, required: bool) -> ArchiveTree:
+    if not root.exists() and not root.is_symlink():
+        if required:
+            fail(f"{label} is missing")
+        return ArchiveTree(set(), {})
+    try:
+        info = root.lstat()
+    except OSError as error:
+        fail(f"cannot inspect {label}: {error}")
+    if not stat.S_ISDIR(info.st_mode) or root.is_symlink():
+        fail(f"{label} must be a real directory")
+    resolved_root = root.resolve(strict=True)
+    directories: set[str] = set()
+    files: dict[str, ArchiveClosureFile] = {}
+    for current, dirnames, filenames in os.walk(resolved_root, followlinks=False):
+        dirnames.sort()
+        filenames.sort()
+        current_path = Path(current)
+        for name in dirnames:
+            path = current_path.joinpath(name)
+            relative = path.relative_to(resolved_root).as_posix()
+            entry = path.lstat()
+            if (
+                not valid_relative(relative)
+                or not stat.S_ISDIR(entry.st_mode)
+                or path.is_symlink()
+            ):
+                fail(f"{label} contains a non-directory namespace: {relative}")
+            directories.add(relative)
+        for name in filenames:
+            path = current_path.joinpath(name)
+            relative = path.relative_to(resolved_root).as_posix()
+            entry = path.lstat()
+            if (
+                not valid_relative(relative)
+                or not stat.S_ISREG(entry.st_mode)
+                or path.is_symlink()
+            ):
+                fail(f"{label} contains a non-regular file: {relative}")
+            files[relative] = ArchiveClosureFile(
+                relative, entry.st_size, sha256_file(path)
+            )
+        if len(directories) + len(files) > MAX_ARCHIVE_ENTRIES:
+            fail(f"{label} has too many entries")
+    return ArchiveTree(directories, files)
+
+
+def verify_promotion_archive(args: argparse.Namespace) -> None:
+    transaction = parse_promotion_projection(
+        args.transaction, "promotion transaction projection"
+    )
+    if not transaction:
+        fail("promotion transaction projection is empty")
+    closure = parse_promotion_archive_closure(args.closure)
+    evidence_sets = {value.evidence_set for value in transaction}
+    if evidence_sets != {closure.evidence_set}:
+        fail("promotion archive closure does not bind the transaction evidence set")
+    closure_by_path = {value.path: value for value in closure.files}
+    for row in transaction:
+        for result in row.results:
+            if result not in closure_by_path:
+                fail(f"promotion archive closure omits transaction result: {result}")
+
+    protected = scan_archive_tree(
+        args.protected_archive, "protected evidence archive", required=False
+    )
+    candidate = scan_archive_tree(
+        args.candidate_archive, "candidate evidence archive", required=True
+    )
+    for relative in protected.directories:
+        if relative not in candidate.directories:
+            fail(f"candidate removed protected evidence namespace: {relative}")
+    for relative, binding in protected.files.items():
+        if candidate.files.get(relative) != binding:
+            fail(f"candidate mutated protected evidence file: {relative}")
+
+    for relative, binding in closure_by_path.items():
+        if candidate.files.get(relative) != binding:
+            fail(f"candidate evidence file violates signed closure: {relative}")
+    protected_files = set(protected.files)
+    expected_new_files = set(closure_by_path) - protected_files
+    actual_new_files = set(candidate.files) - protected_files
+    extra_files = actual_new_files - expected_new_files
+    if extra_files:
+        fail(f"candidate evidence archive has unreferenced file: {min(extra_files)}")
+    missing_files = expected_new_files - actual_new_files
+    if missing_files:
+        fail(f"candidate evidence archive is missing signed file: {min(missing_files)}")
+
+    required_new_directories: set[str] = set()
+    for relative in expected_new_files:
+        parent = Path(relative).parent
+        while parent != Path("."):
+            value = parent.as_posix()
+            if value not in protected.directories:
+                required_new_directories.add(value)
+            parent = parent.parent
+    actual_new_directories = candidate.directories - protected.directories
+    extra_directories = actual_new_directories - required_new_directories
+    if extra_directories:
+        fail(
+            "candidate evidence archive has unreferenced namespace: "
+            f"{min(extra_directories)}"
+        )
+    missing_directories = required_new_directories - actual_new_directories
+    if missing_directories:
+        fail(f"candidate evidence archive is missing namespace: {min(missing_directories)}")
+    print(
+        "promotion archive closure is exact: "
+        f"{len(expected_new_files)} new file(s)"
+    )
+
+
 def write_new_file(path: Path, payload: bytes, label: str) -> None:
     if path.exists() or path.is_symlink():
         fail(f"{label} output already exists")
@@ -1517,6 +1762,8 @@ def gate(args: argparse.Namespace) -> None:
         fail("manifest contains evidence unused by a promotion")
     if set(authorization_by_row) != complete_rows:
         fail("manifest review authorization set is not exact")
+    if args.projection_output is None and args.archive_closure_output is not None:
+        fail("promotion archive closure output requires a projection output")
     if args.projection_output is not None:
         projected_rows: list[PromotionProjectionRow] = []
         for row in sorted(changed_rows, key=row_rank):
@@ -1543,11 +1790,25 @@ def gate(args: argparse.Namespace) -> None:
                     manifest.evidence_set,
                 )
             )
+        if args.projection_output.exists() or args.projection_output.is_symlink():
+            fail("promotion transaction projection output already exists")
+        if args.archive_closure_output is not None and (
+            args.archive_closure_output.exists() or args.archive_closure_output.is_symlink()
+        ):
+            fail("promotion archive closure output already exists")
         write_new_file(
             args.projection_output,
             promotion_projection_bytes(projected_rows),
             "promotion transaction projection",
         )
+        if args.archive_closure_output is not None:
+            write_new_file(
+                args.archive_closure_output,
+                promotion_archive_closure_bytes(
+                    build_promotion_archive_closure(root, manifest)
+                ),
+                "promotion archive closure",
+            )
     print(f"signed parity evidence gate passed: {promotions} promotion(s)")
 
 
@@ -1830,12 +2091,19 @@ def build_parser() -> argparse.ArgumentParser:
     gate_parser.add_argument("--baseline-status", type=Path, required=True)
     gate_parser.add_argument("--candidate-status", type=Path, required=True)
     gate_parser.add_argument("--projection-output", type=Path)
+    gate_parser.add_argument("--archive-closure-output", type=Path)
     gate_parser.add_argument("--allow-test-fixtures", action="store_true")
 
     projection_merge = subparsers.add_parser("merge-projections")
     projection_merge.add_argument("--baseline", type=Path, required=True)
     projection_merge.add_argument("--transaction", type=Path, required=True)
     projection_merge.add_argument("--output", type=Path, required=True)
+
+    archive_verify = subparsers.add_parser("verify-promotion-archive")
+    archive_verify.add_argument("--protected-archive", type=Path, required=True)
+    archive_verify.add_argument("--candidate-archive", type=Path, required=True)
+    archive_verify.add_argument("--transaction", type=Path, required=True)
+    archive_verify.add_argument("--closure", type=Path, required=True)
 
     queue_run = subparsers.add_parser("queue-run")
     common_trust(queue_run)
@@ -1910,6 +2178,8 @@ def main() -> None:
         gate(args)
     elif args.command == "merge-projections":
         merge_promotion_projections(args)
+    elif args.command == "verify-promotion-archive":
+        verify_promotion_archive(args)
     elif args.command == "queue-run":
         run_queue(args)
     else:
