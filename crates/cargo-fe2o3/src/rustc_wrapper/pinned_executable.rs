@@ -482,37 +482,11 @@ mod platform {
     #[cfg(test)]
     mod tests {
         use super::*;
+        use crate::pinned_executable_test_directory::TestDirectory;
         use std::fs::{self, FileTimes};
         use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
         use std::process::Stdio;
-        use std::sync::atomic::{AtomicU64, Ordering};
         use std::time::{Duration, Instant};
-
-        static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(0);
-
-        struct TestDirectory(PathBuf);
-
-        impl TestDirectory {
-            fn new() -> Self {
-                let id = NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed);
-                let path = std::env::temp_dir().join(format!(
-                    "cargo-fe2o3-pinned-executable-{}-{id}",
-                    std::process::id()
-                ));
-                fs::create_dir(&path).expect("create pinned executable test directory");
-                Self(path)
-            }
-
-            fn path(&self) -> &Path {
-                &self.0
-            }
-        }
-
-        impl Drop for TestDirectory {
-            fn drop(&mut self) {
-                let _ = fs::remove_dir_all(&self.0);
-            }
-        }
 
         fn write_executable(path: &Path, contents: &[u8]) {
             fs::write(path, contents).expect("write executable fixture");
