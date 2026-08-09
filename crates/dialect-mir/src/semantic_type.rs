@@ -1,11 +1,13 @@
 use std::collections::HashSet;
 use std::fmt::{self, Write};
 
+use serde::{Deserialize, Serialize};
+
 /// A rustc-reported size and ABI alignment.
 ///
 /// `size` is `None` only for dynamically sized Rust types. Sizes and offsets
 /// are bytes; the model deliberately does not infer target layout.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MirLayout {
     pub size: Option<u64>,
     pub align: u64,
@@ -24,7 +26,7 @@ impl MirLayout {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum MirScalarType {
     Bool,
     Char,
@@ -60,26 +62,26 @@ impl MirScalarType {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum MirMutability {
     Immutable,
     Mutable,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Ord, PartialOrd, Serialize)]
 pub struct MirAddressSpace(pub u32);
 
 impl MirAddressSpace {
     pub const DEFAULT: Self = Self(0);
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MirSemanticType {
     pub layout: MirLayout,
     pub kind: MirTypeKind,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum MirTypeKind {
     Unit,
     Scalar(MirScalarType),
@@ -105,7 +107,7 @@ pub enum MirTypeKind {
     Enum(MirEnumType),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MirField {
     /// Rust source name. Tuple fields use `None` and retain declaration order.
     pub name: Option<String>,
@@ -113,13 +115,13 @@ pub struct MirField {
     pub ty: MirSemanticType,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MirPadding {
     pub offset: u64,
     pub size: u64,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MirAggregateLayout {
     /// Fields are in Rust declaration order, not physical offset order.
     pub fields: Vec<MirField>,
@@ -127,14 +129,14 @@ pub struct MirAggregateLayout {
     pub padding: Vec<MirPadding>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MirStructType {
     /// A monomorphized, crate-qualified rustc type identity.
     pub identity: String,
     pub aggregate: MirAggregateLayout,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MirEnumType {
     /// A monomorphized, crate-qualified rustc type identity.
     pub identity: String,
@@ -145,7 +147,7 @@ pub struct MirEnumType {
     pub variants: Vec<MirVariant>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum MirEnumEncoding {
     Uninhabited,
     Single {
@@ -165,7 +167,7 @@ pub enum MirEnumEncoding {
     },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MirVariant {
     pub index: u32,
     pub name: String,
