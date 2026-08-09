@@ -3,6 +3,29 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+struct ScratchTarget {
+    path: PathBuf,
+}
+
+impl ScratchTarget {
+    fn new() -> Self {
+        let path = std::env::temp_dir().join(format!(
+            "fe2o3-static-view-host-codegen-target-{}",
+            std::process::id()
+        ));
+        if path.exists() {
+            fs::remove_dir_all(&path).expect("remove stale scratch target");
+        }
+        Self { path }
+    }
+}
+
+impl Drop for ScratchTarget {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
 fn newest_rlib(directory: &Path, crate_name: &str) -> PathBuf {
     let prefix = format!("lib{crate_name}-");
     let mut candidates = fs::read_dir(directory)
@@ -64,12 +87,33 @@ fn assert_exact_gep_offsets(body: &str, symbol: &str, expected: &[u64]) {
 
 #[test]
 fn host_rustc_emits_exact_constant_offsets_without_bounds_paths() {
-    let executable = std::env::current_exe().expect("locate integration test executable");
-    let deps = executable
-        .parent()
-        .expect("integration test dependency directory");
-    let device = newest_rlib(deps, "fe2o3_device");
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let workspace = manifest
+        .parent()
+        .and_then(Path::parent)
+        .expect("workspace root");
+    let scratch = ScratchTarget::new();
+    let library_build = Command::new(env!("CARGO"))
+        .current_dir(workspace)
+        .args([
+            "build",
+            "--locked",
+            "-p",
+            "fe2o3-device",
+            "--lib",
+            "--target-dir",
+        ])
+        .arg(&scratch.path)
+        .output()
+        .expect("build isolated fe2o3-device library");
+    assert!(
+        library_build.status.success(),
+        "isolated fe2o3-device build failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&library_build.stdout),
+        String::from_utf8_lossy(&library_build.stderr)
+    );
+    let deps = scratch.path.join("debug/deps");
+    let device = newest_rlib(&deps, "fe2o3_device");
     let source = manifest.join("tests/host_codegen/static_view_shape.rs");
     let output = std::env::temp_dir().join(format!(
         "fe2o3-host-static-view-shape-{}-{}.ll",
@@ -78,12 +122,7 @@ fn host_rustc_emits_exact_constant_offsets_without_bounds_paths() {
     ));
     let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
     let compiled = Command::new(rustc)
-        .current_dir(
-            manifest
-                .parent()
-                .and_then(Path::parent)
-                .expect("workspace root"),
-        )
+        .current_dir(workspace)
         .arg("--crate-name=static_view_shape")
         .arg("--crate-type=lib")
         .arg("--edition=2024")
