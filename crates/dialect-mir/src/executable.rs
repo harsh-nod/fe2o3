@@ -159,6 +159,12 @@ impl MirExternalCallRegistry {
             let path = format!("external_registry.entries[{index}]");
             validate_identity(&format!("{path}.identity"), &entry.identity)?;
             validate_identity(&format!("{path}.contract"), &entry.contract)?;
+            if is_intrinsic_identity(&entry.identity) {
+                return Err(error(
+                    format!("{path}.identity"),
+                    "external imports cannot claim the compiler intrinsic namespace",
+                ));
+            }
             if previous.is_some_and(|value| value >= entry.identity.as_str()) {
                 return Err(error(
                     format!("{path}.identity"),
@@ -657,6 +663,7 @@ impl MirExecutableModule {
             previous_type = Some(canonical);
         }
 
+        self.validate_namespace(registry)?;
         self.validate_callables(registry)?;
 
         let mut previous_identity: Option<&str> = None;
@@ -672,6 +679,69 @@ impl MirExecutableModule {
             previous_identity = Some(&function.identity);
             validate_span_opt(&format!("{path}.span"), function.span.as_ref())?;
             Verifier::new(self, function, path).verify()?;
+        }
+        Ok(())
+    }
+
+    fn validate_namespace(
+        &self,
+        registry: &MirExternalCallRegistry,
+    ) -> Result<(), MirExecutableValidationError> {
+        bounded_len(
+            "module.callables",
+            self.callables.len(),
+            0,
+            MAX_EXECUTABLE_CALLABLES,
+        )?;
+        let mut previous_callable: Option<&str> = None;
+        for (index, callable) in self.callables.iter().enumerate() {
+            let path = format!("module.callables[{index}].identity");
+            validate_identity(&path, &callable.identity)?;
+            if previous_callable.is_some_and(|value| value >= callable.identity.as_str()) {
+                return Err(error(
+                    path,
+                    "callable identities must be globally unique and strictly sorted",
+                ));
+            }
+            previous_callable = Some(&callable.identity);
+        }
+
+        let mut previous_function: Option<&str> = None;
+        for (index, function) in self.functions.iter().enumerate() {
+            let path = format!("module.functions[{index}].identity");
+            validate_identity(&path, &function.identity)?;
+            if previous_function.is_some_and(|value| value >= function.identity.as_str()) {
+                return Err(error(
+                    path,
+                    "defined function identities must be globally unique and strictly sorted",
+                ));
+            }
+            previous_function = Some(&function.identity);
+            if is_intrinsic_identity(&function.identity) {
+                return Err(error(
+                    path,
+                    "defined function collides with the compiler intrinsic namespace",
+                ));
+            }
+            if registry.find(&function.identity).is_some() {
+                return Err(error(
+                    path,
+                    "defined function collides with the trusted import namespace",
+                ));
+            }
+            if let Ok(callable_index) = self
+                .callables
+                .binary_search_by(|callable| callable.identity.cmp(&function.identity))
+                && !matches!(
+                    self.callables[callable_index].authority,
+                    MirCallAuthority::DefinedFunction
+                )
+            {
+                return Err(error(
+                    path,
+                    "defined function cannot shadow an import or intrinsic declaration",
+                ));
+            }
         }
         Ok(())
     }
@@ -2705,6 +2775,16 @@ struct ProjectionState<'a> {
     ty: ProjectionType<'a>,
     writable: bool,
     address_space: MirAddressSpace,
+}
+
+fn is_intrinsic_identity(identity: &str) -> bool {
+    matches!(
+        identity,
+        "fe2o3.copy_nonoverlapping"
+            | "fe2o3.pointer_distance"
+            | "fe2o3.volatile_load"
+            | "fe2o3.volatile_store"
+    )
 }
 
 fn unwind_action_may_unwind(action: &MirUnwindAction) -> bool {
