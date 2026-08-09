@@ -29,3 +29,9 @@
 /.github/workflows/parity-review-signal.yml @powderluv
 /.github/CODEOWNERS @powderluv
 /.github/parity-trust-reviewers.txt @powderluv
+/.github/workflows/s09-* @powderluv
+/crates/rustc-codegen-fe2o3/src/source_debug.rs @powderluv
+/crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/ @powderluv
+/docs/s09-source-debug-pilot-v1.md @powderluv
+/scripts/s09-* @powderluv
+/scripts/tests/s09-* @powderluv

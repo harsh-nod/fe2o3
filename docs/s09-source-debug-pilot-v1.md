@@ -62,7 +62,7 @@ line 70, and the exact hardware test completing with a normal inferior exit.
 A substitute host `alpha`, digest/build-ID mismatch, missing hardware pass, or
 unavailable observation fails even when ROCgdb exits zero.
 
-The available real lane is explicit and GPU-gated:
+The available real lane is an explicit, GPU-gated local capability pilot:
 
 ```text
 FE2O3_ALLOW_S09_DEBUG=1 \
@@ -74,11 +74,14 @@ FE2O3_S09_EVIDENCE_DIR=/absolute/new-evidence-directory \
 ```
 
 This lane performs the genuine direct LLVM/LLD compile, builds the hardware
-test in a fresh isolated target directory, runs native ROCgdb, and archives the
-bound artifact, executable, DWARF, transcript, and status facts. The manual
-`s09-debug.yml` workflow exposes the same lane on a self-hosted ROCm AMD-GPU
-runner. Generic CI continues to run all synthetic mutation and lane-guard
-tests, but those tests cannot satisfy real debug evidence.
+test in a fresh isolated target directory, and runs native ROCgdb. Its output
+is capability-only: local selection of the checkout and host executable is not
+an evidence-grade provenance boundary. The candidate-controlled self-hosted
+workflow was removed. A future protected controller must select an immutable
+source revision, toolchain, harness, and GPU runner, then supply their exact
+digests in the protected S09 manifest. Generic CI continues to run synthetic
+mutation and lane-guard tests; neither those tests nor a local pilot archive
+can satisfy production debug evidence.
 
 Pilot evidence classes are:
 

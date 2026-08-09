@@ -2,6 +2,10 @@
 
 set -Eeuo pipefail
 
+# This lane demonstrates local capability only. Its output cannot satisfy the
+# protected S09 evidence policy without an externally pinned provenance manifest.
+readonly S09_CLAIM="capability-only local pilot"
+
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
@@ -100,4 +104,4 @@ readonly HARDWARE_TEST
 "${RUNNER}" "${HSACO}" "${HARDWARE_TEST}" "${ARCHIVE}"
 rg -q $'^supplemental\tS09\tMissing$' docs/cuda-oxide-parity-status.tsv ||
   fail "S09 parity status must remain Missing"
-printf 'S09 real debug evidence: %s\n' "${EVIDENCE}"
+printf 'S09 %s output: %s\n' "${S09_CLAIM}" "${EVIDENCE}"
