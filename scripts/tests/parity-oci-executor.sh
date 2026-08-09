@@ -793,13 +793,15 @@ module.cleanup_staging_lease(
 os.close(cleanup_root_fd)
 assert not any(output_root.iterdir())
 PY
-PYTHONDONTWRITEBYTECODE=1 python3 - "${EXECUTOR}" <<'PY'
+PYTHONDONTWRITEBYTECODE=1 python3 - "${EXECUTOR}" "${OCI_LAYOUT}" <<'PY'
 import io
 import importlib.util
+import os
+from pathlib import Path
 import sys
 import time
 
-module_path = sys.argv[1]
+module_path, layout_text = sys.argv[1:]
 spec = importlib.util.spec_from_file_location("parity_oci_executor_bounds", module_path)
 assert spec is not None and spec.loader is not None
 module = importlib.util.module_from_spec(spec)
@@ -903,6 +905,74 @@ except module.ExecutorError:
     pass
 else:
     raise AssertionError("recursive JSON parser input was accepted")
+
+layout = Path(layout_text)
+layout_fd = os.open(layout, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+real_read = module.read_descriptor_bound
+real_read_bytes = Path.read_bytes
+
+
+def reject_path_read(self):
+    del self
+    raise AssertionError("OCI JSON reopened through Path.read_bytes")
+
+
+Path.read_bytes = reject_path_read
+try:
+    module.read_oci_json(
+        layout_fd,
+        ("index.json",),
+        "descriptor-only fixture",
+        maximum_bytes=module.MAX_OCI_METADATA_BYTES,
+        expected_uid=os.getuid(),
+        expected_gid=os.getgid(),
+    )
+finally:
+    Path.read_bytes = real_read_bytes
+
+index = layout / "index.json"
+
+
+def mutate_index(file_fd, maximum, label):
+    raw = real_read(file_fd, maximum, label)
+    os.utime(index, None)
+    return raw
+
+
+module.read_descriptor_bound = mutate_index
+try:
+    module.read_oci_json(
+        layout_fd,
+        ("index.json",),
+        "racing OCI index",
+        maximum_bytes=module.MAX_OCI_METADATA_BYTES,
+        expected_uid=os.getuid(),
+        expected_gid=os.getgid(),
+    )
+except module.ExecutorError as error:
+    assert "changed or differs" in str(error)
+else:
+    raise AssertionError("OCI JSON metadata race was accepted")
+finally:
+    module.read_descriptor_bound = real_read
+    os.close(layout_fd)
+
+dev_fd = os.open("/dev", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+try:
+    module.read_oci_json(
+        dev_fd,
+        ("null",),
+        "device JSON fixture",
+        maximum_bytes=1024,
+        expected_uid=0,
+        expected_gid=0,
+    )
+except module.ExecutorError as error:
+    assert "descriptor metadata or size is invalid" in str(error)
+else:
+    raise AssertionError("device OCI JSON input was accepted")
+finally:
+    os.close(dev_fd)
 PY
 plan_arguments="$({
   while IFS=$'\t' read -r key _ encoded; do
@@ -1020,6 +1090,18 @@ cp "${TEST_ROOT}/index.good" "${OCI_LAYOUT}/index.json"
 cp "${TEST_ROOT}/profile.good" "${PROFILE}"
 write_policy
 
+mv "${OCI_LAYOUT}/index.json" "${TEST_ROOT}/index.fifo.good"
+mkfifo "${OCI_LAYOUT}/index.json"
+expect_failure json_fifo 'descriptor metadata or size is invalid' verify
+rm "${OCI_LAYOUT}/index.json"
+mv "${TEST_ROOT}/index.fifo.good" "${OCI_LAYOUT}/index.json"
+
+mv "${OCI_LAYOUT}/index.json" "${TEST_ROOT}/index.oversize.good"
+truncate -s 4194305 "${OCI_LAYOUT}/index.json"
+expect_failure json_oversized 'descriptor metadata or size is invalid' verify
+rm "${OCI_LAYOUT}/index.json"
+mv "${TEST_ROOT}/index.oversize.good" "${OCI_LAYOUT}/index.json"
+
 printf '{"schemaVersion":2,"schemaVersion":2,"manifests":[]}\n' \
   >"${OCI_LAYOUT}/index.json"
 write_profile \
@@ -1053,7 +1135,7 @@ cp "${TEST_ROOT}/layer" "${OCI_LAYOUT}/blobs/sha256/${layer_digest}"
 
 mv "${OCI_LAYOUT}/blobs/sha256" "${TEST_ROOT}/sha256.real"
 ln -s "${TEST_ROOT}/sha256.real" "${OCI_LAYOUT}/blobs/sha256"
-expect_failure oci_parent_symlink 'path contains a symlink' verify
+expect_failure oci_parent_symlink 'cannot open or read OCI manifest by descriptor' verify
 rm "${OCI_LAYOUT}/blobs/sha256"
 mv "${TEST_ROOT}/sha256.real" "${OCI_LAYOUT}/blobs/sha256"
 

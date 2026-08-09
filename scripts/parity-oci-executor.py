@@ -1286,17 +1286,6 @@ def require_safe_oci_entry(
     return current
 
 
-def read_json_bound(path: Path, binding: Layer, label: str) -> dict[str, object]:
-    verify_regular(
-        path, str(binding.size), binding.digest.removeprefix("sha256:"), label
-    )
-    try:
-        raw = path.read_bytes()
-    except OSError:
-        fail(f"cannot read {label}")
-    return strict_json_object(raw, label)
-
-
 def strict_json_object(raw: bytes, label: str) -> dict[str, object]:
     def object_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
         result: dict[str, object] = {}
@@ -1326,32 +1315,84 @@ def strict_json_object(raw: bytes, label: str) -> dict[str, object]:
     return value
 
 
-def read_json_file(
-    path: Path,
+def read_oci_json(
+    layout_fd: int,
+    relative: tuple[str, ...],
     label: str,
     *,
     maximum_bytes: int,
+    expected_uid: int,
+    expected_gid: int,
     expected_size: int | None = None,
     expected_digest: str | None = None,
 ) -> dict[str, object]:
-    try:
-        info = path.lstat()
-        raw = path.read_bytes()
-    except OSError:
-        fail(f"cannot read {label}")
     if (
-        path.is_symlink()
-        or not stat.S_ISREG(info.st_mode)
-        or info.st_nlink != 1
-        or not 1 <= info.st_size <= maximum_bytes
-        or len(raw) != info.st_size
+        not relative
+        or any(
+            not component or "/" in component or component in (".", "..")
+            for component in relative
+        )
+        or not 1 <= maximum_bytes <= MAX_OCI_METADATA_BYTES
         or expected_size is not None
-        and info.st_size != expected_size
+        and not 1 <= expected_size <= maximum_bytes
         or expected_digest is not None
-        and sha256_bytes(raw) != expected_digest
+        and SHA256_RE.fullmatch(expected_digest) is None
     ):
-        fail(f"{label} binding or size is invalid")
-    return strict_json_object(raw, label)
+        fail(f"invalid {label} descriptor read contract")
+    current_fd = -1
+    file_fd = -1
+    try:
+        current_fd = os.dup(layout_fd)
+        for component in relative[:-1]:
+            next_fd = os.open(
+                component,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                dir_fd=current_fd,
+            )
+            os.close(current_fd)
+            current_fd = next_fd
+            parent = os.fstat(current_fd)
+            if (
+                not stat.S_ISDIR(parent.st_mode)
+                or (parent.st_uid, parent.st_gid) != (expected_uid, expected_gid)
+                or parent.st_mode & 0o022
+            ):
+                fail(f"{label} parent ownership or mode is unsafe")
+        file_fd = os.open(
+            relative[-1],
+            os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=current_fd,
+        )
+        before = os.fstat(file_fd)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_nlink != 1
+            or (before.st_uid, before.st_gid) != (expected_uid, expected_gid)
+            or before.st_mode & 0o022
+            or not 1 <= before.st_size <= maximum_bytes
+            or expected_size is not None
+            and before.st_size != expected_size
+        ):
+            fail(f"{label} descriptor metadata or size is invalid")
+        raw = read_descriptor_bound(file_fd, maximum_bytes, label)
+        after = os.fstat(file_fd)
+        if (
+            stable_file_identity(before) != stable_file_identity(after)
+            or len(raw) != before.st_size
+            or expected_digest is not None
+            and sha256_bytes(raw) != expected_digest
+        ):
+            fail(f"{label} changed or differs from its protected binding")
+        return strict_json_object(raw, label)
+    except ExecutorError:
+        raise
+    except OSError as error:
+        fail(f"cannot open or read {label} by descriptor: {error}")
+    finally:
+        if file_fd >= 0:
+            os.close(file_fd)
+        if current_fd >= 0:
+            os.close(current_fd)
 
 
 def validate_json_shape(value: object, label: str) -> None:
@@ -1441,78 +1482,110 @@ def validate_runtime_rootfs(value: object, expected: tuple[str, ...]) -> None:
 
 def verify_oci_image(profile: Profile) -> tuple[str, ...]:
     layout = Path(profile.layout_path)
-    if (
-        not layout.is_absolute()
-        or layout.is_symlink()
-        or not layout.is_dir()
-        or layout.resolve(strict=True) != layout
-    ):
+    if not layout.is_absolute() or not valid_absolute(str(layout)):
         fail("OCI layout is unavailable or unsafe")
-    verify_operator_owned(layout, profile, "OCI layout", directory=True)
-    layout_marker = require_safe_oci_entry(layout, ("oci-layout",), "OCI layout marker")
-    index_path = require_safe_oci_entry(layout, ("index.json",), "OCI index")
-    require_safe_oci_entry(layout, ("blobs",), "OCI blob directory", directory=True)
-    require_safe_oci_entry(
-        layout, ("blobs", "sha256"), "OCI SHA-256 directory", directory=True
-    )
-    verify_operator_owned(layout_marker, profile, "OCI layout marker", directory=False)
-    verify_operator_owned(index_path, profile, "OCI index", directory=False)
-    marker = read_json_file(layout_marker, "OCI layout marker", maximum_bytes=1024)
-    if marker != {"imageLayoutVersion": "1.0.0"}:
-        fail("unsupported OCI layout version")
-    index = read_json_file(
-        index_path,
-        "OCI index",
-        maximum_bytes=MAX_OCI_METADATA_BYTES,
-        expected_size=profile.index_size,
-        expected_digest=profile.index_digest,
-    )
-    manifests = index.get("manifests") if isinstance(index, dict) else None
-    if not isinstance(manifests, list):
-        fail("invalid OCI index manifests")
-    selected = [descriptor(value, "manifest") for value in manifests]
-    if selected.count(profile.manifest) != 1:
-        fail("protected OCI manifest is absent or ambiguous")
-    manifest_path = require_safe_oci_entry(
-        layout,
-        ("blobs", "sha256", profile.manifest.digest.removeprefix("sha256:")),
-        "OCI manifest",
-    )
-    verify_operator_owned(manifest_path, profile, "OCI manifest", directory=False)
-    manifest = read_json_bound(manifest_path, profile.manifest, "OCI manifest")
-    if descriptor(manifest.get("config"), "config") != profile.config:
-        fail("OCI config differs from protected profile")
-    layer_values = manifest.get("layers")
-    if (
-        not isinstance(layer_values, list)
-        or tuple(descriptor(value, "layer") for value in layer_values) != profile.layers
-    ):
-        fail("OCI layers differ from protected profile")
-    config_path = require_safe_oci_entry(
-        layout,
-        ("blobs", "sha256", profile.config.digest.removeprefix("sha256:")),
-        "OCI config",
-    )
-    verify_operator_owned(config_path, profile, "OCI config", directory=False)
-    config = read_json_bound(config_path, profile.config, "OCI config")
-    diff_ids = validate_oci_rootfs(config.get("rootfs"), len(profile.layers))
-    if config.get("architecture") != "amd64" or config.get("os") != "linux":
-        fail("OCI image platform must be linux/amd64")
-    validate_image_config(config.get("config"), "OCI image config")
-    for layer in profile.layers:
-        layer_path = require_safe_oci_entry(
+    layout_fd = -1
+    try:
+        layout_fd = os.open(
             layout,
-            ("blobs", "sha256", layer.digest.removeprefix("sha256:")),
-            "OCI layer",
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
         )
-        verify_operator_owned(layer_path, profile, "OCI layer", directory=False)
-        verify_regular(
-            layer_path,
-            str(layer.size),
-            layer.digest.removeprefix("sha256:"),
-            "OCI layer",
+        layout_info = os.fstat(layout_fd)
+        if (
+            not stat.S_ISDIR(layout_info.st_mode)
+            or (layout_info.st_uid, layout_info.st_gid)
+            != (profile.operator_uid, profile.operator_gid)
+            or layout_info.st_mode & 0o022
+        ):
+            fail("OCI layout descriptor ownership or mode is unsafe")
+        marker = read_oci_json(
+            layout_fd,
+            ("oci-layout",),
+            "OCI layout marker",
+            maximum_bytes=1024,
+            expected_uid=profile.operator_uid,
+            expected_gid=profile.operator_gid,
         )
-    return diff_ids
+        if marker != {"imageLayoutVersion": "1.0.0"}:
+            fail("unsupported OCI layout version")
+        index = read_oci_json(
+            layout_fd,
+            ("index.json",),
+            "OCI index",
+            maximum_bytes=MAX_OCI_METADATA_BYTES,
+            expected_uid=profile.operator_uid,
+            expected_gid=profile.operator_gid,
+            expected_size=profile.index_size,
+            expected_digest=profile.index_digest,
+        )
+        manifests = index.get("manifests") if isinstance(index, dict) else None
+        if not isinstance(manifests, list):
+            fail("invalid OCI index manifests")
+        selected = [descriptor(value, "manifest") for value in manifests]
+        if selected.count(profile.manifest) != 1:
+            fail("protected OCI manifest is absent or ambiguous")
+        manifest = read_oci_json(
+            layout_fd,
+            (
+                "blobs",
+                "sha256",
+                profile.manifest.digest.removeprefix("sha256:"),
+            ),
+            "OCI manifest",
+            maximum_bytes=MAX_OCI_METADATA_BYTES,
+            expected_uid=profile.operator_uid,
+            expected_gid=profile.operator_gid,
+            expected_size=profile.manifest.size,
+            expected_digest=profile.manifest.digest.removeprefix("sha256:"),
+        )
+        if descriptor(manifest.get("config"), "config") != profile.config:
+            fail("OCI config differs from protected profile")
+        layer_values = manifest.get("layers")
+        if (
+            not isinstance(layer_values, list)
+            or tuple(descriptor(value, "layer") for value in layer_values)
+            != profile.layers
+        ):
+            fail("OCI layers differ from protected profile")
+        config = read_oci_json(
+            layout_fd,
+            (
+                "blobs",
+                "sha256",
+                profile.config.digest.removeprefix("sha256:"),
+            ),
+            "OCI config",
+            maximum_bytes=MAX_OCI_METADATA_BYTES,
+            expected_uid=profile.operator_uid,
+            expected_gid=profile.operator_gid,
+            expected_size=profile.config.size,
+            expected_digest=profile.config.digest.removeprefix("sha256:"),
+        )
+        diff_ids = validate_oci_rootfs(config.get("rootfs"), len(profile.layers))
+        if config.get("architecture") != "amd64" or config.get("os") != "linux":
+            fail("OCI image platform must be linux/amd64")
+        validate_image_config(config.get("config"), "OCI image config")
+        for layer in profile.layers:
+            layer_path = require_safe_oci_entry(
+                layout,
+                ("blobs", "sha256", layer.digest.removeprefix("sha256:")),
+                "OCI layer",
+            )
+            verify_operator_owned(layer_path, profile, "OCI layer", directory=False)
+            verify_regular(
+                layer_path,
+                str(layer.size),
+                layer.digest.removeprefix("sha256:"),
+                "OCI layer",
+            )
+        return diff_ids
+    except ExecutorError:
+        raise
+    except OSError as error:
+        fail(f"cannot open OCI layout by descriptor: {error}")
+    finally:
+        if layout_fd >= 0:
+            os.close(layout_fd)
 
 
 @dataclass(frozen=True)
