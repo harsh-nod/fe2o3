@@ -1874,10 +1874,67 @@ fn casts_cannot_create_unchecked_char_values() {
                 .contains("cast kind")
         );
     }
+}
+
+#[test]
+fn rustc_char_to_u32_cast_is_accepted() {
+    let char_ty = ty(MirTypeKind::Scalar(MirScalarType::Char), 4, 4);
+    let u32_ty = ty(
+        MirTypeKind::Scalar(MirScalarType::Int {
+            signed: false,
+            bits: 32,
+        }),
+        4,
+        4,
+    );
 
     scalar_cast_module(char_ty, u32_ty, MirCastKind::IntToInt)
         .validate()
         .unwrap();
+}
+
+#[test]
+fn rustc_char_to_f32_cast_matches_e0606_rejection() {
+    let char_ty = ty(MirTypeKind::Scalar(MirScalarType::Char), 4, 4);
+    let f32_ty = ty(MirTypeKind::Scalar(MirScalarType::Float { bits: 32 }), 4, 4);
+
+    let error = scalar_cast_module(char_ty, f32_ty, MirCastKind::IntToFloat)
+        .validate()
+        .unwrap_err();
+    assert_eq!(
+        error.reason(),
+        "cast kind does not match source and destination types"
+    );
+}
+
+#[test]
+fn rustc_char_to_const_u8_pointer_cast_matches_e0606_rejection() {
+    let char_ty = ty(MirTypeKind::Scalar(MirScalarType::Char), 4, 4);
+    let u8_ty = ty(
+        MirTypeKind::Scalar(MirScalarType::Int {
+            signed: false,
+            bits: 8,
+        }),
+        1,
+        1,
+    );
+    let pointer_ty = ty(
+        MirTypeKind::RawPointer {
+            pointee: Box::new(u8_ty),
+            mutability: MirMutability::Immutable,
+            address_space: MirAddressSpace(1),
+        },
+        8,
+        8,
+    );
+
+    let error = scalar_cast_module(char_ty, pointer_ty, MirCastKind::IntToPointer)
+        .validate()
+        .unwrap_err();
+    assert_eq!(
+        error.reason(),
+        "cast kind does not match source and destination types"
+    );
 }
 
 #[test]
