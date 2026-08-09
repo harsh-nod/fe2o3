@@ -2836,6 +2836,57 @@ def docker_create_arguments(
     return arguments
 
 
+def invocation_digest(arguments: list[str]) -> str:
+    digest = hashlib.sha256(b"fe2o3-oci-create-arguments-v1\0")
+    for argument in arguments:
+        try:
+            encoded = argument.encode("ascii")
+        except UnicodeEncodeError:
+            fail("OCI invocation argument is not ASCII")
+        digest.update(struct.pack(">Q", len(encoded)))
+        digest.update(encoded)
+    return digest.hexdigest()
+
+
+def require_lease_absent(root: Path, lease_name: str, label: str) -> None:
+    root_fd = -1
+    try:
+        root_fd = os.open(
+            root,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+        )
+        try:
+            os.stat(lease_name, dir_fd=root_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return
+        fail(f"{label} lease still exists before plan output")
+    except ExecutorError:
+        raise
+    except OSError as error:
+        fail(f"cannot establish {label} lease cleanup before plan output: {error}")
+    finally:
+        if root_fd >= 0:
+            os.close(root_fd)
+
+
+def emit_plan_output(
+    lines: list[str],
+    lease_contracts: tuple[tuple[Path, str, str], ...],
+) -> None:
+    if not lines or any("\n" in line or "\r" in line for line in lines):
+        fail("invalid bounded plan output")
+    for root, lease_name, label in lease_contracts:
+        require_lease_absent(root, lease_name, label)
+    raw = ("\n".join(lines) + "\n").encode("ascii")
+    if len(raw) > MAX_FILE_BYTES:
+        fail("plan output exceeds protected limit")
+    try:
+        sys.stdout.write(raw.decode("ascii"))
+        sys.stdout.flush()
+    except OSError as error:
+        fail(f"cannot emit cleaned OCI plan: {error}")
+
+
 def command_plan(args: argparse.Namespace) -> None:
     authorized = authorize(args)
     profile = authorized.profile
@@ -2843,6 +2894,7 @@ def command_plan(args: argparse.Namespace) -> None:
     lease_name = staging_lease_name(authorized.authorization_digest)
     snapshot = stage_source(profile, request, lease_name)
     output: OutputStage | None = None
+    plan_lines: list[str] | None = None
     try:
         output = stage_output(profile, lease_name)
         arguments = docker_create_arguments(
@@ -2854,36 +2906,31 @@ def command_plan(args: argparse.Namespace) -> None:
         )
         verify_retained_snapshot(snapshot)
         verify_retained_output(output)
-        print("oci_execution_plan_schema_version\t1")
-        print(
+        plan_lines = [
+            "oci_execution_plan_schema_version\t2",
             "authorization_state\t"
             + (
                 "operator-policy-matched"
                 if args.invocation_mode == "production-operator"
                 else "test-non-authoritative"
-            )
-        )
-        print(f"policy_identity\t{args.policy_identity}")
-        print(f"authorization_sha256\t{authorized.authorization_digest}")
-        print(f"profile_id\t{profile.profile_id}")
-        print(f"profile_sha256\t{profile.profile_digest}")
-        print(f"request_id\t{request.request_id}")
-        print(f"container_name\tfe2o3-evidence-{request.request_id}")
-        print(f"source_snapshot\t{snapshot.path}")
-        print(f"source_manifest\t{snapshot.manifest_path}")
-        print(f"source_manifest_sha256\t{snapshot.manifest_digest}")
-        print(f"request_snapshot\t{snapshot.request_path}")
-        print(f"request_sha256\t{request.digest}")
-        print(f"source_file_count\t{snapshot.file_count}")
-        print(f"source_bytes\t{snapshot.byte_count}")
-        print(f"artifact_stream_protocol\t{profile.artifact_stream_protocol}")
-        print(f"artifact_stream_path\t{output.artifact_path}")
-        print(f"artifact_stream_limit\t{profile.output_limit}")
-        print(f"stderr_stream_path\t{output.log_path}")
-        print(f"stderr_stream_limit\t{profile.log_limit}")
-        print(f"argument_count\t{len(arguments)}")
-        for index, argument in enumerate(arguments):
-            print(f"argument\t{index:04d}\t{argument.encode('ascii').hex()}")
+            ),
+            f"policy_identity\t{args.policy_identity}",
+            f"authorization_sha256\t{authorized.authorization_digest}",
+            f"profile_id\t{profile.profile_id}",
+            f"profile_sha256\t{profile.profile_digest}",
+            f"request_id\t{request.request_id}",
+            f"request_sha256\t{request.digest}",
+            f"source_commit\t{request.source_commit}",
+            f"source_tree\t{request.source_tree}",
+            f"source_manifest_sha256\t{snapshot.manifest_digest}",
+            f"source_file_count\t{snapshot.file_count}",
+            f"source_bytes\t{snapshot.byte_count}",
+            f"artifact_stream_protocol\t{profile.artifact_stream_protocol}",
+            f"artifact_stream_limit\t{profile.output_limit}",
+            f"stderr_stream_limit\t{profile.log_limit}",
+            f"argument_count\t{len(arguments)}",
+            f"invocation_sha256\t{invocation_digest(arguments)}",
+        ]
     finally:
         cleanup_failures: list[str] = []
         if output is not None:
@@ -2897,6 +2944,14 @@ def command_plan(args: argparse.Namespace) -> None:
             cleanup_failures.append(str(error))
         if cleanup_failures:
             fail("plan staging cleanup failed: " + "; ".join(cleanup_failures))
+    assert plan_lines is not None
+    emit_plan_output(
+        plan_lines,
+        (
+            (Path(profile.source_staging_root), lease_name, "source staging"),
+            (Path(profile.output_staging_root), lease_name, "output staging"),
+        ),
+    )
 
 
 def command_preflight(args: argparse.Namespace) -> None:

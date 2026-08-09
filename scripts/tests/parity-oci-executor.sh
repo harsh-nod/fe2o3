@@ -189,7 +189,7 @@ verify() {
 }
 
 plan() {
-  "${EXECUTOR}" test-plan \
+  PYTHONUNBUFFERED=1 "${EXECUTOR}" test-plan \
     --test-request "${REQUEST}" \
     --test-request-owner-uid "$(id -u)" \
     --test-request-owner-gid "$(id -g)" \
@@ -292,63 +292,43 @@ if [[ -e "${TEST_ROOT}/fsmonitor-executed" ]]; then
   printf 'candidate Git fsmonitor executed during immutable export\n' >&2
   exit 1
 fi
-source_snapshot="$(awk -F $'\t' '$1 == "source_snapshot" { print $2 }' <<<"${plan_output}")"
-request_snapshot="$(awk -F $'\t' '$1 == "request_snapshot" { print $2 }' <<<"${plan_output}")"
-source_manifest="$(awk -F $'\t' '$1 == "source_manifest" { print $2 }' <<<"${plan_output}")"
-artifact_stream="$(awk -F $'\t' '$1 == "artifact_stream_path" { print $2 }' <<<"${plan_output}")"
-stderr_stream="$(awk -F $'\t' '$1 == "stderr_stream_path" { print $2 }' <<<"${plan_output}")"
 authorization_digest="$(awk -F $'\t' '$1 == "authorization_sha256" { print $2 }' <<<"${plan_output}")"
-if [[ -z "${source_snapshot}" || -e "${source_snapshot}" || \
-  -e "${request_snapshot}" || -e "${source_manifest}" || \
-  -e "${artifact_stream}" || -e "${stderr_stream}" ]]; then
-  printf 'audit-only plan left an executable staging path behind\n' >&2
+if [[ -z "${authorization_digest}" ]] || grep -F -- "${TEST_ROOT}" <<<"${plan_output}" >/dev/null || \
+  grep -E $'^(source_snapshot|source_manifest|request_snapshot|artifact_stream_path|stderr_stream_path|container_name|argument)\t' \
+    <<<"${plan_output}" >/dev/null; then
+  printf 'audit-only plan exposed a usable runtime or staging identity\n' >&2
   exit 1
 fi
 if find "${SOURCE_STAGING}" "${OUTPUT_STAGING}" -mindepth 1 -print -quit | grep -q .; then
   printf 'audit-only plan left staging entries behind\n' >&2
   exit 1
 fi
-grep -F $'container_name\tfe2o3-evidence-3333333333333333333333333333333333333333333333333333333333333333' \
-  <<<"${plan_output}" >/dev/null
+grep -F $'oci_execution_plan_schema_version\t2' <<<"${plan_output}" >/dev/null
 grep -F $'artifact_stream_protocol\tfe2o3-artifact-stream-v1' \
   <<<"${plan_output}" >/dev/null
-if [[ "${artifact_stream}" != "${OUTPUT_STAGING}/"* || \
-  "${stderr_stream}" != "${OUTPUT_STAGING}/"* || \
-  "${source_snapshot}" != "${SOURCE_STAGING}/plan-${authorization_digest}-"*"/source" ]]; then
-  printf 'authorization-bound ephemeral staging identity is invalid\n' >&2
-  exit 1
-fi
-second_plan_output="$(plan)"
-second_source_snapshot="$(awk -F $'\t' '$1 == "source_snapshot" { print $2 }' <<<"${second_plan_output}")"
-if [[ "${second_source_snapshot}" == "${source_snapshot}" ]] || \
-  find "${SOURCE_STAGING}" "${OUTPUT_STAGING}" -mindepth 1 -print -quit | grep -q .; then
-  printf 'repeated plan reused or retained an ephemeral staging lease\n' >&2
+grep -E $'^invocation_sha256\t[0-9a-f]{64}$' <<<"${plan_output}" >/dev/null
+plan >/dev/null
+if find "${SOURCE_STAGING}" "${OUTPUT_STAGING}" -mindepth 1 -print -quit | grep -q .; then
+  printf 'repeated plan retained an ephemeral staging lease\n' >&2
   exit 1
 fi
 git -C "${SOURCE_REPO}" -c core.fsmonitor=false checkout -q -- \
   scripts/evidence/jobs/row-04.sh
-PYTHONDONTWRITEBYTECODE=1 python3 - "${EXECUTOR}" "${source_snapshot}" "${source_manifest}" \
-  "${request_snapshot}" "${artifact_stream}" "${stderr_stream}" <<'PY'
+PYTHONDONTWRITEBYTECODE=1 python3 - "${EXECUTOR}" "${SOURCE_STAGING}" \
+  "${OUTPUT_STAGING}" <<'PY'
 import importlib.util
 import os
 from pathlib import Path
 import sys
 
-(
-    module_path,
-    source_text,
-    manifest_text,
-    request_text,
-    artifact_text,
-    log_text,
-) = sys.argv[1:]
+module_path, source_root_text, output_root_text = sys.argv[1:]
 spec = importlib.util.spec_from_file_location("parity_oci_executor", module_path)
 assert spec is not None and spec.loader is not None
 module = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = module
 spec.loader.exec_module(module)
 
-source_root = Path(source_text).parents[1]
+source_root = Path(source_root_text)
 lease_name = "plan-" + "b" * 64 + "-" + "c" * 64
 root = source_root / lease_name
 source = root / "source"
@@ -540,9 +520,7 @@ finally:
     os.close(durability_root_fd)
     os.close(durability_fd)
 
-artifact = Path(artifact_text)
-log = Path(log_text)
-output_root = artifact.parents[1]
+output_root = Path(output_root_text)
 output_lease_name = "plan-" + "d" * 64 + "-" + "e" * 64
 output = output_root / output_lease_name
 output.mkdir(mode=0o700)
@@ -792,8 +770,61 @@ module.cleanup_staging_lease(
 )
 os.close(cleanup_root_fd)
 assert not any(output_root.iterdir())
+
+emission_lease = "plan-" + "1" * 64 + "-" + "f" * 64
+
+
+class InstrumentedStdout:
+    def __init__(self):
+        self.payload = ""
+        self.write_count = 0
+
+    def write(self, value):
+        assert not (source_root / emission_lease).exists()
+        assert not (output_root / emission_lease).exists()
+        self.write_count += 1
+        self.payload += value
+
+    def flush(self):
+        return None
+
+
+instrumented = InstrumentedStdout()
+real_stdout = module.sys.stdout
+module.sys.stdout = instrumented
+try:
+    module.emit_plan_output(
+        ["oci_execution_plan_schema_version\t2", "request_sha256\t" + "a" * 64],
+        (
+            (source_root, emission_lease, "source staging"),
+            (output_root, emission_lease, "output staging"),
+        ),
+    )
+finally:
+    module.sys.stdout = real_stdout
+assert instrumented.write_count == 1
+assert instrumented.payload.endswith("\n")
+
+(source_root / emission_lease).mkdir()
+blocked_output = InstrumentedStdout()
+module.sys.stdout = blocked_output
+try:
+    try:
+        module.emit_plan_output(
+            ["oci_execution_plan_schema_version\t2"],
+            ((source_root, emission_lease, "source staging"),),
+        )
+    except module.ExecutorError as error:
+        assert "lease still exists before plan output" in str(error)
+    else:
+        raise AssertionError("plan output was emitted with a live staging lease")
+finally:
+    module.sys.stdout = real_stdout
+    (source_root / emission_lease).rmdir()
+assert blocked_output.write_count == 0
 PY
-PYTHONDONTWRITEBYTECODE=1 python3 - "${EXECUTOR}" "${OCI_LAYOUT}" <<'PY'
+PYTHONDONTWRITEBYTECODE=1 python3 - "${EXECUTOR}" "${OCI_LAYOUT}" "${REQUEST}" \
+  "${TRUSTED_ROOT}" "${QUEUE_AUTH_SHA256}" "${POLICY_IDENTITY}" <<'PY'
 import io
 import importlib.util
 import os
@@ -801,7 +832,14 @@ from pathlib import Path
 import sys
 import time
 
-module_path, layout_text = sys.argv[1:]
+(
+    module_path,
+    layout_text,
+    request_text,
+    trusted_text,
+    queue_digest,
+    policy_identity,
+) = sys.argv[1:]
 spec = importlib.util.spec_from_file_location("parity_oci_executor_bounds", module_path)
 assert spec is not None and spec.loader is not None
 module = importlib.util.module_from_spec(spec)
@@ -973,33 +1011,77 @@ else:
     raise AssertionError("device OCI JSON input was accepted")
 finally:
     os.close(dev_fd)
+
+request = Path(request_text)
+trusted = Path(trusted_text)
+policy = trusted / "policy.tsv"
+parsed = module.build_parser().parse_args(
+    [
+        "test-verify",
+        "--test-request",
+        str(request),
+        "--test-request-owner-uid",
+        str(os.getuid()),
+        "--test-request-owner-gid",
+        str(os.getgid()),
+        "--test-queue-trust-sha256",
+        queue_digest,
+        "--test-trusted-root",
+        str(trusted),
+        "--test-policy",
+        "policy.tsv",
+        "--test-policy-identity",
+        policy_identity,
+        "--test-policy-size",
+        str(policy.stat().st_size),
+        "--test-policy-sha256",
+        module.sha256_file(policy),
+        "--test-trusted-owner-uid",
+        str(os.getuid()),
+        "--test-trusted-owner-gid",
+        str(os.getgid()),
+        "--test-trust-file-contract",
+        "descriptor-stable",
+    ]
+)
+authorized = module.authorize(parsed)
+arguments = module.docker_create_arguments(
+    authorized.profile,
+    authorized.request,
+    Path("/private/source"),
+    Path("/private/request.tsv"),
+    authorized.seccomp_path,
+)
+
+
+def has_sequence(*expected):
+    return any(
+        arguments[index : index + len(expected)] == list(expected)
+        for index in range(len(arguments) - len(expected) + 1)
+    )
+
+
+assert "--pull=never" in arguments
+assert "--no-healthcheck" in arguments
+assert "--cgroupns=private" in arguments
+assert has_sequence("--network", "none")
+assert has_sequence("--shm-size", "33554432")
+assert has_sequence("--read-only", "--cap-drop", "ALL")
+assert has_sequence("--security-opt", "no-new-privileges=true")
+assert has_sequence("--log-driver", "none")
+assert any("readonly,bind-recursive=readonly" in value for value in arguments)
+assert has_sequence(
+    "--device", "/dev/dri/renderD128:/dev/dri/renderD128:rwm"
+)
+assert has_sequence("--device", "/dev/kfd:/dev/kfd:rwm")
+assert (
+    "org.fe2o3.evidence.request-id="
+    "3333333333333333333333333333333333333333333333333333333333333333"
+) in arguments
+assert "--privileged" not in arguments
+assert "/var/run/docker.sock" not in arguments
+assert "docker cp" not in arguments
 PY
-plan_arguments="$({
-  while IFS=$'\t' read -r key _ encoded; do
-    if [[ "${key}" == argument ]]; then
-      printf '%s\n' "$(printf '%s' "${encoded}" | xxd -r -p)"
-    fi
-  done
-} <<<"${plan_output}")"
-grep -F -- $'--network\nnone' <<<"${plan_arguments}" >/dev/null
-grep -F -- '--pull=never' <<<"${plan_arguments}" >/dev/null
-grep -F -- '--no-healthcheck' <<<"${plan_arguments}" >/dev/null
-grep -F -- '--cgroupns=private' <<<"${plan_arguments}" >/dev/null
-grep -F -- $'--shm-size\n33554432' <<<"${plan_arguments}" >/dev/null
-grep -F -- $'--read-only\n--cap-drop\nALL' <<<"${plan_arguments}" >/dev/null
-grep -F -- $'--security-opt\nno-new-privileges=true' <<<"${plan_arguments}" >/dev/null
-grep -F -- $'--log-driver\nnone' <<<"${plan_arguments}" >/dev/null
-grep -F 'readonly,bind-recursive=readonly' <<<"${plan_arguments}" >/dev/null
-grep -F -- $'--device\n/dev/dri/renderD128:/dev/dri/renderD128:rwm' <<<"${plan_arguments}" >/dev/null
-grep -F -- $'--device\n/dev/kfd:/dev/kfd:rwm' <<<"${plan_arguments}" >/dev/null
-grep -F -- 'org.fe2o3.evidence.request-id=3333333333333333333333333333333333333333333333333333333333333333' \
-  <<<"${plan_arguments}" >/dev/null
-if grep -F -- '--privileged' <<<"${plan_arguments}" >/dev/null || \
-  grep -F -- '/var/run/docker.sock' <<<"${plan_arguments}" >/dev/null || \
-  grep -F -- 'docker cp' <<<"${plan_arguments}" >/dev/null; then
-  printf 'OCI plan exposed privilege or runtime control socket\n' >&2
-  exit 1
-fi
 
 cp "${REQUEST}" "${TEST_ROOT}/request.good"
 printf 'execution_closure\tverified\n' >>"${REQUEST}"
