@@ -1409,6 +1409,18 @@ def verify_retained_output(stage: OutputStage) -> None:
         fail("retained output staging path was replaced")
 
 
+def fsync_output_stage(
+    artifact_fd: int, log_fd: int, directory_fd: int, root_fd: int
+) -> None:
+    try:
+        for file_fd in (artifact_fd, log_fd):
+            os.fsync(file_fd)
+        os.fsync(directory_fd)
+        os.fsync(root_fd)
+    except OSError as error:
+        fail(f"cannot durably initialize output staging: {error}")
+
+
 def stage_output(profile: Profile, request: Request) -> OutputStage:
     root = Path(profile.output_staging_root)
     root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
@@ -1438,7 +1450,7 @@ def stage_output(profile: Profile, request: Request) -> OutputStage:
             0o600,
             dir_fd=directory_fd,
         )
-        os.fsync(directory_fd)
+        fsync_output_stage(artifact_fd, log_fd, directory_fd, root_fd)
         identity = os.fstat(directory_fd)
         stage = OutputStage(
             root / name,
