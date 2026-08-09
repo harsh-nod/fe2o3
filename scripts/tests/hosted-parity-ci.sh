@@ -376,6 +376,39 @@ expect_failure force_push_current_pr 'pull request snapshot mismatch' verify_pr_
 expect_failure base_advanced_current_pr 'pull request snapshot mismatch' verify_pr_snapshot \
   "${PR_SNAPSHOT}" dddddddddddddddddddddddddddddddddddddddd "${PR_HEAD}"
 
+verify_merge_source_run() {
+  local snapshot="$1"
+  local expected_head="$2"
+  local expected_branch="$3"
+  jq -e --arg head "${expected_head}" --arg branch "${expected_branch}" \
+    '.id == 91 and .event == "merge_group" and
+      .path == ".github/workflows/ci.yml" and .status == "completed" and
+      .head_sha == $head and .head_branch == $branch' \
+    "${snapshot}" >/dev/null || {
+    printf 'merge-group source run mismatch\n' >&2
+    return 2
+  }
+}
+
+MERGE_SOURCE="${TEST_ROOT}/merge-source-run.json"
+MERGE_HEAD=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+MERGE_BRANCH=gh-readonly-queue/main/pr-17-abcdef
+jq -n --arg head "${MERGE_HEAD}" --arg branch "${MERGE_BRANCH}" \
+  '{id:91,event:"merge_group",path:".github/workflows/ci.yml",
+    status:"completed",head_sha:$head,head_branch:$branch}' >"${MERGE_SOURCE}"
+verify_merge_source_run "${MERGE_SOURCE}" "${MERGE_HEAD}" "${MERGE_BRANCH}"
+expect_failure merge_source_wrong_head 'merge-group source run mismatch' \
+  verify_merge_source_run "${MERGE_SOURCE}" \
+  ffffffffffffffffffffffffffffffffffffffff "${MERGE_BRANCH}"
+expect_failure merge_source_wrong_ref 'merge-group source run mismatch' \
+  verify_merge_source_run "${MERGE_SOURCE}" "${MERGE_HEAD}" \
+  gh-readonly-queue/main/pr-18-fedcba
+jq '.path = ".github/workflows/spoof.yml"' "${MERGE_SOURCE}" \
+  >"${TEST_ROOT}/merge-source-spoof.json"
+expect_failure merge_source_wrong_path 'merge-group source run mismatch' \
+  verify_merge_source_run "${TEST_ROOT}/merge-source-spoof.json" \
+  "${MERGE_HEAD}" "${MERGE_BRANCH}"
+
 # A strengthened default policy invalidates a stale non-default branch. Once
 # updated, the branch is checked against and archives trust from the exact tip.
 REMOTE="${TEST_ROOT}/default-tip-origin.git"
