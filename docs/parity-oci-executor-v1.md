@@ -174,6 +174,12 @@ The runtime control socket is never mounted. The plan never uses
 `--privileged`, host networking, host IPC/PID/UTS namespaces, ambient
 capabilities, a writable root, or a host output bind.
 
+The emitted plan is an audit artifact, not authority for another process to
+execute later. The future `run` operation must authorize, stage, preflight,
+create, stream, and clean up in one process while retaining all safe
+descriptors and the queue lock. Reopening printed paths in a later process is
+not an accepted integration path.
+
 The in-container output tmpfs is bounded working storage. It is not copied
 after container exit. The protected entrypoint reserves stdout for
 `fe2o3-artifact-stream-v1` and stderr for logs. Before any future execution,

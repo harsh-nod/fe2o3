@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -143,7 +144,7 @@ def run_bounded(
 
         def write_input() -> None:
             try:
-                process.stdin.write(input_data)
+                write_all(process.stdin.fileno(), input_data)
                 process.stdin.close()
             except (BrokenPipeError, OSError):
                 pass
@@ -185,6 +186,10 @@ def run_bounded(
             writer.join(timeout=1)
         fail(f"bounded subprocess pipe did not close for {label}")
     if overflow:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
         fail(f"{label} {overflow[0]} exceeds protected limit")
     if timed_out:
         fail(f"{label} exceeded protected timeout")
@@ -335,7 +340,10 @@ def verify_operator_owned(
     if profile.mode == "production":
         current = path.parent
         while current != current.parent:
-            parent_info = current.lstat()
+            try:
+                parent_info = current.lstat()
+            except OSError:
+                fail(f"operator {label} parent is unavailable")
             if (
                 current.is_symlink()
                 or not stat.S_ISDIR(parent_info.st_mode)
@@ -829,8 +837,31 @@ def read_json_bound(path: Path, binding: Layer, label: str) -> dict[str, object]
         path, str(binding.size), binding.digest.removeprefix("sha256:"), label
     )
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        raw = path.read_bytes()
+    except OSError:
+        fail(f"cannot read {label}")
+    return strict_json_object(raw, label)
+
+
+def strict_json_object(raw: bytes, label: str) -> dict[str, object]:
+    def object_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in pairs:
+            if key in result:
+                fail(f"{label} JSON contains a duplicate key")
+            result[key] = value
+        return result
+
+    def reject_constant(value: str) -> object:
+        raise ValueError(value)
+
+    try:
+        value = json.loads(
+            raw,
+            object_pairs_hook=object_pairs,
+            parse_constant=reject_constant,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
         fail(f"invalid {label} JSON")
     if not isinstance(value, dict):
         fail(f"invalid {label} JSON object")
@@ -863,14 +894,7 @@ def read_json_file(
         and sha256_bytes(raw) != expected_digest
     ):
         fail(f"{label} binding or size is invalid")
-    try:
-        value = json.loads(raw)
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        fail(f"invalid {label} JSON")
-    if not isinstance(value, dict):
-        fail(f"invalid {label} JSON object")
-    validate_json_shape(value, label)
-    return value
+    return strict_json_object(raw, label)
 
 
 def validate_json_shape(value: object, label: str) -> None:
@@ -897,7 +921,10 @@ def validate_json_shape(value: object, label: str) -> None:
                     fail(f"{label} JSON has a non-string key")
                 visit(key, depth + 1)
                 visit(child, depth + 1)
-        elif item is not None and not isinstance(item, (bool, int, float)):
+        elif isinstance(item, float):
+            if not math.isfinite(item):
+                fail(f"{label} JSON contains a non-finite number")
+        elif item is not None and not isinstance(item, (bool, int)):
             fail(f"{label} JSON contains an unsupported value")
 
     visit(value, 0)
@@ -911,7 +938,7 @@ def descriptor(value: object, label: str) -> Layer:
     if (
         not isinstance(digest, str)
         or OCI_DIGEST_RE.fullmatch(digest) is None
-        or not isinstance(size, int)
+        or type(size) is not int
         or size < 0
         or size > MAX_OCI_LAYER_BYTES
     ):
@@ -1766,18 +1793,15 @@ def verify_runtime_image(profile: Profile) -> tuple[str, ...]:
         ["image", "inspect", "--format", "{{json .}}", profile.image_reference],
         "image",
     )
-    try:
-        inspected = json.loads(raw)
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        fail("OCI runtime returned invalid image identity")
-    if not isinstance(inspected, dict):
-        fail("OCI runtime returned invalid image object")
-    validate_json_shape(inspected, "OCI runtime image")
+    inspected = strict_json_object(raw, "OCI runtime image")
     rootfs = inspected.get("RootFS")
     config = inspected.get("Config")
+    repo_digests = inspected.get("RepoDigests")
     if (
         inspected.get("Id") != profile.config.digest
-        or profile.image_reference not in inspected.get("RepoDigests", [])
+        or not isinstance(repo_digests, list)
+        or any(not isinstance(value, str) for value in repo_digests)
+        or profile.image_reference not in repo_digests
         or inspected.get("Os") != "linux"
         or inspected.get("Architecture") != "amd64"
         or not isinstance(rootfs, dict)
