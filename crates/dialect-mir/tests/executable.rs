@@ -1,12 +1,32 @@
 use dialect_mir::{
-    MirAddressSpace, MirAggregateLayout, MirBasicBlock, MirBinaryOp, MirBlockId, MirBlockParameter,
-    MirBody, MirBodyForm, MirCall, MirCallAuthority, MirCallReturn, MirCallSignature, MirCallable,
-    MirCallee, MirConstant, MirConstantValue, MirEdge, MirExecutableModule, MirExecutableTarget,
-    MirExecutableVersion, MirField, MirFunction, MirLayout, MirLocalDecl, MirLocalId, MirLocalKind,
-    MirMutability, MirOperand, MirPlace, MirProjection, MirRvalue, MirScalarType, MirSemanticType,
-    MirSourceSpan, MirStatement, MirStatementKind, MirTerminator, MirTerminatorKind, MirTypeId,
-    MirTypeKind, MirUnwindAction, MirValueId,
+    MirAddressSpace, MirAggregateLayout, MirAuthorizedDeviceImport, MirBasicBlock, MirBinaryOp,
+    MirBlockId, MirBlockParameter, MirBody, MirBodyForm, MirCall, MirCallAuthority, MirCallReturn,
+    MirCallSignature, MirCallable, MirCallee, MirConstant, MirConstantValue, MirEdge,
+    MirExecutableModule, MirExecutableTarget, MirExecutableVersion, MirExternalCallRegistry,
+    MirExternalCallReturn, MirExternalCallSignature, MirField, MirFunction, MirLayout,
+    MirLocalDecl, MirLocalId, MirLocalKind, MirMutability, MirOperand, MirPlace, MirProjection,
+    MirRvalue, MirScalarType, MirSemanticType, MirSourceSpan, MirStatement, MirStatementKind,
+    MirTerminator, MirTerminatorKind, MirTypeId, MirTypeKind, MirUnwindAction, MirValueId,
 };
+
+fn external_registry(
+    identity: &str,
+    contract: &str,
+    inputs: Vec<MirSemanticType>,
+    output: MirExternalCallReturn,
+    can_unwind: bool,
+) -> MirExternalCallRegistry {
+    MirExternalCallRegistry::try_new(vec![MirAuthorizedDeviceImport {
+        identity: identity.into(),
+        contract: contract.into(),
+        signature: MirExternalCallSignature {
+            inputs,
+            output,
+            can_unwind,
+        },
+    }])
+    .unwrap()
+}
 
 fn ty(kind: MirTypeKind, size: u64, align: u64) -> MirSemanticType {
     MirSemanticType {
@@ -444,6 +464,7 @@ fn rejects_double_move_of_a_conservatively_non_copy_value() {
 fn tracks_call_destinations_separately_on_normal_and_unwind_edges() {
     let mut module = place_module();
     let return_ty = module.functions[0].body.locals[0].ty;
+    let return_semantic_ty = module.type_at(return_ty).unwrap().clone();
     module.callables.push(MirCallable {
         identity: "fixture::may_unwind".into(),
         authority: MirCallAuthority::DeviceImport {
@@ -479,7 +500,14 @@ fn tracks_call_destinations_separately_on_normal_and_unwind_edges() {
         },
     ];
 
-    let error = module.validate().unwrap_err();
+    let registry = external_registry(
+        "fixture::may_unwind",
+        "fixture::may_unwind::contract",
+        vec![],
+        MirExternalCallReturn::Value(return_semantic_ty),
+        true,
+    );
+    let error = module.validate_with_registry(&registry).unwrap_err();
     assert_eq!(
         error.path(),
         "module.functions[0].body.blocks[2].terminator"
@@ -1039,6 +1067,7 @@ fn references_and_raw_addresses_require_exact_mutability_and_address_space() {
 fn callable_registry_enforces_signatures_and_closed_intrinsic_authority() {
     let mut module = place_module();
     let u32_ty = module.functions[0].body.locals[0].ty;
+    let u32_semantic_ty = module.type_at(u32_ty).unwrap().clone();
     module.callables.push(MirCallable {
         identity: "fixture::typed".into(),
         authority: MirCallAuthority::DeviceImport {
@@ -1057,9 +1086,16 @@ fn callable_registry_enforces_signatures_and_closed_intrinsic_authority() {
         target: None,
         unwind: MirUnwindAction::Unreachable,
     }));
+    let registry = external_registry(
+        "fixture::typed",
+        "fixture::typed::contract",
+        vec![u32_semantic_ty],
+        MirExternalCallReturn::Diverging,
+        false,
+    );
     assert!(
         module
-            .validate()
+            .validate_with_registry(&registry)
             .unwrap_err()
             .reason()
             .contains("argument count")
@@ -1096,6 +1132,78 @@ fn callable_registry_enforces_signatures_and_closed_intrinsic_authority() {
     malformed.functions[0].body.locals.clear();
     let error = malformed.validate().unwrap_err();
     assert!(error.reason().contains("no return local"));
+}
+
+#[test]
+fn device_imports_require_an_exact_external_authority() {
+    let mut module = place_module();
+    let u32_ty = module.functions[0].body.locals[0].ty;
+    let semantic_u32 = module.type_at(u32_ty).unwrap().clone();
+    module.callables.push(MirCallable {
+        identity: "fixture::trusted".into(),
+        authority: MirCallAuthority::DeviceImport {
+            contract: "fixture::trusted::v1".into(),
+        },
+        signature: MirCallSignature {
+            inputs: vec![u32_ty],
+            output: MirCallReturn::Value(u32_ty),
+            can_unwind: false,
+        },
+    });
+    let registry = external_registry(
+        "fixture::trusted",
+        "fixture::trusted::v1",
+        vec![semantic_u32.clone()],
+        MirExternalCallReturn::Value(semantic_u32),
+        false,
+    );
+
+    module.validate_with_registry(&registry).unwrap();
+    assert!(module.validate().unwrap_err().reason().contains("external"));
+
+    let mut forged_contract = module.clone();
+    let MirCallAuthority::DeviceImport { contract } = &mut forged_contract.callables[0].authority
+    else {
+        unreachable!();
+    };
+    *contract = "fixture::forged::v1".into();
+    assert!(
+        forged_contract
+            .validate_with_registry(&registry)
+            .unwrap_err()
+            .reason()
+            .contains("exactly match")
+    );
+
+    let mut forged_signature = module.clone();
+    forged_signature.callables[0].signature.inputs.clear();
+    assert!(
+        forged_signature
+            .validate_with_registry(&registry)
+            .unwrap_err()
+            .reason()
+            .contains("exactly match")
+    );
+
+    let mut forged_unwind = module.clone();
+    forged_unwind.callables[0].signature.can_unwind = true;
+    assert!(
+        forged_unwind
+            .validate_with_registry(&registry)
+            .unwrap_err()
+            .reason()
+            .contains("exactly match")
+    );
+
+    let mut forged_identity = module;
+    forged_identity.callables[0].identity = "fixture::untrusted".into();
+    assert!(
+        forged_identity
+            .validate_with_registry(&registry)
+            .unwrap_err()
+            .reason()
+            .contains("absent")
+    );
 }
 
 #[test]

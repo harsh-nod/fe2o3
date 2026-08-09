@@ -113,6 +113,106 @@ pub struct MirCallSignature {
     pub can_unwind: bool,
 }
 
+/// A trusted device import signature expressed independently of a module's
+/// attacker-controlled type table.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MirExternalCallSignature {
+    pub inputs: Vec<MirSemanticType>,
+    pub output: MirExternalCallReturn,
+    pub can_unwind: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MirExternalCallReturn {
+    Diverging,
+    Value(MirSemanticType),
+}
+
+/// One device import authorized by the embedding process's trust policy.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MirAuthorizedDeviceImport {
+    pub identity: String,
+    pub contract: String,
+    pub signature: MirExternalCallSignature,
+}
+
+/// An external trust root. This registry is deliberately absent from the
+/// executable MIR wire format; module declarations can only reference it.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct MirExternalCallRegistry {
+    entries: Vec<MirAuthorizedDeviceImport>,
+}
+
+impl MirExternalCallRegistry {
+    pub fn try_new(
+        entries: Vec<MirAuthorizedDeviceImport>,
+    ) -> Result<Self, MirExecutableValidationError> {
+        bounded_len(
+            "external_registry.entries",
+            entries.len(),
+            0,
+            MAX_EXECUTABLE_CALLABLES,
+        )?;
+        let mut previous: Option<&str> = None;
+        let mut signature_types = 0_usize;
+        for (index, entry) in entries.iter().enumerate() {
+            let path = format!("external_registry.entries[{index}]");
+            validate_identity(&format!("{path}.identity"), &entry.identity)?;
+            validate_identity(&format!("{path}.contract"), &entry.contract)?;
+            if previous.is_some_and(|value| value >= entry.identity.as_str()) {
+                return Err(error(
+                    format!("{path}.identity"),
+                    "external registry entries must be strictly sorted by identity",
+                ));
+            }
+            previous = Some(&entry.identity);
+            bounded_len(
+                &format!("{path}.signature.inputs"),
+                entry.signature.inputs.len(),
+                0,
+                MAX_EXECUTABLE_CALL_ARGUMENTS,
+            )?;
+            signature_types = signature_types
+                .checked_add(entry.signature.inputs.len())
+                .and_then(|count| {
+                    count.checked_add(usize::from(matches!(
+                        &entry.signature.output,
+                        MirExternalCallReturn::Value(_)
+                    )))
+                })
+                .ok_or_else(|| error(&path, "external signature type count overflow"))?;
+            if signature_types > MAX_EXECUTABLE_TYPE_ITEMS {
+                return Err(error(
+                    &path,
+                    format!(
+                        "external registry exceeds {MAX_EXECUTABLE_TYPE_ITEMS} signature types"
+                    ),
+                ));
+            }
+            validate_type_budget_at(&entry.signature.inputs, &format!("{path}.signature.inputs"))?;
+            for (type_index, ty) in entry.signature.inputs.iter().enumerate() {
+                let type_path = format!("{path}.signature.inputs[{type_index}]");
+                ty.validate()
+                    .map_err(|source| map_type_error(&type_path, source))?;
+            }
+            if let MirExternalCallReturn::Value(ty) = &entry.signature.output {
+                let type_path = format!("{path}.signature.output");
+                validate_type_budget_at(std::slice::from_ref(ty), &type_path)?;
+                ty.validate()
+                    .map_err(|source| map_type_error(&type_path, source))?;
+            }
+        }
+        Ok(Self { entries })
+    }
+
+    fn find(&self, identity: &str) -> Option<&MirAuthorizedDeviceImport> {
+        self.entries
+            .binary_search_by(|entry| entry.identity.as_str().cmp(identity))
+            .ok()
+            .map(|index| &self.entries[index])
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MirCallable {
     pub identity: String,
@@ -498,6 +598,15 @@ impl std::error::Error for MirExecutableValidationError {}
 
 impl MirExecutableModule {
     pub fn validate(&self) -> Result<(), MirExecutableValidationError> {
+        self.validate_with_registry(&MirExternalCallRegistry::default())
+    }
+
+    /// Validates this module against a process-supplied device import trust
+    /// root. The registry must never be populated from this module's bytes.
+    pub fn validate_with_registry(
+        &self,
+        registry: &MirExternalCallRegistry,
+    ) -> Result<(), MirExecutableValidationError> {
         if self.version.number() != EXECUTABLE_MIR_VERSION {
             return Err(error(
                 "module.version",
@@ -545,7 +654,7 @@ impl MirExecutableModule {
             previous_type = Some(canonical);
         }
 
-        self.validate_callables()?;
+        self.validate_callables(registry)?;
 
         let mut previous_identity: Option<&str> = None;
         for (index, function) in self.functions.iter().enumerate() {
@@ -564,7 +673,10 @@ impl MirExecutableModule {
         Ok(())
     }
 
-    fn validate_callables(&self) -> Result<(), MirExecutableValidationError> {
+    fn validate_callables(
+        &self,
+        registry: &MirExternalCallRegistry,
+    ) -> Result<(), MirExecutableValidationError> {
         bounded_len(
             "module.callables",
             self.callables.len(),
@@ -638,6 +750,21 @@ impl MirExecutableModule {
                 }
                 MirCallAuthority::DeviceImport { contract } => {
                     validate_identity(&format!("{path}.authority.contract"), contract)?;
+                    let authorized = registry.find(&callable.identity).ok_or_else(|| {
+                        error(
+                            &path,
+                            "device import is absent from the external authority registry",
+                        )
+                    })?;
+                    if authorized.contract != *contract
+                        || !self
+                            .signature_matches_external(&callable.signature, &authorized.signature)
+                    {
+                        return Err(error(
+                            &path,
+                            "device import declaration does not exactly match its external authority",
+                        ));
+                    }
                 }
                 MirCallAuthority::Intrinsic(intrinsic) => {
                     if callable.identity != intrinsic.identity() {
@@ -654,6 +781,27 @@ impl MirExecutableModule {
 
     pub fn type_at(&self, id: MirTypeId) -> Option<&MirSemanticType> {
         self.types.get(id.0 as usize)
+    }
+
+    fn signature_matches_external(
+        &self,
+        declared: &MirCallSignature,
+        authorized: &MirExternalCallSignature,
+    ) -> bool {
+        declared.can_unwind == authorized.can_unwind
+            && declared.inputs.len() == authorized.inputs.len()
+            && declared
+                .inputs
+                .iter()
+                .zip(&authorized.inputs)
+                .all(|(id, ty)| self.type_at(*id) == Some(ty))
+            && match (&declared.output, &authorized.output) {
+                (MirCallReturn::Diverging, MirExternalCallReturn::Diverging) => true,
+                (MirCallReturn::Value(id), MirExternalCallReturn::Value(ty)) => {
+                    self.type_at(*id) == Some(ty)
+                }
+                _ => false,
+            }
     }
 }
 
@@ -2556,10 +2704,17 @@ fn map_type_error(path: &str, source: MirTypeValidationError) -> MirExecutableVa
 }
 
 fn validate_type_budget(types: &[MirSemanticType]) -> Result<(), MirExecutableValidationError> {
+    validate_type_budget_at(types, "module.types")
+}
+
+fn validate_type_budget_at(
+    types: &[MirSemanticType],
+    root: &str,
+) -> Result<(), MirExecutableValidationError> {
     let mut stack = types
         .iter()
         .enumerate()
-        .map(|(index, ty)| (format!("module.types[{index}]"), ty, 1_usize))
+        .map(|(index, ty)| (format!("{root}[{index}]"), ty, 1_usize))
         .collect::<Vec<_>>();
     let mut nodes = 0_usize;
     let mut items = types.len();
