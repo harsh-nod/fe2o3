@@ -8,7 +8,10 @@
 use crate::rust_type_layout_general::{TypeLayoutFacts, extract_general_layout};
 use rustc_hir::Mutability;
 use rustc_hir::def_id::DefId;
-use rustc_middle::mir::{AggregateKind, Body, Local, Operand, Place, Rvalue, TerminatorKind};
+use rustc_middle::mir::{
+    AggregateKind, Body, InlineAsmOperand, Local, NonDivergingIntrinsic, Operand, Place, Rvalue,
+    StatementKind, TerminatorKind,
+};
 use rustc_middle::ty::layout::{LayoutCx, LayoutOf};
 use rustc_middle::ty::{
     ClosureKind, EarlyBinder, Instance, InstanceKind, Ty, TyCtxt, TyKind, TypingEnv,
@@ -523,7 +526,7 @@ fn validate_uses_and_calls<'tcx>(
     for (block_index, block) in body.basic_blocks.iter_enumerated() {
         for statement in &block.statements {
             if let Some((destination, value)) = statement.kind.as_assign() {
-                if allowed_closure_assignment(*destination, value, closure_locals) {
+                if allowed_closure_assignment(*destination, value, closure_locals, aliases) {
                     continue;
                 }
                 if rvalue_mentions_closure(value, closure_locals, aliases) {
@@ -532,6 +535,11 @@ fn validate_uses_and_calls<'tcx>(
                         block_index.as_usize()
                     )));
                 }
+            } else if statement_mentions_closure(&statement.kind, closure_locals, aliases) {
+                return Err(ClosureProfileErrorV1::new(format!(
+                    "closure value is used by an unsupported statement in bb{}",
+                    block_index.as_usize()
+                )));
             }
         }
         let Some(terminator) = &block.terminator else {
@@ -539,6 +547,11 @@ fn validate_uses_and_calls<'tcx>(
         };
         match &terminator.kind {
             TerminatorKind::Call { func, args, .. } => {
+                if operand_mentions_closure(func, closure_locals, aliases) {
+                    return Err(ClosureProfileErrorV1::new(
+                        "closure value escapes through an indirect call target",
+                    ));
+                }
                 let receiver = args
                     .first()
                     .and_then(|argument| operand_local(&argument.node));
@@ -600,10 +613,61 @@ fn validate_uses_and_calls<'tcx>(
                     ));
                 }
             }
+            TerminatorKind::TailCall { func, args, .. }
+                if operand_mentions_closure(func, closure_locals, aliases)
+                    || args.iter().any(|argument| {
+                        operand_mentions_closure(&argument.node, closure_locals, aliases)
+                    }) =>
+            {
+                return Err(ClosureProfileErrorV1::new(
+                    "closure value escapes through a tail call",
+                ));
+            }
             TerminatorKind::Drop { place, .. }
-                if place
+                if place_mentions_closure(*place, closure_locals, aliases) =>
+            {
+                let allowed = place
                     .as_local()
-                    .is_some_and(|local| closure_locals.contains(&local)) => {}
+                    .and_then(|local| resolve_alias_root(local, closure_locals, aliases))
+                    .is_some();
+                if !allowed {
+                    return Err(ClosureProfileErrorV1::new(
+                        "closure drop must consume one unprojected closure or receiver alias",
+                    ));
+                }
+            }
+            TerminatorKind::SwitchInt { discr, .. }
+                if operand_mentions_closure(discr, closure_locals, aliases) =>
+            {
+                return Err(ClosureProfileErrorV1::new(
+                    "closure value is used as a switch discriminant",
+                ));
+            }
+            TerminatorKind::Assert { cond, .. }
+                if operand_mentions_closure(cond, closure_locals, aliases) =>
+            {
+                return Err(ClosureProfileErrorV1::new(
+                    "closure value is used as an assertion condition",
+                ));
+            }
+            TerminatorKind::Yield {
+                value, resume_arg, ..
+            } if operand_mentions_closure(value, closure_locals, aliases)
+                || place_mentions_closure(*resume_arg, closure_locals, aliases) =>
+            {
+                return Err(ClosureProfileErrorV1::new(
+                    "closure value escapes through a coroutine yield",
+                ));
+            }
+            TerminatorKind::InlineAsm { operands, .. }
+                if operands.iter().any(|operand| {
+                    inline_asm_mentions_closure(operand, closure_locals, aliases)
+                }) =>
+            {
+                return Err(ClosureProfileErrorV1::new(
+                    "closure value escapes through inline assembly",
+                ));
+            }
             _ => {}
         }
     }
@@ -625,6 +689,7 @@ fn allowed_closure_assignment(
     destination: Place<'_>,
     value: &Rvalue<'_>,
     closure_locals: &BTreeSet<Local>,
+    aliases: &BTreeMap<Local, Local>,
 ) -> bool {
     match value {
         Rvalue::Aggregate(kind, _) => {
@@ -633,15 +698,89 @@ fn allowed_closure_assignment(
                     .as_local()
                     .is_some_and(|local| closure_locals.contains(&local))
         }
-        Rvalue::Ref(_, _, source) => source
-            .as_local()
-            .is_some_and(|local| closure_locals.contains(&local)),
-        Rvalue::Use(operand) => operand_local(operand).is_some_and(|source| {
-            destination.as_local().is_some_and(|destination| {
-                source != destination && closure_locals.contains(&source)
-            })
-        }),
+        Rvalue::Ref(_, _, source) => {
+            let Some(destination) = destination.as_local() else {
+                return false;
+            };
+            aliases.contains_key(&destination)
+                && source
+                    .as_local()
+                    .and_then(|local| resolve_alias_root(local, closure_locals, aliases))
+                    .is_some()
+        }
+        Rvalue::Use(operand) => {
+            let Some(destination) = destination.as_local() else {
+                return false;
+            };
+            let Some(source) = operand_local(operand) else {
+                return false;
+            };
+            source != destination
+                && aliases.contains_key(&destination)
+                && resolve_alias_root(source, closure_locals, aliases).is_some()
+        }
         _ => false,
+    }
+}
+
+fn statement_mentions_closure(
+    statement: &StatementKind<'_>,
+    closures: &BTreeSet<Local>,
+    aliases: &BTreeMap<Local, Local>,
+) -> bool {
+    match statement {
+        StatementKind::Assign(_) => false,
+        StatementKind::FakeRead(contents) => place_mentions_closure(contents.1, closures, aliases),
+        StatementKind::SetDiscriminant { place, .. }
+        | StatementKind::Retag(_, place)
+        | StatementKind::PlaceMention(place)
+        | StatementKind::BackwardIncompatibleDropHint { place, .. } => {
+            place_mentions_closure(**place, closures, aliases)
+        }
+        StatementKind::AscribeUserType(contents, _) => {
+            place_mentions_closure(contents.0, closures, aliases)
+        }
+        StatementKind::Intrinsic(intrinsic) => match intrinsic.as_ref() {
+            NonDivergingIntrinsic::Assume(operand) => {
+                operand_mentions_closure(operand, closures, aliases)
+            }
+            NonDivergingIntrinsic::CopyNonOverlapping(copy) => {
+                operand_mentions_closure(&copy.src, closures, aliases)
+                    || operand_mentions_closure(&copy.dst, closures, aliases)
+                    || operand_mentions_closure(&copy.count, closures, aliases)
+            }
+        },
+        StatementKind::StorageLive(_)
+        | StatementKind::StorageDead(_)
+        | StatementKind::Coverage(_)
+        | StatementKind::ConstEvalCounter
+        | StatementKind::Nop => false,
+    }
+}
+
+fn inline_asm_mentions_closure(
+    operand: &InlineAsmOperand<'_>,
+    closures: &BTreeSet<Local>,
+    aliases: &BTreeMap<Local, Local>,
+) -> bool {
+    match operand {
+        InlineAsmOperand::In { value, .. } => operand_mentions_closure(value, closures, aliases),
+        InlineAsmOperand::Out {
+            place: Some(place), ..
+        } => place_mentions_closure(*place, closures, aliases),
+        InlineAsmOperand::InOut {
+            in_value,
+            out_place,
+            ..
+        } => {
+            operand_mentions_closure(in_value, closures, aliases)
+                || out_place.is_some_and(|place| place_mentions_closure(place, closures, aliases))
+        }
+        InlineAsmOperand::Out { place: None, .. }
+        | InlineAsmOperand::Const { .. }
+        | InlineAsmOperand::SymFn { .. }
+        | InlineAsmOperand::SymStatic { .. }
+        | InlineAsmOperand::Label { .. } => false,
     }
 }
 

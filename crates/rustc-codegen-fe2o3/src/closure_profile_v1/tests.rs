@@ -92,6 +92,25 @@ fn dynamic_dispatch(closure: &dyn Fn(u32) -> u32) -> u32 {
 fn returned(seed: u32) -> impl Fn(u32) -> u32 {
     move |delta: u32| seed.wrapping_add(delta)
 }
+
+#[inline(never)]
+fn projected_reference(seed: u32) -> u32 {
+    let closure = move |delta: u32| seed.wrapping_add(delta);
+    let mut slot = (&closure,);
+    slot.0 = &closure;
+    let _ = slot;
+    closure(1)
+}
+
+#[inline(never)]
+fn inline_asm_escape(seed: u32) -> u32 {
+    let closure = move |delta: u32| seed.wrapping_add(delta);
+    let reference = &closure;
+    unsafe {
+        core::arch::asm!("/* {0} */", in(reg) reference, options(nomem, nostack));
+    }
+    closure(1)
+}
 "#;
 
 #[derive(Clone, Debug)]
@@ -105,6 +124,8 @@ struct DriverResults {
     raw_error: String,
     dynamic_error: String,
     return_error: String,
+    projected_error: String,
+    asm_error: String,
     origin_error: String,
     target_error: String,
 }
@@ -202,6 +223,22 @@ impl Callbacks for CaptureCallbacks {
                 "gfx942",
             )
             .expect_err("returned closure must escape")
+            .to_string(),
+            projected_error: analyze_gfx942_closures_v1(
+                tcx,
+                Instance::mono(tcx, local_function(tcx, "projected_reference")),
+                ClosureOriginPolicyV1::DeviceInternal,
+                "gfx942",
+            )
+            .expect_err("projected closure reference destination must fail")
+            .to_string(),
+            asm_error: analyze_gfx942_closures_v1(
+                tcx,
+                Instance::mono(tcx, local_function(tcx, "inline_asm_escape")),
+                ClosureOriginPolicyV1::DeviceInternal,
+                "gfx942",
+            )
+            .expect_err("inline assembly closure use must fail")
             .to_string(),
             origin_error: analyze_gfx942_closures_v1(
                 tcx,
@@ -432,6 +469,17 @@ fn unsupported_authority_escape_and_dispatch_paths_fail_closed() {
         results.return_error.contains("escapes"),
         "{}",
         results.return_error
+    );
+    assert!(
+        results.projected_error.contains("unsupported assignment"),
+        "{}",
+        results.projected_error
+    );
+    assert!(
+        results.asm_error.contains("inline assembly")
+            || results.asm_error.contains("unsupported assignment"),
+        "{}",
+        results.asm_error
     );
     assert!(
         results.origin_error.contains("does not satisfy policy"),
