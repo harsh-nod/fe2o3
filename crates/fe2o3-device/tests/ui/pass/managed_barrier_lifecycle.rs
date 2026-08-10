@@ -5,7 +5,8 @@ use fe2o3_device::{BarrierUninitialized, Gfx12, Gfx942, ManagedBarrier};
 unsafe fn gfx942_full_barrier_lifecycle<'workgroup>() {
     let barrier =
         unsafe { ManagedBarrier::<Gfx942, BarrierUninitialized, 0>::from_compiler() };
-    let ready = barrier.initialize(NonZeroU32::new(256).unwrap()).unwrap();
+    let ready =
+        unsafe { barrier.initialize_full_workgroup(NonZeroU32::new(256).unwrap()) }.unwrap();
     let pending = unsafe { ready.arrive() };
     let ready = unsafe { pending.wait() };
     let _uninitialized = ready.destroy();

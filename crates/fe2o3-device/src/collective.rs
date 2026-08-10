@@ -5,6 +5,8 @@
 //! on a host or unsupported compilation path. The initial profile admits only
 //! `u32`, `i32`, and `f32`, a full wave64, and power-of-two workgroups no larger
 //! than 256 invocations.
+//! The current Rust frontend does not recognize these reserved hooks, so this
+//! source API is not yet an executable kernel path.
 
 use core::fmt;
 use core::marker::PhantomData;

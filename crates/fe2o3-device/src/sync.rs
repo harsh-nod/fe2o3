@@ -1,3 +1,8 @@
+//! Managed barrier authority and target lifecycle contracts.
+//!
+//! Reserved low-level hooks remain panic stubs until a trusted frontend
+//! recognizes them; only direct Kernel IR barrier lowering is executable.
+
 use core::marker::PhantomData;
 use core::num::NonZeroU32;
 
@@ -127,11 +132,35 @@ where
         self,
         participants: NonZeroU32,
     ) -> Result<ManagedBarrier<'workgroup, Target, BarrierReady, SLOT>, BarrierInitializationError>
+    where
+        Target: NativeSplitBarrierTarget,
     {
         if participants.get() > Target::MAX_PARTICIPANTS {
             return Err(BarrierInitializationError {
                 participants: participants.get(),
                 maximum: Target::MAX_PARTICIPANTS,
+            });
+        }
+        Ok(self.transition(participants.get()))
+    }
+}
+
+impl<'workgroup> ManagedBarrier<'workgroup, Gfx942, BarrierUninitialized, 0> {
+    /// Admits the reviewed gfx942 full-workgroup barrier lifecycle.
+    ///
+    /// # Safety
+    ///
+    /// `participants` must equal the launch's complete workgroup size. The
+    /// current frontend does not authenticate this value from launch metadata.
+    pub unsafe fn initialize_full_workgroup(
+        self,
+        participants: NonZeroU32,
+    ) -> Result<ManagedBarrier<'workgroup, Gfx942, BarrierReady, 0>, BarrierInitializationError>
+    {
+        if participants.get() > Gfx942::MAX_PARTICIPANTS {
+            return Err(BarrierInitializationError {
+                participants: participants.get(),
+                maximum: Gfx942::MAX_PARTICIPANTS,
             });
         }
         Ok(self.transition(participants.get()))
@@ -210,7 +239,9 @@ where
     /// # Safety
     ///
     /// The participant set, slot identity, and dynamic arrival sequence must be
-    /// uniform. Target lowering must preserve release semantics.
+    /// uniform. Target lowering must preserve release semantics. The returned
+    /// pending authority must be waited; dropping or forgetting it violates
+    /// this method's safety contract.
     pub unsafe fn arrive(self) -> ManagedBarrier<'workgroup, Target, BarrierPending, SLOT> {
         // SAFETY: this method exists only for a sealed native-split target.
         unsafe { split_barrier_arrive(SLOT) };

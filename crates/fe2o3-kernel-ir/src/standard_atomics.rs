@@ -1,6 +1,7 @@
 //! Admission of standard Rust atomic operations into Kernel IR.
 
 use core::fmt;
+use core::num::NonZeroU64;
 use core::sync::atomic::Ordering;
 
 use crate::{
@@ -20,6 +21,9 @@ pub enum StandardAtomicMappingError {
     UnsupportedScope {
         address_space: AddressSpace,
         scope: SynchronizationScope,
+    },
+    MissingCoherentAllocation {
+        pointer: ValueId,
     },
 }
 
@@ -42,13 +46,40 @@ impl fmt::Display for StandardAtomicMappingError {
                 formatter,
                 "bounded standard atomics do not support {address_space:?} memory at {scope:?} scope"
             ),
+            Self::MissingCoherentAllocation { pointer } => write!(
+                formatter,
+                "system-scoped atomic pointer {pointer} lacks coherent-allocation admission"
+            ),
         }
     }
 }
 
 impl std::error::Error for StandardAtomicMappingError {}
 
+/// Opaque trusted-frontend proof that one global allocation is system coherent.
+///
+/// There is intentionally no public constructor until the frontend/runtime
+/// registry can authenticate allocation identity and system coherence.
+#[derive(Debug)]
+pub struct CoherentAllocationAdmission {
+    pointer: ValueId,
+    allocation_identity: NonZeroU64,
+}
+
+impl CoherentAllocationAdmission {
+    pub const fn allocation_identity(&self) -> NonZeroU64 {
+        self.allocation_identity
+    }
+
+    fn admits(&self, pointer: ValueId) -> bool {
+        self.pointer == pointer
+    }
+}
+
 /// Maps an ordinary Rust atomic operation with its documented system scope.
+///
+/// The current Rust frontend does not recognize standard atomics into this
+/// adapter automatically; callers constructing Kernel IR must supply admission.
 #[allow(clippy::too_many_arguments)]
 pub fn map_core_atomic(
     kind: AtomicKind,
@@ -56,6 +87,7 @@ pub fn map_core_atomic(
     value: Option<ValueId>,
     compare: Option<ValueId>,
     access: MemoryAccess,
+    admission: &CoherentAllocationAdmission,
     ordering: Ordering,
     failure_ordering: Option<Ordering>,
 ) -> Result<Atomic, StandardAtomicMappingError> {
@@ -66,6 +98,7 @@ pub fn map_core_atomic(
         compare,
         access,
         SynchronizationScope::System,
+        Some(admission),
         ordering,
         failure_ordering,
     )
@@ -83,6 +116,7 @@ pub fn map_scoped_core_atomic(
     compare: Option<ValueId>,
     access: MemoryAccess,
     scope: SynchronizationScope,
+    coherent_admission: Option<&CoherentAllocationAdmission>,
     ordering: Ordering,
     failure_ordering: Option<Ordering>,
 ) -> Result<Atomic, StandardAtomicMappingError> {
@@ -91,6 +125,11 @@ pub fn map_scoped_core_atomic(
             address_space: access.address_space,
             scope,
         });
+    }
+    if scope == SynchronizationScope::System
+        && !coherent_admission.is_some_and(|admission| admission.admits(pointer))
+    {
+        return Err(StandardAtomicMappingError::MissingCoherentAllocation { pointer });
     }
     if !ordering_is_valid(kind, ordering, failure_ordering) {
         return Err(StandardAtomicMappingError::InvalidOrdering {

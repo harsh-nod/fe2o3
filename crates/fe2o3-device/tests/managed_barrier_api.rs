@@ -18,13 +18,14 @@ fn target_capabilities_fail_closed_for_gfx942_split_barriers() {
 #[test]
 fn initialization_enforces_the_target_participant_bound() {
     let barrier = unsafe { ManagedBarrier::<Gfx942, BarrierUninitialized, 0>::from_compiler() };
-    let ready = barrier.initialize(NonZeroU32::new(1024).unwrap()).unwrap();
+    let ready =
+        unsafe { barrier.initialize_full_workgroup(NonZeroU32::new(1024).unwrap()) }.unwrap();
     assert_eq!(ready.participants(), 1024);
     let _uninitialized = ready.destroy();
 
     let barrier = unsafe { ManagedBarrier::<Gfx942, BarrierUninitialized, 0>::from_compiler() };
     assert_eq!(
-        barrier.initialize(NonZeroU32::new(1025).unwrap()).err(),
+        unsafe { barrier.initialize_full_workgroup(NonZeroU32::new(1025).unwrap()) }.err(),
         Some(BarrierInitializationError {
             participants: 1025,
             maximum: 1024,

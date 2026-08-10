@@ -1,13 +1,19 @@
-error[E0599]: the method `arrive` exists for struct `ManagedBarrier<'_, Gfx942, BarrierReady, 1>`, but its trait bounds were not satisfied
- --> tests/ui/fail/gfx942_split_barrier_is_unavailable.rs:9:28
+error[E0277]: the trait bound `Gfx942: NativeSplitBarrierTarget` is not satisfied
+ --> tests/ui/fail/gfx942_split_barrier_is_unavailable.rs:8:21
   |
-9 |     let _ = unsafe { ready.arrive() };
-  |                            ^^^^^^ method cannot be called on `ManagedBarrier<'_, Gfx942, BarrierReady, 1>` due to unsatisfied trait bounds
+8 |     let _ = barrier.initialize(NonZeroU32::new(64).unwrap());
+  |                     ^^^^^^^^^^ the trait `NativeSplitBarrierTarget` is not implemented for `Gfx942`
   |
- ::: src/sync.rs
+help: the trait `NativeSplitBarrierTarget` is implemented for `Gfx12`
+ --> src/sync.rs
   |
-  | pub enum Gfx942 {}
-  | --------------- doesn't satisfy `Gfx942: NativeSplitBarrierTarget`
+  | impl NativeSplitBarrierTarget for Gfx12 {}
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `ManagedBarrier::<'workgroup, Target, BarrierUninitialized, SLOT>::initialize`
+ --> src/sync.rs
   |
-  = note: the following trait bounds were not satisfied:
-          `Gfx942: NativeSplitBarrierTarget`
+  |     pub fn initialize(
+  |            ---------- required by a bound in this associated function
+...
+  |         Target: NativeSplitBarrierTarget,
+  |                 ^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `ManagedBarrier::<'workgroup, Target, BarrierUninitialized, SLOT>::initialize`

@@ -2,7 +2,7 @@ use core::sync::atomic::Ordering;
 
 use fe2o3_kernel_ir::{
     AddressSpace, AtomicKind, MemoryAccess, MemoryOrdering, StandardAtomicMappingError,
-    SynchronizationScope, ValueId, map_core_atomic, map_scoped_core_atomic,
+    SynchronizationScope, ValueId, map_scoped_core_atomic,
 };
 
 fn map(
@@ -17,13 +17,14 @@ fn map(
         (kind == AtomicKind::CompareExchange).then_some(ValueId(2)),
         MemoryAccess::new(AddressSpace::Global, 4),
         SynchronizationScope::Device,
+        None,
         ordering,
         failure,
     )
 }
 
 #[test]
-fn maps_every_ordering_and_defaults_to_system_scope() {
+fn maps_every_ordering_at_explicit_device_scope() {
     let cases = [
         (Ordering::Relaxed, MemoryOrdering::Relaxed),
         (Ordering::Acquire, MemoryOrdering::Acquire),
@@ -36,18 +37,6 @@ fn maps_every_ordering_and_defaults_to_system_scope() {
         assert_eq!(atomic.ordering, expected);
         assert_eq!(atomic.scope, SynchronizationScope::Device);
     }
-
-    let default = map_core_atomic(
-        AtomicKind::Load,
-        ValueId(0),
-        None,
-        None,
-        MemoryAccess::new(AddressSpace::Global, 4),
-        Ordering::Acquire,
-        None,
-    )
-    .unwrap();
-    assert_eq!(default.scope, SynchronizationScope::System);
 }
 
 #[test]
@@ -80,7 +69,6 @@ fn admits_only_reviewed_address_space_and_scope_pairs() {
     for (address_space, scope) in [
         (AddressSpace::Global, SynchronizationScope::Workgroup),
         (AddressSpace::Global, SynchronizationScope::Device),
-        (AddressSpace::Global, SynchronizationScope::System),
         (AddressSpace::Workgroup, SynchronizationScope::Workgroup),
     ] {
         map_scoped_core_atomic(
@@ -90,11 +78,29 @@ fn admits_only_reviewed_address_space_and_scope_pairs() {
             None,
             MemoryAccess::new(address_space, 4),
             scope,
+            None,
             Ordering::Relaxed,
             None,
         )
         .unwrap();
     }
+
+    assert_eq!(
+        map_scoped_core_atomic(
+            AtomicKind::Load,
+            ValueId(0),
+            None,
+            None,
+            MemoryAccess::new(AddressSpace::Global, 4),
+            SynchronizationScope::System,
+            None,
+            Ordering::Acquire,
+            None,
+        ),
+        Err(StandardAtomicMappingError::MissingCoherentAllocation {
+            pointer: ValueId(0),
+        })
+    );
 
     for (address_space, scope) in [
         (AddressSpace::Global, SynchronizationScope::Subgroup),
@@ -111,6 +117,7 @@ fn admits_only_reviewed_address_space_and_scope_pairs() {
                 None,
                 MemoryAccess::new(address_space, 4),
                 scope,
+                None,
                 Ordering::Relaxed,
                 None,
             ),
