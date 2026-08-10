@@ -22,6 +22,7 @@ members = [
     "crates/fe2o3-kernel-analysis",
     "crates/fe2o3-kernel-ir",
     "crates/fe2o3-macros",
+    "crates/fe2o3-process-identity",
     "crates/fe2o3-rustc-invocation",
     "crates/fe2o3-rustc-front",
     "crates/fe2o3-verifier",
@@ -91,6 +92,7 @@ fe2o3-kernel-descriptor = { path = "crates/fe2o3-kernel-descriptor" }
 fe2o3-kernel-analysis = { path = "crates/fe2o3-kernel-analysis" }
 fe2o3-kernel-ir = { path = "crates/fe2o3-kernel-ir" }
 fe2o3-macros = { path = "crates/fe2o3-macros" }
+fe2o3-process-identity = { path = "crates/fe2o3-process-identity" }
 fe2o3-rustc-invocation = { path = "crates/fe2o3-rustc-invocation" }
 fe2o3-rustc-front = { path = "crates/fe2o3-rustc-front" }
 fe2o3-verifier = { path = "crates/fe2o3-verifier" }

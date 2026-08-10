@@ -374,10 +374,6 @@ mod platform {
             &self.sha256
         }
 
-        pub(crate) fn display_path(&self) -> &Path {
-            &self.display_path
-        }
-
         pub(crate) fn same_object_as(&self, other: &File) -> Result<bool, PinExecutableError> {
             let metadata = other
                 .metadata()
@@ -419,6 +415,42 @@ mod platform {
 
             let mut command = Command::new(&self.execution_path);
             command.arg0(&self.display_path);
+            Ok(PinnedCommand {
+                _executable: self,
+                command,
+            })
+        }
+
+        /// Executes by the canonical absolute pathname so rustc's relative ELF RUNPATH is kept.
+        ///
+        /// The opened object remains pinned and measured. The S09 compiler receiver compares the
+        /// bytes that actually executed with that measurement, closing the pathname race.
+        pub(crate) fn command_by_canonical_path(
+            &self,
+        ) -> Result<PinnedCommand<'_>, PinExecutableError> {
+            let execution_path = std::fs::canonicalize(&self.display_path).map_err(|source| {
+                PinExecutableError::ExecutionStrategy {
+                    path: self.display_path.clone(),
+                    source,
+                }
+            })?;
+            if !execution_path.is_absolute() {
+                return Err(PinExecutableError::ExecutionStrategy {
+                    path: self.display_path.clone(),
+                    source: io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "canonical executable path is not absolute",
+                    ),
+                });
+            }
+            validate_execution_path(
+                &self.file,
+                &execution_path,
+                self.snapshot,
+                &self.display_path,
+            )?;
+            let mut command = Command::new(&execution_path);
+            command.arg0(&execution_path);
             Ok(PinnedCommand {
                 _executable: self,
                 command,

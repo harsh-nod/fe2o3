@@ -19,6 +19,7 @@ use fe2o3_artifact_transaction::{
     read_backend_publication_receipt_v1, recover_published_hsaco_claim_for_attempt_v1,
 };
 use fe2o3_hsaco_finalize::inspect_worker_v2_raw_hsaco_v1;
+use fe2o3_process_identity::{PreparedCommandIdentityV2, prepared_command_digest_v2};
 use fe2o3_rustc_invocation::{
     RustcArgsErrorV2, RustcCompileInvocationV2, RustcInvocationV2, classify_rustc_invocation_v2,
 };
@@ -74,11 +75,11 @@ const CARGO_LAUNCHER_START_TIME_BUILD_OBSERVATION_ENV_V2: &str =
     "FE2O3_CARGO_LAUNCHER_START_TIME_BUILD_OBSERVATION_V2";
 const MAX_BUILD_EXECUTABLE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_PROC_STAT_BYTES: usize = 4096;
-const PREPARED_RUSTC_COMMAND_OBSERVATION_FD_V2: std::os::fd::RawFd = 194;
+const PREPARED_RUSTC_COMMAND_OBSERVATION_FD_V2: std::os::fd::RawFd =
+    fe2o3_process_identity::S09_PREPARED_COMMAND_EXPECTATION_FD_V2;
 const S09_COMPILE_ENV_ALLOWLIST_ENV_V2: &str = "FE2O3_S09_COMPILE_ENV_ALLOWLIST_V2";
 const MAX_S09_COMPILE_ENV_NAMES_V2: usize = 64;
 const BUILD_ATTEMPT_INPUT_DOMAIN: &[u8] = b"FE2O3/BUILD-ATTEMPT-INPUT/V2\0";
-const PREPARED_RUSTC_COMMAND_DOMAIN_V2: &[u8] = b"FE2O3/PREPARED-RUSTC-COMMAND/V2\0";
 const CARGO_METADATA_BUILD_OBSERVATION_DOMAIN_V2: &[u8] =
     b"FE2O3/CARGO-METADATA-BUILD-OBSERVATION/V2\0";
 const WORKER_V2_CONFIG_ID_DOMAIN: &[u8] = b"FE2O3/WORKER-V2-CONFIG-ID/V1\0";
@@ -382,7 +383,7 @@ pub(crate) fn run(argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperError
     };
     let rustc_path = resolve_command_executable(invocation.executable(), &execution_directory)?;
     let pinned_rustc = PinnedExecutable::open(&rustc_path)?;
-    let mut command = pinned_rustc.command()?;
+    let mut command = pinned_rustc.command_by_canonical_path()?;
     command.args(invocation.forwarded_args());
     command.args(managed_rustc_args);
     if let Some(current_dir) = &rustc_working_directory {
@@ -437,7 +438,6 @@ pub(crate) fn run(argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperError
     if let Some(observation) = worker_build_observation.as_mut() {
         observation.prepared_rustc_command_sha256 = prepared_rustc_command_sha256(
             command.as_command(),
-            pinned_rustc.display_path(),
             *pinned_rustc.sha256(),
             complete_s09_environment
                 .as_ref()
@@ -1084,7 +1084,6 @@ fn managed_s09_child_environment(name: &OsStr) -> bool {
 
 fn prepared_rustc_command_sha256(
     command: &Command,
-    resolved_executable: &Path,
     executable_sha256: [u8; 32],
     environment: &CompleteS09ChildEnvironmentV2,
 ) -> Result<[u8; 32], BindingWrapperError> {
@@ -1093,22 +1092,20 @@ fn prepared_rustc_command_sha256(
             "prepared rustc command has no explicit working directory".to_owned(),
         )
     })?;
-    let mut digest = Sha256::new();
-    digest.update(PREPARED_RUSTC_COMMAND_DOMAIN_V2);
-    hash_os(&mut digest, command.get_program());
-    hash_os(&mut digest, resolved_executable.as_os_str());
-    digest.update(executable_sha256);
-    hash_os(&mut digest, current_dir.as_os_str());
-    digest.update((command.get_args().len() as u64).to_le_bytes());
-    for argument in command.get_args() {
-        hash_os(&mut digest, argument);
-    }
-    digest.update((environment.entries.len() as u64).to_le_bytes());
-    for (name, value) in &environment.entries {
-        hash_os(&mut digest, name);
-        hash_os(&mut digest, value);
-    }
-    Ok(digest.finalize().into())
+    let executable_path = Path::new(command.get_program());
+    let arguments_after_argv0 = command.get_args().map(OsString::from).collect::<Vec<_>>();
+    prepared_command_digest_v2(&PreparedCommandIdentityV2 {
+        executable_path,
+        executable_sha256,
+        arguments_after_argv0: &arguments_after_argv0,
+        current_dir,
+        environment: &environment.entries,
+    })
+    .map_err(|error| {
+        BindingWrapperError::BuildProvenance(format!(
+            "cannot encode prepared rustc command identity: {error}"
+        ))
+    })
 }
 
 struct PreparedRustcCommandDigestCapability {
@@ -2438,11 +2435,10 @@ mod tests {
             arguments: &[String],
             environment: &[(String, Option<String>)],
             current_dir: &Path,
-            program: &str,
             resolved_program: &Path,
             executable_sha256: [u8; 32],
         ) -> [u8; 32] {
-            let mut command = Command::new(program);
+            let mut command = Command::new(resolved_program);
             command.args(arguments).current_dir(current_dir);
             for (name, value) in environment {
                 match value {
@@ -2455,13 +2451,8 @@ mod tests {
                 }
             }
             let complete_environment = CompleteS09ChildEnvironmentV2::from_command(&command);
-            prepared_rustc_command_sha256(
-                &command,
-                resolved_program,
-                executable_sha256,
-                &complete_environment,
-            )
-            .unwrap()
+            prepared_rustc_command_sha256(&command, executable_sha256, &complete_environment)
+                .unwrap()
         }
 
         let arguments = [
@@ -2506,27 +2497,13 @@ mod tests {
         .map(|(name, value)| (name.to_owned(), value.map(str::to_owned)));
         let current_dir = Path::new("/workspace/a");
         let resolved = Path::new("/toolchain/a/rustc");
-        let baseline = identity(
-            &arguments,
-            &environment,
-            current_dir,
-            "rustc",
-            resolved,
-            [0x31; 32],
-        );
+        let baseline = identity(&arguments, &environment, current_dir, resolved, [0x31; 32]);
 
         for index in 0..arguments.len() {
             let mut changed = arguments.clone();
             changed[index].push_str("-changed");
             assert_ne!(
-                identity(
-                    &changed,
-                    &environment,
-                    current_dir,
-                    "rustc",
-                    resolved,
-                    [0x31; 32]
-                ),
+                identity(&changed, &environment, current_dir, resolved, [0x31; 32]),
                 baseline,
                 "argv[{index}] was not covered"
             );
@@ -2538,14 +2515,7 @@ mod tests {
                 None => Some("restored".to_owned()),
             };
             assert_ne!(
-                identity(
-                    &arguments,
-                    &changed,
-                    current_dir,
-                    "rustc",
-                    resolved,
-                    [0x31; 32]
-                ),
+                identity(&arguments, &changed, current_dir, resolved, [0x31; 32]),
                 baseline,
                 "environment mutation {} was not covered",
                 environment[index].0
@@ -2556,7 +2526,6 @@ mod tests {
                 &arguments,
                 &environment,
                 Path::new("/workspace/b"),
-                "rustc",
                 resolved,
                 [0x31; 32]
             ),
@@ -2567,32 +2536,13 @@ mod tests {
                 &arguments,
                 &environment,
                 current_dir,
-                "rustc-next",
-                resolved,
-                [0x31; 32]
-            ),
-            baseline
-        );
-        assert_ne!(
-            identity(
-                &arguments,
-                &environment,
-                current_dir,
-                "rustc",
                 Path::new("/toolchain/b/rustc"),
                 [0x31; 32],
             ),
             baseline
         );
         assert_ne!(
-            identity(
-                &arguments,
-                &environment,
-                current_dir,
-                "rustc",
-                resolved,
-                [0x32; 32]
-            ),
+            identity(&arguments, &environment, current_dir, resolved, [0x32; 32]),
             baseline
         );
     }
@@ -2613,13 +2563,8 @@ mod tests {
                     .map(|(name, value)| (OsString::from(name), OsString::from(value))),
             )
             .unwrap();
-            let digest = prepared_rustc_command_sha256(
-                &command,
-                Path::new("/toolchain/rustc"),
-                [0x44; 32],
-                &complete_environment,
-            )
-            .unwrap();
+            let digest =
+                prepared_rustc_command_sha256(&command, [0x44; 32], &complete_environment).unwrap();
             (command, digest)
         }
 
@@ -2654,26 +2599,15 @@ mod tests {
         policy_value_change[3].1 = "second";
         assert_ne!(prepared(&policy_value_change).1, baseline);
 
-        let mut removed = Command::new("rustc");
+        let mut removed = Command::new("/toolchain/rustc");
         removed.current_dir("/workspace").env_remove("OPTIONAL");
         let removed_environment = CompleteS09ChildEnvironmentV2::from_command(&removed);
-        let removed = prepared_rustc_command_sha256(
-            &removed,
-            Path::new("/toolchain/rustc"),
-            [0x44; 32],
-            &removed_environment,
-        )
-        .unwrap();
-        let mut empty = Command::new("rustc");
+        let removed =
+            prepared_rustc_command_sha256(&removed, [0x44; 32], &removed_environment).unwrap();
+        let mut empty = Command::new("/toolchain/rustc");
         empty.current_dir("/workspace").env("OPTIONAL", "");
         let empty_environment = CompleteS09ChildEnvironmentV2::from_command(&empty);
-        let empty = prepared_rustc_command_sha256(
-            &empty,
-            Path::new("/toolchain/rustc"),
-            [0x44; 32],
-            &empty_environment,
-        )
-        .unwrap();
+        let empty = prepared_rustc_command_sha256(&empty, [0x44; 32], &empty_environment).unwrap();
         assert_ne!(
             removed, empty,
             "removed and empty environments were conflated"
@@ -2708,13 +2642,8 @@ mod tests {
         let mut capability = PreparedRustcCommandDigestCapability::attach(&mut command).unwrap();
         let before = format!("{command:?}");
         let complete_environment = CompleteS09ChildEnvironmentV2::from_command(&command);
-        let digest = prepared_rustc_command_sha256(
-            &command,
-            Path::new("/toolchain/rustc"),
-            [0x55; 32],
-            &complete_environment,
-        )
-        .unwrap();
+        let digest =
+            prepared_rustc_command_sha256(&command, [0x55; 32], &complete_environment).unwrap();
         capability.finalize(digest).unwrap();
         assert_eq!(format!("{command:?}"), before);
         let mut observed = [0_u8; 32];

@@ -1,0 +1,13 @@
+[package]
+name = "fe2o3-process-identity"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Canonical identities for prepared and running fe2o3 compiler processes."
+
+[dependencies]
+libc.workspace = true
+rustix.workspace = true
+sha2.workspace = true

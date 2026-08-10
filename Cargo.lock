@@ -58,6 +58,7 @@ dependencies = [
  "fe2o3-hsaco",
  "fe2o3-hsaco-finalize",
  "fe2o3-kernel-descriptor",
+ "fe2o3-process-identity",
  "fe2o3-rustc-invocation",
  "fe2o3-worker-v2-bundle",
  "libc",
@@ -410,6 +411,15 @@ dependencies = [
  "fe2o3-core",
  "fe2o3-device",
  "fe2o3-host",
+]
+
+[[package]]
+name = "fe2o3-process-identity"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "rustix",
+ "sha2",
 ]
 
 [[package]]
@@ -821,6 +831,7 @@ dependencies = [
  "fe2o3-hsaco",
  "fe2o3-kernel-descriptor",
  "fe2o3-kernel-ir",
+ "fe2o3-process-identity",
  "fe2o3-rustc-front",
  "libc",
  "reserved-fe2o3-symbols",
