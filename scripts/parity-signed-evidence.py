@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import shutil
 import stat
 import subprocess
 import sys
@@ -33,6 +34,12 @@ LANE_RE = re.compile(r"^(-|[a-z0-9][a-z0-9._-]{0,63})$")
 PATH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/+:-]{0,511}$")
 HEX_RE = re.compile(r"^(?:[0-9a-f]{2})+$")
 DEFAULT_LOCK = Path("/run/lock/fe2o3/mi300x-gfx942-evidence.lock")
+TRUST_POLICY_RELATIVE = Path("docs/parity-evidence/trust-policy-v2.tsv")
+TRUST_KEYS_RELATIVE = Path("docs/parity-evidence/trusted-keys")
+REQUIRED_METADATA = [
+    ("exact", "docs/cuda-oxide-parity-status.tsv"),
+    ("prefix", "docs/parity-evidence/archive/"),
+]
 
 
 class EvidenceError(Exception):
@@ -249,6 +256,46 @@ class TrustPolicy:
     metadata_paths: list[tuple[str, str]]
     keys: dict[tuple[str, str], TrustedKey]
 
+
+def canonical_ed25519_public_key(path: Path) -> bytes:
+    try:
+        info = path.lstat()
+    except OSError:
+        fail(f"public key is missing: {path}")
+    if not stat.S_ISREG(info.st_mode) or path.is_symlink():
+        fail(f"public key must be a regular non-symlink file: {path}")
+    process = subprocess.run(
+        ["openssl", "pkey", "-pubin", "-in", str(path), "-pubout"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if process.returncode != 0:
+        fail(f"public key is not public Ed25519 material: {path}")
+    with tempfile.NamedTemporaryFile(prefix="fe2o3-public-key-") as canonical:
+        canonical.write(process.stdout)
+        canonical.flush()
+        ed25519_fingerprint(Path(canonical.name))
+    return process.stdout
+
+
+def require_real_path_components(root: Path, relative: Path, label: str) -> Path:
+    current = root.resolve(strict=True)
+    for index, part in enumerate(relative.parts):
+        current = current.joinpath(part)
+        try:
+            info = current.lstat()
+        except OSError:
+            fail(f"{label} is missing: {relative}")
+        if stat.S_ISLNK(info.st_mode):
+            fail(f"{label} contains a symlink: {relative}")
+        if index + 1 < len(relative.parts):
+            if not stat.S_ISDIR(info.st_mode):
+                fail(f"{label} parent is not a directory: {relative}")
+        elif not stat.S_ISREG(info.st_mode):
+            fail(f"{label} is not a regular file: {relative}")
+    return current
+
 def ed25519_fingerprint(path: Path) -> str:
     process = subprocess.run(
         ["openssl", "pkey", "-pubin", "-in", str(path), "-outform", "DER"],
@@ -325,36 +372,114 @@ def parse_trust_policy(trusted_root: Path, policy_path: Path) -> TrustPolicy:
     return TrustPolicy(domain, metadata, keys)
 
 
+def validate_production_trust(trusted_root: Path, policy_path: Path) -> TrustPolicy:
+    trusted_root = trusted_root.resolve(strict=True)
+    expected_policy = require_real_path_components(
+        trusted_root, TRUST_POLICY_RELATIVE, "production trust policy"
+    )
+    if policy_path.resolve(strict=True) != expected_policy:
+        fail("production trust policy is not at its canonical repository path")
+    trust = parse_trust_policy(trusted_root, expected_policy)
+    if trust.domain != "production":
+        fail("production trust policy must use the production domain")
+    if trust.metadata_paths != REQUIRED_METADATA:
+        fail("production trust policy has a non-canonical metadata allowlist")
+    if len(trust.keys) != 2 or {key.role for key in trust.keys.values()} != {
+        "attestor",
+        "reviewer",
+    }:
+        fail("production trust policy requires exactly one attestor and one reviewer")
+    for key in trust.keys.values():
+        relative = TRUST_KEYS_RELATIVE.joinpath(f"{key.key_id}.pem")
+        expected_key = require_real_path_components(
+            trusted_root, relative, "production public key"
+        )
+        if key.path != expected_key:
+            fail(f"production public key has a non-canonical path: {key.key_id}")
+        if expected_key.read_bytes() != canonical_ed25519_public_key(expected_key):
+            fail(f"production public key is not canonical PEM: {key.key_id}")
+    return trust
+
+
+def bootstrap_production_trust(args: argparse.Namespace) -> None:
+    if not ID_RE.fullmatch(args.attestor_key_id) or not ID_RE.fullmatch(
+        args.reviewer_key_id
+    ):
+        fail("invalid production signing key identity")
+    if args.attestor_key_id == args.reviewer_key_id:
+        fail("attestor and reviewer key IDs must be distinct")
+    attestor = canonical_ed25519_public_key(args.attestor_public_key)
+    reviewer = canonical_ed25519_public_key(args.reviewer_public_key)
+    with tempfile.TemporaryDirectory(prefix="fe2o3-bootstrap-keys-") as temp:
+        attestor_path = Path(temp, "attestor.pem")
+        reviewer_path = Path(temp, "reviewer.pem")
+        attestor_path.write_bytes(attestor)
+        reviewer_path.write_bytes(reviewer)
+        if ed25519_fingerprint(attestor_path) == ed25519_fingerprint(reviewer_path):
+            fail("attestor and reviewer must use distinct Ed25519 public keys")
+
+    destination = args.output_root.absolute()
+    if destination.exists() or destination.is_symlink():
+        fail("production trust bootstrap output already exists")
+    parent = destination.parent.resolve(strict=True)
+    staging = Path(tempfile.mkdtemp(prefix=".fe2o3-trust-", dir=parent))
+    try:
+        keys = staging.joinpath(TRUST_KEYS_RELATIVE)
+        keys.mkdir(parents=True, mode=0o700)
+        material = [
+            ("attestor", args.attestor_key_id, attestor),
+            ("reviewer", args.reviewer_key_id, reviewer),
+        ]
+        records: list[tuple[str, str, str, str]] = []
+        for role, key_id, public_key in material:
+            relative = TRUST_KEYS_RELATIVE.joinpath(f"{key_id}.pem")
+            output = staging.joinpath(relative)
+            output.write_bytes(public_key)
+            output.chmod(0o444)
+            records.append((role, key_id, relative.as_posix(), sha256_file(output)))
+        records.sort()
+        lines = [
+            "parity_trust_policy_schema_version\t2",
+            "trust_domain\tproduction",
+            "metadata_path_count\t2",
+            "metadata_path\t0000\texact\tdocs/cuda-oxide-parity-status.tsv",
+            "metadata_path\t0001\tprefix\tdocs/parity-evidence/archive/",
+            "key_count\t2",
+        ]
+        for index, (role, key_id, relative, digest) in enumerate(records):
+            lines.append(
+                f"key\t{index:04d}\t{role}\t{key_id}\t{relative}\t{digest}\ted25519"
+            )
+        policy = staging.joinpath(TRUST_POLICY_RELATIVE)
+        policy.write_text("\n".join(lines) + "\n", encoding="ascii")
+        policy.chmod(0o444)
+        validate_production_trust(staging, policy)
+        os.rename(staging, destination)
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    print(f"production trust bootstrap written: {destination}")
+
+
 def check_trust_update(args: argparse.Namespace) -> None:
     protected_root = args.protected_root.resolve(strict=True)
     candidate_root = args.candidate_root.resolve(strict=True)
     protected_present = args.protected_policy.exists() or args.protected_policy.is_symlink()
     candidate_present = args.candidate_policy.exists() or args.candidate_policy.is_symlink()
     check_row_policy_update(args.protected_row_policy, args.candidate_row_policy)
-    required_metadata = [
-        ("exact", "docs/cuda-oxide-parity-status.tsv"),
-        ("prefix", "docs/parity-evidence/archive/"),
-    ]
-
     if not protected_present:
         if not candidate_present:
             print("no active production trust policy; promotion remains fail-closed")
             return
-        candidate = parse_trust_policy(candidate_root, args.candidate_policy)
-        if candidate.domain != "production":
-            fail("initial trust policy activation must use the production domain")
-        if candidate.metadata_paths != required_metadata:
-            fail("initial trust policy activation has a non-canonical metadata allowlist")
-        if {key.role for key in candidate.keys.values()} != {"attestor", "reviewer"}:
-            fail("initial trust policy activation requires separated attestor and reviewer roles")
+        validate_production_trust(candidate_root, args.candidate_policy)
         print("initial production trust policy activation is monotonic")
         return
 
     if not candidate_present:
         fail("active trust policy cannot be removed without break-glass")
-    protected = parse_trust_policy(protected_root, args.protected_policy)
-    candidate = parse_trust_policy(candidate_root, args.candidate_policy)
-    if protected.domain != "production" or candidate.domain != protected.domain:
+    protected = validate_production_trust(protected_root, args.protected_policy)
+    candidate = validate_production_trust(candidate_root, args.candidate_policy)
+    if candidate.domain != protected.domain:
         fail("trust domain cannot be changed or downgraded")
     if candidate.metadata_paths != protected.metadata_paths:
         fail("trusted metadata allowlist cannot be changed without break-glass")
@@ -1307,8 +1432,10 @@ def gate(args: argparse.Namespace) -> None:
     repo = args.repo.resolve(strict=True)
     root = args.archive_root.resolve(strict=True)
     trust = parse_trust_policy(args.trusted_root, args.trust_policy)
-    if trust.domain != "production" and not args.allow_test_fixtures:
-        fail("production promotion requires a production trust domain")
+    if not args.allow_test_fixtures:
+        if trust.domain != "production":
+            fail("production promotion requires a production trust domain")
+        trust = validate_production_trust(args.trusted_root, args.trust_policy)
     trusted_policy_bytes = args.trusted_policy.read_bytes()
     if args.candidate_policy.read_bytes() != trusted_policy_bytes:
         fail("candidate row policy differs from protected baseline policy")
@@ -1638,6 +1765,17 @@ def build_parser() -> argparse.ArgumentParser:
     trust_update.add_argument("--protected-row-policy", type=Path, required=True)
     trust_update.add_argument("--candidate-row-policy", type=Path, required=True)
 
+    bootstrap = subparsers.add_parser("bootstrap-production-trust")
+    bootstrap.add_argument("--output-root", type=Path, required=True)
+    bootstrap.add_argument("--attestor-public-key", type=Path, required=True)
+    bootstrap.add_argument("--attestor-key-id", required=True)
+    bootstrap.add_argument("--reviewer-public-key", type=Path, required=True)
+    bootstrap.add_argument("--reviewer-key-id", required=True)
+
+    validate_trust = subparsers.add_parser("validate-production-trust")
+    validate_trust.add_argument("--trusted-root", type=Path, required=True)
+    validate_trust.add_argument("--trust-policy", type=Path, required=True)
+
     result = subparsers.add_parser("validate-result")
     common_trust(result)
     result.add_argument("record")
@@ -1689,6 +1827,11 @@ def main() -> None:
         )
     elif args.command == "check-trust-update":
         check_trust_update(args)
+    elif args.command == "bootstrap-production-trust":
+        bootstrap_production_trust(args)
+    elif args.command == "validate-production-trust":
+        trust = validate_production_trust(args.trusted_root, args.trust_policy)
+        print(f"production trust is valid: {len(trust.keys)} separated public keys")
     elif args.command == "validate-result":
         trust = parse_trust_policy(args.trusted_root, args.trust_policy)
         result = parse_result(

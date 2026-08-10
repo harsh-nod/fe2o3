@@ -419,33 +419,81 @@ expect_failure canonical_fingerprint 'duplicate trusted public-key fingerprint' 
 # Protected production trust requirements are monotonic without break-glass.
 TRUST_OLD="${TEST_ROOT}/trust-old"
 TRUST_CANDIDATE="${TEST_ROOT}/trust-candidate"
-mkdir -p "${TRUST_OLD}/keys"
-cp "${TRUSTED}/keys/attestor.pem" "${TRUST_OLD}/keys/attestor.pem"
-cp "${TRUSTED}/keys/reviewer.pem" "${TRUST_OLD}/keys/reviewer.pem"
-{
-  printf 'parity_trust_policy_schema_version\t2\n'
-  printf 'trust_domain\tproduction\n'
-  printf 'metadata_path_count\t2\n'
-  printf 'metadata_path\t0000\texact\tdocs/cuda-oxide-parity-status.tsv\n'
-  printf 'metadata_path\t0001\tprefix\tdocs/parity-evidence/archive/\n'
-  printf 'key_count\t2\n'
-  printf 'key\t0000\tattestor\tproduction-attestor\tkeys/attestor.pem\t%s\ted25519\n' "$(file_sha "${TRUST_OLD}/keys/attestor.pem")"
-  printf 'key\t0001\treviewer\tproduction-reviewer\tkeys/reviewer.pem\t%s\ted25519\n' "$(file_sha "${TRUST_OLD}/keys/reviewer.pem")"
-} >"${TRUST_OLD}/trust.tsv"
+PRODUCTION_ATTESTOR_PRIVATE="${TEST_ROOT}/production-attestor-private.pem"
+PRODUCTION_REVIEWER_PRIVATE="${TEST_ROOT}/production-reviewer-private.pem"
+PRODUCTION_ATTESTOR_PUBLIC="${TEST_ROOT}/production-attestor-public.pem"
+PRODUCTION_REVIEWER_PUBLIC="${TEST_ROOT}/production-reviewer-public.pem"
+openssl genpkey -algorithm Ed25519 -out "${PRODUCTION_ATTESTOR_PRIVATE}" 2>/dev/null
+openssl genpkey -algorithm Ed25519 -out "${PRODUCTION_REVIEWER_PRIVATE}" 2>/dev/null
+openssl pkey -in "${PRODUCTION_ATTESTOR_PRIVATE}" -pubout \
+  -out "${PRODUCTION_ATTESTOR_PUBLIC}" 2>/dev/null
+openssl pkey -in "${PRODUCTION_REVIEWER_PRIVATE}" -pubout \
+  -out "${PRODUCTION_REVIEWER_PUBLIC}" 2>/dev/null
+
+"${TOOL}" bootstrap-production-trust \
+  --output-root "${TRUST_OLD}" \
+  --attestor-public-key "${PRODUCTION_ATTESTOR_PUBLIC}" \
+  --attestor-key-id production-attestor \
+  --reviewer-public-key "${PRODUCTION_REVIEWER_PUBLIC}" \
+  --reviewer-key-id production-reviewer
+"${TOOL}" validate-production-trust \
+  --trusted-root "${TRUST_OLD}" \
+  --trust-policy "${TRUST_OLD}/docs/parity-evidence/trust-policy-v2.tsv"
+[[ "$(stat -c %a "${TRUST_OLD}/docs/parity-evidence/trust-policy-v2.tsv")" == 444 ]]
+[[ "$(stat -c %a "${TRUST_OLD}/docs/parity-evidence/trusted-keys/production-attestor.pem")" == 444 ]]
+if rg -F -- 'PRIVATE KEY' "${TRUST_OLD}" >/dev/null; then
+  printf 'production bootstrap copied private key material\n' >&2
+  exit 1
+fi
+
+expect_failure bootstrap_existing 'production trust bootstrap output already exists' \
+  "${TOOL}" bootstrap-production-trust \
+  --output-root "${TRUST_OLD}" \
+  --attestor-public-key "${PRODUCTION_ATTESTOR_PUBLIC}" \
+  --attestor-key-id production-attestor \
+  --reviewer-public-key "${PRODUCTION_REVIEWER_PUBLIC}" \
+  --reviewer-key-id production-reviewer
+expect_failure bootstrap_private_input 'public key is not public Ed25519 material' \
+  "${TOOL}" bootstrap-production-trust \
+  --output-root "${TEST_ROOT}/private-input-bootstrap" \
+  --attestor-public-key "${PRODUCTION_ATTESTOR_PRIVATE}" \
+  --attestor-key-id production-attestor \
+  --reviewer-public-key "${PRODUCTION_REVIEWER_PUBLIC}" \
+  --reviewer-key-id production-reviewer
+expect_failure bootstrap_duplicate_key 'attestor and reviewer must use distinct Ed25519 public keys' \
+  "${TOOL}" bootstrap-production-trust \
+  --output-root "${TEST_ROOT}/duplicate-key-bootstrap" \
+  --attestor-public-key "${PRODUCTION_ATTESTOR_PUBLIC}" \
+  --attestor-key-id production-attestor \
+  --reviewer-public-key "${PRODUCTION_ATTESTOR_PUBLIC}" \
+  --reviewer-key-id production-reviewer
+
 {
   printf 'row_evidence_policy_schema_version\t2\n'
   printf 'row_count\t2\n'
   printf 'row\t0000\t04\tgfx942\tunit,ui\tunit,ui,ir,compile\treviewer\n'
   printf 'row\t0001\t05\tgfx950\tunit,ui\tunit,ui,ir,compile\treviewer\n'
 } >"${TRUST_OLD}/row-policy.tsv"
+
+TRUST_EMPTY="${TEST_ROOT}/trust-empty"
+mkdir -p "${TRUST_EMPTY}/docs/parity-evidence"
+cp "${TRUST_OLD}/row-policy.tsv" "${TRUST_EMPTY}/row-policy.tsv"
+"${TOOL}" check-trust-update \
+  --protected-root "${TRUST_EMPTY}" \
+  --protected-policy "${TRUST_EMPTY}/docs/parity-evidence/trust-policy-v2.tsv" \
+  --protected-row-policy "${TRUST_EMPTY}/row-policy.tsv" \
+  --candidate-root "${TRUST_OLD}" \
+  --candidate-policy "${TRUST_OLD}/docs/parity-evidence/trust-policy-v2.tsv" \
+  --candidate-row-policy "${TRUST_OLD}/row-policy.tsv"
+
 cp -a "${TRUST_OLD}" "${TRUST_CANDIDATE}"
 trust_update_args=(
   check-trust-update
   --protected-root "${TRUST_OLD}"
-  --protected-policy "${TRUST_OLD}/trust.tsv"
+  --protected-policy "${TRUST_OLD}/docs/parity-evidence/trust-policy-v2.tsv"
   --protected-row-policy "${TRUST_OLD}/row-policy.tsv"
   --candidate-root "${TRUST_CANDIDATE}"
-  --candidate-policy "${TRUST_CANDIDATE}/trust.tsv"
+  --candidate-policy "${TRUST_CANDIDATE}/docs/parity-evidence/trust-policy-v2.tsv"
   --candidate-row-policy "${TRUST_CANDIDATE}/row-policy.tsv"
 )
 "${TOOL}" "${trust_update_args[@]}"
@@ -486,24 +534,42 @@ sed -i 's/04\tgfx942\tunit,ui\tunit,ui,ir,compile/04\tgfx942\tunit,ui,ir\tunit,u
 rm -rf "${TRUST_CANDIDATE}"
 cp -a "${TRUST_OLD}" "${TRUST_CANDIDATE}"
 
-sed -i 's#prefix\tdocs/parity-evidence/archive/#prefix\tdocs/#' "${TRUST_CANDIDATE}/trust.tsv"
-expect_failure metadata_allowlist_downgrade 'metadata allowlist cannot be changed' "${TOOL}" "${trust_update_args[@]}"
+sed -i 's#prefix\tdocs/parity-evidence/archive/#prefix\tdocs/#' "${TRUST_CANDIDATE}/docs/parity-evidence/trust-policy-v2.tsv"
+expect_failure metadata_allowlist_downgrade 'non-canonical metadata allowlist' "${TOOL}" "${trust_update_args[@]}"
 rm -rf "${TRUST_CANDIDATE}"
 cp -a "${TRUST_OLD}" "${TRUST_CANDIDATE}"
 
-sed -i 's/^trust_domain\tproduction$/trust_domain\ttest/' "${TRUST_CANDIDATE}/trust.tsv"
-expect_failure trust_domain_downgrade 'trust domain cannot be changed or downgraded' "${TOOL}" "${trust_update_args[@]}"
+sed -i 's/^trust_domain\tproduction$/trust_domain\ttest/' "${TRUST_CANDIDATE}/docs/parity-evidence/trust-policy-v2.tsv"
+expect_failure trust_domain_downgrade 'must use the production domain' "${TOOL}" "${trust_update_args[@]}"
+rm -rf "${TRUST_CANDIDATE}"
+cp -a "${TRUST_OLD}" "${TRUST_CANDIDATE}"
+
+chmod u+w "${TRUST_CANDIDATE}/docs/parity-evidence/trusted-keys/production-attestor.pem"
+printf '\n' >>"${TRUST_CANDIDATE}/docs/parity-evidence/trusted-keys/production-attestor.pem"
+sed -i "s#trusted-keys/production-attestor.pem\t[0-9a-f]*#trusted-keys/production-attestor.pem\t$(file_sha "${TRUST_CANDIDATE}/docs/parity-evidence/trusted-keys/production-attestor.pem")#" "${TRUST_CANDIDATE}/docs/parity-evidence/trust-policy-v2.tsv"
+expect_failure noncanonical_public_key 'production public key is not canonical PEM' \
+  "${TOOL}" "${trust_update_args[@]}"
+rm -rf "${TRUST_CANDIDATE}"
+cp -a "${TRUST_OLD}" "${TRUST_CANDIDATE}"
+
+mv "${TRUST_CANDIDATE}/docs/parity-evidence/trusted-keys/production-attestor.pem" \
+  "${TRUST_CANDIDATE}/docs/parity-evidence/trusted-keys/attestor-other.pem"
+sed -i 's#trusted-keys/production-attestor.pem#trusted-keys/attestor-other.pem#' \
+  "${TRUST_CANDIDATE}/docs/parity-evidence/trust-policy-v2.tsv"
+expect_failure noncanonical_public_key_path 'production public key is missing' \
+  "${TOOL}" "${trust_update_args[@]}"
 rm -rf "${TRUST_CANDIDATE}"
 cp -a "${TRUST_OLD}" "${TRUST_CANDIDATE}"
 
 openssl genpkey -algorithm Ed25519 -out "${TEST_ROOT}/replacement-private.pem" 2>/dev/null
-openssl pkey -in "${TEST_ROOT}/replacement-private.pem" -pubout -out "${TRUST_CANDIDATE}/keys/attestor.pem" 2>/dev/null
-sed -i "s#keys/attestor.pem\t[0-9a-f]*#keys/attestor.pem\t$(file_sha "${TRUST_CANDIDATE}/keys/attestor.pem")#" "${TRUST_CANDIDATE}/trust.tsv"
+chmod u+w "${TRUST_CANDIDATE}/docs/parity-evidence/trusted-keys/production-attestor.pem"
+openssl pkey -in "${TEST_ROOT}/replacement-private.pem" -pubout -out "${TRUST_CANDIDATE}/docs/parity-evidence/trusted-keys/production-attestor.pem" 2>/dev/null
+sed -i "s#trusted-keys/production-attestor.pem\t[0-9a-f]*#trusted-keys/production-attestor.pem\t$(file_sha "${TRUST_CANDIDATE}/docs/parity-evidence/trusted-keys/production-attestor.pem")#" "${TRUST_CANDIDATE}/docs/parity-evidence/trust-policy-v2.tsv"
 expect_failure signing_authority_replacement 'cannot replace signing authority without break-glass' "${TOOL}" "${trust_update_args[@]}"
 rm -rf "${TRUST_CANDIDATE}"
 cp -a "${TRUST_OLD}" "${TRUST_CANDIDATE}"
 
-rm "${TRUST_CANDIDATE}/trust.tsv"
+rm "${TRUST_CANDIDATE}/docs/parity-evidence/trust-policy-v2.tsv"
 expect_failure trust_policy_removal 'active trust policy cannot be removed without break-glass' "${TOOL}" "${trust_update_args[@]}"
 
 # Production signing cannot omit the repository trust boundary.

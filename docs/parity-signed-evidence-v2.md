@@ -23,9 +23,20 @@ rejects.
 
 1. Generate separate Ed25519 attestor and reviewer keys outside the repository.
 2. Keep private keys runner-owned, mode 0600, and outside every checkout.
-3. Commit only public keys under docs/parity-evidence/trusted-keys.
-4. Copy trust-policy-v2.example.tsv to trust-policy-v2.tsv, replace key IDs and
-   SHA-256 placeholders, and review the metadata allowlist.
+3. Export only the public keys and run the fail-closed bootstrap into a new,
+   otherwise absent directory:
+
+       scripts/parity-row-evidence.sh bootstrap-production-trust \
+         --output-root /tmp/parity-production-trust \
+         --attestor-public-key /operator-public/attestor.pem \
+         --attestor-key-id operator-runner-v1 \
+         --reviewer-public-key /operator-public/reviewer.pem \
+         --reviewer-key-id operator-reviewer-v1
+
+4. Review and copy the generated `docs/parity-evidence` tree into the candidate.
+   The bootstrap canonicalizes public PEM, rejects private input, requires
+   distinct keys and IDs, writes exact SHA-256 bindings, and never overwrites an
+   existing output.
 5. Merge the configuration without changing parity status. It becomes trusted
    only after it is part of a protected base commit.
 6. Protect the workflow and trust paths with repository rules and code-owner
@@ -34,6 +45,17 @@ rejects.
    branch before merge, or require a merge queue. The workflow checks default-tip
    freshness when it runs, but cannot configure repository rules or prevent the
    default branch from advancing between a completed check and merge.
+
+Validate a staged or installed tree independently:
+
+    scripts/parity-row-evidence.sh validate-production-trust \
+      --trusted-root /path/to/export \
+      --trust-policy /path/to/export/docs/parity-evidence/trust-policy-v2.tsv
+
+Validation requires the canonical policy and key locations, exactly one
+attestor and one reviewer, two distinct canonical Ed25519 public keys, the
+production domain, and the fixed metadata allowlist. Merely hand-writing a
+parseable policy is insufficient.
 
 The active trust policy is canonical TSV:
 
