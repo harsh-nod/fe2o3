@@ -10,6 +10,8 @@ import hashlib
 import os
 import pathlib
 import re
+import resource
+import signal
 import stat
 import string
 import struct
@@ -1356,17 +1358,34 @@ def run_bounded_tool(
     tool: pathlib.Path, arguments: list[str], snapshots: tuple[SealedSnapshot, ...]
 ) -> bytes:
     descriptors = tuple(snapshot.descriptor for snapshot in snapshots)
+
+    def limit_output_files() -> None:
+        resource.setrlimit(
+            resource.RLIMIT_FSIZE, (MAX_INPUT_BYTES, MAX_INPUT_BYTES)
+        )
+
     try:
         with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
-            completed = subprocess.run(
+            process = subprocess.Popen(
                 [os.fspath(tool), *arguments],
                 stdin=subprocess.DEVNULL,
                 stdout=stdout,
                 stderr=stderr,
                 pass_fds=descriptors,
-                timeout=60,
-                check=False,
+                start_new_session=True,
+                preexec_fn=limit_output_files,
             )
+            try:
+                returncode = process.wait(timeout=60)
+            except subprocess.TimeoutExpired as error:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.wait()
+                raise CheckError(
+                    f"direct evidence tool exceeded timeout: {tool.name}"
+                ) from error
             stdout.seek(0)
             output = stdout.read(MAX_INPUT_BYTES + 1)
             stderr.seek(0)
@@ -1375,10 +1394,10 @@ def run_bounded_tool(
         raise CheckError(
             f"direct evidence tool failed to execute: {tool}: {error}"
         ) from error
-    if completed.returncode != 0:
+    if returncode != 0:
         detail = error_output[:4096].decode("utf-8", "replace").strip()
         raise CheckError(
-            f"direct evidence tool failed: {tool.name}: {completed.returncode}: {detail}"
+            f"direct evidence tool failed: {tool.name}: {returncode}: {detail}"
         )
     if len(output) > MAX_INPUT_BYTES:
         raise CheckError(

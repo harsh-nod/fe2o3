@@ -11,6 +11,7 @@ readonly IDENTITY_FIXTURE="${ROOT}/scripts/tests/s09-debug-identity-fixture.py"
 readonly FIXTURE_DWARFDUMP="${FIXTURES}/llvm-dwarfdump"
 readonly FIXTURE_READOBJ="${FIXTURES}/llvm-readobj"
 readonly WRONG_FIXTURE_READOBJ="${FIXTURES}/llvm-readobj-wrong-artifact"
+readonly FLOOD_FIXTURE="${FIXTURES}/llvm-output-flood"
 readonly ROCGDB_HSACO_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 readonly HARDWARE_SHA256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 readonly HARDWARE_BUILD_ID=cccccccccccccccccccccccccccccccccccccccc
@@ -184,6 +185,18 @@ expect_fail "${CHECKER}" check-fixture \
   "${evidence_args[@]}" \
   --fixture-llvm-dwarfdump "${FIXTURE_DWARFDUMP}" \
   --fixture-llvm-readobj "${WRONG_FIXTURE_READOBJ}"
+expect_fail "${CHECKER}" check-fixture \
+  --manifest "${MANIFEST}" \
+  --expected-manifest-sha256 "${manifest_sha256}" \
+  "${evidence_args[@]}" \
+  --fixture-llvm-dwarfdump "${FLOOD_FIXTURE}" \
+  --fixture-llvm-readobj "${FIXTURE_READOBJ}"
+expect_fail "${CHECKER}" check-fixture \
+  --manifest "${MANIFEST}" \
+  --expected-manifest-sha256 "${manifest_sha256}" \
+  "${evidence_args[@]}" \
+  --fixture-llvm-dwarfdump "${FIXTURE_DWARFDUMP}" \
+  --fixture-llvm-readobj "${FLOOD_FIXTURE}"
 
 check_debug_manifest_mutation() {
   local name="$1"
@@ -474,9 +487,13 @@ rg -q 'FE2O3_S09_BP2_ARMED' "${RUNNER}"
 rg -q 'FE2O3_S09_BP3_STOP' "${RUNNER}"
 rg -Fq "info sharedlibrary memory://" "${RUNNER}"
 expect_fail rg -Fq -- "-ex 'info sharedlibrary'" "${RUNNER}"
-rg -Fq 'rm -f -- "${ROCGDB_RAW}"' "${RUNNER}"
+rg -Fq 's09_install_raw_transcript_guard "${ROCGDB_RAW}"' "${RUNNER}"
+rg -Fq 's09_delete_raw_transcript' "${RUNNER}"
+rg -Fq '/usr/bin/prlimit' "${RUNNER}"
+rg -Fq -- '--fsize="${TOOL_OUTPUT_LIMIT_BYTES}:${TOOL_OUTPUT_LIMIT_BYTES}"' "${RUNNER}"
 expect_fail rg -q -- '--command|command-file|FE2O3_.*DEBUG.*COMMAND' "${RUNNER}"
 expect_fail "${RUNNER}"
+PYTHONDONTWRITEBYTECODE=1 python3 "${ROOT}/scripts/tests/s09-raw-transcript-guard.py"
 python3 "${ROOT}/scripts/tests/s09-debug-policy.py"
 
 printf 'S09 debug checker tests passed\n'

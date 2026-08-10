@@ -11,7 +11,10 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 readonly CHECKER="${SCRIPT_DIR}/s09-debug-check.py"
 readonly PINNER="${SCRIPT_DIR}/s09_pinned_snapshot.py"
+readonly RAW_GUARD="${SCRIPT_DIR}/s09-raw-transcript-guard.sh"
 readonly PROFILE=s09-alpha-gfx942-o0-v1
+readonly TOOL_OUTPUT_LIMIT_BYTES=16777216
+readonly LLVM_TOOL_TIMEOUT_SECONDS=60
 
 usage() {
   printf 'Usage: %s ABSOLUTE-HSACO ABSOLUTE-HARDWARE-TEST ABSOLUTE-NEW-ARCHIVE\n' "$0" >&2
@@ -47,6 +50,13 @@ hash_or_missing() {
   fi
 }
 
+run_bounded_llvm_tool() {
+  /usr/bin/timeout --signal=TERM --kill-after=5s "${LLVM_TOOL_TIMEOUT_SECONDS}s" \
+    /usr/bin/prlimit \
+      --fsize="${TOOL_OUTPUT_LIMIT_BYTES}:${TOOL_OUTPUT_LIMIT_BYTES}" \
+      -- "$@"
+}
+
 mode=outer
 if [[ "${1:-}" == --pinned-profile ]]; then
   mode=pinned-profile
@@ -76,7 +86,12 @@ pinned_tool llvm-dwarfdump "${DWARFDUMP}"
 pinned_tool llvm-readobj "${READOBJ}"
 pinned_tool llvm-readelf "${READELF}"
 canonical_file checker "${CHECKER}"
+canonical_file raw-transcript-guard "${RAW_GUARD}"
 pinned_tool snapshot-supervisor "${PINNER}"
+pinned_tool timeout /usr/bin/timeout
+pinned_tool prlimit /usr/bin/prlimit
+# shellcheck source=s09-raw-transcript-guard.sh
+source "${RAW_GUARD}"
 
 if [[ "${mode}" == outer ]]; then
   canonical_file HSACO "${HSACO}"
@@ -118,11 +133,12 @@ readonly HARDWARE_FACTS="${ARCHIVE}/hardware.facts.txt"
 readonly ROCGDB_RAW="${ARCHIVE}/rocgdb.raw.txt"
 readonly ROCGDB_NORMALIZED="${ARCHIVE}/rocgdb.normalized.txt"
 readonly MANIFEST="${ARCHIVE}/manifest.txt"
+s09_install_raw_transcript_guard "${ROCGDB_RAW}"
 
 set +e
-"${DWARFDUMP}" --verify "${HSACO}" >"${DWARF_VERIFY_RAW}" 2>&1
+run_bounded_llvm_tool "${DWARFDUMP}" --verify "${HSACO}" >"${DWARF_VERIFY_RAW}" 2>&1
 dwarf_verify_status=$?
-"${DWARFDUMP}" --debug-info --debug-line "${HSACO}" >"${DWARF_RAW}" 2>&1
+run_bounded_llvm_tool "${DWARFDUMP}" --debug-info --debug-line "${HSACO}" >"${DWARF_RAW}" 2>&1
 dwarf_dump_status=$?
 "${CHECKER}" normalize-dwarf --input "${DWARF_RAW}" --output "${DWARF_NORMALIZED}"
 dwarf_normalize_status=$?
@@ -132,7 +148,7 @@ if ((dwarf_normalize_status == 0)); then
 else
   dwarf_check_status=1
 fi
-"${READOBJ}" --file-headers --notes "${HSACO}" >"${ARTIFACT_RAW}" 2>&1
+run_bounded_llvm_tool "${READOBJ}" --file-headers --notes "${HSACO}" >"${ARTIFACT_RAW}" 2>&1
 artifact_read_status=$?
 if ((artifact_read_status == 0 && dwarf_dump_status == 0)); then
   "${CHECKER}" artifact-facts \
@@ -143,7 +159,7 @@ if ((artifact_read_status == 0 && dwarf_dump_status == 0)); then
 else
   artifact_check_status=1
 fi
-"${READELF}" --elf-output-style=GNU --file-header --notes "${HARDWARE_TEST}" >"${HARDWARE_RAW}" 2>&1
+run_bounded_llvm_tool "${READELF}" --elf-output-style=GNU --file-header --notes "${HARDWARE_TEST}" >"${HARDWARE_RAW}" 2>&1
 hardware_read_status=$?
 if ((hardware_read_status == 0)); then
   "${CHECKER}" hardware-facts \
@@ -181,6 +197,9 @@ if ((dwarf_verify_status == 0 && dwarf_dump_status == 0 && dwarf_normalize_statu
     --input "facts=${ARTIFACT_FACTS}" \
     --executable host \
     -- /usr/bin/timeout --signal=TERM --kill-after=10s 180s \
+    /usr/bin/prlimit \
+      --fsize="${TOOL_OUTPUT_LIMIT_BYTES}:${TOOL_OUTPUT_LIMIT_BYTES}" \
+      -- \
     /usr/bin/env -i \
       HOME="${ARCHIVE}/tmp" \
       PATH=/opt/rocm/bin:/usr/bin:/bin \
@@ -276,7 +295,7 @@ fi
 set -e
 ROCGDB_RAW_SHA256="$(hash_or_missing "${ROCGDB_RAW}")"
 readonly ROCGDB_RAW_SHA256
-rm -f -- "${ROCGDB_RAW}"
+s09_delete_raw_transcript
 
 result=passed
 for status in \

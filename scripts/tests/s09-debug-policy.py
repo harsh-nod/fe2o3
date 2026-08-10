@@ -472,9 +472,10 @@ class ManifestV2SchemaTests(unittest.TestCase):
         self.assertIn("printf 'source_commit\\t%s\\n' \"${SOURCE_COMMIT}\"", finalizer)
         self.assertIn("printf 'source_tree\\t%s\\n' \"${SOURCE_TREE}\"", finalizer)
         self.assertLess(
-            lane.index("mapfile -t source_state"),
+            lane.index('exec "${SOURCE_STATE_CHECKER}"'),
             lane.index("cargo test --locked -p rustc-codegen-fe2o3"),
         )
+        self.assertIn("--source-supervised", lane)
         self.assertEqual(finalizer.count('--expected-commit "${SOURCE_COMMIT}"'), 2)
         self.assertEqual(finalizer.count('--expected-tree "${SOURCE_TREE}"'), 2)
         self.assertEqual(len(CHECKER.MANIFEST_FIELDS), CHECKER.MANIFEST_FIELD_COUNT)
