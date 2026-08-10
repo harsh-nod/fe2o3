@@ -7,8 +7,8 @@ use fe2o3_artifacts::{
     Endianness, ExecutableCodeObjectVersionV1, IdentityText, KernelEntry, LaunchContract,
     ManifestV1, MeasuredToolIdentity as ArtifactMeasuredToolIdentity, Name, PayloadDigest,
     PointerWidth, ProofExecutionIdentity, ProofMatchPolicy, ProofTargetIdentity as ArtifactTarget,
-    SourceContractIdentity, TargetIdentity, ToolIdentity, V1_REQUIRED_PROPERTIES,
-    VerificationModelIdentity as ArtifactModel,
+    SourceContractIdentity, TargetIdentity, ToolIdentity, TrustedItem as ArtifactTrustedItem,
+    V1_REQUIRED_PROPERTIES, VerificationModelIdentity as ArtifactModel,
 };
 use fe2o3_contracts::{
     AddressSpaceIdV1, AllocationProvenanceIdV1, AllocationSpecV1, ByteRegionV1,
@@ -22,7 +22,7 @@ use fe2o3_rustc_front::{
 use fe2o3_verifier::{
     AUTHENTICATED_CONTROL_FLOW_EXECUTABLE_BINDING_DOMAIN_V1,
     AUTHENTICATED_PROOF_EXECUTABLE_BINDING_DOMAIN_V1,
-    AUTHENTICATED_PROOF_EXECUTABLE_BINDING_VERSION_V1, AlphaZetaProductionReviewV1,
+    AUTHENTICATED_PROOF_EXECUTABLE_BINDING_VERSION_V1, AlphaZetaExecutableEvidenceReviewV1,
     AlphaZetaProofErrorV1, AlphaZetaProofSourcesV1, AuthenticatedControlFlowExecutableBindingV1,
     AuthenticatedExecutionFreshnessV1, AuthenticatedProofExecutableBindingError,
     AuthenticatedProofExecutablePolicyV1, AuthenticatedRecorderOutputV1, AxiomPolicy,
@@ -31,10 +31,10 @@ use fe2o3_verifier::{
     CorrelationId, Digest, ExecutionLimits, ExecutionTools,
     GFX942_ALPHA_ZETA_AUTHENTICATED_PROPERTIES_V1, GFX942_ALPHA_ZETA_MODEL_VERSION_V1,
     Gfx942AlphaZetaKernelV1, Gfx942AlphaZetaProofInputV1, Gfx942XnackMinusTargetIdentityV1,
-    KernelProofAdmissionIdentityV1, KernelProofAdmissionRequestV1,
-    MULTI_KERNEL_PROOF_ADMISSION_DOMAIN_V1, MULTI_KERNEL_PROOF_ADMISSION_VERSION_V1,
-    MeasuredRecorderInputsV1, MeasuredToolIdentity, MultiKernelProofAdmissionErrorV1,
-    MultiKernelProofAdmissionV1,
+    InertAlphaZetaExecutableEvidenceSetV1, KernelProofAdmissionIdentityV1,
+    KernelProofAdmissionRequestV1, MULTI_KERNEL_PROOF_ADMISSION_DOMAIN_V1,
+    MULTI_KERNEL_PROOF_ADMISSION_VERSION_V1, MeasuredRecorderInputsV1, MeasuredToolIdentity,
+    MultiKernelProofAdmissionErrorV1, MultiKernelProofAdmissionV1,
     PERSISTENT_AUTHENTICATED_CONTROL_FLOW_EXECUTABLE_BINDING_DOMAIN_V1,
     PERSISTENT_AUTHENTICATED_PROOF_EXECUTABLE_BINDING_DOMAIN_V1,
     PERSISTENT_MULTI_KERNEL_PROOF_ADMISSION_DOMAIN_V1,
@@ -45,19 +45,19 @@ use fe2o3_verifier::{
     PersistentlyFreshKernelProofAdmissionRequestV1,
     PersistentlyFreshMultiKernelProofAdmissionErrorV1,
     PersistentlyFreshMultiKernelProofAdmissionV1, ProcessLocalProofCapsuleDuplicateDetectorV1,
-    ProductionAlphaZetaProofSetV1, ProofCapsuleBuildErrorV1, ProofCapsuleContextErrorV1,
-    ProofCapsuleExpectationV1, ProofCapsuleFreshnessExpectationV1, ProofCapsuleFreshnessIdentityV1,
+    ProofCapsuleBuildErrorV1, ProofCapsuleContextErrorV1, ProofCapsuleExpectationV1,
+    ProofCapsuleFreshnessExpectationV1, ProofCapsuleFreshnessIdentityV1,
     ProofCapsuleIdentityFieldV1, ProofCapsuleTargetV1, ProofCapsuleV1, ProofOutcome, ProofProperty,
     ProofRequestV1, ProofTargetIdentity, STATIC_VIEW_PROOF_REQUIRED_PROPERTIES_V1,
     StaticViewLifetimeEpochClaimV1, StaticViewProofObligationV1, VerificationModelIdentity,
-    VerifierPolicy, alpha_zeta_abi_identity_v1, alpha_zeta_launch_identity_v1,
-    alpha_zeta_production_configuration_v1, bind_authenticated_control_flow_executable_v1,
+    VerifierPolicy, alpha_zeta_abi_identity_v1, alpha_zeta_inert_configuration_v1,
+    alpha_zeta_launch_identity_v1, bind_authenticated_control_flow_executable_v1,
     bind_authenticated_proof_executable_persistent_v1, bind_authenticated_proof_executable_v1,
     bind_control_flow_proof_request_v1,
     bind_persistently_fresh_authenticated_control_flow_executable_v1,
     bind_static_view_proof_evidence_v1, derive_control_flow_functional_specification_digest_v1,
     derive_static_view_functional_specification_digest_v1, execute_authenticated_recorder,
-    reconcile_control_flow_source_v1, record_production_alpha_zeta_execution_v1,
+    reconcile_control_flow_source_v1, record_inert_alpha_zeta_executable_evidence_v1,
 };
 
 static SYNTHETIC_RECORDER_EXECUTION: Mutex<()> = Mutex::new(());
@@ -705,7 +705,7 @@ fn alpha_zeta_configuration(
     input: &Gfx942AlphaZetaProofInputV1,
     mutation: AlphaZetaConfigurationMutation,
 ) -> Configuration {
-    let mut entries = alpha_zeta_production_configuration_v1(input);
+    let mut entries = alpha_zeta_inert_configuration_v1(input);
     if matches!(mutation, AlphaZetaConfigurationMutation::ProofNonce) {
         entries
             .iter_mut()
@@ -771,9 +771,39 @@ fn alpha_zeta_persistent_binding(
     Gfx942AlphaZetaProofInputV1,
     fe2o3_verifier::PersistentlyFreshProofExecutableBindingV1,
 ) {
+    alpha_zeta_persistent_binding_with_role_and_cov(
+        kernel,
+        kernel,
+        processor,
+        proof_set_nonce,
+        proof_nonce,
+        identity_mutation,
+        mutation,
+        ExecutableCodeObjectVersionV1::V6,
+        freshness,
+    )
+}
+
+#[cfg(target_os = "linux")]
+#[allow(clippy::too_many_arguments)]
+fn alpha_zeta_persistent_binding_with_role_and_cov(
+    executable_kernel: Gfx942AlphaZetaKernelV1,
+    input_role: Gfx942AlphaZetaKernelV1,
+    processor: &str,
+    proof_set_nonce: Digest,
+    proof_nonce: Digest,
+    identity_mutation: AlphaZetaIdentityMutation,
+    mutation: AlphaZetaConfigurationMutation,
+    code_object_version: ExecutableCodeObjectVersionV1,
+    freshness: &mut PersistentProofFreshnessLedgerV1,
+) -> (
+    Gfx942AlphaZetaProofInputV1,
+    fe2o3_verifier::PersistentlyFreshProofExecutableBindingV1,
+) {
     let sources = alpha_zeta_sources();
+    let trusted_items = sources.trusted_inventory().trusted_items().to_vec();
     let manifest = alpha_zeta_manifest(&sources, processor);
-    let artifact_target = alpha_zeta_artifact_target(&manifest, &sources, kernel);
+    let artifact_target = alpha_zeta_artifact_target(&manifest, &sources, executable_kernel);
     let target = verifier_target(artifact_target);
     let tools = alpha_zeta_tools();
     let model = alpha_zeta_model();
@@ -782,7 +812,7 @@ fn alpha_zeta_persistent_binding(
         .iter()
         .find(|entry| {
             entry.kernel_id()
-                == match kernel {
+                == match executable_kernel {
                     Gfx942AlphaZetaKernelV1::Alpha => bytes(0xa1),
                     Gfx942AlphaZetaKernelV1::Zeta => bytes(0xa2),
                 }
@@ -796,7 +826,7 @@ fn alpha_zeta_persistent_binding(
         AlphaZetaIdentityMutation::Launch => launch_identity = digest(0xf2),
     }
     let input = Gfx942AlphaZetaProofInputV1::seal(
-        kernel,
+        input_role,
         sources,
         target,
         abi_identity,
@@ -814,7 +844,7 @@ fn alpha_zeta_persistent_binding(
         tools,
         configuration.clone(),
         model.clone(),
-        AxiomPolicy::deny_all(),
+        AxiomPolicy::allow_list(trusted_items.clone()).unwrap(),
         10,
     )
     .unwrap();
@@ -824,7 +854,7 @@ fn alpha_zeta_persistent_binding(
         configuration.clone(),
         model.clone(),
         GFX942_ALPHA_ZETA_AUTHENTICATED_PROPERTIES_V1.to_vec(),
-        vec![],
+        trusted_items.clone(),
     )
     .unwrap();
     let inputs = MeasuredRecorderInputsV1::new(
@@ -846,11 +876,20 @@ fn alpha_zeta_persistent_binding(
         )
         .unwrap()
     };
+    let artifact_trusted_items = trusted_items
+        .iter()
+        .map(|item| {
+            ArtifactTrustedItem::new(
+                name(item.name().as_str()),
+                payload_from_digest(item.contract_digest()),
+            )
+        })
+        .collect();
     let proof_policy = ProofMatchPolicy::new(
         artifact_target,
         artifact_configuration(&configuration),
         alpha_zeta_artifact_execution(&evidence, &model),
-        vec![],
+        artifact_trusted_items,
     )
     .unwrap();
     let policy = AuthenticatedProofExecutablePolicyV1::new(
@@ -858,7 +897,7 @@ fn alpha_zeta_persistent_binding(
         proof_policy,
         manifest,
         payload(0x44),
-        ExecutableCodeObjectVersionV1::V6,
+        code_object_version,
         compiler(),
         producer(),
         DigestAlgorithm::Sha256,
@@ -870,7 +909,71 @@ fn alpha_zeta_persistent_binding(
 
 #[cfg(target_os = "linux")]
 #[test]
-fn production_alpha_zeta_set_consumes_one_contiguous_durable_lineage() {
+fn inert_executable_join_rejects_alpha_role_over_zeta_executable() {
+    let directory = PersistentLedgerDirectory::new();
+    let (mut ledger, _) = PersistentProofFreshnessLedgerV1::create_new(&directory.path).unwrap();
+    let (input, binding) = alpha_zeta_persistent_binding_with_role_and_cov(
+        Gfx942AlphaZetaKernelV1::Zeta,
+        Gfx942AlphaZetaKernelV1::Alpha,
+        "gfx942:xnack-",
+        digest(0xb0),
+        digest(0xb1),
+        AlphaZetaIdentityMutation::Exact,
+        AlphaZetaConfigurationMutation::Exact,
+        ExecutableCodeObjectVersionV1::V6,
+        &mut ledger,
+    );
+    let review = AlphaZetaExecutableEvidenceReviewV1::new(
+        input.identity(),
+        binding.binding_identity(),
+        digest(0xb2),
+        digest(0xb3),
+    )
+    .unwrap();
+    assert_eq!(
+        record_inert_alpha_zeta_executable_evidence_v1(&input, binding, review),
+        Err(AlphaZetaProofErrorV1::KernelRoleSubstitution)
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn inert_executable_join_rejects_code_object_v4_and_v5() {
+    for (version, proof_nonce) in [
+        (ExecutableCodeObjectVersionV1::V4, digest(0xb4)),
+        (ExecutableCodeObjectVersionV1::V5, digest(0xb5)),
+    ] {
+        let directory = PersistentLedgerDirectory::new();
+        let (mut ledger, _) =
+            PersistentProofFreshnessLedgerV1::create_new(&directory.path).unwrap();
+        let (input, binding) = alpha_zeta_persistent_binding_with_role_and_cov(
+            Gfx942AlphaZetaKernelV1::Alpha,
+            Gfx942AlphaZetaKernelV1::Alpha,
+            "gfx942:xnack-",
+            digest(0xb6),
+            proof_nonce,
+            AlphaZetaIdentityMutation::Exact,
+            AlphaZetaConfigurationMutation::Exact,
+            version,
+            &mut ledger,
+        );
+        let review = AlphaZetaExecutableEvidenceReviewV1::new(
+            input.identity(),
+            binding.binding_identity(),
+            digest(0xb7),
+            proof_nonce,
+        )
+        .unwrap();
+        assert_eq!(
+            record_inert_alpha_zeta_executable_evidence_v1(&input, binding, review),
+            Err(AlphaZetaProofErrorV1::UnsupportedCodeObjectVersion)
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn inert_alpha_zeta_executable_evidence_set_consumes_one_contiguous_durable_lineage() {
     let directory = PersistentLedgerDirectory::new();
     let (mut ledger, _) = PersistentProofFreshnessLedgerV1::create_new(&directory.path).unwrap();
     let proof_set_nonce = digest(0xd0);
@@ -883,7 +986,7 @@ fn production_alpha_zeta_set_consumes_one_contiguous_durable_lineage() {
         AlphaZetaConfigurationMutation::Exact,
         &mut ledger,
     );
-    let alpha_review = AlphaZetaProductionReviewV1::new(
+    let alpha_review = AlphaZetaExecutableEvidenceReviewV1::new(
         alpha_input.identity(),
         alpha_binding.binding_identity(),
         digest(0xe0),
@@ -891,7 +994,7 @@ fn production_alpha_zeta_set_consumes_one_contiguous_durable_lineage() {
     )
     .unwrap();
     let alpha =
-        record_production_alpha_zeta_execution_v1(&alpha_input, alpha_binding, alpha_review)
+        record_inert_alpha_zeta_executable_evidence_v1(&alpha_input, alpha_binding, alpha_review)
             .unwrap();
 
     let (zeta_input, zeta_binding) = alpha_zeta_persistent_binding(
@@ -903,7 +1006,7 @@ fn production_alpha_zeta_set_consumes_one_contiguous_durable_lineage() {
         AlphaZetaConfigurationMutation::Exact,
         &mut ledger,
     );
-    let zeta_review = AlphaZetaProductionReviewV1::new(
+    let zeta_review = AlphaZetaExecutableEvidenceReviewV1::new(
         zeta_input.identity(),
         zeta_binding.binding_identity(),
         digest(0xe0),
@@ -911,7 +1014,8 @@ fn production_alpha_zeta_set_consumes_one_contiguous_durable_lineage() {
     )
     .unwrap();
     let zeta =
-        record_production_alpha_zeta_execution_v1(&zeta_input, zeta_binding, zeta_review).unwrap();
+        record_inert_alpha_zeta_executable_evidence_v1(&zeta_input, zeta_binding, zeta_review)
+            .unwrap();
 
     assert_eq!(
         alpha_input.canonical_target(),
@@ -925,7 +1029,7 @@ fn production_alpha_zeta_set_consumes_one_contiguous_durable_lineage() {
         zeta.persistent_binding().freshness_receipt().generation(),
         2
     );
-    let set = ProductionAlphaZetaProofSetV1::new(zeta, alpha).unwrap();
+    let set = InertAlphaZetaExecutableEvidenceSetV1::new(zeta, alpha).unwrap();
     assert_eq!(set.alpha().kernel(), Gfx942AlphaZetaKernelV1::Alpha);
     assert_eq!(set.zeta().kernel(), Gfx942AlphaZetaKernelV1::Zeta);
     assert!(!set.grants_proof_authority());
@@ -934,7 +1038,7 @@ fn production_alpha_zeta_set_consumes_one_contiguous_durable_lineage() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn production_alpha_zeta_join_rejects_configuration_and_target_substitution() {
+fn inert_alpha_zeta_executable_evidence_join_rejects_configuration_and_target_substitution() {
     let configuration_directory = PersistentLedgerDirectory::new();
     let (mut configuration_ledger, _) =
         PersistentProofFreshnessLedgerV1::create_new(&configuration_directory.path).unwrap();
@@ -951,7 +1055,7 @@ fn production_alpha_zeta_join_rejects_configuration_and_target_substitution() {
             mutation,
             &mut configuration_ledger,
         );
-        let review = AlphaZetaProductionReviewV1::new(
+        let review = AlphaZetaExecutableEvidenceReviewV1::new(
             input.identity(),
             binding.binding_identity(),
             digest(0xe3),
@@ -959,7 +1063,7 @@ fn production_alpha_zeta_join_rejects_configuration_and_target_substitution() {
         )
         .unwrap();
         assert_eq!(
-            record_production_alpha_zeta_execution_v1(&input, binding, review),
+            record_inert_alpha_zeta_executable_evidence_v1(&input, binding, review),
             Err(AlphaZetaProofErrorV1::IdentityMismatch {
                 field: "authenticated proof configuration",
             })
@@ -978,7 +1082,7 @@ fn production_alpha_zeta_join_rejects_configuration_and_target_substitution() {
         AlphaZetaConfigurationMutation::Exact,
         &mut target_ledger,
     );
-    let review = AlphaZetaProductionReviewV1::new(
+    let review = AlphaZetaExecutableEvidenceReviewV1::new(
         input.identity(),
         binding.binding_identity(),
         digest(0xe5),
@@ -986,7 +1090,7 @@ fn production_alpha_zeta_join_rejects_configuration_and_target_substitution() {
     )
     .unwrap();
     assert_eq!(
-        record_production_alpha_zeta_execution_v1(&input, binding, review),
+        record_inert_alpha_zeta_executable_evidence_v1(&input, binding, review),
         Err(AlphaZetaProofErrorV1::TargetProfileSubstitution)
     );
 
@@ -1010,7 +1114,7 @@ fn production_alpha_zeta_join_rejects_configuration_and_target_substitution() {
             AlphaZetaConfigurationMutation::Exact,
             &mut identity_ledger,
         );
-        let review = AlphaZetaProductionReviewV1::new(
+        let review = AlphaZetaExecutableEvidenceReviewV1::new(
             input.identity(),
             binding.binding_identity(),
             digest(0xed),
@@ -1018,7 +1122,7 @@ fn production_alpha_zeta_join_rejects_configuration_and_target_substitution() {
         )
         .unwrap();
         assert_eq!(
-            record_production_alpha_zeta_execution_v1(&input, binding, review),
+            record_inert_alpha_zeta_executable_evidence_v1(&input, binding, review),
             Err(AlphaZetaProofErrorV1::IdentityMismatch {
                 field: expected_field,
             })
@@ -1028,7 +1132,7 @@ fn production_alpha_zeta_join_rejects_configuration_and_target_substitution() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn production_alpha_zeta_set_rejects_reused_review_nonce() {
+fn inert_alpha_zeta_executable_evidence_set_rejects_reused_review_nonce() {
     let directory = PersistentLedgerDirectory::new();
     let (mut ledger, _) = PersistentProofFreshnessLedgerV1::create_new(&directory.path).unwrap();
     let proof_set_nonce = digest(0xd7);
@@ -1042,7 +1146,7 @@ fn production_alpha_zeta_set_rejects_reused_review_nonce() {
         AlphaZetaConfigurationMutation::Exact,
         &mut ledger,
     );
-    let alpha_review = AlphaZetaProductionReviewV1::new(
+    let alpha_review = AlphaZetaExecutableEvidenceReviewV1::new(
         alpha_input.identity(),
         alpha_binding.binding_identity(),
         digest(0xe8),
@@ -1050,7 +1154,7 @@ fn production_alpha_zeta_set_rejects_reused_review_nonce() {
     )
     .unwrap();
     let alpha =
-        record_production_alpha_zeta_execution_v1(&alpha_input, alpha_binding, alpha_review)
+        record_inert_alpha_zeta_executable_evidence_v1(&alpha_input, alpha_binding, alpha_review)
             .unwrap();
     let (zeta_input, zeta_binding) = alpha_zeta_persistent_binding(
         Gfx942AlphaZetaKernelV1::Zeta,
@@ -1061,7 +1165,7 @@ fn production_alpha_zeta_set_rejects_reused_review_nonce() {
         AlphaZetaConfigurationMutation::Exact,
         &mut ledger,
     );
-    let zeta_review = AlphaZetaProductionReviewV1::new(
+    let zeta_review = AlphaZetaExecutableEvidenceReviewV1::new(
         zeta_input.identity(),
         zeta_binding.binding_identity(),
         digest(0xe8),
@@ -1069,9 +1173,10 @@ fn production_alpha_zeta_set_rejects_reused_review_nonce() {
     )
     .unwrap();
     let zeta =
-        record_production_alpha_zeta_execution_v1(&zeta_input, zeta_binding, zeta_review).unwrap();
+        record_inert_alpha_zeta_executable_evidence_v1(&zeta_input, zeta_binding, zeta_review)
+            .unwrap();
     assert_eq!(
-        ProductionAlphaZetaProofSetV1::new(alpha, zeta),
+        InertAlphaZetaExecutableEvidenceSetV1::new(alpha, zeta),
         Err(AlphaZetaProofErrorV1::MixedProofSet)
     );
 }

@@ -10,8 +10,9 @@ use std::fmt;
 use fe2o3_artifact_transaction::TargetIdentityV1;
 use fe2o3_artifacts::{
     AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize, Capability,
-    DigestAlgorithm, Endianness, IdentityText, LaunchContract, Mutability, PayloadDigest,
-    PointerWidth, ScalarType, TargetIdentity,
+    DigestAlgorithm, Endianness, ExecutableCodeObjectVersionV1, IdentityText, LaunchContract,
+    Mutability, PayloadDigest, PointerWidth, ProofTargetIdentity as ArtifactProofTargetIdentity,
+    ScalarType, TargetIdentity,
 };
 use fe2o3_kernel_descriptor::DeviceTargetV1;
 
@@ -261,6 +262,12 @@ impl Gfx942AlphaZetaProofInputV1 {
     pub const fn grants_launch_authority(&self) -> bool {
         false
     }
+    pub const fn has_complete_source_closure(&self) -> bool {
+        false
+    }
+    pub const fn has_complete_verifier_runtime_closure(&self) -> bool {
+        false
+    }
 
     pub fn to_canonical_bytes(&self) -> Vec<u8> {
         let mut bytes = self.identity_bytes();
@@ -291,6 +298,7 @@ impl Gfx942AlphaZetaProofInputV1 {
         for identity in [
             self.sources.source_tree_identity(),
             self.sources.dependency_tree_identity(),
+            self.sources.trusted_inventory().identity(),
         ] {
             put_digest(&mut bytes, identity);
         }
@@ -504,7 +512,7 @@ impl ReviewedAlphaZetaExecutionV1 {
 
 /// Records caller-assembled capsule evidence for tests and diagnostics only.
 /// `ProofCapsuleV1::new_inert` values are accepted here, so this function and
-/// its output can never satisfy the production authenticated-binding boundary.
+/// its output can never satisfy an authoritative authenticated-binding boundary.
 pub fn record_descriptive_alpha_zeta_execution_v1(
     input: &Gfx942AlphaZetaProofInputV1,
     proof: &ProofCapsuleV1,
@@ -562,8 +570,11 @@ pub fn record_descriptive_alpha_zeta_execution_v1(
     if policy.model() != &input.model {
         return Err(AlphaZetaProofErrorV1::ModelSubstitution);
     }
-    if !policy.approved_axioms().allowed().is_empty() || !policy.requested_axioms().is_empty() {
-        return Err(AlphaZetaProofErrorV1::AxiomSubstitution);
+    let expected_trusted = input.sources.trusted_inventory().trusted_items();
+    if policy.approved_axioms().allowed() != expected_trusted
+        || policy.requested_axioms() != expected_trusted
+    {
+        return Err(AlphaZetaProofErrorV1::TrustedInventorySubstitution);
     }
     if policy.requested_properties() != GFX942_ALPHA_ZETA_REQUIRED_PROPERTIES_V1
         || proof.result().reported_properties() != GFX942_ALPHA_ZETA_REQUIRED_PROPERTIES_V1
@@ -686,18 +697,16 @@ impl ReviewedAlphaZetaProofSetV1 {
     }
 }
 
-/// Independent production-review expectations. The persistent binding itself
-/// remains the only constructible source of authenticated execution and
-/// durable freshness evidence.
+/// Independent review expectations for inert executable evidence.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AlphaZetaProductionReviewV1 {
+pub struct AlphaZetaExecutableEvidenceReviewV1 {
     input_identity: Digest,
     persistent_binding_identity: Digest,
     reviewer_policy_identity: Digest,
     review_nonce: Digest,
 }
 
-impl AlphaZetaProductionReviewV1 {
+impl AlphaZetaExecutableEvidenceReviewV1 {
     pub fn new(
         input_identity: Digest,
         persistent_binding_identity: Digest,
@@ -705,10 +714,13 @@ impl AlphaZetaProductionReviewV1 {
         review_nonce: Digest,
     ) -> Result<Self, AlphaZetaProofErrorV1> {
         for (field, identity) in [
-            ("production reviewed input", input_identity),
+            ("executable-evidence reviewed input", input_identity),
             ("persistent proof binding", persistent_binding_identity),
-            ("production reviewer policy", reviewer_policy_identity),
-            ("production review nonce", review_nonce),
+            (
+                "executable-evidence reviewer policy",
+                reviewer_policy_identity,
+            ),
+            ("executable-evidence review nonce", review_nonce),
         ] {
             require_nonzero(identity, field)?;
         }
@@ -721,11 +733,15 @@ impl AlphaZetaProductionReviewV1 {
     }
 }
 
-/// Non-clone production review of one privately constructed authenticated
-/// recorder binding and its durable freshness receipt.
+/// Non-clone, inert review of one authenticated recorder/executable binding.
+///
+/// The recorder did not receive the immutable source snapshots and this lane
+/// does not measure the complete Verus/compiler runtime closure. Consequently
+/// this type carries no proof, load, or launch authority.
 #[derive(Debug, Eq, PartialEq)]
-pub struct ProductionReviewedAlphaZetaExecutionV1 {
+pub struct ExecutableEvidenceAlphaZetaExecutionV1 {
     kernel: Gfx942AlphaZetaKernelV1,
+    kernel_identity: Digest,
     input_identity: Digest,
     proof_set_nonce: Digest,
     proof_nonce: Digest,
@@ -737,13 +753,17 @@ pub struct ProductionReviewedAlphaZetaExecutionV1 {
     identity: Digest,
 }
 
-impl ProductionReviewedAlphaZetaExecutionV1 {
+impl ExecutableEvidenceAlphaZetaExecutionV1 {
     pub const fn kernel(&self) -> Gfx942AlphaZetaKernelV1 {
         self.kernel
     }
 
     pub const fn input_identity(&self) -> Digest {
         self.input_identity
+    }
+
+    pub const fn kernel_identity(&self) -> Digest {
+        self.kernel_identity
     }
 
     pub const fn proof_binding_identity(&self) -> Digest {
@@ -765,33 +785,47 @@ impl ProductionReviewedAlphaZetaExecutionV1 {
     pub const fn grants_launch_authority(&self) -> bool {
         false
     }
+
+    pub const fn has_complete_source_closure(&self) -> bool {
+        false
+    }
+
+    pub const fn has_complete_verifier_runtime_closure(&self) -> bool {
+        false
+    }
+
+    pub const fn recorder_consumed_immutable_source_snapshot(&self) -> bool {
+        false
+    }
 }
 
-/// Consumes a privately constructed authenticated recorder/executable binding
-/// carrying a durable non-clone freshness receipt. Unlike the descriptive
-/// `ProofCapsuleV1` path, callers cannot synthesize this input with `new_inert`.
+/// Consumes an authenticated recorder/executable binding as inert evidence.
+///
+/// Unlike the descriptive `ProofCapsuleV1` path, callers cannot synthesize the
+/// binding with `new_inert`. That distinction does not grant proof authority:
+/// the recorder is not Verus and did not consume the retained source snapshot.
 ///
 /// ```compile_fail
 /// # use fe2o3_verifier::{
-/// #     AlphaZetaProductionReviewV1, Gfx942AlphaZetaProofInputV1, ProofCapsuleV1,
-/// #     record_production_alpha_zeta_execution_v1,
+/// #     AlphaZetaExecutableEvidenceReviewV1, Gfx942AlphaZetaProofInputV1, ProofCapsuleV1,
+/// #     record_inert_alpha_zeta_executable_evidence_v1,
 /// # };
-/// # fn inert_capsules_are_not_production_inputs(
+/// # fn inert_capsules_are_not_executable_evidence_inputs(
 /// #     input: &Gfx942AlphaZetaProofInputV1,
 /// #     inert: ProofCapsuleV1,
-/// #     review: AlphaZetaProductionReviewV1,
+/// #     review: AlphaZetaExecutableEvidenceReviewV1,
 /// # ) {
-/// let _ = record_production_alpha_zeta_execution_v1(input, inert, review);
+/// let _ = record_inert_alpha_zeta_executable_evidence_v1(input, inert, review);
 /// # }
 /// ```
-pub fn record_production_alpha_zeta_execution_v1(
+pub fn record_inert_alpha_zeta_executable_evidence_v1(
     input: &Gfx942AlphaZetaProofInputV1,
     binding: PersistentlyFreshProofExecutableBindingV1,
-    review: AlphaZetaProductionReviewV1,
-) -> Result<ProductionReviewedAlphaZetaExecutionV1, AlphaZetaProofErrorV1> {
+    review: AlphaZetaExecutableEvidenceReviewV1,
+) -> Result<ExecutableEvidenceAlphaZetaExecutionV1, AlphaZetaProofErrorV1> {
     if review.input_identity != input.identity {
         return Err(AlphaZetaProofErrorV1::IdentityMismatch {
-            field: "production reviewed input",
+            field: "executable-evidence reviewed input",
         });
     }
     if review.persistent_binding_identity != binding.binding_identity() {
@@ -819,15 +853,16 @@ pub fn record_production_alpha_zeta_execution_v1(
     {
         return Err(AlphaZetaProofErrorV1::PropertySubstitution);
     }
-    if !request.trusted_items().is_empty() || !result.trusted_items().is_empty() {
-        return Err(AlphaZetaProofErrorV1::AxiomSubstitution);
+    let expected_trusted = input.sources.trusted_inventory().trusted_items();
+    if request.trusted_items() != expected_trusted || result.trusted_items() != expected_trusted {
+        return Err(AlphaZetaProofErrorV1::TrustedInventorySubstitution);
     }
     if execution.claimed_verifier().identity() != &input.verus
         || execution.claimed_solver().identity() != &input.solver
     {
         return Err(AlphaZetaProofErrorV1::ToolSubstitution);
     }
-    validate_production_configuration(input, request.configuration())?;
+    validate_inert_configuration(input, request.configuration())?;
 
     let executable = proof_binding.executable_binding().executable();
     if executable.target() != input.canonical_target.artifact()
@@ -835,7 +870,19 @@ pub fn record_production_alpha_zeta_execution_v1(
     {
         return Err(AlphaZetaProofErrorV1::TargetProfileSubstitution);
     }
+    if executable.code_object_version() != ExecutableCodeObjectVersionV1::V6 {
+        return Err(AlphaZetaProofErrorV1::UnsupportedCodeObjectVersion);
+    }
+    let executable_kernel = derive_executable_kernel_role(executable)?;
+    if executable_kernel != input.kernel {
+        return Err(AlphaZetaProofErrorV1::KernelRoleSubstitution);
+    }
     let artifact_target = executable.proof_target();
+    if verifier_target_from_artifact(artifact_target) != input.target {
+        return Err(AlphaZetaProofErrorV1::IdentityMismatch {
+            field: "artifact proof target",
+        });
+    }
     if alpha_zeta_abi_identity_v1(executable.abi()) != input.abi_identity {
         return Err(AlphaZetaProofErrorV1::IdentityMismatch {
             field: "artifact ABI",
@@ -855,35 +902,35 @@ pub fn record_production_alpha_zeta_execution_v1(
     }
 
     let proof_binding_identity = binding.identity().proof_binding_identity();
-    let mut record = ProductionReviewedAlphaZetaExecutionV1 {
-        kernel: input.kernel,
+    let mut record = ExecutableEvidenceAlphaZetaExecutionV1 {
+        kernel: executable_kernel,
+        kernel_identity: digest_from_payload(artifact_target.artifact().kernel_id()),
         input_identity: input.identity,
         proof_set_nonce: input.proof_set_nonce,
         proof_nonce: input.proof_nonce,
-        set_context_identity: production_set_context_identity(input),
+        set_context_identity: inert_set_context_identity(input),
         proof_binding_identity,
         reviewer_policy_identity: review.reviewer_policy_identity,
         review_nonce: review.review_nonce,
         binding,
         identity: Digest::from_bytes([0; 32]),
     };
-    record.identity = production_reviewed_identity(&record);
+    record.identity = inert_executable_reviewed_identity(&record);
     Ok(record)
 }
 
-/// Exact production set consuming two durable records from one contiguous
-/// ledger lineage.
+/// Inert two-kernel evidence set from one contiguous durable ledger lineage.
 #[derive(Debug, Eq, PartialEq)]
-pub struct ProductionAlphaZetaProofSetV1 {
-    alpha: ProductionReviewedAlphaZetaExecutionV1,
-    zeta: ProductionReviewedAlphaZetaExecutionV1,
+pub struct InertAlphaZetaExecutableEvidenceSetV1 {
+    alpha: ExecutableEvidenceAlphaZetaExecutionV1,
+    zeta: ExecutableEvidenceAlphaZetaExecutionV1,
     identity: Digest,
 }
 
-impl ProductionAlphaZetaProofSetV1 {
+impl InertAlphaZetaExecutableEvidenceSetV1 {
     pub fn new(
-        first: ProductionReviewedAlphaZetaExecutionV1,
-        second: ProductionReviewedAlphaZetaExecutionV1,
+        first: ExecutableEvidenceAlphaZetaExecutionV1,
+        second: ExecutableEvidenceAlphaZetaExecutionV1,
     ) -> Result<Self, AlphaZetaProofErrorV1> {
         let (alpha, zeta) = match (first.kernel, second.kernel) {
             (Gfx942AlphaZetaKernelV1::Alpha, Gfx942AlphaZetaKernelV1::Zeta) => (first, second),
@@ -934,11 +981,11 @@ impl ProductionAlphaZetaProofSetV1 {
         })
     }
 
-    pub const fn alpha(&self) -> &ProductionReviewedAlphaZetaExecutionV1 {
+    pub const fn alpha(&self) -> &ExecutableEvidenceAlphaZetaExecutionV1 {
         &self.alpha
     }
 
-    pub const fn zeta(&self) -> &ProductionReviewedAlphaZetaExecutionV1 {
+    pub const fn zeta(&self) -> &ExecutableEvidenceAlphaZetaExecutionV1 {
         &self.zeta
     }
 
@@ -990,8 +1037,8 @@ fn canonical_publication_target(target: &TargetIdentity) -> TargetIdentityV1 {
     TargetIdentityV1::from_bytes(*sha256(&bytes).as_bytes())
 }
 
-/// Canonical launch-contract identity required by the production alpha/zeta
-/// join. This is distinct from the artifact's composite contract identity.
+/// Canonical launch-contract identity used by the inert alpha/zeta executable
+/// evidence join. This is distinct from the artifact's composite identity.
 pub fn alpha_zeta_launch_identity_v1(launch: &LaunchContract) -> Digest {
     let mut bytes = Vec::with_capacity(64);
     bytes.extend_from_slice(b"FE2AZLC\0");
@@ -1014,7 +1061,7 @@ pub fn alpha_zeta_launch_identity_v1(launch: &LaunchContract) -> Digest {
     sha256(&bytes)
 }
 
-/// Canonical identity of the typed artifact ABI used by the production join.
+/// Canonical identity of the typed artifact ABI used by the inert join.
 pub fn alpha_zeta_abi_identity_v1(abi: &AbiLayout) -> Digest {
     let mut bytes = Vec::with_capacity(256 + abi.fields().len() * 128);
     bytes.extend_from_slice(b"FE2AZAB\0");
@@ -1062,7 +1109,7 @@ pub fn alpha_zeta_abi_identity_v1(abi: &AbiLayout) -> Digest {
 }
 
 /// Required authenticated-request configuration bindings for one sealed input.
-pub fn alpha_zeta_production_configuration_v1(
+pub fn alpha_zeta_inert_configuration_v1(
     input: &Gfx942AlphaZetaProofInputV1,
 ) -> Vec<(&'static str, String)> {
     vec![
@@ -1073,14 +1120,18 @@ pub fn alpha_zeta_production_configuration_v1(
             "source_manifest",
             digest_hex(input.sources.dependency_tree_identity()),
         ),
+        (
+            "trusted_inventory",
+            digest_hex(input.sources.trusted_inventory().identity()),
+        ),
     ]
 }
 
-fn validate_production_configuration(
+fn validate_inert_configuration(
     input: &Gfx942AlphaZetaProofInputV1,
     configuration: &Configuration,
 ) -> Result<(), AlphaZetaProofErrorV1> {
-    let mut expected = alpha_zeta_production_configuration_v1(input);
+    let mut expected = alpha_zeta_inert_configuration_v1(input);
     expected.sort_unstable_by_key(|(key, _)| *key);
     if configuration.entries().len() != expected.len() {
         return Err(AlphaZetaProofErrorV1::IdentityMismatch {
@@ -1097,7 +1148,7 @@ fn validate_production_configuration(
     Ok(())
 }
 
-fn production_reviewed_identity(record: &ProductionReviewedAlphaZetaExecutionV1) -> Digest {
+fn inert_executable_reviewed_identity(record: &ExecutableEvidenceAlphaZetaExecutionV1) -> Digest {
     let receipt = record.binding.freshness_receipt();
     let mut bytes = Vec::with_capacity(384);
     bytes.extend_from_slice(&GFX942_ALPHA_ZETA_REVIEW_DOMAIN_V1);
@@ -1106,6 +1157,7 @@ fn production_reviewed_identity(record: &ProductionReviewedAlphaZetaExecutionV1)
     bytes.push(record.kernel.tag());
     for digest in [
         record.input_identity,
+        record.kernel_identity,
         record.proof_set_nonce,
         record.proof_nonce,
         record.set_context_identity,
@@ -1126,13 +1178,14 @@ fn production_reviewed_identity(record: &ProductionReviewedAlphaZetaExecutionV1)
     sha256(&bytes)
 }
 
-fn production_set_context_identity(input: &Gfx942AlphaZetaProofInputV1) -> Digest {
+fn inert_set_context_identity(input: &Gfx942AlphaZetaProofInputV1) -> Digest {
     let mut bytes = Vec::with_capacity(512);
     bytes.extend_from_slice(b"FE2AZSC\0");
     bytes.extend_from_slice(&GFX942_ALPHA_ZETA_PROOF_VERSION_V1.to_le_bytes());
     for digest in [
         input.sources.source_tree_identity(),
         input.sources.dependency_tree_identity(),
+        input.sources.trusted_inventory().identity(),
         input.abi_identity,
         input.effects_identity,
         input.launch_identity,
@@ -1146,6 +1199,41 @@ fn production_set_context_identity(input: &Gfx942AlphaZetaProofInputV1) -> Diges
     put_text(&mut bytes, input.model.version().as_str());
     put_digest(&mut bytes, input.model.axioms_digest());
     sha256(&bytes)
+}
+
+fn derive_executable_kernel_role(
+    executable: &fe2o3_artifacts::ProofExecutableSemanticIdentityV1,
+) -> Result<Gfx942AlphaZetaKernelV1, AlphaZetaProofErrorV1> {
+    match (
+        executable.logical_name().as_str(),
+        executable.export_symbol().as_str(),
+    ) {
+        ("alpha", "alpha.kd") => Ok(Gfx942AlphaZetaKernelV1::Alpha),
+        ("zeta", "zeta.kd") => Ok(Gfx942AlphaZetaKernelV1::Zeta),
+        _ => Err(AlphaZetaProofErrorV1::KernelRoleSubstitution),
+    }
+}
+
+fn verifier_target_from_artifact(target: ArtifactProofTargetIdentity) -> ProofTargetIdentity {
+    let artifact = target.artifact();
+    let contracts = target.source_contracts();
+    ProofTargetIdentity {
+        kernel_id: digest_from_payload(artifact.kernel_id()),
+        instance_digest: digest_from_payload(artifact.instance_digest()),
+        source_tree_digest: digest_from_payload(artifact.source_tree_digest()),
+        crate_graph_digest: digest_from_payload(artifact.crate_graph_digest()),
+        executable_digest: digest_from_payload(artifact.executable_digest()),
+        environment_digest: digest_from_payload(artifact.environment_digest()),
+        artifact_selection_digest: digest_from_payload(artifact.artifact_selection_digest()),
+        artifact_contract_digest: digest_from_payload(artifact.artifact_contract_digest()),
+        memory_contract_digest: digest_from_payload(contracts.memory_digest()),
+        effects_contract_digest: digest_from_payload(contracts.effects_digest()),
+        type_layout_digest: digest_from_payload(contracts.type_layout_digest()),
+        capability_semantics_digest: digest_from_payload(contracts.capability_semantics_digest()),
+        functional_specification_digest: digest_from_payload(
+            contracts.functional_specification_digest(),
+        ),
+    }
 }
 
 const fn pointer_width_tag(value: PointerWidth) -> u8 {
@@ -1352,7 +1440,10 @@ pub enum AlphaZetaProofErrorV1 {
     ToolSubstitution,
     ModelSubstitution,
     AxiomSubstitution,
+    TrustedInventorySubstitution,
     PropertySubstitution,
+    KernelRoleSubstitution,
+    UnsupportedCodeObjectVersion,
     MissingPersistentFreshness,
     FreshnessSubstitution,
     Replay,
@@ -1402,7 +1493,16 @@ impl fmt::Display for AlphaZetaProofErrorV1 {
             Self::ToolSubstitution => formatter.write_str("proof tool substitution"),
             Self::ModelSubstitution => formatter.write_str("proof model substitution"),
             Self::AxiomSubstitution => formatter.write_str("proof axiom substitution"),
+            Self::TrustedInventorySubstitution => {
+                formatter.write_str("proof trusted-item inventory substitution")
+            }
             Self::PropertySubstitution => formatter.write_str("proof property substitution"),
+            Self::KernelRoleSubstitution => {
+                formatter.write_str("alpha/zeta kernel role substitution")
+            }
+            Self::UnsupportedCodeObjectVersion => {
+                formatter.write_str("alpha/zeta executable evidence requires code-object v6")
+            }
             Self::MissingPersistentFreshness => {
                 formatter.write_str("reviewed result lacks persistent freshness")
             }

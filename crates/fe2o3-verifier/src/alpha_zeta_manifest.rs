@@ -1,16 +1,19 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::str::FromStr;
 
 use fe2o3_artifacts::DigestAlgorithm;
+use proc_macro2::{TokenStream, TokenTree};
 use syn::{Attribute, Expr, Item, Lit, LitStr, Meta};
 
-use crate::{AlphaZetaProofErrorV1, Digest, Text};
+use crate::{AlphaZetaProofErrorV1, Digest, Text, TrustedItem};
 
 pub const MAX_GFX942_ALPHA_ZETA_SOURCE_FILES_V1: usize = 64;
 pub const MAX_GFX942_ALPHA_ZETA_DEPENDENCY_EDGES_V1: usize = 128;
 pub const MAX_GFX942_ALPHA_ZETA_SOURCE_BYTES_V1: u64 = 1024 * 1024;
 pub const MAX_GFX942_ALPHA_ZETA_SOURCE_TREE_BYTES_V1: u64 = 8 * 1024 * 1024;
+pub const MAX_GFX942_ALPHA_ZETA_TRUSTED_CONSTRUCTS_V1: usize = 128;
 
 pub const ALPHA_ZETA_WORKSPACE_MANIFEST_PATH_V1: &str = "Cargo.toml";
 pub const ALPHA_ZETA_LOCKFILE_PATH_V1: &str = "Cargo.lock";
@@ -25,7 +28,8 @@ pub const ALPHA_ZETA_PROOF_HARNESS_PATH_V1: &str = "examples/verus_vecadd/verus/
 const CONTRACTS_MANIFEST_PATH: &str = "crates/fe2o3-contracts/Cargo.toml";
 const SOURCE_TREE_DOMAIN: &[u8; 8] = b"FE2AZST\0";
 const DEPENDENCY_TREE_DOMAIN: &[u8; 8] = b"FE2AZDT\0";
-const MANIFEST_VERSION: u16 = 2;
+const TRUSTED_INVENTORY_DOMAIN: &[u8; 8] = b"FE2AZTI\0";
+const MANIFEST_VERSION: u16 = 3;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum AlphaZetaSourceRoleV1 {
@@ -89,6 +93,7 @@ pub struct AlphaZetaSourceFileIdentityV1 {
     path: Text,
     byte_len: u64,
     digest: Digest,
+    snapshot: Vec<u8>,
 }
 
 impl AlphaZetaSourceFileIdentityV1 {
@@ -108,6 +113,7 @@ impl AlphaZetaSourceFileIdentityV1 {
                 .map_err(AlphaZetaProofErrorV1::Model)?,
             byte_len: bytes.len() as u64,
             digest: sha256(bytes),
+            snapshot: bytes.to_vec(),
         })
     }
 
@@ -127,10 +133,106 @@ impl AlphaZetaSourceFileIdentityV1 {
         self.digest
     }
 
+    /// Immutable bytes retained from the one discovery read.
+    pub fn snapshot_bytes(&self) -> &[u8] {
+        &self.snapshot
+    }
+
     pub fn matches(&self, path: &str, bytes: &[u8]) -> bool {
         self.path.as_str() == path
             && self.byte_len == bytes.len() as u64
             && self.digest == sha256(bytes)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum AlphaZetaTrustedConstructKindV1 {
+    ExternalBody,
+    Assume,
+    Admit,
+    TrustedAttribute,
+    TrustedImport,
+}
+
+impl AlphaZetaTrustedConstructKindV1 {
+    const fn tag(self) -> u8 {
+        match self {
+            Self::ExternalBody => 1,
+            Self::Assume => 2,
+            Self::Admit => 3,
+            Self::TrustedAttribute => 4,
+            Self::TrustedImport => 5,
+        }
+    }
+
+    const fn name(self) -> &'static str {
+        match self {
+            Self::ExternalBody => "external_body",
+            Self::Assume => "assume",
+            Self::Admit => "admit",
+            Self::TrustedAttribute => "trusted_attribute",
+            Self::TrustedImport => "trusted_import",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct AlphaZetaTrustedConstructV1 {
+    source_path: Text,
+    kind: AlphaZetaTrustedConstructKindV1,
+    token_index: u32,
+    identity: Digest,
+}
+
+impl AlphaZetaTrustedConstructV1 {
+    pub const fn source_path(&self) -> &Text {
+        &self.source_path
+    }
+
+    pub const fn kind(&self) -> AlphaZetaTrustedConstructKindV1 {
+        self.kind
+    }
+
+    pub const fn token_index(&self) -> u32 {
+        self.token_index
+    }
+
+    pub const fn identity(&self) -> Digest {
+        self.identity
+    }
+}
+
+/// Trusted syntax derived from immutable proof-source tokens.
+///
+/// `unmeasured_imports` records external Verus library APIs whose source and
+/// runtime closure is not part of this bounded project snapshot.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AlphaZetaTrustedInventoryV1 {
+    constructs: Vec<AlphaZetaTrustedConstructV1>,
+    trusted_items: Vec<TrustedItem>,
+    unmeasured_imports: Vec<Text>,
+    identity: Digest,
+}
+
+impl AlphaZetaTrustedInventoryV1 {
+    pub fn constructs(&self) -> &[AlphaZetaTrustedConstructV1] {
+        &self.constructs
+    }
+
+    pub fn trusted_items(&self) -> &[TrustedItem] {
+        &self.trusted_items
+    }
+
+    pub fn unmeasured_imports(&self) -> &[Text] {
+        &self.unmeasured_imports
+    }
+
+    pub const fn identity(&self) -> Digest {
+        self.identity
+    }
+
+    pub const fn has_complete_verifier_runtime_closure(&self) -> bool {
+        false
     }
 }
 
@@ -161,11 +263,14 @@ pub struct AlphaZetaProofSourcesV1 {
     edges: Vec<AlphaZetaDependencyEdgeV1>,
     source_tree_identity: Digest,
     dependency_tree_identity: Digest,
+    trusted_inventory: AlphaZetaTrustedInventoryV1,
 }
 
 impl AlphaZetaProofSourcesV1 {
-    /// Discovers the complete bounded project source closure from structural
-    /// Rust and Cargo inputs rooted at `workspace_root`.
+    /// Discovers a bounded project-input snapshot from structural Rust and
+    /// Cargo inputs rooted at `workspace_root`.
+    ///
+    /// This is not the complete compiler or Verus runtime closure.
     pub fn discover_workspace(
         workspace_root: impl AsRef<Path>,
     ) -> Result<Self, AlphaZetaProofErrorV1> {
@@ -186,6 +291,18 @@ impl AlphaZetaProofSourcesV1 {
 
     pub const fn dependency_tree_identity(&self) -> Digest {
         self.dependency_tree_identity
+    }
+
+    pub const fn trusted_inventory(&self) -> &AlphaZetaTrustedInventoryV1 {
+        &self.trusted_inventory
+    }
+
+    pub const fn has_complete_source_closure(&self) -> bool {
+        false
+    }
+
+    pub const fn has_complete_verifier_runtime_closure(&self) -> bool {
+        false
     }
 
     pub fn validate_workspace(
@@ -261,6 +378,7 @@ struct Discovery {
 
 impl Discovery {
     fn new(root: &Path) -> Result<Self, AlphaZetaProofErrorV1> {
+        reject_symlink_components(root)?;
         let root = fs::canonicalize(root)
             .map_err(|_| manifest_io("canonicalize", root.to_string_lossy().into_owned()))?;
         if !root.is_dir() {
@@ -328,11 +446,13 @@ impl Discovery {
         }
         let source_tree_identity = source_tree_identity(&files);
         let dependency_tree_identity = dependency_tree_identity(&files, &edges);
+        let trusted_inventory = trusted_inventory(&files, &edges)?;
         Ok(AlphaZetaProofSourcesV1 {
             files,
             edges,
             source_tree_identity,
             dependency_tree_identity,
+            trusted_inventory,
         })
     }
 
@@ -465,15 +585,12 @@ impl Discovery {
     }
 
     fn add_file(&mut self, path: &str) -> Result<Vec<u8>, AlphaZetaProofErrorV1> {
+        if let Some(existing) = self.files.get(path) {
+            return Ok(existing.snapshot.clone());
+        }
         let bytes = read_bounded_file(&self.root, path)?;
         let role = role_for_path(path)?;
         let measured = AlphaZetaSourceFileIdentityV1::measure(role, path, &bytes)?;
-        if let Some(existing) = self.files.get(path) {
-            if existing != &measured {
-                return Err(AlphaZetaProofErrorV1::SourceManifestMutation);
-            }
-            return Ok(bytes);
-        }
         if self.files.len() >= MAX_GFX942_ALPHA_ZETA_SOURCE_FILES_V1 {
             return Err(AlphaZetaProofErrorV1::SourceManifestCapacity);
         }
@@ -571,7 +688,7 @@ fn role_for_path(path: &str) -> Result<AlphaZetaSourceRoleV1, AlphaZetaProofErro
 
 fn read_bounded_file(root: &Path, path: &str) -> Result<Vec<u8>, AlphaZetaProofErrorV1> {
     let relative = normalize_relative(path)?;
-    let full = root.join(&relative);
+    let full = reject_relative_symlink_components(root, &relative)?;
     let metadata =
         fs::symlink_metadata(&full).map_err(|_| manifest_io("open", relative.clone()))?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
@@ -587,6 +704,233 @@ fn read_bounded_file(root: &Path, path: &str) -> Result<Vec<u8>, AlphaZetaProofE
         return Err(AlphaZetaProofErrorV1::SourceManifestMutation);
     }
     Ok(bytes)
+}
+
+fn reject_symlink_components(path: &Path) -> Result<(), AlphaZetaProofErrorV1> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|_| manifest_io("inspect", path.display().to_string()))?
+            .join(path)
+    };
+    let mut prefix = PathBuf::new();
+    for component in absolute.components() {
+        prefix.push(component.as_os_str());
+        if matches!(component, Component::RootDir | Component::Prefix(_)) {
+            continue;
+        }
+        let metadata = fs::symlink_metadata(&prefix)
+            .map_err(|_| manifest_io("inspect", prefix.display().to_string()))?;
+        if metadata.file_type().is_symlink() {
+            return Err(manifest_structure(
+                &prefix.display().to_string(),
+                "symlinked workspace path is not accepted",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn reject_relative_symlink_components(
+    root: &Path,
+    relative: &str,
+) -> Result<PathBuf, AlphaZetaProofErrorV1> {
+    let mut full = root.to_path_buf();
+    for component in Path::new(relative).components() {
+        let Component::Normal(component) = component else {
+            return Err(manifest_structure(
+                relative,
+                "source path is not normalized",
+            ));
+        };
+        full.push(component);
+        let metadata =
+            fs::symlink_metadata(&full).map_err(|_| manifest_io("inspect", relative.to_owned()))?;
+        if metadata.file_type().is_symlink() {
+            return Err(manifest_structure(
+                relative,
+                "symlinked source path is not accepted",
+            ));
+        }
+    }
+    Ok(full)
+}
+
+fn trusted_inventory(
+    files: &[AlphaZetaSourceFileIdentityV1],
+    edges: &[AlphaZetaDependencyEdgeV1],
+) -> Result<AlphaZetaTrustedInventoryV1, AlphaZetaProofErrorV1> {
+    let mut reachable = BTreeSet::from([ALPHA_ZETA_PROOF_HARNESS_PATH_V1.to_owned()]);
+    loop {
+        let before = reachable.len();
+        for edge in edges {
+            if reachable.contains(edge.parent.as_str())
+                && matches!(
+                    edge.kind,
+                    AlphaZetaDependencyKindV1::RustInclude
+                        | AlphaZetaDependencyKindV1::RustModule
+                        | AlphaZetaDependencyKindV1::RustPathModule
+                )
+            {
+                reachable.insert(edge.child.as_str().to_owned());
+            }
+        }
+        if reachable.len() == before {
+            break;
+        }
+    }
+
+    let mut constructs = Vec::new();
+    let mut unmeasured_imports = BTreeSet::new();
+    for file in files
+        .iter()
+        .filter(|file| reachable.contains(file.path.as_str()))
+    {
+        scan_trusted_tokens(file, &mut constructs, &mut unmeasured_imports)?;
+    }
+    constructs.sort_unstable();
+    constructs.dedup();
+    if constructs.len() > MAX_GFX942_ALPHA_ZETA_TRUSTED_CONSTRUCTS_V1 {
+        return Err(AlphaZetaProofErrorV1::SourceManifestCapacity);
+    }
+    let unmeasured_imports = unmeasured_imports.into_iter().collect::<Vec<_>>();
+    let identity = trusted_inventory_identity(&constructs, &unmeasured_imports);
+    let trusted_items = constructs
+        .iter()
+        .enumerate()
+        .map(|(index, construct)| {
+            TrustedItem::new(
+                format!("source_{}_{index:03}", construct.kind.name()),
+                construct.identity,
+            )
+            .map_err(AlphaZetaProofErrorV1::Model)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(AlphaZetaTrustedInventoryV1 {
+        constructs,
+        trusted_items,
+        unmeasured_imports,
+        identity,
+    })
+}
+
+fn scan_trusted_tokens(
+    file: &AlphaZetaSourceFileIdentityV1,
+    constructs: &mut Vec<AlphaZetaTrustedConstructV1>,
+    unmeasured_imports: &mut BTreeSet<Text>,
+) -> Result<(), AlphaZetaProofErrorV1> {
+    let source = std::str::from_utf8(file.snapshot_bytes())
+        .map_err(|_| manifest_structure(file.path.as_str(), "Rust source is not UTF-8"))?;
+    let stream = TokenStream::from_str(source)
+        .map_err(|_| manifest_structure(file.path.as_str(), "Rust tokenization failed"))?;
+    let mut tokens = Vec::new();
+    flatten_tokens(stream, &mut tokens);
+
+    for (index, token) in tokens.iter().enumerate() {
+        let TokenTree::Ident(identifier) = token else {
+            continue;
+        };
+        let name = identifier.to_string();
+        let kind = match name.as_str() {
+            "external_body" => Some(AlphaZetaTrustedConstructKindV1::ExternalBody),
+            "assume" => Some(AlphaZetaTrustedConstructKindV1::Assume),
+            "admit" => Some(AlphaZetaTrustedConstructKindV1::Admit),
+            "trusted" | "axiom" | "assume_specification" | "external_fn_specification" => {
+                Some(AlphaZetaTrustedConstructKindV1::TrustedAttribute)
+            }
+            _ => None,
+        };
+        if let Some(kind) = kind {
+            let in_use = tokens[..index]
+                .iter()
+                .rev()
+                .take_while(|token| !is_punctuation(token, ';'))
+                .any(|token| matches!(token, TokenTree::Ident(value) if value == "use"));
+            let kind = if in_use {
+                AlphaZetaTrustedConstructKindV1::TrustedImport
+            } else {
+                kind
+            };
+            constructs.push(trusted_construct(file, kind, index as u32));
+        }
+
+        if name == "use" {
+            let statement = tokens[index + 1..]
+                .iter()
+                .take_while(|token| !is_punctuation(token, ';'))
+                .map(TokenTree::to_string)
+                .collect::<Vec<_>>()
+                .join("");
+            if statement.starts_with("vstd::")
+                || statement.starts_with("builtin::")
+                || statement.starts_with("builtin_macros::")
+            {
+                unmeasured_imports.insert(
+                    Text::new(
+                        "unmeasured Verus import",
+                        format!("{}:{statement}", file.path.as_str()),
+                    )
+                    .map_err(AlphaZetaProofErrorV1::Model)?,
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn flatten_tokens(stream: TokenStream, tokens: &mut Vec<TokenTree>) {
+    for token in stream {
+        match token {
+            TokenTree::Group(group) => flatten_tokens(group.stream(), tokens),
+            token => tokens.push(token),
+        }
+    }
+}
+
+fn is_punctuation(token: &TokenTree, expected: char) -> bool {
+    matches!(token, TokenTree::Punct(value) if value.as_char() == expected)
+}
+
+fn trusted_construct(
+    file: &AlphaZetaSourceFileIdentityV1,
+    kind: AlphaZetaTrustedConstructKindV1,
+    token_index: u32,
+) -> AlphaZetaTrustedConstructV1 {
+    let mut bytes = Vec::with_capacity(96);
+    bytes.extend_from_slice(TRUSTED_INVENTORY_DOMAIN);
+    bytes.extend_from_slice(&MANIFEST_VERSION.to_le_bytes());
+    bytes.push(kind.tag());
+    put_text(&mut bytes, file.path.as_str());
+    bytes.extend_from_slice(&token_index.to_le_bytes());
+    put_digest(&mut bytes, file.digest);
+    AlphaZetaTrustedConstructV1 {
+        source_path: file.path.clone(),
+        kind,
+        token_index,
+        identity: sha256(&bytes),
+    }
+}
+
+fn trusted_inventory_identity(
+    constructs: &[AlphaZetaTrustedConstructV1],
+    unmeasured_imports: &[Text],
+) -> Digest {
+    let mut bytes = Vec::with_capacity(128 + constructs.len() * 96);
+    bytes.extend_from_slice(TRUSTED_INVENTORY_DOMAIN);
+    bytes.extend_from_slice(&MANIFEST_VERSION.to_le_bytes());
+    bytes.extend_from_slice(&(constructs.len() as u16).to_le_bytes());
+    for construct in constructs {
+        bytes.push(construct.kind.tag());
+        put_text(&mut bytes, construct.source_path.as_str());
+        bytes.extend_from_slice(&construct.token_index.to_le_bytes());
+        put_digest(&mut bytes, construct.identity);
+    }
+    bytes.extend_from_slice(&(unmeasured_imports.len() as u16).to_le_bytes());
+    for import in unmeasured_imports {
+        put_text(&mut bytes, import.as_str());
+    }
+    sha256(&bytes)
 }
 
 fn parse_toml(path: &str, bytes: &[u8]) -> Result<toml::Table, AlphaZetaProofErrorV1> {

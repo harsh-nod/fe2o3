@@ -6,14 +6,15 @@ use fe2o3_verifier::{
     ALPHA_ZETA_PERMISSION_MODEL_PATH_V1, ALPHA_ZETA_PROOF_HARNESS_PATH_V1,
     ALPHA_ZETA_RUST_MODEL_PATH_V1, ALPHA_ZETA_SHARED_BODY_PATH_V1, AlphaZetaExecutionReviewV1,
     AlphaZetaProofErrorV1, AlphaZetaProofSourcesV1, AlphaZetaReviewLedgerV1,
-    AlphaZetaSourceFileIdentityV1, AlphaZetaSourceRoleV1, AxiomPolicy, CorrelationId, Digest,
-    GFX942_ALPHA_ZETA_MODEL_VERSION_V1, GFX942_ALPHA_ZETA_REQUIRED_PROPERTIES_V1,
-    GFX942_XNACK_MINUS_TARGET_V1, Gfx942AlphaZetaKernelV1, Gfx942AlphaZetaProofInputV1,
-    Gfx942XnackMinusTargetIdentityV1, MeasuredToolIdentity, ProofCapsuleDependencyV1,
-    ProofCapsuleExecutionV1, ProofCapsuleFreshnessIdentityV1, ProofCapsulePayloadIdentityV1,
-    ProofCapsulePolicyV1, ProofCapsuleResultV1, ProofCapsuleTargetV1, ProofCapsuleV1, ProofOutcome,
-    ProofProperty, ProofTargetIdentity, ReviewedAlphaZetaProofSetV1, Text, TrustedItem,
-    VerificationModelIdentity, record_descriptive_alpha_zeta_execution_v1,
+    AlphaZetaSourceFileIdentityV1, AlphaZetaSourceRoleV1, AlphaZetaTrustedConstructKindV1,
+    AxiomPolicy, CorrelationId, Digest, GFX942_ALPHA_ZETA_MODEL_VERSION_V1,
+    GFX942_ALPHA_ZETA_REQUIRED_PROPERTIES_V1, GFX942_XNACK_MINUS_TARGET_V1,
+    Gfx942AlphaZetaKernelV1, Gfx942AlphaZetaProofInputV1, Gfx942XnackMinusTargetIdentityV1,
+    MeasuredToolIdentity, ProofCapsuleDependencyV1, ProofCapsuleExecutionV1,
+    ProofCapsuleFreshnessIdentityV1, ProofCapsulePayloadIdentityV1, ProofCapsulePolicyV1,
+    ProofCapsuleResultV1, ProofCapsuleTargetV1, ProofCapsuleV1, ProofOutcome, ProofProperty,
+    ProofTargetIdentity, ReviewedAlphaZetaProofSetV1, Text, TrustedItem, VerificationModelIdentity,
+    record_descriptive_alpha_zeta_execution_v1,
 };
 
 const SHARED_BODY: &[u8] =
@@ -261,6 +262,16 @@ fn exact_source_capsule_binds_real_files_and_all_identity_axes() {
     assert!(!input.grants_launch_authority());
     assert!(!input.proves_ieee_f32_refinement());
     assert!(!input.proves_compiler_to_machine_refinement());
+    assert!(!input.has_complete_source_closure());
+    assert!(!input.has_complete_verifier_runtime_closure());
+    assert!(input.sources().trusted_inventory().constructs().is_empty());
+    assert!(
+        !input
+            .sources()
+            .trusted_inventory()
+            .unmeasured_imports()
+            .is_empty()
+    );
 
     input
         .sources()
@@ -432,6 +443,128 @@ fn structural_discovery_rejects_missing_and_unexpected_transitive_sources() {
 }
 
 #[test]
+fn discovery_retains_the_measured_snapshot_after_disk_mutation() {
+    let expected = sources();
+    let fixture = SourceWorkspaceFixture::copy_from(&expected);
+    let snapshot = AlphaZetaProofSourcesV1::discover_workspace(&fixture.path).unwrap();
+    let measured = snapshot
+        .files()
+        .iter()
+        .find(|file| file.path().as_str() == ALPHA_ZETA_SHARED_BODY_PATH_V1)
+        .unwrap();
+    let original = measured.snapshot_bytes().to_vec();
+    fs::write(
+        fixture.path.join(ALPHA_ZETA_SHARED_BODY_PATH_V1),
+        b"macro_rules! mutated_after_snapshot { () => {} }\n",
+    )
+    .unwrap();
+
+    assert_eq!(measured.snapshot_bytes(), original);
+    assert_eq!(
+        snapshot.validate_workspace(&fixture.path),
+        Err(AlphaZetaProofErrorV1::SourceManifestMutation)
+    );
+    assert!(!snapshot.has_complete_source_closure());
+    assert!(!snapshot.has_complete_verifier_runtime_closure());
+}
+
+#[cfg(unix)]
+#[test]
+fn discovery_rejects_workspace_and_source_parent_symlinks() {
+    use std::os::unix::fs::symlink;
+
+    let expected = sources();
+    let root_fixture = SourceWorkspaceFixture::copy_from(&expected);
+    let root_link = root_fixture.path.with_extension("symlink");
+    symlink(&root_fixture.path, &root_link).unwrap();
+    assert!(matches!(
+        AlphaZetaProofSourcesV1::discover_workspace(&root_link),
+        Err(AlphaZetaProofErrorV1::SourceManifestStructure { .. })
+    ));
+    fs::remove_file(root_link).unwrap();
+
+    let parent_fixture = SourceWorkspaceFixture::copy_from(&expected);
+    let source_parent = parent_fixture.path.join("crates/fe2o3-contracts/src");
+    let real_source_parent = parent_fixture.path.join("crates/fe2o3-contracts/src-real");
+    fs::rename(&source_parent, &real_source_parent).unwrap();
+    symlink("src-real", &source_parent).unwrap();
+    assert!(matches!(
+        AlphaZetaProofSourcesV1::discover_workspace(&parent_fixture.path),
+        Err(AlphaZetaProofErrorV1::SourceManifestStructure { .. })
+    ));
+}
+
+#[test]
+fn trusted_inventory_is_derived_from_proof_tokens_and_empty_reports_are_rejected() {
+    let mutations = [
+        (
+            "verus! { #[verifier::external_body] proof fn trust_probe() {} }",
+            AlphaZetaTrustedConstructKindV1::ExternalBody,
+        ),
+        (
+            "verus! { proof fn trust_probe() { assume(false); } }",
+            AlphaZetaTrustedConstructKindV1::Assume,
+        ),
+        (
+            "verus! { proof fn trust_probe() { admit(); } }",
+            AlphaZetaTrustedConstructKindV1::Admit,
+        ),
+        (
+            "verus! { #[verifier::external_fn_specification] fn trust_probe() {} }",
+            AlphaZetaTrustedConstructKindV1::TrustedAttribute,
+        ),
+        (
+            "use vstd::prelude::assume;",
+            AlphaZetaTrustedConstructKindV1::TrustedImport,
+        ),
+    ];
+
+    for (index, (mutation, expected_kind)) in mutations.into_iter().enumerate() {
+        let expected = sources();
+        let fixture = SourceWorkspaceFixture::copy_from(&expected);
+        let harness = fixture.path.join(ALPHA_ZETA_PROOF_HARNESS_PATH_V1);
+        let mut source = fs::read_to_string(&harness).unwrap();
+        source.push('\n');
+        source.push_str(mutation);
+        source.push('\n');
+        fs::write(harness, source).unwrap();
+
+        let mutated = AlphaZetaProofSourcesV1::discover_workspace(&fixture.path).unwrap();
+        assert!(mutated.trusted_inventory().constructs().iter().any(|item| {
+            item.kind() == expected_kind
+                && item.source_path().as_str() == ALPHA_ZETA_PROOF_HARNESS_PATH_V1
+        }));
+        assert!(!mutated.trusted_inventory().trusted_items().is_empty());
+
+        let input = input_with(
+            Gfx942AlphaZetaKernelV1::Alpha,
+            mutated,
+            digest(120 + index as u8),
+            digest(110 + index as u8),
+            tool("verus", "0.2026.08.02", 35),
+        );
+        let fresh = freshness(1, digest(80), digest(81), 10 + index as u8);
+        let empty_report = proof_with_trusted_items(
+            &input,
+            fresh,
+            GFX942_ALPHA_ZETA_REQUIRED_PROPERTIES_V1.to_vec(),
+            DependencyMutation::None,
+            GFX942_XNACK_MINUS_TARGET_V1,
+            vec![],
+        );
+        assert_eq!(
+            record_descriptive_alpha_zeta_execution_v1(
+                &input,
+                &empty_report,
+                review(&input, &empty_report, fresh, 90 + index as u8),
+                &mut AlphaZetaReviewLedgerV1::new(),
+            ),
+            Err(AlphaZetaProofErrorV1::TrustedInventorySubstitution)
+        );
+    }
+}
+
+#[test]
 fn reviewed_result_binds_properties_freshness_and_rejects_replay() {
     let input = input(Gfx942AlphaZetaKernelV1::Alpha, 60, 61);
     let fresh = freshness(1, digest(80), digest(81), 10);
@@ -548,7 +681,7 @@ fn reviewed_result_rejects_dependency_property_and_freshness_substitution() {
             review(&input, &wrong_trust_inventory, fresh, 74),
             &mut AlphaZetaReviewLedgerV1::new(),
         ),
-        Err(AlphaZetaProofErrorV1::AxiomSubstitution)
+        Err(AlphaZetaProofErrorV1::TrustedInventorySubstitution)
     );
 
     let exact = proof(&input, fresh);

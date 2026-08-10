@@ -640,6 +640,7 @@ dependencies = [
  "fe2o3-contracts",
  "fe2o3-kernel-descriptor",
  "fe2o3-rustc-front",
+ "proc-macro2",
  "syn 2.0.117",
  "toml",
 ]
