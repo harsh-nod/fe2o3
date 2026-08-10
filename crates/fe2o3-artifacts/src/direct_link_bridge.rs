@@ -156,6 +156,46 @@ impl DirectLinkPublicationOccurrenceIdentityV1 {
     }
 }
 
+/// Opaque target identity derived from every canonical manifest target field.
+///
+/// Construction is restricted to derive_manifest_claim_target_identity_v1.
+/// The value records manifest provenance but does not authenticate the
+/// container, target, compiler, publication, or current generation.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ManifestClaimDerivedTargetIdentityV1(TargetIdentityV1);
+
+impl ManifestClaimDerivedTargetIdentityV1 {
+    /// Returns the inert G5 target claim used by publication records.
+    pub const fn descriptive_identity(self) -> TargetIdentityV1 {
+        self.0
+    }
+
+    pub const fn grants_publication_authority(self) -> bool {
+        false
+    }
+
+    pub const fn grants_load_authority(self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(self) -> bool {
+        false
+    }
+}
+
+/// Derives the publication bridge's canonical target claim from one container.
+///
+/// This is the single implementation of the manifest-claim-target.v1 domain
+/// used by direct-link publication. The returned witness is descriptive and
+/// inert.
+pub fn derive_manifest_claim_target_identity_v1(
+    container: &ArtifactContainerV1,
+) -> ManifestClaimDerivedTargetIdentityV1 {
+    ManifestClaimDerivedTargetIdentityV1(TargetIdentityV1::from_bytes(
+        derive_manifest_claim_target(container),
+    ))
+}
+
 /// Opaque V1 witness for one manifest-claim-derived G5 publication scope.
 ///
 /// Construction binds an explicit caller package claim to one exact G6 binding
@@ -240,7 +280,7 @@ impl ManifestClaimDerivedLinkPublicationScopeV1 {
             });
         }
 
-        let target = TargetIdentityV1::from_bytes(derive_manifest_claim_target(container));
+        let target = derive_manifest_claim_target_identity_v1(container).descriptive_identity();
         let kernel_set = KernelSetIdentityV1::from_bytes(derive_logical_kernel_set_claim(
             binding.expectation().ffi_contract_identity().digest(),
             &kernels,

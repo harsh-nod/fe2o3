@@ -22,8 +22,8 @@ use fe2o3_artifacts::{
     DirectLinkWorkerIdentityV1, Endianness, KernelEntry,
     ManifestClaimDerivedLinkPublicationScopeV1, ManifestClaimDirectLinkDurablePlanHandoffV1,
     ManifestClaimDirectLinkPublicationBridgeV1, PayloadDigest, PointerWidth, TargetIdentity,
-    ToolIdentity, publish_manifest_claim_direct_link_durable_v1,
-    recover_manifest_claim_direct_link_durable_v1,
+    ToolIdentity, derive_manifest_claim_target_identity_v1,
+    publish_manifest_claim_direct_link_durable_v1, recover_manifest_claim_direct_link_durable_v1,
 };
 use std::fs;
 use std::path::PathBuf;
@@ -1101,6 +1101,28 @@ fn kernel_input_permutation_has_one_canonical_manifest_claim_scope() {
         forward_scope.container_identity(),
         reversed_scope.container_identity()
     );
+}
+
+#[test]
+fn exported_manifest_target_derivation_is_the_publication_scope_identity() {
+    let fixture = evidence(0x4c);
+    let validated = fixture.validated();
+    let scope = ManifestClaimDerivedLinkPublicationScopeV1::derive(
+        package_claim(0x4d),
+        &validated,
+        0,
+        &fixture.container,
+    )
+    .unwrap();
+    let target = derive_manifest_claim_target_identity_v1(&fixture.container);
+
+    assert_eq!(
+        target.descriptive_identity(),
+        scope.descriptive_scope_claim().target()
+    );
+    assert!(!target.grants_publication_authority());
+    assert!(!target.grants_load_authority());
+    assert!(!target.grants_launch_authority());
 }
 
 #[test]

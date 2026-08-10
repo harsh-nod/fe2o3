@@ -71,10 +71,11 @@ pub use direct_link_bridge::{
     CallerClaimedPackageIdentityV1, DirectLinkBridgeError, DirectLinkBridgeIdentityKindV1,
     DirectLinkManifestClaimScopeFieldV1, DirectLinkPublicationBridgeV1,
     DirectLinkPublicationOccurrenceIdentityV1, DirectLinkPublicationScopeProvenanceV1,
-    ManifestClaimDerivedLinkPublicationScopeV1, ManifestClaimDirectLinkCurrentPublicationLeaseV1,
+    ManifestClaimDerivedLinkPublicationScopeV1, ManifestClaimDerivedTargetIdentityV1,
+    ManifestClaimDirectLinkCurrentPublicationLeaseV1,
     ManifestClaimDirectLinkCurrentPublicationTokenV1, ManifestClaimDirectLinkDurablePlanHandoffV1,
     ManifestClaimDirectLinkDurablePublicationResultV1, ManifestClaimDirectLinkPublicationBridgeV1,
-    NonAuthoritativeDirectLinkPublicationDiagnosticsV1,
+    NonAuthoritativeDirectLinkPublicationDiagnosticsV1, derive_manifest_claim_target_identity_v1,
     publish_manifest_claim_direct_link_durable_v1, recover_manifest_claim_direct_link_durable_v1,
 };
 pub use direct_link_decode::DirectLinkDecodeError;
