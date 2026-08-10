@@ -40,6 +40,7 @@ mod semantic_features;
 pub mod semantic_layout_bridge;
 mod semantic_witness;
 mod source_debug;
+mod static_registration;
 mod trusted_device_items;
 mod typed_artifact;
 mod worker_v2_producer;

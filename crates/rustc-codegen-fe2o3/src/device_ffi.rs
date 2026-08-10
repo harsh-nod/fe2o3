@@ -817,10 +817,153 @@ fn upstream_export_registrations<'tcx>(
             ));
         }
         validate_upstream_registration_type(tcx, def_id, &path)?;
+        validate_upstream_registration_initializer(tcx, def_id, instance, contract, &path)?;
         registrations.push(def_id);
     }
     registrations.sort_by_key(|def_id| tcx.def_path_str(*def_id));
     Ok(registrations)
+}
+
+fn validate_upstream_registration_initializer<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    def_id: DefId,
+    instance: Instance<'tcx>,
+    contract: &DeviceFfiContract,
+    path: &str,
+) -> Result<(), DeviceFfiError> {
+    expect_static_integer(
+        tcx,
+        def_id,
+        0,
+        u128::from(reserved_fe2o3_symbols::DEVICE_FFI_REGISTRATION_MAGIC_V1),
+        "registration magic",
+        path,
+    )?;
+    expect_static_integer(
+        tcx,
+        def_id,
+        1,
+        u128::from(reserved_fe2o3_symbols::DEVICE_FFI_REGISTRATION_VERSION_V1),
+        "registration version",
+        path,
+    )?;
+    expect_static_integer(
+        tcx,
+        def_id,
+        2,
+        u128::from(contract.direction.tag()),
+        "registration direction",
+        path,
+    )?;
+    expect_static_string(
+        tcx,
+        def_id,
+        3,
+        "contract identity",
+        &contract.id.to_hex(),
+        path,
+    )?;
+    expect_static_string(tcx, def_id, 4, "symbol", &contract.symbol, path)?;
+    expect_static_string(tcx, def_id, 5, "calling convention", "C", path)?;
+    expect_static_integer(
+        tcx,
+        def_id,
+        6,
+        u128::from(
+            *contract
+                .code_object_version_assertion
+                .asserted_for_consistency_check(),
+        ),
+        "code-object version",
+        path,
+    )?;
+    expect_static_string(tcx, def_id, 7, "target", &contract.target, path)?;
+    expect_static_string(tcx, def_id, 8, "physical ABI", &contract.physical_abi, path)?;
+    expect_static_string(
+        tcx,
+        def_id,
+        9,
+        "effects",
+        contract.effects_assertion.asserted_for_consistency_check(),
+        path,
+    )?;
+    expect_static_string(
+        tcx,
+        def_id,
+        10,
+        "semantic identity",
+        contract
+            .semantic_identity_assertion
+            .asserted_for_consistency_check(),
+        path,
+    )?;
+    let registered = crate::static_registration::function(tcx, def_id, 11).map_err(|reason| {
+        DeviceFfiError::coded(
+            "XCR019",
+            format!("upstream producer registration `{path}` function is invalid: {reason}"),
+        )
+    })?;
+    if registered != instance {
+        return Err(DeviceFfiError::coded(
+            "XCR020",
+            format!(
+                "upstream producer registration `{path}` points to `{}`, not anchored export `{}`",
+                tcx.def_path_str(registered.def_id()),
+                tcx.def_path_str(instance.def_id()),
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn expect_static_integer(
+    tcx: TyCtxt<'_>,
+    def_id: DefId,
+    index: usize,
+    expected: u128,
+    field: &str,
+    path: &str,
+) -> Result<(), DeviceFfiError> {
+    let observed = crate::static_registration::integer(tcx, def_id, index).map_err(|reason| {
+        DeviceFfiError::coded(
+            "XCR019",
+            format!("upstream producer registration `{path}` {field} is invalid: {reason}"),
+        )
+    })?;
+    if observed != expected {
+        return Err(DeviceFfiError::coded(
+            "XCR019",
+            format!(
+                "upstream producer registration `{path}` {field} {observed} does not match {expected}"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn expect_static_string(
+    tcx: TyCtxt<'_>,
+    def_id: DefId,
+    index: usize,
+    field: &str,
+    expected: &str,
+    path: &str,
+) -> Result<(), DeviceFfiError> {
+    let observed = crate::static_registration::string(tcx, def_id, index).map_err(|reason| {
+        DeviceFfiError::coded(
+            "XCR019",
+            format!("upstream producer registration `{path}` {field} is invalid: {reason}"),
+        )
+    })?;
+    if observed != expected {
+        return Err(DeviceFfiError::coded(
+            "XCR019",
+            format!(
+                "upstream producer registration `{path}` {field} `{observed}` does not match `{expected}`"
+            ),
+        ));
+    }
+    Ok(())
 }
 
 fn validate_upstream_registration_type(

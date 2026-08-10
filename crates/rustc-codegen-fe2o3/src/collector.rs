@@ -15,7 +15,7 @@ use reserved_fe2o3_symbols::{
     derive_kernel_binding_id_v1, host_kernel_symbol_v1,
 };
 use rustc_ast::InlineAsmOptions;
-use rustc_hir::def_id::{DefId, LOCAL_CRATE};
+use rustc_hir::def_id::{DefId, DefIndex, LOCAL_CRATE};
 use rustc_hir::{ItemKind, Safety};
 use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags;
 use rustc_middle::mir::interpret::GlobalAlloc;
@@ -613,6 +613,11 @@ fn kernel_roots<'tcx>(
     }
 
     let session_crate_name = tcx.crate_name(LOCAL_CRATE).to_string();
+    for record in &records {
+        if record.target.def_id().krate != LOCAL_CRATE {
+            authenticate_external_typed_v2_registration(tcx, record)?;
+        }
+    }
     let mut roots = validate_registration_records(
         records,
         session_crate_binding(tcx),
@@ -722,6 +727,236 @@ fn session_crate_binding(tcx: TyCtxt<'_>) -> Option<CrateBindingIdV1> {
         crate_name.as_str(),
         metadata.iter().map(String::as_str),
     ))
+}
+
+fn authenticate_external_typed_v2_registration<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    record: &RegistrationRecord<Instance<'tcx>>,
+) -> Result<(), RegistrationError> {
+    if record.version != reserved_fe2o3_symbols::KERNEL_REGISTRATION_VERSION_V2
+        || record.kind != reserved_fe2o3_symbols::KERNEL_REGISTRATION_KIND_TYPED_VECADD_LAYOUT_V2
+    {
+        return Err(RegistrationError::new(
+            &record.registration_path,
+            "cross-crate kernels require an exact producer-owned typed V2 registration",
+        ));
+    }
+    let crate_num = record.target.def_id().krate;
+    let actual_crate_name = tcx.crate_name(crate_num).to_string();
+    if record.target_crate_name != actual_crate_name {
+        return Err(RegistrationError::new(
+            &record.registration_path,
+            format!(
+                "external target crate `{}` disagrees with rustc producer crate `{actual_crate_name}`",
+                record.target_crate_name
+            ),
+        ));
+    }
+    let expected_name = format!(
+        "{}{}",
+        reserved_fe2o3_symbols::KERNEL_REGISTRATION_PREFIX,
+        record.logical_name,
+    );
+    let mut matches = Vec::new();
+    for index in 0..tcx.num_extern_def_ids(crate_num) {
+        let def_id = DefId {
+            krate: crate_num,
+            index: DefIndex::from_usize(index),
+        };
+        if !matches!(tcx.def_kind(def_id), rustc_hir::def::DefKind::Static { .. }) {
+            continue;
+        }
+        let path = tcx.def_path_str(def_id);
+        if final_path_segment(&path) != expected_name {
+            continue;
+        }
+        if tcx.is_mutable_static(def_id) {
+            return Err(RegistrationError::new(
+                path,
+                "upstream kernel registration must be immutable",
+            ));
+        }
+        let flags = tcx.codegen_fn_attrs(def_id).flags;
+        if !flags.intersects(CodegenFnAttrFlags::USED_COMPILER | CodegenFnAttrFlags::USED_LINKER) {
+            return Err(RegistrationError::new(
+                path,
+                "upstream kernel registration must carry #[used]",
+            ));
+        }
+        let ty = tcx
+            .try_normalize_erasing_regions(
+                TypingEnv::fully_monomorphized(),
+                tcx.type_of(def_id).instantiate_identity(),
+            )
+            .map_err(|_| {
+                RegistrationError::new(&path, "upstream kernel registration type did not normalize")
+            })?;
+        let TyKind::Tuple(types) = ty.kind() else {
+            return Err(RegistrationError::new(
+                path,
+                "upstream kernel registration must use the exact V2 tuple type",
+            ));
+        };
+        let exact_v2 = types.len() == reserved_fe2o3_symbols::KERNEL_REGISTRATION_V2_FIELD_COUNT
+            && types[0] == tcx.types.u64
+            && types[1] == tcx.types.u16
+            && types[2] == tcx.types.u16
+            && is_shared_str(types[3])
+            && is_shared_str(types[4])
+            && is_shared_str(types[5])
+            && is_shared_str(types[6])
+            && matches!(types[7].kind(), TyKind::FnPtr(..));
+        if !exact_v2 {
+            return Err(RegistrationError::new(
+                path,
+                "upstream kernel registration must use the exact V2 tuple type",
+            ));
+        }
+        require_static_registration_integer(
+            tcx,
+            def_id,
+            0,
+            u128::from(reserved_fe2o3_symbols::KERNEL_REGISTRATION_MAGIC),
+            "magic",
+            &path,
+        )?;
+        require_static_registration_integer(
+            tcx,
+            def_id,
+            1,
+            u128::from(reserved_fe2o3_symbols::KERNEL_REGISTRATION_VERSION_V2),
+            "version",
+            &path,
+        )?;
+        require_static_registration_integer(
+            tcx,
+            def_id,
+            2,
+            u128::from(reserved_fe2o3_symbols::KERNEL_REGISTRATION_KIND_TYPED_VECADD_LAYOUT_V2),
+            "kind",
+            &path,
+        )?;
+        require_static_registration_string(
+            tcx,
+            def_id,
+            3,
+            &record.logical_name,
+            "logical name",
+            &path,
+        )?;
+        require_static_registration_string(
+            tcx,
+            def_id,
+            4,
+            &record.export_name,
+            "export name",
+            &path,
+        )?;
+        require_static_registration_string(
+            tcx,
+            def_id,
+            5,
+            &record
+                .crate_binding
+                .expect("external V2 record has a crate binding")
+                .to_hex(),
+            "crate binding",
+            &path,
+        )?;
+        require_static_registration_string(
+            tcx,
+            def_id,
+            6,
+            &record
+                .kernel_binding
+                .expect("external V2 record has a kernel binding")
+                .to_hex(),
+            "kernel binding",
+            &path,
+        )?;
+        let target = crate::static_registration::function(tcx, def_id, 7).map_err(|reason| {
+            RegistrationError::new(
+                &path,
+                format!("upstream kernel registration function is invalid: {reason}"),
+            )
+        })?;
+        if target != record.target {
+            return Err(RegistrationError::new(
+                path,
+                format!(
+                    "upstream kernel registration points to `{}`, not imported target `{}`",
+                    tcx.def_path_str(target.def_id()),
+                    record.target_identity,
+                ),
+            ));
+        }
+        if owner_module_path(&path) != owner_module_path(&record.target_identity) {
+            return Err(RegistrationError::new(
+                path,
+                "upstream kernel registration and target must share one producer module",
+            ));
+        }
+        matches.push(def_id);
+    }
+    if matches.len() != 1 {
+        return Err(RegistrationError::new(
+            &record.registration_path,
+            format!(
+                "external kernel `{}` has {} exact producer registrations in crate `{actual_crate_name}`; exactly one is required",
+                record.target_identity,
+                matches.len(),
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn require_static_registration_integer(
+    tcx: TyCtxt<'_>,
+    def_id: DefId,
+    index: usize,
+    expected: u128,
+    field: &str,
+    path: &str,
+) -> Result<(), RegistrationError> {
+    let observed = crate::static_registration::integer(tcx, def_id, index).map_err(|reason| {
+        RegistrationError::new(
+            path,
+            format!("upstream kernel registration {field} is invalid: {reason}"),
+        )
+    })?;
+    (observed == expected).then_some(()).ok_or_else(|| {
+        RegistrationError::new(
+            path,
+            format!(
+                "upstream kernel registration {field} {observed} does not match imported value {expected}"
+            ),
+        )
+    })
+}
+
+fn require_static_registration_string(
+    tcx: TyCtxt<'_>,
+    def_id: DefId,
+    index: usize,
+    expected: &str,
+    field: &str,
+    path: &str,
+) -> Result<(), RegistrationError> {
+    let observed = crate::static_registration::string(tcx, def_id, index).map_err(|reason| {
+        RegistrationError::new(
+            path,
+            format!("upstream kernel registration {field} is invalid: {reason}"),
+        )
+    })?;
+    (observed == expected).then_some(()).ok_or_else(|| {
+        RegistrationError::new(
+            path,
+            format!(
+                "upstream kernel registration {field} `{observed}` does not match imported value `{expected}`"
+            ),
+        )
+    })
 }
 
 fn registration_candidates<'tcx>(
