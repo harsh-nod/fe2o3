@@ -1,11 +1,16 @@
 use std::fmt;
 
+use object::{Object, ObjectSection};
+use serde::Deserialize;
+
+use fe2o3_artifacts::DigestAlgorithm;
+
 #[cfg(feature = "hardware-test-hooks")]
 use fe2o3_amd_target::FeatureState;
 #[cfg(feature = "hardware-test-hooks")]
 use fe2o3_artifacts::{
     AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize,
-    DigestAlgorithm, Dimensions, LaunchContract, Mutability, Name, PointerWidth, ScalarType,
+    Dimensions, LaunchContract, Mutability, Name, PointerWidth, ScalarType,
     derive_generated_host_contract_identity_v1,
 };
 #[cfg(feature = "hardware-test-hooks")]
@@ -52,6 +57,173 @@ const ZETA_EXPLICIT_BYTES: usize = 56;
 const GUARD_PREFIX_ELEMENTS: usize = 8;
 const GUARD_SUFFIX_ELEMENTS: usize = 11;
 const HARDWARE_LENGTHS: [usize; 5] = [1, 255, 256, 257, 1023];
+const COMPILER_EVIDENCE_GOLDEN: &str =
+    include_str!("../../../tests/fixtures/compiler-evidence/gfx942-alpha-zeta-cov6.json");
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CompilerEvidenceKernelV1 {
+    name: String,
+    symbol: String,
+    kernarg_bytes: u64,
+    kernarg_alignment: u64,
+    required_workgroup: [u32; 3],
+    max_workgroup: u32,
+    wavefront: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CompilerEvidenceGoldenV1 {
+    schema: String,
+    target: String,
+    code_object_version: u8,
+    rocm_version: String,
+    llvm_package_version: String,
+    llvm_build_identity: String,
+    rust_toolchain: String,
+    worker_protocol: String,
+    linker_path: String,
+    response_binding: String,
+    publication_route: String,
+    worker_build_identity: String,
+    worker_executable_sha256: String,
+    source_path: String,
+    source_sha256: String,
+    generator_test: String,
+    hardware_test: String,
+    descriptor_section: String,
+    hsaco_sha256: String,
+    hsaco_bytes: u64,
+    max_hsaco_bytes: u64,
+    kernels: Vec<CompilerEvidenceKernelV1>,
+    boundary_lengths: Vec<usize>,
+}
+
+fn compiler_evidence_golden() -> Result<CompilerEvidenceGoldenV1, String> {
+    compiler_evidence_golden_from_str(COMPILER_EVIDENCE_GOLDEN)
+}
+
+fn compiler_evidence_golden_from_str(source: &str) -> Result<CompilerEvidenceGoldenV1, String> {
+    let golden: CompilerEvidenceGoldenV1 = serde_json::from_str(source)
+        .map_err(|error| format!("invalid compiler-evidence golden JSON: {error}"))?;
+    if golden.schema != "fe2o3-gfx942-alpha-zeta-compiler-evidence-v1"
+        || golden.target != "gfx942:xnack-"
+        || golden.code_object_version != 6
+        || golden.rocm_version != "7.2.4"
+        || golden.llvm_package_version != "22.0.0git"
+        || golden.llvm_build_identity != "7.2.4"
+        || golden.rust_toolchain != "nightly-2026-04-03"
+        || golden.worker_protocol != "v2"
+        || golden.linker_path != "llvm-lld-library-apis"
+        || golden.response_binding != "canonical-request-and-compiler-envelope"
+        || golden.publication_route != "raw-inspection-cov6-canonical-finalization"
+        || golden.descriptor_section != ".fe2o3.kd.v1"
+        || golden.generator_test
+            != "worker_v2_general_v3_alpha_zeta_build_links_and_validate_backend_witnesses"
+        || golden.hardware_test != "gfx942_cov6_repository_golden_alpha_then_zeta_one_executable"
+        || golden.max_hsaco_bytes != 16 * 1024 * 1024
+        || golden.hsaco_bytes == 0
+        || golden.hsaco_bytes > golden.max_hsaco_bytes
+        || golden.boundary_lengths != HARDWARE_LENGTHS
+    {
+        return Err("compiler-evidence golden profile changed".to_owned());
+    }
+    for (label, digest) in [
+        ("worker executable", &golden.worker_executable_sha256),
+        ("source", &golden.source_sha256),
+        ("HSACO", &golden.hsaco_sha256),
+    ] {
+        parse_sha256(digest).map_err(|error| format!("invalid {label} digest: {error}"))?;
+    }
+    if !golden
+        .worker_build_identity
+        .starts_with("fe2o3-worker-v1-sha256-")
+        || golden.worker_build_identity.len() != "fe2o3-worker-v1-sha256-".len() + 64
+        || golden.source_path
+            != "crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs"
+    {
+        return Err("compiler-evidence generator closure changed".to_owned());
+    }
+    if golden.kernels.len() != 2 {
+        return Err("compiler-evidence golden must contain exactly two kernels".to_owned());
+    }
+    let expected = [("alpha", "alpha.kd", 296, 8), ("zeta", "zeta.kd", 312, 8)];
+    for (kernel, (name, symbol, bytes, alignment)) in golden.kernels.iter().zip(expected) {
+        if kernel.name != name
+            || kernel.symbol != symbol
+            || kernel.kernarg_bytes != bytes
+            || kernel.kernarg_alignment != alignment
+            || kernel.required_workgroup != [256, 1, 1]
+            || kernel.max_workgroup != 256
+            || kernel.wavefront != 64
+        {
+            return Err(format!(
+                "compiler-evidence kernel contract changed for {name}"
+            ));
+        }
+    }
+    Ok(golden)
+}
+
+fn validate_repository_golden_hsaco(bytes: &[u8]) -> Result<[u8; 32], String> {
+    let golden = compiler_evidence_golden()?;
+    if bytes.len() as u64 != golden.hsaco_bytes || bytes.len() as u64 > golden.max_hsaco_bytes {
+        return Err("repository golden HSACO has the wrong bounded size".to_owned());
+    }
+    let digest = DigestAlgorithm::Sha256.calculate(bytes);
+    let digest_bytes = *digest.bytes().as_bytes();
+    if digest_bytes != parse_sha256(&golden.hsaco_sha256)? {
+        return Err("repository golden HSACO digest changed".to_owned());
+    }
+
+    let physical = fe2o3_hsaco::inspect_and_bind_kernel_descriptors(bytes)
+        .map_err(|error| format!("repository golden physical inspection failed: {error}"))?;
+    if physical.inspection().target().to_string() != golden.target
+        || physical.inspection().code_object_version().number() != golden.code_object_version
+        || physical.inspection().kernels().len() != golden.kernels.len()
+        || physical.bindings().len() != golden.kernels.len()
+    {
+        return Err("repository golden target, COV, or kernel closure changed".to_owned());
+    }
+    for (index, (kernel, expected)) in physical
+        .inspection()
+        .kernels()
+        .iter()
+        .zip(&golden.kernels)
+        .enumerate()
+    {
+        if kernel.name() != expected.name
+            || kernel.symbol() != expected.symbol
+            || kernel.kernarg_segment_size() != expected.kernarg_bytes
+            || kernel.kernarg_segment_alignment() != expected.kernarg_alignment
+            || kernel.required_workgroup_size() != Some(expected.required_workgroup)
+            || kernel.max_flat_workgroup_size() != expected.max_workgroup
+            || kernel.wavefront_size() != expected.wavefront
+            || physical.bindings()[index].kernel_index() != index
+            || physical.bindings()[index].entry_size() == 0
+        {
+            return Err(format!(
+                "repository golden physical contract changed for {}",
+                expected.name
+            ));
+        }
+    }
+
+    let object = object::File::parse(bytes)
+        .map_err(|error| format!("repository golden ELF parsing failed: {error}"))?;
+    let descriptor = object
+        .section_by_name(&golden.descriptor_section)
+        .ok_or_else(|| "repository golden canonical descriptor section is absent".to_owned())?;
+    if descriptor
+        .data()
+        .map_err(|error| format!("repository golden descriptor read failed: {error}"))?
+        .is_empty()
+    {
+        return Err("repository golden canonical descriptor section is empty".to_owned());
+    }
+    Ok(digest_bytes)
+}
 
 #[cfg(feature = "hardware-test-hooks")]
 const GENERATED_SAFE_TEST_SEED: u8 = 0xa7;
@@ -764,15 +936,57 @@ fn pinned_hsaco() -> Result<(Vec<u8>, fe2o3_artifacts::PayloadDigest), BoxError>
 }
 
 #[cfg(feature = "hardware-test-hooks")]
-fn parse_sha256(hex: &str) -> Result<[u8; 32], BoxError> {
+fn pinned_repository_golden_hsaco() -> Result<(Vec<u8>, fe2o3_artifacts::PayloadDigest), BoxError> {
     require(
-        hex.len() == 64,
-        "the pinned SHA-256 must contain 64 hex digits",
+        std::env::var("FE2O3_RUN_GFX942_TWO_KERNEL").as_deref() == Ok("1"),
+        "set FE2O3_RUN_GFX942_TWO_KERNEL=1 to opt into the alpha/zeta hardware test",
     )?;
+    let golden = compiler_evidence_golden()?;
+    let declared = std::env::var("FE2O3_GFX942_ALPHA_ZETA_SHA256")
+        .map_err(|_| "FE2O3_GFX942_ALPHA_ZETA_SHA256 is not set")?;
+    require(
+        declared == golden.hsaco_sha256,
+        "the configured HSACO digest is not the repository compiler-evidence golden",
+    )?;
+    let path = std::path::PathBuf::from(
+        std::env::var_os("FE2O3_GFX942_ALPHA_ZETA_HSACO")
+            .ok_or("FE2O3_GFX942_ALPHA_ZETA_HSACO is not set")?,
+    );
+    require(
+        path.is_absolute(),
+        "the repository golden HSACO path must be absolute",
+    )?;
+    let metadata = std::fs::symlink_metadata(&path)?;
+    require(
+        metadata.file_type().is_file() && !metadata.file_type().is_symlink(),
+        "the repository golden HSACO must be a regular non-symlink file",
+    )?;
+    require(
+        std::fs::canonicalize(&path)? == path,
+        "the repository golden HSACO path must already be canonical",
+    )?;
+    require(
+        metadata.len() == golden.hsaco_bytes && metadata.len() <= golden.max_hsaco_bytes,
+        "the repository golden HSACO has the wrong bounded file size",
+    )?;
+    let bytes = std::fs::read(&path)?;
+    let digest_bytes = validate_repository_golden_hsaco(&bytes)?;
+    let digest = DigestAlgorithm::Sha256.calculate(&bytes);
+    require(
+        digest.bytes().as_bytes() == &digest_bytes,
+        "the repository golden digest changed after structured validation",
+    )?;
+    Ok((bytes, digest))
+}
+
+fn parse_sha256(hex: &str) -> Result<[u8; 32], String> {
+    if hex.len() != 64 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("the pinned SHA-256 must contain exactly 64 hex digits".to_owned());
+    }
     let mut bytes = [0; 32];
     for (index, byte) in bytes.iter_mut().enumerate() {
         *byte = u8::from_str_radix(&hex[index * 2..index * 2 + 2], 16)
-            .map_err(|_| "the pinned SHA-256 contains a non-hex digit")?;
+            .map_err(|_| "the pinned SHA-256 contains a non-hex digit".to_owned())?;
     }
     Ok(bytes)
 }
@@ -1290,27 +1504,11 @@ fn gfx942_alpha_zeta_dispatch_retains_currentness_through_unload() -> Result<(),
     Ok(())
 }
 
-/// Executes the first general typed two-kernel gfx942 raw hardware evidence slice.
-///
-/// This test intentionally calls the reviewed unsafe HSA adapter directly. It
-/// does not exercise, provide, or claim production generated safe dispatch.
-///
-/// Required invocation:
-///
-/// ```text
-/// cargo test -p fe2o3-hsa-runtime --features hardware-test-hooks \
-///   --test gfx942_two_kernel_hardware \
-///   gfx942_cov6_alpha_then_zeta_one_executable -- --ignored --exact --nocapture
-/// ```
-///
-/// The environment must set `FE2O3_RUN_GFX942_TWO_KERNEL=1`,
-/// `FE2O3_GFX942_ALPHA_ZETA_HSACO`, and
-/// `FE2O3_GFX942_ALPHA_ZETA_SHA256`.
 #[cfg(feature = "hardware-test-hooks")]
-#[test]
-#[ignore = "requires an explicitly pinned alpha/zeta COV6 HSACO and a gfx942:xnack- GPU"]
-fn gfx942_cov6_alpha_then_zeta_one_executable() -> Result<(), BoxError> {
-    let (bytes, digest) = pinned_hsaco()?;
+fn run_raw_two_kernel_hardware_slice(
+    bytes: Vec<u8>,
+    digest: fe2o3_artifacts::PayloadDigest,
+) -> Result<(), BoxError> {
     let context = GpuContext::new(0)?;
     let mut adapter = ReviewedHsaRuntimeAdapterV1::new(context.clone())?;
     require(
@@ -1345,6 +1543,63 @@ fn gfx942_cov6_alpha_then_zeta_one_executable() -> Result<(), BoxError> {
         "unload released a substituted executable",
     )?;
     execution
+}
+
+/// Regenerates the repository compiler-evidence golden and executes both kernels.
+///
+/// `scripts/test-gfx942-compiler-evidence.sh` is the required controller. It
+/// rebuilds the measured C++ Worker, runs native CTests, invokes the canonical
+/// V2 request/response and COV6 finalization test, checks the repository digest,
+/// then invokes this test on MI300X. This test alone does not authenticate
+/// compiler execution or create production authority.
+#[cfg(feature = "hardware-test-hooks")]
+#[test]
+#[ignore = "requires the repository-generated alpha/zeta COV6 golden and a gfx942:xnack- GPU"]
+fn gfx942_cov6_repository_golden_alpha_then_zeta_one_executable() -> Result<(), BoxError> {
+    let (bytes, digest) = pinned_repository_golden_hsaco()?;
+    run_raw_two_kernel_hardware_slice(bytes, digest)
+}
+
+/// Executes the first general typed two-kernel gfx942 raw hardware evidence slice.
+///
+/// This test intentionally calls the reviewed unsafe HSA adapter directly. It
+/// does not exercise, provide, or claim production generated safe dispatch.
+///
+/// Required invocation:
+///
+/// ```text
+/// cargo test -p fe2o3-hsa-runtime --features hardware-test-hooks \
+///   --test gfx942_two_kernel_hardware \
+///   gfx942_cov6_alpha_then_zeta_one_executable -- --ignored --exact --nocapture
+/// ```
+///
+/// The environment must set `FE2O3_RUN_GFX942_TWO_KERNEL=1`,
+/// `FE2O3_GFX942_ALPHA_ZETA_HSACO`, and
+/// `FE2O3_GFX942_ALPHA_ZETA_SHA256`.
+#[cfg(feature = "hardware-test-hooks")]
+#[test]
+#[ignore = "requires an explicitly pinned alpha/zeta COV6 HSACO and a gfx942:xnack- GPU"]
+fn gfx942_cov6_alpha_then_zeta_one_executable() -> Result<(), BoxError> {
+    let (bytes, digest) = pinned_hsaco()?;
+    run_raw_two_kernel_hardware_slice(bytes, digest)
+}
+
+#[test]
+fn repository_compiler_evidence_golden_is_exact_and_bounded() {
+    let golden = compiler_evidence_golden().unwrap();
+    assert_eq!(golden.boundary_lengths, HARDWARE_LENGTHS);
+    assert_eq!(golden.kernels.len(), 2);
+    assert!(golden.hsaco_bytes <= golden.max_hsaco_bytes);
+
+    let mut malformed: serde_json::Value = serde_json::from_str(COMPILER_EVIDENCE_GOLDEN).unwrap();
+    malformed["target"] = serde_json::Value::String("gfx942".to_owned());
+    assert!(
+        compiler_evidence_golden_from_str(&serde_json::to_string(&malformed).unwrap()).is_err()
+    );
+
+    let mut substituted = vec![0_u8; golden.hsaco_bytes as usize];
+    substituted[0] = 1;
+    assert!(validate_repository_golden_hsaco(&substituted).is_err());
 }
 
 #[test]

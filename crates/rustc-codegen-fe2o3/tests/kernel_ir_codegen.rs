@@ -4,6 +4,8 @@ use std::process::{Command, Output};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use fe2o3_artifacts::DigestAlgorithm;
+use object::{Object, ObjectSection};
+use serde::Deserialize;
 
 #[path = "../src/s09_identity_v2.rs"]
 mod s09_identity_v2;
@@ -18,6 +20,48 @@ const MULTI_KERNEL_ALPHA: &str = "worker_v2_alpha";
 const MULTI_KERNEL_ZETA: &str = "worker_v2_zeta";
 const ALPHA_ZETA_OUTPUT_ENV: &str = "FE2O3_GFX942_ALPHA_ZETA_OUTPUT";
 const S09_DEBUG_HSACO_OUTPUT_ENV: &str = "FE2O3_S09_DEBUG_HSACO_OUTPUT";
+const COMPILER_EVIDENCE_GOLDEN: &str =
+    include_str!("../../../tests/fixtures/compiler-evidence/gfx942-alpha-zeta-cov6.json");
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CompilerEvidenceKernelV1 {
+    name: String,
+    symbol: String,
+    kernarg_bytes: u64,
+    kernarg_alignment: u64,
+    required_workgroup: [u32; 3],
+    max_workgroup: u32,
+    wavefront: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CompilerEvidenceGoldenV1 {
+    schema: String,
+    target: String,
+    code_object_version: u8,
+    rocm_version: String,
+    llvm_package_version: String,
+    llvm_build_identity: String,
+    rust_toolchain: String,
+    worker_protocol: String,
+    linker_path: String,
+    response_binding: String,
+    publication_route: String,
+    worker_build_identity: String,
+    worker_executable_sha256: String,
+    source_path: String,
+    source_sha256: String,
+    generator_test: String,
+    hardware_test: String,
+    descriptor_section: String,
+    hsaco_sha256: String,
+    hsaco_bytes: u64,
+    max_hsaco_bytes: u64,
+    kernels: Vec<CompilerEvidenceKernelV1>,
+    boundary_lengths: Vec<usize>,
+}
 
 fn backend_test_lock() -> MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -41,6 +85,113 @@ fn sha256_hex(bytes: &[u8]) -> String {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+fn compiler_evidence_golden() -> CompilerEvidenceGoldenV1 {
+    let golden: CompilerEvidenceGoldenV1 =
+        serde_json::from_str(COMPILER_EVIDENCE_GOLDEN).expect("canonical compiler-evidence golden");
+    assert_eq!(
+        golden.schema,
+        "fe2o3-gfx942-alpha-zeta-compiler-evidence-v1"
+    );
+    assert_eq!(golden.target, "gfx942:xnack-");
+    assert_eq!(golden.code_object_version, 6);
+    assert_eq!(golden.rocm_version, "7.2.4");
+    assert_eq!(golden.llvm_package_version, "22.0.0git");
+    assert_eq!(golden.llvm_build_identity, "7.2.4");
+    assert_eq!(golden.rust_toolchain, "nightly-2026-04-03");
+    assert_eq!(golden.worker_protocol, "v2");
+    assert_eq!(golden.linker_path, "llvm-lld-library-apis");
+    assert_eq!(
+        golden.response_binding,
+        "canonical-request-and-compiler-envelope"
+    );
+    assert_eq!(
+        golden.publication_route,
+        "raw-inspection-cov6-canonical-finalization"
+    );
+    assert_eq!(
+        golden.generator_test,
+        "worker_v2_general_v3_alpha_zeta_build_links_and_validate_backend_witnesses"
+    );
+    assert_eq!(
+        golden.hardware_test,
+        "gfx942_cov6_repository_golden_alpha_then_zeta_one_executable"
+    );
+    assert_eq!(golden.descriptor_section, ".fe2o3.kd.v1");
+    assert_eq!(golden.max_hsaco_bytes, 16 * 1024 * 1024);
+    assert!((1..=golden.max_hsaco_bytes).contains(&golden.hsaco_bytes));
+    assert_eq!(golden.boundary_lengths, [1, 255, 256, 257, 1023]);
+    assert_eq!(golden.kernels.len(), 2);
+    golden
+}
+
+fn assert_repository_compiler_evidence_golden(
+    workspace: &Path,
+    worker: &Path,
+    worker_build_identity: &str,
+    llvm_build_identity: &str,
+    hsaco: &[u8],
+) {
+    let golden = compiler_evidence_golden();
+    assert_eq!(worker_build_identity, golden.worker_build_identity);
+    assert_eq!(llvm_build_identity, golden.llvm_build_identity);
+    assert_eq!(
+        sha256_hex(&std::fs::read(worker).expect("read golden Worker V2 executable")),
+        golden.worker_executable_sha256
+    );
+    assert_eq!(
+        sha256_hex(
+            &std::fs::read(workspace.join(&golden.source_path))
+                .expect("read golden alpha/zeta source")
+        ),
+        golden.source_sha256
+    );
+    assert_eq!(hsaco.len() as u64, golden.hsaco_bytes);
+    assert!(hsaco.len() as u64 <= golden.max_hsaco_bytes);
+    assert_eq!(sha256_hex(hsaco), golden.hsaco_sha256);
+
+    let physical = fe2o3_hsaco::inspect_and_bind_kernel_descriptors(hsaco)
+        .expect("bind repository golden kernels to physical descriptors");
+    assert_eq!(physical.inspection().target().to_string(), golden.target);
+    assert_eq!(
+        physical.inspection().code_object_version().number(),
+        golden.code_object_version
+    );
+    assert_eq!(physical.inspection().kernels().len(), golden.kernels.len());
+    assert_eq!(physical.bindings().len(), golden.kernels.len());
+    for (index, (actual, expected)) in physical
+        .inspection()
+        .kernels()
+        .iter()
+        .zip(&golden.kernels)
+        .enumerate()
+    {
+        assert_eq!(actual.name(), expected.name);
+        assert_eq!(actual.symbol(), expected.symbol);
+        assert_eq!(actual.kernarg_segment_size(), expected.kernarg_bytes);
+        assert_eq!(
+            actual.kernarg_segment_alignment(),
+            expected.kernarg_alignment
+        );
+        assert_eq!(
+            actual.required_workgroup_size(),
+            Some(expected.required_workgroup)
+        );
+        assert_eq!(actual.max_flat_workgroup_size(), expected.max_workgroup);
+        assert_eq!(actual.wavefront_size(), expected.wavefront);
+        assert_eq!(physical.bindings()[index].kernel_index(), index);
+        assert_ne!(physical.bindings()[index].entry_size(), 0);
+    }
+    let object = object::File::parse(hsaco).expect("parse repository golden HSACO");
+    assert!(
+        !object
+            .section_by_name(&golden.descriptor_section)
+            .expect("canonical descriptor section")
+            .data()
+            .expect("read canonical descriptor section")
+            .is_empty()
+    );
 }
 
 fn bytes_hex(bytes: &[u8]) -> String {
@@ -1024,6 +1175,25 @@ fn worker_v2_general_v3_alpha_zeta_build_links_and_validate_backend_witnesses() 
         &worker_build_identity,
         &llvm_build_identity,
     );
+    let config_json: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(&config.0).expect("read repository golden Worker V2 config"),
+    )
+    .expect("parse repository golden Worker V2 config");
+    assert_eq!(config_json["format"], "fe2o3-worker-v2-config-v2");
+    assert_eq!(config_json["worker"]["path"], worker.to_str().unwrap());
+    assert_eq!(
+        config_json["worker"]["worker_build_identity"],
+        worker_build_identity
+    );
+    assert_eq!(
+        config_json["worker"]["llvm_build_identity"],
+        llvm_build_identity
+    );
+    assert_eq!(
+        config_json["link_options"][0]["name"],
+        "code-object-version"
+    );
+    assert_eq!(config_json["link_options"][0]["value"], "6");
     let backend = build_codegen_backend(&workspace);
     let target = directory.0.join("cargo-target");
     let output = Command::new(env!("CARGO"))
@@ -1073,6 +1243,13 @@ fn worker_v2_general_v3_alpha_zeta_build_links_and_validate_backend_witnesses() 
         String::from_utf8_lossy(&run.stderr)
     );
     let bytes = assert_published_worker_v2_cov6_kernels(&target.join("fe2o3"), &["alpha", "zeta"]);
+    assert_repository_compiler_evidence_golden(
+        &workspace,
+        &worker,
+        &worker_build_identity,
+        &llvm_build_identity,
+        &bytes,
+    );
     export_alpha_zeta_evidence(&bytes);
 }
 
