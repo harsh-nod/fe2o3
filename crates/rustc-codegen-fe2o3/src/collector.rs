@@ -1908,6 +1908,37 @@ impl<'tcx> DeviceCollector<'tcx> {
             }
 
             let mir = self.tcx.instance_mir(function.instance.def);
+            if crate::closure_profile_v1::contains_concrete_closure_v1(self.tcx, function.instance)
+                .map_err(|error| {
+                    self.reachable_error(
+                        &function.instance,
+                        &format!("closure presence check failed closed: {error}"),
+                        None,
+                    )
+                })?
+            {
+                let closure_plan = crate::closure_profile_v1::analyze_gfx942_closures_v1(
+                    self.tcx,
+                    function.instance,
+                    crate::closure_profile_v1::ClosureOriginPolicyV1::Either,
+                    &self.expected_target,
+                )
+                .map_err(|error| {
+                    self.reachable_error(
+                        &function.instance,
+                        &format!("bounded gfx942 closure admission failed: {error}"),
+                        None,
+                    )
+                })?;
+                if self.verbose {
+                    eprintln!(
+                        "[collector] gfx942 closure profile: {} environment(s), {} static call(s), identity {}",
+                        closure_plan.environments().len(),
+                        closure_plan.calls().len(),
+                        encode_lower_hex(&closure_plan.identity()),
+                    );
+                }
+            }
             let dead_branches =
                 crate::monomorphization_dead::CompilerDeadBranchObservationV1::observe(
                     self.tcx,
