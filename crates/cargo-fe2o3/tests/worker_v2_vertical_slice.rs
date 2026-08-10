@@ -5,6 +5,7 @@ use std::io::{self, IoSlice, Read, Write};
 use std::mem::MaybeUninit;
 use std::os::fd::{AsFd, AsRawFd};
 use std::os::linux::net::SocketAddrExt;
+use std::os::unix::fs::MetadataExt;
 use std::os::unix::net::{SocketAddr, UnixListener};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -28,21 +29,26 @@ include!("../../fe2o3-hsaco-finalize/tests/fixtures/worker_v2_hsaco_test_support
 
 const WORKER_ID: &str = "cargo-fe2o3-fixture-worker-v1";
 const CAPABILITY_BROKER_ENV: &str = "FE2O3_CAPABILITY_BROKER_V1";
-const REQUEST_MAGIC: &[u8] = b"FE2O3-CARGO-CAPABILITY-BROKER-V1\0";
+const REQUEST_MAGIC: &[u8] = b"FE2O3-CARGO-CAPABILITY-BROKER-V2\0";
+const S09_REQUEST_MAGIC: &[u8] = b"FE2O3-CARGO-CAPABILITY-BROKER-09\0";
+const REQUEST_AUTH_DOMAIN: &[u8] = b"FE2O3/CAPABILITY-BROKER/REQUEST-AUTH/V2\0";
+const RESPONSE_AUTH_DOMAIN: &[u8] = b"FE2O3/CAPABILITY-BROKER/RESPONSE-AUTH/V2\0";
+const REQUEST_BYTES: usize = REQUEST_MAGIC.len() + 16 + 1 + 32 + 32 + 32;
+const RESPONSE_BYTES: usize = 33;
 const BUILD_SESSION_BYTES: [u8; 16] = [0x11; 16];
 static NEXT_TEST: AtomicU64 = AtomicU64::new(1);
 
 struct TestCapabilityBroker {
-    endpoint: String,
+    route: String,
     stop: Arc<std::sync::atomic::AtomicBool>,
     worker: Option<thread::JoinHandle<io::Result<()>>>,
 }
 
 impl TestCapabilityBroker {
-    fn start(artifact_dir: &Path) -> io::Result<Self> {
+    fn start(artifact_dir: &Path, config: Option<&Path>) -> io::Result<Self> {
         let endpoint = random_broker_endpoint()?;
         let address =
-            SocketAddr::from_abstract_name(format!("fe2o3-cap-v1-{endpoint}").as_bytes())?;
+            SocketAddr::from_abstract_name(format!("fe2o3-cap-v2-{endpoint}").as_bytes())?;
         let listener = UnixListener::bind_addr(&address)?;
         listener.set_nonblocking(true)?;
         let backend = sealed_test_backend()?;
@@ -54,35 +60,87 @@ impl TestCapabilityBroker {
             )
             .map_err(io::Error::from)?,
         );
+        let pinned_cargo = File::open(env!("CARGO_BIN_EXE_cargo-fe2o3"))?;
+        let secret = random_bytes()?;
+        let config_identity = config.map(worker_config_identity).transpose()?;
+        let s09 = config.is_some_and(config_selects_s09);
+        let peer_executable = std::env::current_exe()?;
+        let peer_metadata = fs::metadata(&peer_executable)?;
+        let peer_sha256: [u8; 32] = Sha256::digest(fs::read(&peer_executable)?).into();
+        let peer_pid = std::process::id();
+        let peer_start_time = process_start_time_ticks(peer_pid)?;
+        let route = format!(
+            "fe2o3-capability-route-v2:{endpoint}:{}:{}:{}:{}:{peer_pid}:{peer_start_time}:{:x}:{:x}:{:x}:{}",
+            hex(&secret),
+            if s09 { "s09" } else { "ordinary" },
+            config_identity.map_or_else(|| "-".to_owned(), |identity| hex(&identity)),
+            unsafe { libc::geteuid() },
+            peer_metadata.dev(),
+            peer_metadata.ino(),
+            peer_metadata.mode(),
+            hex(&peer_sha256),
+        );
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let worker_stop = Arc::clone(&stop);
         let worker = thread::spawn(move || {
             while !worker_stop.load(Ordering::Acquire) {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
-                        stream.set_read_timeout(Some(Duration::from_secs(2)))?;
-                        let mut request = vec![0_u8; REQUEST_MAGIC.len() + 16];
+                        stream.set_read_timeout(Some(Duration::from_secs(30)))?;
+                        let mut request = vec![0_u8; REQUEST_BYTES];
                         stream.read_exact(&mut request)?;
-                        let mut expected = REQUEST_MAGIC.to_vec();
+                        let challenge_start = REQUEST_MAGIC.len() + 16 + 1 + 32;
+                        let challenge: [u8; 32] = request[challenge_start..challenge_start + 32]
+                            .try_into()
+                            .unwrap();
+                        let mut expected = if s09 {
+                            S09_REQUEST_MAGIC.to_vec()
+                        } else {
+                            REQUEST_MAGIC.to_vec()
+                        };
                         expected.extend_from_slice(&BUILD_SESSION_BYTES);
+                        match config_identity {
+                            Some(identity) => {
+                                expected.push(1);
+                                expected.extend_from_slice(&identity);
+                            }
+                            None => {
+                                expected.push(0);
+                                expected.extend_from_slice(&[0; 32]);
+                            }
+                        }
+                        expected.extend_from_slice(&challenge);
+                        let request_auth = keyed_digest(REQUEST_AUTH_DOMAIN, &secret, &[&expected]);
+                        expected.extend_from_slice(&request_auth);
                         if request != expected {
                             return Err(io::Error::new(
                                 io::ErrorKind::PermissionDenied,
                                 "test broker request did not match the build session",
                             ));
                         }
-                        let descriptors = [backend.as_fd(), artifact.as_fd()];
-                        let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(2))];
+                        let mut descriptors = vec![backend.as_fd(), artifact.as_fd()];
+                        if s09 {
+                            descriptors.push(pinned_cargo.as_fd());
+                        }
+                        let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(3))];
                         let mut ancillary = SendAncillaryBuffer::new(&mut space);
                         assert!(ancillary.push(SendAncillaryMessage::ScmRights(&descriptors)));
+                        let response_auth = keyed_digest(
+                            RESPONSE_AUTH_DOMAIN,
+                            &secret,
+                            &[&challenge, &request_auth],
+                        );
+                        let mut response = [0_u8; RESPONSE_BYTES];
+                        response[0] = 1;
+                        response[1..].copy_from_slice(&response_auth);
                         let sent = sendmsg(
                             &stream,
-                            &[IoSlice::new(&[1])],
+                            &[IoSlice::new(&response)],
                             &mut ancillary,
                             SendFlags::NOSIGNAL,
                         )
                         .map_err(io::Error::from)?;
-                        if sent != 1 {
+                        if sent != response.len() {
                             return Err(io::Error::new(
                                 io::ErrorKind::WriteZero,
                                 "test broker response was truncated",
@@ -99,14 +157,14 @@ impl TestCapabilityBroker {
             Ok(())
         });
         Ok(Self {
-            endpoint,
+            route,
             stop,
             worker: Some(worker),
         })
     }
 
-    fn endpoint(&self) -> &str {
-        &self.endpoint
+    fn route(&self) -> &str {
+        &self.route
     }
 }
 
@@ -120,9 +178,112 @@ impl Drop for TestCapabilityBroker {
 }
 
 fn random_broker_endpoint() -> io::Result<String> {
+    Ok(hex(&random_bytes()?))
+}
+
+fn random_bytes() -> io::Result<[u8; 32]> {
     let mut bytes = [0_u8; 32];
     File::open("/dev/urandom")?.read_exact(&mut bytes)?;
-    Ok(hex(&bytes))
+    Ok(bytes)
+}
+
+fn keyed_digest(domain: &[u8], secret: &[u8; 32], fields: &[&[u8]]) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update((domain.len() as u64).to_le_bytes());
+    digest.update(domain);
+    digest.update((secret.len() as u64).to_le_bytes());
+    digest.update(secret);
+    for field in fields {
+        digest.update((field.len() as u64).to_le_bytes());
+        digest.update(field);
+    }
+    digest.finalize().into()
+}
+
+fn process_start_time_ticks(pid: u32) -> io::Result<u64> {
+    let bytes = fs::read(format!("/proc/{pid}/stat"))?;
+    let close = bytes
+        .iter()
+        .rposition(|byte| *byte == b')')
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing stat command"))?;
+    bytes[close + 1..]
+        .split(u8::is_ascii_whitespace)
+        .filter(|field| !field.is_empty())
+        .nth(19)
+        .and_then(|value| std::str::from_utf8(value).ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value != 0)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing stat start time"))
+}
+
+fn update_worker_identity(digest: &mut Sha256, bytes: &[u8]) {
+    digest.update((bytes.len() as u64).to_le_bytes());
+    digest.update(bytes);
+}
+
+fn worker_config_identity(path: &Path) -> io::Result<[u8; 32]> {
+    let manifest = fs::read(path)?;
+    let value: JsonValue = serde_json::from_slice(&manifest)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    let worker = &value["worker"];
+    let worker_bytes = fs::read(worker["path"].as_str().unwrap())?;
+    let mut digest = Sha256::new();
+    update_worker_identity(&mut digest, b"fe2o3-worker-v2-transitive-config-v1");
+    update_worker_identity(&mut digest, &manifest);
+    update_worker_identity(&mut digest, &Sha256::digest(&worker_bytes));
+    update_worker_identity(&mut digest, &(worker_bytes.len() as u64).to_le_bytes());
+    update_worker_identity(
+        &mut digest,
+        worker["worker_build_identity"].as_str().unwrap().as_bytes(),
+    );
+    update_worker_identity(
+        &mut digest,
+        worker["llvm_build_identity"].as_str().unwrap().as_bytes(),
+    );
+    let providers = value["providers"].as_array().unwrap();
+    update_worker_identity(&mut digest, &(providers.len() as u64).to_le_bytes());
+    for provider in providers {
+        let kind = match provider["kind"].as_str().unwrap() {
+            "llvm-bitcode" => 1,
+            "amdgpu-relocatable" => 2,
+            "llvm-text-ir" => 3,
+            kind => panic!("unexpected test provider kind {kind}"),
+        };
+        let bytes = fs::read(provider["path"].as_str().unwrap())?;
+        update_worker_identity(&mut digest, &[kind]);
+        update_worker_identity(&mut digest, &Sha256::digest(&bytes));
+        update_worker_identity(&mut digest, &(bytes.len() as u64).to_le_bytes());
+        update_worker_identity(&mut digest, &bytes);
+    }
+    if let Some(inputs) = value.get("load_envelope_inputs") {
+        update_worker_identity(&mut digest, &[1]);
+        let digest_bytes = decode_hex_32(inputs["sha256"].as_str().unwrap())?;
+        update_worker_identity(&mut digest, &digest_bytes);
+        update_worker_identity(
+            &mut digest,
+            &inputs["byte_len"].as_u64().unwrap().to_le_bytes(),
+        );
+    }
+    Ok(digest.finalize().into())
+}
+
+fn decode_hex_32(value: &str) -> io::Result<[u8; 32]> {
+    if value.len() != 64 {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "bad digest"));
+    }
+    let mut decoded = [0_u8; 32];
+    for (index, byte) in decoded.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    }
+    Ok(decoded)
+}
+
+fn config_selects_s09(path: &Path) -> bool {
+    serde_json::from_slice::<JsonValue>(&fs::read(path).unwrap())
+        .unwrap()
+        .get("source_debug_profile")
+        .is_some()
 }
 
 fn sealed_test_backend() -> io::Result<File> {
@@ -292,6 +453,21 @@ fn write_config(directory: &TestDirectory, selects_invocation: bool) -> PathBuf 
     write_config_with_output(directory, selects_invocation, None)
 }
 
+fn write_s09_config(directory: &TestDirectory) -> PathBuf {
+    let path = write_config_with_output_and_cov(directory, true, None, 6, false);
+    let mut value: JsonValue = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    value["source_debug_profile"] = JsonValue::String("s09-alpha-gfx942-o0-v1".to_owned());
+    for option in value["link_options"].as_array_mut().unwrap() {
+        match option["name"].as_str().unwrap() {
+            "opt-level" => option["value"] = JsonValue::String("0".to_owned()),
+            "strip-debug" => option["value"] = JsonValue::String("false".to_owned()),
+            _ => {}
+        }
+    }
+    fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+    path
+}
+
 fn write_config_with_output(
     directory: &TestDirectory,
     selects_invocation: bool,
@@ -395,7 +571,7 @@ fn wrapper_command_with_options(
     fs::write(&source, "fn main() {}\n").unwrap();
     let artifact_dir = directory.0.join("artifacts");
     fs::create_dir_all(&artifact_dir).unwrap();
-    let broker = TestCapabilityBroker::start(&artifact_dir).unwrap();
+    let broker = TestCapabilityBroker::start(&artifact_dir, config).unwrap();
 
     let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
     command
@@ -407,7 +583,7 @@ fn wrapper_command_with_options(
             "-Zcodegen-backend=/proc/./self/fd/198\x1f-Zmir-enable-passes=-JumpThreading\x1f--cfg\x1ffe2o3_codegen_generation=\"11111111111111111111111111111111\"",
         )
         .env("FE2O3_BUILD_SESSION_V1", "11".repeat(16))
-        .env(CAPABILITY_BROKER_ENV, broker.endpoint())
+        .env(CAPABILITY_BROKER_ENV, broker.route())
         .env("FE2O3_CODEGEN_PIPELINE", "kernel-ir-worker-v2")
         .env("FE2O3_FIXTURE_RUSTC_MARKER", directory.0.join("spawned"))
         .env("FE2O3_FIXTURE_RUSTC_MODE", rustc_mode)
@@ -419,7 +595,10 @@ fn wrapper_command_with_options(
         .arg(&source)
         .arg("-Cmetadata=worker-v2-test");
     if let Some(config) = config {
-        command.env("FE2O3_WORKER_V2_CONFIG_V2", config);
+        command.env("FE2O3_WORKER_V2_CONFIG_V2", config).env(
+            "FE2O3_WORKER_V2_EXPECTED_ID_V1",
+            hex(&worker_config_identity(config).unwrap()),
+        );
     }
     if cov6 {
         command.env("FE2O3_TEST_WORKER_V2_COV6", "1");
@@ -1141,6 +1320,43 @@ fn missing_or_mismeasured_configuration_prevents_rustc_spawn() {
         stderr(&mismatched).contains("Worker V2 setup failed"),
         "{}",
         stderr(&mismatched)
+    );
+}
+
+#[test]
+fn s09_environment_stripping_cannot_downgrade_the_prepared_broker() {
+    let directory = TestDirectory::new();
+    let config = write_s09_config(&directory);
+    let (mut command, _broker) = wrapper_command(&directory, Some(&config), "publish");
+    command
+        .env_remove("FE2O3_CODEGEN_PIPELINE")
+        .env_remove("FE2O3_WORKER_V2_CONFIG_V2")
+        .env_remove("FE2O3_WORKER_V2_EXPECTED_ID_V1");
+
+    let output = command.output().unwrap();
+    assert!(!output.status.success());
+    assert!(!directory.0.join("spawned").exists());
+    assert!(
+        stderr(&output).contains("does not match the prepared profile/config identity"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn s09_requires_the_outer_prepared_worker_identity() {
+    let directory = TestDirectory::new();
+    let config = write_s09_config(&directory);
+    let (mut command, _broker) = wrapper_command(&directory, Some(&config), "publish");
+    command.env_remove("FE2O3_WORKER_V2_EXPECTED_ID_V1");
+
+    let output = command.output().unwrap();
+    assert!(!output.status.success());
+    assert!(!directory.0.join("spawned").exists());
+    assert!(
+        stderr(&output).contains("S09 Worker V2 configuration requires"),
+        "{}",
+        stderr(&output)
     );
 }
 
