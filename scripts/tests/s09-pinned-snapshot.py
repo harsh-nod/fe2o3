@@ -23,6 +23,7 @@ from s09_pinned_snapshot import (  # noqa: E402
     REQUIRED_SEALS,
     SnapshotError,
     create_sealed_snapshot,
+    export_sealed_snapshot,
     verify_sealed_path,
 )
 
@@ -272,6 +273,55 @@ assert completed.returncode == 0
                 second.close()
         finally:
             first.close()
+
+    def test_export_retains_exact_read_only_host_bytes(self) -> None:
+        host = self.directory / "host"
+        shutil.copyfile("/bin/true", host)
+        host.chmod(0o700)
+        snapshot = create_sealed_snapshot("host", host, executable=True)
+        retained = self.directory / "retained-host.bin"
+        try:
+            export_sealed_snapshot(snapshot, retained)
+            self.assertEqual(retained.read_bytes(), host.read_bytes())
+            self.assertEqual(retained.stat().st_mode & 0o777, 0o400)
+            self.assertEqual(retained.stat().st_nlink, 1)
+        finally:
+            snapshot.close()
+
+    def test_export_rejects_existing_destination_substitution(self) -> None:
+        source = self.write("host", b"exact host bytes", 0o700)
+        snapshot = create_sealed_snapshot("host", source, executable=True)
+        destination = self.write("retained-host.bin", b"substitute")
+        try:
+            with self.assertRaisesRegex(SnapshotError, "must not already exist"):
+                export_sealed_snapshot(snapshot, destination)
+            self.assertEqual(destination.read_bytes(), b"substitute")
+        finally:
+            snapshot.close()
+
+    def test_cli_export_rejects_source_path_swap_and_keeps_snapshot(self) -> None:
+        source = self.write("host", b"exact retained host", 0o700)
+        retained = self.directory / "retained-host.bin"
+        completed = subprocess.run(
+            [
+                str(PINNER),
+                "--input",
+                f"host={source}",
+                "--executable",
+                "host",
+                "--export",
+                f"host={retained}",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        replacement = self.write("replacement-host", b"substitute retained", 0o700)
+        replacement.replace(source)
+        self.assertEqual(retained.read_bytes(), b"exact retained host")
+        self.assertEqual(retained.stat().st_mode & 0o777, 0o400)
 
 
 if __name__ == "__main__":

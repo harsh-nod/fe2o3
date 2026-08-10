@@ -166,6 +166,40 @@ ARTIFACT_FACT_FIELDS = (
     "kernel",
 )
 HARDWARE_FACT_FIELDS = ("format", "object_format", "sha256", "build_id")
+DEBUG_ARCHIVE_MANIFEST_FIELDS = (
+    "format",
+    "profile",
+    "result",
+    "target",
+    "optimization",
+    "rocgdb",
+    "llvm_dwarfdump",
+    "llvm_readobj",
+    "llvm_readelf",
+    "hsaco_sha256",
+    "hardware_test_sha256",
+    "hardware_test_build_id",
+    "run_nonce",
+    "checker_sha256",
+    "artifact_facts_sha256",
+    "hardware_facts_sha256",
+    "dwarf_normalized_sha256",
+    "rocgdb_normalized_sha256",
+    "rocgdb_raw_sha256",
+    "rocgdb_raw_retained",
+    "dwarf_verify_status",
+    "dwarf_dump_status",
+    "dwarf_normalize_status",
+    "dwarf_check_status",
+    "artifact_read_status",
+    "artifact_check_status",
+    "hardware_read_status",
+    "hardware_check_status",
+    "rocgdb_status",
+    "rocgdb_normalize_status",
+    "rocgdb_check_status",
+)
+DEBUG_ARCHIVE_STATUS_FIELDS = DEBUG_ARCHIVE_MANIFEST_FIELDS[-11:]
 
 
 class CheckError(Exception):
@@ -714,12 +748,11 @@ def parse_canonical_facts(
         raise CheckError(f"{context} field count changed")
     facts: list[tuple[str, str]] = []
     for expected_field, line in zip(expected_fields, lines, strict=True):
-        fields = line.split("=")
-        if len(fields) != 2 or fields[0] != expected_field or not fields[1]:
+        field, separator, value = line.partition("=")
+        if not separator or field != expected_field or not value:
             raise CheckError(
                 f"{context} field {expected_field!r} is absent or out of order"
             )
-        value = fields[1]
         if value != value.strip() or any(ord(character) < 0x20 for character in value):
             raise CheckError(f"{context} field {expected_field!r} is noncanonical")
         facts.append((expected_field, value))
@@ -861,7 +894,7 @@ def hardware_facts(text: str, sha256: str) -> tuple[str, str]:
 
 def check_rocgdb(
     text: str, hsaco_sha256: str, hardware_sha256: str, build_id: str
-) -> None:
+) -> str:
     if not HEX_SHA256.fullmatch(hsaco_sha256) or not HEX_SHA256.fullmatch(
         hardware_sha256
     ):
@@ -1067,6 +1100,61 @@ def check_rocgdb(
     ):
         if rejected.lower() in text.lower():
             raise CheckError(f"ROCgdb transcript contains failure marker {rejected!r}")
+    return run_nonce
+
+
+def parse_debug_archive_manifest(
+    data: bytes,
+    protected_manifest: dict[str, str],
+    observed_digests: dict[str, str],
+) -> dict[str, str]:
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise CheckError("debug archive manifest is not UTF-8") from error
+    values = dict(
+        parse_canonical_facts(
+            text, DEBUG_ARCHIVE_MANIFEST_FIELDS, "debug archive manifest"
+        )
+    )
+    expected_values = {
+        "format": "fe2o3-s09-debug-archive-v2",
+        "profile": "s09-alpha-gfx942-o0-v1",
+        "result": "passed",
+        "target": "gfx942:xnack-",
+        "optimization": "O0",
+        "rocgdb": "/opt/rocm/bin/rocgdb-py_3.12",
+        "llvm_dwarfdump": "/opt/rocm/llvm/bin/llvm-dwarfdump",
+        "llvm_readobj": "/opt/rocm/llvm/bin/llvm-readobj",
+        "llvm_readelf": (
+            "/opt/rocm/llvm/bin/llvm-readobj --elf-output-style=GNU"
+        ),
+        "hsaco_sha256": observed_digests["hsaco_sha256"],
+        "hardware_test_sha256": observed_digests["host_executable_sha256"],
+        "hardware_test_build_id": protected_manifest["host_executable_build_id"],
+        "artifact_facts_sha256": observed_digests["artifact_facts_sha256"],
+        "hardware_facts_sha256": observed_digests["hardware_facts_sha256"],
+        "dwarf_normalized_sha256": observed_digests["dwarf_normalized_sha256"],
+        "rocgdb_normalized_sha256": observed_digests[
+            "rocgdb_normalized_sha256"
+        ],
+        "rocgdb_raw_retained": "false",
+    }
+    for field, expected in expected_values.items():
+        if values[field] != expected:
+            raise CheckError(f"debug archive manifest field {field!r} changed")
+    for field in DEBUG_ARCHIVE_STATUS_FIELDS:
+        if values[field] != "0":
+            raise CheckError(f"debug archive manifest status {field!r} did not pass")
+    for field in ("run_nonce", "checker_sha256", "rocgdb_raw_sha256"):
+        if not HEX_SHA256.fullmatch(values[field]) or values[field] == "0" * 64:
+            raise CheckError(
+                f"debug archive manifest field {field!r} is not a nonzero SHA-256 value"
+            )
+    checker_path = pathlib.Path(__file__).resolve(strict=True)
+    if values["checker_sha256"] != file_sha256(checker_path):
+        raise CheckError("debug archive manifest does not bind this checker image")
+    return values
 
 
 def serialize_ordered_fields(
@@ -1334,6 +1422,7 @@ def check_evidence_bundle(
     manifest: dict[str, str],
     hsaco_path: pathlib.Path,
     host_executable_path: pathlib.Path,
+    debug_archive_manifest_path: pathlib.Path,
     artifact_path: pathlib.Path,
     hardware_path: pathlib.Path,
     dwarf_path: pathlib.Path,
@@ -1343,7 +1432,8 @@ def check_evidence_bundle(
 ) -> None:
     inputs = (
         ("hsaco", hsaco_path, False),
-        ("host", host_executable_path, True),
+        ("host", host_executable_path, False),
+        ("debug_archive_manifest", debug_archive_manifest_path, False),
         ("artifact_facts", artifact_path, False),
         ("hardware_facts", hardware_path, False),
         ("dwarf", dwarf_path, False),
@@ -1354,6 +1444,9 @@ def check_evidence_bundle(
             digest_bindings = {
                 "hsaco_sha256": snapshots["hsaco"].sha256,
                 "host_executable_sha256": snapshots["host"].sha256,
+                "debug_archive_manifest_sha256": snapshots[
+                    "debug_archive_manifest"
+                ].sha256,
                 "artifact_facts_sha256": snapshots["artifact_facts"].sha256,
                 "hardware_facts_sha256": snapshots["hardware_facts"].sha256,
                 "dwarf_normalized_sha256": snapshots["dwarf"].sha256,
@@ -1363,6 +1456,11 @@ def check_evidence_bundle(
                 if observed != manifest[digest_field]:
                     raise CheckError(f"evidence object does not match {digest_field!r}")
             hsaco = snapshot_bytes(snapshots["hsaco"])
+            debug_archive = parse_debug_archive_manifest(
+                snapshot_bytes(snapshots["debug_archive_manifest"]),
+                manifest,
+                digest_bindings,
+            )
             artifact = snapshot_text(snapshots["artifact_facts"])
             hardware = snapshot_text(snapshots["hardware_facts"])
             dwarf = snapshot_text(snapshots["dwarf"])
@@ -1373,12 +1471,16 @@ def check_evidence_bundle(
                     "authoritative evidence inputs must already be canonical normalized files"
                 )
             check_dwarf(dwarf)
-            check_rocgdb(
+            observed_run_nonce = check_rocgdb(
                 rocgdb,
                 manifest["hsaco_sha256"],
                 manifest["host_executable_sha256"],
                 manifest["host_executable_build_id"],
             )
+            if observed_run_nonce != debug_archive["run_nonce"]:
+                raise CheckError(
+                    "debug archive run nonce does not bind the ROCgdb transcript"
+                )
             check_artifact_fact_schema(artifact)
             check_hardware_fact_schema(
                 hardware,
@@ -1408,6 +1510,7 @@ def check_evidence_bundle(
 def check_production(
     hsaco_path: pathlib.Path,
     host_executable_path: pathlib.Path,
+    debug_archive_manifest_path: pathlib.Path,
     artifact_path: pathlib.Path,
     hardware_path: pathlib.Path,
     dwarf_path: pathlib.Path,
@@ -1424,6 +1527,7 @@ def check_production(
         manifest,
         hsaco_path,
         host_executable_path,
+        debug_archive_manifest_path,
         artifact_path,
         hardware_path,
         dwarf_path,
@@ -1436,6 +1540,7 @@ def check_fixture(
     expected_manifest_sha256: str,
     hsaco_path: pathlib.Path,
     host_executable_path: pathlib.Path,
+    debug_archive_manifest_path: pathlib.Path,
     artifact_path: pathlib.Path,
     hardware_path: pathlib.Path,
     dwarf_path: pathlib.Path,
@@ -1455,6 +1560,7 @@ def check_fixture(
         manifest,
         hsaco_path,
         host_executable_path,
+        debug_archive_manifest_path,
         artifact_path,
         hardware_path,
         dwarf_path,
@@ -1469,6 +1575,7 @@ def check_capability(
     expected_manifest_sha256: str,
     hsaco_path: pathlib.Path,
     host_executable_path: pathlib.Path,
+    debug_archive_manifest_path: pathlib.Path,
     artifact_path: pathlib.Path,
     hardware_path: pathlib.Path,
     dwarf_path: pathlib.Path,
@@ -1486,6 +1593,7 @@ def check_capability(
         manifest,
         hsaco_path,
         host_executable_path,
+        debug_archive_manifest_path,
         artifact_path,
         hardware_path,
         dwarf_path,
@@ -1502,6 +1610,9 @@ def parse_args() -> argparse.Namespace:
     def add_evidence_arguments(command: argparse.ArgumentParser) -> None:
         command.add_argument("--hsaco", required=True, type=pathlib.Path)
         command.add_argument("--host-executable", required=True, type=pathlib.Path)
+        command.add_argument(
+            "--debug-archive-manifest", required=True, type=pathlib.Path
+        )
         command.add_argument("--artifact-facts", required=True, type=pathlib.Path)
         command.add_argument("--hardware-facts", required=True, type=pathlib.Path)
         command.add_argument("--dwarf", required=True, type=pathlib.Path)
@@ -1591,6 +1702,7 @@ def main() -> int:
         check_production(
             args.hsaco,
             args.host_executable,
+            args.debug_archive_manifest,
             args.artifact_facts,
             args.hardware_facts,
             args.dwarf,
@@ -1603,6 +1715,7 @@ def main() -> int:
             args.expected_manifest_sha256,
             args.hsaco,
             args.host_executable,
+            args.debug_archive_manifest,
             args.artifact_facts,
             args.hardware_facts,
             args.dwarf,
@@ -1617,6 +1730,7 @@ def main() -> int:
             args.expected_manifest_sha256,
             args.hsaco,
             args.host_executable,
+            args.debug_archive_manifest,
             args.artifact_facts,
             args.hardware_facts,
             args.dwarf,

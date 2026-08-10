@@ -56,6 +56,13 @@ readonly SOURCE_TREE="$5"
   --expected-tree "${SOURCE_TREE}" >/dev/null
 
 readonly ARCHIVE="${EVIDENCE}/rocgdb-archive"
+readonly RETAINED_HOST="${EVIDENCE}/s09-host-executable.bin"
+"${PINNER}" \
+  --input "host=${HARDWARE_TEST}" \
+  --executable host \
+  --export "host=${RETAINED_HOST}"
+[[ "$(stat -c '%u:%a' -- "${RETAINED_HOST}")" == "${EUID}:400" ]] ||
+  fail "retained host artifact must be caller-owned with mode 0400"
 "${RUNNER}" --pinned-profile "${HSACO}" "${HARDWARE_TEST}" "${ARCHIVE}"
 
 readonly ARCHIVE_MANIFEST="${ARCHIVE}/manifest.txt"
@@ -74,11 +81,15 @@ for evidence_file in \
   [[ -f "${evidence_file}" && ! -L "${evidence_file}" ]] ||
     fail "runner did not produce required evidence file ${evidence_file}"
 done
+[[ -f "${RETAINED_HOST}" && ! -L "${RETAINED_HOST}" ]] ||
+  fail "retained host artifact is missing or not a regular file"
 
 HSACO_SHA256="$(hash_file "${HSACO}")"
-HOST_SHA256="$(archive_value hardware_test_sha256 "${ARCHIVE_MANIFEST}")"
+HOST_SHA256="$(hash_file "${RETAINED_HOST}")"
 HOST_BUILD_ID="$(archive_value hardware_test_build_id "${ARCHIVE_MANIFEST}")"
 readonly HSACO_SHA256 HOST_SHA256 HOST_BUILD_ID
+[[ "$(archive_value hardware_test_sha256 "${ARCHIVE_MANIFEST}")" == "${HOST_SHA256}" ]] ||
+  fail "retained host artifact does not match the executed image"
 
 "${CHECKER}" identity-fields --hsaco "${HSACO}" --output "${IDENTITY_FIELDS}"
 
@@ -105,7 +116,8 @@ readonly MANIFEST_V2_SHA256
   --manifest "${MANIFEST_V2}" \
   --expected-manifest-sha256 "${MANIFEST_V2_SHA256}" \
   --hsaco "${HSACO}" \
-  --host-executable "${HARDWARE_TEST}" \
+  --host-executable "${RETAINED_HOST}" \
+  --debug-archive-manifest "${ARCHIVE_MANIFEST}" \
   --artifact-facts "${ARTIFACT_FACTS}" \
   --hardware-facts "${HARDWARE_FACTS}" \
   --dwarf "${DWARF_NORMALIZED}" \

@@ -11,6 +11,7 @@ import hashlib
 import os
 import pathlib
 import re
+import secrets
 import select
 import stat
 import subprocess
@@ -383,11 +384,125 @@ def verify_sealed_path(
         os.close(descriptor)
 
 
+def export_sealed_snapshot(snapshot: SealedSnapshot, destination: pathlib.Path) -> None:
+    if not destination.is_absolute():
+        raise SnapshotError("snapshot export destination must be absolute")
+    parent = destination.parent
+    try:
+        parent_metadata = parent.stat(follow_symlinks=False)
+        canonical_parent = parent.resolve(strict=True)
+    except OSError as error:
+        raise SnapshotError(f"cannot inspect snapshot export parent: {error}") from error
+    if (
+        not stat.S_ISDIR(parent_metadata.st_mode)
+        or canonical_parent != parent
+        or parent_metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(parent_metadata.st_mode) != 0o700
+    ):
+        raise SnapshotError(
+            "snapshot export parent must be canonical, caller-owned, and mode 0700"
+        )
+    if destination.exists() or destination.is_symlink():
+        raise SnapshotError("snapshot export destination must not already exist")
+
+    temporary = parent / (
+        f".{destination.name}.tmp-{os.getpid()}-{secrets.token_hex(16)}"
+    )
+    descriptor = -1
+    linked = False
+    try:
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+        digest = hashlib.sha256()
+        offset = 0
+        while offset < snapshot.size:
+            chunk = os.pread(
+                snapshot.descriptor,
+                min(COPY_CHUNK_BYTES, snapshot.size - offset),
+                offset,
+            )
+            if not chunk:
+                raise SnapshotError("sealed snapshot became truncated during export")
+            digest.update(chunk)
+            written = 0
+            while written < len(chunk):
+                count = os.write(descriptor, chunk[written:])
+                if count <= 0:
+                    raise SnapshotError("snapshot export write made no progress")
+                written += count
+            offset += len(chunk)
+        if offset != snapshot.size or digest.hexdigest() != snapshot.sha256:
+            raise SnapshotError("snapshot export does not match the sealed source")
+        os.fsync(descriptor)
+        os.fchmod(descriptor, 0o400)
+        os.link(temporary, destination, follow_symlinks=False)
+        linked = True
+        os.unlink(temporary)
+        exported_identity = FileIdentity.from_stat(os.fstat(descriptor))
+        directory = os.open(parent, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0))
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+        reopened = os.open(
+            destination,
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
+        try:
+            final_identity = FileIdentity.from_stat(os.fstat(reopened))
+            if (
+                final_identity != exported_identity
+                or final_identity.links != 1
+                or stat.S_IMODE(final_identity.mode) != 0o400
+                or _digest_source(reopened, snapshot.size, destination)
+                != snapshot.sha256
+            ):
+                raise SnapshotError("retained snapshot export failed identity checks")
+        finally:
+            os.close(reopened)
+    except OSError as error:
+        raise SnapshotError(f"cannot export sealed snapshot: {error}") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+        if sys.exc_info()[0] is not None and linked:
+            try:
+                destination.unlink()
+            except FileNotFoundError:
+                pass
+
+
+def _parse_export(value: str) -> tuple[str, pathlib.Path]:
+    name, separator, raw_path = value.partition("=")
+    if (
+        not separator
+        or not name
+        or not raw_path
+        or not name.replace("_", "a").isalnum()
+    ):
+        raise SnapshotError(f"snapshot export must be NAME=PATH: {value}")
+    return name, pathlib.Path(raw_path)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", action="append", default=[])
     parser.add_argument("--executable", action="append", default=[])
     parser.add_argument("--verify-only", action="store_true")
+    parser.add_argument("--export", action="append", default=[])
     parser.add_argument("command", nargs=argparse.REMAINDER)
     return parser.parse_args()
 
@@ -400,11 +515,26 @@ def main() -> int:
         raise SnapshotError("at least one snapshot input is required")
     if not executable_names.issubset(name for name, _, _ in inputs):
         raise SnapshotError("every executable name must identify a snapshot input")
+    exports = [_parse_export(value) for value in args.export]
     if args.verify_only:
+        if exports:
+            raise SnapshotError("verify-only mode does not accept exports")
         if args.command:
             raise SnapshotError("verify-only mode does not accept a command")
         for name, path, executable in inputs:
             verify_sealed_path(name, path, executable=executable)
+        return 0
+    if exports:
+        if args.command:
+            raise SnapshotError("snapshot export mode does not accept a command")
+        if len({name for name, _ in exports}) != len(exports):
+            raise SnapshotError("snapshot export names must be unique")
+        input_names = {name for name, _, _ in inputs}
+        if any(name not in input_names for name, _ in exports):
+            raise SnapshotError("every export must identify a snapshot input")
+        with sealed_snapshots(inputs) as snapshots:
+            for name, destination in exports:
+                export_sealed_snapshot(snapshots[name], destination)
         return 0
     if not args.command or args.command[0] != "--" or len(args.command) == 1:
         raise SnapshotError("snapshot command must follow --")
