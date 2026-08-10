@@ -73,6 +73,7 @@ mod general_genuine {
         }
     }
 
+    #[cfg(not(feature = "s09-alpha-only"))]
     #[kernel(
         typed,
         namespace = "1b3f523833ae188d124b710c48983f3911bd8be1ea82408ffc78121e843e6271"
@@ -90,10 +91,13 @@ mod general_genuine {
             alpha_gpu::Marker,
         >()
         .expect("backend-issued alpha semantic witness");
-        fe2o3_host::__generated::validate_compiler_generated_semantic_witness_v1::<
-            zeta_gpu::Marker,
-        >()
-        .expect("backend-issued zeta semantic witness");
+        #[cfg(not(feature = "s09-alpha-only"))]
+        {
+            fe2o3_host::__generated::validate_compiler_generated_semantic_witness_v1::<
+                zeta_gpu::Marker,
+            >()
+            .expect("backend-issued zeta semantic witness");
+        }
     }
 }
 

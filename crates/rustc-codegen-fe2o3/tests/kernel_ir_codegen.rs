@@ -519,6 +519,26 @@ fn assert_published_worker_v2_kernels_with_version(
     bytes
 }
 
+fn assert_only_alpha_is_physically_bound(bytes: &[u8]) {
+    let physical = fe2o3_hsaco::inspect_and_bind_kernel_descriptors(bytes)
+        .expect("bind S09 alpha metadata to its physical entry and descriptor");
+    assert_eq!(physical.inspection().kernels().len(), 1);
+    assert_eq!(physical.inspection().kernels()[0].name(), "alpha");
+    assert_eq!(physical.inspection().kernels()[0].symbol(), "alpha.kd");
+    assert!(
+        physical
+            .inspection()
+            .kernels()
+            .iter()
+            .all(|kernel| kernel.name() != "zeta" && kernel.symbol() != "zeta.kd"),
+        "S09 alpha-only collection must exclude zeta before linking"
+    );
+    assert_eq!(physical.bindings().len(), 1);
+    let alpha_binding = physical.bindings()[0];
+    assert_eq!(alpha_binding.kernel_index(), 0);
+    assert_ne!(alpha_binding.entry_size(), 0);
+}
+
 fn export_alpha_zeta_evidence(bytes: &[u8]) {
     let Some(output) = std::env::var_os(ALPHA_ZETA_OUTPUT_ENV) else {
         return;
@@ -1057,6 +1077,71 @@ fn worker_v2_general_v3_alpha_zeta_build_links_and_validate_backend_witnesses() 
 }
 
 #[test]
+#[ignore = "requires the configured native LLVM/LLD Worker V2 executable"]
+fn worker_v2_s09_feature_collects_and_links_only_alpha() {
+    let _lock = backend_test_lock();
+    let workspace = workspace();
+    let directory = WorkerV2SourceDirectory::new(&workspace);
+    let source =
+        Path::new("crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs");
+    let worker = PathBuf::from(std::env::var_os("FE2O3_LLVM_LINK_WORKER").expect("Worker V2 path"));
+    let worker_build_identity =
+        std::env::var("FE2O3_LLVM_LINK_WORKER_BUILD_ID").expect("worker build identity");
+    let llvm_build_identity = std::env::var("FE2O3_LLVM_BUILD_ID").expect("LLVM build identity");
+    let config = WorkerV2TestConfig::native_source_for_crate(
+        &directory.0,
+        &workspace,
+        source,
+        ("fe2o3_typed_alias_spoof", 6),
+        &worker,
+        &worker_build_identity,
+        &llvm_build_identity,
+    );
+    let backend = build_codegen_backend(&workspace);
+    let target = directory.0.join("cargo-target");
+    let output = Command::new(env!("CARGO"))
+        .current_dir(&workspace)
+        .args([
+            "run",
+            "--locked",
+            "-p",
+            "cargo-fe2o3",
+            "--",
+            "build",
+            "-p",
+            "fe2o3-typed-alias-spoof",
+            "--features",
+            "s09-alpha-only",
+            "--target-dir",
+        ])
+        .arg(&target)
+        .env("FE2O3_BACKEND", &backend)
+        .env("FE2O3_CODEGEN_PIPELINE", "kernel-ir-worker-v2")
+        .env("FE2O3_TARGET", "gfx942:xnack-")
+        .env("FE2O3_WORKER_V2_CONFIG_V2", &config.0)
+        .output()
+        .expect("build S09 alpha-only collection fixture");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "S09 alpha-only Worker V2 build failed:\n{stderr}"
+    );
+
+    let executable = target.join("debug/fe2o3-typed-alias-spoof");
+    let run = Command::new(&executable)
+        .output()
+        .unwrap_or_else(|error| panic!("run {}: {error}", executable.display()));
+    assert!(
+        run.status.success(),
+        "S09 alpha-only witness validation failed:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let bytes = assert_published_worker_v2_cov6_kernels(&target.join("fe2o3"), &["alpha"]);
+    assert_only_alpha_is_physically_bound(&bytes);
+}
+
+#[test]
 #[ignore = "requires the configured native LLVM/LLD Worker V2 and llvm-dwarfdump"]
 fn worker_v2_s09_alpha_o0_preserves_source_dwarf_in_hsaco() {
     let _lock = backend_test_lock();
@@ -1103,7 +1188,7 @@ fn worker_v2_s09_alpha_o0_preserves_source_dwarf_in_hsaco() {
             "-p",
             "fe2o3-typed-alias-spoof",
             "--features",
-            "general-genuine",
+            "s09-alpha-only",
             "--target-dir",
         ])
         .arg(&target)
@@ -1120,7 +1205,8 @@ fn worker_v2_s09_alpha_o0_preserves_source_dwarf_in_hsaco() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stderr = String::from_utf8(output.stderr).expect("UTF-8 S09 build diagnostics");
-    let bytes = assert_published_worker_v2_cov6_kernels(&target.join("fe2o3"), &["alpha", "zeta"]);
+    let bytes = assert_published_worker_v2_cov6_kernels(&target.join("fe2o3"), &["alpha"]);
+    assert_only_alpha_is_physically_bound(&bytes);
     let section = identity_section_v2(&bytes).expect("one bounded S09 identity section");
     let identity =
         decode_hsaco_identity_claims_v2(&bytes).expect("canonical inert S09 identity claims");
