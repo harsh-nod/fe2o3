@@ -324,10 +324,21 @@ every file before invoking ingestion:
       --expected-target gfx942 \
       --expected-lane mi300x-gfx942-release
 
-Production ingestion rejects mutable filesystems, symlinks, hardlinks,
+The current in-process publisher is **not production-authoritative**. Production
+ingestion fails closed with `production archive publication requires an
+externally protected publisher contract`, even after validating production
+trust and an immutable source. Activation requires a separately provisioned
+publisher identity or service whose destination namespace and content cannot be
+modified by the evidence-producing UID, plus a verifier for that contract.
+That external contract is not present in this repository or on the reviewed
+host.
+
+The inert/test publisher rejects mutable production sources, symlinks,
+hardlinks,
 non-regular entries, missing referenced content, undeclared files or
 directories, test-domain results, identity mismatches, and pre-existing output.
-It traverses with stable directory descriptors and Linux `openat2` using
+It opens the source root component-by-component and traverses it with stable
+directory descriptors and Linux `openat2` using
 `RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_XDEV`. Every file remains open
 from authentication through parsing and copy; immutable state, type, device,
 inode, link count, size, and digest are checked on that exact descriptor.
@@ -335,22 +346,39 @@ Individual files are limited to 256 MiB and the complete source archive to 2
 GiB, with both limits enforced from `fstat` before hashing or copying.
 
 The destination parent is independently opened by an absolute component walk
-that rejects symlinks. Private staging directories, copied files, and the index
-are then created relative to retained parent/staging descriptors. Publication
+that rejects symlinks. One deterministic, byte-bounded staging lease is used
+for each destination/manifest identity; a subsequent run safely removes a
+bounded same-UID lease left by a hard crash instead of accumulating random
+2-GiB trees. Private staging directories, copied files, and the index are then
+created relative to retained parent/staging descriptors. Every copied-file and
+index descriptor remains open through publication and is re-read, re-hashed,
+and re-`fstat`ed immediately before and after rename. Publication
 uses `renameat2(parent_fd, staging_name, parent_fd, destination_name,
-RENAME_NOREPLACE)`, so replacing the pathname of the parent cannot redirect the
-write. Before rename, copied files, the generated index, every created
+RENAME_NOREPLACE)`. The requested parent path must still resolve to the held
+parent inode before rename; the published child is reopened relative to both
+the held and freshly resolved parent and must match the staging inode. A parent
+path replacement therefore fails rather than publishing into a detached
+directory. Before rename, copied files, the generated index, every created
 directory bottom-up, and the staging root are fsynced. After rename, the
 destination root and parent are fsynced. A post-rename fsync failure is reported
 as an indeterminate durable-publication result and never deletes the complete
 published archive. The Git commit supplies the subsequent immutable object
 identity consumed by hosted CI.
 
+Mode `0444`/`0555` is packaging metadata, not a same-UID security boundary: the
+owner can chmod and mutate those objects. Retained descriptors detect mutation
+around rename, but continuous namespace and content integrity after return is
+possible only under the external protected-publisher contract. Consequently,
+test-mode publication cannot grant production promotion authority.
+
 The generic parity suite verifies that production ingestion fails closed for a
 mutable source, but it cannot manufacture a privileged immutable filesystem.
-An operator can run the positive production path in an isolated loop-mounted
-ext4 or XFS filesystem. The harness creates ephemeral production keys and
-evidence at runtime; it does not use or install repository test keys:
+The privileged ext4/XFS harness creates ephemeral production keys and evidence
+at runtime and does not use or install repository test keys. It is currently a
+prerequisite/inert test: after immutable-source validation it must stop at the
+missing external publisher contract rather than publish production evidence.
+Once that contract has an independently verifiable implementation, these are
+the intended operator invocations:
 
     sudo -E env FE2O3_RUN_PRIVILEGED_IMMUTABLE_TEST=1 \
       FE2O3_IMMUTABLE_TEST_FILESYSTEM=ext4 \
@@ -362,8 +390,8 @@ evidence at runtime; it does not use or install repository test keys:
 
 The command exits 77 unless explicitly opted in, and fails rather than skipping
 when root privileges, loop/mount support, `chattr`, or the requested filesystem
-tooling is unavailable. Passing this harness is test evidence only; it does not
-create a production attestation or promote a parity row.
+tooling is unavailable. It cannot create a production attestation or promote a
+parity row under the current same-UID publisher.
 
 The protected promotion gate independently recomputes the index and requires
 the archive to contain exactly the manifest's transitive result, queue,
