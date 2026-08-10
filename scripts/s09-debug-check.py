@@ -58,9 +58,8 @@ EXPECTED_OBSERVATIONS = {
     "output_len": "1",
     "i": "0",
 }
-HARDWARE_TEST = "gfx942_cov6_alpha_then_zeta_generated_safe_spi_with_fake_authenticator"
-S09_SOURCE_SHA256 = "a02f62a73198b493258224701c4f29e25b3eca02a738bf02c03989d45b77099e"
-S09_SOURCE_LENGTH = "3231"
+S09_SOURCE_SHA256 = "73c1ff5e2f29d245c8071bdb6c1a38af1c9ee1573b78d47a987633483b37e084"
+S09_SOURCE_LENGTH = "3359"
 MANIFEST_SCHEMA = "fe2o3-s09-protected-manifest-v2"
 SEMANTIC_CLAIM_SCHEMA = "fe2o3-s09-semantic-identity-claim-v2"
 BUILD_CLAIM_SCHEMA = "fe2o3-s09-build-identity-claim-v2"
@@ -99,9 +98,9 @@ BUILD_CLAIM_FIELDS = (
     "rustc_executable_sha256",
     "cargo_fe2o3_executable_sha256",
     "declared_cargo_executable_sha256",
-    "cargo_launcher_executable_sha256",
-    "cargo_launcher_pid",
-    "cargo_launcher_start_time_ticks",
+    "pinned_cargo_image_sha256",
+    "observed_parent_pid",
+    "observed_parent_start_time_ticks",
     "codegen_backend_sha256",
     "worker_config_sha256",
     "worker_executable_sha256",
@@ -152,7 +151,6 @@ ARTIFACT_FACT_FIELDS = (
     "target",
     "optimization",
     "source_path",
-    "kernel",
     "kernel",
 )
 HARDWARE_FACT_FIELDS = ("format", "object_format", "sha256", "build_id")
@@ -442,7 +440,7 @@ def decode_hsaco_identity_v2(
         "rustc_executable_sha256",
         "cargo_fe2o3_executable_sha256",
         "declared_cargo_executable_sha256",
-        "cargo_launcher_executable_sha256",
+        "pinned_cargo_image_sha256",
         "codegen_backend_sha256",
         "worker_config_sha256",
         "worker_executable_sha256",
@@ -456,11 +454,11 @@ def decode_hsaco_identity_v2(
     )
     decode_identity_decimal(semantic["rustc_opt_level"], "rustc_opt_level", 255, True)
     decode_identity_decimal(
-        build["cargo_launcher_pid"], "cargo_launcher_pid", 2**64 - 1, False
+        build["observed_parent_pid"], "observed_parent_pid", 2**64 - 1, False
     )
     decode_identity_decimal(
-        build["cargo_launcher_start_time_ticks"],
-        "cargo_launcher_start_time_ticks",
+        build["observed_parent_start_time_ticks"],
+        "observed_parent_start_time_ticks",
         2**64 - 1,
         False,
     )
@@ -703,7 +701,6 @@ def check_artifact_fact_schema(text: str) -> None:
         ("optimization", "O0"),
         ("source_path", S09_SOURCE),
         ("kernel", "alpha:alpha.kd"),
-        ("kernel", "zeta:zeta.kd"),
     ]
     if parse_canonical_facts(
         text, ARTIFACT_FACT_FIELDS, "protected artifact facts"
@@ -770,10 +767,12 @@ def artifact_facts(metadata: str, dwarf: str) -> str:
         "Arch: amdgcn",
         ".name:           alpha",
         ".symbol:         alpha.kd",
-        ".name:           zeta",
-        ".symbol:         zeta.kd",
     ):
         require_once(metadata, token, "AMDGPU artifact metadata")
+    kernel_names = re.findall(r"(?m)^\s*-\s+\.name:\s+(\S+)\s*$", metadata)
+    kernel_symbols = re.findall(r"(?m)^\s+\.symbol:\s+(\S+)\s*$", metadata)
+    if kernel_names != ["alpha"] or kernel_symbols != ["alpha.kd"]:
+        raise CheckError("AMDGPU artifact metadata is not the exact alpha-only kernel set")
     targets = re.findall(
         r"(?m)^amdhsa\.target:\s+'(amdgcn-amd-amdhsa--gfx942:xnack-)'$", metadata
     )
@@ -787,7 +786,6 @@ def artifact_facts(metadata: str, dwarf: str) -> str:
         "optimization=O0\n"
         "source_path=" + S09_SOURCE + "\n"
         "kernel=alpha:alpha.kd\n"
-        "kernel=zeta:zeta.kd\n"
     )
 
 
@@ -1068,7 +1066,7 @@ def validate_manifest_values(manifest: dict[str, str], required_domain: str) -> 
             ord(character) < 0x21 or ord(character) > 0x7E for character in value
         ):
             raise CheckError(f"protected manifest {field!r} is not a canonical observation")
-    for field in ("build_cargo_launcher_pid", "build_cargo_launcher_start_time_ticks"):
+    for field in ("build_observed_parent_pid", "build_observed_parent_start_time_ticks"):
         decode_identity_decimal(manifest[field], field, 2**64 - 1, False)
     if (
         not HEX_BUILD_ID.fullmatch(manifest["host_executable_build_id"])

@@ -8,27 +8,50 @@ configuration value `s09-alpha-gfx942-o0-v1`, which requires COV6, `O0`,
 The profile is deliberately closed, but it does not treat a Cargo/rustc symbol
 as stable source identity. Manifest V2 separates `SemanticIdentityClaimV2`
 from `BuildIdentityClaimV2`. The semantic claim binds the canonical source
-path, 3,231-byte length, source SHA-256, logical crate/module/name/export,
-General Scalar/Slice rustc-layout V3 profile, portable MIR, ABI, launch shape,
-and the exact gfx942/COV6/O0 debug policy. The build claim records Cargo
+path, 3,359-byte length, source SHA-256
+`73c1ff5e2f29d245c8071bdb6c1a38af1c9ee1573b78d47a987633483b37e084`,
+logical crate/module/name/export, General Scalar/Slice rustc-layout V3 profile,
+portable MIR, ABI, launch shape, and the exact gfx942/COV6/O0 debug policy. The
+build claim records Cargo
 metadata, crate and kernel bindings, observed DefPath and symbol, the final
 prepared rustc command and rustc executable, `cargo-fe2o3`, the declared Cargo
-executable, the Cargo launcher executable, parent PID and process start time,
-backend, Worker V2, and LLVM identities. Both records are inert claims:
+executable, the brokered pinned Cargo image digest, observed parent PID and
+process start time, backend, Worker V2, and LLVM identities. Both records are
+inert claims:
 decoding establishes canonical syntax and digest linkage but grants no
 authority. Evidence policy separately authenticates and binds their values.
 
-Cargo launcher provenance is rooted in an inherited pinned executable
-descriptor. The wrapper verifies that descriptor against its trusted digest
-and requires `/proc/<parent-pid>/exe` to name the same open executable object.
-The PID and process start time are continuity observations only; they detect a
-parent change while `/proc` is inspected and do not authenticate an
-executable by themselves. The prepared-command digest covers the final
-program, resolved pinned rustc identity, working directory, complete argument
-vector, and complete S09 child environment. The wrapper transfers that digest
-to codegen through an exact sealed 32-byte prepared-command capability at a
-fixed inherited descriptor. Codegen requires the exact immutable seal set and
-rejects a missing, replaced, writable, resized, zero, or trailing capability.
+The capability broker transfers an open pinned Cargo image to the wrapper.
+The wrapper measures `pinned_cargo_image_sha256` from that object and then
+drops its local pin. This is a brokered build observation; it does not prove
+which process launched the wrapper. `observed_parent_pid` and
+`observed_parent_start_time_ticks` report the actual parent observed while the
+wrapper reads `/proc/<pid>/stat`. Re-reading the start time and parent PID
+detects a process change during that observation, but neither value
+authenticates Cargo or binds the parent to the pinned image.
+
+The wrapper pins the final rustc executable and working-directory objects. A
+descriptor-based `fchdir` selects that exact directory immediately before
+exec. Relative to the same directory descriptor, the wrapper traverses the
+canonical protected source path without following symlinks and measures the
+exact source length and SHA-256. The resulting source-tree identity binds the
+cwd object, relative source path, source length, and source digest. The inert
+process-consistency digest covers the executable object and bytes, raw argv
+including argv0, cwd object, protected source-tree identity, and the complete
+sorted child environment.
+
+For S09, the wrapper rejects credential-like inherited variables, admits only
+the required inherited `CARGO_MANIFEST_DIR`, fixed
+`FE2O3_CODEGEN_PIPELINE=kernel-ir-worker-v2`, and fixed
+`FE2O3_TARGET=gfx942:xnack-` inputs, applies the closed managed environment,
+then calls `env_clear()` and installs that exact environment. The parent puts
+the prepared consistency digest in an exact sealed 32-byte expectation at the
+fixed descriptor. After exec, the running compiler independently remeasures
+its executable, argv, cwd, protected source tree, and complete environment,
+reconstructs the digest, and compares it with the sealed parent expectation.
+Missing, replaced, writable, resized, zero, trailing, or inconsistent data
+fails closed. This comparison detects parent/child process-input drift; it is
+not an authentication or loader-history claim.
 
 The observed DefPath and symbol are opaque, canonical build observations.
 Their exact values may change when Cargo `-C metadata`, the dependency graph,
@@ -72,12 +95,14 @@ witnesses are not source inline assembly and are never accepted from user
 input. They are an intentional code-generation cost of this exact debug
 profile.
 
-The compile test emits one COV6 HSACO and requires `llvm-dwarfdump --verify` to
-accept its linked DWARF. The fixed ROCgdb runner and transcript checker are a
-separate debug evidence boundary. The runner accepts only an absolute HSACO,
-the fixed hardware-test executable, and a fresh archive directory. It invokes
-native `/opt/rocm/bin/rocgdb-py_3.12` with literal batch commands and accepts no
-debugger command, init file, or command environment input.
+The compile test emits one alpha-only COV6 HSACO, rejects any physically bound
+`zeta` entry, and requires `llvm-dwarfdump --verify` to accept its linked
+DWARF. The fixed ROCgdb runner and transcript checker are a separate debug
+evidence boundary. The current Rust hardware controller requires a two-kernel
+alpha/zeta artifact, so it cannot execute this alpha-only HSACO and cannot
+produce current S09 hardware evidence. A matching alpha-only controller must
+land before the local hardware lane or a production controller can complete.
+Until then, attempted use of the old two-kernel controller fails closed.
 
 Before ROCgdb runs, the local runner measures the HSACO SHA-256, hardware-test
 SHA-256, and hardware ELF GNU build ID. It derives `gfx942:xnack-` from AMDGPU
@@ -128,6 +153,21 @@ and ten evidence fields. The identity fields are namespaced, exact copies of:
   `build_claim_sha256`; and
 - every build record field in codec order.
 
+The exact 18-field semantic order is `schema`, `crate`, `module`,
+`logical_name`, `export_name`, `profile`, `source_path`, `source_sha256`,
+`source_bytes`, `target`, `target_capabilities`, `code_object_version`,
+`rustc_opt_level`, `rustc_debug_info`, `injected_debug_policy`, `abi_sha256`,
+`launch_sha256`, and `portable_mir_sha256`. The exact 20-field build order is
+`schema`, `semantic_claim_sha256`, `cargo_metadata_sha256`, `crate_binding`,
+`kernel_binding`, `observed_def_path`, `observed_symbol`,
+`rustc_mir_capture_sha256`, `prepared_rustc_command_sha256`,
+`rustc_executable_sha256`, `cargo_fe2o3_executable_sha256`,
+`declared_cargo_executable_sha256`, `pinned_cargo_image_sha256`,
+`observed_parent_pid`, `observed_parent_start_time_ticks`,
+`codegen_backend_sha256`, `worker_config_sha256`,
+`worker_executable_sha256`, `worker_build_identity_sha256`, and
+`llvm_build_identity_sha256`.
+
 The final ten fields bind the source commit/tree, exact HSACO, host executable
 and build ID, archive manifest, artifact facts, hardware facts, normalized
 DWARF, and normalized ROCgdb transcript. The checker reads the HSACO itself,
@@ -140,8 +180,8 @@ accepted from environment variables or command-line field values.
 The compiler codec additionally delegates HSACO inspection to the physical
 kernel-descriptor binder before returning the inert claims. Metadata, entry
 symbols, descriptor symbols, descriptor bytes, and kernel cardinality must
-form one exact closed physical set, and the semantic export must resolve to
-one member of that set. This structural binding does not itself authenticate
+form the exact closed alpha-only physical set, and the semantic export must
+resolve to that member. This structural binding does not itself authenticate
 the claims or replace production evidence policy.
 
 Every digest is lowercase, nonzero SHA-256. Serialization is one UTF-8,
@@ -161,7 +201,7 @@ the production command. A future protected controller and administrator must
 construct and install the production policy and manifest after selecting
 immutable inputs.
 
-The available real lane is an explicit, GPU-gated local capability pilot:
+The intended GPU-gated local capability invocation is:
 
 ```text
 FE2O3_ALLOW_S09_DEBUG=1 \
@@ -172,11 +212,12 @@ FE2O3_S09_EVIDENCE_DIR=/absolute/new-evidence-directory \
   scripts/ci-local.sh s09-debug-hardware
 ```
 
-This lane performs the genuine direct LLVM/LLD compile, builds the hardware
-test in a fresh isolated target directory, runs native ROCgdb, emits a
-deterministic `s09-evidence-manifest-v2.tsv`, and validates its local evidence
-bundle. The lane derives both identity records exclusively from the emitted
-HSACO. Its `trust_domain=local-capability-v2` prevents promotion: local
+The compile portion performs the genuine direct LLVM/LLD alpha-only build and
+derives both identity records exclusively from the emitted HSACO. The current
+two-kernel host controller is incompatible, so the complete invocation cannot
+yet run native ROCgdb, emit a valid `s09-evidence-manifest-v2.tsv`, or validate
+a hardware evidence bundle. When the alpha-only controller lands, the lane's
+`trust_domain=local-capability-v2` will still prevent promotion: local
 selection of the checkout and host executable is not an evidence-grade
 provenance boundary. A future protected controller must select immutable
 inputs and the GPU runner, then install a separately measured `production-v2`

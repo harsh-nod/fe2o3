@@ -14,13 +14,30 @@ import types
 import unittest
 
 
-CHECKER_PATH = pathlib.Path(__file__).parents[1] / "s09-debug-check.py"
-LANE_PATH = pathlib.Path(__file__).parents[1] / "s09-debug-ci.sh"
+ROOT = pathlib.Path(__file__).parents[2]
+CHECKER_PATH = ROOT / "scripts/s09-debug-check.py"
+LANE_PATH = ROOT / "scripts/s09-debug-ci.sh"
+CODEC_PATH = ROOT / "crates/rustc-codegen-fe2o3/src/s09_identity_v2.rs"
 SPEC = importlib.util.spec_from_file_location("s09_debug_check", CHECKER_PATH)
 assert SPEC is not None and SPEC.loader is not None
 CHECKER = importlib.util.module_from_spec(SPEC)
 sys.dont_write_bytecode = True
 SPEC.loader.exec_module(CHECKER)
+
+
+def codec_fields(constant: str) -> tuple[str, ...]:
+    source = CODEC_PATH.read_text(encoding="utf-8")
+    match = re.search(
+        rf"const {re.escape(constant)}: \[&str; ([0-9]+)\] = \[(.*?)\];",
+        source,
+        re.DOTALL,
+    )
+    if match is None:
+        raise AssertionError(f"codec constant {constant} is missing or malformed")
+    fields = tuple(re.findall(r'"([a-z0-9_]+)"', match.group(2)))
+    if len(fields) != int(match.group(1)):
+        raise AssertionError(f"codec constant {constant} length is inconsistent")
+    return fields
 
 
 def metadata(**overrides: int) -> types.SimpleNamespace:
@@ -80,9 +97,9 @@ def valid_manifest(domain: str = "test-fixture-v2") -> dict[str, str]:
         "build_rustc_executable_sha256": digest("b"),
         "build_cargo_fe2o3_executable_sha256": digest("c"),
         "build_declared_cargo_executable_sha256": digest("d"),
-        "build_cargo_launcher_executable_sha256": digest("e"),
-        "build_cargo_launcher_pid": "4242",
-        "build_cargo_launcher_start_time_ticks": "9001",
+        "build_pinned_cargo_image_sha256": digest("e"),
+        "build_observed_parent_pid": "4242",
+        "build_observed_parent_start_time_ticks": "9001",
         "build_codegen_backend_sha256": digest("f"),
         "build_worker_config_sha256": digest("1"),
         "build_worker_executable_sha256": digest("2"),
@@ -140,9 +157,9 @@ def identity_records() -> tuple[bytes, bytes]:
         "rustc_executable_sha256": digest("9"),
         "cargo_fe2o3_executable_sha256": digest("a"),
         "declared_cargo_executable_sha256": digest("b"),
-        "cargo_launcher_executable_sha256": digest("c"),
-        "cargo_launcher_pid": "4242",
-        "cargo_launcher_start_time_ticks": "9001",
+        "pinned_cargo_image_sha256": digest("c"),
+        "observed_parent_pid": "4242",
+        "observed_parent_start_time_ticks": "9001",
         "codegen_backend_sha256": digest("d"),
         "worker_config_sha256": digest("e"),
         "worker_executable_sha256": digest("f"),
@@ -267,7 +284,6 @@ class NormalizedEvidenceSchemaTests(unittest.TestCase):
         "optimization=O0\n"
         f"source_path={CHECKER.S09_SOURCE}\n"
         "kernel=alpha:alpha.kd\n"
-        "kernel=zeta:zeta.kd\n"
     )
 
     def test_accepts_exact_artifact_schema(self) -> None:
@@ -306,6 +322,16 @@ class NormalizedEvidenceSchemaTests(unittest.TestCase):
 
 
 class IdentityCodecConsumerTests(unittest.TestCase):
+    def test_checker_field_order_matches_codec_constants(self) -> None:
+        self.assertEqual(
+            CHECKER.SEMANTIC_CLAIM_FIELDS,
+            codec_fields("SEMANTIC_CLAIM_FIELDS_V2"),
+        )
+        self.assertEqual(
+            CHECKER.BUILD_CLAIM_FIELDS,
+            codec_fields("BUILD_CLAIM_FIELDS_V2"),
+        )
+
     def test_decodes_exact_records_and_build_binding(self) -> None:
         semantic_record, build_record = identity_records()
         image = elf(handoff(semantic_record, build_record))
@@ -325,12 +351,19 @@ class IdentityCodecConsumerTests(unittest.TestCase):
         self.assertEqual(len(CHECKER.SEMANTIC_CLAIM_FIELDS), 18)
         self.assertEqual(len(CHECKER.BUILD_CLAIM_FIELDS), 20)
         self.assertEqual(
+            len(CHECKER.IDENTITY_MANIFEST_FIELDS),
+            3
+            + len(CHECKER.SEMANTIC_CLAIM_FIELDS)
+            + len(CHECKER.BUILD_CLAIM_FIELDS),
+        )
+        self.assertEqual(
             CHECKER.MANIFEST_FIELD_COUNT,
             3
             + len(CHECKER.IDENTITY_MANIFEST_FIELDS)
             + len(CHECKER.EVIDENCE_MANIFEST_FIELDS),
         )
         self.assertEqual(len(CHECKER.MANIFEST_FIELDS), CHECKER.MANIFEST_FIELD_COUNT)
+        self.assertEqual(CHECKER.MANIFEST_FIELD_COUNT, 54)
 
     def test_rejects_every_handoff_truncation_boundary(self) -> None:
         valid = handoff()
@@ -401,15 +434,15 @@ class IdentityCodecConsumerTests(unittest.TestCase):
             with self.subTest(label=label), self.assertRaises(CHECKER.CheckError):
                 CHECKER.decode_hsaco_identity_v2(elf(bytes(mutated)))
 
-    def test_rejects_descriptor_backed_launcher_claim_substitutions(self) -> None:
+    def test_rejects_inert_cargo_observation_substitutions(self) -> None:
         image = elf(handoff())
         manifest = valid_manifest()
         manifest.update(CHECKER.identity_manifest_values(image))
         CHECKER.validate_manifest_identity_binding(manifest, image)
         substitutions = {
-            "build_cargo_launcher_executable_sha256": digest("d"),
-            "build_cargo_launcher_pid": "4243",
-            "build_cargo_launcher_start_time_ticks": "9002",
+            "build_pinned_cargo_image_sha256": digest("d"),
+            "build_observed_parent_pid": "4243",
+            "build_observed_parent_start_time_ticks": "9002",
         }
         for field, replacement in substitutions.items():
             mutated = dict(manifest)

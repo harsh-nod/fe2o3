@@ -148,10 +148,10 @@ check_identity_substitution() {
 }
 
 check_identity_substitution \
-  build_cargo_launcher_executable_sha256 \
+  build_pinned_cargo_image_sha256 \
   dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
-check_identity_substitution build_cargo_launcher_pid 4243
-check_identity_substitution build_cargo_launcher_start_time_ticks 9002
+check_identity_substitution build_observed_parent_pid 4243
+check_identity_substitution build_observed_parent_start_time_ticks 9002
 
 sed \
   -e 's/^trust_domain\ttest-fixture-v2$/trust_domain\tlocal-capability-v2/' \
@@ -325,6 +325,14 @@ expect_fail "${CHECKER}" artifact-facts \
   --metadata "${TMP}/artifact-wrong-target" \
   --dwarf "${FIXTURES}/dwarf.pass.txt" \
   --output "${TMP}/wrong-target.facts"
+sed '/    \.symbol:         alpha\.kd/a\
+  - .name:           zeta\
+    .symbol:         zeta.kd' \
+  "${FIXTURES}/artifact.pass.txt" >"${TMP}/artifact-extra-zeta"
+expect_fail "${CHECKER}" artifact-facts \
+  --metadata "${TMP}/artifact-extra-zeta" \
+  --dwarf "${FIXTURES}/dwarf.pass.txt" \
+  --output "${TMP}/extra-zeta.facts"
 sed '/Build ID:/d' "${FIXTURES}/hardware.pass.txt" >"${TMP}/hardware-no-build-id"
 expect_fail "${CHECKER}" hardware-facts \
   --input "${TMP}/hardware-no-build-id" \

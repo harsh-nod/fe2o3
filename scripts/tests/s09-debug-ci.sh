@@ -32,11 +32,16 @@ rg -q 's09-identity-fields-v2.tsv' "${LANE}"
 expect_fail rg -q 'FE2O3_S09_(PORTABLE|ORDERED|CRATE|KERNEL|OBSERVED|RUSTC|CARGO|BACKEND)' "${LANE}"
 rg -q 'check-capability' "${LANE}"
 expect_fail rg -q '2f5e34|2d2a566' "${LANE}"
-rg -Fq 'Cargo launcher provenance is rooted in an inherited pinned executable' \
+rg -Fq 'pinned_cargo_image_sha256' "${PILOT_DOC}"
+rg -Fq 'observed_parent_pid' "${PILOT_DOC}"
+rg -Fq 'brokered build observation' "${PILOT_DOC}"
+rg -Fq 'descriptor-based `fchdir`' "${PILOT_DOC}"
+rg -Fq 'calls `env_clear()`' "${PILOT_DOC}"
+rg -Fq 'independently remeasures' "${PILOT_DOC}"
+rg -Fq 'alpha-only COV6 HSACO' "${PILOT_DOC}"
+rg -Fq '3,359-byte length' "${PILOT_DOC}"
+rg -Fq '73c1ff5e2f29d245c8071bdb6c1a38af1c9ee1573b78d47a987633483b37e084' \
   "${PILOT_DOC}"
-rg -Fq 'continuity observations only' "${PILOT_DOC}"
-rg -Fq 'sealed 32-byte prepared-command capability' "${PILOT_DOC}"
-expect_fail rg -Fq 'PID-bound Cargo launcher' "${PILOT_DOC}"
 [[ ! -e "${WORKFLOW}" ]]
 git diff --quiet -- .github/CODEOWNERS
 rg -q $'^supplemental\tS09\tMissing$' "${ROOT}/docs/cuda-oxide-parity-status.tsv"
