@@ -27,6 +27,7 @@ MAX_STATE_BYTES = 64 * 1024 * 1024
 COPY_CHUNK_BYTES = 64 * 1024
 CATCHABLE_SIGNALS = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
 SIGNAL_GRACE_SECONDS = 5.0
+NESTED_CLEANUP_BOUND_SECONDS = 1.0
 TERMINATE_GRACE_SECONDS = 0.5
 KILL_GRACE_SECONDS = 5.0
 PROCESS_POLL_SECONDS = 0.01
@@ -70,6 +71,10 @@ class CatchableSignalOwner:
         self.signal_number: int | None = None
         for signal_number in CATCHABLE_SIGNALS:
             signal.signal(signal_number, self._record)
+        # The public supervisor owns these signals regardless of its caller's
+        # inherited mask. Children consequently inherit the intended unblocked
+        # mask while the installed handlers close the Popen publication window.
+        signal.pthread_sigmask(signal.SIG_UNBLOCK, CATCHABLE_SIGNALS)
 
     def _record(self, signal_number: int, _frame: object) -> None:
         if self.signal_number is None:
@@ -96,7 +101,12 @@ def stop_process_group(process: subprocess.Popen[bytes]) -> None:
         process.wait(timeout=5)
     except subprocess.TimeoutExpired:
         process.kill()
-        process.wait()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired as error:
+            raise SourceStateError(
+                "pinned Git process group did not exit after bounded SIGKILL"
+            ) from error
 
 
 def run_bounded(
@@ -753,10 +763,8 @@ def signal_process_group(process_id: int, signal_number: int) -> None:
         os.killpg(process_id, signal_number)
     except ProcessLookupError:
         # A group containing only an unreaped zombie has no signalable members.
-        if process_group_members(process_id, process_id):
-            raise SourceStateError(
-                "supervised process group disappeared with live members"
-            )
+        # Group observation is deliberately not required to make this decision.
+        pass
 
 
 def wait_for_unreaped_exit(
@@ -765,6 +773,16 @@ def wait_for_unreaped_exit(
     timeout: float,
 ) -> int | None:
     deadline = time.monotonic() + timeout
+    if pid_descriptor < 0:
+        while True:
+            returncode = observe_unreaped_exit(process_id)
+            if returncode is not None:
+                return returncode
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            time.sleep(min(PROCESS_POLL_SECONDS, remaining))
+
     selector = selectors.DefaultSelector()
     try:
         selector.register(pid_descriptor, selectors.EVENT_READ)
@@ -799,6 +817,50 @@ def wait_for_group_drain(
         time.sleep(min(PROCESS_POLL_SECONDS, remaining))
 
 
+def reap_observed_leader(
+    process: subprocess.Popen[bytes],
+    process_id: int,
+    owner: CatchableSignalOwner,
+) -> int:
+    """Reap only after all numeric process-group operations are complete."""
+    owner.block_and_capture_pending()
+    try:
+        waited_process, wait_status = os.waitpid(process_id, 0)
+    except (ChildProcessError, OSError) as error:
+        raise SourceStateError("cannot reap supervised process-group leader") from error
+    if waited_process != process_id:
+        raise SourceStateError("reaped an unexpected supervised process")
+    process.returncode = os.waitstatus_to_exitcode(wait_status)
+    owner.block_and_capture_pending()
+    return process.returncode
+
+
+def mandatory_kill_and_reap(
+    process: subprocess.Popen[bytes],
+    process_id: int,
+    pid_descriptor: int,
+    owner: CatchableSignalOwner,
+) -> int:
+    """Kill the protected group and reap its leader without using /proc."""
+    try:
+        signal_process_group(process_id, signal.SIGKILL)
+    except (OSError, SourceStateError) as error:
+        raise SourceStateError(
+            "mandatory supervised process-group SIGKILL failed"
+        ) from error
+    returncode = wait_for_unreaped_exit(
+        process_id, pid_descriptor, KILL_GRACE_SECONDS
+    )
+    if returncode is None:
+        raise SourceStateError(
+            "supervised process-group leader remained unreaped after bounded SIGKILL"
+        )
+    reaped_returncode = reap_observed_leader(process, process_id, owner)
+    if reaped_returncode != returncode:
+        raise SourceStateError("supervised process exit status changed before reap")
+    return reaped_returncode
+
+
 def run_supervised_command(
     command: Sequence[str], owner: CatchableSignalOwner
 ) -> int:
@@ -818,6 +880,8 @@ def run_supervised_command(
     process_id = process.pid
     pid_descriptor = -1
     reaped = False
+    returncode = 0
+    lifecycle_error: BaseException | None = None
     try:
         if not hasattr(os, "pidfd_open"):
             raise SourceStateError("source-state supervision requires Linux pidfds")
@@ -841,58 +905,67 @@ def run_supervised_command(
         if owner.signal_number is not None:
             forwarded_signal = owner.signal_number
             signal_process_group(process_id, forwarded_signal)
-        returncode = observe_unreaped_exit(process_id)
-        while returncode is None:
+        observed_returncode = observe_unreaped_exit(process_id)
+        while observed_returncode is None:
             if owner.signal_number is None:
                 time.sleep(PROCESS_POLL_SECONDS)
-                returncode = observe_unreaped_exit(process_id)
+                observed_returncode = observe_unreaped_exit(process_id)
                 continue
 
             if forwarded_signal is None:
                 forwarded_signal = owner.signal_number
                 signal_process_group(process_id, forwarded_signal)
-            returncode = wait_for_unreaped_exit(
+            observed_returncode = wait_for_unreaped_exit(
                 process_id, pid_descriptor, SIGNAL_GRACE_SECONDS
             )
-            if returncode is None:
+            if observed_returncode is None:
                 signal_process_group(process_id, signal.SIGTERM)
-                returncode = wait_for_unreaped_exit(
+                observed_returncode = wait_for_unreaped_exit(
                     process_id, pid_descriptor, TERMINATE_GRACE_SECONDS
                 )
-            if returncode is None:
+            if observed_returncode is None:
                 signal_process_group(process_id, signal.SIGKILL)
-                returncode = wait_for_unreaped_exit(
+                observed_returncode = wait_for_unreaped_exit(
                     process_id, pid_descriptor, KILL_GRACE_SECONDS
                 )
-            if returncode is None:
+            if observed_returncode is None:
                 raise SourceStateError(
                     "supervised process did not exit after bounded SIGKILL"
                 )
 
+        if owner.signal_number is not None and forwarded_signal is None:
+            forwarded_signal = owner.signal_number
+            signal_process_group(process_id, forwarded_signal)
+
+        # Never use /proc observation to decide whether to terminate the group.
+        # Preserve enough grace for same-group profile layers to finish their
+        # nested raw-guard teardown before unconditional TERM/KILL escalation.
+        if SIGNAL_GRACE_SECONDS <= NESTED_CLEANUP_BOUND_SECONDS:
+            raise SourceStateError(
+                "signal grace does not cover nested source-state cleanup"
+            )
         forwarded_signal = wait_for_group_drain(
             process_id,
-            0 if forwarded_signal is not None else SIGNAL_GRACE_SECONDS,
+            SIGNAL_GRACE_SECONDS,
             owner,
             forwarded_signal,
         )
-        remaining = process_group_members(process_id, process_id)
-        if remaining:
-            signal_process_group(process_id, signal.SIGTERM)
-            forwarded_signal = wait_for_group_drain(
-                process_id,
-                TERMINATE_GRACE_SECONDS,
-                owner,
-                forwarded_signal,
-            )
-        remaining = process_group_members(process_id, process_id)
-        if remaining:
-            signal_process_group(process_id, signal.SIGKILL)
-            forwarded_signal = wait_for_group_drain(
-                process_id,
-                KILL_GRACE_SECONDS,
-                owner,
-                forwarded_signal,
-            )
+
+        # The unreaped leader pins the PGID through both unconditional signals.
+        signal_process_group(process_id, signal.SIGTERM)
+        forwarded_signal = wait_for_group_drain(
+            process_id,
+            TERMINATE_GRACE_SECONDS,
+            owner,
+            forwarded_signal,
+        )
+        signal_process_group(process_id, signal.SIGKILL)
+        forwarded_signal = wait_for_group_drain(
+            process_id,
+            KILL_GRACE_SECONDS,
+            owner,
+            forwarded_signal,
+        )
         remaining = process_group_members(process_id, process_id)
         if remaining:
             raise SourceStateError(
@@ -900,38 +973,47 @@ def run_supervised_command(
                 + ",".join(str(member) for member in sorted(remaining))
             )
 
-        # Keep catchable cancellation pending while the last protected identity is
-        # released and while the caller performs its final source comparison.
-        owner.block_and_capture_pending()
-        waited_process, wait_status = os.waitpid(process_id, 0)
-        if waited_process != process_id:
-            raise SourceStateError("reaped an unexpected supervised process")
+        returncode = reap_observed_leader(process, process_id, owner)
         reaped = True
-        process.returncode = os.waitstatus_to_exitcode(wait_status)
-        if process.returncode != returncode:
+        if returncode != observed_returncode:
             raise SourceStateError("supervised process exit status changed before reap")
-        owner.block_and_capture_pending()
-        return returncode
-    finally:
-        if not reaped:
-            # The leader is deliberately kept unreaped until every numeric PGID
-            # operation is complete. Best-effort cleanup here retains that order.
-            try:
-                if observe_unreaped_exit(process_id) is None:
-                    signal_process_group(process_id, signal.SIGKILL)
-                    if pid_descriptor >= 0:
-                        wait_for_unreaped_exit(
-                            process_id, pid_descriptor, KILL_GRACE_SECONDS
-                        )
-                if not process_group_members(process_id, process_id):
-                    waited_process, wait_status = os.waitpid(process_id, os.WNOHANG)
-                    if waited_process == process_id:
-                        process.returncode = os.waitstatus_to_exitcode(wait_status)
-                        reaped = True
-            except (ChildProcessError, OSError, SourceStateError):
-                pass
+    except BaseException as error:
+        if process.returncode is not None:
+            reaped = True
+        lifecycle_error = error
+
+    if not reaped:
+        try:
+            returncode = mandatory_kill_and_reap(
+                process, process_id, pid_descriptor, owner
+            )
+            reaped = True
+        except BaseException as cleanup_error:
+            if process.returncode is not None:
+                reaped = True
+            if lifecycle_error is None:
+                lifecycle_error = cleanup_error
+            else:
+                combined = SourceStateError(
+                    f"{lifecycle_error}; mandatory cleanup failed: {cleanup_error}"
+                )
+                combined.__cause__ = cleanup_error
+                lifecycle_error = combined
+
+    try:
         if pid_descriptor >= 0:
             os.close(pid_descriptor)
+    except OSError as error:
+        if lifecycle_error is None:
+            lifecycle_error = SourceStateError(
+                f"cannot close supervised process pidfd: {error}"
+            )
+
+    if lifecycle_error is not None:
+        raise lifecycle_error
+    if not reaped:
+        raise SourceStateError("supervised process-group leader was not reaped")
+    return returncode
 
 
 def supervise(

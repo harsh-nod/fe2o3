@@ -69,7 +69,11 @@ class SourceStateTests(unittest.TestCase):
             str(self.repository / "source.txt"),
         )
 
-    def start_check(self, *arguments: str) -> subprocess.Popen[str]:
+    def start_check(
+        self,
+        *arguments: str,
+        preexec_fn: Callable[[], None] | None = None,
+    ) -> subprocess.Popen[str]:
         environment = os.environ.copy()
         environment["PYTHONDONTWRITEBYTECODE"] = "1"
         return subprocess.Popen(
@@ -78,6 +82,7 @@ class SourceStateTests(unittest.TestCase):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=environment,
+            preexec_fn=preexec_fn,
         )
 
     def wait_for(self, predicate: Callable[[], object], description: str) -> object:
@@ -120,6 +125,10 @@ class SourceStateTests(unittest.TestCase):
         for process_id in process_ids:
             with self.subTest(process_id=process_id):
                 self.assertFalse(pathlib.Path(f"/proc/{process_id}").exists())
+
+    def assert_process_group_gone(self, process_group: int) -> None:
+        with self.assertRaises(ProcessLookupError):
+            os.killpg(process_group, 0)
 
     def test_exact_head_and_tree_are_reported_and_rechecked(self) -> None:
         commit = self.git("rev-parse", "HEAD")
@@ -186,6 +195,58 @@ class SourceStateTests(unittest.TestCase):
         self.assertEqual(stderr, "")
         self.assertFalse(marker.exists())
 
+    def test_public_normalizes_inherited_blocked_term_for_itself_and_child(
+        self,
+    ) -> None:
+        code = r"""
+import json
+import os
+import pathlib
+import signal
+
+marker = pathlib.Path(__import__('sys').argv[1])
+blocked = signal.pthread_sigmask(signal.SIG_BLOCK, ())
+descendant = os.fork()
+if descendant == 0:
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    while True:
+        signal.pause()
+marker.write_text(json.dumps({
+    'leader': os.getpid(),
+    'descendant': descendant,
+    'term_blocked': int(signal.SIGTERM in blocked),
+}), encoding='ascii')
+while True:
+    signal.pause()
+"""
+
+        def block_term_before_exec() -> None:
+            signal.pthread_sigmask(signal.SIG_BLOCK, (signal.SIGTERM,))
+
+        with tempfile.TemporaryDirectory() as coordination_name:
+            marker = pathlib.Path(coordination_name) / "blocked-term.json"
+            process = self.start_check(
+                "--",
+                sys.executable,
+                "-c",
+                code,
+                str(marker),
+                preexec_fn=block_term_before_exec,
+            )
+            identities = self.wait_for(
+                lambda: self.read_json_when_ready(marker),
+                "blocked-mask command readiness",
+            )
+            assert isinstance(identities, dict)
+            self.assertEqual(identities["term_blocked"], 0)
+            os.kill(process.pid, signal.SIGTERM)
+            _stdout, stderr = process.communicate(timeout=15)
+
+        self.assertEqual(process.returncode, 128 + signal.SIGTERM, stderr)
+        self.assert_processes_gone(
+            identities["leader"], identities["descendant"]
+        )
+
     def test_public_post_popen_signal_is_forwarded_at_publication_checkpoint(
         self,
     ) -> None:
@@ -245,6 +306,76 @@ raise SystemExit(status)
 
         self.assertEqual(process.returncode, 128 + signal.SIGTERM, process.stderr)
         self.assert_processes_gone(command_pid)
+
+    def test_proc_observation_failure_still_kills_group_and_reaps_leader(
+        self,
+    ) -> None:
+        wrapper = r"""
+import importlib.util
+import pathlib
+import sys
+
+checker = pathlib.Path(sys.argv[1])
+repository = pathlib.Path(sys.argv[2])
+marker = pathlib.Path(sys.argv[3])
+spec = importlib.util.spec_from_file_location('fault_source_state', checker)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+def fail_observation(_process_group, _leader):
+    raise module.SourceStateError('injected /proc observation failure')
+
+module.process_group_members = fail_observation
+command = r'''import json,os,pathlib,signal,sys
+marker = pathlib.Path(sys.argv[1])
+descendant = os.fork()
+if descendant == 0:
+    for caught in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+        signal.signal(caught, signal.SIG_IGN)
+    while True:
+        signal.pause()
+marker.write_text(json.dumps({
+    "leader": os.getpid(),
+    "descendant": descendant,
+}), encoding="ascii")
+os._exit(0)'''
+sys.argv = [
+    str(checker), '--root', str(repository), '--',
+    sys.executable, '-c', command, str(marker),
+]
+try:
+    status = module.main()
+except module.SourceStateError as error:
+    print(f's09-source-state: {error}', file=sys.stderr)
+    status = 2
+raise SystemExit(status)
+"""
+        with tempfile.TemporaryDirectory() as coordination_name:
+            marker = pathlib.Path(coordination_name) / "proc-failure.json"
+            process = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    wrapper,
+                    str(CHECKER),
+                    str(self.repository),
+                    str(marker),
+                ],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+                check=False,
+                timeout=15,
+            )
+            identities = self.read_json_when_ready(marker)
+            assert identities is not None
+
+        self.assertEqual(process.returncode, 2, process.stderr)
+        self.assertIn("injected /proc observation failure", process.stderr)
+        self.assert_processes_gone(
+            identities["leader"], identities["descendant"]
+        )
 
     def test_public_active_signal_forwards_and_drains_stubborn_descendant(
         self,
@@ -422,6 +553,72 @@ while True:
         self.assertFalse(raw.exists())
         self.assert_processes_gone(inner_pid)
 
+    def test_public_signals_preserve_nested_raw_cleanup_grace(self) -> None:
+        guard = ROOT / "scripts" / "s09-raw-transcript-guard.sh"
+        outer_code = r"""
+trap 'exit 0' HUP INT TERM
+/bin/bash -c "$1" snapshot-layer "$2" "$3" "$4" "$5" "$6" &
+wait "$!"
+"""
+        snapshot_code = r"""
+trap 'exit 0' HUP INT TERM
+/bin/bash -c "$1" profile-layer "$2" "$3" "$4" "$5" &
+wait "$!"
+"""
+        profile_code = r"""
+source "$1"
+s09_install_raw_transcript_guard "$2"
+s09_run_guarded_raw_command /usr/bin/python3 -c "$3" "$4"
+"""
+        inner_code = r"""
+import json
+import os
+import pathlib
+import signal
+import sys
+
+pathlib.Path(sys.argv[1]).write_text(json.dumps({
+    'pid': os.getpid(),
+    'group': os.getpgrp(),
+}), encoding='ascii')
+while True:
+    signal.pause()
+"""
+        for signal_number in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+            with self.subTest(signal_number=signal_number):
+                with tempfile.TemporaryDirectory() as coordination_name:
+                    coordination = pathlib.Path(coordination_name)
+                    raw = coordination / "rocgdb.raw.txt"
+                    marker = coordination / "nested.json"
+                    process = self.start_check(
+                        "--",
+                        "/bin/bash",
+                        "-c",
+                        outer_code,
+                        "outer-layer",
+                        snapshot_code,
+                        profile_code,
+                        str(guard),
+                        str(raw),
+                        inner_code,
+                        str(marker),
+                    )
+                    identities = self.wait_for(
+                        lambda: self.read_json_when_ready(marker),
+                        "nested raw-guard command readiness",
+                    )
+                    assert isinstance(identities, dict)
+                    self.assertTrue(raw.exists())
+                    os.kill(process.pid, signal_number)
+                    _stdout, stderr = process.communicate(timeout=15)
+
+                self.assertEqual(
+                    process.returncode, 128 + signal_number, stderr
+                )
+                self.assertFalse(raw.exists())
+                self.assert_processes_gone(identities["pid"])
+                self.assert_process_group_gone(identities["group"])
+
     def test_same_size_mutate_restore_is_rejected_by_ctime(self) -> None:
         code = r"""
 import os
@@ -596,6 +793,26 @@ path.chmod(mode)
                     SOURCE_STATE.SourceStateError, "bounded diagnostic"
                 ):
                     git_tool.run(self.repository, "status")
+
+    def test_pinned_git_cleanup_has_no_unbounded_wait_fallback(self) -> None:
+        process = mock.Mock()
+        process.pid = 4242
+        process.wait.side_effect = (
+            subprocess.TimeoutExpired(["git"], 5),
+            subprocess.TimeoutExpired(["git"], 5),
+        )
+        with mock.patch.object(SOURCE_STATE.os, "killpg"):
+            with self.assertRaisesRegex(
+                SOURCE_STATE.SourceStateError,
+                "did not exit after bounded SIGKILL",
+            ):
+                SOURCE_STATE.stop_process_group(process)
+
+        self.assertEqual(
+            process.wait.call_args_list,
+            [mock.call(timeout=5), mock.call(timeout=5)],
+        )
+        process.kill.assert_called_once_with()
 
     def test_tracked_symlink_is_rejected(self) -> None:
         (self.repository / "source-link").symlink_to("source.txt")
