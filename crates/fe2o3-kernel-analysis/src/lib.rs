@@ -3,12 +3,14 @@
 //! This crate reports analysis facts and rejected obligations. It does not
 //! grant `Checked`, `Verified`, safe-launch, or any other assurance authority.
 
+mod authenticated_machine_effect;
 mod control_flow;
 mod machine_effect;
 mod physical_machine_effect;
 mod ssa;
 mod uniformity;
 
+pub use authenticated_machine_effect::*;
 pub use control_flow::{
     ControlFlowAnalysis, ControlFlowDiagnostic, ControlFlowDiagnosticV2, ControlFlowEdge,
     ControlFlowErrors, ControlFlowResource, ControlFlowResourceUsage, MAX_CONTROL_FLOW_BLOCKS,
