@@ -56,6 +56,7 @@ prepare_archive() {
   local suffix="$2"
   local source="${3:-${SOURCE}}"
   local target="${4:-gfx942}"
+  local job_count="${5:-1}"
   local bash_executor
   local result_id
   local script_digest
@@ -96,8 +97,15 @@ prepare_archive() {
     printf 'environment\t0002\tPATH\t%s\n' "$(hex_text /nonexistent)"
     printf 'toolchain_count\t1\n'
     printf 'toolchain\t0000\tbash\ttoolchains/bash.tsv\t%s\t%s\n' "$(file_size "${archive}/toolchains/bash.tsv")" "$(file_sha "${archive}/toolchains/bash.tsv")"
-    printf 'job_count\t1\n'
-    printf 'job\t0000\thardware-%s\t%s\t04\tMissing\tPartial\t30\t%s\t%s\t%s\t%s\t%s\thardware\n' "${suffix}" "${result_id}" scripts/hardware-queue-fixture.sh "${script_digest}" results/hardware.tsv logs/hardware.log binary=artifacts/hardware.bin
+    printf 'job_count\t%s\n' "${job_count}"
+    if [[ "${job_count}" == 1 ]]; then
+      printf 'job\t0000\thardware-%s\t%s\t04\tMissing\tPartial\t30\t%s\t%s\t%s\t%s\t%s\thardware\n' "${suffix}" "${result_id}" scripts/hardware-queue-fixture.sh "${script_digest}" results/hardware.tsv logs/hardware.log binary=artifacts/hardware.bin
+    elif [[ "${job_count}" == 2 ]]; then
+      printf 'job\t0000\thardware-%s-one\t%s\t04\tMissing\tPartial\t30\t%s\t%s\t%s\t%s\t%s\thardware\n' "${suffix}" "$(printf '%s' "hardware-${suffix}-one" | sha256sum | awk '{ print $1 }')" scripts/hardware-queue-fixture.sh "${script_digest}" results/hardware-one.tsv logs/hardware-one.log binary=artifacts/hardware-one.bin
+      printf 'job\t0001\thardware-%s-two\t%s\t05\tMissing\tPartial\t30\t%s\t%s\t%s\t%s\t%s\thardware\n' "${suffix}" "$(printf '%s' "hardware-${suffix}-two" | sha256sum | awk '{ print $1 }')" scripts/hardware-queue-fixture.sh "${script_digest}" results/hardware-two.tsv logs/hardware-two.log binary=artifacts/hardware-two.bin
+    else
+      return 2
+    fi
   } >"${archive}/${unsigned}"
   sign_queue "${archive}" "${unsigned}" queues/queue.tsv
   rm "${archive}/${unsigned}"
@@ -261,6 +269,79 @@ expect_failure inert_hardware_promotion 'hardware result execution closure is in
   --candidate-policy "${TEST_ROOT}/inert-policy.tsv" \
   --baseline-status "${TEST_ROOT}/baseline-status.tsv" \
   --candidate-status "${TEST_ROOT}/candidate-status.tsv" --allow-test-fixtures
+
+# A referenced signed queue is an exact unit: every declared job must have one
+# manifest hardware result. Omitting the second job fails before archive copy.
+MULTI_ARCHIVE="${TEST_ROOT}/multi-job-archive"
+mkdir -p "${MULTI_ARCHIVE}"
+prepare_archive "${MULTI_ARCHIVE}" multi "${SOURCE}" gfx942 2
+run_queue "${MULTI_ARCHIVE}"
+rm -rf "${MULTI_ARCHIVE}/work"
+multi_one_id="$(awk -F '\t' '$1 == "result_id" { print $2 }' \
+  "${MULTI_ARCHIVE}/results/hardware-one.tsv")"
+multi_two_id="$(awk -F '\t' '$1 == "result_id" { print $2 }' \
+  "${MULTI_ARCHIVE}/results/hardware-two.tsv")"
+{
+  printf 'promotion_manifest_schema_version\t2\n'
+  printf 'baseline_commit\t%s\n' "${BASELINE}"
+  printf 'source_commit\t%s\n' "${SOURCE}"
+  printf 'source_tree\t%s\n' "${SOURCE_TREE}"
+  printf 'target\tgfx942\n'
+  printf 'hardware_lane\tmi300x-gfx942-test\n'
+  printf 'result_count\t1\n'
+  printf 'result\t0000\t04\tMissing\tPartial\thardware\tresults/hardware-one.tsv\t%s\t%s\n' \
+    "$(file_sha "${MULTI_ARCHIVE}/results/hardware-one.tsv")" "${multi_one_id}"
+} >"${MULTI_ARCHIVE}/promotion.tsv"
+printf 'evidence_set_sha256\t%s\n' "$(file_sha "${MULTI_ARCHIVE}/promotion.tsv")" \
+  >>"${MULTI_ARCHIVE}/promotion.tsv"
+printf 'authorization_count\t0\n' >>"${MULTI_ARCHIVE}/promotion.tsv"
+expect_failure omitted_second_queue_job 'referenced queue job/result set is not exact' \
+  "${TOOL}" ingest-archive \
+  --repo "${REPO}" \
+  --source-root "${MULTI_ARCHIVE}" \
+  --destination-root "${TEST_ROOT}/multi-job-omitted-output" \
+  --trusted-root "${TRUSTED}" \
+  --trust-policy "${TRUSTED}/trust.tsv" \
+  --manifest promotion.tsv \
+  --expected-manifest-sha256 "$(file_sha "${MULTI_ARCHIVE}/promotion.tsv")" \
+  --expected-baseline "${BASELINE}" \
+  --expected-source "${SOURCE}" \
+  --expected-tree "${SOURCE_TREE}" \
+  --expected-target gfx942 \
+  --expected-lane mi300x-gfx942-test \
+  --allow-test-fixtures
+
+{
+  printf 'promotion_manifest_schema_version\t2\n'
+  printf 'baseline_commit\t%s\n' "${BASELINE}"
+  printf 'source_commit\t%s\n' "${SOURCE}"
+  printf 'source_tree\t%s\n' "${SOURCE_TREE}"
+  printf 'target\tgfx942\n'
+  printf 'hardware_lane\tmi300x-gfx942-test\n'
+  printf 'result_count\t2\n'
+  printf 'result\t0000\t04\tMissing\tPartial\thardware\tresults/hardware-one.tsv\t%s\t%s\n' \
+    "$(file_sha "${MULTI_ARCHIVE}/results/hardware-one.tsv")" "${multi_one_id}"
+  printf 'result\t0001\t05\tMissing\tPartial\thardware\tresults/hardware-two.tsv\t%s\t%s\n' \
+    "$(file_sha "${MULTI_ARCHIVE}/results/hardware-two.tsv")" "${multi_two_id}"
+} >"${MULTI_ARCHIVE}/promotion.tsv"
+printf 'evidence_set_sha256\t%s\n' "$(file_sha "${MULTI_ARCHIVE}/promotion.tsv")" \
+  >>"${MULTI_ARCHIVE}/promotion.tsv"
+printf 'authorization_count\t0\n' >>"${MULTI_ARCHIVE}/promotion.tsv"
+"${TOOL}" ingest-archive \
+  --repo "${REPO}" \
+  --source-root "${MULTI_ARCHIVE}" \
+  --destination-root "${TEST_ROOT}/multi-job-complete-output" \
+  --trusted-root "${TRUSTED}" \
+  --trust-policy "${TRUSTED}/trust.tsv" \
+  --manifest promotion.tsv \
+  --expected-manifest-sha256 "$(file_sha "${MULTI_ARCHIVE}/promotion.tsv")" \
+  --expected-baseline "${BASELINE}" \
+  --expected-source "${SOURCE}" \
+  --expected-tree "${SOURCE_TREE}" \
+  --expected-target gfx942 \
+  --expected-lane mi300x-gfx942-test \
+  --allow-test-fixtures
+chmod -R u+w "${TEST_ROOT}/multi-job-complete-output"
 
 # Every queue-declared execution field is checked after signature verification.
 mutate_hardware_result queue_identity $'queue_id\t'"${queue_id}" $'queue_id\t'"${alternate_queue_id}"

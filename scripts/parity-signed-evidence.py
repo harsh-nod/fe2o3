@@ -813,6 +813,8 @@ def parse_queue(
     relative: str,
     trust: TrustPolicy,
     expected_digest: str | None = None,
+    *,
+    enforce_execution_root: bool = False,
 ) -> QueueRecord:
     path = archive_path(root, relative)
     rows, _, digest = verify_signed(path, trust, "attestor")
@@ -850,7 +852,7 @@ def parse_queue(
     toolchain_count = parse_count(cursor.scalar("toolchain_count"), "toolchain", allow_zero=False)
     if execution_closure != "inert":
         fail("shell queue execution closure must remain inert")
-    if archive_root_text != str(root.resolve(strict=True)):
+    if enforce_execution_root and archive_root_text != str(root.resolve(strict=True)):
         fail("signed queue archive root does not match execution root")
     if not {"bash", "timeout"} <= {label for label, _, _, _ in executors}:
         fail("signed queue lacks required absolute executors")
@@ -1247,6 +1249,9 @@ def promotion_archive_closure(
     trust: TrustPolicy,
 ) -> set[str]:
     paths = {manifest_relative}
+    result_by_id = {result.result_id: result for result in manifest.results}
+    referenced_queues: dict[str, QueueRecord] = {}
+    queue_result_ids: dict[str, set[str]] = {}
     for result in manifest.results:
         paths.add(result.relative_path)
         paths.add(result.log[0])
@@ -1254,8 +1259,29 @@ def promotion_archive_closure(
         paths.update(path for _, path, _, _ in result.artifacts)
         if result.queue_path != "-":
             queue = parse_queue(repo, root, result.queue_path, trust, result.queue_digest)
+            previous = referenced_queues.get(result.queue_path)
+            if previous is not None and previous.digest != queue.digest:
+                fail("promotion results disagree on a signed queue identity")
+            referenced_queues[result.queue_path] = queue
+            queue_result_ids.setdefault(result.queue_path, set()).add(result.result_id)
             paths.add(result.queue_path)
             paths.update(path for _, path, _, _ in queue.toolchains)
+    for relative, queue in referenced_queues.items():
+        expected_ids = {job.result_id for job in queue.jobs}
+        if queue_result_ids[relative] != expected_ids:
+            fail("referenced queue job/result set is not exact")
+        for job in queue.jobs:
+            result = result_by_id.get(job.result_id)
+            if (
+                result is None
+                or result.evidence_class != "hardware"
+                or result.queue_path != relative
+                or result.relative_path != job.result_path
+            ):
+                fail("referenced queue job has no exact manifest result")
+            paths.add(job.result_path)
+            paths.add(job.log_path)
+            paths.update(path for _, path in job.artifacts)
     paths.update(value.relative_path for value in manifest.authorizations)
     if ARCHIVE_INDEX_RELATIVE in paths:
         fail("promotion manifest cannot reference the reserved archive index")
@@ -2060,7 +2086,13 @@ def run_queue(args: argparse.Namespace) -> None:
         repo = args.repo.resolve(strict=True)
         root = resolve_real_directory(args.archive_root, "evidence archive root")
         trust = parse_trust_policy(args.trusted_root, args.trust_policy)
-        queue = parse_queue(repo, root, args.manifest, trust)
+        queue = parse_queue(
+            repo,
+            root,
+            args.manifest,
+            trust,
+            enforce_execution_root=True,
+        )
         if args.test_mode != (queue.mode == "test"):
             fail("queue execution mode does not match lock mode")
         if queue.mode == "production" and trust.domain != "production":
@@ -2285,6 +2317,7 @@ def main() -> None:
             resolve_real_directory(args.archive_root, "evidence archive root"),
             args.manifest,
             trust,
+            enforce_execution_root=True,
         )
         print(f"signed MI300X queue is valid: {len(queue.jobs)} job(s)")
     elif args.command == "validate-manifest":
