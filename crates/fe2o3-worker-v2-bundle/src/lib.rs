@@ -21,11 +21,12 @@ pub use compiler_transaction::{
     SourceClosureIdentityV2,
 };
 pub use compiler_transaction_recorder::{
-    AlphaZetaSemanticLayoutWitnessesV1, CompilerTransactionCheckpointV1,
+    AlphaZetaSemanticLayoutWitnessesV1, AuthenticatedCompilerTransactionExecutionReceiptV1,
+    AuthenticatedCompilerTransactionResultV1, CompilerTransactionCheckpointV1,
     CompilerTransactionContentIdentityV1, CompilerTransactionMeasurementsV1,
     CompilerTransactionRecorderErrorV1, CompilerTransactionRecorderV1, CompilerTransactionStageV1,
     ExactCompilerInvocationV1, ExactCompilerSourceClosureV1, ExactCompilerSourceFileV1,
-    ExactCompilerToolV1, ExactSemanticLayoutWitnessV1, Gfx942CompilerTargetV1,
+    ExactCompilerToolV1, ExactSemanticLayoutWitnessV1, ExactWorkerToolV1, Gfx942CompilerTargetV1,
     MAX_COMPILER_TRANSACTION_SOURCE_BYTES_V1, MAX_COMPILER_TRANSACTION_SOURCE_FILE_BYTES_V1,
     MAX_SEALED_COMPILER_TRANSACTION_BYTES_V1, SEALED_COMPILER_TRANSACTION_MAGIC_V1,
     SEALED_COMPILER_TRANSACTION_VERSION_V1, SealedCompilerTransactionDecodeErrorV1,
