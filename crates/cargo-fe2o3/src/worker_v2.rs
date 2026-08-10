@@ -161,7 +161,7 @@ impl WorkerV2SourceDebugProfileV1 {
 struct ConfiguredEnvelopeInputs {
     path: PathBuf,
     expected: ContentIdentityV1,
-    pinned: Option<WorkerV2EnvelopeInputsV1>,
+    pinned: Option<Box<WorkerV2EnvelopeInputsV1>>,
 }
 
 impl PreparedWorkerV2Config {
@@ -295,7 +295,7 @@ impl PreparedWorkerV2Config {
             return Ok(());
         };
         if configured.pinned.is_none() {
-            configured.pinned = Some(configured.read_exact()?);
+            configured.pinned = Some(Box::new(configured.read_exact()?));
         }
         Ok(())
     }
@@ -388,7 +388,7 @@ fn parse_envelope_inputs(
 impl ConfiguredEnvelopeInputs {
     fn load(&self) -> Result<WorkerV2EnvelopeInputsV1, WorkerV2ConfigError> {
         if let Some(inputs) = &self.pinned {
-            return Ok(inputs.clone());
+            return Ok(inputs.as_ref().clone());
         }
         self.read_exact()
     }
