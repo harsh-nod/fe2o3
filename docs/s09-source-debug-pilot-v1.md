@@ -140,19 +140,29 @@ facts, normalized DWARF, normalized ROCgdb, tool paths, and run nonce. The raw
 ROCgdb log is hashed and then removed. Only the path-clean normalized
 transcript is retained.
 
-The complete snapshot-supervised ROCgdb command runs in a new session and
-process group. `EXIT`, `HUP`, `INT`, and `TERM` cleanup targets only that group,
-unlinks the raw transcript, uses bounded `TERM`/`KILL` escalation, reaps the
-group leader, and verifies that neither the group nor raw path remains. For
-these caught signals, an interrupted run cannot defer raw cleanup until a
-foreground debugger returns.
+The public source-state supervisor owns a fresh session and process group for
+the evidence lane. It catches `HUP`, `INT`, and `TERM`, forwards cancellation,
+uses bounded `TERM`/`KILL` escalation before reaping the pinned group leader,
+and repeats the sealed tracked-source comparison before returning. The nested
+snapshot-supervised ROCgdb command has its own pinned process group. Its
+`EXIT`, `HUP`, `INT`, and `TERM` cleanup unlinks the raw transcript first,
+closes the parent-owned descriptor, and sends bounded group-wide `TERM`/`KILL`
+before reaping its leader. For these caught signals, an interrupted public run
+cannot defer raw-path cleanup until a foreground debugger returns.
+
+These local process-group controls cover processes that remain in the pinned
+groups. They do not prove containment of a descendant that creates another
+session or process group, and they do not claim that every zombie has
+disappeared. The raw pathname is checked for removal; complete descendant
+lifetime ownership remains a `production-v2` obligation.
 
 Uncatchable `SIGKILL` is outside the `local-capability-v2` boundary. `SIGKILL`
 before cleanup can leave raw data at its path; `SIGKILL` after the raw path is
 unlinked but before group teardown and reap can leave the pathless child
-process group alive. `production-v2` therefore requires a protected cgroup/job
-supervisor, or an equivalent descendant-lifetime boundary, that owns cleanup
-independently of the runner.
+process group alive. A descendant can also escape process-group containment by
+creating another session. `production-v2` therefore requires a protected
+cgroup/job supervisor, or an equivalent descendant-lifetime boundary, that
+owns cleanup independently of the runner.
 
 The snapshot supervisor supplies each controller input as an exact numeric
 `/proc/<ancestor-pid>/fd/<n>` path together with its owner PID/starttime and
