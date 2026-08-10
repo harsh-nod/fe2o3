@@ -5,6 +5,7 @@ mod generated_alpha_zeta_cov6;
 mod generated_argument_plan;
 mod generated_vecadd;
 mod generated_worker_v2_vecadd;
+mod gfx942_ocml;
 mod hsa_executable_lifecycle;
 mod loaded_kernel;
 mod prepared_launch;
@@ -80,6 +81,14 @@ pub use generated_worker_v2_vecadd::{
     GeneratedWorkerV2VecAddExecutorV1, GeneratedWorkerV2VecAddPrepareError,
     GeneratedWorkerV2VecAddPreparedV1,
 };
+pub use gfx942_ocml::{
+    GFX942_OCML_SIN_F32_CODE_OBJECT_VERSION_V1, GFX942_OCML_SIN_F32_DEVICE_ABI_V1,
+    GFX942_OCML_SIN_F32_IMPORT_SYMBOL_V1, GFX942_OCML_SIN_F32_KERNEL_ABI_V1,
+    GFX942_OCML_SIN_F32_KERNEL_SYMBOL_V1, GFX942_OCML_SIN_F32_MAX_ELEMENTS_V1,
+    GFX942_OCML_SIN_F32_MAX_HSACO_BYTES_V1, GFX942_OCML_SIN_F32_TARGET_V1,
+    GFX942_OCML_SIN_F32_WORKGROUP_SIZE_V1, Gfx942OcmlArtifactIdentityV1, Gfx942OcmlSinErrorV1,
+    Gfx942OcmlSinF32KernelV1,
+};
 pub use hsa_executable_lifecycle::{
     AuthenticatedWorkerV2ExecutableV1, AuthorizedHsaLoadV1, HsaAgentIdentityV1,
     HsaCodeObjectLoadObservationV1, HsaCompletedDispatchV1, HsaDispatchError,
@@ -122,6 +131,7 @@ pub use recovered_worker_v2_admission::{
     RecoveredWorkerV2AdmissionError, RecoveredWorkerV2PinnedDescriptorV1,
     recover_worker_v2_load_envelope_v1,
 };
+
 pub use tile_interop::{
     GFX942_XOR4_BF16_TILE_COLUMNS_V1, GFX942_XOR4_BF16_TILE_ELEMENTS_V1,
     GFX942_XOR4_BF16_TILE_ROWS_V1, GFX942_XOR4_BF16_TILE_WAVE_LANES_V1, Gfx942TileInteropErrorV1,
