@@ -1302,24 +1302,44 @@ mod tests {
         abi_version: u8,
         kernels: &[(&str, &str)],
     ) -> BoundHsacoFixture {
+        bound_elf_with_physical_kernels(
+            identity_sections,
+            abi_version,
+            kernels,
+            &[("alpha", "alpha.kd")],
+        )
+    }
+
+    fn bound_elf_with_physical_kernels(
+        identity_sections: &[&[u8]],
+        abi_version: u8,
+        metadata_kernels: &[(&str, &str)],
+        physical_kernels: &[(&str, &str)],
+    ) -> BoundHsacoFixture {
         const PROGRAM_HEADER_BYTES: usize = 56;
         const SYMBOL_BYTES: usize = 24;
         const PROGRAM_COUNT: usize = 2;
+        assert!(!physical_kernels.is_empty());
 
         let mut bytes = vec![0_u8; ELF64_HEADER_BYTES + PROGRAM_COUNT * PROGRAM_HEADER_BYTES];
         align(&mut bytes, 64);
-        let note = metadata_note(kernels);
+        let note = metadata_note(metadata_kernels);
         let note_offset = bytes.len();
         bytes.extend_from_slice(&note);
         align(&mut bytes, 64);
 
         let descriptor_offset = bytes.len();
-        bytes.resize(descriptor_offset + 64, 0);
+        let descriptor_bytes = physical_kernels.len() * 64;
+        bytes.resize(descriptor_offset + descriptor_bytes, 0);
         align(&mut bytes, 256);
         let entry_offset = bytes.len();
-        bytes.resize(entry_offset + 64, 0xbf);
-        let descriptor_address = descriptor_offset as u64;
-        let entry_address = entry_offset as u64 + 0x1000;
+        let mut entry_offsets = Vec::with_capacity(physical_kernels.len());
+        for _ in physical_kernels {
+            align(&mut bytes, 256);
+            entry_offsets.push(bytes.len());
+            bytes.resize(bytes.len() + 64, 0xbf);
+        }
+        let entry_bytes = bytes.len() - entry_offset;
 
         let mut identity_offsets = Vec::new();
         for identity in identity_sections {
@@ -1328,33 +1348,47 @@ mod tests {
         }
 
         let mut symbol_strings = vec![0];
-        let entry_name = append_string(&mut symbol_strings, "alpha");
-        let descriptor_name = append_string(&mut symbol_strings, "alpha.kd");
+        let mut physical_names = Vec::with_capacity(physical_kernels.len());
+        for (entry_name, descriptor_name) in physical_kernels {
+            physical_names.push((
+                append_string(&mut symbol_strings, entry_name),
+                append_string(&mut symbol_strings, descriptor_name),
+            ));
+        }
         let other_name = append_string(&mut symbol_strings, "other");
         let symbol_string_offset = bytes.len();
-        let entry_name_offset = symbol_string_offset + entry_name as usize;
-        let descriptor_name_offset = symbol_string_offset + descriptor_name as usize;
+        let entry_name_offset = symbol_string_offset + physical_names[0].0 as usize;
+        let descriptor_name_offset = symbol_string_offset + physical_names[0].1 as usize;
         bytes.extend_from_slice(&symbol_strings);
         align(&mut bytes, 8);
 
         let symbol_offset = bytes.len();
-        bytes.resize(symbol_offset + 4 * SYMBOL_BYTES, 0);
-        let entry_symbol = symbol_offset + SYMBOL_BYTES;
-        write_u32(&mut bytes, entry_symbol, entry_name);
-        bytes[entry_symbol + 4] = 0x12;
-        bytes[entry_symbol + 5] = 3;
-        write_u16(&mut bytes, entry_symbol + 6, 3);
-        write_u64(&mut bytes, entry_symbol + 8, entry_address);
-        write_u64(&mut bytes, entry_symbol + 16, 64);
+        let symbol_count = physical_kernels.len() * 2 + 2;
+        bytes.resize(symbol_offset + symbol_count * SYMBOL_BYTES, 0);
+        for (index, ((entry_name, descriptor_name), entry_offset)) in
+            physical_names.iter().zip(entry_offsets.iter()).enumerate()
+        {
+            let entry_symbol = symbol_offset + (index * 2 + 1) * SYMBOL_BYTES;
+            write_u32(&mut bytes, entry_symbol, *entry_name);
+            bytes[entry_symbol + 4] = 0x12;
+            bytes[entry_symbol + 5] = 3;
+            write_u16(&mut bytes, entry_symbol + 6, 3);
+            write_u64(&mut bytes, entry_symbol + 8, *entry_offset as u64 + 0x1000);
+            write_u64(&mut bytes, entry_symbol + 16, 64);
 
-        let descriptor_symbol = symbol_offset + 2 * SYMBOL_BYTES;
-        write_u32(&mut bytes, descriptor_symbol, descriptor_name);
-        bytes[descriptor_symbol + 4] = 0x11;
-        write_u16(&mut bytes, descriptor_symbol + 6, 2);
-        write_u64(&mut bytes, descriptor_symbol + 8, descriptor_address);
-        write_u64(&mut bytes, descriptor_symbol + 16, 64);
+            let descriptor_symbol = entry_symbol + SYMBOL_BYTES;
+            write_u32(&mut bytes, descriptor_symbol, *descriptor_name);
+            bytes[descriptor_symbol + 4] = 0x11;
+            write_u16(&mut bytes, descriptor_symbol + 6, 2);
+            write_u64(
+                &mut bytes,
+                descriptor_symbol + 8,
+                (descriptor_offset + index * 64) as u64,
+            );
+            write_u64(&mut bytes, descriptor_symbol + 16, 64);
+        }
 
-        let spare_symbol = symbol_offset + 3 * SYMBOL_BYTES;
+        let spare_symbol = symbol_offset + (symbol_count - 1) * SYMBOL_BYTES;
         write_u32(&mut bytes, spare_symbol, other_name);
         bytes[spare_symbol + 4] = 0x10;
         write_u16(&mut bytes, spare_symbol + 6, 0xfff1);
@@ -1400,12 +1434,12 @@ mod tests {
         write_u64(
             &mut bytes,
             descriptor_load + 32,
-            (descriptor_offset + 64) as u64,
+            (descriptor_offset + descriptor_bytes) as u64,
         );
         write_u64(
             &mut bytes,
             descriptor_load + 40,
-            (descriptor_offset + 64) as u64,
+            (descriptor_offset + descriptor_bytes) as u64,
         );
         write_u64(&mut bytes, descriptor_load + 48, 0x1000);
 
@@ -1413,9 +1447,9 @@ mod tests {
         write_u32(&mut bytes, entry_load, 1);
         write_u32(&mut bytes, entry_load + 4, 5);
         write_u64(&mut bytes, entry_load + 8, entry_offset as u64);
-        write_u64(&mut bytes, entry_load + 16, entry_address);
-        write_u64(&mut bytes, entry_load + 32, 64);
-        write_u64(&mut bytes, entry_load + 40, 64);
+        write_u64(&mut bytes, entry_load + 16, entry_offset as u64 + 0x1000);
+        write_u64(&mut bytes, entry_load + 32, entry_bytes as u64);
+        write_u64(&mut bytes, entry_load + 40, entry_bytes as u64);
         write_u64(&mut bytes, entry_load + 48, 0x1000);
 
         let note_header = section_offset + ELF64_SECTION_HEADER_BYTES;
@@ -1431,18 +1465,18 @@ mod tests {
         write_u32(&mut bytes, rodata_header, rodata_name);
         write_u32(&mut bytes, rodata_header + 4, SHT_PROGBITS);
         write_u64(&mut bytes, rodata_header + 8, 2);
-        write_u64(&mut bytes, rodata_header + 16, descriptor_address);
+        write_u64(&mut bytes, rodata_header + 16, descriptor_offset as u64);
         write_u64(&mut bytes, rodata_header + 24, descriptor_offset as u64);
-        write_u64(&mut bytes, rodata_header + 32, 64);
+        write_u64(&mut bytes, rodata_header + 32, descriptor_bytes as u64);
         write_u64(&mut bytes, rodata_header + 48, 64);
 
         let text_header = section_offset + 3 * ELF64_SECTION_HEADER_BYTES;
         write_u32(&mut bytes, text_header, text_name);
         write_u32(&mut bytes, text_header + 4, SHT_PROGBITS);
         write_u64(&mut bytes, text_header + 8, 6);
-        write_u64(&mut bytes, text_header + 16, entry_address);
+        write_u64(&mut bytes, text_header + 16, entry_offset as u64 + 0x1000);
         write_u64(&mut bytes, text_header + 24, entry_offset as u64);
-        write_u64(&mut bytes, text_header + 32, 64);
+        write_u64(&mut bytes, text_header + 32, entry_bytes as u64);
         write_u64(&mut bytes, text_header + 48, 256);
 
         let strtab_header = section_offset + 4 * ELF64_SECTION_HEADER_BYTES;
@@ -1456,7 +1490,11 @@ mod tests {
         write_u32(&mut bytes, symtab_header, symtab_name);
         write_u32(&mut bytes, symtab_header + 4, 2);
         write_u64(&mut bytes, symtab_header + 24, symbol_offset as u64);
-        write_u64(&mut bytes, symtab_header + 32, (4 * SYMBOL_BYTES) as u64);
+        write_u64(
+            &mut bytes,
+            symtab_header + 32,
+            (symbol_count * SYMBOL_BYTES) as u64,
+        );
         write_u32(&mut bytes, symtab_header + 40, 4);
         write_u32(&mut bytes, symtab_header + 44, 1);
         write_u64(&mut bytes, symtab_header + 48, 8);
@@ -1489,18 +1527,23 @@ mod tests {
         );
         write_u64(&mut bytes, section_strings_header + 48, 1);
 
-        write_u32(&mut bytes, descriptor_offset, 0);
-        write_u32(&mut bytes, descriptor_offset + 4, 0);
-        write_u32(&mut bytes, descriptor_offset + 8, 256);
-        write_i64(
-            &mut bytes,
-            descriptor_offset + 16,
-            i64::try_from(entry_address - descriptor_address).unwrap(),
-        );
-        write_u32(&mut bytes, descriptor_offset + 44, 1);
-        write_u32(&mut bytes, descriptor_offset + 48, 0x00af_0081);
-        write_u32(&mut bytes, descriptor_offset + 52, 0);
-        write_u16(&mut bytes, descriptor_offset + 56, 0x001e);
+        for (index, entry_offset) in entry_offsets.iter().enumerate() {
+            let descriptor = descriptor_offset + index * 64;
+            let descriptor_address = descriptor as u64;
+            let entry_address = *entry_offset as u64 + 0x1000;
+            write_u32(&mut bytes, descriptor, 0);
+            write_u32(&mut bytes, descriptor + 4, 0);
+            write_u32(&mut bytes, descriptor + 8, 256);
+            write_i64(
+                &mut bytes,
+                descriptor + 16,
+                i64::try_from(entry_address - descriptor_address).unwrap(),
+            );
+            write_u32(&mut bytes, descriptor + 44, 1);
+            write_u32(&mut bytes, descriptor + 48, 0x00af_0081);
+            write_u32(&mut bytes, descriptor + 52, 0);
+            write_u16(&mut bytes, descriptor + 56, 0x001e);
+        }
 
         BoundHsacoFixture {
             bytes,
@@ -1807,13 +1850,20 @@ mod tests {
         );
         assert!(decode_hsaco_identity_claims_v2(&mismatched_metadata.bytes).is_err());
 
-        let extra_kernel = bound_elf(
-            &[handoff.canonical_bytes()],
-            4,
-            &[("alpha", "alpha.kd"), ("beta", "beta.kd")],
+        let kernels = [("alpha", "alpha.kd"), ("beta", "beta.kd")];
+        let extra_kernel =
+            bound_elf_with_physical_kernels(&[handoff.canonical_bytes()], 4, &kernels, &kernels);
+        let physical =
+            fe2o3_hsaco::inspect_and_bind_kernel_descriptors(&extra_kernel.bytes).unwrap();
+        assert_eq!(physical.inspection().kernels().len(), 2);
+        assert_eq!(physical.bindings().len(), 2);
+        assert_eq!(physical.bindings()[0].kernel_index(), 0);
+        assert_eq!(physical.bindings()[1].kernel_index(), 1);
+        assert_eq!(
+            decode_hsaco_identity_claims_v2(&extra_kernel.bytes)
+                .unwrap_err()
+                .to_string(),
+            "S09 requires exactly one physically bound alpha/alpha.kd export matching the semantic claim"
         );
-        assert!(fe2o3_hsaco::inspect(&extra_kernel.bytes).is_ok());
-        assert!(fe2o3_hsaco::inspect_and_bind_kernel_descriptors(&extra_kernel.bytes).is_err());
-        assert!(decode_hsaco_identity_claims_v2(&extra_kernel.bytes).is_err());
     }
 }
