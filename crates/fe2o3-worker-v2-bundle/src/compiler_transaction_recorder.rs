@@ -455,7 +455,9 @@ pub struct ExactSemanticLayoutWitnessV1 {
 }
 
 impl ExactSemanticLayoutWitnessV1 {
-    /// Strictly decodes the canonical compiler-produced semantic witness.
+    /// Strictly decodes a canonical caller-supplied, structurally validated semantic witness.
+    ///
+    /// Successful decoding does not authenticate compiler production or provenance.
     pub fn decode(
         kernel: IdentityText,
         bytes: &[u8],
@@ -1309,10 +1311,12 @@ impl SealedCompilerTransactionV1 {
         true
     }
 
-    /// Joins this inert record with a non-clone receipt issued by a pinned execution adapter.
+    /// Reserved join point for a future non-clone execution-receipt capability.
     ///
-    /// This method is intentionally not a decoder. The receipt has no public constructor; a
-    /// future pinned compiler/backend execution module must issue it after durable observation.
+    /// This method is intentionally not a decoder. No receipt issuer exists today, and the
+    /// receipt has no public constructor. A future pinned compiler/backend execution module must
+    /// define replay-resistant freshness and issue the capability only after it observes the
+    /// measured source/backend-to-module execution and records durable execution evidence.
     pub fn bind_authenticated_execution(
         self,
         receipt: AuthenticatedCompilerTransactionExecutionReceiptV1,
@@ -1362,11 +1366,13 @@ impl SealedCompilerTransactionV1 {
     }
 }
 
-/// Opaque, non-clone proof that pinned compiler/backend/Worker execution was durably observed.
+/// Reserved opaque, non-clone capability for a future authenticated execution receipt.
 ///
-/// There is deliberately no public constructor or byte decoder. The execution integration that
-/// observes all measured processes will own construction once that durable receipt protocol is
-/// implemented.
+/// This is not a current proof: there is no issuer, public constructor, or byte decoder. The
+/// present recorder supplies no replay-resistant freshness, does not observe source/backend to
+/// compiler-module causality, and includes no real Worker-generated COV6 hardware or load/dispatch
+/// evidence. A future pinned execution integration must establish those properties before it may
+/// construct this capability.
 #[derive(Debug)]
 pub struct AuthenticatedCompilerTransactionExecutionReceiptV1 {
     transaction: SealedCompilerTransactionIdentityV1,
@@ -1383,10 +1389,11 @@ impl AuthenticatedCompilerTransactionExecutionReceiptV1 {
     }
 }
 
-/// A compiler transaction joined to an opaque durable execution receipt.
+/// Reserved result of joining a compiler transaction to a future execution-receipt capability.
 ///
-/// This type is not cloneable or serializable. It authenticates only the observed compiler
-/// transaction and still grants no publication, load, or launch authority.
+/// No production value can currently be created because the receipt has no issuer. If an issuer
+/// is implemented, this type remains non-cloneable and non-serializable and grants no publication,
+/// load, or launch authority.
 #[derive(Debug)]
 pub struct AuthenticatedCompilerTransactionResultV1 {
     transaction: SealedCompilerTransactionV1,

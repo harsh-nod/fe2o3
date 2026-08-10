@@ -35,9 +35,11 @@ transaction can seal.
 Each ordered stage consumes a transaction-local checkpoint. Reordered,
 repeated, stale, or cross-transaction checkpoints fail before recorder state
 changes. The recorder keeps its fixed-profile measurement separate from the
-shared `TargetIdentityV1`. The latter is accepted only with the validated final
-artifact inputs and must be supplied from an artifact-transaction publication
-scope; the recorder neither invents nor authenticates that shared identity.
+shared `TargetIdentityV1`. At the final-artifact stage, the recorder derives a
+descriptive target identity from the validated `ArtifactContainerV1` with the
+same canonical manifest-target derivation used by artifact publication. It
+does not accept a caller-supplied target identity. The derived identity grants
+no publication, currentness, load, launch, or other authority.
 
 `SealedCompilerTransactionV1` retains those measurements and the existing
 `CompilerTransactionEvidenceCapsuleV2` in a strict canonical wire. Decoding
@@ -52,6 +54,13 @@ contains no process-local publication lease, currentness token, HSA executable,
 loaded module, or launch token. Decoding and validation grant no load, launch,
 proof, compiler-origin, publication, or currentness authority. A sealed compiler
 transaction is an integrity-bound inert record, not a safe-launch credential.
+
+The execution-receipt API is reserved for a future capability and has no issuer
+today. In particular, the recorder provides no replay-resistant freshness, no
+observation that the measured source and rustc/backend invocation produced the
+recorded compiler module, and no real Worker-generated COV6 hardware or
+load/dispatch evidence. Its current guarantees are structural consistency and
+canonical content binding only.
 
 `DurablePublishedHsacoClaimV1` preserves the exact publication plan, receipt,
 output-directory identity, record identity, artifact identity, and artifact
