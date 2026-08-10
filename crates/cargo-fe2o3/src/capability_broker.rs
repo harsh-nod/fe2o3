@@ -334,6 +334,8 @@ mod platform {
         locked_dispatch_pause: Mutex<Option<Arc<TestPause>>>,
         #[cfg(test)]
         begin_started: std::sync::atomic::AtomicBool,
+        #[cfg(test)]
+        request_read_started: std::sync::atomic::AtomicBool,
     }
 
     impl BrokerShutdown {
@@ -472,6 +474,21 @@ mod platform {
                 assert!(
                     std::time::Instant::now() < deadline,
                     "capability broker shutdown did not start"
+                );
+                thread::yield_now();
+            }
+        }
+
+        #[cfg(test)]
+        fn wait_for_request_read(&self) {
+            let deadline = std::time::Instant::now() + BROKER_IO_TIMEOUT;
+            while !self
+                .request_read_started
+                .load(std::sync::atomic::Ordering::Acquire)
+            {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "capability broker did not reach the request read"
                 );
                 thread::yield_now();
             }
@@ -792,6 +809,10 @@ mod platform {
                 .authenticate_client(stream)
                 .map_err(|error| io::Error::new(io::ErrorKind::PermissionDenied, error))?;
             let mut request = vec![0_u8; REQUEST_BYTES];
+            #[cfg(test)]
+            self.shutdown
+                .request_read_started
+                .store(true, std::sync::atomic::Ordering::Release);
             stream.read_exact(&mut request)?;
             let challenge_start = REQUEST_MAGIC.len() + 16 + 1 + CONFIG_ID_BYTES;
             let challenge: [u8; CHALLENGE_BYTES] = request
@@ -1042,6 +1063,8 @@ mod platform {
         use super::*;
 
         static NEXT: AtomicU64 = AtomicU64::new(1);
+        const PROMPT_SHUTDOWN_BOUND: Duration = Duration::from_secs(5);
+        const _: () = assert!(PROMPT_SHUTDOWN_BOUND.as_secs() < BROKER_IO_TIMEOUT.as_secs());
 
         struct TestDirectory(PathBuf);
 
@@ -1428,12 +1451,14 @@ mod platform {
                 client.write_all(&vec![0_u8; request_prefix_len]).unwrap();
                 let active_identity = wait_for_active_socket(&broker);
                 assert!(object_is_open(active_identity));
+                broker.shutdown.wait_for_request_read();
 
                 let started = Instant::now();
                 drop(broker);
+                let elapsed = started.elapsed();
                 assert!(
-                    started.elapsed() < Duration::from_secs(2),
-                    "broker shutdown waited for the request timeout"
+                    elapsed < PROMPT_SHUTDOWN_BOUND,
+                    "broker shutdown took {elapsed:?}, exceeding the {PROMPT_SHUTDOWN_BOUND:?} prompt bound"
                 );
                 assert_eq!(received_descriptor_count(&client), 0);
                 drop(client);
