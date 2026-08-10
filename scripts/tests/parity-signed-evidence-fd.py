@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -21,6 +22,7 @@ EVIDENCE = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = EVIDENCE
 SPEC.loader.exec_module(EVIDENCE)
 FIXTURES = ROOT / "scripts/tests/fixtures"
+LEASE_DIGEST = "a" * 64
 
 
 def bootstrap_args(output: Path) -> SimpleNamespace:
@@ -161,6 +163,21 @@ def test_archive_snapshot_rejects_symlink_traversal() -> None:
         else:
             raise AssertionError("archive snapshot followed a symlink")
 
+    with tempfile.TemporaryDirectory(prefix="fe2o3-source-parent-symlink-") as raw_temp:
+        temp = Path(raw_temp)
+        real_parent = temp / "real-parent"
+        archive = real_parent / "archive"
+        archive.mkdir(parents=True)
+        (archive / "record.tsv").write_bytes(b"record\n")
+        linked_parent = temp / "linked-parent"
+        linked_parent.symlink_to(real_parent, target_is_directory=True)
+        expect_evidence_error(
+            lambda: EVIDENCE.ArchiveSnapshot(
+                linked_parent / "archive", require_immutable=False
+            ),
+            "evidence archive root must be a real directory",
+        )
+
 
 def test_openat2_architecture_preflight_is_explicit() -> None:
     assert EVIDENCE.openat2_syscall_number("x86_64") == 437
@@ -223,7 +240,9 @@ def test_destination_parent_symlink_and_replacement_races() -> None:
         linked_parent = temp / "linked-parent"
         linked_parent.symlink_to(real_parent, target_is_directory=True)
         expect_evidence_error(
-            lambda: EVIDENCE.ArchiveDestination(linked_parent / "archive"),
+            lambda: EVIDENCE.ArchiveDestination(
+                linked_parent / "archive", LEASE_DIGEST
+            ),
             "destination parent contains an unsafe path component",
         )
 
@@ -231,18 +250,21 @@ def test_destination_parent_symlink_and_replacement_races() -> None:
         temp = Path(raw_temp)
         parent = temp / "parent"
         parent.mkdir()
-        with EVIDENCE.ArchiveDestination(parent / "archive") as destination:
+        with EVIDENCE.ArchiveDestination(
+            parent / "archive", LEASE_DIGEST
+        ) as destination:
             destination.write_index(b"authenticated index bytes\n")
             detached = temp / "detached-parent"
             parent.rename(detached)
             parent.mkdir()
             (parent / "attacker-marker").write_text("replacement\n", encoding="ascii")
-            destination.publish()
-        assert (detached / "archive/archive-index-v1.tsv").read_bytes() == (
-            b"authenticated index bytes\n"
-        )
+            expect_evidence_error(
+                destination.publish,
+                "requested destination parent changed before publication",
+            )
+        assert not (detached / "archive").exists()
         assert not (parent / "archive").exists()
-        make_archive_writable(detached / "archive")
+        assert not list(detached.glob(".fe2o3-archive-*"))
 
 
 def test_destination_durability_order_and_fault_boundaries() -> None:
@@ -263,7 +285,9 @@ def test_destination_durability_order_and_fault_boundaries() -> None:
             with EVIDENCE.ArchiveSnapshot(
                 source_root, require_immutable=False
             ) as source:
-                with EVIDENCE.ArchiveDestination(temp / "archive") as destination:
+                with EVIDENCE.ArchiveDestination(
+                    temp / "archive", LEASE_DIGEST
+                ) as destination:
                     destination.copy(source, "payload.bin")
                     destination.directory_fd("nested/leaf")
                     destination.write_index(b"index\n")
@@ -312,8 +336,116 @@ def test_destination_durability_order_and_fault_boundaries() -> None:
             make_archive_writable(temp / "archive")
 
 
+def test_retained_destination_fds_detect_same_uid_mutation() -> None:
+    for relative in ("payload.bin", "archive-index-v1.tsv"):
+        with tempfile.TemporaryDirectory(prefix="fe2o3-retained-destination-") as raw_temp:
+            temp = Path(raw_temp)
+            source_root = temp / "source"
+            source_root.mkdir()
+            (source_root / "payload.bin").write_bytes(b"payload\n")
+            with EVIDENCE.ArchiveSnapshot(
+                source_root, require_immutable=False
+            ) as source:
+                with EVIDENCE.ArchiveDestination(
+                    temp / "archive", LEASE_DIGEST
+                ) as destination:
+                    destination.copy(source, "payload.bin")
+                    destination.write_index(b"index\n")
+                    with destination.snapshot() as snapshot:
+                        snapshot.validate("payload.bin")
+                        snapshot.validate("archive-index-v1.tsv")
+                    attacked = destination.staging_label / relative
+                    attacked.chmod(0o600)
+                    attacked.write_bytes(b"same-uid replacement\n")
+                    expect_evidence_error(
+                        destination.publish,
+                        "changed immediately before publication",
+                    )
+            assert not (temp / "archive").exists()
+            assert not list(temp.glob(".fe2o3-archive-*"))
+
+    with tempfile.TemporaryDirectory(prefix="fe2o3-post-rename-mutation-") as raw_temp:
+        temp = Path(raw_temp)
+        source_root = temp / "source"
+        source_root.mkdir()
+        (source_root / "payload.bin").write_bytes(b"payload\n")
+        real_rename = EVIDENCE.rename_noreplace_at
+
+        def rename_then_mutate(*args: object) -> None:
+            real_rename(*args)
+            attacked = temp / "archive/payload.bin"
+            attacked.chmod(0o600)
+            attacked.write_bytes(b"post-rename mutation\n")
+
+        EVIDENCE.rename_noreplace_at = rename_then_mutate
+        try:
+            with EVIDENCE.ArchiveSnapshot(
+                source_root, require_immutable=False
+            ) as source:
+                with EVIDENCE.ArchiveDestination(
+                    temp / "archive", LEASE_DIGEST
+                ) as destination:
+                    destination.copy(source, "payload.bin")
+                    destination.write_index(b"index\n")
+                    expect_evidence_error(
+                        destination.publish,
+                        "changed immediately after publication",
+                    )
+        finally:
+            EVIDENCE.rename_noreplace_at = real_rename
+        assert (temp / "archive").is_dir()
+        make_archive_writable(temp / "archive")
+
+
+def test_deterministic_staging_lease_recovers_after_hard_exit() -> None:
+    with tempfile.TemporaryDirectory(prefix="fe2o3-staging-recovery-") as raw_temp:
+        temp = Path(raw_temp)
+        output = temp / "archive"
+        child = os.fork()
+        if child == 0:
+            destination = EVIDENCE.ArchiveDestination(output, LEASE_DIGEST)
+            destination.write_index(b"crash-left index\n")
+            os._exit(0)
+        _, status = os.waitpid(child, 0)
+        assert os.waitstatus_to_exitcode(status) == 0
+        leases = list(temp.glob(".fe2o3-archive-*"))
+        assert len(leases) == 1
+
+        with EVIDENCE.ArchiveDestination(output, LEASE_DIGEST) as destination:
+            assert destination.staging_label == leases[0]
+            destination.write_index(b"recovered index\n")
+            destination.publish()
+        assert not list(temp.glob(".fe2o3-archive-*"))
+        assert (output / "archive-index-v1.tsv").read_bytes() == b"recovered index\n"
+        make_archive_writable(output)
+
+
+def test_same_uid_publisher_is_inert_for_production() -> None:
+    with tempfile.TemporaryDirectory(prefix="fe2o3-production-publisher-") as raw_temp:
+        temp = Path(raw_temp)
+        real_parse = EVIDENCE.parse_trust_policy
+        real_validate = EVIDENCE.validate_production_trust
+        production = EVIDENCE.TrustPolicy("production", [], {})
+        EVIDENCE.parse_trust_policy = lambda *_: production
+        EVIDENCE.validate_production_trust = lambda *_: production
+        args = SimpleNamespace(
+            repo=temp,
+            allow_test_fixtures=False,
+            trusted_root=temp,
+            trust_policy=temp / "trust.tsv",
+        )
+        try:
+            expect_evidence_error(
+                lambda: EVIDENCE.ingest_archive_snapshot(args, None),
+                "requires an externally protected publisher contract",
+            )
+        finally:
+            EVIDENCE.parse_trust_policy = real_parse
+            EVIDENCE.validate_production_trust = real_validate
+
+
 def publish_minimal_archive(output: Path) -> None:
-    with EVIDENCE.ArchiveDestination(output) as destination:
+    with EVIDENCE.ArchiveDestination(output, LEASE_DIGEST) as destination:
         destination.write_index(b"index\n")
         destination.publish()
 
@@ -418,6 +550,9 @@ if __name__ == "__main__":
     test_archive_file_and_cumulative_byte_limits()
     test_destination_parent_symlink_and_replacement_races()
     test_destination_durability_order_and_fault_boundaries()
+    test_retained_destination_fds_detect_same_uid_mutation()
+    test_deterministic_staging_lease_recovers_after_hard_exit()
+    test_same_uid_publisher_is_inert_for_production()
     test_bootstrap_publication_is_durable_and_no_replace()
     test_bootstrap_destination_race_has_one_winner()
     test_bootstrap_interruption_cleans_unpublished_staging()

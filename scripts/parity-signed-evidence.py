@@ -240,12 +240,12 @@ class ArchiveSnapshot:
         preflight_openat2()
         requested = root.absolute()
         if root_fd is None:
-            flags = os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW
             try:
-                self.root_fd = os.open(requested, flags)
-            except OSError as error:
+                self.root, self.root_fd = open_absolute_directory(
+                    requested, "evidence archive root"
+                )
+            except EvidenceError as error:
                 fail(f"evidence archive root must be a real directory: {error}")
-            self.root = requested.resolve(strict=True)
         else:
             self.root_fd = os.dup(root_fd)
             self.root = requested
@@ -400,12 +400,12 @@ class ArchiveSnapshot:
 
     def copy_to_at(
         self, relative: str, directory_fd: int, destination_name: str
-    ) -> None:
+    ) -> tuple[int, ArchiveFileIdentity]:
         descriptor = self._descriptor(relative)
         expected = self.validate(relative)
         output_descriptor = os.open(
             destination_name,
-            os.O_WRONLY
+            os.O_RDWR
             | os.O_CREAT
             | os.O_EXCL
             | os.O_CLOEXEC
@@ -440,9 +440,16 @@ class ArchiveSnapshot:
                 fail(f"copied archive file identity mismatch: {relative}")
             os.fchmod(output_descriptor, 0o444)
             fsync_checked(output_descriptor, f"copied archive file {relative}")
-        finally:
+            retained = archive_file_identity(os.fstat(output_descriptor), expected.digest)
+        except BaseException:
             os.close(output_descriptor)
-        self.validate(relative)
+            raise
+        try:
+            self.validate(relative)
+        except BaseException:
+            os.close(output_descriptor)
+            raise
+        return output_descriptor, retained
 
     def copy_to(self, relative: str, destination: Path) -> None:
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -451,7 +458,8 @@ class ArchiveSnapshot:
             os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
         )
         try:
-            self.copy_to_at(relative, parent_fd, destination.name)
+            descriptor, _ = self.copy_to_at(relative, parent_fd, destination.name)
+            os.close(descriptor)
         finally:
             os.close(parent_fd)
 
@@ -944,41 +952,101 @@ def open_absolute_directory(path: Path, label: str) -> tuple[Path, int]:
         raise
 
 
+def recover_archive_staging_lease(parent_fd: int, name: str) -> None:
+    parent_info = os.fstat(parent_fd)
+    counters = {"entries": 0, "bytes": 0}
+
+    def remove_directory(directory_fd: int) -> None:
+        info = os.fstat(directory_fd)
+        if info.st_dev != parent_info.st_dev or info.st_uid != os.geteuid():
+            fail("existing archive staging lease has unsafe ownership or device")
+        os.fchmod(directory_fd, 0o700)
+        for child_name in os.listdir(directory_fd):
+            counters["entries"] += 1
+            if counters["entries"] > MAX_ARCHIVE_FILES * 4:
+                fail("existing archive staging lease exceeds the entry bound")
+            try:
+                child_fd = openat2_fd(
+                    directory_fd,
+                    child_name,
+                    os.O_RDONLY | os.O_NONBLOCK,
+                    RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV,
+                )
+            except OSError as error:
+                fail(f"existing archive staging lease is unsafe: {error}")
+            try:
+                child_info = os.fstat(child_fd)
+                if child_info.st_uid != os.geteuid():
+                    fail("existing archive staging lease contains foreign ownership")
+                if stat.S_ISDIR(child_info.st_mode):
+                    remove_directory(child_fd)
+                    os.rmdir(child_name, dir_fd=directory_fd)
+                elif stat.S_ISREG(child_info.st_mode) and child_info.st_nlink == 1:
+                    if child_info.st_size > MAX_ARCHIVE_FILE_BYTES:
+                        fail("existing archive staging file exceeds the byte bound")
+                    counters["bytes"] += child_info.st_size
+                    if counters["bytes"] > MAX_ARCHIVE_TOTAL_BYTES + MAX_BYTES:
+                        fail("existing archive staging lease exceeds the byte bound")
+                    os.unlink(child_name, dir_fd=directory_fd)
+                else:
+                    fail("existing archive staging lease contains an unsafe entry")
+            finally:
+                os.close(child_fd)
+
+    try:
+        staging_fd = openat2_fd(
+            parent_fd,
+            name,
+            os.O_RDONLY | os.O_DIRECTORY,
+            RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV,
+        )
+    except OSError as error:
+        fail(f"existing archive staging lease is unsafe: {error}")
+    try:
+        remove_directory(staging_fd)
+    finally:
+        os.close(staging_fd)
+    os.rmdir(name, dir_fd=parent_fd)
+    fsync_checked(parent_fd, "recovered archive staging lease parent")
+
+
 class ArchiveDestination:
     """Private FD-relative staging and atomic destination publication."""
 
-    def __init__(self, destination: Path) -> None:
+    def __init__(self, destination: Path, manifest_digest: str) -> None:
         absolute = Path(os.path.abspath(destination))
         if absolute.name in ("", ".", ".."):
             fail("evidence archive destination must name a directory")
+        if not SHA256_RE.fullmatch(manifest_digest):
+            fail("archive staging lease requires a manifest digest")
         self.parent_path, self.parent_fd = open_absolute_directory(
             absolute.parent, "evidence archive destination parent"
         )
         self.destination = absolute
         self.destination_name = absolute.name
-        self.staging_name = ""
+        lease = sha256_bytes(
+            f"{self.destination_name}\0{manifest_digest}".encode("ascii")
+        )[:32]
+        self.staging_name = f".fe2o3-archive-{lease}"
         self.staging_fd = -1
         self.directory_fds: dict[str, int] = {}
+        self.file_fds: dict[str, int] = {}
+        self.file_identities: dict[str, ArchiveFileIdentity] = {}
+        parent_info = os.fstat(self.parent_fd)
+        self.parent_identity = (parent_info.st_dev, parent_info.st_ino)
         self.published = False
         try:
-            for _ in range(128):
-                candidate = f".fe2o3-archive-{secrets.token_hex(12)}"
-                try:
-                    os.mkdir(candidate, 0o700, dir_fd=self.parent_fd)
-                except FileExistsError:
-                    continue
-                self.staging_name = candidate
-                self.staging_fd = os.open(
-                    candidate,
-                    os.O_RDONLY
-                    | os.O_DIRECTORY
-                    | os.O_CLOEXEC
-                    | os.O_NOFOLLOW,
-                    dir_fd=self.parent_fd,
-                )
-                break
-            if self.staging_fd < 0:
-                fail("cannot allocate a unique evidence archive staging directory")
+            try:
+                os.mkdir(self.staging_name, 0o700, dir_fd=self.parent_fd)
+            except FileExistsError:
+                recover_archive_staging_lease(self.parent_fd, self.staging_name)
+                os.mkdir(self.staging_name, 0o700, dir_fd=self.parent_fd)
+            self.staging_fd = openat2_fd(
+                self.parent_fd,
+                self.staging_name,
+                os.O_RDONLY | os.O_DIRECTORY,
+                RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV,
+            )
         except BaseException:
             self.close()
             raise
@@ -1024,12 +1092,16 @@ class ArchiveDestination:
     def copy(self, source: ArchiveSnapshot, relative: str) -> None:
         path = Path(relative)
         directory = path.parent.as_posix()
-        source.copy_to_at(relative, self.directory_fd(directory), path.name)
+        descriptor, identity = source.copy_to_at(
+            relative, self.directory_fd(directory), path.name
+        )
+        self.file_fds[relative] = descriptor
+        self.file_identities[relative] = identity
 
     def write_index(self, value: bytes) -> None:
         descriptor = os.open(
             ARCHIVE_INDEX_RELATIVE,
-            os.O_WRONLY
+            os.O_RDWR
             | os.O_CREAT
             | os.O_EXCL
             | os.O_CLOEXEC
@@ -1049,8 +1121,13 @@ class ArchiveDestination:
                 fail("generated archive index identity mismatch")
             os.fchmod(descriptor, 0o444)
             fsync_checked(descriptor, "generated archive index")
-        finally:
+            digest = sha256_bytes(value)
+            identity = archive_file_identity(os.fstat(descriptor), digest)
+        except BaseException:
             os.close(descriptor)
+            raise
+        self.file_fds[ARCHIVE_INDEX_RELATIVE] = descriptor
+        self.file_identities[ARCHIVE_INDEX_RELATIVE] = identity
 
     def snapshot(self) -> ArchiveSnapshot:
         return ArchiveSnapshot(
@@ -1058,6 +1135,72 @@ class ArchiveDestination:
             require_immutable=False,
             root_fd=self.staging_fd,
         )
+
+    def validate_requested_parent(self, phase: str) -> None:
+        _, descriptor = open_absolute_directory(
+            self.parent_path, "evidence archive destination parent"
+        )
+        try:
+            info = os.fstat(descriptor)
+            if (info.st_dev, info.st_ino) != self.parent_identity:
+                fail(f"requested destination parent changed {phase}")
+        finally:
+            os.close(descriptor)
+
+    def validate_retained_files(self, phase: str) -> None:
+        for relative in sorted(self.file_fds):
+            descriptor = self.file_fds[relative]
+            expected = self.file_identities[relative]
+            before = os.fstat(descriptor)
+            digest = sha256_fd(descriptor)
+            after = os.fstat(descriptor)
+            actual = archive_file_identity(after, digest)
+            if archive_file_identity(before, digest) != actual or actual != expected:
+                fail(f"destination archive file changed {phase}: {relative}")
+
+    def validate_published_dirent(self) -> None:
+        staging_info = os.fstat(self.staging_fd)
+        try:
+            held_child = openat2_fd(
+                self.parent_fd,
+                self.destination_name,
+                os.O_RDONLY | os.O_DIRECTORY,
+                RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV,
+            )
+        except OSError as error:
+            fail(f"cannot reopen published archive from held parent: {error}")
+        try:
+            held_info = os.fstat(held_child)
+            if (held_info.st_dev, held_info.st_ino) != (
+                staging_info.st_dev,
+                staging_info.st_ino,
+            ):
+                fail("published archive dirent does not match staging root")
+        finally:
+            os.close(held_child)
+
+        self.validate_requested_parent("after publication")
+        _, requested_parent = open_absolute_directory(
+            self.parent_path, "evidence archive destination parent"
+        )
+        try:
+            requested_child = openat2_fd(
+                requested_parent,
+                self.destination_name,
+                os.O_RDONLY | os.O_DIRECTORY,
+                RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV,
+            )
+            try:
+                requested_info = os.fstat(requested_child)
+                if (requested_info.st_dev, requested_info.st_ino) != (
+                    staging_info.st_dev,
+                    staging_info.st_ino,
+                ):
+                    fail("requested destination dirent does not match staging root")
+            finally:
+                os.close(requested_child)
+        finally:
+            os.close(requested_parent)
 
     def publish(self) -> None:
         for relative in sorted(
@@ -1071,6 +1214,8 @@ class ArchiveDestination:
         os.fchmod(self.staging_fd, 0o555)
         fsync_checked(self.staging_fd, "archive staging root")
         fsync_checked(self.parent_fd, "archive staging parent")
+        self.validate_requested_parent("before publication")
+        self.validate_retained_files("immediately before publication")
         rename_noreplace_at(
             self.parent_fd,
             self.staging_name,
@@ -1078,10 +1223,19 @@ class ArchiveDestination:
             "evidence archive destination already exists",
         )
         self.published = True
+        self.validate_published_dirent()
+        self.validate_retained_files("immediately after publication")
         fsync_checked(self.staging_fd, "published archive destination root")
         fsync_checked(self.parent_fd, "published archive destination parent")
 
     def close(self) -> None:
+        for descriptor in self.file_fds.values():
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        self.file_fds.clear()
+        self.file_identities.clear()
         for descriptor in self.directory_fds.values():
             try:
                 os.close(descriptor)
@@ -2271,6 +2425,10 @@ def ingest_archive_snapshot(
         if trust.domain != "production":
             fail("production archive ingestion requires a production trust domain")
         trust = validate_production_trust(args.trusted_root, args.trust_policy)
+        fail(
+            "production archive publication requires an externally protected "
+            "publisher contract"
+        )
     source_records = source_root.records
     if not SHA256_RE.fullmatch(args.expected_manifest_sha256):
         fail("malformed expected promotion manifest digest")
@@ -2306,7 +2464,9 @@ def ingest_archive_snapshot(
             f"extra={sorted(actual_directories - expected_directories)}"
         )
 
-    with ArchiveDestination(args.destination_root) as destination:
+    with ArchiveDestination(
+        args.destination_root, args.expected_manifest_sha256
+    ) as destination:
         for relative in sorted(closure):
             destination.copy(source_root, relative)
         destination.write_index(
