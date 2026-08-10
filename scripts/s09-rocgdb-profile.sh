@@ -91,7 +91,7 @@ pinned_tool snapshot-supervisor "${PINNER}"
 pinned_tool timeout /usr/bin/timeout
 pinned_tool prlimit /usr/bin/prlimit
 # The canonical checked path is intentionally derived from this script's directory.
-# shellcheck disable=SC1091
+# shellcheck disable=SC1090,SC1091
 source "${RAW_GUARD}"
 
 if [[ "${mode}" == outer ]]; then
