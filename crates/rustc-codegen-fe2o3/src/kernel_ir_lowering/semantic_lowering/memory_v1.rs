@@ -297,6 +297,6 @@ fn branch_to_target(
 ) -> Result<Terminator, TranslationDiagnostic> {
     Ok(Terminator::Branch {
         target: lowerer.block_id(call.target, call.location.clone())?,
-        arguments: Vec::new(),
+        arguments: lowerer.edge_arguments(call.target, call.location)?,
     })
 }

@@ -92,6 +92,39 @@ fn recognized_memory_calls_reach_verified_ir_and_gfx942_llvm() {
 }
 
 #[test]
+fn memory_calls_forward_promoted_ssa_values_to_their_successor() {
+    let mut input = memory_module();
+    input.functions[0].blocks[0]
+        .statements
+        .push(assign_use(0, 3, 4));
+
+    let module = translate_and_verify_for_target(&input, &AmdGpuTarget::new("gfx942:xnack-"))
+        .expect("memory call with live promoted successor value");
+    let function = module
+        .functions
+        .iter()
+        .find(|function| function.id.as_str() == "tests::memory_v1")
+        .expect("memory kernel");
+    let body = function.body.as_ref().expect("memory body");
+    let entry = body
+        .blocks
+        .iter()
+        .find(|block| block.id.0 == 0)
+        .expect("entry block");
+    let successor = body
+        .blocks
+        .iter()
+        .find(|block| block.id.0 == 1)
+        .expect("successor block");
+    let Terminator::Branch { arguments, .. } = entry.terminator.as_ref().expect("entry terminator")
+    else {
+        panic!("memory intrinsic must branch to its successor")
+    };
+    assert_eq!(arguments.len(), 1);
+    assert_eq!(successor.parameters.len(), 1);
+}
+
+#[test]
 fn recognized_memory_calls_fail_closed_outside_the_bounded_profile() {
     let untyped = {
         let mut module = memory_module();
@@ -288,6 +321,18 @@ fn assign_ref(index: usize, destination: usize, source: usize) -> MirStatement {
         destination: Some(place(destination)),
         operands: vec![operand(source)],
         rvalue: Some(MirRvalueKind::Ref),
+        operation: None,
+        source: None,
+    }
+}
+
+fn assign_use(index: usize, destination: usize, source: usize) -> MirStatement {
+    MirStatement {
+        index,
+        kind: MirStatementKind::Assign,
+        destination: Some(place(destination)),
+        operands: vec![operand(source)],
+        rvalue: Some(MirRvalueKind::Use),
         operation: None,
         source: None,
     }
