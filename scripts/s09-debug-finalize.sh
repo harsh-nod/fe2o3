@@ -127,7 +127,7 @@ readonly MANIFEST_V2_SHA256
   --root "${ROOT}" \
   --expected-commit "${SOURCE_COMMIT}" \
   --expected-tree "${SOURCE_TREE}" >/dev/null
-rg -q $'^supplemental\tS09\tMissing$' "${ROOT}/docs/cuda-oxide-parity-status.tsv" ||
-  fail "S09 parity status must remain Missing"
+rg -q $'^supplemental\tS09\tPartial$' "${ROOT}/docs/cuda-oxide-parity-status.tsv" ||
+  fail "S09 parity status must remain Partial until production-v2 evidence qualifies"
 printf 'S09 %s output: %s (manifest %s)\n' \
   "${S09_CLAIM}" "${EVIDENCE}" "${MANIFEST_V2_SHA256}"

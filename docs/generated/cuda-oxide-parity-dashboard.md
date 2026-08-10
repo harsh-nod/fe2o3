@@ -11,8 +11,8 @@ N/A rows are visible below and are not parity blockers because their matrix clas
 
 | Scope | Complete | Partial | Missing | N/A | Blockers | Total |
 |:--|--:|--:|--:|--:|--:|--:|
-| Normative | 0 | 50 | 32 | 12 | 82 | 94 |
-| Supplemental | 0 | 11 | 4 | 0 | 15 | 15 |
+| Normative | 0 | 82 | 0 | 12 | 82 | 94 |
+| Supplemental | 0 | 15 | 0 | 0 | 15 | 15 |
 
 ## Gaps By Gate
 
@@ -20,21 +20,21 @@ Rows assigned to multiple gates are counted in each listed gate. Partial and Mis
 
 | Gate | Complete | Partial | Missing | N/A | Blockers |
 |:--|--:|--:|--:|--:|--:|
-| G1 | 0 | 12 | 1 | 1 | 13 |
-| G2 | 0 | 15 | 16 | 1 | 31 |
-| G3 | 0 | 22 | 5 | 0 | 27 |
-| G4 | 0 | 16 | 11 | 0 | 27 |
-| G5 | 0 | 7 | 1 | 0 | 8 |
-| G6 | 0 | 12 | 9 | 6 | 21 |
-| G7 | 0 | 11 | 5 | 0 | 16 |
-| G8 | 0 | 3 | 3 | 6 | 6 |
+| G1 | 0 | 13 | 0 | 1 | 13 |
+| G2 | 0 | 31 | 0 | 1 | 31 |
+| G3 | 0 | 27 | 0 | 0 | 27 |
+| G4 | 0 | 27 | 0 | 0 | 27 |
+| G5 | 0 | 8 | 0 | 0 | 8 |
+| G6 | 0 | 21 | 0 | 6 | 21 |
+| G7 | 0 | 16 | 0 | 0 | 16 |
+| G8 | 0 | 6 | 0 | 6 | 6 |
 
 ## Status By Class
 
 | Class | Complete | Partial | Missing | N/A |
 |:--|--:|--:|--:|--:|
-| Exact | 0 | 39 | 23 | 0 |
-| AMD-equivalent | 0 | 22 | 13 | 0 |
+| Exact | 0 | 62 | 0 | 0 |
+| AMD-equivalent | 0 | 35 | 0 | 0 |
 | N/A | 0 | 0 | 0 | 12 |
 
 ## Evidence Strength
@@ -43,12 +43,12 @@ Counts are row claims carrying each explicit evidence kind; a row can appear mor
 
 | Evidence kind | Rows | What it establishes |
 |:--|--:|:--|
-| Source/unit proof | 61 | Source contracts and CPU/unit behavior only |
+| Source/unit proof | 97 | Source contracts and CPU/unit behavior only |
 | Compile to code object | 18 | Target-specific compilation only |
 | Local hardware execution | 0 | Execution on the named local lane only |
 | Remote hardware execution | 0 | Execution on the named remote lane only |
-| Negative/adversarial testing | 61 | Rejection or robustness behavior only |
-| Verus proof | 11 | The named source-level mathematical model only |
+| Negative/adversarial testing | 97 | Rejection or robustness behavior only |
+| Verus proof | 12 | The named source-level mathematical model only |
 | Machine-code refinement | 0 | Verified source/IR-to-machine-code correspondence only |
 
 ## N/A Rows
