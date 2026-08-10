@@ -1,0 +1,14 @@
+[package]
+name = "fe2o3-cross-crate-provider"
+edition = "2024"
+version = "0.0.0"
+publish = false
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+fe2o3-device = { path = "../../../../../fe2o3-device" }
+fe2o3-host = { path = "../../../../../fe2o3-host" }
+
+[workspace]
