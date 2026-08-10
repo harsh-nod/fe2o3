@@ -1,8 +1,5 @@
 #[allow(dead_code)]
-#[path = "rustc_wrapper/pinned_executable.rs"]
-mod pinned_executable;
-
-use pinned_executable::PinnedExecutable;
+use crate::pinned_executable::PinnedExecutable;
 use sha2::{Digest, Sha256};
 use std::env;
 use std::ffi::{OsStr, OsString};

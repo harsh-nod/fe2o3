@@ -10,7 +10,7 @@
 //! [`PinnedExecutable::sha256`] with an authenticated expected digest. Parent-directory symlinks,
 //! mutations of the opened inode by another writer, the ELF interpreter, shared libraries, the
 //! codegen backend dynamic library, and the kernel/`procfs` implementation remain outside this
-//! boundary. The current wrapper does not use this module to activate compile execution.
+//! boundary.
 
 use std::error::Error;
 use std::fmt;
@@ -185,12 +185,10 @@ mod platform {
     use std::ffi::OsStr;
     use std::fs::{File, Metadata};
     use std::io::{self, Read, Seek, SeekFrom};
-    use std::os::fd::AsRawFd;
-    #[cfg(test)]
-    use std::os::fd::RawFd;
+    use std::os::fd::{AsRawFd, BorrowedFd, IntoRawFd, RawFd};
     use std::os::unix::fs::MetadataExt;
     use std::os::unix::process::CommandExt;
-    use std::process::{Command, ExitStatus, Stdio};
+    use std::process::{Command, ExitStatus};
 
     const HASH_CHUNK_BYTES: usize = 64 * 1024;
 
@@ -253,7 +251,68 @@ mod platform {
                 path: display_path.clone(),
                 source: source.into(),
             })?;
-            let mut file = File::from(fd);
+            Self::from_open_file(File::from(fd), display_path)
+        }
+
+        pub(crate) fn from_inherited_descriptor(
+            descriptor: RawFd,
+            display_path: PathBuf,
+        ) -> Result<Self, PinExecutableError> {
+            if descriptor < 3 {
+                return Err(PinExecutableError::ExecutionStrategy {
+                    path: display_path,
+                    source: io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "inherited executable descriptor overlaps a standard stream",
+                    ),
+                });
+            }
+            // SAFETY: the caller supplies a process-local descriptor number. fcntl validates that
+            // it is live before any owned duplicate is constructed.
+            let inherited = unsafe { BorrowedFd::borrow_raw(descriptor) };
+            let flags = rustix::io::fcntl_getfd(inherited).map_err(|source| {
+                PinExecutableError::ExecutionStrategy {
+                    path: display_path.clone(),
+                    source: source.into(),
+                }
+            })?;
+            if flags.contains(rustix::io::FdFlags::CLOEXEC) {
+                return Err(PinExecutableError::ExecutionStrategy {
+                    path: display_path,
+                    source: io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "inherited executable descriptor is close-on-exec",
+                    ),
+                });
+            }
+            let status = rustix::fs::fcntl_getfl(inherited).map_err(|source| {
+                PinExecutableError::ExecutionStrategy {
+                    path: display_path.clone(),
+                    source: source.into(),
+                }
+            })?;
+            if status & OFlags::ACCMODE != OFlags::RDONLY {
+                return Err(PinExecutableError::ExecutionStrategy {
+                    path: display_path,
+                    source: io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "inherited executable descriptor is writable",
+                    ),
+                });
+            }
+            let duplicate = rustix::io::fcntl_dupfd_cloexec(inherited, 3).map_err(|source| {
+                PinExecutableError::ExecutionStrategy {
+                    path: display_path.clone(),
+                    source: source.into(),
+                }
+            })?;
+            Self::from_open_file(File::from(duplicate), display_path)
+        }
+
+        fn from_open_file(
+            mut file: File,
+            display_path: PathBuf,
+        ) -> Result<Self, PinExecutableError> {
             let initial_metadata =
                 file.metadata()
                     .map_err(|source| PinExecutableError::Inspect {
@@ -315,6 +374,22 @@ mod platform {
             &self.sha256
         }
 
+        pub(crate) fn display_path(&self) -> &Path {
+            &self.display_path
+        }
+
+        pub(crate) fn same_object_as(&self, other: &File) -> Result<bool, PinExecutableError> {
+            let metadata = other
+                .metadata()
+                .map_err(|source| PinExecutableError::Inspect {
+                    path: self.display_path.clone(),
+                    source,
+                })?;
+            Ok(self
+                .snapshot
+                .same_execution_object(ObjectSnapshot::from_metadata(&metadata)))
+        }
+
         pub(crate) const fn size(&self) -> u64 {
             self.snapshot.size
         }
@@ -351,7 +426,7 @@ mod platform {
         }
 
         #[cfg(test)]
-        fn raw_fd(&self) -> RawFd {
+        pub(crate) fn raw_fd(&self) -> RawFd {
             self.file.as_raw_fd()
         }
 
@@ -368,17 +443,84 @@ mod platform {
     }
 
     impl PinnedCommand<'_> {
+        pub(crate) const fn as_command(&self) -> &Command {
+            &self.command
+        }
+
+        pub(crate) fn as_command_mut(&mut self) -> &mut Command {
+            &mut self.command
+        }
+
+        pub(crate) fn inherit_executable_at(
+            &mut self,
+            target_fd: RawFd,
+        ) -> Result<&mut Self, PinExecutableError> {
+            if target_fd < 3 {
+                return Err(PinExecutableError::ExecutionStrategy {
+                    path: self._executable.display_path.clone(),
+                    source: io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "child executable descriptor overlaps a standard stream",
+                    ),
+                });
+            }
+            // SAFETY: fcntl only probes whether the process-local descriptor number is occupied.
+            let target = unsafe { BorrowedFd::borrow_raw(target_fd) };
+            match rustix::io::fcntl_getfd(target) {
+                Err(rustix::io::Errno::BADF) => {}
+                Err(source) => {
+                    return Err(PinExecutableError::ExecutionStrategy {
+                        path: self._executable.display_path.clone(),
+                        source: source.into(),
+                    });
+                }
+                Ok(_) => {
+                    return Err(PinExecutableError::ExecutionStrategy {
+                        path: self._executable.display_path.clone(),
+                        source: io::Error::new(
+                            io::ErrorKind::AlreadyExists,
+                            "child executable descriptor is already occupied",
+                        ),
+                    });
+                }
+            }
+            let source_fd = self._executable.file.as_raw_fd();
+            let device = self._executable.snapshot.device;
+            let inode = self._executable.snapshot.inode;
+            // SAFETY: the pin outlives this command. The callback uses descriptor-only syscalls,
+            // validates the installed object, and deliberately clears CLOEXEC for the process
+            // chain that receives this capability.
+            unsafe {
+                self.command.pre_exec(move || {
+                    let source = BorrowedFd::borrow_raw(source_fd);
+                    let installed = rustix::io::fcntl_dupfd_cloexec(source, target_fd)
+                        .map_err(io::Error::from)?;
+                    if installed.as_raw_fd() != target_fd {
+                        return Err(io::Error::from_raw_os_error(
+                            rustix::io::Errno::BUSY.raw_os_error(),
+                        ));
+                    }
+                    let stat = rustix::fs::fstat(&installed).map_err(io::Error::from)?;
+                    if stat.st_dev != device || stat.st_ino != inode {
+                        return Err(io::Error::from_raw_os_error(
+                            rustix::io::Errno::STALE.raw_os_error(),
+                        ));
+                    }
+                    rustix::io::fcntl_setfd(&installed, rustix::io::FdFlags::empty())
+                        .map_err(io::Error::from)?;
+                    let _ = installed.into_raw_fd();
+                    Ok(())
+                });
+            }
+            Ok(self)
+        }
+
         pub(crate) fn args<I, S>(&mut self, args: I) -> &mut Self
         where
             I: IntoIterator<Item = S>,
             S: AsRef<OsStr>,
         {
             self.command.args(args);
-            self
-        }
-
-        pub(crate) fn stdin(&mut self, configuration: Stdio) -> &mut Self {
-            self.command.stdin(configuration);
             self
         }
 
@@ -720,6 +862,7 @@ mod platform {
                 let mut command = pinned.command().unwrap();
                 command
                     .args(std::iter::empty::<&str>())
+                    .as_command_mut()
                     .stdin(Stdio::null());
                 assert!(command.status().unwrap().success());
             }
@@ -734,6 +877,78 @@ mod platform {
                     "dropping the pin left its executable descriptor open"
                 );
             }
+        }
+
+        #[test]
+        fn inherited_descriptor_is_duplicated_before_close_or_swap() {
+            let root = TestDirectory::new();
+            let selected = root.path().join("cargo");
+            let replacement = root.path().join("replacement");
+            copy_executable(Path::new("/bin/true"), &selected);
+            copy_executable(Path::new("/bin/false"), &replacement);
+            let selected = PinnedExecutable::open(&selected).unwrap();
+            let replacement = PinnedExecutable::open(&replacement).unwrap();
+            let inherited = rustix::io::fcntl_dupfd_cloexec(&selected.file, 220).unwrap();
+            rustix::io::fcntl_setfd(&inherited, rustix::io::FdFlags::empty()).unwrap();
+            let inherited_fd = inherited.into_raw_fd();
+            let retained = PinnedExecutable::from_inherited_descriptor(
+                inherited_fd,
+                PathBuf::from("<test inherited Cargo>"),
+            )
+            .unwrap();
+            assert_eq!(retained.sha256(), selected.sha256());
+
+            // SAFETY: both descriptors are live and the test owns the installed descriptor.
+            assert_eq!(
+                unsafe { libc::dup3(replacement.file.as_raw_fd(), inherited_fd, 0) },
+                inherited_fd
+            );
+            assert!(retained.command().unwrap().status().unwrap().success());
+            assert!(
+                !Command::new(format!("/proc/self/fd/{inherited_fd}"))
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            // SAFETY: the raw descriptor was created and retained exclusively by this test.
+            assert_eq!(unsafe { libc::close(inherited_fd) }, 0);
+            assert!(retained.command().unwrap().status().unwrap().success());
+        }
+
+        #[test]
+        fn closed_inherited_descriptor_fails_closed() {
+            let root = TestDirectory::new();
+            let selected = root.path().join("cargo");
+            copy_executable(Path::new("/bin/true"), &selected);
+            let selected = PinnedExecutable::open(&selected).unwrap();
+            let inherited = rustix::io::fcntl_dupfd_cloexec(&selected.file, 220).unwrap();
+            rustix::io::fcntl_setfd(&inherited, rustix::io::FdFlags::empty()).unwrap();
+            let inherited_fd = inherited.into_raw_fd();
+            // SAFETY: the raw descriptor was created and retained exclusively by this test.
+            assert_eq!(unsafe { libc::close(inherited_fd) }, 0);
+            assert!(
+                PinnedExecutable::from_inherited_descriptor(
+                    inherited_fd,
+                    PathBuf::from("<closed inherited Cargo>"),
+                )
+                .is_err()
+            );
+        }
+
+        #[test]
+        fn child_executes_and_inherits_the_same_pinned_object() {
+            const CHILD_FD: RawFd = 300;
+            let root = TestDirectory::new();
+            let selected = root.path().join("cargo");
+            copy_executable(Path::new("/bin/sh"), &selected);
+            let selected = PinnedExecutable::open(&selected).unwrap();
+            let mut command = selected.command().unwrap();
+            command.inherit_executable_at(CHILD_FD).unwrap();
+            command.args([
+                "-c",
+                &format!("test /proc/self/exe -ef /proc/self/fd/{CHILD_FD}"),
+            ]);
+            assert!(command.status().unwrap().success());
         }
     }
 }

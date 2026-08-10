@@ -12,10 +12,6 @@ use fe2o3_rustc_invocation::{
 #[path = "rustc_wrapper/pinned_codegen_backend.rs"]
 mod pinned_codegen_backend;
 
-#[cfg_attr(not(test), allow(dead_code))]
-#[path = "rustc_wrapper/pinned_executable.rs"]
-mod pinned_executable;
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum WrapperPlan<'a> {
     Passthrough(RustcPassthroughInvocationV2<'a>),

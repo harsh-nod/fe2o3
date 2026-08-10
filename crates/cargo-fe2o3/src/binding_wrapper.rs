@@ -1,9 +1,12 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::fs::{self, File};
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::os::fd::{AsRawFd, BorrowedFd, IntoRawFd};
 use std::os::unix::fs::MetadataExt;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 
@@ -27,6 +30,7 @@ use sha2::{Digest, Sha256};
 
 use crate::capability_broker;
 use crate::pinned_codegen_backend::{PinCodegenBackendError, PinnedCodegenBackend};
+use crate::pinned_executable::{PinExecutableError, PinnedExecutable};
 use crate::project::PinnedDirectory;
 use crate::worker_v2::{
     PreparedWorkerV2Config, WORKER_V2_EXPECTED_ID_ENV, WORKER_V2_SOURCE_DEBUG_PROFILE_ENV,
@@ -41,7 +45,11 @@ use crate::worker_v2_restart::{
     WorkerV2ResumeStoreV1, persist_admitted_worker_v2_intent_v1, recover_worker_v2_intent_v1,
     restart_admission_commitment_with_inputs_v1,
 };
-use crate::{ARTIFACT_CHILD_FD, BACKEND_CHILD_FD, MANAGED_RUSTC_ARGS_ENV};
+use crate::{
+    ARTIFACT_CHILD_FD, BACKEND_CHILD_FD, CARGO_LAUNCHER_CAPABILITY_FD,
+    CARGO_LAUNCHER_CAPABILITY_FD_ENV_V2, CARGO_LAUNCHER_CAPABILITY_SHA256_ENV_V2,
+    MANAGED_RUSTC_ARGS_ENV,
+};
 
 const HSACO_DIR_ENV: &str = "FE2O3_HSACO_DIR";
 const TARGET_ENV: &str = "FE2O3_TARGET";
@@ -54,8 +62,6 @@ const WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2: &str =
     "FE2O3_WORKER_EXECUTABLE_BUILD_OBSERVATION_V2";
 const WORKER_BUILD_IDENTITY_OBSERVATION_ENV_V2: &str = "FE2O3_WORKER_BUILD_IDENTITY_OBSERVATION_V2";
 const LLVM_BUILD_IDENTITY_OBSERVATION_ENV_V2: &str = "FE2O3_LLVM_BUILD_IDENTITY_OBSERVATION_V2";
-const PREPARED_RUSTC_COMMAND_BUILD_OBSERVATION_ENV_V2: &str =
-    "FE2O3_PREPARED_RUSTC_COMMAND_BUILD_OBSERVATION_V2";
 const CARGO_FE2O3_EXECUTABLE_BUILD_OBSERVATION_ENV_V2: &str =
     "FE2O3_CARGO_FE2O3_EXECUTABLE_BUILD_OBSERVATION_V2";
 const DECLARED_CARGO_EXECUTABLE_BUILD_OBSERVATION_ENV_V2: &str =
@@ -68,9 +74,11 @@ const CARGO_LAUNCHER_START_TIME_BUILD_OBSERVATION_ENV_V2: &str =
     "FE2O3_CARGO_LAUNCHER_START_TIME_BUILD_OBSERVATION_V2";
 const MAX_BUILD_EXECUTABLE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_PROC_STAT_BYTES: usize = 4096;
+const PREPARED_RUSTC_COMMAND_OBSERVATION_FD_V2: std::os::fd::RawFd = 194;
+const S09_COMPILE_ENV_ALLOWLIST_ENV_V2: &str = "FE2O3_S09_COMPILE_ENV_ALLOWLIST_V2";
+const MAX_S09_COMPILE_ENV_NAMES_V2: usize = 64;
 const BUILD_ATTEMPT_INPUT_DOMAIN: &[u8] = b"FE2O3/BUILD-ATTEMPT-INPUT/V2\0";
 const PREPARED_RUSTC_COMMAND_DOMAIN_V2: &[u8] = b"FE2O3/PREPARED-RUSTC-COMMAND/V2\0";
-const PREPARED_RUSTC_COMMAND_SELF_MARKER_V2: &[u8] = b"FE2O3/PREPARED-RUSTC-COMMAND/SELF/V2";
 const CARGO_METADATA_BUILD_OBSERVATION_DOMAIN_V2: &[u8] =
     b"FE2O3/CARGO-METADATA-BUILD-OBSERVATION/V2\0";
 const WORKER_V2_CONFIG_ID_DOMAIN: &[u8] = b"FE2O3/WORKER-V2-CONFIG-ID/V1\0";
@@ -135,6 +143,7 @@ pub(crate) enum BindingWrapperError {
     InvalidBuildSession,
     InvalidManagedRustcArguments(&'static str),
     ManagedBackend(PinCodegenBackendError),
+    PinnedExecutable(PinExecutableError),
     ManagedArtifact(String),
     CapabilityBroker(String),
     ChildCapability(String),
@@ -187,6 +196,9 @@ impl fmt::Display for BindingWrapperError {
             }
             Self::ManagedBackend(error) => {
                 write!(formatter, "failed to pin managed codegen backend: {error}")
+            }
+            Self::PinnedExecutable(error) => {
+                write!(formatter, "failed to pin rustc executable: {error}")
             }
             Self::ManagedArtifact(error) => {
                 write!(
@@ -262,6 +274,7 @@ impl Error for BindingWrapperError {
             Self::WorkerV2Restart(error) => Some(error),
             Self::Artifact(error) => Some(error),
             Self::ManagedBackend(error) => Some(error),
+            Self::PinnedExecutable(error) => Some(error),
             Self::ManagedCompletion { cleanup, .. } => cleanup
                 .as_ref()
                 .map(|error| error as &(dyn Error + 'static)),
@@ -289,14 +302,24 @@ impl From<RustcArgsErrorV2> for BindingWrapperError {
     }
 }
 
+impl From<PinExecutableError> for BindingWrapperError {
+    fn from(value: PinExecutableError) -> Self {
+        Self::PinnedExecutable(value)
+    }
+}
+
 pub(crate) fn run(argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperError> {
     reject_uninspectable_rustc_args(&argv)?;
     let invocation = match classify_rustc_invocation_v2(&argv) {
         Ok(invocation) => invocation,
         Err(_) if is_cargo_stdin_probe(&argv) => {
-            let mut command = Command::new(&argv[0]);
+            let current_dir =
+                std::env::current_dir().map_err(BindingWrapperError::CurrentDirectory)?;
+            let executable = resolve_command_executable(&argv[0], &current_dir)?;
+            let pinned = PinnedExecutable::open(&executable)?;
+            let mut command = pinned.command()?;
             command.args(&argv[1..]);
-            configure_build_observation_environment(&mut command, None);
+            configure_build_observation_environment(command.as_command_mut(), None);
             return command.status().map_err(BindingWrapperError::Spawn);
         }
         Err(error) => return Err(error.into()),
@@ -353,30 +376,42 @@ pub(crate) fn run(argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperError
         return Ok(success_exit_status());
     }
 
-    let mut command = Command::new(invocation.executable());
+    let execution_directory = match &rustc_working_directory {
+        Some(directory) => directory.clone(),
+        None => std::env::current_dir().map_err(BindingWrapperError::CurrentDirectory)?,
+    };
+    let rustc_path = resolve_command_executable(invocation.executable(), &execution_directory)?;
+    let pinned_rustc = PinnedExecutable::open(&rustc_path)?;
+    let mut command = pinned_rustc.command()?;
     command.args(invocation.forwarded_args());
     command.args(managed_rustc_args);
     if let Some(current_dir) = &rustc_working_directory {
-        command.current_dir(current_dir);
+        command.as_command_mut().current_dir(current_dir);
     }
     if let Some(capabilities) = &compiler_capabilities {
-        capabilities.prepare_command(&mut command)?;
+        capabilities.prepare_command(command.as_command_mut())?;
     }
-    configure_build_observation_environment(&mut command, build_observation);
+    configure_build_observation_environment(command.as_command_mut(), build_observation);
     if let Some(managed) = &managed_attempt {
-        command.env(BUILD_ATTEMPT_ENV, managed.attempt.to_env_value());
+        command
+            .as_command_mut()
+            .env(BUILD_ATTEMPT_ENV, managed.attempt.to_env_value());
     } else {
-        command.env_remove(BUILD_ATTEMPT_ENV);
+        command.as_command_mut().env_remove(BUILD_ATTEMPT_ENV);
     }
     match managed_attempt
         .as_ref()
         .and_then(ManagedAttempt::source_debug_profile)
     {
         Some(profile) => {
-            command.env(WORKER_V2_SOURCE_DEBUG_PROFILE_ENV, profile.env_value());
+            command
+                .as_command_mut()
+                .env(WORKER_V2_SOURCE_DEBUG_PROFILE_ENV, profile.env_value());
         }
         None => {
-            command.env_remove(WORKER_V2_SOURCE_DEBUG_PROFILE_ENV);
+            command
+                .as_command_mut()
+                .env_remove(WORKER_V2_SOURCE_DEBUG_PROFILE_ENV);
         }
     }
     let mut worker_build_observation = managed_attempt
@@ -384,16 +419,34 @@ pub(crate) fn run(argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperError
         .map(ManagedAttempt::worker_build_observation)
         .transpose()?
         .flatten();
-    configure_worker_build_observation_environment(&mut command, worker_build_observation);
+    configure_worker_build_observation_environment(
+        command.as_command_mut(),
+        worker_build_observation,
+    );
+    let complete_s09_environment = worker_build_observation
+        .is_some()
+        .then(|| materialize_s09_child_environment(command.as_command_mut(), std::env::vars_os()))
+        .transpose()?;
+    let mut prepared_command_capability = if worker_build_observation.is_some() {
+        Some(PreparedRustcCommandDigestCapability::attach(
+            command.as_command_mut(),
+        )?)
+    } else {
+        None
+    };
     if let Some(observation) = worker_build_observation.as_mut() {
-        let current_dir = rustc_working_directory
-            .as_deref()
-            .expect("S09 source-debug compilation has a working directory");
-        let executable = resolve_command_executable(command.get_program(), current_dir)?;
-        let executable_sha256 = measure_build_executable(&executable, "prepared rustc executable")?;
-        observation.prepared_rustc_command_sha256 =
-            prepared_rustc_command_sha256(&command, &executable, executable_sha256)?;
-        configure_worker_build_observation_environment(&mut command, Some(*observation));
+        observation.prepared_rustc_command_sha256 = prepared_rustc_command_sha256(
+            command.as_command(),
+            pinned_rustc.display_path(),
+            *pinned_rustc.sha256(),
+            complete_s09_environment
+                .as_ref()
+                .expect("S09 complete child environment exists"),
+        )?;
+        prepared_command_capability
+            .as_mut()
+            .expect("S09 prepared-command capability exists")
+            .finalize(observation.prepared_rustc_command_sha256)?;
     }
     let status = match command.status() {
         Ok(status) => status,
@@ -459,10 +512,6 @@ fn configure_worker_build_observation_environment(
             observation.llvm_build_identity,
         );
         command.env(
-            PREPARED_RUSTC_COMMAND_BUILD_OBSERVATION_ENV_V2,
-            hex(&observation.prepared_rustc_command_sha256),
-        );
-        command.env(
             CARGO_FE2O3_EXECUTABLE_BUILD_OBSERVATION_ENV_V2,
             hex(&observation.cargo_fe2o3_executable_sha256),
         );
@@ -487,7 +536,6 @@ fn configure_worker_build_observation_environment(
         command.env_remove(WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2);
         command.env_remove(WORKER_BUILD_IDENTITY_OBSERVATION_ENV_V2);
         command.env_remove(LLVM_BUILD_IDENTITY_OBSERVATION_ENV_V2);
-        command.env_remove(PREPARED_RUSTC_COMMAND_BUILD_OBSERVATION_ENV_V2);
         command.env_remove(CARGO_FE2O3_EXECUTABLE_BUILD_OBSERVATION_ENV_V2);
         command.env_remove(DECLARED_CARGO_EXECUTABLE_BUILD_OBSERVATION_ENV_V2);
         command.env_remove(CARGO_LAUNCHER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2);
@@ -612,9 +660,18 @@ fn resolve_declared_cargo_executable(current_dir: &Path) -> Result<PathBuf, Bind
     resolve_command_executable(&value, current_dir)
 }
 
-fn resolve_command_executable(
+pub(crate) fn resolve_command_executable(
     value: &OsStr,
     current_dir: &Path,
+) -> Result<PathBuf, BindingWrapperError> {
+    let search = std::env::var_os("PATH");
+    resolve_command_executable_with_path(value, current_dir, search.as_deref())
+}
+
+fn resolve_command_executable_with_path(
+    value: &OsStr,
+    current_dir: &Path,
+    search: Option<&OsStr>,
 ) -> Result<PathBuf, BindingWrapperError> {
     if value.is_empty() {
         return Err(BindingWrapperError::BuildProvenance(
@@ -629,12 +686,12 @@ fn resolve_command_executable(
             Ok(current_dir.join(path))
         };
     }
-    let search = std::env::var_os("PATH").ok_or_else(|| {
+    let search = search.ok_or_else(|| {
         BindingWrapperError::BuildProvenance(
-            "PATH is missing while resolving the CARGO executable".to_owned(),
+            "PATH is missing while resolving an executable".to_owned(),
         )
     })?;
-    for directory in std::env::split_paths(&search) {
+    for directory in std::env::split_paths(search) {
         let candidate = directory.join(&path);
         if candidate
             .metadata()
@@ -657,6 +714,38 @@ struct CargoLauncherObservation {
 }
 
 fn observe_cargo_launcher() -> Result<CargoLauncherObservation, BindingWrapperError> {
+    let declared_descriptor = std::env::var(CARGO_LAUNCHER_CAPABILITY_FD_ENV_V2)
+        .map_err(|_| {
+            BindingWrapperError::BuildProvenance(
+                "Cargo launcher capability descriptor declaration is missing".to_owned(),
+            )
+        })?
+        .parse::<i32>()
+        .map_err(|_| {
+            BindingWrapperError::BuildProvenance(
+                "Cargo launcher capability descriptor declaration is invalid".to_owned(),
+            )
+        })?;
+    if declared_descriptor != CARGO_LAUNCHER_CAPABILITY_FD {
+        return Err(BindingWrapperError::BuildProvenance(format!(
+            "Cargo launcher capability must be descriptor {CARGO_LAUNCHER_CAPABILITY_FD}"
+        )));
+    }
+    let expected_sha256 = required_sha256_environment(
+        CARGO_LAUNCHER_CAPABILITY_SHA256_ENV_V2,
+        "Cargo launcher capability",
+    )?;
+    let capability = PinnedExecutable::from_inherited_descriptor(
+        CARGO_LAUNCHER_CAPABILITY_FD,
+        PathBuf::from(format!(
+            "<inherited Cargo launcher descriptor {CARGO_LAUNCHER_CAPABILITY_FD}>"
+        )),
+    )?;
+    if capability.sha256() != &expected_sha256 {
+        return Err(BindingWrapperError::BuildProvenance(
+            "inherited Cargo launcher descriptor does not match its trusted digest".to_owned(),
+        ));
+    }
     let initial_parent = rustix::process::getppid().ok_or_else(|| {
         BindingWrapperError::BuildProvenance("cargo launcher has no parent PID".to_owned())
     })?;
@@ -665,14 +754,17 @@ fn observe_cargo_launcher() -> Result<CargoLauncherObservation, BindingWrapperEr
     })?;
     let initial_start_time = process_start_time_ticks(pid)?;
     let executable_path = PathBuf::from(format!("/proc/{pid}/exe"));
-    let executable = File::open(&executable_path).map_err(|error| {
+    let parent_executable = File::open(&executable_path).map_err(|error| {
         BindingWrapperError::BuildProvenance(format!(
             "cargo launcher {} cannot be opened: {error}",
             executable_path.display()
         ))
     })?;
-    let executable_sha256 =
-        measure_open_build_executable(executable, &executable_path, "cargo launcher")?;
+    if !capability.same_object_as(&parent_executable)? {
+        return Err(BindingWrapperError::BuildProvenance(
+            "Cargo launcher parent executable is not the inherited pinned capability".to_owned(),
+        ));
+    }
     let final_start_time = process_start_time_ticks(pid)?;
     let final_parent = rustix::process::getppid().ok_or_else(|| {
         BindingWrapperError::BuildProvenance("cargo launcher parent disappeared".to_owned())
@@ -683,10 +775,47 @@ fn observe_cargo_launcher() -> Result<CargoLauncherObservation, BindingWrapperEr
         ));
     }
     Ok(CargoLauncherObservation {
-        executable_sha256,
+        executable_sha256: *capability.sha256(),
         pid,
         start_time_ticks: initial_start_time,
     })
+}
+
+fn required_sha256_environment(
+    name: &'static str,
+    label: &str,
+) -> Result<[u8; 32], BindingWrapperError> {
+    let value = std::env::var(name).map_err(|_| {
+        BindingWrapperError::BuildProvenance(format!("{label} digest environment is missing"))
+    })?;
+    let bytes = value.as_bytes();
+    if bytes.len() != 64
+        || !bytes
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    {
+        return Err(BindingWrapperError::BuildProvenance(format!(
+            "{label} digest must be 64 lowercase hexadecimal digits"
+        )));
+    }
+    let mut digest = [0_u8; 32];
+    for (index, pair) in bytes.chunks_exact(2).enumerate() {
+        digest[index] = (hex_nibble(pair[0]) << 4) | hex_nibble(pair[1]);
+    }
+    if digest == [0; 32] {
+        return Err(BindingWrapperError::BuildProvenance(format!(
+            "{label} digest must not be zero"
+        )));
+    }
+    Ok(digest)
+}
+
+const fn hex_nibble(byte: u8) -> u8 {
+    match byte {
+        b'0'..=b'9' => byte - b'0',
+        b'a'..=b'f' => byte - b'a' + 10,
+        _ => 0,
+    }
 }
 
 fn process_start_time_ticks(pid: u64) -> Result<u64, BindingWrapperError> {
@@ -736,19 +865,234 @@ fn process_start_time_ticks(pid: u64) -> Result<u64, BindingWrapperError> {
     Ok(start_time)
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct CompleteS09ChildEnvironmentV2 {
+    entries: Vec<(OsString, OsString)>,
+}
+
+impl CompleteS09ChildEnvironmentV2 {
+    #[cfg(test)]
+    fn from_command(command: &Command) -> Self {
+        let mut entries = command
+            .get_envs()
+            .filter_map(|(name, value)| value.map(|value| (name.to_owned(), value.to_owned())))
+            .collect::<Vec<_>>();
+        entries.sort_unstable();
+        Self { entries }
+    }
+}
+
+fn materialize_s09_child_environment(
+    command: &mut Command,
+    inherited: impl IntoIterator<Item = (OsString, OsString)>,
+) -> Result<CompleteS09ChildEnvironmentV2, BindingWrapperError> {
+    let inherited = inherited.into_iter().collect::<BTreeMap<_, _>>();
+    let explicit_policy = parse_s09_compile_environment_policy(
+        inherited
+            .get(OsStr::new(S09_COMPILE_ENV_ALLOWLIST_ENV_V2))
+            .map(OsString::as_os_str),
+    )?;
+    for name in inherited.keys() {
+        if forbidden_s09_environment(name) {
+            return Err(BindingWrapperError::BuildProvenance(format!(
+                "S09 child environment rejects inherited variable {name:?}"
+            )));
+        }
+        if compilation_control_environment(name)
+            && !reviewed_s09_inherited_environment(name)
+            && !consumed_before_s09_rustc_environment(name)
+            && !explicit_policy.contains(name)
+        {
+            return Err(BindingWrapperError::BuildProvenance(format!(
+                "S09 child environment has non-allowlisted compilation control {name:?}"
+            )));
+        }
+    }
+
+    let mut final_environment = inherited
+        .into_iter()
+        .filter(|(name, _)| {
+            reviewed_s09_inherited_environment(name) || explicit_policy.contains(name)
+        })
+        .collect::<BTreeMap<_, _>>();
+    let explicit = command
+        .get_envs()
+        .map(|(name, value)| (name.to_owned(), value.map(OsString::from)))
+        .collect::<Vec<_>>();
+    for (name, value) in explicit {
+        if !managed_s09_child_environment(&name) {
+            return Err(BindingWrapperError::BuildProvenance(format!(
+                "S09 command has unreviewed explicit environment mutation {name:?}"
+            )));
+        }
+        match value {
+            Some(value) => {
+                final_environment.insert(name, value);
+            }
+            None => {
+                final_environment.remove(&name);
+            }
+        }
+    }
+    command.env_clear();
+    command.envs(&final_environment);
+    Ok(CompleteS09ChildEnvironmentV2 {
+        entries: final_environment.into_iter().collect(),
+    })
+}
+
+fn parse_s09_compile_environment_policy(
+    value: Option<&OsStr>,
+) -> Result<BTreeSet<OsString>, BindingWrapperError> {
+    let Some(value) = value else {
+        return Ok(BTreeSet::new());
+    };
+    let value = value.to_str().ok_or_else(|| {
+        BindingWrapperError::BuildProvenance(format!(
+            "{S09_COMPILE_ENV_ALLOWLIST_ENV_V2} is not UTF-8"
+        ))
+    })?;
+    if value.is_empty() {
+        return Err(BindingWrapperError::BuildProvenance(format!(
+            "{S09_COMPILE_ENV_ALLOWLIST_ENV_V2} must not be empty when present"
+        )));
+    }
+    let names = value.split(',').collect::<Vec<_>>();
+    if names.len() > MAX_S09_COMPILE_ENV_NAMES_V2 {
+        return Err(BindingWrapperError::BuildProvenance(format!(
+            "{S09_COMPILE_ENV_ALLOWLIST_ENV_V2} exceeds {MAX_S09_COMPILE_ENV_NAMES_V2} names"
+        )));
+    }
+    let mut previous = None;
+    let mut policy = BTreeSet::new();
+    for name in names {
+        if name.len() > 64
+            || name.is_empty()
+            || !name.bytes().enumerate().all(|(index, byte)| {
+                byte == b'_' || byte.is_ascii_uppercase() || (index != 0 && byte.is_ascii_digit())
+            })
+        {
+            return Err(BindingWrapperError::BuildProvenance(format!(
+                "{S09_COMPILE_ENV_ALLOWLIST_ENV_V2} contains an invalid name"
+            )));
+        }
+        if previous.is_some_and(|previous| previous >= name) {
+            return Err(BindingWrapperError::BuildProvenance(format!(
+                "{S09_COMPILE_ENV_ALLOWLIST_ENV_V2} names must be strictly sorted"
+            )));
+        }
+        if forbidden_s09_environment(OsStr::new(name)) {
+            return Err(BindingWrapperError::BuildProvenance(format!(
+                "{S09_COMPILE_ENV_ALLOWLIST_ENV_V2} cannot permit {name}"
+            )));
+        }
+        policy.insert(OsString::from(name));
+        previous = Some(name);
+    }
+    Ok(policy)
+}
+
+fn forbidden_s09_environment(name: &OsStr) -> bool {
+    let bytes = os_bytes(name);
+    bytes == b"RUSTC_BOOTSTRAP" || bytes.starts_with(b"LD_") || bytes.starts_with(b"DYLD_")
+}
+
+fn compilation_control_environment(name: &OsStr) -> bool {
+    let bytes = os_bytes(name);
+    matches!(
+        bytes,
+        b"CC" | b"CXX" | b"AR" | b"CFLAGS" | b"CXXFLAGS" | b"LDFLAGS"
+    ) || bytes.starts_with(b"LLVM_")
+        || bytes.starts_with(b"RUSTC_")
+}
+
+fn consumed_before_s09_rustc_environment(name: &OsStr) -> bool {
+    matches!(
+        os_bytes(name),
+        b"RUSTC"
+            | b"RUSTFLAGS"
+            | b"CARGO_ENCODED_RUSTFLAGS"
+            | b"RUSTC_WRAPPER"
+            | b"RUSTC_WORKSPACE_WRAPPER"
+            | b"CARGO_BUILD_RUSTC_WRAPPER"
+    )
+}
+
+fn reviewed_s09_inherited_environment(name: &OsStr) -> bool {
+    let bytes = os_bytes(name);
+    matches!(
+        bytes,
+        b"PATH"
+            | b"HOME"
+            | b"TMPDIR"
+            | b"LANG"
+            | b"LC_ALL"
+            | b"TZ"
+            | b"TERM"
+            | b"SOURCE_DATE_EPOCH"
+            | b"CARGO"
+            | b"CARGO_BIN_NAME"
+            | b"CARGO_CRATE_NAME"
+            | b"CARGO_MANIFEST_DIR"
+            | b"CARGO_MANIFEST_PATH"
+            | b"CARGO_PRIMARY_PACKAGE"
+            | b"CARGO_TARGET_TMPDIR"
+            | b"OUT_DIR"
+            | b"OPT_LEVEL"
+            | b"DEBUG"
+            | b"PROFILE"
+            | b"TARGET"
+            | b"HOST"
+            | b"NUM_JOBS"
+            | b"FE2O3_TARGET"
+            | b"FE2O3_CODEGEN_PIPELINE"
+            | b"FE2O3_WORKER_V2_CONFIG_V2"
+            | b"FE2O3_WORKER_V2_EXPECTED_ID_V1"
+            | b"FE2O3_HOST_PASSTHROUGH"
+            | b"FE2O3_CAPABILITY_BROKER_V1"
+            | b"FE2O3_BUILD_SESSION_V1"
+            | b"FE2O3_MANAGED_RUSTC_ARGS_V1"
+            | b"FE2O3_CARGO_LAUNCHER_CAPABILITY_FD_V2"
+            | b"FE2O3_CARGO_LAUNCHER_CAPABILITY_SHA256_V2"
+            | b"FE2O3_S09_COMPILE_ENV_ALLOWLIST_V2"
+    ) || bytes.starts_with(b"CARGO_PKG_")
+        || bytes.starts_with(b"CARGO_CFG_")
+        || bytes.starts_with(b"CARGO_FEATURE_")
+        || bytes.starts_with(b"DEP_")
+}
+
+fn managed_s09_child_environment(name: &OsStr) -> bool {
+    matches!(
+        os_bytes(name),
+        b"FE2O3_HSACO_DIR"
+            | b"FE2O3_BUILD_ATTEMPT_V1"
+            | b"FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2"
+            | b"FE2O3_CODEGEN_BACKEND_BUILD_OBSERVATION_V2"
+            | b"FE2O3_WORKER_CONFIG_BUILD_OBSERVATION_V2"
+            | b"FE2O3_WORKER_EXECUTABLE_BUILD_OBSERVATION_V2"
+            | b"FE2O3_WORKER_BUILD_IDENTITY_OBSERVATION_V2"
+            | b"FE2O3_LLVM_BUILD_IDENTITY_OBSERVATION_V2"
+            | b"FE2O3_CARGO_FE2O3_EXECUTABLE_BUILD_OBSERVATION_V2"
+            | b"FE2O3_DECLARED_CARGO_EXECUTABLE_BUILD_OBSERVATION_V2"
+            | b"FE2O3_CARGO_LAUNCHER_EXECUTABLE_BUILD_OBSERVATION_V2"
+            | b"FE2O3_CARGO_LAUNCHER_PID_BUILD_OBSERVATION_V2"
+            | b"FE2O3_CARGO_LAUNCHER_START_TIME_BUILD_OBSERVATION_V2"
+            | b"FE2O3_WORKER_V2_SOURCE_DEBUG_PROFILE_V1"
+            | b"FE2O3_CRATE_BINDING_ID_V1"
+    )
+}
+
 fn prepared_rustc_command_sha256(
     command: &Command,
     resolved_executable: &Path,
     executable_sha256: [u8; 32],
+    environment: &CompleteS09ChildEnvironmentV2,
 ) -> Result<[u8; 32], BindingWrapperError> {
     let current_dir = command.get_current_dir().ok_or_else(|| {
         BindingWrapperError::BuildProvenance(
             "prepared rustc command has no explicit working directory".to_owned(),
         )
     })?;
-    let mut environment = command.get_envs().collect::<Vec<_>>();
-    environment.sort_unstable_by(|left, right| os_bytes(left.0).cmp(os_bytes(right.0)));
-
     let mut digest = Sha256::new();
     digest.update(PREPARED_RUSTC_COMMAND_DOMAIN_V2);
     hash_os(&mut digest, command.get_program());
@@ -759,23 +1103,145 @@ fn prepared_rustc_command_sha256(
     for argument in command.get_args() {
         hash_os(&mut digest, argument);
     }
-    digest.update((environment.len() as u64).to_le_bytes());
-    for (name, value) in environment {
+    digest.update((environment.entries.len() as u64).to_le_bytes());
+    for (name, value) in &environment.entries {
         hash_os(&mut digest, name);
-        match value {
-            None => digest.update([0]),
-            Some(_) if name == OsStr::new(PREPARED_RUSTC_COMMAND_BUILD_OBSERVATION_ENV_V2) => {
-                digest.update([1]);
-                digest.update((PREPARED_RUSTC_COMMAND_SELF_MARKER_V2.len() as u64).to_le_bytes());
-                digest.update(PREPARED_RUSTC_COMMAND_SELF_MARKER_V2);
-            }
-            Some(value) => {
-                digest.update([1]);
-                hash_os(&mut digest, value);
-            }
-        }
+        hash_os(&mut digest, value);
     }
     Ok(digest.finalize().into())
+}
+
+struct PreparedRustcCommandDigestCapability {
+    image: File,
+    finalized: bool,
+}
+
+impl PreparedRustcCommandDigestCapability {
+    fn attach(command: &mut Command) -> Result<Self, BindingWrapperError> {
+        let display = "S09 prepared-command digest capability";
+        // SAFETY: fcntl only probes the process-local fixed descriptor number.
+        let target = unsafe { BorrowedFd::borrow_raw(PREPARED_RUSTC_COMMAND_OBSERVATION_FD_V2) };
+        match rustix::io::fcntl_getfd(target) {
+            Err(rustix::io::Errno::BADF) => {}
+            Err(error) => {
+                return Err(BindingWrapperError::BuildProvenance(format!(
+                    "cannot inspect {display} descriptor: {error}"
+                )));
+            }
+            Ok(_) => {
+                return Err(BindingWrapperError::BuildProvenance(format!(
+                    "{display} descriptor is already occupied"
+                )));
+            }
+        }
+        let image = File::from(
+            rustix::fs::memfd_create(
+                "fe2o3-s09-prepared-command-v2",
+                rustix::fs::MemfdFlags::CLOEXEC | rustix::fs::MemfdFlags::ALLOW_SEALING,
+            )
+            .map_err(|error| {
+                BindingWrapperError::BuildProvenance(format!("cannot create {display}: {error}"))
+            })?,
+        );
+        image.set_len(32).map_err(|error| {
+            BindingWrapperError::BuildProvenance(format!("cannot size {display}: {error}"))
+        })?;
+        let source_fd = image.as_raw_fd();
+        let metadata = image.metadata().map_err(|error| {
+            BindingWrapperError::BuildProvenance(format!("cannot inspect {display}: {error}"))
+        })?;
+        let device = metadata.dev();
+        let inode = metadata.ino();
+        // SAFETY: `image` remains alive through spawn. The callback installs and validates only
+        // this exact memfd, which is sealed before the command can be spawned.
+        unsafe {
+            command.pre_exec(move || {
+                let source = BorrowedFd::borrow_raw(source_fd);
+                let required = rustix::fs::SealFlags::WRITE
+                    | rustix::fs::SealFlags::GROW
+                    | rustix::fs::SealFlags::SHRINK
+                    | rustix::fs::SealFlags::SEAL;
+                if rustix::fs::fcntl_get_seals(source).map_err(std::io::Error::from)? != required {
+                    return Err(std::io::Error::from_raw_os_error(
+                        rustix::io::Errno::PERM.raw_os_error(),
+                    ));
+                }
+                let installed = rustix::io::fcntl_dupfd_cloexec(
+                    source,
+                    PREPARED_RUSTC_COMMAND_OBSERVATION_FD_V2,
+                )
+                .map_err(std::io::Error::from)?;
+                if installed.as_raw_fd() != PREPARED_RUSTC_COMMAND_OBSERVATION_FD_V2 {
+                    return Err(std::io::Error::from_raw_os_error(
+                        rustix::io::Errno::BUSY.raw_os_error(),
+                    ));
+                }
+                let stat = rustix::fs::fstat(&installed).map_err(std::io::Error::from)?;
+                if stat.st_dev != device || stat.st_ino != inode {
+                    return Err(std::io::Error::from_raw_os_error(
+                        rustix::io::Errno::STALE.raw_os_error(),
+                    ));
+                }
+                rustix::io::fcntl_setfd(&installed, rustix::io::FdFlags::empty())
+                    .map_err(std::io::Error::from)?;
+                let _ = installed.into_raw_fd();
+                Ok(())
+            });
+        }
+        Ok(Self {
+            image,
+            finalized: false,
+        })
+    }
+
+    fn finalize(&mut self, digest: [u8; 32]) -> Result<(), BindingWrapperError> {
+        if self.finalized || digest == [0; 32] {
+            return Err(BindingWrapperError::BuildProvenance(
+                "S09 prepared-command digest capability was finalized invalidly".to_owned(),
+            ));
+        }
+        self.image.seek(SeekFrom::Start(0)).map_err(|error| {
+            BindingWrapperError::BuildProvenance(format!(
+                "cannot rewind S09 prepared-command digest capability: {error}"
+            ))
+        })?;
+        self.image.write_all(&digest).map_err(|error| {
+            BindingWrapperError::BuildProvenance(format!(
+                "cannot write S09 prepared-command digest capability: {error}"
+            ))
+        })?;
+        self.image.seek(SeekFrom::Start(0)).map_err(|error| {
+            BindingWrapperError::BuildProvenance(format!(
+                "cannot prepare S09 command digest capability for child reading: {error}"
+            ))
+        })?;
+        let data_seals = rustix::fs::SealFlags::WRITE
+            | rustix::fs::SealFlags::GROW
+            | rustix::fs::SealFlags::SHRINK;
+        rustix::fs::fcntl_add_seals(&self.image, data_seals).map_err(|error| {
+            BindingWrapperError::BuildProvenance(format!(
+                "cannot seal S09 prepared-command digest capability: {error}"
+            ))
+        })?;
+        rustix::fs::fcntl_add_seals(&self.image, rustix::fs::SealFlags::SEAL).map_err(|error| {
+            BindingWrapperError::BuildProvenance(format!(
+                "cannot finalize S09 prepared-command digest capability seals: {error}"
+            ))
+        })?;
+        let required = data_seals | rustix::fs::SealFlags::SEAL;
+        if rustix::fs::fcntl_get_seals(&self.image).map_err(|error| {
+            BindingWrapperError::BuildProvenance(format!(
+                "cannot verify S09 prepared-command digest capability seals: {error}"
+            ))
+        })? != required
+        {
+            return Err(BindingWrapperError::BuildProvenance(
+                "S09 prepared-command digest capability seals changed".to_owned(),
+            ));
+        }
+        self.finalized = true;
+        Ok(())
+    }
 }
 
 fn managed_rustc_args_from_environment() -> Result<Vec<OsString>, BindingWrapperError> {
@@ -1597,14 +2063,18 @@ mod tests {
         CARGO_LAUNCHER_PID_BUILD_OBSERVATION_ENV_V2,
         CARGO_LAUNCHER_START_TIME_BUILD_OBSERVATION_ENV_V2,
         CARGO_METADATA_BUILD_OBSERVATION_ENV_V2, CompileBuildObservationV2,
-        DECLARED_CARGO_EXECUTABLE_BUILD_OBSERVATION_ENV_V2, LLVM_BUILD_IDENTITY_OBSERVATION_ENV_V2,
-        PREPARED_RUSTC_COMMAND_BUILD_OBSERVATION_ENV_V2, WORKER_BUILD_IDENTITY_OBSERVATION_ENV_V2,
+        CompleteS09ChildEnvironmentV2, DECLARED_CARGO_EXECUTABLE_BUILD_OBSERVATION_ENV_V2,
+        LLVM_BUILD_IDENTITY_OBSERVATION_ENV_V2, PreparedRustcCommandDigestCapability,
+        S09_COMPILE_ENV_ALLOWLIST_ENV_V2, WORKER_BUILD_IDENTITY_OBSERVATION_ENV_V2,
         WORKER_CONFIG_BUILD_OBSERVATION_ENV_V2, WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2,
         configure_build_observation_environment, configure_worker_build_observation_environment,
         decode_managed_rustc_args, derive_build_attempt_input_with_config_identity,
-        is_cargo_stdin_probe, measure_build_executable, ordered_metadata_values,
-        prepared_rustc_command_sha256, reject_uninspectable_rustc_args,
+        is_cargo_stdin_probe, materialize_s09_child_environment, measure_build_executable,
+        observe_cargo_launcher, ordered_metadata_values, prepared_rustc_command_sha256,
+        process_start_time_ticks, reject_uninspectable_rustc_args,
+        resolve_command_executable_with_path,
     };
+    use crate::pinned_executable::PinnedExecutable;
     use crate::worker_v2::{WorkerV2BuildObservation, WorkerV2ConfigIdentity};
     use crate::worker_v2_restart::{
         WorkerV2PublicationKindV1, WorkerV2ResumeStoreV1,
@@ -1621,8 +2091,10 @@ mod tests {
     };
     use reserved_fe2o3_symbols::{CRATE_BINDING_ID_ENV_V1, derive_crate_binding_id_v1};
     use sha2::Digest;
-    use std::ffi::OsString;
+    use std::ffi::{OsStr, OsString};
     use std::fs;
+    #[cfg(target_os = "linux")]
+    use std::os::unix::process::CommandExt;
     use std::path::Path;
     use std::process::Command;
 
@@ -1786,14 +2258,10 @@ mod tests {
                 )
             })
             .collect::<std::collections::BTreeMap<_, _>>();
-        assert_eq!(environment.len(), 10);
+        assert_eq!(environment.len(), 9);
         for (name, expected) in [
             (WORKER_CONFIG_BUILD_OBSERVATION_ENV_V2, "11".repeat(32)),
             (WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2, "12".repeat(32)),
-            (
-                PREPARED_RUSTC_COMMAND_BUILD_OBSERVATION_ENV_V2,
-                "13".repeat(32),
-            ),
             (
                 CARGO_FE2O3_EXECUTABLE_BUILD_OBSERVATION_ENV_V2,
                 "14".repeat(32),
@@ -1825,7 +2293,7 @@ mod tests {
 
         let mut absent = Command::new("rustc");
         configure_worker_build_observation_environment(&mut absent, None);
-        assert_eq!(absent.get_envs().count(), 10);
+        assert_eq!(absent.get_envs().count(), 9);
         assert!(absent.get_envs().all(|(_, value)| value.is_none()));
     }
 
@@ -1837,6 +2305,43 @@ mod tests {
             measure_build_executable(&executable, "test executable").unwrap(),
             expected
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn pinned_rustc_execution_ignores_later_path_disagreement() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "fe2o3-rustc-path-disagreement-{}",
+            std::process::id()
+        ));
+        let first = root.join("first");
+        let second = root.join("second");
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&second).unwrap();
+        for (source, destination) in [
+            (Path::new("/bin/true"), first.join("rustc")),
+            (Path::new("/bin/false"), second.join("rustc")),
+        ] {
+            fs::copy(source, &destination).unwrap();
+            let mut permissions = fs::metadata(&destination).unwrap().permissions();
+            permissions.set_mode(0o700);
+            fs::set_permissions(destination, permissions).unwrap();
+        }
+        let first_path = std::env::join_paths([&first]).unwrap();
+        let second_path = std::env::join_paths([&second]).unwrap();
+        let selected =
+            resolve_command_executable_with_path(OsStr::new("rustc"), &root, Some(&first_path))
+                .unwrap();
+        let pinned = PinnedExecutable::open(&selected).unwrap();
+        let disagreed =
+            resolve_command_executable_with_path(OsStr::new("rustc"), &root, Some(&second_path))
+                .unwrap();
+        assert_ne!(selected, disagreed);
+        assert!(pinned.command().unwrap().status().unwrap().success());
+        assert!(!Command::new(disagreed).status().unwrap().success());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -1949,7 +2454,14 @@ mod tests {
                     }
                 }
             }
-            prepared_rustc_command_sha256(&command, resolved_program, executable_sha256).unwrap()
+            let complete_environment = CompleteS09ChildEnvironmentV2::from_command(&command);
+            prepared_rustc_command_sha256(
+                &command,
+                resolved_program,
+                executable_sha256,
+                &complete_environment,
+            )
+            .unwrap()
         }
 
         let arguments = [
@@ -1971,10 +2483,6 @@ mod tests {
             ("FE2O3_WORKER_EXECUTABLE_BUILD_OBSERVATION_V2", Some("04")),
             ("FE2O3_WORKER_BUILD_IDENTITY_OBSERVATION_V2", Some("worker")),
             ("FE2O3_LLVM_BUILD_IDENTITY_OBSERVATION_V2", Some("llvm")),
-            (
-                "FE2O3_PREPARED_RUSTC_COMMAND_BUILD_OBSERVATION_V2",
-                Some("00"),
-            ),
             (
                 "FE2O3_CARGO_FE2O3_EXECUTABLE_BUILD_OBSERVATION_V2",
                 Some("05"),
@@ -2024,9 +2532,6 @@ mod tests {
             );
         }
         for index in 0..environment.len() {
-            if environment[index].0 == PREPARED_RUSTC_COMMAND_BUILD_OBSERVATION_ENV_V2 {
-                continue;
-            }
             let mut changed = environment.clone();
             changed[index].1 = match &changed[index].1 {
                 Some(value) => Some(format!("{value}-changed")),
@@ -2090,20 +2595,203 @@ mod tests {
             ),
             baseline
         );
-        let mut self_changed = environment;
-        self_changed[8].1 = Some("final-digest".to_owned());
+    }
+
+    #[test]
+    fn s09_environment_is_explicit_complete_and_identity_bound() {
+        fn prepared(inherited: &[(&str, &str)]) -> (Command, [u8; 32]) {
+            let mut command = Command::new("/proc/self/fd/9");
+            command
+                .arg("--crate-name=unit")
+                .current_dir("/workspace")
+                .env("FE2O3_BUILD_ATTEMPT_V1", "attempt")
+                .env_remove("FE2O3_HSACO_DIR");
+            let complete_environment = materialize_s09_child_environment(
+                &mut command,
+                inherited
+                    .iter()
+                    .map(|(name, value)| (OsString::from(name), OsString::from(value))),
+            )
+            .unwrap();
+            let digest = prepared_rustc_command_sha256(
+                &command,
+                Path::new("/toolchain/rustc"),
+                [0x44; 32],
+                &complete_environment,
+            )
+            .unwrap();
+            (command, digest)
+        }
+
+        let inherited = [
+            ("PATH", "/reviewed/bin"),
+            ("CARGO_PKG_NAME", "unit"),
+            (S09_COMPILE_ENV_ALLOWLIST_ENV_V2, "CUSTOM_BUILD_INPUT"),
+            ("CUSTOM_BUILD_INPUT", "first"),
+            ("PRIVATE_TOKEN", "must-not-cross"),
+            ("RUSTC_WORKSPACE_WRAPPER", "/already-consumed/wrapper"),
+        ];
+        let (command, baseline) = prepared(&inherited);
+        let effective = command
+            .get_envs()
+            .filter_map(|(name, value)| value.map(|value| (name, value)))
+            .collect::<std::collections::BTreeMap<_, _>>();
         assert_eq!(
-            identity(
-                &arguments,
-                &self_changed,
-                current_dir,
-                "rustc",
-                resolved,
-                [0x31; 32]
-            ),
-            baseline,
-            "the self-referential observation must use its canonical marker"
+            effective.get(OsStr::new("PATH")),
+            Some(&OsStr::new("/reviewed/bin"))
         );
+        assert_eq!(
+            effective.get(OsStr::new("CUSTOM_BUILD_INPUT")),
+            Some(&OsStr::new("first"))
+        );
+        assert!(!effective.contains_key(OsStr::new("PRIVATE_TOKEN")));
+        assert!(!effective.contains_key(OsStr::new("RUSTC_WORKSPACE_WRAPPER")));
+
+        let mut inherited_change = inherited;
+        inherited_change[1].1 = "other-unit";
+        assert_ne!(prepared(&inherited_change).1, baseline);
+        let mut policy_value_change = inherited;
+        policy_value_change[3].1 = "second";
+        assert_ne!(prepared(&policy_value_change).1, baseline);
+
+        let mut removed = Command::new("rustc");
+        removed.current_dir("/workspace").env_remove("OPTIONAL");
+        let removed_environment = CompleteS09ChildEnvironmentV2::from_command(&removed);
+        let removed = prepared_rustc_command_sha256(
+            &removed,
+            Path::new("/toolchain/rustc"),
+            [0x44; 32],
+            &removed_environment,
+        )
+        .unwrap();
+        let mut empty = Command::new("rustc");
+        empty.current_dir("/workspace").env("OPTIONAL", "");
+        let empty_environment = CompleteS09ChildEnvironmentV2::from_command(&empty);
+        let empty = prepared_rustc_command_sha256(
+            &empty,
+            Path::new("/toolchain/rustc"),
+            [0x44; 32],
+            &empty_environment,
+        )
+        .unwrap();
+        assert_ne!(
+            removed, empty,
+            "removed and empty environments were conflated"
+        );
+    }
+
+    #[test]
+    fn s09_environment_rejects_loader_and_bootstrap_controls() {
+        for name in ["LD_PRELOAD", "LD_LIBRARY_PATH", "RUSTC_BOOTSTRAP"] {
+            let mut command = Command::new("rustc");
+            command.current_dir("/workspace");
+            let error = materialize_s09_child_environment(
+                &mut command,
+                [(OsString::from(name), OsString::from("forbidden"))],
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains(name));
+        }
+    }
+
+    #[test]
+    fn prepared_digest_finalization_does_not_mutate_the_command() {
+        use std::io::Read as _;
+        use std::os::fd::AsRawFd as _;
+
+        let mut command = Command::new("/proc/self/fd/9");
+        command
+            .arg("--crate-name=unit")
+            .current_dir("/workspace")
+            .env_clear()
+            .env("PATH", "/reviewed/bin");
+        let mut capability = PreparedRustcCommandDigestCapability::attach(&mut command).unwrap();
+        let before = format!("{command:?}");
+        let complete_environment = CompleteS09ChildEnvironmentV2::from_command(&command);
+        let digest = prepared_rustc_command_sha256(
+            &command,
+            Path::new("/toolchain/rustc"),
+            [0x55; 32],
+            &complete_environment,
+        )
+        .unwrap();
+        capability.finalize(digest).unwrap();
+        assert_eq!(format!("{command:?}"), before);
+        let mut observed = [0_u8; 32];
+        fs::File::open(format!("/proc/self/fd/{}", capability.image.as_raw_fd()))
+            .unwrap()
+            .read_exact(&mut observed)
+            .unwrap();
+        assert_eq!(observed, digest);
+    }
+
+    #[test]
+    fn pid_and_start_time_do_not_authenticate_an_executable() {
+        let pid = u64::from(std::process::id());
+        assert_ne!(process_start_time_ticks(pid).unwrap(), 0);
+        let unrelated = PinnedExecutable::open(Path::new("/bin/true")).unwrap();
+        let running = fs::File::open("/proc/self/exe").unwrap();
+        assert!(!unrelated.same_object_as(&running).unwrap());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cargo_launcher_descriptor_chain_rejects_close_and_swap() {
+        const CHILD_MODE: &str = "FE2O3_TEST_CARGO_LAUNCHER_CAPABILITY_MODE";
+        if let Some(mode) = std::env::var_os(CHILD_MODE) {
+            let observation = observe_cargo_launcher();
+            if mode == "valid" {
+                assert_ne!(observation.unwrap().executable_sha256, [0; 32]);
+            } else {
+                assert!(observation.is_err());
+            }
+            return;
+        }
+
+        let executable = std::env::current_exe().unwrap();
+        let pinned = PinnedExecutable::open(&executable).unwrap();
+        let replacement = PinnedExecutable::open(Path::new("/bin/false")).unwrap();
+        for mode in ["valid", "closed", "swapped"] {
+            let mut child = pinned.command().unwrap();
+            child
+                .inherit_executable_at(crate::CARGO_LAUNCHER_CAPABILITY_FD)
+                .unwrap();
+            child
+                .as_command_mut()
+                .args([
+                    "--exact",
+                    "binding_wrapper::tests::cargo_launcher_descriptor_chain_rejects_close_and_swap",
+                    "--nocapture",
+                ])
+                .env(CHILD_MODE, mode)
+                .env(
+                    crate::CARGO_LAUNCHER_CAPABILITY_FD_ENV_V2,
+                    crate::CARGO_LAUNCHER_CAPABILITY_FD.to_string(),
+                )
+                .env(
+                    crate::CARGO_LAUNCHER_CAPABILITY_SHA256_ENV_V2,
+                    crate::hex_encode(pinned.sha256()),
+                );
+            let replacement_fd = replacement.raw_fd();
+            if mode != "valid" {
+                // SAFETY: this callback runs after the capability installer in the child and only
+                // closes or replaces that fixed test descriptor before exec.
+                unsafe {
+                    child.as_command_mut().pre_exec(move || {
+                        let result = if mode == "closed" {
+                            libc::close(crate::CARGO_LAUNCHER_CAPABILITY_FD)
+                        } else {
+                            libc::dup3(replacement_fd, crate::CARGO_LAUNCHER_CAPABILITY_FD, 0)
+                        };
+                        if result < 0 {
+                            return Err(std::io::Error::last_os_error());
+                        }
+                        Ok(())
+                    });
+                }
+            }
+            assert!(child.status().unwrap().success(), "child mode {mode}");
+        }
     }
 
     #[test]

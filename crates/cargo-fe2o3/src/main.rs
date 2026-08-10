@@ -7,6 +7,8 @@ mod inspect;
 #[allow(dead_code)]
 #[path = "rustc_wrapper/pinned_codegen_backend.rs"]
 mod pinned_codegen_backend;
+#[path = "rustc_wrapper/pinned_executable.rs"]
+mod pinned_executable;
 #[cfg(test)]
 mod pinned_executable_test_directory;
 mod project;
@@ -29,6 +31,11 @@ const BINDING_WRAPPER_MODE_ENV: &str = "FE2O3_BINDING_WRAPPER_MODE_V1";
 const MANAGED_RUSTC_ARGS_ENV: &str = "FE2O3_MANAGED_RUSTC_ARGS_V1";
 const BUILD_SESSION_ENV: &str = "FE2O3_BUILD_SESSION_V1";
 const INTERNAL_RUNNER_ARG: &str = "__fe2o3-runner-v1";
+pub(crate) const CARGO_LAUNCHER_CAPABILITY_FD: std::os::fd::RawFd = 195;
+pub(crate) const CARGO_LAUNCHER_CAPABILITY_FD_ENV_V2: &str =
+    "FE2O3_CARGO_LAUNCHER_CAPABILITY_FD_V2";
+pub(crate) const CARGO_LAUNCHER_CAPABILITY_SHA256_ENV_V2: &str =
+    "FE2O3_CARGO_LAUNCHER_CAPABILITY_SHA256_V2";
 const BACKEND_BUILD_CHILD_FD: std::os::fd::RawFd = 196;
 const ARTIFACT_CHILD_FD: std::os::fd::RawFd = 197;
 const BACKEND_CHILD_FD: std::os::fd::RawFd = 198;
@@ -321,8 +328,20 @@ fn run_cargo_with_backend(
         context.target
     );
 
-    let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
-    let mut cargo = Command::new(cargo);
+    let cargo_declaration = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
+    let cargo_path = binding_wrapper::resolve_command_executable(
+        &cargo_declaration,
+        &context.project.invocation_dir().child_path(),
+    )
+    .map_err(|error| format!("failed to resolve Cargo executable: {error}"))?;
+    let pinned_cargo = pinned_executable::PinnedExecutable::open(&cargo_path)
+        .map_err(|error| format!("failed to pin Cargo executable: {error}"))?;
+    let mut cargo = pinned_cargo
+        .command()
+        .map_err(|error| format!("failed to prepare pinned Cargo executable: {error}"))?;
+    cargo
+        .inherit_executable_at(CARGO_LAUNCHER_CAPABILITY_FD)
+        .map_err(|error| format!("failed to retain Cargo launcher capability: {error}"))?;
     let mut forwarded_args = args.to_vec();
     if command == "run" {
         inject_application_runner(&context.project, &mut forwarded_args)?;
@@ -334,6 +353,7 @@ fn run_cargo_with_backend(
         artifact_dir,
     )?;
     cargo
+        .as_command_mut()
         .arg(command)
         .args(&forwarded_args)
         .current_dir(context.project.invocation_dir().child_path())
@@ -349,13 +369,25 @@ fn run_cargo_with_backend(
         .env("RUSTC_WORKSPACE_WRAPPER", &context.binding_wrapper)
         .env(BINDING_WRAPPER_MODE_ENV, "1")
         .env(MANAGED_RUSTC_ARGS_ENV, &context.managed_rustc_args)
-        .env(BUILD_SESSION_ENV, context.build_session.to_hex());
+        .env(BUILD_SESSION_ENV, context.build_session.to_hex())
+        .env(
+            CARGO_LAUNCHER_CAPABILITY_FD_ENV_V2,
+            CARGO_LAUNCHER_CAPABILITY_FD.to_string(),
+        )
+        .env(
+            CARGO_LAUNCHER_CAPABILITY_SHA256_ENV_V2,
+            hex_encode(pinned_cargo.sha256()),
+        );
     match context.worker_v2_identity {
         Some(identity) => {
-            cargo.env(worker_v2::WORKER_V2_EXPECTED_ID_ENV, identity.to_hex());
+            cargo
+                .as_command_mut()
+                .env(worker_v2::WORKER_V2_EXPECTED_ID_ENV, identity.to_hex());
         }
         None => {
-            cargo.env_remove(worker_v2::WORKER_V2_EXPECTED_ID_ENV);
+            cargo
+                .as_command_mut()
+                .env_remove(worker_v2::WORKER_V2_EXPECTED_ID_ENV);
         }
     }
     let status = cargo.status();
