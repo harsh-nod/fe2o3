@@ -3266,12 +3266,13 @@ impl<'a> FunctionLowerer<'a> {
             .iter()
             .flat_map(|block| &block.operations)
             .find_map(|operation| {
-                (operation.results.first().map(|result| result.id) == Some(value))
-                    .then(|| match operation.kind {
-                        OperationKind::Constant(Constant::U32(value)) => Some(value),
-                        _ => None,
-                    })
-                    .flatten()
+                if operation.results.first().map(|result| result.id) != Some(value) {
+                    return None;
+                }
+                match operation.kind {
+                    OperationKind::Constant(Constant::U32(value)) => Some(value),
+                    _ => None,
+                }
             })
     }
 
