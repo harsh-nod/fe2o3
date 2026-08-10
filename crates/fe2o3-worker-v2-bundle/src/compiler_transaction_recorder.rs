@@ -2,10 +2,17 @@ use std::{fmt, mem};
 
 use fe2o3_artifact_transaction::TargetIdentityV1;
 use fe2o3_artifacts::{
-    DigestAlgorithm, DigestBytes, DirectLinkContainerIdentityV1,
-    DirectLinkFinalizedPayloadIdentityV1, DirectLinkLinkedOutputIdentityV1,
-    DirectLinkRequestIdentityV1, DirectLinkResponseIdentityV1, IdentityText, MeasuredToolIdentity,
-    PayloadDigest,
+    ArtifactContainerV1, Capability, CodeObjectFormat, DigestAlgorithm, DigestBytes,
+    DirectLinkContainerIdentityV1, DirectLinkFinalizedPayloadIdentityV1,
+    DirectLinkLinkedOutputIdentityV1, DirectLinkRequestIdentityV1, DirectLinkResponseIdentityV1,
+    Endianness, IdentityText, MeasuredToolIdentity, PayloadDigest, PointerWidth,
+};
+use fe2o3_hsaco_finalize::{
+    WorkerRequestV1, WorkerResponseV1, WorkerStageV1, finalize_unfinalized, inspect_unfinalized,
+};
+use fe2o3_kernel_descriptor::{
+    CapabilityV1, CodeObjectVersion, DeviceDescriptorTableV1, decode_device_descriptor_table_v1,
+    encode_device_descriptor_table_v1,
 };
 use fe2o3_rustc_invocation::{InvocationDigestV2, decode_descriptor_v2, encode_descriptor_v2};
 use sha2::{Digest as _, Sha256};
@@ -23,7 +30,6 @@ pub const SEALED_COMPILER_TRANSACTION_MAGIC_V1: [u8; 8] = *b"FE2CTR1\0";
 pub const SEALED_COMPILER_TRANSACTION_VERSION_V1: u16 = 1;
 pub const MAX_COMPILER_TRANSACTION_SOURCE_FILE_BYTES_V1: usize = 16 * 1024 * 1024;
 pub const MAX_COMPILER_TRANSACTION_SOURCE_BYTES_V1: usize = 64 * 1024 * 1024;
-pub const MAX_COMPILER_TRANSACTION_CAPABILITIES_V1: usize = 256;
 pub const MAX_SEALED_COMPILER_TRANSACTION_BYTES_V1: usize =
     MAX_COMPILER_TRANSACTION_EVIDENCE_BYTES_V2 + 1024;
 
@@ -35,14 +41,16 @@ const FIXED_BODY_BYTES: usize =
 
 const TRANSACTION_DOMAIN: &[u8] = b"FE2O3/COMPILER-TRANSACTION-RECORDER/V1\0";
 const SOURCE_TREE_DOMAIN: &[u8] = b"FE2O3/EXACT-COMPILER-SOURCE-TREE/V1\0";
-const TARGET_DOMAIN: &[u8] = b"FE2O3/GFX942-COMPILER-TARGET-CAPABILITIES/V1\0";
+const TARGET_DOMAIN: &[u8] = b"FE2O3/GFX942-XNACK-MINUS-COV6-COMPILER-TARGET/V1\0";
 const SEMANTIC_WITNESSES_DOMAIN: &[u8] = b"FE2O3/ALPHA-ZETA-SEMANTIC-LAYOUT-WITNESSES/V1\0";
 const CHECKPOINT_DOMAIN: &[u8] = b"FE2O3/COMPILER-TRANSACTION-CHECKPOINT/V1\0";
 const RECORD_IDENTITY_DOMAIN: &[u8] = b"FE2O3/SEALED-COMPILER-TRANSACTION/V1\0";
 
 const GFX942_TRIPLE: &str = "amdgcn-amd-amdhsa";
+const GFX942_AMD_TARGET: &str = "gfx942:xnack-";
 const GFX942_WAVEFRONT_SIZE: u8 = 64;
-const GFX942_CODE_OBJECT_VERSION: u8 = 5;
+const GFX942_CODE_OBJECT_VERSION: CodeObjectVersion = CodeObjectVersion::V6;
+const GFX942_ARTIFACT_CAPABILITIES: &[Capability] = &[Capability::AmdWave];
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct CompilerTransactionContentIdentityV1([u8; 32]);
@@ -297,7 +305,7 @@ impl ExactCompilerInvocationV1 {
         if descriptor.codegen_backend_sha256() != backend_tool.executable.as_bytes() {
             return Err(CompilerTransactionRecorderErrorV1::BackendExecutableMismatch);
         }
-        if !is_gfx942(descriptor.amd_target()) {
+        if descriptor.amd_target() != GFX942_AMD_TARGET {
             return Err(CompilerTransactionRecorderErrorV1::UnsupportedTarget);
         }
         let rustc_invocation = InvocationDigestV2::calculate(&descriptor)
@@ -334,29 +342,25 @@ impl ExactCompilerInvocationV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Gfx942CompilerTargetV1 {
     amd_target: String,
-    capabilities: Vec<IdentityText>,
-    identity: CompilerTransactionContentIdentityV1,
+    code_object_version: CodeObjectVersion,
+    measurement: CompilerTransactionContentIdentityV1,
 }
 
 impl Gfx942CompilerTargetV1 {
+    /// Derives the one supported target profile from an exact validated rustc invocation.
+    ///
+    /// The resulting measurement is recorder-local and is not a
+    /// [`TargetIdentityV1`] or an authority-bearing target claim.
     pub fn for_invocation(
         invocation: &ExactCompilerInvocationV1,
-        mut capabilities: Vec<IdentityText>,
     ) -> Result<Self, CompilerTransactionRecorderErrorV1> {
-        if capabilities.len() > MAX_COMPILER_TRANSACTION_CAPABILITIES_V1 {
-            return Err(CompilerTransactionRecorderErrorV1::TooManyCapabilities {
-                max: MAX_COMPILER_TRANSACTION_CAPABILITIES_V1,
-            });
+        if invocation.amd_target() != GFX942_AMD_TARGET {
+            return Err(CompilerTransactionRecorderErrorV1::UnsupportedTarget);
         }
-        capabilities.sort_unstable();
-        if capabilities.windows(2).any(|pair| pair[0] == pair[1]) {
-            return Err(CompilerTransactionRecorderErrorV1::DuplicateCapability);
-        }
-        let identity = calculate_target_identity(invocation.amd_target(), &capabilities);
         Ok(Self {
             amd_target: invocation.amd_target.clone(),
-            capabilities,
-            identity,
+            code_object_version: GFX942_CODE_OBJECT_VERSION,
+            measurement: calculate_target_measurement(),
         })
     }
 
@@ -364,12 +368,16 @@ impl Gfx942CompilerTargetV1 {
         &self.amd_target
     }
 
-    pub fn capabilities(&self) -> &[IdentityText] {
-        &self.capabilities
+    pub const fn code_object_version(&self) -> CodeObjectVersion {
+        self.code_object_version
     }
 
-    pub const fn identity(&self) -> CompilerTransactionContentIdentityV1 {
-        self.identity
+    pub fn capabilities(&self) -> &'static [Capability] {
+        GFX942_ARTIFACT_CAPABILITIES
+    }
+
+    pub const fn measurement(&self) -> CompilerTransactionContentIdentityV1 {
+        self.measurement
     }
 }
 
@@ -479,12 +487,23 @@ pub struct CompilerTransactionRecorderV1 {
     target: Option<Gfx942CompilerTargetV1>,
     semantic_layouts: Option<AlphaZetaSemanticLayoutWitnessesV1>,
     kernel_ir: Option<CompilerTransactionContentIdentityV1>,
-    worker_exchange: Option<(
-        CompilerTransactionContentIdentityV1,
-        CompilerTransactionContentIdentityV1,
-    )>,
-    raw_hsaco: Option<CompilerTransactionContentIdentityV1>,
+    worker_exchange: Option<ValidatedWorkerExchangeV1>,
+    raw_hsaco: Option<ValidatedRawHsacoV1>,
     finalized: Option<FinalizedCompilerArtifactMeasurementsV1>,
+}
+
+#[derive(Clone, Debug)]
+struct ValidatedWorkerExchangeV1 {
+    response: WorkerResponseV1,
+    request_measurement: CompilerTransactionContentIdentityV1,
+    response_measurement: CompilerTransactionContentIdentityV1,
+}
+
+#[derive(Clone, Debug)]
+struct ValidatedRawHsacoV1 {
+    bytes: Vec<u8>,
+    measurement: CompilerTransactionContentIdentityV1,
+    descriptor_source: Vec<u8>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -493,6 +512,7 @@ struct FinalizedCompilerArtifactMeasurementsV1 {
     descriptor_source: CompilerTransactionContentIdentityV1,
     finalized_descriptor: CompilerTransactionContentIdentityV1,
     artifact: CompilerTransactionContentIdentityV1,
+    canonical_target: TargetIdentityV1,
 }
 
 impl CompilerTransactionRecorderV1 {
@@ -559,9 +579,9 @@ impl CompilerTransactionRecorderV1 {
         if target.amd_target != invocation.amd_target {
             return Err(CompilerTransactionRecorderErrorV1::MixedTarget);
         }
-        let identity = target.identity.into_bytes();
+        let measurement = target.measurement.into_bytes();
         self.target = Some(target);
-        Ok(self.advance(CompilerTransactionStageV1::Target, &[identity]))
+        Ok(self.advance(CompilerTransactionStageV1::Target, &[measurement]))
     }
 
     pub fn record_semantic_layouts(
@@ -597,14 +617,39 @@ impl CompilerTransactionRecorderV1 {
         canonical_response: &[u8],
     ) -> Result<CompilerTransactionCheckpointV1, CompilerTransactionRecorderErrorV1> {
         self.authorize(checkpoint, CompilerTransactionStageV1::KernelIr)?;
-        require_nonempty("Worker V2 request", canonical_request)?;
-        require_nonempty("Worker V2 response", canonical_response)?;
-        let request = CompilerTransactionContentIdentityV1::measure(canonical_request);
-        let response = CompilerTransactionContentIdentityV1::measure(canonical_response);
-        self.worker_exchange = Some((request, response));
+        let request = WorkerRequestV1::decode(canonical_request)
+            .map_err(|_| CompilerTransactionRecorderErrorV1::InvalidWorkerRequest)?;
+        if request.target().to_string() != GFX942_AMD_TARGET {
+            return Err(CompilerTransactionRecorderErrorV1::WorkerTargetMismatch);
+        }
+        if request.code_object_version() != GFX942_CODE_OBJECT_VERSION {
+            return Err(CompilerTransactionRecorderErrorV1::WorkerCodeObjectVersionMismatch);
+        }
+        if request.expected_defined_symbols() != ["alpha", "zeta"] {
+            return Err(CompilerTransactionRecorderErrorV1::WorkerKernelSetMismatch);
+        }
+        let response = WorkerResponseV1::decode(canonical_response)
+            .map_err(|_| CompilerTransactionRecorderErrorV1::InvalidWorkerResponse)?;
+        if !response.binds_request(&request) {
+            return Err(CompilerTransactionRecorderErrorV1::WorkerResponseMismatch);
+        }
+        if response.stage() != WorkerStageV1::Complete || response.output().is_none() {
+            return Err(CompilerTransactionRecorderErrorV1::WorkerResponseIncomplete);
+        }
+        let request_measurement = CompilerTransactionContentIdentityV1(*request.identity());
+        let response_measurement =
+            CompilerTransactionContentIdentityV1::measure(response.canonical_bytes());
+        self.worker_exchange = Some(ValidatedWorkerExchangeV1 {
+            response,
+            request_measurement,
+            response_measurement,
+        });
         Ok(self.advance(
             CompilerTransactionStageV1::WorkerExchange,
-            &[request.into_bytes(), response.into_bytes()],
+            &[
+                request_measurement.into_bytes(),
+                response_measurement.into_bytes(),
+            ],
         ))
     }
 
@@ -614,15 +659,39 @@ impl CompilerTransactionRecorderV1 {
         raw_hsaco: &[u8],
     ) -> Result<CompilerTransactionCheckpointV1, CompilerTransactionRecorderErrorV1> {
         self.authorize(checkpoint, CompilerTransactionStageV1::WorkerExchange)?;
-        require_nonempty("raw HSACO", raw_hsaco)?;
+        let exchange = self
+            .worker_exchange
+            .as_ref()
+            .ok_or(CompilerTransactionRecorderErrorV1::MissingStage)?;
+        let output = exchange
+            .response
+            .output()
+            .ok_or(CompilerTransactionRecorderErrorV1::WorkerResponseIncomplete)?;
+        if output.bytes() != raw_hsaco {
+            return Err(CompilerTransactionRecorderErrorV1::WorkerOutputMismatch);
+        }
+        let inspection = inspect_unfinalized(raw_hsaco)
+            .map_err(|_| CompilerTransactionRecorderErrorV1::InvalidRawHsaco)?;
+        validate_descriptor_profile(inspection.descriptor_table())?;
+        let descriptor_source = encode_device_descriptor_table_v1(inspection.descriptor_table())
+            .map_err(|_| CompilerTransactionRecorderErrorV1::InvalidDescriptorSource)?;
         let identity = CompilerTransactionContentIdentityV1::measure(raw_hsaco);
-        self.raw_hsaco = Some(identity);
+        self.raw_hsaco = Some(ValidatedRawHsacoV1 {
+            bytes: raw_hsaco.to_vec(),
+            measurement: identity,
+            descriptor_source,
+        });
         Ok(self.advance(
             CompilerTransactionStageV1::RawHsaco,
             &[identity.into_bytes()],
         ))
     }
 
+    /// Validates the finalization and artifact closure before accepting its canonical target.
+    ///
+    /// `canonical_target` must come from the caller's already validated artifact-transaction
+    /// scope. This inert recorder binds that shared identity but neither derives nor authenticates
+    /// the publication scope that assigned it.
     pub fn record_finalized_artifact(
         &mut self,
         checkpoint: CompilerTransactionCheckpointV1,
@@ -630,12 +699,54 @@ impl CompilerTransactionRecorderV1 {
         descriptor_source: &[u8],
         finalized_descriptor: &[u8],
         artifact_container: &[u8],
+        canonical_target: TargetIdentityV1,
     ) -> Result<CompilerTransactionCheckpointV1, CompilerTransactionRecorderErrorV1> {
         self.authorize(checkpoint, CompilerTransactionStageV1::RawHsaco)?;
-        require_nonempty("finalized HSACO", finalized_hsaco)?;
-        require_nonempty("descriptor source", descriptor_source)?;
-        require_nonempty("finalized descriptor", finalized_descriptor)?;
-        require_nonempty("artifact container", artifact_container)?;
+        if canonical_target.as_bytes() == &[0; 32] {
+            return Err(CompilerTransactionRecorderErrorV1::ReservedZeroCanonicalTarget);
+        }
+        let raw = self
+            .raw_hsaco
+            .as_ref()
+            .ok_or(CompilerTransactionRecorderErrorV1::MissingStage)?;
+        let decoded_source = decode_canonical_descriptor(
+            descriptor_source,
+            CompilerTransactionRecorderErrorV1::InvalidDescriptorSource,
+        )?;
+        validate_descriptor_profile(&decoded_source)?;
+        if decoded_source.canonical_code_object_digest().as_bytes() != &[0; 32]
+            || descriptor_source != raw.descriptor_source
+        {
+            return Err(CompilerTransactionRecorderErrorV1::DescriptorSourceMismatch);
+        }
+        let expected = finalize_unfinalized(&raw.bytes)
+            .map_err(|_| CompilerTransactionRecorderErrorV1::InvalidRawHsaco)?;
+        if expected.as_bytes() != finalized_hsaco {
+            return Err(CompilerTransactionRecorderErrorV1::FinalizedHsacoMismatch);
+        }
+        let decoded_final = decode_canonical_descriptor(
+            finalized_descriptor,
+            CompilerTransactionRecorderErrorV1::InvalidFinalizedDescriptor,
+        )?;
+        validate_descriptor_profile(&decoded_final)?;
+        let expected_descriptor =
+            encode_device_descriptor_table_v1(expected.inspection().descriptor_table())
+                .map_err(|_| CompilerTransactionRecorderErrorV1::InvalidFinalizedDescriptor)?;
+        if finalized_descriptor != expected_descriptor
+            || decoded_final.canonical_code_object_digest().as_bytes() == &[0; 32]
+        {
+            return Err(CompilerTransactionRecorderErrorV1::FinalizedDescriptorMismatch);
+        }
+        let container = ArtifactContainerV1::from_bytes(artifact_container)
+            .map_err(|_| CompilerTransactionRecorderErrorV1::InvalidArtifactContainer)?;
+        if container.to_bytes() != artifact_container {
+            return Err(CompilerTransactionRecorderErrorV1::InvalidArtifactContainer);
+        }
+        validate_artifact_container(
+            &container,
+            finalized_hsaco,
+            expected.inspection().descriptor_table(),
+        )?;
         let finalized = FinalizedCompilerArtifactMeasurementsV1 {
             finalized_hsaco: CompilerTransactionContentIdentityV1::measure(finalized_hsaco),
             descriptor_source: CompilerTransactionContentIdentityV1::measure(descriptor_source),
@@ -643,10 +754,8 @@ impl CompilerTransactionRecorderV1 {
                 finalized_descriptor,
             ),
             artifact: CompilerTransactionContentIdentityV1::measure(artifact_container),
+            canonical_target,
         };
-        if finalized.descriptor_source == finalized.finalized_descriptor {
-            return Err(CompilerTransactionRecorderErrorV1::DescriptorNotFinalized);
-        }
         let payload = [
             finalized.finalized_hsaco.into_bytes(),
             finalized.descriptor_source.into_bytes(),
@@ -677,11 +786,13 @@ impl CompilerTransactionRecorderV1 {
         let kernel_ir = self
             .kernel_ir
             .ok_or(CompilerTransactionRecorderErrorV1::MissingStage)?;
-        let (worker_request, worker_response) = self
+        let worker_exchange = self
             .worker_exchange
+            .as_ref()
             .ok_or(CompilerTransactionRecorderErrorV1::MissingStage)?;
         let raw_hsaco = self
             .raw_hsaco
+            .as_ref()
             .ok_or(CompilerTransactionRecorderErrorV1::MissingStage)?;
         let finalized = self
             .finalized
@@ -705,10 +816,16 @@ impl CompilerTransactionRecorderV1 {
                     kernel_ir.into_bytes(),
                 )
                 .map_err(CompilerTransactionRecorderErrorV1::Capsule)?,
-                worker_request: DirectLinkRequestIdentityV1::new(payload_digest(worker_request)),
-                worker_response: DirectLinkResponseIdentityV1::new(payload_digest(worker_response)),
-                target: TargetIdentityV1::from_bytes(target.identity.into_bytes()),
-                raw_hsaco: DirectLinkLinkedOutputIdentityV1::new(payload_digest(raw_hsaco)),
+                worker_request: DirectLinkRequestIdentityV1::new(payload_digest(
+                    worker_exchange.request_measurement,
+                )),
+                worker_response: DirectLinkResponseIdentityV1::new(payload_digest(
+                    worker_exchange.response_measurement,
+                )),
+                target: finalized.canonical_target,
+                raw_hsaco: DirectLinkLinkedOutputIdentityV1::new(payload_digest(
+                    raw_hsaco.measurement,
+                )),
                 finalized_hsaco: DirectLinkFinalizedPayloadIdentityV1::new(payload_digest(
                     finalized.finalized_hsaco,
                 )),
@@ -729,12 +846,12 @@ impl CompilerTransactionRecorderV1 {
             backend_executable: invocation.backend_tool.executable,
             backend_configuration: invocation.backend_tool.configuration,
             backend_invocation: invocation.backend_invocation,
-            target_capabilities: target.identity,
+            target_profile: target.measurement,
             semantic_layouts: semantic.identity,
             kernel_ir,
-            worker_request,
-            worker_response,
-            raw_hsaco,
+            worker_request: worker_exchange.request_measurement,
+            worker_response: worker_exchange.response_measurement,
+            raw_hsaco: raw_hsaco.measurement,
             finalized_hsaco: finalized.finalized_hsaco,
             descriptor_source: finalized.descriptor_source,
             finalized_descriptor: finalized.finalized_descriptor,
@@ -799,7 +916,7 @@ pub struct CompilerTransactionMeasurementsV1 {
     backend_executable: CompilerTransactionContentIdentityV1,
     backend_configuration: CompilerTransactionContentIdentityV1,
     backend_invocation: CompilerTransactionContentIdentityV1,
-    target_capabilities: CompilerTransactionContentIdentityV1,
+    target_profile: CompilerTransactionContentIdentityV1,
     semantic_layouts: CompilerTransactionContentIdentityV1,
     kernel_ir: CompilerTransactionContentIdentityV1,
     worker_request: CompilerTransactionContentIdentityV1,
@@ -840,8 +957,8 @@ impl CompilerTransactionMeasurementsV1 {
         self.backend_invocation
     }
 
-    pub const fn target_capabilities(self) -> CompilerTransactionContentIdentityV1 {
-        self.target_capabilities
+    pub const fn target_profile(self) -> CompilerTransactionContentIdentityV1 {
+        self.target_profile
     }
 
     pub const fn semantic_layouts(self) -> CompilerTransactionContentIdentityV1 {
@@ -889,7 +1006,7 @@ impl CompilerTransactionMeasurementsV1 {
             self.backend_executable,
             self.backend_configuration,
             self.backend_invocation,
-            self.target_capabilities,
+            self.target_profile,
             self.semantic_layouts,
             self.kernel_ir,
             self.worker_request,
@@ -911,7 +1028,7 @@ impl CompilerTransactionMeasurementsV1 {
             backend_executable,
             backend_configuration,
             backend_invocation,
-            target_capabilities,
+            target_profile,
             semantic_layouts,
             kernel_ir,
             worker_request,
@@ -930,7 +1047,7 @@ impl CompilerTransactionMeasurementsV1 {
             backend_executable,
             backend_configuration,
             backend_invocation,
-            target_capabilities,
+            target_profile,
             semantic_layouts,
             kernel_ir,
             worker_request,
@@ -1076,13 +1193,9 @@ pub enum CompilerTransactionRecorderErrorV1 {
     TooManyFeatures {
         max: usize,
     },
-    TooManyCapabilities {
-        max: usize,
-    },
     DuplicateSourcePath,
     RootRepeatedAsDependency,
     DuplicateFeature,
-    DuplicateCapability,
     DuplicateSemanticWitness,
     MissingAlphaZetaWitnesses,
     InvalidRustcDescriptor,
@@ -1091,6 +1204,30 @@ pub enum CompilerTransactionRecorderErrorV1 {
     BackendExecutableMismatch,
     UnsupportedTarget,
     MixedTarget,
+    InvalidWorkerRequest,
+    InvalidWorkerResponse,
+    WorkerTargetMismatch,
+    WorkerCodeObjectVersionMismatch,
+    WorkerKernelSetMismatch,
+    WorkerResponseMismatch,
+    WorkerResponseIncomplete,
+    WorkerOutputMismatch,
+    InvalidRawHsaco,
+    DescriptorCodeObjectVersionMismatch,
+    DescriptorTargetMismatch,
+    DescriptorKernelSetMismatch,
+    DescriptorCapabilityMismatch,
+    InvalidDescriptorSource,
+    DescriptorSourceMismatch,
+    InvalidFinalizedDescriptor,
+    FinalizedHsacoMismatch,
+    FinalizedDescriptorMismatch,
+    InvalidArtifactContainer,
+    ArtifactTargetMismatch,
+    ArtifactCapabilityMismatch,
+    ArtifactPayloadMismatch,
+    ArtifactKernelSetMismatch,
+    ReservedZeroCanonicalTarget,
     ReservedZeroFreshness,
     UnexpectedStage {
         expected: CompilerTransactionStageV1,
@@ -1099,7 +1236,6 @@ pub enum CompilerTransactionRecorderErrorV1 {
     MixedTransaction,
     StaleCheckpoint,
     MissingStage,
-    DescriptorNotFinalized,
     RecordTooLarge {
         max: usize,
     },
@@ -1126,9 +1262,6 @@ impl fmt::Display for CompilerTransactionRecorderErrorV1 {
             Self::TooManyFeatures { max } => {
                 write!(formatter, "compiler source closure exceeds {max} features")
             }
-            Self::TooManyCapabilities { max } => {
-                write!(formatter, "gfx942 target exceeds {max} capabilities")
-            }
             Self::DuplicateSourcePath => {
                 formatter.write_str("compiler source closure contains a duplicate path")
             }
@@ -1137,9 +1270,6 @@ impl fmt::Display for CompilerTransactionRecorderErrorV1 {
             }
             Self::DuplicateFeature => {
                 formatter.write_str("compiler source closure contains a duplicate feature")
-            }
-            Self::DuplicateCapability => {
-                formatter.write_str("gfx942 target contains a duplicate capability")
             }
             Self::DuplicateSemanticWitness => {
                 formatter.write_str("semantic layout witnesses contain a duplicate kernel")
@@ -1160,10 +1290,76 @@ impl fmt::Display for CompilerTransactionRecorderErrorV1 {
                 formatter.write_str("rustc descriptor does not match measured backend bytes")
             }
             Self::UnsupportedTarget => {
-                formatter.write_str("compiler transaction is not for gfx942")
+                formatter.write_str("compiler transaction is not for canonical gfx942:xnack-")
             }
             Self::MixedTarget => {
-                formatter.write_str("target capabilities do not match the compiler invocation")
+                formatter.write_str("target profile does not match the compiler invocation")
+            }
+            Self::InvalidWorkerRequest => formatter.write_str("Worker request is invalid"),
+            Self::InvalidWorkerResponse => formatter.write_str("Worker response is invalid"),
+            Self::WorkerTargetMismatch => {
+                formatter.write_str("Worker request target is not gfx942:xnack-")
+            }
+            Self::WorkerCodeObjectVersionMismatch => {
+                formatter.write_str("Worker request does not require code object V6")
+            }
+            Self::WorkerKernelSetMismatch => {
+                formatter.write_str("Worker request does not define exactly alpha and zeta")
+            }
+            Self::WorkerResponseMismatch => {
+                formatter.write_str("Worker response does not bind the recorded request")
+            }
+            Self::WorkerResponseIncomplete => {
+                formatter.write_str("Worker response is not a complete successful response")
+            }
+            Self::WorkerOutputMismatch => {
+                formatter.write_str("raw HSACO does not equal the Worker response output")
+            }
+            Self::InvalidRawHsaco => formatter.write_str("raw HSACO is invalid"),
+            Self::DescriptorCodeObjectVersionMismatch => {
+                formatter.write_str("descriptor table does not require code object V6")
+            }
+            Self::DescriptorTargetMismatch => {
+                formatter.write_str("descriptor table target is not gfx942:xnack-")
+            }
+            Self::DescriptorKernelSetMismatch => {
+                formatter.write_str("descriptor table does not contain exactly alpha and zeta")
+            }
+            Self::DescriptorCapabilityMismatch => {
+                formatter.write_str("descriptor kernel capabilities do not match the fixed profile")
+            }
+            Self::InvalidDescriptorSource => {
+                formatter.write_str("descriptor source is invalid or noncanonical")
+            }
+            Self::DescriptorSourceMismatch => {
+                formatter.write_str("descriptor source does not equal the raw HSACO table")
+            }
+            Self::InvalidFinalizedDescriptor => {
+                formatter.write_str("finalized descriptor is invalid or noncanonical")
+            }
+            Self::FinalizedHsacoMismatch => {
+                formatter.write_str("finalized HSACO is not the deterministic raw-HSACO result")
+            }
+            Self::FinalizedDescriptorMismatch => {
+                formatter.write_str("finalized descriptor does not equal the finalized HSACO table")
+            }
+            Self::InvalidArtifactContainer => {
+                formatter.write_str("artifact container is invalid or noncanonical")
+            }
+            Self::ArtifactTargetMismatch => {
+                formatter.write_str("artifact target is not the fixed gfx942:xnack- profile")
+            }
+            Self::ArtifactCapabilityMismatch => {
+                formatter.write_str("artifact capabilities do not match the fixed profile")
+            }
+            Self::ArtifactPayloadMismatch => {
+                formatter.write_str("artifact payload does not equal the finalized HSACO")
+            }
+            Self::ArtifactKernelSetMismatch => {
+                formatter.write_str("artifact kernels do not match the alpha/zeta descriptors")
+            }
+            Self::ReservedZeroCanonicalTarget => {
+                formatter.write_str("canonical target identity must not be all zero")
             }
             Self::ReservedZeroFreshness => {
                 formatter.write_str("compiler transaction freshness must not be all zero")
@@ -1179,9 +1375,6 @@ impl fmt::Display for CompilerTransactionRecorderErrorV1 {
             }
             Self::StaleCheckpoint => formatter.write_str("checkpoint is stale"),
             Self::MissingStage => formatter.write_str("compiler transaction has a missing stage"),
-            Self::DescriptorNotFinalized => {
-                formatter.write_str("finalized descriptor is identical to its source")
-            }
             Self::RecordTooLarge { max } => {
                 write!(formatter, "sealed compiler transaction exceeds {max} bytes")
             }
@@ -1448,13 +1641,6 @@ fn validate_measurements(
             return Err(SealedCompilerTransactionDecodeErrorV1::MeasurementMismatch { field });
         }
     }
-    if values.target_capabilities.as_bytes() != capsule.target().as_bytes() {
-        return Err(
-            SealedCompilerTransactionDecodeErrorV1::MeasurementMismatch {
-                field: "target capabilities",
-            },
-        );
-    }
     Ok(())
 }
 
@@ -1495,7 +1681,7 @@ fn reconstruct_final_chain(
     for (stage, payload) in [
         (
             CompilerTransactionStageV1::Target,
-            vec![values.target_capabilities.into_bytes()],
+            vec![values.target_profile.into_bytes()],
         ),
         (
             CompilerTransactionStageV1::SemanticLayouts,
@@ -1566,19 +1752,15 @@ fn calculate_source_tree_identity(
     CompilerTransactionContentIdentityV1(digest.finalize().into())
 }
 
-fn calculate_target_identity(
-    amd_target: &str,
-    capabilities: &[IdentityText],
-) -> CompilerTransactionContentIdentityV1 {
+fn calculate_target_measurement() -> CompilerTransactionContentIdentityV1 {
     let mut digest = Sha256::new();
     digest.update(TARGET_DOMAIN);
     hash_text(&mut digest, GFX942_TRIPLE);
-    hash_text(&mut digest, amd_target);
-    digest.update([GFX942_WAVEFRONT_SIZE, GFX942_CODE_OBJECT_VERSION]);
-    digest.update((capabilities.len() as u32).to_le_bytes());
-    for capability in capabilities {
-        hash_text(&mut digest, capability.as_str());
-    }
+    hash_text(&mut digest, GFX942_AMD_TARGET);
+    digest.update([GFX942_WAVEFRONT_SIZE]);
+    digest.update([code_object_version_tag(GFX942_CODE_OBJECT_VERSION)]);
+    digest.update((GFX942_ARTIFACT_CAPABILITIES.len() as u32).to_le_bytes());
+    hash_text(&mut digest, "amd-wave");
     CompilerTransactionContentIdentityV1(digest.finalize().into())
 }
 
@@ -1670,6 +1852,103 @@ fn content_from_payload(
     )
 }
 
+fn decode_canonical_descriptor(
+    bytes: &[u8],
+    error: CompilerTransactionRecorderErrorV1,
+) -> Result<DeviceDescriptorTableV1, CompilerTransactionRecorderErrorV1> {
+    let table = decode_device_descriptor_table_v1(bytes).map_err(|_| error.clone())?;
+    let canonical = encode_device_descriptor_table_v1(&table).map_err(|_| error.clone())?;
+    if canonical != bytes {
+        return Err(error);
+    }
+    Ok(table)
+}
+
+fn validate_descriptor_profile(
+    table: &DeviceDescriptorTableV1,
+) -> Result<(), CompilerTransactionRecorderErrorV1> {
+    if table.code_object_version() != GFX942_CODE_OBJECT_VERSION {
+        return Err(CompilerTransactionRecorderErrorV1::DescriptorCodeObjectVersionMismatch);
+    }
+    if table.device_target().to_string() != GFX942_AMD_TARGET {
+        return Err(CompilerTransactionRecorderErrorV1::DescriptorTargetMismatch);
+    }
+    let mut kernels = table.kernels().iter().collect::<Vec<_>>();
+    kernels.sort_unstable_by_key(|kernel| kernel.entry_name().as_str());
+    if kernels.len() != 2
+        || kernels[0].entry_name().as_str() != "alpha"
+        || kernels[1].entry_name().as_str() != "zeta"
+    {
+        return Err(CompilerTransactionRecorderErrorV1::DescriptorKernelSetMismatch);
+    }
+    if kernels
+        .iter()
+        .any(|kernel| kernel.capabilities() != [CapabilityV1::AmdWave])
+    {
+        return Err(CompilerTransactionRecorderErrorV1::DescriptorCapabilityMismatch);
+    }
+    Ok(())
+}
+
+fn validate_artifact_container(
+    container: &ArtifactContainerV1,
+    finalized_hsaco: &[u8],
+    descriptor: &DeviceDescriptorTableV1,
+) -> Result<(), CompilerTransactionRecorderErrorV1> {
+    let target = container.manifest().target();
+    if target.triple().as_str() != GFX942_TRIPLE
+        || target.architecture().as_str() != GFX942_AMD_TARGET
+        || target.pointer_width() != PointerWidth::Bits64
+        || target.endianness() != Endianness::Little
+    {
+        return Err(CompilerTransactionRecorderErrorV1::ArtifactTargetMismatch);
+    }
+    if target.capabilities() != GFX942_ARTIFACT_CAPABILITIES {
+        return Err(CompilerTransactionRecorderErrorV1::ArtifactCapabilityMismatch);
+    }
+
+    let payloads = container.payloads();
+    let code_objects = container.manifest().code_objects();
+    if payloads.len() != 1
+        || code_objects.len() != 1
+        || payloads[0].bytes() != finalized_hsaco
+        || code_objects[0].format() != CodeObjectFormat::NativeExecutable
+        || code_objects[0].byte_len() != finalized_hsaco.len() as u64
+        || code_objects[0].digest() != payloads[0].digest().bytes()
+    {
+        return Err(CompilerTransactionRecorderErrorV1::ArtifactPayloadMismatch);
+    }
+
+    let kernels = container.manifest().kernels();
+    if kernels.len() != 2 {
+        return Err(CompilerTransactionRecorderErrorV1::ArtifactKernelSetMismatch);
+    }
+    for descriptor_kernel in descriptor.kernels() {
+        let Some(kernel) = kernels
+            .iter()
+            .find(|kernel| kernel.name().as_str() == descriptor_kernel.entry_name().as_str())
+        else {
+            return Err(CompilerTransactionRecorderErrorV1::ArtifactKernelSetMismatch);
+        };
+        if kernel.symbol().as_str() != descriptor_kernel.entry_name().as_str()
+            || kernel.kernel_id().as_bytes() != descriptor_kernel.kernel_id().as_bytes()
+            || kernel.code_object_digest() != code_objects[0].digest()
+            || kernel.required_capabilities() != GFX942_ARTIFACT_CAPABILITIES
+        {
+            return Err(CompilerTransactionRecorderErrorV1::ArtifactKernelSetMismatch);
+        }
+    }
+    Ok(())
+}
+
+const fn code_object_version_tag(version: CodeObjectVersion) -> u8 {
+    match version {
+        CodeObjectVersion::V4 => 4,
+        CodeObjectVersion::V5 => 5,
+        CodeObjectVersion::V6 => 6,
+    }
+}
+
 fn require_nonempty(
     field: &'static str,
     bytes: &[u8],
@@ -1681,10 +1960,6 @@ fn require_nonempty(
     }
 }
 
-fn is_gfx942(target: &str) -> bool {
-    target == "gfx942" || target.starts_with("gfx942:")
-}
-
 fn measurement_name(index: usize) -> &'static str {
     const NAMES: [&str; MEASUREMENT_COUNT] = [
         "source tree",
@@ -1694,7 +1969,7 @@ fn measurement_name(index: usize) -> &'static str {
         "backend executable",
         "backend configuration",
         "backend invocation",
-        "target capabilities",
+        "target profile",
         "semantic layouts",
         "Kernel IR",
         "Worker V2 request",
