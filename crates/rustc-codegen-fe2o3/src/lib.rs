@@ -15,6 +15,8 @@ extern crate rustc_session;
 extern crate rustc_span;
 
 mod amdgpu_llvm;
+#[allow(dead_code)]
+mod closure_profile_v1;
 mod collector;
 mod compiler_descriptor;
 mod compiler_ffi_adapter;
