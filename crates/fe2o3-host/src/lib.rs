@@ -128,8 +128,10 @@ pub use published_hsaco_inspection::{
     PublishedPhysicalLayoutInspectionError,
 };
 pub use recovered_worker_v2_admission::{
-    RecoveredWorkerV2AdmissionError, RecoveredWorkerV2PinnedDescriptorV1,
-    recover_worker_v2_load_envelope_v1,
+    RecoveredWorkerV2AdmissionError, RecoveredWorkerV2ApplicationBindingError,
+    RecoveredWorkerV2ApplicationHandoffError, RecoveredWorkerV2ApplicationHandoffV1,
+    RecoveredWorkerV2ApplicationPrepareError, RecoveredWorkerV2ApplicationPrepareResultV1,
+    RecoveredWorkerV2PinnedDescriptorV1, recover_worker_v2_load_envelope_v1,
 };
 
 pub use tile_interop::{

@@ -1,12 +1,18 @@
 use crate::{
-    AdmittedFinalizedWorkerV2BundleV1, ArtifactKernelIdentityV1, DeviceIdentity,
-    FinalizedWorkerV2BundleAdmissionError, MissingFinalizedWorkerV2LoadPrerequisiteV1,
-    ObservedContext, PhysicalMetadataValueV1, PublishedKernelPhysicalLayoutV1,
+    AdmittedFinalizedWorkerV2BundleV1, ArtifactKernelIdentityV1, AuthenticatedWorkerV2ExecutableV1,
+    CompilerGeneratedAlphaZetaCov6ArgumentsV1, CompilerGeneratedKernelExpectationV1,
+    DeviceIdentity, FinalizedWorkerV2BundleAdmissionError, GeneratedAlphaZetaCov6PrepareError,
+    GeneratedAlphaZetaCov6PreparedInvocationV1, HsaExecutableLoadError, HsaLoadAuthorizationError,
+    LoadedHsaExecutableV1, MissingFinalizedWorkerV2LoadPrerequisiteV1, ObservedContext,
+    PhysicalMetadataValueV1, PublishedKernelPhysicalLayoutV1, ReviewedHsaImplicitKernargAdapterV1,
+    UnloadedHsaExecutableV1, WorkerV2ExecutableAuthenticationError,
+    WorkerV2PrerequisiteAuthenticatorV1, WorkerV2TypedKernelSelectionError,
 };
 use fe2o3_artifact_transaction::{
     DurableCurrentLinkPublicationLeaseV1, DurablePublishedClaimReacquisitionErrorV1,
     PublishedLinkArtifactV1, reacquire_current_hsaco_publication_lease_v1,
 };
+use fe2o3_core::{GpuContext, Stream, StreamIdentity};
 use fe2o3_hsaco::{CodeObjectVersion, KernelDescriptorBinding};
 use fe2o3_hsaco_finalize::{FinalizationError, finalize_unfinalized, verify_finalized};
 use fe2o3_kernel_descriptor::{
@@ -16,6 +22,7 @@ use fe2o3_worker_v2_bundle::{EnvelopeDecodeError, WorkerV2LoadEnvelopeV1};
 use std::error::Error;
 use std::fmt;
 use std::path::Path;
+use std::sync::Arc;
 
 /// Read-only host descriptor recovered from one canonical Worker V2 envelope.
 ///
@@ -26,6 +33,7 @@ use std::path::Path;
 pub struct RecoveredWorkerV2PinnedDescriptorV1 {
     admission: AdmittedFinalizedWorkerV2BundleV1,
     descriptor: KernelDescriptorV1,
+    observed: ObservedContext,
 }
 
 impl fmt::Debug for RecoveredWorkerV2PinnedDescriptorV1 {
@@ -74,6 +82,7 @@ impl RecoveredWorkerV2PinnedDescriptorV1 {
         Ok(Self {
             admission,
             descriptor,
+            observed: observed.clone(),
         })
     }
 
@@ -134,6 +143,252 @@ impl RecoveredWorkerV2PinnedDescriptorV1 {
     pub const fn grants_launch_authority(&self) -> bool {
         false
     }
+
+    /// Revalidates and consumes this descriptor into one exact application handoff.
+    ///
+    /// The descriptor remains inert until this transition is called with the existing unsafe
+    /// compiler/Verus prerequisite authenticator. The returned authority owns the exact recovered
+    /// envelope and publication lease through the loaded executable, retains the observed HIP
+    /// context and the exact borrowed application stream, and exposes only generated typed
+    /// preparation. Native bytes and handles remain private.
+    pub fn load_generated_application_handoff_v1<'stream, K, Authenticator, Adapter>(
+        self,
+        stream: &'stream Stream,
+        authenticator: &mut Authenticator,
+        adapter: Adapter,
+    ) -> Result<
+        RecoveredWorkerV2ApplicationHandoffV1<'stream, K, Adapter>,
+        RecoveredWorkerV2ApplicationHandoffError<Authenticator::Error, Adapter::Error>,
+    >
+    where
+        K: CompilerGeneratedKernelExpectationV1,
+        Authenticator: WorkerV2PrerequisiteAuthenticatorV1<K>,
+        Adapter: ReviewedHsaImplicitKernargAdapterV1,
+    {
+        let retained = RetainedApplicationStreamV1::bind(&self.observed, stream)
+            .map_err(RecoveredWorkerV2ApplicationHandoffError::Binding)?;
+        self.finish_generated_application_handoff_v1::<K, Authenticator, Adapter>(
+            retained,
+            authenticator,
+            adapter,
+        )
+    }
+
+    fn finish_generated_application_handoff_v1<'stream, K, Authenticator, Adapter>(
+        self,
+        retained: RetainedApplicationStreamV1<'stream>,
+        authenticator: &mut Authenticator,
+        adapter: Adapter,
+    ) -> Result<
+        RecoveredWorkerV2ApplicationHandoffV1<'stream, K, Adapter>,
+        RecoveredWorkerV2ApplicationHandoffError<Authenticator::Error, Adapter::Error>,
+    >
+    where
+        K: CompilerGeneratedKernelExpectationV1,
+        Authenticator: WorkerV2PrerequisiteAuthenticatorV1<K>,
+        Adapter: ReviewedHsaImplicitKernargAdapterV1,
+    {
+        self.admission
+            .acquire_currentness()
+            .map_err(RecoveredWorkerV2ApplicationHandoffError::CurrentPublication)?;
+        self.admission
+            .select_typed_kernel::<K>()
+            .map_err(RecoveredWorkerV2ApplicationHandoffError::Selection)?;
+        let authenticated =
+            AuthenticatedWorkerV2ExecutableV1::<K>::authenticate(self.admission, authenticator)
+                .map_err(RecoveredWorkerV2ApplicationHandoffError::Authentication)?;
+        let authorized = authenticated
+            .authorize_hsa_load(adapter)
+            .map_err(RecoveredWorkerV2ApplicationHandoffError::Authorization)?;
+        let loaded = authorized
+            .load()
+            .map_err(RecoveredWorkerV2ApplicationHandoffError::Load)?;
+        Ok(RecoveredWorkerV2ApplicationHandoffV1 {
+            loaded,
+            observed: self.observed,
+            retained,
+        })
+    }
+}
+
+/// Linear application authority recovered from one canonical Worker V2 envelope.
+///
+/// This value is intentionally neither `Clone` nor `Copy`. It retains the exact publication
+/// lease, envelope bytes, loaded executable, original context observation, and borrowed stream.
+/// Preparation accepts the bound stream again so a separately created wrapper cannot be
+/// substituted at the application boundary.
+pub struct RecoveredWorkerV2ApplicationHandoffV1<'stream, K, A: ReviewedHsaImplicitKernargAdapterV1>
+{
+    loaded: LoadedHsaExecutableV1<K, A>,
+    observed: ObservedContext,
+    retained: RetainedApplicationStreamV1<'stream>,
+}
+
+/// Result of preparing one invocation through recovered application authority.
+#[doc(hidden)]
+pub type RecoveredWorkerV2ApplicationPrepareResultV1<
+    'loaded,
+    'allocation,
+    Root,
+    Selected,
+    Adapter,
+    Arguments,
+    PrerequisiteError,
+> = Result<
+    GeneratedAlphaZetaCov6PreparedInvocationV1<
+        'loaded,
+        'allocation,
+        Root,
+        Selected,
+        Adapter,
+        Arguments,
+    >,
+    RecoveredWorkerV2ApplicationPrepareError<
+        PrerequisiteError,
+        <Adapter as crate::ReviewedHsaExecutableLifecycleAdapterV1>::Error,
+    >,
+>;
+
+impl<K, A: ReviewedHsaImplicitKernargAdapterV1> fmt::Debug
+    for RecoveredWorkerV2ApplicationHandoffV1<'_, K, A>
+{
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RecoveredWorkerV2ApplicationHandoffV1")
+            .field("load", self.loaded.load_observation())
+            .field("kernel", self.loaded.kernel_observation())
+            .field("stream", &self.retained.identity())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<K, A: ReviewedHsaImplicitKernargAdapterV1> RecoveredWorkerV2ApplicationHandoffV1<'_, K, A> {
+    pub const fn stream_identity(&self) -> StreamIdentity {
+        self.retained.identity()
+    }
+
+    pub const fn load_observation(&self) -> &crate::HsaCodeObjectLoadObservationV1 {
+        self.loaded.load_observation()
+    }
+
+    pub const fn kernel_observation(&self) -> &crate::HsaKernelResolutionObservationV1 {
+        self.loaded.kernel_observation()
+    }
+
+    /// Prepares one generated alpha/zeta COV6 invocation on the exact bound stream.
+    ///
+    /// The HSA dispatch is synchronous; retaining the stream prevents its surrounding HIP
+    /// lifetime from ending, while the generated argument capabilities enforce exact context and
+    /// allocation provenance. Supplying another stream wrapper fails before authentication or
+    /// argument binding.
+    #[doc(hidden)]
+    pub fn prepare_generated_alpha_zeta_cov6_v1<
+        'loaded,
+        'allocation,
+        Selected,
+        Authenticator,
+        Arguments,
+    >(
+        &'loaded mut self,
+        stream: &Stream,
+        authenticator: &mut Authenticator,
+        arguments: Arguments,
+    ) -> RecoveredWorkerV2ApplicationPrepareResultV1<
+        'loaded,
+        'allocation,
+        K,
+        Selected,
+        A,
+        Arguments,
+        Authenticator::Error,
+    >
+    where
+        Selected: CompilerGeneratedKernelExpectationV1,
+        Authenticator: WorkerV2PrerequisiteAuthenticatorV1<Selected>,
+        Arguments: CompilerGeneratedAlphaZetaCov6ArgumentsV1<'allocation, Selected>,
+    {
+        if self.retained.identity() != stream.identity() {
+            return Err(
+                RecoveredWorkerV2ApplicationPrepareError::StreamSubstitution {
+                    expected: self.retained.identity(),
+                    actual: stream.identity(),
+                },
+            );
+        }
+        self.loaded
+            .prepare_generated_alpha_zeta_cov6_selected_kernel_v1::<
+                Selected,
+                Authenticator,
+                Arguments,
+            >(&self.observed, authenticator, arguments)
+            .map_err(RecoveredWorkerV2ApplicationPrepareError::Prepare)
+    }
+
+    pub fn unload(
+        self,
+    ) -> Result<UnloadedHsaExecutableV1, crate::HsaExecutableUnloadError<A::Error>> {
+        self.loaded.unload()
+    }
+}
+
+struct RetainedApplicationStreamV1<'stream> {
+    stream: &'stream Stream,
+    context: Arc<GpuContext>,
+}
+
+impl<'stream> RetainedApplicationStreamV1<'stream> {
+    fn bind(
+        observed: &ObservedContext,
+        stream: &'stream Stream,
+    ) -> Result<Self, RecoveredWorkerV2ApplicationBindingError> {
+        if !observed.is_for_context(stream.context()) {
+            return Err(RecoveredWorkerV2ApplicationBindingError::ContextSubstitution);
+        }
+        Ok(Self {
+            stream,
+            context: stream.context().clone(),
+        })
+    }
+
+    const fn identity(&self) -> StreamIdentity {
+        self.stream.identity()
+    }
+}
+
+impl Drop for RetainedApplicationStreamV1<'_> {
+    fn drop(&mut self) {
+        debug_assert!(Arc::ptr_eq(&self.context, self.stream.context()));
+    }
+}
+
+/// Context/stream mismatch before recovered authority can be authenticated.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum RecoveredWorkerV2ApplicationBindingError {
+    ContextSubstitution,
+}
+
+/// Failure while converting a recovered envelope into application authority.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum RecoveredWorkerV2ApplicationHandoffError<PrerequisiteError, AdapterError> {
+    Binding(RecoveredWorkerV2ApplicationBindingError),
+    CurrentPublication(FinalizedWorkerV2BundleAdmissionError),
+    Selection(WorkerV2TypedKernelSelectionError),
+    Authentication(WorkerV2ExecutableAuthenticationError<PrerequisiteError>),
+    Authorization(HsaLoadAuthorizationError<AdapterError>),
+    Load(HsaExecutableLoadError<AdapterError>),
+}
+
+/// Failure while preparing through recovered application authority.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum RecoveredWorkerV2ApplicationPrepareError<PrerequisiteError, AdapterError> {
+    StreamSubstitution {
+        expected: StreamIdentity,
+        actual: StreamIdentity,
+    },
+    Prepare(GeneratedAlphaZetaCov6PrepareError<PrerequisiteError, AdapterError>),
 }
 
 fn validate_raw_final_lineage(
