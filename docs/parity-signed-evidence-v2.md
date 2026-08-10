@@ -27,6 +27,13 @@ source-pinned checks, required protected workflows, and a merge queue. See
 [GitHub's merge queue documentation](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/configuring-pull-request-merges/managing-a-merge-queue)
 and [repository rules API](https://docs.github.com/en/rest/repos/rules).
 
+Repository-rule activation remains an external production blocker. This
+repository can render and validate a proposed ruleset document, but neither the
+workflow nor its tests establish that a ruleset is installed on GitHub. No
+ruleset was installed as part of this work. An administrator must install it
+out of band and run authenticated remote verification before production
+activation.
+
 This repository intentionally contains no active production trust policy and
 no production public or private key. Production promotion therefore fails
 closed until an operator installs protected public-key configuration and
@@ -323,10 +330,21 @@ directories, test-domain results, identity mismatches, and pre-existing output.
 It traverses with stable directory descriptors and Linux `openat2` using
 `RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_XDEV`. Every file remains open
 from authentication through parsing and copy; immutable state, type, device,
-inode, link count, size, and digest are checked on that exact descriptor. It
-then writes a canonical `archive-index-v1.tsv`, makes the destination read-only,
-and publishes it with one rename. The Git commit supplies the durable immutable
-object identity consumed by hosted CI.
+inode, link count, size, and digest are checked on that exact descriptor.
+Individual files are limited to 256 MiB and the complete source archive to 2
+GiB, with both limits enforced from `fstat` before hashing or copying.
+
+The destination parent is independently opened by an absolute component walk
+that rejects symlinks. Private staging directories, copied files, and the index
+are then created relative to retained parent/staging descriptors. Publication
+uses `renameat2(parent_fd, staging_name, parent_fd, destination_name,
+RENAME_NOREPLACE)`, so replacing the pathname of the parent cannot redirect the
+write. Before rename, copied files, the generated index, every created
+directory bottom-up, and the staging root are fsynced. After rename, the
+destination root and parent are fsynced. A post-rename fsync failure is reported
+as an indeterminate durable-publication result and never deletes the complete
+published archive. The Git commit supplies the subsequent immutable object
+identity consumed by hosted CI.
 
 The generic parity suite verifies that production ingestion fails closed for a
 mutable source, but it cannot manufacture a privileged immutable filesystem.
