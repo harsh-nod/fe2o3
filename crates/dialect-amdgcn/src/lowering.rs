@@ -1218,7 +1218,7 @@ fn component_names(helpers: &[&Function], component: &[usize]) -> String {
 }
 
 fn preflight_function(lowerer: &mut FunctionLowerer<'_>) -> Result<(), LoweringErrors> {
-    validate_barrier_convergence(lowerer)?;
+    validate_convergent_cfg(lowerer)?;
     lowerer.validate_parameters()?;
     let body = lowerer.function.body.as_ref().expect("definition required");
     for block in &body.blocks {
@@ -1228,9 +1228,9 @@ fn preflight_function(lowerer: &mut FunctionLowerer<'_>) -> Result<(), LoweringE
     lowerer.validate_lds_addressability()
 }
 
-fn validate_barrier_convergence(lowerer: &FunctionLowerer<'_>) -> Result<(), LoweringErrors> {
+fn validate_convergent_cfg(lowerer: &FunctionLowerer<'_>) -> Result<(), LoweringErrors> {
     let body = lowerer.function.body.as_ref().expect("definition required");
-    let barriers = body
+    let convergent_operations = body
         .blocks
         .iter()
         .flat_map(|block| {
@@ -1239,12 +1239,15 @@ fn validate_barrier_convergence(lowerer: &FunctionLowerer<'_>) -> Result<(), Low
                 .iter()
                 .enumerate()
                 .filter_map(|(operation, value)| {
-                    matches!(value.kind, OperationKind::WorkgroupBarrier(_))
-                        .then_some((block.id, operation))
+                    matches!(
+                        value.kind,
+                        OperationKind::WorkgroupBarrier(_) | OperationKind::Matrix(_)
+                    )
+                    .then_some((block.id, operation))
                 })
         })
         .collect::<Vec<_>>();
-    if barriers.is_empty() {
+    if convergent_operations.is_empty() {
         return Ok(());
     }
 
@@ -1257,7 +1260,7 @@ fn validate_barrier_convergence(lowerer: &FunctionLowerer<'_>) -> Result<(), Low
         return Err(LoweringErrors::one(
             lowerer.function_location(),
             LoweringDiagnosticCode::UnprovenBarrierConvergence,
-            "workgroup barrier convergence requires an interprocedural summary when the entry calls another function",
+            "matrix and barrier convergence requires an interprocedural summary when the entry calls another function",
         ));
     }
 
@@ -1325,7 +1328,7 @@ fn validate_barrier_convergence(lowerer: &FunctionLowerer<'_>) -> Result<(), Low
         return Err(LoweringErrors::one(
             lowerer.function_location(),
             LoweringDiagnosticCode::UnprovenBarrierConvergence,
-            "workgroup barriers in cyclic control flow require a compatible dynamic-order proof",
+            "convergent matrix and barrier operations in cyclic control flow require a compatible dynamic-order proof",
         ));
     }
 
@@ -1348,14 +1351,14 @@ fn validate_barrier_convergence(lowerer: &FunctionLowerer<'_>) -> Result<(), Low
         current = *target;
     }
 
-    if let Some((block, operation)) = barriers
+    if let Some((block, operation)) = convergent_operations
         .into_iter()
         .find(|(block, _)| !unconditional_chain.contains(block))
     {
         return Err(LoweringErrors::one(
             lowerer.operation_location(block, operation),
             LoweringDiagnosticCode::UnprovenBarrierConvergence,
-            "workgroup barrier is not on the acyclic unconditional entry chain; no uniformity is inferred from branch values",
+            "convergent matrix or barrier operation is not on the acyclic unconditional entry chain; no uniformity is inferred from branch values",
         ));
     }
     Ok(())

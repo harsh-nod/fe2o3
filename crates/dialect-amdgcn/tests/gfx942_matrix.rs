@@ -154,6 +154,42 @@ fn baseline_and_multi_wave_workgroups_fail_closed() {
 }
 
 #[test]
+fn divergent_matrix_placement_is_rejected() {
+    let mut module = matrix_module();
+    let function = &mut module.functions[0];
+    function
+        .signature
+        .parameters
+        .push(Type::Scalar(ScalarType::Bool));
+    let body = function.body.as_mut().unwrap();
+    body.parameters.push(ValueId(19));
+    let matrix_operations = body.blocks[0].operations.split_off(3);
+    body.blocks[0].terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(19),
+        then_target: BlockId(1),
+        then_arguments: vec![],
+        else_target: BlockId(2),
+        else_arguments: vec![],
+    });
+    body.blocks.push(BasicBlock {
+        id: BlockId(1),
+        parameters: vec![],
+        operations: matrix_operations,
+        terminator: Some(Terminator::Return { values: vec![] }),
+    });
+    body.blocks.push(BasicBlock {
+        id: BlockId(2),
+        parameters: vec![],
+        operations: vec![],
+        terminator: Some(Terminator::Return { values: vec![] }),
+    });
+
+    let errors = lower_kernel_to_gfx942_llvm_ir(&module, &"matrix_kernel".into()).unwrap_err();
+    assert!(errors.contains(LoweringDiagnosticCode::UnprovenBarrierConvergence));
+    assert!(errors.to_string().contains("convergent matrix"));
+}
+
+#[test]
 #[ignore = "requires ROCm LLVM tools with gfx942 support"]
 fn rocm_compiles_and_inspects_gfx942_matrix_object() {
     let directory = TemporaryDirectory::new();
