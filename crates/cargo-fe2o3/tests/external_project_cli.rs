@@ -1099,10 +1099,11 @@ fn internal_runner_args(
     let metadata = fs::metadata(&artifact).expect("inspect runner artifact directory");
     vec![
         OsString::from("__fe2o3-runner-v1"),
-        OsString::from("2"),
+        OsString::from("3"),
         OsString::from(hex(os_bytes(artifact.as_os_str()))),
         OsString::from(metadata.dev().to_string()),
         OsString::from(metadata.ino().to_string()),
+        OsString::from("none"),
         OsString::from("0"),
         application.as_os_str().to_os_string(),
         report.as_os_str().to_os_string(),
