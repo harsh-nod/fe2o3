@@ -1,0 +1,5 @@
+error[E0432]: unresolved import `fe2o3_host::recover_worker_v2_load_envelope_v1`
+ --> tests/ui/recovered_worker_v2_admission/path_recovery_constructor_is_private.rs:1:5
+  |
+1 | use fe2o3_host::recover_worker_v2_load_envelope_v1;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `recover_worker_v2_load_envelope_v1` in the root

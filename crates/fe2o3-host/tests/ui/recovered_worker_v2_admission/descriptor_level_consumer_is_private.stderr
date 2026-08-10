@@ -1,0 +1,5 @@
+error[E0432]: unresolved import `fe2o3_host::consume_worker_v2_application_handoff_descriptors_v1`
+ --> tests/ui/recovered_worker_v2_admission/descriptor_level_consumer_is_private.rs:1:5
+  |
+1 | use fe2o3_host::consume_worker_v2_application_handoff_descriptors_v1;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `consume_worker_v2_application_handoff_descriptors_v1` in the root

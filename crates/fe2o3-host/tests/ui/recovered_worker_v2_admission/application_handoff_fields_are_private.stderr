@@ -1,9 +1,14 @@
-error[E0451]: fields `loaded` and `observed` of struct `RecoveredWorkerV2SynchronousHsaHandoffV1` are private
-  --> tests/ui/recovered_worker_v2_admission/application_handoff_fields_are_private.rs:10:9
+error: pattern requires `..` due to inaccessible fields
+  --> tests/ui/recovered_worker_v2_admission/application_handoff_fields_are_private.rs:9:9
    |
- 9 |     let RecoveredWorkerV2SynchronousHsaHandoffV1 {
-   |         ---------------------------------------- in this type
-10 |         loaded,
-   |         ^^^^^^ private field
-11 |         observed,
-   |         ^^^^^^^^ private field
+ 9 |       let RecoveredWorkerV2SynchronousHsaHandoffV1 {
+   |  _________^
+10 | |         loaded,
+11 | |         observed,
+12 | |     } = authority;
+   | |_____^
+   |
+help: ignore the inaccessible and unused fields
+   |
+11 |         observed, ..
+   |                   ++

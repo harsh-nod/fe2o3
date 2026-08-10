@@ -65,7 +65,7 @@ impl fmt::Debug for RecoveredWorkerV2PinnedDescriptorV1 {
 
 impl RecoveredWorkerV2PinnedDescriptorV1 {
     /// Decodes and admits one exact envelope against its durable output directory.
-    pub fn recover(
+    pub(crate) fn recover(
         output_dir: &Path,
         envelope_bytes: &[u8],
         compiler_transaction: CompilerTransactionEvidenceCapsuleV2,
@@ -396,7 +396,7 @@ fn validate_raw_final_lineage(
 }
 
 /// Recovers one read-only descriptor without exposing the envelope's HSACO bytes.
-pub fn recover_worker_v2_load_envelope_v1(
+pub(crate) fn recover_worker_v2_load_envelope_v1(
     output_dir: &Path,
     envelope_bytes: &[u8],
     compiler_transaction: CompilerTransactionEvidenceCapsuleV2,
@@ -586,6 +586,8 @@ impl Error for RecoveredWorkerV2AdmissionError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
+    use crate::application_descriptor_handoff::consume_worker_v2_application_handoff_descriptors_v1;
     use crate::published_direct_link::tests::{
         Fixture, make_observed_for, make_single_hsaco_fixture_with_names_and_kernel_id,
     };
@@ -1478,6 +1480,25 @@ mod tests {
     }
 
     #[cfg(target_os = "linux")]
+    #[test]
+    fn spoofed_canonical_ack_is_only_reproducible_liveness_data() {
+        let fixture = recovery_fixture(28, "gfx942", "vecadd");
+        let envelope = WorkerV2LoadEnvelopeV1::from_bytes(&fixture.envelope).unwrap();
+        let application =
+            crate::application_descriptor_handoff::current_application_identity().unwrap();
+        let expectation = WorkerV2ApplicationHandoffExpectationV1::new(&envelope, application);
+        let challenge = WorkerV2ApplicationHandoffChallengeV1::from_bytes([29; 32]).unwrap();
+
+        // A child that sees the protocol values can reproduce this exact canonical ACK without
+        // performing host recovery. No host API accepts the resulting value as authority.
+        let spoofed = expectation.acknowledgment(challenge).encode_canonical();
+        WorkerV2ApplicationHandoffAckV1::decode_canonical(&spoofed)
+            .unwrap()
+            .validate(expectation, challenge)
+            .unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
     fn clear_close_on_exec(descriptor: RawFd) {
         // SAFETY: the caller retains ownership of this live descriptor while only its descriptor
         // flags are changed for an inherited-handoff test.
@@ -1485,8 +1506,102 @@ mod tests {
     }
 
     #[cfg(target_os = "linux")]
-    #[test]
-    fn inherited_environment_handoff_owns_descriptors_and_closes_ack_writer() {
+    fn assert_descriptor_closed(descriptor: RawFd) {
+        // SAFETY: `F_GETFD` only queries the supplied descriptor number.
+        assert_eq!(unsafe { libc::fcntl(descriptor, libc::F_GETFD) }, -1);
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::EBADF)
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    fn handoff_environment_names() -> [&'static str; 5] {
+        [
+            fe2o3_worker_v2_bundle::WORKER_V2_APPLICATION_ENVELOPE_FD_ENV_V1,
+            fe2o3_worker_v2_bundle::WORKER_V2_APPLICATION_ARTIFACT_DIR_FD_ENV_V1,
+            fe2o3_worker_v2_bundle::WORKER_V2_APPLICATION_HANDOFF_COMMITMENT_ENV_V1,
+            fe2o3_worker_v2_bundle::WORKER_V2_APPLICATION_HANDOFF_ACK_FD_ENV_V1,
+            fe2o3_worker_v2_bundle::WORKER_V2_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
+        ]
+    }
+
+    #[cfg(target_os = "linux")]
+    fn descriptor_identity(descriptor: RawFd) -> (u64, u64) {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = fs::metadata(format!("/proc/self/fd/{descriptor}")).unwrap();
+        (metadata.dev(), metadata.ino())
+    }
+
+    #[cfg(target_os = "linux")]
+    fn encoded_descriptor_identities(identities: &[(u64, u64)]) -> String {
+        identities
+            .iter()
+            .map(|(device, inode)| format!("{device}:{inode}"))
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    #[cfg(target_os = "linux")]
+    fn assert_handoff_environment_scrubbed() {
+        for name in handoff_environment_names() {
+            assert_eq!(std::env::var_os(name), None, "{name} was not scrubbed");
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn run_descriptor_leak_probe() {
+        use std::os::unix::fs::MetadataExt;
+        let expected = std::env::var("FE2O3_TEST_HANDOFF_DESCRIPTOR_IDENTITIES")
+            .unwrap()
+            .split(',')
+            .map(|identity| {
+                let (device, inode) = identity.split_once(':').unwrap();
+                (
+                    device.parse::<u64>().unwrap(),
+                    inode.parse::<u64>().unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_handoff_environment_scrubbed();
+        for entry in fs::read_dir("/proc/self/fd").unwrap() {
+            let entry = entry.unwrap();
+            let Ok(metadata) = fs::metadata(entry.path()) else {
+                continue;
+            };
+            assert!(
+                !expected.contains(&(metadata.dev(), metadata.ino())),
+                "inherited handoff evidence {:?} leaked through descriptor {} -> {:?}",
+                (metadata.dev(), metadata.ino()),
+                entry.file_name().to_string_lossy(),
+                fs::read_link(entry.path()).ok(),
+            );
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn spawn_descriptor_leak_probe(identities: &[(u64, u64)]) {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("recovered_worker_v2_admission::tests::inherited_handoff_scrubs_environment_and_descriptors_in_subprocesses")
+            .arg("--nocapture")
+            .env("FE2O3_TEST_HANDOFF_SUBPROCESS_MODE", "probe")
+            .env(
+                "FE2O3_TEST_HANDOFF_DESCRIPTOR_IDENTITIES",
+                encoded_descriptor_identities(identities),
+            )
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "descriptor leak probe failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    fn run_inherited_handoff_subprocess(mode: &str) {
         let fixture = recovery_fixture(26, "gfx942", "vecadd");
         let descriptors = application_descriptor_fixture(&fixture, 27);
         let expectation = descriptors.expectation;
@@ -1494,6 +1609,10 @@ mod tests {
         let envelope = descriptors.envelope.into_raw_fd();
         let artifact_directory = descriptors.artifact_directory.into_raw_fd();
         let acknowledgment_write = descriptors.acknowledgment_write.into_raw_fd();
+        let identities = [
+            descriptor_identity(envelope),
+            descriptor_identity(artifact_directory),
+        ];
         for descriptor in [envelope, artifact_directory, acknowledgment_write] {
             clear_close_on_exec(descriptor);
         }
@@ -1514,38 +1633,110 @@ mod tests {
             );
             std::env::set_var(
                 fe2o3_worker_v2_bundle::WORKER_V2_APPLICATION_HANDOFF_COMMITMENT_ENV_V1,
-                expectation.commitment().to_hex(),
+                if mode != "failure" {
+                    expectation.commitment().to_hex()
+                } else {
+                    "00".repeat(32)
+                },
             );
-            std::env::set_var(
-                fe2o3_worker_v2_bundle::WORKER_V2_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
-                challenge.to_hex(),
-            );
-        }
-        let recovered = crate::consume_inherited_worker_v2_application_handoff_v1(
-            fixture.compiler_transaction.clone(),
-            fixture.kernel_id,
-            &fixture.observed,
-        );
-        // SAFETY: the one-shot inherited consumer has returned and will never read these variables
-        // again in this process.
-        unsafe {
-            for name in [
-                fe2o3_worker_v2_bundle::WORKER_V2_APPLICATION_ENVELOPE_FD_ENV_V1,
-                fe2o3_worker_v2_bundle::WORKER_V2_APPLICATION_ARTIFACT_DIR_FD_ENV_V1,
-                fe2o3_worker_v2_bundle::WORKER_V2_APPLICATION_HANDOFF_ACK_FD_ENV_V1,
-                fe2o3_worker_v2_bundle::WORKER_V2_APPLICATION_HANDOFF_COMMITMENT_ENV_V1,
-                fe2o3_worker_v2_bundle::WORKER_V2_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
-            ] {
-                std::env::remove_var(name);
+            if mode != "missing" {
+                std::env::set_var(
+                    fe2o3_worker_v2_bundle::WORKER_V2_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
+                    challenge.to_hex(),
+                );
             }
         }
-        let recovered = recovered.unwrap();
-        let acknowledgment = read_acknowledgment(descriptors.acknowledgment_read);
-        WorkerV2ApplicationHandoffAckV1::decode_canonical(&acknowledgment)
-            .unwrap()
-            .validate(expectation, challenge)
-            .unwrap();
-        recovered.revalidate_currentness().unwrap();
+        // SAFETY: this dedicated child has not created application threads or descendants.
+        let recovered = unsafe {
+            crate::consume_inherited_worker_v2_application_handoff_v1(
+                fixture.compiler_transaction.clone(),
+                fixture.kernel_id,
+                &fixture.observed,
+            )
+        };
+        assert_descriptor_closed(acknowledgment_write);
+        assert_handoff_environment_scrubbed();
+        // SAFETY: the same dedicated child still has no competing environment access. A repeated
+        // call must scrub every value before rejecting the already-consumed handoff.
+        unsafe {
+            for name in handoff_environment_names() {
+                std::env::set_var(name, "must-be-scrubbed-without-parsing");
+            }
+        }
+        // SAFETY: as above, this is still single-threaded startup code.
+        let repeated = unsafe {
+            crate::consume_inherited_worker_v2_application_handoff_v1(
+                fixture.compiler_transaction.clone(),
+                fixture.kernel_id,
+                &fixture.observed,
+            )
+        };
+        assert!(matches!(
+            repeated,
+            Err(crate::WorkerV2ApplicationDescriptorHandoffErrorV1::AlreadyConsumed)
+        ));
+        assert_handoff_environment_scrubbed();
+        if mode == "success" {
+            let recovered = recovered.unwrap();
+            let acknowledgment = read_acknowledgment(descriptors.acknowledgment_read);
+            WorkerV2ApplicationHandoffAckV1::decode_canonical(&acknowledgment)
+                .unwrap()
+                .validate(expectation, challenge)
+                .unwrap();
+            recovered.revalidate_currentness().unwrap();
+            spawn_descriptor_leak_probe(&identities);
+            drop(recovered);
+        } else if mode == "failure" {
+            assert!(matches!(
+                recovered,
+                Err(crate::WorkerV2ApplicationDescriptorHandoffErrorV1::CommitmentMismatch)
+            ));
+            assert!(read_acknowledgment(descriptors.acknowledgment_read).is_empty());
+            spawn_descriptor_leak_probe(&identities);
+        } else {
+            assert!(matches!(
+                recovered,
+                Err(
+                    crate::WorkerV2ApplicationDescriptorHandoffErrorV1::MissingEnvironment(
+                        fe2o3_worker_v2_bundle::WORKER_V2_APPLICATION_HANDOFF_CHALLENGE_ENV_V1
+                    )
+                )
+            ));
+            assert!(read_acknowledgment(descriptors.acknowledgment_read).is_empty());
+            spawn_descriptor_leak_probe(&identities);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn inherited_handoff_scrubs_environment_and_descriptors_in_subprocesses() {
+        match std::env::var("FE2O3_TEST_HANDOFF_SUBPROCESS_MODE").as_deref() {
+            Ok("probe") => run_descriptor_leak_probe(),
+            Ok(mode @ ("success" | "failure" | "missing")) => {
+                run_inherited_handoff_subprocess(mode)
+            }
+            Ok(mode) => panic!("unknown handoff subprocess mode {mode}"),
+            Err(_) => {
+                for mode in ["success", "failure", "missing"] {
+                    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+                    command
+                        .arg("--exact")
+                        .arg("recovered_worker_v2_admission::tests::inherited_handoff_scrubs_environment_and_descriptors_in_subprocesses")
+                        .arg("--nocapture")
+                        .env("FE2O3_TEST_HANDOFF_SUBPROCESS_MODE", mode);
+                    for name in handoff_environment_names() {
+                        command.env_remove(name);
+                    }
+                    let output = command.output().unwrap();
+                    assert!(
+                        output.status.success(),
+                        "{mode} handoff subprocess failed:\nstdout:\n{}\nstderr:\n{}",
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                }
+            }
+        }
     }
 
     #[cfg(target_os = "linux")]
@@ -1555,7 +1746,7 @@ mod tests {
         let descriptors = application_descriptor_fixture(&fixture, 31);
         let expectation = descriptors.expectation;
         let challenge = descriptors.challenge;
-        let recovered = crate::consume_worker_v2_application_handoff_descriptors_v1(
+        let recovered = consume_worker_v2_application_handoff_descriptors_v1(
             descriptors.envelope,
             descriptors.artifact_directory,
             descriptors.acknowledgment_write,
@@ -1596,7 +1787,7 @@ mod tests {
         let substitute = recovery_fixture(33, "gfx942", "vecadd");
         let descriptors = application_descriptor_fixture(&fixture, 34);
         let substitute_descriptors = application_descriptor_fixture(&substitute, 35);
-        let error = crate::consume_worker_v2_application_handoff_descriptors_v1(
+        let error = consume_worker_v2_application_handoff_descriptors_v1(
             descriptors.envelope,
             descriptors.artifact_directory,
             descriptors.acknowledgment_write,
@@ -1621,7 +1812,7 @@ mod tests {
         let substitute = recovery_fixture(37, "gfx942", "vecadd");
         let descriptors = application_descriptor_fixture(&fixture, 38);
         let substitute_descriptors = application_descriptor_fixture(&substitute, 39);
-        let error = crate::consume_worker_v2_application_handoff_descriptors_v1(
+        let error = consume_worker_v2_application_handoff_descriptors_v1(
             descriptors.envelope,
             substitute_descriptors.artifact_directory,
             descriptors.acknowledgment_write,
@@ -1653,7 +1844,7 @@ mod tests {
             .open(fixture.output.join("unsafe-ack.bin"))
             .unwrap()
             .into();
-        let error = crate::consume_worker_v2_application_handoff_descriptors_v1(
+        let error = consume_worker_v2_application_handoff_descriptors_v1(
             descriptors.envelope,
             descriptors.artifact_directory,
             acknowledgment,
@@ -1678,7 +1869,7 @@ mod tests {
         let displaced = fixture._directory.0.join("displaced-envelope.bin");
         fs::rename(&descriptors.envelope_path, &displaced).unwrap();
         std::os::unix::fs::symlink(&displaced, &descriptors.envelope_path).unwrap();
-        let error = crate::consume_worker_v2_application_handoff_descriptors_v1(
+        let error = consume_worker_v2_application_handoff_descriptors_v1(
             descriptors.envelope,
             descriptors.artifact_directory,
             descriptors.acknowledgment_write,
@@ -1702,7 +1893,7 @@ mod tests {
         let fixture = recovery_fixture(42, "gfx942", "vecadd");
         let descriptors = application_descriptor_fixture(&fixture, 43);
         let envelope_path = descriptors.envelope_path.clone();
-        let recovered = crate::consume_worker_v2_application_handoff_descriptors_v1(
+        let recovered = consume_worker_v2_application_handoff_descriptors_v1(
             descriptors.envelope,
             descriptors.artifact_directory,
             descriptors.acknowledgment_write,

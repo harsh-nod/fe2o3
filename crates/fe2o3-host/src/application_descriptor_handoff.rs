@@ -1,8 +1,8 @@
 //! Cargo-to-application descriptor handoff for canonical Worker V2 evidence.
 
+use crate::recovered_worker_v2_admission::recover_worker_v2_load_envelope_v1;
 use crate::{
-    KernelId, ObservedContext, RecoveredWorkerV2AdmissionError,
-    RecoveredWorkerV2PinnedDescriptorV1, recover_worker_v2_load_envelope_v1,
+    KernelId, ObservedContext, RecoveredWorkerV2AdmissionError, RecoveredWorkerV2PinnedDescriptorV1,
 };
 use fe2o3_worker_v2_bundle::{
     ApplicationHandoffProtocolErrorV1, CompilerTransactionEvidenceCapsuleV2,
@@ -15,8 +15,8 @@ use fe2o3_worker_v2_bundle::{
 };
 use rustix::fs::{FileType, OFlags, fcntl_getfl, fcntl_setfl, fstat};
 use sha2::{Digest, Sha256};
-use std::env;
 use std::error::Error;
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::fs::File;
 use std::io::{self, Read};
@@ -119,15 +119,25 @@ impl RetainedWorkerV2ApplicationDescriptorsV1 {
 
 /// Consumes the inherited descriptor environment installed by the Cargo application runner.
 ///
-/// The five environment values are parsed once per process. The inherited descriptor numbers are
-/// claimed as owned descriptors immediately; no caller-selected filesystem path participates in
-/// recovery. The envelope and artifact-directory descriptors remain retained by the returned
-/// linear authority through load, generated preparation, synchronous HSA dispatch, and unload.
-pub fn consume_inherited_worker_v2_application_handoff_v1(
+/// The five environment values are removed before parsing, including on rejection. This one-shot
+/// startup function must be called before the application creates threads or descendants. The
+/// inherited descriptor numbers are claimed as owned descriptors immediately; no caller-selected
+/// filesystem path participates in recovery. The envelope and artifact-directory descriptors
+/// remain retained by the returned linear authority through load, generated preparation,
+/// synchronous HSA dispatch, and unload. The emitted ACK is reproducible liveness data and grants
+/// no recovery, load, or launch authority.
+///
+/// # Safety
+///
+/// The caller must invoke this startup operation before creating any threads that can access the
+/// process environment or spawning any descendants. Rust cannot synchronize environment mutation
+/// with foreign code or independently managed threads.
+pub unsafe fn consume_inherited_worker_v2_application_handoff_v1(
     compiler_transaction: CompilerTransactionEvidenceCapsuleV2,
     kernel_id: KernelId,
     observed: &ObservedContext,
 ) -> Result<RecoveredWorkerV2PinnedDescriptorV1, WorkerV2ApplicationDescriptorHandoffErrorV1> {
+    let environment = take_inherited_environment();
     if INHERITED_HANDOFF_CLAIMED_V1
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
@@ -135,37 +145,60 @@ pub fn consume_inherited_worker_v2_application_handoff_v1(
         return Err(WorkerV2ApplicationDescriptorHandoffErrorV1::AlreadyConsumed);
     }
 
-    let envelope_raw = environment_fd(WORKER_V2_APPLICATION_ENVELOPE_FD_ENV_V1)?;
-    let directory_raw = environment_fd(WORKER_V2_APPLICATION_ARTIFACT_DIR_FD_ENV_V1)?;
-    let ack_raw = environment_fd(WORKER_V2_APPLICATION_HANDOFF_ACK_FD_ENV_V1)?;
+    let envelope_raw = environment_fd(
+        WORKER_V2_APPLICATION_ENVELOPE_FD_ENV_V1,
+        environment[0].as_deref(),
+    );
+    let directory_raw = environment_fd(
+        WORKER_V2_APPLICATION_ARTIFACT_DIR_FD_ENV_V1,
+        environment[1].as_deref(),
+    );
+    let ack_raw = environment_fd(
+        WORKER_V2_APPLICATION_HANDOFF_ACK_FD_ENV_V1,
+        environment[3].as_deref(),
+    );
+    let (envelope_raw, directory_raw, ack_raw) = match (envelope_raw, directory_raw, ack_raw) {
+        (Ok(envelope), Ok(directory), Ok(acknowledgment)) => (envelope, directory, acknowledgment),
+        (envelope, directory, acknowledgment) => {
+            close_available_handoff_descriptors([
+                envelope.as_ref().ok().copied(),
+                directory.as_ref().ok().copied(),
+                acknowledgment.as_ref().ok().copied(),
+            ]);
+            return Err(envelope
+                .err()
+                .or_else(|| directory.err())
+                .or_else(|| acknowledgment.err())
+                .expect("the non-success branch contains an error"));
+        }
+    };
     if envelope_raw == directory_raw || envelope_raw == ack_raw || directory_raw == ack_raw {
+        close_aliased_handoff_descriptors(envelope_raw, directory_raw, ack_raw);
         return Err(WorkerV2ApplicationDescriptorHandoffErrorV1::AliasedDescriptors);
     }
-    for (descriptor, kind) in [
-        (envelope_raw, "envelope"),
-        (directory_raw, "artifact directory"),
-        (ack_raw, "acknowledgment"),
-    ] {
-        require_inherited_descriptor(descriptor, kind)?;
-    }
-    // SAFETY: the one-shot Cargo protocol transfers these distinct inherited descriptors to this
-    // application. The successful raw-descriptor checks above prove that each is currently open.
-    let envelope = unsafe { OwnedFd::from_raw_fd(envelope_raw) };
-    // SAFETY: as above, this distinct transferred descriptor is now owned by the application.
-    let directory = unsafe { OwnedFd::from_raw_fd(directory_raw) };
-    // SAFETY: as above, this distinct transferred descriptor is now owned by the application.
-    let acknowledgment = unsafe { OwnedFd::from_raw_fd(ack_raw) };
+    let envelope = claim_inherited_descriptor(envelope_raw, "envelope");
+    let directory = claim_inherited_descriptor(directory_raw, "artifact directory");
+    let acknowledgment = claim_inherited_descriptor(ack_raw, "acknowledgment");
+    let envelope = envelope?;
+    let directory = directory?;
+    let acknowledgment = acknowledgment?;
 
-    let commitment =
-        environment_text(WORKER_V2_APPLICATION_HANDOFF_COMMITMENT_ENV_V1).and_then(|value| {
-            WorkerV2ApplicationHandoffCommitmentV1::from_hex(&value)
-                .map_err(WorkerV2ApplicationDescriptorHandoffErrorV1::Protocol)
-        })?;
-    let challenge =
-        environment_text(WORKER_V2_APPLICATION_HANDOFF_CHALLENGE_ENV_V1).and_then(|value| {
-            WorkerV2ApplicationHandoffChallengeV1::from_hex(&value)
-                .map_err(WorkerV2ApplicationDescriptorHandoffErrorV1::Protocol)
-        })?;
+    let commitment = environment_text(
+        WORKER_V2_APPLICATION_HANDOFF_COMMITMENT_ENV_V1,
+        environment[2].as_deref(),
+    )
+    .and_then(|value| {
+        WorkerV2ApplicationHandoffCommitmentV1::from_hex(&value)
+            .map_err(WorkerV2ApplicationDescriptorHandoffErrorV1::Protocol)
+    })?;
+    let challenge = environment_text(
+        WORKER_V2_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
+        environment[4].as_deref(),
+    )
+    .and_then(|value| {
+        WorkerV2ApplicationHandoffChallengeV1::from_hex(&value)
+            .map_err(WorkerV2ApplicationDescriptorHandoffErrorV1::Protocol)
+    })?;
 
     consume_worker_v2_application_handoff_descriptors_v1(
         envelope,
@@ -185,9 +218,11 @@ pub fn consume_inherited_worker_v2_application_handoff_v1(
 /// [`consume_inherited_worker_v2_application_handoff_v1`]. The function takes ownership of caller
 /// supplied descriptor duplicates, validates the shared Cargo commitment against the current
 /// application image, reacquires the durable publication lease through the pinned directory
-/// descriptor, emits one canonical bounded ACK, and retains the read descriptors.
+/// descriptor, emits one canonical bounded liveness ACK, and retains the read descriptors. The
+/// ACK contains no secret and grants no recovery, load, or launch authority; only the returned
+/// non-forgeable descriptor carries the revalidated lease into later host transitions.
 #[allow(clippy::too_many_arguments)]
-pub fn consume_worker_v2_application_handoff_descriptors_v1(
+pub(crate) fn consume_worker_v2_application_handoff_descriptors_v1(
     envelope: OwnedFd,
     artifact_directory: OwnedFd,
     acknowledgment: OwnedFd,
@@ -197,6 +232,12 @@ pub fn consume_worker_v2_application_handoff_descriptors_v1(
     kernel_id: KernelId,
     observed: &ObservedContext,
 ) -> Result<RecoveredWorkerV2PinnedDescriptorV1, WorkerV2ApplicationDescriptorHandoffErrorV1> {
+    let envelope_cloexec = set_close_on_exec(&envelope, "envelope");
+    let directory_cloexec = set_close_on_exec(&artifact_directory, "artifact directory");
+    let acknowledgment_cloexec = set_close_on_exec(&acknowledgment, "acknowledgment");
+    envelope_cloexec?;
+    directory_cloexec?;
+    acknowledgment_cloexec?;
     let directory = File::from(artifact_directory);
     let envelope = File::from(envelope);
     let acknowledgment = File::from(acknowledgment);
@@ -228,6 +269,7 @@ pub fn consume_worker_v2_application_handoff_descriptors_v1(
         observed,
     )
     .map_err(WorkerV2ApplicationDescriptorHandoffErrorV1::Recovery)?;
+    seal_directory_descriptor_occurrences(retained.directory_snapshot)?;
     retained.revalidate()?;
     recovered
         .revalidate_currentness()
@@ -236,11 +278,37 @@ pub fn consume_worker_v2_application_handoff_descriptors_v1(
     Ok(recovered.retain_application_descriptors(retained))
 }
 
+fn handoff_environment_names() -> [&'static str; 5] {
+    [
+        WORKER_V2_APPLICATION_ENVELOPE_FD_ENV_V1,
+        WORKER_V2_APPLICATION_ARTIFACT_DIR_FD_ENV_V1,
+        WORKER_V2_APPLICATION_HANDOFF_COMMITMENT_ENV_V1,
+        WORKER_V2_APPLICATION_HANDOFF_ACK_FD_ENV_V1,
+        WORKER_V2_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
+    ]
+}
+
+fn take_inherited_environment() -> [Option<OsString>; 5] {
+    let names = handoff_environment_names();
+    let values = names.map(std::env::var_os);
+    // SAFETY: the public function's startup contract excludes concurrent environment access.
+    // Removing all handoff values prevents later descendants from inheriting stale descriptor
+    // numbers or reproducible protocol material.
+    unsafe {
+        for name in names {
+            std::env::remove_var(name);
+        }
+    }
+    values
+}
+
 fn environment_text(
     name: &'static str,
+    value: Option<&OsStr>,
 ) -> Result<String, WorkerV2ApplicationDescriptorHandoffErrorV1> {
-    let value = env::var_os(name)
-        .ok_or(WorkerV2ApplicationDescriptorHandoffErrorV1::MissingEnvironment(name))?;
+    let value = value
+        .ok_or(WorkerV2ApplicationDescriptorHandoffErrorV1::MissingEnvironment(name))?
+        .to_os_string();
     let value = value
         .into_string()
         .map_err(|_| WorkerV2ApplicationDescriptorHandoffErrorV1::InvalidEnvironment(name))?;
@@ -249,8 +317,9 @@ fn environment_text(
 
 fn environment_fd(
     name: &'static str,
+    value: Option<&OsStr>,
 ) -> Result<RawFd, WorkerV2ApplicationDescriptorHandoffErrorV1> {
-    let value = environment_text(name)?;
+    let value = environment_text(name, value)?;
     let canonical = value == "0"
         || value
             .as_bytes()
@@ -265,17 +334,98 @@ fn environment_fd(
     Ok(descriptor)
 }
 
-fn require_inherited_descriptor(
+fn claim_inherited_descriptor(
     descriptor: RawFd,
     kind: &'static str,
-) -> Result<(), WorkerV2ApplicationDescriptorHandoffErrorV1> {
+) -> Result<OwnedFd, WorkerV2ApplicationDescriptorHandoffErrorV1> {
     // Raw `fcntl` rejects stale integers without manufacturing a `BorrowedFd` first.
     let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFD) };
     if flags < 0 {
         return Err(descriptor_io(kind, io::Error::last_os_error()));
     }
+    // SAFETY: successful `F_GETFD` proved that the one-shot protocol's transferred descriptor is
+    // live. This function is its sole owner after the environment has been consumed.
+    let descriptor = unsafe { OwnedFd::from_raw_fd(descriptor) };
+    set_close_on_exec(&descriptor, kind)?;
     if flags & libc::FD_CLOEXEC != 0 {
         return Err(WorkerV2ApplicationDescriptorHandoffErrorV1::DescriptorFlags(kind));
+    }
+    Ok(descriptor)
+}
+
+fn close_aliased_handoff_descriptors(envelope: RawFd, directory: RawFd, acknowledgment: RawFd) {
+    close_available_handoff_descriptors([Some(envelope), Some(directory), Some(acknowledgment)]);
+}
+
+fn close_available_handoff_descriptors(descriptors: [Option<RawFd>; 3]) {
+    for (index, descriptor) in descriptors.into_iter().enumerate() {
+        let Some(descriptor) = descriptor else {
+            continue;
+        };
+        if descriptors[..index].contains(&Some(descriptor)) {
+            continue;
+        }
+        let _ = claim_inherited_descriptor(descriptor, "rejected handoff");
+    }
+}
+
+fn set_close_on_exec(
+    descriptor: &OwnedFd,
+    kind: &'static str,
+) -> Result<(), WorkerV2ApplicationDescriptorHandoffErrorV1> {
+    let flags = unsafe { libc::fcntl(descriptor.as_raw_fd(), libc::F_GETFD) };
+    if flags < 0 {
+        return Err(descriptor_io(kind, io::Error::last_os_error()));
+    }
+    if unsafe {
+        libc::fcntl(
+            descriptor.as_raw_fd(),
+            libc::F_SETFD,
+            flags | libc::FD_CLOEXEC,
+        )
+    } < 0
+    {
+        return Err(descriptor_io(kind, io::Error::last_os_error()));
+    }
+    Ok(())
+}
+
+fn seal_directory_descriptor_occurrences(
+    expected: DirectorySnapshotV1,
+) -> Result<(), WorkerV2ApplicationDescriptorHandoffErrorV1> {
+    for entry in std::fs::read_dir("/proc/self/fd")
+        .map_err(|error| descriptor_io("process descriptor table", error))?
+    {
+        let entry = entry.map_err(|error| descriptor_io("process descriptor entry", error))?;
+        let Some(descriptor) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<RawFd>().ok())
+        else {
+            continue;
+        };
+        let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFD) };
+        if flags < 0 {
+            continue;
+        }
+        let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+        // SAFETY: `stat` points to writable storage and `F_GETFD` established that this descriptor
+        // was live immediately before the non-mutating query. This startup protocol has no racing
+        // descriptor owner.
+        if unsafe { libc::fstat(descriptor, stat.as_mut_ptr()) } != 0 {
+            continue;
+        }
+        // SAFETY: successful `fstat` initialized the complete record.
+        let stat = unsafe { stat.assume_init() };
+        if stat.st_dev != expected.device || stat.st_ino != expected.inode {
+            continue;
+        }
+        if unsafe { libc::fcntl(descriptor, libc::F_SETFD, flags | libc::FD_CLOEXEC) } < 0 {
+            return Err(descriptor_io(
+                "retained artifact directory",
+                io::Error::last_os_error(),
+            ));
+        }
     }
     Ok(())
 }
