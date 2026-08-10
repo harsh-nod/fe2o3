@@ -25,6 +25,7 @@ pub mod memory;
 pub mod mx;
 pub mod simd;
 pub mod sync;
+pub mod tensor;
 pub mod thread;
 pub mod views;
 pub mod wave;
@@ -52,6 +53,11 @@ pub use sync::{
     AmdBarrierTarget, BarrierInitializationError, BarrierPending, BarrierReady,
     BarrierUninitialized, Gfx12, Gfx942, ManagedBarrier, NamedBarrierSlot,
     NativeSplitBarrierTarget, ValidNamedBarrierSlot,
+};
+pub use tensor::{
+    BF16_F32_MFMA_M, BF16_F32_MFMA_N, BF16_F32_MFMA_REDUCTION, BF16_F32_MFMA_WAVE_LANES,
+    Bf16F32M16N16K16, Bf16MfmaFragment, DeviceMatrix, F32AccumulatorFragment, LdsTile16x16,
+    LdsTileShapeError, MATRIX_CONTRACT_VERSION_V1, RowMajorXor4,
 };
 pub use thread::{
     GlobalGridSize, GlobalWorkitemId, GridSize, Index1D, Index2D, Invocation3D, ThreadIndex,

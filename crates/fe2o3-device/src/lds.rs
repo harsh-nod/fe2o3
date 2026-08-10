@@ -121,7 +121,7 @@ impl<'workgroup> WorkgroupLdsScope<'workgroup> {
     }
 
     #[cfg(test)]
-    fn for_host_test() -> Self {
+    pub(crate) fn for_host_test() -> Self {
         Self::new_identity()
     }
 }
@@ -217,7 +217,7 @@ impl<'workgroup, T: LdsElement> DynamicLds<'workgroup, T, LdsUninitialized> {
     }
 
     #[cfg(test)]
-    unsafe fn from_host_parts_for_test(
+    pub(crate) unsafe fn from_host_parts_for_test(
         _scope: &'workgroup mut WorkgroupLdsScope<'workgroup>,
         base: *mut u8,
         allocated_bytes: usize,
