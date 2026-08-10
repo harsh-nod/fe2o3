@@ -207,8 +207,20 @@ if ((dwarf_verify_status == 0 && dwarf_dump_status == 0 && dwarf_normalize_statu
       TMPDIR="${ARCHIVE}/tmp" \
       FE2O3_RUN_S09_GFX942_ALPHA=1 \
       FE2O3_S09_GFX942_ALPHA_HSACO='{hsaco}' \
+      FE2O3_S09_GFX942_ALPHA_HSACO_DEVICE='{hsaco_device}' \
+      FE2O3_S09_GFX942_ALPHA_HSACO_INODE='{hsaco_inode}' \
+      FE2O3_S09_GFX942_ALPHA_HSACO_MODE='{hsaco_mode}' \
+      FE2O3_S09_GFX942_ALPHA_HSACO_SIZE='{hsaco_size}' \
+      FE2O3_S09_GFX942_ALPHA_HSACO_OWNER_PID='{hsaco_owner_pid}' \
+      FE2O3_S09_GFX942_ALPHA_HSACO_OWNER_START_TIME_TICKS='{hsaco_owner_start_time_ticks}' \
       FE2O3_S09_GFX942_ALPHA_SHA256="${HSACO_SHA256}" \
       FE2O3_S09_GFX942_ALPHA_FACTS='{facts}' \
+      FE2O3_S09_GFX942_ALPHA_FACTS_DEVICE='{facts_device}' \
+      FE2O3_S09_GFX942_ALPHA_FACTS_INODE='{facts_inode}' \
+      FE2O3_S09_GFX942_ALPHA_FACTS_MODE='{facts_mode}' \
+      FE2O3_S09_GFX942_ALPHA_FACTS_SIZE='{facts_size}' \
+      FE2O3_S09_GFX942_ALPHA_FACTS_OWNER_PID='{facts_owner_pid}' \
+      FE2O3_S09_GFX942_ALPHA_FACTS_OWNER_START_TIME_TICKS='{facts_owner_start_time_ticks}' \
       FE2O3_S09_GFX942_ALPHA_FACTS_SHA256="${artifact_facts_sha256}" \
       FE2O3_S09_RUN_NONCE="${RUN_NONCE}" \
       "${ROCGDB}" --batch --nx --nh --return-child-result \

@@ -60,6 +60,9 @@ class SealedSnapshot:
     descriptor: int
     sha256: str
     size: int
+    device: int
+    inode: int
+    mode: int
     executable: bool
     owner_pid: int
     owner_start_time_ticks: int
@@ -290,11 +293,15 @@ def create_sealed_snapshot(
             raise SnapshotError(
                 "sealed snapshot is missing required write/resize seals"
             )
+        identity = os.fstat(snapshot)
         return SealedSnapshot(
             name,
             snapshot,
             digest.hexdigest(),
             before.size,
+            identity.st_dev,
+            identity.st_ino,
+            identity.st_mode,
             executable,
             owner_pid,
             owner_start_time_ticks,
@@ -350,7 +357,19 @@ def _substitute(
     for argument in command:
         replaced = argument
         for name, snapshot in snapshots.items():
-            replaced = replaced.replace("{" + name + "}", snapshot.proc_path)
+            values = {
+                name: snapshot.proc_path,
+                f"{name}_device": str(snapshot.device),
+                f"{name}_inode": str(snapshot.inode),
+                f"{name}_mode": str(snapshot.mode),
+                f"{name}_size": str(snapshot.size),
+                f"{name}_owner_pid": str(snapshot.owner_pid),
+                f"{name}_owner_start_time_ticks": str(
+                    snapshot.owner_start_time_ticks
+                ),
+            }
+            for field, value in values.items():
+                replaced = replaced.replace("{" + field + "}", value)
         if "{" in replaced or "}" in replaced:
             raise SnapshotError(
                 f"unresolved snapshot placeholder in argument: {argument}"

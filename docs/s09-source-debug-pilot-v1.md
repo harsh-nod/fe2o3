@@ -132,6 +132,16 @@ facts, normalized DWARF, normalized ROCgdb, tool paths, and run nonce. The raw
 ROCgdb log is hashed and then removed. Only the path-clean normalized
 transcript is retained.
 
+The snapshot supervisor supplies each controller input as an exact numeric
+`/proc/<ancestor-pid>/fd/<n>` path together with its owner PID/starttime and
+Linux device, inode, mode, and size. The controller opens a pidfd before making
+any owner claim, requires the owner to be a live same-UID ancestor, opens the
+memfd once, and compares the opened object with that supervisor-provided
+identity. It repeats liveness, ancestry, UID, and starttime checks after open
+and after read while the pidfd remains live. The content digest remains an
+additional byte binding; it is not used as a substitute for descriptor-object
+identity.
+
 This local boundary does not defend against root or a same-user process able
 to ptrace, inject into, or otherwise control the source-state supervisor,
 runner, debugger, or checker. Those actors can alter the measuring process

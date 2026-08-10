@@ -198,6 +198,15 @@ import time
 path = pathlib.Path(sys.argv[1])
 owner = int(path.parts[2])
 assert owner == os.getppid()
+identity = path.stat()
+assert identity.st_dev == int(sys.argv[2])
+assert identity.st_ino == int(sys.argv[3])
+assert identity.st_mode == int(sys.argv[4])
+assert identity.st_size == int(sys.argv[5])
+assert owner == int(sys.argv[6])
+owner_state = pathlib.Path("/proc/" + str(owner) + "/stat").read_text(encoding="ascii")
+fields = owner_state[owner_state.rfind(") ") + 2:].split()
+assert int(fields[19]) == int(sys.argv[7])
 assert path.read_bytes() == b"supervised facts"
 time.sleep(0.05)
 assert pathlib.Path("/proc/" + str(owner) + "/stat").is_file()
@@ -216,6 +225,12 @@ assert completed.returncode == 0
                 "-c",
                 child_code,
                 "{facts}",
+                "{facts_device}",
+                "{facts_inode}",
+                "{facts_mode}",
+                "{facts_size}",
+                "{facts_owner_pid}",
+                "{facts_owner_start_time_ticks}",
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

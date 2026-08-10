@@ -329,6 +329,50 @@ struct PinnedFileIdentity {
     changed_nanoseconds: i64,
 }
 
+#[cfg(feature = "hardware-test-hooks")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ExpectedProcFdIdentity {
+    owner_pid: u32,
+    owner_start_time_ticks: u64,
+    device: u64,
+    inode: u64,
+    mode: u32,
+    size: u64,
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+impl ExpectedProcFdIdentity {
+    fn from_environment(prefix: &str) -> Result<Self, BoxError> {
+        fn decimal(prefix: &str, suffix: &str, allow_zero: bool) -> Result<u64, BoxError> {
+            let key = format!("{prefix}_{suffix}");
+            let value = std::env::var(&key).map_err(|_| format!("{key} is not set"))?;
+            require(
+                !value.is_empty()
+                    && value.bytes().all(|byte| byte.is_ascii_digit())
+                    && (value == "0" || !value.starts_with('0')),
+                format!("{key} is not a canonical decimal"),
+            )?;
+            let decoded = value
+                .parse::<u64>()
+                .map_err(|_| format!("{key} exceeds its integer bound"))?;
+            require(
+                allow_zero || decoded != 0,
+                format!("{key} must not be zero"),
+            )?;
+            Ok(decoded)
+        }
+
+        Ok(Self {
+            owner_pid: u32::try_from(decimal(prefix, "OWNER_PID", false)?)?,
+            owner_start_time_ticks: decimal(prefix, "OWNER_START_TIME_TICKS", false)?,
+            device: decimal(prefix, "DEVICE", true)?,
+            inode: decimal(prefix, "INODE", false)?,
+            mode: u32::try_from(decimal(prefix, "MODE", false)?)?,
+            size: decimal(prefix, "SIZE", true)?,
+        })
+    }
+}
+
 #[cfg(all(feature = "hardware-test-hooks", target_os = "linux"))]
 impl PinnedFileIdentity {
     fn from_metadata(metadata: &std::fs::Metadata) -> Self {
@@ -343,31 +387,55 @@ impl PinnedFileIdentity {
             changed_nanoseconds: metadata.ctime_nsec(),
         }
     }
+
+    fn matches_expected(&self, expected: ExpectedProcFdIdentity) -> bool {
+        self.device == expected.device
+            && self.inode == expected.inode
+            && self.mode == expected.mode
+            && self.size == expected.size
+    }
 }
 
 #[cfg(all(feature = "hardware-test-hooks", target_os = "linux"))]
-fn read_sealed_proc_fd(path: &Path) -> Result<Vec<u8>, BoxError> {
-    let (owner_pid, _) = parse_exact_proc_fd_path(path)
-        .ok_or("sealed snapshot path is not an exact numeric proc-fd path")?;
-    let owner_start_time = live_ancestor_start_time(owner_pid)?;
+fn validate_snapshot_owner(
+    owner_pid: u32,
+    expected: ExpectedProcFdIdentity,
+    pidfd: &File,
+) -> Result<(), BoxError> {
+    require_live_pidfd(pidfd)?;
+    require(
+        owner_pid == expected.owner_pid,
+        "snapshot proc path does not name the expected owner PID",
+    )?;
+    let observed_start_time = live_ancestor_start_time(owner_pid)?;
     let owner_uid = std::fs::symlink_metadata(format!("/proc/{owner_pid}"))?.uid();
     // SAFETY: getuid has no preconditions.
     require(
         owner_uid == unsafe { libc::getuid() },
         "snapshot owner has the wrong UID",
     )?;
+    require(
+        observed_start_time == expected.owner_start_time_ticks,
+        "snapshot owner PID was reused or has the wrong starttime",
+    )?;
+    require_live_pidfd(pidfd)
+}
+
+#[cfg(all(feature = "hardware-test-hooks", target_os = "linux"))]
+fn read_sealed_proc_fd(path: &Path, expected: ExpectedProcFdIdentity) -> Result<Vec<u8>, BoxError> {
+    let (owner_pid, _) = parse_exact_proc_fd_path(path)
+        .ok_or("sealed snapshot path is not an exact numeric proc-fd path")?;
     let pidfd = open_live_pidfd(owner_pid)?;
-    require_live_pidfd(&pidfd)?;
+    validate_snapshot_owner(owner_pid, expected, &pidfd)?;
 
     let mut file = File::open(path)?;
-    let (_, start_time_after_open) = process_parent_and_start_time(owner_pid)?;
-    require(
-        start_time_after_open == owner_start_time,
-        "snapshot owner PID changed while opening its memfd",
-    )?;
-    require_live_pidfd(&pidfd)?;
+    validate_snapshot_owner(owner_pid, expected, &pidfd)?;
 
     let identity = PinnedFileIdentity::from_metadata(&file.metadata()?);
+    require(
+        identity.matches_expected(expected),
+        "opened snapshot object does not match the supervisor-provided identity",
+    )?;
     require(
         identity.mode & libc::S_IFMT == libc::S_IFREG,
         "sealed snapshot must be a regular file",
@@ -405,20 +473,22 @@ fn read_sealed_proc_fd(path: &Path) -> Result<Vec<u8>, BoxError> {
         final_identity == identity,
         "sealed snapshot identity changed while being read",
     )?;
-    let (_, final_start_time) = process_parent_and_start_time(owner_pid)?;
-    require(
-        final_start_time == owner_start_time,
-        "snapshot owner PID changed while reading its memfd",
-    )?;
-    require_live_pidfd(&pidfd)?;
+    validate_snapshot_owner(owner_pid, expected, &pidfd)?;
     Ok(bytes)
 }
 
 #[cfg(feature = "hardware-test-hooks")]
-fn read_pinned_path(path: &std::path::Path) -> Result<Vec<u8>, BoxError> {
+fn read_pinned_path(
+    path: &std::path::Path,
+    expected_proc_identity: Option<ExpectedProcFdIdentity>,
+) -> Result<Vec<u8>, BoxError> {
     if parse_exact_proc_fd_path(path).is_some() {
         #[cfg(target_os = "linux")]
-        return read_sealed_proc_fd(path);
+        return read_sealed_proc_fd(
+            path,
+            expected_proc_identity
+                .ok_or("sealed proc-fd input requires a supervisor-provided object identity")?,
+        );
         #[cfg(not(target_os = "linux"))]
         return Err("sealed proc-fd snapshots require Linux".into());
     }
@@ -445,7 +515,16 @@ fn read_pinned_file(
     );
     require(path.is_absolute(), format!("{path_key} must be absolute"))?;
     let declared = std::env::var(digest_key).map_err(|_| format!("{digest_key} is not set"))?;
-    let bytes = read_pinned_path(&path).map_err(|error| format!("{path_key}: {error}"))?;
+    #[cfg(target_os = "linux")]
+    let expected_proc_identity = if parse_exact_proc_fd_path(&path).is_some() {
+        Some(ExpectedProcFdIdentity::from_environment(path_key)?)
+    } else {
+        None
+    };
+    #[cfg(not(target_os = "linux"))]
+    let expected_proc_identity = None;
+    let bytes = read_pinned_path(&path, expected_proc_identity)
+        .map_err(|error| format!("{path_key}: {error}"))?;
     let digest = DigestAlgorithm::Sha256.calculate(&bytes);
     let actual = *digest.bytes().as_bytes();
     require_declared_digest(actual, &declared)?;
@@ -709,7 +788,7 @@ fn pinned_digest_rejects_substitution_and_noncanonical_text() {
 }
 
 #[cfg(all(feature = "hardware-test-hooks", target_os = "linux"))]
-fn test_memfd(name: &str, contents: &[u8], sealed: bool) -> File {
+fn test_memfd_with_seals(name: &str, contents: &[u8], seals: libc::c_int) -> File {
     use std::io::Write;
 
     let name = std::ffi::CString::new(name).unwrap();
@@ -721,27 +800,158 @@ fn test_memfd(name: &str, contents: &[u8], sealed: bool) -> File {
     let mut file = unsafe { File::from_raw_fd(descriptor) };
     file.write_all(contents).unwrap();
     file.flush().unwrap();
-    if sealed {
+    if seals != 0 {
         // SAFETY: F_ADD_SEALS updates flags on the valid owned descriptor.
-        let status =
-            unsafe { libc::fcntl(file.as_raw_fd(), libc::F_ADD_SEALS, REQUIRED_MEMFD_SEALS) };
+        let status = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_ADD_SEALS, seals) };
         assert_eq!(status, 0, "{}", std::io::Error::last_os_error());
     }
     file
 }
 
 #[cfg(all(feature = "hardware-test-hooks", target_os = "linux"))]
-fn self_proc_fd(file: &File) -> std::path::PathBuf {
-    format!("/proc/{}/fd/{}", std::process::id(), file.as_raw_fd()).into()
+fn test_memfd(name: &str, contents: &[u8], sealed: bool) -> File {
+    test_memfd_with_seals(
+        name,
+        contents,
+        if sealed { REQUIRED_MEMFD_SEALS } else { 0 },
+    )
+}
+
+#[cfg(all(feature = "hardware-test-hooks", target_os = "linux"))]
+fn proc_fd_path(owner_pid: u32, file: &File) -> std::path::PathBuf {
+    format!("/proc/{owner_pid}/fd/{}", file.as_raw_fd()).into()
+}
+
+#[cfg(all(feature = "hardware-test-hooks", target_os = "linux"))]
+fn expected_proc_identity(file: &File, owner_pid: u32) -> ExpectedProcFdIdentity {
+    let metadata = file.metadata().unwrap();
+    ExpectedProcFdIdentity {
+        owner_pid,
+        owner_start_time_ticks: process_parent_and_start_time(owner_pid).unwrap().1,
+        device: metadata.dev(),
+        inode: metadata.ino(),
+        mode: metadata.mode(),
+        size: metadata.size(),
+    }
+}
+
+#[cfg(all(feature = "hardware-test-hooks", target_os = "linux"))]
+fn set_expected_identity_environment(
+    command: &mut std::process::Command,
+    prefix: &str,
+    expected: ExpectedProcFdIdentity,
+) {
+    command
+        .env(
+            format!("{prefix}_OWNER_PID"),
+            expected.owner_pid.to_string(),
+        )
+        .env(
+            format!("{prefix}_OWNER_START_TIME_TICKS"),
+            expected.owner_start_time_ticks.to_string(),
+        )
+        .env(format!("{prefix}_DEVICE"), expected.device.to_string())
+        .env(format!("{prefix}_INODE"), expected.inode.to_string())
+        .env(format!("{prefix}_MODE"), expected.mode.to_string())
+        .env(format!("{prefix}_SIZE"), expected.size.to_string());
 }
 
 #[cfg(all(feature = "hardware-test-hooks", target_os = "linux"))]
 #[test]
 fn sealed_proc_fd_reader_accepts_one_pinned_descriptor() {
     let file = test_memfd("fe2o3-s09-rust-positive", b"pinned bytes", true);
+    let owner_pid = std::process::id();
     assert_eq!(
-        read_sealed_proc_fd(&self_proc_fd(&file)).unwrap(),
+        read_sealed_proc_fd(
+            &proc_fd_path(owner_pid, &file),
+            expected_proc_identity(&file, owner_pid),
+        )
+        .unwrap(),
         b"pinned bytes"
+    );
+}
+
+#[cfg(all(feature = "hardware-test-hooks", target_os = "linux"))]
+#[test]
+fn sealed_proc_fd_actual_ancestor_helper() {
+    if std::env::var("FE2O3_S09_ANCESTOR_HELPER").as_deref() != Ok("1") {
+        return;
+    }
+    let path = std::path::PathBuf::from(std::env::var_os("FE2O3_S09_TEST_PATH").unwrap());
+    let expected = ExpectedProcFdIdentity::from_environment("FE2O3_S09_TEST").unwrap();
+    assert_eq!(
+        read_sealed_proc_fd(&path, expected).unwrap(),
+        b"ancestor-owned bytes"
+    );
+}
+
+#[cfg(all(feature = "hardware-test-hooks", target_os = "linux"))]
+#[test]
+fn sealed_proc_fd_reader_accepts_actual_ancestor_owned_memfd() {
+    let file = test_memfd("fe2o3-s09-rust-ancestor", b"ancestor-owned bytes", true);
+    let owner_pid = std::process::id();
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    command
+        .arg("sealed_proc_fd_actual_ancestor_helper")
+        .arg("--exact")
+        .arg("--nocapture")
+        .env("FE2O3_S09_ANCESTOR_HELPER", "1")
+        .env("FE2O3_S09_TEST_PATH", proc_fd_path(owner_pid, &file));
+    set_expected_identity_environment(
+        &mut command,
+        "FE2O3_S09_TEST",
+        expected_proc_identity(&file, owner_pid),
+    );
+    let output = command.output().unwrap();
+    assert!(
+        output.status.success(),
+        "ancestor helper failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+#[cfg(all(feature = "hardware-test-hooks", target_os = "linux"))]
+#[test]
+fn sealed_proc_fd_reader_accepts_snapshot_supervisor_topology() {
+    let directory = std::env::temp_dir().join(format!(
+        "fe2o3-s09-supervisor-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir(&directory).unwrap();
+    let source = directory.join("facts");
+    std::fs::write(&source, b"ancestor-owned bytes").unwrap();
+    let pinner = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../scripts/s09_pinned_snapshot.py");
+    let output = std::process::Command::new(pinner)
+        .arg("--input")
+        .arg(format!("facts={}", source.display()))
+        .arg("--")
+        .arg("/usr/bin/env")
+        .arg("FE2O3_S09_ANCESTOR_HELPER=1")
+        .arg("FE2O3_S09_TEST_PATH={facts}")
+        .arg("FE2O3_S09_TEST_DEVICE={facts_device}")
+        .arg("FE2O3_S09_TEST_INODE={facts_inode}")
+        .arg("FE2O3_S09_TEST_MODE={facts_mode}")
+        .arg("FE2O3_S09_TEST_SIZE={facts_size}")
+        .arg("FE2O3_S09_TEST_OWNER_PID={facts_owner_pid}")
+        .arg("FE2O3_S09_TEST_OWNER_START_TIME_TICKS={facts_owner_start_time_ticks}")
+        .arg(std::env::current_exe().unwrap())
+        .arg("sealed_proc_fd_actual_ancestor_helper")
+        .arg("--exact")
+        .arg("--nocapture")
+        .output()
+        .unwrap();
+    std::fs::remove_dir_all(directory).unwrap();
+    assert!(
+        output.status.success(),
+        "snapshot supervisor helper failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
     );
 }
 
@@ -749,33 +959,141 @@ fn sealed_proc_fd_reader_accepts_one_pinned_descriptor() {
 #[test]
 fn sealed_proc_fd_reader_rejects_unsealed_and_foreign_memfds() {
     let unsealed = test_memfd("fe2o3-s09-rust-unsealed", b"unsealed", false);
-    let error = read_sealed_proc_fd(&self_proc_fd(&unsealed))
-        .unwrap_err()
-        .to_string();
+    let owner_pid = std::process::id();
+    let error = read_sealed_proc_fd(
+        &proc_fd_path(owner_pid, &unsealed),
+        expected_proc_identity(&unsealed, owner_pid),
+    )
+    .unwrap_err()
+    .to_string();
     assert!(error.contains("missing required"), "{error}");
 
     let foreign = test_memfd("foreign-rust-sealed", b"foreign", true);
-    let error = read_sealed_proc_fd(&self_proc_fd(&foreign))
-        .unwrap_err()
-        .to_string();
+    let error = read_sealed_proc_fd(
+        &proc_fd_path(owner_pid, &foreign),
+        expected_proc_identity(&foreign, owner_pid),
+    )
+    .unwrap_err()
+    .to_string();
     assert!(error.contains("not an S09 memfd"), "{error}");
 }
 
 #[cfg(all(feature = "hardware-test-hooks", target_os = "linux"))]
 #[test]
+fn sealed_proc_fd_reader_rejects_same_content_descriptor_reuse() {
+    let original = test_memfd("fe2o3-s09-rust-original", b"same bytes", true);
+    let owner_pid = std::process::id();
+    let expected = expected_proc_identity(&original, owner_pid);
+    let path = proc_fd_path(owner_pid, &original);
+    let replacement = test_memfd("fe2o3-s09-rust-replacement", b"same bytes", true);
+    assert_ne!(original.as_raw_fd(), replacement.as_raw_fd());
+    // SAFETY: both descriptors are live; dup3 atomically replaces only the
+    // descriptor owned by `original`, preserving its numeric proc-fd path.
+    let rebound = unsafe {
+        libc::dup3(
+            replacement.as_raw_fd(),
+            original.as_raw_fd(),
+            libc::O_CLOEXEC,
+        )
+    };
+    assert_eq!(rebound, original.as_raw_fd());
+    let error = read_sealed_proc_fd(&path, expected)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("supervisor-provided identity"), "{error}");
+}
+
+#[cfg(all(feature = "hardware-test-hooks", target_os = "linux"))]
+#[test]
+fn sealed_proc_fd_reader_rejects_wrong_owner_generation() {
+    let file = test_memfd("fe2o3-s09-rust-generation", b"generation", true);
+    let owner_pid = std::process::id();
+    let mut expected = expected_proc_identity(&file, owner_pid);
+    expected.owner_start_time_ticks += 1;
+    let error = read_sealed_proc_fd(&proc_fd_path(owner_pid, &file), expected)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("reused") || error.contains("starttime"),
+        "{error}"
+    );
+}
+
+#[cfg(all(feature = "hardware-test-hooks", target_os = "linux"))]
+#[test]
+fn sealed_proc_fd_reader_rejects_empty_oversized_and_partial_seals() {
+    let owner_pid = std::process::id();
+    let empty = test_memfd("fe2o3-s09-rust-empty", b"", true);
+    let error = read_sealed_proc_fd(
+        &proc_fd_path(owner_pid, &empty),
+        expected_proc_identity(&empty, owner_pid),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("size must be within"), "{error}");
+
+    let oversized = test_memfd("fe2o3-s09-rust-oversized", b"x", false);
+    oversized.set_len(MAX_PINNED_FILE_BYTES + 1).unwrap();
+    // SAFETY: F_ADD_SEALS updates flags on the valid owned descriptor.
+    assert_eq!(
+        unsafe {
+            libc::fcntl(
+                oversized.as_raw_fd(),
+                libc::F_ADD_SEALS,
+                REQUIRED_MEMFD_SEALS,
+            )
+        },
+        0
+    );
+    let error = read_sealed_proc_fd(
+        &proc_fd_path(owner_pid, &oversized),
+        expected_proc_identity(&oversized, owner_pid),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("size must be within"), "{error}");
+
+    let partial = test_memfd_with_seals(
+        "fe2o3-s09-rust-partial",
+        b"partial seals",
+        libc::F_SEAL_SHRINK | libc::F_SEAL_GROW,
+    );
+    let error = read_sealed_proc_fd(
+        &proc_fd_path(owner_pid, &partial),
+        expected_proc_identity(&partial, owner_pid),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("missing required"), "{error}");
+}
+
+#[cfg(all(feature = "hardware-test-hooks", target_os = "linux"))]
+#[test]
 fn sealed_proc_fd_reader_rejects_non_proc_and_dead_owners() {
-    let error = read_sealed_proc_fd(Path::new("/tmp/not-a-proc-fd"))
+    let file = test_memfd("fe2o3-s09-rust-parser", b"parser", true);
+    let expected = expected_proc_identity(&file, std::process::id());
+    let error = read_sealed_proc_fd(Path::new("/tmp/not-a-proc-fd"), expected)
         .unwrap_err()
         .to_string();
     assert!(error.contains("exact numeric proc-fd"), "{error}");
 
-    let mut child = std::process::Command::new("/usr/bin/true").spawn().unwrap();
+    let mut child = std::process::Command::new("/usr/bin/sleep")
+        .arg("30")
+        .spawn()
+        .unwrap();
     let child_pid = child.id();
-    assert!(child.wait().unwrap().success());
-    let error = read_sealed_proc_fd(Path::new(&format!("/proc/{child_pid}/fd/0")))
+    let child_start = process_parent_and_start_time(child_pid).unwrap().1;
+    child.kill().unwrap();
+    child.wait().unwrap();
+    let dead_expected = ExpectedProcFdIdentity {
+        owner_pid: child_pid,
+        owner_start_time_ticks: child_start,
+        ..expected
+    };
+    let error = read_sealed_proc_fd(Path::new(&format!("/proc/{child_pid}/fd/0")), dead_expected)
         .unwrap_err()
         .to_string();
-    assert!(error.contains("live ancestor"), "{error}");
+    assert!(error.contains("not live"), "{error}");
 }
 
 #[cfg(all(feature = "hardware-test-hooks", target_os = "linux"))]
@@ -786,11 +1104,46 @@ fn sealed_proc_fd_reader_rejects_live_nonancestor_owner() {
         .spawn()
         .unwrap();
     let path = format!("/proc/{}/fd/0", child.id());
-    let result = read_sealed_proc_fd(Path::new(&path));
+    let expected = ExpectedProcFdIdentity {
+        owner_pid: child.id(),
+        owner_start_time_ticks: process_parent_and_start_time(child.id()).unwrap().1,
+        device: 0,
+        inode: 1,
+        mode: libc::S_IFREG,
+        size: 1,
+    };
+    let result = read_sealed_proc_fd(Path::new(&path), expected);
     let _ = child.kill();
     let _ = child.wait();
     let error = result.unwrap_err().to_string();
     assert!(error.contains("live ancestor"), "{error}");
+}
+
+#[cfg(all(feature = "hardware-test-hooks", target_os = "linux"))]
+#[test]
+fn ordinary_pinned_file_semantics_remain_canonical_and_non_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let directory = std::env::temp_dir().join(format!(
+        "fe2o3-s09-ordinary-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir(&directory).unwrap();
+    let file = directory.join("facts");
+    std::fs::write(&file, b"ordinary bytes").unwrap();
+    let canonical = std::fs::canonicalize(&file).unwrap();
+    assert_eq!(
+        read_pinned_path(&canonical, None).unwrap(),
+        b"ordinary bytes"
+    );
+    let link = directory.join("facts-link");
+    symlink(&canonical, &link).unwrap();
+    assert!(read_pinned_path(&link, None).is_err());
+    std::fs::remove_dir_all(directory).unwrap();
 }
 
 #[cfg(feature = "hardware-test-hooks")]
