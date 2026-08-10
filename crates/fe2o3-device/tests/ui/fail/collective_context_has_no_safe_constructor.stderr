@@ -1,0 +1,11 @@
+error[E0599]: no associated function or constant named `default` found for struct `Gfx942Collectives` in the current scope
+ --> tests/ui/fail/collective_context_has_no_safe_constructor.rs:4:32
+  |
+4 |     let _ = Gfx942Collectives::default();
+  |                                ^^^^^^^ associated function or constant not found in `Gfx942Collectives`
+  |
+note: if you're trying to build a new `Gfx942Collectives`, consider using `Gfx942Collectives::from_compiler` which returns `Gfx942Collectives`
+ --> src/collective.rs
+  |
+  |     pub unsafe fn from_compiler() -> Self {
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

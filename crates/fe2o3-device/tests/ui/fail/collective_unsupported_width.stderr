@@ -1,0 +1,5 @@
+error[E0599]: no method named `reduce_sum` found for reference `&SubgroupTile<'_, 32>` in the current scope
+ --> tests/ui/fail/collective_unsupported_width.rs:4:27
+  |
+4 |     let _ = unsafe { tile.reduce_sum(context, 1_u32) };
+  |                           ^^^^^^^^^^ method not found in `&SubgroupTile<'_, 32>`
