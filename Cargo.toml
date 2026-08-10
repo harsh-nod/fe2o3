@@ -35,6 +35,7 @@ members = [
     "crates/rustc-codegen-fe2o3/tests/fixtures/lookalike-helper",
     "crates/rustc-codegen-fe2o3/tests/fixtures/lookalike-thread",
     "crates/rustc-codegen-fe2o3/tests/fixtures/lookalike-type",
+    "crates/rustc-codegen-fe2o3/tests/fixtures/memory-v1-compiler",
     "crates/rustc-codegen-fe2o3/tests/fixtures/renamed-genuine",
     "crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof",
     "examples/add_inplace",
