@@ -8,6 +8,7 @@
 //! outcome remains a report, not independently authenticated proof evidence.
 //! The legacy planning path retains caller-supplied identities for compatibility.
 
+mod alpha_zeta_manifest;
 mod alpha_zeta_proof;
 mod artifact_record;
 mod authenticated_execution;
@@ -23,17 +24,27 @@ mod proof_capsule;
 mod result;
 mod static_view_proof;
 
-pub use alpha_zeta_proof::{
+pub use alpha_zeta_manifest::{
+    ALPHA_ZETA_LOCKFILE_PATH_V1, ALPHA_ZETA_PACKAGE_MANIFEST_PATH_V1,
     ALPHA_ZETA_PERMISSION_MODEL_PATH_V1, ALPHA_ZETA_PROOF_HARNESS_PATH_V1,
-    ALPHA_ZETA_RUST_MODEL_PATH_V1, ALPHA_ZETA_SHARED_BODY_PATH_V1, AlphaZetaExecutionReviewV1,
-    AlphaZetaProofErrorV1, AlphaZetaProofSourcesV1, AlphaZetaReviewLedgerV1,
-    AlphaZetaSourceFileIdentityV1, GFX942_ALPHA_ZETA_MODEL_VERSION_V1,
-    GFX942_ALPHA_ZETA_PROOF_DOMAIN_V1, GFX942_ALPHA_ZETA_PROOF_VERSION_V1,
-    GFX942_ALPHA_ZETA_REQUIRED_PROPERTIES_V1, GFX942_ALPHA_ZETA_REVIEW_DOMAIN_V1,
-    GFX942_ALPHA_ZETA_SET_DOMAIN_V1, Gfx942AlphaZetaKernelV1, Gfx942AlphaZetaProofInputV1,
-    MAX_GFX942_ALPHA_ZETA_REVIEW_RECORDS_V1, MAX_GFX942_ALPHA_ZETA_SOURCE_BYTES_V1,
-    ReviewedAlphaZetaExecutionV1, ReviewedAlphaZetaProofSetV1,
-    record_reviewed_alpha_zeta_execution_v1,
+    ALPHA_ZETA_RUST_MODEL_PATH_V1, ALPHA_ZETA_SHARED_BODY_PATH_V1, ALPHA_ZETA_TOOLCHAIN_PATH_V1,
+    ALPHA_ZETA_WORKSPACE_MANIFEST_PATH_V1, AlphaZetaDependencyEdgeV1, AlphaZetaDependencyKindV1,
+    AlphaZetaProofSourcesV1, AlphaZetaSourceFileIdentityV1, AlphaZetaSourceRoleV1,
+    MAX_GFX942_ALPHA_ZETA_DEPENDENCY_EDGES_V1, MAX_GFX942_ALPHA_ZETA_SOURCE_BYTES_V1,
+    MAX_GFX942_ALPHA_ZETA_SOURCE_FILES_V1, MAX_GFX942_ALPHA_ZETA_SOURCE_TREE_BYTES_V1,
+};
+pub use alpha_zeta_proof::{
+    AlphaZetaExecutionReviewV1, AlphaZetaProductionReviewV1, AlphaZetaProofErrorV1,
+    AlphaZetaReviewLedgerV1, GFX942_ALPHA_ZETA_AUTHENTICATED_PROPERTIES_V1,
+    GFX942_ALPHA_ZETA_MODEL_VERSION_V1, GFX942_ALPHA_ZETA_PROOF_DOMAIN_V1,
+    GFX942_ALPHA_ZETA_PROOF_VERSION_V1, GFX942_ALPHA_ZETA_REQUIRED_PROPERTIES_V1,
+    GFX942_ALPHA_ZETA_REVIEW_DOMAIN_V1, GFX942_ALPHA_ZETA_SET_DOMAIN_V1,
+    GFX942_XNACK_MINUS_TARGET_V1, Gfx942AlphaZetaKernelV1, Gfx942AlphaZetaProofInputV1,
+    Gfx942XnackMinusTargetIdentityV1, MAX_GFX942_ALPHA_ZETA_REVIEW_RECORDS_V1,
+    ProductionAlphaZetaProofSetV1, ProductionReviewedAlphaZetaExecutionV1,
+    ReviewedAlphaZetaExecutionV1, ReviewedAlphaZetaProofSetV1, alpha_zeta_abi_identity_v1,
+    alpha_zeta_launch_identity_v1, alpha_zeta_production_configuration_v1,
+    record_descriptive_alpha_zeta_execution_v1, record_production_alpha_zeta_execution_v1,
 };
 pub use artifact_record::{
     ArtifactProofEvidenceV1, ArtifactRecordConversionError, ReviewedInvocationIdentityV1,

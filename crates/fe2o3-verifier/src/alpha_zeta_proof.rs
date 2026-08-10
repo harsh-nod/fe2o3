@@ -7,25 +7,27 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
-use fe2o3_artifacts::DigestAlgorithm;
+use fe2o3_artifact_transaction::TargetIdentityV1;
+use fe2o3_artifacts::{
+    AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize, Capability,
+    DigestAlgorithm, Endianness, IdentityText, LaunchContract, Mutability, PayloadDigest,
+    PointerWidth, ScalarType, TargetIdentity,
+};
+use fe2o3_kernel_descriptor::DeviceTargetV1;
 
 use crate::{
-    Digest, MeasuredToolIdentity, ProofCapsuleFreshnessIdentityV1, ProofCapsuleV1, ProofOutcome,
-    ProofProperty, ProofTargetIdentity, Text, VerificationModelIdentity,
+    AlphaZetaProofSourcesV1, Configuration, Digest, MeasuredToolIdentity,
+    PersistentlyFreshProofExecutableBindingV1, ProofCapsuleFreshnessIdentityV1, ProofCapsuleV1,
+    ProofOutcome, ProofProperty, ProofTargetIdentity, VerificationModelIdentity,
 };
 
 pub const GFX942_ALPHA_ZETA_PROOF_DOMAIN_V1: [u8; 8] = *b"FE2AZPI\0";
 pub const GFX942_ALPHA_ZETA_REVIEW_DOMAIN_V1: [u8; 8] = *b"FE2AZRV\0";
 pub const GFX942_ALPHA_ZETA_SET_DOMAIN_V1: [u8; 8] = *b"FE2AZPS\0";
-pub const GFX942_ALPHA_ZETA_PROOF_VERSION_V1: u16 = 1;
+pub const GFX942_ALPHA_ZETA_PROOF_VERSION_V1: u16 = 2;
 pub const GFX942_ALPHA_ZETA_MODEL_VERSION_V1: &str = "gfx942-alpha-zeta-source-v1";
-pub const MAX_GFX942_ALPHA_ZETA_SOURCE_BYTES_V1: u64 = 1024 * 1024;
 pub const MAX_GFX942_ALPHA_ZETA_REVIEW_RECORDS_V1: usize = 4096;
-
-pub const ALPHA_ZETA_SHARED_BODY_PATH_V1: &str = "examples/verus_vecadd/src/two_kernel_bodies.rs";
-pub const ALPHA_ZETA_RUST_MODEL_PATH_V1: &str = "examples/verus_vecadd/src/lib.rs";
-pub const ALPHA_ZETA_PERMISSION_MODEL_PATH_V1: &str = "examples/verus_vecadd/verus/vecadd.rs";
-pub const ALPHA_ZETA_PROOF_HARNESS_PATH_V1: &str = "examples/verus_vecadd/verus/two_kernel.rs";
+pub const GFX942_XNACK_MINUS_TARGET_V1: &str = "gfx942:xnack-";
 
 pub const GFX942_ALPHA_ZETA_REQUIRED_PROPERTIES_V1: [ProofProperty; 5] = [
     ProofProperty::Bounds,
@@ -35,13 +37,20 @@ pub const GFX942_ALPHA_ZETA_REQUIRED_PROPERTIES_V1: [ProofProperty; 5] = [
     ProofProperty::FunctionalCorrectness,
 ];
 
-const REQUIRED_SOURCE_PATHS: [&str; 4] = [
-    ALPHA_ZETA_SHARED_BODY_PATH_V1,
-    ALPHA_ZETA_RUST_MODEL_PATH_V1,
-    ALPHA_ZETA_PERMISSION_MODEL_PATH_V1,
-    ALPHA_ZETA_PROOF_HARNESS_PATH_V1,
+/// The artifact proof-binding V1 schema requires these additional envelope
+/// claims. Only the five entries in `GFX942_ALPHA_ZETA_REQUIRED_PROPERTIES_V1`
+/// are established by the alpha/zeta Verus source harness.
+pub const GFX942_ALPHA_ZETA_AUTHENTICATED_PROPERTIES_V1: [ProofProperty; 7] = [
+    ProofProperty::Bounds,
+    ProofProperty::AddressOverflowFreedom,
+    ProofProperty::MemorySafety,
+    ProofProperty::Initialization,
+    ProofProperty::RaceFreedom,
+    ProofProperty::LaunchValidity,
+    ProofProperty::FunctionalCorrectness,
 ];
-const GFX942_TARGET_PROFILE: &str = "gfx942";
+
+const AMDGPU_TRIPLE_V1: &str = "amdgcn-amd-amdhsa";
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum Gfx942AlphaZetaKernelV1 {
@@ -65,108 +74,46 @@ impl Gfx942AlphaZetaKernelV1 {
     }
 }
 
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub struct AlphaZetaSourceFileIdentityV1 {
-    path: Text,
-    byte_len: u64,
-    digest: Digest,
-}
-
-impl AlphaZetaSourceFileIdentityV1 {
-    pub fn measure(path: &str, bytes: &[u8]) -> Result<Self, AlphaZetaProofErrorV1> {
-        if !REQUIRED_SOURCE_PATHS.contains(&path) {
-            return Err(AlphaZetaProofErrorV1::UnexpectedSourcePath);
-        }
-        if bytes.is_empty() || bytes.len() as u64 > MAX_GFX942_ALPHA_ZETA_SOURCE_BYTES_V1 {
-            return Err(AlphaZetaProofErrorV1::SourceLengthOutOfRange {
-                max: MAX_GFX942_ALPHA_ZETA_SOURCE_BYTES_V1,
-            });
-        }
-        Ok(Self {
-            path: Text::new("alpha/zeta source path", path)
-                .map_err(AlphaZetaProofErrorV1::Model)?,
-            byte_len: bytes.len() as u64,
-            digest: sha256(bytes),
-        })
-    }
-
-    pub const fn path(&self) -> &Text {
-        &self.path
-    }
-
-    pub const fn byte_len(&self) -> u64 {
-        self.byte_len
-    }
-
-    pub const fn digest(&self) -> Digest {
-        self.digest
-    }
-
-    pub fn matches(&self, path: &str, bytes: &[u8]) -> bool {
-        self.path.as_str() == path
-            && self.byte_len == bytes.len() as u64
-            && self.digest == sha256(bytes)
-    }
-}
-
+/// Shared compiler, artifact-manifest, and publication identity for the exact
+/// `gfx942:xnack-` alpha/zeta profile.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AlphaZetaProofSourcesV1 {
-    files: Vec<AlphaZetaSourceFileIdentityV1>,
-    source_tree_identity: Digest,
-    dependency_tree_identity: Digest,
+pub struct Gfx942XnackMinusTargetIdentityV1 {
+    device: DeviceTargetV1,
+    artifact: TargetIdentity,
+    publication: TargetIdentityV1,
 }
 
-impl AlphaZetaProofSourcesV1 {
-    pub fn new(
-        mut files: Vec<AlphaZetaSourceFileIdentityV1>,
-    ) -> Result<Self, AlphaZetaProofErrorV1> {
-        files.sort_unstable_by(|left, right| left.path.cmp(&right.path));
-        if files.len() != REQUIRED_SOURCE_PATHS.len() {
-            return Err(AlphaZetaProofErrorV1::IncompleteSourceSet);
+impl Gfx942XnackMinusTargetIdentityV1 {
+    pub fn canonical() -> Self {
+        let device = DeviceTargetV1::parse(GFX942_XNACK_MINUS_TARGET_V1)
+            .expect("the fixed alpha/zeta target is canonical");
+        let artifact = TargetIdentity::new(
+            IdentityText::new(AMDGPU_TRIPLE_V1).expect("fixed target triple is valid"),
+            IdentityText::new(GFX942_XNACK_MINUS_TARGET_V1)
+                .expect("fixed target architecture is valid"),
+            PointerWidth::Bits64,
+            Endianness::Little,
+            vec![Capability::AmdWave],
+        )
+        .expect("fixed artifact target is canonical");
+        let publication = canonical_publication_target(&artifact);
+        Self {
+            device,
+            artifact,
+            publication,
         }
-        if files.windows(2).any(|pair| pair[0].path == pair[1].path) {
-            return Err(AlphaZetaProofErrorV1::DuplicateSourcePath);
-        }
-        let mut actual = files
-            .iter()
-            .map(|file| file.path.as_str())
-            .collect::<Vec<_>>();
-        let mut required = REQUIRED_SOURCE_PATHS.to_vec();
-        actual.sort_unstable();
-        required.sort_unstable();
-        if actual != required {
-            return Err(AlphaZetaProofErrorV1::IncompleteSourceSet);
-        }
-        Ok(Self {
-            source_tree_identity: source_identity(b"FE2AZST\0", &files),
-            dependency_tree_identity: source_identity(b"FE2AZDT\0", &files),
-            files,
-        })
     }
 
-    pub fn files(&self) -> &[AlphaZetaSourceFileIdentityV1] {
-        &self.files
+    pub const fn device(&self) -> DeviceTargetV1 {
+        self.device
     }
 
-    pub const fn source_tree_identity(&self) -> Digest {
-        self.source_tree_identity
+    pub const fn artifact(&self) -> &TargetIdentity {
+        &self.artifact
     }
 
-    pub const fn dependency_tree_identity(&self) -> Digest {
-        self.dependency_tree_identity
-    }
-
-    pub fn validate_file(&self, path: &str, bytes: &[u8]) -> Result<(), AlphaZetaProofErrorV1> {
-        let file = self
-            .files
-            .iter()
-            .find(|file| file.path.as_str() == path)
-            .ok_or(AlphaZetaProofErrorV1::UnexpectedSourcePath)?;
-        if file.matches(path, bytes) {
-            Ok(())
-        } else {
-            Err(AlphaZetaProofErrorV1::SourceMutation)
-        }
+    pub const fn publication(&self) -> TargetIdentityV1 {
+        self.publication
     }
 }
 
@@ -175,6 +122,7 @@ impl AlphaZetaProofSourcesV1 {
 pub struct Gfx942AlphaZetaProofInputV1 {
     kernel: Gfx942AlphaZetaKernelV1,
     sources: AlphaZetaProofSourcesV1,
+    canonical_target: Gfx942XnackMinusTargetIdentityV1,
     target: ProofTargetIdentity,
     abi_identity: Digest,
     effects_identity: Digest,
@@ -219,12 +167,12 @@ impl Gfx942AlphaZetaProofInputV1 {
         for identity in target.digests() {
             require_nonzero(identity, "proof target")?;
         }
-        if target.source_tree_digest != sources.source_tree_identity {
+        if target.source_tree_digest != sources.source_tree_identity() {
             return Err(AlphaZetaProofErrorV1::IdentityMismatch {
                 field: "source tree",
             });
         }
-        if target.crate_graph_digest != sources.dependency_tree_identity {
+        if target.crate_graph_digest != sources.dependency_tree_identity() {
             return Err(AlphaZetaProofErrorV1::IdentityMismatch {
                 field: "dependency tree",
             });
@@ -232,6 +180,7 @@ impl Gfx942AlphaZetaProofInputV1 {
         if target.effects_contract_digest != effects_identity {
             return Err(AlphaZetaProofErrorV1::IdentityMismatch { field: "effects" });
         }
+        let canonical_target = Gfx942XnackMinusTargetIdentityV1::canonical();
         if verus.name().as_str() != "verus" || solver.name().as_str() != "z3" {
             return Err(AlphaZetaProofErrorV1::UnexpectedTool);
         }
@@ -245,6 +194,7 @@ impl Gfx942AlphaZetaProofInputV1 {
         let mut input = Self {
             kernel,
             sources,
+            canonical_target,
             target,
             abi_identity,
             effects_identity,
@@ -265,6 +215,9 @@ impl Gfx942AlphaZetaProofInputV1 {
     }
     pub const fn sources(&self) -> &AlphaZetaProofSourcesV1 {
         &self.sources
+    }
+    pub const fn canonical_target(&self) -> &Gfx942XnackMinusTargetIdentityV1 {
+        &self.canonical_target
     }
     pub const fn target(&self) -> ProofTargetIdentity {
         self.target
@@ -321,16 +274,23 @@ impl Gfx942AlphaZetaProofInputV1 {
         bytes.extend_from_slice(&GFX942_ALPHA_ZETA_PROOF_VERSION_V1.to_le_bytes());
         bytes.extend_from_slice(&0_u16.to_le_bytes());
         bytes.push(self.kernel.tag());
-        put_text(&mut bytes, GFX942_TARGET_PROFILE);
-        bytes.extend_from_slice(&(self.sources.files.len() as u16).to_le_bytes());
-        for file in &self.sources.files {
-            put_text(&mut bytes, file.path.as_str());
-            bytes.extend_from_slice(&file.byte_len.to_le_bytes());
-            put_digest(&mut bytes, file.digest);
-        }
+        put_text(&mut bytes, &self.canonical_target.device.to_string());
+        put_text(&mut bytes, self.canonical_target.artifact.triple().as_str());
+        put_text(
+            &mut bytes,
+            self.canonical_target.artifact.architecture().as_str(),
+        );
+        bytes.push(1);
+        bytes.push(0);
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&7_u16.to_le_bytes());
+        bytes.extend_from_slice(self.canonical_target.publication.as_bytes());
+        let manifest = self.sources.to_canonical_manifest_bytes();
+        bytes.extend_from_slice(&(manifest.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&manifest);
         for identity in [
-            self.sources.source_tree_identity,
-            self.sources.dependency_tree_identity,
+            self.sources.source_tree_identity(),
+            self.sources.dependency_tree_identity(),
         ] {
             put_digest(&mut bytes, identity);
         }
@@ -542,7 +502,10 @@ impl ReviewedAlphaZetaExecutionV1 {
     }
 }
 
-pub fn record_reviewed_alpha_zeta_execution_v1(
+/// Records caller-assembled capsule evidence for tests and diagnostics only.
+/// `ProofCapsuleV1::new_inert` values are accepted here, so this function and
+/// its output can never satisfy the production authenticated-binding boundary.
+pub fn record_descriptive_alpha_zeta_execution_v1(
     input: &Gfx942AlphaZetaProofInputV1,
     proof: &ProofCapsuleV1,
     review: AlphaZetaExecutionReviewV1,
@@ -559,7 +522,8 @@ pub fn record_reviewed_alpha_zeta_execution_v1(
         });
     }
     let target = proof.target();
-    if target.features().len() != 1 || target.features()[0].as_str() != GFX942_TARGET_PROFILE {
+    if target.features().len() != 1 || target.features()[0].as_str() != GFX942_XNACK_MINUS_TARGET_V1
+    {
         return Err(AlphaZetaProofErrorV1::TargetProfileSubstitution);
     }
     if input.target != target.proof_target() {
@@ -579,20 +543,13 @@ pub fn record_reviewed_alpha_zeta_execution_v1(
 
     let expected_dependencies = input
         .sources
-        .files
-        .iter()
-        .map(|file| {
-            (
-                dependency_name(file.path.as_str())
-                    .expect("sealed source sets contain only required paths"),
-                file.digest,
-            )
-        })
+        .dependency_bindings()
+        .into_iter()
         .collect::<BTreeSet<_>>();
     let actual_dependencies = target
         .dependencies()
         .iter()
-        .map(|dependency| (dependency.name().as_str(), dependency.identity()))
+        .map(|dependency| (dependency.name().as_str().to_owned(), dependency.identity()))
         .collect::<BTreeSet<_>>();
     if actual_dependencies != expected_dependencies {
         return Err(AlphaZetaProofErrorV1::DependencySubstitution);
@@ -626,8 +583,8 @@ pub fn record_reviewed_alpha_zeta_execution_v1(
     let mut record = ReviewedAlphaZetaExecutionV1 {
         kernel: input.kernel,
         input_identity: input.identity,
-        source_tree_identity: input.sources.source_tree_identity,
-        dependency_tree_identity: input.sources.dependency_tree_identity,
+        source_tree_identity: input.sources.source_tree_identity(),
+        dependency_tree_identity: input.sources.dependency_tree_identity(),
         proof_set_nonce: input.proof_set_nonce,
         proof_nonce: input.proof_nonce,
         verus: input.verus.clone(),
@@ -677,6 +634,8 @@ impl ReviewedAlphaZetaProofSetV1 {
         }
         if alpha.input_identity == zeta.input_identity
             || alpha.proof_nonce == zeta.proof_nonce
+            || alpha.freshness.proof_binding_identity() == zeta.freshness.proof_binding_identity()
+            || alpha.review_nonce == zeta.review_nonce
             || alpha.freshness.challenge() == zeta.freshness.challenge()
             || alpha.freshness.transcript() == zeta.freshness.transcript()
             || alpha.freshness.result() == zeta.freshness.result()
@@ -727,27 +686,554 @@ impl ReviewedAlphaZetaProofSetV1 {
     }
 }
 
-fn source_identity(domain: &[u8; 8], files: &[AlphaZetaSourceFileIdentityV1]) -> Digest {
-    let mut bytes = Vec::with_capacity(16 + files.len() * 320);
-    bytes.extend_from_slice(domain);
+/// Independent production-review expectations. The persistent binding itself
+/// remains the only constructible source of authenticated execution and
+/// durable freshness evidence.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AlphaZetaProductionReviewV1 {
+    input_identity: Digest,
+    persistent_binding_identity: Digest,
+    reviewer_policy_identity: Digest,
+    review_nonce: Digest,
+}
+
+impl AlphaZetaProductionReviewV1 {
+    pub fn new(
+        input_identity: Digest,
+        persistent_binding_identity: Digest,
+        reviewer_policy_identity: Digest,
+        review_nonce: Digest,
+    ) -> Result<Self, AlphaZetaProofErrorV1> {
+        for (field, identity) in [
+            ("production reviewed input", input_identity),
+            ("persistent proof binding", persistent_binding_identity),
+            ("production reviewer policy", reviewer_policy_identity),
+            ("production review nonce", review_nonce),
+        ] {
+            require_nonzero(identity, field)?;
+        }
+        Ok(Self {
+            input_identity,
+            persistent_binding_identity,
+            reviewer_policy_identity,
+            review_nonce,
+        })
+    }
+}
+
+/// Non-clone production review of one privately constructed authenticated
+/// recorder binding and its durable freshness receipt.
+#[derive(Debug, Eq, PartialEq)]
+pub struct ProductionReviewedAlphaZetaExecutionV1 {
+    kernel: Gfx942AlphaZetaKernelV1,
+    input_identity: Digest,
+    proof_set_nonce: Digest,
+    proof_nonce: Digest,
+    set_context_identity: Digest,
+    proof_binding_identity: Digest,
+    reviewer_policy_identity: Digest,
+    review_nonce: Digest,
+    binding: PersistentlyFreshProofExecutableBindingV1,
+    identity: Digest,
+}
+
+impl ProductionReviewedAlphaZetaExecutionV1 {
+    pub const fn kernel(&self) -> Gfx942AlphaZetaKernelV1 {
+        self.kernel
+    }
+
+    pub const fn input_identity(&self) -> Digest {
+        self.input_identity
+    }
+
+    pub const fn proof_binding_identity(&self) -> Digest {
+        self.proof_binding_identity
+    }
+
+    pub const fn persistent_binding(&self) -> &PersistentlyFreshProofExecutableBindingV1 {
+        &self.binding
+    }
+
+    pub const fn identity(&self) -> Digest {
+        self.identity
+    }
+
+    pub const fn grants_proof_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+}
+
+/// Consumes a privately constructed authenticated recorder/executable binding
+/// carrying a durable non-clone freshness receipt. Unlike the descriptive
+/// `ProofCapsuleV1` path, callers cannot synthesize this input with `new_inert`.
+///
+/// ```compile_fail
+/// # use fe2o3_verifier::{
+/// #     AlphaZetaProductionReviewV1, Gfx942AlphaZetaProofInputV1, ProofCapsuleV1,
+/// #     record_production_alpha_zeta_execution_v1,
+/// # };
+/// # fn inert_capsules_are_not_production_inputs(
+/// #     input: &Gfx942AlphaZetaProofInputV1,
+/// #     inert: ProofCapsuleV1,
+/// #     review: AlphaZetaProductionReviewV1,
+/// # ) {
+/// let _ = record_production_alpha_zeta_execution_v1(input, inert, review);
+/// # }
+/// ```
+pub fn record_production_alpha_zeta_execution_v1(
+    input: &Gfx942AlphaZetaProofInputV1,
+    binding: PersistentlyFreshProofExecutableBindingV1,
+    review: AlphaZetaProductionReviewV1,
+) -> Result<ProductionReviewedAlphaZetaExecutionV1, AlphaZetaProofErrorV1> {
+    if review.input_identity != input.identity {
+        return Err(AlphaZetaProofErrorV1::IdentityMismatch {
+            field: "production reviewed input",
+        });
+    }
+    if review.persistent_binding_identity != binding.binding_identity() {
+        return Err(AlphaZetaProofErrorV1::IdentityMismatch {
+            field: "persistent proof binding",
+        });
+    }
+
+    let proof_binding = binding.proof_binding();
+    let execution = proof_binding.execution_identity();
+    let evidence = proof_binding.execution_evidence();
+    let request = evidence.invocation_plan().request();
+    let result = evidence.recorder_report();
+    if request.target() != input.target || result.target() != input.target {
+        return Err(AlphaZetaProofErrorV1::IdentityMismatch {
+            field: "authenticated proof target",
+        });
+    }
+    if request.model() != &input.model || result.model() != &input.model {
+        return Err(AlphaZetaProofErrorV1::ModelSubstitution);
+    }
+    if request.properties() != GFX942_ALPHA_ZETA_AUTHENTICATED_PROPERTIES_V1
+        || result.recorder_reported_properties() != GFX942_ALPHA_ZETA_AUTHENTICATED_PROPERTIES_V1
+        || result.outcome() != ProofOutcome::Proved
+    {
+        return Err(AlphaZetaProofErrorV1::PropertySubstitution);
+    }
+    if !request.trusted_items().is_empty() || !result.trusted_items().is_empty() {
+        return Err(AlphaZetaProofErrorV1::AxiomSubstitution);
+    }
+    if execution.claimed_verifier().identity() != &input.verus
+        || execution.claimed_solver().identity() != &input.solver
+    {
+        return Err(AlphaZetaProofErrorV1::ToolSubstitution);
+    }
+    validate_production_configuration(input, request.configuration())?;
+
+    let executable = proof_binding.executable_binding().executable();
+    if executable.target() != input.canonical_target.artifact()
+        || canonical_publication_target(executable.target()) != input.canonical_target.publication()
+    {
+        return Err(AlphaZetaProofErrorV1::TargetProfileSubstitution);
+    }
+    let artifact_target = executable.proof_target();
+    if alpha_zeta_abi_identity_v1(executable.abi()) != input.abi_identity {
+        return Err(AlphaZetaProofErrorV1::IdentityMismatch {
+            field: "artifact ABI",
+        });
+    }
+    if digest_from_payload(artifact_target.source_contracts().effects_digest())
+        != input.effects_identity
+    {
+        return Err(AlphaZetaProofErrorV1::IdentityMismatch {
+            field: "artifact effects contract",
+        });
+    }
+    if alpha_zeta_launch_identity_v1(executable.launch()) != input.launch_identity {
+        return Err(AlphaZetaProofErrorV1::IdentityMismatch {
+            field: "artifact launch contract",
+        });
+    }
+
+    let proof_binding_identity = binding.identity().proof_binding_identity();
+    let mut record = ProductionReviewedAlphaZetaExecutionV1 {
+        kernel: input.kernel,
+        input_identity: input.identity,
+        proof_set_nonce: input.proof_set_nonce,
+        proof_nonce: input.proof_nonce,
+        set_context_identity: production_set_context_identity(input),
+        proof_binding_identity,
+        reviewer_policy_identity: review.reviewer_policy_identity,
+        review_nonce: review.review_nonce,
+        binding,
+        identity: Digest::from_bytes([0; 32]),
+    };
+    record.identity = production_reviewed_identity(&record);
+    Ok(record)
+}
+
+/// Exact production set consuming two durable records from one contiguous
+/// ledger lineage.
+#[derive(Debug, Eq, PartialEq)]
+pub struct ProductionAlphaZetaProofSetV1 {
+    alpha: ProductionReviewedAlphaZetaExecutionV1,
+    zeta: ProductionReviewedAlphaZetaExecutionV1,
+    identity: Digest,
+}
+
+impl ProductionAlphaZetaProofSetV1 {
+    pub fn new(
+        first: ProductionReviewedAlphaZetaExecutionV1,
+        second: ProductionReviewedAlphaZetaExecutionV1,
+    ) -> Result<Self, AlphaZetaProofErrorV1> {
+        let (alpha, zeta) = match (first.kernel, second.kernel) {
+            (Gfx942AlphaZetaKernelV1::Alpha, Gfx942AlphaZetaKernelV1::Zeta) => (first, second),
+            (Gfx942AlphaZetaKernelV1::Zeta, Gfx942AlphaZetaKernelV1::Alpha) => (second, first),
+            _ => return Err(AlphaZetaProofErrorV1::IncompleteKernelSet),
+        };
+        let alpha_receipt = alpha.binding.freshness_receipt();
+        let zeta_receipt = zeta.binding.freshness_receipt();
+        if alpha.proof_set_nonce != zeta.proof_set_nonce
+            || alpha.set_context_identity != zeta.set_context_identity
+            || alpha.reviewer_policy_identity != zeta.reviewer_policy_identity
+            || alpha_receipt.namespace() != zeta_receipt.namespace()
+        {
+            return Err(AlphaZetaProofErrorV1::MixedProofSet);
+        }
+        if alpha.input_identity == zeta.input_identity
+            || alpha.proof_nonce == zeta.proof_nonce
+            || alpha.proof_binding_identity == zeta.proof_binding_identity
+            || alpha.review_nonce == zeta.review_nonce
+            || alpha_receipt.identity().challenge() == zeta_receipt.identity().challenge()
+            || alpha_receipt.identity().transcript() == zeta_receipt.identity().transcript()
+            || alpha_receipt.identity().result() == zeta_receipt.identity().result()
+            || alpha.binding.binding_identity() == zeta.binding.binding_identity()
+        {
+            return Err(AlphaZetaProofErrorV1::MixedProofSet);
+        }
+        let (previous, next) = if alpha_receipt.generation() < zeta_receipt.generation() {
+            (alpha_receipt, zeta_receipt)
+        } else {
+            (zeta_receipt, alpha_receipt)
+        };
+        if previous.generation().checked_add(1) != Some(next.generation())
+            || previous.state_identity() != next.previous_state_identity()
+        {
+            return Err(AlphaZetaProofErrorV1::MixedFreshnessHistory);
+        }
+        let mut bytes = Vec::with_capacity(80);
+        bytes.extend_from_slice(&GFX942_ALPHA_ZETA_SET_DOMAIN_V1);
+        bytes.extend_from_slice(&GFX942_ALPHA_ZETA_PROOF_VERSION_V1.to_le_bytes());
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        put_digest(&mut bytes, alpha.identity);
+        put_digest(&mut bytes, zeta.identity);
+        let identity = sha256(&bytes);
+        Ok(Self {
+            alpha,
+            zeta,
+            identity,
+        })
+    }
+
+    pub const fn alpha(&self) -> &ProductionReviewedAlphaZetaExecutionV1 {
+        &self.alpha
+    }
+
+    pub const fn zeta(&self) -> &ProductionReviewedAlphaZetaExecutionV1 {
+        &self.zeta
+    }
+
+    pub const fn identity(&self) -> Digest {
+        self.identity
+    }
+
+    pub const fn grants_proof_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+}
+
+fn canonical_publication_target(target: &TargetIdentity) -> TargetIdentityV1 {
+    const DOMAIN: &[u8] = b"fe2o3.direct-link.publication-scope.manifest-claim-target.v1\0";
+    let mut bytes = Vec::with_capacity(128);
+    bytes.extend_from_slice(DOMAIN);
+    bytes.push(1);
+    put_text(&mut bytes, target.triple().as_str());
+    put_text(&mut bytes, target.architecture().as_str());
+    bytes.push(match target.pointer_width() {
+        PointerWidth::Bits32 => 0,
+        PointerWidth::Bits64 => 1,
+    });
+    bytes.push(match target.endianness() {
+        Endianness::Little => 0,
+        Endianness::Big => 1,
+    });
+    bytes.extend_from_slice(&(target.capabilities().len() as u16).to_le_bytes());
+    for capability in target.capabilities() {
+        let tag = match capability {
+            Capability::Subgroup => 0,
+            Capability::Ballot => 1,
+            Capability::Shuffle => 2,
+            Capability::WorkgroupMemory => 3,
+            Capability::MatrixMultiply => 4,
+            Capability::AsyncCopy => 5,
+            Capability::Atomics => 6,
+            Capability::AmdWave => 7,
+            Capability::AmdMfma => 8,
+            Capability::AmdWmma => 9,
+            Capability::AmdDsPermute => 10,
+        };
+        bytes.extend_from_slice(&u16::to_le_bytes(tag));
+    }
+    TargetIdentityV1::from_bytes(*sha256(&bytes).as_bytes())
+}
+
+/// Canonical launch-contract identity required by the production alpha/zeta
+/// join. This is distinct from the artifact's composite contract identity.
+pub fn alpha_zeta_launch_identity_v1(launch: &LaunchContract) -> Digest {
+    let mut bytes = Vec::with_capacity(64);
+    bytes.extend_from_slice(b"FE2AZLC\0");
     bytes.extend_from_slice(&GFX942_ALPHA_ZETA_PROOF_VERSION_V1.to_le_bytes());
-    bytes.extend_from_slice(&(files.len() as u16).to_le_bytes());
-    for file in files {
-        put_text(&mut bytes, file.path.as_str());
-        bytes.extend_from_slice(&file.byte_len.to_le_bytes());
-        put_digest(&mut bytes, file.digest);
+    bytes.push(launch.rank());
+    match launch.block_size() {
+        BlockSize::Any => bytes.push(0),
+        BlockSize::Exact(dimensions) => {
+            bytes.push(1);
+            put_dimensions(&mut bytes, dimensions);
+        }
+        BlockSize::AtMost(dimensions) => {
+            bytes.push(2);
+            put_dimensions(&mut bytes, dimensions);
+        }
+    }
+    put_dimensions(&mut bytes, launch.max_grid());
+    bytes.extend_from_slice(&launch.static_shared_memory_bytes().to_le_bytes());
+    bytes.extend_from_slice(&launch.max_dynamic_shared_memory_bytes().to_le_bytes());
+    sha256(&bytes)
+}
+
+/// Canonical identity of the typed artifact ABI used by the production join.
+pub fn alpha_zeta_abi_identity_v1(abi: &AbiLayout) -> Digest {
+    let mut bytes = Vec::with_capacity(256 + abi.fields().len() * 128);
+    bytes.extend_from_slice(b"FE2AZAB\0");
+    bytes.extend_from_slice(&GFX942_ALPHA_ZETA_PROOF_VERSION_V1.to_le_bytes());
+    bytes.push(pointer_width_tag(abi.pointer_width()));
+    bytes.extend_from_slice(&abi.size().to_le_bytes());
+    bytes.extend_from_slice(&abi.alignment().to_le_bytes());
+    bytes.extend_from_slice(&(abi.fields().len() as u16).to_le_bytes());
+    for field in abi.fields() {
+        put_text(&mut bytes, field.name().as_str());
+        bytes.extend_from_slice(&field.offset().to_le_bytes());
+        bytes.extend_from_slice(&field.size().to_le_bytes());
+        bytes.extend_from_slice(&field.alignment().to_le_bytes());
+        match field.kind() {
+            AbiKind::Scalar(scalar) => {
+                bytes.push(0);
+                bytes.push(scalar_tag(scalar));
+            }
+            AbiKind::Pointer {
+                pointee_size,
+                pointee_alignment,
+            } => {
+                bytes.push(1);
+                bytes.extend_from_slice(&pointee_size.to_le_bytes());
+                bytes.extend_from_slice(&pointee_alignment.to_le_bytes());
+            }
+            AbiKind::Slice {
+                element_size,
+                element_alignment,
+            } => {
+                bytes.push(2);
+                bytes.extend_from_slice(&element_size.to_le_bytes());
+                bytes.extend_from_slice(&element_alignment.to_le_bytes());
+            }
+        }
+        bytes.push(mutability_tag(field.mutability()));
+        bytes.push(access_tag(field.access()));
+        bytes.push(address_space_tag(field.address_space()));
+        bytes.extend_from_slice(field.type_identity().rust_type().bytes().as_bytes());
+        bytes.extend_from_slice(field.type_identity().layout().bytes().as_bytes());
+        bytes.push(ownership_tag(field.ownership()));
+        bytes.push(alias_class_tag(field.alias_class()));
     }
     sha256(&bytes)
 }
 
-fn dependency_name(path: &str) -> Option<&'static str> {
-    match path {
-        ALPHA_ZETA_SHARED_BODY_PATH_V1 => Some("shared-body"),
-        ALPHA_ZETA_RUST_MODEL_PATH_V1 => Some("rust-model"),
-        ALPHA_ZETA_PERMISSION_MODEL_PATH_V1 => Some("permission-model"),
-        ALPHA_ZETA_PROOF_HARNESS_PATH_V1 => Some("proof-harness"),
-        _ => None,
+/// Required authenticated-request configuration bindings for one sealed input.
+pub fn alpha_zeta_production_configuration_v1(
+    input: &Gfx942AlphaZetaProofInputV1,
+) -> Vec<(&'static str, String)> {
+    vec![
+        ("alpha_zeta_input", digest_hex(input.identity)),
+        ("proof_set_nonce", digest_hex(input.proof_set_nonce)),
+        ("proof_nonce", digest_hex(input.proof_nonce)),
+        (
+            "source_manifest",
+            digest_hex(input.sources.dependency_tree_identity()),
+        ),
+    ]
+}
+
+fn validate_production_configuration(
+    input: &Gfx942AlphaZetaProofInputV1,
+    configuration: &Configuration,
+) -> Result<(), AlphaZetaProofErrorV1> {
+    let mut expected = alpha_zeta_production_configuration_v1(input);
+    expected.sort_unstable_by_key(|(key, _)| *key);
+    if configuration.entries().len() != expected.len() {
+        return Err(AlphaZetaProofErrorV1::IdentityMismatch {
+            field: "authenticated proof configuration",
+        });
     }
+    for (actual, (expected_key, expected_value)) in configuration.entries().iter().zip(expected) {
+        if actual.key().as_str() != expected_key || actual.value().as_str() != expected_value {
+            return Err(AlphaZetaProofErrorV1::IdentityMismatch {
+                field: "authenticated proof configuration",
+            });
+        }
+    }
+    Ok(())
+}
+
+fn production_reviewed_identity(record: &ProductionReviewedAlphaZetaExecutionV1) -> Digest {
+    let receipt = record.binding.freshness_receipt();
+    let mut bytes = Vec::with_capacity(384);
+    bytes.extend_from_slice(&GFX942_ALPHA_ZETA_REVIEW_DOMAIN_V1);
+    bytes.extend_from_slice(&GFX942_ALPHA_ZETA_PROOF_VERSION_V1.to_le_bytes());
+    bytes.extend_from_slice(&1_u16.to_le_bytes());
+    bytes.push(record.kernel.tag());
+    for digest in [
+        record.input_identity,
+        record.proof_set_nonce,
+        record.proof_nonce,
+        record.set_context_identity,
+        record.proof_binding_identity,
+        record.binding.binding_identity(),
+        receipt.identity().challenge(),
+        receipt.identity().transcript(),
+        receipt.identity().result(),
+        receipt.namespace(),
+        receipt.previous_state_identity(),
+        receipt.state_identity(),
+        record.reviewer_policy_identity,
+        record.review_nonce,
+    ] {
+        put_digest(&mut bytes, digest);
+    }
+    bytes.extend_from_slice(&receipt.generation().to_le_bytes());
+    sha256(&bytes)
+}
+
+fn production_set_context_identity(input: &Gfx942AlphaZetaProofInputV1) -> Digest {
+    let mut bytes = Vec::with_capacity(512);
+    bytes.extend_from_slice(b"FE2AZSC\0");
+    bytes.extend_from_slice(&GFX942_ALPHA_ZETA_PROOF_VERSION_V1.to_le_bytes());
+    for digest in [
+        input.sources.source_tree_identity(),
+        input.sources.dependency_tree_identity(),
+        input.abi_identity,
+        input.effects_identity,
+        input.launch_identity,
+        input.proof_set_nonce,
+    ] {
+        put_digest(&mut bytes, digest);
+    }
+    bytes.extend_from_slice(input.canonical_target.publication.as_bytes());
+    put_tool(&mut bytes, &input.verus);
+    put_tool(&mut bytes, &input.solver);
+    put_text(&mut bytes, input.model.version().as_str());
+    put_digest(&mut bytes, input.model.axioms_digest());
+    sha256(&bytes)
+}
+
+const fn pointer_width_tag(value: PointerWidth) -> u8 {
+    match value {
+        PointerWidth::Bits32 => 0,
+        PointerWidth::Bits64 => 1,
+    }
+}
+
+const fn scalar_tag(value: ScalarType) -> u8 {
+    match value {
+        ScalarType::I8 => 0,
+        ScalarType::U8 => 1,
+        ScalarType::I16 => 2,
+        ScalarType::U16 => 3,
+        ScalarType::I32 => 4,
+        ScalarType::U32 => 5,
+        ScalarType::I64 => 6,
+        ScalarType::U64 => 7,
+        ScalarType::F16 => 8,
+        ScalarType::F32 => 9,
+        ScalarType::F64 => 10,
+    }
+}
+
+const fn mutability_tag(value: Mutability) -> u8 {
+    match value {
+        Mutability::Immutable => 0,
+        Mutability::Mutable => 1,
+    }
+}
+
+const fn access_tag(value: Access) -> u8 {
+    match value {
+        Access::ByValue => 0,
+        Access::ReadOnly => 1,
+        Access::WriteOnly => 2,
+        Access::ReadWrite => 3,
+    }
+}
+
+const fn address_space_tag(value: AddressSpace) -> u8 {
+    match value {
+        AddressSpace::Value => 0,
+        AddressSpace::Global => 1,
+        AddressSpace::Constant => 2,
+        AddressSpace::Workgroup => 3,
+        AddressSpace::Private => 4,
+        AddressSpace::Generic => 5,
+    }
+}
+
+const fn ownership_tag(value: ArgumentOwnership) -> u8 {
+    match value {
+        ArgumentOwnership::ByValue => 0,
+        ArgumentOwnership::SharedBorrow => 1,
+        ArgumentOwnership::UniqueBorrow => 2,
+        ArgumentOwnership::RawPointer => 3,
+    }
+}
+
+const fn alias_class_tag(value: AliasClass) -> u8 {
+    match value {
+        AliasClass::Value => 0,
+        AliasClass::SharedReadOnly => 1,
+        AliasClass::Exclusive => 2,
+        AliasClass::SharedAtomic => 3,
+        AliasClass::Unrestricted => 4,
+    }
+}
+
+fn digest_from_payload(digest: PayloadDigest) -> Digest {
+    Digest::from_bytes(*digest.bytes().as_bytes())
+}
+
+fn put_dimensions(bytes: &mut Vec<u8>, dimensions: fe2o3_artifacts::Dimensions) {
+    bytes.extend_from_slice(&dimensions.x().to_le_bytes());
+    bytes.extend_from_slice(&dimensions.y().to_le_bytes());
+    bytes.extend_from_slice(&dimensions.z().to_le_bytes());
+}
+
+fn digest_hex(digest: Digest) -> String {
+    let mut text = String::with_capacity(64);
+    for byte in digest.as_bytes() {
+        use std::fmt::Write as _;
+        write!(&mut text, "{byte:02x}").expect("writing to String cannot fail");
+    }
+    text
 }
 
 fn reviewed_identity(record: &ReviewedAlphaZetaExecutionV1, proof_capsule: Digest) -> Digest {
@@ -835,12 +1321,29 @@ fn sha256(bytes: &[u8]) -> Digest {
 pub enum AlphaZetaProofErrorV1 {
     Model(crate::ModelError),
     UnexpectedSourcePath,
-    SourceLengthOutOfRange { max: u64 },
+    SourceLengthOutOfRange {
+        max: u64,
+    },
     DuplicateSourcePath,
     IncompleteSourceSet,
     SourceMutation,
-    ZeroIdentity { field: &'static str },
-    IdentityMismatch { field: &'static str },
+    SourceRoleSubstitution,
+    SourceManifestMutation,
+    SourceManifestCapacity,
+    SourceManifestIo {
+        operation: &'static str,
+        path: String,
+    },
+    SourceManifestStructure {
+        path: String,
+        reason: String,
+    },
+    ZeroIdentity {
+        field: &'static str,
+    },
+    IdentityMismatch {
+        field: &'static str,
+    },
     UnexpectedTool,
     UnexpectedModel,
     NonceCollision,
@@ -871,6 +1374,22 @@ impl fmt::Display for AlphaZetaProofErrorV1 {
             Self::DuplicateSourcePath => formatter.write_str("duplicate alpha/zeta source path"),
             Self::IncompleteSourceSet => formatter.write_str("incomplete alpha/zeta source set"),
             Self::SourceMutation => formatter.write_str("alpha/zeta source bytes changed"),
+            Self::SourceRoleSubstitution => formatter.write_str("alpha/zeta source role changed"),
+            Self::SourceManifestMutation => {
+                formatter.write_str("alpha/zeta structural source manifest changed")
+            }
+            Self::SourceManifestCapacity => {
+                formatter.write_str("alpha/zeta structural source manifest exceeds its bound")
+            }
+            Self::SourceManifestIo { operation, path } => {
+                write!(formatter, "cannot {operation} alpha/zeta source {path}")
+            }
+            Self::SourceManifestStructure { path, reason } => {
+                write!(
+                    formatter,
+                    "invalid alpha/zeta source structure in {path}: {reason}"
+                )
+            }
             Self::ZeroIdentity { field } => write!(formatter, "{field} identity is zero"),
             Self::IdentityMismatch { field } => write!(formatter, "{field} identity differs"),
             Self::UnexpectedTool => formatter.write_str("unexpected alpha/zeta proof tool"),
