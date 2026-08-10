@@ -12,7 +12,11 @@ fn extract_kernel<P, S, A, Auth>(
     A: ReviewedHsaExecutableLifecycleAdapterV1,
     Auth: WorkerV2PrerequisiteAuthenticatorV1<S>,
 {
-    let Ok(authenticated) = selection.authenticate(authenticator) else {
+    let expected_identity = selection.artifact_identity().clone();
+    drop(selection);
+    let Ok(authenticated) = loaded
+        .authenticate_typed_kernel_once::<S, _>(&expected_identity, authenticator)
+    else {
         return;
     };
     let Ok(resolved) = authenticated.resolve(loaded) else {

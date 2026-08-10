@@ -1,5 +1,5 @@
 error[E0599]: no method named `clone` found for struct `fe2o3_host::hsa_executable_lifecycle::HsaCompletedSelectedWorkerV2DispatchV1<K>` in the current scope
-  --> tests/ui/hsa_executable_lifecycle/completed_selected_dispatch_cannot_clone.rs:34:32
+  --> tests/ui/hsa_executable_lifecycle/completed_selected_dispatch_cannot_clone.rs:38:32
    |
-34 |     let _duplicate = completed.clone();
+38 |     let _duplicate = completed.clone();
    |                                ^^^^^ method not found in `fe2o3_host::hsa_executable_lifecycle::HsaCompletedSelectedWorkerV2DispatchV1<S>`

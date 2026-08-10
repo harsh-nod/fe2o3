@@ -1,14 +1,14 @@
 error[E0133]: call to unsafe function `fe2o3_host::hsa_executable_lifecycle::ResolvedLoadedWorkerV2KernelSelectionV1::<'_, P, K, A>::dispatch_generated_and_wait` is unsafe and requires unsafe block
-  --> tests/ui/hsa_executable_lifecycle/selected_dispatch_requires_unsafe.rs:23:22
+  --> tests/ui/hsa_executable_lifecycle/selected_dispatch_requires_unsafe.rs:27:22
    |
-23 |       let _completed = resolved.dispatch_generated_and_wait(
+27 |       let _completed = resolved.dispatch_generated_and_wait(
    |  ______________________^
-24 | |         HsaLaunchGeometryV1::new([1, 1, 1], [256, 1, 1], 0),
-25 | |         kernarg,
-26 | |         48,
-27 | |         48,
-28 | |         256,
-29 | |     );
+28 | |         HsaLaunchGeometryV1::new([1, 1, 1], [256, 1, 1], 0),
+29 | |         kernarg,
+30 | |         48,
+31 | |         48,
+32 | |         256,
+33 | |     );
    | |_____^ call to unsafe function
    |
    = note: consult the function's documentation for information on how to avoid undefined behavior

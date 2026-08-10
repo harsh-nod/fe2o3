@@ -1,5 +1,5 @@
 error[E0599]: no method named `clone` found for struct `fe2o3_host::hsa_executable_lifecycle::ResolvedLoadedWorkerV2KernelSelectionV1<'loaded, P, K, A>` in the current scope
-  --> tests/ui/hsa_executable_lifecycle/resolved_typed_selection_cannot_clone.rs:21:31
+  --> tests/ui/hsa_executable_lifecycle/resolved_typed_selection_cannot_clone.rs:25:31
    |
-21 |     let _duplicate = resolved.clone();
+25 |     let _duplicate = resolved.clone();
    |                               ^^^^^ method not found in `fe2o3_host::hsa_executable_lifecycle::ResolvedLoadedWorkerV2KernelSelectionV1<'_, P, S, A>`
