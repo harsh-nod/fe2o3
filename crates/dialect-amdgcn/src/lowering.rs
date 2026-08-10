@@ -5,9 +5,11 @@ use std::fmt::Write as _;
 
 use fe2o3_kernel_descriptor::Gfx942LaunchBoundsV1;
 use fe2o3_kernel_ir::{
+    AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAME, AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAMESPACE,
     AMDGPU_GFX942_INLINE_ASSEMBLY_CAPABILITY_NAME,
     AMDGPU_GFX942_INLINE_ASSEMBLY_CAPABILITY_NAMESPACE, AddressSpace as KernelAddressSpace,
-    AssemblyConstraint, AssemblyOperandKind, AssemblyOption, Atomic, AtomicKind, Axis,
+    AmdGpuDiagnosticOperation, AssemblyConstraint, AssemblyOperandKind, AssemblyOption, Atomic,
+    AtomicKind, Axis,
     BF16_F32_M16N16K16_CAPABILITY, BasicBlock, BinaryOp, BlockId, CastKind, ComparePredicate,
     Constant, DiagnosticCode as VerificationDiagnosticCode, F32MathFunction, F32MathImplementation,
     FloatConversionKind, FloatOperation, Function, FunctionId, FunctionRole, IndexKind,
@@ -46,6 +48,10 @@ impl LoweringTarget {
     }
 
     const fn supports_gfx942_matrix(self) -> bool {
+        matches!(self, Self::Gfx942StrictFloatV1)
+    }
+
+    const fn supports_gfx942_diagnostics(self) -> bool {
         matches!(self, Self::Gfx942StrictFloatV1)
     }
 
@@ -113,6 +119,7 @@ pub enum LoweringDiagnosticCode {
     UnsupportedWorkgroupMemory,
     UnsupportedWaveOperation,
     UnsupportedFloatOperation,
+    UnsupportedDiagnosticOperation,
     UnsupportedInlineAssembly,
     UnsupportedMatrixOperation,
     UnsupportedAssemblyInstruction,
@@ -598,6 +605,9 @@ fn lower_compiler_module_to_llvm_ir_for_target(
             continue;
         }
         if FloatOperation::from_intrinsic_id(&function.id).is_some() {
+            continue;
+        }
+        if AmdGpuDiagnosticOperation::from_intrinsic_id(&function.id).is_some() {
             continue;
         }
         let location = LoweringLocation::device_function(module, function);
@@ -1365,6 +1375,60 @@ fn validate_convergent_cfg(lowerer: &FunctionLowerer<'_>) -> Result<(), Lowering
 }
 
 #[derive(Default)]
+struct DiagnosticRequirements {
+    clock: bool,
+    trap: bool,
+    debugtrap: bool,
+}
+
+impl DiagnosticRequirements {
+    fn collect<'a>(lowerers: impl Iterator<Item = &'a FunctionLowerer<'a>>) -> Self {
+        let mut requirements = Self::default();
+        for lowerer in lowerers {
+            let body = lowerer.function.body.as_ref().expect("definition required");
+            for operation in body.blocks.iter().flat_map(|block| &block.operations) {
+                let OperationKind::Call { callee, arguments } = &operation.kind else {
+                    continue;
+                };
+                let Some(diagnostic) =
+                    AmdGpuDiagnosticOperation::from_intrinsic_call(callee, arguments)
+                else {
+                    continue;
+                };
+                match diagnostic {
+                    AmdGpuDiagnosticOperation::Clock32 => requirements.clock = true,
+                    AmdGpuDiagnosticOperation::Trap
+                    | AmdGpuDiagnosticOperation::AssertFail { .. } => requirements.trap = true,
+                    AmdGpuDiagnosticOperation::DebugTrap => requirements.debugtrap = true,
+                    AmdGpuDiagnosticOperation::ProfilingMarker { .. }
+                    | AmdGpuDiagnosticOperation::Print { .. } => {}
+                }
+            }
+        }
+        requirements
+    }
+
+    const fn is_empty(&self) -> bool {
+        !self.clock && !self.trap && !self.debugtrap
+    }
+}
+
+fn emit_diagnostic_declarations(
+    output: &mut dyn fmt::Write,
+    requirements: &DiagnosticRequirements,
+) {
+    if requirements.clock {
+        writeln!(output, "declare i64 @llvm.amdgcn.s.memrealtime()").unwrap();
+    }
+    if requirements.trap {
+        writeln!(output, "declare void @llvm.trap()").unwrap();
+    }
+    if requirements.debugtrap {
+        writeln!(output, "declare void @llvm.debugtrap()").unwrap();
+    }
+}
+
+#[derive(Default)]
 struct FloatRequirements {
     conversions: BTreeSet<FloatConversionKind>,
     widened_binary: BTreeSet<WidenedFloatBinaryOp>,
@@ -1880,6 +1944,7 @@ fn emit_compiler_module(
     let intrinsics = collect_intrinsic_declarations(kernels.iter().chain(helpers));
     let memcpy_address_spaces = collect_memcpy_declarations(kernels.iter().chain(helpers));
     let float_requirements = FloatRequirements::collect(kernels.iter().chain(helpers));
+    let diagnostic_requirements = DiagnosticRequirements::collect(kernels.iter().chain(helpers));
     let has_readnone = intrinsics
         .values()
         .any(|declaration| declaration.attribute == IntrinsicAttribute::ReadNone);
@@ -1922,6 +1987,7 @@ fn emit_compiler_module(
         .unwrap();
     }
     emit_float_support_declarations(&mut output, &float_requirements);
+    emit_diagnostic_declarations(&mut output, &diagnostic_requirements);
     for function in declarations {
         writeln!(
             output,
@@ -1936,6 +2002,7 @@ fn emit_compiler_module(
         || !memcpy_address_spaces.is_empty()
         || !declarations.is_empty()
         || !float_requirements.is_empty()
+        || !diagnostic_requirements.is_empty()
     {
         writeln!(output).unwrap();
     }
@@ -2286,6 +2353,10 @@ fn validate_capabilities(
                         name.as_str(),
                         BF16_F32_M16N16K16_CAPABILITY | LDS_TILE_16X16_XOR4_CAPABILITY
                     ) => {}
+            TargetCapability::Extension { namespace, name }
+                if target.supports_gfx942_diagnostics()
+                    && namespace == AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAMESPACE
+                    && name == AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAME => {}
             _ => {
                 return Err(LoweringErrors::one(
                     location,
@@ -2481,9 +2552,15 @@ impl<'a> FunctionLowerer<'a> {
             OperationKind::Call { callee, arguments }
                 if FloatOperation::from_intrinsic_call(callee, arguments).is_some()
         );
+        let is_diagnostic = matches!(
+            &operation.kind,
+            OperationKind::Call { callee, arguments }
+                if AmdGpuDiagnosticOperation::from_intrinsic_call(callee, arguments).is_some()
+        );
         let is_inline_assembly = matches!(operation.kind, OperationKind::InlineAssembly(_));
         let is_matrix = matches!(operation.kind, OperationKind::Matrix(_));
         if !is_float
+            && !is_diagnostic
             && !is_inline_assembly
             && !is_matrix
             && !matches!(
@@ -2515,6 +2592,11 @@ impl<'a> FunctionLowerer<'a> {
                     capability,
                     TargetCapability::Extension { namespace, .. }
                         if namespace == MATRIX_CAPABILITY_NAMESPACE
+                ) || matches!(
+                    capability,
+                    TargetCapability::Extension { namespace, name }
+                        if namespace == AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAMESPACE
+                            && name == AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAME
                 )
             })
         {
@@ -2995,7 +3077,11 @@ impl<'a> FunctionLowerer<'a> {
                 ));
             }
             OperationKind::Call { callee, arguments } => {
-                if let Some(float) = FloatOperation::from_intrinsic_call(callee, arguments) {
+                if let Some(diagnostic) =
+                    AmdGpuDiagnosticOperation::from_intrinsic_call(callee, arguments)
+                {
+                    self.validate_diagnostic(&diagnostic, &location)?;
+                } else if let Some(float) = FloatOperation::from_intrinsic_call(callee, arguments) {
                     self.validate_float(&float, &location)?;
                 } else if self.call_symbols.is_some() {
                     self.validate_call(callee, arguments, operation, &location)?;
@@ -3111,6 +3197,82 @@ impl<'a> FunctionLowerer<'a> {
             }
         }
         Ok(())
+    }
+
+    fn validate_diagnostic(
+        &self,
+        diagnostic: &AmdGpuDiagnosticOperation,
+        location: &LoweringLocation,
+    ) -> Result<(), LoweringErrors> {
+        if !self.target.supports_gfx942_diagnostics() {
+            return Err(LoweringErrors::one(
+                location.clone(),
+                LoweringDiagnosticCode::UnsupportedDiagnosticOperation,
+                "device diagnostics are admitted only by the exact gfx942 profile",
+            ));
+        }
+        let require_constant = |value, field: &str| {
+            self.constant_u32(value).ok_or_else(|| {
+                LoweringErrors::one(
+                    location.clone(),
+                    LoweringDiagnosticCode::UnsupportedDiagnosticOperation,
+                    format!("{field} must be a compile-time u32 constant"),
+                )
+            })
+        };
+        match diagnostic {
+            AmdGpuDiagnosticOperation::ProfilingMarker { marker } => {
+                let marker = require_constant(*marker, "profiling marker")?;
+                if marker > u32::from(u16::MAX) {
+                    return Err(LoweringErrors::one(
+                        location.clone(),
+                        LoweringDiagnosticCode::UnsupportedDiagnosticOperation,
+                        "profiling marker exceeds the gfx942 V1 16-bit range",
+                    ));
+                }
+            }
+            AmdGpuDiagnosticOperation::Print { format_id, .. } => {
+                if require_constant(*format_id, "diagnostic format identity")? == 0 {
+                    return Err(LoweringErrors::one(
+                        location.clone(),
+                        LoweringDiagnosticCode::UnsupportedDiagnosticOperation,
+                        "diagnostic format identity must be nonzero",
+                    ));
+                }
+            }
+            AmdGpuDiagnosticOperation::AssertFail { site_id, line } => {
+                if require_constant(*site_id, "assertion site identity")? == 0
+                    || require_constant(*line, "assertion source line")? == 0
+                {
+                    return Err(LoweringErrors::one(
+                        location.clone(),
+                        LoweringDiagnosticCode::UnsupportedDiagnosticOperation,
+                        "assertion site identity and source line must be nonzero",
+                    ));
+                }
+            }
+            AmdGpuDiagnosticOperation::Clock32
+            | AmdGpuDiagnosticOperation::Trap
+            | AmdGpuDiagnosticOperation::DebugTrap => {}
+        }
+        Ok(())
+    }
+
+    fn constant_u32(&self, value: ValueId) -> Option<u32> {
+        self.function
+            .body
+            .as_ref()?
+            .blocks
+            .iter()
+            .flat_map(|block| &block.operations)
+            .find_map(|operation| {
+                (operation.results.first().map(|result| result.id) == Some(value))
+                    .then(|| match operation.kind {
+                        OperationKind::Constant(Constant::U32(value)) => Some(value),
+                        _ => None,
+                    })
+                    .flatten()
+            })
     }
 
     fn validate_inline_assembly(
@@ -3959,6 +4121,12 @@ impl<'a> FunctionLowerer<'a> {
                 .unwrap();
             }
             OperationKind::Call { callee, arguments } => {
+                if let Some(diagnostic) =
+                    AmdGpuDiagnosticOperation::from_intrinsic_call(callee, arguments)
+                {
+                    self.emit_diagnostic(output, result_name.as_deref(), &diagnostic);
+                    return Ok(());
+                }
                 if let Some(float) = FloatOperation::from_intrinsic_call(callee, arguments) {
                     self.emit_float(
                         output,
@@ -4515,6 +4683,88 @@ impl<'a> FunctionLowerer<'a> {
                 )
                 .unwrap();
             }
+        }
+    }
+
+    fn emit_diagnostic(
+        &self,
+        output: &mut dyn fmt::Write,
+        result: Option<&str>,
+        diagnostic: &AmdGpuDiagnosticOperation,
+    ) {
+        match diagnostic {
+            AmdGpuDiagnosticOperation::Clock32 => {
+                let result = result.expect("validated clock result");
+                writeln!(
+                    output,
+                    "  {result}.i64 = call i64 @llvm.amdgcn.s.memrealtime()"
+                )
+                .unwrap();
+                writeln!(output, "  {result} = trunc i64 {result}.i64 to i32").unwrap();
+            }
+            AmdGpuDiagnosticOperation::Trap => {
+                writeln!(output, "  call void @llvm.trap()").unwrap();
+            }
+            AmdGpuDiagnosticOperation::DebugTrap => {
+                writeln!(output, "  call void @llvm.debugtrap()").unwrap();
+            }
+            AmdGpuDiagnosticOperation::ProfilingMarker { marker } => {
+                Self::emit_marker_word(
+                    output,
+                    self.constant_u32(*marker).expect("validated marker"),
+                    false,
+                );
+            }
+            AmdGpuDiagnosticOperation::Print {
+                format_id,
+                arguments,
+            } => {
+                Self::emit_marker_word(
+                    output,
+                    self.constant_u32(*format_id)
+                        .expect("validated format identity"),
+                    true,
+                );
+                for argument in arguments {
+                    let value = self.value(*argument).0;
+                    writeln!(
+                        output,
+                        "  call void asm sideeffect \"s_nop 0\", \"v\"(i32 {value})"
+                    )
+                    .unwrap();
+                }
+            }
+            AmdGpuDiagnosticOperation::AssertFail { site_id, line } => {
+                Self::emit_marker_word(
+                    output,
+                    self.constant_u32(*site_id)
+                        .expect("validated assertion site"),
+                    true,
+                );
+                Self::emit_marker_word(
+                    output,
+                    self.constant_u32(*line).expect("validated assertion line"),
+                    true,
+                );
+                writeln!(output, "  call void @llvm.trap()").unwrap();
+            }
+        }
+    }
+
+    fn emit_marker_word(output: &mut dyn fmt::Write, value: u32, high_half: bool) {
+        writeln!(
+            output,
+            "  call void asm sideeffect \"s_nop {}\", \"\"()",
+            value & u32::from(u16::MAX)
+        )
+        .unwrap();
+        if high_half {
+            writeln!(
+                output,
+                "  call void asm sideeffect \"s_nop {}\", \"\"()",
+                value >> 16
+            )
+            .unwrap();
         }
     }
 
