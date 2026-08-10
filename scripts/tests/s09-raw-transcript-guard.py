@@ -6,7 +6,6 @@ from __future__ import annotations
 import ctypes
 import os
 import pathlib
-import shlex
 import signal
 import subprocess
 import tempfile
@@ -177,18 +176,35 @@ exit "${status}"
         self.assertFalse(self.raw.exists())
 
     def test_teardown_failure_overrides_status_and_deletes_raw(self) -> None:
+        launcher = self.directory / "failed-drain-launcher.py"
+        launcher.write_text(
+            """\
+import os
+import sys
+
+raw_fd = int(sys.argv[1])
+os.setsid()
+leader = os.getpid()
+print(f"ANCHOR {leader} {os.getpgrp()}", flush=True)
+print(f"READY {leader} {os.getpgrp()}", flush=True)
+assert sys.stdin.buffer.readline() == b"START\\n"
+os.write(raw_fd, b"raw output\\n")
+print("STATUS 0", flush=True)
+assert sys.stdin.buffer.readline() == b"DRAIN\\n"
+os.close(raw_fd)
+os._exit(125)
+""",
+            encoding="ascii",
+        )
         body = r"""
 set -Euo pipefail
 source "$1"
-s09_install_raw_transcript_guard "$2"
-kill() {
-  if [[ "${1:-}" == -KILL && "${3:-}" == -* ]]; then
-    builtin kill "$@" || true
-    return 1
-  fi
-  builtin kill "$@"
+TEST_LAUNCHER="$3"
+s09_guarded_launcher() {
+  exec /usr/bin/python3 "${TEST_LAUNCHER}" "$@"
 }
-s09_run_guarded_raw_command /bin/bash -c 'printf "raw output\n"'
+s09_install_raw_transcript_guard "$2"
+s09_run_guarded_raw_command /bin/true
 status=$?
 [[ ! -e "$2" && ! -L "$2" ]] || exit 124
 exit "${status}"
@@ -201,6 +217,7 @@ exit "${status}"
                 "raw-guard-teardown-failure-test",
                 str(GUARD),
                 str(self.raw),
+                str(launcher),
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -342,50 +359,49 @@ s09_run_guarded_raw_command /bin/true
 
     def test_protocol_failure_drains_verified_group_and_deletes_raw(self) -> None:
         marker = self.directory / "protocol-descendant.pid"
-        helper = self.directory / "protocol-descendant.py"
-        wrapper = self.directory / "invalid-status-supervisor.sh"
-        helper.write_text(
+        launcher = self.directory / "invalid-status-launcher.py"
+        launcher.write_text(
             """\
 import os
-import pathlib
 import signal
 import sys
+import time
 
-signal.signal(signal.SIGTERM, signal.SIG_IGN)
-pathlib.Path(sys.argv[1]).write_text(
-    f"{os.getpid()} {sys.argv[2]}\\n", encoding="ascii"
-)
-while True:
-    signal.pause()
-""",
-            encoding="ascii",
-        )
-        wrapper.write_text(
-            f"""\
-source {shlex.quote(str(GUARD))}
-s09_guarded_group_supervisor() {{
-  local supervisor_pgid
-  local cancelled=0
-  local proceed=0
-  trap 'cancelled=1' HUP INT TERM
-  trap 'proceed=1' USR1
-  supervisor_pgid="$(/usr/bin/ps -o pgid= -p "${{BASHPID}}" | /usr/bin/tr -d '[:space:]')"
-  [[ "${{supervisor_pgid}}" == "${{BASHPID}}" ]] || return 125
-  printf 'READY %s %s\\n' "${{BASHPID}}" "${{supervisor_pgid}}"
-  while ((proceed == 0 && cancelled == 0)); do :; done
-  ((cancelled == 0)) || s09_hold_guarded_group
-  /usr/bin/python3 {shlex.quote(str(helper))} {shlex.quote(str(marker))} "${{supervisor_pgid}}" &
-  while [[ ! -e {shlex.quote(str(marker))} ]]; do :; done
-  printf 'INVALID-STATUS\\n'
-  s09_hold_guarded_group
-}}
+raw_fd = int(sys.argv[1])
+marker = sys.argv[-1]
+os.setsid()
+signal.signal(signal.SIGTERM, lambda _signum, _frame: None)
+leader = os.getpid()
+group = os.getpgrp()
+print(f"ANCHOR {leader} {group}", flush=True)
+print(f"READY {leader} {group}", flush=True)
+assert sys.stdin.buffer.readline() == b"START\\n"
+descendant = os.fork()
+if descendant == 0:
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    with open(marker, "w", encoding="ascii") as output:
+        output.write(f"{os.getpid()} {group}\\n")
+    while True:
+        signal.pause()
+while not os.path.exists(marker):
+    time.sleep(0.005)
+print("INVALID-STATUS", flush=True)
+assert sys.stdin.buffer.readline() == b"DRAIN\\n"
+os.close(raw_fd)
+os.killpg(group, signal.SIGTERM)
+time.sleep(0.05)
+os.killpg(group, signal.SIGKILL)
 """,
             encoding="ascii",
         )
         body = r"""
 set -Eeuo pipefail
 source "$1"
-S09_RAW_GUARD_SOURCE="$3"
+TEST_LAUNCHER="$3"
+TEST_MARKER="$4"
+s09_guarded_launcher() {
+  exec /usr/bin/python3 "${TEST_LAUNCHER}" "$@" "${TEST_MARKER}"
+}
 s09_install_raw_transcript_guard "$2"
 s09_run_guarded_raw_command /bin/true
 """
@@ -402,7 +418,8 @@ s09_run_guarded_raw_command /bin/true
                     "raw-guard-protocol-test",
                     str(GUARD),
                     str(self.raw),
-                    str(wrapper),
+                    str(launcher),
+                    str(marker),
                 ],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -502,115 +519,130 @@ s09_run_guarded_raw_command /bin/true
                 self.set_child_subreaper(previous_subreaper)
         self.assertIn(child_pgid, reaped)
 
-    def test_pre_ready_cancellation_unlinks_before_runner_can_be_killed(self) -> None:
-        previous_subreaper = self.child_subreaper_state()
-        marker = self.directory / "supervisor.pid"
-        wrapper = self.directory / "stalled-supervisor.sh"
-        wrapper.write_text(
-            f"""\
-source {shlex.quote(str(GUARD))}
-s09_guarded_group_supervisor() {{
-  local supervisor_pgid
-  supervisor_pgid="$(/usr/bin/ps -o pgid= -p "${{BASHPID}}" | /usr/bin/tr -d '[:space:]')"
-  [[ "${{supervisor_pgid}}" == "${{BASHPID}}" ]] || return 125
-  printf '%s\\n' "${{BASHPID}}" >{shlex.quote(str(marker))}
-  kill -STOP -- "${{BASHPID}}"
-  return 125
-}}
+    def test_pre_ready_hup_int_and_term_drain_without_external_cleanup(self) -> None:
+        marker = self.directory / "pre-ready.pid"
+        launcher = self.directory / "pre-ready-launcher.py"
+        launcher.write_text(
+            """\
+import os
+import signal
+import sys
+import time
+
+raw_fd = int(sys.argv[1])
+marker = sys.argv[-1]
+os.setsid()
+signal.signal(signal.SIGTERM, lambda _signum, _frame: None)
+leader = os.getpid()
+group = os.getpgrp()
+print(f"ANCHOR {leader} {group}", flush=True)
+with open(marker, "w", encoding="ascii") as output:
+    output.write(f"{leader} {group}\\n")
+assert sys.stdin.buffer.readline() == b"DRAIN\\n"
+os.close(raw_fd)
+os.killpg(group, signal.SIGTERM)
+time.sleep(0.05)
+os.killpg(group, signal.SIGKILL)
 """,
             encoding="ascii",
         )
         body = r"""
 set -Eeuo pipefail
 source "$1"
-S09_RAW_GUARD_SOURCE="$3"
+TEST_LAUNCHER="$3"
+TEST_MARKER="$4"
+s09_guarded_launcher() {
+  exec /usr/bin/python3 "${TEST_LAUNCHER}" "$@" "${TEST_MARKER}"
+}
 s09_install_raw_transcript_guard "$2"
 s09_run_guarded_raw_command /bin/true
 """
-        process: subprocess.Popen[str] | None = None
-        supervisor_pid = 0
-        reaped: list[int] = []
-        self.set_child_subreaper(1)
-        try:
-            process = subprocess.Popen(
-                [
-                    "/bin/bash",
-                    "-c",
-                    body,
-                    "raw-guard-pre-ready-test",
-                    str(GUARD),
-                    str(self.raw),
-                    str(wrapper),
-                ],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-            deadline = time.monotonic() + 5
-            while not marker.exists() and time.monotonic() < deadline:
-                time.sleep(0.005)
-            self.assertTrue(marker.exists(), "supervisor did not stop before READY")
-            supervisor_pid = int(marker.read_text(encoding="ascii"))
-            self.assertTrue(self.raw.exists(), "test did not observe the pre-READY raw path")
-
-            os.kill(process.pid, signal.SIGTERM)
-            self.wait_for_raw_unlink(timeout=0.1)
-            os.kill(process.pid, signal.SIGKILL)
-            self.assertEqual(process.wait(timeout=3), -signal.SIGKILL)
-            time.sleep(0.05)
-            self.assertFalse(self.raw.exists())
-        finally:
-            try:
-                if process is not None and process.poll() is None:
-                    process.kill()
-                    process.wait(timeout=3)
-                if supervisor_pid != 0:
-                    try:
-                        os.killpg(supervisor_pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                reaped = self.reap_all_adopted_children()
-            finally:
-                if process is not None:
+        for caught, expected in (
+            (signal.SIGHUP, 129),
+            (signal.SIGINT, 130),
+            (signal.SIGTERM, 143),
+        ):
+            with self.subTest(signal=caught):
+                marker.unlink(missing_ok=True)
+                process = subprocess.Popen(
+                    [
+                        "/bin/bash",
+                        "-c",
+                        body,
+                        "raw-guard-pre-ready-test",
+                        str(GUARD),
+                        str(self.raw),
+                        str(launcher),
+                        str(marker),
+                    ],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                try:
+                    self.wait_for_path(marker, "launcher did not anchor before READY")
+                    leader, group = map(
+                        int, marker.read_text(encoding="ascii").split()
+                    )
+                    self.assertTrue(self.raw.exists())
+                    started = time.monotonic()
+                    os.kill(process.pid, caught)
+                    self.wait_for_raw_unlink(timeout=0.1)
+                    _, stderr = process.communicate(timeout=3)
+                    self.assertEqual(process.returncode, expected, stderr)
+                    self.assertLess(time.monotonic() - started, 2.0)
+                    with self.assertRaises(ProcessLookupError):
+                        os.kill(leader, 0)
+                    with self.assertRaises(ProcessLookupError):
+                        os.killpg(group, 0)
+                    self.assertFalse(self.raw.exists())
+                finally:
+                    if process.poll() is None:
+                        process.kill()
+                        process.wait(timeout=3)
                     if process.stdout is not None:
                         process.stdout.close()
                     if process.stderr is not None:
                         process.stderr.close()
-                self.set_child_subreaper(previous_subreaper)
-        self.assertIn(supervisor_pid, reaped)
 
-    def test_no_group_operation_occurs_after_supervisor_reap(self) -> None:
+    def test_recycled_identity_is_never_signalled_after_launcher_reap(self) -> None:
         body = r"""
 set -Eeuo pipefail
 source "$1"
 reaped=0
 kill() {
-  if ((reaped != 0)); then
-    printf 'numeric operation after reap: %s\n' "$*" >&2
-    return 99
-  fi
-  printf 'KILL %s\n' "$*"
+  printf 'forbidden numeric operation (reaped=%s): %s\n' "${reaped}" "$*" >&2
+  return 99
 }
 wait() {
+  local status
+  builtin wait "$@" || status=$?
+  status="${status:-0}"
   reaped=1
-  printf 'WAIT %s\n' "$*"
+  S09_GUARDED_CHILD_PID=424242
+  return "${status}"
 }
-S09_GUARDED_CHILD_PID=424242
-S09_GUARDED_GROUP_VERIFIED=1
-s09_stop_guarded_group
+s09_install_raw_transcript_guard "$2"
+s09_run_guarded_raw_command /bin/true
 [[ "${reaped}" == 1 ]]
 """
         completed = subprocess.run(
-            ["/bin/bash", "-c", body, "raw-guard-reap-test", str(GUARD)],
+            [
+                "/bin/bash",
+                "-c",
+                body,
+                "raw-guard-recycled-identity-test",
+                str(GUARD),
+                str(self.raw),
+            ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             check=False,
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        operations = completed.stdout.splitlines()
-        self.assertEqual(operations[-1], "WAIT 424242")
-        self.assertNotIn("numeric operation after reap", completed.stderr)
+        self.assertNotIn("forbidden numeric operation", completed.stderr)
+        self.assertFalse(self.raw.exists())
 
 
 if __name__ == "__main__":
