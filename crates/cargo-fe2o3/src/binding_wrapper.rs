@@ -33,7 +33,7 @@ use reserved_fe2o3_symbols::{
 use sha2::{Digest, Sha256};
 
 use crate::capability_broker;
-use crate::pinned_codegen_backend::{PinCodegenBackendError, PinnedCodegenBackend};
+use crate::pinned_codegen_backend::PinnedCodegenBackend;
 use crate::pinned_executable::{PinExecutableError, PinnedExecutable};
 use crate::project::PinnedDirectory;
 use crate::worker_v2::{
@@ -140,9 +140,7 @@ pub(crate) enum BindingWrapperError {
     MissingManagedEnvironment(&'static str),
     InvalidBuildSession,
     InvalidManagedRustcArguments(&'static str),
-    ManagedBackend(PinCodegenBackendError),
     PinnedExecutable(PinExecutableError),
-    ManagedArtifact(String),
     CapabilityBroker(String),
     ChildCapability(String),
     UninspectableRustcResponseFile {
@@ -192,17 +190,8 @@ impl fmt::Display for BindingWrapperError {
             Self::InvalidManagedRustcArguments(reason) => {
                 write!(formatter, "invalid {MANAGED_RUSTC_ARGS_ENV}: {reason}")
             }
-            Self::ManagedBackend(error) => {
-                write!(formatter, "failed to pin managed codegen backend: {error}")
-            }
             Self::PinnedExecutable(error) => {
                 write!(formatter, "failed to pin rustc executable: {error}")
-            }
-            Self::ManagedArtifact(error) => {
-                write!(
-                    formatter,
-                    "failed to pin managed artifact directory: {error}"
-                )
             }
             Self::CapabilityBroker(error) => {
                 write!(formatter, "failed to receive managed capabilities: {error}")
@@ -271,7 +260,6 @@ impl Error for BindingWrapperError {
             Self::WorkerV2Configuration(error) => Some(error),
             Self::WorkerV2Restart(error) => Some(error),
             Self::Artifact(error) => Some(error),
-            Self::ManagedBackend(error) => Some(error),
             Self::PinnedExecutable(error) => Some(error),
             Self::ManagedCompletion { cleanup, .. } => cleanup
                 .as_ref()
@@ -283,7 +271,6 @@ impl Error for BindingWrapperError {
             | Self::MissingManagedEnvironment(_)
             | Self::InvalidBuildSession
             | Self::InvalidManagedRustcArguments(_)
-            | Self::ManagedArtifact(_)
             | Self::CapabilityBroker(_)
             | Self::ChildCapability(_)
             | Self::UninspectableRustcResponseFile { .. }
@@ -331,13 +318,22 @@ pub(crate) fn run(argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperError
     ) = match invocation {
         RustcInvocationV2::Compile(compile) => {
             let managed_rustc_args = managed_rustc_args_from_environment()?;
-            let compiler_capabilities = CompilerCapabilities::from_environment()?;
             let metadata = ordered_metadata_values(compile.argv())?;
             let build_observation =
                 CompileBuildObservationV2::from_ordered_metadata(compile.crate_name(), &metadata)?;
             let worker_v2 = PreparedWorkerV2Config::from_environment()
                 .map_err(BindingWrapperError::WorkerV2Configuration)?;
             validate_expected_worker_v2_identity(worker_v2.as_ref())?;
+            let capability_profile = if worker_v2
+                .as_ref()
+                .and_then(PreparedWorkerV2Config::source_debug_profile)
+                .is_some()
+            {
+                capability_broker::CapabilityProfileV1::S09
+            } else {
+                capability_broker::CapabilityProfileV1::Ordinary
+            };
+            let compiler_capabilities = CompilerCapabilities::from_environment(capability_profile)?;
             let current_dir =
                 std::env::current_dir().map_err(BindingWrapperError::CurrentDirectory)?;
             let managed = if worker_v2.as_ref().is_some_and(|config| {
@@ -412,21 +408,20 @@ pub(crate) fn run(argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperError
                 .env_remove(WORKER_V2_SOURCE_DEBUG_PROFILE_ENV);
         }
     }
-    let mut worker_build_observation = managed_attempt
-        .as_ref()
-        .map(|managed| {
+    let mut worker_build_observation = match managed_attempt.as_ref() {
+        Some(managed) if managed.source_debug_profile().is_some() => {
             let pinned_cargo_image_sha256 = compiler_capabilities
                 .as_ref()
-                .map(CompilerCapabilities::pinned_cargo_image_sha256)
+                .and_then(CompilerCapabilities::pinned_cargo_image_sha256)
                 .ok_or_else(|| {
                     BindingWrapperError::BuildObservation(
                         "S09 build has no brokered pinned Cargo image observation".to_owned(),
                     )
                 })?;
-            managed.worker_build_observation(pinned_cargo_image_sha256)
-        })
-        .transpose()?
-        .flatten();
+            managed.worker_build_observation(pinned_cargo_image_sha256)?
+        }
+        Some(_) | None => None,
+    };
     if worker_build_observation.is_some() {
         let managed = managed_attempt.as_ref().ok_or_else(|| {
             BindingWrapperError::BuildObservation(
@@ -1281,30 +1276,23 @@ struct CompilerCapabilities {
     backend: PinnedCodegenBackend,
     artifact: PinnedDirectory,
     output_dir: PathBuf,
-    pinned_cargo_image_sha256: [u8; 32],
+    pinned_cargo_image_sha256: Option<[u8; 32]>,
 }
 
 impl CompilerCapabilities {
-    fn from_environment() -> Result<Self, BindingWrapperError> {
-        let transferred = capability_broker::receive(managed_build_session()?)
+    fn from_environment(
+        profile: capability_broker::CapabilityProfileV1,
+    ) -> Result<Self, BindingWrapperError> {
+        let transferred = capability_broker::receive(managed_build_session()?, profile)
             .map_err(BindingWrapperError::CapabilityBroker)?;
-        let backend = PinnedCodegenBackend::from_transferred_file(transferred.backend)
-            .map_err(BindingWrapperError::ManagedBackend)?;
-        let artifact = PinnedDirectory::from_transferred_file(
-            transferred.artifact,
-            "artifact output directory",
-        )
-        .map_err(BindingWrapperError::ManagedArtifact)?;
-        let pinned_cargo_image = PinnedExecutable::from_transferred_file(
-            transferred.pinned_cargo_image,
-            PathBuf::from("<brokered pinned Cargo image observation>"),
-        )?;
-        let pinned_cargo_image_sha256 = *pinned_cargo_image.sha256();
-        drop(pinned_cargo_image);
-        let output_dir = artifact.child_path();
+        let pinned_cargo_image_sha256 = transferred
+            .pinned_cargo_image
+            .as_ref()
+            .map(|image| *image.sha256());
+        let output_dir = transferred.artifact.child_path();
         Ok(Self {
-            backend,
-            artifact,
+            backend: transferred.backend,
+            artifact: transferred.artifact,
             output_dir,
             pinned_cargo_image_sha256,
         })
@@ -1314,7 +1302,7 @@ impl CompilerCapabilities {
         &self.output_dir
     }
 
-    const fn pinned_cargo_image_sha256(&self) -> [u8; 32] {
+    const fn pinned_cargo_image_sha256(&self) -> Option<[u8; 32]> {
         self.pinned_cargo_image_sha256
     }
 

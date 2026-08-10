@@ -2,9 +2,10 @@
 //!
 //! Cargo receives only an abstract-socket endpoint and build-session binding. The broker checks
 //! Linux peer credentials and the exact `cargo-fe2o3` executable identity before transferring a
-//! sealed backend image and a read-only artifact-directory descriptor with `SCM_RIGHTS`.
-//! Receivers independently validate both descriptors before installing them in the
-//! caller-selected compiler process for a compile-shaped wrapper invocation.
+//! sealed backend image and a read-only artifact-directory descriptor with `SCM_RIGHTS`. The
+//! explicit S09 profile additionally receives an observed pinned Cargo image. Receivers validate
+//! the exact profile-specific descriptor count and positional types before installing capabilities
+//! in the caller-selected compiler process for a compile-shaped wrapper invocation.
 //!
 //! This boundary prevents accidental descriptor inheritance through Cargo and pathname
 //! substitution between orchestration and rustc. It is not an OS sandbox against project code or
@@ -42,9 +43,40 @@ mod platform {
 
     pub(crate) const CAPABILITY_BROKER_ENV: &str = "FE2O3_CAPABILITY_BROKER_V1";
     const REQUEST_MAGIC: &[u8] = b"FE2O3-CARGO-CAPABILITY-BROKER-V1\0";
+    const S09_REQUEST_MAGIC: &[u8] = b"FE2O3-CARGO-CAPABILITY-BROKER-09\0";
+    const _: () = assert!(REQUEST_MAGIC.len() == S09_REQUEST_MAGIC.len());
     const ENDPOINT_BYTES: usize = 32;
     const ENDPOINT_HEX_BYTES: usize = ENDPOINT_BYTES * 2;
     const RECEIVED_DESCRIPTOR_FLOOR: i32 = 199;
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub(crate) enum CapabilityProfileV1 {
+        Ordinary,
+        S09,
+    }
+
+    impl CapabilityProfileV1 {
+        const fn request_magic(self) -> &'static [u8] {
+            match self {
+                Self::Ordinary => REQUEST_MAGIC,
+                Self::S09 => S09_REQUEST_MAGIC,
+            }
+        }
+
+        const fn descriptor_count(self) -> usize {
+            match self {
+                Self::Ordinary => 2,
+                Self::S09 => 3,
+            }
+        }
+
+        const fn name(self) -> &'static str {
+            match self {
+                Self::Ordinary => "ordinary",
+                Self::S09 => "S09",
+            }
+        }
+    }
 
     #[derive(Clone, Copy)]
     struct ExecutableIdentity {
@@ -144,32 +176,39 @@ mod platform {
     }
 
     pub(crate) struct BrokeredCapabilities {
-        pub(crate) backend: File,
-        pub(crate) artifact: File,
-        pub(crate) pinned_cargo_image: File,
+        pub(crate) backend: PinnedCodegenBackend,
+        pub(crate) artifact: PinnedDirectory,
+        pub(crate) pinned_cargo_image: Option<PinnedExecutable>,
     }
 
-    pub(crate) fn receive(session: BuildSession) -> Result<BrokeredCapabilities, String> {
+    pub(crate) fn receive(
+        session: BuildSession,
+        profile: CapabilityProfileV1,
+    ) -> Result<BrokeredCapabilities, String> {
         let endpoint = std::env::var(CAPABILITY_BROKER_ENV)
             .map_err(|_| format!("managed rustc invocation is missing {CAPABILITY_BROKER_ENV}"))?;
-        receive_from(&endpoint, session)
+        receive_from(&endpoint, session, profile)
     }
 
-    fn receive_from(endpoint: &str, session: BuildSession) -> Result<BrokeredCapabilities, String> {
+    fn receive_from(
+        endpoint: &str,
+        session: BuildSession,
+        profile: CapabilityProfileV1,
+    ) -> Result<BrokeredCapabilities, String> {
         let address = endpoint_address(endpoint)?;
         let mut stream = UnixStream::connect_addr(&address)
             .map_err(|error| format!("failed to connect to capability broker: {error}"))?;
         stream
             .set_read_timeout(Some(Duration::from_secs(2)))
             .map_err(|error| format!("failed to bound capability broker read: {error}"))?;
-        let request = request_bytes(session);
+        let request = request_bytes(session, profile);
         stream
             .write_all(&request)
             .map_err(|error| format!("failed to authenticate to capability broker: {error}"))?;
 
         let mut response = [0_u8; 1];
         let mut iov = [IoSliceMut::new(&mut response)];
-        let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(3))];
+        let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(4))];
         let mut ancillary = RecvAncillaryBuffer::new(&mut space);
         let message = recvmsg(&stream, &mut iov, &mut ancillary, RecvFlags::CMSG_CLOEXEC)
             .map_err(|error| format!("failed to receive brokered capabilities: {error}"))?;
@@ -185,24 +224,49 @@ mod platform {
                 descriptors.extend(received);
             }
         }
-        if descriptors.len() != 3 {
+        decode_received_descriptors(descriptors, profile)
+    }
+
+    fn decode_received_descriptors(
+        mut descriptors: Vec<OwnedFd>,
+        profile: CapabilityProfileV1,
+    ) -> Result<BrokeredCapabilities, String> {
+        if descriptors.len() != profile.descriptor_count() {
             return Err(format!(
-                "capability broker returned {} descriptors instead of three",
-                descriptors.len()
+                "capability broker returned {} descriptors instead of {} for the {} profile",
+                descriptors.len(),
+                profile.descriptor_count(),
+                profile.name(),
             ));
         }
-        let pinned_cargo_image = normalize_received_descriptor(
-            descriptors.pop().expect("descriptor count checked"),
-            "pinned Cargo image observation",
-        )?;
+        let pinned_cargo_image = if profile == CapabilityProfileV1::S09 {
+            let image = normalize_received_descriptor(
+                descriptors.pop().expect("S09 descriptor count checked"),
+                "pinned Cargo image observation",
+            )?;
+            Some(
+                PinnedExecutable::from_transferred_file(
+                    image,
+                    PathBuf::from("<brokered pinned Cargo image observation>"),
+                )
+                .map_err(|error| format!("invalid brokered pinned Cargo image: {error}"))?,
+            )
+        } else {
+            None
+        };
         let artifact = normalize_received_descriptor(
             descriptors.pop().expect("descriptor count checked"),
             "artifact directory",
         )?;
+        let artifact =
+            PinnedDirectory::from_transferred_file(artifact, "artifact output directory")
+                .map_err(|error| format!("invalid brokered artifact directory: {error}"))?;
         let backend = normalize_received_descriptor(
             descriptors.pop().expect("descriptor count checked"),
             "codegen backend",
         )?;
+        let backend = PinnedCodegenBackend::from_transferred_file(backend)
+            .map_err(|error| format!("invalid brokered codegen backend: {error}"))?;
         Ok(BrokeredCapabilities {
             backend,
             artifact,
@@ -273,22 +337,23 @@ mod platform {
         }
         let mut request = vec![0_u8; REQUEST_MAGIC.len() + 16];
         stream.read_exact(&mut request)?;
-        if request != request_bytes(session) {
-            return Err(io::Error::new(
+        let profile = request_profile(&request, session).ok_or_else(|| {
+            io::Error::new(
                 io::ErrorKind::PermissionDenied,
-                "capability broker request is not bound to this build session",
-            ));
-        }
+                "capability broker request is not bound to this build session and profile",
+            )
+        })?;
 
-        // SCM_RIGHTS preserves the open-file-description offset. Give each wrapper an
-        // independently opened description of the retained pinned image.
-        let pinned_cargo_image =
-            File::open(format!("/proc/self/fd/{}", pinned_cargo_image.as_raw_fd()))?;
-        let descriptors = [
-            backend.as_fd(),
-            artifact.as_fd(),
-            pinned_cargo_image.as_fd(),
-        ];
+        // SCM_RIGHTS preserves the open-file-description offset. Give each S09 wrapper an
+        // independently opened description of the retained pinned image. Ordinary V1 clients
+        // retain their historical two-descriptor response.
+        let pinned_cargo_image = (profile == CapabilityProfileV1::S09)
+            .then(|| File::open(format!("/proc/self/fd/{}", pinned_cargo_image.as_raw_fd())))
+            .transpose()?;
+        let mut descriptors = vec![backend.as_fd(), artifact.as_fd()];
+        if let Some(pinned_cargo_image) = &pinned_cargo_image {
+            descriptors.push(pinned_cargo_image.as_fd());
+        }
         let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(3))];
         let mut ancillary = SendAncillaryBuffer::new(&mut space);
         if !ancillary.push(SendAncillaryMessage::ScmRights(&descriptors)) {
@@ -311,11 +376,17 @@ mod platform {
         Ok(())
     }
 
-    fn request_bytes(session: BuildSession) -> Vec<u8> {
+    fn request_bytes(session: BuildSession, profile: CapabilityProfileV1) -> Vec<u8> {
         let mut request = Vec::with_capacity(REQUEST_MAGIC.len() + 16);
-        request.extend_from_slice(REQUEST_MAGIC);
+        request.extend_from_slice(profile.request_magic());
         request.extend_from_slice(session.as_bytes());
         request
+    }
+
+    fn request_profile(request: &[u8], session: BuildSession) -> Option<CapabilityProfileV1> {
+        [CapabilityProfileV1::Ordinary, CapabilityProfileV1::S09]
+            .into_iter()
+            .find(|profile| request == request_bytes(session, *profile))
     }
 
     fn endpoint_address(endpoint: &str) -> Result<SocketAddr, String> {
@@ -409,24 +480,14 @@ mod platform {
             fs::rename(&original_artifact, &moved_artifact).unwrap();
             fs::create_dir(&original_artifact).unwrap();
 
-            let transferred = receive_from(broker.endpoint(), session).unwrap();
-            assert!(transferred.backend.as_raw_fd() >= RECEIVED_DESCRIPTOR_FLOOR);
-            assert!(transferred.artifact.as_raw_fd() >= RECEIVED_DESCRIPTOR_FLOOR);
-            assert!(transferred.pinned_cargo_image.as_raw_fd() >= RECEIVED_DESCRIPTOR_FLOOR);
-            let transferred_cargo = PinnedExecutable::from_transferred_file(
-                transferred.pinned_cargo_image,
-                PathBuf::from("<test pinned Cargo image observation>"),
-            )
-            .unwrap();
+            let transferred =
+                receive_from(broker.endpoint(), session, CapabilityProfileV1::S09).unwrap();
+            let transferred_cargo = transferred
+                .pinned_cargo_image
+                .expect("S09 transfer has a pinned Cargo image");
             assert_eq!(transferred_cargo.sha256(), &cargo_sha);
-            let transferred_backend =
-                PinnedCodegenBackend::from_transferred_file(transferred.backend).unwrap();
-            assert_eq!(transferred_backend.sha256(), &backend_sha);
-            let transferred_artifact = PinnedDirectory::from_transferred_file(
-                transferred.artifact,
-                "transferred test artifact",
-            )
-            .unwrap();
+            assert_eq!(transferred.backend.sha256(), &backend_sha);
+            let transferred_artifact = transferred.artifact;
             let source = PathBuf::from("/src/broker_probe.rs");
             let producer = ProducerIdentity::from_codegen("broker_probe", Some(&source)).unwrap();
             begin_build_attempt(
@@ -442,6 +503,76 @@ mod platform {
         }
 
         #[test]
+        fn ordinary_profile_preserves_the_two_descriptor_v1_contract() {
+            let (_temp, backend, artifact, pinned_cargo_image, session) = fixture();
+            let backend_sha = *backend.sha256();
+            let broker =
+                CapabilityBroker::start(session, &backend, &artifact, &pinned_cargo_image).unwrap();
+
+            let transferred =
+                receive_from(broker.endpoint(), session, CapabilityProfileV1::Ordinary).unwrap();
+            assert_eq!(transferred.backend.sha256(), &backend_sha);
+            assert!(transferred.pinned_cargo_image.is_none());
+        }
+
+        fn raw_descriptor_set(
+            backend: &PinnedCodegenBackend,
+            artifact: &PinnedDirectory,
+            pinned_cargo_image: &PinnedExecutable,
+        ) -> Vec<OwnedFd> {
+            vec![
+                backend.try_clone_for_transfer().unwrap().into(),
+                artifact.try_clone_for_transfer().unwrap().into(),
+                pinned_cargo_image.try_clone_for_transfer().unwrap().into(),
+            ]
+        }
+
+        #[test]
+        fn descriptor_profiles_are_exact_and_fail_closed() {
+            let (_temp, backend, artifact, pinned_cargo_image, _session) = fixture();
+
+            let mut ordinary = raw_descriptor_set(&backend, &artifact, &pinned_cargo_image);
+            ordinary.truncate(2);
+            let ordinary =
+                decode_received_descriptors(ordinary, CapabilityProfileV1::Ordinary).unwrap();
+            assert!(ordinary.pinned_cargo_image.is_none());
+
+            let s09 = decode_received_descriptors(
+                raw_descriptor_set(&backend, &artifact, &pinned_cargo_image),
+                CapabilityProfileV1::S09,
+            )
+            .unwrap();
+            assert!(s09.pinned_cargo_image.is_some());
+
+            let mut missing_s09 = raw_descriptor_set(&backend, &artifact, &pinned_cargo_image);
+            missing_s09.truncate(2);
+            assert!(decode_received_descriptors(missing_s09, CapabilityProfileV1::S09).is_err());
+
+            let ordinary_extra = raw_descriptor_set(&backend, &artifact, &pinned_cargo_image);
+            assert!(
+                decode_received_descriptors(ordinary_extra, CapabilityProfileV1::Ordinary).is_err()
+            );
+
+            let mut s09_extra = raw_descriptor_set(&backend, &artifact, &pinned_cargo_image);
+            s09_extra.push(pinned_cargo_image.try_clone_for_transfer().unwrap().into());
+            assert!(decode_received_descriptors(s09_extra, CapabilityProfileV1::S09).is_err());
+        }
+
+        #[test]
+        fn descriptor_order_is_part_of_each_profile() {
+            let (_temp, backend, artifact, pinned_cargo_image, _session) = fixture();
+
+            let mut ordinary = raw_descriptor_set(&backend, &artifact, &pinned_cargo_image);
+            ordinary.truncate(2);
+            ordinary.swap(0, 1);
+            assert!(decode_received_descriptors(ordinary, CapabilityProfileV1::Ordinary).is_err());
+
+            let mut s09 = raw_descriptor_set(&backend, &artifact, &pinned_cargo_image);
+            s09.swap(1, 2);
+            assert!(decode_received_descriptors(s09, CapabilityProfileV1::S09).is_err());
+        }
+
+        #[test]
         fn rejects_wrong_session_and_serves_concurrent_exact_clients() {
             let (_temp, backend, artifact, pinned_cargo_image, session) = fixture();
             let backend_sha = *backend.sha256();
@@ -449,28 +580,28 @@ mod platform {
             let broker = Arc::new(
                 CapabilityBroker::start(session, &backend, &artifact, &pinned_cargo_image).unwrap(),
             );
-            assert!(receive_from(broker.endpoint(), BuildSession::from_bytes([0x43; 16])).is_err());
+            assert!(
+                receive_from(
+                    broker.endpoint(),
+                    BuildSession::from_bytes([0x43; 16]),
+                    CapabilityProfileV1::S09,
+                )
+                .is_err()
+            );
 
             let clients = (0..8)
                 .map(|_| {
                     let broker = Arc::clone(&broker);
                     std::thread::spawn(move || {
-                        let transferred = receive_from(broker.endpoint(), session).unwrap();
-                        let backend =
-                            PinnedCodegenBackend::from_transferred_file(transferred.backend)
+                        let transferred =
+                            receive_from(broker.endpoint(), session, CapabilityProfileV1::S09)
                                 .unwrap();
-                        assert_eq!(backend.sha256(), &backend_sha);
-                        let cargo = PinnedExecutable::from_transferred_file(
-                            transferred.pinned_cargo_image,
-                            PathBuf::from("<concurrent pinned Cargo image observation>"),
-                        )
-                        .unwrap();
+                        assert_eq!(transferred.backend.sha256(), &backend_sha);
+                        let cargo = transferred
+                            .pinned_cargo_image
+                            .expect("S09 transfer has a pinned Cargo image");
                         assert_eq!(cargo.sha256(), &cargo_sha);
-                        PinnedDirectory::from_transferred_file(
-                            transferred.artifact,
-                            "concurrent artifact",
-                        )
-                        .unwrap();
+                        drop(transferred.artifact);
                     })
                 })
                 .collect::<Vec<_>>();
@@ -487,7 +618,7 @@ mod platform {
             let endpoint = broker.endpoint().to_owned();
             drop(broker);
 
-            assert!(receive_from(&endpoint, session).is_err());
+            assert!(receive_from(&endpoint, session, CapabilityProfileV1::Ordinary).is_err());
         }
 
         #[test]
@@ -504,8 +635,6 @@ pub(crate) use platform::*;
 
 #[cfg(not(target_os = "linux"))]
 mod unsupported {
-    use std::fs::File;
-
     use fe2o3_artifact_transaction::BuildSession;
 
     use crate::pinned_codegen_backend::PinnedCodegenBackend;
@@ -513,6 +642,12 @@ mod unsupported {
     use crate::project::PinnedDirectory;
 
     pub(crate) const CAPABILITY_BROKER_ENV: &str = "FE2O3_CAPABILITY_BROKER_V1";
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub(crate) enum CapabilityProfileV1 {
+        Ordinary,
+        S09,
+    }
 
     pub(crate) struct CapabilityBroker;
 
@@ -532,12 +667,15 @@ mod unsupported {
     }
 
     pub(crate) struct BrokeredCapabilities {
-        pub(crate) backend: File,
-        pub(crate) artifact: File,
-        pub(crate) pinned_cargo_image: File,
+        pub(crate) backend: PinnedCodegenBackend,
+        pub(crate) artifact: PinnedDirectory,
+        pub(crate) pinned_cargo_image: Option<PinnedExecutable>,
     }
 
-    pub(crate) fn receive(_session: BuildSession) -> Result<BrokeredCapabilities, String> {
+    pub(crate) fn receive(
+        _session: BuildSession,
+        _profile: CapabilityProfileV1,
+    ) -> Result<BrokeredCapabilities, String> {
         Err("Cargo capability transport requires Linux".to_string())
     }
 }
