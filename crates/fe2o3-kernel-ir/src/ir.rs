@@ -464,7 +464,7 @@ impl Operation {
             }
             OperationKind::WorkgroupMemory(memory) => {
                 let mut capabilities = BTreeSet::from([TargetCapability::WorkgroupMemory]);
-                if memory.extent == WorkgroupMemoryExtent::Dynamic {
+                if memory.extent.is_dynamic() {
                     capabilities.insert(TargetCapability::DynamicWorkgroupMemory);
                 }
                 capabilities
@@ -1357,7 +1357,24 @@ pub struct WorkgroupBarrier {
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum WorkgroupMemoryExtent {
     Static(u32),
+    /// Runtime-sized LDS with no authenticated lower bound.
     Dynamic,
+    /// Runtime-sized LDS whose launch contract guarantees at least this many
+    /// elements. Frozen wire formats deliberately cannot carry this authority.
+    DynamicAtLeast(u32),
+}
+
+impl WorkgroupMemoryExtent {
+    pub const fn is_dynamic(self) -> bool {
+        matches!(self, Self::Dynamic | Self::DynamicAtLeast(_))
+    }
+
+    pub const fn guaranteed_elements(self) -> Option<u32> {
+        match self {
+            Self::Static(elements) | Self::DynamicAtLeast(elements) => Some(elements),
+            Self::Dynamic => None,
+        }
+    }
 }
 
 /// One explicit LDS allocation visible to all invocations in a workgroup.

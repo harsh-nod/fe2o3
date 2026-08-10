@@ -3055,6 +3055,58 @@ impl<'a> FunctionLowerer<'a> {
                 "matrix operation is outside the exact V1 shape and active-lane profile",
             ));
         }
+        if let MatrixOperationKind::LdsLoad { base, profile }
+        | MatrixOperationKind::LdsStore { base, profile, .. } = &matrix.kind
+        {
+            let allocation = self
+                .function
+                .body
+                .iter()
+                .flat_map(|body| &body.blocks)
+                .flat_map(|block| &block.operations)
+                .find_map(|operation| {
+                    (operation.results.first().map(|result| result.id) == Some(*base))
+                        .then(|| match &operation.kind {
+                            OperationKind::WorkgroupMemory(memory) => Some(memory),
+                            _ => None,
+                        })
+                        .flatten()
+                });
+            let Some(allocation) = allocation else {
+                return Err(LoweringErrors::one(
+                    location.clone(),
+                    LoweringDiagnosticCode::UnsupportedMatrixOperation,
+                    "matrix LDS base is not the direct result of an authenticated workgroup-memory allocation",
+                ));
+            };
+            let required_elements = profile.required_elements();
+            match allocation.extent.guaranteed_elements() {
+                Some(elements) if elements >= required_elements => {}
+                Some(elements) => {
+                    return Err(LoweringErrors::one(
+                        location.clone(),
+                        LoweringDiagnosticCode::UnsupportedMatrixOperation,
+                        format!(
+                            "matrix LDS allocation guarantees {elements} elements but requires at least {required_elements}"
+                        ),
+                    ));
+                }
+                None => {
+                    return Err(LoweringErrors::one(
+                        location.clone(),
+                        LoweringDiagnosticCode::UnsupportedMatrixOperation,
+                        "matrix LDS lowering requires an authenticated allocation extent",
+                    ));
+                }
+            }
+            if allocation.alignment < profile.required_alignment() {
+                return Err(LoweringErrors::one(
+                    location.clone(),
+                    LoweringDiagnosticCode::UnsupportedMatrixOperation,
+                    "matrix LDS allocation does not meet the profile alignment",
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -3559,7 +3611,8 @@ impl<'a> FunctionLowerer<'a> {
                     memory.alignment
                 )
                 .unwrap(),
-                WorkgroupMemoryExtent::Dynamic => writeln!(
+                WorkgroupMemoryExtent::Dynamic
+                | WorkgroupMemoryExtent::DynamicAtLeast(_) => writeln!(
                     output,
                     "{symbol} = external addrspace(3) global [0 x {element}], align {}",
                     memory.alignment
@@ -3989,7 +4042,7 @@ impl<'a> FunctionLowerer<'a> {
                 let result_name = result_name.expect("verified LDS result name");
                 let elements = match memory.extent {
                     WorkgroupMemoryExtent::Static(elements) => elements,
-                    WorkgroupMemoryExtent::Dynamic => 0,
+                    WorkgroupMemoryExtent::Dynamic | WorkgroupMemoryExtent::DynamicAtLeast(_) => 0,
                 };
                 let element = llvm_type(&memory.element);
                 writeln!(

@@ -6,10 +6,11 @@ use crate::{
     AccessMode, AddressSpace, AssemblyConstraint, AssemblyEffect, AssemblyOperandKind,
     AssemblyOption, Atomic, AtomicKind, Barrier, BasicBlock, BinaryOp, BlockId, ComparePredicate,
     Fence, FloatOperation, Function, FunctionId, FunctionRole, InlineAssembly, Kernel, KernelId,
-    LaunchExtent, MatrixVerificationIssueKind, MemoryOrdering, Module, ModuleId, Operation,
-    OperationKind, ScalarType, SemanticOperationIssueKind, SemanticOperationVerificationContext,
-    SynchronizationScope, TargetCapability, Terminator, Type, UnaryOp, ValueId, WaveOperation,
-    WaveOperationKind, WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent, pointer_for,
+    LaunchExtent, MatrixOperation, MatrixOperationKind, MatrixVerificationIssueKind,
+    MemoryOrdering, Module, ModuleId, Operation, OperationKind, ScalarType,
+    SemanticOperationIssueKind, SemanticOperationVerificationContext, SynchronizationScope,
+    TargetCapability, Terminator, Type, UnaryOp, ValueId, WaveOperation, WaveOperationKind,
+    WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent, pointer_for,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -1017,11 +1018,82 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
                     };
                     self.emit(location.clone(), code, issue.message);
                 }
+                self.verify_matrix_lds_allocation(matrix, location);
             }
             OperationKind::Wave(wave) => self.verify_wave(operation, wave, location),
             OperationKind::InlineAssembly(assembly) => {
                 self.verify_inline_assembly(operation, assembly, location)
             }
+        }
+    }
+
+    fn verify_matrix_lds_allocation(
+        &mut self,
+        matrix: &MatrixOperation,
+        location: DiagnosticLocation,
+    ) {
+        let (base, profile) = match &matrix.kind {
+            MatrixOperationKind::MultiplyAccumulate { .. } => return,
+            MatrixOperationKind::LdsLoad { base, profile }
+            | MatrixOperationKind::LdsStore { base, profile, .. } => (*base, *profile),
+        };
+
+        let Some(definition) = self.definitions.get(&base) else {
+            return;
+        };
+        let DefSite::Operation(block_id, operation_index) = definition.site else {
+            self.emit(
+                location,
+                DiagnosticCode::InvalidMemoryAccess,
+                "matrix LDS base must be the direct result of an authenticated workgroup-memory allocation",
+            );
+            return;
+        };
+        let Some(allocation) = self
+            .blocks
+            .get(&block_id)
+            .and_then(|block| block.operations.get(operation_index))
+            .and_then(|operation| match &operation.kind {
+                OperationKind::WorkgroupMemory(memory) => Some(memory),
+                _ => None,
+            })
+        else {
+            self.emit(
+                location,
+                DiagnosticCode::InvalidMemoryAccess,
+                "matrix LDS base must be the direct result of an authenticated workgroup-memory allocation",
+            );
+            return;
+        };
+
+        let extent = allocation.extent;
+        let alignment = allocation.alignment;
+        let required_elements = profile.required_elements();
+        match extent.guaranteed_elements() {
+            Some(elements) if elements >= required_elements => {}
+            Some(elements) => self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidMemoryAccess,
+                format!(
+                    "matrix LDS allocation guarantees {elements} elements but requires at least {required_elements}"
+                ),
+            ),
+            None => self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidMemoryAccess,
+                "matrix LDS operation requires a statically authenticated allocation extent",
+            ),
+        }
+
+        let required_alignment = profile.required_alignment();
+        if alignment < required_alignment {
+            self.emit(
+                location,
+                DiagnosticCode::InvalidAlignment,
+                format!(
+                    "matrix LDS allocation alignment {alignment} is below the required {required_alignment}"
+                ),
+            );
         }
     }
 
@@ -1512,14 +1584,17 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
                 "workgroup memory element type must be storable",
             );
         }
-        if matches!(memory.extent, WorkgroupMemoryExtent::Static(0)) {
+        if matches!(
+            memory.extent,
+            WorkgroupMemoryExtent::Static(0) | WorkgroupMemoryExtent::DynamicAtLeast(0)
+        ) {
             self.emit(
                 location.clone(),
                 DiagnosticCode::InvalidWorkgroupMemory,
-                "static workgroup memory extent must be non-zero",
+                "authenticated workgroup memory extent must be non-zero",
             );
         }
-        if memory.extent == WorkgroupMemoryExtent::Dynamic {
+        if memory.extent.is_dynamic() {
             self.dynamic_workgroup_memory_declarations += 1;
             if self.dynamic_workgroup_memory_declarations > 1 {
                 self.emit(

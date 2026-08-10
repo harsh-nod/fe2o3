@@ -1267,6 +1267,12 @@ fn encode_workgroup_memory(
             writer.u32(elements)?;
         }
         WorkgroupMemoryExtent::Dynamic => writer.u8(2)?,
+        WorkgroupMemoryExtent::DynamicAtLeast(_) => {
+            return Err(KernelIrEncodeError::UnsupportedInVersion {
+                version: writer.version,
+                feature: "authenticated dynamic workgroup-memory extent",
+            });
+        }
     }
     writer.u32(memory.alignment)
 }

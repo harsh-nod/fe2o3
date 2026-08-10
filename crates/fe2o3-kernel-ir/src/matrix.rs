@@ -90,6 +90,17 @@ impl MatrixLdsProfile {
             && matches!(self.layout, MatrixLayout::RowMajorXor4)
             && matches!(self.wave_width, WaveWidth::Wave64)
     }
+
+    pub const fn required_elements(self) -> u32 {
+        self.rows as u32 * self.columns as u32
+    }
+
+    pub const fn required_alignment(self) -> u32 {
+        match self.element {
+            MatrixElement::Bf16 => 2,
+            MatrixElement::F32 => 4,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
