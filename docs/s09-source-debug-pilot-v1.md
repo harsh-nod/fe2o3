@@ -123,6 +123,14 @@ then recaptures and byte-compares it. Same-size mutate/restore, mode restore,
 and path-swap/restore operations therefore fail through content or inode
 metadata drift even when the final Git status is clean.
 
+Source-state capture opens the canonical `/usr/bin/git` object once and invokes
+that held object through `/proc/self/fd/<n>` for every Git query. Each call
+revalidates the fixed pathname, descriptor identity, executable content digest,
+and proc-fd object. The child environment is constructed from scratch, disables
+system and global Git configuration, and admits no inherited `GIT_*` values.
+Tracked symlinks, gitlinks, and any Git mode other than `100644` or `100755`
+fail closed instead of being omitted from the inventory.
+
 The executed host bytes are copied atomically from the sealed memfd into the
 private evidence directory as a single-link mode-0400 artifact. Downstream
 inspection consumes that retained image. The final checker also snapshots and
@@ -131,6 +139,12 @@ tool status to be zero, and cross-binds the HSACO, retained host, checker,
 facts, normalized DWARF, normalized ROCgdb, tool paths, and run nonce. The raw
 ROCgdb log is hashed and then removed. Only the path-clean normalized
 transcript is retained.
+
+The complete snapshot-supervised ROCgdb command runs in a new session and
+process group. `EXIT`, `HUP`, `INT`, and `TERM` cleanup targets only that group,
+uses bounded `TERM`/`KILL` escalation, reaps its leader, removes the raw
+transcript, and verifies that neither the group nor raw path remains. An
+interrupted run cannot defer raw cleanup until a foreground debugger returns.
 
 The snapshot supervisor supplies each controller input as an exact numeric
 `/proc/<ancestor-pid>/fd/<n>` path together with its owner PID/starttime and
@@ -146,6 +160,12 @@ This local boundary does not defend against root or a same-user process able
 to ptrace, inject into, or otherwise control the source-state supervisor,
 runner, debugger, or checker. Those actors can alter the measuring process
 itself and remain outside the pilot threat model.
+
+The ROCgdb and LLVM tools remain fixed, canonical executable paths selected
+from the local ROCm installation. This pilot does not bind those tool images to
+administrator-installed digests or execute them from retained descriptors, so
+their installation is platform-trusted. The pinned Git and cancellation
+hardening do not upgrade the archive to production evidence.
 
 The normalized transcript is segmented around every debugger continuation.
 The checker requires an exact BP2 line-69 hit followed by an AMDGPU-wave frame
