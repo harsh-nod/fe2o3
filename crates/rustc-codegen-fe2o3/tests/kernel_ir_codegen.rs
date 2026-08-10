@@ -1286,12 +1286,12 @@ fn worker_v2_s09_alpha_o0_preserves_source_dwarf_in_hsaco() {
             .as_bytes()
     );
     assert_eq!(
-        observation.cargo_launcher_executable_sha256(),
+        observation.pinned_cargo_image_sha256(),
         observation.declared_cargo_executable_sha256(),
-        "the S09 harness launches the wrapper directly from declared Cargo"
+        "the observed pinned Cargo image differs from the declared image in this harness"
     );
-    assert_ne!(observation.cargo_launcher_pid(), 0);
-    assert_ne!(observation.cargo_launcher_start_time_ticks(), 0);
+    assert_ne!(observation.observed_parent_pid(), 0);
+    assert_ne!(observation.observed_parent_start_time_ticks(), 0);
     for digest in [
         observation.cargo_metadata_sha256(),
         observation.crate_binding(),
@@ -1314,7 +1314,7 @@ fn worker_v2_s09_alpha_o0_preserves_source_dwarf_in_hsaco() {
         observation.prepared_rustc_command_sha256(),
         observation.cargo_fe2o3_executable_sha256(),
         observation.declared_cargo_executable_sha256(),
-        observation.cargo_launcher_executable_sha256(),
+        observation.pinned_cargo_image_sha256(),
     ] {
         let digest = bytes_hex(digest);
         assert!(

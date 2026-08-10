@@ -46,11 +46,7 @@ use crate::worker_v2_restart::{
     WorkerV2ResumeStoreV1, persist_admitted_worker_v2_intent_v1, recover_worker_v2_intent_v1,
     restart_admission_commitment_with_inputs_v1,
 };
-use crate::{
-    ARTIFACT_CHILD_FD, BACKEND_CHILD_FD, CARGO_LAUNCHER_CAPABILITY_FD,
-    CARGO_LAUNCHER_CAPABILITY_FD_ENV_V2, CARGO_LAUNCHER_CAPABILITY_SHA256_ENV_V2,
-    MANAGED_RUSTC_ARGS_ENV,
-};
+use crate::{ARTIFACT_CHILD_FD, BACKEND_CHILD_FD, MANAGED_RUSTC_ARGS_ENV};
 
 const HSACO_DIR_ENV: &str = "FE2O3_HSACO_DIR";
 const TARGET_ENV: &str = "FE2O3_TARGET";
@@ -67,12 +63,12 @@ const CARGO_FE2O3_EXECUTABLE_BUILD_OBSERVATION_ENV_V2: &str =
     "FE2O3_CARGO_FE2O3_EXECUTABLE_BUILD_OBSERVATION_V2";
 const DECLARED_CARGO_EXECUTABLE_BUILD_OBSERVATION_ENV_V2: &str =
     "FE2O3_DECLARED_CARGO_EXECUTABLE_BUILD_OBSERVATION_V2";
-const CARGO_LAUNCHER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2: &str =
-    "FE2O3_CARGO_LAUNCHER_EXECUTABLE_BUILD_OBSERVATION_V2";
-const CARGO_LAUNCHER_PID_BUILD_OBSERVATION_ENV_V2: &str =
-    "FE2O3_CARGO_LAUNCHER_PID_BUILD_OBSERVATION_V2";
-const CARGO_LAUNCHER_START_TIME_BUILD_OBSERVATION_ENV_V2: &str =
-    "FE2O3_CARGO_LAUNCHER_START_TIME_BUILD_OBSERVATION_V2";
+const PINNED_CARGO_IMAGE_BUILD_OBSERVATION_ENV_V2: &str =
+    "FE2O3_PINNED_CARGO_IMAGE_BUILD_OBSERVATION_V2";
+const OBSERVED_PARENT_PID_BUILD_OBSERVATION_ENV_V2: &str =
+    "FE2O3_OBSERVED_PARENT_PID_BUILD_OBSERVATION_V2";
+const OBSERVED_PARENT_START_TIME_BUILD_OBSERVATION_ENV_V2: &str =
+    "FE2O3_OBSERVED_PARENT_START_TIME_BUILD_OBSERVATION_V2";
 const MAX_BUILD_EXECUTABLE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_PROC_STAT_BYTES: usize = 4096;
 const PREPARED_RUSTC_COMMAND_OBSERVATION_FD_V2: std::os::fd::RawFd =
@@ -417,7 +413,17 @@ pub(crate) fn run(argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperError
     }
     let mut worker_build_observation = managed_attempt
         .as_ref()
-        .map(ManagedAttempt::worker_build_observation)
+        .map(|managed| {
+            let pinned_cargo_image_sha256 = compiler_capabilities
+                .as_ref()
+                .map(CompilerCapabilities::pinned_cargo_image_sha256)
+                .ok_or_else(|| {
+                    BindingWrapperError::BuildProvenance(
+                        "S09 build has no brokered pinned Cargo image observation".to_owned(),
+                    )
+                })?;
+            managed.worker_build_observation(pinned_cargo_image_sha256)
+        })
         .transpose()?
         .flatten();
     configure_worker_build_observation_environment(
@@ -520,16 +526,16 @@ fn configure_worker_build_observation_environment(
             hex(&observation.declared_cargo_executable_sha256),
         );
         command.env(
-            CARGO_LAUNCHER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2,
-            hex(&observation.cargo_launcher_executable_sha256),
+            PINNED_CARGO_IMAGE_BUILD_OBSERVATION_ENV_V2,
+            hex(&observation.pinned_cargo_image_sha256),
         );
         command.env(
-            CARGO_LAUNCHER_PID_BUILD_OBSERVATION_ENV_V2,
-            observation.cargo_launcher_pid.to_string(),
+            OBSERVED_PARENT_PID_BUILD_OBSERVATION_ENV_V2,
+            observation.observed_parent_pid.to_string(),
         );
         command.env(
-            CARGO_LAUNCHER_START_TIME_BUILD_OBSERVATION_ENV_V2,
-            observation.cargo_launcher_start_time_ticks.to_string(),
+            OBSERVED_PARENT_START_TIME_BUILD_OBSERVATION_ENV_V2,
+            observation.observed_parent_start_time_ticks.to_string(),
         );
     } else {
         command.env_remove(WORKER_CONFIG_BUILD_OBSERVATION_ENV_V2);
@@ -538,9 +544,9 @@ fn configure_worker_build_observation_environment(
         command.env_remove(LLVM_BUILD_IDENTITY_OBSERVATION_ENV_V2);
         command.env_remove(CARGO_FE2O3_EXECUTABLE_BUILD_OBSERVATION_ENV_V2);
         command.env_remove(DECLARED_CARGO_EXECUTABLE_BUILD_OBSERVATION_ENV_V2);
-        command.env_remove(CARGO_LAUNCHER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2);
-        command.env_remove(CARGO_LAUNCHER_PID_BUILD_OBSERVATION_ENV_V2);
-        command.env_remove(CARGO_LAUNCHER_START_TIME_BUILD_OBSERVATION_ENV_V2);
+        command.env_remove(PINNED_CARGO_IMAGE_BUILD_OBSERVATION_ENV_V2);
+        command.env_remove(OBSERVED_PARENT_PID_BUILD_OBSERVATION_ENV_V2);
+        command.env_remove(OBSERVED_PARENT_START_TIME_BUILD_OBSERVATION_ENV_V2);
     }
 }
 
@@ -707,128 +713,49 @@ fn resolve_command_executable_with_path(
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct CargoLauncherObservation {
-    executable_sha256: [u8; 32],
-    pid: u64,
-    start_time_ticks: u64,
+struct PinnedCargoImageAndParentObservation {
+    pinned_cargo_image_sha256: [u8; 32],
+    observed_parent_pid: u64,
+    observed_parent_start_time_ticks: u64,
 }
 
-fn observe_cargo_launcher() -> Result<CargoLauncherObservation, BindingWrapperError> {
-    let declared_descriptor = std::env::var(CARGO_LAUNCHER_CAPABILITY_FD_ENV_V2)
-        .map_err(|_| {
-            BindingWrapperError::BuildProvenance(
-                "Cargo launcher capability descriptor declaration is missing".to_owned(),
-            )
-        })?
-        .parse::<i32>()
-        .map_err(|_| {
-            BindingWrapperError::BuildProvenance(
-                "Cargo launcher capability descriptor declaration is invalid".to_owned(),
-            )
-        })?;
-    if declared_descriptor != CARGO_LAUNCHER_CAPABILITY_FD {
-        return Err(BindingWrapperError::BuildProvenance(format!(
-            "Cargo launcher capability must be descriptor {CARGO_LAUNCHER_CAPABILITY_FD}"
-        )));
-    }
-    let expected_sha256 = required_sha256_environment(
-        CARGO_LAUNCHER_CAPABILITY_SHA256_ENV_V2,
-        "Cargo launcher capability",
-    )?;
-    let capability = PinnedExecutable::from_inherited_descriptor(
-        CARGO_LAUNCHER_CAPABILITY_FD,
-        PathBuf::from(format!(
-            "<inherited Cargo launcher descriptor {CARGO_LAUNCHER_CAPABILITY_FD}>"
-        )),
-    )?;
-    if capability.sha256() != &expected_sha256 {
-        return Err(BindingWrapperError::BuildProvenance(
-            "inherited Cargo launcher descriptor does not match its trusted digest".to_owned(),
-        ));
-    }
+fn observe_pinned_cargo_image_and_parent(
+    pinned_cargo_image_sha256: [u8; 32],
+) -> Result<PinnedCargoImageAndParentObservation, BindingWrapperError> {
     let initial_parent = rustix::process::getppid().ok_or_else(|| {
-        BindingWrapperError::BuildProvenance("cargo launcher has no parent PID".to_owned())
+        BindingWrapperError::BuildProvenance("wrapper has no observed parent PID".to_owned())
     })?;
     let pid = u64::try_from(initial_parent.as_raw_nonzero().get()).map_err(|_| {
-        BindingWrapperError::BuildProvenance("cargo launcher PID is negative".to_owned())
+        BindingWrapperError::BuildProvenance("observed parent PID is negative".to_owned())
     })?;
     let initial_start_time = process_start_time_ticks(pid)?;
-    let executable_path = PathBuf::from(format!("/proc/{pid}/exe"));
-    let parent_executable = File::open(&executable_path).map_err(|error| {
-        BindingWrapperError::BuildProvenance(format!(
-            "cargo launcher {} cannot be opened: {error}",
-            executable_path.display()
-        ))
-    })?;
-    if !capability.same_object_as(&parent_executable)? {
-        return Err(BindingWrapperError::BuildProvenance(
-            "Cargo launcher parent executable is not the inherited pinned capability".to_owned(),
-        ));
-    }
     let final_start_time = process_start_time_ticks(pid)?;
     let final_parent = rustix::process::getppid().ok_or_else(|| {
-        BindingWrapperError::BuildProvenance("cargo launcher parent disappeared".to_owned())
+        BindingWrapperError::BuildProvenance("observed parent disappeared".to_owned())
     })?;
     if final_parent != initial_parent || final_start_time != initial_start_time {
         return Err(BindingWrapperError::BuildProvenance(
-            "cargo launcher PID identity changed while measuring /proc".to_owned(),
+            "observed parent PID continuity changed while reading /proc".to_owned(),
         ));
     }
-    Ok(CargoLauncherObservation {
-        executable_sha256: *capability.sha256(),
-        pid,
-        start_time_ticks: initial_start_time,
+    Ok(PinnedCargoImageAndParentObservation {
+        pinned_cargo_image_sha256,
+        observed_parent_pid: pid,
+        observed_parent_start_time_ticks: initial_start_time,
     })
-}
-
-fn required_sha256_environment(
-    name: &'static str,
-    label: &str,
-) -> Result<[u8; 32], BindingWrapperError> {
-    let value = std::env::var(name).map_err(|_| {
-        BindingWrapperError::BuildProvenance(format!("{label} digest environment is missing"))
-    })?;
-    let bytes = value.as_bytes();
-    if bytes.len() != 64
-        || !bytes
-            .iter()
-            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-    {
-        return Err(BindingWrapperError::BuildProvenance(format!(
-            "{label} digest must be 64 lowercase hexadecimal digits"
-        )));
-    }
-    let mut digest = [0_u8; 32];
-    for (index, pair) in bytes.chunks_exact(2).enumerate() {
-        digest[index] = (hex_nibble(pair[0]) << 4) | hex_nibble(pair[1]);
-    }
-    if digest == [0; 32] {
-        return Err(BindingWrapperError::BuildProvenance(format!(
-            "{label} digest must not be zero"
-        )));
-    }
-    Ok(digest)
-}
-
-const fn hex_nibble(byte: u8) -> u8 {
-    match byte {
-        b'0'..=b'9' => byte - b'0',
-        b'a'..=b'f' => byte - b'a' + 10,
-        _ => 0,
-    }
 }
 
 fn process_start_time_ticks(pid: u64) -> Result<u64, BindingWrapperError> {
     let path = PathBuf::from(format!("/proc/{pid}/stat"));
     let bytes = fs::read(&path).map_err(|error| {
         BindingWrapperError::BuildProvenance(format!(
-            "cannot read cargo launcher {}: {error}",
+            "cannot read observed parent {}: {error}",
             path.display()
         ))
     })?;
     if bytes.is_empty() || bytes.len() > MAX_PROC_STAT_BYTES {
         return Err(BindingWrapperError::BuildProvenance(format!(
-            "cargo launcher {} must contain 1 through {MAX_PROC_STAT_BYTES} bytes",
+            "observed parent {} must contain 1 through {MAX_PROC_STAT_BYTES} bytes",
             path.display()
         )));
     }
@@ -837,7 +764,7 @@ fn process_start_time_ticks(pid: u64) -> Result<u64, BindingWrapperError> {
         .rposition(|byte| *byte == b')')
         .ok_or_else(|| {
             BindingWrapperError::BuildProvenance(
-                "cargo launcher stat has no command terminator".to_owned(),
+                "observed parent stat has no command terminator".to_owned(),
             )
         })?;
     let recorded_pid = bytes[..close]
@@ -847,7 +774,7 @@ fn process_start_time_ticks(pid: u64) -> Result<u64, BindingWrapperError> {
         .and_then(|value| value.parse::<u64>().ok());
     if recorded_pid != Some(pid) {
         return Err(BindingWrapperError::BuildProvenance(
-            "cargo launcher stat PID does not match the opened proc entry".to_owned(),
+            "observed parent stat PID does not match the proc entry".to_owned(),
         ));
     }
     let start_time = bytes[close + 1..]
@@ -859,7 +786,7 @@ fn process_start_time_ticks(pid: u64) -> Result<u64, BindingWrapperError> {
         .filter(|value| *value != 0)
         .ok_or_else(|| {
             BindingWrapperError::BuildProvenance(
-                "cargo launcher stat has no valid start-time field".to_owned(),
+                "observed parent stat has no valid start-time field".to_owned(),
             )
         })?;
     Ok(start_time)
@@ -1052,8 +979,6 @@ fn reviewed_s09_inherited_environment(name: &OsStr) -> bool {
             | b"FE2O3_CAPABILITY_BROKER_V1"
             | b"FE2O3_BUILD_SESSION_V1"
             | b"FE2O3_MANAGED_RUSTC_ARGS_V1"
-            | b"FE2O3_CARGO_LAUNCHER_CAPABILITY_FD_V2"
-            | b"FE2O3_CARGO_LAUNCHER_CAPABILITY_SHA256_V2"
             | b"FE2O3_S09_COMPILE_ENV_ALLOWLIST_V2"
     ) || bytes.starts_with(b"CARGO_PKG_")
         || bytes.starts_with(b"CARGO_CFG_")
@@ -1074,9 +999,9 @@ fn managed_s09_child_environment(name: &OsStr) -> bool {
             | b"FE2O3_LLVM_BUILD_IDENTITY_OBSERVATION_V2"
             | b"FE2O3_CARGO_FE2O3_EXECUTABLE_BUILD_OBSERVATION_V2"
             | b"FE2O3_DECLARED_CARGO_EXECUTABLE_BUILD_OBSERVATION_V2"
-            | b"FE2O3_CARGO_LAUNCHER_EXECUTABLE_BUILD_OBSERVATION_V2"
-            | b"FE2O3_CARGO_LAUNCHER_PID_BUILD_OBSERVATION_V2"
-            | b"FE2O3_CARGO_LAUNCHER_START_TIME_BUILD_OBSERVATION_V2"
+            | b"FE2O3_PINNED_CARGO_IMAGE_BUILD_OBSERVATION_V2"
+            | b"FE2O3_OBSERVED_PARENT_PID_BUILD_OBSERVATION_V2"
+            | b"FE2O3_OBSERVED_PARENT_START_TIME_BUILD_OBSERVATION_V2"
             | b"FE2O3_WORKER_V2_SOURCE_DEBUG_PROFILE_V1"
             | b"FE2O3_CRATE_BINDING_ID_V1"
     )
@@ -1375,6 +1300,7 @@ struct CompilerCapabilities {
     backend: PinnedCodegenBackend,
     artifact: PinnedDirectory,
     output_dir: PathBuf,
+    pinned_cargo_image_sha256: [u8; 32],
 }
 
 impl CompilerCapabilities {
@@ -1388,16 +1314,27 @@ impl CompilerCapabilities {
             "artifact output directory",
         )
         .map_err(BindingWrapperError::ManagedArtifact)?;
+        let pinned_cargo_image = PinnedExecutable::from_transferred_file(
+            transferred.pinned_cargo_image,
+            PathBuf::from("<brokered pinned Cargo image observation>"),
+        )?;
+        let pinned_cargo_image_sha256 = *pinned_cargo_image.sha256();
+        drop(pinned_cargo_image);
         let output_dir = artifact.child_path();
         Ok(Self {
             backend,
             artifact,
             output_dir,
+            pinned_cargo_image_sha256,
         })
     }
 
     fn output_dir(&self) -> &Path {
         &self.output_dir
+    }
+
+    const fn pinned_cargo_image_sha256(&self) -> [u8; 32] {
+        self.pinned_cargo_image_sha256
     }
 
     fn prepare_command(&self, command: &mut Command) -> Result<(), BindingWrapperError> {
@@ -1463,6 +1400,7 @@ impl ManagedAttempt {
 
     fn worker_build_observation(
         &self,
+        pinned_cargo_image_sha256: [u8; 32],
     ) -> Result<Option<WorkerV2BuildObservation<'_>>, BindingWrapperError> {
         match &self.worker_v2 {
             Some(ManagedWorkerV2::Fresh { config, .. })
@@ -1477,14 +1415,14 @@ impl ManagedAttempt {
                     &declared_cargo_executable,
                     "declared CARGO executable",
                 )?;
-                let launcher = observe_cargo_launcher()?;
+                let observation = observe_pinned_cargo_image_and_parent(pinned_cargo_image_sha256)?;
                 Ok(Some(config.build_observation(
                     [0; 32],
                     cargo_fe2o3_executable_sha256,
                     declared_cargo_executable_sha256,
-                    launcher.executable_sha256,
-                    launcher.pid,
-                    launcher.start_time_ticks,
+                    observation.pinned_cargo_image_sha256,
+                    observation.observed_parent_pid,
+                    observation.observed_parent_start_time_ticks,
                 )))
             }
             Some(ManagedWorkerV2::Fresh { .. }) | Some(ManagedWorkerV2::Recovery { .. }) | None => {
@@ -2056,19 +1994,18 @@ pub(crate) fn exit_code(status: ExitStatus) -> u8 {
 mod tests {
     use super::{
         BindingWrapperError, CARGO_FE2O3_EXECUTABLE_BUILD_OBSERVATION_ENV_V2,
-        CARGO_LAUNCHER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2,
-        CARGO_LAUNCHER_PID_BUILD_OBSERVATION_ENV_V2,
-        CARGO_LAUNCHER_START_TIME_BUILD_OBSERVATION_ENV_V2,
         CARGO_METADATA_BUILD_OBSERVATION_ENV_V2, CompileBuildObservationV2,
         CompleteS09ChildEnvironmentV2, DECLARED_CARGO_EXECUTABLE_BUILD_OBSERVATION_ENV_V2,
-        LLVM_BUILD_IDENTITY_OBSERVATION_ENV_V2, PreparedRustcCommandDigestCapability,
+        LLVM_BUILD_IDENTITY_OBSERVATION_ENV_V2, OBSERVED_PARENT_PID_BUILD_OBSERVATION_ENV_V2,
+        OBSERVED_PARENT_START_TIME_BUILD_OBSERVATION_ENV_V2,
+        PINNED_CARGO_IMAGE_BUILD_OBSERVATION_ENV_V2, PreparedRustcCommandDigestCapability,
         S09_COMPILE_ENV_ALLOWLIST_ENV_V2, WORKER_BUILD_IDENTITY_OBSERVATION_ENV_V2,
         WORKER_CONFIG_BUILD_OBSERVATION_ENV_V2, WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2,
         configure_build_observation_environment, configure_worker_build_observation_environment,
         decode_managed_rustc_args, derive_build_attempt_input_with_config_identity,
         is_cargo_stdin_probe, materialize_s09_child_environment, measure_build_executable,
-        observe_cargo_launcher, ordered_metadata_values, prepared_rustc_command_sha256,
-        process_start_time_ticks, reject_uninspectable_rustc_args,
+        observe_pinned_cargo_image_and_parent, ordered_metadata_values,
+        prepared_rustc_command_sha256, process_start_time_ticks, reject_uninspectable_rustc_args,
         resolve_command_executable_with_path,
     };
     use crate::pinned_executable::PinnedExecutable;
@@ -2091,7 +2028,6 @@ mod tests {
     use std::ffi::{OsStr, OsString};
     use std::fs;
     #[cfg(target_os = "linux")]
-    use std::os::unix::process::CommandExt;
     use std::path::Path;
     use std::process::Command;
 
@@ -2237,9 +2173,9 @@ mod tests {
             prepared_rustc_command_sha256: [0x13; 32],
             cargo_fe2o3_executable_sha256: [0x14; 32],
             declared_cargo_executable_sha256: [0x15; 32],
-            cargo_launcher_executable_sha256: [0x16; 32],
-            cargo_launcher_pid: 17,
-            cargo_launcher_start_time_ticks: 18,
+            pinned_cargo_image_sha256: [0x16; 32],
+            observed_parent_pid: 17,
+            observed_parent_start_time_ticks: 18,
         };
         let mut command = Command::new("rustc");
         configure_worker_build_observation_environment(&mut command, Some(observation));
@@ -2267,13 +2203,13 @@ mod tests {
                 DECLARED_CARGO_EXECUTABLE_BUILD_OBSERVATION_ENV_V2,
                 "15".repeat(32),
             ),
+            (PINNED_CARGO_IMAGE_BUILD_OBSERVATION_ENV_V2, "16".repeat(32)),
             (
-                CARGO_LAUNCHER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2,
-                "16".repeat(32),
+                OBSERVED_PARENT_PID_BUILD_OBSERVATION_ENV_V2,
+                "17".to_owned(),
             ),
-            (CARGO_LAUNCHER_PID_BUILD_OBSERVATION_ENV_V2, "17".to_owned()),
             (
-                CARGO_LAUNCHER_START_TIME_BUILD_OBSERVATION_ENV_V2,
+                OBSERVED_PARENT_START_TIME_BUILD_OBSERVATION_ENV_V2,
                 "18".to_owned(),
             ),
             (
@@ -2482,13 +2418,10 @@ mod tests {
                 "FE2O3_DECLARED_CARGO_EXECUTABLE_BUILD_OBSERVATION_V2",
                 Some("06"),
             ),
+            ("FE2O3_PINNED_CARGO_IMAGE_BUILD_OBSERVATION_V2", Some("07")),
+            ("FE2O3_OBSERVED_PARENT_PID_BUILD_OBSERVATION_V2", Some("17")),
             (
-                "FE2O3_CARGO_LAUNCHER_EXECUTABLE_BUILD_OBSERVATION_V2",
-                Some("07"),
-            ),
-            ("FE2O3_CARGO_LAUNCHER_PID_BUILD_OBSERVATION_V2", Some("17")),
-            (
-                "FE2O3_CARGO_LAUNCHER_START_TIME_BUILD_OBSERVATION_V2",
+                "FE2O3_OBSERVED_PARENT_START_TIME_BUILD_OBSERVATION_V2",
                 Some("18"),
             ),
             ("FE2O3_WORKER_V2_SOURCE_DEBUG_PROFILE_V1", Some("s09")),
@@ -2655,72 +2588,13 @@ mod tests {
     }
 
     #[test]
-    fn pid_and_start_time_do_not_authenticate_an_executable() {
+    fn parent_pid_and_start_time_are_diagnostic_observations() {
         let pid = u64::from(std::process::id());
         assert_ne!(process_start_time_ticks(pid).unwrap(), 0);
-        let unrelated = PinnedExecutable::open(Path::new("/bin/true")).unwrap();
-        let running = fs::File::open("/proc/self/exe").unwrap();
-        assert!(!unrelated.same_object_as(&running).unwrap());
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn cargo_launcher_descriptor_chain_rejects_close_and_swap() {
-        const CHILD_MODE: &str = "FE2O3_TEST_CARGO_LAUNCHER_CAPABILITY_MODE";
-        if let Some(mode) = std::env::var_os(CHILD_MODE) {
-            let observation = observe_cargo_launcher();
-            if mode == "valid" {
-                assert_ne!(observation.unwrap().executable_sha256, [0; 32]);
-            } else {
-                assert!(observation.is_err());
-            }
-            return;
-        }
-
-        let executable = std::env::current_exe().unwrap();
-        let pinned = PinnedExecutable::open(&executable).unwrap();
-        let replacement = PinnedExecutable::open(Path::new("/bin/false")).unwrap();
-        for mode in ["valid", "closed", "swapped"] {
-            let mut child = pinned.command().unwrap();
-            child
-                .inherit_executable_at(crate::CARGO_LAUNCHER_CAPABILITY_FD)
-                .unwrap();
-            child
-                .as_command_mut()
-                .args([
-                    "--exact",
-                    "binding_wrapper::tests::cargo_launcher_descriptor_chain_rejects_close_and_swap",
-                    "--nocapture",
-                ])
-                .env(CHILD_MODE, mode)
-                .env(
-                    crate::CARGO_LAUNCHER_CAPABILITY_FD_ENV_V2,
-                    crate::CARGO_LAUNCHER_CAPABILITY_FD.to_string(),
-                )
-                .env(
-                    crate::CARGO_LAUNCHER_CAPABILITY_SHA256_ENV_V2,
-                    crate::hex_encode(pinned.sha256()),
-                );
-            let replacement_fd = replacement.raw_fd();
-            if mode != "valid" {
-                // SAFETY: this callback runs after the capability installer in the child and only
-                // closes or replaces that fixed test descriptor before exec.
-                unsafe {
-                    child.as_command_mut().pre_exec(move || {
-                        let result = if mode == "closed" {
-                            libc::close(crate::CARGO_LAUNCHER_CAPABILITY_FD)
-                        } else {
-                            libc::dup3(replacement_fd, crate::CARGO_LAUNCHER_CAPABILITY_FD, 0)
-                        };
-                        if result < 0 {
-                            return Err(std::io::Error::last_os_error());
-                        }
-                        Ok(())
-                    });
-                }
-            }
-            assert!(child.status().unwrap().success(), "child mode {mode}");
-        }
+        let observed = observe_pinned_cargo_image_and_parent([0x5a; 32]).unwrap();
+        assert_eq!(observed.pinned_cargo_image_sha256, [0x5a; 32]);
+        assert_ne!(observed.observed_parent_pid, 0);
+        assert_ne!(observed.observed_parent_start_time_ticks, 0);
     }
 
     #[test]

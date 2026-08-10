@@ -98,15 +98,15 @@ pub(crate) fn publish_worker_v2_compiler_module_with_descriptors(
             hex(semantic.portable_mir_sha256()),
         );
         eprintln!(
-            "[rustc-codegen-fe2o3] S09 BuildIdentityClaimV2: schema=fe2o3-s09-build-identity-claim-v2; identity_sha256={}; cargo_metadata_sha256={}; prepared_rustc_command_sha256={}; cargo_fe2o3_executable_sha256={}; declared_cargo_executable_sha256={}; cargo_launcher_executable_sha256={}; cargo_launcher_pid={}; cargo_launcher_start_time_ticks={}; observed_def_path={}; observed_symbol={}",
+            "[rustc-codegen-fe2o3] S09 BuildIdentityClaimV2: schema=fe2o3-s09-build-identity-claim-v2; identity_sha256={}; cargo_metadata_sha256={}; prepared_rustc_command_sha256={}; cargo_fe2o3_executable_sha256={}; declared_cargo_executable_sha256={}; pinned_cargo_image_sha256={}; observed_parent_pid={}; observed_parent_start_time_ticks={}; observed_def_path={}; observed_symbol={}",
             hex(observation.identity_sha256()),
             hex(observation.cargo_metadata_sha256()),
             hex(observation.prepared_rustc_command_sha256()),
             hex(observation.cargo_fe2o3_executable_sha256()),
             hex(observation.declared_cargo_executable_sha256()),
-            hex(observation.cargo_launcher_executable_sha256()),
-            observation.cargo_launcher_pid(),
-            observation.cargo_launcher_start_time_ticks(),
+            hex(observation.pinned_cargo_image_sha256()),
+            observation.observed_parent_pid(),
+            observation.observed_parent_start_time_ticks(),
             observation.observed_def_path(),
             observation.observed_symbol(),
         );

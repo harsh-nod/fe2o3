@@ -31,11 +31,6 @@ const BINDING_WRAPPER_MODE_ENV: &str = "FE2O3_BINDING_WRAPPER_MODE_V1";
 const MANAGED_RUSTC_ARGS_ENV: &str = "FE2O3_MANAGED_RUSTC_ARGS_V1";
 const BUILD_SESSION_ENV: &str = "FE2O3_BUILD_SESSION_V1";
 const INTERNAL_RUNNER_ARG: &str = "__fe2o3-runner-v1";
-pub(crate) const CARGO_LAUNCHER_CAPABILITY_FD: std::os::fd::RawFd = 195;
-pub(crate) const CARGO_LAUNCHER_CAPABILITY_FD_ENV_V2: &str =
-    "FE2O3_CARGO_LAUNCHER_CAPABILITY_FD_V2";
-pub(crate) const CARGO_LAUNCHER_CAPABILITY_SHA256_ENV_V2: &str =
-    "FE2O3_CARGO_LAUNCHER_CAPABILITY_SHA256_V2";
 const BACKEND_BUILD_CHILD_FD: std::os::fd::RawFd = 196;
 const ARTIFACT_CHILD_FD: std::os::fd::RawFd = 197;
 const BACKEND_CHILD_FD: std::os::fd::RawFd = 198;
@@ -339,9 +334,6 @@ fn run_cargo_with_backend(
     let mut cargo = pinned_cargo
         .command()
         .map_err(|error| format!("failed to prepare pinned Cargo executable: {error}"))?;
-    cargo
-        .inherit_executable_at(CARGO_LAUNCHER_CAPABILITY_FD)
-        .map_err(|error| format!("failed to retain Cargo launcher capability: {error}"))?;
     let mut forwarded_args = args.to_vec();
     if command == "run" {
         inject_application_runner(&context.project, &mut forwarded_args)?;
@@ -351,6 +343,7 @@ fn run_cargo_with_backend(
         context.build_session,
         &context.pinned_backend,
         artifact_dir,
+        &pinned_cargo,
     )?;
     cargo
         .as_command_mut()
@@ -369,15 +362,7 @@ fn run_cargo_with_backend(
         .env("RUSTC_WORKSPACE_WRAPPER", &context.binding_wrapper)
         .env(BINDING_WRAPPER_MODE_ENV, "1")
         .env(MANAGED_RUSTC_ARGS_ENV, &context.managed_rustc_args)
-        .env(BUILD_SESSION_ENV, context.build_session.to_hex())
-        .env(
-            CARGO_LAUNCHER_CAPABILITY_FD_ENV_V2,
-            CARGO_LAUNCHER_CAPABILITY_FD.to_string(),
-        )
-        .env(
-            CARGO_LAUNCHER_CAPABILITY_SHA256_ENV_V2,
-            hex_encode(pinned_cargo.sha256()),
-        );
+        .env(BUILD_SESSION_ENV, context.build_session.to_hex());
     match context.worker_v2_identity {
         Some(identity) => {
             cargo

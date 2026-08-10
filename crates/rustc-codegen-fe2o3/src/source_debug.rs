@@ -60,12 +60,12 @@ const CARGO_FE2O3_EXECUTABLE_BUILD_OBSERVATION_ENV_V2: &str =
     "FE2O3_CARGO_FE2O3_EXECUTABLE_BUILD_OBSERVATION_V2";
 const DECLARED_CARGO_EXECUTABLE_BUILD_OBSERVATION_ENV_V2: &str =
     "FE2O3_DECLARED_CARGO_EXECUTABLE_BUILD_OBSERVATION_V2";
-const CARGO_LAUNCHER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2: &str =
-    "FE2O3_CARGO_LAUNCHER_EXECUTABLE_BUILD_OBSERVATION_V2";
-const CARGO_LAUNCHER_PID_BUILD_OBSERVATION_ENV_V2: &str =
-    "FE2O3_CARGO_LAUNCHER_PID_BUILD_OBSERVATION_V2";
-const CARGO_LAUNCHER_START_TIME_BUILD_OBSERVATION_ENV_V2: &str =
-    "FE2O3_CARGO_LAUNCHER_START_TIME_BUILD_OBSERVATION_V2";
+const PINNED_CARGO_IMAGE_BUILD_OBSERVATION_ENV_V2: &str =
+    "FE2O3_PINNED_CARGO_IMAGE_BUILD_OBSERVATION_V2";
+const OBSERVED_PARENT_PID_BUILD_OBSERVATION_ENV_V2: &str =
+    "FE2O3_OBSERVED_PARENT_PID_BUILD_OBSERVATION_V2";
+const OBSERVED_PARENT_START_TIME_BUILD_OBSERVATION_ENV_V2: &str =
+    "FE2O3_OBSERVED_PARENT_START_TIME_BUILD_OBSERVATION_V2";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AlphaSourceDebugV2 {
@@ -400,12 +400,12 @@ fn build_identity_claim_v2(
         required_digest_environment(CARGO_FE2O3_EXECUTABLE_BUILD_OBSERVATION_ENV_V2)?;
     let declared_cargo_executable_sha256 =
         required_digest_environment(DECLARED_CARGO_EXECUTABLE_BUILD_OBSERVATION_ENV_V2)?;
-    let cargo_launcher_executable_sha256 =
-        required_digest_environment(CARGO_LAUNCHER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2)?;
-    let cargo_launcher_pid =
-        required_decimal_environment(CARGO_LAUNCHER_PID_BUILD_OBSERVATION_ENV_V2)?;
-    let cargo_launcher_start_time_ticks =
-        required_decimal_environment(CARGO_LAUNCHER_START_TIME_BUILD_OBSERVATION_ENV_V2)?;
+    let pinned_cargo_image_sha256 =
+        required_digest_environment(PINNED_CARGO_IMAGE_BUILD_OBSERVATION_ENV_V2)?;
+    let observed_parent_pid =
+        required_decimal_environment(OBSERVED_PARENT_PID_BUILD_OBSERVATION_ENV_V2)?;
+    let observed_parent_start_time_ticks =
+        required_decimal_environment(OBSERVED_PARENT_START_TIME_BUILD_OBSERVATION_ENV_V2)?;
     let worker_build_identity =
         required_text_environment(WORKER_BUILD_IDENTITY_OBSERVATION_ENV_V2)?;
     let llvm_build_identity = required_text_environment(LLVM_BUILD_IDENTITY_OBSERVATION_ENV_V2)?;
@@ -430,9 +430,9 @@ fn build_identity_claim_v2(
             rustc_executable_sha256,
             cargo_fe2o3_executable_sha256,
             declared_cargo_executable_sha256,
-            cargo_launcher_executable_sha256,
-            cargo_launcher_pid,
-            cargo_launcher_start_time_ticks,
+            pinned_cargo_image_sha256,
+            observed_parent_pid,
+            observed_parent_start_time_ticks,
             codegen_backend_sha256,
             worker_config_sha256,
             worker_executable_sha256,
@@ -1596,9 +1596,9 @@ mod tests {
             rustc_executable_sha256: [0x37; 32],
             cargo_fe2o3_executable_sha256: [0x38; 32],
             declared_cargo_executable_sha256: [0x39; 32],
-            cargo_launcher_executable_sha256: [0x3a; 32],
-            cargo_launcher_pid: 59,
-            cargo_launcher_start_time_ticks: 60,
+            pinned_cargo_image_sha256: [0x3a; 32],
+            observed_parent_pid: 59,
+            observed_parent_start_time_ticks: 60,
             codegen_backend_sha256: [0x3d; 32],
             worker_config_sha256: [0x3e; 32],
             worker_executable_sha256: [0x3f; 32],

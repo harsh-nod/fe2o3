@@ -61,9 +61,9 @@ const BUILD_CLAIM_FIELDS_V2: [&str; 20] = [
     "rustc_executable_sha256",
     "cargo_fe2o3_executable_sha256",
     "declared_cargo_executable_sha256",
-    "cargo_launcher_executable_sha256",
-    "cargo_launcher_pid",
-    "cargo_launcher_start_time_ticks",
+    "pinned_cargo_image_sha256",
+    "observed_parent_pid",
+    "observed_parent_start_time_ticks",
     "codegen_backend_sha256",
     "worker_config_sha256",
     "worker_executable_sha256",
@@ -286,9 +286,9 @@ pub(crate) struct BuildIdentityClaimFieldsV2<'a> {
     pub(crate) rustc_executable_sha256: [u8; 32],
     pub(crate) cargo_fe2o3_executable_sha256: [u8; 32],
     pub(crate) declared_cargo_executable_sha256: [u8; 32],
-    pub(crate) cargo_launcher_executable_sha256: [u8; 32],
-    pub(crate) cargo_launcher_pid: u64,
-    pub(crate) cargo_launcher_start_time_ticks: u64,
+    pub(crate) pinned_cargo_image_sha256: [u8; 32],
+    pub(crate) observed_parent_pid: u64,
+    pub(crate) observed_parent_start_time_ticks: u64,
     pub(crate) codegen_backend_sha256: [u8; 32],
     pub(crate) worker_config_sha256: [u8; 32],
     pub(crate) worker_executable_sha256: [u8; 32],
@@ -311,9 +311,9 @@ pub struct BuildIdentityClaimV2 {
     rustc_executable_sha256: [u8; 32],
     cargo_fe2o3_executable_sha256: [u8; 32],
     declared_cargo_executable_sha256: [u8; 32],
-    cargo_launcher_executable_sha256: [u8; 32],
-    cargo_launcher_pid: u64,
-    cargo_launcher_start_time_ticks: u64,
+    pinned_cargo_image_sha256: [u8; 32],
+    observed_parent_pid: u64,
+    observed_parent_start_time_ticks: u64,
     codegen_backend_sha256: [u8; 32],
     worker_config_sha256: [u8; 32],
     worker_executable_sha256: [u8; 32],
@@ -354,13 +354,16 @@ impl BuildIdentityClaimV2 {
                 hex(&fields.declared_cargo_executable_sha256),
             ),
             (
-                "cargo_launcher_executable_sha256",
-                hex(&fields.cargo_launcher_executable_sha256),
+                "pinned_cargo_image_sha256",
+                hex(&fields.pinned_cargo_image_sha256),
             ),
-            ("cargo_launcher_pid", fields.cargo_launcher_pid.to_string()),
             (
-                "cargo_launcher_start_time_ticks",
-                fields.cargo_launcher_start_time_ticks.to_string(),
+                "observed_parent_pid",
+                fields.observed_parent_pid.to_string(),
+            ),
+            (
+                "observed_parent_start_time_ticks",
+                fields.observed_parent_start_time_ticks.to_string(),
             ),
             (
                 "codegen_backend_sha256",
@@ -409,14 +412,11 @@ impl BuildIdentityClaimV2 {
                 fields[11],
                 "declared_cargo_executable_sha256",
             )?,
-            cargo_launcher_executable_sha256: decode_digest(
-                fields[12],
-                "cargo_launcher_executable_sha256",
-            )?,
-            cargo_launcher_pid: decode_decimal(fields[13], "cargo_launcher_pid", false)?,
-            cargo_launcher_start_time_ticks: decode_decimal(
+            pinned_cargo_image_sha256: decode_digest(fields[12], "pinned_cargo_image_sha256")?,
+            observed_parent_pid: decode_decimal(fields[13], "observed_parent_pid", false)?,
+            observed_parent_start_time_ticks: decode_decimal(
                 fields[14],
-                "cargo_launcher_start_time_ticks",
+                "observed_parent_start_time_ticks",
                 false,
             )?,
             codegen_backend_sha256: decode_digest(fields[15], "codegen_backend_sha256")?,
@@ -482,16 +482,16 @@ impl BuildIdentityClaimV2 {
         &self.declared_cargo_executable_sha256
     }
 
-    pub const fn cargo_launcher_executable_sha256(&self) -> &[u8; 32] {
-        &self.cargo_launcher_executable_sha256
+    pub const fn pinned_cargo_image_sha256(&self) -> &[u8; 32] {
+        &self.pinned_cargo_image_sha256
     }
 
-    pub const fn cargo_launcher_pid(&self) -> u64 {
-        self.cargo_launcher_pid
+    pub const fn observed_parent_pid(&self) -> u64 {
+        self.observed_parent_pid
     }
 
-    pub const fn cargo_launcher_start_time_ticks(&self) -> u64 {
-        self.cargo_launcher_start_time_ticks
+    pub const fn observed_parent_start_time_ticks(&self) -> u64 {
+        self.observed_parent_start_time_ticks
     }
 
     pub const fn codegen_backend_sha256(&self) -> &[u8; 32] {
@@ -1098,9 +1098,9 @@ mod tests {
             rustc_executable_sha256: [10; 32],
             cargo_fe2o3_executable_sha256: [11; 32],
             declared_cargo_executable_sha256: [12; 32],
-            cargo_launcher_executable_sha256: [13; 32],
-            cargo_launcher_pid: 14,
-            cargo_launcher_start_time_ticks: 15,
+            pinned_cargo_image_sha256: [13; 32],
+            observed_parent_pid: 14,
+            observed_parent_start_time_ticks: 15,
             codegen_backend_sha256: [16; 32],
             worker_config_sha256: [17; 32],
             worker_executable_sha256: [18; 32],
@@ -1575,12 +1575,9 @@ mod tests {
             decoded.build_claim().declared_cargo_executable_sha256(),
             &[12; 32]
         );
-        assert_eq!(
-            decoded.build_claim().cargo_launcher_executable_sha256(),
-            &[13; 32]
-        );
-        assert_eq!(decoded.build_claim().cargo_launcher_pid(), 14);
-        assert_eq!(decoded.build_claim().cargo_launcher_start_time_ticks(), 15);
+        assert_eq!(decoded.build_claim().pinned_cargo_image_sha256(), &[13; 32]);
+        assert_eq!(decoded.build_claim().observed_parent_pid(), 14);
+        assert_eq!(decoded.build_claim().observed_parent_start_time_ticks(), 15);
     }
 
     #[test]
