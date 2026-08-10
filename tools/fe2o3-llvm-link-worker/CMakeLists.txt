@@ -115,7 +115,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 llvm_map_components_to_libnames(FE2O3_LLVM_LIBS
   Core BitReader Linker Passes Target CodeGen Object Support TransformUtils
-  AMDGPUCodeGen AMDGPUAsmParser AMDGPUDesc AMDGPUInfo AMDGPUUtils)
+  MC MCDisassembler AMDGPUCodeGen AMDGPUAsmParser AMDGPUDesc AMDGPUInfo
+  AMDGPUUtils)
 llvm_map_components_to_libnames(FE2O3_LLVM_TEST_LIBS BitWriter)
 
 set(FE2O3_WORKER_MEASUREMENT_PREIMAGE
@@ -139,9 +140,9 @@ set(FE2O3_WORKER_MEASUREMENT_PREIMAGE
 foreach(FE2O3_WORKER_SOURCE IN ITEMS
     CMakeLists.txt include/WorkerProtocol.h include/WorkerPipeline.h
     include/WorkerDeviceLibraryPolicy.h include/WorkerBuildConfig.h.in
-    include/WorkerLldPolicy.h
+    include/WorkerLldPolicy.h include/WorkerMachineEffect.h
     src/WorkerProtocol.cpp src/WorkerPipeline.cpp
-    src/WorkerDeviceLibraryPolicy.cpp src/main.cpp)
+    src/WorkerDeviceLibraryPolicy.cpp src/WorkerMachineEffect.cpp src/main.cpp)
   set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/${FE2O3_WORKER_SOURCE}")
   file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/${FE2O3_WORKER_SOURCE}"
@@ -172,7 +173,7 @@ target_compile_options(fe2o3_worker_protocol PRIVATE -Wall -Wextra -Wpedantic
 target_link_libraries(fe2o3_worker_protocol PUBLIC LLVMSupport)
 
 add_library(fe2o3_worker_pipeline STATIC src/WorkerPipeline.cpp
-  src/WorkerDeviceLibraryPolicy.cpp)
+  src/WorkerDeviceLibraryPolicy.cpp src/WorkerMachineEffect.cpp)
 target_include_directories(fe2o3_worker_pipeline
   PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_include_directories(fe2o3_worker_pipeline SYSTEM PRIVATE
@@ -221,6 +222,21 @@ if(BUILD_TESTING)
 
   add_executable(fe2o3-worker-device-library-policy-tests
     tests/DeviceLibraryPolicyTests.cpp)
+  add_executable(fe2o3-worker-machine-effect-tests
+    tests/MachineEffectTests.cpp)
+  target_include_directories(fe2o3-worker-machine-effect-tests SYSTEM PRIVATE
+    ${LLVM_INCLUDE_DIRS} ${LLD_INCLUDE_DIRS})
+  target_compile_definitions(fe2o3-worker-machine-effect-tests PRIVATE
+    FE2O3_LLVM_BUILD_ID="${FE2O3_MEASURED_LLVM_BUILD_ID}"
+    FE2O3_WORKER_BUILD_ID="${FE2O3_WORKER_MEASUREMENT}")
+  target_compile_options(fe2o3-worker-machine-effect-tests PRIVATE -Wall
+    -Wextra -Wpedantic -Werror -Wno-unused-parameter -fno-exceptions
+    -fno-rtti)
+  target_link_libraries(fe2o3-worker-machine-effect-tests PRIVATE
+    fe2o3_worker_pipeline ${FE2O3_LLVM_TEST_LIBS})
+  add_test(NAME fe2o3-worker-machine-effect-tests
+    COMMAND fe2o3-worker-machine-effect-tests)
+
   target_include_directories(fe2o3-worker-device-library-policy-tests SYSTEM
     PRIVATE ${LLVM_INCLUDE_DIRS})
   target_compile_options(fe2o3-worker-device-library-policy-tests PRIVATE

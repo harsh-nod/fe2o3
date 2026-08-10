@@ -1,3 +1,4 @@
+#include "WorkerMachineEffect.h"
 #include "WorkerPipeline.h"
 #include "WorkerProtocol.h"
 
@@ -6,6 +7,8 @@
 #include <array>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
+#include <string>
 #include <vector>
 
 #ifndef FE2O3_LLVM_BUILD_ID
@@ -46,6 +49,46 @@ int writeResponse(Response ResponseValue) {
   return 0;
 }
 
+int runPhysicalMachineEffect(llvm::ArrayRef<uint8_t> Bytes) {
+  auto RequestValue = decodePhysicalMachineEffectRequest(Bytes);
+  if (!RequestValue) {
+    std::string Diagnostic = llvm::toString(RequestValue.takeError());
+    std::fprintf(stderr, "%s\n", Diagnostic.c_str());
+    return 65;
+  }
+  auto Evidence = analyzeGfx942PhysicalMachineEffects(*RequestValue);
+  if (!Evidence) {
+    std::string Diagnostic = llvm::toString(Evidence.takeError());
+    std::fprintf(stderr, "%s\n", Diagnostic.c_str());
+    return 65;
+  }
+  auto Encoded = encodePhysicalMachineEffectEvidence(*Evidence);
+  if (!Encoded) {
+    std::string Diagnostic = llvm::toString(Encoded.takeError());
+    std::fprintf(stderr, "%s\n", Diagnostic.c_str());
+    return 70;
+  }
+  if (std::fwrite(Encoded->data(), 1, Encoded->size(), stdout) !=
+          Encoded->size() ||
+      std::fflush(stdout) != 0)
+    return 74;
+  return 0;
+}
+
+int runPhysicalMachineEffectIdentity(llvm::ArrayRef<uint8_t> Bytes) {
+  auto Encoded = encodePhysicalMachineEffectIdentityResponse(Bytes);
+  if (!Encoded) {
+    std::string Diagnostic = llvm::toString(Encoded.takeError());
+    std::fprintf(stderr, "%s\n", Diagnostic.c_str());
+    return 65;
+  }
+  if (std::fwrite(Encoded->data(), 1, Encoded->size(), stdout) !=
+          Encoded->size() ||
+      std::fflush(stdout) != 0)
+    return 74;
+  return 0;
+}
+
 int v1DecodeFailure(const char *Diagnostic) {
   return writeResponse({{},
                         {},
@@ -57,8 +100,16 @@ int v1DecodeFailure(const char *Diagnostic) {
 
 } // namespace
 
-int main(int ArgumentCount, char **) {
-  if (ArgumentCount != 1)
+int main(int ArgumentCount, char **ArgumentValues) {
+  bool PhysicalMachineEffect =
+      ArgumentCount == 2 &&
+      std::strcmp(ArgumentValues[1], "--machine-effects-gfx942-v1") == 0;
+  bool PhysicalMachineEffectIdentity =
+      ArgumentCount == 2 &&
+      std::strcmp(ArgumentValues[1],
+                  "--machine-effects-gfx942-identities-v1") == 0;
+  if (ArgumentCount != 1 && !PhysicalMachineEffect &&
+      !PhysicalMachineEffectIdentity)
     return 64;
   std::vector<uint8_t> Bytes;
   Bytes.reserve(64 * 1024);
@@ -71,6 +122,10 @@ int main(int ArgumentCount, char **) {
     }
     return v1DecodeFailure("worker request exceeds byte bound");
   }
+  if (PhysicalMachineEffect)
+    return runPhysicalMachineEffect(Bytes);
+  if (PhysicalMachineEffectIdentity)
+    return runPhysicalMachineEffectIdentity(Bytes);
   auto Version = detectRequestProtocol(Bytes);
   if (!Version) {
     llvm::consumeError(Version.takeError());
