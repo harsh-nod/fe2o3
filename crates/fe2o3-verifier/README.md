@@ -44,7 +44,7 @@ authority.
 
 The bridge offers two separate freshness APIs. The existing
 `AuthenticatedExecutionFreshnessV1` remains a process-local convenience for
-tests and short-lived tools. Production callers can use
+tests and short-lived tools. Callers that need durable replay tracking can use
 `PersistentProofFreshnessLedgerV1` with
 `bind_authenticated_proof_executable_persistent_v1`. That path completes every
 recorder-report and executable-record check first, then durably consumes the
@@ -136,15 +136,27 @@ authenticator.
 ## Exact gfx942 alpha/zeta source-proof records
 
 `Gfx942AlphaZetaProofInputV1` is a sealed identity for the bounded alpha/zeta
-source-model profile. `AlphaZetaProofSourcesV1::discover_workspace` starts from
-the workspace and example Cargo manifests and recursively follows local Cargo
-dependencies, Rust modules, `include!`, and `#[path]`. The resulting bounded,
-canonical manifest includes `Cargo.lock`, toolchain and Cargo configuration,
+CPU/shared-body source-model profile. It is not a GPU-kernel or machine-code
+proof. `AlphaZetaProofSourcesV1::discover_workspace` starts from the workspace
+and example Cargo manifests and recursively follows local Cargo dependencies,
+Rust modules, `include!`, and `#[path]`. The resulting bounded, canonical
+project-input snapshot includes `Cargo.lock`, toolchain and Cargo configuration,
 the ordinary Rust model and shared CPU body, the axiom-free permission model,
 the Verus harness, and the `fe2o3-contracts` manifest and source tree. Missing,
-extra, role-swapped, oversized, symlinked, or structurally ambiguous inputs are
-rejected. File roles, paths, lengths, SHA-256 measurements, and dependency edges
-contribute to separate source-tree and dependency-tree identities.
+extra, role-swapped, oversized, symlinked-root, symlinked-parent, or structurally
+ambiguous inputs are rejected. Discovery reads each file once and retains those
+immutable bytes. File roles, paths, lengths, SHA-256 measurements, and dependency
+edges contribute to separate source-tree and dependency-tree identities.
+
+This bounded snapshot is intentionally not called a complete source or verifier
+runtime closure. It does not measure Cargo build scripts, procedural macros,
+`vstd`, `rust_verify`, Verus support resources, inherited environment, generated
+files, compiler shared libraries, or solver resources. The trusted-item inventory
+is derived from retained Rust token streams reachable from the proof harness. It
+detects `external_body`, `assume`, `admit`, trusted attributes, and explicitly
+imported trusted APIs. External `vstd`/builtin imports are retained as unmeasured
+runtime dependencies. `validate_workspace` may rediscover files for diagnostics,
+but no authoritative result can arise from that reread.
 
 The sealed input also binds the proof target, typed ABI, effects and launch
 identities, measured Verus and Z3 names, versions, executable and configuration
@@ -156,17 +168,21 @@ artifact `TargetIdentity`, and publication `TargetIdentityV1` for exactly
 `record_descriptive_alpha_zeta_execution_v1` is a test and diagnostics helper.
 It accepts caller-assembled `ProofCapsuleV1::new_inert` values and a bounded
 process-local replay ledger, so neither it nor `ReviewedAlphaZetaProofSetV1`
-can satisfy the production boundary. It remains useful for mutation tests over
+can satisfy an authoritative boundary. It remains useful for mutation tests over
 dependency, property, tool, model, nonce, and freshness substitutions.
 
-`record_production_alpha_zeta_execution_v1` instead consumes a non-clone
+`record_inert_alpha_zeta_executable_evidence_v1` consumes a non-clone
 `PersistentlyFreshProofExecutableBindingV1`, whose authenticated recorder output,
-artifact match, and durable receipt have private construction. It rechecks the
-sealed input configuration, exact typed target, ABI, effects, launch, tools,
-model, empty trusted-item inventory, and the artifact V1 seven-property envelope.
+artifact match, and durable receipt have private construction. It remains inert:
+the recorder did not receive the retained source snapshots, did not establish
+that Verus or Z3 ran, and does not cover the compiler/verifier runtime closure.
+The join rechecks the sealed input configuration, source-derived trusted-item
+inventory, exact typed `gfx942:xnack-` target, COV6, full artifact proof target
+including kernel ID, the manifest-derived alpha/zeta logical and export symbols,
+ABI, effects, launch, tools, model, and the artifact V1 seven-property envelope.
 Only the five source obligations are established by the Verus harness; the
 additional memory-safety and launch-validity envelope entries remain recorder
-claims. `ProductionAlphaZetaProofSetV1` requires one contiguous durable ledger
+claims. `InertAlphaZetaExecutableEvidenceSetV1` requires one contiguous durable ledger
 lineage and rejects mixed set context, repeated proof-binding identity, repeated
 review nonce, and repeated execution identities.
 
@@ -177,9 +193,9 @@ forked freshness histories. It also requires distinct per-kernel input, proof,
 challenge, transcript, result, and persistent-binding identities. These are
 review mechanics, not authentication. The reviewer policy and proof capsule are
 caller-selected, and the public inert freshness constructor does not show that
-the persistent bridge ran. Descriptive and production records alike report
-false for proof or launch authority; production construction authenticates the
-recorder and durable lineage, not claimed Verus or solver execution.
+the persistent bridge ran. Both record families report false for proof or launch
+authority. The executable-evidence construction authenticates only the recorder
+and durable lineage, not Verus, the solver, compiler refinement, or GPU execution.
 
 The model proves bounds, natural-number address representability, explicit
 input-initialization premises, injective exclusive output ownership, and exact
