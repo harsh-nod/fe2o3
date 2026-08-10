@@ -533,6 +533,71 @@ fn gfx942_diagnostic_items_lower_to_closed_ir_contracts() {
 }
 
 #[test]
+fn gfx942_diagnostic_calls_forward_promoted_ssa_values() {
+    let mut fixture = diagnostics_alpha();
+    fixture
+        .locals
+        .push(local(19, MirLocalRole::Temp, MirTypeShape::U32));
+    fixture.locals.sort_by_key(|local| local.index);
+    fixture.local_count = fixture.locals.len();
+
+    fixture
+        .blocks
+        .iter_mut()
+        .find(|block| block.index == 7)
+        .unwrap()
+        .statements
+        .push(assign(
+            0,
+            place(19),
+            vec![u32_constant(9)],
+            MirRvalueKind::Use,
+        ));
+    let MirTerminatorKind::Call { operands, .. } = &mut fixture
+        .blocks
+        .iter_mut()
+        .find(|block| block.index == 8)
+        .unwrap()
+        .terminator
+        .as_mut()
+        .unwrap()
+        .kind
+    else {
+        unreachable!()
+    };
+    operands[1] = operand(19);
+    fixture
+        .blocks
+        .iter_mut()
+        .find(|block| block.index == 9)
+        .unwrap()
+        .statements
+        .push(assign(
+            0,
+            place(19),
+            vec![u32_constant(11)],
+            MirRvalueKind::Use,
+        ));
+
+    let module = lower_general_v3(&MirModule {
+        functions: vec![fixture],
+    })
+    .expect("diagnostic call must preserve live control-flow values");
+    let body = function(&module, "tests::alpha")
+        .body
+        .as_ref()
+        .expect("kernel body");
+    let source = body.blocks.iter().find(|block| block.id.0 == 7).unwrap();
+    let target = body.blocks.iter().find(|block| block.id.0 == 8).unwrap();
+    let fe2o3_kernel_ir::Terminator::Branch { arguments, .. } = source.terminator.as_ref().unwrap()
+    else {
+        unreachable!()
+    };
+    assert_eq!(arguments.len(), 1);
+    assert_eq!(target.parameters.len(), 1);
+}
+
+#[test]
 fn gfx942_diagnostic_admission_fails_closed() {
     let mut missing_contract = diagnostics_alpha();
     missing_contract.frontend_contract = None;
