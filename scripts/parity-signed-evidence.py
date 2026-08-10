@@ -105,19 +105,23 @@ def read_raw(path: Path) -> tuple[bytes, list[bytes], list[list[str]]]:
         raw = path.read_bytes()
     except OSError as error:
         fail(f"cannot read {path}: {error}")
+    return parse_raw_bytes(raw, str(path))
+
+
+def parse_raw_bytes(raw: bytes, label: str) -> tuple[bytes, list[bytes], list[list[str]]]:
     if not raw or len(raw) > MAX_BYTES:
-        fail(f"invalid evidence file size: {path}")
+        fail(f"invalid evidence file size: {label}")
     if b"\r" in raw or not raw.endswith(b"\n"):
-        fail(f"non-canonical line endings: {path}")
+        fail(f"non-canonical line endings: {label}")
     raw_lines = raw.splitlines(keepends=True)
     rows: list[list[str]] = []
     for number, raw_line in enumerate(raw_lines, 1):
         if raw_line == b"\n":
-            fail(f"blank line {number}: {path}")
+            fail(f"blank line {number}: {label}")
         try:
             line = raw_line[:-1].decode("ascii")
         except UnicodeDecodeError:
-            fail(f"non-ASCII line {number}: {path}")
+            fail(f"non-ASCII line {number}: {label}")
         rows.append(line.split("\t"))
     return raw, raw_lines, rows
 
@@ -264,8 +268,9 @@ def parse_count(value: str, label: str, *, allow_zero: bool = True) -> int:
 class TrustedKey:
     role: str
     key_id: str
-    path: Path
+    relative_path: str
     fingerprint: str
+    public_key: bytes
 
 
 @dataclass
@@ -282,18 +287,20 @@ def canonical_ed25519_public_key(path: Path) -> bytes:
         fail(f"public key is missing: {path}")
     if not stat.S_ISREG(info.st_mode) or path.is_symlink():
         fail(f"public key must be a regular non-symlink file: {path}")
+    return canonical_ed25519_public_key_bytes(path.read_bytes(), str(path))
+
+
+def canonical_ed25519_public_key_bytes(raw: bytes, label: str) -> bytes:
     process = subprocess.run(
-        ["openssl", "pkey", "-pubin", "-in", str(path), "-pubout"],
+        ["openssl", "pkey", "-pubin", "-pubout"],
+        input=raw,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         check=False,
     )
     if process.returncode != 0:
-        fail(f"public key is not public Ed25519 material: {path}")
-    with tempfile.NamedTemporaryFile(prefix="fe2o3-public-key-") as canonical:
-        canonical.write(process.stdout)
-        canonical.flush()
-        ed25519_fingerprint(Path(canonical.name))
+        fail(f"public key is not public Ed25519 material: {label}")
+    ed25519_fingerprint_bytes(process.stdout, label)
     return process.stdout
 
 
@@ -315,8 +322,13 @@ def require_real_path_components(root: Path, relative: Path, label: str) -> Path
     return current
 
 def ed25519_fingerprint(path: Path) -> str:
+    return ed25519_fingerprint_bytes(path.read_bytes(), path.name)
+
+
+def ed25519_fingerprint_bytes(raw: bytes, label: str) -> str:
     process = subprocess.run(
-        ["openssl", "pkey", "-pubin", "-in", str(path), "-outform", "DER"],
+        ["openssl", "pkey", "-pubin", "-outform", "DER"],
+        input=raw,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         check=False,
@@ -327,7 +339,7 @@ def ed25519_fingerprint(path: Path) -> str:
         or len(process.stdout) != 44
         or not process.stdout.startswith(prefix)
     ):
-        fail(f"trusted public key is not canonical Ed25519 material: {path.name}")
+        fail(f"trusted public key is not canonical Ed25519 material: {label}")
     return hashlib.sha256(process.stdout).hexdigest()
 
 
@@ -379,13 +391,17 @@ def parse_trust_policy(trusted_root: Path, policy_path: Path) -> TrustPolicy:
             fail("duplicate or unsorted trusted key")
         previous = sort_key
         key_path = archive_path(trusted_root, relative)
-        if sha256_file(key_path) != expected:
+        key_bytes = key_path.read_bytes()
+        if sha256_bytes(key_bytes) != expected:
             fail(f"trusted public key digest mismatch: {key_id}")
-        fingerprint = ed25519_fingerprint(key_path)
+        canonical = canonical_ed25519_public_key_bytes(key_bytes, key_id)
+        fingerprint = ed25519_fingerprint_bytes(canonical, key_id)
         if fingerprint in fingerprints:
             fail(f"duplicate trusted public-key fingerprint: {fingerprint}")
         fingerprints.add(fingerprint)
-        keys[(role, key_id)] = TrustedKey(role, key_id, key_path, fingerprint)
+        keys[(role, key_id)] = TrustedKey(
+            role, key_id, relative, fingerprint, key_bytes
+        )
     cursor.done()
     return TrustPolicy(domain, metadata, keys)
 
@@ -409,12 +425,14 @@ def validate_production_trust(trusted_root: Path, policy_path: Path) -> TrustPol
         fail("production trust policy requires exactly one attestor and one reviewer")
     for key in trust.keys.values():
         relative = TRUST_KEYS_RELATIVE.joinpath(f"{key.key_id}.pem")
-        expected_key = require_real_path_components(
+        require_real_path_components(
             trusted_root, relative, "production public key"
         )
-        if key.path != expected_key:
+        if key.relative_path != relative.as_posix():
             fail(f"production public key has a non-canonical path: {key.key_id}")
-        if expected_key.read_bytes() != canonical_ed25519_public_key(expected_key):
+        if key.public_key != canonical_ed25519_public_key_bytes(
+            key.public_key, key.key_id
+        ):
             fail(f"production public key is not canonical PEM: {key.key_id}")
     return trust
 
@@ -579,8 +597,10 @@ def verify_signed(path: Path, trust: TrustPolicy, role: str) -> tuple[list[list[
     with tempfile.TemporaryDirectory(prefix="fe2o3-signature-") as temp:
         payload_path = Path(temp, "payload")
         signature_path = Path(temp, "signature")
+        public_key_path = Path(temp, "public-key.pem")
         payload_path.write_bytes(payload)
         signature_path.write_bytes(signature)
+        public_key_path.write_bytes(key.public_key)
         process = subprocess.run(
             [
                 "openssl",
@@ -588,7 +608,7 @@ def verify_signed(path: Path, trust: TrustPolicy, role: str) -> tuple[list[list[
                 "-verify",
                 "-pubin",
                 "-inkey",
-                str(key.path),
+                str(public_key_path),
                 "-rawin",
                 "-in",
                 str(payload_path),

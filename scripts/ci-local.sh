@@ -183,6 +183,8 @@ run_parity_matrix_checks() {
     bash scripts/tests/parity-oci-operator.sh
   run_step parity-row-evidence-tests \
     bash scripts/tests/parity-row-evidence.sh
+  run_step parity-signed-evidence-fd-tests \
+    python3 scripts/tests/parity-signed-evidence-fd.py
   run_step parity-repository-rules-tests \
     bash scripts/tests/parity-repository-rules.sh
   run_step mi300x-evidence-queue-tests \
