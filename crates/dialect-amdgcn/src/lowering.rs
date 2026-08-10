@@ -3154,7 +3154,7 @@ impl<'a> FunctionLowerer<'a> {
                 .flat_map(|block| &block.operations)
                 .find_map(|operation| {
                     (operation.results.first().map(|result| result.id) == Some(*base))
-                        .then(|| match &operation.kind {
+                        .then_some(match &operation.kind {
                             OperationKind::WorkgroupMemory(memory) => Some(memory),
                             _ => None,
                         })
