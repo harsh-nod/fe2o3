@@ -54,8 +54,8 @@ const WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2: &str =
     "FE2O3_WORKER_EXECUTABLE_BUILD_OBSERVATION_V2";
 const WORKER_BUILD_IDENTITY_OBSERVATION_ENV_V2: &str = "FE2O3_WORKER_BUILD_IDENTITY_OBSERVATION_V2";
 const LLVM_BUILD_IDENTITY_OBSERVATION_ENV_V2: &str = "FE2O3_LLVM_BUILD_IDENTITY_OBSERVATION_V2";
-const PREPARED_RUSTC_COMMAND_OBSERVATION_FD_V2: std::os::fd::RawFd =
-    fe2o3_process_identity::S09_PREPARED_COMMAND_EXPECTATION_FD_V2;
+const PROCESS_CONSISTENCY_EXPECTATION_FD_V3: std::os::fd::RawFd =
+    fe2o3_process_identity::S09_PROCESS_CONSISTENCY_EXPECTATION_FD_V3;
 const CARGO_FE2O3_EXECUTABLE_BUILD_OBSERVATION_ENV_V2: &str =
     "FE2O3_CARGO_FE2O3_EXECUTABLE_BUILD_OBSERVATION_V2";
 const DECLARED_CARGO_EXECUTABLE_BUILD_OBSERVATION_ENV_V2: &str =
@@ -269,6 +269,8 @@ pub(crate) fn collect_requested_profile<'tcx>(
         || function.file != index_location.file
         || function.source_sha256 != local_location.source_sha256
         || function.source_sha256 != index_location.source_sha256
+        || function.source_bytes != local_location.source_bytes
+        || function.source_bytes != index_location.source_bytes
         || function.line != S09_FUNCTION_LINE
         || index_location.line != S09_INDEX_LINE
         || local_location.line != S09_LOCAL_LINE
@@ -294,6 +296,9 @@ pub(crate) fn collect_requested_profile<'tcx>(
         def_path,
         rustc_mir_capture_sha256,
         *semantic_claim.identity_sha256(),
+        &function.file,
+        function.source_sha256,
+        function.source_bytes,
     )?;
     let identity_handoff =
         DecodedIdentityHandoffV2::from_claims(semantic_claim.clone(), build_claim.clone())?;
@@ -387,6 +392,9 @@ fn build_identity_claim_v2(
     observed_def_path: String,
     rustc_mir_capture_sha256: [u8; 32],
     semantic_identity_sha256: [u8; 32],
+    protected_source_path: &str,
+    protected_source_sha256: [u8; 32],
+    protected_source_bytes: u64,
 ) -> Result<BuildIdentityClaimV2, SourceDebugError> {
     let cargo_metadata_sha256 =
         required_digest_environment(CARGO_METADATA_BUILD_OBSERVATION_ENV_V2)?;
@@ -395,7 +403,13 @@ fn build_identity_claim_v2(
     let worker_config_sha256 = required_digest_environment(WORKER_CONFIG_BUILD_OBSERVATION_ENV_V2)?;
     let worker_executable_sha256 =
         required_digest_environment(WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2)?;
-    let prepared_rustc_command_sha256 = prepared_rustc_command_digest_capability()?;
+    // This is an inert parent-prepared/child-observed consistency digest. It does not authenticate
+    // pre-backend execution or loader history.
+    let prepared_rustc_command_sha256 = prepared_rustc_command_consistency_observation(
+        protected_source_path,
+        protected_source_sha256,
+        protected_source_bytes,
+    )?;
     let cargo_fe2o3_executable_sha256 =
         required_digest_environment(CARGO_FE2O3_EXECUTABLE_BUILD_OBSERVATION_ENV_V2)?;
     let declared_cargo_executable_sha256 =
@@ -463,13 +477,35 @@ fn required_digest_environment(name: &'static str) -> Result<[u8; 32], SourceDeb
     Ok(digest)
 }
 
-fn prepared_rustc_command_digest_capability() -> Result<[u8; 32], SourceDebugError> {
-    fe2o3_process_identity::verify_actual_process_against_sealed_expectation_v2(
-        PREPARED_RUSTC_COMMAND_OBSERVATION_FD_V2,
+fn prepared_rustc_command_consistency_observation(
+    protected_source_path: &str,
+    protected_source_sha256: [u8; 32],
+    protected_source_bytes: u64,
+) -> Result<[u8; 32], SourceDebugError> {
+    let current_dir_object = fe2o3_process_identity::current_directory_object_identity_v3()
+        .map_err(|error| {
+            SourceDebugError::new(format!(
+                "S09 cannot observe the compiler cwd object: {error}"
+            ))
+        })?;
+    let protected_source_tree_sha256 = fe2o3_process_identity::protected_source_tree_identity_v3(
+        current_dir_object,
+        std::path::Path::new(protected_source_path),
+        protected_source_sha256,
+        protected_source_bytes,
     )
     .map_err(|error| {
         SourceDebugError::new(format!(
-            "S09 actual-process command identity verification failed: {error}"
+            "S09 cannot observe its protected source tree: {error}"
+        ))
+    })?;
+    fe2o3_process_identity::compare_child_observation_with_parent_preparation_v3(
+        PROCESS_CONSISTENCY_EXPECTATION_FD_V3,
+        protected_source_tree_sha256,
+    )
+    .map_err(|error| {
+        SourceDebugError::new(format!(
+            "S09 parent-prepared/child-observed consistency comparison failed: {error}"
         ))
     })
 }
@@ -1101,6 +1137,7 @@ struct SourceLocation {
     file: String,
     line: usize,
     source_sha256: [u8; 32],
+    source_bytes: u64,
 }
 
 fn source_location(tcx: TyCtxt<'_>, span: Span) -> Result<SourceLocation, SourceDebugError> {
@@ -1124,6 +1161,7 @@ fn source_location(tcx: TyCtxt<'_>, span: Span) -> Result<SourceLocation, Source
         file,
         line: location.line,
         source_sha256,
+        source_bytes: source.len() as u64,
     })
 }
 

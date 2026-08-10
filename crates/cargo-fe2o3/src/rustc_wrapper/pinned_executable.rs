@@ -6,11 +6,11 @@
 //! [`PinExecutableError::UnsupportedPlatform`]; they must grow an equivalent descriptor-based
 //! execution primitive rather than falling back to reopening the input pathname.
 //!
-//! This pins one regular executable object, not its trust chain. The caller must eventually compare
-//! [`PinnedExecutable::sha256`] with an authenticated expected digest. Parent-directory symlinks,
-//! mutations of the opened inode by another writer, the ELF interpreter, shared libraries, the
-//! codegen backend dynamic library, and the kernel/`procfs` implementation remain outside this
-//! boundary.
+//! This is an inert object/byte consistency primitive, not a trust-chain or execution-history
+//! authenticator. Parent-directory symlinks, mutations of the opened inode by another writer, the
+//! ELF interpreter, shared libraries, the codegen backend dynamic library, and the kernel/`procfs`
+//! implementation remain outside this boundary. A protected supervisor is required to grant
+//! authority over pre-backend loader history.
 
 use std::error::Error;
 use std::fmt;
@@ -180,6 +180,7 @@ impl Error for PinExecutableError {
 #[cfg(target_os = "linux")]
 mod platform {
     use super::{MAX_EXECUTABLE_BYTES, Path, PathBuf, PinExecutableError};
+    use fe2o3_process_identity::LinuxObjectIdentityV3;
     use rustix::fs::{Access, Mode, OFlags};
     use sha2::{Digest, Sha256};
     use std::ffi::OsStr;
@@ -356,6 +357,14 @@ mod platform {
             self.snapshot.size
         }
 
+        pub(crate) const fn object_identity(&self) -> LinuxObjectIdentityV3 {
+            LinuxObjectIdentityV3::from_linux_stat(
+                self.snapshot.device,
+                self.snapshot.inode,
+                self.snapshot.mode,
+            )
+        }
+
         pub(crate) fn command(&self) -> Result<PinnedCommand<'_>, PinExecutableError> {
             let current = self
                 .file
@@ -384,42 +393,7 @@ mod platform {
             Ok(PinnedCommand {
                 _executable: self,
                 command,
-            })
-        }
-
-        /// Executes by the canonical absolute pathname so rustc's relative ELF RUNPATH is kept.
-        ///
-        /// The opened object remains pinned and measured. The S09 compiler receiver compares the
-        /// bytes that actually executed with that measurement, closing the pathname race.
-        pub(crate) fn command_by_canonical_path(
-            &self,
-        ) -> Result<PinnedCommand<'_>, PinExecutableError> {
-            let execution_path = std::fs::canonicalize(&self.display_path).map_err(|source| {
-                PinExecutableError::ExecutionStrategy {
-                    path: self.display_path.clone(),
-                    source,
-                }
-            })?;
-            if !execution_path.is_absolute() {
-                return Err(PinExecutableError::ExecutionStrategy {
-                    path: self.display_path.clone(),
-                    source: io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "canonical executable path is not absolute",
-                    ),
-                });
-            }
-            validate_execution_path(
-                &self.file,
-                &execution_path,
-                self.snapshot,
-                &self.display_path,
-            )?;
-            let mut command = Command::new(&execution_path);
-            command.arg0(&execution_path);
-            Ok(PinnedCommand {
-                _executable: self,
-                command,
+                configured_argv0: self.display_path.as_os_str(),
             })
         }
 
@@ -438,6 +412,7 @@ mod platform {
     pub(crate) struct PinnedCommand<'executable> {
         _executable: &'executable PinnedExecutable,
         command: Command,
+        configured_argv0: &'executable OsStr,
     }
 
     impl PinnedCommand<'_> {
@@ -447,6 +422,10 @@ mod platform {
 
         pub(crate) fn as_command_mut(&mut self) -> &mut Command {
             &mut self.command
+        }
+
+        pub(crate) const fn configured_argv0(&self) -> &OsStr {
+            self.configured_argv0
         }
 
         pub(crate) fn args<I, S>(&mut self, args: I) -> &mut Self
@@ -714,7 +693,7 @@ mod platform {
         }
 
         #[test]
-        fn pathname_substitution_cannot_redirect_execution() {
+        fn retained_descriptor_prevents_path_trampoline() {
             let root = TestDirectory::new();
             let selected = root.path().join("rustc");
             let replacement = root.path().join("replacement");
@@ -727,10 +706,14 @@ mod platform {
 
             let pinned_result = pinned.command();
             match pinned_result {
-                Ok(mut command) => assert!(
-                    command.status().unwrap().success(),
-                    "pinned command reopened replacement"
-                ),
+                Ok(mut command) => {
+                    assert_eq!(command.as_command().get_program(), pinned.execution_path());
+                    assert_eq!(command.configured_argv0(), selected.as_os_str());
+                    assert!(
+                        command.status().unwrap().success(),
+                        "pinned command reopened replacement"
+                    );
+                }
                 Err(PinExecutableError::ExecutionObjectChanged { .. }) => {}
                 Err(error) => panic!("unexpected substitution result: {error}"),
             }

@@ -179,8 +179,8 @@ source maps or Rust aggregate layouts are complete.
 
 ## Pinned rustc executable
 
-The wrapper now contains a private pinned-executable primitive for a future
-native `rustc` execution path. On Linux it:
+The managed binding wrapper uses a pinned-executable primitive for native
+`rustc` execution. On Linux it:
 
 - opens the selected path read-only with `O_NOFOLLOW`, `O_NONBLOCK`, and
   `O_CLOEXEC` so a FIFO or device cannot stall validation;
@@ -192,8 +192,14 @@ native `rustc` execution path. On Linux it:
 - constructs commands through a validated `/proc/self/fd/<fd>` reference whose
   lifetime is tied to the retained descriptor.
 
-Compile execution is still disabled. The primitive is not used by bootstrap
-passthrough or compile plans yet.
+The protected S09 path also pins the compilation cwd as a directory descriptor
+and performs `fchdir` immediately before exec. Its bounded V3 consistency
+record covers the exact executable object and bytes, raw argv including argv0,
+cwd object identity, one exact alpha-only source path/length/SHA observation,
+and the complete cleared child environment. The backend reconstructs the same
+record from the actual process and consumes a sealed parent expectation. The
+aggregate canonical encoding is limited to 8 MiB. The separate
+`fe2o3-rustc-wrapper` compile path remains disabled.
 
 ## Pinned codegen-backend object
 
@@ -216,23 +222,25 @@ descriptor; the separate `fe2o3-rustc-wrapper` compile path remains disabled.
 ## Platform and trust limits
 
 Linux with a trustworthy, mounted procfs is the only supported execution
-strategy. Other Unix systems and Windows return an unsupported-platform error;
-they must not fall back to reopening the selected pathname. The current
-strategy is intended for native `rustc` binaries. Interpreter scripts can fail
-when the descriptor is close-on-exec and are outside this boundary.
+strategy. The process-consistency crate has an explicit Linux build gate;
+other platforms must not fall back to reopening the selected pathname. The
+current strategy is intended for native `rustc` binaries. Interpreter scripts
+can fail when the descriptor is close-on-exec and are outside this boundary.
 
 The rustc executable descriptor prevents pathname replacement from redirecting
 execution, but does not make its writable inode immutable. The backend memfd
 does provide an immutable snapshot after successful capture, so later source
 pathname replacement or inode mutation cannot change child-visible bytes.
-Parent-directory symlinks are resolved during each initial source open, and a
-race before that open can choose which object is measured. SHA-256 becomes
-authentication evidence only after an orchestration layer compares it with a
-trusted expected digest.
+Parent-directory symlinks are resolved during each initial executable open, and
+a race before that open can choose which object is measured. Protected-source
+components are instead traversed relative to the pinned cwd with `O_NOFOLLOW`.
+All resulting digests remain inert observations in this implementation.
 
 ELF interpreters, transitive shared libraries of either rustc or the codegen
 backend, dynamic-loader search and loading behavior, procfs mount/identity
 semantics, and the kernel remain outside these primitives' boundary. The
+backend starts too late to authenticate any pre-backend interpreter or loader
+history. A protected supervisor is required to establish that authority. The
 broker installs the backend descriptor only after a compile-shaped managed
 wrapper invocation; the executable selected by that invocation is not
 authenticated as rustc. Trusted Cargo descendants can deliberately replay the
