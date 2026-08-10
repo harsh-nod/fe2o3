@@ -51,7 +51,11 @@ rejects.
 4. Review and copy the generated `docs/parity-evidence` tree into the candidate.
    The bootstrap canonicalizes public PEM, rejects private input, requires
    distinct keys and IDs, writes exact SHA-256 bindings, and never overwrites an
-   existing output.
+   existing output. It writes through stable directory descriptors, fsyncs
+   every public-key and policy file plus each containing directory, and
+   publishes with `renameat2(RENAME_NOREPLACE)` through a held parent
+   descriptor. A successful return therefore means the new trust tree and its
+   parent-directory entry reached the filesystem durability boundary.
 5. Merge the configuration without changing parity status. It becomes trusted
    only after it is part of a protected base commit.
 6. Protect the workflow and trust paths with repository rules and code-owner
@@ -316,10 +320,32 @@ every file before invoking ingestion:
 Production ingestion rejects mutable filesystems, symlinks, hardlinks,
 non-regular entries, missing referenced content, undeclared files or
 directories, test-domain results, identity mismatches, and pre-existing output.
-It copies through file descriptors into a fresh staging directory, revalidates
-all signatures and digests, writes a canonical `archive-index-v1.tsv`, makes
-the destination read-only, and publishes it with one rename. The Git commit
-then supplies the durable immutable object identity consumed by hosted CI.
+It traverses with stable directory descriptors and Linux `openat2` using
+`RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_XDEV`. Every file remains open
+from authentication through parsing and copy; immutable state, type, device,
+inode, link count, size, and digest are checked on that exact descriptor. It
+then writes a canonical `archive-index-v1.tsv`, makes the destination read-only,
+and publishes it with one rename. The Git commit supplies the durable immutable
+object identity consumed by hosted CI.
+
+The generic parity suite verifies that production ingestion fails closed for a
+mutable source, but it cannot manufacture a privileged immutable filesystem.
+An operator can run the positive production path in an isolated loop-mounted
+ext4 or XFS filesystem. The harness creates ephemeral production keys and
+evidence at runtime; it does not use or install repository test keys:
+
+    sudo -E env FE2O3_RUN_PRIVILEGED_IMMUTABLE_TEST=1 \
+      FE2O3_IMMUTABLE_TEST_FILESYSTEM=ext4 \
+      scripts/ci-local.sh parity-production-immutable
+
+    sudo -E env FE2O3_RUN_PRIVILEGED_IMMUTABLE_TEST=1 \
+      FE2O3_IMMUTABLE_TEST_FILESYSTEM=xfs \
+      scripts/ci-local.sh parity-production-immutable
+
+The command exits 77 unless explicitly opted in, and fails rather than skipping
+when root privileges, loop/mount support, `chattr`, or the requested filesystem
+tooling is unavailable. Passing this harness is test evidence only; it does not
+create a production attestation or promote a parity row.
 
 The protected promotion gate independently recomputes the index and requires
 the archive to contain exactly the manifest's transitive result, queue,

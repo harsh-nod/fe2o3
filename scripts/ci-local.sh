@@ -46,6 +46,7 @@ Commands:
   workspace-test  Run every workspace test target; may require ROCm libraries
   backend         Build the rustc codegen backend dylib
   parity-evidence Run parity, signed-attestation, and queue shell tests
+  parity-production-immutable  Run opt-in root ext4/XFS ingestion test
   verus           Run positive and negative Verus proof fixtures; requires Verus
   rocm-compile    Compile every example to host code and HSACO; requires ROCm
   hardware-smoke  Build and run every example; requires an AMD GPU and opt-in
@@ -357,6 +358,11 @@ run_s09_debug_hardware() {
     bash scripts/s09-debug-ci.sh "${FE2O3_S09_EVIDENCE_DIR}"
 }
 
+run_parity_production_immutable() {
+  run_step parity-production-immutable \
+    bash scripts/tests/parity-production-immutable-ingest.sh
+}
+
 main() {
   cd "${REPO_ROOT}"
   mkdir -p "${LOG_DIR}"
@@ -369,6 +375,7 @@ main() {
     workspace-test) run_workspace_tests ;;
     backend) run_backend_build ;;
     parity-evidence) run_parity_matrix_checks ;;
+    parity-production-immutable) run_parity_production_immutable ;;
     verus) run_verus ;;
     rocm-compile) run_rocm_compile ;;
     hardware-smoke) run_hardware_smoke ;;
