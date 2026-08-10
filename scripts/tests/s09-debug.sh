@@ -333,6 +333,18 @@ expect_fail "${CHECKER}" check-dwarf --input "${TMP}/dwarf-missing-location"
 sed 's/ 70 13 / 71 13 /' \
   "${FIXTURES}/dwarf.pass.txt" >"${TMP}/dwarf-missing-line"
 expect_fail "${CHECKER}" check-dwarf --input "${TMP}/dwarf-missing-line"
+sed '/DW_TAG_reference_type/d' \
+  "${FIXTURES}/dwarf.pass.txt" >"${TMP}/dwarf-missing-reference-type"
+expect_fail "${CHECKER}" check-dwarf --input "${TMP}/dwarf-missing-reference-type"
+sed 's/DW_AT_count (0x02)/DW_AT_count (0x03)/' \
+  "${FIXTURES}/dwarf.pass.txt" >"${TMP}/dwarf-wrong-array-count"
+expect_fail "${CHECKER}" check-dwarf --input "${TMP}/dwarf-wrong-array-count"
+sed 's/DW_AT_name ("__1")/DW_AT_name ("second")/' \
+  "${FIXTURES}/dwarf.pass.txt" >"${TMP}/dwarf-wrong-tuple-member"
+expect_fail "${CHECKER}" check-dwarf --input "${TMP}/dwarf-wrong-tuple-member"
+sed '/DW_AT_location (DW_OP_regx SGPR1, DW_OP_piece 0x4, DW_OP_regx SGPR1, DW_OP_piece 0x4)/d' \
+  "${FIXTURES}/dwarf.pass.txt" >"${TMP}/dwarf-scale-pair-missing-location"
+expect_fail "${CHECKER}" check-dwarf --input "${TMP}/dwarf-scale-pair-missing-location"
 sed 's#crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs#/checkout/crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs#' \
   "${FIXTURES}/dwarf.pass.txt" >"${TMP}/dwarf-absolute-source"
 expect_fail "${CHECKER}" check-dwarf --input "${TMP}/dwarf-absolute-source"
@@ -363,7 +375,7 @@ sed '/hit Breakpoint 3/d' "${ROCGDB_FIXTURE}" >"${TMP}/rocgdb-missing-bp3-hit"
 expect_fail check_rocgdb "${TMP}/rocgdb-missing-bp3-hit"
 sed '/AMDGPU Wave .*main.rs:69/d' "${ROCGDB_FIXTURE}" >"${TMP}/rocgdb-missing-bp2-wave"
 expect_fail check_rocgdb "${TMP}/rocgdb-missing-bp2-wave"
-sed '/AMDGPU Wave .*main.rs:70/d' "${ROCGDB_FIXTURE}" >"${TMP}/rocgdb-missing-bp3-wave"
+sed '/AMDGPU Wave .*main.rs:71/d' "${ROCGDB_FIXTURE}" >"${TMP}/rocgdb-missing-bp3-wave"
 expect_fail check_rocgdb "${TMP}/rocgdb-missing-bp3-wave"
 sed 's/scale = 1.5/scale = <optimized out>/' \
   "${ROCGDB_FIXTURE}" >"${TMP}/rocgdb-optimized"
@@ -371,6 +383,12 @@ expect_fail check_rocgdb "${TMP}/rocgdb-optimized"
 sed 's/input_len = 1/input_len = 2/' \
   "${ROCGDB_FIXTURE}" >"${TMP}/rocgdb-wrong-length"
 expect_fail check_rocgdb "${TMP}/rocgdb-wrong-length"
+sed '/^input\.data_ptr = /d' \
+  "${ROCGDB_FIXTURE}" >"${TMP}/rocgdb-missing-aggregate-member"
+expect_fail check_rocgdb "${TMP}/rocgdb-missing-aggregate-member"
+sed 's/input_first_ref = (f32 &) @0x7ffff000: -3.75/input_first_ref = <optimized out>/' \
+  "${ROCGDB_FIXTURE}" >"${TMP}/rocgdb-optimized-reference"
+expect_fail check_rocgdb "${TMP}/rocgdb-optimized-reference"
 sed 's/AMDGPU Wave/CPU Thread/' \
   "${ROCGDB_FIXTURE}" >"${TMP}/rocgdb-host-alpha"
 expect_fail check_rocgdb "${TMP}/rocgdb-host-alpha"
@@ -489,6 +507,10 @@ rg -q 'FE2O3_S09_ROCGDB_EXIT_STATUS' "${RUNNER}"
 rg -q 'FE2O3_S09_BP2_ARMED' "${RUNNER}"
 rg -q 'FE2O3_S09_BP3_STOP' "${RUNNER}"
 rg -Fq "info sharedlibrary memory://" "${RUNNER}"
+rg -Fq -- "-ex 'output input.data_ptr'" "${RUNNER}"
+rg -Fq -- "-ex 'output input_first_ref'" "${RUNNER}"
+expect_fail rg -q -- 'output index_scale_tuple|output scale_pair|stepi' "${RUNNER}"
+rg -Fq -- "-ex 'break main.rs:71'" "${RUNNER}"
 expect_fail rg -Fq -- "-ex 'info sharedlibrary'" "${RUNNER}"
 rg -Fq 's09_install_raw_transcript_guard "${ROCGDB_RAW}"' "${RUNNER}"
 rg -Fq 's09_delete_raw_transcript' "${RUNNER}"

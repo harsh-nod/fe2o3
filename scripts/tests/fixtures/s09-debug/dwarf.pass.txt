@@ -13,22 +13,64 @@ fixture.hsaco: file format elf64-amdgpu
  DW_AT_location (DW_OP_regx SGPR1)
  DW_AT_name ("scale")
 0x0000003a: DW_TAG_formal_parameter
+ DW_AT_location (DW_OP_regx SGPR8, DW_OP_piece 0x8, DW_OP_regx SGPR6, DW_OP_piece 0x8)
+ DW_AT_name ("input")
+0x00000043: DW_TAG_formal_parameter
+ DW_AT_location (DW_OP_regx SGPR4, DW_OP_piece 0x8, DW_OP_regx SGPR2, DW_OP_piece 0x8)
+ DW_AT_name ("output")
+0x0000004c: DW_TAG_variable
  DW_AT_location (DW_OP_regx SGPR8)
  DW_AT_name ("input_data")
-0x0000004b: DW_TAG_formal_parameter
+0x00000055: DW_TAG_variable
  DW_AT_location (DW_OP_regx SGPR6)
  DW_AT_name ("input_len")
-0x0000005c: DW_TAG_formal_parameter
+0x0000005e: DW_TAG_variable
  DW_AT_location (DW_OP_regx SGPR4)
  DW_AT_name ("output_data")
-0x0000006d: DW_TAG_formal_parameter
+0x00000067: DW_TAG_variable
  DW_AT_location (DW_OP_regx SGPR2)
  DW_AT_name ("output_len")
-0x00000076: DW_TAG_variable
+0x00000070: DW_TAG_variable
+ DW_AT_location (DW_OP_regx SGPR8)
+ DW_AT_name ("input_first_ref")
+0x00000079: DW_TAG_variable
  DW_AT_location (DW_OP_regx VGPR0)
  DW_AT_name ("i")
  DW_AT_decl_line (70)
+0x00000082: DW_TAG_variable
+ DW_AT_location (DW_OP_regx VGPR0, DW_OP_piece 0x8, DW_OP_regx SGPR1, DW_OP_piece 0x4)
+ DW_AT_name ("index_scale_tuple")
+ DW_AT_decl_line (70)
+0x0000008b: DW_TAG_variable
+ DW_AT_location (DW_OP_regx SGPR1, DW_OP_piece 0x4, DW_OP_regx SGPR1, DW_OP_piece 0x4)
+ DW_AT_name ("scale_pair")
+ DW_AT_decl_line (70)
+0x00000099: DW_TAG_structure_type
+ DW_AT_name ("DisjointSlice<f32>")
+0x0000009f: DW_TAG_member
+ DW_AT_name ("pointer")
+0x000000a9: DW_TAG_member
+ DW_AT_name ("length")
+0x000000bd: DW_TAG_structure_type
+ DW_AT_name ("S09SliceRefF32")
+0x000000c3: DW_TAG_member
+ DW_AT_name ("data_ptr")
+0x000000cd: DW_TAG_member
+ DW_AT_name ("length")
+0x000000d8: DW_TAG_reference_type
+ DW_AT_type (0x000000b9 "f32")
+0x000000dd: DW_TAG_structure_type
+ DW_AT_name ("(usize, f32)")
+0x000000e3: DW_TAG_member
+ DW_AT_name ("__0")
+0x000000ed: DW_TAG_member
+ DW_AT_name ("__1")
+0x000000f8: DW_TAG_array_type
+ DW_AT_type (0x000000b9 "f32")
+0x000000fd: DW_TAG_subrange_type
+ DW_AT_count (0x02)
 .debug_line contents:
 0x0000000000002100 68 0 0 0 0 0 is_stmt
 0x0000000000002180 69 13 0 0 0 0 is_stmt
 0x00000000000021b8 70 13 0 0 0 0 is_stmt prologue_end
+0x00000000000021c0 71 9 0 0 0 0 is_stmt

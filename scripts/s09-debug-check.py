@@ -52,6 +52,7 @@ SPACE = re.compile(r"[ \t]+")
 HEX_SHA256 = re.compile(r"[0-9a-f]{64}")
 HEX_BUILD_ID = re.compile(r"[0-9a-f]{40,64}")
 S09_SOURCE = "crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main.rs"
+DWARF_COUNT_TWO = re.compile(r"(DW_AT_count\s+\()0x0*2(\))")
 S09_DIRECTORY = "crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src"
 PATH_ATOM_CHARACTERS = frozenset(
     string.ascii_letters + string.digits + "._-$%+~:@#?&=<>/,\\"
@@ -65,7 +66,34 @@ HOST_THREAD_FRAME_SUFFIX = re.compile(
     r" at (?:\.\./sysdeps/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*|native/runtime\.c):[1-9][0-9]*$"
 )
 NORMALIZED_MEMORY_URI = "memory://<PID>#offset=0x<ADDR>&size=<SIZE>"
-VARIABLES = ("scale", "input_data", "input_len", "output_data", "output_len", "i")
+FORMAL_PARAMETERS = frozenset(("scale", "input", "output"))
+DWARF_VARIABLES = (
+    "scale",
+    "input",
+    "output",
+    "input_data",
+    "input_len",
+    "output_data",
+    "output_len",
+    "input_first_ref",
+    "i",
+    "index_scale_tuple",
+    "scale_pair",
+)
+ARGUMENT_OBSERVATIONS = (
+    "scale",
+    "input_data",
+    "input_len",
+    "output_data",
+    "output_len",
+    "input.data_ptr",
+    "input.length",
+    "output.pointer",
+    "output.length",
+    "input_first_ref",
+)
+LOCAL_OBSERVATIONS = ("i",)
+
 EXPECTED_OBSERVATIONS = {
     "scale": "1.5",
     "input_data": "(*mut f32) 0x<ADDR>",
@@ -73,6 +101,11 @@ EXPECTED_OBSERVATIONS = {
     "output_data": "(*mut f32) 0x<ADDR>",
     "output_len": "1",
     "i": "0",
+    "input.data_ptr": "(f32 *) 0x<ADDR>",
+    "input.length": "1",
+    "output.pointer": "(f32 *) 0x<ADDR>",
+    "output.length": "1",
+    "input_first_ref": "(f32 &) @0x<ADDR>: -3.75",
 }
 S09_SOURCE_SHA256 = "73c1ff5e2f29d245c8071bdb6c1a38af1c9ee1573b78d47a987633483b37e084"
 S09_SOURCE_LENGTH = "3359"
@@ -669,7 +702,7 @@ def require_path_hygiene(text: str) -> None:
             saw_source = True
             continue
         source_match = re.fullmatch(
-            re.escape(S09_SOURCE) + r"(?::(?:68|69|70))?", candidate
+            re.escape(S09_SOURCE) + r"(?::(?:68|69|70|71)?)?", candidate
         )
         if source_match:
             saw_source = True
@@ -699,6 +732,7 @@ def normalize_line(line: str) -> str:
     line = AMDGPU_LANE.sub("AMDGPU Lane <LANE>", line)
     line = AMDGPU_WAVE.sub("AMDGPU Wave <WAVE>", line)
     line = re.sub(r"^(\*? )[0-9]+( +AMDGPU Wave)", r"\1<THREAD>\2", line)
+    line = DWARF_COUNT_TWO.sub(r"\1<COUNT-2>\2", line)
     line = ADDRESS.sub("0x<ADDR>", line)
     if line.lstrip().startswith("Starting program: "):
         line = "Starting program: $HOST_EXECUTABLE"
@@ -805,8 +839,33 @@ def check_dwarf(text: str) -> None:
     for token in ("DW_AT_decl_line (68)", S09_SOURCE):
         if token not in text:
             raise CheckError(f"DWARF is missing {token!r}")
+    type_counts = {
+        "DW_TAG_structure_type": 3,
+        "DW_TAG_reference_type": 1,
+        "DW_TAG_array_type": 1,
+        "DW_TAG_subrange_type": 1,
+    }
+    for token, expected_count in type_counts.items():
+        count = text.count(token)
+        if count != expected_count:
+            raise CheckError(
+                f"DWARF requires {expected_count} {token} DIEs; found {count}"
+            )
+    for token in (
+        'DW_AT_name ("S09SliceRefF32")',
+        'DW_AT_name ("DisjointSlice<f32>")',
+        'DW_AT_name ("(usize, f32)")',
+        'DW_AT_name ("data_ptr")',
+        'DW_AT_name ("pointer")',
+        'DW_AT_name ("__0")',
+        'DW_AT_name ("__1")',
+        "DW_AT_count (<COUNT-2>)",
+    ):
+        require_once(text, token, "DWARF bounded composite schema")
+    if text.count('DW_AT_name ("length")') != 2:
+        raise CheckError("DWARF bounded composite schema requires two length members")
     dies = re.split(r"(?=^0x<ADDR>: .*DW_TAG_)", text, flags=re.MULTILINE)
-    for name in VARIABLES:
+    for name in DWARF_VARIABLES:
         require_once(text, f'DW_AT_name ("{name}")', "DWARF")
         matching = [
             die
@@ -815,7 +874,7 @@ def check_dwarf(text: str) -> None:
             and "DW_AT_location" in die
             and (
                 "DW_TAG_formal_parameter" in die
-                if name != "i"
+                if name in FORMAL_PARAMETERS
                 else "DW_TAG_variable" in die
             )
         ]
@@ -823,13 +882,12 @@ def check_dwarf(text: str) -> None:
             raise CheckError(f"DWARF does not contain one located DIE for {name!r}")
     if "DW_AT_decl_line (70)" not in text:
         raise CheckError("DWARF does not bind local `i` to source line 70")
-    for line in (68, 69, 70):
+    for line in (68, 69, 70, 71):
         if not re.search(rf"(?m)^0x<ADDR> +{line} +", text):
             raise CheckError(f"DWARF line table does not contain source line {line}")
     for rejected in (
         "DW_AT_APPLE_optimized",
         "DW_AT_GNU_locviews",
-        "DW_TAG_structure_type",
     ):
         if rejected in text:
             raise CheckError(
@@ -1020,10 +1078,10 @@ def check_rocgdb(
     if not re.search(
         r'Thread <THREAD> "alpha" hit Breakpoint 3, with lanes \[0-63\], alpha .* at '
         + re.escape(S09_SOURCE)
-        + r":70",
+        + r":71",
         bp3_hit,
     ):
-        raise CheckError("ROCgdb did not prove the exact BP3 line-70 stop")
+        raise CheckError("ROCgdb did not prove the exact BP3 line-71 stop")
     bp3_context = text[
         marker_position["FE2O3_S09_BP3_STOP"] : marker_position["FE2O3_S09_LOCAL"]
     ]
@@ -1031,19 +1089,19 @@ def check_rocgdb(
         not re.search(
             r'(?m)^\* <THREAD> AMDGPU Wave <WAVE> .*"alpha".*'
             + re.escape(S09_SOURCE)
-            + r":70$",
+            + r":71$",
             bp3_context,
         )
-        or f"at {S09_SOURCE}:70" not in bp3_context
+        or f"at {S09_SOURCE}:71" not in bp3_context
     ):
         raise CheckError(
-            "ROCgdb local observation is not bound to an AMDGPU wave at line 70"
+            "ROCgdb local observation is not bound to an AMDGPU wave at line 71"
         )
     local_section = text[
         marker_position["FE2O3_S09_LOCAL"] : marker_position["FE2O3_S09_RESUME"]
     ]
-    for name in VARIABLES:
-        section = local_section if name == "i" else argument_section
+    for name in (*ARGUMENT_OBSERVATIONS, *LOCAL_OBSERVATIONS):
+        section = local_section if name in LOCAL_OBSERVATIONS else argument_section
         observations = re.findall(rf"(?m)^{re.escape(name)}\s*=\s*(\S.*)$", section)
         if len(observations) != 1:
             raise CheckError(

@@ -267,8 +267,15 @@ if ((dwarf_verify_status == 0 && dwarf_dump_status == 0 && dwarf_normalize_statu
       -ex 'echo input_len = ' -ex 'output input_len' -ex 'echo \n' \
       -ex 'echo output_data = ' -ex 'output output_data' -ex 'echo \n' \
       -ex 'echo output_len = ' -ex 'output output_len' -ex 'echo \n' \
+      -ex 'set language c' \
+      -ex 'echo input.data_ptr = ' -ex 'output input.data_ptr' -ex 'echo \n' \
+      -ex 'echo input.length = ' -ex 'output input.length' -ex 'echo \n' \
+      -ex 'echo output.pointer = ' -ex 'output output.pointer' -ex 'echo \n' \
+      -ex 'echo output.length = ' -ex 'output output.length' -ex 'echo \n' \
+      -ex 'echo input_first_ref = ' -ex 'output input_first_ref' -ex 'echo \n' \
+      -ex 'set language rust' \
       -ex 'disable 2' \
-      -ex 'break main.rs:70' \
+      -ex 'break main.rs:71' \
       -ex 'echo FE2O3_S09_BP3_ARMED\n' \
       -ex 'continue' \
       -ex 'echo FE2O3_S09_BP3_STOP\n' \
