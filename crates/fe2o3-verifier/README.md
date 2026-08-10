@@ -136,34 +136,50 @@ authenticator.
 ## Exact gfx942 alpha/zeta source-proof records
 
 `Gfx942AlphaZetaProofInputV1` is a sealed identity for the bounded alpha/zeta
-source-model profile. It accepts exactly the ordinary Rust model, shared kernel
-body, permission model, and two-kernel Verus harness paths. Each file's path,
-length, and SHA-256 measurement contribute to separate source-tree and
-dependency-tree identities.
-The complete capsule additionally binds the exact proof target, ABI, effects,
-launch contract, Verus and Z3 names, versions, executable and configuration
-measurements, model identity, fixed five-property vocabulary, proof-set nonce,
-and per-kernel proof nonce. The target's source, dependency, and effects axes
-must agree before construction.
+source-model profile. `AlphaZetaProofSourcesV1::discover_workspace` starts from
+the workspace and example Cargo manifests and recursively follows local Cargo
+dependencies, Rust modules, `include!`, and `#[path]`. The resulting bounded,
+canonical manifest includes `Cargo.lock`, toolchain and Cargo configuration,
+the ordinary Rust model and shared CPU body, the axiom-free permission model,
+the Verus harness, and the `fe2o3-contracts` manifest and source tree. Missing,
+extra, role-swapped, oversized, symlinked, or structurally ambiguous inputs are
+rejected. File roles, paths, lengths, SHA-256 measurements, and dependency edges
+contribute to separate source-tree and dependency-tree identities.
 
-`record_reviewed_alpha_zeta_execution_v1` joins that input to one canonical
-`ProofCapsuleV1`. It requires the exact dependency role-to-measurement mapping,
-the single `gfx942` target feature, no requested or admitted axioms, the complete
-property set, a reported successful result, and an exact persistent-freshness
-projection. An independent review expectation supplies the expected input,
-proof capsule, freshness, reviewer policy, and review nonce. A bounded
-process-local ledger rejects reuse of the input, proof nonce, execution
-challenge, transcript, result, persistent binding, or review nonce.
+The sealed input also binds the proof target, typed ABI, effects and launch
+identities, measured Verus and Z3 names, versions, executable and configuration
+digests, model identity, five source-proof obligations, proof-set nonce, and
+per-kernel proof nonce. Its canonical target joins `DeviceTargetV1`, the
+artifact `TargetIdentity`, and publication `TargetIdentityV1` for exactly
+`amdgcn-amd-amdhsa` / `gfx942:xnack-` / 64-bit little-endian AMD wave semantics.
 
-`ReviewedAlphaZetaProofSetV1` consumes one non-clone alpha record and one
+`record_descriptive_alpha_zeta_execution_v1` is a test and diagnostics helper.
+It accepts caller-assembled `ProofCapsuleV1::new_inert` values and a bounded
+process-local replay ledger, so neither it nor `ReviewedAlphaZetaProofSetV1`
+can satisfy the production boundary. It remains useful for mutation tests over
+dependency, property, tool, model, nonce, and freshness substitutions.
+
+`record_production_alpha_zeta_execution_v1` instead consumes a non-clone
+`PersistentlyFreshProofExecutableBindingV1`, whose authenticated recorder output,
+artifact match, and durable receipt have private construction. It rechecks the
+sealed input configuration, exact typed target, ABI, effects, launch, tools,
+model, empty trusted-item inventory, and the artifact V1 seven-property envelope.
+Only the five source obligations are established by the Verus harness; the
+additional memory-safety and launch-validity envelope entries remain recorder
+claims. `ProductionAlphaZetaProofSetV1` requires one contiguous durable ledger
+lineage and rejects mixed set context, repeated proof-binding identity, repeated
+review nonce, and repeated execution identities.
+
+`ReviewedAlphaZetaProofSetV1` consumes one non-clone descriptive alpha record and one
 non-clone zeta record. It rejects mixed proof-set nonces, source/dependency
 trees, tools, models, review policies, ledger namespaces, and noncontiguous or
 forked freshness histories. It also requires distinct per-kernel input, proof,
 challenge, transcript, result, and persistent-binding identities. These are
-review mechanics, not authentication:
-the reviewer policy and the proof capsule remain caller-selected inputs, and
-the public inert freshness constructor is not proof that the persistent bridge
-ran. All three types report false for proof or launch authority.
+review mechanics, not authentication. The reviewer policy and proof capsule are
+caller-selected, and the public inert freshness constructor does not show that
+the persistent bridge ran. Descriptive and production records alike report
+false for proof or launch authority; production construction authenticates the
+recorder and durable lineage, not claimed Verus or solver execution.
 
 The model proves bounds, natural-number address representability, explicit
 input-initialization premises, injective exclusive output ownership, and exact
