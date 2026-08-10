@@ -13,10 +13,22 @@ General Scalar/Slice rustc-layout V3 profile, portable MIR, ABI, launch shape,
 and the exact gfx942/COV6/O0 debug policy. The build claim records Cargo
 metadata, crate and kernel bindings, observed DefPath and symbol, the final
 prepared rustc command and rustc executable, `cargo-fe2o3`, the declared Cargo
-executable, the measured PID-bound Cargo launcher executable and process start
-time, backend, Worker V2, and LLVM identities. Both records are inert claims:
+executable, the Cargo launcher executable, parent PID and process start time,
+backend, Worker V2, and LLVM identities. Both records are inert claims:
 decoding establishes canonical syntax and digest linkage but grants no
 authority. Evidence policy separately authenticates and binds their values.
+
+Cargo launcher provenance is rooted in an inherited pinned executable
+descriptor. The wrapper verifies that descriptor against its trusted digest
+and requires `/proc/<parent-pid>/exe` to name the same open executable object.
+The PID and process start time are continuity observations only; they detect a
+parent change while `/proc` is inspected and do not authenticate an
+executable by themselves. The prepared-command digest covers the final
+program, resolved pinned rustc identity, working directory, complete argument
+vector, and complete S09 child environment. The wrapper transfers that digest
+to codegen through an exact sealed 32-byte prepared-command capability at a
+fixed inherited descriptor. Codegen requires the exact immutable seal set and
+rejects a missing, replaced, writable, resized, zero, or trailing capability.
 
 The observed DefPath and symbol are opaque, canonical build observations.
 Their exact values may change when Cargo `-C metadata`, the dependency graph,
@@ -124,6 +136,13 @@ both bounded records, verifies the handoff's exact semantic and build claim
 digests plus the build-to-semantic digest edge, and compares all 41 derived
 identity fields against the protected manifest. Identity values are never
 accepted from environment variables or command-line field values.
+
+The compiler codec additionally delegates HSACO inspection to the physical
+kernel-descriptor binder before returning the inert claims. Metadata, entry
+symbols, descriptor symbols, descriptor bytes, and kernel cardinality must
+form one exact closed physical set, and the semantic export must resolve to
+one member of that set. This structural binding does not itself authenticate
+the claims or replace production evidence policy.
 
 Every digest is lowercase, nonzero SHA-256. Serialization is one UTF-8,
 LF-terminated `field<TAB>value` line per field in fixed order. Missing,

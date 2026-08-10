@@ -7,6 +7,7 @@ readonly ROOT
 readonly LANE="${ROOT}/scripts/s09-debug-ci.sh"
 readonly CI_LOCAL="${ROOT}/scripts/ci-local.sh"
 readonly WORKFLOW="${ROOT}/.github/workflows/s09-debug.yml"
+readonly PILOT_DOC="${ROOT}/docs/s09-source-debug-pilot-v1.md"
 
 expect_fail() {
   if "$@" >/dev/null 2>&1; then
@@ -31,6 +32,11 @@ rg -q 's09-identity-fields-v2.tsv' "${LANE}"
 expect_fail rg -q 'FE2O3_S09_(PORTABLE|ORDERED|CRATE|KERNEL|OBSERVED|RUSTC|CARGO|BACKEND)' "${LANE}"
 rg -q 'check-capability' "${LANE}"
 expect_fail rg -q '2f5e34|2d2a566' "${LANE}"
+rg -Fq 'Cargo launcher provenance is rooted in an inherited pinned executable' \
+  "${PILOT_DOC}"
+rg -Fq 'continuity observations only' "${PILOT_DOC}"
+rg -Fq 'sealed 32-byte prepared-command capability' "${PILOT_DOC}"
+expect_fail rg -Fq 'PID-bound Cargo launcher' "${PILOT_DOC}"
 [[ ! -e "${WORKFLOW}" ]]
 git diff --quiet -- .github/CODEOWNERS
 rg -q $'^supplemental\tS09\tMissing$' "${ROOT}/docs/cuda-oxide-parity-status.tsv"

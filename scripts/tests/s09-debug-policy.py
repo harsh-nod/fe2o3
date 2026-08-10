@@ -401,7 +401,7 @@ class IdentityCodecConsumerTests(unittest.TestCase):
             with self.subTest(label=label), self.assertRaises(CHECKER.CheckError):
                 CHECKER.decode_hsaco_identity_v2(elf(bytes(mutated)))
 
-    def test_rejects_pid_bound_cargo_launcher_substitutions(self) -> None:
+    def test_rejects_descriptor_backed_launcher_claim_substitutions(self) -> None:
         image = elf(handoff())
         manifest = valid_manifest()
         manifest.update(CHECKER.identity_manifest_values(image))
