@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+FIXTURE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+readonly FIXTURE_DIR
+readonly input="${*: -1}"
+[[ "${input}" =~ ^/proc/self/fd/[0-9]+$ ]]
+[[ -r "${input}" ]]
+if [[ " $* " == *' --verify '* ]]; then
+  exit 0
+fi
+[[ " $* " == *' --debug-info '* && " $* " == *' --debug-line '* ]]
+cat -- "${FIXTURE_DIR}/dwarf.pass.txt"

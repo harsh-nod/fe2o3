@@ -17,6 +17,7 @@ import unittest
 ROOT = pathlib.Path(__file__).parents[2]
 CHECKER_PATH = ROOT / "scripts/s09-debug-check.py"
 LANE_PATH = ROOT / "scripts/s09-debug-ci.sh"
+FINALIZER_PATH = ROOT / "scripts/s09-debug-finalize.sh"
 CODEC_PATH = ROOT / "crates/rustc-codegen-fe2o3/src/s09_identity_v2.rs"
 SPEC = importlib.util.spec_from_file_location("s09_debug_check", CHECKER_PATH)
 assert SPEC is not None and SPEC.loader is not None
@@ -216,16 +217,16 @@ def elf(identity: bytes, duplicate: bool = False) -> bytes:
         header = section_offset + 64 * (2 + index)
         struct.pack_into("<I", image, header, name_offset)
         struct.pack_into("<I", image, header + 4, 1)
-        struct.pack_into("<Q", image, header + 24, 64 + len(names) + index * len(identity))
+        struct.pack_into(
+            "<Q", image, header + 24, 64 + len(names) + index * len(identity)
+        )
         struct.pack_into("<Q", image, header + 32, len(identity))
     return bytes(image)
 
 
 class ProductionPolicyMetadataTests(unittest.TestCase):
     def test_accepts_exact_protected_metadata(self) -> None:
-        CHECKER.validate_production_policy_metadata(
-            metadata(), CHECKER.FS_IMMUTABLE_FL
-        )
+        CHECKER.validate_production_policy_metadata(metadata(), CHECKER.FS_IMMUTABLE_FL)
 
     def test_rejects_non_root_owner(self) -> None:
         with self.assertRaises(CHECKER.CheckError):
@@ -352,9 +353,7 @@ class IdentityCodecConsumerTests(unittest.TestCase):
         self.assertEqual(len(CHECKER.BUILD_CLAIM_FIELDS), 20)
         self.assertEqual(
             len(CHECKER.IDENTITY_MANIFEST_FIELDS),
-            3
-            + len(CHECKER.SEMANTIC_CLAIM_FIELDS)
-            + len(CHECKER.BUILD_CLAIM_FIELDS),
+            3 + len(CHECKER.SEMANTIC_CLAIM_FIELDS) + len(CHECKER.BUILD_CLAIM_FIELDS),
         )
         self.assertEqual(
             CHECKER.MANIFEST_FIELD_COUNT,
@@ -373,9 +372,12 @@ class IdentityCodecConsumerTests(unittest.TestCase):
 
     def test_rejects_missing_and_duplicate_identity_sections(self) -> None:
         with self.assertRaises(CHECKER.CheckError):
-            CHECKER.decode_hsaco_identity_v2(elf(handoff()).replace(
-                CHECKER.S09_IDENTITY_SECTION.encode("ascii"), b".fe2o3.s09.identity.v1"
-            ))
+            CHECKER.decode_hsaco_identity_v2(
+                elf(handoff()).replace(
+                    CHECKER.S09_IDENTITY_SECTION.encode("ascii"),
+                    b".fe2o3.s09.identity.v1",
+                )
+            )
         with self.assertRaises(CHECKER.CheckError):
             CHECKER.decode_hsaco_identity_v2(elf(handoff(), duplicate=True))
 
@@ -399,7 +401,9 @@ class IdentityCodecConsumerTests(unittest.TestCase):
     def test_rejects_oversize_trailing_unknown_domain_and_broken_binding(self) -> None:
         semantic_record, build_record = identity_records()
         probes = {
-            "oversize record": handoff(b"x" * (CHECKER.MAX_IDENTITY_RECORD_BYTES + 1), build_record),
+            "oversize record": handoff(
+                b"x" * (CHECKER.MAX_IDENTITY_RECORD_BYTES + 1), build_record
+            ),
             "trailing handoff": handoff(semantic_record, build_record, b"x"),
             "unknown domain": b"X" + handoff()[1:],
             "oversize handoff": handoff() + b"x" * CHECKER.MAX_IDENTITY_HANDOFF_BYTES,
@@ -454,14 +458,25 @@ class IdentityCodecConsumerTests(unittest.TestCase):
 class ManifestV2SchemaTests(unittest.TestCase):
     def test_local_lane_serializes_the_exact_schema_order(self) -> None:
         lane = LANE_PATH.read_text(encoding="utf-8")
-        fields = tuple(re.findall(r"printf '([a-z0-9_]+)\\t", lane))
+        finalizer = FINALIZER_PATH.read_text(encoding="utf-8")
+        fields = tuple(re.findall(r"printf '([a-z0-9_]+)\\t", finalizer))
         expected = (
             *CHECKER.MANIFEST_FIELDS[:3],
             *CHECKER.EVIDENCE_MANIFEST_FIELDS,
         )
         self.assertEqual(fields, expected)
-        self.assertIn('"${CHECKER}" identity-fields', lane)
-        self.assertIn('cat -- "${IDENTITY_FIELDS}"', lane)
+        self.assertIn('"${CHECKER}" identity-fields', finalizer)
+        self.assertIn('cat -- "${IDENTITY_FIELDS}"', finalizer)
+        self.assertIn('"${PINNER}"', lane)
+        self.assertIn('"${FINALIZER}"', lane)
+        self.assertIn("printf 'source_commit\\t%s\\n' \"${SOURCE_COMMIT}\"", finalizer)
+        self.assertIn("printf 'source_tree\\t%s\\n' \"${SOURCE_TREE}\"", finalizer)
+        self.assertLess(
+            lane.index("mapfile -t source_state"),
+            lane.index("cargo test --locked -p rustc-codegen-fe2o3"),
+        )
+        self.assertEqual(finalizer.count('--expected-commit "${SOURCE_COMMIT}"'), 2)
+        self.assertEqual(finalizer.count('--expected-tree "${SOURCE_TREE}"'), 2)
         self.assertEqual(len(CHECKER.MANIFEST_FIELDS), CHECKER.MANIFEST_FIELD_COUNT)
 
     def test_serialization_is_deterministic_and_round_trips(self) -> None:
@@ -514,7 +529,9 @@ class ManifestV2SchemaTests(unittest.TestCase):
             with self.subTest(field=field), self.assertRaises(CHECKER.CheckError):
                 CHECKER.parse_protected_manifest(data, "test-fixture-v2")
 
-    def test_every_field_mutation_changes_digest_and_breaks_policy_binding(self) -> None:
+    def test_every_field_mutation_changes_digest_and_breaks_policy_binding(
+        self,
+    ) -> None:
         manifest = valid_manifest("production-v2")
         canonical = CHECKER.serialize_ordered_fields(
             manifest, CHECKER.MANIFEST_FIELDS, "protected manifest"

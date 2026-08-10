@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+FIXTURE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+readonly FIXTURE_DIR
+readonly input="${*: -1}"
+[[ "${input}" =~ ^/proc/self/fd/[0-9]+$ ]]
+[[ -r "${input}" ]]
+if [[ " $* " == *' --elf-output-style=GNU '* ]]; then
+  cat -- "${FIXTURE_DIR}/hardware.pass.txt"
+else
+  sed 's/gfx942:xnack-/gfx90a:xnack-/' "${FIXTURE_DIR}/artifact.pass.txt"
+fi

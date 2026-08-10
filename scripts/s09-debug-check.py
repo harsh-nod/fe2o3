@@ -13,7 +13,19 @@ import re
 import stat
 import string
 import struct
+import subprocess
 import sys
+import tempfile
+
+SCRIPT_DIRECTORY = pathlib.Path(__file__).resolve().parent
+if str(SCRIPT_DIRECTORY) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIRECTORY))
+
+from s09_pinned_snapshot import (  # noqa: E402
+    SealedSnapshot,
+    SnapshotError,
+    sealed_snapshots,
+)
 
 MAX_INPUT_BYTES = 16 * 1024 * 1024
 MAX_HARDWARE_SECTION_LINES = 128
@@ -24,6 +36,8 @@ MAX_IDENTITY_FIELD_VALUE_BYTES = 4096
 MAX_ELF_SECTIONS = 4096
 MAX_ELF_STRING_TABLE_BYTES = 1024 * 1024
 PRODUCTION_POLICY_PATH = pathlib.Path("/etc/fe2o3/s09-trust-v2.tsv")
+LLVM_DWARFDUMP = pathlib.Path("/opt/rocm/llvm/bin/llvm-dwarfdump")
+LLVM_READOBJ = pathlib.Path("/opt/rocm/llvm/bin/llvm-readobj")
 FS_IOC_GETFLAGS = 0x80086601
 FS_IMMUTABLE_FL = 0x00000010
 ADDRESS = re.compile(r"0x[0-9a-fA-F]+")
@@ -133,9 +147,7 @@ MANIFEST_FIELDS = (
     *IDENTITY_MANIFEST_FIELDS,
     *EVIDENCE_MANIFEST_FIELDS,
 )
-MANIFEST_FIELD_COUNT = (
-    3 + len(IDENTITY_MANIFEST_FIELDS) + len(EVIDENCE_MANIFEST_FIELDS)
-)
+MANIFEST_FIELD_COUNT = 3 + len(IDENTITY_MANIFEST_FIELDS) + len(EVIDENCE_MANIFEST_FIELDS)
 POLICY_SCHEMA = "fe2o3-s09-production-policy-v2"
 POLICY_HEADER_FIELDS = (
     "policy_schema",
@@ -171,7 +183,9 @@ def read_bounded_bytes(path: pathlib.Path) -> bytes:
         if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
             raise CheckError(f"input must be a single-link regular file: {path}")
         if before.st_size == 0 or before.st_size > MAX_INPUT_BYTES:
-            raise CheckError(f"input size must be within 1..{MAX_INPUT_BYTES} bytes: {path}")
+            raise CheckError(
+                f"input size must be within 1..{MAX_INPUT_BYTES} bytes: {path}"
+            )
         chunks: list[bytes] = []
         remaining = MAX_INPUT_BYTES + 1
         while remaining:
@@ -182,13 +196,16 @@ def read_bounded_bytes(path: pathlib.Path) -> bytes:
             remaining -= len(chunk)
         data = b"".join(chunks)
         after = os.fstat(descriptor)
-        identity = lambda value: (
-            value.st_dev,
-            value.st_ino,
-            value.st_size,
-            value.st_mtime_ns,
-            value.st_ctime_ns,
-        )
+
+        def identity(value: os.stat_result) -> tuple[int, int, int, int, int]:
+            return (
+                value.st_dev,
+                value.st_ino,
+                value.st_size,
+                value.st_mtime_ns,
+                value.st_ctime_ns,
+            )
+
         if identity(before) != identity(after) or len(data) != before.st_size:
             raise CheckError(f"input changed while being read: {path}")
         return data
@@ -354,17 +371,17 @@ def decode_identity_record(
             value = value_bytes.decode("utf-8")
         except UnicodeDecodeError as error:
             raise CheckError(f"{label} field is not UTF-8") from error
-        if (
-            not 1 <= len(name_bytes) <= MAX_IDENTITY_FIELD_NAME_BYTES
-            or any(
-                not (byte == ord("_") or ord("0") <= byte <= ord("9") or ord("a") <= byte <= ord("z"))
-                for byte in name_bytes
+        if not 1 <= len(name_bytes) <= MAX_IDENTITY_FIELD_NAME_BYTES or any(
+            not (
+                byte == ord("_")
+                or ord("0") <= byte <= ord("9")
+                or ord("a") <= byte <= ord("z")
             )
+            for byte in name_bytes
         ):
             raise CheckError(f"{label} field name is noncanonical")
-        if (
-            not 1 <= len(value_bytes) <= MAX_IDENTITY_FIELD_VALUE_BYTES
-            or any(byte < 0x21 or byte > 0x7E for byte in value_bytes)
+        if not 1 <= len(value_bytes) <= MAX_IDENTITY_FIELD_VALUE_BYTES or any(
+            byte < 0x21 or byte > 0x7E for byte in value_bytes
         ):
             raise CheckError(f"{label} field {name!r} is noncanonical")
         if name != wanted:
@@ -428,7 +445,12 @@ def decode_hsaco_identity_v2(
         raise CheckError("semantic schema is missing or unknown")
     if build["schema"] != BUILD_CLAIM_SCHEMA:
         raise CheckError("build schema is missing or unknown")
-    for field in ("source_sha256", "abi_sha256", "launch_sha256", "portable_mir_sha256"):
+    for field in (
+        "source_sha256",
+        "abi_sha256",
+        "launch_sha256",
+        "portable_mir_sha256",
+    ):
         decode_identity_digest(semantic[field], f"semantic identity claim {field}")
     for field in (
         "semantic_claim_sha256",
@@ -465,7 +487,9 @@ def decode_hsaco_identity_v2(
     semantic_digest = hashlib.sha256(semantic_record).hexdigest()
     build_digest = hashlib.sha256(build_record).hexdigest()
     if semantic_claim_digest != semantic_digest or build_claim_digest != build_digest:
-        raise CheckError("identity handoff manifest does not bind the exact claim records")
+        raise CheckError(
+            "identity handoff manifest does not bind the exact claim records"
+        )
     if build["semantic_claim_sha256"] != semantic_digest:
         raise CheckError(
             "build identity claim does not bind the semantic identity claim"
@@ -528,7 +552,9 @@ def read_production_policy() -> bytes:
         try:
             fcntl.ioctl(descriptor, FS_IOC_GETFLAGS, file_flags, True)
         except OSError as error:
-            raise CheckError("cannot verify production S09 policy immutable flag") from error
+            raise CheckError(
+                "cannot verify production S09 policy immutable flag"
+            ) from error
         validate_production_policy_metadata(before, file_flags[0])
         chunks: list[bytes] = []
         remaining = MAX_INPUT_BYTES + 1
@@ -606,7 +632,9 @@ def require_path_hygiene(text: str) -> None:
         if candidate == S09_DIRECTORY:
             saw_source = True
             continue
-        source_match = re.fullmatch(re.escape(S09_SOURCE) + r"(?::(?:68|69|70))?", candidate)
+        source_match = re.fullmatch(
+            re.escape(S09_SOURCE) + r"(?::(?:68|69|70))?", candidate
+        )
         if source_match:
             saw_source = True
             continue
@@ -616,7 +644,9 @@ def require_path_hygiene(text: str) -> None:
             components = re.split(r"[/\\]", candidate)
             if any(component in {".", ".."} for component in components):
                 raise CheckError("normalized evidence contains a dot path component")
-            raise CheckError(f"normalized evidence contains unallowlisted path atom {candidate!r}")
+            raise CheckError(
+                f"normalized evidence contains unallowlisted path atom {candidate!r}"
+            )
     if not saw_source:
         raise CheckError("evidence contains no canonical S09 source path")
 
@@ -660,7 +690,9 @@ def normalize_rocgdb(text: str) -> str:
     begin = [index for index, line in enumerate(lines) if line == "FE2O3_S09_BEGIN"]
     end = [index for index, line in enumerate(lines) if line == "FE2O3_S09_END"]
     if len(begin) != 1 or len(end) != 1 or begin[0] >= end[0]:
-        raise CheckError("ROCgdb transcript must contain one ordered S09 marker interval")
+        raise CheckError(
+            "ROCgdb transcript must contain one ordered S09 marker interval"
+        )
     normalized = "\n".join(line for line in lines[begin[0] : end[0] + 1] if line) + "\n"
     require_path_hygiene(normalized)
     return normalized
@@ -684,7 +716,9 @@ def parse_canonical_facts(
     for expected_field, line in zip(expected_fields, lines, strict=True):
         fields = line.split("=")
         if len(fields) != 2 or fields[0] != expected_field or not fields[1]:
-            raise CheckError(f"{context} field {expected_field!r} is absent or out of order")
+            raise CheckError(
+                f"{context} field {expected_field!r} is absent or out of order"
+            )
         value = fields[1]
         if value != value.strip() or any(ord(character) < 0x20 for character in value):
             raise CheckError(f"{context} field {expected_field!r} is noncanonical")
@@ -702,9 +736,10 @@ def check_artifact_fact_schema(text: str) -> None:
         ("source_path", S09_SOURCE),
         ("kernel", "alpha:alpha.kd"),
     ]
-    if parse_canonical_facts(
-        text, ARTIFACT_FACT_FIELDS, "protected artifact facts"
-    ) != expected:
+    if (
+        parse_canonical_facts(text, ARTIFACT_FACT_FIELDS, "protected artifact facts")
+        != expected
+    ):
         raise CheckError("protected artifact facts contain an unexpected field value")
 
 
@@ -715,9 +750,10 @@ def check_hardware_fact_schema(text: str, sha256: str, build_id: str) -> None:
         ("sha256", sha256),
         ("build_id", build_id),
     ]
-    if parse_canonical_facts(
-        text, HARDWARE_FACT_FIELDS, "protected hardware facts"
-    ) != expected:
+    if (
+        parse_canonical_facts(text, HARDWARE_FACT_FIELDS, "protected hardware facts")
+        != expected
+    ):
         raise CheckError("protected hardware facts contain an unexpected field value")
 
 
@@ -755,9 +791,15 @@ def check_dwarf(text: str) -> None:
     for line in (68, 69, 70):
         if not re.search(rf"(?m)^0x<ADDR> +{line} +", text):
             raise CheckError(f"DWARF line table does not contain source line {line}")
-    for rejected in ("DW_AT_APPLE_optimized", "DW_AT_GNU_locviews", "DW_TAG_structure_type"):
+    for rejected in (
+        "DW_AT_APPLE_optimized",
+        "DW_AT_GNU_locviews",
+        "DW_TAG_structure_type",
+    ):
         if rejected in text:
-            raise CheckError(f"bounded S09 DWARF contains unsupported construct {rejected!r}")
+            raise CheckError(
+                f"bounded S09 DWARF contains unsupported construct {rejected!r}"
+            )
 
 
 def artifact_facts(metadata: str, dwarf: str) -> str:
@@ -774,17 +816,19 @@ def artifact_facts(metadata: str, dwarf: str) -> str:
         ".symbol:         alpha.kd",
     ):
         require_once(metadata, token, "AMDGPU artifact metadata")
-    kernel_names = re.findall(
-        r"(?m)^(?: {2}- | {4})\.name:\s+(\S+)\s*$", metadata
-    )
+    kernel_names = re.findall(r"(?m)^(?: {2}- | {4})\.name:\s+(\S+)\s*$", metadata)
     kernel_symbols = re.findall(r"(?m)^\s+\.symbol:\s+(\S+)\s*$", metadata)
     if kernel_names != ["alpha"] or kernel_symbols != ["alpha.kd"]:
-        raise CheckError("AMDGPU artifact metadata is not the exact alpha-only kernel set")
+        raise CheckError(
+            "AMDGPU artifact metadata is not the exact alpha-only kernel set"
+        )
     targets = re.findall(
         r"(?m)^amdhsa\.target:\s+'(amdgcn-amd-amdhsa--gfx942:xnack-)'$", metadata
     )
     if targets != ["amdgcn-amd-amdhsa--gfx942:xnack-"]:
-        raise CheckError("AMDGPU artifact metadata has no exact unique gfx942:xnack- target")
+        raise CheckError(
+            "AMDGPU artifact metadata has no exact unique gfx942:xnack- target"
+        )
     return (
         "format=fe2o3-s09-artifact-facts-v1\n"
         "object_format=elf64-amdgpu\n"
@@ -815,8 +859,12 @@ def hardware_facts(text: str, sha256: str) -> tuple[str, str]:
     return facts, build_id
 
 
-def check_rocgdb(text: str, hsaco_sha256: str, hardware_sha256: str, build_id: str) -> None:
-    if not HEX_SHA256.fullmatch(hsaco_sha256) or not HEX_SHA256.fullmatch(hardware_sha256):
+def check_rocgdb(
+    text: str, hsaco_sha256: str, hardware_sha256: str, build_id: str
+) -> None:
+    if not HEX_SHA256.fullmatch(hsaco_sha256) or not HEX_SHA256.fullmatch(
+        hardware_sha256
+    ):
         raise CheckError("ROCgdb binding SHA-256 values must be lowercase hex")
     if not HEX_BUILD_ID.fullmatch(build_id):
         raise CheckError("ROCgdb hardware build ID is malformed")
@@ -858,14 +906,34 @@ def check_rocgdb(text: str, hsaco_sha256: str, hardware_sha256: str, build_id: s
     run_nonce = run_nonces[0]
 
     marker_position = dict(zip(markers, positions, strict=True))
-    kernel_section = text[marker_position["FE2O3_S09_KERNEL_LOAD"] : marker_position["FE2O3_S09_GPU_CONTEXT"]]
-    if 'Function "alpha" not defined.' not in kernel_section or "Breakpoint 1 (alpha) pending." not in kernel_section:
-        raise CheckError("ROCgdb did not prove pending alpha resolved after kernel load")
-    gpu_section = text[marker_position["FE2O3_S09_GPU_CONTEXT"] : marker_position["FE2O3_S09_FUNCTION"]]
-    if not re.search(r"Switching to Thread <THREAD>, lane 0 \(AMDGPU Lane <LANE>\)", gpu_section):
+    kernel_section = text[
+        marker_position["FE2O3_S09_KERNEL_LOAD"] : marker_position[
+            "FE2O3_S09_GPU_CONTEXT"
+        ]
+    ]
+    if (
+        'Function "alpha" not defined.' not in kernel_section
+        or "Breakpoint 1 (alpha) pending." not in kernel_section
+    ):
+        raise CheckError(
+            "ROCgdb did not prove pending alpha resolved after kernel load"
+        )
+    gpu_section = text[
+        marker_position["FE2O3_S09_GPU_CONTEXT"] : marker_position["FE2O3_S09_FUNCTION"]
+    ]
+    if not re.search(
+        r"Switching to Thread <THREAD>, lane 0 \(AMDGPU Lane <LANE>\)", gpu_section
+    ):
         raise CheckError("ROCgdb did not select an AMDGPU lane")
-    if not re.search(r'(?m)^\* <THREAD> AMDGPU Wave <WAVE> .*"alpha".*' + re.escape(S09_SOURCE) + r":68$", gpu_section):
-        raise CheckError("ROCgdb thread inventory does not bind alpha to an AMDGPU wave")
+    if not re.search(
+        r'(?m)^\* <THREAD> AMDGPU Wave <WAVE> .*"alpha".*'
+        + re.escape(S09_SOURCE)
+        + r":68$",
+        gpu_section,
+    ):
+        raise CheckError(
+            "ROCgdb thread inventory does not bind alpha to an AMDGPU wave"
+        )
     if "Yes memory://<PID>#offset=0x<ADDR>&size=<SIZE>" not in gpu_section:
         raise CheckError("ROCgdb did not report a loaded in-memory AMDGPU code object")
     if not re.search(
@@ -876,11 +944,15 @@ def check_rocgdb(text: str, hsaco_sha256: str, hardware_sha256: str, build_id: s
     ):
         raise CheckError("ROCgdb did not hit the loaded alpha kernel breakpoint")
 
-    function_section = text[marker_position["FE2O3_S09_FUNCTION"] : marker_position["FE2O3_S09_BP2_ARMED"]]
+    function_section = text[
+        marker_position["FE2O3_S09_FUNCTION"] : marker_position["FE2O3_S09_BP2_ARMED"]
+    ]
     if f"at {S09_SOURCE}:68" not in function_section:
         raise CheckError("ROCgdb alpha frame is not bound to canonical source line 68")
 
-    bp2_hit = text[marker_position["FE2O3_S09_BP2_ARMED"] : marker_position["FE2O3_S09_BP2_STOP"]]
+    bp2_hit = text[
+        marker_position["FE2O3_S09_BP2_ARMED"] : marker_position["FE2O3_S09_BP2_STOP"]
+    ]
     if not re.search(
         r'Thread <THREAD> "alpha" hit Breakpoint 2, with lanes \[0-63\], alpha .* at '
         + re.escape(S09_SOURCE)
@@ -888,17 +960,28 @@ def check_rocgdb(text: str, hsaco_sha256: str, hardware_sha256: str, build_id: s
         bp2_hit,
     ):
         raise CheckError("ROCgdb did not prove the exact BP2 line-69 stop")
-    bp2_context = text[marker_position["FE2O3_S09_BP2_STOP"] : marker_position["FE2O3_S09_ARGUMENTS"]]
-    if not re.search(
-        r'(?m)^\* <THREAD> AMDGPU Wave <WAVE> .*"alpha".*'
-        + re.escape(S09_SOURCE)
-        + r":69$",
-        bp2_context,
-    ) or f"at {S09_SOURCE}:69" not in bp2_context:
-        raise CheckError("ROCgdb BP2 observations are not bound to an AMDGPU wave at line 69")
+    bp2_context = text[
+        marker_position["FE2O3_S09_BP2_STOP"] : marker_position["FE2O3_S09_ARGUMENTS"]
+    ]
+    if (
+        not re.search(
+            r'(?m)^\* <THREAD> AMDGPU Wave <WAVE> .*"alpha".*'
+            + re.escape(S09_SOURCE)
+            + r":69$",
+            bp2_context,
+        )
+        or f"at {S09_SOURCE}:69" not in bp2_context
+    ):
+        raise CheckError(
+            "ROCgdb BP2 observations are not bound to an AMDGPU wave at line 69"
+        )
 
-    argument_section = text[marker_position["FE2O3_S09_ARGUMENTS"] : marker_position["FE2O3_S09_BP3_ARMED"]]
-    bp3_hit = text[marker_position["FE2O3_S09_BP3_ARMED"] : marker_position["FE2O3_S09_BP3_STOP"]]
+    argument_section = text[
+        marker_position["FE2O3_S09_ARGUMENTS"] : marker_position["FE2O3_S09_BP3_ARMED"]
+    ]
+    bp3_hit = text[
+        marker_position["FE2O3_S09_BP3_ARMED"] : marker_position["FE2O3_S09_BP3_STOP"]
+    ]
     if not re.search(
         r'Thread <THREAD> "alpha" hit Breakpoint 3, with lanes \[0-63\], alpha .* at '
         + re.escape(S09_SOURCE)
@@ -906,15 +989,24 @@ def check_rocgdb(text: str, hsaco_sha256: str, hardware_sha256: str, build_id: s
         bp3_hit,
     ):
         raise CheckError("ROCgdb did not prove the exact BP3 line-70 stop")
-    bp3_context = text[marker_position["FE2O3_S09_BP3_STOP"] : marker_position["FE2O3_S09_LOCAL"]]
-    if not re.search(
-        r'(?m)^\* <THREAD> AMDGPU Wave <WAVE> .*"alpha".*'
-        + re.escape(S09_SOURCE)
-        + r":70$",
-        bp3_context,
-    ) or f"at {S09_SOURCE}:70" not in bp3_context:
-        raise CheckError("ROCgdb local observation is not bound to an AMDGPU wave at line 70")
-    local_section = text[marker_position["FE2O3_S09_LOCAL"] : marker_position["FE2O3_S09_RESUME"]]
+    bp3_context = text[
+        marker_position["FE2O3_S09_BP3_STOP"] : marker_position["FE2O3_S09_LOCAL"]
+    ]
+    if (
+        not re.search(
+            r'(?m)^\* <THREAD> AMDGPU Wave <WAVE> .*"alpha".*'
+            + re.escape(S09_SOURCE)
+            + r":70$",
+            bp3_context,
+        )
+        or f"at {S09_SOURCE}:70" not in bp3_context
+    ):
+        raise CheckError(
+            "ROCgdb local observation is not bound to an AMDGPU wave at line 70"
+        )
+    local_section = text[
+        marker_position["FE2O3_S09_LOCAL"] : marker_position["FE2O3_S09_RESUME"]
+    ]
     for name in VARIABLES:
         section = local_section if name == "i" else argument_section
         observations = re.findall(rf"(?m)^{re.escape(name)}\s*=\s*(\S.*)$", section)
@@ -930,13 +1022,16 @@ def check_rocgdb(text: str, hsaco_sha256: str, hardware_sha256: str, build_id: s
             "error reading variable",
         ):
             if rejected in value:
-                raise CheckError(f"ROCgdb could not inspect {name!r}: {observations[0]}")
+                raise CheckError(
+                    f"ROCgdb could not inspect {name!r}: {observations[0]}"
+                )
         if observations[0] != EXPECTED_OBSERVATIONS[name]:
-            raise CheckError(f"ROCgdb observed unexpected {name!r} value: {observations[0]!r}")
+            raise CheckError(
+                f"ROCgdb observed unexpected {name!r} value: {observations[0]!r}"
+            )
 
     hardware_section = text[
-        marker_position["FE2O3_S09_RESUME"]
-        : marker_position["FE2O3_S09_HARDWARE_PASS"]
+        marker_position["FE2O3_S09_RESUME"] : marker_position["FE2O3_S09_HARDWARE_PASS"]
     ]
     if len(hardware_section.splitlines()) > MAX_HARDWARE_SECTION_LINES:
         raise CheckError("ROCgdb hardware result section exceeds its fixed line bound")
@@ -958,10 +1053,18 @@ def check_rocgdb(text: str, hsaco_sha256: str, hardware_sha256: str, build_id: s
             hardware_section,
         )
     ]
-    if len(normal_exits) != 1 or normal_exits[0] >= hardware_section.index(result_marker):
-        raise CheckError("ROCgdb runner result was not conditional on a normal inferior exit")
+    if len(normal_exits) != 1 or normal_exits[0] >= hardware_section.index(
+        result_marker
+    ):
+        raise CheckError(
+            "ROCgdb runner result was not conditional on a normal inferior exit"
+        )
 
-    for rejected in ("No symbol", "Cannot access memory", "The program is not being run"):
+    for rejected in (
+        "No symbol",
+        "Cannot access memory",
+        "The program is not being run",
+    ):
         if rejected.lower() in text.lower():
             raise CheckError(f"ROCgdb transcript contains failure marker {rejected!r}")
 
@@ -983,7 +1086,9 @@ def serialize_ordered_fields(
             or "\t" in value
             or "\n" in value
             or "\r" in value
-            or any(ord(character) < 0x20 or ord(character) == 0x7F for character in value)
+            or any(
+                ord(character) < 0x20 or ord(character) == 0x7F for character in value
+            )
         ):
             raise CheckError(f"{label} field {field!r} is noncanonical")
         lines.append(f"{field}\t{value}\n")
@@ -1015,16 +1120,24 @@ def parse_ordered_fields(
     return values
 
 
-def require_nonzero_sha256(values: dict[str, str], fields: tuple[str, ...], label: str) -> None:
+def require_nonzero_sha256(
+    values: dict[str, str], fields: tuple[str, ...], label: str
+) -> None:
     for field in fields:
         if field.endswith("_sha256"):
             value = values[field]
             if not HEX_SHA256.fullmatch(value) or value == "0" * 64:
-                raise CheckError(f"{label} field {field!r} is not a nonzero SHA-256 digest")
+                raise CheckError(
+                    f"{label} field {field!r} is not a nonzero SHA-256 digest"
+                )
 
 
 def validate_manifest_values(manifest: dict[str, str], required_domain: str) -> None:
-    if required_domain not in {"production-v2", "test-fixture-v2", "local-capability-v2"}:
+    if required_domain not in {
+        "production-v2",
+        "test-fixture-v2",
+        "local-capability-v2",
+    }:
         raise CheckError("protected manifest trust domain is unsupported")
 
     expected_values = {
@@ -1059,26 +1172,33 @@ def validate_manifest_values(manifest: dict[str, str], required_domain: str) -> 
             "protected manifest build claim does not bind the semantic claim"
         )
     for field in ("source_commit", "source_tree"):
-        if (
-            not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", manifest[field])
-            or set(manifest[field]) == {"0"}
-        ):
-            raise CheckError(f"protected manifest {field!r} is not a canonical Git object ID")
+        if not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", manifest[field]) or set(
+            manifest[field]
+        ) == {"0"}:
+            raise CheckError(
+                f"protected manifest {field!r} is not a canonical Git object ID"
+            )
     for field in ("build_crate_binding", "build_kernel_binding"):
         if not HEX_SHA256.fullmatch(manifest[field]) or manifest[field] == "0" * 64:
-            raise CheckError(f"protected manifest {field!r} is not a nonzero binding ID")
+            raise CheckError(
+                f"protected manifest {field!r} is not a nonzero binding ID"
+            )
     for field in ("build_observed_def_path", "build_observed_symbol"):
         value = manifest[field]
         if not 1 <= len(value.encode("utf-8")) <= MAX_IDENTITY_FIELD_VALUE_BYTES or any(
             ord(character) < 0x21 or ord(character) > 0x7E for character in value
         ):
-            raise CheckError(f"protected manifest {field!r} is not a canonical observation")
-    for field in ("build_observed_parent_pid", "build_observed_parent_start_time_ticks"):
-        decode_identity_decimal(manifest[field], field, 2**64 - 1, False)
-    if (
-        not HEX_BUILD_ID.fullmatch(manifest["host_executable_build_id"])
-        or set(manifest["host_executable_build_id"]) == {"0"}
+            raise CheckError(
+                f"protected manifest {field!r} is not a canonical observation"
+            )
+    for field in (
+        "build_observed_parent_pid",
+        "build_observed_parent_start_time_ticks",
     ):
+        decode_identity_decimal(manifest[field], field, 2**64 - 1, False)
+    if not HEX_BUILD_ID.fullmatch(manifest["host_executable_build_id"]) or set(
+        manifest["host_executable_build_id"]
+    ) == {"0"}:
         raise CheckError("protected manifest host executable build ID is malformed")
 
 
@@ -1105,7 +1225,9 @@ def validate_policy_manifest_binding(
 ) -> None:
     for field in POLICY_MANIFEST_BINDINGS:
         if policy[field] != manifest[field]:
-            raise CheckError(f"production policy does not bind manifest field {field!r}")
+            raise CheckError(
+                f"production policy does not bind manifest field {field!r}"
+            )
 
 
 def validate_manifest_identity_binding(manifest: dict[str, str], hsaco: bytes) -> None:
@@ -1117,49 +1239,175 @@ def validate_manifest_identity_binding(manifest: dict[str, str], hsaco: bytes) -
             )
 
 
+def snapshot_bytes(snapshot: SealedSnapshot) -> bytes:
+    if not 1 <= snapshot.size <= MAX_INPUT_BYTES:
+        raise CheckError(
+            f"sealed evidence input {snapshot.name!r} exceeds the checker bound"
+        )
+    try:
+        data = os.pread(snapshot.descriptor, snapshot.size + 1, 0)
+    except OSError as error:
+        raise CheckError(
+            f"cannot read sealed evidence input {snapshot.name!r}: {error}"
+        ) from error
+    if len(data) != snapshot.size:
+        raise CheckError(f"sealed evidence input {snapshot.name!r} is truncated")
+    return data
+
+
+def snapshot_text(snapshot: SealedSnapshot) -> str:
+    try:
+        return snapshot_bytes(snapshot).decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise CheckError(
+            f"sealed evidence input {snapshot.name!r} is not UTF-8"
+        ) from error
+
+
+def run_bounded_tool(
+    tool: pathlib.Path, arguments: list[str], snapshots: tuple[SealedSnapshot, ...]
+) -> bytes:
+    descriptors = tuple(snapshot.descriptor for snapshot in snapshots)
+    try:
+        with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
+            completed = subprocess.run(
+                [os.fspath(tool), *arguments],
+                stdin=subprocess.DEVNULL,
+                stdout=stdout,
+                stderr=stderr,
+                pass_fds=descriptors,
+                timeout=60,
+                check=False,
+            )
+            stdout.seek(0)
+            output = stdout.read(MAX_INPUT_BYTES + 1)
+            stderr.seek(0)
+            error_output = stderr.read(4097)
+    except (OSError, subprocess.SubprocessError) as error:
+        raise CheckError(
+            f"direct evidence tool failed to execute: {tool}: {error}"
+        ) from error
+    if completed.returncode != 0:
+        detail = error_output[:4096].decode("utf-8", "replace").strip()
+        raise CheckError(
+            f"direct evidence tool failed: {tool.name}: {completed.returncode}: {detail}"
+        )
+    if len(output) > MAX_INPUT_BYTES:
+        raise CheckError(
+            f"direct evidence tool output exceeds checker bound: {tool.name}"
+        )
+    return output
+
+
+def directly_inspect_objects(
+    hsaco: SealedSnapshot,
+    host: SealedSnapshot,
+    llvm_dwarfdump: pathlib.Path,
+    llvm_readobj: pathlib.Path,
+) -> tuple[str, str, str]:
+    try:
+        run_bounded_tool(llvm_dwarfdump, ["--verify", hsaco.proc_path], (hsaco,))
+        dwarf_raw = run_bounded_tool(
+            llvm_dwarfdump,
+            ["--debug-info", "--debug-line", hsaco.proc_path],
+            (hsaco,),
+        ).decode("utf-8", "strict")
+        artifact_raw = run_bounded_tool(
+            llvm_readobj,
+            ["--file-headers", "--notes", hsaco.proc_path],
+            (hsaco,),
+        ).decode("utf-8", "strict")
+        hardware_raw = run_bounded_tool(
+            llvm_readobj,
+            ["--elf-output-style=GNU", "--file-header", "--notes", host.proc_path],
+            (host,),
+        ).decode("utf-8", "strict")
+    except UnicodeDecodeError as error:
+        raise CheckError("direct evidence tool output is not UTF-8") from error
+    derived_artifact = artifact_facts(artifact_raw, dwarf_raw)
+    derived_dwarf = normalize_dwarf(dwarf_raw)
+    derived_hardware, _ = hardware_facts(hardware_raw, host.sha256)
+    return derived_artifact, derived_dwarf, derived_hardware
+
+
 def check_evidence_bundle(
     manifest: dict[str, str],
     hsaco_path: pathlib.Path,
+    host_executable_path: pathlib.Path,
     artifact_path: pathlib.Path,
     hardware_path: pathlib.Path,
     dwarf_path: pathlib.Path,
     rocgdb_path: pathlib.Path,
+    llvm_dwarfdump: pathlib.Path = LLVM_DWARFDUMP,
+    llvm_readobj: pathlib.Path = LLVM_READOBJ,
 ) -> None:
-    evidence = {
-        "hsaco_sha256": hsaco_path,
-        "artifact_facts_sha256": artifact_path,
-        "hardware_facts_sha256": hardware_path,
-        "dwarf_normalized_sha256": dwarf_path,
-        "rocgdb_normalized_sha256": rocgdb_path,
-    }
-    for digest_field, path in evidence.items():
-        if file_sha256(path) != manifest[digest_field]:
-            raise CheckError(f"evidence file does not match {digest_field!r}")
-    validate_manifest_identity_binding(manifest, read_bounded_bytes(hsaco_path))
-
-    artifact = read_bounded(artifact_path)
-    hardware = read_bounded(hardware_path)
-    dwarf = read_bounded(dwarf_path)
-    rocgdb = read_bounded(rocgdb_path)
-    if normalize_dwarf(dwarf) != dwarf or normalize_rocgdb(rocgdb) != rocgdb:
-        raise CheckError("authoritative evidence inputs must already be canonical normalized files")
-    check_dwarf(dwarf)
-    check_rocgdb(
-        rocgdb,
-        manifest["hsaco_sha256"],
-        manifest["host_executable_sha256"],
-        manifest["host_executable_build_id"],
+    inputs = (
+        ("hsaco", hsaco_path, False),
+        ("host", host_executable_path, True),
+        ("artifact_facts", artifact_path, False),
+        ("hardware_facts", hardware_path, False),
+        ("dwarf", dwarf_path, False),
+        ("rocgdb", rocgdb_path, False),
     )
-    check_artifact_fact_schema(artifact)
-    check_hardware_fact_schema(
-        hardware,
-        manifest["host_executable_sha256"],
-        manifest["host_executable_build_id"],
-    )
+    try:
+        with sealed_snapshots(inputs) as snapshots:
+            digest_bindings = {
+                "hsaco_sha256": snapshots["hsaco"].sha256,
+                "host_executable_sha256": snapshots["host"].sha256,
+                "artifact_facts_sha256": snapshots["artifact_facts"].sha256,
+                "hardware_facts_sha256": snapshots["hardware_facts"].sha256,
+                "dwarf_normalized_sha256": snapshots["dwarf"].sha256,
+                "rocgdb_normalized_sha256": snapshots["rocgdb"].sha256,
+            }
+            for digest_field, observed in digest_bindings.items():
+                if observed != manifest[digest_field]:
+                    raise CheckError(f"evidence object does not match {digest_field!r}")
+            hsaco = snapshot_bytes(snapshots["hsaco"])
+            artifact = snapshot_text(snapshots["artifact_facts"])
+            hardware = snapshot_text(snapshots["hardware_facts"])
+            dwarf = snapshot_text(snapshots["dwarf"])
+            rocgdb = snapshot_text(snapshots["rocgdb"])
+            validate_manifest_identity_binding(manifest, hsaco)
+            if normalize_dwarf(dwarf) != dwarf or normalize_rocgdb(rocgdb) != rocgdb:
+                raise CheckError(
+                    "authoritative evidence inputs must already be canonical normalized files"
+                )
+            check_dwarf(dwarf)
+            check_rocgdb(
+                rocgdb,
+                manifest["hsaco_sha256"],
+                manifest["host_executable_sha256"],
+                manifest["host_executable_build_id"],
+            )
+            check_artifact_fact_schema(artifact)
+            check_hardware_fact_schema(
+                hardware,
+                manifest["host_executable_sha256"],
+                manifest["host_executable_build_id"],
+            )
+            direct_artifact, direct_dwarf, direct_hardware = directly_inspect_objects(
+                snapshots["hsaco"],
+                snapshots["host"],
+                llvm_dwarfdump,
+                llvm_readobj,
+            )
+            if artifact != direct_artifact:
+                raise CheckError("artifact facts do not derive from the supplied HSACO")
+            if dwarf != direct_dwarf:
+                raise CheckError(
+                    "normalized DWARF does not derive from the supplied HSACO"
+                )
+            if hardware != direct_hardware:
+                raise CheckError(
+                    "hardware facts do not derive from the supplied host executable"
+                )
+    except SnapshotError as error:
+        raise CheckError(f"cannot pin evidence object: {error}") from error
 
 
 def check_production(
     hsaco_path: pathlib.Path,
+    host_executable_path: pathlib.Path,
     artifact_path: pathlib.Path,
     hardware_path: pathlib.Path,
     dwarf_path: pathlib.Path,
@@ -1173,7 +1421,13 @@ def check_production(
     manifest = parse_protected_manifest(manifest_bytes, "production-v2")
     validate_policy_manifest_binding(policy, manifest)
     check_evidence_bundle(
-        manifest, hsaco_path, artifact_path, hardware_path, dwarf_path, rocgdb_path
+        manifest,
+        hsaco_path,
+        host_executable_path,
+        artifact_path,
+        hardware_path,
+        dwarf_path,
+        rocgdb_path,
     )
 
 
@@ -1181,19 +1435,32 @@ def check_fixture(
     manifest_path: pathlib.Path,
     expected_manifest_sha256: str,
     hsaco_path: pathlib.Path,
+    host_executable_path: pathlib.Path,
     artifact_path: pathlib.Path,
     hardware_path: pathlib.Path,
     dwarf_path: pathlib.Path,
     rocgdb_path: pathlib.Path,
+    llvm_dwarfdump: pathlib.Path,
+    llvm_readobj: pathlib.Path,
 ) -> None:
     if not HEX_SHA256.fullmatch(expected_manifest_sha256):
         raise CheckError("fixture manifest digest must be lowercase SHA-256")
     manifest_bytes = read_bounded_bytes(manifest_path)
     if hashlib.sha256(manifest_bytes).hexdigest() != expected_manifest_sha256:
-        raise CheckError("fixture manifest does not match its non-authoritative test digest")
+        raise CheckError(
+            "fixture manifest does not match its non-authoritative test digest"
+        )
     manifest = parse_protected_manifest(manifest_bytes, "test-fixture-v2")
     check_evidence_bundle(
-        manifest, hsaco_path, artifact_path, hardware_path, dwarf_path, rocgdb_path
+        manifest,
+        hsaco_path,
+        host_executable_path,
+        artifact_path,
+        hardware_path,
+        dwarf_path,
+        rocgdb_path,
+        llvm_dwarfdump,
+        llvm_readobj,
     )
 
 
@@ -1201,10 +1468,13 @@ def check_capability(
     manifest_path: pathlib.Path,
     expected_manifest_sha256: str,
     hsaco_path: pathlib.Path,
+    host_executable_path: pathlib.Path,
     artifact_path: pathlib.Path,
     hardware_path: pathlib.Path,
     dwarf_path: pathlib.Path,
     rocgdb_path: pathlib.Path,
+    llvm_dwarfdump: pathlib.Path,
+    llvm_readobj: pathlib.Path,
 ) -> None:
     if not HEX_SHA256.fullmatch(expected_manifest_sha256):
         raise CheckError("capability manifest digest must be lowercase SHA-256")
@@ -1213,7 +1483,15 @@ def check_capability(
         raise CheckError("capability manifest does not match its measured digest")
     manifest = parse_protected_manifest(manifest_bytes, "local-capability-v2")
     check_evidence_bundle(
-        manifest, hsaco_path, artifact_path, hardware_path, dwarf_path, rocgdb_path
+        manifest,
+        hsaco_path,
+        host_executable_path,
+        artifact_path,
+        hardware_path,
+        dwarf_path,
+        rocgdb_path,
+        llvm_dwarfdump,
+        llvm_readobj,
     )
 
 
@@ -1223,10 +1501,19 @@ def parse_args() -> argparse.Namespace:
 
     def add_evidence_arguments(command: argparse.ArgumentParser) -> None:
         command.add_argument("--hsaco", required=True, type=pathlib.Path)
+        command.add_argument("--host-executable", required=True, type=pathlib.Path)
         command.add_argument("--artifact-facts", required=True, type=pathlib.Path)
         command.add_argument("--hardware-facts", required=True, type=pathlib.Path)
         command.add_argument("--dwarf", required=True, type=pathlib.Path)
         command.add_argument("--rocgdb", required=True, type=pathlib.Path)
+
+    def add_nonproduction_tool_arguments(command: argparse.ArgumentParser) -> None:
+        command.add_argument(
+            "--fixture-llvm-dwarfdump", type=pathlib.Path, default=LLVM_DWARFDUMP
+        )
+        command.add_argument(
+            "--fixture-llvm-readobj", type=pathlib.Path, default=LLVM_READOBJ
+        )
 
     for name in ("normalize-dwarf", "normalize-rocgdb"):
         command = subparsers.add_parser(name)
@@ -1256,10 +1543,12 @@ def parse_args() -> argparse.Namespace:
     command.add_argument("--manifest", required=True, type=pathlib.Path)
     command.add_argument("--expected-manifest-sha256", required=True)
     add_evidence_arguments(command)
+    add_nonproduction_tool_arguments(command)
     command = subparsers.add_parser("check-capability")
     command.add_argument("--manifest", required=True, type=pathlib.Path)
     command.add_argument("--expected-manifest-sha256", required=True)
     add_evidence_arguments(command)
+    add_nonproduction_tool_arguments(command)
     return parser.parse_args()
 
 
@@ -1287,7 +1576,11 @@ def main() -> int:
         facts, _ = hardware_facts(read_bounded(args.input), args.sha256)
         write_new(args.output, facts)
     elif args.command == "identity-fields":
-        values = identity_manifest_values(read_bounded_bytes(args.hsaco))
+        try:
+            with sealed_snapshots((("hsaco", args.hsaco, False),)) as snapshots:
+                values = identity_manifest_values(snapshot_bytes(snapshots["hsaco"]))
+        except SnapshotError as error:
+            raise CheckError(f"cannot pin HSACO identity object: {error}") from error
         write_new(
             args.output,
             serialize_ordered_fields(
@@ -1297,6 +1590,7 @@ def main() -> int:
     elif args.command == "check-production":
         check_production(
             args.hsaco,
+            args.host_executable,
             args.artifact_facts,
             args.hardware_facts,
             args.dwarf,
@@ -1308,10 +1602,13 @@ def main() -> int:
             args.manifest,
             args.expected_manifest_sha256,
             args.hsaco,
+            args.host_executable,
             args.artifact_facts,
             args.hardware_facts,
             args.dwarf,
             args.rocgdb,
+            args.fixture_llvm_dwarfdump,
+            args.fixture_llvm_readobj,
         )
         print("S09 non-authoritative fixture checker passed")
     elif args.command == "check-capability":
@@ -1319,10 +1616,13 @@ def main() -> int:
             args.manifest,
             args.expected_manifest_sha256,
             args.hsaco,
+            args.host_executable,
             args.artifact_facts,
             args.hardware_facts,
             args.dwarf,
             args.rocgdb,
+            args.fixture_llvm_dwarfdump,
+            args.fixture_llvm_readobj,
         )
         print("S09 non-authoritative capability manifest V2 accepted")
     else:

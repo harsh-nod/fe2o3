@@ -8,6 +8,9 @@ readonly CHECKER="${ROOT}/scripts/s09-debug-check.py"
 readonly RUNNER="${ROOT}/scripts/s09-rocgdb-profile.sh"
 readonly FIXTURES="${ROOT}/scripts/tests/fixtures/s09-debug"
 readonly IDENTITY_FIXTURE="${ROOT}/scripts/tests/s09-debug-identity-fixture.py"
+readonly FIXTURE_DWARFDUMP="${FIXTURES}/llvm-dwarfdump"
+readonly FIXTURE_READOBJ="${FIXTURES}/llvm-readobj"
+readonly WRONG_FIXTURE_READOBJ="${FIXTURES}/llvm-readobj-wrong-artifact"
 readonly ROCGDB_HSACO_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 readonly HARDWARE_SHA256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 readonly HARDWARE_BUILD_ID=cccccccccccccccccccccccccccccccccccccccc
@@ -68,17 +71,27 @@ expect_fail rg -q 'sysdeps|\.\./' "${TMP}/rocgdb.one"
 
 readonly MANIFEST="${TMP}/protected-manifest.tsv"
 readonly HSACO="${TMP}/identity.hsaco"
+readonly HOST_EXECUTABLE="${TMP}/host-executable"
 readonly IDENTITY_FIELDS="${TMP}/identity-fields.tsv"
 "${IDENTITY_FIXTURE}" --output "${HSACO}"
+cp -- /bin/true "${HOST_EXECUTABLE}"
+chmod 700 "${HOST_EXECUTABLE}"
 "${CHECKER}" identity-fields --hsaco "${HSACO}" --output "${IDENTITY_FIELDS}"
 HSACO_SHA256="$(sha256sum "${HSACO}" | cut -d ' ' -f 1)"
-readonly HSACO_SHA256
-sed "s/${ROCGDB_HSACO_SHA256}/${HSACO_SHA256}/g" \
+HOST_EXECUTABLE_SHA256="$(sha256sum "${HOST_EXECUTABLE}" | cut -d ' ' -f 1)"
+readonly HSACO_SHA256 HOST_EXECUTABLE_SHA256
+"${CHECKER}" hardware-facts \
+  --input "${FIXTURES}/hardware.pass.txt" \
+  --sha256 "${HOST_EXECUTABLE_SHA256}" \
+  --output "${TMP}/bundle.hardware.facts"
+sed \
+  -e "s/${ROCGDB_HSACO_SHA256}/${HSACO_SHA256}/g" \
+  -e "s/${HARDWARE_SHA256}/${HOST_EXECUTABLE_SHA256}/g" \
   "${ROCGDB_FIXTURE}" >"${TMP}/rocgdb.bundle.raw"
 "${CHECKER}" normalize-rocgdb \
   --input "${TMP}/rocgdb.bundle.raw" --output "${TMP}/rocgdb.bundle"
 artifact_sha256="$(sha256sum "${TMP}/artifact.facts" | cut -d ' ' -f 1)"
-hardware_facts_sha256="$(sha256sum "${TMP}/hardware.facts" | cut -d ' ' -f 1)"
+hardware_facts_sha256="$(sha256sum "${TMP}/bundle.hardware.facts" | cut -d ' ' -f 1)"
 dwarf_sha256="$(sha256sum "${TMP}/dwarf.one" | cut -d ' ' -f 1)"
 rocgdb_sha256="$(sha256sum "${TMP}/rocgdb.bundle" | cut -d ' ' -f 1)"
 readonly artifact_sha256 hardware_facts_sha256 dwarf_sha256 rocgdb_sha256
@@ -90,7 +103,7 @@ readonly artifact_sha256 hardware_facts_sha256 dwarf_sha256 rocgdb_sha256
   printf 'source_commit\t1111111111111111111111111111111111111111\n'
   printf 'source_tree\t2222222222222222222222222222222222222222\n'
   printf 'hsaco_sha256\t%s\n' "${HSACO_SHA256}"
-  printf 'host_executable_sha256\t%s\n' "${HARDWARE_SHA256}"
+  printf 'host_executable_sha256\t%s\n' "${HOST_EXECUTABLE_SHA256}"
   printf 'host_executable_build_id\t%s\n' "${HARDWARE_BUILD_ID}"
   printf 'debug_archive_manifest_sha256\t%064d\n' 15
   printf 'artifact_facts_sha256\t%s\n' "${artifact_sha256}"
@@ -105,14 +118,35 @@ fixture_args=(
   --manifest "${MANIFEST}"
   --expected-manifest-sha256 "${manifest_sha256}"
   --hsaco "${HSACO}"
+  --host-executable "${HOST_EXECUTABLE}"
   --artifact-facts "${TMP}/artifact.facts"
-  --hardware-facts "${TMP}/hardware.facts"
+  --hardware-facts "${TMP}/bundle.hardware.facts"
   --dwarf "${TMP}/dwarf.one"
   --rocgdb "${TMP}/rocgdb.bundle"
+  --fixture-llvm-dwarfdump "${FIXTURE_DWARFDUMP}"
+  --fixture-llvm-readobj "${FIXTURE_READOBJ}"
+)
+evidence_args=(
+  --hsaco "${HSACO}"
+  --host-executable "${HOST_EXECUTABLE}"
+  --artifact-facts "${TMP}/artifact.facts"
+  --hardware-facts "${TMP}/bundle.hardware.facts"
+  --dwarf "${TMP}/dwarf.one"
+  --rocgdb "${TMP}/rocgdb.bundle"
+)
+fixture_tool_args=(
+  --fixture-llvm-dwarfdump "${FIXTURE_DWARFDUMP}"
+  --fixture-llvm-readobj "${FIXTURE_READOBJ}"
 )
 "${fixture_args[@]}" >"${TMP}/fixture.out"
 rg -q '^S09 non-authoritative fixture checker passed$' "${TMP}/fixture.out"
 expect_fail rg -qi 'production.*accepted|authoritative.*accepted' "${TMP}/fixture.out"
+expect_fail "${CHECKER}" check-fixture \
+  --manifest "${MANIFEST}" \
+  --expected-manifest-sha256 "${manifest_sha256}" \
+  "${evidence_args[@]}" \
+  --fixture-llvm-dwarfdump "${FIXTURE_DWARFDUMP}" \
+  --fixture-llvm-readobj "${WRONG_FIXTURE_READOBJ}"
 
 check_identity_substitution() {
   local field replacement substituted_manifest substituted_sha256
@@ -129,11 +163,8 @@ check_identity_substitution() {
   expect_fail "${CHECKER}" check-fixture \
     --manifest "${substituted_manifest}" \
     --expected-manifest-sha256 "${substituted_sha256}" \
-    --hsaco "${HSACO}" \
-    --artifact-facts "${TMP}/artifact.facts" \
-    --hardware-facts "${TMP}/hardware.facts" \
-    --dwarf "${TMP}/dwarf.one" \
-    --rocgdb "${TMP}/rocgdb.bundle"
+    "${evidence_args[@]}" \
+    "${fixture_tool_args[@]}"
 }
 
 check_identity_substitution \
@@ -149,61 +180,46 @@ capability_manifest_sha256="$(sha256sum "${TMP}/capability-manifest.tsv" | cut -
 "${CHECKER}" check-capability \
   --manifest "${TMP}/capability-manifest.tsv" \
   --expected-manifest-sha256 "${capability_manifest_sha256}" \
-  --hsaco "${HSACO}" \
-  --artifact-facts "${TMP}/artifact.facts" \
-  --hardware-facts "${TMP}/hardware.facts" \
-  --dwarf "${TMP}/dwarf.one" \
-  --rocgdb "${TMP}/rocgdb.bundle" >"${TMP}/capability.out"
+  "${evidence_args[@]}" \
+  "${fixture_tool_args[@]}" >"${TMP}/capability.out"
 rg -q '^S09 non-authoritative capability manifest V2 accepted$' "${TMP}/capability.out"
 expect_fail rg -q '^S09 production trust policy accepted' "${TMP}/capability.out"
 "${CHECKER}" check-production --help >"${TMP}/production-help"
 expect_fail rg -q -- '--manifest|--expected-manifest-sha256' "${TMP}/production-help"
 production_evidence_args=(
   "${CHECKER}" check-production
-  --hsaco "${HSACO}"
-  --artifact-facts "${TMP}/artifact.facts"
-  --hardware-facts "${TMP}/hardware.facts"
-  --dwarf "${TMP}/dwarf.one"
-  --rocgdb "${TMP}/rocgdb.bundle"
+  "${evidence_args[@]}"
 )
 expect_fail "${production_evidence_args[@]}"
 expect_fail "${CHECKER}" check-production \
   --manifest "${MANIFEST}" \
   --expected-manifest-sha256 "${manifest_sha256}" \
-  --hsaco "${HSACO}" \
-  --artifact-facts "${TMP}/artifact.facts" \
-  --hardware-facts "${TMP}/hardware.facts" \
-  --dwarf "${TMP}/dwarf.one" \
-  --rocgdb "${TMP}/rocgdb.bundle"
+  "${evidence_args[@]}"
 expect_fail "${CHECKER}" check-fixture \
   --manifest "${TMP}/absent-manifest.tsv" \
   --expected-manifest-sha256 "${manifest_sha256}" \
-  --hsaco "${HSACO}" \
-  --artifact-facts "${TMP}/artifact.facts" \
-  --hardware-facts "${TMP}/hardware.facts" \
-  --dwarf "${TMP}/dwarf.one" \
-  --rocgdb "${TMP}/rocgdb.bundle"
+  "${evidence_args[@]}" \
+  "${fixture_tool_args[@]}"
 cp "${TMP}/artifact.facts" "${TMP}/artifact-mutated.facts"
 printf 'mutation=true\n' >>"${TMP}/artifact-mutated.facts"
 expect_fail "${CHECKER}" check-fixture \
   --manifest "${MANIFEST}" \
   --expected-manifest-sha256 "${manifest_sha256}" \
   --hsaco "${HSACO}" \
+  --host-executable "${HOST_EXECUTABLE}" \
   --artifact-facts "${TMP}/artifact-mutated.facts" \
-  --hardware-facts "${TMP}/hardware.facts" \
+  --hardware-facts "${TMP}/bundle.hardware.facts" \
   --dwarf "${TMP}/dwarf.one" \
-  --rocgdb "${TMP}/rocgdb.bundle"
+  --rocgdb "${TMP}/rocgdb.bundle" \
+  "${fixture_tool_args[@]}"
 sed 's/^trust_domain\ttest-fixture-v2$/trust_domain\tproduction-v2/' \
   "${MANIFEST}" >"${TMP}/production-domain-manifest.tsv"
 production_domain_sha256="$(sha256sum "${TMP}/production-domain-manifest.tsv" | cut -d ' ' -f 1)"
 expect_fail "${CHECKER}" check-fixture \
   --manifest "${TMP}/production-domain-manifest.tsv" \
   --expected-manifest-sha256 "${production_domain_sha256}" \
-  --hsaco "${HSACO}" \
-  --artifact-facts "${TMP}/artifact.facts" \
-  --hardware-facts "${TMP}/hardware.facts" \
-  --dwarf "${TMP}/dwarf.one" \
-  --rocgdb "${TMP}/rocgdb.bundle"
+  "${evidence_args[@]}" \
+  "${fixture_tool_args[@]}"
 expect_fail "${CHECKER}" normalize-dwarf \
   --input "${FIXTURES}/dwarf.pass.txt" --output "${TMP}/dwarf.one"
 

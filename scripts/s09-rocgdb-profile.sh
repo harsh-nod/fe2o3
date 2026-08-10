@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 set -Eeuo pipefail
+export PYTHONDONTWRITEBYTECODE=1
 
 readonly ROCGDB=/opt/rocm/bin/rocgdb-py_3.12
 readonly DWARFDUMP=/opt/rocm/llvm/bin/llvm-dwarfdump
@@ -9,6 +10,7 @@ readonly READELF=/opt/rocm/llvm/bin/llvm-readobj
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 readonly CHECKER="${SCRIPT_DIR}/s09-debug-check.py"
+readonly PINNER="${SCRIPT_DIR}/s09_pinned_snapshot.py"
 readonly PROFILE=s09-alpha-gfx942-o0-v1
 
 usage() {
@@ -45,6 +47,13 @@ hash_or_missing() {
   fi
 }
 
+mode=outer
+if [[ "${1:-}" == --pinned-profile ]]; then
+  mode=pinned-profile
+  shift
+fi
+readonly mode
+
 if (($# != 3)); then
   usage
   exit 2
@@ -54,11 +63,6 @@ readonly HSACO="$1"
 readonly HARDWARE_TEST="$2"
 readonly ARCHIVE="$3"
 
-canonical_file HSACO "${HSACO}"
-canonical_file hardware-test "${HARDWARE_TEST}"
-[[ -x "${HARDWARE_TEST}" ]] || fail "hardware-test must be executable"
-[[ "$(basename -- "${HARDWARE_TEST}")" == s09_gfx942_alpha_hardware-* ]] ||
-  fail "hardware-test basename is outside the fixed S09 profile"
 [[ "${ARCHIVE}" == /* ]] || fail "archive must be an absolute path"
 [[ ! -e "${ARCHIVE}" && ! -L "${ARCHIVE}" ]] || fail "archive must not already exist"
 ARCHIVE_PARENT="$(dirname -- "${ARCHIVE}")"
@@ -72,6 +76,25 @@ pinned_tool llvm-dwarfdump "${DWARFDUMP}"
 pinned_tool llvm-readobj "${READOBJ}"
 pinned_tool llvm-readelf "${READELF}"
 canonical_file checker "${CHECKER}"
+pinned_tool snapshot-supervisor "${PINNER}"
+
+if [[ "${mode}" == outer ]]; then
+  canonical_file HSACO "${HSACO}"
+  canonical_file hardware-test "${HARDWARE_TEST}"
+  [[ -x "${HARDWARE_TEST}" ]] || fail "hardware-test must be executable"
+  [[ "$(basename -- "${HARDWARE_TEST}")" == s09_gfx942_alpha_hardware-* ]] ||
+    fail "hardware-test basename is outside the fixed S09 profile"
+  exec "${PINNER}" \
+    --input "hsaco=${HSACO}" \
+    --input "host=${HARDWARE_TEST}" \
+    --executable host \
+    -- "${BASH_SOURCE[0]}" --pinned-profile '{hsaco}' '{host}' "${ARCHIVE}"
+fi
+
+"${PINNER}" --verify-only \
+  --input "hsaco=${HSACO}" \
+  --input "host=${HARDWARE_TEST}" \
+  --executable host
 
 HSACO_SHA256="$(sha256sum -- "${HSACO}" | awk '{print $1}')"
 readonly HSACO_SHA256
@@ -152,16 +175,21 @@ if ((dwarf_verify_status == 0 && dwarf_dump_status == 0 && dwarf_normalize_statu
   set +e
   # ROCgdb, rather than Bash, evaluates the literal $pc expressions below.
   # shellcheck disable=SC2016
-  /usr/bin/timeout --signal=TERM --kill-after=10s 180s \
+  "${PINNER}" \
+    --input "hsaco=${HSACO}" \
+    --input "host=${HARDWARE_TEST}" \
+    --input "facts=${ARTIFACT_FACTS}" \
+    --executable host \
+    -- /usr/bin/timeout --signal=TERM --kill-after=10s 180s \
     /usr/bin/env -i \
       HOME="${ARCHIVE}/tmp" \
       PATH=/opt/rocm/bin:/usr/bin:/bin \
       LD_LIBRARY_PATH=/opt/rocm/lib:/opt/rocm/lib64 \
       TMPDIR="${ARCHIVE}/tmp" \
       FE2O3_RUN_S09_GFX942_ALPHA=1 \
-      FE2O3_S09_GFX942_ALPHA_HSACO="${HSACO}" \
+      FE2O3_S09_GFX942_ALPHA_HSACO='{hsaco}' \
       FE2O3_S09_GFX942_ALPHA_SHA256="${HSACO_SHA256}" \
-      FE2O3_S09_GFX942_ALPHA_FACTS="${ARTIFACT_FACTS}" \
+      FE2O3_S09_GFX942_ALPHA_FACTS='{facts}' \
       FE2O3_S09_GFX942_ALPHA_FACTS_SHA256="${artifact_facts_sha256}" \
       FE2O3_S09_RUN_NONCE="${RUN_NONCE}" \
       "${ROCGDB}" --batch --nx --nh --return-child-result \
@@ -216,7 +244,7 @@ if ((dwarf_verify_status == 0 && dwarf_dump_status == 0 && dwarf_normalize_statu
       -ex 'disable 3' \
       -ex 'echo FE2O3_S09_RESUME\n' \
       -ex 'continue' \
-      --args "${HARDWARE_TEST}" \
+      --args '{host}' \
         s09_gfx942_cov6_alpha_only_controller \
         --ignored --exact --nocapture >"${ROCGDB_RAW}" 2>&1
   rocgdb_status=$?
