@@ -19,10 +19,7 @@ from collections.abc import Callable, Iterator, Sequence
 MAX_SNAPSHOT_BYTES = 64 * 1024 * 1024
 COPY_CHUNK_BYTES = 64 * 1024
 REQUIRED_SEALS = (
-    fcntl.F_SEAL_SEAL
-    | fcntl.F_SEAL_SHRINK
-    | fcntl.F_SEAL_GROW
-    | fcntl.F_SEAL_WRITE
+    fcntl.F_SEAL_SEAL | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_GROW | fcntl.F_SEAL_WRITE
 )
 
 
@@ -70,14 +67,21 @@ class SealedSnapshot:
 
 
 def _open_source(path: pathlib.Path, executable: bool) -> tuple[int, FileIdentity]:
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    inherited_snapshot = _is_proc_fd_path(path)
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    if not inherited_snapshot:
+        flags |= getattr(os, "O_NOFOLLOW", 0)
     try:
         descriptor = os.open(path, flags)
     except OSError as error:
-        raise SnapshotError(f"cannot open snapshot source safely: {path}: {error}") from error
+        raise SnapshotError(
+            f"cannot open snapshot source safely: {path}: {error}"
+        ) from error
     try:
         identity = FileIdentity.from_stat(os.fstat(descriptor))
-        if not stat.S_ISREG(identity.mode) or identity.links < 1:
+        if not stat.S_ISREG(identity.mode) or (
+            not inherited_snapshot and identity.links < 1
+        ):
             raise SnapshotError(f"snapshot source must be a regular file: {path}")
         if not 1 <= identity.size <= MAX_SNAPSHOT_BYTES:
             raise SnapshotError(
@@ -85,6 +89,17 @@ def _open_source(path: pathlib.Path, executable: bool) -> tuple[int, FileIdentit
             )
         if executable and identity.mode & 0o111 == 0:
             raise SnapshotError(f"snapshot source must be executable: {path}")
+        if inherited_snapshot:
+            try:
+                seals = fcntl.fcntl(descriptor, fcntl.F_GET_SEALS)
+            except OSError as error:
+                raise SnapshotError(
+                    f"inherited snapshot source is not a sealed memfd: {path}"
+                ) from error
+            if seals & REQUIRED_SEALS != REQUIRED_SEALS:
+                raise SnapshotError(
+                    f"inherited snapshot source is missing required seals: {path}"
+                )
         return descriptor, identity
     except BaseException:
         os.close(descriptor)
@@ -112,7 +127,9 @@ def create_sealed_snapshot(
         offset = 0
         first = True
         while offset < before.size:
-            chunk = os.pread(source, min(COPY_CHUNK_BYTES, before.size - offset), offset)
+            chunk = os.pread(
+                source, min(COPY_CHUNK_BYTES, before.size - offset), offset
+            )
             if not chunk:
                 raise SnapshotError(f"snapshot source became truncated: {path}")
             digest.update(chunk)
@@ -134,12 +151,18 @@ def create_sealed_snapshot(
         fcntl.fcntl(snapshot, fcntl.F_ADD_SEALS, REQUIRED_SEALS)
         seals = fcntl.fcntl(snapshot, fcntl.F_GET_SEALS)
         if seals & REQUIRED_SEALS != REQUIRED_SEALS:
-            raise SnapshotError("sealed snapshot is missing required write/resize seals")
-        return SealedSnapshot(name, snapshot, digest.hexdigest(), before.size, executable)
+            raise SnapshotError(
+                "sealed snapshot is missing required write/resize seals"
+            )
+        return SealedSnapshot(
+            name, snapshot, digest.hexdigest(), before.size, executable
+        )
     except OSError as error:
         if snapshot >= 0:
             os.close(snapshot)
-        raise SnapshotError(f"cannot create sealed snapshot for {path}: {error}") from error
+        raise SnapshotError(
+            f"cannot create sealed snapshot for {path}: {error}"
+        ) from error
     except BaseException:
         if snapshot >= 0:
             os.close(snapshot)
@@ -164,43 +187,101 @@ def sealed_snapshots(
             snapshot.close()
 
 
-def _parse_input(value: str, executable_names: frozenset[str]) -> tuple[str, pathlib.Path, bool]:
+def _parse_input(
+    value: str, executable_names: frozenset[str]
+) -> tuple[str, pathlib.Path, bool]:
     name, separator, raw_path = value.partition("=")
-    if not separator or not name or not raw_path or not name.replace("_", "a").isalnum():
+    if (
+        not separator
+        or not name
+        or not raw_path
+        or not name.replace("_", "a").isalnum()
+    ):
         raise SnapshotError(f"snapshot input must be NAME=PATH: {value}")
     return name, pathlib.Path(raw_path), name in executable_names
 
 
-def _substitute(command: Sequence[str], snapshots: dict[str, SealedSnapshot]) -> list[str]:
+def _substitute(
+    command: Sequence[str], snapshots: dict[str, SealedSnapshot]
+) -> list[str]:
     result: list[str] = []
     for argument in command:
         replaced = argument
         for name, snapshot in snapshots.items():
             replaced = replaced.replace("{" + name + "}", snapshot.proc_path)
         if "{" in replaced or "}" in replaced:
-            raise SnapshotError(f"unresolved snapshot placeholder in argument: {argument}")
+            raise SnapshotError(
+                f"unresolved snapshot placeholder in argument: {argument}"
+            )
         result.append(replaced)
     return result
+
+
+def verify_sealed_path(
+    name: str, path: pathlib.Path, *, executable: bool = False
+) -> None:
+    if not _is_proc_fd_path(path):
+        raise SnapshotError(
+            f"sealed snapshot {name} must use an inherited /proc/self/fd path"
+        )
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0))
+    except OSError as error:
+        raise SnapshotError(f"cannot open sealed snapshot {name}: {error}") from error
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or not 1 <= metadata.st_size <= MAX_SNAPSHOT_BYTES
+        ):
+            raise SnapshotError(f"sealed snapshot {name} is not a bounded regular file")
+        if executable and metadata.st_mode & 0o111 == 0:
+            raise SnapshotError(f"sealed snapshot {name} is not executable")
+        try:
+            seals = fcntl.fcntl(descriptor, fcntl.F_GET_SEALS)
+        except OSError as error:
+            raise SnapshotError(
+                f"sealed snapshot {name} is missing required seals"
+            ) from error
+        if seals & REQUIRED_SEALS != REQUIRED_SEALS:
+            raise SnapshotError(f"sealed snapshot {name} is missing required seals")
+    except OSError as error:
+        raise SnapshotError(f"cannot verify sealed snapshot {name}: {error}") from error
+    finally:
+        os.close(descriptor)
+
+
+def _is_proc_fd_path(path: pathlib.Path) -> bool:
+    value = os.fspath(path)
+    prefix = "/proc/self/fd/"
+    return value.startswith(prefix) and value[len(prefix) :].isdigit()
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", action="append", default=[])
     parser.add_argument("--executable", action="append", default=[])
+    parser.add_argument("--verify-only", action="store_true")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    if not args.command or args.command[0] != "--" or len(args.command) == 1:
-        raise SnapshotError("snapshot command must follow --")
     executable_names = frozenset(args.executable)
     inputs = [_parse_input(value, executable_names) for value in args.input]
     if not inputs:
         raise SnapshotError("at least one snapshot input is required")
     if not executable_names.issubset(name for name, _, _ in inputs):
         raise SnapshotError("every executable name must identify a snapshot input")
+    if args.verify_only:
+        if args.command:
+            raise SnapshotError("verify-only mode does not accept a command")
+        for name, path, executable in inputs:
+            verify_sealed_path(name, path, executable=executable)
+        return 0
+    if not args.command or args.command[0] != "--" or len(args.command) == 1:
+        raise SnapshotError("snapshot command must follow --")
     with sealed_snapshots(inputs) as snapshots:
         command = _substitute(args.command[1:], snapshots)
         descriptors = tuple(snapshot.descriptor for snapshot in snapshots.values())
