@@ -1,8 +1,9 @@
 # Typed groups foundation V1
 
 This document records the corrected first source-level foundation for
-cuda-oxide parity rows 68 and 69. It is an arithmetic snapshot and fail-closed
-API contract, not parity evidence. Both rows remain `Missing`.
+cuda-oxide parity rows 68 and 69. The compiler-visible arithmetic snapshot and
+fail-closed API contract qualify both rows as `Partial`; neither row meets its
+full acceptance contract or claims authenticated execution identity.
 
 ## Snapshot model
 

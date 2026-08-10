@@ -13,6 +13,24 @@ source-level Verus contracts. See the [v2 architecture](docs/architecture-v2.md)
 [testing guide](docs/testing.md) defines the generic, Verus, ROCm compile, and
 hardware execution lanes.
 
+## CUDA-Oxide status
+
+Against the pinned cuda-oxide baseline, the evidence ledger currently records
+`0 Complete / 82 Partial / 0 Missing / 12 N/A` normative rows and
+`0 Complete / 15 Partial / 0 Missing` supplemental rows. Zero Missing means
+every in-scope row now has at least one bounded, tested implementation slice;
+it does not mean that any row satisfies its full acceptance contract or that
+fe2o3 has reached cuda-oxide parity.
+
+The newest `gfx942` slices cover trusted memory operations, bounded closures
+and control flow, cross-crate device roots, typed groups and collectives,
+managed barriers and standard atomics, static proof-carrying tiles, launch
+policies, FP8/MX and MFMA/LDS contracts, composite O0 debug metadata, and a
+closed diagnostic/assembly surface. Device-library and tile interop are narrow:
+the former demonstrates one directly linked OCML operation, and the latter one
+BF16 XOR4 tile/stream contract. The dashboard records the exact commits, tests,
+target lanes, evidence strengths, and limitations for each Partial row.
+
 The intended end state is:
 
 ```text
@@ -414,12 +432,13 @@ turn the foundations below into end-to-end features.
   semantic and build identity records to the physical `alpha`/`alpha.kd` pair,
   verifies linked DWARF, executes a dedicated controller over lengths 1, 255,
   256, 257, and 1023 with CPU-oracle and canary checks, and uses native ROCgdb
-  to inspect the scalar argument, physical slice fields, and local `i`. The
+  to inspect scalar and aggregate arguments, a reference value, physical slice
+  fields, and local `i`; tuple and array locals also carry located DWARF. The
   checked-in lane produces only `local-capability-v2` evidence: it does not
-  authenticate the compiler or runner, install production trust, cover
-  aggregates or optimized debugging, establish general local/argument
-  inspection, or provide a safety proof. Parity row 45 therefore remains
-  `Partial`; row 46 and supplemental row S09 remain `Missing`. See the
+  authenticate the compiler or runner, install production trust, materialize
+  tuple/array runtime values at the fixed stop, cover optimized or general
+  debugging, or provide a safety proof. Rows 45 and 46 and supplemental row S09
+  are therefore `Partial`. See the
   [S09 pilot contract](docs/s09-source-debug-pilot-v1.md).
 
 ### Not yet integrated
@@ -492,14 +511,15 @@ turn the foundations below into end-to-end features.
   rustc-descendant descriptor lifetime, dynamic loading, transitive shared
   libraries, and non-Linux execution remain unresolved.
 - General Rust language support, frontend-to-layout integration, broad atomic
-  and wave collective support, production direct-link integration, general
+  and collective coverage, production direct-link integration, general
   device FFI, occupancy-complete cooperative launch, multi-device memory
   semantics, full sanitizer/debugger coverage, broad differential fuzzing, and
   authenticated Verus refinement remain parity work. The alpha/zeta hardware
   result covers only MI300X `gfx942:xnack-`; architecture-family breadth is
-  absent. LDS, atomics, waves,
-  fences, and barriers exist only in bounded experimental paths and are not yet
-  generally available from ordinary Rust kernels.
+  absent. LDS, atomics, waves, collectives, fences, and barriers have bounded
+  source/compiler paths, but are not yet broadly available from ordinary Rust
+  kernels or validated across the full operation, type, target, and hardware
+  matrix.
 
 The evidence-gated comparison with cuda-oxide is tracked in the
 [parity matrix](docs/cuda-oxide-parity-matrix.md) and the generated

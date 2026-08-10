@@ -308,5 +308,7 @@ Pilot evidence classes are:
 - `compile`: genuine rustc/LLVM/LLD COV6 emission plus DWARF verification; and
 - `debug`: normalized `llvm-dwarfdump` and native ROCgdb archive inspection.
 
-This pilot is not production parity evidence. S09 remains `Missing` until a
-production debug result is signed and accepted by the parity gate.
+This pilot is not production parity evidence. Its bounded composite O0 metadata
+and inspection slice supports a source/unit `Partial` claim for S09, without
+dashboard hardware strength. Production-v2 containment, signed hardware
+evidence, optimized modes, and general kernels remain required for Complete.

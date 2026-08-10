@@ -1,6 +1,6 @@
 # Monomorphization-Dead V1 Foundation
 
-Status: bounded compiler foundation. This is not parity evidence for row 23.
+Status: bounded compiler foundation supporting a Partial claim for row 23.
 
 ## Authority
 
@@ -91,4 +91,4 @@ function, including the unreachable-to-policy-excluded edge case.
   supported row-23 kernel. Configured compiler, finalized `gfx942` artifact, and
   hardware differential evidence are absent.
 
-These gaps keep parity row 23 `Missing`.
+These gaps keep parity row 23 `Partial` rather than Complete.
