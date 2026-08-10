@@ -327,7 +327,13 @@ mod platform {
         // This mutex is the shutdown/SCM_RIGHTS linearization point and owns the wakeup socket.
         state: Mutex<BrokerShutdownState>,
         #[cfg(test)]
-        dispatch_pause: Mutex<Option<Arc<TestDispatchPause>>>,
+        accept_pause: Mutex<Option<Arc<TestPause>>>,
+        #[cfg(test)]
+        dispatch_pause: Mutex<Option<Arc<TestPause>>>,
+        #[cfg(test)]
+        locked_dispatch_pause: Mutex<Option<Arc<TestPause>>>,
+        #[cfg(test)]
+        begin_started: std::sync::atomic::AtomicBool,
     }
 
     impl BrokerShutdown {
@@ -363,6 +369,9 @@ mod platform {
         }
 
         fn begin(&self) {
+            #[cfg(test)]
+            self.begin_started
+                .store(true, std::sync::atomic::Ordering::Release);
             let mut state = self.state();
             state.stopping = true;
             if let Some(active) = state.active.take() {
@@ -377,14 +386,7 @@ mod platform {
             descriptors: &[BorrowedFd<'_>],
         ) -> io::Result<()> {
             #[cfg(test)]
-            if let Some(pause) = self
-                .dispatch_pause
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .clone()
-            {
-                pause.server_wait();
-            }
+            self.pause(&self.dispatch_pause, None);
 
             let state = self.state();
             if state.stopping {
@@ -393,6 +395,8 @@ mod platform {
                     "capability broker is shutting down",
                 ));
             }
+            #[cfg(test)]
+            self.pause(&self.locked_dispatch_pause, None);
             let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(3))];
             let mut ancillary = SendAncillaryBuffer::new(&mut space);
             if !ancillary.push(SendAncillaryMessage::ScmRights(descriptors)) {
@@ -416,13 +420,61 @@ mod platform {
         }
 
         #[cfg(test)]
-        fn install_dispatch_pause(&self) -> TestDispatchControl {
-            let (pause, control) = TestDispatchPause::new();
-            *self
-                .dispatch_pause
+        fn install_pause(slot: &Mutex<Option<Arc<TestPause>>>) -> TestPauseControl {
+            let (pause, control) = TestPause::new();
+            *slot
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(pause);
             control
+        }
+
+        #[cfg(test)]
+        fn pause(&self, slot: &Mutex<Option<Arc<TestPause>>>, socket_identity: Option<(u64, u64)>) {
+            if let Some(pause) = slot
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
+            {
+                pause.server_wait(socket_identity);
+            }
+        }
+
+        #[cfg(test)]
+        fn install_accept_pause(&self) -> TestPauseControl {
+            Self::install_pause(&self.accept_pause)
+        }
+
+        #[cfg(test)]
+        fn pause_after_accept(&self, stream: &UnixStream) {
+            let socket_identity = fs::metadata(format!("/proc/self/fd/{}", stream.as_raw_fd()))
+                .ok()
+                .map(|metadata| (metadata.dev(), metadata.ino()));
+            self.pause(&self.accept_pause, socket_identity);
+        }
+
+        #[cfg(test)]
+        fn install_dispatch_pause(&self) -> TestPauseControl {
+            Self::install_pause(&self.dispatch_pause)
+        }
+
+        #[cfg(test)]
+        fn install_locked_dispatch_pause(&self) -> TestPauseControl {
+            Self::install_pause(&self.locked_dispatch_pause)
+        }
+
+        #[cfg(test)]
+        fn wait_for_begin(&self) {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while !self
+                .begin_started
+                .load(std::sync::atomic::Ordering::Acquire)
+            {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "capability broker shutdown did not start"
+                );
+                thread::yield_now();
+            }
         }
 
         #[cfg(test)]
@@ -436,20 +488,20 @@ mod platform {
     }
 
     #[cfg(test)]
-    struct TestDispatchPause {
-        reached: std::sync::mpsc::SyncSender<()>,
+    struct TestPause {
+        reached: std::sync::mpsc::SyncSender<Option<(u64, u64)>>,
         release: Mutex<std::sync::mpsc::Receiver<()>>,
     }
 
     #[cfg(test)]
-    struct TestDispatchControl {
-        reached: std::sync::mpsc::Receiver<()>,
+    struct TestPauseControl {
+        reached: std::sync::mpsc::Receiver<Option<(u64, u64)>>,
         release: std::sync::mpsc::SyncSender<()>,
     }
 
     #[cfg(test)]
-    impl TestDispatchPause {
-        fn new() -> (Arc<Self>, TestDispatchControl) {
+    impl TestPause {
+        fn new() -> (Arc<Self>, TestPauseControl) {
             let (reached_tx, reached_rx) = std::sync::mpsc::sync_channel(0);
             let (release_tx, release_rx) = std::sync::mpsc::sync_channel(0);
             (
@@ -457,15 +509,15 @@ mod platform {
                     reached: reached_tx,
                     release: Mutex::new(release_rx),
                 }),
-                TestDispatchControl {
+                TestPauseControl {
                     reached: reached_rx,
                     release: release_tx,
                 },
             )
         }
 
-        fn server_wait(&self) {
-            if self.reached.send(()).is_ok() {
+        fn server_wait(&self, socket_identity: Option<(u64, u64)>) {
+            if self.reached.send(socket_identity).is_ok() {
                 let _ = self
                     .release
                     .lock()
@@ -476,11 +528,11 @@ mod platform {
     }
 
     #[cfg(test)]
-    impl TestDispatchControl {
-        fn wait_until_reached(&self) {
+    impl TestPauseControl {
+        fn wait_until_reached(&self) -> Option<(u64, u64)> {
             self.reached
                 .recv_timeout(Duration::from_secs(5))
-                .expect("capability broker did not reach descriptor dispatch");
+                .expect("capability broker did not reach the test pause")
         }
 
         fn release(&self) {
@@ -714,14 +766,18 @@ mod platform {
         fn serve(self) {
             while !self.shutdown.is_stopping() {
                 match self.listener.accept() {
-                    Ok((mut stream, _)) => match self.shutdown.register(&stream) {
-                        Ok(true) => {
-                            let _ = self.serve_one(&mut stream);
-                            self.shutdown.finish();
+                    Ok((mut stream, _)) => {
+                        #[cfg(test)]
+                        self.shutdown.pause_after_accept(&stream);
+                        match self.shutdown.register(&stream) {
+                            Ok(true) => {
+                                let _ = self.serve_one(&mut stream);
+                                self.shutdown.finish();
+                            }
+                            Ok(false) => break,
+                            Err(_) => continue,
                         }
-                        Ok(false) => break,
-                        Err(_) => continue,
-                    },
+                    }
                     Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(2));
                     }
@@ -1058,21 +1114,35 @@ mod platform {
                 .any(|metadata| (metadata.dev(), metadata.ino()) == identity)
         }
 
-        fn received_descriptor_count(stream: &UnixStream) -> usize {
+        fn receive_raw_response(
+            stream: &UnixStream,
+        ) -> io::Result<(usize, [u8; RESPONSE_BYTES], Vec<OwnedFd>)> {
             let mut response = [0_u8; RESPONSE_BYTES];
             let mut iov = [IoSliceMut::new(&mut response)];
             let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(4))];
             let mut ancillary = RecvAncillaryBuffer::new(&mut space);
-            if recvmsg(stream, &mut iov, &mut ancillary, RecvFlags::CMSG_CLOEXEC).is_err() {
-                return 0;
+            let message = recvmsg(stream, &mut iov, &mut ancillary, RecvFlags::CMSG_CLOEXEC)
+                .map_err(io::Error::from)?;
+            if message.flags.contains(ReturnFlags::CTRUNC) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "test capability response control data was truncated",
+                ));
             }
-            ancillary
-                .drain()
-                .map(|message| match message {
-                    RecvAncillaryMessage::ScmRights(received) => received.count(),
-                    _ => 0,
-                })
-                .sum()
+            let bytes = message.bytes;
+            let mut descriptors = Vec::new();
+            for message in ancillary.drain() {
+                if let RecvAncillaryMessage::ScmRights(received) = message {
+                    descriptors.extend(received);
+                }
+            }
+            Ok((bytes, response, descriptors))
+        }
+
+        fn received_descriptor_count(stream: &UnixStream) -> usize {
+            receive_raw_response(stream)
+                .map(|(_, _, descriptors)| descriptors.len())
+                .unwrap_or(0)
         }
 
         #[test]
@@ -1388,7 +1458,7 @@ mod platform {
             let active_identity = wait_for_active_socket(&broker);
             let request = request_bytes(session, binding, [0x73; CHALLENGE_BYTES], &route.secret);
             client.write_all(&request).unwrap();
-            pause.wait_until_reached();
+            let _ = pause.wait_until_reached();
 
             let started = Instant::now();
             broker.shutdown.begin();
@@ -1399,6 +1469,108 @@ mod platform {
                 "broker shutdown did not promptly cancel descriptor dispatch"
             );
             assert_eq!(received_descriptor_count(&client), 0);
+            drop(client);
+            assert!(!object_is_open(active_identity));
+        }
+
+        #[test]
+        fn shutdown_race_before_register_is_fail_closed() {
+            let (_temp, backend, artifact, pinned_cargo_image, session) = fixture();
+            let binding = ordinary_binding();
+            let broker =
+                CapabilityBroker::start(session, binding, &backend, &artifact, &pinned_cargo_image)
+                    .unwrap();
+            let pause = broker.shutdown.install_accept_pause();
+            let route = BrokerRouteV2::parse(broker.route()).unwrap();
+            let address = endpoint_address(&route.endpoint).unwrap();
+            let client = UnixStream::connect_addr(&address).unwrap();
+            client
+                .set_read_timeout(Some(Duration::from_secs(1)))
+                .unwrap();
+            let accepted_identity = pause
+                .wait_until_reached()
+                .expect("accept pause must report the accepted socket identity");
+            assert!(broker.shutdown.active_socket_identity().is_none());
+            assert!(object_is_open(accepted_identity));
+
+            let started = Instant::now();
+            broker.shutdown.begin();
+            pause.release();
+            drop(broker);
+            assert!(
+                started.elapsed() < Duration::from_secs(2),
+                "broker did not promptly reject an unregistered accepted connection"
+            );
+            assert_eq!(received_descriptor_count(&client), 0);
+            drop(client);
+            assert!(!object_is_open(accepted_identity));
+        }
+
+        #[test]
+        fn shutdown_race_after_send_lock_preserves_exact_response() {
+            let (temp, backend, artifact, pinned_cargo_image, session) = fixture();
+            let backend_sha = *backend.sha256();
+            let cargo_sha = *pinned_cargo_image.sha256();
+            let binding = s09_binding();
+            let broker =
+                CapabilityBroker::start(session, binding, &backend, &artifact, &pinned_cargo_image)
+                    .unwrap();
+            let pause = broker.shutdown.install_locked_dispatch_pause();
+            let route = BrokerRouteV2::parse(broker.route()).unwrap();
+            let address = endpoint_address(&route.endpoint).unwrap();
+            let mut client = UnixStream::connect_addr(&address).unwrap();
+            client
+                .set_read_timeout(Some(Duration::from_secs(1)))
+                .unwrap();
+            let active_identity = wait_for_active_socket(&broker);
+            let challenge = [0x74; CHALLENGE_BYTES];
+            let request = request_bytes(session, binding, challenge, &route.secret);
+            let request_auth = request[REQUEST_BYTES - REQUEST_AUTH_BYTES..]
+                .try_into()
+                .unwrap();
+            let expected_response = response_bytes(&route.secret, challenge, request_auth);
+            client.write_all(&request).unwrap();
+            assert!(pause.wait_until_reached().is_none());
+
+            let shutdown = Arc::clone(&broker.shutdown);
+            let shutdown_thread = thread::spawn(move || {
+                let started = Instant::now();
+                shutdown.begin();
+                started.elapsed()
+            });
+            broker.shutdown.wait_for_begin();
+            pause.release();
+
+            let (bytes, response, descriptors) = receive_raw_response(&client).unwrap();
+            assert_eq!(bytes, RESPONSE_BYTES);
+            assert_eq!(response, expected_response);
+            let transferred =
+                decode_received_descriptors(descriptors, CapabilityProfileV1::S09).unwrap();
+            assert_eq!(transferred.backend.sha256(), &backend_sha);
+            assert_eq!(
+                transferred
+                    .pinned_cargo_image
+                    .as_ref()
+                    .expect("S09 response must contain the pinned Cargo image")
+                    .sha256(),
+                &cargo_sha
+            );
+            fs::write(
+                transferred.artifact.child_path().join("send-wins-proof"),
+                b"exact retained artifact",
+            )
+            .unwrap();
+            assert_eq!(
+                fs::read(temp.0.join("artifact/send-wins-proof")).unwrap(),
+                b"exact retained artifact"
+            );
+            drop(transferred);
+
+            assert!(
+                shutdown_thread.join().unwrap() < Duration::from_secs(2),
+                "broker shutdown did not promptly follow the winning descriptor send"
+            );
+            drop(broker);
             drop(client);
             assert!(!object_is_open(active_identity));
         }
