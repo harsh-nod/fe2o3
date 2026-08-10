@@ -3,6 +3,7 @@
 
 mod codec;
 mod compiler_transaction;
+mod compiler_transaction_recorder;
 mod error;
 mod inputs;
 mod model;
@@ -18,6 +19,18 @@ pub use compiler_transaction::{
     CompilerTransactionValidationErrorV2, MAX_COMPILER_TRANSACTION_DEPENDENCIES_V2,
     MAX_COMPILER_TRANSACTION_EVIDENCE_BYTES_V2, MAX_COMPILER_TRANSACTION_FEATURES_V2,
     SourceClosureIdentityV2,
+};
+pub use compiler_transaction_recorder::{
+    AlphaZetaSemanticLayoutWitnessesV1, CompilerTransactionCheckpointV1,
+    CompilerTransactionContentIdentityV1, CompilerTransactionMeasurementsV1,
+    CompilerTransactionRecorderErrorV1, CompilerTransactionRecorderV1, CompilerTransactionStageV1,
+    ExactCompilerInvocationV1, ExactCompilerSourceClosureV1, ExactCompilerSourceFileV1,
+    ExactCompilerToolV1, ExactSemanticLayoutWitnessV1, Gfx942CompilerTargetV1,
+    MAX_COMPILER_TRANSACTION_CAPABILITIES_V1, MAX_COMPILER_TRANSACTION_SOURCE_BYTES_V1,
+    MAX_COMPILER_TRANSACTION_SOURCE_FILE_BYTES_V1, MAX_SEALED_COMPILER_TRANSACTION_BYTES_V1,
+    SEALED_COMPILER_TRANSACTION_MAGIC_V1, SEALED_COMPILER_TRANSACTION_VERSION_V1,
+    SealedCompilerTransactionDecodeErrorV1, SealedCompilerTransactionIdentityV1,
+    SealedCompilerTransactionV1,
 };
 pub use error::{EnvelopeDecodeError, EnvelopeValidationError, PublicationClaimFieldV1};
 pub use inputs::{
