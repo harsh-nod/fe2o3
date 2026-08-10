@@ -822,6 +822,7 @@ dependencies = [
  "fe2o3-kernel-descriptor",
  "fe2o3-kernel-ir",
  "fe2o3-rustc-front",
+ "libc",
  "reserved-fe2o3-symbols",
  "rmpv",
  "serde",

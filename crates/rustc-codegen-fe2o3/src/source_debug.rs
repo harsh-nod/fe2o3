@@ -23,6 +23,7 @@ use std::error::Error;
 use std::fmt::{self, Write};
 use std::fs::File;
 use std::io::Read;
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::MetadataExt;
 
 pub(crate) const SOURCE_DEBUG_PROFILE_ENV: &str = "FE2O3_WORKER_V2_SOURCE_DEBUG_PROFILE_V1";
@@ -54,8 +55,7 @@ const WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2: &str =
     "FE2O3_WORKER_EXECUTABLE_BUILD_OBSERVATION_V2";
 const WORKER_BUILD_IDENTITY_OBSERVATION_ENV_V2: &str = "FE2O3_WORKER_BUILD_IDENTITY_OBSERVATION_V2";
 const LLVM_BUILD_IDENTITY_OBSERVATION_ENV_V2: &str = "FE2O3_LLVM_BUILD_IDENTITY_OBSERVATION_V2";
-const PREPARED_RUSTC_COMMAND_BUILD_OBSERVATION_ENV_V2: &str =
-    "FE2O3_PREPARED_RUSTC_COMMAND_BUILD_OBSERVATION_V2";
+const PREPARED_RUSTC_COMMAND_OBSERVATION_FD_V2: std::os::fd::RawFd = 194;
 const CARGO_FE2O3_EXECUTABLE_BUILD_OBSERVATION_ENV_V2: &str =
     "FE2O3_CARGO_FE2O3_EXECUTABLE_BUILD_OBSERVATION_V2";
 const DECLARED_CARGO_EXECUTABLE_BUILD_OBSERVATION_ENV_V2: &str =
@@ -395,8 +395,7 @@ fn build_identity_claim_v2(
     let worker_config_sha256 = required_digest_environment(WORKER_CONFIG_BUILD_OBSERVATION_ENV_V2)?;
     let worker_executable_sha256 =
         required_digest_environment(WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2)?;
-    let prepared_rustc_command_sha256 =
-        required_digest_environment(PREPARED_RUSTC_COMMAND_BUILD_OBSERVATION_ENV_V2)?;
+    let prepared_rustc_command_sha256 = prepared_rustc_command_digest_capability()?;
     let cargo_fe2o3_executable_sha256 =
         required_digest_environment(CARGO_FE2O3_EXECUTABLE_BUILD_OBSERVATION_ENV_V2)?;
     let declared_cargo_executable_sha256 =
@@ -460,6 +459,52 @@ fn required_digest_environment(name: &'static str) -> Result<[u8; 32], SourceDeb
     }
     if digest == [0; 32] {
         return Err(SourceDebugError::new(format!("{name} must not be zero")));
+    }
+    Ok(digest)
+}
+
+fn prepared_rustc_command_digest_capability() -> Result<[u8; 32], SourceDebugError> {
+    let path = format!("/proc/self/fd/{PREPARED_RUSTC_COMMAND_OBSERVATION_FD_V2}");
+    let mut file = File::open(&path).map_err(|error| {
+        SourceDebugError::new(format!(
+            "S09 prepared-command digest capability is unavailable: {error}"
+        ))
+    })?;
+    let metadata = file.metadata().map_err(|error| {
+        SourceDebugError::new(format!(
+            "S09 prepared-command digest capability cannot be inspected: {error}"
+        ))
+    })?;
+    if !metadata.is_file() || metadata.len() != 32 {
+        return Err(SourceDebugError::new(
+            "S09 prepared-command digest capability is not an exact 32-byte file".to_owned(),
+        ));
+    }
+    // SAFETY: fcntl only inspects the already-open descriptor.
+    let seals = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GET_SEALS) };
+    let required = libc::F_SEAL_WRITE | libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL;
+    if seals != required {
+        return Err(SourceDebugError::new(
+            "S09 prepared-command digest capability does not have exact immutable seals".to_owned(),
+        ));
+    }
+    let mut digest = [0_u8; 32];
+    file.read_exact(&mut digest).map_err(|error| {
+        SourceDebugError::new(format!(
+            "S09 prepared-command digest capability is truncated: {error}"
+        ))
+    })?;
+    let mut trailing = [0_u8; 1];
+    if file.read(&mut trailing).map_err(|error| {
+        SourceDebugError::new(format!(
+            "S09 prepared-command digest capability cannot be bounded: {error}"
+        ))
+    })? != 0
+        || digest == [0; 32]
+    {
+        return Err(SourceDebugError::new(
+            "S09 prepared-command digest capability is noncanonical".to_owned(),
+        ));
     }
     Ok(digest)
 }
