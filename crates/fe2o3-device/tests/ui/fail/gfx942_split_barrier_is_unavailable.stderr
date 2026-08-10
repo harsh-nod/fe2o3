@@ -1,8 +1,8 @@
-error[E0599]: the method `arrive` exists for struct `ManagedBarrier<'_, Gfx942, BarrierReady>`, but its trait bounds were not satisfied
+error[E0599]: the method `arrive` exists for struct `ManagedBarrier<'_, Gfx942, BarrierReady, 1>`, but its trait bounds were not satisfied
  --> tests/ui/fail/gfx942_split_barrier_is_unavailable.rs:9:28
   |
 9 |     let _ = unsafe { ready.arrive() };
-  |                            ^^^^^^ method cannot be called on `ManagedBarrier<'_, Gfx942, BarrierReady>` due to unsatisfied trait bounds
+  |                            ^^^^^^ method cannot be called on `ManagedBarrier<'_, Gfx942, BarrierReady, 1>` due to unsatisfied trait bounds
   |
  ::: src/sync.rs
   |
