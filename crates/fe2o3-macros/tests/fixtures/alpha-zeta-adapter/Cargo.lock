@@ -166,6 +166,7 @@ dependencies = [
  "fe2o3-kernel-descriptor",
  "fe2o3-worker-v2-bundle",
  "reserved-fe2o3-symbols",
+ "sha2",
 ]
 
 [[package]]
