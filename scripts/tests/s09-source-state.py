@@ -4,13 +4,17 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import pathlib
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
+from collections.abc import Callable
 from unittest import mock
 
 
@@ -65,6 +69,58 @@ class SourceStateTests(unittest.TestCase):
             str(self.repository / "source.txt"),
         )
 
+    def start_check(self, *arguments: str) -> subprocess.Popen[str]:
+        environment = os.environ.copy()
+        environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        return subprocess.Popen(
+            [str(CHECKER), "--root", str(self.repository), *arguments],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=environment,
+        )
+
+    def wait_for(self, predicate: Callable[[], object], description: str) -> object:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            value = predicate()
+            if value:
+                return value
+            time.sleep(0.01)
+        self.fail(f"timed out waiting for {description}")
+
+    def read_json_when_ready(self, path: pathlib.Path) -> dict[str, int] | None:
+        try:
+            value = json.loads(path.read_text(encoding="ascii"))
+        except (FileNotFoundError, json.JSONDecodeError):
+            return None
+        if not isinstance(value, dict):
+            return None
+        return {str(key): int(item) for key, item in value.items()}
+
+    def child_processes(self, process_id: int) -> list[int]:
+        try:
+            value = pathlib.Path(
+                f"/proc/{process_id}/task/{process_id}/children"
+            ).read_text(encoding="ascii")
+        except FileNotFoundError:
+            return []
+        return [int(item) for item in value.split()]
+
+    def process_state(self, process_id: int) -> str | None:
+        try:
+            value = pathlib.Path(f"/proc/{process_id}/stat").read_text(
+                encoding="ascii"
+            )
+        except FileNotFoundError:
+            return None
+        return value[value.rfind(")") + 2 :].split()[0]
+
+    def assert_processes_gone(self, *process_ids: int) -> None:
+        for process_id in process_ids:
+            with self.subTest(process_id=process_id):
+                self.assertFalse(pathlib.Path(f"/proc/{process_id}").exists())
+
     def test_exact_head_and_tree_are_reported_and_rechecked(self) -> None:
         commit = self.git("rev-parse", "HEAD")
         tree = self.git("rev-parse", "HEAD^{tree}")
@@ -105,6 +161,266 @@ class SourceStateTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(completed.stdout, f"{commit}:{tree}\n")
+
+    def test_public_pre_spawn_signal_is_retained_and_command_is_not_started(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as coordination_name:
+            marker = pathlib.Path(coordination_name) / "command-started"
+            process = self.start_check(
+                "--",
+                sys.executable,
+                "-c",
+                "import pathlib,sys; pathlib.Path(sys.argv[1]).write_text('bad')",
+                str(marker),
+            )
+            self.wait_for(
+                lambda: self.child_processes(process.pid),
+                "the public checker to enter source capture",
+            )
+            os.kill(process.pid, signal.SIGTERM)
+            stdout, stderr = process.communicate(timeout=15)
+
+        self.assertEqual(process.returncode, 128 + signal.SIGTERM, stderr)
+        self.assertEqual(stdout, "")
+        self.assertEqual(stderr, "")
+        self.assertFalse(marker.exists())
+
+    def test_public_post_popen_signal_is_forwarded_at_publication_checkpoint(
+        self,
+    ) -> None:
+        wrapper = r"""
+import importlib.util
+import os
+import pathlib
+import signal
+import sys
+
+checker = pathlib.Path(sys.argv[1])
+repository = pathlib.Path(sys.argv[2])
+marker = pathlib.Path(sys.argv[3])
+spec = importlib.util.spec_from_file_location('publication_source_state', checker)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+real_popen = module.subprocess.Popen
+injected = False
+
+def racing_popen(arguments, *args, **kwargs):
+    global injected
+    process = real_popen(arguments, *args, **kwargs)
+    if arguments[0] == '/bin/sleep' and not injected:
+        injected = True
+        marker.write_text(str(process.pid), encoding='ascii')
+        os.kill(os.getpid(), signal.SIGTERM)
+    return process
+
+module.subprocess.Popen = racing_popen
+sys.argv = [str(checker), '--root', str(repository), '--', '/bin/sleep', '30']
+try:
+    status = module.main()
+except module.SourceStateError as error:
+    print(f's09-source-state: {error}', file=sys.stderr)
+    status = 2
+raise SystemExit(status)
+"""
+        with tempfile.TemporaryDirectory() as coordination_name:
+            marker = pathlib.Path(coordination_name) / "published-pid"
+            process = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    wrapper,
+                    str(CHECKER),
+                    str(self.repository),
+                    str(marker),
+                ],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+                check=False,
+                timeout=15,
+            )
+            command_pid = int(marker.read_text(encoding="ascii"))
+
+        self.assertEqual(process.returncode, 128 + signal.SIGTERM, process.stderr)
+        self.assert_processes_gone(command_pid)
+
+    def test_public_active_signal_forwards_and_drains_stubborn_descendant(
+        self,
+    ) -> None:
+        code = r"""
+import json
+import os
+import pathlib
+import signal
+
+marker = pathlib.Path(__import__('sys').argv[1])
+descendant = os.fork()
+if descendant == 0:
+    for caught in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+        signal.signal(caught, signal.SIG_IGN)
+    while True:
+        signal.pause()
+
+def exit_cleanly(_signal_number, _frame):
+    raise SystemExit(0)
+
+for caught in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+    signal.signal(caught, exit_cleanly)
+marker.write_text(json.dumps({
+    'leader': os.getpid(),
+    'descendant': descendant,
+    'group': os.getpgrp(),
+}), encoding='ascii')
+while True:
+    signal.pause()
+"""
+        with tempfile.TemporaryDirectory() as coordination_name:
+            marker = pathlib.Path(coordination_name) / "active.json"
+            process = self.start_check(
+                "--", sys.executable, "-c", code, str(marker)
+            )
+            identities = self.wait_for(
+                lambda: self.read_json_when_ready(marker), "active command readiness"
+            )
+            assert isinstance(identities, dict)
+            self.assertEqual(identities["leader"], identities["group"])
+            self.assertNotEqual(identities["group"], os.getpgrp())
+            os.kill(process.pid, signal.SIGINT)
+            _stdout, stderr = process.communicate(timeout=15)
+
+        self.assertEqual(process.returncode, 128 + signal.SIGINT, stderr)
+        self.assert_processes_gone(
+            identities["leader"], identities["descendant"]
+        )
+
+    def test_public_final_reap_signal_wins_and_descendant_is_drained(self) -> None:
+        code = r"""
+import json
+import os
+import pathlib
+import signal
+
+marker = pathlib.Path(__import__('sys').argv[1])
+descendant = os.fork()
+if descendant == 0:
+    for caught in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+        signal.signal(caught, signal.SIG_IGN)
+    while True:
+        signal.pause()
+marker.write_text(json.dumps({
+    'leader': os.getpid(),
+    'descendant': descendant,
+    'group': os.getpgrp(),
+}), encoding='ascii')
+os._exit(0)
+"""
+        with tempfile.TemporaryDirectory() as coordination_name:
+            marker = pathlib.Path(coordination_name) / "final-reap.json"
+            process = self.start_check(
+                "--", sys.executable, "-c", code, str(marker)
+            )
+            identities = self.wait_for(
+                lambda: self.read_json_when_ready(marker), "final-reap command exit"
+            )
+            assert isinstance(identities, dict)
+            self.wait_for(
+                lambda: self.process_state(identities["leader"]) == "Z",
+                "the protected unreaped group leader",
+            )
+            os.kill(process.pid, signal.SIGHUP)
+            _stdout, stderr = process.communicate(timeout=15)
+
+        self.assertEqual(process.returncode, 128 + signal.SIGHUP, stderr)
+        self.assert_processes_gone(
+            identities["leader"], identities["descendant"]
+        )
+
+    def test_public_cancellation_still_rechecks_sealed_source_state(self) -> None:
+        code = r"""
+import os
+import pathlib
+import signal
+import sys
+
+path = pathlib.Path(sys.argv[1])
+marker = pathlib.Path(sys.argv[2])
+
+def mutate_and_restore(_signal_number, _frame):
+    before = path.stat()
+    original = path.read_bytes()
+    path.write_bytes(b'X' * len(original))
+    with path.open('rb') as source:
+        os.fsync(source.fileno())
+    path.write_bytes(original)
+    os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+    raise SystemExit(0)
+
+signal.signal(signal.SIGTERM, mutate_and_restore)
+marker.write_text('ready', encoding='ascii')
+while True:
+    signal.pause()
+"""
+        with tempfile.TemporaryDirectory() as coordination_name:
+            marker = pathlib.Path(coordination_name) / "mutation-ready"
+            process = self.start_check(
+                "--",
+                sys.executable,
+                "-c",
+                code,
+                str(self.repository / "source.txt"),
+                str(marker),
+            )
+            self.wait_for(marker.exists, "cancellation mutation readiness")
+            os.kill(process.pid, signal.SIGTERM)
+            _stdout, stderr = process.communicate(timeout=15)
+
+        self.assertEqual(process.returncode, 2, stderr)
+        self.assertIn("changed during evidence generation", stderr)
+        self.assertEqual((self.repository / "source.txt").read_bytes(), b"source\n")
+
+    def test_public_signal_allows_inner_raw_guard_to_finish_cleanup(self) -> None:
+        guard = ROOT / "scripts" / "s09-raw-transcript-guard.sh"
+        shell_code = r"""
+source "$1"
+s09_install_raw_transcript_guard "$2"
+s09_run_guarded_raw_command /usr/bin/python3 -c "$3" "$4"
+"""
+        inner_code = r"""
+import pathlib
+import os
+import signal
+import sys
+
+pathlib.Path(sys.argv[1]).write_text(str(os.getpid()), encoding='ascii')
+while True:
+    signal.pause()
+"""
+        with tempfile.TemporaryDirectory() as coordination_name:
+            coordination = pathlib.Path(coordination_name)
+            raw = coordination / "rocgdb.raw.txt"
+            marker = coordination / "inner-pid"
+            process = self.start_check(
+                "--",
+                "/bin/bash",
+                "-c",
+                shell_code,
+                "source-state-raw-test",
+                str(guard),
+                str(raw),
+                inner_code,
+                str(marker),
+            )
+            self.wait_for(marker.exists, "inner raw-guard command readiness")
+            inner_pid = int(marker.read_text(encoding="ascii"))
+            self.assertTrue(raw.exists())
+            os.kill(process.pid, signal.SIGTERM)
+            _stdout, stderr = process.communicate(timeout=15)
+
+        self.assertEqual(process.returncode, 128 + signal.SIGTERM, stderr)
+        self.assertFalse(raw.exists())
+        self.assert_processes_gone(inner_pid)
 
     def test_same_size_mutate_restore_is_rejected_by_ctime(self) -> None:
         code = r"""

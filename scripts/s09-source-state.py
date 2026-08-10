@@ -25,6 +25,11 @@ REGULAR_GIT_MODES = frozenset(("100644", "100755"))
 MAX_GIT_OUTPUT_BYTES = 64 * 1024 * 1024
 MAX_STATE_BYTES = 64 * 1024 * 1024
 COPY_CHUNK_BYTES = 64 * 1024
+CATCHABLE_SIGNALS = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
+SIGNAL_GRACE_SECONDS = 5.0
+TERMINATE_GRACE_SECONDS = 0.5
+KILL_GRACE_SECONDS = 5.0
+PROCESS_POLL_SECONDS = 0.01
 REQUIRED_SEALS = (
     fcntl.F_SEAL_SEAL | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_GROW | fcntl.F_SEAL_WRITE
 )
@@ -56,6 +61,29 @@ GIT_CONFIG_ARGUMENTS = (
 
 class SourceStateError(Exception):
     pass
+
+
+class CatchableSignalOwner:
+    """Retain catchable cancellation until source revalidation completes."""
+
+    def __init__(self) -> None:
+        self.signal_number: int | None = None
+        for signal_number in CATCHABLE_SIGNALS:
+            signal.signal(signal_number, self._record)
+
+    def _record(self, signal_number: int, _frame: object) -> None:
+        if self.signal_number is None:
+            self.signal_number = signal_number
+
+    def block_and_capture_pending(self) -> None:
+        signal.pthread_sigmask(signal.SIG_BLOCK, CATCHABLE_SIGNALS)
+        if self.signal_number is not None:
+            return
+        pending = signal.sigpending()
+        for signal_number in CATCHABLE_SIGNALS:
+            if signal_number in pending:
+                self.signal_number = signal_number
+                return
 
 
 def stop_process_group(process: subprocess.Popen[bytes]) -> None:
@@ -651,36 +679,310 @@ def substitute_command(command: Sequence[str], state: dict[str, object]) -> list
     return result
 
 
-def supervise(root: pathlib.Path, command: Sequence[str], git_tool: PinnedGit) -> int:
+def observe_unreaped_exit(process_id: int) -> int | None:
+    """Return a Popen-style status without releasing the process identity."""
+    try:
+        result = os.waitid(
+            os.P_PID,
+            process_id,
+            os.WEXITED | os.WNOHANG | os.WNOWAIT,
+        )
+    except ChildProcessError as error:
+        raise SourceStateError(
+            "supervised process was reaped before group cleanup"
+        ) from error
+    if result is None:
+        return None
+    if result.si_code == os.CLD_EXITED:
+        return result.si_status
+    if result.si_code in (os.CLD_KILLED, os.CLD_DUMPED):
+        return -result.si_status
+    raise SourceStateError("supervised process reported an unexpected wait status")
+
+
+def process_group_members(process_group: int, leader: int) -> set[int]:
+    """Find live or zombie group members other than the pinned leader."""
+    members: set[int] = set()
+    try:
+        process_entries = pathlib.Path("/proc").iterdir()
+    except OSError as error:
+        raise SourceStateError(f"cannot inspect supervised process group: {error}") from error
+    for entry in process_entries:
+        if not entry.name.isdigit():
+            continue
+        try:
+            value = (entry / "stat").read_text(encoding="ascii")
+        except (FileNotFoundError, ProcessLookupError, PermissionError):
+            continue
+        except OSError as error:
+            raise SourceStateError(
+                f"cannot inspect supervised process {entry.name}: {error}"
+            ) from error
+        closing_parenthesis = value.rfind(")")
+        fields = value[closing_parenthesis + 2 :].split()
+        if closing_parenthesis < 0 or len(fields) < 3:
+            raise SourceStateError(
+                f"cannot parse supervised process identity for {entry.name}"
+            )
+        try:
+            member_group = int(fields[2])
+            process_id = int(entry.name)
+        except ValueError as error:
+            raise SourceStateError(
+                f"cannot parse supervised process identity for {entry.name}"
+            ) from error
+        if member_group == process_group and process_id != leader:
+            members.add(process_id)
+    return members
+
+
+def signal_process_group(process_id: int, signal_number: int) -> None:
+    """Signal a process group only while its unreaped leader pins the PGID."""
+    own_group = os.getpgrp()
+    if process_id <= 1 or process_id == own_group:
+        raise SourceStateError("refusing to signal the source-state supervisor group")
+    try:
+        observed_group = os.getpgid(process_id)
+    except ProcessLookupError as error:
+        raise SourceStateError(
+            "supervised process-group leader disappeared before reap"
+        ) from error
+    if observed_group != process_id:
+        raise SourceStateError("supervised command does not own its process group")
+    try:
+        os.killpg(process_id, signal_number)
+    except ProcessLookupError:
+        # A group containing only an unreaped zombie has no signalable members.
+        if process_group_members(process_id, process_id):
+            raise SourceStateError(
+                "supervised process group disappeared with live members"
+            )
+
+
+def wait_for_unreaped_exit(
+    process_id: int,
+    pid_descriptor: int,
+    timeout: float,
+) -> int | None:
+    deadline = time.monotonic() + timeout
+    selector = selectors.DefaultSelector()
+    try:
+        selector.register(pid_descriptor, selectors.EVENT_READ)
+        while True:
+            returncode = observe_unreaped_exit(process_id)
+            if returncode is not None:
+                return returncode
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            selector.select(remaining)
+    finally:
+        selector.close()
+
+
+def wait_for_group_drain(
+    process_id: int,
+    timeout: float,
+    owner: CatchableSignalOwner,
+    forwarded_signal: int | None,
+) -> int | None:
+    deadline = time.monotonic() + timeout
+    while True:
+        if owner.signal_number is not None and forwarded_signal is None:
+            signal_process_group(process_id, owner.signal_number)
+            forwarded_signal = owner.signal_number
+        if not process_group_members(process_id, process_id):
+            return forwarded_signal
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return forwarded_signal
+        time.sleep(min(PROCESS_POLL_SECONDS, remaining))
+
+
+def run_supervised_command(
+    command: Sequence[str], owner: CatchableSignalOwner
+) -> int:
+    if owner.signal_number is not None:
+        return 0
+    try:
+        process = subprocess.Popen(
+            command,
+            stdin=None,
+            stdout=None,
+            stderr=None,
+            start_new_session=True,
+        )
+    except OSError as error:
+        raise SourceStateError(f"cannot execute supervised command: {error}") from error
+
+    process_id = process.pid
+    pid_descriptor = -1
+    reaped = False
+    try:
+        if not hasattr(os, "pidfd_open"):
+            raise SourceStateError("source-state supervision requires Linux pidfds")
+        pid_descriptor = os.pidfd_open(process_id, 0)
+        if process_id <= 1 or process_id == os.getpgrp():
+            raise SourceStateError(
+                "supervised command has an unsafe process-group identity"
+            )
+        try:
+            observed_group = os.getpgid(process_id)
+        except ProcessLookupError as error:
+            raise SourceStateError(
+                "supervised command disappeared before group validation"
+            ) from error
+        if observed_group != process_id:
+            raise SourceStateError("supervised command did not create a new session")
+
+        forwarded_signal: int | None = None
+        # Publish the validated identity before observing exit. A signal caught
+        # during Popen or pidfd publication is forwarded at this first checkpoint.
+        if owner.signal_number is not None:
+            forwarded_signal = owner.signal_number
+            signal_process_group(process_id, forwarded_signal)
+        returncode = observe_unreaped_exit(process_id)
+        while returncode is None:
+            if owner.signal_number is None:
+                time.sleep(PROCESS_POLL_SECONDS)
+                returncode = observe_unreaped_exit(process_id)
+                continue
+
+            if forwarded_signal is None:
+                forwarded_signal = owner.signal_number
+                signal_process_group(process_id, forwarded_signal)
+            returncode = wait_for_unreaped_exit(
+                process_id, pid_descriptor, SIGNAL_GRACE_SECONDS
+            )
+            if returncode is None:
+                signal_process_group(process_id, signal.SIGTERM)
+                returncode = wait_for_unreaped_exit(
+                    process_id, pid_descriptor, TERMINATE_GRACE_SECONDS
+                )
+            if returncode is None:
+                signal_process_group(process_id, signal.SIGKILL)
+                returncode = wait_for_unreaped_exit(
+                    process_id, pid_descriptor, KILL_GRACE_SECONDS
+                )
+            if returncode is None:
+                raise SourceStateError(
+                    "supervised process did not exit after bounded SIGKILL"
+                )
+
+        forwarded_signal = wait_for_group_drain(
+            process_id,
+            0 if forwarded_signal is not None else SIGNAL_GRACE_SECONDS,
+            owner,
+            forwarded_signal,
+        )
+        remaining = process_group_members(process_id, process_id)
+        if remaining:
+            signal_process_group(process_id, signal.SIGTERM)
+            forwarded_signal = wait_for_group_drain(
+                process_id,
+                TERMINATE_GRACE_SECONDS,
+                owner,
+                forwarded_signal,
+            )
+        remaining = process_group_members(process_id, process_id)
+        if remaining:
+            signal_process_group(process_id, signal.SIGKILL)
+            forwarded_signal = wait_for_group_drain(
+                process_id,
+                KILL_GRACE_SECONDS,
+                owner,
+                forwarded_signal,
+            )
+        remaining = process_group_members(process_id, process_id)
+        if remaining:
+            raise SourceStateError(
+                "supervised process group retained members after bounded SIGKILL: "
+                + ",".join(str(member) for member in sorted(remaining))
+            )
+
+        # Keep catchable cancellation pending while the last protected identity is
+        # released and while the caller performs its final source comparison.
+        owner.block_and_capture_pending()
+        waited_process, wait_status = os.waitpid(process_id, 0)
+        if waited_process != process_id:
+            raise SourceStateError("reaped an unexpected supervised process")
+        reaped = True
+        process.returncode = os.waitstatus_to_exitcode(wait_status)
+        if process.returncode != returncode:
+            raise SourceStateError("supervised process exit status changed before reap")
+        owner.block_and_capture_pending()
+        return returncode
+    finally:
+        if not reaped:
+            # The leader is deliberately kept unreaped until every numeric PGID
+            # operation is complete. Best-effort cleanup here retains that order.
+            try:
+                if observe_unreaped_exit(process_id) is None:
+                    signal_process_group(process_id, signal.SIGKILL)
+                    if pid_descriptor >= 0:
+                        wait_for_unreaped_exit(
+                            process_id, pid_descriptor, KILL_GRACE_SECONDS
+                        )
+                if not process_group_members(process_id, process_id):
+                    waited_process, wait_status = os.waitpid(process_id, os.WNOHANG)
+                    if waited_process == process_id:
+                        process.returncode = os.waitstatus_to_exitcode(wait_status)
+                        reaped = True
+            except (ChildProcessError, OSError, SourceStateError):
+                pass
+        if pid_descriptor >= 0:
+            os.close(pid_descriptor)
+
+
+def supervise(
+    root: pathlib.Path,
+    command: Sequence[str],
+    git_tool: PinnedGit,
+    owner: CatchableSignalOwner,
+) -> int:
     before = capture_state(root, git_tool)
     state = parse_state(before)
     descriptor = seal_state(before)
     try:
         sealed_before = read_sealed_state(descriptor, len(before))
         parse_state(sealed_before)
+        returncode = 0
+        lifecycle_error: BaseException | None = None
         try:
-            completed = subprocess.run(
-                substitute_command(command, state),
-                stdin=None,
-                stdout=None,
-                stderr=None,
-                check=False,
-            )
-        except OSError as error:
-            raise SourceStateError(
-                f"cannot execute supervised command: {error}"
-            ) from error
-        after = capture_state(root, git_tool)
-        if (
-            read_sealed_state(descriptor, len(before)) != sealed_before
-            or after != sealed_before
-        ):
-            raise SourceStateError(
-                "tracked source identity or content changed during evidence generation"
-            )
-        if completed.returncode < 0:
-            return 128 - completed.returncode
-        return completed.returncode
+            if owner.signal_number is None:
+                returncode = run_supervised_command(
+                    substitute_command(command, state), owner
+                )
+            else:
+                owner.block_and_capture_pending()
+        except BaseException as error:
+            lifecycle_error = error
+
+        # A source mismatch outranks lifecycle failure, caught cancellation, and
+        # child status. Signals stay latched and blocked throughout reinspection.
+        owner.block_and_capture_pending()
+        source_error: BaseException | None = None
+        try:
+            after = capture_state(root, git_tool)
+            if (
+                read_sealed_state(descriptor, len(before)) != sealed_before
+                or after != sealed_before
+            ):
+                raise SourceStateError(
+                    "tracked source identity or content changed during evidence generation"
+                )
+        except BaseException as error:
+            source_error = error
+        owner.block_and_capture_pending()
+        if source_error is not None:
+            raise source_error
+        if lifecycle_error is not None:
+            raise lifecycle_error
+        if owner.signal_number is not None:
+            return 128 + owner.signal_number
+        if returncode < 0:
+            return 128 - returncode
+        return returncode
     finally:
         os.close(descriptor)
 
@@ -698,15 +1000,17 @@ def main() -> int:
     args = parse_args()
     if (args.expected_commit is None) != (args.expected_tree is None):
         raise SourceStateError("expected commit and tree must be supplied together")
+    signal_owner = CatchableSignalOwner() if args.command else None
     with PinnedGit() as git_tool:
         if args.command:
+            assert signal_owner is not None
             if args.expected_commit is not None:
                 raise SourceStateError(
                     "supervised mode does not accept expected Git objects"
                 )
             if args.command[0] != "--" or len(args.command) == 1:
                 raise SourceStateError("supervised command must follow --")
-            return supervise(args.root, args.command[1:], git_tool)
+            return supervise(args.root, args.command[1:], git_tool, signal_owner)
         commit, tree = inspect(args.root, git_tool)
         if args.expected_commit is not None:
             if commit != args.expected_commit or tree != args.expected_tree:
