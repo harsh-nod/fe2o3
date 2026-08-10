@@ -138,6 +138,11 @@ s09_guarded_defer_signal() {
   if [[ -z "${S09_GUARDED_DEFERRED_SIGNAL:-}" ]]; then
     S09_GUARDED_DEFERRED_SIGNAL="$1"
   fi
+  # Defer only process-group teardown. The pathname and parent-owned FD must
+  # disappear at cancellation entry, including while supervisor startup or
+  # the final PID/PGID-to-reap transition is in progress.
+  s09_delete_raw_transcript || true
+  s09_close_raw_transcript_fd || true
 }
 
 s09_install_active_signal_traps() {
@@ -172,12 +177,19 @@ s09_run_guarded_raw_command() {
     return 2
   fi
 
-  # The parent owns the pathname open. Cancellation can unlink it before the
-  # command is stopped without a later child-side pathname open recreating it.
-  exec {raw_fd}>"${S09_RAW_TRANSCRIPT_PATH}"
-  S09_RAW_TRANSCRIPT_FD="${raw_fd}"
   S09_GUARDED_DEFERRED_SIGNAL=
   s09_install_deferred_signal_traps
+
+  # Install deferred traps before creating the pathname. If a signal arrives
+  # before or during the open, the post-open checkpoint removes the newly
+  # opened file before supervisor startup can continue.
+  exec {raw_fd}>"${S09_RAW_TRANSCRIPT_PATH}"
+  S09_RAW_TRANSCRIPT_FD="${raw_fd}"
+  if [[ -n "${S09_GUARDED_DEFERRED_SIGNAL:-}" ]]; then
+    s09_delete_raw_transcript || true
+    s09_close_raw_transcript_fd || true
+    s09_finish_deferred_signal_transition
+  fi
 
   set +m
   # The nested Bash, rather than this parent shell, expands its positional args.

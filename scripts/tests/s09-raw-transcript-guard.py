@@ -6,6 +6,7 @@ from __future__ import annotations
 import ctypes
 import os
 import pathlib
+import shlex
 import signal
 import subprocess
 import tempfile
@@ -238,6 +239,83 @@ exit $?
                         process.stderr.close()
                 self.set_child_subreaper(previous_subreaper)
         self.assertIn(child_pgid, reaped)
+
+    def test_pre_ready_cancellation_unlinks_before_runner_can_be_killed(self) -> None:
+        previous_subreaper = self.child_subreaper_state()
+        marker = self.directory / "supervisor.pid"
+        wrapper = self.directory / "stalled-supervisor.sh"
+        wrapper.write_text(
+            f"""\
+source {shlex.quote(str(GUARD))}
+s09_guarded_group_supervisor() {{
+  local supervisor_pgid
+  supervisor_pgid="$(/usr/bin/ps -o pgid= -p "${{BASHPID}}" | /usr/bin/tr -d '[:space:]')"
+  [[ "${{supervisor_pgid}}" == "${{BASHPID}}" ]] || return 125
+  printf '%s\\n' "${{BASHPID}}" >{shlex.quote(str(marker))}
+  kill -STOP -- "${{BASHPID}}"
+  return 125
+}}
+""",
+            encoding="ascii",
+        )
+        body = r"""
+set -Eeuo pipefail
+source "$1"
+S09_RAW_GUARD_SOURCE="$3"
+s09_install_raw_transcript_guard "$2"
+s09_run_guarded_raw_command /bin/true
+"""
+        process: subprocess.Popen[str] | None = None
+        supervisor_pid = 0
+        reaped: list[int] = []
+        self.set_child_subreaper(1)
+        try:
+            process = subprocess.Popen(
+                [
+                    "/bin/bash",
+                    "-c",
+                    body,
+                    "raw-guard-pre-ready-test",
+                    str(GUARD),
+                    str(self.raw),
+                    str(wrapper),
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            deadline = time.monotonic() + 5
+            while not marker.exists() and time.monotonic() < deadline:
+                time.sleep(0.005)
+            self.assertTrue(marker.exists(), "supervisor did not stop before READY")
+            supervisor_pid = int(marker.read_text(encoding="ascii"))
+            self.assertTrue(self.raw.exists(), "test did not observe the pre-READY raw path")
+
+            os.kill(process.pid, signal.SIGTERM)
+            self.wait_for_raw_unlink(timeout=0.1)
+            os.kill(process.pid, signal.SIGKILL)
+            self.assertEqual(process.wait(timeout=3), -signal.SIGKILL)
+            time.sleep(0.05)
+            self.assertFalse(self.raw.exists())
+        finally:
+            try:
+                if process is not None and process.poll() is None:
+                    process.kill()
+                    process.wait(timeout=3)
+                if supervisor_pid != 0:
+                    try:
+                        os.killpg(supervisor_pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                reaped = self.reap_all_adopted_children()
+            finally:
+                if process is not None:
+                    if process.stdout is not None:
+                        process.stdout.close()
+                    if process.stderr is not None:
+                        process.stderr.close()
+                self.set_child_subreaper(previous_subreaper)
+        self.assertIn(supervisor_pid, reaped)
 
     def test_no_group_operation_occurs_after_supervisor_reap(self) -> None:
         body = r"""
