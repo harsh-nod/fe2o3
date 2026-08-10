@@ -90,6 +90,10 @@ canonical_file raw-transcript-guard "${RAW_GUARD}"
 pinned_tool snapshot-supervisor "${PINNER}"
 pinned_tool timeout /usr/bin/timeout
 pinned_tool prlimit /usr/bin/prlimit
+pinned_tool setsid /usr/bin/setsid
+pinned_tool ps /usr/bin/ps
+pinned_tool sleep /usr/bin/sleep
+pinned_tool tr /usr/bin/tr
 # The canonical checked path is intentionally derived from this script's directory.
 # shellcheck disable=SC1090,SC1091
 source "${RAW_GUARD}"
@@ -192,7 +196,7 @@ if ((dwarf_verify_status == 0 && dwarf_dump_status == 0 && dwarf_normalize_statu
   set +e
   # ROCgdb, rather than Bash, evaluates the literal $pc expressions below.
   # shellcheck disable=SC2016
-  "${PINNER}" \
+  s09_run_guarded_raw_command "${PINNER}" \
     --input "hsaco=${HSACO}" \
     --input "host=${HARDWARE_TEST}" \
     --input "facts=${ARTIFACT_FACTS}" \
@@ -278,7 +282,7 @@ if ((dwarf_verify_status == 0 && dwarf_dump_status == 0 && dwarf_normalize_statu
       -ex 'continue' \
       --args '{host}' \
         s09_gfx942_cov6_alpha_only_controller \
-        --ignored --exact --nocapture >"${ROCGDB_RAW}" 2>&1
+        --ignored --exact --nocapture
   rocgdb_status=$?
   set -e
 else
