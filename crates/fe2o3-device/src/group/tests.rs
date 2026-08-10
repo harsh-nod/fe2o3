@@ -5,8 +5,8 @@
 
 use super::{
     ActiveLaneGroup, Grid, Group, GroupMemoryOrdering, GroupMemorySpace, GroupScope, SubgroupTile,
-    SynchronizationContract, UnsupportedSynchronization, ValidWave64TileWidth, Wave64TileWidth,
-    Workgroup, WorkgroupSynchronization,
+    SynchronizationContract, TYPED_GROUP_CONTRACT_VERSION_V1, UnsupportedSynchronization,
+    ValidWave64TileWidth, Wave64TileWidth, Workgroup, WorkgroupSynchronization,
 };
 use crate::thread::{GridSize, Invocation3D, WorkgroupId, WorkgroupSize, WorkitemId};
 use crate::wave::{Wave64, WaveLane};
@@ -38,6 +38,16 @@ fn inspect_group(group: &impl Group, expected_size: u64, expected_rank: u64) {
     assert_eq!(group.size(), expected_size);
     assert_eq!(group.thread_rank(), expected_rank);
     assert!(group.thread_rank() < group.size());
+    assert!(group.has_valid_rank());
+}
+
+#[test]
+fn universal_group_contract_is_versioned_and_scoped() {
+    assert_eq!(TYPED_GROUP_CONTRACT_VERSION_V1, 1);
+    assert_eq!(<Grid<'_> as Group>::SCOPE, GroupScope::Grid);
+    assert_eq!(<Workgroup<'_> as Group>::SCOPE, GroupScope::Workgroup);
+    assert_eq!(<SubgroupTile<'_, 64> as Group>::SCOPE, GroupScope::Subgroup);
+    assert_eq!(<ActiveLaneGroup<'_> as Group>::SCOPE, GroupScope::Subgroup);
 }
 
 fn enumerated_volume(shape: [u32; 3]) -> u64 {

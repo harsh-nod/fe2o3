@@ -38,8 +38,8 @@ pub use ffi::{
 pub use fp8::{Fp8E4M3Fnuz, Fp8E4M3Fnuzx4, Fp8E5M2Fnuz, Fp8E5M2Fnuzx4};
 pub use group::{
     ActiveLaneGroup, Grid, Group, GroupMemoryOrdering, GroupMemorySpace, GroupScope, SubgroupTile,
-    SynchronizationContract, UnsupportedSynchronization, ValidWave64TileWidth, Wave64TileWidth,
-    Workgroup, WorkgroupSynchronization,
+    SynchronizationContract, TYPED_GROUP_CONTRACT_VERSION_V1, UnsupportedSynchronization,
+    ValidWave64TileWidth, Wave64TileWidth, Workgroup, WorkgroupSynchronization,
 };
 pub use half::{Bf16, Bf16x2, F16};
 pub use lds::{

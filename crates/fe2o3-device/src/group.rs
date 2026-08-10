@@ -13,6 +13,9 @@ use crate::sync;
 use crate::thread::Invocation3D;
 use crate::wave::{Wave64, WaveLane};
 
+/// Version of the typed group and universal arithmetic contract.
+pub const TYPED_GROUP_CONTRACT_VERSION_V1: u16 = 1;
+
 mod sealed {
     pub trait Group {}
     pub trait SynchronizationContract {}
@@ -103,15 +106,24 @@ impl SynchronizationContract for WorkgroupSynchronization {
 /// Sizes and ranks use `u64` so the same generic algorithm can inspect grid,
 /// workgroup, subgroup-tile, and active-lane snapshots without truncation. This
 /// trait grants no execution, synchronization, memory, or launch authority.
+#[rustc_diagnostic_item = "fe2o3_device_group_v1"]
 pub trait Group: sealed::Group {
     /// Static synchronization policy for this group kind.
     type Synchronization: SynchronizationContract;
+
+    /// Execution scope represented by this group kind.
+    const SCOPE: GroupScope;
 
     /// Number of work-items or lanes in this exact group.
     fn size(&self) -> u64;
 
     /// Zero-based rank of the current invocation within this exact group.
     fn thread_rank(&self) -> u64;
+
+    /// Whether the arithmetic snapshot has a rank in its declared extent.
+    fn has_valid_rank(&self) -> bool {
+        self.thread_rank() < self.size()
+    }
 }
 
 /// Arithmetic snapshot of a launch grid and one invocation's rank within it.
@@ -121,6 +133,7 @@ pub trait Group: sealed::Group {
 /// It does not establish that the snapshot describes the current hardware
 /// invocation or epoch. This value is deliberately neither `Copy`, `Clone`,
 /// `Send`, nor `Sync`.
+#[rustc_diagnostic_item = "fe2o3_device_grid_group_v1"]
 pub struct Grid<'invocation> {
     size: u64,
     thread_rank: u64,
@@ -130,6 +143,7 @@ pub struct Grid<'invocation> {
 
 impl<'invocation> Grid<'invocation> {
     /// Derives checked arithmetic from a caller-asserted invocation snapshot.
+    #[rustc_diagnostic_item = "fe2o3_device_grid_from_invocation_snapshot_v1"]
     pub fn from_invocation_snapshot(invocation: &'invocation Invocation3D) -> Option<Self> {
         let extent = invocation.global_grid_size();
         Some(Self {
@@ -156,6 +170,8 @@ impl sealed::Group for Grid<'_> {}
 impl Group for Grid<'_> {
     type Synchronization = UnsupportedSynchronization;
 
+    const SCOPE: GroupScope = GroupScope::Grid;
+
     fn size(&self) -> u64 {
         self.size
     }
@@ -172,6 +188,7 @@ impl Group for Grid<'_> {
 /// `u64`. It does not establish that the snapshot describes the current
 /// hardware invocation or epoch. This value is deliberately neither `Copy`,
 /// `Clone`, `Send`, nor `Sync`.
+#[rustc_diagnostic_item = "fe2o3_device_workgroup_group_v1"]
 pub struct Workgroup<'invocation> {
     size: u64,
     thread_rank: u64,
@@ -181,6 +198,7 @@ pub struct Workgroup<'invocation> {
 
 impl<'invocation> Workgroup<'invocation> {
     /// Derives checked arithmetic from a caller-asserted invocation snapshot.
+    #[rustc_diagnostic_item = "fe2o3_device_workgroup_from_invocation_snapshot_v1"]
     pub fn from_invocation_snapshot(invocation: &'invocation Invocation3D) -> Option<Self> {
         let size = invocation.workgroup_size();
         let id = invocation.workitem_id();
@@ -211,6 +229,7 @@ impl<'invocation> Workgroup<'invocation> {
     /// semantics in [`WorkgroupSynchronization`], including workgroup-uniform
     /// convergence and acquire-release visibility for global and workgroup
     /// memory. The current source compiler establishes none of these facts.
+    #[rustc_diagnostic_item = "fe2o3_device_workgroup_synchronize_v1"]
     pub unsafe fn synchronize(&self) {
         // SAFETY: The caller owns every dynamic convergence, snapshot-currentness,
         // and compiler-lowering obligation required by `sync::syncthreads`.
@@ -232,6 +251,8 @@ impl sealed::Group for Workgroup<'_> {}
 
 impl Group for Workgroup<'_> {
     type Synchronization = WorkgroupSynchronization;
+
+    const SCOPE: GroupScope = GroupScope::Workgroup;
 
     fn size(&self) -> u64 {
         self.size
@@ -270,6 +291,7 @@ valid_wave64_tile_widths!(1, 2, 4, 8, 16, 32, 64);
 /// this value from outliving its caller-asserted lane snapshot, but does not
 /// bind a hardware execution epoch. This value is deliberately neither `Copy`,
 /// `Clone`, `Send`, nor `Sync`.
+#[rustc_diagnostic_item = "fe2o3_device_subgroup_tile_v1"]
 pub struct SubgroupTile<'wave, const N: u32>
 where
     Wave64TileWidth<N>: ValidWave64TileWidth,
@@ -284,6 +306,7 @@ where
     Wave64TileWidth<N>: ValidWave64TileWidth,
 {
     /// Derives tile arithmetic from a caller-asserted wave64 lane snapshot.
+    #[rustc_diagnostic_item = "fe2o3_device_subgroup_tile_from_wave64_v1"]
     pub fn from_wave64_snapshot(lane: &'wave WaveLane<Wave64>) -> Self {
         Self {
             lane: lane.get(),
@@ -323,6 +346,8 @@ where
 {
     type Synchronization = UnsupportedSynchronization;
 
+    const SCOPE: GroupScope = GroupScope::Subgroup;
+
     fn size(&self) -> u64 {
         u64::from(N)
     }
@@ -338,6 +363,7 @@ where
 /// does not bind a hardware execution epoch. In particular, this value is not
 /// persistent EXEC authority and cannot authorize a collective or barrier.
 /// This value is deliberately neither `Copy`, `Clone`, `Send`, nor `Sync`.
+#[rustc_diagnostic_item = "fe2o3_device_active_lane_group_v1"]
 pub struct ActiveLaneGroup<'wave> {
     lane: u32,
     asserted_mask: u64,
@@ -357,6 +383,7 @@ impl<'wave> ActiveLaneGroup<'wave> {
     /// valid only for the arithmetic snapshot returned here; it grants no
     /// continuing EXEC, convergence, collective, synchronization, target, or
     /// epoch authority. The current compiler provides no checked constructor.
+    #[rustc_diagnostic_item = "fe2o3_device_active_lane_group_from_snapshot_v1"]
     pub unsafe fn from_caller_asserted_snapshot(
         lane: &'wave WaveLane<Wave64>,
         asserted_mask: u64,
@@ -405,6 +432,8 @@ impl sealed::Group for ActiveLaneGroup<'_> {}
 
 impl Group for ActiveLaneGroup<'_> {
     type Synchronization = UnsupportedSynchronization;
+
+    const SCOPE: GroupScope = GroupScope::Subgroup;
 
     fn size(&self) -> u64 {
         u64::from(self.asserted_mask.count_ones())
