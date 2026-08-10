@@ -67,6 +67,16 @@ pub const DEVICE_FFI_DIRECTION_EXPORT_V1: u16 = 2;
 pub const DEVICE_FFI_REGISTRATION_V1_FIELD_COUNT: usize = 12;
 pub const MAX_DEVICE_FFI_SYMBOL_BYTES_V1: usize = 128;
 pub const MAX_DEVICE_FFI_TARGET_BYTES_V1: usize = 128;
+
+/// Final-path-segment prefix for explicit consumer anchors of upstream device exports.
+pub const CROSS_CRATE_DEVICE_EXPORT_ANCHOR_PREFIX_V1: &str =
+    "__fe2o3_cross_crate_device_export_anchor_v1_";
+/// ASCII FE2O3XDV, interpreted as a little-endian u64.
+pub const CROSS_CRATE_DEVICE_EXPORT_ANCHOR_MAGIC_V1: u64 = u64::from_le_bytes(*b"FE2O3XDV");
+pub const CROSS_CRATE_DEVICE_EXPORT_ANCHOR_VERSION_V1: u16 = 1;
+/// Tuple fields: magic, version, contract identity, exact function pointer.
+pub const CROSS_CRATE_DEVICE_EXPORT_ANCHOR_FIELD_COUNT_V1: usize = 4;
+
 pub const MAX_DEVICE_FFI_PHYSICAL_ABI_BYTES_V1: usize = 2_048;
 pub const MAX_DEVICE_FFI_EFFECT_BYTES_V1: usize = 256;
 pub const MAX_DEVICE_FFI_ARGUMENTS_V1: usize = 32;
@@ -1010,6 +1020,12 @@ mod tests {
         assert_eq!(DEVICE_FFI_REGISTRATION_MAGIC_V1.to_le_bytes(), *b"FE2O3FFI");
         assert_eq!(DEVICE_FFI_REGISTRATION_VERSION_V1, 1);
         assert_eq!(DEVICE_FFI_REGISTRATION_V1_FIELD_COUNT, 12);
+        assert_eq!(
+            CROSS_CRATE_DEVICE_EXPORT_ANCHOR_MAGIC_V1.to_le_bytes(),
+            *b"FE2O3XDV"
+        );
+        assert_eq!(CROSS_CRATE_DEVICE_EXPORT_ANCHOR_VERSION_V1, 1);
+        assert_eq!(CROSS_CRATE_DEVICE_EXPORT_ANCHOR_FIELD_COUNT_V1, 4);
         let fields = DeviceFfiContractFieldsV1 {
             direction: DEVICE_FFI_DIRECTION_EXPORT_V1,
             symbol: "helper",

@@ -25,8 +25,9 @@ use reserved_fe2o3_symbols::{
 };
 use syn::{
     Data, DeriveInput, Expr, ExprArray, FnArg, ForeignItem, GenericArgument, ItemFn,
-    ItemForeignMod, Lit, LitInt, Meta, Pat, PathArguments, ReturnType, Token, Type, Visibility,
-    parse::Parser, parse_macro_input, punctuated::Punctuated, visit::Visit,
+    ItemForeignMod, Lit, LitInt, Meta, Pat, PathArguments, ReturnType, Token, Type, TypePath,
+    Visibility, parse::Parse, parse::ParseStream, parse::Parser, parse_macro_input,
+    punctuated::Punctuated, visit::Visit,
 };
 
 use crate::control_flow_v1::{
@@ -239,6 +240,99 @@ pub fn kernel(attr: TokenStream, item: TokenStream) -> TokenStream {
     expand_kernel(input, options)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
+}
+
+struct CrossCrateImport {
+    local_name: syn::Ident,
+    marker: TypePath,
+}
+
+impl Parse for CrossCrateImport {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let local_name = input.parse()?;
+        input.parse::<Token![,]>()?;
+        let marker = input.parse()?;
+        if !input.is_empty() {
+            return Err(input.error("expected a local name followed by one producer marker type"));
+        }
+        Ok(Self { local_name, marker })
+    }
+}
+
+#[proc_macro]
+pub fn import_kernel(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as CrossCrateImport);
+    expand_import_kernel(input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+fn expand_import_kernel(input: CrossCrateImport) -> syn::Result<proc_macro2::TokenStream> {
+    let device_import = fe2o3_device_import()?;
+    let local_name = input.local_name;
+    let marker = input.marker;
+    let registration_ident = format_ident!("{KERNEL_REGISTRATION_PREFIX}{local_name}");
+    Ok(quote! {
+        const _: () = {
+            #device_import
+
+            #[doc(hidden)]
+            #[allow(non_upper_case_globals)]
+            #[used]
+            static #registration_ident: (
+                u64, u16, u16, &'static str, &'static str, &'static str, &'static str,
+                <#marker as __fe2o3_kernel_device::KernelMarkerV1>::Function,
+            ) = (
+                #KERNEL_REGISTRATION_MAGIC,
+                <#marker as __fe2o3_kernel_device::CrossCrateTypedKernelV1>::REGISTRATION_VERSION,
+                <#marker as __fe2o3_kernel_device::CrossCrateTypedKernelV1>::REGISTRATION_KIND,
+                <#marker as __fe2o3_kernel_device::KernelMarkerV1>::LOGICAL_NAME,
+                <#marker as __fe2o3_kernel_device::KernelMarkerV1>::EXPORT_NAME,
+                <#marker as __fe2o3_kernel_device::CrossCrateTypedKernelV1>::CRATE_BINDING,
+                <#marker as __fe2o3_kernel_device::CrossCrateTypedKernelV1>::KERNEL_BINDING,
+                <#marker as __fe2o3_kernel_device::KernelMarkerV1>::FUNCTION,
+            );
+        };
+    })
+}
+
+#[proc_macro]
+pub fn import_device(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as CrossCrateImport);
+    expand_import_device(input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+fn expand_import_device(input: CrossCrateImport) -> syn::Result<proc_macro2::TokenStream> {
+    let device_import = fe2o3_device_import()?;
+    let local_name = input.local_name;
+    let marker = input.marker;
+    let anchor_ident = format_ident!(
+        "{}{}",
+        reserved_fe2o3_symbols::CROSS_CRATE_DEVICE_EXPORT_ANCHOR_PREFIX_V1,
+        local_name
+    );
+    let magic = reserved_fe2o3_symbols::CROSS_CRATE_DEVICE_EXPORT_ANCHOR_MAGIC_V1;
+    let version = reserved_fe2o3_symbols::CROSS_CRATE_DEVICE_EXPORT_ANCHOR_VERSION_V1;
+    Ok(quote! {
+        const _: () = {
+            #device_import
+
+            #[doc(hidden)]
+            #[allow(non_upper_case_globals)]
+            #[used]
+            static #anchor_ident: (
+                u64, u16, &'static str,
+                <#marker as __fe2o3_kernel_device::CrossCrateDeviceExportV1>::Function,
+            ) = (
+                #magic,
+                #version,
+                <#marker as __fe2o3_kernel_device::CrossCrateDeviceExportV1>::CONTRACT_ID,
+                <#marker as __fe2o3_kernel_device::CrossCrateDeviceExportV1>::FUNCTION,
+            );
+        };
+    })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -888,6 +982,24 @@ fn expand_legacy_kernel_with_imports(
         }
         _ => unreachable!("kernel mode and binding identity must agree"),
     };
+    let cross_crate_typed_impl = match (mode, crate_binding, kernel_binding) {
+        (KernelMode::Typed, Some(crate_binding), Some(kernel_binding)) => {
+            let crate_binding = syn::LitStr::new(&crate_binding.to_hex(), original_ident.span());
+            let kernel_binding = syn::LitStr::new(&kernel_binding.to_hex(), original_ident.span());
+            quote! {
+                unsafe impl __fe2o3_kernel_device::CrossCrateTypedKernelV1
+                    for #type_marker_ident
+                {
+                    const REGISTRATION_VERSION: u16 = #KERNEL_REGISTRATION_VERSION_V2;
+                    const REGISTRATION_KIND: u16 =
+                        #KERNEL_REGISTRATION_KIND_TYPED_VECADD_LAYOUT_V2;
+                    const CRATE_BINDING: &'static str = #crate_binding;
+                    const KERNEL_BINDING: &'static str = #kernel_binding;
+                }
+            }
+        }
+        _ => quote! {},
+    };
     let export_attribute = match kernel_binding {
         Some(binding) => {
             let symbol = syn::LitStr::new(&host_kernel_symbol_v1(binding), original_ident.span());
@@ -1041,6 +1153,8 @@ fn expand_legacy_kernel_with_imports(
                 const FUNCTION: Self::Function = #internal_ident;
                 const REGISTRATION: &'static Self::Registration = &#registration_ident;
             }
+
+            #cross_crate_typed_impl
         };
 
         #typed_module
@@ -2771,8 +2885,17 @@ fn expand_device_export_with_import(
         contract_hex
     );
     let function_ident = &input.sig.ident;
+    let export_marker_ident = format_ident!("__fe2o3_device_export_marker_{}", function_ident);
+    let visibility = input.vis.clone();
+    let inputs = input.sig.inputs.iter().map(|argument| match argument {
+        FnArg::Typed(argument) => argument.ty.as_ref(),
+        FnArg::Receiver(_) => unreachable!("device FFI methods were rejected"),
+    });
+    let output = &input.sig.output;
+    let function_pointer = quote!(unsafe extern "C" fn(#(#inputs),*) #output);
     let symbol = syn::LitStr::new(&options.symbol, function_ident.span());
     let marker = syn::LitStr::new(&marker, function_ident.span());
+    let contract_literal = syn::LitStr::new(&contract_hex, function_ident.span());
     let registration = device_ffi_registration_tokens(
         direction,
         &options,
@@ -2791,7 +2914,24 @@ fn expand_device_export_with_import(
         #[doc(hidden)]
         #[allow(non_upper_case_globals)]
         #[used]
-        static #registration_ident: #registration
+        #visibility static #registration_ident: #registration
+
+        #[doc(hidden)]
+        #[allow(non_camel_case_types)]
+        #visibility enum #export_marker_ident {}
+
+        const _: () = {
+            #device_import
+
+            // SAFETY: both values are generated from the same parsed export.
+            unsafe impl __fe2o3_kernel_device::CrossCrateDeviceExportV1
+                for #export_marker_ident
+            {
+                type Function = #function_pointer;
+                const CONTRACT_ID: &'static str = #contract_literal;
+                const FUNCTION: Self::Function = #function_ident;
+            }
+        };
 
         #abi_assertions
     })
