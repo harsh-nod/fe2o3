@@ -339,8 +339,25 @@ fn run_cargo_with_backend(
         inject_application_runner(&context.project, &mut forwarded_args)?;
     }
     let artifact_dir = context.generation.artifact_dir();
+    let capability_profile = if context
+        ._worker_v2
+        .as_ref()
+        .and_then(worker_v2::PreparedWorkerV2Config::source_debug_profile)
+        .is_some()
+    {
+        capability_broker::CapabilityProfileV1::S09
+    } else {
+        capability_broker::CapabilityProfileV1::Ordinary
+    };
+    let capability_binding = capability_broker::CapabilityBindingV2::new(
+        capability_profile,
+        context
+            .worker_v2_identity
+            .map(|identity| *identity.as_bytes()),
+    )?;
     let capability_broker = capability_broker::CapabilityBroker::start(
         context.build_session,
+        capability_binding,
         &context.pinned_backend,
         artifact_dir,
         &pinned_cargo,
@@ -353,7 +370,7 @@ fn run_cargo_with_backend(
         .env_remove(HSACO_DIR_ENV)
         .env(
             capability_broker::CAPABILITY_BROKER_ENV,
-            capability_broker.endpoint(),
+            capability_broker.route(),
         )
         .env(TARGET_ENV, &context.target)
         .env("FE2O3_HOST_PASSTHROUGH", "0")

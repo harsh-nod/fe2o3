@@ -1,7 +1,8 @@
 //! Descriptor transport from the `cargo-fe2o3` parent to managed rustc wrappers.
 //!
-//! Cargo receives only an abstract-socket endpoint and build-session binding. The broker checks
-//! Linux peer credentials and the exact `cargo-fe2o3` executable identity before transferring a
+//! Cargo receives a strict per-instance route and build-session binding. Both peers check Linux
+//! credentials, exact executable identity, the prepared profile/config identity, and a
+//! challenge-response bound to a separate 256-bit broker secret before transferring a
 //! sealed backend image and a read-only artifact-directory descriptor with `SCM_RIGHTS`. The
 //! explicit S09 profile additionally receives an observed pinned Cargo image. Receivers validate
 //! the exact profile-specific descriptor count and positional types before installing capabilities
@@ -13,8 +14,9 @@
 //! hostile build script can deliberately replay the wrapper, and a procedural macro executes
 //! inside rustc after the descriptors are installed. Both are trusted by this design. The
 //! directory is opened `O_RDONLY`, but still grants descriptor-relative namespace mutation. The
-//! client does not authenticate the broker server. Untrusted build dependencies require a
-//! separate process sandbox; the endpoint and session are routing bindings, not bearer secrets.
+//! route is inherited by trusted Cargo children and is therefore not a sandbox boundary against
+//! hostile same-user project code that can read or rewrite another child's environment or ptrace
+//! the broker. Untrusted build dependencies require a separate process sandbox.
 
 #[cfg(target_os = "linux")]
 mod platform {
@@ -32,22 +34,36 @@ mod platform {
     use std::time::Duration;
 
     use fe2o3_artifact_transaction::BuildSession;
+    use fe2o3_process_identity::LinuxObjectIdentityV3;
     use rustix::net::{
         RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, ReturnFlags, SendAncillaryBuffer,
         SendAncillaryMessage, SendFlags, recvmsg, sendmsg,
     };
+    use sha2::{Digest, Sha256};
 
     use crate::pinned_codegen_backend::PinnedCodegenBackend;
     use crate::pinned_executable::PinnedExecutable;
     use crate::project::PinnedDirectory;
 
     pub(crate) const CAPABILITY_BROKER_ENV: &str = "FE2O3_CAPABILITY_BROKER_V1";
-    const REQUEST_MAGIC: &[u8] = b"FE2O3-CARGO-CAPABILITY-BROKER-V1\0";
+    const REQUEST_MAGIC: &[u8] = b"FE2O3-CARGO-CAPABILITY-BROKER-V2\0";
     const S09_REQUEST_MAGIC: &[u8] = b"FE2O3-CARGO-CAPABILITY-BROKER-09\0";
     const _: () = assert!(REQUEST_MAGIC.len() == S09_REQUEST_MAGIC.len());
+    const ROUTE_PREFIX: &str = "fe2o3-capability-route-v2";
     const ENDPOINT_BYTES: usize = 32;
     const ENDPOINT_HEX_BYTES: usize = ENDPOINT_BYTES * 2;
+    const SECRET_BYTES: usize = 32;
+    const CHALLENGE_BYTES: usize = 32;
+    const CONFIG_ID_BYTES: usize = 32;
+    const REQUEST_AUTH_BYTES: usize = 32;
+    const REQUEST_BYTES: usize =
+        REQUEST_MAGIC.len() + 16 + 1 + CONFIG_ID_BYTES + CHALLENGE_BYTES + REQUEST_AUTH_BYTES;
+    const RESPONSE_BYTES: usize = 1 + REQUEST_AUTH_BYTES;
+    const REQUEST_AUTH_DOMAIN: &[u8] = b"FE2O3/CAPABILITY-BROKER/REQUEST-AUTH/V2\0";
+    const RESPONSE_AUTH_DOMAIN: &[u8] = b"FE2O3/CAPABILITY-BROKER/RESPONSE-AUTH/V2\0";
+    const MAX_PROC_STAT_BYTES: usize = 4096;
     const RECEIVED_DESCRIPTOR_FLOOR: i32 = 199;
+    const BROKER_IO_TIMEOUT: Duration = Duration::from_secs(30);
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub(crate) enum CapabilityProfileV1 {
@@ -76,33 +92,228 @@ mod platform {
                 Self::S09 => "S09",
             }
         }
-    }
 
-    #[derive(Clone, Copy)]
-    struct ExecutableIdentity {
-        device: u64,
-        inode: u64,
-    }
-
-    impl ExecutableIdentity {
-        fn current() -> io::Result<Self> {
-            let executable = std::env::current_exe()?;
-            let metadata = fs::metadata(executable)?;
-            Ok(Self {
-                device: metadata.dev(),
-                inode: metadata.ino(),
-            })
+        const fn route_name(self) -> &'static str {
+            match self {
+                Self::Ordinary => "ordinary",
+                Self::S09 => "s09",
+            }
         }
 
-        fn matches_peer(self, pid: i32) -> bool {
-            fs::metadata(PathBuf::from(format!("/proc/{pid}/exe")))
-                .map(|metadata| metadata.dev() == self.device && metadata.ino() == self.inode)
-                .unwrap_or(false)
+        fn parse_route_name(value: &str) -> Option<Self> {
+            match value {
+                "ordinary" => Some(Self::Ordinary),
+                "s09" => Some(Self::S09),
+                _ => None,
+            }
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub(crate) struct CapabilityBindingV2 {
+        profile: CapabilityProfileV1,
+        config_identity: Option<[u8; CONFIG_ID_BYTES]>,
+    }
+
+    impl CapabilityBindingV2 {
+        pub(crate) fn new(
+            profile: CapabilityProfileV1,
+            config_identity: Option<[u8; CONFIG_ID_BYTES]>,
+        ) -> Result<Self, String> {
+            if profile == CapabilityProfileV1::S09 && config_identity.is_none() {
+                return Err("S09 capability binding requires a Worker V2 config identity".into());
+            }
+            Ok(Self {
+                profile,
+                config_identity,
+            })
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    struct BrokerPeerIdentityV2 {
+        uid: u32,
+        pid: u32,
+        start_time_ticks: u64,
+        device: u64,
+        inode: u64,
+        mode: u32,
+        executable_sha256: [u8; 32],
+    }
+
+    impl BrokerPeerIdentityV2 {
+        fn current() -> Result<Self, String> {
+            let executable = std::env::current_exe()
+                .map_err(|error| format!("cannot resolve current broker executable: {error}"))?;
+            let metadata = fs::metadata(&executable)
+                .map_err(|error| format!("cannot inspect current broker executable: {error}"))?;
+            let pinned = PinnedExecutable::open(&executable)
+                .map_err(|error| format!("cannot pin current broker executable: {error}"))?;
+            let pid = std::process::id();
+            let start_time_ticks = process_start_time_ticks(pid)?;
+            let identity = Self {
+                uid: unsafe { libc::geteuid() },
+                pid,
+                start_time_ticks,
+                device: metadata.dev(),
+                inode: metadata.ino(),
+                mode: metadata.mode(),
+                executable_sha256: *pinned.sha256(),
+            };
+            if pinned.object_identity() != identity.object_identity() {
+                return Err("current broker executable object changed while pinning".into());
+            }
+            if process_start_time_ticks(pid)? != start_time_ticks {
+                return Err("current broker process identity changed while pinning".into());
+            }
+            Ok(identity)
+        }
+
+        const fn object_identity(self) -> LinuxObjectIdentityV3 {
+            LinuxObjectIdentityV3::from_linux_stat(self.device, self.inode, self.mode)
+        }
+
+        fn authenticate(self, stream: &UnixStream) -> Result<(), String> {
+            let credentials = rustix::net::sockopt::socket_peercred(stream)
+                .map_err(|error| format!("cannot inspect capability broker peer: {error}"))?;
+            let peer_pid = u32::try_from(credentials.pid.as_raw_nonzero().get())
+                .map_err(|_| "capability broker peer PID is negative".to_owned())?;
+            let current_uid = unsafe { libc::geteuid() };
+            if credentials.uid.as_raw() != current_uid || credentials.uid.as_raw() != self.uid {
+                return Err("capability broker peer uid does not match the current user".into());
+            }
+            if peer_pid != self.pid {
+                return Err("capability broker peer PID does not match the prepared route".into());
+            }
+            let initial_start = process_start_time_ticks(peer_pid)?;
+            if initial_start != self.start_time_ticks {
+                return Err(
+                    "capability broker peer start time does not match the prepared route".into(),
+                );
+            }
+            let executable_path = PathBuf::from(format!("/proc/{peer_pid}/exe"));
+            let executable_file = File::open(&executable_path).map_err(|error| {
+                format!("cannot open capability broker peer executable: {error}")
+            })?;
+            let pinned = PinnedExecutable::from_transferred_file(executable_file, executable_path)
+                .map_err(|error| {
+                    format!("cannot pin capability broker peer executable: {error}")
+                })?;
+            let final_start = process_start_time_ticks(peer_pid)?;
+            if final_start != initial_start {
+                return Err("capability broker peer PID was reused while authenticating".into());
+            }
+            if pinned.object_identity() != self.object_identity()
+                || pinned.sha256() != &self.executable_sha256
+            {
+                return Err("capability broker peer executable does not match the prepared object and bytes".into());
+            }
+            Ok(())
+        }
+
+        fn authenticate_client(self, stream: &UnixStream) -> Result<(), String> {
+            let credentials = rustix::net::sockopt::socket_peercred(stream)
+                .map_err(|error| format!("cannot inspect capability broker client: {error}"))?;
+            let client_pid = u32::try_from(credentials.pid.as_raw_nonzero().get())
+                .map_err(|_| "capability broker client PID is negative".to_owned())?;
+            if credentials.uid.as_raw() != self.uid {
+                return Err("capability broker client uid does not match the broker".into());
+            }
+            let initial_start = process_start_time_ticks(client_pid)?;
+            let executable_path = PathBuf::from(format!("/proc/{client_pid}/exe"));
+            let executable_file = File::open(&executable_path).map_err(|error| {
+                format!("cannot open capability broker client executable: {error}")
+            })?;
+            let pinned = PinnedExecutable::from_transferred_file(executable_file, executable_path)
+                .map_err(|error| {
+                    format!("cannot pin capability broker client executable: {error}")
+                })?;
+            if process_start_time_ticks(client_pid)? != initial_start {
+                return Err("capability broker client PID was reused while authenticating".into());
+            }
+            if pinned.object_identity() != self.object_identity()
+                || pinned.sha256() != &self.executable_sha256
+            {
+                return Err(
+                    "capability broker client is not the exact cargo-fe2o3 executable".into(),
+                );
+            }
+            Ok(())
+        }
+    }
+
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    struct BrokerRouteV2 {
+        endpoint: String,
+        secret: [u8; SECRET_BYTES],
+        binding: CapabilityBindingV2,
+        peer: BrokerPeerIdentityV2,
+    }
+
+    impl BrokerRouteV2 {
+        fn encode(&self) -> String {
+            format!(
+                "{ROUTE_PREFIX}:{}:{}:{}:{}:{}:{}:{}:{:x}:{:x}:{:x}:{}",
+                self.endpoint,
+                hex(&self.secret),
+                self.binding.profile.route_name(),
+                self.binding
+                    .config_identity
+                    .map(|identity| hex(&identity))
+                    .unwrap_or_else(|| "-".to_owned()),
+                self.peer.uid,
+                self.peer.pid,
+                self.peer.start_time_ticks,
+                self.peer.device,
+                self.peer.inode,
+                self.peer.mode,
+                hex(&self.peer.executable_sha256),
+            )
+        }
+
+        fn parse(value: &str) -> Result<Self, String> {
+            let fields = value.split(':').collect::<Vec<_>>();
+            if fields.len() != 12 || fields[0] != ROUTE_PREFIX {
+                return Err("capability broker route is not canonical V2".into());
+            }
+            let endpoint = fields[1].to_owned();
+            endpoint_address(&endpoint)?;
+            let secret = decode_fixed_hex(fields[2], "broker secret")?;
+            let profile = CapabilityProfileV1::parse_route_name(fields[3])
+                .ok_or_else(|| "capability broker route has an unknown profile".to_owned())?;
+            let config_identity = if fields[4] == "-" {
+                None
+            } else {
+                Some(decode_fixed_hex(fields[4], "config identity")?)
+            };
+            let binding = CapabilityBindingV2::new(profile, config_identity)?;
+            let peer = BrokerPeerIdentityV2 {
+                uid: u32::try_from(parse_canonical_decimal(fields[5], "peer uid", true)?)
+                    .map_err(|_| "capability broker peer uid exceeds u32".to_owned())?,
+                pid: u32::try_from(parse_canonical_decimal(fields[6], "peer pid", false)?)
+                    .map_err(|_| "capability broker peer pid exceeds u32".to_owned())?,
+                start_time_ticks: parse_canonical_decimal(fields[7], "peer start time", false)?,
+                device: parse_canonical_hex(fields[8], "peer device")?,
+                inode: parse_canonical_hex(fields[9], "peer inode")?,
+                mode: u32::try_from(parse_canonical_hex(fields[10], "peer mode")?)
+                    .map_err(|_| "capability broker peer mode exceeds u32".to_owned())?,
+                executable_sha256: decode_fixed_hex(fields[11], "peer executable digest")?,
+            };
+            let route = Self {
+                endpoint,
+                secret,
+                binding,
+                peer,
+            };
+            if route.encode() != value {
+                return Err("capability broker route is not canonically encoded".into());
+            }
+            Ok(route)
         }
     }
 
     pub(crate) struct CapabilityBroker {
-        endpoint: String,
+        route: String,
         stop: Arc<AtomicBool>,
         worker: Option<JoinHandle<()>>,
     }
@@ -110,6 +321,7 @@ mod platform {
     impl CapabilityBroker {
         pub(crate) fn start(
             session: BuildSession,
+            binding: CapabilityBindingV2,
             backend: &PinnedCodegenBackend,
             artifact: &PinnedDirectory,
             pinned_cargo_image: &PinnedExecutable,
@@ -135,34 +347,46 @@ mod platform {
                     .map_err(|error| {
                         format!("failed to retain pinned Cargo image observation: {error}")
                     })?;
-            let executable = ExecutableIdentity::current().map_err(|error| {
+            let executable = BrokerPeerIdentityV2::current().map_err(|error| {
                 format!("failed to identify capability broker executable: {error}")
             })?;
+            let secret = random_bytes()
+                .map_err(|error| format!("failed to allocate capability broker secret: {error}"))?;
+            let route = BrokerRouteV2 {
+                endpoint,
+                secret,
+                binding,
+                peer: executable,
+            }
+            .encode();
             let stop = Arc::new(AtomicBool::new(false));
             let worker_stop = Arc::clone(&stop);
             let worker = thread::Builder::new()
                 .name("fe2o3-capability-broker".to_string())
                 .spawn(move || {
-                    serve(
+                    BrokerServer {
                         listener,
                         session,
+                        binding,
+                        secret,
                         executable,
                         backend,
                         artifact,
                         pinned_cargo_image,
-                        worker_stop,
-                    );
+                        stop: worker_stop,
+                    }
+                    .serve();
                 })
                 .map_err(|error| format!("failed to start capability broker: {error}"))?;
             Ok(Self {
-                endpoint,
+                route,
                 stop,
                 worker: Some(worker),
             })
         }
 
-        pub(crate) fn endpoint(&self) -> &str {
-            &self.endpoint
+        pub(crate) fn route(&self) -> &str {
+            &self.route
         }
     }
 
@@ -183,30 +407,43 @@ mod platform {
 
     pub(crate) fn receive(
         session: BuildSession,
-        profile: CapabilityProfileV1,
+        binding: CapabilityBindingV2,
     ) -> Result<BrokeredCapabilities, String> {
-        let endpoint = std::env::var(CAPABILITY_BROKER_ENV)
+        let encoded_route = std::env::var(CAPABILITY_BROKER_ENV)
             .map_err(|_| format!("managed rustc invocation is missing {CAPABILITY_BROKER_ENV}"))?;
-        receive_from(&endpoint, session, profile)
+        let route = BrokerRouteV2::parse(&encoded_route)?;
+        receive_from(&route, session, binding)
     }
 
     fn receive_from(
-        endpoint: &str,
+        route: &BrokerRouteV2,
         session: BuildSession,
-        profile: CapabilityProfileV1,
+        binding: CapabilityBindingV2,
     ) -> Result<BrokeredCapabilities, String> {
-        let address = endpoint_address(endpoint)?;
+        if route.binding != binding {
+            return Err(
+                "capability broker route does not match the prepared profile/config identity"
+                    .into(),
+            );
+        }
+        let address = endpoint_address(&route.endpoint)?;
         let mut stream = UnixStream::connect_addr(&address)
             .map_err(|error| format!("failed to connect to capability broker: {error}"))?;
         stream
-            .set_read_timeout(Some(Duration::from_secs(2)))
+            .set_read_timeout(Some(BROKER_IO_TIMEOUT))
             .map_err(|error| format!("failed to bound capability broker read: {error}"))?;
-        let request = request_bytes(session, profile);
+        route.peer.authenticate(&stream)?;
+        let challenge = random_bytes()
+            .map_err(|error| format!("failed to allocate broker client challenge: {error}"))?;
+        let request = request_bytes(session, binding, challenge, &route.secret);
+        let request_auth: [u8; REQUEST_AUTH_BYTES] = request[REQUEST_BYTES - REQUEST_AUTH_BYTES..]
+            .try_into()
+            .expect("request authentication field has a fixed size");
         stream
             .write_all(&request)
             .map_err(|error| format!("failed to authenticate to capability broker: {error}"))?;
 
-        let mut response = [0_u8; 1];
+        let mut response = [0_u8; RESPONSE_BYTES];
         let mut iov = [IoSliceMut::new(&mut response)];
         let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(4))];
         let mut ancillary = RecvAncillaryBuffer::new(&mut space);
@@ -215,7 +452,8 @@ mod platform {
         if message.flags.contains(ReturnFlags::CTRUNC) {
             return Err("capability broker descriptor response was truncated".to_string());
         }
-        if message.bytes != 1 || response != [1] {
+        let expected_response = response_bytes(&route.secret, challenge, request_auth);
+        if message.bytes != RESPONSE_BYTES || response != expected_response {
             return Err("capability broker returned a malformed response".to_string());
         }
         let mut descriptors = Vec::new();
@@ -224,7 +462,7 @@ mod platform {
                 descriptors.extend(received);
             }
         }
-        decode_received_descriptors(descriptors, profile)
+        decode_received_descriptors(descriptors, binding.profile)
     }
 
     fn decode_received_descriptors(
@@ -286,107 +524,134 @@ mod platform {
         Ok(file)
     }
 
-    fn serve(
+    struct BrokerServer {
         listener: UnixListener,
         session: BuildSession,
-        executable: ExecutableIdentity,
+        binding: CapabilityBindingV2,
+        secret: [u8; SECRET_BYTES],
+        executable: BrokerPeerIdentityV2,
         backend: File,
         artifact: File,
         pinned_cargo_image: File,
         stop: Arc<AtomicBool>,
-    ) {
-        while !stop.load(Ordering::Acquire) {
-            match listener.accept() {
-                Ok((mut stream, _)) => {
-                    let _ = serve_one(
-                        &mut stream,
-                        session,
-                        executable,
-                        &backend,
-                        &artifact,
-                        &pinned_cargo_image,
-                    );
+    }
+
+    impl BrokerServer {
+        fn serve(self) {
+            while !self.stop.load(Ordering::Acquire) {
+                match self.listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let _ = self.serve_one(&mut stream);
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(2));
+                    }
+                    Err(_) => break,
                 }
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                    thread::sleep(Duration::from_millis(2));
-                }
-                Err(_) => break,
             }
         }
-    }
 
-    fn serve_one(
-        stream: &mut UnixStream,
-        session: BuildSession,
-        executable: ExecutableIdentity,
-        backend: &File,
-        artifact: &File,
-        pinned_cargo_image: &File,
-    ) -> io::Result<()> {
-        stream.set_read_timeout(Some(Duration::from_secs(2)))?;
-        let credentials =
-            rustix::net::sockopt::socket_peercred(&*stream).map_err(io::Error::from)?;
-        let current_uid = unsafe { libc::geteuid() };
-        if credentials.uid.as_raw() != current_uid
-            || !executable.matches_peer(credentials.pid.as_raw_nonzero().get())
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "capability broker peer is not the cargo-fe2o3 executable",
-            ));
-        }
-        let mut request = vec![0_u8; REQUEST_MAGIC.len() + 16];
-        stream.read_exact(&mut request)?;
-        let profile = request_profile(&request, session).ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "capability broker request is not bound to this build session and profile",
+        fn serve_one(&self, stream: &mut UnixStream) -> io::Result<()> {
+            stream.set_read_timeout(Some(BROKER_IO_TIMEOUT))?;
+            self.executable
+                .authenticate_client(stream)
+                .map_err(|error| io::Error::new(io::ErrorKind::PermissionDenied, error))?;
+            let mut request = vec![0_u8; REQUEST_BYTES];
+            stream.read_exact(&mut request)?;
+            let challenge_start = REQUEST_MAGIC.len() + 16 + 1 + CONFIG_ID_BYTES;
+            let challenge: [u8; CHALLENGE_BYTES] = request
+                [challenge_start..challenge_start + CHALLENGE_BYTES]
+                .try_into()
+                .expect("request challenge has a fixed size");
+            let expected_request =
+                request_bytes(self.session, self.binding, challenge, &self.secret);
+            if request != expected_request {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "capability broker request is not bound to this broker, session, profile, and config",
+                ));
+            }
+            let request_auth: [u8; REQUEST_AUTH_BYTES] = request
+                [REQUEST_BYTES - REQUEST_AUTH_BYTES..]
+                .try_into()
+                .expect("request authentication field has a fixed size");
+            let profile = self.binding.profile;
+
+            // SCM_RIGHTS preserves the open-file-description offset. Give each S09 wrapper an
+            // independently opened description of the retained pinned image. Ordinary clients
+            // retain their historical two-descriptor response.
+            let pinned_cargo_image = (profile == CapabilityProfileV1::S09)
+                .then(|| {
+                    File::open(format!(
+                        "/proc/self/fd/{}",
+                        self.pinned_cargo_image.as_raw_fd()
+                    ))
+                })
+                .transpose()?;
+            let mut descriptors = vec![self.backend.as_fd(), self.artifact.as_fd()];
+            if let Some(pinned_cargo_image) = &pinned_cargo_image {
+                descriptors.push(pinned_cargo_image.as_fd());
+            }
+            let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(3))];
+            let mut ancillary = SendAncillaryBuffer::new(&mut space);
+            if !ancillary.push(SendAncillaryMessage::ScmRights(&descriptors)) {
+                return Err(io::Error::other("capability control buffer is too small"));
+            }
+            let response = response_bytes(&self.secret, challenge, request_auth);
+            let sent = sendmsg(
+                &*stream,
+                &[IoSlice::new(&response)],
+                &mut ancillary,
+                SendFlags::NOSIGNAL,
             )
-        })?;
-
-        // SCM_RIGHTS preserves the open-file-description offset. Give each S09 wrapper an
-        // independently opened description of the retained pinned image. Ordinary V1 clients
-        // retain their historical two-descriptor response.
-        let pinned_cargo_image = (profile == CapabilityProfileV1::S09)
-            .then(|| File::open(format!("/proc/self/fd/{}", pinned_cargo_image.as_raw_fd())))
-            .transpose()?;
-        let mut descriptors = vec![backend.as_fd(), artifact.as_fd()];
-        if let Some(pinned_cargo_image) = &pinned_cargo_image {
-            descriptors.push(pinned_cargo_image.as_fd());
+            .map_err(io::Error::from)?;
+            if sent != response.len() {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "capability broker response was truncated",
+                ));
+            }
+            Ok(())
         }
-        let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(3))];
-        let mut ancillary = SendAncillaryBuffer::new(&mut space);
-        if !ancillary.push(SendAncillaryMessage::ScmRights(&descriptors)) {
-            return Err(io::Error::other("capability control buffer is too small"));
-        }
-        let response = [1_u8];
-        let sent = sendmsg(
-            &*stream,
-            &[IoSlice::new(&response)],
-            &mut ancillary,
-            SendFlags::NOSIGNAL,
-        )
-        .map_err(io::Error::from)?;
-        if sent != response.len() {
-            return Err(io::Error::new(
-                io::ErrorKind::WriteZero,
-                "capability broker response was truncated",
-            ));
-        }
-        Ok(())
     }
 
-    fn request_bytes(session: BuildSession, profile: CapabilityProfileV1) -> Vec<u8> {
-        let mut request = Vec::with_capacity(REQUEST_MAGIC.len() + 16);
-        request.extend_from_slice(profile.request_magic());
+    fn request_bytes(
+        session: BuildSession,
+        binding: CapabilityBindingV2,
+        challenge: [u8; CHALLENGE_BYTES],
+        secret: &[u8; SECRET_BYTES],
+    ) -> Vec<u8> {
+        let mut request = Vec::with_capacity(REQUEST_BYTES);
+        request.extend_from_slice(binding.profile.request_magic());
         request.extend_from_slice(session.as_bytes());
+        match binding.config_identity {
+            Some(identity) => {
+                request.push(1);
+                request.extend_from_slice(&identity);
+            }
+            None => {
+                request.push(0);
+                request.extend_from_slice(&[0; CONFIG_ID_BYTES]);
+            }
+        }
+        request.extend_from_slice(&challenge);
+        let authentication = keyed_digest(REQUEST_AUTH_DOMAIN, secret, &[&request]);
+        request.extend_from_slice(&authentication);
+        debug_assert_eq!(request.len(), REQUEST_BYTES);
         request
     }
 
-    fn request_profile(request: &[u8], session: BuildSession) -> Option<CapabilityProfileV1> {
-        [CapabilityProfileV1::Ordinary, CapabilityProfileV1::S09]
-            .into_iter()
-            .find(|profile| request == request_bytes(session, *profile))
+    fn response_bytes(
+        secret: &[u8; SECRET_BYTES],
+        challenge: [u8; CHALLENGE_BYTES],
+        request_auth: [u8; REQUEST_AUTH_BYTES],
+    ) -> [u8; RESPONSE_BYTES] {
+        let authentication =
+            keyed_digest(RESPONSE_AUTH_DOMAIN, secret, &[&challenge, &request_auth]);
+        let mut response = [0_u8; RESPONSE_BYTES];
+        response[0] = 1;
+        response[1..].copy_from_slice(&authentication);
+        response
     }
 
     fn endpoint_address(endpoint: &str) -> Result<SocketAddr, String> {
@@ -397,20 +662,111 @@ mod platform {
         {
             return Err("capability broker endpoint is not canonical lowercase hexadecimal".into());
         }
-        SocketAddr::from_abstract_name(format!("fe2o3-cap-v1-{endpoint}").as_bytes())
+        SocketAddr::from_abstract_name(format!("fe2o3-cap-v2-{endpoint}").as_bytes())
             .map_err(|error| format!("invalid capability broker endpoint: {error}"))
     }
 
     fn random_endpoint() -> io::Result<String> {
+        Ok(hex(&random_bytes()?))
+    }
+
+    fn random_bytes() -> io::Result<[u8; ENDPOINT_BYTES]> {
         let mut bytes = [0_u8; ENDPOINT_BYTES];
         File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+        Ok(bytes)
+    }
+
+    fn keyed_digest(domain: &[u8], secret: &[u8; SECRET_BYTES], fields: &[&[u8]]) -> [u8; 32] {
+        let mut digest = Sha256::new();
+        digest.update((domain.len() as u64).to_le_bytes());
+        digest.update(domain);
+        digest.update((secret.len() as u64).to_le_bytes());
+        digest.update(secret);
+        for field in fields {
+            digest.update((field.len() as u64).to_le_bytes());
+            digest.update(field);
+        }
+        digest.finalize().into()
+    }
+
+    fn process_start_time_ticks(pid: u32) -> Result<u64, String> {
+        let path = PathBuf::from(format!("/proc/{pid}/stat"));
+        let bytes = fs::read(&path)
+            .map_err(|error| format!("cannot read broker process {}: {error}", path.display()))?;
+        if bytes.is_empty() || bytes.len() > MAX_PROC_STAT_BYTES {
+            return Err(format!(
+                "broker process {} must contain 1 through {MAX_PROC_STAT_BYTES} bytes",
+                path.display()
+            ));
+        }
+        let close = bytes
+            .iter()
+            .rposition(|byte| *byte == b')')
+            .ok_or_else(|| "broker process stat has no command terminator".to_owned())?;
+        let recorded_pid = bytes[..close]
+            .split(|byte| *byte == b' ')
+            .next()
+            .and_then(|value| std::str::from_utf8(value).ok())
+            .and_then(|value| value.parse::<u32>().ok());
+        if recorded_pid != Some(pid) {
+            return Err("broker process stat PID does not match its proc entry".into());
+        }
+        bytes[close + 1..]
+            .split(u8::is_ascii_whitespace)
+            .filter(|field| !field.is_empty())
+            .nth(19)
+            .and_then(|value| std::str::from_utf8(value).ok())
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|value| *value != 0)
+            .ok_or_else(|| "broker process stat has no valid start-time field".to_owned())
+    }
+
+    fn decode_fixed_hex<const N: usize>(value: &str, label: &str) -> Result<[u8; N], String> {
+        if value.len() != N * 2
+            || value
+                .bytes()
+                .any(|byte| !byte.is_ascii_hexdigit() || byte.is_ascii_uppercase())
+        {
+            return Err(format!(
+                "capability broker {label} is not canonical lowercase hex"
+            ));
+        }
+        let mut decoded = [0_u8; N];
+        for (index, output) in decoded.iter_mut().enumerate() {
+            let offset = index * 2;
+            *output = u8::from_str_radix(&value[offset..offset + 2], 16)
+                .map_err(|_| format!("capability broker {label} is invalid"))?;
+        }
+        Ok(decoded)
+    }
+
+    fn parse_canonical_decimal(value: &str, label: &str, allow_zero: bool) -> Result<u64, String> {
+        let parsed = value
+            .parse::<u64>()
+            .map_err(|_| format!("capability broker {label} is not decimal"))?;
+        if (!allow_zero && parsed == 0) || parsed.to_string() != value {
+            return Err(format!("capability broker {label} is not canonical"));
+        }
+        Ok(parsed)
+    }
+
+    fn parse_canonical_hex(value: &str, label: &str) -> Result<u64, String> {
+        let parsed = u64::from_str_radix(value, 16)
+            .map_err(|_| format!("capability broker {label} is not hexadecimal"))?;
+        if parsed == 0 || format!("{parsed:x}") != value {
+            return Err(format!("capability broker {label} is not canonical"));
+        }
+        Ok(parsed)
+    }
+
+    fn hex(bytes: &[u8]) -> String {
         const HEX: &[u8; 16] = b"0123456789abcdef";
-        let mut endpoint = String::with_capacity(ENDPOINT_HEX_BYTES);
+        let mut endpoint = String::with_capacity(bytes.len() * 2);
         for byte in bytes {
             endpoint.push(char::from(HEX[(byte >> 4) as usize]));
             endpoint.push(char::from(HEX[(byte & 0x0f) as usize]));
         }
-        Ok(endpoint)
+        endpoint
     }
 
     #[cfg(test)]
@@ -466,6 +822,14 @@ mod platform {
             (temp, backend, artifact, pinned_cargo_image, session)
         }
 
+        fn ordinary_binding() -> CapabilityBindingV2 {
+            CapabilityBindingV2::new(CapabilityProfileV1::Ordinary, None).unwrap()
+        }
+
+        fn s09_binding() -> CapabilityBindingV2 {
+            CapabilityBindingV2::new(CapabilityProfileV1::S09, Some([0x91; 32])).unwrap()
+        }
+
         #[test]
         fn transfers_exact_capabilities_after_path_substitution() {
             let (temp, backend, artifact, pinned_cargo_image, session) = fixture();
@@ -473,15 +837,17 @@ mod platform {
             let cargo_sha = *pinned_cargo_image.sha256();
             let original_artifact = temp.0.join("artifact");
             let moved_artifact = temp.0.join("moved-artifact");
+            let binding = s09_binding();
             let broker =
-                CapabilityBroker::start(session, &backend, &artifact, &pinned_cargo_image).unwrap();
+                CapabilityBroker::start(session, binding, &backend, &artifact, &pinned_cargo_image)
+                    .unwrap();
 
             fs::write(temp.0.join("backend.so"), b"replacement backend bytes").unwrap();
             fs::rename(&original_artifact, &moved_artifact).unwrap();
             fs::create_dir(&original_artifact).unwrap();
 
-            let transferred =
-                receive_from(broker.endpoint(), session, CapabilityProfileV1::S09).unwrap();
+            let route = BrokerRouteV2::parse(broker.route()).unwrap();
+            let transferred = receive_from(&route, session, binding).unwrap();
             let transferred_cargo = transferred
                 .pinned_cargo_image
                 .expect("S09 transfer has a pinned Cargo image");
@@ -503,14 +869,16 @@ mod platform {
         }
 
         #[test]
-        fn ordinary_profile_preserves_the_two_descriptor_v1_contract() {
+        fn ordinary_profile_preserves_the_two_descriptor_contract() {
             let (_temp, backend, artifact, pinned_cargo_image, session) = fixture();
             let backend_sha = *backend.sha256();
+            let binding = ordinary_binding();
             let broker =
-                CapabilityBroker::start(session, &backend, &artifact, &pinned_cargo_image).unwrap();
+                CapabilityBroker::start(session, binding, &backend, &artifact, &pinned_cargo_image)
+                    .unwrap();
 
-            let transferred =
-                receive_from(broker.endpoint(), session, CapabilityProfileV1::Ordinary).unwrap();
+            let route = BrokerRouteV2::parse(broker.route()).unwrap();
+            let transferred = receive_from(&route, session, binding).unwrap();
             assert_eq!(transferred.backend.sha256(), &backend_sha);
             assert!(transferred.pinned_cargo_image.is_none());
         }
@@ -573,18 +941,98 @@ mod platform {
         }
 
         #[test]
+        fn prepared_profile_config_and_peer_identity_reject_substitution() {
+            let (_temp, backend, artifact, pinned_cargo_image, session) = fixture();
+            let binding = s09_binding();
+            let broker =
+                CapabilityBroker::start(session, binding, &backend, &artifact, &pinned_cargo_image)
+                    .unwrap();
+            let route = BrokerRouteV2::parse(broker.route()).unwrap();
+
+            let ordinary = ordinary_binding();
+            assert!(receive_from(&route, session, ordinary).is_err());
+            let wrong_config =
+                CapabilityBindingV2::new(CapabilityProfileV1::S09, Some([0x92; CONFIG_ID_BYTES]))
+                    .unwrap();
+            assert!(receive_from(&route, session, wrong_config).is_err());
+
+            let mut wrong_uid = route.clone();
+            wrong_uid.peer.uid ^= 1;
+            assert!(receive_from(&wrong_uid, session, binding).is_err());
+
+            let mut wrong_pid = route.clone();
+            wrong_pid.peer.pid = wrong_pid.peer.pid.saturating_add(1);
+            assert!(receive_from(&wrong_pid, session, binding).is_err());
+
+            let mut stale_process = route.clone();
+            stale_process.peer.start_time_ticks += 1;
+            assert!(receive_from(&stale_process, session, binding).is_err());
+
+            let mut wrong_object = route.clone();
+            wrong_object.peer.inode ^= 1;
+            assert!(receive_from(&wrong_object, session, binding).is_err());
+
+            let mut substituted_executable = route.clone();
+            substituted_executable.peer.executable_sha256[0] ^= 1;
+            assert!(receive_from(&substituted_executable, session, binding).is_err());
+
+            let mut wrong_secret = route;
+            wrong_secret.secret[0] ^= 1;
+            assert!(receive_from(&wrong_secret, session, binding).is_err());
+        }
+
+        #[test]
+        fn endpoint_only_mock_cannot_forge_the_broker_response() {
+            let (_temp, backend, artifact, _pinned_cargo_image, session) = fixture();
+            let endpoint = random_endpoint().unwrap();
+            let address = endpoint_address(&endpoint).unwrap();
+            let listener = UnixListener::bind_addr(&address).unwrap();
+            let backend = backend.try_clone_for_transfer().unwrap();
+            let artifact = artifact.try_clone_for_transfer().unwrap();
+            let mock = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0_u8; REQUEST_BYTES];
+                stream.read_exact(&mut request).unwrap();
+                let descriptors = [backend.as_fd(), artifact.as_fd()];
+                let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(2))];
+                let mut ancillary = SendAncillaryBuffer::new(&mut space);
+                assert!(ancillary.push(SendAncillaryMessage::ScmRights(&descriptors)));
+                let mut forged = [0_u8; RESPONSE_BYTES];
+                forged[0] = 1;
+                sendmsg(
+                    &stream,
+                    &[IoSlice::new(&forged)],
+                    &mut ancillary,
+                    SendFlags::NOSIGNAL,
+                )
+                .unwrap();
+            });
+            let route = BrokerRouteV2 {
+                endpoint,
+                secret: random_bytes().unwrap(),
+                binding: ordinary_binding(),
+                peer: BrokerPeerIdentityV2::current().unwrap(),
+            };
+
+            assert!(receive_from(&route, session, ordinary_binding()).is_err());
+            mock.join().unwrap();
+        }
+
+        #[test]
         fn rejects_wrong_session_and_serves_concurrent_exact_clients() {
             let (_temp, backend, artifact, pinned_cargo_image, session) = fixture();
             let backend_sha = *backend.sha256();
             let cargo_sha = *pinned_cargo_image.sha256();
+            let binding = s09_binding();
             let broker = Arc::new(
-                CapabilityBroker::start(session, &backend, &artifact, &pinned_cargo_image).unwrap(),
+                CapabilityBroker::start(session, binding, &backend, &artifact, &pinned_cargo_image)
+                    .unwrap(),
             );
             assert!(
                 receive_from(
-                    broker.endpoint(),
+                    &BrokerRouteV2::parse(broker.route()).unwrap(),
                     BuildSession::from_bytes([0x43; 16]),
-                    CapabilityProfileV1::S09,
+                    binding,
                 )
                 .is_err()
             );
@@ -593,9 +1041,8 @@ mod platform {
                 .map(|_| {
                     let broker = Arc::clone(&broker);
                     std::thread::spawn(move || {
-                        let transferred =
-                            receive_from(broker.endpoint(), session, CapabilityProfileV1::S09)
-                                .unwrap();
+                        let route = BrokerRouteV2::parse(broker.route()).unwrap();
+                        let transferred = receive_from(&route, session, binding).unwrap();
                         assert_eq!(transferred.backend.sha256(), &backend_sha);
                         let cargo = transferred
                             .pinned_cargo_image
@@ -613,12 +1060,14 @@ mod platform {
         #[test]
         fn dropping_broker_closes_the_endpoint_before_post_build_work() {
             let (_temp, backend, artifact, pinned_cargo_image, session) = fixture();
+            let binding = ordinary_binding();
             let broker =
-                CapabilityBroker::start(session, &backend, &artifact, &pinned_cargo_image).unwrap();
-            let endpoint = broker.endpoint().to_owned();
+                CapabilityBroker::start(session, binding, &backend, &artifact, &pinned_cargo_image)
+                    .unwrap();
+            let route = BrokerRouteV2::parse(broker.route()).unwrap();
             drop(broker);
 
-            assert!(receive_from(&endpoint, session, CapabilityProfileV1::Ordinary).is_err());
+            assert!(receive_from(&route, session, binding).is_err());
         }
 
         #[test]
@@ -649,11 +1098,24 @@ mod unsupported {
         S09,
     }
 
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub(crate) struct CapabilityBindingV2;
+
+    impl CapabilityBindingV2 {
+        pub(crate) fn new(
+            _profile: CapabilityProfileV1,
+            _config_identity: Option<[u8; 32]>,
+        ) -> Result<Self, String> {
+            Ok(Self)
+        }
+    }
+
     pub(crate) struct CapabilityBroker;
 
     impl CapabilityBroker {
         pub(crate) fn start(
             _session: BuildSession,
+            _binding: CapabilityBindingV2,
             _backend: &PinnedCodegenBackend,
             _artifact: &PinnedDirectory,
             _pinned_cargo_image: &PinnedExecutable,
@@ -661,7 +1123,7 @@ mod unsupported {
             Err("Cargo capability transport requires Linux".to_string())
         }
 
-        pub(crate) fn endpoint(&self) -> &str {
+        pub(crate) fn route(&self) -> &str {
             ""
         }
     }
@@ -674,7 +1136,7 @@ mod unsupported {
 
     pub(crate) fn receive(
         _session: BuildSession,
-        _profile: CapabilityProfileV1,
+        _binding: CapabilityBindingV2,
     ) -> Result<BrokeredCapabilities, String> {
         Err("Cargo capability transport requires Linux".to_string())
     }

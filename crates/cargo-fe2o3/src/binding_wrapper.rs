@@ -333,7 +333,14 @@ pub(crate) fn run(argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperError
             } else {
                 capability_broker::CapabilityProfileV1::Ordinary
             };
-            let compiler_capabilities = CompilerCapabilities::from_environment(capability_profile)?;
+            let capability_binding = capability_broker::CapabilityBindingV2::new(
+                capability_profile,
+                worker_v2
+                    .as_ref()
+                    .map(|config| *config.identity().as_bytes()),
+            )
+            .map_err(BindingWrapperError::CapabilityBroker)?;
+            let compiler_capabilities = CompilerCapabilities::from_environment(capability_binding)?;
             let current_dir =
                 std::env::current_dir().map_err(BindingWrapperError::CurrentDirectory)?;
             let managed = if worker_v2.as_ref().is_some_and(|config| {
@@ -1253,6 +1260,16 @@ fn validate_expected_worker_v2_identity(
     config: Option<&PreparedWorkerV2Config>,
 ) -> Result<(), BindingWrapperError> {
     let Some(expected) = std::env::var_os(WORKER_V2_EXPECTED_ID_ENV) else {
+        if config
+            .and_then(PreparedWorkerV2Config::source_debug_profile)
+            .is_some()
+        {
+            return Err(BindingWrapperError::WorkerV2Configuration(
+                WorkerV2ConfigError::Invalid(format!(
+                    "S09 Worker V2 configuration requires {WORKER_V2_EXPECTED_ID_ENV}"
+                )),
+            ));
+        }
         return Ok(());
     };
     let expected = expected.to_str().ok_or_else(|| {
@@ -1281,9 +1298,9 @@ struct CompilerCapabilities {
 
 impl CompilerCapabilities {
     fn from_environment(
-        profile: capability_broker::CapabilityProfileV1,
+        binding: capability_broker::CapabilityBindingV2,
     ) -> Result<Self, BindingWrapperError> {
-        let transferred = capability_broker::receive(managed_build_session()?, profile)
+        let transferred = capability_broker::receive(managed_build_session()?, binding)
             .map_err(BindingWrapperError::CapabilityBroker)?;
         let pinned_cargo_image_sha256 = transferred
             .pinned_cargo_image
