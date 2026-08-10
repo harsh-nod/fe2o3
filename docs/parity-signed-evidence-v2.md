@@ -18,6 +18,15 @@ the protected and candidate checkouts must equal their event SHAs, and the
 candidate head must descend from that exact tip. A stale feature branch or a
 substituted checkout therefore cannot retain an older evidence policy.
 
+The protected workflow also handles GitHub `merge_group/checks_requested` and
+reruns the same base-tip, ancestry, trust-monotonicity, and promotion checks on
+the synthetic merge commit. This is necessary for merge queues, but workflow
+code alone cannot stop GitHub from merging a stale or unchecked commit. The
+repository must enforce an active ruleset with no bypass actors, strict
+source-pinned checks, required protected workflows, and a merge queue. See
+[GitHub's merge queue documentation](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/configuring-pull-request-merges/managing-a-merge-queue)
+and [repository rules API](https://docs.github.com/en/rest/repos/rules).
+
 This repository intentionally contains no active production trust policy and
 no production public or private key. Production promotion therefore fails
 closed until an operator installs protected public-key configuration and
@@ -51,6 +60,35 @@ rejects.
    branch before merge, or require a merge queue. The workflow checks default-tip
    freshness when it runs, but cannot configure repository rules or prevent the
    default branch from advancing between a completed check and merge.
+
+8. Render, review, and install the repository ruleset. Obtain the numeric
+   repository ID and GitHub Actions integration ID from authenticated GitHub
+   API responses, then run:
+
+       scripts/parity-repository-rules.sh render \
+         --repository-id REPOSITORY_ID \
+         --actions-integration-id ACTIONS_INTEGRATION_ID \
+         --default-branch main > /tmp/parity-rules.json
+
+       scripts/parity-repository-rules.sh bootstrap \
+         --repo OWNER/REPO \
+         --repository-id REPOSITORY_ID \
+         --actions-integration-id ACTIONS_INTEGRATION_ID \
+         --default-branch main
+
+       scripts/parity-repository-rules.sh verify \
+         --repo OWNER/REPO \
+         --repository-id REPOSITORY_ID \
+         --actions-integration-id ACTIONS_INTEGRATION_ID \
+         --default-branch main
+
+   `bootstrap` requires repository Administration write permission and refuses
+   to update or replace an existing ruleset. `verify` requires sufficient
+   access for GitHub to return `bypass_actors`; an omitted field fails closed.
+   The generated policy allows no bypass, pins both workflows to protected
+   `main`, requires strict GitHub-Actions-sourced status checks, stale-review
+   dismissal, code-owner and last-push review, and an `ALLGREEN` squash merge
+   queue with one PR per merge group.
 
 Validate a staged or installed tree independently:
 

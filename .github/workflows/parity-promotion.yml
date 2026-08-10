@@ -1,6 +1,8 @@
 name: Protected parity promotion
 
 on:
+  merge_group:
+    types: [checks_requested]
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review, edited]
     paths:
@@ -11,6 +13,8 @@ on:
       - docs/parity-evidence/trusted-keys/**
       - scripts/parity-signed-evidence.py
       - scripts/parity-protected-change-policy.sh
+      - scripts/parity-repository-rules.py
+      - scripts/parity-repository-rules.sh
       - .github/workflows/ci.yml
       - .github/workflows/parity-promotion.yml
       - .github/CODEOWNERS
@@ -23,12 +27,13 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: parity-promotion-${{ github.event.pull_request.number }}
+  group: parity-promotion-${{ github.event.pull_request.number || github.event.merge_group.head_sha || github.run_id }}
   cancel-in-progress: true
 
 jobs:
   verify:
     name: Protected signed-evidence gate
+    if: github.event_name != 'merge_group'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
 
@@ -157,3 +162,141 @@ jobs:
             --candidate-status candidate/docs/cuda-oxide-parity-status.tsv
 
           # No candidate executable or workflow content is invoked above.
+
+  verify-merge-group:
+    name: Protected signed-evidence gate
+    if: github.event_name == 'merge_group'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Require current default-tip merge group
+        id: merge-identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_REF: ${{ github.event.merge_group.base_ref }}
+          BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -Eeuo pipefail
+          [[ "${BASE_REF}" == "refs/heads/${DEFAULT_BRANCH}" ]]
+          [[ "${BASE_SHA}" =~ ^[0-9a-f]{40}$ && ! "${BASE_SHA}" =~ ^0{40}$ ]]
+          [[ "${HEAD_SHA}" =~ ^[0-9a-f]{40}$ && ! "${HEAD_SHA}" =~ ^0{40}$ ]]
+          git check-ref-format "refs/heads/${DEFAULT_BRANCH}" >/dev/null
+
+          default_tip_root="${RUNNER_TEMP}/parity-merge-default-tip.git"
+          default_remote_ref="refs/remotes/origin/${DEFAULT_BRANCH}"
+          git init --bare "${default_tip_root}"
+          git -C "${default_tip_root}" remote add origin \
+            "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="$(
+            printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n'
+          )"
+          git -C "${default_tip_root}" \
+            -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+            fetch --no-tags --depth=1 --force origin \
+            "+refs/heads/${DEFAULT_BRANCH}:${default_remote_ref}"
+          unset auth_header
+          current_default_sha="$(
+            git -C "${default_tip_root}" rev-parse --verify \
+              "${default_remote_ref}^{commit}"
+          )"
+          if [[ "${current_default_sha}" != "${BASE_SHA}" ]]; then
+            printf 'merge-group base SHA is not current default tip\n' >&2
+            exit 2
+          fi
+          printf 'base=%s\n' "${BASE_SHA}" >>"${GITHUB_OUTPUT}"
+          printf 'head=%s\n' "${HEAD_SHA}" >>"${GITHUB_OUTPUT}"
+          printf 'default=%s\n' "${current_default_sha}" >>"${GITHUB_OUTPUT}"
+
+      - name: Check out protected merge base
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ steps.merge-identity.outputs.base }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: protected
+
+      - name: Check out merge-group candidate as data only
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ steps.merge-identity.outputs.head }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: candidate
+
+      - name: Revalidate protected state on synthetic merge
+        env:
+          BASE_SHA: ${{ steps.merge-identity.outputs.base }}
+          HEAD_SHA: ${{ steps.merge-identity.outputs.head }}
+          CURRENT_DEFAULT_SHA: ${{ steps.merge-identity.outputs.default }}
+        run: |
+          set -Eeuo pipefail
+          python3 protected/scripts/parity-signed-evidence.py check-protected-base \
+            --protected-repo protected \
+            --candidate-repo candidate \
+            --protected-base "${BASE_SHA}" \
+            --default-tip "${CURRENT_DEFAULT_SHA}" \
+            --candidate-head "${HEAD_SHA}"
+
+          status_path=docs/cuda-oxide-parity-status.tsv
+          trust_paths=(
+            docs/parity-row-evidence-policy-v2.tsv
+            docs/parity-evidence/trust-policy-v2.tsv
+            docs/parity-evidence/trusted-keys
+            scripts/parity-signed-evidence.py
+            scripts/parity-protected-change-policy.sh
+            scripts/parity-repository-rules.py
+            scripts/parity-repository-rules.sh
+            .github/workflows/ci.yml
+            .github/workflows/parity-promotion.yml
+            .github/CODEOWNERS
+            .github/parity-trust-reviewers.txt
+          )
+          status_changed=false
+          trust_changed=false
+          if ! git -C candidate diff --quiet "${BASE_SHA}" "${HEAD_SHA}" -- \
+            "${status_path}"; then
+            status_changed=true
+          fi
+          if ! git -C candidate diff --quiet "${BASE_SHA}" "${HEAD_SHA}" -- \
+            "${trust_paths[@]}"; then
+            trust_changed=true
+          fi
+          if [[ "${status_changed}" == true && "${trust_changed}" == true ]]; then
+            printf 'merge group mixes trust and parity status changes\n' >&2
+            exit 2
+          fi
+          if [[ "${trust_changed}" == true ]]; then
+            python3 protected/scripts/parity-signed-evidence.py check-trust-update \
+              --protected-root protected \
+              --protected-policy protected/docs/parity-evidence/trust-policy-v2.tsv \
+              --candidate-root candidate \
+              --candidate-policy candidate/docs/parity-evidence/trust-policy-v2.tsv \
+              --protected-row-policy protected/docs/parity-row-evidence-policy-v2.tsv \
+              --candidate-row-policy candidate/docs/parity-row-evidence-policy-v2.tsv
+            printf 'merge-group trust monotonicity passed; protected PR review is externally required\n'
+            exit 0
+          fi
+          if [[ "${status_changed}" == false ]]; then
+            printf 'merge group has no protected parity change\n'
+            exit 0
+          fi
+
+          test -f protected/docs/parity-evidence/trust-policy-v2.tsv
+          test -d protected/docs/parity-evidence/trusted-keys
+          test -f candidate/docs/parity-evidence/archive/manifests/promotion-v2.tsv
+          python3 protected/scripts/parity-signed-evidence.py gate \
+            --repo candidate \
+            --archive-root candidate/docs/parity-evidence/archive \
+            --trusted-root protected \
+            --trust-policy protected/docs/parity-evidence/trust-policy-v2.tsv \
+            --manifest manifests/promotion-v2.tsv \
+            --trusted-policy protected/docs/parity-row-evidence-policy-v2.tsv \
+            --candidate-policy candidate/docs/parity-row-evidence-policy-v2.tsv \
+            --baseline-status protected/docs/cuda-oxide-parity-status.tsv \
+            --candidate-status candidate/docs/cuda-oxide-parity-status.tsv
+
+          # This check only becomes merge-enforcing when a protected ruleset
+          # requires the workflow and merge queue without bypass actors.

@@ -340,6 +340,65 @@ expect_failure stale_candidate_ancestry \
   --candidate-head "${BASELINE}"
 git -C "${CANDIDATE_HEAD_REPO}" checkout -q --detach "${SOURCE}"
 
+# Two independently checked PRs cannot both retain the same historical main.
+# After PR one advances main, the checker rejects PR two until its head includes
+# the new tip. Repository rules are required to run this check at merge time.
+TWO_PR_REPO="${TEST_ROOT}/two-pr-repo"
+TWO_PR_PROTECTED="${TEST_ROOT}/two-pr-protected"
+TWO_PR_CANDIDATE="${TEST_ROOT}/two-pr-candidate"
+git init -q "${TWO_PR_REPO}"
+git -C "${TWO_PR_REPO}" config user.email evidence@example.invalid
+git -C "${TWO_PR_REPO}" config user.name 'Evidence Fixture'
+printf 'base\n' >"${TWO_PR_REPO}/state.txt"
+git -C "${TWO_PR_REPO}" add state.txt
+git -C "${TWO_PR_REPO}" commit -qm base
+git -C "${TWO_PR_REPO}" branch -M main
+TWO_PR_BASE="$(git -C "${TWO_PR_REPO}" rev-parse HEAD)"
+git -C "${TWO_PR_REPO}" switch -q -c pr-one
+printf 'one\n' >"${TWO_PR_REPO}/one.txt"
+git -C "${TWO_PR_REPO}" add one.txt
+git -C "${TWO_PR_REPO}" commit -qm 'PR one'
+TWO_PR_ONE="$(git -C "${TWO_PR_REPO}" rev-parse HEAD)"
+git -C "${TWO_PR_REPO}" switch -q main
+git -C "${TWO_PR_REPO}" switch -q -c pr-two
+printf 'two\n' >"${TWO_PR_REPO}/two.txt"
+git -C "${TWO_PR_REPO}" add two.txt
+git -C "${TWO_PR_REPO}" commit -qm 'PR two'
+TWO_PR_TWO="$(git -C "${TWO_PR_REPO}" rev-parse HEAD)"
+git clone -q "${TWO_PR_REPO}" "${TWO_PR_PROTECTED}"
+git clone -q "${TWO_PR_REPO}" "${TWO_PR_CANDIDATE}"
+git -C "${TWO_PR_PROTECTED}" checkout -q --detach "${TWO_PR_BASE}"
+git -C "${TWO_PR_CANDIDATE}" checkout -q --detach "${TWO_PR_TWO}"
+"${TOOL}" check-protected-base \
+  --protected-repo "${TWO_PR_PROTECTED}" \
+  --candidate-repo "${TWO_PR_CANDIDATE}" \
+  --protected-base "${TWO_PR_BASE}" \
+  --default-tip "${TWO_PR_BASE}" \
+  --candidate-head "${TWO_PR_TWO}"
+git -C "${TWO_PR_REPO}" switch -q main
+git -C "${TWO_PR_REPO}" merge -q --ff-only "${TWO_PR_ONE}"
+expect_failure two_pr_stale_main \
+  'pull request base SHA is not current default tip' \
+  "${TOOL}" check-protected-base \
+  --protected-repo "${TWO_PR_PROTECTED}" \
+  --candidate-repo "${TWO_PR_CANDIDATE}" \
+  --protected-base "${TWO_PR_BASE}" \
+  --default-tip "${TWO_PR_ONE}" \
+  --candidate-head "${TWO_PR_TWO}"
+git -C "${TWO_PR_REPO}" switch -q pr-two
+git -C "${TWO_PR_REPO}" merge -q --no-edit main
+TWO_PR_UPDATED="$(git -C "${TWO_PR_REPO}" rev-parse HEAD)"
+git -C "${TWO_PR_PROTECTED}" fetch -q "${TWO_PR_REPO}" main
+git -C "${TWO_PR_CANDIDATE}" fetch -q "${TWO_PR_REPO}" pr-two
+git -C "${TWO_PR_PROTECTED}" checkout -q --detach "${TWO_PR_ONE}"
+git -C "${TWO_PR_CANDIDATE}" checkout -q --detach "${TWO_PR_UPDATED}"
+"${TOOL}" check-protected-base \
+  --protected-repo "${TWO_PR_PROTECTED}" \
+  --candidate-repo "${TWO_PR_CANDIDATE}" \
+  --protected-base "${TWO_PR_ONE}" \
+  --default-tip "${TWO_PR_ONE}" \
+  --candidate-head "${TWO_PR_UPDATED}"
+
 mkdir -p "${ARCHIVE}/toolchains" "${TRUSTED}/keys"
 {
   printf 'toolchain_closure_schema_version\t1\n'

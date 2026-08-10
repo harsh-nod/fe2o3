@@ -3,6 +3,8 @@
 /docs/parity-evidence/trusted-keys/ @powderluv
 /scripts/parity-signed-evidence.py @powderluv
 /scripts/parity-protected-change-policy.sh @powderluv
+/scripts/parity-repository-rules.py @powderluv
+/scripts/parity-repository-rules.sh @powderluv
 /.github/workflows/ci.yml @powderluv
 /.github/workflows/parity-promotion.yml @powderluv
 /.github/CODEOWNERS @powderluv

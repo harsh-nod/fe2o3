@@ -88,6 +88,13 @@ require_text() {
 }
 
 require_text "${PROTECTED_WORKFLOW}" 'pull_request_target:'
+require_text "${PROTECTED_WORKFLOW}" 'merge_group:'
+require_text "${PROTECTED_WORKFLOW}" 'types: [checks_requested]'
+require_text "${PROTECTED_WORKFLOW}" 'github.event.merge_group.base_sha'
+require_text "${PROTECTED_WORKFLOW}" 'github.event.merge_group.head_sha'
+require_text "${PROTECTED_WORKFLOW}" 'merge-group base SHA is not current default tip'
+require_text "${PROTECTED_WORKFLOW}" 'merge-group trust monotonicity passed; protected PR review is externally required'
+require_text "${PROTECTED_WORKFLOW}" 'This check only becomes merge-enforcing when a protected ruleset'
 require_text "${PROTECTED_WORKFLOW}" 'path: protected'
 require_text "${PROTECTED_WORKFLOW}" 'path: candidate'
 require_text "${PROTECTED_WORKFLOW}" 'persist-credentials: false'
@@ -122,6 +129,8 @@ for path in \
   docs/parity-evidence/trusted-keys/** \
   scripts/parity-signed-evidence.py \
   scripts/parity-protected-change-policy.sh \
+  scripts/parity-repository-rules.py \
+  scripts/parity-repository-rules.sh \
   .github/workflows/ci.yml \
   .github/workflows/parity-promotion.yml \
   .github/CODEOWNERS \
@@ -134,6 +143,8 @@ for ownership in \
   /docs/parity-evidence/trusted-keys/ \
   /scripts/parity-signed-evidence.py \
   /scripts/parity-protected-change-policy.sh \
+  /scripts/parity-repository-rules.py \
+  /scripts/parity-repository-rules.sh \
   /.github/workflows/parity-promotion.yml \
   /.github/CODEOWNERS; do
   require_text "${CODEOWNERS}" "${ownership} @powderluv"
@@ -141,6 +152,9 @@ done
 
 
 require_text "${GENERIC_WORKFLOW}" 'git archive "${BASE_SHA}"'
+require_text "${GENERIC_WORKFLOW}" 'merge_group:'
+require_text "${GENERIC_WORKFLOW}" 'MERGE_BASE_SHA: ${{ github.event.merge_group.base_sha }}'
+require_text "${GENERIC_WORKFLOW}" 'MERGE_HEAD_SHA: ${{ github.event.merge_group.head_sha }}'
 require_text "${GENERIC_WORKFLOW}" 'python3 "${trusted}/scripts/parity-signed-evidence.py" gate'
 require_text "${GENERIC_WORKFLOW}" '--trust-policy "${trusted}/docs/parity-evidence/trust-policy-v2.tsv"'
 require_text "${GENERIC_WORKFLOW}" '--trusted-policy "${trusted}/docs/parity-row-evidence-policy-v2.tsv"'
