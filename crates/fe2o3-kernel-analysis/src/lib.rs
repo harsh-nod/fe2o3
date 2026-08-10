@@ -5,6 +5,7 @@
 
 mod control_flow;
 mod machine_effect;
+mod physical_machine_effect;
 mod ssa;
 mod uniformity;
 
@@ -17,6 +18,7 @@ pub use control_flow::{
     MAX_SSA_PLACEMENT_OUTPUT_ITEMS, analyze_control_flow,
 };
 pub use machine_effect::*;
+pub use physical_machine_effect::*;
 pub use ssa::{
     SsaPlacement, SsaPlacementDiagnostic, SsaPlacementErrors, SsaVariable, SsaVariablePlacement,
     place_pruned_ssa_parameters,
