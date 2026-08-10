@@ -2,8 +2,10 @@ use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode};
+use std::process::{Command, ExitCode, Stdio};
 
 fn main() -> ExitCode {
     let args = env::args_os().collect::<Vec<_>>();
@@ -100,6 +102,10 @@ fn metadata() -> ExitCode {
 }
 
 fn build_or_run(args: &[OsString]) -> ExitCode {
+    if env::var_os("FE2O3_TEST_VERTICAL_CONTROL_DIR").is_some() {
+        return vertical_worker_v2_invocation();
+    }
+
     #[cfg(target_os = "linux")]
     for descriptor in [197, 198] {
         if fs::symlink_metadata(format!("/proc/self/fd/{descriptor}")).is_ok() {
@@ -216,6 +222,201 @@ fn build_or_run(args: &[OsString]) -> ExitCode {
         return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS
+}
+
+fn vertical_worker_v2_invocation() -> ExitCode {
+    let control = required_path("FE2O3_TEST_VERTICAL_CONTROL_DIR");
+    if let Err(error) = fs::write(control.join("ready"), []) {
+        eprintln!("fake Cargo could not publish vertical readiness: {error}");
+        return ExitCode::FAILURE;
+    }
+    loop {
+        if control.join("stop").exists() {
+            return ExitCode::SUCCESS;
+        }
+        let request = control.join("request");
+        let Ok(id) = fs::read_to_string(&request) else {
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            continue;
+        };
+        let id = match id.parse::<u64>() {
+            Ok(id) => id,
+            Err(error) => {
+                eprintln!("fake Cargo received malformed vertical request: {error}");
+                return ExitCode::FAILURE;
+            }
+        };
+        if let Err(error) = fs::remove_file(&request) {
+            eprintln!("fake Cargo could not consume vertical request: {error}");
+            return ExitCode::FAILURE;
+        }
+        if let Err(error) = execute_vertical_request(&control, id) {
+            let message = format!("fake Cargo vertical request failed: {error}\n");
+            if let Err(report_error) = write_vertical_result(
+                &control,
+                id,
+                (1_i32 << 8).to_le_bytes(),
+                &[],
+                message.as_bytes(),
+            ) {
+                eprintln!("{message}fake Cargo could not report failure: {report_error}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+}
+
+fn execute_vertical_request(control: &Path, id: u64) -> Result<(), String> {
+    let restore = control.join("restore");
+    if restore.exists() {
+        let backup =
+            fs::read_to_string(&restore).map_err(|error| format!("read restore path: {error}"))?;
+        let artifact = required_path("FE2O3_TEST_TARGET_DIRECTORY").join("fe2o3");
+        restore_test_directory(Path::new(&backup), &artifact)?;
+    }
+
+    let wrapper = required_path("RUSTC_WORKSPACE_WRAPPER");
+    let rustc = required_path("FE2O3_TEST_VERTICAL_RUSTC");
+    let source = required_path("FE2O3_FIXTURE_SOURCE");
+    let mode = fs::read_to_string(control.join("mode"))
+        .map_err(|error| format!("read rustc mode: {error}"))?;
+    let mut command = Command::new(wrapper);
+    command
+        .arg(rustc)
+        .args(["--crate-name", "workflow_fixture"])
+        .arg(source)
+        .arg("-Cmetadata=worker-v2-test")
+        .env("FE2O3_FIXTURE_RUSTC_MODE", mode)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if control.join("cov6").exists() {
+        command.env("FE2O3_TEST_WORKER_V2_COV6", "1");
+    } else {
+        command.env_remove("FE2O3_TEST_WORKER_V2_COV6");
+    }
+    let fault = control.join("fault");
+    if fault.exists() {
+        command.env(
+            "FE2O3_TEST_WORKER_V2_FAULT_POINT_V1",
+            fs::read_to_string(fault).map_err(|error| format!("read fault point: {error}"))?,
+        );
+    } else {
+        command.env_remove("FE2O3_TEST_WORKER_V2_FAULT_POINT_V1");
+    }
+    let handoff = control.join("handoff");
+    if handoff.exists() {
+        command.env(
+            "FE2O3_FIXTURE_HANDOFF_MARKER",
+            fs::read_to_string(handoff)
+                .map_err(|error| format!("read handoff marker path: {error}"))?,
+        );
+    } else {
+        command.env_remove("FE2O3_FIXTURE_HANDOFF_MARKER");
+    }
+    let strip = control.join("strip");
+    if strip.exists() {
+        let names = fs::read_to_string(strip)
+            .map_err(|error| format!("read stripped environment: {error}"))?;
+        for name in names.split(',').filter(|name| !name.is_empty()) {
+            command.env_remove(name);
+        }
+    }
+
+    let child = command
+        .spawn()
+        .map_err(|error| format!("launch vertical rustc wrapper: {error}"))?;
+    fs::write(
+        vertical_result_path(control, id, "pid"),
+        child.id().to_string(),
+    )
+    .map_err(|error| format!("record vertical wrapper PID: {error}"))?;
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("wait for vertical rustc wrapper: {error}"))?;
+    #[cfg(unix)]
+    let status = output.status.into_raw().to_le_bytes();
+    #[cfg(not(unix))]
+    let status = output.status.code().unwrap_or(-1).to_le_bytes();
+    write_vertical_result(control, id, status, &output.stdout, &output.stderr)
+}
+
+fn write_vertical_result(
+    control: &Path,
+    id: u64,
+    status: [u8; 4],
+    stdout: &[u8],
+    stderr: &[u8],
+) -> Result<(), String> {
+    for (suffix, bytes) in [
+        ("status", status.as_slice()),
+        ("stdout", stdout),
+        ("stderr", stderr),
+    ] {
+        fs::write(vertical_result_path(control, id, suffix), bytes)
+            .map_err(|error| format!("record vertical wrapper {suffix}: {error}"))?;
+    }
+    fs::write(vertical_result_path(control, id, "done"), [])
+        .map_err(|error| format!("publish vertical wrapper result: {error}"))
+}
+
+fn vertical_result_path(control: &Path, id: u64, suffix: &str) -> PathBuf {
+    control.join(format!("result-{id}.{suffix}"))
+}
+
+fn restore_test_directory(source: &Path, destination: &Path) -> Result<(), String> {
+    for entry in fs::read_dir(destination)
+        .map_err(|error| format!("read destination {}: {error}", destination.display()))?
+    {
+        let path = entry
+            .map_err(|error| format!("read destination entry: {error}"))?
+            .path();
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|error| format!("inspect destination {}: {error}", path.display()))?;
+        if metadata.is_dir() {
+            fs::remove_dir_all(&path)
+                .map_err(|error| format!("remove destination {}: {error}", path.display()))?;
+        } else {
+            fs::remove_file(&path)
+                .map_err(|error| format!("remove destination {}: {error}", path.display()))?;
+        }
+    }
+    copy_test_directory(source, destination)
+}
+
+fn copy_test_directory(source: &Path, destination: &Path) -> Result<(), String> {
+    for entry in fs::read_dir(source)
+        .map_err(|error| format!("read source {}: {error}", source.display()))?
+    {
+        let entry = entry.map_err(|error| format!("read source entry: {error}"))?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("inspect source {}: {error}", source_path.display()))?;
+        if file_type.is_dir() {
+            fs::create_dir(&destination_path).map_err(|error| {
+                format!(
+                    "create destination directory {}: {error}",
+                    destination_path.display()
+                )
+            })?;
+            copy_test_directory(&source_path, &destination_path)?;
+        } else if file_type.is_file() {
+            fs::copy(&source_path, &destination_path).map_err(|error| {
+                format!(
+                    "copy {} to {}: {error}",
+                    source_path.display(),
+                    destination_path.display()
+                )
+            })?;
+        } else {
+            return Err(format!(
+                "source {} is not a regular file or directory",
+                source_path.display()
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn run_application_fixture(args: &[OsString]) -> Result<(), String> {
