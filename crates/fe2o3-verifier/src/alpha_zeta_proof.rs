@@ -23,6 +23,7 @@ pub const MAX_GFX942_ALPHA_ZETA_SOURCE_BYTES_V1: u64 = 1024 * 1024;
 pub const MAX_GFX942_ALPHA_ZETA_REVIEW_RECORDS_V1: usize = 4096;
 
 pub const ALPHA_ZETA_SHARED_BODY_PATH_V1: &str = "examples/verus_vecadd/src/two_kernel_bodies.rs";
+pub const ALPHA_ZETA_RUST_MODEL_PATH_V1: &str = "examples/verus_vecadd/src/lib.rs";
 pub const ALPHA_ZETA_PERMISSION_MODEL_PATH_V1: &str = "examples/verus_vecadd/verus/vecadd.rs";
 pub const ALPHA_ZETA_PROOF_HARNESS_PATH_V1: &str = "examples/verus_vecadd/verus/two_kernel.rs";
 
@@ -34,12 +35,13 @@ pub const GFX942_ALPHA_ZETA_REQUIRED_PROPERTIES_V1: [ProofProperty; 5] = [
     ProofProperty::FunctionalCorrectness,
 ];
 
-const REQUIRED_SOURCE_PATHS: [&str; 3] = [
+const REQUIRED_SOURCE_PATHS: [&str; 4] = [
     ALPHA_ZETA_SHARED_BODY_PATH_V1,
+    ALPHA_ZETA_RUST_MODEL_PATH_V1,
     ALPHA_ZETA_PERMISSION_MODEL_PATH_V1,
     ALPHA_ZETA_PROOF_HARNESS_PATH_V1,
 ];
-const DEPENDENCY_NAMES: [&str; 3] = ["permission-model", "proof-harness", "shared-body"];
+const GFX942_TARGET_PROFILE: &str = "gfx942";
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum Gfx942AlphaZetaKernelV1 {
@@ -319,6 +321,7 @@ impl Gfx942AlphaZetaProofInputV1 {
         bytes.extend_from_slice(&GFX942_ALPHA_ZETA_PROOF_VERSION_V1.to_le_bytes());
         bytes.extend_from_slice(&0_u16.to_le_bytes());
         bytes.push(self.kernel.tag());
+        put_text(&mut bytes, GFX942_TARGET_PROFILE);
         bytes.extend_from_slice(&(self.sources.files.len() as u16).to_le_bytes());
         for file in &self.sources.files {
             put_text(&mut bytes, file.path.as_str());
@@ -556,6 +559,9 @@ pub fn record_reviewed_alpha_zeta_execution_v1(
         });
     }
     let target = proof.target();
+    if target.features().len() != 1 || target.features()[0].as_str() != GFX942_TARGET_PROFILE {
+        return Err(AlphaZetaProofErrorV1::TargetProfileSubstitution);
+    }
     if input.target != target.proof_target() {
         return Err(AlphaZetaProofErrorV1::IdentityMismatch {
             field: "proof target",
@@ -575,21 +581,20 @@ pub fn record_reviewed_alpha_zeta_execution_v1(
         .sources
         .files
         .iter()
-        .map(|file| file.digest)
+        .map(|file| {
+            (
+                dependency_name(file.path.as_str())
+                    .expect("sealed source sets contain only required paths"),
+                file.digest,
+            )
+        })
         .collect::<BTreeSet<_>>();
     let actual_dependencies = target
         .dependencies()
         .iter()
-        .map(|dependency| dependency.identity())
+        .map(|dependency| (dependency.name().as_str(), dependency.identity()))
         .collect::<BTreeSet<_>>();
-    let actual_names = target
-        .dependencies()
-        .iter()
-        .map(|dependency| dependency.name().as_str())
-        .collect::<BTreeSet<_>>();
-    if actual_dependencies != expected_dependencies
-        || actual_names != DEPENDENCY_NAMES.into_iter().collect()
-    {
+    if actual_dependencies != expected_dependencies {
         return Err(AlphaZetaProofErrorV1::DependencySubstitution);
     }
 
@@ -670,6 +675,16 @@ impl ReviewedAlphaZetaProofSetV1 {
                 return Err(AlphaZetaProofErrorV1::MixedProofSet);
             }
         }
+        if alpha.input_identity == zeta.input_identity
+            || alpha.proof_nonce == zeta.proof_nonce
+            || alpha.freshness.challenge() == zeta.freshness.challenge()
+            || alpha.freshness.transcript() == zeta.freshness.transcript()
+            || alpha.freshness.result() == zeta.freshness.result()
+            || alpha.freshness.persistent_binding_identity()
+                == zeta.freshness.persistent_binding_identity()
+        {
+            return Err(AlphaZetaProofErrorV1::MixedProofSet);
+        }
         let (previous, next) =
             if alpha.freshness.ledger_generation() < zeta.freshness.ledger_generation() {
                 (alpha.freshness, zeta.freshness)
@@ -723,6 +738,16 @@ fn source_identity(domain: &[u8; 8], files: &[AlphaZetaSourceFileIdentityV1]) ->
         put_digest(&mut bytes, file.digest);
     }
     sha256(&bytes)
+}
+
+fn dependency_name(path: &str) -> Option<&'static str> {
+    match path {
+        ALPHA_ZETA_SHARED_BODY_PATH_V1 => Some("shared-body"),
+        ALPHA_ZETA_RUST_MODEL_PATH_V1 => Some("rust-model"),
+        ALPHA_ZETA_PERMISSION_MODEL_PATH_V1 => Some("permission-model"),
+        ALPHA_ZETA_PROOF_HARNESS_PATH_V1 => Some("proof-harness"),
+        _ => None,
+    }
 }
 
 fn reviewed_identity(record: &ReviewedAlphaZetaExecutionV1, proof_capsule: Digest) -> Digest {
@@ -820,6 +845,7 @@ pub enum AlphaZetaProofErrorV1 {
     UnexpectedModel,
     NonceCollision,
     DependencySubstitution,
+    TargetProfileSubstitution,
     ToolSubstitution,
     ModelSubstitution,
     AxiomSubstitution,
@@ -851,6 +877,9 @@ impl fmt::Display for AlphaZetaProofErrorV1 {
             Self::UnexpectedModel => formatter.write_str("unexpected alpha/zeta proof model"),
             Self::NonceCollision => formatter.write_str("proof-set and proof nonces collide"),
             Self::DependencySubstitution => formatter.write_str("proof dependency substitution"),
+            Self::TargetProfileSubstitution => {
+                formatter.write_str("proof target profile substitution")
+            }
             Self::ToolSubstitution => formatter.write_str("proof tool substitution"),
             Self::ModelSubstitution => formatter.write_str("proof model substitution"),
             Self::AxiomSubstitution => formatter.write_str("proof axiom substitution"),

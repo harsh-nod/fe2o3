@@ -25,14 +25,15 @@ mod static_view_proof;
 
 pub use alpha_zeta_proof::{
     ALPHA_ZETA_PERMISSION_MODEL_PATH_V1, ALPHA_ZETA_PROOF_HARNESS_PATH_V1,
-    ALPHA_ZETA_SHARED_BODY_PATH_V1, AlphaZetaExecutionReviewV1, AlphaZetaProofErrorV1,
-    AlphaZetaProofSourcesV1, AlphaZetaReviewLedgerV1, AlphaZetaSourceFileIdentityV1,
-    GFX942_ALPHA_ZETA_MODEL_VERSION_V1, GFX942_ALPHA_ZETA_PROOF_DOMAIN_V1,
-    GFX942_ALPHA_ZETA_PROOF_VERSION_V1, GFX942_ALPHA_ZETA_REQUIRED_PROPERTIES_V1,
-    GFX942_ALPHA_ZETA_REVIEW_DOMAIN_V1, GFX942_ALPHA_ZETA_SET_DOMAIN_V1, Gfx942AlphaZetaKernelV1,
-    Gfx942AlphaZetaProofInputV1, MAX_GFX942_ALPHA_ZETA_REVIEW_RECORDS_V1,
-    MAX_GFX942_ALPHA_ZETA_SOURCE_BYTES_V1, ReviewedAlphaZetaExecutionV1,
-    ReviewedAlphaZetaProofSetV1, record_reviewed_alpha_zeta_execution_v1,
+    ALPHA_ZETA_RUST_MODEL_PATH_V1, ALPHA_ZETA_SHARED_BODY_PATH_V1, AlphaZetaExecutionReviewV1,
+    AlphaZetaProofErrorV1, AlphaZetaProofSourcesV1, AlphaZetaReviewLedgerV1,
+    AlphaZetaSourceFileIdentityV1, GFX942_ALPHA_ZETA_MODEL_VERSION_V1,
+    GFX942_ALPHA_ZETA_PROOF_DOMAIN_V1, GFX942_ALPHA_ZETA_PROOF_VERSION_V1,
+    GFX942_ALPHA_ZETA_REQUIRED_PROPERTIES_V1, GFX942_ALPHA_ZETA_REVIEW_DOMAIN_V1,
+    GFX942_ALPHA_ZETA_SET_DOMAIN_V1, Gfx942AlphaZetaKernelV1, Gfx942AlphaZetaProofInputV1,
+    MAX_GFX942_ALPHA_ZETA_REVIEW_RECORDS_V1, MAX_GFX942_ALPHA_ZETA_SOURCE_BYTES_V1,
+    ReviewedAlphaZetaExecutionV1, ReviewedAlphaZetaProofSetV1,
+    record_reviewed_alpha_zeta_execution_v1,
 };
 pub use artifact_record::{
     ArtifactProofEvidenceV1, ArtifactRecordConversionError, ReviewedInvocationIdentityV1,

@@ -1,18 +1,20 @@
 use fe2o3_verifier::{
     ALPHA_ZETA_PERMISSION_MODEL_PATH_V1, ALPHA_ZETA_PROOF_HARNESS_PATH_V1,
-    ALPHA_ZETA_SHARED_BODY_PATH_V1, AlphaZetaExecutionReviewV1, AlphaZetaProofErrorV1,
-    AlphaZetaProofSourcesV1, AlphaZetaReviewLedgerV1, AlphaZetaSourceFileIdentityV1, AxiomPolicy,
-    CorrelationId, Digest, GFX942_ALPHA_ZETA_MODEL_VERSION_V1,
-    GFX942_ALPHA_ZETA_REQUIRED_PROPERTIES_V1, Gfx942AlphaZetaKernelV1, Gfx942AlphaZetaProofInputV1,
-    MeasuredToolIdentity, ProofCapsuleDependencyV1, ProofCapsuleExecutionV1,
-    ProofCapsuleFreshnessIdentityV1, ProofCapsulePayloadIdentityV1, ProofCapsulePolicyV1,
-    ProofCapsuleResultV1, ProofCapsuleTargetV1, ProofCapsuleV1, ProofOutcome, ProofProperty,
-    ProofTargetIdentity, ReviewedAlphaZetaProofSetV1, Text, VerificationModelIdentity,
+    ALPHA_ZETA_RUST_MODEL_PATH_V1, ALPHA_ZETA_SHARED_BODY_PATH_V1, AlphaZetaExecutionReviewV1,
+    AlphaZetaProofErrorV1, AlphaZetaProofSourcesV1, AlphaZetaReviewLedgerV1,
+    AlphaZetaSourceFileIdentityV1, AxiomPolicy, CorrelationId, Digest,
+    GFX942_ALPHA_ZETA_MODEL_VERSION_V1, GFX942_ALPHA_ZETA_REQUIRED_PROPERTIES_V1,
+    Gfx942AlphaZetaKernelV1, Gfx942AlphaZetaProofInputV1, MeasuredToolIdentity,
+    ProofCapsuleDependencyV1, ProofCapsuleExecutionV1, ProofCapsuleFreshnessIdentityV1,
+    ProofCapsulePayloadIdentityV1, ProofCapsulePolicyV1, ProofCapsuleResultV1,
+    ProofCapsuleTargetV1, ProofCapsuleV1, ProofOutcome, ProofProperty, ProofTargetIdentity,
+    ReviewedAlphaZetaProofSetV1, Text, VerificationModelIdentity,
     record_reviewed_alpha_zeta_execution_v1,
 };
 
 const SHARED_BODY: &[u8] =
     include_bytes!("../../../examples/verus_vecadd/src/two_kernel_bodies.rs");
+const RUST_MODEL: &[u8] = include_bytes!("../../../examples/verus_vecadd/src/lib.rs");
 const PERMISSION_MODEL: &[u8] = include_bytes!("../../../examples/verus_vecadd/verus/vecadd.rs");
 const PROOF_HARNESS: &[u8] = include_bytes!("../../../examples/verus_vecadd/verus/two_kernel.rs");
 
@@ -24,6 +26,7 @@ fn sources_with(shared_body: &[u8]) -> AlphaZetaProofSourcesV1 {
     AlphaZetaProofSourcesV1::new(vec![
         AlphaZetaSourceFileIdentityV1::measure(ALPHA_ZETA_SHARED_BODY_PATH_V1, shared_body)
             .unwrap(),
+        AlphaZetaSourceFileIdentityV1::measure(ALPHA_ZETA_RUST_MODEL_PATH_V1, RUST_MODEL).unwrap(),
         AlphaZetaSourceFileIdentityV1::measure(
             ALPHA_ZETA_PERMISSION_MODEL_PATH_V1,
             PERMISSION_MODEL,
@@ -127,7 +130,8 @@ fn proof_with(
     input: &Gfx942AlphaZetaProofInputV1,
     freshness: ProofCapsuleFreshnessIdentityV1,
     properties: Vec<ProofProperty>,
-    dependency_mutation: bool,
+    dependency_mutation: DependencyMutation,
+    target_profile: &str,
 ) -> ProofCapsuleV1 {
     let mut dependencies = input
         .sources()
@@ -136,6 +140,7 @@ fn proof_with(
         .map(|file| {
             let name = match file.path().as_str() {
                 ALPHA_ZETA_SHARED_BODY_PATH_V1 => "shared-body",
+                ALPHA_ZETA_RUST_MODEL_PATH_V1 => "rust-model",
                 ALPHA_ZETA_PERMISSION_MODEL_PATH_V1 => "permission-model",
                 ALPHA_ZETA_PROOF_HARNESS_PATH_V1 => "proof-harness",
                 _ => unreachable!(),
@@ -143,14 +148,25 @@ fn proof_with(
             ProofCapsuleDependencyV1::new(name, file.digest()).unwrap()
         })
         .collect::<Vec<_>>();
-    if dependency_mutation {
-        let name = dependencies[0].name().as_str().to_owned();
-        dependencies[0] = ProofCapsuleDependencyV1::new(name, digest(99)).unwrap();
+    match dependency_mutation {
+        DependencyMutation::None => {}
+        DependencyMutation::Changed => {
+            let name = dependencies[0].name().as_str().to_owned();
+            dependencies[0] = ProofCapsuleDependencyV1::new(name, digest(99)).unwrap();
+        }
+        DependencyMutation::Swapped => {
+            let first_name = dependencies[0].name().as_str().to_owned();
+            let second_name = dependencies[1].name().as_str().to_owned();
+            let first_identity = dependencies[0].identity();
+            let second_identity = dependencies[1].identity();
+            dependencies[0] = ProofCapsuleDependencyV1::new(first_name, second_identity).unwrap();
+            dependencies[1] = ProofCapsuleDependencyV1::new(second_name, first_identity).unwrap();
+        }
     }
     let target = ProofCapsuleTargetV1::new(
         input.target(),
         dependencies,
-        vec![Text::identifier("feature", "gfx942").unwrap()],
+        vec![Text::identifier("feature", target_profile).unwrap()],
         input.abi_identity(),
         input.launch_identity(),
         digest(50),
@@ -195,8 +211,16 @@ fn proof(
         input,
         freshness,
         GFX942_ALPHA_ZETA_REQUIRED_PROPERTIES_V1.to_vec(),
-        false,
+        DependencyMutation::None,
+        "gfx942",
     )
+}
+
+#[derive(Clone, Copy)]
+enum DependencyMutation {
+    None,
+    Changed,
+    Swapped,
 }
 
 fn review(
@@ -232,6 +256,10 @@ fn exact_source_capsule_binds_real_files_and_all_identity_axes() {
         .sources()
         .validate_file(ALPHA_ZETA_SHARED_BODY_PATH_V1, SHARED_BODY)
         .unwrap();
+    input
+        .sources()
+        .validate_file(ALPHA_ZETA_RUST_MODEL_PATH_V1, RUST_MODEL)
+        .unwrap();
     let mut mutated = SHARED_BODY.to_vec();
     mutated[0] ^= 1;
     assert_eq!(
@@ -248,7 +276,7 @@ fn source_set_and_capsule_construction_reject_substitution() {
         AlphaZetaSourceFileIdentityV1::measure(ALPHA_ZETA_SHARED_BODY_PATH_V1, SHARED_BODY)
             .unwrap();
     assert_eq!(
-        AlphaZetaProofSourcesV1::new(vec![shared.clone(), shared.clone(), shared]),
+        AlphaZetaProofSourcesV1::new(vec![shared.clone(), shared.clone(), shared.clone(), shared]),
         Err(AlphaZetaProofErrorV1::DuplicateSourcePath)
     );
     assert_eq!(
@@ -314,7 +342,8 @@ fn reviewed_result_rejects_dependency_property_and_freshness_substitution() {
         &input,
         fresh,
         GFX942_ALPHA_ZETA_REQUIRED_PROPERTIES_V1.to_vec(),
-        true,
+        DependencyMutation::Changed,
+        "gfx942",
     );
     assert_eq!(
         record_reviewed_alpha_zeta_execution_v1(
@@ -326,8 +355,42 @@ fn reviewed_result_rejects_dependency_property_and_freshness_substitution() {
         Err(AlphaZetaProofErrorV1::DependencySubstitution)
     );
 
+    let swapped_dependencies = proof_with(
+        &input,
+        fresh,
+        GFX942_ALPHA_ZETA_REQUIRED_PROPERTIES_V1.to_vec(),
+        DependencyMutation::Swapped,
+        "gfx942",
+    );
+    assert_eq!(
+        record_reviewed_alpha_zeta_execution_v1(
+            &input,
+            &swapped_dependencies,
+            review(&input, &swapped_dependencies, fresh, 72),
+            &mut AlphaZetaReviewLedgerV1::new(),
+        ),
+        Err(AlphaZetaProofErrorV1::DependencySubstitution)
+    );
+
+    let wrong_target_profile = proof_with(
+        &input,
+        fresh,
+        GFX942_ALPHA_ZETA_REQUIRED_PROPERTIES_V1.to_vec(),
+        DependencyMutation::None,
+        "gfx941",
+    );
+    assert_eq!(
+        record_reviewed_alpha_zeta_execution_v1(
+            &input,
+            &wrong_target_profile,
+            review(&input, &wrong_target_profile, fresh, 73),
+            &mut AlphaZetaReviewLedgerV1::new(),
+        ),
+        Err(AlphaZetaProofErrorV1::TargetProfileSubstitution)
+    );
+
     let subset = vec![ProofProperty::Bounds, ProofProperty::RaceFreedom];
-    let wrong_properties = proof_with(&input, fresh, subset, false);
+    let wrong_properties = proof_with(&input, fresh, subset, DependencyMutation::None, "gfx942");
     assert_eq!(
         record_reviewed_alpha_zeta_execution_v1(
             &input,
@@ -490,6 +553,35 @@ fn two_kernel_set_rejects_mixed_sets_and_forked_history() {
     assert_eq!(
         ReviewedAlphaZetaProofSetV1::new(alpha_record, zeta_record),
         Err(AlphaZetaProofErrorV1::MixedFreshnessHistory)
+    );
+}
+
+#[test]
+fn two_kernel_set_rejects_reused_execution_identity_across_ledgers() {
+    let alpha = input(Gfx942AlphaZetaKernelV1::Alpha, 60, 61);
+    let zeta = input(Gfx942AlphaZetaKernelV1::Zeta, 60, 61);
+    let alpha_fresh = freshness(1, digest(80), digest(81), 10);
+    let zeta_fresh = freshness(2, digest(81), digest(82), 20);
+    let alpha_proof = proof(&alpha, alpha_fresh);
+    let zeta_proof = proof(&zeta, zeta_fresh);
+    let alpha_record = record_reviewed_alpha_zeta_execution_v1(
+        &alpha,
+        &alpha_proof,
+        review(&alpha, &alpha_proof, alpha_fresh, 71),
+        &mut AlphaZetaReviewLedgerV1::new(),
+    )
+    .unwrap();
+    let zeta_record = record_reviewed_alpha_zeta_execution_v1(
+        &zeta,
+        &zeta_proof,
+        review(&zeta, &zeta_proof, zeta_fresh, 72),
+        &mut AlphaZetaReviewLedgerV1::new(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        ReviewedAlphaZetaProofSetV1::new(alpha_record, zeta_record),
+        Err(AlphaZetaProofErrorV1::MixedProofSet)
     );
 }
 

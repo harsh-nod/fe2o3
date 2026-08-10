@@ -136,9 +136,10 @@ authenticator.
 ## Exact gfx942 alpha/zeta source-proof records
 
 `Gfx942AlphaZetaProofInputV1` is a sealed identity for the bounded alpha/zeta
-source-model profile. It accepts exactly the shared kernel body, permission
-model, and two-kernel Verus harness paths. Each file's path, length, and SHA-256
-measurement contribute to separate source-tree and dependency-tree identities.
+source-model profile. It accepts exactly the ordinary Rust model, shared kernel
+body, permission model, and two-kernel Verus harness paths. Each file's path,
+length, and SHA-256 measurement contribute to separate source-tree and
+dependency-tree identities.
 The complete capsule additionally binds the exact proof target, ABI, effects,
 launch contract, Verus and Z3 names, versions, executable and configuration
 measurements, model identity, fixed five-property vocabulary, proof-set nonce,
@@ -146,18 +147,20 @@ and per-kernel proof nonce. The target's source, dependency, and effects axes
 must agree before construction.
 
 `record_reviewed_alpha_zeta_execution_v1` joins that input to one canonical
-`ProofCapsuleV1`. It requires the exact dependency measurements and names, no
-requested or admitted axioms, the complete property set, a reported successful
-result, and an exact persistent-freshness projection. An independent review
-expectation supplies the expected input, proof capsule, freshness, reviewer
-policy, and review nonce. A bounded process-local ledger rejects reuse of the
-input, proof nonce, execution challenge, transcript, result, persistent binding,
-or review nonce.
+`ProofCapsuleV1`. It requires the exact dependency role-to-measurement mapping,
+the single `gfx942` target feature, no requested or admitted axioms, the complete
+property set, a reported successful result, and an exact persistent-freshness
+projection. An independent review expectation supplies the expected input,
+proof capsule, freshness, reviewer policy, and review nonce. A bounded
+process-local ledger rejects reuse of the input, proof nonce, execution
+challenge, transcript, result, persistent binding, or review nonce.
 
 `ReviewedAlphaZetaProofSetV1` consumes one non-clone alpha record and one
 non-clone zeta record. It rejects mixed proof-set nonces, source/dependency
 trees, tools, models, review policies, ledger namespaces, and noncontiguous or
-forked freshness histories. These are review mechanics, not authentication:
+forked freshness histories. It also requires distinct per-kernel input, proof,
+challenge, transcript, result, and persistent-binding identities. These are
+review mechanics, not authentication:
 the reviewer policy and the proof capsule remain caller-selected inputs, and
 the public inert freshness constructor is not proof that the persistent bridge
 ran. All three types report false for proof or launch authority.
