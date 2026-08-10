@@ -3,6 +3,7 @@ use std::error::Error;
 use std::fmt;
 use std::fmt::Write as _;
 
+use fe2o3_kernel_descriptor::Gfx942LaunchBoundsV1;
 use fe2o3_kernel_ir::{
     AMDGPU_GFX942_INLINE_ASSEMBLY_CAPABILITY_NAME,
     AMDGPU_GFX942_INLINE_ASSEMBLY_CAPABILITY_NAMESPACE, AddressSpace as KernelAddressSpace,
@@ -97,6 +98,7 @@ pub enum LoweringDiagnosticCode {
     UnsupportedLaunchDomain,
     MissingWorkgroupSize,
     UnsupportedWorkgroupSize,
+    InvalidLaunchPolicy,
     UnsupportedCapability,
     KernelEntryDeclaration,
     UnsupportedResults,
@@ -457,17 +459,55 @@ fn lower_kernel_to_llvm_ir_for_target(
 /// The text binds the AMDGPU target triple only. Target data layout, processor identity, and code
 /// object version are deliberately absent and remain blockers for artifact construction.
 pub fn lower_compiler_module_to_llvm_ir(module: &Module) -> Result<String, LoweringErrors> {
-    lower_compiler_module_to_llvm_ir_for_target(module, LoweringTarget::Baseline)
+    lower_compiler_module_to_llvm_ir_for_target(module, LoweringTarget::Baseline, None)
 }
 
 /// Lowers a complete compiler module for the strict gfx942 floating-point profile.
 pub fn lower_compiler_module_to_gfx942_llvm_ir(module: &Module) -> Result<String, LoweringErrors> {
-    lower_compiler_module_to_llvm_ir_for_target(module, LoweringTarget::Gfx942StrictFloatV1)
+    lower_compiler_module_to_llvm_ir_for_target(module, LoweringTarget::Gfx942StrictFloatV1, None)
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Gfx942KernelLaunchPolicyV1 {
+    kernel_id: KernelId,
+    launch_bounds: Gfx942LaunchBoundsV1,
+}
+
+impl Gfx942KernelLaunchPolicyV1 {
+    pub fn new(kernel_id: KernelId, launch_bounds: Gfx942LaunchBoundsV1) -> Self {
+        Self {
+            kernel_id,
+            launch_bounds,
+        }
+    }
+
+    pub const fn kernel_id(&self) -> &KernelId {
+        &self.kernel_id
+    }
+
+    pub const fn launch_bounds(&self) -> Gfx942LaunchBoundsV1 {
+        self.launch_bounds
+    }
+}
+
+/// Emits exact AMD flat-workgroup and waves-per-EU attributes for every kernel.
+///
+/// This does not translate CUDA's minimum-blocks-per-SM semantics.
+pub fn lower_compiler_module_to_gfx942_llvm_ir_with_launch_policies(
+    module: &Module,
+    launch_policies: &[Gfx942KernelLaunchPolicyV1],
+) -> Result<String, LoweringErrors> {
+    lower_compiler_module_to_llvm_ir_for_target(
+        module,
+        LoweringTarget::Gfx942StrictFloatV1,
+        Some(launch_policies),
+    )
 }
 
 fn lower_compiler_module_to_llvm_ir_for_target(
     module: &Module,
     target: LoweringTarget,
+    launch_policies: Option<&[Gfx942KernelLaunchPolicyV1]>,
 ) -> Result<String, LoweringErrors> {
     if module.kernels.is_empty() {
         return Err(LoweringErrors::one(
@@ -488,6 +528,8 @@ fn lower_compiler_module_to_llvm_ir_for_target(
     kernels.sort_by(|lhs, rhs| lhs.id.cmp(&rhs.id));
     let mut functions = module.functions.iter().collect::<Vec<_>>();
     functions.sort_by(|lhs, rhs| lhs.id.cmp(&rhs.id));
+
+    let launch_policy_map = validate_launch_policies(module, &kernels, launch_policies)?;
 
     let mut entries = BTreeMap::<FunctionId, &Kernel>::new();
     let mut emitted_symbols = BTreeMap::<String, String>::new();
@@ -618,6 +660,20 @@ fn lower_compiler_module_to_llvm_ir_for_target(
     let mut kernel_lowerers = Vec::with_capacity(kernels.len());
     for kernel in &kernels {
         let workgroup_size = validate_launch(module, kernel)?;
+        let launch_bounds = launch_policy_map
+            .as_ref()
+            .map(|policies| policies[&kernel.id]);
+        if launch_bounds.is_some_and(|bounds| !bounds.admits_flat_workgroup_size(workgroup_size.x))
+        {
+            return Err(LoweringErrors::one(
+                LoweringLocation::kernel(module, kernel),
+                LoweringDiagnosticCode::InvalidLaunchPolicy,
+                format!(
+                    "exact workgroup size {} is outside the admitted flat workgroup range",
+                    workgroup_size.x
+                ),
+            ));
+        }
         let entry = module
             .function(&kernel.entry)
             .expect("verify_module established the kernel entry");
@@ -630,6 +686,7 @@ fn lower_compiler_module_to_llvm_ir_for_target(
             wave_width,
             &call_symbols,
             target,
+            launch_bounds,
         );
         preflight_function(&mut lowerer)?;
         kernel_lowerers.push(lowerer);
@@ -656,6 +713,55 @@ fn lower_compiler_module_to_llvm_ir_for_target(
         &declarations,
         target,
     )
+}
+
+fn validate_launch_policies(
+    module: &Module,
+    kernels: &[&Kernel],
+    policies: Option<&[Gfx942KernelLaunchPolicyV1]>,
+) -> Result<Option<BTreeMap<KernelId, Gfx942LaunchBoundsV1>>, LoweringErrors> {
+    let Some(policies) = policies else {
+        return Ok(None);
+    };
+    if policies.len() != kernels.len() {
+        return Err(LoweringErrors::one(
+            LoweringLocation::module(module),
+            LoweringDiagnosticCode::InvalidLaunchPolicy,
+            format!(
+                "strict launch-policy lowering requires exactly one policy per kernel: expected {}, found {}",
+                kernels.len(),
+                policies.len()
+            ),
+        ));
+    }
+    let kernel_ids = kernels
+        .iter()
+        .map(|kernel| &kernel.id)
+        .collect::<BTreeSet<_>>();
+    let mut result = BTreeMap::new();
+    for policy in policies {
+        if !kernel_ids.contains(policy.kernel_id()) {
+            return Err(LoweringErrors::one(
+                LoweringLocation::module(module),
+                LoweringDiagnosticCode::InvalidLaunchPolicy,
+                format!("launch policy names unknown kernel {}", policy.kernel_id()),
+            ));
+        }
+        if result
+            .insert(policy.kernel_id.clone(), policy.launch_bounds)
+            .is_some()
+        {
+            return Err(LoweringErrors::one(
+                LoweringLocation::module(module),
+                LoweringDiagnosticCode::InvalidLaunchPolicy,
+                format!(
+                    "launch policy for kernel {} is duplicated",
+                    policy.kernel_id()
+                ),
+            ));
+        }
+    }
+    Ok(Some(result))
 }
 
 fn reserve_emitted_symbol(
@@ -1845,12 +1951,28 @@ fn emit_compiler_module(
         let workgroup_x = lowerer
             .workgroup_x
             .expect("compiler-module kernel requires a workgroup size");
-        writeln!(
-            output,
-            "attributes #{index} = {{ nounwind \"amdgpu-flat-work-group-size\"=\"{workgroup_x},{workgroup_x}\"{wave_attribute}{} }}",
-            target.llvm_function_attributes()
-        )
-        .unwrap();
+        match lowerer.launch_bounds {
+            Some(bounds) => {
+                writeln!(
+                    output,
+                    "attributes #{index} = {{ nounwind \"amdgpu-flat-work-group-size\"=\"{},{}\" \"amdgpu-waves-per-eu\"=\"{},{}\"{wave_attribute}{} }}",
+                    bounds.minimum_flat_workgroup_size(),
+                    bounds.maximum_flat_workgroup_size(),
+                    bounds.minimum_waves_per_execution_unit(),
+                    bounds.maximum_waves_per_execution_unit(),
+                    target.llvm_function_attributes()
+                )
+                .unwrap();
+            }
+            None => {
+                writeln!(
+                    output,
+                    "attributes #{index} = {{ nounwind \"amdgpu-flat-work-group-size\"=\"{workgroup_x},{workgroup_x}\"{wave_attribute}{} }}",
+                    target.llvm_function_attributes()
+                )
+                .unwrap();
+            }
+        }
     }
     if let Some(index) = readnone_attribute {
         writeln!(
@@ -2236,6 +2358,7 @@ struct FunctionLowerer<'a> {
     workgroup_x: Option<u32>,
     wave_width: Option<WaveWidth>,
     target: LoweringTarget,
+    launch_bounds: Option<Gfx942LaunchBoundsV1>,
     call_symbols: Option<&'a BTreeMap<FunctionId, String>>,
     bindings: BTreeMap<ValueId, ValueBinding>,
 }
@@ -2257,11 +2380,13 @@ impl<'a> FunctionLowerer<'a> {
             workgroup_x: Some(workgroup_x),
             wave_width,
             target,
+            launch_bounds: None,
             call_symbols: None,
             bindings: BTreeMap::new(),
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn compiler_module_kernel(
         module: &'a Module,
         kernel: &'a Kernel,
@@ -2270,6 +2395,7 @@ impl<'a> FunctionLowerer<'a> {
         wave_width: Option<WaveWidth>,
         call_symbols: &'a BTreeMap<FunctionId, String>,
         target: LoweringTarget,
+        launch_bounds: Option<Gfx942LaunchBoundsV1>,
     ) -> Self {
         Self {
             module,
@@ -2279,6 +2405,7 @@ impl<'a> FunctionLowerer<'a> {
             workgroup_x: Some(workgroup_x),
             wave_width,
             target,
+            launch_bounds,
             call_symbols: Some(call_symbols),
             bindings: BTreeMap::new(),
         }
@@ -2299,6 +2426,7 @@ impl<'a> FunctionLowerer<'a> {
             workgroup_x: None,
             wave_width,
             target,
+            launch_bounds: None,
             call_symbols: Some(call_symbols),
             bindings: BTreeMap::new(),
         }
