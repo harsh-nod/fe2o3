@@ -376,6 +376,13 @@ fn genuine_cov6_alpha_zeta_transaction_round_trips_canonically() {
         sealed.measurements().target_profile().as_bytes(),
         canonical_target.as_bytes()
     );
+
+    let other_target = seal_transaction(0x80, TargetIdentityV1::from_bytes([0xd2; 32]), &fixture);
+    assert_eq!(
+        other_target.measurements().target_profile(),
+        sealed.measurements().target_profile()
+    );
+    assert_ne!(other_target.identity(), sealed.identity());
 }
 
 #[test]
@@ -633,6 +640,13 @@ fn reordered_duplicate_stale_and_mixed_stages_fail_closed() {
     let (_, second_source) = CompilerTransactionRecorderV1::begin([0x92; 32], source(1)).unwrap();
     let invocation = invocation_for("gfx942:xnack-").unwrap();
     let early_target = Gfx942CompilerTargetV1::for_invocation(&invocation).unwrap();
+    assert!(matches!(
+        first.seal(first_source),
+        Err(CompilerTransactionRecorderErrorV1::UnexpectedStage {
+            expected: CompilerTransactionStageV1::FinalizedArtifact,
+            actual: CompilerTransactionStageV1::Source
+        })
+    ));
     assert!(matches!(
         first.record_target(first_source, early_target),
         Err(CompilerTransactionRecorderErrorV1::UnexpectedStage {
