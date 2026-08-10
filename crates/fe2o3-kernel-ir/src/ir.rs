@@ -473,8 +473,14 @@ impl Operation {
             OperationKind::Wave(wave) => wave.required_capabilities(),
             OperationKind::InlineAssembly(assembly) => assembly.required_capabilities(),
             OperationKind::Call { callee, arguments } => {
-                FloatOperation::from_intrinsic_call(callee, arguments)
-                    .map_or_else(BTreeSet::new, |float| float.required_capabilities())
+                if let Some(diagnostic) =
+                    AmdGpuDiagnosticOperation::from_intrinsic_call(callee, arguments)
+                {
+                    diagnostic.required_capabilities()
+                } else {
+                    FloatOperation::from_intrinsic_call(callee, arguments)
+                        .map_or_else(BTreeSet::new, |float| float.required_capabilities())
+                }
             }
             _ => BTreeSet::new(),
         }
@@ -774,6 +780,170 @@ impl InlineAssembly {
     }
 }
 
+/// Target capability required by the bounded gfx942 diagnostic profile.
+pub const AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAMESPACE: &str = "fe2o3.amdgpu";
+pub const AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAME: &str = "diagnostics.gfx942.v1";
+
+/// One closed diagnostic or instrumentation operation for gfx942.
+///
+/// These operations are lane-local and non-convergent. They neither imply a
+/// workgroup barrier nor authorize arbitrary target assembly.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AmdGpuDiagnosticOperation {
+    Clock32,
+    Trap,
+    DebugTrap,
+    ProfilingMarker {
+        marker: ValueId,
+    },
+    Print {
+        format_id: ValueId,
+        arguments: Vec<ValueId>,
+    },
+    AssertFail {
+        site_id: ValueId,
+        line: ValueId,
+    },
+}
+
+impl AmdGpuDiagnosticOperation {
+    pub fn operands(&self) -> Vec<ValueId> {
+        match self {
+            Self::Clock32 | Self::Trap | Self::DebugTrap => Vec::new(),
+            Self::ProfilingMarker { marker } => vec![*marker],
+            Self::Print {
+                format_id,
+                arguments,
+            } => {
+                let mut operands = Vec::with_capacity(arguments.len() + 1);
+                operands.push(*format_id);
+                operands.extend(arguments);
+                operands
+            }
+            Self::AssertFail { site_id, line } => vec![*site_id, *line],
+        }
+    }
+
+    pub fn required_capabilities(&self) -> BTreeSet<TargetCapability> {
+        BTreeSet::from([TargetCapability::Extension {
+            namespace: AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAMESPACE.to_owned(),
+            name: AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAME.to_owned(),
+        }])
+    }
+
+    /// Closed semantic identity carried through the existing call node.
+    pub fn intrinsic_function_id(&self) -> FunctionId {
+        FunctionId::new(match self {
+            Self::Clock32 => "__fe2o3_ir_amdgpu_diagnostics_gfx942_v1_clock32",
+            Self::Trap => "__fe2o3_ir_amdgpu_diagnostics_gfx942_v1_trap",
+            Self::DebugTrap => "__fe2o3_ir_amdgpu_diagnostics_gfx942_v1_debugtrap",
+            Self::ProfilingMarker { .. } => {
+                "__fe2o3_ir_amdgpu_diagnostics_gfx942_v1_profiling_marker"
+            }
+            Self::Print { arguments, .. } => match arguments.len() {
+                0 => "__fe2o3_ir_amdgpu_diagnostics_gfx942_v1_print_0",
+                1 => "__fe2o3_ir_amdgpu_diagnostics_gfx942_v1_print_1",
+                2 => "__fe2o3_ir_amdgpu_diagnostics_gfx942_v1_print_2",
+                _ => "__fe2o3_ir_amdgpu_diagnostics_gfx942_v1_invalid_contract",
+            },
+            Self::AssertFail { .. } => "__fe2o3_ir_amdgpu_diagnostics_gfx942_v1_assert_fail",
+        })
+    }
+
+    pub fn result_type(&self) -> Option<Type> {
+        match self {
+            Self::Clock32 => Some(Type::Scalar(ScalarType::U32)),
+            Self::Trap
+            | Self::DebugTrap
+            | Self::ProfilingMarker { .. }
+            | Self::Print { .. }
+            | Self::AssertFail { .. } => None,
+        }
+    }
+
+    pub fn parameter_types(&self) -> Vec<Type> {
+        vec![Type::Scalar(ScalarType::U32); self.operands().len()]
+    }
+
+    pub fn declaration(&self) -> Function {
+        let mut function = Function::external_import(
+            self.intrinsic_function_id(),
+            Signature::new(
+                self.parameter_types(),
+                self.result_type().into_iter().collect(),
+            ),
+        );
+        function.required_capabilities = self.required_capabilities();
+        function
+    }
+
+    pub fn operation(&self, result: Option<ValueId>) -> Operation {
+        let results = match (self.result_type(), result) {
+            (Some(ty), Some(id)) => vec![ValueDef::new(id, ty)],
+            (None, None) => Vec::new(),
+            _ => panic!("diagnostic operation result must match its canonical signature"),
+        };
+        Operation::new(
+            results,
+            OperationKind::Call {
+                callee: self.intrinsic_function_id(),
+                arguments: self.operands(),
+            },
+        )
+    }
+
+    pub fn from_intrinsic_call(callee: &FunctionId, arguments: &[ValueId]) -> Option<Self> {
+        let mut diagnostic = Self::from_intrinsic_id(callee)?;
+        if diagnostic.operands().len() != arguments.len() {
+            return None;
+        }
+        match &mut diagnostic {
+            Self::Clock32 | Self::Trap | Self::DebugTrap => {}
+            Self::ProfilingMarker { marker } => *marker = arguments[0],
+            Self::Print {
+                format_id,
+                arguments: values,
+            } => {
+                *format_id = arguments[0];
+                values.clone_from_slice(&arguments[1..]);
+            }
+            Self::AssertFail { site_id, line } => {
+                *site_id = arguments[0];
+                *line = arguments[1];
+            }
+        }
+        Some(diagnostic)
+    }
+
+    pub fn from_intrinsic_id(callee: &FunctionId) -> Option<Self> {
+        let values = [ValueId(0), ValueId(1), ValueId(2)];
+        Some(match callee.as_str() {
+            "__fe2o3_ir_amdgpu_diagnostics_gfx942_v1_clock32" => Self::Clock32,
+            "__fe2o3_ir_amdgpu_diagnostics_gfx942_v1_trap" => Self::Trap,
+            "__fe2o3_ir_amdgpu_diagnostics_gfx942_v1_debugtrap" => Self::DebugTrap,
+            "__fe2o3_ir_amdgpu_diagnostics_gfx942_v1_profiling_marker" => {
+                Self::ProfilingMarker { marker: values[0] }
+            }
+            "__fe2o3_ir_amdgpu_diagnostics_gfx942_v1_print_0" => Self::Print {
+                format_id: values[0],
+                arguments: Vec::new(),
+            },
+            "__fe2o3_ir_amdgpu_diagnostics_gfx942_v1_print_1" => Self::Print {
+                format_id: values[0],
+                arguments: vec![values[1]],
+            },
+            "__fe2o3_ir_amdgpu_diagnostics_gfx942_v1_print_2" => Self::Print {
+                format_id: values[0],
+                arguments: vec![values[1], values[2]],
+            },
+            "__fe2o3_ir_amdgpu_diagnostics_gfx942_v1_assert_fail" => Self::AssertFail {
+                site_id: values[0],
+                line: values[1],
+            },
+            _ => return None,
+        })
+    }
+}
 /// One exact conversion between the integer-backed narrow-float values and `f32`.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum FloatConversionKind {

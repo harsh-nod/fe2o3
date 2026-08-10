@@ -3,14 +3,14 @@ use std::error::Error;
 use std::fmt;
 
 use crate::{
-    AccessMode, AddressSpace, AssemblyConstraint, AssemblyEffect, AssemblyOperandKind,
-    AssemblyOption, Atomic, AtomicKind, Barrier, BasicBlock, BinaryOp, BlockId, ComparePredicate,
-    Fence, FloatOperation, Function, FunctionId, FunctionRole, InlineAssembly, Kernel, KernelId,
-    LaunchExtent, MatrixOperation, MatrixOperationKind, MatrixVerificationIssueKind,
-    MemoryOrdering, Module, ModuleId, Operation, OperationKind, ScalarType,
-    SemanticOperationIssueKind, SemanticOperationVerificationContext, SynchronizationScope,
-    TargetCapability, Terminator, Type, UnaryOp, ValueId, WaveOperation, WaveOperationKind,
-    WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent, pointer_for,
+    AccessMode, AddressSpace, AmdGpuDiagnosticOperation, AssemblyConstraint, AssemblyEffect,
+    AssemblyOperandKind, AssemblyOption, Atomic, AtomicKind, Barrier, BasicBlock, BinaryOp,
+    BlockId, ComparePredicate, Fence, FloatOperation, Function, FunctionId, FunctionRole,
+    InlineAssembly, Kernel, KernelId, LaunchExtent, MatrixOperation, MatrixOperationKind,
+    MatrixVerificationIssueKind, MemoryOrdering, Module, ModuleId, Operation, OperationKind,
+    ScalarType, SemanticOperationIssueKind, SemanticOperationVerificationContext,
+    SynchronizationScope, TargetCapability, Terminator, Type, UnaryOp, ValueId, WaveOperation,
+    WaveOperationKind, WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent, pointer_for,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -53,6 +53,7 @@ pub enum DiagnosticCode {
     InvalidWorkgroupMemory,
     InvalidWaveOperation,
     InvalidFloatOperation,
+    InvalidAmdGpuDiagnosticOperation,
     InvalidInlineAssembly,
     InvalidTerminator,
 }
@@ -305,6 +306,32 @@ impl<'module> ModuleVerifier<'module> {
     fn verify_function(&mut self, function: &Function) {
         let location = DiagnosticLocation::function(self.module, function);
         self.verify_capabilities(&function.required_capabilities, location.clone());
+
+        if function
+            .id
+            .as_str()
+            .starts_with("__fe2o3_ir_amdgpu_diagnostics_gfx942_v1_")
+        {
+            let valid = AmdGpuDiagnosticOperation::from_intrinsic_id(&function.id).is_some_and(
+                |diagnostic| {
+                    let expected = diagnostic.declaration();
+                    function.role == expected.role
+                        && function.body.is_none()
+                        && function.signature == expected.signature
+                        && function.required_capabilities == expected.required_capabilities
+                },
+            );
+            if !valid {
+                self.emit(
+                    location.clone(),
+                    DiagnosticCode::InvalidAmdGpuDiagnosticOperation,
+                    format!(
+                        "reserved AMDGPU diagnostic intrinsic {} must have its exact canonical declaration",
+                        function.id
+                    ),
+                );
+            }
+        }
 
         if function.id.as_str().starts_with("__fe2o3_ir_float_v1_") {
             let valid = FloatOperation::from_intrinsic_id(&function.id).is_some_and(|float| {
@@ -874,6 +901,19 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
                 self.expect_results(operation, &[true_ty], location);
             }
             OperationKind::Call { callee, arguments } => {
+                if callee
+                    .as_str()
+                    .starts_with("__fe2o3_ir_amdgpu_diagnostics_gfx942_v1_")
+                    && AmdGpuDiagnosticOperation::from_intrinsic_call(callee, arguments).is_none()
+                {
+                    self.emit(
+                        location.clone(),
+                        DiagnosticCode::InvalidAmdGpuDiagnosticOperation,
+                        format!(
+                            "reserved AMDGPU diagnostic intrinsic call {callee} must use its exact canonical contract"
+                        ),
+                    );
+                }
                 if callee.as_str().starts_with("__fe2o3_ir_float_v1_")
                     && FloatOperation::from_intrinsic_call(callee, arguments).is_none()
                 {
