@@ -29,13 +29,13 @@ mod platform {
     use std::fs::{self, File};
     use std::io::{self, IoSlice, IoSliceMut, Read, Write};
     use std::mem::MaybeUninit;
-    use std::os::fd::{AsFd, AsRawFd, OwnedFd};
+    use std::net::Shutdown;
+    use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
     use std::os::linux::net::SocketAddrExt;
     use std::os::unix::fs::MetadataExt;
     use std::os::unix::net::{SocketAddr, UnixListener, UnixStream};
     use std::path::PathBuf;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex, MutexGuard};
     use std::thread::{self, JoinHandle};
     use std::time::Duration;
 
@@ -312,8 +312,182 @@ mod platform {
 
     pub(crate) struct CapabilityBroker {
         route: String,
-        stop: Arc<AtomicBool>,
+        shutdown: Arc<BrokerShutdown>,
         worker: Option<JoinHandle<()>>,
+    }
+
+    #[derive(Default)]
+    struct BrokerShutdownState {
+        stopping: bool,
+        active: Option<UnixStream>,
+    }
+
+    #[derive(Default)]
+    struct BrokerShutdown {
+        // This mutex is the shutdown/SCM_RIGHTS linearization point and owns the wakeup socket.
+        state: Mutex<BrokerShutdownState>,
+        #[cfg(test)]
+        dispatch_pause: Mutex<Option<Arc<TestDispatchPause>>>,
+    }
+
+    impl BrokerShutdown {
+        fn state(&self) -> MutexGuard<'_, BrokerShutdownState> {
+            self.state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        }
+
+        fn is_stopping(&self) -> bool {
+            self.state().stopping
+        }
+
+        fn register(&self, stream: &UnixStream) -> io::Result<bool> {
+            let retained = stream.try_clone()?;
+            let mut state = self.state();
+            if state.stopping {
+                let _ = stream.shutdown(Shutdown::Both);
+                return Ok(false);
+            }
+            if state.active.is_some() {
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    "capability broker already has an active connection",
+                ));
+            }
+            state.active = Some(retained);
+            Ok(true)
+        }
+
+        fn finish(&self) {
+            self.state().active.take();
+        }
+
+        fn begin(&self) {
+            let mut state = self.state();
+            state.stopping = true;
+            if let Some(active) = state.active.take() {
+                let _ = active.shutdown(Shutdown::Both);
+            }
+        }
+
+        fn send_response(
+            &self,
+            stream: &UnixStream,
+            response: &[u8],
+            descriptors: &[BorrowedFd<'_>],
+        ) -> io::Result<()> {
+            #[cfg(test)]
+            if let Some(pause) = self
+                .dispatch_pause
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
+            {
+                pause.server_wait();
+            }
+
+            let state = self.state();
+            if state.stopping {
+                return Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "capability broker is shutting down",
+                ));
+            }
+            let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(3))];
+            let mut ancillary = SendAncillaryBuffer::new(&mut space);
+            if !ancillary.push(SendAncillaryMessage::ScmRights(descriptors)) {
+                return Err(io::Error::other("capability control buffer is too small"));
+            }
+            let sent = sendmsg(
+                stream,
+                &[IoSlice::new(response)],
+                &mut ancillary,
+                SendFlags::NOSIGNAL | SendFlags::DONTWAIT,
+            )
+            .map_err(io::Error::from)?;
+            if sent != response.len() {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "capability broker response was truncated",
+                ));
+            }
+            drop(state);
+            Ok(())
+        }
+
+        #[cfg(test)]
+        fn install_dispatch_pause(&self) -> TestDispatchControl {
+            let (pause, control) = TestDispatchPause::new();
+            *self
+                .dispatch_pause
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(pause);
+            control
+        }
+
+        #[cfg(test)]
+        fn active_socket_identity(&self) -> Option<(u64, u64)> {
+            let state = self.state();
+            let active = state.active.as_ref()?;
+            fs::metadata(format!("/proc/self/fd/{}", active.as_raw_fd()))
+                .ok()
+                .map(|metadata| (metadata.dev(), metadata.ino()))
+        }
+    }
+
+    #[cfg(test)]
+    struct TestDispatchPause {
+        reached: std::sync::mpsc::SyncSender<()>,
+        release: Mutex<std::sync::mpsc::Receiver<()>>,
+    }
+
+    #[cfg(test)]
+    struct TestDispatchControl {
+        reached: std::sync::mpsc::Receiver<()>,
+        release: std::sync::mpsc::SyncSender<()>,
+    }
+
+    #[cfg(test)]
+    impl TestDispatchPause {
+        fn new() -> (Arc<Self>, TestDispatchControl) {
+            let (reached_tx, reached_rx) = std::sync::mpsc::sync_channel(0);
+            let (release_tx, release_rx) = std::sync::mpsc::sync_channel(0);
+            (
+                Arc::new(Self {
+                    reached: reached_tx,
+                    release: Mutex::new(release_rx),
+                }),
+                TestDispatchControl {
+                    reached: reached_rx,
+                    release: release_tx,
+                },
+            )
+        }
+
+        fn server_wait(&self) {
+            if self.reached.send(()).is_ok() {
+                let _ = self
+                    .release
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .recv();
+            }
+        }
+    }
+
+    #[cfg(test)]
+    impl TestDispatchControl {
+        fn wait_until_reached(&self) {
+            self.reached
+                .recv_timeout(Duration::from_secs(5))
+                .expect("capability broker did not reach descriptor dispatch");
+        }
+
+        fn release(&self) {
+            self.release
+                .send(())
+                .expect("capability broker did not wait for dispatch release");
+        }
     }
 
     impl CapabilityBroker {
@@ -357,8 +531,8 @@ mod platform {
                 peer: executable,
             }
             .encode();
-            let stop = Arc::new(AtomicBool::new(false));
-            let worker_stop = Arc::clone(&stop);
+            let shutdown = Arc::new(BrokerShutdown::default());
+            let worker_shutdown = Arc::clone(&shutdown);
             let worker = thread::Builder::new()
                 .name("fe2o3-capability-broker".to_string())
                 .spawn(move || {
@@ -371,14 +545,14 @@ mod platform {
                         backend,
                         artifact,
                         pinned_cargo_image,
-                        stop: worker_stop,
+                        shutdown: worker_shutdown,
                     }
                     .serve();
                 })
                 .map_err(|error| format!("failed to start capability broker: {error}"))?;
             Ok(Self {
                 route,
-                stop,
+                shutdown,
                 worker: Some(worker),
             })
         }
@@ -390,7 +564,7 @@ mod platform {
 
     impl Drop for CapabilityBroker {
         fn drop(&mut self) {
-            self.stop.store(true, Ordering::Release);
+            self.shutdown.begin();
             if let Some(worker) = self.worker.take() {
                 let _ = worker.join();
             }
@@ -533,16 +707,21 @@ mod platform {
         backend: File,
         artifact: File,
         pinned_cargo_image: File,
-        stop: Arc<AtomicBool>,
+        shutdown: Arc<BrokerShutdown>,
     }
 
     impl BrokerServer {
         fn serve(self) {
-            while !self.stop.load(Ordering::Acquire) {
+            while !self.shutdown.is_stopping() {
                 match self.listener.accept() {
-                    Ok((mut stream, _)) => {
-                        let _ = self.serve_one(&mut stream);
-                    }
+                    Ok((mut stream, _)) => match self.shutdown.register(&stream) {
+                        Ok(true) => {
+                            let _ = self.serve_one(&mut stream);
+                            self.shutdown.finish();
+                        }
+                        Ok(false) => break,
+                        Err(_) => continue,
+                    },
                     Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(2));
                     }
@@ -592,26 +771,8 @@ mod platform {
             if let Some(pinned_cargo_image) = &pinned_cargo_image {
                 descriptors.push(pinned_cargo_image.as_fd());
             }
-            let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(3))];
-            let mut ancillary = SendAncillaryBuffer::new(&mut space);
-            if !ancillary.push(SendAncillaryMessage::ScmRights(&descriptors)) {
-                return Err(io::Error::other("capability control buffer is too small"));
-            }
             let response = response_bytes(&self.secret, challenge, request_auth);
-            let sent = sendmsg(
-                &*stream,
-                &[IoSlice::new(&response)],
-                &mut ancillary,
-                SendFlags::NOSIGNAL,
-            )
-            .map_err(io::Error::from)?;
-            if sent != response.len() {
-                return Err(io::Error::new(
-                    io::ErrorKind::WriteZero,
-                    "capability broker response was truncated",
-                ));
-            }
-            Ok(())
+            self.shutdown.send_response(stream, &response, &descriptors)
         }
     }
 
@@ -818,6 +979,7 @@ mod platform {
         use std::path::PathBuf;
         use std::sync::Arc;
         use std::sync::atomic::{AtomicU64, Ordering};
+        use std::time::{Duration, Instant};
 
         use fe2o3_artifact_transaction::{BuildInvocation, ProducerIdentity, begin_build_attempt};
 
@@ -872,6 +1034,45 @@ mod platform {
 
         fn s09_binding() -> CapabilityBindingV2 {
             CapabilityBindingV2::new(CapabilityProfileV1::S09, Some([0x91; 32])).unwrap()
+        }
+
+        fn wait_for_active_socket(broker: &CapabilityBroker) -> (u64, u64) {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                if let Some(identity) = broker.shutdown.active_socket_identity() {
+                    return identity;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "capability broker did not accept the test connection"
+                );
+                thread::sleep(Duration::from_millis(1));
+            }
+        }
+
+        fn object_is_open(identity: (u64, u64)) -> bool {
+            fs::read_dir("/proc/self/fd")
+                .unwrap()
+                .filter_map(Result::ok)
+                .filter_map(|entry| fs::metadata(entry.path()).ok())
+                .any(|metadata| (metadata.dev(), metadata.ino()) == identity)
+        }
+
+        fn received_descriptor_count(stream: &UnixStream) -> usize {
+            let mut response = [0_u8; RESPONSE_BYTES];
+            let mut iov = [IoSliceMut::new(&mut response)];
+            let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(4))];
+            let mut ancillary = RecvAncillaryBuffer::new(&mut space);
+            if recvmsg(stream, &mut iov, &mut ancillary, RecvFlags::CMSG_CLOEXEC).is_err() {
+                return 0;
+            }
+            ancillary
+                .drain()
+                .map(|message| match message {
+                    RecvAncillaryMessage::ScmRights(received) => received.count(),
+                    _ => 0,
+                })
+                .sum()
         }
 
         #[test]
@@ -1133,6 +1334,73 @@ mod platform {
             for client in clients {
                 client.join().unwrap();
             }
+        }
+
+        #[test]
+        fn shutdown_wakes_stalled_and_partial_accepted_requests() {
+            for request_prefix_len in [0, REQUEST_BYTES / 2] {
+                let (_temp, backend, artifact, pinned_cargo_image, session) = fixture();
+                let binding = ordinary_binding();
+                let broker = CapabilityBroker::start(
+                    session,
+                    binding,
+                    &backend,
+                    &artifact,
+                    &pinned_cargo_image,
+                )
+                .unwrap();
+                let route = BrokerRouteV2::parse(broker.route()).unwrap();
+                let address = endpoint_address(&route.endpoint).unwrap();
+                let mut client = UnixStream::connect_addr(&address).unwrap();
+                client
+                    .set_read_timeout(Some(Duration::from_secs(1)))
+                    .unwrap();
+                client.write_all(&vec![0_u8; request_prefix_len]).unwrap();
+                let active_identity = wait_for_active_socket(&broker);
+                assert!(object_is_open(active_identity));
+
+                let started = Instant::now();
+                drop(broker);
+                assert!(
+                    started.elapsed() < Duration::from_secs(2),
+                    "broker shutdown waited for the request timeout"
+                );
+                assert_eq!(received_descriptor_count(&client), 0);
+                drop(client);
+                assert!(!object_is_open(active_identity));
+            }
+        }
+
+        #[test]
+        fn request_racing_shutdown_receives_no_descriptors() {
+            let (_temp, backend, artifact, pinned_cargo_image, session) = fixture();
+            let binding = s09_binding();
+            let broker =
+                CapabilityBroker::start(session, binding, &backend, &artifact, &pinned_cargo_image)
+                    .unwrap();
+            let pause = broker.shutdown.install_dispatch_pause();
+            let route = BrokerRouteV2::parse(broker.route()).unwrap();
+            let address = endpoint_address(&route.endpoint).unwrap();
+            let mut client = UnixStream::connect_addr(&address).unwrap();
+            client
+                .set_read_timeout(Some(Duration::from_secs(1)))
+                .unwrap();
+            let active_identity = wait_for_active_socket(&broker);
+            let request = request_bytes(session, binding, [0x73; CHALLENGE_BYTES], &route.secret);
+            client.write_all(&request).unwrap();
+            pause.wait_until_reached();
+
+            let started = Instant::now();
+            broker.shutdown.begin();
+            pause.release();
+            drop(broker);
+            assert!(
+                started.elapsed() < Duration::from_secs(2),
+                "broker shutdown did not promptly cancel descriptor dispatch"
+            );
+            assert_eq!(received_descriptor_count(&client), 0);
+            drop(client);
+            assert!(!object_is_open(active_identity));
         }
 
         #[test]
