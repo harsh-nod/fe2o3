@@ -1360,12 +1360,24 @@ fn worker_v2_s09_alpha_o0_preserves_source_dwarf_in_hsaco() {
         "DW_LANG_Rust",
         "DW_TAG_subprogram",
         "DW_AT_name\t(\"alpha\")",
+        "DW_TAG_structure_type",
+        "DW_TAG_reference_type",
+        "DW_TAG_array_type",
         "DW_AT_decl_line\t(68)",
         "DW_AT_name\t(\"scale\")",
         "DW_AT_name\t(\"input_data\")",
         "DW_AT_name\t(\"input_len\")",
         "DW_AT_name\t(\"output_data\")",
         "DW_AT_name\t(\"output_len\")",
+        "DW_AT_name\t(\"input\")",
+        "DW_AT_name\t(\"output\")",
+        "DW_AT_name\t(\"input_first_ref\")",
+        "DW_AT_name\t(\"index_scale_tuple\")",
+        "DW_AT_name\t(\"scale_pair\")",
+        "DW_AT_name\t(\"S09SliceRefF32\")",
+        "DW_AT_name\t(\"DisjointSlice<f32>\")",
+        "DW_AT_name\t(\"(usize, f32)\")",
+        "DW_AT_count\t(0x02)",
         "DW_AT_name\t(\"i\")",
         "DW_AT_decl_line\t(70)",
         "DW_AT_comp_dir\t(\"crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src\")",
@@ -1378,10 +1390,10 @@ fn worker_v2_s09_alpha_o0_preserves_source_dwarf_in_hsaco() {
     }
     assert_eq!(
         dump.matches("DW_AT_location\t").count(),
-        6,
-        "S09 requires locations for five physical arguments and local `i`"
+        11,
+        "S09 requires locations for three logical arguments and eight bounded local views"
     );
-    for source_line in [68, 69, 70] {
+    for source_line in [68, 69, 70, 71] {
         assert!(
             dump.lines().any(|line| {
                 let mut columns = line.split_whitespace();

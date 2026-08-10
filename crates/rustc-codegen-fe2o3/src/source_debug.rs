@@ -45,6 +45,7 @@ const S09_SOURCE_BYTES: usize = 3359;
 const S09_FUNCTION_LINE: usize = 68;
 const S09_INDEX_LINE: usize = 69;
 const S09_LOCAL_LINE: usize = 70;
+const S09_OBSERVATION_LINE: usize = 71;
 const MAX_RUSTC_EXECUTABLE_BYTES: u64 = 256 * 1024 * 1024;
 
 const CARGO_METADATA_BUILD_OBSERVATION_ENV_V2: &str = "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2";
@@ -1231,6 +1232,8 @@ pub(crate) fn inject_alpha_dwarf_v1(
         "!DISubroutineType",
         "!DIBasicType",
         "!DIDerivedType",
+        "!DICompositeType",
+        "!DISubrange",
         "!DILocalVariable",
         "!DILocation",
         "!DIExpression",
@@ -1290,8 +1293,19 @@ pub(crate) fn inject_alpha_dwarf_v1(
     let local_definition =
         format!("  {local_value} = add i64 {local_value}.base, {local_value}.local");
     let local_record = format!(
-        "{local_definition}\n  call void @llvm.dbg.value(metadata i64 {local_value}, metadata !{}, metadata !DIExpression()), !dbg !{}\n  call void asm sideeffect \"s_nop 0\", \"v,~{{memory}}\"(i64 {local_value}), !dbg !{}",
-        ids.local, ids.local_location, ids.local_location,
+        "{local_definition}\n  call void @llvm.dbg.value(metadata i64 {local_value}, metadata !{}, metadata !DIExpression()), !dbg !{}\n  call void @llvm.dbg.value(metadata i64 {local_value}, metadata !{}, metadata !DIExpression(DW_OP_LLVM_fragment, 0, 64)), !dbg !{}\n  call void @llvm.dbg.value(metadata float %arg0, metadata !{}, metadata !DIExpression(DW_OP_LLVM_fragment, 64, 32)), !dbg !{}\n  call void @llvm.dbg.value(metadata float %arg0, metadata !{}, metadata !DIExpression(DW_OP_LLVM_fragment, 0, 32)), !dbg !{}\n  call void @llvm.dbg.value(metadata float %arg0, metadata !{}, metadata !DIExpression(DW_OP_LLVM_fragment, 32, 32)), !dbg !{}\n  call void asm sideeffect \"s_nop 0\", \"v,~{{memory}}\"(i64 {local_value}), !dbg !{}\n  call void asm sideeffect \"s_nop 0\", \"v,v,~{{memory}}\"(i64 {local_value}, float %arg0), !dbg !{}",
+        ids.local,
+        ids.local_location,
+        ids.index_scale_tuple,
+        ids.observation_location,
+        ids.index_scale_tuple,
+        ids.observation_location,
+        ids.scale_pair,
+        ids.observation_location,
+        ids.scale_pair,
+        ids.observation_location,
+        ids.local_location,
+        ids.observation_location,
     );
     rewritten_function = replace_exactly_once(
         &rewritten_function,
@@ -1351,7 +1365,7 @@ fn replace_exactly_once(
 
 fn argument_debug_records(ids: DebugIds) -> String {
     format!(
-        "  call void @llvm.dbg.value(metadata float %arg0, metadata !{}, metadata !DIExpression()), !dbg !{}\n  call void @llvm.dbg.value(metadata ptr addrspace(1) %arg1.data, metadata !{}, metadata !DIExpression()), !dbg !{}\n  call void @llvm.dbg.value(metadata i64 %arg1.len, metadata !{}, metadata !DIExpression()), !dbg !{}\n  call void @llvm.dbg.value(metadata ptr addrspace(1) %arg2.data, metadata !{}, metadata !DIExpression()), !dbg !{}\n  call void @llvm.dbg.value(metadata i64 %arg2.len, metadata !{}, metadata !DIExpression()), !dbg !{}\n  call void asm sideeffect \"s_nop 0\", \"v,v,v,v,v,~{{memory}}\"(float %arg0, ptr addrspace(1) %arg1.data, i64 %arg1.len, ptr addrspace(1) %arg2.data, i64 %arg2.len), !dbg !{}\n  call void asm sideeffect \"s_nop 0\", \"v,v,v,v,v,~{{memory}}\"(float %arg0, ptr addrspace(1) %arg1.data, i64 %arg1.len, ptr addrspace(1) %arg2.data, i64 %arg2.len), !dbg !{}\n",
+        "  call void @llvm.dbg.value(metadata float %arg0, metadata !{}, metadata !DIExpression()), !dbg !{}\n  call void @llvm.dbg.value(metadata ptr addrspace(1) %arg1.data, metadata !{}, metadata !DIExpression()), !dbg !{}\n  call void @llvm.dbg.value(metadata i64 %arg1.len, metadata !{}, metadata !DIExpression()), !dbg !{}\n  call void @llvm.dbg.value(metadata ptr addrspace(1) %arg2.data, metadata !{}, metadata !DIExpression()), !dbg !{}\n  call void @llvm.dbg.value(metadata i64 %arg2.len, metadata !{}, metadata !DIExpression()), !dbg !{}\n  call void @llvm.dbg.value(metadata ptr addrspace(1) %arg1.data, metadata !{}, metadata !DIExpression(DW_OP_LLVM_fragment, 0, 64)), !dbg !{}\n  call void @llvm.dbg.value(metadata i64 %arg1.len, metadata !{}, metadata !DIExpression(DW_OP_LLVM_fragment, 64, 64)), !dbg !{}\n  call void @llvm.dbg.value(metadata ptr addrspace(1) %arg2.data, metadata !{}, metadata !DIExpression(DW_OP_LLVM_fragment, 0, 64)), !dbg !{}\n  call void @llvm.dbg.value(metadata i64 %arg2.len, metadata !{}, metadata !DIExpression(DW_OP_LLVM_fragment, 64, 64)), !dbg !{}\n  call void @llvm.dbg.value(metadata ptr addrspace(1) %arg1.data, metadata !{}, metadata !DIExpression()), !dbg !{}\n  call void asm sideeffect \"s_nop 0\", \"v,v,v,v,v,~{{memory}}\"(float %arg0, ptr addrspace(1) %arg1.data, i64 %arg1.len, ptr addrspace(1) %arg2.data, i64 %arg2.len), !dbg !{}\n  call void asm sideeffect \"s_nop 0\", \"v,v,v,v,v,~{{memory}}\"(float %arg0, ptr addrspace(1) %arg1.data, i64 %arg1.len, ptr addrspace(1) %arg2.data, i64 %arg2.len), !dbg !{}\n",
         ids.scale,
         ids.function_location,
         ids.input_data,
@@ -1361,6 +1375,16 @@ fn argument_debug_records(ids: DebugIds) -> String {
         ids.output_data,
         ids.function_location,
         ids.output_len,
+        ids.function_location,
+        ids.input,
+        ids.function_location,
+        ids.input,
+        ids.function_location,
+        ids.output,
+        ids.function_location,
+        ids.output,
+        ids.function_location,
+        ids.input_first_ref,
         ids.function_location,
         ids.function_location,
         ids.index_location,
@@ -1435,9 +1459,31 @@ struct DebugIds {
     output_data: usize,
     output_len: usize,
     local: usize,
+    input: usize,
+    output: usize,
+    input_first_ref: usize,
+    index_scale_tuple: usize,
+    scale_pair: usize,
+    slice_type: usize,
+    slice_elements: usize,
+    slice_data_member: usize,
+    slice_len_member: usize,
+    output_type: usize,
+    output_elements: usize,
+    output_data_member: usize,
+    output_len_member: usize,
+    input_first_ref_type: usize,
+    tuple_type: usize,
+    tuple_elements: usize,
+    tuple_index_member: usize,
+    tuple_scale_member: usize,
+    array_type: usize,
+    array_elements: usize,
+    array_subrange: usize,
     function_location: usize,
     index_location: usize,
     local_location: usize,
+    observation_location: usize,
 }
 
 impl DebugIds {
@@ -1466,9 +1512,31 @@ impl DebugIds {
             output_data: id(15)?,
             output_len: id(16)?,
             local: id(17)?,
-            function_location: id(18)?,
-            index_location: id(19)?,
-            local_location: id(20)?,
+            input: id(18)?,
+            output: id(19)?,
+            input_first_ref: id(20)?,
+            index_scale_tuple: id(21)?,
+            scale_pair: id(22)?,
+            slice_type: id(23)?,
+            slice_elements: id(24)?,
+            slice_data_member: id(25)?,
+            slice_len_member: id(26)?,
+            output_type: id(27)?,
+            output_elements: id(28)?,
+            output_data_member: id(29)?,
+            output_len_member: id(30)?,
+            input_first_ref_type: id(31)?,
+            tuple_type: id(32)?,
+            tuple_elements: id(33)?,
+            tuple_index_member: id(34)?,
+            tuple_scale_member: id(35)?,
+            array_type: id(36)?,
+            array_elements: id(37)?,
+            array_subrange: id(38)?,
+            function_location: id(39)?,
+            index_location: id(40)?,
+            local_location: id(41)?,
+            observation_location: id(42)?,
         })
     }
 }
@@ -1549,21 +1617,122 @@ fn write_debug_metadata(
     .unwrap();
     writeln!(
         output,
-        "!{} = !{{!{}, !{}, !{}, !{}, !{}, !{}}}",
+        "!{} = !DICompositeType(tag: DW_TAG_structure_type, name: \"S09SliceRefF32\", file: !{}, line: {}, size: 128, align: 64, elements: !{})",
+        ids.slice_type, ids.file, profile.function_line, ids.slice_elements
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "!{} = !{{!{}, !{}}}",
+        ids.slice_elements, ids.slice_data_member, ids.slice_len_member
+    )
+    .unwrap();
+    writeln!(output, "!{} = !DIDerivedType(tag: DW_TAG_member, name: \"data_ptr\", scope: !{}, file: !{}, line: {}, baseType: !{}, size: 64, align: 64, offset: 0)", ids.slice_data_member, ids.slice_type, ids.file, profile.function_line, ids.pointer_type).unwrap();
+    writeln!(output, "!{} = !DIDerivedType(tag: DW_TAG_member, name: \"length\", scope: !{}, file: !{}, line: {}, baseType: !{}, size: 64, align: 64, offset: 64)", ids.slice_len_member, ids.slice_type, ids.file, profile.function_line, ids.usize_type).unwrap();
+    writeln!(
+        output,
+        "!{} = !DICompositeType(tag: DW_TAG_structure_type, name: \"DisjointSlice<f32>\", file: !{}, line: {}, size: 128, align: 64, elements: !{})",
+        ids.output_type, ids.file, profile.function_line, ids.output_elements
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "!{} = !{{!{}, !{}}}",
+        ids.output_elements, ids.output_data_member, ids.output_len_member
+    )
+    .unwrap();
+    writeln!(output, "!{} = !DIDerivedType(tag: DW_TAG_member, name: \"pointer\", scope: !{}, file: !{}, line: {}, baseType: !{}, size: 64, align: 64, offset: 0)", ids.output_data_member, ids.output_type, ids.file, profile.function_line, ids.pointer_type).unwrap();
+    writeln!(output, "!{} = !DIDerivedType(tag: DW_TAG_member, name: \"length\", scope: !{}, file: !{}, line: {}, baseType: !{}, size: 64, align: 64, offset: 64)", ids.output_len_member, ids.output_type, ids.file, profile.function_line, ids.usize_type).unwrap();
+    writeln!(
+        output,
+        "!{} = !DIDerivedType(tag: DW_TAG_reference_type, baseType: !{}, size: 64, align: 64)",
+        ids.input_first_ref_type, ids.f32_type
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "!{} = !DICompositeType(tag: DW_TAG_structure_type, name: \"(usize, f32)\", file: !{}, line: {}, size: 128, align: 64, elements: !{})",
+        ids.tuple_type, ids.file, profile.local_line, ids.tuple_elements
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "!{} = !{{!{}, !{}}}",
+        ids.tuple_elements, ids.tuple_index_member, ids.tuple_scale_member
+    )
+    .unwrap();
+    writeln!(output, "!{} = !DIDerivedType(tag: DW_TAG_member, name: \"__0\", scope: !{}, file: !{}, line: {}, baseType: !{}, size: 64, align: 64, offset: 0)", ids.tuple_index_member, ids.tuple_type, ids.file, profile.local_line, ids.usize_type).unwrap();
+    writeln!(output, "!{} = !DIDerivedType(tag: DW_TAG_member, name: \"__1\", scope: !{}, file: !{}, line: {}, baseType: !{}, size: 32, align: 32, offset: 64)", ids.tuple_scale_member, ids.tuple_type, ids.file, profile.local_line, ids.f32_type).unwrap();
+    writeln!(
+        output,
+        "!{} = !DICompositeType(tag: DW_TAG_array_type, baseType: !{}, size: 64, align: 32, elements: !{})",
+        ids.array_type, ids.f32_type, ids.array_elements
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "!{} = !{{!{}}}",
+        ids.array_elements, ids.array_subrange
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "!{} = !DISubrange(count: 2, lowerBound: 0)",
+        ids.array_subrange
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "!{} = !{{!{}, !{}, !{}, !{}, !{}, !{}, !{}, !{}, !{}, !{}, !{}}}",
         ids.retained,
         ids.scale,
         ids.input_data,
         ids.input_len,
         ids.output_data,
         ids.output_len,
-        ids.local
+        ids.local,
+        ids.input,
+        ids.output,
+        ids.input_first_ref,
+        ids.index_scale_tuple,
+        ids.scale_pair
     )
     .unwrap();
     writeln!(output, "!{} = !DILocalVariable(name: \"scale\", arg: 1, scope: !{}, file: !{}, line: {}, type: !{})", ids.scale, ids.subprogram, ids.file, profile.function_line, ids.f32_type).unwrap();
-    writeln!(output, "!{} = !DILocalVariable(name: \"input_data\", arg: 2, scope: !{}, file: !{}, line: {}, type: !{})", ids.input_data, ids.subprogram, ids.file, profile.function_line, ids.pointer_type).unwrap();
-    writeln!(output, "!{} = !DILocalVariable(name: \"input_len\", arg: 3, scope: !{}, file: !{}, line: {}, type: !{})", ids.input_len, ids.subprogram, ids.file, profile.function_line, ids.usize_type).unwrap();
-    writeln!(output, "!{} = !DILocalVariable(name: \"output_data\", arg: 4, scope: !{}, file: !{}, line: {}, type: !{})", ids.output_data, ids.subprogram, ids.file, profile.function_line, ids.pointer_type).unwrap();
-    writeln!(output, "!{} = !DILocalVariable(name: \"output_len\", arg: 5, scope: !{}, file: !{}, line: {}, type: !{})", ids.output_len, ids.subprogram, ids.file, profile.function_line, ids.usize_type).unwrap();
+    writeln!(
+        output,
+        "!{} = !DILocalVariable(name: \"input_data\", scope: !{}, file: !{}, line: {}, type: !{})",
+        ids.input_data, ids.subprogram, ids.file, profile.function_line, ids.pointer_type
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "!{} = !DILocalVariable(name: \"input_len\", scope: !{}, file: !{}, line: {}, type: !{})",
+        ids.input_len, ids.subprogram, ids.file, profile.function_line, ids.usize_type
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "!{} = !DILocalVariable(name: \"output_data\", scope: !{}, file: !{}, line: {}, type: !{})",
+        ids.output_data, ids.subprogram, ids.file, profile.function_line, ids.pointer_type
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "!{} = !DILocalVariable(name: \"output_len\", scope: !{}, file: !{}, line: {}, type: !{})",
+        ids.output_len, ids.subprogram, ids.file, profile.function_line, ids.usize_type
+    )
+    .unwrap();
+    writeln!(output, "!{} = !DILocalVariable(name: \"input\", arg: 2, scope: !{}, file: !{}, line: {}, type: !{})", ids.input, ids.subprogram, ids.file, profile.function_line, ids.slice_type).unwrap();
+    writeln!(output, "!{} = !DILocalVariable(name: \"output\", arg: 3, scope: !{}, file: !{}, line: {}, type: !{})", ids.output, ids.subprogram, ids.file, profile.function_line, ids.output_type).unwrap();
+    writeln!(output, "!{} = !DILocalVariable(name: \"input_first_ref\", scope: !{}, file: !{}, line: {}, type: !{})", ids.input_first_ref, ids.subprogram, ids.file, profile.function_line, ids.input_first_ref_type).unwrap();
+    writeln!(output, "!{} = !DILocalVariable(name: \"index_scale_tuple\", scope: !{}, file: !{}, line: {}, type: !{})", ids.index_scale_tuple, ids.subprogram, ids.file, profile.local_line, ids.tuple_type).unwrap();
+    writeln!(
+        output,
+        "!{} = !DILocalVariable(name: \"scale_pair\", scope: !{}, file: !{}, line: {}, type: !{})",
+        ids.scale_pair, ids.subprogram, ids.file, profile.local_line, ids.array_type
+    )
+    .unwrap();
     writeln!(
         output,
         "!{} = !DILocalVariable(name: \"i\", scope: !{}, file: !{}, line: {}, type: !{})",
@@ -1586,6 +1755,12 @@ fn write_debug_metadata(
         output,
         "!{} = !DILocation(line: {}, column: 13, scope: !{})",
         ids.local_location, profile.local_line, ids.subprogram
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "!{} = !DILocation(line: {}, column: 9, scope: !{})",
+        ids.observation_location, S09_OBSERVATION_LINE, ids.subprogram
     )
     .unwrap();
     Ok(())
@@ -1703,7 +1878,7 @@ attributes #0 = { nounwind }
     }
 
     #[test]
-    fn injects_exact_physical_arguments_and_source_local() {
+    fn injects_exact_physical_and_bounded_logical_debug_views() {
         let first = inject_alpha_dwarf_v1(module(), &profile()).unwrap();
         let second = inject_alpha_dwarf_v1(module(), &profile()).unwrap();
         assert_eq!(first, second);
@@ -1711,19 +1886,28 @@ attributes #0 = { nounwind }
             "!DICompileUnit(language: DW_LANG_Rust",
             "!DISubprogram(name: \"alpha\"",
             "!DILocalVariable(name: \"scale\", arg: 1",
-            "!DILocalVariable(name: \"input_data\", arg: 2",
-            "!DILocalVariable(name: \"input_len\", arg: 3",
-            "!DILocalVariable(name: \"output_data\", arg: 4",
-            "!DILocalVariable(name: \"output_len\", arg: 5",
+            "!DILocalVariable(name: \"input_data\", scope:",
+            "!DILocalVariable(name: \"input_len\", scope:",
+            "!DILocalVariable(name: \"output_data\", scope:",
+            "!DILocalVariable(name: \"output_len\", scope:",
             "!DILocalVariable(name: \"i\", scope:",
+            "!DICompositeType(tag: DW_TAG_structure_type, name: \"S09SliceRefF32\"",
+            "!DIDerivedType(tag: DW_TAG_reference_type",
+            "!DICompositeType(tag: DW_TAG_structure_type, name: \"(usize, f32)\"",
+            "!DICompositeType(tag: DW_TAG_array_type",
+            "!DILocalVariable(name: \"input\", arg: 2",
+            "!DILocalVariable(name: \"index_scale_tuple\", scope:",
+            "!DILocalVariable(name: \"scale_pair\", scope:",
             "metadata i64 %v3",
             "line: 69",
             "line: 70",
+            "line: 71",
             S09_IDENTITY_SECTION_V2,
         ] {
             assert!(first.contains(expected), "missing {expected:?}\n{first}");
         }
-        assert_eq!(first.matches("@llvm.dbg.value(").count(), 7);
+        assert_eq!(first.matches("@llvm.dbg.value(").count(), 16);
+        assert_eq!(first.matches("DW_OP_LLVM_fragment").count(), 8);
         assert!(first.contains("asm sideeffect \"s_nop 0\", \"v,v,v,v,v,~{memory}\""));
         assert_eq!(
             first
@@ -1731,7 +1915,7 @@ attributes #0 = { nounwind }
                 .count(),
             2
         );
-        assert!(first.contains("asm sideeffect \"s_nop 0\", \"v,~{memory}\""));
+        assert!(first.contains("asm sideeffect \"s_nop 0\", \"v,v,~{memory}\""));
     }
 
     #[test]
@@ -1798,6 +1982,8 @@ attributes #0 = { nounwind }
             "!9 = !DISubroutineType(types: !10)",
             "!9 = !DIBasicType(name: \"f32\")",
             "!9 = !DIDerivedType(tag: DW_TAG_pointer_type)",
+            "!9 = !DICompositeType(tag: DW_TAG_structure_type)",
+            "!9 = !DISubrange(count: 2)",
             "!9 = !DILocalVariable(name: \"i\")",
             "!9 = !DILocation(line: 1, scope: !10)",
             "!9 = !DIExpression()",
