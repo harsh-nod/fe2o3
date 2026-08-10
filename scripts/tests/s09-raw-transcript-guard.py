@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import ctypes
+import errno
 import os
 import pathlib
 import signal
@@ -208,10 +209,10 @@ export PYTHONPATH="$3"
 export FE2O3_RAW_GUARD_PASSTHROUGH="$5"
 s09_install_raw_transcript_guard "$2"
 s09_run_guarded_raw_command /bin/bash -c \
-  'printf "%s\n" "$FE2O3_RAW_GUARD_PASSTHROUGH"; exit 1'
+  'printf "%s\n%s\n" "$FE2O3_RAW_GUARD_PASSTHROUGH" "$PYTHONPATH"; exit 1'
 status=$?
 [[ ! -e "$4" && ! -L "$4" ]] || exit 124
-[[ "$(<"$2")" == "$5" ]] || exit 123
+[[ "$(<"$2")" == "$5"$'\n'"$3" ]] || exit 123
 exit "${status}"
 """
         completed = subprocess.run(
@@ -234,6 +235,98 @@ exit "${status}"
         )
         self.assertEqual(completed.returncode, 1, completed.stderr)
         self.assertFalse(marker.exists())
+        self.assertFalse(self.raw.exists())
+
+    def test_nondumpable_launcher_blocks_parent_protocol_fd_reopen(self) -> None:
+        helper = self.directory / "forge-parent-protocol.py"
+        marker = self.directory / "protocol-reopen.txt"
+        helper.write_text(
+            """\
+import errno
+import os
+import pathlib
+import sys
+import time
+
+parent = os.getppid()
+opened = []
+failures = []
+for descriptor in range(64):
+    for mode_name, mode in (
+        ("read", os.O_RDONLY | os.O_NONBLOCK),
+        ("write", os.O_WRONLY | os.O_NONBLOCK),
+    ):
+        try:
+            reopened = os.open(
+                f"/proc/{parent}/fd/{descriptor}", mode | os.O_CLOEXEC
+            )
+        except OSError as error:
+            failures.append((descriptor, mode_name, error.errno))
+            continue
+        opened.append((descriptor, mode_name))
+        if descriptor == 1 and mode_name == "write":
+            os.write(reopened, b"STATUS 0\\n")
+        os.close(reopened)
+
+fd0_errno = next(
+    error
+    for descriptor, mode_name, error in failures
+    if descriptor == 0 and mode_name == "write"
+)
+fd1_errno = next(
+    error
+    for descriptor, mode_name, error in failures
+    if descriptor == 1 and mode_name == "write"
+)
+temporary = pathlib.Path(f"{sys.argv[1]}.{os.getpid()}.tmp")
+temporary.write_text(
+    f"opened={opened!r}\\nfd0_errno={fd0_errno}\\nfd1_errno={fd1_errno}\\n",
+    encoding="ascii",
+)
+os.replace(temporary, sys.argv[1])
+print("attacker-controlled raw output", flush=True)
+time.sleep(0.2)
+sys.exit(37)
+""",
+            encoding="ascii",
+        )
+        body = r"""
+set -Eeuo pipefail
+source "$1"
+s09_install_raw_transcript_guard "$2"
+set +e
+s09_run_guarded_raw_command /usr/bin/python3 -I -S "$3" "$4"
+status=$?
+set -e
+[[ "${status}" == 37 ]] || exit 122
+[[ "$(<"$2")" == "attacker-controlled raw output" ]] || exit 121
+exit "${status}"
+"""
+        completed = subprocess.run(
+            [
+                "/bin/bash",
+                "-c",
+                body,
+                "raw-guard-protocol-reopen-test",
+                str(GUARD),
+                str(self.raw),
+                str(helper),
+                str(marker),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+        self.assertEqual(completed.returncode, 37, completed.stderr)
+        observations = marker.read_text(encoding="ascii").splitlines()
+        self.assertEqual(observations[0], "opened=[]")
+        for descriptor, observation in enumerate(observations[1:]):
+            self.assertIn(
+                int(observation.removeprefix(f"fd{descriptor}_errno=")),
+                (errno.EACCES, errno.EPERM),
+            )
         self.assertFalse(self.raw.exists())
 
     def test_guarded_command_stdin_is_devnull_and_control_fd_is_closed(self) -> None:
@@ -653,8 +746,10 @@ signal.signal(signal.SIGTERM, lambda _signum, _frame: None)
 leader = os.getpid()
 group = os.getpgrp()
 print(f"ANCHOR {leader} {group}", flush=True)
-with open(marker, "w", encoding="ascii") as output:
+temporary = f"{marker}.{leader}.tmp"
+with open(temporary, "w", encoding="ascii") as output:
     output.write(f"{leader} {group}\\n")
+os.replace(temporary, marker)
 assert sys.stdin.buffer.readline() == b"DRAIN\\n"
 os.close(raw_fd)
 os.killpg(group, signal.SIGTERM)

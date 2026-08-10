@@ -98,16 +98,26 @@ s09_observe_guarded_exit() {
 s09_guarded_launcher() {
   # The launcher, not the outer shell, owns all numeric PGID operations. It
   # stays the session/group leader until DRAIN atomically targets its own PGID.
+  # Isolated mode protects this interpreter without changing the environment
+  # inherited by the guarded command.
   # shellcheck disable=SC2016
-  unset PYTHONBREAKPOINT PYTHONHOME PYTHONINSPECT PYTHONPATH PYTHONPLATLIBDIR
-  unset PYTHONSAFEPATH PYTHONSTARTUP PYTHONUSERBASE PYTHONWARNINGS
   exec /usr/bin/python3 -I -S -c '
+import ctypes
 import os
 import selectors
 import signal
 import subprocess
 import sys
 import time
+
+PR_GET_DUMPABLE = 3
+PR_SET_DUMPABLE = 4
+libc = ctypes.CDLL(None, use_errno=True)
+libc.prctl.restype = ctypes.c_int
+if libc.prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) != 0:
+    os._exit(125)
+if libc.prctl(PR_GET_DUMPABLE, 0, 0, 0, 0) != 0:
+    os._exit(125)
 
 raw_fd = int(sys.argv[1])
 command = sys.argv[2:]
