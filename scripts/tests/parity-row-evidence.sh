@@ -293,6 +293,49 @@ SOURCE_TREE="$(git -C "${REPO}" rev-parse 'HEAD^{tree}')"
 readonly SOURCE_TREE
 git -C "${REPO}" checkout -q --detach
 
+PROTECTED_BASE_REPO="${TEST_ROOT}/protected-base-repo"
+CANDIDATE_HEAD_REPO="${TEST_ROOT}/candidate-head-repo"
+git clone -q "${REPO}" "${PROTECTED_BASE_REPO}"
+git clone -q "${REPO}" "${CANDIDATE_HEAD_REPO}"
+git -C "${PROTECTED_BASE_REPO}" checkout -q --detach "${SOURCE}"
+git -C "${CANDIDATE_HEAD_REPO}" checkout -q --detach "${SOURCE}"
+protected_base_args=(
+  check-protected-base
+  --protected-repo "${PROTECTED_BASE_REPO}"
+  --candidate-repo "${CANDIDATE_HEAD_REPO}"
+  --protected-base "${SOURCE}"
+  --default-tip "${SOURCE}"
+  --candidate-head "${SOURCE}"
+)
+"${TOOL}" "${protected_base_args[@]}"
+expect_failure stale_default_tip 'pull request base SHA is not current default tip' \
+  "${TOOL}" "${protected_base_args[@]:0:8}" "${BASELINE}" \
+  "${protected_base_args[@]:9}"
+expect_failure zero_default_tip 'malformed or zero current default tip commit' \
+  "${TOOL}" "${protected_base_args[@]:0:8}" "$(printf '0%.0s' {1..40})" \
+  "${protected_base_args[@]:9}"
+expect_failure protected_checkout_substitution \
+  'protected checkout does not match event base SHA' \
+  "${TOOL}" check-protected-base \
+  --protected-repo "${PROTECTED_BASE_REPO}" \
+  --candidate-repo "${CANDIDATE_HEAD_REPO}" \
+  --protected-base "${BASELINE}" \
+  --default-tip "${BASELINE}" \
+  --candidate-head "${SOURCE}"
+expect_failure candidate_checkout_substitution \
+  'candidate checkout does not match event head SHA' \
+  "${TOOL}" "${protected_base_args[@]:0:10}" "${BASELINE}"
+git -C "${CANDIDATE_HEAD_REPO}" checkout -q --detach "${BASELINE}"
+expect_failure stale_candidate_ancestry \
+  'candidate head does not contain current protected default tip' \
+  "${TOOL}" check-protected-base \
+  --protected-repo "${PROTECTED_BASE_REPO}" \
+  --candidate-repo "${CANDIDATE_HEAD_REPO}" \
+  --protected-base "${SOURCE}" \
+  --default-tip "${SOURCE}" \
+  --candidate-head "${BASELINE}"
+git -C "${CANDIDATE_HEAD_REPO}" checkout -q --detach "${SOURCE}"
+
 mkdir -p "${ARCHIVE}/toolchains" "${TRUSTED}/keys"
 {
   printf 'toolchain_closure_schema_version\t1\n'

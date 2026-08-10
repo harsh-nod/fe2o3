@@ -12,6 +12,12 @@ changes and an evidence archive. It cannot select a verifier, trusted key, or
 weaker row policy. CI compares the candidate row policy byte-for-byte with the
 protected policy while processing a promotion.
 
+Before classification, the protected verifier independently checks the event
+identity: the protected base must equal the freshly fetched default-branch tip,
+the protected and candidate checkouts must equal their event SHAs, and the
+candidate head must descend from that exact tip. A stale feature branch or a
+substituted checkout therefore cannot retain an older evidence policy.
+
 This repository intentionally contains no active production trust policy and
 no production public or private key. Production promotion therefore fails
 closed until an operator installs protected public-key configuration and

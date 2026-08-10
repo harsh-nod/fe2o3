@@ -494,6 +494,43 @@ def check_trust_update(args: argparse.Namespace) -> None:
     print("production trust policy update is monotonic")
 
 
+def check_protected_base(args: argparse.Namespace) -> None:
+    protected_repo = args.protected_repo.resolve(strict=True)
+    candidate_repo = args.candidate_repo.resolve(strict=True)
+    identities = {
+        "protected base": args.protected_base,
+        "current default tip": args.default_tip,
+        "candidate head": args.candidate_head,
+    }
+    for label, commit in identities.items():
+        if not COMMIT_RE.fullmatch(commit) or commit == "0" * 40:
+            fail(f"malformed or zero {label} commit")
+    if args.protected_base != args.default_tip:
+        fail("pull request base SHA is not current default tip")
+    require_commit(protected_repo, args.protected_base, "protected base")
+    require_commit(candidate_repo, args.candidate_head, "candidate head")
+    if run_git(protected_repo, "rev-parse", "HEAD^{commit}") != args.protected_base:
+        fail("protected checkout does not match event base SHA")
+    if run_git(candidate_repo, "rev-parse", "HEAD^{commit}") != args.candidate_head:
+        fail("candidate checkout does not match event head SHA")
+    if subprocess.run(
+        [
+            "git",
+            "-C",
+            str(candidate_repo),
+            "merge-base",
+            "--is-ancestor",
+            args.protected_base,
+            args.candidate_head,
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    ).returncode:
+        fail("candidate head does not contain current protected default tip")
+    print("protected base and candidate head are current and ancestry-bound")
+
+
 def verify_signed(path: Path, trust: TrustPolicy, role: str) -> tuple[list[list[str]], bytes, str]:
     raw, raw_lines, rows = read_raw(path)
     if len(rows) < 7:
@@ -1776,6 +1813,13 @@ def build_parser() -> argparse.ArgumentParser:
     validate_trust.add_argument("--trusted-root", type=Path, required=True)
     validate_trust.add_argument("--trust-policy", type=Path, required=True)
 
+    protected_base = subparsers.add_parser("check-protected-base")
+    protected_base.add_argument("--protected-repo", type=Path, required=True)
+    protected_base.add_argument("--candidate-repo", type=Path, required=True)
+    protected_base.add_argument("--protected-base", required=True)
+    protected_base.add_argument("--default-tip", required=True)
+    protected_base.add_argument("--candidate-head", required=True)
+
     result = subparsers.add_parser("validate-result")
     common_trust(result)
     result.add_argument("record")
@@ -1832,6 +1876,8 @@ def main() -> None:
     elif args.command == "validate-production-trust":
         trust = validate_production_trust(args.trusted_root, args.trust_policy)
         print(f"production trust is valid: {len(trust.keys)} separated public keys")
+    elif args.command == "check-protected-base":
+        check_protected_base(args)
     elif args.command == "validate-result":
         trust = parse_trust_policy(args.trusted_root, args.trust_policy)
         result = parse_result(

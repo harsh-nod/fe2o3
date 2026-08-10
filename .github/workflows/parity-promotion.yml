@@ -34,6 +34,7 @@ jobs:
 
     steps:
       - name: Require protected default-branch base
+        id: default-tip
         env:
           GH_TOKEN: ${{ github.token }}
           BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
@@ -68,6 +69,7 @@ jobs:
             printf 'pull request base SHA is not current default tip\n' >&2
             exit 2
           fi
+          printf 'sha=%s\n' "${CURRENT_DEFAULT_SHA}" >>"${GITHUB_OUTPUT}"
 
       - name: Check out protected base
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -92,8 +94,17 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           CHANGED_FILE_COUNT: ${{ github.event.pull_request.changed_files }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CURRENT_DEFAULT_SHA: ${{ steps.default-tip.outputs.sha }}
         run: |
           set -Eeuo pipefail
+          python3 protected/scripts/parity-signed-evidence.py check-protected-base \
+            --protected-repo protected \
+            --candidate-repo candidate \
+            --protected-base "${BASE_SHA}" \
+            --default-tip "${CURRENT_DEFAULT_SHA}" \
+            --candidate-head "${HEAD_SHA}"
+
           reviews="${RUNNER_TEMP}/parity-pr-reviews.json"
           changed_files="${RUNNER_TEMP}/parity-pr-files.json"
           gh api --paginate \
