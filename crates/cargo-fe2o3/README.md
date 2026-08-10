@@ -159,11 +159,26 @@ only from the retained inspection evidence. Publication is attempt-scoped,
 durable, digest-bound, and followed by managed attempt completion; exact
 in-process retries recover the same publication without rebinding its inputs.
 
-The published raw HSACO remains inert. This flow does not authenticate compiler
-origin or Verus proof evidence, does not run canonical `.fe2o3.kd.v1`
-descriptor-table finalization, and grants no HSA loading or launch authority.
-Process-restart recovery after handoff consumption still requires a persisted
-publication intent and retained handoff design.
+Required-envelope mode additionally measures and canonical-decodes its bounded
+input capsule before Cargo starts, then revalidates and durably retains the
+exact capsule before a fresh selected attempt can become recoverable. After the
+finalized HSACO publication is committed, the wrapper reconstructs the
+container, descriptor lineage, bundle/direct-link evidence, proofs, exact raw
+and finalized identities, and durable publication claim from those retained
+inputs. It writes the canonical load envelope with create-new semantics, syncs
+the file and containing directory, verifies the exact bytes, and only then
+advances the restart marker to completed and clears the publication intent and
+attempt state. Recovery at every committed boundary repeats those joins from
+the durable intent and capsule without rereading the operator path or
+respawning rustc. Package, generation, receipt, capsule, proof, payload, and
+envelope substitution fail closed; truncated or conflicting canonical files
+are never replaced implicitly.
+
+The published raw HSACO and load envelope remain inert. The envelope contains
+only a durable claim and explicitly contains no process-local currentness
+lease. This flow does not authenticate compiler origin or Verus proof evidence
+and grants no HSA loading or launch authority; downstream admission must
+revalidate the durable claim and acquire fresh process-local authority.
 
 ## Inspection and tool plans
 

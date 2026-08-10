@@ -360,10 +360,10 @@ const ZETA_FIELDS: [FrozenFieldV1; 4] = [
 
 /// Prepares one deterministic two-entry container from typed Worker V2 publication evidence.
 ///
-/// This test-only adapter deliberately has no container or serialization accessor. A production
-/// caller must first define a durable envelope that binds all required lineage
-/// to the container, then reacquire a fresh process-local publication lease for
-/// host admission. A lease must not be serialized in that envelope.
+/// This internal structural adapter deliberately has no public container or serialization
+/// accessor. Production publication wraps its result in the complete durable load envelope. Host
+/// admission must separately reacquire a fresh process-local publication lease; the lease is never
+/// serialized in the envelope.
 pub(crate) fn prepare_worker_v2_artifact_container_v1(
     producer: &ProducerIdentity,
     plan: DurableLinkPublicationPlanV1,
@@ -637,7 +637,7 @@ pub(crate) fn canonical_worker_v2_container_for_fixture_v1(
 /// Cargo deliberately does not derive `direct_link` or `proofs` from descriptor digests. The
 /// upstream producer must provide those sealed records, and the envelope constructor checks their
 /// complete structural join against the finalized container and durable publication claim.
-#[allow(dead_code)] // Wired once the compiler handoff carries sealed direct-link and proof records.
+#[allow(dead_code)] // Fresh-publication counterpart to the production restart assembly path.
 pub(crate) fn assemble_worker_v2_load_envelope_v1(
     producer: &ProducerIdentity,
     plan: DurableLinkPublicationPlanV1,
