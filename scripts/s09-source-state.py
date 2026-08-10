@@ -14,6 +14,7 @@ import stat
 import subprocess
 import sys
 from collections.abc import Sequence
+from types import TracebackType
 
 
 GIT_OBJECT = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
@@ -24,30 +25,163 @@ COPY_CHUNK_BYTES = 64 * 1024
 REQUIRED_SEALS = (
     fcntl.F_SEAL_SEAL | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_GROW | fcntl.F_SEAL_WRITE
 )
+GIT_EXECUTABLE = pathlib.Path("/usr/bin/git")
+MAX_GIT_EXECUTABLE_BYTES = 64 * 1024 * 1024
+GIT_ENVIRONMENT = {
+    "GIT_ATTR_NOSYSTEM": "1",
+    "GIT_ASKPASS": "/bin/false",
+    "GIT_CONFIG_COUNT": "0",
+    "GIT_CONFIG_GLOBAL": "/dev/null",
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_CONFIG_SYSTEM": "/dev/null",
+    "GIT_TERMINAL_PROMPT": "0",
+    "HOME": "/",
+    "LANG": "C",
+    "LC_ALL": "C",
+    "PATH": "/usr/bin:/bin",
+    "SSH_ASKPASS": "/bin/false",
+    "XDG_CONFIG_HOME": "/dev/null",
+}
 
 
 class SourceStateError(Exception):
     pass
 
 
-def git(root: pathlib.Path, *arguments: str) -> bytes:
+def exact_file_identity(value: os.stat_result) -> tuple[int, ...]:
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_mode,
+        value.st_nlink,
+        value.st_uid,
+        value.st_gid,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
+
+
+def hash_descriptor(descriptor: int, size: int) -> str:
+    if not 1 <= size <= MAX_GIT_EXECUTABLE_BYTES:
+        raise SourceStateError("pinned Git executable size is outside its bound")
+    digest = hashlib.sha256()
+    offset = 0
+    while offset < size:
+        try:
+            chunk = os.pread(descriptor, min(COPY_CHUNK_BYTES, size - offset), offset)
+        except OSError as error:
+            raise SourceStateError(
+                f"cannot read pinned Git executable: {error}"
+            ) from error
+        if not chunk:
+            raise SourceStateError("pinned Git executable became truncated")
+        digest.update(chunk)
+        offset += len(chunk)
+    return digest.hexdigest()
+
+
+class PinnedGit:
+    def __init__(self, path: pathlib.Path = GIT_EXECUTABLE) -> None:
+        self.path = path
+        self.descriptor = -1
+        try:
+            if path != GIT_EXECUTABLE and not path.is_absolute():
+                raise SourceStateError("Git executable test pin must be absolute")
+            if path.resolve(strict=True) != path:
+                raise SourceStateError(
+                    "Git executable must be the exact canonical path"
+                )
+            named = path.stat(follow_symlinks=False)
+            if not stat.S_ISREG(named.st_mode) or not named.st_mode & 0o111:
+                raise SourceStateError(
+                    "Git executable must be an executable regular file"
+                )
+            self.descriptor = os.open(
+                path,
+                os.O_RDONLY
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NOFOLLOW", 0),
+            )
+            opened = os.fstat(self.descriptor)
+            if exact_file_identity(named) != exact_file_identity(opened):
+                raise SourceStateError("Git executable changed while it was opened")
+            self.identity = exact_file_identity(opened)
+            self.sha256 = hash_descriptor(self.descriptor, opened.st_size)
+            self.executable = f"/proc/self/fd/{self.descriptor}"
+            self.validate()
+        except (OSError, SourceStateError) as error:
+            self.close()
+            if isinstance(error, SourceStateError):
+                raise
+            raise SourceStateError(f"cannot pin Git executable: {error}") from error
+
+    def __enter__(self) -> PinnedGit:
+        return self
+
+    def __exit__(
+        self,
+        exception_type: type[BaseException] | None,
+        exception: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self.close()
+
+    def close(self) -> None:
+        if self.descriptor >= 0:
+            os.close(self.descriptor)
+            self.descriptor = -1
+
+    def validate(self) -> None:
+        if self.descriptor < 0:
+            raise SourceStateError("pinned Git executable descriptor is closed")
+        try:
+            named = self.path.stat(follow_symlinks=False)
+            opened = os.fstat(self.descriptor)
+            proc_opened = os.stat(self.executable)
+        except OSError as error:
+            raise SourceStateError(
+                f"cannot revalidate pinned Git executable: {error}"
+            ) from error
+        if (
+            exact_file_identity(named) != self.identity
+            or exact_file_identity(opened) != self.identity
+            or exact_file_identity(proc_opened) != self.identity
+            or hash_descriptor(self.descriptor, opened.st_size) != self.sha256
+        ):
+            raise SourceStateError("pinned Git executable identity or content changed")
+
+    def run(self, root: pathlib.Path, *arguments: str) -> bytes:
+        self.validate()
+        try:
+            completed = subprocess.run(
+                [self.executable, "-C", os.fspath(root), *arguments],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd="/",
+                env=GIT_ENVIRONMENT,
+                pass_fds=(self.descriptor,),
+                timeout=60,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            raise SourceStateError(f"cannot execute pinned Git: {error}") from error
+        finally:
+            self.validate()
+        if len(completed.stdout) > MAX_GIT_OUTPUT_BYTES:
+            raise SourceStateError("Git output exceeds the source-state bound")
+        if completed.returncode != 0:
+            detail = completed.stderr[:4096].decode("utf-8", "replace").strip()
+            raise SourceStateError(f"Git {' '.join(arguments)} failed: {detail}")
+        return completed.stdout
+
+
+def git(git_tool: PinnedGit, root: pathlib.Path, *arguments: str) -> bytes:
     try:
-        completed = subprocess.run(
-            ["git", "-C", os.fspath(root), *arguments],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=60,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError) as error:
-        raise SourceStateError(f"cannot execute git: {error}") from error
-    if len(completed.stdout) > MAX_GIT_OUTPUT_BYTES:
-        raise SourceStateError("git output exceeds the source-state bound")
-    if completed.returncode != 0:
-        detail = completed.stderr[:4096].decode("utf-8", "replace").strip()
-        raise SourceStateError(f"git {' '.join(arguments)} failed: {detail}")
-    return completed.stdout
+        return git_tool.run(root, *arguments)
+    except SourceStateError as error:
+        raise SourceStateError(f"Git {' '.join(arguments)} failed: {error}") from error
 
 
 def decode_object(value: bytes, label: str) -> str:
@@ -60,11 +194,11 @@ def decode_object(value: bytes, label: str) -> str:
     return decoded
 
 
-def canonical_root(root: pathlib.Path) -> pathlib.Path:
+def canonical_root(root: pathlib.Path, git_tool: PinnedGit) -> pathlib.Path:
     try:
         canonical = root.resolve(strict=True)
         top_level = pathlib.Path(
-            git(canonical, "rev-parse", "--show-toplevel")
+            git(git_tool, canonical, "rev-parse", "--show-toplevel")
             .decode("utf-8")
             .strip()
         ).resolve(strict=True)
@@ -75,8 +209,9 @@ def canonical_root(root: pathlib.Path) -> pathlib.Path:
     return canonical
 
 
-def require_clean(root: pathlib.Path) -> None:
+def require_clean(root: pathlib.Path, git_tool: PinnedGit) -> None:
     status_output = git(
+        git_tool,
         root,
         "status",
         "--porcelain=v1",
@@ -90,14 +225,9 @@ def require_clean(root: pathlib.Path) -> None:
         )
 
 
-def inspect(root: pathlib.Path) -> tuple[str, str]:
-    root = canonical_root(root)
-    require_clean(root)
-    commit = decode_object(git(root, "rev-parse", "--verify", "HEAD"), "source commit")
-    tree = decode_object(
-        git(root, "rev-parse", "--verify", "HEAD^{tree}"), "source tree"
-    )
-    return commit, tree
+def inspect(root: pathlib.Path, git_tool: PinnedGit) -> tuple[str, str]:
+    state = parse_state(capture_state(root, git_tool))
+    return str(state["source_commit"]), str(state["source_tree"])
 
 
 def hash_open_file(
@@ -155,7 +285,9 @@ def parse_index_entries(data: bytes) -> list[tuple[str, str, bytes]]:
         except UnicodeDecodeError as error:
             raise SourceStateError("Git tracked metadata is not ASCII") from error
         if stage != b"0" or not GIT_OBJECT.fullmatch(object_id):
-            raise SourceStateError("Git index contains a noncanonical or unmerged entry")
+            raise SourceStateError(
+                "Git index contains a noncanonical or unmerged entry"
+            )
         if path.startswith(b"/") or any(
             component in (b"", b".", b"..") for component in path.split(b"/")
         ):
@@ -166,32 +298,35 @@ def parse_index_entries(data: bytes) -> list[tuple[str, str, bytes]]:
     return entries
 
 
-def capture_state(root: pathlib.Path) -> bytes:
-    root = canonical_root(root)
-    require_clean(root)
-    commit = decode_object(git(root, "rev-parse", "--verify", "HEAD"), "source commit")
+def capture_state(root: pathlib.Path, git_tool: PinnedGit) -> bytes:
+    root = canonical_root(root, git_tool)
+    require_clean(root, git_tool)
+    commit = decode_object(
+        git(git_tool, root, "rev-parse", "--verify", "HEAD"), "source commit"
+    )
     tree = decode_object(
-        git(root, "rev-parse", "--verify", "HEAD^{tree}"), "source tree"
+        git(git_tool, root, "rev-parse", "--verify", "HEAD^{tree}"), "source tree"
     )
     try:
-        object_format = git(root, "rev-parse", "--show-object-format").decode(
-            "ascii"
-        ).strip()
+        object_format = (
+            git(git_tool, root, "rev-parse", "--show-object-format")
+            .decode("ascii")
+            .strip()
+        )
     except UnicodeDecodeError as error:
         raise SourceStateError("Git object format is not ASCII") from error
     if object_format not in {"sha1", "sha256"}:
         raise SourceStateError("Git object format is unsupported")
-    raw_index = git(root, "ls-files", "--stage", "-z")
+    raw_index = git(git_tool, root, "ls-files", "--stage", "-z")
     tracked: list[dict[str, object]] = []
     for git_mode, git_object, raw_path in parse_index_entries(raw_index):
         if git_mode not in REGULAR_GIT_MODES:
-            continue
+            raise SourceStateError(
+                "source tree contains unsupported tracked Git mode "
+                f"{git_mode}: {os.fsdecode(raw_path)!r}"
+            )
         path = root / os.fsdecode(raw_path)
-        flags = (
-            os.O_RDONLY
-            | getattr(os, "O_CLOEXEC", 0)
-            | getattr(os, "O_NOFOLLOW", 0)
-        )
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
         try:
             descriptor = os.open(path, flags)
         except OSError as error:
@@ -234,17 +369,23 @@ def capture_state(root: pathlib.Path) -> bytes:
             os.close(descriptor)
     if not tracked:
         raise SourceStateError("source tree contains no tracked regular Git blobs")
-    require_clean(root)
-    if decode_object(git(root, "rev-parse", "--verify", "HEAD"), "source commit") != commit:
+    require_clean(root, git_tool)
+    if (
+        decode_object(
+            git(git_tool, root, "rev-parse", "--verify", "HEAD"), "source commit"
+        )
+        != commit
+    ):
         raise SourceStateError("source HEAD changed while source state was captured")
     if (
         decode_object(
-            git(root, "rev-parse", "--verify", "HEAD^{tree}"), "source tree"
+            git(git_tool, root, "rev-parse", "--verify", "HEAD^{tree}"),
+            "source tree",
         )
         != tree
     ):
         raise SourceStateError("source tree changed while source state was captured")
-    if git(root, "ls-files", "--stage", "-z") != raw_index:
+    if git(git_tool, root, "ls-files", "--stage", "-z") != raw_index:
         raise SourceStateError("Git index changed while source state was captured")
     state = {
         "format": "fe2o3-s09-source-state-v1",
@@ -254,9 +395,12 @@ def capture_state(root: pathlib.Path) -> bytes:
         "git_index_sha256": hashlib.sha256(raw_index).hexdigest(),
         "tracked_regular_blobs": tracked,
     }
-    encoded = json.dumps(
-        state, sort_keys=True, separators=(",", ":"), ensure_ascii=True
-    ).encode("ascii") + b"\n"
+    encoded = (
+        json.dumps(
+            state, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+        ).encode("ascii")
+        + b"\n"
+    )
     if not 1 <= len(encoded) <= MAX_STATE_BYTES:
         raise SourceStateError("canonical source state exceeds its sealed bound")
     return encoded
@@ -336,9 +480,8 @@ def parse_state(data: bytes) -> dict[str, object]:
         ):
             raise SourceStateError("sealed tracked-blob Git object is malformed")
         content_sha256 = entry["content_sha256"]
-        if (
-            not isinstance(content_sha256, str)
-            or not re.fullmatch(r"[0-9a-f]{64}", content_sha256)
+        if not isinstance(content_sha256, str) or not re.fullmatch(
+            r"[0-9a-f]{64}", content_sha256
         ):
             raise SourceStateError("sealed tracked-blob content digest is malformed")
         for field in (
@@ -356,9 +499,12 @@ def parse_state(data: bytes) -> dict[str, object]:
                 )
         if entry["device"] < 0 or entry["inode"] <= 0 or entry["links"] < 1:
             raise SourceStateError("sealed tracked-blob identity is invalid")
-    canonical = json.dumps(
-        state, sort_keys=True, separators=(",", ":"), ensure_ascii=True
-    ).encode("ascii") + b"\n"
+    canonical = (
+        json.dumps(
+            state, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+        ).encode("ascii")
+        + b"\n"
+    )
     if canonical != data:
         raise SourceStateError("sealed source-state serialization is noncanonical")
     return state
@@ -379,7 +525,10 @@ def seal_state(data: bytes) -> int:
             written += count
         os.fsync(descriptor)
         fcntl.fcntl(descriptor, fcntl.F_ADD_SEALS, REQUIRED_SEALS)
-        if fcntl.fcntl(descriptor, fcntl.F_GET_SEALS) & REQUIRED_SEALS != REQUIRED_SEALS:
+        if (
+            fcntl.fcntl(descriptor, fcntl.F_GET_SEALS) & REQUIRED_SEALS
+            != REQUIRED_SEALS
+        ):
             raise SourceStateError("sealed source state is missing required seals")
         return descriptor
     except OSError as error:
@@ -418,8 +567,8 @@ def substitute_command(command: Sequence[str], state: dict[str, object]) -> list
     return result
 
 
-def supervise(root: pathlib.Path, command: Sequence[str]) -> int:
-    before = capture_state(root)
+def supervise(root: pathlib.Path, command: Sequence[str], git_tool: PinnedGit) -> int:
+    before = capture_state(root, git_tool)
     state = parse_state(before)
     descriptor = seal_state(before)
     try:
@@ -434,9 +583,14 @@ def supervise(root: pathlib.Path, command: Sequence[str]) -> int:
                 check=False,
             )
         except OSError as error:
-            raise SourceStateError(f"cannot execute supervised command: {error}") from error
-        after = capture_state(root)
-        if read_sealed_state(descriptor, len(before)) != sealed_before or after != sealed_before:
+            raise SourceStateError(
+                f"cannot execute supervised command: {error}"
+            ) from error
+        after = capture_state(root, git_tool)
+        if (
+            read_sealed_state(descriptor, len(before)) != sealed_before
+            or after != sealed_before
+        ):
             raise SourceStateError(
                 "tracked source identity or content changed during evidence generation"
             )
@@ -460,16 +614,21 @@ def main() -> int:
     args = parse_args()
     if (args.expected_commit is None) != (args.expected_tree is None):
         raise SourceStateError("expected commit and tree must be supplied together")
-    if args.command:
+    with PinnedGit() as git_tool:
+        if args.command:
+            if args.expected_commit is not None:
+                raise SourceStateError(
+                    "supervised mode does not accept expected Git objects"
+                )
+            if args.command[0] != "--" or len(args.command) == 1:
+                raise SourceStateError("supervised command must follow --")
+            return supervise(args.root, args.command[1:], git_tool)
+        commit, tree = inspect(args.root, git_tool)
         if args.expected_commit is not None:
-            raise SourceStateError("supervised mode does not accept expected Git objects")
-        if args.command[0] != "--" or len(args.command) == 1:
-            raise SourceStateError("supervised command must follow --")
-        return supervise(args.root, args.command[1:])
-    commit, tree = inspect(args.root)
-    if args.expected_commit is not None:
-        if commit != args.expected_commit or tree != args.expected_tree:
-            raise SourceStateError("source HEAD or tree changed during evidence generation")
+            if commit != args.expected_commit or tree != args.expected_tree:
+                raise SourceStateError(
+                    "source HEAD or tree changed during evidence generation"
+                )
     print(f"source_commit\t{commit}")
     print(f"source_tree\t{tree}")
     return 0

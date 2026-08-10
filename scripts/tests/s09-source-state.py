@@ -3,7 +3,10 @@
 
 from __future__ import annotations
 
+import importlib.util
+import os
 import pathlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -12,6 +15,10 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 CHECKER = ROOT / "scripts" / "s09-source-state.py"
+SPEC = importlib.util.spec_from_file_location("s09_source_state", CHECKER)
+assert SPEC is not None and SPEC.loader is not None
+SOURCE_STATE = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(SOURCE_STATE)
 
 
 class SourceStateTests(unittest.TestCase):
@@ -33,12 +40,18 @@ class SourceStateTests(unittest.TestCase):
             ["git", "-C", str(self.repository), *arguments], text=True
         ).strip()
 
-    def check(self, *arguments: str) -> subprocess.CompletedProcess[str]:
+    def check(
+        self, *arguments: str, environment: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        child_environment = os.environ.copy()
+        if environment is not None:
+            child_environment.update(environment)
         return subprocess.run(
             [str(CHECKER), "--root", str(self.repository), *arguments],
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            env=child_environment,
             check=False,
         )
 
@@ -142,6 +155,80 @@ path.chmod(mode)
         completed = self.supervise(code)
         self.assertNotEqual(completed.returncode, 0)
         self.assertIn("changed during evidence generation", completed.stderr)
+
+    def test_inherited_git_environment_and_configs_are_ignored(self) -> None:
+        with tempfile.NamedTemporaryFile("w", encoding="ascii") as config:
+            config.write("[core]\n\tbare = true\n")
+            config.flush()
+            completed = self.check(
+                environment={
+                    "GIT_CONFIG_GLOBAL": config.name,
+                    "GIT_CONFIG_SYSTEM": config.name,
+                    "GIT_CONFIG_COUNT": "1",
+                    "GIT_CONFIG_KEY_0": "core.bare",
+                    "GIT_CONFIG_VALUE_0": "true",
+                    "GIT_DIR": "/does/not/exist",
+                    "GIT_INDEX_FILE": "/does/not/exist",
+                    "GIT_WORK_TREE": "/does/not/exist",
+                }
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_tracked_symlink_is_rejected(self) -> None:
+        (self.repository / "source-link").symlink_to("source.txt")
+        self.git("add", "source-link")
+        self.git("commit", "-qm", "symlink")
+        completed = self.check()
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("unsupported tracked Git mode 120000", completed.stderr)
+
+    def test_tracked_gitlink_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as source_name:
+            source = pathlib.Path(source_name)
+            subprocess.check_call(["git", "-C", str(source), "init", "-q"])
+            subprocess.check_call(
+                ["git", "-C", str(source), "config", "user.name", "S09 Test"]
+            )
+            subprocess.check_call(
+                [
+                    "git",
+                    "-C",
+                    str(source),
+                    "config",
+                    "user.email",
+                    "s09@example.invalid",
+                ]
+            )
+            (source / "nested.txt").write_text("nested\n", encoding="ascii")
+            subprocess.check_call(["git", "-C", str(source), "add", "nested.txt"])
+            subprocess.check_call(["git", "-C", str(source), "commit", "-qm", "nested"])
+            self.git(
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                "-q",
+                str(source),
+                "nested",
+            )
+            self.git("commit", "-qm", "gitlink")
+            completed = self.check()
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("unsupported tracked Git mode 160000", completed.stderr)
+
+    def test_pinned_git_path_substitution_is_rejected(self) -> None:
+        executable = self.repository / "pinned-git"
+        parked = self.repository / "held-git"
+        shutil.copy2("/usr/bin/git", executable)
+        with SOURCE_STATE.PinnedGit(executable) as git_tool:
+            git_tool.run(self.repository, "rev-parse", "--verify", "HEAD")
+            executable.rename(parked)
+            shutil.copy2("/usr/bin/git", executable)
+            with self.assertRaisesRegex(
+                SOURCE_STATE.SourceStateError,
+                "identity or content changed",
+            ):
+                git_tool.run(self.repository, "rev-parse", "--verify", "HEAD")
 
 
 if __name__ == "__main__":
