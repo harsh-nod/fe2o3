@@ -1,0 +1,11 @@
+error[E0505]: cannot move out of `tile` because it is borrowed
+ --> tests/ui/tile_interop/allocation_cannot_move_while_leased.rs:6:10
+  |
+4 | fn rejected(stream: &Stream, mut tile: Gfx942Xor4Bf16TileAllocationV1) {
+  |                              -------- binding `tile` declared here
+5 |     let lease = tile.lease(stream).unwrap();
+  |                 ---- borrow of `tile` occurs here
+6 |     drop(tile);
+  |          ^^^^ move out of `tile` occurs here
+7 |     let _ = lease.len();
+  |             ----- borrow later used here

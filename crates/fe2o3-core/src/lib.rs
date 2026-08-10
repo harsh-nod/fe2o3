@@ -45,7 +45,7 @@ pub use peer_access::{
     PeerAccessDirection, PeerAccessEnableError, PeerAccessObservationError,
 };
 pub use pinned_memory::PinnedHostBuffer;
-pub use stream::Stream;
+pub use stream::{Stream, StreamIdentity};
 pub use vmm::{
     VmmAccess, VmmAccessReceipt, VmmAccessibleAllocation, VmmCleanupError, VmmCleanupStage,
     VmmError, VmmLayout, VmmMapAmbiguity, VmmMappedAllocation, VmmReclamationReceipt,

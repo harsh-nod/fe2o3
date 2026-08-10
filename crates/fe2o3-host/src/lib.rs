@@ -11,6 +11,7 @@ mod prepared_launch;
 mod published_direct_link;
 mod published_hsaco_inspection;
 mod recovered_worker_v2_admission;
+mod tile_interop;
 mod worker_v2_bundle_admission;
 
 #[cfg(feature = "hardware-test-hooks")]
@@ -121,6 +122,12 @@ pub use recovered_worker_v2_admission::{
     RecoveredWorkerV2AdmissionError, RecoveredWorkerV2PinnedDescriptorV1,
     recover_worker_v2_load_envelope_v1,
 };
+pub use tile_interop::{
+    GFX942_XOR4_BF16_TILE_COLUMNS_V1, GFX942_XOR4_BF16_TILE_ELEMENTS_V1,
+    GFX942_XOR4_BF16_TILE_ROWS_V1, GFX942_XOR4_BF16_TILE_WAVE_LANES_V1, Gfx942TileInteropErrorV1,
+    Gfx942Xor4Bf16TileAllocationV1, Gfx942Xor4Bf16TileLeaseV1,
+};
+
 pub use worker_v2_bundle_admission::{
     AdmittedFinalizedWorkerV2BundleV1, AdmittedWorkerV2TypedKernelV1,
     CurrentFinalizedWorkerV2BundleAdmissionV1, FinalizedWorkerV2BundleAdmissionError,
