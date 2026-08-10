@@ -13,6 +13,7 @@ import hashlib
 import os
 from pathlib import Path
 import re
+import secrets
 import shlex
 import shutil
 import stat
@@ -712,6 +713,111 @@ def validate_production_trust(trusted_root: Path, policy_path: Path) -> TrustPol
     return trust
 
 
+def open_directory_at(parent_fd: int, name: str) -> int:
+    try:
+        return os.open(
+            name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+            dir_fd=parent_fd,
+        )
+    except OSError as error:
+        fail(f"cannot open bootstrap directory {name}: {error}")
+
+
+def create_directory_at(parent_fd: int, name: str) -> int:
+    try:
+        os.mkdir(name, 0o700, dir_fd=parent_fd)
+    except OSError as error:
+        fail(f"cannot create bootstrap directory {name}: {error}")
+    return open_directory_at(parent_fd, name)
+
+
+def write_file_at(directory_fd: int, name: str, value: bytes, mode: int) -> None:
+    try:
+        descriptor = os.open(
+            name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+            mode,
+            dir_fd=directory_fd,
+        )
+    except OSError as error:
+        fail(f"cannot create bootstrap file {name}: {error}")
+    try:
+        view = memoryview(value)
+        while view:
+            count = os.write(descriptor, view)
+            if count <= 0:
+                fail(f"short write for bootstrap file {name}")
+            view = view[count:]
+        os.fchmod(descriptor, mode)
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def remove_tree_at(parent_fd: int, name: str) -> None:
+    try:
+        descriptor = os.open(
+            name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+            dir_fd=parent_fd,
+        )
+    except FileNotFoundError:
+        return
+    try:
+        for child in os.listdir(descriptor):
+            info = os.stat(child, dir_fd=descriptor, follow_symlinks=False)
+            if stat.S_ISDIR(info.st_mode):
+                remove_tree_at(descriptor, child)
+            else:
+                os.unlink(child, dir_fd=descriptor)
+    finally:
+        os.close(descriptor)
+    os.rmdir(name, dir_fd=parent_fd)
+
+
+def rename_noreplace_at(
+    parent_fd: int, source_name: str, destination_name: str, exists_message: str
+) -> None:
+    libc = ctypes.CDLL(None, use_errno=True)
+    try:
+        renameat2 = libc.renameat2
+    except AttributeError:
+        fail("atomic no-replace publication is unavailable")
+    renameat2.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    renameat2.restype = ctypes.c_int
+    if renameat2(
+        parent_fd,
+        os.fsencode(source_name),
+        parent_fd,
+        os.fsencode(destination_name),
+        RENAME_NOREPLACE,
+    ) != 0:
+        error = ctypes.get_errno()
+        if error == errno.EEXIST:
+            fail(exists_message)
+        fail(f"atomic no-replace publication failed: {os.strerror(error)}")
+
+
+def create_bootstrap_staging(parent_fd: int) -> tuple[str, int]:
+    for _ in range(128):
+        name = f".fe2o3-trust-{secrets.token_hex(12)}"
+        try:
+            os.mkdir(name, 0o700, dir_fd=parent_fd)
+        except FileExistsError:
+            continue
+        except OSError as error:
+            fail(f"cannot create production trust staging directory: {error}")
+        return name, open_directory_at(parent_fd, name)
+    fail("cannot allocate a unique production trust staging directory")
+
+
 def bootstrap_production_trust(args: argparse.Namespace) -> None:
     if not ID_RE.fullmatch(args.attestor_key_id) or not ID_RE.fullmatch(
         args.reviewer_key_id
@@ -729,14 +835,26 @@ def bootstrap_production_trust(args: argparse.Namespace) -> None:
         if ed25519_fingerprint(attestor_path) == ed25519_fingerprint(reviewer_path):
             fail("attestor and reviewer must use distinct Ed25519 public keys")
 
-    destination = args.output_root.absolute()
-    if destination.exists() or destination.is_symlink():
-        fail("production trust bootstrap output already exists")
-    parent = destination.parent.resolve(strict=True)
-    staging = Path(tempfile.mkdtemp(prefix=".fe2o3-trust-", dir=parent))
+    destination = Path(os.path.abspath(args.output_root))
+    destination_name = destination.name
+    if destination_name in ("", ".", ".."):
+        fail("production trust bootstrap output must name a directory")
+    parent = destination.parent
     try:
-        keys = staging.joinpath(TRUST_KEYS_RELATIVE)
-        keys.mkdir(parents=True, mode=0o700)
+        parent_fd = os.open(
+            parent,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+        )
+    except OSError as error:
+        fail(f"production trust bootstrap parent must be a real directory: {error}")
+    staging_name = ""
+    staging_fd = -1
+    published = False
+    try:
+        staging_name, staging_fd = create_bootstrap_staging(parent_fd)
+        docs_fd = create_directory_at(staging_fd, "docs")
+        parity_fd = create_directory_at(docs_fd, "parity-evidence")
+        keys_fd = create_directory_at(parity_fd, "trusted-keys")
         material = [
             ("attestor", args.attestor_key_id, attestor),
             ("reviewer", args.reviewer_key_id, reviewer),
@@ -744,10 +862,10 @@ def bootstrap_production_trust(args: argparse.Namespace) -> None:
         records: list[tuple[str, str, str, str]] = []
         for role, key_id, public_key in material:
             relative = TRUST_KEYS_RELATIVE.joinpath(f"{key_id}.pem")
-            output = staging.joinpath(relative)
-            output.write_bytes(public_key)
-            output.chmod(0o444)
-            records.append((role, key_id, relative.as_posix(), sha256_file(output)))
+            write_file_at(keys_fd, f"{key_id}.pem", public_key, 0o444)
+            records.append(
+                (role, key_id, relative.as_posix(), sha256_bytes(public_key))
+            )
         records.sort()
         lines = [
             "parity_trust_policy_schema_version\t2",
@@ -761,14 +879,42 @@ def bootstrap_production_trust(args: argparse.Namespace) -> None:
             lines.append(
                 f"key\t{index:04d}\t{role}\t{key_id}\t{relative}\t{digest}\ted25519"
             )
-        policy = staging.joinpath(TRUST_POLICY_RELATIVE)
-        policy.write_text("\n".join(lines) + "\n", encoding="ascii")
-        policy.chmod(0o444)
-        validate_production_trust(staging, policy)
-        os.rename(staging, destination)
+        policy_bytes = ("\n".join(lines) + "\n").encode("ascii")
+        write_file_at(parity_fd, "trust-policy-v2.tsv", policy_bytes, 0o444)
+        os.fsync(keys_fd)
+        os.close(keys_fd)
+        keys_fd = -1
+        os.fsync(parity_fd)
+        os.close(parity_fd)
+        parity_fd = -1
+        os.fsync(docs_fd)
+        os.close(docs_fd)
+        docs_fd = -1
+        os.fsync(staging_fd)
+        os.fsync(parent_fd)
+        rename_noreplace_at(
+            parent_fd,
+            staging_name,
+            destination_name,
+            "production trust bootstrap output already exists",
+        )
+        published = True
+        os.fsync(parent_fd)
     except BaseException:
-        shutil.rmtree(staging, ignore_errors=True)
+        for descriptor_name in ("keys_fd", "parity_fd", "docs_fd"):
+            descriptor = locals().get(descriptor_name, -1)
+            if isinstance(descriptor, int) and descriptor >= 0:
+                os.close(descriptor)
+        if staging_fd >= 0:
+            os.close(staging_fd)
+            staging_fd = -1
+        if staging_name and not published:
+            remove_tree_at(parent_fd, staging_name)
         raise
+    finally:
+        if staging_fd >= 0:
+            os.close(staging_fd)
+        os.close(parent_fd)
     print(f"production trust bootstrap written: {destination}")
 
 

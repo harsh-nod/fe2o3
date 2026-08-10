@@ -8,6 +8,8 @@ import importlib.util
 from pathlib import Path
 import sys
 import tempfile
+from types import SimpleNamespace
+from concurrent.futures import ThreadPoolExecutor
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -19,6 +21,25 @@ EVIDENCE = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = EVIDENCE
 SPEC.loader.exec_module(EVIDENCE)
 FIXTURES = ROOT / "scripts/tests/fixtures"
+
+
+def bootstrap_args(output: Path) -> SimpleNamespace:
+    return SimpleNamespace(
+        output_root=output,
+        attestor_public_key=FIXTURES / "evidence-test-attestor-public.pem",
+        attestor_key_id="production-attestor",
+        reviewer_public_key=FIXTURES / "evidence-test-reviewer-public.pem",
+        reviewer_key_id="production-reviewer",
+    )
+
+
+def expect_evidence_error(function: object, expected: str) -> None:
+    try:
+        function()
+    except EVIDENCE.EvidenceError as error:
+        assert expected in str(error), str(error)
+    else:
+        raise AssertionError(f"expected evidence error containing: {expected}")
 
 
 def write_policy(root: Path, public_key: bytes) -> Path:
@@ -141,9 +162,104 @@ def test_archive_snapshot_rejects_symlink_traversal() -> None:
             raise AssertionError("archive snapshot followed a symlink")
 
 
+def test_bootstrap_publication_is_durable_and_no_replace() -> None:
+    with tempfile.TemporaryDirectory(prefix="fe2o3-bootstrap-publish-") as raw_temp:
+        temp = Path(raw_temp)
+        fsync_calls: list[int] = []
+        real_fsync = EVIDENCE.os.fsync
+
+        def recording_fsync(descriptor: int) -> None:
+            fsync_calls.append(descriptor)
+            real_fsync(descriptor)
+
+        EVIDENCE.os.fsync = recording_fsync
+        output = temp / "trust"
+        try:
+            EVIDENCE.bootstrap_production_trust(bootstrap_args(output))
+        finally:
+            EVIDENCE.os.fsync = real_fsync
+        assert len(fsync_calls) >= 8
+        policy = output / "docs/parity-evidence/trust-policy-v2.tsv"
+        EVIDENCE.validate_production_trust(output, policy)
+
+        for kind in ("file", "directory", "symlink"):
+            target = temp / f"existing-{kind}"
+            if kind == "file":
+                target.write_text("occupied\n", encoding="ascii")
+            elif kind == "directory":
+                target.mkdir()
+            else:
+                target.symlink_to(output, target_is_directory=True)
+            expect_evidence_error(
+                lambda target=target: EVIDENCE.bootstrap_production_trust(
+                    bootstrap_args(target)
+                ),
+                "production trust bootstrap output already exists",
+            )
+
+
+def test_bootstrap_destination_race_has_one_winner() -> None:
+    with tempfile.TemporaryDirectory(prefix="fe2o3-bootstrap-race-") as raw_temp:
+        output = Path(raw_temp) / "trust"
+
+        def attempt() -> str:
+            try:
+                EVIDENCE.bootstrap_production_trust(bootstrap_args(output))
+                return "published"
+            except EVIDENCE.EvidenceError as error:
+                return str(error)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            outcomes = list(pool.map(lambda _: attempt(), range(2)))
+        assert outcomes.count("published") == 1, outcomes
+        assert sum("output already exists" in value for value in outcomes) == 1
+        assert not list(output.parent.glob(".fe2o3-trust-*"))
+
+
+def test_bootstrap_interruption_cleans_unpublished_staging() -> None:
+    with tempfile.TemporaryDirectory(prefix="fe2o3-bootstrap-interrupt-") as raw_temp:
+        temp = Path(raw_temp)
+        output = temp / "trust"
+        real_rename = EVIDENCE.rename_noreplace_at
+
+        def interrupt(*_: object) -> None:
+            raise EVIDENCE.EvidenceError("injected publication interruption")
+
+        EVIDENCE.rename_noreplace_at = interrupt
+        try:
+            expect_evidence_error(
+                lambda: EVIDENCE.bootstrap_production_trust(bootstrap_args(output)),
+                "injected publication interruption",
+            )
+        finally:
+            EVIDENCE.rename_noreplace_at = real_rename
+        assert not output.exists() and not output.is_symlink()
+        assert not list(temp.glob(".fe2o3-trust-*"))
+
+
+def test_bootstrap_rejects_symlink_parent() -> None:
+    with tempfile.TemporaryDirectory(prefix="fe2o3-bootstrap-parent-") as raw_temp:
+        temp = Path(raw_temp)
+        real_parent = temp / "real-parent"
+        real_parent.mkdir()
+        linked_parent = temp / "linked-parent"
+        linked_parent.symlink_to(real_parent, target_is_directory=True)
+        expect_evidence_error(
+            lambda: EVIDENCE.bootstrap_production_trust(
+                bootstrap_args(linked_parent / "trust")
+            ),
+            "bootstrap parent must be a real directory",
+        )
+        assert not (real_parent / "trust").exists()
+
+
 if __name__ == "__main__":
     test_verification_retains_authenticated_key_bytes()
     test_archive_snapshot_never_reopens_replaced_root_path()
     test_archive_snapshot_detects_replaced_entry()
     test_archive_snapshot_rejects_symlink_traversal()
+    test_bootstrap_publication_is_durable_and_no_replace()
+    test_bootstrap_destination_race_has_one_winner()
+    test_bootstrap_interruption_cleans_unpublished_staging()
+    test_bootstrap_rejects_symlink_parent()
     print("signed parity FD and retained-key adversarial tests passed")
