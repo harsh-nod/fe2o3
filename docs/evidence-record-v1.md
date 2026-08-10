@@ -240,6 +240,31 @@ semantic witnesses and prerequisite authenticator are explicit test fixtures.
 It is observed runtime-composition and hardware evidence, not production
 authentication, a dashboard `remote-hardware` strength, or a parity promotion.
 
+The later repository-backed compiler-evidence controller is defined by
+`tests/fixtures/compiler-evidence/gfx942-alpha-zeta-cov6.json` and
+`scripts/test-gfx942-compiler-evidence.sh`. Unlike the historical observations
+above, it rebuilds the exact measured Worker from the current clean checkout,
+generates the genuine alpha/zeta COV6 artifact twice through Worker V2, checks
+both outputs against one bounded repository digest, and immediately executes
+that same artifact on MI300X. The checked artifact facts are:
+
+```text
+target=gfx942:xnack-
+code_object_version=6
+worker_build_identity=fe2o3-worker-v1-sha256-234d22f9fb347c86495e7156e53ef8eab55e939d6514973a6df373aee12f77a9
+worker_executable_sha256=764c7309af90b7c11b9a8ca14a84d449ab9f0a7f5eaf39b82b2d316ad4f3235a
+source_sha256=73c1ff5e2f29d245c8071bdb6c1a38af1c9ee1573b78d47a987633483b37e084
+hsaco_sha256=f5bc17f1950921e5bb8e7f64b576b7477cd82b4adffd1b6cfae3f6036c85844d
+hsaco_bytes=9392
+```
+
+The controller stores only two bounded regenerated HSACOs in its fresh
+external evidence directory; no binary is committed. It uses direct LLVM/LLD
+library APIs and no COMGR or command-line linker/disassembler. It is still
+local, unsigned, evidence-only work: no authenticated compiler execution
+issuer exists, no production receipt is constructed, and no parity status is
+promoted.
+
 To archive that exact test in an isolated parity snapshot, first place the
 HSACO as a regular non-symlink file under the external archive root, then run:
 

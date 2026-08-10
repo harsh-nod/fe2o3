@@ -276,6 +276,44 @@ production proof authentication or a dashboard hardware-evidence strength.
 Use the optional `GFX942-ALPHA-ZETA-HARDWARE` parity snapshot shard to archive
 this exact command and artifact pin; see [Evidence Record V1](evidence-record-v1.md).
 
+### Repository-backed compiler evidence controller
+
+The checked
+`tests/fixtures/compiler-evidence/gfx942-alpha-zeta-cov6.json` contract closes
+the reproducible local compiler-evidence slice for one exact environment. It
+pins ROCm 7.2.4, LLVM `22.0.0git`, the measured Release Worker identity and
+executable digest, the genuine Rust alpha/zeta source digest, exact
+`gfx942:xnack-` COV6 metadata, the canonical descriptor section, the finalized
+HSACO digest and size, and the five MI300X boundary lengths. The 9 KiB binary
+is regenerated and is not committed.
+
+Run the complete controller from a clean committed checkout. Both output paths
+must be absent, absolute paths with existing canonical parents:
+
+```text
+scripts/test-gfx942-compiler-evidence.sh \
+  /absolute/absent/worker-build \
+  /absolute/absent/evidence \
+  /home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/bin/cargo \
+  /home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/bin/rustc
+```
+
+The controller builds the pinned C++ Worker from repository sources, runs all
+native CTests, executes the real `rustc -> CompilerModuleHandoffV2 -> Worker
+V2` path twice, and requires byte-identical output with the checked digest. The
+Rust integration verifies the canonical V2 request/response binding, worker and
+LLVM identities, raw COV6 inspection, canonical descriptor finalization, and
+the exact final HSACO. The final ignored test loads one executable and runs
+both alpha and zeta at lengths `1`, `255`, `256`, `257`, and `1023` with CPU
+oracles and prefix/suffix canaries.
+
+This controller uses LLVM and LLD library APIs only. It invokes neither COMGR
+nor a command-line linker/disassembler. Its output remains descriptive local
+evidence: it does not construct
+`AuthenticatedCompilerTransactionExecutionReceiptV1`, authenticate compiler
+causality, grant load/launch authority outside the test harness, archive signed
+production evidence, or promote parity.
+
 ## Verus proof coverage
 
 Run the two positive vecadd and fill proof harnesses plus all twelve
