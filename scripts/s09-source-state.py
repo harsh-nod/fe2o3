@@ -10,9 +10,12 @@ import json
 import os
 import pathlib
 import re
+import selectors
+import signal
 import stat
 import subprocess
 import sys
+import time
 from collections.abc import Sequence
 from types import TracebackType
 
@@ -34,6 +37,7 @@ GIT_ENVIRONMENT = {
     "GIT_CONFIG_GLOBAL": "/dev/null",
     "GIT_CONFIG_NOSYSTEM": "1",
     "GIT_CONFIG_SYSTEM": "/dev/null",
+    "GIT_NO_REPLACE_OBJECTS": "1",
     "GIT_TERMINAL_PROMPT": "0",
     "HOME": "/",
     "LANG": "C",
@@ -42,10 +46,93 @@ GIT_ENVIRONMENT = {
     "SSH_ASKPASS": "/bin/false",
     "XDG_CONFIG_HOME": "/dev/null",
 }
+GIT_CONFIG_ARGUMENTS = (
+    "-c",
+    "core.fsmonitor=false",
+    "-c",
+    "core.hooksPath=/dev/null",
+)
 
 
 class SourceStateError(Exception):
     pass
+
+
+def stop_process_group(process: subprocess.Popen[bytes]) -> None:
+    """Stop a still-unreaped process group without allowing PID reuse."""
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+
+
+def run_bounded(
+    arguments: Sequence[str], descriptor: int
+) -> subprocess.CompletedProcess[bytes]:
+    process = subprocess.Popen(
+        arguments,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd="/",
+        env=GIT_ENVIRONMENT,
+        pass_fds=(descriptor,),
+        start_new_session=True,
+    )
+    assert process.stdout is not None and process.stderr is not None
+    selector = selectors.DefaultSelector()
+    output = {"stdout": bytearray(), "stderr": bytearray()}
+    deadline = time.monotonic() + 60
+    try:
+        for name, stream in (("stdout", process.stdout), ("stderr", process.stderr)):
+            os.set_blocking(stream.fileno(), False)
+            selector.register(stream, selectors.EVENT_READ, name)
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(arguments, 60)
+            events = selector.select(remaining)
+            if not events:
+                raise subprocess.TimeoutExpired(arguments, 60)
+            for key, _ in events:
+                name = key.data
+                destination = output[name]
+                read_size = min(
+                    COPY_CHUNK_BYTES,
+                    MAX_GIT_OUTPUT_BYTES - len(destination) + 1,
+                )
+                chunk = os.read(key.fileobj.fileno(), read_size)
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    continue
+                destination.extend(chunk)
+                if len(destination) > MAX_GIT_OUTPUT_BYTES:
+                    raise SourceStateError(
+                        f"Git {name} exceeds the "
+                        f"{MAX_GIT_OUTPUT_BYTES}-byte source-state bound"
+                    )
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired(arguments, 60)
+        returncode = process.wait(timeout=remaining)
+        return subprocess.CompletedProcess(
+            arguments,
+            returncode,
+            bytes(output["stdout"]),
+            bytes(output["stderr"]),
+        )
+    except BaseException:
+        stop_process_group(process)
+        raise
+    finally:
+        selector.close()
+        process.stdout.close()
+        process.stderr.close()
 
 
 def exact_file_identity(value: os.stat_result) -> tuple[int, ...]:
@@ -154,23 +241,20 @@ class PinnedGit:
     def run(self, root: pathlib.Path, *arguments: str) -> bytes:
         self.validate()
         try:
-            completed = subprocess.run(
-                [self.executable, "-C", os.fspath(root), *arguments],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                cwd="/",
-                env=GIT_ENVIRONMENT,
-                pass_fds=(self.descriptor,),
-                timeout=60,
-                check=False,
+            completed = run_bounded(
+                [
+                    self.executable,
+                    *GIT_CONFIG_ARGUMENTS,
+                    "-C",
+                    os.fspath(root),
+                    *arguments,
+                ],
+                self.descriptor,
             )
         except (OSError, subprocess.SubprocessError) as error:
             raise SourceStateError(f"cannot execute pinned Git: {error}") from error
         finally:
             self.validate()
-        if len(completed.stdout) > MAX_GIT_OUTPUT_BYTES:
-            raise SourceStateError("Git output exceeds the source-state bound")
         if completed.returncode != 0:
             detail = completed.stderr[:4096].decode("utf-8", "replace").strip()
             raise SourceStateError(f"Git {' '.join(arguments)} failed: {detail}")

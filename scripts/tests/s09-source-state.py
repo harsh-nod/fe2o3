@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -173,6 +174,112 @@ path.chmod(mode)
                 }
             )
         self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_repository_local_executable_helpers_are_disabled(self) -> None:
+        with tempfile.TemporaryDirectory() as helper_name:
+            helper_root = pathlib.Path(helper_name)
+            fsmonitor_marker = helper_root / "fsmonitor-ran"
+            fsmonitor = helper_root / "fsmonitor"
+            fsmonitor.write_text(
+                "#!/bin/sh\nprintf invoked > "
+                + str(fsmonitor_marker)
+                + "\nprintf '2\\n'\n",
+                encoding="ascii",
+            )
+            fsmonitor.chmod(0o755)
+            hooks = helper_root / "hooks"
+            hooks.mkdir()
+            hook_marker = helper_root / "hook-ran"
+            hook = hooks / "post-index-change"
+            hook.write_text(
+                "#!/bin/sh\nprintf invoked > " + str(hook_marker) + "\n",
+                encoding="ascii",
+            )
+            hook.chmod(0o755)
+            self.git("config", "core.fsmonitor", str(fsmonitor))
+            self.git("status", "--porcelain=v1")
+            self.assertTrue(fsmonitor_marker.exists())
+            fsmonitor_marker.unlink()
+            self.git("config", "core.hooksPath", str(hooks))
+
+            completed = self.check()
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertFalse(fsmonitor_marker.exists())
+            with SOURCE_STATE.PinnedGit() as git_tool:
+                with self.assertRaises(SOURCE_STATE.SourceStateError):
+                    git_tool.run(
+                        self.repository,
+                        "hook",
+                        "run",
+                        "post-index-change",
+                        "--",
+                        "0",
+                        "0",
+                    )
+            self.assertFalse(hook_marker.exists())
+
+    def test_replace_refs_do_not_change_reported_source_objects(self) -> None:
+        original_commit = self.git("rev-parse", "HEAD")
+        original_tree = self.git("rev-parse", "HEAD^{tree}")
+        (self.repository / "source.txt").write_text("replacement\n", encoding="ascii")
+        self.git("add", "source.txt")
+        self.git("commit", "-qm", "replacement")
+        replacement_commit = self.git("rev-parse", "HEAD")
+        self.git("reset", "--hard", "-q", original_commit)
+        self.git("replace", original_commit, replacement_commit)
+        self.assertNotEqual(self.git("rev-parse", "HEAD^{tree}"), original_tree)
+
+        completed = self.check()
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(
+            completed.stdout,
+            f"source_commit\t{original_commit}\nsource_tree\t{original_tree}\n",
+        )
+
+    def test_pinned_git_bounds_stdout_and_stderr_while_running(self) -> None:
+        with tempfile.TemporaryDirectory() as helper_name:
+            helper = pathlib.Path(helper_name) / "output-helper"
+            helper.write_text(
+                "#!/usr/bin/python3\n"
+                "import os\n"
+                "import sys\n"
+                "import time\n"
+                "stream = 1 if sys.argv[1] == 'stdout' else 2\n"
+                "for _ in range(16):\n"
+                "    os.write(stream, b'x' * 1024)\n"
+                "time.sleep(30)\n",
+                encoding="ascii",
+            )
+            helper.chmod(0o755)
+            for stream in ("stdout", "stderr"):
+                self.git(
+                    "config",
+                    f"alias.emit-{stream}",
+                    f"!{helper} {stream}",
+                )
+            with SOURCE_STATE.PinnedGit() as git_tool:
+                with mock.patch.object(SOURCE_STATE, "MAX_GIT_OUTPUT_BYTES", 4096):
+                    for stream in ("stdout", "stderr"):
+                        with self.subTest(stream=stream):
+                            with self.assertRaisesRegex(
+                                SOURCE_STATE.SourceStateError,
+                                f"Git {stream} exceeds the 4096-byte",
+                            ):
+                                git_tool.run(self.repository, f"emit-{stream}")
+
+    def test_pinned_git_failure_preserves_bounded_stderr_diagnostic(self) -> None:
+        with tempfile.TemporaryDirectory() as executable_name:
+            executable = pathlib.Path(executable_name) / "failing-git"
+            executable.write_text(
+                "#!/bin/sh\nprintf 'bounded diagnostic' >&2\nexit 7\n",
+                encoding="ascii",
+            )
+            executable.chmod(0o755)
+            with SOURCE_STATE.PinnedGit(executable) as git_tool:
+                with self.assertRaisesRegex(
+                    SOURCE_STATE.SourceStateError, "bounded diagnostic"
+                ):
+                    git_tool.run(self.repository, "status")
 
     def test_tracked_symlink_is_rejected(self) -> None:
         (self.repository / "source-link").symlink_to("source.txt")
