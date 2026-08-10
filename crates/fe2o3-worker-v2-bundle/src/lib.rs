@@ -10,10 +10,12 @@ mod inputs;
 mod model;
 
 pub use application_handoff::{
-    ApplicationHandoffProtocolErrorV1, WORKER_V2_APPLICATION_HANDOFF_ACK_BYTES_V1,
-    WorkerV2ApplicationHandoffAckV1, WorkerV2ApplicationHandoffChallengeV1,
-    WorkerV2ApplicationHandoffCommitmentV1, WorkerV2ApplicationHandoffExpectationV1,
-    WorkerV2ApplicationIdentityV1,
+    ApplicationHandoffProtocolErrorV1, WORKER_V2_APPLICATION_ARTIFACT_DIR_FD_ENV_V1,
+    WORKER_V2_APPLICATION_ENVELOPE_FD_ENV_V1, WORKER_V2_APPLICATION_HANDOFF_ACK_BYTES_V1,
+    WORKER_V2_APPLICATION_HANDOFF_ACK_FD_ENV_V1, WORKER_V2_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
+    WORKER_V2_APPLICATION_HANDOFF_COMMITMENT_ENV_V1, WorkerV2ApplicationHandoffAckV1,
+    WorkerV2ApplicationHandoffChallengeV1, WorkerV2ApplicationHandoffCommitmentV1,
+    WorkerV2ApplicationHandoffExpectationV1, WorkerV2ApplicationIdentityV1,
 };
 pub use codec::{WORKER_V2_LOAD_ENVELOPE_MAGIC, WORKER_V2_LOAD_ENVELOPE_VERSION};
 pub use compiler_transaction::{
