@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
+import ctypes
+import errno
 import fcntl
 import hashlib
 import os
@@ -23,6 +25,7 @@ from typing import Iterable
 
 MAX_BYTES = 4 * 1024 * 1024
 MAX_ITEMS = 256
+MAX_ARCHIVE_FILES = 4096
 CLASSES = ("unit", "ui", "ir", "compile", "verus", "hardware", "debug")
 CLASS_RANK = {value: index for index, value in enumerate(CLASSES)}
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -34,6 +37,11 @@ LANE_RE = re.compile(r"^(-|[a-z0-9][a-z0-9._-]{0,63})$")
 PATH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/+:-]{0,511}$")
 HEX_RE = re.compile(r"^(?:[0-9a-f]{2})+$")
 DEFAULT_LOCK = Path("/run/lock/fe2o3/mi300x-gfx942-evidence.lock")
+ARCHIVE_INDEX_RELATIVE = "archive-index-v1.tsv"
+FS_IOC_GETFLAGS = 0x80086601
+FS_IMMUTABLE_FL = 0x00000010
+AT_FDCWD = -100
+RENAME_NOREPLACE = 1
 TRUST_POLICY_RELATIVE = Path("docs/parity-evidence/trust-policy-v2.tsv")
 TRUST_KEYS_RELATIVE = Path("docs/parity-evidence/trusted-keys")
 REQUIRED_METADATA = [
@@ -112,6 +120,16 @@ def read_raw(path: Path) -> tuple[bytes, list[bytes], list[list[str]]]:
             fail(f"non-ASCII line {number}: {path}")
         rows.append(line.split("\t"))
     return raw, raw_lines, rows
+
+
+def resolve_real_directory(path: Path, label: str) -> Path:
+    try:
+        info = path.lstat()
+    except OSError:
+        fail(f"{label} is missing")
+    if not stat.S_ISDIR(info.st_mode) or path.is_symlink():
+        fail(f"{label} must be a real directory")
+    return path.resolve(strict=True)
 
 
 def archive_path(root: Path, relative: str, *, must_exist: bool = True) -> Path:
@@ -1125,9 +1143,9 @@ def parse_result(
         execution_closure,
         executors,
         environment,
-        queue_id,
         queue_path,
         queue_digest,
+        queue_id,
         int(timeout_text),
         toolchains,
         commands,
@@ -1151,6 +1169,7 @@ class Authorization:
     evidence_set: str
     mode: str
     digest: str
+    relative_path: str
 
 
 def parse_authorization(
@@ -1204,6 +1223,7 @@ def parse_authorization(
         evidence_set,
         mode,
         digest,
+        relative,
     )
 
 
@@ -1217,6 +1237,29 @@ class PromotionManifest:
     evidence_set: str
     results: list[ResultRecord]
     authorizations: list[Authorization]
+
+
+def promotion_archive_closure(
+    repo: Path,
+    root: Path,
+    manifest_relative: str,
+    manifest: PromotionManifest,
+    trust: TrustPolicy,
+) -> set[str]:
+    paths = {manifest_relative}
+    for result in manifest.results:
+        paths.add(result.relative_path)
+        paths.add(result.log[0])
+        paths.update(path for _, path, _, _ in result.toolchains)
+        paths.update(path for _, path, _, _ in result.artifacts)
+        if result.queue_path != "-":
+            queue = parse_queue(repo, root, result.queue_path, trust, result.queue_digest)
+            paths.add(result.queue_path)
+            paths.update(path for _, path, _, _ in queue.toolchains)
+    paths.update(value.relative_path for value in manifest.authorizations)
+    if ARCHIVE_INDEX_RELATIVE in paths:
+        fail("promotion manifest cannot reference the reserved archive index")
+    return paths
 
 
 def parse_manifest(
@@ -1329,6 +1372,316 @@ def parse_manifest(
         results,
         authorizations,
     )
+
+
+def immutable_flag_is_set(path: Path) -> bool:
+    flags = os.O_RDONLY | os.O_CLOEXEC
+    if path.is_dir() and hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags)
+        encoded = bytearray(4)
+        fcntl.ioctl(descriptor, FS_IOC_GETFLAGS, encoded, True)
+    except OSError as error:
+        fail(f"cannot establish Linux immutable flag for archive entry {path}: {error}")
+    finally:
+        if "descriptor" in locals():
+            os.close(descriptor)
+    return bool(int.from_bytes(encoded, sys.byteorder) & FS_IMMUTABLE_FL)
+
+
+def scan_archive(root: Path, *, require_immutable: bool) -> dict[str, tuple[int, str]]:
+    root = resolve_real_directory(root, "evidence archive root")
+    root_info = root.lstat()
+    if not stat.S_ISDIR(root_info.st_mode):
+        fail("evidence archive root must be a real directory")
+    if require_immutable and not immutable_flag_is_set(root):
+        fail("production evidence archive root is not Linux immutable")
+    records: dict[str, tuple[int, str]] = {}
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root).as_posix()
+        try:
+            info = path.lstat()
+        except OSError:
+            fail(f"archive entry disappeared during scan: {relative}")
+        if stat.S_ISLNK(info.st_mode):
+            fail(f"archive contains a symlink: {relative}")
+        if stat.S_ISDIR(info.st_mode):
+            if require_immutable and not immutable_flag_is_set(path):
+                fail(f"production archive directory is not Linux immutable: {relative}")
+            continue
+        if not stat.S_ISREG(info.st_mode):
+            fail(f"archive contains a non-regular entry: {relative}")
+        if info.st_nlink != 1:
+            fail(f"archive file has an unsafe link count: {relative}")
+        if len(records) >= MAX_ARCHIVE_FILES:
+            fail("evidence archive exceeds the file-count bound")
+        if require_immutable and not immutable_flag_is_set(path):
+            fail(f"production archive file is not Linux immutable: {relative}")
+        records[relative] = (info.st_size, sha256_file(path))
+    if not records:
+        fail("evidence archive is empty")
+    return records
+
+
+def expected_archive_directories(paths: set[str]) -> set[str]:
+    output: set[str] = set()
+    for relative in paths:
+        for parent in Path(relative).parents:
+            if parent == Path("."):
+                break
+            output.add(parent.as_posix())
+    return output
+
+
+def actual_archive_directories(root: Path) -> set[str]:
+    root = root.resolve(strict=True)
+    return {
+        path.relative_to(root).as_posix()
+        for path in root.rglob("*")
+        if path.is_dir() and not path.is_symlink()
+    }
+
+
+def archive_index_bytes(
+    manifest_relative: str,
+    manifest_digest: str,
+    manifest: PromotionManifest,
+    records: dict[str, tuple[int, str]],
+) -> bytes:
+    lines = [
+        "parity_archive_index_schema_version\t1",
+        f"manifest_path\t{manifest_relative}",
+        f"manifest_sha256\t{manifest_digest}",
+        f"baseline_commit\t{manifest.baseline}",
+        f"source_commit\t{manifest.source}",
+        f"source_tree\t{manifest.tree}",
+        f"target\t{manifest.target}",
+        f"hardware_lane\t{manifest.lane}",
+        f"file_count\t{len(records)}",
+    ]
+    for index, relative in enumerate(sorted(records)):
+        size, digest = records[relative]
+        lines.append(f"file\t{index:04d}\t{relative}\t{size}\t{digest}")
+    return ("\n".join(lines) + "\n").encode("ascii")
+
+
+def verify_archive_index(
+    repo: Path,
+    root: Path,
+    manifest_relative: str,
+    manifest: PromotionManifest,
+    trust: TrustPolicy,
+) -> None:
+    closure = promotion_archive_closure(
+        repo, root, manifest_relative, manifest, trust
+    )
+    actual = scan_archive(root, require_immutable=False)
+    expected_paths = closure | {ARCHIVE_INDEX_RELATIVE}
+    if set(actual) != expected_paths:
+        missing = sorted(expected_paths - set(actual))
+        extra = sorted(set(actual) - expected_paths)
+        fail(f"archive index closure mismatch: missing={missing} extra={extra}")
+    expected_directories = expected_archive_directories(expected_paths)
+    actual_directories = actual_archive_directories(root)
+    if actual_directories != expected_directories:
+        fail(
+            "archive directory closure mismatch: "
+            f"missing={sorted(expected_directories - actual_directories)} "
+            f"extra={sorted(actual_directories - expected_directories)}"
+        )
+    index = archive_path(root, ARCHIVE_INDEX_RELATIVE)
+    _, _, rows = read_raw(index)
+    cursor = Cursor(rows, "archive index")
+    if cursor.scalar("parity_archive_index_schema_version") != "1":
+        fail("archive index schema must be 1")
+    if cursor.scalar("manifest_path") != manifest_relative:
+        fail("archive index manifest path mismatch")
+    manifest_digest = sha256_file(archive_path(root, manifest_relative))
+    if cursor.scalar("manifest_sha256") != manifest_digest:
+        fail("archive index manifest digest mismatch")
+    if cursor.scalar("baseline_commit") != manifest.baseline:
+        fail("archive index baseline commit mismatch")
+    if cursor.scalar("source_commit") != manifest.source:
+        fail("archive index source commit mismatch")
+    if cursor.scalar("source_tree") != manifest.tree:
+        fail("archive index source tree mismatch")
+    if cursor.scalar("target") != manifest.target:
+        fail("archive index target mismatch")
+    if cursor.scalar("hardware_lane") != manifest.lane:
+        fail("archive index hardware lane mismatch")
+    count_text = cursor.scalar("file_count")
+    if not re.fullmatch(r"0|[1-9][0-9]*", count_text):
+        fail("invalid archive index file count")
+    count = int(count_text)
+    if count != len(closure) or count > MAX_ARCHIVE_FILES:
+        fail("archive index file count mismatch")
+    indexed: dict[str, tuple[int, str]] = {}
+    previous = ""
+    for position in range(count):
+        row = cursor.record("file", 5, position)
+        relative, size_text, digest = row[2:]
+        if (
+            not valid_relative(relative)
+            or relative <= previous
+            or not re.fullmatch(r"0|[1-9][0-9]*", size_text)
+            or not SHA256_RE.fullmatch(digest)
+        ):
+            fail("malformed or unsorted archive index entry")
+        indexed[relative] = (int(size_text), digest)
+        previous = relative
+    cursor.done()
+    expected_records = {path: actual[path] for path in closure}
+    if indexed != expected_records:
+        fail("archive index file identity mismatch")
+
+
+def copy_archive_file(source: Path, destination: Path, expected: tuple[int, str]) -> None:
+    flags = os.O_RDONLY | os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(source, flags)
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+            fail(f"unsafe source archive file during copy: {source}")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        output_descriptor = os.open(
+            destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o400
+        )
+        with os.fdopen(output_descriptor, "wb") as output, os.fdopen(
+            os.dup(descriptor), "rb"
+        ) as input_stream:
+            shutil.copyfileobj(input_stream, output, length=1024 * 1024)
+            output.flush()
+            os.fsync(output.fileno())
+        after = os.fstat(descriptor)
+        if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+        ):
+            fail(f"source archive file changed during copy: {source}")
+    finally:
+        os.close(descriptor)
+    if destination.stat().st_size != expected[0] or sha256_file(destination) != expected[1]:
+        fail(f"copied archive file identity mismatch: {source}")
+
+
+def rename_noreplace(source: Path, destination: Path) -> None:
+    libc = ctypes.CDLL(None, use_errno=True)
+    try:
+        renameat2 = libc.renameat2
+    except AttributeError:
+        fail("atomic no-replace archive publication is unavailable")
+    renameat2.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    renameat2.restype = ctypes.c_int
+    if renameat2(
+        AT_FDCWD,
+        os.fsencode(source),
+        AT_FDCWD,
+        os.fsencode(destination),
+        RENAME_NOREPLACE,
+    ) != 0:
+        error = ctypes.get_errno()
+        if error == errno.EEXIST:
+            fail("evidence archive destination already exists")
+        fail(f"atomic no-replace archive publication failed: {os.strerror(error)}")
+
+
+def ingest_archive(args: argparse.Namespace) -> None:
+    repo = args.repo.resolve(strict=True)
+    trust = parse_trust_policy(args.trusted_root, args.trust_policy)
+    if not args.allow_test_fixtures:
+        if trust.domain != "production":
+            fail("production archive ingestion requires a production trust domain")
+        trust = validate_production_trust(args.trusted_root, args.trust_policy)
+    source_records = scan_archive(
+        args.source_root, require_immutable=not args.allow_test_fixtures
+    )
+    source_root = args.source_root.resolve(strict=True)
+    if not SHA256_RE.fullmatch(args.expected_manifest_sha256):
+        fail("malformed expected promotion manifest digest")
+    manifest_path = archive_path(source_root, args.manifest)
+    if sha256_file(manifest_path) != args.expected_manifest_sha256:
+        fail("promotion manifest does not match the operator-pinned digest")
+    manifest = parse_manifest(repo, source_root, args.manifest, trust)
+    if (
+        manifest.baseline != args.expected_baseline
+        or manifest.source != args.expected_source
+        or manifest.tree != args.expected_tree
+        or manifest.target != args.expected_target
+        or manifest.lane != args.expected_lane
+    ):
+        fail("promotion archive does not match the operator-pinned baseline, source, or lane")
+    if not args.allow_test_fixtures:
+        if any(result.mode != "production" for result in manifest.results):
+            fail("test result cannot enter a production evidence archive")
+        if any(value.mode != "production" for value in manifest.authorizations):
+            fail("test review cannot enter a production evidence archive")
+    closure = promotion_archive_closure(
+        repo, source_root, args.manifest, manifest, trust
+    )
+    if set(source_records) != closure:
+        missing = sorted(closure - set(source_records))
+        extra = sorted(set(source_records) - closure)
+        fail(f"source archive closure mismatch: missing={missing} extra={extra}")
+    expected_directories = expected_archive_directories(closure)
+    actual_directories = actual_archive_directories(source_root)
+    if actual_directories != expected_directories:
+        fail(
+            "source archive directory closure mismatch: "
+            f"missing={sorted(expected_directories - actual_directories)} "
+            f"extra={sorted(actual_directories - expected_directories)}"
+        )
+
+    destination = args.destination_root.absolute()
+    if destination.exists() or destination.is_symlink():
+        fail("evidence archive destination already exists")
+    parent = destination.parent.resolve(strict=True)
+    staging = Path(tempfile.mkdtemp(prefix=".fe2o3-archive-", dir=parent))
+    try:
+        for relative in sorted(closure):
+            copy_archive_file(
+                archive_path(source_root, relative),
+                staging.joinpath(relative),
+                source_records[relative],
+            )
+        index = staging.joinpath(ARCHIVE_INDEX_RELATIVE)
+        index.write_bytes(
+            archive_index_bytes(
+                args.manifest,
+                args.expected_manifest_sha256,
+                manifest,
+                source_records,
+            )
+        )
+        index.chmod(0o444)
+        copied_manifest = parse_manifest(repo, staging, args.manifest, trust)
+        verify_archive_index(repo, staging, args.manifest, copied_manifest, trust)
+        for path in sorted(staging.rglob("*"), reverse=True):
+            path.chmod(0o555 if path.is_dir() else 0o444)
+        staging.chmod(0o555)
+        rename_noreplace(staging, destination)
+    except BaseException:
+        for path in staging.rglob("*"):
+            try:
+                path.chmod(0o700 if path.is_dir() else 0o600)
+            except OSError:
+                pass
+        staging.chmod(0o700)
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    print(f"closed signed evidence archive ingested: {destination}")
 
 
 @dataclass(frozen=True)
@@ -1467,7 +1820,7 @@ def metadata_delta_is_allowed(repo: Path, source: str, trust: TrustPolicy) -> No
 
 def gate(args: argparse.Namespace) -> None:
     repo = args.repo.resolve(strict=True)
-    root = args.archive_root.resolve(strict=True)
+    root = resolve_real_directory(args.archive_root, "evidence archive root")
     trust = parse_trust_policy(args.trusted_root, args.trust_policy)
     if not args.allow_test_fixtures:
         if trust.domain != "production":
@@ -1492,6 +1845,8 @@ def gate(args: argparse.Namespace) -> None:
     ).returncode:
         fail("candidate status source is not descended from baseline")
     manifest = parse_manifest(repo, root, args.manifest, trust)
+    if not args.allow_test_fixtures:
+        verify_archive_index(repo, root, args.manifest, manifest, trust)
     if manifest.baseline != baseline_commit or manifest.source != source_commit:
         fail("promotion manifest status commit mismatch")
     metadata_delta_is_allowed(repo, source_commit, trust)
@@ -1703,7 +2058,7 @@ def run_queue(args: argparse.Namespace) -> None:
     lock = acquire_lock(lock_path_for(args))
     try:
         repo = args.repo.resolve(strict=True)
-        root = args.archive_root.resolve(strict=True)
+        root = resolve_real_directory(args.archive_root, "evidence archive root")
         trust = parse_trust_policy(args.trusted_root, args.trust_policy)
         queue = parse_queue(repo, root, args.manifest, trust)
         if args.test_mode != (queue.mode == "test"):
@@ -1813,6 +2168,26 @@ def build_parser() -> argparse.ArgumentParser:
     validate_trust.add_argument("--trusted-root", type=Path, required=True)
     validate_trust.add_argument("--trust-policy", type=Path, required=True)
 
+    ingest = subparsers.add_parser("ingest-archive")
+    ingest.add_argument("--repo", type=Path, required=True)
+    ingest.add_argument("--source-root", type=Path, required=True)
+    ingest.add_argument("--destination-root", type=Path, required=True)
+    ingest.add_argument("--trusted-root", type=Path, required=True)
+    ingest.add_argument("--trust-policy", type=Path, required=True)
+    ingest.add_argument("--manifest", required=True)
+    ingest.add_argument("--expected-manifest-sha256", required=True)
+    ingest.add_argument("--expected-baseline", required=True)
+    ingest.add_argument("--expected-source", required=True)
+    ingest.add_argument("--expected-tree", required=True)
+    ingest.add_argument("--expected-target", required=True)
+    ingest.add_argument("--expected-lane", required=True)
+    ingest.add_argument("--allow-test-fixtures", action="store_true")
+
+    validate_archive = subparsers.add_parser("validate-archive")
+    common_trust(validate_archive)
+    validate_archive.add_argument("--manifest", required=True)
+    validate_archive.add_argument("--allow-test-fixtures", action="store_true")
+
     protected_base = subparsers.add_parser("check-protected-base")
     protected_base.add_argument("--protected-repo", type=Path, required=True)
     protected_base.add_argument("--candidate-repo", type=Path, required=True)
@@ -1876,13 +2251,29 @@ def main() -> None:
     elif args.command == "validate-production-trust":
         trust = validate_production_trust(args.trusted_root, args.trust_policy)
         print(f"production trust is valid: {len(trust.keys)} separated public keys")
+    elif args.command == "ingest-archive":
+        ingest_archive(args)
+    elif args.command == "validate-archive":
+        trust = parse_trust_policy(args.trusted_root, args.trust_policy)
+        if not args.allow_test_fixtures:
+            if trust.domain != "production":
+                fail("production archive validation requires a production trust domain")
+            trust = validate_production_trust(args.trusted_root, args.trust_policy)
+        root = resolve_real_directory(args.archive_root, "evidence archive root")
+        manifest = parse_manifest(
+            args.repo.resolve(strict=True), root, args.manifest, trust
+        )
+        verify_archive_index(
+            args.repo.resolve(strict=True), root, args.manifest, manifest, trust
+        )
+        print(f"signed evidence archive is closed: {len(manifest.results)} result(s)")
     elif args.command == "check-protected-base":
         check_protected_base(args)
     elif args.command == "validate-result":
         trust = parse_trust_policy(args.trusted_root, args.trust_policy)
         result = parse_result(
             args.repo.resolve(strict=True),
-            args.archive_root.resolve(strict=True),
+            resolve_real_directory(args.archive_root, "evidence archive root"),
             args.record,
             trust,
         )
@@ -1891,7 +2282,7 @@ def main() -> None:
         trust = parse_trust_policy(args.trusted_root, args.trust_policy)
         queue = parse_queue(
             args.repo.resolve(strict=True),
-            args.archive_root.resolve(strict=True),
+            resolve_real_directory(args.archive_root, "evidence archive root"),
             args.manifest,
             trust,
         )
@@ -1900,7 +2291,7 @@ def main() -> None:
         trust = parse_trust_policy(args.trusted_root, args.trust_policy)
         manifest = parse_manifest(
             args.repo.resolve(strict=True),
-            args.archive_root.resolve(strict=True),
+            resolve_real_directory(args.archive_root, "evidence archive root"),
             args.manifest,
             trust,
         )
@@ -1909,7 +2300,7 @@ def main() -> None:
         trust = parse_trust_policy(args.trusted_root, args.trust_policy)
         manifest = parse_manifest(
             args.repo.resolve(strict=True),
-            args.archive_root.resolve(strict=True),
+            resolve_real_directory(args.archive_root, "evidence archive root"),
             args.manifest,
             trust,
         )

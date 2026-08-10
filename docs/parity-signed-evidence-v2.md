@@ -253,6 +253,47 @@ Run a production queue:
 The checkout must be detached, clean, and exactly equal to the signed source
 commit and tree.
 
+## Immutable Archive Ingestion
+
+MI300X output is not copied directly into a promotion branch. The operator
+first pins the manifest digest, baseline, source commit and tree, target, and
+lane over an out-of-band authenticated control path. It then finalizes the
+source archive with the Linux immutable flag on the root, every directory, and
+every file before invoking ingestion:
+
+    scripts/parity-row-evidence.sh ingest-archive \
+      --repo /detached/source \
+      --source-root /operator-output/run-001 \
+      --destination-root /candidate/docs/parity-evidence/archive \
+      --trusted-root /protected/base-export \
+      --trust-policy /protected/base-export/docs/parity-evidence/trust-policy-v2.tsv \
+      --manifest manifests/promotion-v2.tsv \
+      --expected-manifest-sha256 SHA256 \
+      --expected-baseline BASE_COMMIT \
+      --expected-source SOURCE_COMMIT \
+      --expected-tree SOURCE_TREE \
+      --expected-target gfx942 \
+      --expected-lane mi300x-gfx942-release
+
+Production ingestion rejects mutable filesystems, symlinks, hardlinks,
+non-regular entries, missing referenced content, undeclared files or
+directories, test-domain results, identity mismatches, and pre-existing output.
+It copies through file descriptors into a fresh staging directory, revalidates
+all signatures and digests, writes a canonical `archive-index-v1.tsv`, makes
+the destination read-only, and publishes it with one rename. The Git commit
+then supplies the durable immutable object identity consumed by hosted CI.
+
+The protected promotion gate independently recomputes the index and requires
+the archive to contain exactly the manifest's transitive result, queue,
+toolchain, log, artifact, and reviewer-authorization closure. The
+`--allow-test-fixtures` bypass exists only for generated shell tests and cannot
+authorize production promotion.
+
+Archive ingestion authenticates transport and completeness. It does not turn
+an `execution_closure=inert` queue result into promotable hardware evidence;
+the separately provisioned hermetic OCI executor must emit a reviewed
+promotable schema.
+
 ## Promotion Manifest And Shards
 
 Independent agents create one manifest per row shard. Results are sorted by

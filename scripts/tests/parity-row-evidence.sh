@@ -12,7 +12,11 @@ readonly ATTESTOR_PRIVATE="${TEST_DIR}/fixtures/evidence-test-attestor-private.p
 readonly REVIEWER_PRIVATE="${TEST_DIR}/fixtures/evidence-test-reviewer-private.pem"
 TEST_ROOT="$(mktemp -d)"
 readonly TEST_ROOT
-trap 'rm -rf "${TEST_ROOT}"' EXIT
+cleanup() {
+  chmod -R u+w "${TEST_ROOT}" 2>/dev/null || true
+  rm -rf "${TEST_ROOT}"
+}
+trap cleanup EXIT
 readonly REPO="${TEST_ROOT}/repo"
 readonly ARCHIVE="${TEST_ROOT}/archive"
 readonly TRUSTED="${TEST_ROOT}/trusted"
@@ -731,6 +735,155 @@ read -r partial complete < <(awk -F '\t' '$1 == "row" && $3 == "S09" { print $5,
 [[ "${partial}" == unit,ui,compile,debug ]]
 [[ "${complete}" == unit,ui,compile,verus,debug ]]
 
+# Ingestion accepts only the exact signed-reference closure, creates a fresh
+# read-only archive with a canonical index, and binds operator-pinned identity.
+INGEST_SOURCE="${TEST_ROOT}/ingest-source"
+INGEST_DESTINATION="${TEST_ROOT}/ingested-archive"
+mkdir -p \
+  "${INGEST_SOURCE}/results" \
+  "${INGEST_SOURCE}/logs" \
+  "${INGEST_SOURCE}/toolchains"
+cp "${ARCHIVE}/partial.tsv" "${INGEST_SOURCE}/partial.tsv"
+cp "${ARCHIVE}/results/partial-unit-Partial-unit.tsv" \
+  "${INGEST_SOURCE}/results/partial-unit-Partial-unit.tsv"
+cp "${ARCHIVE}/results/partial-ui-Partial-ui.tsv" \
+  "${INGEST_SOURCE}/results/partial-ui-Partial-ui.tsv"
+cp "${ARCHIVE}/logs/partial-unit.log" "${INGEST_SOURCE}/logs/partial-unit.log"
+cp "${ARCHIVE}/logs/partial-ui.log" "${INGEST_SOURCE}/logs/partial-ui.log"
+cp "${ARCHIVE}/toolchains/bash.tsv" "${INGEST_SOURCE}/toolchains/bash.tsv"
+INGEST_MANIFEST_DIGEST="$(file_sha "${INGEST_SOURCE}/partial.tsv")"
+ingest_args=(
+  ingest-archive
+  --repo "${REPO}"
+  --source-root "${INGEST_SOURCE}"
+  --destination-root "${INGEST_DESTINATION}"
+  --trusted-root "${TRUSTED}"
+  --trust-policy "${TRUSTED}/trust.tsv"
+  --manifest partial.tsv
+  --expected-manifest-sha256 "${INGEST_MANIFEST_DIGEST}"
+  --expected-baseline "${BASELINE}"
+  --expected-source "${SOURCE}"
+  --expected-tree "${SOURCE_TREE}"
+  --expected-target gfx942
+  --expected-lane mi300x-gfx942-test
+  --allow-test-fixtures
+)
+expect_failure mutable_production_archive \
+  'production evidence archive root is not Linux immutable' \
+  "${TOOL}" ingest-archive \
+  --repo "${REPO}" \
+  --source-root "${INGEST_SOURCE}" \
+  --destination-root "${TEST_ROOT}/mutable-production-output" \
+  --trusted-root "${TRUST_OLD}" \
+  --trust-policy "${TRUST_OLD}/docs/parity-evidence/trust-policy-v2.tsv" \
+  --manifest partial.tsv \
+  --expected-manifest-sha256 "${INGEST_MANIFEST_DIGEST}" \
+  --expected-baseline "${BASELINE}" \
+  --expected-source "${SOURCE}" \
+  --expected-tree "${SOURCE_TREE}" \
+  --expected-target gfx942 \
+  --expected-lane mi300x-gfx942-test
+"${TOOL}" "${ingest_args[@]}"
+[[ "$(stat -c %a "${INGEST_DESTINATION}")" == 555 ]]
+[[ "$(stat -c %a "${INGEST_DESTINATION}/archive-index-v1.tsv")" == 444 ]]
+"${TOOL}" validate-archive \
+  --repo "${REPO}" \
+  --archive-root "${INGEST_DESTINATION}" \
+  --trusted-root "${TRUSTED}" \
+  --trust-policy "${TRUSTED}/trust.tsv" \
+  --manifest partial.tsv \
+  --allow-test-fixtures
+
+expect_failure ingest_existing_destination 'evidence archive destination already exists' \
+  "${TOOL}" "${ingest_args[@]}"
+expect_failure ingest_manifest_digest \
+  'promotion manifest does not match the operator-pinned digest' \
+  "${TOOL}" "${ingest_args[@]:0:14}" "$(printf '0%.0s' {1..64})" \
+  "${ingest_args[@]:15}"
+expect_failure ingest_baseline_substitution \
+  'operator-pinned baseline, source, or lane' \
+  "${TOOL}" "${ingest_args[@]:0:16}" "${SOURCE}" \
+  "${ingest_args[@]:17}"
+
+INGEST_EXTRA="${TEST_ROOT}/ingest-extra"
+cp -a "${INGEST_SOURCE}" "${INGEST_EXTRA}"
+printf 'undeclared\n' >"${INGEST_EXTRA}/extra.txt"
+expect_failure ingest_extra_file 'source archive closure mismatch' \
+  "${TOOL}" "${ingest_args[@]:0:4}" "${INGEST_EXTRA}" \
+  --destination-root "${TEST_ROOT}/ingest-extra-output" \
+  "${ingest_args[@]:7}"
+
+INGEST_EXTRA_DIRECTORY="${TEST_ROOT}/ingest-extra-directory"
+cp -a "${INGEST_SOURCE}" "${INGEST_EXTRA_DIRECTORY}"
+mkdir "${INGEST_EXTRA_DIRECTORY}/undeclared"
+expect_failure ingest_extra_directory 'source archive directory closure mismatch' \
+  "${TOOL}" "${ingest_args[@]:0:4}" "${INGEST_EXTRA_DIRECTORY}" \
+  --destination-root "${TEST_ROOT}/ingest-extra-directory-output" \
+  "${ingest_args[@]:7}"
+
+INGEST_SYMLINK="${TEST_ROOT}/ingest-symlink"
+cp -a "${INGEST_SOURCE}" "${INGEST_SYMLINK}"
+ln -s partial.tsv "${INGEST_SYMLINK}/alias.tsv"
+expect_failure ingest_symlink 'archive contains a symlink' \
+  "${TOOL}" "${ingest_args[@]:0:4}" "${INGEST_SYMLINK}" \
+  --destination-root "${TEST_ROOT}/ingest-symlink-output" \
+  "${ingest_args[@]:7}"
+
+INGEST_ROOT_SYMLINK="${TEST_ROOT}/ingest-root-symlink"
+ln -s "${INGEST_SOURCE}" "${INGEST_ROOT_SYMLINK}"
+expect_failure ingest_root_symlink 'evidence archive root must be a real directory' \
+  "${TOOL}" "${ingest_args[@]:0:4}" "${INGEST_ROOT_SYMLINK}" \
+  --destination-root "${TEST_ROOT}/ingest-root-symlink-output" \
+  "${ingest_args[@]:7}"
+
+INGEST_HARDLINK="${TEST_ROOT}/ingest-hardlink"
+cp -a "${INGEST_SOURCE}" "${INGEST_HARDLINK}"
+ln "${INGEST_HARDLINK}/logs/partial-unit.log" \
+  "${INGEST_HARDLINK}/logs/hardlink.log"
+expect_failure ingest_hardlink 'archive file has an unsafe link count' \
+  "${TOOL}" "${ingest_args[@]:0:4}" "${INGEST_HARDLINK}" \
+  --destination-root "${TEST_ROOT}/ingest-hardlink-output" \
+  "${ingest_args[@]:7}"
+
+INGEST_MISSING="${TEST_ROOT}/ingest-missing"
+cp -a "${INGEST_SOURCE}" "${INGEST_MISSING}"
+rm "${INGEST_MISSING}/logs/partial-unit.log"
+expect_failure ingest_missing_file 'archive entry is missing' \
+  "${TOOL}" "${ingest_args[@]:0:4}" "${INGEST_MISSING}" \
+  --destination-root "${TEST_ROOT}/ingest-missing-output" \
+  "${ingest_args[@]:7}"
+
+INGEST_TAMPERED="${TEST_ROOT}/ingest-tampered"
+cp -a "${INGEST_SOURCE}" "${INGEST_TAMPERED}"
+sed -i 's/^row_id\t04$/row_id\t05/' \
+  "${INGEST_TAMPERED}/results/partial-unit-Partial-unit.tsv"
+expect_failure ingest_tampered_signature 'signature verification failed' \
+  "${TOOL}" "${ingest_args[@]:0:4}" "${INGEST_TAMPERED}" \
+  --destination-root "${TEST_ROOT}/ingest-tampered-output" \
+  "${ingest_args[@]:7}"
+
+INDEX_TAMPERED="${TEST_ROOT}/index-tampered"
+cp -a "${INGEST_DESTINATION}" "${INDEX_TAMPERED}"
+chmod u+w "${INDEX_TAMPERED}" "${INDEX_TAMPERED}/archive-index-v1.tsv"
+sed -i "s/^source_commit\t${SOURCE}$/source_commit\t${BASELINE}/" \
+  "${INDEX_TAMPERED}/archive-index-v1.tsv"
+expect_failure archive_index_source_tamper 'archive index source commit mismatch' \
+  "${TOOL}" validate-archive \
+  --repo "${REPO}" --archive-root "${INDEX_TAMPERED}" \
+  --trusted-root "${TRUSTED}" --trust-policy "${TRUSTED}/trust.tsv" \
+  --manifest partial.tsv --allow-test-fixtures
+
+INDEX_EXTRA="${TEST_ROOT}/index-extra"
+cp -a "${INGEST_DESTINATION}" "${INDEX_EXTRA}"
+chmod u+w "${INDEX_EXTRA}"
+printf 'undeclared\n' >"${INDEX_EXTRA}/extra.txt"
+expect_failure archive_index_extra 'archive index closure mismatch' \
+  "${TOOL}" validate-archive \
+  --repo "${REPO}" --archive-root "${INDEX_EXTRA}" \
+  --trusted-root "${TRUSTED}" --trust-policy "${TRUSTED}/trust.tsv" \
+  --manifest partial.tsv --allow-test-fixtures
+
+chmod -R u+w "${INGEST_DESTINATION}" "${INDEX_TAMPERED}" "${INDEX_EXTRA}"
 
 bash -n "${TOOL}" "${BASH_SOURCE[0]}"
 python3 -m py_compile "${ROOT}/scripts/parity-signed-evidence.py"
