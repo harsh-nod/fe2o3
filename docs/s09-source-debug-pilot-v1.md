@@ -1,7 +1,7 @@
 # S09 source-debug pilot V1
 
-This pilot preserves source metadata for the authenticated General V3 `alpha`
-kernel on exact target `gfx942:xnack-`. It is enabled only by Worker V2
+This pilot preserves source metadata for the closed General V3 `alpha` kernel
+profile on exact target `gfx942:xnack-`. It is enabled only by Worker V2
 configuration value `s09-alpha-gfx942-o0-v1`, which requires COV6, `O0`,
 `strip-debug=false`, and per-stage LLVM verification.
 
@@ -82,7 +82,7 @@ pre-existing debug-metadata mismatch fails before Worker V2 publication.
 
 Source spelling is not sufficient admission. The imported rustc MIR must have
 the exact bounded alpha shape: eight blocks, fourteen locals, three arguments,
-the authenticated thread-index/get-mut/index-get calls, one output-option
+the compiler-recognized thread-index/get-mut/index-get calls, one output-option
 switch, one input-bounds assertion, one indexed input load, one `f32` multiply,
 and one direct guarded output store. Semantic-body or control-flow drift fails
 before debug metadata is injected.
@@ -127,10 +127,9 @@ runner append one `FE2O3_S09_HARNESS_RESULT_V1` marker carrying the HSACO
 digest, a runner-generated 256-bit nonce, and `result=passed`. The checker
 requires the normal inferior-exit record before this marker and zero ROCgdb
 status after it. It does not depend on Cargo status-line adjacency and accepts
-bounded debugger
-thread-exit interleaving, then requires normal inferior exit, the conditional
-runner marker, debugger hardware-pass marker, and zero ROCgdb exit status in
-that order. Removing, moving, or forging the marker fails closed, as do
+bounded debugger thread-exit interleaving, then requires normal inferior exit,
+the runner marker, debugger hardware-pass marker, and zero ROCgdb exit status
+in that order. Removing, moving, or forging the marker fails closed, as do
 reordered stops, a substitute host `alpha`, digest/build-ID mismatch, or an
 unavailable observation.
 

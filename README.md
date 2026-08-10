@@ -409,6 +409,18 @@ turn the foundations below into end-to-end features.
   `sanitize` and `debug` retain plan mode and can execute descriptor-pinned
   native ROCgdb under bounded supervision. ROCgdb precise-memory diagnostics
   are not a race, API, initialization, synchronization, or safety proof.
+  The opt-in S09 source-debug pilot builds one exact General V3 `alpha` profile
+  at O0 into an alpha-only COV6 HSACO for `gfx942:xnack-`. It binds inert
+  semantic and build identity records to the physical `alpha`/`alpha.kd` pair,
+  verifies linked DWARF, executes a dedicated controller over lengths 1, 255,
+  256, 257, and 1023 with CPU-oracle and canary checks, and uses native ROCgdb
+  to inspect the scalar argument, physical slice fields, and local `i`. The
+  checked-in lane produces only `local-capability-v2` evidence: it does not
+  authenticate the compiler or runner, install production trust, cover
+  aggregates or optimized debugging, establish general local/argument
+  inspection, or provide a safety proof. Parity row 45 therefore remains
+  `Partial`; row 46 and supplemental row S09 remain `Missing`. See the
+  [S09 pilot contract](docs/s09-source-debug-pilot-v1.md).
 
 ### Not yet integrated
 
@@ -576,6 +588,18 @@ scripts/ci-local.sh workspace-test
 VERUS=/absolute/path/to/verus scripts/ci-local.sh verus
 FE2O3_TARGET=gfx1151 scripts/ci-local.sh rocm-compile
 FE2O3_ALLOW_GPU_SMOKE=1 FE2O3_TARGET=gfx1151 scripts/ci-local.sh hardware-smoke
+```
+
+Run the exact opt-in S09 local-capability lane on `gfx942:xnack-`. The evidence
+directory must be an absolute path that does not already exist:
+
+```bash
+FE2O3_ALLOW_S09_DEBUG=1 \
+FE2O3_LLVM_LINK_WORKER=/absolute/fe2o3-llvm-link-worker \
+FE2O3_LLVM_LINK_WORKER_BUILD_ID=<measured-worker-id> \
+FE2O3_LLVM_BUILD_ID=<measured-llvm-id> \
+FE2O3_S09_EVIDENCE_DIR=/absolute/new-evidence-directory \
+  scripts/ci-local.sh s09-debug-hardware
 ```
 
 `workspace-test` is the comprehensive local test gate. It runs all workspace
