@@ -55,10 +55,13 @@ pub use fe2o3_compiler_ffi::{
     CompilerFfiEffectAbiIdentityV1, CompilerFfiEnvelopeBuilderV1, CompilerFfiEnvelopeError,
     CompilerFfiEnvelopeIdentityV1, CompilerFfiEnvelopeInspectionV1, CompilerFfiEnvelopeV1,
     CompilerFfiLinkRoleV1, CompilerFfiSourceOwnerIdentityV1, CompilerFfiSourceOwnerV1,
-    CompilerFfiTextFieldV1, DeviceTargetV1 as CompilerFfiDeviceTargetV1,
-    MAX_COMPILER_FFI_AGGREGATE_TEXT_BYTES_V1, MAX_COMPILER_FFI_CONTRACTS_V1,
-    MAX_COMPILER_FFI_CRATE_LABEL_BYTES_V1, MAX_COMPILER_FFI_ENVELOPE_BYTES_V1,
-    MAX_COMPILER_FFI_INSTANCE_SYMBOL_BYTES_V1, MAX_COMPILER_FFI_ITEM_PATH_BYTES_V1,
+    CompilerFfiTextFieldV1, CompilerModuleHandoffErrorV2, CompilerModuleHandoffIdentityV2,
+    CompilerModuleHandoffV2, CompilerModuleKindV1, CompilerModuleSymbolManifestIdentityV1,
+    CompilerModuleSymbolManifestV1, CompilerModuleSymbolRoleV1,
+    DeviceTargetV1 as CompilerFfiDeviceTargetV1, MAX_COMPILER_FFI_AGGREGATE_TEXT_BYTES_V1,
+    MAX_COMPILER_FFI_CONTRACTS_V1, MAX_COMPILER_FFI_CRATE_LABEL_BYTES_V1,
+    MAX_COMPILER_FFI_ENVELOPE_BYTES_V1, MAX_COMPILER_FFI_INSTANCE_SYMBOL_BYTES_V1,
+    MAX_COMPILER_FFI_ITEM_PATH_BYTES_V1,
 };
 pub use first_build_worker_v2::{
     FirstBuildWorkerV2Error, FirstBuildWorkerV2IdentityV1, InertFirstBuildWorkerV2EvidenceV1,
@@ -73,6 +76,11 @@ pub use request_construction::{
     CompilerHandoffWorkerRequestV2, LinkInputKindClosureIdentityV1, LinkInputKindClosureV1,
     LinkSymbolClosureIdentityV1, LinkSymbolClosureV1, WorkerRequestConstructionError,
     construct_worker_request_v1, construct_worker_request_v2_from_consumed_handoff,
+};
+pub use reserved_fe2o3_symbols::{
+    GENERAL_TYPED_V3_SEMANTIC_WITNESS_DOMAIN_V1, GENERAL_TYPED_V3_SEMANTIC_WITNESS_HEADER_BYTES_V1,
+    GENERAL_TYPED_V3_SEMANTIC_WITNESS_MAGIC_V1, GENERAL_TYPED_V3_SEMANTIC_WITNESS_VERSION_V1,
+    MAX_GENERAL_TYPED_V3_SEMANTIC_WITNESS_BYTES_V1, TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3,
 };
 pub use worker_executor::{
     DEFAULT_WORKER_STDERR_BYTES, DEFAULT_WORKER_TIMEOUT, InertCompilerHandoffExecutionV2,
@@ -90,8 +98,9 @@ pub use worker_protocol::{
     WorkerProtocolError, WorkerRequestV1, WorkerResponseV1, WorkerStageV1,
 };
 pub use worker_protocol_v2::{
-    WORKER_REQUEST_MAGIC_V2, WORKER_RESPONSE_MAGIC_V2, WorkerCompilerFfiEnvelopeIdentityV2,
-    WorkerEvidenceClassV2, WorkerOutputV2, WorkerRequestV2, WorkerResponseV2,
+    InertDecodedWorkerExchangeV2, WORKER_REQUEST_MAGIC_V2, WORKER_RESPONSE_MAGIC_V2,
+    WorkerCompilerFfiEnvelopeIdentityV2, WorkerEvidenceClassV2, WorkerOutputV2, WorkerRequestV2,
+    WorkerResponseV2,
 };
 pub use worker_v2_hsaco_admission::{
     CanonicalDescriptorSectionObservationV1, InspectedRawWorkerV2HsacoIdentityV1,

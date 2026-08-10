@@ -20,7 +20,6 @@ use crate::{
     worker_protocol::validate_symbols,
 };
 
-#[cfg(test)]
 use crate::{
     MAX_WORKER_SYMBOL_BYTES, MAX_WORKER_SYMBOLS, MAX_WORKER_TARGET_BYTES, WorkerInputKindV1,
     WorkerOptimizationLevelV1,
@@ -30,7 +29,6 @@ pub const WORKER_REQUEST_MAGIC_V2: &[u8; 8] = b"F3LREQ02";
 pub const WORKER_RESPONSE_MAGIC_V2: &[u8; 8] = b"F3LRSP02";
 
 const REQUEST_DOMAIN_V2: &[u8] = b"FE2O3/DIRECT-LLVM-WORKER-REQUEST/V2\0";
-#[cfg(test)]
 const REQUEST_FIELD_COUNT_V2: u16 = 15;
 const RESPONSE_FIELD_COUNT_V2: u16 = 7;
 const INPUT_OVERHEAD_BYTES: usize = 1 + 32 + 8;
@@ -391,6 +389,53 @@ impl WorkerResponseV2 {
     }
 }
 
+/// Canonically decoded V2 request/response bytes with no execution provenance.
+///
+/// This wrapper is intentionally distinct from the compiler-handoff request
+/// and execution receipt types. Decoding bytes cannot establish that the
+/// compiler emitted the request or that the measured worker executed it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InertDecodedWorkerExchangeV2 {
+    request: WorkerRequestV2,
+    response: WorkerResponseV2,
+}
+
+impl InertDecodedWorkerExchangeV2 {
+    /// Strictly decodes one canonical response in the context of one canonical request.
+    pub fn decode(
+        request_bytes: &[u8],
+        response_bytes: &[u8],
+    ) -> Result<Self, WorkerProtocolError> {
+        let request = decode_request(request_bytes)?;
+        let response = WorkerResponseV2::decode_for_request(response_bytes, &request)?;
+        Ok(Self { request, response })
+    }
+
+    pub const fn request(&self) -> &WorkerRequestV2 {
+        &self.request
+    }
+
+    pub const fn response(&self) -> &WorkerResponseV2 {
+        &self.response
+    }
+
+    pub const fn grants_worker_execution_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_publication_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+}
+
 fn validate_request_parts(parts: &SealedWorkerRequestV2Parts) -> Result<(), WorkerProtocolError> {
     if parts.request_id == [0; 32] {
         return Err(WorkerProtocolError::EmptyRequestId);
@@ -548,7 +593,6 @@ fn encode_request(request: &WorkerRequestV2) -> Result<(Vec<u8>, [u8; 32]), Work
     Ok((encoded, identity))
 }
 
-#[cfg(test)]
 fn decode_request(bytes: &[u8]) -> Result<WorkerRequestV2, WorkerProtocolError> {
     if bytes.len() > MAX_WORKER_REQUEST_BYTES {
         return Err(WorkerProtocolError::RequestTooLarge);
@@ -654,7 +698,6 @@ fn encode_content_identity(identity: ContentIdentityV1) -> [u8; CONTENT_IDENTITY
     encoded
 }
 
-#[cfg(test)]
 fn decode_content_identity(bytes: &[u8]) -> Result<ContentIdentityV1, WorkerProtocolError> {
     if bytes.len() != CONTENT_IDENTITY_BYTES {
         return Err(WorkerProtocolError::InvalidFieldLength(4));
@@ -679,7 +722,6 @@ fn encode_input(input: &WorkerInputV1) -> Result<Vec<u8>, WorkerProtocolError> {
     Ok(encoded)
 }
 
-#[cfg(test)]
 fn decode_input(bytes: &[u8]) -> Result<WorkerInputV1, WorkerProtocolError> {
     let mut cursor = Cursor::new(bytes);
     let kind = decode_input_kind(cursor.byte()?)?;
@@ -712,7 +754,6 @@ fn encode_inputs(inputs: &[WorkerInputV1]) -> Result<Vec<u8>, WorkerProtocolErro
     Ok(encoded)
 }
 
-#[cfg(test)]
 fn decode_inputs(
     bytes: &[u8],
     allow_empty: bool,
@@ -754,7 +795,6 @@ fn decode_inputs(
     Ok(inputs)
 }
 
-#[cfg(test)]
 fn decode_input_kind(value: u8) -> Result<WorkerInputKindV1, WorkerProtocolError> {
     match value {
         1 => Ok(WorkerInputKindV1::LlvmBitcode),
@@ -778,7 +818,6 @@ fn encode_strings(values: &[String]) -> Result<Vec<u8>, WorkerProtocolError> {
     Ok(encoded)
 }
 
-#[cfg(test)]
 fn decode_symbols(bytes: &[u8]) -> Result<Vec<String>, WorkerProtocolError> {
     let values = decode_strings(
         bytes,
@@ -891,7 +930,6 @@ fn decode_output(
     }
 }
 
-#[cfg(test)]
 fn decode_options(bytes: &[u8]) -> Result<WorkerOptionsV1, WorkerProtocolError> {
     if bytes.len() != 3 {
         return Err(WorkerProtocolError::InvalidFieldLength(7));
@@ -925,7 +963,6 @@ fn decode_stage(value: u8) -> Result<WorkerStageV1, WorkerProtocolError> {
     }
 }
 
-#[cfg(test)]
 fn decode_code_object(value: u8) -> Result<CodeObjectVersion, WorkerProtocolError> {
     match value {
         4 => Ok(CodeObjectVersion::V4),
@@ -943,7 +980,6 @@ const fn encode_code_object(version: CodeObjectVersion) -> u8 {
     }
 }
 
-#[cfg(test)]
 fn decode_bool(value: u8) -> Result<bool, WorkerProtocolError> {
     match value {
         0 => Ok(false),
@@ -1043,7 +1079,6 @@ impl<'a> Decoder<'a> {
         self.cursor.take(len)
     }
 
-    #[cfg(test)]
     const fn position(&self) -> usize {
         self.cursor.position
     }
@@ -1128,6 +1163,29 @@ impl fmt::Display for WorkerCompilerFfiEnvelopeIdentityV2 {
 mod tests {
     use super::*;
 
+    fn success_response(request: &WorkerRequestV2, output: &[u8]) -> Vec<u8> {
+        let mut encoded = Vec::new();
+        encoded.extend_from_slice(WORKER_RESPONSE_MAGIC_V2);
+        push_field(&mut encoded, 1, request.request_id()).unwrap();
+        push_field(&mut encoded, 2, request.identity()).unwrap();
+        push_field(
+            &mut encoded,
+            3,
+            &request.compiler_envelope_identity().as_bytes(),
+        )
+        .unwrap();
+        push_field(&mut encoded, 4, request.worker_build_identity().as_bytes()).unwrap();
+        push_field(&mut encoded, 5, &[WorkerStageV1::Complete as u8]).unwrap();
+        push_field(&mut encoded, 6, &0_u32.to_le_bytes()).unwrap();
+        let identity = ContentIdentityV1::calculate(output);
+        let mut output_field = vec![1];
+        output_field.extend_from_slice(identity.sha256());
+        output_field.extend_from_slice(&identity.byte_len().to_le_bytes());
+        output_field.extend_from_slice(output);
+        push_field(&mut encoded, 7, &output_field).unwrap();
+        encoded
+    }
+
     fn request() -> WorkerRequestV2 {
         WorkerRequestV2::from_sealed_parts(SealedWorkerRequestV2Parts {
             request_id: [0x11; 32],
@@ -1187,5 +1245,28 @@ mod tests {
                 "accepted V2 mutation at byte {index}"
             );
         }
+    }
+
+    #[test]
+    fn inert_exchange_decode_binds_response_without_execution_authority() {
+        let request = request();
+        let response = success_response(&request, b"linked-cov6");
+        let exchange =
+            InertDecodedWorkerExchangeV2::decode(request.canonical_bytes(), &response).unwrap();
+
+        assert_eq!(exchange.request(), &request);
+        assert_eq!(
+            exchange.response().output().unwrap().bytes(),
+            b"linked-cov6"
+        );
+        assert!(!exchange.grants_worker_execution_authority());
+        assert!(!exchange.grants_publication_authority());
+        assert!(!exchange.grants_load_authority());
+        assert!(!exchange.grants_launch_authority());
+
+        let other = request();
+        let mut mixed = success_response(&other, b"linked-cov6");
+        mixed[14] ^= 1;
+        assert!(InertDecodedWorkerExchangeV2::decode(request.canonical_bytes(), &mixed).is_err());
     }
 }
