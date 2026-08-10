@@ -11,10 +11,12 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
+PINNER = ROOT / "scripts" / "s09_pinned_snapshot.py"
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from s09_pinned_snapshot import (  # noqa: E402
@@ -110,7 +112,6 @@ class SealedSnapshotTests(unittest.TestCase):
             replacement.replace(host)
             completed = subprocess.run(
                 [snapshot.proc_path],
-                pass_fds=(snapshot.descriptor,),
                 check=False,
             )
             self.assertEqual(completed.returncode, 0)
@@ -123,13 +124,136 @@ class SealedSnapshotTests(unittest.TestCase):
             create_sealed_snapshot("host", host, executable=True)
 
     def test_internal_boundary_rejects_unsealed_descriptors(self) -> None:
-        source = self.write("facts", b"facts")
-        descriptor = os.open(source, os.O_RDONLY)
+        descriptor = os.memfd_create(
+            "fe2o3-s09-unsealed", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING
+        )
         try:
+            os.write(descriptor, b"facts")
+            path = pathlib.Path(f"/proc/{os.getpid()}/fd/{descriptor}")
             with self.assertRaisesRegex(SnapshotError, "missing required seals"):
-                verify_sealed_path("facts", pathlib.Path(f"/proc/self/fd/{descriptor}"))
+                verify_sealed_path("facts", path)
         finally:
             os.close(descriptor)
+
+    def test_dead_and_noncanonical_proc_paths_are_rejected(self) -> None:
+        for path in (
+            pathlib.Path("/proc/self/fd/3"),
+            pathlib.Path("/proc/0/fd/3"),
+            pathlib.Path("/proc/999999999/fd/3"),
+        ):
+            with self.subTest(path=path), self.assertRaises(SnapshotError):
+                verify_sealed_path("facts", path)
+
+    def test_stale_starttime_and_wrong_owner_are_rejected(self) -> None:
+        source = self.write("facts", b"facts")
+        snapshot = create_sealed_snapshot("facts", source)
+        try:
+            with self.assertRaisesRegex(SnapshotError, "PID was reused"):
+                verify_sealed_path(
+                    "facts",
+                    pathlib.Path(snapshot.proc_path),
+                    _expected_owner_start_time_ticks=snapshot.owner_start_time_ticks
+                    + 1,
+                )
+            with self.assertRaisesRegex(SnapshotError, "wrong UID"):
+                verify_sealed_path(
+                    "facts",
+                    pathlib.Path(snapshot.proc_path),
+                    _expected_owner_uid=os.getuid() + 1,
+                )
+        finally:
+            snapshot.close()
+
+    def test_live_nonancestor_snapshot_owner_is_rejected(self) -> None:
+        read_path, write_path = os.pipe()
+        child = os.fork()
+        if child == 0:
+            os.close(read_path)
+            try:
+                source = self.write("child-facts", b"child facts")
+                snapshot = create_sealed_snapshot("child-facts", source)
+                os.write(write_path, snapshot.proc_path.encode("ascii") + b"\n")
+                time.sleep(10)
+            finally:
+                os._exit(0)
+        os.close(write_path)
+        try:
+            path = pathlib.Path(os.read(read_path, 4096).decode("ascii").strip())
+            with self.assertRaisesRegex(SnapshotError, "live ancestor"):
+                verify_sealed_path("facts", path)
+        finally:
+            os.close(read_path)
+            os.kill(child, 15)
+            os.waitpid(child, 0)
+
+    def test_cli_supervisor_stays_alive_for_stable_proc_paths(self) -> None:
+        source = self.write("facts", b"supervised facts")
+        child_code = """
+import os
+import pathlib
+import subprocess
+import sys
+import time
+path = pathlib.Path(sys.argv[1])
+owner = int(path.parts[2])
+assert owner == os.getppid()
+assert path.read_bytes() == b"supervised facts"
+time.sleep(0.05)
+assert pathlib.Path("/proc/" + str(owner) + "/stat").is_file()
+assert path.read_bytes() == b"supervised facts"
+grandchild = "import pathlib,sys; assert pathlib.Path(sys.argv[1]).read_bytes() == b'supervised facts'"
+completed = subprocess.run([sys.executable, "-c", grandchild, str(path)], close_fds=True)
+assert completed.returncode == 0
+"""
+        completed = subprocess.run(
+            [
+                str(PINNER),
+                "--input",
+                f"facts={source}",
+                "--",
+                sys.executable,
+                "-c",
+                child_code,
+                "{facts}",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_grandchild_exec_reopens_supervisor_host_after_fd_close(self) -> None:
+        host = self.directory / "host"
+        shutil.copyfile("/bin/true", host)
+        host.chmod(0o700)
+        child_code = """
+import pathlib
+import subprocess
+import sys
+path = pathlib.Path(sys.argv[1])
+completed = subprocess.run([str(path)], close_fds=True)
+assert completed.returncode == 0
+"""
+        completed = subprocess.run(
+            [
+                str(PINNER),
+                "--input",
+                f"host={host}",
+                "--executable",
+                "host",
+                "--",
+                sys.executable,
+                "-c",
+                child_code,
+                "{host}",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
 
     def test_inherited_sealed_snapshot_can_be_resnapshotted(self) -> None:
         source = self.write("hsaco", b"exact inherited hsaco")

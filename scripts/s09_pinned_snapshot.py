@@ -10,6 +10,8 @@ import fcntl
 import hashlib
 import os
 import pathlib
+import re
+import select
 import stat
 import subprocess
 import sys
@@ -21,6 +23,7 @@ COPY_CHUNK_BYTES = 64 * 1024
 REQUIRED_SEALS = (
     fcntl.F_SEAL_SEAL | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_GROW | fcntl.F_SEAL_WRITE
 )
+PROC_FD_PATH = re.compile(r"/proc/([1-9][0-9]*)/fd/([0-9]+)")
 
 
 class SnapshotError(Exception):
@@ -57,20 +60,142 @@ class SealedSnapshot:
     sha256: str
     size: int
     executable: bool
+    owner_pid: int
+    owner_start_time_ticks: int
 
     @property
     def proc_path(self) -> str:
-        return f"/proc/self/fd/{self.descriptor}"
+        return f"/proc/{self.owner_pid}/fd/{self.descriptor}"
 
     def close(self) -> None:
         os.close(self.descriptor)
 
 
+def _read_process_stat(pid: int) -> tuple[int, int]:
+    path = pathlib.Path(f"/proc/{pid}/stat")
+    try:
+        data = path.read_text(encoding="ascii")
+    except OSError as error:
+        raise SnapshotError(
+            f"cannot read snapshot owner state: {path}: {error}"
+        ) from error
+    closing = data.rfind(") ")
+    if closing < 0:
+        raise SnapshotError(f"snapshot owner state is malformed: {path}")
+    fields = data[closing + 2 :].split()
+    if len(fields) < 20 or not fields[1].isdigit() or not fields[19].isdigit():
+        raise SnapshotError(f"snapshot owner state is truncated: {path}")
+    return int(fields[1]), int(fields[19])
+
+
+def _require_live_ancestor(pid: int) -> int:
+    current = os.getpid()
+    visited: set[int] = set()
+    while current > 0 and current not in visited:
+        visited.add(current)
+        parent, start_time = _read_process_stat(current)
+        if current == pid:
+            return start_time
+        current = parent
+    raise SnapshotError("snapshot owner must be the current process or a live ancestor")
+
+
+def _require_live_pidfd(pid: int) -> int:
+    if not hasattr(os, "pidfd_open"):
+        raise SnapshotError("sealed S09 snapshots require Linux pidfd_open")
+    try:
+        descriptor = os.pidfd_open(pid, 0)
+    except OSError as error:
+        raise SnapshotError(f"snapshot owner is not live: {pid}: {error}") from error
+    poller = select.poll()
+    poller.register(descriptor, select.POLLIN | select.POLLHUP | select.POLLERR)
+    if poller.poll(0):
+        os.close(descriptor)
+        raise SnapshotError(f"snapshot owner has exited: {pid}")
+    return descriptor
+
+
+def _parse_proc_fd_path(path: pathlib.Path) -> tuple[int, int] | None:
+    match = PROC_FD_PATH.fullmatch(os.fspath(path))
+    if match is None:
+        return None
+    return int(match.group(1)), int(match.group(2))
+
+
+def _open_inherited_snapshot(
+    path: pathlib.Path,
+    executable: bool,
+    *,
+    expected_owner_start_time_ticks: int | None = None,
+    expected_owner_uid: int | None = None,
+) -> tuple[int, FileIdentity]:
+    parsed = _parse_proc_fd_path(path)
+    if parsed is None:
+        raise SnapshotError(
+            "inherited snapshot path is not an exact numeric proc-fd path"
+        )
+    owner_pid, _ = parsed
+    owner_start_time = _require_live_ancestor(owner_pid)
+    if (
+        expected_owner_start_time_ticks is not None
+        and owner_start_time != expected_owner_start_time_ticks
+    ):
+        raise SnapshotError("snapshot owner PID was reused or has the wrong starttime")
+    owner_uid = os.stat(f"/proc/{owner_pid}", follow_symlinks=False).st_uid
+    required_uid = os.getuid() if expected_owner_uid is None else expected_owner_uid
+    if owner_uid != required_uid:
+        raise SnapshotError("snapshot owner has the wrong UID")
+    pidfd = _require_live_pidfd(owner_pid)
+    descriptor = -1
+    try:
+        target = os.readlink(path)
+        if not (
+            target.startswith("/memfd:fe2o3-s09-")
+            or target.startswith("memfd:fe2o3-s09-")
+        ):
+            raise SnapshotError("inherited snapshot is not an S09 memfd")
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0))
+        _, owner_start_time_after = _read_process_stat(owner_pid)
+        if owner_start_time_after != owner_start_time:
+            raise SnapshotError("snapshot owner PID changed while opening its memfd")
+        poller = select.poll()
+        poller.register(pidfd, select.POLLIN | select.POLLHUP | select.POLLERR)
+        if poller.poll(0):
+            raise SnapshotError("snapshot owner exited while opening its memfd")
+        identity = FileIdentity.from_stat(os.fstat(descriptor))
+        if not stat.S_ISREG(identity.mode):
+            raise SnapshotError(f"snapshot source must be a regular file: {path}")
+        if not 1 <= identity.size <= MAX_SNAPSHOT_BYTES:
+            raise SnapshotError(
+                f"snapshot source size must be within 1..{MAX_SNAPSHOT_BYTES} bytes: {path}"
+            )
+        if executable and identity.mode & 0o111 == 0:
+            raise SnapshotError(f"snapshot source must be executable: {path}")
+        try:
+            seals = fcntl.fcntl(descriptor, fcntl.F_GET_SEALS)
+        except OSError as error:
+            raise SnapshotError(
+                f"inherited snapshot source is not a sealed memfd: {path}"
+            ) from error
+        if seals & REQUIRED_SEALS != REQUIRED_SEALS:
+            raise SnapshotError(
+                f"inherited snapshot source is missing required seals: {path}"
+            )
+        result = descriptor
+        descriptor = -1
+        return result, identity
+    except BaseException:
+        if descriptor >= 0:
+            os.close(descriptor)
+        raise
+    finally:
+        os.close(pidfd)
+
+
 def _open_source(path: pathlib.Path, executable: bool) -> tuple[int, FileIdentity]:
-    inherited_snapshot = _is_proc_fd_path(path)
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
-    if not inherited_snapshot:
-        flags |= getattr(os, "O_NOFOLLOW", 0)
+    if _parse_proc_fd_path(path) is not None:
+        return _open_inherited_snapshot(path, executable)
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
         descriptor = os.open(path, flags)
     except OSError as error:
@@ -79,9 +204,7 @@ def _open_source(path: pathlib.Path, executable: bool) -> tuple[int, FileIdentit
         ) from error
     try:
         identity = FileIdentity.from_stat(os.fstat(descriptor))
-        if not stat.S_ISREG(identity.mode) or (
-            not inherited_snapshot and identity.links < 1
-        ):
+        if not stat.S_ISREG(identity.mode) or identity.links < 1:
             raise SnapshotError(f"snapshot source must be a regular file: {path}")
         if not 1 <= identity.size <= MAX_SNAPSHOT_BYTES:
             raise SnapshotError(
@@ -89,17 +212,6 @@ def _open_source(path: pathlib.Path, executable: bool) -> tuple[int, FileIdentit
             )
         if executable and identity.mode & 0o111 == 0:
             raise SnapshotError(f"snapshot source must be executable: {path}")
-        if inherited_snapshot:
-            try:
-                seals = fcntl.fcntl(descriptor, fcntl.F_GET_SEALS)
-            except OSError as error:
-                raise SnapshotError(
-                    f"inherited snapshot source is not a sealed memfd: {path}"
-                ) from error
-            if seals & REQUIRED_SEALS != REQUIRED_SEALS:
-                raise SnapshotError(
-                    f"inherited snapshot source is missing required seals: {path}"
-                )
         return descriptor, identity
     except BaseException:
         os.close(descriptor)
@@ -131,6 +243,8 @@ def create_sealed_snapshot(
     if not sys.platform.startswith("linux") or not hasattr(os, "memfd_create"):
         raise SnapshotError("sealed S09 snapshots require Linux memfd_create")
     source, before = _open_source(path, executable)
+    owner_pid = os.getpid()
+    _, owner_start_time_ticks = _read_process_stat(owner_pid)
     snapshot = -1
     try:
         before_digest = _digest_source(source, before.size, path)
@@ -176,7 +290,13 @@ def create_sealed_snapshot(
                 "sealed snapshot is missing required write/resize seals"
             )
         return SealedSnapshot(
-            name, snapshot, digest.hexdigest(), before.size, executable
+            name,
+            snapshot,
+            digest.hexdigest(),
+            before.size,
+            executable,
+            owner_pid,
+            owner_start_time_ticks,
         )
     except OSError as error:
         if snapshot >= 0:
@@ -239,43 +359,28 @@ def _substitute(
 
 
 def verify_sealed_path(
-    name: str, path: pathlib.Path, *, executable: bool = False
+    name: str,
+    path: pathlib.Path,
+    *,
+    executable: bool = False,
+    _expected_owner_start_time_ticks: int | None = None,
+    _expected_owner_uid: int | None = None,
 ) -> None:
-    if not _is_proc_fd_path(path):
+    if _parse_proc_fd_path(path) is None:
         raise SnapshotError(
-            f"sealed snapshot {name} must use an inherited /proc/self/fd path"
+            f"sealed snapshot {name} must use an exact numeric proc-fd path"
         )
+    descriptor, _ = _open_inherited_snapshot(
+        path,
+        executable,
+        expected_owner_start_time_ticks=_expected_owner_start_time_ticks,
+        expected_owner_uid=_expected_owner_uid,
+    )
     try:
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0))
-    except OSError as error:
-        raise SnapshotError(f"cannot open sealed snapshot {name}: {error}") from error
-    try:
-        metadata = os.fstat(descriptor)
-        if (
-            not stat.S_ISREG(metadata.st_mode)
-            or not 1 <= metadata.st_size <= MAX_SNAPSHOT_BYTES
-        ):
-            raise SnapshotError(f"sealed snapshot {name} is not a bounded regular file")
-        if executable and metadata.st_mode & 0o111 == 0:
-            raise SnapshotError(f"sealed snapshot {name} is not executable")
-        try:
-            seals = fcntl.fcntl(descriptor, fcntl.F_GET_SEALS)
-        except OSError as error:
-            raise SnapshotError(
-                f"sealed snapshot {name} is missing required seals"
-            ) from error
-        if seals & REQUIRED_SEALS != REQUIRED_SEALS:
-            raise SnapshotError(f"sealed snapshot {name} is missing required seals")
-    except OSError as error:
-        raise SnapshotError(f"cannot verify sealed snapshot {name}: {error}") from error
+        if os.fstat(descriptor).st_size <= 0:
+            raise SnapshotError(f"sealed snapshot {name} is empty")
     finally:
         os.close(descriptor)
-
-
-def _is_proc_fd_path(path: pathlib.Path) -> bool:
-    value = os.fspath(path)
-    prefix = "/proc/self/fd/"
-    return value.startswith(prefix) and value[len(prefix) :].isdigit()
 
 
 def parse_args() -> argparse.Namespace:
