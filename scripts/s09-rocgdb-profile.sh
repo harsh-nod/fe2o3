@@ -90,7 +90,8 @@ canonical_file raw-transcript-guard "${RAW_GUARD}"
 pinned_tool snapshot-supervisor "${PINNER}"
 pinned_tool timeout /usr/bin/timeout
 pinned_tool prlimit /usr/bin/prlimit
-# shellcheck source=s09-raw-transcript-guard.sh
+# The canonical checked path is intentionally derived from this script's directory.
+# shellcheck disable=SC1091
 source "${RAW_GUARD}"
 
 if [[ "${mode}" == outer ]]; then

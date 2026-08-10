@@ -226,8 +226,8 @@ check_debug_manifest_mutation() {
     "${fixture_tool_args[@]}"
 }
 
-check_debug_manifest_mutation missing sed '$d'
-check_debug_manifest_mutation duplicate awk '{ print; if ($0 ~ /^profile=/) print }'
+check_debug_manifest_mutation missing sed "\$d"
+check_debug_manifest_mutation duplicate awk "{ print; if (\$0 ~ /^profile=/) print }"
 check_debug_manifest_mutation failed-status sed 's/^rocgdb_status=0$/rocgdb_status=1/'
 check_debug_manifest_mutation wrong-nonce sed \
   's/^run_nonce=.*/run_nonce=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee/'
