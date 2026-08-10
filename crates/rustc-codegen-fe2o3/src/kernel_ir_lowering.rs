@@ -16,6 +16,7 @@
 //! and MIR blocks must appear in definition-before-use order. Every other
 //! construct produces a located diagnostic rather than a partial module.
 
+mod control_flow_ssa;
 mod semantic_lowering;
 
 use crate::AmdGpuTarget;
@@ -512,6 +513,9 @@ fn diagnostic(
 #[derive(Clone, Copy, Debug)]
 enum LocalBinding {
     Value(ValueId),
+    FieldlessEnum {
+        discriminant: ValueId,
+    },
     DeviceMathCapability,
     OptionPointer {
         discriminant: ValueId,
@@ -533,6 +537,8 @@ struct FunctionLowerer<'function, 'declarations> {
     trap_block: Option<BlockId>,
     float_target: Option<Gfx942FloatTarget>,
     strict_float_policy: StrictFloatPolicy,
+    control_flow_ssa: control_flow_ssa::ControlFlowSsaPlan,
+    block_parameters: BTreeMap<usize, BTreeMap<usize, ValueId>>,
 }
 
 impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
@@ -556,6 +562,8 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
             trap_block: None,
             float_target,
             strict_float_policy,
+            control_flow_ssa: control_flow_ssa::ControlFlowSsaPlan::default(),
+            block_parameters: BTreeMap::new(),
         }
     }
 
@@ -655,6 +663,29 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
             )?;
         }
 
+        self.control_flow_ssa = control_flow_ssa::ControlFlowSsaPlan::analyze(
+            self.function,
+            self.float_target.is_some(),
+        )?;
+        for source_block in source_blocks
+            .iter()
+            .copied()
+            .filter(|block| block.index != 0)
+        {
+            let mut parameters = BTreeMap::new();
+            for local in self.control_flow_ssa.live_in(source_block.index).to_vec() {
+                let ty = self
+                    .control_flow_ssa
+                    .ty(local)
+                    .expect("live-in local is promoted")
+                    .clone();
+                let parameter =
+                    self.fresh_value(ty, &TranslationLocation::block(self.function, source_block))?;
+                parameters.insert(local, parameter.id);
+            }
+            self.block_parameters.insert(source_block.index, parameters);
+        }
+
         if source_blocks.iter().any(|block| {
             matches!(
                 block.terminator.as_ref().map(|terminator| &terminator.kind),
@@ -751,6 +782,44 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
             source.index,
             TranslationLocation::block(self.function, source),
         )?);
+        let promoted = self.control_flow_ssa.promoted_locals().collect::<Vec<_>>();
+        if source.index == 0 {
+            for local in promoted {
+                if self
+                    .function
+                    .locals
+                    .iter()
+                    .find(|candidate| candidate.index == local)
+                    .is_none_or(|local| local.role != crate::mir_import::MirLocalRole::Arg)
+                {
+                    self.locals.remove(&local);
+                }
+            }
+        } else {
+            for local in promoted {
+                self.locals.remove(&local);
+            }
+            for (&local, &id) in self
+                .block_parameters
+                .get(&source.index)
+                .expect("non-entry block parameter map")
+            {
+                let ty = self
+                    .control_flow_ssa
+                    .ty(local)
+                    .expect("block parameter local is promoted")
+                    .clone();
+                block.parameters.push(ValueDef::new(id, ty));
+                let binding = match self.control_flow_ssa.kind(local) {
+                    Some(control_flow_ssa::PromotedLocalKind::Scalar) => LocalBinding::Value(id),
+                    Some(control_flow_ssa::PromotedLocalKind::FieldlessEnum) => {
+                        LocalBinding::FieldlessEnum { discriminant: id }
+                    }
+                    None => unreachable!("block parameter local is promoted"),
+                };
+                self.locals.insert(local, binding);
+            }
+        }
         for statement in &source.statements {
             self.lower_statement(source.index, statement, &mut block)?;
         }
@@ -877,19 +946,57 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                         "projected discriminants are not supported",
                     ));
                 }
-                let LocalBinding::OptionPointer { discriminant, .. } = self
+                let binding = self
                     .locals
                     .get(&place.local)
                     .copied()
-                    .ok_or_else(|| self.undefined_local(place.local, location.clone()))?
-                else {
+                    .ok_or_else(|| self.undefined_local(place.local, location.clone()))?;
+                let discriminant = match binding {
+                    LocalBinding::OptionPointer { discriminant, .. }
+                    | LocalBinding::FieldlessEnum { discriminant } => discriminant,
+                    LocalBinding::Value(_) | LocalBinding::DeviceMathCapability => {
+                        return Err(diagnostic(
+                            TranslationDiagnosticCode::UnsupportedType,
+                            location,
+                            "discriminant operand is not a translated Option pointer or authenticated fieldless enum",
+                        ));
+                    }
+                };
+                self.bind_plain_destination(destination, discriminant, location)
+            }
+            MirRvalueKind::FieldlessEnumVariant(discriminant) => {
+                if self.float_target.is_none() {
+                    return Err(diagnostic(
+                        TranslationDiagnosticCode::UnsupportedRvalue,
+                        location,
+                        "fieldless enum construction is supported only for the exact gfx942 target profile",
+                    ));
+                }
+                if !destination.projection.is_empty()
+                    || !matches!(
+                        self.local_shape(destination.local, &location)?,
+                        MirTypeShape::Adt { .. }
+                    )
+                {
                     return Err(diagnostic(
                         TranslationDiagnosticCode::UnsupportedType,
                         location,
-                        "discriminant operand is not a translated Option pointer",
+                        "authenticated fieldless enum construction requires an unprojected ADT local",
                     ));
-                };
-                self.bind_plain_destination(destination, discriminant, location)
+                }
+                let value = self.emit_result(
+                    block,
+                    Type::Scalar(ScalarType::I64),
+                    OperationKind::Constant(Constant::I64(discriminant)),
+                    &location,
+                )?;
+                self.bind_local(
+                    destination.local,
+                    LocalBinding::FieldlessEnum {
+                        discriminant: value,
+                    },
+                    location,
+                )
             }
             MirRvalueKind::Unary(MirUnaryOp::PtrMetadata) => {
                 let [operand] = statement.operands.as_slice() else {
@@ -1107,10 +1214,11 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     return Ok(Terminator::ConditionalBranch {
                         condition: selector,
                         then_target: self.block_id(some_entry, location.clone())?,
-                        then_arguments: Vec::new(),
+                        then_arguments: self.edge_arguments(some_entry, &location)?,
                         else_target: self
-                            .block_id(zero.expect("checked above").target, location)?,
-                        else_arguments: Vec::new(),
+                            .block_id(zero.expect("checked above").target, location.clone())?,
+                        else_arguments: self
+                            .edge_arguments(zero.expect("checked above").target, &location)?,
                     });
                 }
                 let mut cases = targets
@@ -1128,7 +1236,7 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                                 )
                             })?,
                             target: self.block_id(target.target, location.clone())?,
-                            arguments: Vec::new(),
+                            arguments: self.edge_arguments(target.target, &location)?,
                         })
                     })
                     .collect::<Result<Vec<_>, TranslationDiagnostic>>()?;
@@ -1136,8 +1244,8 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 Ok(Terminator::Switch {
                     selector,
                     cases,
-                    default_target: self.block_id(*otherwise, location)?,
-                    default_arguments: Vec::new(),
+                    default_target: self.block_id(*otherwise, location.clone())?,
+                    default_arguments: self.edge_arguments(*otherwise, &location)?,
                 })
             }
             MirTerminatorKind::Call {
@@ -1172,12 +1280,21 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 } else {
                     (failure, success)
                 };
+                let success_arguments = self.edge_arguments(*target, &location)?;
                 Ok(Terminator::ConditionalBranch {
                     condition,
                     then_target,
-                    then_arguments: Vec::new(),
+                    then_arguments: if *expected {
+                        success_arguments.clone()
+                    } else {
+                        Vec::new()
+                    },
                     else_target,
-                    else_arguments: Vec::new(),
+                    else_arguments: if *expected {
+                        Vec::new()
+                    } else {
+                        success_arguments
+                    },
                 })
             }
             unsupported => Err(diagnostic(
@@ -1496,8 +1613,8 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
         }
 
         Ok(Terminator::Branch {
-            target: self.block_id(target, location)?,
-            arguments: Vec::new(),
+            target: self.block_id(target, location.clone())?,
+            arguments: self.edge_arguments(target, &location)?,
         })
     }
 
@@ -1543,8 +1660,8 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 location.clone(),
             )?;
             return Ok(Terminator::Branch {
-                target: self.block_id(target, location)?,
-                arguments: Vec::new(),
+                target: self.block_id(target, location.clone())?,
+                arguments: self.edge_arguments(target, &location)?,
             });
         }
 
@@ -1583,8 +1700,8 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
             location.clone(),
         )?;
         Ok(Terminator::Branch {
-            target: self.block_id(target, location)?,
-            arguments: Vec::new(),
+            target: self.block_id(target, location.clone())?,
+            arguments: self.edge_arguments(target, &location)?,
         })
     }
 
@@ -1683,8 +1800,8 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
             location.clone(),
         )?;
         Ok(Terminator::Branch {
-            target: self.block_id(target, location)?,
-            arguments: Vec::new(),
+            target: self.block_id(target, location.clone())?,
+            arguments: self.edge_arguments(target, &location)?,
         })
     }
 
@@ -1907,16 +2024,18 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     self.validate_guarded_pointer_use(value, location)?;
                     Ok(value)
                 }
-                Some(LocalBinding::OptionPointer { .. } | LocalBinding::DeviceMathCapability) => {
-                    Err(diagnostic(
-                        TranslationDiagnosticCode::UnsupportedType,
-                        location.clone(),
-                        format!(
-                            "local{} is a Rust aggregate, not one kernel IR value",
-                            place.local
-                        ),
-                    ))
-                }
+                Some(
+                    LocalBinding::OptionPointer { .. }
+                    | LocalBinding::FieldlessEnum { .. }
+                    | LocalBinding::DeviceMathCapability,
+                ) => Err(diagnostic(
+                    TranslationDiagnosticCode::UnsupportedType,
+                    location.clone(),
+                    format!(
+                        "local{} is a Rust aggregate, not one kernel IR value",
+                        place.local
+                    ),
+                )),
                 None => Err(self.undefined_local(place.local, location.clone())),
             },
             [
@@ -1954,13 +2073,15 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     }
                     Ok(payload)
                 }
-                Some(LocalBinding::Value(_) | LocalBinding::DeviceMathCapability) => {
-                    Err(diagnostic(
-                        TranslationDiagnosticCode::UnsupportedType,
-                        location.clone(),
-                        format!("local{} is not a translated Option pointer", place.local),
-                    ))
-                }
+                Some(
+                    LocalBinding::Value(_)
+                    | LocalBinding::FieldlessEnum { .. }
+                    | LocalBinding::DeviceMathCapability,
+                ) => Err(diagnostic(
+                    TranslationDiagnosticCode::UnsupportedType,
+                    location.clone(),
+                    format!("local{} is not a translated Option pointer", place.local),
+                )),
                 None => Err(self.undefined_local(place.local, location.clone())),
             },
             [MirProjectionElem::Deref, MirProjectionElem::Index { local }] => {
@@ -2170,7 +2291,8 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
         binding: LocalBinding,
         location: TranslationLocation,
     ) -> Result<(), TranslationDiagnostic> {
-        if self.locals.insert(local, binding).is_some() {
+        let previous = self.locals.insert(local, binding);
+        if previous.is_some() && !self.control_flow_ssa.is_promoted(local) {
             return Err(diagnostic(
                 TranslationDiagnosticCode::MalformedMir,
                 location,
@@ -2190,15 +2312,42 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 self.validate_guarded_pointer_use(value, location)?;
                 Ok(value)
             }
-            Some(LocalBinding::OptionPointer { .. } | LocalBinding::DeviceMathCapability) => {
-                Err(diagnostic(
-                    TranslationDiagnosticCode::UnsupportedType,
-                    location.clone(),
-                    format!("local{local} is a Rust aggregate, not one kernel IR value"),
-                ))
-            }
+            Some(
+                LocalBinding::OptionPointer { .. }
+                | LocalBinding::FieldlessEnum { .. }
+                | LocalBinding::DeviceMathCapability,
+            ) => Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedType,
+                location.clone(),
+                format!("local{local} is a Rust aggregate, not one kernel IR value"),
+            )),
             None => Err(self.undefined_local(local, location.clone())),
         }
+    }
+
+    pub(super) fn edge_arguments(
+        &self,
+        target: usize,
+        location: &TranslationLocation,
+    ) -> Result<Vec<ValueId>, TranslationDiagnostic> {
+        self.control_flow_ssa
+            .live_in(target)
+            .iter()
+            .map(|local| match self.locals.get(local).copied() {
+                Some(LocalBinding::Value(value))
+                | Some(LocalBinding::FieldlessEnum {
+                    discriminant: value,
+                }) => Ok(value),
+                Some(LocalBinding::OptionPointer { .. } | LocalBinding::DeviceMathCapability) => {
+                    Err(diagnostic(
+                        TranslationDiagnosticCode::UnsupportedType,
+                        location.clone(),
+                        format!("local{local} is not a promotable scalar control-flow value"),
+                    ))
+                }
+                None => Err(self.undefined_local(*local, location.clone())),
+            })
+            .collect()
     }
 
     fn validate_guarded_pointer_use(
@@ -2608,6 +2757,10 @@ mod vecadd_tests;
 #[cfg(test)]
 #[path = "kernel_ir_lowering_general_v3_tests.rs"]
 mod general_v3_tests;
+
+#[cfg(test)]
+#[path = "kernel_ir_lowering_control_flow_tests.rs"]
+mod control_flow_tests;
 
 #[cfg(test)]
 #[path = "kernel_ir_lowering_memory_tests.rs"]

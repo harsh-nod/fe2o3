@@ -24,10 +24,8 @@ pub(super) fn lower_terminator(
         unreachable!("only claimed goto terminators may be lowered");
     };
 
-    lowerer
-        .block_id(*target, terminator.location.clone())
-        .map(|target| Terminator::Branch {
-            target,
-            arguments: Vec::new(),
-        })
+    Ok(Terminator::Branch {
+        target: lowerer.block_id(*target, terminator.location.clone())?,
+        arguments: lowerer.edge_arguments(*target, terminator.location)?,
+    })
 }

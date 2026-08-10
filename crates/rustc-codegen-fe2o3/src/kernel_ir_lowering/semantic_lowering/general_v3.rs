@@ -218,7 +218,7 @@ fn lower_thread_index_1d(
     )?;
     Ok(Terminator::Branch {
         target: lowerer.block_id(call.target, call.location.clone())?,
-        arguments: Vec::new(),
+        arguments: lowerer.edge_arguments(call.target, call.location)?,
     })
 }
 
@@ -246,7 +246,7 @@ fn lower_thread_index_get(
     )?;
     Ok(Terminator::Branch {
         target: lowerer.block_id(call.target, call.location.clone())?,
-        arguments: Vec::new(),
+        arguments: lowerer.edge_arguments(call.target, call.location)?,
     })
 }
 
@@ -328,6 +328,6 @@ fn lower_disjoint_slice_get_mut(
     )?;
     Ok(Terminator::Branch {
         target: lowerer.block_id(call.target, call.location.clone())?,
-        arguments: Vec::new(),
+        arguments: lowerer.edge_arguments(call.target, call.location)?,
     })
 }

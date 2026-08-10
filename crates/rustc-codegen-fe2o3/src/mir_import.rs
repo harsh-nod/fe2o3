@@ -18,8 +18,8 @@ use reserved_fe2o3_symbols::{
 };
 use rustc_hir::def_id::LOCAL_CRATE;
 use rustc_middle::mir::{
-    BasicBlock, BinOp, Body, ConstOperand, Local, NonDivergingIntrinsic, Operand, Place,
-    ProjectionElem, Rvalue, SourceInfo, StatementKind, TerminatorKind, UnOp,
+    AggregateKind, BasicBlock, BinOp, Body, ConstOperand, Local, NonDivergingIntrinsic, Operand,
+    Place, ProjectionElem, Rvalue, SourceInfo, StatementKind, TerminatorKind, UnOp,
 };
 use rustc_middle::ty::{
     FloatTy, Instance, IntTy, Mutability, Ty, TyCtxt, TyKind, TypingEnv, UintTy,
@@ -440,6 +440,8 @@ pub enum MirRvalueKind {
     Unary(MirUnaryOp),
     Discriminant,
     Aggregate,
+    /// A rustc-authenticated construction of a payload-free enum variant.
+    FieldlessEnumVariant(i64),
     Other,
 }
 
@@ -1674,6 +1676,10 @@ impl PortableMirSemanticEncoderV2 {
             MirRvalueKind::Discriminant => self.tag(7),
             MirRvalueKind::Aggregate => self.tag(8),
             MirRvalueKind::Other => self.tag(9),
+            MirRvalueKind::FieldlessEnumVariant(discriminant) => {
+                self.tag(10);
+                self.i64(discriminant);
+            }
         }
     }
 
@@ -2366,7 +2372,7 @@ fn import_statement<'tcx>(
         kind: statement_kind(kind),
         destination: statement_destination(kind),
         operands: statement_operands(tcx, kind),
-        rvalue: statement_rvalue(kind),
+        rvalue: statement_rvalue(tcx, kind),
         operation: statement_operation(kind),
         source: Some(import_source_location(tcx, source_info)),
     }
@@ -2443,12 +2449,12 @@ fn statement_operation(kind: &StatementKind<'_>) -> Option<String> {
     Some(rvalue_operation(rvalue).to_string())
 }
 
-fn statement_rvalue(kind: &StatementKind<'_>) -> Option<MirRvalueKind> {
+fn statement_rvalue<'tcx>(tcx: TyCtxt<'tcx>, kind: &StatementKind<'tcx>) -> Option<MirRvalueKind> {
     let StatementKind::Assign(assign) = kind else {
         return None;
     };
     let (_, rvalue) = &**assign;
-    Some(import_rvalue_kind(rvalue))
+    Some(import_rvalue_kind(tcx, rvalue))
 }
 
 fn rvalue_operands<'tcx>(tcx: TyCtxt<'tcx>, rvalue: &Rvalue<'tcx>) -> Vec<MirOperandRef> {
@@ -2487,7 +2493,7 @@ fn rvalue_operation(rvalue: &Rvalue<'_>) -> &'static str {
     }
 }
 
-fn import_rvalue_kind(rvalue: &Rvalue<'_>) -> MirRvalueKind {
+fn import_rvalue_kind<'tcx>(tcx: TyCtxt<'tcx>, rvalue: &Rvalue<'tcx>) -> MirRvalueKind {
     match rvalue {
         Rvalue::Use(_) => MirRvalueKind::Use,
         Rvalue::Repeat(_, _) => MirRvalueKind::Repeat,
@@ -2497,9 +2503,36 @@ fn import_rvalue_kind(rvalue: &Rvalue<'_>) -> MirRvalueKind {
         Rvalue::BinaryOp(op, _) => MirRvalueKind::Binary(import_binary_op(*op)),
         Rvalue::UnaryOp(op, _) => MirRvalueKind::Unary(import_unary_op(*op)),
         Rvalue::Discriminant(_) => MirRvalueKind::Discriminant,
-        Rvalue::Aggregate(_, _) => MirRvalueKind::Aggregate,
+        Rvalue::Aggregate(kind, operands) => {
+            fieldless_enum_discriminant(tcx, kind, operands.is_empty()).map_or(
+                MirRvalueKind::Aggregate,
+                MirRvalueKind::FieldlessEnumVariant,
+            )
+        }
         _ => MirRvalueKind::Other,
     }
+}
+
+fn fieldless_enum_discriminant<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    kind: &AggregateKind<'tcx>,
+    operands_empty: bool,
+) -> Option<i64> {
+    let AggregateKind::Adt(def_id, variant, _, _, active_field) = kind else {
+        return None;
+    };
+    let adt = tcx.adt_def(*def_id);
+    if !operands_empty
+        || active_field.is_some()
+        || !adt.is_enum()
+        || adt
+            .variants()
+            .iter()
+            .any(|variant| !variant.fields.is_empty())
+    {
+        return None;
+    }
+    i64::try_from(adt.discriminant_for_variant(tcx, *variant).val).ok()
 }
 
 fn import_operand<'tcx>(tcx: TyCtxt<'tcx>, operand: &Operand<'tcx>) -> MirOperandRef {
