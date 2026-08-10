@@ -742,6 +742,9 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
             && self.function.typed_profile
                 == Some(MirKernelProfile::GeneralScalarSliceRustcLayoutV3)
     }
+    fn is_gfx942_memory_v1_context(&self) -> bool {
+        self.is_general_v3_profile_context() && self.float_target.is_some()
+    }
 
     fn lower_block(&mut self, source: &MirBlock) -> Result<BasicBlock, TranslationDiagnostic> {
         let mut block = BasicBlock::new(self.block_id(
@@ -1416,6 +1419,14 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 }
                 Some(TrustedDeviceItem::HalfOperation(_)) => {
                     unreachable!("half operations are handled before ordinary argument lowering")
+                }
+                Some(
+                    TrustedDeviceItem::MemoryOffsetFrom
+                    | TrustedDeviceItem::MemoryVolatileLoad
+                    | TrustedDeviceItem::MemoryVolatileStore
+                    | TrustedDeviceItem::MemoryCopyNonOverlapping,
+                ) => {
+                    unreachable!("memory operations are handled by semantic lowering")
                 }
                 None => {
                     return Err(diagnostic(
@@ -2597,6 +2608,10 @@ mod vecadd_tests;
 #[cfg(test)]
 #[path = "kernel_ir_lowering_general_v3_tests.rs"]
 mod general_v3_tests;
+
+#[cfg(test)]
+#[path = "kernel_ir_lowering_memory_tests.rs"]
+mod memory_tests;
 
 #[cfg(test)]
 mod tests {

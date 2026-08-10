@@ -51,6 +51,10 @@ mod tests {
             TrustedDeviceItem::ThreadIndex1d,
             TrustedDeviceItem::ThreadIndexGet,
             TrustedDeviceItem::DisjointSliceGetMut,
+            TrustedDeviceItem::MemoryOffsetFrom,
+            TrustedDeviceItem::MemoryVolatileLoad,
+            TrustedDeviceItem::MemoryVolatileStore,
+            TrustedDeviceItem::MemoryCopyNonOverlapping,
         ] {
             let recognized = SessionRecognizedSemanticItem::trusted_device_for_test(item);
             assert_eq!(recognized.trusted_device_item(), item);

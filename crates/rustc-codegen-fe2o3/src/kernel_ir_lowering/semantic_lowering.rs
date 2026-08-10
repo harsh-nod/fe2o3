@@ -7,6 +7,7 @@
 
 mod control_flow;
 mod general_v3;
+mod memory_v1;
 
 use super::{
     FunctionLowerer, TranslationDiagnostic, TranslationDiagnosticCode, TranslationLocation,
@@ -155,11 +156,18 @@ struct TerminatorHandler {
     lower: TerminatorLowering,
 }
 
-const CALL_HANDLERS: &[CallHandler] = &[CallHandler {
-    name: "general-v3",
-    claim: general_v3::claim_call,
-    lower: general_v3::lower_call,
-}];
+const CALL_HANDLERS: &[CallHandler] = &[
+    CallHandler {
+        name: "gfx942-memory-v1",
+        claim: memory_v1::claim_call,
+        lower: memory_v1::lower_call,
+    },
+    CallHandler {
+        name: "general-v3",
+        claim: general_v3::claim_call,
+        lower: general_v3::lower_call,
+    },
+];
 const ASSIGNMENT_HANDLERS: &[AssignmentHandler] = &[AssignmentHandler {
     name: "general-v3",
     claim: general_v3::claim_assignment,

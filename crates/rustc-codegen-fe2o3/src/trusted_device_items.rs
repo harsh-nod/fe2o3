@@ -44,6 +44,10 @@ pub(crate) enum TrustedDeviceItem {
     ThreadIndexStrideOffset,
     DisjointSliceGetMut,
     DisjointSliceGetMutAt,
+    MemoryOffsetFrom,
+    MemoryVolatileLoad,
+    MemoryVolatileStore,
+    MemoryCopyNonOverlapping,
     DeviceValue(DeviceValueDiagnosticItem),
     DeviceMath(DeviceMathDiagnosticItem),
     HalfOperation(TrustedHalfOperation),
@@ -99,6 +103,26 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         TrustedDeviceItem::DisjointSliceGetMutAt,
         "fe2o3_device_disjoint_slice_get_mut_at",
         "fe2o3_device::DisjointSlice::<T>::get_mut_at",
+    ),
+    (
+        TrustedDeviceItem::MemoryOffsetFrom,
+        "fe2o3_device_memory_offset_from_v1",
+        "fe2o3_device::memory::offset_from",
+    ),
+    (
+        TrustedDeviceItem::MemoryVolatileLoad,
+        "fe2o3_device_memory_volatile_load_v1",
+        "fe2o3_device::memory::volatile_load",
+    ),
+    (
+        TrustedDeviceItem::MemoryVolatileStore,
+        "fe2o3_device_memory_volatile_store_v1",
+        "fe2o3_device::memory::volatile_store",
+    ),
+    (
+        TrustedDeviceItem::MemoryCopyNonOverlapping,
+        "fe2o3_device_memory_copy_nonoverlapping_v1",
+        "fe2o3_device::memory::copy_nonoverlapping",
     ),
 ];
 
@@ -351,6 +375,10 @@ mod tests {
             TrustedDeviceItem::ThreadIndexStrideOffset,
             TrustedDeviceItem::DisjointSliceGetMut,
             TrustedDeviceItem::DisjointSliceGetMutAt,
+            TrustedDeviceItem::MemoryOffsetFrom,
+            TrustedDeviceItem::MemoryVolatileLoad,
+            TrustedDeviceItem::MemoryVolatileStore,
+            TrustedDeviceItem::MemoryCopyNonOverlapping,
         ];
 
         let paths = items.map(TrustedDeviceItem::canonical_path);
