@@ -15,6 +15,7 @@ extern crate std;
 use core::marker::PhantomData;
 
 pub mod atomic;
+pub mod collective;
 pub mod ffi;
 pub mod fp8;
 pub mod group;
@@ -30,6 +31,11 @@ pub mod thread;
 pub mod views;
 pub mod wave;
 
+pub use collective::{
+    GFX942_COLLECTIVE_CONTRACT_VERSION_V1, Gfx942CollectiveElement, Gfx942Collectives,
+    MAX_GFX942_WORKGROUP_COLLECTIVE_SIZE, WorkgroupCollectiveScratch,
+    WorkgroupCollectiveScratchError,
+};
 pub use fe2o3_macros::{device_export, device_import, kernel};
 pub use ffi::{
     DeviceConstantPtr, DeviceFfiAbiTypeV1, DeviceGlobalConstPtr, DeviceGlobalMutPtr,
