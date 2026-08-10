@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import pathlib
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -41,6 +42,15 @@ class SourceStateTests(unittest.TestCase):
             check=False,
         )
 
+    def supervise(self, code: str) -> subprocess.CompletedProcess[str]:
+        return self.check(
+            "--",
+            sys.executable,
+            "-c",
+            code,
+            str(self.repository / "source.txt"),
+        )
+
     def test_exact_head_and_tree_are_reported_and_rechecked(self) -> None:
         commit = self.git("rev-parse", "HEAD")
         tree = self.git("rev-parse", "HEAD^{tree}")
@@ -67,6 +77,71 @@ class SourceStateTests(unittest.TestCase):
         tracked = self.check()
         self.assertNotEqual(tracked.returncode, 0)
         self.assertIn("exactly clean", tracked.stderr)
+
+    def test_supervisor_substitutes_exact_commit_and_tree(self) -> None:
+        commit = self.git("rev-parse", "HEAD")
+        tree = self.git("rev-parse", "HEAD^{tree}")
+        completed = self.check(
+            "--",
+            sys.executable,
+            "-c",
+            "import sys; print(sys.argv[1] + ':' + sys.argv[2])",
+            "{source_commit}",
+            "{source_tree}",
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(completed.stdout, f"{commit}:{tree}\n")
+
+    def test_same_size_mutate_restore_is_rejected_by_ctime(self) -> None:
+        code = r"""
+import os
+import pathlib
+import sys
+path = pathlib.Path(sys.argv[1])
+before = path.stat()
+original = path.read_bytes()
+path.write_bytes(b'X' * len(original))
+with path.open('rb') as source:
+    os.fsync(source.fileno())
+path.write_bytes(original)
+os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+"""
+        completed = self.supervise(code)
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("changed during evidence generation", completed.stderr)
+        self.assertEqual((self.repository / "source.txt").read_bytes(), b"source\n")
+
+    def test_path_swap_and_restore_is_rejected(self) -> None:
+        code = r"""
+import os
+import pathlib
+import sys
+path = pathlib.Path(sys.argv[1])
+held = path.with_name('held-source')
+replacement = path.with_name('replacement-source')
+replacement.write_bytes(path.read_bytes())
+replacement.chmod(path.stat().st_mode & 0o777)
+path.rename(held)
+replacement.rename(path)
+path.unlink()
+held.rename(path)
+"""
+        completed = self.supervise(code)
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("changed during evidence generation", completed.stderr)
+
+    def test_mode_change_and_restore_is_rejected(self) -> None:
+        code = r"""
+import pathlib
+import sys
+path = pathlib.Path(sys.argv[1])
+mode = path.stat().st_mode & 0o777
+path.chmod(mode | 0o100)
+path.chmod(mode)
+"""
+        completed = self.supervise(code)
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("changed during evidence generation", completed.stderr)
 
 
 if __name__ == "__main__":

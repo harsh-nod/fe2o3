@@ -114,8 +114,28 @@ Before ROCgdb runs, the local runner measures the HSACO SHA-256, hardware-test
 SHA-256, and hardware ELF GNU build ID. It derives `gfx942:xnack-` from AMDGPU
 metadata and `O0` from the inspected DWARF producer/configuration. These are
 capability measurements, not authenticated provenance: the same local process
-selected the executable and measured it. The raw ROCgdb log is hashed and then
-removed. Only the path-clean normalized transcript is retained.
+selected the executable and measured it. The lane first requires a clean exact
+Git HEAD and seals a canonical inventory of every tracked regular blob. Each
+entry binds the Git mode, raw path, Git blob object, content SHA-256, and Linux
+device, inode, mode, link count, size, mtime, and ctime. A parent supervisor
+holds that sealed inventory across compilation, debugging, and finalization,
+then recaptures and byte-compares it. Same-size mutate/restore, mode restore,
+and path-swap/restore operations therefore fail through content or inode
+metadata drift even when the final Git status is clean.
+
+The executed host bytes are copied atomically from the sealed memfd into the
+private evidence directory as a single-link mode-0400 artifact. Downstream
+inspection consumes that retained image. The final checker also snapshots and
+parses the complete debug archive manifest, requires `result=passed` and every
+tool status to be zero, and cross-binds the HSACO, retained host, checker,
+facts, normalized DWARF, normalized ROCgdb, tool paths, and run nonce. The raw
+ROCgdb log is hashed and then removed. Only the path-clean normalized
+transcript is retained.
+
+This local boundary does not defend against root or a same-user process able
+to ptrace, inject into, or otherwise control the source-state supervisor,
+runner, debugger, or checker. Those actors can alter the measuring process
+itself and remain outside the pilot threat model.
 
 The normalized transcript is segmented around every debugger continuation.
 The checker requires an exact BP2 line-69 hit followed by an AMDGPU-wave frame

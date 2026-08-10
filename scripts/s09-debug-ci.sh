@@ -36,7 +36,14 @@ executable_file() {
     fail "${label} must be an executable regular file"
 }
 
-if (($# != 1)); then
+mode=outer
+if [[ "${1:-}" == --source-supervised ]]; then
+  mode=source-supervised
+  shift
+fi
+readonly mode
+if [[ "${mode}" == outer && $# != 1 ]] ||
+  [[ "${mode}" == source-supervised && $# != 3 ]]; then
   fail "usage: scripts/s09-debug-ci.sh ABSOLUTE-NEW-EVIDENCE-DIRECTORY"
 fi
 [[ "${FE2O3_ALLOW_S09_DEBUG:-}" == 1 ]] ||
@@ -55,14 +62,19 @@ readonly EVIDENCE_PARENT
 [[ "${EVIDENCE}/" != "${ROOT}/"* ]] ||
   fail "evidence directory must be outside the source worktree"
 
-mapfile -t source_state < <("${SOURCE_STATE_CHECKER}" --root "${ROOT}")
-((${#source_state[@]} == 2)) || fail "source-state checker returned malformed output"
-[[ "${source_state[0]}" =~ ^source_commit$'\t'([0-9a-f]{40}|[0-9a-f]{64})$ ]] ||
-  fail "source-state checker returned a malformed commit"
-SOURCE_COMMIT="${BASH_REMATCH[1]}"
-[[ "${source_state[1]}" =~ ^source_tree$'\t'([0-9a-f]{40}|[0-9a-f]{64})$ ]] ||
-  fail "source-state checker returned a malformed tree"
-SOURCE_TREE="${BASH_REMATCH[1]}"
+if [[ "${mode}" == outer ]]; then
+  exec "${SOURCE_STATE_CHECKER}" \
+    --root "${ROOT}" \
+    -- "${BASH_SOURCE[0]}" --source-supervised "${EVIDENCE}" \
+    '{source_commit}' '{source_tree}'
+fi
+
+SOURCE_COMMIT="$2"
+SOURCE_TREE="$3"
+[[ "${SOURCE_COMMIT}" =~ ^[0-9a-f]{40}$|^[0-9a-f]{64}$ ]] ||
+  fail "source-state supervisor supplied a malformed commit"
+[[ "${SOURCE_TREE}" =~ ^[0-9a-f]{40}$|^[0-9a-f]{64}$ ]] ||
+  fail "source-state supervisor supplied a malformed tree"
 readonly SOURCE_COMMIT SOURCE_TREE
 
 readonly WORKER="${FE2O3_LLVM_LINK_WORKER:-}"
