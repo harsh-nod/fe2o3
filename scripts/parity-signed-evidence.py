@@ -12,6 +12,7 @@ import fcntl
 import hashlib
 import os
 from pathlib import Path
+import platform
 import re
 import secrets
 import shlex
@@ -27,6 +28,8 @@ from typing import Iterable
 MAX_BYTES = 4 * 1024 * 1024
 MAX_ITEMS = 256
 MAX_ARCHIVE_FILES = 4096
+MAX_ARCHIVE_FILE_BYTES = 256 * 1024 * 1024
+MAX_ARCHIVE_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
 CLASSES = ("unit", "ui", "ir", "compile", "verus", "hardware", "debug")
 CLASS_RANK = {value: index for index, value in enumerate(CLASSES)}
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -43,7 +46,6 @@ FS_IOC_GETFLAGS = 0x80086601
 FS_IMMUTABLE_FL = 0x00000010
 AT_FDCWD = -100
 RENAME_NOREPLACE = 1
-SYS_OPENAT2 = 437
 RESOLVE_NO_XDEV = 0x01
 RESOLVE_NO_SYMLINKS = 0x04
 RESOLVE_BENEATH = 0x08
@@ -149,6 +151,70 @@ class OpenHow(ctypes.Structure):
     ]
 
 
+OPENAT2_SYSCALLS = {
+    "aarch64": 437,
+    "arm64": 437,
+    "i386": 437,
+    "i686": 437,
+    "ppc64": 437,
+    "ppc64le": 437,
+    "riscv64": 437,
+    "s390x": 437,
+    "x86_64": 437,
+}
+_OPENAT2_PREFLIGHTED = False
+
+
+def openat2_syscall_number(machine: str | None = None) -> int:
+    if not sys.platform.startswith("linux"):
+        fail("secure archive access requires Linux openat2")
+    architecture = (machine or platform.machine()).lower()
+    number = OPENAT2_SYSCALLS.get(architecture)
+    if number is None:
+        fail(f"secure archive access has no openat2 ABI for {architecture}")
+    return number
+
+
+def openat2_fd(parent_fd: int, name: str, flags: int, resolve: int) -> int:
+    how = OpenHow(flags | os.O_CLOEXEC | os.O_NOFOLLOW, 0, resolve)
+    libc = ctypes.CDLL(None, use_errno=True)
+    descriptor = libc.syscall(
+        openat2_syscall_number(),
+        parent_fd,
+        ctypes.c_char_p(os.fsencode(name)),
+        ctypes.byref(how),
+        ctypes.sizeof(how),
+    )
+    if descriptor >= 0:
+        return descriptor
+    error = ctypes.get_errno()
+    if error == errno.ENOSYS:
+        fail("secure archive access requires kernel openat2 support")
+    if error in (errno.EPERM, errno.EACCES):
+        fail("secure archive access cannot use openat2 under the active sandbox")
+    if error == errno.EINVAL:
+        fail("secure archive access requires openat2 resolve flags supported by the kernel")
+    raise OSError(error, os.strerror(error), name)
+
+
+def preflight_openat2() -> None:
+    global _OPENAT2_PREFLIGHTED
+    if _OPENAT2_PREFLIGHTED:
+        return
+    descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        probe = openat2_fd(
+            descriptor,
+            ".",
+            os.O_RDONLY | os.O_DIRECTORY,
+            RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS,
+        )
+        os.close(probe)
+    finally:
+        os.close(descriptor)
+    _OPENAT2_PREFLIGHTED = True
+
+
 @dataclass(frozen=True)
 class ArchiveFileIdentity:
     device: int
@@ -165,6 +231,7 @@ class ArchiveSnapshot:
     """One FD-anchored identity snapshot for an evidence archive."""
 
     def __init__(self, root: Path, *, require_immutable: bool) -> None:
+        preflight_openat2()
         requested = root.absolute()
         flags = os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW
         try:
@@ -176,6 +243,7 @@ class ArchiveSnapshot:
         self.files: dict[str, int] = {}
         self.identities: dict[str, ArchiveFileIdentity] = {}
         self.directories: set[str] = set()
+        self.total_bytes = 0
         try:
             root_info = os.fstat(self.root_fd)
             if not stat.S_ISDIR(root_info.st_mode):
@@ -211,25 +279,17 @@ class ArchiveSnapshot:
 
     @staticmethod
     def _openat2(parent_fd: int, name: str, flags: int) -> int:
-        how = OpenHow(
-            flags | os.O_CLOEXEC | os.O_NOFOLLOW,
-            0,
-            RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV,
-        )
-        libc = ctypes.CDLL(None, use_errno=True)
-        descriptor = libc.syscall(
-            SYS_OPENAT2,
-            parent_fd,
-            ctypes.c_char_p(os.fsencode(name)),
-            ctypes.byref(how),
-            ctypes.sizeof(how),
-        )
-        if descriptor < 0:
-            error = ctypes.get_errno()
-            if error == errno.ELOOP:
+        try:
+            return openat2_fd(
+                parent_fd,
+                name,
+                flags,
+                RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV,
+            )
+        except OSError as error:
+            if error.errno == errno.ELOOP:
                 fail(f"archive contains a symlink: {name}")
-            fail(f"cannot securely open archive entry {name}: {os.strerror(error)}")
-        return descriptor
+            fail(f"cannot securely open archive entry {name}: {error.strerror}")
 
     def _scan_directory(self, directory_fd: int, prefix: str, device: int) -> None:
         try:
@@ -263,6 +323,10 @@ class ArchiveSnapshot:
                     fail(f"archive contains a non-regular entry: {relative}")
                 if info.st_nlink != 1:
                     fail(f"archive file has an unsafe link count: {relative}")
+                if info.st_size > MAX_ARCHIVE_FILE_BYTES:
+                    fail(f"archive file exceeds the byte limit: {relative}")
+                if self.total_bytes > MAX_ARCHIVE_TOTAL_BYTES - info.st_size:
+                    fail("evidence archive exceeds the cumulative byte limit")
                 if len(self.files) >= MAX_ARCHIVE_FILES:
                     fail("evidence archive exceeds the file-count bound")
                 if self.require_immutable and not immutable_flag_is_set_fd(descriptor):
@@ -274,6 +338,7 @@ class ArchiveSnapshot:
                     fail(f"archive entry changed during scan: {relative}")
                 self.files[relative] = descriptor
                 self.identities[relative] = identity
+                self.total_bytes += info.st_size
                 keep = True
             finally:
                 if not keep:

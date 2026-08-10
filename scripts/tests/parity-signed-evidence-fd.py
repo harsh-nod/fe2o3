@@ -162,6 +162,48 @@ def test_archive_snapshot_rejects_symlink_traversal() -> None:
             raise AssertionError("archive snapshot followed a symlink")
 
 
+def test_openat2_architecture_preflight_is_explicit() -> None:
+    assert EVIDENCE.openat2_syscall_number("x86_64") == 437
+    expect_evidence_error(
+        lambda: EVIDENCE.openat2_syscall_number("unsupported-test-architecture"),
+        "has no openat2 ABI",
+    )
+
+
+def test_archive_file_and_cumulative_byte_limits() -> None:
+    original_file_limit = EVIDENCE.MAX_ARCHIVE_FILE_BYTES
+    original_total_limit = EVIDENCE.MAX_ARCHIVE_TOTAL_BYTES
+    try:
+        EVIDENCE.MAX_ARCHIVE_FILE_BYTES = 16
+        EVIDENCE.MAX_ARCHIVE_TOTAL_BYTES = 32
+        with tempfile.TemporaryDirectory(prefix="fe2o3-file-bound-") as raw_temp:
+            archive = Path(raw_temp) / "archive"
+            archive.mkdir()
+            (archive / "oversized.bin").write_bytes(b"x" * 17)
+            expect_evidence_error(
+                lambda: EVIDENCE.ArchiveSnapshot(
+                    archive, require_immutable=False
+                ),
+                "archive file exceeds the byte limit",
+            )
+
+        EVIDENCE.MAX_ARCHIVE_TOTAL_BYTES = 15
+        with tempfile.TemporaryDirectory(prefix="fe2o3-total-bound-") as raw_temp:
+            archive = Path(raw_temp) / "archive"
+            archive.mkdir()
+            (archive / "one.bin").write_bytes(b"x" * 8)
+            (archive / "two.bin").write_bytes(b"y" * 8)
+            expect_evidence_error(
+                lambda: EVIDENCE.ArchiveSnapshot(
+                    archive, require_immutable=False
+                ),
+                "archive exceeds the cumulative byte limit",
+            )
+    finally:
+        EVIDENCE.MAX_ARCHIVE_FILE_BYTES = original_file_limit
+        EVIDENCE.MAX_ARCHIVE_TOTAL_BYTES = original_total_limit
+
+
 def test_bootstrap_publication_is_durable_and_no_replace() -> None:
     with tempfile.TemporaryDirectory(prefix="fe2o3-bootstrap-publish-") as raw_temp:
         temp = Path(raw_temp)
@@ -258,6 +300,8 @@ if __name__ == "__main__":
     test_archive_snapshot_never_reopens_replaced_root_path()
     test_archive_snapshot_detects_replaced_entry()
     test_archive_snapshot_rejects_symlink_traversal()
+    test_openat2_architecture_preflight_is_explicit()
+    test_archive_file_and_cumulative_byte_limits()
     test_bootstrap_publication_is_durable_and_no_replace()
     test_bootstrap_destination_race_has_one_winner()
     test_bootstrap_interruption_cleans_unpublished_staging()
