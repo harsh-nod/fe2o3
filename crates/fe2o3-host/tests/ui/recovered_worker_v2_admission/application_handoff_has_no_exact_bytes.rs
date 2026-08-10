@@ -1,8 +1,8 @@
 use fe2o3_host::{
-    RecoveredWorkerV2ApplicationHandoffV1, ReviewedHsaImplicitKernargAdapterV1,
+    RecoveredWorkerV2SynchronousHsaHandoffV1, ReviewedHsaImplicitKernargAdapterV1,
 };
 
-fn extract<K, A>(authority: &RecoveredWorkerV2ApplicationHandoffV1<'_, K, A>)
+fn extract<K, A>(authority: &RecoveredWorkerV2SynchronousHsaHandoffV1<K, A>)
 where
     A: ReviewedHsaImplicitKernargAdapterV1,
 {

@@ -12,7 +12,6 @@ use fe2o3_artifact_transaction::{
     DurableCurrentLinkPublicationLeaseV1, DurablePublishedClaimReacquisitionErrorV1,
     PublishedLinkArtifactV1, reacquire_current_hsaco_publication_lease_v1,
 };
-use fe2o3_core::{GpuContext, Stream, StreamIdentity};
 use fe2o3_hsaco::{CodeObjectVersion, KernelDescriptorBinding};
 use fe2o3_hsaco_finalize::{FinalizationError, finalize_unfinalized, verify_finalized};
 use fe2o3_kernel_descriptor::{
@@ -24,7 +23,6 @@ use fe2o3_worker_v2_bundle::{
 use std::error::Error;
 use std::fmt;
 use std::path::Path;
-use std::sync::Arc;
 
 /// Read-only host descriptor recovered from one canonical Worker V2 envelope.
 ///
@@ -148,44 +146,21 @@ impl RecoveredWorkerV2PinnedDescriptorV1 {
         false
     }
 
-    /// Revalidates and consumes this descriptor into one exact application handoff.
+    /// Revalidates and consumes this descriptor into one synchronous HSA handoff.
     ///
     /// The descriptor remains inert until this transition is called with the existing unsafe
     /// compiler/Verus prerequisite authenticator. The returned authority owns the exact recovered
-    /// envelope and publication lease through the loaded executable, retains the observed HIP
-    /// context and the exact borrowed application stream, and exposes only generated typed
-    /// preparation. Native bytes and handles remain private.
-    pub fn load_generated_application_handoff_v1<'stream, K, Authenticator, Adapter>(
+    /// envelope and publication lease through the loaded executable, retains the observed device
+    /// and context facts, and exposes only generated typed preparation. Dispatch uses the reviewed
+    /// adapter's private HSA queue and waits for quiescence; this API makes no HIP-stream ordering
+    /// or execution claim. Native bytes and handles remain private.
+    pub fn load_generated_synchronous_hsa_handoff_v1<K, Authenticator, Adapter>(
         self,
-        stream: &'stream Stream,
         authenticator: &mut Authenticator,
         adapter: Adapter,
     ) -> Result<
-        RecoveredWorkerV2ApplicationHandoffV1<'stream, K, Adapter>,
-        RecoveredWorkerV2ApplicationHandoffError<Authenticator::Error, Adapter::Error>,
-    >
-    where
-        K: CompilerGeneratedKernelExpectationV1,
-        Authenticator: WorkerV2PrerequisiteAuthenticatorV1<K>,
-        Adapter: ReviewedHsaImplicitKernargAdapterV1,
-    {
-        let retained = RetainedApplicationStreamV1::bind(&self.observed, stream)
-            .map_err(RecoveredWorkerV2ApplicationHandoffError::Binding)?;
-        self.finish_generated_application_handoff_v1::<K, Authenticator, Adapter>(
-            retained,
-            authenticator,
-            adapter,
-        )
-    }
-
-    fn finish_generated_application_handoff_v1<'stream, K, Authenticator, Adapter>(
-        self,
-        retained: RetainedApplicationStreamV1<'stream>,
-        authenticator: &mut Authenticator,
-        adapter: Adapter,
-    ) -> Result<
-        RecoveredWorkerV2ApplicationHandoffV1<'stream, K, Adapter>,
-        RecoveredWorkerV2ApplicationHandoffError<Authenticator::Error, Adapter::Error>,
+        RecoveredWorkerV2SynchronousHsaHandoffV1<K, Adapter>,
+        RecoveredWorkerV2SynchronousHsaHandoffError<Authenticator::Error, Adapter::Error>,
     >
     where
         K: CompilerGeneratedKernelExpectationV1,
@@ -194,43 +169,40 @@ impl RecoveredWorkerV2PinnedDescriptorV1 {
     {
         self.admission
             .acquire_currentness()
-            .map_err(RecoveredWorkerV2ApplicationHandoffError::CurrentPublication)?;
+            .map_err(RecoveredWorkerV2SynchronousHsaHandoffError::CurrentPublication)?;
         self.admission
             .select_typed_kernel::<K>()
-            .map_err(RecoveredWorkerV2ApplicationHandoffError::Selection)?;
+            .map_err(RecoveredWorkerV2SynchronousHsaHandoffError::Selection)?;
         let authenticated =
             AuthenticatedWorkerV2ExecutableV1::<K>::authenticate(self.admission, authenticator)
-                .map_err(RecoveredWorkerV2ApplicationHandoffError::Authentication)?;
+                .map_err(RecoveredWorkerV2SynchronousHsaHandoffError::Authentication)?;
         let authorized = authenticated
             .authorize_hsa_load(adapter)
-            .map_err(RecoveredWorkerV2ApplicationHandoffError::Authorization)?;
+            .map_err(RecoveredWorkerV2SynchronousHsaHandoffError::Authorization)?;
         let loaded = authorized
             .load()
-            .map_err(RecoveredWorkerV2ApplicationHandoffError::Load)?;
-        Ok(RecoveredWorkerV2ApplicationHandoffV1 {
+            .map_err(RecoveredWorkerV2SynchronousHsaHandoffError::Load)?;
+        Ok(RecoveredWorkerV2SynchronousHsaHandoffV1 {
             loaded,
             observed: self.observed,
-            retained,
         })
     }
 }
 
-/// Linear application authority recovered from one canonical Worker V2 envelope.
+/// Linear synchronous HSA authority recovered from one canonical Worker V2 envelope.
 ///
 /// This value is intentionally neither `Clone` nor `Copy`. It retains the exact publication
-/// lease, envelope bytes, loaded executable, original context observation, and borrowed stream.
-/// Preparation accepts the bound stream again so a separately created wrapper cannot be
-/// substituted at the application boundary.
-pub struct RecoveredWorkerV2ApplicationHandoffV1<'stream, K, A: ReviewedHsaImplicitKernargAdapterV1>
-{
+/// lease, envelope bytes, loaded executable, and original context observation. Its reviewed HSA
+/// adapter owns the private queue and every dispatch waits for quiescence. This value does not
+/// represent, retain, or order work on a HIP stream.
+pub struct RecoveredWorkerV2SynchronousHsaHandoffV1<K, A: ReviewedHsaImplicitKernargAdapterV1> {
     loaded: LoadedHsaExecutableV1<K, A>,
     observed: ObservedContext,
-    retained: RetainedApplicationStreamV1<'stream>,
 }
 
-/// Result of preparing one invocation through recovered application authority.
+/// Result of preparing one invocation through recovered synchronous HSA authority.
 #[doc(hidden)]
-pub type RecoveredWorkerV2ApplicationPrepareResultV1<
+pub type RecoveredWorkerV2SynchronousHsaPrepareResultV1<
     'loaded,
     'allocation,
     Root,
@@ -247,30 +219,25 @@ pub type RecoveredWorkerV2ApplicationPrepareResultV1<
         Adapter,
         Arguments,
     >,
-    RecoveredWorkerV2ApplicationPrepareError<
+    RecoveredWorkerV2SynchronousHsaPrepareError<
         PrerequisiteError,
         <Adapter as crate::ReviewedHsaExecutableLifecycleAdapterV1>::Error,
     >,
 >;
 
 impl<K, A: ReviewedHsaImplicitKernargAdapterV1> fmt::Debug
-    for RecoveredWorkerV2ApplicationHandoffV1<'_, K, A>
+    for RecoveredWorkerV2SynchronousHsaHandoffV1<K, A>
 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("RecoveredWorkerV2ApplicationHandoffV1")
+            .debug_struct("RecoveredWorkerV2SynchronousHsaHandoffV1")
             .field("load", self.loaded.load_observation())
             .field("kernel", self.loaded.kernel_observation())
-            .field("stream", &self.retained.identity())
             .finish_non_exhaustive()
     }
 }
 
-impl<K, A: ReviewedHsaImplicitKernargAdapterV1> RecoveredWorkerV2ApplicationHandoffV1<'_, K, A> {
-    pub const fn stream_identity(&self) -> StreamIdentity {
-        self.retained.identity()
-    }
-
+impl<K, A: ReviewedHsaImplicitKernargAdapterV1> RecoveredWorkerV2SynchronousHsaHandoffV1<K, A> {
     pub const fn load_observation(&self) -> &crate::HsaCodeObjectLoadObservationV1 {
         self.loaded.load_observation()
     }
@@ -279,12 +246,11 @@ impl<K, A: ReviewedHsaImplicitKernargAdapterV1> RecoveredWorkerV2ApplicationHand
         self.loaded.kernel_observation()
     }
 
-    /// Prepares one generated alpha/zeta COV6 invocation on the exact bound stream.
+    /// Prepares one generated alpha/zeta COV6 invocation for synchronous HSA dispatch.
     ///
-    /// The HSA dispatch is synchronous; retaining the stream prevents its surrounding HIP
-    /// lifetime from ending, while the generated argument capabilities enforce exact context and
-    /// allocation provenance. Supplying another stream wrapper fails before authentication or
-    /// argument binding.
+    /// The reviewed adapter owns its HSA queue and waits for dispatch quiescence. Generated
+    /// argument capabilities enforce exact context and allocation provenance. No HIP stream is
+    /// accepted, retained, or associated with the dispatch.
     #[doc(hidden)]
     pub fn prepare_generated_alpha_zeta_cov6_v1<
         'loaded,
@@ -294,10 +260,9 @@ impl<K, A: ReviewedHsaImplicitKernargAdapterV1> RecoveredWorkerV2ApplicationHand
         Arguments,
     >(
         &'loaded mut self,
-        stream: &Stream,
         authenticator: &mut Authenticator,
         arguments: Arguments,
-    ) -> RecoveredWorkerV2ApplicationPrepareResultV1<
+    ) -> RecoveredWorkerV2SynchronousHsaPrepareResultV1<
         'loaded,
         'allocation,
         K,
@@ -311,92 +276,28 @@ impl<K, A: ReviewedHsaImplicitKernargAdapterV1> RecoveredWorkerV2ApplicationHand
         Authenticator: WorkerV2PrerequisiteAuthenticatorV1<Selected>,
         Arguments: CompilerGeneratedAlphaZetaCov6ArgumentsV1<'allocation, Selected>,
     {
-        if self.retained.identity() != stream.identity() {
-            return Err(
-                RecoveredWorkerV2ApplicationPrepareError::StreamSubstitution {
-                    expected: self.retained.identity(),
-                    actual: stream.identity(),
-                },
-            );
-        }
         self.loaded
             .prepare_generated_alpha_zeta_cov6_selected_kernel_v1::<
                 Selected,
                 Authenticator,
                 Arguments,
             >(&self.observed, authenticator, arguments)
-            .map_err(RecoveredWorkerV2ApplicationPrepareError::Prepare)
+            .map_err(RecoveredWorkerV2SynchronousHsaPrepareError::Prepare)
     }
 
     pub fn unload(
         self,
     ) -> Result<UnloadedHsaExecutableV1, crate::HsaExecutableUnloadError<A::Error>> {
-        let Self {
-            loaded,
-            observed,
-            retained,
-        } = self;
-        let _lifetime_guard = (observed, retained);
+        let Self { loaded, observed } = self;
+        let _lifetime_guard = observed;
         loaded.unload()
     }
 }
 
-enum RetainedApplicationStreamV1<'stream> {
-    Production {
-        stream: &'stream Stream,
-        context: Arc<GpuContext>,
-    },
-    #[cfg(test)]
-    Test,
-}
-
-impl<'stream> RetainedApplicationStreamV1<'stream> {
-    fn bind(
-        observed: &ObservedContext,
-        stream: &'stream Stream,
-    ) -> Result<Self, RecoveredWorkerV2ApplicationBindingError> {
-        if !observed.is_for_context(stream.context()) {
-            return Err(RecoveredWorkerV2ApplicationBindingError::ContextSubstitution);
-        }
-        Ok(Self::Production {
-            stream,
-            context: stream.context().clone(),
-        })
-    }
-
-    const fn identity(&self) -> StreamIdentity {
-        match self {
-            Self::Production { stream, .. } => stream.identity(),
-            #[cfg(test)]
-            Self::Test => panic!("test stream retention has no production identity"),
-        }
-    }
-}
-
-impl Drop for RetainedApplicationStreamV1<'_> {
-    fn drop(&mut self) {
-        match self {
-            Self::Production { stream, context } => {
-                debug_assert!(Arc::ptr_eq(context, stream.context()));
-            }
-            #[cfg(test)]
-            Self::Test => {}
-        }
-    }
-}
-
-/// Context/stream mismatch before recovered authority can be authenticated.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub enum RecoveredWorkerV2ApplicationBindingError {
-    ContextSubstitution,
-}
-
-/// Failure while converting a recovered envelope into application authority.
+/// Failure while converting a recovered envelope into synchronous HSA authority.
 #[derive(Debug)]
 #[non_exhaustive]
-pub enum RecoveredWorkerV2ApplicationHandoffError<PrerequisiteError, AdapterError> {
-    Binding(RecoveredWorkerV2ApplicationBindingError),
+pub enum RecoveredWorkerV2SynchronousHsaHandoffError<PrerequisiteError, AdapterError> {
     CurrentPublication(FinalizedWorkerV2BundleAdmissionError),
     Selection(WorkerV2TypedKernelSelectionError),
     Authentication(WorkerV2ExecutableAuthenticationError<PrerequisiteError>),
@@ -404,14 +305,10 @@ pub enum RecoveredWorkerV2ApplicationHandoffError<PrerequisiteError, AdapterErro
     Load(HsaExecutableLoadError<AdapterError>),
 }
 
-/// Failure while preparing through recovered application authority.
+/// Failure while preparing through recovered synchronous HSA authority.
 #[derive(Debug)]
 #[non_exhaustive]
-pub enum RecoveredWorkerV2ApplicationPrepareError<PrerequisiteError, AdapterError> {
-    StreamSubstitution {
-        expected: StreamIdentity,
-        actual: StreamIdentity,
-    },
+pub enum RecoveredWorkerV2SynchronousHsaPrepareError<PrerequisiteError, AdapterError> {
     Prepare(GeneratedAlphaZetaCov6PrepareError<PrerequisiteError, AdapterError>),
 }
 
@@ -1429,32 +1326,6 @@ mod tests {
         }
     }
 
-    struct UnreachableArguments;
-
-    unsafe impl<'allocation> CompilerGeneratedAlphaZetaCov6ArgumentsV1<'allocation, HandoffKernel>
-        for UnreachableArguments
-    {
-        fn dispatch_identity_v1() -> crate::AlphaZetaCov6DispatchIdentityV1 {
-            panic!("stream substitution must fail before generated identity is requested")
-        }
-
-        fn generated_argument_layout_v1()
-        -> Result<crate::CompilerGeneratedArgumentLayoutV1, crate::GeneratedArgumentLayoutError>
-        {
-            panic!("stream substitution must fail before generated layout is requested")
-        }
-
-        fn bind_arguments_v1(
-            &self,
-            _plan: &crate::GeneratedArgumentPackingPlanV1,
-        ) -> Result<
-            crate::GeneratedAlphaZetaCov6ArgumentBindingV1<'allocation>,
-            crate::GeneratedArgumentPackError,
-        > {
-            panic!("stream substitution must fail before argument binding")
-        }
-    }
-
     fn managed_artifact(output: &Path) -> std::path::PathBuf {
         let mut matches = fs::read_dir(output)
             .unwrap()
@@ -1656,15 +1527,11 @@ mod tests {
         let (adapter, unloads) = ExactHsaAdapter::new();
 
         let authority = recovered
-            .finish_generated_application_handoff_v1::<
+            .load_generated_synchronous_hsa_handoff_v1::<
                 HandoffKernel,
                 ExactPrerequisiteAuthenticator,
                 ExactHsaAdapter,
-            >(
-                RetainedApplicationStreamV1::Test,
-                &mut authenticator,
-                adapter,
-            )
+            >(&mut authenticator, adapter)
             .unwrap();
 
         assert_eq!(
@@ -1699,20 +1566,16 @@ mod tests {
         let (adapter, unloads) = ExactHsaAdapter::new();
 
         let error = recovered
-            .finish_generated_application_handoff_v1::<
+            .load_generated_synchronous_hsa_handoff_v1::<
                 WrongMarker,
                 ExactPrerequisiteAuthenticator,
                 ExactHsaAdapter,
-            >(
-                RetainedApplicationStreamV1::Test,
-                &mut authenticator,
-                adapter,
-            )
+            >(&mut authenticator, adapter)
             .unwrap_err();
 
         assert!(matches!(
             error,
-            RecoveredWorkerV2ApplicationHandoffError::Selection(_)
+            RecoveredWorkerV2SynchronousHsaHandoffError::Selection(_)
         ));
         assert_eq!(
             authentication_calls.load(std::sync::atomic::Ordering::SeqCst),
@@ -1750,20 +1613,16 @@ mod tests {
         let (mut authenticator, authentication_calls) = ExactPrerequisiteAuthenticator::new();
         let (adapter, unloads) = ExactHsaAdapter::new();
         let error = recovered
-            .finish_generated_application_handoff_v1::<
+            .load_generated_synchronous_hsa_handoff_v1::<
                 HandoffKernel,
                 ExactPrerequisiteAuthenticator,
                 ExactHsaAdapter,
-            >(
-                RetainedApplicationStreamV1::Test,
-                &mut authenticator,
-                adapter,
-            )
+            >(&mut authenticator, adapter)
             .unwrap_err();
 
         assert!(matches!(
             error,
-            RecoveredWorkerV2ApplicationHandoffError::CurrentPublication(_)
+            RecoveredWorkerV2SynchronousHsaHandoffError::CurrentPublication(_)
         ));
         assert_eq!(
             authentication_calls.load(std::sync::atomic::Ordering::SeqCst),
@@ -1791,116 +1650,22 @@ mod tests {
         let (mut authenticator, authentication_calls) = ExactPrerequisiteAuthenticator::new();
         let (adapter, unloads) = ExactHsaAdapter::new();
         let error = recovered
-            .finish_generated_application_handoff_v1::<
+            .load_generated_synchronous_hsa_handoff_v1::<
                 HandoffKernel,
                 ExactPrerequisiteAuthenticator,
                 ExactHsaAdapter,
-            >(
-                RetainedApplicationStreamV1::Test,
-                &mut authenticator,
-                adapter,
-            )
+            >(&mut authenticator, adapter)
             .unwrap_err();
 
         assert!(matches!(
             error,
-            RecoveredWorkerV2ApplicationHandoffError::CurrentPublication(_)
+            RecoveredWorkerV2SynchronousHsaHandoffError::CurrentPublication(_)
         ));
         assert_eq!(
             authentication_calls.load(std::sync::atomic::Ordering::SeqCst),
             0
         );
         assert_eq!(unloads.load(std::sync::atomic::Ordering::SeqCst), 0);
-    }
-
-    #[test]
-    #[ignore = "requires a working gfx942 HIP context"]
-    fn application_handoff_rejects_context_and_stream_substitution() {
-        let context = GpuContext::new(0).unwrap();
-        let observed = ObservedContext::observe(&context).unwrap();
-        assert_eq!(observed.device().target_id().processor(), "gfx942");
-        let stream = context.default_stream();
-        let other_stream = context.default_stream();
-
-        let mut context_fixture = recovery_fixture(23, "gfx942", "vecadd");
-        context_fixture.observed = observed.clone();
-        let recovered = recover_worker_v2_load_envelope_v1(
-            &context_fixture.output,
-            &context_fixture.envelope,
-            context_fixture.compiler_transaction.clone(),
-            context_fixture.kernel_id,
-            &context_fixture.observed,
-        )
-        .unwrap();
-        let other_context = GpuContext::new(0).unwrap();
-        let foreign_stream = other_context.default_stream();
-        let (mut authenticator, authentication_calls) = ExactPrerequisiteAuthenticator::new();
-        let (adapter, unloads) = ExactHsaAdapter::new();
-        let error = recovered
-            .load_generated_application_handoff_v1::<
-                HandoffKernel,
-                ExactPrerequisiteAuthenticator,
-                ExactHsaAdapter,
-            >(&foreign_stream, &mut authenticator, adapter)
-            .unwrap_err();
-        assert!(matches!(
-            error,
-            RecoveredWorkerV2ApplicationHandoffError::Binding(
-                RecoveredWorkerV2ApplicationBindingError::ContextSubstitution
-            )
-        ));
-        assert_eq!(
-            authentication_calls.load(std::sync::atomic::Ordering::SeqCst),
-            0
-        );
-        assert_eq!(unloads.load(std::sync::atomic::Ordering::SeqCst), 0);
-
-        let mut stream_fixture = recovery_fixture(24, "gfx942", "vecadd");
-        stream_fixture.observed = observed;
-        let recovered = recover_worker_v2_load_envelope_v1(
-            &stream_fixture.output,
-            &stream_fixture.envelope,
-            stream_fixture.compiler_transaction.clone(),
-            stream_fixture.kernel_id,
-            &stream_fixture.observed,
-        )
-        .unwrap();
-        let (mut authenticator, authentication_calls) = ExactPrerequisiteAuthenticator::new();
-        let (adapter, unloads) = ExactHsaAdapter::new();
-        let mut authority = recovered
-            .load_generated_application_handoff_v1::<
-                HandoffKernel,
-                ExactPrerequisiteAuthenticator,
-                ExactHsaAdapter,
-            >(&stream, &mut authenticator, adapter)
-            .unwrap();
-        assert_eq!(
-            authentication_calls.load(std::sync::atomic::Ordering::SeqCst),
-            1
-        );
-
-        let (mut selected_authenticator, selected_calls) = ExactPrerequisiteAuthenticator::new();
-        let error = match authority
-            .prepare_generated_alpha_zeta_cov6_v1::<
-                HandoffKernel,
-                ExactPrerequisiteAuthenticator,
-                UnreachableArguments,
-            >(
-                &other_stream,
-                &mut selected_authenticator,
-                UnreachableArguments,
-            )
-        {
-            Ok(_) => panic!("substituted stream unexpectedly prepared an invocation"),
-            Err(error) => error,
-        };
-        assert!(matches!(
-            error,
-            RecoveredWorkerV2ApplicationPrepareError::StreamSubstitution { .. }
-        ));
-        assert_eq!(selected_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
-        authority.unload().unwrap();
-        assert_eq!(unloads.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     #[cfg(unix)]

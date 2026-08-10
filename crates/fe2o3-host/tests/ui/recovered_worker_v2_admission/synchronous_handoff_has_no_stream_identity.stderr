@@ -1,0 +1,5 @@
+error[E0599]: no method named `stream_identity` found for reference `&RecoveredWorkerV2SynchronousHsaHandoffV1<K, A>` in the current scope
+ --> tests/ui/recovered_worker_v2_admission/synchronous_handoff_has_no_stream_identity.rs:9:23
+  |
+9 |     let _ = authority.stream_identity();
+  |                       ^^^^^^^^^^^^^^^ method not found in `&RecoveredWorkerV2SynchronousHsaHandoffV1<K, A>`
