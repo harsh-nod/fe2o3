@@ -1,0 +1,30 @@
+error[E0277]: the trait bound `bool: GpuSimdElement` is not satisfied
+ --> tests/ui/fail/simd_invalid_element.rs:4:13
+  |
+4 |     let _ = GpuSimd::<bool, 4>::splat(true);
+  |             ^^^^^^^^^^^^^^^^^^ the trait `GpuSimdElement` is not implemented for `bool`
+  |
+  = help: the following other types implement trait `GpuSimdElement`:
+            Bf16
+            F16
+            Fp8E4M3Fnuz
+            Fp8E5M2Fnuz
+            f32
+            f64
+            i16
+            i32
+          and $N others
+note: required by a bound in `GpuSimd`
+ --> src/simd.rs
+  |
+  | pub struct GpuSimd<T: GpuSimdElement, const N: usize>([T; N])
+  |                       ^^^^^^^^^^^^^^ required by this bound in `GpuSimd`
+
+error[E0599]: the associated function or constant `splat` exists for struct `GpuSimd<bool, 4>`, but its trait bounds were not satisfied
+ --> tests/ui/fail/simd_invalid_element.rs:4:33
+  |
+4 |     let _ = GpuSimd::<bool, 4>::splat(true);
+  |                                 ^^^^^ associated function or constant cannot be called on `GpuSimd<bool, 4>` due to unsatisfied trait bounds
+  |
+  = note: the following trait bounds were not satisfied:
+          `bool: GpuSimdElement`

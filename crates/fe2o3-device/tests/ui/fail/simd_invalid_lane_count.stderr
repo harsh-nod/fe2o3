@@ -1,0 +1,42 @@
+error[E0277]: the trait bound `fe2o3_device::GpuSimdLaneCount<3>: ValidGpuSimdLaneCount` is not satisfied
+ --> tests/ui/fail/simd_invalid_lane_count.rs:4:13
+  |
+4 |     let _ = GpuSimd::<u32, 3>::splat(0);
+  |             ^^^^^^^^^^^^^^^^^ the trait `ValidGpuSimdLaneCount` is not implemented for `fe2o3_device::GpuSimdLaneCount<3>`
+  |
+help: the following other types implement trait `ValidGpuSimdLaneCount`
+ --> src/simd.rs
+  |
+  |             impl ValidGpuSimdLaneCount for GpuSimdLaneCount<$count> {}
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |             |
+  |             `fe2o3_device::GpuSimdLaneCount<16>`
+  |             `fe2o3_device::GpuSimdLaneCount<2>`
+  |             `fe2o3_device::GpuSimdLaneCount<4>`
+  |             `fe2o3_device::GpuSimdLaneCount<8>`
+...
+  | simd_lane_counts!(2, 4, 8, 16);
+  | ------------------------------ in this macro invocation
+note: required by a bound in `GpuSimd`
+ --> src/simd.rs
+  |
+  | pub struct GpuSimd<T: GpuSimdElement, const N: usize>([T; N])
+  |            ------- required by a bound in this struct
+  | where
+  |     GpuSimdLaneCount<N>: ValidGpuSimdLaneCount;
+  |                          ^^^^^^^^^^^^^^^^^^^^^ required by this bound in `GpuSimd`
+  = note: this error originates in the macro `simd_lane_counts` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: the associated function or constant `splat` exists for struct `GpuSimd<u32, 3>`, but its trait bounds were not satisfied
+ --> tests/ui/fail/simd_invalid_lane_count.rs:4:32
+  |
+4 |     let _ = GpuSimd::<u32, 3>::splat(0);
+  |                                ^^^^^ associated function or constant cannot be called on `GpuSimd<u32, 3>` due to unsatisfied trait bounds
+  |
+ ::: src/simd.rs
+  |
+  | pub struct GpuSimdLaneCount<const N: usize>;
+  | ------------------------------------------- doesn't satisfy `_: ValidGpuSimdLaneCount`
+  |
+  = note: the following trait bounds were not satisfied:
+          `fe2o3_device::GpuSimdLaneCount<3>: ValidGpuSimdLaneCount`
