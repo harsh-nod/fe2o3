@@ -3,8 +3,10 @@
 # This file is sourced by the fixed S09 ROCgdb runner.
 
 S09_GUARDED_CHILD_PID=
+S09_GUARDED_GROUP_VERIFIED=
 S09_GUARDED_STATUS_FD=
 S09_GUARDED_DEFERRED_SIGNAL=
+S09_GUARDED_DEFERRED_SIGNAL_EPOCH=0
 S09_RAW_TRANSCRIPT_FD=
 S09_RAW_TRANSCRIPT_PATH=
 S09_RAW_GUARD_SOURCE="${BASH_SOURCE[0]}"
@@ -37,6 +39,28 @@ s09_close_guarded_status_fd() {
 s09_hold_guarded_group() {
   while :; do
     /usr/bin/sleep 1
+  done
+}
+
+s09_wait_guarded_leader() {
+  local child_pid="$1"
+  local wait_epoch wait_status
+
+  while :; do
+    wait_epoch="${S09_GUARDED_DEFERRED_SIGNAL_EPOCH}"
+    if wait "${child_pid}"; then
+      wait_status=0
+    else
+      wait_status=$?
+    fi
+    if ((wait_status > 128)) &&
+      ((S09_GUARDED_DEFERRED_SIGNAL_EPOCH != wait_epoch)); then
+      continue
+    fi
+    if ((wait_status == 127)); then
+      return 1
+    fi
+    return 0
   done
 }
 
@@ -85,23 +109,55 @@ s09_guarded_group_supervisor() {
 
 s09_stop_guarded_group() {
   local child_pid="${S09_GUARDED_CHILD_PID:-}"
+  local preserve_raw="${1:-0}"
   local cleanup_status=0
   local attempt
+
+  # Cancellation and failure invalidate the evidence before teardown. A
+  # completed command may retain the pathname, but no writer descriptor.
+  if [[ "${preserve_raw}" != 1 ]]; then
+    s09_delete_raw_transcript || cleanup_status=1
+  fi
+  s09_close_raw_transcript_fd || cleanup_status=1
+  if ((cleanup_status != 0)); then
+    s09_delete_raw_transcript || cleanup_status=1
+  fi
   if [[ -z "${child_pid}" ]]; then
-    return 0
+    return "${cleanup_status}"
   fi
 
-  # The supervisor traps TERM and deliberately remains the live group leader.
-  # Every numeric PGID operation therefore precedes the one and only reap.
-  kill -TERM -- "-${child_pid}" 2>/dev/null || cleanup_status=1
-  for ((attempt = 0; attempt < 25; attempt++)); do
-    /usr/bin/sleep 0.02
-  done
-  if ! kill -KILL -- "-${child_pid}" 2>/dev/null; then
-    kill -KILL -- "${child_pid}" 2>/dev/null || cleanup_status=1
+  if [[ "${S09_GUARDED_GROUP_VERIFIED:-}" != 1 ]]; then
+    # The READY identity was not retained. Never interpret an unverified PID
+    # as a PGID; terminate only the child and fail closed.
+    cleanup_status=1
+    kill -TERM -- "${child_pid}" 2>/dev/null || true
+    for ((attempt = 0; attempt < 25; attempt++)); do
+      /usr/bin/sleep 0.02
+    done
+    kill -KILL -- "${child_pid}" 2>/dev/null || true
+  else
+    # The supervisor traps TERM and remains the known live group leader while
+    # TERM and KILL are sent. KILL is the final numeric PGID operation. This is
+    # bounded teardown of the pinned PGID, not cgroup or parent-SIGKILL
+    # containment.
+    if ! kill -TERM -- "-${child_pid}" 2>/dev/null; then
+      cleanup_status=1
+      s09_delete_raw_transcript || cleanup_status=1
+    fi
+    for ((attempt = 0; attempt < 25; attempt++)); do
+      /usr/bin/sleep 0.02
+    done
+    if ! kill -KILL -- "-${child_pid}" 2>/dev/null; then
+      cleanup_status=1
+      s09_delete_raw_transcript || cleanup_status=1
+    fi
   fi
-  wait "${child_pid}" 2>/dev/null || true
+
+  if ! s09_wait_guarded_leader "${child_pid}"; then
+    cleanup_status=1
+  fi
   S09_GUARDED_CHILD_PID=
+  S09_GUARDED_GROUP_VERIFIED=
   s09_close_guarded_status_fd
   return "${cleanup_status}"
 }
@@ -109,7 +165,8 @@ s09_stop_guarded_group() {
 s09_guarded_exit() {
   local status=$?
   local cleanup_status=0
-  trap - EXIT HUP INT TERM
+  trap - EXIT
+  trap '' HUP INT TERM
   s09_delete_raw_transcript || cleanup_status=1
   s09_close_raw_transcript_fd || cleanup_status=1
   s09_stop_guarded_group || cleanup_status=1
@@ -122,7 +179,7 @@ s09_guarded_exit() {
 s09_guarded_signal() {
   local status="$1"
   local cleanup_status=0
-  trap - HUP INT TERM
+  trap '' HUP INT TERM
   # Remove the pathname before any potentially slow process teardown. The
   # command only inherited an already-open descriptor and cannot reopen it.
   s09_delete_raw_transcript || cleanup_status=1
@@ -135,6 +192,7 @@ s09_guarded_signal() {
 }
 
 s09_guarded_defer_signal() {
+  S09_GUARDED_DEFERRED_SIGNAL_EPOCH=$((S09_GUARDED_DEFERRED_SIGNAL_EPOCH + 1))
   if [[ -z "${S09_GUARDED_DEFERRED_SIGNAL:-}" ]]; then
     S09_GUARDED_DEFERRED_SIGNAL="$1"
   fi
@@ -158,9 +216,10 @@ s09_install_deferred_signal_traps() {
 }
 
 s09_finish_deferred_signal_transition() {
-  local deferred_status="${S09_GUARDED_DEFERRED_SIGNAL:-}"
-  S09_GUARDED_DEFERRED_SIGNAL=
+  local deferred_status
   s09_install_active_signal_traps
+  deferred_status="${S09_GUARDED_DEFERRED_SIGNAL:-}"
+  S09_GUARDED_DEFERRED_SIGNAL=
   if [[ -n "${deferred_status}" ]]; then
     s09_guarded_signal "${deferred_status}"
   fi
@@ -178,6 +237,8 @@ s09_run_guarded_raw_command() {
   fi
 
   S09_GUARDED_DEFERRED_SIGNAL=
+  S09_GUARDED_DEFERRED_SIGNAL_EPOCH=0
+  S09_GUARDED_GROUP_VERIFIED=
   s09_install_deferred_signal_traps
 
   # Install deferred traps before creating the pathname. If a signal arrives
@@ -222,23 +283,18 @@ s09_run_guarded_raw_command() {
   if [[ ! "${supervisor_message}" =~ ^READY\ ([0-9]+)\ ([0-9]+)$ ]] ||
     [[ "${BASH_REMATCH[1]}" != "${child_pid}" ||
       "${BASH_REMATCH[2]}" != "${child_pid}" ]]; then
-    wait "${child_pid}" 2>/dev/null || true
-    S09_GUARDED_CHILD_PID=
-    s09_close_guarded_status_fd
-    s09_close_raw_transcript_fd
+    s09_stop_guarded_group || true
     s09_finish_deferred_signal_transition
     printf 's09-raw-transcript-guard: guarded supervisor did not become ready\n' >&2
     return 125
   fi
+  S09_GUARDED_GROUP_VERIFIED=1
   s09_finish_deferred_signal_transition
 
   S09_GUARDED_DEFERRED_SIGNAL=
   s09_install_deferred_signal_traps
   if ! kill -USR1 -- "${child_pid}" 2>/dev/null; then
-    wait "${child_pid}" 2>/dev/null || true
-    S09_GUARDED_CHILD_PID=
-    s09_close_guarded_status_fd
-    s09_close_raw_transcript_fd
+    s09_stop_guarded_group || true
     s09_finish_deferred_signal_transition
     printf 's09-raw-transcript-guard: guarded supervisor could not start command\n' >&2
     return 125
@@ -248,33 +304,29 @@ s09_run_guarded_raw_command() {
   if ! IFS= read -r supervisor_message <&"${S09_GUARDED_STATUS_FD}"; then
     S09_GUARDED_DEFERRED_SIGNAL=
     s09_install_deferred_signal_traps
-    wait "${child_pid}" 2>/dev/null || true
-    S09_GUARDED_CHILD_PID=
-    s09_close_guarded_status_fd
-    s09_close_raw_transcript_fd
+    s09_stop_guarded_group || true
     s09_finish_deferred_signal_transition
     printf 's09-raw-transcript-guard: guarded supervisor returned no status\n' >&2
     return 125
   fi
   if [[ ! "${supervisor_message}" =~ ^STATUS\ ([0-9]|[1-9][0-9]|1[0-9][0-9]|2[0-4][0-9]|25[0-5])$ ]]; then
+    S09_GUARDED_DEFERRED_SIGNAL=
+    s09_install_deferred_signal_traps
     s09_stop_guarded_group || true
-    s09_close_raw_transcript_fd
+    s09_finish_deferred_signal_transition
     printf 's09-raw-transcript-guard: guarded supervisor returned invalid status\n' >&2
     return 125
   fi
   status="${BASH_REMATCH[1]}"
 
-  # The supervisor holds its PID/PGID until USR1. Defer cancellation across the
-  # release and reap transition so no handler can target a reused numeric ID.
+  # STATUS does not release the leader. Drain every process still in the pinned
+  # PGID while that verified PID==PGID identity remains live, then reap once.
   S09_GUARDED_DEFERRED_SIGNAL=
   s09_install_deferred_signal_traps
-  if ! kill -USR1 -- "${child_pid}" 2>/dev/null; then
+  if ! s09_stop_guarded_group 1; then
     status=125
+    s09_delete_raw_transcript || true
   fi
-  wait "${child_pid}" 2>/dev/null || status=125
-  S09_GUARDED_CHILD_PID=
-  s09_close_guarded_status_fd
-  s09_close_raw_transcript_fd
   s09_finish_deferred_signal_transition
   return "${status}"
 }
