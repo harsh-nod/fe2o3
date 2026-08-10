@@ -315,6 +315,7 @@ impl<'a> Analyzer<'a> {
             ) => join_values(operation.kind.operands(), &self.report.values),
             OperationKind::MemoryIntrinsic(_) => Variation::Varying,
             OperationKind::InlineAssembly(_) => Variation::Varying,
+            OperationKind::Matrix(_) => Variation::Varying,
             OperationKind::Alloca {
                 count,
                 address_space,
