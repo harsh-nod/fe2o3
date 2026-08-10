@@ -15,11 +15,29 @@ proof/compiler authenticator remains absent.
 `CompilerTransactionRecorderV1` is the bounded gfx942 alpha/zeta compiler
 recorder. It measures exact source-tree contents, canonical rustc V2 invocation
 bytes, rustc/backend binaries and configurations, backend invocation bytes,
-target capabilities, alpha/zeta semantic layout witnesses, Kernel IR, Worker
-V2 request/response bytes, raw/final HSACO, descriptor source/final bytes, and
-the artifact container. Each ordered stage consumes a transaction-local
-checkpoint. Reordered, repeated, stale, or cross-transaction checkpoints fail
-before recorder state changes.
+the fixed `gfx942:xnack-`/wave64/COV6/`amd-wave` target profile, alpha/zeta
+semantic layout witnesses, Kernel IR, Worker request/response bytes, raw/final
+HSACO, descriptor source/final bytes, and the artifact container. The rustc
+descriptor and Worker request must use the exact canonical AMD target spelling;
+bare `gfx942`, `xnack+`, extra or unknown features, and noncanonical feature
+order are rejected.
+
+The recorder typed-decodes every post-IR boundary. A successful Worker response
+must bind the exact request and define exactly `alpha` and `zeta`; its output
+must equal the raw HSACO. That HSACO must contain a zero-digest COV6 descriptor
+table for the fixed target and kernel set. Final bytes must equal deterministic
+HSACO finalization, the supplied descriptor bytes must equal the embedded raw
+and finalized tables, and the canonical `ArtifactContainerV1` must own exactly
+that native payload under the same target and capabilities. Mixed responses,
+payloads, descriptors, finalizations, and containers therefore fail before the
+transaction can seal.
+
+Each ordered stage consumes a transaction-local checkpoint. Reordered,
+repeated, stale, or cross-transaction checkpoints fail before recorder state
+changes. The recorder keeps its fixed-profile measurement separate from the
+shared `TargetIdentityV1`. The latter is accepted only with the validated final
+artifact inputs and must be supplied from an artifact-transaction publication
+scope; the recorder neither invents nor authenticates that shared identity.
 
 `SealedCompilerTransactionV1` retains those measurements and the existing
 `CompilerTransactionEvidenceCapsuleV2` in a strict canonical wire. Decoding
@@ -32,7 +50,8 @@ The schema composes existing canonical codecs. It does not reinterpret their
 wire formats or recreate authority-bearing values. In particular, an envelope
 contains no process-local publication lease, currentness token, HSA executable,
 loaded module, or launch token. Decoding and validation grant no load, launch,
-proof, compiler-origin, or currentness authority.
+proof, compiler-origin, publication, or currentness authority. A sealed compiler
+transaction is an integrity-bound inert record, not a safe-launch credential.
 
 `DurablePublishedHsacoClaimV1` preserves the exact publication plan, receipt,
 output-directory identity, record identity, artifact identity, and artifact
