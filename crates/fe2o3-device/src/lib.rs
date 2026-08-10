@@ -69,7 +69,10 @@ pub use thread::{
     GlobalGridSize, GlobalWorkitemId, GridSize, Index1D, Index2D, Invocation3D, ThreadIndex,
     WorkgroupId, WorkgroupSize, WorkitemId,
 };
-pub use views::{StaticIndex, StaticView, StaticViewError, StaticViewMut};
+pub use views::{
+    DisjointStaticTileMut, StaticIndex, StaticTileRegionWitness, StaticView, StaticViewError,
+    StaticViewMut,
+};
 pub use wave::{Wave32, Wave64, WaveLane, WaveWidth};
 
 /// Version of the type-level kernel marker contract emitted by [`kernel`].
@@ -192,6 +195,22 @@ impl<T, IndexSpace> DisjointSlice<T, IndexSpace> {
 
     pub fn is_empty(&self) -> bool {
         self.len == 0
+    }
+
+    /// Checks and borrows one fixed-size tile relative to this exact region.
+    ///
+    /// The returned tile embeds a private witness carrying this
+    /// `DisjointSlice`'s pointer, element extent, and checked start offset. The
+    /// extent check occurs only here; constant-index accesses on the returned
+    /// tile do not repeat it. The mutable borrow prevents the parent view from
+    /// being accessed until the tile is dropped.
+    pub fn checked_static_tile_mut<const N: usize>(
+        &mut self,
+        start_element: usize,
+    ) -> Result<DisjointStaticTileMut<'_, T, IndexSpace, N>, StaticViewError> {
+        let ptr = self.ptr;
+        let len = self.len;
+        DisjointStaticTileMut::from_disjoint_region(self, ptr, len, start_element)
     }
 
     #[rustc_diagnostic_item = "fe2o3_device_disjoint_slice_get_mut"]

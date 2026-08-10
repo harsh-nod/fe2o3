@@ -1,0 +1,5 @@
+error[E0616]: field `region` of struct `DisjointStaticTileMut` is private
+ --> tests/ui/fail/static_tile_private_witness_cannot_be_replaced.rs:7:10
+  |
+7 |     tile.region = replacement;
+  |          ^^^^^^ private field

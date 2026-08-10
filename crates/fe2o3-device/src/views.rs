@@ -3,8 +3,14 @@
 //! [`StaticView`] can be derived safely only from a valid shared Rust slice and
 //! never provides mutation. [`StaticViewMut`] requires an unsafe constructor
 //! because a per-invocation Rust borrow does not establish GPU-wide partition
-//! authority. Neither type consumes symbolic allocation descriptions or
-//! represents proof, artifact, launch, or cross-invocation authority.
+//! authority. [`DisjointStaticTileMut`] instead borrows an existing
+//! [`crate::DisjointSlice`] authority and checks one parent-region-relative
+//! fixed extent before granting unchecked constant-index accesses.
+//!
+//! None of these types represents artifact, launch, or compiler-refinement
+//! authority. In particular, the static tile preserves the parent
+//! `DisjointSlice` contract; it does not authenticate how that parent was
+//! constructed.
 
 use core::fmt;
 use core::marker::PhantomData;
@@ -48,6 +54,147 @@ pub enum StaticViewError {
 impl fmt::Display for StaticViewError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "invalid static view: {self:?}")
+    }
+}
+
+/// Non-forgeable identity and extent witness embedded in one checked tile.
+///
+/// The private fields retain the exact pointer and length representation of the
+/// parent [`crate::DisjointSlice`], plus the checked element offset. The
+/// invariant lifetime brand ties the witness to that exact mutable parent
+/// borrow. Safe code can inspect but cannot construct, clone, extract, replace,
+/// or substitute this witness into another tile.
+type InvariantDisjointBorrow<'parent, T, IndexSpace> =
+    fn(
+        &'parent mut crate::DisjointSlice<T, IndexSpace>,
+    ) -> &'parent mut crate::DisjointSlice<T, IndexSpace>;
+
+pub struct StaticTileRegionWitness<'parent, T, IndexSpace, const N: usize> {
+    parent_ptr: *mut T,
+    parent_len: usize,
+    start_element: usize,
+    _parent: PhantomData<InvariantDisjointBorrow<'parent, T, IndexSpace>>,
+    _not_send_sync: PhantomData<*mut ()>,
+}
+
+impl<T, IndexSpace, const N: usize> StaticTileRegionWitness<'_, T, IndexSpace, N> {
+    /// Element offset relative to the checked parent `DisjointSlice` region.
+    pub const fn start_element(&self) -> usize {
+        self.start_element
+    }
+
+    /// Element extent of the exact parent `DisjointSlice` region.
+    pub const fn parent_region_len(&self) -> usize {
+        self.parent_len
+    }
+
+    pub const fn tile_len(&self) -> usize {
+        N
+    }
+}
+
+impl<T, IndexSpace, const N: usize> fmt::Debug for StaticTileRegionWitness<'_, T, IndexSpace, N> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("StaticTileRegionWitness")
+            .field("parent_region_len", &self.parent_len)
+            .field("start_element", &self.start_element)
+            .field("tile_len", &N)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Mutable fixed-size tile checked once against one `DisjointSlice` region.
+///
+/// The embedded [`StaticTileRegionWitness`] is the proof-carrying portion of
+/// the view. Constant-index accessors use its already-checked extent and emit
+/// no dynamic bounds branch. This type is intentionally neither `Clone`,
+/// `Copy`, `Send`, nor `Sync`.
+pub struct DisjointStaticTileMut<'parent, T, IndexSpace, const N: usize> {
+    region: StaticTileRegionWitness<'parent, T, IndexSpace, N>,
+}
+
+impl<'parent, T, IndexSpace, const N: usize> DisjointStaticTileMut<'parent, T, IndexSpace, N> {
+    pub(crate) fn from_disjoint_region(
+        _parent: &'parent mut crate::DisjointSlice<T, IndexSpace>,
+        parent_ptr: *mut T,
+        parent_len: usize,
+        start_element: usize,
+    ) -> Result<Self, StaticViewError> {
+        let start_element = checked_start::<T, N>(parent_len, start_element)?;
+        Ok(Self {
+            region: StaticTileRegionWitness {
+                parent_ptr,
+                parent_len,
+                start_element,
+                _parent: PhantomData,
+                _not_send_sync: PhantomData,
+            },
+        })
+    }
+
+    pub const fn len(&self) -> usize {
+        N
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        false
+    }
+
+    /// Borrows the inseparable identity and extent witness for this tile.
+    pub const fn region_witness(&self) -> &StaticTileRegionWitness<'parent, T, IndexSpace, N> {
+        &self.region
+    }
+
+    /// Reads an element selected by a compile-time checked tile index.
+    #[inline(always)]
+    pub fn at_const<const I: usize>(&self, _index: StaticIndex<N, I>) -> &T {
+        // SAFETY: tile construction checked `start + N <= parent_len`; the
+        // static index establishes `I < N`, and the embedded witness retains
+        // the exact parent pointer, extent, and borrow.
+        unsafe { &*self.region.parent_ptr.add(self.region.start_element + I) }
+    }
+
+    /// Mutates an element selected by a compile-time checked tile index.
+    #[inline(always)]
+    pub fn at_const_mut<const I: usize>(&mut self, _index: StaticIndex<N, I>) -> &mut T {
+        // SAFETY: the checked embedded witness establishes the element extent;
+        // this mutable tile borrow preserves the parent `DisjointSlice`'s
+        // exclusive partition.
+        unsafe { &mut *self.region.parent_ptr.add(self.region.start_element + I) }
+    }
+
+    pub fn as_array(&self) -> &[T; N] {
+        // SAFETY: construction checked a contiguous `N`-element region and the
+        // parent `DisjointSlice` contract establishes validity.
+        unsafe {
+            &*self
+                .region
+                .parent_ptr
+                .add(self.region.start_element)
+                .cast::<[T; N]>()
+        }
+    }
+
+    pub fn as_mut_array(&mut self) -> &mut [T; N] {
+        // SAFETY: the mutable tile borrow additionally establishes exclusive
+        // access within the parent partition.
+        unsafe {
+            &mut *self
+                .region
+                .parent_ptr
+                .add(self.region.start_element)
+                .cast::<[T; N]>()
+        }
+    }
+}
+
+impl<T, IndexSpace, const N: usize> fmt::Debug for DisjointStaticTileMut<'_, T, IndexSpace, N> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DisjointStaticTileMut")
+            .field("region", &self.region)
+            .finish_non_exhaustive()
     }
 }
 

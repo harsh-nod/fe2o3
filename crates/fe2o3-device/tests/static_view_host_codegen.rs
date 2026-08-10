@@ -85,6 +85,32 @@ fn assert_exact_gep_offsets(body: &str, symbol: &str, expected: &[u64]) {
     }
 }
 
+fn assert_tile_gep_offsets(body: &str, symbol: &str, expected: &[u64]) {
+    let gep_lines = body
+        .lines()
+        .filter(|line| line.contains("getelementptr"))
+        .collect::<Vec<_>>();
+    for offset in expected {
+        let marker = format!(", i64 {offset}");
+        assert_eq!(
+            gep_lines
+                .iter()
+                .filter(|line| line.contains(&marker))
+                .count(),
+            1,
+            "{symbol} must contain exactly one constant element offset {offset}:\n{body}"
+        );
+    }
+    assert_eq!(
+        gep_lines
+            .iter()
+            .filter(|line| line.contains("getelementptr i32") && line.contains(", i64 %"))
+            .count(),
+        1,
+        "{symbol} must compute the already-checked dynamic tile base exactly once:\n{body}"
+    );
+}
+
 #[test]
 fn host_rustc_emits_exact_constant_offsets_without_bounds_paths() {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -156,6 +182,8 @@ fn host_rustc_emits_exact_constant_offsets_without_bounds_paths() {
         "host_static_view_read_index_0",
         "host_static_view_read_indices_1_3",
         "host_static_view_write_index_2",
+        "host_disjoint_tile_read_indices_1_3",
+        "host_disjoint_tile_write_index_2",
     ] {
         let body = function_body(&ir, symbol);
         for forbidden in ["panic_bounds_check", " br i1 ", " switch ", "icmp "] {
@@ -187,5 +215,21 @@ fn host_rustc_emits_exact_constant_offsets_without_bounds_paths() {
         index_two.matches("store i32").count(),
         1,
         "constant mutable access should end in a store:\n{index_two}"
+    );
+
+    let tile_reads = function_body(&ir, "host_disjoint_tile_read_indices_1_3");
+    assert_tile_gep_offsets(tile_reads, "host_disjoint_tile_read_indices_1_3", &[4, 12]);
+    assert_eq!(
+        tile_reads.matches("load i32").count(),
+        2,
+        "checked tile accesses should remain distinct loads:\n{tile_reads}"
+    );
+
+    let tile_write = function_body(&ir, "host_disjoint_tile_write_index_2");
+    assert_tile_gep_offsets(tile_write, "host_disjoint_tile_write_index_2", &[8]);
+    assert_eq!(
+        tile_write.matches("store i32").count(),
+        1,
+        "checked tile constant access should end in a store:\n{tile_write}"
     );
 }
