@@ -315,6 +315,7 @@ dependencies = [
  "fe2o3-core",
  "fe2o3-device",
  "fe2o3-host",
+ "libc",
  "reserved-fe2o3-symbols",
  "sha2",
  "trybuild",
