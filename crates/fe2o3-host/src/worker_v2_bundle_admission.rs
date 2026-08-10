@@ -1207,6 +1207,7 @@ pub(crate) mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
 
+    const REQUIRED_GFX942_TEST_TARGET: &str = "gfx942:xnack-";
     static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(1);
 
     pub struct TestDirectory(PathBuf);
@@ -1335,7 +1336,7 @@ pub(crate) mod tests {
         plan_finalization_delta: u8,
         linked_bytes: Option<Vec<u8>>,
     ) -> AdmissionFixture {
-        let hsaco = typed_vecadd_hsaco_for_target("gfx942");
+        let hsaco = typed_vecadd_hsaco_for_target(REQUIRED_GFX942_TEST_TARGET);
         let abi = crate::generated_vecadd::generated_vecadd_abi_v2().unwrap();
         let launch = exact_launch(256);
         let kernel_id = derive_generated_kernel_identity_v2(
@@ -1351,7 +1352,7 @@ pub(crate) mod tests {
         let fixture = make_single_hsaco_fixture_with_kernel_id(
             seed,
             hsaco.bytes.clone(),
-            "gfx942",
+            REQUIRED_GFX942_TEST_TARGET,
             abi,
             launch,
             kernel_id,
@@ -1367,7 +1368,7 @@ pub(crate) mod tests {
     }
 
     fn two_kernel_admission_fixture(seed: u8) -> AdmissionFixture {
-        let hsaco = typed_vecadd_two_kernel_hsaco_for_target("gfx942");
+        let hsaco = typed_vecadd_two_kernel_hsaco_for_target(REQUIRED_GFX942_TEST_TARGET);
         let abi = crate::generated_vecadd::generated_vecadd_abi_v2().unwrap();
         let launch = exact_launch(256);
         let first_kernel = derive_generated_kernel_identity_v2(
@@ -1393,7 +1394,7 @@ pub(crate) mod tests {
         let fixture = make_two_hsaco_fixture_with_kernel_ids(
             seed,
             hsaco.bytes.clone(),
-            "gfx942",
+            REQUIRED_GFX942_TEST_TARGET,
             "logical_primary",
             "primary_kernel",
             first_kernel,
@@ -1407,7 +1408,7 @@ pub(crate) mod tests {
     }
 
     fn alpha_cov6_admission_fixture(seed: u8) -> AdmissionFixture {
-        let hsaco = alpha_cov6_hsaco_for_target("gfx942");
+        let hsaco = alpha_cov6_hsaco_for_target(REQUIRED_GFX942_TEST_TARGET);
         let abi = crate::generated_alpha_zeta_cov6::alpha_cov6_test_abi();
         let launch = crate::generated_alpha_zeta_cov6::alpha_cov6_test_launch();
         let kernel_binding = [0x61; 32];
@@ -1424,7 +1425,7 @@ pub(crate) mod tests {
         let fixture = make_single_hsaco_fixture_with_names_and_kernel_id(
             seed,
             hsaco.bytes.clone(),
-            "gfx942",
+            REQUIRED_GFX942_TEST_TARGET,
             "alpha",
             "alpha",
             abi,
@@ -1573,7 +1574,7 @@ pub(crate) mod tests {
         let input = admission_fixture(seed, 0);
         let validated = input.fixture.validated();
         let selected_kernel = selected(&input.fixture);
-        let observed = make_observed_for(seed.into(), "gfx942");
+        let observed = make_observed_for(seed.into(), REQUIRED_GFX942_TEST_TARGET);
         let parts = admit_parts(
             input.attempt,
             &input.exact_bytes,
@@ -1616,7 +1617,7 @@ pub(crate) mod tests {
         let input = two_kernel_admission_fixture(seed);
         let validated = input.fixture.validated();
         let selected_kernel = selected(&input.fixture);
-        let observed = make_observed_for(seed.into(), "gfx942");
+        let observed = make_observed_for(seed.into(), REQUIRED_GFX942_TEST_TARGET);
         let parts = admit_parts(
             input.attempt,
             &input.exact_bytes,
@@ -1659,7 +1660,7 @@ pub(crate) mod tests {
         let input = alpha_cov6_admission_fixture(seed);
         let validated = input.fixture.validated();
         let selected_kernel = selected(&input.fixture);
-        let observed = make_observed_for(seed.into(), "gfx942");
+        let observed = make_observed_for(seed.into(), REQUIRED_GFX942_TEST_TARGET);
         let parts = admit_parts(
             input.attempt,
             &input.exact_bytes,

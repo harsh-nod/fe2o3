@@ -390,7 +390,7 @@ fn validate_required_profile(
 }
 
 fn is_required_artifact_target(target: AmdTargetId) -> bool {
-    target.processor() == REQUIRED_TARGET && target.xnack() != Some(FeatureState::Enabled)
+    target.processor() == REQUIRED_TARGET && target.xnack() == Some(FeatureState::Disabled)
 }
 
 fn validate_prerequisites<K: CompilerGeneratedKernelExpectationV1>(
@@ -4449,9 +4449,8 @@ mod tests {
     }
 
     #[test]
-    fn required_artifact_profile_accepts_feature_qualified_xnack_off() {
+    fn required_artifact_profile_requires_explicit_xnack_off() {
         for target in [
-            "gfx942",
             "gfx942:xnack-",
             "gfx942:sramecc+:xnack-",
             "gfx942:sramecc-:xnack-",
@@ -4460,7 +4459,12 @@ mod tests {
                 AmdTargetId::parse(target).unwrap()
             ));
         }
-        for target in ["gfx942:xnack+", "gfx942:sramecc+:xnack+", "gfx950:xnack-"] {
+        for target in [
+            "gfx942",
+            "gfx942:xnack+",
+            "gfx942:sramecc+:xnack+",
+            "gfx950:xnack-",
+        ] {
             assert!(!is_required_artifact_target(
                 AmdTargetId::parse(target).unwrap()
             ));
