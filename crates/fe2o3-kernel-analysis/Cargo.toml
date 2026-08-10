@@ -15,5 +15,17 @@ rustix = { workspace = true, features = ["process"] }
 [lib]
 name = "fe2o3_kernel_analysis"
 
+[[bin]]
+name = "fe2o3-machine-effect-worker-fixture"
+path = "tests/fixtures/machine_effect_worker_fixture.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fe2o3-machine-effect-worker-substitute-fixture"
+path = "tests/fixtures/machine_effect_worker_substitute_fixture.rs"
+test = false
+bench = false
+
 [lints.rust]
 unsafe_code = "forbid"
