@@ -1,0 +1,7 @@
+error[E0599]: no method named `wait` found for struct `ManagedBarrier<'_, Gfx12, BarrierReady>` in the current scope
+ --> tests/ui/fail/managed_barrier_wait_before_arrive.rs:9:28
+  |
+9 |     let _ = unsafe { ready.wait() };
+  |                            ^^^^ method not found in `ManagedBarrier<'_, Gfx12, BarrierReady>`
+  |
+  = note: the method was found for `ManagedBarrier<'workgroup, Target, BarrierPending, SLOT>`

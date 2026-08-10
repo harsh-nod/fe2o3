@@ -1,0 +1,13 @@
+error[E0599]: the method `arrive` exists for struct `ManagedBarrier<'_, Gfx942, BarrierReady>`, but its trait bounds were not satisfied
+ --> tests/ui/fail/gfx942_split_barrier_is_unavailable.rs:9:28
+  |
+9 |     let _ = unsafe { ready.arrive() };
+  |                            ^^^^^^ method cannot be called on `ManagedBarrier<'_, Gfx942, BarrierReady>` due to unsatisfied trait bounds
+  |
+ ::: src/sync.rs
+  |
+  | pub enum Gfx942 {}
+  | --------------- doesn't satisfy `Gfx942: NativeSplitBarrierTarget`
+  |
+  = note: the following trait bounds were not satisfied:
+          `Gfx942: NativeSplitBarrierTarget`

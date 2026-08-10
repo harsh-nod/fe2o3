@@ -48,6 +48,11 @@ pub use lds::{
 pub use math::{DEVICE_MATH_CONTRACT_VERSION_V1, DeviceMath};
 pub use mx::{MxScaleConversionError, MxScaleE8M0, MxScaleE8M0x4};
 pub use simd::{GpuSimd, GpuSimdElement, GpuSimdLaneCount, ValidGpuSimdLaneCount};
+pub use sync::{
+    AmdBarrierTarget, BarrierInitializationError, BarrierPending, BarrierReady,
+    BarrierUninitialized, Gfx12, Gfx942, ManagedBarrier, NamedBarrierSlot,
+    NativeSplitBarrierTarget, ValidNamedBarrierSlot,
+};
 pub use thread::{
     GlobalGridSize, GlobalWorkitemId, GridSize, Index1D, Index2D, Invocation3D, ThreadIndex,
     WorkgroupId, WorkgroupSize, WorkitemId,

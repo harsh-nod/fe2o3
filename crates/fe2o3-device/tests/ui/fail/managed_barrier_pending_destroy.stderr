@@ -1,0 +1,7 @@
+error[E0599]: no method named `destroy` found for struct `ManagedBarrier<'_, Gfx12, BarrierPending>` in the current scope
+  --> tests/ui/fail/managed_barrier_pending_destroy.rs:10:21
+   |
+10 |     let _ = pending.destroy();
+   |                     ^^^^^^^ method not found in `ManagedBarrier<'_, Gfx12, BarrierPending>`
+   |
+   = note: the method was found for `ManagedBarrier<'workgroup, Target, BarrierReady, SLOT>`
