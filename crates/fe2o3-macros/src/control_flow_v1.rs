@@ -1,11 +1,13 @@
 use proc_macro2::Span;
-use quote::ToTokens;
+use quote::{ToTokens, quote_spanned};
 use syn::parse::Parser;
 use syn::spanned::Spanned;
 use syn::visit::Visit;
+use syn::visit_mut::VisitMut;
 use syn::{
     Block, Expr, ExprBreak, ExprContinue, ExprForLoop, ExprIf, ExprLoop, ExprMatch, ExprWhile,
-    Ident, ItemFn, LitInt, MetaList, Pat, Stmt, Token, parenthesized, punctuated::Punctuated,
+    Ident, ItemFn, LitInt, MetaList, Pat, RangeLimits, Stmt, Token, parenthesized,
+    punctuated::Punctuated,
 };
 
 pub(crate) const CONTROL_FLOW_REGISTRATION_PREFIX_V1: &str = "__fe2o3_control_flow_contract_v1_";
@@ -19,6 +21,7 @@ const MAX_DECLARATIONS_V1: usize = 256;
 const MAX_CASES_V1: usize = 256;
 const MAX_NODES_V1: usize = 4096;
 const MAX_BYTES_V1: usize = 1024 * 1024;
+const MAX_LITERAL_FOR_UNROLL_V1: u32 = 32;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ParsedIntegerSwitchTypeV1 {
@@ -229,6 +232,252 @@ pub(crate) fn analyze_kernel_control_flow_v1(
     let mut builder = GraphBuilder::new(input, declaration)?;
     builder.build_function(input)?;
     Ok(Some(builder.encode()?))
+}
+
+pub(crate) fn lower_bounded_for_loops_v1(
+    input: &mut ItemFn,
+    declaration: Option<&ParsedControlFlowOptionsV1>,
+) -> syn::Result<()> {
+    let Some(declaration) = declaration else {
+        return Ok(());
+    };
+    let mut lowerer = LiteralForLowerer {
+        declaration,
+        loop_cursor: 0,
+        error: None,
+    };
+    lowerer.visit_block_mut(&mut input.block);
+    if let Some(error) = lowerer.error {
+        return Err(error);
+    }
+    Ok(())
+}
+
+struct LiteralForLowerer<'a> {
+    declaration: &'a ParsedControlFlowOptionsV1,
+    loop_cursor: usize,
+    error: Option<syn::Error>,
+}
+
+impl LiteralForLowerer<'_> {
+    fn take_bound(&mut self, span: Span) -> Option<(usize, u32)> {
+        let index = self.loop_cursor;
+        self.loop_cursor += 1;
+        let Some(bound) = self.declaration.loop_bounds.get(index).copied() else {
+            self.error = Some(syn::Error::new(
+                span,
+                "kernel loop has no corresponding control_flow loop bound",
+            ));
+            return None;
+        };
+        Some((index, bound))
+    }
+
+    fn lower_for(&mut self, expression: &mut Expr) {
+        let Expr::ForLoop(for_loop) = expression else {
+            unreachable!("literal-for lowering was called for a different expression")
+        };
+        let span = for_loop.span();
+        let Some((loop_index, declared_bound)) = self.take_bound(span) else {
+            return;
+        };
+        if for_loop.label.is_some() {
+            self.error = Some(syn::Error::new_spanned(
+                &for_loop.label,
+                "bounded for lowering does not support labeled loops",
+            ));
+            return;
+        }
+        let Pat::Ident(pattern) = for_loop.pat.as_ref() else {
+            self.error = Some(syn::Error::new_spanned(
+                &for_loop.pat,
+                "bounded for lowering requires a single identifier pattern",
+            ));
+            return;
+        };
+        if pattern.subpat.is_some() || pattern.by_ref.is_some() {
+            self.error = Some(syn::Error::new_spanned(
+                pattern,
+                "bounded for lowering requires a by-value identifier without a subpattern",
+            ));
+            return;
+        }
+        let Expr::Range(range) = for_loop.expr.as_ref() else {
+            self.error = Some(syn::Error::new_spanned(
+                &for_loop.expr,
+                "bounded for lowering requires a literal half-open range START..END",
+            ));
+            return;
+        };
+        if !matches!(range.limits, RangeLimits::HalfOpen(_)) {
+            self.error = Some(syn::Error::new_spanned(
+                range,
+                "bounded for lowering requires a half-open range; inclusive ranges are unsupported",
+            ));
+            return;
+        }
+        let (Some(start), Some(end)) = (&range.start, &range.end) else {
+            self.error = Some(syn::Error::new_spanned(
+                range,
+                "bounded for lowering requires both literal range endpoints",
+            ));
+            return;
+        };
+        let (Expr::Lit(start), Expr::Lit(end)) = (start.as_ref(), end.as_ref()) else {
+            self.error = Some(syn::Error::new_spanned(
+                range,
+                "bounded for lowering requires literal range endpoints",
+            ));
+            return;
+        };
+        let (syn::Lit::Int(start), syn::Lit::Int(end)) = (&start.lit, &end.lit) else {
+            self.error = Some(syn::Error::new_spanned(
+                range,
+                "bounded for lowering requires integer literal range endpoints",
+            ));
+            return;
+        };
+        let start_value = match start.base10_parse::<u32>() {
+            Ok(value) => value,
+            Err(error) => {
+                self.error = Some(error);
+                return;
+            }
+        };
+        let end_value = match end.base10_parse::<u32>() {
+            Ok(value) => value,
+            Err(error) => {
+                self.error = Some(error);
+                return;
+            }
+        };
+        let iterations = end_value.saturating_sub(start_value);
+        if iterations > declared_bound {
+            self.error = Some(syn::Error::new_spanned(
+                range,
+                format!(
+                    "literal for range has {iterations} iterations, exceeding its declared control_flow bound {declared_bound}"
+                ),
+            ));
+            return;
+        }
+        if iterations > MAX_LITERAL_FOR_UNROLL_V1 {
+            self.error = Some(syn::Error::new_spanned(
+                range,
+                format!(
+                    "literal for lowering supports at most {MAX_LITERAL_FOR_UNROLL_V1} iterations; found {iterations}"
+                ),
+            ));
+            return;
+        }
+
+        let break_label = syn::Lifetime::new(&format!("'__fe2o3_unrolled_for_{loop_index}"), span);
+        let pattern = for_loop.pat.clone();
+        let attrs = for_loop.attrs.clone();
+        let suffix = start.suffix();
+        let mut copies = Vec::with_capacity(iterations as usize);
+        for (copy_index, value) in (start_value..end_value).enumerate() {
+            let continue_label = syn::Lifetime::new(
+                &format!("'__fe2o3_unrolled_for_{loop_index}_iteration_{copy_index}"),
+                span,
+            );
+            let mut body = for_loop.body.clone();
+            let mut rewriter = LoopExitRewriter {
+                break_label: &break_label,
+                continue_label: &continue_label,
+                error: None,
+            };
+            rewriter.visit_block_mut(&mut body);
+            if let Some(error) = rewriter.error {
+                self.error = Some(error);
+                return;
+            }
+            let literal = LitInt::new(&format!("{value}{suffix}"), span);
+            copies.push(quote_spanned! {span=>
+                #continue_label: {
+                    let #pattern = #literal;
+                    #body
+                }
+            });
+        }
+        match syn::parse2(quote_spanned! {span=>
+            #(#attrs)*
+            #break_label: {
+                #(#copies)*
+            }
+        }) {
+            Ok(replacement) => *expression = replacement,
+            Err(error) => self.error = Some(error),
+        }
+    }
+}
+
+impl VisitMut for LiteralForLowerer<'_> {
+    fn visit_expr_mut(&mut self, expression: &mut Expr) {
+        if self.error.is_some() {
+            return;
+        }
+        match expression {
+            Expr::Loop(loop_expression) => {
+                if self.take_bound(loop_expression.span()).is_some() {
+                    self.visit_block_mut(&mut loop_expression.body);
+                }
+            }
+            Expr::While(while_expression) => {
+                if self.take_bound(while_expression.span()).is_some() {
+                    self.visit_block_mut(&mut while_expression.body);
+                }
+            }
+            Expr::ForLoop(_) => self.lower_for(expression),
+            _ => syn::visit_mut::visit_expr_mut(self, expression),
+        }
+    }
+}
+
+struct LoopExitRewriter<'a> {
+    break_label: &'a syn::Lifetime,
+    continue_label: &'a syn::Lifetime,
+    error: Option<syn::Error>,
+}
+
+impl VisitMut for LoopExitRewriter<'_> {
+    fn visit_expr_mut(&mut self, expression: &mut Expr) {
+        if self.error.is_some() {
+            return;
+        }
+        match expression {
+            Expr::Break(break_expression) => {
+                if break_expression.label.is_some() || break_expression.expr.is_some() {
+                    self.error = Some(syn::Error::new_spanned(
+                        break_expression,
+                        "bounded for lowering supports only unlabeled break without a value",
+                    ));
+                } else {
+                    let label = self.break_label;
+                    *expression = syn::parse_quote_spanned!(break_expression.span()=> break #label);
+                }
+            }
+            Expr::Continue(continue_expression) => {
+                if continue_expression.label.is_some() {
+                    self.error = Some(syn::Error::new_spanned(
+                        continue_expression,
+                        "bounded for lowering supports only unlabeled continue",
+                    ));
+                } else {
+                    let label = self.continue_label;
+                    *expression =
+                        syn::parse_quote_spanned!(continue_expression.span()=> break #label);
+                }
+            }
+            Expr::Loop(_) | Expr::While(_) | Expr::ForLoop(_) => {
+                self.error = Some(syn::Error::new_spanned(
+                    expression,
+                    "bounded for lowering does not support nested loops",
+                ));
+            }
+            _ => syn::visit_mut::visit_expr_mut(self, expression),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -1306,5 +1555,89 @@ mod tests {
                 .to_string()
                 .contains("not a fixed-width integer switch")
         );
+    }
+
+    #[test]
+    fn literal_half_open_for_is_unrolled_with_lexical_break_and_continue() {
+        let mut input: ItemFn = parse_quote! {
+            fn kernel(mut sum: u32) {
+                for i in 2u32..6u32 {
+                    if i == 3 { continue; }
+                    if i == 5 { break; }
+                    sum += i;
+                }
+            }
+        };
+        let declaration =
+            parse_control_flow_options_v1(&parse_quote!(control_flow(loop_bounds(4)))).unwrap();
+        let original_contract = analyze_kernel_control_flow_v1(&input, Some(&declaration))
+            .unwrap()
+            .unwrap();
+
+        lower_bounded_for_loops_v1(&mut input, Some(&declaration)).unwrap();
+
+        let lowered = quote!(#input).to_string();
+        assert!(!lowered.contains("for i in"), "{lowered}");
+        assert!(!lowered.contains("continue"), "{lowered}");
+        assert_eq!(lowered.matches("let i =").count(), 4, "{lowered}");
+        assert!(lowered.contains("'__fe2o3_unrolled_for_0"), "{lowered}");
+        assert_eq!(&original_contract[..8], &CONTROL_FLOW_CONTRACT_MAGIC_V1);
+    }
+
+    #[test]
+    fn unsupported_for_unroll_shapes_fail_closed() {
+        let cases: Vec<(ItemFn, Vec<u32>, &str)> = vec![
+            (
+                parse_quote! { fn kernel(end: u32) { for i in 0..end { let _ = i; } } },
+                vec![4],
+                "literal range endpoints",
+            ),
+            (
+                parse_quote! { fn kernel() { for i in 0..=4 { let _ = i; } } },
+                vec![5],
+                "inclusive ranges are unsupported",
+            ),
+            (
+                parse_quote! { fn kernel() { for i in 0..5 { let _ = i; } } },
+                vec![4],
+                "exceeding its declared control_flow bound 4",
+            ),
+            (
+                parse_quote! { fn kernel() { for i in 0..33 { let _ = i; } } },
+                vec![33],
+                "supports at most 32 iterations",
+            ),
+            (
+                parse_quote! {
+                    fn kernel() {
+                        for i in 0..2 {
+                            while i == 0 { break; }
+                        }
+                    }
+                },
+                vec![2, 1],
+                "does not support nested loops",
+            ),
+            (
+                parse_quote! {
+                    fn kernel() { 'outer: for i in 0..2 { let _ = i; break 'outer; } }
+                },
+                vec![2],
+                "does not support labeled loops",
+            ),
+        ];
+
+        for (mut input, bounds, expected) in cases {
+            let declaration = ParsedControlFlowOptionsV1 {
+                loop_bounds: bounds,
+                integer_switches: Vec::new(),
+            };
+            analyze_kernel_control_flow_v1(&input, Some(&declaration)).unwrap();
+            let error = lower_bounded_for_loops_v1(&mut input, Some(&declaration)).unwrap_err();
+            assert!(
+                error.to_string().contains(expected),
+                "missing `{expected}` in `{error}`"
+            );
+        }
     }
 }

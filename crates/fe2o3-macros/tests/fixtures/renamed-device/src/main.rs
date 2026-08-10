@@ -39,6 +39,20 @@ pub fn structured_control_flow(mut value: u32) -> u32 {
     value
 }
 
+#[kernel(control_flow(loop_bounds(4)))]
+pub fn literal_for_unroll(mut value: u32) -> u32 {
+    for i in 0u32..4u32 {
+        if i == 1 {
+            continue;
+        }
+        value += i;
+        if i == 2 {
+            break;
+        }
+    }
+    value
+}
+
 fn assert_marker<T: KernelMarkerV1>() {}
 
 fn main() {
@@ -54,6 +68,12 @@ fn main() {
     assert_marker::<__fe2o3_kernel_marker_launch_bounded>();
     assert_marker::<__fe2o3_kernel_marker_assembly_declared>();
     assert_marker::<__fe2o3_kernel_marker_structured_control_flow>();
+    assert_marker::<__fe2o3_kernel_marker_literal_for_unroll>();
+    assert_eq!(
+        <__fe2o3_kernel_marker_literal_for_unroll as KernelMarkerV1>::FUNCTION(10),
+        12
+    );
+    assert!(!__fe2o3_control_flow_contract_v1_literal_for_unroll.4.is_empty());
 
     let sidecar = __fe2o3_control_flow_contract_v1_structured_control_flow.4;
     let contract = frontend::decode_control_flow_contract_v1(sidecar).unwrap();

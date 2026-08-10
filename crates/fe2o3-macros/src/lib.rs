@@ -32,7 +32,8 @@ use syn::{
 use crate::control_flow_v1::{
     CONTROL_FLOW_REGISTRATION_KIND_V1, CONTROL_FLOW_REGISTRATION_MAGIC_V1,
     CONTROL_FLOW_REGISTRATION_PREFIX_V1, CONTROL_FLOW_REGISTRATION_VERSION_V1,
-    ParsedControlFlowOptionsV1, analyze_kernel_control_flow_v1, parse_control_flow_options_v1,
+    ParsedControlFlowOptionsV1, analyze_kernel_control_flow_v1, lower_bounded_for_loops_v1,
+    parse_control_flow_options_v1,
 };
 
 #[proc_macro_derive(DeviceCopy)]
@@ -801,6 +802,7 @@ fn expand_legacy_kernel_with_imports(
     let original_name = original_ident.to_string();
     let control_flow_contract =
         analyze_kernel_control_flow_v1(&input, options.control_flow.as_ref())?;
+    lower_bounded_for_loops_v1(&mut input, options.control_flow.as_ref())?;
 
     if original_name.starts_with(RESERVED_ROOT) {
         return Err(syn::Error::new_spanned(
@@ -1099,6 +1101,7 @@ fn expand_general_typed_kernel_with_imports(
     )?;
     let control_flow_contract =
         analyze_kernel_control_flow_v1(&input, options.control_flow.as_ref())?;
+    lower_bounded_for_loops_v1(&mut input, options.control_flow.as_ref())?;
 
     let internal_ident = format_ident!("__fe2o3_host_kernel_v1_{}", kernel_binding.to_hex());
     let name_marker_ident = format_ident!("__fe2o3_kernel_name_{original_name}");

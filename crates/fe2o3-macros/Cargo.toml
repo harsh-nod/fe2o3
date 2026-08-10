@@ -16,4 +16,4 @@ proc-macro2 = { workspace = true, features = ["span-locations"] }
 proc-macro-crate.workspace = true
 quote.workspace = true
 reserved-fe2o3-symbols.workspace = true
-syn = { workspace = true, features = ["visit"] }
+syn = { workspace = true, features = ["visit", "visit-mut"] }
