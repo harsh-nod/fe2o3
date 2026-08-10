@@ -6,16 +6,18 @@ use std::fmt::Write as _;
 use fe2o3_kernel_ir::{
     AMDGPU_GFX942_INLINE_ASSEMBLY_CAPABILITY_NAME,
     AMDGPU_GFX942_INLINE_ASSEMBLY_CAPABILITY_NAMESPACE, AddressSpace as KernelAddressSpace,
-    AssemblyConstraint, AssemblyOperandKind, AssemblyOption, Atomic, AtomicKind, Axis, BasicBlock,
-    BinaryOp, BlockId, CastKind, ComparePredicate, Constant,
-    DiagnosticCode as VerificationDiagnosticCode, F32MathFunction, F32MathImplementation,
+    AssemblyConstraint, AssemblyOperandKind, AssemblyOption, Atomic, AtomicKind, Axis,
+    BF16_F32_M16N16K16_CAPABILITY, BasicBlock, BinaryOp, BlockId, CastKind, ComparePredicate,
+    Constant, DiagnosticCode as VerificationDiagnosticCode, F32MathFunction, F32MathImplementation,
     FloatConversionKind, FloatOperation, Function, FunctionId, FunctionRole, IndexKind,
-    InlineAssembly, InlineAssemblyTarget, IntrinsicKind, Kernel, KernelId, LaunchDomain,
-    LaunchExtent, MemoryElementType, MemoryIntrinsicOperation, MemoryOrdering, Module, ModuleId,
-    NarrowFloatFormat, Operation, OperationKind, PointerDistanceContract, PointerDistanceKind,
-    PointerDistanceUnit, ScalarType, Signature, SynchronizationScope, TargetCapability, Terminator,
-    Type, ValueId, VerificationErrors, WaveOperation, WaveOperationKind, WaveWidth,
-    WidenedFloatBinaryOp, WorkgroupMemoryExtent, WorkgroupSize, verify_module,
+    InlineAssembly, InlineAssemblyTarget, IntrinsicKind, Kernel, KernelId,
+    LDS_TILE_16X16_XOR4_CAPABILITY, LaunchDomain, LaunchExtent, MATRIX_CAPABILITY_NAMESPACE,
+    MatrixElement, MatrixOperation, MatrixOperationKind, MemoryElementType,
+    MemoryIntrinsicOperation, MemoryOrdering, Module, ModuleId, NarrowFloatFormat, Operation,
+    OperationKind, PointerDistanceContract, PointerDistanceKind, PointerDistanceUnit, ScalarType,
+    Signature, SynchronizationScope, TargetCapability, Terminator, Type, ValueId,
+    VerificationErrors, WaveOperation, WaveOperationKind, WaveWidth, WidenedFloatBinaryOp,
+    WorkgroupMemoryExtent, WorkgroupSize, verify_module,
 };
 
 use crate::{AMDGPU_TRIPLE, AmdgcnIntrinsic, Dim};
@@ -39,6 +41,10 @@ impl LoweringTarget {
     }
 
     const fn supports_gfx942_inline_assembly(self) -> bool {
+        matches!(self, Self::Gfx942StrictFloatV1)
+    }
+
+    const fn supports_gfx942_matrix(self) -> bool {
         matches!(self, Self::Gfx942StrictFloatV1)
     }
 
@@ -106,6 +112,7 @@ pub enum LoweringDiagnosticCode {
     UnsupportedWaveOperation,
     UnsupportedFloatOperation,
     UnsupportedInlineAssembly,
+    UnsupportedMatrixOperation,
     UnsupportedAssemblyInstruction,
     AssemblyOperandMismatch,
     AssemblyEffectMismatch,
@@ -2018,6 +2025,31 @@ fn collect_intrinsic_declarations<'a>(
                         );
                     }
                 }
+                OperationKind::Matrix(matrix) => match &matrix.kind {
+                    MatrixOperationKind::MultiplyAccumulate { .. } => insert_intrinsic(
+                        &mut declarations,
+                        AmdgcnIntrinsic::MfmaF32M16N16K16Bf16,
+                        "<4 x float>",
+                        "<4 x i16>, <4 x i16>, <4 x float>, i32, i32, i32",
+                        IntrinsicAttribute::Convergent,
+                    ),
+                    MatrixOperationKind::LdsLoad { .. } | MatrixOperationKind::LdsStore { .. } => {
+                        insert_intrinsic(
+                            &mut declarations,
+                            AmdgcnIntrinsic::MbcntLo,
+                            "i32",
+                            "i32, i32",
+                            IntrinsicAttribute::ReadNone,
+                        );
+                        insert_intrinsic(
+                            &mut declarations,
+                            AmdgcnIntrinsic::MbcntHi,
+                            "i32",
+                            "i32, i32",
+                            IntrinsicAttribute::ReadNone,
+                        );
+                    }
+                },
                 _ => {}
             }
         }
@@ -2122,6 +2154,13 @@ fn validate_capabilities(
                 if target.supports_gfx942_inline_assembly()
                     && namespace == AMDGPU_GFX942_INLINE_ASSEMBLY_CAPABILITY_NAMESPACE
                     && name == AMDGPU_GFX942_INLINE_ASSEMBLY_CAPABILITY_NAME => {}
+            TargetCapability::Extension { namespace, name }
+                if target.supports_gfx942_matrix()
+                    && namespace == MATRIX_CAPABILITY_NAMESPACE
+                    && matches!(
+                        name.as_str(),
+                        BF16_F32_M16N16K16_CAPABILITY | LDS_TILE_16X16_XOR4_CAPABILITY
+                    ) => {}
             _ => {
                 return Err(LoweringErrors::one(
                     location,
@@ -2312,8 +2351,10 @@ impl<'a> FunctionLowerer<'a> {
                 if FloatOperation::from_intrinsic_call(callee, arguments).is_some()
         );
         let is_inline_assembly = matches!(operation.kind, OperationKind::InlineAssembly(_));
+        let is_matrix = matches!(operation.kind, OperationKind::Matrix(_));
         if !is_float
             && !is_inline_assembly
+            && !is_matrix
             && !matches!(
                 operation.kind,
                 OperationKind::Fence(_)
@@ -2339,6 +2380,10 @@ impl<'a> FunctionLowerer<'a> {
                     TargetCapability::Extension { namespace, name }
                         if namespace == AMDGPU_GFX942_INLINE_ASSEMBLY_CAPABILITY_NAMESPACE
                             && name == AMDGPU_GFX942_INLINE_ASSEMBLY_CAPABILITY_NAME
+                ) || matches!(
+                    capability,
+                    TargetCapability::Extension { namespace, .. }
+                        if namespace == MATRIX_CAPABILITY_NAMESPACE
                 )
             })
         {
@@ -2777,6 +2822,9 @@ impl<'a> FunctionLowerer<'a> {
             OperationKind::InlineAssembly(assembly) => {
                 self.validate_inline_assembly(operation, assembly, &location)?;
             }
+            OperationKind::Matrix(matrix) => {
+                self.validate_matrix(matrix, &location)?;
+            }
             OperationKind::Wave(wave) => self.validate_wave(wave, &location)?,
             OperationKind::Atomic(atomic) => self.validate_atomic(atomic, &location)?,
             OperationKind::Barrier(_) => {
@@ -2819,6 +2867,47 @@ impl<'a> FunctionLowerer<'a> {
                     format!("G1 does not lower {:?}", operation.kind),
                 ));
             }
+        }
+        Ok(())
+    }
+
+    fn validate_matrix(
+        &self,
+        matrix: &MatrixOperation,
+        location: &LoweringLocation,
+    ) -> Result<(), LoweringErrors> {
+        if !self.target.supports_gfx942_matrix() {
+            return Err(LoweringErrors::one(
+                location.clone(),
+                LoweringDiagnosticCode::UnsupportedMatrixOperation,
+                "matrix operations require the strict gfx942 lowering entry point",
+            ));
+        }
+        if self.kernel.is_none() {
+            return Err(LoweringErrors::one(
+                location.clone(),
+                LoweringDiagnosticCode::UnsupportedMatrixOperation,
+                "compiler-module helpers cannot contain kernel-context matrix operations",
+            ));
+        }
+        if self.wave_width != Some(WaveWidth::Wave64) || self.workgroup_x != Some(64) {
+            return Err(LoweringErrors::one(
+                location.clone(),
+                LoweringDiagnosticCode::UnsupportedMatrixOperation,
+                "matrix V1 requires exactly one full wave64 workgroup",
+            ));
+        }
+        let supported = match &matrix.kind {
+            MatrixOperationKind::MultiplyAccumulate { profile, .. } => profile.is_supported_v1(),
+            MatrixOperationKind::LdsLoad { profile, .. }
+            | MatrixOperationKind::LdsStore { profile, .. } => profile.is_supported_v1(),
+        };
+        if !supported || matrix.active_lanes != 64 {
+            return Err(LoweringErrors::one(
+                location.clone(),
+                LoweringDiagnosticCode::UnsupportedMatrixOperation,
+                "matrix operation is outside the exact V1 shape and active-lane profile",
+            ));
         }
         Ok(())
     }
@@ -3083,12 +3172,21 @@ impl<'a> FunctionLowerer<'a> {
         writeln!(output, "target triple = \"{AMDGPU_TRIPLE}\"\n").unwrap();
         let float_requirements = FloatRequirements::collect(std::iter::once(self));
         let has_workgroup_barrier = self.has_workgroup_barrier();
-        let has_lane_id = self.has_wave_kind(|kind| {
+        let has_matrix_lds = self.has_matrix_kind(|kind| {
+            matches!(
+                kind,
+                MatrixOperationKind::LdsLoad { .. } | MatrixOperationKind::LdsStore { .. }
+            )
+        });
+        let has_matrix_mfma = self
+            .has_matrix_kind(|kind| matches!(kind, MatrixOperationKind::MultiplyAccumulate { .. }));
+        let has_wave_lane_id = self.has_wave_kind(|kind| {
             matches!(
                 kind,
                 WaveOperationKind::LaneId | WaveOperationKind::ShuffleIndex { .. }
             )
         });
+        let has_lane_id = has_matrix_lds || has_wave_lane_id;
         let has_ballot = self.has_wave_kind(|kind| {
             matches!(
                 kind,
@@ -3099,7 +3197,8 @@ impl<'a> FunctionLowerer<'a> {
         });
         let has_shuffle =
             self.has_wave_kind(|kind| matches!(kind, WaveOperationKind::ShuffleIndex { .. }));
-        let has_convergent_operation = has_workgroup_barrier || self.has_wave_kind(|_| true);
+        let has_convergent_operation =
+            has_workgroup_barrier || has_matrix_mfma || self.has_wave_kind(|_| true);
         if self.emit_workgroup_memory_declarations(&mut output) {
             writeln!(output).unwrap();
         }
@@ -3152,6 +3251,14 @@ impl<'a> FunctionLowerer<'a> {
                 output,
                 "declare i32 @{}(i32, i32) #2",
                 AmdgcnIntrinsic::DsBpermute.llvm_name()
+            )
+            .unwrap();
+        }
+        if has_matrix_mfma {
+            writeln!(
+                output,
+                "declare <4 x float> @{}(<4 x i16>, <4 x i16>, <4 x float>, i32, i32, i32) #2",
+                AmdgcnIntrinsic::MfmaF32M16N16K16Bf16.llvm_name()
             )
             .unwrap();
         }
@@ -3270,6 +3377,17 @@ impl<'a> FunctionLowerer<'a> {
             .flat_map(|block| &block.operations)
             .any(|operation| {
                 matches!(&operation.kind, OperationKind::Wave(wave) if predicate(&wave.kind))
+            })
+    }
+
+    fn has_matrix_kind(&self, predicate: impl Fn(&MatrixOperationKind) -> bool) -> bool {
+        self.function
+            .body
+            .iter()
+            .flat_map(|body| &body.blocks)
+            .flat_map(|block| &block.operations)
+            .any(|operation| {
+                matches!(&operation.kind, OperationKind::Matrix(matrix) if predicate(&matrix.kind))
             })
     }
 
@@ -3699,6 +3817,9 @@ impl<'a> FunctionLowerer<'a> {
             OperationKind::InlineAssembly(assembly) => {
                 self.emit_inline_assembly(output, operation, assembly);
             }
+            OperationKind::Matrix(matrix) => {
+                self.emit_matrix(output, block, operation_index, operation, matrix);
+            }
             OperationKind::Wave(wave) => {
                 self.emit_wave(
                     output,
@@ -3709,6 +3830,170 @@ impl<'a> FunctionLowerer<'a> {
             _ => unreachable!("preflight rejected unsupported operation"),
         }
         Ok(())
+    }
+
+    fn emit_matrix(
+        &self,
+        output: &mut dyn fmt::Write,
+        block: BlockId,
+        operation_index: usize,
+        operation: &Operation,
+        matrix: &MatrixOperation,
+    ) {
+        let temporary = format!("matrix.{}.{}", block.0, operation_index);
+        match &matrix.kind {
+            MatrixOperationKind::MultiplyAccumulate {
+                lhs,
+                rhs,
+                accumulator,
+                ..
+            } => {
+                for (label, values, ty) in [
+                    ("lhs", lhs.as_slice(), "i16"),
+                    ("rhs", rhs.as_slice(), "i16"),
+                    ("acc", accumulator.as_slice(), "float"),
+                ] {
+                    for (index, value) in values.iter().enumerate() {
+                        let source = self.value(*value).0;
+                        let prior = if index == 0 {
+                            "poison".to_string()
+                        } else {
+                            format!("%{temporary}.{label}.{}", index - 1)
+                        };
+                        writeln!(
+                            output,
+                            "  %{temporary}.{label}.{index} = insertelement <4 x {ty}> {prior}, {ty} {source}, i64 {index}"
+                        )
+                        .unwrap();
+                    }
+                }
+                writeln!(
+                    output,
+                    "  %{temporary}.mfma = call <4 x float> @{}(<4 x i16> %{temporary}.lhs.3, <4 x i16> %{temporary}.rhs.3, <4 x float> %{temporary}.acc.3, i32 0, i32 0, i32 0)",
+                    AmdgcnIntrinsic::MfmaF32M16N16K16Bf16.llvm_name()
+                )
+                .unwrap();
+                for (index, result) in operation.results.iter().enumerate() {
+                    writeln!(
+                        output,
+                        "  {} = extractelement <4 x float> %{temporary}.mfma, i64 {index}",
+                        value_name(result.id)
+                    )
+                    .unwrap();
+                }
+            }
+            MatrixOperationKind::LdsLoad { base, profile } => {
+                self.emit_matrix_lds_lane_address(output, &temporary);
+                let base = self.value(*base).0;
+                let element = llvm_type(&profile.element.ty());
+                let alignment = match profile.element {
+                    MatrixElement::Bf16 => 2,
+                    MatrixElement::F32 => 4,
+                };
+                for (index, result) in operation.results.iter().enumerate() {
+                    self.emit_matrix_lds_pointer(output, &temporary, index, element, base);
+                    writeln!(
+                        output,
+                        "  {} = load {element}, ptr addrspace(3) %{temporary}.pointer.{index}, align {alignment}",
+                        value_name(result.id)
+                    )
+                    .unwrap();
+                }
+            }
+            MatrixOperationKind::LdsStore {
+                base,
+                values,
+                profile,
+            } => {
+                self.emit_matrix_lds_lane_address(output, &temporary);
+                let base = self.value(*base).0;
+                let element = llvm_type(&profile.element.ty());
+                let alignment = match profile.element {
+                    MatrixElement::Bf16 => 2,
+                    MatrixElement::F32 => 4,
+                };
+                for (index, value) in values.iter().enumerate() {
+                    self.emit_matrix_lds_pointer(output, &temporary, index, element, base);
+                    writeln!(
+                        output,
+                        "  store {element} {}, ptr addrspace(3) %{temporary}.pointer.{index}, align {alignment}",
+                        self.value(*value).0
+                    )
+                    .unwrap();
+                }
+            }
+        }
+    }
+
+    fn emit_matrix_lds_lane_address(&self, output: &mut dyn fmt::Write, temporary: &str) {
+        writeln!(
+            output,
+            "  %{temporary}.lane.lo = call i32 @{}(i32 -1, i32 0)",
+            AmdgcnIntrinsic::MbcntLo.llvm_name()
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %{temporary}.lane = call i32 @{}(i32 -1, i32 %{temporary}.lane.lo)",
+            AmdgcnIntrinsic::MbcntHi.llvm_name()
+        )
+        .unwrap();
+        writeln!(output, "  %{temporary}.row = and i32 %{temporary}.lane, 15").unwrap();
+        writeln!(
+            output,
+            "  %{temporary}.chunk = lshr i32 %{temporary}.lane, 4"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %{temporary}.column.base = shl i32 %{temporary}.chunk, 2"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %{temporary}.swizzle.row = and i32 %{temporary}.row, 3"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %{temporary}.swizzle = shl i32 %{temporary}.swizzle.row, 2"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %{temporary}.row.base = shl i32 %{temporary}.row, 4"
+        )
+        .unwrap();
+    }
+
+    fn emit_matrix_lds_pointer(
+        &self,
+        output: &mut dyn fmt::Write,
+        temporary: &str,
+        index: usize,
+        element: &str,
+        base: &str,
+    ) {
+        writeln!(
+            output,
+            "  %{temporary}.column.{index} = add i32 %{temporary}.column.base, {index}"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %{temporary}.physical.column.{index} = xor i32 %{temporary}.column.{index}, %{temporary}.swizzle"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %{temporary}.index.{index} = add i32 %{temporary}.row.base, %{temporary}.physical.column.{index}"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %{temporary}.pointer.{index} = getelementptr {element}, ptr addrspace(3) {base}, i32 %{temporary}.index.{index}"
+        )
+        .unwrap();
     }
 
     fn emit_memory_intrinsic(

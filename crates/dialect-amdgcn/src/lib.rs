@@ -41,6 +41,7 @@ pub enum AmdgcnIntrinsic {
     Ballot32,
     Ballot64,
     DsBpermute,
+    MfmaF32M16N16K16Bf16,
 }
 
 impl AmdgcnIntrinsic {
@@ -59,6 +60,7 @@ impl AmdgcnIntrinsic {
             Self::Ballot32 => "llvm.amdgcn.ballot.i32",
             Self::Ballot64 => "llvm.amdgcn.ballot.i64",
             Self::DsBpermute => "llvm.amdgcn.ds.bpermute",
+            Self::MfmaF32M16N16K16Bf16 => "llvm.amdgcn.mfma.f32.16x16x16bf16.1k",
         }
     }
 }
