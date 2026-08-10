@@ -6,14 +6,16 @@ use crate::{
     AdmittedFinalizedWorkerV2BundleV1, ArtifactKernelIdentityV1, AuthenticatedWorkerV2ExecutableV1,
     CompilerGeneratedAlphaZetaCov6ArgumentsV1, CompilerGeneratedKernelExpectationV1,
     DeviceIdentity, FinalizedWorkerV2BundleAdmissionError, GeneratedAlphaZetaCov6PrepareError,
-    GeneratedAlphaZetaCov6PreparedInvocationV1, HsaExecutableLoadError, HsaLoadAuthorizationError,
-    LoadedHsaExecutableV1, MissingFinalizedWorkerV2LoadPrerequisiteV1, ObservedContext,
-    PhysicalMetadataValueV1, PublishedKernelPhysicalLayoutV1, ReviewedHsaImplicitKernargAdapterV1,
-    UnloadedHsaExecutableV1, WorkerV2ExecutableAuthenticationError,
-    WorkerV2PrerequisiteAuthenticatorV1, WorkerV2TypedKernelSelectionError,
+    GeneratedAlphaZetaCov6PreparedInvocationV1, HsaExecutableLoadError, HsaGeneratedDispatchError,
+    HsaLaunchGeometryV1, HsaLoadAuthorizationError, LoadedHsaExecutableV1,
+    MissingFinalizedWorkerV2LoadPrerequisiteV1, ObservedContext, PhysicalMetadataValueV1,
+    PublishedKernelPhysicalLayoutV1, ReviewedHsaImplicitKernargAdapterV1, UnloadedHsaExecutableV1,
+    WorkerV2ExecutableAuthenticationError, WorkerV2PrerequisiteAuthenticatorV1,
+    WorkerV2TypedKernelSelectionError,
 };
 use fe2o3_artifact_transaction::{
-    DurableCurrentLinkPublicationLeaseV1, DurablePublishedClaimReacquisitionErrorV1,
+    DurableCurrentLinkPublicationLeaseV1, DurableCurrentLinkPublicationTokenV1,
+    DurableLinkPublicationError, DurablePublishedClaimReacquisitionErrorV1,
     PublishedLinkArtifactV1, reacquire_current_hsaco_publication_lease_v1,
 };
 use fe2o3_hsaco::{CodeObjectVersion, KernelDescriptorBinding};
@@ -33,7 +35,8 @@ use std::path::Path;
 /// The value owns the fresh process-local exact-file lease and the complete decoded envelope,
 /// but exposes neither. Public accessors return only inert identity and descriptor metadata. It is
 /// intentionally neither `Clone` nor `Copy` and has no module-load, launch, or prerequisite-
-/// authentication transition.
+/// authentication transition. This is cooperative-process, non-production evidence; it does not
+/// defend authority from malicious code in the same process.
 pub struct RecoveredWorkerV2PinnedDescriptorV1 {
     admission: AdmittedFinalizedWorkerV2BundleV1,
     descriptor: KernelDescriptorV1,
@@ -208,14 +211,18 @@ impl RecoveredWorkerV2PinnedDescriptorV1 {
         let authenticated =
             AuthenticatedWorkerV2ExecutableV1::<K>::authenticate(self.admission, authenticator)
                 .map_err(RecoveredWorkerV2SynchronousHsaHandoffError::Authentication)?;
+        let currentness = authenticated
+            .acquire_retained_currentness_token()
+            .map_err(RecoveredWorkerV2SynchronousHsaHandoffError::CurrentPublication)?;
         let authorized = authenticated
             .authorize_hsa_load(adapter)
             .map_err(RecoveredWorkerV2SynchronousHsaHandoffError::Authorization)?;
         let loaded = authorized
-            .load()
+            .load_with_retained_currentness(&currentness)
             .map_err(RecoveredWorkerV2SynchronousHsaHandoffError::Load)?;
         Ok(RecoveredWorkerV2SynchronousHsaHandoffV1 {
             loaded,
+            currentness,
             observed: self.observed,
             #[cfg(target_os = "linux")]
             application_descriptors: self.application_descriptors,
@@ -228,9 +235,13 @@ impl RecoveredWorkerV2PinnedDescriptorV1 {
 /// This value is intentionally neither `Clone` nor `Copy`. It retains the exact publication
 /// lease, envelope bytes, loaded executable, and original context observation. Its reviewed HSA
 /// adapter owns the private queue and every dispatch waits for quiescence. This value does not
-/// represent, retain, or order work on a HIP stream.
+/// represent, retain, or order work on a HIP stream. A non-clone currentness token keeps the
+/// cooperative publication lock held from before HSA load through prepare, synchronous dispatch
+/// completion, and executable unload. Cooperative generation turnover blocks until unload drops
+/// that token; retained file and path identities are revalidated before every transition.
 pub struct RecoveredWorkerV2SynchronousHsaHandoffV1<K, A: ReviewedHsaImplicitKernargAdapterV1> {
     loaded: LoadedHsaExecutableV1<K, A>,
+    currentness: DurableCurrentLinkPublicationTokenV1,
     observed: ObservedContext,
     #[cfg(target_os = "linux")]
     application_descriptors: Option<RetainedWorkerV2ApplicationDescriptorsV1>,
@@ -247,7 +258,7 @@ pub type RecoveredWorkerV2SynchronousHsaPrepareResultV1<
     Arguments,
     PrerequisiteError,
 > = Result<
-    GeneratedAlphaZetaCov6PreparedInvocationV1<
+    RecoveredWorkerV2SynchronousHsaPreparedInvocationV1<
         'loaded,
         'allocation,
         Root,
@@ -260,6 +271,67 @@ pub type RecoveredWorkerV2SynchronousHsaPrepareResultV1<
         <Adapter as crate::ReviewedHsaExecutableLifecycleAdapterV1>::Error,
     >,
 >;
+
+/// Prepared invocation borrowing the recovered publication's locked currentness token.
+///
+/// Dispatch revalidates the pinned publication under that still-held cooperative lock immediately
+/// before calling the reviewed synchronous adapter.
+#[must_use = "a prepared recovered invocation does no work until dispatched"]
+#[doc(hidden)]
+pub struct RecoveredWorkerV2SynchronousHsaPreparedInvocationV1<
+    'loaded,
+    'allocation,
+    Root,
+    Selected,
+    Adapter: ReviewedHsaImplicitKernargAdapterV1,
+    Arguments,
+> {
+    prepared: GeneratedAlphaZetaCov6PreparedInvocationV1<
+        'loaded,
+        'allocation,
+        Root,
+        Selected,
+        Adapter,
+        Arguments,
+    >,
+    currentness: &'loaded DurableCurrentLinkPublicationTokenV1,
+}
+
+impl<Root, Selected, Adapter, Arguments>
+    RecoveredWorkerV2SynchronousHsaPreparedInvocationV1<'_, '_, Root, Selected, Adapter, Arguments>
+where
+    Adapter: ReviewedHsaImplicitKernargAdapterV1,
+{
+    pub const fn geometry(&self) -> HsaLaunchGeometryV1 {
+        self.prepared.geometry()
+    }
+
+    pub const fn explicit_byte_len(&self) -> usize {
+        self.prepared.explicit_byte_len()
+    }
+
+    pub fn physical_kernarg_byte_len(&self) -> usize {
+        self.prepared.physical_kernarg_byte_len()
+    }
+
+    pub fn physical_kernarg_alignment(&self) -> usize {
+        self.prepared.physical_kernarg_alignment()
+    }
+
+    pub fn dispatch(
+        self,
+    ) -> Result<
+        crate::GeneratedAlphaZetaCov6CompletionV1<Selected>,
+        RecoveredWorkerV2SynchronousHsaDispatchError<Adapter::Error>,
+    > {
+        self.currentness
+            .revalidate_locked_currentness()
+            .map_err(RecoveredWorkerV2SynchronousHsaDispatchError::CurrentPublication)?;
+        self.prepared
+            .dispatch()
+            .map_err(RecoveredWorkerV2SynchronousHsaDispatchError::Dispatch)
+    }
+}
 
 impl<K, A: ReviewedHsaImplicitKernargAdapterV1> fmt::Debug
     for RecoveredWorkerV2SynchronousHsaHandoffV1<K, A>
@@ -326,29 +398,48 @@ impl<K, A: ReviewedHsaImplicitKernargAdapterV1> RecoveredWorkerV2SynchronousHsaH
                 .revalidate()
                 .map_err(RecoveredWorkerV2SynchronousHsaPrepareError::ApplicationDescriptors)?;
         }
-        self.loaded
+        self.currentness
+            .revalidate_locked_currentness()
+            .map_err(RecoveredWorkerV2SynchronousHsaPrepareError::CurrentPublication)?;
+        let prepared = self
+            .loaded
             .prepare_generated_alpha_zeta_cov6_selected_kernel_v1::<
                 Selected,
                 Authenticator,
                 Arguments,
             >(&self.observed, authenticator, arguments)
-            .map_err(RecoveredWorkerV2SynchronousHsaPrepareError::Prepare)
+            .map_err(RecoveredWorkerV2SynchronousHsaPrepareError::Prepare)?;
+        Ok(RecoveredWorkerV2SynchronousHsaPreparedInvocationV1 {
+            prepared,
+            currentness: &self.currentness,
+        })
     }
 
     pub fn unload(
         self,
-    ) -> Result<UnloadedHsaExecutableV1, crate::HsaExecutableUnloadError<A::Error>> {
+    ) -> Result<UnloadedHsaExecutableV1, RecoveredWorkerV2SynchronousHsaUnloadError<A::Error>> {
         let Self {
             loaded,
+            currentness,
             observed,
             #[cfg(target_os = "linux")]
             application_descriptors,
         } = self;
+        let current = currentness.revalidate_locked_currentness();
+        let unloaded = loaded.unload();
         #[cfg(target_os = "linux")]
-        let _lifetime_guard = (observed, application_descriptors);
+        let _lifetime_guard = (currentness, observed, application_descriptors);
         #[cfg(not(target_os = "linux"))]
-        let _lifetime_guard = observed;
-        loaded.unload()
+        let _lifetime_guard = (currentness, observed);
+        match current {
+            Ok(()) => unloaded.map_err(RecoveredWorkerV2SynchronousHsaUnloadError::Unload),
+            Err(source) => Err(
+                RecoveredWorkerV2SynchronousHsaUnloadError::CurrentPublication {
+                    source,
+                    unload: unloaded.err(),
+                },
+            ),
+        }
     }
 }
 
@@ -371,7 +462,27 @@ pub enum RecoveredWorkerV2SynchronousHsaHandoffError<PrerequisiteError, AdapterE
 pub enum RecoveredWorkerV2SynchronousHsaPrepareError<PrerequisiteError, AdapterError> {
     #[cfg(target_os = "linux")]
     ApplicationDescriptors(WorkerV2ApplicationDescriptorHandoffErrorV1),
+    CurrentPublication(DurableLinkPublicationError),
     Prepare(GeneratedAlphaZetaCov6PrepareError<PrerequisiteError, AdapterError>),
+}
+
+/// Failure while dispatching a recovered prepared invocation.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum RecoveredWorkerV2SynchronousHsaDispatchError<AdapterError> {
+    CurrentPublication(DurableLinkPublicationError),
+    Dispatch(HsaGeneratedDispatchError<AdapterError>),
+}
+
+/// Failure while revalidating and unloading recovered synchronous HSA authority.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum RecoveredWorkerV2SynchronousHsaUnloadError<AdapterError> {
+    CurrentPublication {
+        source: DurableLinkPublicationError,
+        unload: Option<crate::HsaExecutableUnloadError<AdapterError>>,
+    },
+    Unload(crate::HsaExecutableUnloadError<AdapterError>),
 }
 
 fn validate_raw_final_lineage(
@@ -634,7 +745,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     use std::io::{Read, Write};
     #[cfg(target_os = "linux")]
-    use std::os::fd::{FromRawFd, IntoRawFd, OwnedFd, RawFd};
+    use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
     #[cfg(target_os = "linux")]
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -655,6 +766,7 @@ mod tests {
 
     const ARTIFACT_PREFIX: &str = ".fe2o3-link-artifact-v1-";
     const ARTIFACT_SUFFIX: &str = ".bin";
+    const REQUIRED_GFX942_TEST_TARGET: &str = "gfx942:xnack-";
     static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(1);
 
     struct TestDirectory(std::path::PathBuf);
@@ -964,11 +1076,11 @@ mod tests {
             "vecadd",
             source_digest,
             executable_digest,
-            "gfx942",
+            REQUIRED_GFX942_TEST_TARGET,
             [0; 32],
         );
         let final_raw = canonical_hsaco_fixture::with_descriptor_table(
-            "gfx942",
+            REQUIRED_GFX942_TEST_TARGET,
             &encode_device_descriptor_table_v1(&final_raw_table).unwrap(),
         );
         let finalized_hsaco = finalize_unfinalized(&final_raw).unwrap();
@@ -995,7 +1107,7 @@ mod tests {
         let mut fixture = make_single_hsaco_fixture_with_names_and_kernel_id(
             seed,
             finalized.clone(),
-            "gfx942",
+            REQUIRED_GFX942_TEST_TARGET,
             "logical_primary",
             manifest_symbol,
             abi,
@@ -1012,7 +1124,7 @@ mod tests {
                 manifest_symbol,
                 source_digest,
                 executable_digest,
-                "gfx942",
+                REQUIRED_GFX942_TEST_TARGET,
                 canonical_digest,
             )
         };
@@ -1100,7 +1212,7 @@ mod tests {
             envelope,
             compiler_transaction,
             kernel_id: KernelId::from_bytes(*kernel_id.as_bytes()),
-            observed: make_observed_for(usize::from(seed), "gfx942"),
+            observed: make_observed_for(usize::from(seed), REQUIRED_GFX942_TEST_TARGET),
         }
     }
 
@@ -1260,6 +1372,7 @@ mod tests {
 
     struct ExactHsaAdapter {
         unloads: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        turnover_completed: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     }
 
     impl ExactHsaAdapter {
@@ -1268,9 +1381,18 @@ mod tests {
             (
                 Self {
                     unloads: unloads.clone(),
+                    turnover_completed: None,
                 },
                 unloads,
             )
+        }
+
+        fn with_turnover_probe(
+            turnover_completed: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        ) -> (Self, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+            let (mut adapter, unloads) = Self::new();
+            adapter.turnover_completed = Some(turnover_completed);
+            (adapter, unloads)
         }
 
         fn environment() -> crate::HsaEnvironmentObservationV1 {
@@ -1362,6 +1484,12 @@ mod tests {
             &mut self,
             _executable: Self::Executable,
         ) -> Result<crate::HsaUnloadObservationV1, Self::Error> {
+            if let Some(turnover_completed) = &self.turnover_completed {
+                assert!(
+                    !turnover_completed.load(std::sync::atomic::Ordering::SeqCst),
+                    "publication turned over before recovered executable unload completed"
+                );
+            }
             self.unloads
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let environment = Self::environment();
@@ -1506,6 +1634,28 @@ mod tests {
     }
 
     #[cfg(target_os = "linux")]
+    fn duplicate_inheritable(descriptor: RawFd) -> OwnedFd {
+        // SAFETY: `dup` creates one independently owned descriptor for this test process.
+        let duplicate = unsafe { libc::dup(descriptor) };
+        assert!(
+            duplicate >= 0,
+            "failed to duplicate descriptor {descriptor}"
+        );
+        // SAFETY: successful `dup` transferred ownership of this new descriptor number.
+        let duplicate = unsafe { OwnedFd::from_raw_fd(duplicate) };
+        clear_close_on_exec(duplicate.as_raw_fd());
+        duplicate
+    }
+
+    #[cfg(target_os = "linux")]
+    fn assert_close_on_exec(descriptor: RawFd) {
+        // SAFETY: `F_GETFD` only queries the supplied live descriptor number.
+        let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFD) };
+        assert!(flags >= 0);
+        assert_ne!(flags & libc::FD_CLOEXEC, 0);
+    }
+
+    #[cfg(target_os = "linux")]
     fn assert_descriptor_closed(descriptor: RawFd) {
         // SAFETY: `F_GETFD` only queries the supplied descriptor number.
         assert_eq!(unsafe { libc::fcntl(descriptor, libc::F_GETFD) }, -1);
@@ -1612,10 +1762,14 @@ mod tests {
         let identities = [
             descriptor_identity(envelope),
             descriptor_identity(artifact_directory),
+            descriptor_identity(acknowledgment_write),
         ];
         for descriptor in [envelope, artifact_directory, acknowledgment_write] {
             clear_close_on_exec(descriptor);
         }
+        let envelope_duplicate = duplicate_inheritable(envelope);
+        let directory_duplicate = duplicate_inheritable(artifact_directory);
+        let acknowledgment_duplicate = duplicate_inheritable(acknowledgment_write);
         // SAFETY: no other test or application code reads these protocol-specific variables; they
         // are removed immediately after the one-shot inherited consumer returns.
         unsafe {
@@ -1656,6 +1810,13 @@ mod tests {
         };
         assert_descriptor_closed(acknowledgment_write);
         assert_handoff_environment_scrubbed();
+        for descriptor in [
+            envelope_duplicate.as_raw_fd(),
+            directory_duplicate.as_raw_fd(),
+            acknowledgment_duplicate.as_raw_fd(),
+        ] {
+            assert_close_on_exec(descriptor);
+        }
         // SAFETY: the same dedicated child still has no competing environment access. A repeated
         // call must scrub every value before rejecting the already-consumed handoff.
         unsafe {
@@ -1676,6 +1837,8 @@ mod tests {
             Err(crate::WorkerV2ApplicationDescriptorHandoffErrorV1::AlreadyConsumed)
         ));
         assert_handoff_environment_scrubbed();
+        spawn_descriptor_leak_probe(&identities);
+        drop(acknowledgment_duplicate);
         if mode == "success" {
             let recovered = recovered.unwrap();
             let acknowledgment = read_acknowledgment(descriptors.acknowledgment_read);
@@ -1684,7 +1847,6 @@ mod tests {
                 .validate(expectation, challenge)
                 .unwrap();
             recovered.revalidate_currentness().unwrap();
-            spawn_descriptor_leak_probe(&identities);
             drop(recovered);
         } else if mode == "failure" {
             assert!(matches!(
@@ -1692,7 +1854,6 @@ mod tests {
                 Err(crate::WorkerV2ApplicationDescriptorHandoffErrorV1::CommitmentMismatch)
             ));
             assert!(read_acknowledgment(descriptors.acknowledgment_read).is_empty());
-            spawn_descriptor_leak_probe(&identities);
         } else {
             assert!(matches!(
                 recovered,
@@ -1703,7 +1864,6 @@ mod tests {
                 )
             ));
             assert!(read_acknowledgment(descriptors.acknowledgment_read).is_empty());
-            spawn_descriptor_leak_probe(&identities);
         }
     }
 
@@ -2137,6 +2297,64 @@ mod tests {
         assert_eq!(unloaded.finalized_digest(), expected_digest);
         assert!(unloaded.unload_observation().released());
         assert_eq!(unloads.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn retained_currentness_blocks_generation_turnover_through_unload() {
+        let fixture = recovery_fixture(46, "gfx942", "vecadd");
+        let recovered = recover_worker_v2_load_envelope_v1(
+            &fixture.output,
+            &fixture.envelope,
+            fixture.compiler_transaction.clone(),
+            fixture.kernel_id,
+            &fixture.observed,
+        )
+        .unwrap();
+        let (mut authenticator, _) = ExactPrerequisiteAuthenticator::new();
+        let turnover_completed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (adapter, unloads) = ExactHsaAdapter::with_turnover_probe(turnover_completed.clone());
+        let authority = recovered
+            .load_generated_synchronous_hsa_handoff_v1::<
+                HandoffKernel,
+                ExactPrerequisiteAuthenticator,
+                ExactHsaAdapter,
+            >(&mut authenticator, adapter)
+            .unwrap();
+
+        let output = fixture.output.clone();
+        let owner = fixture.owner.clone();
+        let completed = turnover_completed.clone();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let turnover = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            let next = begin_build_attempt(
+                &output,
+                &owner,
+                BuildInvocation::from_bytes([0xd1; 32]),
+                BuildSession::from_bytes([0xd2; 16]),
+            );
+            completed.store(true, std::sync::atomic::Ordering::SeqCst);
+            next
+        });
+        started_rx.recv().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(
+            !turnover_completed.load(std::sync::atomic::Ordering::SeqCst),
+            "generation N+1 completed while generation N currentness was retained"
+        );
+        authority
+            .currentness
+            .revalidate_locked_currentness()
+            .unwrap();
+
+        authority.unload().unwrap();
+        assert_eq!(unloads.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let next = turnover.join().unwrap().unwrap();
+        assert_eq!(
+            next.generation(),
+            fixture.attempt.generation().checked_add(1).unwrap()
+        );
+        fail_build_attempt(&fixture.output, &fixture.owner, next).unwrap();
     }
 
     #[test]

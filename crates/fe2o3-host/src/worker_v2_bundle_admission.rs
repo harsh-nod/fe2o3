@@ -484,9 +484,31 @@ impl AdmittedFinalizedWorkerV2BundleV1 {
         &self,
     ) -> Result<CurrentFinalizedWorkerV2BundleAdmissionV1<'_>, FinalizedWorkerV2BundleAdmissionError>
     {
+        let current = self.acquire_retained_currentness_token()?;
+        Ok(CurrentFinalizedWorkerV2BundleAdmissionV1 {
+            admission: self,
+            _current: current,
+        })
+    }
+
+    pub(crate) fn acquire_retained_currentness_token(
+        &self,
+    ) -> Result<DurableCurrentLinkPublicationTokenV1, FinalizedWorkerV2BundleAdmissionError> {
         let current = self
             .current_lease
             .acquire_current_token()
+            .map_err(FinalizedWorkerV2BundleAdmissionError::current_publication)?;
+        self.revalidate_retained_currentness_token(&current)?;
+        Ok(current)
+    }
+
+    pub(crate) fn revalidate_retained_currentness_token(
+        &self,
+        current: &DurableCurrentLinkPublicationTokenV1,
+    ) -> Result<(), FinalizedWorkerV2BundleAdmissionError> {
+        self.current_lease
+            .validate_current_token(current)
+            .and_then(|()| current.revalidate_locked_currentness())
             .map_err(FinalizedWorkerV2BundleAdmissionError::current_publication)?;
         validate_worker_publication(
             self.prepared.attempt(),
@@ -499,10 +521,7 @@ impl AdmittedFinalizedWorkerV2BundleV1 {
             self.linked_output_identity,
             self.published,
         )?;
-        Ok(CurrentFinalizedWorkerV2BundleAdmissionV1 {
-            admission: self,
-            _current: current,
-        })
+        Ok(())
     }
 
     pub const fn grants_load_authority(&self) -> bool {
@@ -932,6 +951,7 @@ impl CurrentFinalizedWorkerV2BundleAdmissionV1<'_> {
         false
     }
 
+    #[cfg(test)]
     pub(crate) fn exact_artifact_bytes(&self) -> &[u8] {
         self._current.exact_artifact_bytes()
     }
@@ -1982,7 +2002,7 @@ pub(crate) mod tests {
         let input = admission_fixture(0x31, 0);
         let validated = input.fixture.validated();
         let selected_kernel = selected(&input.fixture);
-        let observed = make_observed_for(0x31, "gfx942");
+        let observed = make_observed_for(0x31, REQUIRED_GFX942_TEST_TARGET);
         let parts = admit_parts(
             input.attempt,
             &input.exact_bytes,
@@ -2000,7 +2020,10 @@ pub(crate) mod tests {
             parts.artifact_identity.kernel_id().as_bytes(),
             selected_kernel.kernel().kernel_id().as_bytes()
         );
-        assert_eq!(parts.inspected.inspection().target().to_string(), "gfx942");
+        assert_eq!(
+            parts.inspected.inspection().target().to_string(),
+            REQUIRED_GFX942_TEST_TARGET
+        );
         assert_eq!(
             parts.inspected.inspection().code_object_version().number(),
             6
@@ -2021,12 +2044,12 @@ pub(crate) mod tests {
 
     #[test]
     fn binds_transformed_finalized_bytes_to_their_distinct_worker_linked_output() {
-        let mut linked_bytes = typed_vecadd_hsaco_for_target("gfx942").bytes;
+        let mut linked_bytes = typed_vecadd_hsaco_for_target(REQUIRED_GFX942_TEST_TARGET).bytes;
         linked_bytes.push(0);
         let input = admission_fixture_with_linked_bytes(0x35, 0, Some(linked_bytes.clone()));
         let validated = input.fixture.validated();
         let selected_kernel = selected(&input.fixture);
-        let observed = make_observed_for(0x35, "gfx942");
+        let observed = make_observed_for(0x35, REQUIRED_GFX942_TEST_TARGET);
         let parts = admit_parts(
             input.attempt,
             &input.exact_bytes,
@@ -2053,7 +2076,7 @@ pub(crate) mod tests {
         let input = admission_fixture(0x41, 0);
         let validated = input.fixture.validated();
         let selected_kernel = selected(&input.fixture);
-        let observed = make_observed_for(0x41, "gfx942");
+        let observed = make_observed_for(0x41, REQUIRED_GFX942_TEST_TARGET);
         let other_attempt = BuildAttempt::from_env_value(
             "999:42424242424242424242424242424242:4343434343434343434343434343434343434343434343434343434343434343",
         )
@@ -2074,7 +2097,7 @@ pub(crate) mod tests {
         let input = admission_fixture(0x42, 0);
         let validated = input.fixture.validated();
         let selected_kernel = selected(&input.fixture);
-        let observed = make_observed_for(0x42, "gfx942");
+        let observed = make_observed_for(0x42, REQUIRED_GFX942_TEST_TARGET);
         let mut substituted = input.exact_bytes.clone();
         substituted.push(0);
         assert!(matches!(
@@ -2096,7 +2119,7 @@ pub(crate) mod tests {
         let input = admission_fixture(0x51, 1);
         let validated = input.fixture.validated();
         let selected_kernel = selected(&input.fixture);
-        let observed = make_observed_for(0x51, "gfx942");
+        let observed = make_observed_for(0x51, REQUIRED_GFX942_TEST_TARGET);
         assert!(matches!(
             admit_parts(
                 input.attempt,
@@ -2114,7 +2137,7 @@ pub(crate) mod tests {
         let other = admission_fixture(0x53, 0);
         let validated = input.fixture.validated();
         let selected_kernel = selected(&other.fixture);
-        let observed = make_observed_for(0x52, "gfx942");
+        let observed = make_observed_for(0x52, REQUIRED_GFX942_TEST_TARGET);
         assert!(matches!(
             admit_parts(
                 input.attempt,

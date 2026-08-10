@@ -532,6 +532,18 @@ impl DurableCurrentLinkPublicationTokenV1 {
         self.binding.snapshot.artifact().bytes()
     }
 
+    /// Revalidates the exact publication while this token keeps the cooperative lock held.
+    ///
+    /// Cooperative publishers cannot turn over the canonical generation until this token is
+    /// dropped. This check additionally rejects path replacement or mutation of either retained
+    /// publication file before a later load, prepare, dispatch, or unload transition.
+    pub fn revalidate_locked_currentness(&self) -> Result<(), DurableLinkPublicationError> {
+        let binding = &self.binding;
+        binding.output.verify_path_identity()?;
+        let names = DurableNames::new(binding.published.scope());
+        validate_retained_lease_files(binding, &names)
+    }
+
     pub const fn grants_load_authority(&self) -> bool {
         false
     }

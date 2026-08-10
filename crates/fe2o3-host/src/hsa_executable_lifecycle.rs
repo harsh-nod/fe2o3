@@ -9,6 +9,7 @@ use crate::{
     validate_compiler_generated_semantic_witness_v1,
 };
 use fe2o3_amd_target::{AmdTargetId, FeatureState};
+use fe2o3_artifact_transaction::DurableCurrentLinkPublicationTokenV1;
 use fe2o3_artifacts::{
     AbiLayout, BlockSize, DigestAlgorithm, DigestBytes, LaunchContract, PayloadDigest,
 };
@@ -323,6 +324,12 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV2ExecutableV1<
 
     pub const fn prerequisites(&self) -> &WorkerV2PrerequisiteDecisionV1 {
         &self.prerequisites
+    }
+
+    pub(crate) fn acquire_retained_currentness_token(
+        &self,
+    ) -> Result<DurableCurrentLinkPublicationTokenV1, FinalizedWorkerV2BundleAdmissionError> {
+        self.admission.acquire_retained_currentness_token()
     }
 
     pub fn authorize_hsa_load<A: ReviewedHsaExecutableLifecycleAdapterV1>(
@@ -1098,13 +1105,30 @@ impl<K, A: ReviewedHsaExecutableLifecycleAdapterV1> AuthorizedHsaLoadV1<K, A> {
         &self.environment
     }
 
-    pub fn load(mut self) -> Result<LoadedHsaExecutableV1<K, A>, HsaExecutableLoadError<A::Error>> {
+    pub fn load(self) -> Result<LoadedHsaExecutableV1<K, A>, HsaExecutableLoadError<A::Error>> {
         let current = self
             .authenticated
             .admission
-            .acquire_currentness()
+            .acquire_retained_currentness_token()
             .map_err(HsaExecutableLoadError::CurrentPublication)?;
-        let bytes = current.exact_artifact_bytes();
+        self.load_with_retained_currentness(&current)
+    }
+
+    pub(crate) fn load_with_retained_currentness(
+        self,
+        current: &DurableCurrentLinkPublicationTokenV1,
+    ) -> Result<LoadedHsaExecutableV1<K, A>, HsaExecutableLoadError<A::Error>> {
+        self.authenticated
+            .admission
+            .revalidate_retained_currentness_token(current)
+            .map_err(HsaExecutableLoadError::CurrentPublication)?;
+        self.load_exact_current_bytes(current.exact_artifact_bytes())
+    }
+
+    fn load_exact_current_bytes(
+        mut self,
+        bytes: &[u8],
+    ) -> Result<LoadedHsaExecutableV1<K, A>, HsaExecutableLoadError<A::Error>> {
         let digest = self.authenticated.prerequisites.finalized_digest;
         digest
             .verify(bytes)
@@ -1116,7 +1140,6 @@ impl<K, A: ReviewedHsaExecutableLifecycleAdapterV1> AuthorizedHsaLoadV1<K, A> {
         let (executable, load) =
             reviewed_adapter_call(|| unsafe { self.adapter.load_executable(bytes, digest) })
                 .map_err(HsaExecutableLoadError::AdapterLoad)?;
-        drop(current);
 
         if let Err(field) = validate_load_observation(&self.environment, digest, byte_len, &load) {
             terminal_unload(&mut self.adapter, executable, &self.environment, &load);

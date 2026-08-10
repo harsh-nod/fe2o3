@@ -135,8 +135,11 @@ pub use published_hsaco_inspection::{
 };
 pub use recovered_worker_v2_admission::{
     RecoveredWorkerV2AdmissionError, RecoveredWorkerV2PinnedDescriptorV1,
-    RecoveredWorkerV2SynchronousHsaHandoffError, RecoveredWorkerV2SynchronousHsaHandoffV1,
-    RecoveredWorkerV2SynchronousHsaPrepareError, RecoveredWorkerV2SynchronousHsaPrepareResultV1,
+    RecoveredWorkerV2SynchronousHsaDispatchError, RecoveredWorkerV2SynchronousHsaHandoffError,
+    RecoveredWorkerV2SynchronousHsaHandoffV1, RecoveredWorkerV2SynchronousHsaPrepareError,
+    RecoveredWorkerV2SynchronousHsaPrepareResultV1,
+    RecoveredWorkerV2SynchronousHsaPreparedInvocationV1,
+    RecoveredWorkerV2SynchronousHsaUnloadError,
 };
 
 pub use tile_interop::{

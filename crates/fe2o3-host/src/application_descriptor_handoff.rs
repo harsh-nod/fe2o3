@@ -1,4 +1,9 @@
-//! Cargo-to-application descriptor handoff for canonical Worker V2 evidence.
+//! Cooperative-process Cargo-to-application handoff for canonical Worker V2 evidence.
+//!
+//! This module is an inert foundation, not a same-process security boundary. The application must
+//! consume the inherited handoff before threads, signal handlers, descendants, or unrelated FD
+//! mutation can race it. A malicious application in the same process can bypass these cooperative
+//! assumptions and must instead be isolated from authority by a separate broker.
 
 use crate::recovered_worker_v2_admission::recover_worker_v2_load_envelope_v1;
 use crate::{
@@ -20,7 +25,7 @@ use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::fs::File;
 use std::io::{self, Read};
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -31,6 +36,21 @@ const MAX_APPLICATION_EXECUTABLE_BYTES_V1: u64 = 1 << 30;
 const ACK_DEADLINE_V1: Duration = Duration::from_secs(5);
 
 static INHERITED_HANDOFF_CLAIMED_V1: AtomicBool = AtomicBool::new(false);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DescriptorIdentityV1 {
+    device: u64,
+    inode: u64,
+}
+
+impl DescriptorIdentityV1 {
+    const fn from_stat(stat: &rustix::fs::Stat) -> Self {
+        Self {
+            device: stat.st_dev,
+            inode: stat.st_ino,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct DirectorySnapshotV1 {
@@ -125,13 +145,16 @@ impl RetainedWorkerV2ApplicationDescriptorsV1 {
 /// filesystem path participates in recovery. The envelope and artifact-directory descriptors
 /// remain retained by the returned linear authority through load, generated preparation,
 /// synchronous HSA dispatch, and unload. The emitted ACK is reproducible liveness data and grants
-/// no recovery, load, or launch authority.
+/// no recovery, load, or launch authority. The output remains non-production evidence until real
+/// compiler and prerequisite issuers replace the explicitly unsafe caller-supplied boundary.
 ///
 /// # Safety
 ///
-/// The caller must invoke this startup operation before creating any threads that can access the
-/// process environment or spawning any descendants. Rust cannot synchronize environment mutation
-/// with foreign code or independently managed threads.
+/// The caller must invoke this startup operation before creating any threads, installing signal
+/// handlers that can access the environment or descriptor table, spawning descendants, or
+/// allowing any unrelated close, duplicate, flag change, or mutation of handoff FDs. Rust cannot
+/// synchronize environment or descriptor-table mutation with foreign code, signal handlers, or
+/// independently managed threads. A hostile same-process caller violates this contract.
 pub unsafe fn consume_inherited_worker_v2_application_handoff_v1(
     compiler_transaction: CompilerTransactionEvidenceCapsuleV2,
     kernel_id: KernelId,
@@ -182,6 +205,9 @@ pub unsafe fn consume_inherited_worker_v2_application_handoff_v1(
     let envelope = envelope?;
     let directory = directory?;
     let acknowledgment = acknowledgment?;
+    let descriptor_identities =
+        snapshot_handoff_descriptor_identities(&directory, &envelope, &acknowledgment)?;
+    seal_descriptor_occurrences(&descriptor_identities)?;
 
     let commitment = environment_text(
         WORKER_V2_APPLICATION_HANDOFF_COMMITMENT_ENV_V1,
@@ -241,6 +267,9 @@ pub(crate) fn consume_worker_v2_application_handoff_descriptors_v1(
     let directory = File::from(artifact_directory);
     let envelope = File::from(envelope);
     let acknowledgment = File::from(acknowledgment);
+    let descriptor_identities =
+        snapshot_handoff_descriptor_identities(&directory, &envelope, &acknowledgment)?;
+    seal_descriptor_occurrences(&descriptor_identities)?;
     let directory_snapshot = inspect_directory(&directory)?;
     let (envelope_snapshot, exact_envelope_bytes, decoded) =
         inspect_envelope(&directory, &envelope)?;
@@ -269,7 +298,7 @@ pub(crate) fn consume_worker_v2_application_handoff_descriptors_v1(
         observed,
     )
     .map_err(WorkerV2ApplicationDescriptorHandoffErrorV1::Recovery)?;
-    seal_directory_descriptor_occurrences(retained.directory_snapshot)?;
+    seal_descriptor_occurrences(&descriptor_identities)?;
     retained.revalidate()?;
     recovered
         .revalidate_currentness()
@@ -390,8 +419,31 @@ fn set_close_on_exec(
     Ok(())
 }
 
-fn seal_directory_descriptor_occurrences(
-    expected: DirectorySnapshotV1,
+fn snapshot_handoff_descriptor_identities<D: AsFd, E: AsFd, A: AsFd>(
+    directory: &D,
+    envelope: &E,
+    acknowledgment: &A,
+) -> Result<[DescriptorIdentityV1; 3], WorkerV2ApplicationDescriptorHandoffErrorV1> {
+    let directory = fstat(directory)
+        .map(|stat| DescriptorIdentityV1::from_stat(&stat))
+        .map_err(|error| descriptor_io("artifact directory identity", error));
+    let envelope = fstat(envelope)
+        .map(|stat| DescriptorIdentityV1::from_stat(&stat))
+        .map_err(|error| descriptor_io("envelope identity", error));
+    let acknowledgment = fstat(acknowledgment)
+        .map(|stat| DescriptorIdentityV1::from_stat(&stat))
+        .map_err(|error| descriptor_io("acknowledgment identity", error));
+    let available = [
+        directory.as_ref().ok().copied(),
+        envelope.as_ref().ok().copied(),
+        acknowledgment.as_ref().ok().copied(),
+    ];
+    seal_descriptor_occurrences(&available.into_iter().flatten().collect::<Vec<_>>())?;
+    Ok([directory?, envelope?, acknowledgment?])
+}
+
+fn seal_descriptor_occurrences(
+    expected: &[DescriptorIdentityV1],
 ) -> Result<(), WorkerV2ApplicationDescriptorHandoffErrorV1> {
     for entry in std::fs::read_dir("/proc/self/fd")
         .map_err(|error| descriptor_io("process descriptor table", error))?
@@ -417,12 +469,15 @@ fn seal_directory_descriptor_occurrences(
         }
         // SAFETY: successful `fstat` initialized the complete record.
         let stat = unsafe { stat.assume_init() };
-        if stat.st_dev != expected.device || stat.st_ino != expected.inode {
+        if !expected.contains(&DescriptorIdentityV1 {
+            device: stat.st_dev,
+            inode: stat.st_ino,
+        }) {
             continue;
         }
         if unsafe { libc::fcntl(descriptor, libc::F_SETFD, flags | libc::FD_CLOEXEC) } < 0 {
             return Err(descriptor_io(
-                "retained artifact directory",
+                "retained handoff descriptor",
                 io::Error::last_os_error(),
             ));
         }
