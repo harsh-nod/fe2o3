@@ -714,6 +714,12 @@ fn encode_operation_kind(
             writer.u8(20)?;
             encode_wave_operation(writer, wave)?;
         }
+        OperationKind::Matrix(_) => {
+            return Err(KernelIrEncodeError::UnsupportedInVersion {
+                version: writer.version,
+                feature: "matrix operation",
+            });
+        }
         OperationKind::InlineAssembly(assembly) => {
             require_v3(writer, "source-bound inline assembly")?;
             writer.u8(21)?;

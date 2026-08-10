@@ -513,6 +513,7 @@ pub fn derive_kernel_memory_obligations(
                 | OperationKind::Barrier(_)
                 | OperationKind::Atomic(_)
                 | OperationKind::Fence(_)
+                | OperationKind::Matrix(_)
                 | OperationKind::InlineAssembly(_)
                 | OperationKind::WorkgroupBarrier(_)
                 | OperationKind::WorkgroupMemory(_) => {

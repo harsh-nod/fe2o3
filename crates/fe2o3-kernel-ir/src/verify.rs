@@ -6,10 +6,10 @@ use crate::{
     AccessMode, AddressSpace, AssemblyConstraint, AssemblyEffect, AssemblyOperandKind,
     AssemblyOption, Atomic, AtomicKind, Barrier, BasicBlock, BinaryOp, BlockId, ComparePredicate,
     Fence, FloatOperation, Function, FunctionId, FunctionRole, InlineAssembly, Kernel, KernelId,
-    LaunchExtent, MemoryOrdering, Module, ModuleId, Operation, OperationKind, ScalarType,
-    SemanticOperationIssueKind, SemanticOperationVerificationContext, SynchronizationScope,
-    TargetCapability, Terminator, Type, UnaryOp, ValueId, WaveOperation, WaveOperationKind,
-    WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent, pointer_for,
+    LaunchExtent, MatrixVerificationIssueKind, MemoryOrdering, Module, ModuleId, Operation,
+    OperationKind, ScalarType, SemanticOperationIssueKind, SemanticOperationVerificationContext,
+    SynchronizationScope, TargetCapability, Terminator, Type, UnaryOp, ValueId, WaveOperation,
+    WaveOperationKind, WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent, pointer_for,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -998,6 +998,25 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
             }
             OperationKind::WorkgroupMemory(memory) => {
                 self.verify_workgroup_memory(operation, memory, location);
+            }
+            OperationKind::Matrix(matrix) => {
+                let operand_types = matrix
+                    .operands()
+                    .iter()
+                    .map(|operand| self.ty(*operand).cloned())
+                    .collect::<Vec<_>>();
+                for issue in matrix.verify(&operand_types, &operation.results) {
+                    let code = match issue.kind {
+                        MatrixVerificationIssueKind::InvalidStructure => {
+                            DiagnosticCode::InvalidSemanticOperation
+                        }
+                        MatrixVerificationIssueKind::InvalidOperandType => {
+                            DiagnosticCode::InvalidOperandType
+                        }
+                        MatrixVerificationIssueKind::InvalidResult => DiagnosticCode::TypeMismatch,
+                    };
+                    self.emit(location.clone(), code, issue.message);
+                }
             }
             OperationKind::Wave(wave) => self.verify_wave(operation, wave, location),
             OperationKind::InlineAssembly(assembly) => {

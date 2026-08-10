@@ -21,6 +21,7 @@
 mod effect_extraction;
 mod formal_memory_obligations;
 mod ir;
+mod matrix;
 mod region_effects;
 mod semantic_operations;
 mod standard_atomics;
@@ -31,6 +32,7 @@ mod wire;
 pub use effect_extraction::*;
 pub use formal_memory_obligations::*;
 pub use ir::*;
+pub use matrix::*;
 pub use region_effects::*;
 pub use semantic_operations::*;
 pub use standard_atomics::*;

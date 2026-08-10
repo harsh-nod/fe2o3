@@ -2,9 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use crate::{
-    AccessMode, AddressSpace, Axis, BarrierSemantics, LaunchDomain, MemoryIntrinsicOperation,
-    MemoryOrdering, ScalarType, SemanticOperation, SynchronizationScope, TargetCapability, Type,
-    WaveWidth, WorkgroupSize,
+    AccessMode, AddressSpace, Axis, BarrierSemantics, LaunchDomain, MatrixOperation,
+    MemoryIntrinsicOperation, MemoryOrdering, ScalarType, SemanticOperation, SynchronizationScope,
+    TargetCapability, Type, WaveWidth, WorkgroupSize,
 };
 
 macro_rules! string_id {
@@ -399,6 +399,7 @@ impl Operation {
             OperationKind::WorkgroupMemory(_) => {
                 vec![MemoryEffect::Allocate(AddressSpace::Workgroup)]
             }
+            OperationKind::Matrix(matrix) => matrix.memory_effects(),
             OperationKind::InlineAssembly(assembly) => assembly.memory_effects(),
             OperationKind::Wave(_) => Vec::new(),
             _ => Vec::new(),
@@ -468,6 +469,7 @@ impl Operation {
                 }
                 capabilities
             }
+            OperationKind::Matrix(matrix) => matrix.required_capabilities(),
             OperationKind::Wave(wave) => wave.required_capabilities(),
             OperationKind::InlineAssembly(assembly) => assembly.required_capabilities(),
             OperationKind::Call { callee, arguments } => {
@@ -554,6 +556,8 @@ pub enum OperationKind {
     WorkgroupBarrier(WorkgroupBarrier),
     /// A statically or dynamically sized workgroup-memory declaration.
     WorkgroupMemory(WorkgroupMemory),
+    /// A target-neutral cooperative matrix or matrix-tile operation.
+    Matrix(MatrixOperation),
     /// A width-bound, convergent operation over one physical AMD-style wave.
     Wave(WaveOperation),
     /// Source-bound target assembly whose authority was established by the frontend.
@@ -583,6 +587,7 @@ impl OperationKind {
                 ..
             }) => Vec::new(),
             Self::MemoryIntrinsic(intrinsic) => intrinsic.operands(),
+            Self::Matrix(matrix) => matrix.operands(),
             Self::Unary { operand, .. } => vec![*operand],
             Self::Binary { lhs, rhs, .. } | Self::Compare { lhs, rhs, .. } => vec![*lhs, *rhs],
             Self::Cast { value, .. } => vec![*value],
