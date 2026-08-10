@@ -102,16 +102,15 @@ fn metadata() -> ExitCode {
 }
 
 fn build_or_run(args: &[OsString]) -> ExitCode {
-    if env::var_os("FE2O3_TEST_VERTICAL_CONTROL_DIR").is_some() {
-        return vertical_worker_v2_invocation();
-    }
-
     #[cfg(target_os = "linux")]
     for descriptor in [197, 198] {
         if fs::symlink_metadata(format!("/proc/self/fd/{descriptor}")).is_ok() {
             eprintln!("fake Cargo inherited build capability fd {descriptor}");
             return ExitCode::FAILURE;
         }
+    }
+    if env::var_os("FE2O3_TEST_VERTICAL_CONTROL_DIR").is_some() {
+        return vertical_worker_v2_invocation();
     }
     if let Some(mode) = env::var_os("FE2O3_TEST_BUILD_SCRIPT_MODE") {
         let fixture = required_path("FE2O3_TEST_BUILD_SCRIPT_FIXTURE");
