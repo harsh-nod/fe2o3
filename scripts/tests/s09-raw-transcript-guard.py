@@ -175,6 +175,123 @@ exit "${status}"
         self.assertEqual(completed.returncode, 37, completed.stderr)
         self.assertFalse(self.raw.exists())
 
+    def test_hostile_pythonpath_cannot_execute_or_forge_launcher_protocol(self) -> None:
+        hostile = self.directory / "hostile-pythonpath"
+        hostile.mkdir()
+        marker = self.directory / "sitecustomize-ran"
+        (hostile / "sitecustomize.py").write_text(
+            f"""\
+import os
+import pathlib
+import sys
+
+pathlib.Path({str(marker)!r}).write_text("executed\\n", encoding="ascii")
+raw_fd = int(sys.argv[1])
+os.write(raw_fd, b"forged raw output\\n")
+try:
+    os.setsid()
+except OSError:
+    pass
+leader = os.getpid()
+print(f"ANCHOR {{leader}} {{os.getpgrp()}}", flush=True)
+print(f"READY {{leader}} {{os.getpgrp()}}", flush=True)
+sys.stdin.buffer.readline()
+print("STATUS 0", flush=True)
+os._exit(0)
+""",
+            encoding="ascii",
+        )
+        body = r"""
+set -Euo pipefail
+source "$1"
+export PYTHONPATH="$3"
+export FE2O3_RAW_GUARD_PASSTHROUGH="$5"
+s09_install_raw_transcript_guard "$2"
+s09_run_guarded_raw_command /bin/bash -c \
+  'printf "%s\n" "$FE2O3_RAW_GUARD_PASSTHROUGH"; exit 1'
+status=$?
+[[ ! -e "$4" && ! -L "$4" ]] || exit 124
+[[ "$(<"$2")" == "$5" ]] || exit 123
+exit "${status}"
+"""
+        completed = subprocess.run(
+            [
+                "/bin/bash",
+                "-c",
+                body,
+                "raw-guard-hostile-pythonpath-test",
+                str(GUARD),
+                str(self.raw),
+                str(hostile),
+                str(marker),
+                "preserved-non-python-environment",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+        self.assertEqual(completed.returncode, 1, completed.stderr)
+        self.assertFalse(marker.exists())
+        self.assertFalse(self.raw.exists())
+
+    def test_guarded_command_stdin_is_devnull_and_control_fd_is_closed(self) -> None:
+        helper = self.directory / "consume-stdin.py"
+        marker = self.directory / "stdin-fds.txt"
+        helper.write_text(
+            """\
+import os
+import pathlib
+import sys
+
+payload = sys.stdin.buffer.read()
+targets = []
+for entry in pathlib.Path("/proc/self/fd").iterdir():
+    try:
+        targets.append((int(entry.name), os.readlink(entry)))
+    except FileNotFoundError:
+        pass
+with open(sys.argv[1], "w", encoding="ascii") as output:
+    output.write(f"payload={payload!r}\\n")
+    for descriptor, target in sorted(targets):
+        output.write(f"fd{descriptor}={target}\\n")
+print("raw output")
+sys.exit(0 if payload == b"" else 91)
+""",
+            encoding="ascii",
+        )
+        body = r"""
+set -Euo pipefail
+source "$1"
+s09_install_raw_transcript_guard "$2"
+s09_run_guarded_raw_command /usr/bin/python3 -I -S "$3" "$4"
+exit $?
+"""
+        completed = subprocess.run(
+            [
+                "/bin/bash",
+                "-c",
+                body,
+                "raw-guard-stdin-consumer-test",
+                str(GUARD),
+                str(self.raw),
+                str(helper),
+                str(marker),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        observations = marker.read_text(encoding="ascii").splitlines()
+        self.assertEqual(observations[0], "payload=b''")
+        self.assertIn("fd0=/dev/null", observations)
+        self.assertFalse(any("pipe:[" in line for line in observations))
+        self.assertFalse(self.raw.exists())
+
     def test_teardown_failure_overrides_status_and_deletes_raw(self) -> None:
         launcher = self.directory / "failed-drain-launcher.py"
         launcher.write_text(
@@ -604,6 +721,84 @@ s09_run_guarded_raw_command /bin/true
                         process.stdout.close()
                     if process.stderr is not None:
                         process.stderr.close()
+
+    def test_same_uid_stopped_launcher_times_out_fail_closed(self) -> None:
+        marker = self.directory / "stopped-launcher.pid"
+        launcher = self.directory / "stopped-launcher.py"
+        launcher.write_text(
+            """\
+import os
+import signal
+import sys
+
+raw_fd = int(sys.argv[1])
+marker = sys.argv[-1]
+os.setsid()
+leader = os.getpid()
+group = os.getpgrp()
+print(f"ANCHOR {leader} {group}", flush=True)
+print(f"READY {leader} {group}", flush=True)
+assert sys.stdin.buffer.readline() == b"START\\n"
+print("STATUS 0", flush=True)
+assert sys.stdin.buffer.readline() == b"DRAIN\\n"
+os.close(raw_fd)
+with open(marker, "w", encoding="ascii") as output:
+    output.write(f"{leader} {group}\\n")
+os.kill(leader, signal.SIGSTOP)
+""",
+            encoding="ascii",
+        )
+        body = r"""
+set -Euo pipefail
+source "$1"
+TEST_LAUNCHER="$3"
+TEST_MARKER="$4"
+s09_guarded_launcher() {
+  exec /usr/bin/python3 -I -S "${TEST_LAUNCHER}" "$@" "${TEST_MARKER}"
+}
+s09_install_raw_transcript_guard "$2"
+s09_run_guarded_raw_command /bin/true
+exit $?
+"""
+        previous_subreaper = self.child_subreaper_state()
+        leader = 0
+        group = 0
+        self.set_child_subreaper(1)
+        started = time.monotonic()
+        try:
+            completed = subprocess.run(
+                [
+                    "/bin/bash",
+                    "-c",
+                    body,
+                    "raw-guard-stopped-launcher-test",
+                    str(GUARD),
+                    str(self.raw),
+                    str(launcher),
+                    str(marker),
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+                timeout=6,
+            )
+            self.assertEqual(completed.returncode, 125, completed.stderr)
+            self.assertLess(time.monotonic() - started, 5.0)
+            leader, group = map(int, marker.read_text(encoding="ascii").split())
+            self.assertFalse(self.raw.exists())
+        finally:
+            if marker.exists() and group == 0:
+                leader, group = map(int, marker.read_text(encoding="ascii").split())
+            if group != 0:
+                try:
+                    os.killpg(group, signal.SIGCONT)
+                    os.killpg(group, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            reaped = self.reap_all_adopted_children()
+            self.set_child_subreaper(previous_subreaper)
+        self.assertIn(leader, reaped)
 
     def test_recycled_identity_is_never_signalled_after_launcher_reap(self) -> None:
         body = r"""

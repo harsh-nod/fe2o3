@@ -8,6 +8,9 @@ S09_GUARDED_GROUP_VERIFIED=
 S09_GUARDED_STATUS_FD=
 S09_GUARDED_DEFERRED_SIGNAL=
 S09_GUARDED_DEFERRED_SIGNAL_EPOCH=0
+S09_GUARDED_EXIT_POLL_LIMIT=30
+S09_GUARDED_STARTUP_POLL_LIMIT=20
+S09_GUARDED_TEARDOWN_ABANDONED=
 S09_GUARDED_WAIT_STATUS=
 S09_RAW_TRANSCRIPT_FD=
 S09_RAW_TRANSCRIPT_PATH=
@@ -68,11 +71,37 @@ s09_wait_guarded_leader() {
   done
 }
 
+s09_observe_guarded_exit() {
+  local attempt read_status
+  if [[ -z "${S09_GUARDED_STATUS_FD:-}" ]]; then
+    return 1
+  fi
+
+  for ((attempt = 0; attempt < S09_GUARDED_EXIT_POLL_LIMIT; attempt++)); do
+    if IFS= read -r -t 0.1 _ <&"${S09_GUARDED_STATUS_FD}"; then
+      continue
+    else
+      read_status=$?
+    fi
+    if ((read_status == 1)); then
+      return 0
+    fi
+    if ((read_status == 142)) ||
+      { ((read_status > 128)) && [[ -n "${S09_GUARDED_DEFERRED_SIGNAL:-}" ]]; }; then
+      continue
+    fi
+    return 1
+  done
+  return 1
+}
+
 s09_guarded_launcher() {
   # The launcher, not the outer shell, owns all numeric PGID operations. It
   # stays the session/group leader until DRAIN atomically targets its own PGID.
   # shellcheck disable=SC2016
-  exec /usr/bin/python3 -c '
+  unset PYTHONBREAKPOINT PYTHONHOME PYTHONINSPECT PYTHONPATH PYTHONPLATLIBDIR
+  unset PYTHONSAFEPATH PYTHONSTARTUP PYTHONUSERBASE PYTHONWARNINGS
+  exec /usr/bin/python3 -I -S -c '
 import os
 import selectors
 import signal
@@ -152,6 +181,7 @@ while True:
         try:
             process = subprocess.Popen(
                 command,
+                stdin=subprocess.DEVNULL,
                 stdout=raw_fd,
                 stderr=subprocess.STDOUT,
                 close_fds=True,
@@ -187,6 +217,12 @@ s09_stop_guarded_group() {
     s09_close_guarded_control_fd
     return "${cleanup_status}"
   fi
+  if [[ "${S09_GUARDED_TEARDOWN_ABANDONED:-}" == 1 ]]; then
+    s09_close_guarded_control_fd
+    s09_close_guarded_status_fd
+    s09_delete_raw_transcript || cleanup_status=1
+    return 1
+  fi
 
   if [[ "${S09_GUARDED_GROUP_VERIFIED:-}" != 1 ]]; then
     # EOF asks the trusted launcher to self-drain if it reached its event loop.
@@ -200,7 +236,14 @@ s09_stop_guarded_group() {
   fi
   s09_close_guarded_control_fd
 
-  if ! s09_wait_guarded_leader "${child_pid}"; then
+  if ! s09_observe_guarded_exit; then
+    # A same-UID SIGSTOP can force this bounded fail-closed path. Without a
+    # protected supervisor the local guard cannot resume or reap that process.
+    cleanup_status=1
+    S09_GUARDED_TEARDOWN_ABANDONED=1
+    s09_close_guarded_status_fd
+    disown "${child_pid}" 2>/dev/null || true
+  elif ! s09_wait_guarded_leader "${child_pid}"; then
     cleanup_status=1
   elif [[ "${S09_GUARDED_GROUP_VERIFIED:-}" == 1 &&
     "${S09_GUARDED_WAIT_STATUS}" != 137 ]]; then
@@ -209,9 +252,11 @@ s09_stop_guarded_group() {
   if ((cleanup_status != 0)); then
     s09_delete_raw_transcript || cleanup_status=1
   fi
-  S09_GUARDED_CHILD_PID=
-  S09_GUARDED_GROUP_VERIFIED=
-  s09_close_guarded_status_fd
+  if [[ "${S09_GUARDED_TEARDOWN_ABANDONED:-}" != 1 ]]; then
+    S09_GUARDED_CHILD_PID=
+    S09_GUARDED_GROUP_VERIFIED=
+    s09_close_guarded_status_fd
+  fi
   return "${cleanup_status}"
 }
 
@@ -292,6 +337,7 @@ s09_run_guarded_raw_command() {
   S09_GUARDED_DEFERRED_SIGNAL=
   S09_GUARDED_DEFERRED_SIGNAL_EPOCH=0
   S09_GUARDED_GROUP_VERIFIED=
+  S09_GUARDED_TEARDOWN_ABANDONED=
   s09_install_deferred_signal_traps
 
   # Install deferred traps before creating the pathname. If a signal arrives
@@ -307,7 +353,7 @@ s09_run_guarded_raw_command() {
 
   set +m
   coproc S09_GUARDED_COPROC {
-    s09_guarded_launcher "${raw_fd}" "$@"
+    s09_guarded_launcher "${raw_fd}" "$@" 2>&1
   }
   child_pid="${S09_GUARDED_COPROC_PID}"
   S09_GUARDED_CHILD_PID="${child_pid}"
@@ -315,7 +361,7 @@ s09_run_guarded_raw_command() {
   S09_GUARDED_CONTROL_FD="${S09_GUARDED_COPROC[1]}"
 
   supervisor_message=
-  for ((attempt = 0; attempt < 20; attempt++)); do
+  for ((attempt = 0; attempt < S09_GUARDED_STARTUP_POLL_LIMIT; attempt++)); do
     if IFS= read -r -t 0.1 supervisor_message <&"${S09_GUARDED_STATUS_FD}"; then
       break
     else
@@ -343,7 +389,7 @@ s09_run_guarded_raw_command() {
   fi
 
   supervisor_message=
-  for ((attempt = 0; attempt < 20; attempt++)); do
+  for ((attempt = 0; attempt < S09_GUARDED_STARTUP_POLL_LIMIT; attempt++)); do
     if [[ -n "${S09_GUARDED_DEFERRED_SIGNAL:-}" ]]; then
       break
     fi
