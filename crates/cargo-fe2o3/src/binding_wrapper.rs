@@ -609,6 +609,8 @@ struct BuildExecutableSnapshot {
     size: u64,
     modified_seconds: i64,
     modified_nanoseconds: i64,
+    changed_seconds: i64,
+    changed_nanoseconds: i64,
 }
 
 impl BuildExecutableSnapshot {
@@ -620,6 +622,8 @@ impl BuildExecutableSnapshot {
             size: metadata.len(),
             modified_seconds: metadata.mtime(),
             modified_nanoseconds: metadata.mtime_nsec(),
+            changed_seconds: metadata.ctime(),
+            changed_nanoseconds: metadata.ctime_nsec(),
         }
     }
 }
@@ -2015,11 +2019,11 @@ pub(crate) fn exit_code(status: ExitStatus) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::{
-        BindingWrapperError, CARGO_FE2O3_EXECUTABLE_BUILD_OBSERVATION_ENV_V2,
-        CARGO_METADATA_BUILD_OBSERVATION_ENV_V2, CompileBuildObservationV2,
-        CompleteS09ChildEnvironmentV2, DECLARED_CARGO_EXECUTABLE_BUILD_OBSERVATION_ENV_V2,
-        LLVM_BUILD_IDENTITY_OBSERVATION_ENV_V2, LinuxObjectIdentityV3,
-        OBSERVED_PARENT_PID_BUILD_OBSERVATION_ENV_V2,
+        BindingWrapperError, BuildExecutableSnapshot,
+        CARGO_FE2O3_EXECUTABLE_BUILD_OBSERVATION_ENV_V2, CARGO_METADATA_BUILD_OBSERVATION_ENV_V2,
+        CompileBuildObservationV2, CompleteS09ChildEnvironmentV2,
+        DECLARED_CARGO_EXECUTABLE_BUILD_OBSERVATION_ENV_V2, LLVM_BUILD_IDENTITY_OBSERVATION_ENV_V2,
+        LinuxObjectIdentityV3, OBSERVED_PARENT_PID_BUILD_OBSERVATION_ENV_V2,
         OBSERVED_PARENT_START_TIME_BUILD_OBSERVATION_ENV_V2,
         PINNED_CARGO_IMAGE_BUILD_OBSERVATION_ENV_V2, PreparedRustcConsistencyExpectation,
         WORKER_BUILD_IDENTITY_OBSERVATION_ENV_V2, WORKER_CONFIG_BUILD_OBSERVATION_ENV_V2,
@@ -2260,6 +2264,35 @@ mod tests {
         assert_eq!(
             measure_build_executable(&executable, "test executable").unwrap(),
             expected
+        );
+    }
+
+    #[test]
+    fn executable_snapshot_detects_change_time_differences() {
+        let initial = BuildExecutableSnapshot {
+            device: 1,
+            inode: 2,
+            mode: 0o100700,
+            size: 3,
+            modified_seconds: 4,
+            modified_nanoseconds: 5,
+            changed_seconds: 6,
+            changed_nanoseconds: 7,
+        };
+
+        assert_ne!(
+            initial,
+            BuildExecutableSnapshot {
+                changed_seconds: 8,
+                ..initial
+            }
+        );
+        assert_ne!(
+            initial,
+            BuildExecutableSnapshot {
+                changed_nanoseconds: 8,
+                ..initial
+            }
         );
     }
 
