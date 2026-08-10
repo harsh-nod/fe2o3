@@ -54,11 +54,19 @@ fn compile_frontend(source: &Path, output: &Path) -> Output {
         .expect("compile frontend-contract fixture")
 }
 
-fn backend(workspace: &Path) -> PathBuf {
+fn backend_build_command(workspace: &Path, target_dir: &Path) -> Command {
     let mut command = Command::new(env!("CARGO"));
     command
         .current_dir(workspace)
-        .args(["build", "--locked", "-p", "rustc-codegen-fe2o3"]);
+        .args(["build", "--locked", "-p", "rustc-codegen-fe2o3"])
+        .arg("--target-dir")
+        .arg(target_dir);
+    command
+}
+
+fn backend(workspace: &Path, output: &TestOutputDir) -> PathBuf {
+    let target_dir = output.path.join("cargo-target");
+    let mut command = backend_build_command(workspace, &target_dir);
     let profile = if cfg!(debug_assertions) {
         "debug"
     } else {
@@ -72,12 +80,24 @@ fn backend(workspace: &Path) -> PathBuf {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    let dylib = workspace
-        .join("target")
-        .join(profile)
-        .join("librustc_codegen_fe2o3.so");
+    let dylib = target_dir.join(profile).join("librustc_codegen_fe2o3.so");
     assert!(dylib.is_file(), "missing backend at {}", dylib.display());
     dylib
+}
+
+#[test]
+fn backend_fixture_build_uses_an_isolated_target_directory() {
+    let workspace = workspace();
+    let output = TestOutputDir::new(&workspace);
+    let target_dir = output.path.join("cargo-target");
+    let command = backend_build_command(&workspace, &target_dir);
+    let args = command.get_args().collect::<Vec<_>>();
+
+    assert!(target_dir.starts_with(&output.path));
+    assert_ne!(target_dir, workspace.join("target"));
+    assert!(args.windows(2).any(|window| {
+        window[0] == std::ffi::OsStr::new("--target-dir") && window[1] == target_dir.as_os_str()
+    }));
 }
 
 fn compile_with_backend(
@@ -136,7 +156,7 @@ fn collector_authenticates_exact_roots_and_reachable_helpers_and_rejects_adversa
     let workspace = workspace();
     let fixtures = fixtures(&workspace);
     let output = TestOutputDir::new(&workspace);
-    let backend = backend(&workspace);
+    let backend = backend(&workspace, &output);
 
     for (fixture, crate_name, effectful) in [
         ("genuine.rs", "frontend_contract_genuine", false),
