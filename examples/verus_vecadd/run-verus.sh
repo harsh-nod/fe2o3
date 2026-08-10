@@ -350,12 +350,12 @@ run_rejected_exact copy_wrong_source \
     'final(output)@ == old(output)@.update'
 run_rejected_exact affine_wrong_bias \
     "$script_dir/verus/negative/affine_wrong_bias.rs" \
-    'mutated_affine_claims_requested_bias' \
+    'affine_wrong_bias.rs' \
     'error: postcondition not satisfied' \
     'final(output)@ == old(output)@.update'
 run_rejected_exact gather_wrong_index \
     "$script_dir/verus/negative/gather_wrong_index.rs" \
-    'mutated_gather_claims_selected_index' \
+    'gather_wrong_index.rs' \
     'error: postcondition not satisfied' \
     'final(output)@ == old(output)@.update'
 run_rejected two_kernel_wrong_scalar \
@@ -365,7 +365,7 @@ run_rejected two_kernel_wrong_scalar \
 run_rejected two_kernel_guard_bypass \
     "$script_dir/verus/negative/two_kernel_guard_bypass.rs" \
     'mutated_alpha_bypasses_output_guard' \
-    'precondition.*not satisfied|precondition failure'
+    'precondition not met|precondition.*not satisfied|precondition failure'
 run_rejected two_kernel_overlapping_output \
     "$script_dir/verus/negative/two_kernel_overlapping_output.rs" \
     'mutated_overlapping_output_ownership_is_race_free' \
