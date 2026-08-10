@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
+mod application_handoff;
 mod codec;
 mod compiler_transaction;
 mod compiler_transaction_recorder;
@@ -8,6 +9,12 @@ mod error;
 mod inputs;
 mod model;
 
+pub use application_handoff::{
+    ApplicationHandoffProtocolErrorV1, WORKER_V2_APPLICATION_HANDOFF_ACK_BYTES_V1,
+    WorkerV2ApplicationHandoffAckV1, WorkerV2ApplicationHandoffChallengeV1,
+    WorkerV2ApplicationHandoffCommitmentV1, WorkerV2ApplicationHandoffExpectationV1,
+    WorkerV2ApplicationIdentityV1,
+};
 pub use codec::{WORKER_V2_LOAD_ENVELOPE_MAGIC, WORKER_V2_LOAD_ENVELOPE_VERSION};
 pub use compiler_transaction::{
     CALLER_MEASURED_IDENTITY_ALGORITHM_V2, COMPILER_TRANSACTION_EVIDENCE_MAGIC_V2,
