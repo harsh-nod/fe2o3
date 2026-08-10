@@ -358,29 +358,55 @@ fn collector_resolves_concrete_instances_and_rejects_unavailable_mir_stably() {
 
 #[test]
 #[ignore = "requires a configured rustc backend"]
+fn collector_excludes_direct_monomorphized_const_branches() {
+    let workspace = workspace();
+    let fixtures = fixtures(&workspace);
+    let output = TestOutputDir::new(&workspace);
+    let backend = build_backend(&workspace);
+    let source = fixtures.join("dead-branches.rs");
+
+    for (configuration, function) in [
+        ("local_const_panic", "local_const_panic"),
+        ("local_const_unsupported", "local_const_unsupported"),
+    ] {
+        let result = compile_with_backend(
+            &source,
+            &format!("g2_{configuration}"),
+            &backend,
+            &output.path.join(configuration),
+            &[],
+            &["-Zmir-opt-level=0", "--cfg", configuration],
+        );
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        assert!(
+            !result.status.success() && stderr.contains("unsupported kernel shape"),
+            "fixture did not reach its expected post-collector ABI boundary:\n{stderr}"
+        );
+        let (decisions, excluded) = observation_counts(&stderr, function)
+            .unwrap_or_else(|| panic!("missing observation for `{function}`:\n{stderr}"));
+        assert_eq!(decisions, 1, "{configuration}:\n{stderr}");
+        assert!(excluded > 0, "{configuration}:\n{stderr}");
+        assert!(
+            !stderr.contains("device code reaches a panic path")
+                && !stderr.contains("indirect function-pointer calls are not permitted"),
+            "dead branch remained policy reachable for `{configuration}`:\n{stderr}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires a configured rustc backend"]
 fn collector_rejects_non_direct_constants_aliases_and_lookalikes() {
     let workspace = workspace();
     let fixtures = fixtures(&workspace);
     let output = TestOutputDir::new(&workspace);
     let backend = build_backend(&workspace);
     let source = fixtures.join("dead-branches.rs");
-    for (configuration, function, diagnostic) in [
-        (
-            "local_const_panic",
-            "local_const_panic",
-            "device code reaches a panic path",
-        ),
-        (
-            "local_const_unsupported",
-            "local_const_unsupported",
-            "indirect function-pointer calls are not permitted",
-        ),
-        (
-            "local_add_spoof",
-            "generic_add",
-            "indirect function-pointer calls are not permitted",
-        ),
-    ] {
+    for (configuration, function, diagnostic) in [(
+        "local_add_spoof",
+        "generic_add",
+        "indirect function-pointer calls are not permitted",
+    )] {
         let mut args = vec!["-Zmir-opt-level=0", "--cfg", configuration];
         if configuration == "local_add_spoof" {
             args.push("-Cpanic=abort");

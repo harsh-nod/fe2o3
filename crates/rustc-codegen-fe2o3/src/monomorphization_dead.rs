@@ -13,8 +13,10 @@ use fe2o3_rustc_front::{
 };
 use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
-use rustc_middle::mir::{Body, Operand, TerminatorKind};
-use rustc_middle::ty::{EarlyBinder, Instance, IntTy, TyCtxt, TyKind, TypingEnv, UintTy};
+use rustc_middle::mir::{Body, Operand, Rvalue, StatementKind, TerminatorKind};
+use rustc_middle::ty::{
+    ConstKind, EarlyBinder, Instance, IntTy, TyCtxt, TyKind, TypingEnv, UintTy,
+};
 use rustc_span::Span;
 use sha2::{Digest as _, Sha256};
 
@@ -22,6 +24,7 @@ const FUNCTION_IDENTITY_DOMAIN_V1: &[u8] = b"fe2o3.monomorphization-dead.functio
 const CFG_IDENTITY_DOMAIN_V1: &[u8] = b"fe2o3.monomorphization-dead.cfg.v1\0";
 const SOURCE_IDENTITY_DOMAIN_V1: &[u8] = b"fe2o3.monomorphization-dead.source.v1\0";
 const TARGET_IDENTITY_DOMAIN_V1: &[u8] = b"fe2o3.monomorphization-dead.target.v1\0";
+const MAX_LOCAL_CONST_SCAN_STATEMENTS_V1: usize = 4096;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CompilerDeadBranchObservationV1 {
@@ -56,7 +59,7 @@ impl CompilerDeadBranchObservationV1 {
             let TerminatorKind::SwitchInt { discr, targets } = &terminator.kind else {
                 continue;
             };
-            let Some(discriminant) = fixed_operand(tcx, instance, discr) else {
+            let Some(discriminant) = fixed_operand(tcx, instance, body, block, discr) else {
                 continue;
             };
             let branch_block = u32::try_from(block.as_usize())
@@ -180,12 +183,83 @@ impl std::error::Error for DeadBranchObservationError {}
 fn fixed_operand<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
+    body: &Body<'tcx>,
+    block: rustc_middle::mir::BasicBlock,
     operand: &Operand<'tcx>,
 ) -> Option<FixedWidthIntegerV1> {
-    let Operand::Constant(constant) = operand else {
+    match operand {
+        Operand::Constant(constant) => fixed_constant(tcx, instance, constant),
+        Operand::Copy(place) | Operand::Move(place) if place.projection.is_empty() => {
+            fixed_monomorphized_local(tcx, instance, body, block, place.local)
+        }
+        Operand::Copy(_) | Operand::Move(_) => None,
+        Operand::RuntimeChecks(_) => None,
+    }
+}
+
+fn fixed_monomorphized_local<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    body: &Body<'tcx>,
+    block: rustc_middle::mir::BasicBlock,
+    local: rustc_middle::mir::Local,
+) -> Option<FixedWidthIntegerV1> {
+    if local.as_usize() <= body.arg_count
+        || body
+            .basic_blocks
+            .iter()
+            .map(|data| data.statements.len())
+            .sum::<usize>()
+            > MAX_LOCAL_CONST_SCAN_STATEMENTS_V1
+    {
         return None;
-    };
-    fixed_constant(tcx, instance, constant)
+    }
+
+    let mut source = None;
+    for (candidate_block, data) in body.basic_blocks.iter_enumerated() {
+        for statement in &data.statements {
+            match &statement.kind {
+                StatementKind::Assign(assignment) => {
+                    let (destination, rvalue) = &**assignment;
+                    if rvalue_borrows_local(rvalue, local) {
+                        return None;
+                    }
+                    if destination.local != local {
+                        continue;
+                    }
+                    if !destination.projection.is_empty()
+                        || candidate_block != block
+                        || source.is_some()
+                    {
+                        return None;
+                    }
+                    let Rvalue::Use(Operand::Constant(constant)) = rvalue else {
+                        return None;
+                    };
+                    if !matches!(
+                        constant.const_,
+                        rustc_middle::mir::Const::Ty(_, value)
+                            if matches!(value.kind(), ConstKind::Param(_))
+                    ) {
+                        return None;
+                    }
+                    source = Some(constant);
+                }
+                StatementKind::SetDiscriminant { place, .. } if place.local == local => {
+                    return None;
+                }
+                _ => {}
+            }
+        }
+    }
+    fixed_constant(tcx, instance, source?)
+}
+
+fn rvalue_borrows_local(rvalue: &Rvalue<'_>, local: rustc_middle::mir::Local) -> bool {
+    matches!(
+        rvalue,
+        Rvalue::Ref(_, _, place) | Rvalue::RawPtr(_, place) if place.local == local
+    )
 }
 
 fn fixed_constant<'tcx>(
