@@ -338,6 +338,10 @@ fn translate_and_verify_with_float_target(
             function,
             &mut declarations,
             &internal_definitions,
+            launch_contracts
+                .get(function.export_name.as_str())
+                .copied()
+                .flatten(),
             float_target,
             strict_float_policy,
         )
@@ -517,6 +521,7 @@ enum LocalBinding {
         discriminant: ValueId,
     },
     DeviceMathCapability,
+    Gfx942CollectiveCapability,
     OptionPointer {
         discriminant: ValueId,
         payload: ValueId,
@@ -535,6 +540,7 @@ struct FunctionLowerer<'function, 'declarations> {
     return_type: Option<Type>,
     next_value: u32,
     trap_block: Option<BlockId>,
+    workgroup_size: Option<WorkgroupSize>,
     float_target: Option<Gfx942FloatTarget>,
     strict_float_policy: StrictFloatPolicy,
     control_flow_ssa: control_flow_ssa::ControlFlowSsaPlan,
@@ -546,6 +552,7 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
         function: &'function MirFunction,
         declarations: &'declarations mut BTreeMap<String, Signature>,
         internal_definitions: &'declarations BTreeMap<String, InternalDefinitionContract>,
+        workgroup_size: Option<WorkgroupSize>,
         float_target: Option<Gfx942FloatTarget>,
         strict_float_policy: StrictFloatPolicy,
     ) -> Self {
@@ -560,6 +567,7 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
             return_type: None,
             next_value: 0,
             trap_block: None,
+            workgroup_size,
             float_target,
             strict_float_policy,
             control_flow_ssa: control_flow_ssa::ControlFlowSsaPlan::default(),
@@ -719,7 +727,7 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
             blocks.push(block);
         }
 
-        Ok(match self.function.kind {
+        let mut definition = match self.function.kind {
             MirFunctionKind::KernelEntry => Function::kernel_entry(
                 self.function.rust_path.clone(),
                 signature,
@@ -738,7 +746,9 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 parameter_values,
                 blocks,
             ),
-        })
+        };
+        definition.required_capabilities = definition.derived_capabilities();
+        Ok(definition)
     }
 
     fn is_exact_general_v3_alpha_zeta_context(&self) -> bool {
@@ -775,6 +785,27 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
     }
     fn is_gfx942_memory_v1_context(&self) -> bool {
         self.is_general_v3_profile_context() && self.float_target.is_some()
+    }
+
+    fn gfx942_collective_workgroup_size(&self) -> Option<u32> {
+        let workgroup = self.workgroup_size?;
+        (self.is_general_v3_profile_context()
+            && self.float_target.is_some()
+            && workgroup.y == 1
+            && workgroup.z == 1
+            && workgroup.x != 0
+            && workgroup.x <= 256
+            && workgroup.x.is_power_of_two())
+        .then_some(workgroup.x)
+    }
+
+    fn is_gfx942_wave64_collective_context(&self) -> bool {
+        self.gfx942_collective_workgroup_size()
+            .is_some_and(|size| size.is_multiple_of(64))
+    }
+
+    fn is_gfx942_collective_v1_context(&self) -> bool {
+        self.gfx942_collective_workgroup_size().is_some()
     }
 
     fn lower_block(&mut self, source: &MirBlock) -> Result<BasicBlock, TranslationDiagnostic> {
@@ -910,12 +941,10 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 if matches!(
                     self.locals.get(&place.local),
                     Some(LocalBinding::DeviceMathCapability)
+                        | Some(LocalBinding::Gfx942CollectiveCapability)
                 ) {
-                    return self.bind_local(
-                        destination.local,
-                        LocalBinding::DeviceMathCapability,
-                        location,
-                    );
+                    let binding = self.locals[&place.local];
+                    return self.bind_local(destination.local, binding, location);
                 }
                 let value = self.plain_local(place.local, &location)?;
                 self.bind_plain_destination(destination, value, location)
@@ -954,7 +983,9 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 let discriminant = match binding {
                     LocalBinding::OptionPointer { discriminant, .. }
                     | LocalBinding::FieldlessEnum { discriminant } => discriminant,
-                    LocalBinding::Value(_) | LocalBinding::DeviceMathCapability => {
+                    LocalBinding::Value(_)
+                    | LocalBinding::DeviceMathCapability
+                    | LocalBinding::Gfx942CollectiveCapability => {
                         return Err(diagnostic(
                             TranslationDiagnosticCode::UnsupportedType,
                             location,
@@ -1511,7 +1542,11 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                         Type::pointer((*slice.element).clone(), slice.address_space, slice.access),
                     ]
                 }
-                Some(TrustedDeviceItem::DisjointSlice | TrustedDeviceItem::ThreadIndex) => {
+                Some(
+                    TrustedDeviceItem::DisjointSlice
+                    | TrustedDeviceItem::ThreadIndex
+                    | TrustedDeviceItem::Gfx942CollectivesContext,
+                ) => {
                     return Err(diagnostic(
                         TranslationDiagnosticCode::UnsupportedCall,
                         location,
@@ -1544,6 +1579,19 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     | TrustedDeviceItem::MemoryCopyNonOverlapping,
                 ) => {
                     unreachable!("memory operations are handled by semantic lowering")
+                }
+                Some(
+                    TrustedDeviceItem::Gfx942CollectivesFromCompiler
+                    | TrustedDeviceItem::Gfx942Wave64ReduceSum
+                    | TrustedDeviceItem::Gfx942Wave64InclusiveScanSum
+                    | TrustedDeviceItem::Gfx942Wave64ExclusiveScanSum
+                    | TrustedDeviceItem::Gfx942WorkgroupReduceSum
+                    | TrustedDeviceItem::Gfx942WorkgroupInclusiveScanSum
+                    | TrustedDeviceItem::Gfx942WorkgroupExclusiveScanSum
+                    | TrustedDeviceItem::Gfx942BarrierArrive
+                    | TrustedDeviceItem::Gfx942BarrierWait,
+                ) => {
+                    unreachable!("collective operations are handled by semantic lowering")
                 }
                 None => {
                     return Err(diagnostic(
@@ -2027,7 +2075,8 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 Some(
                     LocalBinding::OptionPointer { .. }
                     | LocalBinding::FieldlessEnum { .. }
-                    | LocalBinding::DeviceMathCapability,
+                    | LocalBinding::DeviceMathCapability
+                    | LocalBinding::Gfx942CollectiveCapability,
                 ) => Err(diagnostic(
                     TranslationDiagnosticCode::UnsupportedType,
                     location.clone(),
@@ -2076,7 +2125,8 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 Some(
                     LocalBinding::Value(_)
                     | LocalBinding::FieldlessEnum { .. }
-                    | LocalBinding::DeviceMathCapability,
+                    | LocalBinding::DeviceMathCapability
+                    | LocalBinding::Gfx942CollectiveCapability,
                 ) => Err(diagnostic(
                     TranslationDiagnosticCode::UnsupportedType,
                     location.clone(),
@@ -2315,7 +2365,8 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
             Some(
                 LocalBinding::OptionPointer { .. }
                 | LocalBinding::FieldlessEnum { .. }
-                | LocalBinding::DeviceMathCapability,
+                | LocalBinding::DeviceMathCapability
+                | LocalBinding::Gfx942CollectiveCapability,
             ) => Err(diagnostic(
                 TranslationDiagnosticCode::UnsupportedType,
                 location.clone(),
@@ -2338,13 +2389,15 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 | Some(LocalBinding::FieldlessEnum {
                     discriminant: value,
                 }) => Ok(value),
-                Some(LocalBinding::OptionPointer { .. } | LocalBinding::DeviceMathCapability) => {
-                    Err(diagnostic(
-                        TranslationDiagnosticCode::UnsupportedType,
-                        location.clone(),
-                        format!("local{local} is not a promotable scalar control-flow value"),
-                    ))
-                }
+                Some(
+                    LocalBinding::OptionPointer { .. }
+                    | LocalBinding::DeviceMathCapability
+                    | LocalBinding::Gfx942CollectiveCapability,
+                ) => Err(diagnostic(
+                    TranslationDiagnosticCode::UnsupportedType,
+                    location.clone(),
+                    format!("local{local} is not a promotable scalar control-flow value"),
+                )),
                 None => Err(self.undefined_local(*local, location.clone())),
             })
             .collect()

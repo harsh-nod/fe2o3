@@ -2833,11 +2833,16 @@ impl<'a> FunctionLowerer<'a> {
             }
             OperationKind::Intrinsic(intrinsic)
                 if self.kernel.is_some()
-                    && intrinsic.kind
-                        == (IntrinsicKind::InvocationIndex {
+                    && matches!(
+                        intrinsic.kind,
+                        IntrinsicKind::InvocationIndex {
                             kind: IndexKind::Global,
                             axis: Axis::X,
-                        }) => {}
+                        } | IntrinsicKind::InvocationIndex {
+                            kind: IndexKind::Local,
+                            axis: Axis::X,
+                        }
+                    ) => {}
             OperationKind::MemoryIntrinsic(intrinsic) => {
                 validate_memory_intrinsic(intrinsic, &location, self.target)?;
             }
@@ -2861,6 +2866,20 @@ impl<'a> FunctionLowerer<'a> {
                         location,
                         LoweringDiagnosticCode::UnsupportedOperation,
                         "G1 lowers only integer and boolean comparisons",
+                    ));
+                }
+            }
+            OperationKind::Select { true_value, .. } => {
+                let ty = self.value_type(*true_value);
+                if !ty.as_scalar().is_some_and(|scalar| {
+                    scalar == ScalarType::Bool
+                        || supported_integer(scalar)
+                        || scalar == ScalarType::F32
+                }) {
+                    return Err(LoweringErrors::one(
+                        location,
+                        LoweringDiagnosticCode::UnsupportedOperation,
+                        "G1 lowers select only for supported scalar values",
                     ));
                 }
             }
@@ -2987,7 +3006,6 @@ impl<'a> FunctionLowerer<'a> {
             }
             OperationKind::Intrinsic(_)
             | OperationKind::Unary { .. }
-            | OperationKind::Select { .. }
             | OperationKind::Alloca { .. } => {
                 return Err(LoweringErrors::one(
                     location,
@@ -3694,7 +3712,7 @@ impl<'a> FunctionLowerer<'a> {
                 )
                 .unwrap();
             }
-            OperationKind::Intrinsic(_) => {
+            OperationKind::Intrinsic(intrinsic) => {
                 let result = result_name.expect("validated result");
                 writeln!(
                     output,
@@ -3702,30 +3720,53 @@ impl<'a> FunctionLowerer<'a> {
                     AmdgcnIntrinsic::WorkItemId(Dim::X).llvm_name()
                 )
                 .unwrap();
-                writeln!(
-                    output,
-                    "  {result}.group.i32 = call i32 @{}()",
-                    AmdgcnIntrinsic::WorkGroupId(Dim::X).llvm_name()
-                )
-                .unwrap();
+                if matches!(
+                    intrinsic.kind,
+                    IntrinsicKind::InvocationIndex {
+                        kind: IndexKind::Global,
+                        axis: Axis::X,
+                    }
+                ) {
+                    writeln!(
+                        output,
+                        "  {result}.group.i32 = call i32 @{}()",
+                        AmdgcnIntrinsic::WorkGroupId(Dim::X).llvm_name()
+                    )
+                    .unwrap();
+                }
                 writeln!(
                     output,
                     "  {result}.local = zext i32 {result}.local.i32 to i64"
                 )
                 .unwrap();
-                writeln!(
-                    output,
-                    "  {result}.group = zext i32 {result}.group.i32 to i64"
-                )
-                .unwrap();
-                writeln!(
-                    output,
-                    "  {result}.base = mul i64 {result}.group, {}",
-                    self.workgroup_x
-                        .expect("global invocation index requires a kernel workgroup size")
-                )
-                .unwrap();
-                writeln!(output, "  {result} = add i64 {result}.base, {result}.local").unwrap();
+                match intrinsic.kind {
+                    IntrinsicKind::InvocationIndex {
+                        kind: IndexKind::Local,
+                        axis: Axis::X,
+                    } => {
+                        writeln!(output, "  {result} = add i64 {result}.local, 0").unwrap();
+                    }
+                    IntrinsicKind::InvocationIndex {
+                        kind: IndexKind::Global,
+                        axis: Axis::X,
+                    } => {
+                        writeln!(
+                            output,
+                            "  {result}.group = zext i32 {result}.group.i32 to i64"
+                        )
+                        .unwrap();
+                        writeln!(
+                            output,
+                            "  {result}.base = mul i64 {result}.group, {}",
+                            self.workgroup_x
+                                .expect("global invocation index requires a kernel workgroup size")
+                        )
+                        .unwrap();
+                        writeln!(output, "  {result} = add i64 {result}.base, {result}.local")
+                            .unwrap();
+                    }
+                    _ => unreachable!("preflight rejected unsupported intrinsic"),
+                }
             }
             OperationKind::MemoryIntrinsic(intrinsic) => self.emit_memory_intrinsic(
                 output,
@@ -3763,6 +3804,26 @@ impl<'a> FunctionLowerer<'a> {
                     llvm_type(lhs_ty),
                     lhs_name,
                     rhs_name
+                )
+                .unwrap();
+            }
+            OperationKind::Select {
+                condition,
+                true_value,
+                false_value,
+            } => {
+                let (condition_name, _) = self.value(*condition);
+                let (true_name, value_ty) = self.value(*true_value);
+                let (false_name, _) = self.value(*false_value);
+                writeln!(
+                    output,
+                    "  {} = select i1 {}, {} {}, {} {}",
+                    result_name.expect("validated result"),
+                    condition_name,
+                    llvm_type(value_ty),
+                    true_name,
+                    llvm_type(value_ty),
+                    false_name
                 )
                 .unwrap();
             }
@@ -4810,10 +4871,16 @@ fn supported_atomic_address_scope(
 }
 
 fn supported_binary(op: BinaryOp, ty: &Type) -> bool {
-    matches!(op, BinaryOp::Add | BinaryOp::Subtract | BinaryOp::Multiply)
-        && ty
-            .as_scalar()
-            .is_some_and(|scalar| supported_integer(scalar) || scalar == ScalarType::F32)
+    let Some(scalar) = ty.as_scalar() else {
+        return false;
+    };
+    match op {
+        BinaryOp::Add | BinaryOp::Subtract | BinaryOp::Multiply => {
+            supported_integer(scalar) || scalar == ScalarType::F32
+        }
+        BinaryOp::BitXor => supported_integer(scalar),
+        _ => false,
+    }
 }
 
 fn validate_pointer(
@@ -5180,6 +5247,7 @@ fn binary_opcode(op: BinaryOp, ty: &Type) -> &'static str {
         (BinaryOp::Add, false) => "add",
         (BinaryOp::Subtract, false) => "sub",
         (BinaryOp::Multiply, false) => "mul",
+        (BinaryOp::BitXor, false) => "xor",
         (BinaryOp::Add, true) => "fadd",
         (BinaryOp::Subtract, true) => "fsub",
         (BinaryOp::Multiply, true) => "fmul",

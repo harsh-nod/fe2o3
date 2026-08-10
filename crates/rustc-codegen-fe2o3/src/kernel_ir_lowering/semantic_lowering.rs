@@ -5,6 +5,7 @@
 //! compilation session and grants no proof, provider, or artifact authority.
 //! Feature modules must dispatch on it, never on diagnostic paths.
 
+mod collective_v1;
 mod control_flow;
 mod general_v3;
 mod memory_v1;
@@ -157,6 +158,11 @@ struct TerminatorHandler {
 }
 
 const CALL_HANDLERS: &[CallHandler] = &[
+    CallHandler {
+        name: "gfx942-collective-v1",
+        claim: collective_v1::claim_call,
+        lower: collective_v1::lower_call,
+    },
     CallHandler {
         name: "gfx942-memory-v1",
         claim: memory_v1::claim_call,

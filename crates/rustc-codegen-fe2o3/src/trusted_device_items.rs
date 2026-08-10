@@ -48,6 +48,16 @@ pub(crate) enum TrustedDeviceItem {
     MemoryVolatileLoad,
     MemoryVolatileStore,
     MemoryCopyNonOverlapping,
+    Gfx942CollectivesContext,
+    Gfx942CollectivesFromCompiler,
+    Gfx942Wave64ReduceSum,
+    Gfx942Wave64InclusiveScanSum,
+    Gfx942Wave64ExclusiveScanSum,
+    Gfx942WorkgroupReduceSum,
+    Gfx942WorkgroupInclusiveScanSum,
+    Gfx942WorkgroupExclusiveScanSum,
+    Gfx942BarrierArrive,
+    Gfx942BarrierWait,
     DeviceValue(DeviceValueDiagnosticItem),
     DeviceMath(DeviceMathDiagnosticItem),
     HalfOperation(TrustedHalfOperation),
@@ -123,6 +133,56 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         TrustedDeviceItem::MemoryCopyNonOverlapping,
         "fe2o3_device_memory_copy_nonoverlapping_v1",
         "fe2o3_device::memory::copy_nonoverlapping",
+    ),
+    (
+        TrustedDeviceItem::Gfx942CollectivesContext,
+        "fe2o3_device_gfx942_collectives_context_v1",
+        "fe2o3_device::Gfx942Collectives",
+    ),
+    (
+        TrustedDeviceItem::Gfx942CollectivesFromCompiler,
+        "fe2o3_device_gfx942_collectives_from_compiler_v1",
+        "fe2o3_device::Gfx942Collectives::from_compiler",
+    ),
+    (
+        TrustedDeviceItem::Gfx942Wave64ReduceSum,
+        "fe2o3_device_gfx942_wave64_reduce_sum_v1",
+        "fe2o3_device::SubgroupTile::<64>::reduce_sum",
+    ),
+    (
+        TrustedDeviceItem::Gfx942Wave64InclusiveScanSum,
+        "fe2o3_device_gfx942_wave64_inclusive_scan_sum_v1",
+        "fe2o3_device::SubgroupTile::<64>::inclusive_scan_sum",
+    ),
+    (
+        TrustedDeviceItem::Gfx942Wave64ExclusiveScanSum,
+        "fe2o3_device_gfx942_wave64_exclusive_scan_sum_v1",
+        "fe2o3_device::SubgroupTile::<64>::exclusive_scan_sum",
+    ),
+    (
+        TrustedDeviceItem::Gfx942WorkgroupReduceSum,
+        "fe2o3_device_gfx942_workgroup_reduce_sum_v1",
+        "fe2o3_device::Workgroup::reduce_sum",
+    ),
+    (
+        TrustedDeviceItem::Gfx942WorkgroupInclusiveScanSum,
+        "fe2o3_device_gfx942_workgroup_inclusive_scan_sum_v1",
+        "fe2o3_device::Workgroup::inclusive_scan_sum",
+    ),
+    (
+        TrustedDeviceItem::Gfx942WorkgroupExclusiveScanSum,
+        "fe2o3_device_gfx942_workgroup_exclusive_scan_sum_v1",
+        "fe2o3_device::Workgroup::exclusive_scan_sum",
+    ),
+    (
+        TrustedDeviceItem::Gfx942BarrierArrive,
+        "fe2o3_device_gfx942_barrier_arrive_v1",
+        "fe2o3_device::sync::gfx942_barrier_arrive",
+    ),
+    (
+        TrustedDeviceItem::Gfx942BarrierWait,
+        "fe2o3_device_gfx942_barrier_wait_v1",
+        "fe2o3_device::sync::gfx942_barrier_wait",
     ),
 ];
 
@@ -379,6 +439,16 @@ mod tests {
             TrustedDeviceItem::MemoryVolatileLoad,
             TrustedDeviceItem::MemoryVolatileStore,
             TrustedDeviceItem::MemoryCopyNonOverlapping,
+            TrustedDeviceItem::Gfx942CollectivesContext,
+            TrustedDeviceItem::Gfx942CollectivesFromCompiler,
+            TrustedDeviceItem::Gfx942Wave64ReduceSum,
+            TrustedDeviceItem::Gfx942Wave64InclusiveScanSum,
+            TrustedDeviceItem::Gfx942Wave64ExclusiveScanSum,
+            TrustedDeviceItem::Gfx942WorkgroupReduceSum,
+            TrustedDeviceItem::Gfx942WorkgroupInclusiveScanSum,
+            TrustedDeviceItem::Gfx942WorkgroupExclusiveScanSum,
+            TrustedDeviceItem::Gfx942BarrierArrive,
+            TrustedDeviceItem::Gfx942BarrierWait,
         ];
 
         let paths = items.map(TrustedDeviceItem::canonical_path);

@@ -164,6 +164,40 @@ impl<'workgroup> ManagedBarrier<'workgroup, Gfx942, BarrierReady, 0> {
         unsafe { syncthreads() };
         self
     }
+
+    /// Begins a gfx942 deferred full-workgroup synchronization epoch.
+    ///
+    /// gfx942 has no physical split/named-barrier instruction. This operation
+    /// therefore performs the release half only. Every participating work-item
+    /// must later call `ManagedBarrier::wait`, which executes the physical
+    /// full-workgroup barrier and acquire half. Producer/consumer subsets and
+    /// work-items that arrive without waiting are not supported.
+    ///
+    /// # Safety
+    ///
+    /// All declared participants must execute this call and its matching wait
+    /// in uniform dynamic order.
+    pub unsafe fn arrive(self) -> ManagedBarrier<'workgroup, Gfx942, BarrierPending, 0> {
+        // SAFETY: the caller establishes the uniform full-workgroup epoch.
+        unsafe { gfx942_barrier_arrive() };
+        let participants = self.participants;
+        self.transition(participants)
+    }
+}
+
+impl<'workgroup> ManagedBarrier<'workgroup, Gfx942, BarrierPending, 0> {
+    /// Completes a gfx942 deferred full-workgroup synchronization epoch.
+    ///
+    /// # Safety
+    ///
+    /// Every declared participant must have executed the matching arrival and
+    /// must execute this wait in uniform dynamic order.
+    pub unsafe fn wait(self) -> ManagedBarrier<'workgroup, Gfx942, BarrierReady, 0> {
+        // SAFETY: the caller establishes the uniform full-workgroup epoch.
+        unsafe { gfx942_barrier_wait() };
+        let participants = self.participants;
+        self.transition(participants)
+    }
 }
 
 impl<'workgroup, Target, const SLOT: u8> ManagedBarrier<'workgroup, Target, BarrierReady, SLOT>
@@ -234,6 +268,28 @@ unsafe fn split_barrier_arrive(_slot: u8) {
 #[inline(never)]
 unsafe fn split_barrier_wait(_slot: u8) {
     unreachable!("split barrier wait must be lowered by a supported fe2o3 backend")
+}
+
+/// Emits the release half of the bounded gfx942 deferred barrier profile.
+///
+/// The fe2o3 backend recognizes this exact diagnostic item. It remains
+/// fail-closed on hosts and unsupported compiler paths.
+#[doc(hidden)]
+#[inline(never)]
+#[rustc_diagnostic_item = "fe2o3_device_gfx942_barrier_arrive_v1"]
+pub unsafe fn gfx942_barrier_arrive() {
+    unreachable!("gfx942 barrier arrival must be lowered by the fe2o3 backend")
+}
+
+/// Emits the physical barrier and acquire half of the bounded gfx942 profile.
+///
+/// The fe2o3 backend recognizes this exact diagnostic item. It remains
+/// fail-closed on hosts and unsupported compiler paths.
+#[doc(hidden)]
+#[inline(never)]
+#[rustc_diagnostic_item = "fe2o3_device_gfx942_barrier_wait_v1"]
+pub unsafe fn gfx942_barrier_wait() {
+    unreachable!("gfx942 barrier wait must be lowered by the fe2o3 backend")
 }
 
 /// Executes one uniform workgroup barrier with acquire-release ordering over
