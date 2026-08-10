@@ -336,6 +336,138 @@ set_gate_args partial.tsv "${TEST_ROOT}/partial.tsv"
 "${TOOL}" "${gate_args[@]}"
 expect_failure test_domain 'production promotion requires a production trust domain' "${TOOL}" "${gate_args[@]:0:${#gate_args[@]}-1}"
 
+TRANSACTION="${TEST_ROOT}/partial-projection.tsv"
+ARCHIVE_CLOSURE="${TEST_ROOT}/partial-archive-closure.tsv"
+"${TOOL}" "${gate_args[@]}" \
+  --projection-output "${TRANSACTION}" \
+  --archive-closure-output "${ARCHIVE_CLOSURE}"
+partial_evidence_set="$(awk -F '\t' '$1 == "evidence_set_sha256" { print $2 }' "${ARCHIVE}/partial.tsv")"
+cat >"${TEST_ROOT}/expected-partial-projection.tsv" <<EOF
+signed_promotion_projection_schema_version	1
+row_count	1
+row	0000	04	Missing	Partial	${SOURCE}	gfx942	mi300x-gfx942-test	unit,ui	bash	results/partial-unit-Partial-unit.tsv,results/partial-ui-Partial-ui.tsv	${partial_evidence_set}
+EOF
+cmp -- "${TEST_ROOT}/expected-partial-projection.tsv" "${TRANSACTION}"
+{
+  printf 'promotion_archive_closure_schema_version\t1\n'
+  printf 'evidence_set_sha256\t%s\n' "${partial_evidence_set}"
+  printf 'manifest_path\tpartial.tsv\n'
+  printf 'manifest_sha256\t%s\n' "$(file_sha "${ARCHIVE}/partial.tsv")"
+  printf 'file_count\t6\n'
+  index=0
+  for path in \
+    logs/partial-ui.log \
+    logs/partial-unit.log \
+    partial.tsv \
+    results/partial-ui-Partial-ui.tsv \
+    results/partial-unit-Partial-unit.tsv \
+    toolchains/bash.tsv; do
+    printf 'file\t%04d\t%s\t%s\t%s\n' "${index}" "${path}" \
+      "$(file_size "${ARCHIVE}/${path}")" "$(file_sha "${ARCHIVE}/${path}")"
+    ((index += 1))
+  done
+} >"${TEST_ROOT}/expected-partial-archive-closure.tsv"
+cmp -- "${TEST_ROOT}/expected-partial-archive-closure.tsv" "${ARCHIVE_CLOSURE}"
+expect_failure projection_overwrite 'promotion transaction projection output already exists' \
+  "${TOOL}" "${gate_args[@]}" \
+    --projection-output "${TRANSACTION}" \
+    --archive-closure-output "${ARCHIVE_CLOSURE}"
+expect_failure unpaired_closure \
+  'promotion archive closure output requires a projection output' \
+  "${TOOL}" "${gate_args[@]}" \
+    --archive-closure-output "${TEST_ROOT}/unpaired-closure.tsv"
+printf 'signed_promotion_projection_schema_version\t1\nrow_count\t0\n' \
+  >"${TEST_ROOT}/empty-projection.tsv"
+"${TOOL}" merge-projections \
+  --baseline "${TEST_ROOT}/empty-projection.tsv" \
+  --transaction "${TRANSACTION}" \
+  --output "${TEST_ROOT}/merged-projection.tsv"
+cmp -- "${TRANSACTION}" "${TEST_ROOT}/merged-projection.tsv"
+cp "${TRANSACTION}" "${TEST_ROOT}/history-mismatch.tsv"
+awk -F '\t' -v OFS='\t' '$1 == "row" { $5 = "Complete" } { print }' "${TEST_ROOT}/history-mismatch.tsv" >"${TEST_ROOT}/history-mismatch.tmp"
+mv "${TEST_ROOT}/history-mismatch.tmp" "${TEST_ROOT}/history-mismatch.tsv"
+expect_failure projection_history 'promotion projection history mismatch for row 04' \
+  "${TOOL}" merge-projections \
+    --baseline "${TRANSACTION}" \
+    --transaction "${TEST_ROOT}/history-mismatch.tsv" \
+    --output "${TEST_ROOT}/history-output.tsv"
+
+# Manifest selection is append-only, content-addressed, and derived from the
+# protected/candidate archive delta rather than caller-provided input.
+MANIFEST_BASE="${TEST_ROOT}/manifest-base"
+MANIFEST_FIRST="${TEST_ROOT}/manifest-first"
+MANIFEST_SECOND="${TEST_ROOT}/manifest-second"
+mkdir -p "${MANIFEST_BASE}/manifests"
+cp -a "${MANIFEST_BASE}" "${MANIFEST_FIRST}"
+printf 'first promotion manifest\n' >"${MANIFEST_FIRST}/manifests/new.tsv"
+first_manifest_digest="$(file_sha "${MANIFEST_FIRST}/manifests/new.tsv")"
+first_manifest="manifests/promotion-${first_manifest_digest}.tsv"
+mv "${MANIFEST_FIRST}/manifests/new.tsv" "${MANIFEST_FIRST}/${first_manifest}"
+[[ "$("${TOOL}" derive-promotion-manifest \
+  --protected-archive "${MANIFEST_BASE}" \
+  --candidate-archive "${MANIFEST_FIRST}")" == "${first_manifest}" ]]
+
+cp -a "${MANIFEST_FIRST}" "${MANIFEST_SECOND}"
+printf 'second promotion manifest\n' >"${MANIFEST_SECOND}/manifests/new.tsv"
+second_manifest_digest="$(file_sha "${MANIFEST_SECOND}/manifests/new.tsv")"
+second_manifest="manifests/promotion-${second_manifest_digest}.tsv"
+mv "${MANIFEST_SECOND}/manifests/new.tsv" "${MANIFEST_SECOND}/${second_manifest}"
+[[ "$("${TOOL}" derive-promotion-manifest \
+  --protected-archive "${MANIFEST_FIRST}" \
+  --candidate-archive "${MANIFEST_SECOND}")" == "${second_manifest}" ]]
+cmp "${MANIFEST_FIRST}/${first_manifest}" "${MANIFEST_SECOND}/${first_manifest}"
+
+expect_failure manifest_replay \
+  'promotion requires exactly one newly appended manifest: found 0' \
+  "${TOOL}" derive-promotion-manifest \
+    --protected-archive "${MANIFEST_FIRST}" \
+    --candidate-archive "${MANIFEST_FIRST}"
+
+MANIFEST_SUBSTITUTED="${TEST_ROOT}/manifest-substituted"
+cp -a "${MANIFEST_BASE}" "${MANIFEST_SUBSTITUTED}"
+printf 'named manifest\n' >"${MANIFEST_SUBSTITUTED}/manifests/new.tsv"
+substituted_digest="$(file_sha "${MANIFEST_SUBSTITUTED}/manifests/new.tsv")"
+substituted_manifest="manifests/promotion-${substituted_digest}.tsv"
+mv "${MANIFEST_SUBSTITUTED}/manifests/new.tsv" \
+  "${MANIFEST_SUBSTITUTED}/${substituted_manifest}"
+printf 'substitution\n' >>"${MANIFEST_SUBSTITUTED}/${substituted_manifest}"
+expect_failure manifest_substitution \
+  'new promotion manifest digest does not match its path' \
+  "${TOOL}" derive-promotion-manifest \
+    --protected-archive "${MANIFEST_BASE}" \
+    --candidate-archive "${MANIFEST_SUBSTITUTED}"
+
+MANIFEST_AMBIGUOUS="${TEST_ROOT}/manifest-ambiguous"
+cp -a "${MANIFEST_BASE}" "${MANIFEST_AMBIGUOUS}"
+for value in first second; do
+  printf '%s ambiguous manifest\n' "${value}" >"${MANIFEST_AMBIGUOUS}/manifests/new.tsv"
+  digest="$(file_sha "${MANIFEST_AMBIGUOUS}/manifests/new.tsv")"
+  mv "${MANIFEST_AMBIGUOUS}/manifests/new.tsv" \
+    "${MANIFEST_AMBIGUOUS}/manifests/promotion-${digest}.tsv"
+done
+expect_failure manifest_ambiguity \
+  'promotion requires exactly one newly appended manifest: found 2' \
+  "${TOOL}" derive-promotion-manifest \
+    --protected-archive "${MANIFEST_BASE}" \
+    --candidate-archive "${MANIFEST_AMBIGUOUS}"
+
+MANIFEST_HISTORY="${TEST_ROOT}/manifest-history"
+cp -a "${MANIFEST_FIRST}" "${MANIFEST_HISTORY}"
+printf 'mutated history\n' >>"${MANIFEST_HISTORY}/${first_manifest}"
+expect_failure manifest_history_mutation \
+  "candidate mutated protected evidence file: ${first_manifest}" \
+  "${TOOL}" derive-promotion-manifest \
+    --protected-archive "${MANIFEST_FIRST}" \
+    --candidate-archive "${MANIFEST_HISTORY}"
+rm -rf "${MANIFEST_HISTORY}"
+cp -a "${MANIFEST_FIRST}" "${MANIFEST_HISTORY}"
+rm "${MANIFEST_HISTORY}/${first_manifest}"
+expect_failure manifest_history_deletion \
+  "candidate mutated protected evidence file: ${first_manifest}" \
+  "${TOOL}" derive-promotion-manifest \
+    --protected-archive "${MANIFEST_FIRST}" \
+    --candidate-archive "${MANIFEST_HISTORY}"
+
 for class in unit ui ir compile; do
   write_result "${class}" Complete >/dev/null
 done
@@ -347,6 +479,22 @@ mv "${ARCHIVE}/complete-prefix.tsv" "${ARCHIVE}/complete.tsv"
 finish_manifest "${ARCHIVE}/complete.tsv" authorizations/review.tsv
 set_gate_args complete.tsv "${TEST_ROOT}/complete.tsv" "${TEST_ROOT}/baseline-partial.tsv"
 "${TOOL}" "${gate_args[@]}"
+COMPLETE_TRANSACTION="${TEST_ROOT}/complete-projection.tsv"
+COMPLETE_ARCHIVE_CLOSURE="${TEST_ROOT}/complete-archive-closure.tsv"
+"${TOOL}" "${gate_args[@]}" \
+  --projection-output "${COMPLETE_TRANSACTION}" \
+  --archive-closure-output "${COMPLETE_ARCHIVE_CLOSURE}"
+for path in \
+  authorizations/review.tsv \
+  artifacts/complete-compile.bin \
+  complete.tsv \
+  results/complete-compile-Complete-compile.tsv; do
+  awk -F '\t' -v path="${path}" -v size="$(file_size "${ARCHIVE}/${path}")" \
+    -v digest="$(file_sha "${ARCHIVE}/${path}")" '
+      $1 == "file" && $3 == path && $4 == size && $5 == digest { found++ }
+      END { exit found == 1 ? 0 : 1 }
+    ' "${COMPLETE_ARCHIVE_CLOSURE}"
+done
 
 # Signature mutation.
 cp "${ARCHIVE}/results/partial-unit-Partial-unit.tsv" "${ARCHIVE}/results/signature-mutated.tsv"
@@ -425,9 +573,13 @@ cp "${TRUSTED}/keys/reviewer.pem" "${TRUST_OLD}/keys/reviewer.pem"
 {
   printf 'parity_trust_policy_schema_version\t2\n'
   printf 'trust_domain\tproduction\n'
-  printf 'metadata_path_count\t2\n'
-  printf 'metadata_path\t0000\texact\tdocs/cuda-oxide-parity-status.tsv\n'
-  printf 'metadata_path\t0001\tprefix\tdocs/parity-evidence/archive/\n'
+  printf 'metadata_path_count\t6\n'
+  printf 'metadata_path\t0000\texact\tdocs/cuda-oxide-parity-matrix.md\n'
+  printf 'metadata_path\t0001\texact\tdocs/cuda-oxide-parity-status.tsv\n'
+  printf 'metadata_path\t0002\texact\tdocs/generated/cuda-oxide-parity-dashboard.md\n'
+  printf 'metadata_path\t0003\texact\tdocs/generated/cuda-oxide-parity-dashboard.tsv\n'
+  printf 'metadata_path\t0004\texact\tdocs/generated/cuda-oxide-parity-signed-promotions.tsv\n'
+  printf 'metadata_path\t0005\tprefix\tdocs/parity-evidence/archive/\n'
   printf 'key_count\t2\n'
   printf 'key\t0000\tattestor\tproduction-attestor\tkeys/attestor.pem\t%s\ted25519\n' "$(file_sha "${TRUST_OLD}/keys/attestor.pem")"
   printf 'key\t0001\treviewer\tproduction-reviewer\tkeys/reviewer.pem\t%s\ted25519\n' "$(file_sha "${TRUST_OLD}/keys/reviewer.pem")"
@@ -449,6 +601,33 @@ trust_update_args=(
   --candidate-row-policy "${TRUST_CANDIDATE}/row-policy.tsv"
 )
 "${TOOL}" "${trust_update_args[@]}"
+
+TRUST_PREACTIVATION="${TEST_ROOT}/trust-preactivation"
+mkdir -p "${TRUST_PREACTIVATION}"
+cp "${TRUST_OLD}/row-policy.tsv" "${TRUST_PREACTIVATION}/row-policy.tsv"
+"${TOOL}" check-trust-update \
+  --protected-root "${TRUST_PREACTIVATION}" \
+  --protected-policy "${TRUST_PREACTIVATION}/missing-trust.tsv" \
+  --protected-row-policy "${TRUST_PREACTIVATION}/row-policy.tsv" \
+  --candidate-root "${TRUST_CANDIDATE}" \
+  --candidate-policy "${TRUST_CANDIDATE}/trust.tsv" \
+  --candidate-row-policy "${TRUST_CANDIDATE}/row-policy.tsv"
+cp -a "${TRUST_CANDIDATE}" "${TEST_ROOT}/legacy-activation"
+awk -F '\t' -v OFS='\t' '
+  $1 == "metadata_path_count" { $2 = 2 }
+  $1 == "metadata_path" && $4 == "docs/cuda-oxide-parity-status.tsv" { $2 = "0000"; print; next }
+  $1 == "metadata_path" && $4 == "docs/parity-evidence/archive/" { $2 = "0001"; print; next }
+  $1 != "metadata_path" { print }
+' "${TEST_ROOT}/legacy-activation/trust.tsv" >"${TEST_ROOT}/legacy-activation/trust.tmp"
+mv "${TEST_ROOT}/legacy-activation/trust.tmp" "${TEST_ROOT}/legacy-activation/trust.tsv"
+expect_failure legacy_activation 'initial trust policy activation has a non-canonical metadata allowlist' \
+  "${TOOL}" check-trust-update \
+    --protected-root "${TRUST_PREACTIVATION}" \
+    --protected-policy "${TRUST_PREACTIVATION}/missing-trust.tsv" \
+    --protected-row-policy "${TRUST_PREACTIVATION}/row-policy.tsv" \
+    --candidate-root "${TEST_ROOT}/legacy-activation" \
+    --candidate-policy "${TEST_ROOT}/legacy-activation/trust.tsv" \
+    --candidate-row-policy "${TEST_ROOT}/legacy-activation/row-policy.tsv"
 
 sed -i 's/^row_count\t2$/row_count\t1/' "${TRUST_CANDIDATE}/row-policy.tsv"
 sed -i '/^row\t0001\t05\t/d' "${TRUST_CANDIDATE}/row-policy.tsv"
