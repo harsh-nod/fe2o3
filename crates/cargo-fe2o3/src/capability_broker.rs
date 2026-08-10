@@ -14,9 +14,15 @@
 //! hostile build script can deliberately replay the wrapper, and a procedural macro executes
 //! inside rustc after the descriptors are installed. Both are trusted by this design. The
 //! directory is opened `O_RDONLY`, but still grants descriptor-relative namespace mutation. The
-//! route is inherited by trusted Cargo children and is therefore not a sandbox boundary against
-//! hostile same-user project code that can read or rewrite another child's environment or ptrace
-//! the broker. Untrusted build dependencies require a separate process sandbox.
+//! receiver treats that route as untrusted: before connecting, it independently observes its own
+//! running `cargo-fe2o3` image and requires the advertised broker to have the same uid, executable
+//! object, and bytes. This closes a self-consistent route redirected to an arbitrary mock
+//! executable. A substitute running the same executable object and bytes remains inside the
+//! executable-authentication boundary, but it has no public broker-server entry point and must
+//! still possess the fresh build session and per-broker secret. The route is inherited by trusted
+//! Cargo children and is therefore not a sandbox boundary against hostile same-user project code
+//! that can read or rewrite another child's environment or ptrace the broker. Untrusted build
+//! dependencies require a separate process sandbox.
 
 #[cfg(target_os = "linux")]
 mod platform {
@@ -42,7 +48,7 @@ mod platform {
     use sha2::{Digest, Sha256};
 
     use crate::pinned_codegen_backend::PinnedCodegenBackend;
-    use crate::pinned_executable::PinnedExecutable;
+    use crate::pinned_executable::{PinExecutableError, PinnedExecutable};
     use crate::project::PinnedDirectory;
 
     pub(crate) const CAPABILITY_BROKER_ENV: &str = "FE2O3_CAPABILITY_BROKER_V1";
@@ -62,6 +68,7 @@ mod platform {
     const REQUEST_AUTH_DOMAIN: &[u8] = b"FE2O3/CAPABILITY-BROKER/REQUEST-AUTH/V2\0";
     const RESPONSE_AUTH_DOMAIN: &[u8] = b"FE2O3/CAPABILITY-BROKER/RESPONSE-AUTH/V2\0";
     const MAX_PROC_STAT_BYTES: usize = 4096;
+    const EXECUTABLE_PIN_ATTEMPTS: usize = 8;
     const RECEIVED_DESCRIPTOR_FLOOR: i32 = 199;
     const BROKER_IO_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -143,14 +150,9 @@ mod platform {
 
     impl BrokerPeerIdentityV2 {
         fn current() -> Result<Self, String> {
-            let executable = std::env::current_exe()
-                .map_err(|error| format!("cannot resolve current broker executable: {error}"))?;
-            let metadata = fs::metadata(&executable)
-                .map_err(|error| format!("cannot inspect current broker executable: {error}"))?;
-            let pinned = PinnedExecutable::open(&executable)
-                .map_err(|error| format!("cannot pin current broker executable: {error}"))?;
             let pid = std::process::id();
             let start_time_ticks = process_start_time_ticks(pid)?;
+            let (pinned, metadata) = pin_process_executable(pid)?;
             let identity = Self {
                 uid: unsafe { libc::geteuid() },
                 pid,
@@ -160,9 +162,6 @@ mod platform {
                 mode: metadata.mode(),
                 executable_sha256: *pinned.sha256(),
             };
-            if pinned.object_identity() != identity.object_identity() {
-                return Err("current broker executable object changed while pinning".into());
-            }
             if process_start_time_ticks(pid)? != start_time_ticks {
                 return Err("current broker process identity changed while pinning".into());
             }
@@ -171,6 +170,19 @@ mod platform {
 
         const fn object_identity(self) -> LinuxObjectIdentityV3 {
             LinuxObjectIdentityV3::from_linux_stat(self.device, self.inode, self.mode)
+        }
+
+        fn require_same_executable(self, current: Self) -> Result<(), String> {
+            if self.uid != current.uid
+                || self.object_identity() != current.object_identity()
+                || self.executable_sha256 != current.executable_sha256
+            {
+                return Err(
+                    "capability broker route does not name the current cargo-fe2o3 executable"
+                        .into(),
+                );
+            }
+            Ok(())
         }
 
         fn authenticate(self, stream: &UnixStream) -> Result<(), String> {
@@ -191,14 +203,7 @@ mod platform {
                     "capability broker peer start time does not match the prepared route".into(),
                 );
             }
-            let executable_path = PathBuf::from(format!("/proc/{peer_pid}/exe"));
-            let executable_file = File::open(&executable_path).map_err(|error| {
-                format!("cannot open capability broker peer executable: {error}")
-            })?;
-            let pinned = PinnedExecutable::from_transferred_file(executable_file, executable_path)
-                .map_err(|error| {
-                    format!("cannot pin capability broker peer executable: {error}")
-                })?;
+            let (pinned, _) = pin_process_executable(peer_pid)?;
             let final_start = process_start_time_ticks(peer_pid)?;
             if final_start != initial_start {
                 return Err("capability broker peer PID was reused while authenticating".into());
@@ -220,14 +225,7 @@ mod platform {
                 return Err("capability broker client uid does not match the broker".into());
             }
             let initial_start = process_start_time_ticks(client_pid)?;
-            let executable_path = PathBuf::from(format!("/proc/{client_pid}/exe"));
-            let executable_file = File::open(&executable_path).map_err(|error| {
-                format!("cannot open capability broker client executable: {error}")
-            })?;
-            let pinned = PinnedExecutable::from_transferred_file(executable_file, executable_path)
-                .map_err(|error| {
-                    format!("cannot pin capability broker client executable: {error}")
-                })?;
+            let (pinned, _) = pin_process_executable(client_pid)?;
             if process_start_time_ticks(client_pid)? != initial_start {
                 return Err("capability broker client PID was reused while authenticating".into());
             }
@@ -426,6 +424,8 @@ mod platform {
                     .into(),
             );
         }
+        let current = BrokerPeerIdentityV2::current()?;
+        route.peer.require_same_executable(current)?;
         let address = endpoint_address(&route.endpoint)?;
         let mut stream = UnixStream::connect_addr(&address)
             .map_err(|error| format!("failed to connect to capability broker: {error}"))?;
@@ -719,6 +719,50 @@ mod platform {
             .and_then(|value| value.parse::<u64>().ok())
             .filter(|value| *value != 0)
             .ok_or_else(|| "broker process stat has no valid start-time field".to_owned())
+    }
+
+    fn pin_process_executable(pid: u32) -> Result<(PinnedExecutable, fs::Metadata), String> {
+        let path = PathBuf::from(format!("/proc/{pid}/exe"));
+        for attempt in 0..EXECUTABLE_PIN_ATTEMPTS {
+            let file = File::open(&path).map_err(|error| {
+                format!(
+                    "cannot open broker process executable {}: {error}",
+                    path.display()
+                )
+            })?;
+            let metadata = file.metadata().map_err(|error| {
+                format!(
+                    "cannot inspect broker process executable {}: {error}",
+                    path.display()
+                )
+            })?;
+            match PinnedExecutable::from_transferred_file(file, path.clone()) {
+                Ok(pinned) => {
+                    if pinned.object_identity()
+                        != LinuxObjectIdentityV3::from_linux_stat(
+                            metadata.dev(),
+                            metadata.ino(),
+                            metadata.mode(),
+                        )
+                    {
+                        return Err("broker process executable object changed while pinning".into());
+                    }
+                    return Ok((pinned, metadata));
+                }
+                Err(PinExecutableError::ChangedDuringRead { .. })
+                    if attempt + 1 < EXECUTABLE_PIN_ATTEMPTS =>
+                {
+                    thread::yield_now();
+                }
+                Err(error) => {
+                    return Err(format!(
+                        "cannot pin broker process executable {}: {error}",
+                        path.display()
+                    ));
+                }
+            }
+        }
+        unreachable!("executable pin retries either return or report their final error")
     }
 
     fn decode_fixed_hex<const N: usize>(value: &str, label: &str) -> Result<[u8; N], String> {
@@ -1016,6 +1060,40 @@ mod platform {
 
             assert!(receive_from(&route, session, ordinary_binding()).is_err());
             mock.join().unwrap();
+        }
+
+        #[test]
+        fn self_consistent_arbitrary_executable_route_is_rejected_before_connect() {
+            let (_temp, _backend, _artifact, _pinned_cargo_image, session) = fixture();
+            let mut mock = std::process::Command::new("/bin/sleep")
+                .arg("30")
+                .spawn()
+                .unwrap();
+            let mock_pid = mock.id();
+            let mock_start_time = process_start_time_ticks(mock_pid).unwrap();
+            let (mock_image, mock_metadata) = pin_process_executable(mock_pid).unwrap();
+            let route = BrokerRouteV2 {
+                endpoint: random_endpoint().unwrap(),
+                secret: random_bytes().unwrap(),
+                binding: ordinary_binding(),
+                peer: BrokerPeerIdentityV2 {
+                    uid: unsafe { libc::geteuid() },
+                    pid: mock_pid,
+                    start_time_ticks: mock_start_time,
+                    device: mock_metadata.dev(),
+                    inode: mock_metadata.ino(),
+                    mode: mock_metadata.mode(),
+                    executable_sha256: *mock_image.sha256(),
+                },
+            };
+
+            let result = receive_from(&route, session, ordinary_binding());
+            mock.kill().unwrap();
+            mock.wait().unwrap();
+            let error = result
+                .err()
+                .expect("an arbitrary executable route must fail closed");
+            assert!(error.contains("does not name the current cargo-fe2o3 executable"));
         }
 
         #[test]
