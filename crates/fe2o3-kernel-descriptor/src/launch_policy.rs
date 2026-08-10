@@ -316,6 +316,9 @@ impl Gfx942KernelFamilyBundleV1 {
     }
 }
 
+type FamilyVariantMarkers<Family, Interface, Variant> =
+    PhantomData<fn() -> (Family, Interface, Variant)>;
+
 /// Generated typed expectation for one variant of one logical interface.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TypedKernelFamilyVariantExpectationV1<Family, Interface, Variant> {
@@ -330,7 +333,7 @@ pub struct TypedKernelFamilyVariantExpectationV1<Family, Interface, Variant> {
     artifact_digest: CanonicalCodeObjectDigest,
     launch_bounds: Gfx942LaunchBoundsV1,
     policy_identity: KernelLaunchPolicyIdentityV1,
-    _markers: PhantomData<fn() -> (Family, Interface, Variant)>,
+    _markers: FamilyVariantMarkers<Family, Interface, Variant>,
 }
 
 impl<Family, Interface, Variant> TypedKernelFamilyVariantExpectationV1<Family, Interface, Variant> {
@@ -362,7 +365,7 @@ impl<Family, Interface, Variant> TypedKernelFamilyVariantExpectationV1<Family, I
 /// It grants neither load nor launch authority.
 pub struct AdmittedKernelFamilyVariantV1<'bundle, Family, Interface, Variant> {
     descriptor: &'bundle KernelFamilyVariantDescriptorV1,
-    _markers: PhantomData<fn() -> (Family, Interface, Variant)>,
+    _markers: FamilyVariantMarkers<Family, Interface, Variant>,
 }
 
 impl<Family, Interface, Variant> fmt::Debug
