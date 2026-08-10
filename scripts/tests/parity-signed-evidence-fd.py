@@ -204,6 +204,120 @@ def test_archive_file_and_cumulative_byte_limits() -> None:
         EVIDENCE.MAX_ARCHIVE_TOTAL_BYTES = original_total_limit
 
 
+def make_archive_writable(root: Path) -> None:
+    if not root.exists():
+        return
+    for path in sorted(root.rglob("*"), reverse=True):
+        if path.is_dir():
+            path.chmod(0o700)
+        else:
+            path.chmod(0o600)
+    root.chmod(0o700)
+
+
+def test_destination_parent_symlink_and_replacement_races() -> None:
+    with tempfile.TemporaryDirectory(prefix="fe2o3-destination-symlink-") as raw_temp:
+        temp = Path(raw_temp)
+        real_parent = temp / "real-parent"
+        real_parent.mkdir()
+        linked_parent = temp / "linked-parent"
+        linked_parent.symlink_to(real_parent, target_is_directory=True)
+        expect_evidence_error(
+            lambda: EVIDENCE.ArchiveDestination(linked_parent / "archive"),
+            "destination parent contains an unsafe path component",
+        )
+
+    with tempfile.TemporaryDirectory(prefix="fe2o3-destination-race-") as raw_temp:
+        temp = Path(raw_temp)
+        parent = temp / "parent"
+        parent.mkdir()
+        with EVIDENCE.ArchiveDestination(parent / "archive") as destination:
+            destination.write_index(b"authenticated index bytes\n")
+            detached = temp / "detached-parent"
+            parent.rename(detached)
+            parent.mkdir()
+            (parent / "attacker-marker").write_text("replacement\n", encoding="ascii")
+            destination.publish()
+        assert (detached / "archive/archive-index-v1.tsv").read_bytes() == (
+            b"authenticated index bytes\n"
+        )
+        assert not (parent / "archive").exists()
+        make_archive_writable(detached / "archive")
+
+
+def test_destination_durability_order_and_fault_boundaries() -> None:
+    with tempfile.TemporaryDirectory(prefix="fe2o3-durability-order-") as raw_temp:
+        temp = Path(raw_temp)
+        source_root = temp / "source"
+        source_root.mkdir()
+        (source_root / "payload.bin").write_bytes(b"payload\n")
+        labels: list[str] = []
+        real_fsync = EVIDENCE.fsync_checked
+
+        def recording_fsync(descriptor: int, label: str) -> None:
+            labels.append(label)
+            real_fsync(descriptor, label)
+
+        EVIDENCE.fsync_checked = recording_fsync
+        try:
+            with EVIDENCE.ArchiveSnapshot(
+                source_root, require_immutable=False
+            ) as source:
+                with EVIDENCE.ArchiveDestination(temp / "archive") as destination:
+                    destination.copy(source, "payload.bin")
+                    destination.directory_fd("nested/leaf")
+                    destination.write_index(b"index\n")
+                    destination.publish()
+        finally:
+            EVIDENCE.fsync_checked = real_fsync
+        required = [
+            "copied archive file payload.bin",
+            "generated archive index",
+            "destination archive directory nested/leaf",
+            "destination archive directory nested",
+            "archive staging root",
+            "archive staging parent",
+            "published archive destination root",
+            "published archive destination parent",
+        ]
+        assert [labels.index(label) for label in required] == sorted(
+            labels.index(label) for label in required
+        )
+        make_archive_writable(temp / "archive")
+
+    for fault, published in (
+        ("archive staging root", False),
+        ("published archive destination root", True),
+        ("published archive destination parent", True),
+    ):
+        with tempfile.TemporaryDirectory(prefix="fe2o3-durability-fault-") as raw_temp:
+            temp = Path(raw_temp)
+            real_fsync = EVIDENCE.fsync_checked
+
+            def failing_fsync(descriptor: int, label: str) -> None:
+                if label == fault:
+                    raise EVIDENCE.EvidenceError(f"injected fsync failure: {label}")
+                real_fsync(descriptor, label)
+
+            EVIDENCE.fsync_checked = failing_fsync
+            try:
+                expect_evidence_error(
+                    lambda: publish_minimal_archive(temp / "archive"),
+                    "injected fsync failure",
+                )
+            finally:
+                EVIDENCE.fsync_checked = real_fsync
+            assert (temp / "archive").exists() is published
+            assert not list(temp.glob(".fe2o3-archive-*"))
+            make_archive_writable(temp / "archive")
+
+
+def publish_minimal_archive(output: Path) -> None:
+    with EVIDENCE.ArchiveDestination(output) as destination:
+        destination.write_index(b"index\n")
+        destination.publish()
+
+
 def test_bootstrap_publication_is_durable_and_no_replace() -> None:
     with tempfile.TemporaryDirectory(prefix="fe2o3-bootstrap-publish-") as raw_temp:
         temp = Path(raw_temp)
@@ -302,6 +416,8 @@ if __name__ == "__main__":
     test_archive_snapshot_rejects_symlink_traversal()
     test_openat2_architecture_preflight_is_explicit()
     test_archive_file_and_cumulative_byte_limits()
+    test_destination_parent_symlink_and_replacement_races()
+    test_destination_durability_order_and_fault_boundaries()
     test_bootstrap_publication_is_durable_and_no_replace()
     test_bootstrap_destination_race_has_one_winner()
     test_bootstrap_interruption_cleans_unpublished_staging()
