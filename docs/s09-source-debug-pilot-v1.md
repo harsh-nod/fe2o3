@@ -142,9 +142,17 @@ transcript is retained.
 
 The complete snapshot-supervised ROCgdb command runs in a new session and
 process group. `EXIT`, `HUP`, `INT`, and `TERM` cleanup targets only that group,
-uses bounded `TERM`/`KILL` escalation, reaps its leader, removes the raw
-transcript, and verifies that neither the group nor raw path remains. An
-interrupted run cannot defer raw cleanup until a foreground debugger returns.
+unlinks the raw transcript, uses bounded `TERM`/`KILL` escalation, reaps the
+group leader, and verifies that neither the group nor raw path remains. For
+these caught signals, an interrupted run cannot defer raw cleanup until a
+foreground debugger returns.
+
+Uncatchable `SIGKILL` is outside the `local-capability-v2` boundary. `SIGKILL`
+before cleanup can leave raw data at its path; `SIGKILL` after the raw path is
+unlinked but before group teardown and reap can leave the pathless child
+process group alive. `production-v2` therefore requires a protected cgroup/job
+supervisor, or an equivalent descendant-lifetime boundary, that owns cleanup
+independently of the runner.
 
 The snapshot supervisor supplies each controller input as an exact numeric
 `/proc/<ancestor-pid>/fd/<n>` path together with its owner PID/starttime and
