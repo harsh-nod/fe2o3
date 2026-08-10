@@ -315,13 +315,15 @@ where
         validate_context_device(self, observed)
             .map_err(|()| GeneratedAlphaZetaCov6PrepareError::ContextDeviceMismatch)?;
 
-        let selection = self
+        let selected_identity = self
             .select_typed_kernel::<K>()
-            .map_err(GeneratedAlphaZetaCov6PrepareError::Selection)?;
-        // `authenticate` consumes and validates K's backend semantic witness
-        // before entering the unsafe prerequisite authenticator.
-        let authenticated: AuthenticatedLoadedWorkerV2KernelSelectionV1<K> = selection
-            .authenticate(authenticator)
+            .map_err(GeneratedAlphaZetaCov6PrepareError::Selection)?
+            .artifact_identity()
+            .clone();
+        // The loaded executable owns the exact per-kernel cache. It validates K's backend
+        // semantic witness before entering the unsafe authenticator on the first occurrence.
+        let authenticated: AuthenticatedLoadedWorkerV2KernelSelectionV1<K> = self
+            .authenticate_typed_kernel_once::<K, _>(&selected_identity, authenticator)
             .map_err(GeneratedAlphaZetaCov6PrepareError::Authentication)?;
         let resolved = authenticated
             .resolve(self)

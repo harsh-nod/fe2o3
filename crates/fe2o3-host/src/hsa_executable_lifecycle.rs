@@ -351,6 +351,7 @@ pub enum WorkerV2ExecutableAuthenticationError<E> {
     Profile(WorkerV2RequiredProfileError),
     CurrentPublication(FinalizedWorkerV2BundleAdmissionError),
     FullLineage(FinalizedWorkerV2BundleAdmissionError),
+    AuthenticationConflict(&'static str),
     Authenticator(E),
     Prerequisite(WorkerV2PrerequisiteError),
 }
@@ -1157,6 +1158,15 @@ impl<K, A: ReviewedHsaExecutableLifecycleAdapterV1> AuthorizedHsaLoadV1<K, A> {
             });
         }
 
+        let authenticated_kernels = vec![CachedWorkerV2KernelAuthenticationV2 {
+            artifact_identity: self.authenticated.admission.artifact_identity().clone(),
+            challenge_identity: self
+                .authenticated
+                .prerequisites
+                .challenge_identity()
+                .clone(),
+            prerequisites: self.authenticated.prerequisites.clone(),
+        }];
         Ok(LoadedHsaExecutableV1 {
             authenticated: self.authenticated,
             adapter: self.adapter,
@@ -1165,6 +1175,7 @@ impl<K, A: ReviewedHsaExecutableLifecycleAdapterV1> AuthorizedHsaLoadV1<K, A> {
             kernel: Some(kernel),
             load,
             resolution,
+            authenticated_kernels,
         })
     }
 }
@@ -1315,6 +1326,14 @@ pub struct LoadedHsaExecutableV1<K, A: ReviewedHsaExecutableLifecycleAdapterV1> 
     kernel: Option<A::Kernel>,
     load: HsaCodeObjectLoadObservationV1,
     resolution: HsaKernelResolutionObservationV1,
+    authenticated_kernels: Vec<CachedWorkerV2KernelAuthenticationV2>,
+}
+
+#[derive(Clone, Debug)]
+struct CachedWorkerV2KernelAuthenticationV2 {
+    artifact_identity: ArtifactKernelIdentityV1,
+    challenge_identity: WorkerV2FullLineagePrerequisiteChallengeIdentityV2,
+    prerequisites: WorkerV2PrerequisiteDecisionV1,
 }
 
 impl<K, A: ReviewedHsaExecutableLifecycleAdapterV1> fmt::Debug for LoadedHsaExecutableV1<K, A> {
@@ -1380,10 +1399,123 @@ impl<K, A: ReviewedHsaExecutableLifecycleAdapterV1> LoadedHsaExecutableV1<K, A> 
         Ok(InertLoadedWorkerV2KernelSelectionV1 {
             selected,
             executable_object: self.load.executable_object,
-            environment: self.environment.clone(),
-            target: self.authenticated.admission.target(),
-            code_object_version: self.authenticated.admission.code_object_version(),
+        })
+    }
+
+    /// Authenticates one exact selected kernel at most once for this loaded executable.
+    ///
+    /// The root authentication seeds this cache during load. Subsequent generated preparation
+    /// for the same exact kernel and challenge reuses that retained decision. Any same-kernel
+    /// identity or challenge conflict is rejected before entering the unsafe authenticator.
+    #[doc(hidden)]
+    pub fn authenticate_typed_kernel_once<S, Authenticator>(
+        &mut self,
+        expected_identity: &ArtifactKernelIdentityV1,
+        authenticator: &mut Authenticator,
+    ) -> Result<
+        AuthenticatedLoadedWorkerV2KernelSelectionV1<S>,
+        WorkerV2ExecutableAuthenticationError<Authenticator::Error>,
+    >
+    where
+        S: CompilerGeneratedKernelExpectationV1,
+        Authenticator: WorkerV2PrerequisiteAuthenticatorV1<S>,
+    {
+        validate_compiler_generated_semantic_witness_v1::<S>()
+            .map_err(WorkerV2ExecutableAuthenticationError::SemanticWitness)?;
+        let (artifact_identity, physical_kernel, challenge_identity, finalized_digest) = {
+            let selected = self
+                .authenticated
+                .admission
+                .select_typed_kernel::<S>()
+                .map_err(|_| {
+                    WorkerV2ExecutableAuthenticationError::AuthenticationConflict(
+                        "typed kernel selection",
+                    )
+                })?;
+            if selected.artifact_identity() != expected_identity
+                || selected.finalized_payload_identity().digest() != self.load.finalized_digest
+            {
+                return Err(
+                    WorkerV2ExecutableAuthenticationError::AuthenticationConflict(
+                        "typed kernel identity",
+                    ),
+                );
+            }
+            (
+                selected.artifact_identity().clone(),
+                selected.physical_kernel().clone(),
+                selected
+                    .full_lineage_challenge()
+                    .map_err(WorkerV2ExecutableAuthenticationError::FullLineage)?,
+                selected.finalized_payload_identity().digest(),
+            )
+        };
+        let target = self.authenticated.admission.target();
+        let code_object_version = self.authenticated.admission.code_object_version();
+        let request = WorkerV2PrerequisiteRequestV1 {
+            challenge_identity: challenge_identity.clone(),
+            artifact_identity: &artifact_identity,
+            finalized_digest,
+            target,
+            code_object_version,
             device: self.authenticated.admission.device(),
+            _marker: PhantomData,
+        };
+
+        let mut same_kernel = self
+            .authenticated_kernels
+            .iter()
+            .filter(|entry| entry.artifact_identity.kernel_id() == artifact_identity.kernel_id());
+        if let Some(cached) = same_kernel.next() {
+            if same_kernel.next().is_some()
+                || cached.artifact_identity != artifact_identity
+                || cached.challenge_identity != challenge_identity
+                || cached.prerequisites.challenge_identity() != &cached.challenge_identity
+            {
+                return Err(
+                    WorkerV2ExecutableAuthenticationError::AuthenticationConflict(
+                        "cached kernel challenge lineage",
+                    ),
+                );
+            }
+            validate_prerequisites::<S>(&request, &cached.prerequisites)
+                .map_err(WorkerV2ExecutableAuthenticationError::Prerequisite)?;
+            return Ok(AuthenticatedLoadedWorkerV2KernelSelectionV1 {
+                artifact_identity,
+                physical_kernel,
+                executable_object: self.load.executable_object,
+                environment: self.environment.clone(),
+                finalized_digest,
+                target,
+                code_object_version,
+                prerequisites: cached.prerequisites.clone(),
+                _marker: PhantomData,
+            });
+        }
+
+        // SAFETY: this is the sole uncached transition for an exact kernel identity. Every
+        // decision field is checked before the decision is retained or returned.
+        let prerequisites = unsafe { authenticator.authenticate(&request) }
+            .map_err(WorkerV2ExecutableAuthenticationError::Authenticator)?;
+        validate_prerequisites::<S>(&request, &prerequisites)
+            .map_err(WorkerV2ExecutableAuthenticationError::Prerequisite)?;
+        self.authenticated_kernels
+            .push(CachedWorkerV2KernelAuthenticationV2 {
+                artifact_identity: artifact_identity.clone(),
+                challenge_identity,
+                prerequisites: prerequisites.clone(),
+            });
+
+        Ok(AuthenticatedLoadedWorkerV2KernelSelectionV1 {
+            artifact_identity,
+            physical_kernel,
+            executable_object: self.load.executable_object,
+            environment: self.environment.clone(),
+            finalized_digest,
+            target,
+            code_object_version,
+            prerequisites,
+            _marker: PhantomData,
         })
     }
 
@@ -1430,10 +1562,6 @@ impl<K, A: ReviewedHsaExecutableLifecycleAdapterV1> LoadedHsaExecutableV1<K, A> 
 pub struct InertLoadedWorkerV2KernelSelectionV1<'loaded, K> {
     selected: AdmittedWorkerV2TypedKernelV1<'loaded, K>,
     executable_object: HsaExecutableObjectIdentityV1,
-    environment: HsaEnvironmentObservationV1,
-    target: AmdTargetId,
-    code_object_version: CodeObjectVersion,
-    device: &'loaded DeviceIdentity,
 }
 
 impl<K> fmt::Debug for InertLoadedWorkerV2KernelSelectionV1<'_, K> {
@@ -1473,57 +1601,6 @@ impl<K> InertLoadedWorkerV2KernelSelectionV1<'_, K> {
 
     pub const fn grants_launch_authority(&self) -> bool {
         false
-    }
-}
-
-impl<K: CompilerGeneratedKernelExpectationV1> InertLoadedWorkerV2KernelSelectionV1<'_, K> {
-    /// Consumes this loaded-executable selection and authenticates the exact
-    /// selected marker's compiler, Verus, ABI, and effect prerequisites.
-    ///
-    /// The returned state owns only validated evidence. It retains no native
-    /// handle and grants no load or launch authority, so the original borrow
-    /// can end before the reviewed adapter is mutably entered for resolution.
-    #[doc(hidden)]
-    pub fn authenticate<A: WorkerV2PrerequisiteAuthenticatorV1<K>>(
-        self,
-        authenticator: &mut A,
-    ) -> Result<
-        AuthenticatedLoadedWorkerV2KernelSelectionV1<K>,
-        WorkerV2ExecutableAuthenticationError<A::Error>,
-    > {
-        validate_compiler_generated_semantic_witness_v1::<K>()
-            .map_err(WorkerV2ExecutableAuthenticationError::SemanticWitness)?;
-        let challenge_identity = self
-            .selected
-            .full_lineage_challenge()
-            .map_err(WorkerV2ExecutableAuthenticationError::FullLineage)?;
-        let request = WorkerV2PrerequisiteRequestV1 {
-            challenge_identity,
-            artifact_identity: self.selected.artifact_identity(),
-            finalized_digest: self.selected.finalized_payload_identity().digest(),
-            target: self.target,
-            code_object_version: self.code_object_version,
-            device: self.device,
-            _marker: PhantomData,
-        };
-        // SAFETY: callers cannot reach this transition through a safe trait
-        // implementation. The exact selected-kernel fields are checked below.
-        let prerequisites = unsafe { authenticator.authenticate(&request) }
-            .map_err(WorkerV2ExecutableAuthenticationError::Authenticator)?;
-        validate_prerequisites::<K>(&request, &prerequisites)
-            .map_err(WorkerV2ExecutableAuthenticationError::Prerequisite)?;
-
-        Ok(AuthenticatedLoadedWorkerV2KernelSelectionV1 {
-            artifact_identity: self.selected.artifact_identity().clone(),
-            physical_kernel: self.selected.physical_kernel().clone(),
-            executable_object: self.executable_object,
-            environment: self.environment,
-            finalized_digest: request.finalized_digest,
-            target: request.target,
-            code_object_version: request.code_object_version,
-            prerequisites,
-            _marker: PhantomData,
-        })
     }
 }
 
@@ -3047,6 +3124,37 @@ mod tests {
         }
     }
 
+    struct CountingAuthenticator {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl CountingAuthenticator {
+        fn new() -> (Self, Arc<AtomicUsize>) {
+            let calls = Arc::new(AtomicUsize::new(0));
+            (
+                Self {
+                    calls: calls.clone(),
+                },
+                calls,
+            )
+        }
+    }
+
+    unsafe impl<K: CompilerGeneratedKernelExpectationV1> WorkerV2PrerequisiteAuthenticatorV1<K>
+        for CountingAuthenticator
+    {
+        type Error = &'static str;
+
+        unsafe fn authenticate(
+            &mut self,
+            request: &WorkerV2PrerequisiteRequestV1<'_, K>,
+        ) -> Result<WorkerV2PrerequisiteDecisionV1, Self::Error> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            // SAFETY: the exact test authenticator satisfies the same test-only obligations.
+            unsafe { FakeAuthenticator::exact().authenticate(request) }
+        }
+    }
+
     struct StaleChallengeAuthenticator {
         challenge: WorkerV2FullLineagePrerequisiteChallengeIdentityV2,
     }
@@ -3654,9 +3762,16 @@ mod tests {
     fn selected_marker_authenticates_and_resolves_without_launch_authority() {
         let (loaded, unloads, _directory) = load_two_kernels(0x8d);
         let mut loaded = loaded.unwrap();
-        let selection = loaded.select_typed_kernel::<SecondTestKernel>().unwrap();
-        let authenticated = selection
-            .authenticate(&mut FakeAuthenticator::exact())
+        let selected_identity = loaded
+            .select_typed_kernel::<SecondTestKernel>()
+            .unwrap()
+            .artifact_identity()
+            .clone();
+        let authenticated = loaded
+            .authenticate_typed_kernel_once::<SecondTestKernel, _>(
+                &selected_identity,
+                &mut FakeAuthenticator::exact(),
+            )
             .unwrap();
         assert!(!authenticated.requires_prerequisite_authentication());
         assert!(authenticated.requires_hsa_kernel_resolution());
@@ -3684,12 +3799,85 @@ mod tests {
     }
 
     #[test]
+    fn loaded_executable_authenticates_each_exact_kernel_once_and_rejects_cache_conflicts() {
+        let (admission, _directory) = admitted_two_kernel_for_lifecycle_test(0xb3);
+        let (mut authenticator, calls) = CountingAuthenticator::new();
+        let authenticated = AuthenticatedWorkerV2ExecutableV1::<TestKernel>::authenticate(
+            admission,
+            &mut authenticator,
+        )
+        .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        let (adapter, unloads) = FakeHsaAdapter::new(AdapterFault::None);
+        let mut loaded = authenticated
+            .authorize_hsa_load(adapter)
+            .unwrap()
+            .load()
+            .unwrap();
+
+        let root_identity = loaded
+            .select_typed_kernel::<TestKernel>()
+            .unwrap()
+            .artifact_identity()
+            .clone();
+        drop(
+            loaded
+                .authenticate_typed_kernel_once::<TestKernel, _>(&root_identity, &mut authenticator)
+                .unwrap(),
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        let second_identity = loaded
+            .select_typed_kernel::<SecondTestKernel>()
+            .unwrap()
+            .artifact_identity()
+            .clone();
+        for expected_calls in [2, 2] {
+            drop(
+                loaded
+                    .authenticate_typed_kernel_once::<SecondTestKernel, _>(
+                        &second_identity,
+                        &mut authenticator,
+                    )
+                    .unwrap(),
+            );
+            assert_eq!(calls.load(Ordering::SeqCst), expected_calls);
+        }
+        assert_eq!(loaded.authenticated_kernels.len(), 2);
+
+        loaded.authenticated_kernels[1].challenge_identity =
+            loaded.authenticated_kernels[0].challenge_identity.clone();
+        assert!(matches!(
+            loaded.authenticate_typed_kernel_once::<SecondTestKernel, _>(
+                &second_identity,
+                &mut authenticator,
+            ),
+            Err(
+                WorkerV2ExecutableAuthenticationError::AuthenticationConflict(
+                    "cached kernel challenge lineage"
+                )
+            )
+        ));
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+        loaded.unload().unwrap();
+        assert_eq!(unloads.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
     fn resolved_selected_marker_validates_its_generated_packing_plan() {
         let (loaded, unloads, _directory) = load_two_kernels(0x82);
         let mut loaded = loaded.unwrap();
-        let selection = loaded.select_typed_kernel::<SecondTestKernel>().unwrap();
-        let authenticated = selection
-            .authenticate(&mut FakeAuthenticator::exact())
+        let selected_identity = loaded
+            .select_typed_kernel::<SecondTestKernel>()
+            .unwrap()
+            .artifact_identity()
+            .clone();
+        let authenticated = loaded
+            .authenticate_typed_kernel_once::<SecondTestKernel, _>(
+                &selected_identity,
+                &mut FakeAuthenticator::exact(),
+            )
             .unwrap();
         let resolved = authenticated.resolve(&mut loaded).unwrap();
         let generated = crate::generated_vecadd::generated_vecadd_argument_layout_v2().unwrap();
@@ -3730,9 +3918,16 @@ mod tests {
         implicit_byte_len: usize,
     ) -> Result<HsaCompletedSelectedWorkerV2DispatchV1<K>, HsaGeneratedDispatchError<&'static str>>
     {
-        let selection = loaded.select_typed_kernel::<K>().unwrap();
-        let authenticated = selection
-            .authenticate(&mut FakeAuthenticator::exact())
+        let selected_identity = loaded
+            .select_typed_kernel::<K>()
+            .unwrap()
+            .artifact_identity()
+            .clone();
+        let authenticated = loaded
+            .authenticate_typed_kernel_once::<K, _>(
+                &selected_identity,
+                &mut FakeAuthenticator::exact(),
+            )
             .unwrap();
         let resolved = authenticated.resolve(loaded).unwrap();
         let mut kernarg = AlignedKernarg([0; 304]);
@@ -3866,9 +4061,16 @@ mod tests {
     fn selected_kernel_dispatch_rejects_misaligned_complete_storage() {
         let (loaded, unloads, _directory) = load_two_kernels(0x84);
         let mut loaded = loaded.unwrap();
-        let selection = loaded.select_typed_kernel::<SecondTestKernel>().unwrap();
-        let authenticated = selection
-            .authenticate(&mut FakeAuthenticator::exact())
+        let selected_identity = loaded
+            .select_typed_kernel::<SecondTestKernel>()
+            .unwrap()
+            .artifact_identity()
+            .clone();
+        let authenticated = loaded
+            .authenticate_typed_kernel_once::<SecondTestKernel, _>(
+                &selected_identity,
+                &mut FakeAuthenticator::exact(),
+            )
             .unwrap();
         let resolved = authenticated.resolve(&mut loaded).unwrap();
         let mut kernarg = OffsetKernarg([0; 305]);
@@ -3947,9 +4149,16 @@ mod tests {
         ] {
             let (loaded, unloads, _directory) = load_two_kernels(0x85);
             let mut loaded = loaded.unwrap();
-            let selection = loaded.select_typed_kernel::<SecondTestKernel>().unwrap();
-            let authenticated = selection
-                .authenticate(&mut FakeAuthenticator::exact())
+            let selected_identity = loaded
+                .select_typed_kernel::<SecondTestKernel>()
+                .unwrap()
+                .artifact_identity()
+                .clone();
+            let authenticated = loaded
+                .authenticate_typed_kernel_once::<SecondTestKernel, _>(
+                    &selected_identity,
+                    &mut FakeAuthenticator::exact(),
+                )
                 .unwrap();
             let mut resolved = authenticated.resolve(&mut loaded).unwrap();
             match fault {
@@ -4001,10 +4210,17 @@ mod tests {
             PrerequisiteFault::MissingRaceFreedom,
         ] {
             let (loaded, unloads, _directory) = load_two_kernels(0x8c);
-            let loaded = loaded.unwrap();
-            let selection = loaded.select_typed_kernel::<SecondTestKernel>().unwrap();
+            let mut loaded = loaded.unwrap();
+            let selected_identity = loaded
+                .select_typed_kernel::<SecondTestKernel>()
+                .unwrap()
+                .artifact_identity()
+                .clone();
             assert!(matches!(
-                selection.authenticate(&mut FakeAuthenticator { fault }),
+                loaded.authenticate_typed_kernel_once::<SecondTestKernel, _>(
+                    &selected_identity,
+                    &mut FakeAuthenticator { fault },
+                ),
                 Err(WorkerV2ExecutableAuthenticationError::Prerequisite(_))
             ));
             loaded.unload().unwrap();
@@ -4029,12 +4245,17 @@ mod tests {
     #[test]
     fn selected_authentication_rejects_a_substituted_semantic_witness_first() {
         let (loaded, unloads, _directory) = load_two_kernels(0x8e);
-        let loaded = loaded.unwrap();
-        let selection = loaded
+        let mut loaded = loaded.unwrap();
+        let selected_identity = loaded
             .select_typed_kernel::<SubstitutedSecondWitness>()
-            .unwrap();
+            .unwrap()
+            .artifact_identity()
+            .clone();
         assert!(matches!(
-            selection.authenticate(&mut PanicAuthenticator),
+            loaded.authenticate_typed_kernel_once::<SubstitutedSecondWitness, _>(
+                &selected_identity,
+                &mut PanicAuthenticator,
+            ),
             Err(WorkerV2ExecutableAuthenticationError::SemanticWitness(
                 CompilerGeneratedSemanticWitnessErrorV1::WitnessSubstitution
             ))
@@ -4054,9 +4275,16 @@ mod tests {
         ] {
             let (loaded, unloads, _directory) = load_two_kernels(0x8b);
             let mut loaded = loaded.unwrap();
-            let selection = loaded.select_typed_kernel::<SecondTestKernel>().unwrap();
-            let authenticated = selection
-                .authenticate(&mut FakeAuthenticator::exact())
+            let selected_identity = loaded
+                .select_typed_kernel::<SecondTestKernel>()
+                .unwrap()
+                .artifact_identity()
+                .clone();
+            let authenticated = loaded
+                .authenticate_typed_kernel_once::<SecondTestKernel, _>(
+                    &selected_identity,
+                    &mut FakeAuthenticator::exact(),
+                )
                 .unwrap();
             loaded.adapter.fault = fault;
             match authenticated.resolve(&mut loaded) {
@@ -4073,10 +4301,17 @@ mod tests {
     #[test]
     fn authenticated_selection_cannot_cross_hsa_environments() {
         let (first, first_unloads, _first_directory) = load_two_kernels(0x8a);
-        let first = first.unwrap();
-        let selection = first.select_typed_kernel::<SecondTestKernel>().unwrap();
-        let authenticated = selection
-            .authenticate(&mut FakeAuthenticator::exact())
+        let mut first = first.unwrap();
+        let selected_identity = first
+            .select_typed_kernel::<SecondTestKernel>()
+            .unwrap()
+            .artifact_identity()
+            .clone();
+        let authenticated = first
+            .authenticate_typed_kernel_once::<SecondTestKernel, _>(
+                &selected_identity,
+                &mut FakeAuthenticator::exact(),
+            )
             .unwrap();
 
         let (second, second_unloads, _second_directory) =
