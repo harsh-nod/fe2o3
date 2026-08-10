@@ -14,6 +14,7 @@ extern crate std;
 
 use core::marker::PhantomData;
 
+pub mod atomic;
 pub mod ffi;
 pub mod fp8;
 pub mod group;
