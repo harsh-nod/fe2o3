@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
@@ -73,8 +73,6 @@ const MAX_BUILD_EXECUTABLE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_PROC_STAT_BYTES: usize = 4096;
 const PREPARED_RUSTC_COMMAND_OBSERVATION_FD_V2: std::os::fd::RawFd =
     fe2o3_process_identity::S09_PREPARED_COMMAND_EXPECTATION_FD_V2;
-const S09_COMPILE_ENV_ALLOWLIST_ENV_V2: &str = "FE2O3_S09_COMPILE_ENV_ALLOWLIST_V2";
-const MAX_S09_COMPILE_ENV_NAMES_V2: usize = 64;
 const BUILD_ATTEMPT_INPUT_DOMAIN: &[u8] = b"FE2O3/BUILD-ATTEMPT-INPUT/V2\0";
 const CARGO_METADATA_BUILD_OBSERVATION_DOMAIN_V2: &[u8] =
     b"FE2O3/CARGO-METADATA-BUILD-OBSERVATION/V2\0";
@@ -426,6 +424,24 @@ pub(crate) fn run(argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperError
         })
         .transpose()?
         .flatten();
+    if worker_build_observation.is_some() {
+        let managed = managed_attempt.as_ref().ok_or_else(|| {
+            BindingWrapperError::BuildProvenance(
+                "S09 build observation has no managed build attempt".to_owned(),
+            )
+        })?;
+        let capabilities = compiler_capabilities.as_ref().ok_or_else(|| {
+            BindingWrapperError::BuildProvenance(
+                "S09 build observation has no compiler capabilities".to_owned(),
+            )
+        })?;
+        let private_tmpdir = capabilities.create_s09_private_tmpdir(managed.attempt)?;
+        command
+            .as_command_mut()
+            .env("LANG", "C.UTF-8")
+            .env("PATH", "/usr/bin")
+            .env("TMPDIR", private_tmpdir);
+    }
     configure_worker_build_observation_environment(
         command.as_command_mut(),
         worker_build_observation,
@@ -797,6 +813,36 @@ struct CompleteS09ChildEnvironmentV2 {
     entries: Vec<(OsString, OsString)>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FixedS09InheritedInputV2 {
+    CargoManifestDir,
+    CodegenPipeline,
+    Target,
+}
+
+impl FixedS09InheritedInputV2 {
+    const ALL: [Self; 3] = [Self::CargoManifestDir, Self::CodegenPipeline, Self::Target];
+
+    const fn name(self) -> &'static str {
+        match self {
+            Self::CargoManifestDir => "CARGO_MANIFEST_DIR",
+            Self::CodegenPipeline => "FE2O3_CODEGEN_PIPELINE",
+            Self::Target => "FE2O3_TARGET",
+        }
+    }
+
+    fn accepts(self, value: &OsStr) -> bool {
+        match self {
+            Self::CargoManifestDir => {
+                let path = Path::new(value);
+                path.is_absolute() && os_bytes(value).len() <= 4096
+            }
+            Self::CodegenPipeline => value == "kernel-ir-worker-v2",
+            Self::Target => value == "gfx942:xnack-",
+        }
+    }
+}
+
 impl CompleteS09ChildEnvironmentV2 {
     #[cfg(test)]
     fn from_command(command: &Command) -> Self {
@@ -814,34 +860,29 @@ fn materialize_s09_child_environment(
     inherited: impl IntoIterator<Item = (OsString, OsString)>,
 ) -> Result<CompleteS09ChildEnvironmentV2, BindingWrapperError> {
     let inherited = inherited.into_iter().collect::<BTreeMap<_, _>>();
-    let explicit_policy = parse_s09_compile_environment_policy(
-        inherited
-            .get(OsStr::new(S09_COMPILE_ENV_ALLOWLIST_ENV_V2))
-            .map(OsString::as_os_str),
-    )?;
     for name in inherited.keys() {
-        if forbidden_s09_environment(name) {
+        if rejected_s09_inherited_environment(name) {
             return Err(BindingWrapperError::BuildProvenance(format!(
                 "S09 child environment rejects inherited variable {name:?}"
             )));
         }
-        if compilation_control_environment(name)
-            && !reviewed_s09_inherited_environment(name)
-            && !consumed_before_s09_rustc_environment(name)
-            && !explicit_policy.contains(name)
-        {
-            return Err(BindingWrapperError::BuildProvenance(format!(
-                "S09 child environment has non-allowlisted compilation control {name:?}"
-            )));
-        }
     }
 
-    let mut final_environment = inherited
-        .into_iter()
-        .filter(|(name, _)| {
-            reviewed_s09_inherited_environment(name) || explicit_policy.contains(name)
-        })
-        .collect::<BTreeMap<_, _>>();
+    let mut final_environment = BTreeMap::new();
+    for input in FixedS09InheritedInputV2::ALL {
+        let name = input.name();
+        let value = inherited.get(OsStr::new(name)).ok_or_else(|| {
+            BindingWrapperError::BuildProvenance(format!(
+                "S09 fixed environment is missing required {name}"
+            ))
+        })?;
+        if !input.accepts(value) {
+            return Err(BindingWrapperError::BuildProvenance(format!(
+                "S09 fixed environment has invalid {name}"
+            )));
+        }
+        final_environment.insert(OsString::from(name), value.clone());
+    }
     let explicit = command
         .get_envs()
         .map(|(name, value)| (name.to_owned(), value.map(OsString::from)))
@@ -868,128 +909,40 @@ fn materialize_s09_child_environment(
     })
 }
 
-fn parse_s09_compile_environment_policy(
-    value: Option<&OsStr>,
-) -> Result<BTreeSet<OsString>, BindingWrapperError> {
-    let Some(value) = value else {
-        return Ok(BTreeSet::new());
-    };
-    let value = value.to_str().ok_or_else(|| {
-        BindingWrapperError::BuildProvenance(format!(
-            "{S09_COMPILE_ENV_ALLOWLIST_ENV_V2} is not UTF-8"
-        ))
-    })?;
-    if value.is_empty() {
-        return Err(BindingWrapperError::BuildProvenance(format!(
-            "{S09_COMPILE_ENV_ALLOWLIST_ENV_V2} must not be empty when present"
-        )));
-    }
-    let names = value.split(',').collect::<Vec<_>>();
-    if names.len() > MAX_S09_COMPILE_ENV_NAMES_V2 {
-        return Err(BindingWrapperError::BuildProvenance(format!(
-            "{S09_COMPILE_ENV_ALLOWLIST_ENV_V2} exceeds {MAX_S09_COMPILE_ENV_NAMES_V2} names"
-        )));
-    }
-    let mut previous = None;
-    let mut policy = BTreeSet::new();
-    for name in names {
-        if name.len() > 64
-            || name.is_empty()
-            || !name.bytes().enumerate().all(|(index, byte)| {
-                byte == b'_' || byte.is_ascii_uppercase() || (index != 0 && byte.is_ascii_digit())
-            })
-        {
-            return Err(BindingWrapperError::BuildProvenance(format!(
-                "{S09_COMPILE_ENV_ALLOWLIST_ENV_V2} contains an invalid name"
-            )));
-        }
-        if previous.is_some_and(|previous| previous >= name) {
-            return Err(BindingWrapperError::BuildProvenance(format!(
-                "{S09_COMPILE_ENV_ALLOWLIST_ENV_V2} names must be strictly sorted"
-            )));
-        }
-        if forbidden_s09_environment(OsStr::new(name)) {
-            return Err(BindingWrapperError::BuildProvenance(format!(
-                "{S09_COMPILE_ENV_ALLOWLIST_ENV_V2} cannot permit {name}"
-            )));
-        }
-        policy.insert(OsString::from(name));
-        previous = Some(name);
-    }
-    Ok(policy)
-}
-
-fn forbidden_s09_environment(name: &OsStr) -> bool {
+fn rejected_s09_inherited_environment(name: &OsStr) -> bool {
     let bytes = os_bytes(name);
-    bytes == b"RUSTC_BOOTSTRAP" || bytes.starts_with(b"LD_") || bytes.starts_with(b"DYLD_")
+    bytes == b"RUSTC_BOOTSTRAP"
+        || bytes == b"LD_PRELOAD"
+        || bytes.starts_with(b"DYLD_")
+        || credential_like_environment_name(bytes)
 }
 
-fn compilation_control_environment(name: &OsStr) -> bool {
-    let bytes = os_bytes(name);
-    matches!(
-        bytes,
-        b"CC" | b"CXX" | b"AR" | b"CFLAGS" | b"CXXFLAGS" | b"LDFLAGS"
-    ) || bytes.starts_with(b"LLVM_")
-        || bytes.starts_with(b"RUSTC_")
-}
-
-fn consumed_before_s09_rustc_environment(name: &OsStr) -> bool {
-    matches!(
-        os_bytes(name),
-        b"RUSTC"
-            | b"RUSTFLAGS"
-            | b"CARGO_ENCODED_RUSTFLAGS"
-            | b"RUSTC_WRAPPER"
-            | b"RUSTC_WORKSPACE_WRAPPER"
-            | b"CARGO_BUILD_RUSTC_WRAPPER"
-    )
-}
-
-fn reviewed_s09_inherited_environment(name: &OsStr) -> bool {
-    let bytes = os_bytes(name);
-    matches!(
-        bytes,
-        b"PATH"
-            | b"HOME"
-            | b"TMPDIR"
-            | b"LANG"
-            | b"LC_ALL"
-            | b"TZ"
-            | b"TERM"
-            | b"SOURCE_DATE_EPOCH"
-            | b"CARGO"
-            | b"CARGO_BIN_NAME"
-            | b"CARGO_CRATE_NAME"
-            | b"CARGO_MANIFEST_DIR"
-            | b"CARGO_MANIFEST_PATH"
-            | b"CARGO_PRIMARY_PACKAGE"
-            | b"CARGO_TARGET_TMPDIR"
-            | b"OUT_DIR"
-            | b"OPT_LEVEL"
-            | b"DEBUG"
-            | b"PROFILE"
-            | b"TARGET"
-            | b"HOST"
-            | b"NUM_JOBS"
-            | b"FE2O3_TARGET"
-            | b"FE2O3_CODEGEN_PIPELINE"
-            | b"FE2O3_WORKER_V2_CONFIG_V2"
-            | b"FE2O3_WORKER_V2_EXPECTED_ID_V1"
-            | b"FE2O3_HOST_PASSTHROUGH"
-            | b"FE2O3_CAPABILITY_BROKER_V1"
-            | b"FE2O3_BUILD_SESSION_V1"
-            | b"FE2O3_MANAGED_RUSTC_ARGS_V1"
-            | b"FE2O3_S09_COMPILE_ENV_ALLOWLIST_V2"
-    ) || bytes.starts_with(b"CARGO_PKG_")
-        || bytes.starts_with(b"CARGO_CFG_")
-        || bytes.starts_with(b"CARGO_FEATURE_")
-        || bytes.starts_with(b"DEP_")
+fn credential_like_environment_name(name: &[u8]) -> bool {
+    let upper = name.iter().map(u8::to_ascii_uppercase).collect::<Vec<_>>();
+    [
+        b"TOKEN".as_slice(),
+        b"PASSWORD".as_slice(),
+        b"PASSWD".as_slice(),
+        b"SECRET".as_slice(),
+        b"CREDENTIAL".as_slice(),
+        b"ACCESS_KEY".as_slice(),
+        b"PRIVATE_KEY".as_slice(),
+    ]
+    .iter()
+    .any(|pattern| {
+        upper
+            .windows(pattern.len())
+            .any(|window| window == *pattern)
+    })
 }
 
 fn managed_s09_child_environment(name: &OsStr) -> bool {
     matches!(
         os_bytes(name),
-        b"FE2O3_HSACO_DIR"
+        b"LANG"
+            | b"PATH"
+            | b"TMPDIR"
+            | b"FE2O3_HSACO_DIR"
             | b"FE2O3_BUILD_ATTEMPT_V1"
             | b"FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2"
             | b"FE2O3_CODEGEN_BACKEND_BUILD_OBSERVATION_V2"
@@ -1335,6 +1288,41 @@ impl CompilerCapabilities {
 
     const fn pinned_cargo_image_sha256(&self) -> [u8; 32] {
         self.pinned_cargo_image_sha256
+    }
+
+    fn create_s09_private_tmpdir(
+        &self,
+        attempt: BuildAttempt,
+    ) -> Result<PathBuf, BindingWrapperError> {
+        let component = format!(".fe2o3-s09-tmp-{}", attempt.to_env_value());
+        let mode = rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR | rustix::fs::Mode::XUSR;
+        rustix::fs::mkdirat(self.artifact.file(), &component, mode).map_err(|error| {
+            BindingWrapperError::BuildProvenance(format!(
+                "cannot create private S09 compiler temporary directory: {error}"
+            ))
+        })?;
+        let directory = rustix::fs::openat(
+            self.artifact.file(),
+            &component,
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::DIRECTORY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .map_err(|error| {
+            BindingWrapperError::BuildProvenance(format!(
+                "cannot pin private S09 compiler temporary directory: {error}"
+            ))
+        })?;
+        rustix::fs::fchmod(&directory, mode).map_err(|error| {
+            BindingWrapperError::BuildProvenance(format!(
+                "cannot make S09 compiler temporary directory private: {error}"
+            ))
+        })?;
+        Ok(PathBuf::from(format!(
+            "/proc/self/fd/{ARTIFACT_CHILD_FD}/{component}"
+        )))
     }
 
     fn prepare_command(&self, command: &mut Command) -> Result<(), BindingWrapperError> {
@@ -1999,11 +1987,11 @@ mod tests {
         LLVM_BUILD_IDENTITY_OBSERVATION_ENV_V2, OBSERVED_PARENT_PID_BUILD_OBSERVATION_ENV_V2,
         OBSERVED_PARENT_START_TIME_BUILD_OBSERVATION_ENV_V2,
         PINNED_CARGO_IMAGE_BUILD_OBSERVATION_ENV_V2, PreparedRustcCommandDigestCapability,
-        S09_COMPILE_ENV_ALLOWLIST_ENV_V2, WORKER_BUILD_IDENTITY_OBSERVATION_ENV_V2,
-        WORKER_CONFIG_BUILD_OBSERVATION_ENV_V2, WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2,
-        configure_build_observation_environment, configure_worker_build_observation_environment,
-        decode_managed_rustc_args, derive_build_attempt_input_with_config_identity,
-        is_cargo_stdin_probe, materialize_s09_child_environment, measure_build_executable,
+        WORKER_BUILD_IDENTITY_OBSERVATION_ENV_V2, WORKER_CONFIG_BUILD_OBSERVATION_ENV_V2,
+        WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2, configure_build_observation_environment,
+        configure_worker_build_observation_environment, decode_managed_rustc_args,
+        derive_build_attempt_input_with_config_identity, is_cargo_stdin_probe,
+        materialize_s09_child_environment, measure_build_executable,
         observe_pinned_cargo_image_and_parent, ordered_metadata_values,
         prepared_rustc_command_sha256, process_start_time_ticks, reject_uninspectable_rustc_args,
         resolve_command_executable_with_path,
@@ -2487,6 +2475,9 @@ mod tests {
             command
                 .arg("--crate-name=unit")
                 .current_dir("/workspace")
+                .env("LANG", "C.UTF-8")
+                .env("PATH", "/usr/bin")
+                .env("TMPDIR", "/proc/self/fd/197/private")
                 .env("FE2O3_BUILD_ATTEMPT_V1", "attempt")
                 .env_remove("FE2O3_HSACO_DIR");
             let complete_environment = materialize_s09_child_environment(
@@ -2502,11 +2493,14 @@ mod tests {
         }
 
         let inherited = [
-            ("PATH", "/reviewed/bin"),
+            ("CARGO_MANIFEST_DIR", "/workspace"),
+            ("FE2O3_CODEGEN_PIPELINE", "kernel-ir-worker-v2"),
+            ("FE2O3_TARGET", "gfx942:xnack-"),
+            ("LD_LIBRARY_PATH", "/writable/build/dirs"),
+            ("LD_AUDIT", "/unreviewed/audit.so"),
             ("CARGO_PKG_NAME", "unit"),
-            (S09_COMPILE_ENV_ALLOWLIST_ENV_V2, "CUSTOM_BUILD_INPUT"),
             ("CUSTOM_BUILD_INPUT", "first"),
-            ("PRIVATE_TOKEN", "must-not-cross"),
+            ("FE2O3_S09_COMPILE_ENV_ALLOWLIST_V2", "CUSTOM_BUILD_INPUT"),
             ("RUSTC_WORKSPACE_WRAPPER", "/already-consumed/wrapper"),
         ];
         let (command, baseline) = prepared(&inherited);
@@ -2515,22 +2509,39 @@ mod tests {
             .filter_map(|(name, value)| value.map(|value| (name, value)))
             .collect::<std::collections::BTreeMap<_, _>>();
         assert_eq!(
-            effective.get(OsStr::new("PATH")),
-            Some(&OsStr::new("/reviewed/bin"))
+            effective.get(OsStr::new("CARGO_MANIFEST_DIR")),
+            Some(&OsStr::new("/workspace"))
         );
         assert_eq!(
-            effective.get(OsStr::new("CUSTOM_BUILD_INPUT")),
-            Some(&OsStr::new("first"))
+            effective.get(OsStr::new("LANG")),
+            Some(&OsStr::new("C.UTF-8"))
         );
-        assert!(!effective.contains_key(OsStr::new("PRIVATE_TOKEN")));
-        assert!(!effective.contains_key(OsStr::new("RUSTC_WORKSPACE_WRAPPER")));
+        assert_eq!(
+            effective.get(OsStr::new("TMPDIR")),
+            Some(&OsStr::new("/proc/self/fd/197/private"))
+        );
+        assert_eq!(
+            effective
+                .keys()
+                .map(|name| name.to_str().unwrap())
+                .collect::<Vec<_>>(),
+            [
+                "CARGO_MANIFEST_DIR",
+                "FE2O3_BUILD_ATTEMPT_V1",
+                "FE2O3_CODEGEN_PIPELINE",
+                "FE2O3_TARGET",
+                "LANG",
+                "PATH",
+                "TMPDIR",
+            ]
+        );
 
         let mut inherited_change = inherited;
-        inherited_change[1].1 = "other-unit";
+        inherited_change[0].1 = "/other-workspace";
         assert_ne!(prepared(&inherited_change).1, baseline);
-        let mut policy_value_change = inherited;
-        policy_value_change[3].1 = "second";
-        assert_ne!(prepared(&policy_value_change).1, baseline);
+        let mut ignored_change = inherited;
+        ignored_change[6].1 = "second";
+        assert_eq!(prepared(&ignored_change).1, baseline);
 
         let mut removed = Command::new("/toolchain/rustc");
         removed.current_dir("/workspace").env_remove("OPTIONAL");
@@ -2549,16 +2560,65 @@ mod tests {
 
     #[test]
     fn s09_environment_rejects_loader_and_bootstrap_controls() {
-        for name in ["LD_PRELOAD", "LD_LIBRARY_PATH", "RUSTC_BOOTSTRAP"] {
-            let mut command = Command::new("rustc");
-            command.current_dir("/workspace");
-            let error = materialize_s09_child_environment(
-                &mut command,
-                [(OsString::from(name), OsString::from("forbidden"))],
-            )
-            .unwrap_err();
+        for name in [
+            "LD_PRELOAD",
+            "DYLD_INSERT_LIBRARIES",
+            "RUSTC_BOOTSTRAP",
+            "PRIVATE_TOKEN",
+            "AWS_SECRET_ACCESS_KEY",
+        ] {
+            let mut command = Command::new("/toolchain/rustc");
+            command
+                .current_dir("/workspace")
+                .env("LANG", "C.UTF-8")
+                .env("TMPDIR", "/proc/self/fd/197/private");
+            let mut inherited = vec![
+                (
+                    OsString::from("CARGO_MANIFEST_DIR"),
+                    OsString::from("/workspace"),
+                ),
+                (
+                    OsString::from("FE2O3_CODEGEN_PIPELINE"),
+                    OsString::from("kernel-ir-worker-v2"),
+                ),
+                (
+                    OsString::from("FE2O3_TARGET"),
+                    OsString::from("gfx942:xnack-"),
+                ),
+            ];
+            inherited.push((OsString::from(name), OsString::from("forbidden")));
+            let error = materialize_s09_child_environment(&mut command, inherited).unwrap_err();
             assert!(error.to_string().contains(name));
         }
+    }
+
+    #[test]
+    fn s09_environment_rejects_custom_explicit_inputs() {
+        let mut command = Command::new("/toolchain/rustc");
+        command
+            .current_dir("/workspace")
+            .env("LANG", "C.UTF-8")
+            .env("TMPDIR", "/proc/self/fd/197/private")
+            .env("CUSTOM_ENV_MACRO_INPUT", "unsupported");
+        let error = materialize_s09_child_environment(
+            &mut command,
+            [
+                (
+                    OsString::from("CARGO_MANIFEST_DIR"),
+                    OsString::from("/workspace"),
+                ),
+                (
+                    OsString::from("FE2O3_CODEGEN_PIPELINE"),
+                    OsString::from("kernel-ir-worker-v2"),
+                ),
+                (
+                    OsString::from("FE2O3_TARGET"),
+                    OsString::from("gfx942:xnack-"),
+                ),
+            ],
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("CUSTOM_ENV_MACRO_INPUT"));
     }
 
     #[test]
