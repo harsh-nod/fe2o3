@@ -6,6 +6,7 @@ mod digest;
 mod encode;
 mod error;
 pub mod ffi_contract;
+mod launch_policy;
 mod model;
 mod requirements_v2;
 mod wire_v2;
@@ -21,6 +22,13 @@ pub use encode::{
     encode_device_descriptor_table_v1,
 };
 pub use error::{DecodeError, ValidationError};
+pub use launch_policy::{
+    AdmittedKernelFamilyVariantV1, GFX942_MAX_FLAT_WORKGROUP_SIZE_V1,
+    GFX942_MAX_KERNEL_FAMILY_VARIANTS_V1, GFX942_MAX_WAVES_PER_EXECUTION_UNIT_V1,
+    GFX942_XNACK_MINUS_TARGET_V1, Gfx942KernelFamilyBundleV1, Gfx942LaunchBoundsV1,
+    KernelFamilyIdentityV1, KernelFamilyPolicyErrorV1, KernelFamilyVariantDescriptorV1,
+    KernelInterfaceIdentityV1, KernelLaunchPolicyIdentityV1, TypedKernelFamilyVariantExpectationV1,
+};
 pub use model::{
     AccessMode, AliasSemantics, BlockSizeV1, BuildEvidenceV1, CapabilityV1, CodeObjectVersion,
     CompilerIdentityV1, DeviceDescriptorTableV1, DeviceLayoutDescriptorV1, DeviceLayoutRecordV1,
