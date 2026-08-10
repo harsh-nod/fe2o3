@@ -85,19 +85,21 @@ a parser error or an unrelated failure does not count as a successful negative.
 
 ## General typed two-kernel slice
 
-`src/two_kernel_bodies.rs` adds shared executable fragments for the planned
-general typed vertical slice:
+`src/two_kernel_bodies.rs` adds two ordinary-Rust/shared macro bodies for the
+planned general typed vertical slice:
 
 - `alpha(scale: f32, input: &[f32], output: DisjointSlice<f32>)` computes
   `output[i] = scale * input[i]`; and
 - `zeta(a: &[f32], b: &[f32], bias: f32, output: DisjointSlice<f32>)` computes
   `output[i] = a[i] + b[i] + bias`.
 
-Ordinary Rust expands those fragments over actual `f32` slices. The positive
-Verus harness in `verus/two_kernel.rs` expands the same guarded index/read/write
-fragments over a bounded integer arithmetic abstraction. It reuses the
+The ordinary CPU test model expands those fragments over actual `f32` slices.
+They are not `#[kernel]` entry points, are not lowered to AMDGPU, and are not
+evidence about a generated gfx942 code object. The positive Verus harness in
+`verus/two_kernel.rs` expands the same guarded index/read/write fragments over a
+bounded integer arithmetic abstraction. It imports the reusable, axiom-free
 allocation, byte-region, permission, and identity-index lemmas from
-`verus/vecadd.rs` and proves, for both distinct signatures:
+`verus/permission_core.rs` and proves, for both modeled signatures:
 
 - the output guard dominates every input access, including rounded launch
   tails;
@@ -114,6 +116,11 @@ The bounded arithmetic abstraction is deliberately not an IEEE-754 theorem.
 Proving that production `f32` multiply and add refine it, including rounding,
 NaNs, infinities, signed zero, contraction, and operation order, remains an
 authenticated compiler/backend refinement obligation.
+
+The exact `gfx942:xnack-` identity belongs to the sealed review capsule and its
+artifact join, not to these CPU/shared bodies. A separate compiler-refinement
+step must still connect a real GPU kernel source, lowered IR, HSACO, and machine
+execution to this model.
 
 The input-initialization premise and four-byte address-representability result
 are named explicitly in `alpha_input_initialization_assumptions`,

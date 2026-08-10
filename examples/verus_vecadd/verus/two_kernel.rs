@@ -2,7 +2,7 @@ use vstd::prelude::*;
 
 include!("../src/two_kernel_bodies.rs");
 
-#[path = "vecadd.rs"]
+#[path = "permission_core.rs"]
 pub mod permission_model;
 
 verus! {

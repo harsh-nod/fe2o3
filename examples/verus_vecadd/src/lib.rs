@@ -351,6 +351,11 @@ mod tests {
         let bodies = include_str!("two_kernel_bodies.rs");
 
         assert!(positive.contains("include!(\"../src/two_kernel_bodies.rs\")"));
+        assert!(positive.contains("#[path = \"permission_core.rs\"]"));
+        let permission_core = include_str!("../verus/permission_core.rs");
+        assert!(!permission_core.contains("#[verifier::external_body]"));
+        assert!(!permission_core.contains("admit("));
+        assert!(!permission_core.contains("assume("));
         for (declaration, invocation) in [
             ("macro_rules! alpha_kernel_body", "alpha_kernel_body!"),
             ("macro_rules! zeta_kernel_body", "zeta_kernel_body!"),

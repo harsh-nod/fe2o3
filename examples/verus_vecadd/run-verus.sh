@@ -62,7 +62,10 @@ require_source "$script_dir/verus/negative/gather_wrong_index.rs" \
 two_kernel_body="$script_dir/src/two_kernel_bodies.rs"
 two_kernel="$script_dir/verus/two_kernel.rs"
 require_source "$two_kernel" 'include!("../src/two_kernel_bodies.rs")'
-require_source "$two_kernel" '#[path = "vecadd.rs"]'
+require_source "$two_kernel" '#[path = "permission_core.rs"]'
+forbid_source "$script_dir/verus/permission_core.rs" '#[verifier::external_body]'
+forbid_source "$script_dir/verus/permission_core.rs" 'admit('
+forbid_source "$script_dir/verus/permission_core.rs" 'assume('
 require_source "$two_kernel_body" 'macro_rules! alpha_kernel_body'
 require_source "$two_kernel_body" 'macro_rules! zeta_kernel_body'
 require_source "$two_kernel_body" 'if let Some(out) = $output.get_mut($thread)'
