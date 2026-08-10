@@ -374,7 +374,20 @@ impl LiteralForLowerer<'_> {
         let break_label = syn::Lifetime::new(&format!("'__fe2o3_unrolled_for_{loop_index}"), span);
         let pattern = for_loop.pat.clone();
         let attrs = for_loop.attrs.clone();
-        let suffix = start.suffix();
+        let start_suffix = start.suffix();
+        let end_suffix = end.suffix();
+        let suffix = match (start_suffix.is_empty(), end_suffix.is_empty()) {
+            (false, false) if start_suffix != end_suffix => {
+                self.error = Some(syn::Error::new_spanned(
+                    range,
+                    "bounded for lowering requires identical explicit integer suffixes",
+                ));
+                return;
+            }
+            (false, _) => start_suffix,
+            (_, false) => end_suffix,
+            (true, true) => "",
+        };
         let mut copies = Vec::with_capacity(iterations as usize);
         for (copy_index, value) in (start_value..end_value).enumerate() {
             let continue_label = syn::Lifetime::new(
@@ -1582,6 +1595,35 @@ mod tests {
         assert_eq!(lowered.matches("let i =").count(), 4, "{lowered}");
         assert!(lowered.contains("'__fe2o3_unrolled_for_0"), "{lowered}");
         assert_eq!(&original_contract[..8], &CONTROL_FLOW_CONTRACT_MAGIC_V1);
+    }
+
+    #[test]
+    fn literal_for_preserves_an_end_owned_element_suffix() {
+        let mut input: ItemFn = parse_quote! {
+            fn kernel(mut output: u64) {
+                for i in 0..2u64 {
+                    output ^= i.wrapping_sub(1);
+                }
+            }
+        };
+        let declaration =
+            parse_control_flow_options_v1(&parse_quote!(control_flow(loop_bounds(2)))).unwrap();
+
+        lower_bounded_for_loops_v1(&mut input, Some(&declaration)).unwrap();
+
+        let lowered = quote!(#input).to_string();
+        assert!(lowered.contains("let i = 0u64"), "{lowered}");
+        assert!(lowered.contains("let i = 1u64"), "{lowered}");
+
+        let mut mismatched: ItemFn = parse_quote! {
+            fn kernel() { for i in 0u32..2u64 { let _ = i; } }
+        };
+        assert!(
+            lower_bounded_for_loops_v1(&mut mismatched, Some(&declaration))
+                .unwrap_err()
+                .to_string()
+                .contains("identical explicit integer suffixes")
+        );
     }
 
     #[test]
