@@ -20,6 +20,7 @@ pub mod group;
 pub mod half;
 pub mod lds;
 pub mod math;
+pub mod memory;
 pub mod mx;
 pub mod simd;
 pub mod sync;
