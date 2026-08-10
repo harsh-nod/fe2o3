@@ -1,3 +1,4 @@
+mod application_handoff;
 mod binding_wrapper;
 mod capability_broker;
 mod clean;
@@ -337,7 +338,11 @@ fn run_cargo_with_backend(
         .map_err(|error| format!("failed to prepare pinned Cargo executable: {error}"))?;
     let mut forwarded_args = args.to_vec();
     if command == "run" {
-        inject_application_runner(&context.project, &mut forwarded_args)?;
+        inject_application_runner(
+            &context.project,
+            context.generation.artifact_dir(),
+            &mut forwarded_args,
+        )?;
     }
     let artifact_dir = context.generation.artifact_dir();
     let capability_profile = if context
@@ -410,6 +415,7 @@ fn run_cargo_with_backend(
 
 fn inject_application_runner(
     project: &project::CargoProject,
+    artifact_dir: &project::PinnedDirectory,
     args: &mut Vec<OsString>,
 ) -> Result<(), String> {
     let target = match selected_run_target(args)? {
@@ -426,12 +432,13 @@ fn inject_application_runner(
     }
     let original_runner = resolve_original_runner(project, args, &target)?;
     reject_recursive_runner(&original_runner)?;
-    inject_application_runner_config(args, &target, &original_runner)
+    inject_application_runner_config(args, &target, artifact_dir, &original_runner)
 }
 
 fn inject_application_runner_config(
     args: &mut Vec<OsString>,
     target: &str,
+    artifact_dir: &project::PinnedDirectory,
     original_runner: &[OsString],
 ) -> Result<(), String> {
     let executable = env::current_exe()
@@ -440,9 +447,14 @@ fn inject_application_runner_config(
         "cargo fe2o3 run requires a UTF-8 cargo-fe2o3 executable path for Cargo runner configuration"
             .to_string()
     })?;
+    let (artifact_device, artifact_inode) = artifact_dir.identity_parts();
     let mut runner = vec![
         executable.to_string(),
         INTERNAL_RUNNER_ARG.to_string(),
+        application_handoff::RUNNER_CONTEXT_VERSION.to_string(),
+        hex_encode(os_bytes(artifact_dir.display_path().as_os_str())),
+        artifact_device.to_string(),
+        artifact_inode.to_string(),
         original_runner.len().to_string(),
     ];
     runner.extend(
@@ -706,20 +718,37 @@ fn run_application_boundary(args: &[OsString]) -> ExitCode {
 }
 
 fn run_application_boundary_result(args: &[OsString]) -> Result<std::process::ExitStatus, String> {
-    if args.len() < 2 {
-        return Err("runner requires an original-runner count and application".to_string());
+    if args.len() < 6 {
+        return Err(
+            "runner requires a generation context, original-runner count, and application"
+                .to_string(),
+        );
     }
-    let runner_count = args[0]
+    if args[0] != application_handoff::RUNNER_CONTEXT_VERSION {
+        return Err(format!(
+            "unsupported application runner context {:?}",
+            args[0]
+        ));
+    }
+    let artifact_path = PathBuf::from(hex_decode_os(&args[1])?);
+    let artifact_device = parse_runner_u64(&args[2], "artifact directory device")?;
+    let artifact_inode = parse_runner_u64(&args[3], "artifact directory inode")?;
+    let artifact_dir = application_handoff::open_expected_generation(
+        artifact_path,
+        artifact_device,
+        artifact_inode,
+    )?;
+    let runner_count = args[4]
         .to_str()
         .and_then(|value| value.parse::<usize>().ok())
-        .ok_or_else(|| format!("invalid original runner argument count {:?}", args[0]))?;
-    let application_index = 1_usize
+        .ok_or_else(|| format!("invalid original runner argument count {:?}", args[4]))?;
+    let application_index = 5_usize
         .checked_add(runner_count)
         .ok_or_else(|| "original runner argument count overflowed".to_string())?;
     let application = args
         .get(application_index)
         .ok_or_else(|| "runner argument count does not leave an application".to_string())?;
-    let original_runner = args[1..application_index]
+    let original_runner = args[5..application_index]
         .iter()
         .map(|argument| hex_decode_os(argument))
         .collect::<Result<Vec<_>, _>>()?;
@@ -730,6 +759,42 @@ fn run_application_boundary_result(args: &[OsString]) -> Result<std::process::Ex
         return Err("original Cargo runner executable may not be empty".to_string());
     }
     reject_recursive_runner(&original_runner)?;
+
+    let handoff = application_handoff::PinnedApplicationEnvelope::discover(&artifact_dir)?;
+    if let Some(mut handoff) = handoff {
+        if !original_runner.is_empty() {
+            return Err(
+                "Worker V2 application descriptor handoff does not permit an intermediate Cargo runner"
+                    .to_string(),
+            );
+        }
+        let current_dir = env::current_dir()
+            .map_err(|error| format!("failed to resolve application runner directory: {error}"))?;
+        let application_path =
+            binding_wrapper::resolve_command_executable(application, &current_dir)
+                .map_err(|error| format!("failed to resolve application executable: {error}"))?;
+        let mut pinned_application =
+            pinned_executable::PinnedExecutable::open(&application_path)
+                .map_err(|error| format!("failed to pin application executable: {error}"))?;
+        if !pinned_application
+            .declares_protocol_marker(application_handoff::APPLICATION_PROTOCOL_MARKER)
+            .map_err(|error| format!("failed to inspect application handoff protocol: {error}"))?
+        {
+            return Err(
+                "application does not declare Worker V2 descriptor handoff protocol V1".to_string(),
+            );
+        }
+        let child_sha256 = *pinned_application.sha256();
+        let mut child = pinned_application
+            .command()
+            .map_err(|error| format!("failed to prepare pinned application: {error}"))?;
+        child.args(&args[application_index + 1..]);
+        scrub_application_environment(child.as_command_mut());
+        handoff.configure_child(child.as_command_mut(), child_sha256)?;
+        return child
+            .status()
+            .map_err(|error| format!("failed to launch pinned Cargo application: {error}"));
+    }
 
     let mut child = if let Some(program) = original_runner.first() {
         let mut command = Command::new(program);
@@ -742,6 +807,13 @@ fn run_application_boundary_result(args: &[OsString]) -> Result<std::process::Ex
         command.args(&args[application_index + 1..]);
         command
     };
+    scrub_application_environment(&mut child);
+    child
+        .status()
+        .map_err(|error| format!("failed to launch Cargo runner/application: {error}"))
+}
+
+fn scrub_application_environment(child: &mut Command) {
     for (name, _) in env::vars_os() {
         let bytes = os_bytes(&name);
         if bytes.starts_with(b"FE2O3_")
@@ -756,9 +828,13 @@ fn run_application_boundary_result(args: &[OsString]) -> Result<std::process::Ex
             child.env_remove(name);
         }
     }
-    child
-        .status()
-        .map_err(|error| format!("failed to launch Cargo runner/application: {error}"))
+}
+
+fn parse_runner_u64(value: &OsStr, kind: &str) -> Result<u64, String> {
+    value
+        .to_str()
+        .and_then(|value| value.parse::<u64>().ok())
+        .ok_or_else(|| format!("invalid {kind} {value:?}"))
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
@@ -1114,6 +1190,7 @@ mod tests {
         inject_application_runner_config, normalize_invocation, parse_rocminfo_target,
         selected_run_target,
     };
+    use crate::project::PinnedDirectory;
     use std::ffi::OsString;
 
     #[test]
@@ -1164,12 +1241,18 @@ Agent 2
 
     #[test]
     fn runner_configuration_precedes_and_preserves_application_arguments() {
+        let artifact_dir = PinnedDirectory::open_existing(
+            std::env::current_dir().expect("current directory"),
+            "runner configuration test directory",
+        )
+        .expect("pin test directory");
         let mut args = ["--target", "gfx942", "--", "application"]
             .map(OsString::from)
             .to_vec();
         inject_application_runner_config(
             &mut args,
             "gfx942",
+            &artifact_dir,
             &[
                 OsString::from("qemu"),
                 OsString::from("-cpu"),

@@ -1046,13 +1046,12 @@ fn application_runner_scrubs_build_environment_and_preserves_non_utf8_argv() {
     let payload = OsString::from_vec(b"application-\xff".to_vec());
     let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
     command
-        .args([
-            OsString::from("__fe2o3-runner-v1"),
-            OsString::from("0"),
-            OsString::from(env!("CARGO_BIN_EXE_cargo-fe2o3-runner-app-fixture")),
-            report.as_os_str().to_os_string(),
+        .args(internal_runner_args(
+            &root,
+            Path::new(env!("CARGO_BIN_EXE_cargo-fe2o3-runner-app-fixture")),
+            &report,
             payload,
-        ])
+        ))
         .env("FE2O3_PRIVATE_BUILD_CAPABILITY", "must-not-leak")
         .env("FE2O3_BINDING_WRAPPER_MODE_V1", "1")
         .env("CARGO_ENCODED_RUSTFLAGS", "must-not-leak")
@@ -1076,6 +1075,39 @@ fn application_runner_scrubs_build_environment_and_preserves_non_utf8_argv() {
     assert_eq!(report["leaked_environment"], serde_json::json!([]));
     assert_eq!(report["payload_hex"], "6170706c69636174696f6e2dff");
     fs::remove_dir_all(root).expect("remove runner fixture");
+}
+
+#[cfg(unix)]
+fn internal_runner_args(
+    root: &Path,
+    application: &Path,
+    report: &Path,
+    payload: OsString,
+) -> Vec<OsString> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let artifact = root.join("runner-artifact");
+    fs::create_dir(&artifact).expect("create runner artifact directory");
+    fs::set_permissions(&artifact, fs::Permissions::from_mode(0o700))
+        .expect("make runner artifact directory private");
+    let owner = artifact.join(".fe2o3-owned-v1");
+    let mut owner_bytes = b"fe2o3-owned-v1\0".to_vec();
+    owner_bytes.extend_from_slice(&[1; 16]);
+    fs::write(&owner, owner_bytes).expect("write runner artifact owner record");
+    fs::set_permissions(&owner, fs::Permissions::from_mode(0o600))
+        .expect("make runner owner record private");
+    let metadata = fs::metadata(&artifact).expect("inspect runner artifact directory");
+    vec![
+        OsString::from("__fe2o3-runner-v1"),
+        OsString::from("2"),
+        OsString::from(hex(os_bytes(artifact.as_os_str()))),
+        OsString::from(metadata.dev().to_string()),
+        OsString::from(metadata.ino().to_string()),
+        OsString::from("0"),
+        application.as_os_str().to_os_string(),
+        report.as_os_str().to_os_string(),
+        payload,
+    ]
 }
 
 #[cfg(unix)]

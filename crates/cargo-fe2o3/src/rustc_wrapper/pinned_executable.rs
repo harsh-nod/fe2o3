@@ -389,6 +389,67 @@ mod platform {
             )
         }
 
+        pub(crate) fn declares_protocol_marker(
+            &mut self,
+            marker: &[u8],
+        ) -> Result<bool, PinExecutableError> {
+            if marker.is_empty() {
+                return Ok(false);
+            }
+            self.file
+                .seek(SeekFrom::Start(0))
+                .map_err(|source| PinExecutableError::Rewind {
+                    path: self.display_path.clone(),
+                    source,
+                })?;
+            let mut digest = Sha256::new();
+            let mut buffer = [0_u8; HASH_CHUNK_BYTES];
+            let mut overlap = Vec::with_capacity(marker.len().saturating_sub(1));
+            let mut total = 0_u64;
+            let mut declared = false;
+            loop {
+                let read = read_retry(&mut self.file, &mut buffer).map_err(|source| {
+                    PinExecutableError::Read {
+                        path: self.display_path.clone(),
+                        source,
+                    }
+                })?;
+                if read == 0 {
+                    break;
+                }
+                total = total.saturating_add(read as u64);
+                digest.update(&buffer[..read]);
+                overlap.extend_from_slice(&buffer[..read]);
+                declared |= overlap.windows(marker.len()).any(|window| window == marker);
+                let retained = overlap.len().min(marker.len().saturating_sub(1));
+                overlap.drain(..overlap.len() - retained);
+            }
+            let current = self
+                .file
+                .metadata()
+                .map_err(|source| PinExecutableError::Inspect {
+                    path: self.display_path.clone(),
+                    source,
+                })?;
+            if total != self.snapshot.size
+                || !self
+                    .snapshot
+                    .same_execution_object(ObjectSnapshot::from_metadata(&current))
+                || <[u8; 32]>::from(digest.finalize()) != self.sha256
+            {
+                return Err(PinExecutableError::ChangedDuringRead {
+                    path: self.display_path.clone(),
+                });
+            }
+            self.file
+                .seek(SeekFrom::Start(0))
+                .map_err(|source| PinExecutableError::Rewind {
+                    path: self.display_path.clone(),
+                    source,
+                })?;
+            Ok(declared)
+        }
+
         pub(crate) fn command(&self) -> Result<PinnedCommand<'_>, PinExecutableError> {
             let current = self
                 .file

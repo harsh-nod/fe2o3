@@ -2,7 +2,7 @@ use crate::project::PinnedDirectory;
 use crate::worker_v2::WorkerV2ConfigIdentity;
 use cap_primitives::fs::{read_base_dir, remove_open_dir_all};
 use rustix::fs::{AtFlags, FileType, FlockOperation};
-use rustix::fs::{Mode, OFlags, flock, fstat, fsync, openat, renameat, statat, unlinkat};
+use rustix::fs::{Mode, OFlags, fchmod, flock, fstat, fsync, openat, renameat, statat, unlinkat};
 use sha2::{Digest, Sha256};
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
@@ -42,6 +42,7 @@ impl PreparedGeneration {
             target_dir.open_child(ARTIFACT_COMPONENT, "fe2o3 artifact directory")?
         {
             recover_or_validate_artifact_guard(target_dir, &existing)?;
+            make_artifact_directory_private(&existing)?;
             if let Some(token) = load_marker(&existing, semantic)? {
                 return Ok(Self {
                     _lock: lock,
@@ -65,6 +66,11 @@ impl PreparedGeneration {
                     return Err(error);
                 }
             };
+        if let Err(error) = make_artifact_directory_private(&artifact_dir) {
+            let _ = remove_open_dir_all(artifact_dir.into_file());
+            let _ = unlinkat(target_dir.file(), INTENT_NAME, AtFlags::empty());
+            return Err(error);
+        }
         if let Err(error) =
             write_fixed_record_exclusive(&artifact_dir, OWNER_NAME, OWNER_MAGIC, guard_token)
         {
@@ -117,6 +123,19 @@ impl PreparedGeneration {
         self.pending = false;
         Ok(())
     }
+}
+
+fn make_artifact_directory_private(directory: &PinnedDirectory) -> Result<(), String> {
+    let normalized = directory.try_clone_for_transfer()?;
+    fchmod(&normalized, Mode::RUSR | Mode::WUSR | Mode::XUSR)
+        .map_err(|error| format!("failed to make fe2o3 artifact directory private: {error}"))?;
+    let stat = fstat(&normalized)
+        .map_err(|error| format!("failed to inspect private fe2o3 artifact directory: {error}"))?;
+    if FileType::from_raw_mode(stat.st_mode) != FileType::Directory || stat.st_mode & 0o777 != 0o700
+    {
+        return Err("fe2o3 artifact directory is not private 0700".to_string());
+    }
+    Ok(())
 }
 
 #[derive(Debug)]

@@ -457,6 +457,16 @@ impl PinnedDirectory {
         &self.file
     }
 
+    #[cfg(unix)]
+    pub(crate) const fn identity_parts(&self) -> (u64, u64) {
+        (self.identity.device, self.identity.inode)
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn matches_identity(&self, device: u64, inode: u64) -> bool {
+        self.identity == DirectoryIdentity { device, inode }
+    }
+
     pub(crate) fn into_file(self) -> File {
         self.file
     }
