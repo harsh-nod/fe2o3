@@ -29,10 +29,11 @@ use crate::trusted_device_items::{TrustedDeviceItem, TrustedHalfOperation};
 use dialect_amdgcn::{DeviceMathDiagnosticItem, recognized_device_math_operation};
 use fe2o3_amd_target::AmdTargetId;
 use fe2o3_kernel_ir::{
-    AccessMode, AddressSpace, BasicBlock, BinaryOp, BlockId, ComparePredicate, Constant,
-    FloatConversionKind, FloatOperation, Function, FunctionId, Kernel, LaunchDomain, LaunchExtent,
-    MemoryAccess, Module, Operation, OperationKind, ScalarType, Signature, SwitchCase, Terminator,
-    Type, ValueDef, ValueId, WorkgroupSize, verify_module,
+    AccessMode, AddressSpace, AmdGpuDiagnosticOperation, BasicBlock, BinaryOp, BlockId,
+    ComparePredicate, Constant, FloatConversionKind, FloatOperation, Function, FunctionId, Kernel,
+    LaunchDomain, LaunchExtent, MemoryAccess, Module, Operation, OperationKind, ScalarType,
+    Signature, SwitchCase, TargetCapability, Terminator, Type, ValueDef, ValueId, WorkgroupSize,
+    verify_module,
 };
 use reserved_fe2o3_symbols::{
     DeviceFfiAddressSpaceV1, DeviceFfiPhysicalResultV1, DeviceFfiPhysicalTypeV1,
@@ -378,7 +379,11 @@ fn translate_and_verify_with_float_target(
             .filter(|(identity, _)| !definition_ids.contains(identity))
             .map(|(identity, signature)| {
                 let id = FunctionId::new(identity.clone());
-                if let Some(float) = FloatOperation::from_intrinsic_id(&id) {
+                if let Some(diagnostic) = AmdGpuDiagnosticOperation::from_intrinsic_id(&id) {
+                    let declaration = diagnostic.declaration();
+                    debug_assert_eq!(declaration.signature, signature);
+                    declaration
+                } else if let Some(float) = FloatOperation::from_intrinsic_id(&id) {
                     let declaration = float.declaration();
                     debug_assert_eq!(declaration.signature, signature);
                     declaration
@@ -545,6 +550,7 @@ struct FunctionLowerer<'function, 'declarations> {
     strict_float_policy: StrictFloatPolicy,
     control_flow_ssa: control_flow_ssa::ControlFlowSsaPlan,
     block_parameters: BTreeMap<usize, BTreeMap<usize, ValueId>>,
+    required_capabilities: BTreeSet<TargetCapability>,
 }
 
 impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
@@ -572,6 +578,7 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
             strict_float_policy,
             control_flow_ssa: control_flow_ssa::ControlFlowSsaPlan::default(),
             block_parameters: BTreeMap::new(),
+            required_capabilities: BTreeSet::new(),
         }
     }
 
@@ -747,7 +754,9 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 blocks,
             ),
         };
-        definition.required_capabilities = definition.derived_capabilities();
+        let mut required_capabilities = definition.derived_capabilities();
+        required_capabilities.extend(self.required_capabilities);
+        definition.required_capabilities = required_capabilities;
         Ok(definition)
     }
 
@@ -1593,6 +1602,9 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 ) => {
                     unreachable!("collective operations are handled by semantic lowering")
                 }
+                Some(
+                    TrustedDeviceItem::AmdGpuInline(_) | TrustedDeviceItem::AmdGpuDiagnostic(_),
+                ) => unreachable!("AMDGPU diagnostics are handled by semantic lowering"),
                 None => {
                     return Err(diagnostic(
                         TranslationDiagnosticCode::UnsupportedCall,

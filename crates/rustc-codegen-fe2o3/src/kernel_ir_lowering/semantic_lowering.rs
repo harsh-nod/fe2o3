@@ -7,6 +7,7 @@
 
 mod collective_v1;
 mod control_flow;
+mod diagnostics;
 mod general_v3;
 mod memory_v1;
 
@@ -158,6 +159,11 @@ struct TerminatorHandler {
 }
 
 const CALL_HANDLERS: &[CallHandler] = &[
+    CallHandler {
+        name: "gfx942-diagnostics",
+        claim: diagnostics::claim_call,
+        lower: diagnostics::lower_call,
+    },
     CallHandler {
         name: "gfx942-collective-v1",
         claim: collective_v1::claim_call,

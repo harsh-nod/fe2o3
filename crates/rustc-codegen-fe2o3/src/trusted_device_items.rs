@@ -33,6 +33,28 @@ pub(crate) enum TrustedHalfOperation {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TrustedAmdGpuInlineOperation {
+    VMovB32,
+    VAddU32,
+    VSubU32,
+    VAndB32,
+    VOrB32,
+    VXorB32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TrustedAmdGpuDiagnosticOperation {
+    Print0,
+    Print1,
+    Print2,
+    AssertFail,
+    Clock32,
+    Trap,
+    DebugTrap,
+    ProfilingMarker,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TrustedDeviceItem {
     DisjointSlice,
     ThreadIndex,
@@ -61,6 +83,8 @@ pub(crate) enum TrustedDeviceItem {
     DeviceValue(DeviceValueDiagnosticItem),
     DeviceMath(DeviceMathDiagnosticItem),
     HalfOperation(TrustedHalfOperation),
+    AmdGpuInline(TrustedAmdGpuInlineOperation),
+    AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation),
 }
 
 const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
@@ -183,6 +207,76 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         TrustedDeviceItem::Gfx942BarrierWait,
         "fe2o3_device_gfx942_barrier_wait_v1",
         "fe2o3_device::sync::gfx942_barrier_wait",
+    ),
+    (
+        TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VMovB32),
+        "fe2o3_device_amdgpu_v_mov_b32_v1",
+        "fe2o3_device::diagnostics::__amdgpu_v_mov_b32_v1",
+    ),
+    (
+        TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VAddU32),
+        "fe2o3_device_amdgpu_v_add_u32_v1",
+        "fe2o3_device::diagnostics::__amdgpu_v_add_u32_v1",
+    ),
+    (
+        TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VSubU32),
+        "fe2o3_device_amdgpu_v_sub_u32_v1",
+        "fe2o3_device::diagnostics::__amdgpu_v_sub_u32_v1",
+    ),
+    (
+        TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VAndB32),
+        "fe2o3_device_amdgpu_v_and_b32_v1",
+        "fe2o3_device::diagnostics::__amdgpu_v_and_b32_v1",
+    ),
+    (
+        TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VOrB32),
+        "fe2o3_device_amdgpu_v_or_b32_v1",
+        "fe2o3_device::diagnostics::__amdgpu_v_or_b32_v1",
+    ),
+    (
+        TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VXorB32),
+        "fe2o3_device_amdgpu_v_xor_b32_v1",
+        "fe2o3_device::diagnostics::__amdgpu_v_xor_b32_v1",
+    ),
+    (
+        TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::Print0),
+        "fe2o3_device_gpu_printf_0_v1",
+        "fe2o3_device::diagnostics::__gpu_printf_0_v1",
+    ),
+    (
+        TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::Print1),
+        "fe2o3_device_gpu_printf_1_v1",
+        "fe2o3_device::diagnostics::__gpu_printf_1_v1",
+    ),
+    (
+        TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::Print2),
+        "fe2o3_device_gpu_printf_2_v1",
+        "fe2o3_device::diagnostics::__gpu_printf_2_v1",
+    ),
+    (
+        TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::AssertFail),
+        "fe2o3_device_gpu_assert_fail_v1",
+        "fe2o3_device::diagnostics::__gpu_assert_fail_v1",
+    ),
+    (
+        TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::Clock32),
+        "fe2o3_device_clock32_v1",
+        "fe2o3_device::diagnostics::clock32",
+    ),
+    (
+        TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::Trap),
+        "fe2o3_device_trap_v1",
+        "fe2o3_device::diagnostics::trap",
+    ),
+    (
+        TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::DebugTrap),
+        "fe2o3_device_debugtrap_v1",
+        "fe2o3_device::diagnostics::debugtrap",
+    ),
+    (
+        TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::ProfilingMarker),
+        "fe2o3_device_profiling_marker_v1",
+        "fe2o3_device::diagnostics::__profiling_marker_v1",
     ),
 ];
 
@@ -419,7 +513,10 @@ const fn narrow_format(value: DeviceValueDiagnosticItem) -> Option<NarrowFloatFo
 
 #[cfg(test)]
 mod tests {
-    use super::{HALF_MATH_DIAGNOSTIC_ITEMS, TrustedDeviceItem};
+    use super::{
+        HALF_MATH_DIAGNOSTIC_ITEMS, TrustedAmdGpuDiagnosticOperation, TrustedAmdGpuInlineOperation,
+        TrustedDeviceItem,
+    };
     use dialect_amdgcn::{DeviceMathDiagnosticItem, DeviceValueDiagnosticItem};
 
     #[test]
@@ -449,6 +546,20 @@ mod tests {
             TrustedDeviceItem::Gfx942WorkgroupExclusiveScanSum,
             TrustedDeviceItem::Gfx942BarrierArrive,
             TrustedDeviceItem::Gfx942BarrierWait,
+            TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VMovB32),
+            TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VAddU32),
+            TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VSubU32),
+            TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VAndB32),
+            TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VOrB32),
+            TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VXorB32),
+            TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::Print0),
+            TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::Print1),
+            TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::Print2),
+            TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::AssertFail),
+            TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::Clock32),
+            TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::Trap),
+            TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::DebugTrap),
+            TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::ProfilingMarker),
         ];
 
         let paths = items.map(TrustedDeviceItem::canonical_path);

@@ -1,12 +1,16 @@
 use super::*;
 use crate::mir_import::{
     MirImportedType, MirLocal, MirLocalRole, MirPlaceRef, MirProjectionElem,
-    MirSemanticAdmissionInputsV2, MirStatement, MirSwitchTarget,
+    MirSemanticAdmissionInputsV2, MirSourceLocation, MirStatement, MirSwitchTarget,
 };
+use crate::trusted_device_items::{TrustedAmdGpuDiagnosticOperation, TrustedAmdGpuInlineOperation};
 use dialect_mir::MirType;
 use fe2o3_artifacts::{
     AbiLayout, BlockSize, Capability, Dimensions, Endianness, IdentityText, LaunchContract,
     PointerWidth, TargetIdentity,
+};
+use fe2o3_rustc_front::{
+    FrontendLaunchBoundsV1, FrontendWorkgroupDimensionsV1, KernelFrontendContractV1,
 };
 use reserved_fe2o3_symbols::{
     KernelBindingIdV1, TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3, derive_crate_binding_id_v1,
@@ -432,6 +436,358 @@ fn option_payload_cannot_escape_the_bounds_checked_some_region() {
             .message
             .contains("boolean switch must have exact 0/1 cases")
     }));
+}
+
+#[test]
+fn gfx942_diagnostic_items_lower_to_closed_ir_contracts() {
+    let module = lower_general_v3(&MirModule {
+        functions: vec![diagnostics_alpha()],
+    })
+    .expect("bounded diagnostics kernel");
+    let kernel = function(&module, "tests::alpha");
+    let operations = operations(kernel);
+    let assemblies = operations
+        .iter()
+        .filter_map(|operation| match &operation.kind {
+            OperationKind::InlineAssembly(assembly) => Some(assembly),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(assemblies.len(), 6);
+    assert!(assemblies.iter().all(|assembly| {
+        assembly.target == fe2o3_kernel_ir::InlineAssemblyTarget::AmdGpuGfx942
+            && assembly.source.is_complete()
+            && assembly.declared_effects.is_empty()
+            && assembly
+                .options
+                .contains(&fe2o3_kernel_ir::AssemblyOption::NoMemory)
+            && assembly
+                .options
+                .contains(&fe2o3_kernel_ir::AssemblyOption::Pure)
+    }));
+    assert_eq!(
+        assemblies
+            .iter()
+            .map(|assembly| assembly.mnemonic.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "v_mov_b32",
+            "v_add_u32",
+            "v_sub_u32",
+            "v_and_b32",
+            "v_or_b32",
+            "v_xor_b32",
+        ]
+    );
+
+    let diagnostics = operations
+        .iter()
+        .filter_map(|operation| match &operation.kind {
+            OperationKind::Call { callee, arguments } => {
+                AmdGpuDiagnosticOperation::from_intrinsic_call(callee, arguments)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(diagnostics.len(), 6);
+    assert!(matches!(
+        diagnostics.as_slice(),
+        [
+            AmdGpuDiagnosticOperation::Clock32,
+            AmdGpuDiagnosticOperation::Print { .. },
+            AmdGpuDiagnosticOperation::ProfilingMarker { .. },
+            AmdGpuDiagnosticOperation::DebugTrap,
+            AmdGpuDiagnosticOperation::AssertFail { .. },
+            AmdGpuDiagnosticOperation::Trap,
+        ]
+    ));
+    assert_eq!(
+        module
+            .functions
+            .iter()
+            .filter(|function| {
+                AmdGpuDiagnosticOperation::from_intrinsic_id(&function.id).is_some()
+                    && function.body.is_none()
+            })
+            .count(),
+        6
+    );
+    assert!(
+        module
+            .required_capabilities
+            .contains(&TargetCapability::Extension {
+                namespace: fe2o3_kernel_ir::AMDGPU_GFX942_INLINE_ASSEMBLY_CAPABILITY_NAMESPACE
+                    .to_owned(),
+                name: fe2o3_kernel_ir::AMDGPU_GFX942_INLINE_ASSEMBLY_CAPABILITY_NAME.to_owned(),
+            })
+    );
+    assert!(
+        module
+            .required_capabilities
+            .contains(&TargetCapability::Extension {
+                namespace: fe2o3_kernel_ir::AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAMESPACE
+                    .to_owned(),
+                name: fe2o3_kernel_ir::AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAME.to_owned(),
+            })
+    );
+}
+
+#[test]
+fn gfx942_diagnostic_admission_fails_closed() {
+    let mut missing_contract = diagnostics_alpha();
+    missing_contract.frontend_contract = None;
+    let errors = lower_general_v3(&MirModule {
+        functions: vec![missing_contract],
+    })
+    .expect_err("inline operation without authenticated frontend contract");
+    assert!(errors.diagnostics().iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("requires an authenticated frontend contract")
+    }));
+
+    let mut missing_source = diagnostics_alpha();
+    missing_source
+        .blocks
+        .iter_mut()
+        .find(|block| block.index == 7)
+        .unwrap()
+        .terminator
+        .as_mut()
+        .unwrap()
+        .source = None;
+    let errors = lower_general_v3(&MirModule {
+        functions: vec![missing_source],
+    })
+    .expect_err("inline operation without source location");
+    assert!(errors.diagnostics().iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("requires a concrete source location")
+    }));
+
+    let mut wrong_target = diagnostics_alpha();
+    wrong_target
+        .blocks
+        .iter_mut()
+        .find(|block| block.index == 4)
+        .unwrap()
+        .statements
+        .clear();
+    let errors = translate_and_verify_for_target(
+        &MirModule {
+            functions: vec![wrong_target],
+        },
+        &AmdGpuTarget::new("gfx90a"),
+    )
+    .expect_err("diagnostics on a non-gfx942 target");
+    assert!(
+        errors.diagnostics().iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("requires the exact gfx942 target")
+        }),
+        "{errors}"
+    );
+
+    let mut wrong_type = diagnostics_alpha();
+    let MirTerminatorKind::Call { operands, .. } = &mut wrong_type
+        .blocks
+        .iter_mut()
+        .find(|block| block.index == 7)
+        .unwrap()
+        .terminator
+        .as_mut()
+        .unwrap()
+        .kind
+    else {
+        unreachable!()
+    };
+    operands[0] = operand(1);
+    let errors = lower_general_v3(&MirModule {
+        functions: vec![wrong_type],
+    })
+    .expect_err("f32 passed to a typed u32 inline operation");
+    assert!(
+        errors
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| { diagnostic.message.contains("operand 0 must lower to u32") })
+    );
+
+    let mut lookalike = diagnostics_alpha();
+    let MirTerminatorKind::Call { callee, .. } = &mut lookalike
+        .blocks
+        .iter_mut()
+        .find(|block| block.index == 7)
+        .unwrap()
+        .terminator
+        .as_mut()
+        .unwrap()
+        .kind
+    else {
+        unreachable!()
+    };
+    *callee = Some(MirCallee::untrusted_for_test(
+        TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VMovB32).canonical_path(),
+    ));
+    let errors = lower_general_v3(&MirModule {
+        functions: vec![lookalike],
+    })
+    .expect_err("path lookalike without diagnostic-item identity");
+    assert!(errors.diagnostics().iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("has no classified trusted device identity")
+    }));
+}
+
+fn diagnostics_alpha() -> MirFunction {
+    let mut function = alpha();
+    let dimensions = FrontendWorkgroupDimensionsV1::new([256, 1, 1]).unwrap();
+    let launch = FrontendLaunchBoundsV1::new(Some(dimensions), Some(dimensions), None).unwrap();
+    function.frontend_contract = Some(
+        crate::collector::AuthenticatedKernelFrontendContractV1::for_test(
+            KernelFrontendContractV1::new(Some(launch), None).unwrap(),
+        ),
+    );
+    for index in 12..=18 {
+        function
+            .locals
+            .push(local(index, MirLocalRole::Temp, MirTypeShape::U32));
+    }
+    function.locals.sort_by_key(|local| local.index);
+    function.local_count = function.locals.len();
+    function.blocks[4].terminator = Some(MirTerminator {
+        kind: call(
+            TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::Clock32),
+            Vec::new(),
+            12,
+            7,
+        ),
+        source: None,
+    });
+    function.blocks.extend([
+        diagnostic_call_block(
+            7,
+            TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VMovB32),
+            vec![operand(12)],
+            13,
+            8,
+            true,
+        ),
+        diagnostic_call_block(
+            8,
+            TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VAddU32),
+            vec![operand(13), operand(12)],
+            14,
+            9,
+            true,
+        ),
+        diagnostic_call_block(
+            9,
+            TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VSubU32),
+            vec![operand(14), operand(12)],
+            15,
+            10,
+            true,
+        ),
+        diagnostic_call_block(
+            10,
+            TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VAndB32),
+            vec![operand(15), operand(12)],
+            16,
+            11,
+            true,
+        ),
+        diagnostic_call_block(
+            11,
+            TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VOrB32),
+            vec![operand(16), operand(12)],
+            17,
+            12,
+            true,
+        ),
+        diagnostic_call_block(
+            12,
+            TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VXorB32),
+            vec![operand(17), operand(12)],
+            18,
+            13,
+            true,
+        ),
+        diagnostic_call_block(
+            13,
+            TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::Print2),
+            vec![u32_constant(0x1234_5678), operand(12), operand(18)],
+            0,
+            14,
+            false,
+        ),
+        diagnostic_call_block(
+            14,
+            TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::ProfilingMarker),
+            vec![u32_constant(73)],
+            0,
+            15,
+            false,
+        ),
+        diagnostic_call_block(
+            15,
+            TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::DebugTrap),
+            Vec::new(),
+            0,
+            16,
+            false,
+        ),
+        diagnostic_call_block(
+            16,
+            TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::AssertFail),
+            vec![u32_constant(0x7654_3210), u32_constant(41)],
+            0,
+            17,
+            false,
+        ),
+        diagnostic_call_block(
+            17,
+            TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::Trap),
+            Vec::new(),
+            0,
+            5,
+            false,
+        ),
+    ]);
+    function
+}
+
+fn diagnostic_call_block(
+    index: usize,
+    item: TrustedDeviceItem,
+    operands: Vec<MirOperandRef>,
+    destination: usize,
+    target: usize,
+    with_source: bool,
+) -> MirBlock {
+    MirBlock {
+        index,
+        statements: Vec::new(),
+        terminator: Some(MirTerminator {
+            kind: call(item, operands, destination, target),
+            source: with_source.then(|| MirSourceLocation {
+                file: "tests/diagnostics.rs".to_owned(),
+                line: index + 10,
+                column: 5,
+            }),
+        }),
+    }
+}
+
+fn u32_constant(value: u32) -> MirOperandRef {
+    MirOperandRef::Constant {
+        ty: imported(MirTypeShape::U32),
+        literal: MirConstant::U32(value),
+        value: value.to_string(),
+    }
 }
 
 fn lower_general_v3(module: &MirModule) -> Result<Module, TranslationErrors> {
@@ -945,6 +1301,7 @@ fn local(index: usize, role: MirLocalRole, shape: MirTypeShape) -> MirLocal {
 fn imported(shape: MirTypeShape) -> MirImportedType {
     let (kind, rust) = match &shape {
         MirTypeShape::Unit => (MirType::Unit, "()"),
+        MirTypeShape::U32 => (MirType::I32, "u32"),
         MirTypeShape::F32 => (MirType::F32, "f32"),
         MirTypeShape::USize => (MirType::USize, "usize"),
         MirTypeShape::ISize => (MirType::I64, "isize"),
