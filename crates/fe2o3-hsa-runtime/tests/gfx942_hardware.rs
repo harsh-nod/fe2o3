@@ -64,6 +64,7 @@ unsafe impl WorkerV2PrerequisiteAuthenticatorV1<GeneratedHardwareVecAddKernel>
     ) -> Result<WorkerV2PrerequisiteDecisionV1, Self::Error> {
         let artifact = request.artifact_identity();
         Ok(WorkerV2PrerequisiteDecisionV1::new(
+            request.challenge_identity().clone(),
             request.finalized_digest(),
             artifact.kernel_id(),
             artifact.executable_digest(),

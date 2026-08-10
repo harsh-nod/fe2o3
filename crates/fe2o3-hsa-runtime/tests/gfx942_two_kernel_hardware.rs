@@ -668,6 +668,7 @@ unsafe impl<K: CompilerGeneratedKernelExpectationV1> WorkerV2PrerequisiteAuthent
     ) -> Result<WorkerV2PrerequisiteDecisionV1, Self::Error> {
         let artifact = request.artifact_identity();
         Ok(WorkerV2PrerequisiteDecisionV1::new(
+            request.challenge_identity().clone(),
             request.finalized_digest(),
             artifact.kernel_id(),
             artifact.executable_digest(),

@@ -5,7 +5,8 @@ use crate::{
     CompilerGeneratedSemanticWitnessErrorV1, DeviceIdentity, FinalizedWorkerV2BundleAdmissionError,
     GeneratedArgumentPackingError, GeneratedArgumentPackingPlanV1, PhysicalMetadataValueV1,
     PublishedKernelPhysicalLayoutV1, PublishedPhysicalLaunchLayoutV1,
-    WorkerV2TypedKernelSelectionError, validate_compiler_generated_semantic_witness_v1,
+    WorkerV2FullLineagePrerequisiteChallengeIdentityV2, WorkerV2TypedKernelSelectionError,
+    validate_compiler_generated_semantic_witness_v1,
 };
 use fe2o3_amd_target::{AmdTargetId, FeatureState};
 use fe2o3_artifacts::{
@@ -86,6 +87,7 @@ impl WorkerV2SafetyPropertiesV1 {
 /// every executable field against the admitted Worker V2 bundle.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkerV2PrerequisiteDecisionV1 {
+    challenge_identity: WorkerV2FullLineagePrerequisiteChallengeIdentityV2,
     finalized_digest: PayloadDigest,
     kernel_id: KernelId,
     executable_digest: DigestBytes,
@@ -107,6 +109,7 @@ pub struct WorkerV2PrerequisiteDecisionV1 {
 impl WorkerV2PrerequisiteDecisionV1 {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
+        challenge_identity: WorkerV2FullLineagePrerequisiteChallengeIdentityV2,
         finalized_digest: PayloadDigest,
         kernel_id: KernelId,
         executable_digest: DigestBytes,
@@ -125,6 +128,7 @@ impl WorkerV2PrerequisiteDecisionV1 {
         safety_properties: WorkerV2SafetyPropertiesV1,
     ) -> Self {
         Self {
+            challenge_identity,
             finalized_digest,
             kernel_id,
             executable_digest,
@@ -142,6 +146,10 @@ impl WorkerV2PrerequisiteDecisionV1 {
             rust_effect_contract,
             safety_properties,
         }
+    }
+
+    pub const fn challenge_identity(&self) -> &WorkerV2FullLineagePrerequisiteChallengeIdentityV2 {
+        &self.challenge_identity
     }
 
     pub const fn finalized_digest(&self) -> PayloadDigest {
@@ -175,6 +183,7 @@ impl WorkerV2PrerequisiteDecisionV1 {
 
 /// Exact challenge presented to a reviewed compiler/Verus authenticator.
 pub struct WorkerV2PrerequisiteRequestV1<'admission, K> {
+    challenge_identity: WorkerV2FullLineagePrerequisiteChallengeIdentityV2,
     artifact_identity: &'admission ArtifactKernelIdentityV1,
     finalized_digest: PayloadDigest,
     target: AmdTargetId,
@@ -184,6 +193,10 @@ pub struct WorkerV2PrerequisiteRequestV1<'admission, K> {
 }
 
 impl<K> WorkerV2PrerequisiteRequestV1<'_, K> {
+    pub const fn challenge_identity(&self) -> &WorkerV2FullLineagePrerequisiteChallengeIdentityV2 {
+        &self.challenge_identity
+    }
+
     pub const fn artifact_identity(&self) -> &ArtifactKernelIdentityV1 {
         self.artifact_identity
     }
@@ -275,7 +288,11 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV2ExecutableV1<
         admission
             .acquire_currentness()
             .map_err(WorkerV2ExecutableAuthenticationError::CurrentPublication)?;
+        let challenge_identity = admission
+            .full_lineage_challenge_for(admission.artifact_identity())
+            .map_err(WorkerV2ExecutableAuthenticationError::FullLineage)?;
         let request = WorkerV2PrerequisiteRequestV1 {
+            challenge_identity,
             artifact_identity: admission.artifact_identity(),
             finalized_digest: admission.finalized_payload_identity().digest(),
             target: admission.target(),
@@ -333,6 +350,7 @@ pub enum WorkerV2ExecutableAuthenticationError<E> {
     SemanticWitness(CompilerGeneratedSemanticWitnessErrorV1),
     Profile(WorkerV2RequiredProfileError),
     CurrentPublication(FinalizedWorkerV2BundleAdmissionError),
+    FullLineage(FinalizedWorkerV2BundleAdmissionError),
     Authenticator(E),
     Prerequisite(WorkerV2PrerequisiteError),
 }
@@ -379,6 +397,11 @@ fn validate_prerequisites<K: CompilerGeneratedKernelExpectationV1>(
     actual: &WorkerV2PrerequisiteDecisionV1,
 ) -> Result<(), WorkerV2PrerequisiteError> {
     let artifact = request.artifact_identity();
+    if actual.challenge_identity != request.challenge_identity {
+        return Err(WorkerV2PrerequisiteError::IdentityMismatch(
+            "full-lineage challenge",
+        ));
+    }
     for (matches, field) in [
         (
             actual.finalized_digest == request.finalized_digest(),
@@ -1470,7 +1493,12 @@ impl<K: CompilerGeneratedKernelExpectationV1> InertLoadedWorkerV2KernelSelection
     > {
         validate_compiler_generated_semantic_witness_v1::<K>()
             .map_err(WorkerV2ExecutableAuthenticationError::SemanticWitness)?;
+        let challenge_identity = self
+            .selected
+            .full_lineage_challenge()
+            .map_err(WorkerV2ExecutableAuthenticationError::FullLineage)?;
         let request = WorkerV2PrerequisiteRequestV1 {
+            challenge_identity,
             artifact_identity: self.selected.artifact_identity(),
             finalized_digest: self.selected.finalized_payload_identity().digest(),
             target: self.target,
@@ -2998,6 +3026,7 @@ mod tests {
                 WorkerV2SafetyPropertiesV1::required()
             };
             Ok(WorkerV2PrerequisiteDecisionV1::new(
+                request.challenge_identity().clone(),
                 finalized_digest,
                 kernel_id,
                 artifact.executable_digest(),
@@ -3015,6 +3044,27 @@ mod tests {
                 effects,
                 properties,
             ))
+        }
+    }
+
+    struct StaleChallengeAuthenticator {
+        challenge: WorkerV2FullLineagePrerequisiteChallengeIdentityV2,
+    }
+
+    unsafe impl<K: CompilerGeneratedKernelExpectationV1> WorkerV2PrerequisiteAuthenticatorV1<K>
+        for StaleChallengeAuthenticator
+    {
+        type Error = &'static str;
+
+        unsafe fn authenticate(
+            &mut self,
+            request: &WorkerV2PrerequisiteRequestV1<'_, K>,
+        ) -> Result<WorkerV2PrerequisiteDecisionV1, Self::Error> {
+            // SAFETY: this adversarial authenticator intentionally delegates all ordinary
+            // fields to the exact test implementation, then substitutes only the challenge.
+            let mut decision = unsafe { FakeAuthenticator::exact().authenticate(request)? };
+            decision.challenge_identity = self.challenge.clone();
+            Ok(decision)
         }
     }
 
@@ -4100,6 +4150,32 @@ mod tests {
                 WorkerV2ExecutableAuthenticationError::Prerequisite(_)
             ));
         }
+    }
+
+    #[test]
+    fn package_and_receipt_substitution_in_the_challenge_are_rejected() {
+        let (first, _first_directory) = admitted_for_lifecycle_test(0xb1);
+        let first_challenge = first
+            .full_lineage_challenge_for(first.artifact_identity())
+            .unwrap();
+        let (second, _second_directory) = admitted_for_lifecycle_test(0xb2);
+        let second_challenge = second
+            .full_lineage_challenge_for(second.artifact_identity())
+            .unwrap();
+
+        assert_ne!(first_challenge.package(), second_challenge.package());
+        assert_ne!(first_challenge.receipt(), second_challenge.receipt());
+        assert!(matches!(
+            AuthenticatedWorkerV2ExecutableV1::<TestKernel>::authenticate(
+                second,
+                &mut StaleChallengeAuthenticator {
+                    challenge: first_challenge,
+                },
+            ),
+            Err(WorkerV2ExecutableAuthenticationError::Prerequisite(
+                WorkerV2PrerequisiteError::IdentityMismatch("full-lineage challenge")
+            ))
+        ));
     }
 
     #[test]

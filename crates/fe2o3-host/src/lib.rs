@@ -143,7 +143,9 @@ pub use tile_interop::{
 pub use worker_v2_bundle_admission::{
     AdmittedFinalizedWorkerV2BundleV1, AdmittedWorkerV2TypedKernelV1,
     CurrentFinalizedWorkerV2BundleAdmissionV1, FinalizedWorkerV2BundleAdmissionError,
-    MissingFinalizedWorkerV2LoadPrerequisiteV1, WorkerV2TypedKernelSelectionError,
+    MissingFinalizedWorkerV2LoadPrerequisiteV1,
+    WORKER_V2_FULL_LINEAGE_PREREQUISITE_CHALLENGE_VERSION_V2,
+    WorkerV2FullLineagePrerequisiteChallengeIdentityV2, WorkerV2TypedKernelSelectionError,
 };
 
 /// Compiler-generated host bindings. This is an unstable implementation SPI,

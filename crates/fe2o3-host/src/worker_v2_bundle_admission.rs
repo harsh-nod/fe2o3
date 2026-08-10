@@ -10,21 +10,126 @@ use crate::{
 use fe2o3_artifact_transaction::{
     AttemptScopedHsacoPublicationResultV1, BackendPublicationReceiptV1, BuildAttempt,
     DurableCurrentLinkPublicationLeaseV1, DurableCurrentLinkPublicationTokenV1,
-    DurableLinkPublicationError, PublishedLinkArtifactV1,
+    DurableLinkPublicationError, PackageIdentityV1, PublishedLinkArtifactV1,
 };
 use fe2o3_artifacts::{
     ArtifactContainerV1, DIRECT_LINK_EVIDENCE_DIGEST_ALGORITHM, DigestAlgorithm, DigestBytes,
     DirectLinkBindingSourceV1, DirectLinkBundleIndexIdentityV1, DirectLinkContainerIdentityV1,
     DirectLinkFinalizationIdentityV1, DirectLinkFinalizedPayloadIdentityV1,
-    DirectLinkLinkedOutputIdentityV1, PayloadDigest, SelectedNativeKernel,
+    DirectLinkLinkedOutputIdentityV1, PayloadDigest, ProofRecordV1, SelectedNativeKernel,
     ValidatedDirectLinkBundleEvidenceV1,
 };
 use fe2o3_hsaco::{CodeObjectVersion, InspectedKernelBindings, KernelDescriptorBinding};
 use fe2o3_hsaco_finalize::PreparedWorkerV2HsacoPublicationV1;
 use fe2o3_kernel_descriptor::KernelId;
-use fe2o3_worker_v2_bundle::WorkerV2LoadEnvelopeV1;
+use fe2o3_worker_v2_bundle::{
+    CompilerTransactionEvidenceCapsuleV2, CompilerTransactionEvidenceIdentityV2,
+    WorkerV2LoadEnvelopeIdentityV1, WorkerV2LoadEnvelopeV1,
+};
 use std::fmt;
 use std::marker::PhantomData;
+
+/// Version of the complete recovered-lineage prerequisite challenge.
+pub const WORKER_V2_FULL_LINEAGE_PREREQUISITE_CHALLENGE_VERSION_V2: u16 = 2;
+
+/// Exact, aggregate identity presented to a reviewed compiler/Verus authenticator.
+///
+/// This value deliberately embeds existing canonical identities and canonical records rather
+/// than defining another digest namespace. Equality therefore compares every recovered lineage
+/// component directly, including the selected descriptor and proof record.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorkerV2FullLineagePrerequisiteChallengeIdentityV2 {
+    producer: [u8; 32],
+    package: PackageIdentityV1,
+    attempt: BuildAttempt,
+    receipt: BackendPublicationReceiptV1,
+    publication: PublishedLinkArtifactV1,
+    envelope: WorkerV2LoadEnvelopeIdentityV1,
+    bundle: DirectLinkBundleIndexIdentityV1,
+    container: DirectLinkContainerIdentityV1,
+    direct_link_evidence: PayloadDigest,
+    descriptor_lineage: Box<[u8]>,
+    selected_proof_record: ProofRecordV1,
+    raw_hsaco: PayloadDigest,
+    finalized_hsaco: DirectLinkFinalizedPayloadIdentityV1,
+    kernel: ArtifactKernelIdentityV1,
+    compiler_transaction: CompilerTransactionEvidenceIdentityV2,
+}
+
+impl WorkerV2FullLineagePrerequisiteChallengeIdentityV2 {
+    pub const fn version(&self) -> u16 {
+        WORKER_V2_FULL_LINEAGE_PREREQUISITE_CHALLENGE_VERSION_V2
+    }
+
+    pub const fn producer(&self) -> [u8; 32] {
+        self.producer
+    }
+
+    pub const fn package(&self) -> PackageIdentityV1 {
+        self.package
+    }
+
+    pub const fn attempt(&self) -> BuildAttempt {
+        self.attempt
+    }
+
+    pub const fn receipt(&self) -> BackendPublicationReceiptV1 {
+        self.receipt
+    }
+
+    pub const fn publication(&self) -> PublishedLinkArtifactV1 {
+        self.publication
+    }
+
+    pub const fn envelope(&self) -> WorkerV2LoadEnvelopeIdentityV1 {
+        self.envelope
+    }
+
+    pub const fn bundle(&self) -> DirectLinkBundleIndexIdentityV1 {
+        self.bundle
+    }
+
+    pub const fn container(&self) -> DirectLinkContainerIdentityV1 {
+        self.container
+    }
+
+    pub const fn direct_link_evidence(&self) -> PayloadDigest {
+        self.direct_link_evidence
+    }
+
+    pub fn descriptor_lineage(&self) -> &[u8] {
+        &self.descriptor_lineage
+    }
+
+    pub const fn selected_proof_record(&self) -> &ProofRecordV1 {
+        &self.selected_proof_record
+    }
+
+    pub const fn raw_hsaco(&self) -> PayloadDigest {
+        self.raw_hsaco
+    }
+
+    pub const fn finalized_hsaco(&self) -> DirectLinkFinalizedPayloadIdentityV1 {
+        self.finalized_hsaco
+    }
+
+    pub const fn kernel(&self) -> &ArtifactKernelIdentityV1 {
+        &self.kernel
+    }
+
+    pub const fn compiler_transaction(&self) -> CompilerTransactionEvidenceIdentityV2 {
+        self.compiler_transaction
+    }
+}
+
+#[derive(Debug)]
+struct RecoveredWorkerV2FullLineageV2 {
+    envelope: WorkerV2LoadEnvelopeIdentityV1,
+    descriptor_lineage: Box<[u8]>,
+    proof_records: Box<[ProofRecordV1]>,
+    raw_hsaco: PayloadDigest,
+    compiler_transaction: CompilerTransactionEvidenceIdentityV2,
+}
 
 /// Strict, inert host admission for one finalized Worker V2 bundle occurrence.
 ///
@@ -56,6 +161,7 @@ pub struct AdmittedFinalizedWorkerV2BundleV1 {
     inspected: InspectedKernelBindings,
     kernels: Box<[PublishedKernelPhysicalLayoutV1]>,
     selected_kernel_index: usize,
+    full_lineage: Option<RecoveredWorkerV2FullLineageV2>,
 }
 
 enum RetainedWorkerV2PreparationV1 {
@@ -137,11 +243,13 @@ impl AdmittedFinalizedWorkerV2BundleV1 {
         Ok(Self::from_parts(
             RetainedWorkerV2PreparationV1::Production(Box::new(prepared)),
             parts,
+            None,
         ))
     }
 
     pub(crate) fn admit_recovered(
         envelope: WorkerV2LoadEnvelopeV1,
+        compiler_transaction: CompilerTransactionEvidenceCapsuleV2,
         current_lease: DurableCurrentLinkPublicationLeaseV1,
         kernel_id: KernelId,
         observed: &ObservedContext,
@@ -163,6 +271,17 @@ impl AdmittedFinalizedWorkerV2BundleV1 {
             .select_native_kernel(DigestBytes::from_bytes(*kernel_id.as_bytes()))
             .map_err(|_| FinalizedWorkerV2BundleAdmissionError::SelectedKernelSubstitution)?;
         let claim = envelope.published_claim();
+        validate_compiler_transaction_lineage(&envelope, &compiler_transaction)?;
+        let full_lineage = RecoveredWorkerV2FullLineageV2 {
+            envelope: envelope.identity(),
+            descriptor_lineage: envelope
+                .descriptor_lineage()
+                .canonical_bytes()
+                .into_boxed_slice(),
+            proof_records: envelope.proof_records().to_vec().into_boxed_slice(),
+            raw_hsaco: envelope.raw_hsaco().identity(),
+            compiler_transaction: compiler_transaction.identity(),
+        };
         let parts = admit_parts_with_lease(
             claim.plan().attempt(),
             envelope.raw_hsaco().bytes(),
@@ -177,10 +296,15 @@ impl AdmittedFinalizedWorkerV2BundleV1 {
         Ok(Self::from_parts(
             RetainedWorkerV2PreparationV1::Recovered(Box::new(envelope)),
             parts,
+            Some(full_lineage),
         ))
     }
 
-    fn from_parts(prepared: RetainedWorkerV2PreparationV1, parts: AdmissionParts) -> Self {
+    fn from_parts(
+        prepared: RetainedWorkerV2PreparationV1,
+        parts: AdmissionParts,
+        full_lineage: Option<RecoveredWorkerV2FullLineageV2>,
+    ) -> Self {
         Self {
             prepared,
             current_lease: parts.current_lease,
@@ -199,6 +323,7 @@ impl AdmittedFinalizedWorkerV2BundleV1 {
             inspected: parts.inspected,
             kernels: parts.kernels,
             selected_kernel_index: parts.selected_kernel_index,
+            full_lineage,
         }
     }
 
@@ -240,6 +365,46 @@ impl AdmittedFinalizedWorkerV2BundleV1 {
 
     pub const fn artifact_identity(&self) -> &ArtifactKernelIdentityV1 {
         &self.artifact_identity
+    }
+
+    pub(crate) fn full_lineage_challenge_for(
+        &self,
+        kernel: &ArtifactKernelIdentityV1,
+    ) -> Result<
+        WorkerV2FullLineagePrerequisiteChallengeIdentityV2,
+        FinalizedWorkerV2BundleAdmissionError,
+    > {
+        let lineage = self
+            .full_lineage
+            .as_ref()
+            .ok_or(FinalizedWorkerV2BundleAdmissionError::MissingFullLineage)?;
+        let mut proof_matches = lineage.proof_records.iter().filter(|record| {
+            record.target().artifact().kernel_id().bytes().as_bytes()
+                == kernel.kernel_id().as_bytes()
+        });
+        let selected_proof_record = proof_matches
+            .next()
+            .ok_or(FinalizedWorkerV2BundleAdmissionError::MissingKernelLineage)?;
+        if proof_matches.next().is_some() {
+            return Err(FinalizedWorkerV2BundleAdmissionError::MissingKernelLineage);
+        }
+        Ok(WorkerV2FullLineagePrerequisiteChallengeIdentityV2 {
+            producer: self.receipt.producer_identity(),
+            package: self.published.scope().package(),
+            attempt: self.prepared.attempt(),
+            receipt: self.receipt,
+            publication: self.published,
+            envelope: lineage.envelope,
+            bundle: self.bundle_index_identity,
+            container: self.container_identity,
+            direct_link_evidence: self.bundle_evidence_identity,
+            descriptor_lineage: lineage.descriptor_lineage.clone(),
+            selected_proof_record: selected_proof_record.clone(),
+            raw_hsaco: lineage.raw_hsaco,
+            finalized_hsaco: self.finalized_payload_identity,
+            kernel: kernel.clone(),
+            compiler_transaction: lineage.compiler_transaction,
+        })
     }
 
     /// Number of manifest kernels physically admitted from the exact finalized payload.
@@ -366,6 +531,52 @@ struct AdmissionParts {
     inspected: InspectedKernelBindings,
     kernels: Box<[PublishedKernelPhysicalLayoutV1]>,
     selected_kernel_index: usize,
+}
+
+fn validate_compiler_transaction_lineage(
+    envelope: &WorkerV2LoadEnvelopeV1,
+    compiler_transaction: &CompilerTransactionEvidenceCapsuleV2,
+) -> Result<(), FinalizedWorkerV2BundleAdmissionError> {
+    let expectation = envelope
+        .direct_link_evidence()
+        .bindings()
+        .first()
+        .ok_or(FinalizedWorkerV2BundleAdmissionError::EnvelopeRevalidation)?
+        .expectation();
+    let container = DirectLinkContainerIdentityV1::new(
+        DIRECT_LINK_EVIDENCE_DIGEST_ALGORITHM.calculate(&envelope.container().to_bytes()),
+    );
+    let checks = [
+        (
+            compiler_transaction.worker_request() == expectation.request_identity(),
+            "direct-link request",
+        ),
+        (
+            compiler_transaction.worker_response() == expectation.response_identity(),
+            "direct-link response",
+        ),
+        (
+            compiler_transaction.target() == envelope.published_claim().plan().scope().target(),
+            "target",
+        ),
+        (
+            compiler_transaction.raw_hsaco() == expectation.linked_output_identity(),
+            "raw HSACO",
+        ),
+        (
+            compiler_transaction.finalized_hsaco() == expectation.finalized_payload_identity(),
+            "finalized HSACO",
+        ),
+        (compiler_transaction.artifact() == container, "container"),
+    ];
+    for (matches, field) in checks {
+        if !matches {
+            return Err(
+                FinalizedWorkerV2BundleAdmissionError::CompilerTransactionLineageMismatch(field),
+            );
+        }
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -620,6 +831,16 @@ impl<K> AdmittedWorkerV2TypedKernelV1<'_, K> {
         self.admission.finalized_payload_identity
     }
 
+    pub(crate) fn full_lineage_challenge(
+        &self,
+    ) -> Result<
+        WorkerV2FullLineagePrerequisiteChallengeIdentityV2,
+        FinalizedWorkerV2BundleAdmissionError,
+    > {
+        self.admission
+            .full_lineage_challenge_for(self.artifact_identity())
+    }
+
     pub const fn grants_load_authority(&self) -> bool {
         false
     }
@@ -865,6 +1086,9 @@ pub enum FinalizedWorkerV2BundleAdmissionError {
     ArtifactBinding(ArtifactBindingError),
     PhysicalInspection(PublishedPhysicalLayoutInspectionError),
     SelectedIdentityMismatch,
+    MissingFullLineage,
+    MissingKernelLineage,
+    CompilerTransactionLineageMismatch(&'static str),
 }
 
 impl FinalizedWorkerV2BundleAdmissionError {
@@ -921,6 +1145,16 @@ impl fmt::Display for FinalizedWorkerV2BundleAdmissionError {
             Self::PhysicalInspection(error) => error.fmt(formatter),
             Self::SelectedIdentityMismatch => formatter
                 .write_str("selected kernel identity differs from inspected physical layout"),
+            Self::MissingFullLineage => formatter.write_str(
+                "Worker V2 admission lacks a recovered full-lineage prerequisite challenge",
+            ),
+            Self::MissingKernelLineage => formatter.write_str(
+                "selected kernel lacks one exact descriptor and proof record in recovered lineage",
+            ),
+            Self::CompilerTransactionLineageMismatch(field) => write!(
+                formatter,
+                "compiler transaction {field} differs from the recovered envelope"
+            ),
         }
     }
 }
@@ -960,8 +1194,10 @@ pub(crate) mod tests {
         CodeObjectPayload, CompilerIdentity, Dimensions, DirectLinkBindingExpectationV1,
         DirectLinkBindingSourceV1, DirectLinkBundleEvidenceV1, DirectLinkFinalizationIdentityV1,
         DirectLinkLinkedOutputIdentityV1, DirectLinkTransformationIdentityV1, Endianness,
-        IdentityText, KernelEntry, LaunchContract, ManifestV1, Name, PointerWidth, TargetIdentity,
-        ToolIdentity, derive_generated_kernel_identity_v2,
+        IdentityText, KernelEntry, LaunchContract, ManifestV1, MeasuredToolIdentity, Name,
+        PointerWidth, ProofArtifactIdentity, ProofExecutionIdentity, ProofOutcome, ProofProperty,
+        ProofTargetIdentity, SourceContractIdentity, TargetIdentity, ToolIdentity,
+        VerificationModelIdentity, derive_generated_kernel_identity_v2,
     };
     use fe2o3_device::KernelMarkerV1;
     use reserved_fe2o3_symbols::{
@@ -1015,6 +1251,79 @@ pub(crate) mod tests {
 
     fn repeated_digest(seed: u8) -> fe2o3_artifacts::DigestBytes {
         fe2o3_artifacts::DigestBytes::from_bytes([seed; 32])
+    }
+
+    fn test_payload_digest(seed: u8) -> PayloadDigest {
+        PayloadDigest::new(DigestAlgorithm::Sha256, repeated_digest(seed.max(1)))
+    }
+
+    fn test_proof_record(kernel: &fe2o3_artifacts::KernelEntry, seed: u8) -> ProofRecordV1 {
+        let tool = |name: &str, offset: u8| {
+            MeasuredToolIdentity::new(
+                IdentityText::new(name).unwrap(),
+                IdentityText::new("test").unwrap(),
+                test_payload_digest(seed.wrapping_add(offset)),
+                test_payload_digest(seed.wrapping_add(offset).wrapping_add(1)),
+            )
+        };
+        ProofRecordV1::new(
+            ProofTargetIdentity::new(
+                ProofArtifactIdentity::new(
+                    PayloadDigest::new(DigestAlgorithm::Sha256, kernel.kernel_id()),
+                    test_payload_digest(seed.wrapping_add(1)),
+                    PayloadDigest::new(DigestAlgorithm::Sha256, kernel.source_digest()),
+                    test_payload_digest(seed.wrapping_add(2)),
+                    PayloadDigest::new(DigestAlgorithm::Sha256, kernel.executable_digest()),
+                    test_payload_digest(seed.wrapping_add(3)),
+                    test_payload_digest(seed.wrapping_add(4)),
+                    test_payload_digest(seed.wrapping_add(5)),
+                ),
+                SourceContractIdentity::new(
+                    test_payload_digest(seed.wrapping_add(6)),
+                    test_payload_digest(seed.wrapping_add(7)),
+                    test_payload_digest(seed.wrapping_add(8)),
+                    test_payload_digest(seed.wrapping_add(9)),
+                    test_payload_digest(seed.wrapping_add(10)),
+                ),
+            ),
+            vec![],
+            ProofExecutionIdentity::new(
+                VerificationModelIdentity::new(
+                    IdentityText::new("test-model").unwrap(),
+                    test_payload_digest(seed.wrapping_add(11)),
+                ),
+                tool("verus", 12),
+                tool("solver", 14),
+                tool("recorder", 16),
+                test_payload_digest(seed.wrapping_add(18)),
+            ),
+            ProofOutcome::Proved,
+            vec![ProofProperty::Bounds],
+            vec![],
+        )
+        .unwrap()
+    }
+
+    fn test_full_lineage(fixture: &Fixture, seed: u8) -> RecoveredWorkerV2FullLineageV2 {
+        let selected = selected(fixture);
+        let proof_records = selected
+            .manifest()
+            .kernels()
+            .iter()
+            .filter(|kernel| kernel.code_object_digest() == selected.code_object().digest())
+            .map(|kernel| test_proof_record(kernel, seed))
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        RecoveredWorkerV2FullLineageV2 {
+            envelope: WorkerV2LoadEnvelopeIdentityV1::from_bytes([seed.max(1); 32]),
+            descriptor_lineage: vec![seed.max(1)].into_boxed_slice(),
+            proof_records,
+            raw_hsaco: fixture.expectations[0].linked_output_identity().digest(),
+            compiler_transaction: CompilerTransactionEvidenceIdentityV2::from_bytes(
+                [seed.wrapping_add(1).max(1); 32],
+            )
+            .unwrap(),
+        }
     }
 
     fn admission_fixture(seed: u8, plan_finalization_delta: u8) -> AdmissionFixture {
@@ -1296,6 +1605,7 @@ pub(crate) mod tests {
             inspected: parts.inspected,
             kernels: parts.kernels,
             selected_kernel_index: parts.selected_kernel_index,
+            full_lineage: Some(test_full_lineage(&input.fixture, seed)),
         };
         (admission, input._directory)
     }
@@ -1338,6 +1648,7 @@ pub(crate) mod tests {
             inspected: parts.inspected,
             kernels: parts.kernels,
             selected_kernel_index: parts.selected_kernel_index,
+            full_lineage: Some(test_full_lineage(&input.fixture, seed)),
         };
         (admission, input._directory)
     }
@@ -1380,6 +1691,7 @@ pub(crate) mod tests {
             inspected: parts.inspected,
             kernels: parts.kernels,
             selected_kernel_index: parts.selected_kernel_index,
+            full_lineage: Some(test_full_lineage(&input.fixture, seed)),
         };
         (admission, input._directory)
     }
@@ -1492,6 +1804,7 @@ pub(crate) mod tests {
             inspected: parts.inspected,
             kernels: parts.kernels,
             selected_kernel_index: parts.selected_kernel_index,
+            full_lineage: Some(test_full_lineage(&fixture, seed)),
         };
         (admission, directory)
     }
@@ -1581,6 +1894,7 @@ pub(crate) mod tests {
             inspected: parts.inspected,
             kernels: parts.kernels,
             selected_kernel_index: parts.selected_kernel_index,
+            full_lineage: Some(test_full_lineage(&input.fixture, seed)),
         };
         (admission, input._directory)
     }

@@ -18,7 +18,9 @@ use fe2o3_hsaco_finalize::{FinalizationError, finalize_unfinalized, verify_final
 use fe2o3_kernel_descriptor::{
     CodeObjectVersion as DescriptorCodeObjectVersion, KernelDescriptorV1, KernelId,
 };
-use fe2o3_worker_v2_bundle::{EnvelopeDecodeError, WorkerV2LoadEnvelopeV1};
+use fe2o3_worker_v2_bundle::{
+    CompilerTransactionEvidenceCapsuleV2, EnvelopeDecodeError, WorkerV2LoadEnvelopeV1,
+};
 use std::error::Error;
 use std::fmt;
 use std::path::Path;
@@ -54,6 +56,7 @@ impl RecoveredWorkerV2PinnedDescriptorV1 {
     pub fn recover(
         output_dir: &Path,
         envelope_bytes: &[u8],
+        compiler_transaction: CompilerTransactionEvidenceCapsuleV2,
         kernel_id: KernelId,
         observed: &ObservedContext,
     ) -> Result<Self, RecoveredWorkerV2AdmissionError> {
@@ -68,6 +71,7 @@ impl RecoveredWorkerV2PinnedDescriptorV1 {
         validate_raw_final_lineage(&envelope, &current_lease)?;
         let admission = AdmittedFinalizedWorkerV2BundleV1::admit_recovered(
             envelope,
+            compiler_transaction,
             current_lease,
             kernel_id,
             observed,
@@ -436,10 +440,17 @@ fn validate_raw_final_lineage(
 pub fn recover_worker_v2_load_envelope_v1(
     output_dir: &Path,
     envelope_bytes: &[u8],
+    compiler_transaction: CompilerTransactionEvidenceCapsuleV2,
     kernel_id: KernelId,
     observed: &ObservedContext,
 ) -> Result<RecoveredWorkerV2PinnedDescriptorV1, RecoveredWorkerV2AdmissionError> {
-    RecoveredWorkerV2PinnedDescriptorV1::recover(output_dir, envelope_bytes, kernel_id, observed)
+    RecoveredWorkerV2PinnedDescriptorV1::recover(
+        output_dir,
+        envelope_bytes,
+        compiler_transaction,
+        kernel_id,
+        observed,
+    )
 }
 
 fn select_descriptor(
@@ -629,12 +640,13 @@ mod tests {
         BlockSize, CallerClaimedPackageIdentityV1, DeclaredRustLayoutIdentity,
         DeclaredRustTypeIdentity, DigestAlgorithm, DigestBytes, Dimensions,
         DirectLinkBindingExpectationV1, DirectLinkBindingSourceV1, DirectLinkBundleEvidenceV1,
-        DirectLinkLinkedOutputIdentityV1, DirectLinkTransformationIdentityV1,
-        ManifestClaimDerivedLinkPublicationScopeV1, ManifestClaimDirectLinkPublicationBridgeV1,
-        MeasuredToolIdentity, Mutability, Name, PayloadDigest, PointerWidth, ProofArtifactIdentity,
-        ProofExecutionIdentity, ProofOutcome, ProofProperty, ProofRecordV1, ProofTargetIdentity,
-        SourceContractIdentity, TypeIdentity, VerificationModelIdentity,
-        derive_generated_host_contract_identity_v1, derive_generated_kernel_identity_v2,
+        DirectLinkContainerIdentityV1, DirectLinkLinkedOutputIdentityV1,
+        DirectLinkTransformationIdentityV1, ManifestClaimDerivedLinkPublicationScopeV1,
+        ManifestClaimDirectLinkPublicationBridgeV1, MeasuredToolIdentity, Mutability, Name,
+        PayloadDigest, PointerWidth, ProofArtifactIdentity, ProofExecutionIdentity, ProofOutcome,
+        ProofProperty, ProofRecordV1, ProofTargetIdentity, SourceContractIdentity, TypeIdentity,
+        VerificationModelIdentity, derive_generated_host_contract_identity_v1,
+        derive_generated_kernel_identity_v2,
     };
     use fe2o3_device::KernelMarkerV1;
     use fe2o3_kernel_descriptor::{
@@ -645,7 +657,13 @@ mod tests {
         SourceTypeDescriptorV1, SourceTypeRecordV1, Text, ValidName,
         encode_device_descriptor_table_v1,
     };
-    use fe2o3_worker_v2_bundle::{DescriptorLineageV1, ExactRawHsacoV1};
+    use fe2o3_rustc_invocation::InvocationDigestV2;
+    use fe2o3_worker_v2_bundle::{
+        CallerMeasuredBackendInvocationIdentityV2, CallerMeasuredKernelIrIdentityV2,
+        CallerMeasuredSemanticWitnessIdentityV2, CallerMeasuredSourceRootIdentityV2,
+        CompilerSourceClosureV2, CompilerTransactionEvidenceCapsuleV2,
+        CompilerTransactionEvidencePartsV2, DescriptorLineageV1, ExactRawHsacoV1,
+    };
     use reserved_fe2o3_symbols::{
         MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1, TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3,
     };
@@ -696,6 +714,7 @@ mod tests {
         owner: ProducerIdentity,
         attempt: fe2o3_artifact_transaction::BuildAttempt,
         envelope: Vec<u8>,
+        compiler_transaction: CompilerTransactionEvidenceCapsuleV2,
         kernel_id: KernelId,
         observed: ObservedContext,
     }
@@ -706,6 +725,56 @@ mod tests {
 
     fn tagged(seed: u8) -> PayloadDigest {
         PayloadDigest::new(DigestAlgorithm::Sha256, digest(seed))
+    }
+
+    fn measured_tool(name: &str, seed: u8) -> MeasuredToolIdentity {
+        MeasuredToolIdentity::new(
+            identity_text(name),
+            identity_text("test"),
+            tagged(seed.max(1)),
+            tagged(seed.wrapping_add(1).max(1)),
+        )
+    }
+
+    fn compiler_transaction(
+        fixture: &Fixture,
+        target: fe2o3_artifact_transaction::TargetIdentityV1,
+        seed: u8,
+    ) -> CompilerTransactionEvidenceCapsuleV2 {
+        let expectation = &fixture.expectations[0];
+        CompilerTransactionEvidenceCapsuleV2::new(CompilerTransactionEvidencePartsV2 {
+            source_closure: CompilerSourceClosureV2::new(
+                CallerMeasuredSourceRootIdentityV2::try_from_sha256([seed.max(1); 32]).unwrap(),
+                vec![],
+                vec![],
+            )
+            .unwrap(),
+            rustc_tool: measured_tool("rustc", seed.wrapping_add(1)),
+            rustc_invocation: InvocationDigestV2::from_bytes([seed.wrapping_add(3).max(1); 32])
+                .unwrap(),
+            backend_tool: measured_tool("rustc-codegen-fe2o3", seed.wrapping_add(4)),
+            backend_invocation: CallerMeasuredBackendInvocationIdentityV2::try_from_sha256(
+                [seed.wrapping_add(6).max(1); 32],
+            )
+            .unwrap(),
+            semantic_witness: CallerMeasuredSemanticWitnessIdentityV2::try_from_sha256(
+                [seed.wrapping_add(7).max(1); 32],
+            )
+            .unwrap(),
+            kernel_ir: CallerMeasuredKernelIrIdentityV2::try_from_sha256(
+                [seed.wrapping_add(8).max(1); 32],
+            )
+            .unwrap(),
+            worker_request: expectation.request_identity(),
+            worker_response: expectation.response_identity(),
+            target,
+            raw_hsaco: expectation.linked_output_identity(),
+            finalized_hsaco: expectation.finalized_payload_identity(),
+            artifact: DirectLinkContainerIdentityV1::new(
+                DigestAlgorithm::Sha256.calculate(&fixture.container.to_bytes()),
+            ),
+        })
+        .unwrap()
     }
 
     fn identity_text(value: &str) -> fe2o3_artifacts::IdentityText {
@@ -1016,6 +1085,7 @@ mod tests {
         let descriptive_scope = bridge
             .non_authoritative_diagnostics()
             .descriptive_scope_claim();
+        let target_identity = descriptive_scope.target();
         let plan = DurableLinkPublicationPlanV1::new(
             attempt,
             descriptive_scope,
@@ -1041,6 +1111,7 @@ mod tests {
         .unwrap();
         let claim = publication.published_claim().clone();
         drop(publication);
+        let compiler_transaction = compiler_transaction(&fixture, target_identity, seed);
         let envelope = WorkerV2LoadEnvelopeV1::new(
             fixture.container,
             fixture.bundle,
@@ -1058,6 +1129,7 @@ mod tests {
             owner,
             attempt,
             envelope,
+            compiler_transaction,
             kernel_id: KernelId::from_bytes(*kernel_id.as_bytes()),
             observed: make_observed_for(usize::from(seed), "gfx942"),
         }
@@ -1193,6 +1265,7 @@ mod tests {
             self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let artifact = request.artifact_identity();
             Ok(crate::WorkerV2PrerequisiteDecisionV1::new(
+                request.challenge_identity().clone(),
                 request.finalized_digest(),
                 artifact.kernel_id(),
                 artifact.executable_digest(),
@@ -1401,6 +1474,7 @@ mod tests {
         let recovered = recover_worker_v2_load_envelope_v1(
             &fixture.output,
             &fixture.envelope,
+            fixture.compiler_transaction.clone(),
             fixture.kernel_id,
             &fixture.observed,
         )
@@ -1431,6 +1505,7 @@ mod tests {
                 recover_worker_v2_load_envelope_v1(
                     &fixture.output,
                     bytes,
+                    fixture.compiler_transaction.clone(),
                     fixture.kernel_id,
                     &fixture.observed,
                 ),
@@ -1443,6 +1518,7 @@ mod tests {
             recover_worker_v2_load_envelope_v1(
                 &fixture.output,
                 &trailing,
+                fixture.compiler_transaction.clone(),
                 fixture.kernel_id,
                 &fixture.observed,
             ),
@@ -1457,6 +1533,7 @@ mod tests {
             recover_worker_v2_load_envelope_v1(
                 &fixture.output,
                 &substituted,
+                fixture.compiler_transaction.clone(),
                 fixture.kernel_id,
                 &fixture.observed,
             ),
@@ -1467,6 +1544,7 @@ mod tests {
             recover_worker_v2_load_envelope_v1(
                 &fixture.output,
                 &oversized,
+                fixture.compiler_transaction.clone(),
                 fixture.kernel_id,
                 &fixture.observed,
             ),
@@ -1484,6 +1562,7 @@ mod tests {
             recover_worker_v2_load_envelope_v1(
                 &stale.output,
                 &stale.envelope,
+                stale.compiler_transaction.clone(),
                 stale.kernel_id,
                 &stale.observed,
             ),
@@ -1496,6 +1575,7 @@ mod tests {
             recover_worker_v2_load_envelope_v1(
                 &second.output,
                 &first.envelope,
+                first.compiler_transaction.clone(),
                 first.kernel_id,
                 &first.observed,
             ),
@@ -1505,10 +1585,30 @@ mod tests {
             recover_worker_v2_load_envelope_v1(
                 &first.output,
                 &first.envelope,
+                first.compiler_transaction.clone(),
                 second.kernel_id,
                 &first.observed,
             ),
             Err(RecoveredWorkerV2AdmissionError::KernelNotFound)
+        ));
+    }
+
+    #[test]
+    fn compiler_transaction_substitution_is_rejected() {
+        let first = recovery_fixture(9, "gfx942", "vecadd");
+        let second = recovery_fixture(10, "gfx942", "vecadd");
+
+        assert!(matches!(
+            recover_worker_v2_load_envelope_v1(
+                &first.output,
+                &first.envelope,
+                second.compiler_transaction.clone(),
+                first.kernel_id,
+                &first.observed,
+            ),
+            Err(RecoveredWorkerV2AdmissionError::Admission(
+                FinalizedWorkerV2BundleAdmissionError::CompilerTransactionLineageMismatch(_)
+            ))
         ));
     }
 
@@ -1519,6 +1619,7 @@ mod tests {
             recover_worker_v2_load_envelope_v1(
                 &raw_substitution.output,
                 &raw_substitution.envelope,
+                raw_substitution.compiler_transaction.clone(),
                 raw_substitution.kernel_id,
                 &raw_substitution.observed,
             ),
@@ -1530,6 +1631,7 @@ mod tests {
             recover_worker_v2_load_envelope_v1(
                 &physical_substitution.output,
                 &physical_substitution.envelope,
+                physical_substitution.compiler_transaction.clone(),
                 physical_substitution.kernel_id,
                 &physical_substitution.observed,
             ),
@@ -1544,6 +1646,7 @@ mod tests {
         let recovered = recover_worker_v2_load_envelope_v1(
             &fixture.output,
             &fixture.envelope,
+            fixture.compiler_transaction.clone(),
             fixture.kernel_id,
             &fixture.observed,
         )
@@ -1587,6 +1690,7 @@ mod tests {
         let recovered = recover_worker_v2_load_envelope_v1(
             &fixture.output,
             &fixture.envelope,
+            fixture.compiler_transaction.clone(),
             fixture.kernel_id,
             &fixture.observed,
         )
@@ -1626,6 +1730,7 @@ mod tests {
         let recovered = recover_worker_v2_load_envelope_v1(
             &fixture.output,
             &fixture.envelope,
+            fixture.compiler_transaction.clone(),
             fixture.kernel_id,
             &fixture.observed,
         )
@@ -1673,6 +1778,7 @@ mod tests {
         let recovered = recover_worker_v2_load_envelope_v1(
             &fixture.output,
             &fixture.envelope,
+            fixture.compiler_transaction.clone(),
             fixture.kernel_id,
             &fixture.observed,
         )
@@ -1721,6 +1827,7 @@ mod tests {
         let recovered = recover_worker_v2_load_envelope_v1(
             &context_fixture.output,
             &context_fixture.envelope,
+            context_fixture.compiler_transaction.clone(),
             context_fixture.kernel_id,
             &context_fixture.observed,
         )
@@ -1753,6 +1860,7 @@ mod tests {
         let recovered = recover_worker_v2_load_envelope_v1(
             &stream_fixture.output,
             &stream_fixture.envelope,
+            stream_fixture.compiler_transaction.clone(),
             stream_fixture.kernel_id,
             &stream_fixture.observed,
         )
@@ -1804,6 +1912,7 @@ mod tests {
         let recovered = recover_worker_v2_load_envelope_v1(
             &fixture.output,
             &fixture.envelope,
+            fixture.compiler_transaction.clone(),
             fixture.kernel_id,
             &fixture.observed,
         )
@@ -1825,6 +1934,7 @@ mod tests {
             recover_worker_v2_load_envelope_v1(
                 &fixture.output,
                 &fixture.envelope,
+                fixture.compiler_transaction.clone(),
                 fixture.kernel_id,
                 &fixture.observed,
             ),
