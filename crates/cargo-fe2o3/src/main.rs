@@ -273,7 +273,7 @@ impl BackendRunContext {
         let backend = find_or_build_backend(&target_dir)?;
         let pinned_backend = pinned_codegen_backend::PinnedCodegenBackend::open(&backend)
             .map_err(|error| format!("failed to pin codegen backend: {error}"))?;
-        let worker_v2 = worker_v2::PreparedWorkerV2Config::from_environment()
+        let worker_v2 = worker_v2::PreparedWorkerV2Config::from_environment_for_cargo_setup()
             .map_err(|error| format!("Worker V2 setup failed: {error}"))?;
         let worker_v2_identity = worker_v2.as_ref().map(|config| config.identity());
         let cargo_configuration = project.semantic_configuration(args)?;

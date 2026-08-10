@@ -161,6 +161,7 @@ impl WorkerV2SourceDebugProfileV1 {
 struct ConfiguredEnvelopeInputs {
     path: PathBuf,
     expected: ContentIdentityV1,
+    pinned: Option<WorkerV2EnvelopeInputsV1>,
 }
 
 impl PreparedWorkerV2Config {
@@ -169,6 +170,14 @@ impl PreparedWorkerV2Config {
             std::env::var_os(CODEGEN_PIPELINE_ENV).as_deref(),
             std::env::var_os(WORKER_V2_CONFIG_ENV).as_deref(),
         )
+    }
+
+    pub(crate) fn from_environment_for_cargo_setup() -> Result<Option<Self>, WorkerV2ConfigError> {
+        let mut prepared = Self::from_environment()?;
+        if let Some(config) = prepared.as_mut() {
+            config.pin_envelope_inputs()?;
+        }
+        Ok(prepared)
     }
 
     fn from_selection(
@@ -281,6 +290,16 @@ impl PreparedWorkerV2Config {
             .transpose()
     }
 
+    fn pin_envelope_inputs(&mut self) -> Result<(), WorkerV2ConfigError> {
+        let Some(configured) = self.envelope_inputs.as_mut() else {
+            return Ok(());
+        };
+        if configured.pinned.is_none() {
+            configured.pinned = Some(configured.read_exact()?);
+        }
+        Ok(())
+    }
+
     pub(crate) fn selects(
         &self,
         crate_name: &str,
@@ -354,13 +373,27 @@ fn parse_envelope_inputs(
                     "load_envelope_inputs.byte_len exceeds {MAX_WORKER_V2_ENVELOPE_INPUTS_BYTES} bytes"
                 )));
             }
-            Ok((mode, Some(ConfiguredEnvelopeInputs { path, expected })))
+            Ok((
+                mode,
+                Some(ConfiguredEnvelopeInputs {
+                    path,
+                    expected,
+                    pinned: None,
+                }),
+            ))
         }
     }
 }
 
 impl ConfiguredEnvelopeInputs {
     fn load(&self) -> Result<WorkerV2EnvelopeInputsV1, WorkerV2ConfigError> {
+        if let Some(inputs) = &self.pinned {
+            return Ok(inputs.clone());
+        }
+        self.read_exact()
+    }
+
+    fn read_exact(&self) -> Result<WorkerV2EnvelopeInputsV1, WorkerV2ConfigError> {
         let declared_len = usize::try_from(self.expected.byte_len()).map_err(|_| {
             WorkerV2ConfigError::Invalid(
                 "load_envelope_inputs.byte_len exceeds the platform bound".to_owned(),
@@ -373,11 +406,17 @@ impl ConfiguredEnvelopeInputs {
                 "load_envelope_inputs.sha256 does not match the exact capsule bytes".to_owned(),
             ));
         }
-        WorkerV2EnvelopeInputsV1::from_bytes(&bytes).map_err(|error| {
+        let inputs = WorkerV2EnvelopeInputsV1::from_bytes(&bytes).map_err(|error| {
             WorkerV2ConfigError::Invalid(format!(
                 "load_envelope_inputs is not a canonical capsule: {error}"
             ))
-        })
+        })?;
+        if inputs.to_bytes() != bytes {
+            return Err(WorkerV2ConfigError::Invalid(
+                "load_envelope_inputs capsule encoding is not canonical".to_owned(),
+            ));
+        }
+        Ok(inputs)
     }
 }
 
@@ -1042,7 +1081,7 @@ mod tests {
     fn load_envelope_requirement_needs_an_exact_measured_capsule() {
         let directory = TestDirectory::new();
         let path = manifest(&directory);
-        let ordinary = PreparedWorkerV2Config::from_manifest(&path).unwrap();
+        PreparedWorkerV2Config::from_manifest(&path).unwrap();
         let mut value: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         value["load_envelope"] = Value::String("required".to_owned());
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
@@ -1071,12 +1110,11 @@ mod tests {
             "sha256": hex(&Sha256::digest(b"not-a-canonical-capsule"))
         });
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
-        let prepared = PreparedWorkerV2Config::from_manifest(&path).unwrap();
-        assert_eq!(prepared.envelope_mode(), WorkerV2EnvelopeModeV1::Required);
-        assert_ne!(ordinary.identity(), prepared.identity());
+        let mut prepared = PreparedWorkerV2Config::from_manifest(&path).unwrap();
         assert!(matches!(
-            prepared.load_envelope_inputs(),
-            Err(WorkerV2ConfigError::Invalid(_))
+            prepared.pin_envelope_inputs(),
+            Err(WorkerV2ConfigError::Invalid(message))
+                if message.contains("not a canonical capsule")
         ));
 
         value["load_envelope"] = Value::String("optional".to_owned());
@@ -1089,7 +1127,7 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
-    fn required_envelope_input_rejects_symlink_and_oversized_handoffs() {
+    fn required_envelope_input_rejects_symlink_truncation_substitution_and_oversize() {
         use std::os::unix::fs::{PermissionsExt, symlink};
 
         let directory = TestDirectory::new();
@@ -1107,10 +1145,31 @@ mod tests {
             "sha256": hex(&Sha256::digest(b"capsule"))
         });
         fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
-        let prepared = PreparedWorkerV2Config::from_manifest(&path).unwrap();
+        let mut prepared = PreparedWorkerV2Config::from_manifest(&path).unwrap();
         assert!(matches!(
-            prepared.load_envelope_inputs(),
+            prepared.pin_envelope_inputs(),
             Err(WorkerV2ConfigError::Io { .. })
+        ));
+
+        value["load_envelope_inputs"]["path"] =
+            Value::String(target.to_str().expect("temporary path is UTF-8").to_owned());
+        value["load_envelope_inputs"]["byte_len"] = Value::from(8);
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        let mut prepared = PreparedWorkerV2Config::from_manifest(&path).unwrap();
+        assert!(matches!(
+            prepared.pin_envelope_inputs(),
+            Err(WorkerV2ConfigError::Invalid(message))
+                if message.contains("declared size")
+        ));
+
+        value["load_envelope_inputs"]["byte_len"] = Value::from(7);
+        fs::write(&target, b"capsulE").unwrap();
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        let mut prepared = PreparedWorkerV2Config::from_manifest(&path).unwrap();
+        assert!(matches!(
+            prepared.pin_envelope_inputs(),
+            Err(WorkerV2ConfigError::Invalid(message))
+                if message.contains("sha256 does not match")
         ));
 
         value["load_envelope_inputs"]["byte_len"] =
