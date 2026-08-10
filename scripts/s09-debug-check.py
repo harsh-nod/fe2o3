@@ -62,11 +62,11 @@ HARDWARE_TEST = "gfx942_cov6_alpha_then_zeta_generated_safe_spi_with_fake_authen
 S09_SOURCE_SHA256 = "a02f62a73198b493258224701c4f29e25b3eca02a738bf02c03989d45b77099e"
 S09_SOURCE_LENGTH = "3231"
 MANIFEST_SCHEMA = "fe2o3-s09-protected-manifest-v2"
-SEMANTIC_ADMISSION_SCHEMA = "fe2o3-s09-semantic-admission-v2"
-BUILD_OBSERVATION_SCHEMA = "fe2o3-s09-build-observation-v2"
+SEMANTIC_CLAIM_SCHEMA = "fe2o3-s09-semantic-identity-claim-v2"
+BUILD_CLAIM_SCHEMA = "fe2o3-s09-build-identity-claim-v2"
 S09_IDENTITY_SECTION = ".fe2o3.s09.identity.v2"
 S09_IDENTITY_HANDOFF_DOMAIN = b"FE2O3/S09-IDENTITY-HANDOFF/V2\0"
-SEMANTIC_RECORD_FIELDS = (
+SEMANTIC_CLAIM_FIELDS = (
     "schema",
     "crate",
     "module",
@@ -86,19 +86,22 @@ SEMANTIC_RECORD_FIELDS = (
     "launch_sha256",
     "portable_mir_sha256",
 )
-BUILD_RECORD_FIELDS = (
+BUILD_CLAIM_FIELDS = (
     "schema",
-    "semantic_admission_sha256",
+    "semantic_claim_sha256",
     "cargo_metadata_sha256",
     "crate_binding",
     "kernel_binding",
     "observed_def_path",
     "observed_symbol",
     "rustc_mir_capture_sha256",
-    "rustc_invocation_sha256",
+    "prepared_rustc_command_sha256",
     "rustc_executable_sha256",
     "cargo_fe2o3_executable_sha256",
-    "cargo_executable_sha256",
+    "declared_cargo_executable_sha256",
+    "cargo_launcher_executable_sha256",
+    "cargo_launcher_pid",
+    "cargo_launcher_start_time_ticks",
     "codegen_backend_sha256",
     "worker_config_sha256",
     "worker_executable_sha256",
@@ -107,10 +110,10 @@ BUILD_RECORD_FIELDS = (
 )
 IDENTITY_MANIFEST_FIELDS = (
     "identity_section",
-    "semantic_admission_sha256",
-    *(f"semantic_{field}" for field in SEMANTIC_RECORD_FIELDS),
-    "build_observation_sha256",
-    *(f"build_{field}" for field in BUILD_RECORD_FIELDS),
+    "semantic_claim_sha256",
+    *(f"semantic_{field}" for field in SEMANTIC_CLAIM_FIELDS),
+    "build_claim_sha256",
+    *(f"build_{field}" for field in BUILD_CLAIM_FIELDS),
 )
 EVIDENCE_MANIFEST_FIELDS = (
     "source_commit",
@@ -130,6 +133,9 @@ MANIFEST_FIELDS = (
     "claim",
     *IDENTITY_MANIFEST_FIELDS,
     *EVIDENCE_MANIFEST_FIELDS,
+)
+MANIFEST_FIELD_COUNT = (
+    3 + len(IDENTITY_MANIFEST_FIELDS) + len(EVIDENCE_MANIFEST_FIELDS)
 )
 POLICY_SCHEMA = "fe2o3-s09-production-policy-v2"
 POLICY_HEADER_FIELDS = (
@@ -382,6 +388,13 @@ def take_identity_record(data: bytes, offset: int, label: str) -> tuple[bytes, i
     return checked_slice(data, offset, length, label), offset + length
 
 
+def take_identity_digest(data: bytes, offset: int, label: str) -> tuple[str, int]:
+    digest = checked_slice(data, offset, 32, label)
+    if digest == b"\0" * 32:
+        raise CheckError(f"{label} must not be zero")
+    return digest.hex(), offset + 32
+
+
 def decode_hsaco_identity_v2(
     hsaco: bytes,
 ) -> tuple[bytes, dict[str, str], bytes, dict[str, str]]:
@@ -394,46 +407,71 @@ def decode_hsaco_identity_v2(
     if not handoff.startswith(S09_IDENTITY_HANDOFF_DOMAIN):
         raise CheckError("identity handoff has a missing or unknown domain")
     offset = len(S09_IDENTITY_HANDOFF_DOMAIN)
-    semantic_record, offset = take_identity_record(handoff, offset, "semantic admission")
-    build_record, offset = take_identity_record(handoff, offset, "build observation")
+    semantic_claim_digest, offset = take_identity_digest(
+        handoff, offset, "semantic_claim_sha256"
+    )
+    build_claim_digest, offset = take_identity_digest(
+        handoff, offset, "build_claim_sha256"
+    )
+    semantic_record, offset = take_identity_record(
+        handoff, offset, "semantic identity claim"
+    )
+    build_record, offset = take_identity_record(handoff, offset, "build identity claim")
     if offset != len(handoff):
         raise CheckError("identity handoff has trailing bytes or records")
 
     semantic = decode_identity_record(
-        semantic_record, SEMANTIC_RECORD_FIELDS, "semantic admission"
+        semantic_record, SEMANTIC_CLAIM_FIELDS, "semantic identity claim"
     )
-    build = decode_identity_record(build_record, BUILD_RECORD_FIELDS, "build observation")
-    if semantic["schema"] != SEMANTIC_ADMISSION_SCHEMA:
+    build = decode_identity_record(
+        build_record, BUILD_CLAIM_FIELDS, "build identity claim"
+    )
+    if semantic["schema"] != SEMANTIC_CLAIM_SCHEMA:
         raise CheckError("semantic schema is missing or unknown")
-    if build["schema"] != BUILD_OBSERVATION_SCHEMA:
+    if build["schema"] != BUILD_CLAIM_SCHEMA:
         raise CheckError("build schema is missing or unknown")
     for field in ("source_sha256", "abi_sha256", "launch_sha256", "portable_mir_sha256"):
-        decode_identity_digest(semantic[field], f"semantic admission {field}")
+        decode_identity_digest(semantic[field], f"semantic identity claim {field}")
     for field in (
-        "semantic_admission_sha256",
+        "semantic_claim_sha256",
         "cargo_metadata_sha256",
         "crate_binding",
         "kernel_binding",
         "rustc_mir_capture_sha256",
-        "rustc_invocation_sha256",
+        "prepared_rustc_command_sha256",
         "rustc_executable_sha256",
         "cargo_fe2o3_executable_sha256",
-        "cargo_executable_sha256",
+        "declared_cargo_executable_sha256",
+        "cargo_launcher_executable_sha256",
         "codegen_backend_sha256",
         "worker_config_sha256",
         "worker_executable_sha256",
         "worker_build_identity_sha256",
         "llvm_build_identity_sha256",
     ):
-        decode_identity_digest(build[field], f"build observation {field}")
+        decode_identity_digest(build[field], f"build identity claim {field}")
     decode_identity_decimal(semantic["source_bytes"], "source_bytes", 2**64 - 1, False)
     decode_identity_decimal(
         semantic["code_object_version"], "code_object_version", 2**16 - 1, False
     )
     decode_identity_decimal(semantic["rustc_opt_level"], "rustc_opt_level", 255, True)
+    decode_identity_decimal(
+        build["cargo_launcher_pid"], "cargo_launcher_pid", 2**64 - 1, False
+    )
+    decode_identity_decimal(
+        build["cargo_launcher_start_time_ticks"],
+        "cargo_launcher_start_time_ticks",
+        2**64 - 1,
+        False,
+    )
     semantic_digest = hashlib.sha256(semantic_record).hexdigest()
-    if build["semantic_admission_sha256"] != semantic_digest:
-        raise CheckError("build observation does not bind the semantic admission identity")
+    build_digest = hashlib.sha256(build_record).hexdigest()
+    if semantic_claim_digest != semantic_digest or build_claim_digest != build_digest:
+        raise CheckError("identity handoff manifest does not bind the exact claim records")
+    if build["semantic_claim_sha256"] != semantic_digest:
+        raise CheckError(
+            "build identity claim does not bind the semantic identity claim"
+        )
     return semantic_record, semantic, build_record, build
 
 
@@ -441,10 +479,10 @@ def identity_manifest_values(hsaco: bytes) -> dict[str, str]:
     semantic_record, semantic, build_record, build = decode_hsaco_identity_v2(hsaco)
     values = {
         "identity_section": S09_IDENTITY_SECTION,
-        "semantic_admission_sha256": hashlib.sha256(semantic_record).hexdigest(),
-        **{f"semantic_{field}": semantic[field] for field in SEMANTIC_RECORD_FIELDS},
-        "build_observation_sha256": hashlib.sha256(build_record).hexdigest(),
-        **{f"build_{field}": build[field] for field in BUILD_RECORD_FIELDS},
+        "semantic_claim_sha256": hashlib.sha256(semantic_record).hexdigest(),
+        **{f"semantic_{field}": semantic[field] for field in SEMANTIC_CLAIM_FIELDS},
+        "build_claim_sha256": hashlib.sha256(build_record).hexdigest(),
+        **{f"build_{field}": build[field] for field in BUILD_CLAIM_FIELDS},
     }
     if tuple(values) != IDENTITY_MANIFEST_FIELDS:
         raise AssertionError("identity manifest field construction changed")
@@ -988,7 +1026,7 @@ def validate_manifest_values(manifest: dict[str, str], required_domain: str) -> 
         "manifest_schema": MANIFEST_SCHEMA,
         "claim": "source-debug-evidence-v2",
         "identity_section": S09_IDENTITY_SECTION,
-        "semantic_schema": SEMANTIC_ADMISSION_SCHEMA,
+        "semantic_schema": SEMANTIC_CLAIM_SCHEMA,
         "semantic_crate": "fe2o3_typed_alias_spoof",
         "semantic_module": "general_genuine",
         "semantic_logical_name": "alpha",
@@ -1003,7 +1041,7 @@ def validate_manifest_values(manifest: dict[str, str], required_domain: str) -> 
         "semantic_rustc_opt_level": "0",
         "semantic_rustc_debug_info": "full",
         "semantic_injected_debug_policy": "dwarf-v5-full",
-        "build_schema": BUILD_OBSERVATION_SCHEMA,
+        "build_schema": BUILD_CLAIM_SCHEMA,
     }
     for field, expected in expected_values.items():
         if manifest[field] != expected:
@@ -1011,8 +1049,10 @@ def validate_manifest_values(manifest: dict[str, str], required_domain: str) -> 
     if manifest["trust_domain"] != required_domain:
         raise CheckError("protected manifest trust domain is not authorized")
     require_nonzero_sha256(manifest, MANIFEST_FIELDS, "protected manifest")
-    if manifest["build_semantic_admission_sha256"] != manifest["semantic_admission_sha256"]:
-        raise CheckError("protected manifest build observation does not bind semantic admission")
+    if manifest["build_semantic_claim_sha256"] != manifest["semantic_claim_sha256"]:
+        raise CheckError(
+            "protected manifest build claim does not bind the semantic claim"
+        )
     for field in ("source_commit", "source_tree"):
         if (
             not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", manifest[field])
@@ -1028,6 +1068,8 @@ def validate_manifest_values(manifest: dict[str, str], required_domain: str) -> 
             ord(character) < 0x21 or ord(character) > 0x7E for character in value
         ):
             raise CheckError(f"protected manifest {field!r} is not a canonical observation")
+    for field in ("build_cargo_launcher_pid", "build_cargo_launcher_start_time_ticks"):
+        decode_identity_decimal(manifest[field], field, 2**64 - 1, False)
     if (
         not HEX_BUILD_ID.fullmatch(manifest["host_executable_build_id"])
         or set(manifest["host_executable_build_id"]) == {"0"}
@@ -1061,6 +1103,15 @@ def validate_policy_manifest_binding(
             raise CheckError(f"production policy does not bind manifest field {field!r}")
 
 
+def validate_manifest_identity_binding(manifest: dict[str, str], hsaco: bytes) -> None:
+    observed_identity = identity_manifest_values(hsaco)
+    for field in IDENTITY_MANIFEST_FIELDS:
+        if manifest[field] != observed_identity[field]:
+            raise CheckError(
+                f"protected manifest does not match HSACO identity field {field!r}"
+            )
+
+
 def check_evidence_bundle(
     manifest: dict[str, str],
     hsaco_path: pathlib.Path,
@@ -1079,10 +1130,7 @@ def check_evidence_bundle(
     for digest_field, path in evidence.items():
         if file_sha256(path) != manifest[digest_field]:
             raise CheckError(f"evidence file does not match {digest_field!r}")
-    observed_identity = identity_manifest_values(read_bounded_bytes(hsaco_path))
-    for field in IDENTITY_MANIFEST_FIELDS:
-        if manifest[field] != observed_identity[field]:
-            raise CheckError(f"protected manifest does not match HSACO identity field {field!r}")
+    validate_manifest_identity_binding(manifest, read_bounded_bytes(hsaco_path))
 
     artifact = read_bounded(artifact_path)
     hardware = read_bounded(hardware_path)

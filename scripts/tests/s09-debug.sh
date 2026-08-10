@@ -124,6 +124,35 @@ fixture_args=(
 "${fixture_args[@]}" >"${TMP}/fixture.out"
 rg -q '^S09 non-authoritative fixture checker passed$' "${TMP}/fixture.out"
 expect_fail rg -qi 'production.*accepted|authoritative.*accepted' "${TMP}/fixture.out"
+
+check_identity_substitution() {
+  local field replacement substituted_manifest substituted_sha256
+  field="$1"
+  replacement="$2"
+  substituted_manifest="${TMP}/${field}-substitution.tsv"
+  awk -F '\t' -v key="${field}" -v value="${replacement}" '
+    BEGIN { OFS = "\t" }
+    $1 == key { $2 = value; found += 1 }
+    { print }
+    END { if (found != 1) exit 2 }
+  ' "${MANIFEST}" >"${substituted_manifest}"
+  substituted_sha256="$(sha256sum "${substituted_manifest}" | cut -d ' ' -f 1)"
+  expect_fail "${CHECKER}" check-fixture \
+    --manifest "${substituted_manifest}" \
+    --expected-manifest-sha256 "${substituted_sha256}" \
+    --hsaco "${HSACO}" \
+    --artifact-facts "${TMP}/artifact.facts" \
+    --hardware-facts "${TMP}/hardware.facts" \
+    --dwarf "${TMP}/dwarf.one" \
+    --rocgdb "${TMP}/rocgdb.bundle"
+}
+
+check_identity_substitution \
+  build_cargo_launcher_executable_sha256 \
+  dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+check_identity_substitution build_cargo_launcher_pid 4243
+check_identity_substitution build_cargo_launcher_start_time_ticks 9002
+
 sed \
   -e 's/^trust_domain\ttest-fixture-v2$/trust_domain\tlocal-capability-v2/' \
   "${MANIFEST}" >"${TMP}/capability-manifest.tsv"

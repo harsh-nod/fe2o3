@@ -25,7 +25,7 @@ def digest(character: str) -> str:
 
 def identity_handoff() -> bytes:
     semantic = {
-        "schema": CHECKER.SEMANTIC_ADMISSION_SCHEMA,
+        "schema": CHECKER.SEMANTIC_CLAIM_SCHEMA,
         "crate": "fe2o3_typed_alias_spoof",
         "module": "general_genuine",
         "logical_name": "alpha",
@@ -45,32 +45,39 @@ def identity_handoff() -> bytes:
         "portable_mir_sha256": digest("3"),
     }
     semantic_record = CHECKER.serialize_ordered_fields(
-        semantic, CHECKER.SEMANTIC_RECORD_FIELDS, "semantic admission"
+        semantic, CHECKER.SEMANTIC_CLAIM_FIELDS, "semantic identity claim"
     )
     build = {
-        "schema": CHECKER.BUILD_OBSERVATION_SCHEMA,
-        "semantic_admission_sha256": hashlib.sha256(semantic_record).hexdigest(),
+        "schema": CHECKER.BUILD_CLAIM_SCHEMA,
+        "semantic_claim_sha256": hashlib.sha256(semantic_record).hexdigest(),
         "cargo_metadata_sha256": digest("4"),
         "crate_binding": digest("5"),
         "kernel_binding": digest("6"),
         "observed_def_path": "metadata_a::kernel_a",
         "observed_symbol": "metadata_a_kernel_a",
         "rustc_mir_capture_sha256": digest("7"),
-        "rustc_invocation_sha256": digest("8"),
+        "prepared_rustc_command_sha256": digest("8"),
         "rustc_executable_sha256": digest("9"),
         "cargo_fe2o3_executable_sha256": digest("a"),
-        "cargo_executable_sha256": digest("b"),
-        "codegen_backend_sha256": digest("c"),
-        "worker_config_sha256": digest("d"),
-        "worker_executable_sha256": digest("e"),
-        "worker_build_identity_sha256": digest("f"),
-        "llvm_build_identity_sha256": digest("1"),
+        "declared_cargo_executable_sha256": digest("b"),
+        "cargo_launcher_executable_sha256": digest("c"),
+        "cargo_launcher_pid": "4242",
+        "cargo_launcher_start_time_ticks": "9001",
+        "codegen_backend_sha256": digest("d"),
+        "worker_config_sha256": digest("e"),
+        "worker_executable_sha256": digest("f"),
+        "worker_build_identity_sha256": digest("1"),
+        "llvm_build_identity_sha256": digest("2"),
     }
     build_record = CHECKER.serialize_ordered_fields(
-        build, CHECKER.BUILD_RECORD_FIELDS, "build observation"
+        build, CHECKER.BUILD_CLAIM_FIELDS, "build identity claim"
     )
+    semantic_digest = hashlib.sha256(semantic_record).digest()
+    build_digest = hashlib.sha256(build_record).digest()
     return (
         CHECKER.S09_IDENTITY_HANDOFF_DOMAIN
+        + semantic_digest
+        + build_digest
         + struct.pack("<I", len(semantic_record))
         + semantic_record
         + struct.pack("<I", len(build_record))

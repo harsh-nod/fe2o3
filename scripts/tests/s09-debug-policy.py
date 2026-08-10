@@ -48,8 +48,8 @@ def valid_manifest(domain: str = "test-fixture-v2") -> dict[str, str]:
         "trust_domain": domain,
         "claim": "source-debug-evidence-v2",
         "identity_section": CHECKER.S09_IDENTITY_SECTION,
-        "semantic_admission_sha256": digest("1"),
-        "semantic_schema": CHECKER.SEMANTIC_ADMISSION_SCHEMA,
+        "semantic_claim_sha256": digest("1"),
+        "semantic_schema": CHECKER.SEMANTIC_CLAIM_SCHEMA,
         "semantic_crate": "fe2o3_typed_alias_spoof",
         "semantic_module": "general_genuine",
         "semantic_logical_name": "alpha",
@@ -67,24 +67,27 @@ def valid_manifest(domain: str = "test-fixture-v2") -> dict[str, str]:
         "semantic_abi_sha256": digest("2"),
         "semantic_launch_sha256": digest("3"),
         "semantic_portable_mir_sha256": digest("4"),
-        "build_observation_sha256": digest("5"),
-        "build_schema": CHECKER.BUILD_OBSERVATION_SCHEMA,
-        "build_semantic_admission_sha256": digest("1"),
+        "build_claim_sha256": digest("5"),
+        "build_schema": CHECKER.BUILD_CLAIM_SCHEMA,
+        "build_semantic_claim_sha256": digest("1"),
         "build_cargo_metadata_sha256": digest("6"),
         "build_crate_binding": digest("7"),
         "build_kernel_binding": digest("8"),
         "build_observed_def_path": "metadata_specific::kernel_a",
         "build_observed_symbol": "metadata_specific_kernel_a",
         "build_rustc_mir_capture_sha256": digest("9"),
-        "build_rustc_invocation_sha256": digest("a"),
+        "build_prepared_rustc_command_sha256": digest("a"),
         "build_rustc_executable_sha256": digest("b"),
         "build_cargo_fe2o3_executable_sha256": digest("c"),
-        "build_cargo_executable_sha256": digest("d"),
-        "build_codegen_backend_sha256": digest("e"),
-        "build_worker_config_sha256": digest("f"),
-        "build_worker_executable_sha256": digest("1"),
-        "build_worker_build_identity_sha256": digest("2"),
-        "build_llvm_build_identity_sha256": digest("3"),
+        "build_declared_cargo_executable_sha256": digest("d"),
+        "build_cargo_launcher_executable_sha256": digest("e"),
+        "build_cargo_launcher_pid": "4242",
+        "build_cargo_launcher_start_time_ticks": "9001",
+        "build_codegen_backend_sha256": digest("f"),
+        "build_worker_config_sha256": digest("1"),
+        "build_worker_executable_sha256": digest("2"),
+        "build_worker_build_identity_sha256": digest("3"),
+        "build_llvm_build_identity_sha256": digest("4"),
         "source_commit": "3" * 40,
         "source_tree": "4" * 40,
         "hsaco_sha256": digest("5"),
@@ -102,7 +105,7 @@ def valid_manifest(domain: str = "test-fixture-v2") -> dict[str, str]:
 
 def identity_records() -> tuple[bytes, bytes]:
     semantic = {
-        "schema": CHECKER.SEMANTIC_ADMISSION_SCHEMA,
+        "schema": CHECKER.SEMANTIC_CLAIM_SCHEMA,
         "crate": "fe2o3_typed_alias_spoof",
         "module": "general_genuine",
         "logical_name": "alpha",
@@ -122,29 +125,32 @@ def identity_records() -> tuple[bytes, bytes]:
         "portable_mir_sha256": digest("3"),
     }
     semantic_record = CHECKER.serialize_ordered_fields(
-        semantic, CHECKER.SEMANTIC_RECORD_FIELDS, "semantic admission"
+        semantic, CHECKER.SEMANTIC_CLAIM_FIELDS, "semantic identity claim"
     )
     build = {
-        "schema": CHECKER.BUILD_OBSERVATION_SCHEMA,
-        "semantic_admission_sha256": hashlib.sha256(semantic_record).hexdigest(),
+        "schema": CHECKER.BUILD_CLAIM_SCHEMA,
+        "semantic_claim_sha256": hashlib.sha256(semantic_record).hexdigest(),
         "cargo_metadata_sha256": digest("4"),
         "crate_binding": digest("5"),
         "kernel_binding": digest("6"),
         "observed_def_path": "metadata_a::kernel_a",
         "observed_symbol": "metadata_a_kernel_a",
         "rustc_mir_capture_sha256": digest("7"),
-        "rustc_invocation_sha256": digest("8"),
+        "prepared_rustc_command_sha256": digest("8"),
         "rustc_executable_sha256": digest("9"),
         "cargo_fe2o3_executable_sha256": digest("a"),
-        "cargo_executable_sha256": digest("b"),
-        "codegen_backend_sha256": digest("c"),
-        "worker_config_sha256": digest("d"),
-        "worker_executable_sha256": digest("e"),
-        "worker_build_identity_sha256": digest("f"),
-        "llvm_build_identity_sha256": digest("1"),
+        "declared_cargo_executable_sha256": digest("b"),
+        "cargo_launcher_executable_sha256": digest("c"),
+        "cargo_launcher_pid": "4242",
+        "cargo_launcher_start_time_ticks": "9001",
+        "codegen_backend_sha256": digest("d"),
+        "worker_config_sha256": digest("e"),
+        "worker_executable_sha256": digest("f"),
+        "worker_build_identity_sha256": digest("1"),
+        "llvm_build_identity_sha256": digest("2"),
     }
     build_record = CHECKER.serialize_ordered_fields(
-        build, CHECKER.BUILD_RECORD_FIELDS, "build observation"
+        build, CHECKER.BUILD_CLAIM_FIELDS, "build identity claim"
     )
     return semantic_record, build_record
 
@@ -159,6 +165,8 @@ def handoff(
     build_record = default_build if build_record is None else build_record
     return (
         CHECKER.S09_IDENTITY_HANDOFF_DOMAIN
+        + hashlib.sha256(semantic_record).digest()
+        + hashlib.sha256(build_record).digest()
         + struct.pack("<I", len(semantic_record))
         + semantic_record
         + struct.pack("<I", len(build_record))
@@ -306,15 +314,23 @@ class IdentityCodecConsumerTests(unittest.TestCase):
         )
         self.assertEqual(decoded_semantic, semantic_record)
         self.assertEqual(decoded_build, build_record)
-        self.assertEqual(tuple(semantic), CHECKER.SEMANTIC_RECORD_FIELDS)
-        self.assertEqual(tuple(build), CHECKER.BUILD_RECORD_FIELDS)
+        self.assertEqual(tuple(semantic), CHECKER.SEMANTIC_CLAIM_FIELDS)
+        self.assertEqual(tuple(build), CHECKER.BUILD_CLAIM_FIELDS)
         self.assertEqual(
-            build["semantic_admission_sha256"],
+            build["semantic_claim_sha256"],
             hashlib.sha256(semantic_record).hexdigest(),
         )
         manifest_values = CHECKER.identity_manifest_values(image)
         self.assertEqual(tuple(manifest_values), CHECKER.IDENTITY_MANIFEST_FIELDS)
-        self.assertEqual(len(CHECKER.MANIFEST_FIELDS), 51)
+        self.assertEqual(len(CHECKER.SEMANTIC_CLAIM_FIELDS), 18)
+        self.assertEqual(len(CHECKER.BUILD_CLAIM_FIELDS), 20)
+        self.assertEqual(
+            CHECKER.MANIFEST_FIELD_COUNT,
+            3
+            + len(CHECKER.IDENTITY_MANIFEST_FIELDS)
+            + len(CHECKER.EVIDENCE_MANIFEST_FIELDS),
+        )
+        self.assertEqual(len(CHECKER.MANIFEST_FIELDS), CHECKER.MANIFEST_FIELD_COUNT)
 
     def test_rejects_every_handoff_truncation_boundary(self) -> None:
         valid = handoff()
@@ -374,6 +390,33 @@ class IdentityCodecConsumerTests(unittest.TestCase):
             with self.subTest(name=name), self.assertRaises(CHECKER.CheckError):
                 CHECKER.decode_hsaco_identity_v2(elf(probe))
 
+    def test_rejects_substituted_handoff_claim_digests(self) -> None:
+        valid = handoff()
+        for label, offset in (
+            ("semantic claim", len(CHECKER.S09_IDENTITY_HANDOFF_DOMAIN)),
+            ("build claim", len(CHECKER.S09_IDENTITY_HANDOFF_DOMAIN) + 32),
+        ):
+            mutated = bytearray(valid)
+            mutated[offset] ^= 1
+            with self.subTest(label=label), self.assertRaises(CHECKER.CheckError):
+                CHECKER.decode_hsaco_identity_v2(elf(bytes(mutated)))
+
+    def test_rejects_pid_bound_cargo_launcher_substitutions(self) -> None:
+        image = elf(handoff())
+        manifest = valid_manifest()
+        manifest.update(CHECKER.identity_manifest_values(image))
+        CHECKER.validate_manifest_identity_binding(manifest, image)
+        substitutions = {
+            "build_cargo_launcher_executable_sha256": digest("d"),
+            "build_cargo_launcher_pid": "4243",
+            "build_cargo_launcher_start_time_ticks": "9002",
+        }
+        for field, replacement in substitutions.items():
+            mutated = dict(manifest)
+            mutated[field] = replacement
+            with self.subTest(field=field), self.assertRaises(CHECKER.CheckError):
+                CHECKER.validate_manifest_identity_binding(mutated, image)
+
 
 class ManifestV2SchemaTests(unittest.TestCase):
     def test_local_lane_serializes_the_exact_schema_order(self) -> None:
@@ -386,7 +429,7 @@ class ManifestV2SchemaTests(unittest.TestCase):
         self.assertEqual(fields, expected)
         self.assertIn('"${CHECKER}" identity-fields', lane)
         self.assertIn('cat -- "${IDENTITY_FIELDS}"', lane)
-        self.assertEqual(len(CHECKER.MANIFEST_FIELDS), 51)
+        self.assertEqual(len(CHECKER.MANIFEST_FIELDS), CHECKER.MANIFEST_FIELD_COUNT)
 
     def test_serialization_is_deterministic_and_round_trips(self) -> None:
         values = valid_manifest()
@@ -475,7 +518,7 @@ class ManifestV2SchemaTests(unittest.TestCase):
             with self.subTest(field=field), self.assertRaises(CHECKER.CheckError):
                 CHECKER.parse_protected_manifest(data, "test-fixture-v2")
 
-    def test_dynamic_symbol_observation_is_not_semantic_admission(self) -> None:
+    def test_dynamic_symbol_observation_is_not_a_semantic_claim(self) -> None:
         values = valid_manifest()
         values["build_observed_def_path"] = "metadata_b::renamed_kernel"
         values["build_observed_symbol"] = "metadata_b_renamed_kernel"

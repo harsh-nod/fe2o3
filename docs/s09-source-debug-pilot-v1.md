@@ -6,23 +6,25 @@ configuration value `s09-alpha-gfx942-o0-v1`, which requires COV6, `O0`,
 `strip-debug=false`, and per-stage LLVM verification.
 
 The profile is deliberately closed, but it does not treat a Cargo/rustc symbol
-as stable source identity. Manifest V2 separates `SemanticAdmissionV2` from
-`BuildObservationV2`. Semantic admission binds the canonical source path,
-3,231-byte length, source SHA-256, logical crate/module/name/export, General
-Scalar/Slice rustc-layout V3 profile, portable MIR, ABI, launch shape, and the
-exact gfx942/COV6/O0 debug policy. Cargo metadata, crate and kernel bindings,
-observed DefPath and symbol, the exact rustc invocation and executable, Cargo
-and `cargo-fe2o3`, backend, Worker V2, and LLVM identities are build
-observations. They are recorded and bound by evidence policy, never used as
-fixed semantic-admission values.
+as stable source identity. Manifest V2 separates `SemanticIdentityClaimV2`
+from `BuildIdentityClaimV2`. The semantic claim binds the canonical source
+path, 3,231-byte length, source SHA-256, logical crate/module/name/export,
+General Scalar/Slice rustc-layout V3 profile, portable MIR, ABI, launch shape,
+and the exact gfx942/COV6/O0 debug policy. The build claim records Cargo
+metadata, crate and kernel bindings, observed DefPath and symbol, the final
+prepared rustc command and rustc executable, `cargo-fe2o3`, the declared Cargo
+executable, the measured PID-bound Cargo launcher executable and process start
+time, backend, Worker V2, and LLVM identities. Both records are inert claims:
+decoding establishes canonical syntax and digest linkage but grants no
+authority. Evidence policy separately authenticates and binds their values.
 
 The observed DefPath and symbol are opaque, canonical build observations.
 Their exact values may change when Cargo `-C metadata`, the dependency graph,
 toolchain, profile, or checkout context changes. The harness does not derive
 either value from a binding ID and does not admit a build by matching a fixed
-DefPath or symbol. Such changes produce a new `BuildObservationV2`; they do not
-alter `SemanticAdmissionV2` when source, portable MIR semantics, ABI, launch
-shape, and target policy are unchanged.
+DefPath or symbol. Such changes produce a new `BuildIdentityClaimV2`; they do
+not alter `SemanticIdentityClaimV2` when source, portable MIR semantics, ABI,
+launch shape, and target policy are unchanged.
 
 Absolute paths and paths containing `.` or `..` components are rejected and
 the checkout root is not emitted into DWARF. The compiler also requires the
@@ -100,26 +102,28 @@ policy, or trust-path arguments. It reads only the compiled fixed path
 policy must be a root-owned, single-link regular file with no write bits and
 the Linux filesystem immutable flag. Missing or unsupported installation
 fails closed. The policy binds the canonical installed manifest path and
-digest plus every SemanticAdmissionV2 and BuildObservationV2 field.
+digest plus every `SemanticIdentityClaimV2` and `BuildIdentityClaimV2` field.
 
 The installed manifest uses ordered schema
-`fe2o3-s09-protected-manifest-v2` and has exactly 51 fields. Three envelope
-fields are followed by 38 identity fields and ten evidence fields. The identity
-fields are namespaced, exact copies of:
+`fe2o3-s09-protected-manifest-v2` and has exactly 54 fields. The count is
+derived from the codec field lists: three envelope fields, 41 identity fields,
+and ten evidence fields. The identity fields are namespaced, exact copies of:
 
 - the section name and SHA-256 of the canonical 18-field
-  `SemanticAdmissionV2` record;
+  `SemanticIdentityClaimV2` record, named `semantic_claim_sha256`;
 - every semantic record field in codec order;
-- the SHA-256 of the canonical 17-field `BuildObservationV2` record; and
+- the SHA-256 of the canonical 20-field `BuildIdentityClaimV2` record, named
+  `build_claim_sha256`; and
 - every build record field in codec order.
 
 The final ten fields bind the source commit/tree, exact HSACO, host executable
 and build ID, archive manifest, artifact facts, hardware facts, normalized
 DWARF, and normalized ROCgdb transcript. The checker reads the HSACO itself,
 requires exactly one `.fe2o3.s09.identity.v2` `SHT_PROGBITS` section, decodes
-both bounded records, verifies the build-to-semantic digest edge, and compares
-all 38 derived identity fields against the protected manifest. Identity values
-are never accepted from environment variables or command-line field values.
+both bounded records, verifies the handoff's exact semantic and build claim
+digests plus the build-to-semantic digest edge, and compares all 41 derived
+identity fields against the protected manifest. Identity values are never
+accepted from environment variables or command-line field values.
 
 Every digest is lowercase, nonzero SHA-256. Serialization is one UTF-8,
 LF-terminated `field<TAB>value` line per field in fixed order. Missing,
