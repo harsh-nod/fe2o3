@@ -1,9 +1,9 @@
 use vstd::prelude::*;
 
-include!("../../src/two_kernel_bodies.rs");
-
 #[path = "../two_kernel.rs"]
 mod model;
+
+include!("../../src/two_kernel_bodies.rs");
 
 verus! {
 

@@ -351,6 +351,88 @@ fn reviewed_result_rejects_dependency_property_and_freshness_substitution() {
     );
 }
 
+#[test]
+fn reviewed_result_rejects_tool_and_review_expectation_substitution() {
+    let expected = input(Gfx942AlphaZetaKernelV1::Alpha, 60, 61);
+    let substituted_input = input_with(
+        Gfx942AlphaZetaKernelV1::Alpha,
+        sources_with(SHARED_BODY),
+        digest(60),
+        digest(61),
+        tool("verus", "0.2026.08.11", 45),
+    );
+    let fresh = freshness(1, digest(80), digest(81), 10);
+    let substituted_proof = proof(&substituted_input, fresh);
+    let substituted_review = AlphaZetaExecutionReviewV1::new(
+        expected.identity(),
+        substituted_proof.identity(),
+        fresh,
+        digest(70),
+        digest(71),
+    )
+    .unwrap();
+    assert_eq!(
+        record_reviewed_alpha_zeta_execution_v1(
+            &expected,
+            &substituted_proof,
+            substituted_review,
+            &mut AlphaZetaReviewLedgerV1::new(),
+        ),
+        Err(AlphaZetaProofErrorV1::ToolSubstitution)
+    );
+
+    let exact_proof = proof(&expected, fresh);
+    let wrong_input_review = AlphaZetaExecutionReviewV1::new(
+        digest(99),
+        exact_proof.identity(),
+        fresh,
+        digest(70),
+        digest(72),
+    )
+    .unwrap();
+    assert_eq!(
+        record_reviewed_alpha_zeta_execution_v1(
+            &expected,
+            &exact_proof,
+            wrong_input_review,
+            &mut AlphaZetaReviewLedgerV1::new(),
+        ),
+        Err(AlphaZetaProofErrorV1::IdentityMismatch {
+            field: "reviewed input"
+        })
+    );
+}
+
+#[test]
+fn abi_effects_and_launch_each_change_the_sealed_input_identity() {
+    let baseline = input(Gfx942AlphaZetaKernelV1::Alpha, 60, 61);
+    let make = |abi: Digest, effects: Digest, launch: Digest| {
+        let sources = sources_with(SHARED_BODY);
+        let mut proof_target = target(&sources, 1);
+        proof_target.effects_contract_digest = effects;
+        Gfx942AlphaZetaProofInputV1::seal(
+            Gfx942AlphaZetaKernelV1::Alpha,
+            sources,
+            proof_target,
+            abi,
+            effects,
+            launch,
+            tool("verus", "0.2026.08.10", 35),
+            tool("z3", "4.12.5", 37),
+            model(),
+            digest(60),
+            digest(61),
+        )
+        .unwrap()
+    };
+    let changed_abi = make(digest(99), digest(25), digest(40));
+    let changed_effects = make(digest(31), digest(98), digest(40));
+    let changed_launch = make(digest(31), digest(25), digest(97));
+    assert_ne!(baseline.identity(), changed_abi.identity());
+    assert_ne!(baseline.identity(), changed_effects.identity());
+    assert_ne!(baseline.identity(), changed_launch.identity());
+}
+
 fn record_pair(
     alpha: &Gfx942AlphaZetaProofInputV1,
     zeta: &Gfx942AlphaZetaProofInputV1,

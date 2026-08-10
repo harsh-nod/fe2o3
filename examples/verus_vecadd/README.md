@@ -115,9 +115,17 @@ Proving that production `f32` multiply and add refine it, including rounding,
 NaNs, infinities, signed zero, contraction, and operation order, remains an
 authenticated compiler/backend refinement obligation.
 
-Three paired negative fixtures require Verus to reject an alpha arithmetic
-mutation, an input read moved before the output guard, and duplicate exclusive
-ownership of one output element.
+The input-initialization premise and four-byte address-representability result
+are named explicitly in `alpha_input_initialization_assumptions`,
+`zeta_input_initialization_assumptions`, and
+`f32_access_address_is_representable`. Initialization is consumed as a ghost
+assumption; it is not derived from a Rust reference or a runtime allocation.
+
+Five paired negative fixtures require Verus to reject an alpha arithmetic
+mutation, an input read moved before the output guard, duplicate exclusive
+ownership of one output element, and a shared-read capability whose explicit
+initialization state is false. A fifth mutation claims that a four-byte element
+starting at the maximum `usize` address has a representable end address.
 
 ## Running the checks
 
@@ -128,11 +136,19 @@ cargo +stable test --manifest-path examples/verus_vecadd/Cargo.toml
 cargo test -p fe2o3-vecadd
 ```
 
-Run all five positive Verus harnesses and all twenty-two expected proof
+Run all five positive Verus harnesses and all twenty-four expected proof
 rejections with:
 
 ```text
 VERUS=/absolute/path/to/verus examples/verus_vecadd/run-verus.sh --require
+```
+
+Run only the exact gfx942 alpha/zeta source-model proof and its five property
+mutations with:
+
+```text
+PATH=/path/to/rustup/bin:$PATH \
+VERUS=/absolute/path/to/verus examples/verus_vecadd/run-alpha-zeta-verus.sh
 ```
 
 Source sharing and positive/negative pairing can be checked without Verus:

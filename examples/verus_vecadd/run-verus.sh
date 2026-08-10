@@ -68,6 +68,9 @@ require_source "$two_kernel_body" 'macro_rules! zeta_kernel_body'
 require_source "$two_kernel_body" 'if let Some(out) = $output.get_mut($thread)'
 require_source "$two_kernel" 'pub fn verified_alpha_thread'
 require_source "$two_kernel" 'pub fn verified_zeta_thread'
+require_source "$two_kernel" 'pub open spec fn alpha_input_initialization_assumptions'
+require_source "$two_kernel" 'pub open spec fn zeta_input_initialization_assumptions'
+require_source "$two_kernel" 'pub proof fn f32_access_address_is_representable'
 require_source "$two_kernel" 'pub proof fn initialized_read_is_bounded'
 require_source "$two_kernel" 'pub proof fn exclusive_output_is_bounded_and_initialized_by_write'
 require_source "$two_kernel" 'pub proof fn two_kernel_identity_ownership_is_race_free'
@@ -83,6 +86,10 @@ require_source "$script_dir/verus/negative/two_kernel_guard_bypass.rs" \
     'mutated_alpha_bypasses_output_guard'
 require_source "$script_dir/verus/negative/two_kernel_overlapping_output.rs" \
     'mutated_overlapping_output_ownership_is_race_free'
+require_source "$script_dir/verus/negative/two_kernel_uninitialized_input.rs" \
+    'mutated_uninitialized_input_is_readable'
+require_source "$script_dir/verus/negative/two_kernel_address_overflow.rs" \
+    'mutated_f32_address_overflow_is_representable'
 
 wave_lds="$script_dir/verus/wave_lds.rs"
 require_source "$wave_lds" 'include!("vecadd.rs")'
@@ -360,6 +367,14 @@ run_rejected two_kernel_overlapping_output \
     "$script_dir/verus/negative/two_kernel_overlapping_output.rs" \
     'mutated_overlapping_output_ownership_is_race_free' \
     'postcondition.*not satisfied|postcondition failure'
+run_rejected two_kernel_uninitialized_input \
+    "$script_dir/verus/negative/two_kernel_uninitialized_input.rs" \
+    'mutated_uninitialized_input_is_readable' \
+    'postcondition.*not satisfied|postcondition failure'
+run_rejected two_kernel_address_overflow \
+    "$script_dir/verus/negative/two_kernel_address_overflow.rs" \
+    'mutated_f32_address_overflow_is_representable' \
+    'postcondition.*not satisfied|postcondition failure'
 run_rejected wave_inactive_lane_contributes \
     "$script_dir/verus/negative/wave_inactive_lane_contributes.rs" \
     'mutated_inactive_lane_contributes' \
@@ -381,4 +396,4 @@ if [ "$failures" -ne 0 ]; then
     printf 'Verus fixture run failed: %s unexpected result(s)\n' "$failures" >&2
     exit 1
 fi
-printf 'Verus fixture run passed: 5 proof harnesses, 22 expected rejections\n'
+printf 'Verus fixture run passed: 5 proof harnesses, 24 expected rejections\n'

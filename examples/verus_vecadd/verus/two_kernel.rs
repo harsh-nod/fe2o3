@@ -68,7 +68,7 @@ pub fn exact_zeta(a: i16, b: i16, bias: i32) -> (result: i64)
     assert(i16::MIN as int <= b as int <= i16::MAX as int);
     assert(i32::MIN as int <= bias as int <= i32::MAX as int);
     assert(i64::MIN as int <= a as int + b as int + bias as int <= i64::MAX as int)
-        by (linear_arith);
+        by (nonlinear_arith);
     a as i64 + b as i64 + bias as i64
 }
 
@@ -128,6 +128,24 @@ pub open spec fn capability_after_write(
     }
 }
 
+/// Input initialization is a caller-supplied source-model premise. The proof
+/// checks and consumes it; neither Rust references nor runtime allocation state
+/// are inferred from this ghost fact.
+pub open spec fn alpha_input_initialization_assumptions(
+    evidence: AlphaEvidence,
+    thread: nat,
+) -> bool {
+    evidence.input_capability == read_capability_at(evidence.input_allocation, thread)
+}
+
+pub open spec fn zeta_input_initialization_assumptions(
+    evidence: ZetaEvidence,
+    thread: nat,
+) -> bool {
+    evidence.a_capability == read_capability_at(evidence.a_allocation, thread)
+        && evidence.b_capability == read_capability_at(evidence.b_allocation, thread)
+}
+
 pub open spec fn alpha_evidence_is_valid(
     evidence: AlphaEvidence,
     length: nat,
@@ -136,7 +154,7 @@ pub open spec fn alpha_evidence_is_valid(
     models_f32_slice(evidence.input_allocation, length)
         && models_f32_slice(evidence.output_allocation, length)
         && evidence.input_allocation.id != evidence.output_allocation.id
-        && evidence.input_capability == read_capability_at(evidence.input_allocation, thread)
+        && alpha_input_initialization_assumptions(evidence, thread)
         && evidence.output_capability.permission
             == output_capability_at(evidence.output_allocation, thread, false).permission
 }
@@ -151,13 +169,39 @@ pub open spec fn zeta_evidence_is_valid(
         && models_f32_slice(evidence.output_allocation, length)
         && evidence.output_allocation.id != evidence.a_allocation.id
         && evidence.output_allocation.id != evidence.b_allocation.id
-        && evidence.a_capability == read_capability_at(evidence.a_allocation, thread)
-        && evidence.b_capability == read_capability_at(evidence.b_allocation, thread)
+        && zeta_input_initialization_assumptions(evidence, thread)
         && evidence.output_capability.permission
             == output_capability_at(evidence.output_allocation, thread, false).permission
 }
 
 /// Shared proof for every initialized `f32` input element in this slice.
+/// Proves natural-number address representability for an active four-byte
+/// access. This is a source-model result, not compiler or machine-code fact.
+pub proof fn f32_access_address_is_representable(
+    allocation: permission_model::Allocation,
+    length: nat,
+    index: nat,
+)
+    requires
+        models_f32_slice(allocation, length),
+        index < length,
+    ensures
+        permission_model::region_is_in_bounds(
+            allocation,
+            permission_model::element_region(allocation, index, 4),
+        ),
+        permission_model::element_byte_address(allocation, index, 4)
+            < permission_model::element_byte_end(allocation, index, 4),
+        permission_model::element_byte_end(allocation, index, 4) <= usize::MAX as nat,
+{
+    permission_model::element_region_is_in_bounds_and_address_representable(
+        allocation,
+        length,
+        index,
+        4,
+    );
+}
+
 pub proof fn initialized_read_is_bounded(
     allocation: permission_model::Allocation,
     capability: permission_model::RegionCapability,
@@ -171,14 +215,10 @@ pub proof fn initialized_read_is_bounded(
     ensures
         permission_model::region_is_in_bounds(allocation, capability.permission.region),
         permission_model::capability_can_read(capability),
+        capability.initialized,
         permission_model::element_byte_end(allocation, index, 4) <= usize::MAX as nat,
 {
-    permission_model::element_region_is_in_bounds_and_address_representable(
-        allocation,
-        length,
-        index,
-        4,
-    );
+    f32_access_address_is_representable(allocation, length, index);
 }
 
 /// Shared proof for the exclusive element selected by either kernel.
@@ -224,6 +264,7 @@ pub proof fn alpha_permissions_are_valid(
             evidence.output_capability.permission.region,
         ),
         permission_model::capability_can_read(evidence.input_capability),
+        evidence.input_capability.initialized,
         permission_model::permission_can_write(evidence.output_capability.permission),
         capability_after_write(evidence.output_capability).initialized,
         permission_model::permissions_are_compatible(
@@ -276,6 +317,8 @@ pub proof fn zeta_permissions_are_valid(
         ),
         permission_model::capability_can_read(evidence.a_capability),
         permission_model::capability_can_read(evidence.b_capability),
+        evidence.a_capability.initialized,
+        evidence.b_capability.initialized,
         permission_model::permission_can_write(evidence.output_capability.permission),
         capability_after_write(evidence.output_capability).initialized,
         permission_model::permissions_are_compatible(
@@ -348,6 +391,7 @@ pub fn verified_alpha_thread(
             ),
         thread < output.values@.len() ==>
             permission_model::capability_can_read(evidence.input_capability),
+        thread < output.values@.len() ==> evidence.input_capability.initialized,
         thread < output.values@.len() ==>
             permission_model::permission_can_write(evidence.output_capability.permission),
         thread < output.values@.len() ==>
@@ -404,6 +448,8 @@ pub fn verified_zeta_thread(
             permission_model::capability_can_read(evidence.a_capability),
         thread < output.values@.len() ==>
             permission_model::capability_can_read(evidence.b_capability),
+        thread < output.values@.len() ==> evidence.a_capability.initialized,
+        thread < output.values@.len() ==> evidence.b_capability.initialized,
         thread < output.values@.len() ==>
             permission_model::permission_can_write(evidence.output_capability.permission),
         thread < output.values@.len() ==>
