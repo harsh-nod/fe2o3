@@ -912,6 +912,71 @@ fn required_finished_crash_recovery_removes_capsule_residue() {
 
 #[test]
 #[cfg(feature = "worker-v2-fault-injection-test-only")]
+fn required_cov6_fault_matrix_recovers_every_committed_boundary() {
+    for point in [
+        "pending-intent",
+        "ready",
+        "published",
+        "envelope-published",
+        "completed",
+        "intent-cleared",
+        "finished",
+    ] {
+        let directory = TestDirectory::new();
+        let fixture = required_alpha_zeta_publication_fixture(&directory);
+        let interrupted = run_wrapper_with_options(
+            &directory,
+            &fixture.config,
+            "publish-valid",
+            fixture.cov6,
+            Some(point),
+        );
+        assert_eq!(
+            interrupted.status.code(),
+            Some(86),
+            "{point}: {}",
+            stderr(&interrupted)
+        );
+        fs::remove_file(directory.0.join("spawned")).unwrap();
+        fs::remove_file(directory.0.join("envelope-inputs.capsule")).unwrap();
+
+        let recovered =
+            run_wrapper_with_options(&directory, &fixture.config, "fail", fixture.cov6, None);
+        assert!(
+            recovered.status.success(),
+            "{point}: {}",
+            stderr(&recovered)
+        );
+        assert!(
+            !directory.0.join("spawned").exists(),
+            "{point} unexpectedly spawned rustc"
+        );
+        assert_eq!(
+            published_artifacts(&directory),
+            [fixture.expected_publication],
+            "{point}"
+        );
+        assert!(restart_records(&directory).is_empty(), "{point}");
+        assert!(envelope_input_residue(&directory).is_empty(), "{point}");
+        assert!(
+            envelope_publication_temp_residue(&directory).is_empty(),
+            "{point}"
+        );
+        let envelope_count = fs::read_dir(artifact_dir(&directory))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .filter(|name| {
+                let name = name.to_string_lossy();
+                name.starts_with(".fe2o3-worker-v2-load-envelope-v1-")
+                    && name.ends_with(".envelope")
+            })
+            .count();
+        assert_eq!(envelope_count, 1, "{point}");
+    }
+}
+
+#[test]
+#[cfg(feature = "worker-v2-fault-injection-test-only")]
 fn required_cov6_production_wrapper_recovers_after_published_crash() {
     let directory = TestDirectory::new();
     let fixture = required_alpha_zeta_publication_fixture(&directory);

@@ -1963,35 +1963,61 @@ mod tests {
         assert!(!recovered.grants_currentness_authority());
         assert!(!recovered.grants_load_authority());
         assert!(!recovered.grants_launch_authority());
+        assert_ne!(
+            stale_receipt.publication_identity(),
+            recovered.published_claim().receipt().publication_identity()
+        );
         assert!(store.recover_load_envelope(stale_receipt).is_err());
     }
 
     #[test]
-    fn malformed_or_mutated_envelope_is_never_replaced() {
+    fn malformed_mutated_and_truncated_envelopes_are_never_replaced() {
+        for case in ["mutated", "truncated"] {
+            let directory = TestDirectory::new();
+            let (publisher, envelope, _) = canonical_envelope_fixture(&directory);
+            let receipt = envelope.published_claim().receipt();
+            let store = WorkerV2ResumeStoreV1::open(&directory.0, &publisher).unwrap();
+            store.publish_load_envelope(&envelope).unwrap();
+            drop(store);
+
+            let path = directory
+                .0
+                .join(envelope_name(receipt.publication_identity()));
+            let mut bytes = fs::read(&path).unwrap();
+            match case {
+                "mutated" => bytes[0] ^= 1,
+                "truncated" => {
+                    bytes.truncate(bytes.len() - 1);
+                }
+                _ => unreachable!(),
+            }
+            fs::write(&path, &bytes).unwrap();
+
+            let store = WorkerV2ResumeStoreV1::open(&directory.0, &publisher).unwrap();
+            assert!(store.recover_load_envelope(receipt).is_err(), "{case}");
+            assert!(store.publish_load_envelope(&envelope).is_err(), "{case}");
+            assert_eq!(fs::read(path).unwrap(), bytes, "{case}");
+        }
+    }
+
+    #[test]
+    fn envelope_store_rejects_cross_producer_publication_and_recovery() {
         let directory = TestDirectory::new();
-        let (publisher, envelope, _) = canonical_envelope_fixture(&directory);
-        let receipt = envelope.published_claim().receipt();
-        let store = WorkerV2ResumeStoreV1::open(&directory.0, &publisher).unwrap();
-        store.publish_load_envelope(&envelope).unwrap();
-        drop(store);
+        let (publisher, _, _) = canonical_envelope_fixture(&directory);
+        let (other_publisher, other_envelope, _) = canonical_envelope_fixture_for(
+            &directory,
+            "other_alpha_zeta",
+            "/workspace/other-envelope.rs",
+        );
+        let receipt = other_envelope.published_claim().receipt();
 
-        let path = fs::read_dir(&directory.0)
-            .unwrap()
-            .map(|entry| entry.unwrap().path())
-            .find(|path| {
-                let name = path.file_name().unwrap().to_string_lossy();
-                name.starts_with(".fe2o3-worker-v2-load-envelope-v1-")
-                    && name.ends_with(".envelope")
-            })
-            .unwrap();
-        let mut bytes = fs::read(&path).unwrap();
-        bytes[0] ^= 1;
-        fs::write(&path, &bytes).unwrap();
+        let other_store = WorkerV2ResumeStoreV1::open(&directory.0, &other_publisher).unwrap();
+        other_store.publish_load_envelope(&other_envelope).unwrap();
+        drop(other_store);
 
         let store = WorkerV2ResumeStoreV1::open(&directory.0, &publisher).unwrap();
+        assert!(store.publish_load_envelope(&other_envelope).is_err());
         assert!(store.recover_load_envelope(receipt).is_err());
-        assert!(store.publish_load_envelope(&envelope).is_err());
-        assert_eq!(fs::read(path).unwrap(), bytes);
     }
 
     #[test]
@@ -2392,16 +2418,19 @@ mod tests {
                 }
                 "substituted" => {
                     let other_directory = TestDirectory::new();
-                    let (_, substituted, _) = canonical_envelope_fixture_for(
+                    let (other_publisher, substituted, _) = canonical_envelope_fixture_for(
                         &other_directory,
                         "substituted_alpha_zeta",
                         "/workspace/substituted-envelope.rs",
                     );
                     let substituted_receipt = substituted.published_claim().receipt();
                     assert_ne!(substituted_receipt, receipt);
-                    store.publish_load_envelope(&substituted).unwrap();
+                    let other_store =
+                        WorkerV2ResumeStoreV1::open(&other_directory.0, &other_publisher).unwrap();
+                    other_store.publish_load_envelope(&substituted).unwrap();
+                    drop(other_store);
                     fs::rename(
-                        directory
+                        other_directory
                             .0
                             .join(envelope_name(substituted_receipt.publication_identity())),
                         &expected_path,

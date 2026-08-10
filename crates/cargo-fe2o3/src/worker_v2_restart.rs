@@ -1137,6 +1137,16 @@ impl WorkerV2ResumeStoreV1 {
         envelope: &WorkerV2LoadEnvelopeV1,
     ) -> Result<WorkerV2EnvelopePublicationOutcomeV1, ResumeMarkerErrorV1> {
         self.verify_output_path()?;
+        if envelope
+            .published_claim()
+            .plan()
+            .scope()
+            .package()
+            .as_bytes()
+            != &self.package
+        {
+            return Err(self.invalid("load envelope belongs to another producer package"));
+        }
         let bytes = envelope.to_bytes();
         let decoded = WorkerV2LoadEnvelopeV1::from_bytes(&bytes)
             .map_err(|error| self.invalid(format!("envelope is not canonical: {error}")))?;
@@ -1271,6 +1281,16 @@ impl WorkerV2ResumeStoreV1 {
             .map_err(|error| self.invalid_at_name(name, format!("invalid envelope: {error}")))?;
         if envelope.to_bytes() != bytes {
             return Err(self.invalid_at_name(name, "envelope encoding is not canonical"));
+        }
+        if envelope
+            .published_claim()
+            .plan()
+            .scope()
+            .package()
+            .as_bytes()
+            != &self.package
+        {
+            return Err(self.invalid_at_name(name, "envelope producer package was substituted"));
         }
         if envelope.published_claim().receipt() != receipt {
             return Err(self.invalid_at_name(name, "envelope publication receipt was substituted"));
