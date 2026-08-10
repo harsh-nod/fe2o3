@@ -98,11 +98,17 @@ profile.
 The compile test emits one alpha-only COV6 HSACO, rejects any physically bound
 `zeta` entry, and requires `llvm-dwarfdump --verify` to accept its linked
 DWARF. The fixed ROCgdb runner and transcript checker are a separate debug
-evidence boundary. The current Rust hardware controller requires a two-kernel
-alpha/zeta artifact, so it cannot execute this alpha-only HSACO and cannot
-produce current S09 hardware evidence. A matching alpha-only controller must
-land before the local hardware lane or a production controller can complete.
-Until then, attempted use of the old two-kernel controller fails closed.
+evidence boundary. The S09 Rust controller is separate from the ordinary
+alpha/zeta controller and accepts only the exact alpha-only artifact facts,
+their SHA-256, and the matching HSACO SHA-256. The fixed facts are
+`gfx942:xnack-`, O0, and one `alpha` entry bound to one `alpha.kd` descriptor.
+The controller then requires the 40-byte explicit alpha layout plus the
+256-byte COV6 implicit suffix, executes lengths 1, 255, 256, 257, and 1023,
+and checks the CPU oracle, immutable input, and both output canaries. Extra
+kernels, a changed descriptor symbol, either digest substitution, target
+drift, or a changed runtime kernarg shape fail closed. The ordinary alpha/zeta
+hardware tests remain unchanged and continue to cover the non-S09 two-kernel
+contract.
 
 Before ROCgdb runs, the local runner measures the HSACO SHA-256, hardware-test
 SHA-256, and hardware ELF GNU build ID. It derives `gfx942:xnack-` from AMDGPU
@@ -116,10 +122,12 @@ The checker requires an exact BP2 line-69 hit followed by an AMDGPU-wave frame
 and all physical argument observations before BP3 is armed. It then requires
 an exact BP3 line-70 hit, another AMDGPU-wave frame, and local `i` before the
 final continuation. ROCgdb runs with `--return-child-result`. Only after the
-hardware test exits normally with child status zero does a literal conditional
-ROCgdb command emit one `FE2O3_S09_HARNESS_RESULT_V1` marker carrying the HSACO
-digest, a runner-generated 256-bit nonce, and `result=passed`. The checker does
-not depend on Cargo status-line adjacency: it accepts bounded debugger
+hardware test exits normally and ROCgdb returns its zero child status does the
+runner append one `FE2O3_S09_HARNESS_RESULT_V1` marker carrying the HSACO
+digest, a runner-generated 256-bit nonce, and `result=passed`. The checker
+requires the normal inferior-exit record before this marker and zero ROCgdb
+status after it. It does not depend on Cargo status-line adjacency and accepts
+bounded debugger
 thread-exit interleaving, then requires normal inferior exit, the conditional
 runner marker, debugger hardware-pass marker, and zero ROCgdb exit status in
 that order. Removing, moving, or forging the marker fails closed, as do
@@ -213,18 +221,18 @@ FE2O3_S09_EVIDENCE_DIR=/absolute/new-evidence-directory \
 ```
 
 The compile portion performs the genuine direct LLVM/LLD alpha-only build and
-derives both identity records exclusively from the emitted HSACO. The current
-two-kernel host controller is incompatible, so the complete invocation cannot
-yet run native ROCgdb, emit a valid `s09-evidence-manifest-v2.tsv`, or validate
-a hardware evidence bundle. When the alpha-only controller lands, the lane's
-`trust_domain=local-capability-v2` will still prevent promotion: local
+derives both identity records exclusively from the emitted HSACO. The
+alpha-only controller allows the complete local invocation to run native
+ROCgdb, emit `s09-evidence-manifest-v2.tsv`, and validate a capability bundle.
+Its `trust_domain=local-capability-v2` still prevents promotion: local
 selection of the checkout and host executable is not an evidence-grade
 provenance boundary. A future protected controller must select immutable
 inputs and the GPU runner, then install a separately measured `production-v2`
 manifest and policy. Generic CI continues to run field-by-field mutation,
 missing, zero-digest, duplicate, reorder, truncation, oversize, trailing-data,
-unknown-field, deterministic-serialization, and lane-guard tests; neither
-those tests nor a local pilot archive can satisfy production debug evidence.
+unknown-field, deterministic-serialization, exact alpha-only artifact,
+digest-substitution, and lane-guard tests; neither those tests nor a local
+pilot archive can satisfy production debug evidence.
 
 Pilot evidence classes are:
 
