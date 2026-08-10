@@ -2,9 +2,18 @@ File: /evidence/alpha.hsaco
 Format: elf64-amdgpu
 Arch: amdgcn
 AddressSize: 64bit
+ElfHeader {
+  Ident {
+    OS/ABI: AMDGPU_HSA (0x40)
+    ABIVersion: 4
+  }
+  Machine: EM_AMDGPU (0xE0)
+}
 AMDGPU Metadata: ---
 amdhsa.kernels:
   - .name:           alpha
+    .kernarg_segment_align: 8
+    .kernarg_segment_size: 296
     .symbol:         alpha.kd
 amdhsa.target:   'amdgcn-amd-amdhsa--gfx942:xnack-'
 amdhsa.version:

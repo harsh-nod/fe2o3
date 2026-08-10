@@ -16,18 +16,7 @@ TMP="$(mktemp -d)"
 readonly TMP
 trap 'rm -rf -- "${TMP}"' EXIT
 readonly ROCGDB_FIXTURE="${TMP}/rocgdb.pass.txt"
-awk '
-  /^FE2O3_S09_HARNESS_RESULT_V1 / { result = $0; next }
-  /^\[Inferior [1-9][0-9]* \(process [0-9]+\) exited normally\]$/ {
-    print
-    if (result == "") exit 2
-    print result
-    result = ""
-    next
-  }
-  { print }
-  END { if (result != "") exit 2 }
-' "${FIXTURES}/rocgdb.pass.txt" >"${ROCGDB_FIXTURE}"
+cp -- "${FIXTURES}/rocgdb.pass.txt" "${ROCGDB_FIXTURE}"
 
 expect_fail() {
   if "$@" >/dev/null 2>&1; then
@@ -325,6 +314,18 @@ expect_fail "${CHECKER}" artifact-facts \
   --metadata "${TMP}/artifact-wrong-target" \
   --dwarf "${FIXTURES}/dwarf.pass.txt" \
   --output "${TMP}/wrong-target.facts"
+sed 's/ABIVersion: 4/ABIVersion: 3/' \
+  "${FIXTURES}/artifact.pass.txt" >"${TMP}/artifact-wrong-cov"
+expect_fail "${CHECKER}" artifact-facts \
+  --metadata "${TMP}/artifact-wrong-cov" \
+  --dwarf "${FIXTURES}/dwarf.pass.txt" \
+  --output "${TMP}/wrong-cov.facts"
+sed 's/\.kernarg_segment_size: 296/.kernarg_segment_size: 295/' \
+  "${FIXTURES}/artifact.pass.txt" >"${TMP}/artifact-wrong-kernarg"
+expect_fail "${CHECKER}" artifact-facts \
+  --metadata "${TMP}/artifact-wrong-kernarg" \
+  --dwarf "${FIXTURES}/dwarf.pass.txt" \
+  --output "${TMP}/wrong-kernarg.facts"
 sed '/    \.symbol:         alpha\.kd/a\
   - .name:           zeta\
     .symbol:         zeta.kd' \
@@ -333,6 +334,12 @@ expect_fail "${CHECKER}" artifact-facts \
   --metadata "${TMP}/artifact-extra-zeta" \
   --dwarf "${FIXTURES}/dwarf.pass.txt" \
   --output "${TMP}/extra-zeta.facts"
+sed 's/\.symbol:         alpha\.kd/.symbol:         wrong.kd/' \
+  "${FIXTURES}/artifact.pass.txt" >"${TMP}/artifact-wrong-symbol"
+expect_fail "${CHECKER}" artifact-facts \
+  --metadata "${TMP}/artifact-wrong-symbol" \
+  --dwarf "${FIXTURES}/dwarf.pass.txt" \
+  --output "${TMP}/wrong-symbol.facts"
 sed '/Build ID:/d' "${FIXTURES}/hardware.pass.txt" >"${TMP}/hardware-no-build-id"
 expect_fail "${CHECKER}" hardware-facts \
   --input "${TMP}/hardware-no-build-id" \
@@ -341,6 +348,7 @@ expect_fail "${CHECKER}" hardware-facts \
 
 rg -q '^readonly ROCGDB=/opt/rocm/bin/rocgdb-py_3\.12$' "${RUNNER}"
 rg -q '^readonly READOBJ=/opt/rocm/llvm/bin/llvm-readobj$' "${RUNNER}"
+rg -Fq -- '--file-headers --notes "${HSACO}"' "${RUNNER}"
 rg -q '^readonly READELF=/opt/rocm/llvm/bin/llvm-readobj$' "${RUNNER}"
 rg -Fq '/etc/fe2o3/s09-trust-v2.tsv' "${CHECKER}"
 rg -q 'FS_IMMUTABLE_FL' "${CHECKER}"
@@ -349,8 +357,13 @@ rg -q -- '--batch --nx --nh' "${RUNNER}"
 rg -q -- '--return-child-result' "${RUNNER}"
 rg -q 'FE2O3_S09_HARDWARE_PASS' "${RUNNER}"
 rg -q 'FE2O3_S09_HARNESS_RESULT_V1' "${RUNNER}"
+expect_fail rg -Fq -- "-ex 'if \$_exitcode" "${RUNNER}"
 expect_fail rg -q 'FE2O3_S09_HARNESS_RESULT_V1' \
   "${ROOT}/crates/fe2o3-hsa-runtime/tests/gfx942_two_kernel_hardware.rs"
+rg -q 's09_gfx942_cov6_alpha_only_controller' "${RUNNER}"
+rg -q 'FE2O3_S09_GFX942_ALPHA_SHA256' "${RUNNER}"
+rg -q 'FE2O3_S09_GFX942_ALPHA_FACTS_SHA256' "${RUNNER}"
+expect_fail rg -q 'FE2O3_GFX942_ALPHA_ZETA' "${RUNNER}"
 rg -q 'FE2O3_S09_RUN_NONCE' "${RUNNER}"
 rg -q 'FE2O3_S09_ROCGDB_EXIT_STATUS' "${RUNNER}"
 rg -q 'FE2O3_S09_BP2_ARMED' "${RUNNER}"

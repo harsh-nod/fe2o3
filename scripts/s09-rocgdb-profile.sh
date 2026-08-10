@@ -57,7 +57,7 @@ readonly ARCHIVE="$3"
 canonical_file HSACO "${HSACO}"
 canonical_file hardware-test "${HARDWARE_TEST}"
 [[ -x "${HARDWARE_TEST}" ]] || fail "hardware-test must be executable"
-[[ "$(basename -- "${HARDWARE_TEST}")" == gfx942_two_kernel_hardware-* ]] ||
+[[ "$(basename -- "${HARDWARE_TEST}")" == s09_gfx942_alpha_hardware-* ]] ||
   fail "hardware-test basename is outside the fixed S09 profile"
 [[ "${ARCHIVE}" == /* ]] || fail "archive must be an absolute path"
 [[ ! -e "${ARCHIVE}" && ! -L "${ARCHIVE}" ]] || fail "archive must not already exist"
@@ -109,7 +109,7 @@ if ((dwarf_normalize_status == 0)); then
 else
   dwarf_check_status=1
 fi
-"${READOBJ}" --notes "${HSACO}" >"${ARTIFACT_RAW}" 2>&1
+"${READOBJ}" --file-headers --notes "${HSACO}" >"${ARTIFACT_RAW}" 2>&1
 artifact_read_status=$?
 if ((artifact_read_status == 0 && dwarf_dump_status == 0)); then
   "${CHECKER}" artifact-facts \
@@ -145,6 +145,9 @@ if ((hardware_check_status == 0)); then
 fi
 readonly artifact_target artifact_optimization hardware_build_id
 
+artifact_facts_sha256="$(hash_or_missing "${ARTIFACT_FACTS}")"
+readonly artifact_facts_sha256
+
 if ((dwarf_verify_status == 0 && dwarf_dump_status == 0 && dwarf_normalize_status == 0 && dwarf_check_status == 0 && artifact_read_status == 0 && artifact_check_status == 0 && hardware_read_status == 0 && hardware_check_status == 0)); then
   set +e
   # ROCgdb, rather than Bash, evaluates the literal $pc expressions below.
@@ -155,9 +158,11 @@ if ((dwarf_verify_status == 0 && dwarf_dump_status == 0 && dwarf_normalize_statu
       PATH=/opt/rocm/bin:/usr/bin:/bin \
       LD_LIBRARY_PATH=/opt/rocm/lib:/opt/rocm/lib64 \
       TMPDIR="${ARCHIVE}/tmp" \
-      FE2O3_RUN_GFX942_TWO_KERNEL=1 \
-      FE2O3_GFX942_ALPHA_ZETA_HSACO="${HSACO}" \
-      FE2O3_GFX942_ALPHA_ZETA_SHA256="${HSACO_SHA256}" \
+      FE2O3_RUN_S09_GFX942_ALPHA=1 \
+      FE2O3_S09_GFX942_ALPHA_HSACO="${HSACO}" \
+      FE2O3_S09_GFX942_ALPHA_SHA256="${HSACO_SHA256}" \
+      FE2O3_S09_GFX942_ALPHA_FACTS="${ARTIFACT_FACTS}" \
+      FE2O3_S09_GFX942_ALPHA_FACTS_SHA256="${artifact_facts_sha256}" \
       FE2O3_S09_RUN_NONCE="${RUN_NONCE}" \
       "${ROCGDB}" --batch --nx --nh --return-child-result \
       -ex 'set confirm off' \
@@ -211,18 +216,19 @@ if ((dwarf_verify_status == 0 && dwarf_dump_status == 0 && dwarf_normalize_statu
       -ex 'disable 3' \
       -ex 'echo FE2O3_S09_RESUME\n' \
       -ex 'continue' \
-      -ex 'if $_exitcode == 0' \
-      -ex "echo FE2O3_S09_HARNESS_RESULT_V1 hsaco_sha256=${HSACO_SHA256} run_nonce=${RUN_NONCE} result=passed\\n" \
-      -ex 'end' \
-      -ex 'echo FE2O3_S09_HARDWARE_PASS\n' \
       --args "${HARDWARE_TEST}" \
-        gfx942_cov6_alpha_then_zeta_generated_safe_spi_with_fake_authenticator \
+        s09_gfx942_cov6_alpha_only_controller \
         --ignored --exact --nocapture >"${ROCGDB_RAW}" 2>&1
   rocgdb_status=$?
   set -e
 else
   printf 'FE2O3_S09_BEGIN\nDWARF or identity prerequisite failed; ROCgdb was not run\n' >"${ROCGDB_RAW}"
   rocgdb_status=125
+fi
+if ((rocgdb_status == 0)); then
+  printf 'FE2O3_S09_HARNESS_RESULT_V1 hsaco_sha256=%s run_nonce=%s result=passed\n' \
+    "${HSACO_SHA256}" "${RUN_NONCE}" >>"${ROCGDB_RAW}"
+  printf 'FE2O3_S09_HARDWARE_PASS\n' >>"${ROCGDB_RAW}"
 fi
 printf 'FE2O3_S09_ROCGDB_EXIT_STATUS = %d\nFE2O3_S09_END\n' \
   "${rocgdb_status}" >>"${ROCGDB_RAW}"
@@ -277,7 +283,7 @@ done
   printf 'hardware_test_build_id=%s\n' "${hardware_build_id}"
   printf 'run_nonce=%s\n' "${RUN_NONCE}"
   printf 'checker_sha256=%s\n' "$(hash_or_missing "${CHECKER}")"
-  printf 'artifact_facts_sha256=%s\n' "$(hash_or_missing "${ARTIFACT_FACTS}")"
+  printf 'artifact_facts_sha256=%s\n' "${artifact_facts_sha256}"
   printf 'hardware_facts_sha256=%s\n' "$(hash_or_missing "${HARDWARE_FACTS}")"
   printf 'dwarf_normalized_sha256=%s\n' "$(hash_or_missing "${DWARF_NORMALIZED}")"
   printf 'rocgdb_normalized_sha256=%s\n' "$(hash_or_missing "${ROCGDB_NORMALIZED}")"

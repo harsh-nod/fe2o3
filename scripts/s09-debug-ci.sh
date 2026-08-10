@@ -105,13 +105,13 @@ FE2O3_S09_DEBUG_HSACO_OUTPUT="${HSACO}" \
 
 cargo test --locked -p fe2o3-hsa-runtime \
   --features hardware-test-hooks \
-  --test gfx942_two_kernel_hardware \
+  --test s09_gfx942_alpha_hardware \
   --target-dir "${BUILD_TARGET}" \
   --no-run
 
 mapfile -d '' -t hardware_tests < <(
   find "${BUILD_TARGET}/debug/deps" -maxdepth 1 -type f -perm -0100 \
-    -name 'gfx942_two_kernel_hardware-*' -print0
+    -name 's09_gfx942_alpha_hardware-*' -print0
 )
 if ((${#hardware_tests[@]} != 1)); then
   fail "isolated build produced ${#hardware_tests[@]} candidate hardware executables"

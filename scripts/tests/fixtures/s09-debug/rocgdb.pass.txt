@@ -1,6 +1,7 @@
 fixed-profile setup noise
 FE2O3_S09_BEGIN
 1 Thread 0x7ffff7c006c0 (process 12345) "gfx942_two_ker" 0x7ffff7e01f16 in futex_wait () at ../sysdeps/nptl/futex-internal.c:146
+2 Thread 0x7ffff74006c0 (process 12345) "s09_gfx942_alp" 0x7ffff7d01234 in runtime_wait () at native/runtime.c:364
 Reading symbols from /home/runner/target/debug/deps/gfx942_two_kernel_hardware
 of file /home/runner/target/debug/deps/gfx942_two_kernel_hardware.
 Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
@@ -45,11 +46,11 @@ Line 70 of "crates/rustc-codegen-fe2o3/tests/fixtures/typed-alias-spoof/src/main
 i = 0
 FE2O3_S09_RESUME
 [Thread 0x7ffff6c006c0 (LWP 12346) exited]
-FE2O3_S09_HARNESS_RESULT_V1 hsaco_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa run_nonce=dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd result=passed
 [Thread 0x7ffff64006c0 (LWP 12347) exited]
-test gfx942_cov6_alpha_then_zeta_generated_safe_spi_with_fake_authenticator ... ok
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.12s
+test s09_gfx942_cov6_alpha_only_controller ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.12s
 [Inferior 1 (process 12345) exited normally]
+FE2O3_S09_HARNESS_RESULT_V1 hsaco_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa run_nonce=dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd result=passed
 FE2O3_S09_HARDWARE_PASS
 FE2O3_S09_ROCGDB_EXIT_STATUS = 0
 FE2O3_S09_END

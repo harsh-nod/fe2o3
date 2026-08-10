@@ -46,7 +46,7 @@ HOST_THREAD_FRAME_PREFIX = re.compile(
     r'^[1-9][0-9]* Thread <THREAD> \(process <PID>\) "[A-Za-z0-9_]{1,15}" '
 )
 HOST_THREAD_FRAME_SUFFIX = re.compile(
-    r" at \.\./sysdeps/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*:[1-9][0-9]*$"
+    r" at (?:\.\./sysdeps/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*|native/runtime\.c):[1-9][0-9]*$"
 )
 NORMALIZED_MEMORY_URI = "memory://<PID>#offset=0x<ADDR>&size=<SIZE>"
 VARIABLES = ("scale", "input_data", "input_len", "output_data", "output_len", "i")
@@ -765,11 +765,18 @@ def artifact_facts(metadata: str, dwarf: str) -> str:
     for token in (
         "Format: elf64-amdgpu",
         "Arch: amdgcn",
+        "OS/ABI: AMDGPU_HSA (0x40)",
+        "ABIVersion: 4",
+        "Machine: EM_AMDGPU (0xE0)",
+        ".kernarg_segment_align: 8",
+        ".kernarg_segment_size: 296",
         ".name:           alpha",
         ".symbol:         alpha.kd",
     ):
         require_once(metadata, token, "AMDGPU artifact metadata")
-    kernel_names = re.findall(r"(?m)^\s*-\s+\.name:\s+(\S+)\s*$", metadata)
+    kernel_names = re.findall(
+        r"(?m)^(?: {2}- | {4})\.name:\s+(\S+)\s*$", metadata
+    )
     kernel_symbols = re.findall(r"(?m)^\s+\.symbol:\s+(\S+)\s*$", metadata)
     if kernel_names != ["alpha"] or kernel_symbols != ["alpha.kd"]:
         raise CheckError("AMDGPU artifact metadata is not the exact alpha-only kernel set")

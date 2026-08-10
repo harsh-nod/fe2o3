@@ -22,7 +22,7 @@ expect_fail "${LANE}"
 expect_fail "${LANE}" relative-evidence
 rg -q 'FE2O3_ALLOW_S09_DEBUG=1' "${LANE}"
 rg -q 'worker_v2_s09_alpha_o0_preserves_source_dwarf_in_hsaco' "${LANE}"
-rg -q -- '--test gfx942_two_kernel_hardware' "${LANE}"
+rg -q -- '--test s09_gfx942_alpha_hardware' "${LANE}"
 rg -q 's09-rocgdb-profile.sh' "${LANE}"
 rg -Fq 's09-debug-hardware) run_s09_debug_hardware' "${CI_LOCAL}"
 rg -q 'Manifest V2 capability-only local pilot' "${LANE}"
