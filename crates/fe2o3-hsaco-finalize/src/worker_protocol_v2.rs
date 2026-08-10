@@ -1249,12 +1249,13 @@ mod tests {
 
     #[test]
     fn inert_exchange_decode_binds_response_without_execution_authority() {
-        let request = request();
-        let response = success_response(&request, b"linked-cov6");
+        let request_value = request();
+        let response = success_response(&request_value, b"linked-cov6");
         let exchange =
-            InertDecodedWorkerExchangeV2::decode(request.canonical_bytes(), &response).unwrap();
+            InertDecodedWorkerExchangeV2::decode(request_value.canonical_bytes(), &response)
+                .unwrap();
 
-        assert_eq!(exchange.request(), &request);
+        assert_eq!(exchange.request(), &request_value);
         assert_eq!(
             exchange.response().output().unwrap().bytes(),
             b"linked-cov6"
@@ -1264,9 +1265,10 @@ mod tests {
         assert!(!exchange.grants_load_authority());
         assert!(!exchange.grants_launch_authority());
 
-        let other = request();
-        let mut mixed = success_response(&other, b"linked-cov6");
+        let mut mixed = success_response(&request_value, b"linked-cov6");
         mixed[14] ^= 1;
-        assert!(InertDecodedWorkerExchangeV2::decode(request.canonical_bytes(), &mixed).is_err());
+        assert!(
+            InertDecodedWorkerExchangeV2::decode(request_value.canonical_bytes(), &mixed).is_err()
+        );
     }
 }
