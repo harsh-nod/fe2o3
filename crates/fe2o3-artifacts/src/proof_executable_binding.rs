@@ -8,7 +8,7 @@ use crate::proof_encode::digest_algorithm_tag;
 use crate::{
     AbiKind, AbiLayout, AliasClass, ArgumentOwnership, BlockSize, CodeObjectFormat,
     DigestAlgorithm, DigestBytes, LaunchContract, ManifestV1, MatchedProofEvidenceV1,
-    MeasuredToolIdentity, PayloadDigest, ProofExecutionIdentity, ProofOutcome, ProofRecordV1,
+    MeasuredToolIdentity, Name, PayloadDigest, ProofExecutionIdentity, ProofOutcome, ProofRecordV1,
     ProofTargetError, ProofTargetIdentity, SourceContractIdentity, TargetIdentity,
     V1_REQUIRED_PROPERTIES,
 };
@@ -43,6 +43,8 @@ impl ExecutableCodeObjectVersionV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProofExecutableSemanticIdentityV1 {
     proof_target: ProofTargetIdentity,
+    logical_name: Name,
+    export_symbol: Name,
     finalized_code_object_digest: PayloadDigest,
     target: TargetIdentity,
     code_object_version: ExecutableCodeObjectVersionV1,
@@ -57,6 +59,14 @@ impl ProofExecutableSemanticIdentityV1 {
 
     pub const fn kernel_semantic_identity(&self) -> PayloadDigest {
         self.proof_target.artifact().executable_digest()
+    }
+
+    pub const fn logical_name(&self) -> &Name {
+        &self.logical_name
+    }
+
+    pub const fn export_symbol(&self) -> &Name {
+        &self.export_symbol
     }
 
     pub const fn source_contracts(&self) -> SourceContractIdentity {
@@ -151,6 +161,16 @@ impl ProofExecutableBindingV1 {
     pub fn validate_against(&self, actual: &Self) -> Result<(), ProofExecutableBindingError> {
         let expected_executable = &self.executable;
         let actual_executable = &actual.executable;
+        require_equal(
+            &expected_executable.logical_name,
+            &actual_executable.logical_name,
+            "logical kernel name",
+        )?;
+        require_equal(
+            &expected_executable.export_symbol,
+            &actual_executable.export_symbol,
+            "kernel export symbol",
+        )?;
         require_equal(
             expected_executable.finalized_code_object_digest,
             actual_executable.finalized_code_object_digest,
@@ -289,6 +309,8 @@ impl MatchedProofEvidenceV1 {
 
         let executable = ProofExecutableSemanticIdentityV1 {
             proof_target: target,
+            logical_name: kernel.name().clone(),
+            export_symbol: kernel.symbol().clone(),
             finalized_code_object_digest,
             target: manifest.target().clone(),
             code_object_version,
@@ -486,6 +508,8 @@ fn binding_identity_bytes(
     let mut writer = BindingIdentityWriter::new();
     writer.payload_digest(proof_record_digest);
     writer.proof_target(executable.proof_target);
+    writer.text(executable.logical_name.as_str());
+    writer.text(executable.export_symbol.as_str());
     writer.payload_digest(executable.finalized_code_object_digest);
     writer.target(&executable.target);
     writer.u8(executable.code_object_version.number());

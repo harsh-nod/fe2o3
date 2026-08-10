@@ -151,6 +151,8 @@ fn exact_matched_proof_binds_every_executable_and_policy_axis_without_authority(
         tagged(kernel.executable_digest())
     );
     assert_eq!(binding.executable().proof_target(), fixture.target());
+    assert_eq!(binding.executable().logical_name(), kernel.name());
+    assert_eq!(binding.executable().export_symbol(), kernel.symbol());
     assert_eq!(binding.executable().source_contracts(), source_contracts());
     assert_eq!(
         binding.executable().finalized_code_object_digest(),
@@ -358,6 +360,32 @@ fn semantic_code_object_target_cov_abi_and_launch_mutations_fail_closed() {
 }
 
 #[test]
+fn logical_name_and_export_symbol_substitutions_fail_closed() {
+    let base = Fixture::base();
+    let expected = base.binding();
+
+    let mut changed = base.clone();
+    changed.manifest = manifest_with_kernel(
+        kernel_with_names(base.kernel(), name("zeta"), base.kernel().symbol().clone()),
+        base.manifest.target().clone(),
+        base.manifest.code_objects().to_vec(),
+        &changed.compiler,
+        &changed.producer,
+    );
+    assert_axis_mismatch(&expected, &changed.binding(), "logical kernel name");
+
+    let mut changed = base.clone();
+    changed.manifest = manifest_with_kernel(
+        kernel_with_names(base.kernel(), base.kernel().name().clone(), name("zeta.kd")),
+        base.manifest.target().clone(),
+        base.manifest.code_objects().to_vec(),
+        &changed.compiler,
+        &changed.producer,
+    );
+    assert_axis_mismatch(&expected, &changed.binding(), "kernel export symbol");
+}
+
+#[test]
 fn every_tool_measurement_and_policy_mutation_fails_closed() {
     let base = Fixture::base();
     let expected = base.binding();
@@ -497,6 +525,25 @@ fn kernel_with(
         base.required_capabilities().to_vec(),
         launch,
         abi,
+    )
+    .unwrap()
+}
+
+fn kernel_with_names(
+    base: &KernelEntry,
+    logical_name: fe2o3_artifacts::Name,
+    export_symbol: fe2o3_artifacts::Name,
+) -> KernelEntry {
+    KernelEntry::new(
+        base.kernel_id(),
+        logical_name,
+        export_symbol,
+        base.source_digest(),
+        base.executable_digest(),
+        base.code_object_digest(),
+        base.required_capabilities().to_vec(),
+        base.launch().clone(),
+        base.abi().clone(),
     )
     .unwrap()
 }
