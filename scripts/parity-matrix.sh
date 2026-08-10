@@ -180,8 +180,11 @@ main() {
       print "partial, experimental, planned, and N/A rows. The supplemental audit also"
       print "accounts for capabilities demonstrated elsewhere in the repository."
       print ""
-      print "The fe2o3 current-state column is based on commit"
+      print "The fe2o3 status floor and default claim snapshot are based on commit"
       print "`" fe2o3_commit "`."
+      print "Qualifying per-row evidence may name a landed descendant of that commit; this"
+      print "projection does not claim that every change at current HEAD has qualifying parity"
+      print "evidence."
     }
 
     function print_counts() {

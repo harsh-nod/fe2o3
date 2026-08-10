@@ -703,7 +703,9 @@ G7 passes when:
   execution.
 - Integrate available GPU memory, initialization, race, and synchronization
   checking tools through `cargo fe2o3 sanitize`.
-- Integrate ROCgdb source debugging and local/argument inspection.
+- Generalize the bounded alpha/O0 ROCgdb pilot to supported kernels,
+  optimization modes, and aggregate local/argument inspection, then admit it
+  through protected production-v2 evidence.
 - Validate release behavior on supported RDNA and CDNA families.
 - Compare representative kernels with equivalent HIP C++ and relevant ROCm
   libraries for correctness, generated code, and performance.

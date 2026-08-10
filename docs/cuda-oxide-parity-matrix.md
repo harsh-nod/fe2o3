@@ -20,8 +20,11 @@ source is `cuda-oxide-book/appendix/supported-features.md` at that commit. Its
 partial, experimental, planned, and N/A rows. The supplemental audit also
 accounts for capabilities demonstrated elsewhere in the repository.
 
-The fe2o3 current-state column is based on commit
+The fe2o3 status floor and default claim snapshot are based on commit
 `2fee8b63b77df73b92f4de79caaabc5b623ab867`.
+Qualifying per-row evidence may name a landed descendant of that commit; this
+projection does not claim that every change at current HEAD has qualifying parity
+evidence.
 <!-- parity-status:baseline:end -->
 
 The source of truth now pins the cuda-oxide commit and date above. Its supported
@@ -343,13 +346,16 @@ The detailed dependencies and exit criteria are in
   compiler-refinement authority. The `gfx942` machine-effect capsule validates
   caller-supplied straight-line call/effect mechanics; it does not establish
   correspondence to LLVM IR or HSACO.
-- Rows 44 and 45: `cargo fe2o3 sanitize` and `debug` retain plan-only mode and
-  can execute an exact descriptor-pinned native ROCgdb binary with bounded
+- Rows 44 and 45: `cargo fe2o3 sanitize` and `debug` retain plan mode and can
+  execute an exact descriptor-pinned native ROCgdb binary with bounded
   output, timeout, process cleanup, an environment allowlist, and diagnostic
   evidence. Precise-memory support is checked at execution and fails closed
   when unavailable. It is not a race, API, initialization, synchronization, or
-  memory-safety proof; source-debug metadata and aggregate inspection remain
-  unvalidated.
+  memory-safety proof. Row 45 additionally has a bounded alpha-only
+  `gfx942:xnack-` O0/COV6 pilot that validates source locations, one scalar
+  argument, physical slice components, and one local through native ROCgdb.
+  General source-debug metadata, aggregate inspection, optimized debugging,
+  and production-v2 evidence remain unvalidated.
 - Rows 48, 49, and 60: one-dimensional `DisjointSlice` and `ThreadIndex` APIs,
   target-neutral launch-axis verification, and observed target/capability facts
   exist. Checked shared/exclusive `DeviceBuffer` views preserve exact allocation
@@ -587,7 +593,7 @@ The detailed dependencies and exit criteria are in
 | 43 | Local Clean | Full | Exact | Partial | `cargo fe2o3 clean` safely removes only guarded `target/fe2o3` output; pinned cuda-oxide removes the full project target directory | G0 |
 | 44 | Compute Sanitizer Wrapper | Full | AMD-equivalent | Partial | `cargo fe2o3 sanitize` invokes supported ROCm GPU sanitizers/checkers and clearly reports unavailable tools or checks | G8 |
 | 45 | cuda-gdb Source Debugging | Full | AMD-equivalent | Partial | Debug build and `cargo fe2o3 debug` launch ROCgdb with kernel source locations | G8 |
-| 46 | cuda-gdb Local / Argument Inspection | Partial | AMD-equivalent | Missing | Match the pinned baseline's scalar, pointer/reference, struct, tuple, and array inspection scope in ROCgdb, with known gaps listed | G8 |
+| 46 | cuda-gdb Local / Argument Inspection | Partial | AMD-equivalent | Missing | A bounded local alpha/O0 pilot inspects one scalar, physical slice pointer/length components, and one local; qualifying production-v2 evidence and baseline-scope reference, struct, tuple, and array inspection remain absent | G8 |
 | 47 | `ptx_asm!` Macro | Partial | AMD-equivalent | Missing | `amdgpu_asm!` supports typed operands, outputs, clobbers, side-effect/convergence options, and baseline-equivalent limits where LLVM permits | G6 |
 
 ### Runtime Library: Safety
@@ -707,7 +713,7 @@ for a credible parity release even though they are not separate appendix rows.
 | S06 | VMM, peer access, and multi-device memory | AMD-equivalent | Partial | HIP/HSA-supported virtual/peer memory has context, lifetime, topology, and capability checks | G6 |
 | S07 | Device constants, statics, and relocations | Exact | Partial | Layout-aware constants/globals preserve supported pointer relocations and reject unsupported provenance | G2, G6 |
 | S08 | Kernel families and compile-time policies | Exact | Missing | Tuned monomorphized variants share a typed logical interface and carry policy identity in the bundle | G2, G3 |
-| S09 | Source debug metadata | Exact | Missing | Spans, functions, arguments, locals, and aggregate layouts survive supported optimization/debug modes | G2, G8 |
+| S09 | Source debug metadata | Exact | Missing | A bounded local alpha/O0 pilot preserves function, argument, and local metadata; qualifying production-v2 evidence, aggregate layouts, broader kernels, and supported optimized modes remain absent | G2, G8 |
 | S10 | Differential MIR/codegen fuzzer | Exact | Partial | Generated accepted programs compare CPU reference behavior and AMD execution; reducer preserves failures | G8 |
 | S11 | Half/BF16 types and conversions | Exact | Partial | Scalar and packed formats, conversions, arithmetic, constants, ABI, and edge cases are tested | G2, G4 |
 | S12 | Tensor/matrix instructions | AMD-equivalent | Missing | Capability-gated MFMA/WMMA abstractions cover supported shapes/types with ISA and numerical tests | G6 |

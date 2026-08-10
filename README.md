@@ -501,10 +501,13 @@ turn the foundations below into end-to-end features.
   fences, and barriers exist only in bounded experimental paths and are not yet
   generally available from ordinary Rust kernels.
 
-The current comparison with cuda-oxide is tracked in the
+The evidence-gated comparison with cuda-oxide is tracked in the
 [parity matrix](docs/cuda-oxide-parity-matrix.md) and the generated
-[evidence dashboard](docs/generated/cuda-oxide-parity-dashboard.md). fe2o3 is
-not yet at parity.
+[evidence dashboard](docs/generated/cuda-oxide-parity-dashboard.md). The
+dashboard pins a status floor and records qualifying per-row evidence at that
+commit or a landed descendant; it is not a claim that every change at the
+current repository HEAD has qualifying parity evidence. fe2o3 is not yet at
+parity.
 
 See [docs/implementation-plan.md](docs/implementation-plan.md) for the original
 compiler/runtime plan and

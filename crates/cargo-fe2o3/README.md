@@ -64,10 +64,15 @@ Process ancestry cannot
 distinguish either case from an intended compiler invocation without trusted
 Cargo or rustc cooperation. Same-UID process inspection or injection may also
 cross the boundary where host policy permits it. The broker compares a request
-with the expected build session, but neither that comparison nor compile-shaped
-arguments authenticate Cargo's intent. The client does not authenticate the
-broker server, and Cargo configuration can replace inherited environment
-values.
+with the expected build session, profile, and Worker V2 configuration identity.
+The client and broker also verify Linux peer credentials and exact
+`cargo-fe2o3` executable object and bytes, then authenticate the exchange with a
+fresh challenge bound to a separate 256-bit broker secret. These checks reject
+an arbitrary substitute broker and route downgrade, but they do not authenticate
+Cargo's intent: a hostile build script can replay the same trusted wrapper, and
+same-UID environment inspection, rewriting, or process injection remains outside
+this boundary. Altered inherited routing values fail closed unless they still
+name and authenticate the exact prepared broker exchange.
 
 The artifact descriptor is opened with `O_RDONLY`, which prevents file I/O on
 the directory descriptor itself but still grants namespace authority through
@@ -168,8 +173,12 @@ output is descriptive only: inspection neither loads code nor grants launch
 authority. Auto-detection uses validated wire magic, and `--format` can require
 one exact decoder.
 
-`cargo fe2o3 sanitize -- <program>` and `cargo fe2o3 debug -- <program>`
-currently print normalized ROCgdb invocation plans without executing them.
+Without `--execute`, `cargo fe2o3 sanitize -- <program>` and
+`cargo fe2o3 debug -- <program>` print normalized ROCgdb invocation plans.
+With `--execute`, both commands run an exact descriptor-pinned native ROCgdb
+image under bounded timeout, output, environment, working-directory, and
+process supervision. Debug execution additionally requires an explicit
+`--batch` or `--interactive` mode.
 Discovery checks `ROCM_PATH`, `HIP_PATH`, supported `/opt/rocm` roots, and
 absolute `PATH` entries in a fixed order; `--tool` accepts one explicit absolute
 ROCgdb path. The sanitize foundation enables ROCgdb precise-memory mode, which
