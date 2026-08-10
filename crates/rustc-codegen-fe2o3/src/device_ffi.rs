@@ -1,6 +1,10 @@
 //! Compiler-side validation for explicit device FFI declarations.
 
 use reserved_fe2o3_symbols::{
+    CROSS_CRATE_DEVICE_EXPORT_ANCHOR_FIELD_COUNT_V1, CROSS_CRATE_DEVICE_EXPORT_ANCHOR_MAGIC_V1,
+    CROSS_CRATE_DEVICE_EXPORT_ANCHOR_PREFIX_V1, CROSS_CRATE_DEVICE_EXPORT_ANCHOR_VERSION_V1,
+};
+use reserved_fe2o3_symbols::{
     DEVICE_FFI_MARKER_PREFIX_V1, DeviceFfiContractFieldsV1, DeviceFfiContractIdV1,
     DeviceFfiDirectionV1, MAX_DEVICE_FFI_ARGUMENTS_V1, MAX_DEVICE_FFI_TARGET_BYTES_V1,
     derive_device_ffi_contract_id_v1, parse_device_ffi_direction_v1, parse_device_ffi_effects_v1,
@@ -9,14 +13,18 @@ use reserved_fe2o3_symbols::{
 };
 use rustc_abi::ExternAbi;
 use rustc_ast::LitKind;
-use rustc_hir::def_id::DefId;
+use rustc_hir::def::DefKind;
+use rustc_hir::def_id::{DefId, DefIndex};
 use rustc_hir::{Expr, ExprKind, ItemKind, Safety};
 use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags;
+use rustc_middle::mir::interpret::GlobalAlloc;
 use rustc_middle::mir::mono::{CodegenUnit, MonoItem};
 use rustc_middle::mir::visit::Visitor;
 use rustc_middle::mir::{
-    Body, ConstOperand, Location, Operand, Rvalue, TerminatorKind, UnwindAction,
+    AggregateKind, Body, CastKind, ConstOperand, Location, Operand, RETURN_PLACE, Rvalue,
+    TerminatorKind, UnwindAction,
 };
+use rustc_middle::ty::adjustment::PointerCoercion;
 use rustc_middle::ty::{
     EarlyBinder, FloatTy, Instance, IntTy, Ty, TyCtxt, TyKind, TypeVisitableExt, TypingEnv, UintTy,
 };
@@ -119,10 +127,11 @@ pub(crate) struct ClosedDeviceFfiContract {
 /// Code-object version, effects, semantic identity, and expected link roles are
 /// declaration assertions, represented by [`AssertionOnly`], not derived facts.
 ///
-/// Known V1 incompleteness: rustc metadata preserves upstream doc markers but
-/// does not authenticate the producer registration static. Upstream assertions
-/// are therefore rejected with `AUTH001`; authenticated cross-crate closure
-/// requires a future producer-evidence transport and verification protocol.
+/// Cross-crate V1 is intentionally bounded to one explicit local anchor for an
+/// exact nongeneric gfx942:xnack- code-object V6 export and one exact producer
+/// registration in the function's source crate. Other upstream assertions are
+/// rejected with `AUTH001` or an `XCR` profile diagnostic; broader producer
+/// evidence transport remains unsupported.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct DeviceFfiClosure {
     pub(crate) target: Option<String>,
@@ -210,10 +219,12 @@ pub(crate) fn collect_declarations<'tcx>(
     let mut declarations = Vec::new();
     let mut seen_instances = BTreeSet::new();
     let local_registrations = local_registrations(tcx)?;
+    let cross_crate_anchors = cross_crate_export_anchors(tcx)?;
 
     for instance in local_registrations
         .iter()
         .map(|registration| registration.instance)
+        .chain(cross_crate_anchors.iter().map(|anchor| anchor.instance))
         .chain(cgu_instances(cgus))
     {
         let identity = stable_instance_identity(tcx, instance);
@@ -577,6 +588,521 @@ fn is_shared_str(ty: Ty<'_>) -> bool {
     matches!(ty.kind(), TyKind::Ref(_, inner, mutability) if inner.is_str() && !mutability.is_mut())
 }
 
+#[derive(Clone, Debug)]
+struct CrossCrateDeviceExportAnchor<'tcx> {
+    id: DeviceFfiContractIdV1,
+    instance: Instance<'tcx>,
+    path: String,
+}
+
+fn authenticate_upstream_export<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    contract: &DeviceFfiContract,
+) -> Result<bool, DeviceFfiError> {
+    let matching_anchors = cross_crate_export_anchors(tcx)?
+        .into_iter()
+        .filter(|anchor| anchor.id == contract.id && anchor.instance == instance)
+        .collect::<Vec<_>>();
+    if matching_anchors.is_empty() {
+        return Ok(false);
+    }
+    if matching_anchors.len() != 1 {
+        return Err(DeviceFfiError::coded(
+            "XCR001",
+            format!(
+                "upstream export `{}` has {} local import anchors; exactly one is required",
+                tcx.def_path_str(instance.def_id()),
+                matching_anchors.len()
+            ),
+        ));
+    }
+    if contract.direction != DeviceFfiDirection::Export
+        || contract.target != "gfx942:xnack-"
+        || *contract
+            .code_object_version_assertion
+            .asserted_for_consistency_check()
+            != 6
+    {
+        return Err(DeviceFfiError::coded(
+            "XCR002",
+            format!(
+                "cross-crate device exports are bounded to gfx942:xnack-, code-object V6 exports; `{}` is outside that profile",
+                tcx.def_path_str(instance.def_id())
+            ),
+        ));
+    }
+
+    let registrations = upstream_export_registrations(tcx, instance, contract)?;
+    if registrations.len() != 1 {
+        return Err(DeviceFfiError::coded(
+            "XCR003",
+            format!(
+                "upstream export `{}` has {} exact producer registrations in crate `{}`; exactly one is required",
+                tcx.def_path_str(instance.def_id()),
+                registrations.len(),
+                tcx.crate_name(instance.def_id().krate)
+            ),
+        ));
+    }
+    Ok(true)
+}
+
+fn cross_crate_export_anchors<'tcx>(
+    tcx: TyCtxt<'tcx>,
+) -> Result<Vec<CrossCrateDeviceExportAnchor<'tcx>>, DeviceFfiError> {
+    let mut anchors = Vec::new();
+    for item_id in tcx.hir_free_items() {
+        let item = tcx.hir_item(item_id);
+        let def_id = item.owner_id.def_id;
+        let path = tcx.def_path_str(def_id.to_def_id());
+        let item_name = path.rsplit("::").next().unwrap_or(&path);
+        if !item_name.starts_with(CROSS_CRATE_DEVICE_EXPORT_ANCHOR_PREFIX_V1) {
+            continue;
+        }
+        if !matches!(item.kind, ItemKind::Static(_, _, _, _)) {
+            return Err(DeviceFfiError::coded(
+                "XCR004",
+                format!("reserved cross-crate device anchor `{path}` is not a static"),
+            ));
+        }
+        if tcx.is_mutable_static(def_id.to_def_id()) {
+            return Err(DeviceFfiError::coded(
+                "XCR005",
+                format!("cross-crate device anchor `{path}` must be immutable"),
+            ));
+        }
+        let flags = tcx.codegen_fn_attrs(def_id).flags;
+        if !flags.intersects(CodegenFnAttrFlags::USED_COMPILER | CodegenFnAttrFlags::USED_LINKER) {
+            return Err(DeviceFfiError::coded(
+                "XCR006",
+                format!("cross-crate device anchor `{path}` must carry #[used]"),
+            ));
+        }
+        validate_cross_crate_anchor_type(tcx, def_id, &path)?;
+        let body = tcx.mir_for_ctfe(def_id);
+        let fields =
+            static_tuple_fields(body, CROSS_CRATE_DEVICE_EXPORT_ANCHOR_FIELD_COUNT_V1, &path)?;
+        expect_mir_integer(
+            tcx,
+            fields[0],
+            tcx.types.u64,
+            u128::from(CROSS_CRATE_DEVICE_EXPORT_ANCHOR_MAGIC_V1),
+            "anchor magic",
+            &path,
+        )?;
+        expect_mir_integer(
+            tcx,
+            fields[1],
+            tcx.types.u16,
+            u128::from(CROSS_CRATE_DEVICE_EXPORT_ANCHOR_VERSION_V1),
+            "anchor version",
+            &path,
+        )?;
+        let id = DeviceFfiContractIdV1::from_hex(&mir_string(
+            tcx,
+            fields[2],
+            "contract identity",
+            &path,
+        )?)
+        .map_err(|error| {
+            DeviceFfiError::coded(
+                "XCR007",
+                format!("cross-crate device anchor `{path}` has invalid identity: {error}"),
+            )
+        })?;
+        let instance = mir_function_target(tcx, body, fields[3], &path)?;
+        if instance.def_id().is_local() {
+            return Err(DeviceFfiError::coded(
+                "XCR008",
+                format!("cross-crate device anchor `{path}` points to a local function"),
+            ));
+        }
+        let contract = contract_assertion_for_def(tcx, instance.def_id())?.ok_or_else(|| {
+            DeviceFfiError::coded(
+                "XCR009",
+                format!(
+                    "cross-crate device anchor `{path}` points to `{}` without a device FFI marker",
+                    tcx.def_path_str(instance.def_id())
+                ),
+            )
+        })?;
+        if contract.id != id {
+            return Err(DeviceFfiError::coded(
+                "XCR010",
+                format!(
+                    "cross-crate device anchor `{path}` identity {} does not match exact function contract {}",
+                    id.to_hex(),
+                    contract.id.to_hex()
+                ),
+            ));
+        }
+        anchors.push(CrossCrateDeviceExportAnchor { id, instance, path });
+    }
+    anchors.sort_by(|lhs, rhs| lhs.path.cmp(&rhs.path));
+    Ok(anchors)
+}
+
+fn validate_cross_crate_anchor_type(
+    tcx: TyCtxt<'_>,
+    def_id: rustc_hir::def_id::LocalDefId,
+    path: &str,
+) -> Result<(), DeviceFfiError> {
+    let ty = tcx
+        .try_normalize_erasing_regions(
+            TypingEnv::fully_monomorphized(),
+            tcx.type_of(def_id).instantiate_identity(),
+        )
+        .map_err(|_| {
+            DeviceFfiError::coded(
+                "XCR011",
+                format!("cross-crate device anchor `{path}` type did not normalize"),
+            )
+        })?;
+    let TyKind::Tuple(fields) = ty.kind() else {
+        return Err(DeviceFfiError::coded(
+            "XCR011",
+            format!("cross-crate device anchor `{path}` must use the exact V1 tuple type"),
+        ));
+    };
+    let valid = fields.len() == CROSS_CRATE_DEVICE_EXPORT_ANCHOR_FIELD_COUNT_V1
+        && fields[0] == tcx.types.u64
+        && fields[1] == tcx.types.u16
+        && is_shared_str(fields[2])
+        && matches!(fields[3].kind(), TyKind::FnPtr(..));
+    if !valid {
+        return Err(DeviceFfiError::coded(
+            "XCR011",
+            format!("cross-crate device anchor `{path}` must use the exact V1 tuple type"),
+        ));
+    }
+    Ok(())
+}
+
+fn upstream_export_registrations<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    contract: &DeviceFfiContract,
+) -> Result<Vec<DefId>, DeviceFfiError> {
+    let crate_num = instance.def_id().krate;
+    let expected_name = format!(
+        "{}{}",
+        reserved_fe2o3_symbols::DEVICE_FFI_REGISTRATION_PREFIX_V1,
+        contract.id.to_hex()
+    );
+    let mut registrations = Vec::new();
+    for index in 0..tcx.num_extern_def_ids(crate_num) {
+        let def_id = DefId {
+            krate: crate_num,
+            index: DefIndex::from_usize(index),
+        };
+        if !matches!(tcx.def_kind(def_id), DefKind::Static { .. }) {
+            continue;
+        }
+        let path = tcx.def_path_str(def_id);
+        if path.rsplit("::").next().unwrap_or(&path) != expected_name {
+            continue;
+        }
+        if tcx.is_mutable_static(def_id) {
+            return Err(DeviceFfiError::coded(
+                "XCR012",
+                format!("upstream producer registration `{path}` must be immutable"),
+            ));
+        }
+        let flags = tcx.codegen_fn_attrs(def_id).flags;
+        if !flags.intersects(CodegenFnAttrFlags::USED_COMPILER | CodegenFnAttrFlags::USED_LINKER) {
+            return Err(DeviceFfiError::coded(
+                "XCR013",
+                format!("upstream producer registration `{path}` must carry #[used]"),
+            ));
+        }
+        validate_upstream_registration_type(tcx, def_id, &path)?;
+        registrations.push(def_id);
+    }
+    registrations.sort_by_key(|def_id| tcx.def_path_str(*def_id));
+    Ok(registrations)
+}
+
+fn validate_upstream_registration_type(
+    tcx: TyCtxt<'_>,
+    def_id: DefId,
+    path: &str,
+) -> Result<(), DeviceFfiError> {
+    let ty = tcx.type_of(def_id).instantiate_identity();
+    let TyKind::Tuple(fields) = ty.kind() else {
+        return Err(DeviceFfiError::coded(
+            "XCR014",
+            format!("upstream producer registration `{path}` must use the exact V1 tuple type"),
+        ));
+    };
+    let valid = fields.len() == reserved_fe2o3_symbols::DEVICE_FFI_REGISTRATION_V1_FIELD_COUNT
+        && fields[0] == tcx.types.u64
+        && fields[1] == tcx.types.u16
+        && fields[2] == tcx.types.u16
+        && is_shared_str(fields[3])
+        && is_shared_str(fields[4])
+        && is_shared_str(fields[5])
+        && fields[6] == tcx.types.u16
+        && is_shared_str(fields[7])
+        && is_shared_str(fields[8])
+        && is_shared_str(fields[9])
+        && is_shared_str(fields[10])
+        && matches!(fields[11].kind(), TyKind::FnPtr(..));
+    if !valid {
+        return Err(DeviceFfiError::coded(
+            "XCR014",
+            format!("upstream producer registration `{path}` must use the exact V1 tuple type"),
+        ));
+    }
+    Ok(())
+}
+
+fn static_tuple_fields<'a, 'tcx>(
+    body: &'a Body<'tcx>,
+    expected_fields: usize,
+    path: &str,
+) -> Result<Vec<&'a Operand<'tcx>>, DeviceFfiError> {
+    let mut aggregate = None;
+    for block in body.basic_blocks.iter() {
+        for statement in &block.statements {
+            let Some((place, Rvalue::Aggregate(kind, fields))) = statement.kind.as_assign() else {
+                continue;
+            };
+            if place.as_local() != Some(RETURN_PLACE) || !matches!(**kind, AggregateKind::Tuple) {
+                continue;
+            }
+            if aggregate.replace(fields).is_some() {
+                return Err(DeviceFfiError::coded(
+                    "XCR015",
+                    format!("cross-crate device anchor `{path}` contains multiple tuple values"),
+                ));
+            }
+        }
+    }
+    let fields = aggregate.ok_or_else(|| {
+        DeviceFfiError::coded(
+            "XCR015",
+            format!("cross-crate device anchor `{path}` has no tuple initializer"),
+        )
+    })?;
+    if fields.len() != expected_fields {
+        return Err(DeviceFfiError::coded(
+            "XCR015",
+            format!(
+                "cross-crate device anchor `{path}` has {} fields; expected {expected_fields}",
+                fields.len()
+            ),
+        ));
+    }
+    Ok(fields.iter().collect())
+}
+
+fn expect_mir_integer<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    operand: &Operand<'tcx>,
+    expected_ty: Ty<'tcx>,
+    expected: u128,
+    field: &str,
+    path: &str,
+) -> Result<(), DeviceFfiError> {
+    let Operand::Constant(constant) = operand else {
+        return Err(DeviceFfiError::coded(
+            "XCR016",
+            format!("cross-crate device anchor `{path}` {field} is not a constant"),
+        ));
+    };
+    if constant.const_.ty() != expected_ty
+        || constant
+            .const_
+            .try_eval_bits(tcx, TypingEnv::fully_monomorphized())
+            != Some(expected)
+    {
+        return Err(DeviceFfiError::coded(
+            "XCR016",
+            format!("cross-crate device anchor `{path}` {field} is not canonical"),
+        ));
+    }
+    Ok(())
+}
+
+fn mir_string<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    operand: &Operand<'tcx>,
+    field: &str,
+    path: &str,
+) -> Result<String, DeviceFfiError> {
+    let Operand::Constant(constant) = operand else {
+        return Err(DeviceFfiError::coded(
+            "XCR017",
+            format!("cross-crate device anchor `{path}` {field} is not a string constant"),
+        ));
+    };
+    if !is_shared_str(constant.const_.ty()) {
+        return Err(DeviceFfiError::coded(
+            "XCR017",
+            format!("cross-crate device anchor `{path}` {field} has the wrong type"),
+        ));
+    }
+    let value = constant
+        .const_
+        .eval(tcx, TypingEnv::fully_monomorphized(), constant.span)
+        .map_err(|_| {
+            DeviceFfiError::coded(
+                "XCR017",
+                format!("cross-crate device anchor `{path}` {field} could not be evaluated"),
+            )
+        })?;
+    let bytes = value
+        .try_get_slice_bytes_for_diagnostics(tcx)
+        .ok_or_else(|| {
+            DeviceFfiError::coded(
+                "XCR017",
+                format!("cross-crate device anchor `{path}` {field} is not string data"),
+            )
+        })?;
+    std::str::from_utf8(bytes).map(str::to_owned).map_err(|_| {
+        DeviceFfiError::coded(
+            "XCR017",
+            format!("cross-crate device anchor `{path}` {field} is not UTF-8"),
+        )
+    })
+}
+
+fn mir_function_target<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    body: &Body<'tcx>,
+    operand: &Operand<'tcx>,
+    path: &str,
+) -> Result<Instance<'tcx>, DeviceFfiError> {
+    let place = match operand {
+        Operand::Copy(place) | Operand::Move(place) => place,
+        Operand::Constant(constant) => {
+            return constant_device_function_target(tcx, constant, path);
+        }
+        Operand::RuntimeChecks(_) => {
+            return Err(DeviceFfiError::coded(
+                "XCR018",
+                format!("cross-crate device anchor `{path}` must use one exact function pointer"),
+            ));
+        }
+    };
+    let Some(target_local) = place.as_local() else {
+        return Err(DeviceFfiError::coded(
+            "XCR018",
+            format!("cross-crate device anchor `{path}` uses a projected function pointer"),
+        ));
+    };
+
+    let mut target = None;
+    for block in body.basic_blocks.iter() {
+        for statement in &block.statements {
+            let Some((place, Rvalue::Cast(cast, source, _))) = statement.kind.as_assign() else {
+                continue;
+            };
+            if place.as_local() != Some(target_local)
+                || !matches!(
+                    cast,
+                    CastKind::PointerCoercion(PointerCoercion::ReifyFnPointer(_), _)
+                )
+            {
+                continue;
+            }
+            let Operand::Constant(source) = source else {
+                return Err(DeviceFfiError::coded(
+                    "XCR018",
+                    format!("cross-crate device anchor `{path}` function is indirect"),
+                ));
+            };
+            let TyKind::FnDef(def_id, args) = source.const_.ty().kind() else {
+                return Err(DeviceFfiError::coded(
+                    "XCR018",
+                    format!("cross-crate device anchor `{path}` does not name a function item"),
+                ));
+            };
+            let resolved =
+                Instance::try_resolve(tcx, TypingEnv::fully_monomorphized(), *def_id, args)
+                    .ok()
+                    .flatten()
+                    .ok_or_else(|| {
+                        DeviceFfiError::coded(
+                            "XCR018",
+                            format!("cross-crate device anchor `{path}` function did not resolve"),
+                        )
+                    })?;
+            if target.replace(resolved).is_some() {
+                return Err(DeviceFfiError::coded(
+                    "XCR018",
+                    format!("cross-crate device anchor `{path}` has multiple function targets"),
+                ));
+            }
+        }
+    }
+    target.ok_or_else(|| {
+        DeviceFfiError::coded(
+            "XCR018",
+            format!("cross-crate device anchor `{path}` has no exact function target"),
+        )
+    })
+}
+
+fn constant_device_function_target<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    constant: &ConstOperand<'tcx>,
+    path: &str,
+) -> Result<Instance<'tcx>, DeviceFfiError> {
+    if !matches!(constant.const_.ty().kind(), TyKind::FnPtr(..)) {
+        return Err(DeviceFfiError::coded(
+            "XCR018",
+            format!("cross-crate device anchor `{path}` target is not a function pointer"),
+        ));
+    }
+    let value = constant
+        .const_
+        .eval(tcx, TypingEnv::fully_monomorphized(), constant.span)
+        .map_err(|_| {
+            DeviceFfiError::coded(
+                "XCR018",
+                format!("cross-crate device anchor `{path}` target did not evaluate"),
+            )
+        })?;
+    let scalar = value.try_to_scalar().ok_or_else(|| {
+        DeviceFfiError::coded(
+            "XCR018",
+            format!("cross-crate device anchor `{path}` target is not one scalar pointer"),
+        )
+    })?;
+    let pointer = scalar
+        .to_pointer(&tcx)
+        .discard_err()
+        .ok_or_else(|| {
+            DeviceFfiError::coded(
+                "XCR018",
+                format!("cross-crate device anchor `{path}` target is not a pointer"),
+            )
+        })?
+        .into_pointer_or_addr()
+        .map_err(|_| {
+            DeviceFfiError::coded(
+                "XCR018",
+                format!("cross-crate device anchor `{path}` target has no provenance"),
+            )
+        })?;
+    let (provenance, offset) = pointer.into_raw_parts();
+    if offset.bytes() != 0 {
+        return Err(DeviceFfiError::coded(
+            "XCR018",
+            format!("cross-crate device anchor `{path}` target has a nonzero offset"),
+        ));
+    }
+    match tcx.global_alloc(provenance.alloc_id()) {
+        GlobalAlloc::Function { instance } => Ok(instance),
+        _ => Err(DeviceFfiError::coded(
+            "XCR018",
+            format!("cross-crate device anchor `{path}` target is not a function allocation"),
+        )),
+    }
+}
+
 pub(crate) fn contract_for_instance<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
@@ -587,6 +1113,10 @@ pub(crate) fn contract_for_instance<'tcx>(
         return Ok(None);
     };
     if !def_id.is_local() {
+        if authenticate_upstream_export(tcx, instance, &contract)? {
+            return validate_contract_for_instance(tcx, instance, expected_target, contract)
+                .map(Some);
+        }
         return Err(DeviceFfiError::coded(
             "AUTH001",
             format!(

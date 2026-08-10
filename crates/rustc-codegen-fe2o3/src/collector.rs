@@ -18,6 +18,7 @@ use rustc_ast::InlineAsmOptions;
 use rustc_hir::def_id::{DefId, LOCAL_CRATE};
 use rustc_hir::{ItemKind, Safety};
 use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags;
+use rustc_middle::mir::interpret::GlobalAlloc;
 use rustc_middle::mir::mono::{CodegenUnit, MonoItem};
 use rustc_middle::mir::{
     AggregateKind, Body, CastKind, InlineAsmMacro, InlineAsmOperand, Operand, RETURN_PLACE, Rvalue,
@@ -616,6 +617,7 @@ fn kernel_roots<'tcx>(
         records,
         session_crate_binding(tcx),
         Some(&session_crate_name),
+        std::env::var("FE2O3_TARGET").as_deref() == Ok("gfx942:xnack-"),
     )?;
     let frontend_records = decode_frontend_contract_registrations(tcx, &functions_by_symbol)?;
     bind_frontend_contract_registrations(tcx, &mut roots, frontend_records)?;
@@ -988,7 +990,14 @@ fn decode_registration_static<'tcx>(
     item_name: String,
     functions_by_symbol: &BTreeMap<String, Vec<Instance<'tcx>>>,
 ) -> Result<RegistrationRecord<Instance<'tcx>>, RegistrationError> {
-    let registration_ty = tcx.type_of(def_id).instantiate_identity();
+    let registration_ty = tcx
+        .try_normalize_erasing_regions(
+            TypingEnv::fully_monomorphized(),
+            tcx.type_of(def_id).instantiate_identity(),
+        )
+        .map_err(|_| {
+            RegistrationError::new(&registration_path, "registration type did not normalize")
+        })?;
     let TyKind::Tuple(fields) = registration_ty.kind() else {
         return Err(RegistrationError::new(
             registration_path,
@@ -1137,30 +1146,30 @@ fn decode_registration_static<'tcx>(
     let target_symbol = tcx.symbol_name(target).name.to_string();
     let target_identity = tcx.def_path_str(target.def_id());
     let target_def_path_hash = tcx.def_path_hash(target.def_id()).0.to_le_bytes();
-    let Some(cgu_targets) = functions_by_symbol.get(&target_symbol) else {
-        return Err(RegistrationError::new(
-            registration_path,
-            format!(
-                "registered target `{target_symbol}` was not monomorphized into a codegen unit"
-            ),
-        ));
-    };
-    if cgu_targets.len() != 1 {
-        let paths = cgu_targets
-            .iter()
-            .map(|instance| tcx.def_path_str(instance.def_id()))
-            .collect::<Vec<_>>()
-            .join(", ");
-        return Err(RegistrationError::new(
-            registration_path,
-            format!("registered target symbol `{target_symbol}` is ambiguous across: {paths}"),
-        ));
-    }
-    if cgu_targets[0] != target {
-        return Err(RegistrationError::new(
-            registration_path,
-            format!("registered target `{target_symbol}` resolved inconsistently"),
-        ));
+    match functions_by_symbol.get(&target_symbol) {
+        None if !target.def_id().is_local() && tcx.is_mir_available(target.def_id()) => {}
+        None => {
+            return Err(RegistrationError::new(
+                registration_path,
+                format!(
+                    "registered target `{target_symbol}` was not monomorphized into a codegen unit"
+                ),
+            ));
+        }
+        Some(cgu_targets) if cgu_targets.as_slice() == [target] => {}
+        Some(cgu_targets) => {
+            let paths = cgu_targets
+                .iter()
+                .map(|instance| tcx.def_path_str(instance.def_id()))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(RegistrationError::new(
+                registration_path,
+                format!(
+                    "registered target symbol `{target_symbol}` is ambiguous or inconsistent across: {paths}"
+                ),
+            ));
+        }
     }
     let magic = u64::try_from(magic)
         .map_err(|_| RegistrationError::new(&registration_path, "magic does not fit u64"))?;
@@ -1363,10 +1372,13 @@ fn registration_target<'tcx>(
 ) -> Result<Instance<'tcx>, RegistrationError> {
     let place = match operand {
         Operand::Copy(place) | Operand::Move(place) => place,
-        Operand::Constant(_) | Operand::RuntimeChecks(_) => {
+        Operand::Constant(constant) => {
+            return constant_function_target(tcx, constant, registration_path);
+        }
+        Operand::RuntimeChecks(_) => {
             return Err(RegistrationError::new(
                 registration_path,
-                "registration target field must directly use a reified function pointer",
+                "registration target field must use one exact function pointer",
             ));
         }
     };
@@ -1430,6 +1442,55 @@ fn registration_target<'tcx>(
     })
 }
 
+fn constant_function_target<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    constant: &rustc_middle::mir::ConstOperand<'tcx>,
+    registration_path: &str,
+) -> Result<Instance<'tcx>, RegistrationError> {
+    if !matches!(constant.const_.ty().kind(), TyKind::FnPtr(..)) {
+        return Err(RegistrationError::new(
+            registration_path,
+            "registration target constant is not a function pointer",
+        ));
+    }
+    let value = constant
+        .const_
+        .eval(tcx, TypingEnv::fully_monomorphized(), constant.span)
+        .map_err(|_| {
+            RegistrationError::new(registration_path, "registration target did not evaluate")
+        })?;
+    let scalar = value.try_to_scalar().ok_or_else(|| {
+        RegistrationError::new(
+            registration_path,
+            "registration target is not one scalar pointer",
+        )
+    })?;
+    let pointer = scalar
+        .to_pointer(&tcx)
+        .discard_err()
+        .ok_or_else(|| {
+            RegistrationError::new(registration_path, "registration target is not a pointer")
+        })?
+        .into_pointer_or_addr()
+        .map_err(|_| {
+            RegistrationError::new(registration_path, "registration target has no provenance")
+        })?;
+    let (provenance, offset) = pointer.into_raw_parts();
+    if offset.bytes() != 0 {
+        return Err(RegistrationError::new(
+            registration_path,
+            "registration target has a nonzero function-pointer offset",
+        ));
+    }
+    match tcx.global_alloc(provenance.alloc_id()) {
+        GlobalAlloc::Function { instance } => Ok(instance),
+        _ => Err(RegistrationError::new(
+            registration_path,
+            "registration target pointer does not identify a function",
+        )),
+    }
+}
+
 fn is_shared_str(ty: rustc_middle::ty::Ty<'_>) -> bool {
     matches!(ty.kind(), TyKind::Ref(_, inner, mutability) if inner.is_str() && !mutability.is_mut())
 }
@@ -1447,6 +1508,7 @@ fn validate_registration_records<T: Copy>(
     mut records: Vec<RegistrationRecord<T>>,
     expected_crate_binding: Option<CrateBindingIdV1>,
     expected_crate_name: Option<&str>,
+    allow_external_typed_v2: bool,
 ) -> Result<Vec<KernelRoot<T>>, RegistrationError> {
     records.sort_by(|lhs, rhs| lhs.registration_path.cmp(&rhs.registration_path));
 
@@ -1559,17 +1621,24 @@ fn validate_registration_records<T: Copy>(
 
         let registration_module = owner_module_path(&record.registration_path);
         let target_module = owner_module_path(&record.target_identity);
+        let target_is_external =
+            expected_crate_name.is_some_and(|expected| record.target_crate_name != expected);
         if typed_profile.is_some() {
-            let expected_crate_name = expected_crate_name.ok_or_else(|| {
+            let _expected_crate_name = expected_crate_name.ok_or_else(|| {
                 error("typed registration has no rustc session crate identity".to_owned())
             })?;
-            if record.target_crate_name != expected_crate_name {
-                return Err(error(format!(
-                    "target crate `{}` disagrees with rustc session crate `{expected_crate_name}`",
-                    record.target_crate_name
-                )));
-            }
-            if registration_module != target_module {
+            if target_is_external {
+                if typed_profile != Some(TypedKernelProfile::VecAddRustcLayoutV2) {
+                    return Err(error(
+                        "cross-crate kernels are bounded to typed V2".to_owned(),
+                    ));
+                }
+                if !allow_external_typed_v2 {
+                    return Err(error(
+                        "cross-crate typed V2 kernels are bounded to gfx942:xnack-".to_owned(),
+                    ));
+                }
+            } else if registration_module != target_module {
                 return Err(error(format!(
                     "registered target module `{target_module}` disagrees with registration module `{registration_module}`"
                 )));
@@ -1584,7 +1653,7 @@ fn validate_registration_records<T: Copy>(
                 let expected = expected_crate_binding.ok_or_else(|| {
                     error("V2 registration has no rustc session crate binding".to_owned())
                 })?;
-                if crate_binding != expected {
+                if !target_is_external && crate_binding != expected {
                     return Err(error(format!(
                         "crate binding {} disagrees with rustc session binding {}",
                         crate_binding.to_hex(),
@@ -2846,7 +2915,7 @@ mod tests {
         records: Vec<RegistrationRecord<T>>,
     ) -> Result<Vec<KernelRoot<T>>, RegistrationError> {
         let expected_crate_binding = records.iter().find_map(|record| record.crate_binding);
-        validate_records(records, expected_crate_binding, Some("fixture"))
+        validate_records(records, expected_crate_binding, Some("fixture"), false)
     }
 
     fn registration(
@@ -2968,6 +3037,88 @@ mod tests {
     }
 
     #[test]
+    fn gfx942_external_typed_v2_registration_preserves_producer_binding() {
+        let mut typed = typed_registration(
+            "consumer::__fe2o3_kernel_registration_vecadd",
+            "vecadd",
+            "vecadd",
+            7,
+        );
+        typed.target_crate_name = "producer".to_owned();
+        typed.target_identity = "producer::kernels::__fe2o3_host_kernel_v1_vecadd".to_owned();
+        let producer_binding = derive_crate_binding_id_v1("producer", ["producer-metadata"]);
+        let kernel_binding = derive_kernel_binding_id_v1(
+            producer_binding,
+            TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
+            "vecadd",
+            "vecadd",
+        );
+        typed.crate_binding = Some(producer_binding);
+        typed.kernel_binding = Some(kernel_binding);
+        typed.target_symbol = host_kernel_symbol_v1(kernel_binding);
+        let consumer_binding = derive_crate_binding_id_v1("consumer", ["consumer-metadata"]);
+
+        let roots = validate_records(
+            vec![typed.clone()],
+            Some(consumer_binding),
+            Some("consumer"),
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(roots.len(), 1);
+        assert_eq!(roots[0].kernel_binding, Some(kernel_binding));
+        assert_eq!(
+            roots[0].authenticated_owner.as_ref().unwrap().crate_name(),
+            "producer"
+        );
+
+        let substituted = KernelBindingIdV1::from_bytes([0x5a; 32]);
+        typed.kernel_binding = Some(substituted);
+        typed.target_symbol = host_kernel_symbol_v1(substituted);
+        let error = validate_records(vec![typed], Some(consumer_binding), Some("consumer"), true)
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("disagrees with derived binding"),
+            "substituted producer binding was not rejected: {error}"
+        );
+    }
+
+    #[test]
+    fn external_typed_v2_registration_fails_closed_outside_gfx942_profile() {
+        let mut typed = typed_registration(
+            "consumer::__fe2o3_kernel_registration_vecadd",
+            "vecadd",
+            "vecadd",
+            7,
+        );
+        typed.target_crate_name = "producer".to_owned();
+        typed.target_identity = "producer::kernels::__fe2o3_host_kernel_v1_vecadd".to_owned();
+        let producer_binding = derive_crate_binding_id_v1("producer", ["producer-metadata"]);
+        let kernel_binding = derive_kernel_binding_id_v1(
+            producer_binding,
+            TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
+            "vecadd",
+            "vecadd",
+        );
+        typed.crate_binding = Some(producer_binding);
+        typed.kernel_binding = Some(kernel_binding);
+        typed.target_symbol = host_kernel_symbol_v1(kernel_binding);
+
+        let error = validate_records(
+            vec![typed],
+            Some(derive_crate_binding_id_v1(
+                "consumer",
+                ["consumer-metadata"],
+            )),
+            Some("consumer"),
+            false,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("bounded to gfx942:xnack-"));
+    }
+
+    #[test]
     fn general_v3_registration_carries_the_complete_profile_identity() {
         let registration = general_typed_registration(
             "crate::__fe2o3_kernel_registration_alpha",
@@ -3034,13 +3185,14 @@ mod tests {
         let expected_crate_binding = registration.crate_binding.unwrap();
 
         let error =
-            validate_records(vec![registration.clone()], None, Some("fixture")).unwrap_err();
+            validate_records(vec![registration.clone()], None, Some("fixture"), false).unwrap_err();
         assert!(error.reason.contains("no rustc session crate binding"));
 
         let error = validate_records(
             vec![registration.clone()],
             Some(expected_crate_binding),
             None,
+            false,
         )
         .unwrap_err();
         assert!(error.reason.contains("no rustc session crate identity"));
@@ -3051,9 +3203,10 @@ mod tests {
             vec![wrong_crate],
             Some(expected_crate_binding),
             Some("fixture"),
+            false,
         )
         .unwrap_err();
-        assert!(error.reason.contains("target crate `other`"));
+        assert!(error.reason.contains("bounded to typed V2"));
 
         let mut wrong_module = registration.clone();
         wrong_module.target_identity = format!("spoof::{}", wrong_module.target_symbol);
@@ -3089,6 +3242,7 @@ mod tests {
             vec![wrong_crate_binding],
             Some(expected_crate_binding),
             Some("fixture"),
+            false,
         )
         .unwrap_err();
         assert!(
@@ -3197,8 +3351,13 @@ mod tests {
             7,
         );
         let wrong_crate = derive_crate_binding_id_v1("other", ["metadata"]);
-        let error =
-            validate_records(vec![typed.clone()], Some(wrong_crate), Some("fixture")).unwrap_err();
+        let error = validate_records(
+            vec![typed.clone()],
+            Some(wrong_crate),
+            Some("fixture"),
+            false,
+        )
+        .unwrap_err();
         assert!(
             error
                 .reason
