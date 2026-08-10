@@ -3,7 +3,8 @@
 //! The embedded handoff contains one 18-field semantic claim and one 20-field
 //! build claim, with exact manifest digests for both records. Decoding grants
 //! no authority. HSACO decoding first delegates envelope and metadata checks
-//! to `fe2o3_hsaco::inspect`, then checks exact gfx942:xnack- claim linkage.
+//! to `fe2o3_hsaco::inspect_and_bind_kernel_descriptors`, then checks exact
+//! gfx942:xnack- claim linkage.
 
 use sha2::{Digest, Sha256};
 use std::error::Error;
@@ -629,7 +630,7 @@ pub fn identity_section_v2(hsaco: &[u8]) -> Result<&[u8], IdentityCodecErrorV2> 
             "HSACO must contain 1 through {MAX_HSACO_BYTES_V2} bytes"
         )));
     }
-    fe2o3_hsaco::inspect(hsaco).map_err(|error| {
+    fe2o3_hsaco::inspect_and_bind_kernel_descriptors(hsaco).map_err(|error| {
         IdentityCodecErrorV2::new(format!("authoritative HSACO inspection failed: {error}"))
     })?;
     identity_section_after_hsaco_inspection_v2(hsaco)
@@ -728,9 +729,11 @@ pub fn decode_hsaco_identity_claims_v2(
             "HSACO must contain 1 through {MAX_HSACO_BYTES_V2} bytes"
         )));
     }
-    let inspection = fe2o3_hsaco::inspect(hsaco).map_err(|error| {
-        IdentityCodecErrorV2::new(format!("authoritative HSACO inspection failed: {error}"))
-    })?;
+    let physical_bindings =
+        fe2o3_hsaco::inspect_and_bind_kernel_descriptors(hsaco).map_err(|error| {
+            IdentityCodecErrorV2::new(format!("authoritative HSACO inspection failed: {error}"))
+        })?;
+    let inspection = physical_bindings.inspection();
     let decoded =
         DecodedIdentityHandoffV2::decode(identity_section_after_hsaco_inspection_v2(hsaco)?)?;
     let semantic = decoded.semantic_claim();
@@ -742,23 +745,25 @@ pub fn decode_hsaco_identity_claims_v2(
             observed_target
         )));
     }
-    if u16::from(inspection.code_object_version().number()) != semantic.code_object_version() {
+    if inspection.code_object_version() != fe2o3_hsaco::CodeObjectVersion::V6
+        || semantic.code_object_version() != 6
+    {
         return Err(IdentityCodecErrorV2::new(
-            "S09 code-object-version claim does not match inspected HSACO",
+            "S09 requires an inspected V6 code object and a semantic version-6 claim",
         ));
     }
-    let matching_kernels = inspection
-        .kernels()
-        .iter()
-        .filter(|kernel| {
-            kernel.name() == semantic.export_name()
-                && kernel.symbol() == format!("{}.kd", semantic.export_name())
-        })
-        .count();
-    if matching_kernels != 1 {
-        return Err(IdentityCodecErrorV2::new(format!(
-            "S09 export claim has {matching_kernels} exact metadata kernel linkages; expected one"
-        )));
+    let kernels = inspection.kernels();
+    let bindings = physical_bindings.bindings();
+    if semantic.export_name() != "alpha"
+        || kernels.len() != 1
+        || bindings.len() != 1
+        || kernels[0].name() != semantic.export_name()
+        || kernels[0].symbol() != "alpha.kd"
+        || bindings[0].kernel_index() != 0
+    {
+        return Err(IdentityCodecErrorV2::new(
+            "S09 requires exactly one physically bound alpha/alpha.kd export matching the semantic claim",
+        ));
     }
     Ok(decoded)
 }
@@ -1053,7 +1058,7 @@ mod tests {
     use super::*;
     use rmpv::{Value, encode::write_value};
 
-    fn semantic() -> SemanticIdentityClaimV2 {
+    fn semantic_with_code_object_version(code_object_version: u16) -> SemanticIdentityClaimV2 {
         SemanticIdentityClaimV2::from_fields(SemanticIdentityClaimFieldsV2 {
             crate_name: "fixture",
             module: "module",
@@ -1065,7 +1070,7 @@ mod tests {
             source_bytes: 3231,
             target: "gfx942:xnack-",
             target_capabilities: "atomics,amd-wave",
-            code_object_version: 6,
+            code_object_version,
             rustc_opt_level: 0,
             rustc_debug_info: "full",
             injected_debug_policy: "dwarf-v5-full",
@@ -1074,6 +1079,10 @@ mod tests {
             portable_mir_sha256: [4; 32],
         })
         .unwrap()
+    }
+
+    fn semantic() -> SemanticIdentityClaimV2 {
+        semantic_with_code_object_version(6)
     }
 
     fn build(semantic: &SemanticIdentityClaimV2) -> BuildIdentityClaimV2 {
@@ -1103,6 +1112,12 @@ mod tests {
 
     fn handoff() -> DecodedIdentityHandoffV2 {
         let semantic = semantic();
+        let build = build(&semantic);
+        DecodedIdentityHandoffV2::from_claims(semantic, build).unwrap()
+    }
+
+    fn handoff_with_code_object_version(code_object_version: u16) -> DecodedIdentityHandoffV2 {
+        let semantic = semantic_with_code_object_version(code_object_version);
         let build = build(&semantic);
         DecodedIdentityHandoffV2::from_claims(semantic, build).unwrap()
     }
@@ -1197,10 +1212,10 @@ mod tests {
         .collect()
     }
 
-    fn metadata() -> Vec<u8> {
-        let kernel = Value::Map(vec![
-            (Value::from(".name"), Value::from("alpha")),
-            (Value::from(".symbol"), Value::from("alpha.kd")),
+    fn metadata_kernel(name: &str, symbol: &str) -> Value {
+        Value::Map(vec![
+            (Value::from(".name"), Value::from(name)),
+            (Value::from(".symbol"), Value::from(symbol)),
             (Value::from(".args"), Value::Array(hidden_arguments(0))),
             (Value::from(".kernarg_segment_size"), Value::from(256)),
             (Value::from(".kernarg_segment_align"), Value::from(8)),
@@ -1211,7 +1226,10 @@ mod tests {
             (Value::from(".vgpr_count"), Value::from(11)),
             (Value::from(".agpr_count"), Value::from(3)),
             (Value::from(".max_flat_workgroup_size"), Value::from(256)),
-        ]);
+        ])
+    }
+
+    fn metadata(kernels: &[(&str, &str)]) -> Vec<u8> {
         let root = Value::Map(vec![
             (
                 Value::from("amdhsa.version"),
@@ -1221,16 +1239,24 @@ mod tests {
                 Value::from("amdhsa.target"),
                 Value::from("amdgcn-amd-amdhsa--gfx942:xnack-"),
             ),
-            (Value::from("amdhsa.kernels"), Value::Array(vec![kernel])),
+            (
+                Value::from("amdhsa.kernels"),
+                Value::Array(
+                    kernels
+                        .iter()
+                        .map(|(name, symbol)| metadata_kernel(name, symbol))
+                        .collect(),
+                ),
+            ),
         ]);
         let mut encoded = Vec::new();
         write_value(&mut encoded, &root).unwrap();
         encoded
     }
 
-    fn metadata_note() -> Vec<u8> {
+    fn metadata_note(kernels: &[(&str, &str)]) -> Vec<u8> {
         let owner = b"AMDGPU\0";
-        let metadata = metadata();
+        let metadata = metadata(kernels);
         let mut note = Vec::new();
         note.extend_from_slice(&(owner.len() as u32).to_le_bytes());
         note.extend_from_slice(&(metadata.len() as u32).to_le_bytes());
@@ -1242,27 +1268,111 @@ mod tests {
         note
     }
 
-    fn elf(identity_sections: &[&[u8]]) -> Vec<u8> {
-        let mut strings = b"\0.note\0".to_vec();
-        let identity_name = strings.len() as u32;
-        strings.extend_from_slice(S09_IDENTITY_SECTION_V2.as_bytes());
-        strings.push(0);
-        let string_name = strings.len() as u32;
-        strings.extend_from_slice(b".shstrtab\0");
-        let mut bytes = vec![0_u8; ELF64_HEADER_BYTES];
-        let note = metadata_note();
+    struct BoundHsacoFixture {
+        bytes: Vec<u8>,
+        entry_name_offset: usize,
+        descriptor_name_offset: usize,
+    }
+
+    fn append_string(table: &mut Vec<u8>, value: &str) -> u32 {
+        let offset = u32::try_from(table.len()).unwrap();
+        table.extend_from_slice(value.as_bytes());
+        table.push(0);
+        offset
+    }
+
+    fn write_u16(bytes: &mut [u8], offset: usize, value: u16) {
+        bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn write_u32(bytes: &mut [u8], offset: usize, value: u32) {
+        bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn write_u64(bytes: &mut [u8], offset: usize, value: u64) {
+        bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn write_i64(bytes: &mut [u8], offset: usize, value: i64) {
+        bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn bound_elf(
+        identity_sections: &[&[u8]],
+        abi_version: u8,
+        kernels: &[(&str, &str)],
+    ) -> BoundHsacoFixture {
+        const PROGRAM_HEADER_BYTES: usize = 56;
+        const SYMBOL_BYTES: usize = 24;
+        const PROGRAM_COUNT: usize = 2;
+
+        let mut bytes = vec![0_u8; ELF64_HEADER_BYTES + PROGRAM_COUNT * PROGRAM_HEADER_BYTES];
+        align(&mut bytes, 64);
+        let note = metadata_note(kernels);
         let note_offset = bytes.len();
         bytes.extend_from_slice(&note);
+        align(&mut bytes, 64);
+
+        let descriptor_offset = bytes.len();
+        bytes.resize(descriptor_offset + 64, 0);
+        align(&mut bytes, 256);
+        let entry_offset = bytes.len();
+        bytes.resize(entry_offset + 64, 0xbf);
+        let descriptor_address = descriptor_offset as u64;
+        let entry_address = entry_offset as u64 + 0x1000;
+
         let mut identity_offsets = Vec::new();
         for identity in identity_sections {
             identity_offsets.push(bytes.len());
             bytes.extend_from_slice(identity);
         }
-        let string_offset = bytes.len();
-        bytes.extend_from_slice(&strings);
+
+        let mut symbol_strings = vec![0];
+        let entry_name = append_string(&mut symbol_strings, "alpha");
+        let descriptor_name = append_string(&mut symbol_strings, "alpha.kd");
+        let other_name = append_string(&mut symbol_strings, "other");
+        let symbol_string_offset = bytes.len();
+        let entry_name_offset = symbol_string_offset + entry_name as usize;
+        let descriptor_name_offset = symbol_string_offset + descriptor_name as usize;
+        bytes.extend_from_slice(&symbol_strings);
         align(&mut bytes, 8);
+
+        let symbol_offset = bytes.len();
+        bytes.resize(symbol_offset + 4 * SYMBOL_BYTES, 0);
+        let entry_symbol = symbol_offset + SYMBOL_BYTES;
+        write_u32(&mut bytes, entry_symbol, entry_name);
+        bytes[entry_symbol + 4] = 0x12;
+        bytes[entry_symbol + 5] = 3;
+        write_u16(&mut bytes, entry_symbol + 6, 3);
+        write_u64(&mut bytes, entry_symbol + 8, entry_address);
+        write_u64(&mut bytes, entry_symbol + 16, 64);
+
+        let descriptor_symbol = symbol_offset + 2 * SYMBOL_BYTES;
+        write_u32(&mut bytes, descriptor_symbol, descriptor_name);
+        bytes[descriptor_symbol + 4] = 0x11;
+        write_u16(&mut bytes, descriptor_symbol + 6, 2);
+        write_u64(&mut bytes, descriptor_symbol + 8, descriptor_address);
+        write_u64(&mut bytes, descriptor_symbol + 16, 64);
+
+        let spare_symbol = symbol_offset + 3 * SYMBOL_BYTES;
+        write_u32(&mut bytes, spare_symbol, other_name);
+        bytes[spare_symbol + 4] = 0x10;
+        write_u16(&mut bytes, spare_symbol + 6, 0xfff1);
+
+        let mut section_strings = vec![0];
+        let note_name = append_string(&mut section_strings, ".note");
+        let rodata_name = append_string(&mut section_strings, ".rodata");
+        let text_name = append_string(&mut section_strings, ".text");
+        let strtab_name = append_string(&mut section_strings, ".strtab");
+        let symtab_name = append_string(&mut section_strings, ".symtab");
+        let identity_name = append_string(&mut section_strings, S09_IDENTITY_SECTION_V2);
+        let shstrtab_name = append_string(&mut section_strings, ".shstrtab");
+        let section_string_offset = bytes.len();
+        bytes.extend_from_slice(&section_strings);
+        align(&mut bytes, 8);
+
         let section_offset = bytes.len();
-        let section_count = 3 + identity_sections.len();
+        let section_count = 7 + identity_sections.len();
         let string_index = section_count - 1;
         bytes.resize(
             section_offset + section_count * ELF64_SECTION_HEADER_BYTES,
@@ -1270,46 +1380,137 @@ mod tests {
         );
         bytes[..7].copy_from_slice(b"\x7fELF\x02\x01\x01");
         bytes[7] = 64;
-        bytes[8] = 4;
-        bytes[16..18].copy_from_slice(&3_u16.to_le_bytes());
-        bytes[18..20].copy_from_slice(&224_u16.to_le_bytes());
-        bytes[20..24].copy_from_slice(&1_u32.to_le_bytes());
-        bytes[40..48].copy_from_slice(&(section_offset as u64).to_le_bytes());
-        bytes[48..52].copy_from_slice(&0x64c_u32.to_le_bytes());
-        bytes[52..54].copy_from_slice(&(ELF64_HEADER_BYTES as u16).to_le_bytes());
-        bytes[54..56].copy_from_slice(&56_u16.to_le_bytes());
-        bytes[58..60].copy_from_slice(&(ELF64_SECTION_HEADER_BYTES as u16).to_le_bytes());
-        bytes[60..62].copy_from_slice(&(section_count as u16).to_le_bytes());
-        bytes[62..64].copy_from_slice(&(string_index as u16).to_le_bytes());
+        bytes[8] = abi_version;
+        write_u16(&mut bytes, 16, 3);
+        write_u16(&mut bytes, 18, 224);
+        write_u32(&mut bytes, 20, 1);
+        write_u64(&mut bytes, 32, ELF64_HEADER_BYTES as u64);
+        write_u64(&mut bytes, 40, section_offset as u64);
+        write_u32(&mut bytes, 48, 0x64c);
+        write_u16(&mut bytes, 52, ELF64_HEADER_BYTES as u16);
+        write_u16(&mut bytes, 54, PROGRAM_HEADER_BYTES as u16);
+        write_u16(&mut bytes, 56, PROGRAM_COUNT as u16);
+        write_u16(&mut bytes, 58, ELF64_SECTION_HEADER_BYTES as u16);
+        write_u16(&mut bytes, 60, section_count as u16);
+        write_u16(&mut bytes, 62, string_index as u16);
+
+        let descriptor_load = ELF64_HEADER_BYTES;
+        write_u32(&mut bytes, descriptor_load, 1);
+        write_u32(&mut bytes, descriptor_load + 4, 4);
+        write_u64(
+            &mut bytes,
+            descriptor_load + 32,
+            (descriptor_offset + 64) as u64,
+        );
+        write_u64(
+            &mut bytes,
+            descriptor_load + 40,
+            (descriptor_offset + 64) as u64,
+        );
+        write_u64(&mut bytes, descriptor_load + 48, 0x1000);
+
+        let entry_load = descriptor_load + PROGRAM_HEADER_BYTES;
+        write_u32(&mut bytes, entry_load, 1);
+        write_u32(&mut bytes, entry_load + 4, 5);
+        write_u64(&mut bytes, entry_load + 8, entry_offset as u64);
+        write_u64(&mut bytes, entry_load + 16, entry_address);
+        write_u64(&mut bytes, entry_load + 32, 64);
+        write_u64(&mut bytes, entry_load + 40, 64);
+        write_u64(&mut bytes, entry_load + 48, 0x1000);
 
         let note_header = section_offset + ELF64_SECTION_HEADER_BYTES;
-        bytes[note_header..note_header + 4].copy_from_slice(&1_u32.to_le_bytes());
-        bytes[note_header + 4..note_header + 8].copy_from_slice(&7_u32.to_le_bytes());
-        bytes[note_header + 24..note_header + 32]
-            .copy_from_slice(&(note_offset as u64).to_le_bytes());
-        bytes[note_header + 32..note_header + 40]
-            .copy_from_slice(&(note.len() as u64).to_le_bytes());
-        bytes[note_header + 48..note_header + 56].copy_from_slice(&4_u64.to_le_bytes());
+        write_u32(&mut bytes, note_header, note_name);
+        write_u32(&mut bytes, note_header + 4, 7);
+        write_u64(&mut bytes, note_header + 8, 2);
+        write_u64(&mut bytes, note_header + 16, note_offset as u64);
+        write_u64(&mut bytes, note_header + 24, note_offset as u64);
+        write_u64(&mut bytes, note_header + 32, note.len() as u64);
+        write_u64(&mut bytes, note_header + 48, 4);
 
-        let strings_header = section_offset + string_index * ELF64_SECTION_HEADER_BYTES;
-        bytes[strings_header..strings_header + 4].copy_from_slice(&string_name.to_le_bytes());
-        bytes[strings_header + 4..strings_header + 8].copy_from_slice(&SHT_STRTAB.to_le_bytes());
-        bytes[strings_header + 24..strings_header + 32]
-            .copy_from_slice(&(string_offset as u64).to_le_bytes());
-        bytes[strings_header + 32..strings_header + 40]
-            .copy_from_slice(&(strings.len() as u64).to_le_bytes());
+        let rodata_header = section_offset + 2 * ELF64_SECTION_HEADER_BYTES;
+        write_u32(&mut bytes, rodata_header, rodata_name);
+        write_u32(&mut bytes, rodata_header + 4, SHT_PROGBITS);
+        write_u64(&mut bytes, rodata_header + 8, 2);
+        write_u64(&mut bytes, rodata_header + 16, descriptor_address);
+        write_u64(&mut bytes, rodata_header + 24, descriptor_offset as u64);
+        write_u64(&mut bytes, rodata_header + 32, 64);
+        write_u64(&mut bytes, rodata_header + 48, 64);
+
+        let text_header = section_offset + 3 * ELF64_SECTION_HEADER_BYTES;
+        write_u32(&mut bytes, text_header, text_name);
+        write_u32(&mut bytes, text_header + 4, SHT_PROGBITS);
+        write_u64(&mut bytes, text_header + 8, 6);
+        write_u64(&mut bytes, text_header + 16, entry_address);
+        write_u64(&mut bytes, text_header + 24, entry_offset as u64);
+        write_u64(&mut bytes, text_header + 32, 64);
+        write_u64(&mut bytes, text_header + 48, 256);
+
+        let strtab_header = section_offset + 4 * ELF64_SECTION_HEADER_BYTES;
+        write_u32(&mut bytes, strtab_header, strtab_name);
+        write_u32(&mut bytes, strtab_header + 4, SHT_STRTAB);
+        write_u64(&mut bytes, strtab_header + 24, symbol_string_offset as u64);
+        write_u64(&mut bytes, strtab_header + 32, symbol_strings.len() as u64);
+        write_u64(&mut bytes, strtab_header + 48, 1);
+
+        let symtab_header = section_offset + 5 * ELF64_SECTION_HEADER_BYTES;
+        write_u32(&mut bytes, symtab_header, symtab_name);
+        write_u32(&mut bytes, symtab_header + 4, 2);
+        write_u64(&mut bytes, symtab_header + 24, symbol_offset as u64);
+        write_u64(&mut bytes, symtab_header + 32, (4 * SYMBOL_BYTES) as u64);
+        write_u32(&mut bytes, symtab_header + 40, 4);
+        write_u32(&mut bytes, symtab_header + 44, 1);
+        write_u64(&mut bytes, symtab_header + 48, 8);
+        write_u64(&mut bytes, symtab_header + 56, SYMBOL_BYTES as u64);
+
         for (index, (offset, identity)) in identity_offsets
             .iter()
             .zip(identity_sections.iter())
             .enumerate()
         {
-            let header = section_offset + (index + 2) * ELF64_SECTION_HEADER_BYTES;
-            bytes[header..header + 4].copy_from_slice(&identity_name.to_le_bytes());
-            bytes[header + 4..header + 8].copy_from_slice(&SHT_PROGBITS.to_le_bytes());
-            bytes[header + 24..header + 32].copy_from_slice(&(*offset as u64).to_le_bytes());
-            bytes[header + 32..header + 40].copy_from_slice(&(identity.len() as u64).to_le_bytes());
+            let header = section_offset + (index + 6) * ELF64_SECTION_HEADER_BYTES;
+            write_u32(&mut bytes, header, identity_name);
+            write_u32(&mut bytes, header + 4, SHT_PROGBITS);
+            write_u64(&mut bytes, header + 24, *offset as u64);
+            write_u64(&mut bytes, header + 32, identity.len() as u64);
         }
-        bytes
+
+        let section_strings_header = section_offset + string_index * ELF64_SECTION_HEADER_BYTES;
+        write_u32(&mut bytes, section_strings_header, shstrtab_name);
+        write_u32(&mut bytes, section_strings_header + 4, SHT_STRTAB);
+        write_u64(
+            &mut bytes,
+            section_strings_header + 24,
+            section_string_offset as u64,
+        );
+        write_u64(
+            &mut bytes,
+            section_strings_header + 32,
+            section_strings.len() as u64,
+        );
+        write_u64(&mut bytes, section_strings_header + 48, 1);
+
+        write_u32(&mut bytes, descriptor_offset, 0);
+        write_u32(&mut bytes, descriptor_offset + 4, 0);
+        write_u32(&mut bytes, descriptor_offset + 8, 256);
+        write_i64(
+            &mut bytes,
+            descriptor_offset + 16,
+            i64::try_from(entry_address - descriptor_address).unwrap(),
+        );
+        write_u32(&mut bytes, descriptor_offset + 44, 1);
+        write_u32(&mut bytes, descriptor_offset + 48, 0x00af_0081);
+        write_u32(&mut bytes, descriptor_offset + 52, 0);
+        write_u16(&mut bytes, descriptor_offset + 56, 0x001e);
+
+        BoundHsacoFixture {
+            bytes,
+            entry_name_offset,
+            descriptor_name_offset,
+        }
+    }
+
+    fn elf(identity_sections: &[&[u8]]) -> Vec<u8> {
+        bound_elf(identity_sections, 4, &[("alpha", "alpha.kd")]).bytes
     }
 
     #[test]
@@ -1549,5 +1750,70 @@ mod tests {
         for length in 0..one.len() {
             assert!(identity_section_v2(&one[..length]).is_err());
         }
+    }
+
+    #[test]
+    fn hsaco_claim_decode_accepts_one_physically_bound_v6_alpha_export() {
+        let handoff = handoff();
+        let fixture = bound_elf(&[handoff.canonical_bytes()], 4, &[("alpha", "alpha.kd")]);
+        let physical = fe2o3_hsaco::inspect_and_bind_kernel_descriptors(&fixture.bytes).unwrap();
+        assert_eq!(physical.inspection().kernels().len(), 1);
+        assert_eq!(physical.bindings().len(), 1);
+        assert_eq!(physical.bindings()[0].kernel_index(), 0);
+        assert_eq!(
+            decode_hsaco_identity_claims_v2(&fixture.bytes).unwrap(),
+            handoff
+        );
+    }
+
+    #[test]
+    fn hsaco_claim_decode_rejects_coherent_v5_artifact_and_claim() {
+        let handoff = handoff_with_code_object_version(5);
+        let fixture = bound_elf(&[handoff.canonical_bytes()], 3, &[("alpha", "alpha.kd")]);
+        let physical = fe2o3_hsaco::inspect_and_bind_kernel_descriptors(&fixture.bytes).unwrap();
+        assert_eq!(
+            physical.inspection().code_object_version(),
+            fe2o3_hsaco::CodeObjectVersion::V5
+        );
+        assert!(decode_hsaco_identity_claims_v2(&fixture.bytes).is_err());
+    }
+
+    #[test]
+    fn hsaco_claim_decode_rejects_wrong_or_missing_physical_symbols() {
+        let handoff = handoff();
+
+        let mut wrong_entry = bound_elf(&[handoff.canonical_bytes()], 4, &[("alpha", "alpha.kd")]);
+        wrong_entry.bytes[wrong_entry.entry_name_offset..wrong_entry.entry_name_offset + 5]
+            .copy_from_slice(b"omega");
+        assert!(fe2o3_hsaco::inspect_and_bind_kernel_descriptors(&wrong_entry.bytes).is_err());
+        assert!(decode_hsaco_identity_claims_v2(&wrong_entry.bytes).is_err());
+
+        let mut wrong_descriptor =
+            bound_elf(&[handoff.canonical_bytes()], 4, &[("alpha", "alpha.kd")]);
+        wrong_descriptor.bytes
+            [wrong_descriptor.descriptor_name_offset..wrong_descriptor.descriptor_name_offset + 8]
+            .copy_from_slice(b"omega.kd");
+        assert!(fe2o3_hsaco::inspect_and_bind_kernel_descriptors(&wrong_descriptor.bytes).is_err());
+        assert!(decode_hsaco_identity_claims_v2(&wrong_descriptor.bytes).is_err());
+    }
+
+    #[test]
+    fn hsaco_claim_decode_rejects_metadata_symbol_mismatch_and_extra_kernel() {
+        let handoff = handoff();
+        let mismatched_metadata =
+            bound_elf(&[handoff.canonical_bytes()], 4, &[("alpha", "omega.kd")]);
+        assert!(
+            fe2o3_hsaco::inspect_and_bind_kernel_descriptors(&mismatched_metadata.bytes).is_err()
+        );
+        assert!(decode_hsaco_identity_claims_v2(&mismatched_metadata.bytes).is_err());
+
+        let extra_kernel = bound_elf(
+            &[handoff.canonical_bytes()],
+            4,
+            &[("alpha", "alpha.kd"), ("beta", "beta.kd")],
+        );
+        assert!(fe2o3_hsaco::inspect(&extra_kernel.bytes).is_ok());
+        assert!(fe2o3_hsaco::inspect_and_bind_kernel_descriptors(&extra_kernel.bytes).is_err());
+        assert!(decode_hsaco_identity_claims_v2(&extra_kernel.bytes).is_err());
     }
 }
