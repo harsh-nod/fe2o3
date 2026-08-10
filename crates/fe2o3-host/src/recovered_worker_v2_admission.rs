@@ -1,3 +1,7 @@
+#[cfg(target_os = "linux")]
+use crate::application_descriptor_handoff::{
+    RetainedWorkerV2ApplicationDescriptorsV1, WorkerV2ApplicationDescriptorHandoffErrorV1,
+};
 use crate::{
     AdmittedFinalizedWorkerV2BundleV1, ArtifactKernelIdentityV1, AuthenticatedWorkerV2ExecutableV1,
     CompilerGeneratedAlphaZetaCov6ArgumentsV1, CompilerGeneratedKernelExpectationV1,
@@ -34,10 +38,16 @@ pub struct RecoveredWorkerV2PinnedDescriptorV1 {
     admission: AdmittedFinalizedWorkerV2BundleV1,
     descriptor: KernelDescriptorV1,
     observed: ObservedContext,
+    #[cfg(target_os = "linux")]
+    application_descriptors: Option<RetainedWorkerV2ApplicationDescriptorsV1>,
 }
 
 impl fmt::Debug for RecoveredWorkerV2PinnedDescriptorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        #[cfg(target_os = "linux")]
+        let retains_application_descriptors = self.application_descriptors.is_some();
+        #[cfg(not(target_os = "linux"))]
+        let retains_application_descriptors = false;
         formatter
             .debug_struct("RecoveredWorkerV2PinnedDescriptorV1")
             .field("published", &self.admission.published())
@@ -45,6 +55,10 @@ impl fmt::Debug for RecoveredWorkerV2PinnedDescriptorV1 {
             .field("artifact_identity", self.admission.artifact_identity())
             .field("target", &self.admission.target())
             .field("code_object_version", &self.admission.code_object_version())
+            .field(
+                "retains_application_descriptors",
+                &retains_application_descriptors,
+            )
             .finish_non_exhaustive()
     }
 }
@@ -85,7 +99,19 @@ impl RecoveredWorkerV2PinnedDescriptorV1 {
             admission,
             descriptor,
             observed: observed.clone(),
+            #[cfg(target_os = "linux")]
+            application_descriptors: None,
         })
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn retain_application_descriptors(
+        mut self,
+        descriptors: RetainedWorkerV2ApplicationDescriptorsV1,
+    ) -> Self {
+        debug_assert!(self.application_descriptors.is_none());
+        self.application_descriptors = Some(descriptors);
+        self
     }
 
     pub const fn published(&self) -> PublishedLinkArtifactV1 {
@@ -167,6 +193,12 @@ impl RecoveredWorkerV2PinnedDescriptorV1 {
         Authenticator: WorkerV2PrerequisiteAuthenticatorV1<K>,
         Adapter: ReviewedHsaImplicitKernargAdapterV1,
     {
+        #[cfg(target_os = "linux")]
+        if let Some(descriptors) = &self.application_descriptors {
+            descriptors
+                .revalidate()
+                .map_err(RecoveredWorkerV2SynchronousHsaHandoffError::ApplicationDescriptors)?;
+        }
         self.admission
             .acquire_currentness()
             .map_err(RecoveredWorkerV2SynchronousHsaHandoffError::CurrentPublication)?;
@@ -185,6 +217,8 @@ impl RecoveredWorkerV2PinnedDescriptorV1 {
         Ok(RecoveredWorkerV2SynchronousHsaHandoffV1 {
             loaded,
             observed: self.observed,
+            #[cfg(target_os = "linux")]
+            application_descriptors: self.application_descriptors,
         })
     }
 }
@@ -198,6 +232,8 @@ impl RecoveredWorkerV2PinnedDescriptorV1 {
 pub struct RecoveredWorkerV2SynchronousHsaHandoffV1<K, A: ReviewedHsaImplicitKernargAdapterV1> {
     loaded: LoadedHsaExecutableV1<K, A>,
     observed: ObservedContext,
+    #[cfg(target_os = "linux")]
+    application_descriptors: Option<RetainedWorkerV2ApplicationDescriptorsV1>,
 }
 
 /// Result of preparing one invocation through recovered synchronous HSA authority.
@@ -229,10 +265,18 @@ impl<K, A: ReviewedHsaImplicitKernargAdapterV1> fmt::Debug
     for RecoveredWorkerV2SynchronousHsaHandoffV1<K, A>
 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        #[cfg(target_os = "linux")]
+        let retains_application_descriptors = self.application_descriptors.is_some();
+        #[cfg(not(target_os = "linux"))]
+        let retains_application_descriptors = false;
         formatter
             .debug_struct("RecoveredWorkerV2SynchronousHsaHandoffV1")
             .field("load", self.loaded.load_observation())
             .field("kernel", self.loaded.kernel_observation())
+            .field(
+                "retains_application_descriptors",
+                &retains_application_descriptors,
+            )
             .finish_non_exhaustive()
     }
 }
@@ -276,6 +320,12 @@ impl<K, A: ReviewedHsaImplicitKernargAdapterV1> RecoveredWorkerV2SynchronousHsaH
         Authenticator: WorkerV2PrerequisiteAuthenticatorV1<Selected>,
         Arguments: CompilerGeneratedAlphaZetaCov6ArgumentsV1<'allocation, Selected>,
     {
+        #[cfg(target_os = "linux")]
+        if let Some(descriptors) = &self.application_descriptors {
+            descriptors
+                .revalidate()
+                .map_err(RecoveredWorkerV2SynchronousHsaPrepareError::ApplicationDescriptors)?;
+        }
         self.loaded
             .prepare_generated_alpha_zeta_cov6_selected_kernel_v1::<
                 Selected,
@@ -288,7 +338,15 @@ impl<K, A: ReviewedHsaImplicitKernargAdapterV1> RecoveredWorkerV2SynchronousHsaH
     pub fn unload(
         self,
     ) -> Result<UnloadedHsaExecutableV1, crate::HsaExecutableUnloadError<A::Error>> {
-        let Self { loaded, observed } = self;
+        let Self {
+            loaded,
+            observed,
+            #[cfg(target_os = "linux")]
+            application_descriptors,
+        } = self;
+        #[cfg(target_os = "linux")]
+        let _lifetime_guard = (observed, application_descriptors);
+        #[cfg(not(target_os = "linux"))]
         let _lifetime_guard = observed;
         loaded.unload()
     }
@@ -298,6 +356,8 @@ impl<K, A: ReviewedHsaImplicitKernargAdapterV1> RecoveredWorkerV2SynchronousHsaH
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum RecoveredWorkerV2SynchronousHsaHandoffError<PrerequisiteError, AdapterError> {
+    #[cfg(target_os = "linux")]
+    ApplicationDescriptors(WorkerV2ApplicationDescriptorHandoffErrorV1),
     CurrentPublication(FinalizedWorkerV2BundleAdmissionError),
     Selection(WorkerV2TypedKernelSelectionError),
     Authentication(WorkerV2ExecutableAuthenticationError<PrerequisiteError>),
@@ -309,6 +369,8 @@ pub enum RecoveredWorkerV2SynchronousHsaHandoffError<PrerequisiteError, AdapterE
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum RecoveredWorkerV2SynchronousHsaPrepareError<PrerequisiteError, AdapterError> {
+    #[cfg(target_os = "linux")]
+    ApplicationDescriptors(WorkerV2ApplicationDescriptorHandoffErrorV1),
     Prepare(GeneratedAlphaZetaCov6PrepareError<PrerequisiteError, AdapterError>),
 }
 
@@ -560,11 +622,19 @@ mod tests {
         CallerMeasuredSemanticWitnessIdentityV2, CallerMeasuredSourceRootIdentityV2,
         CompilerSourceClosureV2, CompilerTransactionEvidenceCapsuleV2,
         CompilerTransactionEvidencePartsV2, DescriptorLineageV1, ExactRawHsacoV1,
+        WorkerV2ApplicationHandoffAckV1, WorkerV2ApplicationHandoffChallengeV1,
+        WorkerV2ApplicationHandoffExpectationV1,
     };
     use reserved_fe2o3_symbols::{
         MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1, TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3,
     };
     use std::fs;
+    #[cfg(target_os = "linux")]
+    use std::io::{Read, Write};
+    #[cfg(target_os = "linux")]
+    use std::os::fd::{FromRawFd, IntoRawFd, OwnedFd, RawFd};
+    #[cfg(target_os = "linux")]
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     #[allow(dead_code)]
@@ -1337,6 +1407,333 @@ mod tests {
         let path = matches.next().unwrap();
         assert!(matches.next().is_none());
         path
+    }
+
+    #[cfg(target_os = "linux")]
+    struct ApplicationDescriptorFixture {
+        envelope_path: std::path::PathBuf,
+        envelope: OwnedFd,
+        artifact_directory: OwnedFd,
+        acknowledgment_read: OwnedFd,
+        acknowledgment_write: OwnedFd,
+        expectation: WorkerV2ApplicationHandoffExpectationV1,
+        challenge: WorkerV2ApplicationHandoffChallengeV1,
+    }
+
+    #[cfg(target_os = "linux")]
+    fn application_descriptor_fixture(
+        fixture: &RecoveryFixture,
+        seed: u8,
+    ) -> ApplicationDescriptorFixture {
+        fs::set_permissions(&fixture.output, fs::Permissions::from_mode(0o700)).unwrap();
+        let envelope_path = fixture
+            .output
+            .join(format!("worker-v2-application-envelope-{seed}.bin"));
+        let mut writer = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&envelope_path)
+            .unwrap();
+        writer.write_all(&fixture.envelope).unwrap();
+        writer.sync_all().unwrap();
+        drop(writer);
+
+        let envelope = fs::File::open(&envelope_path).unwrap().into();
+        let artifact_directory = fs::File::open(&fixture.output).unwrap().into();
+        let mut pipe = [-1; 2];
+        // SAFETY: `pipe` has room for both returned descriptors and successful descriptors are
+        // immediately transferred into separate `OwnedFd` values.
+        assert_eq!(
+            unsafe { libc::pipe2(pipe.as_mut_ptr(), libc::O_CLOEXEC) },
+            0
+        );
+        // SAFETY: successful `pipe2` returned two distinct descriptors owned by this process.
+        let acknowledgment_read = unsafe { OwnedFd::from_raw_fd(pipe[0]) };
+        // SAFETY: successful `pipe2` returned two distinct descriptors owned by this process.
+        let acknowledgment_write = unsafe { OwnedFd::from_raw_fd(pipe[1]) };
+        let envelope_value = WorkerV2LoadEnvelopeV1::from_bytes(&fixture.envelope).unwrap();
+        let application =
+            crate::application_descriptor_handoff::current_application_identity().unwrap();
+        let expectation =
+            WorkerV2ApplicationHandoffExpectationV1::new(&envelope_value, application);
+        let challenge =
+            WorkerV2ApplicationHandoffChallengeV1::from_bytes([seed.max(1); 32]).unwrap();
+        ApplicationDescriptorFixture {
+            envelope_path,
+            envelope,
+            artifact_directory,
+            acknowledgment_read,
+            acknowledgment_write,
+            expectation,
+            challenge,
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn read_acknowledgment(descriptor: OwnedFd) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        fs::File::from(descriptor).read_to_end(&mut bytes).unwrap();
+        bytes
+    }
+
+    #[cfg(target_os = "linux")]
+    fn clear_close_on_exec(descriptor: RawFd) {
+        // SAFETY: the caller retains ownership of this live descriptor while only its descriptor
+        // flags are changed for an inherited-handoff test.
+        assert_eq!(unsafe { libc::fcntl(descriptor, libc::F_SETFD, 0) }, 0);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn inherited_environment_handoff_owns_descriptors_and_closes_ack_writer() {
+        let fixture = recovery_fixture(26, "gfx942", "vecadd");
+        let descriptors = application_descriptor_fixture(&fixture, 27);
+        let expectation = descriptors.expectation;
+        let challenge = descriptors.challenge;
+        let envelope = descriptors.envelope.into_raw_fd();
+        let artifact_directory = descriptors.artifact_directory.into_raw_fd();
+        let acknowledgment_write = descriptors.acknowledgment_write.into_raw_fd();
+        for descriptor in [envelope, artifact_directory, acknowledgment_write] {
+            clear_close_on_exec(descriptor);
+        }
+        // SAFETY: no other test or application code reads these protocol-specific variables; they
+        // are removed immediately after the one-shot inherited consumer returns.
+        unsafe {
+            std::env::set_var(
+                fe2o3_worker_v2_bundle::WORKER_V2_APPLICATION_ENVELOPE_FD_ENV_V1,
+                envelope.to_string(),
+            );
+            std::env::set_var(
+                fe2o3_worker_v2_bundle::WORKER_V2_APPLICATION_ARTIFACT_DIR_FD_ENV_V1,
+                artifact_directory.to_string(),
+            );
+            std::env::set_var(
+                fe2o3_worker_v2_bundle::WORKER_V2_APPLICATION_HANDOFF_ACK_FD_ENV_V1,
+                acknowledgment_write.to_string(),
+            );
+            std::env::set_var(
+                fe2o3_worker_v2_bundle::WORKER_V2_APPLICATION_HANDOFF_COMMITMENT_ENV_V1,
+                expectation.commitment().to_hex(),
+            );
+            std::env::set_var(
+                fe2o3_worker_v2_bundle::WORKER_V2_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
+                challenge.to_hex(),
+            );
+        }
+        let recovered = crate::consume_inherited_worker_v2_application_handoff_v1(
+            fixture.compiler_transaction.clone(),
+            fixture.kernel_id,
+            &fixture.observed,
+        );
+        // SAFETY: the one-shot inherited consumer has returned and will never read these variables
+        // again in this process.
+        unsafe {
+            for name in [
+                fe2o3_worker_v2_bundle::WORKER_V2_APPLICATION_ENVELOPE_FD_ENV_V1,
+                fe2o3_worker_v2_bundle::WORKER_V2_APPLICATION_ARTIFACT_DIR_FD_ENV_V1,
+                fe2o3_worker_v2_bundle::WORKER_V2_APPLICATION_HANDOFF_ACK_FD_ENV_V1,
+                fe2o3_worker_v2_bundle::WORKER_V2_APPLICATION_HANDOFF_COMMITMENT_ENV_V1,
+                fe2o3_worker_v2_bundle::WORKER_V2_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
+            ] {
+                std::env::remove_var(name);
+            }
+        }
+        let recovered = recovered.unwrap();
+        let acknowledgment = read_acknowledgment(descriptors.acknowledgment_read);
+        WorkerV2ApplicationHandoffAckV1::decode_canonical(&acknowledgment)
+            .unwrap()
+            .validate(expectation, challenge)
+            .unwrap();
+        recovered.revalidate_currentness().unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn application_descriptor_handoff_acks_and_survives_directory_rename_through_unload() {
+        let fixture = recovery_fixture(30, "gfx942", "vecadd");
+        let descriptors = application_descriptor_fixture(&fixture, 31);
+        let expectation = descriptors.expectation;
+        let challenge = descriptors.challenge;
+        let recovered = crate::consume_worker_v2_application_handoff_descriptors_v1(
+            descriptors.envelope,
+            descriptors.artifact_directory,
+            descriptors.acknowledgment_write,
+            expectation.commitment(),
+            challenge,
+            fixture.compiler_transaction.clone(),
+            fixture.kernel_id,
+            &fixture.observed,
+        )
+        .unwrap();
+        let acknowledgment = read_acknowledgment(descriptors.acknowledgment_read);
+        WorkerV2ApplicationHandoffAckV1::decode_canonical(&acknowledgment)
+            .unwrap()
+            .validate(expectation, challenge)
+            .unwrap();
+
+        let renamed = fixture._directory.0.join("renamed-output");
+        fs::rename(&fixture.output, &renamed).unwrap();
+        recovered.revalidate_currentness().unwrap();
+        let (mut authenticator, authentication_calls) = ExactPrerequisiteAuthenticator::new();
+        let (adapter, unloads) = ExactHsaAdapter::new();
+        let authority = recovered
+            .load_generated_synchronous_hsa_handoff_v1::<
+                HandoffKernel,
+                ExactPrerequisiteAuthenticator,
+                ExactHsaAdapter,
+            >(&mut authenticator, adapter)
+            .unwrap();
+        assert_eq!(authentication_calls.load(Ordering::SeqCst), 1);
+        authority.unload().unwrap();
+        assert_eq!(unloads.load(Ordering::SeqCst), 1);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn package_and_receipt_commitment_substitution_is_rejected_without_ack() {
+        let fixture = recovery_fixture(32, "gfx942", "vecadd");
+        let substitute = recovery_fixture(33, "gfx942", "vecadd");
+        let descriptors = application_descriptor_fixture(&fixture, 34);
+        let substitute_descriptors = application_descriptor_fixture(&substitute, 35);
+        let error = crate::consume_worker_v2_application_handoff_descriptors_v1(
+            descriptors.envelope,
+            descriptors.artifact_directory,
+            descriptors.acknowledgment_write,
+            substitute_descriptors.expectation.commitment(),
+            descriptors.challenge,
+            fixture.compiler_transaction.clone(),
+            fixture.kernel_id,
+            &fixture.observed,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            crate::WorkerV2ApplicationDescriptorHandoffErrorV1::CommitmentMismatch
+        ));
+        assert!(read_acknowledgment(descriptors.acknowledgment_read).is_empty());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn artifact_directory_substitution_is_rejected_without_ack() {
+        let fixture = recovery_fixture(36, "gfx942", "vecadd");
+        let substitute = recovery_fixture(37, "gfx942", "vecadd");
+        let descriptors = application_descriptor_fixture(&fixture, 38);
+        let substitute_descriptors = application_descriptor_fixture(&substitute, 39);
+        let error = crate::consume_worker_v2_application_handoff_descriptors_v1(
+            descriptors.envelope,
+            substitute_descriptors.artifact_directory,
+            descriptors.acknowledgment_write,
+            descriptors.expectation.commitment(),
+            descriptors.challenge,
+            fixture.compiler_transaction.clone(),
+            fixture.kernel_id,
+            &fixture.observed,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            crate::WorkerV2ApplicationDescriptorHandoffErrorV1::EnvelopeNotLinked
+        ));
+        assert!(read_acknowledgment(descriptors.acknowledgment_read).is_empty());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn regular_file_ack_endpoint_is_rejected() {
+        let fixture = recovery_fixture(44, "gfx942", "vecadd");
+        let descriptors = application_descriptor_fixture(&fixture, 45);
+        drop(descriptors.acknowledgment_read);
+        drop(descriptors.acknowledgment_write);
+        let acknowledgment: OwnedFd = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(fixture.output.join("unsafe-ack.bin"))
+            .unwrap()
+            .into();
+        let error = crate::consume_worker_v2_application_handoff_descriptors_v1(
+            descriptors.envelope,
+            descriptors.artifact_directory,
+            acknowledgment,
+            descriptors.expectation.commitment(),
+            descriptors.challenge,
+            fixture.compiler_transaction.clone(),
+            fixture.kernel_id,
+            &fixture.observed,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            crate::WorkerV2ApplicationDescriptorHandoffErrorV1::UnsafeAcknowledgment
+        ));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn symlink_alias_does_not_satisfy_exact_envelope_link() {
+        let fixture = recovery_fixture(40, "gfx942", "vecadd");
+        let descriptors = application_descriptor_fixture(&fixture, 41);
+        let displaced = fixture._directory.0.join("displaced-envelope.bin");
+        fs::rename(&descriptors.envelope_path, &displaced).unwrap();
+        std::os::unix::fs::symlink(&displaced, &descriptors.envelope_path).unwrap();
+        let error = crate::consume_worker_v2_application_handoff_descriptors_v1(
+            descriptors.envelope,
+            descriptors.artifact_directory,
+            descriptors.acknowledgment_write,
+            descriptors.expectation.commitment(),
+            descriptors.challenge,
+            fixture.compiler_transaction.clone(),
+            fixture.kernel_id,
+            &fixture.observed,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            crate::WorkerV2ApplicationDescriptorHandoffErrorV1::EnvelopeNotLinked
+        ));
+        assert!(read_acknowledgment(descriptors.acknowledgment_read).is_empty());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn retained_envelope_mutation_blocks_load_before_authentication() {
+        let fixture = recovery_fixture(42, "gfx942", "vecadd");
+        let descriptors = application_descriptor_fixture(&fixture, 43);
+        let envelope_path = descriptors.envelope_path.clone();
+        let recovered = crate::consume_worker_v2_application_handoff_descriptors_v1(
+            descriptors.envelope,
+            descriptors.artifact_directory,
+            descriptors.acknowledgment_write,
+            descriptors.expectation.commitment(),
+            descriptors.challenge,
+            fixture.compiler_transaction.clone(),
+            fixture.kernel_id,
+            &fixture.observed,
+        )
+        .unwrap();
+        let acknowledgment = read_acknowledgment(descriptors.acknowledgment_read);
+        assert!(WorkerV2ApplicationHandoffAckV1::decode_canonical(&acknowledgment).is_ok());
+        let mut envelope_bytes = fs::read(&envelope_path).unwrap();
+        envelope_bytes[0] ^= 1;
+        fs::write(&envelope_path, envelope_bytes).unwrap();
+
+        let (mut authenticator, authentication_calls) = ExactPrerequisiteAuthenticator::new();
+        let (adapter, unloads) = ExactHsaAdapter::new();
+        let error = recovered
+            .load_generated_synchronous_hsa_handoff_v1::<
+                HandoffKernel,
+                ExactPrerequisiteAuthenticator,
+                ExactHsaAdapter,
+            >(&mut authenticator, adapter)
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            RecoveredWorkerV2SynchronousHsaHandoffError::ApplicationDescriptors(_)
+        ));
+        assert_eq!(authentication_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(unloads.load(Ordering::SeqCst), 0);
     }
 
     #[test]

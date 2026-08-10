@@ -20,8 +20,10 @@ fe2o3-hsaco.workspace = true
 fe2o3-hsaco-finalize.workspace = true
 fe2o3-kernel-descriptor.workspace = true
 fe2o3-worker-v2-bundle.workspace = true
+libc.workspace = true
 reserved-fe2o3-symbols.workspace = true
 rmpv = { version = "1.3.1", default-features = false, optional = true }
+rustix.workspace = true
 sha2.workspace = true
 
 [dev-dependencies]

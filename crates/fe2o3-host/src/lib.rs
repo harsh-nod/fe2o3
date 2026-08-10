@@ -1,3 +1,5 @@
+#[cfg(target_os = "linux")]
+mod application_descriptor_handoff;
 mod argument_alias;
 mod artifact_binding;
 mod cooperative_launch;
@@ -24,6 +26,12 @@ pub mod __hardware_test {
     };
 }
 
+#[cfg(target_os = "linux")]
+pub use application_descriptor_handoff::{
+    WorkerV2ApplicationDescriptorHandoffErrorV1,
+    consume_inherited_worker_v2_application_handoff_v1,
+    consume_worker_v2_application_handoff_descriptors_v1,
+};
 pub use argument_alias::{
     AliasAdmissionError, AllocationIdentity, AllocationProvenance, ArgumentAccess,
     ArgumentAccessMode, ArgumentAliasAdmission, ArgumentAliasValidator, AtomicAccess,
