@@ -179,7 +179,10 @@ fn canonical_record_binds_exact_payload_worker_target_graph_and_effects() {
     let decoded = PhysicalMachineEffectEvidenceV1::decode_canonical_for(&request, &bytes).unwrap();
 
     assert_eq!(decoded.schema_version(), 1);
-    assert_eq!(decoded.target(), PhysicalMachineTargetV1::Gfx942);
+    assert_eq!(
+        decoded.target(),
+        PhysicalMachineTargetV1::Gfx942XnackMinusCov6
+    );
     assert_eq!(
         decoded.analysis_basis(),
         PhysicalMachineEffectAnalysisBasisV1::FinalizedHsacoViaMeasuredLlvmObjectMc

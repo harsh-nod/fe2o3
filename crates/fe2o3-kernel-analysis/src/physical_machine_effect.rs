@@ -255,7 +255,7 @@ impl PhysicalMachineEffectRequestV1 {
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum PhysicalMachineTargetV1 {
-    Gfx942,
+    Gfx942XnackMinusCov6,
 }
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -395,7 +395,7 @@ impl PhysicalMachineEffectEvidenceV1 {
     }
 
     pub const fn target(&self) -> PhysicalMachineTargetV1 {
-        PhysicalMachineTargetV1::Gfx942
+        PhysicalMachineTargetV1::Gfx942XnackMinusCov6
     }
 
     pub const fn analysis_basis(&self) -> PhysicalMachineEffectAnalysisBasisV1 {
