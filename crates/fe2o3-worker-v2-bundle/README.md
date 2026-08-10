@@ -62,6 +62,11 @@ recorded compiler module, and no real Worker-generated COV6 hardware or
 load/dispatch evidence. Its current guarantees are structural consistency and
 canonical content binding only.
 
+The application handoff ACK is likewise only bounded liveness and possession
+evidence. The child receives its challenge, commitment, and ACK descriptor and
+can reproduce the canonical bytes; ACK validation therefore proves no recovery
+provenance and grants no host, publication, load, or launch authority.
+
 `DurablePublishedHsacoClaimV1` preserves the exact publication plan, receipt,
 output-directory identity, record identity, artifact identity, and artifact
 length. A recovered-admission adapter can use it to reacquire a non-`Clone`

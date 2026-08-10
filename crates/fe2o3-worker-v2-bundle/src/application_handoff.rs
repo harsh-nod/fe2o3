@@ -145,7 +145,11 @@ impl WorkerV2ApplicationHandoffExpectationV1 {
     }
 }
 
-/// Fixed-schema child acknowledgment of one validated descriptor handoff.
+/// Fixed-schema child liveness acknowledgment for one descriptor handoff.
+///
+/// Every field is visible to the child, so a canonical ACK proves only possession of the values
+/// transferred for one spawn. It establishes no recovery provenance and grants no publication,
+/// load, or launch authority.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct WorkerV2ApplicationHandoffAckV1 {
     challenge: WorkerV2ApplicationHandoffChallengeV1,
