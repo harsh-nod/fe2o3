@@ -20,6 +20,7 @@ pub mod group;
 pub mod half;
 pub mod lds;
 pub mod math;
+pub mod mx;
 pub mod simd;
 pub mod sync;
 pub mod thread;
@@ -43,6 +44,7 @@ pub use lds::{
     MAX_DYNAMIC_LDS_ALIGNMENT, WorkgroupLdsScope,
 };
 pub use math::{DEVICE_MATH_CONTRACT_VERSION_V1, DeviceMath};
+pub use mx::{MxScaleConversionError, MxScaleE8M0, MxScaleE8M0x4};
 pub use simd::{GpuSimd, GpuSimdElement, GpuSimdLaneCount, ValidGpuSimdLaneCount};
 pub use thread::{
     GlobalGridSize, GlobalWorkitemId, GridSize, Index1D, Index2D, Invocation3D, ThreadIndex,
