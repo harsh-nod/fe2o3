@@ -1,0 +1,15 @@
+error[E0080]: evaluation panicked: gpu_printf! format is outside the bounded V1 grammar
+ --> tests/ui/fail/gpu_printf_rejects_format_specifiers.rs:4:5
+  |
+4 |     gpu_printf!("value={:x}", 7u32);
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `main::FORMAT_ID` failed here
+  |
+  = note: this error originates in the macro `$crate::panic::panic_2021` which comes from the expansion of the macro `gpu_printf` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+note: erroneous constant encountered
+ --> tests/ui/fail/gpu_printf_rejects_format_specifiers.rs:4:5
+  |
+4 |     gpu_printf!("value={:x}", 7u32);
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this note originates in the macro `gpu_printf` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -1,0 +1,7 @@
+error: gpu_printf! requires a literal V1 format and at most two u32 values
+ --> tests/ui/fail/gpu_printf_requires_literal.rs:5:5
+  |
+5 |     gpu_printf!(format, 7u32);
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the macro `gpu_printf` (in Nightly builds, run with -Z macro-backtrace for more info)
