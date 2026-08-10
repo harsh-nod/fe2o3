@@ -1,0 +1,23 @@
+error[E0451]: fields `loaded`, `observed` and `retained` of struct `RecoveredWorkerV2ApplicationHandoffV1` are private
+  --> tests/ui/recovered_worker_v2_admission/application_handoff_fields_are_private.rs:10:9
+   |
+ 9 |     let RecoveredWorkerV2ApplicationHandoffV1 {
+   |         ------------------------------------- in this type
+10 |         loaded,
+   |         ^^^^^^ private field
+11 |         observed,
+   |         ^^^^^^^^ private field
+12 |         retained,
+   |         ^^^^^^^^ private field
+
+error: type `fe2o3_host::recovered_worker_v2_admission::RetainedApplicationStreamV1<'_>` is private
+  --> tests/ui/recovered_worker_v2_admission/application_handoff_fields_are_private.rs:12:9
+   |
+12 |         retained,
+   |         ^^^^^^^^ private type
+
+error: type `fe2o3_host::recovered_worker_v2_admission::RetainedApplicationStreamV1<'_>` is private
+  --> tests/ui/recovered_worker_v2_admission/application_handoff_fields_are_private.rs:14:13
+   |
+14 |     let _ = (loaded, observed, retained);
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ private type

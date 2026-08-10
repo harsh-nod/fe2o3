@@ -1,0 +1,8 @@
+error: lifetime may not live long enough
+  --> tests/ui/recovered_worker_v2_admission/application_handoff_cannot_escape_stream.rs:11:5
+   |
+ 6 |     authority: RecoveredWorkerV2ApplicationHandoffV1<'_, K, A>,
+   |     --------- has type `RecoveredWorkerV2ApplicationHandoffV1<'1, K, A>`
+...
+11 |     authority
+   |     ^^^^^^^^^ returning this value requires that `'1` must outlive `'static`

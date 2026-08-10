@@ -1,0 +1,5 @@
+error[E0599]: no method named `exact_hsaco_bytes` found for reference `&RecoveredWorkerV2ApplicationHandoffV1<'_, K, A>` in the current scope
+ --> tests/ui/recovered_worker_v2_admission/application_handoff_has_no_exact_bytes.rs:9:23
+  |
+9 |     let _ = authority.exact_hsaco_bytes();
+  |                       ^^^^^^^^^^^^^^^^^ method not found in `&RecoveredWorkerV2ApplicationHandoffV1<'_, K, A>`
