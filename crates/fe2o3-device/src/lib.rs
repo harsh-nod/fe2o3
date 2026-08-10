@@ -16,6 +16,7 @@ use core::marker::PhantomData;
 
 pub mod atomic;
 pub mod collective;
+pub mod diagnostics;
 pub mod ffi;
 pub mod fp8;
 pub mod group;
@@ -36,6 +37,7 @@ pub use collective::{
     MAX_GFX942_WORKGROUP_COLLECTIVE_SIZE, WorkgroupCollectiveScratch,
     WorkgroupCollectiveScratchError,
 };
+pub use diagnostics::{clock32, debugtrap, trap};
 pub use fe2o3_macros::{device_export, device_import, import_device, import_kernel, kernel};
 pub use ffi::{
     DeviceConstantPtr, DeviceFfiAbiTypeV1, DeviceGlobalConstPtr, DeviceGlobalMutPtr,
@@ -74,6 +76,101 @@ pub use views::{
     StaticViewMut,
 };
 pub use wave::{Wave32, Wave64, WaveLane, WaveWidth};
+
+/// Executes one operation from the closed, typed gfx942 vector-ALU allowlist.
+#[macro_export]
+macro_rules! amdgpu_asm {
+    (v_mov_b32($value:expr)) => {
+        $crate::diagnostics::__amdgpu_v_mov_b32_v1($value)
+    };
+    (v_add_u32($lhs:expr, $rhs:expr)) => {
+        $crate::diagnostics::__amdgpu_v_add_u32_v1($lhs, $rhs)
+    };
+    (v_sub_u32($lhs:expr, $rhs:expr)) => {
+        $crate::diagnostics::__amdgpu_v_sub_u32_v1($lhs, $rhs)
+    };
+    (v_and_b32($lhs:expr, $rhs:expr)) => {
+        $crate::diagnostics::__amdgpu_v_and_b32_v1($lhs, $rhs)
+    };
+    (v_or_b32($lhs:expr, $rhs:expr)) => {
+        $crate::diagnostics::__amdgpu_v_or_b32_v1($lhs, $rhs)
+    };
+    (v_xor_b32($lhs:expr, $rhs:expr)) => {
+        $crate::diagnostics::__amdgpu_v_xor_b32_v1($lhs, $rhs)
+    };
+    ($($unsupported:tt)*) => {
+        compile_error!("unsupported amdgpu_asm! operation; use the typed gfx942 V1 allowlist")
+    };
+}
+
+/// Emits one bounded diagnostic-format event with at most two `u32` values.
+#[macro_export]
+macro_rules! gpu_printf {
+    ($format:literal $(,)?) => {{
+        const FORMAT_ID: u32 = match $crate::diagnostics::__checked_format_id_v1($format, 0) {
+            Some(id) => id,
+            None => panic!("gpu_printf! format is outside the bounded V1 grammar"),
+        };
+        $crate::diagnostics::__gpu_printf_0_v1(FORMAT_ID)
+    }};
+    ($format:literal, $value0:expr $(,)?) => {{
+        const FORMAT_ID: u32 = match $crate::diagnostics::__checked_format_id_v1($format, 1) {
+            Some(id) => id,
+            None => panic!("gpu_printf! format is outside the bounded V1 grammar"),
+        };
+        $crate::diagnostics::__gpu_printf_1_v1(FORMAT_ID, $value0)
+    }};
+    ($format:literal, $value0:expr, $value1:expr $(,)?) => {{
+        const FORMAT_ID: u32 = match $crate::diagnostics::__checked_format_id_v1($format, 2) {
+            Some(id) => id,
+            None => panic!("gpu_printf! format is outside the bounded V1 grammar"),
+        };
+        $crate::diagnostics::__gpu_printf_2_v1(FORMAT_ID, $value0, $value1)
+    }};
+    ($($unsupported:tt)*) => {
+        compile_error!("gpu_printf! requires a literal V1 format and at most two u32 values")
+    };
+}
+
+/// Traps without unwinding when a device assertion fails.
+#[macro_export]
+macro_rules! gpu_assert {
+    ($condition:expr $(,)?) => {{
+        if !$condition {
+            const SITE_ID: u32 =
+                $crate::diagnostics::__site_id_v1(concat!(file!(), ":", stringify!($condition)));
+            $crate::diagnostics::__gpu_assert_fail_v1(SITE_ID, line!())
+        }
+    }};
+    ($condition:expr, $message:literal $(,)?) => {{
+        const SITE_ID: u32 = match $crate::diagnostics::__checked_format_id_v1($message, 0) {
+            Some(id) => id,
+            None => panic!("gpu_assert! message is outside the bounded V1 grammar"),
+        };
+        if !$condition {
+            $crate::diagnostics::__gpu_assert_fail_v1(SITE_ID, line!())
+        }
+    }};
+    ($($unsupported:tt)*) => {
+        compile_error!("gpu_assert! accepts a condition and an optional literal message")
+    };
+}
+
+/// Emits a target-gated gfx942 profiling marker in the range `0..=65535`.
+#[macro_export]
+macro_rules! profiling_marker {
+    ($marker:literal $(,)?) => {{
+        const MARKER: u32 = $marker;
+        const _: () = assert!(
+            MARKER <= u16::MAX as u32,
+            "profiling marker exceeds V1 range"
+        );
+        $crate::diagnostics::__profiling_marker_v1(MARKER)
+    }};
+    ($($unsupported:tt)*) => {
+        compile_error!("profiling_marker! requires one u16-range integer literal")
+    };
+}
 
 /// Version of the type-level kernel marker contract emitted by [`kernel`].
 ///
