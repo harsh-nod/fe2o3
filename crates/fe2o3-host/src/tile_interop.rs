@@ -170,6 +170,10 @@ impl Gfx942Xor4Bf16TileLeaseV1<'_, '_> {
         GFX942_XOR4_BF16_TILE_ELEMENTS_V1
     }
 
+    pub const fn is_empty(&self) -> bool {
+        false
+    }
+
     pub const fn allocation_identity(&self) -> DeviceBufferIdentity {
         self.allocation_identity
     }

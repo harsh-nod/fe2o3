@@ -46,6 +46,5 @@ fn xor4_tile_round_trips_and_rejects_stream_substitution() {
             .unwrap()
             .unwrap();
     }
-    drop(lease);
     assert_eq!(tile.to_logical_bits(&stream).unwrap(), logical);
 }
