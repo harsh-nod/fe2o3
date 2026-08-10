@@ -50,6 +50,7 @@ macro_rules! digest_identity {
 digest_identity!(PhysicalMachineAnalyzerIdentityV1);
 digest_identity!(PhysicalMachineToolchainIdentityV1);
 digest_identity!(PhysicalMachineDescriptorIdentityV1);
+digest_identity!(PhysicalMachineExecutionChallengeV1);
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct PhysicalMachinePayloadIdentityV1 {
@@ -161,6 +162,7 @@ impl PhysicalMachineEffectRequestIdentityV1 {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PhysicalMachineEffectRequestV1 {
+    execution_challenge: PhysicalMachineExecutionChallengeV1,
     analyzer_identity: PhysicalMachineAnalyzerIdentityV1,
     toolchain_identity: PhysicalMachineToolchainIdentityV1,
     payload_identity: PhysicalMachinePayloadIdentityV1,
@@ -171,11 +173,17 @@ pub struct PhysicalMachineEffectRequestV1 {
 
 impl PhysicalMachineEffectRequestV1 {
     pub fn new(
+        execution_challenge: PhysicalMachineExecutionChallengeV1,
         analyzer_identity: PhysicalMachineAnalyzerIdentityV1,
         toolchain_identity: PhysicalMachineToolchainIdentityV1,
         payload: Vec<u8>,
         mut entries: Vec<PhysicalMachineEffectEntryRequestV1>,
     ) -> Result<Self, PhysicalMachineEffectRequestErrorV1> {
+        if execution_challenge.0 == [0; 32] {
+            return Err(PhysicalMachineEffectRequestErrorV1::ZeroIdentity(
+                "execution challenge",
+            ));
+        }
         if analyzer_identity.0 == [0; 32] {
             return Err(PhysicalMachineEffectRequestErrorV1::ZeroIdentity(
                 "analyzer",
@@ -210,6 +218,7 @@ impl PhysicalMachineEffectRequestV1 {
             byte_len: payload.len() as u64,
         };
         let mut result = Self {
+            execution_challenge,
             analyzer_identity,
             toolchain_identity,
             payload_identity,
@@ -219,6 +228,10 @@ impl PhysicalMachineEffectRequestV1 {
         };
         result.canonical_bytes = encode_request(&result)?;
         Ok(result)
+    }
+
+    pub const fn execution_challenge(&self) -> PhysicalMachineExecutionChallengeV1 {
+        self.execution_challenge
     }
 
     pub const fn analyzer_identity(&self) -> PhysicalMachineAnalyzerIdentityV1 {
@@ -372,6 +385,7 @@ impl PhysicalMachineEffectEvidenceIdentityV1 {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PhysicalMachineEffectEvidenceV1 {
+    execution_challenge: PhysicalMachineExecutionChallengeV1,
     request_identity: PhysicalMachineEffectRequestIdentityV1,
     payload_identity: PhysicalMachinePayloadIdentityV1,
     analyzer_identity: PhysicalMachineAnalyzerIdentityV1,
@@ -404,6 +418,10 @@ impl PhysicalMachineEffectEvidenceV1 {
 
     pub const fn request_identity(&self) -> PhysicalMachineEffectRequestIdentityV1 {
         self.request_identity
+    }
+
+    pub const fn execution_challenge(&self) -> PhysicalMachineExecutionChallengeV1 {
+        self.execution_challenge
     }
 
     pub const fn payload_identity(&self) -> PhysicalMachinePayloadIdentityV1 {
@@ -462,6 +480,11 @@ impl PhysicalMachineEffectEvidenceV1 {
     }
 }
 
+/// Runs the legacy descriptive worker protocol without authenticating execution.
+///
+/// The pathname and request identities are caller supplied, and this helper does
+/// not pin the executable, measure its runtime closure, or bound its lifetime.
+/// Use the authenticated machine-effect API for production evidence.
 pub fn analyze_gfx942_hsaco_with_worker_v1(
     worker: &Path,
     request: &PhysicalMachineEffectRequestV1,
@@ -506,6 +529,7 @@ fn encode_request(
     output.extend_from_slice(PHYSICAL_MACHINE_EFFECT_REQUEST_DOMAIN_V1);
     push_u32(&mut output, 0);
     push_u16(&mut output, PHYSICAL_MACHINE_EFFECT_SCHEMA_VERSION_V1);
+    output.extend_from_slice(&request.execution_challenge.0);
     output.extend_from_slice(&request.analyzer_identity.0);
     output.extend_from_slice(&request.toolchain_identity.0);
     output.extend_from_slice(&request.payload_identity.sha256);
@@ -541,6 +565,10 @@ fn decode_evidence_for(
     }
     if input.u16()? != PHYSICAL_MACHINE_EFFECT_SCHEMA_VERSION_V1 {
         return Err(PhysicalMachineEffectEvidenceErrorV1::UnsupportedVersion);
+    }
+    let execution_challenge = PhysicalMachineExecutionChallengeV1(input.array()?);
+    if execution_challenge != request.execution_challenge {
+        return Err(PhysicalMachineEffectEvidenceErrorV1::ExecutionChallengeMismatch);
     }
     let request_identity = PhysicalMachineEffectRequestIdentityV1 {
         sha256: input.array()?,
@@ -670,6 +698,7 @@ fn decode_evidence_for(
     validate_effects(request, &functions, &closures, &effects)?;
 
     Ok(PhysicalMachineEffectEvidenceV1 {
+        execution_challenge,
         request_identity,
         payload_identity,
         analyzer_identity,
@@ -934,6 +963,7 @@ pub enum PhysicalMachineEffectEvidenceErrorV1 {
     InvalidSymbol,
     LengthMismatch,
     UnsupportedVersion,
+    ExecutionChallengeMismatch,
     RequestIdentityMismatch,
     PayloadIdentityMismatch,
     AnalyzerIdentityMismatch,

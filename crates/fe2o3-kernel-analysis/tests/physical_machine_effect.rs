@@ -4,7 +4,8 @@ use fe2o3_kernel_analysis::{
     PhysicalMachineEffectBudgetV1, PhysicalMachineEffectEntryRequestV1,
     PhysicalMachineEffectEvidenceErrorV1, PhysicalMachineEffectEvidenceV1,
     PhysicalMachineEffectKindV1, PhysicalMachineEffectRequestErrorV1,
-    PhysicalMachineEffectRequestV1, PhysicalMachineTargetV1, PhysicalMachineToolchainIdentityV1,
+    PhysicalMachineEffectRequestV1, PhysicalMachineExecutionChallengeV1, PhysicalMachineTargetV1,
+    PhysicalMachineToolchainIdentityV1,
 };
 
 #[derive(Clone)]
@@ -40,6 +41,7 @@ fn request_with(
     entries: Vec<PhysicalMachineEffectEntryRequestV1>,
 ) -> PhysicalMachineEffectRequestV1 {
     PhysicalMachineEffectRequestV1::new(
+        PhysicalMachineExecutionChallengeV1::from_sha256_bytes([0x10; 32]),
         PhysicalMachineAnalyzerIdentityV1::from_sha256_bytes([0x11; 32]),
         PhysicalMachineToolchainIdentityV1::from_sha256_bytes([0x22; 32]),
         payload.to_vec(),
@@ -104,6 +106,7 @@ fn evidence(
     output.extend_from_slice(PHYSICAL_MACHINE_EFFECT_EVIDENCE_DOMAIN_V1);
     push_u32(&mut output, 0);
     push_u16(&mut output, PHYSICAL_MACHINE_EFFECT_SCHEMA_VERSION_V1);
+    output.extend_from_slice(&request.execution_challenge().as_bytes());
     output.extend_from_slice(&request.identity().sha256());
     push_u64(&mut output, request.identity().byte_len());
     output.extend_from_slice(&request.payload_identity().sha256());
@@ -179,6 +182,7 @@ fn canonical_record_binds_exact_payload_worker_target_graph_and_effects() {
     let decoded = PhysicalMachineEffectEvidenceV1::decode_canonical_for(&request, &bytes).unwrap();
 
     assert_eq!(decoded.schema_version(), 1);
+    assert_eq!(decoded.execution_challenge(), request.execution_challenge());
     assert_eq!(
         decoded.target(),
         PhysicalMachineTargetV1::Gfx942XnackMinusCov6
@@ -232,9 +236,9 @@ fn request_and_evidence_are_deterministic_golden_records() {
     assert_eq!(
         first.identity().sha256(),
         [
-            0xe5, 0x1b, 0xd5, 0x8e, 0x20, 0xef, 0x72, 0x3f, 0x52, 0xc7, 0x25, 0x64, 0xa7, 0xd3,
-            0x5f, 0x62, 0x3f, 0x4e, 0x8e, 0xa9, 0x66, 0x49, 0x4e, 0x26, 0xfe, 0xaf, 0xa7, 0x89,
-            0x24, 0xbe, 0x47, 0xa2,
+            0xea, 0xf2, 0xb7, 0xa7, 0x4f, 0xfb, 0xe2, 0x77, 0x0e, 0x1d, 0x0a, 0x96, 0xa9, 0xe9,
+            0x39, 0xc1, 0x04, 0x23, 0x8d, 0xf6, 0xbe, 0x72, 0xd0, 0x30, 0x79, 0x90, 0xbf, 0xfb,
+            0x63, 0xa1, 0xdb, 0xd9,
         ]
     );
 }
@@ -261,6 +265,7 @@ fn symbol_and_identity_substitution_fail_closed() {
         + 4
         + 2
         + 32
+        + 32
         + 8
         + 32
         + 8
@@ -277,7 +282,7 @@ fn symbol_and_identity_substitution_fail_closed() {
 
     let mut bytes = evidence(&request, &[alpha_function()], &effects());
     let analyzer_offset =
-        PHYSICAL_MACHINE_EFFECT_EVIDENCE_DOMAIN_V1.len() + 4 + 2 + 32 + 8 + 32 + 8;
+        PHYSICAL_MACHINE_EFFECT_EVIDENCE_DOMAIN_V1.len() + 4 + 2 + 32 + 32 + 8 + 32 + 8;
     bytes[analyzer_offset] ^= 1;
     assert_eq!(
         PhysicalMachineEffectEvidenceV1::decode_canonical_for(&request, &bytes),
@@ -328,6 +333,7 @@ fn slice_rejects_non_alpha_zeta_entries_and_reserved_identities() {
     );
     assert_eq!(
         PhysicalMachineEffectRequestV1::new(
+            PhysicalMachineExecutionChallengeV1::from_sha256_bytes([1; 32]),
             PhysicalMachineAnalyzerIdentityV1::from_sha256_bytes([0; 32]),
             PhysicalMachineToolchainIdentityV1::from_sha256_bytes([2; 32]),
             vec![1],
@@ -335,6 +341,18 @@ fn slice_rejects_non_alpha_zeta_entries_and_reserved_identities() {
         ),
         Err(PhysicalMachineEffectRequestErrorV1::ZeroIdentity(
             "analyzer"
+        ))
+    );
+    assert_eq!(
+        PhysicalMachineEffectRequestV1::new(
+            PhysicalMachineExecutionChallengeV1::from_sha256_bytes([0; 32]),
+            PhysicalMachineAnalyzerIdentityV1::from_sha256_bytes([1; 32]),
+            PhysicalMachineToolchainIdentityV1::from_sha256_bytes([2; 32]),
+            vec![1],
+            vec![entry("alpha", budget())],
+        ),
+        Err(PhysicalMachineEffectRequestErrorV1::ZeroIdentity(
+            "execution challenge"
         ))
     );
 }
