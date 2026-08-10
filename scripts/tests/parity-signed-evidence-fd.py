@@ -65,7 +65,7 @@ def test_verification_retains_authenticated_key_bytes() -> None:
             test_mode=True,
         )
         try:
-            EVIDENCE.verify_signed(forged, trust, "attestor")
+            EVIDENCE.verify_signed(temp, forged.name, trust, "attestor")
         except EVIDENCE.EvidenceError as error:
             assert "signature verification failed" in str(error)
         else:
@@ -82,9 +82,68 @@ def test_verification_retains_authenticated_key_bytes() -> None:
             repo=None,
             test_mode=True,
         )
-        EVIDENCE.verify_signed(authentic, trust, "attestor")
+        EVIDENCE.verify_signed(temp, authentic.name, trust, "attestor")
+
+
+def test_archive_snapshot_never_reopens_replaced_root_path() -> None:
+    with tempfile.TemporaryDirectory(prefix="fe2o3-archive-root-race-") as raw_temp:
+        temp = Path(raw_temp)
+        archive = temp / "archive"
+        archive.mkdir()
+        authentic = b"authenticated archive bytes\n"
+        (archive / "record.tsv").write_bytes(authentic)
+        with EVIDENCE.ArchiveSnapshot(
+            archive, require_immutable=False
+        ) as snapshot:
+            detached = temp / "authenticated-archive"
+            archive.rename(detached)
+            archive.mkdir()
+            (archive / "record.tsv").write_bytes(b"replacement bytes\n")
+
+            assert snapshot.read("record.tsv") == authentic
+            destination = temp / "copied.tsv"
+            snapshot.copy_to("record.tsv", destination)
+            assert destination.read_bytes() == authentic
+
+
+def test_archive_snapshot_detects_replaced_entry() -> None:
+    with tempfile.TemporaryDirectory(prefix="fe2o3-archive-entry-race-") as raw_temp:
+        archive = Path(raw_temp) / "archive"
+        archive.mkdir()
+        record = archive / "record.tsv"
+        record.write_bytes(b"authenticated archive bytes\n")
+        with EVIDENCE.ArchiveSnapshot(
+            archive, require_immutable=False
+        ) as snapshot:
+            replacement = archive / "replacement.tsv"
+            replacement.write_bytes(b"replacement bytes\n")
+            replacement.replace(record)
+            try:
+                snapshot.read("record.tsv")
+            except EVIDENCE.EvidenceError as error:
+                assert "changed after authentication" in str(error)
+            else:
+                raise AssertionError("replaced archive entry retained authenticated identity")
+
+
+def test_archive_snapshot_rejects_symlink_traversal() -> None:
+    with tempfile.TemporaryDirectory(prefix="fe2o3-archive-symlink-") as raw_temp:
+        temp = Path(raw_temp)
+        archive = temp / "archive"
+        archive.mkdir()
+        (temp / "outside.tsv").write_bytes(b"outside\n")
+        (archive / "record.tsv").symlink_to(temp / "outside.tsv")
+        try:
+            EVIDENCE.ArchiveSnapshot(archive, require_immutable=False)
+        except EVIDENCE.EvidenceError as error:
+            assert "archive contains a symlink" in str(error)
+        else:
+            raise AssertionError("archive snapshot followed a symlink")
 
 
 if __name__ == "__main__":
     test_verification_retains_authenticated_key_bytes()
-    print("signed parity retained-key adversarial tests passed")
+    test_archive_snapshot_never_reopens_replaced_root_path()
+    test_archive_snapshot_detects_replaced_entry()
+    test_archive_snapshot_rejects_symlink_traversal()
+    print("signed parity FD and retained-key adversarial tests passed")

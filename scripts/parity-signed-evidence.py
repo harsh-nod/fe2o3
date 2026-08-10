@@ -42,6 +42,10 @@ FS_IOC_GETFLAGS = 0x80086601
 FS_IMMUTABLE_FL = 0x00000010
 AT_FDCWD = -100
 RENAME_NOREPLACE = 1
+SYS_OPENAT2 = 437
+RESOLVE_NO_XDEV = 0x01
+RESOLVE_NO_SYMLINKS = 0x04
+RESOLVE_BENEATH = 0x08
 TRUST_POLICY_RELATIVE = Path("docs/parity-evidence/trust-policy-v2.tsv")
 TRUST_KEYS_RELATIVE = Path("docs/parity-evidence/trusted-keys")
 REQUIRED_METADATA = [
@@ -134,6 +138,277 @@ def resolve_real_directory(path: Path, label: str) -> Path:
     if not stat.S_ISDIR(info.st_mode) or path.is_symlink():
         fail(f"{label} must be a real directory")
     return path.resolve(strict=True)
+
+
+class OpenHow(ctypes.Structure):
+    _fields_ = [
+        ("flags", ctypes.c_uint64),
+        ("mode", ctypes.c_uint64),
+        ("resolve", ctypes.c_uint64),
+    ]
+
+
+@dataclass(frozen=True)
+class ArchiveFileIdentity:
+    device: int
+    inode: int
+    mode: int
+    links: int
+    size: int
+    modified_ns: int
+    changed_ns: int
+    digest: str
+
+
+class ArchiveSnapshot:
+    """One FD-anchored identity snapshot for an evidence archive."""
+
+    def __init__(self, root: Path, *, require_immutable: bool) -> None:
+        requested = root.absolute()
+        flags = os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW
+        try:
+            self.root_fd = os.open(requested, flags)
+        except OSError as error:
+            fail(f"evidence archive root must be a real directory: {error}")
+        self.root = requested.resolve(strict=True)
+        self.require_immutable = require_immutable
+        self.files: dict[str, int] = {}
+        self.identities: dict[str, ArchiveFileIdentity] = {}
+        self.directories: set[str] = set()
+        try:
+            root_info = os.fstat(self.root_fd)
+            if not stat.S_ISDIR(root_info.st_mode):
+                fail("evidence archive root must be a real directory")
+            if require_immutable and not immutable_flag_is_set_fd(self.root_fd):
+                fail("production evidence archive root is not Linux immutable")
+            self._scan_directory(self.root_fd, "", root_info.st_dev)
+            if not self.files:
+                fail("evidence archive is empty")
+        except BaseException:
+            self.close()
+            raise
+
+    def __enter__(self) -> ArchiveSnapshot:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+    def close(self) -> None:
+        for descriptor in self.files.values():
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        self.files.clear()
+        if getattr(self, "root_fd", -1) >= 0:
+            try:
+                os.close(self.root_fd)
+            except OSError:
+                pass
+            self.root_fd = -1
+
+    @staticmethod
+    def _openat2(parent_fd: int, name: str, flags: int) -> int:
+        how = OpenHow(
+            flags | os.O_CLOEXEC | os.O_NOFOLLOW,
+            0,
+            RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV,
+        )
+        libc = ctypes.CDLL(None, use_errno=True)
+        descriptor = libc.syscall(
+            SYS_OPENAT2,
+            parent_fd,
+            ctypes.c_char_p(os.fsencode(name)),
+            ctypes.byref(how),
+            ctypes.sizeof(how),
+        )
+        if descriptor < 0:
+            error = ctypes.get_errno()
+            if error == errno.ELOOP:
+                fail(f"archive contains a symlink: {name}")
+            fail(f"cannot securely open archive entry {name}: {os.strerror(error)}")
+        return descriptor
+
+    def _scan_directory(self, directory_fd: int, prefix: str, device: int) -> None:
+        try:
+            names = sorted(os.listdir(directory_fd))
+        except OSError as error:
+            fail(f"cannot enumerate archive directory {prefix or '.'}: {error}")
+        if len(self.files) + len(self.directories) + len(names) > MAX_ARCHIVE_FILES * 4:
+            fail("evidence archive exceeds the entry-count bound")
+        for name in names:
+            relative = f"{prefix}/{name}" if prefix else name
+            if not valid_relative(relative):
+                fail(f"invalid archive path: {relative}")
+            descriptor = self._openat2(
+                directory_fd, name, os.O_RDONLY | os.O_NONBLOCK
+            )
+            keep = False
+            try:
+                info = os.fstat(descriptor)
+                if info.st_dev != device:
+                    fail(f"archive entry crosses a filesystem boundary: {relative}")
+                if stat.S_ISDIR(info.st_mode):
+                    if self.require_immutable and not immutable_flag_is_set_fd(descriptor):
+                        fail(
+                            "production archive directory is not Linux immutable: "
+                            f"{relative}"
+                        )
+                    self.directories.add(relative)
+                    self._scan_directory(descriptor, relative, device)
+                    continue
+                if not stat.S_ISREG(info.st_mode):
+                    fail(f"archive contains a non-regular entry: {relative}")
+                if info.st_nlink != 1:
+                    fail(f"archive file has an unsafe link count: {relative}")
+                if len(self.files) >= MAX_ARCHIVE_FILES:
+                    fail("evidence archive exceeds the file-count bound")
+                if self.require_immutable and not immutable_flag_is_set_fd(descriptor):
+                    fail(f"production archive file is not Linux immutable: {relative}")
+                digest = sha256_fd(descriptor)
+                after = os.fstat(descriptor)
+                identity = archive_file_identity(after, digest)
+                if archive_file_identity(info, digest) != identity:
+                    fail(f"archive entry changed during scan: {relative}")
+                self.files[relative] = descriptor
+                self.identities[relative] = identity
+                keep = True
+            finally:
+                if not keep:
+                    os.close(descriptor)
+
+    @property
+    def records(self) -> dict[str, tuple[int, str]]:
+        return {
+            relative: (identity.size, identity.digest)
+            for relative, identity in self.identities.items()
+        }
+
+    def _descriptor(self, relative: str) -> int:
+        if not valid_relative(relative):
+            fail(f"invalid archive path: {relative}")
+        descriptor = self.files.get(relative)
+        if descriptor is None:
+            fail(f"archive entry is missing: {relative}")
+        return descriptor
+
+    def validate(self, relative: str) -> ArchiveFileIdentity:
+        descriptor = self._descriptor(relative)
+        expected = self.identities[relative]
+        before = os.fstat(descriptor)
+        digest = sha256_fd(descriptor)
+        after = os.fstat(descriptor)
+        actual = archive_file_identity(after, digest)
+        if archive_file_identity(before, digest) != actual or actual != expected:
+            fail(f"archive entry changed after authentication: {relative}")
+        if self.require_immutable and not immutable_flag_is_set_fd(descriptor):
+            fail(f"production archive file lost Linux immutable: {relative}")
+        return actual
+
+    def read(self, relative: str) -> bytes:
+        descriptor = self._descriptor(relative)
+        self.validate(relative)
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        chunks: list[bytes] = []
+        remaining = MAX_BYTES + 1
+        while remaining:
+            chunk = os.read(descriptor, min(1024 * 1024, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        value = b"".join(chunks)
+        self.validate(relative)
+        return value
+
+    def copy_to(self, relative: str, destination: Path) -> None:
+        descriptor = self._descriptor(relative)
+        expected = self.validate(relative)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        output_descriptor = os.open(
+            destination,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC,
+            0o400,
+        )
+        try:
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            digest = hashlib.sha256()
+            written = 0
+            while True:
+                chunk = os.read(descriptor, 1024 * 1024)
+                if not chunk:
+                    break
+                digest.update(chunk)
+                written += len(chunk)
+                view = memoryview(chunk)
+                while view:
+                    count = os.write(output_descriptor, view)
+                    view = view[count:]
+            os.fsync(output_descriptor)
+            copied = os.fstat(output_descriptor)
+            if (
+                not stat.S_ISREG(copied.st_mode)
+                or copied.st_nlink != 1
+                or copied.st_size != expected.size
+                or written != expected.size
+                or digest.hexdigest() != expected.digest
+            ):
+                fail(f"copied archive file identity mismatch: {relative}")
+        finally:
+            os.close(output_descriptor)
+        self.validate(relative)
+
+
+def archive_file_identity(info: os.stat_result, digest: str) -> ArchiveFileIdentity:
+    return ArchiveFileIdentity(
+        info.st_dev,
+        info.st_ino,
+        info.st_mode,
+        info.st_nlink,
+        info.st_size,
+        info.st_mtime_ns,
+        info.st_ctime_ns,
+        digest,
+    )
+
+
+def sha256_fd(descriptor: int) -> str:
+    digest = hashlib.sha256()
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    for chunk in iter(lambda: os.read(descriptor, 1024 * 1024), b""):
+        digest.update(chunk)
+    return digest.hexdigest()
+
+
+def immutable_flag_is_set_fd(descriptor: int) -> bool:
+    encoded = bytearray(4)
+    try:
+        fcntl.ioctl(descriptor, FS_IOC_GETFLAGS, encoded, True)
+    except OSError as error:
+        fail(f"cannot establish Linux immutable flag for archive FD: {error}")
+    return bool(int.from_bytes(encoded, sys.byteorder) & FS_IMMUTABLE_FL)
+
+
+ArchiveRoot = Path | ArchiveSnapshot
+
+
+def archive_root_path(root: ArchiveRoot) -> Path:
+    return root.root if isinstance(root, ArchiveSnapshot) else root.resolve(strict=True)
+
+
+def archive_read_raw(
+    root: ArchiveRoot, relative: str
+) -> tuple[bytes, list[bytes], list[list[str]]]:
+    if isinstance(root, ArchiveSnapshot):
+        return parse_raw_bytes(root.read(relative), f"{root.root}/{relative}")
+    return read_raw(archive_path(root, relative))
+
+
+def archive_digest(root: ArchiveRoot, relative: str) -> str:
+    if isinstance(root, ArchiveSnapshot):
+        return root.validate(relative).digest
+    return sha256_file(archive_path(root, relative))
 
 
 def archive_path(root: Path, relative: str, *, must_exist: bool = True) -> Path:
@@ -567,8 +842,11 @@ def check_protected_base(args: argparse.Namespace) -> None:
     print("protected base and candidate head are current and ancestry-bound")
 
 
-def verify_signed(path: Path, trust: TrustPolicy, role: str) -> tuple[list[list[str]], bytes, str]:
-    raw, raw_lines, rows = read_raw(path)
+def verify_signed(
+    root: ArchiveRoot, relative: str, trust: TrustPolicy, role: str
+) -> tuple[list[list[str]], bytes, str]:
+    raw, raw_lines, rows = archive_read_raw(root, relative)
+    path = archive_root_path(root).joinpath(relative)
     if len(rows) < 7:
         fail(f"signed payload is too short: {path}")
     trailer = rows[-6:]
@@ -699,9 +977,16 @@ def sign_payload(
         stream.write(f"signature_base64\t{encoded}\n".encode())
 
 
-def verify_bound_file(root: Path, path: str, size: str, digest: str, label: str) -> Path:
+def verify_bound_file(
+    root: ArchiveRoot, path: str, size: str, digest: str, label: str
+) -> Path:
     if not re.fullmatch(r"0|[1-9][0-9]*", size) or not SHA256_RE.fullmatch(digest):
         fail(f"invalid {label} size or digest")
+    if isinstance(root, ArchiveSnapshot):
+        identity = root.validate(path)
+        if identity.size != int(size) or identity.digest != digest:
+            fail(f"{label} digest mismatch: {path}")
+        return root.root.joinpath(path)
     absolute = archive_path(root, path)
     if absolute.stat().st_size != int(size) or sha256_file(absolute) != digest:
         fail(f"{label} digest mismatch: {path}")
@@ -829,15 +1114,14 @@ def parse_artifact_csv(value: str) -> list[tuple[str, str]]:
 
 def parse_queue(
     repo: Path,
-    root: Path,
+    root: ArchiveRoot,
     relative: str,
     trust: TrustPolicy,
     expected_digest: str | None = None,
     *,
     enforce_execution_root: bool = False,
 ) -> QueueRecord:
-    path = archive_path(root, relative)
-    rows, _, digest = verify_signed(path, trust, "attestor")
+    rows, _, digest = verify_signed(root, relative, trust, "attestor")
     if expected_digest is not None and digest != expected_digest:
         fail("signed queue manifest digest mismatch")
     cursor = Cursor(rows, "signed queue")
@@ -872,7 +1156,7 @@ def parse_queue(
     toolchain_count = parse_count(cursor.scalar("toolchain_count"), "toolchain", allow_zero=False)
     if execution_closure != "inert":
         fail("shell queue execution closure must remain inert")
-    if enforce_execution_root and archive_root_text != str(root.resolve(strict=True)):
+    if enforce_execution_root and archive_root_text != str(archive_root_path(root)):
         fail("signed queue archive root does not match execution root")
     if not {"bash", "timeout"} <= {label for label, _, _, _ in executors}:
         fail("signed queue lacks required absolute executors")
@@ -1003,13 +1287,12 @@ class ResultRecord:
 
 def parse_result(
     repo: Path,
-    root: Path,
+    root: ArchiveRoot,
     relative: str,
     trust: TrustPolicy,
     expected_digest: str | None = None,
 ) -> ResultRecord:
-    path = archive_path(root, relative)
-    rows, _, digest = verify_signed(path, trust, "attestor")
+    rows, _, digest = verify_signed(root, relative, trust, "attestor")
     if expected_digest is not None and digest != expected_digest:
         fail(f"signed result digest mismatch: {relative}")
     cursor = Cursor(rows, "signed result")
@@ -1196,13 +1479,12 @@ class Authorization:
 
 def parse_authorization(
     repo: Path,
-    root: Path,
+    root: ArchiveRoot,
     relative: str,
     expected_digest: str,
     trust: TrustPolicy,
 ) -> Authorization:
-    path = archive_path(root, relative)
-    rows, _, digest = verify_signed(path, trust, "reviewer")
+    rows, _, digest = verify_signed(root, relative, trust, "reviewer")
     if digest != expected_digest:
         fail("review authorization digest mismatch")
     cursor = Cursor(rows, "review authorization")
@@ -1263,7 +1545,7 @@ class PromotionManifest:
 
 def promotion_archive_closure(
     repo: Path,
-    root: Path,
+    root: ArchiveRoot,
     manifest_relative: str,
     manifest: PromotionManifest,
     trust: TrustPolicy,
@@ -1310,12 +1592,11 @@ def promotion_archive_closure(
 
 def parse_manifest(
     repo: Path,
-    root: Path,
+    root: ArchiveRoot,
     relative: str,
     trust: TrustPolicy,
 ) -> PromotionManifest:
-    path = archive_path(root, relative)
-    _, raw_lines, rows = read_raw(path)
+    _, raw_lines, rows = archive_read_raw(root, relative)
     cursor = Cursor(rows, "promotion manifest")
     if cursor.scalar("promotion_manifest_schema_version") != "2":
         fail("promotion manifest schema must be 2")
@@ -1420,56 +1701,8 @@ def parse_manifest(
     )
 
 
-def immutable_flag_is_set(path: Path) -> bool:
-    flags = os.O_RDONLY | os.O_CLOEXEC
-    if path.is_dir() and hasattr(os, "O_DIRECTORY"):
-        flags |= os.O_DIRECTORY
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    try:
-        descriptor = os.open(path, flags)
-        encoded = bytearray(4)
-        fcntl.ioctl(descriptor, FS_IOC_GETFLAGS, encoded, True)
-    except OSError as error:
-        fail(f"cannot establish Linux immutable flag for archive entry {path}: {error}")
-    finally:
-        if "descriptor" in locals():
-            os.close(descriptor)
-    return bool(int.from_bytes(encoded, sys.byteorder) & FS_IMMUTABLE_FL)
-
-
-def scan_archive(root: Path, *, require_immutable: bool) -> dict[str, tuple[int, str]]:
-    root = resolve_real_directory(root, "evidence archive root")
-    root_info = root.lstat()
-    if not stat.S_ISDIR(root_info.st_mode):
-        fail("evidence archive root must be a real directory")
-    if require_immutable and not immutable_flag_is_set(root):
-        fail("production evidence archive root is not Linux immutable")
-    records: dict[str, tuple[int, str]] = {}
-    for path in sorted(root.rglob("*")):
-        relative = path.relative_to(root).as_posix()
-        try:
-            info = path.lstat()
-        except OSError:
-            fail(f"archive entry disappeared during scan: {relative}")
-        if stat.S_ISLNK(info.st_mode):
-            fail(f"archive contains a symlink: {relative}")
-        if stat.S_ISDIR(info.st_mode):
-            if require_immutable and not immutable_flag_is_set(path):
-                fail(f"production archive directory is not Linux immutable: {relative}")
-            continue
-        if not stat.S_ISREG(info.st_mode):
-            fail(f"archive contains a non-regular entry: {relative}")
-        if info.st_nlink != 1:
-            fail(f"archive file has an unsafe link count: {relative}")
-        if len(records) >= MAX_ARCHIVE_FILES:
-            fail("evidence archive exceeds the file-count bound")
-        if require_immutable and not immutable_flag_is_set(path):
-            fail(f"production archive file is not Linux immutable: {relative}")
-        records[relative] = (info.st_size, sha256_file(path))
-    if not records:
-        fail("evidence archive is empty")
-    return records
+def scan_archive(root: Path, *, require_immutable: bool) -> ArchiveSnapshot:
+    return ArchiveSnapshot(root, require_immutable=require_immutable)
 
 
 def expected_archive_directories(paths: set[str]) -> set[str]:
@@ -1482,7 +1715,9 @@ def expected_archive_directories(paths: set[str]) -> set[str]:
     return output
 
 
-def actual_archive_directories(root: Path) -> set[str]:
+def actual_archive_directories(root: ArchiveRoot) -> set[str]:
+    if isinstance(root, ArchiveSnapshot):
+        return set(root.directories)
     root = root.resolve(strict=True)
     return {
         path.relative_to(root).as_posix()
@@ -1516,15 +1751,21 @@ def archive_index_bytes(
 
 def verify_archive_index(
     repo: Path,
-    root: Path,
+    root: ArchiveRoot,
     manifest_relative: str,
     manifest: PromotionManifest,
     trust: TrustPolicy,
 ) -> None:
+    if not isinstance(root, ArchiveSnapshot):
+        with ArchiveSnapshot(root, require_immutable=False) as snapshot:
+            verify_archive_index(
+                repo, snapshot, manifest_relative, manifest, trust
+            )
+        return
     closure = promotion_archive_closure(
         repo, root, manifest_relative, manifest, trust
     )
-    actual = scan_archive(root, require_immutable=False)
+    actual = root.records
     expected_paths = closure | {ARCHIVE_INDEX_RELATIVE}
     if set(actual) != expected_paths:
         missing = sorted(expected_paths - set(actual))
@@ -1538,14 +1779,13 @@ def verify_archive_index(
             f"missing={sorted(expected_directories - actual_directories)} "
             f"extra={sorted(actual_directories - expected_directories)}"
         )
-    index = archive_path(root, ARCHIVE_INDEX_RELATIVE)
-    _, _, rows = read_raw(index)
+    _, _, rows = archive_read_raw(root, ARCHIVE_INDEX_RELATIVE)
     cursor = Cursor(rows, "archive index")
     if cursor.scalar("parity_archive_index_schema_version") != "1":
         fail("archive index schema must be 1")
     if cursor.scalar("manifest_path") != manifest_relative:
         fail("archive index manifest path mismatch")
-    manifest_digest = sha256_file(archive_path(root, manifest_relative))
+    manifest_digest = archive_digest(root, manifest_relative)
     if cursor.scalar("manifest_sha256") != manifest_digest:
         fail("archive index manifest digest mismatch")
     if cursor.scalar("baseline_commit") != manifest.baseline:
@@ -1584,39 +1824,6 @@ def verify_archive_index(
         fail("archive index file identity mismatch")
 
 
-def copy_archive_file(source: Path, destination: Path, expected: tuple[int, str]) -> None:
-    flags = os.O_RDONLY | os.O_CLOEXEC
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    descriptor = os.open(source, flags)
-    try:
-        before = os.fstat(descriptor)
-        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
-            fail(f"unsafe source archive file during copy: {source}")
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        output_descriptor = os.open(
-            destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o400
-        )
-        with os.fdopen(output_descriptor, "wb") as output, os.fdopen(
-            os.dup(descriptor), "rb"
-        ) as input_stream:
-            shutil.copyfileobj(input_stream, output, length=1024 * 1024)
-            output.flush()
-            os.fsync(output.fileno())
-        after = os.fstat(descriptor)
-        if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
-            after.st_dev,
-            after.st_ino,
-            after.st_size,
-            after.st_mtime_ns,
-        ):
-            fail(f"source archive file changed during copy: {source}")
-    finally:
-        os.close(descriptor)
-    if destination.stat().st_size != expected[0] or sha256_file(destination) != expected[1]:
-        fail(f"copied archive file identity mismatch: {source}")
-
-
 def rename_noreplace(source: Path, destination: Path) -> None:
     libc = ctypes.CDLL(None, use_errno=True)
     try:
@@ -1645,20 +1852,25 @@ def rename_noreplace(source: Path, destination: Path) -> None:
 
 
 def ingest_archive(args: argparse.Namespace) -> None:
+    with scan_archive(
+        args.source_root, require_immutable=not args.allow_test_fixtures
+    ) as source_root:
+        ingest_archive_snapshot(args, source_root)
+
+
+def ingest_archive_snapshot(
+    args: argparse.Namespace, source_root: ArchiveSnapshot
+) -> None:
     repo = args.repo.resolve(strict=True)
     trust = parse_trust_policy(args.trusted_root, args.trust_policy)
     if not args.allow_test_fixtures:
         if trust.domain != "production":
             fail("production archive ingestion requires a production trust domain")
         trust = validate_production_trust(args.trusted_root, args.trust_policy)
-    source_records = scan_archive(
-        args.source_root, require_immutable=not args.allow_test_fixtures
-    )
-    source_root = args.source_root.resolve(strict=True)
+    source_records = source_root.records
     if not SHA256_RE.fullmatch(args.expected_manifest_sha256):
         fail("malformed expected promotion manifest digest")
-    manifest_path = archive_path(source_root, args.manifest)
-    if sha256_file(manifest_path) != args.expected_manifest_sha256:
+    if archive_digest(source_root, args.manifest) != args.expected_manifest_sha256:
         fail("promotion manifest does not match the operator-pinned digest")
     manifest = parse_manifest(repo, source_root, args.manifest, trust)
     if (
@@ -1697,11 +1909,7 @@ def ingest_archive(args: argparse.Namespace) -> None:
     staging = Path(tempfile.mkdtemp(prefix=".fe2o3-archive-", dir=parent))
     try:
         for relative in sorted(closure):
-            copy_archive_file(
-                archive_path(source_root, relative),
-                staging.joinpath(relative),
-                source_records[relative],
-            )
+            source_root.copy_to(relative, staging.joinpath(relative))
         index = staging.joinpath(ARCHIVE_INDEX_RELATIVE)
         index.write_bytes(
             archive_index_bytes(
@@ -1712,8 +1920,9 @@ def ingest_archive(args: argparse.Namespace) -> None:
             )
         )
         index.chmod(0o444)
-        copied_manifest = parse_manifest(repo, staging, args.manifest, trust)
-        verify_archive_index(repo, staging, args.manifest, copied_manifest, trust)
+        with ArchiveSnapshot(staging, require_immutable=False) as copied:
+            copied_manifest = parse_manifest(repo, copied, args.manifest, trust)
+            verify_archive_index(repo, copied, args.manifest, copied_manifest, trust)
         for path in sorted(staging.rglob("*"), reverse=True):
             path.chmod(0o555 if path.is_dir() else 0o444)
         staging.chmod(0o555)
@@ -1865,8 +2074,12 @@ def metadata_delta_is_allowed(repo: Path, source: str, trust: TrustPolicy) -> No
 
 
 def gate(args: argparse.Namespace) -> None:
+    with ArchiveSnapshot(args.archive_root, require_immutable=False) as root:
+        gate_snapshot(args, root)
+
+
+def gate_snapshot(args: argparse.Namespace, root: ArchiveSnapshot) -> None:
     repo = args.repo.resolve(strict=True)
-    root = resolve_real_directory(args.archive_root, "evidence archive root")
     trust = parse_trust_policy(args.trusted_root, args.trust_policy)
     if not args.allow_test_fixtures:
         if trust.domain != "production":
@@ -2311,52 +2524,47 @@ def main() -> None:
             if trust.domain != "production":
                 fail("production archive validation requires a production trust domain")
             trust = validate_production_trust(args.trusted_root, args.trust_policy)
-        root = resolve_real_directory(args.archive_root, "evidence archive root")
-        manifest = parse_manifest(
-            args.repo.resolve(strict=True), root, args.manifest, trust
-        )
-        verify_archive_index(
-            args.repo.resolve(strict=True), root, args.manifest, manifest, trust
-        )
+        with ArchiveSnapshot(args.archive_root, require_immutable=False) as root:
+            manifest = parse_manifest(
+                args.repo.resolve(strict=True), root, args.manifest, trust
+            )
+            verify_archive_index(
+                args.repo.resolve(strict=True), root, args.manifest, manifest, trust
+            )
         print(f"signed evidence archive is closed: {len(manifest.results)} result(s)")
     elif args.command == "check-protected-base":
         check_protected_base(args)
     elif args.command == "validate-result":
         trust = parse_trust_policy(args.trusted_root, args.trust_policy)
-        result = parse_result(
-            args.repo.resolve(strict=True),
-            resolve_real_directory(args.archive_root, "evidence archive root"),
-            args.record,
-            trust,
-        )
+        with ArchiveSnapshot(args.archive_root, require_immutable=False) as root:
+            result = parse_result(
+                args.repo.resolve(strict=True), root, args.record, trust
+            )
         print(f"signed result is valid: {result.result_id}")
     elif args.command == "validate-queue":
         trust = parse_trust_policy(args.trusted_root, args.trust_policy)
-        queue = parse_queue(
-            args.repo.resolve(strict=True),
-            resolve_real_directory(args.archive_root, "evidence archive root"),
-            args.manifest,
-            trust,
-            enforce_execution_root=True,
-        )
+        with ArchiveSnapshot(args.archive_root, require_immutable=False) as root:
+            queue = parse_queue(
+                args.repo.resolve(strict=True),
+                root,
+                args.manifest,
+                trust,
+                enforce_execution_root=True,
+            )
         print(f"signed MI300X queue is valid: {len(queue.jobs)} job(s)")
     elif args.command == "validate-manifest":
         trust = parse_trust_policy(args.trusted_root, args.trust_policy)
-        manifest = parse_manifest(
-            args.repo.resolve(strict=True),
-            resolve_real_directory(args.archive_root, "evidence archive root"),
-            args.manifest,
-            trust,
-        )
+        with ArchiveSnapshot(args.archive_root, require_immutable=False) as root:
+            manifest = parse_manifest(
+                args.repo.resolve(strict=True), root, args.manifest, trust
+            )
         print(f"signed promotion manifest is valid: {len(manifest.results)} result(s)")
     elif args.command == "validate-shard":
         trust = parse_trust_policy(args.trusted_root, args.trust_policy)
-        manifest = parse_manifest(
-            args.repo.resolve(strict=True),
-            resolve_real_directory(args.archive_root, "evidence archive root"),
-            args.manifest,
-            trust,
-        )
+        with ArchiveSnapshot(args.archive_root, require_immutable=False) as root:
+            manifest = parse_manifest(
+                args.repo.resolve(strict=True), root, args.manifest, trust
+            )
         requested = args.row
         if len(requested) != len(set(requested)) or any(
             not valid_row(row) for row in requested
