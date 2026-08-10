@@ -55,7 +55,7 @@ rg -Fq '3,359-byte length' "${PILOT_DOC}"
 rg -Fq '73c1ff5e2f29d245c8071bdb6c1a38af1c9ee1573b78d47a987633483b37e084' \
   "${PILOT_DOC}"
 [[ ! -e "${WORKFLOW}" ]]
-git diff --quiet -- .github/CODEOWNERS
+git -C "${ROOT}" diff --quiet -- .github/CODEOWNERS
 rg -q $'^supplemental\tS09\tMissing$' "${ROOT}/docs/cuda-oxide-parity-status.tsv"
 
 printf 'S09 non-authoritative local pilot guards passed\n'
