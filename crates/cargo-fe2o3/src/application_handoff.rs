@@ -1,31 +1,41 @@
 //! Descriptor-only Cargo-to-application handoff for canonical Worker V2 evidence.
+//!
+//! ACK bytes are child-visible protocol completion, not authentication or authority. The runner's
+//! non-clone current-publication lease and pinned descriptors remain the authority-bearing state.
 
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
-use std::os::fd::{AsRawFd, BorrowedFd, RawFd};
+use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, RawFd};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command, ExitStatus};
+use std::time::{Duration, Instant};
 
-use fe2o3_artifact_transaction::reacquire_current_hsaco_publication_lease_v1;
-use fe2o3_worker_v2_bundle::{MAX_WORKER_V2_LOAD_ENVELOPE_BYTES, WorkerV2LoadEnvelopeV1};
+use fe2o3_artifact_transaction::{
+    DurableCurrentLinkPublicationLeaseV1, reacquire_current_hsaco_publication_lease_v1,
+};
+use fe2o3_worker_v2_bundle::{
+    MAX_WORKER_V2_LOAD_ENVELOPE_BYTES, WORKER_V2_APPLICATION_ARTIFACT_DIR_FD_ENV_V1,
+    WORKER_V2_APPLICATION_ENVELOPE_FD_ENV_V1, WORKER_V2_APPLICATION_HANDOFF_ACK_BYTES_V1,
+    WORKER_V2_APPLICATION_HANDOFF_ACK_FD_ENV_V1, WORKER_V2_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
+    WORKER_V2_APPLICATION_HANDOFF_COMMITMENT_ENV_V1, WorkerV2ApplicationHandoffAckV1,
+    WorkerV2ApplicationHandoffChallengeV1, WorkerV2ApplicationHandoffExpectationV1,
+    WorkerV2ApplicationIdentityV1, WorkerV2LoadEnvelopeV1,
+};
 use rustix::fs::{AtFlags, FileType, Mode, OFlags, ResolveFlags, fstat, openat2, statat};
-use sha2::{Digest, Sha256};
 
 use crate::generation;
 use crate::project::PinnedDirectory;
 
-pub(crate) const RUNNER_CONTEXT_VERSION: &str = "2";
-pub(crate) const ENVELOPE_FD_ENV: &str = "FE2O3_APPLICATION_ENVELOPE_FD_V1";
-pub(crate) const COMMITMENT_ENV: &str = "FE2O3_APPLICATION_ENVELOPE_COMMITMENT_V1";
-pub(crate) const APPLICATION_PROTOCOL_MARKER: &[u8] =
-    b"FE2O3-APPLICATION-WORKER-V2-ENVELOPE-FD-V1\0";
+pub(crate) const RUNNER_CONTEXT_VERSION: &str = "3";
+pub(crate) const RUNNER_EXPECTS_ENVELOPE: &str = "required";
+pub(crate) const RUNNER_EXPECTS_NO_ENVELOPE: &str = "none";
 
 const ENVELOPE_PREFIX: &[u8] = b".fe2o3-worker-v2-load-envelope-v1-";
 const ENVELOPE_SUFFIX: &[u8] = b".envelope";
 const ENVELOPE_NAME_BYTES: usize = ENVELOPE_PREFIX.len() + 64 + ENVELOPE_SUFFIX.len();
 const MAX_ENVELOPE_CANDIDATES: usize = 256;
-const COMMITMENT_DOMAIN: &[u8] = b"FE2O3/APPLICATION-WORKER-V2-HANDOFF/V1\0";
+const ACK_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct FileSnapshot {
@@ -89,6 +99,8 @@ pub(crate) struct PinnedApplicationEnvelope<'directory> {
     snapshot: FileSnapshot,
     exact_bytes: Vec<u8>,
     envelope: WorkerV2LoadEnvelopeV1,
+    artifact_directory_file: File,
+    current_lease: Option<DurableCurrentLinkPublicationLeaseV1>,
 }
 
 impl<'directory> PinnedApplicationEnvelope<'directory> {
@@ -103,9 +115,9 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
         let mut rejected = Vec::new();
         for name in names {
             let candidate = Self::open(directory, name)?;
-            match candidate.reacquire_current() {
-                Ok(()) if current.is_none() => current = Some(candidate),
-                Ok(()) => {
+            match candidate.retain_current_lease() {
+                Ok(candidate) if current.is_none() => current = Some(candidate),
+                Ok(_) => {
                     return Err(
                         "multiple canonical Worker V2 envelopes claim the current publication"
                             .to_string(),
@@ -182,6 +194,7 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
         }
         file.seek(SeekFrom::Start(0))
             .map_err(|error| format!("failed to rewind canonical Worker V2 envelope: {error}"))?;
+        let artifact_directory_file = directory.try_clone_for_transfer()?;
         Ok(Self {
             directory,
             name,
@@ -189,16 +202,29 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
             snapshot,
             exact_bytes,
             envelope,
+            artifact_directory_file,
+            current_lease: None,
         })
     }
 
-    fn reacquire_current(&self) -> Result<(), String> {
+    fn retain_current_lease(mut self) -> Result<Self, String> {
         let lease = reacquire_current_hsaco_publication_lease_v1(
             &self.directory.child_path(),
             self.envelope.published_claim(),
         )
         .map_err(|error| format!("{}: {error}", self.name))?;
-        drop(lease);
+        self.current_lease = Some(lease);
+        Ok(self)
+    }
+
+    pub(crate) fn validate_retained_currentness(&self) -> Result<(), String> {
+        let lease = self.current_lease.as_ref().ok_or_else(|| {
+            "application envelope has no retained current-publication lease".to_string()
+        })?;
+        let token = lease.acquire_current_token().map_err(|error| {
+            format!("retained application publication is no longer current: {error}")
+        })?;
+        drop(token);
         Ok(())
     }
 
@@ -222,7 +248,7 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
         if decoded != self.envelope || decoded.to_bytes() != bytes {
             return Err("inherited Worker V2 envelope identity changed".to_string());
         }
-        self.reacquire_current()?;
+        self.validate_retained_currentness()?;
         self.directory
             .validate_path("Cargo application artifact directory")?;
         self.file
@@ -235,20 +261,59 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
         &mut self,
         command: &mut Command,
         child_sha256: [u8; 32],
-    ) -> Result<[u8; 32], String> {
+    ) -> Result<PendingApplicationAck, String> {
         self.revalidate()?;
-        reject_inheritable_descriptors()?;
-        let commitment = application_commitment(&self.envelope, child_sha256);
-        let raw_fd = self.file.as_raw_fd();
+        let application = WorkerV2ApplicationIdentityV1::from_bytes(child_sha256);
+        let expectation = WorkerV2ApplicationHandoffExpectationV1::new(&self.envelope, application);
+        let challenge = random_challenge()?;
+        ensure_child_subreaper()?;
+        let (ack_read, ack_write) = cloexec_pipe()?;
+        let envelope_fd = self.file.as_raw_fd();
+        let artifact_directory_fd = self.artifact_directory_file.as_raw_fd();
+        let ack_fd = ack_write.as_raw_fd();
         let expected = self.snapshot;
         command
-            .env(ENVELOPE_FD_ENV, raw_fd.to_string())
-            .env(COMMITMENT_ENV, hex(&commitment));
-        // SAFETY: `self.file` remains alive through spawn. The callback only inspects that exact
-        // inherited descriptor and clears CLOEXEC in the child-side descriptor table.
+            .env(
+                WORKER_V2_APPLICATION_ENVELOPE_FD_ENV_V1,
+                envelope_fd.to_string(),
+            )
+            .env(
+                WORKER_V2_APPLICATION_ARTIFACT_DIR_FD_ENV_V1,
+                artifact_directory_fd.to_string(),
+            )
+            .env(
+                WORKER_V2_APPLICATION_HANDOFF_COMMITMENT_ENV_V1,
+                expectation.commitment().to_hex(),
+            )
+            .env(
+                WORKER_V2_APPLICATION_HANDOFF_ACK_FD_ENV_V1,
+                ack_fd.to_string(),
+            )
+            .env(
+                WORKER_V2_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
+                challenge.to_hex(),
+            );
+        let directory_stat = fstat(&self.artifact_directory_file)
+            .map_err(|error| format!("failed to inspect inherited artifact directory: {error}"))?;
+        let directory_device = directory_stat.st_dev;
+        let directory_inode = directory_stat.st_ino;
+        // SAFETY: all three owning `File`s remain alive through spawn. The callback validates the
+        // exact evidence and ACK descriptors before clearing only their child-side CLOEXEC flags.
         unsafe {
             command.pre_exec(move || {
-                let descriptor = BorrowedFd::borrow_raw(raw_fd);
+                if libc::setpgid(0, 0) != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                if libc::syscall(
+                    libc::SYS_close_range,
+                    3_u32,
+                    u32::MAX,
+                    libc::CLOSE_RANGE_CLOEXEC,
+                ) != 0
+                {
+                    return Err(io::Error::last_os_error());
+                }
+                let descriptor = BorrowedFd::borrow_raw(envelope_fd);
                 let flags = rustix::io::fcntl_getfd(descriptor).map_err(io::Error::from)?;
                 let status = rustix::fs::fcntl_getfl(descriptor).map_err(io::Error::from)?;
                 let stat = fstat(descriptor).map_err(io::Error::from)?;
@@ -258,11 +323,246 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
                 {
                     return Err(io::Error::from_raw_os_error(libc::ESTALE));
                 }
-                rustix::io::fcntl_setfd(descriptor, rustix::io::FdFlags::empty())
-                    .map_err(io::Error::from)
+                let directory = BorrowedFd::borrow_raw(artifact_directory_fd);
+                let directory_flags =
+                    rustix::io::fcntl_getfd(directory).map_err(io::Error::from)?;
+                let directory_status =
+                    rustix::fs::fcntl_getfl(directory).map_err(io::Error::from)?;
+                let current_directory = fstat(directory).map_err(io::Error::from)?;
+                if !directory_flags.contains(rustix::io::FdFlags::CLOEXEC)
+                    || directory_status & OFlags::ACCMODE != OFlags::RDONLY
+                    || FileType::from_raw_mode(current_directory.st_mode) != FileType::Directory
+                    || current_directory.st_dev != directory_device
+                    || current_directory.st_ino != directory_inode
+                {
+                    return Err(io::Error::from_raw_os_error(libc::ESTALE));
+                }
+                let ack = BorrowedFd::borrow_raw(ack_fd);
+                let ack_flags = rustix::io::fcntl_getfd(ack).map_err(io::Error::from)?;
+                let ack_status = rustix::fs::fcntl_getfl(ack).map_err(io::Error::from)?;
+                if !ack_flags.contains(rustix::io::FdFlags::CLOEXEC)
+                    || ack_status & OFlags::ACCMODE != OFlags::WRONLY
+                {
+                    return Err(io::Error::from_raw_os_error(libc::ESTALE));
+                }
+                for inherited in [descriptor, directory, ack] {
+                    rustix::io::fcntl_setfd(inherited, rustix::io::FdFlags::empty())
+                        .map_err(io::Error::from)?;
+                }
+                Ok(())
             });
         }
-        Ok(commitment)
+        Ok(PendingApplicationAck {
+            read: ack_read,
+            parent_write: Some(ack_write),
+            expectation,
+            challenge,
+        })
+    }
+}
+
+pub(crate) fn terminate_application_group(child: &mut Child) -> Result<(), String> {
+    let process_group = child.id() as libc::pid_t;
+    let mut failures = Vec::new();
+    let group_killed = match kill_process_group(process_group) {
+        Ok(()) => true,
+        Err(error) => {
+            failures.push(error);
+            false
+        }
+    };
+    match child.kill() {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::InvalidInput => {}
+        Err(error) => failures.push(format!("failed to kill application leader: {error}")),
+    }
+    if let Err(error) = child.wait() {
+        failures.push(format!("failed to reap application leader: {error}"));
+    }
+    if group_killed && let Err(error) = reap_process_group(process_group) {
+        failures.push(error);
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("; "))
+    }
+}
+
+pub(crate) fn wait_and_contain_application_group(child: &mut Child) -> Result<ExitStatus, String> {
+    let process_group = child.id() as libc::pid_t;
+    let status = child
+        .wait()
+        .map_err(|error| format!("failed to wait for pinned Cargo application: {error}"))?;
+    kill_process_group(process_group)?;
+    reap_process_group(process_group)?;
+    Ok(status)
+}
+
+pub(crate) struct PendingApplicationAck {
+    read: File,
+    parent_write: Option<File>,
+    expectation: WorkerV2ApplicationHandoffExpectationV1,
+    challenge: WorkerV2ApplicationHandoffChallengeV1,
+}
+
+impl PendingApplicationAck {
+    pub(crate) fn await_after_spawn(mut self, child: &mut Child) -> Result<(), String> {
+        drop(self.parent_write.take());
+        let deadline = Instant::now() + ACK_TIMEOUT;
+        let mut bytes = Vec::with_capacity(WORKER_V2_APPLICATION_HANDOFF_ACK_BYTES_V1 + 1);
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err("application handoff acknowledgment timed out".to_string());
+            }
+            poll_readable(self.read.as_raw_fd(), remaining)?;
+            let mut chunk = [0_u8; 256];
+            match self.read.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(read) => {
+                    bytes.extend_from_slice(&chunk[..read]);
+                    if bytes.len() > WORKER_V2_APPLICATION_HANDOFF_ACK_BYTES_V1 {
+                        return Err(
+                            "application handoff acknowledgment has extra bytes".to_string()
+                        );
+                    }
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) => {
+                    return Err(format!(
+                        "failed to read application handoff acknowledgment: {error}"
+                    ));
+                }
+            }
+            if child
+                .try_wait()
+                .map_err(|error| format!("failed to inspect application during handoff: {error}"))?
+                .is_some()
+                && bytes.is_empty()
+            {
+                continue;
+            }
+        }
+        let ack = WorkerV2ApplicationHandoffAckV1::decode_canonical(&bytes)
+            .map_err(|error| format!("invalid application handoff acknowledgment: {error}"))?;
+        ack.validate(self.expectation, self.challenge)
+            .map_err(|error| format!("rejected application handoff acknowledgment: {error}"))
+    }
+}
+
+fn cloexec_pipe() -> Result<(File, File), String> {
+    let mut descriptors = [-1_i32; 2];
+    // SAFETY: `descriptors` points to two writable integers and successful `pipe2` initializes both.
+    if unsafe { libc::pipe2(descriptors.as_mut_ptr(), libc::O_CLOEXEC | libc::O_NONBLOCK) } != 0 {
+        return Err(format!(
+            "failed to create application acknowledgment pipe: {}",
+            io::Error::last_os_error()
+        ));
+    }
+    // SAFETY: successful `pipe2` returned two newly owned descriptors.
+    Ok(unsafe {
+        (
+            File::from_raw_fd(descriptors[0]),
+            File::from_raw_fd(descriptors[1]),
+        )
+    })
+}
+
+fn random_challenge() -> Result<WorkerV2ApplicationHandoffChallengeV1, String> {
+    let mut bytes = [0_u8; 32];
+    let mut offset = 0;
+    while offset != bytes.len() {
+        // SAFETY: the remaining byte slice is valid writable storage for `getrandom`.
+        let read = unsafe {
+            libc::getrandom(bytes[offset..].as_mut_ptr().cast(), bytes.len() - offset, 0)
+        };
+        if read > 0 {
+            offset += read as usize;
+            continue;
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() == io::ErrorKind::Interrupted {
+            continue;
+        }
+        return Err(format!(
+            "failed to generate application handoff challenge: {error}"
+        ));
+    }
+    WorkerV2ApplicationHandoffChallengeV1::from_bytes(bytes)
+        .map_err(|error| format!("invalid application handoff challenge: {error}"))
+}
+
+fn poll_readable(descriptor: RawFd, timeout: Duration) -> Result<(), String> {
+    let millis = timeout.as_millis().min(i32::MAX as u128) as i32;
+    let mut pollfd = libc::pollfd {
+        fd: descriptor,
+        events: libc::POLLIN | libc::POLLHUP | libc::POLLERR,
+        revents: 0,
+    };
+    loop {
+        // SAFETY: `pollfd` is one valid poll descriptor record for the duration of the call.
+        let result = unsafe { libc::poll(&mut pollfd, 1, millis) };
+        if result > 0 {
+            return Ok(());
+        }
+        if result == 0 {
+            return Err("application handoff acknowledgment timed out".to_string());
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::Interrupted {
+            return Err(format!(
+                "failed to wait for application handoff acknowledgment: {error}"
+            ));
+        }
+    }
+}
+
+fn ensure_child_subreaper() -> Result<(), String> {
+    // SAFETY: `prctl` receives the documented scalar argument for this process attribute.
+    if unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) } != 0 {
+        return Err(format!(
+            "failed to make the application runner a child subreaper: {}",
+            io::Error::last_os_error()
+        ));
+    }
+    Ok(())
+}
+
+fn kill_process_group(process_group: libc::pid_t) -> Result<(), String> {
+    // SAFETY: a negative PID addresses the dedicated application process group established in the
+    // child before exec. A live, unreaped leader prevents its PID from being reused here.
+    if unsafe { libc::kill(-process_group, libc::SIGKILL) } == 0 {
+        return Ok(());
+    }
+    let error = io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        Ok(())
+    } else {
+        Err(format!("failed to kill application process group: {error}"))
+    }
+}
+
+fn reap_process_group(process_group: libc::pid_t) -> Result<(), String> {
+    loop {
+        let mut status = 0;
+        // SAFETY: `status` is writable and the negative PID selects children in the application
+        // process group. Subreaper ownership makes orphaned descendants waitable by this runner.
+        let result = unsafe { libc::waitpid(-process_group, &mut status, 0) };
+        if result > 0 {
+            continue;
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() == io::ErrorKind::Interrupted {
+            continue;
+        }
+        if error.raw_os_error() == Some(libc::ECHILD) {
+            return Ok(());
+        }
+        return Err(format!(
+            "failed to reap application process-group descendants: {error}"
+        ));
     }
 }
 
@@ -313,6 +613,10 @@ fn canonical_envelope_name(publication: [u8; 32]) -> String {
     )
 }
 
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 fn validate_envelope_stat(
     directory: &PinnedDirectory,
     name: &str,
@@ -330,75 +634,4 @@ fn validate_envelope_stat(
         return Err(format!("refusing unsafe Worker V2 envelope {name}"));
     }
     Ok(())
-}
-
-fn application_commitment(envelope: &WorkerV2LoadEnvelopeV1, child_sha256: [u8; 32]) -> [u8; 32] {
-    let claim = envelope.published_claim();
-    let plan = claim.plan();
-    let attempt = plan.attempt();
-    let receipt = claim.receipt();
-    let mut digest = Sha256::new();
-    digest.update(COMMITMENT_DOMAIN);
-    digest.update(plan.scope().package().as_bytes());
-    digest.update(attempt.generation().to_le_bytes());
-    digest.update(attempt.session().as_bytes());
-    digest.update(attempt.invocation().as_bytes());
-    for field in [
-        receipt.attempt_identity(),
-        receipt.producer_identity(),
-        receipt.scope_identity(),
-        receipt.plan_commitment(),
-        receipt.upstream_evidence_identity(),
-        receipt.finalized_output_identity(),
-        receipt.publication_identity(),
-    ] {
-        digest.update(field);
-    }
-    digest.update(envelope.identity().as_bytes());
-    digest.update(child_sha256);
-    digest.finalize().into()
-}
-
-fn reject_inheritable_descriptors() -> Result<(), String> {
-    let entries = std::fs::read_dir("/proc/self/fd")
-        .map_err(|error| format!("failed to audit runner descriptors: {error}"))?;
-    for entry in entries {
-        let name = entry
-            .map_err(|error| format!("failed to audit runner descriptor: {error}"))?
-            .file_name();
-        let Some(raw_fd) = name.to_str().and_then(|value| value.parse::<RawFd>().ok()) else {
-            continue;
-        };
-        if raw_fd <= libc::STDERR_FILENO {
-            continue;
-        }
-        // SAFETY: each number came from a live `/proc/self/fd` entry. A concurrent close simply
-        // turns the fcntl into EBADF, which is harmless for this fail-closed audit.
-        let descriptor = unsafe { BorrowedFd::borrow_raw(raw_fd) };
-        match rustix::io::fcntl_getfd(descriptor) {
-            Ok(flags) if flags.contains(rustix::io::FdFlags::CLOEXEC) => {}
-            Ok(_) => {
-                return Err(format!(
-                    "runner refuses to pass inheritable descriptor {raw_fd} to the application"
-                ));
-            }
-            Err(rustix::io::Errno::BADF) => {}
-            Err(error) => {
-                return Err(format!(
-                    "failed to audit runner descriptor {raw_fd}: {error}"
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
-fn hex(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut encoded = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        encoded.push(HEX[(byte >> 4) as usize] as char);
-        encoded.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    encoded
 }

@@ -338,10 +338,15 @@ fn run_cargo_with_backend(
         .map_err(|error| format!("failed to prepare pinned Cargo executable: {error}"))?;
     let mut forwarded_args = args.to_vec();
     if command == "run" {
+        let expects_envelope = context
+            ._worker_v2
+            .as_ref()
+            .is_some_and(|config| config.envelope_mode().is_required());
         inject_application_runner(
             &context.project,
             context.generation.artifact_dir(),
             &mut forwarded_args,
+            expects_envelope,
         )?;
     }
     let artifact_dir = context.generation.artifact_dir();
@@ -417,6 +422,7 @@ fn inject_application_runner(
     project: &project::CargoProject,
     artifact_dir: &project::PinnedDirectory,
     args: &mut Vec<OsString>,
+    expects_envelope: bool,
 ) -> Result<(), String> {
     let target = match selected_run_target(args)? {
         Some(target) => target,
@@ -432,7 +438,13 @@ fn inject_application_runner(
     }
     let original_runner = resolve_original_runner(project, args, &target)?;
     reject_recursive_runner(&original_runner)?;
-    inject_application_runner_config(args, &target, artifact_dir, &original_runner)
+    inject_application_runner_config(
+        args,
+        &target,
+        artifact_dir,
+        &original_runner,
+        expects_envelope,
+    )
 }
 
 fn inject_application_runner_config(
@@ -440,6 +452,7 @@ fn inject_application_runner_config(
     target: &str,
     artifact_dir: &project::PinnedDirectory,
     original_runner: &[OsString],
+    expects_envelope: bool,
 ) -> Result<(), String> {
     let executable = env::current_exe()
         .map_err(|error| format!("failed to locate cargo-fe2o3 runner executable: {error}"))?;
@@ -455,6 +468,11 @@ fn inject_application_runner_config(
         hex_encode(os_bytes(artifact_dir.display_path().as_os_str())),
         artifact_device.to_string(),
         artifact_inode.to_string(),
+        if expects_envelope {
+            application_handoff::RUNNER_EXPECTS_ENVELOPE.to_string()
+        } else {
+            application_handoff::RUNNER_EXPECTS_NO_ENVELOPE.to_string()
+        },
         original_runner.len().to_string(),
     ];
     runner.extend(
@@ -718,7 +736,7 @@ fn run_application_boundary(args: &[OsString]) -> ExitCode {
 }
 
 fn run_application_boundary_result(args: &[OsString]) -> Result<std::process::ExitStatus, String> {
-    if args.len() < 6 {
+    if args.len() < 7 {
         return Err(
             "runner requires a generation context, original-runner count, and application"
                 .to_string(),
@@ -738,17 +756,27 @@ fn run_application_boundary_result(args: &[OsString]) -> Result<std::process::Ex
         artifact_device,
         artifact_inode,
     )?;
-    let runner_count = args[4]
+    let expects_envelope = match args[4].to_str() {
+        Some(application_handoff::RUNNER_EXPECTS_ENVELOPE) => true,
+        Some(application_handoff::RUNNER_EXPECTS_NO_ENVELOPE) => false,
+        _ => {
+            return Err(format!(
+                "invalid application envelope expectation {:?}",
+                args[4]
+            ));
+        }
+    };
+    let runner_count = args[5]
         .to_str()
         .and_then(|value| value.parse::<usize>().ok())
-        .ok_or_else(|| format!("invalid original runner argument count {:?}", args[4]))?;
-    let application_index = 5_usize
+        .ok_or_else(|| format!("invalid original runner argument count {:?}", args[5]))?;
+    let application_index = 6_usize
         .checked_add(runner_count)
         .ok_or_else(|| "original runner argument count overflowed".to_string())?;
     let application = args
         .get(application_index)
         .ok_or_else(|| "runner argument count does not leave an application".to_string())?;
-    let original_runner = args[5..application_index]
+    let original_runner = args[6..application_index]
         .iter()
         .map(|argument| hex_decode_os(argument))
         .collect::<Result<Vec<_>, _>>()?;
@@ -761,6 +789,14 @@ fn run_application_boundary_result(args: &[OsString]) -> Result<std::process::Ex
     reject_recursive_runner(&original_runner)?;
 
     let handoff = application_handoff::PinnedApplicationEnvelope::discover(&artifact_dir)?;
+    if expects_envelope && handoff.is_none() {
+        return Err("Cargo runner expected a canonical Worker V2 envelope, but none exists".into());
+    }
+    if !expects_envelope && handoff.is_some() {
+        return Err(
+            "Cargo runner did not expect a Worker V2 envelope for this application build".into(),
+        );
+    }
     if let Some(mut handoff) = handoff {
         if !original_runner.is_empty() {
             return Err(
@@ -773,27 +809,36 @@ fn run_application_boundary_result(args: &[OsString]) -> Result<std::process::Ex
         let application_path =
             binding_wrapper::resolve_command_executable(application, &current_dir)
                 .map_err(|error| format!("failed to resolve application executable: {error}"))?;
-        let mut pinned_application =
-            pinned_executable::PinnedExecutable::open(&application_path)
-                .map_err(|error| format!("failed to pin application executable: {error}"))?;
-        if !pinned_application
-            .declares_protocol_marker(application_handoff::APPLICATION_PROTOCOL_MARKER)
-            .map_err(|error| format!("failed to inspect application handoff protocol: {error}"))?
-        {
-            return Err(
-                "application does not declare Worker V2 descriptor handoff protocol V1".to_string(),
-            );
-        }
+        let pinned_application = pinned_executable::PinnedExecutable::open(&application_path)
+            .map_err(|error| format!("failed to pin application executable: {error}"))?;
         let child_sha256 = *pinned_application.sha256();
         let mut child = pinned_application
             .command()
             .map_err(|error| format!("failed to prepare pinned application: {error}"))?;
         child.args(&args[application_index + 1..]);
         scrub_application_environment(child.as_command_mut());
-        handoff.configure_child(child.as_command_mut(), child_sha256)?;
-        return child
-            .status()
-            .map_err(|error| format!("failed to launch pinned Cargo application: {error}"));
+        let pending_ack = handoff.configure_child(child.as_command_mut(), child_sha256)?;
+        let mut process = child
+            .as_command_mut()
+            .spawn()
+            .map_err(|error| format!("failed to launch pinned Cargo application: {error}"))?;
+        if let Err(error) = pending_ack.await_after_spawn(&mut process) {
+            return match application_handoff::terminate_application_group(&mut process) {
+                Ok(()) => Err(error),
+                Err(containment) => Err(format!(
+                    "{error}; application containment failed: {containment}"
+                )),
+            };
+        }
+        if let Err(error) = handoff.validate_retained_currentness() {
+            return match application_handoff::terminate_application_group(&mut process) {
+                Ok(()) => Err(error),
+                Err(containment) => Err(format!(
+                    "{error}; application containment failed: {containment}"
+                )),
+            };
+        }
+        return application_handoff::wait_and_contain_application_group(&mut process);
     }
 
     let mut child = if let Some(program) = original_runner.first() {
@@ -1258,6 +1303,7 @@ Agent 2
                 OsString::from("-cpu"),
                 OsString::from("max"),
             ],
+            false,
         )
         .expect("inject runner");
         let separator = args
