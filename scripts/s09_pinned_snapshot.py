@@ -106,6 +106,20 @@ def _open_source(path: pathlib.Path, executable: bool) -> tuple[int, FileIdentit
         raise
 
 
+def _digest_source(descriptor: int, size: int, path: pathlib.Path) -> str:
+    digest = hashlib.sha256()
+    offset = 0
+    while offset < size:
+        chunk = os.pread(descriptor, min(COPY_CHUNK_BYTES, size - offset), offset)
+        if not chunk:
+            raise SnapshotError(f"snapshot source became truncated: {path}")
+        digest.update(chunk)
+        offset += len(chunk)
+    if offset != size:
+        raise SnapshotError(f"snapshot source size changed while hashing: {path}")
+    return digest.hexdigest()
+
+
 def create_sealed_snapshot(
     name: str,
     path: pathlib.Path,
@@ -119,6 +133,7 @@ def create_sealed_snapshot(
     source, before = _open_source(path, executable)
     snapshot = -1
     try:
+        before_digest = _digest_source(source, before.size, path)
         snapshot = os.memfd_create(
             f"fe2o3-s09-{name}",
             os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING,
@@ -143,8 +158,14 @@ def create_sealed_snapshot(
             if first and _after_first_chunk is not None:
                 first = False
                 _after_first_chunk()
+        after_digest = _digest_source(source, before.size, path)
         after = FileIdentity.from_stat(os.fstat(source))
-        if before != after or offset != before.size:
+        if (
+            before != after
+            or offset != before.size
+            or before_digest != digest.hexdigest()
+            or before_digest != after_digest
+        ):
             raise SnapshotError(f"snapshot source changed while being copied: {path}")
         os.fchmod(snapshot, 0o500 if executable else 0o400)
         os.lseek(snapshot, 0, os.SEEK_SET)
