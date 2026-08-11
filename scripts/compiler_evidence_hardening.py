@@ -573,7 +573,6 @@ class Supervisor:
                     resource.setrlimit(resource.RLIMIT_AS, (limits.memory_bytes, limits.memory_bytes))
                     resource.setrlimit(resource.RLIMIT_CPU, (limits.cpu_seconds, limits.cpu_seconds + 1))
                     resource.setrlimit(resource.RLIMIT_FSIZE, (limits.file_bytes, limits.file_bytes))
-                    resource.setrlimit(resource.RLIMIT_NOFILE, (limits.open_files, limits.open_files))
                     os.dup2(stdout_write, 1)
                     os.dup2(stderr_write, 2)
                     null_fd = os.open("/dev/null", os.O_RDONLY | os.O_CLOEXEC)
@@ -585,6 +584,9 @@ class Supervisor:
                             os.set_inheritable(fd, True)
                     if os.read(gate_read, 1) != b"1":
                         os._exit(126)
+                    resource.setrlimit(
+                        resource.RLIMIT_NOFILE, (limits.open_files, limits.open_files)
+                    )
                     os.execve(executable.fd, list(arguments), dict(environment))
                 except BaseException as error:
                     os.write(2, f"supervised exec failed: {error}\n".encode("utf-8", "replace")[:4096])
