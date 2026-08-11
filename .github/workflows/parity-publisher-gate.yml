@@ -1,0 +1,20 @@
+name: Protected parity publisher bootstrap (inert)
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  bootstrap-inert:
+    name: Protected publisher bootstrap is inert
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Refuse production authority before atomic activation
+        shell: bash
+        run: |
+          echo "::error::Protected publisher bootstrap is inert until the hardened client and restricted caller activate together."
+          exit 1
