@@ -42,6 +42,13 @@ impl Default for SemanticTypeGraphBudgetsV2 {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct SemanticTypeNodeIdV2(u32);
 
+impl SemanticTypeNodeIdV2 {
+    /// Returns the graph-local index. It has no meaning outside this graph.
+    pub const fn index(self) -> u32 {
+        self.0
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct SemanticTypeLayoutV2 {
     pub size: Option<u64>,
@@ -437,12 +444,36 @@ impl UntrustedSemanticTypeGraphEncodingV2 {
 }
 
 impl SemanticTypeGraphV2 {
+    pub const fn root(&self) -> SemanticTypeNodeIdV2 {
+        self.root
+    }
+
     pub fn root_key(&self) -> &str {
         &self.keys[self.root.0 as usize]
     }
+
     pub fn node_count(&self) -> usize {
         self.nodes.len()
     }
+
+    pub fn key(&self, id: SemanticTypeNodeIdV2) -> Option<&str> {
+        self.keys.get(id.0 as usize).map(String::as_str)
+    }
+
+    pub fn node(&self, id: SemanticTypeNodeIdV2) -> Option<&SemanticTypeNodeV2> {
+        self.nodes.get(id.0 as usize)
+    }
+
+    pub fn nodes(
+        &self,
+    ) -> impl ExactSizeIterator<Item = (SemanticTypeNodeIdV2, &str, &SemanticTypeNodeV2)> {
+        self.keys
+            .iter()
+            .zip(&self.nodes)
+            .enumerate()
+            .map(|(index, (key, node))| (SemanticTypeNodeIdV2(index as u32), key.as_str(), node))
+    }
+
     pub fn node_by_key(&self, key: &str) -> Option<&SemanticTypeNodeV2> {
         self.keys
             .iter()

@@ -5,6 +5,7 @@ mod mem2reg;
 mod semantic_constant;
 mod semantic_memory;
 mod semantic_type;
+pub mod semantic_type_v2;
 
 pub use control_flow::{
     MAX_MIR_CONTROL_FLOW_WORK_UNITS, MIR_CONTROL_FLOW_WORK_UNITS_PER_BLOCK, MirControlFlowAnalysis,
@@ -58,6 +59,13 @@ pub use semantic_type::{
     MirAddressSpace, MirAggregateLayout, MirEnumEncoding, MirEnumType, MirField, MirLayout,
     MirMutability, MirPadding, MirScalarType, MirSemanticType, MirStructType, MirTypeKind,
     MirTypeValidationError, MirVariant,
+};
+pub use semantic_type_v2::{
+    PointerMetadataV2, ScalarValidityRangeV2, SemanticEnumEncodingV2, SemanticFieldV2,
+    SemanticMutabilityV2, SemanticNichePathComponentV2, SemanticNicheSourceV2, SemanticScalarV2,
+    SemanticTypeGraphBudgetsV2, SemanticTypeGraphBuilderV2, SemanticTypeGraphErrorV2,
+    SemanticTypeGraphV2, SemanticTypeKindV2, SemanticTypeLayoutV2, SemanticTypeNodeIdV2,
+    SemanticTypeNodeV2, SemanticVariantV2, UntrustedSemanticTypeGraphEncodingV2,
 };
 
 pub const DIALECT: &str = "mir";
