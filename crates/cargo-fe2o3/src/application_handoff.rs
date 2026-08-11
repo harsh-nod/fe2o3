@@ -5,6 +5,7 @@
 
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
+use std::mem::MaybeUninit;
 use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, RawFd};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -403,12 +404,27 @@ pub(crate) fn terminate_application_group(child: &mut Child) -> Result<(), Strin
 
 pub(crate) fn wait_and_contain_application_group(child: &mut Child) -> Result<ExitStatus, String> {
     let process_group = child.id() as libc::pid_t;
-    let status = child
-        .wait()
-        .map_err(|error| format!("failed to wait for pinned Cargo application: {error}"))?;
-    kill_process_group(process_group)?;
-    reap_process_group(process_group)?;
-    Ok(status)
+    wait_for_leader_exit_without_reaping(process_group)?;
+
+    let mut failures = Vec::new();
+    if let Err(error) = kill_process_group(process_group) {
+        failures.push(error);
+    }
+    let status = match child.wait() {
+        Ok(status) => Some(status),
+        Err(error) => {
+            failures.push(format!("failed to reap pinned Cargo application: {error}"));
+            None
+        }
+    };
+    if let Err(error) = reap_process_group(process_group) {
+        failures.push(error);
+    }
+    if failures.is_empty() {
+        Ok(status.expect("successful child wait produced an exit status"))
+    } else {
+        Err(failures.join("; "))
+    }
 }
 
 pub(crate) struct PendingApplicationAck {
@@ -566,6 +582,32 @@ fn kill_process_group(process_group: libc::pid_t) -> Result<(), String> {
     }
 }
 
+fn wait_for_leader_exit_without_reaping(leader: libc::pid_t) -> Result<(), String> {
+    loop {
+        let mut information = MaybeUninit::<libc::siginfo_t>::zeroed();
+        // SAFETY: `information` is writable, P_PID selects the owned child, and WNOWAIT leaves
+        // the exited leader waitable so its PID/PGID cannot be recycled before group signaling.
+        let result = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                leader as libc::id_t,
+                information.as_mut_ptr(),
+                libc::WEXITED | libc::WNOWAIT,
+            )
+        };
+        if result == 0 {
+            return Ok(());
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() == io::ErrorKind::Interrupted {
+            continue;
+        }
+        return Err(format!(
+            "failed to observe application leader exit without reaping it: {error}"
+        ));
+    }
+}
+
 fn reap_process_group(process_group: libc::pid_t) -> Result<(), String> {
     loop {
         let mut status = 0;
@@ -643,4 +685,38 @@ fn validate_envelope_stat(
         return Err(format!("refusing unsafe Worker V2 envelope {name}"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exit_observation_keeps_process_group_leader_unreaped() {
+        let mut command = Command::new("/bin/true");
+        command.process_group(0);
+        let mut child = command.spawn().unwrap();
+        let leader = child.id() as libc::pid_t;
+
+        wait_for_leader_exit_without_reaping(leader).unwrap();
+        // SAFETY: signal zero only checks the dedicated group while its zombie leader is retained.
+        assert_eq!(unsafe { libc::kill(-leader, 0) }, 0);
+        kill_process_group(leader).unwrap();
+        assert!(child.wait().unwrap().success());
+        reap_process_group(leader).unwrap();
+    }
+
+    #[test]
+    fn successful_wait_contains_before_reaping_leader() {
+        for _ in 0..32 {
+            let mut command = Command::new("/bin/true");
+            command.process_group(0);
+            let mut child = command.spawn().unwrap();
+            assert!(
+                wait_and_contain_application_group(&mut child)
+                    .unwrap()
+                    .success()
+            );
+        }
+    }
 }
