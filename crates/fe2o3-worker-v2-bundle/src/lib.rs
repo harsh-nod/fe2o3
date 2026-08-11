@@ -9,6 +9,7 @@ mod error;
 mod inputs;
 mod load_envelope_name;
 mod model;
+mod static_application;
 
 pub use application_handoff::{
     ApplicationHandoffProtocolErrorV1, WORKER_V2_APPLICATION_ARTIFACT_DIR_FD_ENV_V1,
@@ -57,3 +58,4 @@ pub use model::{
     MAX_WORKER_V2_PROOF_EVIDENCE_BYTES, MAX_WORKER_V2_RAW_HSACO_BYTES,
     WorkerV2LoadEnvelopeIdentityV1, WorkerV2LoadEnvelopeV1,
 };
+pub use static_application::SealedStaticApplicationErrorV1;

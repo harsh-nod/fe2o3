@@ -2,6 +2,9 @@ use core::fmt;
 
 use sha2::{Digest, Sha256};
 
+use crate::static_application::{
+    SealedStaticApplicationErrorV1, sealed_static_application_identity_v1,
+};
 use crate::{WorkerV2LoadEnvelopeIdentityV1, WorkerV2LoadEnvelopeV1};
 
 const COMMITMENT_DOMAIN: &[u8] = b"FE2O3/APPLICATION-WORKER-V2-HANDOFF/V1\0";
@@ -30,6 +33,13 @@ impl WorkerV2ApplicationIdentityV1 {
 
     pub const fn as_bytes(self) -> [u8; 32] {
         self.0
+    }
+
+    /// Derives an identity only for an ELF image with no interpreter or runtime dependencies.
+    pub fn from_sealed_static_elf_v1(
+        executable: &[u8],
+    ) -> Result<Self, SealedStaticApplicationErrorV1> {
+        sealed_static_application_identity_v1(executable).map(Self)
     }
 }
 

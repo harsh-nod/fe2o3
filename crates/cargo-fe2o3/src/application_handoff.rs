@@ -18,9 +18,10 @@ use fe2o3_worker_v2_bundle::{
     MAX_WORKER_V2_LOAD_ENVELOPE_BYTES, WORKER_V2_APPLICATION_ARTIFACT_DIR_FD_ENV_V1,
     WORKER_V2_APPLICATION_ENVELOPE_FD_ENV_V1, WORKER_V2_APPLICATION_HANDOFF_ACK_BYTES_V1,
     WORKER_V2_APPLICATION_HANDOFF_ACK_FD_ENV_V1, WORKER_V2_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
-    WORKER_V2_APPLICATION_HANDOFF_COMMITMENT_ENV_V1, WorkerV2ApplicationHandoffAckV1,
+    WORKER_V2_APPLICATION_HANDOFF_COMMITMENT_ENV_V1, WORKER_V2_LOAD_ENVELOPE_NAME_PREFIX_V1,
+    WORKER_V2_LOAD_ENVELOPE_NAME_SUFFIX_V1, WorkerV2ApplicationHandoffAckV1,
     WorkerV2ApplicationHandoffChallengeV1, WorkerV2ApplicationHandoffExpectationV1,
-    WorkerV2ApplicationIdentityV1, WorkerV2LoadEnvelopeV1,
+    WorkerV2ApplicationIdentityV1, WorkerV2LoadEnvelopeV1, worker_v2_load_envelope_name_v1,
 };
 use rustix::fs::{AtFlags, FileType, Mode, OFlags, ResolveFlags, fstat, openat2, statat};
 
@@ -31,8 +32,8 @@ pub(crate) const RUNNER_CONTEXT_VERSION: &str = "3";
 pub(crate) const RUNNER_EXPECTS_ENVELOPE: &str = "required";
 pub(crate) const RUNNER_EXPECTS_NO_ENVELOPE: &str = "none";
 
-const ENVELOPE_PREFIX: &[u8] = b".fe2o3-worker-v2-load-envelope-v1-";
-const ENVELOPE_SUFFIX: &[u8] = b".envelope";
+const ENVELOPE_PREFIX: &[u8] = WORKER_V2_LOAD_ENVELOPE_NAME_PREFIX_V1.as_bytes();
+const ENVELOPE_SUFFIX: &[u8] = WORKER_V2_LOAD_ENVELOPE_NAME_SUFFIX_V1.as_bytes();
 const ENVELOPE_NAME_BYTES: usize = ENVELOPE_PREFIX.len() + 64 + ENVELOPE_SUFFIX.len();
 const MAX_ENVELOPE_CANDIDATES: usize = 256;
 const ACK_TIMEOUT: Duration = Duration::from_secs(5);
@@ -188,8 +189,11 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
         if envelope.to_bytes() != exact_bytes {
             return Err("Worker V2 envelope encoding is not canonical".to_string());
         }
-        let receipt = envelope.published_claim().receipt();
-        if name != canonical_envelope_name(receipt.publication_identity()) {
+        if name
+            != worker_v2_load_envelope_name_v1(
+                envelope.published_claim().receipt().publication_identity(),
+            )
+        {
             return Err("Worker V2 envelope filename does not bind its publication".to_string());
         }
         file.seek(SeekFrom::Start(0))
@@ -260,10 +264,9 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
     pub(crate) fn configure_child(
         &mut self,
         command: &mut Command,
-        child_sha256: [u8; 32],
+        application: WorkerV2ApplicationIdentityV1,
     ) -> Result<PendingApplicationAck, String> {
         self.revalidate()?;
-        let application = WorkerV2ApplicationIdentityV1::from_bytes(child_sha256);
         let expectation = WorkerV2ApplicationHandoffExpectationV1::new(&self.envelope, application);
         let challenge = random_challenge()?;
         ensure_child_subreaper()?;
@@ -602,19 +605,6 @@ fn is_canonical_envelope_name(bytes: &[u8]) -> bool {
         && bytes[ENVELOPE_PREFIX.len()..ENVELOPE_PREFIX.len() + 64]
             .iter()
             .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-}
-
-fn canonical_envelope_name(publication: [u8; 32]) -> String {
-    format!(
-        "{}{}{}",
-        std::str::from_utf8(ENVELOPE_PREFIX).expect("ASCII prefix"),
-        hex(&publication),
-        std::str::from_utf8(ENVELOPE_SUFFIX).expect("ASCII suffix")
-    )
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn validate_envelope_stat(

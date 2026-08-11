@@ -18,6 +18,8 @@ use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use fe2o3_worker_v2_bundle::SealedStaticApplicationErrorV1;
+
 /// A deliberately bounded read prevents a selected tool path from causing unbounded hashing work.
 pub(crate) const MAX_EXECUTABLE_BYTES: u64 = 512 * 1024 * 1024;
 
@@ -74,6 +76,10 @@ pub(crate) enum PinExecutableError {
     },
     ExecutionObjectChanged {
         path: PathBuf,
+    },
+    UnsealedApplicationRuntime {
+        path: PathBuf,
+        source: SealedStaticApplicationErrorV1,
     },
 }
 
@@ -153,6 +159,11 @@ impl fmt::Display for PinExecutableError {
                 "pinned executable changed after hashing: {}",
                 path.display()
             ),
+            Self::UnsealedApplicationRuntime { path, source } => write!(
+                formatter,
+                "application {} does not satisfy the sealed-static runtime profile: {source}",
+                path.display()
+            ),
         }
     }
 }
@@ -165,6 +176,7 @@ impl Error for PinExecutableError {
             | Self::Read { source, .. }
             | Self::Rewind { source, .. }
             | Self::ExecutionStrategy { source, .. } => Some(source),
+            Self::UnsealedApplicationRuntime { source, .. } => Some(source),
             Self::UnsupportedPlatform
             | Self::NotRegular { .. }
             | Self::NotExecutable { .. }
@@ -190,7 +202,7 @@ mod platform {
     use std::os::fd::AsRawFd;
     #[cfg(test)]
     use std::os::fd::RawFd;
-    use std::os::unix::fs::MetadataExt;
+    use std::os::unix::fs::{FileExt, MetadataExt};
     use std::os::unix::process::CommandExt;
     use std::process::{Command, ExitStatus};
 
@@ -375,6 +387,67 @@ mod platform {
 
         pub(crate) const fn sha256(&self) -> &[u8; 32] {
             &self.sha256
+        }
+
+        pub(crate) fn sealed_static_application_identity(
+            &self,
+        ) -> Result<fe2o3_worker_v2_bundle::WorkerV2ApplicationIdentityV1, PinExecutableError>
+        {
+            let initial = self
+                .file
+                .metadata()
+                .map_err(|source| PinExecutableError::Inspect {
+                    path: self.display_path.clone(),
+                    source,
+                })?;
+            if !self
+                .snapshot
+                .same_execution_object(ObjectSnapshot::from_metadata(&initial))
+            {
+                return Err(PinExecutableError::ExecutionObjectChanged {
+                    path: self.display_path.clone(),
+                });
+            }
+            let size = usize::try_from(self.snapshot.size).expect("executable size is bounded");
+            let mut bytes = vec![0_u8; size];
+            let mut offset = 0;
+            while offset != bytes.len() {
+                let read = self
+                    .file
+                    .read_at(&mut bytes[offset..], offset as u64)
+                    .map_err(|source| PinExecutableError::Read {
+                        path: self.display_path.clone(),
+                        source,
+                    })?;
+                if read == 0 {
+                    return Err(PinExecutableError::UnexpectedEof {
+                        path: self.display_path.clone(),
+                        expected: self.snapshot.size,
+                        actual: offset as u64,
+                    });
+                }
+                offset += read;
+            }
+            let final_metadata =
+                self.file
+                    .metadata()
+                    .map_err(|source| PinExecutableError::Inspect {
+                        path: self.display_path.clone(),
+                        source,
+                    })?;
+            if !self
+                .snapshot
+                .same_execution_object(ObjectSnapshot::from_metadata(&final_metadata))
+            {
+                return Err(PinExecutableError::ChangedDuringRead {
+                    path: self.display_path.clone(),
+                });
+            }
+            fe2o3_worker_v2_bundle::WorkerV2ApplicationIdentityV1::from_sealed_static_elf_v1(&bytes)
+                .map_err(|source| PinExecutableError::UnsealedApplicationRuntime {
+                    path: self.display_path.clone(),
+                    source,
+                })
         }
 
         pub(crate) const fn size(&self) -> u64 {
