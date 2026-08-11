@@ -6,7 +6,7 @@
 //! rustc session, and neither value grants manifest, device-copy, code
 //! generation, loading, or launch authority.
 
-use std::collections::BTreeMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use dialect_mir::{
@@ -40,14 +40,20 @@ const GFX942_CANDIDATE_DOMAIN_V2: &[u8] = b"FE2O3/GFX942-LAYOUT-CANDIDATE/V2\0";
 const GFX942_POINTER_WIDTH_BITS: u16 = 64;
 const DEFAULT_MAX_SIDECAR_RECORDS: u32 = 32_768;
 const DEFAULT_MAX_SIDECAR_BYTES: u32 = 8 * 1024 * 1024;
+const DEFAULT_MAX_CAPTURE_WORK: u64 = 1_000_000;
 const DEFAULT_MAX_PROJECTION_WORK: u64 = 1_000_000;
+const DEFAULT_MAX_TOTAL_TEXT_BYTES: u64 = 8 * 1024 * 1024;
+const DEFAULT_MAX_PATH_BYTES: u32 = 4 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SemanticTypeCaptureBudgetsV2 {
     pub graph: SemanticTypeGraphBudgetsV2,
     pub max_sidecar_records: u32,
     pub max_sidecar_bytes: u32,
+    pub max_capture_work: u64,
     pub max_projection_work: u64,
+    pub max_total_text_bytes: u64,
+    pub max_path_bytes: u32,
 }
 
 impl Default for SemanticTypeCaptureBudgetsV2 {
@@ -56,7 +62,10 @@ impl Default for SemanticTypeCaptureBudgetsV2 {
             graph: SemanticTypeGraphBudgetsV2::default(),
             max_sidecar_records: DEFAULT_MAX_SIDECAR_RECORDS,
             max_sidecar_bytes: DEFAULT_MAX_SIDECAR_BYTES,
+            max_capture_work: DEFAULT_MAX_CAPTURE_WORK,
             max_projection_work: DEFAULT_MAX_PROJECTION_WORK,
+            max_total_text_bytes: DEFAULT_MAX_TOTAL_TEXT_BYTES,
+            max_path_bytes: DEFAULT_MAX_PATH_BYTES,
         }
     }
 }
@@ -918,6 +927,9 @@ pub enum SemanticTypeAdapterErrorV2 {
         actual: u64,
         max: u64,
     },
+    AllocationFailed {
+        resource: &'static str,
+    },
     Graph(SemanticTypeGraphErrorV2),
     UntrustedGraphMismatch,
 }
@@ -947,6 +959,9 @@ impl fmt::Display for SemanticTypeAdapterErrorV2 {
                 max,
             } => {
                 write!(formatter, "{resource} bound exceeded: {actual} > {max}")
+            }
+            Self::AllocationFailed { resource } => {
+                write!(formatter, "allocation failed while building {resource}")
             }
             Self::Graph(error) => {
                 write!(formatter, "semantic type graph rejected capture: {error}")
@@ -984,6 +999,231 @@ impl From<SemanticLayoutBridgeError> for SemanticTypeAdapterErrorV2 {
     }
 }
 
+struct CaptureMeterV2 {
+    work: u64,
+    text_bytes: u64,
+    max_work: u64,
+    max_text_bytes: u64,
+}
+
+impl CaptureMeterV2 {
+    fn new(budgets: SemanticTypeCaptureBudgetsV2) -> Self {
+        Self {
+            work: 0,
+            text_bytes: 0,
+            max_work: budgets.max_capture_work,
+            max_text_bytes: budgets.max_total_text_bytes,
+        }
+    }
+
+    fn charge_work(
+        &mut self,
+        resource: &'static str,
+        amount: u64,
+    ) -> Result<(), SemanticTypeAdapterErrorV2> {
+        self.work = self.work.checked_add(amount).unwrap_or(u64::MAX);
+        if self.work > self.max_work {
+            return Err(SemanticTypeAdapterErrorV2::BoundExceeded {
+                resource,
+                actual: self.work,
+                max: self.max_work,
+            });
+        }
+        Ok(())
+    }
+
+    fn charge_text(&mut self, amount: usize) -> Result<(), SemanticTypeAdapterErrorV2> {
+        self.text_bytes = self
+            .text_bytes
+            .checked_add(amount as u64)
+            .unwrap_or(u64::MAX);
+        if self.text_bytes > self.max_text_bytes {
+            return Err(SemanticTypeAdapterErrorV2::BoundExceeded {
+                resource: "rustc layout total text bytes",
+                actual: self.text_bytes,
+                max: self.max_text_bytes,
+            });
+        }
+        Ok(())
+    }
+}
+
+fn normalize_and_preflight_layout_type<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+    budgets: SemanticTypeCaptureBudgetsV2,
+) -> Result<(Ty<'tcx>, CaptureMeterV2), SemanticTypeAdapterErrorV2> {
+    const EXTRACTION_MAX_DEPTH: u64 = 64;
+    const MAX_PATH_SEGMENT_BYTES: u64 = 48;
+    let required_path_bytes = 4_u64
+        .checked_add(EXTRACTION_MAX_DEPTH.saturating_mul(MAX_PATH_SEGMENT_BYTES))
+        .unwrap_or(u64::MAX);
+    if required_path_bytes > u64::from(budgets.max_path_bytes) {
+        return Err(SemanticTypeAdapterErrorV2::BoundExceeded {
+            resource: "rustc layout path bytes",
+            actual: required_path_bytes,
+            max: u64::from(budgets.max_path_bytes),
+        });
+    }
+
+    let typing_env = TypingEnv::fully_monomorphized();
+    let normalized = tcx
+        .try_normalize_erasing_regions(typing_env, ty)
+        .map_err(|_| {
+            SemanticTypeAdapterErrorV2::Extraction("type normalization failed".to_owned())
+        })?;
+    let max_nodes = budgets.graph.max_nodes as usize;
+    let mut stack = Vec::new();
+    stack.try_reserve(max_nodes.min(64)).map_err(|_| {
+        SemanticTypeAdapterErrorV2::AllocationFailed {
+            resource: "rustc layout preflight stack",
+        }
+    })?;
+    stack.push((normalized, 0_u32));
+    let mut seen = HashSet::new();
+    seen.try_reserve(max_nodes.min(64)).map_err(|_| {
+        SemanticTypeAdapterErrorV2::AllocationFailed {
+            resource: "rustc layout preflight visited set",
+        }
+    })?;
+    let mut meter = CaptureMeterV2::new(budgets);
+    let mut total_fields = 0_u64;
+    let mut total_variants = 0_u64;
+
+    while let Some((current, depth)) = stack.pop() {
+        meter.charge_work("rustc layout preflight work", 1)?;
+        if depth > EXTRACTION_MAX_DEPTH as u32 {
+            return Err(SemanticTypeAdapterErrorV2::BoundExceeded {
+                resource: "rustc layout depth",
+                actual: u64::from(depth),
+                max: EXTRACTION_MAX_DEPTH,
+            });
+        }
+        if seen.contains(&current) {
+            continue;
+        }
+        if seen.len() >= max_nodes {
+            return Err(SemanticTypeAdapterErrorV2::BoundExceeded {
+                resource: "rustc layout preflight nodes",
+                actual: seen.len().saturating_add(1) as u64,
+                max: max_nodes as u64,
+            });
+        }
+        seen.try_reserve(1)
+            .map_err(|_| SemanticTypeAdapterErrorV2::AllocationFailed {
+                resource: "rustc layout preflight visited set",
+            })?;
+        seen.insert(current);
+        let name = bounded_type_name(current, budgets.graph.max_name_bytes)?;
+        meter.charge_text(name.len())?;
+        let child_depth =
+            depth
+                .checked_add(1)
+                .ok_or(SemanticTypeAdapterErrorV2::BoundExceeded {
+                    resource: "rustc layout depth",
+                    actual: u64::MAX,
+                    max: EXTRACTION_MAX_DEPTH,
+                })?;
+        match *current.kind() {
+            TyKind::Array(element, _)
+            | TyKind::Slice(element)
+            | TyKind::RawPtr(element, _)
+            | TyKind::Ref(_, element, _)
+            | TyKind::Pat(element, _) => push_preflight_type(&mut stack, element, child_depth)?,
+            TyKind::Tuple(elements) => {
+                meter.charge_work("rustc layout preflight work", elements.len() as u64)?;
+                for element in elements.iter().rev() {
+                    push_preflight_type(&mut stack, element, child_depth)?;
+                }
+            }
+            TyKind::Adt(definition, arguments) => {
+                let variants = definition.variants();
+                total_variants = total_variants
+                    .checked_add(variants.len() as u64)
+                    .unwrap_or(u64::MAX);
+                if total_variants > u64::from(budgets.graph.max_variants) {
+                    return Err(SemanticTypeAdapterErrorV2::BoundExceeded {
+                        resource: "rustc layout preflight variants",
+                        actual: total_variants,
+                        max: u64::from(budgets.graph.max_variants),
+                    });
+                }
+                for variant in variants.iter().rev() {
+                    meter.charge_text(variant.name.as_str().len())?;
+                    total_fields = total_fields
+                        .checked_add(variant.fields.len() as u64)
+                        .unwrap_or(u64::MAX);
+                    if total_fields > u64::from(budgets.graph.max_fields) {
+                        return Err(SemanticTypeAdapterErrorV2::BoundExceeded {
+                            resource: "rustc layout preflight fields",
+                            actual: total_fields,
+                            max: u64::from(budgets.graph.max_fields),
+                        });
+                    }
+                    meter
+                        .charge_work("rustc layout preflight work", variant.fields.len() as u64)?;
+                    for field in variant.fields.iter().rev() {
+                        meter.charge_text(field.name.as_str().len())?;
+                        let field_ty = field.ty(tcx, arguments);
+                        let field_ty = tcx
+                            .try_normalize_erasing_regions(typing_env, field_ty)
+                            .map_err(|_| {
+                                SemanticTypeAdapterErrorV2::Extraction(
+                                    "field type normalization failed".to_owned(),
+                                )
+                            })?;
+                        push_preflight_type(&mut stack, field_ty, child_depth)?;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok((normalized, meter))
+}
+
+fn push_preflight_type<'tcx>(
+    stack: &mut Vec<(Ty<'tcx>, u32)>,
+    ty: Ty<'tcx>,
+    depth: u32,
+) -> Result<(), SemanticTypeAdapterErrorV2> {
+    stack
+        .try_reserve(1)
+        .map_err(|_| SemanticTypeAdapterErrorV2::AllocationFailed {
+            resource: "rustc layout preflight stack",
+        })?;
+    stack.push((ty, depth));
+    Ok(())
+}
+
+fn charge_capture_result(
+    meter: &mut CaptureMeterV2,
+    capture: &PendingCaptureV2,
+) -> Result<(), SemanticTypeAdapterErrorV2> {
+    meter.charge_work(
+        "rustc layout capture work",
+        capture.graph.node_count() as u64,
+    )?;
+    meter.charge_work(
+        "rustc layout sidecar sorting work",
+        sort_work(capture.layout_records.len()),
+    )?;
+    for record in &capture.layout_records {
+        meter.charge_work("rustc layout sidecar work", 1)?;
+        meter.charge_text(record.key.len())?;
+        for aggregate in &record.aggregates {
+            meter.charge_work(
+                "rustc layout sidecar work",
+                1_u64
+                    .saturating_add(aggregate.source_to_memory.len() as u64)
+                    .saturating_add(aggregate.padding.len() as u64),
+            )?;
+            meter.charge_text(aggregate.path.len())?;
+        }
+    }
+    Ok(())
+}
+
 /// Observes a type layout under the exact active rustc target.
 ///
 /// This result is inert and is not compiler/source provenance or freshness
@@ -996,7 +1236,6 @@ pub fn observe_rustc_type_layout_v2<'tcx>(
     expected_rustc_target: &SemanticLayoutTargetV1,
     budgets: SemanticTypeCaptureBudgetsV2,
 ) -> Result<RustcTypeLayoutObservationV2, SemanticTypeAdapterErrorV2> {
-    let _root_type_name = bounded_type_name(ty, budgets.graph.max_name_bytes)?;
     let observed = rustc_semantic_layout_target_v1(tcx)?;
     if expected_rustc_target != &observed {
         return Err(SemanticTypeAdapterErrorV2::TargetMismatch {
@@ -1004,6 +1243,7 @@ pub fn observe_rustc_type_layout_v2<'tcx>(
             observed,
         });
     }
+    let (ty, mut meter) = normalize_and_preflight_layout_type(tcx, ty, budgets)?;
 
     let mut capture = if is_unsized_pointer(ty, tcx) {
         capture_unsized_pointer(tcx, ty, budgets)?
@@ -1020,8 +1260,9 @@ pub fn observe_rustc_type_layout_v2<'tcx>(
                 max_array_elements: 1 << 24,
             },
         )?;
-        CaptureBuilderV2::new(budgets).finish(&facts)?
+        CaptureBuilderV2::new(budgets)?.finish(&facts)?
     };
+    charge_capture_result(&mut meter, &capture)?;
     capture
         .layout_records
         .sort_by(|left, right| left.key.cmp(&right.key));
@@ -1062,18 +1303,31 @@ struct PendingCaptureV2 {
 struct CaptureBuilderV2 {
     budgets: SemanticTypeCaptureBudgetsV2,
     graph: SemanticTypeGraphBuilderV2,
-    by_type: BTreeMap<String, SemanticTypeNodeIdV2>,
+    by_type: HashMap<String, SemanticTypeNodeIdV2>,
     records: Vec<RustcTypeLayoutRecordV2>,
 }
 
 impl CaptureBuilderV2 {
-    fn new(budgets: SemanticTypeCaptureBudgetsV2) -> Self {
-        Self {
+    fn new(budgets: SemanticTypeCaptureBudgetsV2) -> Result<Self, SemanticTypeAdapterErrorV2> {
+        let initial = (budgets.max_sidecar_records as usize).min(64);
+        let mut by_type = HashMap::new();
+        by_type
+            .try_reserve(initial)
+            .map_err(|_| SemanticTypeAdapterErrorV2::AllocationFailed {
+                resource: "rustc layout type intern table",
+            })?;
+        let mut records = Vec::new();
+        records
+            .try_reserve(initial)
+            .map_err(|_| SemanticTypeAdapterErrorV2::AllocationFailed {
+                resource: "rustc layout records",
+            })?;
+        Ok(Self {
             budgets,
             graph: SemanticTypeGraphBuilderV2::new(budgets.graph),
-            by_type: BTreeMap::new(),
-            records: Vec::new(),
-        }
+            by_type,
+            records,
+        })
     }
 
     fn finish(
@@ -1113,7 +1367,7 @@ impl CaptureBuilderV2 {
         Ok(id)
     }
 
-    fn reserve_record(&self) -> Result<(), SemanticTypeAdapterErrorV2> {
+    fn reserve_record(&mut self) -> Result<(), SemanticTypeAdapterErrorV2> {
         let actual = self.records.len() as u64 + 1;
         let max = u64::from(self.budgets.max_sidecar_records);
         if actual > max {
@@ -1123,6 +1377,16 @@ impl CaptureBuilderV2 {
                 max,
             });
         }
+        self.records
+            .try_reserve(1)
+            .map_err(|_| SemanticTypeAdapterErrorV2::AllocationFailed {
+                resource: "rustc layout records",
+            })?;
+        self.by_type
+            .try_reserve(1)
+            .map_err(|_| SemanticTypeAdapterErrorV2::AllocationFailed {
+                resource: "rustc layout type intern table",
+            })?;
         Ok(())
     }
 
@@ -1215,9 +1479,10 @@ impl CaptureBuilderV2 {
             }
             TypeLayoutKind::Tuple(fields) => {
                 let semantic_fields = self.convert_fields(fields, path, false)?;
-                record
-                    .aggregates
-                    .push(aggregate_record(path, fields, facts.size_bytes, &[])?);
+                push_aggregate_record(
+                    &mut record,
+                    aggregate_record(path, fields, facts.size_bytes, &[])?,
+                )?;
                 SemanticTypeKindV2::Tuple {
                     fields: semantic_fields,
                 }
@@ -1236,7 +1501,12 @@ impl CaptureBuilderV2 {
         path: &str,
         require_names: bool,
     ) -> Result<Vec<SemanticFieldV2>, SemanticTypeAdapterErrorV2> {
-        let mut converted = Vec::with_capacity(fields.len());
+        let mut converted = Vec::new();
+        converted.try_reserve_exact(fields.len()).map_err(|_| {
+            SemanticTypeAdapterErrorV2::AllocationFailed {
+                resource: "semantic aggregate fields",
+            }
+        })?;
         for (index, field) in fields.iter().enumerate() {
             if field.source_index != index || (require_names && field.name.is_none()) {
                 return Err(inconsistent(
@@ -1270,9 +1540,10 @@ impl CaptureBuilderV2 {
                 }
                 let fields = &adt.variants[0].fields;
                 let converted = self.convert_fields(fields, path, true)?;
-                record
-                    .aggregates
-                    .push(aggregate_record(path, fields, facts.size_bytes, &[])?);
+                push_aggregate_record(
+                    record,
+                    aggregate_record(path, fields, facts.size_bytes, &[])?,
+                )?;
                 if adt.kind == AdtKind::Struct {
                     Ok(SemanticTypeKindV2::Struct {
                         identity: facts.rust_type.clone(),
@@ -1350,7 +1621,18 @@ impl CaptureBuilderV2 {
             )],
             _ => Vec::new(),
         };
-        let mut variants = Vec::with_capacity(adt.variants.len());
+        let mut variants = Vec::new();
+        variants
+            .try_reserve_exact(adt.variants.len())
+            .map_err(|_| SemanticTypeAdapterErrorV2::AllocationFailed {
+                resource: "semantic enum variants",
+            })?;
+        record
+            .aggregates
+            .try_reserve(adt.variants.len())
+            .map_err(|_| SemanticTypeAdapterErrorV2::AllocationFailed {
+                resource: "rustc enum aggregate records",
+            })?;
         for (index, variant) in adt.variants.iter().enumerate() {
             if variant.source_index as usize != index {
                 return Err(inconsistent(path, "enum variants are not in source order"));
@@ -1379,6 +1661,20 @@ impl CaptureBuilderV2 {
             variants,
         })
     }
+}
+
+fn push_aggregate_record(
+    record: &mut RustcTypeLayoutRecordV2,
+    aggregate: RustcAggregateLayoutV2,
+) -> Result<(), SemanticTypeAdapterErrorV2> {
+    record
+        .aggregates
+        .try_reserve(1)
+        .map_err(|_| SemanticTypeAdapterErrorV2::AllocationFailed {
+            resource: "rustc aggregate records",
+        })?;
+    record.aggregates.push(aggregate);
+    Ok(())
 }
 
 fn scalar_kind(
@@ -1685,9 +1981,26 @@ fn aggregate_record(
     container_size: u64,
     reserved: &[(u64, u64)],
 ) -> Result<RustcAggregateLayoutV2, SemanticTypeAdapterErrorV2> {
-    let mut source_to_memory = Vec::with_capacity(fields.len());
-    let mut seen_memory = vec![false; fields.len()];
-    let mut occupied = reserved.to_vec();
+    let mut source_to_memory = Vec::new();
+    source_to_memory
+        .try_reserve_exact(fields.len())
+        .map_err(|_| SemanticTypeAdapterErrorV2::AllocationFailed {
+            resource: "rustc source-to-memory projection",
+        })?;
+    let mut seen_memory = Vec::new();
+    seen_memory.try_reserve_exact(fields.len()).map_err(|_| {
+        SemanticTypeAdapterErrorV2::AllocationFailed {
+            resource: "rustc field permutation state",
+        }
+    })?;
+    seen_memory.resize(fields.len(), false);
+    let mut occupied = Vec::new();
+    occupied
+        .try_reserve(reserved.len().saturating_add(fields.len()))
+        .map_err(|_| SemanticTypeAdapterErrorV2::AllocationFailed {
+            resource: "rustc aggregate occupied ranges",
+        })?;
+    occupied.extend_from_slice(reserved);
     for (source_index, field) in fields.iter().enumerate() {
         if field.source_index != source_index || field.memory_index >= fields.len() {
             return Err(inconsistent(
@@ -1716,6 +2029,11 @@ fn aggregate_record(
     }
     occupied.sort_unstable();
     let mut merged: Vec<(u64, u64)> = Vec::new();
+    merged.try_reserve(occupied.len()).map_err(|_| {
+        SemanticTypeAdapterErrorV2::AllocationFailed {
+            resource: "rustc aggregate merged ranges",
+        }
+    })?;
     for range in occupied {
         if let Some(last) = merged.last_mut()
             && range.0 <= last.1
@@ -1726,6 +2044,11 @@ fn aggregate_record(
         }
     }
     let mut padding = Vec::new();
+    padding
+        .try_reserve(merged.len().saturating_add(1))
+        .map_err(|_| SemanticTypeAdapterErrorV2::AllocationFailed {
+            resource: "rustc aggregate padding ranges",
+        })?;
     let mut cursor = 0;
     for (start, end) in merged {
         if start > cursor {
@@ -1800,6 +2123,18 @@ fn capture_unsized_pointer<'tcx>(
         TyKind::RawPtr(pointee, mutability) => (pointee, mutability, false),
         _ => return Err(unsupported("root", "expected an unsized pointer")),
     };
+    let required_records = if matches!(*pointee.kind(), TyKind::Slice(_)) {
+        3_u64
+    } else {
+        2_u64
+    };
+    if required_records > u64::from(budgets.max_sidecar_records) {
+        return Err(SemanticTypeAdapterErrorV2::BoundExceeded {
+            resource: "rustc layout sidecar records",
+            actual: required_records,
+            max: u64::from(budgets.max_sidecar_records),
+        });
+    }
     let BackendRepr::ScalarPair(first, second) = layout.backend_repr else {
         return Err(inconsistent(
             "root",
@@ -1822,13 +2157,19 @@ fn capture_unsized_pointer<'tcx>(
     let pointee_layout = layout_cx
         .layout_of(pointee)
         .map_err(|error| SemanticTypeAdapterErrorV2::Extraction(error.to_string()))?;
-    let mut records = vec![RustcTypeLayoutRecordV2 {
+    let mut records = Vec::new();
+    records
+        .try_reserve_exact(required_records as usize)
+        .map_err(|_| SemanticTypeAdapterErrorV2::AllocationFailed {
+            resource: "rustc DST layout records",
+        })?;
+    records.push(RustcTypeLayoutRecordV2 {
         key: root_key.clone(),
         representation: None,
         aggregates: Vec::new(),
         array_stride_bytes: None,
         uninhabited: false,
-    }];
+    });
     let (pointee_kind, metadata) = match *pointee.kind() {
         TyKind::Slice(element) => {
             let element_facts =
@@ -1937,14 +2278,6 @@ fn capture_unsized_pointer<'tcx>(
         array_stride_bytes: None,
         uninhabited: false,
     });
-    let record_count = records.len() as u64;
-    if record_count > u64::from(budgets.max_sidecar_records) {
-        return Err(SemanticTypeAdapterErrorV2::BoundExceeded {
-            resource: "rustc layout sidecar records",
-            actual: record_count,
-            max: u64::from(budgets.max_sidecar_records),
-        });
-    }
     let graph = graph.finish(root)?;
     let graph_bytes = graph.canonical_bytes()?;
     Ok(PendingCaptureV2 {
@@ -1959,6 +2292,11 @@ fn encode_sidecar(
     max_bytes: u32,
 ) -> Result<Vec<u8>, SemanticTypeAdapterErrorV2> {
     let mut output = Vec::new();
+    output
+        .try_reserve((max_bytes as usize).min(4096))
+        .map_err(|_| SemanticTypeAdapterErrorV2::AllocationFailed {
+            resource: "rustc layout sidecar bytes",
+        })?;
     push_bytes(&mut output, b"fe2o3.rustc-layout-sidecar.v2", max_bytes)?;
     push_u32(&mut output, records.len() as u32, max_bytes)?;
     for record in records {
@@ -2235,6 +2573,11 @@ fn extend_bounded(
             max: u64::from(max),
         });
     }
+    output
+        .try_reserve(bytes.len())
+        .map_err(|_| SemanticTypeAdapterErrorV2::AllocationFailed {
+            resource: "rustc layout sidecar bytes",
+        })?;
     output.extend_from_slice(bytes);
     Ok(())
 }
@@ -2258,15 +2601,21 @@ impl fmt::Write for BoundedTypeNameWriter {
 
 fn bounded_type_name(ty: Ty<'_>, max_bytes: u32) -> Result<String, SemanticTypeAdapterErrorV2> {
     let max_bytes = max_bytes as usize;
+    let mut text = String::new();
+    text.try_reserve(max_bytes.min(256)).map_err(|_| {
+        SemanticTypeAdapterErrorV2::AllocationFailed {
+            resource: "bounded rustc type name",
+        }
+    })?;
     let mut output = BoundedTypeNameWriter {
-        text: String::with_capacity(max_bytes.min(256)),
+        text,
         max_bytes,
         exceeded: false,
     };
     let rendered = with_no_trimmed_paths!(fmt::write(&mut output, format_args!("{ty}")));
     if output.exceeded {
         return Err(SemanticTypeAdapterErrorV2::BoundExceeded {
-            resource: "rustc root type name bytes",
+            resource: "rustc type name bytes",
             actual: max_bytes.saturating_add(1) as u64,
             max: max_bytes as u64,
         });
@@ -2296,8 +2645,9 @@ fn inconsistent(path: &str, detail: impl Into<String>) -> SemanticTypeAdapterErr
 mod tests {
     use std::collections::BTreeMap;
     use std::fs;
+    use std::io::Write as _;
     use std::path::PathBuf;
-    use std::process::Command;
+    use std::process::{Command, Stdio};
 
     use rustc_driver::{Callbacks, Compilation};
     use rustc_hir::def::DefKind;
@@ -2321,6 +2671,12 @@ struct RustRoot { byte: u8, wide: u64, half: u16, word: u32 }
 #[repr(C)]
 struct Padded { byte: u8, word: u32 }
 
+#[repr(transparent)]
+struct Transparent(u32);
+
+struct VeryLongNestedTypeNameForBoundedPreflight(u32);
+struct R { nested: VeryLongNestedTypeNameForBoundedPreflight }
+
 #[repr(u8)]
 enum Direct { Empty = 3, Payload(u32) = 9 }
 
@@ -2341,6 +2697,8 @@ static C_VALUE: CRoot = CRoot {
 };
 static RUST_VALUE: RustRoot = RustRoot { byte: 1, wide: 2, half: 3, word: 4 };
 static PADDED_VALUE: Padded = Padded { byte: 1, word: 2 };
+static TRANSPARENT_VALUE: Transparent = Transparent(7);
+static NESTED_NAME_VALUE: R = R { nested: VeryLongNestedTypeNameForBoundedPreflight(9) };
 static TUPLE_VALUE: (u8, u32, [u16; 2]) = (1, 2, [3, 4]);
 static ARRAY_VALUE: [Inner; 2] = [Inner { left: 1, right: 2 }, Inner { left: 3, right: 4 }];
 static DIRECT_VALUE: Direct = Direct::Empty;
@@ -2359,6 +2717,9 @@ static POINTER_NICHE: Option<&u8> = Some(&BYTE);
         mismatch: Option<SemanticTypeAdapterErrorV2>,
         bounded: Option<SemanticTypeAdapterErrorV2>,
         name_bounded: Option<SemanticTypeAdapterErrorV2>,
+        nested_name_bounded: Option<SemanticTypeAdapterErrorV2>,
+        work_bounded: Option<SemanticTypeAdapterErrorV2>,
+        path_bounded: Option<SemanticTypeAdapterErrorV2>,
         dst_bounded: Option<SemanticTypeAdapterErrorV2>,
         reauthenticated: bool,
     }
@@ -2371,6 +2732,7 @@ static POINTER_NICHE: Option<&u8> = Some(&BYTE);
                 "C_VALUE",
                 "RUST_VALUE",
                 "PADDED_VALUE",
+                "TRANSPARENT_VALUE",
                 "TUPLE_VALUE",
                 "ARRAY_VALUE",
                 "DIRECT_VALUE",
@@ -2439,6 +2801,41 @@ static POINTER_NICHE: Option<&u8> = Some(&BYTE);
                         max_name_bytes: 4,
                         ..SemanticTypeGraphBudgetsV2::default()
                     },
+                    ..SemanticTypeCaptureBudgetsV2::default()
+                },
+            )
+            .err();
+            let nested_root = local_static_type(tcx, "NESTED_NAME_VALUE");
+            let nested_root_name = bounded_type_name(nested_root, u32::MAX).unwrap();
+            self.nested_name_bounded = observe_rustc_type_layout_v2(
+                tcx,
+                nested_root,
+                &observed,
+                SemanticTypeCaptureBudgetsV2 {
+                    graph: SemanticTypeGraphBudgetsV2 {
+                        max_name_bytes: nested_root_name.len() as u32,
+                        ..SemanticTypeGraphBudgetsV2::default()
+                    },
+                    ..SemanticTypeCaptureBudgetsV2::default()
+                },
+            )
+            .err();
+            self.work_bounded = observe_rustc_type_layout_v2(
+                tcx,
+                local_static_type(tcx, "C_VALUE"),
+                &observed,
+                SemanticTypeCaptureBudgetsV2 {
+                    max_capture_work: 0,
+                    ..SemanticTypeCaptureBudgetsV2::default()
+                },
+            )
+            .err();
+            self.path_bounded = observe_rustc_type_layout_v2(
+                tcx,
+                local_static_type(tcx, "C_VALUE"),
+                &observed,
+                SemanticTypeCaptureBudgetsV2 {
+                    max_path_bytes: 3_075,
                     ..SemanticTypeCaptureBudgetsV2::default()
                 },
             )
@@ -2550,9 +2947,32 @@ static POINTER_NICHE: Option<&u8> = Some(&BYTE);
         assert!(matches!(
             results.name_bounded,
             Some(SemanticTypeAdapterErrorV2::BoundExceeded {
-                resource: "rustc root type name bytes",
+                resource: "rustc type name bytes",
                 actual: 5,
                 max: 4,
+            })
+        ));
+        assert!(matches!(
+            results.nested_name_bounded,
+            Some(SemanticTypeAdapterErrorV2::BoundExceeded {
+                resource: "rustc type name bytes",
+                ..
+            })
+        ));
+        assert!(matches!(
+            results.work_bounded,
+            Some(SemanticTypeAdapterErrorV2::BoundExceeded {
+                resource: "rustc layout preflight work",
+                actual: 1,
+                max: 0,
+            })
+        ));
+        assert!(matches!(
+            results.path_bounded,
+            Some(SemanticTypeAdapterErrorV2::BoundExceeded {
+                resource: "rustc layout path bytes",
+                actual: 3_076,
+                max: 3_075,
             })
         ));
         assert!(matches!(
@@ -2663,6 +3083,8 @@ static POINTER_NICHE: Option<&u8> = Some(&BYTE);
 
         let array = &results.captures["ARRAY_VALUE"];
         assert!(derive_gfx942_layout_compatibility_candidate_v2(array, budgets).is_ok());
+        let transparent = &results.captures["TRANSPARENT_VALUE"];
+        assert!(derive_gfx942_layout_compatibility_candidate_v2(transparent, budgets).is_ok());
         for rejected in [
             "RUST_VALUE",
             "PADDED_VALUE",
@@ -2752,5 +3174,132 @@ static POINTER_NICHE: Option<&u8> = Some(&BYTE);
             compare_host_device_fixture_bytes_v2(&candidate, host_bytes, host_bytes, 15),
             Err(DeviceCopyLayoutErrorV2::ByteLengthExceeded { .. })
         ));
+    }
+
+    #[test]
+    fn projection_limits_fail_at_max_plus_one_and_on_overflow() {
+        let results = captures();
+        let c = &results.captures["C_VALUE"];
+        let error = derive_gfx942_layout_compatibility_candidate_v2(
+            c,
+            SemanticTypeCaptureBudgetsV2 {
+                max_projection_work: 0,
+                ..SemanticTypeCaptureBudgetsV2::default()
+            },
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            DeviceCopyLayoutErrorV2::WorkBoundExceeded { actual: 1, max: 0 }
+        );
+        assert!(matches!(
+            align_up(u64::MAX, 8, "overflow"),
+            Err(DeviceCopyLayoutErrorV2::ArithmeticOverflow { .. })
+        ));
+    }
+
+    #[test]
+    #[ignore = "requires ROCm LLVM 22, Ubuntu LLVM 18, and gfx942 target support"]
+    fn reviewed_gfx942_projection_matches_llvm_record_and_code_object_probes() {
+        const SOURCE: &str = r#"
+typedef struct { unsigned short left; unsigned short right; } Inner;
+typedef struct { unsigned head; Inner nested[2]; unsigned tail; } Root;
+__attribute__((amdgpu_kernel)) void layout_probe(Root *out) { out[0].tail = 7; }
+"#;
+        for clang in ["/opt/rocm/llvm/bin/clang", "/usr/bin/clang-18"] {
+            let mut child = Command::new(clang)
+                .args([
+                    "-x",
+                    "c",
+                    "-",
+                    "--target=amdgcn-amd-amdhsa",
+                    "-mcpu=gfx942",
+                    "-nogpulib",
+                    "-Xclang",
+                    "-fdump-record-layouts-complete",
+                    "-fsyntax-only",
+                ])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap_or_else(|error| panic!("start {clang}: {error}"));
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(SOURCE.as_bytes())
+                .unwrap();
+            let output = child.wait_with_output().unwrap();
+            assert!(
+                output.status.success(),
+                "{clang}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let dump = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            for expected in [
+                "0 |   unsigned short left",
+                "2 |   unsigned short right",
+                "[sizeof=4, align=2]",
+                "0 |   unsigned int head",
+                "4 |   Inner[2] nested",
+                "12 |   unsigned int tail",
+                "[sizeof=16, align=4]",
+            ] {
+                assert!(
+                    dump.contains(expected),
+                    "{clang} omitted {expected:?}:\n{dump}"
+                );
+            }
+        }
+
+        let object = std::env::temp_dir().join(format!(
+            "fe2o3-gfx942-layout-probe-{}.o",
+            std::process::id()
+        ));
+        let mut child = Command::new("/opt/rocm/llvm/bin/clang")
+            .args([
+                "-x",
+                "c",
+                "-",
+                "--target=amdgcn-amd-amdhsa",
+                "-mcpu=gfx942",
+                "-nogpulib",
+                "-c",
+                "-o",
+            ])
+            .arg(&object)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("start ROCm clang code-object probe");
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(SOURCE.as_bytes())
+            .unwrap();
+        let compile = child.wait_with_output().unwrap();
+        assert!(
+            compile.status.success(),
+            "{}",
+            String::from_utf8_lossy(&compile.stderr)
+        );
+        let readelf = Command::new("/opt/rocm/llvm/bin/llvm-readelf")
+            .args(["--file-header", "--notes"])
+            .arg(&object)
+            .output()
+            .expect("inspect gfx942 code object");
+        let _ = fs::remove_file(&object);
+        assert!(readelf.status.success());
+        let inspection = String::from_utf8(readelf.stdout).unwrap();
+        assert!(inspection.contains("Machine:                           EM_AMDGPU"));
+        assert!(inspection.contains("gfx942"));
+        assert!(inspection.contains("amdhsa.target:   amdgcn-amd-amdhsa--gfx942"));
     }
 }
