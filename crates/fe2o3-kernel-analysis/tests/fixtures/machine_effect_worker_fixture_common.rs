@@ -86,6 +86,22 @@ fn analysis_response(bytes: Vec<u8>) {
                 std::process::exit(82);
             }
         }
+        10 => {
+            use rustix::process::{Resource, getrlimit};
+            for (resource, expected) in [
+                (Resource::As, 4 * 1024 * 1024 * 1024),
+                (Resource::Data, 2 * 1024 * 1024 * 1024),
+                (Resource::Fsize, 16 * 1024 * 1024),
+                (Resource::Core, 0),
+            ] {
+                let limit = getrlimit(resource);
+                if limit.current.is_none_or(|value| value > expected)
+                    || limit.maximum.is_none_or(|value| value > expected)
+                {
+                    std::process::exit(83);
+                }
+            }
+        }
         _ => {}
     }
     let mode = request.payload[0];

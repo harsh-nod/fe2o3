@@ -736,6 +736,21 @@ void loaderViewMutationsFailClosed() {
     requireRejectedWith(std::move(Mutated),
                         "unsupported finalized-image relocations");
   }
+  {
+    std::vector<uint8_t> Mutated = Payload;
+    size_t Symtab = Layout.SectionHeaders.at(".symtab");
+    uint64_t Offset = support::endian::read64le(Mutated.data() + Symtab + 24);
+    constexpr uint64_t OversizedSymbolBytes = 4097 * sizeof(ELF64LE::Sym);
+    require(Offset <= std::numeric_limits<size_t>::max() - OversizedSymbolBytes,
+            "symbol fanout mutation overflows host size");
+    Mutated.resize(static_cast<size_t>(Offset + OversizedSymbolBytes));
+    support::endian::write64le(Mutated.data() + Symtab + 32,
+                               OversizedSymbolBytes);
+    support::endian::write64le(Mutated.data() + Symtab + 56,
+                               sizeof(ELF64LE::Sym));
+    requireRejectedWith(std::move(Mutated),
+                        ".symtab symbol count is outside bounded profile");
+  }
 }
 
 void cfgReviewerReproductionsFailClosed() {

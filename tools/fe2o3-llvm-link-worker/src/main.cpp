@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <sys/resource.h>
 #include <vector>
 
 #ifndef FE2O3_LLVM_BUILD_ID
@@ -21,6 +22,30 @@
 using namespace fe2o3::worker;
 
 namespace {
+
+constexpr rlim_t MachineEffectAddressSpaceBytes = 4ULL * 1024 * 1024 * 1024;
+constexpr rlim_t MachineEffectDataBytes = 2ULL * 1024 * 1024 * 1024;
+constexpr rlim_t MachineEffectFileBytes = 16ULL * 1024 * 1024;
+
+bool setBoundedLimit(int Resource, rlim_t Bound) {
+  struct rlimit Existing{};
+  if (::getrlimit(Resource, &Existing) != 0)
+    return false;
+  auto Clamp = [Bound](rlim_t Value) {
+    return Value == RLIM_INFINITY || Value > Bound ? Bound : Value;
+  };
+  struct rlimit Limited{Clamp(Existing.rlim_cur), Clamp(Existing.rlim_max)};
+  if (Limited.rlim_cur > Limited.rlim_max)
+    Limited.rlim_cur = Limited.rlim_max;
+  return ::setrlimit(Resource, &Limited) == 0;
+}
+
+bool installMachineEffectResourceLimits() {
+  return setBoundedLimit(RLIMIT_AS, MachineEffectAddressSpaceBytes) &&
+         setBoundedLimit(RLIMIT_DATA, MachineEffectDataBytes) &&
+         setBoundedLimit(RLIMIT_FSIZE, MachineEffectFileBytes) &&
+         setBoundedLimit(RLIMIT_CORE, 0);
+}
 
 bool readBoundedStdin(std::vector<uint8_t> &Bytes) {
   std::array<uint8_t, 16 * 1024> Buffer{};
@@ -111,6 +136,9 @@ int main(int ArgumentCount, char **ArgumentValues) {
   if (ArgumentCount != 1 && !PhysicalMachineEffect &&
       !PhysicalMachineEffectIdentity)
     return 64;
+  if ((PhysicalMachineEffect || PhysicalMachineEffectIdentity) &&
+      !installMachineEffectResourceLimits())
+    return 70;
   std::vector<uint8_t> Bytes;
   Bytes.reserve(64 * 1024);
   if (!readBoundedStdin(Bytes)) {

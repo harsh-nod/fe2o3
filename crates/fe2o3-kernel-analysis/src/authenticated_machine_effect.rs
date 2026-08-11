@@ -213,6 +213,7 @@ pub enum AuthenticatedPhysicalMachineEffectErrorKindV1 {
     Spawn,
     ProcessObservation,
     RuntimeClosureChanged,
+    ConfigureResourceLimits,
     RuntimeClosureMismatch {
         expected: PhysicalMachineRuntimeClosureIdentityV1,
         actual: PhysicalMachineRuntimeClosureIdentityV1,
@@ -478,7 +479,7 @@ mod platform {
     use super::*;
     use rustix::{
         fs::{MemfdFlags, Mode, OFlags, SealFlags},
-        process::{Pid, Signal, kill_process, kill_process_group},
+        process::{Pid, Resource, Rlimit, Signal, kill_process, kill_process_group, prlimit},
     };
     use std::{
         collections::{BTreeMap, BTreeSet},
@@ -498,6 +499,11 @@ mod platform {
     const POLL_INTERVAL: Duration = Duration::from_millis(2);
     const DESCENDANT_SCAN_INTERVAL: Duration = Duration::from_millis(25);
     const DRAIN_GRACE: Duration = Duration::from_millis(200);
+    const MAX_PROC_MAPS_BYTES: usize = 1024 * 1024;
+    const MAX_PROC_STAT_BYTES: usize = 4096;
+    const WORKER_ADDRESS_SPACE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+    const WORKER_DATA_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+    const WORKER_FILE_BYTES: u64 = 16 * 1024 * 1024;
     const REQUIRED_SEALS: SealFlags = SealFlags::WRITE
         .union(SealFlags::GROW)
         .union(SealFlags::SHRINK)
@@ -759,6 +765,11 @@ mod platform {
                     error,
                 )
             })?;
+            if let Err(error) = configure_worker_limits(&child) {
+                terminate_process_tree(&mut child, &BTreeSet::new());
+                let _ = child.wait();
+                return Err(error);
+            }
             let mut observation = match observe_process(child.id(), self.policy.executable) {
                 Ok(observation) => observation,
                 Err(error) => {
@@ -1108,13 +1119,43 @@ mod platform {
         })
     }
 
-    fn process_start_ticks(pid: u32) -> Result<u64, AuthenticatedPhysicalMachineEffectErrorV1> {
-        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).map_err(|error| {
-            AuthenticatedPhysicalMachineEffectErrorV1::detail(
-                AuthenticatedPhysicalMachineEffectErrorKindV1::ProcessObservation,
-                error,
+    fn configure_worker_limits(
+        child: &Child,
+    ) -> Result<(), AuthenticatedPhysicalMachineEffectErrorV1> {
+        let pid = Pid::from_child(child);
+        for (resource, value) in [
+            (Resource::As, WORKER_ADDRESS_SPACE_BYTES),
+            (Resource::Data, WORKER_DATA_BYTES),
+            (Resource::Fsize, WORKER_FILE_BYTES),
+            (Resource::Core, 0),
+        ] {
+            prlimit(
+                Some(pid),
+                resource,
+                Rlimit {
+                    current: Some(value),
+                    maximum: Some(value),
+                },
             )
-        })?;
+            .map_err(|error| {
+                AuthenticatedPhysicalMachineEffectErrorV1::detail(
+                    AuthenticatedPhysicalMachineEffectErrorKindV1::ConfigureResourceLimits,
+                    error,
+                )
+            })?;
+        }
+        Ok(())
+    }
+
+    fn process_start_ticks(pid: u32) -> Result<u64, AuthenticatedPhysicalMachineEffectErrorV1> {
+        let stat = read_bounded_utf8(format!("/proc/{pid}/stat"), MAX_PROC_STAT_BYTES).map_err(
+            |error| {
+                AuthenticatedPhysicalMachineEffectErrorV1::detail(
+                    AuthenticatedPhysicalMachineEffectErrorKindV1::ProcessObservation,
+                    error,
+                )
+            },
+        )?;
         let end = stat.rfind(')').ok_or_else(|| {
             AuthenticatedPhysicalMachineEffectErrorV1::plain(
                 AuthenticatedPhysicalMachineEffectErrorKindV1::ProcessObservation,
@@ -1144,12 +1185,14 @@ mod platform {
         (PhysicalMachineRuntimeClosureIdentityV1, Vec<RuntimeFile>),
         AuthenticatedPhysicalMachineEffectErrorV1,
     > {
-        let maps = std::fs::read_to_string(format!("/proc/{pid}/maps")).map_err(|error| {
-            AuthenticatedPhysicalMachineEffectErrorV1::detail(
-                AuthenticatedPhysicalMachineEffectErrorKindV1::ProcessObservation,
-                error,
-            )
-        })?;
+        let maps = read_bounded_utf8(format!("/proc/{pid}/maps"), MAX_PROC_MAPS_BYTES).map_err(
+            |error| {
+                AuthenticatedPhysicalMachineEffectErrorV1::detail(
+                    AuthenticatedPhysicalMachineEffectErrorKindV1::ProcessObservation,
+                    error,
+                )
+            },
+        )?;
         let mut files = BTreeMap::<(u32, u32, u64), RuntimeFile>::new();
         let mut total = 0_u64;
         for line in maps.lines() {
@@ -1160,6 +1203,11 @@ mod platform {
             let device = fields.next().unwrap_or_default();
             let inode = fields.next().unwrap_or("0");
             let path = fields.collect::<Vec<_>>().join(" ");
+            if path.len() > u16::MAX as usize {
+                return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
+                    AuthenticatedPhysicalMachineEffectErrorKindV1::ProcessObservation,
+                ));
+            }
             if inode == "0" || (!path.starts_with('/') && !path.starts_with("/memfd:")) {
                 continue;
             }
@@ -1679,6 +1727,26 @@ mod platform {
                 result => return result,
             }
         }
+    }
+
+    fn read_bounded_utf8(path: impl AsRef<Path>, limit: usize) -> io::Result<String> {
+        let mut file = File::open(path)?;
+        let mut bytes = Vec::with_capacity(limit.min(8192));
+        let mut buffer = [0_u8; 8192];
+        loop {
+            let read = read_retry(&mut file, &mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            if read > limit.saturating_sub(bytes.len()) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "bounded proc record exceeds byte limit",
+                ));
+            }
+            bytes.extend_from_slice(&buffer[..read]);
+        }
+        String::from_utf8(bytes).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
     }
 
     pub(super) fn persist_receipt(

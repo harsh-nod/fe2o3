@@ -217,6 +217,11 @@ fn worker_receives_only_the_fixed_environment_allowlist() {
 }
 
 #[test]
+fn worker_parses_requests_under_bounded_resource_limits() {
+    worker().analyze(vec![10], vec![entry()], limits()).unwrap();
+}
+
+#[test]
 fn timeout_reaps_worker_and_descendants() {
     let worker = worker();
     let started = Instant::now();
