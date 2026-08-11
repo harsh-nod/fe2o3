@@ -2091,6 +2091,137 @@ fn truncated_collection_counts_fail_before_reservation() {
 }
 
 #[test]
+fn aggregate_decode_limits_reject_before_nested_reservation() {
+    let aggregate_types = vec![
+        scalar(1, 8, BitValidityV2::Any),
+        MemoryTypeV2 {
+            id: ty(2),
+            size: 2,
+            alignment: 1,
+            kind: MemoryTypeKindV2::Aggregate {
+                fields: vec![
+                    MemoryFieldV2 {
+                        offset: 0,
+                        ty: ty(1),
+                    },
+                    MemoryFieldV2 {
+                        offset: 1,
+                        ty: ty(1),
+                    },
+                ],
+            },
+        },
+        MemoryTypeV2 {
+            id: ty(3),
+            size: 2,
+            alignment: 1,
+            kind: MemoryTypeKindV2::Aggregate {
+                fields: vec![
+                    MemoryFieldV2 {
+                        offset: 0,
+                        ty: ty(1),
+                    },
+                    MemoryFieldV2 {
+                        offset: 1,
+                        ty: ty(1),
+                    },
+                ],
+            },
+        },
+    ];
+    let aggregate = MemoryProgramV2::new(
+        TargetLayoutV2::gfx942_xnack_minus(),
+        aggregate_types,
+        vec![],
+        MemoryBudgetsV2::default(),
+    )
+    .unwrap();
+    let aggregate_bytes = aggregate
+        .canonical_bytes(MemoryBudgetsV2::default())
+        .unwrap();
+    let edge_boundary = MemoryBudgetsV2 {
+        max_type_edges: 4,
+        ..MemoryBudgetsV2::default()
+    };
+    MemoryProgramV2::decode_canonical(&aggregate_bytes, edge_boundary).unwrap();
+    assert_eq!(
+        MemoryProgramV2::decode_canonical(
+            &aggregate_bytes,
+            MemoryBudgetsV2 {
+                max_type_edges: 3,
+                ..MemoryBudgetsV2::default()
+            },
+        )
+        .unwrap_err()
+        .reason,
+        MemoryErrorReasonV2::ResourceLimit {
+            resource: "type edges",
+            actual: 4,
+            max: 3,
+        }
+    );
+
+    let ranged = MemoryProgramV2::new(
+        TargetLayoutV2::gfx942_xnack_minus(),
+        vec![
+            scalar(
+                1,
+                8,
+                BitValidityV2::Ranges(vec![
+                    BitValidityRangeV2 {
+                        start: 0,
+                        end_inclusive: 0,
+                    },
+                    BitValidityRangeV2 {
+                        start: 2,
+                        end_inclusive: 2,
+                    },
+                ]),
+            ),
+            scalar(
+                2,
+                8,
+                BitValidityV2::Ranges(vec![
+                    BitValidityRangeV2 {
+                        start: 4,
+                        end_inclusive: 4,
+                    },
+                    BitValidityRangeV2 {
+                        start: 6,
+                        end_inclusive: 6,
+                    },
+                ]),
+            ),
+        ],
+        vec![],
+        MemoryBudgetsV2::default(),
+    )
+    .unwrap();
+    let ranged_bytes = ranged.canonical_bytes(MemoryBudgetsV2::default()).unwrap();
+    let range_boundary = MemoryBudgetsV2 {
+        max_validity_ranges: 4,
+        ..MemoryBudgetsV2::default()
+    };
+    MemoryProgramV2::decode_canonical(&ranged_bytes, range_boundary).unwrap();
+    assert_eq!(
+        MemoryProgramV2::decode_canonical(
+            &ranged_bytes,
+            MemoryBudgetsV2 {
+                max_validity_ranges: 3,
+                ..MemoryBudgetsV2::default()
+            },
+        )
+        .unwrap_err()
+        .reason,
+        MemoryErrorReasonV2::ResourceLimit {
+            resource: "validity ranges",
+            actual: 4,
+            max: 3,
+        }
+    );
+}
+
+#[test]
 fn allocation_bomb_inputs_fail_before_internal_growth() {
     let empty = MemoryProgramV2::new(
         TargetLayoutV2::gfx942_xnack_minus(),

@@ -68,6 +68,15 @@ struct WorkMeterV2 {
     resource: &'static str,
     used: u64,
     max: u64,
+    decoded_type_edges: u64,
+    decoded_validity_ranges: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DecodeCollectionKindV2 {
+    Ordinary,
+    TypeEdges,
+    ValidityRanges,
 }
 
 impl WorkMeterV2 {
@@ -76,6 +85,8 @@ impl WorkMeterV2 {
             resource: "validation work",
             used: 0,
             max,
+            decoded_type_edges: 0,
+            decoded_validity_ranges: 0,
         }
     }
 
@@ -84,6 +95,8 @@ impl WorkMeterV2 {
             resource: "execution work",
             used: 0,
             max,
+            decoded_type_edges: 0,
+            decoded_validity_ranges: 0,
         }
     }
 
@@ -102,7 +115,42 @@ impl WorkMeterV2 {
             resource,
             used,
             max,
+            decoded_type_edges: 0,
+            decoded_validity_ranges: 0,
         })
+    }
+
+    fn admit_decoded_collection(
+        &mut self,
+        kind: DecodeCollectionKindV2,
+        count: usize,
+        budgets: MemoryBudgetsV2,
+    ) -> Result<(), MemoryErrorReasonV2> {
+        let count = u64::try_from(count).map_err(|_| MemoryErrorReasonV2::ResourceLimit {
+            resource: "decoded collection items",
+            actual: u64::MAX,
+            max: u64::from(HARD_MAX_ACTIONS),
+        })?;
+        match kind {
+            DecodeCollectionKindV2::Ordinary => {}
+            DecodeCollectionKindV2::TypeEdges => {
+                self.decoded_type_edges = charge_resource(
+                    "type edges",
+                    self.decoded_type_edges,
+                    count,
+                    u64::from(budgets.max_type_edges),
+                )?;
+            }
+            DecodeCollectionKindV2::ValidityRanges => {
+                self.decoded_validity_ranges = charge_resource(
+                    "validity ranges",
+                    self.decoded_validity_ranges,
+                    count,
+                    u64::from(budgets.max_validity_ranges),
+                )?;
+            }
+        }
+        self.charge(count)
     }
 }
 
@@ -760,6 +808,7 @@ impl MemoryProgramV2 {
             type_count,
             MIN_TYPE_BYTES,
             budgets,
+            DecodeCollectionKindV2::Ordinary,
             &mut work,
         )?;
         for _ in 0..type_count {
@@ -772,6 +821,7 @@ impl MemoryProgramV2 {
             action_count,
             MIN_ACTION_BYTES,
             budgets,
+            DecodeCollectionKindV2::Ordinary,
             &mut work,
         )?;
         for _ in 0..action_count {
@@ -3660,11 +3710,12 @@ fn decode_collection<T>(
     resource: &'static str,
     count: usize,
     minimum_item_bytes: usize,
-    _budgets: MemoryBudgetsV2,
+    budgets: MemoryBudgetsV2,
+    kind: DecodeCollectionKindV2,
     work: &mut WorkMeterV2,
 ) -> Result<Vec<T>, MemoryModelErrorV2> {
     reader.preflight_collection(count, minimum_item_bytes)?;
-    work.charge(count as u64)
+    work.admit_decoded_collection(kind, count, budgets)
         .map_err(MemoryModelErrorV2::static_error)?;
     let mut values = Vec::new();
     values.try_reserve_exact(count).map_err(|_| {
@@ -3717,6 +3768,7 @@ fn decode_target(
         count,
         MIN_TARGET_ENTRY_BYTES,
         budgets,
+        DecodeCollectionKindV2::Ordinary,
         work,
     )?;
     for _ in 0..count {
@@ -3798,6 +3850,7 @@ fn decode_type(
                 count,
                 MIN_FIELD_BYTES,
                 budgets,
+                DecodeCollectionKindV2::TypeEdges,
                 work,
             )?;
             for _ in 0..count {
@@ -3858,6 +3911,7 @@ fn decode_validity(
                 count,
                 MIN_VALIDITY_RANGE_BYTES,
                 budgets,
+                DecodeCollectionKindV2::ValidityRanges,
                 work,
             )?;
             for _ in 0..count {
@@ -4202,6 +4256,7 @@ fn decode_place(
         count,
         MIN_PROJECTION_BYTES,
         budgets,
+        DecodeCollectionKindV2::Ordinary,
         work,
     )?;
     for _ in 0..count {
