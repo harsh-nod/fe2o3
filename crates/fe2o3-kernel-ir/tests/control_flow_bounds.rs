@@ -125,27 +125,44 @@ fn exact_block_edge_argument_and_phi_boundaries_are_stable() {
     }
 }
 
-#[test]
-fn reverse_chains_have_exact_linear_work_counts() {
-    for block_count in [1usize, 1_024, 2_048, 4_096] {
-        let function = reverse_chain(block_count);
-        let analysis = analyze_control_flow(&function).unwrap();
-        let blocks = u64::try_from(block_count).unwrap();
-        let work = analysis.work();
-        assert_eq!(work.index_units, 3 * blocks - 2);
-        assert_eq!(work.reachability_edge_visits, blocks - 1);
-        assert_eq!(work.depth_first_edge_visits, blocks - 1);
-        assert_eq!(work.dominator_predecessor_visits, 2 * (blocks - 1));
-        assert_eq!(work.dominator_climbs, 0);
-        assert_eq!(work.interval_node_visits, 2 * blocks);
-        assert_eq!(work.reducibility_edge_visits, blocks - 1);
-        assert_eq!(work.reducibility_node_visits, blocks);
-        assert_eq!(work.total, 11 * blocks - 7);
+fn assert_reverse_chain_work(block_count: usize) {
+    let function = reverse_chain(block_count);
+    let analysis = analyze_control_flow(&function).unwrap();
+    let blocks = u64::try_from(block_count).unwrap();
+    let work = analysis.work();
+    assert_eq!(work.index_units, 3 * blocks - 2);
+    assert_eq!(work.reachability_edge_visits, blocks - 1);
+    assert_eq!(work.depth_first_edge_visits, blocks - 1);
+    assert_eq!(work.dominator_predecessor_visits, 2 * (blocks - 1));
+    assert_eq!(work.dominator_climbs, 0);
+    assert_eq!(work.interval_node_visits, 2 * blocks);
+    assert_eq!(work.reducibility_edge_visits, blocks - 1);
+    assert_eq!(work.reducibility_node_visits, blocks);
+    assert_eq!(work.total, 11 * blocks - 7);
 
-        let mut module = Module::new(format!("cfg::reverse_chain_{block_count}"));
-        module.functions.push(function);
-        verify_module(&module).expect("bounded reverse chain must verify");
-    }
+    let mut module = Module::new(format!("cfg::reverse_chain_{block_count}"));
+    module.functions.push(function);
+    verify_module(&module).expect("bounded reverse chain must verify");
+}
+
+#[test]
+fn one_block_has_exact_work_count() {
+    assert_reverse_chain_work(1);
+}
+
+#[test]
+fn reverse_chain_1024_has_exact_linear_work_count() {
+    assert_reverse_chain_work(1_024);
+}
+
+#[test]
+fn reverse_chain_2048_has_exact_linear_work_count() {
+    assert_reverse_chain_work(2_048);
+}
+
+#[test]
+fn reverse_chain_4096_has_exact_linear_work_count() {
+    assert_reverse_chain_work(4_096);
 }
 
 #[test]
