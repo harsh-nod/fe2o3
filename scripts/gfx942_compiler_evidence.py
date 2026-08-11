@@ -908,7 +908,7 @@ def build_and_generate(
     supervisor: Supervisor,
     *,
     observe_candidate: bool,
-) -> tuple[Path, dict[str, Any]]:
+) -> tuple[Path, dict[str, Any], RetainedFile]:
     if run != run.parent / f"run-{index}" or not run.is_dir():
         raise EvidenceError("run root does not match its independent index")
     path_dir = run / "tool-path"
@@ -1101,18 +1101,31 @@ def build_and_generate(
         retained_worker.close()
     for file, record in generated:
         revalidate_generated_executable(file, record)
-    data = output.read_bytes()
-    if len(data) != golden["hsaco_bytes"] or sha256_bytes(data) != golden["hsaco_sha256"]:
+    output.chmod(0o444)
+    retained_hsaco = RetainedFile.open(
+        f"run-{index}-final-hsaco", output, require_read_only=True
+    )
+    data = os.pread(retained_hsaco.fd, os.fstat(retained_hsaco.fd).st_size, 0)
+    if not data or len(data) > golden["max_hsaco_bytes"]:
+        retained_hsaco.close()
+        raise EvidenceError(f"run {index} HSACO is empty or exceeds its size bound")
+    if not observe_candidate and (
+        len(data) != golden["hsaco_bytes"] or sha256_bytes(data) != golden["hsaco_sha256"]
+    ):
+        retained_hsaco.close()
         raise EvidenceError(f"run {index} HSACO identity changed")
     executable_manifest = {
         "schema": "fe2o3-gfx942-run-executable-manifest-v1",
         "run": index,
+        "worker_build_identity": build_identity,
+        "worker_sha256": worker_record["sha256"],
+        "hsaco": retained_hsaco.record(),
         "executables": [record for _, record in generated],
     }
     (output_dir / "executables.json").write_bytes(canonical_json(executable_manifest))
     for file, _ in generated:
         file.close()
-    return output, executable_manifest
+    return output, executable_manifest, retained_hsaco
 
 
 def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) -> None:
@@ -1137,6 +1150,7 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
     closures: list[SnapshotClosure] = []
     retained_closures: list[RetainedClosure] = []
     generated_inputs: list[RetainedFile] = []
+    retained_artifacts: list[RetainedFile] = []
     try:
         supervisor = Supervisor()
         run_root.mkdir(mode=0o700)
@@ -1206,7 +1220,7 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
         retained_closures.append(runtime_closure)
         supervisor.guards.extend(runtime_closure.files)
         (evidence_root / "tool-runtime-manifest.json").write_bytes(canonical_json(observed))
-        first, first_executables = build_and_generate(
+        first, first_executables, first_hsaco = build_and_generate(
             1,
             prepared[0][1].root,
             prepared[0][0],
@@ -1217,10 +1231,11 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
             supervisor,
             observe_candidate=observe_candidate,
         )
+        retained_artifacts.append(first_hsaco)
         for closure in closures:
             closure.revalidate()
         git_clean(repo, bootstrap_environment, tools, supervisor)
-        second, second_executables = build_and_generate(
+        second, second_executables, second_hsaco = build_and_generate(
             2,
             prepared[1][1].root,
             prepared[1][0],
@@ -1231,10 +1246,15 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
             supervisor,
             observe_candidate=observe_candidate,
         )
+        retained_artifacts.append(second_hsaco)
         for closure in closures:
             closure.revalidate()
         git_clean(repo, bootstrap_environment, tools, supervisor)
-        if first.read_bytes() != second.read_bytes():
+        first_hsaco.revalidate()
+        second_hsaco.revalidate()
+        first_bytes = os.pread(first_hsaco.fd, os.fstat(first_hsaco.fd).st_size, 0)
+        second_bytes = os.pread(second_hsaco.fd, os.fstat(second_hsaco.fd).st_size, 0)
+        if first_bytes != second_bytes:
             raise EvidenceError("independent Worker/build/target runs were not byte-identical")
         reject_cross_run_reuse(first_executables, second_executables)
         for closure in closures:
@@ -1252,12 +1272,18 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
             "run_1": {
                 "worker_build": os.fspath(run_root / "run-1/worker-build"),
                 "cargo_target": os.fspath(run_root / "run-1/cargo-target"),
-                "hsaco_sha256": sha256_bytes(first.read_bytes()),
+                "worker_build_identity": first_executables["worker_build_identity"],
+                "worker_sha256": first_executables["worker_sha256"],
+                "hsaco_bytes": len(first_bytes),
+                "hsaco_sha256": sha256_bytes(first_bytes),
             },
             "run_2": {
                 "worker_build": os.fspath(run_root / "run-2/worker-build"),
                 "cargo_target": os.fspath(run_root / "run-2/cargo-target"),
-                "hsaco_sha256": sha256_bytes(second.read_bytes()),
+                "worker_build_identity": second_executables["worker_build_identity"],
+                "worker_sha256": second_executables["worker_sha256"],
+                "hsaco_bytes": len(second_bytes),
+                "hsaco_sha256": sha256_bytes(second_bytes),
             },
             "claim": "exact-artifact-observation-only",
             "compiler_causality_authenticated": False,
@@ -1271,6 +1297,8 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
     finally:
         for generated in generated_inputs:
             generated.close()
+        for artifact in retained_artifacts:
+            artifact.close()
         for closure in closures:
             closure.close()
         for closure in retained_closures:
