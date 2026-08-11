@@ -12,6 +12,7 @@ use std::{
     io::{Seek, SeekFrom, Write},
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
+    process::Command,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -44,6 +45,11 @@ fn short_limits() -> AuthenticatedPhysicalMachineEffectLimitsV1 {
         16 * 1024,
     )
     .unwrap()
+}
+
+fn hostile_timeout_limits() -> AuthenticatedPhysicalMachineEffectLimitsV1 {
+    AuthenticatedPhysicalMachineEffectLimitsV1::new(Duration::from_secs(10), 1024 * 1024, 16 * 1024)
+        .unwrap()
 }
 
 fn entry() -> PhysicalMachineEffectEntryRequestV1 {
@@ -292,26 +298,84 @@ fn transient_remap_between_ready_and_done_is_outside_two_snapshot_guarantee() {
 #[test]
 fn failed_ack_delivery_terminates_and_reaps_worker() {
     let directory = temp_dir("closed-ack");
-    let pid_file = directory.join("worker.pid");
-    let mut payload = vec![16];
-    payload.extend_from_slice(pid_file.to_str().unwrap().as_bytes());
     let worker = worker();
-    let started = Instant::now();
-    let error = worker
-        .analyze(payload, vec![entry()], limits())
-        .unwrap_err();
-    assert_eq!(
-        error.kind(),
-        &AuthenticatedPhysicalMachineEffectErrorKindV1::ControlHandshake
-    );
-    assert!(
-        started.elapsed() < Duration::from_secs(10),
-        "ACK failure cleanup took {:?}",
-        started.elapsed()
-    );
-    let pid = fs::read_to_string(&pid_file).unwrap();
-    assert!(!Path::new(&format!("/proc/{pid}")).exists());
+    for iteration in 0..30 {
+        let pid_file = directory.join(format!("worker-{iteration}.pid"));
+        let mut payload = vec![16];
+        payload.extend_from_slice(pid_file.to_str().unwrap().as_bytes());
+        let started = Instant::now();
+        let error = worker
+            .analyze(payload, vec![entry()], limits())
+            .unwrap_err();
+        assert_eq!(
+            error.kind(),
+            &AuthenticatedPhysicalMachineEffectErrorKindV1::ControlHandshake
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "ACK failure cleanup {iteration} took {:?}",
+            started.elapsed()
+        );
+        let pid = fs::read_to_string(&pid_file).unwrap();
+        assert!(!Path::new(&format!("/proc/{pid}")).exists());
+    }
     fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn parent_session_helper_cannot_join_worker_group_and_survives_cleanup() {
+    for (name, mode, execution_limits, expected) in [
+        (
+            "timeout",
+            17,
+            hostile_timeout_limits(),
+            AuthenticatedPhysicalMachineEffectErrorKindV1::Timeout,
+        ),
+        (
+            "ack",
+            16,
+            limits(),
+            AuthenticatedPhysicalMachineEffectErrorKindV1::ControlHandshake,
+        ),
+    ] {
+        let directory = temp_dir(name);
+        let pid_file = directory.join("worker.pid");
+        let join_result = directory.join("join-result");
+        let mut payload = vec![mode];
+        payload.extend_from_slice(pid_file.to_str().unwrap().as_bytes());
+        let worker = worker();
+        let execution =
+            thread::spawn(move || worker.analyze(payload, vec![entry()], execution_limits));
+        wait_for_file(&pid_file);
+        let pid = fs::read_to_string(&pid_file).unwrap();
+        let mut helper = Command::new(fixture())
+            .arg(format!("--fe2o3-test-join-process-group={pid}"))
+            .arg(format!("--fe2o3-test-result={}", join_result.display()))
+            .spawn()
+            .unwrap();
+        wait_for_file(&join_result);
+        assert_eq!(fs::read_to_string(&join_result).unwrap(), "errno=1");
+
+        let error = execution.join().unwrap().unwrap_err();
+        assert_eq!(error.kind(), &expected);
+        assert!(helper.try_wait().unwrap().is_none(), "helper was signaled");
+        helper.kill().unwrap();
+        helper.wait().unwrap();
+        assert!(!Path::new(&format!("/proc/{pid}")).exists());
+        fs::remove_dir_all(directory).unwrap();
+    }
+}
+
+fn wait_for_file(path: &Path) {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while !path.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {}",
+            path.display()
+        );
+        thread::sleep(Duration::from_millis(2));
+    }
 }
 
 #[test]

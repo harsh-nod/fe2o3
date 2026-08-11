@@ -39,6 +39,9 @@ struct Request {
 }
 
 pub fn run(analyzer_byte: u8, toolchain_byte: u8) {
+    if run_process_group_join_helper() {
+        return;
+    }
     let mut arguments = std::env::args().skip(1);
     let argument = arguments.next().unwrap_or_default();
     let challenge = parse_argument_array(
@@ -218,6 +221,7 @@ fn analysis_response(bytes: Vec<u8>, control_challenge: [u8; 32]) {
         12 => load_late_runtime_library(),
         14 => remap_self(false),
         15 => remap_self(true),
+        17 => write_pid_and_sleep(&request.payload[1..]),
         _ => {}
     }
     let mode = request.payload[0];
@@ -237,6 +241,35 @@ fn analysis_response(bytes: Vec<u8>, control_challenge: [u8; 32]) {
     if mode == 13 {
         reexec_from_spoofed_memfd();
     }
+}
+
+fn run_process_group_join_helper() -> bool {
+    let mut arguments = std::env::args().skip(1);
+    let Some(group) = arguments
+        .next()
+        .and_then(|value| value.strip_prefix("--fe2o3-test-join-process-group=").map(str::to_owned))
+        .and_then(|value| value.parse::<i32>().ok())
+        .and_then(rustix::process::Pid::from_raw)
+    else {
+        return false;
+    };
+    let result_path = arguments
+        .next()
+        .and_then(|value| value.strip_prefix("--fe2o3-test-result=").map(str::to_owned))
+        .unwrap_or_else(|| exit(64));
+    let result = match rustix::process::setpgid(None, Some(group)) {
+        Ok(()) => "joined".to_string(),
+        Err(error) => format!("errno={}", error.raw_os_error()),
+    };
+    std::fs::write(result_path, result).unwrap();
+    thread::sleep(Duration::from_secs(30));
+    true
+}
+
+fn write_pid_and_sleep(path: &[u8]) {
+    let path = std::str::from_utf8(path).unwrap();
+    std::fs::write(path, std::process::id().to_string()).unwrap();
+    thread::sleep(Duration::from_secs(30));
 }
 
 #[allow(unsafe_code)]
