@@ -321,7 +321,7 @@ class SealedExecutable:
 
     @property
     def proc_path(self) -> str:
-        return f"/proc/{os.getpid()}/fd/{self.fd}"
+        return f"/proc/self/fd/{self.fd}"
 
     def revalidate(self) -> None:
         self.source.revalidate()
