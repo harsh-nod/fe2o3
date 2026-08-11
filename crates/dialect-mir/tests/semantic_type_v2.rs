@@ -25,6 +25,27 @@ fn scalar(kind: SemanticScalarV2, bytes: u64) -> SemanticTypeNodeV2 {
     }
 }
 
+fn validity_scalar(
+    scalar: SemanticScalarV2,
+    bytes: u64,
+    valid_ranges: Vec<ScalarValidityRangeV2>,
+) -> SemanticTypeNodeV2 {
+    SemanticTypeNodeV2 {
+        layout: SemanticTypeLayoutV2::sized(bytes, bytes),
+        kind: SemanticTypeKindV2::ValidityScalar {
+            scalar,
+            valid_ranges,
+        },
+    }
+}
+
+fn first_field_niche_source() -> SemanticNicheSourceV2 {
+    SemanticNicheSourceV2 {
+        path: vec![SemanticNichePathComponentV2::Field(0)],
+        expected_offset: 0,
+    }
+}
+
 fn named(name: &str, offset: u64, ty: SemanticTypeNodeIdV2) -> SemanticFieldV2 {
     SemanticFieldV2 {
         name: Some(name.to_owned()),
@@ -90,7 +111,10 @@ fn recursive_pointer_graph_is_valid_and_order_independent() {
         left.canonical_bytes().unwrap(),
         right.canonical_bytes().unwrap()
     );
-    assert_eq!(left.identity().unwrap(), right.identity().unwrap());
+    assert_eq!(
+        left.untrusted_canonical_encoding().unwrap(),
+        right.untrusted_canonical_encoding().unwrap()
+    );
     assert_eq!(left.root_key(), "crate::List");
 }
 
@@ -183,7 +207,7 @@ fn build_dst_family_in_order(order: &[&str]) -> SemanticTypeGraphV2 {
 }
 
 #[test]
-fn every_declaration_permutation_has_one_identity() {
+fn every_declaration_permutation_has_one_untrusted_encoding() {
     let names = ["u8", "u32", "[u32]", "Packet", "*const Packet", "Root"];
     let expected = build_dst_family_in_order(&names).canonical_bytes().unwrap();
     let mut indices = [0_usize, 1, 2, 3, 4, 5];
@@ -715,31 +739,20 @@ fn bounded_niche_validity_accepts_invalid_zero() {
             },
         )
         .unwrap();
-    let pointer_target = builder
+    let nonnull = builder
         .intern(
-            "u64",
-            scalar(
+            "NonNull",
+            validity_scalar(
                 SemanticScalarV2::Int {
                     signed: false,
                     bits: 64,
                 },
                 8,
+                vec![ScalarValidityRangeV2 {
+                    start: 1,
+                    end: u64::MAX as u128,
+                }],
             ),
-        )
-        .unwrap();
-    let nonnull = builder
-        .intern(
-            "NonNull",
-            SemanticTypeNodeV2 {
-                layout: SemanticTypeLayoutV2::sized(8, 8),
-                kind: SemanticTypeKindV2::RawPointer {
-                    pointee: pointer_target,
-                    mutability: SemanticMutabilityV2::Mutable,
-                    address_space: 0,
-                    data_pointer_bytes: 8,
-                    metadata: PointerMetadataV2::None,
-                },
-            },
         )
         .unwrap();
     let option = builder
@@ -754,7 +767,7 @@ fn bounded_niche_validity_accepts_invalid_zero() {
                         bits: 8,
                     },
                     encoding: SemanticEnumEncodingV2::Niche {
-                        niche_offset: 0,
+                        source: first_field_niche_source(),
                         niche_scalar: SemanticScalarV2::Int {
                             signed: false,
                             bits: 64,
@@ -797,6 +810,19 @@ fn niche_overlap_and_range_order_are_rejected() {
         ],
     ] {
         let mut builder = SemanticTypeGraphBuilderV2::new(budgets());
+        let constrained = builder
+            .intern(
+                "constrained",
+                validity_scalar(
+                    SemanticScalarV2::Int {
+                        signed: false,
+                        bits: 8,
+                    },
+                    1,
+                    ranges.clone(),
+                ),
+            )
+            .unwrap();
         let root = builder
             .intern(
                 "N",
@@ -809,7 +835,7 @@ fn niche_overlap_and_range_order_are_rejected() {
                             bits: 8,
                         },
                         encoding: SemanticEnumEncodingV2::Niche {
-                            niche_offset: 0,
+                            source: first_field_niche_source(),
                             niche_scalar: SemanticScalarV2::Int {
                                 signed: false,
                                 bits: 8,
@@ -829,7 +855,7 @@ fn niche_overlap_and_range_order_are_rejected() {
                             SemanticVariantV2 {
                                 name: "B".into(),
                                 discriminant: 1,
-                                fields: vec![],
+                                fields: vec![named("value", 0, constrained)],
                             },
                         ],
                     },
@@ -1160,6 +1186,19 @@ fn node_edge_field_variant_range_and_work_budgets_are_enforced() {
     let mut range_budget = budgets();
     range_budget.max_validity_ranges = 0;
     let mut builder = SemanticTypeGraphBuilderV2::new(range_budget);
+    let constrained = builder
+        .intern(
+            "constrained",
+            validity_scalar(
+                SemanticScalarV2::Int {
+                    signed: false,
+                    bits: 8,
+                },
+                1,
+                vec![ScalarValidityRangeV2 { start: 1, end: 255 }],
+            ),
+        )
+        .unwrap();
     let enumeration = builder
         .intern(
             "N",
@@ -1172,7 +1211,7 @@ fn node_edge_field_variant_range_and_work_budgets_are_enforced() {
                         bits: 8,
                     },
                     encoding: SemanticEnumEncodingV2::Niche {
-                        niche_offset: 0,
+                        source: first_field_niche_source(),
                         niche_scalar: SemanticScalarV2::Int {
                             signed: false,
                             bits: 8,
@@ -1192,7 +1231,7 @@ fn node_edge_field_variant_range_and_work_budgets_are_enforced() {
                         SemanticVariantV2 {
                             name: "B".into(),
                             discriminant: 1,
-                            fields: vec![],
+                            fields: vec![named("value", 0, constrained)],
                         },
                     ],
                 },
@@ -1276,6 +1315,7 @@ fn forged_collection_counts_are_rejected_before_allocation() {
     field_count[field_count_offset..].copy_from_slice(&u32::MAX.to_le_bytes());
     let mut permissive = budgets();
     permissive.max_fields = u32::MAX;
+    permissive.max_edges = u32::MAX;
     assert!(matches!(
         SemanticTypeGraphV2::decode_canonical(&field_count, permissive),
         Err(SemanticTypeGraphErrorV2::Decode { .. })

@@ -1,9 +1,10 @@
 //! Bounded, inert semantic Rust type graph schema.
 //!
 //! This module deliberately has no rustc, artifact, lowering, or execution
-//! integration. Nodes are interned by stable semantic keys. The canonical
-//! binary representation sorts those keys and rewrites all edges to sorted
-//! indices, so it is independent of declaration order.
+//! integration. Nodes are interned by caller-supplied, untrusted keys. The
+//! canonical binary representation sorts those keys and rewrites all edges to
+//! sorted indices, so it is independent of declaration order. It is not a
+//! graph-isomorphism identity and does not authenticate either keys or types.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -41,7 +42,7 @@ impl Default for SemanticTypeGraphBudgetsV2 {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct SemanticTypeNodeIdV2(u32);
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct SemanticTypeLayoutV2 {
     pub size: Option<u64>,
     pub align: u64,
@@ -60,7 +61,7 @@ impl SemanticTypeLayoutV2 {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum SemanticScalarV2 {
     Bool,
     Char,
@@ -94,13 +95,13 @@ impl SemanticScalarV2 {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum SemanticMutabilityV2 {
     Immutable,
     Mutable,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum PointerMetadataV2 {
     None,
     SliceLength,
@@ -108,28 +109,44 @@ pub enum PointerMetadataV2 {
     Scalar(SemanticScalarV2),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct SemanticFieldV2 {
     pub name: Option<String>,
     pub offset: u64,
     pub ty: SemanticTypeNodeIdV2,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct ScalarValidityRangeV2 {
     /// Inclusive raw scalar bit patterns; signed ranges are not numerically ordered.
     pub start: u128,
     pub end: u128,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct SemanticVariantV2 {
     pub name: String,
     pub discriminant: u128,
     pub fields: Vec<SemanticFieldV2>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum SemanticNichePathComponentV2 {
+    /// Select a field by declaration index from a variant, tuple, struct, or union.
+    Field(u32),
+    /// Select an element from an array. The element stride is its sized layout.
+    ArrayElement(u64),
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct SemanticNicheSourceV2 {
+    /// A nonempty, bounded path beginning at the untagged variant payload.
+    pub path: Vec<SemanticNichePathComponentV2>,
+    /// The independently extracted byte offset; validation derives and compares it.
+    pub expected_offset: u64,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum SemanticEnumEncodingV2 {
     Uninhabited,
     Single {
@@ -140,7 +157,8 @@ pub enum SemanticEnumEncodingV2 {
         tag: SemanticScalarV2,
     },
     Niche {
-        niche_offset: u64,
+        source: SemanticNicheSourceV2,
+        /// Redundant claims that must exactly match the terminal type-owned validity.
         niche_scalar: SemanticScalarV2,
         valid_ranges: Vec<ScalarValidityRangeV2>,
         untagged_variant: u32,
@@ -150,11 +168,16 @@ pub enum SemanticEnumEncodingV2 {
     },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum SemanticTypeKindV2 {
     Unit,
     Never,
     Scalar(SemanticScalarV2),
+    /// A scalar whose valid bit patterns are part of its semantic type.
+    ValidityScalar {
+        scalar: SemanticScalarV2,
+        valid_ranges: Vec<ScalarValidityRangeV2>,
+    },
     RawPointer {
         pointee: SemanticTypeNodeIdV2,
         mutability: SemanticMutabilityV2,
@@ -200,7 +223,7 @@ pub enum SemanticTypeKindV2 {
     },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct SemanticTypeNodeV2 {
     pub layout: SemanticTypeLayoutV2,
     pub kind: SemanticTypeKindV2,
@@ -399,11 +422,13 @@ pub struct SemanticTypeGraphV2 {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SemanticTypeGraphIdentityV2(Box<[u8]>);
+pub struct UntrustedSemanticTypeGraphEncodingV2(Box<[u8]>);
 
-impl SemanticTypeGraphIdentityV2 {
-    /// Exact canonical content identity. A containing artifact may hash these
-    /// bytes in its own versioned SHA-256 identity domain.
+impl UntrustedSemanticTypeGraphEncodingV2 {
+    /// Declaration-order-stable bytes containing untrusted caller keys.
+    ///
+    /// A later rustc extraction boundary must authenticate every key before an
+    /// artifact may use these bytes as semantic identity evidence.
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
     }
@@ -423,8 +448,10 @@ impl SemanticTypeGraphV2 {
             .map(|index| &self.nodes[index])
     }
 
-    pub fn identity(&self) -> Result<SemanticTypeGraphIdentityV2, SemanticTypeGraphErrorV2> {
-        Ok(SemanticTypeGraphIdentityV2(
+    pub fn untrusted_canonical_encoding(
+        &self,
+    ) -> Result<UntrustedSemanticTypeGraphEncodingV2, SemanticTypeGraphErrorV2> {
+        Ok(UntrustedSemanticTypeGraphEncodingV2(
             self.canonical_bytes()?.into_boxed_slice(),
         ))
     }
@@ -548,7 +575,36 @@ impl SemanticTypeGraphV2 {
             u64::from(self.budgets.max_validity_ranges),
         )?;
         self.validate_reachability(&mut work)?;
+        self.validate_definition_uniqueness()?;
         self.validate_by_value_acyclic(&mut work)
+    }
+
+    fn validate_definition_uniqueness(&self) -> Result<(), SemanticTypeGraphErrorV2> {
+        let mut nominal_identities = BTreeMap::new();
+        let mut exact_definitions = BTreeMap::new();
+        for (index, node) in self.nodes.iter().enumerate() {
+            if let Some(identity) = nominal_identity(&node.kind)
+                && let Some(previous) = nominal_identities.insert(identity, index)
+            {
+                return Err(invalid(
+                    &self.keys[index],
+                    format!(
+                        "nominal identity {identity:?} duplicates node {:?}",
+                        self.keys[previous]
+                    ),
+                ));
+            }
+            if let Some(previous) = exact_definitions.insert(node, index) {
+                return Err(invalid(
+                    &self.keys[index],
+                    format!(
+                        "exact type definition duplicates node {:?}",
+                        self.keys[previous]
+                    ),
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn validate_reachability(&self, work: &mut WorkV2) -> Result<(), SemanticTypeGraphErrorV2> {
@@ -697,6 +753,16 @@ fn node(
         .ok_or(SemanticTypeGraphErrorV2::UnknownNode { id: id.0 })
 }
 
+fn nominal_identity(kind: &SemanticTypeKindV2) -> Option<&str> {
+    match kind {
+        SemanticTypeKindV2::Struct { identity, .. }
+        | SemanticTypeKindV2::Union { identity, .. }
+        | SemanticTypeKindV2::OpaqueDst { identity, .. }
+        | SemanticTypeKindV2::Enum { identity, .. } => Some(identity),
+        _ => None,
+    }
+}
+
 fn validate_node(
     graph: &SemanticTypeGraphV2,
     index: usize,
@@ -736,6 +802,21 @@ fn validate_node(
                     format!("scalar requires size and alignment {width}"),
                 ));
             }
+        }
+        SemanticTypeKindV2::ValidityScalar {
+            scalar,
+            valid_ranges,
+        } => {
+            let width = scalar
+                .byte_width()
+                .ok_or_else(|| invalid(key, "unsupported validity scalar width"))?;
+            if node_value.layout != SemanticTypeLayoutV2::sized(width, width) {
+                return Err(invalid(
+                    key,
+                    format!("validity scalar requires size and alignment {width}"),
+                ));
+            }
+            validate_scalar_validity(&mut context, key, *scalar, valid_ranges)?;
         }
         SemanticTypeKindV2::RawPointer {
             pointee,
@@ -1085,6 +1166,140 @@ fn validate_aggregate(
     Ok(())
 }
 
+fn validate_scalar_validity(
+    context: &mut ValidationContextV2<'_>,
+    key: &str,
+    scalar: SemanticScalarV2,
+    valid_ranges: &[ScalarValidityRangeV2],
+) -> Result<(), SemanticTypeGraphErrorV2> {
+    if !scalar.is_integer() || scalar.byte_width().is_none() {
+        return Err(invalid(key, "validity scalar must be a supported integer"));
+    }
+    if valid_ranges.is_empty() {
+        return Err(invalid(key, "scalar validity set must not be empty"));
+    }
+    context.totals.ranges = context
+        .totals
+        .ranges
+        .checked_add(valid_ranges.len() as u64)
+        .ok_or_else(|| invalid(key, "validity range count overflows u64"))?;
+    enforce(
+        "validity ranges",
+        context.totals.ranges,
+        u64::from(context.graph.budgets.max_validity_ranges),
+    )?;
+    let bits = scalar.bits().unwrap_or(0);
+    let mut previous_end = None;
+    for range in valid_ranges {
+        context.work.one()?;
+        if range.start > range.end
+            || !fits_bits(range.end, bits)
+            || previous_end.is_some_and(|end| end >= range.start)
+        {
+            return Err(invalid(
+                key,
+                "validity ranges must be sorted, disjoint, nonempty, and fit the scalar",
+            ));
+        }
+        previous_end = Some(range.end);
+    }
+    Ok(())
+}
+
+enum NicheCursorV2 {
+    VariantFields,
+    Node(SemanticTypeNodeIdV2),
+}
+
+fn resolve_niche_source<'graph>(
+    context: &mut ValidationContextV2<'graph>,
+    key: &str,
+    variants: &[SemanticVariantV2],
+    untagged_variant: u32,
+    source: &SemanticNicheSourceV2,
+) -> Result<(u64, SemanticScalarV2, &'graph [ScalarValidityRangeV2]), SemanticTypeGraphErrorV2> {
+    if source.path.is_empty() {
+        return Err(invalid(key, "niche source path must not be empty"));
+    }
+    let variant = variants
+        .get(untagged_variant as usize)
+        .ok_or_else(|| invalid(key, "untagged niche variant is out of range"))?;
+    let mut cursor = NicheCursorV2::VariantFields;
+    let mut offset = 0_u64;
+    for component in &source.path {
+        context.work.one()?;
+        match (component, cursor) {
+            (SemanticNichePathComponentV2::Field(index), NicheCursorV2::VariantFields) => {
+                let field = variant
+                    .fields
+                    .get(*index as usize)
+                    .ok_or_else(|| invalid(key, "niche field path component is out of range"))?;
+                offset = offset
+                    .checked_add(field.offset)
+                    .ok_or_else(|| invalid(key, "niche field path offset overflows u64"))?;
+                cursor = NicheCursorV2::Node(field.ty);
+            }
+            (SemanticNichePathComponentV2::Field(index), NicheCursorV2::Node(id)) => {
+                let fields = match &node(context.graph, id)?.kind {
+                    SemanticTypeKindV2::Tuple { fields }
+                    | SemanticTypeKindV2::Struct { fields, .. }
+                    | SemanticTypeKindV2::Union { fields, .. } => fields,
+                    _ => return Err(invalid(key, "niche field path does not traverse an aggregate")),
+                };
+                let field = fields
+                    .get(*index as usize)
+                    .ok_or_else(|| invalid(key, "niche field path component is out of range"))?;
+                offset = offset
+                    .checked_add(field.offset)
+                    .ok_or_else(|| invalid(key, "niche field path offset overflows u64"))?;
+                cursor = NicheCursorV2::Node(field.ty);
+            }
+            (SemanticNichePathComponentV2::ArrayElement(index), NicheCursorV2::Node(id)) => {
+                let (element, length) = match &node(context.graph, id)?.kind {
+                    SemanticTypeKindV2::Array { element, length } => (*element, *length),
+                    _ => return Err(invalid(key, "niche array path does not traverse an array")),
+                };
+                if *index >= length {
+                    return Err(invalid(key, "niche array index is out of range"));
+                }
+                let stride = node(context.graph, element)?
+                    .layout
+                    .size
+                    .ok_or_else(|| invalid(key, "niche array element is unsized"))?;
+                let element_offset = stride
+                    .checked_mul(*index)
+                    .ok_or_else(|| invalid(key, "niche array path offset overflows u64"))?;
+                offset = offset
+                    .checked_add(element_offset)
+                    .ok_or_else(|| invalid(key, "niche array path offset overflows u64"))?;
+                cursor = NicheCursorV2::Node(element);
+            }
+            (SemanticNichePathComponentV2::ArrayElement(_), NicheCursorV2::VariantFields) => {
+                return Err(invalid(key, "niche path must begin with a variant field"));
+            }
+        }
+    }
+    let NicheCursorV2::Node(terminal) = cursor else {
+        return Err(invalid(key, "niche source path has no terminal type"));
+    };
+    if offset != source.expected_offset {
+        return Err(invalid(
+            key,
+            "niche source offset does not match its traversed payload path",
+        ));
+    }
+    match &node(context.graph, terminal)?.kind {
+        SemanticTypeKindV2::ValidityScalar {
+            scalar,
+            valid_ranges,
+        } => Ok((offset, *scalar, valid_ranges)),
+        _ => Err(invalid(
+            key,
+            "niche source must terminate at a validity-constrained scalar type",
+        )),
+    }
+}
+
 fn validate_enum(
     context: &mut ValidationContextV2<'_>,
     key: &str,
@@ -1185,7 +1400,7 @@ fn validate_enum(
             }
         }
         SemanticEnumEncodingV2::Niche {
-            niche_offset,
+            source,
             niche_scalar,
             valid_ranges,
             untagged_variant,
@@ -1193,10 +1408,23 @@ fn validate_enum(
             niche_variants_end,
             niche_start,
         } => {
+            let (niche_offset, terminal_scalar, terminal_ranges) = resolve_niche_source(
+                context,
+                key,
+                variants,
+                *untagged_variant,
+                source,
+            )?;
+            if *niche_scalar != terminal_scalar || valid_ranges.as_slice() != terminal_ranges {
+                return Err(invalid(
+                    key,
+                    "niche scalar and validity ranges must exactly match the terminal type",
+                ));
+            }
             let width = niche_scalar
                 .byte_width()
                 .ok_or_else(|| invalid(key, "unsupported niche scalar width"))?;
-            checked_end(*niche_offset, width, size, key, "niche")?;
+            checked_end(niche_offset, width, size, key, "niche")?;
             let bits = niche_scalar.bits().unwrap_or(0);
             if !niche_scalar.is_integer() {
                 return Err(invalid(key, "niche scalar must be an integer"));
@@ -1214,16 +1442,6 @@ fn validate_enum(
             if valid_ranges.is_empty() {
                 return Err(invalid(key, "niche validity set must not be empty"));
             }
-            context.totals.ranges = context
-                .totals
-                .ranges
-                .checked_add(valid_ranges.len() as u64)
-                .ok_or_else(|| invalid(key, "validity range count overflows u64"))?;
-            enforce(
-                "validity ranges",
-                context.totals.ranges,
-                u64::from(context.graph.budgets.max_validity_ranges),
-            )?;
             let mut previous_end = None;
             for range in valid_ranges {
                 context.work.one()?;
@@ -1299,6 +1517,7 @@ fn all_edges(kind: &SemanticTypeKindV2) -> Vec<SemanticTypeNodeIdV2> {
         SemanticTypeKindV2::Unit
         | SemanticTypeKindV2::Never
         | SemanticTypeKindV2::Scalar(_)
+        | SemanticTypeKindV2::ValidityScalar { .. }
         | SemanticTypeKindV2::Str
         | SemanticTypeKindV2::OpaqueDst { .. } => Vec::new(),
     }
@@ -1313,13 +1532,22 @@ fn edge_count(kind: &SemanticTypeKindV2) -> u64 {
         SemanticTypeKindV2::Tuple { fields }
         | SemanticTypeKindV2::Struct { fields, .. }
         | SemanticTypeKindV2::Union { fields, .. } => fields.len() as u64,
-        SemanticTypeKindV2::Enum { variants, .. } => variants
+        SemanticTypeKindV2::Enum {
+            encoding,
+            variants,
+            ..
+        } => variants
             .iter()
             .map(|variant| variant.fields.len() as u64)
-            .sum(),
+            .sum::<u64>()
+            .saturating_add(match encoding {
+                SemanticEnumEncodingV2::Niche { source, .. } => source.path.len() as u64,
+                _ => 0,
+            }),
         SemanticTypeKindV2::Unit
         | SemanticTypeKindV2::Never
         | SemanticTypeKindV2::Scalar(_)
+        | SemanticTypeKindV2::ValidityScalar { .. }
         | SemanticTypeKindV2::Str
         | SemanticTypeKindV2::OpaqueDst { .. } => 0,
     }
@@ -1608,9 +1836,26 @@ fn encode_fields(
 }
 #[derive(Default)]
 struct DecodeTotalsV2 {
+    edges: u64,
     fields: u64,
     variants: u64,
     ranges: u64,
+}
+
+fn charge_decode_total(
+    total: &mut u64,
+    count: u32,
+    resource: &'static str,
+    max: u32,
+) -> Result<(), SemanticTypeGraphErrorV2> {
+    *total = total
+        .checked_add(u64::from(count))
+        .ok_or(SemanticTypeGraphErrorV2::ResourceLimit {
+            resource,
+            actual: u64::MAX,
+            max: u64::from(max),
+        })?;
+    enforce(resource, *total, u64::from(max))
 }
 
 fn decode_fields(
@@ -1619,14 +1864,8 @@ fn decode_fields(
     totals: &mut DecodeTotalsV2,
 ) -> Result<Vec<SemanticFieldV2>, SemanticTypeGraphErrorV2> {
     let count = reader.u32()?;
-    totals.fields = totals.fields.checked_add(u64::from(count)).ok_or(
-        SemanticTypeGraphErrorV2::ResourceLimit {
-            resource: "fields",
-            actual: u64::MAX,
-            max: u64::from(budgets.max_fields),
-        },
-    )?;
-    enforce("fields", totals.fields, u64::from(budgets.max_fields))?;
+    charge_decode_total(&mut totals.fields, count, "fields", budgets.max_fields)?;
+    charge_decode_total(&mut totals.edges, count, "edges", budgets.max_edges)?;
     reader.ensure_count_fits(count, 13, "field count exceeds remaining input")?;
     let mut fields = Vec::with_capacity(count as usize);
     for _ in 0..count {
@@ -1644,6 +1883,41 @@ fn decode_fields(
     Ok(fields)
 }
 
+fn encode_validity_ranges(
+    writer: &mut WriterV2,
+    valid_ranges: &[ScalarValidityRangeV2],
+) -> Result<(), SemanticTypeGraphErrorV2> {
+    writer.u32(valid_ranges.len() as u32)?;
+    for range in valid_ranges {
+        writer.u128(range.start)?;
+        writer.u128(range.end)?;
+    }
+    Ok(())
+}
+
+fn decode_validity_ranges(
+    reader: &mut ReaderV2<'_>,
+    budgets: SemanticTypeGraphBudgetsV2,
+    totals: &mut DecodeTotalsV2,
+) -> Result<Vec<ScalarValidityRangeV2>, SemanticTypeGraphErrorV2> {
+    let count = reader.u32()?;
+    charge_decode_total(
+        &mut totals.ranges,
+        count,
+        "validity ranges",
+        budgets.max_validity_ranges,
+    )?;
+    reader.ensure_count_fits(count, 32, "validity range count exceeds remaining input")?;
+    let mut valid_ranges = Vec::with_capacity(count as usize);
+    for _ in 0..count {
+        valid_ranges.push(ScalarValidityRangeV2 {
+            start: reader.u128()?,
+            end: reader.u128()?,
+        });
+    }
+    Ok(valid_ranges)
+}
+
 fn encode_node(
     writer: &mut WriterV2,
     node: &SemanticTypeNodeV2,
@@ -1657,6 +1931,14 @@ fn encode_node(
         SemanticTypeKindV2::Scalar(scalar) => {
             writer.u8(2)?;
             encode_scalar(writer, *scalar)?;
+        }
+        SemanticTypeKindV2::ValidityScalar {
+            scalar,
+            valid_ranges,
+        } => {
+            writer.u8(13)?;
+            encode_scalar(writer, *scalar)?;
+            encode_validity_ranges(writer, valid_ranges)?;
         }
         SemanticTypeKindV2::RawPointer {
             pointee,
@@ -1746,7 +2028,12 @@ fn decode_node(
         0 => SemanticTypeKindV2::Unit,
         1 => SemanticTypeKindV2::Never,
         2 => SemanticTypeKindV2::Scalar(decode_scalar(reader)?),
+        13 => SemanticTypeKindV2::ValidityScalar {
+            scalar: decode_scalar(reader)?,
+            valid_ranges: decode_validity_ranges(reader, budgets, totals)?,
+        },
         tag @ (3 | 4) => {
+            charge_decode_total(&mut totals.edges, 1, "edges", budgets.max_edges)?;
             let target = SemanticTypeNodeIdV2(reader.u32()?);
             let mutability = decode_mutability(reader)?;
             let address_space = reader.u32()?;
@@ -1770,17 +2057,23 @@ fn decode_node(
                 }
             }
         }
-        5 => SemanticTypeKindV2::Slice {
-            element: SemanticTypeNodeIdV2(reader.u32()?),
-        },
+        5 => {
+            charge_decode_total(&mut totals.edges, 1, "edges", budgets.max_edges)?;
+            SemanticTypeKindV2::Slice {
+                element: SemanticTypeNodeIdV2(reader.u32()?),
+            }
+        }
         6 => SemanticTypeKindV2::Str,
         7 => SemanticTypeKindV2::Tuple {
             fields: decode_fields(reader, budgets, totals)?,
         },
-        8 => SemanticTypeKindV2::Array {
-            element: SemanticTypeNodeIdV2(reader.u32()?),
-            length: reader.u64()?,
-        },
+        8 => {
+            charge_decode_total(&mut totals.edges, 1, "edges", budgets.max_edges)?;
+            SemanticTypeKindV2::Array {
+                element: SemanticTypeNodeIdV2(reader.u32()?),
+                length: reader.u64()?,
+            }
+        }
         9 => SemanticTypeKindV2::Struct {
             identity: reader.string(max_name)?,
             fields: decode_fields(reader, budgets, totals)?,
@@ -1798,14 +2091,12 @@ fn decode_node(
             let discriminant = decode_scalar(reader)?;
             let encoding = decode_enum_encoding(reader, budgets, totals)?;
             let count = reader.u32()?;
-            totals.variants = totals.variants.checked_add(u64::from(count)).ok_or(
-                SemanticTypeGraphErrorV2::ResourceLimit {
-                    resource: "variants",
-                    actual: u64::MAX,
-                    max: u64::from(budgets.max_variants),
-                },
+            charge_decode_total(
+                &mut totals.variants,
+                count,
+                "variants",
+                budgets.max_variants,
             )?;
-            enforce("variants", totals.variants, u64::from(budgets.max_variants))?;
             reader.ensure_count_fits(count, 25, "variant count exceeds remaining input")?;
             let mut variants = Vec::with_capacity(count as usize);
             for _ in 0..count {
@@ -1843,7 +2134,7 @@ fn encode_enum_encoding(
             encode_scalar(writer, *tag)
         }
         SemanticEnumEncodingV2::Niche {
-            niche_offset,
+            source,
             niche_scalar,
             valid_ranges,
             untagged_variant,
@@ -1852,13 +2143,22 @@ fn encode_enum_encoding(
             niche_start,
         } => {
             writer.u8(3)?;
-            writer.u64(*niche_offset)?;
-            encode_scalar(writer, *niche_scalar)?;
-            writer.u32(valid_ranges.len() as u32)?;
-            for range in valid_ranges {
-                writer.u128(range.start)?;
-                writer.u128(range.end)?;
+            writer.u32(source.path.len() as u32)?;
+            for component in &source.path {
+                match component {
+                    SemanticNichePathComponentV2::Field(index) => {
+                        writer.u8(0)?;
+                        writer.u32(*index)?;
+                    }
+                    SemanticNichePathComponentV2::ArrayElement(index) => {
+                        writer.u8(1)?;
+                        writer.u64(*index)?;
+                    }
+                }
             }
+            writer.u64(source.expected_offset)?;
+            encode_scalar(writer, *niche_scalar)?;
+            encode_validity_ranges(writer, valid_ranges)?;
             writer.u32(*untagged_variant)?;
             writer.u32(*niche_variants_start)?;
             writer.u32(*niche_variants_end)?;
@@ -1881,31 +2181,34 @@ fn decode_enum_encoding(
             tag: decode_scalar(reader)?,
         }),
         3 => {
-            let niche_offset = reader.u64()?;
-            let niche_scalar = decode_scalar(reader)?;
-            let count = reader.u32()?;
-            totals.ranges = totals.ranges.checked_add(u64::from(count)).ok_or(
-                SemanticTypeGraphErrorV2::ResourceLimit {
-                    resource: "validity ranges",
-                    actual: u64::MAX,
-                    max: u64::from(budgets.max_validity_ranges),
-                },
+            let path_count = reader.u32()?;
+            charge_decode_total(
+                &mut totals.edges,
+                path_count,
+                "edges",
+                budgets.max_edges,
             )?;
-            enforce(
-                "validity ranges",
-                totals.ranges,
-                u64::from(budgets.max_validity_ranges),
+            reader.ensure_count_fits(
+                path_count,
+                5,
+                "niche path count exceeds remaining input",
             )?;
-            reader.ensure_count_fits(count, 32, "validity range count exceeds remaining input")?;
-            let mut valid_ranges = Vec::with_capacity(count as usize);
-            for _ in 0..count {
-                valid_ranges.push(ScalarValidityRangeV2 {
-                    start: reader.u128()?,
-                    end: reader.u128()?,
+            let mut path = Vec::with_capacity(path_count as usize);
+            for _ in 0..path_count {
+                path.push(match reader.u8()? {
+                    0 => SemanticNichePathComponentV2::Field(reader.u32()?),
+                    1 => SemanticNichePathComponentV2::ArrayElement(reader.u64()?),
+                    _ => return Err(reader.error("invalid niche path component tag")),
                 });
             }
+            let expected_offset = reader.u64()?;
+            let niche_scalar = decode_scalar(reader)?;
+            let valid_ranges = decode_validity_ranges(reader, budgets, totals)?;
             Ok(SemanticEnumEncodingV2::Niche {
-                niche_offset,
+                source: SemanticNicheSourceV2 {
+                    path,
+                    expected_offset,
+                },
                 niche_scalar,
                 valid_ranges,
                 untagged_variant: reader.u32()?,
