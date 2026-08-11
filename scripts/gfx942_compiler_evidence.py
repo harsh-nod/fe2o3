@@ -2015,6 +2015,9 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
         supervisor.guards.extend(runtime_closure.files)
         run_root.mkdir(mode=0o700)
         evidence_root.mkdir(mode=0o700)
+        supervisor.set_writable_roots(
+            (run_root, evidence_root, Path("/tmp"), Path("/dev"))
+        )
         bootstrap_path = run_root / "bootstrap-tool-path"
         create_allowlisted_path(bootstrap_path, manifest, tools)
         bootstrap_environment = {

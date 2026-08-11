@@ -21,6 +21,34 @@ from typing import Any, Iterable, Mapping, Sequence
 
 PR_SET_CHILD_SUBREAPER = 36
 PR_SET_NO_NEW_PRIVS = 38
+LANDLOCK_CREATE_RULESET_VERSION = 1
+LANDLOCK_RULE_PATH_BENEATH = 1
+LANDLOCK_ACCESS_FS_WRITE_FILE = 1 << 1
+LANDLOCK_ACCESS_FS_REMOVE_DIR = 1 << 4
+LANDLOCK_ACCESS_FS_REMOVE_FILE = 1 << 5
+LANDLOCK_ACCESS_FS_MAKE_CHAR = 1 << 6
+LANDLOCK_ACCESS_FS_MAKE_DIR = 1 << 7
+LANDLOCK_ACCESS_FS_MAKE_REG = 1 << 8
+LANDLOCK_ACCESS_FS_MAKE_SOCK = 1 << 9
+LANDLOCK_ACCESS_FS_MAKE_FIFO = 1 << 10
+LANDLOCK_ACCESS_FS_MAKE_BLOCK = 1 << 11
+LANDLOCK_ACCESS_FS_MAKE_SYM = 1 << 12
+LANDLOCK_ACCESS_FS_REFER = 1 << 13
+LANDLOCK_ACCESS_FS_TRUNCATE = 1 << 14
+LANDLOCK_WRITE_ACCESS = (
+    LANDLOCK_ACCESS_FS_WRITE_FILE
+    | LANDLOCK_ACCESS_FS_REMOVE_DIR
+    | LANDLOCK_ACCESS_FS_REMOVE_FILE
+    | LANDLOCK_ACCESS_FS_MAKE_CHAR
+    | LANDLOCK_ACCESS_FS_MAKE_DIR
+    | LANDLOCK_ACCESS_FS_MAKE_REG
+    | LANDLOCK_ACCESS_FS_MAKE_SOCK
+    | LANDLOCK_ACCESS_FS_MAKE_FIFO
+    | LANDLOCK_ACCESS_FS_MAKE_BLOCK
+    | LANDLOCK_ACCESS_FS_MAKE_SYM
+    | LANDLOCK_ACCESS_FS_REFER
+    | LANDLOCK_ACCESS_FS_TRUNCATE
+)
 F_ADD_SEALS = 1033
 F_GET_SEALS = 1034
 F_SEAL_SEAL = 0x0001
@@ -47,6 +75,69 @@ def _prctl(option: int, value: int) -> None:
     if libc.prctl(option, value, 0, 0, 0) != 0:
         code = ctypes.get_errno()
         raise OSError(code, os.strerror(code))
+
+
+class _LandlockRulesetAttr(ctypes.Structure):
+    _fields_ = [("handled_access_fs", ctypes.c_uint64)]
+
+
+class _LandlockPathBeneathAttr(ctypes.Structure):
+    _fields_ = [
+        ("allowed_access", ctypes.c_uint64),
+        ("parent_fd", ctypes.c_int32),
+        ("reserved", ctypes.c_uint32),
+    ]
+
+
+def _landlock_syscalls() -> tuple[int, int, int]:
+    if os.uname().machine != "x86_64":
+        raise HardeningError("Landlock syscall mapping is pinned to x86_64")
+    return 444, 445, 446
+
+
+def _restrict_writes_with_landlock(roots: Sequence[Path]) -> None:
+    create_ruleset, add_rule, restrict_self = _landlock_syscalls()
+    libc = ctypes.CDLL(None, use_errno=True)
+    abi = libc.syscall(
+        create_ruleset,
+        ctypes.c_void_p(),
+        ctypes.c_size_t(0),
+        ctypes.c_uint(LANDLOCK_CREATE_RULESET_VERSION),
+    )
+    if abi < 3:
+        raise HardeningError("Landlock ABI 3 or newer is required")
+    ruleset_attr = _LandlockRulesetAttr(LANDLOCK_WRITE_ACCESS)
+    ruleset_fd = libc.syscall(
+        create_ruleset,
+        ctypes.byref(ruleset_attr),
+        ctypes.sizeof(ruleset_attr),
+        ctypes.c_uint(0),
+    )
+    if ruleset_fd < 0:
+        code = ctypes.get_errno()
+        raise OSError(code, os.strerror(code))
+    opened: list[int] = []
+    try:
+        for root in roots:
+            fd = os.open(root, os.O_PATH | os.O_CLOEXEC | os.O_NOFOLLOW)
+            opened.append(fd)
+            rule = _LandlockPathBeneathAttr(LANDLOCK_WRITE_ACCESS, fd, 0)
+            if libc.syscall(
+                add_rule,
+                ruleset_fd,
+                LANDLOCK_RULE_PATH_BENEATH,
+                ctypes.byref(rule),
+                ctypes.c_uint(0),
+            ) != 0:
+                code = ctypes.get_errno()
+                raise OSError(code, os.strerror(code))
+        if libc.syscall(restrict_self, ruleset_fd, ctypes.c_uint(0)) != 0:
+            code = ctypes.get_errno()
+            raise OSError(code, os.strerror(code))
+    finally:
+        for fd in opened:
+            os.close(fd)
+        os.close(ruleset_fd)
 
 
 def enable_subreaper_and_no_new_privs() -> None:
@@ -591,6 +682,20 @@ class Supervisor:
         self.cgroup_root = prepare_cgroup_delegation()
         self.sequence = 0
         self.guards: list[RetainedFile] = []
+        self.writable_roots: tuple[Path, ...] = ()
+
+    def set_writable_roots(self, roots: Iterable[Path]) -> None:
+        selected = tuple(sorted(set(roots), key=os.fspath))
+        if not selected:
+            raise HardeningError("supervisor write-root allowlist is empty")
+        for root in selected:
+            if (
+                not root.is_absolute()
+                or root.is_symlink()
+                or root.resolve(strict=True) != root
+            ):
+                raise HardeningError(f"supervisor write root is not canonical: {root}")
+        self.writable_roots = selected
 
     @staticmethod
     def _reap_descendants() -> None:
@@ -639,6 +744,7 @@ class Supervisor:
                     os.close(gate_write)
                     os.setsid()
                     _prctl(PR_SET_NO_NEW_PRIVS, 1)
+                    _restrict_writes_with_landlock(self.writable_roots)
                     resource.setrlimit(resource.RLIMIT_AS, (limits.memory_bytes, limits.memory_bytes))
                     resource.setrlimit(resource.RLIMIT_CPU, (limits.cpu_seconds, limits.cpu_seconds + 1))
                     resource.setrlimit(resource.RLIMIT_FSIZE, (limits.file_bytes, limits.file_bytes))
@@ -761,7 +867,14 @@ def adversarial_self_test() -> None:
         retained = RetainedFile.open("self-test-python", source, require_read_only=True, require_executable=True)
         executable = SealedExecutable.from_retained(retained)
         supervisor = Supervisor()
-        environment = {"LANG": "C", "LC_ALL": "C", "PATH": "/nonexistent", "TZ": "UTC"}
+        supervisor.set_writable_roots((root, Path("/tmp")))
+        environment = {
+            "LANG": "C",
+            "LC_ALL": "C",
+            "PATH": "/nonexistent",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "TZ": "UTC",
+        }
         try:
             result = supervisor.run(
                 executable,
@@ -771,7 +884,10 @@ def adversarial_self_test() -> None:
                 limits=CommandLimits(timeout_seconds=5, memory_bytes=256 * 1024 * 1024),
             )
             if result.returncode != 0 or result.stdout != b"retained-exec-ok\n":
-                raise AssertionError("retained executable did not run")
+                raise AssertionError(
+                    "retained executable did not run: "
+                    f"returncode={result.returncode}, stderr={result.stderr!r}"
+                )
             large = supervisor.run(
                 executable,
                 ["python", "-c", "print('z' * 200000, end='')"],
@@ -785,6 +901,62 @@ def adversarial_self_test() -> None:
             )
             if large.returncode != 0 or large.stdout != b"z" * 200000:
                 raise AssertionError("bounded output capture lost bytes")
+            escape_program = r'''
+import os
+from pathlib import Path
+
+root = Path(os.environ["FE2O3_ESCAPE_CGROUP_ROOT"])
+targets = [root / "cgroup.procs"]
+targets.extend(path / "cgroup.procs" for path in root.glob("controller-*"))
+
+def blocked() -> bool:
+    if len(targets) < 2:
+        return False
+    for target in targets:
+        try:
+            target.write_text(str(os.getpid()), encoding="ascii")
+        except OSError:
+            continue
+        return False
+    return True
+
+read_fd, write_fd = os.pipe()
+first = os.fork()
+if first == 0:
+    os.close(read_fd)
+    os.setsid()
+    second = os.fork()
+    if second == 0:
+        os.write(write_fd, b"blocked" if blocked() else b"escaped")
+        os.close(write_fd)
+        os._exit(0)
+    os.close(write_fd)
+    os._exit(0)
+os.close(write_fd)
+result = os.read(read_fd, 32)
+os.close(read_fd)
+os.waitpid(first, 0)
+if result != b"blocked" or not blocked():
+    raise SystemExit("cgroup migration escape succeeded")
+print("cgroup-migration-blocked")
+'''
+            escape_environment = dict(environment)
+            escape_environment["FE2O3_ESCAPE_CGROUP_ROOT"] = os.fspath(
+                supervisor.cgroup_root
+            )
+            escaped = supervisor.run(
+                executable,
+                ["python", "-c", escape_program],
+                root,
+                escape_environment,
+                limits=CommandLimits(
+                    timeout_seconds=5,
+                    memory_bytes=256 * 1024 * 1024,
+                    processes=8,
+                ),
+            )
+            if escaped.returncode != 0 or escaped.stdout != b"cgroup-migration-blocked\n":
+                raise AssertionError("user-namespace cgroup migration guard failed")
             probes = (
                 ("hang", "import time; time.sleep(30)", CommandLimits(timeout_seconds=0.2)),
                 ("output", "print('x' * 200000)", CommandLimits(timeout_seconds=5, output_bytes=1024)),
