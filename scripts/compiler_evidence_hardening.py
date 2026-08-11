@@ -566,22 +566,44 @@ def capture_snapshot(
         raise
 
 
-def compare_labeled_manifests(first: Mapping[str, Any], second: Mapping[str, Any]) -> None:
-    def keyed(value: Mapping[str, Any]) -> dict[str, tuple[str, int, int]]:
+def compare_labeled_manifests(
+    first: Mapping[str, Any],
+    second: Mapping[str, Any],
+    *,
+    reject_reuse: bool = False,
+) -> None:
+    def keyed(
+        value: Mapping[str, Any],
+    ) -> tuple[dict[str, tuple[str, int, int]], dict[str, tuple[int, int]]]:
         files = value.get("files")
         if not isinstance(files, list):
             raise HardeningError("closure manifest has no file list")
         result: dict[str, tuple[str, int, int]] = {}
+        identities: dict[str, tuple[int, int]] = {}
+        observed_labels = [record.get("label") for record in files]
+        if not all(isinstance(label, str) for label in observed_labels):
+            raise HardeningError("closure manifest labels are invalid")
+        if observed_labels != sorted(observed_labels):
+            raise HardeningError("closure manifest labels are reordered")
         for record in files:
             label = record.get("label")
             info = record.get("stat")
             if not isinstance(label, str) or not isinstance(info, dict) or label in result:
                 raise HardeningError("closure manifest labels are invalid or duplicated")
             result[label] = (record["sha256"], info["bytes"], info["mode"])
-        return result
+            identities[label] = (info["device"], info["inode"])
+        return result, identities
 
-    if keyed(first) != keyed(second):
+    first_content, first_identities = keyed(first)
+    second_content, second_identities = keyed(second)
+    if first_content != second_content:
         raise HardeningError("independent closure manifests differ by labeled content")
+    if reject_reuse:
+        for label in first_content:
+            if first_identities[label] == second_identities[label]:
+                raise HardeningError(
+                    f"independent closure reused an inode across runs: {label}"
+                )
 
 
 @dataclass(frozen=True)
@@ -1113,7 +1135,9 @@ print("cgroup-migration-blocked")
             {"kind": "self-test"},
         )
         try:
-            compare_labeled_manifests(first.manifest, second.manifest)
+            compare_labeled_manifests(
+                first.manifest, second.manifest, reject_reuse=True
+            )
             occupied = root / "occupied-execution-root"
             occupied.mkdir()
             try:
@@ -1138,6 +1162,28 @@ print("cgroup-migration-blocked")
                 pass
             else:
                 raise AssertionError("labeled source substitution was accepted")
+            reordered = copy.deepcopy(second.manifest)
+            reordered["files"].reverse()
+            try:
+                compare_labeled_manifests(first.manifest, reordered)
+            except HardeningError:
+                pass
+            else:
+                raise AssertionError("reordered closure manifest was accepted")
+            reused = copy.deepcopy(second.manifest)
+            for left, right in zip(
+                first.manifest["files"], reused["files"], strict=True
+            ):
+                right["stat"]["device"] = left["stat"]["device"]
+                right["stat"]["inode"] = left["stat"]["inode"]
+            try:
+                compare_labeled_manifests(
+                    first.manifest, reused, reject_reuse=True
+                )
+            except HardeningError:
+                pass
+            else:
+                raise AssertionError("cross-run closure inode reuse was accepted")
             try:
                 capture_snapshot(
                     "preexisting",

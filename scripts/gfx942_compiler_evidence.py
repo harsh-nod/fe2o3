@@ -1022,7 +1022,23 @@ def reject_cross_run_reuse(first: dict[str, Any], second: dict[str, Any]) -> Non
         or not first_records
     ):
         raise EvidenceError("cross-run executable closures are not comparable")
-    for left, right in zip(first_records, second_records, strict=True):
+    def keyed(records: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        labels = [record.get("label") for record in records]
+        if (
+            not all(isinstance(label, str) for label in labels)
+            or labels != sorted(labels)
+            or len(labels) != len(set(labels))
+        ):
+            raise EvidenceError("cross-run executable labels are reordered or duplicated")
+        return {record["label"]: record for record in records}
+
+    first_keyed = keyed(first_records)
+    second_keyed = keyed(second_records)
+    if set(first_keyed) != set(second_keyed):
+        raise EvidenceError("cross-run executable roles differ")
+    for label in first_keyed:
+        left = first_keyed[label]
+        right = second_keyed[label]
         left_stat = left["stat"]
         right_stat = right["stat"]
         if left["path"] == right["path"] or (
@@ -1030,6 +1046,13 @@ def reject_cross_run_reuse(first: dict[str, Any], second: dict[str, Any]) -> Non
             and left_stat["inode"] == right_stat["inode"]
         ):
             raise EvidenceError("run B reused an executable from run A")
+        if (left_stat["bytes"], left_stat["mode"]) != (
+            right_stat["bytes"],
+            right_stat["mode"],
+        ):
+            raise EvidenceError(f"cross-run executable shape differs: {label}")
+        if label != "Rust integration test" and left["sha256"] != right["sha256"]:
+            raise EvidenceError(f"cross-run executable content differs: {label}")
 
 
 def compare_generated_build_snapshots(
@@ -1491,7 +1514,7 @@ def build_and_generate(
     worker = worker_build / "fe2o3-llvm-link-worker"
     generated: list[tuple[Any, dict[str, Any]]] = []
     worker_file, worker_record = measure_generated_executable(
-        worker, worker_build, f"run-{index} Worker"
+        worker, worker_build, "Worker"
     )
     generated.append((worker_file, worker_record))
     if not observe_candidate and worker_record["sha256"] != golden["worker_executable_sha256"]:
@@ -1521,7 +1544,7 @@ def build_and_generate(
             raise EvidenceError("CTest listed a test without an executable")
         executable = Path(command[0])
         file, record = measure_generated_executable(
-            executable, worker_build, f"run-{index} native test {test.get('name')}"
+            executable, worker_build, f"native test {test.get('name')}"
         )
         generated.append((file, record))
         retained = RetainedFile.open(record["label"], executable, require_executable=True)
@@ -1666,7 +1689,7 @@ def build_and_generate(
     if len(test_executables) != 1:
         raise EvidenceError(f"run {index} did not produce exactly one integration-test executable")
     test_file, test_record = measure_generated_executable(
-        test_executables[0], run / "cargo-target", f"run-{index} Rust integration test"
+        test_executables[0], run / "cargo-target", "Rust integration test"
     )
     generated.append((test_file, test_record))
     retained_worker = RetainedFile.open(
@@ -1753,7 +1776,9 @@ def build_and_generate(
             "total": 3,
             "sealed_direct_results": native_results,
         },
-        "executables": [record for _, record in generated],
+        "executables": sorted(
+            (record for _, record in generated), key=lambda record: record["label"]
+        ),
     }
     (output_dir / "executables.json").write_bytes(canonical_json(executable_manifest))
     worker_generated, cargo_generated = capture_generated_build_closures(
@@ -2102,11 +2127,19 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
             retained_closures.append(vendor_generated)
             supervisor.guards.extend(vendor_generated.files)
             generated_inputs.append(cargo_config)
-        compare_labeled_manifests(closures[0].manifest, closures[3].manifest)
-        compare_labeled_manifests(closures[1].manifest, closures[4].manifest)
-        compare_labeled_manifests(closures[2].manifest, closures[5].manifest)
         compare_labeled_manifests(
-            retained_closures[1].manifest, retained_closures[2].manifest
+            closures[0].manifest, closures[3].manifest, reject_reuse=True
+        )
+        compare_labeled_manifests(
+            closures[1].manifest, closures[4].manifest, reject_reuse=True
+        )
+        compare_labeled_manifests(
+            closures[2].manifest, closures[5].manifest, reject_reuse=True
+        )
+        compare_labeled_manifests(
+            retained_closures[1].manifest,
+            retained_closures[2].manifest,
+            reject_reuse=True,
         )
         first_transition = validate_signed_transition(
             prepared[0][1].root, golden, manifest_bytes
@@ -2455,12 +2488,32 @@ def self_test(repo: Path) -> None:
             raise AssertionError("cross-run build-root reuse was accepted")
         reused = {
             "executables": [
-                {"path": "/run-a/test", "stat": {"device": 1, "inode": 2}}
+                {
+                    "label": "test",
+                    "path": "/run-a/test",
+                    "sha256": "1" * 64,
+                    "stat": {
+                        "device": 1,
+                        "inode": 2,
+                        "bytes": 10,
+                        "mode": 0o555,
+                    },
+                }
             ]
         }
         substituted = {
             "executables": [
-                {"path": "/run-b/test", "stat": {"device": 1, "inode": 2}}
+                {
+                    "label": "test",
+                    "path": "/run-b/test",
+                    "sha256": "1" * 64,
+                    "stat": {
+                        "device": 1,
+                        "inode": 2,
+                        "bytes": 10,
+                        "mode": 0o555,
+                    },
+                }
             ]
         }
         try:
@@ -2469,6 +2522,33 @@ def self_test(repo: Path) -> None:
             pass
         else:
             raise AssertionError("cross-run executable reuse was accepted")
+        reordered = copy.deepcopy(substituted)
+        reordered["executables"] = [
+            {
+                **reordered["executables"][0],
+                "label": "z-test",
+                "path": "/run-b/z-test",
+                "stat": {
+                    **reordered["executables"][0]["stat"],
+                    "inode": 3,
+                },
+            },
+            {
+                **reordered["executables"][0],
+                "label": "a-test",
+                "path": "/run-b/a-test",
+                "stat": {
+                    **reordered["executables"][0]["stat"],
+                    "inode": 4,
+                },
+            },
+        ]
+        try:
+            reject_cross_run_reuse(reordered, reordered)
+        except EvidenceError:
+            pass
+        else:
+            raise AssertionError("reordered executable manifest was accepted")
         tools = pin_tools(manifest)
         try:
             allowlist = root / "allowlist"
