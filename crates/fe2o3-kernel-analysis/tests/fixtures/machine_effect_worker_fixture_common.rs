@@ -216,6 +216,8 @@ fn analysis_response(bytes: Vec<u8>, control_challenge: [u8; 32]) {
             }
         }
         12 => load_late_runtime_library(),
+        14 => remap_self(false),
+        15 => remap_self(true),
         _ => {}
     }
     let mode = request.payload[0];
@@ -257,6 +259,43 @@ fn reexec_from_spoofed_memfd() -> ! {
         .exec();
     eprintln!("spoofed worker re-exec failed: {error}");
     exit(87)
+}
+
+#[allow(unsafe_code)]
+fn remap_self(transient: bool) {
+    use std::os::fd::AsRawFd;
+
+    unsafe extern "C" {
+        fn mmap(
+            address: *mut std::ffi::c_void,
+            length: usize,
+            protection: std::ffi::c_int,
+            flags: std::ffi::c_int,
+            descriptor: std::ffi::c_int,
+            offset: i64,
+        ) -> *mut std::ffi::c_void;
+        fn munmap(address: *mut std::ffi::c_void, length: usize) -> std::ffi::c_int;
+    }
+    const PROT_READ: std::ffi::c_int = 1;
+    const MAP_PRIVATE: std::ffi::c_int = 2;
+    const LENGTH: usize = 4096;
+    let image = File::open("/proc/self/exe").unwrap();
+    let mapping = unsafe {
+        mmap(
+            std::ptr::null_mut(),
+            LENGTH,
+            PROT_READ,
+            MAP_PRIVATE,
+            image.as_raw_fd(),
+            0,
+        )
+    };
+    if mapping as isize == -1 {
+        exit(88);
+    }
+    if transient && unsafe { munmap(mapping, LENGTH) } != 0 {
+        exit(89);
+    }
 }
 
 #[allow(unsafe_code)]

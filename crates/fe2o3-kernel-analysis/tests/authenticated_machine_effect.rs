@@ -273,6 +273,23 @@ fn post_ready_fexecve_replacement_from_spoofed_memfd_is_rejected() {
 }
 
 #[test]
+fn persistent_same_object_remap_is_rejected_before_acknowledgement() {
+    let error = worker()
+        .analyze(vec![14], vec![entry()], limits())
+        .unwrap_err();
+    assert_eq!(
+        error.kind(),
+        &AuthenticatedPhysicalMachineEffectErrorKindV1::RuntimeClosureChanged
+    );
+}
+
+#[test]
+fn transient_remap_between_ready_and_done_is_outside_two_snapshot_guarantee() {
+    let execution = worker().analyze(vec![15], vec![entry()], limits()).unwrap();
+    assert!(execution.authenticates_analyzer_execution());
+}
+
+#[test]
 fn in_place_source_mutation_during_capture_never_authenticates() {
     let directory = temp_dir("mutation-race");
     let selected = directory.join("worker");

@@ -39,10 +39,15 @@ rejected.
 The Rust authenticated execution API copies the exact worker into a sealed
 memfd, clears the environment to `LANG=C`, `LC_ALL=C`, and `TZ=UTC`, retains
 the dynamic loader and every mapped DSO descriptor, and uses a fresh-challenge
-`READY`/`DONE`/`ACK` handshake. It measures the exact file-backed map set
-only after runtime initialization and again while the worker is blocked before
-exit; late mappings or `dlopen` fail closed. Retained files are re-statted and
-rehashed after execution.
+`READY`/`DONE`/`ACK` handshake. The deployment policy pins an ASLR-stable
+file-object closure. Each execution receipt separately binds every observed map
+instance, including its address range, permissions, file offset, device/inode,
+path, digest, and object length. The exact mapping snapshot is measured after
+runtime initialization and again while the worker is blocked before exit, so
+persistent additions, removals, remaps, permission changes, and offset changes
+fail closed. A mapping created and removed entirely between these two snapshots
+is outside this guarantee; there is no continuous kernel-backed map audit.
+Retained files are re-statted and rehashed after execution.
 
 The no-fork containment profile requires all real, effective, saved, and
 filesystem UIDs to be equal and nonzero, an initial full-range UID map, and

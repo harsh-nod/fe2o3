@@ -5,9 +5,12 @@
 //! retained image, and accepted only when both its bytes and its observed
 //! file-backed runtime closure match a caller-pinned policy. Fresh OS challenges
 //! bind the ready/done/ack process handshake, identity probe, and every analysis
-//! response. The runtime map set is measured at ready and again before the
-//! worker may exit. Receipts remain inert: they cannot publish, load, or launch
-//! code.
+//! response. Each receipt binds every mapping instance observed at ready by
+//! address range, permissions, file offset, device/inode, path, digest, and
+//! object length; the exact mapping set is checked again before acknowledgement.
+//! This two-snapshot check detects persistent changes but cannot observe a
+//! mapping created and removed entirely between snapshots. Receipts remain
+//! inert: they cannot publish, load, or launch code.
 //!
 //! The authenticated result is still only a list of reachable static
 //! instruction sites and their bounded effect kinds for one exact finalized
@@ -29,6 +32,8 @@ const EXECUTABLE_IDENTITY_DOMAIN: &[u8] =
     b"FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-WORKER-EXECUTABLE/V1\0";
 const RUNTIME_CLOSURE_IDENTITY_DOMAIN: &[u8] =
     b"FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-RUNTIME-CLOSURE/V1\0";
+const RUNTIME_MAPPING_IDENTITY_DOMAIN: &[u8] =
+    b"FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-RUNTIME-MAPPINGS/V1\0";
 const RECEIPT_IDENTITY_DOMAIN: &[u8] =
     b"FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-AUTHENTICATED-RECEIPT/V1\0";
 const RECEIPT_DOMAIN: &[u8] =
@@ -45,6 +50,7 @@ const SCHEMA_VERSION: u16 = 1;
 
 pub const MAX_PHYSICAL_MACHINE_EFFECT_WORKER_BYTES_V1: u64 = 512 * 1024 * 1024;
 pub const MAX_PHYSICAL_MACHINE_EFFECT_RUNTIME_FILES_V1: usize = 256;
+pub const MAX_PHYSICAL_MACHINE_EFFECT_RUNTIME_MAPPINGS_V1: usize = 4096;
 pub const MAX_PHYSICAL_MACHINE_EFFECT_RUNTIME_BYTES_V1: u64 = 2 * 1024 * 1024 * 1024;
 pub const MAX_PHYSICAL_MACHINE_EFFECT_STDERR_BYTES_V1: usize = 64 * 1024;
 pub const DEFAULT_PHYSICAL_MACHINE_EFFECT_TIMEOUT_V1: Duration = Duration::from_secs(120);
@@ -76,6 +82,7 @@ macro_rules! measured_identity {
 
 measured_identity!(PhysicalMachineWorkerExecutableIdentityV1);
 measured_identity!(PhysicalMachineRuntimeClosureIdentityV1);
+measured_identity!(PhysicalMachineRuntimeMappingIdentityV1);
 measured_identity!(AuthenticatedPhysicalMachineEffectReceiptIdentityV1);
 
 impl PhysicalMachineWorkerExecutableIdentityV1 {
@@ -87,7 +94,10 @@ impl PhysicalMachineWorkerExecutableIdentityV1 {
     }
 }
 
-/// Deployment-pinned executable and dynamic runtime closure.
+/// Deployment-pinned executable and ASLR-stable file-object closure.
+///
+/// Per-execution mapping ranges, permissions, offsets, and object identities
+/// are bound separately in the authenticated receipt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PhysicalMachineEffectWorkerPolicyV1 {
     executable: PhysicalMachineWorkerExecutableIdentityV1,
@@ -309,14 +319,15 @@ impl Error for AuthenticatedPhysicalMachineEffectErrorV1 {}
 
 /// A policy-authenticated static-site analysis receipt. Deliberately not `Clone`.
 ///
-/// Authentication binds the worker image, observed runtime closure, challenge,
-/// and exact evidence bytes. It does not upgrade the static effect list into a
+/// Authentication binds the worker image, observed object and mapping closures,
+/// challenge, and exact evidence bytes. It does not upgrade the static effect list into a
 /// memory-safety, race-freedom, refinement, or runtime-count proof.
 pub struct AuthenticatedPhysicalMachineEffectExecutionV1 {
     policy: PhysicalMachineEffectWorkerPolicyV1,
     execution_challenge: PhysicalMachineExecutionChallengeV1,
     process_id: u32,
     process_start_ticks: u64,
+    runtime_mapping_identity: PhysicalMachineRuntimeMappingIdentityV1,
     evidence: PhysicalMachineEffectEvidenceV1,
     canonical_receipt: Vec<u8>,
 }
@@ -348,6 +359,10 @@ impl AuthenticatedPhysicalMachineEffectExecutionV1 {
 
     pub const fn process_start_ticks(&self) -> u64 {
         self.process_start_ticks
+    }
+
+    pub const fn runtime_mapping_identity(&self) -> PhysicalMachineRuntimeMappingIdentityV1 {
+        self.runtime_mapping_identity
     }
 
     pub const fn evidence(&self) -> &PhysicalMachineEffectEvidenceV1 {
@@ -448,6 +463,7 @@ fn encode_receipt(
     challenge: PhysicalMachineExecutionChallengeV1,
     process_id: u32,
     process_start_ticks: u64,
+    runtime_mapping: PhysicalMachineRuntimeMappingIdentityV1,
     evidence: &PhysicalMachineEffectEvidenceV1,
 ) -> Vec<u8> {
     let mut output = Vec::with_capacity(RECEIPT_DOMAIN.len() + 256);
@@ -461,6 +477,8 @@ fn encode_receipt(
     output.extend_from_slice(&challenge.as_bytes());
     push_u32(&mut output, process_id);
     push_u64(&mut output, process_start_ticks);
+    output.extend_from_slice(&runtime_mapping.sha256);
+    push_u64(&mut output, runtime_mapping.byte_len);
     let request = evidence.request_identity();
     output.extend_from_slice(&request.sha256());
     push_u64(&mut output, request.byte_len());
@@ -538,6 +556,7 @@ mod platform {
     const DESCENDANT_SCAN_INTERVAL: Duration = Duration::from_millis(25);
     const DRAIN_GRACE: Duration = Duration::from_millis(200);
     const MAX_PROC_MAPS_BYTES: usize = 1024 * 1024;
+    const MAX_RUNTIME_MAPPING_CANONICAL_BYTES: usize = 4 * 1024 * 1024;
     const MAX_PROC_STAT_BYTES: usize = 4096;
     const MAX_PROC_STATUS_BYTES: usize = 16 * 1024;
     const WORKER_ADDRESS_SPACE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
@@ -619,6 +638,7 @@ mod platform {
         start_ticks: u64,
         executable: RetainedExecutable,
         runtime_closure: PhysicalMachineRuntimeClosureIdentityV1,
+        runtime_mappings: PhysicalMachineRuntimeMappingIdentityV1,
         runtime_files: Vec<RuntimeFile>,
     }
 
@@ -635,6 +655,18 @@ mod platform {
         key: (u32, u32, u64),
         path: String,
         snapshot: Snapshot,
+        digest: [u8; 32],
+        length: u64,
+    }
+
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    struct RuntimeMapping {
+        start: u64,
+        end: u64,
+        permissions: [u8; 4],
+        file_offset: u64,
+        key: (u32, u32, u64),
+        path: String,
         digest: [u8; 32],
         length: u64,
     }
@@ -787,6 +819,7 @@ mod platform {
                 challenge,
                 execution.observation.process_id,
                 execution.observation.start_ticks,
+                execution.observation.runtime_mappings,
                 &evidence,
             );
             Ok(AuthenticatedPhysicalMachineEffectExecutionV1 {
@@ -794,6 +827,7 @@ mod platform {
                 execution_challenge: challenge,
                 process_id: execution.observation.process_id,
                 process_start_ticks: execution.observation.start_ticks,
+                runtime_mapping_identity: execution.observation.runtime_mappings,
                 evidence,
                 canonical_receipt,
             })
@@ -870,14 +904,15 @@ mod platform {
                 let _ = child.wait();
                 return Err(error);
             }
-            let mut observation = match observe_process(child.id(), self.policy.executable) {
-                Ok(observation) => observation,
-                Err(error) => {
-                    terminate_process_tree(&mut child, &BTreeSet::new());
-                    let _ = child.wait();
-                    return Err(error);
-                }
-            };
+            let mut observation =
+                match observe_process(child.id(), self.policy.executable, deadline) {
+                    Ok(observation) => observation,
+                    Err(error) => {
+                        terminate_process_tree(&mut child, &BTreeSet::new());
+                        let _ = child.wait();
+                        return Err(error);
+                    }
+                };
             if observation.executable.identity != self.policy.executable {
                 terminate_process_tree(&mut child, &BTreeSet::new());
                 let _ = child.wait();
@@ -892,6 +927,7 @@ mod platform {
                 child.id(),
                 observation.start_ticks,
                 &mut observation.executable,
+                deadline,
             ) {
                 terminate_process_tree(&mut child, &BTreeSet::new());
                 let _ = child.wait();
@@ -909,7 +945,7 @@ mod platform {
                     },
                 ));
             }
-            if let Err(error) = validate_runtime_files(&mut observation.runtime_files) {
+            if let Err(error) = validate_runtime_files(&mut observation.runtime_files, deadline) {
                 terminate_process_tree(&mut child, &BTreeSet::new());
                 let _ = child.wait();
                 return Err(error);
@@ -925,7 +961,7 @@ mod platform {
                     observation: &mut observation,
                 },
             );
-            let runtime_result = validate_runtime_files(&mut observation.runtime_files);
+            let runtime_result = validate_runtime_files(&mut observation.runtime_files, deadline);
             let image_result = validate_image(&self.image, &self.descriptor_path, self.snapshot);
             runtime_result?;
             image_result?;
@@ -1251,15 +1287,19 @@ mod platform {
     fn observe_process(
         pid: u32,
         expected: PhysicalMachineWorkerExecutableIdentityV1,
+        deadline: Instant,
     ) -> Result<ProcessObservation, AuthenticatedPhysicalMachineEffectErrorV1> {
+        ensure_before_deadline(deadline)?;
         let start_ticks = process_start_ticks(pid)?;
-        let executable = retain_process_executable(pid, expected)?;
-        let (runtime_closure, runtime_files) = runtime_closure(pid, &executable)?;
+        let executable = retain_process_executable(pid, expected, deadline)?;
+        let (runtime_closure, runtime_mappings, runtime_files) =
+            runtime_closure(pid, &executable, deadline)?;
         Ok(ProcessObservation {
             process_id: pid,
             start_ticks,
             executable,
             runtime_closure,
+            runtime_mappings,
             runtime_files,
         })
     }
@@ -1267,7 +1307,9 @@ mod platform {
     fn retain_process_executable(
         pid: u32,
         expected: PhysicalMachineWorkerExecutableIdentityV1,
+        deadline: Instant,
     ) -> Result<RetainedExecutable, AuthenticatedPhysicalMachineEffectErrorV1> {
+        ensure_before_deadline(deadline)?;
         let proc_path = format!("/proc/{pid}/exe");
         let link = std::fs::read_link(&proc_path)
             .map_err(observation_io)?
@@ -1296,7 +1338,12 @@ mod platform {
             rustix::fs::minor(metadata.dev()),
             metadata.ino(),
         );
-        let identity = hash_file_identity(&mut file, EXECUTABLE_IDENTITY_DOMAIN, snapshot.size)?;
+        let identity = hash_file_identity(
+            &mut file,
+            EXECUTABLE_IDENTITY_DOMAIN,
+            snapshot.size,
+            deadline,
+        )?;
         if Snapshot::from_metadata(&file.metadata().map_err(observation_io)?) != snapshot {
             return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
                 AuthenticatedPhysicalMachineEffectErrorKindV1::ProcessObservation,
@@ -1323,7 +1370,9 @@ mod platform {
         pid: u32,
         start_ticks: u64,
         retained: &mut RetainedExecutable,
+        deadline: Instant,
     ) -> Result<(), AuthenticatedPhysicalMachineEffectErrorV1> {
+        ensure_before_deadline(deadline)?;
         if process_start_ticks(pid)? != start_ticks {
             return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
                 AuthenticatedPhysicalMachineEffectErrorKindV1::RuntimeClosureChanged,
@@ -1335,6 +1384,7 @@ mod platform {
             &mut retained.file,
             EXECUTABLE_IDENTITY_DOMAIN,
             retained.snapshot.size,
+            deadline,
         )?;
         if retained_snapshot != retained.snapshot
             || retained_identity != retained.identity
@@ -1344,7 +1394,7 @@ mod platform {
                 AuthenticatedPhysicalMachineEffectErrorKindV1::RuntimeClosureChanged,
             ));
         }
-        let current = retain_process_executable(pid, retained.identity)?;
+        let current = retain_process_executable(pid, retained.identity, deadline)?;
         if current.key != retained.key
             || current.link != retained.link
             || current.snapshot != retained.snapshot
@@ -1524,10 +1574,16 @@ mod platform {
     fn runtime_closure(
         pid: u32,
         executable: &RetainedExecutable,
+        deadline: Instant,
     ) -> Result<
-        (PhysicalMachineRuntimeClosureIdentityV1, Vec<RuntimeFile>),
+        (
+            PhysicalMachineRuntimeClosureIdentityV1,
+            PhysicalMachineRuntimeMappingIdentityV1,
+            Vec<RuntimeFile>,
+        ),
         AuthenticatedPhysicalMachineEffectErrorV1,
     > {
+        ensure_before_deadline(deadline)?;
         let maps = read_bounded_utf8(format!("/proc/{pid}/maps"), MAX_PROC_MAPS_BYTES).map_err(
             |error| {
                 AuthenticatedPhysicalMachineEffectErrorV1::detail(
@@ -1537,93 +1593,118 @@ mod platform {
             },
         )?;
         let mut files = BTreeMap::<(u32, u32, u64), RuntimeFile>::new();
+        let mut mappings = Vec::new();
         let mut total = 0_u64;
         for line in maps.lines() {
-            let mut fields = line.split_ascii_whitespace();
-            let range = fields.next().unwrap_or_default();
-            let _permissions = fields.next();
-            let _offset = fields.next();
-            let device = fields.next().unwrap_or_default();
-            let inode = fields.next().unwrap_or("0");
-            let path = fields.collect::<Vec<_>>().join(" ");
-            if path.len() > u16::MAX as usize {
-                return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
-                    AuthenticatedPhysicalMachineEffectErrorKindV1::ProcessObservation,
-                ));
-            }
-            if inode == "0" || (!path.starts_with('/') && !path.starts_with("/memfd:")) {
-                continue;
-            }
-            let (major, minor) = device.split_once(':').ok_or_else(|| {
-                AuthenticatedPhysicalMachineEffectErrorV1::plain(
-                    AuthenticatedPhysicalMachineEffectErrorKindV1::ProcessObservation,
-                )
-            })?;
-            let major = u32::from_str_radix(major, 16).map_err(|error| {
-                AuthenticatedPhysicalMachineEffectErrorV1::detail(
-                    AuthenticatedPhysicalMachineEffectErrorKindV1::ProcessObservation,
-                    error,
-                )
-            })?;
-            let minor = u32::from_str_radix(minor, 16).map_err(|error| {
-                AuthenticatedPhysicalMachineEffectErrorV1::detail(
-                    AuthenticatedPhysicalMachineEffectErrorKindV1::ProcessObservation,
-                    error,
-                )
-            })?;
-            let inode = inode.parse::<u64>().map_err(|error| {
-                AuthenticatedPhysicalMachineEffectErrorV1::detail(
-                    AuthenticatedPhysicalMachineEffectErrorKindV1::ProcessObservation,
-                    error,
-                )
-            })?;
-            let key = (major, minor, inode);
-            if files.contains_key(&key) {
-                continue;
-            }
-            let mut file = if key == executable.key {
-                executable.file.try_clone().map_err(observation_io)?
-            } else {
-                open_mapped_file(pid, range, &path, key)?
-            };
-            let metadata = file.metadata().map_err(|error| {
-                AuthenticatedPhysicalMachineEffectErrorV1::detail(
-                    AuthenticatedPhysicalMachineEffectErrorKindV1::ProcessObservation,
-                    error,
-                )
-            })?;
-            let snapshot = Snapshot::from_metadata(&metadata);
-            if writable_alias(&file) {
-                return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
-                    AuthenticatedPhysicalMachineEffectErrorKindV1::ProcessObservation,
-                ));
-            }
-            if files.len() >= MAX_PHYSICAL_MACHINE_EFFECT_RUNTIME_FILES_V1
-                || metadata.len() > MAX_PHYSICAL_MACHINE_EFFECT_WORKER_BYTES_V1
-                || total > MAX_PHYSICAL_MACHINE_EFFECT_RUNTIME_BYTES_V1 - metadata.len()
+            ensure_before_deadline(deadline)?;
+            if line.is_empty() || mappings.len() >= MAX_PHYSICAL_MACHINE_EFFECT_RUNTIME_MAPPINGS_V1
             {
-                return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
-                    AuthenticatedPhysicalMachineEffectErrorKindV1::ProcessObservation,
-                ));
+                return Err(observation_error());
             }
-            let (plain_digest, _, length) = hash_runtime_file(&mut file, metadata.len())?;
-            if Snapshot::from_metadata(&file.metadata().map_err(observation_io)?) != snapshot {
-                return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
-                    AuthenticatedPhysicalMachineEffectErrorKindV1::ProcessObservation,
-                ));
+            let mut fields = line.split_ascii_whitespace();
+            let range = fields.next().ok_or_else(observation_error)?;
+            let permissions = fields.next().ok_or_else(observation_error)?;
+            let offset = fields.next().ok_or_else(observation_error)?;
+            let device = fields.next().ok_or_else(observation_error)?;
+            let inode = fields.next().ok_or_else(observation_error)?;
+            let mut path = String::new();
+            for component in fields {
+                let separator = usize::from(!path.is_empty());
+                if path
+                    .len()
+                    .checked_add(separator + component.len())
+                    .is_none_or(|length| length > u16::MAX as usize)
+                {
+                    return Err(observation_error());
+                }
+                if separator != 0 {
+                    path.push(' ');
+                }
+                path.push_str(component);
             }
-            total += metadata.len();
-            files.insert(
+            let (start, end) = range.split_once('-').ok_or_else(observation_error)?;
+            let start = u64::from_str_radix(start, 16).map_err(|_| observation_error())?;
+            let end = u64::from_str_radix(end, 16).map_err(|_| observation_error())?;
+            if start >= end {
+                return Err(observation_error());
+            }
+            let permissions: [u8; 4] = permissions
+                .as_bytes()
+                .try_into()
+                .map_err(|_| observation_error())?;
+            if !matches!(permissions[0], b'r' | b'-')
+                || !matches!(permissions[1], b'w' | b'-')
+                || !matches!(permissions[2], b'x' | b'-')
+                || !matches!(permissions[3], b'p' | b's')
+            {
+                return Err(observation_error());
+            }
+            let file_offset = u64::from_str_radix(offset, 16).map_err(|_| observation_error())?;
+            let (major, minor) = device.split_once(':').ok_or_else(|| observation_error())?;
+            let major = u32::from_str_radix(major, 16).map_err(|_| observation_error())?;
+            let minor = u32::from_str_radix(minor, 16).map_err(|_| observation_error())?;
+            let inode = inode.parse::<u64>().map_err(|_| observation_error())?;
+            let key = (major, minor, inode);
+            let (digest, length) = if inode == 0 {
+                if key != (0, 0, 0) {
+                    return Err(observation_error());
+                }
+                ([0; 32], 0)
+            } else {
+                if !path.starts_with('/') && !path.starts_with("/memfd:") {
+                    return Err(observation_error());
+                }
+                if !files.contains_key(&key) {
+                    let mut file = if key == executable.key {
+                        executable.file.try_clone().map_err(observation_io)?
+                    } else {
+                        open_mapped_file(pid, range, &path, key)?
+                    };
+                    let metadata = file.metadata().map_err(observation_io)?;
+                    let snapshot = Snapshot::from_metadata(&metadata);
+                    if writable_alias(&file)
+                        || files.len() >= MAX_PHYSICAL_MACHINE_EFFECT_RUNTIME_FILES_V1
+                        || metadata.len() > MAX_PHYSICAL_MACHINE_EFFECT_WORKER_BYTES_V1
+                        || total > MAX_PHYSICAL_MACHINE_EFFECT_RUNTIME_BYTES_V1 - metadata.len()
+                    {
+                        return Err(observation_error());
+                    }
+                    let (digest, _, length) =
+                        hash_runtime_file(&mut file, metadata.len(), deadline)?;
+                    if Snapshot::from_metadata(&file.metadata().map_err(observation_io)?)
+                        != snapshot
+                    {
+                        return Err(observation_error());
+                    }
+                    total += metadata.len();
+                    files.insert(
+                        key,
+                        RuntimeFile {
+                            file,
+                            key,
+                            path: path.clone(),
+                            snapshot,
+                            digest,
+                            length,
+                        },
+                    );
+                }
+                let file = files.get(&key).ok_or_else(observation_error)?;
+                if file.path != path {
+                    return Err(observation_error());
+                }
+                (file.digest, file.length)
+            };
+            mappings.push(RuntimeMapping {
+                start,
+                end,
+                permissions,
+                file_offset,
                 key,
-                RuntimeFile {
-                    file,
-                    key,
-                    path,
-                    snapshot,
-                    digest: plain_digest,
-                    length,
-                },
-            );
+                path,
+                digest,
+                length,
+            });
         }
         if files.is_empty() {
             return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
@@ -1648,13 +1729,71 @@ mod platform {
             canonical.extend_from_slice(&digest);
             push_u64(&mut canonical, length);
         }
+        let mapping_identity = runtime_mapping_identity(mappings)?;
         Ok((
             PhysicalMachineRuntimeClosureIdentityV1 {
                 sha256: domain_hash(RUNTIME_CLOSURE_IDENTITY_DOMAIN, &canonical),
                 byte_len: canonical.len() as u64,
             },
+            mapping_identity,
             files.into_values().collect(),
         ))
+    }
+
+    fn runtime_mapping_identity(
+        mut mappings: Vec<RuntimeMapping>,
+    ) -> Result<PhysicalMachineRuntimeMappingIdentityV1, AuthenticatedPhysicalMachineEffectErrorV1>
+    {
+        mappings.sort_by(|left, right| {
+            (
+                left.start,
+                left.end,
+                left.permissions,
+                left.file_offset,
+                left.key,
+                left.path.as_str(),
+                left.digest,
+                left.length,
+            )
+                .cmp(&(
+                    right.start,
+                    right.end,
+                    right.permissions,
+                    right.file_offset,
+                    right.key,
+                    right.path.as_str(),
+                    right.digest,
+                    right.length,
+                ))
+        });
+        let canonical_len = mappings.iter().try_fold(4_usize, |total, mapping| {
+            total.checked_add(86)?.checked_add(mapping.path.len())
+        });
+        let Some(canonical_len) =
+            canonical_len.filter(|length| *length <= MAX_RUNTIME_MAPPING_CANONICAL_BYTES)
+        else {
+            return Err(observation_error());
+        };
+        let mut canonical = Vec::with_capacity(canonical_len);
+        push_u32(&mut canonical, mappings.len() as u32);
+        for mapping in mappings {
+            push_u64(&mut canonical, mapping.start);
+            push_u64(&mut canonical, mapping.end);
+            canonical.extend_from_slice(&mapping.permissions);
+            push_u64(&mut canonical, mapping.file_offset);
+            push_u32(&mut canonical, mapping.key.0);
+            push_u32(&mut canonical, mapping.key.1);
+            push_u64(&mut canonical, mapping.key.2);
+            push_u16(&mut canonical, mapping.path.len() as u16);
+            canonical.extend_from_slice(mapping.path.as_bytes());
+            canonical.extend_from_slice(&mapping.digest);
+            push_u64(&mut canonical, mapping.length);
+        }
+        debug_assert_eq!(canonical.len(), canonical_len);
+        Ok(PhysicalMachineRuntimeMappingIdentityV1 {
+            sha256: domain_hash(RUNTIME_MAPPING_IDENTITY_DOMAIN, &canonical),
+            byte_len: canonical.len() as u64,
+        })
     }
 
     fn runtime_file_set(files: &[RuntimeFile]) -> BTreeSet<RuntimeFileIdentity> {
@@ -1667,22 +1806,31 @@ mod platform {
     fn validate_post_execution_closure(
         pid: u32,
         observation: &mut ProcessObservation,
+        deadline: Instant,
     ) -> Result<(), AuthenticatedPhysicalMachineEffectErrorV1> {
+        ensure_before_deadline(deadline)?;
         if process_start_ticks(pid)? != observation.start_ticks {
             return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
                 AuthenticatedPhysicalMachineEffectErrorKindV1::RuntimeClosureChanged,
             ));
         }
-        validate_retained_executable(pid, observation.start_ticks, &mut observation.executable)?;
-        let (identity, mut files) = runtime_closure(pid, &observation.executable)?;
+        validate_retained_executable(
+            pid,
+            observation.start_ticks,
+            &mut observation.executable,
+            deadline,
+        )?;
+        let (identity, mappings, mut files) =
+            runtime_closure(pid, &observation.executable, deadline)?;
         if identity != observation.runtime_closure
+            || mappings != observation.runtime_mappings
             || runtime_file_set(&files) != runtime_file_set(&observation.runtime_files)
         {
             return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
                 AuthenticatedPhysicalMachineEffectErrorKindV1::RuntimeClosureChanged,
             ));
         }
-        validate_runtime_files(&mut files)?;
+        validate_runtime_files(&mut files, deadline)?;
         observation.runtime_files.append(&mut files);
         Ok(())
     }
@@ -1729,15 +1877,18 @@ mod platform {
 
     fn validate_runtime_files(
         files: &mut [RuntimeFile],
+        deadline: Instant,
     ) -> Result<(), AuthenticatedPhysicalMachineEffectErrorV1> {
         for runtime in files {
+            ensure_before_deadline(deadline)?;
             let before = Snapshot::from_metadata(&runtime.file.metadata().map_err(observation_io)?);
             if before != runtime.snapshot || writable_alias(&runtime.file) {
                 return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
                     AuthenticatedPhysicalMachineEffectErrorKindV1::RuntimeClosureChanged,
                 ));
             }
-            let (digest, _, length) = hash_runtime_file(&mut runtime.file, runtime.snapshot.size)?;
+            let (digest, _, length) =
+                hash_runtime_file(&mut runtime.file, runtime.snapshot.size, deadline)?;
             let after = Snapshot::from_metadata(&runtime.file.metadata().map_err(observation_io)?);
             if after != runtime.snapshot || digest != runtime.digest || length != runtime.length {
                 return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
@@ -1751,6 +1902,7 @@ mod platform {
     fn hash_runtime_file(
         file: &mut File,
         expected: u64,
+        deadline: Instant,
     ) -> Result<([u8; 32], [u8; 32], u64), AuthenticatedPhysicalMachineEffectErrorV1> {
         file.seek(SeekFrom::Start(0)).map_err(observation_io)?;
         let mut plain = Sha256::new();
@@ -1759,6 +1911,7 @@ mod platform {
         let mut total = 0_u64;
         let mut buffer = [0_u8; IO_CHUNK_BYTES];
         loop {
+            ensure_before_deadline(deadline)?;
             let read = read_retry(file, &mut buffer).map_err(observation_io)?;
             if read == 0 {
                 break;
@@ -1788,6 +1941,7 @@ mod platform {
         file: &mut File,
         domain: &[u8],
         expected: u64,
+        deadline: Instant,
     ) -> Result<PhysicalMachineWorkerExecutableIdentityV1, AuthenticatedPhysicalMachineEffectErrorV1>
     {
         file.seek(SeekFrom::Start(0)).map_err(observation_io)?;
@@ -1796,6 +1950,7 @@ mod platform {
         let mut length = 0_u64;
         let mut buffer = [0_u8; IO_CHUNK_BYTES];
         loop {
+            ensure_before_deadline(deadline)?;
             let read = read_retry(file, &mut buffer).map_err(observation_io)?;
             if read == 0 {
                 break;
@@ -1828,6 +1983,23 @@ mod platform {
             AuthenticatedPhysicalMachineEffectErrorKindV1::ProcessObservation,
             error,
         )
+    }
+
+    fn observation_error() -> AuthenticatedPhysicalMachineEffectErrorV1 {
+        AuthenticatedPhysicalMachineEffectErrorV1::plain(
+            AuthenticatedPhysicalMachineEffectErrorKindV1::ProcessObservation,
+        )
+    }
+
+    fn ensure_before_deadline(
+        deadline: Instant,
+    ) -> Result<(), AuthenticatedPhysicalMachineEffectErrorV1> {
+        if Instant::now() >= deadline {
+            return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
+                AuthenticatedPhysicalMachineEffectErrorKindV1::Timeout,
+            ));
+        }
+        Ok(())
     }
 
     fn supervise(
@@ -1903,7 +2075,9 @@ mod platform {
                         )
                     })?;
                 completed_request_written = Some(request_written);
-                if let Err(error) = validate_post_execution_closure(child.id(), observation) {
+                if let Err(error) =
+                    validate_post_execution_closure(child.id(), observation, deadline)
+                {
                     terminate_process_tree(child, &descendants_seen);
                     let _ = child.wait();
                     return Err(error);
@@ -2309,7 +2483,9 @@ mod platform {
                 return;
             }
             let snapshot = Snapshot::from_metadata(&file.metadata().unwrap());
-            let (digest, _, length) = hash_runtime_file(&mut file, snapshot.size).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(30);
+            let (digest, _, length) =
+                hash_runtime_file(&mut file, snapshot.size, deadline).unwrap();
             let mut retained = [RuntimeFile {
                 file,
                 key: (1, 2, 3),
@@ -2318,12 +2494,12 @@ mod platform {
                 digest,
                 length,
             }];
-            validate_runtime_files(&mut retained).unwrap();
+            validate_runtime_files(&mut retained, deadline).unwrap();
 
             writer.seek(SeekFrom::Start(0)).unwrap();
             writer.write_all(b"mutated!").unwrap();
             writer.sync_all().unwrap();
-            let error = validate_runtime_files(&mut retained).unwrap_err();
+            let error = validate_runtime_files(&mut retained, deadline).unwrap_err();
             assert_eq!(
                 error.kind(),
                 &AuthenticatedPhysicalMachineEffectErrorKindV1::RuntimeClosureChanged
@@ -2331,6 +2507,63 @@ mod platform {
             drop(writer);
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
             std::fs::remove_file(path).unwrap();
+        }
+
+        #[test]
+        fn mapping_identity_binds_every_instance_field() {
+            let base = RuntimeMapping {
+                start: 0x1000,
+                end: 0x2000,
+                permissions: *b"r-xp",
+                file_offset: 0x3000,
+                key: (8, 1, 42),
+                path: "/runtime.so".to_string(),
+                digest: [0x5a; 32],
+                length: 8192,
+            };
+            let identity = runtime_mapping_identity(vec![base.clone()]).unwrap();
+            let mut variants = Vec::new();
+            let mut changed = base.clone();
+            changed.start += 0x1000;
+            variants.push(changed);
+            let mut changed = base.clone();
+            changed.end += 0x1000;
+            variants.push(changed);
+            let mut changed = base.clone();
+            changed.permissions = *b"rw-p";
+            variants.push(changed);
+            let mut changed = base.clone();
+            changed.file_offset += 0x1000;
+            variants.push(changed);
+            let mut changed = base.clone();
+            changed.key.0 += 1;
+            variants.push(changed);
+            let mut changed = base.clone();
+            changed.key.1 += 1;
+            variants.push(changed);
+            let mut changed = base.clone();
+            changed.key.2 += 1;
+            variants.push(changed);
+            let mut changed = base.clone();
+            changed.path.push_str(".changed");
+            variants.push(changed);
+            let mut changed = base.clone();
+            changed.digest[0] ^= 1;
+            variants.push(changed);
+            let mut changed = base.clone();
+            changed.length += 1;
+            variants.push(changed);
+            for changed in variants {
+                assert_ne!(runtime_mapping_identity(vec![changed]).unwrap(), identity);
+            }
+            assert_ne!(runtime_mapping_identity(Vec::new()).unwrap(), identity);
+            let mut added = base.clone();
+            added.start = 0x4000;
+            added.end = 0x5000;
+            assert_ne!(
+                runtime_mapping_identity(vec![base, added]).unwrap(),
+                identity
+            );
         }
 
         #[test]
