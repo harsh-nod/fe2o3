@@ -6,7 +6,6 @@
 //! no runtime allocation, GPU behavior, compiler refinement, proof execution,
 //! or inter-invocation race-freedom.
 
-use std::collections::BTreeMap;
 use std::fmt;
 
 const MAGIC: [u8; 8] = *b"FE2OMEM2";
@@ -1565,13 +1564,96 @@ struct CapabilityStateV2 {
     kind: CapabilityKindV2,
 }
 
+#[derive(Clone, Debug)]
+struct BoundedStateMapV2<K, V> {
+    entries: Vec<(K, V)>,
+    resource: &'static str,
+    max: u32,
+}
+
+impl<K: Ord, V> BoundedStateMapV2<K, V> {
+    fn try_with_capacity(resource: &'static str, max: u32) -> Result<Self, MemoryErrorReasonV2> {
+        let capacity = usize::try_from(max).map_err(|_| MemoryErrorReasonV2::ResourceLimit {
+            resource,
+            actual: u64::from(max),
+            max: usize::MAX as u64,
+        })?;
+        let mut entries = Vec::new();
+        entries
+            .try_reserve_exact(capacity)
+            .map_err(|_| MemoryErrorReasonV2::AllocationFailed {
+                resource: "runtime state map",
+            })?;
+        Ok(Self {
+            entries,
+            resource,
+            max,
+        })
+    }
+
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    fn contains_key(&self, key: &K) -> bool {
+        self.entries
+            .binary_search_by(|(item, _)| item.cmp(key))
+            .is_ok()
+    }
+
+    fn get(&self, key: &K) -> Option<&V> {
+        self.entries
+            .binary_search_by(|(item, _)| item.cmp(key))
+            .ok()
+            .map(|index| &self.entries[index].1)
+    }
+
+    fn get_mut(&mut self, key: &K) -> Option<&mut V> {
+        self.entries
+            .binary_search_by(|(item, _)| item.cmp(key))
+            .ok()
+            .map(|index| &mut self.entries[index].1)
+    }
+
+    fn insert(&mut self, key: K, value: V) -> Result<bool, MemoryErrorReasonV2> {
+        match self.entries.binary_search_by(|(item, _)| item.cmp(&key)) {
+            Ok(_) => Ok(false),
+            Err(index) => {
+                let actual = self.entries.len().checked_add(1).ok_or(
+                    MemoryErrorReasonV2::ResourceLimit {
+                        resource: self.resource,
+                        actual: u64::MAX,
+                        max: u64::from(self.max),
+                    },
+                )?;
+                enforce(self.resource, actual as u64, u64::from(self.max))?;
+                if self.entries.len() == self.entries.capacity() {
+                    return Err(MemoryErrorReasonV2::AllocationFailed {
+                        resource: "runtime state map invariant",
+                    });
+                }
+                self.entries.insert(index, (key, value));
+                Ok(true)
+            }
+        }
+    }
+
+    fn values(&self) -> impl Iterator<Item = &V> {
+        self.entries.iter().map(|(_, value)| value)
+    }
+
+    fn retain(&mut self, mut keep: impl FnMut(&K, &V) -> bool) {
+        self.entries.retain(|(key, value)| keep(key, value));
+    }
+}
+
 struct MachineV2<'a> {
     target: &'a TargetLayoutV2,
     types: &'a [MemoryTypeV2],
     epoch: EpochV2,
-    allocations: BTreeMap<AllocationIdV2, AllocationStateV2>,
-    loans: BTreeMap<LoanIdV2, LoanStateV2>,
-    capabilities: BTreeMap<CapabilityIdV2, CapabilityStateV2>,
+    allocations: BoundedStateMapV2<AllocationIdV2, AllocationStateV2>,
+    loans: BoundedStateMapV2<LoanIdV2, LoanStateV2>,
+    capabilities: BoundedStateMapV2<CapabilityIdV2, CapabilityStateV2>,
     records: Vec<TransitionRecordV2>,
     obligation_count: u64,
     program_identity: UntrustedMemoryProgramIdentityV2,
@@ -1615,17 +1697,30 @@ pub fn execute_memory_program_v2(
                 resource: "transition records",
             })
         })?;
+    let allocations = BoundedStateMapV2::try_with_capacity("allocations", budgets.max_allocations)
+        .map_err(MemoryModelErrorV2::static_error)?;
+    let loans = BoundedStateMapV2::try_with_capacity("loans", budgets.max_loans)
+        .map_err(MemoryModelErrorV2::static_error)?;
+    let capabilities =
+        BoundedStateMapV2::try_with_capacity("capabilities", budgets.max_capabilities)
+            .map_err(MemoryModelErrorV2::static_error)?;
     let mut initial_execution_work = WorkMeterV2::execution(budgets.max_execution_work);
     initial_execution_work
-        .charge(program.types.len() as u64 + program.actions.len() as u64)
+        .charge(
+            program.types.len() as u64
+                + program.actions.len() as u64
+                + u64::from(budgets.max_allocations)
+                + u64::from(budgets.max_loans)
+                + u64::from(budgets.max_capabilities),
+        )
         .map_err(MemoryModelErrorV2::static_error)?;
     let mut machine = MachineV2 {
         target: &program.target,
         types: &program.types,
         epoch: EpochV2(0),
-        allocations: BTreeMap::new(),
-        loans: BTreeMap::new(),
-        capabilities: BTreeMap::new(),
+        allocations,
+        loans,
+        capabilities,
         records,
         obligation_count: 0,
         program_identity,
@@ -1960,7 +2055,8 @@ impl MachineV2<'_> {
             }
         }
         self.charge_work(btree_lookup_work(self.allocations.len() as u64))?;
-        self.allocations.insert(
+        self.charge_work(self.allocations.len() as u64)?;
+        if !self.allocations.insert(
             id,
             AllocationStateV2 {
                 provenance: ProvenanceV2 {
@@ -1977,21 +2073,29 @@ impl MachineV2<'_> {
                 initialized: Vec::new(),
                 typed: Vec::new(),
             },
-        );
-        Ok(vec![
+        )? {
+            return Err(MemoryErrorReasonV2::DuplicateAllocation(id));
+        }
+        let mut obligations = self.empty_obligations();
+        self.push_obligation(
+            &mut obligations,
             self.obligation(
                 id,
                 ByteRangeV2 { start: 0, len },
                 MemoryObligationKindV2::AddressRepresentable,
                 ObligationBasisV2::LocallyEstablished,
             ),
+        )?;
+        self.push_obligation(
+            &mut obligations,
             self.obligation(
                 id,
                 ByteRangeV2 { start: 0, len },
                 MemoryObligationKindV2::LifetimeContainsEpoch,
                 ObligationBasisV2::LocallyEstablished,
             ),
-        ])
+        )?;
+        Ok(obligations)
     }
 
     fn resolve_place(
@@ -2120,7 +2224,8 @@ impl MachineV2<'_> {
             .ok_or(MemoryErrorReasonV2::BorrowEpochOverflow)?;
         let borrow_epoch = allocation.next_borrow_epoch;
         self.charge_work(btree_lookup_work(self.loans.len() as u64))?;
-        self.loans.insert(
+        self.charge_work(self.loans.len() as u64)?;
+        if !self.loans.insert(
             loan_id,
             LoanStateV2 {
                 id: loan_id,
@@ -2132,8 +2237,10 @@ impl MachineV2<'_> {
                 borrow_epoch,
                 active: true,
             },
-        );
-        Ok(self.base_obligations(resolved, true))
+        )? {
+            return Err(MemoryErrorReasonV2::DuplicateLoan(loan_id));
+        }
+        self.base_obligations(resolved, true)
     }
 
     fn end_borrow(
@@ -2181,9 +2288,9 @@ impl MachineV2<'_> {
                 (allocation.initialized.len(), allocation.typed.len())
             };
             self.charge_work(
-                initialized_len as u64
+                2 * initialized_len as u64
                     + sort_work(initialized_len as u64 + 1)
-                    + typed_len as u64
+                    + 2 * typed_len as u64
                     + sort_work(typed_len as u64 + 1),
             )?;
             self.charge_work(btree_lookup_work(self.allocations.len() as u64))?;
@@ -2196,16 +2303,12 @@ impl MachineV2<'_> {
                 resolved.range,
                 self.budgets.max_state_ranges,
             )?;
-            allocation
-                .typed
-                .retain(|(range, _)| !range.overlaps(resolved.range));
-            enforce(
-                "typed state ranges",
-                allocation.typed.len() as u64 + 1,
-                self.budgets.max_state_ranges as u64,
+            replace_typed_range(
+                &mut allocation.typed,
+                resolved.range,
+                resolved.ty,
+                self.budgets.max_state_ranges,
             )?;
-            allocation.typed.push((resolved.range, resolved.ty));
-            allocation.typed.sort();
         } else {
             self.charge_work(btree_lookup_work(self.allocations.len() as u64))?;
             let (initialized_len, typed_len) = {
@@ -2228,26 +2331,35 @@ impl MachineV2<'_> {
                 return Err(MemoryErrorReasonV2::IncompatibleBitValidity);
             }
         }
-        let mut obligations = self.base_obligations(resolved, true);
-        obligations.push(self.obligation(
-            resolved.allocation,
-            resolved.range,
-            MemoryObligationKindV2::BorrowAuthorizesAccess,
-            ObligationBasisV2::LocallyEstablished,
-        ));
-        obligations.push(self.obligation(
-            resolved.allocation,
-            resolved.range,
-            MemoryObligationKindV2::BitValidityCompatible,
-            ObligationBasisV2::LocallyEstablished,
-        ));
-        if write.is_none() {
-            obligations.push(self.obligation(
+        let mut obligations = self.base_obligations(resolved, true)?;
+        self.push_obligation(
+            &mut obligations,
+            self.obligation(
                 resolved.allocation,
                 resolved.range,
-                MemoryObligationKindV2::Initialized,
+                MemoryObligationKindV2::BorrowAuthorizesAccess,
                 ObligationBasisV2::LocallyEstablished,
-            ));
+            ),
+        )?;
+        self.push_obligation(
+            &mut obligations,
+            self.obligation(
+                resolved.allocation,
+                resolved.range,
+                MemoryObligationKindV2::BitValidityCompatible,
+                ObligationBasisV2::LocallyEstablished,
+            ),
+        )?;
+        if write.is_none() {
+            self.push_obligation(
+                &mut obligations,
+                self.obligation(
+                    resolved.allocation,
+                    resolved.range,
+                    MemoryObligationKindV2::Initialized,
+                    ObligationBasisV2::LocallyEstablished,
+                ),
+            )?;
         }
         Ok(obligations)
     }
@@ -2307,7 +2419,8 @@ impl MachineV2<'_> {
             ),
         )?;
         self.charge_work(btree_lookup_work(self.capabilities.len() as u64))?;
-        self.capabilities.insert(
+        self.charge_work(self.capabilities.len() as u64)?;
+        if !self.capabilities.insert(
             id,
             CapabilityStateV2 {
                 provenance,
@@ -2316,13 +2429,20 @@ impl MachineV2<'_> {
                 lifetime,
                 kind,
             },
-        );
-        Ok(vec![self.obligation(
-            provenance.allocation,
-            range,
-            MemoryObligationKindV2::LifetimeContainsEpoch,
-            ObligationBasisV2::LocallyEstablished,
-        )])
+        )? {
+            return Err(MemoryErrorReasonV2::DuplicateCapability(id));
+        }
+        let mut obligations = self.empty_obligations();
+        self.push_obligation(
+            &mut obligations,
+            self.obligation(
+                provenance.allocation,
+                range,
+                MemoryObligationKindV2::LifetimeContainsEpoch,
+                ObligationBasisV2::LocallyEstablished,
+            ),
+        )?;
+        Ok(obligations)
     }
 
     fn raw_access(
@@ -2369,13 +2489,16 @@ impl MachineV2<'_> {
         {
             return Err(MemoryErrorReasonV2::InvalidCapability);
         }
-        let mut obligations = self.base_raw_obligations(place.provenance.allocation, range);
-        obligations.push(self.obligation(
-            place.provenance.allocation,
-            range,
-            MemoryObligationKindV2::ExplicitRawCapability,
-            ObligationBasisV2::ExplicitCapability,
-        ));
+        let mut obligations = self.base_raw_obligations(place.provenance.allocation, range)?;
+        self.push_obligation(
+            &mut obligations,
+            self.obligation(
+                place.provenance.allocation,
+                range,
+                MemoryObligationKindV2::ExplicitRawCapability,
+                ObligationBasisV2::ExplicitCapability,
+            ),
+        )?;
         if place.pointer_address_space != allocation_space {
             self.charge_work(btree_lookup_work(self.capabilities.len() as u64))?;
             let cast = self
@@ -2390,12 +2513,15 @@ impl MachineV2<'_> {
             {
                 return Err(MemoryErrorReasonV2::InvalidCapability);
             }
-            obligations.push(self.obligation(
-                place.provenance.allocation,
-                range,
-                MemoryObligationKindV2::ExplicitAddressSpaceCastCapability,
-                ObligationBasisV2::ExplicitCapability,
-            ));
+            self.push_obligation(
+                &mut obligations,
+                self.obligation(
+                    place.provenance.allocation,
+                    range,
+                    MemoryObligationKindV2::ExplicitAddressSpaceCastCapability,
+                    ObligationBasisV2::ExplicitCapability,
+                ),
+            )?;
         } else if cast_id.is_some() {
             return Err(MemoryErrorReasonV2::UnexpectedAddressSpaceCastCapability);
         }
@@ -2410,7 +2536,9 @@ impl MachineV2<'_> {
                 (allocation.initialized.len(), allocation.typed.len())
             };
             self.charge_work(
-                initialized_len as u64 + sort_work(initialized_len as u64 + 1) + typed_len as u64,
+                2 * initialized_len as u64
+                    + sort_work(initialized_len as u64 + 1)
+                    + typed_len as u64,
             )?;
             self.charge_work(btree_lookup_work(self.allocations.len() as u64))?;
             let allocation = self
@@ -2442,12 +2570,15 @@ impl MachineV2<'_> {
             if !range_set_contains(&allocation.initialized, range) {
                 return Err(MemoryErrorReasonV2::UninitializedRead);
             }
-            obligations.push(self.obligation(
-                place.provenance.allocation,
-                range,
-                MemoryObligationKindV2::Initialized,
-                ObligationBasisV2::LocallyEstablished,
-            ));
+            self.push_obligation(
+                &mut obligations,
+                self.obligation(
+                    place.provenance.allocation,
+                    range,
+                    MemoryObligationKindV2::Initialized,
+                    ObligationBasisV2::LocallyEstablished,
+                ),
+            )?;
         }
         Ok(obligations)
     }
@@ -2507,7 +2638,7 @@ impl MachineV2<'_> {
         let right_obligations =
             self.raw_access(actor, right, right_capability, right_cast_capability, false)?;
         self.charge_work(right_obligations.len() as u64)?;
-        obligations.extend(right_obligations);
+        self.append_obligations(&mut obligations, right_obligations)?;
         let distance = left.byte_offset.abs_diff(right.byte_offset);
         if !distance.is_multiple_of(element_size) {
             return Err(MemoryErrorReasonV2::InvalidPointerDistance);
@@ -2516,18 +2647,24 @@ impl MachineV2<'_> {
             start: left.byte_offset.min(right.byte_offset),
             len: distance,
         };
-        obligations.push(self.obligation(
-            left.provenance.allocation,
-            range,
-            MemoryObligationKindV2::PointerDistanceSameAllocation,
-            ObligationBasisV2::LocallyEstablished,
-        ));
-        obligations.push(self.obligation(
-            left.provenance.allocation,
-            range,
-            MemoryObligationKindV2::PointerDistanceElementDivisibility,
-            ObligationBasisV2::LocallyEstablished,
-        ));
+        self.push_obligation(
+            &mut obligations,
+            self.obligation(
+                left.provenance.allocation,
+                range,
+                MemoryObligationKindV2::PointerDistanceSameAllocation,
+                ObligationBasisV2::LocallyEstablished,
+            ),
+        )?;
+        self.push_obligation(
+            &mut obligations,
+            self.obligation(
+                left.provenance.allocation,
+                range,
+                MemoryObligationKindV2::PointerDistanceElementDivisibility,
+                ObligationBasisV2::LocallyEstablished,
+            ),
+        )?;
         Ok(obligations)
     }
 
@@ -2569,13 +2706,16 @@ impl MachineV2<'_> {
             true,
         )?;
         self.charge_work(destination_obligations.len() as u64)?;
-        obligations.extend(destination_obligations);
-        obligations.push(self.obligation(
-            source.provenance.allocation,
-            source_range,
-            MemoryObligationKindV2::NonOverlappingCopy,
-            ObligationBasisV2::LocallyEstablished,
-        ));
+        self.append_obligations(&mut obligations, destination_obligations)?;
+        self.push_obligation(
+            &mut obligations,
+            self.obligation(
+                source.provenance.allocation,
+                source_range,
+                MemoryObligationKindV2::NonOverlappingCopy,
+                ObligationBasisV2::LocallyEstablished,
+            ),
+        )?;
         Ok(obligations)
     }
 
@@ -2651,12 +2791,17 @@ impl MachineV2<'_> {
         self.charge_work(self.capabilities.len() as u64)?;
         self.capabilities
             .retain(|_, capability| capability.provenance.allocation != id);
-        Ok(vec![self.obligation(
-            id,
-            ByteRangeV2 { start: 0, len },
-            MemoryObligationKindV2::AllocationLive,
-            ObligationBasisV2::LocallyEstablished,
-        )])
+        let mut obligations = self.empty_obligations();
+        self.push_obligation(
+            &mut obligations,
+            self.obligation(
+                id,
+                ByteRangeV2 { start: 0, len },
+                MemoryObligationKindV2::AllocationLive,
+                ObligationBasisV2::LocallyEstablished,
+            ),
+        )?;
+        Ok(obligations)
     }
 
     fn live_allocation(
@@ -2778,47 +2923,127 @@ impl MachineV2<'_> {
         &self,
         resolved: ResolvedPlaceV2,
         include_alias: bool,
-    ) -> Vec<MemoryObligationV2> {
-        let mut result = self.base_raw_obligations(resolved.allocation, resolved.range);
-        result.push(self.obligation(
-            resolved.allocation,
-            resolved.range,
-            MemoryObligationKindV2::Aligned,
-            ObligationBasisV2::LocallyEstablished,
-        ));
-        if include_alias {
-            result.push(self.obligation(
+    ) -> Result<Vec<MemoryObligationV2>, MemoryErrorReasonV2> {
+        let mut result = self.base_raw_obligations(resolved.allocation, resolved.range)?;
+        self.push_obligation(
+            &mut result,
+            self.obligation(
                 resolved.allocation,
                 resolved.range,
-                MemoryObligationKindV2::NoConflictingAlias,
+                MemoryObligationKindV2::Aligned,
                 ObligationBasisV2::LocallyEstablished,
-            ));
+            ),
+        )?;
+        if include_alias {
+            self.push_obligation(
+                &mut result,
+                self.obligation(
+                    resolved.allocation,
+                    resolved.range,
+                    MemoryObligationKindV2::NoConflictingAlias,
+                    ObligationBasisV2::LocallyEstablished,
+                ),
+            )?;
         }
-        result
+        Ok(result)
     }
 
     fn base_raw_obligations(
         &self,
         allocation: AllocationIdV2,
         range: ByteRangeV2,
-    ) -> Vec<MemoryObligationV2> {
-        [
+    ) -> Result<Vec<MemoryObligationV2>, MemoryErrorReasonV2> {
+        let mut result = self.empty_obligations();
+        for kind in [
             MemoryObligationKindV2::AllocationLive,
             MemoryObligationKindV2::ProvenanceGeneration,
             MemoryObligationKindV2::AddressRepresentable,
             MemoryObligationKindV2::InBounds,
             MemoryObligationKindV2::LifetimeContainsEpoch,
-        ]
-        .into_iter()
-        .map(|kind| {
-            self.obligation(
-                allocation,
-                range,
-                kind,
-                ObligationBasisV2::LocallyEstablished,
-            )
-        })
-        .collect()
+        ] {
+            self.push_obligation(
+                &mut result,
+                self.obligation(
+                    allocation,
+                    range,
+                    kind,
+                    ObligationBasisV2::LocallyEstablished,
+                ),
+            )?;
+        }
+        Ok(result)
+    }
+
+    fn empty_obligations(&self) -> Vec<MemoryObligationV2> {
+        Vec::new()
+    }
+
+    fn push_obligation(
+        &self,
+        obligations: &mut Vec<MemoryObligationV2>,
+        obligation: MemoryObligationV2,
+    ) -> Result<(), MemoryErrorReasonV2> {
+        let action_total = (obligations.len() as u64).checked_add(1).ok_or(
+            MemoryErrorReasonV2::ResourceLimit {
+                resource: "obligations",
+                actual: u64::MAX,
+                max: u64::from(self.budgets.max_obligations),
+            },
+        )?;
+        let total = self.obligation_count.checked_add(action_total).ok_or(
+            MemoryErrorReasonV2::ResourceLimit {
+                resource: "obligations",
+                actual: u64::MAX,
+                max: u64::from(self.budgets.max_obligations),
+            },
+        )?;
+        enforce(
+            "obligations",
+            total,
+            u64::from(self.budgets.max_obligations),
+        )?;
+        obligations
+            .try_reserve_exact(1)
+            .map_err(|_| MemoryErrorReasonV2::AllocationFailed {
+                resource: "action obligations",
+            })?;
+        obligations.push(obligation);
+        Ok(())
+    }
+
+    fn append_obligations(
+        &self,
+        obligations: &mut Vec<MemoryObligationV2>,
+        mut additional: Vec<MemoryObligationV2>,
+    ) -> Result<(), MemoryErrorReasonV2> {
+        let action_total = obligations
+            .len()
+            .checked_add(additional.len())
+            .and_then(|total| u64::try_from(total).ok())
+            .ok_or(MemoryErrorReasonV2::ResourceLimit {
+                resource: "obligations",
+                actual: u64::MAX,
+                max: u64::from(self.budgets.max_obligations),
+            })?;
+        let total = self.obligation_count.checked_add(action_total).ok_or(
+            MemoryErrorReasonV2::ResourceLimit {
+                resource: "obligations",
+                actual: u64::MAX,
+                max: u64::from(self.budgets.max_obligations),
+            },
+        )?;
+        enforce(
+            "obligations",
+            total,
+            u64::from(self.budgets.max_obligations),
+        )?;
+        obligations
+            .try_reserve_exact(additional.len())
+            .map_err(|_| MemoryErrorReasonV2::AllocationFailed {
+                resource: "action obligations",
+            })?;
+        obligations.append(&mut additional);
+        Ok(())
     }
 
     fn obligation(
@@ -2968,6 +3193,29 @@ fn insert_range(
     }
     let mut start = range.start;
     let mut end = range.end().ok_or(MemoryErrorReasonV2::OutOfBounds)?;
+    let mut retained = 0_usize;
+    for existing in ranges.iter() {
+        let existing_end = existing.end().expect("validated state range");
+        if existing_end < start || end < existing.start {
+            retained += 1;
+        } else {
+            start = start.min(existing.start);
+            end = end.max(existing_end);
+        }
+    }
+    let final_len = retained
+        .checked_add(1)
+        .ok_or(MemoryErrorReasonV2::ResourceLimit {
+            resource: "state ranges",
+            actual: u64::MAX,
+            max: u64::from(max),
+        })?;
+    enforce("state ranges", final_len as u64, u64::from(max))?;
+    ranges
+        .try_reserve_exact(final_len.saturating_sub(ranges.len()))
+        .map_err(|_| MemoryErrorReasonV2::AllocationFailed {
+            resource: "initialized state ranges",
+        })?;
     ranges.retain(|existing| {
         let existing_end = existing.end().expect("validated state range");
         if existing_end < start || end < existing.start {
@@ -2982,8 +3230,37 @@ fn insert_range(
         start,
         len: end - start,
     });
-    ranges.sort();
-    enforce("state ranges", ranges.len() as u64, max as u64)
+    ranges.sort_unstable();
+    Ok(())
+}
+
+fn replace_typed_range(
+    ranges: &mut Vec<(ByteRangeV2, MemoryTypeIdV2)>,
+    range: ByteRangeV2,
+    ty: MemoryTypeIdV2,
+    max: u32,
+) -> Result<(), MemoryErrorReasonV2> {
+    let retained = ranges
+        .iter()
+        .filter(|(existing, _)| !existing.overlaps(range))
+        .count();
+    let final_len = retained
+        .checked_add(1)
+        .ok_or(MemoryErrorReasonV2::ResourceLimit {
+            resource: "typed state ranges",
+            actual: u64::MAX,
+            max: u64::from(max),
+        })?;
+    enforce("typed state ranges", final_len as u64, u64::from(max))?;
+    ranges
+        .try_reserve_exact(final_len.saturating_sub(ranges.len()))
+        .map_err(|_| MemoryErrorReasonV2::AllocationFailed {
+            resource: "typed state ranges",
+        })?;
+    ranges.retain(|(existing, _)| !existing.overlaps(range));
+    ranges.push((range, ty));
+    ranges.sort_unstable();
+    Ok(())
 }
 
 fn sort_work(items: u64) -> u64 {
@@ -4485,29 +4762,43 @@ mod internal_tests {
     #[test]
     fn copy_rechecks_physical_overlap_across_distinct_provenance() {
         let target = TargetLayoutV2::gfx942_xnack_minus();
-        let mut machine = MachineV2 {
-            target: &target,
-            types: &[],
-            epoch: EpochV2(0),
-            allocations: BTreeMap::from([
-                (AllocationIdV2::new(1).unwrap(), allocation_state(1, 7)),
-                (
+        let budgets = MemoryBudgetsV2::default();
+        let mut allocations =
+            BoundedStateMapV2::try_with_capacity("allocations", budgets.max_allocations).unwrap();
+        assert!(
+            allocations
+                .insert(AllocationIdV2::new(1).unwrap(), allocation_state(1, 7))
+                .unwrap()
+        );
+        assert!(
+            allocations
+                .insert(
                     AllocationIdV2::new(2).unwrap(),
                     AllocationStateV2 {
                         address_space: AddressSpaceV2::Flat,
                         ..allocation_state(2, 8)
                     },
-                ),
-            ]),
-            loans: BTreeMap::new(),
-            capabilities: BTreeMap::new(),
+                )
+                .unwrap()
+        );
+        let mut machine = MachineV2 {
+            target: &target,
+            types: &[],
+            epoch: EpochV2(0),
+            allocations,
+            loans: BoundedStateMapV2::try_with_capacity("loans", budgets.max_loans).unwrap(),
+            capabilities: BoundedStateMapV2::try_with_capacity(
+                "capabilities",
+                budgets.max_capabilities,
+            )
+            .unwrap(),
             records: Vec::new(),
             obligation_count: 0,
             program_identity: UntrustedMemoryProgramIdentityV2([0; 32]),
             action_identity: MemoryActionIdentityV2([0; 32]),
             action_index: 0,
-            execution_work: WorkMeterV2::execution(MemoryBudgetsV2::default().max_execution_work),
-            budgets: MemoryBudgetsV2::default(),
+            execution_work: WorkMeterV2::execution(budgets.max_execution_work),
+            budgets,
         };
         let raw = |id, generation| RawPlaceV2 {
             provenance: ProvenanceV2 {
@@ -4534,5 +4825,52 @@ mod internal_tests {
                 .unwrap_err(),
             MemoryErrorReasonV2::OverlappingCopy
         );
+    }
+
+    #[test]
+    fn bounded_runtime_collections_reject_before_mutation() {
+        let first = ByteRangeV2 { start: 0, len: 1 };
+        let second = ByteRangeV2 { start: 2, len: 1 };
+
+        let mut initialized = Vec::new();
+        insert_range(&mut initialized, first, 1).unwrap();
+        let initialized_before = initialized.clone();
+        assert_eq!(
+            insert_range(&mut initialized, second, 1).unwrap_err(),
+            MemoryErrorReasonV2::ResourceLimit {
+                resource: "state ranges",
+                actual: 2,
+                max: 1,
+            }
+        );
+        assert_eq!(initialized, initialized_before);
+
+        let mut typed = Vec::new();
+        replace_typed_range(&mut typed, first, MemoryTypeIdV2::new(1).unwrap(), 1).unwrap();
+        let typed_before = typed.clone();
+        assert_eq!(
+            replace_typed_range(&mut typed, second, MemoryTypeIdV2::new(1).unwrap(), 1)
+                .unwrap_err(),
+            MemoryErrorReasonV2::ResourceLimit {
+                resource: "typed state ranges",
+                actual: 2,
+                max: 1,
+            }
+        );
+        assert_eq!(typed, typed_before);
+
+        let mut map = BoundedStateMapV2::try_with_capacity("test state", 1).unwrap();
+        assert!(map.insert(1_u32, 10_u32).unwrap());
+        assert_eq!(
+            map.insert(2, 20).unwrap_err(),
+            MemoryErrorReasonV2::ResourceLimit {
+                resource: "test state",
+                actual: 2,
+                max: 1,
+            }
+        );
+        assert_eq!(map.len(), 1);
+        assert_eq!(map.get(&1), Some(&10));
+        assert_eq!(map.get(&2), None);
     }
 }

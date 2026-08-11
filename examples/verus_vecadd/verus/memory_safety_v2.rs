@@ -276,6 +276,22 @@ pub open spec fn initialized_covers(initialized: ByteRange, read: ByteRange) -> 
     range_contains(initialized, read)
 }
 
+pub open spec fn cumulative_phase_admitted(
+    prior_work: nat,
+    phase_work: nat,
+    max_work: nat,
+) -> bool {
+    prior_work + phase_work <= max_work
+}
+
+pub open spec fn bounded_collection_growth(
+    current_len: nat,
+    additional: nat,
+    max_len: nat,
+) -> bool {
+    current_len + additional <= max_len
+}
+
 pub open spec fn typed_read_obligations(
     allocation: Allocation,
     provenance: Provenance,
@@ -603,6 +619,36 @@ pub proof fn full_domain_and_nonzero_ranges_require_named_encodings(scalar_max: 
             ValidityRange { start: 1, end_inclusive: scalar_max },
             scalar_max,
         ),
+{
+}
+
+pub proof fn cumulative_admission_never_resets_prior_work(
+    decode_work: nat,
+    validation_and_identity_work: nat,
+    max_work: nat,
+)
+    requires
+        cumulative_phase_admitted(
+            decode_work,
+            validation_and_identity_work,
+            max_work,
+        ),
+    ensures
+        decode_work <= decode_work + validation_and_identity_work,
+        decode_work + validation_and_identity_work <= max_work,
+{
+}
+
+pub proof fn admitted_collection_growth_stays_within_its_ceiling(
+    current_len: nat,
+    additional: nat,
+    max_len: nat,
+)
+    requires
+        bounded_collection_growth(current_len, additional, max_len),
+    ensures
+        current_len <= max_len,
+        current_len + additional <= max_len,
 {
 }
 

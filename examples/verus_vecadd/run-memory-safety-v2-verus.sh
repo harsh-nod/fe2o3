@@ -22,7 +22,9 @@ for marker in \
     'pub proof fn zero_size_storage_never_overlaps' \
     'pub proof fn admitted_live_storage_makes_copy_ranges_disjoint' \
     'pub proof fn adjacent_validity_ranges_are_not_canonical' \
-    'pub proof fn full_domain_and_nonzero_ranges_require_named_encodings'
+    'pub proof fn full_domain_and_nonzero_ranges_require_named_encodings' \
+    'pub proof fn cumulative_admission_never_resets_prior_work' \
+    'pub proof fn admitted_collection_growth_stays_within_its_ceiling'
 do
     if ! grep -Fq "$marker" "$positive"; then
         printf 'FAIL: missing proof marker %s\n' "$marker" >&2
@@ -123,3 +125,4 @@ run_rejected memory_safety_v2_pointer_width mutated_one_past_workgroup_pointer_i
 run_rejected memory_safety_v2_physical_alias mutated_distinct_allocation_ids_imply_physical_disjointness
 run_rejected memory_safety_v2_validity_canonical mutated_adjacent_validity_ranges_are_canonical
 run_rejected memory_safety_v2_target_layout mutated_64_bit_workgroup_layout_is_gfx942
+run_rejected memory_safety_v2_work_reset mutated_separate_phase_budgets_imply_cumulative_admission

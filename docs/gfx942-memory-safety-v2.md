@@ -48,8 +48,9 @@ foundations. It supplies:
 - a pure, deterministic transition result containing descriptive obligations;
   and
 - a canonical V2 codec whose decoder preflights each collection against the
-  remaining minimum encoded bytes, uses fallible reservation, and re-encodes to
-  reject noncanonical input.
+  remaining minimum encoded bytes, cumulatively admits aggregate type edges and
+  validity ranges before reservation, uses fallible reservation, and re-encodes
+  to reject noncanonical input.
 
 The executable model rejects out-of-bounds or misaligned places, stale or dead
 provenance, incompatible aliases, uninitialized reads, invalid scalar bit
@@ -97,42 +98,65 @@ counterexamples as well as the other listed boundaries.
 All externally sized collections have caller-selected budgets that may only
 narrow immutable hard caps. One meter is carried through decode, structural
 validation, canonical re-encoding, byte comparison, and program-identity
-hashing; no phase may reset it. Decode charges every input byte once, each
+hashing; no phase may reset it. A decoded or constructed program privately
+retains its admission usage. Execution and report verification continue from
+that retained value through repeated structural validation and identity
+hashing, and the report identity binds the final cumulative validation work.
+The retained value has no public setter and cloning cannot reduce it. Decode
+charges every input byte once, each
 collection element before reservation, and every byte compared after
 re-encoding. Validation charges target-name bytes and target entries, every
 type/action/edge/range/projection traversal, cycle scratch initialization and
 stack visits, and canonical output bytes. An in-place sort of `n` items costs
 `n * ceil(log2(n))` (`n` for zero or one item); a sorted-slice lookup costs
 `ceil(log2(n)) + 1`. All additions and products are checked before charging.
-The 1,000-range regression therefore rejects the formerly accepted 1,010-work
-budget, and tests exercise exact success and one-less failure thresholds for
-construction, canonical validation, decode, and execution.
+The 1,000-range regression therefore rejects both the formerly accepted
+1,010-work construction budget and a decode-then-execute budget that only fits
+one phase. Tests exercise exact success and one-less failure thresholds for
+construction, canonical validation, decode, cumulative decode-through-identity,
+execution, and report verification.
 
 A separate hard-capped execution meter charges initial type/action traversal,
-every action, B-tree lookup or insertion at
-`2 * (ceil(log2(n)) + 1)`, linear allocation/loan/capability scans, recursive
-validity scratch and visits, each retain pass, each state sort using the sort
-formula above, initialized/typed-state lookup, final liveness, and every
-obligation's allocation lookup. Canonical action encoding charges emitted
-bytes. Every identity charges each hashed input byte plus 64 units per SHA-256
-compression block, including padding. Report sizing is a checked fixed-width
-formula plus one visit per transition; the report digest binds the meter value
-after its own work has been charged.
+the three pre-reserved state-map capacities, every action, conservative sorted
+state-map lookup and insertion work, insertion shifts, linear
+allocation/loan/capability scans, recursive validity scratch and visits, both
+preflight and mutation retain passes, each state sort using the sort formula
+above, initialized/typed-state lookup, final liveness, and every obligation's
+allocation lookup. Canonical action encoding charges emitted bytes. Every
+identity charges each hashed input byte plus 64 units per SHA-256 compression
+block, including padding. Report sizing is a checked fixed-width formula plus
+one visit per transition; the report digest binds both the cumulative validation
+work and the execution-meter value after its own work has been charged.
 
-Decoder counts are checked and byte-preflighted before allocation. Target
-strings, decoded vectors, cycle/validity scratch, canonical writers, and the
-transition-record vector reserve fallibly before growth. Canonical validation
-does not clone the program, construct a standard-library map, or use an
-allocating stable sort. `AllocationFailed` describes only those explicit
-fallible reservations. Execution still uses standard-library `BTreeMap` and
-small obligation-vector growth; allocator abort under process-wide OOM is not
-contained or reported as `AllocationFailed`. Allocation-bomb tests establish
-bounded rejection before internal growth, not global OOM recovery.
+Decoder counts are checked and byte-preflighted before allocation. The aggregate
+type-edge and validity-range counters use checked addition and are enforced
+before each nested vector reservation, so multiple individually legal
+collections cannot allocate beyond one global ceiling. Target strings (32
+bytes), target entries (16), types (4,096), aggregate edges (16,384), validity
+ranges (16,384), actions (65,536), and per-place projections (64) all reserve
+fallibly under the 16 MiB canonical-byte ceiling. Cycle/validity scratch,
+canonical writers, and transition records also reserve fallibly before growth.
+
+Execution fallibly pre-reserves sorted state maps for at most 4,096 allocations,
+16,384 loans, and 16,384 capabilities before the first action. The record vector
+reserves the admitted action count. Each initialized and typed range vector is
+limited to 65,536 entries; growth computes its post-retain size with checked
+arithmetic, enforces the ceiling, and reserves before mutation. These vectors use
+nonallocating unstable sorts. Per-action obligation vectors reserve each growth
+before mutation and enforce the global 262,144-obligation ceiling before the
+reservation. Failed map/range growth leaves that collection unchanged, as the
+boundary regressions assert. Caller-owned vectors supplied to `new`, explicit
+clones performed by callers or tests, and process setup remain outside this
+admission boundary; the model does not claim global OOM recovery. All internal
+input-sized codec and execution growth described above reports
+`AllocationFailed` on failed fallible reservation.
 
 Domain-separated SHA-256 identities bind codec semantics, the exact target,
 type table, ordered actions including allocation generations, and every policy
-field. Each obligation has its own identity over every obligation field and its
-program/action enclosure. Each transition has a distinct identity over every
+field. Each obligation has its own identity over every obligation field, its
+canonical ordinal, and its program/action enclosure. Obligation verification
+first verifies the complete unchanged transition and then requires exact value
+membership at that ordinal. Each transition has a distinct identity over every
 transition field, ordered obligation identity, and repeated obligation field.
 The report identity directly repeats every transition and obligation field and
 also binds final epoch, live count, and final execution work. Verification APIs
