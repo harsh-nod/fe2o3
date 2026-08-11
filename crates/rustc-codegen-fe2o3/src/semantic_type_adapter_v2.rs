@@ -273,8 +273,8 @@ impl HostDeviceByteDifferentialV2 {
 pub enum DeviceCopyLayoutErrorV2 {
     TargetMismatch,
     StaleCaptureRevision {
-        expected: RustcCaptureRevisionV2,
-        observed: RustcCaptureRevisionV2,
+        expected: Box<RustcCaptureRevisionV2>,
+        observed: Box<RustcCaptureRevisionV2>,
     },
     Unsupported {
         key: String,
@@ -337,8 +337,8 @@ pub fn admit_device_copy_layout_for_gfx942_v2(
     }
     if capture.revision() != expected_revision {
         return Err(DeviceCopyLayoutErrorV2::StaleCaptureRevision {
-            expected: expected_revision,
-            observed: capture.revision(),
+            expected: Box::new(expected_revision),
+            observed: Box::new(capture.revision()),
         });
     }
     let mut seen = BTreeSet::new();
@@ -411,14 +411,11 @@ fn check_device_copy_node(
     }
     match &node.kind {
         SemanticTypeKindV2::Unit => Ok(()),
-        SemanticTypeKindV2::Scalar(SemanticScalarV2::Int { bits, .. })
-            if matches!(bits, 8 | 16 | 32 | 64 | 128) =>
-        {
-            Ok(())
-        }
-        SemanticTypeKindV2::Scalar(SemanticScalarV2::Float { bits }) if matches!(bits, 32 | 64) => {
-            Ok(())
-        }
+        SemanticTypeKindV2::Scalar(SemanticScalarV2::Int {
+            bits: 8 | 16 | 32 | 64 | 128,
+            ..
+        }) => Ok(()),
+        SemanticTypeKindV2::Scalar(SemanticScalarV2::Float { bits: 32 | 64 }) => Ok(()),
         SemanticTypeKindV2::Scalar(_) => Err(device_copy_unsupported(
             key,
             "the scalar has invalid or unsupported bit patterns",
@@ -1687,7 +1684,7 @@ fn extend_bounded(
     bytes: &[u8],
     max: u32,
 ) -> Result<(), SemanticTypeAdapterErrorV2> {
-    let actual = output.len().checked_add(bytes.len()).unwrap_or(usize::MAX);
+    let actual = output.len().saturating_add(bytes.len());
     if actual > max as usize {
         return Err(SemanticTypeAdapterErrorV2::BoundExceeded {
             resource: "rustc layout sidecar bytes",
