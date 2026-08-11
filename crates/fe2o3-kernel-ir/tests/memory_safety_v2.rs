@@ -1912,12 +1912,20 @@ fn detached_identity_mutation_matrix_fails_closed() {
 
     let two_transition_program = program(vec![
         allocate(16),
-        MemoryActionV2::AdvanceEpoch { to: EpochV2(1) },
+        allocate_at(2, 8, AddressSpaceV2::Global, 0x2000, 16, 16, life(0, 100)),
     ]);
     let two_transition = execute_memory_program_v2(&two_transition_program, budgets).unwrap();
+    let first_transition_obligation = two_transition.records()[0].obligations[0].clone();
     assert!(
-        !two_transition.records()[0].obligations[0]
+        !first_transition_obligation
             .verify_identity_in(&two_transition.records()[1], budgets)
+            .unwrap()
+    );
+    let mut cross_transition_substitution = two_transition.records()[1].clone();
+    cross_transition_substitution.obligations[0] = first_transition_obligation.clone();
+    assert!(
+        !first_transition_obligation
+            .verify_identity_in(&cross_transition_substitution, budgets)
             .unwrap()
     );
 
