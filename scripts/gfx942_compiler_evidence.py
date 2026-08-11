@@ -692,6 +692,8 @@ def registry_paths(lock_path: Path, registry_root: Path) -> list[str]:
         if not isinstance(name, str) or not isinstance(version, str):
             raise EvidenceError("Cargo.lock registry package identity is invalid")
         package_root = registry_root / f"{name}-{version}"
+        if not package_root.exists():
+            continue
         if package_root.resolve(strict=True) != package_root or package_root.is_symlink():
             raise EvidenceError(f"registry package is not canonical: {name}-{version}")
         members = sorted(path for path in package_root.rglob("*") if path.is_file())
@@ -726,6 +728,8 @@ def materialize_vendor_checksums(lock_path: Path, vendor: Path, index: int) -> R
         ):
             raise EvidenceError("Cargo.lock registry checksum identity is invalid")
         package_root = vendor / f"{name}-{version}"
+        if not package_root.exists():
+            continue
         files: dict[str, str] = {}
         for member in sorted(path for path in package_root.rglob("*") if path.is_file()):
             relative = member.relative_to(package_root).as_posix()
