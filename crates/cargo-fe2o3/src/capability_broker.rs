@@ -2023,7 +2023,7 @@ mod platform {
                         .is_none(),
                     "capacity worker pause unexpectedly reported a socket"
                 );
-                assert!(broker.shutdown.active_connection_count() >= reached + 1);
+                assert!(broker.shutdown.active_connection_count() > reached);
             }
             assert_eq!(broker.shutdown.active_connection_count(), CLIENTS);
             for _ in 0..CLIENTS {
