@@ -1,4 +1,6 @@
-use dialect_amdgcn::{LoweringDiagnosticCode, lower_compiler_module_to_llvm_ir};
+use dialect_amdgcn::{
+    LoweringDiagnosticCode, lower_compiler_module_to_llvm_ir, lower_device_module_to_gfx942_llvm_ir,
+};
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, BasicBlock, BinaryOp, BlockId, Function, FunctionId,
     IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent, Module, Operation, OperationKind,
@@ -191,6 +193,39 @@ fn canonical_order_is_independent_of_module_vector_order() {
         lower_compiler_module_to_llvm_ir(&permuted).unwrap(),
         baseline
     );
+}
+
+#[test]
+fn helper_only_gfx942_modules_require_explicit_wave_modes() {
+    let mut module = Module::new("tests::helper_only");
+    module.functions = vec![Function::device_ffi_export(
+        "branching_helper",
+        Signature::new(
+            vec![Type::BOOL],
+            vec![Type::Scalar(fe2o3_kernel_ir::ScalarType::I32)],
+        ),
+        vec![ValueId(0)],
+        effective_wave_module().functions[1]
+            .body
+            .as_ref()
+            .unwrap()
+            .blocks
+            .clone(),
+    )];
+
+    let missing = lower_device_module_to_gfx942_llvm_ir(&module).unwrap_err();
+    assert!(missing.contains(LoweringDiagnosticCode::MissingWaveWidth));
+
+    module.functions[0]
+        .required_capabilities
+        .insert(TargetCapability::WaveWidth(WaveWidth::Wave64));
+    let llvm = lower_device_module_to_gfx942_llvm_ir(&module).unwrap();
+    assert!(llvm.contains(
+        "define i32 @branching_helper(i1 %arg0) nounwind \"target-features\"=\"-wavefrontsize32,+wavefrontsize64\" \"target-cpu\"=\"gfx942\""
+    ));
+    assert!(llvm.contains("%v3 = phi i32 [ 11, %bb1 ], [ 22, %bb2 ]"));
+    assert!(!llvm.contains("amdgpu_kernel"));
+    assert!(!llvm.contains("!reqd_work_group_size"));
 }
 
 #[test]

@@ -465,12 +465,31 @@ fn lower_kernel_to_llvm_ir_for_target(
 /// The text binds the AMDGPU target triple only. Target data layout, processor identity, and code
 /// object version are deliberately absent and remain blockers for artifact construction.
 pub fn lower_compiler_module_to_llvm_ir(module: &Module) -> Result<String, LoweringErrors> {
-    lower_compiler_module_to_llvm_ir_for_target(module, LoweringTarget::Baseline, None)
+    lower_compiler_module_to_llvm_ir_for_target(module, LoweringTarget::Baseline, None, true)
 }
 
 /// Lowers a complete compiler module for the strict gfx942 floating-point profile.
 pub fn lower_compiler_module_to_gfx942_llvm_ir(module: &Module) -> Result<String, LoweringErrors> {
-    lower_compiler_module_to_llvm_ir_for_target(module, LoweringTarget::Gfx942StrictFloatV1, None)
+    lower_compiler_module_to_llvm_ir_for_target(
+        module,
+        LoweringTarget::Gfx942StrictFloatV1,
+        None,
+        true,
+    )
+}
+
+/// Lowers a verified helper-only module for the strict gfx942 profile.
+///
+/// Every defined function must carry an exact wave-width capability. This API
+/// emits ordinary AMDGPU device functions and declarations, never kernel
+/// entries, launch metadata, a code object, or execution authority.
+pub fn lower_device_module_to_gfx942_llvm_ir(module: &Module) -> Result<String, LoweringErrors> {
+    lower_compiler_module_to_llvm_ir_for_target(
+        module,
+        LoweringTarget::Gfx942StrictFloatV1,
+        None,
+        false,
+    )
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -507,6 +526,7 @@ pub fn lower_compiler_module_to_gfx942_llvm_ir_with_launch_policies(
         module,
         LoweringTarget::Gfx942StrictFloatV1,
         Some(launch_policies),
+        true,
     )
 }
 
@@ -514,8 +534,9 @@ fn lower_compiler_module_to_llvm_ir_for_target(
     module: &Module,
     target: LoweringTarget,
     launch_policies: Option<&[Gfx942KernelLaunchPolicyV1]>,
+    require_kernel: bool,
 ) -> Result<String, LoweringErrors> {
-    if module.kernels.is_empty() {
+    if require_kernel && module.kernels.is_empty() {
         return Err(LoweringErrors::one(
             LoweringLocation::module(module),
             LoweringDiagnosticCode::MissingKernel,
