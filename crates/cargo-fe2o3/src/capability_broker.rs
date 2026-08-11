@@ -1428,7 +1428,7 @@ mod platform {
     mod tests {
         use std::collections::BTreeSet;
         use std::path::PathBuf;
-        use std::process::{Child, Command};
+        use std::process::{Child, Command, Stdio};
         use std::sync::atomic::{AtomicU64, Ordering};
         use std::sync::{Arc, Barrier};
         use std::time::{Duration, Instant};
@@ -1438,6 +1438,7 @@ mod platform {
         use super::*;
 
         static NEXT: AtomicU64 = AtomicU64::new(1);
+        const MOCK_EXEC_READY_BOUND: Duration = Duration::from_secs(30);
         const PROMPT_SHUTDOWN_BOUND: Duration = Duration::from_secs(5);
         const _: () = assert!(PROMPT_SHUTDOWN_BOUND.as_secs() < BROKER_IO_TIMEOUT.as_secs());
 
@@ -1478,32 +1479,41 @@ mod platform {
         }
 
         impl SpawnedMockExecutable {
-            fn sleep() -> Self {
-                let expected = PinnedExecutable::open(&PathBuf::from("/bin/sleep")).unwrap();
+            fn ready_shell() -> Self {
+                const READY: &[u8] = b"fe2o3-ready";
+
+                let shell = fs::canonicalize("/bin/sh").unwrap();
+                let expected = PinnedExecutable::open(&shell).unwrap();
                 let expected_object = expected.object_identity();
                 let expected_sha256 = *expected.sha256();
-                let child = ReapedChild(Command::new("/bin/sleep").arg("30").spawn().unwrap());
+                let (mut readiness, child_readiness) = UnixStream::pair().unwrap();
+                readiness
+                    .set_read_timeout(Some(MOCK_EXEC_READY_BOUND))
+                    .unwrap();
+                let child = ReapedChild(
+                    Command::new(shell)
+                        .arg("-c")
+                        .arg("printf fe2o3-ready; read _")
+                        .stdin(Stdio::piped())
+                        .stdout(Stdio::from(OwnedFd::from(child_readiness)))
+                        .spawn()
+                        .unwrap(),
+                );
+                let mut ready = [0_u8; READY.len()];
+                readiness.read_exact(&mut ready).unwrap();
+                assert_eq!(&ready, READY);
+
                 let pid = child.0.id();
-                let deadline = Instant::now() + Duration::from_secs(5);
-                loop {
-                    let start_time_ticks = process_start_time_ticks(pid).unwrap();
-                    if let Ok((image, metadata)) = pin_process_executable(pid)
-                        && image.object_identity() == expected_object
-                        && image.sha256() == &expected_sha256
-                    {
-                        assert_eq!(process_start_time_ticks(pid).unwrap(), start_time_ticks);
-                        return Self {
-                            child,
-                            start_time_ticks,
-                            image,
-                            metadata,
-                        };
-                    }
-                    assert!(
-                        Instant::now() < deadline,
-                        "mock executable did not complete exec before its identity was pinned"
-                    );
-                    thread::yield_now();
+                let start_time_ticks = process_start_time_ticks(pid).unwrap();
+                let (image, metadata) = pin_process_executable(pid).unwrap();
+                assert_eq!(image.object_identity(), expected_object);
+                assert_eq!(image.sha256(), &expected_sha256);
+                assert_eq!(process_start_time_ticks(pid).unwrap(), start_time_ticks);
+                Self {
+                    child,
+                    start_time_ticks,
+                    image,
+                    metadata,
                 }
             }
 
@@ -1533,7 +1543,7 @@ mod platform {
                 let address = endpoint_address(&endpoint).unwrap();
                 let listener = UnixListener::bind_addr(&address).unwrap();
                 listener.set_nonblocking(true).unwrap();
-                let mock = SpawnedMockExecutable::sleep();
+                let mock = SpawnedMockExecutable::ready_shell();
                 let route = BrokerRouteV2 {
                     endpoint: endpoint.clone(),
                     secret: random_bytes().unwrap(),
