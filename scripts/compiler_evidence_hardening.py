@@ -24,6 +24,7 @@ PR_SET_NO_NEW_PRIVS = 38
 LANDLOCK_CREATE_RULESET_VERSION = 1
 LANDLOCK_RULE_PATH_BENEATH = 1
 LANDLOCK_ACCESS_FS_WRITE_FILE = 1 << 1
+LANDLOCK_ACCESS_FS_READ_FILE = 1 << 2
 LANDLOCK_ACCESS_FS_REMOVE_DIR = 1 << 4
 LANDLOCK_ACCESS_FS_REMOVE_FILE = 1 << 5
 LANDLOCK_ACCESS_FS_MAKE_CHAR = 1 << 6
@@ -95,7 +96,11 @@ def _landlock_syscalls() -> tuple[int, int, int]:
     return 444, 445, 446
 
 
-def _restrict_writes_with_landlock(roots: Sequence[Path]) -> None:
+def _restrict_filesystem_with_landlock(
+    writable_roots: Sequence[Path],
+    readable_paths: Sequence[Path] | None,
+    readable_roots: Sequence[Path],
+) -> None:
     create_ruleset, add_rule, restrict_self = _landlock_syscalls()
     libc = ctypes.CDLL(None, use_errno=True)
     abi = libc.syscall(
@@ -106,7 +111,10 @@ def _restrict_writes_with_landlock(roots: Sequence[Path]) -> None:
     )
     if abi < 3:
         raise HardeningError("Landlock ABI 3 or newer is required")
-    ruleset_attr = _LandlockRulesetAttr(LANDLOCK_WRITE_ACCESS)
+    handled_access = LANDLOCK_WRITE_ACCESS
+    if readable_paths is not None:
+        handled_access |= LANDLOCK_ACCESS_FS_READ_FILE
+    ruleset_attr = _LandlockRulesetAttr(handled_access)
     ruleset_fd = libc.syscall(
         create_ruleset,
         ctypes.byref(ruleset_attr),
@@ -118,10 +126,18 @@ def _restrict_writes_with_landlock(roots: Sequence[Path]) -> None:
         raise OSError(code, os.strerror(code))
     opened: list[int] = []
     try:
-        for root in roots:
+        rules: dict[Path, int] = {
+            root: LANDLOCK_WRITE_ACCESS for root in writable_roots
+        }
+        if readable_paths is not None:
+            for path in readable_paths:
+                rules[path] = rules.get(path, 0) | LANDLOCK_ACCESS_FS_READ_FILE
+            for root in readable_roots:
+                rules[root] = rules.get(root, 0) | LANDLOCK_ACCESS_FS_READ_FILE
+        for root, allowed_access in sorted(rules.items(), key=lambda item: os.fspath(item[0])):
             fd = os.open(root, os.O_PATH | os.O_CLOEXEC | os.O_NOFOLLOW)
             opened.append(fd)
-            rule = _LandlockPathBeneathAttr(LANDLOCK_WRITE_ACCESS, fd, 0)
+            rule = _LandlockPathBeneathAttr(allowed_access, fd, 0)
             if libc.syscall(
                 add_rule,
                 ruleset_fd,
@@ -716,12 +732,32 @@ class Supervisor:
         *,
         limits: CommandLimits = CommandLimits(),
         inherited_fds: Iterable[int] = (),
+        readable_paths: Iterable[Path] | None = None,
+        readable_roots: Iterable[Path] = (),
     ) -> CommandResult:
         if not arguments or any("\0" in value for value in arguments):
             raise HardeningError("command arguments are invalid")
         if any("\0" in key or "\0" in value or "=" in key for key, value in environment.items()):
             raise HardeningError("command environment is invalid")
         executable.revalidate()
+        selected_readable_paths = (
+            None
+            if readable_paths is None
+            else tuple(sorted(set(readable_paths), key=os.fspath))
+        )
+        selected_readable_roots = tuple(
+            sorted(set(readable_roots), key=os.fspath)
+        )
+        for selected in (
+            *(() if selected_readable_paths is None else selected_readable_paths),
+            *selected_readable_roots,
+        ):
+            if (
+                not selected.is_absolute()
+                or selected.is_symlink()
+                or selected.resolve(strict=True) != selected
+            ):
+                raise HardeningError(f"Landlock read path is not canonical: {selected}")
         for guard in self.guards:
             guard.revalidate_identity()
         cwd_fd = os.open(cwd, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
@@ -742,15 +778,19 @@ class Supervisor:
                     os.close(stdout_read)
                     os.close(stderr_read)
                     os.close(gate_write)
+                    null_fd = os.open("/dev/null", os.O_RDONLY | os.O_CLOEXEC)
                     os.setsid()
                     _prctl(PR_SET_NO_NEW_PRIVS, 1)
-                    _restrict_writes_with_landlock(self.writable_roots)
+                    _restrict_filesystem_with_landlock(
+                        self.writable_roots,
+                        selected_readable_paths,
+                        selected_readable_roots,
+                    )
                     resource.setrlimit(resource.RLIMIT_AS, (limits.memory_bytes, limits.memory_bytes))
                     resource.setrlimit(resource.RLIMIT_CPU, (limits.cpu_seconds, limits.cpu_seconds + 1))
                     resource.setrlimit(resource.RLIMIT_FSIZE, (limits.file_bytes, limits.file_bytes))
                     os.dup2(stdout_write, 1)
                     os.dup2(stderr_write, 2)
-                    null_fd = os.open("/dev/null", os.O_RDONLY | os.O_CLOEXEC)
                     os.dup2(null_fd, 0)
                     os.fchdir(cwd_fd)
                     allowed = {0, 1, 2, executable.fd, *inherited_fds}
@@ -770,7 +810,12 @@ class Supervisor:
             os.close(stderr_write)
             os.close(gate_read)
             cgroup.add(pid)
-            os.write(gate_write, b"1")
+            try:
+                os.write(gate_write, b"1")
+            except BrokenPipeError:
+                # The pre-exec child reports its bounded error through stderr;
+                # continue supervision rather than masking it at the gate.
+                pass
             os.close(gate_write)
             gate_write = -1
             selector = selectors.DefaultSelector()
@@ -956,7 +1001,49 @@ print("cgroup-migration-blocked")
                 ),
             )
             if escaped.returncode != 0 or escaped.stdout != b"cgroup-migration-blocked\n":
-                raise AssertionError("user-namespace cgroup migration guard failed")
+                raise AssertionError("Landlock cgroup migration guard failed")
+            busybox_source = Path("/usr/bin/busybox").resolve(strict=True)
+            busybox_path = root / "busybox"
+            busybox_path.write_bytes(busybox_source.read_bytes())
+            busybox_path.chmod(0o555)
+            allowed_path = root / "allowed-input"
+            allowed_path.write_text("allowed\n", encoding="ascii")
+            allowed_path.chmod(0o444)
+            busybox_retained = RetainedFile.open(
+                "self-test-static-busybox",
+                busybox_path,
+                require_read_only=True,
+                require_executable=True,
+            )
+            busybox = SealedExecutable.from_retained(busybox_retained)
+            try:
+                denied_read = supervisor.run(
+                    busybox,
+                    ["busybox", "cat", "/etc/hostname"],
+                    root,
+                    environment,
+                    limits=CommandLimits(timeout_seconds=5),
+                    readable_paths=(),
+                )
+                if denied_read.returncode == 0:
+                    raise AssertionError("Landlock accepted an unlisted runtime read")
+                allowed_read = supervisor.run(
+                    busybox,
+                    ["busybox", "cat", os.fspath(allowed_path)],
+                    root,
+                    environment,
+                    limits=CommandLimits(timeout_seconds=5),
+                    readable_paths=(allowed_path,),
+                )
+                if allowed_read.returncode != 0 or allowed_read.stdout != b"allowed\n":
+                    raise AssertionError(
+                        "Landlock rejected a retained runtime read: "
+                        f"returncode={allowed_read.returncode}, "
+                        f"stderr={allowed_read.stderr!r}"
+                    )
+            finally:
+                busybox.close()
+                busybox_retained.close()
             probes = (
                 ("hang", "import time; time.sleep(30)", CommandLimits(timeout_seconds=0.2)),
                 ("output", "print('x' * 200000)", CommandLimits(timeout_seconds=5, output_bytes=1024)),

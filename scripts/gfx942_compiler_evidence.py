@@ -16,6 +16,7 @@ import re
 import resource
 import shutil
 import stat
+import struct
 import sys
 import tempfile
 import tomllib
@@ -759,6 +760,8 @@ def run_command(
     executable: SealedExecutable | None = None,
     extra_inherited_fds: tuple[int, ...] = (),
     limits: CommandLimits = CommandLimits(),
+    readable_paths: tuple[Path, ...] | None = None,
+    readable_roots: tuple[Path, ...] = (),
 ) -> Any:
     for tool in tools.values():
         tool.revalidate_identity()
@@ -793,6 +796,8 @@ def run_command(
             environment,
             limits=limits,
             inherited_fds=inherited,
+            readable_paths=readable_paths,
+            readable_roots=readable_roots,
         )
     except HardeningError as error:
         raise EvidenceError(str(error)) from error
@@ -1806,13 +1811,47 @@ def build_from_canonical_snapshot(
         source.relocate(archived_root)
 
 
+def elf_interpreter(executable: SealedExecutable) -> Path:
+    header = os.pread(executable.fd, 64, 0)
+    if len(header) != 64 or header[:6] != b"\x7fELF\x02\x01":
+        raise EvidenceError("generated executable is not little-endian ELF64")
+    program_offset = struct.unpack_from("<Q", header, 32)[0]
+    program_entry_bytes = struct.unpack_from("<H", header, 54)[0]
+    program_entries = struct.unpack_from("<H", header, 56)[0]
+    if program_entry_bytes != 56 or not 1 <= program_entries <= 1024:
+        raise EvidenceError("generated executable program-header table is invalid")
+    interpreters = []
+    for index in range(program_entries):
+        entry = os.pread(
+            executable.fd,
+            program_entry_bytes,
+            program_offset + index * program_entry_bytes,
+        )
+        if len(entry) != program_entry_bytes:
+            raise EvidenceError("generated executable program-header table truncated")
+        kind, _, offset, _, _, file_bytes, _, _ = struct.unpack("<IIQQQQQQ", entry)
+        if kind == 3:
+            if not 2 <= file_bytes <= 4096:
+                raise EvidenceError("ELF interpreter field is unbounded")
+            raw = os.pread(executable.fd, file_bytes, offset)
+            if len(raw) != file_bytes or raw[-1:] != b"\0" or b"\0" in raw[:-1]:
+                raise EvidenceError("ELF interpreter field is malformed")
+            interpreters.append(Path(raw[:-1].decode("utf-8", "strict")))
+    if len(interpreters) != 1:
+        raise EvidenceError("generated dynamic executable lacks one ELF interpreter")
+    interpreter = interpreters[0].resolve(strict=True)
+    if not interpreter.is_absolute() or interpreter.is_symlink():
+        raise EvidenceError("ELF interpreter did not resolve to a canonical file")
+    return interpreter
+
+
 def runtime_paths_for_executable(
     executable: SealedExecutable,
     cwd: Path,
     environment: dict[str, str],
     tools: dict[str, PinnedTool],
     supervisor: Supervisor,
-) -> list[Path]:
+) -> tuple[list[Path], Path]:
     completed = run_command(
         [os.fspath(tools["ldd"].path), executable.proc_path],
         cwd,
@@ -1834,7 +1873,10 @@ def runtime_paths_for_executable(
             paths.add(Path(candidate).resolve(strict=True))
     if not paths or len(paths) > MAX_RUNTIME_FILES:
         raise EvidenceError("hardware executable runtime closure count is invalid")
-    return sorted(paths, key=os.fspath)
+    interpreter = elf_interpreter(executable)
+    if interpreter not in paths:
+        raise EvidenceError("ldd closure did not bind the ELF interpreter")
+    return sorted(paths, key=os.fspath), interpreter
 
 
 def build_and_run_hardware_observation(
@@ -1907,13 +1949,21 @@ def build_and_run_hardware_observation(
             "run-1-gfx942-hardware-test", executables[0], require_executable=True
         )
         sealed_test = SealedExecutable.from_retained(retained_test)
-        runtime_paths = runtime_paths_for_executable(
+        runtime_paths, interpreter = runtime_paths_for_executable(
             sealed_test, source.root, environment, tools, supervisor
         )
+        loader_cache = Path("/etc/ld.so.cache").resolve(strict=True)
         runtime = capture_retained_closure(
             "run-1-gfx942-hardware-runtime",
-            [(f"runtime:{path.as_posix()}", path) for path in runtime_paths],
-            {"executable_sha256": sealed_test.sha256},
+            [
+                *((f"runtime:{path.as_posix()}", path) for path in runtime_paths),
+                ("loader-cache:/etc/ld.so.cache", loader_cache),
+            ],
+            {
+                "executable_sha256": sealed_test.sha256,
+                "elf_interpreter": os.fspath(interpreter),
+                "dlopen_policy": "Landlock exact-file read allowlist",
+            },
         )
         retained_closures.append(runtime)
         supervisor.guards.extend(runtime.files)
@@ -1943,6 +1993,10 @@ def build_and_run_hardware_observation(
             executable=sealed_test,
             extra_inherited_fds=(retained_hsaco.fd,),
             limits=CommandLimits(timeout_seconds=300, cpu_seconds=300),
+            readable_paths=tuple(
+                [*runtime_paths, loader_cache, retained_hsaco.path]
+            ),
+            readable_roots=(Path("/proc"), Path("/sys"), Path("/dev")),
         )
         retained_hsaco.revalidate()
         sealed_test.revalidate()
@@ -1958,6 +2012,8 @@ def build_and_run_hardware_observation(
             "hsaco": retained_hsaco.record(),
             "test_executable": executable_record,
             "runtime_manifest_sha256": runtime.manifest["manifest_sha256"],
+            "elf_interpreter": os.fspath(interpreter),
+            "dlopen_fail_closed": True,
             "boundary_lengths": golden["boundary_lengths"],
             "cpu_oracles_checked": True,
             "prefix_suffix_canaries_checked": True,
