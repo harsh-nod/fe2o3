@@ -52,6 +52,21 @@ use reserved_fe2o3_symbols::{
 };
 #[cfg(feature = "hardware-test-hooks")]
 use std::cell::Cell;
+#[cfg(feature = "hardware-test-hooks")]
+use std::ffi::{CString, c_char, c_int, c_void};
+#[cfg(feature = "hardware-test-hooks")]
+use std::fs::OpenOptions;
+#[cfg(feature = "hardware-test-hooks")]
+use std::io::ErrorKind;
+
+#[cfg(feature = "hardware-test-hooks")]
+#[link(name = "dl")]
+unsafe extern "C" {
+    fn dlopen(filename: *const c_char, flags: c_int) -> *mut c_void;
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+const RTLD_NOW: c_int = 2;
 
 const WORKGROUP_SIZE: usize = 256;
 #[cfg(feature = "hardware-test-hooks")]
@@ -956,6 +971,43 @@ fn require(condition: bool, message: impl Into<String>) -> Result<(), BoxError> 
 }
 
 #[cfg(feature = "hardware-test-hooks")]
+fn verify_compiler_evidence_device_sandbox() -> Result<(), BoxError> {
+    require(
+        std::env::var("FE2O3_VERIFY_DEVICE_LANDLOCK").as_deref() == Ok("1"),
+        "compiler evidence did not enable the device Landlock fixture",
+    )?;
+    let fixture = std::env::var("FE2O3_DEVICE_LANDLOCK_SHM_FIXTURE")?;
+    let create_path = std::env::var("FE2O3_DEVICE_LANDLOCK_SHM_CREATE")?;
+    require(
+        fixture.starts_with("/dev/shm/") && create_path.starts_with("/dev/shm/"),
+        "device Landlock fixtures escaped /dev/shm",
+    )?;
+
+    let read_error = std::fs::read(&fixture).expect_err("Landlock allowed /dev/shm read");
+    require(
+        read_error.kind() == ErrorKind::PermissionDenied,
+        format!("/dev/shm read did not fail with EACCES: {read_error}"),
+    )?;
+    let create_error = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&create_path)
+        .expect_err("Landlock allowed /dev/shm create");
+    require(
+        create_error.kind() == ErrorKind::PermissionDenied,
+        format!("/dev/shm create did not fail with EACCES: {create_error}"),
+    )?;
+
+    let name = CString::new(fixture)?;
+    // SAFETY: `name` is a live NUL-terminated path. The expected null result
+    // creates no handle and therefore needs no matching `dlclose`.
+    let handle = unsafe { dlopen(name.as_ptr(), RTLD_NOW) };
+    require(handle.is_null(), "Landlock allowed dlopen from /dev/shm")?;
+    println!("compiler-evidence /dev/shm create/read/dlopen denial: PASS");
+    Ok(())
+}
+
+#[cfg(feature = "hardware-test-hooks")]
 fn pinned_hsaco() -> Result<(Vec<u8>, fe2o3_artifacts::PayloadDigest), BoxError> {
     require(
         std::env::var("FE2O3_RUN_GFX942_TWO_KERNEL").as_deref() == Ok("1"),
@@ -1635,6 +1687,7 @@ fn run_raw_two_kernel_hardware_slice(
 #[test]
 #[ignore = "requires the repository-generated alpha/zeta COV6 golden and a gfx942:xnack- GPU"]
 fn gfx942_cov6_repository_golden_alpha_then_zeta_one_executable() -> Result<(), BoxError> {
+    verify_compiler_evidence_device_sandbox()?;
     let (bytes, digest) = pinned_repository_golden_hsaco()?;
     run_raw_two_kernel_hardware_slice(bytes, digest)
 }
