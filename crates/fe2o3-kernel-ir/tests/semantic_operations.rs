@@ -34,6 +34,16 @@ fn schema_codec_is_fixed_width_and_explicitly_payload_blind() {
         launch_extent(Axis::X).contract().instance_id(),
         launch_extent(Axis::Z).contract().instance_id()
     );
+
+    let mut noncanonical_v2 = encoded;
+    noncanonical_v2[8..10].copy_from_slice(&SEMANTIC_OPERATION_VERSION_V2.to_le_bytes());
+    assert_eq!(
+        decode_semantic_operation_schema(&noncanonical_v2),
+        Err(SemanticOperationSchemaDecodeError::NonCanonicalVersion {
+            version: SEMANTIC_OPERATION_VERSION_V2,
+            kind: SemanticOperationKind::LaunchExtent,
+        })
+    );
 }
 
 #[test]
@@ -87,6 +97,11 @@ fn wide_memory_elements_use_additive_v2_identity() {
         VolatileAccessContract::rust_allocation_load(),
     );
     assert_eq!(id.schema().version(), SEMANTIC_OPERATION_VERSION_V2);
+    let schema_bytes = encode_semantic_operation_schema(id.schema());
+    assert_eq!(
+        decode_semantic_operation_schema(&schema_bytes),
+        Ok(id.schema())
+    );
     let encoded = encode_semantic_operation_instance_id(id);
     assert_eq!(encoded[8..10], SEMANTIC_OPERATION_VERSION_V2.to_le_bytes());
     assert_eq!(decode_semantic_operation_instance_id(&encoded), Ok(id));

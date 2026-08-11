@@ -1,9 +1,10 @@
 //! Versioned contracts shared by target-neutral semantic operation families.
 //!
 //! This module is deliberately separate from the module wire format. Kernel IR
-//! V1 through V3 remain frozen. A later module wire version can carry an
-//! operation family only after that family's strongly typed payload, semantic
-//! instance identity, verifier, and lowering are implemented.
+//! V1 through V3 remain frozen, and V4 only adds wide scalar carrier types. A
+//! module wire version can directly carry an operation family only after that
+//! family's strongly typed payload, semantic instance identity, verifier, and
+//! lowering are implemented.
 
 use std::collections::BTreeSet;
 use std::error::Error;
@@ -465,7 +466,7 @@ impl SemanticOperationSchema {
         }
     }
 
-    pub const fn v2(kind: SemanticOperationKind) -> Self {
+    const fn v2(kind: SemanticOperationKind) -> Self {
         Self {
             version: SEMANTIC_OPERATION_VERSION_V2,
             kind,
@@ -533,6 +534,11 @@ pub fn decode_semantic_operation_schema(
     let opcode = u16::from_le_bytes([bytes[12], bytes[13]]);
     let kind = SemanticOperationKind::from_parts(family, opcode)
         .ok_or(SemanticOperationSchemaDecodeError::UnknownOperation { family, opcode })?;
+    if version == SEMANTIC_OPERATION_VERSION_V2
+        && family != SemanticOperationFamily::MemoryIntrinsic
+    {
+        return Err(SemanticOperationSchemaDecodeError::NonCanonicalVersion { version, kind });
+    }
     Ok(SemanticOperationSchema { version, kind })
 }
 
@@ -546,6 +552,10 @@ pub enum SemanticOperationSchemaDecodeError {
     },
     InvalidMagic,
     UnknownVersion(u16),
+    NonCanonicalVersion {
+        version: u16,
+        kind: SemanticOperationKind,
+    },
     UnknownFamily(u8),
     UnknownOperation {
         family: SemanticOperationFamily,
@@ -570,6 +580,10 @@ impl fmt::Display for SemanticOperationSchemaDecodeError {
                     "unknown semantic-operation schema version {version}"
                 )
             }
+            Self::NonCanonicalVersion { version, kind } => write!(
+                formatter,
+                "semantic-operation schema version {version} is not canonical for {kind:?}"
+            ),
             Self::UnknownFamily(family) => {
                 write!(formatter, "unknown semantic-operation family {family}")
             }
@@ -587,7 +601,7 @@ impl fmt::Display for SemanticOperationSchemaDecodeError {
 
 impl Error for SemanticOperationSchemaDecodeError {}
 
-/// Canonical payload represented by a V1 semantic instance identity.
+/// Canonical payload represented by a V1 or additive wide-element V2 identity.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum SemanticOperationInstancePayloadV1 {
     PointerDistance {
