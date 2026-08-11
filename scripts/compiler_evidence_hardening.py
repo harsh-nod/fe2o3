@@ -147,7 +147,11 @@ class RetainedFile:
         named = os.stat(self.path, follow_symlinks=False)
         opened = os.fstat(self.fd)
         if stat_identity(named) != self.identity or stat_identity(opened) != self.identity:
-            raise HardeningError(f"retained file identity changed: {self.label}")
+            raise HardeningError(
+                f"retained file identity changed: {self.label}: fd={self.fd}: "
+                f"expected={self.identity}: named={stat_identity(named)}: "
+                f"opened={stat_identity(opened)}"
+            )
         if self.require_read_only and opened.st_mode & 0o222:
             raise HardeningError(f"retained file became mutable: {self.label}")
         if hash_fd(self.fd, opened.st_size) != self.sha256:
@@ -155,7 +159,11 @@ class RetainedFile:
 
     def close(self) -> None:
         if self.fd >= 0:
-            os.close(self.fd)
+            try:
+                os.close(self.fd)
+            except OSError as error:
+                if error.errno != errno.EBADF:
+                    raise
             self.fd = -1
 
 
@@ -234,6 +242,8 @@ class SnapshotClosure:
     def close(self) -> None:
         for retained in self.source_files:
             retained.close()
+        for retained in self.snapshot_files:
+            retained.close()
 
 
 @dataclass
@@ -279,6 +289,9 @@ def capture_retained_closure(
             "files": records,
         }
         manifest["manifest_sha256"] = hashlib.sha256(canonical_json(manifest)).hexdigest()
+        all_fds = [retained.fd for retained in source_files + snapshot_files]
+        if len(all_fds) != len(set(all_fds)):
+            raise HardeningError(f"{label} snapshot retained duplicate descriptors")
         closure = RetainedClosure(label, files, manifest)
         closure.revalidate()
         return closure
@@ -286,8 +299,6 @@ def capture_retained_closure(
         for retained in files:
             retained.close()
         raise
-        for retained in self.snapshot_files:
-            retained.close()
 
 
 def _validate_relative_path(path: str) -> Path:
@@ -544,6 +555,7 @@ class Supervisor:
         cgroup = Cgroup(self.cgroup_root, limits, self.sequence)
         start = time.monotonic()
         pid = -1
+        selector: selectors.BaseSelector | None = None
         try:
             pid = os.fork()
             if pid == 0:
@@ -613,6 +625,8 @@ class Supervisor:
                     break
             if status is None:
                 _, status = os.waitpid(pid, 0)
+            selector.close()
+            selector = None
             returncode = os.waitstatus_to_exitcode(status)
             leaked = cgroup.populated()
             if leaked:
@@ -641,6 +655,8 @@ class Supervisor:
                 peak_processes,
             )
         finally:
+            if selector is not None:
+                selector.close()
             if pid > 0:
                 try:
                     cgroup.kill()
