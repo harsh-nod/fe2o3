@@ -1,4 +1,7 @@
+use std::collections::BTreeSet;
 use std::path::PathBuf;
+use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use dialect_amdgcn::{MAX_GFX942_SCALAR_LLVM_BYTES, lower_scalar_v2_to_gfx942_llvm};
 use fe2o3_kernel_ir::ValueId;
@@ -39,6 +42,264 @@ fn next_u128(state: &mut u128) -> u128 {
     *state ^= *state >> 17;
     *state ^= *state << 26;
     *state
+}
+
+fn accepted_gfx942_operations() -> Vec<Operation> {
+    let widths = [
+        IntWidth::W8,
+        IntWidth::W16,
+        IntWidth::W32,
+        IntWidth::W64,
+        IntWidth::W128,
+    ];
+    let predicates = [
+        Predicate::Eq,
+        Predicate::Ne,
+        Predicate::Lt,
+        Predicate::Le,
+        Predicate::Gt,
+        Predicate::Ge,
+    ];
+    let mut operations = BTreeSet::new();
+    for width in widths {
+        for signed in [false, true] {
+            let ty = int(width, signed);
+            for op in [
+                IntBinary::Add,
+                IntBinary::Sub,
+                IntBinary::Mul,
+                IntBinary::Div,
+                IntBinary::Rem,
+            ] {
+                for mode in [
+                    IntMode::Checked,
+                    IntMode::Wrapping,
+                    IntMode::Overflowing,
+                    IntMode::Saturating,
+                ] {
+                    if op != IntBinary::Rem || mode != IntMode::Saturating {
+                        operations.insert(Operation::IntegerBinary { ty, op, mode });
+                    }
+                }
+            }
+            for op in [IntBinary::And, IntBinary::Or, IntBinary::Xor] {
+                operations.insert(Operation::IntegerBinary {
+                    ty,
+                    op,
+                    mode: IntMode::Wrapping,
+                });
+            }
+            operations.insert(Operation::IntegerUnary {
+                ty,
+                op: IntUnary::Not,
+                mode: IntMode::Wrapping,
+            });
+            if signed {
+                for mode in [
+                    IntMode::Checked,
+                    IntMode::Wrapping,
+                    IntMode::Overflowing,
+                    IntMode::Saturating,
+                ] {
+                    operations.insert(Operation::IntegerUnary {
+                        ty,
+                        op: IntUnary::Neg,
+                        mode,
+                    });
+                }
+            }
+            for predicate in predicates {
+                operations.insert(Operation::IntegerCompare { ty, predicate });
+            }
+            operations.insert(Operation::Cast {
+                from: ty,
+                to: ScalarType::Bool,
+                cast: Cast::IntToBoolChecked,
+            });
+            if width.bits() >= 32 {
+                operations.insert(Operation::Cast {
+                    from: ty,
+                    to: ScalarType::Char,
+                    cast: Cast::IntToCharChecked,
+                });
+            }
+            for float in [FloatWidth::F32, FloatWidth::F64] {
+                operations.insert(Operation::Cast {
+                    from: ty,
+                    to: ScalarType::Float(float),
+                    cast: Cast::IntToFloat {
+                        semantics: IntToFloatSemantics::RustAs,
+                    },
+                });
+                if width.bits() == float.bits() {
+                    operations.insert(Operation::Cast {
+                        from: ty,
+                        to: ScalarType::Float(float),
+                        cast: Cast::Bitcast,
+                    });
+                }
+            }
+        }
+    }
+    for from_width in widths {
+        for to_width in widths {
+            for from_signed in [false, true] {
+                for to_signed in [false, true] {
+                    operations.insert(Operation::Cast {
+                        from: int(from_width, from_signed),
+                        to: int(to_width, to_signed),
+                        cast: match from_width.bits().cmp(&to_width.bits()) {
+                            std::cmp::Ordering::Less => Cast::IntExtend {
+                                signed: from_signed,
+                            },
+                            std::cmp::Ordering::Equal => Cast::Bitcast,
+                            std::cmp::Ordering::Greater => Cast::IntNarrow,
+                        },
+                    });
+                }
+            }
+        }
+    }
+    for lhs_width in widths {
+        for rhs_width in widths {
+            for lhs_signed in [false, true] {
+                for rhs_signed in [false, true] {
+                    for direction in [ShiftDirection::Left, ShiftDirection::Right] {
+                        for policy in [
+                            ShiftPolicy::Checked,
+                            ShiftPolicy::Wrapping,
+                            ShiftPolicy::Overflowing,
+                            ShiftPolicy::RustOperator {
+                                overflow_checks: false,
+                            },
+                            ShiftPolicy::RustOperator {
+                                overflow_checks: true,
+                            },
+                        ] {
+                            operations.insert(Operation::Shift {
+                                ty: int(lhs_width, lhs_signed),
+                                rhs_ty: int(rhs_width, rhs_signed),
+                                direction,
+                                policy,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for float in [FloatWidth::F32, FloatWidth::F64] {
+        let ty = ScalarType::Float(float);
+        for op in [
+            FloatBinary::Add,
+            FloatBinary::Sub,
+            FloatBinary::Mul,
+            FloatBinary::Rem,
+        ] {
+            operations.insert(Operation::FloatBinary {
+                ty,
+                op,
+                semantics: FloatArithmeticSemantics::RustIeee754,
+            });
+        }
+        operations.insert(Operation::FloatNeg {
+            ty,
+            semantics: FloatArithmeticSemantics::RustIeee754,
+        });
+        operations.insert(Operation::FloatTotalCompare { ty });
+        for (policy, admitted) in [
+            (FloatComparisonPolicy::RustPartialEq, &predicates[..2]),
+            (FloatComparisonPolicy::RustPartialOrd, &predicates[2..]),
+            (FloatComparisonPolicy::IeeeOrdered, &predicates[..]),
+            (FloatComparisonPolicy::IeeeUnordered, &predicates[..]),
+        ] {
+            for &predicate in admitted {
+                operations.insert(Operation::FloatCompare {
+                    ty,
+                    predicate,
+                    policy,
+                });
+            }
+        }
+        for width in widths {
+            for signed in [false, true] {
+                let integer = int(width, signed);
+                operations.insert(Operation::Cast {
+                    from: ty,
+                    to: integer,
+                    cast: Cast::FloatToInt {
+                        semantics: FloatToIntSemantics::RustSaturatingAs,
+                    },
+                });
+                if width.bits() == float.bits() {
+                    operations.insert(Operation::Cast {
+                        from: ty,
+                        to: integer,
+                        cast: Cast::Bitcast,
+                    });
+                }
+            }
+        }
+    }
+    operations.insert(Operation::Cast {
+        from: ScalarType::Float(FloatWidth::F32),
+        to: ScalarType::Float(FloatWidth::F64),
+        cast: Cast::FloatExtend,
+    });
+    operations.insert(Operation::Cast {
+        from: ScalarType::Float(FloatWidth::F64),
+        to: ScalarType::Float(FloatWidth::F32),
+        cast: Cast::FloatNarrow,
+    });
+    for width in widths {
+        for signed in [false, true] {
+            operations.insert(Operation::Cast {
+                from: ScalarType::Bool,
+                to: int(width, signed),
+                cast: Cast::BoolToInt,
+            });
+            operations.insert(Operation::Cast {
+                from: ScalarType::Char,
+                to: int(width, signed),
+                cast: Cast::CharToInt,
+            });
+        }
+    }
+    operations.into_iter().collect()
+}
+
+fn combined_llvm_module(operations: &[Operation]) -> String {
+    let mut declarations = BTreeSet::new();
+    let mut definitions = Vec::with_capacity(operations.len());
+    let mut attributes = None::<String>;
+    for &operation in operations {
+        let llvm = lower(operation);
+        declarations.extend(
+            llvm.lines()
+                .filter(|line| line.starts_with("declare "))
+                .map(str::to_owned),
+        );
+        let definition_start = llvm.find("define ").unwrap();
+        let attributes_start = llvm.find("\nattributes #0").unwrap();
+        definitions.push(llvm[definition_start..attributes_start].trim().to_owned());
+        attributes = llvm
+            .lines()
+            .find(|line| line.starts_with("attributes #0"))
+            .map(str::to_owned);
+    }
+    let mut module = String::from("target triple = \"amdgcn-amd-amdhsa\"\n\n");
+    for declaration in declarations {
+        module.push_str(&declaration);
+        module.push('\n');
+    }
+    module.push('\n');
+    for definition in definitions {
+        module.push_str(&definition);
+        module.push_str("\n\n");
+    }
+    module.push_str(attributes.as_deref().unwrap());
+    module.push('\n');
+    module
 }
 
 fn software_float_to_int(
@@ -166,6 +427,13 @@ fn every_integer_width_signedness_operation_and_mode_lowers_deterministically() 
                         continue;
                     }
                     let llvm = lower(Operation::IntegerBinary { ty, op, mode });
+                    if mode == IntMode::Saturating
+                        && matches!(op, IntBinary::Add | IntBinary::Sub | IntBinary::Mul)
+                    {
+                        assert!(llvm.contains(".with.overflow."));
+                        assert!(!llvm.contains(".sat."));
+                        assert!(llvm.contains("%result = select i1 %overflow"));
+                    }
                     if matches!(op, IntBinary::Div | IntBinary::Rem) {
                         assert!(llvm.contains("%zero = icmp eq"));
                         if mode == IntMode::Checked {
@@ -266,7 +534,6 @@ fn floats_casts_bool_char_and_total_cmp_have_closed_surfaces() {
             FloatBinary::Add,
             FloatBinary::Sub,
             FloatBinary::Mul,
-            FloatBinary::Div,
             FloatBinary::Rem,
         ] {
             lower(Operation::FloatBinary {
@@ -275,6 +542,16 @@ fn floats_casts_bool_char_and_total_cmp_have_closed_surfaces() {
                 semantics: FloatArithmeticSemantics::RustIeee754,
             });
         }
+        let division = carrier(Operation::FloatBinary {
+            ty,
+            op: FloatBinary::Div,
+            semantics: FloatArithmeticSemantics::RustIeee754,
+        });
+        let error = lower_scalar_v2_to_gfx942_llvm(&division).unwrap_err();
+        assert!(matches!(
+            error,
+            dialect_amdgcn::ScalarV2LoweringError::Unsupported(_)
+        ));
         lower(Operation::FloatNeg {
             ty,
             semantics: FloatArithmeticSemantics::RustIeee754,
@@ -496,6 +773,146 @@ fn software_i128_boundaries_match_independent_cpu_semantics() {
             (random as f64).to_bits()
         );
     }
+}
+
+#[test]
+fn saturation_selection_matches_rust_cpu_semantics() {
+    let mut state = 0xa613_5f92_89c4_7761_d0e8_4a2f_39b7_1c05_u128;
+    macro_rules! check_signed {
+        ($ty:ty) => {
+            for _ in 0..20_000 {
+                let left = next_u128(&mut state) as $ty;
+                let right = next_u128(&mut state) as $ty;
+                let (value, overflow) = left.overflowing_add(right);
+                assert_eq!(
+                    if overflow {
+                        if left < 0 { <$ty>::MIN } else { <$ty>::MAX }
+                    } else {
+                        value
+                    },
+                    left.saturating_add(right)
+                );
+                let (value, overflow) = left.overflowing_sub(right);
+                assert_eq!(
+                    if overflow {
+                        if left < 0 { <$ty>::MIN } else { <$ty>::MAX }
+                    } else {
+                        value
+                    },
+                    left.saturating_sub(right)
+                );
+                let (value, overflow) = left.overflowing_mul(right);
+                assert_eq!(
+                    if overflow {
+                        if (left < 0) ^ (right < 0) {
+                            <$ty>::MIN
+                        } else {
+                            <$ty>::MAX
+                        }
+                    } else {
+                        value
+                    },
+                    left.saturating_mul(right)
+                );
+                let (value, overflow) = left.overflowing_neg();
+                assert_eq!(
+                    if overflow { <$ty>::MAX } else { value },
+                    left.saturating_neg()
+                );
+            }
+        };
+    }
+    macro_rules! check_unsigned {
+        ($ty:ty) => {
+            for _ in 0..20_000 {
+                let left = next_u128(&mut state) as $ty;
+                let right = next_u128(&mut state) as $ty;
+                let (value, overflow) = left.overflowing_add(right);
+                assert_eq!(
+                    if overflow { <$ty>::MAX } else { value },
+                    left.saturating_add(right)
+                );
+                let (value, overflow) = left.overflowing_sub(right);
+                assert_eq!(if overflow { 0 } else { value }, left.saturating_sub(right));
+                let (value, overflow) = left.overflowing_mul(right);
+                assert_eq!(
+                    if overflow { <$ty>::MAX } else { value },
+                    left.saturating_mul(right)
+                );
+            }
+        };
+    }
+    check_signed!(i8);
+    check_signed!(i16);
+    check_signed!(i32);
+    check_signed!(i64);
+    check_signed!(i128);
+    check_unsigned!(u8);
+    check_unsigned!(u16);
+    check_unsigned!(u32);
+    check_unsigned!(u64);
+    check_unsigned!(u128);
+}
+
+#[test]
+fn every_unicode_boundary_matches_rust_char_validity() {
+    for bits in 0..=0x11_0000_u128 {
+        assert_eq!(
+            valid_char_bits(bits),
+            u32::try_from(bits).ok().and_then(char::from_u32).is_some(),
+            "char bits {bits:#x}"
+        );
+    }
+    for bits in [u128::MAX, 1_u128 << 127, 0xffff_ffff] {
+        assert!(!valid_char_bits(bits));
+    }
+}
+
+#[test]
+#[ignore = "requires ROCm clang with gfx942 support"]
+fn rocm_clang_compiles_every_accepted_gfx942_scalar_path() {
+    let operations = accepted_gfx942_operations();
+    assert_eq!(operations.len(), 1_544, "incomplete operation matrix");
+    let module = combined_llvm_module(&operations);
+    assert!(!module.contains(".mul.sat."));
+    assert!(!module.contains("constrained.fdiv"));
+    assert!(!module.contains("trunc i64 %exponent to i64"));
+
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        "fe2o3-gfx942-scalar-matrix-{}-{nonce}",
+        std::process::id()
+    ));
+    std::fs::create_dir(&root).unwrap();
+    let llvm = root.join("all-scalar-paths.ll");
+    let object = root.join("all-scalar-paths.o");
+    std::fs::write(&llvm, module).unwrap();
+    let output = Command::new("/opt/rocm/llvm/bin/clang")
+        .args([
+            "--target=amdgcn-amd-amdhsa",
+            "-mcpu=gfx942",
+            "-nogpulib",
+            "-O0",
+            "-x",
+            "ir",
+            "-c",
+        ])
+        .arg(&llvm)
+        .arg("-o")
+        .arg(&object)
+        .output()
+        .expect("run ROCm clang");
+    let cleanup = std::fs::remove_dir_all(&root);
+    assert!(
+        output.status.success(),
+        "ROCm clang rejected {} accepted scalar paths:\n{}",
+        operations.len(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    cleanup.unwrap();
 }
 
 #[test]

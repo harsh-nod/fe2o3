@@ -27,6 +27,10 @@ race, provenance, dispatch, or whole-kernel safety.
 - Rust float-to-integer `as` uses saturating conversion, including NaN to zero.
   All i128/u128 conversions and div/rem are emitted without target runtime
   libcalls because gfx942 LLVM cannot legalize those hidden calls reliably.
+- Floating division is rejected before LLVM. LLVM 18 constrained `fdiv` is not
+  a reviewed gfx942 path and has crashed during backend compilation; ordinary
+  `fdiv` is not substituted because that would silently weaken the strict
+  floating-point policy.
 
 ## Compiler admission
 
@@ -35,10 +39,11 @@ custom LLVM pass pipeline or LLVM arguments. Raw MIR arithmetic, comparisons,
 shifts, unary operations, and numeric casts are normalized separately from
 authenticated checked/wrapping/overflowing/saturating intrinsics.
 
-Raw MIR `Div` and `Rem` remain rejected. Their Rust operator semantics require
-composition with the exact MIR assertion terminator; treating the arithmetic
-node alone as `wrapping_div` would be wrong. Explicit intrinsic div/rem modes
-are supported now.
+Raw integer MIR `Div` and `Rem` remain rejected. Their Rust operator semantics
+require composition with the exact MIR assertion terminator; treating the
+arithmetic node alone as `wrapping_div` would be wrong. Explicit integer
+intrinsic div/rem modes are supported. Raw floating MIR division is separately
+rejected because the LLVM 18 gfx942 backend path is unsupported.
 
 ## Current limitations
 
@@ -48,8 +53,8 @@ are supported now.
 - The dialect entry point emits one deterministic scalar helper module. Merging
   that helper into the existing multi-kernel compiler-module path is a later
   integration step.
-- Representative modules are assembled and compiled for gfx942, but they are
-  helpers rather than dispatchable kernel entries, so this slice records no GPU
-  execution evidence.
+- A 1,544-operation module covering every admitted gfx942 scalar lowering is
+  compiled with ROCm clang. The functions are helpers rather than dispatchable
+  kernel entries, so this slice records no GPU execution evidence.
 - No Verus proof, signed production evidence, or independent Complete review is
   included here.

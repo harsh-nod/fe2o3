@@ -90,6 +90,13 @@ pub fn lower_scalar_v2_to_gfx942_llvm(
 
 fn reject_unsupported(operation: Operation) -> Result<(), ScalarV2LoweringError> {
     match operation {
+        Operation::FloatBinary {
+            op: FloatBinary::Div,
+            ..
+        } => Err(ScalarV2LoweringError::Unsupported(
+            "gfx942 scalar V2 rejects floating division because LLVM 18 constrained fdiv is not a reviewed backend path"
+                .to_owned(),
+        )),
         Operation::Cast {
             cast: Cast::PointerAddressSpace | Cast::PointerToInt { .. } | Cast::IntToPointer { .. },
             ..
@@ -152,15 +159,9 @@ fn emit_declarations(output: &mut String, operation: Operation) {
             let (width, signed) = integer_parts(ty);
             let stem = integer_stem(op);
             match mode {
-                IntMode::Checked | IntMode::Overflowing => writeln!(
+                IntMode::Checked | IntMode::Overflowing | IntMode::Saturating => writeln!(
                     output,
                     "declare {{ i{width}, i1 }} @llvm.{}{}.with.overflow.i{width}(i{width}, i{width})",
-                    signed_prefix(signed), stem
-                )
-                .unwrap(),
-                IntMode::Saturating => writeln!(
-                    output,
-                    "declare i{width} @llvm.{}{}.sat.i{width}(i{width}, i{width})",
                     signed_prefix(signed), stem
                 )
                 .unwrap(),
@@ -179,14 +180,9 @@ fn emit_declarations(output: &mut String, operation: Operation) {
         } => {
             let (width, _) = integer_parts(ty);
             match mode {
-                IntMode::Checked | IntMode::Overflowing => writeln!(
+                IntMode::Checked | IntMode::Overflowing | IntMode::Saturating => writeln!(
                     output,
                     "declare {{ i{width}, i1 }} @llvm.ssub.with.overflow.i{width}(i{width}, i{width})"
-                )
-                .unwrap(),
-                IntMode::Saturating => writeln!(
-                    output,
-                    "declare i{width} @llvm.ssub.sat.i{width}(i{width}, i{width})"
                 )
                 .unwrap(),
                 IntMode::Wrapping => {}
@@ -346,9 +342,53 @@ fn emit_integer_binary(
         IntMode::Saturating => {
             writeln!(
                 output,
-                "  %result = call i{width} @llvm.{}{}.sat.i{width}(i{width} %arg0, i{width} %arg1)",
+                "  %pair = call {{ i{width}, i1 }} @llvm.{}{}.with.overflow.i{width}(i{width} %arg0, i{width} %arg1)",
                 signed_prefix(signed),
                 stem
+            )
+            .unwrap();
+            writeln!(
+                output,
+                "  %value = extractvalue {{ i{width}, i1 }} %pair, 0"
+            )
+            .unwrap();
+            writeln!(
+                output,
+                "  %overflow = extractvalue {{ i{width}, i1 }} %pair, 1"
+            )
+            .unwrap();
+            let bound = if signed {
+                match op {
+                    IntBinary::Add | IntBinary::Sub => {
+                        writeln!(output, "  %toward.min = icmp slt i{width} %arg0, 0").unwrap();
+                    }
+                    IntBinary::Mul => {
+                        writeln!(output, "  %lhs.negative = icmp slt i{width} %arg0, 0").unwrap();
+                        writeln!(output, "  %rhs.negative = icmp slt i{width} %arg1, 0").unwrap();
+                        writeln!(
+                            output,
+                            "  %toward.min = xor i1 %lhs.negative, %rhs.negative"
+                        )
+                        .unwrap();
+                    }
+                    _ => unreachable!(),
+                }
+                writeln!(
+                    output,
+                    "  %bound = select i1 %toward.min, i{width} {}, i{width} {}",
+                    signed_min(width),
+                    signed_max(width)
+                )
+                .unwrap();
+                "%bound"
+            } else if op == IntBinary::Sub {
+                "0"
+            } else {
+                "-1"
+            };
+            writeln!(
+                output,
+                "  %result = select i1 %overflow, i{width} {bound}, i{width} %value"
             )
             .unwrap();
             writeln!(output, "  ret i{width} %result").unwrap();
@@ -650,7 +690,23 @@ fn emit_integer_unary(
             emit_pair_return(output, results, "%value", flag)?;
         }
         IntMode::Saturating => {
-            writeln!(output, "  %result = call i{width} @llvm.ssub.sat.i{width}(i{width} 0, i{width} %arg0)\n  ret i{width} %result").unwrap();
+            writeln!(output, "  %pair = call {{ i{width}, i1 }} @llvm.ssub.with.overflow.i{width}(i{width} 0, i{width} %arg0)").unwrap();
+            writeln!(
+                output,
+                "  %value = extractvalue {{ i{width}, i1 }} %pair, 0"
+            )
+            .unwrap();
+            writeln!(
+                output,
+                "  %overflow = extractvalue {{ i{width}, i1 }} %pair, 1"
+            )
+            .unwrap();
+            writeln!(
+                output,
+                "  %result = select i1 %overflow, i{width} {}, i{width} %value\n  ret i{width} %result",
+                signed_max(width)
+            )
+            .unwrap();
         }
     }
     Ok(())

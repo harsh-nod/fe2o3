@@ -329,17 +329,20 @@ fn normalize_float_binary(
     ty: ScalarType,
 ) -> Result<Operation, RustcScalarAdmissionErrorV2> {
     Ok(match op {
+        RustcMirBinaryV2::Div => {
+            return unsupported(
+                "gfx942 floating division is rejected before LLVM because constrained fdiv is not reviewed on LLVM 18",
+            );
+        }
         RustcMirBinaryV2::Add
         | RustcMirBinaryV2::Sub
         | RustcMirBinaryV2::Mul
-        | RustcMirBinaryV2::Div
         | RustcMirBinaryV2::Rem => Operation::FloatBinary {
             ty,
             op: match op {
                 RustcMirBinaryV2::Add => FloatBinary::Add,
                 RustcMirBinaryV2::Sub => FloatBinary::Sub,
                 RustcMirBinaryV2::Mul => FloatBinary::Mul,
-                RustcMirBinaryV2::Div => FloatBinary::Div,
                 RustcMirBinaryV2::Rem => FloatBinary::Rem,
                 _ => unreachable!(),
             },
@@ -582,6 +585,20 @@ mod tests {
                 },
             }),
             Err(RustcScalarAdmissionErrorV2::UnsupportedMir(_))
+        ));
+        assert!(matches!(
+            lower_rustc_scalar_v2(RustcScalarRequestV2 {
+                target: &AmdGpuTarget::new(EXACT_SCALAR_V2_TARGET),
+                custom_llvm_pipeline: false,
+                expression: RustcScalarExpressionV2::Binary {
+                    op: RustcMirBinaryV2::Div,
+                    lhs: ScalarType::Float(FloatWidth::F64),
+                    rhs: ScalarType::Float(FloatWidth::F64),
+                    overflow_checks: false,
+                },
+            }),
+            Err(RustcScalarAdmissionErrorV2::UnsupportedMir(message))
+                if message.contains("rejected before LLVM")
         ));
     }
 
