@@ -551,6 +551,7 @@ fn block_policy_is_canonical_and_has_a_wave64_inhabitant() {
     launch.maximum_flat_workgroup_size = 63;
     launch.max_grid_blocks = DimensionsV2::new(1, 1, 1);
     launch.max_total_workitems = 63;
+    launch.require_full_waves = false;
     assert_eq!(
         candidate.validate(&limits()),
         Err(LaunchKernelValidationErrorV2::NoAdmittedBlockShape)
@@ -566,6 +567,7 @@ fn block_policy_is_canonical_and_has_a_wave64_inhabitant() {
     launch.maximum_flat_workgroup_size = 64;
     launch.max_grid_blocks = DimensionsV2::new(1, 1, 1);
     launch.max_total_workitems = 64;
+    launch.require_full_waves = false;
     bind_family(&mut candidate);
     candidate.validate(&limits()).unwrap();
     assert!(
@@ -593,7 +595,14 @@ fn block_policy_is_canonical_and_has_a_wave64_inhabitant() {
             },
             &limits(),
         ),
-        Err(LaunchKernelValidationErrorV2::BlockShapeRejected)
+        Ok(ValidatedLaunchFactsV2 {
+            flat_workgroup_size: 33,
+            grid_block_count: 1,
+            global_workitems: DimensionsV2::new(33, 1, 1),
+            total_workitems: 33,
+            waves_per_workgroup: 1,
+            total_lds_bytes: 1_024,
+        })
     );
 }
 
@@ -955,11 +964,11 @@ fn exhaustive_small_launch_domain_matches_independent_oracle() {
     variant.launch.rank = 2;
     variant.launch.block = BlockShapePolicyV2::Bounded {
         minimum: DimensionsV2::new(1, 1, 1),
-        maximum: DimensionsV2::new(4, 4, 1),
+        maximum: DimensionsV2::new(8, 8, 1),
     };
     variant.launch.max_grid_blocks = DimensionsV2::new(4, 4, 1);
-    variant.launch.maximum_flat_workgroup_size = 16;
-    variant.launch.max_total_workitems = 256;
+    variant.launch.maximum_flat_workgroup_size = 64;
+    variant.launch.max_total_workitems = 1_024;
     variant.resources.maximum_dynamic_lds_bytes = 4;
     variant.resources.dynamic_lds_alignment = 2;
     bind_family(&mut candidate);
@@ -1014,8 +1023,8 @@ fn exhaustive_small_wave_width_and_full_wave_boundaries() {
                     max_total_workitems: u64::from(block_x),
                     unsupported: UnsupportedLaunchFeaturesV2::NONE,
                 };
-                let expected = wavefront == WavefrontWidthV2::Wave64
-                    && (!require_full_waves || block_x % wavefront.lanes() == 0);
+                let expected =
+                    wavefront == WavefrontWidthV2::Wave64 && block_x % wavefront.lanes() == 0;
                 bind_family(&mut candidate);
                 assert_eq!(candidate.validate(&limits()).is_ok(), expected);
                 cases += 1;
@@ -1042,7 +1051,7 @@ fn exhaustive_block_policy_canonicalization_and_admissible_set() {
             launch.require_full_waves = require_full_waves;
             launch.max_total_workitems = u64::from(block_x);
             bind_family(&mut candidate);
-            let expected = !require_full_waves || block_x % 64 == 0;
+            let expected = block_x % 64 == 0;
             assert_eq!(candidate.validate(&limits()).is_ok(), expected);
             contract_cases += 1;
         }
@@ -1066,7 +1075,7 @@ fn exhaustive_block_policy_canonicalization_and_admissible_set() {
                 bind_family(&mut candidate);
 
                 let has_full_wave = (minimum..=maximum).any(|shape| shape % 64 == 0);
-                let expected_valid = minimum != maximum && (!require_full_waves || has_full_wave);
+                let expected_valid = minimum != maximum && has_full_wave;
                 assert_eq!(
                     candidate.validate(&limits()).is_ok(),
                     expected_valid,
@@ -1074,9 +1083,12 @@ fn exhaustive_block_policy_canonicalization_and_admissible_set() {
                 );
                 contract_cases += 1;
 
-                if expected_valid {
+                let exercise_requests =
+                    minimum != maximum && (!require_full_waves || has_full_wave);
+                if exercise_requests {
                     for shape in 1..=96 {
-                        let expected_launch = shape >= minimum
+                        let expected_launch = expected_valid
+                            && shape >= minimum
                             && shape <= maximum
                             && (!require_full_waves || shape % 64 == 0);
                         let actual = candidate.validate_launch(

@@ -403,7 +403,7 @@ impl Gfx942LaunchContractV2 {
         {
             return Err(LaunchKernelValidationErrorV2::InvalidOccupancyBounds);
         }
-        if !self.has_admitted_block_shape()? {
+        if !self.has_admitted_full_wave_block_shape()? {
             return Err(LaunchKernelValidationErrorV2::NoAdmittedBlockShape);
         }
 
@@ -430,12 +430,17 @@ impl Gfx942LaunchContractV2 {
                 || flat % u64::from(GFX942_REQUIRED_WAVEFRONT_WIDTH_V2.lanes()) == 0))
     }
 
-    fn has_admitted_block_shape(self) -> Result<bool, LaunchKernelValidationErrorV2> {
+    fn has_admitted_full_wave_block_shape(self) -> Result<bool, LaunchKernelValidationErrorV2> {
         let (minimum, maximum) = self.block.bounds();
         for z in minimum.z..=maximum.z {
             for y in minimum.y..=maximum.y {
                 for x in minimum.x..=maximum.x {
-                    if self.admits_block_shape(DimensionsV2::new(x, y, z))? {
+                    let shape = DimensionsV2::new(x, y, z);
+                    if self.admits_block_shape(shape)?
+                        && shape.checked_product()?
+                            % u64::from(GFX942_REQUIRED_WAVEFRONT_WIDTH_V2.lanes())
+                            == 0
+                    {
                         return Ok(true);
                     }
                 }
