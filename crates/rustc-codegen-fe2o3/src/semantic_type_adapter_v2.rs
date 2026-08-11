@@ -551,7 +551,7 @@ impl<'a> ProjectionBuilderV2<'a> {
     }
 
     fn charge(&mut self, amount: u64) -> Result<(), Gfx942LayoutCompatibilityErrorV2> {
-        self.work = self.work.checked_add(amount).unwrap_or(u64::MAX);
+        self.work = self.work.saturating_add(amount);
         if self.work > self.budgets.max_projection_work {
             return Err(Gfx942LayoutCompatibilityErrorV2::WorkBoundExceeded {
                 actual: self.work,
@@ -1033,7 +1033,7 @@ impl ObservationMeterV2 {
         resource: &'static str,
         amount: u64,
     ) -> Result<(), SemanticTypeAdapterErrorV2> {
-        self.work = self.work.checked_add(amount).unwrap_or(u64::MAX);
+        self.work = self.work.saturating_add(amount);
         if self.work > self.max_work {
             return Err(SemanticTypeAdapterErrorV2::BoundExceeded {
                 resource,
@@ -1045,10 +1045,7 @@ impl ObservationMeterV2 {
     }
 
     fn charge_text(&mut self, amount: usize) -> Result<(), SemanticTypeAdapterErrorV2> {
-        self.text_bytes = self
-            .text_bytes
-            .checked_add(amount as u64)
-            .unwrap_or(u64::MAX);
+        self.text_bytes = self.text_bytes.saturating_add(amount as u64);
         if self.text_bytes > self.max_text_bytes {
             return Err(SemanticTypeAdapterErrorV2::BoundExceeded {
                 resource: "rustc layout total text bytes",
@@ -1067,9 +1064,8 @@ fn normalize_and_preflight_layout_type<'tcx>(
 ) -> Result<(Ty<'tcx>, ObservationMeterV2), SemanticTypeAdapterErrorV2> {
     const EXTRACTION_MAX_DEPTH: u64 = 64;
     const MAX_PATH_SEGMENT_BYTES: u64 = 48;
-    let required_path_bytes = 4_u64
-        .checked_add(EXTRACTION_MAX_DEPTH.saturating_mul(MAX_PATH_SEGMENT_BYTES))
-        .unwrap_or(u64::MAX);
+    let required_path_bytes =
+        4_u64.saturating_add(EXTRACTION_MAX_DEPTH.saturating_mul(MAX_PATH_SEGMENT_BYTES));
     if required_path_bytes > u64::from(budgets.max_path_bytes) {
         return Err(SemanticTypeAdapterErrorV2::BoundExceeded {
             resource: "rustc layout path bytes",
@@ -1150,9 +1146,7 @@ fn normalize_and_preflight_layout_type<'tcx>(
             }
             TyKind::Adt(definition, arguments) => {
                 let variants = definition.variants();
-                total_variants = total_variants
-                    .checked_add(variants.len() as u64)
-                    .unwrap_or(u64::MAX);
+                total_variants = total_variants.saturating_add(variants.len() as u64);
                 if total_variants > u64::from(budgets.graph.max_variants) {
                     return Err(SemanticTypeAdapterErrorV2::BoundExceeded {
                         resource: "rustc layout preflight variants",
@@ -1162,9 +1156,7 @@ fn normalize_and_preflight_layout_type<'tcx>(
                 }
                 for variant in variants.iter().rev() {
                     meter.charge_text(variant.name.as_str().len())?;
-                    total_fields = total_fields
-                        .checked_add(variant.fields.len() as u64)
-                        .unwrap_or(u64::MAX);
+                    total_fields = total_fields.saturating_add(variant.fields.len() as u64);
                     if total_fields > u64::from(budgets.graph.max_fields) {
                         return Err(SemanticTypeAdapterErrorV2::BoundExceeded {
                             resource: "rustc layout preflight fields",
