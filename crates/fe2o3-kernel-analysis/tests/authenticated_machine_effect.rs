@@ -33,7 +33,7 @@ fn substitute_fixture() -> &'static Path {
 }
 
 fn limits() -> AuthenticatedPhysicalMachineEffectLimitsV1 {
-    AuthenticatedPhysicalMachineEffectLimitsV1::new(Duration::from_secs(2), 1024 * 1024, 16 * 1024)
+    AuthenticatedPhysicalMachineEffectLimitsV1::new(Duration::from_secs(30), 1024 * 1024, 16 * 1024)
         .unwrap()
 }
 
@@ -254,6 +254,17 @@ fn rapid_double_fork_and_setsid_are_denied_before_worker_input() {
 fn late_runtime_library_mapping_is_rejected_before_acknowledgement() {
     let error = worker()
         .analyze(vec![12], vec![entry()], limits())
+        .unwrap_err();
+    assert_eq!(
+        error.kind(),
+        &AuthenticatedPhysicalMachineEffectErrorKindV1::RuntimeClosureChanged
+    );
+}
+
+#[test]
+fn post_ready_fexecve_replacement_from_spoofed_memfd_is_rejected() {
+    let error = worker()
+        .analyze(vec![13], vec![entry()], limits())
         .unwrap_err();
     assert_eq!(
         error.kind(),

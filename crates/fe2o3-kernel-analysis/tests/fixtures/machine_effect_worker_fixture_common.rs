@@ -1,7 +1,9 @@
 use sha2::{Digest, Sha256};
 use std::{
-    io::{Read, Write},
-    process::Command,
+    fs::File,
+    io::{Read, Seek, SeekFrom, Write},
+    os::unix::process::CommandExt,
+    process::{Command, exit},
     thread,
     time::Duration,
 };
@@ -53,6 +55,10 @@ pub fn run(analyzer_byte: u8, toolchain_byte: u8) {
     if arguments.next().is_some() {
         std::process::exit(64);
     }
+    if std::env::var_os("FE2O3_TEST_REEXECUTED_WORKER").is_some() {
+        finish_control_handshake(challenge);
+        return;
+    }
     write_control(std::io::stderr(), READY_DOMAIN, challenge);
     let mut input = vec![0_u8; request_bytes];
     std::io::stdin().read_exact(&mut input).unwrap();
@@ -64,6 +70,10 @@ pub fn run(analyzer_byte: u8, toolchain_byte: u8) {
         _ => std::process::exit(64),
     }
     std::io::stdout().flush().unwrap();
+    finish_control_handshake(challenge);
+}
+
+fn finish_control_handshake(challenge: [u8; 32]) {
     write_control(std::io::stderr(), DONE_DOMAIN, challenge);
     let mut ack = vec![0_u8; ACK_DOMAIN.len() + challenge.len()];
     std::io::stdin().read_exact(&mut ack).unwrap();
@@ -219,6 +229,34 @@ fn analysis_response(bytes: Vec<u8>, control_challenge: [u8; 32]) {
         _ => {}
     }
     std::io::stdout().write_all(&output).unwrap();
+    if mode == 13 {
+        reexec_from_spoofed_memfd();
+    }
+}
+
+fn reexec_from_spoofed_memfd() -> ! {
+    use rustix::fs::{MemfdFlags, Mode, fchmod, memfd_create};
+    use std::os::fd::AsRawFd;
+
+    std::io::stdout().flush().unwrap();
+    let descriptor = memfd_create(
+        c"fe2o3-machine-effect-worker-spoof",
+        MemfdFlags::empty(),
+    )
+    .unwrap();
+    let mut image = File::from(descriptor);
+    let mut source = File::open("/proc/self/exe").unwrap();
+    std::io::copy(&mut source, &mut image).unwrap();
+    fchmod(&image, Mode::from_bits_retain(0o500)).unwrap();
+    image.seek(SeekFrom::Start(0)).unwrap();
+    let path = format!("/proc/self/fd/{}", image.as_raw_fd());
+    let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
+    let error = Command::new(path)
+        .args(arguments)
+        .env("FE2O3_TEST_REEXECUTED_WORKER", "1")
+        .exec();
+    eprintln!("spoofed worker re-exec failed: {error}");
+    exit(87)
 }
 
 #[allow(unsafe_code)]

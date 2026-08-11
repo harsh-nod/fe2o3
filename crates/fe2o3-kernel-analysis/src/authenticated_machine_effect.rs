@@ -605,7 +605,6 @@ mod platform {
         limits: AuthenticatedPhysicalMachineEffectLimitsV1,
         deadline: Instant,
         observation: &'a mut ProcessObservation,
-        worker: PhysicalMachineWorkerExecutableIdentityV1,
     }
 
     struct ProcessCapture {
@@ -618,9 +617,17 @@ mod platform {
     struct ProcessObservation {
         process_id: u32,
         start_ticks: u64,
-        executable: PhysicalMachineWorkerExecutableIdentityV1,
+        executable: RetainedExecutable,
         runtime_closure: PhysicalMachineRuntimeClosureIdentityV1,
         runtime_files: Vec<RuntimeFile>,
+    }
+
+    struct RetainedExecutable {
+        file: File,
+        key: (u32, u32, u64),
+        link: String,
+        snapshot: Snapshot,
+        identity: PhysicalMachineWorkerExecutableIdentityV1,
     }
 
     struct RuntimeFile {
@@ -871,15 +878,24 @@ mod platform {
                     return Err(error);
                 }
             };
-            if observation.executable != self.policy.executable {
+            if observation.executable.identity != self.policy.executable {
                 terminate_process_tree(&mut child, &BTreeSet::new());
                 let _ = child.wait();
                 return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
                     AuthenticatedPhysicalMachineEffectErrorKindV1::WorkerIdentityMismatch {
                         expected: self.policy.executable,
-                        actual: observation.executable,
+                        actual: observation.executable.identity,
                     },
                 ));
+            }
+            if let Err(error) = validate_retained_executable(
+                child.id(),
+                observation.start_ticks,
+                &mut observation.executable,
+            ) {
+                terminate_process_tree(&mut child, &BTreeSet::new());
+                let _ = child.wait();
+                return Err(error);
             }
             if let Some(expected) = expected_runtime
                 && observation.runtime_closure != expected
@@ -907,7 +923,6 @@ mod platform {
                     limits,
                     deadline,
                     observation: &mut observation,
-                    worker: self.policy.executable,
                 },
             );
             let runtime_result = validate_runtime_files(&mut observation.runtime_files);
@@ -1235,26 +1250,11 @@ mod platform {
 
     fn observe_process(
         pid: u32,
-        worker: PhysicalMachineWorkerExecutableIdentityV1,
+        expected: PhysicalMachineWorkerExecutableIdentityV1,
     ) -> Result<ProcessObservation, AuthenticatedPhysicalMachineEffectErrorV1> {
         let start_ticks = process_start_ticks(pid)?;
-        let mut executable = File::open(format!("/proc/{pid}/exe")).map_err(|error| {
-            AuthenticatedPhysicalMachineEffectErrorV1::detail(
-                AuthenticatedPhysicalMachineEffectErrorKindV1::ProcessObservation,
-                error,
-            )
-        })?;
-        let size = executable
-            .metadata()
-            .map_err(|error| {
-                AuthenticatedPhysicalMachineEffectErrorV1::detail(
-                    AuthenticatedPhysicalMachineEffectErrorKindV1::ProcessObservation,
-                    error,
-                )
-            })?
-            .len();
-        let executable = hash_file_identity(&mut executable, EXECUTABLE_IDENTITY_DOMAIN, size)?;
-        let (runtime_closure, runtime_files) = runtime_closure(pid, worker)?;
+        let executable = retain_process_executable(pid, expected)?;
+        let (runtime_closure, runtime_files) = runtime_closure(pid, &executable)?;
         Ok(ProcessObservation {
             process_id: pid,
             start_ticks,
@@ -1262,6 +1262,98 @@ mod platform {
             runtime_closure,
             runtime_files,
         })
+    }
+
+    fn retain_process_executable(
+        pid: u32,
+        expected: PhysicalMachineWorkerExecutableIdentityV1,
+    ) -> Result<RetainedExecutable, AuthenticatedPhysicalMachineEffectErrorV1> {
+        let proc_path = format!("/proc/{pid}/exe");
+        let link = std::fs::read_link(&proc_path)
+            .map_err(observation_io)?
+            .into_os_string()
+            .into_string()
+            .map_err(|_| {
+                AuthenticatedPhysicalMachineEffectErrorV1::plain(
+                    AuthenticatedPhysicalMachineEffectErrorKindV1::ProcessObservation,
+                )
+            })?;
+        if link.len() > u16::MAX as usize {
+            return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
+                AuthenticatedPhysicalMachineEffectErrorKindV1::ProcessObservation,
+            ));
+        }
+        let mut file = File::open(&proc_path).map_err(observation_io)?;
+        let metadata = file.metadata().map_err(observation_io)?;
+        if !metadata.is_file() {
+            return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
+                AuthenticatedPhysicalMachineEffectErrorKindV1::ProcessObservation,
+            ));
+        }
+        let snapshot = Snapshot::from_metadata(&metadata);
+        let key = (
+            rustix::fs::major(metadata.dev()),
+            rustix::fs::minor(metadata.dev()),
+            metadata.ino(),
+        );
+        let identity = hash_file_identity(&mut file, EXECUTABLE_IDENTITY_DOMAIN, snapshot.size)?;
+        if Snapshot::from_metadata(&file.metadata().map_err(observation_io)?) != snapshot {
+            return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
+                AuthenticatedPhysicalMachineEffectErrorKindV1::ProcessObservation,
+            ));
+        }
+        if identity != expected {
+            return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
+                AuthenticatedPhysicalMachineEffectErrorKindV1::WorkerIdentityMismatch {
+                    expected,
+                    actual: identity,
+                },
+            ));
+        }
+        Ok(RetainedExecutable {
+            file,
+            key,
+            link,
+            snapshot,
+            identity,
+        })
+    }
+
+    fn validate_retained_executable(
+        pid: u32,
+        start_ticks: u64,
+        retained: &mut RetainedExecutable,
+    ) -> Result<(), AuthenticatedPhysicalMachineEffectErrorV1> {
+        if process_start_ticks(pid)? != start_ticks {
+            return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
+                AuthenticatedPhysicalMachineEffectErrorKindV1::RuntimeClosureChanged,
+            ));
+        }
+        let retained_snapshot =
+            Snapshot::from_metadata(&retained.file.metadata().map_err(observation_io)?);
+        let retained_identity = hash_file_identity(
+            &mut retained.file,
+            EXECUTABLE_IDENTITY_DOMAIN,
+            retained.snapshot.size,
+        )?;
+        if retained_snapshot != retained.snapshot
+            || retained_identity != retained.identity
+            || writable_alias(&retained.file)
+        {
+            return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
+                AuthenticatedPhysicalMachineEffectErrorKindV1::RuntimeClosureChanged,
+            ));
+        }
+        let current = retain_process_executable(pid, retained.identity)?;
+        if current.key != retained.key
+            || current.link != retained.link
+            || current.snapshot != retained.snapshot
+        {
+            return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
+                AuthenticatedPhysicalMachineEffectErrorKindV1::RuntimeClosureChanged,
+            ));
+        }
+        Ok(())
     }
 
     #[allow(unsafe_code)]
@@ -1431,7 +1523,7 @@ mod platform {
 
     fn runtime_closure(
         pid: u32,
-        worker: PhysicalMachineWorkerExecutableIdentityV1,
+        executable: &RetainedExecutable,
     ) -> Result<
         (PhysicalMachineRuntimeClosureIdentityV1, Vec<RuntimeFile>),
         AuthenticatedPhysicalMachineEffectErrorV1,
@@ -1462,9 +1554,6 @@ mod platform {
             if inode == "0" || (!path.starts_with('/') && !path.starts_with("/memfd:")) {
                 continue;
             }
-            if path.starts_with("/memfd:fe2o3-machine-effect-worker") {
-                continue;
-            }
             let (major, minor) = device.split_once(':').ok_or_else(|| {
                 AuthenticatedPhysicalMachineEffectErrorV1::plain(
                     AuthenticatedPhysicalMachineEffectErrorKindV1::ProcessObservation,
@@ -1492,7 +1581,11 @@ mod platform {
             if files.contains_key(&key) {
                 continue;
             }
-            let mut file = open_mapped_file(pid, range, &path, key)?;
+            let mut file = if key == executable.key {
+                executable.file.try_clone().map_err(observation_io)?
+            } else {
+                open_mapped_file(pid, range, &path, key)?
+            };
             let metadata = file.metadata().map_err(|error| {
                 AuthenticatedPhysicalMachineEffectErrorV1::detail(
                     AuthenticatedPhysicalMachineEffectErrorKindV1::ProcessObservation,
@@ -1513,19 +1606,11 @@ mod platform {
                     AuthenticatedPhysicalMachineEffectErrorKindV1::ProcessObservation,
                 ));
             }
-            let (plain_digest, executable_digest, length) =
-                hash_runtime_file(&mut file, metadata.len())?;
+            let (plain_digest, _, length) = hash_runtime_file(&mut file, metadata.len())?;
             if Snapshot::from_metadata(&file.metadata().map_err(observation_io)?) != snapshot {
                 return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
                     AuthenticatedPhysicalMachineEffectErrorKindV1::ProcessObservation,
                 ));
-            }
-            let executable_identity = PhysicalMachineWorkerExecutableIdentityV1 {
-                sha256: executable_digest,
-                byte_len: length,
-            };
-            if executable_identity == worker {
-                continue;
             }
             total += metadata.len();
             files.insert(
@@ -1581,7 +1666,6 @@ mod platform {
 
     fn validate_post_execution_closure(
         pid: u32,
-        worker: PhysicalMachineWorkerExecutableIdentityV1,
         observation: &mut ProcessObservation,
     ) -> Result<(), AuthenticatedPhysicalMachineEffectErrorV1> {
         if process_start_ticks(pid)? != observation.start_ticks {
@@ -1589,7 +1673,8 @@ mod platform {
                 AuthenticatedPhysicalMachineEffectErrorKindV1::RuntimeClosureChanged,
             ));
         }
-        let (identity, mut files) = runtime_closure(pid, worker)?;
+        validate_retained_executable(pid, observation.start_ticks, &mut observation.executable)?;
+        let (identity, mut files) = runtime_closure(pid, &observation.executable)?;
         if identity != observation.runtime_closure
             || runtime_file_set(&files) != runtime_file_set(&observation.runtime_files)
         {
@@ -1756,7 +1841,6 @@ mod platform {
             limits,
             deadline,
             observation,
-            worker,
         } = context;
         let stdin = child.stdin.take().expect("worker stdin is piped");
         let stdout_pipe = child.stdout.take().expect("worker stdout is piped");
@@ -1819,8 +1903,7 @@ mod platform {
                         )
                     })?;
                 completed_request_written = Some(request_written);
-                if let Err(error) = validate_post_execution_closure(child.id(), worker, observation)
-                {
+                if let Err(error) = validate_post_execution_closure(child.id(), observation) {
                     terminate_process_tree(child, &descendants_seen);
                     let _ = child.wait();
                     return Err(error);
