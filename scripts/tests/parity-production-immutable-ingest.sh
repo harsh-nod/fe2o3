@@ -99,15 +99,21 @@ git -C "${repo}" checkout -q --detach
 
 openssl genpkey -algorithm ED25519 -out "${keys}/attestor-private.pem"
 openssl genpkey -algorithm ED25519 -out "${keys}/reviewer-private.pem"
-chmod 600 "${keys}/attestor-private.pem" "${keys}/reviewer-private.pem"
+openssl genpkey -algorithm ED25519 -out "${keys}/publisher-private.pem"
+chmod 600 "${keys}/attestor-private.pem" "${keys}/publisher-private.pem" \
+  "${keys}/reviewer-private.pem"
 openssl pkey -in "${keys}/attestor-private.pem" -pubout \
   -out "${keys}/attestor-public.pem"
 openssl pkey -in "${keys}/reviewer-private.pem" -pubout \
   -out "${keys}/reviewer-public.pem"
+openssl pkey -in "${keys}/publisher-private.pem" -pubout \
+  -out "${keys}/publisher-public.pem"
 "${TOOL}" bootstrap-production-trust \
   --output-root "${trust}" \
   --attestor-public-key "${keys}/attestor-public.pem" \
   --attestor-key-id privileged-attestor \
+  --publisher-public-key "${keys}/publisher-public.pem" \
+  --publisher-key-id privileged-publisher \
   --reviewer-public-key "${keys}/reviewer-public.pem" \
   --reviewer-key-id privileged-reviewer
 

@@ -527,19 +527,26 @@ TRUST_OLD="${TEST_ROOT}/trust-old"
 TRUST_CANDIDATE="${TEST_ROOT}/trust-candidate"
 PRODUCTION_ATTESTOR_PRIVATE="${TEST_ROOT}/production-attestor-private.pem"
 PRODUCTION_REVIEWER_PRIVATE="${TEST_ROOT}/production-reviewer-private.pem"
+PRODUCTION_PUBLISHER_PRIVATE="${TEST_ROOT}/production-publisher-private.pem"
 PRODUCTION_ATTESTOR_PUBLIC="${TEST_ROOT}/production-attestor-public.pem"
 PRODUCTION_REVIEWER_PUBLIC="${TEST_ROOT}/production-reviewer-public.pem"
+PRODUCTION_PUBLISHER_PUBLIC="${TEST_ROOT}/production-publisher-public.pem"
 openssl genpkey -algorithm Ed25519 -out "${PRODUCTION_ATTESTOR_PRIVATE}" 2>/dev/null
 openssl genpkey -algorithm Ed25519 -out "${PRODUCTION_REVIEWER_PRIVATE}" 2>/dev/null
+openssl genpkey -algorithm Ed25519 -out "${PRODUCTION_PUBLISHER_PRIVATE}" 2>/dev/null
 openssl pkey -in "${PRODUCTION_ATTESTOR_PRIVATE}" -pubout \
   -out "${PRODUCTION_ATTESTOR_PUBLIC}" 2>/dev/null
 openssl pkey -in "${PRODUCTION_REVIEWER_PRIVATE}" -pubout \
   -out "${PRODUCTION_REVIEWER_PUBLIC}" 2>/dev/null
+openssl pkey -in "${PRODUCTION_PUBLISHER_PRIVATE}" -pubout \
+  -out "${PRODUCTION_PUBLISHER_PUBLIC}" 2>/dev/null
 
 "${TOOL}" bootstrap-production-trust \
   --output-root "${TRUST_OLD}" \
   --attestor-public-key "${PRODUCTION_ATTESTOR_PUBLIC}" \
   --attestor-key-id production-attestor \
+  --publisher-public-key "${PRODUCTION_PUBLISHER_PUBLIC}" \
+  --publisher-key-id production-publisher \
   --reviewer-public-key "${PRODUCTION_REVIEWER_PUBLIC}" \
   --reviewer-key-id production-reviewer
 "${TOOL}" validate-production-trust \
@@ -557,6 +564,8 @@ expect_failure bootstrap_existing 'production trust bootstrap output already exi
   --output-root "${TRUST_OLD}" \
   --attestor-public-key "${PRODUCTION_ATTESTOR_PUBLIC}" \
   --attestor-key-id production-attestor \
+  --publisher-public-key "${PRODUCTION_PUBLISHER_PUBLIC}" \
+  --publisher-key-id production-publisher \
   --reviewer-public-key "${PRODUCTION_REVIEWER_PUBLIC}" \
   --reviewer-key-id production-reviewer
 expect_failure bootstrap_private_input 'public key is not public Ed25519 material' \
@@ -564,13 +573,17 @@ expect_failure bootstrap_private_input 'public key is not public Ed25519 materia
   --output-root "${TEST_ROOT}/private-input-bootstrap" \
   --attestor-public-key "${PRODUCTION_ATTESTOR_PRIVATE}" \
   --attestor-key-id production-attestor \
+  --publisher-public-key "${PRODUCTION_PUBLISHER_PUBLIC}" \
+  --publisher-key-id production-publisher \
   --reviewer-public-key "${PRODUCTION_REVIEWER_PUBLIC}" \
   --reviewer-key-id production-reviewer
-expect_failure bootstrap_duplicate_key 'attestor and reviewer must use distinct Ed25519 public keys' \
+expect_failure bootstrap_duplicate_key 'must use distinct Ed25519 public keys' \
   "${TOOL}" bootstrap-production-trust \
   --output-root "${TEST_ROOT}/duplicate-key-bootstrap" \
   --attestor-public-key "${PRODUCTION_ATTESTOR_PUBLIC}" \
   --attestor-key-id production-attestor \
+  --publisher-public-key "${PRODUCTION_PUBLISHER_PUBLIC}" \
+  --publisher-key-id production-publisher \
   --reviewer-public-key "${PRODUCTION_ATTESTOR_PUBLIC}" \
   --reviewer-key-id production-reviewer
 

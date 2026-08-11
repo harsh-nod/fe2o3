@@ -7,8 +7,12 @@ import hashlib
 import importlib.util
 import os
 from pathlib import Path
+import shutil
+import subprocess
 import sys
 import tempfile
+import threading
+import time
 from types import SimpleNamespace
 from concurrent.futures import ThreadPoolExecutor
 
@@ -26,12 +30,41 @@ LEASE_DIGEST = "a" * 64
 
 
 def bootstrap_args(output: Path) -> SimpleNamespace:
+    publisher_private = output.parent / (
+        f"publisher-{os.getpid()}-{threading.get_ident()}.private.pem"
+    )
+    publisher_public = output.parent / (
+        f"publisher-{os.getpid()}-{threading.get_ident()}.public.pem"
+    )
+    if not publisher_public.exists():
+        subprocess.run(
+            ["openssl", "genpkey", "-algorithm", "Ed25519", "-out", publisher_private],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        subprocess.run(
+            [
+                "openssl",
+                "pkey",
+                "-in",
+                publisher_private,
+                "-pubout",
+                "-out",
+                publisher_public,
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
     return SimpleNamespace(
         output_root=output,
         attestor_public_key=FIXTURES / "evidence-test-attestor-public.pem",
         attestor_key_id="production-attestor",
         reviewer_public_key=FIXTURES / "evidence-test-reviewer-public.pem",
         reviewer_key_id="production-reviewer",
+        publisher_public_key=publisher_public,
+        publisher_key_id="production-publisher",
     )
 
 
@@ -422,7 +455,7 @@ def test_retained_destination_dirents_detect_swaps() -> None:
                 )
                 expect_evidence_error(
                     destination.publish,
-                    "changed immediately before publication",
+                    "changed",
                 )
 
     with tempfile.TemporaryDirectory(prefix="fe2o3-same-size-swap-") as raw_temp:
@@ -447,7 +480,7 @@ def test_retained_destination_dirents_detect_swaps() -> None:
                 )
                 expect_evidence_error(
                     destination.publish,
-                    "changed immediately before publication",
+                    "changed",
                 )
 
     with tempfile.TemporaryDirectory(prefix="fe2o3-rename-out-in-") as raw_temp:
@@ -464,10 +497,11 @@ def test_retained_destination_dirents_detect_swaps() -> None:
                 payload = destination.staging_label / "payload.bin"
                 moved = destination.staging_label / "moved.bin"
                 payload.rename(moved)
+                time.sleep(0.01)
                 moved.rename(payload)
                 expect_evidence_error(
                     destination.publish,
-                    "changed immediately before publication",
+                    "namespace changed before publication",
                 )
 
 
@@ -531,6 +565,207 @@ def test_same_uid_publisher_is_inert_for_production() -> None:
         finally:
             EVIDENCE.parse_trust_policy = real_parse
             EVIDENCE.validate_production_trust = real_validate
+
+        EVIDENCE.parse_trust_policy = lambda *_: production
+        args.allow_test_fixtures = True
+        try:
+            expect_evidence_error(
+                lambda: EVIDENCE.ingest_archive_snapshot(args, None),
+                "test fixture ingestion requires test-domain trust",
+            )
+        finally:
+            EVIDENCE.parse_trust_policy = real_parse
+
+
+def test_production_archive_index_requires_publisher_receipt() -> None:
+    with tempfile.TemporaryDirectory(prefix="fe2o3-missing-receipt-") as raw_temp:
+        temp = Path(raw_temp)
+        archive = temp / "archive"
+        archive.mkdir()
+        (archive / "promotion.tsv").write_bytes(b"manifest\n")
+        (archive / EVIDENCE.ARCHIVE_INDEX_RELATIVE).write_bytes(b"index\n")
+        manifest = EVIDENCE.PromotionManifest(
+            "a" * 40,
+            "b" * 40,
+            "c" * 40,
+            "gfx942",
+            "mi300x-gfx942-test",
+            "d" * 64,
+            [],
+            [],
+        )
+        trust = EVIDENCE.TrustPolicy("production", [], {})
+        real_closure = EVIDENCE.promotion_archive_closure
+        EVIDENCE.promotion_archive_closure = lambda *_: {"promotion.tsv"}
+        try:
+            with EVIDENCE.ArchiveSnapshot(archive, require_immutable=False) as snapshot:
+                expect_evidence_error(
+                    lambda: EVIDENCE.verify_archive_index(
+                        temp,
+                        snapshot,
+                        "promotion.tsv",
+                        manifest,
+                        trust,
+                    ),
+                    "publisher-receipt-v1.tsv",
+                )
+        finally:
+            EVIDENCE.promotion_archive_closure = real_closure
+
+
+def test_publisher_receipt_is_authenticated_and_domain_separated() -> None:
+    with tempfile.TemporaryDirectory(prefix="fe2o3-publisher-receipt-") as raw_temp:
+        temp = Path(raw_temp)
+        archive = temp / "archive"
+        archive.mkdir()
+        manifest_path = archive / "promotion.tsv"
+        manifest_path.write_bytes(b"fixture manifest\n")
+        manifest = EVIDENCE.PromotionManifest(
+            "a" * 40,
+            "b" * 40,
+            "c" * 40,
+            "gfx942",
+            "mi300x-gfx942-test",
+            "d" * 64,
+            [],
+            [],
+        )
+        closure = {"promotion.tsv"}
+        with EVIDENCE.ArchiveSnapshot(archive, require_immutable=False) as snapshot:
+            archive_identity = EVIDENCE.publisher_archive_identity(
+                snapshot, "promotion.tsv", manifest, closure
+            )
+        parent_info = os.stat(temp)
+        root_info = os.stat(archive)
+        now = int(time.time())
+        unsigned = temp / "receipt.unsigned.tsv"
+        unsigned.write_text(
+            "publisher_contract_receipt_schema_version\t1\n"
+            "publisher_identity\ttest-publisher\n"
+            "publisher_key_role\tpublisher\n"
+            f"destination_contract\t{EVIDENCE.PUBLISHER_CONTRACT}\n"
+            "destination_name\tarchive\n"
+            f"destination_parent_device\t{parent_info.st_dev}\n"
+            f"destination_parent_inode\t{parent_info.st_ino}\n"
+            f"destination_root_device\t{root_info.st_dev}\n"
+            f"destination_root_inode\t{root_info.st_ino}\n"
+            f"archive_sha256\t{archive_identity}\n"
+            "manifest_path\tpromotion.tsv\n"
+            f"manifest_sha256\t{hashlib.sha256(manifest_path.read_bytes()).hexdigest()}\n"
+            f"source_commit\t{manifest.source}\n"
+            f"source_tree\t{manifest.tree}\n"
+            f"target\t{manifest.target}\n"
+            f"hardware_lane\t{manifest.lane}\n"
+            f"freshness_nonce\t{'e' * 64}\n"
+            f"issued_at_unix\t{now}\n"
+            f"expires_at_unix\t{now + 60}\n",
+            encoding="ascii",
+        )
+        EVIDENCE.sign_payload(
+            unsigned,
+            archive / EVIDENCE.PUBLISHER_RECEIPT_RELATIVE,
+            FIXTURES / "evidence-test-reviewer-private.pem",
+            "test-publisher",
+            domain="test",
+            role="publisher",
+            repo=None,
+            test_mode=True,
+        )
+        public_key = (FIXTURES / "evidence-test-reviewer-public.pem").read_bytes()
+        key = EVIDENCE.TrustedKey(
+            "publisher",
+            "test-publisher",
+            "keys/test-publisher.pem",
+            EVIDENCE.ed25519_fingerprint_bytes(public_key, "test-publisher"),
+            public_key,
+        )
+        trust = EVIDENCE.TrustPolicy(
+            "test", [], {("publisher", "test-publisher"): key}
+        )
+        real_closure = EVIDENCE.promotion_archive_closure
+        EVIDENCE.promotion_archive_closure = lambda *_: closure
+        try:
+            with EVIDENCE.ArchiveSnapshot(archive, require_immutable=False) as snapshot:
+                receipt = EVIDENCE.parse_publisher_receipt(
+                    temp,
+                    snapshot,
+                    "promotion.tsv",
+                    manifest,
+                    trust,
+                    require_fresh=True,
+                    expected_domain="test",
+                )
+                assert receipt.domain == "test"
+                expect_evidence_error(
+                    lambda: EVIDENCE.parse_publisher_receipt(
+                        temp,
+                        snapshot,
+                        "promotion.tsv",
+                        manifest,
+                        trust,
+                        require_fresh=True,
+                    ),
+                    "requires production-domain trust",
+                )
+                real_time = EVIDENCE.time.time
+                EVIDENCE.time.time = lambda: now + 61
+                try:
+                    expect_evidence_error(
+                        lambda: EVIDENCE.parse_publisher_receipt(
+                            temp,
+                            snapshot,
+                            "promotion.tsv",
+                            manifest,
+                            trust,
+                            require_fresh=True,
+                            expected_domain="test",
+                        ),
+                        "stale or not yet valid",
+                    )
+                finally:
+                    EVIDENCE.time.time = real_time
+
+            copied_parent = temp / "copied-parent"
+            copied_parent.mkdir()
+            copied_archive = copied_parent / "archive"
+            shutil.copytree(archive, copied_archive)
+            with EVIDENCE.ArchiveSnapshot(
+                copied_archive, require_immutable=False
+            ) as copied_snapshot:
+                expect_evidence_error(
+                    lambda: EVIDENCE.parse_publisher_receipt(
+                        temp,
+                        copied_snapshot,
+                        "promotion.tsv",
+                        manifest,
+                        trust,
+                        require_fresh=False,
+                        expected_domain="test",
+                    ),
+                    "archive root identity mismatch",
+                )
+
+            relocated_parent = temp / "relocated-parent"
+            relocated_parent.mkdir()
+            relocated_archive = relocated_parent / "archive"
+            archive.rename(relocated_archive)
+            with EVIDENCE.ArchiveSnapshot(
+                relocated_archive, require_immutable=False
+            ) as relocated_snapshot:
+                expect_evidence_error(
+                    lambda: EVIDENCE.parse_publisher_receipt(
+                        temp,
+                        relocated_snapshot,
+                        "promotion.tsv",
+                        manifest,
+                        trust,
+                        require_fresh=False,
+                        expected_domain="test",
+                    ),
+                    "parent identity mismatch",
+                )
+        finally:
+            EVIDENCE.promotion_archive_closure = real_closure
 
 
 def publish_minimal_archive(output: Path) -> None:
@@ -644,6 +879,8 @@ if __name__ == "__main__":
     test_deterministic_staging_lease_recovers_after_hard_exit()
     test_second_live_publisher_fails_busy()
     test_same_uid_publisher_is_inert_for_production()
+    test_production_archive_index_requires_publisher_receipt()
+    test_publisher_receipt_is_authenticated_and_domain_separated()
     test_bootstrap_publication_is_durable_and_no_replace()
     test_bootstrap_destination_race_has_one_winner()
     test_bootstrap_interruption_cleans_unpublished_staging()

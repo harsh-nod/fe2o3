@@ -21,6 +21,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from typing import Iterable
 
@@ -42,6 +43,10 @@ PATH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/+:-]{0,511}$")
 HEX_RE = re.compile(r"^(?:[0-9a-f]{2})+$")
 DEFAULT_LOCK = Path("/run/lock/fe2o3/mi300x-gfx942-evidence.lock")
 ARCHIVE_INDEX_RELATIVE = "archive-index-v1.tsv"
+PUBLISHER_RECEIPT_RELATIVE = "publisher-receipt-v1.tsv"
+PUBLISHER_CONTRACT = "external-protected-publisher-v1"
+MAX_PUBLISHER_RECEIPT_LIFETIME = 24 * 60 * 60
+PUBLISHER_RECEIPT_CLOCK_SKEW = 5 * 60
 FS_IOC_GETFLAGS = 0x80086601
 FS_IMMUTABLE_FL = 0x00000010
 AT_FDCWD = -100
@@ -804,11 +809,15 @@ def validate_production_trust(trusted_root: Path, policy_path: Path) -> TrustPol
         fail("production trust policy must use the production domain")
     if trust.metadata_paths != REQUIRED_METADATA:
         fail("production trust policy has a non-canonical metadata allowlist")
-    if len(trust.keys) != 2 or {key.role for key in trust.keys.values()} != {
+    if len(trust.keys) != 3 or {key.role for key in trust.keys.values()} != {
         "attestor",
+        "publisher",
         "reviewer",
     }:
-        fail("production trust policy requires exactly one attestor and one reviewer")
+        fail(
+            "production trust policy requires separated attestor, publisher, "
+            "and reviewer keys"
+        )
     for key in trust.keys.values():
         relative = TRUST_KEYS_RELATIVE.joinpath(f"{key.key_id}.pem")
         require_real_path_components(
@@ -967,6 +976,21 @@ def process_start_time(pid: int) -> str | None:
     return fields[19] if len(fields) > 19 and fields[19].isdigit() else None
 
 
+def publisher_process_is_dead(pid: int, expected_start: str) -> bool:
+    current_start = process_start_time(pid)
+    if current_start == expected_start:
+        return False
+    if current_start is not None:
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except (PermissionError, OSError) as error:
+        fail(f"cannot prove archive staging lease owner is dead: {error}")
+    fail("cannot prove archive staging lease owner is dead")
+
+
 def staging_lease_bytes(
     destination_name: str, manifest_digest: str, challenge: str
 ) -> bytes:
@@ -1090,7 +1114,9 @@ def recover_archive_staging_lease(
         ):
             fail("existing archive staging lease does not match the request")
         pid = int(values["owner_pid"])
-        if process_start_time(pid) == values["owner_start_time"]:
+        if pid <= 0:
+            fail("archive staging lease owner PID is invalid")
+        if not publisher_process_is_dead(pid, values["owner_start_time"]):
             fail("evidence archive staging lease is busy")
     finally:
         os.close(lease_fd)
@@ -1143,6 +1169,7 @@ class ArchiveDestination:
         self.directory_fds: dict[str, int] = {}
         self.file_fds: dict[str, int] = {}
         self.file_identities: dict[str, ArchiveFileIdentity] = {}
+        self.namespace_identities: dict[str, tuple[int, ...]] = {}
         parent_info = os.fstat(self.parent_fd)
         self.parent_identity = (parent_info.st_dev, parent_info.st_ino)
         self.published = False
@@ -1239,6 +1266,8 @@ class ArchiveDestination:
             if existing is not None:
                 current_fd = existing
                 continue
+            if self.namespace_identities:
+                fail("destination archive namespace is already sealed")
             try:
                 os.mkdir(component, 0o700, dir_fd=current_fd)
             except OSError as error:
@@ -1254,6 +1283,8 @@ class ArchiveDestination:
         return current_fd
 
     def copy(self, source: ArchiveSnapshot, relative: str) -> None:
+        if self.namespace_identities:
+            fail("destination archive namespace is already sealed")
         path = Path(relative)
         directory = path.parent.as_posix()
         descriptor, identity = source.copy_to_at(
@@ -1292,6 +1323,37 @@ class ArchiveDestination:
             raise
         self.file_fds[ARCHIVE_INDEX_RELATIVE] = descriptor
         self.file_identities[ARCHIVE_INDEX_RELATIVE] = identity
+        self.seal_namespace()
+
+    @staticmethod
+    def directory_identity(descriptor: int) -> tuple[int, ...]:
+        info = os.fstat(descriptor)
+        return (
+            info.st_dev,
+            info.st_ino,
+            info.st_mode,
+            info.st_nlink,
+            info.st_size,
+            info.st_mtime_ns,
+            info.st_ctime_ns,
+        )
+
+    def seal_namespace(self) -> None:
+        self.namespace_identities = {
+            ".": self.directory_identity(self.staging_fd),
+            **{
+                relative: self.directory_identity(descriptor)
+                for relative, descriptor in self.directory_fds.items()
+            },
+        }
+
+    def validate_sealed_namespace(self) -> None:
+        if not self.namespace_identities:
+            fail("destination archive namespace was not sealed")
+        descriptors = {".": self.staging_fd, **self.directory_fds}
+        for relative, expected in self.namespace_identities.items():
+            if self.directory_identity(descriptors[relative]) != expected:
+                fail(f"destination archive namespace changed before publication: {relative}")
 
     def snapshot(self) -> ArchiveSnapshot:
         return ArchiveSnapshot(
@@ -1424,6 +1486,7 @@ class ArchiveDestination:
         self.lease_owned = False
 
     def publish(self) -> None:
+        self.validate_sealed_namespace()
         for relative in sorted(
             self.directory_fds,
             key=lambda value: (value.count("/"), value),
@@ -1492,21 +1555,28 @@ class ArchiveDestination:
 
 
 def bootstrap_production_trust(args: argparse.Namespace) -> None:
-    if not ID_RE.fullmatch(args.attestor_key_id) or not ID_RE.fullmatch(
-        args.reviewer_key_id
-    ):
+    key_ids = (
+        args.attestor_key_id,
+        args.publisher_key_id,
+        args.reviewer_key_id,
+    )
+    if any(not ID_RE.fullmatch(key_id) for key_id in key_ids):
         fail("invalid production signing key identity")
-    if args.attestor_key_id == args.reviewer_key_id:
-        fail("attestor and reviewer key IDs must be distinct")
+    if len(set(key_ids)) != 3:
+        fail("attestor, publisher, and reviewer key IDs must be distinct")
     attestor = canonical_ed25519_public_key(args.attestor_public_key)
+    publisher = canonical_ed25519_public_key(args.publisher_public_key)
     reviewer = canonical_ed25519_public_key(args.reviewer_public_key)
-    with tempfile.TemporaryDirectory(prefix="fe2o3-bootstrap-keys-") as temp:
-        attestor_path = Path(temp, "attestor.pem")
-        reviewer_path = Path(temp, "reviewer.pem")
-        attestor_path.write_bytes(attestor)
-        reviewer_path.write_bytes(reviewer)
-        if ed25519_fingerprint(attestor_path) == ed25519_fingerprint(reviewer_path):
-            fail("attestor and reviewer must use distinct Ed25519 public keys")
+    fingerprints = {
+        ed25519_fingerprint_bytes(value, role)
+        for role, value in (
+            ("attestor", attestor),
+            ("publisher", publisher),
+            ("reviewer", reviewer),
+        )
+    }
+    if len(fingerprints) != 3:
+        fail("attestor, publisher, and reviewer must use distinct Ed25519 public keys")
 
     destination = Path(os.path.abspath(args.output_root))
     destination_name = destination.name
@@ -1530,6 +1600,7 @@ def bootstrap_production_trust(args: argparse.Namespace) -> None:
         keys_fd = create_directory_at(parity_fd, "trusted-keys")
         material = [
             ("attestor", args.attestor_key_id, attestor),
+            ("publisher", args.publisher_key_id, publisher),
             ("reviewer", args.reviewer_key_id, reviewer),
         ]
         records: list[tuple[str, str, str, str]] = []
@@ -1546,7 +1617,7 @@ def bootstrap_production_trust(args: argparse.Namespace) -> None:
             "metadata_path_count\t2",
             "metadata_path\t0000\texact\tdocs/cuda-oxide-parity-status.tsv",
             "metadata_path\t0001\tprefix\tdocs/parity-evidence/archive/",
-            "key_count\t2",
+            "key_count\t3",
         ]
         for index, (role, key_id, relative, digest) in enumerate(records):
             lines.append(
@@ -1613,8 +1684,12 @@ def check_trust_update(args: argparse.Namespace) -> None:
         fail("trust domain cannot be changed or downgraded")
     if candidate.metadata_paths != protected.metadata_paths:
         fail("trusted metadata allowlist cannot be changed without break-glass")
-    if {key.role for key in candidate.keys.values()} != {"attestor", "reviewer"}:
-        fail("trust update must retain separated attestor and reviewer roles")
+    if {key.role for key in candidate.keys.values()} != {
+        "attestor",
+        "publisher",
+        "reviewer",
+    }:
+        fail("trust update must retain separated attestor, publisher, and reviewer roles")
     for identity, key in candidate.keys.items():
         previous = protected.keys.get(identity)
         if previous is None:
@@ -2520,6 +2595,165 @@ def parse_manifest(
     )
 
 
+@dataclass(frozen=True)
+class PublisherReceipt:
+    publisher_identity: str
+    destination_name: str
+    parent_identity: tuple[int, int]
+    root_identity: tuple[int, int]
+    archive_identity: str
+    nonce: str
+    issued_at: int
+    expires_at: int
+    domain: str
+
+
+def publisher_archive_identity(
+    root: ArchiveSnapshot,
+    manifest_relative: str,
+    manifest: PromotionManifest,
+    closure: set[str],
+) -> str:
+    lines = [
+        "publisher_archive_identity_schema_version\t1",
+        f"manifest_path\t{manifest_relative}",
+        f"manifest_sha256\t{archive_digest(root, manifest_relative)}",
+        f"source_commit\t{manifest.source}",
+        f"source_tree\t{manifest.tree}",
+        f"target\t{manifest.target}",
+        f"hardware_lane\t{manifest.lane}",
+        f"file_count\t{len(closure)}",
+    ]
+    for index, relative in enumerate(sorted(closure)):
+        size, digest = root.records[relative]
+        lines.append(f"file\t{index:04d}\t{relative}\t{size}\t{digest}")
+    return sha256_bytes(("\n".join(lines) + "\n").encode("ascii"))
+
+
+def parse_publisher_receipt(
+    repo: Path,
+    root: ArchiveSnapshot,
+    manifest_relative: str,
+    manifest: PromotionManifest,
+    trust: TrustPolicy,
+    *,
+    require_fresh: bool,
+    expected_domain: str = "production",
+) -> PublisherReceipt:
+    if trust.domain != expected_domain:
+        fail(f"publisher contract receipt requires {expected_domain}-domain trust")
+    rows, _, _ = verify_signed(
+        root, PUBLISHER_RECEIPT_RELATIVE, trust, "publisher"
+    )
+    _, _, signed_rows = archive_read_raw(root, PUBLISHER_RECEIPT_RELATIVE)
+    signing_key_id = signed_rows[-2][1]
+    cursor = Cursor(rows, "publisher contract receipt")
+    if cursor.scalar("publisher_contract_receipt_schema_version") != "1":
+        fail("publisher contract receipt schema must be 1")
+    publisher_identity = cursor.scalar("publisher_identity")
+    if cursor.scalar("publisher_key_role") != "publisher":
+        fail("publisher contract receipt has the wrong key role")
+    if cursor.scalar("destination_contract") != PUBLISHER_CONTRACT:
+        fail("publisher contract receipt has an unsupported protection contract")
+    destination_name = cursor.scalar("destination_name")
+    parent_device = cursor.scalar("destination_parent_device")
+    parent_inode = cursor.scalar("destination_parent_inode")
+    root_device = cursor.scalar("destination_root_device")
+    root_inode = cursor.scalar("destination_root_inode")
+    archive_identity = cursor.scalar("archive_sha256")
+    if cursor.scalar("manifest_path") != manifest_relative:
+        fail("publisher contract receipt manifest path mismatch")
+    if cursor.scalar("manifest_sha256") != archive_digest(root, manifest_relative):
+        fail("publisher contract receipt manifest digest mismatch")
+    if cursor.scalar("source_commit") != manifest.source:
+        fail("publisher contract receipt source commit mismatch")
+    if cursor.scalar("source_tree") != manifest.tree:
+        fail("publisher contract receipt source tree mismatch")
+    if cursor.scalar("target") != manifest.target:
+        fail("publisher contract receipt target mismatch")
+    if cursor.scalar("hardware_lane") != manifest.lane:
+        fail("publisher contract receipt hardware lane mismatch")
+    nonce = cursor.scalar("freshness_nonce")
+    issued_text = cursor.scalar("issued_at_unix")
+    expires_text = cursor.scalar("expires_at_unix")
+    cursor.done()
+    numeric = (parent_device, parent_inode, root_device, root_inode, issued_text, expires_text)
+    if (
+        publisher_identity != signing_key_id
+        or not ID_RE.fullmatch(publisher_identity)
+        or not valid_relative(destination_name)
+        or "/" in destination_name
+        or any(not value.isdigit() or int(value) <= 0 for value in numeric)
+        or not SHA256_RE.fullmatch(archive_identity)
+        or not SHA256_RE.fullmatch(nonce)
+    ):
+        fail("publisher contract receipt is malformed")
+    closure = promotion_archive_closure(
+        repo, root, manifest_relative, manifest, trust
+    )
+    expected_archive = publisher_archive_identity(
+        root, manifest_relative, manifest, closure
+    )
+    if archive_identity != expected_archive:
+        fail("publisher contract receipt archive identity mismatch")
+    root_info = os.fstat(root.root_fd)
+    if destination_name != root.root.name:
+        fail("publisher contract receipt destination name mismatch")
+    if (int(root_device), int(root_inode)) != (root_info.st_dev, root_info.st_ino):
+        fail("publisher contract receipt archive root identity mismatch")
+    _, parent_fd = open_absolute_directory(
+        root.root.parent, "publisher contract destination parent"
+    )
+    try:
+        parent_info = os.fstat(parent_fd)
+        if (int(parent_device), int(parent_inode)) != (
+            parent_info.st_dev,
+            parent_info.st_ino,
+        ):
+            fail("publisher contract receipt parent identity mismatch")
+        try:
+            child_fd = openat2_fd(
+                parent_fd,
+                destination_name,
+                os.O_RDONLY | os.O_DIRECTORY,
+                RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV,
+            )
+        except OSError as error:
+            fail(f"cannot reopen publisher contract destination: {error}")
+        try:
+            child_info = os.fstat(child_fd)
+            if (child_info.st_dev, child_info.st_ino) != (
+                root_info.st_dev,
+                root_info.st_ino,
+            ):
+                fail("publisher contract destination dirent identity mismatch")
+        finally:
+            os.close(child_fd)
+    finally:
+        os.close(parent_fd)
+    issued_at, expires_at = int(issued_text), int(expires_text)
+    if (
+        expires_at <= issued_at
+        or expires_at - issued_at > MAX_PUBLISHER_RECEIPT_LIFETIME
+    ):
+        fail("publisher contract receipt lifetime is invalid")
+    if require_fresh:
+        now = int(time.time())
+        if issued_at > now + PUBLISHER_RECEIPT_CLOCK_SKEW or expires_at < now:
+            fail("publisher contract receipt is stale or not yet valid")
+    return PublisherReceipt(
+        publisher_identity,
+        destination_name,
+        (int(parent_device), int(parent_inode)),
+        (int(root_device), int(root_inode)),
+        archive_identity,
+        nonce,
+        issued_at,
+        expires_at,
+        trust.domain,
+    )
+
+
 def scan_archive(root: Path, *, require_immutable: bool) -> ArchiveSnapshot:
     return ArchiveSnapshot(root, require_immutable=require_immutable)
 
@@ -2585,7 +2819,10 @@ def verify_archive_index(
         repo, root, manifest_relative, manifest, trust
     )
     actual = root.records
-    expected_paths = closure | {ARCHIVE_INDEX_RELATIVE}
+    indexed_closure = set(closure)
+    if trust.domain == "production":
+        indexed_closure.add(PUBLISHER_RECEIPT_RELATIVE)
+    expected_paths = indexed_closure | {ARCHIVE_INDEX_RELATIVE}
     if set(actual) != expected_paths:
         missing = sorted(expected_paths - set(actual))
         extra = sorted(set(actual) - expected_paths)
@@ -2621,7 +2858,7 @@ def verify_archive_index(
     if not re.fullmatch(r"0|[1-9][0-9]*", count_text):
         fail("invalid archive index file count")
     count = int(count_text)
-    if count != len(closure) or count > MAX_ARCHIVE_FILES:
+    if count != len(indexed_closure) or count > MAX_ARCHIVE_FILES:
         fail("archive index file count mismatch")
     indexed: dict[str, tuple[int, str]] = {}
     previous = ""
@@ -2638,7 +2875,7 @@ def verify_archive_index(
         indexed[relative] = (int(size_text), digest)
         previous = relative
     cursor.done()
-    expected_records = {path: actual[path] for path in closure}
+    expected_records = {path: actual[path] for path in indexed_closure}
     if indexed != expected_records:
         fail("archive index file identity mismatch")
 
@@ -2655,6 +2892,8 @@ def ingest_archive_snapshot(
 ) -> None:
     repo = args.repo.resolve(strict=True)
     trust = parse_trust_policy(args.trusted_root, args.trust_policy)
+    if args.allow_test_fixtures and trust.domain != "test":
+        fail("test fixture ingestion requires test-domain trust")
     if not args.allow_test_fixtures:
         if trust.domain != "production":
             fail("production archive ingestion requires a production trust domain")
@@ -2860,6 +3099,8 @@ def gate(args: argparse.Namespace) -> None:
 def gate_snapshot(args: argparse.Namespace, root: ArchiveSnapshot) -> None:
     repo = args.repo.resolve(strict=True)
     trust = parse_trust_policy(args.trusted_root, args.trust_policy)
+    if args.allow_test_fixtures and trust.domain != "test":
+        fail("test fixture promotion requires test-domain trust")
     if not args.allow_test_fixtures:
         if trust.domain != "production":
             fail("production promotion requires a production trust domain")
@@ -2885,6 +3126,14 @@ def gate_snapshot(args: argparse.Namespace, root: ArchiveSnapshot) -> None:
     manifest = parse_manifest(repo, root, args.manifest, trust)
     if not args.allow_test_fixtures:
         verify_archive_index(repo, root, args.manifest, manifest, trust)
+        parse_publisher_receipt(
+            repo,
+            root,
+            args.manifest,
+            manifest,
+            trust,
+            require_fresh=True,
+        )
     if manifest.baseline != baseline_commit or manifest.source != source_commit:
         fail("promotion manifest status commit mismatch")
     metadata_delta_is_allowed(repo, source_commit, trust)
@@ -3205,6 +3454,8 @@ def build_parser() -> argparse.ArgumentParser:
     bootstrap.add_argument("--output-root", type=Path, required=True)
     bootstrap.add_argument("--attestor-public-key", type=Path, required=True)
     bootstrap.add_argument("--attestor-key-id", required=True)
+    bootstrap.add_argument("--publisher-public-key", type=Path, required=True)
+    bootstrap.add_argument("--publisher-key-id", required=True)
     bootstrap.add_argument("--reviewer-public-key", type=Path, required=True)
     bootstrap.add_argument("--reviewer-key-id", required=True)
 
@@ -3299,6 +3550,8 @@ def main() -> None:
         ingest_archive(args)
     elif args.command == "validate-archive":
         trust = parse_trust_policy(args.trusted_root, args.trust_policy)
+        if args.allow_test_fixtures and trust.domain != "test":
+            fail("test fixture archive validation requires test-domain trust")
         if not args.allow_test_fixtures:
             if trust.domain != "production":
                 fail("production archive validation requires a production trust domain")
@@ -3310,6 +3563,15 @@ def main() -> None:
             verify_archive_index(
                 args.repo.resolve(strict=True), root, args.manifest, manifest, trust
             )
+            if not args.allow_test_fixtures:
+                parse_publisher_receipt(
+                    args.repo.resolve(strict=True),
+                    root,
+                    args.manifest,
+                    manifest,
+                    trust,
+                    require_fresh=False,
+                )
         print(f"signed evidence archive is closed: {len(manifest.results)} result(s)")
     elif args.command == "check-protected-base":
         check_protected_base(args)
