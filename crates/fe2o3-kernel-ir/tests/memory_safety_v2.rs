@@ -1820,6 +1820,35 @@ fn detached_identity_mutation_matrix_fails_closed() {
         assert!(obligation.verify_identity_in(&record, budgets).unwrap());
     }
 
+    let detached = record.obligations[0].clone();
+    assert_eq!(detached.obligation_index(), 0);
+    let mut deleted = record.clone();
+    deleted.obligations.remove(0);
+    assert!(!detached.verify_identity_in(&deleted, budgets).unwrap());
+
+    let mut substituted = record.clone();
+    substituted.obligations[0] = record.obligations[1].clone();
+    assert!(!detached.verify_identity_in(&substituted, budgets).unwrap());
+
+    let mut reordered = record.clone();
+    reordered.obligations.swap(0, 1);
+    assert!(!detached.verify_identity_in(&reordered, budgets).unwrap());
+
+    let mut duplicated = record.clone();
+    duplicated.obligations.push(detached.clone());
+    assert!(!detached.verify_identity_in(&duplicated, budgets).unwrap());
+
+    let two_transition_program = program(vec![
+        allocate(16),
+        MemoryActionV2::AdvanceEpoch { to: EpochV2(1) },
+    ]);
+    let two_transition = execute_memory_program_v2(&two_transition_program, budgets).unwrap();
+    assert!(
+        !two_transition.records()[0].obligations[0]
+            .verify_identity_in(&two_transition.records()[1], budgets)
+            .unwrap()
+    );
+
     let alternate_program = program(vec![allocate_at(
         1,
         9,

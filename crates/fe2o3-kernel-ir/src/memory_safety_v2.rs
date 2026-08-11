@@ -1161,6 +1161,7 @@ pub enum ObligationBasisV2 {
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct MemoryObligationV2 {
     obligation_identity: MemoryObligationIdentityV2,
+    obligation_index: u32,
     pub program_identity: UntrustedMemoryProgramIdentityV2,
     pub action_identity: MemoryActionIdentityV2,
     pub action_index: u32,
@@ -1341,6 +1342,10 @@ impl MemoryObligationV2 {
         &self.obligation_identity
     }
 
+    pub const fn obligation_index(&self) -> u32 {
+        self.obligation_index
+    }
+
     pub fn verify_identity_in(
         &self,
         record: &TransitionRecordV2,
@@ -1350,8 +1355,18 @@ impl MemoryObligationV2 {
             .validate_hard_caps()
             .map_err(MemoryModelErrorV2::static_error)?;
         let mut work = WorkMeterV2::execution(budgets.max_execution_work);
-        verify_obligation_identity_v2(self, record, &mut work)
-            .map_err(MemoryModelErrorV2::static_error)
+        let index = self.obligation_index as usize;
+        if record.obligations.get(index) != Some(self) {
+            return Ok(false);
+        }
+        verify_transition_identity_v2(
+            record,
+            record.program_identity,
+            record.action_identity,
+            record.action_index,
+            &mut work,
+        )
+        .map_err(MemoryModelErrorV2::static_error)
     }
 }
 
@@ -1392,11 +1407,13 @@ impl TransitionRecordV2 {
 fn verify_obligation_identity_v2(
     obligation: &MemoryObligationV2,
     record: &TransitionRecordV2,
+    obligation_index: u32,
     work: &mut WorkMeterV2,
 ) -> Result<bool, MemoryErrorReasonV2> {
     if obligation.program_identity != record.program_identity
         || obligation.action_identity != record.action_identity
         || obligation.action_index != record.action_index
+        || obligation.obligation_index != obligation_index
     {
         return Ok(false);
     }
@@ -1416,8 +1433,8 @@ fn verify_transition_identity_v2(
     {
         return Ok(false);
     }
-    for obligation in &record.obligations {
-        if !verify_obligation_identity_v2(obligation, record, work)? {
+    for (index, obligation) in record.obligations.iter().enumerate() {
+        if !verify_obligation_identity_v2(obligation, record, index as u32, work)? {
             return Ok(false);
         }
     }
@@ -1581,7 +1598,8 @@ pub fn execute_memory_program_v2(
                 action_index: Some(index as u32),
                 reason,
             })?;
-        for obligation in &mut obligations {
+        for (obligation_index, obligation) in obligations.iter_mut().enumerate() {
+            obligation.obligation_index = obligation_index as u32;
             obligation.obligation_identity =
                 canonical_obligation_identity_v2(obligation, &mut machine.execution_work).map_err(
                     |reason| MemoryModelErrorV2 {
@@ -2742,6 +2760,7 @@ impl MachineV2<'_> {
             .generation;
         MemoryObligationV2 {
             obligation_identity: MemoryObligationIdentityV2([0; 32]),
+            obligation_index: 0,
             program_identity: self.program_identity,
             action_identity: self.action_identity,
             action_index: self.action_index,
@@ -3017,7 +3036,7 @@ fn report_identity_work_v2(
 ) -> Result<u64, MemoryErrorReasonV2> {
     const REPORT_FIXED_BYTES: u64 = 8 + REPORT_IDENTITY_DOMAIN.len() as u64 + 40 + 32;
     const TRANSITION_FIXED_BYTES: u64 = 40 + 40 + 40 + 4 + 8;
-    const OBLIGATION_BYTES: u64 = 40 + 40 + 40 + 4 + 1 + 4 + 8 + 8 + 8 + 8 + 1;
+    const OBLIGATION_BYTES: u64 = 40 + 4 + 40 + 40 + 4 + 1 + 4 + 8 + 8 + 8 + 8 + 1;
     let mut message_bytes = REPORT_FIXED_BYTES;
     for record in records {
         message_bytes = message_bytes.checked_add(TRANSITION_FIXED_BYTES).ok_or(
@@ -3077,6 +3096,7 @@ fn identity_obligation_fields<D: IdentitySinkV2>(
     digest: &mut D,
     obligation: &MemoryObligationV2,
 ) -> Result<(), MemoryErrorReasonV2> {
+    identity_u32(digest, obligation.obligation_index)?;
     identity_bytes(digest, obligation.program_identity.digest())?;
     identity_bytes(digest, obligation.action_identity.digest())?;
     identity_u32(digest, obligation.action_index)?;
