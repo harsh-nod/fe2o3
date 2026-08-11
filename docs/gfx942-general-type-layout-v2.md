@@ -11,7 +11,8 @@ evidence.
   pointer width, effective target CPU, normalized effective target-feature
   configuration, canonical semantic graph, and exact layout sidecar. The
   strengthened observation, projection, and candidate hash domains are V3;
-  the public V2 data APIs remain inert compatibility records.
+  semantic-layout evidence uses the profile-aware V2 canonical schema, while
+  the public V2 compatibility APIs remain inert records.
 - A host observation remains a host observation. It is described as observed
   on gfx942 only when the active rustc target itself exactly matches the
   canonical gfx942 triple, data layout, pointer width, `gfx942` CPU, wave64

@@ -26,6 +26,10 @@ use crate::rust_type_layout_general::{
 pub const SEMANTIC_LAYOUT_EVIDENCE_SCHEMA_V1: &str = "fe2o3.semantic-layout-evidence.v1";
 /// Numeric version paired with [`SEMANTIC_LAYOUT_EVIDENCE_SCHEMA_V1`].
 pub const SEMANTIC_LAYOUT_EVIDENCE_VERSION_V1: u16 = 1;
+/// Profile-aware schema identity emitted by the active layout bridge.
+pub const SEMANTIC_LAYOUT_EVIDENCE_SCHEMA_V2: &str = "fe2o3.semantic-layout-evidence.v2";
+/// Numeric version paired with [`SEMANTIC_LAYOUT_EVIDENCE_SCHEMA_V2`].
+pub const SEMANTIC_LAYOUT_EVIDENCE_VERSION_V2: u16 = 2;
 /// Maximum byte length of either exact rustc target identity component.
 pub const MAX_SEMANTIC_LAYOUT_TARGET_TEXT_BYTES_V1: usize = 16 * 1024;
 /// Maximum nesting depth accepted before recursive dialect validation.
@@ -296,7 +300,7 @@ impl SemanticLayoutEvidenceV1 {
         let semantic_text = semantic_type
             .canonical_text()
             .map_err(SemanticLayoutBridgeError::DialectValidation)?;
-        let mut canonical = String::from(SEMANTIC_LAYOUT_EVIDENCE_SCHEMA_V1);
+        let mut canonical = String::from(SEMANTIC_LAYOUT_EVIDENCE_SCHEMA_V2);
         canonical.push('|');
         observed_target.write_canonical(&mut canonical);
         canonical.push_str("|source-type=");
@@ -319,11 +323,11 @@ impl SemanticLayoutEvidenceV1 {
     }
 
     pub const fn schema(&self) -> &'static str {
-        SEMANTIC_LAYOUT_EVIDENCE_SCHEMA_V1
+        SEMANTIC_LAYOUT_EVIDENCE_SCHEMA_V2
     }
 
     pub const fn version(&self) -> u16 {
-        SEMANTIC_LAYOUT_EVIDENCE_VERSION_V1
+        SEMANTIC_LAYOUT_EVIDENCE_VERSION_V2
     }
 
     pub const fn target(&self) -> &SemanticLayoutTargetV1 {
