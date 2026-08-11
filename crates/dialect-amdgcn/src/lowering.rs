@@ -2880,19 +2880,6 @@ impl<'a> FunctionLowerer<'a> {
                     "G1 cannot materialize block parameters without an incoming CFG edge",
                 ));
             }
-
-            let mut predecessors = BTreeSet::new();
-            for (predecessor, _) in incomings {
-                if !predecessors.insert(predecessor) {
-                    return Err(LoweringErrors::one(
-                        location,
-                        LoweringDiagnosticCode::UnsupportedBlockArguments,
-                        format!(
-                            "G1 cannot materialize block parameters for multiple edges from {predecessor}; LLVM phi nodes require one incoming value per predecessor"
-                        ),
-                    ));
-                }
-            }
         }
         Ok(())
     }
@@ -3402,13 +3389,43 @@ impl<'a> FunctionLowerer<'a> {
     ) -> Result<(), LoweringErrors> {
         let location = self.block_location(block);
         match terminator {
-            Terminator::Branch { .. } | Terminator::ConditionalBranch { .. } => Ok(()),
+            Terminator::Branch { .. }
+            | Terminator::ConditionalBranch { .. }
+            | Terminator::IntegerSwitch { .. } => Ok(()),
+            Terminator::Switch {
+                selector, cases, ..
+            } => {
+                let selector_type = self.value_type(*selector);
+                let Some(scalar) = selector_type
+                    .as_scalar()
+                    .filter(|scalar| supported_integer(*scalar))
+                else {
+                    return Err(LoweringErrors::one(
+                        location,
+                        LoweringDiagnosticCode::UnsupportedTerminator,
+                        "legacy switch selector must have a fixed-width integer type",
+                    ));
+                };
+                let width = llvm_width(scalar);
+                if width < 64 {
+                    let limit = 1_u64 << width;
+                    if let Some(case) = cases.iter().find(|case| case.value >= limit) {
+                        return Err(LoweringErrors::one(
+                            location,
+                            LoweringDiagnosticCode::UnsupportedTerminator,
+                            format!(
+                                "legacy switch case {} is not representable in its i{width} selector",
+                                case.value
+                            ),
+                        ));
+                    }
+                }
+                Ok(())
+            }
             Terminator::Return { values } if values.is_empty() => Ok(()),
             Terminator::Return { .. } if self.call_symbols.is_some() => Ok(()),
             Terminator::Unreachable => Ok(()),
-            Terminator::Switch { .. }
-            | Terminator::IntegerSwitch { .. }
-            | Terminator::Return { .. } => Err(LoweringErrors::one(
+            Terminator::Return { .. } => Err(LoweringErrors::one(
                 location,
                 LoweringDiagnosticCode::UnsupportedTerminator,
                 format!("G1 does not lower {terminator:?}"),
@@ -3416,37 +3433,108 @@ impl<'a> FunctionLowerer<'a> {
         }
     }
 
-    fn incoming_edges(&self, target: BlockId) -> Vec<(BlockId, &[ValueId])> {
+    fn outgoing_edges<'b>(&self, terminator: &'b Terminator) -> Vec<(BlockId, &'b [ValueId])> {
+        match terminator {
+            Terminator::Branch { target, arguments } => vec![(*target, arguments)],
+            Terminator::ConditionalBranch {
+                then_target,
+                then_arguments,
+                else_target,
+                else_arguments,
+                ..
+            } => vec![
+                (*then_target, then_arguments),
+                (*else_target, else_arguments),
+            ],
+            Terminator::Switch {
+                cases,
+                default_target,
+                default_arguments,
+                ..
+            } => cases
+                .iter()
+                .map(|case| (case.target, case.arguments.as_slice()))
+                .chain([(*default_target, default_arguments.as_slice())])
+                .collect(),
+            Terminator::IntegerSwitch {
+                cases,
+                default_target,
+                default_arguments,
+                ..
+            } => cases
+                .iter()
+                .map(|case| (case.target, case.arguments.as_slice()))
+                .chain([(*default_target, default_arguments.as_slice())])
+                .collect(),
+            Terminator::Return { .. } | Terminator::Unreachable => Vec::new(),
+        }
+    }
+
+    fn incoming_edges(&self, target: BlockId) -> Vec<(BlockId, usize, &[ValueId])> {
         let body = self.function.body.as_ref().expect("definition required");
         let mut incomings = Vec::new();
         for block in &body.blocks {
-            match block.terminator.as_ref().expect("verified terminator") {
-                Terminator::Branch {
-                    target: edge_target,
-                    arguments,
-                } if *edge_target == target => incomings.push((block.id, arguments.as_slice())),
-                Terminator::ConditionalBranch {
-                    then_target,
-                    then_arguments,
-                    else_target,
-                    else_arguments,
-                    ..
-                } => {
-                    if *then_target == target {
-                        incomings.push((block.id, then_arguments.as_slice()));
-                    }
-                    if *else_target == target {
-                        incomings.push((block.id, else_arguments.as_slice()));
-                    }
+            let terminator = block.terminator.as_ref().expect("verified terminator");
+            for (ordinal, (edge_target, arguments)) in
+                self.outgoing_edges(terminator).into_iter().enumerate()
+            {
+                if edge_target == target {
+                    incomings.push((block.id, ordinal, arguments));
                 }
-                Terminator::Branch { .. }
-                | Terminator::Switch { .. }
-                | Terminator::IntegerSwitch { .. }
-                | Terminator::Return { .. }
-                | Terminator::Unreachable => {}
             }
         }
         incomings
+    }
+
+    fn split_edge(&self, predecessor: BlockId, target: BlockId) -> bool {
+        let body = self.function.body.as_ref().expect("definition required");
+        let target_block = body
+            .blocks
+            .iter()
+            .find(|block| block.id == target)
+            .expect("verified edge target");
+        if target_block.parameters.is_empty() {
+            return false;
+        }
+        let predecessor_block = body
+            .blocks
+            .iter()
+            .find(|block| block.id == predecessor)
+            .expect("verified predecessor");
+        let outgoing = self.outgoing_edges(
+            predecessor_block
+                .terminator
+                .as_ref()
+                .expect("verified terminator"),
+        );
+        let duplicate_target = outgoing
+            .iter()
+            .filter(|(candidate, _)| *candidate == target)
+            .count()
+            > 1;
+        let critical = outgoing.len() > 1 && self.incoming_edges(target).len() > 1;
+        duplicate_target || critical
+    }
+
+    fn edge_target_label(&self, predecessor: BlockId, ordinal: usize, target: BlockId) -> String {
+        if self.split_edge(predecessor, target) {
+            edge_label(predecessor, ordinal, target)
+        } else {
+            block_label(target)
+        }
+    }
+
+    fn phi_predecessor_label(
+        &self,
+        predecessor: BlockId,
+        ordinal: usize,
+        target: BlockId,
+    ) -> String {
+        if self.split_edge(predecessor, target) {
+            edge_label(predecessor, ordinal, target)
+        } else {
+            block_label(predecessor)
+        }
     }
 
     fn value_type(&self, value: ValueId) -> &Type {
@@ -3717,8 +3805,10 @@ impl<'a> FunctionLowerer<'a> {
             }
             self.emit_terminator(
                 output,
+                block.id,
                 block.terminator.as_ref().expect("verified terminator"),
             );
+            self.emit_split_edges(output, block);
         }
         Ok(())
     }
@@ -3799,9 +3889,12 @@ impl<'a> FunctionLowerer<'a> {
                 ValueBinding::Value { llvm_name, ty } => {
                     let values = incomings
                         .iter()
-                        .map(|(predecessor, arguments)| {
+                        .map(|(predecessor, ordinal, arguments)| {
                             let (argument, _) = self.value(arguments[parameter_index]);
-                            format!("[ {argument}, %{} ]", block_label(*predecessor))
+                            format!(
+                                "[ {argument}, %{} ]",
+                                self.phi_predecessor_label(*predecessor, *ordinal, block.id)
+                            )
                         })
                         .collect::<Vec<_>>();
                     writeln!(
@@ -3819,7 +3912,7 @@ impl<'a> FunctionLowerer<'a> {
                 } => {
                     let data_values = incomings
                         .iter()
-                        .map(|(predecessor, arguments)| {
+                        .map(|(predecessor, ordinal, arguments)| {
                             let ValueBinding::Slice {
                                 data_name: argument,
                                 ..
@@ -3830,12 +3923,15 @@ impl<'a> FunctionLowerer<'a> {
                             else {
                                 unreachable!("verify_module checked branch argument types")
                             };
-                            format!("[ {argument}, %{} ]", block_label(*predecessor))
+                            format!(
+                                "[ {argument}, %{} ]",
+                                self.phi_predecessor_label(*predecessor, *ordinal, block.id)
+                            )
                         })
                         .collect::<Vec<_>>();
                     let length_values = incomings
                         .iter()
-                        .map(|(predecessor, arguments)| {
+                        .map(|(predecessor, ordinal, arguments)| {
                             let ValueBinding::Slice {
                                 length_name: argument,
                                 ..
@@ -3846,7 +3942,10 @@ impl<'a> FunctionLowerer<'a> {
                             else {
                                 unreachable!("verify_module checked branch argument types")
                             };
-                            format!("[ {argument}, %{} ]", block_label(*predecessor))
+                            format!(
+                                "[ {argument}, %{} ]",
+                                self.phi_predecessor_label(*predecessor, *ordinal, block.id)
+                            )
                         })
                         .collect::<Vec<_>>();
                     writeln!(
@@ -5071,10 +5170,20 @@ impl<'a> FunctionLowerer<'a> {
         }
     }
 
-    fn emit_terminator(&self, output: &mut dyn fmt::Write, terminator: &Terminator) {
+    fn emit_terminator(
+        &self,
+        output: &mut dyn fmt::Write,
+        predecessor: BlockId,
+        terminator: &Terminator,
+    ) {
         match terminator {
             Terminator::Branch { target, .. } => {
-                writeln!(output, "  br label %{}", block_label(*target)).unwrap();
+                writeln!(
+                    output,
+                    "  br label %{}",
+                    self.edge_target_label(predecessor, 0, *target)
+                )
+                .unwrap();
             }
             Terminator::ConditionalBranch {
                 condition,
@@ -5086,10 +5195,63 @@ impl<'a> FunctionLowerer<'a> {
                 writeln!(
                     output,
                     "  br i1 {condition}, label %{}, label %{}",
-                    block_label(*then_target),
-                    block_label(*else_target)
+                    self.edge_target_label(predecessor, 0, *then_target),
+                    self.edge_target_label(predecessor, 1, *else_target)
                 )
                 .unwrap();
+            }
+            Terminator::Switch {
+                selector,
+                cases,
+                default_target,
+                ..
+            } => {
+                let (selector, ty) = self.value(*selector);
+                writeln!(
+                    output,
+                    "  switch {} {selector}, label %{} [",
+                    llvm_type(ty),
+                    self.edge_target_label(predecessor, cases.len(), *default_target)
+                )
+                .unwrap();
+                for (ordinal, case) in cases.iter().enumerate() {
+                    writeln!(
+                        output,
+                        "    {} {}, label %{}",
+                        llvm_type(ty),
+                        case.value,
+                        self.edge_target_label(predecessor, ordinal, case.target)
+                    )
+                    .unwrap();
+                }
+                writeln!(output, "  ]").unwrap();
+            }
+            Terminator::IntegerSwitch {
+                selector,
+                cases,
+                default_target,
+                ..
+            } => {
+                let (selector, ty) = self.value(*selector);
+                writeln!(
+                    output,
+                    "  switch {} {selector}, label %{} [",
+                    llvm_type(ty),
+                    self.edge_target_label(predecessor, cases.len(), *default_target)
+                )
+                .unwrap();
+                for (ordinal, case) in cases.iter().enumerate() {
+                    writeln!(
+                        output,
+                        "    {} {}, label %{}",
+                        llvm_type(ty),
+                        constant_value(&case.value)
+                            .expect("verified integer switch case has an integer constant"),
+                        self.edge_target_label(predecessor, ordinal, case.target)
+                    )
+                    .unwrap();
+                }
+                writeln!(output, "  ]").unwrap();
             }
             Terminator::Return { values } => match values.as_slice() {
                 [] => writeln!(output, "  ret void").unwrap(),
@@ -5100,7 +5262,17 @@ impl<'a> FunctionLowerer<'a> {
                 _ => unreachable!("compiler-module preflight rejected multi-value returns"),
             },
             Terminator::Unreachable => writeln!(output, "  unreachable").unwrap(),
-            _ => unreachable!("preflight rejected unsupported terminator"),
+        }
+    }
+
+    fn emit_split_edges(&self, output: &mut dyn fmt::Write, block: &BasicBlock) {
+        let terminator = block.terminator.as_ref().expect("verified terminator");
+        for (ordinal, (target, _)) in self.outgoing_edges(terminator).into_iter().enumerate() {
+            if !self.split_edge(block.id, target) {
+                continue;
+            }
+            writeln!(output, "{}:", edge_label(block.id, ordinal, target)).unwrap();
+            writeln!(output, "  br label %{}", block_label(target)).unwrap();
         }
     }
 }
@@ -5484,6 +5656,10 @@ fn ballot_intrinsic(width: WaveWidth) -> (&'static str, &'static str) {
 
 fn block_label(block: BlockId) -> String {
     format!("bb{}", block.0)
+}
+
+fn edge_label(predecessor: BlockId, ordinal: usize, target: BlockId) -> String {
+    format!("edge_bb{}_{}_bb{}", predecessor.0, ordinal, target.0)
 }
 
 fn llvm_type(ty: &Type) -> &'static str {

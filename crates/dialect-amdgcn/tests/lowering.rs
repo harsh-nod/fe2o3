@@ -1568,12 +1568,13 @@ fn vecadd_three_slice_abi_and_cfg_match_the_exact_golden() {
 fn loop_block_arguments_materialize_as_exact_phi_golden() {
     let output = lower_kernel_to_llvm_ir(&phi_loop_module(), &KernelId::new("phi_loop")).unwrap();
     assert_eq!(output, include_str!("fixtures/phi_loop_g1.ll"));
-    assert!(output.contains("%v10 = phi i64 [ %arg1, %bb0 ], [ %v15, %bb1 ]"));
+    assert!(output.contains("%v10 = phi i64 [ %arg1, %bb0 ], [ %v15, %edge_bb1_0_bb1 ]"));
+    assert!(output.contains(
+        "%v11.data = phi ptr addrspace(1) [ %arg0.data, %bb0 ], [ %v11.data, %edge_bb1_0_bb1 ]"
+    ));
     assert!(
-        output
-            .contains("%v11.data = phi ptr addrspace(1) [ %arg0.data, %bb0 ], [ %v11.data, %bb1 ]")
+        output.contains("%v12 = phi ptr addrspace(1) [ %v2, %bb0 ], [ %v12, %edge_bb1_0_bb1 ]")
     );
-    assert!(output.contains("%v12 = phi ptr addrspace(1) [ %v2, %bb0 ], [ %v12, %bb1 ]"));
 }
 
 #[test]
@@ -2106,21 +2107,37 @@ fn excluded_operations_constants_casts_and_comparisons_have_located_errors() {
 }
 
 #[test]
-fn switches_remain_explicitly_outside_g1() {
+fn integer_switches_lower_deterministically() {
     let mut switch = fill_module();
     switch.functions[0].body.as_mut().unwrap().blocks[0].terminator = Some(Terminator::Switch {
         selector: ValueId(2),
         cases: vec![SwitchCase {
-            value: 0,
+            value: 7,
             target: BlockId(1),
             arguments: vec![],
         }],
         default_target: BlockId(2),
         default_arguments: vec![],
     });
+    let legacy = lower_kernel_to_llvm_ir(&switch, &KernelId::new("fill")).unwrap();
+    assert!(legacy.contains("switch i64 %v2, label %bb2 [\n    i64 7, label %bb1\n  ]"));
+
+    switch.functions[0].body.as_mut().unwrap().blocks[0].terminator =
+        Some(Terminator::IntegerSwitch {
+            selector: ValueId(2),
+            cases: vec![IntegerSwitchCase {
+                value: Constant::Index(42),
+                target: BlockId(1),
+                arguments: vec![],
+            }],
+            default_target: BlockId(2),
+            default_arguments: vec![],
+        });
+    let typed = lower_kernel_to_llvm_ir(&switch, &KernelId::new("fill")).unwrap();
+    assert!(typed.contains("switch i64 %v2, label %bb2 [\n    i64 42, label %bb1\n  ]"));
     assert_eq!(
-        first_code(&switch, "fill"),
-        LoweringDiagnosticCode::UnsupportedTerminator
+        typed,
+        lower_kernel_to_llvm_ir(&switch, &KernelId::new("fill")).unwrap()
     );
 }
 
@@ -2177,17 +2194,13 @@ fn unrepresentable_phi_cfgs_fail_closed_with_located_errors() {
     then_arguments.push(ValueId(1));
     *else_target = BlockId(1);
     else_arguments.push(ValueId(1));
-    let error = lower_kernel_to_llvm_ir(&duplicate_edges, &KernelId::new("fill")).unwrap_err();
-    assert_eq!(
-        error.diagnostics()[0].code,
-        LoweringDiagnosticCode::UnsupportedBlockArguments
-    );
-    assert_eq!(error.diagnostics()[0].location.block, Some(BlockId(1)));
+    let llvm = lower_kernel_to_llvm_ir(&duplicate_edges, &KernelId::new("fill")).unwrap();
+    assert!(llvm.contains("br i1 %v4, label %edge_bb0_0_bb1, label %edge_bb0_1_bb1"));
     assert!(
-        error.diagnostics()[0]
-            .message
-            .contains("multiple edges from bb0")
+        llvm.contains("%v20 = phi float [ %arg1, %edge_bb0_0_bb1 ], [ %arg1, %edge_bb0_1_bb1 ]")
     );
+    assert!(llvm.contains("edge_bb0_0_bb1:\n  br label %bb1"));
+    assert!(llvm.contains("edge_bb0_1_bb1:\n  br label %bb1"));
 }
 
 #[test]

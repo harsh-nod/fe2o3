@@ -8,14 +8,16 @@ bb0:
   %v2 = getelementptr i8, ptr addrspace(1) %arg0.data, i64 0
   br label %bb1
 bb1:
-  %v10 = phi i64 [ %arg1, %bb0 ], [ %v15, %bb1 ]
-  %v11.data = phi ptr addrspace(1) [ %arg0.data, %bb0 ], [ %v11.data, %bb1 ]
-  %v11.len = phi i64 [ %arg0.len, %bb0 ], [ %v11.len, %bb1 ]
-  %v12 = phi ptr addrspace(1) [ %v2, %bb0 ], [ %v12, %bb1 ]
+  %v10 = phi i64 [ %arg1, %bb0 ], [ %v15, %edge_bb1_0_bb1 ]
+  %v11.data = phi ptr addrspace(1) [ %arg0.data, %bb0 ], [ %v11.data, %edge_bb1_0_bb1 ]
+  %v11.len = phi i64 [ %arg0.len, %bb0 ], [ %v11.len, %edge_bb1_0_bb1 ]
+  %v12 = phi ptr addrspace(1) [ %v2, %bb0 ], [ %v12, %edge_bb1_0_bb1 ]
   %v13 = add i64 %v11.len, 0
   %v15 = add i64 %v10, 1
   %v16 = icmp ult i64 %v15, %v13
-  br i1 %v16, label %bb1, label %bb2
+  br i1 %v16, label %edge_bb1_0_bb1, label %bb2
+edge_bb1_0_bb1:
+  br label %bb1
 bb2:
   ret void
 }
