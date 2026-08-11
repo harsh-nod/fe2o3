@@ -1,6 +1,75 @@
-#[path = "../src/scalar_ops_v2.rs"]
-mod scalar_ops_v2;
-use scalar_ops_v2::*;
+use fe2o3_kernel_ir::scalar_ops_v2::*;
+use fe2o3_kernel_ir::{FunctionId, ScalarType as IrScalarType, Type, ValueId};
+
+#[test]
+fn public_carrier_is_canonical_bounded_and_multi_result_aware() {
+    let operation = Operation::IntegerBinary {
+        ty: ScalarType::Int {
+            width: IntWidth::W128,
+            signed: true,
+        },
+        op: IntBinary::Add,
+        mode: IntMode::Overflowing,
+    };
+    let carrier = ScalarOperationV2::new(operation, vec![ValueId(3), ValueId(4)]).unwrap();
+    assert_eq!(
+        carrier.operand_types(),
+        vec![
+            Type::Scalar(IrScalarType::I128),
+            Type::Scalar(IrScalarType::I128)
+        ]
+    );
+    assert_eq!(
+        carrier.result_types(),
+        vec![Type::Scalar(IrScalarType::I128), Type::BOOL]
+    );
+    let id = carrier.intrinsic_function_id();
+    assert_eq!(operation_from_intrinsic_id(&id), Some(operation));
+    assert_eq!(
+        ScalarOperationV2::from_intrinsic_call(&id, &[ValueId(3), ValueId(4)]),
+        Some(carrier.clone())
+    );
+    assert!(ScalarOperationV2::from_intrinsic_call(&id, &[ValueId(3)]).is_none());
+    let ir = carrier.kernel_operation(&[ValueId(5), ValueId(6)]).unwrap();
+    assert_eq!(ir.results.len(), 2);
+    assert!(carrier.kernel_operation(&[ValueId(5)]).is_err());
+}
+
+#[test]
+fn reserved_carrier_identity_rejects_malformed_and_provenance_operations() {
+    for suffix in ["", "0", "gg", "FE2O"] {
+        assert!(
+            operation_from_intrinsic_id(&FunctionId::new(format!("{INTRINSIC_PREFIX}{suffix}")))
+                .is_none()
+        );
+    }
+    let oversized = FunctionId::new(format!(
+        "{INTRINSIC_PREFIX}{}",
+        "00".repeat(MAX_ENCODED_BYTES + 1)
+    ));
+    assert!(operation_from_intrinsic_id(&oversized).is_none());
+
+    let pointer = ScalarType::Pointer {
+        address_space: 1,
+        width: IntWidth::W64,
+    };
+    assert!(matches!(
+        ScalarOperationV2::new(
+            Operation::Cast {
+                from: pointer,
+                to: ScalarType::Int {
+                    width: IntWidth::W64,
+                    signed: false,
+                },
+                cast: Cast::PointerToInt {
+                    unsafe_policy: UnsafeProvenancePolicy::ExplicitProvenanceLoss,
+                },
+            },
+            vec![ValueId(0)],
+        ),
+        Err(diagnostics) if diagnostics == vec![Diagnostic::UnsupportedProvenance]
+    ));
+}
 use std::collections::BTreeSet;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 

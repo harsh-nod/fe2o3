@@ -131,6 +131,7 @@ impl MemoryElementType {
             Self::Scalar(
                 ScalarType::I64 | ScalarType::U64 | ScalarType::Index | ScalarType::F64,
             ) => (8, 8),
+            Self::Scalar(ScalarType::I128 | ScalarType::U128) => (16, 16),
         };
         MemoryLayout::new(size_bytes, alignment_bytes)
     }
@@ -1135,6 +1136,8 @@ fn scalar_type_tag(scalar: ScalarType) -> u8 {
         ScalarType::Bf16 => 12,
         ScalarType::F32 => 13,
         ScalarType::F64 => 14,
+        ScalarType::I128 => 15,
+        ScalarType::U128 => 16,
     }
 }
 
@@ -1154,6 +1157,8 @@ fn decode_scalar_type(tag: u8) -> Result<ScalarType, SemanticOperationInstanceDe
         12 => Ok(ScalarType::Bf16),
         13 => Ok(ScalarType::F32),
         14 => Ok(ScalarType::F64),
+        15 => Ok(ScalarType::I128),
+        16 => Ok(ScalarType::U128),
         tag => Err(SemanticOperationInstanceDecodeError::UnknownPayloadTag {
             field: "memory element",
             tag,

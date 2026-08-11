@@ -1859,6 +1859,8 @@ enum_codec!(scalar_type_tag, decode_scalar_type, ScalarType, "scalar type", {
     ScalarType::Bf16 => 12,
     ScalarType::F32 => 13,
     ScalarType::F64 => 14,
+    ScalarType::I128 => 15,
+    ScalarType::U128 => 16,
 });
 enum_codec!(axis_tag, decode_axis, Axis, "axis", {
     Axis::X => 1,

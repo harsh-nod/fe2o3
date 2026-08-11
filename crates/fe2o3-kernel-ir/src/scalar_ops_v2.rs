@@ -1,15 +1,24 @@
-//! Inert target-neutral scalar contracts for a future Kernel IR V2.
+//! Bounded target-neutral scalar contracts for Kernel IR V2.
 //!
-//! This file is intentionally not wired into the crate. It provides a bounded
-//! schema, verifier, and canonical identity, but no source/backend lowering,
-//! GPU execution, or formal-verification claim.
+//! The schema is public and can be carried through kernel IR as a reserved,
+//! canonical call. Constructing a carrier proves structural well-formedness;
+//! target admission and backend semantics remain separate obligations.
 
-use std::fmt;
+use std::fmt::{self, Write as _};
+
+use crate::{
+    Function, FunctionId, Operation as KernelOperation, OperationKind, ScalarType as IrScalarType,
+    Signature, Type, ValueDef, ValueId,
+};
 
 pub const MAGIC: [u8; 8] = *b"FE2OSV2\0";
 pub const VERSION: u16 = 3;
 pub const MAX_ENCODED_BYTES: usize = 96;
 pub const MAX_DIAGNOSTICS: usize = 16;
+pub const INTRINSIC_PREFIX: &str = "__fe2o3_ir_scalar_v2_";
+pub const MAX_INTRINSIC_SYMBOL_BYTES: usize = INTRINSIC_PREFIX.len() + MAX_ENCODED_BYTES * 2;
+pub const GFX942_FLOAT_CAPABILITIES: FloatCapabilities =
+    FloatCapabilities::new(false, true, true, false);
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum IntWidth {
@@ -305,6 +314,8 @@ pub enum Diagnostic {
         to: u16,
     },
     PointerWidthMismatch,
+    UnsupportedCarrierType(ScalarType),
+    UnsupportedProvenance,
 }
 impl fmt::Display for Diagnostic {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -600,6 +611,225 @@ pub fn decode(bytes: &[u8], caps: FloatCapabilities) -> Result<Operation, Decode
     }
     verify(op, caps).map_err(DecodeError::Invalid)?;
     Ok(op)
+}
+
+/// A closed scalar operation plus its SSA operands.
+///
+/// The operation is encoded into a reserved function identity. Backends must
+/// decode and revalidate that identity; the spelling alone grants no authority.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ScalarOperationV2 {
+    operation: Operation,
+    arguments: Vec<ValueId>,
+}
+
+impl ScalarOperationV2 {
+    pub fn new(operation: Operation, arguments: Vec<ValueId>) -> Result<Self, Vec<Diagnostic>> {
+        verify(operation, GFX942_FLOAT_CAPABILITIES)?;
+        if operation_uses_pointer(operation) {
+            return Err(vec![Diagnostic::UnsupportedProvenance]);
+        }
+        let expected = operand_types(operation)?;
+        if arguments.len() != expected.len() {
+            return Err(vec![Diagnostic::ResourceLimit {
+                resource: "scalar operands",
+                limit: expected.len(),
+                actual: arguments.len(),
+            }]);
+        }
+        Ok(Self {
+            operation,
+            arguments,
+        })
+    }
+
+    pub const fn operation(&self) -> Operation {
+        self.operation
+    }
+
+    pub fn arguments(&self) -> &[ValueId] {
+        &self.arguments
+    }
+
+    pub fn operand_types(&self) -> Vec<Type> {
+        operand_types(self.operation).expect("validated carrier types")
+    }
+
+    pub fn result_types(&self) -> Vec<Type> {
+        result_types(self.operation).expect("validated carrier types")
+    }
+
+    pub fn intrinsic_function_id(&self) -> FunctionId {
+        intrinsic_function_id(self.operation).expect("validated operation has canonical bytes")
+    }
+
+    pub fn declaration(&self) -> Function {
+        Function::external_import(
+            self.intrinsic_function_id(),
+            Signature::new(self.operand_types(), self.result_types()),
+        )
+    }
+
+    pub fn kernel_operation(
+        &self,
+        results: &[ValueId],
+    ) -> Result<KernelOperation, Vec<Diagnostic>> {
+        let result_types = self.result_types();
+        if results.len() != result_types.len() {
+            return Err(vec![Diagnostic::ResourceLimit {
+                resource: "scalar results",
+                limit: result_types.len(),
+                actual: results.len(),
+            }]);
+        }
+        Ok(KernelOperation::new(
+            results
+                .iter()
+                .copied()
+                .zip(result_types)
+                .map(|(id, ty)| ValueDef::new(id, ty))
+                .collect(),
+            OperationKind::Call {
+                callee: self.intrinsic_function_id(),
+                arguments: self.arguments.clone(),
+            },
+        ))
+    }
+
+    pub fn from_intrinsic_call(callee: &FunctionId, arguments: &[ValueId]) -> Option<Self> {
+        Self::new(operation_from_intrinsic_id(callee)?, arguments.to_vec()).ok()
+    }
+}
+
+pub fn operation_from_intrinsic_id(id: &FunctionId) -> Option<Operation> {
+    let encoded = id.as_str().strip_prefix(INTRINSIC_PREFIX)?;
+    if encoded.is_empty()
+        || encoded.len() % 2 != 0
+        || id.as_str().len() > MAX_INTRINSIC_SYMBOL_BYTES
+    {
+        return None;
+    }
+    let mut bytes = Vec::with_capacity(encoded.len() / 2);
+    for pair in encoded.as_bytes().chunks_exact(2) {
+        bytes.push((hex_nibble(pair[0])? << 4) | hex_nibble(pair[1])?);
+    }
+    let operation = decode(&bytes, GFX942_FLOAT_CAPABILITIES).ok()?;
+    (encode(operation, GFX942_FLOAT_CAPABILITIES)
+        .ok()?
+        .as_slice()
+        == bytes.as_slice())
+    .then_some(operation)
+}
+
+fn intrinsic_function_id(operation: Operation) -> Result<FunctionId, Vec<Diagnostic>> {
+    let bytes = encode(operation, GFX942_FLOAT_CAPABILITIES)?;
+    let mut symbol = String::with_capacity(INTRINSIC_PREFIX.len() + bytes.len() * 2);
+    symbol.push_str(INTRINSIC_PREFIX);
+    for byte in bytes {
+        write!(&mut symbol, "{byte:02x}").expect("writing to String cannot fail");
+    }
+    Ok(FunctionId::new(symbol))
+}
+
+const fn hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        _ => None,
+    }
+}
+
+fn operation_uses_pointer(operation: Operation) -> bool {
+    match operation {
+        Operation::Cast { from, to, .. } => {
+            matches!(from, ScalarType::Pointer { .. }) || matches!(to, ScalarType::Pointer { .. })
+        }
+        Operation::IntegerBinary { .. }
+        | Operation::IntegerUnary { .. }
+        | Operation::Shift { .. }
+        | Operation::IntegerCompare { .. }
+        | Operation::FloatBinary { .. }
+        | Operation::FloatNeg { .. }
+        | Operation::FloatCompare { .. }
+        | Operation::FloatTotalCompare { .. } => false,
+    }
+}
+
+fn operand_types(operation: Operation) -> Result<Vec<Type>, Vec<Diagnostic>> {
+    let types = match operation {
+        Operation::IntegerBinary { ty, .. }
+        | Operation::IntegerCompare { ty, .. }
+        | Operation::FloatBinary { ty, .. }
+        | Operation::FloatCompare { ty, .. }
+        | Operation::FloatTotalCompare { ty } => vec![carrier_type(ty)?, carrier_type(ty)?],
+        Operation::IntegerUnary { ty, .. } | Operation::FloatNeg { ty, .. } => {
+            vec![carrier_type(ty)?]
+        }
+        Operation::Shift { ty, rhs_ty, .. } => vec![carrier_type(ty)?, carrier_type(rhs_ty)?],
+        Operation::Cast { from, .. } => vec![carrier_type(from)?],
+    };
+    Ok(types)
+}
+
+fn result_types(operation: Operation) -> Result<Vec<Type>, Vec<Diagnostic>> {
+    let types = match operation {
+        Operation::IntegerBinary { ty, mode, .. } => match mode {
+            IntMode::Checked | IntMode::Overflowing => vec![carrier_type(ty)?, Type::BOOL],
+            IntMode::Wrapping | IntMode::Saturating => vec![carrier_type(ty)?],
+        },
+        Operation::IntegerUnary { ty, mode, .. } => match mode {
+            IntMode::Checked | IntMode::Overflowing => vec![carrier_type(ty)?, Type::BOOL],
+            IntMode::Wrapping | IntMode::Saturating => vec![carrier_type(ty)?],
+        },
+        Operation::Shift { ty, policy, .. } => match policy {
+            ShiftPolicy::Checked | ShiftPolicy::Overflowing => {
+                vec![carrier_type(ty)?, Type::BOOL]
+            }
+            ShiftPolicy::Wrapping | ShiftPolicy::RustOperator { .. } => vec![carrier_type(ty)?],
+        },
+        Operation::IntegerCompare { .. } | Operation::FloatCompare { .. } => vec![Type::BOOL],
+        Operation::FloatBinary { ty, .. } | Operation::FloatNeg { ty, .. } => {
+            vec![carrier_type(ty)?]
+        }
+        Operation::FloatTotalCompare { .. } => vec![Type::Scalar(IrScalarType::I8)],
+        Operation::Cast { to, cast, .. } => match cast {
+            Cast::IntToBoolChecked | Cast::IntToCharChecked => {
+                vec![carrier_type(to)?, Type::BOOL]
+            }
+            _ => vec![carrier_type(to)?],
+        },
+    };
+    Ok(types)
+}
+
+fn carrier_type(ty: ScalarType) -> Result<Type, Vec<Diagnostic>> {
+    let scalar = match ty {
+        ScalarType::Bool => IrScalarType::Bool,
+        ScalarType::Char => IrScalarType::U32,
+        ScalarType::Int { width, signed } => match (width, signed) {
+            (IntWidth::W8, true) => IrScalarType::I8,
+            (IntWidth::W16, true) => IrScalarType::I16,
+            (IntWidth::W32, true) => IrScalarType::I32,
+            (IntWidth::W64, true) => IrScalarType::I64,
+            (IntWidth::W128, true) => IrScalarType::I128,
+            (IntWidth::W8, false) => IrScalarType::U8,
+            (IntWidth::W16, false) => IrScalarType::U16,
+            (IntWidth::W32, false) => IrScalarType::U32,
+            (IntWidth::W64, false) => IrScalarType::U64,
+            (IntWidth::W128, false) => IrScalarType::U128,
+        },
+        ScalarType::Float(FloatWidth::F32) => IrScalarType::F32,
+        ScalarType::Float(FloatWidth::F64) => IrScalarType::F64,
+        ScalarType::Float(width @ (FloatWidth::F16 | FloatWidth::F128)) => {
+            return Err(vec![Diagnostic::UnsupportedCarrierType(ScalarType::Float(
+                width,
+            ))]);
+        }
+        pointer @ ScalarType::Pointer { .. } => {
+            return Err(vec![Diagnostic::UnsupportedCarrierType(pointer)]);
+        }
+    };
+    Ok(Type::Scalar(scalar))
 }
 fn encode_type(t: ScalarType, o: &mut Vec<u8>) {
     match t {

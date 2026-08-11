@@ -24,6 +24,7 @@ mod formal_memory_obligations;
 mod ir;
 mod matrix;
 mod region_effects;
+pub mod scalar_ops_v2;
 mod semantic_operations;
 mod standard_atomics;
 mod types;

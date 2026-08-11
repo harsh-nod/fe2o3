@@ -28,10 +28,12 @@ pub enum ScalarType {
     I16,
     I32,
     I64,
+    I128,
     U8,
     U16,
     U32,
     U64,
+    U128,
     /// The target's pointer-sized unsigned indexing type.
     Index,
     F16,
@@ -48,16 +50,21 @@ impl ScalarType {
                 | Self::I16
                 | Self::I32
                 | Self::I64
+                | Self::I128
                 | Self::U8
                 | Self::U16
                 | Self::U32
                 | Self::U64
+                | Self::U128
                 | Self::Index
         )
     }
 
     pub const fn is_signed_integer(self) -> bool {
-        matches!(self, Self::I8 | Self::I16 | Self::I32 | Self::I64)
+        matches!(
+            self,
+            Self::I8 | Self::I16 | Self::I32 | Self::I64 | Self::I128
+        )
     }
 
     pub const fn is_float(self) -> bool {
@@ -75,6 +82,7 @@ impl ScalarType {
             Self::I16 | Self::U16 | Self::F16 | Self::Bf16 => Some(16),
             Self::I32 | Self::U32 | Self::F32 => Some(32),
             Self::I64 | Self::U64 | Self::F64 => Some(64),
+            Self::I128 | Self::U128 => Some(128),
             Self::Index => None,
         }
     }
