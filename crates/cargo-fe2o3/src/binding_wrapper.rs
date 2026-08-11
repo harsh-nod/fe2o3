@@ -1578,6 +1578,10 @@ fn complete_fresh_worker_v2(
         CompletionFailure::Uncommitted(format!("reproducible Worker V2 execution failed: {error}"))
     })?;
     debug_assert_eq!(evidence.attempt(), managed.attempt);
+    let canonical_request = evidence.authorized_request_bytes().to_vec();
+    let canonical_response = evidence.authorized().response().canonical_bytes().to_vec();
+    let raw_output = evidence.output_bytes().to_vec();
+    let worker_v2_request_identity = *evidence.authorized_request_identity();
     let inspected = inspect_worker_v2_raw_hsaco_v1(evidence).map_err(|error| {
         CompletionFailure::Uncommitted(format!(
             "independent Worker V2 HSACO inspection failed: {error}"
@@ -1591,12 +1595,22 @@ fn complete_fresh_worker_v2(
         envelope_inputs,
     )
     .map_err(|error| preserve_restart_error("persistence", error))?;
-    write_non_production_reproduction_record(&persisted)?;
+    write_non_production_reproduction_record(
+        &persisted,
+        &canonical_request,
+        &canonical_response,
+        &raw_output,
+        &worker_v2_request_identity,
+    )?;
     publish_finish_and_clear(managed, resume, persisted.publication, persisted.intent)
 }
 
 fn write_non_production_reproduction_record(
     persisted: &PersistedAdmittedWorkerV2IntentV1,
+    canonical_request: &[u8],
+    canonical_response: &[u8],
+    raw_output: &[u8],
+    worker_v2_request_identity: &[u8; 32],
 ) -> Result<(), CompletionFailure> {
     if !crate::non_production_reproduction::enabled() {
         return Ok(());
@@ -1620,30 +1634,59 @@ fn write_non_production_reproduction_record(
     }
     let plan = persisted.intent.record().plan();
     let exact_output = persisted.intent.exact_output();
+    let sealed_worker_v2_response_identity = {
+        let mut digest = Sha256::new();
+        digest.update(b"FE2O3/WORKER-V2-SEALED-RESPONSE/V1\0");
+        digest.update((canonical_response.len() as u64).to_le_bytes());
+        digest.update(canonical_response);
+        digest.finalize()
+    };
     let record = format!(
         concat!(
             "{{\"authority\":\"none\",",
+            "\"canonical_request_bytes\":{},",
+            "\"canonical_request_hex\":\"{}\",",
+            "\"canonical_request_sha256\":\"{}\",",
+            "\"canonical_response_bytes\":{},",
+            "\"canonical_response_hex\":\"{}\",",
+            "\"canonical_response_sha256\":\"{}\",",
             "\"claim\":\"non-production-exact-artifact-observation-only\",",
             "\"final_hsaco_bytes\":{},",
             "\"final_hsaco_sha256\":\"{}\",",
             "\"finalization_identity\":\"{}\",",
             "\"finalized_output_identity\":\"{}\",",
             "\"publication_identity\":\"{}\",",
+            "\"raw_output_bytes\":{},",
+            "\"raw_output_hex\":\"{}\",",
             "\"raw_output_identity\":\"{}\",",
+            "\"raw_output_sha256\":\"{}\",",
             "\"request_identity\":\"{}\",",
             "\"response_identity\":\"{}\",",
-            "\"schema\":\"fe2o3-non-production-compiler-reproduction-record-v1\",",
-            "\"worker_identity\":\"{}\"}}\n"
+            "\"schema\":\"fe2o3-non-production-compiler-reproduction-record-v2\",",
+            "\"sealed_worker_v2_response_identity\":\"{}\",",
+            "\"worker_identity\":\"{}\",",
+            "\"worker_v2_request_identity\":\"{}\"}}\n"
         ),
+        canonical_request.len(),
+        hex(canonical_request),
+        hex(&Sha256::digest(canonical_request)),
+        canonical_response.len(),
+        hex(canonical_response),
+        hex(&Sha256::digest(canonical_response)),
         exact_output.len(),
         hex(&Sha256::digest(exact_output)),
         hex(plan.finalization().as_bytes()),
         hex(plan.finalized_output().as_bytes()),
         hex(plan.publication().as_bytes()),
+        raw_output.len(),
+        hex(raw_output),
         hex(plan.linked_output().as_bytes()),
+        hex(&Sha256::digest(raw_output)),
         hex(plan.request().as_bytes()),
         hex(plan.response().as_bytes()),
+        hex(&sealed_worker_v2_response_identity),
         hex(plan.worker().as_bytes()),
+        hex(worker_v2_request_identity),
     );
     let mut file = fs::OpenOptions::new()
         .write(true)

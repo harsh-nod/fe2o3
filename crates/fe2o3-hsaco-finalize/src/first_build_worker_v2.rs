@@ -51,6 +51,7 @@ pub struct InertFirstBuildWorkerV2EvidenceV1 {
     worker: WorkerMeasurementV1,
     plan: MultiInputLinkPlanV1,
     candidate: InertWorkerExecutionV1,
+    authorized_request_bytes: Vec<u8>,
     authorized: InertCompilerHandoffExecutionV2,
 }
 
@@ -102,6 +103,11 @@ impl InertFirstBuildWorkerV2EvidenceV1 {
 
     pub const fn authorized(&self) -> &InertCompilerHandoffExecutionV2 {
         &self.authorized
+    }
+
+    /// Exact canonical Worker V2 request bytes used by the authorized execution.
+    pub fn authorized_request_bytes(&self) -> &[u8] {
+        &self.authorized_request_bytes
     }
 
     pub const fn authorized_request_id(&self) -> &[u8; 32] {
@@ -337,6 +343,10 @@ pub fn execute_reproducible_first_build_worker_v2(
         exact_output,
     )
     .map_err(FirstBuildWorkerV2Error::RequestConstruction)?;
+    let authorized_request_bytes = authorized_request
+        .sealed_request()
+        .canonical_bytes()
+        .to_vec();
     let authorized = worker
         .execute_compiler_handoff_v2(&authorized_request, limits)
         .map_err(FirstBuildWorkerV2Error::AuthorizedExecution)?;
@@ -371,6 +381,7 @@ pub fn execute_reproducible_first_build_worker_v2(
         worker: worker.measurement().clone(),
         plan,
         candidate,
+        authorized_request_bytes,
         authorized,
     })
 }
