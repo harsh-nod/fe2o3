@@ -10,7 +10,7 @@
 //! canonical identifiers, bounded resources, and well-formed synchronization
 //! edges. Every dynamic claim remains in [`VerificationReport::obligations`].
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::BTreeSet;
 
 pub const SYNCHRONIZATION_V2_MAGIC: [u8; 8] = *b"F2SYNCV2";
 pub const SYNCHRONIZATION_V2_VERSION: u16 = 2;
@@ -681,13 +681,17 @@ impl SynchronizationModuleV2 {
             total_lds = total_lds
                 .checked_add(u64::from(allocation.bytes))
                 .ok_or(ValidationError::ArithmeticOverflow)?;
-            obligations.insert(VerifierObligation::LdsBankMapping {
-                allocation: allocation.id,
-                bank_count: allocation.bank_count,
-                bank_width: allocation.bank_width,
-                element_stride: allocation.element_stride,
-                swizzle: allocation.swizzle,
-            });
+            insert_obligation(
+                &mut obligations,
+                VerifierObligation::LdsBankMapping {
+                    allocation: allocation.id,
+                    bank_count: allocation.bank_count,
+                    bank_width: allocation.bank_width,
+                    element_stride: allocation.element_stride,
+                    swizzle: allocation.swizzle,
+                },
+                limits,
+            )?;
         }
         let lds_limit = limits.max_total_lds_bytes.min(self.target.max_lds_bytes());
         check_limit(Resource::TotalLdsBytes, total_lds, u64::from(lds_limit))?;
@@ -707,18 +711,26 @@ impl SynchronizationModuleV2 {
                 event.participation.convergence,
                 ConvergenceContract::UniformRequired | ConvergenceContract::ExplicitMask
             ) {
-                obligations.insert(VerifierObligation::UniformParticipation {
-                    event: event.id,
-                    group: event.participation.group,
-                    expected_participants: event.participation.expected_participants,
-                    active_mask: event.participation.active_mask,
-                });
+                insert_obligation(
+                    &mut obligations,
+                    VerifierObligation::UniformParticipation {
+                        event: event.id,
+                        group: event.participation.group,
+                        expected_participants: event.participation.expected_participants,
+                        active_mask: event.participation.active_mask,
+                    },
+                    limits,
+                )?;
             }
             if event.participation.group == GroupKind::CooperativeGrid {
-                obligations.insert(VerifierObligation::CooperativeParticipation {
-                    event: event.id,
-                    expected_participants: event.participation.expected_participants,
-                });
+                insert_obligation(
+                    &mut obligations,
+                    VerifierObligation::CooperativeParticipation {
+                        event: event.id,
+                        expected_participants: event.participation.expected_participants,
+                    },
+                    limits,
+                )?;
             }
         }
 
@@ -736,14 +748,18 @@ impl SynchronizationModuleV2 {
             let edge_index =
                 u32::try_from(index).map_err(|_| ValidationError::ArithmeticOverflow)?;
             validate_edge(edge_index, edge, self)?;
-            obligations.insert(VerifierObligation::HappensBefore {
-                edge: edge_index,
-                before: edge.before,
-                after: edge.after,
-                kind: edge.kind.clone(),
-                scope: edge.scope,
-                domains: edge.domains,
-            });
+            insert_obligation(
+                &mut obligations,
+                VerifierObligation::HappensBefore {
+                    edge: edge_index,
+                    before: edge.before,
+                    after: edge.after,
+                    kind: edge.kind.clone(),
+                    scope: edge.scope,
+                    domains: edge.domains,
+                },
+                limits,
+            )?;
         }
 
         let reachability = Reachability::new(self)?;
@@ -761,14 +777,18 @@ impl SynchronizationModuleV2 {
                     continue;
                 }
                 if left_access.atomic && right_access.atomic {
-                    obligations.insert(VerifierObligation::ScopeCompatibility {
-                        first: left.id,
-                        second: right.id,
-                        required_scope: required_pair_scope(
-                            left.participation.group,
-                            right.participation.group,
-                        ),
-                    });
+                    insert_obligation(
+                        &mut obligations,
+                        VerifierObligation::ScopeCompatibility {
+                            first: left.id,
+                            second: right.id,
+                            required_scope: required_pair_scope(
+                                left.participation.group,
+                                right.participation.group,
+                            ),
+                        },
+                        limits,
+                    )?;
                     continue;
                 }
                 if !(left_access.writes || right_access.writes) {
@@ -777,12 +797,16 @@ impl SynchronizationModuleV2 {
                 let domain = domains_for(left_access.address_space);
                 let ordered = reachability.path_covers(left.id, right.id, domain)
                     || reachability.path_covers(right.id, left.id, domain);
-                obligations.insert(VerifierObligation::NonAtomicConflict {
-                    first: left.id,
-                    second: right.id,
-                    address_space: left_access.address_space,
-                    structurally_ordered: ordered,
-                });
+                insert_obligation(
+                    &mut obligations,
+                    VerifierObligation::NonAtomicConflict {
+                        first: left.id,
+                        second: right.id,
+                        address_space: left_access.address_space,
+                        structurally_ordered: ordered,
+                    },
+                    limits,
+                )?;
             }
         }
 
@@ -1093,6 +1117,7 @@ fn valid_region(
 
 fn validate_fence(id: EventId, fence: &Fence) -> Result<(), ValidationError> {
     if fence.ordering == MemoryOrdering::Relaxed
+        || fence.domains == MemoryDomains::NONE
         || (fence.domains.contains(AddressSpace::Lds)
             && fence.scope.rank() > MemoryScope::Workgroup.rank())
     {
@@ -1102,7 +1127,7 @@ fn validate_fence(id: EventId, fence: &Fence) -> Result<(), ValidationError> {
 }
 
 fn validate_barrier(event: &Event, barrier: &Barrier) -> Result<(), ValidationError> {
-    if barrier.ordering == MemoryOrdering::Relaxed {
+    if barrier.ordering == MemoryOrdering::Relaxed || barrier.domains == MemoryDomains::NONE {
         return Err(ValidationError::InvalidBarrier(event.id));
     }
     match barrier.kind {
@@ -1110,7 +1135,6 @@ fn validate_barrier(event: &Event, barrier: &Barrier) -> Result<(), ValidationEr
             if event.participation.group != GroupKind::Subgroup
                 || event.participation.convergence == ConvergenceContract::NotRequired
                 || barrier.scope != MemoryScope::Wavefront
-                || barrier.domains.contains(AddressSpace::Lds)
             {
                 return Err(ValidationError::InvalidBarrier(event.id));
             }
@@ -1262,7 +1286,12 @@ fn validate_edge(
                 event_scope(before).ok_or(ValidationError::InvalidEdgeEndpointKind(edge_index))?;
             let after_scope =
                 event_scope(after).ok_or(ValidationError::InvalidEdgeEndpointKind(edge_index))?;
-            if edge.scope.rank() > before_scope.rank() || edge.scope.rank() > after_scope.rank() {
+            let participant_scope =
+                required_pair_scope(before.participation.group, after.participation.group);
+            if edge.scope.rank() < participant_scope.rank()
+                || edge.scope.rank() > before_scope.rank()
+                || edge.scope.rank() > after_scope.rank()
+            {
                 return Err(ValidationError::IncompatibleEdgeScope(edge_index));
             }
             let before_domains = event_domains(before)
@@ -1310,6 +1339,7 @@ fn event_scope(event: &Event) -> Option<MemoryScope> {
 fn event_domains(event: &Event) -> Option<MemoryDomains> {
     match &event.kind {
         EventKind::Atomic(atomic) => Some(domains_for(atomic.address_space)),
+        EventKind::NonAtomic(access) => Some(domains_for(access.address_space)),
         EventKind::Fence(fence) => Some(fence.domains),
         EventKind::Barrier(barrier) => Some(barrier.domains),
         _ => None,
@@ -1401,50 +1431,46 @@ fn required_pair_scope(left: GroupKind, right: GroupKind) -> MemoryScope {
 }
 
 struct Reachability {
-    adjacency: BTreeMap<EventId, Vec<(EventId, MemoryDomains)>>,
+    matrix: Vec<u8>,
     event_count: usize,
 }
 
 impl Reachability {
     fn new(module: &SynchronizationModuleV2) -> Result<Self, ValidationError> {
-        let mut adjacency: BTreeMap<EventId, Vec<(EventId, MemoryDomains)>> = BTreeMap::new();
+        let event_count = module.events.len();
+        let cells = event_count
+            .checked_mul(event_count)
+            .ok_or(ValidationError::ArithmeticOverflow)?;
+        let mut matrix = Vec::new();
+        matrix
+            .try_reserve_exact(cells)
+            .map_err(|_| ValidationError::ArithmeticOverflow)?;
+        matrix.resize(cells, 0);
+        let mut outgoing = vec![Vec::<(usize, u8)>::new(); event_count];
         for edge in &module.edges {
-            adjacency
-                .entry(edge.before)
-                .or_default()
-                .push((edge.after, edge.domains));
+            outgoing[edge.before.0 as usize].push((edge.after.0 as usize, edge.domains.bits()));
+        }
+        for source in (0..event_count).rev() {
+            for &(next, edge_domains) in &outgoing[source] {
+                matrix[source * event_count + next] |= edge_domains;
+                for target in (next + 1)..event_count {
+                    let propagated = edge_domains & matrix[next * event_count + target];
+                    matrix[source * event_count + target] |= propagated;
+                }
+            }
         }
         Ok(Self {
-            adjacency,
-            event_count: module.events.len(),
+            matrix,
+            event_count,
         })
     }
 
     fn path_covers(&self, from: EventId, to: EventId, required: MemoryDomains) -> bool {
-        if from >= to {
+        if from >= to || to.0 as usize >= self.event_count {
             return false;
         }
-        let mut seen = vec![false; self.event_count];
-        let mut queue = VecDeque::from([from]);
-        while let Some(current) = queue.pop_front() {
-            let Some(next) = self.adjacency.get(&current) else {
-                continue;
-            };
-            for &(candidate, domains) in next {
-                if domains.bits() & required.bits() != required.bits() {
-                    continue;
-                }
-                if candidate == to {
-                    return true;
-                }
-                let index = candidate.0 as usize;
-                if index < seen.len() && !seen[index] {
-                    seen[index] = true;
-                    queue.push_back(candidate);
-                }
-            }
-        }
-        false
+        let domains = self.matrix[from.0 as usize * self.event_count + to.0 as usize];
+        domains & required.bits() == required.bits()
     }
 }
 
@@ -2204,6 +2230,19 @@ fn check_limit(resource: Resource, observed: u64, limit: u64) -> Result<(), Vali
     } else {
         Ok(())
     }
+}
+
+fn insert_obligation(
+    obligations: &mut BTreeSet<VerifierObligation>,
+    obligation: VerifierObligation,
+    limits: &SynchronizationLimits,
+) -> Result<(), ValidationError> {
+    obligations.insert(obligation);
+    check_limit(
+        Resource::Obligations,
+        usize_u64(obligations.len())?,
+        u64::from(limits.max_obligations),
+    )
 }
 
 fn check_decode_limit(resource: Resource, observed: u64, limit: u64) -> Result<(), DecodeError> {
