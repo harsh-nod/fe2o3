@@ -77,6 +77,9 @@ fn configured_native_worker_uses_authenticated_identity_probe() {
     let worker =
         AuthenticatedPhysicalMachineEffectWorkerV1::open(&path, candidate.policy(), native_limits)
             .unwrap();
+    worker
+        .verify_deployed_no_fork_profile_for_test(native_limits)
+        .unwrap();
     assert_eq!(worker.policy(), candidate.policy());
     assert_eq!(worker.analyzer_identity(), candidate.analyzer_identity());
     assert_eq!(worker.toolchain_identity(), candidate.toolchain_identity());

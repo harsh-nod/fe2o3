@@ -25,6 +25,7 @@ endif()
 
 find_package(LLVM REQUIRED CONFIG NO_DEFAULT_PATH PATHS "${LLVM_DIR}")
 find_package(LLD REQUIRED CONFIG NO_DEFAULT_PATH PATHS "${LLD_DIR}")
+find_package(Threads REQUIRED)
 
 file(REAL_PATH "${LLVM_DIR}" FE2O3_REAL_LLVM_DIR)
 file(REAL_PATH "${LLD_DIR}" FE2O3_REAL_LLD_DIR)
@@ -194,7 +195,8 @@ target_compile_definitions(fe2o3-llvm-link-worker PRIVATE
   FE2O3_WORKER_BUILD_ID="${FE2O3_WORKER_MEASUREMENT}")
 target_compile_options(fe2o3-llvm-link-worker PRIVATE -Wall -Wextra -Wpedantic
   -Werror -Wno-unused-parameter -fno-exceptions -fno-rtti)
-target_link_libraries(fe2o3-llvm-link-worker PRIVATE fe2o3_worker_pipeline)
+target_link_libraries(fe2o3-llvm-link-worker PRIVATE fe2o3_worker_pipeline
+  Threads::Threads)
 
 include(CTest)
 if(BUILD_TESTING)

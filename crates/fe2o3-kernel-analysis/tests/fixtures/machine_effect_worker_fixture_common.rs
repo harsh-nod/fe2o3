@@ -163,6 +163,33 @@ fn analysis_response(bytes: Vec<u8>, control_challenge: [u8; 32]) {
                     std::process::exit(83);
                 }
             }
+            let status = std::fs::read_to_string("/proc/self/status").unwrap();
+            let field = |name: &str| {
+                status
+                    .lines()
+                    .find_map(|line| line.strip_prefix(name))
+                    .map(str::trim)
+            };
+            let uids = field("Uid:")
+                .map(|value| {
+                    value
+                        .split_ascii_whitespace()
+                        .map(str::parse::<u32>)
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .and_then(Result::ok);
+            if uids.as_deref().is_none_or(|uids| {
+                uids.len() != 4 || uids[0] == 0 || !uids.iter().all(|uid| *uid == uids[0])
+            })
+                || field("CapInh:") != Some("0000000000000000")
+                || field("CapPrm:") != Some("0000000000000000")
+                || field("CapEff:") != Some("0000000000000000")
+                || field("CapAmb:") != Some("0000000000000000")
+                || field("NoNewPrivs:") != Some("1")
+                || field("Threads:") != Some("1")
+            {
+                std::process::exit(86);
+            }
         }
         11 => {
             let escaped = Command::new("/bin/sh")

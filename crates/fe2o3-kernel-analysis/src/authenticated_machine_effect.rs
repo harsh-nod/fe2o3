@@ -38,6 +38,7 @@ const IDENTITY_RESPONSE_DOMAIN: &[u8] =
 const WORKER_READY_DOMAIN: &[u8] = b"FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-WORKER-READY/V1\0";
 const WORKER_DONE_DOMAIN: &[u8] = b"FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-WORKER-DONE/V1\0";
 const WORKER_ACK_DOMAIN: &[u8] = b"FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-WORKER-ACK/V1\0";
+const CONTAINMENT_RESPONSE: &[u8] = b"FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-CONTAINMENT-OK/V1\0";
 const SCHEMA_VERSION: u16 = 1;
 
 pub const MAX_PHYSICAL_MACHINE_EFFECT_WORKER_BYTES_V1: u64 = 512 * 1024 * 1024;
@@ -512,8 +513,9 @@ mod platform {
     use rustix::{
         fs::{MemfdFlags, Mode, OFlags, SealFlags},
         process::{
-            Pid, Resource, Rlimit, Signal, geteuid, kill_process, kill_process_group, prlimit,
+            Pid, Resource, Rlimit, Signal, getrlimit, kill_process, kill_process_group, setrlimit,
         },
+        thread::set_no_new_privs,
     };
     use std::{
         collections::{BTreeMap, BTreeSet},
@@ -688,6 +690,29 @@ mod platform {
             &self.descriptor_path
         }
 
+        #[doc(hidden)]
+        pub fn verify_deployed_no_fork_profile_for_test(
+            &self,
+            limits: AuthenticatedPhysicalMachineEffectLimitsV1,
+        ) -> Result<(), AuthenticatedPhysicalMachineEffectErrorV1> {
+            let challenge = fresh_challenge()?;
+            let execution = self.run(
+                "--machine-effects-containment-probe-v1",
+                &[0],
+                challenge,
+                limits,
+                Some(self.policy.runtime_closure),
+            )?;
+            validate_success(&execution.capture)?;
+            if execution.capture.stdout.bytes != CONTAINMENT_RESPONSE {
+                return Err(process_error(
+                    AuthenticatedPhysicalMachineEffectErrorKindV1::ControlHandshake,
+                    &execution.capture,
+                ));
+            }
+            Ok(())
+        }
+
         pub fn analyze(
             &self,
             payload: Vec<u8>,
@@ -810,19 +835,20 @@ mod platform {
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .process_group(0);
+            configure_worker_pre_exec(&mut command);
             let mut child = command.spawn().map_err(|error| {
                 AuthenticatedPhysicalMachineEffectErrorV1::detail(
                     AuthenticatedPhysicalMachineEffectErrorKindV1::Spawn,
                     error,
                 )
             })?;
-            if let Err(error) = configure_worker_limits(&child) {
+            let stderr = child.stderr.take().expect("worker stderr is piped");
+            let stderr = await_worker_ready(&mut child, stderr, challenge, deadline)?;
+            if let Err(error) = validate_worker_security_profile(child.id()) {
                 terminate_process_tree(&mut child, &BTreeSet::new());
                 let _ = child.wait();
                 return Err(error);
             }
-            let stderr = child.stderr.take().expect("worker stderr is piped");
-            let stderr = await_worker_ready(&mut child, stderr, challenge, deadline)?;
             let mut observation = match observe_process(child.id(), self.policy.executable) {
                 Ok(observation) => observation,
                 Err(error) => {
@@ -1222,65 +1248,138 @@ mod platform {
         })
     }
 
-    fn configure_worker_limits(
-        child: &Child,
-    ) -> Result<(), AuthenticatedPhysicalMachineEffectErrorV1> {
-        let pid = Pid::from_child(child);
-        for (resource, value) in [
-            (Resource::As, WORKER_ADDRESS_SPACE_BYTES),
-            (Resource::Data, WORKER_DATA_BYTES),
-            (Resource::Fsize, WORKER_FILE_BYTES),
-            (Resource::Core, 0),
-            (Resource::Nproc, 0),
-        ] {
-            prlimit(
-                Some(pid),
-                resource,
-                Rlimit {
-                    current: Some(value),
-                    maximum: Some(value),
-                },
-            )
-            .map_err(|error| {
-                AuthenticatedPhysicalMachineEffectErrorV1::detail(
-                    AuthenticatedPhysicalMachineEffectErrorKindV1::ConfigureResourceLimits,
-                    error,
-                )
-            })?;
+    #[allow(unsafe_code)]
+    fn configure_worker_pre_exec(command: &mut Command) {
+        // Command runs this after fork and before exec. The closure performs
+        // only direct rustix syscall wrappers and stack-only arithmetic.
+        unsafe {
+            command.pre_exec(|| {
+                set_no_new_privs(true).map_err(io::Error::from)?;
+                for (resource, bound) in [
+                    (Resource::As, WORKER_ADDRESS_SPACE_BYTES),
+                    (Resource::Data, WORKER_DATA_BYTES),
+                    (Resource::Fsize, WORKER_FILE_BYTES),
+                    (Resource::Core, 0),
+                    (Resource::Nproc, 0),
+                ] {
+                    let existing = getrlimit(resource);
+                    let maximum = existing.maximum.map_or(bound, |value| value.min(bound));
+                    let current = existing.current.map_or(maximum, |value| value.min(maximum));
+                    setrlimit(
+                        resource,
+                        Rlimit {
+                            current: Some(current),
+                            maximum: Some(maximum),
+                        },
+                    )
+                    .map_err(io::Error::from)?;
+                }
+                Ok(())
+            });
         }
-        Ok(())
     }
 
     fn validate_no_fork_profile() -> Result<(), AuthenticatedPhysicalMachineEffectErrorV1> {
-        if geteuid().is_root() {
+        validate_security_profile_for_pid("self", false, false)
+    }
+
+    fn validate_worker_security_profile(
+        pid: u32,
+    ) -> Result<(), AuthenticatedPhysicalMachineEffectErrorV1> {
+        validate_security_profile_for_pid(&pid.to_string(), true, true)
+    }
+
+    fn validate_security_profile_for_pid(
+        pid: &str,
+        require_no_new_privs: bool,
+        require_single_thread: bool,
+    ) -> Result<(), AuthenticatedPhysicalMachineEffectErrorV1> {
+        let status = read_bounded_utf8(format!("/proc/{pid}/status"), MAX_PROC_STATUS_BYTES)
+            .map_err(containment_io)?;
+        let uid_map =
+            read_bounded_utf8(format!("/proc/{pid}/uid_map"), 4096).map_err(containment_io)?;
+        let namespace =
+            std::fs::read_link(format!("/proc/{pid}/ns/user")).map_err(containment_io)?;
+        let parent_namespace = std::fs::read_link("/proc/self/ns/user").map_err(containment_io)?;
+        if namespace != parent_namespace
+            || !security_profile_record_is_valid(
+                &status,
+                &uid_map,
+                require_no_new_privs,
+                require_single_thread,
+            )
+        {
             return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
                 AuthenticatedPhysicalMachineEffectErrorKindV1::ContainmentUnavailable,
             ));
         }
-        let status =
-            read_bounded_utf8("/proc/self/status", MAX_PROC_STATUS_BYTES).map_err(|error| {
-                AuthenticatedPhysicalMachineEffectErrorV1::detail(
-                    AuthenticatedPhysicalMachineEffectErrorKindV1::ContainmentUnavailable,
-                    error,
-                )
-            })?;
+        Ok(())
+    }
+
+    fn security_profile_record_is_valid(
+        status: &str,
+        uid_map: &str,
+        require_no_new_privs: bool,
+        require_single_thread: bool,
+    ) -> bool {
+        let Some(uids) = status
+            .lines()
+            .find_map(|line| line.strip_prefix("Uid:"))
+            .map(|value| {
+                value
+                    .split_ascii_whitespace()
+                    .map(str::parse::<u32>)
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .and_then(Result::ok)
+        else {
+            return false;
+        };
+        if uids.len() != 4 || uids[0] == 0 || !uids.iter().all(|uid| *uid == uids[0]) {
+            return false;
+        }
         for field in ["CapInh:", "CapPrm:", "CapEff:", "CapAmb:"] {
             let Some(value) = status
                 .lines()
                 .find_map(|line| line.strip_prefix(field))
                 .map(str::trim)
             else {
-                return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
-                    AuthenticatedPhysicalMachineEffectErrorKindV1::ContainmentUnavailable,
-                ));
+                return false;
             };
             if u64::from_str_radix(value, 16).ok() != Some(0) {
-                return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
-                    AuthenticatedPhysicalMachineEffectErrorKindV1::ContainmentUnavailable,
-                ));
+                return false;
             }
         }
-        Ok(())
+        if require_no_new_privs
+            && status
+                .lines()
+                .find_map(|line| line.strip_prefix("NoNewPrivs:"))
+                .map(str::trim)
+                != Some("1")
+        {
+            return false;
+        }
+        if require_single_thread
+            && status
+                .lines()
+                .find_map(|line| line.strip_prefix("Threads:"))
+                .map(str::trim)
+                != Some("1")
+        {
+            return false;
+        }
+        let mapping = uid_map
+            .split_ascii_whitespace()
+            .map(str::parse::<u64>)
+            .collect::<Result<Vec<_>, _>>();
+        mapping.ok().as_deref() == Some(&[0, 0, u32::MAX as u64])
+    }
+
+    fn containment_io(error: io::Error) -> AuthenticatedPhysicalMachineEffectErrorV1 {
+        AuthenticatedPhysicalMachineEffectErrorV1::detail(
+            AuthenticatedPhysicalMachineEffectErrorKindV1::ContainmentUnavailable,
+            error,
+        )
     }
 
     fn process_start_ticks(pid: u32) -> Result<u64, AuthenticatedPhysicalMachineEffectErrorV1> {
@@ -2113,6 +2212,7 @@ mod platform {
             let (digest, _, length) = hash_runtime_file(&mut file, snapshot.size).unwrap();
             let mut retained = [RuntimeFile {
                 file,
+                key: (1, 2, 3),
                 path: path.to_string_lossy().into_owned(),
                 snapshot,
                 digest,
@@ -2131,6 +2231,63 @@ mod platform {
             drop(writer);
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
             std::fs::remove_file(path).unwrap();
+        }
+
+        #[test]
+        fn security_profile_rejects_root_credentials_capabilities_userns_and_threads() {
+            let valid = "Uid:\t1002\t1002\t1002\t1002\n\
+                         CapInh:\t0000000000000000\n\
+                         CapPrm:\t0000000000000000\n\
+                         CapEff:\t0000000000000000\n\
+                         CapAmb:\t0000000000000000\n\
+                         NoNewPrivs:\t1\n\
+                         Threads:\t1\n";
+            let initial_map = "0 0 4294967295\n";
+            assert!(security_profile_record_is_valid(
+                valid,
+                initial_map,
+                true,
+                true
+            ));
+            assert!(!security_profile_record_is_valid(
+                &valid.replace("Uid:\t1002\t1002\t1002\t1002", "Uid:\t0\t0\t0\t0"),
+                initial_map,
+                true,
+                true
+            ));
+            assert!(!security_profile_record_is_valid(
+                &valid.replace(
+                    "Uid:\t1002\t1002\t1002\t1002",
+                    "Uid:\t1002\t1002\t1003\t1002"
+                ),
+                initial_map,
+                true,
+                true
+            ));
+            assert!(!security_profile_record_is_valid(
+                &valid.replace("CapEff:\t0000000000000000", "CapEff:\t1"),
+                initial_map,
+                true,
+                true
+            ));
+            assert!(!security_profile_record_is_valid(
+                &valid.replace("NoNewPrivs:\t1", "NoNewPrivs:\t0"),
+                initial_map,
+                true,
+                true
+            ));
+            assert!(!security_profile_record_is_valid(
+                &valid.replace("Threads:\t1", "Threads:\t2"),
+                initial_map,
+                true,
+                true
+            ));
+            assert!(!security_profile_record_is_valid(
+                valid,
+                "0 1002 1\n",
+                true,
+                true
+            ));
         }
     }
 }

@@ -6,13 +6,21 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <limits>
 #include <optional>
+#include <pthread.h>
+#include <sched.h>
+#include <signal.h>
 #include <string>
+#include <sys/fsuid.h>
+#include <sys/prctl.h>
 #include <sys/resource.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <vector>
 
 #ifndef FE2O3_LLVM_BUILD_ID
@@ -37,6 +45,8 @@ constexpr char MachineEffectDoneDomain[] =
     "FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-WORKER-DONE/V1";
 constexpr char MachineEffectAckDomain[] =
     "FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-WORKER-ACK/V1";
+constexpr char MachineEffectContainmentResponse[] =
+    "FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-CONTAINMENT-OK/V1";
 
 bool setBoundedLimit(int Resource, rlim_t Bound) {
   struct rlimit Existing{};
@@ -56,6 +66,81 @@ bool installMachineEffectResourceLimits() {
          setBoundedLimit(RLIMIT_DATA, MachineEffectDataBytes) &&
          setBoundedLimit(RLIMIT_FSIZE, MachineEffectFileBytes) &&
          setBoundedLimit(RLIMIT_CORE, 0) && setBoundedLimit(RLIMIT_NPROC, 0);
+}
+
+bool limitIsBounded(int Resource, rlim_t Bound, bool RequireExact) {
+  struct rlimit Limit{};
+  if (::getrlimit(Resource, &Limit) != 0)
+    return false;
+  if (RequireExact)
+    return Limit.rlim_cur == Bound && Limit.rlim_max == Bound;
+  return Limit.rlim_cur != RLIM_INFINITY && Limit.rlim_max != RLIM_INFINITY &&
+         Limit.rlim_cur <= Bound && Limit.rlim_max <= Bound;
+}
+
+bool verifyMachineEffectSecurityProfile() {
+  uid_t Real = 0;
+  uid_t Effective = 0;
+  uid_t Saved = 0;
+  if (::getresuid(&Real, &Effective, &Saved) != 0 || Real == 0 ||
+      Real != Effective || Real != Saved ||
+      static_cast<uid_t>(::setfsuid(static_cast<uid_t>(-1))) != Real ||
+      ::prctl(PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) != 1)
+    return false;
+  return limitIsBounded(RLIMIT_AS, MachineEffectAddressSpaceBytes, false) &&
+         limitIsBounded(RLIMIT_DATA, MachineEffectDataBytes, false) &&
+         limitIsBounded(RLIMIT_FSIZE, MachineEffectFileBytes, false) &&
+         limitIsBounded(RLIMIT_CORE, 0, true) &&
+         limitIsBounded(RLIMIT_NPROC, 0, true);
+}
+
+void *threadProbe(void *) { return nullptr; }
+
+int cloneProbe(void *) {
+  (void)::setsid();
+  return 91;
+}
+
+bool reapUnexpectedChild(pid_t Child) {
+  (void)::kill(Child, SIGKILL);
+  int Status = 0;
+  while (::waitpid(Child, &Status, 0) < 0 && errno == EINTR) {
+  }
+  return false;
+}
+
+bool processCreationIsDenied() {
+  errno = 0;
+  pid_t Forked = ::fork();
+  if (Forked == 0) {
+    pid_t Second = ::fork();
+    if (Second == 0) {
+      (void)::setsid();
+      _exit(92);
+    }
+    _exit(93);
+  }
+  if (Forked > 0)
+    return reapUnexpectedChild(Forked);
+  if (errno != EAGAIN)
+    return false;
+
+  std::array<uint8_t, 1024 * 1024> Stack{};
+  errno = 0;
+  pid_t Cloned =
+      ::clone(cloneProbe, Stack.data() + Stack.size(), SIGCHLD, nullptr);
+  if (Cloned >= 0)
+    return reapUnexpectedChild(Cloned);
+  if (errno != EAGAIN)
+    return false;
+
+  pthread_t Thread{};
+  int ThreadResult = ::pthread_create(&Thread, nullptr, threadProbe, nullptr);
+  if (ThreadResult == 0) {
+    (void)::pthread_join(Thread, nullptr);
+    return false;
+  }
+  return ThreadResult == EAGAIN;
 }
 
 bool readBoundedStdin(std::vector<uint8_t> &Bytes) {
@@ -223,15 +308,24 @@ int main(int ArgumentCount, char **ArgumentValues) {
       ArgumentCount == 4 &&
       std::strcmp(ArgumentValues[1],
                   "--machine-effects-gfx942-identities-v1") == 0;
+  bool PhysicalMachineEffectContainment =
+      ArgumentCount == 4 &&
+      std::strcmp(ArgumentValues[1],
+                  "--machine-effects-containment-probe-v1") == 0;
   if (ArgumentCount != 1 && !PhysicalMachineEffect &&
-      !PhysicalMachineEffectIdentity)
+      !PhysicalMachineEffectContainment && !PhysicalMachineEffectIdentity)
     return 64;
-  if ((PhysicalMachineEffect || PhysicalMachineEffectIdentity) &&
-      !installMachineEffectResourceLimits())
+  bool AuthenticatedMachineEffect = PhysicalMachineEffect ||
+                                    PhysicalMachineEffectIdentity ||
+                                    PhysicalMachineEffectContainment;
+  if (AuthenticatedMachineEffect && (!installMachineEffectResourceLimits() ||
+                                     !verifyMachineEffectSecurityProfile()))
+    return 70;
+  if (PhysicalMachineEffectContainment && !processCreationIsDenied())
     return 70;
   std::optional<std::array<uint8_t, 32>> ControlChallenge;
   std::optional<size_t> RequestBytes;
-  if (PhysicalMachineEffect || PhysicalMachineEffectIdentity) {
+  if (AuthenticatedMachineEffect) {
     ControlChallenge = parseControlChallenge(ArgumentValues[2]);
     RequestBytes = parseRequestBytes(ArgumentValues[3]);
     if (!ControlChallenge || !RequestBytes ||
@@ -251,11 +345,18 @@ int main(int ArgumentCount, char **ArgumentValues) {
     }
     return v1DecodeFailure("worker request exceeds byte bound");
   }
-  if (PhysicalMachineEffect || PhysicalMachineEffectIdentity) {
-    int Result =
-        PhysicalMachineEffect
-            ? runPhysicalMachineEffect(Bytes, *ControlChallenge)
-            : runPhysicalMachineEffectIdentity(Bytes, *ControlChallenge);
+  if (AuthenticatedMachineEffect) {
+    int Result = 0;
+    if (PhysicalMachineEffect)
+      Result = runPhysicalMachineEffect(Bytes, *ControlChallenge);
+    else if (PhysicalMachineEffectIdentity)
+      Result = runPhysicalMachineEffectIdentity(Bytes, *ControlChallenge);
+    else if (Bytes != std::vector<uint8_t>{0} ||
+             std::fwrite(MachineEffectContainmentResponse, 1,
+                         sizeof(MachineEffectContainmentResponse),
+                         stdout) != sizeof(MachineEffectContainmentResponse) ||
+             std::fflush(stdout) != 0)
+      Result = 70;
     if (Result != 0)
       return Result;
     if (!writeControl(MachineEffectDoneDomain, *ControlChallenge) ||
