@@ -1261,13 +1261,19 @@ fn worker_v2_general_v3_alpha_zeta_build_links_and_validate_backend_witnesses() 
         String::from_utf8_lossy(&run.stderr)
     );
     let bytes = assert_published_worker_v2_cov6_kernels(&target.join("fe2o3"), &["alpha", "zeta"]);
-    assert_repository_compiler_evidence_golden(
-        &workspace,
-        &worker,
-        &worker_build_identity,
-        &llvm_build_identity,
-        &bytes,
-    );
+    match std::env::var("FE2O3_NON_PRODUCTION_COMPILER_TRANSITION_OBSERVATION_V1") {
+        Err(std::env::VarError::NotPresent) => assert_repository_compiler_evidence_golden(
+            &workspace,
+            &worker,
+            &worker_build_identity,
+            &llvm_build_identity,
+            &bytes,
+        ),
+        Ok(value) if value == "observe-without-golden-acceptance" => {}
+        Ok(_) | Err(std::env::VarError::NotUnicode(_)) => {
+            panic!("invalid non-production compiler transition observation mode")
+        }
+    }
     export_alpha_zeta_evidence(&bytes);
 }
 

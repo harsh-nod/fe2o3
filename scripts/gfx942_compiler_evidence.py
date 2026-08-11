@@ -1024,6 +1024,10 @@ def build_and_generate(
             "ROCM_PATH": "/opt/rocm-7.2.4",
         }
     )
+    if observe_candidate:
+        generation_environment[
+            "FE2O3_NON_PRODUCTION_COMPILER_TRANSITION_OBSERVATION_V1"
+        ] = "observe-without-golden-acceptance"
     build_test = run_command(
         [
             os.fspath(tools["cargo"].path),
