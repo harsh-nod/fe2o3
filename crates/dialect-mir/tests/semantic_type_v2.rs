@@ -1389,13 +1389,22 @@ fn build_nested_niche(
             },
         },
     )?;
+    let tuple = builder.intern(
+        "([valid-u8;2],)",
+        SemanticTypeNodeV2 {
+            layout: SemanticTypeLayoutV2::sized(2, 1),
+            kind: SemanticTypeKindV2::Tuple {
+                fields: vec![unnamed(0, array)],
+            },
+        },
+    )?;
     let wrapper = builder.intern(
         "Wrapper",
         SemanticTypeNodeV2 {
             layout: SemanticTypeLayoutV2::sized(2, 1),
             kind: SemanticTypeKindV2::Struct {
                 identity: "crate::Wrapper".into(),
-                fields: vec![named("values", 0, array)],
+                fields: vec![named("values", 0, tuple)],
             },
         },
     )?;
@@ -1436,9 +1445,160 @@ fn build_nested_niche(
     builder.finish(root)
 }
 
+#[derive(Clone, Copy)]
+enum UnionNichePath {
+    Direct,
+    NestedStruct,
+    NestedArray,
+}
+
+fn build_union_niche(
+    path_kind: UnionNichePath,
+) -> Result<SemanticTypeGraphV2, SemanticTypeGraphErrorV2> {
+    let mut builder = SemanticTypeGraphBuilderV2::new(budgets());
+    let unit = builder.intern(
+        "unit",
+        SemanticTypeNodeV2 {
+            layout: SemanticTypeLayoutV2::sized(0, 1),
+            kind: SemanticTypeKindV2::Unit,
+        },
+    )?;
+    let nonzero = builder.intern(
+        "NonZeroU8",
+        validity_scalar(
+            SemanticScalarV2::Int {
+                signed: false,
+                bits: 8,
+            },
+            1,
+            nonzero_u8_ranges(),
+        ),
+    )?;
+    let unrestricted = builder.intern(
+        "u8",
+        scalar(
+            SemanticScalarV2::Int {
+                signed: false,
+                bits: 8,
+            },
+            1,
+        ),
+    )?;
+    let union = builder.intern(
+        "NonZeroOrByte",
+        SemanticTypeNodeV2 {
+            layout: SemanticTypeLayoutV2::sized(1, 1),
+            kind: SemanticTypeKindV2::Union {
+                identity: "NonZeroOrByte".into(),
+                fields: vec![
+                    named("nonzero", 0, nonzero),
+                    named("unrestricted", 0, unrestricted),
+                ],
+            },
+        },
+    )?;
+    let (payload, path, expected_offset, size) = match path_kind {
+        UnionNichePath::Direct => (
+            union,
+            vec![
+                SemanticNichePathComponentV2::Field(0),
+                SemanticNichePathComponentV2::Field(0),
+            ],
+            0,
+            1,
+        ),
+        UnionNichePath::NestedStruct => {
+            let wrapper = builder.intern(
+                "UnionWrapper",
+                SemanticTypeNodeV2 {
+                    layout: SemanticTypeLayoutV2::sized(1, 1),
+                    kind: SemanticTypeKindV2::Struct {
+                        identity: "UnionWrapper".into(),
+                        fields: vec![named("inner", 0, union)],
+                    },
+                },
+            )?;
+            (
+                wrapper,
+                vec![
+                    SemanticNichePathComponentV2::Field(0),
+                    SemanticNichePathComponentV2::Field(0),
+                    SemanticNichePathComponentV2::Field(0),
+                ],
+                0,
+                1,
+            )
+        }
+        UnionNichePath::NestedArray => {
+            let array = builder.intern(
+                "[NonZeroOrByte;2]",
+                SemanticTypeNodeV2 {
+                    layout: SemanticTypeLayoutV2::sized(2, 1),
+                    kind: SemanticTypeKindV2::Array {
+                        element: union,
+                        length: 2,
+                    },
+                },
+            )?;
+            (
+                array,
+                vec![
+                    SemanticNichePathComponentV2::Field(0),
+                    SemanticNichePathComponentV2::ArrayElement(1),
+                    SemanticNichePathComponentV2::Field(0),
+                ],
+                1,
+                2,
+            )
+        }
+    };
+    let root = builder.intern(
+        "OptionUnionPayload",
+        SemanticTypeNodeV2 {
+            layout: SemanticTypeLayoutV2::sized(size, 1),
+            kind: SemanticTypeKindV2::Enum {
+                identity: "OptionUnionPayload".into(),
+                discriminant: SemanticScalarV2::Int {
+                    signed: false,
+                    bits: 8,
+                },
+                encoding: SemanticEnumEncodingV2::Niche {
+                    source: SemanticNicheSourceV2 {
+                        path,
+                        expected_offset,
+                    },
+                    niche_scalar: SemanticScalarV2::Int {
+                        signed: false,
+                        bits: 8,
+                    },
+                    valid_ranges: nonzero_u8_ranges(),
+                    untagged_variant: 1,
+                    niche_variants_start: 0,
+                    niche_variants_end: 0,
+                    niche_start: 0,
+                },
+                variants: vec![
+                    SemanticVariantV2 {
+                        name: "None".into(),
+                        discriminant: 0,
+                        fields: vec![named("zst", 0, unit)],
+                    },
+                    SemanticVariantV2 {
+                        name: "Some".into(),
+                        discriminant: 1,
+                        fields: vec![named("payload", 0, payload)],
+                    },
+                ],
+            },
+        },
+    )?;
+    builder.finish(root)
+}
+
 fn nested_source() -> SemanticNicheSourceV2 {
     SemanticNicheSourceV2 {
         path: vec![
+            SemanticNichePathComponentV2::Field(0),
             SemanticNichePathComponentV2::Field(0),
             SemanticNichePathComponentV2::Field(0),
             SemanticNichePathComponentV2::ArrayElement(1),
@@ -1468,6 +1628,57 @@ fn niche_source_is_derived_through_nested_payload_layout() {
 }
 
 #[test]
+fn union_fields_cannot_supply_niche_validity() {
+    let expected = SemanticTypeGraphErrorV2::Invalid {
+        key: "OptionUnionPayload".into(),
+        reason: "niche source path cannot traverse a union without authenticated active-field or union-wide validity evidence".into(),
+    };
+    for path in [
+        UnionNichePath::Direct,
+        UnionNichePath::NestedStruct,
+        UnionNichePath::NestedArray,
+    ] {
+        assert_eq!(build_union_niche(path).unwrap_err(), expected);
+        assert_eq!(build_union_niche(path).unwrap_err(), expected);
+    }
+}
+
+#[test]
+fn fifty_thousand_niche_path_oracle_cases_include_unions() {
+    let scalar = SemanticScalarV2::Int {
+        signed: false,
+        bits: 8,
+    };
+    for case in 0..50_000_u32 {
+        match case % 4 {
+            0 => assert!(matches!(
+                build_union_niche(UnionNichePath::Direct),
+                Err(SemanticTypeGraphErrorV2::Invalid { .. })
+            )),
+            1 => assert!(matches!(
+                build_union_niche(UnionNichePath::NestedStruct),
+                Err(SemanticTypeGraphErrorV2::Invalid { .. })
+            )),
+            2 => assert!(matches!(
+                build_union_niche(UnionNichePath::NestedArray),
+                Err(SemanticTypeGraphErrorV2::Invalid { .. })
+            )),
+            _ => {
+                let graph = build_nested_niche(
+                    nested_source(),
+                    scalar,
+                    nonzero_u8_ranges(),
+                    nonzero_u8_ranges(),
+                )
+                .unwrap();
+                let encoded = graph.canonical_bytes().unwrap();
+                SemanticTypeGraphV2::decode_canonical(&encoded, budgets()).unwrap();
+            }
+        }
+    }
+}
+
+#[test]
 fn niche_source_rejects_padding_missing_fields_offsets_scalars_and_ranges() {
     let scalar = SemanticScalarV2::Int {
         signed: false,
@@ -1484,6 +1695,7 @@ fn niche_source_rejects_padding_missing_fields_offsets_scalars_and_ranges() {
         },
         SemanticNicheSourceV2 {
             path: vec![
+                SemanticNichePathComponentV2::Field(0),
                 SemanticNichePathComponentV2::Field(0),
                 SemanticNichePathComponentV2::Field(0),
                 SemanticNichePathComponentV2::ArrayElement(2),

@@ -132,7 +132,7 @@ pub struct SemanticVariantV2 {
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum SemanticNichePathComponentV2 {
-    /// Select a field by declaration index from a variant, tuple, struct, or union.
+    /// Select a field by declaration index from a variant, tuple, or struct.
     Field(u32),
     /// Select an element from an array. The element stride is its sized layout.
     ArrayElement(u64),
@@ -1246,8 +1246,13 @@ fn resolve_niche_source<'graph>(
             (SemanticNichePathComponentV2::Field(index), NicheCursorV2::Node(id)) => {
                 let fields = match &node(context.graph, id)?.kind {
                     SemanticTypeKindV2::Tuple { fields }
-                    | SemanticTypeKindV2::Struct { fields, .. }
-                    | SemanticTypeKindV2::Union { fields, .. } => fields,
+                    | SemanticTypeKindV2::Struct { fields, .. } => fields,
+                    SemanticTypeKindV2::Union { .. } => {
+                        return Err(invalid(
+                            key,
+                            "niche source path cannot traverse a union without authenticated active-field or union-wide validity evidence",
+                        ));
+                    }
                     _ => {
                         return Err(invalid(
                             key,
