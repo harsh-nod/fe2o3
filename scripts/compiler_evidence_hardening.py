@@ -128,10 +128,15 @@ def _restrict_filesystem_with_landlock(
     opened: list[int] = []
     try:
         rules: dict[Path, int] = {
-            root: LANDLOCK_WRITE_ACCESS for root in writable_roots
+            root: (
+                LANDLOCK_WRITE_ACCESS
+                if stat.S_ISDIR(os.stat(root, follow_symlinks=False).st_mode)
+                else LANDLOCK_ACCESS_FS_WRITE_FILE | LANDLOCK_ACCESS_FS_TRUNCATE
+            )
+            for root in writable_roots
         }
         for path in writable_paths:
-            rules[path] = rules.get(path, 0) | LANDLOCK_WRITE_ACCESS
+            rules[path] = rules.get(path, 0) | LANDLOCK_ACCESS_FS_WRITE_FILE
         if readable_paths is not None:
             for path in readable_paths:
                 rules[path] = rules.get(path, 0) | LANDLOCK_ACCESS_FS_READ_FILE
