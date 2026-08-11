@@ -26,7 +26,20 @@ fn run() -> Result<(), Box<dyn Error>> {
         "LD_PRELOAD",
         "LD_LIBRARY_PATH",
         "LD_AUDIT",
+        "LD_PROFILE",
         "GLIBC_TUNABLES",
+        "GCONV_PATH",
+        "HOSTALIASES",
+        "LANG",
+        "LANGUAGE",
+        "LC_ALL",
+        "LOCALDOMAIN",
+        "LOCPATH",
+        "MALLOC_ARENA_MAX",
+        "MALLOC_PERTURB_",
+        "NSS_DISABLE_AUDIT",
+        "RES_OPTIONS",
+        "RESOLV_HOST_CONF",
     ] {
         if std::env::var_os(name).is_some() {
             return Err(format!("loader-sensitive environment survived: {name}").into());

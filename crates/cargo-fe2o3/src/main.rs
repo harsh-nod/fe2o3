@@ -880,25 +880,27 @@ fn scrub_application_environment(child: &mut Command) {
 }
 
 fn is_loader_sensitive_environment(name: &[u8]) -> bool {
-    name.starts_with(b"LD_")
-        || name.starts_with(b"DYLD_")
-        || matches!(
-            name,
-            b"GLIBC_TUNABLES"
-                | b"GCONV_PATH"
-                | b"GETCONF_DIR"
-                | b"HOSTALIASES"
-                | b"LIBPATH"
-                | b"LOCALDOMAIN"
-                | b"LOCPATH"
-                | b"MALLOC_CHECK_"
-                | b"MALLOC_TRACE"
-                | b"NIS_PATH"
-                | b"NLSPATH"
-                | b"RES_OPTIONS"
-                | b"SHLIB_PATH"
-                | b"TZDIR"
-        )
+    const PREFIXES: &[&[u8]] = &[
+        b"LD_", b"DYLD_", b"GLIBC_", b"MALLOC_", b"NSS_", b"LC_", b"RESOLV_",
+    ];
+    const EXACT: &[&[u8]] = &[
+        b"GCONV_PATH",
+        b"GETCONF_DIR",
+        b"HOSTALIASES",
+        b"LANG",
+        b"LANGUAGE",
+        b"LIBC_FATAL_STDERR_",
+        b"LIBPATH",
+        b"LOCALDOMAIN",
+        b"LOCPATH",
+        b"NIS_PATH",
+        b"NLSPATH",
+        b"RES_OPTIONS",
+        b"SHLIB_PATH",
+        b"TZ",
+        b"TZDIR",
+    ];
+    PREFIXES.iter().any(|prefix| name.starts_with(prefix)) || EXACT.contains(&name)
 }
 
 fn parse_runner_u64(value: &OsStr, kind: &str) -> Result<u64, String> {
@@ -1364,10 +1366,18 @@ Agent 2
             b"LD_LIBRARY_PATH",
             b"LD_AUDIT",
             b"GLIBC_TUNABLES",
+            b"GLIBC_PTHREAD_RSEQ",
             b"GCONV_PATH",
+            b"LANG",
+            b"LANGUAGE",
+            b"LC_ALL",
             b"LOCPATH",
+            b"MALLOC_ARENA_MAX",
+            b"MALLOC_PERTURB_",
             b"MALLOC_TRACE",
+            b"NSS_DISABLE_AUDIT",
             b"RES_OPTIONS",
+            b"RESOLV_HOST_CONF",
             b"DYLD_INSERT_LIBRARIES",
         ] {
             assert!(is_loader_sensitive_environment(name), "{name:?}");
