@@ -346,9 +346,10 @@ fn validate_load_segments(
                 ) {
                     return Err(SealedStaticApplicationErrorV1::SegmentLayout);
                 }
-                if (left.flags | right.flags) & (PF_W | PF_X) == (PF_W | PF_X) {
-                    return Err(SealedStaticApplicationErrorV1::SegmentPermissions);
-                }
+                // The sealed-static profile enforces W^X over declared segment bytes and rounded
+                // virtual mappings. Normal static Rust binaries may privately map one raw-disjoint
+                // boundary file page through RX and RW PT_LOAD segments, so this is deliberately
+                // not an alias-level W^X guarantee over rounded file offsets.
             }
         }
     }
@@ -1128,7 +1129,7 @@ mod tests {
     }
 
     #[test]
-    fn validates_page_rounded_load_mappings_and_file_page_alias_permissions() {
+    fn validates_page_rounded_load_mappings_and_segment_byte_permissions() {
         let code = HEADER + 2 * PROGRAM;
         let adjacent_offset = (HEADER + 4 * PROGRAM) as u64;
 
@@ -1148,22 +1149,17 @@ mod tests {
             Err(SealedStaticApplicationErrorV1::SegmentLayout)
         );
 
-        let raw_disjoint_writable_executable_file_alias = [
+        let raw_disjoint_private_file_alias = [
             program(PT_LOAD, PF_R, 0, 0, 0x200, 0x200, 0x1000),
             program(PT_LOAD, PF_R | PF_X, 0x200, 0x1200, 1, 1, 0x1000),
             program(PT_LOAD, PF_R | PF_W, 0x201, 0x2201, 0x200, 0x200, 0x1000),
         ];
-        assert_eq!(
-            validate_load_segments(
-                &raw_disjoint_writable_executable_file_alias,
-                HEADER,
-                0x190,
-                0x1200,
-            ),
-            Err(SealedStaticApplicationErrorV1::SegmentPermissions)
+        assert!(
+            validate_load_segments(&raw_disjoint_private_file_alias, HEADER, 0x190, 0x1200,)
+                .is_ok()
         );
 
-        let mut overlapping_file_alias = raw_disjoint_writable_executable_file_alias;
+        let mut overlapping_file_alias = raw_disjoint_private_file_alias;
         overlapping_file_alias[2].offset = 0x200;
         overlapping_file_alias[2].virtual_address = 0x2200;
         assert_eq!(

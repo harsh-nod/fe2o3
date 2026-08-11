@@ -194,15 +194,18 @@ completion only. Cargo retains and revalidates its private lease through the
 handoff.
 
 The initial image profile is ELF64 x86-64 static executable/static PIE. It
-checks page-rounded PT_LOAD mappings, including writable/executable aliases of
-the same rounded file page, static-PIE dynamic metadata and relocations. At
-most one PT_TLS is admitted when it is well formed and wholly owned by a
-writable, non-executable PT_LOAD; malformed, executable-load-backed, or
-outside-load TLS is rejected. `no_new_privs` plus seccomp admits only the
-controlled initial `execve`, denies later `execve`/`execveat`, and denies
-fork/clone, namespace/session creation, and io_uring. Missing kernel support
-for the required seccomp listener or `close_range(CLOSE_RANGE_CLOEXEC)` fails
-launch without leaving a blocked supervisor.
+checks page-rounded virtual PT_LOAD mappings and enforces W^X over declared
+segment bytes. This is not alias-level W^X over rounded file offsets: normal
+static Rust binaries may privately map raw-disjoint bytes from one boundary
+file page through RX and RW segments. The profile also validates static-PIE
+dynamic metadata and relocations. At most one PT_TLS is admitted when it is
+well formed and wholly owned by a writable, non-executable PT_LOAD; malformed,
+executable-load-backed, or outside-load TLS is rejected. `no_new_privs` plus
+seccomp admits only the controlled initial `execve`, denies later
+`execve`/`execveat`, and denies fork/clone, namespace/session creation, and
+io_uring. Missing kernel support for the required seccomp listener or
+`close_range(CLOSE_RANGE_CLOEXEC)` fails launch without leaving a blocked
+supervisor.
 
 This no-fork/no-re-exec startup boundary does not constrain arbitrary
 same-process behavior. The syscall profile still permits operations including
