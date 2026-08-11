@@ -13,14 +13,14 @@
 use std::collections::BTreeSet;
 
 pub const SYNCHRONIZATION_V2_MAGIC: [u8; 8] = *b"F2SYNCV2";
-pub const SYNCHRONIZATION_V2_VERSION: u16 = 2;
+pub const SYNCHRONIZATION_V2_VERSION: u16 = 3;
 pub const SYNCHRONIZATION_V2_LIMITATIONS: &str = "inert unexported schema; gfx942 wave64 only; \
 no LLVM emission, execution, runtime admission, race-freedom proof, uniformity proof, \
 happens-before proof, bank-conflict proof, or formal-verification claim";
 
 const HEADER_BYTES: u64 = 32;
 const LDS_RECORD_BYTES: u64 = 32;
-const EDGE_RECORD_BYTES: u64 = 20;
+const EDGE_RECORD_BYTES: u64 = 24;
 const EVENT_PREFIX_BYTES: u64 = 28;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -258,6 +258,15 @@ pub struct MemoryRegion {
     pub bytes: u32,
 }
 
+/// Untrusted claim naming the authority that can attest system coherence for
+/// one exact global allocation. Validation emits an authentication obligation;
+/// possession of this value is never itself treated as authority.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct CoherentAllocationClaim {
+    pub allocation: u32,
+    pub authority: u64,
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[repr(u8)]
 pub enum AtomicDialect {
@@ -325,6 +334,7 @@ pub struct AtomicAccess {
     pub scope: MemoryScope,
     pub success_ordering: MemoryOrdering,
     pub failure_ordering: Option<MemoryOrdering>,
+    pub coherent_allocation: Option<CoherentAllocationClaim>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -485,6 +495,21 @@ pub enum SynchronizationEdgeKind {
     SynchronizesWith,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[repr(u8)]
+pub enum EventOutcome {
+    Unconditional = 1,
+    CompareExchangeSuccess = 2,
+    CompareExchangeFailure = 3,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[repr(u8)]
+pub enum ReadFromCondition {
+    NotApplicable = 1,
+    VerifierMustProve = 2,
+}
+
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct SynchronizationEdge {
     pub before: EventId,
@@ -492,6 +517,9 @@ pub struct SynchronizationEdge {
     pub kind: SynchronizationEdgeKind,
     pub scope: MemoryScope,
     pub domains: MemoryDomains,
+    pub before_outcome: EventOutcome,
+    pub after_outcome: EventOutcome,
+    pub read_from: ReadFromCondition,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -546,10 +574,20 @@ pub enum ValidationError {
     UnsupportedPlatformOperation(EventId),
     InvalidAtomicOrdering(EventId),
     InvalidCompareExchangeOrdering(EventId),
+    InvalidCoherentAllocationClaim(EventId),
     InvalidAddressSpace(EventId),
     InvalidScope(EventId),
     InvalidAlignment(EventId),
     InvalidMemoryRegion(EventId),
+    IncompatibleAtomicObject {
+        first: EventId,
+        second: EventId,
+    },
+    IncompatibleAtomicScope {
+        first: EventId,
+        second: EventId,
+        required: MemoryScope,
+    },
     UnknownLdsAllocation {
         event: EventId,
         allocation: LdsAllocationId,
@@ -589,6 +627,9 @@ pub enum VerifierObligation {
         kind: SynchronizationEdgeKind,
         scope: MemoryScope,
         domains: MemoryDomains,
+        before_outcome: EventOutcome,
+        after_outcome: EventOutcome,
+        read_from: ReadFromCondition,
     },
     NonAtomicConflict {
         first: EventId,
@@ -600,6 +641,11 @@ pub enum VerifierObligation {
         first: EventId,
         second: EventId,
         required_scope: MemoryScope,
+    },
+    AuthenticateCoherentAllocation {
+        event: EventId,
+        allocation: u32,
+        authority: u64,
     },
     LdsBankMapping {
         allocation: LdsAllocationId,
@@ -707,6 +753,21 @@ impl SynchronizationModuleV2 {
             }
             validate_participation(event, self.target, limits)?;
             validate_event(event, self, limits)?;
+            if let EventKind::Atomic(AtomicAccess {
+                coherent_allocation: Some(claim),
+                ..
+            }) = &event.kind
+            {
+                insert_obligation(
+                    &mut obligations,
+                    VerifierObligation::AuthenticateCoherentAllocation {
+                        event: event.id,
+                        allocation: claim.allocation,
+                        authority: claim.authority,
+                    },
+                    limits,
+                )?;
+            }
             if matches!(
                 event.participation.convergence,
                 ConvergenceContract::UniformRequired | ConvergenceContract::ExplicitMask
@@ -757,6 +818,9 @@ impl SynchronizationModuleV2 {
                     kind: edge.kind.clone(),
                     scope: edge.scope,
                     domains: edge.domains,
+                    before_outcome: edge.before_outcome,
+                    after_outcome: edge.after_outcome,
+                    read_from: edge.read_from,
                 },
                 limits,
             )?;
@@ -777,15 +841,32 @@ impl SynchronizationModuleV2 {
                     continue;
                 }
                 if left_access.atomic && right_access.atomic {
+                    if !atomic_objects_compatible(left_access, right_access) {
+                        return Err(ValidationError::IncompatibleAtomicObject {
+                            first: left.id,
+                            second: right.id,
+                        });
+                    }
+                    let required_scope = required_access_pair_scope(left_access.address_space);
+                    if left_access
+                        .scope
+                        .is_none_or(|scope| scope.rank() < required_scope.rank())
+                        || right_access
+                            .scope
+                            .is_none_or(|scope| scope.rank() < required_scope.rank())
+                    {
+                        return Err(ValidationError::IncompatibleAtomicScope {
+                            first: left.id,
+                            second: right.id,
+                            required: required_scope,
+                        });
+                    }
                     insert_obligation(
                         &mut obligations,
                         VerifierObligation::ScopeCompatibility {
                             first: left.id,
                             second: right.id,
-                            required_scope: required_pair_scope(
-                                left.participation.group,
-                                right.participation.group,
-                            ),
+                            required_scope,
                         },
                         limits,
                     )?;
@@ -953,6 +1034,16 @@ fn validate_atomic(
         && atomic.scope.rank() > MemoryScope::Workgroup.rank()
     {
         return Err(ValidationError::InvalidScope(id));
+    }
+    match atomic.coherent_allocation {
+        Some(claim)
+            if atomic.address_space == AddressSpace::Global
+                && atomic.scope == MemoryScope::System
+                && claim.allocation == atomic.region.allocation
+                && claim.authority != 0 => {}
+        None if atomic.address_space != AddressSpace::Global
+            || atomic.scope != MemoryScope::System => {}
+        _ => return Err(ValidationError::InvalidCoherentAllocationClaim(id)),
     }
     if atomic.value_type == ScalarType::Bool {
         return Err(ValidationError::InvalidAtomicType(id));
@@ -1267,6 +1358,12 @@ fn validate_edge(
     }
     match edge.kind {
         SynchronizationEdgeKind::ProgramOrder => {
+            if edge.before_outcome != EventOutcome::Unconditional
+                || edge.after_outcome != EventOutcome::Unconditional
+                || edge.read_from != ReadFromCondition::NotApplicable
+            {
+                return Err(ValidationError::InvalidEdgeEndpointKind(edge_index));
+            }
             if before.participation.group != after.participation.group
                 || edge.scope.rank()
                     < required_pair_scope(before.participation.group, after.participation.group)
@@ -1284,15 +1381,21 @@ fn validate_edge(
             }
         }
         SynchronizationEdgeKind::SynchronizesWith => {
-            if !event_has_release(before) || !event_has_acquire(after) {
+            if !event_has_release(before, edge.before_outcome)
+                || !event_has_acquire(after, edge.after_outcome)
+            {
+                return Err(ValidationError::InvalidEdgeEndpointKind(edge_index));
+            }
+            let has_atomic_endpoint = matches!(before.kind, EventKind::Atomic(_))
+                || matches!(after.kind, EventKind::Atomic(_));
+            if has_atomic_endpoint != (edge.read_from == ReadFromCondition::VerifierMustProve) {
                 return Err(ValidationError::InvalidEdgeEndpointKind(edge_index));
             }
             let before_scope =
                 event_scope(before).ok_or(ValidationError::InvalidEdgeEndpointKind(edge_index))?;
             let after_scope =
                 event_scope(after).ok_or(ValidationError::InvalidEdgeEndpointKind(edge_index))?;
-            let participant_scope =
-                required_pair_scope(before.participation.group, after.participation.group);
+            let participant_scope = required_edge_scope(edge.domains);
             if edge.scope.rank() < participant_scope.rank()
                 || edge.scope.rank() > before_scope.rank()
                 || edge.scope.rank() > after_scope.rank()
@@ -1314,21 +1417,29 @@ fn validate_edge(
     Ok(())
 }
 
-fn event_has_release(event: &Event) -> bool {
-    match &event.kind {
-        EventKind::Atomic(atomic) => atomic.success_ordering.has_release(),
-        EventKind::Fence(fence) => fence.ordering.has_release(),
-        EventKind::Barrier(barrier) => barrier.ordering.has_release(),
-        _ => false,
-    }
+fn event_has_release(event: &Event, outcome: EventOutcome) -> bool {
+    event_ordering_for_outcome(event, outcome).is_some_and(MemoryOrdering::has_release)
 }
 
-fn event_has_acquire(event: &Event) -> bool {
+fn event_has_acquire(event: &Event, outcome: EventOutcome) -> bool {
+    event_ordering_for_outcome(event, outcome).is_some_and(MemoryOrdering::has_acquire)
+}
+
+fn event_ordering_for_outcome(event: &Event, outcome: EventOutcome) -> Option<MemoryOrdering> {
     match &event.kind {
-        EventKind::Atomic(atomic) => atomic.success_ordering.has_acquire(),
-        EventKind::Fence(fence) => fence.ordering.has_acquire(),
-        EventKind::Barrier(barrier) => barrier.ordering.has_acquire(),
-        _ => false,
+        EventKind::Atomic(atomic) if atomic.operation.is_compare_exchange() => match outcome {
+            EventOutcome::CompareExchangeSuccess => Some(atomic.success_ordering),
+            EventOutcome::CompareExchangeFailure => atomic.failure_ordering,
+            EventOutcome::Unconditional => None,
+        },
+        EventKind::Atomic(atomic) if outcome == EventOutcome::Unconditional => {
+            Some(atomic.success_ordering)
+        }
+        EventKind::Fence(fence) if outcome == EventOutcome::Unconditional => Some(fence.ordering),
+        EventKind::Barrier(barrier) if outcome == EventOutcome::Unconditional => {
+            Some(barrier.ordering)
+        }
+        _ => None,
     }
 }
 
@@ -1386,6 +1497,9 @@ fn domains_for(address_space: AddressSpace) -> MemoryDomains {
 struct AccessView {
     region: MemoryRegion,
     address_space: AddressSpace,
+    value_type: ScalarType,
+    alignment: u32,
+    scope: Option<MemoryScope>,
     writes: bool,
     atomic: bool,
 }
@@ -1395,16 +1509,44 @@ fn memory_access(event: &Event) -> Option<AccessView> {
         EventKind::Atomic(access) => Some(AccessView {
             region: access.region,
             address_space: access.address_space,
+            value_type: access.value_type,
+            alignment: access.alignment,
+            scope: Some(access.scope),
             writes: !access.operation.is_load(),
             atomic: true,
         }),
         EventKind::NonAtomic(access) => Some(AccessView {
             region: access.region,
             address_space: access.address_space,
+            value_type: access.value_type,
+            alignment: access.alignment,
+            scope: None,
             writes: access.kind.writes(),
             atomic: false,
         }),
         _ => None,
+    }
+}
+
+fn atomic_objects_compatible(left: AccessView, right: AccessView) -> bool {
+    left.address_space == right.address_space
+        && left.region == right.region
+        && left.value_type == right.value_type
+        && left.alignment == right.alignment
+}
+
+fn required_access_pair_scope(address_space: AddressSpace) -> MemoryScope {
+    match address_space {
+        AddressSpace::Lds => MemoryScope::Workgroup,
+        _ => MemoryScope::System,
+    }
+}
+
+fn required_edge_scope(domains: MemoryDomains) -> MemoryScope {
+    if domains.contains(AddressSpace::Global) {
+        MemoryScope::System
+    } else {
+        MemoryScope::Workgroup
     }
 }
 
@@ -1510,7 +1652,10 @@ pub fn encode_synchronization_v2(
         })?;
         writer.u8(edge.scope as u8)?;
         writer.u8(edge.domains.bits())?;
-        writer.u8(0)?;
+        writer.u8(edge.before_outcome as u8)?;
+        writer.u8(edge.after_outcome as u8)?;
+        writer.u8(edge.read_from as u8)?;
+        writer.bytes(&[0; 2])?;
         writer.u64(0)?;
     }
     let payload_len = writer
@@ -1619,7 +1764,10 @@ pub fn decode_synchronization_v2(
         };
         let scope = decode_scope(reader.u8()?)?;
         let domains = MemoryDomains::from_bits(reader.u8()?).ok_or(DecodeError::UnknownTag)?;
-        if reader.u8()? != 0 || reader.u64()? != 0 {
+        let before_outcome = decode_event_outcome(reader.u8()?)?;
+        let after_outcome = decode_event_outcome(reader.u8()?)?;
+        let read_from = decode_read_from(reader.u8()?)?;
+        if reader.array::<2>()? != [0; 2] || reader.u64()? != 0 {
             return Err(DecodeError::NonZeroReserved);
         }
         edges.push(SynchronizationEdge {
@@ -1628,6 +1776,9 @@ pub fn decode_synchronization_v2(
             kind,
             scope,
             domains,
+            before_outcome,
+            after_outcome,
+            read_from,
         });
     }
     if reader.remaining() != 0 {
@@ -1778,7 +1929,18 @@ fn encode_event_kind(writer: &mut Writer, kind: &EventKind) -> Result<(), Valida
             writer.u8(atomic.scope as u8)?;
             writer.u8(atomic.success_ordering as u8)?;
             writer.u8(atomic.failure_ordering.map_or(0, |ordering| ordering as u8))?;
-            writer.u8(0)?;
+            match atomic.coherent_allocation {
+                None => {
+                    writer.u8(0)?;
+                    writer.u32(0)?;
+                    writer.u64(0)?;
+                }
+                Some(claim) => {
+                    writer.u8(1)?;
+                    writer.u32(claim.allocation)?;
+                    writer.u64(claim.authority)?;
+                }
+            }
         }
         EventKind::NonAtomic(access) => {
             writer.u8(2)?;
@@ -1846,9 +2008,19 @@ fn decode_event_kind(reader: &mut Reader<'_>) -> Result<EventKind, DecodeError> 
                 0 => None,
                 tag => Some(decode_ordering(tag)?),
             };
-            if reader.u8()? != 0 {
-                return Err(DecodeError::NonZeroReserved);
-            }
+            let coherent_allocation = match reader.u8()? {
+                0 => {
+                    if reader.u32()? != 0 || reader.u64()? != 0 {
+                        return Err(DecodeError::NonZeroReserved);
+                    }
+                    None
+                }
+                1 => Some(CoherentAllocationClaim {
+                    allocation: reader.u32()?,
+                    authority: reader.u64()?,
+                }),
+                _ => return Err(DecodeError::UnknownTag),
+            };
             Ok(EventKind::Atomic(AtomicAccess {
                 region,
                 dialect,
@@ -1859,6 +2031,7 @@ fn decode_event_kind(reader: &mut Reader<'_>) -> Result<EventKind, DecodeError> 
                 scope,
                 success_ordering,
                 failure_ordering,
+                coherent_allocation,
             }))
         }
         2 => {
@@ -2053,6 +2226,23 @@ fn decode_ordering(tag: u8) -> Result<MemoryOrdering, DecodeError> {
         3 => Ok(MemoryOrdering::Release),
         4 => Ok(MemoryOrdering::AcquireRelease),
         5 => Ok(MemoryOrdering::SequentiallyConsistent),
+        _ => Err(DecodeError::UnknownTag),
+    }
+}
+
+fn decode_event_outcome(tag: u8) -> Result<EventOutcome, DecodeError> {
+    match tag {
+        1 => Ok(EventOutcome::Unconditional),
+        2 => Ok(EventOutcome::CompareExchangeSuccess),
+        3 => Ok(EventOutcome::CompareExchangeFailure),
+        _ => Err(DecodeError::UnknownTag),
+    }
+}
+
+fn decode_read_from(tag: u8) -> Result<ReadFromCondition, DecodeError> {
+    match tag {
+        1 => Ok(ReadFromCondition::NotApplicable),
+        2 => Ok(ReadFromCondition::VerifierMustProve),
         _ => Err(DecodeError::UnknownTag),
     }
 }
