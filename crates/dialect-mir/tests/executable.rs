@@ -222,6 +222,151 @@ fn accepts_dominating_cross_block_values_and_rejects_use_before_definition() {
 }
 
 #[test]
+fn rejects_ssa_values_that_leak_across_sibling_paths() {
+    let (types, bool_id, u32_id) = fixture_types();
+    let define = |value, addend| MirStatement {
+        kind: MirStatementKind::Define {
+            value: MirValueId(value),
+            ty: u32_id,
+            rvalue: MirRvalue::BinaryOp {
+                op: MirBinaryOp::Add,
+                lhs: MirOperand::Value(MirValueId(0)),
+                rhs: MirOperand::Constant(MirConstant {
+                    ty: u32_id,
+                    value: MirConstantValue::Integer(addend),
+                }),
+            },
+        },
+        span: None,
+    };
+    let mut module = MirExecutableModule {
+        version: MirExecutableVersion::V1,
+        target: MirExecutableTarget::gfx942(),
+        types,
+        callables: vec![],
+        functions: vec![MirFunction {
+            identity: "fixture::ssa_diamond".into(),
+            span: None,
+            body: MirBody {
+                form: MirBodyForm::Ssa {
+                    promoted_locals: vec![MirLocalId(1)],
+                },
+                locals: vec![
+                    local(u32_id, MirLocalKind::Return, true),
+                    local(u32_id, MirLocalKind::Argument, false),
+                ],
+                blocks: vec![
+                    MirBasicBlock {
+                        parameters: vec![MirBlockParameter {
+                            value: MirValueId(0),
+                            ty: u32_id,
+                            origin: Some(MirLocalId(1)),
+                        }],
+                        statements: vec![],
+                        terminator: terminator(MirTerminatorKind::SwitchInt {
+                            discr: MirOperand::Constant(MirConstant {
+                                ty: bool_id,
+                                value: MirConstantValue::Bool(true),
+                            }),
+                            targets: vec![(1, MirEdge::new(MirBlockId(1)))],
+                            otherwise: MirEdge::new(MirBlockId(2)),
+                        }),
+                    },
+                    MirBasicBlock {
+                        parameters: vec![],
+                        statements: vec![define(1, 1)],
+                        terminator: terminator(MirTerminatorKind::Goto(MirEdge {
+                            target: MirBlockId(3),
+                            arguments: vec![MirOperand::Value(MirValueId(1))],
+                        })),
+                    },
+                    MirBasicBlock {
+                        parameters: vec![],
+                        statements: vec![define(2, 2)],
+                        terminator: terminator(MirTerminatorKind::Goto(MirEdge {
+                            target: MirBlockId(3),
+                            arguments: vec![MirOperand::Value(MirValueId(2))],
+                        })),
+                    },
+                    MirBasicBlock {
+                        parameters: vec![MirBlockParameter {
+                            value: MirValueId(3),
+                            ty: u32_id,
+                            origin: Some(MirLocalId(1)),
+                        }],
+                        statements: vec![MirStatement {
+                            kind: MirStatementKind::Assign {
+                                place: MirPlace::local(MirLocalId(0), u32_id),
+                                value: MirRvalue::Use(MirOperand::Value(MirValueId(3))),
+                            },
+                            span: None,
+                        }],
+                        terminator: terminator(MirTerminatorKind::Return),
+                    },
+                ],
+                entry: MirBlockId(0),
+            },
+        }],
+    };
+    module.validate().unwrap();
+
+    let MirStatementKind::Define { rvalue, .. } =
+        &mut module.functions[0].body.blocks[2].statements[0].kind
+    else {
+        unreachable!();
+    };
+    let MirRvalue::BinaryOp { lhs, .. } = rvalue else {
+        unreachable!();
+    };
+    *lhs = MirOperand::Value(MirValueId(1));
+    let error = module.validate().unwrap_err();
+    assert_eq!(
+        error.reason(),
+        "SSA value 1 does not dominate this use or is not a prior definition in this block"
+    );
+}
+
+#[test]
+fn rejects_irreducible_executable_control_flow() {
+    let mut module = place_module();
+    let (_, bool_id, _) = fixture_types();
+    let branch = |then_target, otherwise| {
+        terminator(MirTerminatorKind::SwitchInt {
+            discr: MirOperand::Constant(MirConstant {
+                ty: bool_id,
+                value: MirConstantValue::Bool(true),
+            }),
+            targets: vec![(1, MirEdge::new(MirBlockId(then_target)))],
+            otherwise: MirEdge::new(MirBlockId(otherwise)),
+        })
+    };
+    let return_block = module.functions[0].body.blocks.pop().unwrap();
+    module.functions[0].body.blocks = vec![
+        MirBasicBlock {
+            parameters: vec![],
+            statements: vec![],
+            terminator: branch(1, 2),
+        },
+        MirBasicBlock {
+            parameters: vec![],
+            statements: vec![],
+            terminator: terminator(MirTerminatorKind::Goto(MirEdge::new(MirBlockId(2)))),
+        },
+        MirBasicBlock {
+            parameters: vec![],
+            statements: vec![],
+            terminator: branch(1, 3),
+        },
+        return_block,
+    ];
+    let error = module.validate().unwrap_err();
+    assert_eq!(
+        error.reason(),
+        "irreducible control flow in bb1, bb2; entries: bb0 -> bb1, bb0 -> bb2"
+    );
+}
+
+#[test]
 fn rejects_edge_arity_and_type_mismatches() {
     let mut module = ssa_module();
     let MirTerminatorKind::Goto(edge) = &mut module.functions[0].body.blocks[0].terminator.kind
