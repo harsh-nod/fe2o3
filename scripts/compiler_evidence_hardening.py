@@ -610,6 +610,7 @@ def compare_labeled_manifests(
 class CommandLimits:
     timeout_seconds: float = 300.0
     memory_bytes: int = 8 * 1024 * 1024 * 1024
+    address_space_bytes: int | None = None
     output_bytes: int = 16 * 1024 * 1024
     file_bytes: int = 2 * 1024 * 1024 * 1024
     open_files: int = 8192
@@ -808,7 +809,15 @@ class Supervisor:
                         selected_readable_paths,
                         selected_readable_roots,
                     )
-                    resource.setrlimit(resource.RLIMIT_AS, (limits.memory_bytes, limits.memory_bytes))
+                    address_space_bytes = (
+                        limits.memory_bytes
+                        if limits.address_space_bytes is None
+                        else limits.address_space_bytes
+                    )
+                    resource.setrlimit(
+                        resource.RLIMIT_AS,
+                        (address_space_bytes, address_space_bytes),
+                    )
                     resource.setrlimit(resource.RLIMIT_CPU, (limits.cpu_seconds, limits.cpu_seconds + 1))
                     resource.setrlimit(resource.RLIMIT_FSIZE, (limits.file_bytes, limits.file_bytes))
                     os.dup2(stdout_write, 1)
@@ -955,6 +964,27 @@ def adversarial_self_test() -> None:
                     "retained executable did not run: "
                     f"returncode={result.returncode}, stderr={result.stderr!r}"
                 )
+            address_space = 512 * 1024 * 1024
+            limit_probe = supervisor.run(
+                executable,
+                [
+                    "python",
+                    "-c",
+                    "import resource; print(resource.getrlimit(resource.RLIMIT_AS)[0])",
+                ],
+                root,
+                environment,
+                limits=CommandLimits(
+                    timeout_seconds=5,
+                    memory_bytes=128 * 1024 * 1024,
+                    address_space_bytes=address_space,
+                ),
+            )
+            if (
+                limit_probe.returncode != 0
+                or limit_probe.stdout != f"{address_space}\n".encode("ascii")
+            ):
+                raise AssertionError("physical and address-space limits were not independent")
             large = supervisor.run(
                 executable,
                 ["python", "-c", "print('z' * 200000, end='')"],

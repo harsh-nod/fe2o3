@@ -60,6 +60,17 @@ MAX_TOOL_BYTES = 256 * 1024 * 1024
 MAX_VERSION_BYTES = 64 * 1024
 MAX_RUNTIME_FILES = 256
 MAX_RUNTIME_BYTES = 512 * 1024 * 1024
+HARDWARE_ADDRESS_SPACE_BYTES = 4 * 1024 * 1024 * 1024 * 1024
+HARDWARE_DLOPEN_PATHS = (
+    Path("/opt/rocm-7.2.4/lib/libamd_comgr.so.3.0.0"),
+    Path("/opt/rocm-7.2.4/lib/libhsa-amd-aqlprofile64.so.1.0.70204"),
+)
+HARDWARE_RUNTIME_DATA_PATHS = (
+    Path("/etc/nsswitch.conf"),
+    Path("/etc/passwd"),
+    Path("/usr/share/zoneinfo/Etc/UTC"),
+    Path("/opt/amdgpu/share/libdrm/amdgpu.ids"),
+)
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 TOOL_NAMES = (
     "shell",
@@ -133,6 +144,20 @@ EXPECTED_ALIASES = {
 
 class EvidenceError(RuntimeError):
     pass
+
+
+def validate_hardware_runtime_configuration() -> None:
+    paths = (*HARDWARE_DLOPEN_PATHS, *HARDWARE_RUNTIME_DATA_PATHS)
+    if len(paths) != len(set(paths)):
+        raise EvidenceError("hardware runtime closure contains duplicate paths")
+    for path in paths:
+        if (
+            not path.is_absolute()
+            or path.is_symlink()
+            or path.resolve(strict=True) != path
+            or not path.is_file()
+        ):
+            raise EvidenceError(f"hardware runtime path is not canonical: {path}")
 
 
 def canonical_json(value: Any) -> bytes:
@@ -1884,30 +1909,38 @@ def elf_interpreter(executable: SealedExecutable) -> Path:
 
 def runtime_paths_for_executable(
     executable: SealedExecutable,
+    dlopen_roots: tuple[RetainedFile, ...],
     cwd: Path,
     environment: dict[str, str],
     tools: dict[str, PinnedTool],
     supervisor: Supervisor,
 ) -> tuple[list[Path], Path]:
-    completed = run_command(
-        [os.fspath(tools["ldd"].path), executable.proc_path],
-        cwd,
-        environment,
-        tools,
-        supervisor,
-        capture=True,
-        extra_inherited_fds=(executable.fd,),
-    )
-    output = (completed.stdout or b"").decode("utf-8", "strict")
-    if "not found" in output:
-        raise EvidenceError("hardware executable has an unresolved runtime dependency")
     paths: set[Path] = set()
-    for line in output.splitlines():
-        match = re.search(r"=>\s+(/\S+)", line)
-        direct = re.match(r"\s*(/\S+)\s+\(", line)
-        candidate = match.group(1) if match else direct.group(1) if direct else None
-        if candidate is not None:
-            paths.add(Path(candidate).resolve(strict=True))
+    targets = ((executable.proc_path, (executable.fd,), "hardware executable"),)
+    targets += tuple(
+        (f"/proc/self/fd/{root.fd}", (root.fd,), root.label)
+        for root in dlopen_roots
+    )
+    for target, inherited_fds, label in targets:
+        completed = run_command(
+            [os.fspath(tools["ldd"].path), target],
+            cwd,
+            environment,
+            tools,
+            supervisor,
+            capture=True,
+            extra_inherited_fds=inherited_fds,
+        )
+        output = (completed.stdout or b"").decode("utf-8", "strict")
+        if "not found" in output:
+            raise EvidenceError(f"{label} has an unresolved runtime dependency")
+        for line in output.splitlines():
+            match = re.search(r"=>\s+(/\S+)", line)
+            direct = re.match(r"\s*(/\S+)\s+\(", line)
+            candidate = match.group(1) if match else direct.group(1) if direct else None
+            if candidate is not None:
+                paths.add(Path(candidate).resolve(strict=True))
+    paths.update(root.path for root in dlopen_roots)
     if not paths or len(paths) > MAX_RUNTIME_FILES:
         raise EvidenceError("hardware executable runtime closure count is invalid")
     interpreter = elf_interpreter(executable)
@@ -1997,28 +2030,67 @@ def build_and_run_hardware_observation(
             "run-1-gfx942-hardware-test", executables[0], require_executable=True
         )
         sealed_test = SealedExecutable.from_retained(retained_test)
-        runtime_paths, interpreter = runtime_paths_for_executable(
-            sealed_test, source.root, environment, tools, supervisor
-        )
-        loader_cache = Path("/etc/ld.so.cache").resolve(strict=True)
-        runtime_data = (
-            Path("/opt/amdgpu/share/libdrm/amdgpu.ids").resolve(strict=True),
-        )
-        runtime = capture_retained_closure(
-            "run-1-gfx942-hardware-runtime",
-            [
-                *((f"runtime:{path.as_posix()}", path) for path in runtime_paths),
-                ("loader-cache:/etc/ld.so.cache", loader_cache),
-                *((f"runtime-data:{path.as_posix()}", path) for path in runtime_data),
-            ],
-            {
-                "executable_sha256": sealed_test.sha256,
-                "elf_interpreter": os.fspath(interpreter),
-                "dlopen_policy": "Landlock exact-file read allowlist",
-            },
-        )
+        initial_dlopen_files: list[RetainedFile] = []
+        try:
+            for path in HARDWARE_DLOPEN_PATHS:
+                initial_dlopen_files.append(
+                    RetainedFile.open(
+                        f"hardware-dlopen:{path.name}", path.resolve(strict=True)
+                    )
+                )
+            initial_dlopen_roots = tuple(initial_dlopen_files)
+            runtime_paths, interpreter = runtime_paths_for_executable(
+                sealed_test,
+                initial_dlopen_roots,
+                source.root,
+                environment,
+                tools,
+                supervisor,
+            )
+            loader_cache = Path("/etc/ld.so.cache").resolve(strict=True)
+            runtime_data = tuple(
+                path.resolve(strict=True) for path in HARDWARE_RUNTIME_DATA_PATHS
+            )
+            runtime = capture_retained_closure(
+                "run-1-gfx942-hardware-runtime",
+                [
+                    *((f"runtime:{path.as_posix()}", path) for path in runtime_paths),
+                    ("loader-cache:/etc/ld.so.cache", loader_cache),
+                    *((f"runtime-data:{path.as_posix()}", path) for path in runtime_data),
+                ],
+                {
+                    "executable_sha256": sealed_test.sha256,
+                    "elf_interpreter": os.fspath(interpreter),
+                    "dlopen_policy": "retained roots plus transitive ldd closure",
+                    "dlopen_roots": [os.fspath(root.path) for root in initial_dlopen_roots],
+                },
+                max_total_bytes=MAX_RUNTIME_BYTES,
+            )
+        finally:
+            for root in initial_dlopen_files:
+                root.close()
         retained_closures.append(runtime)
         supervisor.guards.extend(runtime.files)
+        runtime_by_path = {retained.path: retained for retained in runtime.files}
+        try:
+            retained_dlopen_roots = tuple(
+                runtime_by_path[path.resolve(strict=True)] for path in HARDWARE_DLOPEN_PATHS
+            )
+        except KeyError as error:
+            raise EvidenceError("runtime closure omitted a retained dlopen root") from error
+        verified_paths, verified_interpreter = runtime_paths_for_executable(
+            sealed_test,
+            retained_dlopen_roots,
+            source.root,
+            environment,
+            tools,
+            supervisor,
+        )
+        if verified_paths != runtime_paths or verified_interpreter != interpreter:
+            raise EvidenceError("retained hardware runtime closure changed on verification")
+        (evidence_root / "run-1/hardware-runtime-manifest.json").write_bytes(
+            canonical_json(runtime.manifest)
+        )
         retained_hsaco.revalidate()
         hardware_environment = dict(environment)
         hardware_environment.update(
@@ -2044,7 +2116,11 @@ def build_and_run_hardware_observation(
             capture=True,
             executable=sealed_test,
             extra_inherited_fds=(retained_hsaco.fd,),
-            limits=CommandLimits(timeout_seconds=300, cpu_seconds=300),
+            limits=CommandLimits(
+                timeout_seconds=300,
+                address_space_bytes=HARDWARE_ADDRESS_SPACE_BYTES,
+                cpu_seconds=300,
+            ),
             readable_paths=tuple(
                 [*runtime_paths, loader_cache, *runtime_data, retained_hsaco.path]
             ),
@@ -2073,6 +2149,8 @@ def build_and_run_hardware_observation(
             "elapsed_seconds": result.elapsed_seconds,
             "peak_memory_bytes": result.peak_memory_bytes,
             "peak_processes": result.peak_processes,
+            "physical_memory_limit_bytes": CommandLimits().memory_bytes,
+            "address_space_limit_bytes": HARDWARE_ADDRESS_SPACE_BYTES,
             "bounded_output_bytes": len(output),
             "bounded_output_sha256": sha256_bytes(output),
         }
@@ -2103,6 +2181,7 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
     golden, _ = read_bounded_json(golden_path)
     validate_manifest_document(manifest)
     validate_golden(golden, manifest_path, manifest_bytes)
+    validate_hardware_runtime_configuration()
     soft_files, hard_files = resource.getrlimit(resource.RLIMIT_NOFILE)
     if hard_files < 262144:
         raise EvidenceError("compiler evidence requires an RLIMIT_NOFILE hard limit of 262144")
@@ -2345,7 +2424,9 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
                 "generated-cargo-build-manifest.json",
             ]
             if index == 1:
-                document_names.append("hardware-observation.json")
+                document_names.extend(
+                    ["hardware-runtime-manifest.json", "hardware-observation.json"]
+                )
             for name in document_names:
                 document = output_dir / name
                 value = document.read_bytes()
@@ -2452,6 +2533,7 @@ def self_test(repo: Path) -> None:
     golden, _ = read_bounded_json(golden_path)
     validate_manifest_document(manifest)
     validate_golden(golden, manifest_path, manifest_bytes)
+    validate_hardware_runtime_configuration()
     configured_runtime, runtime_closure = retain_configured_tool_runtime(repo, manifest)
     try:
         if sha256_bytes(canonical_json(configured_runtime)) != manifest["runtime_manifest_sha256"]:
