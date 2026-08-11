@@ -8,6 +8,7 @@ mod advanced_model;
 mod atomic_legalizability;
 mod capabilities;
 mod feature_capabilities;
+mod resolved_target_v2;
 
 pub use advanced_model::{
     ADVANCED_CAPABILITY_MODEL_REVISION, AdvancedCapabilityModelIdentity,
@@ -25,6 +26,12 @@ pub use feature_capabilities::{
     AtomicOrdering, AtomicOrderings, AtomicWidth, AtomicWidths, DeviceDiagnosticFeature, Fp8Format,
     Fp8Formats, LaunchBoundsField, LaunchBoundsMetadata, MfmaFamilies, MfmaFamily, MxFormat,
     MxFormats, WorkgroupAxis, WorkgroupLimits,
+};
+pub use resolved_target_v2::{
+    AmdTargetDetectionV2, CanonicalResolvedAmdTargetBytesV2, DecodeResolvedAmdTargetV2Error,
+    DetectedTargetFeatureV2, MAX_AMD_TARGET_ID_BYTES_V2, MAX_DETECTED_AMD_DEVICES_V2,
+    MAX_RESOLVED_AMD_TARGET_CANONICAL_BYTES_V2, ResolveAmdTargetV2Error, ResolvedAmdTargetDigestV2,
+    ResolvedAmdTargetIdentityV2, ResolvedAmdTargetSourceV2, resolve_amd_target_v2,
 };
 
 /// Concrete canonical AMDGPU processor names understood by this crate.
