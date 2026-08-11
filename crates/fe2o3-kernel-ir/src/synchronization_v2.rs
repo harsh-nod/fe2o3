@@ -636,6 +636,15 @@ pub enum VerifierObligation {
         second: EventId,
         address_space: AddressSpace,
         structurally_ordered: bool,
+        aliasing: AliasingCondition,
+    },
+    DischargeAllocationAlias {
+        first: EventId,
+        second: EventId,
+        address_space: AddressSpace,
+        first_region: MemoryRegion,
+        second_region: MemoryRegion,
+        consequence: AllocationAliasConsequence,
     },
     ScopeCompatibility {
         first: EventId,
@@ -655,6 +664,19 @@ pub enum VerifierObligation {
         element_stride: u32,
         swizzle: LdsSwizzle,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum AliasingCondition {
+    ConfirmedOverlap,
+    VerifierMustProveDisjoint,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum AllocationAliasConsequence {
+    ReadOnlyOverlap,
+    NonAtomicConflict,
+    AtomicObjectCompatibility,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -832,7 +854,50 @@ impl SynchronizationModuleV2 {
                 let Some(right_access) = memory_access(right) else {
                     continue;
                 };
-                if !accesses_overlap(left_access, right_access)? {
+                let relation = access_relation(left_access, right_access)?;
+                if relation == AccessRelation::Disjoint {
+                    continue;
+                }
+                if relation == AccessRelation::UnknownGlobalAllocationAlias {
+                    let consequence = if left_access.atomic && right_access.atomic {
+                        AllocationAliasConsequence::AtomicObjectCompatibility
+                    } else if left_access.writes || right_access.writes {
+                        AllocationAliasConsequence::NonAtomicConflict
+                    } else {
+                        AllocationAliasConsequence::ReadOnlyOverlap
+                    };
+                    insert_obligation(
+                        &mut obligations,
+                        VerifierObligation::DischargeAllocationAlias {
+                            first: left.id,
+                            second: right.id,
+                            address_space: left_access.address_space,
+                            first_region: left_access.region,
+                            second_region: right_access.region,
+                            consequence,
+                        },
+                        limits,
+                    )?;
+                    if left_access.atomic && right_access.atomic {
+                        continue;
+                    }
+                    if !(left_access.writes || right_access.writes) {
+                        continue;
+                    }
+                    let domain = domains_for(left_access.address_space);
+                    let ordered = reachability.path_covers(left.id, right.id, domain)
+                        || reachability.path_covers(right.id, left.id, domain);
+                    insert_obligation(
+                        &mut obligations,
+                        VerifierObligation::NonAtomicConflict {
+                            first: left.id,
+                            second: right.id,
+                            address_space: left_access.address_space,
+                            structurally_ordered: ordered,
+                            aliasing: AliasingCondition::VerifierMustProveDisjoint,
+                        },
+                        limits,
+                    )?;
                     continue;
                 }
                 if left_access.atomic && right_access.atomic {
@@ -880,6 +945,7 @@ impl SynchronizationModuleV2 {
                         second: right.id,
                         address_space: left_access.address_space,
                         structurally_ordered: ordered,
+                        aliasing: AliasingCondition::ConfirmedOverlap,
                     },
                     limits,
                 )?;
@@ -1648,11 +1714,23 @@ fn required_edge_scope(domains: MemoryDomains) -> MemoryScope {
     }
 }
 
-fn accesses_overlap(left: AccessView, right: AccessView) -> Result<bool, ValidationError> {
-    if left.address_space != right.address_space
-        || left.region.allocation != right.region.allocation
-    {
-        return Ok(false);
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AccessRelation {
+    Disjoint,
+    ConfirmedOverlap,
+    UnknownGlobalAllocationAlias,
+}
+
+fn access_relation(left: AccessView, right: AccessView) -> Result<AccessRelation, ValidationError> {
+    if left.address_space != right.address_space {
+        return Ok(AccessRelation::Disjoint);
+    }
+    if left.region.allocation != right.region.allocation {
+        return Ok(if left.address_space == AddressSpace::Global {
+            AccessRelation::UnknownGlobalAllocationAlias
+        } else {
+            AccessRelation::Disjoint
+        });
     }
     let left_end = left
         .region
@@ -1664,7 +1742,13 @@ fn accesses_overlap(left: AccessView, right: AccessView) -> Result<bool, Validat
         .offset
         .checked_add(right.region.bytes)
         .ok_or(ValidationError::ArithmeticOverflow)?;
-    Ok(left.region.offset < right_end && right.region.offset < left_end)
+    Ok(
+        if left.region.offset < right_end && right.region.offset < left_end {
+            AccessRelation::ConfirmedOverlap
+        } else {
+            AccessRelation::Disjoint
+        },
+    )
 }
 
 fn required_pair_scope(left: GroupKind, right: GroupKind) -> MemoryScope {

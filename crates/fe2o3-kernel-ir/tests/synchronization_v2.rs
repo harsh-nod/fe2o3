@@ -533,6 +533,112 @@ fn overlapping_atomics_must_name_the_same_exact_object() {
 }
 
 #[test]
+fn unauthenticated_global_allocation_ids_never_establish_disjointness() {
+    let limits = SynchronizationLimits::default();
+    let global_access = |id, allocation, kind| {
+        event(
+            id,
+            EventKind::NonAtomic(NonAtomicAccess {
+                region: MemoryRegion {
+                    allocation,
+                    offset: 0,
+                    bytes: 4,
+                },
+                kind,
+                value_type: u32_ty(),
+                address_space: AddressSpace::Global,
+                alignment: 4,
+            }),
+        )
+    };
+    let report = module(vec![
+        global_access(0, 9, AccessKind::Write),
+        global_access(1, 10, AccessKind::Write),
+    ])
+    .validate(&limits)
+    .unwrap();
+    assert!(
+        report
+            .obligations
+            .contains(&VerifierObligation::DischargeAllocationAlias {
+                first: EventId(0),
+                second: EventId(1),
+                address_space: AddressSpace::Global,
+                first_region: MemoryRegion {
+                    allocation: 9,
+                    offset: 0,
+                    bytes: 4,
+                },
+                second_region: MemoryRegion {
+                    allocation: 10,
+                    offset: 0,
+                    bytes: 4,
+                },
+                consequence: AllocationAliasConsequence::NonAtomicConflict,
+            })
+    );
+    assert!(
+        report
+            .obligations
+            .contains(&VerifierObligation::NonAtomicConflict {
+                first: EventId(0),
+                second: EventId(1),
+                address_space: AddressSpace::Global,
+                structurally_ordered: false,
+                aliasing: AliasingCondition::VerifierMustProveDisjoint,
+            })
+    );
+
+    let report = module(vec![
+        global_access(0, 9, AccessKind::Read),
+        global_access(1, 10, AccessKind::Read),
+    ])
+    .validate(&limits)
+    .unwrap();
+    assert!(report.obligations.iter().any(|obligation| matches!(
+        obligation,
+        VerifierObligation::DischargeAllocationAlias {
+            consequence: AllocationAliasConsequence::ReadOnlyOverlap,
+            ..
+        }
+    )));
+    assert!(
+        !report
+            .obligations
+            .iter()
+            .any(|obligation| matches!(obligation, VerifierObligation::NonAtomicConflict { .. }))
+    );
+
+    let mut first = atomic(
+        AtomicOperation::FetchAdd,
+        u32_ty(),
+        AddressSpace::Global,
+        MemoryScope::System,
+        MemoryOrdering::Relaxed,
+        None,
+        AtomicDialect::Rust,
+    );
+    first.region.allocation = 9;
+    first.coherent_allocation.as_mut().unwrap().allocation = 9;
+    let mut second = first.clone();
+    second.region.allocation = 10;
+    second.coherent_allocation.as_mut().unwrap().allocation = 10;
+    let report = module(vec![
+        event(0, EventKind::Atomic(first)),
+        event(1, EventKind::Atomic(second)),
+    ])
+    .validate(&limits)
+    .unwrap();
+    assert!(report.obligations.iter().any(|obligation| matches!(
+        obligation,
+        VerifierObligation::DischargeAllocationAlias {
+            consequence: AllocationAliasConsequence::AtomicObjectCompatibility,
+            ..
+        }
+    )));
+}
+
+#[test]
 fn unknown_invocation_pairs_use_conservative_address_space_scope() {
     let limits = SynchronizationLimits::default();
     for (address_space, narrow_scope, required) in [
@@ -1782,12 +1888,24 @@ fn review_counterexamples_are_repaired_incrementally() {
         })
         .collect();
     let report = module(writes).validate(&limits).unwrap();
-    assert!(
-        !report
-            .obligations
-            .iter()
-            .any(|obligation| matches!(obligation, VerifierObligation::NonAtomicConflict { .. }))
-    );
+    assert!(report.obligations.iter().any(|obligation| matches!(
+        obligation,
+        VerifierObligation::DischargeAllocationAlias {
+            first: EventId(0),
+            second: EventId(1),
+            consequence: AllocationAliasConsequence::NonAtomicConflict,
+            ..
+        }
+    )));
+    assert!(report.obligations.iter().any(|obligation| matches!(
+        obligation,
+        VerifierObligation::NonAtomicConflict {
+            first: EventId(0),
+            second: EventId(1),
+            aliasing: AliasingCondition::VerifierMustProveDisjoint,
+            ..
+        }
+    )));
 
     let widened = SynchronizationLimits {
         max_workgroup_participants: 2_048,
