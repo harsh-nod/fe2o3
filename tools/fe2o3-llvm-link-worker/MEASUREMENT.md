@@ -10,17 +10,24 @@ The legacy pathname helper must therefore not be used as production execution
 evidence. The authenticated physical machine-effect API instead pins the final
 worker bytes in a sealed memfd, derives the executable identity from those
 bytes, observes and retains the dynamic loader and every mapped DSO, and
-revalidates their metadata and contents before input and after execution. Its
-deployment policy pins that measured runtime-closure identity. The protocol
-decoder, LLVM, LLD, worker, kernel analyzer, operating system, and retained
-runtime files remain the trusted computing base.
+uses a fresh-challenge ready/done/ack handshake to enumerate the exact
+file-backed map set after loader initialization and again before permitting
+exit. New mappings and `dlopen` fail closed. It revalidates retained metadata
+and contents after execution, and its deployment policy pins the measured
+runtime-closure identity. The protocol decoder, LLVM, LLD, worker, kernel
+analyzer, operating system, and retained runtime files remain the trusted
+computing base.
 
-Authenticated execution uses a fail-closed no-fork profile when no private
-delegated cgroup is used: UID 0 and nonzero capability sets are rejected, the
-child's hard `RLIMIT_NPROC` is zero before stdin, and the native entrypoint
-installs the same limit before request collection. Memory, data, file, input,
-output, metadata, symbol, and runtime-file collection are bounded. Process
-groups are cleanup defense only.
+Authenticated execution uses a fail-closed no-fork profile. Real, effective,
+saved, and filesystem UIDs must be equal and nonzero; the UID map must be the
+initial full-range map; and inherited, permitted, effective, and ambient
+capabilities must be zero. The child installs `PR_SET_NO_NEW_PRIVS`,
+`RLIMIT_NPROC=0`, and hard memory, data, core, and file limits before
+`exec`. The native entrypoint verifies this state, and a deployed test mode
+attempts `fork`, `clone`, thread creation, and double-fork/`setsid` before
+stdin. No cgroup-v2 or seccomp guarantee is asserted. Process groups and
+descendant scans are cleanup defense only. Input, output, metadata, symbol,
+and runtime-file collection are also bounded.
 
 Successful worker output is still inert. The worker verifies an exact AMDGPU
 ELF/AMDHSA target contract, code-object ABI version, symbol closure, requested

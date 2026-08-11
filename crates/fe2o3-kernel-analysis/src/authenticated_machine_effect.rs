@@ -4,8 +4,10 @@
 //! production worker is copied into a sealed memfd, executed only through that
 //! retained image, and accepted only when both its bytes and its observed
 //! file-backed runtime closure match a caller-pinned policy. Fresh OS challenges
-//! bind the identity probe and every analysis response. Receipts remain inert:
-//! they cannot publish, load, or launch code.
+//! bind the ready/done/ack process handshake, identity probe, and every analysis
+//! response. The runtime map set is measured at ready and again before the
+//! worker may exit. Receipts remain inert: they cannot publish, load, or launch
+//! code.
 //!
 //! The authenticated result is still only a list of reachable static
 //! instruction sites and their bounded effect kinds for one exact finalized

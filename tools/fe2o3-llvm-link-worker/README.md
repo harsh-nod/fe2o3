@@ -17,10 +17,14 @@ analysis for exact `gfx942:xnack-` COV6 finalized HSACO bytes. LLVM Object and
 MC APIs build a closed direct-call graph and enumerate reachable static global
 address, read, write, and return sites. The loader view must be unambiguous:
 all allocatable sections and analyzed symbols must agree with bounded `PT_LOAD`
-ranges and permissions, metadata and descriptors must agree, `.symtab` and
-`.dynsym` kernel exports must be identical, and every nonempty relocation form
-is rejected. Indirect calls, ambiguous call materialization, unsupported
-control flow, and unsupported ISA fail closed.
+ranges and permissions, the AMDGPU metadata section must exactly equal the one
+loader-visible `PT_NOTE`, and `.dynamic` must exactly equal the one
+`PT_DYNAMIC`. Its `.dynsym`, `.dynstr`, SysV hash, and GNU hash
+declarations must agree with their uniquely mapped sections. Metadata,
+descriptors, and `.symtab`/`.dynsym` kernel exports must agree, and every
+section or dynamic-table relocation form is rejected. Indirect calls,
+ambiguous call materialization, unsupported control flow, and unsupported ISA
+fail closed.
 
 The accepted ISA subset is intentionally small: recognized `GLOBAL_LOAD_*`,
 `S_LOAD_*`, and `GLOBAL_STORE_*` sites plus the scalar/vector ALU, wait,
@@ -28,18 +32,27 @@ materialized direct-call, forward-branch, and exact entry/helper return forms
 emitted by the alpha/zeta fixtures. Atomics and all `DS_*`, `FLAT_*`,
 `BUFFER_*`, `TBUFFER_*`, `IMAGE_*`, and `SCRATCH_*` families are unsupported.
 Backward/external branches, recursive calls, indirect calls, helper
-`S_ENDPGM`, modified `S_SETPC` return pairs, and unknown memory widths are also
+`S_ENDPGM`, `S_SWAPPC_B64` destinations other than `SGPR30_SGPR31`,
+modified helper `S_SETPC` return pairs, and unknown memory widths are also
 rejected.
 
 The Rust authenticated execution API copies the exact worker into a sealed
 memfd, clears the environment to `LANG=C`, `LC_ALL=C`, and `TZ=UTC`, retains
-the dynamic loader and every mapped DSO descriptor, and re-stats and rehashes
-that runtime closure before input and after execution. The bounded fallback
-containment profile requires a non-root process with no inherited, permitted,
-effective, or ambient capabilities and hard-lowers `RLIMIT_NPROC` to zero;
-address-space, data, output-file, request, response, symbol, metadata, and
-runtime-closure sizes are also bounded. Process-group cleanup and descendant
-scanning are secondary checks, not the containment mechanism.
+the dynamic loader and every mapped DSO descriptor, and uses a fresh-challenge
+`READY`/`DONE`/`ACK` handshake. It measures the exact file-backed map set
+only after runtime initialization and again while the worker is blocked before
+exit; late mappings or `dlopen` fail closed. Retained files are re-statted and
+rehashed after execution.
+
+The no-fork containment profile requires all real, effective, saved, and
+filesystem UIDs to be equal and nonzero, an initial full-range UID map, and
+zero inherited, permitted, effective, and ambient capabilities.
+`PR_SET_NO_NEW_PRIVS` and hard address-space, data, output-file, core, and
+`RLIMIT_NPROC=0` limits are installed in the child before `exec`. The native
+entrypoint verifies that state; its deployed containment probe confirms
+`fork`, `clone`, thread creation, and double-fork/`setsid` attempts are
+denied before stdin. No cgroup or seccomp claim is made. Process-group cleanup
+and descendant scanning remain secondary checks.
 
 This evidence describes reachable static instruction sites only. It does not
 provide concrete runtime addresses or execution counts and does not prove OOB
