@@ -412,7 +412,7 @@ class CommandLimits:
     output_bytes: int = 16 * 1024 * 1024
     file_bytes: int = 64 * 1024 * 1024
     open_files: int = 8192
-    processes: int = 64
+    processes: int = 256
     cpu_seconds: int = 300
 
 
@@ -569,7 +569,6 @@ class Supervisor:
                     resource.setrlimit(resource.RLIMIT_CPU, (limits.cpu_seconds, limits.cpu_seconds + 1))
                     resource.setrlimit(resource.RLIMIT_FSIZE, (limits.file_bytes, limits.file_bytes))
                     resource.setrlimit(resource.RLIMIT_NOFILE, (limits.open_files, limits.open_files))
-                    resource.setrlimit(resource.RLIMIT_NPROC, (limits.processes, limits.processes))
                     os.dup2(stdout_write, 1)
                     os.dup2(stderr_write, 2)
                     null_fd = os.open("/dev/null", os.O_RDONLY | os.O_CLOEXEC)
