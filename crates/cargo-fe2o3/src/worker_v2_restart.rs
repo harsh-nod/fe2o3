@@ -24,8 +24,8 @@ use fe2o3_hsaco_finalize::{
     prepare_finalized_worker_v2_hsaco_publication_v1, prepare_worker_v2_hsaco_publication_v1,
 };
 use fe2o3_worker_v2_bundle::{
-    MAX_WORKER_V2_ENVELOPE_INPUTS_BYTES, MAX_WORKER_V2_LOAD_ENVELOPE_BYTES,
-    WORKER_V2_LOAD_ENVELOPE_NAME_PREFIX_V1 as ENVELOPE_PREFIX,
+    MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1, MAX_WORKER_V2_ENVELOPE_INPUTS_BYTES,
+    MAX_WORKER_V2_LOAD_ENVELOPE_BYTES, WORKER_V2_LOAD_ENVELOPE_NAME_PREFIX_V1 as ENVELOPE_PREFIX,
     WORKER_V2_LOAD_ENVELOPE_NAME_SUFFIX_V1 as ENVELOPE_SUFFIX, WorkerV2EnvelopeInputsIdentityV1,
     WorkerV2EnvelopeInputsV1, WorkerV2LoadEnvelopeIdentityV1, WorkerV2LoadEnvelopeV1,
     worker_v2_load_envelope_name_v1,
@@ -889,9 +889,14 @@ impl WorkerV2ResumeStoreV1 {
         let scan =
             rustix::io::fcntl_dupfd_cloexec(&self.directory, 0).map_err(std::io::Error::from)?;
         let mut directory = rustix::fs::Dir::read_from(&scan).map_err(std::io::Error::from)?;
+        let mut entries = 0_usize;
         let mut residue = Vec::new();
         for entry in &mut directory {
             let entry = entry.map_err(std::io::Error::from)?;
+            entries = entries
+                .checked_add(1)
+                .filter(|entries| *entries <= MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1)
+                .ok_or_else(|| self.invalid("artifact directory exceeds its scan bound"))?;
             let bytes = entry.file_name().to_bytes();
             if !bytes.starts_with(package_prefix.as_bytes()) {
                 continue;
@@ -934,9 +939,14 @@ impl WorkerV2ResumeStoreV1 {
         let scan =
             rustix::io::fcntl_dupfd_cloexec(&self.directory, 0).map_err(std::io::Error::from)?;
         let mut directory = rustix::fs::Dir::read_from(&scan).map_err(std::io::Error::from)?;
+        let mut entries = 0_usize;
         let mut residue = Vec::new();
         for entry in &mut directory {
             let entry = entry.map_err(std::io::Error::from)?;
+            entries = entries
+                .checked_add(1)
+                .filter(|entries| *entries <= MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1)
+                .ok_or_else(|| self.invalid("artifact directory exceeds its scan bound"))?;
             let bytes = entry.file_name().to_bytes();
             if !bytes.starts_with(package_prefix.as_bytes()) {
                 continue;

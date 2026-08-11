@@ -1,6 +1,7 @@
 use crate::project::PinnedDirectory;
 use crate::worker_v2::WorkerV2ConfigIdentity;
 use cap_primitives::fs::{read_base_dir, remove_open_dir_all};
+use fe2o3_worker_v2_bundle::MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1;
 use rustix::fs::{AtFlags, FileType, FlockOperation};
 use rustix::fs::{Mode, OFlags, fchmod, flock, fstat, fsync, openat, renameat, statat, unlinkat};
 use sha2::{Digest, Sha256};
@@ -20,7 +21,7 @@ const MARKER_NAME: &str = ".codegen-generation-v1";
 const MARKER_MAGIC: &[u8; 28] = b"fe2o3-codegen-generation-v1\0";
 const MARKER_BYTES: usize = MARKER_MAGIC.len() + 32 + 16 + 32 + 8;
 const MAX_SNAPSHOT_BYTES: u64 = 1024 * 1024 * 1024;
-const MAX_SNAPSHOT_ENTRIES: u64 = 4096;
+const MAX_SNAPSHOT_ENTRIES: u64 = MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1 as u64;
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug)]
@@ -508,14 +509,22 @@ fn snapshot_directory(
     hash: &mut Sha256,
     state: &mut SnapshotState,
 ) -> Result<(), String> {
-    let mut names = read_base_dir(directory)
-        .map_err(|error| format!("failed to enumerate generated artifacts: {error}"))?
-        .map(|entry| {
-            entry
-                .map(|entry| entry.file_name())
-                .map_err(|error| format!("failed to enumerate a generated artifact: {error}"))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let entries = read_base_dir(directory)
+        .map_err(|error| format!("failed to enumerate generated artifacts: {error}"))?;
+    let mut visible_entries = 0_usize;
+    let mut names = Vec::new();
+    for entry in entries {
+        let entry =
+            entry.map_err(|error| format!("failed to enumerate a generated artifact: {error}"))?;
+        visible_entries = visible_entries
+            .checked_add(1)
+            .filter(|entries| *entries <= MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1)
+            .ok_or_else(|| "generated artifact directory exceeds its scan bound".to_string())?;
+        names
+            .try_reserve(1)
+            .map_err(|_| "failed to reserve generated artifact directory scan".to_string())?;
+        names.push(entry.file_name());
+    }
     names.sort_by(|left, right| os_bytes(left).cmp(os_bytes(right)));
 
     for name in names {
