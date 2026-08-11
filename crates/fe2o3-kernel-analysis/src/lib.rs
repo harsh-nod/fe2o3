@@ -9,8 +9,8 @@ mod ssa;
 mod uniformity;
 
 pub use control_flow::{
-    ControlFlowAnalysis, ControlFlowDiagnostic, ControlFlowEdge, ControlFlowErrors,
-    ControlFlowResource, ControlFlowResourceUsage, MAX_CONTROL_FLOW_BLOCKS,
+    ControlFlowAnalysis, ControlFlowDiagnostic, ControlFlowDiagnosticV2, ControlFlowEdge,
+    ControlFlowErrors, ControlFlowResource, ControlFlowResourceUsage, MAX_CONTROL_FLOW_BLOCKS,
     MAX_CONTROL_FLOW_DOMINANCE_FRONTIER_ENTRIES, MAX_CONTROL_FLOW_EDGES,
     MAX_CONTROL_FLOW_IDF_ENTRIES, MAX_CONTROL_FLOW_LOOP_BODY_MEMBERSHIPS,
     MAX_CONTROL_FLOW_NATURAL_LOOPS, MAX_CONTROL_FLOW_STORAGE_ITEMS, MAX_CONTROL_FLOW_WORK_UNITS,

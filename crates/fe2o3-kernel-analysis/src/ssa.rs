@@ -6,7 +6,7 @@ use fe2o3_kernel_ir::BlockId;
 
 use crate::control_flow::ControlFlowBudget;
 use crate::{
-    ControlFlowAnalysis, ControlFlowDiagnostic, ControlFlowResource, ControlFlowResourceUsage,
+    ControlFlowAnalysis, ControlFlowDiagnosticV2, ControlFlowResource, ControlFlowResourceUsage,
 };
 
 /// Stable frontend identity for one promotable source variable.
@@ -269,8 +269,8 @@ fn charge(budget: &mut ControlFlowBudget, charge: BudgetCharge) -> Result<(), Ss
     result.map_err(resource_errors)
 }
 
-fn resource_errors(diagnostic: ControlFlowDiagnostic) -> SsaPlacementErrors {
-    let ControlFlowDiagnostic::ResourceLimitExceeded {
+fn resource_errors(diagnostic: ControlFlowDiagnosticV2) -> SsaPlacementErrors {
+    let ControlFlowDiagnosticV2::ResourceLimitExceeded {
         resource,
         required,
         limit,

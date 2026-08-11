@@ -1,6 +1,6 @@
 use fe2o3_kernel_analysis::{
-    ControlFlowDiagnostic, ControlFlowEdge, ControlFlowResource, MAX_CONTROL_FLOW_BLOCKS,
-    MAX_CONTROL_FLOW_DOMINANCE_FRONTIER_ENTRIES, MAX_CONTROL_FLOW_EDGES,
+    ControlFlowDiagnostic, ControlFlowDiagnosticV2, ControlFlowEdge, ControlFlowResource,
+    MAX_CONTROL_FLOW_BLOCKS, MAX_CONTROL_FLOW_DOMINANCE_FRONTIER_ENTRIES, MAX_CONTROL_FLOW_EDGES,
     MAX_CONTROL_FLOW_LOOP_BODY_MEMBERSHIPS, MAX_CONTROL_FLOW_NATURAL_LOOPS,
     MAX_CONTROL_FLOW_WORK_UNITS, analyze_control_flow,
 };
@@ -67,6 +67,25 @@ fn raw_conditional(id: u32, then_target: u32, else_target: u32) -> BasicBlock {
 
 fn ids(values: &[u32]) -> BTreeSet<BlockId> {
     values.iter().copied().map(BlockId).collect()
+}
+
+fn legacy_diagnostic_kind(diagnostic: &ControlFlowDiagnostic) -> u8 {
+    match diagnostic {
+        ControlFlowDiagnostic::FunctionDeclaration => 0,
+        ControlFlowDiagnostic::EmptyFunction => 1,
+        ControlFlowDiagnostic::DuplicateBlock { .. } => 2,
+        ControlFlowDiagnostic::MissingTerminator { .. } => 3,
+        ControlFlowDiagnostic::UnknownSuccessor { .. } => 4,
+        ControlFlowDiagnostic::IrreducibleControlFlow { .. } => 5,
+    }
+}
+
+#[test]
+fn legacy_diagnostic_enum_remains_exhaustively_matchable() {
+    assert_eq!(
+        legacy_diagnostic_kind(&ControlFlowDiagnostic::EmptyFunction),
+        1
+    );
 }
 
 fn two_arm_frontier_ladder(rungs: u32) -> Function {
@@ -286,8 +305,8 @@ fn release_complexity_wire_scale_self_loops_hit_exact_resource_boundaries() {
         default_arguments: vec![],
     });
     assert_eq!(
-        analyze_control_flow(&input).unwrap_err().diagnostics(),
-        &[ControlFlowDiagnostic::ResourceLimitExceeded {
+        analyze_control_flow(&input).unwrap_err().diagnostics_v2(),
+        &[ControlFlowDiagnosticV2::ResourceLimitExceeded {
             resource: ControlFlowResource::Edges,
             required: MAX_CONTROL_FLOW_EDGES + 1,
             limit: MAX_CONTROL_FLOW_EDGES,
@@ -303,8 +322,8 @@ fn release_complexity_wire_scale_self_loops_hit_exact_resource_boundaries() {
         .blocks
         .push(returning(block_count));
     assert_eq!(
-        analyze_control_flow(&input).unwrap_err().diagnostics(),
-        &[ControlFlowDiagnostic::ResourceLimitExceeded {
+        analyze_control_flow(&input).unwrap_err().diagnostics_v2(),
+        &[ControlFlowDiagnosticV2::ResourceLimitExceeded {
             resource: ControlFlowResource::Blocks,
             required: MAX_CONTROL_FLOW_BLOCKS + 1,
             limit: MAX_CONTROL_FLOW_BLOCKS,
@@ -387,8 +406,8 @@ fn release_complexity_frontier_ladder_accepts_boundary_and_rejects_next_entry() 
 
     let error = analyze_control_flow(&two_arm_frontier_ladder(513)).unwrap_err();
     assert_eq!(
-        error.diagnostics(),
-        &[ControlFlowDiagnostic::ResourceLimitExceeded {
+        error.diagnostics_v2(),
+        &[ControlFlowDiagnosticV2::ResourceLimitExceeded {
             resource: ControlFlowResource::DominanceFrontierEntries,
             required: MAX_CONTROL_FLOW_DOMINANCE_FRONTIER_ENTRIES + 1,
             limit: MAX_CONTROL_FLOW_DOMINANCE_FRONTIER_ENTRIES,
@@ -406,8 +425,8 @@ fn release_complexity_frontier_ladder_accepts_boundary_and_rejects_next_entry() 
 fn release_complexity_reviewer_8192_rung_ladder_rejects_before_frontier_growth() {
     let error = analyze_control_flow(&two_arm_frontier_ladder(8_192)).unwrap_err();
     assert_eq!(
-        error.diagnostics(),
-        &[ControlFlowDiagnostic::ResourceLimitExceeded {
+        error.diagnostics_v2(),
+        &[ControlFlowDiagnosticV2::ResourceLimitExceeded {
             resource: ControlFlowResource::WorkUnits,
             required: MAX_CONTROL_FLOW_WORK_UNITS + 1,
             limit: MAX_CONTROL_FLOW_WORK_UNITS,

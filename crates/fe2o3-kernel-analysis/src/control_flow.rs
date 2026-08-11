@@ -128,7 +128,7 @@ impl ControlFlowBudget {
         &mut self,
         resource: ControlFlowResource,
         amount: usize,
-    ) -> Result<(), ControlFlowDiagnostic> {
+    ) -> Result<(), ControlFlowDiagnosticV2> {
         self.reserve_with_storage(resource, amount, 0)
     }
 
@@ -137,7 +137,7 @@ impl ControlFlowBudget {
         resource: ControlFlowResource,
         amount: usize,
         storage_amount: usize,
-    ) -> Result<(), ControlFlowDiagnostic> {
+    ) -> Result<(), ControlFlowDiagnosticV2> {
         let current = self.resource_usage(resource);
         let required = checked_budget_add(current, amount);
         let storage_required = if resource == ControlFlowResource::StorageItems {
@@ -215,15 +215,15 @@ impl ControlFlowBudget {
         }
     }
 
-    pub(crate) fn storage(&mut self, amount: usize) -> Result<(), ControlFlowDiagnostic> {
+    pub(crate) fn storage(&mut self, amount: usize) -> Result<(), ControlFlowDiagnosticV2> {
         self.reserve(ControlFlowResource::StorageItems, amount)
     }
 
-    fn natural_loop(&mut self, amount: usize) -> Result<(), ControlFlowDiagnostic> {
+    fn natural_loop(&mut self, amount: usize) -> Result<(), ControlFlowDiagnosticV2> {
         self.reserve_with_storage(ControlFlowResource::NaturalLoops, amount, amount)
     }
 
-    fn natural_loop_membership(&mut self, amount: usize) -> Result<(), ControlFlowDiagnostic> {
+    fn natural_loop_membership(&mut self, amount: usize) -> Result<(), ControlFlowDiagnosticV2> {
         self.reserve_with_storage(
             ControlFlowResource::NaturalLoopBodyMemberships,
             amount,
@@ -231,7 +231,7 @@ impl ControlFlowBudget {
         )
     }
 
-    fn dominance_frontier_entry(&mut self, amount: usize) -> Result<(), ControlFlowDiagnostic> {
+    fn dominance_frontier_entry(&mut self, amount: usize) -> Result<(), ControlFlowDiagnosticV2> {
         self.reserve_with_storage(
             ControlFlowResource::DominanceFrontierEntries,
             amount,
@@ -239,7 +239,7 @@ impl ControlFlowBudget {
         )
     }
 
-    fn idf_entry(&mut self, amount: usize) -> Result<(), ControlFlowDiagnostic> {
+    fn idf_entry(&mut self, amount: usize) -> Result<(), ControlFlowDiagnosticV2> {
         self.reserve_with_storage(
             ControlFlowResource::IteratedDominanceFrontierEntries,
             amount,
@@ -247,11 +247,11 @@ impl ControlFlowBudget {
         )
     }
 
-    pub(crate) fn ssa_output(&mut self, amount: usize) -> Result<(), ControlFlowDiagnostic> {
+    pub(crate) fn ssa_output(&mut self, amount: usize) -> Result<(), ControlFlowDiagnosticV2> {
         self.reserve_with_storage(ControlFlowResource::SsaPlacementOutputItems, amount, amount)
     }
 
-    pub(crate) fn work(&mut self, amount: usize) -> Result<(), ControlFlowDiagnostic> {
+    pub(crate) fn work(&mut self, amount: usize) -> Result<(), ControlFlowDiagnosticV2> {
         self.reserve(ControlFlowResource::WorkUnits, amount)
     }
 }
@@ -278,8 +278,8 @@ fn resource_error(
     limit: usize,
     storage_items: usize,
     work_units: usize,
-) -> ControlFlowDiagnostic {
-    ControlFlowDiagnostic::ResourceLimitExceeded {
+) -> ControlFlowDiagnosticV2 {
+    ControlFlowDiagnosticV2::ResourceLimitExceeded {
         resource,
         required,
         limit,
@@ -320,13 +320,6 @@ impl fmt::Display for ControlFlowEdge {
 pub enum ControlFlowDiagnostic {
     FunctionDeclaration,
     EmptyFunction,
-    ResourceLimitExceeded {
-        resource: ControlFlowResource,
-        required: usize,
-        limit: usize,
-        storage_items: usize,
-        work_units: usize,
-    },
     DuplicateBlock {
         block: BlockId,
     },
@@ -348,17 +341,6 @@ impl fmt::Display for ControlFlowDiagnostic {
         match self {
             Self::FunctionDeclaration => formatter.write_str("function is a declaration"),
             Self::EmptyFunction => formatter.write_str("function has no entry block"),
-            Self::ResourceLimitExceeded {
-                resource,
-                required,
-                limit,
-                storage_items,
-                work_units,
-            } => write!(
-                formatter,
-                "{} require {required} items, exceeding the deterministic limit {limit}; aggregate storage {storage_items}, aggregate work {work_units}",
-                resource.description()
-            ),
             Self::DuplicateBlock { block } => write!(formatter, "duplicate block {block}"),
             Self::MissingTerminator { block } => {
                 write!(formatter, "block {block} has no terminator")
@@ -379,11 +361,52 @@ impl fmt::Display for ControlFlowDiagnostic {
     }
 }
 
+/// Versioned diagnostic surface including bounded-analysis resource failures.
+///
+/// [`ControlFlowDiagnostic`] remains the exact legacy exhaustive enum.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum ControlFlowDiagnosticV2 {
+    Legacy(ControlFlowDiagnostic),
+    ResourceLimitExceeded {
+        resource: ControlFlowResource,
+        required: usize,
+        limit: usize,
+        storage_items: usize,
+        work_units: usize,
+    },
+}
+
+impl From<ControlFlowDiagnostic> for ControlFlowDiagnosticV2 {
+    fn from(diagnostic: ControlFlowDiagnostic) -> Self {
+        Self::Legacy(diagnostic)
+    }
+}
+
+impl fmt::Display for ControlFlowDiagnosticV2 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Legacy(diagnostic) => diagnostic.fmt(formatter),
+            Self::ResourceLimitExceeded {
+                resource,
+                required,
+                limit,
+                storage_items,
+                work_units,
+            } => write!(
+                formatter,
+                "{} require {required} items, exceeding the deterministic limit {limit}; aggregate storage {storage_items}, aggregate work {work_units}",
+                resource.description()
+            ),
+        }
+    }
+}
+
 /// Errors that prevent construction of a trustworthy control-flow analysis.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ControlFlowErrors {
     function: FunctionId,
     diagnostics: Vec<ControlFlowDiagnostic>,
+    diagnostics_v2: Vec<ControlFlowDiagnosticV2>,
 }
 
 impl ControlFlowErrors {
@@ -395,6 +418,11 @@ impl ControlFlowErrors {
     pub fn diagnostics(&self) -> &[ControlFlowDiagnostic] {
         &self.diagnostics
     }
+
+    /// Complete diagnostics, including fail-closed resource-limit failures.
+    pub fn diagnostics_v2(&self) -> &[ControlFlowDiagnosticV2] {
+        &self.diagnostics_v2
+    }
 }
 
 impl fmt::Display for ControlFlowErrors {
@@ -403,9 +431,9 @@ impl fmt::Display for ControlFlowErrors {
             formatter,
             "control-flow analysis of {} failed with {} diagnostic(s)",
             self.function,
-            self.diagnostics.len()
+            self.diagnostics_v2.len()
         )?;
-        for diagnostic in &self.diagnostics {
+        for diagnostic in &self.diagnostics_v2 {
             writeln!(formatter, "  {diagnostic}")?;
         }
         Ok(())
@@ -601,7 +629,7 @@ impl ControlFlowAnalysis {
     pub fn try_iterated_dominance_frontier(
         &self,
         definition_blocks: &BTreeSet<BlockId>,
-    ) -> Result<Option<BTreeSet<BlockId>>, ControlFlowDiagnostic> {
+    ) -> Result<Option<BTreeSet<BlockId>>, ControlFlowDiagnosticV2> {
         let mut budget = ControlFlowBudget::from_usage(self.resource_usage);
         self.iterated_dominance_frontier_with_budget(definition_blocks, &mut budget)
     }
@@ -610,7 +638,7 @@ impl ControlFlowAnalysis {
         &self,
         definition_blocks: &BTreeSet<BlockId>,
         budget: &mut ControlFlowBudget,
-    ) -> Result<Option<BTreeSet<BlockId>>, ControlFlowDiagnostic> {
+    ) -> Result<Option<BTreeSet<BlockId>>, ControlFlowDiagnosticV2> {
         budget.work(definition_blocks.len())?;
         if !definition_blocks
             .iter()
@@ -714,7 +742,7 @@ pub fn analyze_control_flow(function: &Function) -> Result<ControlFlowAnalysis, 
     }
     let mut budget = ControlFlowBudget::default();
     if let Err(diagnostic) = budget.reserve(ControlFlowResource::Blocks, body.blocks.len()) {
-        return Err(errors(function, [diagnostic]));
+        return Err(resource_errors(function, diagnostic));
     }
 
     let mut diagnostics = BTreeSet::new();
@@ -752,7 +780,7 @@ pub fn analyze_control_flow(function: &Function) -> Result<ControlFlowAnalysis, 
             Ok(())
         });
         if let Err(diagnostic) = result {
-            return Err(errors(function, [diagnostic]));
+            return Err(resource_errors(function, diagnostic));
         }
     }
     if !diagnostics.is_empty() {
@@ -770,7 +798,7 @@ pub fn analyze_control_flow(function: &Function) -> Result<ControlFlowAnalysis, 
         &reverse_postorder,
         &mut budget,
     )
-    .map_err(|diagnostic| errors(function, [diagnostic]))?;
+    .map_err(|diagnostic| resource_errors(function, diagnostic))?;
     let dominator_tree_children =
         compute_dominator_tree_children(&reachable, &immediate_dominators);
     let (dominator_preorder, dominator_subtree_end) =
@@ -783,7 +811,7 @@ pub fn analyze_control_flow(function: &Function) -> Result<ControlFlowAnalysis, 
         &dominator_tree_children,
         &mut budget,
     )
-    .map_err(|diagnostic| errors(function, [diagnostic]))?;
+    .map_err(|diagnostic| resource_errors(function, diagnostic))?;
     let backedges = compute_backedges(
         &reachable,
         &successors,
@@ -795,7 +823,7 @@ pub fn analyze_control_flow(function: &Function) -> Result<ControlFlowAnalysis, 
         return Err(errors(function, irreducible));
     }
     let natural_loops = compute_natural_loops(&reachable, &predecessors, &backedges, &mut budget)
-        .map_err(|diagnostic| errors(function, [diagnostic]))?;
+        .map_err(|diagnostic| resource_errors(function, diagnostic))?;
 
     let legacy_dominators = LegacyDominatorSets::new(&reachable);
     Ok(ControlFlowAnalysis {
@@ -824,8 +852,8 @@ pub fn analyze_control_flow(function: &Function) -> Result<ControlFlowAnalysis, 
 
 fn visit_successors(
     terminator: &Terminator,
-    mut visit: impl FnMut(BlockId) -> Result<(), ControlFlowDiagnostic>,
-) -> Result<(), ControlFlowDiagnostic> {
+    mut visit: impl FnMut(BlockId) -> Result<(), ControlFlowDiagnosticV2>,
+) -> Result<(), ControlFlowDiagnosticV2> {
     match terminator {
         Terminator::Branch { target, .. } => visit(*target),
         Terminator::ConditionalBranch {
@@ -867,9 +895,23 @@ fn errors(
     let mut diagnostics = diagnostics.into_iter().collect::<Vec<_>>();
     diagnostics.sort();
     diagnostics.dedup();
+    let diagnostics_v2 = diagnostics.iter().cloned().map(Into::into).collect();
     ControlFlowErrors {
         function: function.id.clone(),
         diagnostics,
+        diagnostics_v2,
+    }
+}
+
+fn resource_errors(function: &Function, diagnostic: ControlFlowDiagnosticV2) -> ControlFlowErrors {
+    debug_assert!(matches!(
+        &diagnostic,
+        ControlFlowDiagnosticV2::ResourceLimitExceeded { .. }
+    ));
+    ControlFlowErrors {
+        function: function.id.clone(),
+        diagnostics: Vec::new(),
+        diagnostics_v2: vec![diagnostic],
     }
 }
 
@@ -939,7 +981,7 @@ fn compute_immediate_dominators(
     predecessors: &BTreeMap<BlockId, BTreeSet<BlockId>>,
     reverse_postorder: &[BlockId],
     budget: &mut ControlFlowBudget,
-) -> Result<BTreeMap<BlockId, Option<BlockId>>, ControlFlowDiagnostic> {
+) -> Result<BTreeMap<BlockId, Option<BlockId>>, ControlFlowDiagnosticV2> {
     budget.storage(checked_budget_mul(reachable.len(), 2))?;
     let rpo_index = reverse_postorder
         .iter()
@@ -997,7 +1039,7 @@ fn intersect_dominator_paths(
     immediate: &BTreeMap<BlockId, Option<BlockId>>,
     rpo_index: &BTreeMap<BlockId, usize>,
     budget: &mut ControlFlowBudget,
-) -> Result<BlockId, ControlFlowDiagnostic> {
+) -> Result<BlockId, ControlFlowDiagnosticV2> {
     while left != right {
         budget.work(1)?;
         while rpo_index[&left] > rpo_index[&right] {
@@ -1067,7 +1109,7 @@ fn compute_dominance_frontiers(
     immediate: &BTreeMap<BlockId, Option<BlockId>>,
     children: &BTreeMap<BlockId, BTreeSet<BlockId>>,
     budget: &mut ControlFlowBudget,
-) -> Result<BTreeMap<BlockId, BTreeSet<BlockId>>, ControlFlowDiagnostic> {
+) -> Result<BTreeMap<BlockId, BTreeSet<BlockId>>, ControlFlowDiagnosticV2> {
     budget.storage(checked_budget_mul(reachable.len(), 3))?;
     let mut tree_postorder = Vec::with_capacity(reachable.len());
     let mut pending = vec![(entry, false)];
@@ -1129,7 +1171,7 @@ fn compute_natural_loops(
     predecessors: &BTreeMap<BlockId, BTreeSet<BlockId>>,
     backedges: &BTreeSet<ControlFlowEdge>,
     budget: &mut ControlFlowBudget,
-) -> Result<NaturalLoopForest, ControlFlowDiagnostic> {
+) -> Result<NaturalLoopForest, ControlFlowDiagnosticV2> {
     let block_ids = reachable.iter().copied().collect::<Vec<_>>();
     budget.work(block_ids.len())?;
     let block_indices = block_ids
@@ -1567,7 +1609,7 @@ mod resource_budget_tests {
             budget.reserve(resource, resource.limit()).unwrap();
             assert_eq!(
                 budget.reserve(resource, 1),
-                Err(ControlFlowDiagnostic::ResourceLimitExceeded {
+                Err(ControlFlowDiagnosticV2::ResourceLimitExceeded {
                     resource,
                     required: resource.limit() + 1,
                     limit: resource.limit(),
@@ -1588,7 +1630,7 @@ mod resource_budget_tests {
 
     #[test]
     fn resource_diagnostic_text_is_stable() {
-        let diagnostic = ControlFlowDiagnostic::ResourceLimitExceeded {
+        let diagnostic = ControlFlowDiagnosticV2::ResourceLimitExceeded {
             resource: ControlFlowResource::NaturalLoopBodyMemberships,
             required: MAX_CONTROL_FLOW_LOOP_BODY_MEMBERSHIPS + 1,
             limit: MAX_CONTROL_FLOW_LOOP_BODY_MEMBERSHIPS,
@@ -1615,7 +1657,7 @@ mod resource_budget_tests {
         );
         assert_eq!(
             budget.idf_entry(1),
-            Err(ControlFlowDiagnostic::ResourceLimitExceeded {
+            Err(ControlFlowDiagnosticV2::ResourceLimitExceeded {
                 resource: ControlFlowResource::IteratedDominanceFrontierEntries,
                 required: MAX_CONTROL_FLOW_IDF_ENTRIES + 1,
                 limit: MAX_CONTROL_FLOW_IDF_ENTRIES,
@@ -1634,7 +1676,7 @@ mod resource_budget_tests {
         let mut budget = ControlFlowBudget::from_usage(initial);
         assert_eq!(
             budget.work(usize::MAX),
-            Err(ControlFlowDiagnostic::ResourceLimitExceeded {
+            Err(ControlFlowDiagnosticV2::ResourceLimitExceeded {
                 resource: ControlFlowResource::WorkUnits,
                 required: usize::MAX,
                 limit: MAX_CONTROL_FLOW_WORK_UNITS,
