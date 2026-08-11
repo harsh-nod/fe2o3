@@ -2386,3 +2386,138 @@ fn u64_exclusive_end_matches_executable_range_semantics() {
         MemoryErrorReasonV2::AddressNotRepresentable
     );
 }
+
+fn assert_identity_rejected(result: Result<bool, MemoryModelErrorV2>) {
+    assert!(!matches!(result, Ok(true)));
+}
+
+#[test]
+fn standalone_identity_verifiers_bind_every_policy_limit() {
+    let exact = MemoryBudgetsV2 {
+        max_types: 16,
+        max_type_edges: 32,
+        max_validity_ranges: 32,
+        max_actions: 4,
+        max_projections_per_place: 4,
+        max_allocations: 4,
+        max_loans: 4,
+        max_capabilities: 4,
+        max_state_ranges: 32,
+        max_obligations: 32,
+        max_canonical_bytes: 16_384,
+        max_validation_work: 1_000_000,
+        max_execution_work: 1_000_000,
+    };
+    let exact_program = MemoryProgramV2::new(
+        TargetLayoutV2::gfx942_xnack_minus(),
+        type_table(),
+        vec![allocate(16)],
+        exact,
+    )
+    .unwrap();
+    let execution = execute_memory_program_v2(&exact_program, exact).unwrap();
+    let record = &execution.records()[0];
+    let obligation = &record.obligations[0];
+    let identity = *execution.untrusted_program_identity();
+    let action = &exact_program.actions()[0];
+
+    assert!(
+        record
+            .verify_identity_for(identity, action, 0, exact)
+            .unwrap()
+    );
+    assert!(obligation.verify_identity_in(record, exact).unwrap());
+    assert!(execution.verify_identities(&exact_program, exact).unwrap());
+
+    let check = |budgets| {
+        assert_identity_rejected(record.verify_identity_for(identity, action, 0, budgets));
+        assert_identity_rejected(obligation.verify_identity_in(record, budgets));
+        assert_identity_rejected(execution.verify_identities(&exact_program, budgets));
+    };
+    macro_rules! check_policy_field {
+        ($field:ident, $exact:expr) => {{
+            for value in [0, 1, $exact + 1] {
+                let mut budgets = exact;
+                budgets.$field = value;
+                check(budgets);
+            }
+        }};
+    }
+    check_policy_field!(max_types, exact.max_types);
+    check_policy_field!(max_type_edges, exact.max_type_edges);
+    check_policy_field!(max_validity_ranges, exact.max_validity_ranges);
+    check_policy_field!(max_actions, exact.max_actions);
+    check_policy_field!(max_projections_per_place, exact.max_projections_per_place);
+    check_policy_field!(max_allocations, exact.max_allocations);
+    check_policy_field!(max_loans, exact.max_loans);
+    check_policy_field!(max_capabilities, exact.max_capabilities);
+    check_policy_field!(max_state_ranges, exact.max_state_ranges);
+    check_policy_field!(max_obligations, exact.max_obligations);
+    check_policy_field!(max_canonical_bytes, exact.max_canonical_bytes);
+    check_policy_field!(max_validation_work, exact.max_validation_work);
+    check_policy_field!(max_execution_work, exact.max_execution_work);
+}
+
+#[test]
+fn standalone_action_verification_preflights_projection_bombs() {
+    let budgets = MemoryBudgetsV2::default();
+    let baseline_program = program(vec![allocate(16)]);
+    let execution = execute_memory_program_v2(&baseline_program, budgets).unwrap();
+    let record = &execution.records()[0];
+    let projection_bomb = MemoryActionV2::ReadTyped {
+        actor: AccessActorV2::Owner(owner(1)),
+        place: place(1, u64::MAX, vec![ProjectionV2::Index(u64::MAX); 1_000]),
+    };
+    let hostile = MemoryBudgetsV2 {
+        max_actions: 1,
+        max_projections_per_place: 0,
+        max_allocations: 0,
+        max_obligations: 0,
+        max_canonical_bytes: 1,
+        max_validation_work: 1,
+        max_execution_work: 1,
+        ..budgets
+    };
+
+    for _ in 0..16 {
+        let error = record
+            .verify_identity_for(
+                *execution.untrusted_program_identity(),
+                &projection_bomb,
+                0,
+                hostile,
+            )
+            .unwrap_err();
+        assert_eq!(
+            error.reason,
+            MemoryErrorReasonV2::ResourceLimit {
+                resource: "place projections",
+                actual: 1_000,
+                max: 0,
+            }
+        );
+    }
+
+    let zero = MemoryBudgetsV2 {
+        max_types: 0,
+        max_type_edges: 0,
+        max_validity_ranges: 0,
+        max_actions: 0,
+        max_projections_per_place: 0,
+        max_allocations: 0,
+        max_loans: 0,
+        max_capabilities: 0,
+        max_state_ranges: 0,
+        max_obligations: 0,
+        max_canonical_bytes: 0,
+        max_validation_work: 0,
+        max_execution_work: 0,
+    };
+    assert_identity_rejected(record.verify_identity_for(
+        *execution.untrusted_program_identity(),
+        baseline_program.actions().first().unwrap(),
+        0,
+        zero,
+    ));
+    assert_identity_rejected(record.obligations[0].verify_identity_in(record, zero));
+}

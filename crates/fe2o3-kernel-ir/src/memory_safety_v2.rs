@@ -153,7 +153,7 @@ impl WorkMeterV2 {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct MemoryBudgetsV2 {
     pub max_types: u32,
     pub max_type_edges: u32,
@@ -1237,6 +1237,7 @@ pub enum ObligationBasisV2 {
 pub struct MemoryObligationV2 {
     obligation_identity: MemoryObligationIdentityV2,
     obligation_index: u32,
+    admitted_budgets: MemoryBudgetsV2,
     pub program_identity: UntrustedMemoryProgramIdentityV2,
     pub action_identity: MemoryActionIdentityV2,
     pub action_index: u32,
@@ -1251,6 +1252,7 @@ pub struct MemoryObligationV2 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TransitionRecordV2 {
     transition_identity: MemoryTransitionIdentityV2,
+    admitted_budgets: MemoryBudgetsV2,
     pub program_identity: UntrustedMemoryProgramIdentityV2,
     pub action_identity: MemoryActionIdentityV2,
     pub action_index: u32,
@@ -1376,13 +1378,14 @@ impl MemoryExecutionV2 {
         for (index, (record, action)) in self.records.iter().zip(&program.actions).enumerate() {
             work.charge(1).map_err(MemoryModelErrorV2::static_error)?;
             let action_identity =
-                canonical_action_identity_v2(program_identity, index, action, &mut work)
+                canonical_action_identity_v2(program_identity, index, action, budgets, &mut work)
                     .map_err(MemoryModelErrorV2::static_error)?;
             if !verify_transition_identity_v2(
                 record,
                 program_identity,
                 action_identity,
                 index as u32,
+                budgets,
                 &mut work,
             )
             .map_err(MemoryModelErrorV2::static_error)?
@@ -1433,7 +1436,10 @@ impl MemoryObligationV2 {
             .map_err(MemoryModelErrorV2::static_error)?;
         let mut work = WorkMeterV2::execution(budgets.max_execution_work);
         let index = self.obligation_index as usize;
-        if record.obligations.get(index) != Some(self) {
+        if self.admitted_budgets != budgets
+            || record.admitted_budgets != budgets
+            || record.obligations.get(index) != Some(self)
+        {
             return Ok(false);
         }
         verify_transition_identity_v2(
@@ -1441,6 +1447,7 @@ impl MemoryObligationV2 {
             record.program_identity,
             record.action_identity,
             record.action_index,
+            budgets,
             &mut work,
         )
         .map_err(MemoryModelErrorV2::static_error)
@@ -1467,6 +1474,7 @@ impl TransitionRecordV2 {
             program_identity,
             action_index as usize,
             action,
+            budgets,
             &mut work,
         )
         .map_err(MemoryModelErrorV2::static_error)?;
@@ -1475,6 +1483,7 @@ impl TransitionRecordV2 {
             program_identity,
             action_identity,
             action_index,
+            budgets,
             &mut work,
         )
         .map_err(MemoryModelErrorV2::static_error)
@@ -1491,6 +1500,7 @@ fn verify_obligation_identity_v2(
         || obligation.action_identity != record.action_identity
         || obligation.action_index != record.action_index
         || obligation.obligation_index != obligation_index
+        || obligation.admitted_budgets != record.admitted_budgets
     {
         return Ok(false);
     }
@@ -1502,9 +1512,21 @@ fn verify_transition_identity_v2(
     program_identity: UntrustedMemoryProgramIdentityV2,
     action_identity: MemoryActionIdentityV2,
     action_index: u32,
+    budgets: MemoryBudgetsV2,
     work: &mut WorkMeterV2,
 ) -> Result<bool, MemoryErrorReasonV2> {
-    if record.program_identity != program_identity
+    enforce(
+        "actions",
+        u64::from(action_index).saturating_add(1),
+        u64::from(budgets.max_actions),
+    )?;
+    enforce(
+        "obligations",
+        record.obligations.len() as u64,
+        u64::from(budgets.max_obligations),
+    )?;
+    if record.admitted_budgets != budgets
+        || record.program_identity != program_identity
         || record.action_identity != action_identity
         || record.action_index != action_index
     {
@@ -1741,6 +1763,7 @@ pub fn execute_memory_program_v2(
             program_identity,
             index,
             action,
+            budgets,
             &mut machine.execution_work,
         )
         .map_err(|reason| MemoryModelErrorV2 {
@@ -1797,6 +1820,7 @@ pub fn execute_memory_program_v2(
         machine.obligation_count = total;
         let mut record = TransitionRecordV2 {
             transition_identity: MemoryTransitionIdentityV2([0; 32]),
+            admitted_budgets: budgets,
             program_identity,
             action_identity: machine.action_identity,
             action_index: index as u32,
@@ -3062,6 +3086,7 @@ impl MachineV2<'_> {
         MemoryObligationV2 {
             obligation_identity: MemoryObligationIdentityV2([0; 32]),
             obligation_index: 0,
+            admitted_budgets: self.budgets,
             program_identity: self.program_identity,
             action_identity: self.action_identity,
             action_index: self.action_index,
@@ -3316,18 +3341,54 @@ fn canonical_action_identity_v2(
     program_identity: UntrustedMemoryProgramIdentityV2,
     index: usize,
     action: &MemoryActionV2,
+    budgets: MemoryBudgetsV2,
     work: &mut WorkMeterV2,
 ) -> Result<MemoryActionIdentityV2, MemoryErrorReasonV2> {
-    let mut writer = WriterV2::new(HARD_MAX_CANONICAL_BYTES);
-    encode_action(&mut writer, action)?;
-    let canonical_action = writer.finish();
-    work.charge(canonical_action.len() as u64)?;
+    let canonical_len = preflight_action_identity_v2(index, action, budgets, work)?;
     let mut digest = MeteredSha256V2::new(work);
     identity_bytes(&mut digest, ACTION_IDENTITY_DOMAIN)?;
     identity_bytes(&mut digest, program_identity.digest())?;
+    identity_budget_fields_v2(&mut digest, budgets)?;
     identity_u64(&mut digest, index as u64)?;
-    identity_bytes(&mut digest, &canonical_action)?;
+    identity_u64(&mut digest, canonical_len)?;
+    let mut writer = DigestWriterV2::new(&mut digest, budgets.max_canonical_bytes);
+    encode_action(&mut writer, action)?;
+    debug_assert_eq!(writer.written(), canonical_len);
     Ok(MemoryActionIdentityV2(digest.finalize()?))
+}
+
+fn preflight_action_identity_v2(
+    index: usize,
+    action: &MemoryActionV2,
+    budgets: MemoryBudgetsV2,
+    work: &mut WorkMeterV2,
+) -> Result<u64, MemoryErrorReasonV2> {
+    let action_count = index
+        .checked_add(1)
+        .ok_or(MemoryErrorReasonV2::ResourceLimit {
+            resource: "actions",
+            actual: u64::MAX,
+            max: u64::from(budgets.max_actions),
+        })?;
+    enforce(
+        "actions",
+        action_count as u64,
+        u64::from(budgets.max_actions),
+    )?;
+    if let Some(place) = action.typed_place() {
+        enforce(
+            "place projections",
+            place.projections.len() as u64,
+            u64::from(budgets.max_projections_per_place),
+        )?;
+    }
+    work.charge(1)?;
+    if let Some(place) = action.typed_place() {
+        work.charge(place.projections.len() as u64)?;
+    }
+    let mut counter = CountingWriterV2::new(budgets.max_canonical_bytes);
+    encode_action(&mut counter, action)?;
+    Ok(counter.written())
 }
 
 fn canonical_obligation_identity_v2(
@@ -3455,6 +3516,7 @@ fn identity_obligation_fields<D: IdentitySinkV2>(
     digest: &mut D,
     obligation: &MemoryObligationV2,
 ) -> Result<(), MemoryErrorReasonV2> {
+    identity_budget_fields_v2(digest, obligation.admitted_budgets)?;
     identity_u32(digest, obligation.obligation_index)?;
     identity_bytes(digest, obligation.program_identity.digest())?;
     identity_bytes(digest, obligation.action_identity.digest())?;
@@ -3472,6 +3534,7 @@ fn identity_transition_fields<D: IdentitySinkV2>(
     digest: &mut D,
     record: &TransitionRecordV2,
 ) -> Result<(), MemoryErrorReasonV2> {
+    identity_budget_fields_v2(digest, record.admitted_budgets)?;
     identity_bytes(digest, record.program_identity.digest())?;
     identity_bytes(digest, record.action_identity.digest())?;
     identity_u32(digest, record.action_index)?;
@@ -3481,6 +3544,25 @@ fn identity_transition_fields<D: IdentitySinkV2>(
         identity_obligation_fields(digest, obligation)?;
     }
     Ok(())
+}
+
+fn identity_budget_fields_v2<D: IdentitySinkV2>(
+    digest: &mut D,
+    budgets: MemoryBudgetsV2,
+) -> Result<(), MemoryErrorReasonV2> {
+    identity_u32(digest, budgets.max_types)?;
+    identity_u32(digest, budgets.max_type_edges)?;
+    identity_u32(digest, budgets.max_validity_ranges)?;
+    identity_u32(digest, budgets.max_actions)?;
+    identity_u32(digest, budgets.max_projections_per_place)?;
+    identity_u32(digest, budgets.max_allocations)?;
+    identity_u32(digest, budgets.max_loans)?;
+    identity_u32(digest, budgets.max_capabilities)?;
+    identity_u32(digest, budgets.max_state_ranges)?;
+    identity_u32(digest, budgets.max_obligations)?;
+    identity_u32(digest, budgets.max_canonical_bytes)?;
+    identity_u64(digest, budgets.max_validation_work)?;
+    identity_u64(digest, budgets.max_execution_work)
 }
 
 const fn obligation_kind_tag(kind: MemoryObligationKindV2) -> u8 {
@@ -3898,23 +3980,14 @@ impl WriterV2 {
             max,
         }
     }
-    fn append(&mut self, bytes: &[u8]) -> Result<(), MemoryErrorReasonV2> {
-        let actual = self.bytes.len().checked_add(bytes.len()).ok_or(
-            MemoryErrorReasonV2::ResourceLimit {
-                resource: "canonical bytes",
-                actual: u64::MAX,
-                max: self.max as u64,
-            },
-        )?;
-        enforce("canonical bytes", actual as u64, self.max as u64)?;
+    fn finish(self) -> Vec<u8> {
         self.bytes
-            .try_reserve(bytes.len())
-            .map_err(|_| MemoryErrorReasonV2::AllocationFailed {
-                resource: "canonical bytes",
-            })?;
-        self.bytes.extend_from_slice(bytes);
-        Ok(())
     }
+}
+
+trait CanonicalWriterV2 {
+    fn append(&mut self, bytes: &[u8]) -> Result<(), MemoryErrorReasonV2>;
+
     fn bytes(&mut self, value: &[u8]) -> Result<(), MemoryErrorReasonV2> {
         self.append(value)
     }
@@ -3933,8 +4006,91 @@ impl WriterV2 {
     fn u128(&mut self, value: u128) -> Result<(), MemoryErrorReasonV2> {
         self.append(&value.to_le_bytes())
     }
-    fn finish(self) -> Vec<u8> {
+}
+
+impl CanonicalWriterV2 for WriterV2 {
+    fn append(&mut self, bytes: &[u8]) -> Result<(), MemoryErrorReasonV2> {
+        let actual = self.bytes.len().checked_add(bytes.len()).ok_or(
+            MemoryErrorReasonV2::ResourceLimit {
+                resource: "canonical bytes",
+                actual: u64::MAX,
+                max: self.max as u64,
+            },
+        )?;
+        enforce("canonical bytes", actual as u64, self.max as u64)?;
         self.bytes
+            .try_reserve(bytes.len())
+            .map_err(|_| MemoryErrorReasonV2::AllocationFailed {
+                resource: "canonical bytes",
+            })?;
+        self.bytes.extend_from_slice(bytes);
+        Ok(())
+    }
+}
+
+struct CountingWriterV2 {
+    written: u64,
+    max: u32,
+}
+
+impl CountingWriterV2 {
+    const fn new(max: u32) -> Self {
+        Self { written: 0, max }
+    }
+
+    const fn written(&self) -> u64 {
+        self.written
+    }
+}
+
+impl CanonicalWriterV2 for CountingWriterV2 {
+    fn append(&mut self, bytes: &[u8]) -> Result<(), MemoryErrorReasonV2> {
+        let actual = self.written.checked_add(bytes.len() as u64).ok_or(
+            MemoryErrorReasonV2::ResourceLimit {
+                resource: "canonical bytes",
+                actual: u64::MAX,
+                max: u64::from(self.max),
+            },
+        )?;
+        enforce("canonical bytes", actual, u64::from(self.max))?;
+        self.written = actual;
+        Ok(())
+    }
+}
+
+struct DigestWriterV2<'a, 'work> {
+    digest: &'a mut MeteredSha256V2<'work>,
+    written: u64,
+    max: u32,
+}
+
+impl<'a, 'work> DigestWriterV2<'a, 'work> {
+    const fn new(digest: &'a mut MeteredSha256V2<'work>, max: u32) -> Self {
+        Self {
+            digest,
+            written: 0,
+            max,
+        }
+    }
+
+    const fn written(&self) -> u64 {
+        self.written
+    }
+}
+
+impl CanonicalWriterV2 for DigestWriterV2<'_, '_> {
+    fn append(&mut self, bytes: &[u8]) -> Result<(), MemoryErrorReasonV2> {
+        let actual = self.written.checked_add(bytes.len() as u64).ok_or(
+            MemoryErrorReasonV2::ResourceLimit {
+                resource: "canonical bytes",
+                actual: u64::MAX,
+                max: u64::from(self.max),
+            },
+        )?;
+        enforce("canonical bytes", actual, u64::from(self.max))?;
+        self.digest.update(bytes)?;
+        self.written = actual;
+        Ok(())
     }
 }
 
@@ -4235,8 +4391,8 @@ fn decode_validity(
     })
 }
 
-fn encode_action(
-    writer: &mut WriterV2,
+fn encode_action<W: CanonicalWriterV2>(
+    writer: &mut W,
     action: &MemoryActionV2,
 ) -> Result<(), MemoryErrorReasonV2> {
     match action {
@@ -4530,7 +4686,10 @@ fn decode_action(
     })
 }
 
-fn encode_place(writer: &mut WriterV2, place: &TypedPlaceV2) -> Result<(), MemoryErrorReasonV2> {
+fn encode_place<W: CanonicalWriterV2>(
+    writer: &mut W,
+    place: &TypedPlaceV2,
+) -> Result<(), MemoryErrorReasonV2> {
     encode_provenance(writer, place.provenance)?;
     writer.u64(place.base_offset)?;
     writer.u32(place.root_type.get())?;
@@ -4583,7 +4742,10 @@ fn decode_place(
     })
 }
 
-fn encode_raw_place(writer: &mut WriterV2, place: RawPlaceV2) -> Result<(), MemoryErrorReasonV2> {
+fn encode_raw_place<W: CanonicalWriterV2>(
+    writer: &mut W,
+    place: RawPlaceV2,
+) -> Result<(), MemoryErrorReasonV2> {
     encode_provenance(writer, place.provenance)?;
     writer.u8(place.pointer_address_space.tag())?;
     writer.u64(place.byte_offset)?;
@@ -4600,7 +4762,10 @@ fn decode_raw_place(reader: &mut ReaderV2<'_>) -> Result<RawPlaceV2, MemoryModel
     })
 }
 
-fn encode_actor(writer: &mut WriterV2, actor: AccessActorV2) -> Result<(), MemoryErrorReasonV2> {
+fn encode_actor<W: CanonicalWriterV2>(
+    writer: &mut W,
+    actor: AccessActorV2,
+) -> Result<(), MemoryErrorReasonV2> {
     match actor {
         AccessActorV2::Owner(owner) => {
             writer.u8(0)?;
@@ -4624,8 +4789,8 @@ fn decode_actor(reader: &mut ReaderV2<'_>) -> Result<AccessActorV2, MemoryModelE
     }
 }
 
-fn encode_scope(
-    writer: &mut WriterV2,
+fn encode_scope<W: CanonicalWriterV2>(
+    writer: &mut W,
     scope: CapabilityScopeV2,
 ) -> Result<(), MemoryErrorReasonV2> {
     match scope {
@@ -4651,8 +4816,8 @@ fn decode_scope(reader: &mut ReaderV2<'_>) -> Result<CapabilityScopeV2, MemoryMo
     }
 }
 
-fn encode_provenance(
-    writer: &mut WriterV2,
+fn encode_provenance<W: CanonicalWriterV2>(
+    writer: &mut W,
     provenance: ProvenanceV2,
 ) -> Result<(), MemoryErrorReasonV2> {
     writer.u32(provenance.allocation.get())?;
@@ -4664,8 +4829,8 @@ fn decode_provenance(reader: &mut ReaderV2<'_>) -> Result<ProvenanceV2, MemoryMo
         generation: reader.u64()?,
     })
 }
-fn encode_lifetime(
-    writer: &mut WriterV2,
+fn encode_lifetime<W: CanonicalWriterV2>(
+    writer: &mut W,
     lifetime: LifetimeRegionV2,
 ) -> Result<(), MemoryErrorReasonV2> {
     writer.u64(lifetime.start.0)?;
@@ -4677,7 +4842,10 @@ fn decode_lifetime(reader: &mut ReaderV2<'_>) -> Result<LifetimeRegionV2, Memory
         end_inclusive: EpochV2(reader.u64()?),
     })
 }
-fn encode_range(writer: &mut WriterV2, range: ByteRangeV2) -> Result<(), MemoryErrorReasonV2> {
+fn encode_range<W: CanonicalWriterV2>(
+    writer: &mut W,
+    range: ByteRangeV2,
+) -> Result<(), MemoryErrorReasonV2> {
     writer.u64(range.start)?;
     writer.u64(range.len)
 }
@@ -4688,8 +4856,8 @@ fn decode_range(reader: &mut ReaderV2<'_>) -> Result<ByteRangeV2, MemoryModelErr
     })
 }
 
-fn encode_optional_capability(
-    writer: &mut WriterV2,
+fn encode_optional_capability<W: CanonicalWriterV2>(
+    writer: &mut W,
     capability: Option<CapabilityIdV2>,
 ) -> Result<(), MemoryErrorReasonV2> {
     match capability {
@@ -4872,5 +5040,106 @@ mod internal_tests {
         assert_eq!(map.len(), 1);
         assert_eq!(map.get(&1), Some(&10));
         assert_eq!(map.get(&2), None);
+    }
+
+    fn identity_test_action(projections: Vec<ProjectionV2>) -> MemoryActionV2 {
+        MemoryActionV2::ReadTyped {
+            actor: AccessActorV2::Owner(OwnerIdV2::new(1).unwrap()),
+            place: TypedPlaceV2 {
+                provenance: ProvenanceV2 {
+                    allocation: AllocationIdV2::new(1).unwrap(),
+                    generation: u64::MAX,
+                },
+                base_offset: u64::MAX,
+                root_type: MemoryTypeIdV2::new(u32::MAX).unwrap(),
+                projections,
+            },
+        }
+    }
+
+    #[test]
+    fn action_identity_preflight_is_exact_streaming_and_retry_stable() {
+        let identity = UntrustedMemoryProgramIdentityV2([0x5a; 32]);
+        let action = identity_test_action(vec![
+            ProjectionV2::Field(u32::MAX),
+            ProjectionV2::Index(u64::MAX),
+        ]);
+        let mut counter = CountingWriterV2::new(HARD_MAX_CANONICAL_BYTES);
+        encode_action(&mut counter, &action).unwrap();
+        let exact_bytes = u32::try_from(counter.written()).unwrap();
+
+        let exact_byte_budgets = MemoryBudgetsV2 {
+            max_actions: 1,
+            max_projections_per_place: 2,
+            max_canonical_bytes: exact_bytes,
+            ..MemoryBudgetsV2::default()
+        };
+        let mut work = WorkMeterV2::execution(exact_byte_budgets.max_execution_work);
+        canonical_action_identity_v2(identity, 0, &action, exact_byte_budgets, &mut work).unwrap();
+        let exact_work = work.used();
+
+        let exact_work_budgets = MemoryBudgetsV2 {
+            max_execution_work: exact_work,
+            ..exact_byte_budgets
+        };
+        let mut work = WorkMeterV2::execution(exact_work);
+        canonical_action_identity_v2(identity, 0, &action, exact_work_budgets, &mut work).unwrap();
+        assert_eq!(work.used(), exact_work);
+
+        let short_bytes = MemoryBudgetsV2 {
+            max_canonical_bytes: exact_bytes - 1,
+            ..exact_byte_budgets
+        };
+        let mut work = WorkMeterV2::execution(short_bytes.max_execution_work);
+        assert_eq!(
+            canonical_action_identity_v2(identity, 0, &action, short_bytes, &mut work).unwrap_err(),
+            MemoryErrorReasonV2::ResourceLimit {
+                resource: "canonical bytes",
+                actual: u64::from(exact_bytes),
+                max: u64::from(exact_bytes - 1),
+            }
+        );
+
+        let short_work = MemoryBudgetsV2 {
+            max_execution_work: exact_work - 1,
+            ..exact_byte_budgets
+        };
+        let mut work = WorkMeterV2::execution(short_work.max_execution_work);
+        assert!(matches!(
+            canonical_action_identity_v2(identity, 0, &action, short_work, &mut work),
+            Err(MemoryErrorReasonV2::ResourceLimit {
+                resource: "execution work",
+                actual,
+                max,
+            }) if actual == exact_work && max == exact_work - 1
+        ));
+
+        let projection_bomb = identity_test_action(vec![ProjectionV2::Field(u32::MAX); 1_000]);
+        let hostile_budgets = MemoryBudgetsV2 {
+            max_actions: 1,
+            max_projections_per_place: 0,
+            max_canonical_bytes: 1,
+            max_execution_work: 1,
+            ..MemoryBudgetsV2::default()
+        };
+        for _ in 0..8 {
+            let mut work = WorkMeterV2::execution(hostile_budgets.max_execution_work);
+            assert_eq!(
+                canonical_action_identity_v2(
+                    identity,
+                    0,
+                    &projection_bomb,
+                    hostile_budgets,
+                    &mut work,
+                )
+                .unwrap_err(),
+                MemoryErrorReasonV2::ResourceLimit {
+                    resource: "place projections",
+                    actual: 1_000,
+                    max: 0,
+                }
+            );
+            assert_eq!(work.used(), 0, "projection rejection must precede encoding");
+        }
     }
 }
