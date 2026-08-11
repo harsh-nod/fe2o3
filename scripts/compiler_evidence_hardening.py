@@ -98,6 +98,7 @@ def _landlock_syscalls() -> tuple[int, int, int]:
 
 def _restrict_filesystem_with_landlock(
     writable_roots: Sequence[Path],
+    writable_paths: Sequence[Path],
     readable_paths: Sequence[Path] | None,
     readable_roots: Sequence[Path],
 ) -> None:
@@ -129,6 +130,8 @@ def _restrict_filesystem_with_landlock(
         rules: dict[Path, int] = {
             root: LANDLOCK_WRITE_ACCESS for root in writable_roots
         }
+        for path in writable_paths:
+            rules[path] = rules.get(path, 0) | LANDLOCK_WRITE_ACCESS
         if readable_paths is not None:
             for path in readable_paths:
                 rules[path] = rules.get(path, 0) | LANDLOCK_ACCESS_FS_READ_FILE
@@ -626,6 +629,7 @@ class CommandResult:
     elapsed_seconds: float
     peak_memory_bytes: int
     peak_processes: int
+    cgroup_measurements: dict[str, Any]
 
 
 def prepare_cgroup_delegation() -> Path:
@@ -695,6 +699,20 @@ class Cgroup:
         value = (self.path / name).read_text("ascii").strip()
         return int(value) if value != "max" else 0
 
+    def measurement(self) -> dict[str, str]:
+        names = (
+            "memory.current",
+            "memory.peak",
+            "memory.max",
+            "pids.current",
+            "pids.peak",
+            "pids.max",
+        )
+        return {
+            name: (self.path / name).read_text("ascii").strip()
+            for name in names
+        }
+
     def kill(self) -> None:
         if self.populated():
             (self.path / "cgroup.kill").write_text("1", encoding="ascii")
@@ -755,6 +773,7 @@ class Supervisor:
         *,
         limits: CommandLimits = CommandLimits(),
         inherited_fds: Iterable[int] = (),
+        writable_paths: Iterable[Path] = (),
         readable_paths: Iterable[Path] | None = None,
         readable_roots: Iterable[Path] = (),
     ) -> CommandResult:
@@ -771,7 +790,11 @@ class Supervisor:
         selected_readable_roots = tuple(
             sorted(set(readable_roots), key=os.fspath)
         )
+        selected_writable_paths = tuple(
+            sorted(set(writable_paths), key=os.fspath)
+        )
         for selected in (
+            *selected_writable_paths,
             *(() if selected_readable_paths is None else selected_readable_paths),
             *selected_readable_roots,
         ):
@@ -792,6 +815,8 @@ class Supervisor:
         self.sequence += 1
         cgroup = Cgroup(self.cgroup_root, limits, self.sequence)
         start = time.monotonic()
+        samples: list[dict[str, Any]] = []
+        next_sample = start
         pid = -1
         selector: selectors.BaseSelector | None = None
         try:
@@ -806,6 +831,7 @@ class Supervisor:
                     _prctl(PR_SET_NO_NEW_PRIVS, 1)
                     _restrict_filesystem_with_landlock(
                         self.writable_roots,
+                        selected_writable_paths,
                         selected_readable_paths,
                         selected_readable_roots,
                     )
@@ -857,6 +883,15 @@ class Supervisor:
             failure: str | None = None
             while status is None or selector.get_map():
                 elapsed = time.monotonic() - start
+                now = time.monotonic()
+                if now >= next_sample and len(samples) < 4096:
+                    samples.append(
+                        {
+                            "elapsed_nanoseconds": int((now - start) * 1_000_000_000),
+                            "files": cgroup.measurement(),
+                        }
+                    )
+                    next_sample = now + 0.1
                 if elapsed > limits.timeout_seconds and failure is None:
                     failure = "command exceeded timeout"
                     cgroup.kill()
@@ -895,6 +930,7 @@ class Supervisor:
             self._reap_descendants()
             peak_memory = cgroup.peak("memory.peak")
             peak_processes = cgroup.peak("pids.peak")
+            final_measurement = cgroup.measurement()
             elapsed = time.monotonic() - start
             executable.revalidate()
             for guard in self.guards:
@@ -910,6 +946,11 @@ class Supervisor:
                 elapsed,
                 peak_memory,
                 peak_processes,
+                {
+                    "schema": "fe2o3-cgroup-v2-command-measurement-v1",
+                    "samples": samples,
+                    "final_files": final_measurement,
+                },
             )
         finally:
             if selector is not None:
