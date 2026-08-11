@@ -43,7 +43,8 @@ rejects.
 
 ## Operator Provisioning
 
-1. Generate separate Ed25519 attestor and reviewer keys outside the repository.
+1. Generate separate Ed25519 attestor, publisher, and reviewer keys outside the
+   repository.
 2. Keep private keys runner-owned, mode 0600, and outside every checkout.
 3. Export only the public keys and run the fail-closed bootstrap into a new,
    otherwise absent directory:
@@ -52,6 +53,8 @@ rejects.
          --output-root /tmp/parity-production-trust \
          --attestor-public-key /operator-public/attestor.pem \
          --attestor-key-id operator-runner-v1 \
+         --publisher-public-key /operator-public/publisher.pem \
+         --publisher-key-id operator-publisher-v1 \
          --reviewer-public-key /operator-public/reviewer.pem \
          --reviewer-key-id operator-reviewer-v1
 
@@ -107,10 +110,10 @@ Validate a staged or installed tree independently:
       --trusted-root /path/to/export \
       --trust-policy /path/to/export/docs/parity-evidence/trust-policy-v2.tsv
 
-Validation requires the canonical policy and key locations, exactly one
-attestor and one reviewer, two distinct canonical Ed25519 public keys, the
-production domain, and the fixed metadata allowlist. Merely hand-writing a
-parseable policy is insufficient.
+Validation requires the canonical policy and key locations, exactly one key for
+each attestor, publisher, and reviewer role, three distinct canonical Ed25519
+public keys, the production domain, and the fixed metadata allowlist. Merely
+hand-writing a parseable policy is insufficient.
 
 The active trust policy is canonical TSV:
 
@@ -119,9 +122,10 @@ The active trust policy is canonical TSV:
     metadata_path_count                 2
     metadata_path  0000  exact   docs/cuda-oxide-parity-status.tsv
     metadata_path  0001  prefix  docs/parity-evidence/archive/
-    key_count                           2
+    key_count                           3
     key  0000  attestor  runner-v1    PUBLIC_KEY_PATH  SHA256  ed25519
-    key  0001  reviewer  reviewer-v1  PUBLIC_KEY_PATH  SHA256  ed25519
+    key  0001  publisher publisher-v1 PUBLIC_KEY_PATH  SHA256  ed25519
+    key  0002  reviewer  reviewer-v1  PUBLIC_KEY_PATH  SHA256  ed25519
 
 Public-key fingerprints are SHA-256 over canonical Ed25519 SubjectPublicKeyInfo
 DER, not PEM file bytes, and must be unique across every role and key ID.
@@ -347,9 +351,13 @@ GiB, with both limits enforced from `fstat` before hashing or copying.
 
 The destination parent is independently opened by an absolute component walk
 that rejects symlinks. One deterministic, byte-bounded staging lease is used
-for each destination/manifest identity; a subsequent run safely removes a
-bounded same-UID lease left by a hard crash instead of accumulating random
-2-GiB trees. Private staging directories, copied files, and the index are then
+for each destination/manifest identity. A create-new sibling lease binds owner
+UID, PID, Linux process start time, destination, manifest, and a random
+challenge. A second live publisher fails busy. A subsequent run recovers only
+a matching lease whose exact PID/start-time owner is provably dead, and both
+per-lease contents and all lease names in a parent are bounded. This prevents
+random 2-GiB staging-tree accumulation across manifests. Private staging
+directories, copied files, and the index are then
 created relative to retained parent/staging descriptors. Every copied-file and
 index descriptor remains open through publication and is re-read, re-hashed,
 and re-`fstat`ed immediately before and after rename. Publication
@@ -370,6 +378,36 @@ owner can chmod and mutate those objects. Retained descriptors detect mutation
 around rename, but continuous namespace and content integrity after return is
 possible only under the external protected-publisher contract. Consequently,
 test-mode publication cannot grant production promotion authority.
+
+## Protected Publisher Receipt
+
+Production archives reserve `publisher-receipt-v1.tsv`. The protected gate and
+production archive validator require this canonical payload to be signed in
+the production trust domain by the distinct `publisher` key role. The receipt
+binds:
+
+- protected publisher/key identity and
+  `external-protected-publisher-v1` destination contract;
+- destination name plus publisher-observed parent and archive-root device/inode
+  identities;
+- SHA-256 identity of the complete manifest-derived archive closure;
+- manifest path/digest, source commit/tree, target, and hardware lane; and
+- a 256-bit nonce, issue time, expiry, and a maximum 24-hour lifetime.
+
+The promotion gate checks current receipt freshness, compares the receipt's
+parent/root identities with the descriptor-anchored destination and its current
+dirent, and recomputes the archive identity from protected parsing of every
+referenced file. The archive index
+must include the receipt, so directly placing otherwise valid evidence in Git
+without the trusted publisher signature cannot authorize production. The
+operator bootstrap therefore requires a third public key dedicated to the
+`publisher` role. No production publisher private key or production receipt is
+present in this repository.
+
+`--allow-test-fixtures` requires a test-domain trust policy. A test-domain
+publisher receipt can exercise schema/signature rejection paths, but its
+signature context is not production and the test archive index does not admit
+it as production authority.
 
 The generic parity suite verifies that production ingestion fails closed for a
 mutable source, but it cannot manufacture a privileged immutable filesystem.
