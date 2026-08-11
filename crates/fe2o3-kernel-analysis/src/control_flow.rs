@@ -123,9 +123,10 @@ pub struct ControlFlowAnalysis {
     blocks: BTreeSet<BlockId>,
     predecessors: BTreeMap<BlockId, BTreeSet<BlockId>>,
     reachable: BTreeSet<BlockId>,
-    dominators: BTreeMap<BlockId, BTreeSet<BlockId>>,
     immediate_dominators: BTreeMap<BlockId, Option<BlockId>>,
     dominator_tree_children: BTreeMap<BlockId, BTreeSet<BlockId>>,
+    dominator_preorder: BTreeMap<BlockId, usize>,
+    dominator_subtree_end: BTreeMap<BlockId, usize>,
     dominance_frontiers: BTreeMap<BlockId, BTreeSet<BlockId>>,
     backedges: BTreeSet<ControlFlowEdge>,
     natural_loop_headers: BTreeSet<BlockId>,
@@ -163,14 +164,30 @@ impl ControlFlowAnalysis {
     }
 
     /// Returns `None` for an unknown or unreachable block.
-    pub fn dominators(&self, block: BlockId) -> Option<&BTreeSet<BlockId>> {
-        self.dominators.get(&block)
+    pub fn dominators(&self, block: BlockId) -> Option<BTreeSet<BlockId>> {
+        if !self.reachable.contains(&block) {
+            return None;
+        }
+        let mut dominators = BTreeSet::new();
+        let mut current = block;
+        loop {
+            dominators.insert(current);
+            if current == self.entry {
+                return Some(dominators);
+            }
+            current = self.immediate_dominators.get(&current).copied().flatten()?;
+        }
     }
 
     pub fn dominates(&self, dominator: BlockId, block: BlockId) -> bool {
-        self.dominators
-            .get(&block)
-            .is_some_and(|dominators| dominators.contains(&dominator))
+        let (Some(start), Some(candidate), Some(end)) = (
+            self.dominator_preorder.get(&dominator),
+            self.dominator_preorder.get(&block),
+            self.dominator_subtree_end.get(&dominator),
+        ) else {
+            return false;
+        };
+        start <= candidate && candidate < end
     }
 
     /// The block's immediate dominator.
@@ -335,12 +352,26 @@ pub fn analyze_control_flow(function: &Function) -> Result<ControlFlowAnalysis, 
     let entry = body.blocks[0].id;
     let predecessors = compute_predecessors(&block_ids, &successors);
     let reachable = compute_reachable(entry, &successors);
-    let dominators = compute_dominators(entry, &reachable, &predecessors);
-    let immediate_dominators = compute_immediate_dominators(entry, &reachable, &dominators);
+    let reverse_postorder = compute_reverse_postorder(entry, &successors);
+    let immediate_dominators =
+        compute_immediate_dominators(entry, &reachable, &predecessors, &reverse_postorder);
     let dominator_tree_children =
         compute_dominator_tree_children(&reachable, &immediate_dominators);
-    let dominance_frontiers = compute_dominance_frontiers(&reachable, &predecessors, &dominators);
-    let backedges = compute_backedges(&reachable, &successors, &dominators);
+    let (dominator_preorder, dominator_subtree_end) =
+        compute_dominator_intervals(entry, &dominator_tree_children);
+    let dominance_frontiers = compute_dominance_frontiers(
+        entry,
+        &reachable,
+        &successors,
+        &immediate_dominators,
+        &dominator_tree_children,
+    );
+    let backedges = compute_backedges(
+        &reachable,
+        &successors,
+        &dominator_preorder,
+        &dominator_subtree_end,
+    );
     let irreducible = irreducible_diagnostics(&reachable, &successors, &backedges);
     if !irreducible.is_empty() {
         return Err(errors(function, irreducible));
@@ -353,9 +384,10 @@ pub fn analyze_control_flow(function: &Function) -> Result<ControlFlowAnalysis, 
         blocks: block_ids,
         predecessors,
         reachable,
-        dominators,
         immediate_dominators,
         dominator_tree_children,
+        dominator_preorder,
+        dominator_subtree_end,
         dominance_frontiers,
         backedges,
         natural_loop_headers: natural_loops.bodies.keys().copied().collect(),
@@ -416,82 +448,91 @@ fn compute_reachable(
     reachable
 }
 
-fn compute_dominators(
+fn compute_reverse_postorder(
     entry: BlockId,
-    reachable: &BTreeSet<BlockId>,
-    predecessors: &BTreeMap<BlockId, BTreeSet<BlockId>>,
-) -> BTreeMap<BlockId, BTreeSet<BlockId>> {
-    let mut dominators = reachable
-        .iter()
-        .copied()
-        .map(|block| {
-            let initial = if block == entry {
-                BTreeSet::from([entry])
-            } else {
-                reachable.clone()
-            };
-            (block, initial)
-        })
-        .collect::<BTreeMap<_, _>>();
-
-    // Every successful pass removes at least one candidate dominator. The
-    // quadratic limit is therefore a conservative finite bound.
-    let maximum_passes = reachable.len().saturating_mul(reachable.len()).max(1);
-    for _ in 0..maximum_passes {
-        let mut changed = false;
-        for block in reachable.iter().copied().filter(|block| *block != entry) {
-            let mut incoming = predecessors[&block]
-                .iter()
-                .filter(|predecessor| reachable.contains(predecessor));
-            let mut next = incoming
-                .next()
-                .map(|predecessor| dominators[predecessor].clone())
-                .unwrap_or_default();
-            for predecessor in incoming {
-                next.retain(|candidate| dominators[predecessor].contains(candidate));
-            }
-            next.insert(block);
-            if dominators[&block] != next {
-                dominators.insert(block, next);
-                changed = true;
-            }
-        }
-        if !changed {
-            return dominators;
+    successors: &BTreeMap<BlockId, BTreeSet<BlockId>>,
+) -> Vec<BlockId> {
+    let mut visited = BTreeSet::new();
+    let mut postorder = Vec::new();
+    let mut pending = vec![(entry, false)];
+    while let Some((block, finish)) = pending.pop() {
+        if finish {
+            postorder.push(block);
+        } else if visited.insert(block) {
+            pending.push((block, true));
+            pending.extend(
+                successors[&block]
+                    .iter()
+                    .rev()
+                    .copied()
+                    .map(|successor| (successor, false)),
+            );
         }
     }
-
-    // The monotone intersection above must converge within the number of
-    // removable `(block, candidate)` facts.
-    unreachable!("bounded dominator fixed point did not converge")
+    postorder.reverse();
+    postorder
 }
 
 fn compute_immediate_dominators(
     entry: BlockId,
     reachable: &BTreeSet<BlockId>,
-    dominators: &BTreeMap<BlockId, BTreeSet<BlockId>>,
+    predecessors: &BTreeMap<BlockId, BTreeSet<BlockId>>,
+    reverse_postorder: &[BlockId],
 ) -> BTreeMap<BlockId, Option<BlockId>> {
-    reachable
+    let rpo_index = reverse_postorder
         .iter()
         .copied()
-        .map(|block| {
-            if block == entry {
-                return (block, None);
-            }
+        .enumerate()
+        .map(|(index, block)| (block, index))
+        .collect::<BTreeMap<_, _>>();
+    let mut immediate = reachable
+        .iter()
+        .copied()
+        .map(|block| (block, None))
+        .collect::<BTreeMap<_, _>>();
+    immediate.insert(entry, Some(entry));
 
-            let strict_dominators = dominators[&block]
+    loop {
+        let mut changed = false;
+        for block in reverse_postorder.iter().copied().skip(1) {
+            let mut processed = predecessors[&block]
                 .iter()
                 .copied()
-                .filter(|dominator| *dominator != block)
-                .collect::<BTreeSet<_>>();
-            let immediate = strict_dominators.iter().copied().find(|candidate| {
-                strict_dominators.iter().all(|dominator| {
-                    dominator == candidate || dominators[candidate].contains(dominator)
-                })
-            });
-            (block, immediate)
-        })
-        .collect()
+                .filter(|predecessor| immediate[predecessor].is_some());
+            let Some(mut next) = processed.next() else {
+                continue;
+            };
+            for predecessor in processed {
+                next = intersect_dominator_paths(predecessor, next, &immediate, &rpo_index);
+            }
+            if immediate[&block] != Some(next) {
+                immediate.insert(block, Some(next));
+                changed = true;
+            }
+        }
+        if !changed {
+            immediate.insert(entry, None);
+            return immediate;
+        }
+    }
+}
+
+fn intersect_dominator_paths(
+    mut left: BlockId,
+    mut right: BlockId,
+    immediate: &BTreeMap<BlockId, Option<BlockId>>,
+    rpo_index: &BTreeMap<BlockId, usize>,
+) -> BlockId {
+    while left != right {
+        while rpo_index[&left] > rpo_index[&right] {
+            left = immediate[&left].expect("processed CHK predecessor has an immediate dominator");
+        }
+        while rpo_index[&right] > rpo_index[&left] {
+            right =
+                immediate[&right].expect("processed CHK predecessor has an immediate dominator");
+        }
+    }
+    left
 }
 
 fn compute_dominator_tree_children(
@@ -514,31 +555,79 @@ fn compute_dominator_tree_children(
     children
 }
 
+fn compute_dominator_intervals(
+    entry: BlockId,
+    children: &BTreeMap<BlockId, BTreeSet<BlockId>>,
+) -> (BTreeMap<BlockId, usize>, BTreeMap<BlockId, usize>) {
+    let mut preorder = BTreeMap::new();
+    let mut subtree_end = BTreeMap::new();
+    let mut clock = 0_usize;
+    let mut pending = vec![(entry, false)];
+    while let Some((block, finish)) = pending.pop() {
+        if finish {
+            subtree_end.insert(block, clock);
+        } else {
+            preorder.insert(block, clock);
+            clock += 1;
+            pending.push((block, true));
+            pending.extend(
+                children[&block]
+                    .iter()
+                    .rev()
+                    .copied()
+                    .map(|child| (child, false)),
+            );
+        }
+    }
+    (preorder, subtree_end)
+}
+
 fn compute_dominance_frontiers(
+    entry: BlockId,
     reachable: &BTreeSet<BlockId>,
-    predecessors: &BTreeMap<BlockId, BTreeSet<BlockId>>,
-    dominators: &BTreeMap<BlockId, BTreeSet<BlockId>>,
+    successors: &BTreeMap<BlockId, BTreeSet<BlockId>>,
+    immediate: &BTreeMap<BlockId, Option<BlockId>>,
+    children: &BTreeMap<BlockId, BTreeSet<BlockId>>,
 ) -> BTreeMap<BlockId, BTreeSet<BlockId>> {
-    reachable
+    let mut tree_postorder = Vec::with_capacity(reachable.len());
+    let mut pending = vec![(entry, false)];
+    while let Some((block, finish)) = pending.pop() {
+        if finish {
+            tree_postorder.push(block);
+        } else {
+            pending.push((block, true));
+            pending.extend(
+                children[&block]
+                    .iter()
+                    .rev()
+                    .copied()
+                    .map(|child| (child, false)),
+            );
+        }
+    }
+
+    let mut frontiers = reachable
         .iter()
         .copied()
-        .map(|dominator| {
-            let frontier = reachable
-                .iter()
-                .copied()
-                .filter(|candidate| {
-                    let strictly_dominates_candidate =
-                        *candidate != dominator && dominators[candidate].contains(&dominator);
-                    !strictly_dominates_candidate
-                        && predecessors[candidate]
-                            .iter()
-                            .filter(|predecessor| reachable.contains(predecessor))
-                            .any(|predecessor| dominators[predecessor].contains(&dominator))
-                })
-                .collect();
-            (dominator, frontier)
-        })
-        .collect()
+        .map(|block| (block, BTreeSet::new()))
+        .collect::<BTreeMap<_, _>>();
+    for block in tree_postorder {
+        let mut frontier = BTreeSet::new();
+        for successor in &successors[&block] {
+            if reachable.contains(successor) && immediate[successor] != Some(block) {
+                frontier.insert(*successor);
+            }
+        }
+        for child in &children[&block] {
+            for candidate in &frontiers[child] {
+                if immediate[candidate] != Some(block) {
+                    frontier.insert(*candidate);
+                }
+            }
+        }
+        frontiers.insert(block, frontier);
+    }
+    frontiers
 }
 
 #[derive(Debug)]
@@ -645,12 +734,17 @@ fn compute_natural_loops(
 fn compute_backedges(
     reachable: &BTreeSet<BlockId>,
     successors: &BTreeMap<BlockId, BTreeSet<BlockId>>,
-    dominators: &BTreeMap<BlockId, BTreeSet<BlockId>>,
+    dominator_preorder: &BTreeMap<BlockId, usize>,
+    dominator_subtree_end: &BTreeMap<BlockId, usize>,
 ) -> BTreeSet<ControlFlowEdge> {
     let mut backedges = BTreeSet::new();
     for source in reachable {
         for target in &successors[source] {
-            if dominators[source].contains(target) {
+            let Some(start) = dominator_preorder.get(target) else {
+                continue;
+            };
+            let candidate = dominator_preorder[source];
+            if *start <= candidate && candidate < dominator_subtree_end[target] {
                 backedges.insert(ControlFlowEdge::new(*source, *target));
             }
         }
