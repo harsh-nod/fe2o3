@@ -59,6 +59,8 @@ const GUARD_SUFFIX_ELEMENTS: usize = 11;
 const HARDWARE_LENGTHS: [usize; 5] = [1, 255, 256, 257, 1023];
 const COMPILER_EVIDENCE_GOLDEN: &str =
     include_str!("../../../tests/fixtures/compiler-evidence/gfx942-alpha-zeta-cov6.json");
+const COMPILER_EVIDENCE_TOOL_MANIFEST: &str =
+    include_str!("../../../tests/fixtures/compiler-evidence/gfx942-mi300x-tools.json");
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -82,6 +84,8 @@ struct CompilerEvidenceGoldenV1 {
     llvm_package_version: String,
     llvm_build_identity: String,
     rust_toolchain: String,
+    tool_manifest_path: String,
+    tool_manifest_sha256: String,
     worker_protocol: String,
     linker_path: String,
     response_binding: String,
@@ -114,6 +118,8 @@ fn compiler_evidence_golden_from_str(source: &str) -> Result<CompilerEvidenceGol
         || golden.llvm_package_version != "22.0.0git"
         || golden.llvm_build_identity != "7.2.4"
         || golden.rust_toolchain != "nightly-2026-04-03"
+        || golden.tool_manifest_path != "tests/fixtures/compiler-evidence/gfx942-mi300x-tools.json"
+        || golden.tool_manifest_sha256 != sha256_hex(COMPILER_EVIDENCE_TOOL_MANIFEST.as_bytes())
         || golden.worker_protocol != "v2"
         || golden.linker_path != "llvm-lld-library-apis"
         || golden.response_binding != "canonical-request-and-compiler-envelope"
@@ -164,6 +170,16 @@ fn compiler_evidence_golden_from_str(source: &str) -> Result<CompilerEvidenceGol
         }
     }
     Ok(golden)
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    DigestAlgorithm::Sha256
+        .calculate(bytes)
+        .bytes()
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn validate_repository_golden_hsaco(bytes: &[u8]) -> Result<[u8; 32], String> {

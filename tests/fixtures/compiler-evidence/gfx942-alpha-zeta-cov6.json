@@ -6,6 +6,8 @@
   "llvm_package_version": "22.0.0git",
   "llvm_build_identity": "7.2.4",
   "rust_toolchain": "nightly-2026-04-03",
+  "tool_manifest_path": "tests/fixtures/compiler-evidence/gfx942-mi300x-tools.json",
+  "tool_manifest_sha256": "c0085899a746bf2312958dc6410db2a426afc092a6b0a224b48a7683c5996b40",
   "worker_protocol": "v2",
   "linker_path": "llvm-lld-library-apis",
   "response_binding": "canonical-request-and-compiler-envelope",

@@ -22,6 +22,8 @@ const ALPHA_ZETA_OUTPUT_ENV: &str = "FE2O3_GFX942_ALPHA_ZETA_OUTPUT";
 const S09_DEBUG_HSACO_OUTPUT_ENV: &str = "FE2O3_S09_DEBUG_HSACO_OUTPUT";
 const COMPILER_EVIDENCE_GOLDEN: &str =
     include_str!("../../../tests/fixtures/compiler-evidence/gfx942-alpha-zeta-cov6.json");
+const COMPILER_EVIDENCE_TOOL_MANIFEST: &str =
+    include_str!("../../../tests/fixtures/compiler-evidence/gfx942-mi300x-tools.json");
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -45,6 +47,8 @@ struct CompilerEvidenceGoldenV1 {
     llvm_package_version: String,
     llvm_build_identity: String,
     rust_toolchain: String,
+    tool_manifest_path: String,
+    tool_manifest_sha256: String,
     worker_protocol: String,
     linker_path: String,
     response_binding: String,
@@ -100,6 +104,14 @@ fn compiler_evidence_golden() -> CompilerEvidenceGoldenV1 {
     assert_eq!(golden.llvm_package_version, "22.0.0git");
     assert_eq!(golden.llvm_build_identity, "7.2.4");
     assert_eq!(golden.rust_toolchain, "nightly-2026-04-03");
+    assert_eq!(
+        golden.tool_manifest_path,
+        "tests/fixtures/compiler-evidence/gfx942-mi300x-tools.json"
+    );
+    assert_eq!(
+        sha256_hex(COMPILER_EVIDENCE_TOOL_MANIFEST.as_bytes()),
+        golden.tool_manifest_sha256
+    );
     assert_eq!(golden.worker_protocol, "v2");
     assert_eq!(golden.linker_path, "llvm-lld-library-apis");
     assert_eq!(
@@ -368,12 +380,18 @@ impl Drop for WorkerV2TestConfig {
 
 struct WorkerV2SourceDirectory(PathBuf);
 
+fn cargo_target_root(workspace: &Path) -> PathBuf {
+    match std::env::var_os("CARGO_TARGET_DIR") {
+        Some(path) if Path::new(&path).is_absolute() => PathBuf::from(path),
+        Some(path) => workspace.join(path),
+        None => workspace.join("target"),
+    }
+}
+
 impl WorkerV2SourceDirectory {
     fn new(workspace: &Path) -> Self {
-        let path = workspace.join(format!(
-            "target/worker-v2-native-source-{}",
-            std::process::id()
-        ));
+        let path = cargo_target_root(workspace)
+            .join(format!("worker-v2-native-source-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("create native Worker V2 source directory");
         Self(path)
@@ -397,7 +415,7 @@ fn build_codegen_backend(workspace: &Path) -> PathBuf {
         "backend build failed:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    workspace.join("target/debug/librustc_codegen_fe2o3.so")
+    cargo_target_root(workspace).join("debug/librustc_codegen_fe2o3.so")
 }
 
 fn worker_v2_source() -> String {

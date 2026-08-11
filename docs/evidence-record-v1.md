@@ -242,11 +242,13 @@ authentication, a dashboard `remote-hardware` strength, or a parity promotion.
 
 The later repository-backed compiler-evidence controller is defined by
 `tests/fixtures/compiler-evidence/gfx942-alpha-zeta-cov6.json` and
-`scripts/test-gfx942-compiler-evidence.sh`. Unlike the historical observations
-above, it rebuilds the exact measured Worker from the current clean checkout,
-generates the genuine alpha/zeta COV6 artifact twice through Worker V2, checks
-both outputs against one bounded repository digest, and immediately executes
-that same artifact on MI300X. The checked artifact facts are:
+`scripts/gfx942-cov6-compiler-evidence.sh`. It rebuilds the measured Worker and
+Rust test executable in two distinct empty Worker/Cargo roots, generates the
+alpha/zeta COV6 artifact through Worker V2 in each root, and checks both outputs
+against one bounded repository digest. The content-pinned host tool manifest,
+retained stat checks, cleared environment and generated PATH allowlist constrain
+this exact observation; they do not authenticate compiler causality. The
+checked artifact facts are:
 
 ```text
 target=gfx942:xnack-
@@ -258,12 +260,13 @@ hsaco_sha256=f5bc17f1950921e5bb8e7f64b576b7477cd82b4adffd1b6cfae3f6036c85844d
 hsaco_bytes=9392
 ```
 
-The controller stores only two bounded regenerated HSACOs in its fresh
-external evidence directory; no binary is committed. It uses direct LLVM/LLD
-library APIs and no COMGR or command-line linker/disassembler. It is still
-local, unsigned, evidence-only work: no authenticated compiler execution
-issuer exists, no production receipt is constructed, and no parity status is
-promoted.
+The controller stores only two bounded regenerated HSACOs and canonical tool
+and generated-executable manifests in its fresh external evidence directory;
+no binary is committed. It uses direct LLVM/LLD library APIs for HSACO linking
+and no COMGR or command-line HSACO linker/disassembler. This is an
+exact-artifact observation only. It supplies no source refinement, compiler
+causal authentication, production authority, hardware result, compiler
+receipt, signed record, or parity promotion.
 
 To archive that exact test in an isolated parity snapshot, first place the
 HSACO as a regular non-symlink file under the external archive root, then run:
