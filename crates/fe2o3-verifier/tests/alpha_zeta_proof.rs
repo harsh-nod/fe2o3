@@ -462,10 +462,11 @@ fn discovery_retains_the_measured_snapshot_after_disk_mutation() {
     assert_eq!(measured.snapshot_bytes(), original);
     assert_eq!(
         snapshot.validate_workspace(&fixture.path),
-        Err(AlphaZetaProofErrorV1::SourceManifestMutation)
+        Err(AlphaZetaProofErrorV1::SourceSnapshotGenerationChanged)
     );
     assert!(!snapshot.has_complete_source_closure());
     assert!(!snapshot.has_complete_verifier_runtime_closure());
+    assert!(!snapshot.recorder_consumes_source_snapshot());
 }
 
 #[cfg(unix)]
@@ -479,7 +480,8 @@ fn discovery_rejects_workspace_and_source_parent_symlinks() {
     symlink(&root_fixture.path, &root_link).unwrap();
     assert!(matches!(
         AlphaZetaProofSourcesV1::discover_workspace(&root_link),
-        Err(AlphaZetaProofErrorV1::SourceManifestStructure { .. })
+        Err(AlphaZetaProofErrorV1::SourceManifestStructure { .. }
+            | AlphaZetaProofErrorV1::SourceManifestIo { .. })
     ));
     fs::remove_file(root_link).unwrap();
 
@@ -490,7 +492,8 @@ fn discovery_rejects_workspace_and_source_parent_symlinks() {
     symlink("src-real", &source_parent).unwrap();
     assert!(matches!(
         AlphaZetaProofSourcesV1::discover_workspace(&parent_fixture.path),
-        Err(AlphaZetaProofErrorV1::SourceManifestStructure { .. })
+        Err(AlphaZetaProofErrorV1::SourceManifestStructure { .. }
+            | AlphaZetaProofErrorV1::SourceManifestIo { .. })
     ));
 }
 
@@ -562,6 +565,82 @@ fn trusted_inventory_is_derived_from_proof_tokens_and_empty_reports_are_rejected
             Err(AlphaZetaProofErrorV1::TrustedInventorySubstitution)
         );
     }
+}
+
+#[test]
+fn trusted_import_inventory_covers_alias_group_glob_and_leading_root_bypasses() {
+    let mutations = [
+        (
+            "use ::vstd::prelude::assume as imported_assume;",
+            "use ::vstd::prelude::assume as imported_assume",
+            true,
+        ),
+        (
+            "use vstd as vv; use vv::prelude::*;",
+            "use vv::prelude::*",
+            false,
+        ),
+        (
+            "use {vstd::{prelude::*, seq::Seq}, builtin::{assume as grouped_assume}};",
+            "use builtin::assume as grouped_assume",
+            true,
+        ),
+        (
+            "extern crate builtin_macros as bm; use bm::*;",
+            "use bm::*",
+            false,
+        ),
+        (
+            "use vstd::{self as vv, prelude::{assume as nested_assume, *}};",
+            "use vstd::prelude::assume as nested_assume",
+            true,
+        ),
+    ];
+
+    for (mutation, expected_import, expects_trusted_api) in mutations {
+        let expected = sources();
+        let fixture = SourceWorkspaceFixture::copy_from(&expected);
+        let harness = fixture.path.join(ALPHA_ZETA_PROOF_HARNESS_PATH_V1);
+        let mut source = fs::read_to_string(&harness).unwrap();
+        source.push('\n');
+        source.push_str(mutation);
+        source.push('\n');
+        fs::write(harness, source).unwrap();
+
+        let mutated = AlphaZetaProofSourcesV1::discover_workspace(&fixture.path).unwrap();
+        assert!(
+            mutated
+                .trusted_inventory()
+                .unmeasured_imports()
+                .iter()
+                .any(|import| import.as_str().ends_with(expected_import)),
+            "missing structural import for {mutation}"
+        );
+        assert_eq!(
+            mutated.trusted_inventory().constructs().iter().any(|item| {
+                item.kind() == AlphaZetaTrustedConstructKindV1::TrustedImport
+                    && item.source_path().as_str() == ALPHA_ZETA_PROOF_HARNESS_PATH_V1
+            }),
+            expects_trusted_api,
+            "wrong trusted import classification for {mutation}"
+        );
+    }
+}
+
+#[test]
+fn trusted_import_inventory_fails_closed_for_opaque_macro_imports() {
+    let expected = sources();
+    let fixture = SourceWorkspaceFixture::copy_from(&expected);
+    let harness = fixture.path.join(ALPHA_ZETA_PROOF_HARNESS_PATH_V1);
+    let mut source = fs::read_to_string(&harness).unwrap();
+    source.push_str("\nmacro_rules! hidden_import { () => { use vstd::prelude::*; } }\n");
+    fs::write(harness, source).unwrap();
+
+    assert!(matches!(
+        AlphaZetaProofSourcesV1::discover_workspace(&fixture.path),
+        Err(AlphaZetaProofErrorV1::SourceManifestStructure { reason, .. })
+            if reason.contains("opaque macro")
+    ));
 }
 
 #[test]

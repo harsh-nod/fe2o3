@@ -1417,6 +1417,7 @@ pub enum AlphaZetaProofErrorV1 {
     SourceMutation,
     SourceRoleSubstitution,
     SourceManifestMutation,
+    SourceSnapshotGenerationChanged,
     SourceManifestCapacity,
     SourceManifestIo {
         operation: &'static str,
@@ -1468,6 +1469,9 @@ impl fmt::Display for AlphaZetaProofErrorV1 {
             Self::SourceRoleSubstitution => formatter.write_str("alpha/zeta source role changed"),
             Self::SourceManifestMutation => {
                 formatter.write_str("alpha/zeta structural source manifest changed")
+            }
+            Self::SourceSnapshotGenerationChanged => {
+                formatter.write_str("alpha/zeta source snapshot generation changed")
             }
             Self::SourceManifestCapacity => {
                 formatter.write_str("alpha/zeta structural source manifest exceeds its bound")

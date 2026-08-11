@@ -142,11 +142,15 @@ and example Cargo manifests and recursively follows local Cargo dependencies,
 Rust modules, `include!`, and `#[path]`. The resulting bounded, canonical
 project-input snapshot includes `Cargo.lock`, toolchain and Cargo configuration,
 the ordinary Rust model and shared CPU body, the axiom-free permission model,
-the Verus harness, and the `fe2o3-contracts` manifest and source tree. Missing,
-extra, role-swapped, oversized, symlinked-root, symlinked-parent, or structurally
-ambiguous inputs are rejected. Discovery reads each file once and retains those
-immutable bytes. File roles, paths, lengths, SHA-256 measurements, and dependency
-edges contribute to separate source-tree and dependency-tree identities.
+the Verus harness, and the `fe2o3-contracts` manifest and source tree. Missing
+reachable inputs, extra reachable-closure inputs, role-swapped inputs,
+oversized inputs, symlinked roots or parents, and structurally ambiguous inputs
+are rejected. On Linux, discovery walks descendants relative to retained
+descriptors with `openat2(BENEATH|NO_SYMLINKS|NO_MAGICLINKS|NO_XDEV)`, retains
+every source and parent descriptor, checks each exact read with `fstat` before
+and after, and revalidates the complete descriptor generation. File roles,
+paths, lengths, SHA-256 measurements, and dependency edges contribute to
+separate source-tree and dependency-tree identities.
 
 This bounded snapshot is intentionally not called a complete source or verifier
 runtime closure. It does not measure Cargo build scripts, procedural macros,
@@ -155,8 +159,9 @@ files, compiler shared libraries, or solver resources. The trusted-item inventor
 is derived from retained Rust token streams reachable from the proof harness. It
 detects `external_body`, `assume`, `admit`, trusted attributes, and explicitly
 imported trusted APIs. External `vstd`/builtin imports are retained as unmeasured
-runtime dependencies. `validate_workspace` may rediscover files for diagnostics,
-but no authoritative result can arise from that reread.
+runtime dependencies. The recorder does not consume the retained snapshot or
+its environmental generation identity. `validate_workspace` may rediscover
+files for diagnostics, but no authoritative result can arise from that reread.
 
 The sealed input also binds the proof target, typed ABI, effects and launch
 identities, measured Verus and Z3 names, versions, executable and configuration
