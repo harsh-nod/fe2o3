@@ -312,9 +312,7 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
         // exact evidence and ACK descriptors before clearing only their child-side CLOEXEC flags.
         unsafe {
             command.pre_exec(move || {
-                if libc::setpgid(0, 0) != 0 {
-                    return Err(io::Error::last_os_error());
-                }
+                establish_fresh_application_session()?;
                 if libc::syscall(
                     libc::SYS_close_range,
                     3_u32,
@@ -568,9 +566,27 @@ fn ensure_child_subreaper() -> Result<(), String> {
     Ok(())
 }
 
+fn establish_fresh_application_session() -> io::Result<()> {
+    // SAFETY: this runs in the single-threaded post-fork child before exec. A successful `setsid`
+    // makes the child both session and process-group leader, so processes from the runner's session
+    // cannot join the group later. Any failure is returned through `Command::spawn`.
+    let process = unsafe { libc::getpid() };
+    let session = unsafe { libc::setsid() };
+    if session < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: these scalar identity queries have no memory preconditions.
+    let current_session = unsafe { libc::getsid(0) };
+    let process_group = unsafe { libc::getpgrp() };
+    if session != process || current_session != process || process_group != process {
+        return Err(io::Error::from_raw_os_error(libc::ESTALE));
+    }
+    Ok(())
+}
+
 fn kill_process_group(process_group: libc::pid_t) -> Result<(), String> {
-    // SAFETY: a negative PID addresses the dedicated application process group established in the
-    // child before exec. A live, unreaped leader prevents its PID from being reused here.
+    // SAFETY: a negative PID addresses the application process group in its dedicated session. A
+    // live, unreaped session leader prevents its PID and process-group identity from being reused.
     if unsafe { libc::kill(-process_group, libc::SIGKILL) } == 0 {
         return Ok(());
     }
@@ -690,11 +706,127 @@ fn validate_envelope_stat(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::process::ExitStatusExt;
+
+    fn fresh_session_command(program: &str) -> Command {
+        let mut command = Command::new(program);
+        // SAFETY: the callback performs only child-side session syscalls before exec.
+        unsafe {
+            command.pre_exec(establish_fresh_application_session);
+        }
+        command
+    }
+
+    fn wait_for_raw_child(child: libc::pid_t) {
+        let mut status = 0;
+        loop {
+            // SAFETY: `status` is writable and `child` was returned by `fork` in this process.
+            let result = unsafe { libc::waitpid(child, &mut status, 0) };
+            if result == child {
+                return;
+            }
+            assert_eq!(result, -1);
+            assert_eq!(
+                io::Error::last_os_error().kind(),
+                io::ErrorKind::Interrupted
+            );
+        }
+    }
+
+    fn process_exists(process: libc::pid_t) -> bool {
+        // SAFETY: signal zero performs an existence/permission check without delivering a signal.
+        unsafe { libc::kill(process, 0) == 0 }
+    }
+
+    #[test]
+    fn session_setup_fails_closed_for_a_process_group_leader() {
+        let mut command = Command::new("/bin/true");
+        // SAFETY: the callback deliberately creates the forbidden precondition, then verifies that
+        // the production setup returns EPERM through `spawn` instead of launching without isolation.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setpgid(0, 0) != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                establish_fresh_application_session()
+            });
+        }
+        let error = command.spawn().unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(libc::EPERM));
+    }
+
+    #[test]
+    fn unrelated_same_session_process_cannot_join_or_be_killed() {
+        let mut application = fresh_session_command("/bin/sleep");
+        application.arg("30");
+        let mut application = application.spawn().unwrap();
+        let leader = application.id() as libc::pid_t;
+        // SAFETY: the spawned child is live and its pre-exec callback completed before `spawn`.
+        assert_eq!(unsafe { libc::getsid(leader) }, leader);
+        assert_eq!(unsafe { libc::getpgid(leader) }, leader);
+
+        let mut report = [-1_i32; 2];
+        // SAFETY: `report` points to two writable descriptor slots.
+        assert_eq!(
+            unsafe { libc::pipe2(report.as_mut_ptr(), libc::O_CLOEXEC) },
+            0
+        );
+        // SAFETY: the child branch uses only async-signal-safe syscalls and never returns to Rust.
+        let outsider = unsafe { libc::fork() };
+        assert!(
+            outsider >= 0,
+            "fork outsider: {}",
+            io::Error::last_os_error()
+        );
+        if outsider == 0 {
+            unsafe {
+                libc::close(report[0]);
+                let joined = libc::setpgid(0, leader);
+                let error = *libc::__errno_location();
+                let values = [joined, error];
+                let _ = libc::write(
+                    report[1],
+                    values.as_ptr().cast(),
+                    std::mem::size_of_val(&values),
+                );
+                loop {
+                    libc::pause();
+                }
+            }
+        }
+
+        // SAFETY: each branch owns the descriptor it closes; the remaining read end becomes `File`.
+        unsafe { libc::close(report[1]) };
+        let mut report = unsafe { File::from_raw_fd(report[0]) };
+        let mut bytes = [0_u8; std::mem::size_of::<[i32; 2]>()];
+        report.read_exact(&mut bytes).unwrap();
+        let joined = i32::from_ne_bytes(bytes[..4].try_into().unwrap());
+        let join_error = i32::from_ne_bytes(bytes[4..].try_into().unwrap());
+        // SAFETY: `outsider` remains live and inherited the test runner's session.
+        let outsider_session = unsafe { libc::getsid(outsider) };
+        let runner_session = unsafe { libc::getsid(0) };
+
+        let containment = terminate_application_group(&mut application);
+        let outsider_survived = process_exists(outsider);
+        // SAFETY: the outsider is this test's child and is intentionally paused until cleanup.
+        unsafe { libc::kill(outsider, libc::SIGKILL) };
+        wait_for_raw_child(outsider);
+
+        assert_eq!(joined, -1);
+        assert_eq!(join_error, libc::EPERM);
+        assert_eq!(outsider_session, runner_session);
+        assert_ne!(outsider_session, leader);
+        assert!(containment.is_ok(), "{containment:?}");
+        assert!(
+            outsider_survived,
+            "application containment killed the outsider"
+        );
+        assert_eq!(application.wait().unwrap().signal(), Some(libc::SIGKILL));
+    }
 
     #[test]
     fn exit_observation_keeps_process_group_leader_unreaped() {
-        let mut command = Command::new("/bin/true");
-        command.process_group(0);
+        let mut command = fresh_session_command("/bin/true");
         let mut child = command.spawn().unwrap();
         let leader = child.id() as libc::pid_t;
 
@@ -709,8 +841,7 @@ mod tests {
     #[test]
     fn successful_wait_contains_before_reaping_leader() {
         for _ in 0..32 {
-            let mut command = Command::new("/bin/true");
-            command.process_group(0);
+            let mut command = fresh_session_command("/bin/true");
             let mut child = command.spawn().unwrap();
             assert!(
                 wait_and_contain_application_group(&mut child)
@@ -718,5 +849,34 @@ mod tests {
                     .success()
             );
         }
+    }
+
+    #[test]
+    fn successful_leader_exit_still_contains_session_descendants() {
+        ensure_child_subreaper().unwrap();
+        let pid_file = std::env::temp_dir().join(format!(
+            "cargo-fe2o3-session-descendant-{}",
+            std::process::id()
+        ));
+        let mut command = fresh_session_command("/bin/sh");
+        command
+            .arg("-c")
+            .arg("sleep 30 & echo $! > \"$1\"")
+            .arg("fe2o3-descendant-probe")
+            .arg(&pid_file);
+        let mut child = command.spawn().unwrap();
+        let status = wait_and_contain_application_group(&mut child).unwrap();
+        let descendant = std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .parse::<libc::pid_t>()
+            .unwrap();
+        let _ = std::fs::remove_file(pid_file);
+
+        assert!(status.success());
+        assert!(
+            !process_exists(descendant),
+            "session descendant survived cleanup"
+        );
     }
 }
