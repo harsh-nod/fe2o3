@@ -623,24 +623,271 @@ bool isImmediateOperand(const MCInst &Instruction, size_t Index) {
   return Index < Instruction.size() && Instruction.getOperand(Index).isImm();
 }
 
-bool isPhysicalReturn(const DecodedInstruction &Instruction,
-                      const McState &Mc) {
-  if (StringRef(Instruction.Name).starts_with("S_ENDPGM"))
-    return true;
-  return Instruction.Name == "S_SETPC_B64_vi" && Instruction.Inst.size() == 1 &&
-         Instruction.Inst.getOperand(0).isReg() &&
-         StringRef(Mc.Registers->getName(
-             Instruction.Inst.getOperand(0).getReg())) == "SGPR30_SGPR31";
+bool isEndProgram(const DecodedInstruction &Instruction) {
+  return StringRef(Instruction.Name).starts_with("S_ENDPGM");
 }
 
-Expected<SmallVector<uint64_t, 2>>
-directCallTargets(ArrayRef<DecodedInstruction> Instructions, size_t CallIndex,
-                  McState &Mc) {
+bool isSetPc(const DecodedInstruction &Instruction) {
+  return Instruction.Name == "S_SETPC_B64_vi";
+}
+
+struct FunctionCfg {
+  struct Block {
+    size_t Begin = 0;
+    size_t End = 0;
+    std::vector<size_t> Successors;
+    std::vector<size_t> Predecessors;
+    bool Reachable = false;
+  };
+
+  std::vector<Block> Blocks;
+  std::vector<size_t> InstructionBlocks;
+};
+
+void appendUnique(std::vector<size_t> &Values, size_t Value) {
+  if (llvm::find(Values, Value) == Values.end())
+    Values.push_back(Value);
+}
+
+Expected<FunctionCfg>
+buildFunctionCfg(ArrayRef<DecodedInstruction> Instructions, McState &Mc,
+                 StringRef FunctionName) {
+  std::map<uint64_t, size_t> Boundaries;
+  for (size_t I = 0; I < Instructions.size(); ++I)
+    if (!Boundaries.emplace(Instructions[I].Address, I).second)
+      return analysisError(Twine("duplicate instruction boundary in ") +
+                           FunctionName);
+
+  std::set<size_t> Leaders{0};
+  std::map<size_t, size_t> BranchTargets;
+  for (size_t I = 0; I < Instructions.size(); ++I) {
+    const DecodedInstruction &Instruction = Instructions[I];
+    const MCInstrDesc &Descriptor =
+        Mc.Instructions->get(Instruction.Inst.getOpcode());
+    bool SetPc = isSetPc(Instruction);
+    if (Descriptor.isIndirectBranch() && !SetPc)
+      return analysisError(Twine("indirect branch in ") + FunctionName);
+    if (Descriptor.isBranch() && !Descriptor.isCall() && !SetPc) {
+      uint64_t Target = 0;
+      if (!Mc.Analysis->evaluateBranch(Instruction.Inst, Instruction.Address,
+                                       Instruction.Size, Target))
+        return analysisError(Twine("unknown branch target in ") + FunctionName);
+      auto Boundary = Boundaries.find(Target);
+      if (Target <= Instruction.Address || Boundary == Boundaries.end())
+        return analysisError(
+            Twine("unsupported backward or external branch in ") +
+            FunctionName);
+      BranchTargets.emplace(I, Boundary->second);
+      Leaders.insert(Boundary->second);
+    }
+    if ((Descriptor.isBranch() || Descriptor.isCall() ||
+         isEndProgram(Instruction) || SetPc) &&
+        I + 1 < Instructions.size())
+      Leaders.insert(I + 1);
+  }
+
+  FunctionCfg Result;
+  Result.InstructionBlocks.resize(Instructions.size());
+  std::vector<size_t> OrderedLeaders(Leaders.begin(), Leaders.end());
+  for (size_t I = 0; I < OrderedLeaders.size(); ++I) {
+    size_t End = I + 1 < OrderedLeaders.size() ? OrderedLeaders[I + 1]
+                                               : Instructions.size();
+    size_t BlockIndex = Result.Blocks.size();
+    Result.Blocks.push_back({OrderedLeaders[I], End, {}, {}, false});
+    for (size_t Instruction = OrderedLeaders[I]; Instruction < End;
+         ++Instruction)
+      Result.InstructionBlocks[Instruction] = BlockIndex;
+  }
+
+  for (size_t BlockIndex = 0; BlockIndex < Result.Blocks.size(); ++BlockIndex) {
+    FunctionCfg::Block &Block = Result.Blocks[BlockIndex];
+    size_t LastIndex = Block.End - 1;
+    const DecodedInstruction &Last = Instructions[LastIndex];
+    const MCInstrDesc &Descriptor = Mc.Instructions->get(Last.Inst.getOpcode());
+    auto AddFallthrough = [&]() -> Error {
+      if (Block.End >= Instructions.size())
+        return Error::success();
+      appendUnique(Block.Successors, Result.InstructionBlocks[Block.End]);
+      return Error::success();
+    };
+
+    if (isEndProgram(Last) || isSetPc(Last)) {
+      // Proven terminal kind and return-pair provenance are checked below.
+    } else if (Descriptor.isCall()) {
+      if (Error ErrorValue = AddFallthrough())
+        return ErrorValue;
+    } else if (Descriptor.isBranch()) {
+      auto Target = BranchTargets.find(LastIndex);
+      if (Target == BranchTargets.end())
+        return analysisError(Twine("branch target is absent in ") +
+                             FunctionName);
+      appendUnique(Block.Successors, Result.InstructionBlocks[Target->second]);
+      if (Mc.Analysis->isConditionalBranch(Last.Inst)) {
+        if (Error ErrorValue = AddFallthrough())
+          return ErrorValue;
+      } else if (!Mc.Analysis->isUnconditionalBranch(Last.Inst)) {
+        return analysisError(Twine("unsupported branch kind in ") +
+                             FunctionName);
+      }
+    } else if (Error ErrorValue = AddFallthrough()) {
+      return ErrorValue;
+    }
+  }
+
+  for (size_t BlockIndex = 0; BlockIndex < Result.Blocks.size(); ++BlockIndex)
+    for (size_t Successor : Result.Blocks[BlockIndex].Successors)
+      appendUnique(Result.Blocks[Successor].Predecessors, BlockIndex);
+
+  std::vector<size_t> Pending{0};
+  while (!Pending.empty()) {
+    size_t BlockIndex = Pending.back();
+    Pending.pop_back();
+    FunctionCfg::Block &Block = Result.Blocks[BlockIndex];
+    if (Block.Reachable)
+      continue;
+    Block.Reachable = true;
+    Pending.insert(Pending.end(), Block.Successors.begin(),
+                   Block.Successors.end());
+  }
+  for (const FunctionCfg::Block &Block : Result.Blocks) {
+    if (!Block.Reachable || !Block.Successors.empty())
+      continue;
+    const DecodedInstruction &Last = Instructions[Block.End - 1];
+    if (!isEndProgram(Last) && !isSetPc(Last))
+      return analysisError(Twine("reachable fallthrough exits symbol ") +
+                           FunctionName);
+  }
+  return Result;
+}
+
+struct ReachingDefinitions {
+  std::set<size_t> Instructions;
+  bool LiveIn = false;
+};
+
+Expected<ReachingDefinitions> reachingDefinitions(
+    const FunctionCfg &Cfg, ArrayRef<DecodedInstruction> Instructions,
+    size_t BeforeInstruction, unsigned Register, const McState &Mc) {
+  if (BeforeInstruction >= Instructions.size())
+    return analysisError("reaching-definition query is outside function");
+  size_t InitialBlock = Cfg.InstructionBlocks[BeforeInstruction];
+  std::vector<std::pair<size_t, size_t>> Pending{
+      {InitialBlock, BeforeInstruction}};
+  std::set<std::pair<size_t, size_t>> Visited;
+  ReachingDefinitions Result;
+  while (!Pending.empty()) {
+    auto [BlockIndex, Before] = Pending.back();
+    Pending.pop_back();
+    if (!Visited.insert({BlockIndex, Before}).second)
+      continue;
+    const FunctionCfg::Block &Block = Cfg.Blocks[BlockIndex];
+    bool Found = false;
+    for (size_t I = Before; I-- > Block.Begin;) {
+      if (definesRegister(Instructions[I], Register, Mc)) {
+        Result.Instructions.insert(I);
+        Found = true;
+        break;
+      }
+    }
+    if (Found)
+      continue;
+    if (Block.Predecessors.empty()) {
+      Result.LiveIn = true;
+      continue;
+    }
+    for (size_t Predecessor : Block.Predecessors) {
+      const FunctionCfg::Block &Previous = Cfg.Blocks[Predecessor];
+      if (Previous.Reachable)
+        Pending.push_back({Predecessor, Previous.End});
+    }
+  }
+  return Result;
+}
+
+bool isUniqueDefinition(const ReachingDefinitions &Definitions, size_t Site) {
+  return !Definitions.LiveIn && Definitions.Instructions.size() == 1 &&
+         *Definitions.Instructions.begin() == Site;
+}
+
+bool instructionDominates(const FunctionCfg &Cfg, size_t Definition,
+                          size_t Use) {
+  size_t DefinitionBlock = Cfg.InstructionBlocks[Definition];
+  size_t UseBlock = Cfg.InstructionBlocks[Use];
+  if (DefinitionBlock == UseBlock)
+    return Definition < Use;
+  std::vector<size_t> Pending{0};
+  std::set<size_t> Visited;
+  while (!Pending.empty()) {
+    size_t Block = Pending.back();
+    Pending.pop_back();
+    if (Block == DefinitionBlock || !Visited.insert(Block).second)
+      continue;
+    if (Block == UseBlock)
+      return false;
+    Pending.insert(Pending.end(), Cfg.Blocks[Block].Successors.begin(),
+                   Cfg.Blocks[Block].Successors.end());
+  }
+  return true;
+}
+
+Expected<std::pair<unsigned, unsigned>> splitSgprPair(unsigned PairRegister,
+                                                      const McState &Mc) {
+  StringRef PairName = Mc.Registers->getName(PairRegister);
+  auto PairParts = PairName.split('_');
+  if (!PairParts.first.starts_with("SGPR") ||
+      !PairParts.second.starts_with("SGPR") || PairParts.second.contains('_'))
+    return analysisError("register is not one SGPR pair");
+  auto Low = registerNamed(PairParts.first, Mc);
+  auto High = registerNamed(PairParts.second, Mc);
+  if (!Low || !High || *Low == *High)
+    return analysisError("SGPR pair is malformed");
+  return std::pair<unsigned, unsigned>{*Low, *High};
+}
+
+Expected<bool> validatePhysicalReturn(ArrayRef<DecodedInstruction> Instructions,
+                                      size_t InstructionIndex,
+                                      const FunctionCfg &Cfg,
+                                      bool ReturnPairIsLiveIn,
+                                      const McState &Mc) {
+  const DecodedInstruction &Instruction = Instructions[InstructionIndex];
+  if (isEndProgram(Instruction)) {
+    if (ReturnPairIsLiveIn)
+      return analysisError("callable helper terminates with S_ENDPGM");
+    return true;
+  }
+  if (!isSetPc(Instruction))
+    return false;
+  if (!ReturnPairIsLiveIn)
+    return analysisError("kernel entry attempts S_SETPC return");
+  if (Instruction.Inst.size() != 1 || !Instruction.Inst.getOperand(0).isReg() ||
+      StringRef(Mc.Registers->getName(
+          Instruction.Inst.getOperand(0).getReg())) != "SGPR30_SGPR31")
+    return analysisError("S_SETPC does not use the ABI return pair");
+  auto Pair = splitSgprPair(Instruction.Inst.getOperand(0).getReg(), Mc);
+  if (!Pair)
+    return Pair.takeError();
+  auto Low =
+      reachingDefinitions(Cfg, Instructions, InstructionIndex, Pair->first, Mc);
+  if (!Low)
+    return Low.takeError();
+  auto High = reachingDefinitions(Cfg, Instructions, InstructionIndex,
+                                  Pair->second, Mc);
+  if (!High)
+    return High.takeError();
+  if (!Low->LiveIn || !Low->Instructions.empty() || !High->LiveIn ||
+      !High->Instructions.empty())
+    return analysisError("S_SETPC return pair was modified or is ambiguous");
+  return true;
+}
+
+Expected<uint64_t> directCallTargets(ArrayRef<DecodedInstruction> Instructions,
+                                     size_t CallIndex, const FunctionCfg &Cfg,
+                                     McState &Mc) {
   const DecodedInstruction &Call = Instructions[CallIndex];
   uint64_t ImmediateTarget = 0;
   if (Mc.Analysis->evaluateBranch(Call.Inst, Call.Address, Call.Size,
                                   ImmediateTarget))
-    return SmallVector<uint64_t, 2>{ImmediateTarget};
+    return ImmediateTarget;
 
   if (Call.Name != "S_SWAPPC_B64_vi" || Call.Inst.size() != 2 ||
       !Call.Inst.getOperand(1).isReg())
@@ -648,57 +895,65 @@ directCallTargets(ArrayRef<DecodedInstruction> Instructions, size_t CallIndex,
                          instructionDescription(Call, Mc));
 
   unsigned PairRegister = Call.Inst.getOperand(1).getReg();
-  StringRef PairName = Mc.Registers->getName(PairRegister);
-  auto PairParts = PairName.split('_');
-  if (!PairParts.first.starts_with("SGPR") ||
-      !PairParts.second.starts_with("SGPR") || PairParts.second.contains('_'))
-    return analysisError("direct-call target is not one SGPR pair");
-  auto LowRegister = registerNamed(PairParts.first, Mc);
-  auto HighRegister = registerNamed(PairParts.second, Mc);
-  if (!LowRegister || !HighRegister || *LowRegister == *HighRegister)
-    return analysisError("direct-call SGPR pair is malformed");
-
-  const DecodedInstruction *GetPc = nullptr;
-  const DecodedInstruction *AddLow = nullptr;
-  const DecodedInstruction *AddHigh = nullptr;
-  constexpr size_t MaxMaterializationInstructions = 16;
-  size_t Begin = CallIndex > MaxMaterializationInstructions
-                     ? CallIndex - MaxMaterializationInstructions
-                     : 0;
-  unsigned Step = 0;
-  for (size_t I = CallIndex; I-- > Begin;) {
-    const DecodedInstruction &Candidate = Instructions[I];
-    bool DefinesTarget = definesRegister(Candidate, *LowRegister, Mc) ||
-                         definesRegister(Candidate, *HighRegister, Mc);
-    if (!DefinesTarget)
-      continue;
-    if (Step == 0 && Candidate.Name == "S_ADDC_U32_vi" &&
-        isRegisterOperand(Candidate.Inst, 0, *HighRegister) &&
-        isRegisterOperand(Candidate.Inst, 1, *HighRegister) &&
-        isImmediateOperand(Candidate.Inst, 2)) {
-      AddHigh = &Candidate;
-    } else if (Step == 1 && Candidate.Name == "S_ADD_U32_vi" &&
-               isRegisterOperand(Candidate.Inst, 0, *LowRegister) &&
-               isRegisterOperand(Candidate.Inst, 1, *LowRegister) &&
-               isImmediateOperand(Candidate.Inst, 2)) {
-      AddLow = &Candidate;
-    } else if (Step == 2 && Candidate.Name == "S_GETPC_B64_vi" &&
-               Candidate.Inst.size() == 1 &&
-               isRegisterOperand(Candidate.Inst, 0, PairRegister)) {
-      GetPc = &Candidate;
-    } else {
-      return analysisError(
-          "direct-call target register has unsupported definitions");
-    }
-    ++Step;
-    if (Step == 3)
-      break;
-  }
-  if (!GetPc || !AddLow || !AddHigh)
-    return analysisError("direct-call materialization is incomplete");
+  auto Pair = splitSgprPair(PairRegister, Mc);
+  if (!Pair)
+    return Pair.takeError();
+  unsigned LowRegister = Pair->first;
+  unsigned HighRegister = Pair->second;
+  auto LowAtCall =
+      reachingDefinitions(Cfg, Instructions, CallIndex, LowRegister, Mc);
+  auto HighAtCall =
+      reachingDefinitions(Cfg, Instructions, CallIndex, HighRegister, Mc);
+  if (!LowAtCall)
+    return LowAtCall.takeError();
+  if (!HighAtCall)
+    return HighAtCall.takeError();
+  if (LowAtCall->LiveIn || LowAtCall->Instructions.size() != 1 ||
+      HighAtCall->LiveIn || HighAtCall->Instructions.size() != 1)
+    return analysisError("direct-call target definitions are ambiguous");
+  size_t AddLowIndex = *LowAtCall->Instructions.begin();
+  size_t AddHighIndex = *HighAtCall->Instructions.begin();
+  const DecodedInstruction *AddLow = &Instructions[AddLowIndex];
+  const DecodedInstruction *AddHigh = &Instructions[AddHighIndex];
+  if (AddLow->Name != "S_ADD_U32_vi" ||
+      !isRegisterOperand(AddLow->Inst, 0, LowRegister) ||
+      !isRegisterOperand(AddLow->Inst, 1, LowRegister) ||
+      !isImmediateOperand(AddLow->Inst, 2) ||
+      AddHigh->Name != "S_ADDC_U32_vi" ||
+      !isRegisterOperand(AddHigh->Inst, 0, HighRegister) ||
+      !isRegisterOperand(AddHigh->Inst, 1, HighRegister) ||
+      !isImmediateOperand(AddHigh->Inst, 2))
+    return analysisError(
+        "direct-call target has ambiguous or skipped definitions");
+  auto LowAtAdd =
+      reachingDefinitions(Cfg, Instructions, AddLowIndex, LowRegister, Mc);
+  auto HighAtAdd =
+      reachingDefinitions(Cfg, Instructions, AddHighIndex, HighRegister, Mc);
+  if (!LowAtAdd)
+    return LowAtAdd.takeError();
+  if (!HighAtAdd)
+    return HighAtAdd.takeError();
+  if (LowAtAdd->LiveIn || LowAtAdd->Instructions.size() != 1 ||
+      HighAtAdd->LiveIn || HighAtAdd->Instructions.size() != 1 ||
+      LowAtAdd->Instructions != HighAtAdd->Instructions)
+    return analysisError("direct-call GETPC definition is ambiguous");
+  size_t GetPcIndex = *LowAtAdd->Instructions.begin();
+  const DecodedInstruction *GetPc = &Instructions[GetPcIndex];
+  if (GetPc->Name != "S_GETPC_B64_vi" || GetPc->Inst.size() != 1 ||
+      !isRegisterOperand(GetPc->Inst, 0, PairRegister))
+    return analysisError("direct-call provenance is not exact GETPC");
   if (GetPc->Address + GetPc->Size != AddLow->Address ||
       AddLow->Address + AddLow->Size != AddHigh->Address)
-    return analysisError("direct-call materialization is not contiguous");
+    return analysisError("direct-call carry materialization is not contiguous");
+  if (!isUniqueDefinition(*LowAtCall, AddLowIndex) ||
+      !isUniqueDefinition(*HighAtCall, AddHighIndex) ||
+      !isUniqueDefinition(*LowAtAdd, GetPcIndex) ||
+      !isUniqueDefinition(*HighAtAdd, GetPcIndex) ||
+      !instructionDominates(Cfg, GetPcIndex, CallIndex) ||
+      !instructionDominates(Cfg, AddLowIndex, CallIndex) ||
+      !instructionDominates(Cfg, AddHighIndex, CallIndex))
+    return analysisError(
+        "direct-call target definitions do not uniquely dominate call");
 
   int64_t LowImmediate = AddLow->Inst.getOperand(2).getImm();
   int64_t HighImmediate = AddHigh->Inst.getOperand(2).getImm();
@@ -718,35 +973,38 @@ directCallTargets(ArrayRef<DecodedInstruction> Instructions, size_t CallIndex,
            static_cast<uint32_t>(LowSum);
   };
 
-  SmallVector<uint64_t, 2> Result;
-  Result.push_back(Materialize(GetPc->Address));
-  uint64_t NextPc = GetPc->Address + GetPc->Size;
-  uint64_t NextTarget = Materialize(NextPc);
-  if (NextTarget != Result.front())
-    Result.push_back(NextTarget);
-  return Result;
+  // GFX942 S_GETPC_B64 returns the address of its next instruction.
+  return Materialize(GetPc->Address + GetPc->Size);
 }
 
 Expected<AnalyzedFunction> analyzeFunction(const SymbolRecord &Function,
                                            ArrayRef<SymbolRecord> Symbols,
+                                           bool ReturnPairIsLiveIn,
                                            McState &Mc) {
   auto Decoded = decodeFunction(Function, Mc);
   if (!Decoded)
     return Decoded.takeError();
-  std::set<uint64_t> Boundaries;
-  for (const DecodedInstruction &Instruction : *Decoded)
-    Boundaries.insert(Instruction.Address);
+  auto Cfg = buildFunctionCfg(*Decoded, Mc, Function.Name);
+  if (!Cfg)
+    return Cfg.takeError();
 
   AnalyzedFunction Result;
   Result.Evidence = {Function.Name, Function.Address, Function.Size, {}};
-  for (const DecodedInstruction &Instruction : *Decoded) {
+  for (size_t Index = 0; Index < Decoded->size(); ++Index) {
+    if (!Cfg->Blocks[Cfg->InstructionBlocks[Index]].Reachable)
+      continue;
+    const DecodedInstruction &Instruction = (*Decoded)[Index];
     const MCInstrDesc &Descriptor =
         Mc.Instructions->get(Instruction.Inst.getOpcode());
     StringRef Name = Instruction.Name;
     if (forbiddenOpcodeFamily(Name))
       return analysisError(Twine("unsupported opcode family ") + Name + " in " +
                            Function.Name);
-    if (isPhysicalReturn(Instruction, Mc)) {
+    auto PhysicalReturn =
+        validatePhysicalReturn(*Decoded, Index, *Cfg, ReturnPairIsLiveIn, Mc);
+    if (!PhysicalReturn)
+      return PhysicalReturn.takeError();
+    if (*PhysicalReturn) {
       Result.Effects.push_back(
           {Instruction.Address, PhysicalMachineEffectKind::Return, 0});
       continue;
@@ -754,27 +1012,26 @@ Expected<AnalyzedFunction> analyzeFunction(const SymbolRecord &Function,
     if (Descriptor.isIndirectBranch())
       return analysisError(Twine("indirect branch in ") + Function.Name);
     if (Descriptor.isCall()) {
-      size_t Index = static_cast<size_t>(&Instruction - Decoded->data());
-      auto Targets = directCallTargets(*Decoded, Index, Mc);
-      if (!Targets)
+      auto Target = directCallTargets(*Decoded, Index, *Cfg, Mc);
+      if (!Target)
         return analysisError(Twine("cannot resolve call in ") + Function.Name +
-                             ": " + toString(Targets.takeError()));
-      std::vector<const SymbolRecord *> Matches;
-      for (uint64_t Target : *Targets)
-        for (const SymbolRecord &Candidate : Symbols)
-          if (Candidate.Address == Target &&
-              Candidate.Type == SymbolRef::ST_Function && Candidate.Size != 0 &&
-              Candidate.Section.isText() &&
-              llvm::find(Matches, &Candidate) == Matches.end())
-            Matches.push_back(&Candidate);
-      if (Matches.size() != 1) {
+                             ": " + toString(Target.takeError()));
+      const SymbolRecord *Match = nullptr;
+      for (const SymbolRecord &Candidate : Symbols) {
+        if (Candidate.Address != *Target ||
+            Candidate.Type != SymbolRef::ST_Function || Candidate.Size == 0 ||
+            !Candidate.Section.isText())
+          continue;
+        if (Match)
+          return analysisError(Twine("call target aliases functions in ") +
+                               Function.Name);
+        Match = &Candidate;
+      }
+      if (!Match) {
         std::string Detail;
         raw_string_ostream Stream(Detail);
         Stream << "call target is not one exact function in " << Function.Name
-               << "; computed=";
-        for (uint64_t Target : *Targets)
-          Stream << ' ' << Target;
-        Stream << "; functions=";
+               << "; computed=" << *Target << "; functions=";
         for (const SymbolRecord &Candidate : Symbols)
           if (Candidate.Type == SymbolRef::ST_Function && Candidate.Size != 0 &&
               Candidate.Section.isText())
@@ -782,21 +1039,12 @@ Expected<AnalyzedFunction> analyzeFunction(const SymbolRecord &Function,
         Stream.flush();
         return analysisError(Detail);
       }
-      Result.Evidence.DirectCallees.push_back(Matches.front()->Name);
+      Result.Evidence.DirectCallees.push_back(Match->Name);
       continue;
     }
     if (Descriptor.isBranch()) {
       if (Descriptor.isBarrier())
         return analysisError(Twine("barrier branch in ") + Function.Name);
-      uint64_t Target = 0;
-      if (!Mc.Analysis->evaluateBranch(Instruction.Inst, Instruction.Address,
-                                       Instruction.Size, Target))
-        return analysisError(Twine("unknown branch target in ") +
-                             Function.Name);
-      if (Target <= Instruction.Address || !Boundaries.contains(Target))
-        return analysisError(
-            Twine("unsupported backward or external branch in ") +
-            Function.Name);
       continue;
     }
     if (Descriptor.mayLoad() || Descriptor.mayStore()) {
@@ -1160,6 +1408,9 @@ Expected<PhysicalMachineEffectEvidence> analyzeGfx942PhysicalMachineEffects(
     return Mc.takeError();
   std::map<std::string, AnalyzedFunction> Functions;
   std::vector<std::string> Pending;
+  std::set<std::string> KernelEntries;
+  for (const auto &Entry : Request.Entries)
+    KernelEntries.insert(Entry.Symbol);
   for (const auto &Entry : Request.Entries)
     Pending.push_back(Entry.Symbol);
   while (!Pending.empty()) {
@@ -1173,7 +1424,8 @@ Expected<PhysicalMachineEffectEvidence> analyzeGfx942PhysicalMachineEffects(
     if (!Function)
       return analysisError(Twine("reachable function symbol is absent: ") +
                            Name);
-    auto Analyzed = analyzeFunction(*Function, *Symbols, *Mc);
+    auto Analyzed = analyzeFunction(*Function, *Symbols,
+                                    !KernelEntries.contains(Name), *Mc);
     if (!Analyzed)
       return Analyzed.takeError();
     for (const std::string &Callee : Analyzed->Evidence.DirectCallees)

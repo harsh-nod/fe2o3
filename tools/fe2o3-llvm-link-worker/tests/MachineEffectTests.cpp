@@ -10,6 +10,14 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
+#include "llvm/MC/MCAsmInfo.h"
+#include "llvm/MC/MCContext.h"
+#include "llvm/MC/MCDisassembler/MCDisassembler.h"
+#include "llvm/MC/MCInst.h"
+#include "llvm/MC/MCInstrInfo.h"
+#include "llvm/MC/MCRegisterInfo.h"
+#include "llvm/MC/MCSubtargetInfo.h"
+#include "llvm/MC/MCTargetOptions.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Object/ObjectFile.h"
@@ -68,6 +76,7 @@ std::unique_ptr<TargetMachine> createMachine() {
     LLVMInitializeAMDGPUTargetInfo();
     LLVMInitializeAMDGPUTarget();
     LLVMInitializeAMDGPUTargetMC();
+    LLVMInitializeAMDGPUDisassembler();
     LLVMInitializeAMDGPUAsmPrinter();
     return true;
   }();
@@ -399,6 +408,93 @@ size_t symbolFileOffset(ArrayRef<uint8_t> Payload, StringRef Name) {
   fail("mutation symbol is absent");
 }
 
+struct DecodedSite {
+  size_t FileOffset = 0;
+  uint64_t Address = 0;
+  uint64_t Size = 0;
+  std::string Name;
+};
+
+std::vector<DecodedSite> decodeSymbolSites(ArrayRef<uint8_t> Payload,
+                                           StringRef Name) {
+  StringRef Data(reinterpret_cast<const char *>(Payload.data()),
+                 Payload.size());
+  auto ObjectOrError =
+      ObjectFile::createObjectFile(MemoryBufferRef(Data, "decode.hsaco"));
+  if (!ObjectOrError)
+    fail(takeError(ObjectOrError.takeError()));
+  uint64_t Address = 0;
+  uint64_t Size = 0;
+  bool Found = false;
+  for (SymbolRef Symbol : (*ObjectOrError)->symbols()) {
+    auto SymbolName = Symbol.getName();
+    if (!SymbolName)
+      fail(takeError(SymbolName.takeError()));
+    if (*SymbolName != Name)
+      continue;
+    auto SymbolAddress = Symbol.getAddress();
+    if (!SymbolAddress)
+      fail(takeError(SymbolAddress.takeError()));
+    Address = *SymbolAddress;
+    Size = ELFSymbolRef(Symbol).getSize();
+    Found = true;
+    break;
+  }
+  require(Found && Size != 0, "decode symbol is absent or empty");
+  size_t BaseOffset = symbolFileOffset(Payload, Name);
+  require(BaseOffset <= Payload.size() && Size <= Payload.size() - BaseOffset,
+          "decode symbol bytes are outside payload");
+
+  Triple TripleValue(TripleName);
+  std::string LookupError;
+  const Target *TargetValue =
+      TargetRegistry::lookupTarget("amdgcn", TripleValue, LookupError);
+  require(TargetValue != nullptr, LookupError);
+  std::unique_ptr<MCRegisterInfo> Registers(
+      TargetValue->createMCRegInfo(TripleValue));
+  std::unique_ptr<MCInstrInfo> Instructions(TargetValue->createMCInstrInfo());
+  std::unique_ptr<MCSubtargetInfo> Subtarget(
+      TargetValue->createMCSubtargetInfo(TripleValue, "gfx942", "-xnack"));
+  MCTargetOptions Options;
+  std::unique_ptr<MCAsmInfo> AsmInfo(
+      TargetValue->createMCAsmInfo(*Registers, TripleValue, Options));
+  MCContext Context(TripleValue, AsmInfo.get(), Registers.get(),
+                    Subtarget.get(), nullptr, &Options);
+  std::unique_ptr<MCDisassembler> Disassembler(
+      TargetValue->createMCDisassembler(*Subtarget, Context));
+  require(Registers && Instructions && Subtarget && AsmInfo && Disassembler,
+          "test MC tables are unavailable");
+
+  ArrayRef<uint8_t> Bytes = Payload.slice(BaseOffset, Size);
+  std::vector<DecodedSite> Result;
+  uint64_t Offset = 0;
+  while (Offset < Bytes.size()) {
+    if (llvm::all_of(Bytes.drop_front(Offset),
+                     [](uint8_t Byte) { return Byte == 0; }))
+      break;
+    MCInst Instruction;
+    uint64_t InstructionSize = 0;
+    auto Status = Disassembler->getInstruction(Instruction, InstructionSize,
+                                               Bytes.drop_front(Offset),
+                                               Address + Offset, nulls());
+    require(Status == MCDisassembler::Success && InstructionSize != 0 &&
+                InstructionSize <= Bytes.size() - Offset,
+            "reviewer repro cannot decode symbol");
+    Result.push_back({BaseOffset + static_cast<size_t>(Offset),
+                      Address + Offset, InstructionSize,
+                      Instructions->getName(Instruction.getOpcode()).str()});
+    Offset += InstructionSize;
+  }
+  return Result;
+}
+
+std::string rejectedDiagnostic(std::vector<uint8_t> Payload) {
+  auto Result =
+      analyzeGfx942PhysicalMachineEffects(directRequest(std::move(Payload)));
+  require(!Result, "reviewer mutation was accepted");
+  return takeError(Result.takeError());
+}
+
 void replaceText(std::vector<uint8_t> &Bytes, StringRef Expected,
                  StringRef Replacement) {
   require(Expected.size() == Replacement.size(),
@@ -471,6 +567,80 @@ void targetDescriptorAndEffectExpansionFailClosed() {
   consumeError(TightResult.takeError());
 }
 
+void cfgReviewerReproductionsFailClosed() {
+  {
+    std::vector<uint8_t> Payload = finalize(makeKernelBitcode(false));
+    auto Sites = decodeSymbolSites(Payload, "alpha");
+    auto End = llvm::find_if(Sites, [](const DecodedSite &Site) {
+      return StringRef(Site.Name).starts_with("S_ENDPGM");
+    });
+    require(End != Sites.end() && End->Size == 4,
+            "fallthrough repro lacks four-byte S_ENDPGM");
+    support::endian::write32le(Payload.data() + End->FileOffset, 0xbf800000);
+    auto Changed = decodeSymbolSites(Payload, "alpha");
+    require(llvm::any_of(Changed,
+                         [](const DecodedSite &Site) {
+                           return StringRef(Site.Name).starts_with("S_NOP");
+                         }),
+            "fallthrough repro did not encode S_NOP");
+    std::string Diagnostic = rejectedDiagnostic(std::move(Payload));
+    require(StringRef(Diagnostic).contains("fallthrough exits symbol"),
+            "fallthrough repro did not reach CFG rejection");
+  }
+
+  {
+    std::vector<uint8_t> Payload = finalize(makeKernelBitcode(true));
+    auto Sites = decodeSymbolSites(Payload, "alpha");
+    auto GetPc = llvm::find_if(Sites, [](const DecodedSite &Site) {
+      return Site.Name == "S_GETPC_B64_vi";
+    });
+    auto AddHigh = llvm::find_if(Sites, [](const DecodedSite &Site) {
+      return Site.Name == "S_ADDC_U32_vi";
+    });
+    require(GetPc != Sites.end() && AddHigh != Sites.end() &&
+                GetPc->Size == 4 && AddHigh->Address > GetPc->Address + 4,
+            "skipped-definition repro lacks call materialization");
+    uint64_t Distance = AddHigh->Address - (GetPc->Address + 4);
+    require(Distance % 4 == 0 && Distance / 4 <= 0x7fff,
+            "skipped-definition branch is not encodable");
+    uint32_t Branch = 0xbf840000 | static_cast<uint16_t>(Distance / 4);
+    support::endian::write32le(Payload.data() + GetPc->FileOffset, Branch);
+    auto Changed = decodeSymbolSites(Payload, "alpha");
+    require(llvm::any_of(Changed,
+                         [](const DecodedSite &Site) {
+                           return StringRef(Site.Name).starts_with("S_CBRANCH");
+                         }),
+            "skipped-definition repro did not encode S_BRANCH");
+    std::string Diagnostic = rejectedDiagnostic(std::move(Payload));
+    require(StringRef(Diagnostic).contains("definitions are ambiguous") ||
+                StringRef(Diagnostic).contains("provenance is not exact"),
+            "skipped-definition repro did not reach dataflow rejection: " +
+                Diagnostic);
+  }
+
+  {
+    std::vector<uint8_t> Payload = finalize(makeKernelBitcode(true));
+    auto Sites = decodeSymbolSites(Payload, "alpha_helper");
+    auto Return = llvm::find_if(Sites, [](const DecodedSite &Site) {
+      return Site.Name == "S_SETPC_B64_vi";
+    });
+    require(Return != Sites.end() && Return != Sites.begin() &&
+                std::prev(Return)->Size == 4,
+            "return-provenance repro lacks replaceable predecessor");
+    support::endian::write32le(Payload.data() + std::prev(Return)->FileOffset,
+                               0xbe9e0180);
+    auto Changed = decodeSymbolSites(Payload, "alpha_helper");
+    require(llvm::any_of(Changed,
+                         [](const DecodedSite &Site) {
+                           return StringRef(Site.Name).starts_with("S_MOV_B64");
+                         }),
+            "return-provenance repro did not encode S_MOV_B64");
+    std::string Diagnostic = rejectedDiagnostic(std::move(Payload));
+    require(StringRef(Diagnostic).contains("return pair was modified"),
+            "return-provenance repro did not reach dataflow rejection");
+  }
+}
+
 void directCallEdgesAreResolvedExactly() {
   auto Payload = finalize(makeKernelBitcode(true));
   auto RequestValue = directRequest(std::move(Payload));
@@ -499,6 +669,7 @@ int main() {
   physicalAnalysisDerivesDeterministicClosedEffects();
   decoderBindsBytesSymbolsAndIdentities();
   targetDescriptorAndEffectExpansionFailClosed();
+  cfgReviewerReproductionsFailClosed();
   directCallEdgesAreResolvedExactly();
   return 0;
 }
