@@ -25,7 +25,7 @@ fn canonical_encoding_is_frozen_and_is_the_identity() {
     assert_eq!(
         bytes,
         vec![
-            b'F', b'E', b'2', b'O', b'S', b'V', b'2', 0, 2, 0, 8, 0, 0, 0, 0, 0, 1, 1, 1, 0, 3, 3,
+            b'F', b'E', b'2', b'O', b'S', b'V', b'2', 0, 3, 0, 8, 0, 0, 0, 0, 0, 1, 1, 1, 0, 3, 3,
             1, 0
         ]
     );
@@ -35,6 +35,37 @@ fn canonical_encoding_is_frozen_and_is_the_identity() {
             .unwrap()
             .canonical_bytes(),
         bytes
+    );
+}
+
+#[test]
+fn v3_shift_and_float_comparison_encodings_are_frozen() {
+    let shift = Operation::Shift {
+        ty: int(IntWidth::W32, false),
+        rhs_ty: int(IntWidth::W128, true),
+        direction: ShiftDirection::Left,
+        policy: ShiftPolicy::RustOperator {
+            overflow_checks: false,
+        },
+    };
+    assert_eq!(
+        encode(shift, FloatCapabilities::NONE).unwrap(),
+        vec![
+            b'F', b'E', b'2', b'O', b'S', b'V', b'2', 0, 3, 0, 12, 0, 0, 0, 0, 0, 3, 1, 5, 0, 3, 3,
+            0, 0, 3, 5, 1, 0,
+        ]
+    );
+    let compare = Operation::FloatCompare {
+        ty: ScalarType::Float(FloatWidth::F64),
+        predicate: Predicate::Ne,
+        policy: FloatComparisonPolicy::IeeeUnordered,
+    };
+    assert_eq!(
+        encode(compare, FloatCapabilities::ALL).unwrap(),
+        vec![
+            b'F', b'E', b'2', b'O', b'S', b'V', b'2', 0, 3, 0, 8, 0, 0, 0, 0, 0, 7, 2, 4, 0, 4, 3,
+            0, 0,
+        ]
     );
 }
 
@@ -247,13 +278,14 @@ fn division_remainder_exception_table_covers_all_widths() {
 }
 
 #[test]
-fn shifts_have_only_checked_or_masked_semantics() {
+fn shifts_preserve_rhs_type_and_full_value() {
     for w in WIDTHS {
-        let n = u32::from(w.bits());
+        let n = u128::from(w.bits());
         for signed in [false, true] {
             assert_eq!(
                 evaluate_shift(
                     int(w, signed),
+                    int(IntWidth::W128, false),
                     ShiftDirection::Left,
                     ShiftPolicy::Checked,
                     1,
@@ -264,8 +296,9 @@ fn shifts_have_only_checked_or_masked_semantics() {
             assert_eq!(
                 evaluate_shift(
                     int(w, signed),
+                    int(IntWidth::W128, false),
                     ShiftDirection::Left,
-                    ShiftPolicy::Masked,
+                    ShiftPolicy::Wrapping,
                     1,
                     n
                 ),
@@ -281,14 +314,141 @@ fn shifts_have_only_checked_or_masked_semantics() {
             assert_eq!(
                 evaluate_shift(
                     int(w, true),
+                    int(IntWidth::W64, false),
                     ShiftDirection::Right,
-                    ShiftPolicy::Masked,
+                    ShiftPolicy::Wrapping,
                     high,
                     n + 1
                 ),
                 Some(IntOutcome::Value(expected))
             );
         }
+    }
+    for (rhs_ty, raw, wrapped) in [
+        (int(IntWidth::W64, false), 1u128 << 32, 1),
+        (int(IntWidth::W128, false), 1u128 << 96, 1),
+        (int(IntWidth::W64, true), u64::MAX.into(), 1u128 << 31),
+        (int(IntWidth::W128, true), u128::MAX, 1u128 << 31),
+    ] {
+        assert_eq!(
+            evaluate_shift(
+                int(IntWidth::W32, false),
+                rhs_ty,
+                ShiftDirection::Left,
+                ShiftPolicy::Checked,
+                1,
+                raw,
+            ),
+            Some(IntOutcome::CheckedNone)
+        );
+        assert_eq!(
+            evaluate_shift(
+                int(IntWidth::W32, false),
+                rhs_ty,
+                ShiftDirection::Left,
+                ShiftPolicy::Overflowing,
+                1,
+                raw,
+            ),
+            Some(IntOutcome::Overflowing {
+                value: wrapped,
+                overflowed: true,
+            })
+        );
+        assert_eq!(
+            evaluate_shift(
+                int(IntWidth::W32, false),
+                rhs_ty,
+                ShiftDirection::Left,
+                ShiftPolicy::RustOperator {
+                    overflow_checks: true,
+                },
+                1,
+                raw,
+            ),
+            Some(IntOutcome::Trap)
+        );
+        assert_eq!(
+            evaluate_shift(
+                int(IntWidth::W32, false),
+                rhs_ty,
+                ShiftDirection::Left,
+                ShiftPolicy::RustOperator {
+                    overflow_checks: false,
+                },
+                1,
+                raw,
+            ),
+            Some(IntOutcome::Value(wrapped))
+        );
+    }
+}
+
+#[test]
+fn randomized_shift_oracle_covers_all_rhs_widths() {
+    let mut state = 0xa863_91c4_7e2d_5b0fu64;
+    for iteration in 0..100_000 {
+        state = xorshift(state);
+        let lhs_width = WIDTHS[iteration % WIDTHS.len()];
+        let rhs_width = WIDTHS[(iteration / WIDTHS.len()) % WIDTHS.len()];
+        let lhs_signed = state & 1 != 0;
+        let rhs_signed = state & 2 != 0;
+        let value = u128::from(state) << 64 | u128::from(xorshift(state));
+        let amount = u128::from(xorshift(xorshift(state))) << 64
+            | u128::from(xorshift(xorshift(xorshift(state))));
+        let lhs_ty = int(lhs_width, lhs_signed);
+        let rhs_ty = int(rhs_width, rhs_signed);
+        let normalized = amount & width_mask(rhs_width);
+        let bits = u128::from(lhs_width.bits());
+        let invalid = if rhs_signed {
+            signed_value(normalized, rhs_width).is_negative()
+                || signed_value(normalized, rhs_width) as u128 >= bits
+        } else {
+            normalized >= bits
+        };
+        let shift = (normalized % bits) as u32;
+        let base = value & width_mask(lhs_width);
+        let expected = if iteration & 1 == 0 {
+            (base << shift) & width_mask(lhs_width)
+        } else if lhs_signed {
+            encode_signed_reference(signed_value(base, lhs_width) >> shift, lhs_width)
+        } else {
+            base >> shift
+        };
+        let direction = if iteration & 1 == 0 {
+            ShiftDirection::Left
+        } else {
+            ShiftDirection::Right
+        };
+        assert_eq!(
+            evaluate_shift(
+                lhs_ty,
+                rhs_ty,
+                direction,
+                ShiftPolicy::Checked,
+                value,
+                amount,
+            ),
+            Some(if invalid {
+                IntOutcome::CheckedNone
+            } else {
+                IntOutcome::Value(expected)
+            })
+        );
+        assert_eq!(
+            evaluate_shift(
+                lhs_ty,
+                rhs_ty,
+                direction,
+                ShiftPolicy::Overflowing,
+                value,
+                amount,
+            ),
+            Some(IntOutcome::Overflowing {
+                value: expected,
+                overflowed: invalid,
+            })
+        );
     }
 }
 
@@ -377,13 +537,17 @@ fn float_arithmetic_comparisons_and_nan_are_capability_gated() {
                 matches!(w, FloatWidth::F32 | FloatWidth::F64)
             )
         }
-        for nan in [NaNSemantics::Ordered, NaNSemantics::RustPartialEq] {
+        for policy in [
+            FloatComparisonPolicy::RustPartialEq,
+            FloatComparisonPolicy::IeeeOrdered,
+            FloatComparisonPolicy::IeeeUnordered,
+        ] {
             assert_eq!(
                 verify(
                     Operation::FloatCompare {
                         ty: ScalarType::Float(w),
-                        predicate: Predicate::Ne,
-                        nan
+                        predicate: Predicate::Eq,
+                        policy,
                     },
                     caps
                 )
@@ -392,6 +556,110 @@ fn float_arithmetic_comparisons_and_nan_are_capability_gated() {
             )
         }
     }
+}
+
+#[test]
+fn float_comparison_policies_define_nan_and_result_surfaces() {
+    let predicates = [
+        Predicate::Eq,
+        Predicate::Ne,
+        Predicate::Lt,
+        Predicate::Le,
+        Predicate::Gt,
+        Predicate::Ge,
+    ];
+    for predicate in predicates {
+        let rust_policy = if matches!(predicate, Predicate::Eq | Predicate::Ne) {
+            FloatComparisonPolicy::RustPartialEq
+        } else {
+            FloatComparisonPolicy::RustPartialOrd
+        };
+        let op = Operation::FloatCompare {
+            ty: ScalarType::Float(FloatWidth::F64),
+            predicate,
+            policy: rust_policy,
+        };
+        assert!(verify(op, FloatCapabilities::ALL).is_ok());
+        for (left, right) in [
+            (f64::NAN, 1.0),
+            (1.0, f64::NAN),
+            (-0.0, 0.0),
+            (f64::NEG_INFINITY, f64::INFINITY),
+            (3.0, 3.0),
+            (4.0, 3.0),
+        ] {
+            let expected = match predicate {
+                Predicate::Eq => left == right,
+                Predicate::Ne => left != right,
+                Predicate::Lt => left < right,
+                Predicate::Le => left <= right,
+                Predicate::Gt => left > right,
+                Predicate::Ge => left >= right,
+            };
+            assert_eq!(
+                evaluate_float_compare_f64(rust_policy, predicate, left, right),
+                Some(expected)
+            );
+            let unordered = left.is_nan() || right.is_nan();
+            assert_eq!(
+                evaluate_float_compare_f64(
+                    FloatComparisonPolicy::IeeeOrdered,
+                    predicate,
+                    left,
+                    right,
+                ),
+                Some(!unordered && expected)
+            );
+            assert_eq!(
+                evaluate_float_compare_f64(
+                    FloatComparisonPolicy::IeeeUnordered,
+                    predicate,
+                    left,
+                    right,
+                ),
+                Some(unordered || expected)
+            );
+        }
+    }
+    for (policy, predicate) in [
+        (FloatComparisonPolicy::RustPartialEq, Predicate::Lt),
+        (FloatComparisonPolicy::RustPartialOrd, Predicate::Eq),
+    ] {
+        assert_eq!(
+            evaluate_float_compare_f32(policy, predicate, f32::NAN, 0.0),
+            None
+        );
+        assert!(matches!(
+            verify(
+                Operation::FloatCompare {
+                    ty: ScalarType::Float(FloatWidth::F32),
+                    predicate,
+                    policy,
+                },
+                FloatCapabilities::ALL,
+            ),
+            Err(ds) if ds.contains(&Diagnostic::InvalidFloatComparison)
+        ));
+    }
+
+    let total = Operation::FloatTotalCompare {
+        ty: ScalarType::Float(FloatWidth::F64),
+    };
+    assert_eq!(
+        decode(
+            &encode(total, FloatCapabilities::ALL).unwrap(),
+            FloatCapabilities::ALL
+        ),
+        Ok(total)
+    );
+    assert_eq!(
+        evaluate_float_total_cmp_f64(-0.0, 0.0),
+        (-0.0f64).total_cmp(&0.0)
+    );
+    assert_eq!(
+        evaluate_float_total_cmp_f32(f32::from_bits(0xffc0_0001), f32::NEG_INFINITY),
+        f32::from_bits(0xffc0_0001).total_cmp(&f32::NEG_INFINITY)
+    );
 }
 
 #[test]
@@ -514,6 +782,102 @@ fn bool_char_and_float_cast_boundaries_follow_rust() {
 }
 
 #[test]
+fn float_cast_thresholds_and_random_campaign_match_rust_as() {
+    for width in WIDTHS {
+        let signed_limit = 2.0f64.powi(i32::from(width.bits() - 1));
+        let unsigned_limit = 2.0f64.powi(i32::from(width.bits()));
+        let values = [
+            f64::NAN,
+            f64::from_bits(0xfff8_0000_0000_0001),
+            f64::NEG_INFINITY,
+            f64::INFINITY,
+            -0.0,
+            0.0,
+            f64::from_bits(1),
+            -f64::from_bits(1),
+            -signed_limit,
+            (-signed_limit).next_down(),
+            (-signed_limit).next_up(),
+            signed_limit,
+            signed_limit.next_down(),
+            signed_limit.next_up(),
+            unsigned_limit,
+            unsigned_limit.next_down(),
+            unsigned_limit.next_up(),
+        ];
+        for value in values {
+            assert_eq!(
+                rust_saturating_float_to_int(value, width, true),
+                rust_cast_f64(value, width, true),
+                "signed {width:?} {value:?}"
+            );
+            assert_eq!(
+                rust_saturating_float_to_int(value, width, false),
+                rust_cast_f64(value, width, false),
+                "unsigned {width:?} {value:?}"
+            );
+        }
+
+        let signed_limit = signed_limit as f32;
+        let unsigned_limit = unsigned_limit as f32;
+        for value in [
+            f32::NAN,
+            f32::from_bits(0xffc0_0001),
+            f32::NEG_INFINITY,
+            f32::INFINITY,
+            -0.0,
+            0.0,
+            f32::from_bits(1),
+            -f32::from_bits(1),
+            -signed_limit,
+            (-signed_limit).next_down(),
+            (-signed_limit).next_up(),
+            signed_limit,
+            signed_limit.next_down(),
+            signed_limit.next_up(),
+            unsigned_limit,
+            unsigned_limit.next_down(),
+            unsigned_limit.next_up(),
+        ] {
+            assert_eq!(
+                rust_saturating_f32_to_int(value, width, true),
+                rust_cast_f32(value, width, true),
+                "signed {width:?} {value:?}"
+            );
+            assert_eq!(
+                rust_saturating_f32_to_int(value, width, false),
+                rust_cast_f32(value, width, false),
+                "unsigned {width:?} {value:?}"
+            );
+        }
+    }
+
+    let mut state = 0x8f4d_3a29_61c7_b5e1u64;
+    for iteration in 0..110_000 {
+        state = xorshift(state);
+        let value = f64::from_bits(state);
+        let width = WIDTHS[iteration % WIDTHS.len()];
+        for signed in [false, true] {
+            assert_eq!(
+                rust_saturating_float_to_int(value, width, signed),
+                rust_cast_f64(value, width, signed)
+            );
+        }
+    }
+    for iteration in 0..110_000 {
+        state = xorshift(state);
+        let value = f32::from_bits(state as u32);
+        let width = WIDTHS[iteration % WIDTHS.len()];
+        for signed in [false, true] {
+            assert_eq!(
+                rust_saturating_f32_to_int(value, width, signed),
+                rust_cast_f32(value, width, signed)
+            );
+        }
+    }
+}
+
+#[test]
 fn malformed_encoding_is_bounded_fail_closed_and_never_panics() {
     let base = encode(
         binary(
@@ -542,15 +906,122 @@ fn malformed_encoding_is_bounded_fail_closed_and_never_panics() {
         decode(&trailing, FloatCapabilities::NONE),
         Err(DecodeError::TrailingBytes)
     );
+    let corpus = [
+        base,
+        encode(
+            Operation::Shift {
+                ty: int(IntWidth::W8, true),
+                rhs_ty: int(IntWidth::W128, true),
+                direction: ShiftDirection::Right,
+                policy: ShiftPolicy::Overflowing,
+            },
+            FloatCapabilities::NONE,
+        )
+        .unwrap(),
+        encode(
+            Operation::FloatCompare {
+                ty: ScalarType::Float(FloatWidth::F64),
+                predicate: Predicate::Ge,
+                policy: FloatComparisonPolicy::IeeeUnordered,
+            },
+            FloatCapabilities::ALL,
+        )
+        .unwrap(),
+        encode(
+            Operation::FloatTotalCompare {
+                ty: ScalarType::Float(FloatWidth::F32),
+            },
+            FloatCapabilities::ALL,
+        )
+        .unwrap(),
+        encode(
+            Operation::Cast {
+                from: ScalarType::Float(FloatWidth::F64),
+                to: int(IntWidth::W128, true),
+                cast: Cast::FloatToInt {
+                    semantics: FloatToIntSemantics::RustSaturatingAs,
+                },
+            },
+            FloatCapabilities::ALL,
+        )
+        .unwrap(),
+    ];
     let mut state = 0x4d595df4d0f33173u64;
-    for _ in 0..20_000 {
-        state ^= state << 13;
-        state ^= state >> 7;
-        state ^= state << 17;
-        let mut bytes = base.clone();
+    for iteration in 0..160_000 {
+        state = xorshift(state);
+        let mut bytes = corpus[iteration % corpus.len()].clone();
         let at = (state as usize) % bytes.len();
         bytes[at] ^= ((state >> 32) as u8) | 1;
-        assert!(catch_unwind(AssertUnwindSafe(|| decode(&bytes, FloatCapabilities::ALL))).is_ok());
+        let decoded =
+            catch_unwind(AssertUnwindSafe(|| decode(&bytes, FloatCapabilities::ALL))).unwrap();
+        if let Ok(operation) = decoded {
+            assert_eq!(
+                encode(operation, FloatCapabilities::ALL).unwrap(),
+                bytes,
+                "successful decodes must already be canonical"
+            );
+        }
+    }
+}
+
+fn xorshift(mut state: u64) -> u64 {
+    state ^= state << 13;
+    state ^= state >> 7;
+    state ^ (state << 17)
+}
+
+fn width_mask(width: IntWidth) -> u128 {
+    if width == IntWidth::W128 {
+        u128::MAX
+    } else {
+        (1u128 << width.bits()) - 1
+    }
+}
+
+fn signed_value(value: u128, width: IntWidth) -> i128 {
+    if width == IntWidth::W128 {
+        value as i128
+    } else {
+        let sign = 1u128 << (width.bits() - 1);
+        if value & sign == 0 {
+            value as i128
+        } else {
+            value as i128 - (1i128 << width.bits())
+        }
+    }
+}
+
+fn encode_signed_reference(value: i128, width: IntWidth) -> u128 {
+    value as u128 & width_mask(width)
+}
+
+fn rust_cast_f64(value: f64, width: IntWidth, signed: bool) -> u128 {
+    match (width, signed) {
+        (IntWidth::W8, true) => (value as i8) as u8 as u128,
+        (IntWidth::W16, true) => (value as i16) as u16 as u128,
+        (IntWidth::W32, true) => (value as i32) as u32 as u128,
+        (IntWidth::W64, true) => (value as i64) as u64 as u128,
+        (IntWidth::W128, true) => (value as i128) as u128,
+        (IntWidth::W8, false) => (value as u8) as u128,
+        (IntWidth::W16, false) => (value as u16) as u128,
+        (IntWidth::W32, false) => (value as u32) as u128,
+        (IntWidth::W64, false) => (value as u64) as u128,
+        (IntWidth::W128, false) => value as u128,
+    }
+}
+
+fn rust_cast_f32(value: f32, width: IntWidth, signed: bool) -> u128 {
+    match (width, signed) {
+        (IntWidth::W8, true) => (value as i8) as u8 as u128,
+        (IntWidth::W16, true) => (value as i16) as u16 as u128,
+        (IntWidth::W32, true) => (value as i32) as u32 as u128,
+        (IntWidth::W64, true) => (value as i64) as u64 as u128,
+        (IntWidth::W128, true) => (value as i128) as u128,
+        (IntWidth::W8, false) => (value as u8) as u128,
+        (IntWidth::W16, false) => (value as u16) as u128,
+        (IntWidth::W32, false) => (value as u32) as u128,
+        (IntWidth::W64, false) => (value as u64) as u128,
+        (IntWidth::W128, false) => value as u128,
     }
 }
 
@@ -592,6 +1063,7 @@ fn boundary_table_roundtrips_all_widths_and_cast_families() {
         for signed in [false, true] {
             operations.push(Operation::Shift {
                 ty: int(w, signed),
+                rhs_ty: int(IntWidth::W128, !signed),
                 direction: ShiftDirection::Right,
                 policy: ShiftPolicy::Checked,
             });
