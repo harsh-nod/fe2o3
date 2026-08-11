@@ -73,6 +73,11 @@ constexpr uint16_t SchemaVersion = 1;
 constexpr size_t MaxEntries = 2;
 constexpr size_t MaxEdges = 256;
 constexpr size_t MaxSymbolBytes = 256;
+constexpr size_t MaxElfSections = 256;
+constexpr size_t MaxProgramHeaders = 32;
+constexpr size_t MaxSymbolsPerTable = 4096;
+constexpr size_t MaxStringTableBytes = 1024 * 1024;
+constexpr size_t MaxMetadataBytes = 1024 * 1024;
 
 Error analysisError(const Twine &Message) {
   return createStringError(inconvertibleErrorCode(),
@@ -204,6 +209,180 @@ struct MetadataKernel {
   uint64_t PrivateSize = 0;
 };
 
+struct LoaderSegment {
+  uint64_t FileOffset = 0;
+  uint64_t Address = 0;
+  uint64_t FileSize = 0;
+  uint64_t MemorySize = 0;
+  uint32_t Flags = 0;
+};
+
+struct LoaderView {
+  ArrayRef<uint8_t> Payload;
+  std::vector<LoaderSegment> Segments;
+
+  Expected<uint64_t> fileOffset(uint64_t Address, uint64_t Size,
+                                uint32_t RequiredFlags, uint32_t ForbiddenFlags,
+                                StringRef Description) const {
+    std::optional<uint64_t> Result;
+    for (const LoaderSegment &Segment : Segments) {
+      if ((Segment.Flags & RequiredFlags) != RequiredFlags ||
+          (Segment.Flags & ForbiddenFlags) != 0 || Address < Segment.Address)
+        continue;
+      uint64_t Delta = Address - Segment.Address;
+      if (Delta > Segment.FileSize || Size > Segment.FileSize - Delta)
+        continue;
+      if (Segment.FileOffset > std::numeric_limits<uint64_t>::max() - Delta)
+        return analysisError(Twine(Description) +
+                             " loader file offset overflows");
+      uint64_t Current = Segment.FileOffset + Delta;
+      if (Result && *Result != Current)
+        return analysisError(Twine(Description) +
+                             " has ambiguous PT_LOAD mappings");
+      Result = Current;
+    }
+    if (!Result)
+      return analysisError(Twine(Description) +
+                           " is outside a permitted file-backed PT_LOAD");
+    if (*Result > Payload.size() || Size > Payload.size() - *Result)
+      return analysisError(Twine(Description) +
+                           " loader bytes are outside payload");
+    return *Result;
+  }
+
+  Error validateSection(const ELF64LE::Shdr &Section,
+                        StringRef Description) const {
+    if (Section.sh_type != ELF::SHT_NOBITS &&
+        (Section.sh_offset > Payload.size() ||
+         Section.sh_size > Payload.size() - Section.sh_offset))
+      return analysisError(Twine(Description) +
+                           " section bytes are outside payload");
+    if ((Section.sh_flags & ELF::SHF_ALLOC) == 0 || Section.sh_size == 0)
+      return Error::success();
+    if (Section.sh_type == ELF::SHT_NOBITS) {
+      size_t Matches = 0;
+      for (const LoaderSegment &Segment : Segments) {
+        if (Section.sh_addr < Segment.Address)
+          continue;
+        uint64_t Delta = Section.sh_addr - Segment.Address;
+        if (Delta <= Segment.MemorySize &&
+            Section.sh_size <= Segment.MemorySize - Delta)
+          ++Matches;
+      }
+      if (Matches != 1)
+        return analysisError(Twine(Description) +
+                             " has ambiguous loader memory mapping");
+      return Error::success();
+    }
+
+    uint32_t Required = ELF::PF_R;
+    uint32_t Forbidden = 0;
+    if ((Section.sh_flags & ELF::SHF_EXECINSTR) != 0) {
+      Required |= ELF::PF_X;
+      Forbidden |= ELF::PF_W;
+    }
+    if ((Section.sh_flags & ELF::SHF_WRITE) != 0)
+      Required |= ELF::PF_W;
+    auto Offset = fileOffset(Section.sh_addr, Section.sh_size, Required,
+                             Forbidden, Description);
+    if (!Offset)
+      return Offset.takeError();
+    if (*Offset != Section.sh_offset)
+      return analysisError(Twine(Description) +
+                           " section and PT_LOAD file views disagree");
+    return Error::success();
+  }
+
+  Expected<ArrayRef<uint8_t>> bytes(uint64_t Address, uint64_t Size,
+                                    uint32_t RequiredFlags,
+                                    uint32_t ForbiddenFlags,
+                                    uint64_t ExpectedSectionOffset,
+                                    StringRef Description) const {
+    auto Offset =
+        fileOffset(Address, Size, RequiredFlags, ForbiddenFlags, Description);
+    if (!Offset)
+      return Offset.takeError();
+    if (*Offset != ExpectedSectionOffset)
+      return analysisError(Twine(Description) +
+                           " section and loader bytes disagree");
+    return Payload.slice(static_cast<size_t>(*Offset),
+                         static_cast<size_t>(Size));
+  }
+};
+
+bool rangesOverlap(uint64_t Left, uint64_t LeftSize, uint64_t Right,
+                   uint64_t RightSize) {
+  if (LeftSize == 0 || RightSize == 0)
+    return false;
+  return Left < Right + RightSize && Right < Left + LeftSize;
+}
+
+Expected<LoaderView> buildLoaderView(const ELFObjectFile<ELF64LE> &Object,
+                                     ArrayRef<uint8_t> Payload) {
+  const ELFFile<ELF64LE> &File = Object.getELFFile();
+  auto Headers = File.program_headers();
+  if (!Headers)
+    return Headers.takeError();
+  if (Headers->empty() || Headers->size() > MaxProgramHeaders)
+    return analysisError("program-header count is outside bounded profile");
+
+  LoaderView Result{Payload, {}};
+  for (const ELF64LE::Phdr &Header : *Headers) {
+    if (Header.p_filesz != 0 &&
+        (Header.p_offset > Payload.size() ||
+         Header.p_filesz > Payload.size() - Header.p_offset))
+      return analysisError("program-header file range is outside payload");
+    if (Header.p_type != ELF::PT_LOAD)
+      continue;
+    if (Header.p_memsz == 0 || Header.p_filesz > Header.p_memsz)
+      return analysisError("PT_LOAD size is invalid");
+    if ((Header.p_flags & ~(ELF::PF_R | ELF::PF_W | ELF::PF_X)) != 0 ||
+        (Header.p_flags & ELF::PF_R) == 0 ||
+        (Header.p_flags & (ELF::PF_W | ELF::PF_X)) == (ELF::PF_W | ELF::PF_X))
+      return analysisError("PT_LOAD permissions are outside bounded profile");
+    if (Header.p_vaddr > std::numeric_limits<uint64_t>::max() - Header.p_memsz)
+      return analysisError("PT_LOAD virtual range overflows");
+    if (Header.p_align > 1 &&
+        ((Header.p_align & (Header.p_align - 1)) != 0 ||
+         Header.p_offset % Header.p_align != Header.p_vaddr % Header.p_align))
+      return analysisError("PT_LOAD alignment is invalid");
+    Result.Segments.push_back({Header.p_offset, Header.p_vaddr, Header.p_filesz,
+                               Header.p_memsz, Header.p_flags});
+  }
+  if (Result.Segments.empty() ||
+      !llvm::any_of(Result.Segments, [](const LoaderSegment &Segment) {
+        return (Segment.Flags & ELF::PF_X) != 0 && Segment.FileSize != 0;
+      }))
+    return analysisError("loadable executable segment is absent");
+  for (size_t I = 0; I < Result.Segments.size(); ++I) {
+    const LoaderSegment &Left = Result.Segments[I];
+    for (size_t J = I + 1; J < Result.Segments.size(); ++J) {
+      const LoaderSegment &Right = Result.Segments[J];
+      if (rangesOverlap(Left.Address, Left.MemorySize, Right.Address,
+                        Right.MemorySize))
+        return analysisError("PT_LOAD virtual mappings overlap");
+      if (((Left.Flags | Right.Flags) & ELF::PF_X) != 0 &&
+          rangesOverlap(Left.FileOffset, Left.FileSize, Right.FileOffset,
+                        Right.FileSize))
+        return analysisError("executable PT_LOAD file mappings alias");
+    }
+  }
+
+  auto Sections = File.sections();
+  if (!Sections)
+    return Sections.takeError();
+  if (Sections->empty() || Sections->size() > MaxElfSections)
+    return analysisError("section count is outside bounded profile");
+  for (const ELF64LE::Shdr &Section : *Sections) {
+    auto Name = File.getSectionName(Section);
+    if (!Name)
+      return Name.takeError();
+    if (Error ErrorValue = Result.validateSection(Section, *Name))
+      return ErrorValue;
+  }
+  return Result;
+}
+
 Expected<msgpack::DocNode *> requiredField(msgpack::MapDocNode &Map,
                                            StringRef Name) {
   auto Field = Map.find(Name);
@@ -233,7 +412,7 @@ Expected<uint64_t> metadataUnsigned(msgpack::MapDocNode &Map, StringRef Name) {
 }
 
 Expected<std::vector<MetadataKernel>>
-readMetadata(const ELFObjectFile<ELF64LE> &Object) {
+readMetadata(const ELFObjectFile<ELF64LE> &Object, const LoaderView &Loader) {
   const ELFFile<ELF64LE> &File = Object.getELFFile();
   auto Sections = File.sections();
   if (!Sections)
@@ -246,6 +425,8 @@ readMetadata(const ELFObjectFile<ELF64LE> &Object) {
   for (const ELF64LE::Shdr &Section : *Sections) {
     if (Section.sh_type != ELF::SHT_NOTE)
       continue;
+    if (Error ErrorValue = Loader.validateSection(Section, "metadata note"))
+      return ErrorValue;
     Error NoteError = Error::success();
     for (const ELF64LE::Note Note : File.notes(Section, NoteError)) {
       if (Note.getName() != "AMDGPU" ||
@@ -256,8 +437,8 @@ readMetadata(const ELFObjectFile<ELF64LE> &Object) {
       if (Section.sh_addralign != 4)
         return analysisError("metadata note alignment is not four");
       StringRef Blob = Note.getDescAsStringRef(Section.sh_addralign);
-      if (Blob.empty())
-        return analysisError("metadata note is empty");
+      if (Blob.empty() || Blob.size() > MaxMetadataBytes)
+        return analysisError("metadata note size is outside bounded profile");
       msgpack::Document Document;
       if (!Document.readFromBlob(Blob, false))
         return analysisError("metadata note is malformed");
@@ -280,6 +461,9 @@ readMetadata(const ELFObjectFile<ELF64LE> &Object) {
         return Kernels.takeError();
       if (!(**Kernels).isArray())
         return analysisError("metadata kernels are not an array");
+      if ((**Kernels).getArray().empty() ||
+          (**Kernels).getArray().size() > MaxEntries)
+        return analysisError("metadata kernel count exceeds bounded profile");
       for (msgpack::DocNode &Node : (**Kernels).getArray()) {
         if (!Node.isMap())
           return analysisError("metadata kernel is not a map");
@@ -324,32 +508,90 @@ struct SymbolRecord {
   std::string Name;
   uint64_t Address = 0;
   uint64_t Size = 0;
-  SectionRef Section;
-  SymbolRef::Type Type = SymbolRef::ST_Unknown;
+  uint64_t FileOffset = 0;
+  uint32_t SectionIndex = 0;
+  uint8_t Type = ELF::STT_NOTYPE;
+  uint8_t Binding = ELF::STB_LOCAL;
+  uint8_t Visibility = ELF::STV_DEFAULT;
+  bool Text = false;
+  bool Data = false;
+  ArrayRef<uint8_t> Bytes;
 };
 
+const SymbolRecord *findSymbol(ArrayRef<SymbolRecord> Symbols, StringRef Name);
+
 Expected<std::vector<SymbolRecord>>
-readSymbols(const ELFObjectFile<ELF64LE> &Object) {
+readSymbolTable(const ELFObjectFile<ELF64LE> &Object,
+                ArrayRef<ELF64LE::Shdr> Sections, const ELF64LE::Shdr &Table,
+                const LoaderView &Loader, StringRef TableName) {
+  const ELFFile<ELF64LE> &File = Object.getELFFile();
+  if (Table.sh_entsize != sizeof(ELF64LE::Sym) ||
+      Table.sh_size % sizeof(ELF64LE::Sym) != 0 ||
+      Table.sh_size / sizeof(ELF64LE::Sym) > MaxSymbolsPerTable)
+    return analysisError(Twine(TableName) +
+                         " symbol count is outside bounded profile");
+  auto Symbols = File.symbols(&Table);
+  if (!Symbols)
+    return Symbols.takeError();
+  auto StringTable = File.getStringTableForSymtab(Table, Sections);
+  if (!StringTable)
+    return StringTable.takeError();
+  if (StringTable->size() > MaxStringTableBytes)
+    return analysisError(Twine(TableName) +
+                         " string table exceeds bounded profile");
+
   std::vector<SymbolRecord> Result;
-  for (SymbolRef Symbol : Object.symbols()) {
-    auto Name = Symbol.getName();
+  Result.reserve(Symbols->size());
+  for (const ELF64LE::Sym &Symbol : *Symbols) {
+    auto Name = Symbol.getName(*StringTable);
     if (!Name)
       return Name.takeError();
     if (Name->empty())
       continue;
-    auto Address = Symbol.getAddress();
-    if (!Address)
-      return Address.takeError();
-    auto Type = Symbol.getType();
-    if (!Type)
-      return Type.takeError();
-    auto Section = Symbol.getSection();
-    if (!Section)
-      return Section.takeError();
-    if (*Section == Object.section_end())
+    if (Name->size() > MaxSymbolBytes || !Reader::validSymbol(*Name))
+      return analysisError(Twine(TableName) + " contains invalid symbol name");
+    if (Symbol.isUndefined() || Symbol.isAbsolute() || Symbol.isCommon())
       continue;
-    uint64_t Size = ELFSymbolRef(Symbol).getSize();
-    Result.push_back({Name->str(), *Address, Size, **Section, *Type});
+    if (Symbol.st_shndx == ELF::SHN_XINDEX ||
+        Symbol.st_shndx >= Sections.size())
+      return analysisError(Twine(TableName) +
+                           " symbol section index is unsupported");
+    const ELF64LE::Shdr &Section = Sections[Symbol.st_shndx];
+    if (Symbol.st_value < Section.sh_addr)
+      return analysisError(Twine(TableName) + " symbol precedes section");
+    uint64_t Delta = Symbol.st_value - Section.sh_addr;
+    if (Delta > Section.sh_size || Symbol.st_size > Section.sh_size - Delta)
+      return analysisError(Twine(TableName) +
+                           " symbol range is outside section");
+
+    bool Text = (Section.sh_flags & (ELF::SHF_ALLOC | ELF::SHF_EXECINSTR)) ==
+                (ELF::SHF_ALLOC | ELF::SHF_EXECINSTR);
+    bool Data = (Section.sh_flags & ELF::SHF_ALLOC) != 0 && !Text;
+    uint64_t FileOffset = 0;
+    ArrayRef<uint8_t> Bytes;
+    if (Symbol.st_size != 0 && (Text || Data)) {
+      if (Section.sh_type == ELF::SHT_NOBITS ||
+          Section.sh_offset > std::numeric_limits<uint64_t>::max() - Delta)
+        return analysisError(Twine(TableName) +
+                             " symbol has no bounded file bytes");
+      FileOffset = Section.sh_offset + Delta;
+      uint32_t Required = ELF::PF_R;
+      uint32_t Forbidden = 0;
+      if (Text) {
+        Required |= ELF::PF_X;
+        Forbidden |= ELF::PF_W;
+      } else if ((Section.sh_flags & ELF::SHF_WRITE) != 0) {
+        Required |= ELF::PF_W;
+      }
+      auto Mapped = Loader.bytes(Symbol.st_value, Symbol.st_size, Required,
+                                 Forbidden, FileOffset, *Name);
+      if (!Mapped)
+        return Mapped.takeError();
+      Bytes = *Mapped;
+    }
+    Result.push_back({Name->str(), Symbol.st_value, Symbol.st_size, FileOffset,
+                      Symbol.st_shndx, Symbol.getType(), Symbol.getBinding(),
+                      Symbol.getVisibility(), Text, Data, Bytes});
   }
   llvm::sort(Result, [](const SymbolRecord &Left, const SymbolRecord &Right) {
     return std::tie(Left.Name, Left.Address, Left.Size) <
@@ -357,24 +599,138 @@ readSymbols(const ELFObjectFile<ELF64LE> &Object) {
   });
   for (size_t I = 1; I < Result.size(); ++I)
     if (Result[I - 1].Name == Result[I].Name)
-      return analysisError(Twine("duplicate symbol: ") + Result[I].Name);
+      return analysisError(Twine(TableName) +
+                           " duplicate symbol: " + Result[I].Name);
   return Result;
 }
 
+Expected<std::vector<SymbolRecord>>
+readSymbols(const ELFObjectFile<ELF64LE> &Object, const LoaderView &Loader,
+            ArrayRef<MetadataKernel> Metadata) {
+  const ELFFile<ELF64LE> &File = Object.getELFFile();
+  auto Sections = File.sections();
+  if (!Sections)
+    return Sections.takeError();
+  const ELF64LE::Shdr *StaticTable = nullptr;
+  const ELF64LE::Shdr *DynamicTable = nullptr;
+  for (const ELF64LE::Shdr &Section : *Sections) {
+    if (Section.sh_type == ELF::SHT_SYMTAB) {
+      if (StaticTable)
+        return analysisError("multiple .symtab sections");
+      StaticTable = &Section;
+    } else if (Section.sh_type == ELF::SHT_DYNSYM) {
+      if (DynamicTable)
+        return analysisError("multiple .dynsym sections");
+      DynamicTable = &Section;
+    }
+  }
+  if (!StaticTable || !DynamicTable)
+    return analysisError("bounded profile requires .symtab and .dynsym");
+  auto Static =
+      readSymbolTable(Object, *Sections, *StaticTable, Loader, ".symtab");
+  if (!Static)
+    return Static.takeError();
+  auto Dynamic =
+      readSymbolTable(Object, *Sections, *DynamicTable, Loader, ".dynsym");
+  if (!Dynamic)
+    return Dynamic.takeError();
+
+  for (const MetadataKernel &Kernel : Metadata) {
+    for (StringRef Name :
+         {StringRef(Kernel.Name), StringRef(Kernel.Descriptor)}) {
+      const SymbolRecord *StaticSymbol = findSymbol(*Static, Name);
+      const SymbolRecord *DynamicSymbol = findSymbol(*Dynamic, Name);
+      if (!StaticSymbol || !DynamicSymbol)
+        return analysisError(
+            Twine("kernel export is absent from symbol view: ") + Name);
+      if (std::tie(StaticSymbol->Address, StaticSymbol->Size,
+                   StaticSymbol->SectionIndex, StaticSymbol->Type) !=
+              std::tie(DynamicSymbol->Address, DynamicSymbol->Size,
+                       DynamicSymbol->SectionIndex, DynamicSymbol->Type) ||
+          DynamicSymbol->Binding != ELF::STB_GLOBAL ||
+          (DynamicSymbol->Visibility != ELF::STV_DEFAULT &&
+           DynamicSymbol->Visibility != ELF::STV_PROTECTED))
+        return analysisError(Twine(".symtab/.dynsym export mismatch: ") + Name);
+    }
+  }
+  return Static;
+}
+
+bool isRelocationSection(uint32_t Type) {
+  return Type == ELF::SHT_REL || Type == ELF::SHT_RELA ||
+         Type == ELF::SHT_RELR || Type == ELF::SHT_CREL ||
+         Type == ELF::SHT_ANDROID_REL || Type == ELF::SHT_ANDROID_RELA ||
+         Type == ELF::SHT_ANDROID_RELR;
+}
+
+bool isRelocationDynamicTag(int64_t Tag) {
+  // Generic ELF DT_* relocation tables plus Android packed relocations.
+  switch (Tag) {
+  case 2:          // DT_PLTRELSZ
+  case 7:          // DT_RELA
+  case 8:          // DT_RELASZ
+  case 9:          // DT_RELAENT
+  case 17:         // DT_REL
+  case 18:         // DT_RELSZ
+  case 19:         // DT_RELENT
+  case 20:         // DT_PLTREL
+  case 23:         // DT_JMPREL
+  case 35:         // DT_RELRSZ
+  case 36:         // DT_RELR
+  case 37:         // DT_RELRENT
+  case 0x6000000f: // DT_ANDROID_REL
+  case 0x60000010: // DT_ANDROID_RELSZ
+  case 0x60000011: // DT_ANDROID_RELA
+  case 0x60000012: // DT_ANDROID_RELASZ
+    return true;
+  default:
+    return false;
+  }
+}
+
+Error validateRelocations(const ELFObjectFile<ELF64LE> &Object) {
+  const ELFFile<ELF64LE> &File = Object.getELFFile();
+  auto Sections = File.sections();
+  if (!Sections)
+    return Sections.takeError();
+  for (const ELF64LE::Shdr &Section : *Sections) {
+    auto Name = File.getSectionName(Section);
+    if (!Name)
+      return Name.takeError();
+    bool Relocation = isRelocationSection(Section.sh_type);
+    bool RelocationName = *Name == ".rel" || Name->starts_with(".rel.") ||
+                          *Name == ".rela" || Name->starts_with(".rela.") ||
+                          *Name == ".relr" || Name->starts_with(".relr.");
+    if (RelocationName && !Relocation)
+      return analysisError(Twine("relocation-named section has wrong type: ") +
+                           *Name + " type=" + Twine(Section.sh_type));
+    if (Relocation && Section.sh_size != 0) {
+      if (Section.sh_info >= Sections->size() && Section.sh_info != 0)
+        return analysisError("relocation target section is invalid");
+      return analysisError(Twine("unsupported finalized-image relocations: ") +
+                           *Name);
+    }
+    if (Section.sh_type != ELF::SHT_DYNAMIC)
+      continue;
+    if (Section.sh_entsize != sizeof(ELF64LE::Dyn) ||
+        Section.sh_size % sizeof(ELF64LE::Dyn) != 0 ||
+        Section.sh_size / sizeof(ELF64LE::Dyn) > 256)
+      return analysisError("dynamic table exceeds bounded profile");
+    auto Entries = File.getSectionContentsAsArray<ELF64LE::Dyn>(Section);
+    if (!Entries)
+      return Entries.takeError();
+    for (const ELF64LE::Dyn &Entry : *Entries)
+      if (isRelocationDynamicTag(Entry.getTag()))
+        return analysisError("dynamic relocation table is unsupported");
+  }
+  return Error::success();
+}
+
 Expected<ArrayRef<uint8_t>> symbolBytes(const SymbolRecord &Symbol) {
-  auto Contents = Symbol.Section.getContents();
-  if (!Contents)
-    return Contents.takeError();
-  uint64_t SectionAddress = Symbol.Section.getAddress();
-  if (Symbol.Address < SectionAddress)
-    return analysisError(Twine("symbol precedes section: ") + Symbol.Name);
-  uint64_t Offset = Symbol.Address - SectionAddress;
-  if (Offset > Contents->size() || Symbol.Size > Contents->size() - Offset)
-    return analysisError(Twine("symbol range is outside section: ") +
+  if (Symbol.Size != Symbol.Bytes.size())
+    return analysisError(Twine("symbol has no exact loader bytes: ") +
                          Symbol.Name);
-  const uint8_t *Begin =
-      reinterpret_cast<const uint8_t *>(Contents->data() + Offset);
-  return ArrayRef<uint8_t>(Begin, static_cast<size_t>(Symbol.Size));
+  return Symbol.Bytes;
 }
 
 const SymbolRecord *findSymbol(ArrayRef<SymbolRecord> Symbols, StringRef Name) {
@@ -390,12 +746,11 @@ const SymbolRecord *findSymbol(ArrayRef<SymbolRecord> Symbols, StringRef Name) {
 Expected<PhysicalMachineEntryEvidence>
 validateDescriptor(const MetadataKernel &Metadata, const SymbolRecord &Entry,
                    const SymbolRecord &Descriptor) {
-  if (Entry.Type != SymbolRef::ST_Function || Entry.Size == 0 ||
-      !Entry.Section.isText())
+  if (Entry.Type != ELF::STT_FUNC || Entry.Size == 0 || !Entry.Text)
     return analysisError(Twine("entry is not a bounded text function: ") +
                          Entry.Name);
-  if (Descriptor.Type != SymbolRef::ST_Data || Descriptor.Size != 64 ||
-      !Descriptor.Section.isData())
+  if (Descriptor.Type != ELF::STT_OBJECT || Descriptor.Size != 64 ||
+      !Descriptor.Data)
     return analysisError(Twine("kernel descriptor has invalid shape: ") +
                          Descriptor.Name);
   auto Bytes = symbolBytes(Descriptor);
@@ -1018,9 +1373,8 @@ Expected<AnalyzedFunction> analyzeFunction(const SymbolRecord &Function,
                              ": " + toString(Target.takeError()));
       const SymbolRecord *Match = nullptr;
       for (const SymbolRecord &Candidate : Symbols) {
-        if (Candidate.Address != *Target ||
-            Candidate.Type != SymbolRef::ST_Function || Candidate.Size == 0 ||
-            !Candidate.Section.isText())
+        if (Candidate.Address != *Target || Candidate.Type != ELF::STT_FUNC ||
+            Candidate.Size == 0 || !Candidate.Text)
           continue;
         if (Match)
           return analysisError(Twine("call target aliases functions in ") +
@@ -1033,8 +1387,8 @@ Expected<AnalyzedFunction> analyzeFunction(const SymbolRecord &Function,
         Stream << "call target is not one exact function in " << Function.Name
                << "; computed=" << *Target << "; functions=";
         for (const SymbolRecord &Candidate : Symbols)
-          if (Candidate.Type == SymbolRef::ST_Function && Candidate.Size != 0 &&
-              Candidate.Section.isText())
+          if (Candidate.Type == ELF::STT_FUNC && Candidate.Size != 0 &&
+              Candidate.Text)
             Stream << ' ' << Candidate.Name << '@' << Candidate.Address;
         Stream.flush();
         return analysisError(Detail);
@@ -1369,7 +1723,13 @@ Expected<PhysicalMachineEffectEvidence> analyzeGfx942PhysicalMachineEffects(
   if (Base->getPlatformFlags() != PhysicalProfileElfFlags)
     return analysisError("ELF target is not exact gfx942:xnack- profile");
 
-  auto Metadata = readMetadata(*Object);
+  auto Loader = buildLoaderView(*Object, Request.Payload);
+  if (!Loader)
+    return Loader.takeError();
+  if (Error ErrorValue = validateRelocations(*Object))
+    return ErrorValue;
+
+  auto Metadata = readMetadata(*Object, *Loader);
   if (!Metadata)
     return Metadata.takeError();
   if (Metadata->size() != Request.Entries.size())
@@ -1378,7 +1738,7 @@ Expected<PhysicalMachineEffectEvidence> analyzeGfx942PhysicalMachineEffects(
     if ((*Metadata)[I].Name != Request.Entries[I].Symbol)
       return analysisError("metadata entry symbol differs from request");
 
-  auto Symbols = readSymbols(*Object);
+  auto Symbols = readSymbols(*Object, *Loader, *Metadata);
   if (!Symbols)
     return Symbols.takeError();
 

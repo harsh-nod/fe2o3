@@ -32,6 +32,8 @@
 #include <array>
 #include <cstddef>
 #include <cstdlib>
+#include <limits>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -415,6 +417,80 @@ struct DecodedSite {
   std::string Name;
 };
 
+struct ElfMutationLayout {
+  std::vector<size_t> ExecutableProgramHeaders;
+  std::vector<size_t> NonLoadProgramHeaders;
+  std::map<std::string, size_t> SectionHeaders;
+  std::map<std::string, uint32_t> SectionIndices;
+  std::map<std::pair<uint32_t, std::string>, size_t> Symbols;
+};
+
+size_t payloadOffset(ArrayRef<uint8_t> Payload, const void *Pointer,
+                     size_t Size) {
+  const auto *Bytes = static_cast<const uint8_t *>(Pointer);
+  require(Bytes >= Payload.data() && Bytes <= Payload.data() + Payload.size() &&
+              Size <=
+                  static_cast<size_t>(Payload.data() + Payload.size() - Bytes),
+          "ELF mutation target is outside payload");
+  return static_cast<size_t>(Bytes - Payload.data());
+}
+
+ElfMutationLayout inspectElfMutationLayout(ArrayRef<uint8_t> Payload) {
+  StringRef Data(reinterpret_cast<const char *>(Payload.data()),
+                 Payload.size());
+  auto ObjectOrError =
+      ObjectFile::createObjectFile(MemoryBufferRef(Data, "layout.hsaco"));
+  if (!ObjectOrError)
+    fail(takeError(ObjectOrError.takeError()));
+  auto *Object = dyn_cast<ELFObjectFile<ELF64LE>>(ObjectOrError->get());
+  require(Object != nullptr, "mutation fixture is not ELF64LE");
+  const ELFFile<ELF64LE> &File = Object->getELFFile();
+  auto Headers = File.program_headers();
+  if (!Headers)
+    fail(takeError(Headers.takeError()));
+  ElfMutationLayout Result;
+  for (const ELF64LE::Phdr &Header : *Headers) {
+    size_t Offset = payloadOffset(Payload, &Header, sizeof(Header));
+    if (Header.p_type == ELF::PT_LOAD && (Header.p_flags & ELF::PF_X) != 0)
+      Result.ExecutableProgramHeaders.push_back(Offset);
+    else if (Header.p_type != ELF::PT_LOAD)
+      Result.NonLoadProgramHeaders.push_back(Offset);
+  }
+
+  auto Sections = File.sections();
+  if (!Sections)
+    fail(takeError(Sections.takeError()));
+  for (size_t Index = 0; Index < Sections->size(); ++Index) {
+    const ELF64LE::Shdr &Section = (*Sections)[Index];
+    auto Name = File.getSectionName(Section);
+    if (!Name)
+      fail(takeError(Name.takeError()));
+    Result.SectionHeaders.emplace(
+        Name->str(), payloadOffset(Payload, &Section, sizeof(Section)));
+    Result.SectionIndices.emplace(Name->str(), static_cast<uint32_t>(Index));
+    if (Section.sh_type != ELF::SHT_SYMTAB &&
+        Section.sh_type != ELF::SHT_DYNSYM)
+      continue;
+    auto StringTable = File.getStringTableForSymtab(Section, *Sections);
+    if (!StringTable)
+      fail(takeError(StringTable.takeError()));
+    auto Symbols = File.symbols(&Section);
+    if (!Symbols)
+      fail(takeError(Symbols.takeError()));
+    for (const ELF64LE::Sym &Symbol : *Symbols) {
+      auto SymbolName = Symbol.getName(*StringTable);
+      if (!SymbolName)
+        fail(takeError(SymbolName.takeError()));
+      if (!SymbolName->empty())
+        Result.Symbols.emplace(
+            std::pair<uint32_t, std::string>{Section.sh_type,
+                                             SymbolName->str()},
+            payloadOffset(Payload, &Symbol, sizeof(Symbol)));
+    }
+  }
+  return Result;
+}
+
 std::vector<DecodedSite> decodeSymbolSites(ArrayRef<uint8_t> Payload,
                                            StringRef Name) {
   StringRef Data(reinterpret_cast<const char *>(Payload.data()),
@@ -495,6 +571,14 @@ std::string rejectedDiagnostic(std::vector<uint8_t> Payload) {
   return takeError(Result.takeError());
 }
 
+void requireRejectedWith(std::vector<uint8_t> Payload, StringRef Fragment) {
+  std::string Diagnostic = rejectedDiagnostic(std::move(Payload));
+  std::string Message =
+      (Twine("unexpected rejection; wanted '") + Fragment + "': " + Diagnostic)
+          .str();
+  require(StringRef(Diagnostic).contains(Fragment), Message);
+}
+
 void replaceText(std::vector<uint8_t> &Bytes, StringRef Expected,
                  StringRef Replacement) {
   require(Expected.size() == Replacement.size(),
@@ -565,6 +649,93 @@ void targetDescriptorAndEffectExpansionFailClosed() {
   auto TightResult = analyzeGfx942PhysicalMachineEffects(TightRequest);
   require(!TightResult, "effect expansion was accepted");
   consumeError(TightResult.takeError());
+}
+
+void loaderViewMutationsFailClosed() {
+  std::vector<uint8_t> Payload = finalize(makeKernelBitcode(false));
+  ElfMutationLayout Layout = inspectElfMutationLayout(Payload);
+  require(Layout.ExecutableProgramHeaders.size() == 1,
+          "fixture does not have one executable PT_LOAD");
+  require(!Layout.NonLoadProgramHeaders.empty(),
+          "fixture lacks a non-PT_LOAD header for alias repro");
+  require(Layout.SectionHeaders.contains(".text") &&
+              Layout.SectionHeaders.contains(".note") &&
+              Layout.SectionHeaders.contains(".symtab") &&
+              Layout.SectionIndices.contains(".text"),
+          "fixture lacks loader-view mutation sections");
+  auto StaticAlpha =
+      Layout.Symbols.find({ELF::SHT_SYMTAB, std::string("alpha")});
+  auto DynamicAlpha =
+      Layout.Symbols.find({ELF::SHT_DYNSYM, std::string("alpha")});
+  require(StaticAlpha != Layout.Symbols.end() &&
+              DynamicAlpha != Layout.Symbols.end(),
+          "fixture lacks alpha in both symbol tables");
+
+  const size_t Executable = Layout.ExecutableProgramHeaders.front();
+  {
+    std::vector<uint8_t> Mutated = Payload;
+    support::endian::write64le(Mutated.data() + Executable + 32,
+                               Mutated.size() + 1);
+    requireRejectedWith(std::move(Mutated),
+                        "program-header file range is outside payload");
+  }
+  {
+    std::vector<uint8_t> Mutated = Payload;
+    uint32_t Flags = support::endian::read32le(Mutated.data() + Executable + 4);
+    support::endian::write32le(Mutated.data() + Executable + 4,
+                               Flags | ELF::PF_W);
+    requireRejectedWith(std::move(Mutated),
+                        "PT_LOAD permissions are outside bounded profile");
+  }
+  {
+    std::vector<uint8_t> Mutated = Payload;
+    std::array<uint8_t, sizeof(ELF64LE::Phdr)> Copy{};
+    llvm::copy(ArrayRef<uint8_t>(Mutated).slice(Executable, Copy.size()),
+               Copy.begin());
+    llvm::copy(Copy, Mutated.begin() + Layout.NonLoadProgramHeaders.front());
+    requireRejectedWith(std::move(Mutated), "PT_LOAD virtual mappings overlap");
+  }
+  {
+    std::vector<uint8_t> Mutated = Payload;
+    size_t Text = Layout.SectionHeaders.at(".text");
+    uint64_t Offset = support::endian::read64le(Mutated.data() + Text + 24);
+    support::endian::write64le(Mutated.data() + Text + 24, Offset + 4);
+    requireRejectedWith(std::move(Mutated),
+                        "section and PT_LOAD file views disagree");
+  }
+  {
+    std::vector<uint8_t> Mutated = Payload;
+    size_t Note = Layout.SectionHeaders.at(".note");
+    uint64_t Address = support::endian::read64le(Mutated.data() + Note + 16);
+    support::endian::write64le(Mutated.data() + Note + 16, Address + 4);
+    requireRejectedWith(std::move(Mutated),
+                        "section and PT_LOAD file views disagree");
+  }
+  {
+    std::vector<uint8_t> Mutated = Payload;
+    uint64_t Value =
+        support::endian::read64le(Mutated.data() + DynamicAlpha->second + 8);
+    support::endian::write64le(Mutated.data() + DynamicAlpha->second + 8,
+                               Value + 4);
+    requireRejectedWith(std::move(Mutated), ".symtab/.dynsym export mismatch");
+  }
+  {
+    std::vector<uint8_t> Mutated = Payload;
+    support::endian::write64le(Mutated.data() + StaticAlpha->second + 16,
+                               std::numeric_limits<uint64_t>::max());
+    support::endian::write64le(Mutated.data() + DynamicAlpha->second + 16,
+                               std::numeric_limits<uint64_t>::max());
+    requireRejectedWith(std::move(Mutated), "symbol range is outside section");
+  }
+  {
+    std::vector<uint8_t> Mutated = Payload;
+    size_t Symtab = Layout.SectionHeaders.at(".symtab");
+    support::endian::write32le(Mutated.data() + Symtab + 4, ELF::SHT_RELA);
+    support::endian::write32le(Mutated.data() + Symtab + 44,
+                               Layout.SectionIndices.at(".text"));
+    requireRejectedWith(std::move(Mutated),
+                        "unsupported finalized-image relocations");
+  }
 }
 
 void cfgReviewerReproductionsFailClosed() {
@@ -669,6 +840,7 @@ int main() {
   physicalAnalysisDerivesDeterministicClosedEffects();
   decoderBindsBytesSymbolsAndIdentities();
   targetDescriptorAndEffectExpansionFailClosed();
+  loaderViewMutationsFailClosed();
   cfgReviewerReproductionsFailClosed();
   directCallEdgesAreResolvedExactly();
   return 0;
