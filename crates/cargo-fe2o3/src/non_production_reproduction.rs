@@ -3,20 +3,20 @@ use std::ffi::OsStr;
 
 pub(crate) const MODE_ENV: &str = "FE2O3_NON_PRODUCTION_COMPILER_REPRODUCTION_V1";
 pub(crate) const MODE_VALUE: &str = "gfx942-alpha-zeta-cov6-v1";
-const OBSERVATION_ENV: &str = "FE2O3_NON_PRODUCTION_COMPILER_TRANSITION_OBSERVATION_V1";
-const OBSERVATION_VALUE: &str = "observe-without-golden-acceptance";
+const SCOPE_ENV: &str = "FE2O3_NON_PRODUCTION_COMPILER_EVIDENCE_SCOPE_V1";
+const SCOPE_VALUE: &str = "exact-artifact-observation-only";
 const DOMAIN: &[u8] = b"FE2O3/NON-PRODUCTION-COMPILER-REPRODUCTION/V1\0";
 const CANONICAL_METADATA: &str = "fe2o3-gfx942-alpha-zeta-cov6-reproduction-v1";
 
 pub(crate) fn enabled() -> bool {
     enabled_from(
         std::env::var(MODE_ENV).ok().as_deref(),
-        std::env::var(OBSERVATION_ENV).ok().as_deref(),
+        std::env::var(SCOPE_ENV).ok().as_deref(),
     )
 }
 
-fn enabled_from(mode: Option<&str>, observation: Option<&str>) -> bool {
-    mode == Some(MODE_VALUE) && observation == Some(OBSERVATION_VALUE)
+fn enabled_from(mode: Option<&str>, scope: Option<&str>) -> bool {
+    mode == Some(MODE_VALUE) && scope == Some(SCOPE_VALUE)
 }
 
 pub(crate) fn deterministic_16(label: &[u8]) -> [u8; 16] {
@@ -123,15 +123,15 @@ mod tests {
 
     #[test]
     fn reproduction_requires_both_exact_non_production_gates() {
-        assert!(enabled_from(Some(MODE_VALUE), Some(OBSERVATION_VALUE)));
-        for (mode, observation) in [
+        assert!(enabled_from(Some(MODE_VALUE), Some(SCOPE_VALUE)));
+        for (mode, scope) in [
             (None, None),
             (Some(MODE_VALUE), None),
-            (None, Some(OBSERVATION_VALUE)),
-            (Some("caller-selected"), Some(OBSERVATION_VALUE)),
-            (Some(MODE_VALUE), Some("accept-golden")),
+            (None, Some(SCOPE_VALUE)),
+            (Some("caller-selected"), Some(SCOPE_VALUE)),
+            (Some(MODE_VALUE), Some("production-authority")),
         ] {
-            assert!(!enabled_from(mode, observation));
+            assert!(!enabled_from(mode, scope));
         }
     }
 

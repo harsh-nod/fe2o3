@@ -908,7 +908,7 @@ def build_and_generate(
     supervisor: Supervisor,
     *,
     observe_candidate: bool,
-) -> tuple[Path, dict[str, Any], RetainedFile]:
+) -> tuple[Path, dict[str, Any], RetainedFile, RetainedFile]:
     if run != run.parent / f"run-{index}" or not run.is_dir():
         raise EvidenceError("run root does not match its independent index")
     path_dir = run / "tool-path"
@@ -987,7 +987,17 @@ def build_and_generate(
         capture=True,
     )
     listing = json.loads((ctest_listing.stdout or b"").decode("utf-8"))
-    for test in listing.get("tests", []):
+    tests = listing.get("tests", [])
+    expected_native_tests = {
+        "fe2o3-worker-codec-tests",
+        "fe2o3-worker-pipeline-tests",
+        "fe2o3-worker-device-library-policy-tests",
+    }
+    if not isinstance(tests, list) or {test.get("name") for test in tests} != expected_native_tests:
+        raise EvidenceError("CTest did not list the exact three native Worker tests")
+    native_tests: list[tuple[Path, RetainedFile, SealedExecutable, list[str]]] = []
+    native_results = []
+    for test in tests:
         command = test.get("command", [])
         if not command:
             raise EvidenceError("CTest listed a test without an executable")
@@ -996,13 +1006,83 @@ def build_and_generate(
             executable, worker_build, f"run-{index} native test {test.get('name')}"
         )
         generated.append((file, record))
-    run_command(
-        [os.fspath(tools["ctest"].path), "--test-dir", os.fspath(worker_build), "--output-on-failure"],
-        repo,
-        environment,
-        tools,
-        supervisor,
+        retained = RetainedFile.open(record["label"], executable, require_executable=True)
+        sealed = SealedExecutable.from_retained(retained)
+        direct = run_command(
+            [os.fspath(executable), *command[1:]],
+            worker_build,
+            environment,
+            tools,
+            supervisor,
+            executable=sealed,
+        )
+        native_results.append(
+            {
+                "name": test["name"],
+                "direct_returncode": direct.returncode,
+                "executable_sha256": sealed.sha256,
+            }
+        )
+        native_tests.append((executable, retained, sealed, command))
+    ctest_file = worker_build / "CTestTestfile.cmake"
+    ctest_original = ctest_file.read_bytes()
+    if not ctest_original or len(ctest_original) > 1024 * 1024:
+        raise EvidenceError("generated CTest command file is empty or unbounded")
+    ctest_fd = os.open(ctest_file, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    ctest_stat = os.fstat(ctest_fd)
+    ctest_identity = (
+        ctest_stat.st_dev,
+        ctest_stat.st_ino,
+        ctest_stat.st_mode,
+        ctest_stat.st_nlink,
+        ctest_stat.st_uid,
+        ctest_stat.st_gid,
     )
+    ctest_rewritten = ctest_original
+    for executable, _, sealed, _ in native_tests:
+        original = os.fsencode(executable)
+        if ctest_rewritten.count(original) != 1:
+            raise EvidenceError("CTest command did not contain one exact native executable path")
+        ctest_rewritten = ctest_rewritten.replace(original, os.fsencode(sealed.proc_path))
+    ctest_file.write_bytes(ctest_rewritten)
+    try:
+        ctest = run_command(
+            [
+                os.fspath(tools["ctest"].path),
+                "--test-dir",
+                os.fspath(worker_build),
+                "--output-on-failure",
+            ],
+            repo,
+            environment,
+            tools,
+            supervisor,
+            capture=True,
+            extra_inherited_fds=tuple(item[2].fd for item in native_tests),
+        )
+        ctest_output = (ctest.stdout + ctest.stderr).decode("utf-8", "replace")
+        if "100% tests passed, 0 tests failed out of 3" not in ctest_output:
+            raise EvidenceError("CTest did not report an exact 3/3 pass")
+    finally:
+        ctest_file.write_bytes(ctest_original)
+        if ctest_file.read_bytes() != ctest_original:
+            raise EvidenceError("generated CTest command file was not exactly restored")
+        restored = os.stat(ctest_file, follow_symlinks=False)
+        if (
+            restored.st_dev,
+            restored.st_ino,
+            restored.st_mode,
+            restored.st_nlink,
+            restored.st_uid,
+            restored.st_gid,
+        ) != ctest_identity or os.pread(ctest_fd, restored.st_size, 0) != ctest_original:
+            raise EvidenceError("generated CTest command file identity changed")
+        os.close(ctest_fd)
+        for _, retained, sealed, _ in reversed(native_tests):
+            sealed.revalidate()
+            retained.revalidate()
+            sealed.close()
+            retained.close()
     for file, record in generated:
         revalidate_generated_executable(file, record)
     build_identity = (worker_build / "fe2o3-worker-build-id.txt").read_text("ascii").strip()
@@ -1012,6 +1092,7 @@ def build_and_generate(
     if not output_dir.is_dir():
         raise EvidenceError("run evidence root was not prepared independently")
     output = output_dir / "alpha-zeta-cov6.hsaco"
+    transaction_output = output_dir / "compiler-transaction-observation.json"
     generation_environment = dict(environment)
     generation_environment.update(
         {
@@ -1021,6 +1102,13 @@ def build_and_generate(
             "FE2O3_LLVM_BUILD_ID": EXPECTED_LLVM_BUILD,
             "FE2O3_LLVM_LINK_WORKER": os.fspath(worker),
             "FE2O3_LLVM_LINK_WORKER_BUILD_ID": build_identity,
+            "FE2O3_NON_PRODUCTION_COMPILER_REPRODUCTION_RECORD_V1": os.fspath(
+                transaction_output
+            ),
+            "FE2O3_NON_PRODUCTION_COMPILER_EVIDENCE_SCOPE_V1":
+                "exact-artifact-observation-only",
+            "FE2O3_NON_PRODUCTION_COMPILER_REPRODUCTION_V1":
+                "gfx942-alpha-zeta-cov6-v1",
             "ROCM_PATH": "/opt/rocm-7.2.4",
         }
     )
@@ -1028,9 +1116,6 @@ def build_and_generate(
         generation_environment[
             "FE2O3_NON_PRODUCTION_COMPILER_TRANSITION_OBSERVATION_V1"
         ] = "observe-without-golden-acceptance"
-        generation_environment[
-            "FE2O3_NON_PRODUCTION_COMPILER_REPRODUCTION_V1"
-        ] = "gfx942-alpha-zeta-cov6-v1"
     build_test = run_command(
         [
             os.fspath(tools["cargo"].path),
@@ -1117,18 +1202,45 @@ def build_and_generate(
     ):
         retained_hsaco.close()
         raise EvidenceError(f"run {index} HSACO identity changed")
+    retained_transaction = RetainedFile.open(
+        f"run-{index}-compiler-transaction-observation",
+        transaction_output,
+        require_read_only=True,
+    )
+    transaction = json.loads(
+        os.pread(
+            retained_transaction.fd,
+            os.fstat(retained_transaction.fd).st_size,
+            0,
+        )
+    )
+    if (
+        transaction.get("authority") != "none"
+        or transaction.get("final_hsaco_sha256") != sha256_bytes(data)
+        or transaction.get("final_hsaco_bytes") != len(data)
+    ):
+        retained_transaction.close()
+        retained_hsaco.close()
+        raise EvidenceError("compiler transaction observation does not bind the final HSACO")
     executable_manifest = {
         "schema": "fe2o3-gfx942-run-executable-manifest-v1",
         "run": index,
         "worker_build_identity": build_identity,
         "worker_sha256": worker_record["sha256"],
         "hsaco": retained_hsaco.record(),
+        "compiler_transaction": retained_transaction.record(),
+        "ctest": {
+            "listed": sorted(expected_native_tests),
+            "passed": 3,
+            "total": 3,
+            "sealed_direct_results": native_results,
+        },
         "executables": [record for _, record in generated],
     }
     (output_dir / "executables.json").write_bytes(canonical_json(executable_manifest))
     for file, _ in generated:
         file.close()
-    return output, executable_manifest, retained_hsaco
+    return output, executable_manifest, retained_hsaco, retained_transaction
 
 
 def build_from_canonical_snapshot(
@@ -1143,7 +1255,7 @@ def build_from_canonical_snapshot(
     supervisor: Supervisor,
     *,
     observe_candidate: bool,
-) -> tuple[Path, dict[str, Any], RetainedFile]:
+) -> tuple[Path, dict[str, Any], RetainedFile, RetainedFile]:
     archived_root = source.root
     if archived_root != run / "source":
         raise EvidenceError("independent source snapshot has an unexpected archive path")
@@ -1257,7 +1369,7 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
         supervisor.guards.extend(runtime_closure.files)
         (evidence_root / "tool-runtime-manifest.json").write_bytes(canonical_json(observed))
         canonical_source = run_root / "canonical-execution-source"
-        first, first_executables, first_hsaco = build_from_canonical_snapshot(
+        first, first_executables, first_hsaco, first_transaction = build_from_canonical_snapshot(
             1,
             prepared[0][1],
             prepared[0][0],
@@ -1269,11 +1381,11 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
             supervisor,
             observe_candidate=observe_candidate,
         )
-        retained_artifacts.append(first_hsaco)
+        retained_artifacts.extend((first_hsaco, first_transaction))
         for closure in closures:
             closure.revalidate()
         git_clean(repo, bootstrap_environment, tools, supervisor)
-        second, second_executables, second_hsaco = build_from_canonical_snapshot(
+        second, second_executables, second_hsaco, second_transaction = build_from_canonical_snapshot(
             2,
             prepared[1][1],
             prepared[1][0],
@@ -1285,7 +1397,7 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
             supervisor,
             observe_candidate=observe_candidate,
         )
-        retained_artifacts.append(second_hsaco)
+        retained_artifacts.extend((second_hsaco, second_transaction))
         for closure in closures:
             closure.revalidate()
         git_clean(repo, bootstrap_environment, tools, supervisor)
@@ -1295,6 +1407,26 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
         second_bytes = os.pread(second_hsaco.fd, os.fstat(second_hsaco.fd).st_size, 0)
         if first_bytes != second_bytes:
             raise EvidenceError("independent Worker/build/target runs were not byte-identical")
+        first_transaction_bytes = os.pread(
+            first_transaction.fd, os.fstat(first_transaction.fd).st_size, 0
+        )
+        second_transaction_bytes = os.pread(
+            second_transaction.fd, os.fstat(second_transaction.fd).st_size, 0
+        )
+        first_transaction_record = json.loads(first_transaction_bytes)
+        second_transaction_record = json.loads(second_transaction_bytes)
+        for field in (
+            "worker_identity",
+            "response_identity",
+            "raw_output_identity",
+            "finalized_output_identity",
+            "final_hsaco_sha256",
+            "final_hsaco_bytes",
+        ):
+            if first_transaction_record.get(field) != second_transaction_record.get(field):
+                raise EvidenceError(
+                    f"independent compiler transaction stable field differed: {field}"
+                )
         reject_cross_run_reuse(first_executables, second_executables)
         for closure in closures:
             closure.revalidate()
@@ -1302,6 +1434,37 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
             closure.revalidate()
         for tool in tools.values():
             tool.revalidate()
+        reproduction_manifest_sha256 = []
+        for index in (1, 2):
+            output_dir = evidence_root / f"run-{index}"
+            documents = {}
+            for name in (
+                "repository-source-manifest.json",
+                "cargo-registry-manifest.json",
+                "cargo-vendor-generated-manifest.json",
+                "rust-sysroot-manifest.json",
+                "llvm-rocm-provider-manifest.json",
+                "executables.json",
+                "compiler-transaction-observation.json",
+            ):
+                document = output_dir / name
+                value = document.read_bytes()
+                documents[name] = {"bytes": len(value), "sha256": sha256_bytes(value)}
+            reproduction = {
+                "schema": "fe2o3-gfx942-run-reproduction-manifest-v1",
+                "run": index,
+                "source_commit": commit,
+                "source_tree": tree,
+                "work_root": os.fspath(run_root / f"run-{index}"),
+                "documents": documents,
+                "hsaco_bytes": len(first_bytes),
+                "hsaco_sha256": sha256_bytes(first_bytes),
+                "claim": "non-production-exact-artifact-observation-only",
+                "authority": "none",
+            }
+            reproduction_bytes = canonical_json(reproduction)
+            (output_dir / "reproduction-manifest.json").write_bytes(reproduction_bytes)
+            reproduction_manifest_sha256.append(sha256_bytes(reproduction_bytes))
         summary = {
             "schema": "fe2o3-gfx942-two-run-compiler-evidence-summary-v1",
             "source_commit": commit,
@@ -1328,10 +1491,29 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
             "compiler_causality_authenticated": False,
             "compiler_receipt_issued": False,
             "transition_candidate_observation": observe_candidate,
+            "reproduction_manifest_sha256": reproduction_manifest_sha256,
+            "run_scoped_transaction_identities": [
+                {
+                    field: first_transaction_record[field]
+                    for field in (
+                        "request_identity",
+                        "finalization_identity",
+                        "publication_identity",
+                    )
+                },
+                {
+                    field: second_transaction_record[field]
+                    for field in (
+                        "request_identity",
+                        "finalization_identity",
+                        "publication_identity",
+                    )
+                },
+            ],
         }
         (evidence_root / "summary.json").write_bytes(canonical_json(summary))
         print(f"source commit: {commit}")
-        print(f"artifact SHA-256: {golden['hsaco_sha256']}")
+        print(f"artifact SHA-256: {sha256_bytes(first_bytes)}")
         print("independent pinned-tool Worker V2 compiler evidence: PASS")
     finally:
         for generated in generated_inputs:

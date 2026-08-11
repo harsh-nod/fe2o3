@@ -45,14 +45,17 @@ use crate::worker_v2_artifact_container::assemble_recovered_worker_v2_load_envel
 #[cfg(feature = "worker-v2-fault-injection-test-only")]
 use crate::worker_v2_restart::injected_fault_point_v1;
 use crate::worker_v2_restart::{
-    RestartIntentErrorV1, ResumeMarkerErrorV1, ResumeMarkerStateV1, WorkerV2PublicationKindV1,
-    WorkerV2ResumeStoreV1, persist_admitted_worker_v2_intent_v1, recover_worker_v2_intent_v1,
+    PersistedAdmittedWorkerV2IntentV1, RestartIntentErrorV1, ResumeMarkerErrorV1,
+    ResumeMarkerStateV1, WorkerV2PublicationKindV1, WorkerV2ResumeStoreV1,
+    persist_admitted_worker_v2_intent_v1, recover_worker_v2_intent_v1,
     restart_admission_commitment_with_inputs_v1,
 };
 use crate::{ARTIFACT_CHILD_FD, BACKEND_CHILD_FD, MANAGED_RUSTC_ARGS_ENV};
 
 const HSACO_DIR_ENV: &str = "FE2O3_HSACO_DIR";
 const TARGET_ENV: &str = "FE2O3_TARGET";
+const NON_PRODUCTION_REPRODUCTION_RECORD_ENV: &str =
+    "FE2O3_NON_PRODUCTION_COMPILER_REPRODUCTION_RECORD_V1";
 const BUILD_SESSION_ENV: &str = "FE2O3_BUILD_SESSION_V1";
 const BUILD_ATTEMPT_ENV: &str = "FE2O3_BUILD_ATTEMPT_V1";
 const CARGO_METADATA_BUILD_OBSERVATION_ENV_V2: &str = "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2";
@@ -1588,7 +1591,81 @@ fn complete_fresh_worker_v2(
         envelope_inputs,
     )
     .map_err(|error| preserve_restart_error("persistence", error))?;
+    write_non_production_reproduction_record(&persisted)?;
     publish_finish_and_clear(managed, resume, persisted.publication, persisted.intent)
+}
+
+fn write_non_production_reproduction_record(
+    persisted: &PersistedAdmittedWorkerV2IntentV1,
+) -> Result<(), CompletionFailure> {
+    if !crate::non_production_reproduction::enabled() {
+        return Ok(());
+    }
+    let path = std::env::var_os(NON_PRODUCTION_REPRODUCTION_RECORD_ENV).ok_or_else(|| {
+        CompletionFailure::Uncommitted(format!(
+            "non-production reproduction is missing {NON_PRODUCTION_REPRODUCTION_RECORD_ENV}"
+        ))
+    })?;
+    let path = PathBuf::from(path);
+    if !path.is_absolute() || path.file_name().is_none() {
+        return Err(CompletionFailure::Uncommitted(
+            "non-production reproduction record path is not absolute".into(),
+        ));
+    }
+    let parent = path.parent().expect("absolute record path has a parent");
+    if parent.canonicalize().ok().as_deref() != Some(parent) {
+        return Err(CompletionFailure::Uncommitted(
+            "non-production reproduction record parent is not canonical".into(),
+        ));
+    }
+    let plan = persisted.intent.record().plan();
+    let exact_output = persisted.intent.exact_output();
+    let record = format!(
+        concat!(
+            "{{\"authority\":\"none\",",
+            "\"claim\":\"non-production-exact-artifact-observation-only\",",
+            "\"final_hsaco_bytes\":{},",
+            "\"final_hsaco_sha256\":\"{}\",",
+            "\"finalization_identity\":\"{}\",",
+            "\"finalized_output_identity\":\"{}\",",
+            "\"publication_identity\":\"{}\",",
+            "\"raw_output_identity\":\"{}\",",
+            "\"request_identity\":\"{}\",",
+            "\"response_identity\":\"{}\",",
+            "\"schema\":\"fe2o3-non-production-compiler-reproduction-record-v1\",",
+            "\"worker_identity\":\"{}\"}}\n"
+        ),
+        exact_output.len(),
+        hex(&Sha256::digest(exact_output)),
+        hex(plan.finalization().as_bytes()),
+        hex(plan.finalized_output().as_bytes()),
+        hex(plan.publication().as_bytes()),
+        hex(plan.linked_output().as_bytes()),
+        hex(plan.request().as_bytes()),
+        hex(plan.response().as_bytes()),
+        hex(plan.worker().as_bytes()),
+    );
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(|error| {
+            CompletionFailure::Uncommitted(format!(
+                "cannot create non-production reproduction record: {error}"
+            ))
+        })?;
+    file.write_all(record.as_bytes())
+        .and_then(|()| file.sync_all())
+        .and_then(|()| {
+            let mut permissions = file.metadata()?.permissions();
+            permissions.set_readonly(true);
+            file.set_permissions(permissions)
+        })
+        .map_err(|error| {
+            CompletionFailure::Uncommitted(format!(
+                "cannot seal non-production reproduction record: {error}"
+            ))
+        })
 }
 
 fn complete_recovered_worker_v2(
