@@ -5,6 +5,7 @@
 
 mod control_flow;
 mod machine_effect;
+mod ssa;
 mod uniformity;
 
 pub use control_flow::{
@@ -12,6 +13,10 @@ pub use control_flow::{
     analyze_control_flow,
 };
 pub use machine_effect::*;
+pub use ssa::{
+    SsaPlacement, SsaPlacementDiagnostic, SsaPlacementErrors, SsaVariable, SsaVariablePlacement,
+    place_pruned_ssa_parameters,
+};
 pub use uniformity::analyze_function;
 
 use fe2o3_kernel_ir::{BlockId, FunctionId, SynchronizationScope, ValueId};
