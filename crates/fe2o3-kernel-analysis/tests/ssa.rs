@@ -1,8 +1,8 @@
 use std::collections::BTreeSet;
 
 use fe2o3_kernel_analysis::{
-    SsaPlacementDiagnostic, SsaVariable, SsaVariablePlacement, analyze_control_flow,
-    place_pruned_ssa_parameters,
+    ControlFlowResource, MAX_SSA_PLACEMENT_OUTPUT_ITEMS, SsaPlacementDiagnostic, SsaVariable,
+    SsaVariablePlacement, analyze_control_flow, place_pruned_ssa_parameters,
 };
 use fe2o3_kernel_ir::{
     BasicBlock, BlockId, Constant, Function, Operation, OperationKind, Signature, Terminator, Type,
@@ -165,5 +165,41 @@ fn placement_is_deterministic_across_variable_input_order() {
     assert_eq!(
         place_pruned_ssa_parameters(&control_flow, &[first.clone(), second.clone()]).unwrap(),
         place_pruned_ssa_parameters(&control_flow, &[second, first]).unwrap()
+    );
+}
+
+#[test]
+fn pruned_ssa_output_accepts_the_exact_boundary_and_rejects_next_parameter() {
+    let control_flow = analyze_control_flow(&function(vec![branch(0, 0)])).unwrap();
+    let variables = (0..=u32::try_from(MAX_SSA_PLACEMENT_OUTPUT_ITEMS).unwrap())
+        .map(|variable| SsaVariablePlacement {
+            variable: SsaVariable(variable),
+            definition_blocks: ids(&[0]),
+            live_in_blocks: ids(&[0]),
+        })
+        .collect::<Vec<_>>();
+
+    let boundary =
+        place_pruned_ssa_parameters(&control_flow, &variables[..MAX_SSA_PLACEMENT_OUTPUT_ITEMS])
+            .unwrap();
+    assert_eq!(
+        boundary.resource_usage().ssa_placement_output_items(),
+        MAX_SSA_PLACEMENT_OUTPUT_ITEMS
+    );
+
+    let error = place_pruned_ssa_parameters(&control_flow, &variables).unwrap_err();
+    assert_eq!(
+        error.diagnostics(),
+        &[SsaPlacementDiagnostic::ResourceLimitExceeded {
+            resource: ControlFlowResource::SsaPlacementOutputItems,
+            required: MAX_SSA_PLACEMENT_OUTPUT_ITEMS + 1,
+            limit: MAX_SSA_PLACEMENT_OUTPUT_ITEMS,
+            storage_items: 458_766,
+            work_units: 2_818_116,
+        }]
+    );
+    assert_eq!(
+        error.to_string(),
+        "SSA placement failed with 1 diagnostic(s)\n  SSA placement pruned-SSA output items require 65537 items, exceeding the deterministic limit 65536; aggregate storage 458766, aggregate work 2818116\n"
     );
 }

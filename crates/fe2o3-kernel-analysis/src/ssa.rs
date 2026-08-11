@@ -4,7 +4,10 @@ use std::fmt;
 
 use fe2o3_kernel_ir::BlockId;
 
-use crate::ControlFlowAnalysis;
+use crate::control_flow::ControlFlowBudget;
+use crate::{
+    ControlFlowAnalysis, ControlFlowDiagnostic, ControlFlowResource, ControlFlowResourceUsage,
+};
 
 /// Stable frontend identity for one promotable source variable.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -23,6 +26,7 @@ pub struct SsaVariablePlacement {
 pub struct SsaPlacement {
     by_block: BTreeMap<BlockId, BTreeSet<SsaVariable>>,
     by_variable: BTreeMap<SsaVariable, BTreeSet<BlockId>>,
+    resource_usage: ControlFlowResourceUsage,
 }
 
 impl SsaPlacement {
@@ -37,10 +41,21 @@ impl SsaPlacement {
     pub fn by_block(&self) -> &BTreeMap<BlockId, BTreeSet<SsaVariable>> {
         &self.by_block
     }
+
+    pub const fn resource_usage(&self) -> ControlFlowResourceUsage {
+        self.resource_usage
+    }
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum SsaPlacementDiagnostic {
+    ResourceLimitExceeded {
+        resource: ControlFlowResource,
+        required: usize,
+        limit: usize,
+        storage_items: usize,
+        work_units: usize,
+    },
     DuplicateVariable {
         variable: SsaVariable,
     },
@@ -68,6 +83,17 @@ pub enum SsaPlacementDiagnostic {
 impl fmt::Display for SsaPlacementDiagnostic {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ResourceLimitExceeded {
+                resource,
+                required,
+                limit,
+                storage_items,
+                work_units,
+            } => write!(
+                formatter,
+                "SSA placement {} require {required} items, exceeding the deterministic limit {limit}; aggregate storage {storage_items}, aggregate work {work_units}",
+                resource.description()
+            ),
             Self::DuplicateVariable { variable } => {
                 write!(formatter, "duplicate SSA variable v{}", variable.0)
             }
@@ -138,6 +164,14 @@ pub fn place_pruned_ssa_parameters(
     control_flow: &ControlFlowAnalysis,
     variables: &[SsaVariablePlacement],
 ) -> Result<SsaPlacement, SsaPlacementErrors> {
+    let mut budget = ControlFlowBudget::from_usage(control_flow.resource_usage());
+    let validation_work = variables.iter().fold(variables.len(), |work, placement| {
+        work.checked_add(placement.definition_blocks.len())
+            .and_then(|work| work.checked_add(placement.live_in_blocks.len()))
+            .unwrap_or(usize::MAX)
+    });
+    charge(&mut budget, BudgetCharge::Work(validation_work))?;
+    charge(&mut budget, BudgetCharge::Storage(variables.len()))?;
     let mut diagnostics = BTreeSet::new();
     let mut seen = BTreeSet::new();
     for placement in variables {
@@ -172,6 +206,10 @@ pub fn place_pruned_ssa_parameters(
         });
     }
 
+    charge(
+        &mut budget,
+        BudgetCharge::Storage(control_flow.blocks().len()),
+    )?;
     let mut by_block = control_flow
         .blocks()
         .iter()
@@ -179,28 +217,90 @@ pub fn place_pruned_ssa_parameters(
         .map(|block| (block, BTreeSet::new()))
         .collect::<BTreeMap<_, _>>();
     let mut by_variable = BTreeMap::new();
+    charge(&mut budget, BudgetCharge::Storage(variables.len()))?;
     let mut ordered = variables.iter().collect::<Vec<_>>();
+    charge(&mut budget, BudgetCharge::Work(sort_work(ordered.len())))?;
     ordered.sort_by_key(|placement| placement.variable);
     for placement in ordered {
-        let blocks = control_flow
-            .iterated_dominance_frontier(&placement.definition_blocks)
-            .expect("validated definitions are reachable")
-            .intersection(&placement.live_in_blocks)
-            .copied()
-            .collect::<BTreeSet<_>>();
+        charge(&mut budget, BudgetCharge::Work(1))?;
+        let frontiers = control_flow
+            .iterated_dominance_frontier_with_budget(&placement.definition_blocks, &mut budget)
+            .map_err(resource_errors)?
+            .expect("validated definitions are reachable");
+        let mut blocks = BTreeSet::new();
+        for block in frontiers {
+            charge(&mut budget, BudgetCharge::Work(1))?;
+            if placement.live_in_blocks.contains(&block) {
+                charge(&mut budget, BudgetCharge::SsaOutput(1))?;
+                blocks.insert(block);
+            }
+        }
         for block in &blocks {
+            charge(&mut budget, BudgetCharge::Work(1))?;
+            charge(&mut budget, BudgetCharge::Storage(1))?;
             by_block
                 .get_mut(block)
                 .expect("validated placement block belongs to the function")
                 .insert(placement.variable);
         }
+        charge(&mut budget, BudgetCharge::Storage(1))?;
         by_variable.insert(placement.variable, blocks);
     }
 
     Ok(SsaPlacement {
         by_block,
         by_variable,
+        resource_usage: budget.usage(),
     })
+}
+
+enum BudgetCharge {
+    Storage(usize),
+    SsaOutput(usize),
+    Work(usize),
+}
+
+fn charge(budget: &mut ControlFlowBudget, charge: BudgetCharge) -> Result<(), SsaPlacementErrors> {
+    let result = match charge {
+        BudgetCharge::Storage(items) => budget.storage(items),
+        BudgetCharge::SsaOutput(items) => budget.ssa_output(items),
+        BudgetCharge::Work(items) => budget.work(items),
+    };
+    result.map_err(resource_errors)
+}
+
+fn resource_errors(diagnostic: ControlFlowDiagnostic) -> SsaPlacementErrors {
+    let ControlFlowDiagnostic::ResourceLimitExceeded {
+        resource,
+        required,
+        limit,
+        storage_items,
+        work_units,
+    } = diagnostic
+    else {
+        unreachable!("SSA placement budget produced a non-resource diagnostic");
+    };
+    SsaPlacementErrors {
+        diagnostics: vec![SsaPlacementDiagnostic::ResourceLimitExceeded {
+            resource,
+            required,
+            limit,
+            storage_items,
+            work_units,
+        }],
+    }
+}
+
+fn sort_work(items: usize) -> usize {
+    let levels = if items <= 1 {
+        1
+    } else {
+        usize::BITS as usize - (items - 1).leading_zeros() as usize
+    };
+    items
+        .checked_mul(levels)
+        .and_then(|work| work.checked_mul(2))
+        .unwrap_or(usize::MAX)
 }
 
 fn validate_blocks(
