@@ -43,6 +43,13 @@ struct AlignedZst([u64; 0]);
 #[repr(transparent)]
 struct IntegerEncodedHandle(u64);
 
+#[derive(Clone, Copy, DeviceCopy)]
+#[repr(C)]
+struct Nested {
+    pair: Named,
+    tuples: [Tuple; 2],
+}
+
 fn assert_device_copy<T: DeviceCopy>() {}
 
 #[test]
@@ -53,4 +60,5 @@ fn accepted_layouts_implement_the_public_trait() {
     assert_device_copy::<Unit>();
     assert_device_copy::<AlignedZst>();
     assert_device_copy::<IntegerEncodedHandle>();
+    assert_device_copy::<Nested>();
 }

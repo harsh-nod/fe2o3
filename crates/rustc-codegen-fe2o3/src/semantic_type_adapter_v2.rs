@@ -6,7 +6,7 @@
 //! pinned rustc session, and neither value grants manifest, device-copy, code
 //! generation, loading, or launch authority.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use dialect_mir::{
@@ -229,6 +229,292 @@ impl AuthenticatedRustcTypeCaptureV2 {
             .binary_search_by(|record| record.key.as_str().cmp(key))
             .ok()
             .map(|index| &self.layout_records[index])
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeviceCopyLayoutAdmissionV2 {
+    capture_identity_sha256: [u8; 32],
+    root_key: String,
+}
+
+impl DeviceCopyLayoutAdmissionV2 {
+    pub const fn capture_identity_sha256(&self) -> &[u8; 32] {
+        &self.capture_identity_sha256
+    }
+
+    pub fn root_key(&self) -> &str {
+        &self.root_key
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HostDeviceByteDifferentialV2 {
+    capture_identity_sha256: [u8; 32],
+    bytes_sha256: [u8; 32],
+    byte_length: u64,
+}
+
+impl HostDeviceByteDifferentialV2 {
+    pub const fn capture_identity_sha256(&self) -> &[u8; 32] {
+        &self.capture_identity_sha256
+    }
+
+    pub const fn bytes_sha256(&self) -> &[u8; 32] {
+        &self.bytes_sha256
+    }
+
+    pub const fn byte_length(&self) -> u64 {
+        self.byte_length
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DeviceCopyLayoutErrorV2 {
+    TargetMismatch,
+    StaleCaptureRevision {
+        expected: RustcCaptureRevisionV2,
+        observed: RustcCaptureRevisionV2,
+    },
+    Unsupported {
+        key: String,
+        detail: &'static str,
+    },
+    InconsistentCapture {
+        key: String,
+        detail: &'static str,
+    },
+    ByteLengthExceeded {
+        actual: usize,
+        max: usize,
+    },
+    HostDeviceByteMismatch,
+}
+
+impl fmt::Display for DeviceCopyLayoutErrorV2 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TargetMismatch => formatter.write_str("type capture target identity mismatch"),
+            Self::StaleCaptureRevision { expected, observed } => write!(
+                formatter,
+                "stale type capture revision: expected {expected:?}, observed {observed:?}"
+            ),
+            Self::Unsupported { key, detail } => {
+                write!(
+                    formatter,
+                    "type {key:?} is not DeviceCopy-layout eligible: {detail}"
+                )
+            }
+            Self::InconsistentCapture { key, detail } => {
+                write!(formatter, "type capture {key:?} is inconsistent: {detail}")
+            }
+            Self::ByteLengthExceeded { actual, max } => {
+                write!(
+                    formatter,
+                    "byte differential bound exceeded: {actual} > {max}"
+                )
+            }
+            Self::HostDeviceByteMismatch => {
+                formatter.write_str("host and gfx942 fixture bytes differ")
+            }
+        }
+    }
+}
+
+impl std::error::Error for DeviceCopyLayoutErrorV2 {}
+
+/// Checks only the structural object-representation subset of `DeviceCopy`.
+///
+/// The returned token does not prove that the Rust trait is implemented and
+/// has no artifact, manifest, allocation, transfer, or launch authority.
+pub fn admit_device_copy_layout_for_gfx942_v2(
+    capture: &AuthenticatedRustcTypeCaptureV2,
+    expected_target: &Gfx942TypeTargetV2,
+    expected_revision: RustcCaptureRevisionV2,
+) -> Result<DeviceCopyLayoutAdmissionV2, DeviceCopyLayoutErrorV2> {
+    if capture.target() != expected_target || !expected_target.is_exact_gfx942() {
+        return Err(DeviceCopyLayoutErrorV2::TargetMismatch);
+    }
+    if capture.revision() != expected_revision {
+        return Err(DeviceCopyLayoutErrorV2::StaleCaptureRevision {
+            expected: expected_revision,
+            observed: capture.revision(),
+        });
+    }
+    let mut seen = BTreeSet::new();
+    check_device_copy_node(capture, capture.graph().root(), &mut seen)?;
+    Ok(DeviceCopyLayoutAdmissionV2 {
+        capture_identity_sha256: *capture.identity_sha256(),
+        root_key: capture.graph().root_key().to_owned(),
+    })
+}
+
+pub fn compare_host_device_fixture_bytes_v2(
+    admission: &DeviceCopyLayoutAdmissionV2,
+    host_bytes: &[u8],
+    gfx942_bytes: &[u8],
+    max_bytes: usize,
+) -> Result<HostDeviceByteDifferentialV2, DeviceCopyLayoutErrorV2> {
+    let actual = host_bytes.len().max(gfx942_bytes.len());
+    if actual > max_bytes {
+        return Err(DeviceCopyLayoutErrorV2::ByteLengthExceeded {
+            actual,
+            max: max_bytes,
+        });
+    }
+    if host_bytes != gfx942_bytes {
+        return Err(DeviceCopyLayoutErrorV2::HostDeviceByteMismatch);
+    }
+    Ok(HostDeviceByteDifferentialV2 {
+        capture_identity_sha256: *admission.capture_identity_sha256(),
+        bytes_sha256: Sha256::digest(host_bytes).into(),
+        byte_length: host_bytes.len() as u64,
+    })
+}
+
+fn check_device_copy_node(
+    capture: &AuthenticatedRustcTypeCaptureV2,
+    id: SemanticTypeNodeIdV2,
+    seen: &mut BTreeSet<u32>,
+) -> Result<(), DeviceCopyLayoutErrorV2> {
+    if !seen.insert(id.index()) {
+        return Ok(());
+    }
+    let key =
+        capture
+            .graph()
+            .key(id)
+            .ok_or_else(|| DeviceCopyLayoutErrorV2::InconsistentCapture {
+                key: format!("node {}", id.index()),
+                detail: "node key is missing",
+            })?;
+    let node =
+        capture
+            .graph()
+            .node(id)
+            .ok_or_else(|| DeviceCopyLayoutErrorV2::InconsistentCapture {
+                key: key.to_owned(),
+                detail: "node definition is missing",
+            })?;
+    let record =
+        capture
+            .layout_record(key)
+            .ok_or_else(|| DeviceCopyLayoutErrorV2::InconsistentCapture {
+                key: key.to_owned(),
+                detail: "authenticated rustc sidecar record is missing",
+            })?;
+    if record.uninhabited() {
+        return Err(device_copy_unsupported(
+            key,
+            "uninhabited values are not byte-copy values",
+        ));
+    }
+    match &node.kind {
+        SemanticTypeKindV2::Unit => Ok(()),
+        SemanticTypeKindV2::Scalar(SemanticScalarV2::Int { bits, .. })
+            if matches!(bits, 8 | 16 | 32 | 64 | 128) =>
+        {
+            Ok(())
+        }
+        SemanticTypeKindV2::Scalar(SemanticScalarV2::Float { bits }) if matches!(bits, 32 | 64) => {
+            Ok(())
+        }
+        SemanticTypeKindV2::Scalar(_) => Err(device_copy_unsupported(
+            key,
+            "the scalar has invalid or unsupported bit patterns",
+        )),
+        SemanticTypeKindV2::ValidityScalar { .. } => Err(device_copy_unsupported(
+            key,
+            "not every scalar bit pattern is valid",
+        )),
+        SemanticTypeKindV2::Array { element, .. } => {
+            let stride = record.array_stride_bytes().ok_or_else(|| {
+                DeviceCopyLayoutErrorV2::InconsistentCapture {
+                    key: key.to_owned(),
+                    detail: "array stride is missing",
+                }
+            })?;
+            let element_size = capture
+                .graph()
+                .node(*element)
+                .and_then(|element| element.layout.size)
+                .ok_or_else(|| DeviceCopyLayoutErrorV2::InconsistentCapture {
+                    key: key.to_owned(),
+                    detail: "array element is missing or unsized",
+                })?;
+            if stride != element_size {
+                return Err(DeviceCopyLayoutErrorV2::InconsistentCapture {
+                    key: key.to_owned(),
+                    detail: "array stride differs from element size",
+                });
+            }
+            check_device_copy_node(capture, *element, seen)
+        }
+        SemanticTypeKindV2::Struct { fields, .. } => {
+            let repr = record.representation().ok_or_else(|| {
+                DeviceCopyLayoutErrorV2::InconsistentCapture {
+                    key: key.to_owned(),
+                    detail: "struct representation is missing",
+                }
+            })?;
+            if !repr.c && !repr.transparent {
+                return Err(device_copy_unsupported(
+                    key,
+                    "repr(Rust) aggregate ABI is not admitted",
+                ));
+            }
+            if repr.packed_alignment_bytes.is_some() {
+                return Err(device_copy_unsupported(
+                    key,
+                    "packed aggregate access and ABI are not admitted",
+                ));
+            }
+            if record.aggregates().len() != 1 || !record.aggregates()[0].padding().is_empty() {
+                return Err(device_copy_unsupported(
+                    key,
+                    "aggregate object representation contains padding",
+                ));
+            }
+            for field in fields {
+                check_device_copy_node(capture, field.ty, seen)?;
+            }
+            Ok(())
+        }
+        SemanticTypeKindV2::Tuple { .. } => Err(device_copy_unsupported(
+            key,
+            "tuple repr(Rust) ABI is not admitted",
+        )),
+        SemanticTypeKindV2::Union { .. } => Err(device_copy_unsupported(
+            key,
+            "union admission requires a separate explicit all-fields-safe proof",
+        )),
+        SemanticTypeKindV2::Enum { .. } => Err(device_copy_unsupported(
+            key,
+            "enum discriminants or niches leave invalid object representations",
+        )),
+        SemanticTypeKindV2::RawPointer { .. } | SemanticTypeKindV2::Reference { .. } => {
+            Err(device_copy_unsupported(
+                key,
+                "pointer provenance and address-space authority are not byte-copy facts",
+            ))
+        }
+        SemanticTypeKindV2::Never => Err(device_copy_unsupported(
+            key,
+            "never has no inhabited object representation",
+        )),
+        SemanticTypeKindV2::Slice { .. }
+        | SemanticTypeKindV2::Str
+        | SemanticTypeKindV2::OpaqueDst { .. } => Err(device_copy_unsupported(
+            key,
+            "dynamically sized values are not copied by value",
+        )),
+    }
+}
+
+fn device_copy_unsupported(key: &str, detail: &'static str) -> DeviceCopyLayoutErrorV2 {
+    DeviceCopyLayoutErrorV2::Unsupported {
+        key: key.to_owned(),
+        detail,
     }
 }
 
@@ -1649,6 +1935,21 @@ static POINTER_NICHE: Option<&u8> = Some(&BYTE);
         callbacks
     }
 
+    #[derive(Clone, Copy)]
+    #[repr(C)]
+    struct HostInner {
+        left: u16,
+        right: u16,
+    }
+
+    #[derive(Clone, Copy)]
+    #[repr(C)]
+    struct HostRoot {
+        head: u32,
+        nested: [HostInner; 2],
+        tail: u32,
+    }
+
     #[test]
     fn pinned_rustc_capture_preserves_general_layout_and_trust_boundaries() {
         let results = captures();
@@ -1747,5 +2048,86 @@ static POINTER_NICHE: Option<&u8> = Some(&BYTE);
                 assert_ne!(decoded.canonical_bytes().unwrap(), canonical);
             }
         }
+    }
+
+    #[test]
+    fn device_copy_layout_admission_is_fresh_conservative_and_inert() {
+        let results = captures();
+        let c = &results.captures["C_VALUE"];
+        let admission = admit_device_copy_layout_for_gfx942_v2(c, c.target(), revision())
+            .expect("padding-free repr(C) fixture is structurally eligible");
+        assert_eq!(admission.capture_identity_sha256(), c.identity_sha256());
+
+        let array = &results.captures["ARRAY_VALUE"];
+        assert!(admit_device_copy_layout_for_gfx942_v2(array, array.target(), revision()).is_ok());
+        for rejected in [
+            "RUST_VALUE",
+            "PADDED_VALUE",
+            "TUPLE_VALUE",
+            "DIRECT_VALUE",
+            "NICHE_VALUE",
+            "BITS_VALUE",
+            "SLICE_VALUE",
+            "DYN_VALUE",
+        ] {
+            let capture = &results.captures[rejected];
+            assert!(matches!(
+                admit_device_copy_layout_for_gfx942_v2(capture, capture.target(), revision()),
+                Err(DeviceCopyLayoutErrorV2::Unsupported { .. })
+            ));
+        }
+
+        let stale = RustcCaptureRevisionV2 {
+            generation: revision().generation + 1,
+            ..revision()
+        };
+        assert!(matches!(
+            admit_device_copy_layout_for_gfx942_v2(c, c.target(), stale),
+            Err(DeviceCopyLayoutErrorV2::StaleCaptureRevision { .. })
+        ));
+        let mut wrong_target = c.target().clone();
+        wrong_target.device_cpu = "gfx941".to_owned();
+        assert!(matches!(
+            admit_device_copy_layout_for_gfx942_v2(c, &wrong_target, revision()),
+            Err(DeviceCopyLayoutErrorV2::TargetMismatch)
+        ));
+
+        let value = HostRoot {
+            head: 1,
+            nested: [
+                HostInner { left: 2, right: 3 },
+                HostInner { left: 4, right: 5 },
+            ],
+            tail: 6,
+        };
+        assert_eq!(std::mem::size_of::<HostRoot>(), 16);
+        // SAFETY: the asserted repr(C) layout has no padding, and `value`
+        // remains alive for the complete immutable slice borrow.
+        let host_bytes = unsafe {
+            std::slice::from_raw_parts(
+                std::ptr::from_ref(&value).cast::<u8>(),
+                std::mem::size_of::<HostRoot>(),
+            )
+        };
+        let gfx942_bytes = [1, 0, 0, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 0, 0];
+        let differential =
+            compare_host_device_fixture_bytes_v2(&admission, host_bytes, &gfx942_bytes, 16)
+                .expect("host and gfx942 fixture bytes match");
+        assert_eq!(differential.byte_length(), 16);
+        assert_eq!(
+            differential.capture_identity_sha256(),
+            admission.capture_identity_sha256()
+        );
+
+        let mut wrong = gfx942_bytes;
+        wrong[9] ^= 1;
+        assert!(matches!(
+            compare_host_device_fixture_bytes_v2(&admission, host_bytes, &wrong, 16),
+            Err(DeviceCopyLayoutErrorV2::HostDeviceByteMismatch)
+        ));
+        assert!(matches!(
+            compare_host_device_fixture_bytes_v2(&admission, host_bytes, host_bytes, 15),
+            Err(DeviceCopyLayoutErrorV2::ByteLengthExceeded { .. })
+        ));
     }
 }
