@@ -154,9 +154,13 @@ pub enum ShiftDirection {
 }
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ShiftPolicy {
+    /// Rust's checked shift methods: an invalid RHS returns no value.
     Checked,
+    /// Rust's wrapping shift methods: the RHS bit pattern is reduced modulo the LHS width.
     Wrapping,
+    /// Rust's overflowing shift methods: wrapping value plus an invalid-RHS flag.
     Overflowing,
+    /// A source `<<` or `>>`; invalid RHS values trap only when overflow checks are enabled.
     RustOperator { overflow_checks: bool },
 }
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -182,9 +186,13 @@ pub enum FloatArithmeticSemantics {
 }
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum FloatComparisonPolicy {
+    /// Rust `PartialEq`; valid only for `Eq` and `Ne`.
     RustPartialEq,
+    /// Rust `PartialOrd`; valid only for the four ordering predicates.
     RustPartialOrd,
+    /// IEEE ordered predicate: every predicate is false when either input is NaN.
     IeeeOrdered,
+    /// IEEE unordered predicate: every predicate is true when either input is NaN.
     IeeeUnordered,
 }
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -265,6 +273,7 @@ pub enum Operation {
         policy: FloatComparisonPolicy,
     },
     FloatTotalCompare {
+        /// The result is a three-way `Ordering`, never a boolean predicate.
         ty: ScalarType,
     },
     Cast {
@@ -1020,6 +1029,11 @@ pub fn evaluate_integer_binary(
         IntMode::Saturating => IntOutcome::Value(if overflow { saturated } else { raw }),
     })
 }
+/// Evaluates a shift without narrowing the RHS to `u32`.
+///
+/// `amount_raw` is first interpreted as the complete bit pattern of `rhs_ty`.
+/// A negative signed value or a nonnegative value at least as wide as the LHS is
+/// invalid; the selected policy determines the result for that condition.
 pub fn evaluate_shift(
     ty: ScalarType,
     rhs_ty: ScalarType,
