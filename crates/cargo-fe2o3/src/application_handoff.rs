@@ -25,7 +25,10 @@ use fe2o3_worker_v2_bundle::{
 };
 use rustix::fs::{AtFlags, FileType, Mode, OFlags, ResolveFlags, fstat, openat2, statat};
 
-use crate::application_sandbox::{install_no_fork_application_profile, no_fork_application_filter};
+use crate::application_sandbox::{
+    ApplicationSandboxGuard, PendingApplicationSandbox, install_application_profile,
+    no_fork_application_filter,
+};
 use crate::generation;
 use crate::project::PinnedDirectory;
 
@@ -302,6 +305,8 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
         let directory_device = directory_stat.st_dev;
         let directory_inode = directory_stat.st_ino;
         let seccomp_filter = no_fork_application_filter();
+        let sandbox = PendingApplicationSandbox::start()?;
+        let supervisor_socket = sandbox.child_socket_fd();
         // SAFETY: all three owning `File`s remain alive through spawn. The callback validates the
         // exact evidence and ACK descriptors before clearing only their child-side CLOEXEC flags.
         unsafe {
@@ -354,7 +359,7 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
                     rustix::io::fcntl_setfd(inherited, rustix::io::FdFlags::empty())
                         .map_err(io::Error::from)?;
                 }
-                install_no_fork_application_profile(&seccomp_filter)?;
+                install_application_profile(&seccomp_filter, supervisor_socket)?;
                 Ok(())
             });
         }
@@ -363,6 +368,7 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
             parent_write: Some(ack_write),
             expectation,
             challenge,
+            sandbox: Some(sandbox),
         })
     }
 }
@@ -410,11 +416,20 @@ pub(crate) struct PendingApplicationAck {
     parent_write: Option<File>,
     expectation: WorkerV2ApplicationHandoffExpectationV1,
     challenge: WorkerV2ApplicationHandoffChallengeV1,
+    sandbox: Option<PendingApplicationSandbox>,
 }
 
 impl PendingApplicationAck {
-    pub(crate) fn await_after_spawn(mut self, child: &mut Child) -> Result<(), String> {
+    pub(crate) fn await_after_spawn(
+        mut self,
+        child: &mut Child,
+    ) -> Result<ApplicationSandboxGuard, String> {
         drop(self.parent_write.take());
+        let sandbox = self
+            .sandbox
+            .take()
+            .expect("pending acknowledgment owns its sandbox")
+            .complete(child.id())?;
         let deadline = Instant::now() + ACK_TIMEOUT;
         let mut bytes = Vec::with_capacity(WORKER_V2_APPLICATION_HANDOFF_ACK_BYTES_V1 + 1);
         loop {
@@ -454,7 +469,8 @@ impl PendingApplicationAck {
         let ack = WorkerV2ApplicationHandoffAckV1::decode_canonical(&bytes)
             .map_err(|error| format!("invalid application handoff acknowledgment: {error}"))?;
         ack.validate(self.expectation, self.challenge)
-            .map_err(|error| format!("rejected application handoff acknowledgment: {error}"))
+            .map_err(|error| format!("rejected application handoff acknowledgment: {error}"))?;
+        Ok(sandbox)
     }
 }
 

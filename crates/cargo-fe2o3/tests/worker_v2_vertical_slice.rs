@@ -1306,6 +1306,38 @@ fn application_seccomp_rejects_process_and_double_fork_setsid_escape() {
 }
 
 #[test]
+fn application_seccomp_rejects_static_and_dynamic_exec_replacement() {
+    let directory = TestDirectory::new();
+    let fixture = required_alpha_zeta_publication_fixture(&directory);
+    let published = run_wrapper_with_options(
+        &directory,
+        &fixture.config,
+        "publish-valid",
+        fixture.cov6,
+        None,
+    );
+    assert!(published.status.success(), "{}", stderr(&published));
+
+    let report = directory.0.join("seccomp-exec-report.json");
+    let completed = application_runner_command(&directory, application_fixture(), &report)
+        .arg("--fe2o3-test-exec-replacement-probe")
+        .arg(no_protocol_application_fixture())
+        .arg("/bin/true")
+        .output()
+        .unwrap();
+    assert!(completed.status.success(), "{}", stderr(&completed));
+    let report: JsonValue = serde_json::from_slice(&fs::read(report).unwrap()).unwrap();
+    for probe in [
+        "static_execve",
+        "static_execveat",
+        "dynamic_execve",
+        "dynamic_execveat",
+    ] {
+        assert_eq!(report["handoff"]["exec_replacement"][probe], "EPERM");
+    }
+}
+
+#[test]
 fn repeated_required_builds_do_not_accumulate_capsules_or_temps() {
     let directory = TestDirectory::new();
     for seed in [0, 1, 2] {

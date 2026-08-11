@@ -825,14 +825,17 @@ fn run_application_boundary_result(args: &[OsString]) -> Result<std::process::Ex
             .as_command_mut()
             .spawn()
             .map_err(|error| format!("failed to launch pinned Cargo application: {error}"))?;
-        if let Err(error) = pending_ack.await_after_spawn(&mut process) {
-            return match application_handoff::terminate_application_group(&mut process) {
-                Ok(()) => Err(error),
-                Err(containment) => Err(format!(
-                    "{error}; application containment failed: {containment}"
-                )),
-            };
-        }
+        let sandbox = match pending_ack.await_after_spawn(&mut process) {
+            Ok(sandbox) => sandbox,
+            Err(error) => {
+                return match application_handoff::terminate_application_group(&mut process) {
+                    Ok(()) => Err(error),
+                    Err(containment) => Err(format!(
+                        "{error}; application containment failed: {containment}"
+                    )),
+                };
+            }
+        };
         if let Err(error) = handoff.validate_retained_currentness() {
             return match application_handoff::terminate_application_group(&mut process) {
                 Ok(()) => Err(error),
@@ -841,7 +844,9 @@ fn run_application_boundary_result(args: &[OsString]) -> Result<std::process::Ex
                 )),
             };
         }
-        return application_handoff::wait_and_contain_application_group(&mut process);
+        let status = application_handoff::wait_and_contain_application_group(&mut process)?;
+        sandbox.finish()?;
+        return Ok(status);
     }
 
     let mut child = if let Some(program) = original_runner.first() {

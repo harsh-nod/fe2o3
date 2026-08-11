@@ -34,6 +34,7 @@ struct FixtureControls {
     substitute_commitment: bool,
     public_ack_without_reacquire: bool,
     seccomp_escape_marker: Option<OsString>,
+    exec_replacement_images: Option<(OsString, OsString)>,
     premature_close_ack: bool,
     extra_ack_byte: bool,
 }
@@ -77,13 +78,27 @@ impl FixtureControls {
                     );
                     index += 2;
                 }
+                "--fe2o3-test-exec-replacement-probe" => {
+                    let static_image = arguments
+                        .get(index + 1)
+                        .ok_or_else(|| "exec probe requires a static image".to_string())?
+                        .clone();
+                    let dynamic_image = arguments
+                        .get(index + 2)
+                        .ok_or_else(|| "exec probe requires a dynamic image".to_string())?
+                        .clone();
+                    controls.exec_replacement_images = Some((static_image, dynamic_image));
+                    index += 3;
+                }
                 "--fe2o3-test-premature-close-ack" => controls.premature_close_ack = true,
                 "--fe2o3-test-extra-ack-byte" => controls.extra_ack_byte = true,
                 _ => return Err(format!("unknown runner fixture control {argument:?}")),
             }
             if !matches!(
                 flag,
-                "--fe2o3-test-probe-fd" | "--fe2o3-test-seccomp-process-probe"
+                "--fe2o3-test-probe-fd"
+                    | "--fe2o3-test-seccomp-process-probe"
+                    | "--fe2o3-test-exec-replacement-probe"
             ) {
                 index += 1;
             }
@@ -286,6 +301,11 @@ fn validate_handoff(controls: &FixtureControls) -> Result<ValidatedHandoff, Stri
         .as_deref()
         .map(seccomp_process_probe)
         .transpose()?;
+    let exec_replacement = controls
+        .exec_replacement_images
+        .as_ref()
+        .map(|(static_image, dynamic_image)| exec_replacement_probe(static_image, dynamic_image))
+        .transpose()?;
 
     if controls.premature_close_ack {
         drop(ack_file);
@@ -316,6 +336,7 @@ fn validate_handoff(controls: &FixtureControls) -> Result<ValidatedHandoff, Stri
             "descriptor": envelope_fd,
             "envelope_identity": hex(&envelope.identity().as_bytes()),
             "process_creation": process_creation,
+            "exec_replacement": exec_replacement,
             "read_only": true,
         }),
         _envelope: Some(envelope_file),
@@ -354,6 +375,56 @@ fn seccomp_process_probe(escape_marker: &OsStr) -> Result<serde_json::Value, Str
         "unshare": "EPERM",
         "vfork": "EPERM",
     }))
+}
+
+fn exec_replacement_probe(
+    static_image: &OsStr,
+    dynamic_image: &OsStr,
+) -> Result<serde_json::Value, String> {
+    for (kind, image) in [("static", static_image), ("dynamic", dynamic_image)] {
+        let image = CString::new(os_bytes(image))
+            .map_err(|_| format!("{kind} exec replacement path contains NUL"))?;
+        blocked_exec_replacement(&format!("{kind} execve"), libc::SYS_execve, &image)?;
+        blocked_exec_replacement(&format!("{kind} execveat"), libc::SYS_execveat, &image)?;
+    }
+    Ok(serde_json::json!({
+        "dynamic_execve": "EPERM",
+        "dynamic_execveat": "EPERM",
+        "static_execve": "EPERM",
+        "static_execveat": "EPERM",
+    }))
+}
+
+fn blocked_exec_replacement(
+    name: &str,
+    syscall: libc::c_long,
+    image: &CString,
+) -> Result<(), String> {
+    let arguments = [image.as_ptr(), std::ptr::null()];
+    let environment = [std::ptr::null::<libc::c_char>()];
+    let syscall_arguments = if syscall == libc::SYS_execve {
+        [
+            image.as_ptr() as usize,
+            arguments.as_ptr() as usize,
+            environment.as_ptr() as usize,
+            0,
+            0,
+            0,
+        ]
+    } else {
+        [
+            libc::AT_FDCWD as isize as usize,
+            image.as_ptr() as usize,
+            arguments.as_ptr() as usize,
+            environment.as_ptr() as usize,
+            0,
+            0,
+        ]
+    };
+    if raw_syscall(syscall, syscall_arguments) >= 0 {
+        return Err(format!("seccomp unexpectedly allowed {name}"));
+    }
+    expect_eperm(name)
 }
 
 fn blocked_process_creation(
