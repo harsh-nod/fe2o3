@@ -1,13 +1,53 @@
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs;
+#[cfg(unix)]
+use std::fs::OpenOptions;
+#[cfg(unix)]
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::process::Stdio;
 use std::process::{self, Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::thread;
-use std::time::{Duration, Instant};
+
+#[cfg(unix)]
+use rustix::fs::{FlockOperation, flock};
+#[cfg(unix)]
+use rustix::io::Errno;
 
 static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(unix)]
+struct ReapedChild(Option<std::process::Child>);
+
+#[cfg(unix)]
+impl ReapedChild {
+    fn new(child: std::process::Child) -> Self {
+        Self(Some(child))
+    }
+
+    fn child_mut(&mut self) -> &mut std::process::Child {
+        self.0.as_mut().expect("child has not been reaped")
+    }
+
+    fn wait_with_output(mut self) -> std::io::Result<Output> {
+        self.0
+            .take()
+            .expect("child has not been reaped")
+            .wait_with_output()
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ReapedChild {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.0.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
 
 struct ProjectFixture {
     root: PathBuf,
@@ -901,6 +941,7 @@ fn artifact_path_substitution_is_rejected_without_redirecting_writes() {
     assert!(!outside.join("fixture.hsaco").exists());
 }
 
+#[cfg(unix)]
 #[test]
 fn concurrent_generations_are_serialized_by_the_target_lock() {
     let fixture = ProjectFixture::standalone();
@@ -908,23 +949,55 @@ fn concurrent_generations_are_serialized_by_the_target_lock() {
     let mut first = fixture.command(&[OsString::from("build")]);
     first
         .env("FE2O3_TEST_EXCLUSIVE_ACTIVE", &active)
-        .env("FE2O3_TEST_SLEEP_MS", "250");
-    let mut first = first.spawn().expect("spawn first generation");
+        .env("FE2O3_TEST_GENERATION_CONTROL", "stdio")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut first = ReapedChild::new(first.spawn().expect("spawn first generation"));
 
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !active.exists() {
-        assert!(Instant::now() < deadline, "first generation did not start");
-        thread::sleep(Duration::from_millis(5));
-    }
+    let mut ready = [0_u8; 5];
+    first
+        .child_mut()
+        .stdout
+        .as_mut()
+        .expect("first generation stdout")
+        .read_exact(&mut ready)
+        .expect("read generation readiness");
+    assert_eq!(ready, *b"ready");
+    assert!(active.is_file(), "first generation did not become active");
+
+    let lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(fixture.target.join(".fe2o3-generation.lock-v1"))
+        .expect("open generation lock");
+    assert_eq!(
+        flock(&lock, FlockOperation::NonBlockingLockExclusive),
+        Err(Errno::WOULDBLOCK),
+        "generation worker did not retain the target lock"
+    );
 
     let mut second = fixture.command(&[OsString::from("build")]);
     second
         .env("FE2O3_TEST_EXCLUSIVE_ACTIVE", &active)
-        .env("FE2O3_TEST_SLEEP_MS", "25");
-    let second = second.output().expect("run second generation");
-    let first = first.wait().expect("wait for first generation");
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let second = ReapedChild::new(second.spawn().expect("spawn second generation"));
+    first
+        .child_mut()
+        .stdin
+        .take()
+        .expect("first generation stdin")
+        .write_all(b"release")
+        .expect("release first generation");
 
-    assert!(first.success(), "first generation failed: {first}");
+    let first = first.wait_with_output().expect("run first generation");
+    let second = second.wait_with_output().expect("run second generation");
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
     assert!(
         second.status.success(),
         "{}",

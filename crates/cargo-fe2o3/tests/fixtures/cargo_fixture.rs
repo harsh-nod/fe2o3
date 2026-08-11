@@ -1,6 +1,8 @@
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, OpenOptions};
+#[cfg(unix)]
+use std::io::Read;
 use std::io::Write;
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
@@ -164,11 +166,24 @@ fn build_or_run(args: &[OsString]) -> ExitCode {
         }
         None => None,
     };
-    if let Some(milliseconds) = env::var("FE2O3_TEST_SLEEP_MS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-    {
-        std::thread::sleep(std::time::Duration::from_millis(milliseconds));
+    #[cfg(unix)]
+    if env::var_os("FE2O3_TEST_GENERATION_CONTROL").is_some() {
+        if let Err(error) = std::io::stdout()
+            .write_all(b"ready")
+            .and_then(|()| std::io::stdout().flush())
+        {
+            eprintln!("fake Cargo could not signal generation readiness: {error}");
+            return ExitCode::FAILURE;
+        }
+        let mut release = [0_u8; 7];
+        if let Err(error) = std::io::stdin().read_exact(&mut release) {
+            eprintln!("fake Cargo could not receive generation release: {error}");
+            return ExitCode::FAILURE;
+        }
+        if release != *b"release" {
+            eprintln!("fake Cargo received invalid generation release");
+            return ExitCode::FAILURE;
+        }
     }
     if let Some(display) = env::var_os("FE2O3_TEST_SUBSTITUTE_ARTIFACT") {
         let display = PathBuf::from(display);
