@@ -10,6 +10,42 @@ LLD library directly, and returns a measured response on stdout. It never
 loads LLVM into rustc, invokes a shell, runs `clang`/`ld.lld`, accepts caller
 paths or flags, or searches for implicit libraries.
 
+## Bounded physical machine-effect profile
+
+The `--machine-effects-gfx942-v1` path is a separate, narrow alpha/zeta
+analysis for exact `gfx942:xnack-` COV6 finalized HSACO bytes. LLVM Object and
+MC APIs build a closed direct-call graph and enumerate reachable static global
+address, read, write, and return sites. The loader view must be unambiguous:
+all allocatable sections and analyzed symbols must agree with bounded `PT_LOAD`
+ranges and permissions, metadata and descriptors must agree, `.symtab` and
+`.dynsym` kernel exports must be identical, and every nonempty relocation form
+is rejected. Indirect calls, ambiguous call materialization, unsupported
+control flow, and unsupported ISA fail closed.
+
+The accepted ISA subset is intentionally small: recognized `GLOBAL_LOAD_*`,
+`S_LOAD_*`, and `GLOBAL_STORE_*` sites plus the scalar/vector ALU, wait,
+materialized direct-call, forward-branch, and exact entry/helper return forms
+emitted by the alpha/zeta fixtures. Atomics and all `DS_*`, `FLAT_*`,
+`BUFFER_*`, `TBUFFER_*`, `IMAGE_*`, and `SCRATCH_*` families are unsupported.
+Backward/external branches, recursive calls, indirect calls, helper
+`S_ENDPGM`, modified `S_SETPC` return pairs, and unknown memory widths are also
+rejected.
+
+The Rust authenticated execution API copies the exact worker into a sealed
+memfd, clears the environment to `LANG=C`, `LC_ALL=C`, and `TZ=UTC`, retains
+the dynamic loader and every mapped DSO descriptor, and re-stats and rehashes
+that runtime closure before input and after execution. The bounded fallback
+containment profile requires a non-root process with no inherited, permitted,
+effective, or ambient capabilities and hard-lowers `RLIMIT_NPROC` to zero;
+address-space, data, output-file, request, response, symbol, metadata, and
+runtime-closure sizes are also bounded. Process-group cleanup and descendant
+scanning are secondary checks, not the containment mechanism.
+
+This evidence describes reachable static instruction sites only. It does not
+provide concrete runtime addresses or execution counts and does not prove OOB
+absence, data-race freedom, compiler/source refinement, Verus obligations,
+publication eligibility, HSA load authority, or launch safety.
+
 Configuration requires explicit matching LLVM and LLD CMake package paths, an
 exact LLVM package version, and a build-ID file whose contents equal the
 expected build ID:

@@ -99,6 +99,9 @@ bool matchesPhysicalMachineEffectMetadataTargetV1(llvm::StringRef Target);
 llvm::Expected<PhysicalMachineEffectRequest>
 decodePhysicalMachineEffectRequest(llvm::ArrayRef<uint8_t> Bytes);
 
+// Evidence enumerates reachable static instruction sites in the exact payload.
+// It does not prove concrete addresses, OOB absence, race freedom, dynamic
+// execution counts, compiler refinement, source properties, or launch safety.
 llvm::Expected<PhysicalMachineEffectEvidence>
 analyzeGfx942PhysicalMachineEffects(
     const PhysicalMachineEffectRequest &Request);

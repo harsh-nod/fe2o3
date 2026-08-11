@@ -6,6 +6,12 @@
 //! file-backed runtime closure match a caller-pinned policy. Fresh OS challenges
 //! bind the identity probe and every analysis response. Receipts remain inert:
 //! they cannot publish, load, or launch code.
+//!
+//! The authenticated result is still only a list of reachable static
+//! instruction sites and their bounded effect kinds for one exact finalized
+//! HSACO. It does not establish concrete addresses, runtime execution counts,
+//! out-of-bounds absence, race freedom, source/compiler refinement, Verus
+//! correctness, or safe dispatch.
 
 use crate::{
     MAX_PHYSICAL_MACHINE_EFFECT_EVIDENCE_BYTES_V1, PhysicalMachineAnalyzerIdentityV1,
@@ -294,7 +300,11 @@ impl fmt::Display for AuthenticatedPhysicalMachineEffectErrorV1 {
 
 impl Error for AuthenticatedPhysicalMachineEffectErrorV1 {}
 
-/// A policy-authenticated execution receipt. Deliberately not `Clone`.
+/// A policy-authenticated static-site analysis receipt. Deliberately not `Clone`.
+///
+/// Authentication binds the worker image, observed runtime closure, challenge,
+/// and exact evidence bytes. It does not upgrade the static effect list into a
+/// memory-safety, race-freedom, refinement, or runtime-count proof.
 pub struct AuthenticatedPhysicalMachineEffectExecutionV1 {
     policy: PhysicalMachineEffectWorkerPolicyV1,
     execution_challenge: PhysicalMachineExecutionChallengeV1,

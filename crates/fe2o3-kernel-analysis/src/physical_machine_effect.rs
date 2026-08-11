@@ -383,6 +383,11 @@ impl PhysicalMachineEffectEvidenceIdentityV1 {
     }
 }
 
+/// Canonical static machine-site evidence for one exact finalized HSACO.
+///
+/// Effects name reachable instruction sites and bounded access widths. They do
+/// not report concrete runtime addresses or dynamic execution counts and do not
+/// prove OOB absence, race freedom, compiler refinement, or source properties.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PhysicalMachineEffectEvidenceV1 {
     execution_challenge: PhysicalMachineExecutionChallengeV1,
