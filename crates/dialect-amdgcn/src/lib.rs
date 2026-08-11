@@ -9,9 +9,11 @@
 
 mod device_math;
 mod lowering;
+mod scalar_v2;
 
 pub use device_math::*;
 pub use lowering::*;
+pub use scalar_v2::*;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Dim {

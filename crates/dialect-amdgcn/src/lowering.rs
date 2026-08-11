@@ -5754,7 +5754,7 @@ fn llvm_scalar(scalar: ScalarType) -> &'static str {
         ScalarType::I32 | ScalarType::U32 => "i32",
         ScalarType::I64 | ScalarType::U64 | ScalarType::Index => "i64",
         ScalarType::F32 => "float",
-        ScalarType::F64 => {
+        ScalarType::I128 | ScalarType::U128 | ScalarType::F64 => {
             unreachable!("preflight rejected unsupported scalar")
         }
     }
