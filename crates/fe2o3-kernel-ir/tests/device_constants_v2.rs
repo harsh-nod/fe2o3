@@ -97,6 +97,95 @@ fn pointer_source_at(id: u32, target: u32, width: u8, offset: u32, alignment: u3
     }
 }
 
+fn mixed_width_pointer_source(alignment: u32) -> Allocation {
+    Allocation {
+        id: AllocationId(0),
+        semantic_type: semantic_type(17),
+        kind: AllocationKind::Constant,
+        alignment,
+        mutability: Mutability::ReadOnly,
+        address_space: AddressSpace::Constant,
+        bytes: vec![0; 16],
+        validity: vec![
+            ValidityRegion {
+                offset: 0,
+                len: 4,
+                class: ValidityClass::Pointer,
+            },
+            ValidityRegion {
+                offset: 4,
+                len: 4,
+                class: ValidityClass::PaddingZero,
+            },
+            ValidityRegion {
+                offset: 8,
+                len: 8,
+                class: ValidityClass::Pointer,
+            },
+        ],
+        relocations: vec![
+            Relocation {
+                source_offset: 0,
+                width: 4,
+                target: AllocationId(1),
+                addend: 0,
+                provenance: ProvenancePolicy::SharedReadOnly,
+                capability: CapabilityPolicy::ReadOnly,
+            },
+            Relocation {
+                source_offset: 8,
+                width: 8,
+                target: AllocationId(2),
+                addend: 0,
+                provenance: ProvenancePolicy::SharedReadOnly,
+                capability: CapabilityPolicy::ReadOnly,
+            },
+        ],
+    }
+}
+
+fn two_narrow_pointer_source(alignment: u32) -> Allocation {
+    Allocation {
+        id: AllocationId(0),
+        semantic_type: semantic_type(18),
+        kind: AllocationKind::Constant,
+        alignment,
+        mutability: Mutability::ReadOnly,
+        address_space: AddressSpace::Constant,
+        bytes: vec![0; 8],
+        validity: vec![
+            ValidityRegion {
+                offset: 0,
+                len: 4,
+                class: ValidityClass::Pointer,
+            },
+            ValidityRegion {
+                offset: 4,
+                len: 4,
+                class: ValidityClass::Pointer,
+            },
+        ],
+        relocations: vec![
+            Relocation {
+                source_offset: 0,
+                width: 4,
+                target: AllocationId(1),
+                addend: 0,
+                provenance: ProvenancePolicy::SharedReadOnly,
+                capability: CapabilityPolicy::ReadOnly,
+            },
+            Relocation {
+                source_offset: 4,
+                width: 4,
+                target: AllocationId(2),
+                addend: 0,
+                provenance: ProvenancePolicy::SharedReadOnly,
+                capability: CapabilityPolicy::ReadOnly,
+            },
+        ],
+    }
+}
+
 fn graph(allocations: Vec<Allocation>) -> DeviceConstantGraphV2 {
     DeviceConstantGraphV2 { allocations }
 }
@@ -792,6 +881,138 @@ fn relocation_width_requires_matching_allocation_base_alignment() {
     graph(vec![exactly_aligned, constant(1, vec![1])])
         .validate(&limits)
         .unwrap();
+}
+
+#[test]
+fn multi_relocation_alignment_uses_the_widest_record() {
+    let limits = GraphLimits::default();
+    let targets = || vec![constant(1, vec![1]), constant(2, vec![2])];
+
+    let mut mixed = vec![mixed_width_pointer_source(8)];
+    mixed.extend(targets());
+    graph(mixed).validate(&limits).unwrap();
+
+    let mut under_aligned_mixed = vec![mixed_width_pointer_source(4)];
+    under_aligned_mixed.extend(targets());
+    assert_eq!(
+        graph(under_aligned_mixed).validate(&limits),
+        Err(ValidationError::UnalignedRelocation(AllocationId(0)))
+    );
+
+    let mut narrow = vec![two_narrow_pointer_source(4)];
+    narrow.extend(targets());
+    graph(narrow).validate(&limits).unwrap();
+}
+
+#[test]
+fn exhaustive_alignment_width_and_offset_congruence_matrix() {
+    let limits = GraphLimits::default();
+    let mut checked = 0_u64;
+
+    // Offsets 0..16 cover two periods of every supported pointer width.
+    for alignment in 1..=limits.max_alignment {
+        for width in [4_u8, 8] {
+            for offset in 0..16_u32 {
+                let source = pointer_source_at(0, 1, width, offset, alignment);
+                let candidate = graph(vec![source, constant(1, vec![1])]);
+                let expected = alignment.is_power_of_two()
+                    && alignment >= u32::from(width)
+                    && offset.is_multiple_of(u32::from(width));
+                assert_eq!(
+                    candidate.validate(&limits).is_ok(),
+                    expected,
+                    "alignment={alignment} width={width} offset={offset}"
+                );
+                checked += 1;
+            }
+        }
+    }
+    assert_eq!(checked, 2_097_152);
+}
+
+#[test]
+fn sixty_five_thousand_case_independent_alignment_oracle() {
+    let limits = GraphLimits::default();
+    let mut state = 0xa11c_07ba_5e00_0001_u64;
+
+    for case in 0..65_536_u64 {
+        let alignment =
+            u32::try_from(next_random(&mut state) % u64::from(limits.max_alignment) + 1).unwrap();
+        let width = if next_random(&mut state) & 1 == 0 {
+            4_u8
+        } else {
+            8_u8
+        };
+        let offset = u32::try_from(next_random(&mut state) % 64).unwrap();
+        let source = pointer_source_at(0, 1, width, offset, alignment);
+        let candidate = graph(vec![source, constant(1, vec![1])]);
+
+        let allocation_alignment_is_canonical = alignment.is_power_of_two();
+        let base_covers_width = u64::from(alignment) >= u64::from(width);
+        let offset_is_aligned = u64::from(offset) % u64::from(width) == 0;
+        let oracle_accepts =
+            allocation_alignment_is_canonical && base_covers_width && offset_is_aligned;
+        assert_eq!(
+            candidate.validate(&limits).is_ok(),
+            oracle_accepts,
+            "independent oracle mismatch case={case} alignment={alignment} width={width} offset={offset}"
+        );
+    }
+}
+
+#[test]
+fn canonical_decoder_binds_allocation_alignment_to_relocations() {
+    const FIRST_ALLOCATION_ALIGNMENT: std::ops::Range<usize> = 30..34;
+    let limits = GraphLimits::default();
+
+    for width in [4_u8, 8] {
+        let exact_alignment = u32::from(width);
+        let graph = graph(vec![
+            pointer_source_at(0, 1, width, 0, exact_alignment),
+            constant(1, vec![1]),
+        ]);
+        let encoded = graph.encode_canonical(&limits).unwrap();
+        assert_eq!(
+            DeviceConstantGraphV2::decode_canonical(&encoded, &limits).unwrap(),
+            graph
+        );
+
+        for alignment in 1..exact_alignment {
+            if !alignment.is_power_of_two() {
+                continue;
+            }
+            let mut under_aligned = encoded.clone();
+            under_aligned[FIRST_ALLOCATION_ALIGNMENT].copy_from_slice(&alignment.to_le_bytes());
+            assert_eq!(
+                DeviceConstantGraphV2::decode_canonical(&under_aligned, &limits),
+                Err(DecodeError::Graph(ValidationError::UnalignedRelocation(
+                    AllocationId(0)
+                )))
+            );
+        }
+
+        for alignment in [exact_alignment, exact_alignment * 2] {
+            let mut strengthened = encoded.clone();
+            strengthened[FIRST_ALLOCATION_ALIGNMENT].copy_from_slice(&alignment.to_le_bytes());
+            let decoded = DeviceConstantGraphV2::decode_canonical(&strengthened, &limits).unwrap();
+            assert_eq!(decoded.allocations[0].alignment, alignment);
+            assert_eq!(decoded.encode_canonical(&limits).unwrap(), strengthened);
+        }
+    }
+
+    let mixed = graph(vec![
+        mixed_width_pointer_source(8),
+        constant(1, vec![1]),
+        constant(2, vec![2]),
+    ]);
+    let mut under_aligned = mixed.encode_canonical(&limits).unwrap();
+    under_aligned[FIRST_ALLOCATION_ALIGNMENT].copy_from_slice(&4_u32.to_le_bytes());
+    assert_eq!(
+        DeviceConstantGraphV2::decode_canonical(&under_aligned, &limits),
+        Err(DecodeError::Graph(ValidationError::UnalignedRelocation(
+            AllocationId(0)
+        )))
+    );
 }
 
 #[test]
