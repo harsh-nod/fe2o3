@@ -109,7 +109,8 @@ void configureKernel(Function &Kernel, LLVMContext &Context) {
 }
 
 std::vector<uint8_t> makeKernelBitcode(bool WithHelper,
-                                       uint32_t CodeObjectFlag = 600) {
+                                       uint32_t CodeObjectFlag = 600,
+                                       bool WithNestedHelper = false) {
   LLVMContext Context;
   Module ModuleValue("physical-machine-effect-fixture", Context);
   auto Machine = createMachine();
@@ -123,7 +124,22 @@ std::vector<uint8_t> makeKernelBitcode(bool WithHelper,
   FunctionType *HelperType =
       FunctionType::get(Type::getVoidTy(Context), {GlobalPointer}, false);
   Function *Helper = nullptr;
+  Function *NestedHelper = nullptr;
   if (WithHelper) {
+    if (WithNestedHelper) {
+      NestedHelper = Function::Create(HelperType, GlobalValue::InternalLinkage,
+                                      "alpha_nested_helper", ModuleValue);
+      NestedHelper->addFnAttr(Attribute::NoInline);
+      NestedHelper->addFnAttr("target-cpu", "gfx942");
+      NestedHelper->addFnAttr("target-features",
+                              "-wavefrontsize32,+wavefrontsize64");
+      BasicBlock *NestedBlock =
+          BasicBlock::Create(Context, "entry", NestedHelper);
+      IRBuilder<> NestedBuilder(NestedBlock);
+      NestedBuilder.CreateStore(ConstantFP::get(F32, 11.0),
+                                NestedHelper->getArg(0));
+      NestedBuilder.CreateRetVoid();
+    }
     Helper = Function::Create(HelperType, GlobalValue::InternalLinkage,
                               "alpha_helper", ModuleValue);
     Helper->addFnAttr(Attribute::NoInline);
@@ -131,6 +147,8 @@ std::vector<uint8_t> makeKernelBitcode(bool WithHelper,
     Helper->addFnAttr("target-features", "-wavefrontsize32,+wavefrontsize64");
     BasicBlock *Block = BasicBlock::Create(Context, "entry", Helper);
     IRBuilder<> Builder(Block);
+    if (NestedHelper)
+      Builder.CreateCall(HelperType, NestedHelper, {Helper->getArg(0)});
     Builder.CreateStore(ConstantFP::get(F32, 9.0), Helper->getArg(0));
     Builder.CreateRetVoid();
   }
@@ -587,6 +605,41 @@ std::vector<DecodedSite> decodeSymbolSites(ArrayRef<uint8_t> Payload,
   return Result;
 }
 
+void patchSwapCallToImmediate(std::vector<uint8_t> &Payload, StringRef Caller,
+                              StringRef Callee, uint8_t DestinationRegister) {
+  auto CallerSites = decodeSymbolSites(Payload, Caller);
+  auto CalleeSites = decodeSymbolSites(Payload, Callee);
+  require(!CalleeSites.empty(), "immediate-call callee is empty");
+  auto Call = llvm::find_if(CallerSites, [](const DecodedSite &Site) {
+    return Site.Name == "S_SWAPPC_B64_vi";
+  });
+  require(Call != CallerSites.end() && Call->Size == 4,
+          "immediate-call mutation lacks S_SWAPPC");
+  int64_t Delta = static_cast<int64_t>(CalleeSites.front().Address) -
+                  static_cast<int64_t>(Call->Address + Call->Size);
+  require(Delta % 4 == 0 && Delta / 4 >= std::numeric_limits<int16_t>::min() &&
+              Delta / 4 <= std::numeric_limits<int16_t>::max(),
+          "immediate-call target is outside SOPK displacement");
+  uint32_t Encoding = 0xba800000 |
+                      (static_cast<uint32_t>(DestinationRegister) << 16) |
+                      static_cast<uint16_t>(Delta / 4);
+  support::endian::write32le(Payload.data() + Call->FileOffset, Encoding);
+
+  auto Changed = decodeSymbolSites(Payload, Caller);
+  auto Immediate = llvm::find_if(Changed, [&](const DecodedSite &Site) {
+    return Site.Address == Call->Address && Site.Name == "S_CALL_B64_vi" &&
+           Site.Size == Call->Size;
+  });
+  require(Immediate != Changed.end() && Immediate->RegisterOperands.size() == 2,
+          "SOPK mutation did not encode immediate S_CALL_B64_vi");
+  if (DestinationRegister == 30)
+    require(Immediate->RegisterOperands[0] == "SGPR30_SGPR31",
+            "S_CALL ABI destination did not decode exactly");
+  else
+    require(Immediate->RegisterOperands[0] != "SGPR30_SGPR31",
+            "alternate S_CALL destination decoded as ABI pair");
+}
+
 std::string rejectedDiagnostic(std::vector<uint8_t> Payload) {
   auto Result =
       analyzeGfx942PhysicalMachineEffects(directRequest(std::move(Payload)));
@@ -964,7 +1017,7 @@ void cfgReviewerReproductionsFailClosed() {
         continue;
       requireRejectedWith(
           std::move(Candidate),
-          "S_SWAPPC destination is not ABI return pair SGPR30_SGPR31");
+          "call destination is not ABI return pair SGPR30_SGPR31");
       ChangedDestination = true;
     }
     require(ChangedDestination,
@@ -992,6 +1045,79 @@ void directCallEdgesAreResolvedExactly() {
           "direct-call closure omitted helper");
 }
 
+void everyCallEncodingUsesTheAbiReturnPair() {
+  {
+    auto Payload = finalize(makeKernelBitcode(true));
+    patchSwapCallToImmediate(Payload, "alpha", "alpha_helper", 30);
+    auto Result =
+        analyzeGfx942PhysicalMachineEffects(directRequest(std::move(Payload)));
+    if (!Result)
+      fail(takeError(Result.takeError()));
+    auto Alpha = llvm::find_if(Result->Functions, [](const auto &Function) {
+      return Function.Symbol == "alpha";
+    });
+    require(Alpha != Result->Functions.end() &&
+                Alpha->DirectCallees ==
+                    std::vector<std::string>{"alpha_helper"},
+            "immediate S_CALL edge was not resolved exactly");
+  }
+
+  {
+    auto Payload = finalize(makeKernelBitcode(true));
+    patchSwapCallToImmediate(Payload, "alpha", "alpha_helper", 28);
+    requireRejectedWith(
+        std::move(Payload),
+        "call destination is not ABI return pair SGPR30_SGPR31");
+  }
+
+  {
+    // Nested calls currently require scratch spills outside this bounded
+    // static profile. Keep the compiler-emitted valid ABI call visible and
+    // make that unsupported boundary deterministic.
+    auto Payload = finalize(makeKernelBitcode(true, 600, true));
+    auto Sites = decodeSymbolSites(Payload, "alpha_helper");
+    auto NestedCall = llvm::find_if(Sites, [](const DecodedSite &Site) {
+      return Site.Name == "S_SWAPPC_B64_vi";
+    });
+    require(NestedCall != Sites.end() &&
+                NestedCall->RegisterOperands.size() == 2 &&
+                NestedCall->RegisterOperands[0] == "SGPR30_SGPR31",
+            "nested compiler call does not use the exact ABI return pair");
+    requireRejectedWith(std::move(Payload),
+                        "unsupported instruction S_XOR_SAVEEXEC_B64_vi");
+  }
+
+  {
+    // Remove only instructions before the nested call that are already
+    // outside the profile, so the malformed immediate call itself is the
+    // first rejection.
+    auto Payload = finalize(makeKernelBitcode(true, 600, true));
+    patchSwapCallToImmediate(Payload, "alpha_helper", "alpha_nested_helper",
+                             28);
+    auto Sites = decodeSymbolSites(Payload, "alpha_helper");
+    auto Call = llvm::find_if(Sites, [](const DecodedSite &Site) {
+      return Site.Name == "S_CALL_B64_vi";
+    });
+    require(Call != Sites.end(), "nested immediate call is absent");
+    for (const DecodedSite &Site : Sites) {
+      if (Site.Address >= Call->Address)
+        break;
+      if (Site.Name != "S_XOR_SAVEEXEC_B64_vi" &&
+          Site.Name != "V_WRITELANE_B32_vi" &&
+          !StringRef(Site.Name).starts_with("SCRATCH_"))
+        continue;
+      require(Site.Size % 4 == 0,
+              "unsupported nested prefix is not word sized");
+      for (size_t Offset = 0; Offset < Site.Size; Offset += 4)
+        support::endian::write32le(Payload.data() + Site.FileOffset + Offset,
+                                   0xbf800000);
+    }
+    requireRejectedWith(
+        std::move(Payload),
+        "call destination is not ABI return pair SGPR30_SGPR31");
+  }
+}
+
 } // namespace
 
 int main() {
@@ -1003,5 +1129,6 @@ int main() {
   loaderViewMutationsFailClosed();
   cfgReviewerReproductionsFailClosed();
   directCallEdgesAreResolvedExactly();
+  everyCallEncodingUsesTheAbiReturnPair();
   return 0;
 }

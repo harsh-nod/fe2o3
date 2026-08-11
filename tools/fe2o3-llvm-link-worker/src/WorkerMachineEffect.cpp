@@ -1437,19 +1437,38 @@ Expected<uint64_t> directCallTargets(ArrayRef<DecodedInstruction> Instructions,
                                      size_t CallIndex, const FunctionCfg &Cfg,
                                      McState &Mc) {
   const DecodedInstruction &Call = Instructions[CallIndex];
+  if (Call.Inst.size() == 0 || !Call.Inst.getOperand(0).isReg() ||
+      StringRef(Mc.Registers->getName(Call.Inst.getOperand(0).getReg())) !=
+          "SGPR30_SGPR31")
+    return analysisError(
+        "call destination is not ABI return pair SGPR30_SGPR31");
+
   uint64_t ImmediateTarget = 0;
   if (Mc.Analysis->evaluateBranch(Call.Inst, Call.Address, Call.Size,
                                   ImmediateTarget))
     return ImmediateTarget;
+  if (Call.Name == "S_CALL_B64_vi") {
+    if (Call.Inst.size() != 2 || !Call.Inst.getOperand(1).isImm())
+      return analysisError("malformed immediate S_CALL_B64_vi");
+    int64_t Encoded = Call.Inst.getOperand(1).getImm();
+    if (Encoded < 0 || Encoded > std::numeric_limits<uint16_t>::max())
+      return analysisError("S_CALL_B64_vi displacement is not u16");
+    int64_t Displacement = static_cast<int16_t>(Encoded);
+    if (Call.Address >
+        static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) - Call.Size)
+      return analysisError("S_CALL_B64_vi address is outside i64 range");
+    int64_t Base = static_cast<int64_t>(Call.Address + Call.Size);
+    int64_t Delta = Displacement * 4;
+    if ((Delta < 0 && Base < -Delta) ||
+        (Delta > 0 && Base > std::numeric_limits<int64_t>::max() - Delta))
+      return analysisError("S_CALL_B64_vi target overflows address range");
+    return static_cast<uint64_t>(Base + Delta);
+  }
 
   if (Call.Name != "S_SWAPPC_B64_vi" || Call.Inst.size() != 2 ||
-      !Call.Inst.getOperand(0).isReg() || !Call.Inst.getOperand(1).isReg())
+      !Call.Inst.getOperand(1).isReg())
     return analysisError(Twine("indirect or unknown call: ") +
                          instructionDescription(Call, Mc));
-  if (StringRef(Mc.Registers->getName(Call.Inst.getOperand(0).getReg())) !=
-      "SGPR30_SGPR31")
-    return analysisError(
-        "S_SWAPPC destination is not ABI return pair SGPR30_SGPR31");
 
   unsigned PairRegister = Call.Inst.getOperand(1).getReg();
   auto Pair = splitSgprPair(PairRegister, Mc);
