@@ -102,6 +102,13 @@ impl EnvelopeSnapshotV1 {
     }
 }
 
+struct InspectedEnvelopeV1 {
+    snapshot: EnvelopeSnapshotV1,
+    exact_bytes: Box<[u8]>,
+    decoded: WorkerV2LoadEnvelopeV1,
+    canonical_name: String,
+}
+
 /// Exact inherited descriptors retained through recovered load and synchronous dispatch.
 pub(crate) struct RetainedWorkerV2ApplicationDescriptorsV1 {
     directory: File,
@@ -274,8 +281,12 @@ pub(crate) fn consume_worker_v2_application_handoff_descriptors_v1(
         snapshot_handoff_descriptor_identities(&directory, &envelope, &acknowledgment)?;
     seal_descriptor_occurrences(&descriptor_identities)?;
     let directory_snapshot = inspect_directory(&directory)?;
-    let (envelope_snapshot, exact_envelope_bytes, decoded, envelope_name) =
-        inspect_envelope(&directory, &envelope)?;
+    let InspectedEnvelopeV1 {
+        snapshot: envelope_snapshot,
+        exact_bytes: exact_envelope_bytes,
+        decoded,
+        canonical_name: envelope_name,
+    } = inspect_envelope(&directory, &envelope)?;
     let application = current_application_identity()?;
     let expectation = WorkerV2ApplicationHandoffExpectationV1::new(&decoded, application);
     if expectation.commitment() != commitment {
@@ -518,15 +529,7 @@ fn validate_directory(
 fn inspect_envelope(
     directory: &File,
     envelope: &File,
-) -> Result<
-    (
-        EnvelopeSnapshotV1,
-        Box<[u8]>,
-        WorkerV2LoadEnvelopeV1,
-        String,
-    ),
-    WorkerV2ApplicationDescriptorHandoffErrorV1,
-> {
+) -> Result<InspectedEnvelopeV1, WorkerV2ApplicationDescriptorHandoffErrorV1> {
     let flags = fcntl_getfl(envelope).map_err(|error| descriptor_io("envelope", error))?;
     let initial = fstat(envelope).map_err(|error| descriptor_io("envelope", error))?;
     let snapshot = EnvelopeSnapshotV1::from_stat(&initial);
@@ -557,7 +560,12 @@ fn inspect_envelope(
     let envelope_name =
         worker_v2_load_envelope_name_v1(decoded.published_claim().receipt().publication_identity());
     require_canonical_envelope_link(directory, snapshot, &envelope_name)?;
-    Ok((snapshot, bytes.into_boxed_slice(), decoded, envelope_name))
+    Ok(InspectedEnvelopeV1 {
+        snapshot,
+        exact_bytes: bytes.into_boxed_slice(),
+        decoded,
+        canonical_name: envelope_name,
+    })
 }
 
 fn validate_envelope(
@@ -585,6 +593,7 @@ fn require_canonical_envelope_link(
 ) -> Result<(), WorkerV2ApplicationDescriptorHandoffErrorV1> {
     let mut entries = 0_usize;
     let mut links = 0_usize;
+    let mut canonical_entries = 0_usize;
     let mut canonical_links = 0_usize;
     for entry in std::fs::read_dir(descriptor_directory_path(directory))
         .map_err(|error| descriptor_io("artifact directory", error))?
@@ -601,14 +610,18 @@ fn require_canonical_envelope_link(
             .symlink_metadata()
             .map_err(|error| descriptor_io("artifact directory entry", error))?;
         use std::os::unix::fs::MetadataExt;
+        let has_canonical_name = entry.file_name() == OsStr::new(expected_name);
+        if has_canonical_name {
+            canonical_entries += 1;
+        }
         if metadata.dev() == expected.device && metadata.ino() == expected.inode {
             links += 1;
-            if entry.file_name() == OsStr::new(expected_name) {
+            if has_canonical_name && metadata.file_type().is_file() && metadata.nlink() == 1 {
                 canonical_links += 1;
             }
         }
     }
-    if links != 1 || canonical_links != 1 {
+    if links != 1 || canonical_entries != 1 || canonical_links != 1 {
         return Err(WorkerV2ApplicationDescriptorHandoffErrorV1::EnvelopeNotLinked);
     }
     Ok(())

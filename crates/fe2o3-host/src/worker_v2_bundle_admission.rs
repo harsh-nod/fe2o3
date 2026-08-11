@@ -1201,8 +1201,6 @@ pub(crate) mod tests {
         make_two_hsaco_fixture_with_kernel_ids_and_abis, physical_test_abi,
         typed_vecadd_hsaco_for_target, typed_vecadd_two_kernel_hsaco_for_target,
     };
-    #[cfg(feature = "hardware-test-hooks")]
-    use fe2o3_artifact_transaction::fail_build_attempt;
     use fe2o3_artifact_transaction::{
         AtomicPublicationIdentityV1, BuildInvocation, BuildSession, CanonicalLinkRequestIdentityV1,
         DurableLinkPublicationPlanV1, FinalizationIdentityV1, FinalizedOutputIdentityV1,
@@ -1210,6 +1208,10 @@ pub(crate) mod tests {
         PinnedWorkerIdentityV1, ProducerIdentity, TargetIdentityV1,
         UpstreamCodeObjectEvidenceIdentityV1, ValidatedResponseIdentityV1, begin_build_attempt,
         publish_exact_hsaco_evidence_for_attempt_v1,
+    };
+    #[cfg(feature = "hardware-test-hooks")]
+    use fe2o3_artifact_transaction::{
+        fail_build_attempt, install_begin_build_attempt_lock_probe_v1,
     };
     use fe2o3_artifacts::{
         AbiField, AbiLayout, Access, BlockSize, CodeObjectFormat, CodeObjectIdentity,
@@ -1283,9 +1285,8 @@ pub(crate) mod tests {
         .unwrap();
         let completed = Arc::new(AtomicBool::new(false));
         let thread_completed = completed.clone();
-        let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(0);
+        let lock_probe = install_begin_build_attempt_lock_probe_v1(&output, &owner);
         let thread = std::thread::spawn(move || {
-            entered_tx.send(()).unwrap();
             let next = begin_build_attempt(
                 &output,
                 &owner,
@@ -1297,7 +1298,7 @@ pub(crate) mod tests {
             fail_build_attempt(&output, &owner, next).unwrap();
             thread_completed.store(true, Ordering::SeqCst);
         });
-        entered_rx.recv().unwrap();
+        lock_probe.wait_until_contended();
         TestPublicationTurnover { completed, thread }
     }
 

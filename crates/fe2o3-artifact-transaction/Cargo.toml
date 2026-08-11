@@ -8,6 +8,9 @@ rust-version.workspace = true
 description = "Transactional compiler artifact publication for fe2o3."
 readme = "README.md"
 
+[features]
+test-hooks = []
+
 [dependencies]
 libc.workspace = true
 rustix.workspace = true

@@ -295,6 +295,8 @@ pub struct RecoveredWorkerV2SynchronousHsaPreparedInvocationV1<
         Arguments,
     >,
     currentness: &'loaded DurableCurrentLinkPublicationTokenV1,
+    #[cfg(target_os = "linux")]
+    application_descriptors: Option<&'loaded RetainedWorkerV2ApplicationDescriptorsV1>,
 }
 
 impl<Root, Selected, Adapter, Arguments>
@@ -327,6 +329,12 @@ where
         self.currentness
             .revalidate_locked_currentness()
             .map_err(RecoveredWorkerV2SynchronousHsaDispatchError::CurrentPublication)?;
+        #[cfg(target_os = "linux")]
+        if let Some(descriptors) = self.application_descriptors {
+            descriptors
+                .revalidate()
+                .map_err(RecoveredWorkerV2SynchronousHsaDispatchError::ApplicationDescriptors)?;
+        }
         self.prepared
             .dispatch()
             .map_err(RecoveredWorkerV2SynchronousHsaDispatchError::Dispatch)
@@ -412,6 +420,8 @@ impl<K, A: ReviewedHsaImplicitKernargAdapterV1> RecoveredWorkerV2SynchronousHsaH
         Ok(RecoveredWorkerV2SynchronousHsaPreparedInvocationV1 {
             prepared,
             currentness: &self.currentness,
+            #[cfg(target_os = "linux")]
+            application_descriptors: self.application_descriptors.as_ref(),
         })
     }
 
@@ -471,6 +481,8 @@ pub enum RecoveredWorkerV2SynchronousHsaPrepareError<PrerequisiteError, AdapterE
 #[non_exhaustive]
 pub enum RecoveredWorkerV2SynchronousHsaDispatchError<AdapterError> {
     CurrentPublication(DurableLinkPublicationError),
+    #[cfg(target_os = "linux")]
+    ApplicationDescriptors(WorkerV2ApplicationDescriptorHandoffErrorV1),
     Dispatch(HsaGeneratedDispatchError<AdapterError>),
 }
 
@@ -708,7 +720,8 @@ mod tests {
     use fe2o3_artifact_transaction::{
         BuildInvocation, BuildSession, DurableLinkPublicationPlanV1, PackageIdentityV1,
         ProducerIdentity, UpstreamCodeObjectEvidenceIdentityV1, begin_build_attempt,
-        fail_build_attempt, publish_exact_hsaco_evidence_for_attempt_v1,
+        fail_build_attempt, install_begin_build_attempt_lock_probe_v1,
+        publish_exact_hsaco_evidence_for_attempt_v1,
     };
     use fe2o3_artifacts::{
         AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership,
@@ -2169,6 +2182,153 @@ mod tests {
         assert_eq!(unloads.load(Ordering::SeqCst), 0);
     }
 
+    #[cfg(target_os = "linux")]
+    #[derive(Clone, Copy)]
+    enum PreparedDescriptorMutation {
+        Rename,
+        HardLink,
+        SymlinkReplacement,
+        DirentReplacement,
+    }
+
+    #[cfg(target_os = "linux")]
+    fn assert_prepared_dispatch_rejects_descriptor_mutation(
+        seed: u8,
+        mutation: PreparedDescriptorMutation,
+    ) {
+        let descriptor_fixture = recovery_fixture(seed, "gfx942", "vecadd");
+        let descriptors = application_descriptor_fixture(&descriptor_fixture, seed.wrapping_add(1));
+        let envelope_path = descriptors.envelope_path.clone();
+        let expectation = descriptors.expectation;
+        let challenge = descriptors.challenge;
+        let mut recovered = consume_worker_v2_application_handoff_descriptors_v1(
+            descriptors.envelope,
+            descriptors.artifact_directory,
+            descriptors.acknowledgment_write,
+            expectation.commitment(),
+            challenge,
+            descriptor_fixture.compiler_transaction.clone(),
+            descriptor_fixture.kernel_id,
+            &descriptor_fixture.observed,
+        )
+        .unwrap();
+        let acknowledgment = read_acknowledgment(descriptors.acknowledgment_read);
+        WorkerV2ApplicationHandoffAckV1::decode_canonical(&acknowledgment)
+            .unwrap()
+            .validate(expectation, challenge)
+            .unwrap();
+        let application_descriptors = recovered.application_descriptors.take().unwrap();
+        drop(recovered);
+
+        let (admission, _alpha_directory) =
+            crate::worker_v2_bundle_admission::tests::admitted_alpha_cov6_for_lifecycle_test(
+                seed.wrapping_add(2),
+            );
+        let observed =
+            make_observed_for(usize::from(seed.wrapping_add(2)), "gfx942:sramecc+:xnack-");
+        let (mut authenticator, _) = ExactPrerequisiteAuthenticator::new();
+        let (adapter, unloads) = ExactHsaAdapter::new();
+        let authenticated = AuthenticatedWorkerV2ExecutableV1::<AlphaCov6TestKernel>::authenticate(
+            admission,
+            &mut authenticator,
+        )
+        .unwrap();
+        let currentness = authenticated.acquire_retained_currentness_token().unwrap();
+        let authorized = authenticated.authorize_hsa_load(adapter).unwrap();
+        let loaded = authorized
+            .load_with_retained_currentness(&currentness)
+            .unwrap();
+        let mut authority = RecoveredWorkerV2SynchronousHsaHandoffV1 {
+            loaded,
+            currentness,
+            observed: observed.clone(),
+            application_descriptors: Some(application_descriptors),
+        };
+        let (arguments, drops) = alpha_cov6_arguments_for_lifecycle_test(&observed);
+        let prepared = authority
+            .prepare_generated_alpha_zeta_cov6_v1::<
+                AlphaCov6TestKernel,
+                ExactPrerequisiteAuthenticator,
+                _,
+            >(&mut authenticator, arguments)
+            .unwrap();
+
+        let displaced = descriptor_fixture
+            .output
+            .join(format!("displaced-after-prepare-{seed}.envelope"));
+        match mutation {
+            PreparedDescriptorMutation::Rename => {
+                fs::rename(&envelope_path, &displaced).unwrap();
+            }
+            PreparedDescriptorMutation::HardLink => {
+                fs::hard_link(&envelope_path, &displaced).unwrap();
+            }
+            PreparedDescriptorMutation::SymlinkReplacement => {
+                fs::rename(&envelope_path, &displaced).unwrap();
+                std::os::unix::fs::symlink(&displaced, &envelope_path).unwrap();
+            }
+            PreparedDescriptorMutation::DirentReplacement => {
+                fs::rename(&envelope_path, &displaced).unwrap();
+                let mut replacement = fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .mode(0o600)
+                    .open(&envelope_path)
+                    .unwrap();
+                replacement.write_all(&descriptor_fixture.envelope).unwrap();
+                replacement.sync_all().unwrap();
+            }
+        }
+
+        let error = match prepared.dispatch() {
+            Ok(_) => panic!("descriptor mutation must prevent dispatch"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            RecoveredWorkerV2SynchronousHsaDispatchError::ApplicationDescriptors(_)
+        ));
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+        authority.unload().unwrap();
+        assert_eq!(unloads.load(Ordering::SeqCst), 1);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn prepared_dispatch_rejects_canonical_envelope_rename() {
+        assert_prepared_dispatch_rejects_descriptor_mutation(
+            80,
+            PreparedDescriptorMutation::Rename,
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn prepared_dispatch_rejects_new_envelope_hard_link() {
+        assert_prepared_dispatch_rejects_descriptor_mutation(
+            84,
+            PreparedDescriptorMutation::HardLink,
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn prepared_dispatch_rejects_canonical_symlink_replacement() {
+        assert_prepared_dispatch_rejects_descriptor_mutation(
+            88,
+            PreparedDescriptorMutation::SymlinkReplacement,
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn prepared_dispatch_rejects_canonical_dirent_replacement() {
+        assert_prepared_dispatch_rejects_descriptor_mutation(
+            92,
+            PreparedDescriptorMutation::DirentReplacement,
+        );
+    }
+
     #[test]
     fn canonical_envelope_recovers_one_inert_pinned_descriptor() {
         let fixture = recovery_fixture(1, "gfx942", "vecadd");
@@ -2416,10 +2576,9 @@ mod tests {
         .unwrap();
         let completed = turnover_completed.clone();
         let turnover_owner = owner.clone();
-        let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(0);
+        let lock_probe = install_begin_build_attempt_lock_probe_v1(&output, &owner);
         let (completed_tx, completed_rx) = std::sync::mpsc::channel();
         let turnover = std::thread::spawn(move || {
-            entered_tx.send(()).unwrap();
             let next = begin_build_attempt(
                 &output,
                 &turnover_owner,
@@ -2430,7 +2589,7 @@ mod tests {
             completed_tx.send(()).unwrap();
             next
         });
-        entered_rx.recv().unwrap();
+        lock_probe.wait_until_contended();
 
         let (arguments, drops) = alpha_cov6_arguments_for_lifecycle_test(&observed);
         let prepared = authority

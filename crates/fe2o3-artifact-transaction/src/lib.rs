@@ -92,6 +92,8 @@ use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process;
+#[cfg(feature = "test-hooks")]
+use std::sync::Weak;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 pub use worker_v2_publication_intent::{
@@ -327,6 +329,135 @@ impl ProducerIdentity {
     }
 }
 
+/// Test-only observation of a blocked `begin_build_attempt` lock acquisition.
+///
+/// This hook is coordination instrumentation, not artifact or launch authority. It is available
+/// only when the `test-hooks` feature is explicitly enabled.
+#[cfg(feature = "test-hooks")]
+#[doc(hidden)]
+pub struct BeginBuildAttemptLockProbeV1 {
+    inner: Arc<BeginBuildAttemptLockProbeInnerV1>,
+}
+
+#[cfg(feature = "test-hooks")]
+struct BeginBuildAttemptLockProbeInnerV1 {
+    output_dir: PathBuf,
+    producer: ProducerIdentity,
+    state: Mutex<BeginBuildAttemptLockProbeStateV1>,
+    changed: Condvar,
+}
+
+#[cfg(feature = "test-hooks")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd)]
+enum BeginBuildAttemptLockProbeStateV1 {
+    Installed,
+    BeforeBlockingAcquire,
+    Contended,
+}
+
+#[cfg(feature = "test-hooks")]
+impl BeginBuildAttemptLockProbeInnerV1 {
+    fn advance_to(&self, next: BeginBuildAttemptLockProbeStateV1) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if *state < next {
+            *state = next;
+            self.changed.notify_all();
+        }
+    }
+}
+
+#[cfg(feature = "test-hooks")]
+impl BeginBuildAttemptLockProbeV1 {
+    /// Blocks until the matching build attempt has observed the existing same-process lock and is
+    /// immediately about to wait for its release.
+    pub fn wait_until_contended(&self) {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        while *state < BeginBuildAttemptLockProbeStateV1::Contended {
+            state = self
+                .inner
+                .changed
+                .wait(state)
+                .unwrap_or_else(|error| error.into_inner());
+        }
+    }
+}
+
+#[cfg(feature = "test-hooks")]
+struct BeginBuildAttemptLockProbeRegistryV1 {
+    probes: Mutex<Vec<Weak<BeginBuildAttemptLockProbeInnerV1>>>,
+}
+
+#[cfg(feature = "test-hooks")]
+impl BeginBuildAttemptLockProbeRegistryV1 {
+    fn global() -> &'static Self {
+        static REGISTRY: OnceLock<BeginBuildAttemptLockProbeRegistryV1> = OnceLock::new();
+        REGISTRY.get_or_init(|| BeginBuildAttemptLockProbeRegistryV1 {
+            probes: Mutex::new(Vec::new()),
+        })
+    }
+
+    fn observation(
+        &self,
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+    ) -> BeginBuildAttemptLockObservationV1 {
+        let mut registered = self
+            .probes
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let mut matching = Vec::new();
+        registered.retain(|probe| {
+            let Some(probe) = probe.upgrade() else {
+                return false;
+            };
+            if probe.output_dir == output_dir && probe.producer == *producer {
+                matching.push(probe);
+            }
+            true
+        });
+        BeginBuildAttemptLockObservationV1 { matching }
+    }
+}
+
+#[cfg(feature = "test-hooks")]
+struct BeginBuildAttemptLockObservationV1 {
+    matching: Vec<Arc<BeginBuildAttemptLockProbeInnerV1>>,
+}
+
+#[cfg(feature = "test-hooks")]
+impl BeginBuildAttemptLockObservationV1 {
+    fn advance_to(&self, state: BeginBuildAttemptLockProbeStateV1) {
+        for probe in &self.matching {
+            probe.advance_to(state);
+        }
+    }
+}
+
+/// Installs a test-only observer for one exact build attempt lock acquisition.
+#[cfg(feature = "test-hooks")]
+#[doc(hidden)]
+pub fn install_begin_build_attempt_lock_probe_v1(
+    output_dir: &Path,
+    producer: &ProducerIdentity,
+) -> BeginBuildAttemptLockProbeV1 {
+    let inner = Arc::new(BeginBuildAttemptLockProbeInnerV1 {
+        output_dir: output_dir.to_path_buf(),
+        producer: producer.clone(),
+        state: Mutex::new(BeginBuildAttemptLockProbeStateV1::Installed),
+        changed: Condvar::new(),
+    });
+    BeginBuildAttemptLockProbeRegistryV1::global()
+        .probes
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .push(Arc::downgrade(&inner));
+    BeginBuildAttemptLockProbeV1 { inner }
+}
+
 /// Starts or resumes the durable artifact generation for one rustc invocation.
 ///
 /// A new generation is recorded before this function invalidates the producer's prior owned
@@ -352,6 +483,14 @@ pub fn begin_build_attempt(
     }
 
     let output = PinnedOutput::open(output_dir)?;
+    #[cfg(feature = "test-hooks")]
+    let lock_observation =
+        BeginBuildAttemptLockProbeRegistryV1::global().observation(output_dir, producer);
+    #[cfg(feature = "test-hooks")]
+    lock_observation.advance_to(BeginBuildAttemptLockProbeStateV1::BeforeBlockingAcquire);
+    #[cfg(feature = "test-hooks")]
+    let _lock = output.lock_for_build_attempt(&lock_observation)?;
+    #[cfg(not(feature = "test-hooks"))]
     let _lock = output.lock()?;
     output.verify_path_identity()?;
     let mut attempts = read_attempt_registry(&output)?;
@@ -2776,7 +2915,7 @@ impl PinnedOutput {
     }
 
     fn lock(&self) -> Result<OutputLock, EmitError> {
-        self.lock_with(FlockOperation::LockExclusive)
+        self.lock_with(FlockOperation::LockExclusive, None)
             .and_then(|lock| {
                 lock.ok_or_else(|| EmitError::InvalidArtifactDestination {
                     path: self.display_path.join(LOCK_FILE),
@@ -2786,10 +2925,29 @@ impl PinnedOutput {
     }
 
     fn try_lock(&self) -> Result<Option<OutputLock>, EmitError> {
-        self.lock_with(FlockOperation::NonBlockingLockExclusive)
+        self.lock_with(FlockOperation::NonBlockingLockExclusive, None)
     }
 
-    fn lock_with(&self, operation: FlockOperation) -> Result<Option<OutputLock>, EmitError> {
+    #[cfg(feature = "test-hooks")]
+    fn lock_for_build_attempt(
+        &self,
+        observation: &BeginBuildAttemptLockObservationV1,
+    ) -> Result<OutputLock, EmitError> {
+        self.lock_with(FlockOperation::LockExclusive, Some(observation))
+            .and_then(|lock| {
+                lock.ok_or_else(|| EmitError::InvalidArtifactDestination {
+                    path: self.display_path.join(LOCK_FILE),
+                    reason: "blocking lock unexpectedly reported contention".to_string(),
+                })
+            })
+    }
+
+    fn lock_with(
+        &self,
+        operation: FlockOperation,
+        #[cfg(feature = "test-hooks")] observation: Option<&BeginBuildAttemptLockObservationV1>,
+        #[cfg(not(feature = "test-hooks"))] _observation: Option<&()>,
+    ) -> Result<Option<OutputLock>, EmitError> {
         let validate_lock = |stat: &rustix::fs::Stat| {
             if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile {
                 return Err(EmitError::InvalidArtifactDestination {
@@ -2835,6 +2993,10 @@ impl PinnedOutput {
                 if nonblocking {
                     return Ok(None);
                 }
+                #[cfg(feature = "test-hooks")]
+                if let Some(observation) = observation {
+                    observation.advance_to(BeginBuildAttemptLockProbeStateV1::Contended);
+                }
                 drop(registry.wait(state));
                 continue;
             }
@@ -2854,6 +3016,10 @@ impl PinnedOutput {
                 drop(fd);
                 if nonblocking {
                     return Ok(None);
+                }
+                #[cfg(feature = "test-hooks")]
+                if let Some(observation) = observation {
+                    observation.advance_to(BeginBuildAttemptLockProbeStateV1::Contended);
                 }
                 drop(registry.wait(state));
                 continue;
