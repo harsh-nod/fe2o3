@@ -138,30 +138,46 @@ authenticator.
 `Gfx942AlphaZetaProofInputV1` is a sealed identity for the bounded alpha/zeta
 CPU/shared-body source-model profile. It is not a GPU-kernel or machine-code
 proof. `AlphaZetaProofSourcesV1::discover_workspace` starts from the workspace
-and example Cargo manifests and recursively follows local Cargo dependencies,
-Rust modules, `include!`, and `#[path]`. The resulting bounded, canonical
-project-input snapshot includes `Cargo.lock`, toolchain and Cargo configuration,
-the ordinary Rust model and shared CPU body, the axiom-free permission model,
-the Verus harness, and the `fe2o3-contracts` manifest and source tree. Missing
-reachable inputs, extra reachable-closure inputs, role-swapped inputs,
-oversized inputs, symlinked roots or parents, and structurally ambiguous inputs
-are rejected. On Linux, discovery walks descendants relative to retained
-descriptors with `openat2(BENEATH|NO_SYMLINKS|NO_MAGICLINKS|NO_XDEV)`, retains
-every source and parent descriptor, checks each exact read with `fstat` before
-and after, and revalidates the complete descriptor generation. File roles,
-paths, lengths, SHA-256 measurements, and dependency edges contribute to
-separate source-tree and dependency-tree identities.
+and example Cargo manifests. Within this fixed profile it follows path entries
+from ordinary and workspace `dependencies`, rustc module-file rules,
+literal `include!` in structurally parsed item/expression/statement/pattern/type
+positions, and literal `#[path]`. It treats `cfg(test)` modules as disabled and
+fails closed on every other module `cfg`, module `cfg_attr`, file-level
+`cfg`/`cfg_attr`, ambiguous module candidate, nonliteral include, or include
+token hidden in an opaque macro. The measured graph includes `Cargo.lock`,
+toolchain and Cargo configuration, the ordinary Rust model and shared CPU body,
+the permission model, the Verus harness, and the structurally reached
+`fe2o3-contracts` files. Declared manifests are checked for missing, extra,
+role-swapped, oversized, or mutated entries relative to that discovered graph;
+unreachable files are not enumerated.
+
+On Linux, descendant discovery uses
+`openat2(BENEATH|NO_SYMLINKS|NO_MAGICLINKS|NO_XDEV)`. The absolute workspace
+walk, every descendant directory, and every source file retain their canonical
+parent descriptor, entry name, object descriptor, and device/inode/type
+identity. The workspace root and descendants additionally bind full metadata;
+regular files require one link and retain their exact bytes. Discovery reopens
+every retained name relative to its retained parent before and after reads and
+during final lease validation, rejecting ancestor, mount, rename, or file
+replacement without binding mutable metadata of unrelated ancestor siblings.
+File roles, paths, lengths, SHA-256 measurements, and dependency edges
+contribute to separate source-tree and dependency-tree identities.
 
 This bounded snapshot is intentionally not called a complete source or verifier
-runtime closure. It does not measure Cargo build scripts, procedural macros,
-`vstd`, `rust_verify`, Verus support resources, inherited environment, generated
-files, compiler shared libraries, or solver resources. The trusted-item inventory
-is derived from retained Rust token streams reachable from the proof harness. It
-detects `external_body`, `assume`, `admit`, trusted attributes, and explicitly
-imported trusted APIs. External `vstd`/builtin imports are retained as unmeasured
-runtime dependencies. The recorder does not consume the retained snapshot or
-its environmental generation identity. `validate_workspace` may rediscover
-files for diagnostics, but no authoritative result can arise from that reread.
+runtime closure. It does not evaluate arbitrary target/feature cfg expressions,
+Cargo target/dev/build dependency tables, build scripts, procedural or
+attribute macros, macro-generated module declarations, macro expansions that
+synthesize include paths without an `include!` token, generated files, inherited
+environment, `vstd`, `rust_verify`, Verus support resources, compiler shared
+libraries, or solver resources. Opaque macro bodies are only scanned for the
+specific fail-closed include/import token cases above; they are not expanded.
+The trusted-item inventory is derived from retained Rust token streams reachable
+from the proof harness. It detects `external_body`, `assume`, `admit`, trusted
+attributes, and explicitly imported trusted APIs. External `vstd`/builtin
+imports remain unmeasured runtime dependencies. The recorder does not consume
+the retained snapshot or its environmental generation identity.
+`validate_workspace` may rediscover files for diagnostics, but no authoritative
+result can arise from that reread.
 
 The sealed input also binds the proof target, typed ABI, effects and launch
 identities, measured Verus and Z3 names, versions, executable and configuration

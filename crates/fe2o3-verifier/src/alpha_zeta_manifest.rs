@@ -1720,4 +1720,34 @@ mod tests {
             Err(AlphaZetaProofErrorV1::SourceSnapshotGenerationChanged)
         ));
     }
+
+    #[test]
+    fn coherent_snapshot_rejects_concurrent_workspace_dirent_replacement() {
+        let _serial = SNAPSHOT_RACE_TEST.lock().unwrap();
+        let fixture = SourceFixture::copy_from_workspace();
+        let target = fixture.path.clone();
+        let retired = target.with_extension("retired");
+        let replacement = target.with_extension("replacement");
+        fs::create_dir(&replacement).unwrap();
+
+        let reached = Arc::new(Barrier::new(2));
+        let resume = Arc::new(Barrier::new(2));
+        snapshot_linux::install_finish_pause(Arc::clone(&reached), Arc::clone(&resume));
+        let retired_for_worker = retired.clone();
+        let worker = std::thread::spawn(move || {
+            reached.wait();
+            fs::rename(&target, &retired_for_worker).unwrap();
+            fs::rename(&replacement, &target).unwrap();
+            resume.wait();
+        });
+
+        let result = AlphaZetaProofSourcesV1::discover_workspace(&fixture.path);
+        snapshot_linux::clear_finish_pause();
+        worker.join().unwrap();
+        assert!(matches!(
+            result,
+            Err(AlphaZetaProofErrorV1::SourceSnapshotGenerationChanged)
+        ));
+        fs::remove_dir_all(retired).unwrap();
+    }
 }
