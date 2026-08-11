@@ -596,6 +596,18 @@ mod platform {
         stderr: Capture,
     }
 
+    type RuntimeFileIdentity = ((u32, u32, u64), String, [u8; 32], u64);
+
+    struct SupervisionContext<'a> {
+        stderr_pipe: ChildStderr,
+        request: &'a [u8],
+        challenge: PhysicalMachineExecutionChallengeV1,
+        limits: AuthenticatedPhysicalMachineEffectLimitsV1,
+        deadline: Instant,
+        observation: &'a mut ProcessObservation,
+        worker: PhysicalMachineWorkerExecutableIdentityV1,
+    }
+
     struct ProcessCapture {
         status: ExitStatus,
         request_written: usize,
@@ -888,13 +900,15 @@ mod platform {
             }
             let capture = supervise(
                 &mut child,
-                stderr,
-                request,
-                challenge,
-                limits,
-                deadline,
-                &mut observation,
-                self.policy.executable,
+                SupervisionContext {
+                    stderr_pipe: stderr,
+                    request,
+                    challenge,
+                    limits,
+                    deadline,
+                    observation: &mut observation,
+                    worker: self.policy.executable,
+                },
             );
             let runtime_result = validate_runtime_files(&mut observation.runtime_files);
             let image_result = validate_image(&self.image, &self.descriptor_path, self.snapshot);
@@ -1558,9 +1572,7 @@ mod platform {
         ))
     }
 
-    fn runtime_file_set(
-        files: &[RuntimeFile],
-    ) -> BTreeSet<((u32, u32, u64), String, [u8; 32], u64)> {
+    fn runtime_file_set(files: &[RuntimeFile]) -> BTreeSet<RuntimeFileIdentity> {
         files
             .iter()
             .map(|file| (file.key, file.path.clone(), file.digest, file.length))
@@ -1735,14 +1747,17 @@ mod platform {
 
     fn supervise(
         child: &mut Child,
-        stderr_pipe: ChildStderr,
-        request: &[u8],
-        challenge: PhysicalMachineExecutionChallengeV1,
-        limits: AuthenticatedPhysicalMachineEffectLimitsV1,
-        deadline: Instant,
-        observation: &mut ProcessObservation,
-        worker: PhysicalMachineWorkerExecutableIdentityV1,
+        context: SupervisionContext<'_>,
     ) -> Result<ProcessCapture, AuthenticatedPhysicalMachineEffectErrorV1> {
+        let SupervisionContext {
+            stderr_pipe,
+            request,
+            challenge,
+            limits,
+            deadline,
+            observation,
+            worker,
+        } = context;
         let stdin = child.stdin.take().expect("worker stdin is piped");
         let stdout_pipe = child.stdout.take().expect("worker stdout is piped");
         let (write_sender, write_receiver) = std::sync::mpsc::sync_channel(1);
