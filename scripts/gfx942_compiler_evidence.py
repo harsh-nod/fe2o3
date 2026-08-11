@@ -1392,6 +1392,7 @@ def capture_generated_build_closures(
             member.is_file()
             and not member.is_symlink()
             and "Testing/Temporary" not in member.relative_to(worker_build).as_posix()
+            and member.relative_to(worker_build).as_posix() != ".ninja_log"
         )
     )
     if not worker_paths or not any(name.endswith(".o") for name in worker_paths):
@@ -1408,7 +1409,11 @@ def capture_generated_build_closures(
                 {
                     "path_prefix": "Testing/Temporary/",
                     "reason": "transient CTest timing/log output, not a build input",
-                }
+                },
+                {
+                    "path": ".ninja_log",
+                    "reason": "transient Ninja timing log, not a build input",
+                },
             ],
         },
         allow_source_hardlinks=True,
