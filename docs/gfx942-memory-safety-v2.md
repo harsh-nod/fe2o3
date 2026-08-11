@@ -90,8 +90,9 @@ theorem proves equivalence between the executable and modeled predicates for
 exactly provenance equality, current-state liveness, bounds, and initialized
 read coverage. This is not a refinement proof for the Rust implementation or
 for borrow, capability, raw-cast, identity, or full transition behavior.
-Mutation-negative fixtures include stale generation and deallocated-liveness
-counterexamples as well as the other listed boundaries.
+Each mutation-negative theorem has its own fixture, including separate stale
+generation and deallocated-liveness counterexamples, so every intended failure
+must be observed independently.
 
 ## Resource and Trust Boundary
 
@@ -122,7 +123,11 @@ state-map lookup and insertion work, insertion shifts, linear
 allocation/loan/capability scans, recursive validity scratch and visits, both
 preflight and mutation retain passes, each state sort using the sort formula
 above, initialized/typed-state lookup, final liveness, and every obligation's
-allocation lookup. Canonical action encoding charges emitted bytes. Every
+allocation lookup. Standalone action identity first checks its action ordinal
+and projection count, then computes the exact encoded size without allocation.
+It rejects the canonical-byte ceiling before hashing and streams each action
+field directly into the metered digest. No canonical action buffer is created,
+and work is charged before each digest update. Every
 identity charges each hashed input byte plus 64 units per SHA-256 compression
 block, including padding. Report sizing is a checked fixed-width formula plus
 one visit per transition; the report digest binds both the cumulative validation
@@ -153,8 +158,13 @@ input-sized codec and execution growth described above reports
 
 Domain-separated SHA-256 identities bind codec semantics, the exact target,
 type table, ordered actions including allocation generations, and every policy
-field. Each obligation has its own identity over every obligation field, its
-canonical ordinal, and its program/action enclosure. Obligation verification
+field. Records and obligations privately retain the complete admitted budget
+policy, and their identities commit that policy. Standalone verification
+requires exact equality with the retained policy; caller-supplied narrower,
+wider, or replayed budgets cannot freshen evidence. Action ordinals and
+obligation counts are rechecked against that exact policy before successful
+verification. Each obligation has its own identity over every obligation field,
+its canonical ordinal, and its program/action enclosure. Obligation verification
 first verifies the complete unchanged transition and then requires exact value
 membership at that ordinal. Each transition has a distinct identity over every
 transition field, ordered obligation identity, and repeated obligation field.
