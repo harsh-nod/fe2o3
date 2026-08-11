@@ -179,7 +179,7 @@ manifest_digest="$(sha256sum "${manifest}" | awk '{ print $1 }')"
 
 find "${archive}" -type f -exec chattr +i {} +
 find "${archive}" -depth -type d -exec chattr +i {} +
-"${TOOL}" ingest-archive \
+if "${TOOL}" ingest-archive \
   --repo "${repo}" \
   --source-root "${archive}" \
   --destination-root "${destination}" \
@@ -191,12 +191,14 @@ find "${archive}" -depth -type d -exec chattr +i {} +
   --expected-source "${source_commit}" \
   --expected-tree "${source_tree}" \
   --expected-target gfx942 \
-  --expected-lane mi300x-gfx942-privileged
-"${TOOL}" validate-archive \
-  --repo "${repo}" \
-  --archive-root "${destination}" \
-  --trusted-root "${trust}" \
-  --trust-policy "${trust}/docs/parity-evidence/trust-policy-v2.tsv" \
-  --manifest promotion.tsv
+  --expected-lane mi300x-gfx942-privileged \
+  >"${control}/ingest.out" 2>"${control}/ingest.err"; then
+  printf 'same-UID production ingestion unexpectedly passed\n' >&2
+  exit 1
+fi
+grep -F 'requires an externally protected publisher contract' \
+  "${control}/ingest.err" >/dev/null
+[[ ! -e "${destination}" ]]
 
-printf 'privileged production immutable ingestion passed on %s\n' "${filesystem}"
+printf 'privileged immutable source preflight passed on %s; external publisher remains required\n' \
+  "${filesystem}"
