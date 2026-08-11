@@ -425,12 +425,182 @@ operator bootstrap therefore requires a third public key dedicated to the
 `publisher` role. No production publisher private key, receipt, or expected
 challenge is present in this repository.
 
-Hosted workflows intentionally fail closed unless the protected publisher
-service populates `${RUNNER_TEMP}/fe2o3-protected-publisher-receipt` and
-`${RUNNER_TEMP}/fe2o3-protected-publisher-challenge` before the gate runs. The
-current repository does not install or authenticate such a service. Its
-publisher identity, key custody, unique-challenge state, and runner integration
-remain external activation prerequisites.
+### Hosted acquisition protocol
+
+Only the `gate` job in the same-commit reusable workflow
+`./.github/workflows/parity-publisher-gate.yml` runs
+`scripts/parity-publisher-client.py` from the separately checked-out exact
+protected base commit and receives `id-token: write`. GitHub's
+[reuse-workflow syntax](https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows#calling-a-reusable-workflow)
+documents that this local form resolves the called workflow from the same
+commit as the caller. The generic workflow and the
+`pull_request_target`/`pull_request_review` classifier have no OIDC permission
+and never invoke the publisher service. The local caller and called workflow
+YAML are candidate-selected until the external service verifies their blobs.
+They are not authority by themselves: before issuance, the service must fetch
+the candidate and current default tip independently and prove that every
+protected executable/trust path is byte-identical. The client requests a GitHub
+Actions OIDC token for one exact configured audience,
+then sends a canonical request to one exact allowlisted HTTPS service origin.
+It does not follow redirects, use proxies or ambient credentials, accept a URL
+with user information, or permit a response larger than its fixed bound. One
+monotonic ten-second deadline covers OIDC connect, TLS, headers and body plus
+the publisher-service connect, TLS, headers and body. Every operation receives
+only the remaining monotonic budget, and a process timer alarm interrupts a
+slow-drip body even if socket-level timeouts keep resetting. See GitHub's
+[OIDC reference](https://docs.github.com/en/actions/reference/security/oidc)
+for the runner token variables and permission model.
+
+Repository administrators must configure all three Actions variables; an empty
+or malformed value fails closed:
+
+    FE2O3_PUBLISHER_SERVICE_URL=https://publisher.example/v1/receipts
+    FE2O3_PUBLISHER_SERVICE_HOST=publisher.example
+    FE2O3_PUBLISHER_OIDC_AUDIENCE=https://publisher.example/github-actions
+
+Production has one authorization-matrix row. No wildcard or second event/job
+row is valid:
+
+| Field | Exact production requirement |
+| --- | --- |
+| JOSE members | Exactly `alg,kid,typ` or `alg,kid,typ,x5t`; any other, missing, duplicate, or type-confused member fails closed |
+| `alg`, `typ`, `kid` | `RS256`, `JWT`, and a bounded printable key ID that selects a currently trusted key from GitHub's issuer JWKS |
+| Optional `x5t` | Canonical unpadded base64url for exactly one 20-byte SHA-1 certificate thumbprint; the exact value is copied into `oidc_authorization` |
+| `iss`, `aud` | `https://token.actions.githubusercontent.com`; exact configured audience above |
+| `repository` | `powderluv/fe2o3` |
+| `repository_id`, `repository_owner_id` | `1233498266`, `74956`; both must also equal independently provisioned service policy, the verified token, and the GitHub run record |
+| `workflow_ref`, `workflow_sha` | `powderluv/fe2o3/.github/workflows/parity-promotion.yml@MERGE_GROUP_REF`; exact merge-group candidate SHA |
+| `job_workflow_ref`, `job_workflow_sha` | `powderluv/fe2o3/.github/workflows/parity-publisher-gate.yml@MERGE_GROUP_REF`; the same exact merge-group candidate SHA |
+| `job`, `event_name` | `gate`; `merge_group` |
+| `ref` | Exact `refs/heads/gh-readonly-queue/main/...` merge-group ref |
+| `base_ref`, `head_ref` | Present as exact empty strings; these claims are reserved for pull-request workflows |
+| `sub` | Exact default GitHub subject `repo:powderluv/fe2o3:ref:MERGE_GROUP_REF`, with `:` in values percent-encoded |
+| `runner_environment` | `github-hosted` |
+| `iat`, `nbf`, `exp` | JSON integers, never booleans; `nbf <= iat < exp`, at most ten minutes lifetime, current within five-minute clock skew |
+| `jti` | Nonempty exact token identifier, accepted once by durable service state |
+
+This matrix combines GitHub's documented same-commit local-call behavior with
+the documented meanings of `workflow_ref`, `workflow_sha`,
+`job_workflow_ref`, and `job_workflow_sha`. Before enabling issuance, an
+operator must run a non-authoritative merge-group enrollment against the
+disabled service and confirm these exact values without logging the token. Any
+GitHub behavior that emits a different ref or SHA remains fail closed and
+requires a reviewed matrix update.
+
+The request carries this resolved row as canonical
+`oidc_authorization` schema version 1. It also includes exact `sha`, run ID,
+run number, run attempt, actor ID, repository owner, `check_run_id`, workflow
+name, JOSE key ID, and the fixed policy ID
+`fe2o3-protected-local-merge-group-v2`. The client decodes these fields only to bind
+the request; when the JOSE header includes `x5t`, the request also contains its
+exact value. Client decoding does not authenticate the JWT. The two accepted
+header shapes correspond to GitHub's current JOSE parameter reference and its
+documented token example; expanding either set requires a reviewed client and
+service policy change.
+
+The canonical request contains the candidate and current default-tip commits,
+baseline and candidate status digests, archive and manifest identities, source
+commit/tree, target, lane, logical destination, and fresh GitHub workflow
+identity and the complete resolved OIDC authorization row. The service response is one
+canonical JSON object containing schema version 1, the exact request SHA-256,
+a fresh 256-bit challenge, and a base64-encoded canonical
+`publisher-receipt-v2.tsv`. The client validates all fields, freshness, the
+production publisher signature, and exact request binding before creating the
+receipt and challenge as new mode-0600 files directly under `RUNNER_TEMP`.
+Tokens, response bodies, receipts, and challenges are never logged. Before an
+Authorization header is constructed, both the runner request token and returned
+JWT must be nonempty bounded ASCII bearer values with no whitespace or control
+characters.
+
+The external service must validate the JWT signature using only the HTTPS
+issuer's current JWKS and `RS256`, select the verified key by `kid`, and, when
+`x5t` is present, require it to equal that key's certificate thumbprint before
+comparing the same exact value with `oidc_authorization`. It then compares every
+verified claim above byte-for-byte and type-for-type with
+`oidc_authorization`. Request values alone are never authority. Independently
+provisioned service policy supplies the
+repository and owner IDs, issuer, audience, workflow paths, default branch,
+runner type, event, and job. The service queries GitHub using `check_run_id` and
+run ID/attempt to confirm that `job=gate`, the event/ref/candidate are current,
+both workflow SHAs equal the candidate head, both workflow refs use the exact
+merge-group ref, and the transition is still pending in that one-entry merge
+group. Before signing, it independently fetches both candidate and current
+default-tip trees from GitHub and requires byte-identical blobs for every trust
+path enumerated by the reusable workflow, including both workflow files, the
+publisher client, evidence verifier, protected-change policy, repository-rule
+tools, trust policy, trusted keys, CODEOWNERS, and reviewer policy. The service
+also requires that the candidate changes parity status without mixing a trust
+change. Request-supplied digests or assertions cannot satisfy these checks. A
+subject customization, omitted claim, boolean in place of an integer, extra
+allowed event, changed workflow ref/SHA, or protected-blob difference fails
+closed until the matrix and implementation are deliberately updated.
+The checked-in matrix accepts GitHub's legacy default repository subject form.
+An operator must confirm that this repository has not opted into the newer
+immutable-ID subject form. Opt-in, rename, transfer, or any emitted immutable
+subject fails closed until both client and service receive a reviewed matrix
+update; the service must not accept both forms through a wildcard.
+The service must durably reserve every request digest, `jti`, and challenge with
+create-once semantics before signing, atomically mark the pair consumed, and
+reject retries, replays, stale runs, superseded default tips, and reuse across
+candidate, target, or lane. Concurrent requests require a transactional unique
+constraint or equivalent one-time state; process-local memory is insufficient.
+The production publisher private key must remain in the protected service's
+KMS/HSM or distinct publisher account. Repository and runner storage contain
+only its production public key.
+
+The repository includes neither that service nor production service
+configuration, private keys, one-time state, or installed repository rules.
+Production therefore remains fail closed until an administrator provisions
+them and verifies the active no-bypass ruleset. The client test transport is
+available only behind both `--test-domain` and an explicit test-domain
+environment guard, accepts only test-domain trust, and cannot emit a
+production-acceptable receipt.
+
+The local reusable workflow removes the `@main` bootstrap gap: GitHub resolves
+caller and called workflow from the same candidate commit. Activation has this
+exact order, with production issuance, Actions variables, production keys, and
+repository rules absent throughout the first three steps:
+
+1. Replay the signed-evidence prerequisites. They may require externally
+   supplied receipt files, but must contain no OIDC token grant or service
+   acquisition path.
+2. Land commit A as a fail-closed history checkpoint. It adds only the reusable
+   workflow in an inert form: no
+   checkout, client invocation, service configuration, or `id-token`
+   permission, and its only job exits nonzero.
+3. Land commit B as one atomic change. It installs the hardened client and
+   active reusable workflow, adds the restricted candidate-local `merge_group`
+   caller, and
+   removes `id-token` permission and service invocation from generic CI and all
+   `pull_request_target`, `pull_request`, and review jobs. Commit B contains no
+   parity status change or production credential.
+4. After B is on protected `main`, provision the external service with issuance
+   disabled, its independently held publisher key, durable replay state, exact
+   OIDC matrix, GitHub run verification, and protected-blob equality checks.
+   Install only the production public key through the separate trust-update
+   review path.
+5. Configure the three Actions variables, exercise a non-authoritative service
+   health check, install and independently verify the no-bypass single-entry
+   merge-queue rules, then enable production issuance. Any failed check leaves
+   issuance disabled and parity promotion fail closed.
+
+Commit A contains no candidate-controlled OIDC permission. Commit B introduces
+the only two grants atomically: the local `merge_group` call and the called
+`gate` job. There is no intermediate commit with a usable token path and no
+direct-main bootstrap exception. Although candidate-local YAML can request a
+token after B, the token authorizes nothing until the external service verifies
+the exact claims, current GitHub run, pending transition, and protected-blob
+equality described above. Once production is active, any deviation fails
+closed and must not be bypassed by direct push.
+
+Direct pushes to the default branch conflict with this protocol. A CI failure
+after a direct push cannot remove or undo the commit. Active repository rules
+must prohibit direct default-branch writes and bypass actors, require the
+protected merge-group caller, the generic parity policy gate, and the
+unprivileged generic validation check, and require the single-entry merge
+queue. The service must also refuse receipt issuance for a
+default-branch `push` event. The repository-side push check is detection and
+fail-closed signaling, not merge prevention.
 
 `--allow-test-fixtures` requires a test-domain trust policy. A test-domain
 publisher receipt can exercise schema/signature rejection paths, but its
@@ -443,6 +613,9 @@ The privileged ext4/XFS harness creates ephemeral production keys and evidence
 at runtime and does not use or install repository test keys. It is currently a
 prerequisite/inert test: after immutable-source validation it must stop at the
 missing external publisher contract rather than publish production evidence.
+It remains a production-activation prerequisite, not a current integration
+blocker while the external service, production keys, Actions variables, and
+repository rules are deliberately absent.
 Once that contract has an independently verifiable implementation, these are
 the intended operator invocations:
 

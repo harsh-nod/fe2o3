@@ -638,9 +638,17 @@ def test_oidc_authorization_matrix() -> None:
         assert authorization["job"] == "gate"
         assert authorization["alg"] == "RS256"
         assert "x5t" not in authorization
-        assert authorization["job_workflow_ref"].endswith(f"@{fixture.queue_ref}")
+        assert authorization["ref"] == fixture.queue_ref
+        assert authorization["sha"] == fixture.candidate_head
+        assert authorization["job_workflow_ref"] == (
+            "powderluv/fe2o3/.github/workflows/"
+            f"parity-publisher-gate.yml@{fixture.queue_ref}"
+        )
         assert authorization["job_workflow_sha"] == fixture.candidate_head
-        assert authorization["workflow_ref"].endswith(f"@{fixture.queue_ref}")
+        assert authorization["workflow_ref"] == (
+            "powderluv/fe2o3/.github/workflows/"
+            f"parity-promotion.yml@{fixture.queue_ref}"
+        )
         assert authorization["workflow_sha"] == fixture.candidate_head
 
         x5t_args = fixture.args("documented-x5t-header")
