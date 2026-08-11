@@ -332,25 +332,26 @@ fn validate_load_segments(
             }
             let left_file_pages = loader_file_pages(*left)?;
             let right_file_pages = loader_file_pages(*right)?;
-            if ranges_overlap(
+            let shares_rounded_file_page = ranges_overlap(
                 left_file_pages.0,
                 left_file_pages.1,
                 right_file_pages.0,
                 right_file_pages.1,
-            ) {
-                if ranges_overlap(
+            );
+            if shares_rounded_file_page
+                && ranges_overlap(
                     left.offset,
                     left.file_end()?,
                     right.offset,
                     right.file_end()?,
-                ) {
-                    return Err(SealedStaticApplicationErrorV1::SegmentLayout);
-                }
-                // The sealed-static profile enforces W^X over declared segment bytes and rounded
-                // virtual mappings. Normal static Rust binaries may privately map one raw-disjoint
-                // boundary file page through RX and RW PT_LOAD segments, so this is deliberately
-                // not an alias-level W^X guarantee over rounded file offsets.
+                )
+            {
+                return Err(SealedStaticApplicationErrorV1::SegmentLayout);
             }
+            // The sealed-static profile enforces W^X over declared segment bytes and rounded
+            // virtual mappings. Normal static Rust binaries may privately map one raw-disjoint
+            // boundary file page through RX and RW PT_LOAD segments, so this is deliberately not
+            // an alias-level W^X guarantee over rounded file offsets.
         }
     }
     let headers_covered = loads.iter().any(|load| {

@@ -289,6 +289,14 @@ mod platform {
         identity: fe2o3_worker_v2_bundle::WorkerV2ApplicationIdentityV1,
     }
 
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum StaticSnapshotBarrier {
+        SourceValidated,
+        SourceCopied,
+        SnapshotSealed,
+        SnapshotBound,
+    }
+
     impl PinnedExecutable {
         pub(crate) fn open(path: &Path) -> Result<Self, PinExecutableError> {
             let display_path = path.to_path_buf();
@@ -484,6 +492,13 @@ mod platform {
         pub(crate) fn seal_static_application(
             &self,
         ) -> Result<SealedStaticApplication, PinExecutableError> {
+            self.seal_static_application_with_barrier(|_| {})
+        }
+
+        fn seal_static_application_with_barrier(
+            &self,
+            mut barrier: impl FnMut(StaticSnapshotBarrier),
+        ) -> Result<SealedStaticApplication, PinExecutableError> {
             let initial = self
                 .file
                 .metadata()
@@ -499,6 +514,7 @@ mod platform {
                     path: self.display_path.clone(),
                 });
             }
+            barrier(StaticSnapshotBarrier::SourceValidated);
 
             let image_fd = rustix::fs::memfd_create(
                 "fe2o3-static-application",
@@ -528,6 +544,7 @@ mod platform {
                 &self.display_path,
                 self.snapshot.size,
             )?;
+            barrier(StaticSnapshotBarrier::SourceCopied);
             if captured != self.sha256 {
                 return Err(PinExecutableError::SnapshotDigestMismatch {
                     path: self.display_path.clone(),
@@ -566,6 +583,7 @@ mod platform {
                 source: source.into(),
             })?;
             require_exact_seals(&image, seals, &self.display_path)?;
+            barrier(StaticSnapshotBarrier::SnapshotSealed);
 
             image
                 .seek(SeekFrom::Start(0))
@@ -618,6 +636,7 @@ mod platform {
             require_exact_seals(&file, seals, &self.display_path)?;
             let execution_path = PathBuf::from(format!("/proc/self/fd/{}", file.as_raw_fd()));
             validate_execution_path(&file, &execution_path, snapshot, &self.display_path)?;
+            barrier(StaticSnapshotBarrier::SnapshotBound);
             drop(image);
 
             Ok(SealedStaticApplication {
@@ -1068,6 +1087,37 @@ mod platform {
             assert_eq!(sealed.bytes(), original);
             assert_eq!(sealed.identity(), identity);
             assert_eq!(command.as_command().get_program(), sealed.execution_path);
+        }
+
+        #[test]
+        fn same_inode_mutation_is_fail_closed_at_every_snapshot_barrier() {
+            for target in [
+                StaticSnapshotBarrier::SourceValidated,
+                StaticSnapshotBarrier::SourceCopied,
+                StaticSnapshotBarrier::SnapshotSealed,
+                StaticSnapshotBarrier::SnapshotBound,
+            ] {
+                let root = TestDirectory::new();
+                let path = root.path().join("static-app");
+                let original = sealed_static_elf();
+                write_executable(&path, &original);
+                let pinned = PinnedExecutable::open(&path).unwrap();
+                let mut mutated = original.clone();
+                *mutated.last_mut().unwrap() ^= 0xff;
+                let result = pinned.seal_static_application_with_barrier(|barrier| {
+                    if barrier == target {
+                        fs::write(&path, &mutated).unwrap();
+                    }
+                });
+
+                if target == StaticSnapshotBarrier::SourceValidated {
+                    assert!(result.is_err(), "source mutation escaped at {target:?}");
+                } else {
+                    let sealed = result.unwrap();
+                    assert_eq!(sealed.bytes(), original, "snapshot changed at {target:?}");
+                    sealed.command().unwrap();
+                }
+            }
         }
 
         #[test]
