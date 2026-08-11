@@ -2142,6 +2142,27 @@ fn integer_switches_lower_deterministically() {
 }
 
 #[test]
+fn irreducible_control_flow_is_rejected_deterministically() {
+    let mut module = fill_module();
+    let blocks = &mut module.functions[0].body.as_mut().unwrap().blocks;
+    blocks[1].terminator = Some(Terminator::Branch {
+        target: BlockId(2),
+        arguments: vec![],
+    });
+    blocks[2].terminator = Some(Terminator::Branch {
+        target: BlockId(1),
+        arguments: vec![],
+    });
+
+    let first = lower_kernel_to_llvm_ir(&module, &KernelId::new("fill")).unwrap_err();
+    let second = lower_kernel_to_llvm_ir(&module, &KernelId::new("fill")).unwrap_err();
+    assert_eq!(first, second);
+    assert!(first.contains(LoweringDiagnosticCode::IrreducibleControlFlow));
+    assert_eq!(first.diagnostics()[0].location.block, Some(BlockId(1)));
+    assert!(first.to_string().contains("bb1, bb2"));
+}
+
+#[test]
 fn unrepresentable_phi_cfgs_fail_closed_with_located_errors() {
     let mut entry_parameter = fill_module();
     entry_parameter.functions[0].body.as_mut().unwrap().blocks[0]

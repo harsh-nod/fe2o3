@@ -127,6 +127,7 @@ pub enum LoweringDiagnosticCode {
     UnsupportedCast,
     UnsupportedConstant,
     UnsupportedTerminator,
+    IrreducibleControlFlow,
 }
 
 /// A deterministic source location in the kernel IR.
@@ -1248,6 +1249,7 @@ fn component_names(helpers: &[&Function], component: &[usize]) -> String {
 }
 
 fn preflight_function(lowerer: &mut FunctionLowerer<'_>) -> Result<(), LoweringErrors> {
+    validate_reducible_cfg(lowerer)?;
     validate_convergent_cfg(lowerer)?;
     lowerer.validate_parameters()?;
     let body = lowerer.function.body.as_ref().expect("definition required");
@@ -1256,6 +1258,131 @@ fn preflight_function(lowerer: &mut FunctionLowerer<'_>) -> Result<(), LoweringE
     }
     lowerer.validate_block_arguments()?;
     lowerer.validate_lds_addressability()
+}
+
+fn validate_reducible_cfg(lowerer: &FunctionLowerer<'_>) -> Result<(), LoweringErrors> {
+    let body = lowerer.function.body.as_ref().expect("definition required");
+    let blocks = body
+        .blocks
+        .iter()
+        .map(|block| (block.id, block))
+        .collect::<BTreeMap<_, _>>();
+    let all = blocks.keys().copied().collect::<BTreeSet<_>>();
+    let entry = body.blocks.first().expect("verified non-empty body").id;
+    let mut predecessors = all
+        .iter()
+        .map(|block| (*block, BTreeSet::new()))
+        .collect::<BTreeMap<_, _>>();
+    for block in &body.blocks {
+        for successor in block
+            .terminator
+            .as_ref()
+            .expect("verified terminator")
+            .successors()
+        {
+            predecessors
+                .get_mut(&successor)
+                .expect("verified successor")
+                .insert(block.id);
+        }
+    }
+
+    let mut dominators = all
+        .iter()
+        .map(|block| {
+            let set = if *block == entry {
+                BTreeSet::from([entry])
+            } else {
+                all.clone()
+            };
+            (*block, set)
+        })
+        .collect::<BTreeMap<_, _>>();
+    loop {
+        let mut changed = false;
+        for block in all.iter().copied().filter(|block| *block != entry) {
+            let mut incoming = predecessors[&block].iter();
+            let mut next = incoming
+                .next()
+                .map(|predecessor| dominators[predecessor].clone())
+                .unwrap_or_default();
+            for predecessor in incoming {
+                next.retain(|candidate| dominators[predecessor].contains(candidate));
+            }
+            next.insert(block);
+            changed |= dominators[&block] != next;
+            dominators.insert(block, next);
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    let mut forward = all
+        .iter()
+        .map(|block| (*block, BTreeSet::new()))
+        .collect::<BTreeMap<_, _>>();
+    let mut indegrees = all
+        .iter()
+        .map(|block| (*block, 0_usize))
+        .collect::<BTreeMap<_, _>>();
+    for block in &body.blocks {
+        for successor in block
+            .terminator
+            .as_ref()
+            .expect("verified terminator")
+            .successors()
+            .into_iter()
+            .collect::<BTreeSet<_>>()
+        {
+            if dominators[&block.id].contains(&successor) {
+                continue;
+            }
+            if forward
+                .get_mut(&block.id)
+                .expect("known block")
+                .insert(successor)
+            {
+                *indegrees.get_mut(&successor).expect("known successor") += 1;
+            }
+        }
+    }
+
+    let mut ready = indegrees
+        .iter()
+        .filter_map(|(block, count)| (*count == 0).then_some(*block))
+        .collect::<BTreeSet<_>>();
+    let mut visited = BTreeSet::new();
+    while let Some(block) = ready.pop_first() {
+        visited.insert(block);
+        for successor in &forward[&block] {
+            let count = indegrees.get_mut(successor).expect("known successor");
+            *count -= 1;
+            if *count == 0 {
+                ready.insert(*successor);
+            }
+        }
+    }
+    if visited.len() == all.len() {
+        return Ok(());
+    }
+
+    let cyclic = all
+        .difference(&visited)
+        .map(|block| block_label(*block))
+        .collect::<Vec<_>>();
+    let first = *all
+        .difference(&visited)
+        .next()
+        .expect("a short traversal leaves a block");
+    Err(LoweringErrors::one(
+        lowerer.block_location(first),
+        LoweringDiagnosticCode::IrreducibleControlFlow,
+        format!(
+            "control flow remains cyclic after removing dominance backedges: {}",
+            cyclic.join(", ")
+        ),
+    ))
 }
 
 fn validate_convergent_cfg(lowerer: &FunctionLowerer<'_>) -> Result<(), LoweringErrors> {
