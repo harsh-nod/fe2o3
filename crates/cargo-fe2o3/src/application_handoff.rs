@@ -444,47 +444,104 @@ impl PendingApplicationAck {
             .take()
             .expect("pending acknowledgment owns its sandbox")
             .complete(child.id())?;
-        let deadline = Instant::now() + ACK_TIMEOUT;
-        let mut bytes = Vec::with_capacity(WORKER_V2_APPLICATION_HANDOFF_ACK_BYTES_V1 + 1);
-        loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err("application handoff acknowledgment timed out".to_string());
-            }
-            poll_readable(self.read.as_raw_fd(), remaining)?;
-            let mut chunk = [0_u8; 256];
-            match self.read.read(&mut chunk) {
-                Ok(0) => break,
-                Ok(read) => {
-                    bytes.extend_from_slice(&chunk[..read]);
-                    if bytes.len() > WORKER_V2_APPLICATION_HANDOFF_ACK_BYTES_V1 {
-                        return Err(
-                            "application handoff acknowledgment has extra bytes".to_string()
-                        );
-                    }
-                }
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-                Err(error) => {
-                    return Err(format!(
-                        "failed to read application handoff acknowledgment: {error}"
-                    ));
-                }
-            }
-            if child
-                .try_wait()
-                .map_err(|error| format!("failed to inspect application during handoff: {error}"))?
-                .is_some()
-                && bytes.is_empty()
-            {
-                continue;
-            }
-        }
+        let bytes = read_application_handoff_ack(&mut self.read, child, ACK_TIMEOUT)?;
         let ack = WorkerV2ApplicationHandoffAckV1::decode_canonical(&bytes)
             .map_err(|error| format!("invalid application handoff acknowledgment: {error}"))?;
         ack.validate(self.expectation, self.challenge)
             .map_err(|error| format!("rejected application handoff acknowledgment: {error}"))?;
         Ok(sandbox)
+    }
+}
+
+fn read_application_handoff_ack(
+    read: &mut File,
+    child: &Child,
+    timeout: Duration,
+) -> Result<Vec<u8>, String> {
+    let deadline = Instant::now() + timeout;
+    let mut bytes = Vec::with_capacity(WORKER_V2_APPLICATION_HANDOFF_ACK_BYTES_V1 + 1);
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err("application handoff acknowledgment timed out".to_string());
+        }
+        poll_readable(read.as_raw_fd(), remaining)?;
+        let mut chunk = [0_u8; 256];
+        match read.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(count) => {
+                bytes.extend_from_slice(&chunk[..count]);
+                if bytes.len() > WORKER_V2_APPLICATION_HANDOFF_ACK_BYTES_V1 {
+                    return Err("application handoff acknowledgment has extra bytes".to_string());
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => {
+                return Err(format!(
+                    "failed to read application handoff acknowledgment: {error}"
+                ));
+            }
+        }
+        let _ = observe_leader_exit_without_reaping(child.id() as libc::pid_t)?;
+    }
+    Ok(bytes)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LeaderExitObservation {
+    Running,
+    Exited,
+}
+
+fn observe_leader_exit_without_reaping(
+    leader: libc::pid_t,
+) -> Result<LeaderExitObservation, String> {
+    observe_leader_exit_without_reaping_with(leader, |information| {
+        // SAFETY: `information` is writable, P_PID selects the owned child, WNOHANG bounds the
+        // observation, and WNOWAIT retains an exited leader until containment has signaled its
+        // dedicated process group.
+        let result = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                leader as libc::id_t,
+                information.as_mut_ptr(),
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    })
+}
+
+fn observe_leader_exit_without_reaping_with(
+    leader: libc::pid_t,
+    mut wait: impl FnMut(&mut MaybeUninit<libc::siginfo_t>) -> io::Result<()>,
+) -> Result<LeaderExitObservation, String> {
+    loop {
+        let mut information = MaybeUninit::<libc::siginfo_t>::zeroed();
+        match wait(&mut information) {
+            Ok(()) => {
+                // SAFETY: a successful waitid-style operation initialized the siginfo record.
+                let observed = unsafe { information.assume_init().si_pid() };
+                return match observed {
+                    0 => Ok(LeaderExitObservation::Running),
+                    observed if observed == leader => Ok(LeaderExitObservation::Exited),
+                    observed => Err(format!(
+                        "application handoff observed unexpected child {observed} instead of {leader}"
+                    )),
+                };
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => {
+                return Err(format!(
+                    "failed to inspect application during handoff without reaping it: {error}"
+                ));
+            }
+        }
     }
 }
 
