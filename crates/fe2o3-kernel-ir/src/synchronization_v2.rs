@@ -478,9 +478,18 @@ pub struct Event {
 }
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum SynchronizationEdgeKind {
+    /// Same-participant control-flow ordering. This is an obligation, not a proof.
+    ProgramOrder,
+    /// A release/acquire pairing intended to synchronize participants.
+    SynchronizesWith,
+}
+
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct SynchronizationEdge {
     pub before: EventId,
     pub after: EventId,
+    pub kind: SynchronizationEdgeKind,
     pub scope: MemoryScope,
     pub domains: MemoryDomains,
 }
@@ -577,6 +586,7 @@ pub enum VerifierObligation {
         edge: u32,
         before: EventId,
         after: EventId,
+        kind: SynchronizationEdgeKind,
         scope: MemoryScope,
         domains: MemoryDomains,
     },
@@ -730,6 +740,7 @@ impl SynchronizationModuleV2 {
                 edge: edge_index,
                 before: edge.before,
                 after: edge.after,
+                kind: edge.kind.clone(),
                 scope: edge.scope,
                 domains: edge.domains,
             });
@@ -1225,25 +1236,46 @@ fn validate_edge(
     if edge.before >= edge.after {
         return Err(ValidationError::BackwardOrSelfEdge(edge_index));
     }
-    if !event_has_release(before) || !event_has_acquire(after) {
-        return Err(ValidationError::InvalidEdgeEndpointKind(edge_index));
-    }
-    let before_scope =
-        event_scope(before).ok_or(ValidationError::InvalidEdgeEndpointKind(edge_index))?;
-    let after_scope =
-        event_scope(after).ok_or(ValidationError::InvalidEdgeEndpointKind(edge_index))?;
-    if edge.scope.rank() > before_scope.rank() || edge.scope.rank() > after_scope.rank() {
-        return Err(ValidationError::IncompatibleEdgeScope(edge_index));
-    }
-    let before_domains =
-        event_domains(before).ok_or(ValidationError::InvalidEdgeEndpointKind(edge_index))?;
-    let after_domains =
-        event_domains(after).ok_or(ValidationError::InvalidEdgeEndpointKind(edge_index))?;
-    if !edge.domains.intersects(before_domains)
-        || !edge.domains.intersects(after_domains)
-        || edge.domains.bits() & !(before_domains.bits() & after_domains.bits()) != 0
-    {
-        return Err(ValidationError::IncompatibleEdgeDomains(edge_index));
+    match edge.kind {
+        SynchronizationEdgeKind::ProgramOrder => {
+            if before.participation.group != after.participation.group
+                || edge.scope.rank()
+                    < required_pair_scope(before.participation.group, after.participation.group)
+                        .rank()
+            {
+                return Err(ValidationError::IncompatibleEdgeScope(edge_index));
+            }
+            for endpoint_domains in [event_domains(before), event_domains(after)]
+                .into_iter()
+                .flatten()
+            {
+                if edge.domains.bits() & !endpoint_domains.bits() != 0 {
+                    return Err(ValidationError::IncompatibleEdgeDomains(edge_index));
+                }
+            }
+        }
+        SynchronizationEdgeKind::SynchronizesWith => {
+            if !event_has_release(before) || !event_has_acquire(after) {
+                return Err(ValidationError::InvalidEdgeEndpointKind(edge_index));
+            }
+            let before_scope =
+                event_scope(before).ok_or(ValidationError::InvalidEdgeEndpointKind(edge_index))?;
+            let after_scope =
+                event_scope(after).ok_or(ValidationError::InvalidEdgeEndpointKind(edge_index))?;
+            if edge.scope.rank() > before_scope.rank() || edge.scope.rank() > after_scope.rank() {
+                return Err(ValidationError::IncompatibleEdgeScope(edge_index));
+            }
+            let before_domains = event_domains(before)
+                .ok_or(ValidationError::InvalidEdgeEndpointKind(edge_index))?;
+            let after_domains =
+                event_domains(after).ok_or(ValidationError::InvalidEdgeEndpointKind(edge_index))?;
+            if !edge.domains.intersects(before_domains)
+                || !edge.domains.intersects(after_domains)
+                || edge.domains.bits() & !(before_domains.bits() & after_domains.bits()) != 0
+            {
+                return Err(ValidationError::IncompatibleEdgeDomains(edge_index));
+            }
+        }
     }
     Ok(())
 }
@@ -1441,9 +1473,13 @@ pub fn encode_synchronization_v2(
     for edge in &module.edges {
         writer.u32(edge.before.0)?;
         writer.u32(edge.after.0)?;
+        writer.u8(match edge.kind {
+            SynchronizationEdgeKind::ProgramOrder => 1,
+            SynchronizationEdgeKind::SynchronizesWith => 2,
+        })?;
         writer.u8(edge.scope as u8)?;
         writer.u8(edge.domains.bits())?;
-        writer.u16(0)?;
+        writer.u8(0)?;
         writer.u64(0)?;
     }
     let payload_len = writer
@@ -1545,14 +1581,20 @@ pub fn decode_synchronization_v2(
     for _ in 0..edge_count {
         let before = EventId(reader.u32()?);
         let after = EventId(reader.u32()?);
+        let kind = match reader.u8()? {
+            1 => SynchronizationEdgeKind::ProgramOrder,
+            2 => SynchronizationEdgeKind::SynchronizesWith,
+            _ => return Err(DecodeError::UnknownTag),
+        };
         let scope = decode_scope(reader.u8()?)?;
         let domains = MemoryDomains::from_bits(reader.u8()?).ok_or(DecodeError::UnknownTag)?;
-        if reader.u16()? != 0 || reader.u64()? != 0 {
+        if reader.u8()? != 0 || reader.u64()? != 0 {
             return Err(DecodeError::NonZeroReserved);
         }
         edges.push(SynchronizationEdge {
             before,
             after,
+            kind,
             scope,
             domains,
         });
