@@ -5,12 +5,13 @@ use std::fmt;
 use crate::{
     AccessMode, AddressSpace, AmdGpuDiagnosticOperation, AssemblyConstraint, AssemblyEffect,
     AssemblyOperandKind, AssemblyOption, Atomic, AtomicKind, Barrier, BasicBlock, BinaryOp,
-    BlockId, ComparePredicate, Fence, FloatOperation, Function, FunctionId, FunctionRole,
-    InlineAssembly, Kernel, KernelId, LaunchExtent, MatrixOperation, MatrixOperationKind,
-    MatrixVerificationIssueKind, MemoryOrdering, Module, ModuleId, Operation, OperationKind,
-    ScalarType, SemanticOperationIssueKind, SemanticOperationVerificationContext,
-    SynchronizationScope, TargetCapability, Terminator, Type, UnaryOp, ValueId, WaveOperation,
-    WaveOperationKind, WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent, pointer_for,
+    BlockId, ComparePredicate, ControlFlowError, Fence, FloatOperation, Function, FunctionId,
+    FunctionRole, IndexedControlFlow, InlineAssembly, Kernel, KernelId, LaunchExtent,
+    MatrixOperation, MatrixOperationKind, MatrixVerificationIssueKind, MemoryOrdering, Module,
+    ModuleId, Operation, OperationKind, ScalarType, SemanticOperationIssueKind,
+    SemanticOperationVerificationContext, SynchronizationScope, TargetCapability, Terminator, Type,
+    UnaryOp, ValueId, WaveOperation, WaveOperationKind, WorkgroupBarrier, WorkgroupMemory,
+    WorkgroupMemoryExtent, analyze_control_flow, pointer_for,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -50,6 +51,7 @@ pub enum DiagnosticCode {
     InvalidAtomic,
     InvalidFence,
     InvalidConvergence,
+    ResourceLimit,
     InvalidWorkgroupMemory,
     InvalidWaveOperation,
     InvalidFloatOperation,
@@ -394,12 +396,24 @@ impl<'module> ModuleVerifier<'module> {
             return;
         }
 
+        let control_flow = match analyze_control_flow(function) {
+            Ok(control_flow) => Some(control_flow),
+            Err(
+                error @ (ControlFlowError::ResourceLimit { .. }
+                | ControlFlowError::ArithmeticOverflow(_)),
+            ) => {
+                self.emit(location, DiagnosticCode::ResourceLimit, error.to_string());
+                return;
+            }
+            Err(_) => None,
+        };
         let mut function_verifier = FunctionVerifier::new(
             self.module,
             function,
             &self.functions,
             self.supported_capabilities.as_ref(),
             &mut self.diagnostics,
+            control_flow,
         );
         function_verifier.verify();
     }
@@ -635,7 +649,7 @@ struct FunctionVerifier<'a, 'module> {
     diagnostics: &'a mut Vec<Diagnostic>,
     definitions: BTreeMap<ValueId, DefInfo>,
     blocks: BTreeMap<BlockId, &'module BasicBlock>,
-    dominators: BTreeMap<BlockId, BTreeSet<BlockId>>,
+    control_flow: Option<IndexedControlFlow>,
     dynamic_workgroup_memory_declarations: usize,
 }
 
@@ -646,6 +660,7 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
         functions: &'a BTreeMap<&'module FunctionId, &'module Function>,
         supported_capabilities: Option<&'a BTreeSet<TargetCapability>>,
         diagnostics: &'a mut Vec<Diagnostic>,
+        control_flow: Option<IndexedControlFlow>,
     ) -> Self {
         Self {
             module,
@@ -655,7 +670,7 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
             diagnostics,
             definitions: BTreeMap::new(),
             blocks: BTreeMap::new(),
-            dominators: BTreeMap::new(),
+            control_flow,
             dynamic_workgroup_memory_declarations: 0,
         }
     }
@@ -711,8 +726,6 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
                 );
             }
         }
-
-        self.dominators = self.compute_dominators();
 
         for block in &body.blocks {
             for (operation_index, operation) in block.operations.iter().enumerate() {
@@ -785,9 +798,9 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
     }
 
     fn block_dominates(&self, definition: BlockId, use_block: BlockId) -> bool {
-        self.dominators
-            .get(&use_block)
-            .is_some_and(|dominators| dominators.contains(&definition))
+        self.control_flow
+            .as_ref()
+            .is_some_and(|control_flow| control_flow.dominates(definition, use_block))
     }
 
     fn verify_operation(&mut self, operation: &Operation, location: DiagnosticLocation) {
@@ -2048,88 +2061,6 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
         self.definitions
             .get(&value)
             .map(|definition| &definition.ty)
-    }
-
-    fn compute_dominators(&self) -> BTreeMap<BlockId, BTreeSet<BlockId>> {
-        let body = self.function.body.as_ref().expect("definition required");
-        let entry = body.blocks[0].id;
-        let all_blocks: BTreeSet<_> = self.blocks.keys().copied().collect();
-        let mut predecessors: BTreeMap<BlockId, BTreeSet<BlockId>> = self
-            .blocks
-            .keys()
-            .copied()
-            .map(|block| (block, BTreeSet::new()))
-            .collect();
-        for block in self.blocks.values() {
-            let Some(terminator) = &block.terminator else {
-                continue;
-            };
-            for successor in terminator.successors() {
-                if let Some(predecessors) = predecessors.get_mut(&successor) {
-                    predecessors.insert(block.id);
-                }
-            }
-        }
-
-        let mut reachable = BTreeSet::from([entry]);
-        let mut frontier = vec![entry];
-        while let Some(block) = frontier.pop() {
-            let Some(terminator) = self
-                .blocks
-                .get(&block)
-                .and_then(|block| block.terminator.as_ref())
-            else {
-                continue;
-            };
-            for successor in terminator.successors() {
-                if self.blocks.contains_key(&successor) && reachable.insert(successor) {
-                    frontier.push(successor);
-                }
-            }
-        }
-
-        let mut dominators = BTreeMap::new();
-        for block in &all_blocks {
-            let initial = if *block == entry {
-                BTreeSet::from([entry])
-            } else if reachable.contains(block) {
-                reachable.clone()
-            } else {
-                BTreeSet::from([*block])
-            };
-            dominators.insert(*block, initial);
-        }
-
-        loop {
-            let mut changed = false;
-            for block in reachable.iter().copied().filter(|block| *block != entry) {
-                let reachable_predecessors: Vec<_> = predecessors[&block]
-                    .iter()
-                    .copied()
-                    .filter(|predecessor| reachable.contains(predecessor))
-                    .collect();
-                let mut next = if let Some(first) = reachable_predecessors.first() {
-                    dominators[first].clone()
-                } else {
-                    BTreeSet::new()
-                };
-                for predecessor in reachable_predecessors.iter().skip(1) {
-                    next = next
-                        .intersection(&dominators[predecessor])
-                        .copied()
-                        .collect();
-                }
-                next.insert(block);
-                if dominators[&block] != next {
-                    dominators.insert(block, next);
-                    changed = true;
-                }
-            }
-            if !changed {
-                break;
-            }
-        }
-        dominators
     }
 
     fn emit(

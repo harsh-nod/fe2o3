@@ -18,6 +18,7 @@
 //! target-neutral operation families. Its separate schema and payload-bearing
 //! instance codecs do not alter or extend any frozen module wire format.
 
+mod control_flow;
 mod effect_extraction;
 mod formal_memory_obligations;
 mod ir;
@@ -29,6 +30,7 @@ mod types;
 mod verify;
 mod wire;
 
+pub use control_flow::*;
 pub use effect_extraction::*;
 pub use formal_memory_obligations::*;
 pub use ir::*;
