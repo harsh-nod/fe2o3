@@ -73,13 +73,24 @@ canonical representation.
 `examples/verus_vecadd/verus/memory_safety_v2.rs` is a Verus-friendly pure
 specification of selected executable predicates. Its target predicate includes
 all five exact gfx942 pointer widths and alignments. It proves nested bounds,
-stale generation rejection, lifetime nesting, disjoint exclusive loans,
-write-initialization, integral same-allocation element distance, the distinction
-between a 32-bit exclusive range bound and a materialized pointer, zero-sized
-non-overlap, the executable 64-bit exclusive-end limit, conservative
-flat/global/constant aliasing, constant read-only semantics, physical-range
-disjointness, and the repaired validity-range canonicality rules.
-Mutation-negative fixtures cover each of those boundaries.
+stale generation rejection, `dead_at` and expiry liveness, deallocation making
+all subsequent current-state observations dead, lifetime nesting, disjoint
+exclusive loans, write-initialization, integral same-allocation element
+distance, the distinction between a 32-bit exclusive range bound and a
+materialized pointer, zero-sized non-overlap, the executable 64-bit
+exclusive-end limit, conservative flat/global/constant aliasing, constant
+read-only semantics, physical-range disjointness, and repaired validity-range
+canonicality.
+
+The Verus file defines a concrete field-for-field refinement relation between
+`ExecutableAllocationFacts`/`ExecutableReadFacts` and the modeled allocation,
+provenance, access, initialization, and epoch values. A mechanically checked
+theorem proves equivalence between the executable and modeled predicates for
+exactly provenance equality, current-state liveness, bounds, and initialized
+read coverage. This is not a refinement proof for the Rust implementation or
+for borrow, capability, raw-cast, identity, or full transition behavior.
+Mutation-negative fixtures include stale generation and deallocated-liveness
+counterexamples as well as the other listed boundaries.
 
 ## Resource and Trust Boundary
 

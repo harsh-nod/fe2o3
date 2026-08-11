@@ -6,6 +6,19 @@ use memory_safety_v2::*;
 
 verus! {
 
+proof fn mutated_deallocated_storage_is_live(
+    allocation: Allocation,
+    epoch: nat,
+)
+    requires
+        allocation.dead_at == Some(epoch),
+        allocation.alive_from <= epoch,
+        epoch <= allocation.alive_through,
+    ensures
+        allocation_live_at(allocation, epoch),
+{
+}
+
 proof fn mutated_stale_generation_is_accepted(
     allocation: Allocation,
     provenance: Provenance,

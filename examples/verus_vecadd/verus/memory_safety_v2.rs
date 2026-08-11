@@ -25,6 +25,7 @@ pub struct Allocation {
     pub byte_len: nat,
     pub alive_from: nat,
     pub alive_through: nat,
+    pub dead_at: Option<nat>,
 }
 
 pub struct Provenance {
@@ -61,6 +62,25 @@ pub struct Loan {
     pub borrow_epoch: nat,
     pub alive_from: nat,
     pub alive_through: nat,
+}
+
+pub struct ExecutableAllocationFacts {
+    pub id: nat,
+    pub generation: nat,
+    pub byte_len: nat,
+    pub alive_from: nat,
+    pub alive_through: nat,
+    pub dead_at: Option<nat>,
+}
+
+pub struct ExecutableReadFacts {
+    pub allocation_id: nat,
+    pub generation: nat,
+    pub access_start: nat,
+    pub access_len: nat,
+    pub initialized_start: nat,
+    pub initialized_len: nat,
+    pub epoch: nat,
 }
 
 pub open spec fn gfx942_xnack_minus(target: TargetLayout) -> bool {
@@ -167,7 +187,30 @@ pub open spec fn provenance_matches(allocation: Allocation, provenance: Provenan
 }
 
 pub open spec fn allocation_live_at(allocation: Allocation, epoch: nat) -> bool {
-    allocation.alive_from <= epoch && epoch <= allocation.alive_through
+    allocation.dead_at == None
+        && allocation.alive_from <= epoch
+        && epoch <= allocation.alive_through
+}
+
+pub open spec fn same_allocation_payload(pre: Allocation, post: Allocation) -> bool {
+    pre.id == post.id
+        && pre.generation == post.generation
+        && pre.base == post.base
+        && pre.byte_len == post.byte_len
+        && pre.alive_from == post.alive_from
+        && pre.alive_through == post.alive_through
+}
+
+pub open spec fn deallocation_transition(
+    pre: Allocation,
+    post: Allocation,
+    epoch: nat,
+) -> bool {
+    pre.dead_at == None
+        && pre.alive_from <= epoch
+        && epoch <= pre.alive_through
+        && same_allocation_payload(pre, post)
+        && post.dead_at == Some(epoch)
 }
 
 pub open spec fn range_in_bounds(allocation: Allocation, range: ByteRange) -> bool {
@@ -246,6 +289,49 @@ pub open spec fn typed_read_obligations(
         && initialized_covers(initialized, access)
 }
 
+pub open spec fn allocation_facts_refine(
+    executable: ExecutableAllocationFacts,
+    modeled: Allocation,
+) -> bool {
+    executable.id == modeled.id
+        && executable.generation == modeled.generation
+        && executable.byte_len == modeled.byte_len
+        && executable.alive_from == modeled.alive_from
+        && executable.alive_through == modeled.alive_through
+        && executable.dead_at == modeled.dead_at
+}
+
+pub open spec fn read_facts_refine(
+    executable: ExecutableReadFacts,
+    provenance: Provenance,
+    access: ByteRange,
+    initialized: ByteRange,
+    epoch: nat,
+) -> bool {
+    executable.allocation_id == provenance.allocation_id
+        && executable.generation == provenance.generation
+        && executable.access_start == access.start
+        && executable.access_len == access.len
+        && executable.initialized_start == initialized.start
+        && executable.initialized_len == initialized.len
+        && executable.epoch == epoch
+}
+
+pub open spec fn executable_typed_read_accepts(
+    allocation: ExecutableAllocationFacts,
+    read: ExecutableReadFacts,
+) -> bool {
+    allocation.id == read.allocation_id
+        && allocation.generation == read.generation
+        && allocation.dead_at == None
+        && allocation.alive_from <= read.epoch
+        && read.epoch <= allocation.alive_through
+        && read.access_start + read.access_len <= allocation.byte_len
+        && read.initialized_start <= read.access_start
+        && read.access_start + read.access_len
+            <= read.initialized_start + read.initialized_len
+}
+
 pub proof fn nested_range_stays_in_bounds(
     allocation: Allocation,
     parent: ByteRange,
@@ -276,6 +362,7 @@ pub proof fn nested_loan_lifetime_is_live_with_allocation(
     epoch: nat,
 )
     requires
+        allocation.dead_at == None,
         lifetime_contains(
             allocation.alive_from,
             allocation.alive_through,
@@ -286,6 +373,60 @@ pub proof fn nested_loan_lifetime_is_live_with_allocation(
         epoch <= loan.alive_through,
     ensures
         allocation_live_at(allocation, epoch),
+{
+}
+
+pub proof fn deallocation_transition_makes_storage_not_live(
+    pre: Allocation,
+    post: Allocation,
+    epoch: nat,
+    observed_epoch: nat,
+)
+    requires
+        deallocation_transition(pre, post, epoch),
+    ensures
+        !allocation_live_at(post, observed_epoch),
+{
+}
+
+pub proof fn expired_or_deallocated_storage_is_not_live(
+    allocation: Allocation,
+    epoch: nat,
+)
+    requires
+        allocation.dead_at != None || epoch > allocation.alive_through,
+    ensures
+        !allocation_live_at(allocation, epoch),
+{
+}
+
+pub proof fn executable_typed_read_refines_modeled_predicates(
+    executable_allocation: ExecutableAllocationFacts,
+    executable_read: ExecutableReadFacts,
+    modeled_allocation: Allocation,
+    modeled_provenance: Provenance,
+    modeled_access: ByteRange,
+    modeled_initialized: ByteRange,
+    modeled_epoch: nat,
+)
+    requires
+        allocation_facts_refine(executable_allocation, modeled_allocation),
+        read_facts_refine(
+            executable_read,
+            modeled_provenance,
+            modeled_access,
+            modeled_initialized,
+            modeled_epoch,
+        ),
+    ensures
+        executable_typed_read_accepts(executable_allocation, executable_read)
+            == typed_read_obligations(
+                modeled_allocation,
+                modeled_provenance,
+                modeled_access,
+                modeled_initialized,
+                modeled_epoch,
+            ),
 {
 }
 

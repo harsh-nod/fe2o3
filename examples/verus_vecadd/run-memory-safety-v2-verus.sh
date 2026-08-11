@@ -9,6 +9,9 @@ for marker in \
     'pub proof fn nested_range_stays_in_bounds' \
     'pub proof fn stale_generation_cannot_match' \
     'pub proof fn nested_loan_lifetime_is_live_with_allocation' \
+    'pub proof fn deallocation_transition_makes_storage_not_live' \
+    'pub proof fn expired_or_deallocated_storage_is_not_live' \
+    'pub proof fn executable_typed_read_refines_modeled_predicates' \
     'pub proof fn ordered_exclusive_ranges_are_compatible' \
     'pub proof fn valid_write_initializes_same_typed_read' \
     'pub proof fn same_allocation_element_distance_is_integral' \
@@ -30,7 +33,8 @@ done
 for fixture_marker in \
     'memory_safety_v2_pointer_width.rs:mutated_u64_exclusive_end_wrap_is_representable' \
     'memory_safety_v2_physical_alias.rs:mutated_global_and_flat_tags_imply_physical_disjointness' \
-    'memory_safety_v2_target_layout.rs:mutated_constant_memory_is_writable'
+    'memory_safety_v2_target_layout.rs:mutated_constant_memory_is_writable' \
+    'memory_safety_v2_stale.rs:mutated_deallocated_storage_is_live'
 do
     fixture=${fixture_marker%%:*}
     marker=${fixture_marker#*:}
