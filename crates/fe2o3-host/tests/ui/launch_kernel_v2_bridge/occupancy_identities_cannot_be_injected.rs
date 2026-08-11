@@ -5,6 +5,9 @@ fn inject_caller_claims(binding: &CurrentRecoveredLaunchKernelMetadataV2<'_>) {
     let verifier = OccupancyVerifierIdentityV2::from_bytes([1; 32]);
     let metadata = OccupancyMetadataIdentityV2::from_bytes([2; 32]);
     binding.require_occupancy_dependent_admission(verifier, metadata);
+    let _ = binding.occupancy_subject();
+    let _ = binding.resources();
+    let _ = binding.variant_name();
 }
 
 fn main() {}

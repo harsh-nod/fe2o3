@@ -3896,28 +3896,51 @@ mod tests {
             binding.kernel_identity(),
             family.variants[0].kernel_identity
         );
-        assert_eq!(binding.signature(), &family.signature);
-        assert_eq!(binding.signature().explicit_argument_bytes, 16);
-        assert_eq!(binding.signature().kernarg_segment_bytes, 272);
-        assert_eq!(binding.signature().kernarg_segment_alignment, 8);
-        assert_eq!(binding.signature().parameters.len(), 2);
+        let explicit = binding.physical_signature().explicit();
+        assert_eq!(explicit, &family.signature);
+        assert_eq!(explicit.explicit_argument_bytes, 16);
+        assert_eq!(explicit.kernarg_segment_bytes, 272);
+        assert_eq!(explicit.kernarg_segment_alignment, 8);
+        assert_eq!(explicit.parameters.len(), 2);
         assert_eq!(
-            binding.signature().parameters[0].kind,
+            explicit.parameters[0].kind,
             fe2o3_kernel_ir::AbiParameterKindV2::SharedGlobalPointer
         );
         assert_eq!(
-            binding.signature().parameters[1].kind,
+            explicit.parameters[1].kind,
             fe2o3_kernel_ir::AbiParameterKindV2::ByValue
         );
-        assert_eq!(binding.resources(), family.variants[0].resources);
         assert_eq!(
-            binding.occupancy_subject(),
-            family.variants[0]
-                .occupancy_witness
-                .unwrap()
-                .subject_identity
+            binding.launch_projection().required_block_threads(),
+            fe2o3_kernel_ir::DimensionsV2::new(256, 1, 1)
         );
-        assert_eq!(binding.variant_name(), "recovered-exact-wave64");
+        assert_eq!(binding.launch_projection().wavefront_width(), 64);
+        assert_eq!(binding.launch_projection().declared_rank(), 1);
+        assert_eq!(
+            binding.launch_projection().physical_maximum_workgroups(),
+            fe2o3_kernel_ir::DimensionsV2::new(65_535, 1, 1)
+        );
+        assert_eq!(
+            binding.launch_projection().declared_maximum_grid_blocks(),
+            fe2o3_kernel_ir::DimensionsV2::new(65_535, 1, 1)
+        );
+        assert_eq!(
+            binding.launch_projection().required_flat_workgroup_size(),
+            256
+        );
+        assert_eq!(
+            binding
+                .launch_projection()
+                .physical_maximum_flat_workgroup_size(),
+            256
+        );
+        assert_eq!(binding.resource_projection().static_lds_bytes(), 0);
+        assert_eq!(binding.resource_projection().private_segment_bytes(), 0);
+        assert_eq!(
+            binding.resource_projection().dynamic_lds(),
+            crate::Gfx942DynamicLdsProjectionV2::ArtifactForbidsAndPhysicalAbiOmits
+        );
+        assert_eq!(binding.model_projection_name(), "recovered-exact-wave64");
         assert!(!binding.authenticates_compiler_or_verus_provenance());
         assert!(!binding.authenticates_rust_type_or_effect_semantics());
         assert!(!binding.authenticates_policy_or_proof_claims());
@@ -4080,11 +4103,7 @@ mod tests {
                 &candidate,
                 "recovered-exact-wave64"
             ),
-            Err(
-                crate::LaunchKernelMetadataBridgeErrorV2::InvalidLaunchModel(
-                    fe2o3_kernel_ir::LaunchKernelValidationErrorV2::LdsLimitExceeded
-                )
-            )
+            Err(crate::LaunchKernelMetadataBridgeErrorV2::ResourceSubstitution)
         ));
 
         candidate = canonical;
@@ -4096,11 +4115,7 @@ mod tests {
                 &candidate,
                 "recovered-exact-wave64"
             ),
-            Err(
-                crate::LaunchKernelMetadataBridgeErrorV2::InvalidLaunchModel(
-                    fe2o3_kernel_ir::LaunchKernelValidationErrorV2::PrivateSegmentLimitExceeded
-                )
-            )
+            Err(crate::LaunchKernelMetadataBridgeErrorV2::ResourceSubstitution)
         ));
     }
 
@@ -4199,7 +4214,7 @@ mod tests {
     }
 
     #[test]
-    fn caller_occupancy_authority_identities_are_discarded() {
+    fn launch_bridge_caller_occupancy_fields_do_not_enter_physical_projection() {
         let (_fixture, recovered) = recovered_launch_bridge_fixture(83);
         let mut family =
             crate::launch_kernel_v2_bridge::canonical_family_for_recovered_launch_bridge_test(
@@ -4211,27 +4226,52 @@ mod tests {
             "recovered-exact-wave64",
         )
         .unwrap();
-        let subject = first.occupancy_subject();
+        let physical_signature = first.physical_signature().identity();
+        let launch = first.launch_projection();
+        let resources = first.resource_projection();
         drop(first);
 
-        let witness = family.variants[0].occupancy_witness.as_mut().unwrap();
-        witness.verifier_identity =
-            fe2o3_kernel_ir::OccupancyVerifierIdentityV2::from_bytes([0xe1; 32]);
-        witness.metadata_identity =
-            fe2o3_kernel_ir::OccupancyMetadataIdentityV2::from_bytes([0xe2; 32]);
-        crate::launch_kernel_v2_bridge::rebind_launch_family_for_bridge_test(&mut family);
+        family.variants[0].launch.minimum_waves_per_execution_unit = 0;
+        family.variants[0].launch.maximum_waves_per_execution_unit = u8::MAX;
+        family.variants[0].occupancy_witness = None;
+        family.variants[0].tuple_identity =
+            fe2o3_kernel_ir::KernelVariantTupleIdentityV2::from_bytes([0; 32]);
+        family.variants[0].policy_identity =
+            fe2o3_kernel_ir::KernelPolicyIdentityV2::from_bytes([0; 32]);
+        family.variants[0].capabilities.clear();
+        family.variants[0].proof_obligations.clear();
         let rebound = crate::bind_current_recovered_launch_kernel_metadata_v2(
             &recovered,
             &family,
             "recovered-exact-wave64",
         )
         .unwrap();
-        assert_eq!(rebound.occupancy_subject(), subject);
+        assert_eq!(rebound.physical_signature().identity(), physical_signature);
+        assert_eq!(rebound.launch_projection(), launch);
+        assert_eq!(rebound.resource_projection(), resources);
         assert_eq!(
             rebound.occupancy_status(),
             crate::Gfx942OccupancyMetadataStatusV2::NoReviewedPhysicalDerivation
         );
         assert!(rebound.require_occupancy_dependent_admission().is_err());
+    }
+
+    #[test]
+    fn launch_bridge_rejects_ambiguous_projection_name_without_model_authority() {
+        let (_fixture, recovered) = recovered_launch_bridge_fixture(119);
+        let mut family =
+            crate::launch_kernel_v2_bridge::canonical_family_for_recovered_launch_bridge_test(
+                &recovered,
+            );
+        family.variants.push(family.variants[0].clone());
+        assert!(matches!(
+            crate::bind_current_recovered_launch_kernel_metadata_v2(
+                &recovered,
+                &family,
+                "recovered-exact-wave64"
+            ),
+            Err(crate::LaunchKernelMetadataBridgeErrorV2::AmbiguousModelProjection)
+        ));
     }
 
     #[test]

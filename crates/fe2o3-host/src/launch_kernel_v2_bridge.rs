@@ -19,11 +19,10 @@ use fe2o3_kernel_descriptor::{
 };
 use fe2o3_kernel_ir::{
     AbiParameterKindV2, AbiParameterV2, ArtifactIdentityV2, BlockShapePolicyV2, DimensionsV2,
-    Gfx942LaunchContractV2, Gfx942ResourceLimitsV2, Gfx942TargetBindingV2, KernelIdentityV2,
-    KernelSignatureIdentityV2, KernelSignatureV2, KernelVariantV2, LaunchKernelFamilyV2,
-    LaunchKernelLimitsV2, LaunchKernelValidationErrorV2, OccupancySubjectIdentityV2,
-    SemanticTypeIdentityV2, TargetIdentityV2, UnsupportedLaunchFeaturesV2, WavefrontWidthV2,
-    canonical_occupancy_subject_identity_v2,
+    Gfx942LaunchContractV2, Gfx942TargetBindingV2, KernelIdentityV2, KernelSignatureIdentityV2,
+    KernelSignatureV2, KernelVariantV2, LaunchKernelFamilyV2, LaunchKernelLimitsV2,
+    LaunchKernelValidationErrorV2, SemanticTypeIdentityV2, TargetIdentityV2,
+    UnsupportedLaunchFeaturesV2, WavefrontWidthV2,
 };
 use sha2::{Digest, Sha256};
 use std::error::Error;
@@ -122,6 +121,85 @@ impl Gfx942PhysicalKernelSignatureV2 {
     }
 }
 
+/// Physically and artifact-joined launch geometry with no occupancy fields.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Gfx942PhysicalLaunchProjectionV2 {
+    declared_rank: u8,
+    required_block_threads: DimensionsV2,
+    declared_maximum_grid_blocks: DimensionsV2,
+    physical_maximum_workgroups: DimensionsV2,
+    required_flat_workgroup_size: u32,
+    physical_maximum_flat_workgroup_size: u32,
+    declared_maximum_total_workitems: u64,
+    wavefront_width: u32,
+}
+
+impl Gfx942PhysicalLaunchProjectionV2 {
+    /// Returns the artifact/descriptor rank. AMDHSA does not encode source rank.
+    pub const fn declared_rank(self) -> u8 {
+        self.declared_rank
+    }
+
+    pub const fn required_block_threads(self) -> DimensionsV2 {
+        self.required_block_threads
+    }
+
+    /// Returns the artifact/descriptor grid ceiling after checking it against physical maxima.
+    pub const fn declared_maximum_grid_blocks(self) -> DimensionsV2 {
+        self.declared_maximum_grid_blocks
+    }
+
+    pub const fn physical_maximum_workgroups(self) -> DimensionsV2 {
+        self.physical_maximum_workgroups
+    }
+
+    pub const fn required_flat_workgroup_size(self) -> u32 {
+        self.required_flat_workgroup_size
+    }
+
+    pub const fn physical_maximum_flat_workgroup_size(self) -> u32 {
+        self.physical_maximum_flat_workgroup_size
+    }
+
+    /// Returns the maximum implied by the checked artifact/descriptor grid and required block.
+    pub const fn declared_maximum_total_workitems(self) -> u64 {
+        self.declared_maximum_total_workitems
+    }
+
+    pub const fn wavefront_width(self) -> u32 {
+        self.wavefront_width
+    }
+}
+
+/// Dynamic-LDS fact established by the narrow bridge profile.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Gfx942DynamicLdsProjectionV2 {
+    /// The artifact and descriptor both forbid dynamic LDS and no physical ABI record requests it.
+    ArtifactForbidsAndPhysicalAbiOmits,
+}
+
+/// Physically and artifact-joined resource facts with no occupancy interpretation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Gfx942PhysicalResourceProjectionV2 {
+    static_lds_bytes: u32,
+    private_segment_bytes: u32,
+    dynamic_lds: Gfx942DynamicLdsProjectionV2,
+}
+
+impl Gfx942PhysicalResourceProjectionV2 {
+    pub const fn static_lds_bytes(self) -> u32 {
+        self.static_lds_bytes
+    }
+
+    pub const fn private_segment_bytes(self) -> u32 {
+        self.private_segment_bytes
+    }
+
+    pub const fn dynamic_lds(self) -> Gfx942DynamicLdsProjectionV2 {
+        self.dynamic_lds
+    }
+}
+
 /// Why inspected gfx942 metadata cannot authorize an occupancy-dependent launch.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -149,7 +227,8 @@ impl fmt::Display for OccupancyDependentLaunchAdmissionErrorV2 {
 
 impl Error for OccupancyDependentLaunchAdmissionErrorV2 {}
 
-/// Current, inert match between one launch-model variant and one recovered executable kernel.
+/// Current, inert match between one occupancy-independent model projection and one recovered
+/// executable kernel.
 ///
 /// The value retains the cooperative current-publication guard and contains only identities and
 /// physical metadata derived from the recovered Worker V2 admission. Caller-supplied policy,
@@ -160,11 +239,10 @@ pub struct CurrentRecoveredLaunchKernelMetadataV2<'recovered> {
     target: Gfx942TargetBindingV2,
     artifact_identity: ArtifactIdentityV2,
     kernel_identity: KernelIdentityV2,
-    signature: KernelSignatureV2,
     physical_signature: Gfx942PhysicalKernelSignatureV2,
-    resources: Gfx942ResourceLimitsV2,
-    occupancy_subject: OccupancySubjectIdentityV2,
-    variant_name: Box<str>,
+    launch: Gfx942PhysicalLaunchProjectionV2,
+    resources: Gfx942PhysicalResourceProjectionV2,
+    model_projection_name: Box<str>,
 }
 
 impl fmt::Debug for CurrentRecoveredLaunchKernelMetadataV2<'_> {
@@ -174,11 +252,10 @@ impl fmt::Debug for CurrentRecoveredLaunchKernelMetadataV2<'_> {
             .field("target", &self.target)
             .field("artifact_identity", &self.artifact_identity)
             .field("kernel_identity", &self.kernel_identity)
-            .field("signature", &self.signature)
             .field("physical_signature", &self.physical_signature)
+            .field("launch", &self.launch)
             .field("resources", &self.resources)
-            .field("occupancy_subject", &self.occupancy_subject)
-            .field("variant_name", &self.variant_name)
+            .field("model_projection_name", &self.model_projection_name)
             .field("occupancy_status", &self.occupancy_status())
             .finish_non_exhaustive()
     }
@@ -197,24 +274,20 @@ impl CurrentRecoveredLaunchKernelMetadataV2<'_> {
         self.kernel_identity
     }
 
-    pub const fn signature(&self) -> &KernelSignatureV2 {
-        &self.signature
-    }
-
     pub const fn physical_signature(&self) -> &Gfx942PhysicalKernelSignatureV2 {
         &self.physical_signature
     }
 
-    pub const fn resources(&self) -> Gfx942ResourceLimitsV2 {
+    pub const fn launch_projection(&self) -> Gfx942PhysicalLaunchProjectionV2 {
+        self.launch
+    }
+
+    pub const fn resource_projection(&self) -> Gfx942PhysicalResourceProjectionV2 {
         self.resources
     }
 
-    pub const fn occupancy_subject(&self) -> OccupancySubjectIdentityV2 {
-        self.occupancy_subject
-    }
-
-    pub fn variant_name(&self) -> &str {
-        &self.variant_name
+    pub fn model_projection_name(&self) -> &str {
+        &self.model_projection_name
     }
 
     pub const fn occupancy_status(&self) -> Gfx942OccupancyMetadataStatusV2 {
@@ -252,55 +325,86 @@ impl CurrentRecoveredLaunchKernelMetadataV2<'_> {
     }
 }
 
-/// Binds one valid launch-model variant to current recovered physical metadata.
+/// Binds one named occupancy-independent launch-model projection to current recovered metadata.
 ///
 /// This validates target, payload, kernel, symbol, the embedded descriptor's flattened signature
-/// against AMDHSA physical arguments, non-occupancy launch geometry, static/private resources, and
-/// the occupancy subject. Dynamic LDS is rejected because AMDHSA does not provide the maximum and
-/// alignment required by the launch model. Occupancy-dependent admission remains unavailable even
-/// on success. The V2 semantic profile is intentionally limited to canonical descriptor scalars
-/// and scalar slices. Standalone pointers and nested reference elements are rejected because the
-/// descriptor V1 source-type schema cannot express their semantic identity.
+/// against AMDHSA physical arguments, non-occupancy launch geometry, and static/private resources.
+/// Occupancy bounds, witnesses, subjects, variant tuples, policy identities, capabilities, and
+/// proof records are neither read nor retained. Dynamic LDS is rejected because the narrow model
+/// has no complete physical maximum/alignment derivation. The V2 semantic profile is intentionally
+/// limited to canonical descriptor scalars and scalar slices. Standalone pointers and nested
+/// reference elements are rejected because descriptor V1 cannot express their semantic identity.
 pub fn bind_current_recovered_launch_kernel_metadata_v2<'recovered>(
     recovered: &'recovered RecoveredWorkerV2PinnedDescriptorV1,
     family: &LaunchKernelFamilyV2,
-    variant_name: &str,
+    projection_name: &str,
 ) -> Result<CurrentRecoveredLaunchKernelMetadataV2<'recovered>, LaunchKernelMetadataBridgeErrorV2> {
-    let variant = validate_and_select_variant(family, variant_name)?;
+    let variant = validate_and_select_projection(family, projection_name)?;
     let current = recovered
         .acquire_launch_kernel_v2_currentness()
         .map_err(LaunchKernelMetadataBridgeErrorV2::CurrentPublication)?;
     bind_with_current_and_physical_override(current, recovered, family, variant, None)
 }
 
-fn validate_and_select_variant<'family>(
+fn validate_and_select_projection<'family>(
     family: &'family LaunchKernelFamilyV2,
-    variant_name: &str,
+    projection_name: &str,
 ) -> Result<&'family KernelVariantV2, LaunchKernelMetadataBridgeErrorV2> {
     let limits = LaunchKernelLimitsV2::default();
     family
         .validate_variant_count(&limits)
         .map_err(LaunchKernelMetadataBridgeErrorV2::InvalidLaunchModel)?;
-    if family
-        .variants
-        .iter()
-        .any(|variant| !matches!(variant.launch.block, BlockShapePolicyV2::Exact(_)))
-    {
-        return Err(
-            LaunchKernelMetadataBridgeErrorV2::UnsupportedPhysicalLaunchContract(
-                "non-exact block policy",
-            ),
-        );
+    validate_projection_name(projection_name, &limits)?;
+    validate_projection_name(&family.logical_name, &limits)?;
+    if family.signature.parameters.len() > limits.max_parameters {
+        return Err(LaunchKernelMetadataBridgeErrorV2::InvalidLaunchModel(
+            LaunchKernelValidationErrorV2::ResourceLimit {
+                resource: "parameters",
+                observed: family.signature.parameters.len(),
+                limit: limits.max_parameters,
+            },
+        ));
     }
-    family
-        .validate(&limits)
-        .map_err(LaunchKernelMetadataBridgeErrorV2::InvalidLaunchModel)?;
-    let variant = family
-        .variants
-        .iter()
-        .find(|variant| variant.variant_name == variant_name)
-        .ok_or(LaunchKernelMetadataBridgeErrorV2::UnknownVariant)?;
-    Ok(variant)
+    let mut selected = None;
+    for variant in &family.variants {
+        validate_projection_name(&variant.variant_name, &limits)?;
+        if variant.variant_name == projection_name {
+            if selected.is_some() {
+                return Err(LaunchKernelMetadataBridgeErrorV2::AmbiguousModelProjection);
+            }
+            selected = Some(variant);
+        }
+    }
+    let selected = selected.ok_or(LaunchKernelMetadataBridgeErrorV2::UnknownVariant)?;
+    validate_projection_name(&selected.entry_name, &limits)?;
+    Ok(selected)
+}
+
+fn validate_projection_name(
+    name: &str,
+    limits: &LaunchKernelLimitsV2,
+) -> Result<(), LaunchKernelMetadataBridgeErrorV2> {
+    if name.len() > limits.max_name_bytes {
+        return Err(LaunchKernelMetadataBridgeErrorV2::InvalidLaunchModel(
+            LaunchKernelValidationErrorV2::ResourceLimit {
+                resource: "name bytes",
+                observed: name.len(),
+                limit: limits.max_name_bytes,
+            },
+        ));
+    }
+    let bytes = name.as_bytes();
+    if bytes.is_empty()
+        || !matches!(bytes[0], b'A'..=b'Z' | b'a'..=b'z' | b'_')
+        || !bytes.iter().all(|byte| {
+            matches!(byte, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_' | b'.' | b'$' | b'-')
+        })
+    {
+        return Err(LaunchKernelMetadataBridgeErrorV2::InvalidLaunchModel(
+            LaunchKernelValidationErrorV2::InvalidName,
+        ));
+    }
+    Ok(())
 }
 
 fn bind_with_current_and_physical_override<'recovered>(
@@ -327,11 +431,10 @@ fn bind_with_current_and_physical_override<'recovered>(
         target: derived.target,
         artifact_identity: derived.artifact_identity,
         kernel_identity: derived.kernel_identity,
-        signature: derived.signature,
         physical_signature: derived.physical_signature,
+        launch: derived.launch,
         resources: derived.resources,
-        occupancy_subject: derived.occupancy_subject,
-        variant_name: variant.variant_name.clone().into_boxed_str(),
+        model_projection_name: variant.variant_name.clone().into_boxed_str(),
     })
 }
 
@@ -339,10 +442,10 @@ fn bind_with_current_and_physical_override<'recovered>(
 pub(crate) fn bind_current_recovered_launch_kernel_metadata_with_physical_probe_v2<'recovered>(
     recovered: &'recovered RecoveredWorkerV2PinnedDescriptorV1,
     family: &LaunchKernelFamilyV2,
-    variant_name: &str,
+    projection_name: &str,
     physical: &PublishedKernelPhysicalLayoutV1,
 ) -> Result<CurrentRecoveredLaunchKernelMetadataV2<'recovered>, LaunchKernelMetadataBridgeErrorV2> {
-    let variant = validate_and_select_variant(family, variant_name)?;
+    let variant = validate_and_select_projection(family, projection_name)?;
     let current = recovered
         .acquire_launch_kernel_v2_currentness()
         .map_err(LaunchKernelMetadataBridgeErrorV2::CurrentPublication)?;
@@ -357,19 +460,8 @@ struct DerivedLaunchMetadataV2 {
     entry_name: Box<str>,
     signature: KernelSignatureV2,
     physical_signature: Gfx942PhysicalKernelSignatureV2,
-    launch: DerivedLaunchGeometryV2,
-    resources: Gfx942ResourceLimitsV2,
-    occupancy_subject: OccupancySubjectIdentityV2,
-}
-
-#[derive(Clone, Copy)]
-struct DerivedLaunchGeometryV2 {
-    rank: u8,
-    block: BlockShapePolicyV2,
-    max_grid_blocks: DimensionsV2,
-    minimum_flat_workgroup_size: u32,
-    maximum_flat_workgroup_size: u32,
-    max_total_workitems: u64,
+    launch: Gfx942PhysicalLaunchProjectionV2,
+    resources: Gfx942PhysicalResourceProjectionV2,
 }
 
 fn derive_metadata(
@@ -387,13 +479,6 @@ fn derive_metadata(
     let physical_signature = derive_physical_signature(signature.clone(), physical)?;
     let launch = derive_launch_geometry(artifact.launch(), physical)?;
     let resources = derive_resources(artifact.launch(), physical)?;
-    let occupancy_subject = canonical_occupancy_subject_identity_v2(
-        &target,
-        &signature,
-        artifact_identity,
-        physical.export_symbol(),
-        resources,
-    );
 
     Ok(DerivedLaunchMetadataV2 {
         target,
@@ -405,7 +490,6 @@ fn derive_metadata(
         physical_signature,
         launch,
         resources,
-        occupancy_subject,
     })
 }
 
@@ -1345,7 +1429,7 @@ fn derive_signature_identity(signature: &KernelSignatureV2) -> KernelSignatureId
 fn derive_launch_geometry(
     launch: &ArtifactLaunchContract,
     physical: &PublishedKernelPhysicalLayoutV1,
-) -> Result<DerivedLaunchGeometryV2, LaunchKernelMetadataBridgeErrorV2> {
+) -> Result<Gfx942PhysicalLaunchProjectionV2, LaunchKernelMetadataBridgeErrorV2> {
     let physical_launch = physical.launch();
     let physical_block = match physical_launch.required_workgroup_size() {
         PhysicalMetadataValueV1::Known(value) => value,
@@ -1378,6 +1462,7 @@ fn derive_launch_geometry(
     let block = DimensionsV2::new(block.x(), block.y(), block.z());
     let max_grid = launch.max_grid();
     let max_grid_blocks = DimensionsV2::new(max_grid.x(), max_grid.y(), max_grid.z());
+    let mut physical_maximum_workgroups = [0_u32; 3];
     for (axis, (declared, observed, field)) in [
         (
             max_grid_blocks.x,
@@ -1415,6 +1500,7 @@ fn derive_launch_geometry(
                 },
             );
         }
+        physical_maximum_workgroups[axis] = maximum;
     }
     let flat = checked_dimensions_product(block, "flat workgroup size")?;
     let flat = u32::try_from(flat)
@@ -1430,20 +1516,26 @@ fn derive_launch_geometry(
     let max_total_workitems = grid_blocks.checked_mul(u64::from(flat)).ok_or(
         LaunchKernelMetadataBridgeErrorV2::NumericOverflow("maximum total workitems"),
     )?;
-    Ok(DerivedLaunchGeometryV2 {
-        rank: launch.rank(),
-        block: BlockShapePolicyV2::Exact(block),
-        max_grid_blocks,
-        minimum_flat_workgroup_size: flat,
-        maximum_flat_workgroup_size: flat,
-        max_total_workitems,
+    Ok(Gfx942PhysicalLaunchProjectionV2 {
+        declared_rank: launch.rank(),
+        required_block_threads: block,
+        declared_maximum_grid_blocks: max_grid_blocks,
+        physical_maximum_workgroups: DimensionsV2::new(
+            physical_maximum_workgroups[0],
+            physical_maximum_workgroups[1],
+            physical_maximum_workgroups[2],
+        ),
+        required_flat_workgroup_size: flat,
+        physical_maximum_flat_workgroup_size: physical_launch.max_flat_workgroup_size(),
+        declared_maximum_total_workitems: max_total_workitems,
+        wavefront_width: physical_launch.wavefront_size(),
     })
 }
 
 fn derive_resources(
     launch: &ArtifactLaunchContract,
     physical: &PublishedKernelPhysicalLayoutV1,
-) -> Result<Gfx942ResourceLimitsV2, LaunchKernelMetadataBridgeErrorV2> {
+) -> Result<Gfx942PhysicalResourceProjectionV2, LaunchKernelMetadataBridgeErrorV2> {
     if launch.max_dynamic_shared_memory_bytes() != 0 {
         return Err(LaunchKernelMetadataBridgeErrorV2::UnsupportedDynamicLds);
     }
@@ -1466,11 +1558,10 @@ fn derive_resources(
     }
     let private_segment_bytes = u32::try_from(physical.private_segment_fixed_size())
         .map_err(|_| LaunchKernelMetadataBridgeErrorV2::NumericOverflow("private segment size"))?;
-    Ok(Gfx942ResourceLimitsV2 {
+    Ok(Gfx942PhysicalResourceProjectionV2 {
         static_lds_bytes,
-        maximum_dynamic_lds_bytes: 0,
-        dynamic_lds_alignment: 1,
         private_segment_bytes,
+        dynamic_lds: Gfx942DynamicLdsProjectionV2::ArtifactForbidsAndPhysicalAbiOmits,
     })
 }
 
@@ -1498,32 +1589,35 @@ fn validate_model_match(
         return Err(LaunchKernelMetadataBridgeErrorV2::KernelSubstitution);
     }
     validate_launch_geometry_match(variant.launch, derived.launch)?;
-    if variant.resources != derived.resources {
+    if variant.resources.static_lds_bytes != derived.resources.static_lds_bytes
+        || variant.resources.maximum_dynamic_lds_bytes != 0
+        || variant.resources.dynamic_lds_alignment != 1
+        || variant.resources.private_segment_bytes != derived.resources.private_segment_bytes
+    {
         return Err(LaunchKernelMetadataBridgeErrorV2::ResourceSubstitution);
-    }
-    let model_subject = variant
-        .occupancy_witness
-        .as_ref()
-        .expect("validated launch model requires an occupancy witness")
-        .subject_identity;
-    if model_subject != derived.occupancy_subject {
-        return Err(LaunchKernelMetadataBridgeErrorV2::OccupancySubjectSubstitution);
     }
     Ok(())
 }
 
 fn validate_launch_geometry_match(
     model: Gfx942LaunchContractV2,
-    derived: DerivedLaunchGeometryV2,
+    derived: Gfx942PhysicalLaunchProjectionV2,
 ) -> Result<(), LaunchKernelMetadataBridgeErrorV2> {
-    if model.rank != derived.rank
-        || model.block != derived.block
-        || model.max_grid_blocks != derived.max_grid_blocks
-        || model.minimum_flat_workgroup_size != derived.minimum_flat_workgroup_size
-        || model.maximum_flat_workgroup_size != derived.maximum_flat_workgroup_size
+    let BlockShapePolicyV2::Exact(model_block) = model.block else {
+        return Err(
+            LaunchKernelMetadataBridgeErrorV2::UnsupportedPhysicalLaunchContract(
+                "non-exact block policy",
+            ),
+        );
+    };
+    if model.rank != derived.declared_rank
+        || model_block != derived.required_block_threads
+        || model.max_grid_blocks != derived.declared_maximum_grid_blocks
+        || model.minimum_flat_workgroup_size != derived.required_flat_workgroup_size
+        || model.maximum_flat_workgroup_size != derived.required_flat_workgroup_size
         || model.wavefront != WavefrontWidthV2::Wave64
         || model.require_full_waves
-        || model.max_total_workitems != derived.max_total_workitems
+        || model.max_total_workitems != derived.declared_maximum_total_workitems
         || model.unsupported != UnsupportedLaunchFeaturesV2::NONE
     {
         return Err(LaunchKernelMetadataBridgeErrorV2::LaunchGeometrySubstitution);
@@ -1621,13 +1715,14 @@ impl CanonicalDigestV2 {
     }
 }
 
-/// Failure to bind a launch-model variant to current recovered executable metadata.
+/// Failure to bind a launch-model projection to current recovered executable metadata.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum LaunchKernelMetadataBridgeErrorV2 {
     CurrentPublication(FinalizedWorkerV2BundleAdmissionError),
     InvalidLaunchModel(LaunchKernelValidationErrorV2),
     UnknownVariant,
+    AmbiguousModelProjection,
     UnsupportedTarget,
     UnsupportedCodeObjectVersion,
     UnsupportedDigestAlgorithm,
@@ -1650,7 +1745,6 @@ pub enum LaunchKernelMetadataBridgeErrorV2 {
     SignatureSubstitution,
     LaunchGeometrySubstitution,
     ResourceSubstitution,
-    OccupancySubjectSubstitution,
 }
 
 impl fmt::Display for LaunchKernelMetadataBridgeErrorV2 {
@@ -1658,7 +1752,12 @@ impl fmt::Display for LaunchKernelMetadataBridgeErrorV2 {
         match self {
             Self::CurrentPublication(error) => error.fmt(formatter),
             Self::InvalidLaunchModel(error) => write!(formatter, "invalid launch model: {error:?}"),
-            Self::UnknownVariant => formatter.write_str("launch variant is absent from the family"),
+            Self::UnknownVariant => {
+                formatter.write_str("launch model projection is absent from the family")
+            }
+            Self::AmbiguousModelProjection => {
+                formatter.write_str("launch model projection name is ambiguous")
+            }
             Self::UnsupportedTarget => {
                 formatter.write_str("launch metadata bridge requires gfx942:xnack- Wave64")
             }
@@ -1712,9 +1811,6 @@ impl fmt::Display for LaunchKernelMetadataBridgeErrorV2 {
                 formatter.write_str("launch geometry policy was substituted")
             }
             Self::ResourceSubstitution => formatter.write_str("launch resources were substituted"),
-            Self::OccupancySubjectSubstitution => {
-                formatter.write_str("launch occupancy subject was substituted")
-            }
         }
     }
 }
@@ -1754,6 +1850,19 @@ pub(crate) fn canonical_family_for_recovered_launch_bridge_test(
     if derived.resources.static_lds_bytes != 0 {
         capabilities.push(LaunchCapabilityV2::StaticLds);
     }
+    let resources = fe2o3_kernel_ir::Gfx942ResourceLimitsV2 {
+        static_lds_bytes: derived.resources.static_lds_bytes,
+        maximum_dynamic_lds_bytes: 0,
+        dynamic_lds_alignment: 1,
+        private_segment_bytes: derived.resources.private_segment_bytes,
+    };
+    let occupancy_subject = fe2o3_kernel_ir::canonical_occupancy_subject_identity_v2(
+        &derived.target,
+        &derived.signature,
+        derived.artifact_identity,
+        &derived.entry_name,
+        resources,
+    );
     let variant = KernelVariantV2 {
         kernel_identity: derived.kernel_identity,
         policy_identity: KernelPolicyIdentityV2::from_bytes([0x72; 32]),
@@ -1762,23 +1871,23 @@ pub(crate) fn canonical_family_for_recovered_launch_bridge_test(
         variant_name: "recovered-exact-wave64".to_owned(),
         entry_name: derived.entry_name.into(),
         launch: Gfx942LaunchContractV2 {
-            rank: derived.launch.rank,
-            block: derived.launch.block,
-            max_grid_blocks: derived.launch.max_grid_blocks,
-            minimum_flat_workgroup_size: derived.launch.minimum_flat_workgroup_size,
-            maximum_flat_workgroup_size: derived.launch.maximum_flat_workgroup_size,
+            rank: derived.launch.declared_rank,
+            block: BlockShapePolicyV2::Exact(derived.launch.required_block_threads),
+            max_grid_blocks: derived.launch.declared_maximum_grid_blocks,
+            minimum_flat_workgroup_size: derived.launch.required_flat_workgroup_size,
+            maximum_flat_workgroup_size: derived.launch.required_flat_workgroup_size,
             wavefront: WavefrontWidthV2::Wave64,
             require_full_waves: false,
             minimum_waves_per_execution_unit: 1,
             maximum_waves_per_execution_unit: 8,
-            max_total_workitems: derived.launch.max_total_workitems,
+            max_total_workitems: derived.launch.declared_maximum_total_workitems,
             unsupported: UnsupportedLaunchFeaturesV2::NONE,
         },
-        resources: derived.resources,
+        resources,
         occupancy_witness: Some(Gfx942OccupancyWitnessV2 {
             verifier_identity: OccupancyVerifierIdentityV2::from_bytes([0x73; 32]),
             metadata_identity: OccupancyMetadataIdentityV2::from_bytes([0x74; 32]),
-            subject_identity: derived.occupancy_subject,
+            subject_identity: occupancy_subject,
             minimum_waves_per_execution_unit: 1,
             maximum_waves_per_execution_unit: 8,
         }),
@@ -1799,7 +1908,8 @@ pub(crate) fn canonical_family_for_recovered_launch_bridge_test(
 #[cfg(test)]
 pub(crate) fn rebind_launch_family_for_bridge_test(family: &mut LaunchKernelFamilyV2) {
     use fe2o3_kernel_ir::{
-        LaunchProofKindV2, LaunchProofObligationV2, canonical_variant_tuple_identity_v2,
+        LaunchProofKindV2, LaunchProofObligationV2, canonical_occupancy_subject_identity_v2,
+        canonical_variant_tuple_identity_v2,
     };
 
     for variant in &mut family.variants {

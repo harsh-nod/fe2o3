@@ -136,10 +136,12 @@ pub use hsa_executable_lifecycle::{
 };
 #[doc(hidden)]
 pub use launch_kernel_v2_bridge::{
-    CurrentRecoveredLaunchKernelMetadataV2, Gfx942ImplicitAbiKindV2, Gfx942ImplicitAbiParameterV2,
-    Gfx942OccupancyMetadataStatusV2, Gfx942PhysicalKernelSignatureIdentityV2,
-    Gfx942PhysicalKernelSignatureV2, LaunchKernelMetadataBridgeErrorV2,
-    OccupancyDependentLaunchAdmissionErrorV2, bind_current_recovered_launch_kernel_metadata_v2,
+    CurrentRecoveredLaunchKernelMetadataV2, Gfx942DynamicLdsProjectionV2, Gfx942ImplicitAbiKindV2,
+    Gfx942ImplicitAbiParameterV2, Gfx942OccupancyMetadataStatusV2,
+    Gfx942PhysicalKernelSignatureIdentityV2, Gfx942PhysicalKernelSignatureV2,
+    Gfx942PhysicalLaunchProjectionV2, Gfx942PhysicalResourceProjectionV2,
+    LaunchKernelMetadataBridgeErrorV2, OccupancyDependentLaunchAdmissionErrorV2,
+    bind_current_recovered_launch_kernel_metadata_v2,
 };
 #[doc(hidden)]
 pub use loaded_kernel::{GeneratedAdmittedLaunch, LoadedKernelLoadError};

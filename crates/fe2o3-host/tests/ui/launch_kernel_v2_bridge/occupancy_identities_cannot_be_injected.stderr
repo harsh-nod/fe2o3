@@ -16,3 +16,21 @@ help: remove the extra arguments
 7 -     binding.require_occupancy_dependent_admission(verifier, metadata);
 7 +     binding.require_occupancy_dependent_admission();
   |
+
+error[E0599]: no method named `occupancy_subject` found for reference `&CurrentRecoveredLaunchKernelMetadataV2<'_>` in the current scope
+ --> tests/ui/launch_kernel_v2_bridge/occupancy_identities_cannot_be_injected.rs:8:21
+  |
+8 |     let _ = binding.occupancy_subject();
+  |                     ^^^^^^^^^^^^^^^^^ method not found in `&CurrentRecoveredLaunchKernelMetadataV2<'_>`
+
+error[E0599]: no method named `resources` found for reference `&CurrentRecoveredLaunchKernelMetadataV2<'_>` in the current scope
+ --> tests/ui/launch_kernel_v2_bridge/occupancy_identities_cannot_be_injected.rs:9:21
+  |
+9 |     let _ = binding.resources();
+  |                     ^^^^^^^^^ private field, not a method
+
+error[E0599]: no method named `variant_name` found for reference `&CurrentRecoveredLaunchKernelMetadataV2<'_>` in the current scope
+  --> tests/ui/launch_kernel_v2_bridge/occupancy_identities_cannot_be_injected.rs:10:21
+   |
+10 |     let _ = binding.variant_name();
+   |                     ^^^^^^^^^^^^ method not found in `&CurrentRecoveredLaunchKernelMetadataV2<'_>`
