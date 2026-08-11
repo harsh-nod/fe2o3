@@ -812,12 +812,13 @@ fn run_application_boundary_result(args: &[OsString]) -> Result<std::process::Ex
                 .map_err(|error| format!("failed to resolve application executable: {error}"))?;
         let pinned_application = pinned_executable::PinnedExecutable::open(&application_path)
             .map_err(|error| format!("failed to pin application executable: {error}"))?;
-        let application_identity = pinned_application
-            .sealed_static_application_identity()
-            .map_err(|error| format!("failed to bind application runtime identity: {error}"))?;
-        let mut child = pinned_application
+        let sealed_application = pinned_application
+            .seal_static_application()
+            .map_err(|error| format!("failed to seal application runtime image: {error}"))?;
+        let application_identity = sealed_application.identity();
+        let mut child = sealed_application
             .command()
-            .map_err(|error| format!("failed to prepare pinned application: {error}"))?;
+            .map_err(|error| format!("failed to prepare sealed application: {error}"))?;
         child.args(&args[application_index + 1..]);
         scrub_application_environment(child.as_command_mut());
         let pending_ack = handoff.configure_child(child.as_command_mut(), application_identity)?;

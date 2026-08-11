@@ -77,6 +77,12 @@ pub(crate) enum PinExecutableError {
     ExecutionObjectChanged {
         path: PathBuf,
     },
+    SnapshotDigestMismatch {
+        path: PathBuf,
+    },
+    SnapshotSealsChanged {
+        path: PathBuf,
+    },
     UnsealedApplicationRuntime {
         path: PathBuf,
         source: SealedStaticApplicationErrorV1,
@@ -159,6 +165,16 @@ impl fmt::Display for PinExecutableError {
                 "pinned executable changed after hashing: {}",
                 path.display()
             ),
+            Self::SnapshotDigestMismatch { path } => write!(
+                formatter,
+                "sealed executable snapshot does not match the pinned bytes from {}",
+                path.display()
+            ),
+            Self::SnapshotSealsChanged { path } => write!(
+                formatter,
+                "sealed executable snapshot has missing or unexpected seals for {}",
+                path.display()
+            ),
             Self::UnsealedApplicationRuntime { path, source } => write!(
                 formatter,
                 "application {} does not satisfy the sealed-static runtime profile: {source}",
@@ -185,7 +201,9 @@ impl Error for PinExecutableError {
             | Self::UnexpectedEof { .. }
             | Self::GrewDuringRead { .. }
             | Self::ChangedDuringRead { .. }
-            | Self::ExecutionObjectChanged { .. } => None,
+            | Self::ExecutionObjectChanged { .. }
+            | Self::SnapshotDigestMismatch { .. }
+            | Self::SnapshotSealsChanged { .. } => None,
         }
     }
 }
@@ -194,15 +212,17 @@ impl Error for PinExecutableError {
 mod platform {
     use super::{MAX_EXECUTABLE_BYTES, Path, PathBuf, PinExecutableError};
     use fe2o3_process_identity::LinuxObjectIdentityV3;
-    use rustix::fs::{Access, Mode, OFlags, SealFlags};
+    use rustix::fs::{Access, MemfdFlags, Mode, OFlags, SealFlags};
     use sha2::{Digest, Sha256};
     use std::ffi::OsStr;
     use std::fs::{File, Metadata};
-    use std::io::{self, Read, Seek, SeekFrom};
+    use std::io::{self, Read, Seek, SeekFrom, Write};
     use std::os::fd::AsRawFd;
     #[cfg(test)]
     use std::os::fd::RawFd;
-    use std::os::unix::fs::{FileExt, MetadataExt};
+    #[cfg(test)]
+    use std::os::unix::fs::FileExt;
+    use std::os::unix::fs::MetadataExt;
     use std::os::unix::process::CommandExt;
     use std::process::{Command, ExitStatus};
 
@@ -257,6 +277,16 @@ mod platform {
         execution_path: PathBuf,
         snapshot: ObjectSnapshot,
         sha256: [u8; 32],
+    }
+
+    /// An exact, immutable application image captured from a validated executable descriptor.
+    pub(crate) struct SealedStaticApplication {
+        file: File,
+        display_path: PathBuf,
+        execution_path: PathBuf,
+        snapshot: ObjectSnapshot,
+        seals: SealFlags,
+        identity: fe2o3_worker_v2_bundle::WorkerV2ApplicationIdentityV1,
     }
 
     impl PinnedExecutable {
@@ -389,6 +419,7 @@ mod platform {
             &self.sha256
         }
 
+        #[cfg(test)]
         pub(crate) fn sealed_static_application_identity(
             &self,
         ) -> Result<fe2o3_worker_v2_bundle::WorkerV2ApplicationIdentityV1, PinExecutableError>
@@ -450,6 +481,155 @@ mod platform {
                 })
         }
 
+        pub(crate) fn seal_static_application(
+            &self,
+        ) -> Result<SealedStaticApplication, PinExecutableError> {
+            let initial = self
+                .file
+                .metadata()
+                .map_err(|source| PinExecutableError::Inspect {
+                    path: self.display_path.clone(),
+                    source,
+                })?;
+            if !self
+                .snapshot
+                .same_execution_object(ObjectSnapshot::from_metadata(&initial))
+            {
+                return Err(PinExecutableError::ExecutionObjectChanged {
+                    path: self.display_path.clone(),
+                });
+            }
+
+            let image_fd = rustix::fs::memfd_create(
+                "fe2o3-static-application",
+                MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING,
+            )
+            .map_err(|source| PinExecutableError::ExecutionStrategy {
+                path: self.display_path.clone(),
+                source: source.into(),
+            })?;
+            let mut image = File::from(image_fd);
+            let mut source = self
+                .file
+                .try_clone()
+                .map_err(|source| PinExecutableError::Read {
+                    path: self.display_path.clone(),
+                    source,
+                })?;
+            source
+                .seek(SeekFrom::Start(0))
+                .map_err(|source| PinExecutableError::Rewind {
+                    path: self.display_path.clone(),
+                    source,
+                })?;
+            let captured = copy_exact(
+                &mut source,
+                &mut image,
+                &self.display_path,
+                self.snapshot.size,
+            )?;
+            if captured != self.sha256 {
+                return Err(PinExecutableError::SnapshotDigestMismatch {
+                    path: self.display_path.clone(),
+                });
+            }
+            let final_source =
+                self.file
+                    .metadata()
+                    .map_err(|source| PinExecutableError::Inspect {
+                        path: self.display_path.clone(),
+                        source,
+                    })?;
+            if !self
+                .snapshot
+                .same_execution_object(ObjectSnapshot::from_metadata(&final_source))
+            {
+                return Err(PinExecutableError::ChangedDuringRead {
+                    path: self.display_path.clone(),
+                });
+            }
+
+            rustix::fs::fchmod(&image, Mode::RUSR | Mode::XUSR).map_err(|source| {
+                PinExecutableError::ExecutionStrategy {
+                    path: self.display_path.clone(),
+                    source: source.into(),
+                }
+            })?;
+            let seals = SealFlags::WRITE | SealFlags::GROW | SealFlags::SHRINK | SealFlags::SEAL;
+            rustix::fs::fcntl_add_seals(
+                &image,
+                SealFlags::WRITE | SealFlags::GROW | SealFlags::SHRINK,
+            )
+            .and_then(|()| rustix::fs::fcntl_add_seals(&image, SealFlags::SEAL))
+            .map_err(|source| PinExecutableError::ExecutionStrategy {
+                path: self.display_path.clone(),
+                source: source.into(),
+            })?;
+            require_exact_seals(&image, seals, &self.display_path)?;
+
+            image
+                .seek(SeekFrom::Start(0))
+                .map_err(|source| PinExecutableError::Rewind {
+                    path: self.display_path.clone(),
+                    source,
+                })?;
+            let size = usize::try_from(self.snapshot.size).expect("executable size is bounded");
+            let mut bytes = Vec::with_capacity(size.saturating_add(1));
+            Read::by_ref(&mut image)
+                .take(self.snapshot.size + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|source| PinExecutableError::Read {
+                    path: self.display_path.clone(),
+                    source,
+                })?;
+            if bytes.len() != size || <[u8; 32]>::from(Sha256::digest(&bytes)) != captured {
+                return Err(PinExecutableError::SnapshotDigestMismatch {
+                    path: self.display_path.clone(),
+                });
+            }
+            let identity =
+                fe2o3_worker_v2_bundle::WorkerV2ApplicationIdentityV1::from_sealed_static_elf_v1(
+                    &bytes,
+                )
+                .map_err(|source| {
+                    PinExecutableError::UnsealedApplicationRuntime {
+                        path: self.display_path.clone(),
+                        source,
+                    }
+                })?;
+
+            let writable_path = PathBuf::from(format!("/proc/self/fd/{}", image.as_raw_fd()));
+            let read_only_fd = rustix::fs::open(
+                &writable_path,
+                OFlags::RDONLY | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(|source| PinExecutableError::ExecutionStrategy {
+                path: self.display_path.clone(),
+                source: source.into(),
+            })?;
+            let file = File::from(read_only_fd);
+            let snapshot = ObjectSnapshot::from_metadata(&file.metadata().map_err(|source| {
+                PinExecutableError::Inspect {
+                    path: self.display_path.clone(),
+                    source,
+                }
+            })?);
+            require_exact_seals(&file, seals, &self.display_path)?;
+            let execution_path = PathBuf::from(format!("/proc/self/fd/{}", file.as_raw_fd()));
+            validate_execution_path(&file, &execution_path, snapshot, &self.display_path)?;
+            drop(image);
+
+            Ok(SealedStaticApplication {
+                file,
+                display_path: self.display_path.clone(),
+                execution_path,
+                snapshot,
+                seals,
+                identity,
+            })
+        }
+
         pub(crate) const fn size(&self) -> u64 {
             self.snapshot.size
         }
@@ -488,7 +668,7 @@ mod platform {
             let mut command = Command::new(&self.execution_path);
             command.arg0(&self.display_path);
             Ok(PinnedCommand {
-                _executable: self,
+                _executable: &self.file,
                 command,
                 configured_argv0: self.display_path.as_os_str(),
             })
@@ -518,9 +698,50 @@ mod platform {
         (descriptor >= 3 && text == format!("/proc/self/fd/{descriptor}")).then_some(descriptor)
     }
 
+    impl SealedStaticApplication {
+        pub(crate) const fn identity(
+            &self,
+        ) -> fe2o3_worker_v2_bundle::WorkerV2ApplicationIdentityV1 {
+            self.identity
+        }
+
+        pub(crate) fn command(&self) -> Result<PinnedCommand<'_>, PinExecutableError> {
+            require_exact_seals(&self.file, self.seals, &self.display_path)?;
+            validate_execution_path(
+                &self.file,
+                &self.execution_path,
+                self.snapshot,
+                &self.display_path,
+            )?;
+            let status = rustix::fs::fcntl_getfl(&self.file).map_err(|source| {
+                PinExecutableError::ExecutionStrategy {
+                    path: self.display_path.clone(),
+                    source: source.into(),
+                }
+            })?;
+            if status & OFlags::ACCMODE != OFlags::RDONLY {
+                return Err(PinExecutableError::ExecutionObjectChanged {
+                    path: self.display_path.clone(),
+                });
+            }
+            let mut command = Command::new(&self.execution_path);
+            command.arg0(&self.display_path);
+            Ok(PinnedCommand {
+                _executable: &self.file,
+                command,
+                configured_argv0: self.display_path.as_os_str(),
+            })
+        }
+
+        #[cfg(test)]
+        fn bytes(&self) -> Vec<u8> {
+            std::fs::read(&self.execution_path).unwrap()
+        }
+    }
+
     /// A command that cannot outlive the descriptor used by its executable pathname.
     pub(crate) struct PinnedCommand<'executable> {
-        _executable: &'executable PinnedExecutable,
+        _executable: &'executable File,
         command: Command,
         configured_argv0: &'executable OsStr,
     }
@@ -596,6 +817,73 @@ mod platform {
         Ok(hasher.finalize().into())
     }
 
+    fn copy_exact<R: Read, W: Write>(
+        reader: &mut R,
+        writer: &mut W,
+        display_path: &Path,
+        expected_size: u64,
+    ) -> Result<[u8; 32], PinExecutableError> {
+        let mut hasher = Sha256::new();
+        let mut buffer = [0_u8; HASH_CHUNK_BYTES];
+        let mut total = 0_u64;
+        while total < expected_size {
+            let remaining = expected_size - total;
+            let requested = usize::try_from(remaining.min(HASH_CHUNK_BYTES as u64))
+                .expect("copy chunk length fits usize");
+            let read = read_retry(reader, &mut buffer[..requested]).map_err(|source| {
+                PinExecutableError::Read {
+                    path: display_path.to_path_buf(),
+                    source,
+                }
+            })?;
+            if read == 0 {
+                return Err(PinExecutableError::UnexpectedEof {
+                    path: display_path.to_path_buf(),
+                    expected: expected_size,
+                    actual: total,
+                });
+            }
+            writer.write_all(&buffer[..read]).map_err(|source| {
+                PinExecutableError::ExecutionStrategy {
+                    path: display_path.to_path_buf(),
+                    source,
+                }
+            })?;
+            hasher.update(&buffer[..read]);
+            total += read as u64;
+        }
+        if read_retry(reader, &mut buffer[..1]).map_err(|source| PinExecutableError::Read {
+            path: display_path.to_path_buf(),
+            source,
+        })? != 0
+        {
+            return Err(PinExecutableError::GrewDuringRead {
+                path: display_path.to_path_buf(),
+                expected: expected_size,
+            });
+        }
+        Ok(hasher.finalize().into())
+    }
+
+    fn require_exact_seals(
+        file: &File,
+        expected: SealFlags,
+        display_path: &Path,
+    ) -> Result<(), PinExecutableError> {
+        let actual = rustix::fs::fcntl_get_seals(file).map_err(|source| {
+            PinExecutableError::ExecutionStrategy {
+                path: display_path.to_path_buf(),
+                source: source.into(),
+            }
+        })?;
+        if actual != expected {
+            return Err(PinExecutableError::SnapshotSealsChanged {
+                path: display_path.to_path_buf(),
+            });
+        }
+        Ok(())
+    }
+
     fn read_retry<R: Read>(reader: &mut R, buffer: &mut [u8]) -> io::Result<usize> {
         loop {
             match reader.read(buffer) {
@@ -648,7 +936,7 @@ mod platform {
     mod tests {
         use super::*;
         use crate::pinned_executable_test_directory::TestDirectory;
-        use std::fs::{self, FileTimes};
+        use std::fs::{self, FileTimes, OpenOptions};
         use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
         use std::process::Stdio;
         use std::time::{Duration, Instant};
@@ -758,6 +1046,79 @@ mod platform {
         }
 
         #[test]
+        fn sealed_static_snapshot_is_exact_immutable_and_source_independent() {
+            let root = TestDirectory::new();
+            let path = root.path().join("static-app");
+            let original = sealed_static_elf();
+            write_executable(&path, &original);
+            let pinned = PinnedExecutable::open(&path).unwrap();
+            let sealed = pinned.seal_static_application().unwrap();
+            let identity = sealed.identity();
+
+            let mut first_mutation = original.clone();
+            *first_mutation.last_mut().unwrap() ^= 0xff;
+            fs::write(&path, &first_mutation).unwrap();
+            let command = sealed.command().unwrap();
+            assert_eq!(sealed.bytes(), original);
+            assert_eq!(sealed.identity(), identity);
+
+            let mut second_mutation = first_mutation;
+            second_mutation[0] ^= 0xff;
+            fs::write(&path, &second_mutation).unwrap();
+            assert_eq!(sealed.bytes(), original);
+            assert_eq!(sealed.identity(), identity);
+            assert_eq!(command.as_command().get_program(), sealed.execution_path);
+        }
+
+        #[test]
+        fn sealed_static_snapshot_rejects_write_resize_and_new_seals() {
+            let root = TestDirectory::new();
+            let path = root.path().join("static-app");
+            let original = sealed_static_elf();
+            write_executable(&path, &original);
+            let pinned = PinnedExecutable::open(&path).unwrap();
+            let sealed = pinned.seal_static_application().unwrap();
+
+            assert_eq!(
+                rustix::fs::fcntl_get_seals(&sealed.file).unwrap(),
+                SealFlags::WRITE | SealFlags::GROW | SealFlags::SHRINK | SealFlags::SEAL
+            );
+            if let Ok(mut writable) = OpenOptions::new().write(true).open(&sealed.execution_path) {
+                assert!(writable.write_all(b"attacker").is_err());
+                assert!(writable.set_len(1).is_err());
+                assert!(writable.set_len(original.len() as u64 + 1).is_err());
+                assert!(rustix::fs::fcntl_add_seals(&writable, SealFlags::EXEC).is_err());
+            }
+            assert_eq!(sealed.bytes(), original);
+        }
+
+        #[test]
+        fn sealed_static_command_rejects_descriptor_identity_substitution() {
+            let root = TestDirectory::new();
+            let first_path = root.path().join("first");
+            let second_path = root.path().join("second");
+            write_executable(&first_path, &sealed_static_elf());
+            let mut second_bytes = sealed_static_elf();
+            second_bytes.push(0);
+            write_executable(&second_path, &second_bytes);
+            let first = PinnedExecutable::open(&first_path)
+                .unwrap()
+                .seal_static_application()
+                .unwrap();
+            let second = PinnedExecutable::open(&second_path)
+                .unwrap()
+                .seal_static_application()
+                .unwrap();
+            let mut substituted = first;
+            substituted.execution_path = second.execution_path.clone();
+
+            assert!(matches!(
+                substituted.command(),
+                Err(PinExecutableError::ExecutionObjectChanged { .. })
+            ));
+        }
+
+        #[test]
         fn exact_hash_policy_rejects_short_and_growing_streams() {
             let path = Path::new("fixture");
             let mut short = &b"abc"[..];
@@ -774,6 +1135,17 @@ mod platform {
             assert!(matches!(
                 hash_exact(&mut growing, path, 2),
                 Err(PinExecutableError::GrewDuringRead { expected: 2, .. })
+            ));
+
+            let mut short = &b"abc"[..];
+            let mut snapshot = Vec::new();
+            assert!(matches!(
+                copy_exact(&mut short, &mut snapshot, path, 4),
+                Err(PinExecutableError::UnexpectedEof {
+                    expected: 4,
+                    actual: 3,
+                    ..
+                })
             ));
         }
 
