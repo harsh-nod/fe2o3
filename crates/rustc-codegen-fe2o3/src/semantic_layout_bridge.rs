@@ -3,6 +3,7 @@
 //! The records in this module are observational compiler evidence. They carry
 //! no code-generation, artifact, proof, device, or launch authority.
 
+use std::collections::BTreeMap;
 use std::fmt::{self, Write};
 
 use dialect_mir::{
@@ -49,6 +50,8 @@ pub struct SemanticLayoutTargetV1 {
     llvm_target: String,
     data_layout: String,
     default_pointer_width_bits: u16,
+    active_cpu: Option<String>,
+    active_features: Option<String>,
 }
 
 impl SemanticLayoutTargetV1 {
@@ -75,7 +78,32 @@ impl SemanticLayoutTargetV1 {
             llvm_target,
             data_layout,
             default_pointer_width_bits,
+            active_cpu: None,
+            active_features: None,
         })
+    }
+
+    /// Constructs a target identity with the effective rustc codegen profile.
+    ///
+    /// `target_features` is the target-spec baseline and `codegen_features` is
+    /// the active `-Ctarget-feature` override. Conflicting declarations within
+    /// either component are rejected. An override may replace one baseline
+    /// feature because that is how rustc computes the effective configuration.
+    pub fn new_with_codegen_profile(
+        llvm_target: impl Into<String>,
+        data_layout: impl Into<String>,
+        default_pointer_width_bits: u16,
+        active_cpu: &str,
+        target_features: &str,
+        codegen_features: &str,
+    ) -> Result<Self, SemanticLayoutBridgeError> {
+        let mut target = Self::new(llvm_target, data_layout, default_pointer_width_bits)?;
+        target.active_cpu = normalize_active_cpu(active_cpu)?;
+        target.active_features = Some(normalize_active_features(
+            target_features,
+            codegen_features,
+        )?);
+        Ok(target)
     }
 
     pub fn llvm_target(&self) -> &str {
@@ -90,10 +118,29 @@ impl SemanticLayoutTargetV1 {
         self.default_pointer_width_bits
     }
 
+    /// Effective target CPU selected by the active rustc session.
+    ///
+    /// `None` means that rustc exposed only an ambiguous/default/native CPU.
+    pub fn active_cpu(&self) -> Option<&str> {
+        self.active_cpu.as_deref()
+    }
+
+    /// Canonical effective target-feature set selected by the active session.
+    ///
+    /// Entries are sorted by feature name and duplicate declarations are
+    /// collapsed. `None` means no active-session profile was captured.
+    pub fn active_features(&self) -> Option<&str> {
+        self.active_features.as_deref()
+    }
+
+    pub fn has_exact_codegen_profile(&self, cpu: &str, features: &str) -> bool {
+        self.active_cpu() == Some(cpu) && self.active_features() == Some(features)
+    }
+
     fn write_canonical(&self, output: &mut String) {
         write!(
             output,
-            "target(llvm={}:{};data-layout={}:{};default-pointer-bits={})",
+            "target(llvm={}:{};data-layout={}:{};default-pointer-bits={};cpu=",
             self.llvm_target.len(),
             self.llvm_target,
             self.data_layout.len(),
@@ -101,7 +148,111 @@ impl SemanticLayoutTargetV1 {
             self.default_pointer_width_bits,
         )
         .expect("writing to a String cannot fail");
+        write_optional_text(output, self.active_cpu());
+        output.push_str(";features=");
+        write_optional_text(output, self.active_features());
+        output.push(')');
     }
+}
+
+fn write_optional_text(output: &mut String, value: Option<&str>) {
+    match value {
+        Some(value) => {
+            write!(output, "{}:{value}", value.len()).expect("writing to a String cannot fail");
+        }
+        None => output.push_str("unavailable"),
+    }
+}
+
+fn normalize_active_cpu(cpu: &str) -> Result<Option<String>, SemanticLayoutBridgeError> {
+    let cpu = cpu.trim();
+    if cpu.is_empty()
+        || cpu.eq_ignore_ascii_case("default")
+        || cpu.eq_ignore_ascii_case("generic")
+        || cpu.eq_ignore_ascii_case("native")
+        || cpu.eq_ignore_ascii_case("baseline")
+    {
+        return Ok(None);
+    }
+    validate_target_text("rustc active target CPU", cpu)?;
+    if cpu
+        .bytes()
+        .any(|byte| byte.is_ascii_whitespace() || byte == b',')
+    {
+        return Err(SemanticLayoutBridgeError::InvalidTarget {
+            field: "rustc active target CPU",
+            detail: "must be one unambiguous CPU name".to_owned(),
+        });
+    }
+    Ok(Some(cpu.to_ascii_lowercase()))
+}
+
+fn normalize_active_features(
+    target_features: &str,
+    codegen_features: &str,
+) -> Result<String, SemanticLayoutBridgeError> {
+    let mut effective = parse_feature_component("rustc target-spec features", target_features)?;
+    for (name, enabled) in parse_feature_component(
+        "rustc active -Ctarget-feature configuration",
+        codegen_features,
+    )? {
+        effective.insert(name, enabled);
+    }
+    let mut output = String::new();
+    for (index, (name, enabled)) in effective.into_iter().enumerate() {
+        if index != 0 {
+            output.push(',');
+        }
+        output.push(if enabled { '+' } else { '-' });
+        output.push_str(&name);
+    }
+    if !output.is_empty() {
+        validate_target_text("rustc normalized target features", &output)?;
+    }
+    Ok(output)
+}
+
+fn parse_feature_component(
+    field: &'static str,
+    features: &str,
+) -> Result<BTreeMap<String, bool>, SemanticLayoutBridgeError> {
+    let mut parsed = BTreeMap::new();
+    if features.trim().is_empty() {
+        return Ok(parsed);
+    }
+    for declaration in features.split(',') {
+        let declaration = declaration.trim();
+        let (enabled, name) = match declaration.as_bytes().first() {
+            Some(b'+') => (true, &declaration[1..]),
+            Some(b'-') => (false, &declaration[1..]),
+            _ => {
+                return Err(SemanticLayoutBridgeError::InvalidTarget {
+                    field,
+                    detail: "each feature must have an explicit `+` or `-` state".to_owned(),
+                });
+            }
+        };
+        if name.is_empty()
+            || !name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+        {
+            return Err(SemanticLayoutBridgeError::InvalidTarget {
+                field,
+                detail: "feature names must be nonempty ASCII identifiers".to_owned(),
+            });
+        }
+        let name = name.to_ascii_lowercase();
+        if let Some(previous) = parsed.insert(name.clone(), enabled)
+            && previous != enabled
+        {
+            return Err(SemanticLayoutBridgeError::InvalidTarget {
+                field,
+                detail: format!("feature `{name}` has conflicting states"),
+            });
+        }
+    }
+    Ok(parsed)
 }
 
 /// Canonical, target-bound semantic type/layout evidence produced by rustc.
@@ -266,10 +417,20 @@ pub fn rustc_semantic_layout_target_v1(
                 detail: "rustc pointer width does not fit u16".to_owned(),
             }
         })?;
-    SemanticLayoutTargetV1::new(
+    let active_cpu = tcx
+        .sess
+        .opts
+        .cg
+        .target_cpu
+        .as_deref()
+        .unwrap_or(tcx.sess.target.cpu.as_ref());
+    SemanticLayoutTargetV1::new_with_codegen_profile(
         tcx.sess.target.llvm_target.to_string(),
         tcx.sess.target.data_layout.to_string(),
         pointer_width,
+        active_cpu,
+        tcx.sess.target.features.as_ref(),
+        &tcx.sess.opts.cg.target_feature,
     )
 }
 
@@ -1222,6 +1383,68 @@ mod tests {
 
     fn target() -> SemanticLayoutTargetV1 {
         SemanticLayoutTargetV1::new("test-target", "e-p:64:64", 64).unwrap()
+    }
+
+    #[test]
+    fn active_codegen_profile_is_normalized_and_identity_bound() {
+        let first = SemanticLayoutTargetV1::new_with_codegen_profile(
+            "amdgcn-amd-amdhsa",
+            "e-p:64:64",
+            64,
+            "GFX942",
+            "+wavefrontsize64,-wavefrontsize32",
+            "-xnack,+wavefrontsize64",
+        )
+        .unwrap();
+        let reordered = SemanticLayoutTargetV1::new_with_codegen_profile(
+            "amdgcn-amd-amdhsa",
+            "e-p:64:64",
+            64,
+            "gfx942",
+            "-wavefrontsize32,+wavefrontsize64,+wavefrontsize64",
+            "-xnack",
+        )
+        .unwrap();
+        assert_eq!(first, reordered);
+        assert_eq!(first.active_cpu(), Some("gfx942"));
+        assert_eq!(
+            first.active_features(),
+            Some("-wavefrontsize32,+wavefrontsize64,-xnack")
+        );
+
+        let unavailable = SemanticLayoutTargetV1::new_with_codegen_profile(
+            "amdgcn-amd-amdhsa",
+            "e-p:64:64",
+            64,
+            "native",
+            "",
+            "-xnack",
+        )
+        .unwrap();
+        assert_eq!(unavailable.active_cpu(), None);
+        assert_ne!(first, unavailable);
+        assert!(
+            SemanticLayoutTargetV1::new_with_codegen_profile(
+                "amdgcn-amd-amdhsa",
+                "e-p:64:64",
+                64,
+                "gfx942",
+                "+xnack,-xnack",
+                "",
+            )
+            .is_err()
+        );
+        assert!(
+            SemanticLayoutTargetV1::new_with_codegen_profile(
+                "amdgcn-amd-amdhsa",
+                "e-p:64:64",
+                64,
+                "gfx942",
+                "xnack",
+                "",
+            )
+            .is_err()
+        );
     }
 
     fn scalar_facts(source: SourceScalarKind) -> TypeLayoutFacts {

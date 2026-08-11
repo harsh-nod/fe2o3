@@ -10,9 +10,9 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use dialect_mir::{
-    GFX942_TARGET_CPU, GFX942_TARGET_DATA_LAYOUT, GFX942_TARGET_FEATURES, GFX942_TARGET_TRIPLE,
-    PointerMetadataV2, ScalarValidityRangeV2, SemanticEnumEncodingV2, SemanticFieldV2,
-    SemanticMutabilityV2, SemanticNichePathComponentV2, SemanticNicheSourceV2, SemanticScalarV2,
+    GFX942_TARGET_CPU, GFX942_TARGET_DATA_LAYOUT, GFX942_TARGET_TRIPLE, PointerMetadataV2,
+    ScalarValidityRangeV2, SemanticEnumEncodingV2, SemanticFieldV2, SemanticMutabilityV2,
+    SemanticNichePathComponentV2, SemanticNicheSourceV2, SemanticScalarV2,
     SemanticTypeGraphBudgetsV2, SemanticTypeGraphBuilderV2, SemanticTypeGraphErrorV2,
     SemanticTypeGraphV2, SemanticTypeKindV2, SemanticTypeLayoutV2, SemanticTypeNodeIdV2,
     SemanticTypeNodeV2, SemanticVariantV2,
@@ -34,10 +34,11 @@ use crate::semantic_layout_bridge::{
     SemanticLayoutBridgeError, SemanticLayoutTargetV1, rustc_semantic_layout_target_v1,
 };
 
-const OBSERVATION_DOMAIN_V2: &[u8] = b"FE2O3/RUSTC-TYPE-LAYOUT-OBSERVATION/V2\0";
-const GFX942_PROJECTION_DOMAIN_V2: &[u8] = b"FE2O3/GFX942-LAYOUT-PROJECTION/V2\0";
-const GFX942_CANDIDATE_DOMAIN_V2: &[u8] = b"FE2O3/GFX942-LAYOUT-CANDIDATE/V2\0";
+const OBSERVATION_DOMAIN_V2: &[u8] = b"FE2O3/RUSTC-TYPE-LAYOUT-OBSERVATION/V3\0";
+const GFX942_PROJECTION_DOMAIN_V2: &[u8] = b"FE2O3/GFX942-LAYOUT-PROJECTION/V3\0";
+const GFX942_CANDIDATE_DOMAIN_V2: &[u8] = b"FE2O3/GFX942-LAYOUT-CANDIDATE/V3\0";
 const GFX942_POINTER_WIDTH_BITS: u16 = 64;
+const GFX942_LAYOUT_ACTIVE_FEATURES_V2: &str = "-wavefrontsize32,+wavefrontsize64,-xnack";
 const DEFAULT_MAX_SIDECAR_RECORDS: u32 = 32_768;
 const DEFAULT_MAX_SIDECAR_BYTES: u32 = 8 * 1024 * 1024;
 const DEFAULT_MAX_OBSERVATION_WORK: u64 = 1_000_000;
@@ -88,7 +89,7 @@ impl CanonicalGfx942LayoutTargetV2 {
         Self {
             triple: GFX942_TARGET_TRIPLE.to_owned(),
             cpu: GFX942_TARGET_CPU.to_owned(),
-            features: GFX942_TARGET_FEATURES.to_owned(),
+            features: GFX942_LAYOUT_ACTIVE_FEATURES_V2.to_owned(),
             data_layout: GFX942_TARGET_DATA_LAYOUT.to_owned(),
             pointer_width_bits: GFX942_POINTER_WIDTH_BITS,
         }
@@ -117,7 +118,7 @@ impl CanonicalGfx942LayoutTargetV2 {
     fn is_canonical(&self) -> bool {
         self.triple == GFX942_TARGET_TRIPLE
             && self.cpu == GFX942_TARGET_CPU
-            && self.features == GFX942_TARGET_FEATURES
+            && self.features == GFX942_LAYOUT_ACTIVE_FEATURES_V2
             && self.data_layout == GFX942_TARGET_DATA_LAYOUT
             && self.pointer_width_bits == GFX942_POINTER_WIDTH_BITS
     }
@@ -238,6 +239,9 @@ impl RustcTypeLayoutObservationV2 {
         self.rustc_target.llvm_target() == GFX942_TARGET_TRIPLE
             && self.rustc_target.data_layout() == GFX942_TARGET_DATA_LAYOUT
             && self.rustc_target.default_pointer_width_bits() == GFX942_POINTER_WIDTH_BITS
+            && self
+                .rustc_target
+                .has_exact_codegen_profile(GFX942_TARGET_CPU, GFX942_LAYOUT_ACTIVE_FEATURES_V2)
     }
 
     pub fn layout_record(&self, key: &str) -> Option<&RustcTypeLayoutRecordV2> {
@@ -2345,9 +2349,18 @@ fn observation_identity(target: &SemanticLayoutTargetV1, graph: &[u8], sidecar: 
     hash_component(&mut digest, target.llvm_target().as_bytes());
     hash_component(&mut digest, target.data_layout().as_bytes());
     digest.update(target.default_pointer_width_bits().to_le_bytes());
+    hash_optional_component(&mut digest, target.active_cpu());
+    hash_optional_component(&mut digest, target.active_features());
     hash_component(&mut digest, graph);
     hash_component(&mut digest, sidecar);
     digest.finalize().into()
+}
+
+fn hash_optional_component(digest: &mut Sha256, value: Option<&str>) {
+    digest.update([u8::from(value.is_some())]);
+    if let Some(value) = value {
+        hash_component(digest, value.as_bytes());
+    }
 }
 
 fn projection_identity(canonical_bytes: &[u8]) -> [u8; 32] {
@@ -2926,6 +2939,32 @@ static POINTER_NICHE: Option<&u8> = Some(&BYTE);
         callbacks
     }
 
+    fn retarget_observation(
+        observation: &RustcTypeLayoutObservationV2,
+        cpu: &str,
+        target_features: &str,
+        codegen_features: &str,
+    ) -> RustcTypeLayoutObservationV2 {
+        let mut retargeted = observation.clone();
+        retargeted.rustc_target = SemanticLayoutTargetV1::new_with_codegen_profile(
+            GFX942_TARGET_TRIPLE,
+            GFX942_TARGET_DATA_LAYOUT,
+            GFX942_POINTER_WIDTH_BITS,
+            cpu,
+            target_features,
+            codegen_features,
+        )
+        .unwrap();
+        let sidecar = encode_sidecar(
+            &retargeted.layout_records,
+            SemanticTypeLayoutBudgetsV2::default().max_sidecar_bytes,
+        )
+        .unwrap();
+        retargeted.identity_sha256 =
+            observation_identity(&retargeted.rustc_target, &retargeted.graph_bytes, &sidecar);
+        retargeted
+    }
+
     #[derive(Clone, Copy)]
     #[repr(C)]
     struct HostInner {
@@ -3057,6 +3096,67 @@ static POINTER_NICHE: Option<&u8> = Some(&BYTE);
                 metadata: PointerMetadataV2::VTable { .. },
                 ..
             }
+        ));
+    }
+
+    #[test]
+    fn canonical_gfx942_observation_requires_exact_cpu_and_xnack_profile() {
+        let captures = captures();
+        let host = &captures.captures["C_VALUE"];
+        let gfx942 = retarget_observation(
+            host,
+            "gfx942",
+            "+wavefrontsize64,-wavefrontsize32",
+            "-xnack,+wavefrontsize64",
+        );
+        assert!(gfx942.was_observed_on_canonical_gfx942_target());
+
+        let reordered = retarget_observation(
+            host,
+            "GFX942",
+            "-wavefrontsize32,+wavefrontsize64,+wavefrontsize64",
+            "-xnack",
+        );
+        assert!(reordered.was_observed_on_canonical_gfx942_target());
+        assert_eq!(gfx942.rustc_target(), reordered.rustc_target());
+        assert_eq!(gfx942.identity_sha256(), reordered.identity_sha256());
+
+        for observation in [
+            retarget_observation(
+                host,
+                "gfx900",
+                "-wavefrontsize32,+wavefrontsize64",
+                "-xnack",
+            ),
+            retarget_observation(
+                host,
+                "gfx942",
+                "-wavefrontsize32,+wavefrontsize64",
+                "+xnack",
+            ),
+            retarget_observation(host, "gfx942", "-wavefrontsize32,+wavefrontsize64", ""),
+            retarget_observation(
+                host,
+                "native",
+                "-wavefrontsize32,+wavefrontsize64",
+                "-xnack",
+            ),
+        ] {
+            assert!(!observation.was_observed_on_canonical_gfx942_target());
+            assert_ne!(observation.identity_sha256(), gfx942.identity_sha256());
+        }
+
+        let mut mutated = gfx942.clone();
+        mutated.rustc_target = retarget_observation(
+            host,
+            "gfx900",
+            "-wavefrontsize32,+wavefrontsize64",
+            "-xnack",
+        )
+        .rustc_target;
+        assert!(matches!(
+            validate_observation_integrity(&mutated, SemanticTypeLayoutBudgetsV2::default()),
+            Err(Gfx942LayoutCompatibilityErrorV2::ObservationIdentityMismatch)
         ));
     }
 
