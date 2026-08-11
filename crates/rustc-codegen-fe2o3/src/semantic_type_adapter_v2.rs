@@ -613,6 +613,7 @@ pub fn capture_rustc_type_for_gfx942_v2<'tcx>(
     if !expected_target.is_exact_gfx942() {
         return Err(SemanticTypeAdapterErrorV2::NotGfx942);
     }
+    let _root_type_name = bounded_type_name(ty, budgets.graph.max_name_bytes)?;
     let observed = rustc_semantic_layout_target_v1(tcx)?;
     if expected_target.rustc_target() != &observed {
         return Err(SemanticTypeAdapterErrorV2::TargetMismatch {
@@ -1433,8 +1434,8 @@ fn capture_unsized_pointer<'tcx>(
     let data_pointer_bytes = u8::try_from(first.size(&layout_cx).bytes())
         .map_err(|_| unsupported("root", "pointer width exceeds u8 bytes"))?;
     let mut graph = SemanticTypeGraphBuilderV2::new(budgets.graph);
-    let root_key = type_name(ty);
-    let pointee_key = type_name(pointee);
+    let root_key = bounded_type_name(ty, budgets.graph.max_name_bytes)?;
+    let pointee_key = bounded_type_name(pointee, budgets.graph.max_name_bytes)?;
     let root = graph.declare(root_key.clone())?;
     let pointee_id = graph.declare(pointee_key.clone())?;
     let pointee_layout = layout_cx
@@ -1704,8 +1705,43 @@ fn extend_bounded(
     Ok(())
 }
 
-fn type_name(ty: Ty<'_>) -> String {
-    with_no_trimmed_paths!(format!("{ty}"))
+struct BoundedTypeNameWriter {
+    text: String,
+    max_bytes: usize,
+    exceeded: bool,
+}
+
+impl fmt::Write for BoundedTypeNameWriter {
+    fn write_str(&mut self, value: &str) -> fmt::Result {
+        if self.text.len().saturating_add(value.len()) > self.max_bytes {
+            self.exceeded = true;
+            return Err(fmt::Error);
+        }
+        self.text.push_str(value);
+        Ok(())
+    }
+}
+
+fn bounded_type_name(ty: Ty<'_>, max_bytes: u32) -> Result<String, SemanticTypeAdapterErrorV2> {
+    let max_bytes = max_bytes as usize;
+    let mut output = BoundedTypeNameWriter {
+        text: String::with_capacity(max_bytes.min(256)),
+        max_bytes,
+        exceeded: false,
+    };
+    let rendered = with_no_trimmed_paths!(fmt::write(&mut output, format_args!("{ty}")));
+    if output.exceeded {
+        return Err(SemanticTypeAdapterErrorV2::BoundExceeded {
+            resource: "rustc root type name bytes",
+            actual: max_bytes.saturating_add(1) as u64,
+            max: max_bytes as u64,
+        });
+    }
+    rendered.map_err(|_| SemanticTypeAdapterErrorV2::Inconsistent {
+        path: "root".to_owned(),
+        detail: "rustc type name formatting failed".to_owned(),
+    })?;
+    Ok(output.text)
 }
 
 fn unsupported(path: &str, detail: &'static str) -> SemanticTypeAdapterErrorV2 {
@@ -1796,6 +1832,7 @@ static POINTER_NICHE: Option<&u8> = Some(&BYTE);
         pointer_niche: Option<SemanticTypeAdapterErrorV2>,
         mismatch: Option<SemanticTypeAdapterErrorV2>,
         bounded: Option<SemanticTypeAdapterErrorV2>,
+        name_bounded: Option<SemanticTypeAdapterErrorV2>,
         dst_bounded: Option<SemanticTypeAdapterErrorV2>,
         reauthenticated: bool,
     }
@@ -1869,6 +1906,20 @@ static POINTER_NICHE: Option<&u8> = Some(&BYTE);
                 SemanticTypeCaptureBudgetsV2 {
                     graph: SemanticTypeGraphBudgetsV2 {
                         max_nodes: 1,
+                        ..SemanticTypeGraphBudgetsV2::default()
+                    },
+                    ..SemanticTypeCaptureBudgetsV2::default()
+                },
+            )
+            .err();
+            self.name_bounded = capture_rustc_type_for_gfx942_v2(
+                tcx,
+                local_static_type(tcx, "C_VALUE"),
+                &target,
+                revision(),
+                SemanticTypeCaptureBudgetsV2 {
+                    graph: SemanticTypeGraphBudgetsV2 {
+                        max_name_bytes: 4,
                         ..SemanticTypeGraphBudgetsV2::default()
                     },
                     ..SemanticTypeCaptureBudgetsV2::default()
@@ -1980,6 +2031,14 @@ static POINTER_NICHE: Option<&u8> = Some(&BYTE);
             Some(SemanticTypeAdapterErrorV2::TargetMismatch { .. })
         ));
         assert!(results.bounded.is_some());
+        assert!(matches!(
+            results.name_bounded,
+            Some(SemanticTypeAdapterErrorV2::BoundExceeded {
+                resource: "rustc root type name bytes",
+                actual: 5,
+                max: 4,
+            })
+        ));
         assert!(matches!(
             results.dst_bounded,
             Some(SemanticTypeAdapterErrorV2::BoundExceeded {
