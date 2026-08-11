@@ -290,6 +290,31 @@ fn transient_remap_between_ready_and_done_is_outside_two_snapshot_guarantee() {
 }
 
 #[test]
+fn failed_ack_delivery_terminates_and_reaps_worker() {
+    let directory = temp_dir("closed-ack");
+    let pid_file = directory.join("worker.pid");
+    let mut payload = vec![16];
+    payload.extend_from_slice(pid_file.to_str().unwrap().as_bytes());
+    let worker = worker();
+    let started = Instant::now();
+    let error = worker
+        .analyze(payload, vec![entry()], limits())
+        .unwrap_err();
+    assert_eq!(
+        error.kind(),
+        &AuthenticatedPhysicalMachineEffectErrorKindV1::ControlHandshake
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "ACK failure cleanup took {:?}",
+        started.elapsed()
+    );
+    let pid = fs::read_to_string(&pid_file).unwrap();
+    assert!(!Path::new(&format!("/proc/{pid}")).exists());
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn in_place_source_mutation_during_capture_never_authenticates() {
     let directory = temp_dir("mutation-race");
     let selected = directory.join("worker");

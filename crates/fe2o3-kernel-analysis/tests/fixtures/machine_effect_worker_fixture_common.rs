@@ -231,9 +231,24 @@ fn analysis_response(bytes: Vec<u8>, control_challenge: [u8; 32]) {
         _ => {}
     }
     std::io::stdout().write_all(&output).unwrap();
+    if mode == 16 {
+        close_stdin_after_done_and_sleep(&request.payload[1..], control_challenge);
+    }
     if mode == 13 {
         reexec_from_spoofed_memfd();
     }
+}
+
+#[allow(unsafe_code)]
+fn close_stdin_after_done_and_sleep(path: &[u8], challenge: [u8; 32]) -> ! {
+    let path = std::str::from_utf8(path).unwrap();
+    std::fs::write(path, std::process::id().to_string()).unwrap();
+    std::io::stdout().flush().unwrap();
+    write_control(std::io::stderr(), DONE_DOMAIN, challenge);
+    // SAFETY: this fixture intentionally makes the protocol ACK write fail.
+    unsafe { rustix::io::close(0) };
+    thread::sleep(Duration::from_secs(30));
+    exit(90)
 }
 
 fn reexec_from_spoofed_memfd() -> ! {

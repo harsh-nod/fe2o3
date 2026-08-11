@@ -533,7 +533,8 @@ mod platform {
     use rustix::{
         fs::{MemfdFlags, Mode, OFlags, SealFlags},
         process::{
-            Pid, Resource, Rlimit, Signal, getrlimit, kill_process, kill_process_group, setrlimit,
+            Pid, Resource, Rlimit, Signal, WaitId, WaitIdOptions, getrlimit, kill_process,
+            kill_process_group, setrlimit, waitid,
         },
         thread::set_no_new_privs,
     };
@@ -624,6 +625,55 @@ mod platform {
         limits: AuthenticatedPhysicalMachineEffectLimitsV1,
         deadline: Instant,
         observation: &'a mut ProcessObservation,
+    }
+
+    struct ChildProcessGuard {
+        child: Child,
+        descendants_seen: BTreeSet<u32>,
+        reaped: bool,
+    }
+
+    impl ChildProcessGuard {
+        fn new(child: Child) -> Self {
+            Self {
+                child,
+                descendants_seen: BTreeSet::new(),
+                reaped: false,
+            }
+        }
+
+        fn refresh_descendants(&mut self) {
+            self.descendants_seen.extend(descendants(self.child.id()));
+        }
+
+        fn terminate_and_wait(&mut self) -> io::Result<ExitStatus> {
+            self.refresh_descendants();
+            terminate_process_tree(&mut self.child, &self.descendants_seen);
+            let status = self.child.wait()?;
+            self.reaped = true;
+            Ok(status)
+        }
+
+        fn exited_without_reaping(&self) -> io::Result<bool> {
+            let raw = i32::try_from(self.child.id()).map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidInput, "worker PID exceeds i32")
+            })?;
+            let pid = Pid::from_raw(raw)
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "worker PID is zero"))?;
+            Ok(waitid(
+                WaitId::Pid(pid),
+                WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT,
+            )
+            .map(|status| status.is_some())?)
+        }
+    }
+
+    impl Drop for ChildProcessGuard {
+        fn drop(&mut self) {
+            if !self.reaped {
+                let _ = self.terminate_and_wait();
+            }
+        }
     }
 
     struct ProcessCapture {
@@ -891,31 +941,19 @@ mod platform {
                 .stderr(Stdio::piped())
                 .process_group(0);
             configure_worker_pre_exec(&mut command);
-            let mut child = command.spawn().map_err(|error| {
+            let child = command.spawn().map_err(|error| {
                 AuthenticatedPhysicalMachineEffectErrorV1::detail(
                     AuthenticatedPhysicalMachineEffectErrorKindV1::Spawn,
                     error,
                 )
             })?;
-            let stderr = child.stderr.take().expect("worker stderr is piped");
-            let stderr = await_worker_ready(&mut child, stderr, challenge, deadline)?;
-            if let Err(error) = validate_worker_security_profile(child.id()) {
-                terminate_process_tree(&mut child, &BTreeSet::new());
-                let _ = child.wait();
-                return Err(error);
-            }
+            let mut child = ChildProcessGuard::new(child);
+            let stderr = child.child.stderr.take().expect("worker stderr is piped");
+            let stderr = await_worker_ready(stderr, challenge, deadline)?;
+            validate_worker_security_profile(child.child.id())?;
             let mut observation =
-                match observe_process(child.id(), self.policy.executable, deadline) {
-                    Ok(observation) => observation,
-                    Err(error) => {
-                        terminate_process_tree(&mut child, &BTreeSet::new());
-                        let _ = child.wait();
-                        return Err(error);
-                    }
-                };
+                observe_process(child.child.id(), self.policy.executable, deadline)?;
             if observation.executable.identity != self.policy.executable {
-                terminate_process_tree(&mut child, &BTreeSet::new());
-                let _ = child.wait();
                 return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
                     AuthenticatedPhysicalMachineEffectErrorKindV1::WorkerIdentityMismatch {
                         expected: self.policy.executable,
@@ -923,21 +961,15 @@ mod platform {
                     },
                 ));
             }
-            if let Err(error) = validate_retained_executable(
-                child.id(),
+            validate_retained_executable(
+                child.child.id(),
                 observation.start_ticks,
                 &mut observation.executable,
                 deadline,
-            ) {
-                terminate_process_tree(&mut child, &BTreeSet::new());
-                let _ = child.wait();
-                return Err(error);
-            }
+            )?;
             if let Some(expected) = expected_runtime
                 && observation.runtime_closure != expected
             {
-                terminate_process_tree(&mut child, &BTreeSet::new());
-                let _ = child.wait();
                 return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
                     AuthenticatedPhysicalMachineEffectErrorKindV1::RuntimeClosureMismatch {
                         expected,
@@ -945,11 +977,7 @@ mod platform {
                     },
                 ));
             }
-            if let Err(error) = validate_runtime_files(&mut observation.runtime_files, deadline) {
-                terminate_process_tree(&mut child, &BTreeSet::new());
-                let _ = child.wait();
-                return Err(error);
-            }
+            validate_runtime_files(&mut observation.runtime_files, deadline)?;
             let capture = supervise(
                 &mut child,
                 SupervisionContext {
@@ -963,9 +991,16 @@ mod platform {
             );
             let runtime_result = validate_runtime_files(&mut observation.runtime_files, deadline);
             let image_result = validate_image(&self.image, &self.descriptor_path, self.snapshot);
+            let capture = match capture {
+                Ok(capture) => capture,
+                Err(error) => {
+                    let _ = runtime_result;
+                    let _ = image_result;
+                    return Err(error);
+                }
+            };
             runtime_result?;
             image_result?;
-            let capture = capture?;
             if capture.request_written != request.len() {
                 return Err(process_error(
                     AuthenticatedPhysicalMachineEffectErrorKindV1::RequestWriteIncomplete,
@@ -1244,7 +1279,6 @@ mod platform {
     }
 
     fn await_worker_ready(
-        child: &mut Child,
         mut stderr: ChildStderr,
         challenge: PhysicalMachineExecutionChallengeV1,
         deadline: Instant,
@@ -1262,25 +1296,17 @@ mod platform {
             Ok(Ok((stderr, bytes))) if bytes == control_frame(WORKER_READY_DOMAIN, challenge) => {
                 Ok(stderr)
             }
-            Ok(Err(error)) => {
-                terminate_process_tree(child, &BTreeSet::new());
-                let _ = child.wait();
-                Err(AuthenticatedPhysicalMachineEffectErrorV1::detail(
-                    AuthenticatedPhysicalMachineEffectErrorKindV1::ControlHandshake,
-                    error,
-                ))
-            }
-            Ok(Ok(_)) | Err(_) => {
-                terminate_process_tree(child, &BTreeSet::new());
-                let _ = child.wait();
-                Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
-                    if Instant::now() >= deadline {
-                        AuthenticatedPhysicalMachineEffectErrorKindV1::Timeout
-                    } else {
-                        AuthenticatedPhysicalMachineEffectErrorKindV1::ControlHandshake
-                    },
-                ))
-            }
+            Ok(Err(error)) => Err(AuthenticatedPhysicalMachineEffectErrorV1::detail(
+                AuthenticatedPhysicalMachineEffectErrorKindV1::ControlHandshake,
+                error,
+            )),
+            Ok(Ok(_)) | Err(_) => Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
+                if Instant::now() >= deadline {
+                    AuthenticatedPhysicalMachineEffectErrorKindV1::Timeout
+                } else {
+                    AuthenticatedPhysicalMachineEffectErrorKindV1::ControlHandshake
+                },
+            )),
         }
     }
 
@@ -2003,7 +2029,7 @@ mod platform {
     }
 
     fn supervise(
-        child: &mut Child,
+        child: &mut ChildProcessGuard,
         context: SupervisionContext<'_>,
     ) -> Result<ProcessCapture, AuthenticatedPhysicalMachineEffectErrorV1> {
         let SupervisionContext {
@@ -2014,8 +2040,8 @@ mod platform {
             deadline,
             observation,
         } = context;
-        let stdin = child.stdin.take().expect("worker stdin is piped");
-        let stdout_pipe = child.stdout.take().expect("worker stdout is piped");
+        let stdin = child.child.stdin.take().expect("worker stdin is piped");
+        let stdout_pipe = child.child.stdout.take().expect("worker stdout is piped");
         let (write_sender, write_receiver) = std::sync::mpsc::sync_channel(1);
         let request = request.to_vec();
         thread::spawn(move || {
@@ -2039,7 +2065,6 @@ mod platform {
         let stdout_receiver = capture_pipe(stdout_pipe, limits.stdout_bytes);
         let control_receiver = capture_worker_done(stderr_pipe, challenge, limits.stderr_bytes);
 
-        let mut descendants_seen = BTreeSet::new();
         let mut next_descendant_scan = Instant::now();
         let mut timed_out = false;
         let mut request_state = None;
@@ -2048,7 +2073,7 @@ mod platform {
         let mut acknowledged = false;
         let status = loop {
             if Instant::now() >= next_descendant_scan {
-                descendants_seen.extend(descendants(child.id()));
+                child.refresh_descendants();
                 next_descendant_scan = Instant::now() + DESCENDANT_SCAN_INTERVAL;
             }
             if request_state.is_none()
@@ -2076,10 +2101,8 @@ mod platform {
                     })?;
                 completed_request_written = Some(request_written);
                 if let Err(error) =
-                    validate_post_execution_closure(child.id(), observation, deadline)
+                    validate_post_execution_closure(child.child.id(), observation, deadline)
                 {
-                    terminate_process_tree(child, &descendants_seen);
-                    let _ = child.wait();
                     return Err(error);
                 }
                 stdin
@@ -2093,22 +2116,26 @@ mod platform {
                 drop(stdin);
                 acknowledged = true;
             }
-            match child.try_wait() {
-                Ok(Some(status)) => break status,
-                Ok(None) if Instant::now() >= deadline => {
-                    timed_out = true;
-                    terminate_process_tree(child, &descendants_seen);
-                    break child.wait().map_err(|error| {
+            match child.exited_without_reaping() {
+                Ok(true) => {
+                    break child.terminate_and_wait().map_err(|error| {
                         AuthenticatedPhysicalMachineEffectErrorV1::detail(
                             AuthenticatedPhysicalMachineEffectErrorKindV1::Wait,
                             error,
                         )
                     })?;
                 }
-                Ok(None) => thread::sleep(POLL_INTERVAL),
+                Ok(false) if Instant::now() >= deadline => {
+                    timed_out = true;
+                    break child.terminate_and_wait().map_err(|error| {
+                        AuthenticatedPhysicalMachineEffectErrorV1::detail(
+                            AuthenticatedPhysicalMachineEffectErrorKindV1::Wait,
+                            error,
+                        )
+                    })?;
+                }
+                Ok(false) => thread::sleep(POLL_INTERVAL),
                 Err(error) => {
-                    terminate_process_tree(child, &descendants_seen);
-                    let _ = child.wait();
                     return Err(AuthenticatedPhysicalMachineEffectErrorV1::detail(
                         AuthenticatedPhysicalMachineEffectErrorKindV1::Wait,
                         error,
@@ -2116,8 +2143,6 @@ mod platform {
                 }
             }
         };
-        descendants_seen.extend(descendants(child.id()));
-        terminate_process_tree(child, &descendants_seen);
         let request_written = match completed_request_written {
             Some(written) => written,
             None => {
