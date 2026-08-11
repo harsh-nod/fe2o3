@@ -7,7 +7,7 @@
 use std::fmt;
 
 pub const MAGIC: [u8; 8] = *b"FE2OSV2\0";
-pub const VERSION: u16 = 2;
+pub const VERSION: u16 = 3;
 pub const MAX_ENCODED_BYTES: usize = 96;
 pub const MAX_DIAGNOSTICS: usize = 16;
 
@@ -155,7 +155,9 @@ pub enum ShiftDirection {
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ShiftPolicy {
     Checked,
-    Masked,
+    Wrapping,
+    Overflowing,
+    RustOperator { overflow_checks: bool },
 }
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum Predicate {
@@ -179,9 +181,11 @@ pub enum FloatArithmeticSemantics {
     RustIeee754,
 }
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub enum NaNSemantics {
-    Ordered,
+pub enum FloatComparisonPolicy {
     RustPartialEq,
+    RustPartialOrd,
+    IeeeOrdered,
+    IeeeUnordered,
 }
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum FloatToIntSemantics {
@@ -238,6 +242,7 @@ pub enum Operation {
     },
     Shift {
         ty: ScalarType,
+        rhs_ty: ScalarType,
         direction: ShiftDirection,
         policy: ShiftPolicy,
     },
@@ -257,7 +262,10 @@ pub enum Operation {
     FloatCompare {
         ty: ScalarType,
         predicate: Predicate,
-        nan: NaNSemantics,
+        policy: FloatComparisonPolicy,
+    },
+    FloatTotalCompare {
+        ty: ScalarType,
     },
     Cast {
         from: ScalarType,
@@ -274,10 +282,12 @@ pub enum Diagnostic {
         actual: usize,
     },
     NonIntegerType,
+    NonShiftRhsIntegerType,
     NonFloatType,
     UnsupportedFloat(FloatWidth),
     InvalidIntMode,
     InvalidUnary,
+    InvalidFloatComparison,
     InvalidCast,
     WidthRelation,
     SignednessMismatch,
@@ -319,20 +329,53 @@ pub fn verify(op: Operation, caps: FloatCapabilities) -> Result<(), Vec<Diagnost
                 }
             }
         },
-        Operation::Shift { ty, .. } | Operation::IntegerCompare { ty, .. } => {
+        Operation::Shift { ty, rhs_ty, .. } => {
+            if int_parts(ty).is_none() {
+                ds.push(Diagnostic::NonIntegerType)
+            }
+            if int_parts(rhs_ty).is_none() {
+                ds.push(Diagnostic::NonShiftRhsIntegerType)
+            }
+        }
+        Operation::IntegerCompare { ty, .. } => {
             if int_parts(ty).is_none() {
                 ds.push(Diagnostic::NonIntegerType)
             }
         }
         Operation::FloatBinary { ty, .. }
         | Operation::FloatNeg { ty, .. }
-        | Operation::FloatCompare { ty, .. } => check_float(ty, caps, &mut ds),
+        | Operation::FloatTotalCompare { ty }
+        | Operation::FloatCompare { ty, .. } => {
+            check_float(ty, caps, &mut ds);
+            if let Operation::FloatCompare {
+                predicate, policy, ..
+            } = op
+                && !valid_float_comparison(predicate, policy)
+            {
+                ds.push(Diagnostic::InvalidFloatComparison)
+            }
+        }
         Operation::Cast { from, to, cast } => verify_cast(from, to, cast, caps, &mut ds),
     }
     if ds.len() > MAX_DIAGNOSTICS {
         ds.truncate(MAX_DIAGNOSTICS)
     }
     if ds.is_empty() { Ok(()) } else { Err(ds) }
+}
+
+const fn valid_float_comparison(predicate: Predicate, policy: FloatComparisonPolicy) -> bool {
+    match policy {
+        FloatComparisonPolicy::RustPartialEq => {
+            matches!(predicate, Predicate::Eq | Predicate::Ne)
+        }
+        FloatComparisonPolicy::RustPartialOrd => {
+            matches!(
+                predicate,
+                Predicate::Lt | Predicate::Le | Predicate::Gt | Predicate::Ge
+            )
+        }
+        FloatComparisonPolicy::IeeeOrdered | FloatComparisonPolicy::IeeeUnordered => true,
+    }
 }
 
 fn verify_cast(
@@ -602,11 +645,13 @@ fn encode_op(x: Operation, o: &mut Vec<u8>) {
         }
         Operation::Shift {
             ty,
+            rhs_ty,
             direction,
             policy,
         } => {
             o.extend_from_slice(&[3, shift_tag(direction), sp_tag(policy), 0]);
-            encode_type(ty, o)
+            encode_type(ty, o);
+            encode_type(rhs_ty, o)
         }
         Operation::IntegerCompare { ty, predicate } => {
             o.extend_from_slice(&[4, pred_tag(predicate), 0, 0]);
@@ -620,14 +665,22 @@ fn encode_op(x: Operation, o: &mut Vec<u8>) {
             o.extend_from_slice(&[6, 1, 0, 0]);
             encode_type(ty, o)
         }
-        Operation::FloatCompare { ty, predicate, nan } => {
-            o.extend_from_slice(&[7, pred_tag(predicate), nan_tag(nan), 0]);
+        Operation::FloatCompare {
+            ty,
+            predicate,
+            policy,
+        } => {
+            o.extend_from_slice(&[7, pred_tag(predicate), fcp_tag(policy), 0]);
             encode_type(ty, o)
         }
         Operation::Cast { from, to, cast } => {
             o.extend_from_slice(&[8, cast_tag(cast), cast_aux(cast), 0]);
             encode_type(from, o);
             encode_type(to, o)
+        }
+        Operation::FloatTotalCompare { ty } => {
+            o.extend_from_slice(&[9, 1, 0, 0]);
+            encode_type(ty, o)
         }
     }
 }
@@ -653,6 +706,7 @@ fn decode_op(d: &mut Decoder<'_>) -> Result<Operation, DecodeError> {
             direction: shift(a)?,
             policy: sp(b)?,
             ty: decode_type(d)?,
+            rhs_ty: decode_type(d)?,
         },
         4 => {
             if b != 0 {
@@ -684,7 +738,7 @@ fn decode_op(d: &mut Decoder<'_>) -> Result<Operation, DecodeError> {
         }
         7 => Operation::FloatCompare {
             predicate: pred(a)?,
-            nan: nan(b)?,
+            policy: fcp(b)?,
             ty: decode_type(d)?,
         },
         8 => Operation::Cast {
@@ -692,6 +746,14 @@ fn decode_op(d: &mut Decoder<'_>) -> Result<Operation, DecodeError> {
             from: decode_type(d)?,
             to: decode_type(d)?,
         },
+        9 => {
+            if a != 1 || b != 0 {
+                return Err(DecodeError::ReservedNonZero);
+            }
+            Operation::FloatTotalCompare {
+                ty: decode_type(d)?,
+            }
+        }
         _ => {
             return Err(DecodeError::UnknownTag {
                 field: "operation",
@@ -716,10 +778,39 @@ tags!(ib_tag,ib,IntBinary,{IntBinary::Add=>1,IntBinary::Sub=>2,IntBinary::Mul=>3
 tags!(iu_tag,iu,IntUnary,{IntUnary::Neg=>1,IntUnary::Not=>2},"unary op");
 tags!(mode_tag,mode,IntMode,{IntMode::Checked=>1,IntMode::Wrapping=>2,IntMode::Overflowing=>3,IntMode::Saturating=>4},"mode");
 tags!(shift_tag,shift,ShiftDirection,{ShiftDirection::Left=>1,ShiftDirection::Right=>2},"shift");
-tags!(sp_tag,sp,ShiftPolicy,{ShiftPolicy::Checked=>1,ShiftPolicy::Masked=>2},"shift policy");
+const fn sp_tag(policy: ShiftPolicy) -> u8 {
+    match policy {
+        ShiftPolicy::Checked => 1,
+        ShiftPolicy::Wrapping => 2,
+        ShiftPolicy::Overflowing => 3,
+        ShiftPolicy::RustOperator {
+            overflow_checks: true,
+        } => 4,
+        ShiftPolicy::RustOperator {
+            overflow_checks: false,
+        } => 5,
+    }
+}
+fn sp(tag: u8) -> Result<ShiftPolicy, DecodeError> {
+    match tag {
+        1 => Ok(ShiftPolicy::Checked),
+        2 => Ok(ShiftPolicy::Wrapping),
+        3 => Ok(ShiftPolicy::Overflowing),
+        4 => Ok(ShiftPolicy::RustOperator {
+            overflow_checks: true,
+        }),
+        5 => Ok(ShiftPolicy::RustOperator {
+            overflow_checks: false,
+        }),
+        _ => Err(DecodeError::UnknownTag {
+            field: "shift policy",
+            tag,
+        }),
+    }
+}
 tags!(pred_tag,pred,Predicate,{Predicate::Eq=>1,Predicate::Ne=>2,Predicate::Lt=>3,Predicate::Le=>4,Predicate::Gt=>5,Predicate::Ge=>6},"predicate");
 tags!(fb_tag,fb,FloatBinary,{FloatBinary::Add=>1,FloatBinary::Sub=>2,FloatBinary::Mul=>3,FloatBinary::Div=>4,FloatBinary::Rem=>5},"float op");
-tags!(nan_tag,nan,NaNSemantics,{NaNSemantics::Ordered=>1,NaNSemantics::RustPartialEq=>2},"NaN");
+tags!(fcp_tag,fcp,FloatComparisonPolicy,{FloatComparisonPolicy::RustPartialEq=>1,FloatComparisonPolicy::RustPartialOrd=>2,FloatComparisonPolicy::IeeeOrdered=>3,FloatComparisonPolicy::IeeeUnordered=>4},"float comparison policy");
 fn iw(t: u8) -> Result<IntWidth, DecodeError> {
     IntWidth::from_tag(t).ok_or(DecodeError::UnknownTag {
         field: "integer width",
@@ -931,24 +1022,41 @@ pub fn evaluate_integer_binary(
 }
 pub fn evaluate_shift(
     ty: ScalarType,
+    rhs_ty: ScalarType,
     direction: ShiftDirection,
     policy: ShiftPolicy,
     value: u128,
-    amount: u32,
+    amount_raw: u128,
 ) -> Option<IntOutcome> {
     let (w, signed) = int_parts(ty)?;
-    let bits = u32::from(w.bits());
-    if policy == ShiftPolicy::Checked && amount >= bits {
-        return Some(IntOutcome::CheckedNone);
-    }
-    let n = amount % bits;
+    let (rhs_width, rhs_signed) = int_parts(rhs_ty)?;
+    let bits = u128::from(w.bits());
+    let amount = amount_raw & mask(rhs_width);
+    let invalid = if rhs_signed {
+        let signed_amount = decode_signed(amount, rhs_width);
+        signed_amount < 0 || (signed_amount as u128) >= bits
+    } else {
+        amount >= bits
+    };
+    let n = (amount % bits) as u32;
     let v = value & mask(w);
     let out = match direction {
         ShiftDirection::Left => (v << n) & mask(w),
         ShiftDirection::Right if signed => encode_signed(decode_signed(v, w) >> n, w),
         ShiftDirection::Right => v >> n,
     };
-    Some(IntOutcome::Value(out))
+    Some(match policy {
+        ShiftPolicy::Checked if invalid => IntOutcome::CheckedNone,
+        ShiftPolicy::Checked | ShiftPolicy::Wrapping => IntOutcome::Value(out),
+        ShiftPolicy::Overflowing => IntOutcome::Overflowing {
+            value: out,
+            overflowed: invalid,
+        },
+        ShiftPolicy::RustOperator {
+            overflow_checks: true,
+        } if invalid => IntOutcome::Trap,
+        ShiftPolicy::RustOperator { .. } => IntOutcome::Value(out),
+    })
 }
 const fn decode_signed(v: u128, w: IntWidth) -> i128 {
     if w.bits() == 128 {
@@ -981,23 +1089,81 @@ pub const fn exceptional_semantics(m: IntMode) -> ExceptionalSemantics {
         min_neg_one_saturates: matches!(m, IntMode::Saturating),
     }
 }
+pub fn rust_saturating_f32_to_int(value: f32, width: IntWidth, signed: bool) -> u128 {
+    rust_saturating_float_to_int(value.into(), width, signed)
+}
 pub fn rust_saturating_float_to_int(value: f64, width: IntWidth, signed: bool) -> u128 {
     if value.is_nan() {
         return 0;
     }
+    let bits = i32::from(width.bits());
     if signed {
-        let (min, max) = signed_bounds(width);
-        encode_signed(value.trunc().clamp(min as f64, max as f64) as i128, width)
+        let lower = -2.0f64.powi(bits - 1);
+        let upper = 2.0f64.powi(bits - 1);
+        if value <= lower {
+            1u128 << (width.bits() - 1)
+        } else if value >= upper {
+            (1u128 << (width.bits() - 1)) - 1
+        } else {
+            encode_signed(value.trunc() as i128, width)
+        }
     } else {
-        let max = mask(width);
         if value <= 0.0 {
             0
-        } else if value >= max as f64 {
-            max
+        } else if value >= 2.0f64.powi(bits) {
+            mask(width)
         } else {
             value.trunc() as u128
         }
     }
+}
+
+pub fn evaluate_float_compare_f32(
+    policy: FloatComparisonPolicy,
+    predicate: Predicate,
+    left: f32,
+    right: f32,
+) -> Option<bool> {
+    evaluate_float_compare(policy, predicate, left.into(), right.into())
+}
+pub fn evaluate_float_compare_f64(
+    policy: FloatComparisonPolicy,
+    predicate: Predicate,
+    left: f64,
+    right: f64,
+) -> Option<bool> {
+    evaluate_float_compare(policy, predicate, left, right)
+}
+fn evaluate_float_compare(
+    policy: FloatComparisonPolicy,
+    predicate: Predicate,
+    left: f64,
+    right: f64,
+) -> Option<bool> {
+    if !valid_float_comparison(predicate, policy) {
+        return None;
+    }
+    let unordered = left.is_nan() || right.is_nan();
+    let base = match predicate {
+        Predicate::Eq => left == right,
+        Predicate::Ne => left != right,
+        Predicate::Lt => left < right,
+        Predicate::Le => left <= right,
+        Predicate::Gt => left > right,
+        Predicate::Ge => left >= right,
+    };
+    Some(match policy {
+        FloatComparisonPolicy::IeeeOrdered if unordered => false,
+        FloatComparisonPolicy::IeeeUnordered if unordered => true,
+        _ => base,
+    })
+}
+
+pub fn evaluate_float_total_cmp_f32(left: f32, right: f32) -> std::cmp::Ordering {
+    left.total_cmp(&right)
+}
+pub fn evaluate_float_total_cmp_f64(left: f64, right: f64) -> std::cmp::Ordering {
+    left.total_cmp(&right)
 }
 const fn mask(w: IntWidth) -> u128 {
     if w.bits() == 128 {
