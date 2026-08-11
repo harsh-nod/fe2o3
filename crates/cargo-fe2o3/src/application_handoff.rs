@@ -458,14 +458,12 @@ fn read_application_handoff_ack(
     child: &Child,
     timeout: Duration,
 ) -> Result<Vec<u8>, String> {
-    let deadline = Instant::now() + timeout;
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .ok_or_else(|| "application handoff acknowledgment deadline overflowed".to_string())?;
     let mut bytes = Vec::with_capacity(WORKER_V2_APPLICATION_HANDOFF_ACK_BYTES_V1 + 1);
     loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Err("application handoff acknowledgment timed out".to_string());
-        }
-        poll_readable(read.as_raw_fd(), remaining)?;
+        poll_readable(read.as_raw_fd(), deadline)?;
         let mut chunk = [0_u8; 256];
         match read.read(&mut chunk) {
             Ok(0) => break,
@@ -483,7 +481,8 @@ fn read_application_handoff_ack(
                 ));
             }
         }
-        let _ = observe_leader_exit_without_reaping(child.id() as libc::pid_t)?;
+        let _ =
+            observe_leader_exit_without_reaping_until(child.id() as libc::pid_t, Some(deadline))?;
     }
     Ok(bytes)
 }
@@ -494,10 +493,18 @@ enum LeaderExitObservation {
     Exited,
 }
 
+#[cfg(test)]
 fn observe_leader_exit_without_reaping(
     leader: libc::pid_t,
 ) -> Result<LeaderExitObservation, String> {
-    observe_leader_exit_without_reaping_with(leader, |information| {
+    observe_leader_exit_without_reaping_until(leader, None)
+}
+
+fn observe_leader_exit_without_reaping_until(
+    leader: libc::pid_t,
+    deadline: Option<Instant>,
+) -> Result<LeaderExitObservation, String> {
+    observe_leader_exit_without_reaping_with(leader, deadline, |information| {
         // SAFETY: `information` is writable, P_PID selects the owned child, WNOHANG bounds the
         // observation, and WNOWAIT retains an exited leader until containment has signaled its
         // dedicated process group.
@@ -519,9 +526,13 @@ fn observe_leader_exit_without_reaping(
 
 fn observe_leader_exit_without_reaping_with(
     leader: libc::pid_t,
+    deadline: Option<Instant>,
     mut wait: impl FnMut(&mut MaybeUninit<libc::siginfo_t>) -> io::Result<()>,
 ) -> Result<LeaderExitObservation, String> {
     loop {
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            return Err("application handoff acknowledgment timed out".to_string());
+        }
         let mut information = MaybeUninit::<libc::siginfo_t>::zeroed();
         match wait(&mut information) {
             Ok(()) => {
@@ -588,28 +599,63 @@ fn random_challenge() -> Result<WorkerV2ApplicationHandoffChallengeV1, String> {
         .map_err(|error| format!("invalid application handoff challenge: {error}"))
 }
 
-fn poll_readable(descriptor: RawFd, timeout: Duration) -> Result<(), String> {
-    let millis = timeout.as_millis().min(i32::MAX as u128) as i32;
+fn poll_readable(descriptor: RawFd, deadline: Instant) -> Result<(), String> {
+    poll_readable_with(deadline, Instant::now, |millis| {
+        poll_descriptor(descriptor, millis)
+    })
+}
+
+fn poll_readable_with(
+    deadline: Instant,
+    mut now: impl FnMut() -> Instant,
+    mut poll: impl FnMut(i32) -> io::Result<i32>,
+) -> Result<(), String> {
+    loop {
+        let remaining = deadline.saturating_duration_since(now());
+        if remaining.is_zero() {
+            return Err("application handoff acknowledgment timed out".to_string());
+        }
+        let millis = duration_to_poll_millis(remaining);
+        match poll(millis) {
+            Ok(result) if result > 0 => {
+                if deadline.saturating_duration_since(now()).is_zero() {
+                    return Err("application handoff acknowledgment timed out".to_string());
+                }
+                return Ok(());
+            }
+            Ok(_) => return Err("application handoff acknowledgment timed out".to_string()),
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => {
+                return Err(format!(
+                    "failed to wait for application handoff acknowledgment: {error}"
+                ));
+            }
+        }
+    }
+}
+
+fn duration_to_poll_millis(duration: Duration) -> i32 {
+    let whole_millis = duration.as_millis();
+    let rounded_millis = if duration.subsec_nanos().is_multiple_of(1_000_000) {
+        whole_millis
+    } else {
+        whole_millis.saturating_add(1)
+    };
+    rounded_millis.clamp(1, i32::MAX as u128) as i32
+}
+
+fn poll_descriptor(descriptor: RawFd, millis: i32) -> io::Result<i32> {
     let mut pollfd = libc::pollfd {
         fd: descriptor,
         events: libc::POLLIN | libc::POLLHUP | libc::POLLERR,
         revents: 0,
     };
-    loop {
-        // SAFETY: `pollfd` is one valid poll descriptor record for the duration of the call.
-        let result = unsafe { libc::poll(&mut pollfd, 1, millis) };
-        if result > 0 {
-            return Ok(());
-        }
-        if result == 0 {
-            return Err("application handoff acknowledgment timed out".to_string());
-        }
-        let error = io::Error::last_os_error();
-        if error.kind() != io::ErrorKind::Interrupted {
-            return Err(format!(
-                "failed to wait for application handoff acknowledgment: {error}"
-            ));
-        }
+    // SAFETY: `pollfd` is one valid poll descriptor record for the duration of the call.
+    let result = unsafe { libc::poll(&mut pollfd, 1, millis) };
+    if result >= 0 {
+        Ok(result)
+    } else {
+        Err(io::Error::last_os_error())
     }
 }
 
@@ -765,6 +811,52 @@ fn validate_envelope_stat(
 mod tests {
     use super::*;
     use std::os::unix::process::ExitStatusExt;
+
+    const REPEATED_SIGNAL_CHILD_ENV: &str = "FE2O3_ACK_POLL_REPEATED_SIGNAL_CHILD";
+
+    unsafe extern "C" fn acknowledge_test_signal(_: libc::c_int) {}
+
+    struct SignalActionGuard {
+        signal: libc::c_int,
+        previous: libc::sigaction,
+    }
+
+    impl SignalActionGuard {
+        fn install(signal: libc::c_int) -> Self {
+            // SAFETY: zero is a valid initial representation before all required sigaction fields
+            // are initialized below.
+            let mut action = unsafe { std::mem::zeroed::<libc::sigaction>() };
+            action.sa_sigaction = acknowledge_test_signal as *const () as usize;
+            action.sa_flags = 0;
+            // SAFETY: `sa_mask` is writable and belongs to the local action record.
+            assert_eq!(unsafe { libc::sigemptyset(&mut action.sa_mask) }, 0);
+            let mut previous = MaybeUninit::<libc::sigaction>::uninit();
+            // SAFETY: both action records are valid for this isolated test process.
+            assert_eq!(
+                unsafe { libc::sigaction(signal, &action, previous.as_mut_ptr()) },
+                0,
+                "install signal action: {}",
+                io::Error::last_os_error()
+            );
+            // SAFETY: successful sigaction initialized the previous action record.
+            let previous = unsafe { previous.assume_init() };
+            Self { signal, previous }
+        }
+    }
+
+    impl Drop for SignalActionGuard {
+        fn drop(&mut self) {
+            // SAFETY: `previous` came from a successful sigaction for this signal.
+            let result =
+                unsafe { libc::sigaction(self.signal, &self.previous, std::ptr::null_mut()) };
+            assert_eq!(
+                result,
+                0,
+                "restore signal action: {}",
+                io::Error::last_os_error()
+            );
+        }
+    }
 
     fn fresh_session_command(program: &str) -> Command {
         let mut command = Command::new(program);
@@ -1009,7 +1101,7 @@ mod tests {
         wait_for_leader_exit_without_reaping(leader).unwrap();
 
         let mut attempts = 0;
-        let observation = observe_leader_exit_without_reaping_with(leader, |information| {
+        let observation = observe_leader_exit_without_reaping_with(leader, None, |information| {
             attempts += 1;
             if attempts == 1 {
                 return Err(io::Error::from(io::ErrorKind::Interrupted));
@@ -1040,6 +1132,114 @@ mod tests {
             error.contains(&format!("errno Some({})", libc::ECHILD)),
             "{error}"
         );
+    }
+
+    #[test]
+    fn ack_poll_recomputes_the_deadline_after_every_interruption() {
+        let origin = Instant::now();
+        let elapsed = std::cell::Cell::new(Duration::ZERO);
+        let attempts = std::cell::Cell::new(0_u32);
+        let requested = std::cell::RefCell::new(Vec::new());
+        let result = poll_readable_with(
+            origin + Duration::from_millis(10),
+            || origin + elapsed.get(),
+            |millis| {
+                requested.borrow_mut().push(millis);
+                attempts.set(attempts.get() + 1);
+                elapsed.set(elapsed.get() + Duration::from_millis(1));
+                Err(io::Error::from(io::ErrorKind::Interrupted))
+            },
+        );
+
+        assert_eq!(
+            result.unwrap_err(),
+            "application handoff acknowledgment timed out"
+        );
+        assert_eq!(attempts.get(), 10);
+        assert_eq!(&*requested.borrow(), &[10, 9, 8, 7, 6, 5, 4, 3, 2, 1]);
+    }
+
+    #[test]
+    fn ack_poll_rounds_submillisecond_deadlines_up_without_overflow() {
+        assert_eq!(duration_to_poll_millis(Duration::from_nanos(1)), 1);
+        assert_eq!(duration_to_poll_millis(Duration::from_millis(1)), 1);
+        assert_eq!(duration_to_poll_millis(Duration::from_micros(1_001)), 2);
+        assert_eq!(duration_to_poll_millis(Duration::MAX), i32::MAX);
+    }
+
+    #[test]
+    fn repeated_signals_cannot_extend_the_ack_poll_deadline() {
+        if std::env::var_os(REPEATED_SIGNAL_CHILD_ENV).is_some() {
+            run_repeated_signal_deadline_probe();
+            return;
+        }
+
+        let output = Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("application_handoff::tests::repeated_signals_cannot_extend_the_ack_poll_deadline")
+            .arg("--nocapture")
+            .env(REPEATED_SIGNAL_CHILD_ENV, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "isolated repeated-signal probe failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn run_repeated_signal_deadline_probe() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+        let _signal_action = SignalActionGuard::install(libc::SIGUSR2);
+        let (read, _write) = cloexec_pipe().unwrap();
+        // SAFETY: pthread_self returns the identity of this test thread for targeted delivery.
+        let target = unsafe { libc::pthread_self() };
+        let stop = Arc::new(AtomicBool::new(false));
+        let sent = Arc::new(AtomicUsize::new(0));
+        let sender_stop = Arc::clone(&stop);
+        let sender_sent = Arc::clone(&sent);
+        let sender = std::thread::spawn(move || {
+            for _ in 0..2_000 {
+                if sender_stop.load(Ordering::Acquire) {
+                    return Ok(());
+                }
+                // SAFETY: `target` identifies the live parent test thread until this sender joins.
+                let result = unsafe { libc::pthread_kill(target, libc::SIGUSR2) };
+                if result != 0 {
+                    return Err(result);
+                }
+                sender_sent.fetch_add(1, Ordering::Relaxed);
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Ok(())
+        });
+
+        let interrupted = std::cell::Cell::new(0_usize);
+        let started = Instant::now();
+        let deadline = started.checked_add(Duration::from_millis(75)).unwrap();
+        let result = poll_readable_with(deadline, Instant::now, |millis| {
+            let result = poll_descriptor(read.as_raw_fd(), millis);
+            if matches!(&result, Err(error) if error.kind() == io::ErrorKind::Interrupted) {
+                interrupted.set(interrupted.get() + 1);
+            }
+            result
+        });
+        let elapsed = started.elapsed();
+        stop.store(true, Ordering::Release);
+        assert_eq!(sender.join().unwrap(), Ok(()));
+
+        assert_eq!(
+            result.unwrap_err(),
+            "application handoff acknowledgment timed out"
+        );
+        assert!(sent.load(Ordering::Relaxed) >= 10);
+        assert!(interrupted.get() >= 10);
+        // The sender runs for more than two seconds if polling resets its timeout. The broad
+        // one-second bound avoids depending on scheduler-scale timing while detecting that bug.
+        assert!(elapsed < Duration::from_secs(1), "poll took {elapsed:?}");
     }
 
     #[test]
