@@ -293,8 +293,11 @@ impl From<PinExecutableError> for BindingWrapperError {
     }
 }
 
-pub(crate) fn run(argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperError> {
+pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperError> {
     reject_uninspectable_rustc_args(&argv)?;
+    if crate::non_production_reproduction::enabled() {
+        canonicalize_rustc_metadata(&mut argv);
+    }
     let invocation = match classify_rustc_invocation_v2(&argv) {
         Ok(invocation) => invocation,
         Err(_) if is_cargo_stdin_probe(&argv) => {
@@ -1915,22 +1918,31 @@ fn derive_build_attempt_input_with_config_identity(
     worker_v2_identity: Option<WorkerV2ConfigIdentity>,
     current_dir: &std::path::Path,
 ) -> BuildInvocation {
+    let canonicalize = |value: &OsStr| {
+        if crate::non_production_reproduction::enabled() {
+            crate::non_production_reproduction::canonicalize_argument(value)
+        } else {
+            os_bytes(value).to_vec()
+        }
+    };
     let mut digest = Sha256::new();
     digest.update(BUILD_ATTEMPT_INPUT_DOMAIN);
-    hash_os(&mut digest, current_dir.as_os_str());
-    hash_os(
+    hash_bytes(&mut digest, &canonicalize(current_dir.as_os_str()));
+    hash_bytes(
         &mut digest,
-        std::env::var_os(TARGET_ENV).as_deref().unwrap_or_default(),
+        &canonicalize(std::env::var_os(TARGET_ENV).as_deref().unwrap_or_default()),
     );
-    hash_os(
+    hash_bytes(
         &mut digest,
-        std::env::var_os(HSACO_DIR_ENV)
-            .as_deref()
-            .unwrap_or_default(),
+        &canonicalize(
+            std::env::var_os(HSACO_DIR_ENV)
+                .as_deref()
+                .unwrap_or_default(),
+        ),
     );
     digest.update((argv.len() as u64).to_le_bytes());
     for argument in argv {
-        hash_os(&mut digest, argument);
+        hash_bytes(&mut digest, &canonicalize(argument));
     }
     if let Some(worker_v2_identity) = worker_v2_identity {
         digest.update(WORKER_V2_CONFIG_ID_DOMAIN);
@@ -1939,14 +1951,7 @@ fn derive_build_attempt_input_with_config_identity(
     BuildInvocation::from_bytes(digest.finalize().into())
 }
 
-fn hash_os(digest: &mut Sha256, value: &OsStr) {
-    #[cfg(unix)]
-    let bytes = {
-        use std::os::unix::ffi::OsStrExt;
-        value.as_bytes()
-    };
-    #[cfg(not(unix))]
-    let bytes = value.to_str().unwrap_or_default().as_bytes();
+fn hash_bytes(digest: &mut Sha256, bytes: &[u8]) {
     digest.update((bytes.len() as u64).to_le_bytes());
     digest.update(bytes);
 }
@@ -1986,6 +1991,32 @@ fn ordered_metadata_values(argv: &[OsString]) -> Result<Vec<String>, BindingWrap
         index += 1;
     }
     Ok(metadata)
+}
+
+fn canonicalize_rustc_metadata(argv: &mut [OsString]) {
+    let canonical = crate::non_production_reproduction::canonical_metadata();
+    let mut index = 1;
+    while index < argv.len() {
+        if argv[index] == "-C" || argv[index] == "--codegen" {
+            if let Some(value) = argv.get_mut(index + 1)
+                && value
+                    .to_str()
+                    .is_some_and(|value| value.starts_with("metadata="))
+            {
+                *value = OsString::from(format!("metadata={canonical}"));
+            }
+            index += 2;
+            continue;
+        }
+        if let Some(value) = argv[index].to_str() {
+            if value.starts_with("-Cmetadata=") {
+                argv[index] = OsString::from(format!("-Cmetadata={canonical}"));
+            } else if value.starts_with("--codegen=metadata=") {
+                argv[index] = OsString::from(format!("--codegen=metadata={canonical}"));
+            }
+        }
+        index += 1;
+    }
 }
 
 fn inspect_codegen_value(
@@ -2032,10 +2063,10 @@ mod tests {
         OBSERVED_PARENT_START_TIME_BUILD_OBSERVATION_ENV_V2,
         PINNED_CARGO_IMAGE_BUILD_OBSERVATION_ENV_V2, PreparedRustcConsistencyExpectation,
         WORKER_BUILD_IDENTITY_OBSERVATION_ENV_V2, WORKER_CONFIG_BUILD_OBSERVATION_ENV_V2,
-        WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2, configure_build_observation_environment,
-        configure_worker_build_observation_environment, decode_managed_rustc_args,
-        derive_build_attempt_input_with_config_identity, is_cargo_stdin_probe,
-        materialize_s09_child_environment, measure_build_executable,
+        WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2, canonicalize_rustc_metadata,
+        configure_build_observation_environment, configure_worker_build_observation_environment,
+        decode_managed_rustc_args, derive_build_attempt_input_with_config_identity,
+        is_cargo_stdin_probe, materialize_s09_child_environment, measure_build_executable,
         observe_pinned_cargo_image_and_parent, ordered_metadata_values,
         prepared_rustc_command_sha256, process_start_time_ticks, reject_uninspectable_rustc_args,
         resolve_command_executable_with_path,
@@ -2087,6 +2118,26 @@ mod tests {
             ordered_metadata_values(&argv).unwrap(),
             ["first", "second", "third", "fourth"]
         );
+    }
+
+    #[test]
+    fn canonicalizes_every_supported_rustc_metadata_form() {
+        let mut argv = args(&[
+            "rustc",
+            "-C",
+            "metadata=first",
+            "-Cmetadata=second",
+            "--codegen",
+            "metadata=third",
+            "--codegen=metadata=fourth",
+            "-Copt-level=2",
+        ]);
+        canonicalize_rustc_metadata(&mut argv);
+        assert_eq!(
+            ordered_metadata_values(&argv).unwrap(),
+            [crate::non_production_reproduction::canonical_metadata(); 4]
+        );
+        assert_eq!(argv.last().unwrap(), "-Copt-level=2");
     }
 
     #[test]

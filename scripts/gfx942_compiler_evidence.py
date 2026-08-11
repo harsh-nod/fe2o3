@@ -1028,6 +1028,9 @@ def build_and_generate(
         generation_environment[
             "FE2O3_NON_PRODUCTION_COMPILER_TRANSITION_OBSERVATION_V1"
         ] = "observe-without-golden-acceptance"
+        generation_environment[
+            "FE2O3_NON_PRODUCTION_COMPILER_REPRODUCTION_V1"
+        ] = "gfx942-alpha-zeta-cov6-v1"
     build_test = run_command(
         [
             os.fspath(tools["cargo"].path),

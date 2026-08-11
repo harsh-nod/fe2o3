@@ -55,7 +55,7 @@ impl PreparedGeneration {
         }
 
         clear_or_reject_orphaned_intent(target_dir)?;
-        let guard_token = random_token()?;
+        let guard_token = random_token(b"artifact-guard")?;
         write_fixed_record_exclusive(target_dir, INTENT_NAME, INTENT_MAGIC, guard_token)?;
         let artifact_dir =
             match target_dir.open_or_create_child(ARTIFACT_COMPONENT, "fe2o3 artifact directory") {
@@ -79,7 +79,7 @@ impl PreparedGeneration {
             _lock: lock,
             artifact_dir: Some(artifact_dir),
             semantic,
-            token: random_token()?,
+            token: random_token(b"codegen-generation")?,
             pending: true,
         })
     }
@@ -584,7 +584,10 @@ fn remove_generated(directory: PinnedDirectory) -> Result<(), String> {
     })
 }
 
-fn random_token() -> Result<[u8; 16], String> {
+fn random_token(label: &[u8]) -> Result<[u8; 16], String> {
+    if crate::non_production_reproduction::enabled() {
+        return Ok(crate::non_production_reproduction::deterministic_16(label));
+    }
     for _ in 0..8 {
         let mut token = [0_u8; 16];
         File::open("/dev/urandom")

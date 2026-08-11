@@ -4,6 +4,7 @@ mod clean;
 mod example_manifest;
 mod generation;
 mod inspect;
+mod non_production_reproduction;
 #[allow(dead_code)]
 #[path = "rustc_wrapper/pinned_codegen_backend.rs"]
 mod pinned_codegen_backend;
@@ -822,6 +823,11 @@ fn os_string(value: Vec<u8>) -> Result<OsString, String> {
 }
 
 fn random_build_session() -> Result<fe2o3_artifact_transaction::BuildSession, String> {
+    if non_production_reproduction::enabled() {
+        return Ok(fe2o3_artifact_transaction::BuildSession::from_bytes(
+            non_production_reproduction::deterministic_16(b"build-session"),
+        ));
+    }
     for _ in 0..8 {
         let mut bytes = [0_u8; 16];
         std::fs::File::open("/dev/urandom")
