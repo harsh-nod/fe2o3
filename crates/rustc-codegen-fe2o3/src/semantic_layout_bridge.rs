@@ -47,11 +47,16 @@ pub const MAX_SEMANTIC_LAYOUT_EVIDENCE_BYTES_V1: usize = 4 * 1024 * 1024;
 /// target and data-layout strings identify the ABI used to compute the facts.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SemanticLayoutTargetV1 {
-    llvm_target: String,
-    data_layout: String,
+    llvm_target: Box<str>,
+    data_layout: Box<str>,
     default_pointer_width_bits: u16,
-    active_cpu: Option<String>,
-    active_features: Option<String>,
+    active_codegen_profile: Option<Box<ActiveCodegenProfileV1>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ActiveCodegenProfileV1 {
+    cpu: Option<String>,
+    features: String,
 }
 
 impl SemanticLayoutTargetV1 {
@@ -75,11 +80,10 @@ impl SemanticLayoutTargetV1 {
             });
         }
         Ok(Self {
-            llvm_target,
-            data_layout,
+            llvm_target: llvm_target.into_boxed_str(),
+            data_layout: data_layout.into_boxed_str(),
             default_pointer_width_bits,
-            active_cpu: None,
-            active_features: None,
+            active_codegen_profile: None,
         })
     }
 
@@ -98,11 +102,10 @@ impl SemanticLayoutTargetV1 {
         codegen_features: &str,
     ) -> Result<Self, SemanticLayoutBridgeError> {
         let mut target = Self::new(llvm_target, data_layout, default_pointer_width_bits)?;
-        target.active_cpu = normalize_active_cpu(active_cpu)?;
-        target.active_features = Some(normalize_active_features(
-            target_features,
-            codegen_features,
-        )?);
+        target.active_codegen_profile = Some(Box::new(ActiveCodegenProfileV1 {
+            cpu: normalize_active_cpu(active_cpu)?,
+            features: normalize_active_features(target_features, codegen_features)?,
+        }));
         Ok(target)
     }
 
@@ -122,7 +125,9 @@ impl SemanticLayoutTargetV1 {
     ///
     /// `None` means that rustc exposed only an ambiguous/default/native CPU.
     pub fn active_cpu(&self) -> Option<&str> {
-        self.active_cpu.as_deref()
+        self.active_codegen_profile
+            .as_ref()
+            .and_then(|profile| profile.cpu.as_deref())
     }
 
     /// Canonical effective target-feature set selected by the active session.
@@ -130,7 +135,9 @@ impl SemanticLayoutTargetV1 {
     /// Entries are sorted by feature name and duplicate declarations are
     /// collapsed. `None` means no active-session profile was captured.
     pub fn active_features(&self) -> Option<&str> {
-        self.active_features.as_deref()
+        self.active_codegen_profile
+            .as_ref()
+            .map(|profile| profile.features.as_str())
     }
 
     pub fn has_exact_codegen_profile(&self, cpu: &str, features: &str) -> bool {
