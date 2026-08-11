@@ -142,6 +142,14 @@ def sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
+def reject_repository_python_bytecode(repo: Path) -> None:
+    for root, directories, files in os.walk(repo):
+        if "__pycache__" in directories:
+            raise EvidenceError(f"repository contains Python bytecode cache: {root}")
+        if any(name.endswith(".pyc") for name in files):
+            raise EvidenceError(f"repository contains compiled Python bytecode: {root}")
+
+
 def sha256_file(file: Any, size: int) -> str:
     if size < 1 or size > MAX_TOOL_BYTES:
         raise EvidenceError("tool size is outside the configured bound")
@@ -2080,6 +2088,7 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
 
 
 def self_test(repo: Path) -> None:
+    reject_repository_python_bytecode(repo)
     manifest_path = repo / "tests/fixtures/compiler-evidence/gfx942-mi300x-tools.json"
     golden_path = repo / "tests/fixtures/compiler-evidence/gfx942-alpha-zeta-cov6.json"
     manifest, manifest_bytes = read_bounded_json(manifest_path)
@@ -2179,7 +2188,9 @@ def self_test(repo: Path) -> None:
             for tool in tools.values():
                 tool.close()
     adversarial_self_test()
+    reject_repository_python_bytecode(repo)
     print("gfx942 compiler-evidence controller mutation tests: PASS")
+    print("gfx942 compiler-evidence clean launcher bytecode test: PASS")
 
 
 def main() -> int:

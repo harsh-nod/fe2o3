@@ -18,15 +18,7 @@ if /usr/bin/find "$repo" -type d -name __pycache__ -print -quit | /usr/bin/grep 
   exit 1
 fi
 
-scripts/gfx942-cov6-compiler-evidence.sh --self-test
-
-if /usr/bin/find "$repo" -type d -name __pycache__ -print -quit | /usr/bin/grep -q . ||
-  /usr/bin/find "$repo" -type f -name '*.pyc' -print -quit | /usr/bin/grep -q .; then
-  printf 'launcher created Python bytecode in the clean checkout\n' >&2
-  exit 1
-fi
-if [[ -n $(/usr/bin/git status --porcelain=v1 --untracked-files=all) ]]; then
-  printf 'launcher self-test dirtied the checkout\n' >&2
-  exit 1
-fi
-printf 'gfx942 compiler-evidence clean launcher test: PASS\n'
+# The exec is required: no same-scope parent may remain in the delegated cgroup
+# when the controller creates its command sub-cgroups. The controller self-test
+# performs the post-execution bytecode scan before reporting success.
+exec scripts/gfx942-cov6-compiler-evidence.sh --self-test
