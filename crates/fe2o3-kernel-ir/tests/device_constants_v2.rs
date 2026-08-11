@@ -62,6 +62,41 @@ fn pointer_source(id: u32, target: u32) -> Allocation {
     }
 }
 
+fn pointer_source_at(id: u32, target: u32, width: u8, offset: u32, alignment: u32) -> Allocation {
+    let byte_len = offset.checked_add(u32::from(width)).unwrap();
+    let mut validity = Vec::with_capacity(2);
+    if offset != 0 {
+        validity.push(ValidityRegion {
+            offset: 0,
+            len: offset,
+            class: ValidityClass::Bytes,
+        });
+    }
+    validity.push(ValidityRegion {
+        offset,
+        len: u32::from(width),
+        class: ValidityClass::Pointer,
+    });
+    Allocation {
+        id: AllocationId(id),
+        semantic_type: semantic_type((id as u8).wrapping_add(9)),
+        kind: AllocationKind::Constant,
+        alignment,
+        mutability: Mutability::ReadOnly,
+        address_space: AddressSpace::Constant,
+        bytes: vec![0; usize::try_from(byte_len).unwrap()],
+        validity,
+        relocations: vec![Relocation {
+            source_offset: offset,
+            width,
+            target: AllocationId(target),
+            addend: 0,
+            provenance: ProvenancePolicy::SharedReadOnly,
+            capability: CapabilityPolicy::ReadOnly,
+        }],
+    }
+}
+
 fn graph(allocations: Vec<Allocation>) -> DeviceConstantGraphV2 {
     DeviceConstantGraphV2 { allocations }
 }
@@ -740,6 +775,21 @@ fn relocation_width_alignment_and_policy_fields_are_bound() {
     let mut unique_source = pointer_source(0, 1);
     unique_source.relocations[0].provenance = ProvenancePolicy::Unique;
     graph(vec![unique_source, readonly_global])
+        .validate(&limits)
+        .unwrap();
+}
+
+#[test]
+fn relocation_width_requires_matching_allocation_base_alignment() {
+    let limits = GraphLimits::default();
+    let under_aligned = pointer_source_at(0, 1, 8, 0, 4);
+    assert_eq!(
+        graph(vec![under_aligned, constant(1, vec![1])]).validate(&limits),
+        Err(ValidationError::UnalignedRelocation(AllocationId(0)))
+    );
+
+    let exactly_aligned = pointer_source_at(0, 1, 8, 0, 8);
+    graph(vec![exactly_aligned, constant(1, vec![1])])
         .validate(&limits)
         .unwrap();
 }

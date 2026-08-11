@@ -748,15 +748,15 @@ fn validate_relocation_source(
     if !matches!(relocation.width, 4 | 8) {
         return Err(ValidationError::InvalidRelocationWidth(allocation.id));
     }
-    if !relocation
-        .source_offset
-        .is_multiple_of(u32::from(relocation.width))
+    let relocation_width = u32::from(relocation.width);
+    if allocation.alignment < relocation_width
+        || !relocation.source_offset.is_multiple_of(relocation_width)
     {
         return Err(ValidationError::UnalignedRelocation(allocation.id));
     }
     let end = relocation
         .source_offset
-        .checked_add(u32::from(relocation.width))
+        .checked_add(relocation_width)
         .ok_or(ValidationError::ArithmeticOverflow)?;
     let byte_len =
         u32::try_from(allocation.bytes.len()).map_err(|_| ValidationError::ArithmeticOverflow)?;
