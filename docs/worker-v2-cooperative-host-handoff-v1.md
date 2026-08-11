@@ -18,6 +18,11 @@ after recovery because durable lease acquisition duplicates the pinned
 directory descriptor. Exact envelope bytes, the pinned directory, and the
 reacquired lease remain retained through unload.
 
+The Cargo producer and host consumer share one 4,096-entry artifact-directory
+scan limit. Every visible entry is counted before publication-name filtering,
+so unrelated names cannot create unbounded parent work or bypass the child's
+admission limit.
+
 The ACK is canonical liveness and possession data only. The child receives all
 inputs needed to reproduce it. ACK bytes establish no recovery provenance and
 grant no host, publication, load, or launch authority.

@@ -191,7 +191,9 @@ Cargo also retains a fresh current-publication lease. The child receives
 read-only envelope and directory descriptors plus the bounded handoff values;
 no pathname or external-HSACO fallback exists. The public ACK is protocol
 completion only. Cargo retains and revalidates its private lease through the
-handoff.
+handoff. Parent discovery and child revalidation both reject an artifact
+directory with more than 4,096 visible entries before filtering publication
+names; unrelated entries consume the same deterministic scan budget.
 
 The initial image profile is ELF64 x86-64 static executable/static PIE. It
 checks page-rounded virtual PT_LOAD mappings and enforces W^X over declared
