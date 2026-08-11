@@ -338,9 +338,6 @@ fn validate_load_segments(
                 right_file_pages.0,
                 right_file_pages.1,
             ) {
-                // Linux may map one raw-disjoint boundary page twice with different permissions.
-                // Writable PT_LOAD mappings are private/COW, so only an overlap in the declared
-                // file bytes or in rounded virtual pages creates a W^X mapping.
                 if ranges_overlap(
                     left.offset,
                     left.file_end()?,
@@ -348,6 +345,9 @@ fn validate_load_segments(
                     right.file_end()?,
                 ) {
                     return Err(SealedStaticApplicationErrorV1::SegmentLayout);
+                }
+                if (left.flags | right.flags) & (PF_W | PF_X) == (PF_W | PF_X) {
+                    return Err(SealedStaticApplicationErrorV1::SegmentPermissions);
                 }
             }
         }
@@ -1148,17 +1148,22 @@ mod tests {
             Err(SealedStaticApplicationErrorV1::SegmentLayout)
         );
 
-        let raw_disjoint_private_file_alias = [
+        let raw_disjoint_writable_executable_file_alias = [
             program(PT_LOAD, PF_R, 0, 0, 0x200, 0x200, 0x1000),
             program(PT_LOAD, PF_R | PF_X, 0x200, 0x1200, 1, 1, 0x1000),
             program(PT_LOAD, PF_R | PF_W, 0x201, 0x2201, 0x200, 0x200, 0x1000),
         ];
-        assert!(
-            validate_load_segments(&raw_disjoint_private_file_alias, HEADER, 0x190, 0x1200,)
-                .is_ok()
+        assert_eq!(
+            validate_load_segments(
+                &raw_disjoint_writable_executable_file_alias,
+                HEADER,
+                0x190,
+                0x1200,
+            ),
+            Err(SealedStaticApplicationErrorV1::SegmentPermissions)
         );
 
-        let mut overlapping_file_alias = raw_disjoint_private_file_alias;
+        let mut overlapping_file_alias = raw_disjoint_writable_executable_file_alias;
         overlapping_file_alias[2].offset = 0x200;
         overlapping_file_alias[2].virtual_address = 0x2200;
         assert_eq!(

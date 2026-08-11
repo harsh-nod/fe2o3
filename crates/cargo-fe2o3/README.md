@@ -182,22 +182,27 @@ revalidate the durable claim and acquire fresh process-local authority.
 
 For required-envelope `cargo fe2o3 run`, Cargo retains the owner-controlled
 artifact-directory descriptor, opens the exact canonical envelope with
-`openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_XDEV)`, pins the exact
-initial application image, and retains a fresh current-publication lease. The
-child receives read-only envelope and directory descriptors plus the bounded
-handoff values; no pathname or external-HSACO fallback exists. The public ACK
-is protocol completion only. Cargo retains and revalidates its private lease
-through the handoff.
+`openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_XDEV)`, copies the exact
+initial application bytes into a bounded anonymous image, validates the copy,
+and seals it against writes and size changes before deriving the handoff
+identity. The child executes a read-only descriptor for that sealed snapshot;
+later source-path or same-inode mutation cannot change the admitted image.
+Cargo also retains a fresh current-publication lease. The child receives
+read-only envelope and directory descriptors plus the bounded handoff values;
+no pathname or external-HSACO fallback exists. The public ACK is protocol
+completion only. Cargo retains and revalidates its private lease through the
+handoff.
 
 The initial image profile is ELF64 x86-64 static executable/static PIE. It
-checks page-rounded PT_LOAD mappings, W^X, static-PIE dynamic metadata and
-relocations. At most one PT_TLS is admitted when it is well formed and wholly
-owned by a writable, non-executable PT_LOAD; malformed, executable-load-backed,
-or outside-load TLS is rejected. `no_new_privs` plus seccomp admits only the
+checks page-rounded PT_LOAD mappings, including writable/executable aliases of
+the same rounded file page, static-PIE dynamic metadata and relocations. At
+most one PT_TLS is admitted when it is well formed and wholly owned by a
+writable, non-executable PT_LOAD; malformed, executable-load-backed, or
+outside-load TLS is rejected. `no_new_privs` plus seccomp admits only the
 controlled initial `execve`, denies later `execve`/`execveat`, and denies
 fork/clone, namespace/session creation, and io_uring. Missing kernel support
 for the required seccomp listener or `close_range(CLOSE_RANGE_CLOEXEC)` fails
-launch.
+launch without leaving a blocked supervisor.
 
 This no-fork/no-re-exec startup boundary does not constrain arbitrary
 same-process behavior. The syscall profile still permits operations including
