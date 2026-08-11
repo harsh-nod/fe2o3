@@ -1,16 +1,24 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 
 use crate::control_flow::{MirControlFlowAnalysis, analyze_mir_control_flow};
 use crate::executable::terminator_edges;
 use crate::{
-    MirBasicBlock, MirBlockId, MirBlockParameter, MirBody, MirBodyForm, MirCall, MirEdge,
-    MirExecutableModule, MirExternalCallRegistry, MirLocalId, MirLocalKind, MirMutability,
-    MirOperand, MirPlace, MirProjection, MirRvalue, MirStatement, MirStatementKind,
-    MirTerminatorKind, MirTypeKind, MirUnwindAction, MirValueId, ValidatedMirExecutableModule,
+    MAX_EXECUTABLE_BLOCKS, MAX_EXECUTABLE_LOCALS, MirBasicBlock, MirBlockId, MirBlockParameter,
+    MirBody, MirBodyForm, MirCall, MirEdge, MirExecutableModule, MirExternalCallRegistry,
+    MirLocalId, MirLocalKind, MirMutability, MirOperand, MirPlace, MirProjection, MirRvalue,
+    MirStatement, MirStatementKind, MirTerminatorKind, MirTypeKind, MirUnwindAction, MirValueId,
+    ValidatedMirExecutableModule,
 };
 
 pub const MAX_MEM2REG_OUTPUT_ITEMS: usize = 65_536;
+const MAX_MEM2REG_LOCAL_WORDS: usize = MAX_EXECUTABLE_LOCALS.div_ceil(u64::BITS as usize);
+pub const MAX_MEM2REG_LIVENESS_STORAGE_ITEMS: usize = MAX_EXECUTABLE_LOCALS
+    + MAX_EXECUTABLE_BLOCKS * MAX_MEM2REG_LOCAL_WORDS * 3
+    + MAX_MEM2REG_LOCAL_WORDS
+    + MAX_EXECUTABLE_BLOCKS * 2;
+pub const MAX_MEM2REG_LIVENESS_WORK_UNITS: usize =
+    MAX_EXECUTABLE_BLOCKS * MAX_MEM2REG_LOCAL_WORDS * 32;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MirMem2RegFunctionReport {
@@ -19,6 +27,8 @@ pub struct MirMem2RegFunctionReport {
     pub inserted_parameters: usize,
     pub inserted_definitions: usize,
     pub fact_work_units: usize,
+    pub liveness_storage_items: usize,
+    pub liveness_work_units: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -52,6 +62,20 @@ impl MirMem2RegReport {
         self.functions
             .iter()
             .map(|function| function.fact_work_units)
+            .sum()
+    }
+
+    pub fn liveness_storage_items(&self) -> usize {
+        self.functions
+            .iter()
+            .map(|function| function.liveness_storage_items)
+            .sum()
+    }
+
+    pub fn liveness_work_units(&self) -> usize {
+        self.functions
+            .iter()
+            .map(|function| function.liveness_work_units)
             .sum()
     }
 }
@@ -135,6 +159,8 @@ pub fn promote_module_to_ssa(
             inserted_parameters,
             inserted_definitions,
             fact_work_units: facts.work_units,
+            liveness_storage_items: plan.liveness_storage_items,
+            liveness_work_units: plan.liveness_work_units,
         });
     }
 
@@ -192,6 +218,68 @@ impl GeneratedItemBudget {
 struct SsaPlan {
     parameter_locals: Vec<Vec<MirLocalId>>,
     definition_count: usize,
+    liveness_storage_items: usize,
+    liveness_work_units: usize,
+}
+
+#[derive(Default)]
+struct LivenessBudget {
+    storage_items: usize,
+    work_units: usize,
+}
+
+impl LivenessBudget {
+    fn reserve_storage(
+        &mut self,
+        function_index: usize,
+        items: usize,
+    ) -> Result<(), MirMem2RegError> {
+        let required = self
+            .storage_items
+            .checked_add(items)
+            .unwrap_or(MAX_MEM2REG_LIVENESS_STORAGE_ITEMS + 1);
+        if required > MAX_MEM2REG_LIVENESS_STORAGE_ITEMS {
+            return Err(MirMem2RegError::new(
+                format!("module.functions[{function_index}].body"),
+                format!(
+                    "mem2reg liveness requires {required} storage items, exceeding the deterministic limit {MAX_MEM2REG_LIVENESS_STORAGE_ITEMS}"
+                ),
+            ));
+        }
+        self.storage_items = required;
+        Ok(())
+    }
+
+    fn charge_work(&mut self, function_index: usize, units: usize) -> Result<(), MirMem2RegError> {
+        let consumed = self
+            .work_units
+            .checked_add(units)
+            .unwrap_or(MAX_MEM2REG_LIVENESS_WORK_UNITS + 1);
+        if consumed > MAX_MEM2REG_LIVENESS_WORK_UNITS {
+            return Err(MirMem2RegError::new(
+                format!("module.functions[{function_index}].body"),
+                format!(
+                    "mem2reg liveness consumed {consumed} work units, exceeding the deterministic limit {MAX_MEM2REG_LIVENESS_WORK_UNITS}"
+                ),
+            ));
+        }
+        self.work_units = consumed;
+        Ok(())
+    }
+}
+
+struct IndexedLiveIn {
+    words_per_block: usize,
+    words: Vec<u64>,
+}
+
+impl IndexedLiveIn {
+    fn contains(&self, block: MirBlockId, local_index: usize) -> bool {
+        let word = block.0 as usize * self.words_per_block + local_index / u64::BITS as usize;
+        self.words
+            .get(word)
+            .is_some_and(|value| value & (1_u64 << (local_index % u64::BITS as usize)) != 0)
+    }
 }
 
 struct BodyLocalFacts {
@@ -277,6 +365,131 @@ impl BodyLocalFacts {
     }
 }
 
+fn compute_liveness(
+    function_index: usize,
+    body: &MirBody,
+    promoted: &[MirLocalId],
+    control_flow: &MirControlFlowAnalysis,
+    facts: &BodyLocalFacts,
+) -> Result<(IndexedLiveIn, LivenessBudget), MirMem2RegError> {
+    let block_count = body.blocks.len();
+    let words_per_block = promoted.len().div_ceil(u64::BITS as usize);
+    let matrix_words = block_count.checked_mul(words_per_block).ok_or_else(|| {
+        MirMem2RegError::new(
+            format!("module.functions[{function_index}].body"),
+            "mem2reg liveness storage item overflow",
+        )
+    })?;
+    let storage_items = body
+        .locals
+        .len()
+        .checked_add(matrix_words.checked_mul(3).ok_or_else(|| {
+            MirMem2RegError::new(
+                format!("module.functions[{function_index}].body"),
+                "mem2reg liveness storage item overflow",
+            )
+        })?)
+        .and_then(|items| items.checked_add(words_per_block))
+        .and_then(|items| items.checked_add(block_count.checked_mul(2)?))
+        .ok_or_else(|| {
+            MirMem2RegError::new(
+                format!("module.functions[{function_index}].body"),
+                "mem2reg liveness storage item overflow",
+            )
+        })?;
+    let mut budget = LivenessBudget::default();
+    budget.reserve_storage(function_index, storage_items)?;
+
+    let mut local_to_bit = vec![usize::MAX; body.locals.len()];
+    for (bit, local) in promoted.iter().copied().enumerate() {
+        budget.charge_work(function_index, 1)?;
+        local_to_bit[local.0 as usize] = bit;
+    }
+    let mut definitions = vec![0_u64; matrix_words];
+    let mut upward_exposed_uses = vec![0_u64; matrix_words];
+    for block_index in 0..block_count {
+        let offset = block_index * words_per_block;
+        for local in &facts.definitions[block_index] {
+            budget.charge_work(function_index, 1)?;
+            let bit = local_to_bit[local.0 as usize];
+            if bit != usize::MAX {
+                definitions[offset + bit / u64::BITS as usize] |=
+                    1_u64 << (bit % u64::BITS as usize);
+            }
+        }
+        for local in &facts.upward_exposed_uses[block_index] {
+            budget.charge_work(function_index, 1)?;
+            let bit = local_to_bit[local.0 as usize];
+            if bit != usize::MAX {
+                upward_exposed_uses[offset + bit / u64::BITS as usize] |=
+                    1_u64 << (bit % u64::BITS as usize);
+            }
+        }
+    }
+
+    let mut live_in = vec![0_u64; matrix_words];
+    let mut scratch = vec![0_u64; words_per_block];
+    let mut queued = vec![true; block_count];
+    let mut pending = VecDeque::with_capacity(block_count);
+    budget.charge_work(function_index, block_count)?;
+    pending.extend(0..block_count);
+
+    while !pending.is_empty() {
+        budget.charge_work(function_index, 1)?;
+        let block_index = pending
+            .pop_front()
+            .expect("a nonempty liveness worklist has a front item");
+        queued[block_index] = false;
+        budget.charge_work(function_index, words_per_block)?;
+        scratch.fill(0);
+        let block = MirBlockId(block_index as u32);
+        for successor in control_flow
+            .successors(block)
+            .expect("analysis covers every canonical block")
+        {
+            budget.charge_work(function_index, words_per_block)?;
+            let successor_offset = successor.0 as usize * words_per_block;
+            for (word, successor_word) in scratch
+                .iter_mut()
+                .zip(&live_in[successor_offset..successor_offset + words_per_block])
+            {
+                *word |= successor_word;
+            }
+        }
+
+        budget.charge_work(function_index, words_per_block)?;
+        let offset = block_index * words_per_block;
+        let mut changed = false;
+        for word_index in 0..words_per_block {
+            let next = upward_exposed_uses[offset + word_index]
+                | (scratch[word_index] & !definitions[offset + word_index]);
+            changed |= live_in[offset + word_index] != next;
+            live_in[offset + word_index] = next;
+        }
+        if changed {
+            for predecessor in control_flow
+                .predecessors(block)
+                .expect("analysis covers every canonical block")
+            {
+                budget.charge_work(function_index, 1)?;
+                let predecessor_index = predecessor.0 as usize;
+                if !queued[predecessor_index] {
+                    queued[predecessor_index] = true;
+                    pending.push_back(predecessor_index);
+                }
+            }
+        }
+    }
+
+    Ok((
+        IndexedLiveIn {
+            words_per_block,
+            words: live_in,
+        },
+        budget,
+    ))
+}
+
 impl SsaPlan {
     fn build(
         function_index: usize,
@@ -286,32 +499,6 @@ impl SsaPlan {
         facts: &BodyLocalFacts,
         output_items: &mut GeneratedItemBudget,
     ) -> Result<Self, MirMem2RegError> {
-        let mut promoted_flags = vec![false; body.locals.len()];
-        for local in promoted {
-            promoted_flags[local.0 as usize] = true;
-        }
-        let definitions = facts
-            .definitions
-            .iter()
-            .map(|locals| {
-                locals
-                    .iter()
-                    .copied()
-                    .filter(|local| promoted_flags[local.0 as usize])
-                    .collect::<BTreeSet<_>>()
-            })
-            .collect::<Vec<_>>();
-        let upward_exposed_uses = facts
-            .upward_exposed_uses
-            .iter()
-            .map(|locals| {
-                locals
-                    .iter()
-                    .copied()
-                    .filter(|local| promoted_flags[local.0 as usize])
-                    .collect::<BTreeSet<_>>()
-            })
-            .collect::<Vec<_>>();
         let definition_count = promoted.iter().try_fold(0_usize, |total, local| {
             total.checked_add(facts.assignment_definition_counts[local.0 as usize])
         });
@@ -322,34 +509,8 @@ impl SsaPlan {
             )
         })?;
         output_items.charge(function_index, definition_count)?;
-
-        let mut live_in = vec![BTreeSet::new(); body.blocks.len()];
-        let mut live_out = vec![BTreeSet::new(); body.blocks.len()];
-        loop {
-            let mut changed = false;
-            for block_index in (0..body.blocks.len()).rev() {
-                let block = MirBlockId(block_index as u32);
-                let next_out = control_flow
-                    .successors(block)
-                    .expect("analysis covers every canonical block")
-                    .iter()
-                    .flat_map(|successor| live_in[successor.0 as usize].iter().copied())
-                    .collect::<BTreeSet<_>>();
-                let mut next_in = upward_exposed_uses[block_index].clone();
-                next_in.extend(
-                    next_out
-                        .iter()
-                        .filter(|local| !definitions[block_index].contains(local))
-                        .copied(),
-                );
-                changed |= live_out[block_index] != next_out || live_in[block_index] != next_in;
-                live_out[block_index] = next_out;
-                live_in[block_index] = next_in;
-            }
-            if !changed {
-                break;
-            }
-        }
+        let (live_in, liveness_budget) =
+            compute_liveness(function_index, body, promoted, control_flow, facts)?;
 
         let path = format!("module.functions[{function_index}].body");
         let mut incoming_edges = vec![0_usize; body.blocks.len()];
@@ -376,12 +537,12 @@ impl SsaPlan {
             output_items.charge(function_index, growth)?;
             parameter_locals[body.entry.0 as usize].push(local);
         }
-        for local in promoted {
+        for (local_index, local) in promoted.iter().enumerate() {
             let frontiers = control_flow
                 .iterated_dominance_frontier(&facts.definition_blocks[local.0 as usize])
                 .expect("definition blocks belong to the analyzed body");
             for block in frontiers {
-                if block != body.entry && live_in[block.0 as usize].contains(local) {
+                if block != body.entry && live_in.contains(block, local_index) {
                     let growth =
                         incoming_edges[block.0 as usize]
                             .checked_add(1)
@@ -401,6 +562,8 @@ impl SsaPlan {
         Ok(Self {
             parameter_locals,
             definition_count,
+            liveness_storage_items: liveness_budget.storage_items,
+            liveness_work_units: liveness_budget.work_units,
         })
     }
 }
@@ -993,4 +1156,45 @@ fn inspect_terminator(
 
 fn charge_fact_work(work_units: &mut usize) {
     *work_units = work_units.saturating_add(1);
+}
+
+#[cfg(test)]
+mod liveness_budget_tests {
+    use super::*;
+
+    #[test]
+    fn storage_budget_accepts_the_boundary_and_rejects_the_next_item() {
+        let mut budget = LivenessBudget::default();
+        budget
+            .reserve_storage(7, MAX_MEM2REG_LIVENESS_STORAGE_ITEMS)
+            .unwrap();
+
+        let error = budget.reserve_storage(7, 1).unwrap_err();
+        assert_eq!(error.path(), "module.functions[7].body");
+        assert_eq!(
+            error.reason(),
+            format!(
+                "mem2reg liveness requires {} storage items, exceeding the deterministic limit {MAX_MEM2REG_LIVENESS_STORAGE_ITEMS}",
+                MAX_MEM2REG_LIVENESS_STORAGE_ITEMS + 1
+            )
+        );
+    }
+
+    #[test]
+    fn work_budget_accepts_the_boundary_and_rejects_the_next_item() {
+        let mut budget = LivenessBudget::default();
+        budget
+            .charge_work(11, MAX_MEM2REG_LIVENESS_WORK_UNITS)
+            .unwrap();
+
+        let error = budget.charge_work(11, 1).unwrap_err();
+        assert_eq!(error.path(), "module.functions[11].body");
+        assert_eq!(
+            error.reason(),
+            format!(
+                "mem2reg liveness consumed {} work units, exceeding the deterministic limit {MAX_MEM2REG_LIVENESS_WORK_UNITS}",
+                MAX_MEM2REG_LIVENESS_WORK_UNITS + 1
+            )
+        );
+    }
 }

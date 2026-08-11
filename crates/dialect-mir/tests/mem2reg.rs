@@ -1,12 +1,13 @@
 use dialect_mir::{
-    MAX_MEM2REG_OUTPUT_ITEMS, MirAddressSpace, MirAuthorizedDeviceImport, MirBasicBlock,
-    MirBinaryOp, MirBlockId, MirBody, MirBodyForm, MirCall, MirCallAuthority, MirCallReturn,
-    MirCallSignature, MirCallable, MirCallee, MirConstant, MirConstantValue, MirEdge,
-    MirExecutableModule, MirExecutableTarget, MirExecutableVersion, MirExternalCallRegistry,
-    MirExternalCallReturn, MirExternalCallSignature, MirFunction, MirLayout, MirLocalDecl,
-    MirLocalId, MirLocalKind, MirOperand, MirPlace, MirRvalue, MirScalarType, MirSemanticType,
-    MirStatement, MirStatementKind, MirTerminator, MirTerminatorKind, MirTypeId, MirTypeKind,
-    MirUnwindAction, MirValueId, promote_module_to_ssa, promote_module_to_ssa_with_registry,
+    MAX_MEM2REG_LIVENESS_STORAGE_ITEMS, MAX_MEM2REG_LIVENESS_WORK_UNITS, MAX_MEM2REG_OUTPUT_ITEMS,
+    MirAddressSpace, MirAuthorizedDeviceImport, MirBasicBlock, MirBinaryOp, MirBlockId, MirBody,
+    MirBodyForm, MirCall, MirCallAuthority, MirCallReturn, MirCallSignature, MirCallable,
+    MirCallee, MirConstant, MirConstantValue, MirEdge, MirExecutableModule, MirExecutableTarget,
+    MirExecutableVersion, MirExternalCallRegistry, MirExternalCallReturn, MirExternalCallSignature,
+    MirFunction, MirLayout, MirLocalDecl, MirLocalId, MirLocalKind, MirOperand, MirPlace,
+    MirRvalue, MirScalarType, MirSemanticType, MirStatement, MirStatementKind, MirTerminator,
+    MirTerminatorKind, MirTypeId, MirTypeKind, MirUnwindAction, MirValueId, promote_module_to_ssa,
+    promote_module_to_ssa_with_registry,
 };
 
 #[derive(Clone, Copy)]
@@ -390,6 +391,51 @@ fn linear_amplification_module(argument_count: u32, block_count: u32) -> MirExec
     }
 }
 
+fn reverse_liveness_module(block_count: u32, argument_count: u32) -> MirExecutableModule {
+    let (types, ids) = types();
+    let mut locals = vec![local(ids.u32_ty, MirLocalKind::Return, true)];
+    locals.extend((0..argument_count).map(|_| local(ids.u32_ty, MirLocalKind::Argument, false)));
+    let terminal_uses = (1..=argument_count)
+        .map(|argument| assign(0, ids.u32_ty, MirRvalue::Use(copy(argument, ids.u32_ty))))
+        .collect::<Vec<_>>();
+    let mut blocks = Vec::with_capacity(block_count as usize);
+    blocks.push(MirBasicBlock {
+        parameters: vec![],
+        statements: vec![],
+        terminator: terminator(MirTerminatorKind::Goto(MirEdge::new(MirBlockId(
+            block_count - 1,
+        )))),
+    });
+    blocks.push(MirBasicBlock {
+        parameters: vec![],
+        statements: terminal_uses,
+        terminator: terminator(MirTerminatorKind::Return),
+    });
+    for block in 2..block_count {
+        blocks.push(MirBasicBlock {
+            parameters: vec![],
+            statements: vec![],
+            terminator: terminator(MirTerminatorKind::Goto(MirEdge::new(MirBlockId(block - 1)))),
+        });
+    }
+    MirExecutableModule {
+        version: MirExecutableVersion::V1,
+        target: MirExecutableTarget::gfx942(),
+        types,
+        callables: vec![],
+        functions: vec![MirFunction {
+            identity: format!("mem2reg::reverse_liveness_{block_count}_{argument_count}"),
+            span: None,
+            body: MirBody {
+                form: MirBodyForm::Places,
+                locals,
+                blocks,
+                entry: MirBlockId(0),
+            },
+        }],
+    }
+}
+
 #[test]
 fn linear_control_flow_does_not_amplify_block_arguments() {
     let argument_count = 256_u32;
@@ -418,6 +464,48 @@ fn fact_collection_scales_with_syntax_not_local_statement_pairs() {
     assert_eq!(work_1024, 1 + 6 * 1024 + 2);
     assert_eq!(work_2048, 1 + 6 * 2048 + 2);
     assert_eq!(work_2048, work_1024 * 2 - 3);
+}
+
+fn assert_reverse_liveness_work(block_count: u32, argument_count: u32, expected: (usize, usize)) {
+    let input = reverse_liveness_module(block_count, argument_count)
+        .validate()
+        .unwrap();
+    let (output, report) = promote_module_to_ssa(&input).unwrap();
+    assert_eq!(report.inserted_parameter_count(), argument_count as usize);
+    assert!(
+        output.functions[0].body.blocks[1..]
+            .iter()
+            .all(|block| block.parameters.is_empty())
+    );
+    assert_eq!(
+        (
+            report.liveness_storage_items(),
+            report.liveness_work_units(),
+        ),
+        expected
+    );
+    assert!(expected.0 < MAX_MEM2REG_LIVENESS_STORAGE_ITEMS);
+    assert!(expected.1 < MAX_MEM2REG_LIVENESS_WORK_UNITS);
+}
+
+#[test]
+fn reverse_cfg_liveness_1024x64_has_bounded_indexed_work() {
+    assert_reverse_liveness_work(1024, 64, (5_186, 6_339));
+}
+
+#[test]
+fn reverse_cfg_liveness_2048x64_has_bounded_indexed_work() {
+    assert_reverse_liveness_work(2048, 64, (10_306, 12_483));
+}
+
+#[test]
+fn reverse_cfg_liveness_4096x64_has_bounded_indexed_work() {
+    assert_reverse_liveness_work(4096, 64, (20_546, 24_771));
+}
+
+#[test]
+fn reverse_cfg_liveness_1024x256_has_bounded_indexed_work() {
+    assert_reverse_liveness_work(1024, 256, (14_597, 16_137));
 }
 
 #[test]
