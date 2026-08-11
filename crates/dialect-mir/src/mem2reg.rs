@@ -26,6 +26,11 @@ pub struct MirMem2RegFunctionReport {
     pub promoted_locals: Vec<MirLocalId>,
     pub inserted_parameters: usize,
     pub inserted_definitions: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MirMem2RegFunctionResourceReport {
+    pub identity: String,
     pub fact_work_units: usize,
     pub liveness_storage_items: usize,
     /// Deterministic for the same canonical executable-MIR encoding.
@@ -39,6 +44,11 @@ pub struct MirMem2RegFunctionReport {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MirMem2RegReport {
     pub functions: Vec<MirMem2RegFunctionReport>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MirMem2RegResourceReport {
+    pub functions: Vec<MirMem2RegFunctionResourceReport>,
 }
 
 impl MirMem2RegReport {
@@ -62,7 +72,9 @@ impl MirMem2RegReport {
             .map(|function| function.inserted_definitions)
             .sum()
     }
+}
 
+impl MirMem2RegResourceReport {
     pub fn fact_work_units(&self) -> usize {
         self.functions
             .iter()
@@ -126,9 +138,25 @@ impl std::error::Error for MirMem2RegError {}
 pub fn promote_module_to_ssa(
     module: &ValidatedMirExecutableModule,
 ) -> Result<(ValidatedMirExecutableModule, MirMem2RegReport), MirMem2RegError> {
+    let (output, report, _) = promote_module_to_ssa_with_resources(module)?;
+    Ok((output, report))
+}
+
+/// Promotes places to SSA and returns deterministic resource accounting.
+pub fn promote_module_to_ssa_with_resources(
+    module: &ValidatedMirExecutableModule,
+) -> Result<
+    (
+        ValidatedMirExecutableModule,
+        MirMem2RegReport,
+        MirMem2RegResourceReport,
+    ),
+    MirMem2RegError,
+> {
     let source = module.as_module();
     let mut output = source.clone();
     let mut reports = Vec::with_capacity(output.functions.len());
+    let mut resource_reports = Vec::with_capacity(output.functions.len());
     let mut output_items = GeneratedItemBudget::default();
 
     for (function_index, function) in output.functions.iter_mut().enumerate() {
@@ -163,6 +191,9 @@ pub fn promote_module_to_ssa(
             promoted_locals: promoted,
             inserted_parameters,
             inserted_definitions,
+        });
+        resource_reports.push(MirMem2RegFunctionResourceReport {
+            identity: function.identity.clone(),
             fact_work_units: facts.work_units,
             liveness_storage_items: plan.liveness_storage_items,
             liveness_work_units: plan.liveness_work_units,
@@ -180,7 +211,13 @@ pub fn promote_module_to_ssa(
                 ),
             )
         })?;
-    Ok((output, MirMem2RegReport { functions: reports }))
+    Ok((
+        output,
+        MirMem2RegReport { functions: reports },
+        MirMem2RegResourceReport {
+            functions: resource_reports,
+        },
+    ))
 }
 
 /// Compatibility constructor that validates untrusted data and immediately
@@ -193,6 +230,24 @@ pub fn promote_module_to_ssa_with_registry(
         .validate_with_registry(registry)
         .map_err(|error| MirMem2RegError::new(error.path(), error.reason()))?;
     promote_module_to_ssa(&validated)
+}
+
+/// Validates untrusted data, promotes places to SSA, and returns resource accounting.
+pub fn promote_module_to_ssa_with_registry_and_resources(
+    module: &MirExecutableModule,
+    registry: &MirExternalCallRegistry,
+) -> Result<
+    (
+        ValidatedMirExecutableModule,
+        MirMem2RegReport,
+        MirMem2RegResourceReport,
+    ),
+    MirMem2RegError,
+> {
+    let validated = module
+        .validate_with_registry(registry)
+        .map_err(|error| MirMem2RegError::new(error.path(), error.reason()))?;
+    promote_module_to_ssa_with_resources(&validated)
 }
 
 #[derive(Default)]

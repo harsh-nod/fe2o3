@@ -33,8 +33,9 @@ pub use executable::{
 pub use executable_wire::{MAX_EXECUTABLE_WIRE_BYTES, MirExecutableDecodeError};
 pub use mem2reg::{
     MAX_MEM2REG_LIVENESS_STORAGE_ITEMS, MAX_MEM2REG_LIVENESS_WORK_UNITS, MAX_MEM2REG_OUTPUT_ITEMS,
-    MirMem2RegError, MirMem2RegFunctionReport, MirMem2RegReport, promote_module_to_ssa,
-    promote_module_to_ssa_with_registry,
+    MirMem2RegError, MirMem2RegFunctionReport, MirMem2RegFunctionResourceReport, MirMem2RegReport,
+    MirMem2RegResourceReport, promote_module_to_ssa, promote_module_to_ssa_with_registry,
+    promote_module_to_ssa_with_registry_and_resources, promote_module_to_ssa_with_resources,
 };
 
 pub use semantic_constant::{

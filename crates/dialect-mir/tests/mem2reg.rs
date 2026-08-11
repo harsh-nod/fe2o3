@@ -4,10 +4,11 @@ use dialect_mir::{
     MirBodyForm, MirCall, MirCallAuthority, MirCallReturn, MirCallSignature, MirCallable,
     MirCallee, MirConstant, MirConstantValue, MirEdge, MirExecutableModule, MirExecutableTarget,
     MirExecutableVersion, MirExternalCallRegistry, MirExternalCallReturn, MirExternalCallSignature,
-    MirFunction, MirLayout, MirLocalDecl, MirLocalId, MirLocalKind, MirOperand, MirPlace,
-    MirRvalue, MirScalarType, MirSemanticType, MirStatement, MirStatementKind, MirTerminator,
-    MirTerminatorKind, MirTypeId, MirTypeKind, MirUnwindAction, MirValueId, promote_module_to_ssa,
-    promote_module_to_ssa_with_registry,
+    MirFunction, MirLayout, MirLocalDecl, MirLocalId, MirLocalKind, MirMem2RegFunctionReport,
+    MirOperand, MirPlace, MirRvalue, MirScalarType, MirSemanticType, MirStatement,
+    MirStatementKind, MirTerminator, MirTerminatorKind, MirTypeId, MirTypeKind, MirUnwindAction,
+    MirValueId, promote_module_to_ssa, promote_module_to_ssa_with_registry,
+    promote_module_to_ssa_with_resources,
 };
 
 #[derive(Clone, Copy)]
@@ -456,7 +457,10 @@ fn fact_collection_scales_with_syntax_not_local_statement_pairs() {
         let input = linear_amplification_module(argument_count, 2)
             .validate()
             .unwrap();
-        promote_module_to_ssa(&input).unwrap().1.fact_work_units()
+        promote_module_to_ssa_with_resources(&input)
+            .unwrap()
+            .2
+            .fact_work_units()
     };
 
     let work_1024 = collect_work(1024);
@@ -470,7 +474,7 @@ fn assert_reverse_liveness_work(block_count: u32, argument_count: u32, expected:
     let input = reverse_liveness_module(block_count, argument_count)
         .validate()
         .unwrap();
-    let (output, report) = promote_module_to_ssa(&input).unwrap();
+    let (output, report, resources) = promote_module_to_ssa_with_resources(&input).unwrap();
     assert_eq!(report.inserted_parameter_count(), argument_count as usize);
     assert!(
         output.functions[0].body.blocks[1..]
@@ -479,13 +483,32 @@ fn assert_reverse_liveness_work(block_count: u32, argument_count: u32, expected:
     );
     assert_eq!(
         (
-            report.liveness_storage_items(),
-            report.liveness_work_units(),
+            resources.liveness_storage_items(),
+            resources.liveness_work_units(),
         ),
         expected
     );
     assert!(expected.0 < MAX_MEM2REG_LIVENESS_STORAGE_ITEMS);
     assert!(expected.1 < MAX_MEM2REG_LIVENESS_WORK_UNITS);
+}
+
+#[test]
+fn legacy_function_report_literal_and_destructure_remain_source_compatible() {
+    let report = MirMem2RegFunctionReport {
+        identity: "legacy".to_owned(),
+        promoted_locals: vec![MirLocalId(7)],
+        inserted_parameters: 2,
+        inserted_definitions: 3,
+    };
+    let MirMem2RegFunctionReport {
+        identity,
+        promoted_locals,
+        inserted_parameters,
+        inserted_definitions,
+    } = report;
+    assert_eq!(identity, "legacy");
+    assert_eq!(promoted_locals, vec![MirLocalId(7)]);
+    assert_eq!((inserted_parameters, inserted_definitions), (2, 3));
 }
 
 #[test]
