@@ -379,6 +379,26 @@ fn floats_casts_bool_char_and_total_cmp_have_closed_surfaces() {
         to: int(IntWidth::W64, false),
         cast: Cast::BoolToInt,
     });
+    for signed in [false, true] {
+        let same_width_char = lower(Operation::Cast {
+            from: ScalarType::Char,
+            to: int(IntWidth::W32, signed),
+            cast: Cast::CharToInt,
+        });
+        assert!(same_width_char.contains("%result = add i32 %arg0, 0"));
+        assert!(!same_width_char.contains("trunc i32 %arg0 to i32"));
+
+        let char_check = lower(Operation::Cast {
+            from: int(IntWidth::W32, signed),
+            to: ScalarType::Char,
+            cast: Cast::IntToCharChecked,
+        });
+        assert!(char_check.contains("%wide = add i32 %arg0, 0"));
+        assert!(!char_check.contains("trunc i32 %arg0 to i32"));
+        if signed {
+            assert!(char_check.contains("%nonnegative = icmp sge i32 %arg0, 0"));
+        }
+    }
     let char_check = lower(Operation::Cast {
         from: int(IntWidth::W128, false),
         to: ScalarType::Char,
@@ -386,6 +406,24 @@ fn floats_casts_bool_char_and_total_cmp_have_closed_surfaces() {
     });
     assert!(char_check.contains("icmp ule i128 %arg0, 1114111"));
     assert!(char_check.contains("%surrogate"));
+
+    let signedness = lower(Operation::Cast {
+        from: int(IntWidth::W64, true),
+        to: int(IntWidth::W64, false),
+        cast: Cast::Bitcast,
+    });
+    assert!(signedness.contains("%result = add i64 %arg0, 0"));
+    assert!(!signedness.contains("bitcast i64 %arg0 to i64"));
+
+    let i128_to_f64 = lower(Operation::Cast {
+        from: int(IntWidth::W128, false),
+        to: ScalarType::Float(FloatWidth::F64),
+        cast: Cast::IntToFloat {
+            semantics: IntToFloatSemantics::RustAs,
+        },
+    });
+    assert!(i128_to_f64.contains("%exponent.storage = add i64 %exponent, 0"));
+    assert!(!i128_to_f64.contains("trunc i64 %exponent to i64"));
 }
 
 #[test]

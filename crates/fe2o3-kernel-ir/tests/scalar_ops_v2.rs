@@ -763,6 +763,16 @@ fn cast_matrix_enforces_width_validity_and_provenance() {
             cast: Cast::CharToInt,
         },
         Operation::Cast {
+            from: int(IntWidth::W32, true),
+            to: int(IntWidth::W32, false),
+            cast: Cast::Bitcast,
+        },
+        Operation::Cast {
+            from: int(IntWidth::W32, true),
+            to: ScalarType::Char,
+            cast: Cast::IntToCharChecked,
+        },
+        Operation::Cast {
             from: p64,
             to: ScalarType::Pointer {
                 address_space: 3,

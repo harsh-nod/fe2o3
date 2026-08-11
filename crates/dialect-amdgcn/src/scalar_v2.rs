@@ -856,14 +856,17 @@ fn emit_cast(
             )
             .unwrap();
         }
-        Cast::BoolToInt | Cast::CharToInt => {
-            let opcode = if from.bit_width() < to.bit_width() {
-                "zext"
-            } else {
-                "trunc"
-            };
-            writeln!(output, "  %result = {opcode} {from_ty} %arg0 to {to_ty}").unwrap();
-        }
+        Cast::BoolToInt | Cast::CharToInt => match from.bit_width().cmp(&to.bit_width()) {
+            std::cmp::Ordering::Less => {
+                writeln!(output, "  %result = zext {from_ty} %arg0 to {to_ty}").unwrap()
+            }
+            std::cmp::Ordering::Greater => {
+                writeln!(output, "  %result = trunc {from_ty} %arg0 to {to_ty}").unwrap()
+            }
+            std::cmp::Ordering::Equal => {
+                writeln!(output, "  %result = add {to_ty} %arg0, 0").unwrap()
+            }
+        },
         Cast::IntToBoolChecked => {
             writeln!(output, "  %valid = icmp ule {from_ty} %arg0, 1").unwrap();
             writeln!(output, "  %value.raw = trunc {from_ty} %arg0 to i1").unwrap();
@@ -876,8 +879,21 @@ fn emit_cast(
             return Ok(());
         }
         Cast::IntToCharChecked => {
-            writeln!(output, "  %wide = trunc {from_ty} %arg0 to i32").unwrap();
+            let ScalarType::Int { width, signed } = from else {
+                unreachable!()
+            };
+            if width == IntWidth::W32 {
+                writeln!(output, "  %wide = add i32 %arg0, 0").unwrap();
+            } else {
+                writeln!(output, "  %wide = trunc {from_ty} %arg0 to i32").unwrap();
+            }
+            if signed {
+                writeln!(output, "  %nonnegative = icmp sge {from_ty} %arg0, 0").unwrap();
+            } else {
+                writeln!(output, "  %nonnegative = icmp eq i1 false, false").unwrap();
+            }
             writeln!(output, "  %unicode = icmp ule {from_ty} %arg0, 1114111").unwrap();
+            writeln!(output, "  %in.range = and i1 %nonnegative, %unicode").unwrap();
             writeln!(output, "  %surrogate.low = icmp uge i32 %wide, 55296").unwrap();
             writeln!(output, "  %surrogate.high = icmp ule i32 %wide, 57343").unwrap();
             writeln!(
@@ -886,13 +902,17 @@ fn emit_cast(
             )
             .unwrap();
             writeln!(output, "  %not.surrogate = xor i1 %surrogate, true").unwrap();
-            writeln!(output, "  %valid = and i1 %unicode, %not.surrogate").unwrap();
+            writeln!(output, "  %valid = and i1 %in.range, %not.surrogate").unwrap();
             writeln!(output, "  %value = select i1 %valid, i32 %wide, i32 0").unwrap();
             emit_pair_return(output, results, "%value", "%valid")?;
             return Ok(());
         }
         Cast::Bitcast => {
-            writeln!(output, "  %result = bitcast {from_ty} %arg0 to {to_ty}").unwrap()
+            if matches!((from, to), (ScalarType::Int { .. }, ScalarType::Int { .. })) {
+                writeln!(output, "  %result = add {to_ty} %arg0, 0").unwrap()
+            } else {
+                writeln!(output, "  %result = bitcast {from_ty} %arg0 to {to_ty}").unwrap()
+            }
         }
         Cast::PointerAddressSpace | Cast::PointerToInt { .. } | Cast::IntToPointer { .. } => {
             return Err(unsupported("pointer casts are not admitted"));
@@ -1244,11 +1264,15 @@ fn emit_i128_to_float(
         "  %fraction = trunc i128 %fraction.i128 to {storage}"
     )
     .unwrap();
-    writeln!(
-        output,
-        "  %exponent.storage = trunc i64 %exponent to {storage}"
-    )
-    .unwrap();
+    if storage == "i64" {
+        writeln!(output, "  %exponent.storage = add i64 %exponent, 0").unwrap();
+    } else {
+        writeln!(
+            output,
+            "  %exponent.storage = trunc i64 %exponent to {storage}"
+        )
+        .unwrap();
+    }
     writeln!(
         output,
         "  %exponent.bits = shl {storage} %exponent.storage, {fraction_bits}"

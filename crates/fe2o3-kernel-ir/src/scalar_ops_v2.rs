@@ -435,7 +435,7 @@ fn verify_cast(
         Cast::IntToBoolChecked => int_parts(from).is_some() && to == ScalarType::Bool,
         Cast::CharToInt => from == ScalarType::Char && int_parts(to).is_some(),
         Cast::IntToCharChecked => {
-            matches!(int_parts(from),Some((w,false))if w.bits()>=32) && to == ScalarType::Char
+            matches!(int_parts(from), Some((w, _)) if w.bits() >= 32) && to == ScalarType::Char
         }
         Cast::Bitcast => {
             if from.bit_width() != to.bit_width() {

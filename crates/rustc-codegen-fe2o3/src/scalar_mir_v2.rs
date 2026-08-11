@@ -413,6 +413,7 @@ fn normalize_cast(
         {
             Cast::IntNarrow
         }
+        (ScalarType::Int { .. }, ScalarType::Int { .. }) => Cast::Bitcast,
         (ScalarType::Float(from), ScalarType::Float(to)) if from.bits() < to.bits() => {
             Cast::FloatExtend
         }
@@ -702,15 +703,25 @@ mod tests {
 
         for from_width in widths {
             for to_width in widths {
-                if from_width == to_width {
-                    continue;
-                }
                 for from_signed in [false, true] {
                     for to_signed in [false, true] {
-                        lower(RustcScalarExpressionV2::NumericCast {
+                        let artifact = lower(RustcScalarExpressionV2::NumericCast {
                             from: i(from_width, from_signed),
                             to: i(to_width, to_signed),
                         });
+                        if from_width == to_width {
+                            assert!(matches!(
+                                artifact.kernel_ir.operation(),
+                                Operation::Cast {
+                                    cast: Cast::Bitcast,
+                                    ..
+                                }
+                            ));
+                            assert!(artifact.gfx942_llvm.contains(&format!(
+                                "%result = add i{} %arg0, 0",
+                                from_width.bits()
+                            )));
+                        }
                     }
                 }
             }
