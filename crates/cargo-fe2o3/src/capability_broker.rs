@@ -1264,7 +1264,21 @@ mod platform {
     }
 
     fn random_endpoint() -> io::Result<String> {
-        Ok(hex(&random_bytes()?))
+        let bytes = random_bytes()?;
+        #[cfg(test)]
+        let bytes = {
+            let mut bytes = bytes;
+            static NEXT_TEST_ENDPOINT: std::sync::atomic::AtomicU64 =
+                std::sync::atomic::AtomicU64::new(1);
+            bytes[..4].copy_from_slice(&std::process::id().to_le_bytes());
+            bytes[4..12].copy_from_slice(
+                &NEXT_TEST_ENDPOINT
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                    .to_le_bytes(),
+            );
+            bytes
+        };
+        Ok(hex(&bytes))
     }
 
     fn random_bytes() -> io::Result<[u8; ENDPOINT_BYTES]> {
@@ -1412,8 +1426,9 @@ mod platform {
 
     #[cfg(test)]
     mod tests {
+        use std::collections::BTreeSet;
         use std::path::PathBuf;
-        use std::process::Command;
+        use std::process::{Child, Command};
         use std::sync::atomic::{AtomicU64, Ordering};
         use std::sync::{Arc, Barrier};
         use std::time::{Duration, Instant};
@@ -1443,6 +1458,115 @@ mod platform {
         impl Drop for TestDirectory {
             fn drop(&mut self) {
                 let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+
+        struct ReapedChild(Child);
+
+        impl Drop for ReapedChild {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+
+        struct SpawnedMockExecutable {
+            child: ReapedChild,
+            start_time_ticks: u64,
+            image: PinnedExecutable,
+            metadata: fs::Metadata,
+        }
+
+        impl SpawnedMockExecutable {
+            fn sleep() -> Self {
+                let expected = PinnedExecutable::open(&PathBuf::from("/bin/sleep")).unwrap();
+                let expected_object = expected.object_identity();
+                let expected_sha256 = *expected.sha256();
+                let child = ReapedChild(Command::new("/bin/sleep").arg("30").spawn().unwrap());
+                let pid = child.0.id();
+                let deadline = Instant::now() + Duration::from_secs(5);
+                loop {
+                    let start_time_ticks = process_start_time_ticks(pid).unwrap();
+                    if let Ok((image, metadata)) = pin_process_executable(pid)
+                        && image.object_identity() == expected_object
+                        && image.sha256() == &expected_sha256
+                    {
+                        assert_eq!(process_start_time_ticks(pid).unwrap(), start_time_ticks);
+                        return Self {
+                            child,
+                            start_time_ticks,
+                            image,
+                            metadata,
+                        };
+                    }
+                    assert!(
+                        Instant::now() < deadline,
+                        "mock executable did not complete exec before its identity was pinned"
+                    );
+                    thread::yield_now();
+                }
+            }
+
+            fn peer_identity(&self) -> BrokerPeerIdentityV2 {
+                BrokerPeerIdentityV2 {
+                    uid: unsafe { libc::geteuid() },
+                    pid: self.child.0.id(),
+                    start_time_ticks: self.start_time_ticks,
+                    device: self.metadata.dev(),
+                    inode: self.metadata.ino(),
+                    mode: self.metadata.mode(),
+                    executable_sha256: *self.image.sha256(),
+                }
+            }
+        }
+
+        struct ArbitraryRouteProbe {
+            endpoint: String,
+            listener: UnixListener,
+            route: BrokerRouteV2,
+            _mock: SpawnedMockExecutable,
+        }
+
+        impl ArbitraryRouteProbe {
+            fn new() -> Self {
+                let endpoint = random_endpoint().unwrap();
+                let address = endpoint_address(&endpoint).unwrap();
+                let listener = UnixListener::bind_addr(&address).unwrap();
+                listener.set_nonblocking(true).unwrap();
+                let mock = SpawnedMockExecutable::sleep();
+                let route = BrokerRouteV2 {
+                    endpoint: endpoint.clone(),
+                    secret: random_bytes().unwrap(),
+                    binding: ordinary_binding(),
+                    peer: mock.peer_identity(),
+                };
+                Self {
+                    endpoint,
+                    listener,
+                    route,
+                    _mock: mock,
+                }
+            }
+
+            fn assert_pre_connect_rejection(&self, session: BuildSession) {
+                let error = receive_from(&self.route, session, ordinary_binding())
+                    .err()
+                    .expect("an arbitrary executable route must fail closed");
+                assert_eq!(
+                    error,
+                    "capability broker route does not name the current cargo-fe2o3 executable"
+                );
+                match self.listener.accept() {
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+                    Err(error) => panic!(
+                        "unexpected mock broker accept error for endpoint {}: {error}",
+                        self.endpoint
+                    ),
+                    Ok(_) => panic!(
+                        "arbitrary executable route reached uniquely marked endpoint {}",
+                        self.endpoint
+                    ),
+                }
             }
         }
 
@@ -1750,43 +1874,31 @@ mod platform {
         #[test]
         fn self_consistent_arbitrary_executable_route_is_rejected_before_connect() {
             let (_temp, _backend, _artifact, _pinned_cargo_image, session) = fixture();
-            let endpoint = random_endpoint().unwrap();
-            let address = endpoint_address(&endpoint).unwrap();
-            let listener = UnixListener::bind_addr(&address).unwrap();
-            listener.set_nonblocking(true).unwrap();
-            let mut mock = std::process::Command::new("/bin/sleep")
-                .arg("30")
-                .spawn()
-                .unwrap();
-            let mock_pid = mock.id();
-            let mock_start_time = process_start_time_ticks(mock_pid).unwrap();
-            let (mock_image, mock_metadata) = pin_process_executable(mock_pid).unwrap();
-            let route = BrokerRouteV2 {
-                endpoint,
-                secret: random_bytes().unwrap(),
-                binding: ordinary_binding(),
-                peer: BrokerPeerIdentityV2 {
-                    uid: unsafe { libc::geteuid() },
-                    pid: mock_pid,
-                    start_time_ticks: mock_start_time,
-                    device: mock_metadata.dev(),
-                    inode: mock_metadata.ino(),
-                    mode: mock_metadata.mode(),
-                    executable_sha256: *mock_image.sha256(),
-                },
-            };
+            ArbitraryRouteProbe::new().assert_pre_connect_rejection(session);
+        }
 
-            let result = receive_from(&route, session, ordinary_binding());
-            mock.kill().unwrap();
-            mock.wait().unwrap();
-            let error = result
-                .err()
-                .expect("an arbitrary executable route must fail closed");
-            assert!(!error.is_empty());
-            assert!(
-                matches!(listener.accept(), Err(error) if error.kind() == io::ErrorKind::WouldBlock),
-                "arbitrary executable route reached the broker endpoint"
-            );
+        #[test]
+        fn arbitrary_executable_routes_reject_before_connect_under_concurrent_exec() {
+            const ROUNDS: usize = 8;
+            const PROBES_PER_ROUND: usize = 4;
+            let (_temp, _backend, _artifact, _pinned_cargo_image, session) = fixture();
+            let mut observed_endpoints = BTreeSet::new();
+            for _ in 0..ROUNDS {
+                let probes = (0..PROBES_PER_ROUND)
+                    .map(|_| ArbitraryRouteProbe::new())
+                    .collect::<Vec<_>>();
+                for probe in &probes {
+                    assert!(
+                        observed_endpoints.insert(probe.endpoint.clone()),
+                        "test endpoint marker was reused"
+                    );
+                }
+                thread::scope(|scope| {
+                    for probe in &probes {
+                        scope.spawn(move || probe.assert_pre_connect_rejection(session));
+                    }
+                });
+            }
         }
 
         #[test]
