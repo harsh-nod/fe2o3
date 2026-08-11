@@ -553,6 +553,8 @@ class Supervisor:
         cwd_fd = os.open(cwd, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
         stdout_read, stdout_write = os.pipe2(os.O_CLOEXEC | os.O_NONBLOCK)
         stderr_read, stderr_write = os.pipe2(os.O_CLOEXEC | os.O_NONBLOCK)
+        os.set_blocking(stdout_write, True)
+        os.set_blocking(stderr_write, True)
         gate_read, gate_write = os.pipe2(os.O_CLOEXEC)
         self.sequence += 1
         cgroup = Cgroup(self.cgroup_root, limits, self.sequence)
@@ -699,6 +701,19 @@ def adversarial_self_test() -> None:
             )
             if result.returncode != 0 or result.stdout != b"retained-exec-ok\n":
                 raise AssertionError("retained executable did not run")
+            large = supervisor.run(
+                executable,
+                ["python", "-c", "print('z' * 200000, end='')"],
+                root,
+                environment,
+                limits=CommandLimits(
+                    timeout_seconds=5,
+                    memory_bytes=256 * 1024 * 1024,
+                    output_bytes=256 * 1024,
+                ),
+            )
+            if large.returncode != 0 or large.stdout != b"z" * 200000:
+                raise AssertionError("bounded output capture lost bytes")
             probes = (
                 ("hang", "import time; time.sleep(30)", CommandLimits(timeout_seconds=0.2)),
                 ("output", "print('x' * 200000)", CommandLimits(timeout_seconds=5, output_bytes=1024)),
