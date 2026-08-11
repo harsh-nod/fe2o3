@@ -676,13 +676,14 @@ mod platform {
         }
 
         fn refresh_descendants(&mut self) -> io::Result<()> {
+            let root = child_pid(&self.child);
+            validate_session_leader(root)?;
             for raw in descendants(self.child.id()) {
                 if self.descendant_pidfds.contains_key(&raw) {
                     continue;
                 }
                 let pid = checked_pid(raw)?;
-                let pidfd = pidfd_open(pid, PidfdFlags::empty())?;
-                validate_pidfd_identity(&pidfd, pid)?;
+                let pidfd = retain_descendant_pidfd(root, pid)?;
                 self.descendant_pidfds.insert(raw, pidfd);
             }
             Ok(())
@@ -2466,6 +2467,18 @@ mod platform {
         Ok(())
     }
 
+    fn retain_descendant_pidfd(root: Pid, pid: Pid) -> io::Result<OwnedFd> {
+        let pidfd = pidfd_open(pid, PidfdFlags::empty())?;
+        validate_pidfd_identity(&pidfd, pid)?;
+        if getsid(Some(pid))? != root {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "observed descendant is not in the worker session",
+            ));
+        }
+        Ok(pidfd)
+    }
+
     fn terminate_without_pidfd(pid: Pid) {
         // `spawn` has not reaped the child. A verified, isolated session is the
         // only safe fallback when the kernel cannot provide the required pidfd.
@@ -2689,6 +2702,22 @@ mod platform {
                 &AuthenticatedPhysicalMachineEffectErrorKindV1::ContainmentUnavailable
             );
             assert!(!Path::new(&format!("/proc/{pid}")).exists());
+        }
+
+        #[test]
+        fn unrelated_process_cannot_be_retained_as_a_descendant() {
+            let (child, _) = spawned_session_child();
+            let mut worker = ChildProcessGuard::new(child).unwrap();
+            let mut unrelated = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+            let unrelated_pid = child_pid(&unrelated);
+            let error = retain_descendant_pidfd(child_pid(&worker.child), unrelated_pid)
+                .expect_err("parent-session process was accepted as a worker descendant");
+            assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+            assert!(unrelated.try_wait().unwrap().is_none());
+            worker.terminate_and_wait().unwrap();
+            assert!(unrelated.try_wait().unwrap().is_none());
+            unrelated.kill().unwrap();
+            unrelated.wait().unwrap();
         }
 
         #[test]
