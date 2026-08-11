@@ -42,16 +42,22 @@ the token is dropped. This is prevention under a cooperative lock, not
 asynchronous revocation of an already running kernel and not protection from a
 same-process attacker that bypasses the lock or mutates descriptors.
 
-## Production Boundary
+## Trust Boundary
 
 Safe Rust visibility and non-`Clone` types prevent accidental authority
 duplication; they are not a security boundary against malicious code sharing
-the process. A hostile application must not receive production descriptors,
-lease tokens, authenticators, or HSA authority. That deployment requires a
-separate broker which retains those resources and exposes a bounded request
-protocol to the application.
+the process. An untrusted same-process application must not receive
+descriptors, lease tokens, authenticators, or HSA authority. That deployment
+requires a separate broker which retains those resources and exposes a bounded
+request protocol to the application.
 
-No output from this handoff is production authority until genuine compiler,
-Verus, proof-to-executable, effect, and prerequisite issuers replace the unsafe
-caller-supplied authenticator boundary. ACK acceptance does not change that
-status.
+Cargo's application launcher separately pins and validates the exact initial
+static image and applies a no-fork/no-re-exec seccomp profile. It does not
+constrain arbitrary same-process behavior: permitted `openat`, `mmap`,
+`mprotect`, and `pwrite64` operations do not prevent in-process loading or
+self-modification. Dynamic HIP runtime closure remains outside the boundary.
+
+This handoff does not carry authority from genuine compiler, Verus,
+proof-to-executable, effect, and prerequisite issuers across the remaining
+unsafe caller-supplied authenticator boundary. ACK acceptance does not change
+that status.

@@ -26,15 +26,14 @@ safe `dispatch`, but uses test-only semantic witnesses and an explicitly fake
 prerequisite authenticator. Both accept the same externally supplied
 SHA-256-pinned HSACO.
 
-The remaining production composition is larger than enabling the Cargo adapter
-and implementing `WorkerV2PrerequisiteAuthenticatorV1`. Cargo drops the live
-currentness lease, but the canonical published claim can now reacquire a fresh
-lease after durable revalidation. A bounded Worker V2 load envelope retains the
-container, bundle/proof evidence, descriptor lineage, raw/finalized identities,
-and that canonical claim. Cargo does not yet publish the envelope, host
-admission accepts only live in-process preparation/publication objects, and the
-application runner receives no pinned bundle descriptor. No production authenticator,
-Verus proof, or machine-code effect/refinement evidence is bound to the payload.
+The remaining composition is larger than implementing
+`WorkerV2PrerequisiteAuthenticatorV1`. Cargo now durably publishes the bounded
+Worker V2 load envelope, recovers it from exact retained inputs, and transfers
+the canonical envelope and artifact-directory descriptors to the application
+while retaining a fresh current-publication lease. The accepted host consumer
+revalidates that descriptor handoff and currentness before reaching exact
+prerequisite admission. No production authenticator, Verus proof, or
+machine-code effect/refinement evidence is bound to the payload.
 The production-safe exit gate therefore remains open, this result is not a
 CUDA-Oxide parity claim, and Complete remains `0`.
 
@@ -52,9 +51,8 @@ The bounded alpha/zeta executable contains two kernels with different non-empty
 signatures in one `gfx942` code object and selects, packs, resolves, and
 dispatches them independently through both the raw and generated-safe hardware
 paths. The full G3.1 exit fixture additionally requires a shared internal
-helper. Production completion also requires Cargo envelope publication,
-application handoff, recovered host admission, and a production prerequisite
-authenticator.
+helper. Production completion still requires a production prerequisite
+authenticator and the remaining proof-to-executable authority joins.
 
 V1 does not accept standalone raw pointers, references not represented as an
 approved slice profile, aggregates, enums, closures, return values, dynamic
@@ -95,17 +93,23 @@ exact generated alpha/zeta adapter, and raw and generated-safe HSA execution
 harnesses are landed.
 The adapter validates compiler and host identities, checked packing, alias
 registration, geometry, physical kernarg, and synchronous completion. The
-Cargo artifact-container adapter is deliberately inert, exposes no container or
-serialization accessor, and is compiled only for tests. Separately, production
-host APIs already admit finalized bundles from durable publication, retain and
-revalidate currentness, authenticate load prerequisites, and drive the reviewed
-runtime adapter. No production `WorkerV2PrerequisiteAuthenticatorV1` currently
-satisfies the unsafe authentication contract. The Cargo candidate also cannot
-cross the compiler/application boundary: the separate durable envelope and
-lease-reacquisition foundations are not connected to Cargo or recovered host
-admission, and the runner passes no pinned descriptor. The raw harness bypasses
-these gaps. The generated-safe harness exercises the state machine but
-substitutes explicit test authority at the missing authenticator boundary.
+Cargo artifact-container adapter remains inert and exposes no authority
+accessor. Cargo's canonical envelope crosses the application boundary through
+pinned descriptors while Cargo retains and revalidates its recovered lease.
+The accepted host consumer composes that handoff with recovered admission and
+fails at the missing genuine prerequisite authority. No production
+`WorkerV2PrerequisiteAuthenticatorV1` currently satisfies the unsafe
+authentication contract. The raw harness bypasses that gap; the generated-safe
+harness exercises the state machine with explicit test authority there.
+
+Cargo validates and pins the exact initial ELF64 x86-64 static image. One valid
+PT_TLS owned by a writable, non-executable load is accepted; malformed,
+executable-load-backed, and outside-load TLS is rejected. The launch profile
+prevents fork/clone and re-exec after the controlled initial `execve`. This is
+not containment of arbitrary same-process behavior: allowed `openat`, `mmap`,
+`mprotect`, and `pwrite64` operations mean in-process loading and
+self-modification are not prevented. Dynamic HIP runtime closure remains out
+of scope.
 
 ## Frozen Interfaces
 

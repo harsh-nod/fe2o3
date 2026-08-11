@@ -94,12 +94,12 @@ ordinary `target`. Packaged deployments without that source tree must provide
 a built backend through `FE2O3_BACKEND`.
 
 `cargo fe2o3 run` places a narrow application boundary in front of Cargo's
-effective exact-target runner. The boundary closes the backend and artifact
-descriptors and removes `FE2O3_*`, rustflags, and rustc-wrapper controls before
-chaining to the configured runner with its command, arguments, environment,
-application path, and application arguments preserved byte-for-byte. String
-and array runners from target configuration and target-runner environment
-variables are supported, including non-UTF-8 Unix environment values.
+effective exact-target runner. Every application or configured runner starts
+with an empty environment; no `PATH`, `TMPDIR`, build control, or arbitrary
+inherited variable is retained. The configured runner command, application
+path, and arguments remain byte-preserving. String and array runners from
+target configuration and target-runner environment variables are supported,
+including non-UTF-8 Unix values while Cargo resolves the runner.
 Recursive cargo-fe2o3 runners, including aliases and hardlinks to the same
 executable inode, and runner selections that cannot be resolved unambiguously
 fail closed. In particular, a `cfg(...)` runner must currently be made explicit
@@ -179,6 +179,33 @@ only a durable claim and explicitly contains no process-local currentness
 lease. This flow does not authenticate compiler origin or Verus proof evidence
 and grants no HSA loading or launch authority; downstream admission must
 revalidate the durable claim and acquire fresh process-local authority.
+
+For required-envelope `cargo fe2o3 run`, Cargo retains the owner-controlled
+artifact-directory descriptor, opens the exact canonical envelope with
+`openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_XDEV)`, pins the exact
+initial application image, and retains a fresh current-publication lease. The
+child receives read-only envelope and directory descriptors plus the bounded
+handoff values; no pathname or external-HSACO fallback exists. The public ACK
+is protocol completion only. Cargo retains and revalidates its private lease
+through the handoff.
+
+The initial image profile is ELF64 x86-64 static executable/static PIE. It
+checks page-rounded PT_LOAD mappings, W^X, static-PIE dynamic metadata and
+relocations. At most one PT_TLS is admitted when it is well formed and wholly
+owned by a writable, non-executable PT_LOAD; malformed, executable-load-backed,
+or outside-load TLS is rejected. `no_new_privs` plus seccomp admits only the
+controlled initial `execve`, denies later `execve`/`execveat`, and denies
+fork/clone, namespace/session creation, and io_uring. Missing kernel support
+for the required seccomp listener or `close_range(CLOSE_RANGE_CLOEXEC)` fails
+launch.
+
+This no-fork/no-re-exec startup boundary does not constrain arbitrary
+same-process behavior. The syscall profile still permits operations including
+`openat`, `mmap`, `mprotect`, and `pwrite64`; code already running in the
+process can perform in-process loading or self-modification where ordinary OS
+permissions allow.
+Dynamic HIP applications and their interpreter/runtime-library closure remain
+out of scope and require a separate identity-bound broker design.
 
 ## Inspection and tool plans
 
