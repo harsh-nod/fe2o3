@@ -74,6 +74,54 @@ impl From<MirExecutableValidationError> for MirExecutableDecodeError {
 }
 
 impl MirExecutableModule {
+    /// Prints the exact canonical textual form used inside the wire envelope.
+    pub fn to_canonical_text(&self) -> Result<String, MirExecutableValidationError> {
+        self.to_canonical_text_with_registry(&MirExternalCallRegistry::default())
+    }
+
+    /// Prints canonical text after resolving external call authority.
+    pub fn to_canonical_text_with_registry(
+        &self,
+        registry: &MirExternalCallRegistry,
+    ) -> Result<String, MirExecutableValidationError> {
+        self.validate_with_registry(registry)?.to_canonical_text()
+    }
+
+    /// Parses only the exact canonical textual form.
+    pub fn from_canonical_text(
+        text: &str,
+    ) -> Result<ValidatedMirExecutableModule, MirExecutableDecodeError> {
+        Self::from_canonical_text_with_registry(text, &MirExternalCallRegistry::default())
+    }
+
+    /// Parses canonical text while resolving external call authority.
+    pub fn from_canonical_text_with_registry(
+        text: &str,
+        registry: &MirExternalCallRegistry,
+    ) -> Result<ValidatedMirExecutableModule, MirExecutableDecodeError> {
+        if text.len() > MAX_EXECUTABLE_WIRE_BYTES - HEADER_BYTES {
+            return Err(MirExecutableDecodeError::InputTooLarge);
+        }
+        let module: Self = serde_json::from_str(text).map_err(MirExecutableDecodeError::InvalidPayload)?;
+        if module.version != MirExecutableVersion::V1 {
+            return Err(MirExecutableDecodeError::Validation(
+                MirExecutableValidationError::new(
+                    "module.version",
+                    "text version is not executable MIR V1",
+                ),
+            ));
+        }
+        let validated = module.validate_with_registry(registry)?;
+        if validated
+            .to_canonical_text()
+            .map_err(MirExecutableDecodeError::Validation)?
+            != text
+        {
+            return Err(MirExecutableDecodeError::NonCanonical);
+        }
+        Ok(validated)
+    }
+
     /// Encodes the validated module into the V1 canonical wire envelope.
     ///
     /// The payload is deterministic JSON over structs, enums, vectors and
@@ -150,6 +198,19 @@ impl MirExecutableModule {
 }
 
 impl ValidatedMirExecutableModule {
+    /// Prints deterministic, compact JSON with no ambient formatting state.
+    pub fn to_canonical_text(&self) -> Result<String, MirExecutableValidationError> {
+        let text = serde_json::to_string(self.as_module())
+            .expect("validated executable MIR contains only serializable values");
+        if text.len() > MAX_EXECUTABLE_WIRE_BYTES - HEADER_BYTES {
+            return Err(MirExecutableValidationError::new(
+                "module",
+                "canonical text representation exceeds its byte bound",
+            ));
+        }
+        Ok(text)
+    }
+
     /// Encodes without accepting a mutable or deserializable authority token.
     pub fn to_bytes(&self) -> Result<Vec<u8>, MirExecutableValidationError> {
         let payload = serde_json::to_vec(self.as_module())

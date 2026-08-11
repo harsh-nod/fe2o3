@@ -106,6 +106,26 @@ fn canonical_wire_roundtrips_with_a_versioned_envelope() {
 }
 
 #[test]
+fn canonical_text_parse_print_and_wire_roundtrip_are_identical() {
+    let validated = module().validate().unwrap();
+    let first = validated.to_canonical_text().unwrap();
+    let second = validated.to_canonical_text().unwrap();
+    assert_eq!(first, second);
+    assert!(!first.contains('\n'));
+    assert_eq!(MirExecutableModule::from_canonical_text(&first).unwrap(), validated);
+
+    let bytes = validated.to_bytes().unwrap();
+    let from_wire = MirExecutableModule::from_bytes(&bytes).unwrap();
+    assert_eq!(from_wire.to_canonical_text().unwrap(), first);
+
+    let with_whitespace = format!(" {first}");
+    assert!(matches!(
+        MirExecutableModule::from_canonical_text(&with_whitespace),
+        Err(MirExecutableDecodeError::NonCanonical)
+    ));
+}
+
+#[test]
 fn canonical_wire_binds_the_complete_gfx942_target_profile() {
     let canonical = module().to_bytes().unwrap();
     assert!(canonical.len() < MAX_EXECUTABLE_WIRE_BYTES);
