@@ -2058,6 +2058,297 @@ fn one_hundred_twenty_thousand_repair_cases_match_independent_oracle() {
     }
 }
 
+#[test]
+fn two_hundred_thousand_review_repairs_match_independent_oracles() {
+    let mut state = 0x6a09_e667_f3bc_c908_u64;
+    for case in 0..200_000_u32 {
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        match case % 4 {
+            0 => {
+                let alignments = [1, 2, 4, 8, 16];
+                let first_bytes = 4 * (1 + ((state >> 8) as u32 % 32));
+                let second_bytes = 4 * (1 + ((state >> 16) as u32 % 32));
+                let second_alignment = alignments[((state >> 24) as usize) % alignments.len()];
+                let limit = 1 + ((state >> 32) as u32 % 320);
+                let allocation = |id, bytes, alignment| LdsAllocation {
+                    id: LdsAllocationId(id),
+                    kind: LdsAllocationKind::Static,
+                    bytes,
+                    alignment,
+                    bank_count: 32,
+                    bank_width: 4,
+                    element_stride: 4,
+                    elements: bytes / 4,
+                    swizzle: LdsSwizzle::Linear,
+                };
+                let candidate = SynchronizationModuleV2 {
+                    target: TargetProfile::Gfx942Wave64,
+                    lds_allocations: vec![
+                        allocation(0, first_bytes, 1),
+                        allocation(1, second_bytes, second_alignment),
+                    ],
+                    events: vec![],
+                    edges: vec![],
+                };
+                let padding =
+                    (second_alignment - first_bytes % second_alignment) % second_alignment;
+                let extent = first_bytes + padding + second_bytes;
+                let limits = SynchronizationLimits {
+                    max_total_lds_bytes: limit,
+                    ..SynchronizationLimits::default()
+                };
+                assert_eq!(
+                    candidate.validate(&limits).is_ok(),
+                    extent <= limit,
+                    "LDS case={case} extent={extent} limit={limit}"
+                );
+            }
+            1 => {
+                let alignments = [1, 2, 4, 8, 16];
+                let allocation_alignment = alignments[((state >> 8) as usize) % alignments.len()];
+                let access_alignment = alignments[((state >> 16) as usize) % alignments.len()];
+                let offset = ((state >> 24) as u32) % 12;
+                let mut access = atomic(
+                    AtomicOperation::Load,
+                    u32_ty(),
+                    AddressSpace::Lds,
+                    MemoryScope::Workgroup,
+                    MemoryOrdering::Relaxed,
+                    None,
+                    AtomicDialect::Rust,
+                );
+                access.region.allocation = 1;
+                access.region.offset = offset;
+                access.alignment = access_alignment;
+                let allocation = |id, bytes, alignment, elements| LdsAllocation {
+                    id: LdsAllocationId(id),
+                    kind: LdsAllocationKind::Static,
+                    bytes,
+                    alignment,
+                    bank_count: 32,
+                    bank_width: 4,
+                    element_stride: 4,
+                    elements,
+                    swizzle: LdsSwizzle::Linear,
+                };
+                let candidate = SynchronizationModuleV2 {
+                    target: TargetProfile::Gfx942Wave64,
+                    lds_allocations: vec![
+                        allocation(0, 5, 1, 1),
+                        allocation(1, 64, allocation_alignment, 16),
+                    ],
+                    events: vec![event(0, EventKind::Atomic(access))],
+                    edges: vec![],
+                };
+                let second_base =
+                    5 + (allocation_alignment - 5 % allocation_alignment) % allocation_alignment;
+                let expected = access_alignment >= 4
+                    && allocation_alignment >= access_alignment
+                    && (second_base + offset).is_multiple_of(access_alignment);
+                assert_eq!(
+                    candidate
+                        .validate(&SynchronizationLimits::default())
+                        .is_ok(),
+                    expected,
+                    "alignment case={case} base={second_base} offset={offset} allocation_alignment={allocation_alignment} access_alignment={access_alignment}"
+                );
+            }
+            2 => {
+                let same_allocation = state & 1 == 0;
+                let same_offset = state & 2 == 0;
+                let first_writes = state & 4 != 0;
+                let second_writes = state & 8 != 0;
+                let access = |id, allocation, offset, writes| {
+                    event(
+                        id,
+                        EventKind::NonAtomic(NonAtomicAccess {
+                            region: MemoryRegion {
+                                allocation,
+                                offset,
+                                bytes: 4,
+                            },
+                            kind: if writes {
+                                AccessKind::Write
+                            } else {
+                                AccessKind::Read
+                            },
+                            value_type: u32_ty(),
+                            address_space: AddressSpace::Global,
+                            alignment: 4,
+                        }),
+                    )
+                };
+                let report = module(vec![
+                    access(0, 9, 0, first_writes),
+                    access(
+                        1,
+                        if same_allocation { 9 } else { 10 },
+                        if same_offset { 0 } else { 8 },
+                        second_writes,
+                    ),
+                ])
+                .validate(&SynchronizationLimits::default())
+                .unwrap();
+                let has_alias = report.obligations.iter().any(|obligation| {
+                    matches!(
+                        obligation,
+                        VerifierObligation::DischargeAllocationAlias { .. }
+                    )
+                });
+                let has_conflict = report.obligations.iter().any(|obligation| {
+                    matches!(obligation, VerifierObligation::NonAtomicConflict { .. })
+                });
+                let writes = first_writes || second_writes;
+                assert_eq!(has_alias, !same_allocation, "alias case={case}");
+                assert_eq!(
+                    has_conflict,
+                    writes && (!same_allocation || same_offset),
+                    "conflict case={case}"
+                );
+            }
+            _ => {
+                let participants = 1 + ((state >> 8) as u32 % 1_500);
+                let policy_limit = 1 + ((state >> 24) as u32 % 2_048);
+                let candidate = module(vec![Event {
+                    id: EventId(0),
+                    participation: ParticipationContract {
+                        group: GroupKind::Workgroup,
+                        convergence: ConvergenceContract::UniformRequired,
+                        expected_participants: participants,
+                        active_mask: None,
+                    },
+                    kind: EventKind::Barrier(Barrier {
+                        kind: BarrierKind::Workgroup,
+                        scope: MemoryScope::Workgroup,
+                        ordering: MemoryOrdering::AcquireRelease,
+                        domains: MemoryDomains::LDS,
+                    }),
+                }]);
+                let limits = SynchronizationLimits {
+                    max_workgroup_participants: policy_limit,
+                    ..SynchronizationLimits::default()
+                };
+                assert_eq!(
+                    candidate.validate(&limits).is_ok(),
+                    participants <= policy_limit.min(1_024),
+                    "target-limit case={case} participants={participants} policy={policy_limit}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn synchronization_endpoint_witness_matrix_is_exhaustive() {
+    #[derive(Clone, Copy, Debug)]
+    enum Endpoint {
+        Atomic,
+        Fence,
+        Barrier,
+    }
+    let endpoints = [Endpoint::Atomic, Endpoint::Fence, Endpoint::Barrier];
+    let make_event = |id, endpoint, release, participants| {
+        let ordering = if release {
+            MemoryOrdering::Release
+        } else {
+            MemoryOrdering::Acquire
+        };
+        match endpoint {
+            Endpoint::Atomic => event(
+                id,
+                EventKind::Atomic(atomic(
+                    AtomicOperation::Exchange,
+                    u32_ty(),
+                    AddressSpace::Global,
+                    MemoryScope::System,
+                    ordering,
+                    None,
+                    AtomicDialect::Rust,
+                )),
+            ),
+            Endpoint::Fence => event(
+                id,
+                EventKind::Fence(Fence {
+                    scope: MemoryScope::System,
+                    ordering,
+                    domains: MemoryDomains::GLOBAL,
+                }),
+            ),
+            Endpoint::Barrier => Event {
+                id: EventId(id),
+                participation: ParticipationContract {
+                    group: GroupKind::Workgroup,
+                    convergence: ConvergenceContract::UniformRequired,
+                    expected_participants: participants,
+                    active_mask: None,
+                },
+                kind: EventKind::Barrier(Barrier {
+                    kind: BarrierKind::Workgroup,
+                    scope: MemoryScope::Workgroup,
+                    ordering,
+                    domains: MemoryDomains::LDS,
+                }),
+            },
+        }
+    };
+    let mut cases = 0;
+    for before_endpoint in endpoints {
+        for after_endpoint in endpoints {
+            for read_from in [
+                ReadFromCondition::NotApplicable,
+                ReadFromCondition::VerifierMustProve,
+            ] {
+                for same_cohort in [false, true] {
+                    let participants = if same_cohort { 64 } else { 32 };
+                    let before = make_event(0, before_endpoint, true, 64);
+                    let after = make_event(1, after_endpoint, false, participants);
+                    let barrier_pair = matches!(before_endpoint, Endpoint::Barrier)
+                        && matches!(after_endpoint, Endpoint::Barrier);
+                    let atomic_pair = matches!(before_endpoint, Endpoint::Atomic)
+                        && matches!(after_endpoint, Endpoint::Atomic);
+                    let domains = if barrier_pair {
+                        MemoryDomains::LDS
+                    } else {
+                        MemoryDomains::GLOBAL
+                    };
+                    let scope = if barrier_pair {
+                        MemoryScope::Workgroup
+                    } else {
+                        MemoryScope::System
+                    };
+                    let mut candidate = module(vec![before, after]);
+                    candidate.edges.push(SynchronizationEdge {
+                        before: EventId(0),
+                        after: EventId(1),
+                        kind: SynchronizationEdgeKind::SynchronizesWith,
+                        scope,
+                        domains,
+                        before_outcome: EventOutcome::Unconditional,
+                        after_outcome: EventOutcome::Unconditional,
+                        read_from,
+                    });
+                    let expected = (atomic_pair
+                        && read_from == ReadFromCondition::VerifierMustProve)
+                        || (barrier_pair
+                            && same_cohort
+                            && read_from == ReadFromCondition::NotApplicable);
+                    assert_eq!(
+                        candidate
+                            .validate(&SynchronizationLimits::default())
+                            .is_ok(),
+                        expected,
+                        "before={before_endpoint:?} after={after_endpoint:?} read_from={read_from:?} same_cohort={same_cohort}"
+                    );
+                    cases += 1;
+                }
+            }
+        }
+    }
+    assert_eq!(cases, 36);
+}
+
 trait AtomicOperationTestExt {
     fn compare_exchange_for_test(self) -> bool;
 }
@@ -2072,11 +2363,11 @@ impl AtomicOperationTestExt for AtomicOperation {
 }
 
 #[test]
-fn one_hundred_sixty_thousand_hostile_decodes_are_bounded_and_panic_free() {
+fn two_hundred_fifty_thousand_hostile_decodes_are_bounded_and_panic_free() {
     let limits = SynchronizationLimits::default();
     let seed = encode_synchronization_v2(&full_module(), &limits).unwrap();
     let mut state = 0x9e37_79b9_7f4a_7c15_u64;
-    for case in 0..160_000_u32 {
+    for case in 0..250_000_u32 {
         state = state
             .wrapping_mul(2_862_933_555_777_941_757)
             .wrapping_add(3_037_000_493);
