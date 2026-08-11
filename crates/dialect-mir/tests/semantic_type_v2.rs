@@ -1840,6 +1840,48 @@ fn fifty_thousand_niche_path_oracle_cases_include_unions() {
 }
 
 #[test]
+fn hundred_thousand_niche_partitions_match_total_coverage_oracle() {
+    let mut state = 0x6d5a_56e9_0c3b_71f2_u64;
+    for case in 0..100_000_u32 {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        let variant_count = 2 + (state as u32 % 8);
+        let (untagged, start, end) = match case % 5 {
+            0 => (variant_count - 1, 0, variant_count - 2),
+            1 => (0, 1, variant_count - 1),
+            2 => {
+                let untagged = (state >> 16) as u32 % variant_count;
+                (untagged, 0, variant_count - 1)
+            }
+            3 => (0, 1, variant_count - 2),
+            _ => (
+                (state >> 24) as u32 % (variant_count + 1),
+                (state >> 32) as u32 % (variant_count + 1),
+                (state >> 40) as u32 % (variant_count + 1),
+            ),
+        };
+        let range_is_bounded = start <= end && end < variant_count;
+        let range_excludes_untagged =
+            untagged < variant_count && range_is_bounded && !(start..=end).contains(&untagged);
+        let covers_every_other_variant =
+            range_is_bounded && u64::from(end - start) + 1 == u64::from(variant_count - 1);
+        let expected_valid = range_excludes_untagged && covers_every_other_variant;
+        let result = build_niche_partition(variant_count, untagged, start, end, 128);
+        assert_eq!(
+            result.is_ok(),
+            expected_valid,
+            "case {case}: variants={variant_count}, untagged={untagged}, range={start}..={end}"
+        );
+        if let Ok(graph) = result {
+            let encoded = graph.canonical_bytes().unwrap();
+            let decoded = SemanticTypeGraphV2::decode_canonical(&encoded, budgets()).unwrap();
+            assert_eq!(decoded.canonical_bytes().unwrap(), encoded);
+        }
+    }
+}
+
+#[test]
 fn niche_source_rejects_padding_missing_fields_offsets_scalars_and_ranges() {
     let scalar = SemanticScalarV2::Int {
         signed: false,
