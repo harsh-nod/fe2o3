@@ -333,11 +333,20 @@ run-specific Cargo hash suffixes. Timing-only CTest and Ninja logs are excluded
 explicitly as non-input observations.
 
 For the final dispatch, the controller parses and retains the ELF interpreter,
-retains the direct `ldd` DSO closure, the loader cache, and the exact libdrm GPU
-identity file, then applies an exact-file Landlock read allowlist. Unlisted
+the direct `ldd` DSO closure, and the transitive closures of the exact
+ROCr-requested `libamd_comgr` and `libhsa-amd-aqlprofile64` dynamic roots. It
+also retains the loader cache, NSS/passwd/timezone inputs, and exact libdrm GPU
+identity file, then re-runs dependency discovery while every closure file is
+retained. Landlock admits only those regular files and the HSACO. Unlisted
 regular-file `dlopen` and data reads fail closed. `/proc`, `/sys`, and `/dev`
 remain readable kernel/device observation roots and are not represented as
 ordinary hashed files in the runtime manifest.
+
+The repository-golden test uses host-visible HSA pool allocations for guarded
+inputs and outputs; it does not use HIP `DeviceBuffer` compilation or linking.
+The hardware child remains physically capped at 8 GiB by cgroup while a
+separate bounded 4 TiB `RLIMIT_AS` admits the virtual GPU mappings required by
+the eight-device MI300X host.
 
 The golden update is accepted only through the committed canonical transition,
 public-key, and signature fixtures. That transition binds the old/new identities
@@ -353,9 +362,12 @@ compiler process caused the bytes, refine source semantics, authenticate the
 build, create production load or dispatch authority, or issue a compiler
 receipt.
 
-This controller uses LLVM and LLD library APIs only. It invokes neither COMGR
-nor a command-line HSACO linker/disassembler. Its output remains descriptive
-local evidence: it does not construct
+The compiler-generation path uses LLVM and LLD library APIs only. It invokes
+neither COMGR nor a command-line HSACO linker/disassembler. The hardware HSA
+loader may dynamically load the retained ROCm COMGR library as a runtime code
+object dependency; it is outside artifact generation and is not used to link
+the checked HSACO. The controller output remains descriptive local evidence:
+it does not construct
 `AuthenticatedCompilerTransactionExecutionReceiptV1`, authenticate compiler
 causality, grant load/launch authority outside the test harness, archive signed
 production evidence, or promote parity.

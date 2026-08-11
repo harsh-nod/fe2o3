@@ -281,10 +281,16 @@ and canonical manifests in its fresh external evidence directory; no binary is
 committed.
 
 The hardware child parses and retains its ELF interpreter, direct DSO closure,
-loader cache, and exact libdrm GPU identity file. Landlock admits only those
-regular files plus the retained HSACO; other regular-file runtime and `dlopen`
-reads fail closed. `/proc`, `/sys`, and `/dev` are broader read-only
-kernel/device observation roots and are not hashed as ordinary runtime files.
+the transitive closures of exact ROCr-requested COMGR/AQL-profile dynamic
+roots, loader cache, NSS/passwd/timezone inputs, and exact libdrm GPU identity
+file. It verifies dependency discovery again while those files are retained.
+Landlock admits only those regular files plus the retained HSACO; other
+regular-file runtime and `dlopen` reads fail closed. `/proc`, `/sys`, and
+`/dev` are broader read-only kernel/device observation roots and are not hashed
+as ordinary runtime files. Guarded inputs and outputs use host-visible HSA pool
+allocations rather than HIP `DeviceBuffer` compilation/linking. Physical memory
+is capped at 8 GiB; a separate bounded 4 TiB address-space limit admits the
+host's eight MI300X GPU mappings.
 
 The accepted digest is bound to a checked Ed25519-signed transition fixture
 that records the old/new Worker and HSACO identities and both independent
@@ -295,7 +301,9 @@ authenticate compiler causality, reviewer identity outside the fixture, source
 refinement, production authority, a compiler receipt, or a parity promotion.
 The hardware result is an exact-artifact observation only. Linking uses direct
 LLVM/LLD library APIs, with no COMGR or command-line HSACO
-linker/disassembler.
+linker/disassembler in artifact generation. The hardware HSA loader may load
+the retained ROCm COMGR DSO as a code-object runtime dependency, but it does not
+relink the checked HSACO.
 
 To archive that exact test in an isolated parity snapshot, first place the
 HSACO as a regular non-symlink file under the external archive root, then run:
