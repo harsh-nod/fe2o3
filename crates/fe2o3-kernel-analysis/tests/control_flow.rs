@@ -8,7 +8,7 @@ use fe2o3_kernel_ir::{
     BasicBlock, BlockId, Constant, Function, Operation, OperationKind, Signature, SwitchCase,
     Terminator, Type, ValueDef, ValueId,
 };
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 
 fn function(blocks: Vec<BasicBlock>) -> Function {
     Function::definition("cfg", Signature::new(vec![], vec![]), vec![], blocks)
@@ -67,6 +67,168 @@ fn raw_conditional(id: u32, then_target: u32, else_target: u32) -> BasicBlock {
 
 fn ids(values: &[u32]) -> BTreeSet<BlockId> {
     values.iter().copied().map(BlockId).collect()
+}
+
+fn graph(rows: &[&[usize]]) -> Vec<BTreeSet<usize>> {
+    rows.iter()
+        .map(|targets| targets.iter().copied().collect())
+        .collect()
+}
+
+fn graph_function(successors: &[BTreeSet<usize>]) -> Function {
+    function(
+        successors
+            .iter()
+            .enumerate()
+            .map(|(source, targets)| {
+                let source = u32::try_from(source).unwrap();
+                let mut targets = targets.iter().copied();
+                match (targets.next(), targets.next(), targets.next()) {
+                    (None, None, None) => returning(source),
+                    (Some(target), None, None) => branch(source, u32::try_from(target).unwrap()),
+                    (Some(left), Some(right), None) => raw_conditional(
+                        source,
+                        u32::try_from(left).unwrap(),
+                        u32::try_from(right).unwrap(),
+                    ),
+                    _ => panic!("test graph has more than two successors"),
+                }
+            })
+            .collect(),
+    )
+}
+
+fn reference_dominators(successors: &[BTreeSet<usize>]) -> (BTreeSet<usize>, Vec<BTreeSet<usize>>) {
+    let mut reachable = BTreeSet::new();
+    let mut pending = VecDeque::from([0]);
+    while let Some(block) = pending.pop_front() {
+        if reachable.insert(block) {
+            pending.extend(successors[block].iter().copied());
+        }
+    }
+
+    let mut dominators = vec![BTreeSet::new(); successors.len()];
+    for block in &reachable {
+        dominators[*block] = if *block == 0 {
+            BTreeSet::from([0])
+        } else {
+            reachable.clone()
+        };
+    }
+
+    loop {
+        let mut changed = false;
+        for block in reachable.iter().copied().filter(|block| *block != 0) {
+            let mut predecessors = reachable
+                .iter()
+                .copied()
+                .filter(|predecessor| successors[*predecessor].contains(&block));
+            let first = predecessors
+                .next()
+                .expect("every reachable non-entry block has a reachable predecessor");
+            let mut next = dominators[first].clone();
+            for predecessor in predecessors {
+                next = next
+                    .intersection(&dominators[predecessor])
+                    .copied()
+                    .collect();
+            }
+            next.insert(block);
+            if dominators[block] != next {
+                dominators[block] = next;
+                changed = true;
+            }
+        }
+        if !changed {
+            return (reachable, dominators);
+        }
+    }
+}
+
+fn reference_is_reducible(
+    successors: &[BTreeSet<usize>],
+    reachable: &BTreeSet<usize>,
+    dominators: &[BTreeSet<usize>],
+) -> bool {
+    let mut indegree = vec![0_usize; successors.len()];
+    for source in reachable {
+        for target in &successors[*source] {
+            if reachable.contains(target) && !dominators[*source].contains(target) {
+                indegree[*target] += 1;
+            }
+        }
+    }
+
+    let mut pending = reachable
+        .iter()
+        .copied()
+        .filter(|block| indegree[*block] == 0)
+        .collect::<BTreeSet<_>>();
+    let mut visited = 0_usize;
+    while let Some(block) = pending.pop_first() {
+        visited += 1;
+        for target in &successors[block] {
+            if reachable.contains(target) && !dominators[block].contains(target) {
+                indegree[*target] -= 1;
+                if indegree[*target] == 0 {
+                    pending.insert(*target);
+                }
+            }
+        }
+    }
+    visited == reachable.len()
+}
+
+fn assert_matches_reference(successors: &[BTreeSet<usize>]) -> (usize, bool) {
+    let (reachable, dominators) = reference_dominators(successors);
+    let reducible = reference_is_reducible(successors, &reachable, &dominators);
+    let result = analyze_control_flow(&graph_function(successors));
+    if reducible {
+        let analysis = result.expect("reference-reducible graph must be accepted");
+        assert_eq!(
+            analysis.reachable_blocks(),
+            &reachable
+                .iter()
+                .map(|block| BlockId(u32::try_from(*block).unwrap()))
+                .collect()
+        );
+        for (block, expected_dominators) in dominators.iter().enumerate() {
+            let block_id = BlockId(u32::try_from(block).unwrap());
+            if reachable.contains(&block) {
+                let expected = expected_dominators
+                    .iter()
+                    .map(|dominator| BlockId(u32::try_from(*dominator).unwrap()))
+                    .collect::<BTreeSet<_>>();
+                assert_eq!(analysis.dominators(block_id), Some(&expected));
+            } else {
+                assert_eq!(analysis.dominators(block_id), None);
+            }
+        }
+    } else {
+        let error = result.expect_err("reference-irreducible graph must be rejected");
+        assert!(!error.diagnostics().is_empty());
+        assert!(error.diagnostics().iter().all(|diagnostic| matches!(
+            diagnostic,
+            ControlFlowDiagnostic::IrreducibleControlFlow { .. }
+        )));
+    }
+    (reachable.len(), reducible)
+}
+
+#[derive(Clone, Copy)]
+struct OracleRng(u64);
+
+impl OracleRng {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+
+    fn index(&mut self, upper: usize) -> usize {
+        usize::try_from(self.next() % u64::try_from(upper).unwrap()).unwrap()
+    }
 }
 
 fn legacy_diagnostic_kind(diagnostic: &ControlFlowDiagnostic) -> u8 {
@@ -168,6 +330,66 @@ fn preserves_predecessors_but_omits_dominance_for_unreachable_blocks() {
     assert_eq!(analysis.immediate_dominator(BlockId(99)), None);
     assert_eq!(analysis.iterated_dominance_frontier(&ids(&[10])), None);
     assert!(analysis.backedges().is_empty());
+}
+
+#[test]
+fn ignores_unreachable_predecessors_during_chk_intersection() {
+    let exact = function(vec![
+        conditional(0, 3, 5),
+        branch(1, 1),
+        branch(2, 3),
+        branch(3, 3),
+        branch(4, 4),
+        returning(5),
+    ]);
+    let analysis = analyze_control_flow(&exact).unwrap();
+
+    assert_eq!(analysis.reachable_blocks(), &ids(&[0, 3, 5]));
+    assert_eq!(analysis.predecessors(BlockId(3)), Some(&ids(&[0, 2, 3])));
+    assert_eq!(analysis.dominators(BlockId(3)), Some(&ids(&[0, 3])));
+    assert_eq!(analysis.dominators(BlockId(5)), Some(&ids(&[0, 5])));
+    assert_eq!(analysis.natural_loop_headers(), &ids(&[3]));
+
+    let variants = [
+        graph(&[&[3, 5], &[2], &[1, 3], &[3], &[1, 5], &[]]),
+        graph(&[&[5], &[2, 3], &[1], &[4, 5], &[3], &[]]),
+        graph(&[&[3], &[2], &[1, 3], &[3, 5], &[3], &[]]),
+    ];
+    for successors in variants {
+        let (reachable, _) = assert_matches_reference(&successors);
+        assert!(reachable < successors.len());
+    }
+}
+
+#[test]
+fn arbitrary_cfgs_with_unreachable_regions_match_reference() {
+    const GRAPH_COUNT: usize = 50_000;
+    let mut rng = OracleRng(0x9e37_79b9_7f4a_7c15);
+    let mut graphs_with_unreachable_blocks = 0_usize;
+    let mut reducible_graphs = 0_usize;
+    let mut irreducible_graphs = 0_usize;
+
+    for _ in 0..GRAPH_COUNT {
+        let block_count = 1 + rng.index(8);
+        let mut successors = Vec::with_capacity(block_count);
+        for _ in 0..block_count {
+            let targets = match rng.index(4) {
+                0 => BTreeSet::new(),
+                1 => BTreeSet::from([rng.index(block_count)]),
+                _ => BTreeSet::from([rng.index(block_count), rng.index(block_count)]),
+            };
+            successors.push(targets);
+        }
+
+        let (reachable, reducible) = assert_matches_reference(&successors);
+        graphs_with_unreachable_blocks += usize::from(reachable < block_count);
+        reducible_graphs += usize::from(reducible);
+        irreducible_graphs += usize::from(!reducible);
+    }
+
+    assert!(graphs_with_unreachable_blocks > GRAPH_COUNT / 4);
+    assert!(reducible_graphs > 0);
+    assert!(irreducible_graphs > 0);
 }
 
 #[test]

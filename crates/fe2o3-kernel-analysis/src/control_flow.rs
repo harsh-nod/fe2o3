@@ -1004,7 +1004,9 @@ fn compute_immediate_dominators(
             let mut next = None;
             for predecessor in &predecessors[&block] {
                 budget.work(1)?;
-                if immediate[predecessor].is_some() {
+                if reachable.contains(predecessor)
+                    && immediate.get(predecessor).is_some_and(Option::is_some)
+                {
                     next = Some(if let Some(current) = next {
                         intersect_dominator_paths(
                             *predecessor,
