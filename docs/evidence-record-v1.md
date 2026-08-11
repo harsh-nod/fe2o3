@@ -260,13 +260,19 @@ hsaco_sha256=efe77ed0ac7f67531c46670a3c36030ed19e2d901f6858a8bee42cabd707c15b
 hsaco_bytes=9392
 ```
 
-The controller snapshots the complete tracked repository, vendored Cargo
+The controller retains its committed loader/DSO fixture before the first child,
+then snapshots the complete tracked repository, vendored Cargo
 registry, Rust sysroot, and retained LLVM/ROCm/OCML provider closure twice. It
 uses separate Worker and Cargo build roots, runs commands under bounded cgroup
 and rlimit supervision, executes generated native tests through sealed file
 descriptors, requires 3/3 CTest results, and retains the final HSACO descriptors
-through comparison. It stores two bounded regenerated HSACOs and canonical
-manifests in its fresh external evidence directory; no binary is committed.
+through comparison. It then retains the run-A HSACO descriptor through one
+MI300X hardware test. The test compares the inherited descriptor with the
+canonical direct dirent, consumes the descriptor bytes, loads one executable,
+and dispatches alpha/zeta across all five boundary lengths with CPU oracles and
+prefix/suffix canaries. The controller stores two bounded regenerated HSACOs
+and canonical manifests in its fresh external evidence directory; no binary is
+committed.
 
 The accepted digest is bound to a checked Ed25519-signed transition fixture
 that records the old/new Worker and HSACO identities and both independent
@@ -274,9 +280,10 @@ reproduction-manifest digests. The key, signature, and transition are explicitly
 non-production review fixtures with `authority=none`. They prevent an unsigned
 mutable-checkout update from silently replacing this golden; they do not
 authenticate compiler causality, reviewer identity outside the fixture, source
-refinement, production authority, a hardware result, a compiler receipt, or a
-parity promotion. Linking uses direct LLVM/LLD library APIs, with no COMGR or
-command-line HSACO linker/disassembler.
+refinement, production authority, a compiler receipt, or a parity promotion.
+The hardware result is an exact-artifact observation only. Linking uses direct
+LLVM/LLD library APIs, with no COMGR or command-line HSACO
+linker/disassembler.
 
 To archive that exact test in an isolated parity snapshot, first place the
 HSACO as a regular non-symlink file under the external archive root, then run:

@@ -51,6 +51,9 @@ EXPECTED_LLVM_PACKAGE = "22.0.0git"
 EXPECTED_TRANSITION_PUBLIC_KEY = bytes.fromhex(
     "3acecd80720befbedbff8292a6adcac6a7b160e79d05ae4e8599dc1c1dcf2b01"
 )
+TOOL_RUNTIME_FIXTURE = (
+    "tests/fixtures/compiler-evidence/gfx942-mi300x-tool-runtime-v1.json"
+)
 MAX_CONFIG_BYTES = 256 * 1024
 MAX_TOOL_BYTES = 256 * 1024 * 1024
 MAX_VERSION_BYTES = 64 * 1024
@@ -196,6 +199,90 @@ def read_bounded_json(path: Path) -> tuple[dict[str, Any], bytes]:
     if not isinstance(value, dict):
         raise EvidenceError(f"configuration root is not an object: {path}")
     return value, data
+
+
+def retain_configured_tool_runtime(
+    repo: Path, manifest: dict[str, Any]
+) -> tuple[list[dict[str, Any]], RetainedClosure]:
+    path = repo / TOOL_RUNTIME_FIXTURE
+    if path.resolve(strict=True) != path or path.is_symlink():
+        raise EvidenceError("configured tool-runtime fixture path is not canonical")
+    data = path.read_bytes()
+    if not data or len(data) > MAX_CONFIG_BYTES:
+        raise EvidenceError("configured tool-runtime fixture size is invalid")
+    if sha256_bytes(data) != manifest["runtime_manifest_sha256"]:
+        raise EvidenceError("configured tool-runtime fixture digest changed")
+    try:
+        records = json.loads(data)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise EvidenceError("configured tool-runtime fixture is invalid JSON") from error
+    if (
+        not isinstance(records, list)
+        or not records
+        or len(records) > MAX_RUNTIME_FILES
+        or canonical_json(records) != data
+    ):
+        raise EvidenceError("configured tool-runtime fixture is not a bounded canonical list")
+    expected_fields = {
+        "path",
+        "sha256",
+        "bytes",
+        "uid",
+        "gid",
+        "mode",
+        "device",
+        "inode",
+        "mtime_ns",
+        "ctime_ns",
+    }
+    paths: list[Path] = []
+    for index, record in enumerate(records):
+        if not isinstance(record, dict):
+            raise EvidenceError(f"tool-runtime record {index} is not an object")
+        require_exact_keys(record, expected_fields, f"tool-runtime record {index}")
+        runtime_path = Path(str(record["path"]))
+        if (
+            not runtime_path.is_absolute()
+            or runtime_path.is_symlink()
+            or runtime_path.resolve(strict=True) != runtime_path
+            or not SHA256_RE.fullmatch(str(record["sha256"]))
+        ):
+            raise EvidenceError(f"tool-runtime record {index} path or digest is invalid")
+        named = os.stat(runtime_path, follow_symlinks=False)
+        observed = stat_record(named)
+        for field in (
+            "bytes",
+            "uid",
+            "gid",
+            "mode",
+            "device",
+            "inode",
+            "mtime_ns",
+            "ctime_ns",
+        ):
+            if observed[field] != record[field]:
+                raise EvidenceError(
+                    f"configured tool-runtime identity changed: {runtime_path}: {field}"
+                )
+        paths.append(runtime_path)
+    if paths != sorted(set(paths), key=os.fspath):
+        raise EvidenceError("configured tool-runtime paths are not sorted and unique")
+    closure = capture_retained_closure(
+        "configured-tool-runtime",
+        [(f"runtime:{runtime_path.as_posix()}", runtime_path) for runtime_path in paths],
+        {"runtime_manifest_sha256": manifest["runtime_manifest_sha256"]},
+    )
+    try:
+        for record, retained in zip(records, closure.files, strict=True):
+            if retained.sha256 != record["sha256"]:
+                raise EvidenceError(
+                    f"configured tool-runtime content changed: {record['path']}"
+                )
+        closure.revalidate()
+        return records, closure
+    except BaseException:
+        closure.close()
+        raise
 
 
 def validate_manifest_document(manifest: dict[str, Any]) -> None:
@@ -615,23 +702,15 @@ def create_allowlisted_path(directory: Path, manifest: dict[str, Any], tools: di
         raise EvidenceError("allowlisted PATH materialization changed")
 
 
-def clean_environment(run: Path, path_dir: Path, manifest: dict[str, Any]) -> dict[str, str]:
-    home = run / "home"
-    temp = run / "tmp"
-    home.mkdir(mode=0o700)
-    temp.mkdir(mode=0o700)
-    target = run / "cargo-target"
-    target.mkdir(mode=0o700)
-    if any(target.iterdir()):
-        raise EvidenceError("CARGO_TARGET_DIR was not empty at run start")
+def run_environment(run: Path, path_dir: Path) -> dict[str, str]:
     return {
         "AR": os.fspath(path_dir / "ar"),
         "CARGO_HOME": os.fspath(run / "cargo-home"),
         "CARGO_NET_OFFLINE": "true",
-        "CARGO_TARGET_DIR": os.fspath(target),
+        "CARGO_TARGET_DIR": os.fspath(run / "cargo-target"),
         "CC": os.fspath(path_dir / "cc"),
         "CXX": os.fspath(path_dir / "c++"),
-        "HOME": os.fspath(home),
+        "HOME": os.fspath(run / "home"),
         "LANG": "C",
         "LC_ALL": "C",
         "LD": os.fspath(path_dir / "ld.lld"),
@@ -643,9 +722,21 @@ def clean_environment(run: Path, path_dir: Path, manifest: dict[str, Any]) -> di
         "RUSTUP_TOOLCHAIN": EXPECTED_RUST_TOOLCHAIN,
         "SOURCE_DATE_EPOCH": "0",
         "TERM": "dumb",
-        "TMPDIR": os.fspath(temp),
+        "TMPDIR": os.fspath(run / "tmp"),
         "TZ": "UTC",
     }
+
+
+def clean_environment(run: Path, path_dir: Path, manifest: dict[str, Any]) -> dict[str, str]:
+    home = run / "home"
+    temp = run / "tmp"
+    home.mkdir(mode=0o700)
+    temp.mkdir(mode=0o700)
+    target = run / "cargo-target"
+    target.mkdir(mode=0o700)
+    if any(target.iterdir()):
+        raise EvidenceError("CARGO_TARGET_DIR was not empty at run start")
+    return run_environment(run, path_dir)
 
 
 def run_command(
@@ -713,7 +804,8 @@ def version_and_runtime_manifest(
     path_dir: Path,
     rust_library_path: Path,
     supervisor: Supervisor,
-) -> tuple[dict[str, Any], RetainedClosure]:
+    configured_runtime: list[dict[str, Any]],
+) -> dict[str, Any]:
     environment = {
         "LANG": "C",
         "LC_ALL": "C",
@@ -821,6 +913,8 @@ def version_and_runtime_manifest(
             "pinned runtime closure changed: "
             f"expected {manifest['runtime_manifest_sha256']}, observed {runtime_digest}"
         )
+    if runtime != configured_runtime:
+        raise EvidenceError("discovered tool loader/DSO closure differs from retained fixture")
     observed = {
         "schema": "fe2o3-observed-gfx942-tool-runtime-manifest-v1",
         "configured_manifest_sha256": sha256_bytes(canonical_json(manifest)),
@@ -828,12 +922,7 @@ def version_and_runtime_manifest(
         "tools": observed_tools,
         "runtime": runtime,
     }
-    retained_runtime = capture_retained_closure(
-        "configured-tool-runtime",
-        [(f"runtime:{path.as_posix()}", path) for path in sorted(runtime_paths, key=os.fspath)],
-        {"runtime_manifest_sha256": runtime_digest},
-    )
-    return observed, retained_runtime
+    return observed
 
 
 def require_absent_output(path: Path, label: str) -> None:
@@ -1110,22 +1199,39 @@ def build_provider_members() -> list[tuple[str, Path]]:
         ("rocm-info", Path("/opt/rocm-7.2.4/.info")),
         ("rocm-include", Path("/opt/rocm-7.2.4/include")),
     )
-    members: list[tuple[str, Path]] = []
+    members: dict[Path, str] = {}
     for prefix, root in roots:
         if root.resolve(strict=True) != root or root.is_symlink():
             raise EvidenceError(f"build-provider root is not canonical: {root}")
         for member in sorted(root.rglob("*")):
             if member.is_file() and not member.is_symlink():
-                members.append((f"{prefix}:{member.relative_to(root).as_posix()}", member))
+                members.setdefault(
+                    member,
+                    f"{prefix}:{member.relative_to(root).as_posix()}",
+                )
     library_root = Path("/opt/rocm-7.2.4/lib/llvm/lib")
     for member in sorted(library_root.iterdir()):
         if member.is_file() and not member.is_symlink():
-            members.append((f"llvm-library:{member.name}", member))
-    rocm_library_root = Path("/opt/rocm-7.2.4/lib")
-    for member in sorted(rocm_library_root.glob("libamdhip64.so*")):
-        if member.is_file() and not member.is_symlink():
-            members.append((f"rocm-runtime:{member.name}", member))
-    return members
+            members.setdefault(member, f"llvm-library:{member.name}")
+    for prefix, root in (
+        ("rocm-runtime", Path("/opt/rocm-7.2.4/lib")),
+        ("amdgpu-runtime", Path("/opt/amdgpu/lib/x86_64-linux-gnu")),
+    ):
+        if root.resolve(strict=True) != root or root.is_symlink():
+            raise EvidenceError(f"runtime-provider root is not canonical: {root}")
+        for member in sorted(root.rglob("*")):
+            if (
+                member.is_file()
+                and not member.is_symlink()
+                and (member.name.endswith(".so") or ".so." in member.name)
+            ):
+                members.setdefault(
+                    member,
+                    f"{prefix}:{member.relative_to(root).as_posix()}",
+                )
+    return sorted(
+        ((label, path) for path, label in members.items()), key=lambda item: item[0]
+    )
 
 
 def build_and_generate(
@@ -1507,6 +1613,177 @@ def build_from_canonical_snapshot(
         source.relocate(archived_root)
 
 
+def runtime_paths_for_executable(
+    executable: SealedExecutable,
+    cwd: Path,
+    environment: dict[str, str],
+    tools: dict[str, PinnedTool],
+    supervisor: Supervisor,
+) -> list[Path]:
+    completed = run_command(
+        [os.fspath(tools["ldd"].path), executable.proc_path],
+        cwd,
+        environment,
+        tools,
+        supervisor,
+        capture=True,
+        extra_inherited_fds=(executable.fd,),
+    )
+    output = (completed.stdout or b"").decode("utf-8", "strict")
+    if "not found" in output:
+        raise EvidenceError("hardware executable has an unresolved runtime dependency")
+    paths: set[Path] = set()
+    for line in output.splitlines():
+        match = re.search(r"=>\s+(/\S+)", line)
+        direct = re.match(r"\s*(/\S+)\s+\(", line)
+        candidate = match.group(1) if match else direct.group(1) if direct else None
+        if candidate is not None:
+            paths.add(Path(candidate).resolve(strict=True))
+    if not paths or len(paths) > MAX_RUNTIME_FILES:
+        raise EvidenceError("hardware executable runtime closure count is invalid")
+    return sorted(paths, key=os.fspath)
+
+
+def build_and_run_hardware_observation(
+    source: SnapshotClosure,
+    run: Path,
+    execution_root: Path,
+    evidence_root: Path,
+    tools: dict[str, PinnedTool],
+    golden: dict[str, Any],
+    supervisor: Supervisor,
+    retained_hsaco: RetainedFile,
+    retained_closures: list[RetainedClosure],
+) -> dict[str, Any]:
+    archived_root = source.root
+    if archived_root != run / "source":
+        raise EvidenceError("hardware source snapshot has an unexpected archive path")
+    source.relocate(execution_root)
+    generated_file = None
+    retained_test = None
+    sealed_test = None
+    try:
+        environment = run_environment(run, run / "tool-path")
+        environment["RUSTC"] = f"/proc/self/fd/{tools['rustc'].executable.fd}"
+        build = run_command(
+            [
+                os.fspath(tools["cargo"].path),
+                "test",
+                "--offline",
+                "--locked",
+                "-p",
+                "fe2o3-hsa-runtime",
+                "--features",
+                "hardware-test-hooks",
+                "--test",
+                "gfx942_two_kernel_hardware",
+                "--no-run",
+                "--message-format=json",
+            ],
+            source.root,
+            environment,
+            tools,
+            supervisor,
+            capture=True,
+        )
+        executables: list[Path] = []
+        for line in (build.stdout or b"").splitlines():
+            try:
+                message = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            target = message.get("target", {})
+            executable = message.get("executable")
+            if (
+                target.get("name") == "gfx942_two_kernel_hardware"
+                and target.get("kind") == ["test"]
+                and executable
+            ):
+                executables.append(Path(executable))
+        if len(executables) != 1:
+            raise EvidenceError("hardware build did not produce exactly one test executable")
+        generated_file, executable_record = measure_generated_executable(
+            executables[0], run / "cargo-target", "run-1 gfx942 hardware test"
+        )
+        retained_test = RetainedFile.open(
+            "run-1-gfx942-hardware-test", executables[0], require_executable=True
+        )
+        sealed_test = SealedExecutable.from_retained(retained_test)
+        runtime_paths = runtime_paths_for_executable(
+            sealed_test, source.root, environment, tools, supervisor
+        )
+        runtime = capture_retained_closure(
+            "run-1-gfx942-hardware-runtime",
+            [(f"runtime:{path.as_posix()}", path) for path in runtime_paths],
+            {"executable_sha256": sealed_test.sha256},
+        )
+        retained_closures.append(runtime)
+        supervisor.guards.extend(runtime.files)
+        retained_hsaco.revalidate()
+        hardware_environment = dict(environment)
+        hardware_environment.update(
+            {
+                "FE2O3_RUN_GFX942_TWO_KERNEL": "1",
+                "FE2O3_GFX942_ALPHA_ZETA_HSACO": os.fspath(retained_hsaco.path),
+                "FE2O3_GFX942_ALPHA_ZETA_SHA256": retained_hsaco.sha256,
+                "FE2O3_GFX942_ALPHA_ZETA_RETAINED_FD": str(retained_hsaco.fd),
+            }
+        )
+        result = run_command(
+            [
+                os.fspath(executables[0]),
+                golden["hardware_test"],
+                "--ignored",
+                "--exact",
+                "--nocapture",
+            ],
+            source.root,
+            hardware_environment,
+            tools,
+            supervisor,
+            capture=True,
+            executable=sealed_test,
+            extra_inherited_fds=(retained_hsaco.fd,),
+            limits=CommandLimits(timeout_seconds=300, cpu_seconds=300),
+        )
+        retained_hsaco.revalidate()
+        sealed_test.revalidate()
+        retained_test.revalidate()
+        revalidate_generated_executable(generated_file, executable_record)
+        output = result.stdout + result.stderr
+        observation = {
+            "schema": "fe2o3-non-production-gfx942-hardware-observation-v1",
+            "authority": "none",
+            "claim": "exact-artifact-hardware-observation-only",
+            "test": golden["hardware_test"],
+            "target": golden["target"],
+            "hsaco": retained_hsaco.record(),
+            "test_executable": executable_record,
+            "runtime_manifest_sha256": runtime.manifest["manifest_sha256"],
+            "boundary_lengths": golden["boundary_lengths"],
+            "cpu_oracles_checked": True,
+            "prefix_suffix_canaries_checked": True,
+            "returncode": result.returncode,
+            "elapsed_seconds": result.elapsed_seconds,
+            "peak_memory_bytes": result.peak_memory_bytes,
+            "peak_processes": result.peak_processes,
+            "bounded_output_bytes": len(output),
+            "bounded_output_sha256": sha256_bytes(output),
+        }
+        (evidence_root / "run-1/hardware-observation.json").write_bytes(
+            canonical_json(observation)
+        )
+        return observation
+    finally:
+        if sealed_test is not None:
+            sealed_test.close()
+        if retained_test is not None:
+            retained_test.close()
+        if generated_file is not None:
+            generated_file.close()
+        source.relocate(archived_root)
+
+
 def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) -> None:
     require_absent_output(run_root, "run root")
     require_absent_output(evidence_root, "evidence root")
@@ -1532,6 +1809,11 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
     retained_artifacts: list[RetainedFile] = []
     try:
         supervisor = Supervisor()
+        configured_runtime, runtime_closure = retain_configured_tool_runtime(
+            repo, manifest
+        )
+        retained_closures.append(runtime_closure)
+        supervisor.guards.extend(runtime_closure.files)
         run_root.mkdir(mode=0o700)
         evidence_root.mkdir(mode=0o700)
         bootstrap_path = run_root / "bootstrap-tool-path"
@@ -1566,7 +1848,7 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
         compare_labeled_manifests(closures[1].manifest, closures[4].manifest)
         compare_labeled_manifests(closures[2].manifest, closures[5].manifest)
         compare_labeled_manifests(
-            retained_closures[0].manifest, retained_closures[1].manifest
+            retained_closures[1].manifest, retained_closures[2].manifest
         )
         first_transition = validate_signed_transition(
             prepared[0][1].root, golden, manifest_bytes
@@ -1593,19 +1875,18 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
                 canonical_json(provider.manifest)
             )
         compare_labeled_manifests(
-            retained_closures[2].manifest, retained_closures[3].manifest
+            retained_closures[3].manifest, retained_closures[4].manifest
         )
         for closure in closures:
             closure.revalidate()
-        observed, runtime_closure = version_and_runtime_manifest(
+        observed = version_and_runtime_manifest(
             manifest,
             tools,
             bootstrap_path,
             run_root / "run-1/rust-sysroot/lib",
             supervisor,
+            configured_runtime,
         )
-        retained_closures.append(runtime_closure)
-        supervisor.guards.extend(runtime_closure.files)
         (evidence_root / "tool-runtime-manifest.json").write_bytes(canonical_json(observed))
         canonical_source = run_root / "canonical-execution-source"
         first, first_executables, first_hsaco, first_transaction = build_from_canonical_snapshot(
@@ -1667,6 +1948,20 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
                     f"independent compiler transaction stable field differed: {field}"
                 )
         reject_cross_run_reuse(first_executables, second_executables)
+        hardware_observation = build_and_run_hardware_observation(
+            prepared[0][1],
+            prepared[0][0],
+            canonical_source,
+            evidence_root,
+            tools,
+            golden,
+            supervisor,
+            first_hsaco,
+            retained_closures,
+        )
+        first_hsaco.revalidate()
+        second_hsaco.revalidate()
+        git_clean(repo, bootstrap_environment, tools, supervisor)
         for closure in closures:
             closure.revalidate()
         for closure in retained_closures:
@@ -1677,7 +1972,7 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
         for index in (1, 2):
             output_dir = evidence_root / f"run-{index}"
             documents = {}
-            for name in (
+            document_names = [
                 "repository-source-manifest.json",
                 "cargo-registry-manifest.json",
                 "cargo-vendor-generated-manifest.json",
@@ -1685,7 +1980,10 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
                 "llvm-rocm-provider-manifest.json",
                 "executables.json",
                 "compiler-transaction-observation.json",
-            ):
+            ]
+            if index == 1:
+                document_names.append("hardware-observation.json")
+            for name in document_names:
                 document = output_dir / name
                 value = document.read_bytes()
                 documents[name] = {"bytes": len(value), "sha256": sha256_bytes(value)}
@@ -1749,10 +2047,24 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
                     )
                 },
             ],
+            "hardware_observation": {
+                "document_sha256": sha256_bytes(
+                    canonical_json(hardware_observation)
+                ),
+                "test": hardware_observation["test"],
+                "target": hardware_observation["target"],
+                "hsaco_sha256": hardware_observation["hsaco"]["sha256"],
+                "boundary_lengths": hardware_observation["boundary_lengths"],
+                "cpu_oracles_checked": True,
+                "prefix_suffix_canaries_checked": True,
+            },
         }
         (evidence_root / "summary.json").write_bytes(canonical_json(summary))
         print(f"source commit: {commit}")
         print(f"artifact SHA-256: {sha256_bytes(first_bytes)}")
+        print(
+            "MI300X alpha/zeta CPU-oracle and canary hardware observation: PASS"
+        )
         print("independent pinned-tool Worker V2 compiler evidence: PASS")
     finally:
         for generated in generated_inputs:
@@ -1774,6 +2086,12 @@ def self_test(repo: Path) -> None:
     golden, _ = read_bounded_json(golden_path)
     validate_manifest_document(manifest)
     validate_golden(golden, manifest_path, manifest_bytes)
+    configured_runtime, runtime_closure = retain_configured_tool_runtime(repo, manifest)
+    try:
+        if sha256_bytes(canonical_json(configured_runtime)) != manifest["runtime_manifest_sha256"]:
+            raise AssertionError("retained tool-runtime fixture digest changed")
+    finally:
+        runtime_closure.close()
     transition = validate_signed_transition(repo, golden, manifest_bytes)
     transition_bytes = (repo / golden["transition_path"]).read_bytes()
     signature = bytes.fromhex(

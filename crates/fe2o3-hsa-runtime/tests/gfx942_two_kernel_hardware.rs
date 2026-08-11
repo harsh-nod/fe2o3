@@ -1,5 +1,12 @@
 use std::fmt;
 
+#[cfg(feature = "hardware-test-hooks")]
+use std::io::{Read, Seek};
+#[cfg(feature = "hardware-test-hooks")]
+use std::os::fd::{FromRawFd, RawFd};
+#[cfg(feature = "hardware-test-hooks")]
+use std::os::unix::fs::MetadataExt;
+
 use object::{Object, ObjectSection};
 use serde::Deserialize;
 
@@ -61,6 +68,9 @@ const COMPILER_EVIDENCE_GOLDEN: &str =
     include_str!("../../../tests/fixtures/compiler-evidence/gfx942-alpha-zeta-cov6.json");
 const COMPILER_EVIDENCE_TOOL_MANIFEST: &str =
     include_str!("../../../tests/fixtures/compiler-evidence/gfx942-mi300x-tools.json");
+const COMPILER_EVIDENCE_TRANSITION: &str = include_str!(
+    "../../../tests/fixtures/compiler-evidence/gfx942-alpha-zeta-cov6-transition-v1.json"
+);
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -100,6 +110,11 @@ struct CompilerEvidenceGoldenV1 {
     hsaco_sha256: String,
     hsaco_bytes: u64,
     max_hsaco_bytes: u64,
+    transition_path: String,
+    transition_sha256: String,
+    transition_signature_path: String,
+    transition_public_key_path: String,
+    transition_signature_algorithm: String,
     kernels: Vec<CompilerEvidenceKernelV1>,
     boundary_lengths: Vec<usize>,
 }
@@ -129,6 +144,14 @@ fn compiler_evidence_golden_from_str(source: &str) -> Result<CompilerEvidenceGol
             != "worker_v2_general_v3_alpha_zeta_build_links_and_validate_backend_witnesses"
         || golden.hardware_test != "gfx942_cov6_repository_golden_alpha_then_zeta_one_executable"
         || golden.max_hsaco_bytes != 16 * 1024 * 1024
+        || golden.transition_path
+            != "tests/fixtures/compiler-evidence/gfx942-alpha-zeta-cov6-transition-v1.json"
+        || golden.transition_sha256 != sha256_hex(COMPILER_EVIDENCE_TRANSITION.as_bytes())
+        || golden.transition_signature_path
+            != "tests/fixtures/compiler-evidence/gfx942-alpha-zeta-cov6-transition-v1.sig"
+        || golden.transition_public_key_path
+            != "tests/fixtures/compiler-evidence/gfx942-alpha-zeta-cov6-transition-v1.pub"
+        || golden.transition_signature_algorithm != "ed25519-sha512"
         || golden.hsaco_bytes == 0
         || golden.hsaco_bytes > golden.max_hsaco_bytes
         || golden.boundary_lengths != HARDWARE_LENGTHS
@@ -985,7 +1008,27 @@ fn pinned_repository_golden_hsaco() -> Result<(Vec<u8>, fe2o3_artifacts::Payload
         metadata.len() == golden.hsaco_bytes && metadata.len() <= golden.max_hsaco_bytes,
         "the repository golden HSACO has the wrong bounded file size",
     )?;
-    let bytes = std::fs::read(&path)?;
+    let path_bytes = std::fs::read(&path)?;
+    let retained_fd: RawFd = std::env::var("FE2O3_GFX942_ALPHA_ZETA_RETAINED_FD")
+        .map_err(|_| "FE2O3_GFX942_ALPHA_ZETA_RETAINED_FD is not set")?
+        .parse()
+        .map_err(|_| "FE2O3_GFX942_ALPHA_ZETA_RETAINED_FD is not a file descriptor")?;
+    require(retained_fd >= 3, "the retained HSACO descriptor is invalid")?;
+    // SAFETY: the evidence controller transfers ownership of this inherited
+    // descriptor to the hardware-test child for exactly this consumption.
+    let mut retained = unsafe { std::fs::File::from_raw_fd(retained_fd) };
+    let retained_metadata = retained.metadata()?;
+    require(
+        retained_metadata.dev() == metadata.dev() && retained_metadata.ino() == metadata.ino(),
+        "the retained HSACO descriptor and direct dirent differ",
+    )?;
+    retained.rewind()?;
+    let mut bytes = Vec::new();
+    retained.read_to_end(&mut bytes)?;
+    require(
+        bytes == path_bytes,
+        "the retained HSACO descriptor and direct dirent bytes differ",
+    )?;
     let digest_bytes = validate_repository_golden_hsaco(&bytes)?;
     let digest = DigestAlgorithm::Sha256.calculate(&bytes);
     require(

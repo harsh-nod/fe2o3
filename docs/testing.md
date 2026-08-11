@@ -292,14 +292,17 @@ Run the complete controller from a clean committed checkout. Both output paths
 must be absent, absolute paths with existing canonical parents:
 
 ```text
-scripts/gfx942-cov6-compiler-evidence.sh \
+systemd-run --user --scope --quiet -p Delegate=yes \
+  scripts/gfx942-cov6-compiler-evidence.sh \
   /absolute/absent/run-root \
   /absolute/absent/evidence-root
 ```
 
-The launcher clears the inherited environment. The controller verifies every
+The launcher clears the inherited environment. Before its first child, the
+controller retains the digest-pinned loader/DSO fixture and verifies every
 configured executable by canonical path, SHA-256, version output and retained
-stat identity, then exposes only a generated PATH allowlist. Run A and run B
+stat identity. Every child is descriptor-executed under a bounded delegated
+cgroup and a generated PATH allowlist. Run A and run B
 use separately copied immutable tracked sources, vendored registries, Rust
 sysroots, LLVM/ROCm/OCML closure records, initially empty Worker build trees,
 and `CARGO_TARGET_DIR`s. Generated native tests execute directly from sealed
@@ -307,7 +310,11 @@ descriptors and CTest must report 3/3 through descriptor-backed commands. Each
 run independently builds the Worker and Rust integration-test executable,
 records request/response/raw/final identities, runs the real `rustc ->
 CompilerModuleHandoffV2 -> Worker V2` path, and must produce the checked
-byte-identical Worker and HSACO.
+byte-identical Worker and HSACO. After comparison, the controller retains the
+run-A HSACO descriptor, independently builds the ignored hardware test, retains
+its direct dynamic-runtime closure, and requires the hardware child to compare
+the direct HSACO dirent with the inherited descriptor before dispatching the
+descriptor bytes.
 
 The golden update is accepted only through the committed canonical transition,
 public-key, and signature fixtures. That transition binds the old/new identities
@@ -316,12 +323,12 @@ review check with `authority=none`, not an authenticated human or production
 review service.
 
 This is only an observation of those exact artifact bytes under the recorded
-tools. It does not prove which compiler process caused them, refine source
-semantics, authenticate the build, create production load or dispatch
-authority, issue a compiler receipt, or establish a hardware result. The
-separate ignored MI300X test may load the observed artifact and run alpha/zeta
-at lengths `1`, `255`, `256`, `257`, and `1023` with CPU oracles and canaries;
-that is a separate exact-artifact hardware observation.
+tools plus an exact-artifact MI300X observation. The hardware stage loads one
+executable and dispatches alpha/zeta at lengths `1`, `255`, `256`, `257`, and
+`1023` with CPU oracles and prefix/suffix canaries. It does not prove which
+compiler process caused the bytes, refine source semantics, authenticate the
+build, create production load or dispatch authority, or issue a compiler
+receipt.
 
 This controller uses LLVM and LLD library APIs only. It invokes neither COMGR
 nor a command-line HSACO linker/disassembler. Its output remains descriptive
