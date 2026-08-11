@@ -2100,11 +2100,7 @@ mod platform {
                         )
                     })?;
                 completed_request_written = Some(request_written);
-                if let Err(error) =
-                    validate_post_execution_closure(child.child.id(), observation, deadline)
-                {
-                    return Err(error);
-                }
+                validate_post_execution_closure(child.child.id(), observation, deadline)?;
                 stdin
                     .write_all(&control_frame(WORKER_ACK_DOMAIN, challenge))
                     .map_err(|error| {
