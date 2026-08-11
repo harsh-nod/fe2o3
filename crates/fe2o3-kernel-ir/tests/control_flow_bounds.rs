@@ -128,7 +128,8 @@ fn exact_block_edge_argument_and_phi_boundaries_are_stable() {
 #[test]
 fn reverse_chains_have_exact_linear_work_counts() {
     for block_count in [1usize, 1_024, 2_048, 4_096] {
-        let analysis = analyze_control_flow(&reverse_chain(block_count)).unwrap();
+        let function = reverse_chain(block_count);
+        let analysis = analyze_control_flow(&function).unwrap();
         let blocks = u64::try_from(block_count).unwrap();
         let work = analysis.work();
         assert_eq!(work.index_units, 3 * blocks - 2);
@@ -140,6 +141,10 @@ fn reverse_chains_have_exact_linear_work_counts() {
         assert_eq!(work.reducibility_edge_visits, blocks - 1);
         assert_eq!(work.reducibility_node_visits, blocks);
         assert_eq!(work.total, 11 * blocks - 7);
+
+        let mut module = Module::new(format!("cfg::reverse_chain_{block_count}"));
+        module.functions.push(function);
+        verify_module(&module).expect("bounded reverse chain must verify");
     }
 }
 

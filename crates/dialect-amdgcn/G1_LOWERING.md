@@ -118,9 +118,11 @@ input graph dimensions before this path can be wired to collection.
 device-export subset without inventing a kernel entry. Every definition must
 carry an exact wave32 or wave64 mode. This is the backend test boundary used by
 the branching-fill, integer-match, and nested-loop gfx942 goldens. Those tests
-are anchored to the reviewed canonical MIR fixtures, but this crate does not
-parse MIR: the MIR-to-kernel-IR adapter remains frontend work and cannot be
-added in this lane without changing the shared workspace dependency graph.
+use manually transcribed kernel-IR modules corresponding to the reviewed MIR
+fixtures. They assert only that the source fixtures remain identifiable; there
+is no structured adapter or content hash tying the transcription to MIR. The
+MIR-to-kernel-IR adapter remains frontend work and cannot be added in this lane
+without changing the shared workspace dependency graph.
 
 The crate has no in-process LLVM target-machine/code-object API. Consequently
 these control-flow tests stop at exact, target-bound LLVM text. Code-object

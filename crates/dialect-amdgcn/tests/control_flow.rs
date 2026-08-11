@@ -5,6 +5,8 @@ use fe2o3_kernel_ir::{
     ValueId, WaveWidth,
 };
 
+// These identify the source of manually transcribed modules below; they do not
+// establish a structured MIR-to-kernel-IR correspondence.
 const BRANCHING_FILL_MIR: &str =
     include_str!("../../dialect-mir/tests/fixtures/branching-fill.mir.json");
 const INTEGER_MATCH_MIR: &str =
@@ -301,7 +303,7 @@ fn nested_loop_module() -> Module {
 }
 
 #[test]
-fn reviewed_mir_fixtures_remain_the_semantic_anchors() {
+fn manually_transcribed_mir_sources_remain_identifiable() {
     assert!(BRANCHING_FILL_MIR.contains("fixture::branching_fill"));
     assert!(BRANCHING_FILL_MIR.contains("SwitchInt"));
     assert!(INTEGER_MATCH_MIR.contains("fixture::integer_match"));

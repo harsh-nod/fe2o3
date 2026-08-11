@@ -12,14 +12,15 @@ use fe2o3_kernel_ir::{
     AtomicKind, Axis, BF16_F32_M16N16K16_CAPABILITY, BasicBlock, BinaryOp, BlockId, CastKind,
     ComparePredicate, Constant, DiagnosticCode as VerificationDiagnosticCode, F32MathFunction,
     F32MathImplementation, FloatConversionKind, FloatOperation, Function, FunctionId, FunctionRole,
-    IndexKind, InlineAssembly, InlineAssemblyTarget, IntrinsicKind, Kernel, KernelId,
-    LDS_TILE_16X16_XOR4_CAPABILITY, LaunchDomain, LaunchExtent, MATRIX_CAPABILITY_NAMESPACE,
-    MatrixElement, MatrixOperation, MatrixOperationKind, MemoryElementType,
-    MemoryIntrinsicOperation, MemoryOrdering, Module, ModuleId, NarrowFloatFormat, Operation,
-    OperationKind, PointerDistanceContract, PointerDistanceKind, PointerDistanceUnit, ScalarType,
-    Signature, SynchronizationScope, TargetCapability, Terminator, Type, ValueId,
-    VerificationErrors, WaveOperation, WaveOperationKind, WaveWidth, WidenedFloatBinaryOp,
-    WorkgroupMemoryExtent, WorkgroupSize, verify_module,
+    IndexKind, IndexedControlFlow, InlineAssembly, InlineAssemblyTarget, IntrinsicKind, Kernel,
+    KernelId, LDS_TILE_16X16_XOR4_CAPABILITY, LaunchDomain, LaunchExtent,
+    MATRIX_CAPABILITY_NAMESPACE, MatrixElement, MatrixOperation, MatrixOperationKind,
+    MemoryElementType, MemoryIntrinsicOperation, MemoryOrdering, Module, ModuleId,
+    NarrowFloatFormat, Operation, OperationKind, PointerDistanceContract, PointerDistanceKind,
+    PointerDistanceUnit, ScalarType, Signature, SynchronizationScope, TargetCapability, Terminator,
+    Type, ValueId, VerificationErrors, WaveOperation, WaveOperationKind, WaveWidth,
+    WidenedFloatBinaryOp, WorkgroupMemoryExtent, WorkgroupSize, analyze_control_flow,
+    verify_module,
 };
 
 use crate::{AMDGPU_TRIPLE, AmdgcnIntrinsic, Dim};
@@ -1261,126 +1262,20 @@ fn preflight_function(lowerer: &mut FunctionLowerer<'_>) -> Result<(), LoweringE
 }
 
 fn validate_reducible_cfg(lowerer: &FunctionLowerer<'_>) -> Result<(), LoweringErrors> {
-    let body = lowerer.function.body.as_ref().expect("definition required");
-    let blocks = body
-        .blocks
-        .iter()
-        .map(|block| (block.id, block))
-        .collect::<BTreeMap<_, _>>();
-    let all = blocks.keys().copied().collect::<BTreeSet<_>>();
-    let entry = body.blocks.first().expect("verified non-empty body").id;
-    let mut predecessors = all
-        .iter()
-        .map(|block| (*block, BTreeSet::new()))
-        .collect::<BTreeMap<_, _>>();
-    for block in &body.blocks {
-        for successor in block
-            .terminator
-            .as_ref()
-            .expect("verified terminator")
-            .successors()
-        {
-            predecessors
-                .get_mut(&successor)
-                .expect("verified successor")
-                .insert(block.id);
-        }
-    }
-
-    let mut dominators = all
-        .iter()
-        .map(|block| {
-            let set = if *block == entry {
-                BTreeSet::from([entry])
-            } else {
-                all.clone()
-            };
-            (*block, set)
-        })
-        .collect::<BTreeMap<_, _>>();
-    loop {
-        let mut changed = false;
-        for block in all.iter().copied().filter(|block| *block != entry) {
-            let mut incoming = predecessors[&block].iter();
-            let mut next = incoming
-                .next()
-                .map(|predecessor| dominators[predecessor].clone())
-                .unwrap_or_default();
-            for predecessor in incoming {
-                next.retain(|candidate| dominators[predecessor].contains(candidate));
-            }
-            next.insert(block);
-            changed |= dominators[&block] != next;
-            dominators.insert(block, next);
-        }
-        if !changed {
-            break;
-        }
-    }
-
-    let mut forward = all
-        .iter()
-        .map(|block| (*block, BTreeSet::new()))
-        .collect::<BTreeMap<_, _>>();
-    let mut indegrees = all
-        .iter()
-        .map(|block| (*block, 0_usize))
-        .collect::<BTreeMap<_, _>>();
-    for block in &body.blocks {
-        for successor in block
-            .terminator
-            .as_ref()
-            .expect("verified terminator")
-            .successors()
-            .into_iter()
-            .collect::<BTreeSet<_>>()
-        {
-            if dominators[&block.id].contains(&successor) {
-                continue;
-            }
-            if forward
-                .get_mut(&block.id)
-                .expect("known block")
-                .insert(successor)
-            {
-                *indegrees.get_mut(&successor).expect("known successor") += 1;
-            }
-        }
-    }
-
-    let mut ready = indegrees
-        .iter()
-        .filter_map(|(block, count)| (*count == 0).then_some(*block))
-        .collect::<BTreeSet<_>>();
-    let mut visited = BTreeSet::new();
-    while let Some(block) = ready.pop_first() {
-        visited.insert(block);
-        for successor in &forward[&block] {
-            let count = indegrees.get_mut(successor).expect("known successor");
-            *count -= 1;
-            if *count == 0 {
-                ready.insert(*successor);
-            }
-        }
-    }
-    if visited.len() == all.len() {
+    let cyclic = lowerer.control_flow.irreducible_blocks();
+    if cyclic.is_empty() {
         return Ok(());
     }
-
-    let cyclic = all
-        .difference(&visited)
+    let labels = cyclic
+        .iter()
         .map(|block| block_label(*block))
         .collect::<Vec<_>>();
-    let first = *all
-        .difference(&visited)
-        .next()
-        .expect("a short traversal leaves a block");
     Err(LoweringErrors::one(
-        lowerer.block_location(first),
+        lowerer.block_location(cyclic[0]),
         LoweringDiagnosticCode::IrreducibleControlFlow,
         format!(
             "control flow remains cyclic after removing dominance backedges: {}",
-            cyclic.join(", ")
+            labels.join(", ")
         ),
     ))
 }
@@ -1421,38 +1316,22 @@ fn validate_convergent_cfg(lowerer: &FunctionLowerer<'_>) -> Result<(), Lowering
         ));
     }
 
-    let blocks = body
+    let entry = body.blocks.first().expect("verified non-empty body").id;
+    let reachable = body
         .blocks
         .iter()
-        .map(|block| (block.id, block))
-        .collect::<BTreeMap<_, _>>();
-    let entry = body.blocks.first().expect("verified non-empty body").id;
-    let mut reachable = BTreeSet::from([entry]);
-    let mut pending = vec![entry];
-    let mut predecessors = BTreeMap::<BlockId, BTreeSet<BlockId>>::new();
-    while let Some(block_id) = pending.pop() {
-        let block = blocks[&block_id];
-        for successor in block
-            .terminator
-            .as_ref()
-            .expect("verified terminator")
-            .successors()
-            .into_iter()
-            .collect::<BTreeSet<_>>()
-        {
-            predecessors.entry(successor).or_default().insert(block_id);
-            if reachable.insert(successor) {
-                pending.push(successor);
-            }
-        }
-    }
-
+        .map(|block| block.id)
+        .filter(|block| lowerer.control_flow.is_reachable(*block))
+        .collect::<BTreeSet<_>>();
     let mut indegrees = reachable
         .iter()
         .map(|block| {
-            let count = predecessors
-                .get(block)
-                .map_or(0, |incoming| incoming.intersection(&reachable).count());
+            let count = lowerer
+                .control_flow
+                .predecessor_blocks(*block)
+                .expect("indexed block")
+                .filter(|predecessor| reachable.contains(predecessor))
+                .count();
             (*block, count)
         })
         .collect::<BTreeMap<_, _>>();
@@ -1463,14 +1342,11 @@ fn validate_convergent_cfg(lowerer: &FunctionLowerer<'_>) -> Result<(), Lowering
     let mut visited = 0usize;
     while let Some(block_id) = ready.pop() {
         visited += 1;
-        let block = blocks[&block_id];
-        for successor in block
-            .terminator
-            .as_ref()
-            .expect("verified terminator")
-            .successors()
-            .into_iter()
-            .collect::<BTreeSet<_>>()
+        for successor in lowerer
+            .control_flow
+            .successor_blocks(block_id)
+            .expect("indexed block")
+            .filter(|successor| reachable.contains(successor))
         {
             let count = indegrees
                 .get_mut(&successor)
@@ -1495,14 +1371,15 @@ fn validate_convergent_cfg(lowerer: &FunctionLowerer<'_>) -> Result<(), Lowering
         if !unconditional_chain.insert(current) {
             break;
         }
-        let block = blocks[&current];
+        let block = lowerer.block(current);
         let Some(Terminator::Branch { target, .. }) = &block.terminator else {
             break;
         };
-        if predecessors
-            .get(target)
-            .is_none_or(|incoming| incoming.len() != 1 || !incoming.contains(&current))
-        {
+        let mut incoming = lowerer
+            .control_flow
+            .predecessor_blocks(*target)
+            .expect("indexed block");
+        if incoming.next() != Some(current) || incoming.next().is_some() {
             break;
         }
         current = *target;
@@ -2571,6 +2448,52 @@ impl ValueBinding {
     }
 }
 
+fn control_flow_emission_plan(function: &Function) -> (IndexedControlFlow, Vec<bool>) {
+    let control_flow = analyze_control_flow(function)
+        .expect("verify_module established bounded structural control flow");
+    let body = function.body.as_ref().expect("definition required");
+    let mut split_edges = vec![false; control_flow.edge_count()];
+    let mut target_counts = vec![0usize; control_flow.block_count()];
+    let mut touched_targets = Vec::new();
+    for block in &body.blocks {
+        let outgoing = control_flow
+            .outgoing_edges(block.id)
+            .expect("indexed source block");
+        touched_targets.clear();
+        for edge_index in outgoing.clone() {
+            let target = control_flow.edge_target(edge_index).expect("indexed edge");
+            let target_position = control_flow
+                .block_position(target)
+                .expect("indexed target block");
+            if target_counts[target_position] == 0 {
+                touched_targets.push(target_position);
+            }
+            target_counts[target_position] += 1;
+        }
+        for edge_index in outgoing.clone() {
+            let target = control_flow.edge_target(edge_index).expect("indexed edge");
+            let target_position = control_flow
+                .block_position(target)
+                .expect("indexed target block");
+            if body.blocks[target_position].parameters.is_empty() {
+                continue;
+            }
+            let duplicate_target = target_counts[target_position] > 1;
+            let critical = outgoing.len() > 1
+                && control_flow
+                    .incoming_edges(target)
+                    .expect("indexed target block")
+                    .len()
+                    > 1;
+            split_edges[edge_index] = duplicate_target || critical;
+        }
+        for target in &touched_targets {
+            target_counts[*target] = 0;
+        }
+    }
+    (control_flow, split_edges)
+}
+
 struct FunctionLowerer<'a> {
     module: &'a Module,
     kernel: Option<&'a Kernel>,
@@ -2582,6 +2505,8 @@ struct FunctionLowerer<'a> {
     launch_bounds: Option<Gfx942LaunchBoundsV1>,
     call_symbols: Option<&'a BTreeMap<FunctionId, String>>,
     bindings: BTreeMap<ValueId, ValueBinding>,
+    control_flow: IndexedControlFlow,
+    split_edges: Vec<bool>,
 }
 
 impl<'a> FunctionLowerer<'a> {
@@ -2593,6 +2518,7 @@ impl<'a> FunctionLowerer<'a> {
         wave_width: Option<WaveWidth>,
         target: LoweringTarget,
     ) -> Self {
+        let (control_flow, split_edges) = control_flow_emission_plan(function);
         Self {
             module,
             kernel: Some(kernel),
@@ -2604,6 +2530,8 @@ impl<'a> FunctionLowerer<'a> {
             launch_bounds: None,
             call_symbols: None,
             bindings: BTreeMap::new(),
+            control_flow,
+            split_edges,
         }
     }
 
@@ -2618,6 +2546,7 @@ impl<'a> FunctionLowerer<'a> {
         target: LoweringTarget,
         launch_bounds: Option<Gfx942LaunchBoundsV1>,
     ) -> Self {
+        let (control_flow, split_edges) = control_flow_emission_plan(function);
         Self {
             module,
             kernel: Some(kernel),
@@ -2629,6 +2558,8 @@ impl<'a> FunctionLowerer<'a> {
             launch_bounds,
             call_symbols: Some(call_symbols),
             bindings: BTreeMap::new(),
+            control_flow,
+            split_edges,
         }
     }
 
@@ -2639,6 +2570,7 @@ impl<'a> FunctionLowerer<'a> {
         call_symbols: &'a BTreeMap<FunctionId, String>,
         target: LoweringTarget,
     ) -> Self {
+        let (control_flow, split_edges) = control_flow_emission_plan(function);
         Self {
             module,
             kernel: None,
@@ -2650,7 +2582,22 @@ impl<'a> FunctionLowerer<'a> {
             launch_bounds: None,
             call_symbols: Some(call_symbols),
             bindings: BTreeMap::new(),
+            control_flow,
+            split_edges,
         }
+    }
+
+    fn block(&self, block: BlockId) -> &BasicBlock {
+        let position = self
+            .control_flow
+            .block_position(block)
+            .expect("verified block has an index");
+        &self
+            .function
+            .body
+            .as_ref()
+            .expect("definition required")
+            .blocks[position]
     }
 
     fn function_location(&self) -> LoweringLocation {
@@ -3020,8 +2967,12 @@ impl<'a> FunctionLowerer<'a> {
                 ));
             }
 
-            let incomings = self.incoming_edges(block.id);
-            if incomings.is_empty() {
+            if self
+                .control_flow
+                .incoming_edges(block.id)
+                .expect("indexed block")
+                .is_empty()
+            {
                 return Err(LoweringErrors::one(
                     location,
                     LoweringDiagnosticCode::UnsupportedBlockArguments,
@@ -3581,91 +3532,45 @@ impl<'a> FunctionLowerer<'a> {
         }
     }
 
-    fn outgoing_edges<'b>(&self, terminator: &'b Terminator) -> Vec<(BlockId, &'b [ValueId])> {
-        match terminator {
-            Terminator::Branch { target, arguments } => vec![(*target, arguments)],
-            Terminator::ConditionalBranch {
-                then_target,
-                then_arguments,
-                else_target,
-                else_arguments,
-                ..
-            } => vec![
-                (*then_target, then_arguments),
-                (*else_target, else_arguments),
-            ],
-            Terminator::Switch {
-                cases,
-                default_target,
-                default_arguments,
-                ..
-            } => cases
-                .iter()
-                .map(|case| (case.target, case.arguments.as_slice()))
-                .chain([(*default_target, default_arguments.as_slice())])
-                .collect(),
-            Terminator::IntegerSwitch {
-                cases,
-                default_target,
-                default_arguments,
-                ..
-            } => cases
-                .iter()
-                .map(|case| (case.target, case.arguments.as_slice()))
-                .chain([(*default_target, default_arguments.as_slice())])
-                .collect(),
-            Terminator::Return { .. } | Terminator::Unreachable => Vec::new(),
-        }
-    }
-
     fn incoming_edges(&self, target: BlockId) -> Vec<(BlockId, usize, &[ValueId])> {
-        let body = self.function.body.as_ref().expect("definition required");
-        let mut incomings = Vec::new();
-        for block in &body.blocks {
-            let terminator = block.terminator.as_ref().expect("verified terminator");
-            for (ordinal, (edge_target, arguments)) in
-                self.outgoing_edges(terminator).into_iter().enumerate()
-            {
-                if edge_target == target {
-                    incomings.push((block.id, ordinal, arguments));
-                }
-            }
-        }
-        incomings
+        self.control_flow
+            .incoming_edges(target)
+            .expect("indexed target block")
+            .iter()
+            .copied()
+            .map(|edge_index| {
+                let edge = self
+                    .control_flow
+                    .edge(edge_index)
+                    .expect("indexed incoming edge");
+                (
+                    self.control_flow
+                        .edge_source(edge_index)
+                        .expect("indexed incoming source"),
+                    edge.ordinal(),
+                    self.control_flow.edge_arguments(self.function, edge_index),
+                )
+            })
+            .collect()
     }
 
-    fn split_edge(&self, predecessor: BlockId, target: BlockId) -> bool {
-        let body = self.function.body.as_ref().expect("definition required");
-        let target_block = body
-            .blocks
-            .iter()
-            .find(|block| block.id == target)
-            .expect("verified edge target");
-        if target_block.parameters.is_empty() {
-            return false;
-        }
-        let predecessor_block = body
-            .blocks
-            .iter()
-            .find(|block| block.id == predecessor)
-            .expect("verified predecessor");
-        let outgoing = self.outgoing_edges(
-            predecessor_block
-                .terminator
-                .as_ref()
-                .expect("verified terminator"),
+    fn edge_index(&self, predecessor: BlockId, ordinal: usize, target: BlockId) -> usize {
+        let outgoing = self
+            .control_flow
+            .outgoing_edges(predecessor)
+            .expect("indexed predecessor");
+        let edge_index = outgoing.start + ordinal;
+        assert!(edge_index < outgoing.end, "indexed edge ordinal");
+        assert_eq!(
+            self.control_flow.edge_target(edge_index),
+            Some(target),
+            "indexed edge target"
         );
-        let duplicate_target = outgoing
-            .iter()
-            .filter(|(candidate, _)| *candidate == target)
-            .count()
-            > 1;
-        let critical = outgoing.len() > 1 && self.incoming_edges(target).len() > 1;
-        duplicate_target || critical
+        edge_index
     }
 
     fn edge_target_label(&self, predecessor: BlockId, ordinal: usize, target: BlockId) -> String {
-        if self.split_edge(predecessor, target) {
+        if self.split_edges[self.edge_index(predecessor, ordinal, target)] {
             edge_label(predecessor, ordinal, target)
         } else {
             block_label(target)
@@ -3678,7 +3583,7 @@ impl<'a> FunctionLowerer<'a> {
         ordinal: usize,
         target: BlockId,
     ) -> String {
-        if self.split_edge(predecessor, target) {
+        if self.split_edges[self.edge_index(predecessor, ordinal, target)] {
             edge_label(predecessor, ordinal, target)
         } else {
             block_label(predecessor)
@@ -5414,11 +5319,20 @@ impl<'a> FunctionLowerer<'a> {
     }
 
     fn emit_split_edges(&self, output: &mut dyn fmt::Write, block: &BasicBlock) {
-        let terminator = block.terminator.as_ref().expect("verified terminator");
-        for (ordinal, (target, _)) in self.outgoing_edges(terminator).into_iter().enumerate() {
-            if !self.split_edge(block.id, target) {
+        let outgoing = self
+            .control_flow
+            .outgoing_edges(block.id)
+            .expect("indexed source block");
+        for edge_index in outgoing {
+            if !self.split_edges[edge_index] {
                 continue;
             }
+            let edge = self.control_flow.edge(edge_index).expect("indexed edge");
+            let target = self
+                .control_flow
+                .edge_target(edge_index)
+                .expect("indexed edge target");
+            let ordinal = edge.ordinal();
             writeln!(output, "{}:", edge_label(block.id, ordinal, target)).unwrap();
             writeln!(output, "  br label %{}", block_label(target)).unwrap();
         }
