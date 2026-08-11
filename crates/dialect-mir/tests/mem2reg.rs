@@ -350,11 +350,8 @@ fn leaves_call_defined_locals_as_slots() {
     assert_eq!(call.target.as_ref().unwrap().arguments.len(), 1);
 }
 
-#[test]
-fn linear_control_flow_does_not_amplify_block_arguments() {
+fn linear_amplification_module(argument_count: u32, block_count: u32) -> MirExecutableModule {
     let (types, ids) = types();
-    let argument_count = 256_u32;
-    let block_count = 257_u32;
     let mut locals = vec![local(ids.u32_ty, MirLocalKind::Return, true)];
     locals.extend((0..argument_count).map(|_| local(ids.u32_ty, MirLocalKind::Argument, false)));
     let statements = (1..=argument_count)
@@ -375,7 +372,7 @@ fn linear_control_flow_does_not_amplify_block_arguments() {
             },
         })
         .collect();
-    let input = MirExecutableModule {
+    MirExecutableModule {
         version: MirExecutableVersion::V1,
         target: MirExecutableTarget::gfx942(),
         types,
@@ -390,8 +387,13 @@ fn linear_control_flow_does_not_amplify_block_arguments() {
                 entry: MirBlockId(0),
             },
         }],
-    };
+    }
+}
 
+#[test]
+fn linear_control_flow_does_not_amplify_block_arguments() {
+    let argument_count = 256_u32;
+    let input = linear_amplification_module(argument_count, 257);
     let input = input.validate().unwrap();
     let (output, report) = promote_module_to_ssa(&input).unwrap();
     assert_eq!(report.inserted_parameter_count(), argument_count as usize);
@@ -400,6 +402,22 @@ fn linear_control_flow_does_not_amplify_block_arguments() {
             .iter()
             .all(|block| block.parameters.is_empty())
     );
+}
+
+#[test]
+fn fact_collection_scales_with_syntax_not_local_statement_pairs() {
+    let collect_work = |argument_count: u32| {
+        let input = linear_amplification_module(argument_count, 2)
+            .validate()
+            .unwrap();
+        promote_module_to_ssa(&input).unwrap().1.fact_work_units()
+    };
+
+    let work_1024 = collect_work(1024);
+    let work_2048 = collect_work(2048);
+    assert_eq!(work_1024, 1 + 6 * 1024 + 2);
+    assert_eq!(work_2048, 1 + 6 * 2048 + 2);
+    assert_eq!(work_2048, work_1024 * 2 - 3);
 }
 
 #[test]
@@ -494,10 +512,11 @@ fn rejects_repeated_join_amplification_before_transforming() {
 
     let input = input.validate().unwrap();
     let error = promote_module_to_ssa(&input).unwrap_err();
-    assert!(error.reason().contains("generated items"));
-    assert!(
-        error
-            .reason()
-            .contains(&MAX_MEM2REG_OUTPUT_ITEMS.to_string())
+    assert_eq!(error.path(), "module.functions[0].body");
+    assert_eq!(
+        error.reason(),
+        format!(
+            "mem2reg output requires 65539 generated items, exceeding {MAX_MEM2REG_OUTPUT_ITEMS}"
+        )
     );
 }
