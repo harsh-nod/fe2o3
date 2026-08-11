@@ -233,6 +233,28 @@ pub(crate) enum AdtKind {
     Union,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AdtRepresentationFacts {
+    pub(crate) c: bool,
+    pub(crate) transparent: bool,
+    pub(crate) explicit_integer: bool,
+    pub(crate) packed_alignment_bytes: Option<u64>,
+    pub(crate) requested_alignment_bytes: Option<u64>,
+}
+
+impl AdtRepresentationFacts {
+    #[cfg(test)]
+    pub(crate) const fn rust() -> Self {
+        Self {
+            c: false,
+            transparent: false,
+            explicit_integer: false,
+            packed_alignment_bytes: None,
+            requested_alignment_bytes: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct VariantLayoutFacts {
     pub(crate) source_index: u32,
@@ -274,6 +296,7 @@ pub(crate) struct NicheLayoutFacts {
 pub(crate) struct AdtLayoutFacts {
     pub(crate) definition: String,
     pub(crate) kind: AdtKind,
+    pub(crate) representation: AdtRepresentationFacts,
     pub(crate) tag: Option<EnumTagLayoutFacts>,
     pub(crate) variants: Vec<VariantLayoutFacts>,
 }
@@ -552,12 +575,14 @@ impl<'tcx> Extractor<'tcx> {
                     detail: "closure and coroutine layouts require capture identity facts",
                 });
             }
-            TyKind::Pat(..) => {
-                return Err(GeneralLayoutExtractError::UnsupportedType {
-                    path,
-                    rust_type: type_name(ty),
-                    detail: "pattern types require source-pattern validity facts",
-                });
+            TyKind::Pat(base, _) => {
+                TypeLayoutKind::Scalar(source_scalar_kind(&self.layout_cx, base).ok_or_else(
+                    || GeneralLayoutExtractError::UnsupportedType {
+                        path: path.clone(),
+                        rust_type: type_name(ty),
+                        detail: "only scalar pattern types have an exact validity representation",
+                    },
+                )?)
             }
             TyKind::UnsafeBinder(..) => {
                 return Err(GeneralLayoutExtractError::UnsupportedType {
@@ -741,6 +766,16 @@ impl<'tcx> Extractor<'tcx> {
         Ok(AdtLayoutFacts {
             definition: self.tcx.def_path_str(definition.did()),
             kind,
+            representation: {
+                let repr = definition.repr();
+                AdtRepresentationFacts {
+                    c: repr.c(),
+                    transparent: repr.transparent(),
+                    explicit_integer: repr.int.is_some(),
+                    packed_alignment_bytes: repr.pack.map(|align| align.bytes()),
+                    requested_alignment_bytes: repr.align.map(|align| align.bytes()),
+                }
+            },
             tag,
             variants,
         })

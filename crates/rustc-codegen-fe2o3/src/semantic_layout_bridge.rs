@@ -1217,7 +1217,7 @@ mod tests {
 
     use super::*;
     use crate::rust_type_layout_general::{
-        ArrayLayoutFacts, EnumTagLayoutFacts, PointerLayoutFacts,
+        AdtRepresentationFacts, ArrayLayoutFacts, EnumTagLayoutFacts, PointerLayoutFacts,
     };
 
     fn target() -> SemanticLayoutTargetV1 {
@@ -1408,6 +1408,7 @@ mod tests {
             TypeLayoutKind::Adt(AdtLayoutFacts {
                 definition: "fixture::Root".to_owned(),
                 kind: AdtKind::Struct,
+                representation: AdtRepresentationFacts::rust(),
                 tag: None,
                 variants: vec![VariantLayoutFacts {
                     source_index: 0,
@@ -1480,6 +1481,7 @@ mod tests {
             TypeLayoutKind::Adt(AdtLayoutFacts {
                 definition: "fixture::Choice".to_owned(),
                 kind: AdtKind::Enum,
+                representation: AdtRepresentationFacts::rust(),
                 tag: Some(EnumTagLayoutFacts {
                     offset_bytes: 0,
                     scalar: tag_scalar,
@@ -1540,6 +1542,7 @@ mod tests {
             TypeLayoutKind::Adt(AdtLayoutFacts {
                 definition: "core::option::Option".to_owned(),
                 kind: AdtKind::Enum,
+                representation: AdtRepresentationFacts::rust(),
                 tag: Some(EnumTagLayoutFacts {
                     offset_bytes: 0,
                     scalar: pointer_scalar,
@@ -1598,6 +1601,7 @@ mod tests {
             TypeLayoutKind::Adt(AdtLayoutFacts {
                 definition: "fixture::Bits".to_owned(),
                 kind: AdtKind::Union,
+                representation: AdtRepresentationFacts::rust(),
                 tag: None,
                 variants: vec![],
             }),
@@ -1665,6 +1669,7 @@ mod tests {
             TypeLayoutKind::Adt(AdtLayoutFacts {
                 definition: "fixture::Bad".to_owned(),
                 kind: AdtKind::Enum,
+                representation: AdtRepresentationFacts::rust(),
                 tag: Some(EnumTagLayoutFacts {
                     offset_bytes: 0,
                     scalar: ScalarLayoutFacts {

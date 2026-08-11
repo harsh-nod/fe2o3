@@ -39,6 +39,7 @@ pub mod s09_identity_v2;
 pub mod scalar_mir_v2;
 mod semantic_features;
 pub mod semantic_layout_bridge;
+pub mod semantic_type_adapter_v2;
 mod semantic_witness;
 mod source_debug;
 mod static_registration;
