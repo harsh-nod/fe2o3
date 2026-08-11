@@ -220,6 +220,8 @@ struct LoaderSegment {
 struct LoaderView {
   ArrayRef<uint8_t> Payload;
   std::vector<LoaderSegment> Segments;
+  std::optional<LoaderSegment> MetadataNote;
+  std::optional<LoaderSegment> DynamicTable;
 
   Expected<uint64_t> fileOffset(uint64_t Address, uint64_t Size,
                                 uint32_t RequiredFlags, uint32_t ForbiddenFlags,
@@ -293,6 +295,22 @@ struct LoaderView {
     return Error::success();
   }
 
+  Error validateExactSegment(const ELF64LE::Shdr &Section,
+                             const LoaderSegment &Segment,
+                             StringRef Description) const {
+    if (Error ErrorValue = validateSection(Section, Description))
+      return ErrorValue;
+    if (Section.sh_offset != Segment.FileOffset ||
+        Section.sh_addr != Segment.Address ||
+        Section.sh_size != Segment.FileSize ||
+        Segment.FileSize != Segment.MemorySize)
+      return analysisError(Twine(Description) +
+                           " section and program-header views disagree");
+    if (Section.sh_type == ELF::SHT_NOBITS)
+      return analysisError(Twine(Description) + " has no file bytes");
+    return Error::success();
+  }
+
   Expected<ArrayRef<uint8_t>> bytes(uint64_t Address, uint64_t Size,
                                     uint32_t RequiredFlags,
                                     uint32_t ForbiddenFlags,
@@ -326,12 +344,33 @@ Expected<LoaderView> buildLoaderView(const ELFObjectFile<ELF64LE> &Object,
   if (Headers->empty() || Headers->size() > MaxProgramHeaders)
     return analysisError("program-header count is outside bounded profile");
 
-  LoaderView Result{Payload, {}};
+  LoaderView Result{Payload, {}, std::nullopt, std::nullopt};
   for (const ELF64LE::Phdr &Header : *Headers) {
     if (Header.p_filesz != 0 &&
         (Header.p_offset > Payload.size() ||
          Header.p_filesz > Payload.size() - Header.p_offset))
       return analysisError("program-header file range is outside payload");
+    if (Header.p_type == ELF::PT_NOTE || Header.p_type == ELF::PT_DYNAMIC) {
+      std::optional<LoaderSegment> &Destination = Header.p_type == ELF::PT_NOTE
+                                                      ? Result.MetadataNote
+                                                      : Result.DynamicTable;
+      StringRef Description =
+          Header.p_type == ELF::PT_NOTE ? "PT_NOTE" : "PT_DYNAMIC";
+      uint32_t ExpectedFlags =
+          Header.p_type == ELF::PT_NOTE ? ELF::PF_R : ELF::PF_R | ELF::PF_W;
+      uint64_t ExpectedAlignment = Header.p_type == ELF::PT_NOTE ? 4 : 8;
+      if (Destination)
+        return analysisError(Twine("multiple ") + Description +
+                             " program headers");
+      if (Header.p_filesz == 0 || Header.p_filesz != Header.p_memsz ||
+          Header.p_flags != ExpectedFlags ||
+          Header.p_align != ExpectedAlignment)
+        return analysisError(Twine(Description) +
+                             " is outside bounded loader profile");
+      Destination =
+          LoaderSegment{Header.p_offset, Header.p_vaddr, Header.p_filesz,
+                        Header.p_memsz, Header.p_flags};
+    }
     if (Header.p_type != ELF::PT_LOAD)
       continue;
     if (Header.p_memsz == 0 || Header.p_filesz > Header.p_memsz)
@@ -354,6 +393,9 @@ Expected<LoaderView> buildLoaderView(const ELFObjectFile<ELF64LE> &Object,
         return (Segment.Flags & ELF::PF_X) != 0 && Segment.FileSize != 0;
       }))
     return analysisError("loadable executable segment is absent");
+  if (!Result.MetadataNote || !Result.DynamicTable)
+    return analysisError(
+        "bounded loader profile requires one PT_NOTE and one PT_DYNAMIC");
   for (size_t I = 0; I < Result.Segments.size(); ++I) {
     const LoaderSegment &Left = Result.Segments[I];
     for (size_t J = I + 1; J < Result.Segments.size(); ++J) {
@@ -366,6 +408,21 @@ Expected<LoaderView> buildLoaderView(const ELFObjectFile<ELF64LE> &Object,
                         Right.FileSize))
         return analysisError("executable PT_LOAD file mappings alias");
     }
+  }
+  for (const auto &[Description, Segment] :
+       {std::pair<StringRef, const LoaderSegment *>("PT_NOTE",
+                                                    &*Result.MetadataNote),
+        std::pair<StringRef, const LoaderSegment *>("PT_DYNAMIC",
+                                                    &*Result.DynamicTable)}) {
+    uint32_t Forbidden =
+        Description == "PT_NOTE" ? ELF::PF_W | ELF::PF_X : ELF::PF_X;
+    auto Offset = Result.fileOffset(Segment->Address, Segment->FileSize,
+                                    Segment->Flags, Forbidden, Description);
+    if (!Offset)
+      return Offset.takeError();
+    if (*Offset != Segment->FileOffset)
+      return analysisError(Twine(Description) +
+                           " and PT_LOAD file views disagree");
   }
 
   auto Sections = File.sections();
@@ -434,6 +491,9 @@ readMetadata(const ELFObjectFile<ELF64LE> &Object, const LoaderView &Loader) {
         continue;
       if (++MetadataNoteCount != 1)
         return analysisError("multiple AMDGPU metadata notes");
+      if (Error ErrorValue = Loader.validateExactSegment(
+              Section, *Loader.MetadataNote, "AMDGPU metadata note"))
+        return ErrorValue;
       if (Section.sh_addralign != 4)
         return analysisError("metadata note alignment is not four");
       StringRef Blob = Note.getDescAsStringRef(Section.sh_addralign);
@@ -516,6 +576,14 @@ struct SymbolRecord {
   bool Text = false;
   bool Data = false;
   ArrayRef<uint8_t> Bytes;
+};
+
+struct DynamicLoaderSections {
+  size_t Dynsym = 0;
+  size_t Dynstr = 0;
+  size_t GnuHash = 0;
+  size_t Hash = 0;
+  size_t Dynamic = 0;
 };
 
 const SymbolRecord *findSymbol(ArrayRef<SymbolRecord> Symbols, StringRef Name);
@@ -606,25 +674,22 @@ readSymbolTable(const ELFObjectFile<ELF64LE> &Object,
 
 Expected<std::vector<SymbolRecord>>
 readSymbols(const ELFObjectFile<ELF64LE> &Object, const LoaderView &Loader,
+            const DynamicLoaderSections &DynamicLoader,
             ArrayRef<MetadataKernel> Metadata) {
   const ELFFile<ELF64LE> &File = Object.getELFFile();
   auto Sections = File.sections();
   if (!Sections)
     return Sections.takeError();
   const ELF64LE::Shdr *StaticTable = nullptr;
-  const ELF64LE::Shdr *DynamicTable = nullptr;
+  const ELF64LE::Shdr *DynamicTable = &(*Sections)[DynamicLoader.Dynsym];
   for (const ELF64LE::Shdr &Section : *Sections) {
     if (Section.sh_type == ELF::SHT_SYMTAB) {
       if (StaticTable)
         return analysisError("multiple .symtab sections");
       StaticTable = &Section;
-    } else if (Section.sh_type == ELF::SHT_DYNSYM) {
-      if (DynamicTable)
-        return analysisError("multiple .dynsym sections");
-      DynamicTable = &Section;
     }
   }
-  if (!StaticTable || !DynamicTable)
+  if (!StaticTable)
     return analysisError("bounded profile requires .symtab and .dynsym");
   auto Static =
       readSymbolTable(Object, *Sections, *StaticTable, Loader, ".symtab");
@@ -688,12 +753,20 @@ bool isRelocationDynamicTag(int64_t Tag) {
   }
 }
 
-Error validateRelocations(const ELFObjectFile<ELF64LE> &Object) {
+Expected<DynamicLoaderSections>
+validateDynamicLoaderView(const ELFObjectFile<ELF64LE> &Object,
+                          const LoaderView &Loader) {
   const ELFFile<ELF64LE> &File = Object.getELFFile();
   auto Sections = File.sections();
   if (!Sections)
     return Sections.takeError();
-  for (const ELF64LE::Shdr &Section : *Sections) {
+  std::optional<size_t> Dynsym;
+  std::optional<size_t> Dynstr;
+  std::optional<size_t> GnuHash;
+  std::optional<size_t> Hash;
+  std::optional<size_t> Dynamic;
+  for (size_t Index = 0; Index < Sections->size(); ++Index) {
+    const ELF64LE::Shdr &Section = (*Sections)[Index];
     auto Name = File.getSectionName(Section);
     if (!Name)
       return Name.takeError();
@@ -710,20 +783,145 @@ Error validateRelocations(const ELFObjectFile<ELF64LE> &Object) {
       return analysisError(Twine("unsupported finalized-image relocations: ") +
                            *Name);
     }
-    if (Section.sh_type != ELF::SHT_DYNAMIC)
-      continue;
-    if (Section.sh_entsize != sizeof(ELF64LE::Dyn) ||
-        Section.sh_size % sizeof(ELF64LE::Dyn) != 0 ||
-        Section.sh_size / sizeof(ELF64LE::Dyn) > 256)
-      return analysisError("dynamic table exceeds bounded profile");
-    auto Entries = File.getSectionContentsAsArray<ELF64LE::Dyn>(Section);
-    if (!Entries)
-      return Entries.takeError();
-    for (const ELF64LE::Dyn &Entry : *Entries)
-      if (isRelocationDynamicTag(Entry.getTag()))
-        return analysisError("dynamic relocation table is unsupported");
+    auto Select = [&](StringRef ExpectedName, uint32_t ExpectedType,
+                      std::optional<size_t> &Slot) -> Error {
+      if (*Name != ExpectedName && Section.sh_type != ExpectedType)
+        return Error::success();
+      if (*Name != ExpectedName || Section.sh_type != ExpectedType)
+        return analysisError(Twine(ExpectedName) +
+                             " name/type view is inconsistent");
+      if (Slot)
+        return analysisError(Twine("multiple ") + ExpectedName + " sections");
+      Slot = Index;
+      return Error::success();
+    };
+    if (Error ErrorValue = Select(".dynsym", ELF::SHT_DYNSYM, Dynsym))
+      return ErrorValue;
+    if (*Name == ".dynstr") {
+      if (Section.sh_type != ELF::SHT_STRTAB || Dynstr)
+        return analysisError(".dynstr section view is inconsistent");
+      Dynstr = Index;
+    }
+    if (Error ErrorValue = Select(".gnu.hash", ELF::SHT_GNU_HASH, GnuHash))
+      return ErrorValue;
+    if (Error ErrorValue = Select(".hash", ELF::SHT_HASH, Hash))
+      return ErrorValue;
+    if (Error ErrorValue = Select(".dynamic", ELF::SHT_DYNAMIC, Dynamic))
+      return ErrorValue;
   }
-  return Error::success();
+  if (!Dynsym || !Dynstr || !GnuHash || !Hash || !Dynamic)
+    return analysisError(
+        "bounded dynamic loader sections are absent or incomplete");
+
+  const ELF64LE::Shdr &DynsymSection = (*Sections)[*Dynsym];
+  const ELF64LE::Shdr &DynstrSection = (*Sections)[*Dynstr];
+  const ELF64LE::Shdr &GnuHashSection = (*Sections)[*GnuHash];
+  const ELF64LE::Shdr &HashSection = (*Sections)[*Hash];
+  const ELF64LE::Shdr &DynamicSection = (*Sections)[*Dynamic];
+  if (DynsymSection.sh_link != *Dynstr || GnuHashSection.sh_link != *Dynsym ||
+      HashSection.sh_link != *Dynsym || DynamicSection.sh_link != *Dynstr)
+    return analysisError("dynamic loader section links are inconsistent");
+  if (Error ErrorValue = Loader.validateExactSegment(
+          DynamicSection, *Loader.DynamicTable, ".dynamic"))
+    return ErrorValue;
+  for (const auto &[Section, Description] :
+       {std::pair<const ELF64LE::Shdr *, StringRef>(&DynsymSection, ".dynsym"),
+        std::pair<const ELF64LE::Shdr *, StringRef>(&DynstrSection, ".dynstr"),
+        std::pair<const ELF64LE::Shdr *, StringRef>(&GnuHashSection,
+                                                    ".gnu.hash"),
+        std::pair<const ELF64LE::Shdr *, StringRef>(&HashSection, ".hash")})
+    if (Error ErrorValue = Loader.validateSection(*Section, Description))
+      return ErrorValue;
+
+  if (DynsymSection.sh_entsize != sizeof(ELF64LE::Sym) ||
+      DynsymSection.sh_size % sizeof(ELF64LE::Sym) != 0)
+    return analysisError(".dynsym has invalid entry geometry");
+  const uint64_t SymbolCount = DynsymSection.sh_size / sizeof(ELF64LE::Sym);
+  if (SymbolCount == 0 || SymbolCount > MaxSymbolsPerTable)
+    return analysisError(".dynsym symbol count is outside bounded profile");
+
+  auto HashBytes =
+      Loader.bytes(HashSection.sh_addr, HashSection.sh_size, ELF::PF_R,
+                   ELF::PF_W | ELF::PF_X, HashSection.sh_offset, ".hash");
+  if (!HashBytes)
+    return HashBytes.takeError();
+  if (HashBytes->size() < 8 || HashBytes->size() % 4 != 0)
+    return analysisError(".hash geometry is invalid");
+  uint64_t BucketCount = support::endian::read32le(HashBytes->data());
+  uint64_t ChainCount = support::endian::read32le(HashBytes->data() + 4);
+  if (BucketCount == 0 || ChainCount != SymbolCount ||
+      BucketCount >
+          (std::numeric_limits<uint64_t>::max() / 4) - ChainCount - 2 ||
+      HashBytes->size() != (2 + BucketCount + ChainCount) * 4)
+    return analysisError(".hash does not exactly describe .dynsym");
+
+  auto GnuHashBytes = Loader.bytes(
+      GnuHashSection.sh_addr, GnuHashSection.sh_size, ELF::PF_R,
+      ELF::PF_W | ELF::PF_X, GnuHashSection.sh_offset, ".gnu.hash");
+  if (!GnuHashBytes)
+    return GnuHashBytes.takeError();
+  if (GnuHashBytes->size() < 16)
+    return analysisError(".gnu.hash geometry is invalid");
+  uint64_t GnuBucketCount = support::endian::read32le(GnuHashBytes->data());
+  uint64_t SymbolOffset = support::endian::read32le(GnuHashBytes->data() + 4);
+  uint64_t BloomCount = support::endian::read32le(GnuHashBytes->data() + 8);
+  if (GnuBucketCount == 0 || BloomCount == 0 || SymbolOffset > SymbolCount ||
+      BloomCount > (std::numeric_limits<uint64_t>::max() - 16) / 8 ||
+      GnuBucketCount >
+          (std::numeric_limits<uint64_t>::max() - 16 - BloomCount * 8) / 4)
+    return analysisError(".gnu.hash header is outside bounded profile");
+  uint64_t PrefixBytes = 16 + BloomCount * 8 + GnuBucketCount * 4;
+  uint64_t ChainCountGnu = SymbolCount - SymbolOffset;
+  if (ChainCountGnu >
+          (std::numeric_limits<uint64_t>::max() - PrefixBytes) / 4 ||
+      GnuHashBytes->size() != PrefixBytes + ChainCountGnu * 4)
+    return analysisError(".gnu.hash does not exactly describe .dynsym");
+  for (uint64_t Index = 0; Index < GnuBucketCount; ++Index) {
+    uint32_t Bucket = support::endian::read32le(GnuHashBytes->data() + 16 +
+                                                BloomCount * 8 + Index * 4);
+    if (Bucket != 0 && (Bucket < SymbolOffset || Bucket >= SymbolCount))
+      return analysisError(".gnu.hash bucket is outside .dynsym");
+  }
+
+  if (DynamicSection.sh_entsize != sizeof(ELF64LE::Dyn) ||
+      DynamicSection.sh_size % sizeof(ELF64LE::Dyn) != 0 ||
+      DynamicSection.sh_size / sizeof(ELF64LE::Dyn) > 256)
+    return analysisError("dynamic table exceeds bounded profile");
+  auto Entries = File.getSectionContentsAsArray<ELF64LE::Dyn>(DynamicSection);
+  if (!Entries)
+    return Entries.takeError();
+  std::map<int64_t, uint64_t> Tags;
+  bool Terminated = false;
+  for (const ELF64LE::Dyn &Entry : *Entries) {
+    int64_t Tag = Entry.getTag();
+    if (Tag == ELF::DT_NULL) {
+      if (Terminated)
+        return analysisError("dynamic table has duplicate terminators");
+      Terminated = true;
+      continue;
+    }
+    if (Terminated)
+      return analysisError("dynamic table has declarations after DT_NULL");
+    if (isRelocationDynamicTag(Tag))
+      return analysisError("dynamic relocation table is unsupported");
+    if (Tag != ELF::DT_SYMTAB && Tag != ELF::DT_SYMENT &&
+        Tag != ELF::DT_STRTAB && Tag != ELF::DT_STRSZ &&
+        Tag != ELF::DT_GNU_HASH && Tag != ELF::DT_HASH)
+      return analysisError("dynamic declaration is outside bounded profile");
+    if (!Tags.emplace(Tag, Entry.getVal()).second)
+      return analysisError("dynamic table repeats a declaration");
+  }
+  if (!Terminated || Tags.size() != 6 ||
+      Tags[ELF::DT_SYMTAB] != DynsymSection.sh_addr ||
+      Tags[ELF::DT_SYMENT] != sizeof(ELF64LE::Sym) ||
+      Tags[ELF::DT_STRTAB] != DynstrSection.sh_addr ||
+      Tags[ELF::DT_STRSZ] != DynstrSection.sh_size ||
+      Tags[ELF::DT_GNU_HASH] != GnuHashSection.sh_addr ||
+      Tags[ELF::DT_HASH] != HashSection.sh_addr)
+    return analysisError(
+        "dynamic declarations disagree with loadable sections");
+
+  return DynamicLoaderSections{*Dynsym, *Dynstr, *GnuHash, *Hash, *Dynamic};
 }
 
 Expected<ArrayRef<uint8_t>> symbolBytes(const SymbolRecord &Symbol) {
@@ -1730,8 +1928,9 @@ Expected<PhysicalMachineEffectEvidence> analyzeGfx942PhysicalMachineEffects(
   auto Loader = buildLoaderView(*Object, Request.Payload);
   if (!Loader)
     return Loader.takeError();
-  if (Error ErrorValue = validateRelocations(*Object))
-    return ErrorValue;
+  auto DynamicLoader = validateDynamicLoaderView(*Object, *Loader);
+  if (!DynamicLoader)
+    return DynamicLoader.takeError();
 
   auto Metadata = readMetadata(*Object, *Loader);
   if (!Metadata)
@@ -1742,7 +1941,7 @@ Expected<PhysicalMachineEffectEvidence> analyzeGfx942PhysicalMachineEffects(
     if ((*Metadata)[I].Name != Request.Entries[I].Symbol)
       return analysisError("metadata entry symbol differs from request");
 
-  auto Symbols = readSymbols(*Object, *Loader, *Metadata);
+  auto Symbols = readSymbols(*Object, *Loader, *DynamicLoader, *Metadata);
   if (!Symbols)
     return Symbols.takeError();
 

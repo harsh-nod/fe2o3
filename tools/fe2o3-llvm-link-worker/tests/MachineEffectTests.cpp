@@ -421,9 +421,11 @@ struct DecodedSite {
 struct ElfMutationLayout {
   std::vector<size_t> ExecutableProgramHeaders;
   std::vector<size_t> NonLoadProgramHeaders;
+  std::map<uint32_t, std::vector<size_t>> ProgramHeaders;
   std::map<std::string, size_t> SectionHeaders;
   std::map<std::string, uint32_t> SectionIndices;
   std::map<std::pair<uint32_t, std::string>, size_t> Symbols;
+  std::map<int64_t, size_t> DynamicEntries;
 };
 
 size_t payloadOffset(ArrayRef<uint8_t> Payload, const void *Pointer,
@@ -452,6 +454,7 @@ ElfMutationLayout inspectElfMutationLayout(ArrayRef<uint8_t> Payload) {
   ElfMutationLayout Result;
   for (const ELF64LE::Phdr &Header : *Headers) {
     size_t Offset = payloadOffset(Payload, &Header, sizeof(Header));
+    Result.ProgramHeaders[Header.p_type].push_back(Offset);
     if (Header.p_type == ELF::PT_LOAD && (Header.p_flags & ELF::PF_X) != 0)
       Result.ExecutableProgramHeaders.push_back(Offset);
     else if (Header.p_type != ELF::PT_LOAD)
@@ -469,6 +472,17 @@ ElfMutationLayout inspectElfMutationLayout(ArrayRef<uint8_t> Payload) {
     Result.SectionHeaders.emplace(
         Name->str(), payloadOffset(Payload, &Section, sizeof(Section)));
     Result.SectionIndices.emplace(Name->str(), static_cast<uint32_t>(Index));
+    if (Section.sh_type == ELF::SHT_DYNAMIC) {
+      auto Entries = File.getSectionContentsAsArray<ELF64LE::Dyn>(Section);
+      if (!Entries)
+        fail(takeError(Entries.takeError()));
+      for (const ELF64LE::Dyn &Entry : *Entries)
+        require(Result.DynamicEntries
+                    .emplace(Entry.getTag(),
+                             payloadOffset(Payload, &Entry, sizeof(Entry)))
+                    .second,
+                "fixture dynamic table has duplicate tags");
+    }
     if (Section.sh_type != ELF::SHT_SYMTAB &&
         Section.sh_type != ELF::SHT_DYNSYM)
       continue;
@@ -667,6 +681,9 @@ void loaderViewMutationsFailClosed() {
           "fixture does not have one executable PT_LOAD");
   require(!Layout.NonLoadProgramHeaders.empty(),
           "fixture lacks a non-PT_LOAD header for alias repro");
+  require(Layout.ProgramHeaders[ELF::PT_NOTE].size() == 1 &&
+              Layout.ProgramHeaders[ELF::PT_DYNAMIC].size() == 1,
+          "fixture lacks exact PT_NOTE/PT_DYNAMIC views");
   require(Layout.SectionHeaders.contains(".text") &&
               Layout.SectionHeaders.contains(".note") &&
               Layout.SectionHeaders.contains(".symtab") &&
@@ -681,6 +698,16 @@ void loaderViewMutationsFailClosed() {
           "fixture lacks alpha in both symbol tables");
 
   const size_t Executable = Layout.ExecutableProgramHeaders.front();
+  const size_t NoteProgramHeader =
+      Layout.ProgramHeaders.at(ELF::PT_NOTE).front();
+  const size_t DynamicProgramHeader =
+      Layout.ProgramHeaders.at(ELF::PT_DYNAMIC).front();
+  auto SpareProgramHeader =
+      llvm::find_if(Layout.NonLoadProgramHeaders, [&](size_t Offset) {
+        return Offset != NoteProgramHeader && Offset != DynamicProgramHeader;
+      });
+  require(SpareProgramHeader != Layout.NonLoadProgramHeaders.end(),
+          "fixture lacks a spare program header for duplicate-view repro");
   {
     std::vector<uint8_t> Mutated = Payload;
     support::endian::write64le(Mutated.data() + Executable + 32,
@@ -703,6 +730,59 @@ void loaderViewMutationsFailClosed() {
                Copy.begin());
     llvm::copy(Copy, Mutated.begin() + Layout.NonLoadProgramHeaders.front());
     requireRejectedWith(std::move(Mutated), "PT_LOAD virtual mappings overlap");
+  }
+  {
+    std::vector<uint8_t> Mutated = Payload;
+    support::endian::write32le(Mutated.data() + NoteProgramHeader,
+                               ELF::PT_NULL);
+    requireRejectedWith(
+        std::move(Mutated),
+        "bounded loader profile requires one PT_NOTE and one PT_DYNAMIC");
+  }
+  {
+    std::vector<uint8_t> Mutated = Payload;
+    llvm::copy(ArrayRef<uint8_t>(Mutated).slice(NoteProgramHeader,
+                                                sizeof(ELF64LE::Phdr)),
+               Mutated.begin() + *SpareProgramHeader);
+    requireRejectedWith(std::move(Mutated), "multiple PT_NOTE program headers");
+  }
+  {
+    std::vector<uint8_t> Mutated = Payload;
+    uint64_t Offset =
+        support::endian::read64le(Mutated.data() + NoteProgramHeader + 8);
+    support::endian::write64le(Mutated.data() + NoteProgramHeader + 8,
+                               Offset + 4);
+    requireRejectedWith(std::move(Mutated),
+                        "PT_NOTE and PT_LOAD file views disagree");
+  }
+  {
+    std::vector<uint8_t> Mutated = Payload;
+    support::endian::write32le(Mutated.data() + DynamicProgramHeader,
+                               ELF::PT_NULL);
+    requireRejectedWith(
+        std::move(Mutated),
+        "bounded loader profile requires one PT_NOTE and one PT_DYNAMIC");
+  }
+  {
+    std::vector<uint8_t> Mutated = Payload;
+    llvm::copy(ArrayRef<uint8_t>(Mutated).slice(DynamicProgramHeader,
+                                                sizeof(ELF64LE::Phdr)),
+               Mutated.begin() + *SpareProgramHeader);
+    requireRejectedWith(std::move(Mutated),
+                        "multiple PT_DYNAMIC program headers");
+  }
+  {
+    std::vector<uint8_t> Mutated = Payload;
+    uint64_t Size =
+        support::endian::read64le(Mutated.data() + DynamicProgramHeader + 32);
+    require(Size > sizeof(ELF64LE::Dyn),
+            "fixture PT_DYNAMIC is too small for alternate-view repro");
+    support::endian::write64le(Mutated.data() + DynamicProgramHeader + 32,
+                               Size - sizeof(ELF64LE::Dyn));
+    support::endian::write64le(Mutated.data() + DynamicProgramHeader + 40,
+                               Size - sizeof(ELF64LE::Dyn));
+    requireRejectedWith(std::move(Mutated),
+                        ".dynamic section and program-header views disagree");
   }
   {
     std::vector<uint8_t> Mutated = Payload;
@@ -744,6 +824,26 @@ void loaderViewMutationsFailClosed() {
                                Layout.SectionIndices.at(".text"));
     requireRejectedWith(std::move(Mutated),
                         "unsupported finalized-image relocations");
+  }
+  {
+    std::vector<uint8_t> Mutated = Payload;
+    size_t Entry = Layout.DynamicEntries.at(ELF::DT_STRTAB);
+    uint64_t Address = support::endian::read64le(Mutated.data() + Entry + 8);
+    support::endian::write64le(Mutated.data() + Entry + 8, Address + 1);
+    requireRejectedWith(std::move(Mutated),
+                        "dynamic declarations disagree with loadable sections");
+  }
+  {
+    std::vector<uint8_t> Mutated = Payload;
+    size_t Hash = Layout.SectionHeaders.at(".hash");
+    uint64_t Offset = support::endian::read64le(Mutated.data() + Hash + 24);
+    require(Offset + 8 <= Mutated.size(),
+            "fixture .hash bytes are outside payload");
+    uint32_t ChainCount =
+        support::endian::read32le(Mutated.data() + Offset + 4);
+    support::endian::write32le(Mutated.data() + Offset + 4, ChainCount + 1);
+    requireRejectedWith(std::move(Mutated),
+                        ".hash does not exactly describe .dynsym");
   }
   {
     std::vector<uint8_t> Mutated = Payload;
