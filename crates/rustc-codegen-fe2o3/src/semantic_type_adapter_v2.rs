@@ -1059,6 +1059,14 @@ impl ObservationMeterV2 {
         }
         Ok(())
     }
+
+    fn charge_text_repeated(
+        &mut self,
+        amount: usize,
+        repetitions: usize,
+    ) -> Result<(), SemanticTypeAdapterErrorV2> {
+        self.charge_text(amount.saturating_mul(repetitions))
+    }
 }
 
 fn normalize_and_preflight_layout_type<'tcx>(
@@ -1103,7 +1111,7 @@ fn normalize_and_preflight_layout_type<'tcx>(
     let mut total_variants = 0_u64;
 
     while let Some((current, depth)) = stack.pop() {
-        meter.charge_work("rustc layout preflight work", 1)?;
+        meter.charge_work("rustc layout preflight and extraction work", 2)?;
         if depth > EXTRACTION_MAX_DEPTH as u32 {
             return Err(SemanticTypeAdapterErrorV2::BoundExceeded {
                 resource: "rustc layout depth",
@@ -1111,23 +1119,24 @@ fn normalize_and_preflight_layout_type<'tcx>(
                 max: EXTRACTION_MAX_DEPTH,
             });
         }
-        if seen.contains(&current) {
-            continue;
+        let first_visit = !seen.contains(&current);
+        if first_visit {
+            if seen.len() >= max_nodes {
+                return Err(SemanticTypeAdapterErrorV2::BoundExceeded {
+                    resource: "rustc layout preflight nodes",
+                    actual: seen.len().saturating_add(1) as u64,
+                    max: max_nodes as u64,
+                });
+            }
+            seen.try_reserve(1)
+                .map_err(|_| SemanticTypeAdapterErrorV2::AllocationFailed {
+                    resource: "rustc layout preflight visited set",
+                })?;
+            seen.insert(current);
+            meter.charge_work("rustc layout observation construction work", 2)?;
         }
-        if seen.len() >= max_nodes {
-            return Err(SemanticTypeAdapterErrorV2::BoundExceeded {
-                resource: "rustc layout preflight nodes",
-                actual: seen.len().saturating_add(1) as u64,
-                max: max_nodes as u64,
-            });
-        }
-        seen.try_reserve(1)
-            .map_err(|_| SemanticTypeAdapterErrorV2::AllocationFailed {
-                resource: "rustc layout preflight visited set",
-            })?;
-        seen.insert(current);
-        let name = bounded_type_name(current, budgets.graph.max_name_bytes)?;
-        meter.charge_text(name.len())?;
+        let name_bytes = bounded_type_name_length(current, budgets.graph.max_name_bytes)?;
+        meter.charge_text_repeated(name_bytes, if first_visit { 3 } else { 1 })?;
         let child_depth =
             depth
                 .checked_add(1)
@@ -1143,35 +1152,50 @@ fn normalize_and_preflight_layout_type<'tcx>(
             | TyKind::Ref(_, element, _)
             | TyKind::Pat(element, _) => push_preflight_type(&mut stack, element, child_depth)?,
             TyKind::Tuple(elements) => {
-                meter.charge_work("rustc layout preflight work", elements.len() as u64)?;
+                meter.charge_work(
+                    "rustc layout preflight and extraction work",
+                    (elements.len() as u64).saturating_mul(2),
+                )?;
                 for element in elements.iter().rev() {
                     push_preflight_type(&mut stack, element, child_depth)?;
                 }
             }
             TyKind::Adt(definition, arguments) => {
                 let variants = definition.variants();
-                total_variants = total_variants.saturating_add(variants.len() as u64);
-                if total_variants > u64::from(budgets.graph.max_variants) {
-                    return Err(SemanticTypeAdapterErrorV2::BoundExceeded {
-                        resource: "rustc layout preflight variants",
-                        actual: total_variants,
-                        max: u64::from(budgets.graph.max_variants),
-                    });
-                }
-                for variant in variants.iter().rev() {
-                    meter.charge_text(variant.name.as_str().len())?;
-                    total_fields = total_fields.saturating_add(variant.fields.len() as u64);
-                    if total_fields > u64::from(budgets.graph.max_fields) {
+                if first_visit {
+                    total_variants = total_variants.saturating_add(variants.len() as u64);
+                    if total_variants > u64::from(budgets.graph.max_variants) {
                         return Err(SemanticTypeAdapterErrorV2::BoundExceeded {
-                            resource: "rustc layout preflight fields",
-                            actual: total_fields,
-                            max: u64::from(budgets.graph.max_fields),
+                            resource: "rustc layout preflight variants",
+                            actual: total_variants,
+                            max: u64::from(budgets.graph.max_variants),
                         });
                     }
-                    meter
-                        .charge_work("rustc layout preflight work", variant.fields.len() as u64)?;
+                }
+                for variant in variants.iter().rev() {
+                    meter.charge_text_repeated(
+                        variant.name.as_str().len(),
+                        if first_visit { 2 } else { 1 },
+                    )?;
+                    if first_visit {
+                        total_fields = total_fields.saturating_add(variant.fields.len() as u64);
+                        if total_fields > u64::from(budgets.graph.max_fields) {
+                            return Err(SemanticTypeAdapterErrorV2::BoundExceeded {
+                                resource: "rustc layout preflight fields",
+                                actual: total_fields,
+                                max: u64::from(budgets.graph.max_fields),
+                            });
+                        }
+                    }
+                    meter.charge_work(
+                        "rustc layout preflight and extraction work",
+                        (variant.fields.len() as u64).saturating_mul(2),
+                    )?;
                     for field in variant.fields.iter().rev() {
-                        meter.charge_text(field.name.as_str().len())?;
+                        meter.charge_text_repeated(
+                            field.name.as_str().len(),
+                            if first_visit { 2 } else { 1 },
+                        )?;
                         let field_ty = field.ty(tcx, arguments);
                         let field_ty = tcx
                             .try_normalize_erasing_regions(typing_env, field_ty)
@@ -1187,6 +1211,7 @@ fn normalize_and_preflight_layout_type<'tcx>(
             _ => {}
         }
     }
+    meter.charge_work("rustc layout sidecar sorting work", sort_work(seen.len()))?;
     Ok((normalized, meter))
 }
 
@@ -2615,6 +2640,52 @@ impl fmt::Write for BoundedTypeNameWriter {
     }
 }
 
+struct BoundedTypeNameLengthWriter {
+    length: usize,
+    max_bytes: usize,
+    exceeded: bool,
+}
+
+impl fmt::Write for BoundedTypeNameLengthWriter {
+    fn write_str(&mut self, value: &str) -> fmt::Result {
+        let Some(length) = self.length.checked_add(value.len()) else {
+            self.exceeded = true;
+            return Err(fmt::Error);
+        };
+        if length > self.max_bytes {
+            self.exceeded = true;
+            return Err(fmt::Error);
+        }
+        self.length = length;
+        Ok(())
+    }
+}
+
+fn bounded_type_name_length(
+    ty: Ty<'_>,
+    max_bytes: u32,
+) -> Result<usize, SemanticTypeAdapterErrorV2> {
+    let max_bytes = max_bytes as usize;
+    let mut output = BoundedTypeNameLengthWriter {
+        length: 0,
+        max_bytes,
+        exceeded: false,
+    };
+    let rendered = with_no_trimmed_paths!(fmt::write(&mut output, format_args!("{ty}")));
+    if output.exceeded {
+        return Err(SemanticTypeAdapterErrorV2::BoundExceeded {
+            resource: "rustc type name bytes",
+            actual: max_bytes.saturating_add(1) as u64,
+            max: max_bytes as u64,
+        });
+    }
+    rendered.map_err(|_| SemanticTypeAdapterErrorV2::Inconsistent {
+        path: "root".to_owned(),
+        detail: "rustc type name measurement failed".to_owned(),
+    })?;
+    Ok(output.length)
+}
+
 fn bounded_type_name(ty: Ty<'_>, max_bytes: u32) -> Result<String, SemanticTypeAdapterErrorV2> {
     let max_bytes = max_bytes as usize;
     let mut text = String::new();
@@ -2693,6 +2764,20 @@ struct Transparent(u32);
 struct VeryLongNestedTypeNameForBoundedPreflight(u32);
 struct R { nested: VeryLongNestedTypeNameForBoundedPreflight }
 
+#[repr(C)] struct L0(u32);
+#[repr(C)] struct L1(L0, L0);
+#[repr(C)] struct L2(L1, L1);
+#[repr(C)] struct L3(L2, L2);
+#[repr(C)] struct L4(L3, L3);
+#[repr(C)] struct L5(L4, L4);
+#[repr(C)] struct L6(L5, L5);
+#[repr(C)] struct L7(L6, L6);
+#[repr(C)] struct L8(L7, L7);
+#[repr(C)] struct L9(L8, L8);
+#[repr(C)] struct L10(L9, L9);
+#[repr(C)] struct L11(L10, L10);
+#[repr(C)] struct L12(L11, L11);
+
 #[repr(u8)]
 enum Direct { Empty = 3, Payload(u32) = 9 }
 
@@ -2728,6 +2813,7 @@ static F64_VALUE: f64 = 13.0;
 static U128_VALUE: u128 = 17;
 static BOOL_VALUE: bool = true;
 static POINTER_NICHE: Option<&u8> = Some(&BYTE);
+static EXPANSION_VALUE: L12 = unsafe { core::mem::zeroed() };
 "#;
 
     #[derive(Default)]
@@ -2739,6 +2825,7 @@ static POINTER_NICHE: Option<&u8> = Some(&BYTE);
         name_bounded: Option<SemanticTypeAdapterErrorV2>,
         nested_name_bounded: Option<SemanticTypeAdapterErrorV2>,
         work_bounded: Option<SemanticTypeAdapterErrorV2>,
+        expansion_bounded: Option<SemanticTypeAdapterErrorV2>,
         path_bounded: Option<SemanticTypeAdapterErrorV2>,
         dst_bounded: Option<SemanticTypeAdapterErrorV2>,
         reobserved: bool,
@@ -2849,6 +2936,20 @@ static POINTER_NICHE: Option<&u8> = Some(&BYTE);
                 &observed,
                 SemanticTypeLayoutBudgetsV2 {
                     max_observation_work: 0,
+                    ..SemanticTypeLayoutBudgetsV2::default()
+                },
+            )
+            .err();
+            self.expansion_bounded = observe_rustc_type_layout_v2(
+                tcx,
+                local_static_type(tcx, "EXPANSION_VALUE"),
+                &observed,
+                SemanticTypeLayoutBudgetsV2 {
+                    graph: SemanticTypeGraphBudgetsV2 {
+                        max_nodes: 32_768,
+                        ..SemanticTypeGraphBudgetsV2::default()
+                    },
+                    max_observation_work: 200,
                     ..SemanticTypeLayoutBudgetsV2::default()
                 },
             )
@@ -3011,10 +3112,18 @@ static POINTER_NICHE: Option<&u8> = Some(&BYTE);
         assert!(matches!(
             results.work_bounded,
             Some(SemanticTypeAdapterErrorV2::BoundExceeded {
-                resource: "rustc layout preflight work",
-                actual: 1,
+                resource: "rustc layout preflight and extraction work",
+                actual: 2,
                 max: 0,
             })
+        ));
+        assert!(matches!(
+            results.expansion_bounded,
+            Some(SemanticTypeAdapterErrorV2::BoundExceeded {
+                resource: "rustc layout preflight and extraction work",
+                actual,
+                max: 200,
+            }) if actual > 200
         ));
         assert!(matches!(
             results.path_bounded,
