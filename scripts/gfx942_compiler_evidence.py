@@ -715,6 +715,7 @@ def run_environment(run: Path, path_dir: Path) -> dict[str, str]:
     return {
         "AR": os.fspath(path_dir / "ar"),
         "CARGO_HOME": os.fspath(run / "cargo-home"),
+        "CARGO_BUILD_JOBS": "8",
         "CARGO_INCREMENTAL": "0",
         "CARGO_NET_OFFLINE": "true",
         "CARGO_TARGET_DIR": os.fspath(run / "cargo-target"),
@@ -1966,6 +1967,12 @@ def build_and_run_hardware_observation(
             tools,
             supervisor,
             capture=True,
+            limits=CommandLimits(
+                timeout_seconds=600,
+                memory_bytes=16 * 1024 * 1024 * 1024,
+                processes=512,
+                cpu_seconds=600,
+            ),
         )
         executables: list[Path] = []
         for line in (build.stdout or b"").splitlines():
