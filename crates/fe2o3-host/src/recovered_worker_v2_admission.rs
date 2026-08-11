@@ -980,6 +980,12 @@ mod tests {
         )
     }
 
+    #[derive(Clone, Copy)]
+    enum DescriptorArgumentFixture {
+        SharedSlice,
+        DisjointSlice,
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn descriptor_table(
         kernel_id: DigestBytes,
@@ -991,10 +997,68 @@ mod tests {
         canonical_digest: [u8; 32],
         launch: LaunchConstraintsV1,
     ) -> DeviceDescriptorTableV1 {
-        let shared_source =
-            SourceTypeRecordV1::new(SourceTypeDescriptorV1::shared_slice(ScalarTypeV1::F32));
-        let shared_layout =
-            DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::shared_slice(ScalarTypeV1::F32));
+        descriptor_table_with_argument(
+            kernel_id,
+            logical_name,
+            entry_name,
+            source_digest,
+            executable_digest,
+            target,
+            canonical_digest,
+            launch,
+            DescriptorArgumentFixture::SharedSlice,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn descriptor_table_with_argument(
+        kernel_id: DigestBytes,
+        logical_name: &str,
+        entry_name: &str,
+        source_digest: DigestBytes,
+        executable_digest: DigestBytes,
+        target: &str,
+        canonical_digest: [u8; 32],
+        launch: LaunchConstraintsV1,
+        argument_fixture: DescriptorArgumentFixture,
+    ) -> DeviceDescriptorTableV1 {
+        let (source, layout, argument) = match argument_fixture {
+            DescriptorArgumentFixture::SharedSlice => {
+                let source = SourceTypeRecordV1::new(SourceTypeDescriptorV1::shared_slice(
+                    ScalarTypeV1::F32,
+                ));
+                let layout = DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::shared_slice(
+                    ScalarTypeV1::F32,
+                ));
+                let argument = LogicalArgumentV1::shared_slice(
+                    0,
+                    descriptor_name("values"),
+                    &source,
+                    &layout,
+                    0,
+                )
+                .unwrap();
+                (source, layout, argument)
+            }
+            DescriptorArgumentFixture::DisjointSlice => {
+                let source = SourceTypeRecordV1::new(SourceTypeDescriptorV1::disjoint_slice(
+                    ScalarTypeV1::F32,
+                ));
+                let layout = DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::disjoint_slice(
+                    ScalarTypeV1::F32,
+                ));
+                let argument = LogicalArgumentV1::disjoint_slice(
+                    0,
+                    descriptor_name("values"),
+                    &source,
+                    &layout,
+                    fe2o3_kernel_descriptor::AccessMode::ReadWrite,
+                    0,
+                )
+                .unwrap();
+                (source, layout, argument)
+            }
+        };
         let descriptor = KernelDescriptorV1::new(
             KernelId::from_bytes(*kernel_id.as_bytes()),
             descriptor_name(logical_name),
@@ -1005,16 +1069,7 @@ mod tests {
             vec![],
             KernelAbiLayoutV1::new(16, 272, 8).unwrap(),
             launch,
-            vec![
-                LogicalArgumentV1::shared_slice(
-                    0,
-                    descriptor_name("values"),
-                    &shared_source,
-                    &shared_layout,
-                    0,
-                )
-                .unwrap(),
-            ],
+            vec![argument],
         )
         .unwrap();
         DeviceDescriptorTableV1::new(
@@ -1030,8 +1085,8 @@ mod tests {
                 descriptor_text("test"),
             ),
             DeviceTargetV1::parse(target).unwrap(),
-            vec![shared_source],
-            vec![shared_layout],
+            vec![source],
+            vec![layout],
             vec![descriptor],
         )
         .unwrap()
@@ -1157,6 +1212,7 @@ mod tests {
             descriptor_launch(include_required_workgroup_size),
             [Some(65_535), Some(1), Some(1)],
             false,
+            DescriptorArgumentFixture::SharedSlice,
         )
     }
 
@@ -1171,6 +1227,7 @@ mod tests {
         descriptor_launch: LaunchConstraintsV1,
         max_workgroups: [Option<u32>; 3],
         include_dynamic_lds_size: bool,
+        argument_fixture: DescriptorArgumentFixture,
     ) -> RecoveryFixture {
         let source_digest = digest(seed.wrapping_add(0x40));
         let executable_digest = digest(seed.wrapping_add(0x50));
@@ -1185,7 +1242,7 @@ mod tests {
             &abi,
             &artifact_launch,
         );
-        let final_raw_table = descriptor_table(
+        let final_raw_table = descriptor_table_with_argument(
             kernel_id,
             "logical_primary",
             "vecadd",
@@ -1194,6 +1251,7 @@ mod tests {
             REQUIRED_GFX942_TEST_TARGET,
             [0; 32],
             descriptor_launch.clone(),
+            argument_fixture,
         );
         let final_raw = canonical_hsaco_fixture::with_descriptor_table_and_launch_metadata(
             REQUIRED_GFX942_TEST_TARGET,
@@ -1212,7 +1270,7 @@ mod tests {
         let raw = if raw_target == "gfx942" {
             final_raw
         } else {
-            let substituted_raw_table = descriptor_table(
+            let substituted_raw_table = descriptor_table_with_argument(
                 kernel_id,
                 "logical_primary",
                 "vecadd",
@@ -1221,6 +1279,7 @@ mod tests {
                 raw_target,
                 [0; 32],
                 descriptor_launch.clone(),
+                argument_fixture,
             );
             canonical_hsaco_fixture::with_descriptor_table_and_launch_metadata(
                 raw_target,
@@ -1247,7 +1306,7 @@ mod tests {
         let descriptor = if manifest_symbol == "vecadd" {
             embedded_descriptor
         } else {
-            descriptor_table(
+            descriptor_table_with_argument(
                 kernel_id,
                 "logical_primary",
                 manifest_symbol,
@@ -1256,6 +1315,7 @@ mod tests {
                 REQUIRED_GFX942_TEST_TARGET,
                 canonical_digest,
                 descriptor_launch,
+                argument_fixture,
             )
         };
         let kernel = &fixture.container.manifest().kernels()[0];
@@ -2939,6 +2999,34 @@ mod tests {
             descriptor_launch,
             max_workgroups,
             include_dynamic_lds_size,
+            DescriptorArgumentFixture::SharedSlice,
+        );
+        let recovered = recover_worker_v2_load_envelope_v1(
+            &fixture.output,
+            &fixture.envelope,
+            fixture.compiler_transaction.clone(),
+            fixture.kernel_id,
+            &fixture.observed,
+        )
+        .unwrap();
+        (fixture, recovered)
+    }
+
+    fn recovered_launch_bridge_fixture_with_descriptor_argument(
+        seed: u8,
+        argument_fixture: DescriptorArgumentFixture,
+    ) -> (RecoveryFixture, RecoveredWorkerV2PinnedDescriptorV1) {
+        let fixture = recovery_fixture_with_launch_contracts(
+            seed,
+            "gfx942",
+            "vecadd",
+            true,
+            true,
+            launch(),
+            descriptor_launch(true),
+            [Some(65_535), Some(1), Some(1)],
+            false,
+            argument_fixture,
         );
         let recovered = recover_worker_v2_load_envelope_v1(
             &fixture.output,
@@ -3168,6 +3256,40 @@ mod tests {
             Err(
                 crate::LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(
                     "artifact dynamic LDS limit"
+                )
+            )
+        ));
+    }
+
+    #[test]
+    fn launch_bridge_public_path_rejects_descriptor_abi_policy_substitution() {
+        let (_fixture, recovered) = recovered_launch_bridge_fixture_with_descriptor_argument(
+            98,
+            DescriptorArgumentFixture::DisjointSlice,
+        );
+        let (_model_fixture, model_recovered) = recovered_launch_bridge_fixture(98);
+        let family =
+            crate::launch_kernel_v2_bridge::canonical_family_for_recovered_launch_bridge_test(
+                &model_recovered,
+            );
+
+        assert_eq!(
+            recovered.artifact_identity().abi().fields()[0].ownership(),
+            fe2o3_artifacts::ArgumentOwnership::SharedBorrow
+        );
+        assert_eq!(
+            recovered.descriptor().arguments()[0].ownership(),
+            fe2o3_kernel_descriptor::OwnershipSemantics::UniqueBorrow
+        );
+        assert!(matches!(
+            crate::bind_current_recovered_launch_kernel_metadata_v2(
+                &recovered,
+                &family,
+                "recovered-exact-wave64"
+            ),
+            Err(
+                crate::LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(
+                    "artifact ABI argument ownership"
                 )
             )
         ));

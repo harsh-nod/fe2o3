@@ -5,8 +5,11 @@ use crate::{
 };
 use fe2o3_amd_target::{AmdTargetId, FeatureState};
 use fe2o3_artifacts::{
+    AbiField as ArtifactAbiField, AbiKind as ArtifactAbiKind, AbiLayout as ArtifactAbiLayout,
+    Access as ArtifactAccess, AddressSpace as ArtifactAddressSpace,
+    AliasClass as ArtifactAliasClass, ArgumentOwnership as ArtifactOwnership,
     BlockSize as ArtifactBlockSize, DigestAlgorithm, Endianness as ArtifactEndianness,
-    LaunchContract as ArtifactLaunchContract, PointerWidth,
+    LaunchContract as ArtifactLaunchContract, PointerWidth, ScalarType as ArtifactScalarType,
 };
 use fe2o3_hsaco::{CodeObjectVersion, ExplicitValueKind};
 use fe2o3_kernel_descriptor::{
@@ -280,7 +283,7 @@ fn derive_metadata(
     let target = derive_target(inspected_target, code_object_version, artifact)?;
     let artifact_identity = derive_artifact_identity(artifact)?;
     let kernel_identity = KernelIdentityV2::from_bytes(*descriptor.kernel_id().as_bytes());
-    let signature = derive_signature(descriptor, physical)?;
+    let signature = derive_signature(artifact.abi(), descriptor, physical)?;
     let launch = derive_launch_geometry(artifact.launch(), physical)?;
     let resources = derive_resources(artifact.launch(), physical)?;
     let occupancy_subject = canonical_occupancy_subject_identity_v2(
@@ -340,7 +343,187 @@ fn validate_descriptor_artifact_identity(
             return Err(LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(field));
         }
     }
-    validate_descriptor_artifact_launch(artifact.launch(), descriptor.launch())
+    validate_descriptor_artifact_launch(artifact.launch(), descriptor.launch())?;
+    validate_descriptor_artifact_abi(artifact.abi(), descriptor)
+}
+
+fn validate_descriptor_artifact_abi(
+    artifact: &ArtifactAbiLayout,
+    descriptor: &KernelDescriptorV1,
+) -> Result<(), LaunchKernelMetadataBridgeErrorV2> {
+    if artifact.fields().len() != descriptor.arguments().len() {
+        return Err(
+            LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(
+                "artifact ABI argument count",
+            ),
+        );
+    }
+    for (index, (field, argument)) in artifact
+        .fields()
+        .iter()
+        .zip(descriptor.arguments())
+        .enumerate()
+    {
+        if usize::from(argument.source_index()) != index {
+            return Err(
+                LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(
+                    "artifact ABI argument order",
+                ),
+            );
+        }
+        let checks = [
+            (
+                field.name().as_str() == argument.name().as_str(),
+                "artifact ABI argument name",
+            ),
+            (
+                artifact_ownership_matches(field.ownership(), argument.ownership()),
+                "artifact ABI argument ownership",
+            ),
+            (
+                artifact_access_matches(field.access(), argument.access()),
+                "artifact ABI argument access",
+            ),
+            (
+                artifact_alias_matches(field.alias_class(), argument.alias()),
+                "artifact ABI argument aliasing",
+            ),
+        ];
+        for (matches, name) in checks {
+            if !matches {
+                return Err(LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(name));
+            }
+        }
+        validate_artifact_argument_components(artifact, field, argument)?;
+    }
+    Ok(())
+}
+
+fn validate_artifact_argument_components(
+    artifact: &ArtifactAbiLayout,
+    field: &ArtifactAbiField,
+    argument: &fe2o3_kernel_descriptor::LogicalArgumentV1,
+) -> Result<(), LaunchKernelMetadataBridgeErrorV2> {
+    let components = argument.physical_components().collect::<Vec<_>>();
+    let field_offset = u32::try_from(field.offset())
+        .map_err(|_| LaunchKernelMetadataBridgeErrorV2::NumericOverflow("artifact ABI offset"))?;
+    let field_size = u16::try_from(field.size())
+        .map_err(|_| LaunchKernelMetadataBridgeErrorV2::NumericOverflow("artifact ABI size"))?;
+    let field_alignment = u16::try_from(field.alignment()).map_err(|_| {
+        LaunchKernelMetadataBridgeErrorV2::NumericOverflow("artifact ABI alignment")
+    })?;
+    let pointer_bytes = u16::try_from(artifact.pointer_width().bytes()).map_err(|_| {
+        LaunchKernelMetadataBridgeErrorV2::NumericOverflow("artifact ABI pointer width")
+    })?;
+    let matches = match field.kind() {
+        ArtifactAbiKind::Scalar(scalar) => {
+            components.as_slice()
+                == [(
+                    PhysicalAbiComponentKind::ScalarByValue(descriptor_scalar(scalar)),
+                    field_offset,
+                    field_size,
+                    field_alignment,
+                )]
+        }
+        ArtifactAbiKind::Pointer { .. } => {
+            field.address_space() == ArtifactAddressSpace::Global
+                && components.as_slice()
+                    == [(
+                        PhysicalAbiComponentKind::GlobalPointer,
+                        field_offset,
+                        pointer_bytes,
+                        field_alignment,
+                    )]
+        }
+        ArtifactAbiKind::Slice { .. } => {
+            let length_offset = field_offset.checked_add(u32::from(pointer_bytes)).ok_or(
+                LaunchKernelMetadataBridgeErrorV2::NumericOverflow(
+                    "artifact ABI slice length offset",
+                ),
+            )?;
+            field.address_space() == ArtifactAddressSpace::Global
+                && field_size == pointer_bytes.saturating_mul(2)
+                && components.as_slice()
+                    == [
+                        (
+                            PhysicalAbiComponentKind::GlobalPointer,
+                            field_offset,
+                            pointer_bytes,
+                            field_alignment,
+                        ),
+                        (
+                            PhysicalAbiComponentKind::SliceLengthU64,
+                            length_offset,
+                            pointer_bytes,
+                            field_alignment,
+                        ),
+                    ]
+        }
+    };
+    if !matches {
+        return Err(
+            LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(
+                "artifact ABI physical components",
+            ),
+        );
+    }
+    Ok(())
+}
+
+const fn descriptor_scalar(value: ArtifactScalarType) -> ScalarTypeV1 {
+    match value {
+        ArtifactScalarType::I8 => ScalarTypeV1::I8,
+        ArtifactScalarType::U8 => ScalarTypeV1::U8,
+        ArtifactScalarType::I16 => ScalarTypeV1::I16,
+        ArtifactScalarType::U16 => ScalarTypeV1::U16,
+        ArtifactScalarType::I32 => ScalarTypeV1::I32,
+        ArtifactScalarType::U32 => ScalarTypeV1::U32,
+        ArtifactScalarType::I64 => ScalarTypeV1::I64,
+        ArtifactScalarType::U64 => ScalarTypeV1::U64,
+        ArtifactScalarType::F16 => ScalarTypeV1::F16,
+        ArtifactScalarType::F32 => ScalarTypeV1::F32,
+        ArtifactScalarType::F64 => ScalarTypeV1::F64,
+    }
+}
+
+const fn artifact_ownership_matches(
+    artifact: ArtifactOwnership,
+    descriptor: OwnershipSemantics,
+) -> bool {
+    matches!(
+        (artifact, descriptor),
+        (ArtifactOwnership::ByValue, OwnershipSemantics::ByValue)
+            | (
+                ArtifactOwnership::SharedBorrow,
+                OwnershipSemantics::SharedBorrow
+            )
+            | (
+                ArtifactOwnership::UniqueBorrow,
+                OwnershipSemantics::UniqueBorrow
+            )
+    )
+}
+
+const fn artifact_access_matches(artifact: ArtifactAccess, descriptor: AccessMode) -> bool {
+    matches!(
+        (artifact, descriptor),
+        (ArtifactAccess::ByValue, AccessMode::ByValue)
+            | (ArtifactAccess::ReadOnly, AccessMode::ReadOnly)
+            | (ArtifactAccess::WriteOnly, AccessMode::WriteOnly)
+            | (ArtifactAccess::ReadWrite, AccessMode::ReadWrite)
+    )
+}
+
+const fn artifact_alias_matches(artifact: ArtifactAliasClass, descriptor: AliasSemantics) -> bool {
+    matches!(
+        (artifact, descriptor),
+        (ArtifactAliasClass::Value, AliasSemantics::Value)
+            | (
+                ArtifactAliasClass::SharedReadOnly,
+                AliasSemantics::SharedReadOnly
+            )
+            | (ArtifactAliasClass::Exclusive, AliasSemantics::Exclusive)
+    )
 }
 
 fn validate_descriptor_artifact_launch(
@@ -455,12 +638,13 @@ fn derive_artifact_identity(
 }
 
 fn derive_signature(
+    artifact_abi: &ArtifactAbiLayout,
     descriptor: &KernelDescriptorV1,
     physical: &PublishedKernelPhysicalLayoutV1,
 ) -> Result<KernelSignatureV2, LaunchKernelMetadataBridgeErrorV2> {
     let mut parameters = Vec::with_capacity(physical.arguments().len());
     let mut physical_index = 0_usize;
-    for argument in descriptor.arguments() {
+    for (artifact_field, argument) in artifact_abi.fields().iter().zip(descriptor.arguments()) {
         for (component_index, (kind, offset, size, alignment)) in
             argument.physical_components().enumerate()
         {
@@ -469,7 +653,7 @@ fn derive_signature(
                     "physical argument count",
                 ),
             )?;
-            let model_kind = model_parameter_kind(kind, argument.ownership())?;
+            let model_kind = model_parameter_kind(kind, artifact_field.ownership())?;
             validate_physical_component(kind, offset, size, alignment, physical_argument)?;
             let source_index = u16::try_from(physical_index).map_err(|_| {
                 LaunchKernelMetadataBridgeErrorV2::NumericOverflow("physical argument index")
@@ -479,6 +663,7 @@ fn derive_signature(
                 kind: model_kind,
                 semantic_type: derive_semantic_parameter_identity(
                     argument,
+                    artifact_field,
                     component_index,
                     kind,
                     offset,
@@ -519,16 +704,16 @@ fn derive_signature(
 
 fn model_parameter_kind(
     component: PhysicalAbiComponentKind,
-    ownership: OwnershipSemantics,
+    ownership: ArtifactOwnership,
 ) -> Result<AbiParameterKindV2, LaunchKernelMetadataBridgeErrorV2> {
     match component {
         PhysicalAbiComponentKind::ScalarByValue(_) | PhysicalAbiComponentKind::SliceLengthU64 => {
             Ok(AbiParameterKindV2::ByValue)
         }
         PhysicalAbiComponentKind::GlobalPointer => match ownership {
-            OwnershipSemantics::SharedBorrow => Ok(AbiParameterKindV2::SharedGlobalPointer),
-            OwnershipSemantics::UniqueBorrow => Ok(AbiParameterKindV2::UniqueGlobalPointer),
-            OwnershipSemantics::ByValue => {
+            ArtifactOwnership::SharedBorrow => Ok(AbiParameterKindV2::SharedGlobalPointer),
+            ArtifactOwnership::UniqueBorrow => Ok(AbiParameterKindV2::UniqueGlobalPointer),
+            ArtifactOwnership::ByValue | ArtifactOwnership::RawPointer => {
                 Err(LaunchKernelMetadataBridgeErrorV2::UnsupportedPhysicalAbi(
                     "by-value global pointer",
                 ))
@@ -574,6 +759,7 @@ fn validate_physical_component(
 
 fn derive_semantic_parameter_identity(
     argument: &fe2o3_kernel_descriptor::LogicalArgumentV1,
+    artifact: &ArtifactAbiField,
     component_index: usize,
     component: PhysicalAbiComponentKind,
     offset: u32,
@@ -582,6 +768,18 @@ fn derive_semantic_parameter_identity(
 ) -> SemanticTypeIdentityV2 {
     let mut digest = CanonicalDigestV2::new(SEMANTIC_PARAMETER_DOMAIN_V2);
     digest.u16(argument.source_index());
+    digest.bytes(artifact.name().as_str().as_bytes());
+    digest.u64(artifact.offset());
+    digest.u64(artifact.size());
+    digest.u32(artifact.alignment());
+    digest_artifact_kind(&mut digest, artifact.kind());
+    digest.u8(artifact_mutability_tag(artifact.mutability()));
+    digest.u8(artifact_ownership_tag(artifact.ownership()));
+    digest.u8(artifact_access_tag(artifact.access()));
+    digest.u8(artifact_address_space_tag(artifact.address_space()));
+    digest.u8(artifact_alias_tag(artifact.alias_class()));
+    digest.bytes(artifact.type_identity().rust_type().bytes().as_bytes());
+    digest.bytes(artifact.type_identity().layout().bytes().as_bytes());
     digest.bytes(argument.name().as_str().as_bytes());
     digest.bytes(argument.source_type().as_bytes());
     digest.bytes(argument.device_layout().as_bytes());
@@ -594,6 +792,79 @@ fn derive_semantic_parameter_identity(
     digest.u16(size);
     digest.u16(alignment);
     SemanticTypeIdentityV2::from_bytes(digest.finish())
+}
+
+fn digest_artifact_kind(digest: &mut CanonicalDigestV2, value: ArtifactAbiKind) {
+    match value {
+        ArtifactAbiKind::Scalar(scalar) => {
+            digest.u8(0);
+            digest.u8(component_tag(PhysicalAbiComponentKind::ScalarByValue(
+                descriptor_scalar(scalar),
+            )));
+        }
+        ArtifactAbiKind::Pointer {
+            pointee_size,
+            pointee_alignment,
+        } => {
+            digest.u8(1);
+            digest.u64(pointee_size);
+            digest.u32(pointee_alignment);
+        }
+        ArtifactAbiKind::Slice {
+            element_size,
+            element_alignment,
+        } => {
+            digest.u8(2);
+            digest.u64(element_size);
+            digest.u32(element_alignment);
+        }
+    }
+}
+
+const fn artifact_mutability_tag(value: fe2o3_artifacts::Mutability) -> u8 {
+    match value {
+        fe2o3_artifacts::Mutability::Immutable => 0,
+        fe2o3_artifacts::Mutability::Mutable => 1,
+    }
+}
+
+const fn artifact_ownership_tag(value: ArtifactOwnership) -> u8 {
+    match value {
+        ArtifactOwnership::ByValue => 0,
+        ArtifactOwnership::SharedBorrow => 1,
+        ArtifactOwnership::UniqueBorrow => 2,
+        ArtifactOwnership::RawPointer => 3,
+    }
+}
+
+const fn artifact_access_tag(value: ArtifactAccess) -> u8 {
+    match value {
+        ArtifactAccess::ByValue => 0,
+        ArtifactAccess::ReadOnly => 1,
+        ArtifactAccess::WriteOnly => 2,
+        ArtifactAccess::ReadWrite => 3,
+    }
+}
+
+const fn artifact_address_space_tag(value: ArtifactAddressSpace) -> u8 {
+    match value {
+        ArtifactAddressSpace::Value => 0,
+        ArtifactAddressSpace::Global => 1,
+        ArtifactAddressSpace::Constant => 2,
+        ArtifactAddressSpace::Workgroup => 3,
+        ArtifactAddressSpace::Private => 4,
+        ArtifactAddressSpace::Generic => 5,
+    }
+}
+
+const fn artifact_alias_tag(value: ArtifactAliasClass) -> u8 {
+    match value {
+        ArtifactAliasClass::Value => 0,
+        ArtifactAliasClass::SharedReadOnly => 1,
+        ArtifactAliasClass::Exclusive => 2,
+        ArtifactAliasClass::SharedAtomic => 3,
+        ArtifactAliasClass::Unrestricted => 4,
+    }
 }
 
 fn derive_signature_identity(signature: &KernelSignatureV2) -> KernelSignatureIdentityV2 {
