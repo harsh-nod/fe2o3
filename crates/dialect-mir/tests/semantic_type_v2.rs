@@ -1611,6 +1611,116 @@ fn nonzero_u8_ranges() -> Vec<ScalarValidityRangeV2> {
     vec![ScalarValidityRangeV2 { start: 1, end: 255 }]
 }
 
+fn build_niche_partition(
+    variant_count: u32,
+    untagged_variant: u32,
+    niche_variants_start: u32,
+    niche_variants_end: u32,
+    valid_start: u128,
+) -> Result<SemanticTypeGraphV2, SemanticTypeGraphErrorV2> {
+    let mut builder = SemanticTypeGraphBuilderV2::new(budgets());
+    let payload = builder.intern(
+        "NichePayload",
+        validity_scalar(
+            SemanticScalarV2::Int {
+                signed: false,
+                bits: 8,
+            },
+            1,
+            vec![ScalarValidityRangeV2 {
+                start: valid_start,
+                end: 255,
+            }],
+        ),
+    )?;
+    let variants = (0..variant_count)
+        .map(|index| SemanticVariantV2 {
+            name: format!("V{index}"),
+            discriminant: u128::from(index),
+            fields: if index == untagged_variant {
+                vec![named("payload", 0, payload)]
+            } else {
+                vec![]
+            },
+        })
+        .collect();
+    let root = builder.intern(
+        "PartitionedNiche",
+        SemanticTypeNodeV2 {
+            layout: SemanticTypeLayoutV2::sized(1, 1),
+            kind: SemanticTypeKindV2::Enum {
+                identity: "PartitionedNiche".into(),
+                discriminant: SemanticScalarV2::Int {
+                    signed: false,
+                    bits: 8,
+                },
+                encoding: SemanticEnumEncodingV2::Niche {
+                    source: first_field_niche_source(),
+                    niche_scalar: SemanticScalarV2::Int {
+                        signed: false,
+                        bits: 8,
+                    },
+                    valid_ranges: vec![ScalarValidityRangeV2 {
+                        start: valid_start,
+                        end: 255,
+                    }],
+                    untagged_variant,
+                    niche_variants_start,
+                    niche_variants_end,
+                    niche_start: 0,
+                },
+                variants,
+            },
+        },
+    )?;
+    builder.finish(root)
+}
+
+fn build_direct_partition(
+    tag_bits: u16,
+    payload_offset: u64,
+) -> Result<SemanticTypeGraphV2, SemanticTypeGraphErrorV2> {
+    let mut builder = SemanticTypeGraphBuilderV2::new(budgets());
+    let payload = builder.intern(
+        "u8",
+        scalar(
+            SemanticScalarV2::Int {
+                signed: false,
+                bits: 8,
+            },
+            1,
+        ),
+    )?;
+    let root = builder.intern(
+        "DirectControl",
+        SemanticTypeNodeV2 {
+            layout: SemanticTypeLayoutV2::sized(2, 1),
+            kind: SemanticTypeKindV2::Enum {
+                identity: "DirectControl".into(),
+                discriminant: SemanticScalarV2::Int {
+                    signed: false,
+                    bits: 8,
+                },
+                encoding: SemanticEnumEncodingV2::Direct {
+                    tag_offset: 0,
+                    tag: SemanticScalarV2::Int {
+                        signed: false,
+                        bits: tag_bits,
+                    },
+                },
+                variants: (0_u32..3)
+                    .map(|index| SemanticVariantV2 {
+                        name: format!("V{index}"),
+                        discriminant: u128::from(index),
+                        fields: vec![named("payload", payload_offset, payload)],
+                    })
+                    .collect(),
+            },
+        },
+    )?;
+    builder.finish(root)
+}
+
 #[test]
 fn niche_source_is_derived_through_nested_payload_layout() {
     let graph = build_nested_niche(
@@ -1625,6 +1735,57 @@ fn niche_source_is_derived_through_nested_payload_layout() {
     .unwrap();
     let encoded = graph.canonical_bytes().unwrap();
     SemanticTypeGraphV2::decode_canonical(&encoded, budgets()).unwrap();
+}
+
+#[test]
+fn niche_encoding_rejects_an_inhabited_omitted_third_variant() {
+    let expected = SemanticTypeGraphErrorV2::Invalid {
+        key: "PartitionedNiche".into(),
+        reason: "niche encoding must cover every non-untagged variant exactly once".into(),
+    };
+    assert_eq!(build_niche_partition(3, 1, 0, 0, 1).unwrap_err(), expected);
+}
+
+#[test]
+fn niche_partition_boundaries_are_exact_and_gapless() {
+    for (variant_count, untagged, start, end) in [(2, 1, 0, 0), (3, 2, 0, 1), (3, 0, 1, 2)] {
+        build_niche_partition(variant_count, untagged, start, end, 128).unwrap();
+    }
+
+    for (variant_count, untagged, start, end) in [(3, 2, 0, 3), (3, 2, 2, 1), (3, 1, 0, 1)] {
+        assert!(matches!(
+            build_niche_partition(variant_count, untagged, start, end, 128),
+            Err(SemanticTypeGraphErrorV2::Invalid { .. })
+        ));
+    }
+}
+
+#[test]
+fn niche_partition_rejects_holes_and_multiple_omitted_variants() {
+    let expected = SemanticTypeGraphErrorV2::Invalid {
+        key: "PartitionedNiche".into(),
+        reason: "niche encoding must cover every non-untagged variant exactly once".into(),
+    };
+    for arguments in [(4, 0, 1, 2), (6, 0, 1, 1), (6, 5, 3, 4)] {
+        assert_eq!(
+            build_niche_partition(arguments.0, arguments.1, arguments.2, arguments.3, 128,)
+                .unwrap_err(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn direct_tagged_encoding_controls_are_unchanged() {
+    build_direct_partition(8, 1).unwrap();
+    assert!(matches!(
+        build_direct_partition(1, 1),
+        Err(SemanticTypeGraphErrorV2::Invalid { .. })
+    ));
+    assert!(matches!(
+        build_direct_partition(8, 0),
+        Err(SemanticTypeGraphErrorV2::Invalid { .. })
+    ));
 }
 
 #[test]

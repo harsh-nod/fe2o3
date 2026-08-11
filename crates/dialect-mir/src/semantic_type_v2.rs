@@ -1458,6 +1458,13 @@ fn validate_enum(
                     "niche variant range and untagged variant must be valid and disjoint",
                 ));
             }
+            let count = u128::from(*niche_variants_end - *niche_variants_start) + 1;
+            if count + 1 != variants.len() as u128 {
+                return Err(invalid(
+                    key,
+                    "niche encoding must cover every non-untagged variant exactly once",
+                ));
+            }
             if valid_ranges.is_empty() {
                 return Err(invalid(key, "niche validity set must not be empty"));
             }
@@ -1475,7 +1482,6 @@ fn validate_enum(
                 }
                 previous_end = Some(range.end);
             }
-            let count = u128::from(*niche_variants_end - *niche_variants_start) + 1;
             let last = niche_start
                 .checked_add(count - 1)
                 .ok_or_else(|| invalid(key, "niche value range overflows u128"))?;
