@@ -513,6 +513,7 @@ fn artifact_dir(directory: &TestDirectory) -> PathBuf {
 struct StaticApplicationFixtures {
     protocol: PathBuf,
     host_consumer: PathBuf,
+    no_protocol: PathBuf,
 }
 
 fn static_application_fixtures() -> &'static StaticApplicationFixtures {
@@ -547,6 +548,8 @@ fn static_application_fixtures() -> &'static StaticApplicationFixtures {
                 "cargo-fe2o3-runner-app-fixture",
                 "--bin",
                 "cargo-fe2o3-host-consumer-app-fixture",
+                "--bin",
+                "cargo-fe2o3-runner-chain-fixture",
             ])
             .output()
             .unwrap();
@@ -555,6 +558,7 @@ fn static_application_fixtures() -> &'static StaticApplicationFixtures {
         StaticApplicationFixtures {
             protocol: directory.join("cargo-fe2o3-runner-app-fixture"),
             host_consumer: directory.join("cargo-fe2o3-host-consumer-app-fixture"),
+            no_protocol: directory.join("cargo-fe2o3-runner-chain-fixture"),
         }
     })
 }
@@ -565,6 +569,10 @@ fn application_fixture() -> &'static Path {
 
 fn host_consumer_application_fixture() -> &'static Path {
     &static_application_fixtures().host_consumer
+}
+
+fn no_protocol_application_fixture() -> &'static Path {
+    &static_application_fixtures().no_protocol
 }
 
 fn envelope_paths(directory: &TestDirectory) -> Vec<PathBuf> {
@@ -1250,8 +1258,9 @@ fn application_handoff_timeout_kills_and_reaps_descriptor_retaining_descendant()
 
     let report = directory.0.join("descendant-retention-report.json");
     let pid_file = directory.0.join("descriptor-retaining-descendant.pid");
+    let application = application_fixture();
     let started = Instant::now();
-    let rejected = application_runner_command(&directory, application_fixture(), &report)
+    let rejected = application_runner_command(&directory, application, &report)
         .env("RUNNER_FIXTURE_FORK_RETAIN_HANDOFF", "1")
         .env("RUNNER_FIXTURE_DESCENDANT_PID_FILE", &pid_file)
         .output()
@@ -1532,9 +1541,13 @@ fn application_handoff_rejects_child_protocol_substitution_and_omission() {
     }
 
     let absent_report = directory.0.join("absent-child-protocol.json");
-    let absent = application_runner_command(&directory, Path::new("/bin/true"), &absent_report)
-        .output()
-        .unwrap();
+    let absent = application_runner_command(
+        &directory,
+        no_protocol_application_fixture(),
+        &absent_report,
+    )
+    .output()
+    .unwrap();
     assert!(
         !absent.status.success(),
         "child without protocol support passed"

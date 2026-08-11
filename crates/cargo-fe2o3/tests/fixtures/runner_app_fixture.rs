@@ -17,7 +17,6 @@ use fe2o3_worker_v2_bundle::{
     WorkerV2ApplicationHandoffCommitmentV1, WorkerV2ApplicationHandoffExpectationV1,
     WorkerV2ApplicationIdentityV1, WorkerV2LoadEnvelopeV1,
 };
-use sha2::{Digest, Sha256};
 
 struct ValidatedHandoff {
     report: serde_json::Value,
@@ -182,13 +181,12 @@ fn validate_handoff() -> Result<ValidatedHandoff, String> {
     if envelope.to_bytes() != bytes {
         return Err("inherited envelope is not canonical".to_string());
     }
-    let child_sha256: [u8; 32] = Sha256::digest(
-        fs::read("/proc/self/exe").map_err(|error| format!("read child executable: {error}"))?,
-    )
-    .into();
+    let child =
+        fs::read("/proc/self/exe").map_err(|error| format!("read child executable: {error}"))?;
     let expectation = WorkerV2ApplicationHandoffExpectationV1::new(
         &envelope,
-        WorkerV2ApplicationIdentityV1::from_bytes(child_sha256),
+        WorkerV2ApplicationIdentityV1::from_sealed_static_elf_v1(&child)
+            .map_err(|error| format!("bind sealed-static child executable: {error}"))?,
     );
     let supplied_commitment = WorkerV2ApplicationHandoffCommitmentV1::from_hex(&commitment)
         .map_err(|error| format!("decode application handoff commitment: {error}"))?;
