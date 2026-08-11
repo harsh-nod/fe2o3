@@ -28,6 +28,11 @@ pub struct MirMem2RegFunctionReport {
     pub inserted_definitions: usize,
     pub fact_work_units: usize,
     pub liveness_storage_items: usize,
+    /// Deterministic for the same canonical executable-MIR encoding.
+    ///
+    /// Worklist scheduling follows canonical block identities, so an
+    /// otherwise equivalent body with different block numbering can report a
+    /// different count while remaining under the same hard limit.
     pub liveness_work_units: usize,
 }
 
