@@ -297,9 +297,19 @@ fn transient_remap_between_ready_and_done_is_outside_two_snapshot_guarantee() {
 
 #[test]
 fn failed_ack_delivery_terminates_and_reaps_worker() {
+    run_failed_ack_delivery_repeats(1);
+}
+
+#[test]
+#[ignore = "slow 30-run authenticated teardown stress"]
+fn failed_ack_delivery_terminates_and_reaps_worker_30_repeat_stress() {
+    run_failed_ack_delivery_repeats(30);
+}
+
+fn run_failed_ack_delivery_repeats(repeats: usize) {
     let directory = temp_dir("closed-ack");
     let worker = worker();
-    for iteration in 0..30 {
+    for iteration in 0..repeats {
         let pid_file = directory.join(format!("worker-{iteration}.pid"));
         let mut payload = vec![16];
         payload.extend_from_slice(pid_file.to_str().unwrap().as_bytes());
