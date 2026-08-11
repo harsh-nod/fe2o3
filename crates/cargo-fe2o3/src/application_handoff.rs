@@ -1163,10 +1163,24 @@ mod tests {
         ack.write_all(b"x").unwrap();
         drop(ack);
 
-        let descendant = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+        // SAFETY: the descendant branch performs only the async-signal-safe `pause` syscall. The
+        // parent fixture exits immediately; the outer subreaper owns bounded group cleanup.
+        let descendant = unsafe { libc::fork() };
+        assert!(
+            descendant >= 0,
+            "fork invalid-ACK descendant: {}",
+            io::Error::last_os_error()
+        );
+        if descendant == 0 {
+            unsafe {
+                loop {
+                    libc::pause();
+                }
+            }
+        }
         std::fs::write(
             std::env::var_os(INVALID_ACK_PID_FILE_ENV).unwrap(),
-            descendant.id().to_string(),
+            descendant.to_string(),
         )
         .unwrap();
     }
