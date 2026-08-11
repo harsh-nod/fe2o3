@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -888,29 +889,41 @@ fn rocm_clang_compiles_every_accepted_gfx942_scalar_path() {
     ));
     std::fs::create_dir(&root).unwrap();
     let llvm = root.join("all-scalar-paths.ll");
-    let object = root.join("all-scalar-paths.o");
     std::fs::write(&llvm, module).unwrap();
-    let output = Command::new("/opt/rocm/llvm/bin/clang")
-        .args([
-            "--target=amdgcn-amd-amdhsa",
-            "-mcpu=gfx942",
-            "-nogpulib",
-            "-O0",
-            "-x",
-            "ir",
-            "-c",
-        ])
-        .arg(&llvm)
-        .arg("-o")
-        .arg(&object)
-        .output()
-        .expect("run ROCm clang");
+    let clang = std::env::var_os("FE2O3_SCALAR_CLANG")
+        .unwrap_or_else(|| OsString::from("/opt/rocm/llvm/bin/clang"));
+    let mut failures = Vec::new();
+    for optimization in ["-O0", "-O2"] {
+        let object = root.join(format!("all-scalar-paths-{optimization}.o"));
+        let output = Command::new(&clang)
+            .args([
+                "--target=amdgcn-amd-amdhsa",
+                "-mcpu=gfx942",
+                "-nogpulib",
+                optimization,
+                "-x",
+                "ir",
+                "-c",
+            ])
+            .arg(&llvm)
+            .arg("-o")
+            .arg(&object)
+            .output()
+            .expect("run gfx942 clang");
+        if !output.status.success() {
+            failures.push(format!(
+                "{optimization}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+    }
     let cleanup = std::fs::remove_dir_all(&root);
     assert!(
-        output.status.success(),
-        "ROCm clang rejected {} accepted scalar paths:\n{}",
+        failures.is_empty(),
+        "{} rejected {} accepted scalar paths:\n{}",
+        clang.to_string_lossy(),
         operations.len(),
-        String::from_utf8_lossy(&output.stderr)
+        failures.join("\n")
     );
     cleanup.unwrap();
 }
