@@ -883,6 +883,107 @@ fn alignment_region_and_lds_bounds_are_exact() {
 }
 
 #[test]
+fn lds_layout_accounts_for_padding_and_binds_effective_alignment() {
+    let allocation = |id, bytes, alignment, elements| LdsAllocation {
+        id: LdsAllocationId(id),
+        kind: LdsAllocationKind::Static,
+        bytes,
+        alignment,
+        bank_count: 32,
+        bank_width: 4,
+        element_stride: 4,
+        elements,
+        swizzle: LdsSwizzle::Linear,
+    };
+    let allocations = vec![
+        allocation(0, 5, 1, 1),
+        allocation(1, 9, 16, 2),
+        allocation(2, 4, 8, 1),
+    ];
+    let report = SynchronizationModuleV2 {
+        target: TargetProfile::Gfx942Wave64,
+        lds_allocations: allocations.clone(),
+        events: vec![],
+        edges: vec![],
+    }
+    .validate(&SynchronizationLimits::default())
+    .unwrap();
+    let bases: Vec<_> = report
+        .obligations
+        .iter()
+        .filter_map(|obligation| match obligation {
+            VerifierObligation::LdsBankMapping {
+                allocation,
+                base_offset,
+                ..
+            } => Some((*allocation, *base_offset)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        bases,
+        vec![
+            (LdsAllocationId(0), 0),
+            (LdsAllocationId(1), 16),
+            (LdsAllocationId(2), 32),
+        ]
+    );
+
+    let tight = SynchronizationLimits {
+        max_total_lds_bytes: 35,
+        ..SynchronizationLimits::default()
+    };
+    assert_eq!(
+        SynchronizationModuleV2 {
+            target: TargetProfile::Gfx942Wave64,
+            lds_allocations: allocations.clone(),
+            events: vec![],
+            edges: vec![],
+        }
+        .validate(&tight),
+        Err(ValidationError::ResourceLimit {
+            resource: Resource::TotalLdsBytes,
+            observed: 36,
+            limit: 35,
+        })
+    );
+
+    let mut access = atomic(
+        AtomicOperation::Load,
+        u32_ty(),
+        AddressSpace::Lds,
+        MemoryScope::Workgroup,
+        MemoryOrdering::Relaxed,
+        None,
+        AtomicDialect::Rust,
+    );
+    access.region.allocation = 1;
+    access.alignment = 16;
+    assert!(
+        SynchronizationModuleV2 {
+            target: TargetProfile::Gfx942Wave64,
+            lds_allocations: allocations.clone(),
+            events: vec![event(0, EventKind::Atomic(access.clone()))],
+            edges: vec![],
+        }
+        .validate(&SynchronizationLimits::default())
+        .is_ok()
+    );
+    access.region.allocation = 0;
+    access.alignment = 4;
+    assert_eq!(
+        SynchronizationModuleV2 {
+            target: TargetProfile::Gfx942Wave64,
+            lds_allocations: allocations,
+            events: vec![event(0, EventKind::Atomic(access))],
+            edges: vec![],
+        }
+        .validate(&SynchronizationLimits::default()),
+        Err(ValidationError::InvalidAlignment(EventId(0)))
+    );
+}
+
+#[test]
 fn barriers_fences_and_participation_contracts_reject_divergence() {
     let limits = SynchronizationLimits::default();
     for ordering in ORDERINGS {
@@ -1603,4 +1704,186 @@ fn schema_is_inert_and_makes_no_race_or_lowering_claim() {
     assert!(SYNCHRONIZATION_V2_LIMITATIONS.contains("race-freedom proof"));
     assert!(SYNCHRONIZATION_V2_LIMITATIONS.contains("uniformity proof"));
     assert!(SYNCHRONIZATION_V2_LIMITATIONS.contains("happens-before proof"));
+}
+
+#[test]
+fn review_counterexamples_are_repaired_incrementally() {
+    let limits = SynchronizationLimits::default();
+
+    let allocations = (0..508)
+        .map(|id| LdsAllocation {
+            id: LdsAllocationId(id),
+            kind: LdsAllocationKind::Static,
+            bytes: 129,
+            alignment: 16,
+            bank_count: 32,
+            bank_width: 4,
+            element_stride: 4,
+            elements: 32,
+            swizzle: LdsSwizzle::Linear,
+        })
+        .collect();
+    assert_eq!(
+        SynchronizationModuleV2 {
+            target: TargetProfile::Gfx942Wave64,
+            lds_allocations: allocations,
+            events: vec![],
+            edges: vec![],
+        }
+        .validate(&limits),
+        Err(ValidationError::ResourceLimit {
+            resource: Resource::TotalLdsBytes,
+            observed: 73_137,
+            limit: 65_536,
+        })
+    );
+
+    let mut under_aligned = lds_allocation();
+    under_aligned.alignment = 1;
+    let mut lds_access = atomic(
+        AtomicOperation::Load,
+        i64_ty(),
+        AddressSpace::Lds,
+        MemoryScope::Workgroup,
+        MemoryOrdering::Relaxed,
+        None,
+        AtomicDialect::Rust,
+    );
+    lds_access.alignment = 8;
+    assert_eq!(
+        SynchronizationModuleV2 {
+            target: TargetProfile::Gfx942Wave64,
+            lds_allocations: vec![under_aligned],
+            events: vec![event(0, EventKind::Atomic(lds_access))],
+            edges: vec![],
+        }
+        .validate(&limits),
+        Err(ValidationError::InvalidAlignment(EventId(0)))
+    );
+
+    let writes = [9, 10]
+        .into_iter()
+        .enumerate()
+        .map(|(id, allocation)| {
+            event(
+                id as u32,
+                EventKind::NonAtomic(NonAtomicAccess {
+                    region: MemoryRegion {
+                        allocation,
+                        offset: 0,
+                        bytes: 4,
+                    },
+                    kind: AccessKind::Write,
+                    value_type: u32_ty(),
+                    address_space: AddressSpace::Global,
+                    alignment: 4,
+                }),
+            )
+        })
+        .collect();
+    let report = module(writes).validate(&limits).unwrap();
+    assert!(
+        !report
+            .obligations
+            .iter()
+            .any(|obligation| matches!(obligation, VerifierObligation::NonAtomicConflict { .. }))
+    );
+
+    let widened = SynchronizationLimits {
+        max_workgroup_participants: 2_048,
+        ..limits
+    };
+    let oversized = Event {
+        id: EventId(0),
+        participation: ParticipationContract {
+            group: GroupKind::Workgroup,
+            convergence: ConvergenceContract::UniformRequired,
+            expected_participants: 1_025,
+            active_mask: None,
+        },
+        kind: EventKind::Barrier(Barrier {
+            kind: BarrierKind::Workgroup,
+            scope: MemoryScope::Workgroup,
+            ordering: MemoryOrdering::AcquireRelease,
+            domains: MemoryDomains::LDS,
+        }),
+    };
+    assert!(module(vec![oversized]).validate(&widened).is_ok());
+
+    let load_report = atomic_module(atomic(
+        AtomicOperation::Load,
+        u32_ty(),
+        AddressSpace::Global,
+        MemoryScope::System,
+        MemoryOrdering::Acquire,
+        None,
+        AtomicDialect::Rust,
+    ))
+    .validate(&limits)
+    .unwrap();
+    let store_report = atomic_module(atomic(
+        AtomicOperation::Store,
+        u32_ty(),
+        AddressSpace::Global,
+        MemoryScope::System,
+        MemoryOrdering::Release,
+        None,
+        AtomicDialect::Rust,
+    ))
+    .validate(&limits)
+    .unwrap();
+    assert_eq!(load_report, store_report);
+
+    let collective_add = module(vec![Event {
+        id: EventId(0),
+        participation: ParticipationContract::full_subgroup(64),
+        kind: EventKind::Collective(Collective {
+            kind: CollectiveKind::ReduceAdd,
+            value_type: u32_ty(),
+        }),
+    }])
+    .validate(&limits)
+    .unwrap();
+    let collective_min = module(vec![Event {
+        id: EventId(0),
+        participation: ParticipationContract::full_subgroup(64),
+        kind: EventKind::Collective(Collective {
+            kind: CollectiveKind::ReduceMin,
+            value_type: u32_ty(),
+        }),
+    }])
+    .validate(&limits)
+    .unwrap();
+    assert_eq!(collective_add, collective_min);
+
+    let fences = vec![
+        event(
+            0,
+            EventKind::Fence(Fence {
+                scope: MemoryScope::System,
+                ordering: MemoryOrdering::Release,
+                domains: MemoryDomains::GLOBAL,
+            }),
+        ),
+        event(
+            1,
+            EventKind::Fence(Fence {
+                scope: MemoryScope::System,
+                ordering: MemoryOrdering::Acquire,
+                domains: MemoryDomains::GLOBAL,
+            }),
+        ),
+    ];
+    let mut fence_pair = module(fences);
+    fence_pair.edges.push(SynchronizationEdge {
+        before: EventId(0),
+        after: EventId(1),
+        kind: SynchronizationEdgeKind::SynchronizesWith,
+        scope: MemoryScope::System,
+        domains: MemoryDomains::GLOBAL,
+        before_outcome: EventOutcome::Unconditional,
+        after_outcome: EventOutcome::Unconditional,
+        read_from: ReadFromCondition::NotApplicable,
+    });
+    assert!(fence_pair.validate(&limits).is_ok());
 }

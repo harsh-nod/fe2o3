@@ -649,6 +649,7 @@ pub enum VerifierObligation {
     },
     LdsBankMapping {
         allocation: LdsAllocationId,
+        base_offset: u32,
         bank_count: u16,
         bank_width: u16,
         element_stride: u32,
@@ -713,7 +714,7 @@ impl SynchronizationModuleV2 {
         check_limit(Resource::PairChecks, pair_checks, limits.max_pair_checks)?;
 
         let mut obligations = BTreeSet::new();
-        let mut total_lds = 0_u64;
+        let lds_layout = canonical_lds_layout(self, limits)?;
         for (position, allocation) in self.lds_allocations.iter().enumerate() {
             let expected =
                 u32::try_from(position).map_err(|_| ValidationError::ArithmeticOverflow)?;
@@ -723,14 +724,11 @@ impl SynchronizationModuleV2 {
                     actual: allocation.id,
                 });
             }
-            validate_lds(allocation, self.target)?;
-            total_lds = total_lds
-                .checked_add(u64::from(allocation.bytes))
-                .ok_or(ValidationError::ArithmeticOverflow)?;
             insert_obligation(
                 &mut obligations,
                 VerifierObligation::LdsBankMapping {
                     allocation: allocation.id,
+                    base_offset: lds_layout[position].base_offset,
                     bank_count: allocation.bank_count,
                     bank_width: allocation.bank_width,
                     element_stride: allocation.element_stride,
@@ -739,9 +737,6 @@ impl SynchronizationModuleV2 {
                 limits,
             )?;
         }
-        let lds_limit = limits.max_total_lds_bytes.min(self.target.max_lds_bytes());
-        check_limit(Resource::TotalLdsBytes, total_lds, u64::from(lds_limit))?;
-
         for (position, event) in self.events.iter().enumerate() {
             let expected =
                 u32::try_from(position).map_err(|_| ValidationError::ArithmeticOverflow)?;
@@ -752,7 +747,7 @@ impl SynchronizationModuleV2 {
                 });
             }
             validate_participation(event, self.target, limits)?;
-            validate_event(event, self, limits)?;
+            validate_event(event, self, &lds_layout, limits)?;
             if let EventKind::Atomic(AtomicAccess {
                 coherent_allocation: Some(claim),
                 ..
@@ -902,6 +897,44 @@ impl SynchronizationModuleV2 {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct LdsPlacement {
+    base_offset: u32,
+    end_offset: u32,
+}
+
+fn canonical_lds_layout(
+    module: &SynchronizationModuleV2,
+    limits: &SynchronizationLimits,
+) -> Result<Vec<LdsPlacement>, ValidationError> {
+    let mut placements = Vec::new();
+    placements
+        .try_reserve_exact(module.lds_allocations.len())
+        .map_err(|_| ValidationError::ArithmeticOverflow)?;
+    let mut cursor = 0_u64;
+    for allocation in &module.lds_allocations {
+        validate_lds(allocation, module.target)?;
+        let alignment = u64::from(allocation.alignment);
+        let padding = (alignment - cursor % alignment) % alignment;
+        let base = cursor
+            .checked_add(padding)
+            .ok_or(ValidationError::ArithmeticOverflow)?;
+        let end = base
+            .checked_add(u64::from(allocation.bytes))
+            .ok_or(ValidationError::ArithmeticOverflow)?;
+        placements.push(LdsPlacement {
+            base_offset: u32::try_from(base).map_err(|_| ValidationError::ArithmeticOverflow)?,
+            end_offset: u32::try_from(end).map_err(|_| ValidationError::ArithmeticOverflow)?,
+        });
+        cursor = end;
+    }
+    let lds_limit = limits
+        .max_total_lds_bytes
+        .min(module.target.max_lds_bytes());
+    check_limit(Resource::TotalLdsBytes, cursor, u64::from(lds_limit))?;
+    Ok(placements)
+}
+
 fn validate_lds(allocation: &LdsAllocation, target: TargetProfile) -> Result<(), ValidationError> {
     if allocation.bytes == 0
         || allocation.bytes > target.max_lds_bytes()
@@ -1006,11 +1039,12 @@ fn validate_participation(
 fn validate_event(
     event: &Event,
     module: &SynchronizationModuleV2,
+    lds_layout: &[LdsPlacement],
     _limits: &SynchronizationLimits,
 ) -> Result<(), ValidationError> {
     match &event.kind {
-        EventKind::Atomic(atomic) => validate_atomic(event.id, atomic, module),
-        EventKind::NonAtomic(access) => validate_non_atomic(event.id, access, module),
+        EventKind::Atomic(atomic) => validate_atomic(event.id, atomic, module, lds_layout),
+        EventKind::NonAtomic(access) => validate_non_atomic(event.id, access, module, lds_layout),
         EventKind::Fence(fence) => validate_fence(event.id, fence),
         EventKind::Barrier(barrier) => validate_barrier(event, barrier),
         EventKind::Collective(collective) => validate_collective(event, collective),
@@ -1023,6 +1057,7 @@ fn validate_atomic(
     id: EventId,
     atomic: &AtomicAccess,
     module: &SynchronizationModuleV2,
+    lds_layout: &[LdsPlacement],
 ) -> Result<(), ValidationError> {
     if !matches!(
         atomic.address_space,
@@ -1060,13 +1095,20 @@ fn validate_atomic(
         return Err(ValidationError::UnsupportedPlatformOperation(id));
     }
     if atomic.region.bytes != atomic.value_type.storage_bytes()
-        || !valid_region(id, atomic.region, atomic.address_space, module)?
+        || !valid_region(id, atomic.region, atomic.address_space, module, lds_layout)?
     {
         return Err(ValidationError::InvalidMemoryRegion(id));
     }
     if !valid_alignment(atomic.alignment, 16)
         || atomic.alignment < atomic.value_type.storage_bytes()
-        || !atomic.region.offset.is_multiple_of(atomic.alignment)
+        || !valid_access_alignment(
+            id,
+            atomic.region,
+            atomic.address_space,
+            atomic.alignment,
+            module,
+            lds_layout,
+        )?
     {
         return Err(ValidationError::InvalidAlignment(id));
     }
@@ -1159,6 +1201,7 @@ fn validate_non_atomic(
     id: EventId,
     access: &NonAtomicAccess,
     module: &SynchronizationModuleV2,
+    lds_layout: &[LdsPlacement],
 ) -> Result<(), ValidationError> {
     if !matches!(
         access.address_space,
@@ -1167,13 +1210,20 @@ fn validate_non_atomic(
         return Err(ValidationError::InvalidAddressSpace(id));
     }
     if access.region.bytes != access.value_type.storage_bytes()
-        || !valid_region(id, access.region, access.address_space, module)?
+        || !valid_region(id, access.region, access.address_space, module, lds_layout)?
     {
         return Err(ValidationError::InvalidMemoryRegion(id));
     }
     if !valid_alignment(access.alignment, 16)
         || access.alignment < access.value_type.storage_bytes()
-        || !access.region.offset.is_multiple_of(access.alignment)
+        || !valid_access_alignment(
+            id,
+            access.region,
+            access.address_space,
+            access.alignment,
+            module,
+            lds_layout,
+        )?
     {
         return Err(ValidationError::InvalidAlignment(id));
     }
@@ -1185,6 +1235,7 @@ fn valid_region(
     region: MemoryRegion,
     address_space: AddressSpace,
     module: &SynchronizationModuleV2,
+    lds_layout: &[LdsPlacement],
 ) -> Result<bool, ValidationError> {
     if region.bytes == 0 {
         return Ok(false);
@@ -1209,7 +1260,50 @@ fn valid_region(
             allocation: allocation_id,
         });
     }
-    Ok(end <= allocation.bytes)
+    let placement = lds_layout.get(region.allocation as usize).ok_or(
+        ValidationError::UnknownLdsAllocation {
+            event: id,
+            allocation: allocation_id,
+        },
+    )?;
+    Ok(end <= allocation.bytes
+        && placement
+            .base_offset
+            .checked_add(end)
+            .is_some_and(|effective_end| effective_end <= placement.end_offset))
+}
+
+fn valid_access_alignment(
+    id: EventId,
+    region: MemoryRegion,
+    address_space: AddressSpace,
+    access_alignment: u32,
+    module: &SynchronizationModuleV2,
+    lds_layout: &[LdsPlacement],
+) -> Result<bool, ValidationError> {
+    if address_space != AddressSpace::Lds {
+        return Ok(region.offset.is_multiple_of(access_alignment));
+    }
+    let allocation_id = LdsAllocationId(region.allocation);
+    let allocation = module
+        .lds_allocations
+        .get(region.allocation as usize)
+        .filter(|allocation| allocation.id == allocation_id)
+        .ok_or(ValidationError::UnknownLdsAllocation {
+            event: id,
+            allocation: allocation_id,
+        })?;
+    let placement = lds_layout.get(region.allocation as usize).ok_or(
+        ValidationError::UnknownLdsAllocation {
+            event: id,
+            allocation: allocation_id,
+        },
+    )?;
+    let effective = placement
+        .base_offset
+        .checked_add(region.offset)
+        .ok_or(ValidationError::ArithmeticOverflow)?;
+    Ok(allocation.alignment >= access_alignment && effective.is_multiple_of(access_alignment))
 }
 
 fn validate_fence(id: EventId, fence: &Fence) -> Result<(), ValidationError> {
