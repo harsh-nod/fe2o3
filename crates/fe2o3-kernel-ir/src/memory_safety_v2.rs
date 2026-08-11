@@ -10,7 +10,29 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 const MAGIC: [u8; 8] = *b"FE2OMEM2";
-const VERSION: u16 = 1;
+const VERSION: u16 = 2;
+const HARD_MAX_TYPES: u32 = 4_096;
+const HARD_MAX_TYPE_EDGES: u32 = 16_384;
+const HARD_MAX_VALIDITY_RANGES: u32 = 16_384;
+const HARD_MAX_ACTIONS: u32 = 65_536;
+const HARD_MAX_PROJECTIONS_PER_PLACE: u32 = 64;
+const HARD_MAX_ALLOCATIONS: u32 = 4_096;
+const HARD_MAX_LOANS: u32 = 16_384;
+const HARD_MAX_CAPABILITIES: u32 = 16_384;
+const HARD_MAX_STATE_RANGES: u32 = 65_536;
+const HARD_MAX_OBLIGATIONS: u32 = 262_144;
+const HARD_MAX_CANONICAL_BYTES: u32 = 16 * 1024 * 1024;
+const HARD_MAX_VALIDATION_WORK: u64 = 4_000_000;
+const HARD_MAX_EXECUTION_WORK: u64 = 4_000_000;
+const PROGRAM_IDENTITY_DOMAIN: &[u8] = b"fe2o3.memory-proof-v2.program-identity.v2\0";
+const ACTION_IDENTITY_DOMAIN: &[u8] = b"fe2o3.memory-proof-v2.action-identity.v2\0";
+const REPORT_IDENTITY_DOMAIN: &[u8] = b"fe2o3.memory-proof-v2.report-identity.v2\0";
+const MIN_TARGET_ENTRY_BYTES: usize = 5;
+const MIN_TYPE_BYTES: usize = 21;
+const MIN_ACTION_BYTES: usize = 9;
+const MIN_FIELD_BYTES: usize = 12;
+const MIN_VALIDITY_RANGE_BYTES: usize = 32;
+const MIN_PROJECTION_BYTES: usize = 5;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MemoryBudgetsV2 {
@@ -26,6 +48,7 @@ pub struct MemoryBudgetsV2 {
     pub max_obligations: u32,
     pub max_canonical_bytes: u32,
     pub max_validation_work: u64,
+    pub max_execution_work: u64,
 }
 
 impl Default for MemoryBudgetsV2 {
@@ -43,7 +66,84 @@ impl Default for MemoryBudgetsV2 {
             max_obligations: 262_144,
             max_canonical_bytes: 16 * 1024 * 1024,
             max_validation_work: 4_000_000,
+            max_execution_work: 4_000_000,
         }
+    }
+}
+
+impl MemoryBudgetsV2 {
+    fn validate_hard_caps(self) -> Result<(), MemoryErrorReasonV2> {
+        let configured = [
+            (
+                "configured types",
+                u64::from(self.max_types),
+                u64::from(HARD_MAX_TYPES),
+            ),
+            (
+                "configured type edges",
+                u64::from(self.max_type_edges),
+                u64::from(HARD_MAX_TYPE_EDGES),
+            ),
+            (
+                "configured validity ranges",
+                u64::from(self.max_validity_ranges),
+                u64::from(HARD_MAX_VALIDITY_RANGES),
+            ),
+            (
+                "configured actions",
+                u64::from(self.max_actions),
+                u64::from(HARD_MAX_ACTIONS),
+            ),
+            (
+                "configured place projections",
+                u64::from(self.max_projections_per_place),
+                u64::from(HARD_MAX_PROJECTIONS_PER_PLACE),
+            ),
+            (
+                "configured allocations",
+                u64::from(self.max_allocations),
+                u64::from(HARD_MAX_ALLOCATIONS),
+            ),
+            (
+                "configured loans",
+                u64::from(self.max_loans),
+                u64::from(HARD_MAX_LOANS),
+            ),
+            (
+                "configured capabilities",
+                u64::from(self.max_capabilities),
+                u64::from(HARD_MAX_CAPABILITIES),
+            ),
+            (
+                "configured state ranges",
+                u64::from(self.max_state_ranges),
+                u64::from(HARD_MAX_STATE_RANGES),
+            ),
+            (
+                "configured obligations",
+                u64::from(self.max_obligations),
+                u64::from(HARD_MAX_OBLIGATIONS),
+            ),
+            (
+                "configured canonical bytes",
+                u64::from(self.max_canonical_bytes),
+                u64::from(HARD_MAX_CANONICAL_BYTES),
+            ),
+            (
+                "configured validation work",
+                self.max_validation_work,
+                HARD_MAX_VALIDATION_WORK,
+            ),
+            (
+                "configured execution work",
+                self.max_execution_work,
+                HARD_MAX_EXECUTION_WORK,
+            ),
+        ];
+        for (resource, actual, max) in configured {
+            enforce(resource, actual, max)?;
+        }
+        Ok(())
     }
 }
 
@@ -54,6 +154,25 @@ pub enum AddressSpaceV2 {
     Workgroup,
     Constant,
     Private,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum PhysicalAliasDomainV2 {
+    GlobalFlat,
+    Workgroup,
+    Private,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum MemoryMutabilityV2 {
+    ReadOnly,
+    ReadWrite,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct AddressSpaceSemanticsV2 {
+    pub alias_domain: PhysicalAliasDomainV2,
+    pub mutability: MemoryMutabilityV2,
 }
 
 impl AddressSpaceV2 {
@@ -145,6 +264,26 @@ impl TargetLayoutV2 {
             .iter()
             .find(|entry| entry.address_space == space)
             .map(|entry| entry.pointer_bits)
+    }
+    pub const fn address_space_semantics(&self, space: AddressSpaceV2) -> AddressSpaceSemanticsV2 {
+        match space {
+            AddressSpaceV2::Flat | AddressSpaceV2::Global => AddressSpaceSemanticsV2 {
+                alias_domain: PhysicalAliasDomainV2::GlobalFlat,
+                mutability: MemoryMutabilityV2::ReadWrite,
+            },
+            AddressSpaceV2::Constant => AddressSpaceSemanticsV2 {
+                alias_domain: PhysicalAliasDomainV2::GlobalFlat,
+                mutability: MemoryMutabilityV2::ReadOnly,
+            },
+            AddressSpaceV2::Workgroup => AddressSpaceSemanticsV2 {
+                alias_domain: PhysicalAliasDomainV2::Workgroup,
+                mutability: MemoryMutabilityV2::ReadWrite,
+            },
+            AddressSpaceV2::Private => AddressSpaceSemanticsV2 {
+                alias_domain: PhysicalAliasDomainV2::Private,
+                mutability: MemoryMutabilityV2::ReadWrite,
+            },
+        }
     }
     fn validate(&self) -> Result<(), MemoryErrorReasonV2> {
         if self != &Self::gfx942_xnack_minus() {
@@ -457,6 +596,9 @@ impl MemoryProgramV2 {
         actions: Vec<MemoryActionV2>,
         budgets: MemoryBudgetsV2,
     ) -> Result<Self, MemoryModelErrorV2> {
+        budgets
+            .validate_hard_caps()
+            .map_err(MemoryModelErrorV2::static_error)?;
         let mut validation_work = charge(
             0,
             target.address_spaces.len() as u64,
@@ -472,7 +614,7 @@ impl MemoryProgramV2 {
             .map_err(MemoryModelErrorV2::static_error)?;
         validation_work = charge(
             validation_work,
-            types.len() as u64,
+            sort_work(types.len() as u64),
             budgets.max_validation_work,
         )
         .map_err(MemoryModelErrorV2::static_error)?;
@@ -525,6 +667,9 @@ impl MemoryProgramV2 {
         input: &[u8],
         budgets: MemoryBudgetsV2,
     ) -> Result<Self, MemoryModelErrorV2> {
+        budgets
+            .validate_hard_caps()
+            .map_err(MemoryModelErrorV2::static_error)?;
         enforce(
             "canonical bytes",
             input.len() as u64,
@@ -541,20 +686,26 @@ impl MemoryProgramV2 {
         let mut decode_work = 0_u64;
         let target = decode_target(&mut reader, budgets, &mut decode_work)?;
         let type_count = reader.count("types", budgets.max_types)?;
-        decode_work = charge(decode_work, type_count as u64, budgets.max_validation_work)
-            .map_err(MemoryModelErrorV2::static_error)?;
-        let mut types = Vec::with_capacity(type_count);
+        let mut types = decode_collection::<MemoryTypeV2>(
+            &reader,
+            "types",
+            type_count,
+            MIN_TYPE_BYTES,
+            budgets,
+            &mut decode_work,
+        )?;
         for _ in 0..type_count {
             types.push(decode_type(&mut reader, budgets, &mut decode_work)?);
         }
         let action_count = reader.count("actions", budgets.max_actions)?;
-        decode_work = charge(
-            decode_work,
-            action_count as u64,
-            budgets.max_validation_work,
-        )
-        .map_err(MemoryModelErrorV2::static_error)?;
-        let mut actions = Vec::with_capacity(action_count);
+        let mut actions = decode_collection::<MemoryActionV2>(
+            &reader,
+            "actions",
+            action_count,
+            MIN_ACTION_BYTES,
+            budgets,
+            &mut decode_work,
+        )?;
         for _ in 0..action_count {
             actions.push(decode_action(&mut reader, budgets, &mut decode_work)?);
         }
@@ -578,7 +729,11 @@ impl MemoryProgramV2 {
         budgets: MemoryBudgetsV2,
         work: &mut u64,
     ) -> Result<(), MemoryErrorReasonV2> {
-        *work = charge(*work, self.types.len() as u64, budgets.max_validation_work)?;
+        *work = charge(
+            *work,
+            sort_work(self.types.len() as u64),
+            budgets.max_validation_work,
+        )?;
         let map = self.type_map();
         if map.len() != self.types.len() {
             return Err(MemoryErrorReasonV2::DuplicateType);
@@ -809,14 +964,27 @@ fn validate_validity(
 }
 
 fn charge(current: u64, amount: u64, max: u64) -> Result<u64, MemoryErrorReasonV2> {
+    charge_resource("validation work", current, amount, max)
+}
+
+fn charge_execution(current: u64, amount: u64, max: u64) -> Result<u64, MemoryErrorReasonV2> {
+    charge_resource("execution work", current, amount, max)
+}
+
+fn charge_resource(
+    resource: &'static str,
+    current: u64,
+    amount: u64,
+    max: u64,
+) -> Result<u64, MemoryErrorReasonV2> {
     let actual = current
         .checked_add(amount)
         .ok_or(MemoryErrorReasonV2::ResourceLimit {
-            resource: "validation work",
+            resource,
             actual: u64::MAX,
             max,
         })?;
-    enforce("validation work", actual, max)?;
+    enforce(resource, actual, max)?;
     Ok(actual)
 }
 
@@ -859,8 +1027,12 @@ pub enum ObligationBasisV2 {
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct MemoryObligationV2 {
+    pub program_identity: UntrustedMemoryProgramIdentityV2,
+    pub action_identity: MemoryActionIdentityV2,
+    pub action_index: u32,
     pub kind: MemoryObligationKindV2,
     pub allocation: AllocationIdV2,
+    pub allocation_generation: u64,
     pub range: ByteRangeV2,
     pub epoch: EpochV2,
     pub basis: ObligationBasisV2,
@@ -868,6 +1040,8 @@ pub struct MemoryObligationV2 {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TransitionRecordV2 {
+    pub program_identity: UntrustedMemoryProgramIdentityV2,
+    pub action_identity: MemoryActionIdentityV2,
     pub action_index: u32,
     pub obligations: Vec<MemoryObligationV2>,
 }
@@ -878,13 +1052,33 @@ pub struct MemoryExecutionV2 {
     records: Vec<TransitionRecordV2>,
     live_allocations: usize,
     program_identity: UntrustedMemoryProgramIdentityV2,
+    report_identity: MemoryReportIdentityV2,
+    execution_work: u64,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct UntrustedMemoryProgramIdentityV2(Box<[u8]>);
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct UntrustedMemoryProgramIdentityV2([u8; 32]);
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct MemoryActionIdentityV2([u8; 32]);
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct MemoryReportIdentityV2([u8; 32]);
 
 impl UntrustedMemoryProgramIdentityV2 {
-    pub fn canonical_bytes(&self) -> &[u8] {
+    pub const fn digest(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl MemoryActionIdentityV2 {
+    pub const fn digest(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl MemoryReportIdentityV2 {
+    pub const fn digest(&self) -> &[u8; 32] {
         &self.0
     }
 }
@@ -901,6 +1095,12 @@ impl MemoryExecutionV2 {
     }
     pub const fn untrusted_program_identity(&self) -> &UntrustedMemoryProgramIdentityV2 {
         &self.program_identity
+    }
+    pub const fn report_identity(&self) -> &MemoryReportIdentityV2 {
+        &self.report_identity
+    }
+    pub const fn execution_work(&self) -> u64 {
+        self.execution_work
     }
     pub const fn grants_runtime_authority(&self) -> bool {
         false
@@ -974,6 +1174,10 @@ struct MachineV2<'a> {
     capabilities: BTreeMap<CapabilityIdV2, CapabilityStateV2>,
     records: Vec<TransitionRecordV2>,
     obligation_count: u64,
+    program_identity: UntrustedMemoryProgramIdentityV2,
+    action_identity: MemoryActionIdentityV2,
+    action_index: u32,
+    execution_work: u64,
     budgets: MemoryBudgetsV2,
 }
 
@@ -988,11 +1192,29 @@ pub fn execute_memory_program_v2(
     program: &MemoryProgramV2,
     budgets: MemoryBudgetsV2,
 ) -> Result<MemoryExecutionV2, MemoryModelErrorV2> {
+    budgets
+        .validate_hard_caps()
+        .map_err(MemoryModelErrorV2::static_error)?;
     let canonical = program.canonical_bytes(budgets)?;
     enforce(
         "canonical bytes",
         canonical.len() as u64,
         budgets.max_canonical_bytes as u64,
+    )
+    .map_err(MemoryModelErrorV2::static_error)?;
+    let program_identity = canonical_program_identity_v2(&canonical, budgets);
+    let mut records = Vec::new();
+    records
+        .try_reserve_exact(program.actions.len())
+        .map_err(|_| {
+            MemoryModelErrorV2::static_error(MemoryErrorReasonV2::AllocationFailed {
+                resource: "transition records",
+            })
+        })?;
+    let initial_execution_work = charge_execution(
+        0,
+        program.types.len() as u64 + program.actions.len() as u64,
+        budgets.max_execution_work,
     )
     .map_err(MemoryModelErrorV2::static_error)?;
     let mut machine = MachineV2 {
@@ -1002,11 +1224,23 @@ pub fn execute_memory_program_v2(
         allocations: BTreeMap::new(),
         loans: BTreeMap::new(),
         capabilities: BTreeMap::new(),
-        records: Vec::with_capacity(program.actions.len()),
+        records,
         obligation_count: 0,
+        program_identity,
+        action_identity: MemoryActionIdentityV2([0; 32]),
+        action_index: 0,
+        execution_work: initial_execution_work,
         budgets,
     };
     for (index, action) in program.actions.iter().enumerate() {
+        machine.action_index = index as u32;
+        machine
+            .charge_work(1)
+            .map_err(|reason| MemoryModelErrorV2 {
+                action_index: Some(index as u32),
+                reason,
+            })?;
+        machine.action_identity = canonical_action_identity_v2(program_identity, index, action)?;
         let obligations = machine.apply(action).map_err(|reason| MemoryModelErrorV2 {
             action_index: Some(index as u32),
             reason,
@@ -1030,24 +1264,49 @@ pub fn execute_memory_program_v2(
         })?;
         machine.obligation_count = total;
         machine.records.push(TransitionRecordV2 {
+            program_identity,
+            action_identity: machine.action_identity,
             action_index: index as u32,
             obligations,
         });
     }
+    machine
+        .charge_work(machine.allocations.len() as u64)
+        .map_err(MemoryModelErrorV2::static_error)?;
     let live_allocations = machine
         .allocations
         .values()
-        .filter(|allocation| allocation.dead_at.is_none())
+        .filter(|allocation| {
+            allocation.dead_at.is_none() && allocation.lifetime.contains(machine.epoch)
+        })
         .count();
+    machine
+        .charge_work(machine.records.len() as u64 + machine.obligation_count)
+        .map_err(MemoryModelErrorV2::static_error)?;
+    let report_identity = canonical_report_identity_v2(
+        program_identity,
+        machine.epoch,
+        live_allocations,
+        machine.execution_work,
+        &machine.records,
+    );
     Ok(MemoryExecutionV2 {
         final_epoch: machine.epoch,
         records: machine.records,
         live_allocations,
-        program_identity: UntrustedMemoryProgramIdentityV2(canonical.into_boxed_slice()),
+        program_identity,
+        report_identity,
+        execution_work: machine.execution_work,
     })
 }
 
 impl MachineV2<'_> {
+    fn charge_work(&mut self, amount: u64) -> Result<(), MemoryErrorReasonV2> {
+        self.execution_work =
+            charge_execution(self.execution_work, amount, self.budgets.max_execution_work)?;
+        Ok(())
+    }
+
     fn apply(
         &mut self,
         action: &MemoryActionV2,
@@ -1234,6 +1493,7 @@ impl MachineV2<'_> {
             }
         }
         let candidate = ByteRangeV2 { start: base, len };
+        self.charge_work(self.allocations.len() as u64)?;
         for existing in self.allocations.values() {
             let existing_is_live =
                 existing.dead_at.is_none() && existing.lifetime.contains(self.epoch);
@@ -1241,10 +1501,12 @@ impl MachineV2<'_> {
                 start: existing.base_address,
                 len: existing.byte_len,
             };
-            if existing_is_live
-                && existing.address_space == space
-                && existing_range.overlaps(candidate)
-            {
+            let same_alias_domain = self
+                .target
+                .address_space_semantics(existing.address_space)
+                .alias_domain
+                == self.target.address_space_semantics(space).alias_domain;
+            if existing_is_live && same_alias_domain && existing_range.overlaps(candidate) {
                 return Err(MemoryErrorReasonV2::OverlappingLiveAllocation);
             }
         }
@@ -1282,7 +1544,11 @@ impl MachineV2<'_> {
         ])
     }
 
-    fn resolve_place(&self, place: &TypedPlaceV2) -> Result<ResolvedPlaceV2, MemoryErrorReasonV2> {
+    fn resolve_place(
+        &mut self,
+        place: &TypedPlaceV2,
+    ) -> Result<ResolvedPlaceV2, MemoryErrorReasonV2> {
+        self.charge_work(place.projections.len() as u64)?;
         let allocation = self.live_allocation(place.provenance)?;
         let mut offset = place.base_offset;
         let mut ty = *self
@@ -1437,10 +1703,32 @@ impl MachineV2<'_> {
     ) -> Result<Vec<MemoryObligationV2>, MemoryErrorReasonV2> {
         let resolved = self.resolve_place(place)?;
         self.authorize_actor(actor, resolved.allocation, resolved.range, write.is_some())?;
-        let constrained = type_has_constrained_validity(resolved.ty, &self.types);
+        let constrained = type_has_constrained_validity(
+            resolved.ty,
+            &self.types,
+            &mut self.execution_work,
+            self.budgets.max_execution_work,
+        )?;
         if let Some(value) = write {
+            self.ensure_mutable(resolved.allocation)?;
             let ty = *self.types.get(&resolved.ty).expect("resolved type exists");
-            validate_typed_value(ty, value, constrained)?;
+            validate_typed_value(
+                ty,
+                value,
+                constrained,
+                &mut self.execution_work,
+                self.budgets.max_execution_work,
+            )?;
+            let (initialized_len, typed_len) = {
+                let allocation = self
+                    .allocations
+                    .get(&resolved.allocation)
+                    .expect("resolved allocation exists");
+                (allocation.initialized.len(), allocation.typed.len())
+            };
+            self.charge_work(
+                initialized_len as u64 + typed_len as u64 + sort_work(typed_len as u64 + 1),
+            )?;
             let allocation = self
                 .allocations
                 .get_mut(&resolved.allocation)
@@ -1461,6 +1749,14 @@ impl MachineV2<'_> {
             allocation.typed.push((resolved.range, resolved.ty));
             allocation.typed.sort();
         } else {
+            let (initialized_len, typed_len) = {
+                let allocation = self
+                    .allocations
+                    .get(&resolved.allocation)
+                    .expect("resolved allocation exists");
+                (allocation.initialized.len(), allocation.typed.len())
+            };
+            self.charge_work(initialized_len as u64 + u64::from(constrained) * typed_len as u64)?;
             let allocation = self
                 .allocations
                 .get(&resolved.allocation)
@@ -1528,6 +1824,14 @@ impl MachineV2<'_> {
             || lifetime.end_inclusive.0 > allocation.lifetime.end_inclusive.0
         {
             return Err(MemoryErrorReasonV2::InvalidCapability);
+        }
+        if matches!(
+            kind,
+            CapabilityKindV2::Raw {
+                access: RawAccessV2::Write | RawAccessV2::ReadWrite
+            }
+        ) {
+            self.ensure_mutable(provenance.allocation)?;
         }
         self.authorize_actor(
             scope.actor(),
@@ -1630,6 +1934,15 @@ impl MachineV2<'_> {
             return Err(MemoryErrorReasonV2::UnexpectedAddressSpaceCastCapability);
         }
         if write {
+            self.ensure_mutable(place.provenance.allocation)?;
+            let (initialized_len, typed_len) = {
+                let allocation = self
+                    .allocations
+                    .get(&place.provenance.allocation)
+                    .expect("live allocation exists");
+                (allocation.initialized.len(), allocation.typed.len())
+            };
+            self.charge_work(initialized_len as u64 + typed_len as u64)?;
             let allocation = self
                 .allocations
                 .get_mut(&place.provenance.allocation)
@@ -1643,6 +1956,13 @@ impl MachineV2<'_> {
                 .typed
                 .retain(|(typed_range, _)| !typed_range.overlaps(range));
         } else {
+            let initialized_len = self
+                .allocations
+                .get(&place.provenance.allocation)
+                .expect("live allocation exists")
+                .initialized
+                .len();
+            self.charge_work(initialized_len as u64)?;
             let allocation = self
                 .allocations
                 .get(&place.provenance.allocation)
@@ -1760,9 +2080,9 @@ impl MachineV2<'_> {
             start: source.byte_offset,
             len: source.byte_len,
         };
-        let (source_space, source_physical) = self.raw_physical_range(source)?;
-        let (destination_space, destination_physical) = self.raw_physical_range(destination)?;
-        if source_space == destination_space && source_physical.overlaps(destination_physical) {
+        let (source_domain, source_physical) = self.raw_physical_range(source)?;
+        let (destination_domain, destination_physical) = self.raw_physical_range(destination)?;
+        if source_domain == destination_domain && source_physical.overlaps(destination_physical) {
             return Err(MemoryErrorReasonV2::OverlappingCopy);
         }
         let mut obligations = self.raw_access(
@@ -1791,7 +2111,7 @@ impl MachineV2<'_> {
     fn raw_physical_range(
         &self,
         place: RawPlaceV2,
-    ) -> Result<(AddressSpaceV2, ByteRangeV2), MemoryErrorReasonV2> {
+    ) -> Result<(PhysicalAliasDomainV2, ByteRangeV2), MemoryErrorReasonV2> {
         let allocation = self.live_allocation(place.provenance)?;
         let relative = ByteRangeV2 {
             start: place.byte_offset,
@@ -1806,7 +2126,9 @@ impl MachineV2<'_> {
             return Err(MemoryErrorReasonV2::OutOfBounds);
         }
         Ok((
-            allocation.address_space,
+            self.target
+                .address_space_semantics(allocation.address_space)
+                .alias_domain,
             ByteRangeV2 {
                 start: address(allocation, place.byte_offset)?,
                 len: place.byte_len,
@@ -1819,16 +2141,28 @@ impl MachineV2<'_> {
         id: AllocationIdV2,
         owner: OwnerIdV2,
     ) -> Result<Vec<MemoryObligationV2>, MemoryErrorReasonV2> {
-        let allocation = self
-            .allocations
-            .get(&id)
-            .ok_or(MemoryErrorReasonV2::UnknownAllocation(id))?;
-        if allocation.dead_at.is_some() {
+        let (dead_at, allocation_owner, lifetime, len) = {
+            let allocation = self
+                .allocations
+                .get(&id)
+                .ok_or(MemoryErrorReasonV2::UnknownAllocation(id))?;
+            (
+                allocation.dead_at,
+                allocation.owner,
+                allocation.lifetime,
+                allocation.byte_len,
+            )
+        };
+        if dead_at.is_some() {
             return Err(MemoryErrorReasonV2::UseAfterFree);
         }
-        if allocation.owner != owner {
+        if allocation_owner != owner {
             return Err(MemoryErrorReasonV2::InvalidLifetimeOrOwner);
         }
+        if !lifetime.contains(self.epoch) {
+            return Err(MemoryErrorReasonV2::UseAfterFree);
+        }
+        self.charge_work(self.loans.len() as u64)?;
         if self
             .loans
             .values()
@@ -1836,11 +2170,11 @@ impl MachineV2<'_> {
         {
             return Err(MemoryErrorReasonV2::ActiveBorrowAtDeallocation);
         }
-        let len = allocation.byte_len;
         self.allocations
             .get_mut(&id)
             .expect("allocation exists")
             .dead_at = Some(self.epoch);
+        self.charge_work(self.capabilities.len() as u64)?;
         self.capabilities
             .retain(|_, capability| capability.provenance.allocation != id);
         Ok(vec![self.obligation(
@@ -1868,7 +2202,7 @@ impl MachineV2<'_> {
     }
 
     fn authorize_actor(
-        &self,
+        &mut self,
         actor: AccessActorV2,
         allocation: AllocationIdV2,
         range: ByteRangeV2,
@@ -1922,13 +2256,33 @@ impl MachineV2<'_> {
         }
     }
 
+    fn ensure_mutable(&self, allocation: AllocationIdV2) -> Result<(), MemoryErrorReasonV2> {
+        let allocation = self
+            .allocations
+            .get(&allocation)
+            .ok_or(MemoryErrorReasonV2::UnknownAllocation(allocation))?;
+        if self
+            .target
+            .address_space_semantics(allocation.address_space)
+            .mutability
+            == MemoryMutabilityV2::ReadOnly
+        {
+            Err(MemoryErrorReasonV2::ReadOnlyAddressSpace(
+                allocation.address_space,
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
     fn ensure_no_alias_conflict(
-        &self,
+        &mut self,
         allocation: AllocationIdV2,
         range: ByteRangeV2,
         requested: BorrowKindV2,
         except: Option<LoanIdV2>,
     ) -> Result<(), MemoryErrorReasonV2> {
+        self.charge_work(self.loans.len() as u64)?;
         let conflict = self.loans.values().any(|loan| {
             loan.active
                 && Some(loan.id) != except
@@ -1997,9 +2351,19 @@ impl MachineV2<'_> {
         kind: MemoryObligationKindV2,
         basis: ObligationBasisV2,
     ) -> MemoryObligationV2 {
+        let allocation_generation = self
+            .allocations
+            .get(&allocation)
+            .expect("obligations only describe admitted allocations")
+            .provenance
+            .generation;
         MemoryObligationV2 {
+            program_identity: self.program_identity,
+            action_identity: self.action_identity,
+            action_index: self.action_index,
             kind,
             allocation,
+            allocation_generation,
             range,
             epoch: self.epoch,
             basis,
@@ -2017,33 +2381,39 @@ fn address(allocation: &AllocationStateV2, offset: u64) -> Result<u64, MemoryErr
 fn type_has_constrained_validity(
     root: MemoryTypeIdV2,
     types: &BTreeMap<MemoryTypeIdV2, &MemoryTypeV2>,
-) -> bool {
+    work: &mut u64,
+    max_work: u64,
+) -> Result<bool, MemoryErrorReasonV2> {
     let mut pending = vec![root];
     let mut seen = BTreeSet::new();
     while let Some(id) = pending.pop() {
+        *work = charge_execution(*work, 1, max_work)?;
         if !seen.insert(id) {
             continue;
         }
         match &types.get(&id).expect("validated type graph").kind {
             MemoryTypeKindV2::Scalar { validity, .. } => {
                 if *validity != BitValidityV2::Any {
-                    return true;
+                    return Ok(true);
                 }
             }
             MemoryTypeKindV2::Array { element, .. } => pending.push(*element),
             MemoryTypeKindV2::Aggregate { fields } => {
+                *work = charge_execution(*work, fields.len() as u64, max_work)?;
                 pending.extend(fields.iter().map(|field| field.ty));
             }
             MemoryTypeKindV2::OpaqueBytes => {}
         }
     }
-    false
+    Ok(false)
 }
 
 fn validate_typed_value(
     ty: &MemoryTypeV2,
     value: TypedWriteValueV2,
     constrained: bool,
+    work: &mut u64,
+    max_work: u64,
 ) -> Result<(), MemoryErrorReasonV2> {
     let MemoryTypeKindV2::Scalar {
         bit_width,
@@ -2071,9 +2441,12 @@ fn validate_typed_value(
         BitValidityV2::Bool => bits <= 1,
         BitValidityV2::Char => bits <= 0x10ffff && !(0xd800..=0xdfff).contains(&(bits as u32)),
         BitValidityV2::NonZero => bits != 0,
-        BitValidityV2::Ranges(ranges) => ranges
-            .iter()
-            .any(|range| range.start <= bits && bits <= range.end_inclusive),
+        BitValidityV2::Ranges(ranges) => {
+            *work = charge_execution(*work, ranges.len() as u64, max_work)?;
+            ranges
+                .iter()
+                .any(|range| range.start <= bits && bits <= range.end_inclusive)
+        }
     };
     if valid {
         Ok(())
@@ -2110,8 +2483,281 @@ fn insert_range(
     enforce("state ranges", ranges.len() as u64, max as u64)
 }
 
+fn sort_work(items: u64) -> u64 {
+    if items < 2 {
+        return items;
+    }
+    let levels = u64::from(u64::BITS - (items - 1).leading_zeros());
+    items.saturating_mul(levels)
+}
+
 fn range_set_contains(ranges: &[ByteRangeV2], range: ByteRangeV2) -> bool {
     range.len == 0 || ranges.iter().any(|initialized| initialized.contains(range))
+}
+
+fn canonical_program_identity_v2(
+    canonical_program: &[u8],
+    budgets: MemoryBudgetsV2,
+) -> UntrustedMemoryProgramIdentityV2 {
+    let mut digest = Sha256V2::new();
+    identity_bytes(&mut digest, PROGRAM_IDENTITY_DOMAIN);
+    identity_u16(&mut digest, VERSION);
+    identity_u32(&mut digest, budgets.max_types);
+    identity_u32(&mut digest, budgets.max_type_edges);
+    identity_u32(&mut digest, budgets.max_validity_ranges);
+    identity_u32(&mut digest, budgets.max_actions);
+    identity_u32(&mut digest, budgets.max_projections_per_place);
+    identity_u32(&mut digest, budgets.max_allocations);
+    identity_u32(&mut digest, budgets.max_loans);
+    identity_u32(&mut digest, budgets.max_capabilities);
+    identity_u32(&mut digest, budgets.max_state_ranges);
+    identity_u32(&mut digest, budgets.max_obligations);
+    identity_u32(&mut digest, budgets.max_canonical_bytes);
+    identity_u64(&mut digest, budgets.max_validation_work);
+    identity_u64(&mut digest, budgets.max_execution_work);
+    identity_bytes(&mut digest, canonical_program);
+    UntrustedMemoryProgramIdentityV2(digest.finalize())
+}
+
+fn canonical_action_identity_v2(
+    program_identity: UntrustedMemoryProgramIdentityV2,
+    index: usize,
+    action: &MemoryActionV2,
+) -> Result<MemoryActionIdentityV2, MemoryModelErrorV2> {
+    let mut writer = WriterV2::new(HARD_MAX_CANONICAL_BYTES);
+    encode_action(&mut writer, action).map_err(MemoryModelErrorV2::static_error)?;
+    let canonical_action = writer.finish();
+    let mut digest = Sha256V2::new();
+    identity_bytes(&mut digest, ACTION_IDENTITY_DOMAIN);
+    identity_bytes(&mut digest, program_identity.digest());
+    identity_u64(&mut digest, index as u64);
+    identity_bytes(&mut digest, &canonical_action);
+    Ok(MemoryActionIdentityV2(digest.finalize()))
+}
+
+fn canonical_report_identity_v2(
+    program_identity: UntrustedMemoryProgramIdentityV2,
+    final_epoch: EpochV2,
+    live_allocations: usize,
+    execution_work: u64,
+    records: &[TransitionRecordV2],
+) -> MemoryReportIdentityV2 {
+    let mut digest = Sha256V2::new();
+    identity_bytes(&mut digest, REPORT_IDENTITY_DOMAIN);
+    identity_bytes(&mut digest, program_identity.digest());
+    identity_u64(&mut digest, final_epoch.0);
+    identity_u64(&mut digest, live_allocations as u64);
+    identity_u64(&mut digest, execution_work);
+    identity_u64(&mut digest, records.len() as u64);
+    for record in records {
+        identity_bytes(&mut digest, record.program_identity.digest());
+        identity_bytes(&mut digest, record.action_identity.digest());
+        identity_u32(&mut digest, record.action_index);
+        identity_u64(&mut digest, record.obligations.len() as u64);
+        for obligation in &record.obligations {
+            identity_bytes(&mut digest, obligation.program_identity.digest());
+            identity_bytes(&mut digest, obligation.action_identity.digest());
+            identity_u32(&mut digest, obligation.action_index);
+            identity_u8(&mut digest, obligation_kind_tag(obligation.kind));
+            identity_u32(&mut digest, obligation.allocation.get());
+            identity_u64(&mut digest, obligation.allocation_generation);
+            identity_u64(&mut digest, obligation.range.start);
+            identity_u64(&mut digest, obligation.range.len);
+            identity_u64(&mut digest, obligation.epoch.0);
+            identity_u8(&mut digest, obligation_basis_tag(obligation.basis));
+        }
+    }
+    MemoryReportIdentityV2(digest.finalize())
+}
+
+const fn obligation_kind_tag(kind: MemoryObligationKindV2) -> u8 {
+    match kind {
+        MemoryObligationKindV2::AllocationLive => 1,
+        MemoryObligationKindV2::ProvenanceGeneration => 2,
+        MemoryObligationKindV2::AddressRepresentable => 3,
+        MemoryObligationKindV2::InBounds => 4,
+        MemoryObligationKindV2::Aligned => 5,
+        MemoryObligationKindV2::LifetimeContainsEpoch => 6,
+        MemoryObligationKindV2::BorrowAuthorizesAccess => 7,
+        MemoryObligationKindV2::NoConflictingAlias => 8,
+        MemoryObligationKindV2::Initialized => 9,
+        MemoryObligationKindV2::BitValidityCompatible => 10,
+        MemoryObligationKindV2::ExplicitRawCapability => 11,
+        MemoryObligationKindV2::ExplicitAddressSpaceCastCapability => 12,
+        MemoryObligationKindV2::PointerDistanceSameAllocation => 13,
+        MemoryObligationKindV2::PointerDistanceElementDivisibility => 14,
+        MemoryObligationKindV2::NonOverlappingCopy => 15,
+    }
+}
+
+const fn obligation_basis_tag(basis: ObligationBasisV2) -> u8 {
+    match basis {
+        ObligationBasisV2::LocallyEstablished => 1,
+        ObligationBasisV2::ExplicitCapability => 2,
+    }
+}
+
+fn identity_bytes(digest: &mut Sha256V2, bytes: &[u8]) {
+    identity_u64(digest, bytes.len() as u64);
+    digest.update(bytes);
+}
+
+fn identity_u8(digest: &mut Sha256V2, value: u8) {
+    digest.update(&[value]);
+}
+
+fn identity_u16(digest: &mut Sha256V2, value: u16) {
+    digest.update(&value.to_le_bytes());
+}
+
+fn identity_u32(digest: &mut Sha256V2, value: u32) {
+    digest.update(&value.to_le_bytes());
+}
+
+fn identity_u64(digest: &mut Sha256V2, value: u64) {
+    digest.update(&value.to_le_bytes());
+}
+
+struct Sha256V2 {
+    state: [u32; 8],
+    buffer: [u8; 64],
+    buffer_len: usize,
+    message_len: u64,
+}
+
+impl Sha256V2 {
+    const ROUND_CONSTANTS: [u32; 64] = [
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
+    ];
+
+    const fn new() -> Self {
+        Self {
+            state: [
+                0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+                0x5be0cd19,
+            ],
+            buffer: [0; 64],
+            buffer_len: 0,
+            message_len: 0,
+        }
+    }
+
+    fn update(&mut self, mut bytes: &[u8]) {
+        self.message_len = self
+            .message_len
+            .checked_add(bytes.len() as u64)
+            .expect("hard-bounded memory identity length");
+        if self.buffer_len != 0 {
+            let count = (64 - self.buffer_len).min(bytes.len());
+            self.buffer[self.buffer_len..self.buffer_len + count].copy_from_slice(&bytes[..count]);
+            self.buffer_len += count;
+            bytes = &bytes[count..];
+            if self.buffer_len != 64 {
+                return;
+            }
+            let block = self.buffer;
+            self.compress(&block);
+            self.buffer_len = 0;
+        }
+        while bytes.len() >= 64 {
+            let block: &[u8; 64] = bytes[..64].try_into().expect("exact block");
+            self.compress(block);
+            bytes = &bytes[64..];
+        }
+        self.buffer[..bytes.len()].copy_from_slice(bytes);
+        self.buffer_len = bytes.len();
+    }
+
+    fn finalize(mut self) -> [u8; 32] {
+        let bit_len = self
+            .message_len
+            .checked_mul(8)
+            .expect("hard-bounded memory identity bit length");
+        self.buffer[self.buffer_len] = 0x80;
+        self.buffer_len += 1;
+        if self.buffer_len > 56 {
+            self.buffer[self.buffer_len..].fill(0);
+            let block = self.buffer;
+            self.compress(&block);
+            self.buffer = [0; 64];
+        } else {
+            self.buffer[self.buffer_len..56].fill(0);
+        }
+        self.buffer[56..].copy_from_slice(&bit_len.to_be_bytes());
+        let block = self.buffer;
+        self.compress(&block);
+
+        let mut output = [0_u8; 32];
+        for (chunk, word) in output.chunks_exact_mut(4).zip(self.state) {
+            chunk.copy_from_slice(&word.to_be_bytes());
+        }
+        output
+    }
+
+    fn compress(&mut self, block: &[u8; 64]) {
+        let mut words = [0_u32; 64];
+        for (index, chunk) in block.chunks_exact(4).enumerate() {
+            words[index] = u32::from_be_bytes(chunk.try_into().expect("four-byte word"));
+        }
+        for index in 16..64 {
+            let s0 = words[index - 15].rotate_right(7)
+                ^ words[index - 15].rotate_right(18)
+                ^ (words[index - 15] >> 3);
+            let s1 = words[index - 2].rotate_right(17)
+                ^ words[index - 2].rotate_right(19)
+                ^ (words[index - 2] >> 10);
+            words[index] = words[index - 16]
+                .wrapping_add(s0)
+                .wrapping_add(words[index - 7])
+                .wrapping_add(s1);
+        }
+
+        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = self.state;
+        for (word, constant) in words.into_iter().zip(Self::ROUND_CONSTANTS) {
+            let sum1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+            let choose = (e & f) ^ ((!e) & g);
+            let temporary1 = h
+                .wrapping_add(sum1)
+                .wrapping_add(choose)
+                .wrapping_add(constant)
+                .wrapping_add(word);
+            let sum0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+            let majority = (a & b) ^ (a & c) ^ (b & c);
+            let temporary2 = sum0.wrapping_add(majority);
+            h = g;
+            g = f;
+            f = e;
+            e = d.wrapping_add(temporary1);
+            d = c;
+            c = b;
+            b = a;
+            a = temporary1.wrapping_add(temporary2);
+        }
+        self.state[0] = self.state[0].wrapping_add(a);
+        self.state[1] = self.state[1].wrapping_add(b);
+        self.state[2] = self.state[2].wrapping_add(c);
+        self.state[3] = self.state[3].wrapping_add(d);
+        self.state[4] = self.state[4].wrapping_add(e);
+        self.state[5] = self.state[5].wrapping_add(f);
+        self.state[6] = self.state[6].wrapping_add(g);
+        self.state[7] = self.state[7].wrapping_add(h);
+    }
+}
+
+#[cfg(test)]
+pub fn sha256_test_vector_v2(bytes: &[u8]) -> [u8; 32] {
+    let mut digest = Sha256V2::new();
+    digest.update(bytes);
+    digest.finalize()
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2136,6 +2782,9 @@ pub enum MemoryErrorReasonV2 {
         resource: &'static str,
         actual: u64,
         max: u64,
+    },
+    AllocationFailed {
+        resource: &'static str,
     },
     DuplicateType,
     UnknownType(MemoryTypeIdV2),
@@ -2172,6 +2821,7 @@ pub enum MemoryErrorReasonV2 {
     InvalidPointerDistance,
     InvalidCopy,
     OverlappingCopy,
+    ReadOnlyAddressSpace(AddressSpaceV2),
     EpochDidNotAdvance,
     Decode {
         offset: usize,
@@ -2229,6 +2879,11 @@ impl WriterV2 {
             },
         )?;
         enforce("canonical bytes", actual as u64, self.max as u64)?;
+        self.bytes
+            .try_reserve(bytes.len())
+            .map_err(|_| MemoryErrorReasonV2::AllocationFailed {
+                resource: "canonical bytes",
+            })?;
         self.bytes.extend_from_slice(bytes);
         Ok(())
     }
@@ -2309,9 +2964,44 @@ impl<'a> ReaderV2<'a> {
         enforce(resource, count as u64, max as u64).map_err(MemoryModelErrorV2::static_error)?;
         usize::try_from(count).map_err(|_| self.error("count does not fit usize"))
     }
+    fn remaining(&self) -> usize {
+        self.input.len() - self.offset
+    }
+    fn preflight_collection(
+        &self,
+        count: usize,
+        minimum_item_bytes: usize,
+    ) -> Result<(), MemoryModelErrorV2> {
+        let minimum = count
+            .checked_mul(minimum_item_bytes)
+            .ok_or_else(|| self.error("collection byte count overflow"))?;
+        if minimum > self.remaining() {
+            Err(self.error("collection count exceeds remaining input"))
+        } else {
+            Ok(())
+        }
+    }
     fn finished(&self) -> bool {
         self.offset == self.input.len()
     }
+}
+
+fn decode_collection<T>(
+    reader: &ReaderV2<'_>,
+    resource: &'static str,
+    count: usize,
+    minimum_item_bytes: usize,
+    budgets: MemoryBudgetsV2,
+    work: &mut u64,
+) -> Result<Vec<T>, MemoryModelErrorV2> {
+    reader.preflight_collection(count, minimum_item_bytes)?;
+    *work = charge(*work, count as u64, budgets.max_validation_work)
+        .map_err(MemoryModelErrorV2::static_error)?;
+    let mut values = Vec::new();
+    values.try_reserve_exact(count).map_err(|_| {
+        MemoryModelErrorV2::static_error(MemoryErrorReasonV2::AllocationFailed { resource })
+    })?;
+    Ok(values)
 }
 
 fn encode_target(
@@ -2340,15 +3030,26 @@ fn decode_target(
     if len > 32 {
         return Err(reader.error("target name too long"));
     }
-    let architecture = std::str::from_utf8(reader.bytes(len)?)
-        .map_err(|_| reader.error("target name is not UTF-8"))?
-        .to_owned();
+    let name = std::str::from_utf8(reader.bytes(len)?)
+        .map_err(|_| reader.error("target name is not UTF-8"))?;
+    let mut architecture = String::new();
+    architecture.try_reserve_exact(len).map_err(|_| {
+        MemoryModelErrorV2::static_error(MemoryErrorReasonV2::AllocationFailed {
+            resource: "target name",
+        })
+    })?;
+    architecture.push_str(name);
     let xnack_disabled = decode_bool(reader)?;
     let little_endian = decode_bool(reader)?;
     let count = reader.count("target address spaces", 16)?;
-    *work = charge(*work, count as u64, budgets.max_validation_work)
-        .map_err(MemoryModelErrorV2::static_error)?;
-    let mut address_spaces = Vec::with_capacity(count);
+    let mut address_spaces = decode_collection::<AddressSpaceLayoutV2>(
+        reader,
+        "target address spaces",
+        count,
+        MIN_TARGET_ENTRY_BYTES,
+        budgets,
+        work,
+    )?;
     for _ in 0..count {
         let address_space = AddressSpaceV2::from_tag(reader.u8()?)
             .ok_or_else(|| reader.error("unknown address space"))?;
@@ -2422,9 +3123,14 @@ fn decode_type(
         },
         3 => {
             let count = reader.count("type edges", budgets.max_type_edges)?;
-            *work = charge(*work, count as u64, budgets.max_validation_work)
-                .map_err(MemoryModelErrorV2::static_error)?;
-            let mut fields = Vec::with_capacity(count);
+            let mut fields = decode_collection::<MemoryFieldV2>(
+                reader,
+                "type fields",
+                count,
+                MIN_FIELD_BYTES,
+                budgets,
+                work,
+            )?;
             for _ in 0..count {
                 fields.push(MemoryFieldV2 {
                     offset: reader.u64()?,
@@ -2477,9 +3183,14 @@ fn decode_validity(
         3 => BitValidityV2::NonZero,
         4 => {
             let count = reader.count("validity ranges", budgets.max_validity_ranges)?;
-            *work = charge(*work, count as u64, budgets.max_validation_work)
-                .map_err(MemoryModelErrorV2::static_error)?;
-            let mut ranges = Vec::with_capacity(count);
+            let mut ranges = decode_collection::<BitValidityRangeV2>(
+                reader,
+                "validity ranges",
+                count,
+                MIN_VALIDITY_RANGE_BYTES,
+                budgets,
+                work,
+            )?;
             for _ in 0..count {
                 ranges.push(BitValidityRangeV2 {
                     start: reader.u128()?,
@@ -2816,9 +3527,14 @@ fn decode_place(
     let base_offset = reader.u64()?;
     let root_type = decode_type_id(reader)?;
     let count = reader.count("place projections", budgets.max_projections_per_place)?;
-    *work = charge(*work, count as u64, budgets.max_validation_work)
-        .map_err(MemoryModelErrorV2::static_error)?;
-    let mut projections = Vec::with_capacity(count);
+    let mut projections = decode_collection::<ProjectionV2>(
+        reader,
+        "place projections",
+        count,
+        MIN_PROJECTION_BYTES,
+        budgets,
+        work,
+    )?;
     for _ in 0..count {
         projections.push(match reader.u8()? {
             0 => ProjectionV2::Field(reader.u32()?),
@@ -3019,12 +3735,22 @@ mod internal_tests {
             epoch: EpochV2(0),
             allocations: BTreeMap::from([
                 (AllocationIdV2::new(1).unwrap(), allocation_state(1, 7)),
-                (AllocationIdV2::new(2).unwrap(), allocation_state(2, 8)),
+                (
+                    AllocationIdV2::new(2).unwrap(),
+                    AllocationStateV2 {
+                        address_space: AddressSpaceV2::Flat,
+                        ..allocation_state(2, 8)
+                    },
+                ),
             ]),
             loans: BTreeMap::new(),
             capabilities: BTreeMap::new(),
             records: Vec::new(),
             obligation_count: 0,
+            program_identity: UntrustedMemoryProgramIdentityV2([0; 32]),
+            action_identity: MemoryActionIdentityV2([0; 32]),
+            action_index: 0,
+            execution_work: 0,
             budgets: MemoryBudgetsV2::default(),
         };
         let raw = |id, generation| RawPlaceV2 {
