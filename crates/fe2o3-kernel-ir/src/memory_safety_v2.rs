@@ -680,12 +680,21 @@ impl MemoryActionV2 {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct MemoryProgramV2 {
     target: TargetLayoutV2,
     types: Vec<MemoryTypeV2>,
     actions: Vec<MemoryActionV2>,
+    admission_validation_work: u64,
 }
+
+impl PartialEq for MemoryProgramV2 {
+    fn eq(&self, other: &Self) -> bool {
+        self.target == other.target && self.types == other.types && self.actions == other.actions
+    }
+}
+
+impl Eq for MemoryProgramV2 {}
 
 impl MemoryProgramV2 {
     pub fn new(
@@ -711,10 +720,11 @@ impl MemoryProgramV2 {
         work.charge(sort_work(types.len() as u64))
             .map_err(MemoryModelErrorV2::static_error)?;
         types.sort_unstable_by_key(|ty| ty.id);
-        let program = Self {
+        let mut program = Self {
             target,
             types,
             actions,
+            admission_validation_work: 0,
         };
         program
             .validate_types(budgets, &mut work)
@@ -731,6 +741,7 @@ impl MemoryProgramV2 {
             budgets.max_canonical_bytes as u64,
         )
         .map_err(MemoryModelErrorV2::static_error)?;
+        program.admission_validation_work = work.used();
         Ok((program, work.used()))
     }
     pub fn target(&self) -> &TargetLayoutV2 {
@@ -742,6 +753,9 @@ impl MemoryProgramV2 {
     pub fn actions(&self) -> &[MemoryActionV2] {
         &self.actions
     }
+    pub const fn admission_validation_work(&self) -> u64 {
+        self.admission_validation_work
+    }
     pub fn canonical_bytes(&self, budgets: MemoryBudgetsV2) -> Result<Vec<u8>, MemoryModelErrorV2> {
         self.canonical_bytes_with_work(budgets)
             .map(|(bytes, _work)| bytes)
@@ -750,10 +764,20 @@ impl MemoryProgramV2 {
         &self,
         budgets: MemoryBudgetsV2,
     ) -> Result<(Vec<u8>, u64), MemoryModelErrorV2> {
+        let (bytes, work) = self.canonical_bytes_continuing_from(budgets, 0)?;
+        Ok((bytes, work.used()))
+    }
+
+    fn canonical_bytes_continuing_from(
+        &self,
+        budgets: MemoryBudgetsV2,
+        used: u64,
+    ) -> Result<(Vec<u8>, WorkMeterV2), MemoryModelErrorV2> {
         budgets
             .validate_hard_caps()
             .map_err(MemoryModelErrorV2::static_error)?;
-        let mut work = WorkMeterV2::validation(budgets.max_validation_work);
+        let mut work = WorkMeterV2::with_used("validation work", used, budgets.max_validation_work)
+            .map_err(MemoryModelErrorV2::static_error)?;
         validate_program_envelope(
             &self.target,
             self.types.len(),
@@ -769,7 +793,7 @@ impl MemoryProgramV2 {
         let bytes = self
             .encode_unchecked(budgets, &mut work)
             .map_err(MemoryModelErrorV2::static_error)?;
-        Ok((bytes, work.used()))
+        Ok((bytes, work))
     }
     pub fn decode_canonical(
         input: &[u8],
@@ -832,10 +856,11 @@ impl MemoryProgramV2 {
         }
         validate_program_envelope(&target, types.len(), actions.len(), budgets, &mut work)
             .map_err(MemoryModelErrorV2::static_error)?;
-        let program = Self {
+        let mut program = Self {
             target,
             types,
             actions,
+            admission_validation_work: 0,
         };
         program
             .validate_types(budgets, &mut work)
@@ -853,6 +878,7 @@ impl MemoryProgramV2 {
                 MemoryErrorReasonV2::NonCanonical,
             ));
         }
+        program.admission_validation_work = work.used();
         Ok((program, work.used()))
     }
 
@@ -1239,6 +1265,7 @@ pub struct MemoryExecutionV2 {
     live_allocations: usize,
     program_identity: UntrustedMemoryProgramIdentityV2,
     report_identity: MemoryReportIdentityV2,
+    validation_work: u64,
     execution_work: u64,
 }
 
@@ -1303,6 +1330,9 @@ impl MemoryExecutionV2 {
     pub const fn report_identity(&self) -> &MemoryReportIdentityV2 {
         &self.report_identity
     }
+    pub const fn validation_work(&self) -> u64 {
+        self.validation_work
+    }
     pub const fn execution_work(&self) -> u64 {
         self.execution_work
     }
@@ -1330,17 +1360,13 @@ impl MemoryExecutionV2 {
         budgets
             .validate_hard_caps()
             .map_err(MemoryModelErrorV2::static_error)?;
-        let (canonical, validation_work) = program.canonical_bytes_with_work(budgets)?;
-        let mut validation_meter = WorkMeterV2::with_used(
-            "validation work",
-            validation_work,
-            budgets.max_validation_work,
-        )
-        .map_err(MemoryModelErrorV2::static_error)?;
+        let (canonical, mut validation_meter) =
+            program.canonical_bytes_continuing_from(budgets, program.admission_validation_work)?;
         let program_identity =
             canonical_program_identity_v2(&canonical, budgets, &mut validation_meter)
                 .map_err(MemoryModelErrorV2::static_error)?;
         if program_identity != self.program_identity
+            || validation_meter.used() != self.validation_work
             || self.records.len() != program.actions.len()
             || self.live_allocations > budgets.max_allocations as usize
         {
@@ -1367,6 +1393,7 @@ impl MemoryExecutionV2 {
         }
         let report_work = report_identity_work_v2(
             program_identity,
+            self.validation_work,
             self.final_epoch,
             self.live_allocations,
             self.execution_work,
@@ -1377,6 +1404,7 @@ impl MemoryExecutionV2 {
             .map_err(MemoryModelErrorV2::static_error)?;
         let report_identity = hash_report_identity_v2(
             program_identity,
+            self.validation_work,
             self.final_epoch,
             self.live_allocations,
             self.execution_work,
@@ -1567,22 +1595,18 @@ pub fn execute_memory_program_v2(
     budgets
         .validate_hard_caps()
         .map_err(MemoryModelErrorV2::static_error)?;
-    let (canonical, validation_work) = program.canonical_bytes_with_work(budgets)?;
+    let (canonical, mut validation_meter) =
+        program.canonical_bytes_continuing_from(budgets, program.admission_validation_work)?;
     enforce(
         "canonical bytes",
         canonical.len() as u64,
         budgets.max_canonical_bytes as u64,
     )
     .map_err(MemoryModelErrorV2::static_error)?;
-    let mut validation_meter = WorkMeterV2::with_used(
-        "validation work",
-        validation_work,
-        budgets.max_validation_work,
-    )
-    .map_err(MemoryModelErrorV2::static_error)?;
     let program_identity =
         canonical_program_identity_v2(&canonical, budgets, &mut validation_meter)
             .map_err(MemoryModelErrorV2::static_error)?;
+    let validation_work = validation_meter.used();
     let mut records = Vec::new();
     records
         .try_reserve_exact(program.actions.len())
@@ -1707,6 +1731,7 @@ pub fn execute_memory_program_v2(
         .map_err(MemoryModelErrorV2::static_error)?;
     let report_identity = canonical_report_identity_v2(
         program_identity,
+        validation_work,
         machine.epoch,
         live_allocations,
         machine.execution_work.used(),
@@ -1720,6 +1745,7 @@ pub fn execute_memory_program_v2(
         live_allocations,
         program_identity,
         report_identity,
+        validation_work,
         execution_work: machine.execution_work.used(),
     })
 }
@@ -3049,6 +3075,7 @@ fn canonical_transition_identity_v2(
 
 fn canonical_report_identity_v2(
     program_identity: UntrustedMemoryProgramIdentityV2,
+    validation_work: u64,
     final_epoch: EpochV2,
     live_allocations: usize,
     execution_work: u64,
@@ -3057,6 +3084,7 @@ fn canonical_report_identity_v2(
 ) -> Result<MemoryReportIdentityV2, MemoryErrorReasonV2> {
     let hash_work = report_identity_work_v2(
         program_identity,
+        validation_work,
         final_epoch,
         live_allocations,
         execution_work,
@@ -3070,6 +3098,7 @@ fn canonical_report_identity_v2(
     work.charge(hash_work)?;
     hash_report_identity_v2(
         program_identity,
+        validation_work,
         final_epoch,
         live_allocations,
         work.used(),
@@ -3079,12 +3108,13 @@ fn canonical_report_identity_v2(
 
 fn report_identity_work_v2(
     _program_identity: UntrustedMemoryProgramIdentityV2,
+    _validation_work: u64,
     _final_epoch: EpochV2,
     _live_allocations: usize,
     _execution_work: u64,
     records: &[TransitionRecordV2],
 ) -> Result<u64, MemoryErrorReasonV2> {
-    const REPORT_FIXED_BYTES: u64 = 8 + REPORT_IDENTITY_DOMAIN.len() as u64 + 40 + 32;
+    const REPORT_FIXED_BYTES: u64 = 8 + REPORT_IDENTITY_DOMAIN.len() as u64 + 40 + 8 + 32;
     const TRANSITION_FIXED_BYTES: u64 = 40 + 40 + 40 + 4 + 8;
     const OBLIGATION_BYTES: u64 = 40 + 4 + 40 + 40 + 4 + 1 + 4 + 8 + 8 + 8 + 8 + 1;
     let mut message_bytes = REPORT_FIXED_BYTES;
@@ -3123,6 +3153,7 @@ fn report_identity_work_v2(
 
 fn hash_report_identity_v2(
     program_identity: UntrustedMemoryProgramIdentityV2,
+    validation_work: u64,
     final_epoch: EpochV2,
     live_allocations: usize,
     execution_work: u64,
@@ -3131,6 +3162,7 @@ fn hash_report_identity_v2(
     let mut digest = UnmeteredSha256V2::new();
     identity_bytes(&mut digest, REPORT_IDENTITY_DOMAIN)?;
     identity_bytes(&mut digest, program_identity.digest())?;
+    identity_u64(&mut digest, validation_work)?;
     identity_u64(&mut digest, final_epoch.0)?;
     identity_u64(&mut digest, live_allocations as u64)?;
     identity_u64(&mut digest, execution_work)?;

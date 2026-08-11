@@ -1232,6 +1232,78 @@ fn validity_traversal_uses_the_global_work_budget_at_exact_boundaries() {
 }
 
 #[test]
+fn decode_through_identity_and_execution_uses_one_validation_budget() {
+    let ranges = (0_u128..1_000)
+        .map(|index| BitValidityRangeV2 {
+            start: index * 2,
+            end_inclusive: index * 2,
+        })
+        .collect();
+    let constructed = MemoryProgramV2::new(
+        TargetLayoutV2::gfx942_xnack_minus(),
+        vec![scalar(1, 128, BitValidityV2::Ranges(ranges))],
+        vec![],
+        MemoryBudgetsV2::default(),
+    )
+    .unwrap();
+    let direct_execution =
+        execute_memory_program_v2(&constructed, MemoryBudgetsV2::default()).unwrap();
+    assert!(direct_execution.validation_work() > constructed.admission_validation_work());
+
+    let bytes = constructed
+        .canonical_bytes(MemoryBudgetsV2::default())
+        .unwrap();
+    let (decoded, decode_work) =
+        MemoryProgramV2::decode_canonical_with_work(&bytes, MemoryBudgetsV2::default()).unwrap();
+    assert_eq!(decoded.admission_validation_work(), decode_work);
+    let baseline = execute_memory_program_v2(&decoded, MemoryBudgetsV2::default()).unwrap();
+    let total_work = baseline.validation_work();
+    assert!(total_work > decode_work);
+
+    let exact = MemoryBudgetsV2 {
+        max_validation_work: total_work,
+        ..MemoryBudgetsV2::default()
+    };
+    let exact_decoded = MemoryProgramV2::decode_canonical(&bytes, exact).unwrap();
+    let exact_execution = execute_memory_program_v2(&exact_decoded, exact).unwrap();
+    assert_eq!(exact_execution.validation_work(), total_work);
+    assert!(
+        exact_execution
+            .verify_identities(&exact_decoded, exact)
+            .unwrap()
+    );
+
+    let one_less = MemoryBudgetsV2 {
+        max_validation_work: total_work - 1,
+        ..MemoryBudgetsV2::default()
+    };
+    let (rejected_at_execution, repeated_decode_work) =
+        MemoryProgramV2::decode_canonical_with_work(&bytes, one_less).unwrap();
+    assert_eq!(repeated_decode_work, decode_work);
+    assert_eq!(
+        execute_memory_program_v2(&rejected_at_execution, one_less)
+            .unwrap_err()
+            .reason,
+        MemoryErrorReasonV2::ResourceLimit {
+            resource: "validation work",
+            actual: total_work,
+            max: total_work - 1,
+        }
+    );
+    assert!(matches!(
+        exact_execution
+            .verify_identities(&rejected_at_execution, one_less)
+            .unwrap_err()
+            .reason,
+        MemoryErrorReasonV2::ResourceLimit {
+            resource: "validation work",
+            max,
+            ..
+        } if max == total_work - 1
+    ));
+}
+
+#[test]
 fn execution_obligation_and_typed_fact_limits_are_enforced() {
     let one_type = vec![MemoryTypeV2 {
         id: ty(1),
