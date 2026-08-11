@@ -5,8 +5,9 @@ use std::sync::Arc;
 
 use fe2o3_artifacts::DigestAlgorithm;
 use proc_macro2::{TokenStream, TokenTree};
+use syn::parse::Parser;
 use syn::visit::Visit;
-use syn::{Attribute, Expr, Item, Lit, LitStr, Meta, UseTree};
+use syn::{Attribute, Expr, Lit, LitStr, Meta, UseTree};
 
 use crate::{AlphaZetaProofErrorV1, Digest, Text, TrustedItem};
 
@@ -451,14 +452,157 @@ impl AlphaZetaProofSourcesV1 {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum RustSyntaxContext {
+    Items,
+    Expression,
+    Statements,
+    Pattern,
+    Type,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct ModuleSearchContext {
+    default_dir: PathBuf,
+    path_attr_dir: PathBuf,
+    inside_inline_module: bool,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct RustVisitKey {
+    path: String,
+    syntax_context: RustSyntaxContext,
+    module_context: ModuleSearchContext,
+}
+
 struct Discovery {
     snapshot: SnapshotFilesystem,
     files: BTreeMap<String, AlphaZetaSourceFileIdentityV1>,
     edges: BTreeSet<AlphaZetaDependencyEdgeV1>,
-    rust_visited: BTreeSet<String>,
+    rust_visited: BTreeSet<RustVisitKey>,
     package_visited: BTreeSet<String>,
     total_bytes: u64,
     workspace_manifest: toml::Table,
+}
+
+struct SourceClosureWalker<'a> {
+    discovery: &'a mut Discovery,
+    owner: String,
+    module_context: ModuleSearchContext,
+    block_depth: usize,
+    error: Option<AlphaZetaProofErrorV1>,
+}
+
+impl<'a> SourceClosureWalker<'a> {
+    fn new(discovery: &'a mut Discovery, owner: &str, module_context: ModuleSearchContext) -> Self {
+        Self {
+            discovery,
+            owner: owner.to_owned(),
+            module_context,
+            block_depth: 0,
+            error: None,
+        }
+    }
+
+    fn finish(self) -> Result<(), AlphaZetaProofErrorV1> {
+        self.error.map_or(Ok(()), Err)
+    }
+
+    fn process_macro(&mut self, mac: &syn::Macro, syntax_context: Option<RustSyntaxContext>) {
+        if self.error.is_some() {
+            return;
+        }
+        if mac.path.is_ident("include") {
+            let Some(syntax_context) = syntax_context else {
+                self.error = Some(manifest_structure(
+                    &self.owner,
+                    "include! appears in an unsupported structural context",
+                ));
+                return;
+            };
+            let included = match syn::parse2::<LitStr>(mac.tokens.clone()) {
+                Ok(included) => included,
+                Err(_) => {
+                    self.error = Some(manifest_structure(
+                        &self.owner,
+                        "include! path is not one literal string",
+                    ));
+                    return;
+                }
+            };
+            if let Err(error) = self.discovery.discover_include(
+                &self.owner,
+                &included,
+                syntax_context,
+                self.module_context.clone(),
+            ) {
+                self.error = Some(error);
+            }
+            return;
+        }
+        if mac
+            .path
+            .segments
+            .last()
+            .is_some_and(|segment| segment.ident == "include")
+            || opaque_tokens_contain_include(mac.tokens.clone())
+        {
+            self.error = Some(manifest_structure(
+                &self.owner,
+                "include! inside a qualified or opaque macro is not structurally incorporated",
+            ));
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for SourceClosureWalker<'_> {
+    fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
+        if self.error.is_some() {
+            return;
+        }
+        if let Err(error) = self.discovery.discover_module(
+            &self.owner,
+            &self.module_context,
+            self.block_depth,
+            item,
+        ) {
+            self.error = Some(error);
+        }
+    }
+
+    fn visit_block(&mut self, block: &'ast syn::Block) {
+        self.block_depth += 1;
+        syn::visit::visit_block(self, block);
+        self.block_depth -= 1;
+    }
+
+    fn visit_item_macro(&mut self, item: &'ast syn::ItemMacro) {
+        self.process_macro(&item.mac, Some(RustSyntaxContext::Items));
+    }
+
+    fn visit_expr_macro(&mut self, expression: &'ast syn::ExprMacro) {
+        self.process_macro(&expression.mac, Some(RustSyntaxContext::Expression));
+    }
+
+    fn visit_stmt_macro(&mut self, statement: &'ast syn::StmtMacro) {
+        self.process_macro(&statement.mac, Some(RustSyntaxContext::Statements));
+    }
+
+    fn visit_pat(&mut self, pattern: &'ast syn::Pat) {
+        if let syn::Pat::Macro(pattern) = pattern {
+            self.process_macro(&pattern.mac, Some(RustSyntaxContext::Pattern));
+        } else {
+            syn::visit::visit_pat(self, pattern);
+        }
+    }
+
+    fn visit_type_macro(&mut self, ty: &'ast syn::TypeMacro) {
+        self.process_macro(&ty.mac, Some(RustSyntaxContext::Type));
+    }
+
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        self.process_macro(mac, None);
+    }
 }
 
 impl Discovery {
@@ -505,7 +649,7 @@ impl Discovery {
         }
 
         self.discover_package(ALPHA_ZETA_PACKAGE_MANIFEST_PATH_V1)?;
-        self.discover_rust(ALPHA_ZETA_PROOF_HARNESS_PATH_V1)?;
+        self.discover_rust_root(ALPHA_ZETA_PROOF_HARNESS_PATH_V1)?;
         self.add_edge(
             ALPHA_ZETA_PACKAGE_MANIFEST_PATH_V1,
             ALPHA_ZETA_PROOF_HARNESS_PATH_V1,
@@ -546,7 +690,7 @@ impl Discovery {
             .and_then(toml::Value::as_str)
             .unwrap_or("src/lib.rs");
         let lib_path = normalize_relative(manifest_dir.join(lib_relative))?;
-        self.discover_rust(&lib_path)?;
+        self.discover_rust_root(&lib_path)?;
         self.add_edge(
             manifest_path,
             &lib_path,
@@ -590,71 +734,182 @@ impl Discovery {
         Ok(())
     }
 
-    fn discover_rust(&mut self, path: &str) -> Result<(), AlphaZetaProofErrorV1> {
-        if !self.rust_visited.insert(path.to_owned()) {
+    fn discover_rust_root(&mut self, path: &str) -> Result<(), AlphaZetaProofErrorV1> {
+        let parent = Path::new(path)
+            .parent()
+            .unwrap_or_else(|| Path::new(""))
+            .to_path_buf();
+        self.discover_rust_source(
+            path,
+            RustSyntaxContext::Items,
+            ModuleSearchContext {
+                default_dir: parent.clone(),
+                path_attr_dir: parent,
+                inside_inline_module: false,
+            },
+        )
+    }
+
+    fn discover_rust_source(
+        &mut self,
+        path: &str,
+        syntax_context: RustSyntaxContext,
+        module_context: ModuleSearchContext,
+    ) -> Result<(), AlphaZetaProofErrorV1> {
+        let visit = RustVisitKey {
+            path: path.to_owned(),
+            syntax_context,
+            module_context: module_context.clone(),
+        };
+        if !self.rust_visited.insert(visit) {
             return Ok(());
         }
         let bytes = self.add_file(path)?;
         let source = std::str::from_utf8(&bytes)
             .map_err(|_| manifest_structure(path, "Rust source is not UTF-8"))?;
-        let syntax = syn::parse_file(source)
-            .map_err(|_| manifest_structure(path, "Rust source did not parse"))?;
-        let parent = Path::new(path).parent().unwrap_or(Path::new(""));
-        self.discover_items(path, parent, &syntax.items)
+        self.walk_rust_source(path, source, syntax_context, module_context)
     }
 
-    fn discover_items(
+    fn walk_rust_source(
         &mut self,
         owner: &str,
-        parent: &Path,
-        items: &[Item],
+        source: &str,
+        syntax_context: RustSyntaxContext,
+        module_context: ModuleSearchContext,
     ) -> Result<(), AlphaZetaProofErrorV1> {
-        for item in items {
-            match item {
-                Item::Macro(item_macro) if item_macro.mac.path.is_ident("include") => {
-                    let included = syn::parse2::<LitStr>(item_macro.mac.tokens.clone())
-                        .map_err(|_| manifest_structure(owner, "include! path is not literal"))?;
-                    let child = normalize_relative(parent.join(included.value()))?;
-                    self.add_edge(owner, &child, AlphaZetaDependencyKindV1::RustInclude)?;
-                    self.discover_rust(&child)?;
-                }
-                Item::Mod(item_mod) if !is_cfg_test(&item_mod.attrs) => {
-                    if let Some((_, nested)) = &item_mod.content {
-                        self.discover_items(owner, parent, nested)?;
-                        continue;
-                    }
-                    let explicit = path_attribute(&item_mod.attrs)?;
-                    let (child, kind) = if let Some(explicit) = explicit {
-                        (
-                            normalize_relative(parent.join(explicit))?,
-                            AlphaZetaDependencyKindV1::RustPathModule,
-                        )
-                    } else {
-                        let direct = parent.join(format!("{}.rs", item_mod.ident));
-                        let nested = parent.join(item_mod.ident.to_string()).join("mod.rs");
-                        let direct = normalize_relative(direct)?;
-                        let nested = normalize_relative(nested)?;
-                        match (
-                            self.snapshot.regular_file_exists(&direct)?,
-                            self.snapshot.regular_file_exists(&nested)?,
-                        ) {
-                            (true, false) => (direct, AlphaZetaDependencyKindV1::RustModule),
-                            (false, true) => (nested, AlphaZetaDependencyKindV1::RustModule),
-                            _ => {
-                                return Err(manifest_structure(
-                                    owner,
-                                    "module path is missing or ambiguous",
-                                ));
-                            }
-                        }
-                    };
-                    self.add_edge(owner, &child, kind)?;
-                    self.discover_rust(&child)?;
-                }
-                _ => {}
+        let tokens = TokenStream::from_str(source)
+            .map_err(|_| manifest_structure(owner, "Rust tokenization failed"))?;
+        let mut walker = SourceClosureWalker::new(self, owner, module_context);
+        match syntax_context {
+            RustSyntaxContext::Items => {
+                let syntax = syn::parse2::<syn::File>(tokens)
+                    .map_err(|_| manifest_structure(owner, "Rust item source did not parse"))?;
+                reject_configured_file_attributes(owner, &syntax.attrs)?;
+                walker.visit_file(&syntax);
+            }
+            RustSyntaxContext::Expression => {
+                let syntax = syn::parse2::<syn::Expr>(tokens)
+                    .map_err(|_| manifest_structure(owner, "included expression did not parse"))?;
+                walker.visit_expr(&syntax);
+            }
+            RustSyntaxContext::Statements => {
+                let wrapped = TokenStream::from_str(&format!("{{{source}}}")).map_err(|_| {
+                    manifest_structure(owner, "included statements did not tokenize")
+                })?;
+                let syntax = syn::parse2::<syn::Block>(wrapped)
+                    .map_err(|_| manifest_structure(owner, "included statements did not parse"))?;
+                walker.visit_block(&syntax);
+            }
+            RustSyntaxContext::Pattern => {
+                let syntax = syn::Pat::parse_single
+                    .parse2(tokens)
+                    .map_err(|_| manifest_structure(owner, "included pattern did not parse"))?;
+                walker.visit_pat(&syntax);
+            }
+            RustSyntaxContext::Type => {
+                let syntax = syn::parse2::<syn::Type>(tokens)
+                    .map_err(|_| manifest_structure(owner, "included type did not parse"))?;
+                walker.visit_type(&syntax);
             }
         }
-        Ok(())
+        walker.finish()
+    }
+
+    fn discover_include(
+        &mut self,
+        owner: &str,
+        included: &LitStr,
+        syntax_context: RustSyntaxContext,
+        module_context: ModuleSearchContext,
+    ) -> Result<(), AlphaZetaProofErrorV1> {
+        let parent = Path::new(owner).parent().unwrap_or_else(|| Path::new(""));
+        let child = normalize_relative(parent.join(included.value()))?;
+        self.add_edge(owner, &child, AlphaZetaDependencyKindV1::RustInclude)?;
+        self.discover_rust_source(&child, syntax_context, module_context)
+    }
+
+    fn discover_module(
+        &mut self,
+        owner: &str,
+        module_context: &ModuleSearchContext,
+        block_depth: usize,
+        item: &syn::ItemMod,
+    ) -> Result<(), AlphaZetaProofErrorV1> {
+        if block_depth != 0 {
+            return Err(manifest_structure(
+                owner,
+                "module declarations inside block expressions are not supported",
+            ));
+        }
+        let attributes = module_attributes(owner, &item.attrs)?;
+        if !attributes.enabled {
+            return Ok(());
+        }
+        let ident = item.ident.to_string();
+        if let Some((_, nested)) = &item.content {
+            let directory = if let Some(explicit) = attributes.path {
+                module_context.path_attr_dir.join(explicit)
+            } else {
+                module_context.default_dir.join(&ident)
+            };
+            let nested_context = ModuleSearchContext {
+                default_dir: directory.clone(),
+                path_attr_dir: directory,
+                inside_inline_module: true,
+            };
+            let mut walker = SourceClosureWalker::new(self, owner, nested_context);
+            for nested_item in nested {
+                walker.visit_item(nested_item);
+            }
+            return walker.finish();
+        }
+
+        let (child, kind) = if let Some(explicit) = attributes.path {
+            (
+                normalize_relative(module_context.path_attr_dir.join(explicit))?,
+                AlphaZetaDependencyKindV1::RustPathModule,
+            )
+        } else {
+            let direct =
+                normalize_relative(module_context.default_dir.join(format!("{ident}.rs")))?;
+            let nested =
+                normalize_relative(module_context.default_dir.join(&ident).join("mod.rs"))?;
+            match (
+                self.snapshot.regular_file_exists(&direct)?,
+                self.snapshot.regular_file_exists(&nested)?,
+            ) {
+                (true, false) => (direct, AlphaZetaDependencyKindV1::RustModule),
+                (false, true) => (nested, AlphaZetaDependencyKindV1::RustModule),
+                _ => {
+                    return Err(manifest_structure(
+                        owner,
+                        "module path is missing or ambiguous",
+                    ));
+                }
+            }
+        };
+        let source_parent = Path::new(&child)
+            .parent()
+            .unwrap_or_else(|| Path::new(""))
+            .to_path_buf();
+        let is_mod_rs = Path::new(&child)
+            .file_name()
+            .is_some_and(|name| name == "mod.rs");
+        let default_dir = if is_mod_rs {
+            source_parent.clone()
+        } else {
+            source_parent.join(&ident)
+        };
+        self.add_edge(owner, &child, kind)?;
+        self.discover_rust_source(
+            &child,
+            RustSyntaxContext::Items,
+            ModuleSearchContext {
+                default_dir,
+                path_attr_dir: source_parent,
+                inside_inline_module: false,
+            },
+        )
     }
 
     fn add_file(&mut self, path: &str) -> Result<Vec<u8>, AlphaZetaProofErrorV1> {
@@ -696,45 +951,82 @@ impl Discovery {
     }
 }
 
-fn path_attribute(attributes: &[Attribute]) -> Result<Option<String>, AlphaZetaProofErrorV1> {
+struct ModuleAttributes {
+    enabled: bool,
+    path: Option<String>,
+}
+
+fn module_attributes(
+    owner: &str,
+    attributes: &[Attribute],
+) -> Result<ModuleAttributes, AlphaZetaProofErrorV1> {
+    let mut enabled = true;
+    let mut path = None;
     for attribute in attributes {
+        if attribute.path().is_ident("cfg_attr") {
+            return Err(manifest_structure(
+                owner,
+                "cfg_attr on a module is not evaluated by this source snapshot",
+            ));
+        }
+        if attribute.path().is_ident("cfg") {
+            let Meta::List(list) = &attribute.meta else {
+                return Err(manifest_structure(
+                    owner,
+                    "module cfg attribute is malformed",
+                ));
+            };
+            let predicate = syn::parse2::<syn::Path>(list.tokens.clone()).map_err(|_| {
+                manifest_structure(
+                    owner,
+                    "only the pinned disabled cfg(test) module predicate is supported",
+                )
+            })?;
+            if !predicate.is_ident("test") {
+                return Err(manifest_structure(
+                    owner,
+                    "module cfg predicate is outside the pinned discovery environment",
+                ));
+            }
+            enabled = false;
+            continue;
+        }
         if !attribute.path().is_ident("path") {
             continue;
         }
+        if path.is_some() {
+            return Err(manifest_structure(
+                owner,
+                "module has multiple path attributes",
+            ));
+        }
         let Meta::NameValue(name_value) = &attribute.meta else {
-            return Err(manifest_structure("#[path]", "path attribute is malformed"));
+            return Err(manifest_structure(owner, "path attribute is malformed"));
         };
         let Expr::Lit(expression) = &name_value.value else {
-            return Err(manifest_structure(
-                "#[path]",
-                "path attribute is not literal",
-            ));
+            return Err(manifest_structure(owner, "path attribute is not literal"));
         };
-        let Lit::Str(path) = &expression.lit else {
-            return Err(manifest_structure(
-                "#[path]",
-                "path attribute is not a string",
-            ));
+        let Lit::Str(value) = &expression.lit else {
+            return Err(manifest_structure(owner, "path attribute is not a string"));
         };
-        return Ok(Some(path.value()));
+        path = Some(value.value());
     }
-    Ok(None)
+    Ok(ModuleAttributes { enabled, path })
 }
 
-fn is_cfg_test(attributes: &[Attribute]) -> bool {
-    attributes.iter().any(|attribute| {
-        if !attribute.path().is_ident("cfg") {
-            return false;
+fn reject_configured_file_attributes(
+    owner: &str,
+    attributes: &[Attribute],
+) -> Result<(), AlphaZetaProofErrorV1> {
+    for attribute in attributes {
+        if attribute.path().is_ident("cfg") || attribute.path().is_ident("cfg_attr") {
+            return Err(manifest_structure(
+                owner,
+                "file-level cfg and cfg_attr are outside the pinned discovery environment",
+            ));
         }
-        let mut is_test = false;
-        let _ = attribute.parse_nested_meta(|meta| {
-            if meta.path.is_ident("test") {
-                is_test = true;
-            }
-            Ok(())
-        });
-        is_test
-    })
+    }
+    Ok(())
 }
 
 fn role_for_path(path: &str) -> Result<AlphaZetaSourceRoleV1, AlphaZetaProofErrorV1> {
@@ -992,8 +1284,8 @@ impl<'ast> Visit<'ast> for StructuralImportCollector<'_> {
         });
     }
 
-    fn visit_item_macro(&mut self, item: &'ast syn::ItemMacro) {
-        if opaque_tokens_contain_import(item.mac.tokens.clone()) {
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        if opaque_tokens_contain_import(mac.tokens.clone()) {
             self.error = Some(manifest_structure(
                 self.file.path.as_str(),
                 "import syntax inside an opaque macro is not structurally inventoried",
@@ -1008,15 +1300,30 @@ fn collect_structural_imports(
 ) -> Result<Vec<StructuralImport>, AlphaZetaProofErrorV1> {
     let source = std::str::from_utf8(file.snapshot_bytes())
         .map_err(|_| manifest_structure(file.path.as_str(), "Rust source is not UTF-8"))?;
-    let syntax = syn::parse_file(source)
-        .map_err(|_| manifest_structure(file.path.as_str(), "Rust source did not parse"))?;
+    let tokens = TokenStream::from_str(source)
+        .map_err(|_| manifest_structure(file.path.as_str(), "Rust tokenization failed"))?;
     let mut collector = StructuralImportCollector {
         file,
         file_index,
         imports: Vec::new(),
         error: None,
     };
-    collector.visit_file(&syntax);
+    if let Ok(syntax) = syn::parse2::<syn::File>(tokens.clone()) {
+        collector.visit_file(&syntax);
+    } else if let Ok(syntax) = syn::parse2::<syn::Expr>(tokens.clone()) {
+        collector.visit_expr(&syntax);
+    } else if let Ok(syntax) = syn::parse2::<syn::Type>(tokens.clone()) {
+        collector.visit_type(&syntax);
+    } else if let Ok(syntax) = syn::Pat::parse_single.parse2(tokens.clone()) {
+        collector.visit_pat(&syntax);
+    } else {
+        let wrapped = TokenStream::from_str(&format!("{{{source}}}")).map_err(|_| {
+            manifest_structure(file.path.as_str(), "Rust fragment did not tokenize")
+        })?;
+        let syntax = syn::parse2::<syn::Block>(wrapped)
+            .map_err(|_| manifest_structure(file.path.as_str(), "Rust fragment did not parse"))?;
+        collector.visit_block(&syntax);
+    }
     if let Some(error) = collector.error {
         Err(error)
     } else {
@@ -1034,6 +1341,18 @@ fn opaque_tokens_contain_import(stream: TokenStream) -> bool {
                 (TokenTree::Ident(first), Some(TokenTree::Ident(second)))
                     if first == "extern" && second == "crate"
             )
+    })
+}
+
+fn opaque_tokens_contain_include(stream: TokenStream) -> bool {
+    let mut tokens = Vec::new();
+    flatten_tokens(stream, &mut tokens);
+    tokens.windows(2).any(|tokens| {
+        matches!(
+            tokens,
+            [TokenTree::Ident(identifier), TokenTree::Punct(punctuation)]
+                if identifier == "include" && punctuation.as_char() == '!'
+        )
     })
 }
 

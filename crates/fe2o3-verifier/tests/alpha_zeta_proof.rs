@@ -1,20 +1,21 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use fe2o3_verifier::{
     ALPHA_ZETA_PERMISSION_MODEL_PATH_V1, ALPHA_ZETA_PROOF_HARNESS_PATH_V1,
-    ALPHA_ZETA_RUST_MODEL_PATH_V1, ALPHA_ZETA_SHARED_BODY_PATH_V1, AlphaZetaExecutionReviewV1,
-    AlphaZetaProofErrorV1, AlphaZetaProofSourcesV1, AlphaZetaReviewLedgerV1,
-    AlphaZetaSourceFileIdentityV1, AlphaZetaSourceRoleV1, AlphaZetaTrustedConstructKindV1,
-    AxiomPolicy, CorrelationId, Digest, GFX942_ALPHA_ZETA_MODEL_VERSION_V1,
-    GFX942_ALPHA_ZETA_REQUIRED_PROPERTIES_V1, GFX942_XNACK_MINUS_TARGET_V1,
-    Gfx942AlphaZetaKernelV1, Gfx942AlphaZetaProofInputV1, Gfx942XnackMinusTargetIdentityV1,
-    MeasuredToolIdentity, ProofCapsuleDependencyV1, ProofCapsuleExecutionV1,
-    ProofCapsuleFreshnessIdentityV1, ProofCapsulePayloadIdentityV1, ProofCapsulePolicyV1,
-    ProofCapsuleResultV1, ProofCapsuleTargetV1, ProofCapsuleV1, ProofOutcome, ProofProperty,
-    ProofTargetIdentity, ReviewedAlphaZetaProofSetV1, Text, TrustedItem, VerificationModelIdentity,
-    record_descriptive_alpha_zeta_execution_v1,
+    ALPHA_ZETA_RUST_MODEL_PATH_V1, ALPHA_ZETA_SHARED_BODY_PATH_V1, AlphaZetaDependencyKindV1,
+    AlphaZetaExecutionReviewV1, AlphaZetaProofErrorV1, AlphaZetaProofSourcesV1,
+    AlphaZetaReviewLedgerV1, AlphaZetaSourceFileIdentityV1, AlphaZetaSourceRoleV1,
+    AlphaZetaTrustedConstructKindV1, AxiomPolicy, CorrelationId, Digest,
+    GFX942_ALPHA_ZETA_MODEL_VERSION_V1, GFX942_ALPHA_ZETA_REQUIRED_PROPERTIES_V1,
+    GFX942_XNACK_MINUS_TARGET_V1, Gfx942AlphaZetaKernelV1, Gfx942AlphaZetaProofInputV1,
+    Gfx942XnackMinusTargetIdentityV1, MeasuredToolIdentity, ProofCapsuleDependencyV1,
+    ProofCapsuleExecutionV1, ProofCapsuleFreshnessIdentityV1, ProofCapsulePayloadIdentityV1,
+    ProofCapsulePolicyV1, ProofCapsuleResultV1, ProofCapsuleTargetV1, ProofCapsuleV1, ProofOutcome,
+    ProofProperty, ProofTargetIdentity, ReviewedAlphaZetaProofSetV1, Text, TrustedItem,
+    VerificationModelIdentity, record_descriptive_alpha_zeta_execution_v1,
 };
 
 const SHARED_BODY: &[u8] =
@@ -440,6 +441,207 @@ fn structural_discovery_rejects_missing_and_unexpected_transitive_sources() {
         AlphaZetaProofSourcesV1::discover_workspace(&unexpected.path),
         Err(AlphaZetaProofErrorV1::UnexpectedSourcePath)
     );
+}
+
+#[test]
+fn structural_discovery_follows_expression_and_nested_includes() {
+    let expected = sources();
+    let fixture = SourceWorkspaceFixture::copy_from(&expected);
+    let model = fixture.path.join(ALPHA_ZETA_RUST_MODEL_PATH_V1);
+    let mut source = fs::read_to_string(&model).unwrap();
+    source
+        .push_str("\nconst REVIEW_INCLUDE_VALUE: usize = include!(\"review_const_include.rs\");\n");
+    fs::write(&model, source).unwrap();
+    fs::write(
+        fixture
+            .path
+            .join("examples/verus_vecadd/src/review_const_include.rs"),
+        "1 + include!(\"review_nested_include.rs\")\n",
+    )
+    .unwrap();
+    fs::write(
+        fixture
+            .path
+            .join("examples/verus_vecadd/src/review_nested_include.rs"),
+        "2\n",
+    )
+    .unwrap();
+
+    let discovered = AlphaZetaProofSourcesV1::discover_workspace(&fixture.path).unwrap();
+    let paths = discovered
+        .files()
+        .iter()
+        .map(|file| file.path().as_str())
+        .collect::<Vec<_>>();
+    assert!(paths.contains(&"examples/verus_vecadd/src/review_const_include.rs"));
+    assert!(paths.contains(&"examples/verus_vecadd/src/review_nested_include.rs"));
+    assert!(discovered.edges().iter().any(|edge| {
+        edge.parent().as_str() == ALPHA_ZETA_RUST_MODEL_PATH_V1
+            && edge.child().as_str() == "examples/verus_vecadd/src/review_const_include.rs"
+            && edge.kind() == AlphaZetaDependencyKindV1::RustInclude
+    }));
+    assert!(discovered.edges().iter().any(|edge| {
+        edge.parent().as_str() == "examples/verus_vecadd/src/review_const_include.rs"
+            && edge.child().as_str() == "examples/verus_vecadd/src/review_nested_include.rs"
+            && edge.kind() == AlphaZetaDependencyKindV1::RustInclude
+    }));
+}
+
+#[test]
+fn structural_discovery_rejects_include_hidden_in_opaque_macro_tokens() {
+    let expected = sources();
+    let fixture = SourceWorkspaceFixture::copy_from(&expected);
+    let model = fixture.path.join(ALPHA_ZETA_RUST_MODEL_PATH_V1);
+    let mut source = fs::read_to_string(&model).unwrap();
+    source.push_str("\nmacro_rules! hidden_include { () => { include!(\"review_decoy.rs\") } }\n");
+    fs::write(model, source).unwrap();
+
+    assert!(matches!(
+        AlphaZetaProofSourcesV1::discover_workspace(&fixture.path),
+        Err(AlphaZetaProofErrorV1::SourceManifestStructure { reason, .. })
+            if reason.contains("opaque macro")
+    ));
+}
+
+#[test]
+fn module_resolution_measures_rustc_paths_and_ignores_valid_decoys() {
+    let expected = sources();
+    let fixture = SourceWorkspaceFixture::copy_from(&expected);
+    let source_root = fixture.path.join("examples/verus_vecadd/src");
+    let model = source_root.join("lib.rs");
+    let mut source = fs::read_to_string(&model).unwrap();
+    source.push_str(
+        r#"
+mod review_outer;
+#[path = "review_selected.rs"]
+mod review_selected_mod;
+#[path = "review_paths"]
+mod review_inline {
+    #[path = "actual.rs"]
+    mod selected;
+}
+"#,
+    );
+    fs::write(model, source).unwrap();
+
+    fs::write(
+        source_root.join("review_outer.rs"),
+        r#"
+mod leaf;
+mod inline {
+    mod deep;
+    #[path = "selected.rs"]
+    mod path_selected;
+}
+"#,
+    )
+    .unwrap();
+    fs::create_dir_all(source_root.join("review_outer")).unwrap();
+    fs::write(
+        source_root.join("review_outer/leaf.rs"),
+        "pub const COMPILED_NESTED: usize = 1;\n",
+    )
+    .unwrap();
+    fs::create_dir_all(source_root.join("review_outer/inline")).unwrap();
+    fs::write(
+        source_root.join("review_outer/inline/deep.rs"),
+        "pub const COMPILED_INLINE_NESTED: usize = 8;\n",
+    )
+    .unwrap();
+    fs::write(
+        source_root.join("review_outer/inline/selected.rs"),
+        "pub const COMPILED_NON_MOD_PATH: usize = 9;\n",
+    )
+    .unwrap();
+    fs::write(
+        source_root.join("review_outer/deep.rs"),
+        "pub const WRONG_NON_MOD_DECOY: usize = 10;\n",
+    )
+    .unwrap();
+    fs::write(
+        source_root.join("review_outer/selected.rs"),
+        "pub const WRONG_NON_MOD_PATH_DECOY: usize = 11;\n",
+    )
+    .unwrap();
+    fs::write(
+        source_root.join("leaf.rs"),
+        "pub const WRONG_FLAT_DECOY: usize = 2;\n",
+    )
+    .unwrap();
+    fs::write(
+        source_root.join("review_selected.rs"),
+        "pub const COMPILED_PATH: usize = 3;\n",
+    )
+    .unwrap();
+    fs::write(
+        source_root.join("review_selected_mod.rs"),
+        "pub const WRONG_DEFAULT_DECOY: usize = 4;\n",
+    )
+    .unwrap();
+    fs::create_dir_all(source_root.join("review_paths")).unwrap();
+    fs::write(
+        source_root.join("review_paths/actual.rs"),
+        "pub const COMPILED_INLINE_PATH: usize = 5;\n",
+    )
+    .unwrap();
+    fs::create_dir_all(source_root.join("review_inline")).unwrap();
+    fs::write(
+        source_root.join("review_inline/actual.rs"),
+        "pub const WRONG_INLINE_DECOY: usize = 6;\n",
+    )
+    .unwrap();
+    fs::write(
+        source_root.join("actual.rs"),
+        "pub const WRONG_SOURCE_DIR_DECOY: usize = 7;\n",
+    )
+    .unwrap();
+
+    let discovered = AlphaZetaProofSourcesV1::discover_workspace(&fixture.path).unwrap();
+    let paths = discovered
+        .files()
+        .iter()
+        .map(|file| file.path().as_str())
+        .collect::<BTreeSet<_>>();
+    for compiled in [
+        "examples/verus_vecadd/src/review_outer.rs",
+        "examples/verus_vecadd/src/review_outer/leaf.rs",
+        "examples/verus_vecadd/src/review_outer/inline/deep.rs",
+        "examples/verus_vecadd/src/review_outer/inline/selected.rs",
+        "examples/verus_vecadd/src/review_selected.rs",
+        "examples/verus_vecadd/src/review_paths/actual.rs",
+    ] {
+        assert!(
+            paths.contains(compiled),
+            "compiled path not measured: {compiled}"
+        );
+    }
+    for decoy in [
+        "examples/verus_vecadd/src/leaf.rs",
+        "examples/verus_vecadd/src/review_outer/deep.rs",
+        "examples/verus_vecadd/src/review_outer/selected.rs",
+        "examples/verus_vecadd/src/review_selected_mod.rs",
+        "examples/verus_vecadd/src/review_inline/actual.rs",
+        "examples/verus_vecadd/src/actual.rs",
+    ] {
+        assert!(!paths.contains(decoy), "decoy path was measured: {decoy}");
+    }
+}
+
+#[test]
+fn module_resolution_fails_closed_on_cfg_attr_path_selection() {
+    let expected = sources();
+    let fixture = SourceWorkspaceFixture::copy_from(&expected);
+    let model = fixture.path.join(ALPHA_ZETA_RUST_MODEL_PATH_V1);
+    let mut source = fs::read_to_string(&model).unwrap();
+    source
+        .push_str("\n#[cfg_attr(not(test), path = \"review_cfg_selected.rs\")]\nmod review_cfg;\n");
+    fs::write(model, source).unwrap();
+
+    assert!(matches!(
+        AlphaZetaProofSourcesV1::discover_workspace(&fixture.path),
+        Err(AlphaZetaProofErrorV1::SourceManifestStructure { reason, .. })
+            if reason.contains("cfg_attr")
+    ));
 }
 
 #[test]
