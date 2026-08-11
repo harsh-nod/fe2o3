@@ -1371,6 +1371,10 @@ mod platform {
         #[test]
         fn self_consistent_arbitrary_executable_route_is_rejected_before_connect() {
             let (_temp, _backend, _artifact, _pinned_cargo_image, session) = fixture();
+            let endpoint = random_endpoint().unwrap();
+            let address = endpoint_address(&endpoint).unwrap();
+            let listener = UnixListener::bind_addr(&address).unwrap();
+            listener.set_nonblocking(true).unwrap();
             let mut mock = std::process::Command::new("/bin/sleep")
                 .arg("30")
                 .spawn()
@@ -1379,7 +1383,7 @@ mod platform {
             let mock_start_time = process_start_time_ticks(mock_pid).unwrap();
             let (mock_image, mock_metadata) = pin_process_executable(mock_pid).unwrap();
             let route = BrokerRouteV2 {
-                endpoint: random_endpoint().unwrap(),
+                endpoint,
                 secret: random_bytes().unwrap(),
                 binding: ordinary_binding(),
                 peer: BrokerPeerIdentityV2 {
@@ -1399,7 +1403,11 @@ mod platform {
             let error = result
                 .err()
                 .expect("an arbitrary executable route must fail closed");
-            assert!(error.contains("does not name the current cargo-fe2o3 executable"));
+            assert!(!error.is_empty());
+            assert!(
+                matches!(listener.accept(), Err(error) if error.kind() == io::ErrorKind::WouldBlock),
+                "arbitrary executable route reached the broker endpoint"
+            );
         }
 
         #[test]
