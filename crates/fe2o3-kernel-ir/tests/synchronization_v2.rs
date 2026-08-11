@@ -210,6 +210,36 @@ fn full_module() -> SynchronizationModuleV2 {
         offset: 0,
         bytes: 4,
     };
+    let mut release_atomic = atomic(
+        AtomicOperation::Store,
+        u32_ty(),
+        AddressSpace::Global,
+        MemoryScope::System,
+        MemoryOrdering::Release,
+        None,
+        AtomicDialect::Rust,
+    );
+    release_atomic.region = global;
+    release_atomic
+        .coherent_allocation
+        .as_mut()
+        .unwrap()
+        .allocation = global.allocation;
+    let mut acquire_atomic = atomic(
+        AtomicOperation::Load,
+        u32_ty(),
+        AddressSpace::Global,
+        MemoryScope::System,
+        MemoryOrdering::Acquire,
+        None,
+        AtomicDialect::Rust,
+    );
+    acquire_atomic.region = global;
+    acquire_atomic
+        .coherent_allocation
+        .as_mut()
+        .unwrap()
+        .allocation = global.allocation;
     let mut events = vec![
         event(
             0,
@@ -221,22 +251,8 @@ fn full_module() -> SynchronizationModuleV2 {
                 alignment: 4,
             }),
         ),
-        event(
-            1,
-            EventKind::Fence(Fence {
-                scope: MemoryScope::System,
-                ordering: MemoryOrdering::Release,
-                domains: MemoryDomains::GLOBAL,
-            }),
-        ),
-        event(
-            2,
-            EventKind::Fence(Fence {
-                scope: MemoryScope::System,
-                ordering: MemoryOrdering::Acquire,
-                domains: MemoryDomains::GLOBAL,
-            }),
-        ),
+        event(1, EventKind::Atomic(release_atomic)),
+        event(2, EventKind::Atomic(acquire_atomic)),
         event(
             3,
             EventKind::NonAtomic(NonAtomicAccess {
@@ -335,7 +351,7 @@ fn full_module() -> SynchronizationModuleV2 {
                 domains: MemoryDomains::GLOBAL,
                 before_outcome: EventOutcome::Unconditional,
                 after_outcome: EventOutcome::Unconditional,
-                read_from: ReadFromCondition::NotApplicable,
+                read_from: ReadFromCondition::VerifierMustProve,
             },
             SynchronizationEdge {
                 before: EventId(2),
@@ -365,7 +381,7 @@ fn empty_codec_golden_is_versioned_and_canonical() {
     assert_eq!(
         bytes,
         vec![
-            b'F', b'2', b'S', b'Y', b'N', b'C', b'V', b'2', 3, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,
+            b'F', b'2', b'S', b'Y', b'N', b'C', b'V', b'2', 4, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         ]
     );
@@ -1345,19 +1361,27 @@ fn edge_kind_scope_domain_and_ordering_checks_are_exhaustive() {
                 let events = vec![
                     event(
                         0,
-                        EventKind::Fence(Fence {
-                            scope: MemoryScope::System,
-                            ordering: release,
-                            domains: MemoryDomains::GLOBAL,
-                        }),
+                        EventKind::Atomic(atomic(
+                            AtomicOperation::Exchange,
+                            u32_ty(),
+                            AddressSpace::Global,
+                            MemoryScope::System,
+                            release,
+                            None,
+                            AtomicDialect::Rust,
+                        )),
                     ),
                     event(
                         1,
-                        EventKind::Fence(Fence {
-                            scope: MemoryScope::System,
-                            ordering: acquire,
-                            domains: MemoryDomains::GLOBAL,
-                        }),
+                        EventKind::Atomic(atomic(
+                            AtomicOperation::Exchange,
+                            u32_ty(),
+                            AddressSpace::Global,
+                            MemoryScope::System,
+                            acquire,
+                            None,
+                            AtomicDialect::Rust,
+                        )),
                     ),
                 ];
                 let mut candidate = module(events);
@@ -1369,7 +1393,7 @@ fn edge_kind_scope_domain_and_ordering_checks_are_exhaustive() {
                     domains: MemoryDomains::GLOBAL,
                     before_outcome: EventOutcome::Unconditional,
                     after_outcome: EventOutcome::Unconditional,
-                    read_from: ReadFromCondition::NotApplicable,
+                    read_from: ReadFromCondition::VerifierMustProve,
                 });
                 let expected = release != MemoryOrdering::Relaxed
                     && acquire != MemoryOrdering::Relaxed
@@ -1413,6 +1437,177 @@ fn edge_kind_scope_domain_and_ordering_checks_are_exhaustive() {
     assert_eq!(
         candidate.validate(&limits),
         Err(ValidationError::DuplicateEdge)
+    );
+}
+
+#[test]
+fn synchronization_witnesses_bind_endpoints_participants_and_operations() {
+    let limits = SynchronizationLimits::default();
+    let atomic_report = full_module().validate(&limits).unwrap();
+    assert!(atomic_report.obligations.iter().any(|obligation| matches!(
+        obligation,
+        VerifierObligation::HappensBefore {
+            before: EventId(1),
+            after: EventId(2),
+            before_kind: EventKind::Atomic(AtomicAccess {
+                operation: AtomicOperation::Store,
+                ..
+            }),
+            after_kind: EventKind::Atomic(AtomicAccess {
+                operation: AtomicOperation::Load,
+                ..
+            }),
+            participant_witness: ParticipantWitness::SynchronizingParticipantsMustProve,
+            operation_witness: SynchronizationOperationWitness::AtomicReadFrom {
+                region: MemoryRegion {
+                    allocation: 7,
+                    offset: 0,
+                    bytes: 4,
+                },
+                before_operation: AtomicOperation::Store,
+                after_operation: AtomicOperation::Load,
+            },
+            ..
+        }
+    )));
+
+    let fences = vec![
+        event(
+            0,
+            EventKind::Fence(Fence {
+                scope: MemoryScope::System,
+                ordering: MemoryOrdering::Release,
+                domains: MemoryDomains::GLOBAL,
+            }),
+        ),
+        event(
+            1,
+            EventKind::Fence(Fence {
+                scope: MemoryScope::System,
+                ordering: MemoryOrdering::Acquire,
+                domains: MemoryDomains::GLOBAL,
+            }),
+        ),
+    ];
+    let mut program_order = module(fences.clone());
+    program_order.edges.push(SynchronizationEdge {
+        before: EventId(0),
+        after: EventId(1),
+        kind: SynchronizationEdgeKind::ProgramOrder,
+        scope: MemoryScope::Wavefront,
+        domains: MemoryDomains::GLOBAL,
+        before_outcome: EventOutcome::Unconditional,
+        after_outcome: EventOutcome::Unconditional,
+        read_from: ReadFromCondition::NotApplicable,
+    });
+    let report = program_order.validate(&limits).unwrap();
+    assert!(report.obligations.iter().any(|obligation| matches!(
+        obligation,
+        VerifierObligation::HappensBefore {
+            before_kind: EventKind::Fence(Fence {
+                ordering: MemoryOrdering::Release,
+                ..
+            }),
+            after_kind: EventKind::Fence(Fence {
+                ordering: MemoryOrdering::Acquire,
+                ..
+            }),
+            participant_witness: ParticipantWitness::SameParticipantMustProve,
+            operation_witness: SynchronizationOperationWitness::ProgramOrder,
+            ..
+        }
+    )));
+    assert_eq!(
+        report
+            .obligations
+            .iter()
+            .filter(|obligation| matches!(obligation, VerifierObligation::FenceSemantics { .. }))
+            .count(),
+        2
+    );
+
+    let mut unsupported_direct_fence = module(fences);
+    unsupported_direct_fence.edges.push(SynchronizationEdge {
+        before: EventId(0),
+        after: EventId(1),
+        kind: SynchronizationEdgeKind::SynchronizesWith,
+        scope: MemoryScope::System,
+        domains: MemoryDomains::GLOBAL,
+        before_outcome: EventOutcome::Unconditional,
+        after_outcome: EventOutcome::Unconditional,
+        read_from: ReadFromCondition::VerifierMustProve,
+    });
+    assert_eq!(
+        unsupported_direct_fence.validate(&limits),
+        Err(ValidationError::InvalidEdgeEndpointKind(0))
+    );
+
+    let barrier_event = |id, ordering, participants| Event {
+        id: EventId(id),
+        participation: ParticipationContract {
+            group: GroupKind::Workgroup,
+            convergence: ConvergenceContract::UniformRequired,
+            expected_participants: participants,
+            active_mask: None,
+        },
+        kind: EventKind::Barrier(Barrier {
+            kind: BarrierKind::Workgroup,
+            scope: MemoryScope::Workgroup,
+            ordering,
+            domains: MemoryDomains::LDS,
+        }),
+    };
+    let mut barrier_pair = module(vec![
+        barrier_event(0, MemoryOrdering::Release, 256),
+        barrier_event(1, MemoryOrdering::Acquire, 256),
+    ]);
+    barrier_pair.edges.push(SynchronizationEdge {
+        before: EventId(0),
+        after: EventId(1),
+        kind: SynchronizationEdgeKind::SynchronizesWith,
+        scope: MemoryScope::Workgroup,
+        domains: MemoryDomains::LDS,
+        before_outcome: EventOutcome::Unconditional,
+        after_outcome: EventOutcome::Unconditional,
+        read_from: ReadFromCondition::NotApplicable,
+    });
+    let report = barrier_pair.validate(&limits).unwrap();
+    assert!(report.obligations.iter().any(|obligation| matches!(
+        obligation,
+        VerifierObligation::HappensBefore {
+            participant_witness: ParticipantWitness::SameBarrierCohortMustProve,
+            operation_witness: SynchronizationOperationWitness::BarrierPhase {
+                kind: BarrierKind::Workgroup,
+                expected_participants: 256,
+            },
+            ..
+        }
+    )));
+    assert_eq!(
+        report
+            .obligations
+            .iter()
+            .filter(|obligation| matches!(obligation, VerifierObligation::BarrierSemantics { .. }))
+            .count(),
+        2
+    );
+
+    barrier_pair.events[1].participation.expected_participants = 64;
+    assert_eq!(
+        barrier_pair.validate(&limits),
+        Err(ValidationError::InvalidEdgeEndpointKind(0))
+    );
+    barrier_pair.events[1] = event(
+        1,
+        EventKind::Fence(Fence {
+            scope: MemoryScope::Workgroup,
+            ordering: MemoryOrdering::Acquire,
+            domains: MemoryDomains::LDS,
+        }),
+    );
+    assert_eq!(
+        barrier_pair.validate(&limits),
+        Err(ValidationError::InvalidEdgeEndpointKind(0))
     );
 }
 
@@ -1583,10 +1778,10 @@ fn codec_rejects_every_truncation_count_bombs_and_noncanonical_fields() {
     }
 
     let mut bad_version = empty.clone();
-    bad_version[8..10].copy_from_slice(&4_u16.to_le_bytes());
+    bad_version[8..10].copy_from_slice(&5_u16.to_le_bytes());
     assert_eq!(
         decode_synchronization_v2(&bad_version, &limits),
-        Err(DecodeError::UnsupportedVersion(4))
+        Err(DecodeError::UnsupportedVersion(5))
     );
     let mut bad_target = empty.clone();
     bad_target[16] = 0xff;
@@ -2096,11 +2291,21 @@ fn review_counterexamples_are_repaired_incrementally() {
     }])
     .validate(&limits)
     .unwrap();
-    assert_eq!(collective_add.obligations, collective_min.obligations);
-    assert_eq!(
+    assert_ne!(collective_add.obligations, collective_min.obligations);
+    assert_ne!(
         collective_add.obligations_digest,
         collective_min.obligations_digest
     );
+    assert!(collective_add.obligations.iter().any(|obligation| matches!(
+        obligation,
+        VerifierObligation::CollectiveSemantics {
+            collective: Collective {
+                kind: CollectiveKind::ReduceAdd,
+                ..
+            },
+            ..
+        }
+    )));
     assert_ne!(collective_add.module_digest, collective_min.module_digest);
     assert_ne!(collective_add.report_digest, collective_min.report_digest);
 
@@ -2133,5 +2338,8 @@ fn review_counterexamples_are_repaired_incrementally() {
         after_outcome: EventOutcome::Unconditional,
         read_from: ReadFromCondition::NotApplicable,
     });
-    assert!(fence_pair.validate(&limits).is_ok());
+    assert_eq!(
+        fence_pair.validate(&limits),
+        Err(ValidationError::InvalidEdgeEndpointKind(0))
+    );
 }

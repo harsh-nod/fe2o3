@@ -13,10 +13,10 @@
 use std::collections::BTreeSet;
 
 pub const SYNCHRONIZATION_V2_MAGIC: [u8; 8] = *b"F2SYNCV2";
-pub const SYNCHRONIZATION_V2_VERSION: u16 = 3;
+pub const SYNCHRONIZATION_V2_VERSION: u16 = 4;
 pub const SYNCHRONIZATION_V2_LIMITATIONS: &str = "inert unexported schema; gfx942 wave64 only; \
 no LLVM emission, execution, runtime admission, race-freedom proof, uniformity proof, \
-happens-before proof, bank-conflict proof, or formal-verification claim";
+happens-before proof, direct fence synchronization, bank-conflict proof, or formal-verification claim";
 
 const HEADER_BYTES: u64 = 32;
 const LDS_RECORD_BYTES: u64 = 32;
@@ -645,6 +645,12 @@ pub enum VerifierObligation {
         before_outcome: EventOutcome,
         after_outcome: EventOutcome,
         read_from: ReadFromCondition,
+        before_participation: ParticipationContract,
+        after_participation: ParticipationContract,
+        before_kind: EventKind,
+        after_kind: EventKind,
+        participant_witness: ParticipantWitness,
+        operation_witness: SynchronizationOperationWitness,
     },
     NonAtomicConflict {
         first: EventId,
@@ -679,6 +685,21 @@ pub enum VerifierObligation {
         element_stride: u32,
         swizzle: LdsSwizzle,
     },
+    FenceSemantics {
+        event: EventId,
+        participation: ParticipationContract,
+        fence: Fence,
+    },
+    BarrierSemantics {
+        event: EventId,
+        participation: ParticipationContract,
+        barrier: Barrier,
+    },
+    CollectiveSemantics {
+        event: EventId,
+        participation: ParticipationContract,
+        collective: Collective,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -692,6 +713,27 @@ pub enum AllocationAliasConsequence {
     ReadOnlyOverlap,
     NonAtomicConflict,
     AtomicObjectCompatibility,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum ParticipantWitness {
+    SameParticipantMustProve,
+    SynchronizingParticipantsMustProve,
+    SameBarrierCohortMustProve,
+}
+
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum SynchronizationOperationWitness {
+    ProgramOrder,
+    AtomicReadFrom {
+        region: MemoryRegion,
+        before_operation: AtomicOperation,
+        after_operation: AtomicOperation,
+    },
+    BarrierPhase {
+        kind: BarrierKind,
+        expected_participants: u32,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -841,6 +883,36 @@ impl SynchronizationModuleV2 {
                     limits,
                 )?;
             }
+            match &event.kind {
+                EventKind::Fence(fence) => insert_obligation(
+                    &mut obligations,
+                    VerifierObligation::FenceSemantics {
+                        event: event.id,
+                        participation: event.participation,
+                        fence: fence.clone(),
+                    },
+                    limits,
+                )?,
+                EventKind::Barrier(barrier) => insert_obligation(
+                    &mut obligations,
+                    VerifierObligation::BarrierSemantics {
+                        event: event.id,
+                        participation: event.participation,
+                        barrier: barrier.clone(),
+                    },
+                    limits,
+                )?,
+                EventKind::Collective(collective) => insert_obligation(
+                    &mut obligations,
+                    VerifierObligation::CollectiveSemantics {
+                        event: event.id,
+                        participation: event.participation,
+                        collective: collective.clone(),
+                    },
+                    limits,
+                )?,
+                _ => {}
+            }
         }
 
         let mut prior_edge: Option<&SynchronizationEdge> = None;
@@ -856,7 +928,7 @@ impl SynchronizationModuleV2 {
             prior_edge = Some(edge);
             let edge_index =
                 u32::try_from(index).map_err(|_| ValidationError::ArithmeticOverflow)?;
-            validate_edge(edge_index, edge, self)?;
+            let witness = validate_edge(edge_index, edge, self)?;
             insert_obligation(
                 &mut obligations,
                 VerifierObligation::HappensBefore {
@@ -869,6 +941,12 @@ impl SynchronizationModuleV2 {
                     before_outcome: edge.before_outcome,
                     after_outcome: edge.after_outcome,
                     read_from: edge.read_from,
+                    before_participation: witness.before.participation,
+                    after_participation: witness.after.participation,
+                    before_kind: witness.before.kind.clone(),
+                    after_kind: witness.after.kind.clone(),
+                    participant_witness: witness.participant_witness,
+                    operation_witness: witness.operation_witness,
                 },
                 limits,
             )?;
@@ -1542,11 +1620,18 @@ fn validate_ballot(
     Ok(())
 }
 
-fn validate_edge(
+struct ValidatedEdgeWitness<'a> {
+    before: &'a Event,
+    after: &'a Event,
+    participant_witness: ParticipantWitness,
+    operation_witness: SynchronizationOperationWitness,
+}
+
+fn validate_edge<'a>(
     edge_index: u32,
     edge: &SynchronizationEdge,
-    module: &SynchronizationModuleV2,
-) -> Result<(), ValidationError> {
+    module: &'a SynchronizationModuleV2,
+) -> Result<ValidatedEdgeWitness<'a>, ValidationError> {
     if edge.domains == MemoryDomains::NONE {
         return Err(ValidationError::IncompatibleEdgeDomains(edge_index));
     }
@@ -1583,10 +1668,9 @@ fn validate_edge(
             {
                 return Err(ValidationError::InvalidEdgeEndpointKind(edge_index));
             }
-            if before.participation.group != after.participation.group
-                || edge.scope.rank()
-                    < required_pair_scope(before.participation.group, after.participation.group)
-                        .rank()
+            if before.participation != after.participation
+                || edge.scope
+                    != required_pair_scope(before.participation.group, after.participation.group)
             {
                 return Err(ValidationError::IncompatibleEdgeScope(edge_index));
             }
@@ -1598,6 +1682,12 @@ fn validate_edge(
                     return Err(ValidationError::IncompatibleEdgeDomains(edge_index));
                 }
             }
+            Ok(ValidatedEdgeWitness {
+                before,
+                after,
+                participant_witness: ParticipantWitness::SameParticipantMustProve,
+                operation_witness: SynchronizationOperationWitness::ProgramOrder,
+            })
         }
         SynchronizationEdgeKind::SynchronizesWith => {
             if !event_has_release(before, edge.before_outcome)
@@ -1605,11 +1695,43 @@ fn validate_edge(
             {
                 return Err(ValidationError::InvalidEdgeEndpointKind(edge_index));
             }
-            let has_atomic_endpoint = matches!(before.kind, EventKind::Atomic(_))
-                || matches!(after.kind, EventKind::Atomic(_));
-            if has_atomic_endpoint != (edge.read_from == ReadFromCondition::VerifierMustProve) {
-                return Err(ValidationError::InvalidEdgeEndpointKind(edge_index));
-            }
+            let (participant_witness, operation_witness) = match (&before.kind, &after.kind) {
+                (EventKind::Atomic(before_atomic), EventKind::Atomic(after_atomic)) => {
+                    let before_access = memory_access(before)
+                        .ok_or(ValidationError::InvalidEdgeEndpointKind(edge_index))?;
+                    let after_access = memory_access(after)
+                        .ok_or(ValidationError::InvalidEdgeEndpointKind(edge_index))?;
+                    if edge.read_from != ReadFromCondition::VerifierMustProve
+                        || !atomic_objects_compatible(before_access, after_access)
+                    {
+                        return Err(ValidationError::InvalidEdgeEndpointKind(edge_index));
+                    }
+                    (
+                        ParticipantWitness::SynchronizingParticipantsMustProve,
+                        SynchronizationOperationWitness::AtomicReadFrom {
+                            region: before_atomic.region,
+                            before_operation: before_atomic.operation,
+                            after_operation: after_atomic.operation,
+                        },
+                    )
+                }
+                (EventKind::Barrier(before_barrier), EventKind::Barrier(after_barrier)) => {
+                    if edge.read_from != ReadFromCondition::NotApplicable
+                        || before_barrier.kind != after_barrier.kind
+                        || before.participation != after.participation
+                    {
+                        return Err(ValidationError::InvalidEdgeEndpointKind(edge_index));
+                    }
+                    (
+                        ParticipantWitness::SameBarrierCohortMustProve,
+                        SynchronizationOperationWitness::BarrierPhase {
+                            kind: before_barrier.kind,
+                            expected_participants: before.participation.expected_participants,
+                        },
+                    )
+                }
+                _ => return Err(ValidationError::InvalidEdgeEndpointKind(edge_index)),
+            };
             let before_scope =
                 event_scope(before).ok_or(ValidationError::InvalidEdgeEndpointKind(edge_index))?;
             let after_scope =
@@ -1631,9 +1753,14 @@ fn validate_edge(
             {
                 return Err(ValidationError::IncompatibleEdgeDomains(edge_index));
             }
+            Ok(ValidatedEdgeWitness {
+                before,
+                after,
+                participant_witness,
+                operation_witness,
+            })
         }
     }
-    Ok(())
 }
 
 fn event_has_release(event: &Event, outcome: EventOutcome) -> bool {
@@ -2555,13 +2682,13 @@ fn decode_bool(tag: u8) -> Result<bool, DecodeError> {
 }
 
 fn digest_module(canonical_module: &[u8]) -> [u8; 32] {
-    let mut digest = DomainSeparatedDigest::new(b"fe2o3.synchronization.module.v3");
+    let mut digest = DomainSeparatedDigest::new(b"fe2o3.synchronization.module.v4");
     digest.bytes(canonical_module);
     digest.finish()
 }
 
 fn digest_obligations(obligations: &[VerifierObligation]) -> [u8; 32] {
-    let mut digest = DomainSeparatedDigest::new(b"fe2o3.synchronization.obligations.v3");
+    let mut digest = DomainSeparatedDigest::new(b"fe2o3.synchronization.obligations.v4");
     digest.u32(obligations.len() as u32);
     for obligation in obligations {
         match obligation {
@@ -2595,6 +2722,12 @@ fn digest_obligations(obligations: &[VerifierObligation]) -> [u8; 32] {
                 before_outcome,
                 after_outcome,
                 read_from,
+                before_participation,
+                after_participation,
+                before_kind,
+                after_kind,
+                participant_witness,
+                operation_witness,
             } => {
                 digest.u8(3);
                 digest.u32(*edge);
@@ -2609,6 +2742,36 @@ fn digest_obligations(obligations: &[VerifierObligation]) -> [u8; 32] {
                 digest.u8(*before_outcome as u8);
                 digest.u8(*after_outcome as u8);
                 digest.u8(*read_from as u8);
+                digest.participation(*before_participation);
+                digest.participation(*after_participation);
+                digest.event_kind(before_kind);
+                digest.event_kind(after_kind);
+                digest.u8(match participant_witness {
+                    ParticipantWitness::SameParticipantMustProve => 1,
+                    ParticipantWitness::SynchronizingParticipantsMustProve => 2,
+                    ParticipantWitness::SameBarrierCohortMustProve => 3,
+                });
+                match operation_witness {
+                    SynchronizationOperationWitness::ProgramOrder => digest.u8(1),
+                    SynchronizationOperationWitness::AtomicReadFrom {
+                        region,
+                        before_operation,
+                        after_operation,
+                    } => {
+                        digest.u8(2);
+                        digest.region(*region);
+                        digest.u8(*before_operation as u8);
+                        digest.u8(*after_operation as u8);
+                    }
+                    SynchronizationOperationWitness::BarrierPhase {
+                        kind,
+                        expected_participants,
+                    } => {
+                        digest.u8(3);
+                        digest.u8(*kind as u8);
+                        digest.u32(*expected_participants);
+                    }
+                }
             }
             VerifierObligation::NonAtomicConflict {
                 first,
@@ -2692,6 +2855,36 @@ fn digest_obligations(obligations: &[VerifierObligation]) -> [u8; 32] {
                     }
                 }
             }
+            VerifierObligation::FenceSemantics {
+                event,
+                participation,
+                fence,
+            } => {
+                digest.u8(9);
+                digest.u32(event.0);
+                digest.participation(*participation);
+                digest.fence(fence);
+            }
+            VerifierObligation::BarrierSemantics {
+                event,
+                participation,
+                barrier,
+            } => {
+                digest.u8(10);
+                digest.u32(event.0);
+                digest.participation(*participation);
+                digest.barrier(barrier);
+            }
+            VerifierObligation::CollectiveSemantics {
+                event,
+                participation,
+                collective,
+            } => {
+                digest.u8(11);
+                digest.u32(event.0);
+                digest.participation(*participation);
+                digest.collective(collective);
+            }
         }
     }
     digest.finish()
@@ -2704,7 +2897,7 @@ fn digest_report(
     target_limits: TargetHardLimits,
     policy_limits: SynchronizationLimits,
 ) -> [u8; 32] {
-    let mut digest = DomainSeparatedDigest::new(b"fe2o3.synchronization.report.v3");
+    let mut digest = DomainSeparatedDigest::new(b"fe2o3.synchronization.report.v4");
     digest.bytes(&module_digest);
     digest.bytes(&obligations_digest);
     digest.u8(target as u8);
@@ -2769,6 +2962,102 @@ impl DomainSeparatedDigest {
         self.u32(region.allocation);
         self.u32(region.offset);
         self.u32(region.bytes);
+    }
+
+    fn scalar(&mut self, value_type: ScalarType) {
+        match value_type {
+            ScalarType::Bool => self.u8(1),
+            ScalarType::Integer { width, signed } => {
+                self.u8(2);
+                self.u8(width as u8);
+                self.boolean(signed);
+            }
+            ScalarType::Float32 => self.u8(3),
+            ScalarType::Float64 => self.u8(4),
+            ScalarType::Pointer64 => self.u8(5),
+        }
+    }
+
+    fn participation(&mut self, participation: ParticipationContract) {
+        self.u8(participation.group as u8);
+        self.u8(participation.convergence as u8);
+        self.u32(participation.expected_participants);
+        self.option_u64(participation.active_mask);
+    }
+
+    fn fence(&mut self, fence: &Fence) {
+        self.u8(fence.scope as u8);
+        self.u8(fence.ordering as u8);
+        self.u8(fence.domains.bits());
+    }
+
+    fn barrier(&mut self, barrier: &Barrier) {
+        self.u8(barrier.kind as u8);
+        self.u8(barrier.scope as u8);
+        self.u8(barrier.ordering as u8);
+        self.u8(barrier.domains.bits());
+    }
+
+    fn collective(&mut self, collective: &Collective) {
+        self.u8(collective.kind as u8);
+        self.scalar(collective.value_type);
+    }
+
+    fn event_kind(&mut self, kind: &EventKind) {
+        match kind {
+            EventKind::Atomic(atomic) => {
+                self.u8(1);
+                self.region(atomic.region);
+                self.u8(atomic.dialect as u8);
+                self.u8(atomic.operation as u8);
+                self.scalar(atomic.value_type);
+                self.u8(atomic.address_space as u8);
+                self.u32(atomic.alignment);
+                self.u8(atomic.scope as u8);
+                self.u8(atomic.success_ordering as u8);
+                self.u8(atomic.failure_ordering.map_or(0, |ordering| ordering as u8));
+                self.boolean(atomic.coherent_allocation.is_some());
+                let claim = atomic
+                    .coherent_allocation
+                    .unwrap_or(CoherentAllocationClaim {
+                        allocation: 0,
+                        authority: 0,
+                    });
+                self.u32(claim.allocation);
+                self.u64(claim.authority);
+            }
+            EventKind::NonAtomic(access) => {
+                self.u8(2);
+                self.region(access.region);
+                self.u8(access.kind as u8);
+                self.scalar(access.value_type);
+                self.u8(access.address_space as u8);
+                self.u32(access.alignment);
+            }
+            EventKind::Fence(fence) => {
+                self.u8(3);
+                self.fence(fence);
+            }
+            EventKind::Barrier(barrier) => {
+                self.u8(4);
+                self.barrier(barrier);
+            }
+            EventKind::Collective(collective) => {
+                self.u8(5);
+                self.collective(collective);
+            }
+            EventKind::Shuffle(shuffle) => {
+                self.u8(6);
+                self.u8(shuffle.kind as u8);
+                self.scalar(shuffle.value_type);
+                self.u32(shuffle.tile_width);
+            }
+            EventKind::Ballot(ballot) => {
+                self.u8(7);
+                self.u32(ballot.wave_size);
+                self.u8(ballot.result_width as u8);
+            }
+        }
     }
 
     fn finish(self) -> [u8; 32] {
