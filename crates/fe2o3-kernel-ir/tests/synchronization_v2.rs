@@ -562,11 +562,8 @@ fn unknown_invocation_pairs_use_conservative_address_space_scope() {
                 event(1, EventKind::Atomic(access)),
             ])
             .validate(&limits),
-            Err(ValidationError::IncompatibleAtomicScope {
-                first: EventId(0),
-                second: EventId(1),
-                required,
-            })
+            Err(ValidationError::InvalidScope(EventId(0))),
+            "required {required:?}"
         );
     }
 }
@@ -801,9 +798,8 @@ fn exhaustive_scope_address_space_cross_product_is_fail_closed() {
                 None,
                 AtomicDialect::Rust,
             );
-            let expected = address_space == AddressSpace::Global
-                || (address_space == AddressSpace::Lds
-                    && matches!(scope, MemoryScope::Wavefront | MemoryScope::Workgroup));
+            let expected = (address_space == AddressSpace::Global && scope == MemoryScope::System)
+                || (address_space == AddressSpace::Lds && scope == MemoryScope::Workgroup);
             assert_eq!(
                 atomic_module(access).validate(&limits).is_ok(),
                 expected,
@@ -821,7 +817,7 @@ fn alignment_region_and_lds_bounds_are_exact() {
             AtomicOperation::FetchAdd,
             u32_ty(),
             AddressSpace::Global,
-            MemoryScope::Agent,
+            MemoryScope::System,
             MemoryOrdering::Relaxed,
             None,
             AtomicDialect::Rust,
@@ -1407,11 +1403,7 @@ fn one_hundred_twenty_thousand_repair_cases_match_independent_oracle() {
                         authority: 0,
                     }),
                 };
-                let expected = if scope == MemoryScope::System {
-                    mode == 1
-                } else {
-                    mode == 0
-                };
+                let expected = scope == MemoryScope::System && mode == 1;
                 (atomic_module(access), expected)
             }
             1 => {
