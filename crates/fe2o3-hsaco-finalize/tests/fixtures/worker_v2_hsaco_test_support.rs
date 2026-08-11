@@ -28,6 +28,10 @@ struct FixtureOptions<'a> {
     include_canonical_descriptor_section_name: bool,
     include_explicit_argument_alignments: bool,
     include_required_workgroup_size: bool,
+    max_workgroups: [Option<u32>; 3],
+    include_dynamic_lds_size: bool,
+    duplicate_max_workgroups_x: bool,
+    malformed_max_workgroups_x: bool,
 }
 
 impl FixtureOptions<'static> {
@@ -45,6 +49,10 @@ impl FixtureOptions<'static> {
             include_canonical_descriptor_section_name: false,
             include_explicit_argument_alignments: false,
             include_required_workgroup_size: true,
+            max_workgroups: [None; 3],
+            include_dynamic_lds_size: false,
+            duplicate_max_workgroups_x: false,
+            malformed_max_workgroups_x: false,
         }
     }
 }
@@ -316,6 +324,15 @@ fn metadata(options: FixtureOptions<'_>) -> Vec<u8> {
         explicit_argument(Some("values_len"), 8, 8, alignment, "by_value", None),
     ];
     arguments.extend(v5_hidden_arguments(16));
+    if options.include_dynamic_lds_size {
+        arguments.push(argument(
+            None,
+            136,
+            4,
+            "hidden_dynamic_lds_size",
+            None,
+        ));
+    }
     let mut kernel = vec![
         (Value::from(".name"), Value::from(options.entry)),
         (Value::from(".symbol"), Value::from(options.descriptor)),
@@ -348,6 +365,25 @@ fn metadata(options: FixtureOptions<'_>) -> Vec<u8> {
                     .map(Value::from)
                     .collect(),
             ),
+        ));
+    }
+    for (field, maximum) in [
+        (".max_num_workgroups_x", options.max_workgroups[0]),
+        (".max_num_workgroups_y", options.max_workgroups[1]),
+        (".max_num_workgroups_z", options.max_workgroups[2]),
+    ] {
+        if let Some(maximum) = maximum {
+            kernel.push((Value::from(field), Value::from(maximum)));
+        }
+    }
+    if options.duplicate_max_workgroups_x {
+        kernel.push((Value::from(".max_num_workgroups_x"), Value::from(1)));
+        kernel.push((Value::from(".max_num_workgroups_x"), Value::from(1)));
+    }
+    if options.malformed_max_workgroups_x {
+        kernel.push((
+            Value::from(".max_num_workgroups_x"),
+            Value::from("not-an-integer"),
         ));
     }
     let kernel = Value::Map(kernel);

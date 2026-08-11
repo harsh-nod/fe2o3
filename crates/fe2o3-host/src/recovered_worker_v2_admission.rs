@@ -787,10 +787,37 @@ mod tests {
             include_explicit_argument_alignments: bool,
             include_required_workgroup_size: bool,
         ) -> Vec<u8> {
+            with_descriptor_table_and_launch_metadata(
+                target,
+                table,
+                include_explicit_argument_alignments,
+                include_required_workgroup_size,
+                [Some(65_535), Some(1), Some(1)],
+                false,
+                false,
+                false,
+            )
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        pub(super) fn with_descriptor_table_and_launch_metadata(
+            target: &str,
+            table: &[u8],
+            include_explicit_argument_alignments: bool,
+            include_required_workgroup_size: bool,
+            max_workgroups: [Option<u32>; 3],
+            include_dynamic_lds_size: bool,
+            duplicate_max_workgroups_x: bool,
+            malformed_max_workgroups_x: bool,
+        ) -> Vec<u8> {
             let mut options = FixtureOptions::valid();
             options.target = target;
             options.include_explicit_argument_alignments = include_explicit_argument_alignments;
             options.include_required_workgroup_size = include_required_workgroup_size;
+            options.max_workgroups = max_workgroups;
+            options.include_dynamic_lds_size = include_dynamic_lds_size;
+            options.duplicate_max_workgroups_x = duplicate_max_workgroups_x;
+            options.malformed_max_workgroups_x = malformed_max_workgroups_x;
             fixture_with_descriptor_table(options, Some(table)).bytes
         }
     }
@@ -902,29 +929,46 @@ mod tests {
     }
 
     fn launch() -> fe2o3_artifacts::LaunchContract {
+        artifact_launch_with(1, [65_535, 1, 1], 0)
+    }
+
+    fn artifact_launch_with(
+        rank: u8,
+        max_grid: [u32; 3],
+        max_dynamic_shared_memory_bytes: u32,
+    ) -> fe2o3_artifacts::LaunchContract {
         fe2o3_artifacts::LaunchContract::new(
-            1,
+            rank,
             BlockSize::Exact(Dimensions::new(256, 1, 1).unwrap()),
-            Dimensions::new(65_535, 1, 1).unwrap(),
+            Dimensions::new(max_grid[0], max_grid[1], max_grid[2]).unwrap(),
             0,
-            0,
+            max_dynamic_shared_memory_bytes,
         )
         .unwrap()
     }
 
     fn descriptor_launch(include_required_workgroup_size: bool) -> LaunchConstraintsV1 {
+        descriptor_launch_with(include_required_workgroup_size, 1, [65_535, 1, 1], 0)
+    }
+
+    fn descriptor_launch_with(
+        include_required_workgroup_size: bool,
+        rank: u8,
+        max_grid: [u32; 3],
+        max_dynamic_shared_memory_bytes: u32,
+    ) -> LaunchConstraintsV1 {
         let block_size = if include_required_workgroup_size {
             BlockSizeV1::Exact(DimensionsV1::new(256, 1, 1).unwrap())
         } else {
             BlockSizeV1::Any
         };
         LaunchConstraintsV1::new(
-            1,
+            rank,
             block_size,
-            DimensionsV1::new(65_535, 1, 1).unwrap(),
+            DimensionsV1::new(max_grid[0], max_grid[1], max_grid[2]).unwrap(),
             256,
             0,
-            0,
+            max_dynamic_shared_memory_bytes,
         )
         .unwrap()
     }
@@ -945,7 +989,7 @@ mod tests {
         executable_digest: DigestBytes,
         target: &str,
         canonical_digest: [u8; 32],
-        include_required_workgroup_size: bool,
+        launch: LaunchConstraintsV1,
     ) -> DeviceDescriptorTableV1 {
         let shared_source =
             SourceTypeRecordV1::new(SourceTypeDescriptorV1::shared_slice(ScalarTypeV1::F32));
@@ -960,7 +1004,7 @@ mod tests {
             evidence(0x32, executable_digest),
             vec![],
             KernelAbiLayoutV1::new(16, 272, 8).unwrap(),
-            descriptor_launch(include_required_workgroup_size),
+            launch,
             vec![
                 LogicalArgumentV1::shared_slice(
                     0,
@@ -1103,10 +1147,34 @@ mod tests {
         include_explicit_argument_alignments: bool,
         include_required_workgroup_size: bool,
     ) -> RecoveryFixture {
+        recovery_fixture_with_launch_contracts(
+            seed,
+            raw_target,
+            manifest_symbol,
+            include_explicit_argument_alignments,
+            include_required_workgroup_size,
+            launch(),
+            descriptor_launch(include_required_workgroup_size),
+            [Some(65_535), Some(1), Some(1)],
+            false,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn recovery_fixture_with_launch_contracts(
+        seed: u8,
+        raw_target: &str,
+        manifest_symbol: &str,
+        include_explicit_argument_alignments: bool,
+        include_required_workgroup_size: bool,
+        artifact_launch: fe2o3_artifacts::LaunchContract,
+        descriptor_launch: LaunchConstraintsV1,
+        max_workgroups: [Option<u32>; 3],
+        include_dynamic_lds_size: bool,
+    ) -> RecoveryFixture {
         let source_digest = digest(seed.wrapping_add(0x40));
         let executable_digest = digest(seed.wrapping_add(0x50));
         let abi = manifest_abi();
-        let launch = launch();
         let kernel_id = derive_generated_kernel_identity_v2(
             MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
             HANDOFF_MARKER_BINDING,
@@ -1115,7 +1183,7 @@ mod tests {
             source_digest,
             executable_digest,
             &abi,
-            &launch,
+            &artifact_launch,
         );
         let final_raw_table = descriptor_table(
             kernel_id,
@@ -1125,13 +1193,17 @@ mod tests {
             executable_digest,
             REQUIRED_GFX942_TEST_TARGET,
             [0; 32],
-            include_required_workgroup_size,
+            descriptor_launch.clone(),
         );
-        let final_raw = canonical_hsaco_fixture::with_descriptor_table(
+        let final_raw = canonical_hsaco_fixture::with_descriptor_table_and_launch_metadata(
             REQUIRED_GFX942_TEST_TARGET,
             &encode_device_descriptor_table_v1(&final_raw_table).unwrap(),
             include_explicit_argument_alignments,
             include_required_workgroup_size,
+            max_workgroups,
+            include_dynamic_lds_size,
+            false,
+            false,
         );
         let finalized_hsaco = finalize_unfinalized(&final_raw).unwrap();
         let embedded_descriptor = finalized_hsaco.inspection().descriptor_table().clone();
@@ -1148,13 +1220,17 @@ mod tests {
                 executable_digest,
                 raw_target,
                 [0; 32],
-                include_required_workgroup_size,
+                descriptor_launch.clone(),
             );
-            canonical_hsaco_fixture::with_descriptor_table(
+            canonical_hsaco_fixture::with_descriptor_table_and_launch_metadata(
                 raw_target,
                 &encode_device_descriptor_table_v1(&substituted_raw_table).unwrap(),
                 include_explicit_argument_alignments,
                 include_required_workgroup_size,
+                max_workgroups,
+                include_dynamic_lds_size,
+                false,
+                false,
             )
         };
         let mut fixture = make_single_hsaco_fixture_with_names_and_kernel_id(
@@ -1164,7 +1240,7 @@ mod tests {
             "logical_primary",
             manifest_symbol,
             abi,
-            launch,
+            artifact_launch,
             kernel_id,
         );
         bind_raw_hsaco(&mut fixture, &raw);
@@ -1179,7 +1255,7 @@ mod tests {
                 executable_digest,
                 REQUIRED_GFX942_TEST_TARGET,
                 canonical_digest,
-                include_required_workgroup_size,
+                descriptor_launch,
             )
         };
         let kernel = &fixture.container.manifest().kernels()[0];
@@ -2846,6 +2922,35 @@ mod tests {
         (fixture, recovered)
     }
 
+    fn recovered_launch_bridge_fixture_with_contracts(
+        seed: u8,
+        artifact_launch: fe2o3_artifacts::LaunchContract,
+        descriptor_launch: LaunchConstraintsV1,
+        max_workgroups: [Option<u32>; 3],
+        include_dynamic_lds_size: bool,
+    ) -> (RecoveryFixture, RecoveredWorkerV2PinnedDescriptorV1) {
+        let fixture = recovery_fixture_with_launch_contracts(
+            seed,
+            "gfx942",
+            "vecadd",
+            true,
+            true,
+            artifact_launch,
+            descriptor_launch,
+            max_workgroups,
+            include_dynamic_lds_size,
+        );
+        let recovered = recover_worker_v2_load_envelope_v1(
+            &fixture.output,
+            &fixture.envelope,
+            fixture.compiler_transaction.clone(),
+            fixture.kernel_id,
+            &fixture.observed,
+        )
+        .unwrap();
+        (fixture, recovered)
+    }
+
     #[test]
     fn launch_bridge_public_path_rejects_omitted_required_workgroup_size_without_authority() {
         let (fixture, recovered) =
@@ -2887,8 +2992,8 @@ mod tests {
                 "recovered-exact-wave64"
             ),
             Err(
-                crate::LaunchKernelMetadataBridgeErrorV2::MissingPhysicalMetadata(
-                    "required workgroup size"
+                crate::LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(
+                    "artifact launch block size"
                 )
             )
         ));
@@ -2988,6 +3093,233 @@ mod tests {
                 "required workgroup size"
             ))
         ));
+    }
+
+    #[test]
+    fn launch_bridge_public_path_rejects_descriptor_grid_substitution() {
+        let (_fixture, recovered) = recovered_launch_bridge_fixture_with_contracts(
+            93,
+            artifact_launch_with(1, [1, 1, 1], 0),
+            descriptor_launch_with(true, 1, [2, 1, 1], 0),
+            [Some(2), Some(1), Some(1)],
+            false,
+        );
+        let (_model_fixture, model_recovered) = recovered_launch_bridge_fixture(93);
+        let family =
+            crate::launch_kernel_v2_bridge::canonical_family_for_recovered_launch_bridge_test(
+                &model_recovered,
+            );
+
+        assert_eq!(recovered.artifact_identity().launch().max_grid().x(), 1);
+        assert_eq!(recovered.descriptor().launch().max_grid().x(), 2);
+        assert_eq!(
+            recovered.physical_kernel().launch().max_workgroups()[0],
+            crate::PhysicalMetadataValueV1::Known(2)
+        );
+        assert!(matches!(
+            crate::bind_current_recovered_launch_kernel_metadata_v2(
+                &recovered,
+                &family,
+                "recovered-exact-wave64"
+            ),
+            Err(
+                crate::LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(
+                    "artifact maximum grid"
+                )
+            )
+        ));
+    }
+
+    #[test]
+    fn launch_bridge_public_path_rejects_dynamic_lds_descriptor_substitution() {
+        let (_fixture, recovered) = recovered_launch_bridge_fixture_with_contracts(
+            94,
+            artifact_launch_with(1, [65_535, 1, 1], 4_096),
+            descriptor_launch_with(true, 1, [65_535, 1, 1], 0),
+            [Some(65_535), Some(1), Some(1)],
+            true,
+        );
+        let (_model_fixture, model_recovered) = recovered_launch_bridge_fixture(94);
+        let family =
+            crate::launch_kernel_v2_bridge::canonical_family_for_recovered_launch_bridge_test(
+                &model_recovered,
+            );
+
+        assert_eq!(
+            recovered
+                .physical_kernel()
+                .launch()
+                .dynamic_shared_memory_indicator(),
+            crate::PhysicalMetadataValueV1::Known(true)
+        );
+        assert_eq!(
+            recovered
+                .descriptor()
+                .launch()
+                .max_dynamic_shared_memory_bytes(),
+            0
+        );
+        assert!(matches!(
+            crate::bind_current_recovered_launch_kernel_metadata_v2(
+                &recovered,
+                &family,
+                "recovered-exact-wave64"
+            ),
+            Err(
+                crate::LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(
+                    "artifact dynamic LDS limit"
+                )
+            )
+        ));
+    }
+
+    #[test]
+    fn launch_bridge_enforces_each_physical_grid_axis_and_exact_boundary() {
+        let limits = [7, 11, 13];
+        let (_fixture, recovered) = recovered_launch_bridge_fixture_with_contracts(
+            95,
+            artifact_launch_with(3, limits, 0),
+            descriptor_launch_with(true, 3, limits, 0),
+            limits.map(Some),
+            false,
+        );
+        let family =
+            crate::launch_kernel_v2_bridge::canonical_family_for_recovered_launch_bridge_test(
+                &recovered,
+            );
+
+        crate::bind_current_recovered_launch_kernel_metadata_v2(
+            &recovered,
+            &family,
+            "recovered-exact-wave64",
+        )
+        .unwrap();
+
+        for axis in 0..3 {
+            let mut observed = limits.map(crate::PhysicalMetadataValueV1::Known);
+            observed[axis] = crate::PhysicalMetadataValueV1::Known(limits[axis] - 1);
+            let physical = recovered
+                .physical_kernel()
+                .with_max_workgroups_for_launch_bridge_test(observed);
+            assert!(matches!(
+                crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_with_physical_probe_v2(
+                    &recovered,
+                    &family,
+                    "recovered-exact-wave64",
+                    &physical,
+                ),
+                Err(crate::LaunchKernelMetadataBridgeErrorV2::PhysicalLaunchLimitExceeded {
+                    axis: actual_axis,
+                    declared,
+                    maximum,
+                }) if actual_axis == axis
+                    && declared == limits[axis]
+                    && maximum == limits[axis] - 1
+            ));
+        }
+    }
+
+    #[test]
+    fn launch_bridge_rejects_each_omitted_physical_grid_axis() {
+        let (_fixture, recovered) = recovered_launch_bridge_fixture(96);
+        let family =
+            crate::launch_kernel_v2_bridge::canonical_family_for_recovered_launch_bridge_test(
+                &recovered,
+            );
+        let fields = [
+            "maximum workgroups X",
+            "maximum workgroups Y",
+            "maximum workgroups Z",
+        ];
+
+        for axis in 0..3 {
+            let mut observed = [
+                crate::PhysicalMetadataValueV1::Known(65_535),
+                crate::PhysicalMetadataValueV1::Known(1),
+                crate::PhysicalMetadataValueV1::Known(1),
+            ];
+            observed[axis] = crate::PhysicalMetadataValueV1::Unknown;
+            let physical = recovered
+                .physical_kernel()
+                .with_max_workgroups_for_launch_bridge_test(observed);
+            assert!(matches!(
+                crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_with_physical_probe_v2(
+                    &recovered,
+                    &family,
+                    "recovered-exact-wave64",
+                    &physical,
+                ),
+                Err(crate::LaunchKernelMetadataBridgeErrorV2::MissingPhysicalMetadata(field))
+                    if field == fields[axis]
+            ));
+        }
+    }
+
+    #[test]
+    fn launch_bridge_rejects_physically_present_dynamic_lds_with_zero_contract() {
+        let (_fixture, recovered) = recovered_launch_bridge_fixture(97);
+        let family =
+            crate::launch_kernel_v2_bridge::canonical_family_for_recovered_launch_bridge_test(
+                &recovered,
+            );
+        let physical = recovered
+            .physical_kernel()
+            .with_dynamic_shared_memory_indicator_for_launch_bridge_test(
+                crate::PhysicalMetadataValueV1::Known(true),
+            );
+
+        assert!(matches!(
+            crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_with_physical_probe_v2(
+                &recovered,
+                &family,
+                "recovered-exact-wave64",
+                &physical,
+            ),
+            Err(crate::LaunchKernelMetadataBridgeErrorV2::UnsupportedDynamicLds)
+        ));
+    }
+
+    #[test]
+    fn launch_bridge_malformed_and_duplicate_grid_limits_fail_before_admission() {
+        let source_digest = digest(0xe1);
+        let executable_digest = digest(0xe2);
+        let artifact_launch = launch();
+        let kernel_id = derive_generated_kernel_identity_v2(
+            MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+            HANDOFF_MARKER_BINDING,
+            "logical_primary",
+            "vecadd",
+            source_digest,
+            executable_digest,
+            &manifest_abi(),
+            &artifact_launch,
+        );
+        let table = descriptor_table(
+            kernel_id,
+            "logical_primary",
+            "vecadd",
+            source_digest,
+            executable_digest,
+            REQUIRED_GFX942_TEST_TARGET,
+            [0; 32],
+            descriptor_launch(true),
+        );
+        let encoded = encode_device_descriptor_table_v1(&table).unwrap();
+
+        for (duplicate, malformed) in [(true, false), (false, true)] {
+            let raw = canonical_hsaco_fixture::with_descriptor_table_and_launch_metadata(
+                REQUIRED_GFX942_TEST_TARGET,
+                &encoded,
+                true,
+                true,
+                [None; 3],
+                false,
+                duplicate,
+                malformed,
+            );
+            assert!(fe2o3_hsaco::inspect(&raw).is_err());
+            assert!(finalize_unfinalized(&raw).is_err());
+        }
     }
 
     #[test]

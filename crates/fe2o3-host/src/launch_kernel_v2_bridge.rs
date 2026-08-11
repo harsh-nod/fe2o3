@@ -4,11 +4,14 @@ use crate::{
     PublishedKernelPhysicalLayoutV1, RecoveredWorkerV2PinnedDescriptorV1,
 };
 use fe2o3_amd_target::{AmdTargetId, FeatureState};
-use fe2o3_artifacts::{DigestAlgorithm, Endianness as ArtifactEndianness, PointerWidth};
+use fe2o3_artifacts::{
+    BlockSize as ArtifactBlockSize, DigestAlgorithm, Endianness as ArtifactEndianness,
+    LaunchContract as ArtifactLaunchContract, PointerWidth,
+};
 use fe2o3_hsaco::{CodeObjectVersion, ExplicitValueKind};
 use fe2o3_kernel_descriptor::{
-    AccessMode, AliasSemantics, BlockSizeV1, KernelDescriptorV1, OwnershipSemantics,
-    PhysicalAbiComponentKind, ScalarTypeV1,
+    AccessMode, AliasSemantics, BlockSizeV1, KernelDescriptorV1, LaunchConstraintsV1,
+    OwnershipSemantics, PhysicalAbiComponentKind, ScalarTypeV1,
 };
 use fe2o3_kernel_ir::{
     AbiParameterKindV2, AbiParameterV2, ArtifactIdentityV2, BlockShapePolicyV2, DimensionsV2,
@@ -278,8 +281,8 @@ fn derive_metadata(
     let artifact_identity = derive_artifact_identity(artifact)?;
     let kernel_identity = KernelIdentityV2::from_bytes(*descriptor.kernel_id().as_bytes());
     let signature = derive_signature(descriptor, physical)?;
-    let launch = derive_launch_geometry(descriptor, physical)?;
-    let resources = derive_resources(descriptor, physical)?;
+    let launch = derive_launch_geometry(artifact.launch(), physical)?;
+    let resources = derive_resources(artifact.launch(), physical)?;
     let occupancy_subject = canonical_occupancy_subject_identity_v2(
         &target,
         &signature,
@@ -336,6 +339,74 @@ fn validate_descriptor_artifact_identity(
         if !matches {
             return Err(LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(field));
         }
+    }
+    validate_descriptor_artifact_launch(artifact.launch(), descriptor.launch())
+}
+
+fn validate_descriptor_artifact_launch(
+    artifact: &ArtifactLaunchContract,
+    descriptor: &LaunchConstraintsV1,
+) -> Result<(), LaunchKernelMetadataBridgeErrorV2> {
+    let artifact_block = artifact.block_size();
+    let descriptor_block = descriptor.block_size();
+    let block_matches = match (artifact_block, descriptor_block) {
+        (ArtifactBlockSize::Any, BlockSizeV1::Any) => true,
+        (ArtifactBlockSize::Exact(artifact), BlockSizeV1::Exact(descriptor))
+        | (ArtifactBlockSize::AtMost(artifact), BlockSizeV1::AtMost(descriptor)) => {
+            [artifact.x(), artifact.y(), artifact.z()]
+                == [descriptor.x(), descriptor.y(), descriptor.z()]
+        }
+        _ => false,
+    };
+    let artifact_grid = artifact.max_grid();
+    let descriptor_grid = descriptor.max_grid();
+    let checks = [
+        (artifact.rank() == descriptor.rank(), "artifact launch rank"),
+        (block_matches, "artifact launch block size"),
+        (
+            [artifact_grid.x(), artifact_grid.y(), artifact_grid.z()]
+                == [
+                    descriptor_grid.x(),
+                    descriptor_grid.y(),
+                    descriptor_grid.z(),
+                ],
+            "artifact maximum grid",
+        ),
+        (
+            artifact.static_shared_memory_bytes() == descriptor.static_shared_memory_bytes(),
+            "artifact static LDS limit",
+        ),
+        (
+            artifact.max_dynamic_shared_memory_bytes()
+                == descriptor.max_dynamic_shared_memory_bytes(),
+            "artifact dynamic LDS limit",
+        ),
+    ];
+    for (matches, field) in checks {
+        if !matches {
+            return Err(LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(field));
+        }
+    }
+
+    let ArtifactBlockSize::Exact(block) = artifact_block else {
+        return Err(
+            LaunchKernelMetadataBridgeErrorV2::UnsupportedPhysicalLaunchContract(
+                "non-exact artifact block policy",
+            ),
+        );
+    };
+    let flat = u64::from(block.x())
+        .checked_mul(u64::from(block.y()))
+        .and_then(|xy| xy.checked_mul(u64::from(block.z())))
+        .ok_or(LaunchKernelMetadataBridgeErrorV2::NumericOverflow(
+            "artifact flat workgroup size",
+        ))?;
+    if flat != u64::from(descriptor.max_flat_workgroup_size()) {
+        return Err(
+            LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(
+                "artifact maximum flat workgroup size",
+            ),
+        );
     }
     Ok(())
 }
@@ -543,7 +614,7 @@ fn derive_signature_identity(signature: &KernelSignatureV2) -> KernelSignatureId
 }
 
 fn derive_launch_geometry(
-    descriptor: &KernelDescriptorV1,
+    launch: &ArtifactLaunchContract,
     physical: &PublishedKernelPhysicalLayoutV1,
 ) -> Result<DerivedLaunchGeometryV2, LaunchKernelMetadataBridgeErrorV2> {
     let physical_launch = physical.launch();
@@ -555,10 +626,9 @@ fn derive_launch_geometry(
             ));
         }
     };
-    let launch = descriptor.launch();
     let block = match launch.block_size() {
-        BlockSizeV1::Exact(dimensions) => dimensions,
-        BlockSizeV1::Any | BlockSizeV1::AtMost(_) => {
+        ArtifactBlockSize::Exact(dimensions) => dimensions,
+        ArtifactBlockSize::Any | ArtifactBlockSize::AtMost(_) => {
             return Err(
                 LaunchKernelMetadataBridgeErrorV2::UnsupportedPhysicalLaunchContract(
                     "non-exact block policy",
@@ -579,11 +649,48 @@ fn derive_launch_geometry(
     let block = DimensionsV2::new(block.x(), block.y(), block.z());
     let max_grid = launch.max_grid();
     let max_grid_blocks = DimensionsV2::new(max_grid.x(), max_grid.y(), max_grid.z());
+    for (axis, (declared, observed, field)) in [
+        (
+            max_grid_blocks.x,
+            physical_launch.max_workgroups()[0],
+            "maximum workgroups X",
+        ),
+        (
+            max_grid_blocks.y,
+            physical_launch.max_workgroups()[1],
+            "maximum workgroups Y",
+        ),
+        (
+            max_grid_blocks.z,
+            physical_launch.max_workgroups()[2],
+            "maximum workgroups Z",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let maximum = match observed {
+            PhysicalMetadataValueV1::Known(value) => value,
+            PhysicalMetadataValueV1::Unknown => {
+                return Err(LaunchKernelMetadataBridgeErrorV2::MissingPhysicalMetadata(
+                    field,
+                ));
+            }
+        };
+        if declared > maximum {
+            return Err(
+                LaunchKernelMetadataBridgeErrorV2::PhysicalLaunchLimitExceeded {
+                    axis,
+                    declared,
+                    maximum,
+                },
+            );
+        }
+    }
     let flat = checked_dimensions_product(block, "flat workgroup size")?;
     let flat = u32::try_from(flat)
         .map_err(|_| LaunchKernelMetadataBridgeErrorV2::NumericOverflow("flat workgroup size"))?;
-    if flat != launch.max_flat_workgroup_size() || flat != physical_launch.max_flat_workgroup_size()
-    {
+    if flat != physical_launch.max_flat_workgroup_size() {
         return Err(
             LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(
                 "maximum flat workgroup size",
@@ -605,17 +712,23 @@ fn derive_launch_geometry(
 }
 
 fn derive_resources(
-    descriptor: &KernelDescriptorV1,
+    launch: &ArtifactLaunchContract,
     physical: &PublishedKernelPhysicalLayoutV1,
 ) -> Result<Gfx942ResourceLimitsV2, LaunchKernelMetadataBridgeErrorV2> {
-    if descriptor.launch().max_dynamic_shared_memory_bytes() != 0 {
+    if launch.max_dynamic_shared_memory_bytes() != 0 {
         return Err(LaunchKernelMetadataBridgeErrorV2::UnsupportedDynamicLds);
     }
     let physical = physical.launch();
+    if matches!(
+        physical.dynamic_shared_memory_indicator(),
+        PhysicalMetadataValueV1::Known(true)
+    ) {
+        return Err(LaunchKernelMetadataBridgeErrorV2::UnsupportedDynamicLds);
+    }
     let static_lds_bytes = u32::try_from(physical.group_segment_fixed_size()).map_err(|_| {
         LaunchKernelMetadataBridgeErrorV2::NumericOverflow("static LDS segment size")
     })?;
-    if static_lds_bytes != descriptor.launch().static_shared_memory_bytes() {
+    if static_lds_bytes != launch.static_shared_memory_bytes() {
         return Err(
             LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(
                 "static LDS segment size",
@@ -795,6 +908,11 @@ pub enum LaunchKernelMetadataBridgeErrorV2 {
     UnsupportedDynamicLds,
     NumericOverflow(&'static str),
     RecoveredMetadataInconsistent(&'static str),
+    PhysicalLaunchLimitExceeded {
+        axis: usize,
+        declared: u32,
+        maximum: u32,
+    },
     TargetSubstitution,
     LogicalNameSubstitution,
     EntryNameSubstitution,
@@ -831,13 +949,24 @@ impl fmt::Display for LaunchKernelMetadataBridgeErrorV2 {
                 write!(formatter, "launch metadata bridge does not support {field}")
             }
             Self::UnsupportedDynamicLds => formatter.write_str(
-                "inspected HSACO cannot establish the dynamic LDS maximum and alignment",
+                "launch metadata bridge requires zero declared and physically observed dynamic LDS",
             ),
             Self::NumericOverflow(field) => write!(formatter, "{field} exceeds launch V2 bounds"),
             Self::RecoveredMetadataInconsistent(field) => {
                 write!(
                     formatter,
                     "recovered executable metadata disagrees on {field}"
+                )
+            }
+            Self::PhysicalLaunchLimitExceeded {
+                axis,
+                declared,
+                maximum,
+            } => {
+                let axis = ["X", "Y", "Z"].get(*axis).copied().unwrap_or("unknown");
+                write!(
+                    formatter,
+                    "artifact maximum grid {axis}={declared} exceeds physical maximum workgroups {axis}={maximum}"
                 )
             }
             Self::TargetSubstitution => formatter.write_str("launch target was substituted"),

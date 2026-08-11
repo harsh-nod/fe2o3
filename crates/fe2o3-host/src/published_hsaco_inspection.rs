@@ -254,6 +254,26 @@ impl PublishedKernelPhysicalLayoutV1 {
         physical.launch.required_workgroup_size = required_workgroup_size;
         physical
     }
+
+    #[cfg(test)]
+    pub(crate) fn with_max_workgroups_for_launch_bridge_test(
+        &self,
+        max_workgroups: [PhysicalMetadataValueV1<u32>; 3],
+    ) -> Self {
+        let mut physical = self.clone();
+        physical.launch.max_workgroups = max_workgroups;
+        physical
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_dynamic_shared_memory_indicator_for_launch_bridge_test(
+        &self,
+        indicator: PhysicalMetadataValueV1<bool>,
+    ) -> Self {
+        let mut physical = self.clone();
+        physical.launch.dynamic_shared_memory_indicator = indicator;
+        physical
+    }
 }
 
 /// Inert physical-layout inspection bound to one complete published direct-link admission.
