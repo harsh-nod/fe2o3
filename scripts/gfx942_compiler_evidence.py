@@ -830,8 +830,7 @@ def prepare_run_closures(
         f"run-{index}-cargo-config", cargo_config, require_read_only=True
     )
     output_dir = evidence_root / f"run-{index}"
-    if not output_dir.is_dir():
-        raise EvidenceError("run evidence root was not prepared independently")
+    output_dir.mkdir(mode=0o700)
     (output_dir / "repository-source-manifest.json").write_bytes(
         canonical_json(source.manifest)
     )
@@ -978,7 +977,8 @@ def build_and_generate(
     if not observe_candidate and build_identity != golden["worker_build_identity"]:
         raise EvidenceError(f"run {index} Worker build identity changed")
     output_dir = evidence_root / f"run-{index}"
-    output_dir.mkdir(mode=0o700)
+    if not output_dir.is_dir():
+        raise EvidenceError("run evidence root was not prepared independently")
     output = output_dir / "alpha-zeta-cov6.hsaco"
     generation_environment = dict(environment)
     generation_environment.update(
