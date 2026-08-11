@@ -619,6 +619,40 @@ def test_two_recoverers_cannot_delete_new_live_winner() -> None:
         assert not list(temp.glob(".fe2o3-archive-*"))
 
 
+def test_stale_lease_recovery_rejects_dirent_replacement() -> None:
+    with tempfile.TemporaryDirectory(prefix="fe2o3-lease-dirent-race-") as raw_temp:
+        temp = Path(raw_temp)
+        output = temp / "archive"
+        child = os.fork()
+        if child == 0:
+            EVIDENCE.ArchiveDestination(output, LEASE_DIGEST)
+            os._exit(0)
+        _, status = os.waitpid(child, 0)
+        assert os.waitstatus_to_exitcode(status) == 0
+        lease = next(temp.glob(".fe2o3-archive-*.lease"))
+        detached = temp / "detached-stale.lease"
+        real_dead = EVIDENCE.publisher_process_is_dead
+        replaced = False
+
+        def replace_after_authentication(_pid: int, _start: str) -> bool:
+            nonlocal replaced
+            if not replaced:
+                lease.rename(detached)
+                lease.write_bytes(detached.read_bytes())
+                replaced = True
+            return True
+
+        EVIDENCE.publisher_process_is_dead = replace_after_authentication
+        try:
+            expect_evidence_error(
+                lambda: EVIDENCE.ArchiveDestination(output, LEASE_DIGEST),
+                "staging lease changed during recovery",
+            )
+        finally:
+            EVIDENCE.publisher_process_is_dead = real_dead
+        assert replaced
+
+
 def test_global_staging_entry_boundaries_and_concurrency() -> None:
     with tempfile.TemporaryDirectory(prefix="fe2o3-entry-boundary-") as raw_temp:
         temp = Path(raw_temp)
@@ -1166,6 +1200,7 @@ if __name__ == "__main__":
     test_deterministic_staging_lease_recovers_after_hard_exit()
     test_lease_initialization_recovers_every_crash_phase()
     test_two_recoverers_cannot_delete_new_live_winner()
+    test_stale_lease_recovery_rejects_dirent_replacement()
     test_global_staging_entry_boundaries_and_concurrency()
     test_second_live_publisher_fails_busy()
     test_same_uid_publisher_is_inert_for_production()
