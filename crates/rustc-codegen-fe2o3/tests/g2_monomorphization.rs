@@ -402,42 +402,38 @@ fn collector_rejects_non_direct_constants_aliases_and_lookalikes() {
     let output = TestOutputDir::new(&workspace);
     let backend = build_backend(&workspace);
     let source = fixtures.join("dead-branches.rs");
-    for (configuration, function, diagnostic) in [(
+    let (configuration, function, diagnostic) = (
         "local_add_spoof",
         "generic_add",
         "indirect function-pointer calls are not permitted",
-    )] {
-        let mut args = vec!["-Zmir-opt-level=0", "--cfg", configuration];
-        if configuration == "local_add_spoof" {
-            args.push("-Cpanic=abort");
-        }
-        let result = compile_with_backend(
-            &source,
-            &format!("g2_{configuration}"),
-            &backend,
-            &output.path.join(configuration),
-            &[],
-            &args,
-        );
-        let stderr = String::from_utf8_lossy(&result.stderr);
-        assert!(
-            !result.status.success(),
-            "non-direct adversary `{configuration}` compiled successfully:\n{stderr}"
-        );
-        assert!(
-            stderr.contains(diagnostic),
-            "adversary `{configuration}` did not fail for `{diagnostic}`:\n{stderr}"
-        );
-        assert_eq!(
-            observation_counts(&stderr, function),
-            Some((0, 0)),
-            "`{configuration}` received non-direct V1 authority:\n{stderr}"
-        );
-        let target = observation_field(&stderr, function, "target")
-            .unwrap_or_else(|| panic!("missing target identity for `{function}`:\n{stderr}"));
-        assert_eq!(target.len(), 64);
-        assert_ne!(target, "0".repeat(64));
-    }
+    );
+    let args = ["-Zmir-opt-level=0", "--cfg", configuration, "-Cpanic=abort"];
+    let result = compile_with_backend(
+        &source,
+        &format!("g2_{configuration}"),
+        &backend,
+        &output.path.join(configuration),
+        &[],
+        &args,
+    );
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        !result.status.success(),
+        "non-direct adversary `{configuration}` compiled successfully:\n{stderr}"
+    );
+    assert!(
+        stderr.contains(diagnostic),
+        "adversary `{configuration}` did not fail for `{diagnostic}`:\n{stderr}"
+    );
+    assert_eq!(
+        observation_counts(&stderr, function),
+        Some((0, 0)),
+        "`{configuration}` received non-direct V1 authority:\n{stderr}"
+    );
+    let target = observation_field(&stderr, function, "target")
+        .unwrap_or_else(|| panic!("missing target identity for `{function}`:\n{stderr}"));
+    assert_eq!(target.len(), 64);
+    assert_ne!(target, "0".repeat(64));
 
     // The pinned 2bbdb7f scanner trusted a direct local initialization and
     // ignored a later write through `&mut`. The target case likewise became a
