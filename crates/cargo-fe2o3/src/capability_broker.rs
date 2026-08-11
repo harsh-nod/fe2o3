@@ -38,7 +38,7 @@ mod platform {
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex, MutexGuard};
     use std::thread::{self, JoinHandle};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use fe2o3_artifact_transaction::BuildSession;
     use fe2o3_process_identity::LinuxObjectIdentityV3;
@@ -72,6 +72,18 @@ mod platform {
     const EXECUTABLE_PIN_ATTEMPTS: usize = 8;
     const RECEIVED_DESCRIPTOR_FLOOR: i32 = 199;
     const BROKER_IO_TIMEOUT: Duration = Duration::from_secs(30);
+    const MAX_ACTIVE_CONNECTIONS: usize = 64;
+
+    #[derive(Clone, Copy)]
+    struct BrokerLimits {
+        max_active_connections: usize,
+        io_timeout: Duration,
+    }
+
+    const PRODUCTION_BROKER_LIMITS: BrokerLimits = BrokerLimits {
+        max_active_connections: MAX_ACTIVE_CONNECTIONS,
+        io_timeout: BROKER_IO_TIMEOUT,
+    };
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub(crate) enum CapabilityProfileV1 {
@@ -324,10 +336,10 @@ mod platform {
         active: BTreeMap<u64, UnixStream>,
     }
 
-    #[derive(Default)]
     struct BrokerShutdown {
         // This mutex is the shutdown/SCM_RIGHTS linearization point and owns the wakeup socket.
         state: Mutex<BrokerShutdownState>,
+        max_active_connections: usize,
         #[cfg(test)]
         accept_pause: Mutex<Option<Arc<TestPause>>>,
         #[cfg(test)]
@@ -338,9 +350,43 @@ mod platform {
         begin_started: std::sync::atomic::AtomicBool,
         #[cfg(test)]
         request_read_started: std::sync::atomic::AtomicBool,
+        #[cfg(test)]
+        panic_next_worker: std::sync::atomic::AtomicBool,
+        #[cfg(test)]
+        caught_worker_panics: std::sync::atomic::AtomicUsize,
+        #[cfg(test)]
+        admission_rejections: std::sync::atomic::AtomicUsize,
+        #[cfg(test)]
+        registration_failures: std::sync::atomic::AtomicUsize,
     }
 
     impl BrokerShutdown {
+        fn new(max_active_connections: usize) -> Self {
+            assert!(max_active_connections != 0);
+            Self {
+                state: Mutex::new(BrokerShutdownState::default()),
+                max_active_connections,
+                #[cfg(test)]
+                accept_pause: Mutex::new(None),
+                #[cfg(test)]
+                dispatch_pause: Mutex::new(None),
+                #[cfg(test)]
+                locked_dispatch_pause: Mutex::new(None),
+                #[cfg(test)]
+                begin_started: std::sync::atomic::AtomicBool::new(false),
+                #[cfg(test)]
+                request_read_started: std::sync::atomic::AtomicBool::new(false),
+                #[cfg(test)]
+                panic_next_worker: std::sync::atomic::AtomicBool::new(false),
+                #[cfg(test)]
+                caught_worker_panics: std::sync::atomic::AtomicUsize::new(0),
+                #[cfg(test)]
+                admission_rejections: std::sync::atomic::AtomicUsize::new(0),
+                #[cfg(test)]
+                registration_failures: std::sync::atomic::AtomicUsize::new(0),
+            }
+        }
+
         fn state(&self) -> MutexGuard<'_, BrokerShutdownState> {
             self.state
                 .lock()
@@ -351,20 +397,45 @@ mod platform {
             self.state().stopping
         }
 
-        fn register(&self, stream: &UnixStream) -> io::Result<Option<u64>> {
-            let retained = stream.try_clone()?;
+        fn register(
+            self: &Arc<Self>,
+            stream: &UnixStream,
+        ) -> io::Result<Option<ConnectionRegistryGuard>> {
             let mut state = self.state();
             if state.stopping {
                 let _ = stream.shutdown(Shutdown::Both);
                 return Ok(None);
             }
+            if state.active.len() >= self.max_active_connections {
+                #[cfg(test)]
+                self.admission_rejections
+                    .fetch_add(1, std::sync::atomic::Ordering::Release);
+                let _ = stream.shutdown(Shutdown::Both);
+                return Err(io::Error::new(
+                    io::ErrorKind::ConnectionRefused,
+                    "capability broker active-connection limit reached",
+                ));
+            }
+            let retained = match stream.try_clone() {
+                Ok(retained) => retained,
+                Err(error) => {
+                    #[cfg(test)]
+                    self.registration_failures
+                        .fetch_add(1, std::sync::atomic::Ordering::Release);
+                    let _ = stream.shutdown(Shutdown::Both);
+                    return Err(error);
+                }
+            };
             let connection_id = state.next_connection_id;
             state.next_connection_id =
                 state.next_connection_id.checked_add(1).ok_or_else(|| {
                     io::Error::other("capability broker exhausted connection identifiers")
                 })?;
             state.active.insert(connection_id, retained);
-            Ok(Some(connection_id))
+            Ok(Some(ConnectionRegistryGuard {
+                shutdown: Arc::clone(self),
+                connection_id,
+            }))
         }
 
         fn finish(&self, connection_id: u64) {
@@ -453,7 +524,14 @@ mod platform {
             let socket_identity = fs::metadata(format!("/proc/self/fd/{}", stream.as_raw_fd()))
                 .ok()
                 .map(|metadata| (metadata.dev(), metadata.ino()));
-            self.pause(&self.accept_pause, socket_identity);
+            let pause = self
+                .accept_pause
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
+            if let Some(pause) = pause {
+                pause.server_wait(socket_identity);
+            }
         }
 
         #[cfg(test)]
@@ -508,6 +586,33 @@ mod platform {
         #[cfg(test)]
         fn active_connection_count(&self) -> usize {
             self.state().active.len()
+        }
+
+        #[cfg(test)]
+        fn inject_worker_panic(&self) {
+            self.panic_next_worker
+                .store(true, std::sync::atomic::Ordering::Release);
+        }
+
+        #[cfg(test)]
+        fn maybe_inject_worker_panic(&self) {
+            if self
+                .panic_next_worker
+                .swap(false, std::sync::atomic::Ordering::AcqRel)
+            {
+                panic!("injected capability broker worker panic");
+            }
+        }
+    }
+
+    struct ConnectionRegistryGuard {
+        shutdown: Arc<BrokerShutdown>,
+        connection_id: u64,
+    }
+
+    impl Drop for ConnectionRegistryGuard {
+        fn drop(&mut self) {
+            self.shutdown.finish(self.connection_id);
         }
     }
 
@@ -574,6 +679,27 @@ mod platform {
             artifact: &PinnedDirectory,
             pinned_cargo_image: &PinnedExecutable,
         ) -> Result<Self, String> {
+            Self::start_with_limits(
+                session,
+                binding,
+                backend,
+                artifact,
+                pinned_cargo_image,
+                PRODUCTION_BROKER_LIMITS,
+            )
+        }
+
+        fn start_with_limits(
+            session: BuildSession,
+            binding: CapabilityBindingV2,
+            backend: &PinnedCodegenBackend,
+            artifact: &PinnedDirectory,
+            pinned_cargo_image: &PinnedExecutable,
+            limits: BrokerLimits,
+        ) -> Result<Self, String> {
+            if limits.max_active_connections == 0 || limits.io_timeout.is_zero() {
+                return Err("capability broker limits must be nonzero".to_owned());
+            }
             let endpoint = random_endpoint().map_err(|error| {
                 format!("failed to allocate capability broker endpoint: {error}")
             })?;
@@ -607,7 +733,7 @@ mod platform {
                 peer: executable,
             }
             .encode();
-            let shutdown = Arc::new(BrokerShutdown::default());
+            let shutdown = Arc::new(BrokerShutdown::new(limits.max_active_connections));
             let worker_shutdown = Arc::clone(&shutdown);
             let worker = thread::Builder::new()
                 .name("fe2o3-capability-broker".to_string())
@@ -621,6 +747,7 @@ mod platform {
                         backend,
                         artifact,
                         pinned_cargo_image,
+                        io_timeout: limits.io_timeout,
                         shutdown: worker_shutdown,
                     }
                     .serve();
@@ -783,6 +910,7 @@ mod platform {
         backend: File,
         artifact: File,
         pinned_cargo_image: File,
+        io_timeout: Duration,
         shutdown: Arc<BrokerShutdown>,
     }
 
@@ -792,15 +920,35 @@ mod platform {
                 while !self.shutdown.is_stopping() {
                     match self.listener.accept() {
                         Ok((mut stream, _)) => {
+                            let accepted_at = Instant::now();
                             #[cfg(test)]
                             self.shutdown.pause_after_accept(&stream);
                             match self.shutdown.register(&stream) {
-                                Ok(Some(connection_id)) => {
+                                Ok(Some(registry_guard)) => {
                                     let server = &self;
-                                    scope.spawn(move || {
-                                        let _ = server.serve_one(&mut stream);
-                                        server.shutdown.finish(connection_id);
-                                    });
+                                    let deadline =
+                                        BrokerDeadline::new(accepted_at, self.io_timeout);
+                                    let spawned =
+                                        thread::Builder::new().spawn_scoped(scope, move || {
+                                            let _registry_guard = registry_guard;
+                                            let outcome = std::panic::catch_unwind(
+                                                std::panic::AssertUnwindSafe(|| {
+                                                    #[cfg(test)]
+                                                    server.shutdown.maybe_inject_worker_panic();
+                                                    server.serve_one(&mut stream, deadline)
+                                                }),
+                                            );
+                                            if outcome.is_err() {
+                                                #[cfg(test)]
+                                                server.shutdown.caught_worker_panics.fetch_add(
+                                                    1,
+                                                    std::sync::atomic::Ordering::Release,
+                                                );
+                                            }
+                                        });
+                                    if spawned.is_err() {
+                                        continue;
+                                    }
                                 }
                                 Ok(None) => break,
                                 Err(_) => continue,
@@ -809,23 +957,28 @@ mod platform {
                         Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                             thread::sleep(Duration::from_millis(2));
                         }
-                        Err(_) => break,
+                        Err(_) => {
+                            // Descriptor exhaustion and transient listener failures must reject
+                            // work without permanently disabling the broker.
+                            thread::sleep(Duration::from_millis(2));
+                        }
                     }
                 }
             });
         }
 
-        fn serve_one(&self, stream: &mut UnixStream) -> io::Result<()> {
-            stream.set_read_timeout(Some(BROKER_IO_TIMEOUT))?;
+        fn serve_one(&self, stream: &mut UnixStream, deadline: BrokerDeadline) -> io::Result<()> {
+            deadline.require_remaining()?;
             self.executable
                 .authenticate_client(stream)
                 .map_err(|error| io::Error::new(io::ErrorKind::PermissionDenied, error))?;
+            deadline.require_remaining()?;
             let mut request = vec![0_u8; REQUEST_BYTES];
             #[cfg(test)]
             self.shutdown
                 .request_read_started
                 .store(true, std::sync::atomic::Ordering::Release);
-            stream.read_exact(&mut request)?;
+            deadline.read_exact(stream, &mut request)?;
             let challenge_start = REQUEST_MAGIC.len() + 16 + 1 + CONFIG_ID_BYTES;
             let challenge: [u8; CHALLENGE_BYTES] = request
                 [challenge_start..challenge_start + CHALLENGE_BYTES]
@@ -839,6 +992,7 @@ mod platform {
                     "capability broker request is not bound to this broker, session, profile, and config",
                 ));
             }
+            deadline.require_remaining()?;
             let request_auth: [u8; REQUEST_AUTH_BYTES] = request
                 [REQUEST_BYTES - REQUEST_AUTH_BYTES..]
                 .try_into()
@@ -856,12 +1010,68 @@ mod platform {
                     ))
                 })
                 .transpose()?;
+            deadline.require_remaining()?;
             let mut descriptors = vec![self.backend.as_fd(), self.artifact.as_fd()];
             if let Some(pinned_cargo_image) = &pinned_cargo_image {
                 descriptors.push(pinned_cargo_image.as_fd());
             }
             let response = response_bytes(&self.secret, challenge, request_auth);
             self.shutdown.send_response(stream, &response, &descriptors)
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    struct BrokerDeadline {
+        expires_at: Instant,
+    }
+
+    impl BrokerDeadline {
+        fn new(accepted_at: Instant, timeout: Duration) -> Self {
+            Self {
+                expires_at: accepted_at + timeout,
+            }
+        }
+
+        fn remaining(self) -> io::Result<Duration> {
+            self.expires_at
+                .checked_duration_since(Instant::now())
+                .filter(|remaining| !remaining.is_zero())
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "capability broker connection deadline expired",
+                    )
+                })
+        }
+
+        fn require_remaining(self) -> io::Result<()> {
+            self.remaining().map(|_| ())
+        }
+
+        fn read_exact(self, stream: &mut UnixStream, mut buffer: &mut [u8]) -> io::Result<()> {
+            while !buffer.is_empty() {
+                stream.set_read_timeout(Some(self.remaining()?))?;
+                match stream.read(buffer) {
+                    Ok(0) => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::UnexpectedEof,
+                            "capability broker request ended early",
+                        ));
+                    }
+                    Ok(read) => buffer = &mut buffer[read..],
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                        ) =>
+                    {
+                        self.require_remaining()?;
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            Ok(())
         }
     }
 
@@ -1066,8 +1276,9 @@ mod platform {
     #[cfg(test)]
     mod tests {
         use std::path::PathBuf;
-        use std::sync::Arc;
+        use std::process::Command;
         use std::sync::atomic::{AtomicU64, Ordering};
+        use std::sync::{Arc, Barrier};
         use std::time::{Duration, Instant};
 
         use fe2o3_artifact_transaction::{BuildInvocation, ProducerIdentity, begin_build_attempt};
@@ -1139,6 +1350,37 @@ mod platform {
                 );
                 thread::sleep(Duration::from_millis(1));
             }
+        }
+
+        fn wait_until(mut predicate: impl FnMut() -> bool, failure: &str) {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !predicate() {
+                assert!(Instant::now() < deadline, "{failure}");
+                thread::sleep(Duration::from_millis(1));
+            }
+        }
+
+        fn start_test_broker(
+            session: BuildSession,
+            binding: CapabilityBindingV2,
+            backend: &PinnedCodegenBackend,
+            artifact: &PinnedDirectory,
+            pinned_cargo_image: &PinnedExecutable,
+            max_active_connections: usize,
+            io_timeout: Duration,
+        ) -> CapabilityBroker {
+            CapabilityBroker::start_with_limits(
+                session,
+                binding,
+                backend,
+                artifact,
+                pinned_cargo_image,
+                BrokerLimits {
+                    max_active_connections,
+                    io_timeout,
+                },
+            )
+            .unwrap()
         }
 
         fn object_is_open(identity: (u64, u64)) -> bool {
@@ -1450,6 +1692,168 @@ mod platform {
         }
 
         #[test]
+        fn active_connection_limit_rejects_max_plus_one_and_recovers() {
+            const TEST_LIMIT: usize = 4;
+            let (_temp, backend, artifact, pinned_cargo_image, session) = fixture();
+            let binding = ordinary_binding();
+            let broker = start_test_broker(
+                session,
+                binding,
+                &backend,
+                &artifact,
+                &pinned_cargo_image,
+                TEST_LIMIT,
+                Duration::from_secs(5),
+            );
+            let route = BrokerRouteV2::parse(broker.route()).unwrap();
+            let address = endpoint_address(&route.endpoint).unwrap();
+            let stalled = (0..TEST_LIMIT)
+                .map(|_| UnixStream::connect_addr(&address).unwrap())
+                .collect::<Vec<_>>();
+            wait_until(
+                || broker.shutdown.active_connection_count() == TEST_LIMIT,
+                "capability broker did not fill its configured admission limit",
+            );
+
+            let mut excess = UnixStream::connect_addr(&address).unwrap();
+            excess
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            wait_until(
+                || broker.shutdown.admission_rejections.load(Ordering::Acquire) != 0,
+                "capability broker did not reject the limit-plus-one connection",
+            );
+            let mut byte = [0_u8; 1];
+            assert!(
+                !matches!(
+                    excess.read(&mut byte),
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                        )
+                ),
+                "limit-plus-one connection remained live"
+            );
+            assert_eq!(broker.shutdown.active_connection_count(), TEST_LIMIT);
+
+            drop(excess);
+            drop(stalled);
+            wait_until(
+                || broker.shutdown.active_connection_count() == 0,
+                "stalled connection slots were not released",
+            );
+            receive_from(&route, session, binding).unwrap();
+        }
+
+        #[test]
+        fn accepted_connection_deadline_rejects_slow_drip() {
+            let (_temp, backend, artifact, pinned_cargo_image, session) = fixture();
+            let binding = ordinary_binding();
+            let broker = start_test_broker(
+                session,
+                binding,
+                &backend,
+                &artifact,
+                &pinned_cargo_image,
+                4,
+                Duration::from_millis(500),
+            );
+            let route = BrokerRouteV2::parse(broker.route()).unwrap();
+            let address = endpoint_address(&route.endpoint).unwrap();
+            let mut client = UnixStream::connect_addr(&address).unwrap();
+            let request = request_bytes(session, binding, [0x19; CHALLENGE_BYTES], &route.secret);
+            let mut sent = 0;
+            while sent < request.len() {
+                match client.write(&request[sent..sent + 1]) {
+                    Ok(1) => sent += 1,
+                    Ok(_) => break,
+                    Err(_) => break,
+                }
+                thread::sleep(Duration::from_millis(25));
+            }
+            assert!(
+                sent < request.len(),
+                "a slow-drip request outlived the accepted-connection deadline"
+            );
+            wait_until(
+                || broker.shutdown.active_connection_count() == 0,
+                "expired slow-drip connection remained registered",
+            );
+        }
+
+        #[test]
+        fn caught_worker_panic_always_releases_registry_slot() {
+            let (_temp, backend, artifact, pinned_cargo_image, session) = fixture();
+            let binding = ordinary_binding();
+            let broker = start_test_broker(
+                session,
+                binding,
+                &backend,
+                &artifact,
+                &pinned_cargo_image,
+                2,
+                Duration::from_secs(5),
+            );
+            let route = BrokerRouteV2::parse(broker.route()).unwrap();
+            let address = endpoint_address(&route.endpoint).unwrap();
+            broker.shutdown.inject_worker_panic();
+            let failed = UnixStream::connect_addr(&address).unwrap();
+            wait_until(
+                || broker.shutdown.caught_worker_panics.load(Ordering::Acquire) == 1,
+                "injected worker panic was not caught",
+            );
+            wait_until(
+                || broker.shutdown.active_connection_count() == 0,
+                "panicking worker retained its registry slot",
+            );
+            drop(failed);
+            receive_from(&route, session, binding).unwrap();
+        }
+
+        #[test]
+        fn constrained_parallel_requests_do_not_leak_slots() {
+            const CLIENTS: usize = 8;
+            const REQUESTS_PER_CLIENT: usize = 6;
+            let (_temp, backend, artifact, pinned_cargo_image, session) = fixture();
+            let binding = ordinary_binding();
+            let broker = Arc::new(start_test_broker(
+                session,
+                binding,
+                &backend,
+                &artifact,
+                &pinned_cargo_image,
+                CLIENTS,
+                Duration::from_secs(5),
+            ));
+            let barrier = Arc::new(Barrier::new(CLIENTS));
+            let clients = (0..CLIENTS)
+                .map(|_| {
+                    let broker = Arc::clone(&broker);
+                    let barrier = Arc::clone(&barrier);
+                    thread::spawn(move || {
+                        barrier.wait();
+                        let route = BrokerRouteV2::parse(broker.route()).unwrap();
+                        for _ in 0..REQUESTS_PER_CLIENT {
+                            receive_from(&route, session, binding).unwrap();
+                        }
+                    })
+                })
+                .collect::<Vec<_>>();
+            for client in clients {
+                client.join().unwrap();
+            }
+            wait_until(
+                || broker.shutdown.active_connection_count() == 0,
+                "parallel requests leaked active registry slots",
+            );
+            assert_eq!(
+                broker.shutdown.admission_rejections.load(Ordering::Acquire),
+                0
+            );
+        }
+
+        #[test]
         fn concurrent_requests_are_registered_before_dispatch_completes() {
             let (_temp, backend, artifact, pinned_cargo_image, session) = fixture();
             let binding = s09_binding();
@@ -1481,6 +1885,132 @@ mod platform {
             for client in clients {
                 client.join().unwrap().unwrap();
             }
+        }
+
+        #[test]
+        fn shutdown_closes_every_connection_at_the_admission_limit() {
+            const TEST_LIMIT: usize = 6;
+            let (_temp, backend, artifact, pinned_cargo_image, session) = fixture();
+            let binding = ordinary_binding();
+            let broker = start_test_broker(
+                session,
+                binding,
+                &backend,
+                &artifact,
+                &pinned_cargo_image,
+                TEST_LIMIT,
+                Duration::from_secs(5),
+            );
+            let shutdown = Arc::clone(&broker.shutdown);
+            let route = BrokerRouteV2::parse(broker.route()).unwrap();
+            let address = endpoint_address(&route.endpoint).unwrap();
+            let clients = (0..TEST_LIMIT)
+                .map(|_| {
+                    let client = UnixStream::connect_addr(&address).unwrap();
+                    client
+                        .set_read_timeout(Some(Duration::from_secs(2)))
+                        .unwrap();
+                    client
+                })
+                .collect::<Vec<_>>();
+            wait_until(
+                || shutdown.active_connection_count() == TEST_LIMIT,
+                "capability broker did not register all shutdown test clients",
+            );
+
+            drop(broker);
+            assert_eq!(shutdown.active_connection_count(), 0);
+            for client in clients {
+                assert_eq!(received_descriptor_count(&client), 0);
+            }
+        }
+
+        #[test]
+        fn descriptor_pressure_does_not_disable_the_accept_loop() {
+            if std::env::var_os("FE2O3_CAPABILITY_BROKER_FD_PRESSURE_CHILD").is_some() {
+                return;
+            }
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "capability_broker::platform::tests::descriptor_pressure_child",
+                    "--nocapture",
+                ])
+                .env("FE2O3_CAPABILITY_BROKER_FD_PRESSURE_CHILD", "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "descriptor-pressure child failed:\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+        }
+
+        #[test]
+        fn descriptor_pressure_child() {
+            if std::env::var_os("FE2O3_CAPABILITY_BROKER_FD_PRESSURE_CHILD").is_none() {
+                return;
+            }
+            let (_temp, backend, artifact, pinned_cargo_image, session) = fixture();
+            let binding = ordinary_binding();
+            let broker = start_test_broker(
+                session,
+                binding,
+                &backend,
+                &artifact,
+                &pinned_cargo_image,
+                4,
+                Duration::from_secs(5),
+            );
+            let pause = broker.shutdown.install_accept_pause();
+            let route = BrokerRouteV2::parse(broker.route()).unwrap();
+            let address = endpoint_address(&route.endpoint).unwrap();
+            let client = UnixStream::connect_addr(&address).unwrap();
+            assert!(pause.wait_until_reached().is_some());
+
+            let mut original = MaybeUninit::<libc::rlimit>::uninit();
+            assert_eq!(
+                unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, original.as_mut_ptr()) },
+                0
+            );
+            let original = unsafe { original.assume_init() };
+            let open_descriptors = fs::read_dir("/proc/self/fd").unwrap().count() as libc::rlim_t;
+            let reduced = libc::rlimit {
+                rlim_cur: (open_descriptors + 24).min(original.rlim_max),
+                rlim_max: original.rlim_max,
+            };
+            assert!(reduced.rlim_cur > open_descriptors + 4);
+            assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &reduced) }, 0);
+            let mut fillers = Vec::new();
+            loop {
+                match File::open("/dev/null") {
+                    Ok(file) => fillers.push(file),
+                    Err(error) if error.raw_os_error() == Some(libc::EMFILE) => break,
+                    Err(error) => panic!("unexpected descriptor-pressure error: {error}"),
+                }
+            }
+
+            pause.release();
+            wait_until(
+                || {
+                    broker
+                        .shutdown
+                        .registration_failures
+                        .load(Ordering::Acquire)
+                        != 0
+                },
+                "descriptor exhaustion did not reject registration",
+            );
+            drop(fillers);
+            assert_eq!(
+                unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &original) },
+                0
+            );
+            assert_eq!(received_descriptor_count(&client), 0);
+            drop(client);
+
+            receive_from(&route, session, binding).unwrap();
         }
 
         #[test]
