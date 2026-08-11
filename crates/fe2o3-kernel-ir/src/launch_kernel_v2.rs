@@ -12,17 +12,19 @@
 //!   obligations are opaque declarations until authenticated by later layers.
 //! - Direct host dispatch is the only admitted launch mode. Cooperative-grid
 //!   launch, device-side enqueue, and dynamic parallelism fail closed.
-//! - Occupancy metadata is validated against bounded gfx942 limits, but is not
-//!   automatically derived from executable register/resource usage.
+//! - Occupancy is admitted only through a tuple-bound verifier/metadata
+//!   witness. Witness identities remain unauthenticated, and occupancy is not
+//!   derived from executable register/resource usage by this model.
 //! - No source extraction, LLVM lowering, bundle wiring, runtime enforcement,
 //!   hardware evidence, or formal-verification claim is made here.
 
 use std::collections::BTreeSet;
 
 pub const LAUNCH_KERNEL_V2_MAGIC: [u8; 8] = *b"F2LKV2\0\0";
-pub const LAUNCH_KERNEL_V2_VERSION: u16 = 4;
-pub const LAUNCH_KERNEL_V2_LIMITATIONS: &str = "gfx942:xnack- COV6 Wave64 only; canonical tuple identities and tuple-bound proof records remain unauthenticated claims; direct host dispatch only; no cooperative grid, device enqueue, or dynamic parallelism; occupancy is declared, not derived; no export, lowering, bundle, runtime, hardware, or formal-verification claim";
-pub const VARIANT_TUPLE_DOMAIN_V2: &[u8] = b"fe2o3.launch-kernel.variant-tuple.v4\0";
+pub const LAUNCH_KERNEL_V2_VERSION: u16 = 5;
+pub const LAUNCH_KERNEL_V2_LIMITATIONS: &str = "gfx942:xnack- COV6 Wave64 only; canonical tuple identities, proof records, and occupancy verifier/metadata identities remain unauthenticated caller-supplied claims; direct host dispatch only; no cooperative grid, device enqueue, or dynamic parallelism; occupancy is witnessed, not derived; no export, lowering, bundle, runtime, hardware, or formal-verification claim";
+pub const VARIANT_TUPLE_DOMAIN_V2: &[u8] = b"fe2o3.launch-kernel.variant-tuple.v5\0";
+pub const OCCUPANCY_SUBJECT_DOMAIN_V2: &[u8] = b"fe2o3.launch-kernel.occupancy-subject.v1\0";
 
 pub const GFX942_MAX_FLAT_WORKGROUP_SIZE_V2: u32 = 1_024;
 pub const GFX942_MAX_WAVES_PER_EXECUTION_UNIT_V2: u8 = 8;
@@ -33,7 +35,8 @@ pub const GFX942_MAX_PRIVATE_SEGMENT_BYTES_V2: u32 = 1 << 20;
 const HEADER_BYTES: usize = 24;
 const TARGET_BYTES: usize = 40;
 const PARAMETER_BYTES: usize = 48;
-const VARIANT_FIXED_BYTES: usize = 212;
+const OCCUPANCY_WITNESS_BYTES: usize = 104;
+const VARIANT_FIXED_BYTES: usize = 212 + OCCUPANCY_WITNESS_BYTES;
 const PROOF_OBLIGATION_BYTES: usize = 33;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -91,6 +94,9 @@ opaque_identity!(KernelPolicyIdentityV2);
 opaque_identity!(ArtifactIdentityV2);
 opaque_identity!(SemanticTypeIdentityV2);
 opaque_identity!(KernelVariantTupleIdentityV2);
+opaque_identity!(OccupancyVerifierIdentityV2);
+opaque_identity!(OccupancyMetadataIdentityV2);
+opaque_identity!(OccupancySubjectIdentityV2);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -549,6 +555,51 @@ impl Gfx942ResourceLimitsV2 {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Gfx942OccupancyWitnessV2 {
+    pub verifier_identity: OccupancyVerifierIdentityV2,
+    pub metadata_identity: OccupancyMetadataIdentityV2,
+    pub subject_identity: OccupancySubjectIdentityV2,
+    pub minimum_waves_per_execution_unit: u8,
+    pub maximum_waves_per_execution_unit: u8,
+}
+
+impl Gfx942OccupancyWitnessV2 {
+    fn validate(
+        self,
+        launch: Gfx942LaunchContractV2,
+        expected_subject: OccupancySubjectIdentityV2,
+    ) -> Result<(), LaunchKernelValidationErrorV2> {
+        if self.verifier_identity.is_zero() {
+            return Err(LaunchKernelValidationErrorV2::ZeroIdentity(
+                "occupancy verifier",
+            ));
+        }
+        if self.metadata_identity.is_zero() {
+            return Err(LaunchKernelValidationErrorV2::ZeroIdentity(
+                "occupancy metadata",
+            ));
+        }
+        if self.verifier_identity.0 == self.metadata_identity.0 {
+            return Err(LaunchKernelValidationErrorV2::OccupancyAuthoritiesNotIndependent);
+        }
+        if self.subject_identity.is_zero() {
+            return Err(LaunchKernelValidationErrorV2::ZeroIdentity(
+                "occupancy subject",
+            ));
+        }
+        if self.subject_identity != expected_subject {
+            return Err(LaunchKernelValidationErrorV2::OccupancySubjectMismatch);
+        }
+        if self.minimum_waves_per_execution_unit != launch.minimum_waves_per_execution_unit
+            || self.maximum_waves_per_execution_unit != launch.maximum_waves_per_execution_unit
+        {
+            return Err(LaunchKernelValidationErrorV2::OccupancyBoundsMismatch);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u8)]
 pub enum LaunchCapabilityV2 {
@@ -607,6 +658,7 @@ pub struct KernelVariantV2 {
     pub entry_name: String,
     pub launch: Gfx942LaunchContractV2,
     pub resources: Gfx942ResourceLimitsV2,
+    pub occupancy_witness: Option<Gfx942OccupancyWitnessV2>,
     pub capabilities: Vec<LaunchCapabilityV2>,
     pub proof_obligations: Vec<LaunchProofObligationV2>,
 }
@@ -616,6 +668,7 @@ impl KernelVariantV2 {
         &self,
         limits: &LaunchKernelLimitsV2,
         expected_tuple_identity: KernelVariantTupleIdentityV2,
+        expected_occupancy_subject: OccupancySubjectIdentityV2,
     ) -> Result<(), LaunchKernelValidationErrorV2> {
         if self.kernel_identity.is_zero() {
             return Err(LaunchKernelValidationErrorV2::ZeroIdentity("kernel"));
@@ -679,6 +732,9 @@ impl KernelVariantV2 {
                 LaunchCapabilityV2::DynamicLds,
             ));
         }
+        let occupancy_witness = self
+            .occupancy_witness
+            .ok_or(LaunchKernelValidationErrorV2::MissingOccupancyWitness)?;
         for required in REQUIRED_PROOFS {
             if !self
                 .proof_obligations
@@ -700,6 +756,7 @@ impl KernelVariantV2 {
         if self.tuple_identity != expected_tuple_identity {
             return Err(LaunchKernelValidationErrorV2::VariantTupleIdentityMismatch);
         }
+        occupancy_witness.validate(self.launch, expected_occupancy_subject)?;
         Ok(())
     }
 }
@@ -735,6 +792,13 @@ impl LaunchKernelFamilyV2 {
         let mut policies = BTreeSet::new();
         let mut previous_name: Option<&str> = None;
         for variant in &self.variants {
+            let expected_occupancy_subject = canonical_occupancy_subject_identity_v2(
+                &self.target,
+                &self.signature,
+                variant.artifact_identity,
+                &variant.entry_name,
+                variant.resources,
+            );
             let expected_tuple_identity = canonical_variant_tuple_identity_v2(
                 &self.target,
                 self.family_identity,
@@ -742,7 +806,7 @@ impl LaunchKernelFamilyV2 {
                 &self.signature,
                 variant,
             );
-            variant.validate(limits, expected_tuple_identity)?;
+            variant.validate(limits, expected_tuple_identity, expected_occupancy_subject)?;
             if !variant_names.insert(&variant.variant_name) {
                 return Err(LaunchKernelValidationErrorV2::DuplicateVariantName);
             }
@@ -888,6 +952,47 @@ fn checked_geometry(
     })
 }
 
+/// Bind an occupancy claim to the exact executable metadata subject.
+///
+/// This digest establishes internal substitution resistance only. It does not
+/// authenticate either the metadata producer or the independent verifier.
+pub fn canonical_occupancy_subject_identity_v2(
+    target: &Gfx942TargetBindingV2,
+    signature: &KernelSignatureV2,
+    artifact_identity: ArtifactIdentityV2,
+    entry_name: &str,
+    resources: Gfx942ResourceLimitsV2,
+) -> OccupancySubjectIdentityV2 {
+    let mut digest = Sha256V2::new();
+    tuple_bytes(&mut digest, OCCUPANCY_SUBJECT_DOMAIN_V2);
+    tuple_bytes(&mut digest, &target.identity.0);
+    tuple_u8(&mut digest, target.architecture as u8);
+    tuple_u8(&mut digest, target.xnack as u8);
+    tuple_u8(&mut digest, target.code_object as u8);
+    tuple_u8(&mut digest, target.pointer_width_bytes);
+    tuple_u8(&mut digest, target.endianness as u8);
+    tuple_bytes(&mut digest, &artifact_identity.0);
+    tuple_name(&mut digest, entry_name);
+    tuple_bytes(&mut digest, &signature.identity.0);
+    tuple_u32(&mut digest, signature.explicit_argument_bytes);
+    tuple_u32(&mut digest, signature.kernarg_segment_bytes);
+    tuple_u32(&mut digest, signature.kernarg_segment_alignment);
+    tuple_u64(&mut digest, signature.parameters.len() as u64);
+    for parameter in &signature.parameters {
+        tuple_u16(&mut digest, parameter.source_index);
+        tuple_u8(&mut digest, parameter.kind as u8);
+        tuple_bytes(&mut digest, &parameter.semantic_type.0);
+        tuple_u32(&mut digest, parameter.offset);
+        tuple_u32(&mut digest, parameter.size);
+        tuple_u32(&mut digest, parameter.alignment);
+    }
+    tuple_u32(&mut digest, resources.static_lds_bytes);
+    tuple_u32(&mut digest, resources.maximum_dynamic_lds_bytes);
+    tuple_u32(&mut digest, resources.dynamic_lds_alignment);
+    tuple_u32(&mut digest, resources.private_segment_bytes);
+    OccupancySubjectIdentityV2(digest.finalize())
+}
+
 /// Derive the canonical identity of one complete launch variant tuple.
 ///
 /// The domain-separated digest commits the exact target and COV, family,
@@ -959,6 +1064,17 @@ pub fn canonical_variant_tuple_identity_v2(
     tuple_u32(&mut digest, variant.resources.maximum_dynamic_lds_bytes);
     tuple_u32(&mut digest, variant.resources.dynamic_lds_alignment);
     tuple_u32(&mut digest, variant.resources.private_segment_bytes);
+    match variant.occupancy_witness {
+        Some(witness) => {
+            tuple_u8(&mut digest, 1);
+            tuple_bytes(&mut digest, &witness.verifier_identity.0);
+            tuple_bytes(&mut digest, &witness.metadata_identity.0);
+            tuple_bytes(&mut digest, &witness.subject_identity.0);
+            tuple_u8(&mut digest, witness.minimum_waves_per_execution_unit);
+            tuple_u8(&mut digest, witness.maximum_waves_per_execution_unit);
+        }
+        None => tuple_u8(&mut digest, 0),
+    }
     tuple_u64(&mut digest, variant.capabilities.len() as u64);
     for capability in &variant.capabilities {
         tuple_u8(&mut digest, *capability as u8);
@@ -1185,6 +1301,10 @@ pub enum LaunchKernelValidationErrorV2 {
     NonCanonicalSet(&'static str),
     MissingCapability(LaunchCapabilityV2),
     RedundantCapability(LaunchCapabilityV2),
+    MissingOccupancyWitness,
+    OccupancySubjectMismatch,
+    OccupancyBoundsMismatch,
+    OccupancyAuthoritiesNotIndependent,
     MissingProofObligation(LaunchProofKindV2),
     VariantTupleIdentityMismatch,
     ProofTupleIdentityMismatch(LaunchProofKindV2),
@@ -1374,6 +1494,18 @@ pub fn encode_launch_kernel_family_v2(
         put_u32(&mut bytes, variant.resources.maximum_dynamic_lds_bytes);
         put_u32(&mut bytes, variant.resources.dynamic_lds_alignment);
         put_u32(&mut bytes, variant.resources.private_segment_bytes);
+        match variant.occupancy_witness {
+            Some(witness) => {
+                bytes.extend_from_slice(&[1, 0, 0, 0]);
+                bytes.extend_from_slice(&witness.verifier_identity.0);
+                bytes.extend_from_slice(&witness.metadata_identity.0);
+                bytes.extend_from_slice(&witness.subject_identity.0);
+                bytes.push(witness.minimum_waves_per_execution_unit);
+                bytes.push(witness.maximum_waves_per_execution_unit);
+                bytes.extend_from_slice(&[0; 2]);
+            }
+            None => bytes.extend_from_slice(&[0; OCCUPANCY_WITNESS_BYTES]),
+        }
         put_u16(
             &mut bytes,
             u16::try_from(variant.capabilities.len())
@@ -1541,6 +1673,37 @@ pub fn decode_launch_kernel_family_v2(
             dynamic_lds_alignment: reader.u32()?,
             private_segment_bytes: reader.u32()?,
         };
+        let occupancy_tag = reader.u8()?;
+        if reader.take(3)? != [0, 0, 0] {
+            return Err(LaunchKernelDecodeErrorV2::NonZeroReserved);
+        }
+        let occupancy_verifier = OccupancyVerifierIdentityV2(reader.array32()?);
+        let occupancy_metadata = OccupancyMetadataIdentityV2(reader.array32()?);
+        let occupancy_subject = OccupancySubjectIdentityV2(reader.array32()?);
+        let occupancy_minimum = reader.u8()?;
+        let occupancy_maximum = reader.u8()?;
+        if reader.take(2)? != [0, 0] {
+            return Err(LaunchKernelDecodeErrorV2::NonZeroReserved);
+        }
+        let occupancy_witness = match occupancy_tag {
+            0 if occupancy_verifier.is_zero()
+                && occupancy_metadata.is_zero()
+                && occupancy_subject.is_zero()
+                && occupancy_minimum == 0
+                && occupancy_maximum == 0 =>
+            {
+                None
+            }
+            0 => return Err(LaunchKernelDecodeErrorV2::NonCanonicalEncoding),
+            1 => Some(Gfx942OccupancyWitnessV2 {
+                verifier_identity: occupancy_verifier,
+                metadata_identity: occupancy_metadata,
+                subject_identity: occupancy_subject,
+                minimum_waves_per_execution_unit: occupancy_minimum,
+                maximum_waves_per_execution_unit: occupancy_maximum,
+            }),
+            _ => return Err(LaunchKernelDecodeErrorV2::UnknownTag),
+        };
         let capability_count = usize::from(reader.u16()?);
         let proof_count = usize::from(reader.u16()?);
         if reader.u32()? != 0 {
@@ -1604,6 +1767,7 @@ pub fn decode_launch_kernel_family_v2(
                 unsupported,
             },
             resources,
+            occupancy_witness,
             capabilities,
             proof_obligations,
         });

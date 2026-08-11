@@ -2,6 +2,7 @@
 mod launch_kernel_v2;
 
 use launch_kernel_v2::*;
+use std::collections::{BTreeMap, BTreeSet};
 
 fn id(byte: u8) -> [u8; 32] {
     [byte; 32]
@@ -94,6 +95,13 @@ fn variant(
             dynamic_lds_alignment: 16,
             private_segment_bytes: 128,
         },
+        occupancy_witness: Some(Gfx942OccupancyWitnessV2 {
+            verifier_identity: OccupancyVerifierIdentityV2::from_bytes(id(byte.wrapping_add(60))),
+            metadata_identity: OccupancyMetadataIdentityV2::from_bytes(id(byte.wrapping_add(80))),
+            subject_identity: OccupancySubjectIdentityV2::from_bytes([0; 32]),
+            minimum_waves_per_execution_unit: 1,
+            maximum_waves_per_execution_unit: 8,
+        }),
         capabilities: vec![
             LaunchCapabilityV2::ExactWaveMode,
             LaunchCapabilityV2::StaticLds,
@@ -104,7 +112,29 @@ fn variant(
     }
 }
 
-fn bind_family(candidate: &mut LaunchKernelFamilyV2) {
+fn bind_occupancy_subjects(candidate: &mut LaunchKernelFamilyV2) {
+    for index in 0..candidate.variants.len() {
+        let variant = &candidate.variants[index];
+        let subject = canonical_occupancy_subject_identity_v2(
+            &candidate.target,
+            &candidate.signature,
+            variant.artifact_identity,
+            &variant.entry_name,
+            variant.resources,
+        );
+        let minimum = variant.launch.minimum_waves_per_execution_unit;
+        let maximum = variant.launch.maximum_waves_per_execution_unit;
+        let witness = candidate.variants[index]
+            .occupancy_witness
+            .as_mut()
+            .expect("test fixture occupancy witness");
+        witness.subject_identity = subject;
+        witness.minimum_waves_per_execution_unit = minimum;
+        witness.maximum_waves_per_execution_unit = maximum;
+    }
+}
+
+fn bind_tuples(candidate: &mut LaunchKernelFamilyV2) {
     for index in 0..candidate.variants.len() {
         let tuple_identity = canonical_variant_tuple_identity_v2(
             &candidate.target,
@@ -116,6 +146,11 @@ fn bind_family(candidate: &mut LaunchKernelFamilyV2) {
         candidate.variants[index].tuple_identity = tuple_identity;
         candidate.variants[index].proof_obligations = required_proofs(tuple_identity);
     }
+}
+
+fn bind_family(candidate: &mut LaunchKernelFamilyV2) {
+    bind_occupancy_subjects(candidate);
+    bind_tuples(candidate);
 }
 
 fn family() -> LaunchKernelFamilyV2 {
@@ -323,6 +358,168 @@ fn proof_records_commit_the_exact_canonical_tuple() {
     );
 }
 
+fn assert_stale_occupancy_subject_rejected(mutation: impl FnOnce(&mut LaunchKernelFamilyV2)) {
+    let mut candidate = family();
+    mutation(&mut candidate);
+    bind_tuples(&mut candidate);
+    assert_eq!(
+        candidate.validate(&limits()),
+        Err(LaunchKernelValidationErrorV2::OccupancySubjectMismatch)
+    );
+}
+
+#[test]
+fn occupancy_requires_an_exact_tuple_bound_metadata_subject() {
+    let mut candidate = family();
+    candidate.variants[0].occupancy_witness = None;
+    assert_eq!(
+        candidate.validate(&limits()),
+        Err(LaunchKernelValidationErrorV2::MissingOccupancyWitness)
+    );
+
+    assert_stale_occupancy_subject_rejected(|candidate| {
+        candidate.target.identity = TargetIdentityV2::from_bytes(id(100));
+    });
+    assert_stale_occupancy_subject_rejected(|candidate| {
+        candidate.variants[0].artifact_identity = ArtifactIdentityV2::from_bytes(id(101));
+    });
+    assert_stale_occupancy_subject_rejected(|candidate| {
+        candidate.variants[0].entry_name = "saxpy_stale_occupancy".to_owned();
+    });
+    assert_stale_occupancy_subject_rejected(|candidate| {
+        candidate.signature.identity = KernelSignatureIdentityV2::from_bytes(id(102));
+    });
+    assert_stale_occupancy_subject_rejected(|candidate| {
+        candidate.signature.parameters[0].semantic_type =
+            SemanticTypeIdentityV2::from_bytes(id(103));
+    });
+    assert_stale_occupancy_subject_rejected(|candidate| {
+        candidate.variants[0].resources.private_segment_bytes += 1;
+    });
+
+    candidate = family();
+    candidate.variants[0]
+        .occupancy_witness
+        .as_mut()
+        .unwrap()
+        .verifier_identity = OccupancyVerifierIdentityV2::from_bytes(id(104));
+    assert_eq!(
+        candidate.validate(&limits()),
+        Err(LaunchKernelValidationErrorV2::VariantTupleIdentityMismatch)
+    );
+    candidate = family();
+    candidate.variants[0]
+        .occupancy_witness
+        .as_mut()
+        .unwrap()
+        .metadata_identity = OccupancyMetadataIdentityV2::from_bytes(id(105));
+    assert_eq!(
+        candidate.validate(&limits()),
+        Err(LaunchKernelValidationErrorV2::VariantTupleIdentityMismatch)
+    );
+}
+
+#[test]
+fn occupancy_witness_bounds_and_identity_fail_closed() {
+    let mut candidate = family();
+    candidate.variants[0]
+        .occupancy_witness
+        .as_mut()
+        .unwrap()
+        .maximum_waves_per_execution_unit = 7;
+    bind_tuples(&mut candidate);
+    assert_eq!(
+        candidate.validate(&limits()),
+        Err(LaunchKernelValidationErrorV2::OccupancyBoundsMismatch)
+    );
+
+    candidate = family();
+    candidate.variants[0]
+        .occupancy_witness
+        .as_mut()
+        .unwrap()
+        .subject_identity = OccupancySubjectIdentityV2::from_bytes(id(106));
+    bind_tuples(&mut candidate);
+    assert_eq!(
+        candidate.validate(&limits()),
+        Err(LaunchKernelValidationErrorV2::OccupancySubjectMismatch)
+    );
+
+    candidate = family();
+    candidate.variants[0]
+        .occupancy_witness
+        .as_mut()
+        .unwrap()
+        .verifier_identity = OccupancyVerifierIdentityV2::from_bytes([0; 32]);
+    bind_tuples(&mut candidate);
+    assert_eq!(
+        candidate.validate(&limits()),
+        Err(LaunchKernelValidationErrorV2::ZeroIdentity(
+            "occupancy verifier"
+        ))
+    );
+
+    candidate = family();
+    let verifier = candidate.variants[0]
+        .occupancy_witness
+        .unwrap()
+        .verifier_identity;
+    candidate.variants[0]
+        .occupancy_witness
+        .as_mut()
+        .unwrap()
+        .metadata_identity = OccupancyMetadataIdentityV2::from_bytes(verifier.0);
+    bind_tuples(&mut candidate);
+    assert_eq!(
+        candidate.validate(&limits()),
+        Err(LaunchKernelValidationErrorV2::OccupancyAuthoritiesNotIndependent)
+    );
+
+    candidate = family();
+    candidate.variants[0]
+        .launch
+        .minimum_waves_per_execution_unit = 2;
+    bind_tuples(&mut candidate);
+    assert_eq!(
+        candidate.validate(&limits()),
+        Err(LaunchKernelValidationErrorV2::OccupancyBoundsMismatch)
+    );
+}
+
+#[test]
+fn occupancy_wire_presence_is_canonical_and_required() {
+    let canonical = encode_launch_kernel_family_v2(&family(), &limits()).unwrap();
+    let verifier = id(64);
+    let verifier_offset = canonical
+        .windows(verifier.len())
+        .position(|window| window == verifier)
+        .expect("first occupancy verifier identity");
+    let witness_offset = verifier_offset - 4;
+
+    let mut absent = canonical.clone();
+    absent[witness_offset..witness_offset + 104].fill(0);
+    assert_eq!(
+        decode_launch_kernel_family_v2(&absent, &limits()),
+        Err(LaunchKernelDecodeErrorV2::Model(
+            LaunchKernelValidationErrorV2::MissingOccupancyWitness
+        ))
+    );
+
+    let mut unknown = canonical.clone();
+    unknown[witness_offset] = 2;
+    assert_eq!(
+        decode_launch_kernel_family_v2(&unknown, &limits()),
+        Err(LaunchKernelDecodeErrorV2::UnknownTag)
+    );
+
+    let mut reserved = canonical;
+    reserved[witness_offset + 1] = 1;
+    assert_eq!(
+        decode_launch_kernel_family_v2(&reserved, &limits()),
+        Err(LaunchKernelDecodeErrorV2::NonZeroReserved)
+    );
+}
+
 #[test]
 fn tuple_digest_uses_standard_sha256() {
     assert_eq!(
@@ -514,6 +711,43 @@ fn rank_shape_wave_grid_and_total_limits_fail_closed() {
     candidate.variants[0].launch.max_grid_blocks = DimensionsV2::new(u32::MAX, 1, 1);
     assert_eq!(
         candidate.validate(&limits()),
+        Err(LaunchKernelValidationErrorV2::ArithmeticOverflow)
+    );
+}
+
+#[test]
+fn extreme_3d_geometry_and_products_fail_closed() {
+    let mut candidate = family();
+    candidate.variants.truncate(1);
+    let launch = &mut candidate.variants[0].launch;
+    launch.rank = 3;
+    launch.block = BlockShapePolicyV2::Exact(DimensionsV2::new(16, 8, 8));
+    launch.max_grid_blocks = DimensionsV2::new(1, 1, 1);
+    launch.minimum_flat_workgroup_size = 1_024;
+    launch.maximum_flat_workgroup_size = 1_024;
+    launch.require_full_waves = false;
+    launch.max_total_workitems = 1_024;
+    bind_family(&mut candidate);
+    candidate.validate(&limits()).unwrap();
+
+    let mut overflow = candidate.clone();
+    overflow.variants[0].launch.max_grid_blocks =
+        DimensionsV2::new(u32::MAX / 16, u32::MAX / 8, u32::MAX / 8);
+    overflow.variants[0].launch.max_total_workitems = u64::MAX;
+    bind_family(&mut overflow);
+    assert_eq!(
+        overflow.validate(&limits()),
+        Err(LaunchKernelValidationErrorV2::ArithmeticOverflow)
+    );
+
+    overflow = candidate;
+    overflow.variants[0].launch.block =
+        BlockShapePolicyV2::Exact(DimensionsV2::new(u32::MAX, u32::MAX, u32::MAX));
+    overflow.variants[0].launch.minimum_flat_workgroup_size = 1;
+    overflow.variants[0].launch.maximum_flat_workgroup_size = 1_024;
+    bind_family(&mut overflow);
+    assert_eq!(
+        overflow.validate(&limits()),
         Err(LaunchKernelValidationErrorV2::ArithmeticOverflow)
     );
 }
@@ -840,12 +1074,14 @@ fn decoder_rejects_header_target_length_and_resource_mutations() {
         decode_launch_kernel_family_v2(&mutated, &limits()),
         Err(LaunchKernelDecodeErrorV2::BadMagic)
     );
-    mutated = canonical.clone();
-    mutated[8..10].copy_from_slice(&3_u16.to_le_bytes());
-    assert_eq!(
-        decode_launch_kernel_family_v2(&mutated, &limits()),
-        Err(LaunchKernelDecodeErrorV2::UnsupportedVersion(3))
-    );
+    for version in [3_u16, 4] {
+        mutated = canonical.clone();
+        mutated[8..10].copy_from_slice(&version.to_le_bytes());
+        assert_eq!(
+            decode_launch_kernel_family_v2(&mutated, &limits()),
+            Err(LaunchKernelDecodeErrorV2::UnsupportedVersion(version))
+        );
+    }
     mutated = canonical.clone();
     mutated[10] = 1;
     assert_eq!(
@@ -916,6 +1152,79 @@ impl DeterministicRng {
     fn below(&mut self, ceiling: u32) -> u32 {
         (self.next() % u64::from(ceiling)) as u32
     }
+}
+
+fn independent_occupancy_subject(
+    target: &Gfx942TargetBindingV2,
+    signature: &KernelSignatureV2,
+    artifact_identity: ArtifactIdentityV2,
+    entry_name: &str,
+    resources: Gfx942ResourceLimitsV2,
+) -> OccupancySubjectIdentityV2 {
+    fn name(bytes: &mut Vec<u8>, value: &str) {
+        bytes.extend_from_slice(&(value.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(value.as_bytes());
+    }
+
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(OCCUPANCY_SUBJECT_DOMAIN_V2);
+    bytes.extend_from_slice(&target.identity.0);
+    bytes.push(target.architecture as u8);
+    bytes.push(target.xnack as u8);
+    bytes.push(target.code_object as u8);
+    bytes.push(target.pointer_width_bytes);
+    bytes.push(target.endianness as u8);
+    bytes.extend_from_slice(&artifact_identity.0);
+    name(&mut bytes, entry_name);
+    bytes.extend_from_slice(&signature.identity.0);
+    bytes.extend_from_slice(&signature.explicit_argument_bytes.to_le_bytes());
+    bytes.extend_from_slice(&signature.kernarg_segment_bytes.to_le_bytes());
+    bytes.extend_from_slice(&signature.kernarg_segment_alignment.to_le_bytes());
+    bytes.extend_from_slice(&(signature.parameters.len() as u64).to_le_bytes());
+    for parameter in &signature.parameters {
+        bytes.extend_from_slice(&parameter.source_index.to_le_bytes());
+        bytes.push(parameter.kind as u8);
+        bytes.extend_from_slice(&parameter.semantic_type.0);
+        bytes.extend_from_slice(&parameter.offset.to_le_bytes());
+        bytes.extend_from_slice(&parameter.size.to_le_bytes());
+        bytes.extend_from_slice(&parameter.alignment.to_le_bytes());
+    }
+    bytes.extend_from_slice(&resources.static_lds_bytes.to_le_bytes());
+    bytes.extend_from_slice(&resources.maximum_dynamic_lds_bytes.to_le_bytes());
+    bytes.extend_from_slice(&resources.dynamic_lds_alignment.to_le_bytes());
+    bytes.extend_from_slice(&resources.private_segment_bytes.to_le_bytes());
+    OccupancySubjectIdentityV2::from_bytes(sha256_test_vector_v2(&bytes))
+}
+
+#[test]
+fn occupancy_subject_matches_independent_serializer_campaign() {
+    const CASES: u64 = 50_000;
+    let baseline = family();
+    let mut rng = DeterministicRng(0x0cc0_9420_0000_0001);
+    let mut distinct = BTreeSet::new();
+
+    for case in 0..CASES {
+        let mut target = baseline.target;
+        target.identity = TargetIdentityV2::from_bytes(id((rng.next() as u8).max(1)));
+        let mut signature = baseline.signature.clone();
+        let parameter_index = case as usize % signature.parameters.len();
+        signature.parameters[parameter_index].semantic_type =
+            SemanticTypeIdentityV2::from_bytes(id((rng.next() as u8).max(1)));
+        let artifact = ArtifactIdentityV2::from_bytes(id((rng.next() as u8).max(1)));
+        let entry = format!("occupancy_entry_{case:x}");
+        let resources = Gfx942ResourceLimitsV2 {
+            private_segment_bytes: rng.below(GFX942_MAX_PRIVATE_SEGMENT_BYTES_V2 + 1),
+            ..baseline.variants[0].resources
+        };
+        let actual = canonical_occupancy_subject_identity_v2(
+            &target, &signature, artifact, &entry, resources,
+        );
+        let expected =
+            independent_occupancy_subject(&target, &signature, artifact, &entry, resources);
+        assert_eq!(actual, expected, "case={case}");
+        distinct.insert(actual);
+    }
+    assert_eq!(distinct.len() as u64, CASES);
 }
 
 fn oracle_family() -> LaunchKernelFamilyV2 {
@@ -1221,6 +1530,127 @@ fn exhaustive_block_policy_canonicalization_and_admissible_set() {
 }
 
 #[test]
+fn exhaustive_small_2d_policy_sets_have_one_canonical_representation() {
+    type ShapeKey = Vec<(u32, u32, u32)>;
+
+    fn admitted_shapes(
+        minimum: DimensionsV2,
+        maximum: DimensionsV2,
+        minimum_flat: u32,
+        maximum_flat: u32,
+        require_full_waves: bool,
+    ) -> ShapeKey {
+        let mut shapes = Vec::new();
+        for y in minimum.y..=maximum.y {
+            for x in minimum.x..=maximum.x {
+                let flat = x * y;
+                if flat >= minimum_flat
+                    && flat <= maximum_flat
+                    && (!require_full_waves || flat % 64 == 0)
+                {
+                    shapes.push((x, y, 1));
+                }
+            }
+        }
+        shapes
+    }
+
+    fn candidate(
+        block: BlockShapePolicyV2,
+        minimum_flat: u32,
+        maximum_flat: u32,
+        require_full_waves: bool,
+    ) -> LaunchKernelFamilyV2 {
+        let mut candidate = family();
+        candidate.variants.truncate(1);
+        let (_, maximum) = match block {
+            BlockShapePolicyV2::Exact(shape) => (shape, shape),
+            BlockShapePolicyV2::Bounded { minimum, maximum } => (minimum, maximum),
+        };
+        let launch = &mut candidate.variants[0].launch;
+        launch.rank = 2;
+        launch.block = block;
+        launch.max_grid_blocks = DimensionsV2::new(1, 1, 1);
+        launch.minimum_flat_workgroup_size = minimum_flat;
+        launch.maximum_flat_workgroup_size = maximum_flat;
+        launch.require_full_waves = require_full_waves;
+        launch.max_total_workitems = u64::from(maximum.x) * u64::from(maximum.y);
+        bind_family(&mut candidate);
+        candidate
+    }
+
+    let flat_values = [16, 17, 32, 34, 48, 51, 64, 68];
+    let mut represented = BTreeSet::<ShapeKey>::new();
+    let mut canonical = BTreeMap::<ShapeKey, u32>::new();
+    let mut representations = 0_u32;
+
+    for x in 1..=4 {
+        for y in 16..=17 {
+            let shape = DimensionsV2::new(x, y, 1);
+            let flat = x * y;
+            let key = vec![(x, y, 1)];
+            if flat % 64 == 0 {
+                represented.insert(key.clone());
+            }
+            if candidate(BlockShapePolicyV2::Exact(shape), flat, flat, false)
+                .validate(&limits())
+                .is_ok()
+            {
+                *canonical.entry(key).or_default() += 1;
+            }
+            representations += 1;
+        }
+    }
+
+    for minimum_x in 1..=4 {
+        for maximum_x in minimum_x..=4 {
+            for minimum_y in 16..=17 {
+                for maximum_y in minimum_y..=17 {
+                    let minimum = DimensionsV2::new(minimum_x, minimum_y, 1);
+                    let maximum = DimensionsV2::new(maximum_x, maximum_y, 1);
+                    for (minimum_index, minimum_flat) in flat_values.iter().enumerate() {
+                        for maximum_flat in &flat_values[minimum_index..] {
+                            for require_full_waves in [false, true] {
+                                let key = admitted_shapes(
+                                    minimum,
+                                    maximum,
+                                    *minimum_flat,
+                                    *maximum_flat,
+                                    require_full_waves,
+                                );
+                                if key.iter().any(|(x, y, z)| x * y * z % 64 == 0) {
+                                    represented.insert(key.clone());
+                                }
+                                let policy = BlockShapePolicyV2::Bounded { minimum, maximum };
+                                if candidate(
+                                    policy,
+                                    *minimum_flat,
+                                    *maximum_flat,
+                                    require_full_waves,
+                                )
+                                .validate(&limits())
+                                .is_ok()
+                                {
+                                    *canonical.entry(key).or_default() += 1;
+                                }
+                                representations += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    for key in &represented {
+        assert_eq!(canonical.get(key), Some(&1), "admitted set={key:?}");
+    }
+    assert_eq!(representations, 2_168);
+    assert_eq!(canonical.len(), represented.len());
+    assert_eq!(represented.len(), 17);
+}
+
+#[test]
 fn deterministic_randomized_launches_match_independent_oracle() {
     const CASES: u64 = 200_000;
     let candidate = oracle_family();
@@ -1253,7 +1683,7 @@ fn deterministic_randomized_launches_match_independent_oracle() {
 fn hostile_decoder_campaign_is_bounded_panic_free_and_canonical() {
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
-    const CASES: u64 = 160_000;
+    const CASES: u64 = 250_000;
     let limits = limits();
     let canonical = encode_launch_kernel_family_v2(&family(), &limits).unwrap();
     let mut rng = DeterministicRng(0x5330_3882_9420_0001);
@@ -1307,7 +1737,7 @@ fn hostile_decoder_campaign_is_bounded_panic_free_and_canonical() {
             accepted += 1;
         }
     }
-    assert_eq!(CASES, 160_000);
+    assert_eq!(CASES, 250_000);
     assert!(accepted >= CASES / 1_024);
 
     let oversized = vec![0_u8; limits.max_encoded_bytes + 1];
