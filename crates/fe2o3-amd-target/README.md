@@ -14,6 +14,44 @@ The accepted grammar is deliberately narrow:
 - each feature may occur at most once; and
 - formatting emits features in AMD's canonical `sramecc`, then `xnack` order.
 
+## Resolved target identity V2
+
+`resolve_amd_target_v2` creates one bounded, canonical target identity from an
+explicit override or injected device observations. An override has absolute
+precedence: when present, the resolver never queries detection, and an invalid
+override returns its parse or capability error without falling back. Override
+feature order is normalized through the existing `AmdTargetId` API. An omitted
+supported override feature remains `unspecified`, which preserves the existing
+code-object `Any` meaning.
+
+Without an override, the resolver accepts at most 64 observations of at most 64
+bytes each. Every detected target is parsed and capability checked. A detected
+target must report an explicit enabled or disabled state for every target-ID
+feature configurable by that architecture. Multiple identical targets are
+accepted, including equivalent target IDs with different input feature order.
+Different architectures or feature states are ambiguous and fail closed. Zero
+devices, too many devices, malformed observations, incomplete feature states,
+and detector errors are distinct failures.
+
+Detection is injected through `AmdTargetDetectionV2`; this crate does not spawn
+commands, parse shell output, read environment variables, or choose a runtime.
+An adapter is expected to query an in-process driver or runtime API and retain
+stable device indices for one resolution call. No HSA adapter or shared
+consumer is wired in this V2 lane yet.
+
+`ResolvedAmdTargetIdentityV2` binds the concrete architecture, SRAM ECC and
+XNACK states, and selection source (`detected` or `override`). Its fixed-capacity
+canonical bytes are versioned and field ordered. `canonical_digest` is SHA-256
+over exactly those bytes. Decoding accepts only records that reproduce the same
+canonical bytes, and detected records with unspecified configurable features
+remain invalid.
+
+The V2 identity is normalized configuration, not attestation. An override does
+not prove device presence. Injected observations do not prove that the adapter
+queried trustworthy hardware, and identical observations do not bind a
+particular device ordinal. Runtime admission must separately authenticate its
+query path, selected device, executable target, and compatibility decision.
+
 ## Target capabilities
 
 `AmdTargetId::capabilities` derives a canonical V1 capability record from the
