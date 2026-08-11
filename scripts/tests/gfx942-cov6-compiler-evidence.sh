@@ -6,4 +6,5 @@ case ${BASH_SOURCE[0]} in
   *) controller=$PWD/${BASH_SOURCE[0]%/*}/../gfx942_compiler_evidence.py ;;
 esac
 
-exec -c /usr/bin/python3.12 "$controller" --self-test
+exec /usr/bin/env -i PYTHONDONTWRITEBYTECODE=1 \
+  /usr/bin/python3.12 -B "$controller" --self-test
