@@ -1237,6 +1237,9 @@ fn validate_edge(
     edge: &SynchronizationEdge,
     module: &SynchronizationModuleV2,
 ) -> Result<(), ValidationError> {
+    if edge.domains == MemoryDomains::NONE {
+        return Err(ValidationError::IncompatibleEdgeDomains(edge_index));
+    }
     let Some(before) = module.events.get(edge.before.0 as usize) else {
         return Err(ValidationError::UnknownEdgeEndpoint {
             edge: edge_index,

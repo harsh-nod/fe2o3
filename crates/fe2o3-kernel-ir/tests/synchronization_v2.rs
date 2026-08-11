@@ -600,6 +600,20 @@ fn alignment_region_and_lds_bounds_are_exact() {
         atomic_module(out_of_bounds).validate(&limits),
         Err(ValidationError::InvalidMemoryRegion(EventId(0)))
     );
+    let mut overflow = atomic(
+        AtomicOperation::Load,
+        u32_ty(),
+        AddressSpace::Global,
+        MemoryScope::System,
+        MemoryOrdering::Relaxed,
+        None,
+        AtomicDialect::Rust,
+    );
+    overflow.region.offset = u32::MAX - 1;
+    assert_eq!(
+        atomic_module(overflow).validate(&limits),
+        Err(ValidationError::ArithmeticOverflow)
+    );
 
     for (bank_count, bank_width, shift, expected) in [
         (32, 4, None, true),
@@ -811,6 +825,12 @@ fn edge_kind_scope_domain_and_ordering_checks_are_exhaustive() {
         Err(ValidationError::IncompatibleEdgeDomains(0))
     );
     let mut candidate = full_module();
+    candidate.edges[0].domains = MemoryDomains::NONE;
+    assert_eq!(
+        candidate.validate(&limits),
+        Err(ValidationError::IncompatibleEdgeDomains(0))
+    );
+    let mut candidate = full_module();
     candidate.edges[0].after = EventId(0);
     assert_eq!(
         candidate.validate(&limits),
@@ -822,6 +842,73 @@ fn edge_kind_scope_domain_and_ordering_checks_are_exhaustive() {
         candidate.validate(&limits),
         Err(ValidationError::NonCanonicalEdgeOrder)
     );
+    let mut candidate = full_module();
+    candidate.edges.insert(1, candidate.edges[0].clone());
+    assert_eq!(
+        candidate.validate(&limits),
+        Err(ValidationError::DuplicateEdge)
+    );
+}
+
+#[test]
+fn canonical_ids_and_exact_lds_capacity_are_enforced() {
+    let limits = SynchronizationLimits::default();
+    let mut bad_event = full_module();
+    bad_event.events[0].id = EventId(9);
+    assert!(matches!(
+        bad_event.validate(&limits),
+        Err(ValidationError::NonCanonicalEventId {
+            position: 0,
+            actual: EventId(9),
+        })
+    ));
+
+    let mut exact = lds_allocation();
+    exact.bytes = 64 * 1024;
+    exact.elements = 16 * 1024;
+    assert!(
+        SynchronizationModuleV2 {
+            target: TargetProfile::Gfx942Wave64,
+            lds_allocations: vec![exact.clone()],
+            events: vec![],
+            edges: vec![],
+        }
+        .validate(&limits)
+        .is_ok()
+    );
+    let mut tail = lds_allocation();
+    tail.id = LdsAllocationId(1);
+    tail.bytes = 4;
+    tail.elements = 1;
+    assert!(matches!(
+        SynchronizationModuleV2 {
+            target: TargetProfile::Gfx942Wave64,
+            lds_allocations: vec![exact, tail],
+            events: vec![],
+            edges: vec![],
+        }
+        .validate(&limits),
+        Err(ValidationError::ResourceLimit {
+            resource: Resource::TotalLdsBytes,
+            observed: 65_540,
+            limit: 65_536,
+        })
+    ));
+
+    let mut bad_lds = SynchronizationModuleV2 {
+        target: TargetProfile::Gfx942Wave64,
+        lds_allocations: vec![lds_allocation()],
+        events: vec![],
+        edges: vec![],
+    };
+    bad_lds.lds_allocations[0].id = LdsAllocationId(1);
+    assert!(matches!(
+        bad_lds.validate(&limits),
+        Err(ValidationError::NonCanonicalLdsId {
+            position: 0,
+            actual: LdsAllocationId(1),
+        })
+    ));
 }
 
 #[test]
@@ -947,6 +1034,34 @@ fn codec_rejects_every_truncation_count_bombs_and_noncanonical_fields() {
         decode_synchronization_v2(&reserved, &limits),
         Err(DecodeError::NonZeroReserved)
     );
+
+    let tiny = SynchronizationLimits {
+        max_encoded_bytes: 31,
+        ..SynchronizationLimits::default()
+    };
+    let empty_module = SynchronizationModuleV2 {
+        target: TargetProfile::Gfx942Wave64,
+        lds_allocations: vec![],
+        events: vec![],
+        edges: vec![],
+    };
+    assert!(matches!(
+        encode_synchronization_v2(&empty_module, &tiny),
+        Err(ValidationError::ResourceLimit {
+            resource: Resource::EncodedBytes,
+            observed: 32,
+            limit: 31,
+        })
+    ));
+    let encoded = encode_synchronization_v2(&empty_module, &limits).unwrap();
+    assert!(matches!(
+        decode_synchronization_v2(&encoded, &tiny),
+        Err(DecodeError::ResourceLimit {
+            resource: Resource::EncodedBytes,
+            observed: 32,
+            limit: 31,
+        })
+    ));
 }
 
 #[test]
