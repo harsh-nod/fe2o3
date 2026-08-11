@@ -3428,7 +3428,14 @@ mod tests {
         );
         let encoded = encode_device_descriptor_table_v1(&table).unwrap();
 
-        for (duplicate, malformed) in [(true, false), (false, true)] {
+        for (duplicate, malformed, expected) in [
+            (true, false, fe2o3_hsaco::InspectionError::DuplicateMapKey),
+            (
+                false,
+                true,
+                fe2o3_hsaco::InspectionError::InvalidFieldType(".max_num_workgroups_x"),
+            ),
+        ] {
             let raw = canonical_hsaco_fixture::with_descriptor_table_and_launch_metadata(
                 REQUIRED_GFX942_TEST_TARGET,
                 &encoded,
@@ -3439,7 +3446,7 @@ mod tests {
                 duplicate,
                 malformed,
             );
-            assert!(fe2o3_hsaco::inspect(&raw).is_err());
+            assert_eq!(fe2o3_hsaco::inspect(&raw), Err(expected));
             assert!(finalize_unfinalized(&raw).is_err());
         }
     }
