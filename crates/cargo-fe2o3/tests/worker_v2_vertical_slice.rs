@@ -1,11 +1,13 @@
 #![cfg(target_os = "linux")]
 
+use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::io::Read;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::sync::Mutex;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, sync_channel};
 use std::thread;
@@ -58,6 +60,12 @@ fn worker_fixture() -> &'static Path {
 
 fn envelope_input_fixture() -> &'static Path {
     Path::new(env!("CARGO_BIN_EXE_cargo-fe2o3-envelope-input-fixture"))
+}
+
+fn host_consumer_input_fixture() -> &'static Path {
+    Path::new(env!(
+        "CARGO_BIN_EXE_cargo-fe2o3-host-consumer-input-fixture"
+    ))
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -502,8 +510,61 @@ fn artifact_dir(directory: &TestDirectory) -> PathBuf {
     directory.0.join("target/fe2o3")
 }
 
+struct StaticApplicationFixtures {
+    protocol: PathBuf,
+    host_consumer: PathBuf,
+}
+
+fn static_application_fixtures() -> &'static StaticApplicationFixtures {
+    static FIXTURES: OnceLock<StaticApplicationFixtures> = OnceLock::new();
+    FIXTURES.get_or_init(|| {
+        let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let target = std::env::temp_dir().join(format!(
+            "cargo-fe2o3-static-application-fixtures-{}",
+            std::process::id()
+        ));
+        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+        let built = Command::new(cargo)
+            .current_dir(workspace)
+            .env(
+                "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS",
+                "-C target-feature=+crt-static",
+            )
+            .env("FE2O3_HIP_SYS_DISABLE", "1")
+            .args([
+                "build",
+                "--target",
+                "x86_64-unknown-linux-gnu",
+                "--target-dir",
+            ])
+            .arg(&target)
+            .args([
+                "-p",
+                "cargo-fe2o3",
+                "--features",
+                "host-consumer-fixture",
+                "--bin",
+                "cargo-fe2o3-runner-app-fixture",
+                "--bin",
+                "cargo-fe2o3-host-consumer-app-fixture",
+            ])
+            .output()
+            .unwrap();
+        assert!(built.status.success(), "{}", stderr(&built));
+        let directory = target.join("x86_64-unknown-linux-gnu/debug");
+        StaticApplicationFixtures {
+            protocol: directory.join("cargo-fe2o3-runner-app-fixture"),
+            host_consumer: directory.join("cargo-fe2o3-host-consumer-app-fixture"),
+        }
+    })
+}
+
 fn application_fixture() -> &'static Path {
-    Path::new(env!("CARGO_BIN_EXE_cargo-fe2o3-runner-app-fixture"))
+    &static_application_fixtures().protocol
+}
+
+fn host_consumer_application_fixture() -> &'static Path {
+    &static_application_fixtures().host_consumer
 }
 
 fn envelope_paths(directory: &TestDirectory) -> Vec<PathBuf> {
@@ -521,6 +582,25 @@ fn application_runner_command(
     application: &Path,
     report: &Path,
 ) -> Command {
+    application_runner_command_with_args(
+        directory,
+        application,
+        [
+            report.as_os_str(),
+            OsStr::new("worker-v2-application-payload"),
+        ],
+    )
+}
+
+fn application_runner_command_with_args<I, S>(
+    directory: &TestDirectory,
+    application: &Path,
+    arguments: I,
+) -> Command
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
     use std::os::unix::fs::MetadataExt;
 
     let artifact = artifact_dir(directory);
@@ -535,9 +615,29 @@ fn application_runner_command(
         .arg("required")
         .arg("0")
         .arg(application)
-        .arg(report)
-        .arg("worker-v2-application-payload");
+        .args(arguments);
     command
+}
+
+fn host_consumer_runner_command(directory: &TestDirectory, report: &Path) -> Command {
+    let capsule = directory.0.join("host-consumer.compiler-transaction");
+    let kernel = directory.0.join("host-consumer.kernel-id");
+    let envelope = envelope_paths(directory).pop().unwrap();
+    let generated = Command::new(host_consumer_input_fixture())
+        .args([&envelope, &capsule, &kernel])
+        .output()
+        .unwrap();
+    assert!(generated.status.success(), "{}", stderr(&generated));
+    application_runner_command_with_args(
+        directory,
+        host_consumer_application_fixture(),
+        [
+            capsule.as_os_str(),
+            kernel.as_os_str(),
+            OsStr::new("gfx942:xnack-"),
+            report.as_os_str(),
+        ],
+    )
 }
 
 fn run_application_fixture(directory: &TestDirectory, report: &Path) -> Output {
@@ -1011,6 +1111,61 @@ fn canonical_envelope_is_consumed_through_descriptor_protocol_completion() {
     assert_eq!(report["handoff"]["read_only"], true);
     assert_eq!(report["handoff"]["commitment"].as_str().unwrap().len(), 64);
     assert_eq!(report["payload_hex"], hex(b"worker-v2-application-payload"));
+}
+
+#[test]
+fn real_host_consumer_reaches_exact_prerequisite_admission() {
+    let directory = TestDirectory::new();
+    let fixture = required_alpha_zeta_publication_fixture(&directory);
+    let published = run_wrapper_with_options(
+        &directory,
+        &fixture.config,
+        "publish-valid",
+        fixture.cov6,
+        None,
+    );
+    assert!(published.status.success(), "{}", stderr(&published));
+
+    let report = directory.0.join("host-consumer-report.json");
+    let consumed = host_consumer_runner_command(&directory, &report)
+        .env("LD_PRELOAD", "")
+        .env("LD_LIBRARY_PATH", "/untrusted/runtime")
+        .env("LD_AUDIT", "")
+        .env("GLIBC_TUNABLES", "glibc.malloc.trim_threshold=1")
+        .output()
+        .unwrap();
+    assert!(!consumed.status.success());
+    assert!(
+        stderr(&consumed).contains("AmdWave"),
+        "{}",
+        stderr(&consumed)
+    );
+    assert!(
+        !stderr(&consumed).contains("loader-sensitive environment survived"),
+        "{}",
+        stderr(&consumed)
+    );
+    let report: JsonValue = serde_json::from_slice(&fs::read(report).unwrap()).unwrap();
+    assert_eq!(report["host_consumer"], true);
+    assert_eq!(report["loader_environment_clear"], true);
+    assert_eq!(report["admitted"], false);
+
+    let rejected_report = directory.0.join("host-consumer-substitution.json");
+    let rejected = host_consumer_runner_command(&directory, &rejected_report)
+        .env("RUNNER_HOST_FIXTURE_SUBSTITUTE_COMMITMENT", "1")
+        .output()
+        .unwrap();
+    assert!(!rejected.status.success());
+    assert!(
+        stderr(&rejected).contains("commitment"),
+        "{}",
+        stderr(&rejected)
+    );
+    assert!(
+        !stderr(&rejected).contains("AmdWave"),
+        "{}",
+        stderr(&rejected)
+    );
 }
 
 #[test]

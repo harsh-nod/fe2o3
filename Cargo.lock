@@ -55,6 +55,7 @@ dependencies = [
  "fe2o3-artifact-transaction",
  "fe2o3-artifacts",
  "fe2o3-compiler-ffi",
+ "fe2o3-host",
  "fe2o3-hsaco",
  "fe2o3-hsaco-finalize",
  "fe2o3-kernel-descriptor",

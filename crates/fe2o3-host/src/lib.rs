@@ -23,6 +23,8 @@ mod worker_v2_bundle_admission;
 pub mod __hardware_test {
     use fe2o3_artifact_transaction::DurableCurrentLinkPublicationTokenV1;
 
+    use crate::ObservedContext;
+
     pub use crate::worker_v2_bundle_admission::tests::{
         TestDirectory, TestPublicationTurnover,
         admitted_alpha_zeta_cov6_hardware_for_lifecycle_test, admitted_hardware_for_lifecycle_test,
@@ -46,6 +48,11 @@ pub mod __hardware_test {
         A: crate::ReviewedHsaExecutableLifecycleAdapterV1,
     {
         authorized.load_with_retained_currentness(current)
+    }
+
+    /// Constructs inert device facts for a descriptor-handoff integration fixture.
+    pub fn application_handoff_observed_context_fixture_v1(target: &str) -> ObservedContext {
+        ObservedContext::for_test(0xf3_02, 0, target, 1_024, 65_536)
     }
 }
 

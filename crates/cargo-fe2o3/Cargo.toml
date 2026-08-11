@@ -10,6 +10,7 @@ description = "Cargo subcommand for fe2o3."
 
 [features]
 worker-v2-fault-injection-test-only = []
+host-consumer-fixture = ["dep:fe2o3-host"]
 
 [dependencies]
 cap-primitives = "=4.0.2"
@@ -18,6 +19,7 @@ fe2o3-artifact-transaction.workspace = true
 fe2o3-compiler-ffi.workspace = true
 fe2o3-hsaco.workspace = true
 fe2o3-hsaco-finalize.workspace = true
+fe2o3-host = { workspace = true, optional = true, features = ["hardware-test-hooks"] }
 fe2o3-kernel-descriptor.workspace = true
 fe2o3-process-identity.workspace = true
 fe2o3-rustc-invocation.workspace = true
@@ -79,5 +81,18 @@ bench = false
 [[bin]]
 name = "cargo-fe2o3-runner-chain-fixture"
 path = "tests/fixtures/runner_chain_fixture.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "cargo-fe2o3-host-consumer-input-fixture"
+path = "tests/fixtures/host_consumer_input_fixture.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "cargo-fe2o3-host-consumer-app-fixture"
+path = "tests/fixtures/host_consumer_app_fixture.rs"
+required-features = ["host-consumer-fixture"]
 test = false
 bench = false
