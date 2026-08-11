@@ -1989,11 +1989,15 @@ def build_and_run_hardware_observation(
             sealed_test, source.root, environment, tools, supervisor
         )
         loader_cache = Path("/etc/ld.so.cache").resolve(strict=True)
+        runtime_data = (
+            Path("/opt/amdgpu/share/libdrm/amdgpu.ids").resolve(strict=True),
+        )
         runtime = capture_retained_closure(
             "run-1-gfx942-hardware-runtime",
             [
                 *((f"runtime:{path.as_posix()}", path) for path in runtime_paths),
                 ("loader-cache:/etc/ld.so.cache", loader_cache),
+                *((f"runtime-data:{path.as_posix()}", path) for path in runtime_data),
             ],
             {
                 "executable_sha256": sealed_test.sha256,
@@ -2030,7 +2034,7 @@ def build_and_run_hardware_observation(
             extra_inherited_fds=(retained_hsaco.fd,),
             limits=CommandLimits(timeout_seconds=300, cpu_seconds=300),
             readable_paths=tuple(
-                [*runtime_paths, loader_cache, retained_hsaco.path]
+                [*runtime_paths, loader_cache, *runtime_data, retained_hsaco.path]
             ),
             readable_roots=(Path("/proc"), Path("/sys"), Path("/dev")),
         )
