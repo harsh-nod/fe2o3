@@ -538,7 +538,8 @@ fn observe_leader_exit_without_reaping_with(
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
             Err(error) => {
                 return Err(format!(
-                    "failed to inspect application during handoff without reaping it: {error}"
+                    "failed to inspect application during handoff without reaping it: {error} (errno {:?})",
+                    error.raw_os_error()
                 ));
             }
         }
@@ -795,6 +796,37 @@ mod tests {
         unsafe { libc::kill(process, 0) == 0 }
     }
 
+    fn await_nonreaping_exit(child: &Child) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match observe_leader_exit_without_reaping(child.id() as libc::pid_t).unwrap() {
+                LeaderExitObservation::Exited => return,
+                LeaderExitObservation::Running if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                LeaderExitObservation::Running => panic!("application leader did not exit"),
+            }
+        }
+    }
+
+    fn spawn_paused_outsider() -> libc::pid_t {
+        // SAFETY: the child branch performs only the async-signal-safe `pause` syscall.
+        let outsider = unsafe { libc::fork() };
+        assert!(
+            outsider >= 0,
+            "fork outsider: {}",
+            io::Error::last_os_error()
+        );
+        if outsider == 0 {
+            unsafe {
+                loop {
+                    libc::pause();
+                }
+            }
+        }
+        outsider
+    }
+
     #[test]
     fn session_setup_fails_closed_for_a_process_group_leader() {
         let mut command = Command::new("/bin/true");
@@ -893,6 +925,142 @@ mod tests {
         kill_process_group(leader).unwrap();
         assert!(child.wait().unwrap().success());
         reap_process_group(leader).unwrap();
+    }
+
+    #[test]
+    fn invalid_ack_early_exit_retains_leader_until_bounded_group_cleanup() {
+        ensure_child_subreaper().unwrap();
+        let pid_file = std::env::temp_dir().join(format!(
+            "cargo-fe2o3-invalid-ack-descendant-{}",
+            std::process::id()
+        ));
+        let (mut ack_read, ack_write) = cloexec_pipe().unwrap();
+        let ack_fd = ack_write.as_raw_fd();
+        let mut command = fresh_session_command("/bin/sh");
+        // SAFETY: the callback changes only the inherited ACK descriptor before exec. Session
+        // establishment was registered first and both callbacks run in the single-threaded child.
+        unsafe {
+            command.pre_exec(move || {
+                if libc::fcntl(ack_fd, libc::F_SETFD, 0) != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        command
+            .arg("-c")
+            .arg("eval \"printf x >&$1\"; eval \"exec $1>&-\"; sleep 30 & echo $! > \"$2\"")
+            .arg("fe2o3-invalid-ack-probe")
+            .arg(ack_fd.to_string())
+            .arg(&pid_file);
+        let mut application = command.spawn().unwrap();
+        drop(ack_write);
+
+        await_nonreaping_exit(&application);
+        let bytes =
+            read_application_handoff_ack(&mut ack_read, &application, Duration::from_secs(1))
+                .unwrap();
+        assert_eq!(bytes, b"x");
+        assert!(WorkerV2ApplicationHandoffAckV1::decode_canonical(&bytes).is_err());
+        assert_eq!(
+            observe_leader_exit_without_reaping(application.id() as libc::pid_t).unwrap(),
+            LeaderExitObservation::Exited
+        );
+        assert_eq!(
+            observe_leader_exit_without_reaping(application.id() as libc::pid_t).unwrap(),
+            LeaderExitObservation::Exited
+        );
+
+        let descendant = std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .parse::<libc::pid_t>()
+            .unwrap();
+        let _ = std::fs::remove_file(&pid_file);
+        assert!(process_exists(descendant));
+        let outsider = spawn_paused_outsider();
+        // SAFETY: both calls only query live process/session identities.
+        let outsider_session = unsafe { libc::getsid(outsider) };
+        let runner_session = unsafe { libc::getsid(0) };
+        let started = Instant::now();
+        let containment = terminate_application_group(&mut application);
+        let elapsed = started.elapsed();
+        let descendant_survived = process_exists(descendant);
+        let outsider_survived = process_exists(outsider);
+        // SAFETY: the outsider is this test's live child and is reaped immediately below.
+        unsafe { libc::kill(outsider, libc::SIGKILL) };
+        wait_for_raw_child(outsider);
+
+        assert!(containment.is_ok(), "{containment:?}");
+        assert!(elapsed < Duration::from_secs(2), "cleanup took {elapsed:?}");
+        assert!(
+            !descendant_survived,
+            "application descendant escaped cleanup"
+        );
+        assert_eq!(outsider_session, runner_session);
+        assert!(outsider_survived, "cleanup killed an unrelated outsider");
+    }
+
+    #[test]
+    fn ack_exit_observation_retries_eintr_and_echild_fails_closed() {
+        let mut command = fresh_session_command("/bin/true");
+        let mut child = command.spawn().unwrap();
+        let leader = child.id() as libc::pid_t;
+        wait_for_leader_exit_without_reaping(leader).unwrap();
+
+        let mut attempts = 0;
+        let observation = observe_leader_exit_without_reaping_with(leader, |information| {
+            attempts += 1;
+            if attempts == 1 {
+                return Err(io::Error::from(io::ErrorKind::Interrupted));
+            }
+            // SAFETY: the writable record and flags match the production waitid observation.
+            let result = unsafe {
+                libc::waitid(
+                    libc::P_PID,
+                    leader as libc::id_t,
+                    information.as_mut_ptr(),
+                    libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+                )
+            };
+            if result == 0 {
+                Ok(())
+            } else {
+                Err(io::Error::last_os_error())
+            }
+        })
+        .unwrap();
+        assert_eq!(attempts, 2);
+        assert_eq!(observation, LeaderExitObservation::Exited);
+        terminate_application_group(&mut child).unwrap();
+
+        let error = observe_leader_exit_without_reaping(leader).unwrap_err();
+        assert!(error.contains("without reaping"), "{error}");
+        assert!(
+            error.contains(&format!("errno Some({})", libc::ECHILD)),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn early_exit_without_ack_remains_waitable_until_cleanup() {
+        let (mut ack_read, ack_write) = cloexec_pipe().unwrap();
+        let mut command = fresh_session_command("/bin/true");
+        let mut child = command.spawn().unwrap();
+        drop(ack_write);
+        assert!(
+            read_application_handoff_ack(&mut ack_read, &child, Duration::from_secs(1))
+                .unwrap()
+                .is_empty()
+        );
+        await_nonreaping_exit(&child);
+        assert_eq!(
+            observe_leader_exit_without_reaping(child.id() as libc::pid_t).unwrap(),
+            LeaderExitObservation::Exited
+        );
+        let started = Instant::now();
+        terminate_application_group(&mut child).unwrap();
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 
     #[test]
