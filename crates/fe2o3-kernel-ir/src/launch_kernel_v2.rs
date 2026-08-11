@@ -771,6 +771,17 @@ pub struct LaunchKernelFamilyV2 {
 }
 
 impl LaunchKernelFamilyV2 {
+    /// Checks family cardinality without inspecting or allocating for any variant.
+    pub fn validate_variant_count(
+        &self,
+        limits: &LaunchKernelLimitsV2,
+    ) -> Result<(), LaunchKernelValidationErrorV2> {
+        if self.variants.is_empty() {
+            return Err(LaunchKernelValidationErrorV2::EmptyKernelFamily);
+        }
+        check_count("variants", self.variants.len(), limits.max_variants)
+    }
+
     pub fn validate(
         &self,
         limits: &LaunchKernelLimitsV2,
@@ -781,10 +792,7 @@ impl LaunchKernelFamilyV2 {
         }
         validate_name(&self.logical_name, limits)?;
         self.signature.validate(limits)?;
-        if self.variants.is_empty() {
-            return Err(LaunchKernelValidationErrorV2::EmptyKernelFamily);
-        }
-        check_count("variants", self.variants.len(), limits.max_variants)?;
+        self.validate_variant_count(limits)?;
 
         let mut variant_names = BTreeSet::new();
         let mut entry_names = BTreeSet::new();

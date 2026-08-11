@@ -249,6 +249,26 @@ fn one_typed_signature_is_shared_by_distinct_family_policies() {
     }
 }
 
+#[test]
+fn variant_count_preflight_uses_the_authoritative_limit_without_variant_validation() {
+    let limits = limits();
+    let mut candidate = family();
+    candidate.variants[0].launch.block = BlockShapePolicyV2::Bounded {
+        minimum: DimensionsV2::new(1, 1, 1),
+        maximum: DimensionsV2::new(1_024, 1, 1),
+    };
+    candidate.variants = vec![candidate.variants[0].clone(); limits.max_variants + 1];
+
+    assert_eq!(
+        candidate.validate_variant_count(&limits),
+        Err(LaunchKernelValidationErrorV2::ResourceLimit {
+            resource: "variants",
+            observed: limits.max_variants + 1,
+            limit: limits.max_variants,
+        })
+    );
+}
+
 fn assert_tuple_substitution_rejected(mutation: impl FnOnce(&mut LaunchKernelFamilyV2)) {
     let mut candidate = family();
     mutation(&mut candidate);

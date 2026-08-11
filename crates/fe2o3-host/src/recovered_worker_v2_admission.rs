@@ -3172,6 +3172,74 @@ mod tests {
         ));
     }
 
+    fn non_exact_minimal_variant_for_count_preflight(
+        family: &fe2o3_kernel_ir::LaunchKernelFamilyV2,
+    ) -> fe2o3_kernel_ir::KernelVariantV2 {
+        let mut variant = family.variants[0].clone();
+        variant.variant_name.clear();
+        variant.entry_name.clear();
+        variant.launch.block = fe2o3_kernel_ir::BlockShapePolicyV2::Bounded {
+            minimum: fe2o3_kernel_ir::DimensionsV2::new(1, 1, 1),
+            maximum: fe2o3_kernel_ir::DimensionsV2::new(1_024, 1, 1),
+        };
+        variant.occupancy_witness = None;
+        variant.capabilities.clear();
+        variant.proof_obligations.clear();
+        variant
+    }
+
+    fn assert_variant_count_precedes_policy_scan(
+        recovered: &RecoveredWorkerV2PinnedDescriptorV1,
+        family: &fe2o3_kernel_ir::LaunchKernelFamilyV2,
+        observed: usize,
+        limit: usize,
+    ) {
+        assert!(matches!(
+            crate::bind_current_recovered_launch_kernel_metadata_v2(
+                recovered,
+                family,
+                "recovered-exact-wave64"
+            ),
+            Err(crate::LaunchKernelMetadataBridgeErrorV2::InvalidLaunchModel(
+                fe2o3_kernel_ir::LaunchKernelValidationErrorV2::ResourceLimit {
+                    resource: "variants",
+                    observed: actual_observed,
+                    limit: actual_limit,
+                }
+            )) if actual_observed == observed && actual_limit == limit
+        ));
+    }
+
+    #[test]
+    fn launch_bridge_rejects_max_plus_one_variants_before_policy_scan() {
+        let (_fixture, recovered) = recovered_launch_bridge_fixture(91);
+        let mut family =
+            crate::launch_kernel_v2_bridge::canonical_family_for_recovered_launch_bridge_test(
+                &recovered,
+            );
+        let limit = fe2o3_kernel_ir::LaunchKernelLimitsV2::default().max_variants;
+        let variant = non_exact_minimal_variant_for_count_preflight(&family);
+        family.variants = vec![variant; limit + 1];
+
+        assert_variant_count_precedes_policy_scan(&recovered, &family, limit + 1, limit);
+    }
+
+    #[test]
+    fn launch_bridge_rejects_huge_variant_family_before_policy_scan() {
+        const HUGE_VARIANT_COUNT: usize = 65_536;
+
+        let (_fixture, recovered) = recovered_launch_bridge_fixture(92);
+        let mut family =
+            crate::launch_kernel_v2_bridge::canonical_family_for_recovered_launch_bridge_test(
+                &recovered,
+            );
+        let limit = fe2o3_kernel_ir::LaunchKernelLimitsV2::default().max_variants;
+        let variant = non_exact_minimal_variant_for_count_preflight(&family);
+        family.variants = vec![variant; HUGE_VARIANT_COUNT];
+
+        assert_variant_count_precedes_policy_scan(&recovered, &family, HUGE_VARIANT_COUNT, limit);
+    }
+
     #[test]
     fn caller_occupancy_authority_identities_are_discarded() {
         let (_fixture, recovered) = recovered_launch_bridge_fixture(83);

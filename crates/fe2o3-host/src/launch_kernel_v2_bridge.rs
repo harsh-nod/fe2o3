@@ -173,6 +173,10 @@ fn validate_and_select_variant<'family>(
     family: &'family LaunchKernelFamilyV2,
     variant_name: &str,
 ) -> Result<&'family KernelVariantV2, LaunchKernelMetadataBridgeErrorV2> {
+    let limits = LaunchKernelLimitsV2::default();
+    family
+        .validate_variant_count(&limits)
+        .map_err(LaunchKernelMetadataBridgeErrorV2::InvalidLaunchModel)?;
     if family
         .variants
         .iter()
@@ -185,7 +189,7 @@ fn validate_and_select_variant<'family>(
         );
     }
     family
-        .validate(&LaunchKernelLimitsV2::default())
+        .validate(&limits)
         .map_err(LaunchKernelMetadataBridgeErrorV2::InvalidLaunchModel)?;
     let variant = family
         .variants
