@@ -1,11 +1,13 @@
 #![cfg(target_os = "linux")]
 
 use std::fs;
-use std::os::unix::process::ExitStatusExt;
+use std::io::Read;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{Receiver, sync_channel};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -258,6 +260,8 @@ fn write_config_with_output_and_cov(
 struct OuterHarness {
     config_key: [u8; 32],
     child: Child,
+    stdout: Receiver<Vec<u8>>,
+    stderr: Receiver<Vec<u8>>,
     control: PathBuf,
     next_request: u64,
 }
@@ -268,25 +272,32 @@ impl OuterHarness {
         let _ = fs::remove_dir_all(&control);
         fs::create_dir(&control).unwrap();
         let mut command = outer_command(directory, config, &control);
-        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        command
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .process_group(0);
         let mut child = command.spawn().unwrap();
+        let stdout_receiver = capture_output(child.stdout.take().unwrap());
+        let stderr_receiver = capture_output(child.stderr.take().unwrap());
+        let mut harness = Self {
+            config_key: config_key(config),
+            child,
+            stdout: stdout_receiver,
+            stderr: stderr_receiver,
+            control,
+            next_request: 1,
+        };
         let deadline = Instant::now() + Duration::from_secs(30);
         while Instant::now() < deadline {
-            if control.join("ready").exists() {
-                return Ok(Self {
-                    config_key: config_key(config),
-                    child,
-                    control,
-                    next_request: 1,
-                });
+            if harness.control.join("ready").exists() {
+                return Ok(harness);
             }
-            if child.try_wait().unwrap().is_some() {
-                return Err(child.wait_with_output().unwrap());
+            if let Some(status) = harness.child.try_wait().unwrap() {
+                return Err(harness.collect_output(status));
             }
             thread::sleep(Duration::from_millis(2));
         }
-        child.kill().unwrap();
-        let output = child.wait_with_output().unwrap();
+        let output = harness.kill_and_collect();
         panic!(
             "outer cargo-fe2o3 did not start vertical Cargo fixture: {}",
             stderr(&output)
@@ -334,9 +345,97 @@ impl OuterHarness {
     }
 
     fn stop(self) -> Output {
-        fs::write(self.control.join("stop"), []).unwrap();
-        self.child.wait_with_output().unwrap()
+        self.stop_with_timeout(Duration::from_secs(10))
     }
+
+    fn stop_with_timeout(mut self, graceful_timeout: Duration) -> Output {
+        fs::write(self.control.join("stop"), []).unwrap();
+        if let Some(status) = wait_for_exit(&mut self.child, graceful_timeout) {
+            return self.collect_output(status);
+        }
+        self.kill_and_collect()
+    }
+
+    fn kill_and_collect(mut self) -> Output {
+        let process_group = i32::try_from(self.child.id()).unwrap();
+        let result = unsafe { libc::kill(-process_group, libc::SIGKILL) };
+        let error = std::io::Error::last_os_error();
+        assert!(
+            result == 0 || error.raw_os_error() == Some(libc::ESRCH),
+            "failed to kill stalled outer cargo-fe2o3 process group: {}",
+            error
+        );
+        let status = wait_for_exit(&mut self.child, Duration::from_secs(5))
+            .expect("outer cargo-fe2o3 survived bounded SIGKILL");
+        self.collect_output(status)
+    }
+
+    fn collect_output(self, status: ExitStatus) -> Output {
+        Output {
+            status,
+            stdout: self
+                .stdout
+                .recv_timeout(Duration::from_secs(5))
+                .expect("outer cargo-fe2o3 stdout remained open after exit"),
+            stderr: self
+                .stderr
+                .recv_timeout(Duration::from_secs(5))
+                .expect("outer cargo-fe2o3 stderr remained open after exit"),
+        }
+    }
+}
+
+fn capture_output(mut pipe: impl Read + Send + 'static) -> Receiver<Vec<u8>> {
+    let (sender, receiver) = sync_channel(1);
+    thread::spawn(move || {
+        let mut output = Vec::new();
+        pipe.read_to_end(&mut output).unwrap();
+        let _ = sender.send(output);
+    });
+    receiver
+}
+
+fn wait_for_exit(child: &mut Child, timeout: Duration) -> Option<ExitStatus> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            return Some(status);
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        thread::sleep(Duration::from_millis(2));
+    }
+}
+
+#[test]
+fn outer_harness_stop_kills_an_unresponsive_process_group() {
+    let directory = TestDirectory::new();
+    let control = directory.0.join("unresponsive-control");
+    fs::create_dir(&control).unwrap();
+    let mut command = Command::new("bash");
+    command
+        .args(["-c", "trap '' TERM; while :; do sleep 60; done"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0);
+    let mut child = command.spawn().unwrap();
+    let harness = OuterHarness {
+        config_key: [0; 32],
+        stdout: capture_output(child.stdout.take().unwrap()),
+        stderr: capture_output(child.stderr.take().unwrap()),
+        child,
+        control,
+        next_request: 1,
+    };
+
+    let started = Instant::now();
+    let output = harness.stop_with_timeout(Duration::from_millis(100));
+    assert!(!output.status.success());
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "unresponsive outer harness teardown exceeded its bound"
+    );
 }
 
 struct VerticalRequest {
