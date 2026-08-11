@@ -624,3 +624,247 @@ fn limitations_do_not_claim_unimplemented_trust_boundaries() {
         assert!(DEVICE_CONSTANTS_V2_LIMITATIONS.contains(required));
     }
 }
+
+#[test]
+fn allocation_policy_matrix_is_conservative() {
+    let limits = GraphLimits::default();
+    let valid_policies = [
+        (
+            AllocationKind::Constant,
+            Mutability::ReadOnly,
+            AddressSpace::Constant,
+        ),
+        (
+            AllocationKind::Static,
+            Mutability::ReadOnly,
+            AddressSpace::Constant,
+        ),
+        (
+            AllocationKind::Static,
+            Mutability::ReadOnly,
+            AddressSpace::Global,
+        ),
+        (
+            AllocationKind::Static,
+            Mutability::Mutable,
+            AddressSpace::Global,
+        ),
+    ];
+    for (kind, mutability, address_space) in valid_policies {
+        let mut allocation = constant(0, vec![1]);
+        allocation.kind = kind;
+        allocation.mutability = mutability;
+        allocation.address_space = address_space;
+        graph(vec![allocation]).validate(&limits).unwrap();
+    }
+
+    for (kind, mutability, address_space) in [
+        (
+            AllocationKind::Constant,
+            Mutability::ReadOnly,
+            AddressSpace::Global,
+        ),
+        (
+            AllocationKind::Constant,
+            Mutability::Mutable,
+            AddressSpace::Constant,
+        ),
+        (
+            AllocationKind::Constant,
+            Mutability::Mutable,
+            AddressSpace::Global,
+        ),
+        (
+            AllocationKind::Static,
+            Mutability::Mutable,
+            AddressSpace::Constant,
+        ),
+    ] {
+        let mut allocation = constant(0, vec![1]);
+        allocation.kind = kind;
+        allocation.mutability = mutability;
+        allocation.address_space = address_space;
+        assert_eq!(
+            graph(vec![allocation]).validate(&limits),
+            Err(ValidationError::InvalidAllocationPolicy(AllocationId(0)))
+        );
+    }
+}
+
+#[test]
+fn relocation_width_alignment_and_policy_fields_are_bound() {
+    let limits = GraphLimits::default();
+
+    let mut bad_width = pointer_source(0, 1);
+    bad_width.relocations[0].width = 3;
+    assert_eq!(
+        graph(vec![bad_width, constant(1, vec![1])]).validate(&limits),
+        Err(ValidationError::InvalidRelocationWidth(AllocationId(0)))
+    );
+
+    let mut unaligned = pointer_source(0, 1);
+    unaligned.bytes = vec![9, 9, 0, 0, 0, 0, 9, 9];
+    unaligned.validity = vec![
+        ValidityRegion {
+            offset: 0,
+            len: 2,
+            class: ValidityClass::Bytes,
+        },
+        ValidityRegion {
+            offset: 2,
+            len: 4,
+            class: ValidityClass::Pointer,
+        },
+        ValidityRegion {
+            offset: 6,
+            len: 2,
+            class: ValidityClass::Bytes,
+        },
+    ];
+    unaligned.relocations[0].source_offset = 2;
+    unaligned.relocations[0].width = 4;
+    assert_eq!(
+        graph(vec![unaligned, constant(1, vec![1])]).validate(&limits),
+        Err(ValidationError::UnalignedRelocation(AllocationId(0)))
+    );
+
+    let mut readonly_global = constant(1, vec![1]);
+    readonly_global.kind = AllocationKind::Static;
+    readonly_global.address_space = AddressSpace::Global;
+    let shared_source = pointer_source(0, 1);
+    assert!(matches!(
+        graph(vec![shared_source, readonly_global.clone()]).validate(&limits),
+        Err(ValidationError::CapabilityMismatch { .. })
+    ));
+
+    let mut unique_source = pointer_source(0, 1);
+    unique_source.relocations[0].provenance = ProvenancePolicy::Unique;
+    graph(vec![unique_source, readonly_global])
+        .validate(&limits)
+        .unwrap();
+}
+
+#[test]
+fn duplicate_and_noncanonical_records_are_rejected() {
+    let limits = GraphLimits::default();
+
+    let mut duplicate_validity = constant(0, vec![1, 2, 3, 4]);
+    let region = duplicate_validity.validity[0];
+    duplicate_validity.validity.push(region);
+    assert_eq!(
+        graph(vec![duplicate_validity]).validate(&limits),
+        Err(ValidationError::NonCanonicalValidityOrder(AllocationId(0)))
+    );
+
+    let mut duplicate_relocation = pointer_source(0, 1);
+    let relocation = duplicate_relocation.relocations[0];
+    duplicate_relocation.relocations.push(relocation);
+    assert_eq!(
+        graph(vec![duplicate_relocation, constant(1, vec![1])]).validate(&limits),
+        Err(ValidationError::NonCanonicalRelocationOrder(AllocationId(
+            0
+        )))
+    );
+
+    let mut overlap = pointer_source(0, 1);
+    overlap.bytes = vec![0; 16];
+    overlap.validity = vec![
+        ValidityRegion {
+            offset: 0,
+            len: 8,
+            class: ValidityClass::Pointer,
+        },
+        ValidityRegion {
+            offset: 8,
+            len: 8,
+            class: ValidityClass::Pointer,
+        },
+    ];
+    overlap.relocations.push(Relocation {
+        source_offset: 4,
+        ..relocation
+    });
+    assert_eq!(
+        graph(vec![overlap, constant(1, vec![1])]).validate(&limits),
+        Err(ValidationError::RelocationOverlap(AllocationId(0)))
+    );
+}
+
+#[test]
+fn semantic_type_commitment_round_trips_without_raw_type_bytes() {
+    let limits = GraphLimits::default();
+    let mut allocation = constant(0, vec![7]);
+    allocation.semantic_type = SemanticTypeId {
+        schema_version: u16::MAX,
+        domain: *b"type-domain-v2!!",
+        digest: [0xa5; 32],
+    };
+    let graph = graph(vec![allocation]);
+    let encoded = graph.encode_canonical(&limits).unwrap();
+    let decoded = DeviceConstantGraphV2::decode_canonical(&encoded, &limits).unwrap();
+    assert_eq!(decoded, graph);
+    assert_eq!(decoded.allocations[0].semantic_type.digest, [0xa5; 32]);
+}
+
+#[test]
+fn codec_rejects_unknown_tags_versions_and_reserved_bits() {
+    let limits = GraphLimits::default();
+    let encoded = graph(vec![pointer_source(0, 1), constant(1, vec![1])])
+        .encode_canonical(&limits)
+        .unwrap();
+
+    let mut bad_version = encoded.clone();
+    bad_version[4..6].copy_from_slice(&1_u16.to_le_bytes());
+    assert_eq!(
+        DeviceConstantGraphV2::decode_canonical(&bad_version, &limits),
+        Err(DecodeError::UnsupportedVersion(1))
+    );
+
+    for offset in [6_usize, 29, 111, 121] {
+        let mut reserved = encoded.clone();
+        reserved[offset] = 1;
+        assert_eq!(
+            DeviceConstantGraphV2::decode_canonical(&reserved, &limits),
+            Err(DecodeError::NonZeroReserved)
+        );
+    }
+
+    for offset in [26_usize, 27, 28, 110, 119, 120] {
+        let mut unknown = encoded.clone();
+        unknown[offset] = 0xff;
+        assert_eq!(
+            DeviceConstantGraphV2::decode_canonical(&unknown, &limits),
+            Err(DecodeError::UnknownTag)
+        );
+    }
+}
+
+#[test]
+fn empty_graph_has_a_versioned_header_golden() {
+    let limits = GraphLimits::default();
+    let empty = graph(Vec::new());
+    let encoded = empty.encode_canonical(&limits).unwrap();
+    assert_eq!(hex(&encoded), "4632433202000000000000000000000000000000");
+    assert_eq!(
+        DeviceConstantGraphV2::decode_canonical(&encoded, &limits).unwrap(),
+        empty
+    );
+}
+
+#[test]
+fn alignment_limit_reports_observed_and_limit() {
+    let mut allocation = constant(0, vec![1]);
+    allocation.alignment = 128;
+    let limits = GraphLimits {
+        max_alignment: 64,
+        ..GraphLimits::default()
+    };
+    assert_eq!(
+        graph(vec![allocation]).validate(&limits),
+        Err(ValidationError::ResourceLimit {
+            resource: Resource::Alignment,
+            observed: 128,
+            limit: 64,
+        })
+    );
+}
