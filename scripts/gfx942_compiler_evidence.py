@@ -472,9 +472,16 @@ def version_and_runtime_manifest(
     manifest: dict[str, Any],
     tools: dict[str, PinnedTool],
     path_dir: Path,
+    rust_library_path: Path,
     supervisor: Supervisor,
 ) -> tuple[dict[str, Any], RetainedClosure]:
-    environment = {"LANG": "C", "LC_ALL": "C", "PATH": os.fspath(path_dir), "TZ": "UTC"}
+    environment = {
+        "LANG": "C",
+        "LC_ALL": "C",
+        "LD_LIBRARY_PATH": os.fspath(rust_library_path),
+        "PATH": os.fspath(path_dir),
+        "TZ": "UTC",
+    }
     observed_tools: list[dict[str, Any]] = []
     runtime_paths: set[Path] = set()
     ldd = tools["ldd"].path
@@ -1160,7 +1167,11 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
         for closure in closures:
             closure.revalidate()
         observed, runtime_closure = version_and_runtime_manifest(
-            manifest, tools, bootstrap_path, supervisor
+            manifest,
+            tools,
+            bootstrap_path,
+            run_root / "run-1/rust-sysroot/lib",
+            supervisor,
         )
         retained_closures.append(runtime_closure)
         supervisor.guards.extend(runtime_closure.files)
