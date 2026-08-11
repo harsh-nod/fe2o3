@@ -952,7 +952,83 @@ def open_absolute_directory(path: Path, label: str) -> tuple[Path, int]:
         raise
 
 
-def recover_archive_staging_lease(parent_fd: int, name: str) -> None:
+MAX_ARCHIVE_STAGING_LEASES = 64
+
+
+def process_start_time(pid: int) -> str | None:
+    try:
+        raw = Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
+    except (OSError, UnicodeError):
+        return None
+    closing = raw.rfind(")")
+    if closing < 0:
+        return None
+    fields = raw[closing + 2 :].split()
+    return fields[19] if len(fields) > 19 and fields[19].isdigit() else None
+
+
+def staging_lease_bytes(
+    destination_name: str, manifest_digest: str, challenge: str
+) -> bytes:
+    start = process_start_time(os.getpid())
+    if start is None:
+        fail("cannot establish publisher process start time")
+    return (
+        "archive_staging_lease_schema_version\t1\n"
+        f"owner_uid\t{os.geteuid()}\n"
+        f"owner_pid\t{os.getpid()}\n"
+        f"owner_start_time\t{start}\n"
+        f"destination_name\t{destination_name}\n"
+        f"manifest_sha256\t{manifest_digest}\n"
+        f"challenge\t{challenge}\n"
+    ).encode("ascii")
+
+
+def read_small_fd(descriptor: int, limit: int, label: str) -> bytes:
+    info = os.fstat(descriptor)
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > limit:
+        fail(f"{label} has an unsafe identity or size")
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    value = os.read(descriptor, limit + 1)
+    if len(value) != info.st_size:
+        fail(f"{label} changed while reading")
+    return value
+
+
+def parse_staging_lease(raw: bytes) -> dict[str, str]:
+    _, _, rows = parse_raw_bytes(raw, "archive staging lease")
+    expected = [
+        "archive_staging_lease_schema_version",
+        "owner_uid",
+        "owner_pid",
+        "owner_start_time",
+        "destination_name",
+        "manifest_sha256",
+        "challenge",
+    ]
+    if len(rows) != len(expected) or [row[0] for row in rows] != expected:
+        fail("archive staging lease is non-canonical")
+    values = {row[0]: row[1] for row in rows if len(row) == 2}
+    if (
+        len(values) != len(expected)
+        or values["archive_staging_lease_schema_version"] != "1"
+        or not values["owner_uid"].isdigit()
+        or not values["owner_pid"].isdigit()
+        or not values["owner_start_time"].isdigit()
+        or not SHA256_RE.fullmatch(values["manifest_sha256"])
+        or not SHA256_RE.fullmatch(values["challenge"])
+    ):
+        fail("archive staging lease is malformed")
+    return values
+
+
+def recover_archive_staging_lease(
+    parent_fd: int,
+    lease_name: str,
+    staging_name: str,
+    destination_name: str,
+    manifest_digest: str,
+) -> None:
     parent_info = os.fstat(parent_fd)
     counters = {"entries": 0, "bytes": 0}
 
@@ -994,19 +1070,48 @@ def recover_archive_staging_lease(parent_fd: int, name: str) -> None:
                 os.close(child_fd)
 
     try:
-        staging_fd = openat2_fd(
+        lease_fd = openat2_fd(
             parent_fd,
-            name,
-            os.O_RDONLY | os.O_DIRECTORY,
+            lease_name,
+            os.O_RDONLY,
             RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV,
         )
     except OSError as error:
         fail(f"existing archive staging lease is unsafe: {error}")
     try:
-        remove_directory(staging_fd)
+        lease_info = os.fstat(lease_fd)
+        if lease_info.st_uid != os.geteuid():
+            fail("existing archive staging lease has foreign ownership")
+        values = parse_staging_lease(read_small_fd(lease_fd, 4096, "archive staging lease"))
+        if (
+            values["owner_uid"] != str(os.geteuid())
+            or values["destination_name"] != destination_name
+            or values["manifest_sha256"] != manifest_digest
+        ):
+            fail("existing archive staging lease does not match the request")
+        pid = int(values["owner_pid"])
+        if process_start_time(pid) == values["owner_start_time"]:
+            fail("evidence archive staging lease is busy")
     finally:
-        os.close(staging_fd)
-    os.rmdir(name, dir_fd=parent_fd)
+        os.close(lease_fd)
+
+    try:
+        staging_fd = openat2_fd(
+            parent_fd,
+            staging_name,
+            os.O_RDONLY | os.O_DIRECTORY,
+            RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV,
+        )
+    except OSError as error:
+        if error.errno != errno.ENOENT:
+            fail(f"existing archive staging tree is unsafe: {error}")
+    else:
+        try:
+            remove_directory(staging_fd)
+        finally:
+            os.close(staging_fd)
+        os.rmdir(staging_name, dir_fd=parent_fd)
+    os.unlink(lease_name, dir_fd=parent_fd)
     fsync_checked(parent_fd, "recovered archive staging lease parent")
 
 
@@ -1027,8 +1132,14 @@ class ArchiveDestination:
         lease = sha256_bytes(
             f"{self.destination_name}\0{manifest_digest}".encode("ascii")
         )[:32]
-        self.staging_name = f".fe2o3-archive-{lease}"
+        self.staging_name = f".fe2o3-archive-{lease}.stage"
+        self.lease_name = f".fe2o3-archive-{lease}.lease"
+        self.manifest_digest = manifest_digest
         self.staging_fd = -1
+        self.staging_owned = False
+        self.lease_fd = -1
+        self.lease_owned = False
+        self.lease_identity: ArchiveFileIdentity | None = None
         self.directory_fds: dict[str, int] = {}
         self.file_fds: dict[str, int] = {}
         self.file_identities: dict[str, ArchiveFileIdentity] = {}
@@ -1036,11 +1147,64 @@ class ArchiveDestination:
         self.parent_identity = (parent_info.st_dev, parent_info.st_ino)
         self.published = False
         try:
+            lease_entries = [
+                name
+                for name in os.listdir(self.parent_fd)
+                if name.startswith(".fe2o3-archive-")
+                and (name.endswith(".lease") or name.endswith(".stage"))
+            ]
+            if len(lease_entries) > MAX_ARCHIVE_STAGING_LEASES * 2:
+                fail("evidence archive staging leases exceed the parent bound")
+            challenge = secrets.token_hex(32)
+            lease_value = staging_lease_bytes(
+                self.destination_name, manifest_digest, challenge
+            )
+            try:
+                self.lease_fd = os.open(
+                    self.lease_name,
+                    os.O_RDWR
+                    | os.O_CREAT
+                    | os.O_EXCL
+                    | os.O_CLOEXEC
+                    | os.O_NOFOLLOW,
+                    0o600,
+                    dir_fd=self.parent_fd,
+                )
+                self.lease_owned = True
+            except FileExistsError:
+                recover_archive_staging_lease(
+                    self.parent_fd,
+                    self.lease_name,
+                    self.staging_name,
+                    self.destination_name,
+                    manifest_digest,
+                )
+                self.lease_fd = os.open(
+                    self.lease_name,
+                    os.O_RDWR
+                    | os.O_CREAT
+                    | os.O_EXCL
+                    | os.O_CLOEXEC
+                    | os.O_NOFOLLOW,
+                    0o600,
+                    dir_fd=self.parent_fd,
+                )
+                self.lease_owned = True
+            view = memoryview(lease_value)
+            while view:
+                count = os.write(self.lease_fd, view)
+                if count <= 0:
+                    fail("short archive staging lease write")
+                view = view[count:]
+            fsync_checked(self.lease_fd, "archive staging lease")
+            self.lease_identity = archive_file_identity(
+                os.fstat(self.lease_fd), sha256_bytes(lease_value)
+            )
             try:
                 os.mkdir(self.staging_name, 0o700, dir_fd=self.parent_fd)
             except FileExistsError:
-                recover_archive_staging_lease(self.parent_fd, self.staging_name)
-                os.mkdir(self.staging_name, 0o700, dir_fd=self.parent_fd)
+                fail("unleased evidence archive staging tree already exists")
+            self.staging_owned = True
             self.staging_fd = openat2_fd(
                 self.parent_fd,
                 self.staging_name,
@@ -1157,6 +1321,34 @@ class ArchiveDestination:
             actual = archive_file_identity(after, digest)
             if archive_file_identity(before, digest) != actual or actual != expected:
                 fail(f"destination archive file changed {phase}: {relative}")
+            try:
+                reopened = openat2_fd(
+                    self.staging_fd,
+                    relative,
+                    os.O_RDONLY | os.O_NONBLOCK,
+                    RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV,
+                )
+            except OSError as error:
+                fail(f"destination archive dirent changed {phase}: {relative}: {error}")
+            try:
+                reopened_before = os.fstat(reopened)
+                reopened_digest = sha256_fd(reopened)
+                reopened_after = os.fstat(reopened)
+                reopened_identity = archive_file_identity(
+                    reopened_after, reopened_digest
+                )
+                if (
+                    not stat.S_ISREG(reopened_after.st_mode)
+                    or reopened_after.st_nlink != 1
+                    or (reopened_after.st_dev, reopened_after.st_ino)
+                    != (expected.device, expected.inode)
+                    or archive_file_identity(reopened_before, reopened_digest)
+                    != reopened_identity
+                    or reopened_identity != expected
+                ):
+                    fail(f"destination archive dirent changed {phase}: {relative}")
+            finally:
+                os.close(reopened)
 
     def validate_published_dirent(self) -> None:
         staging_info = os.fstat(self.staging_fd)
@@ -1202,6 +1394,35 @@ class ArchiveDestination:
         finally:
             os.close(requested_parent)
 
+    def release_lease(self) -> None:
+        if self.lease_fd < 0 or self.lease_identity is None:
+            return
+        expected = self.lease_identity
+        before = os.fstat(self.lease_fd)
+        digest = sha256_fd(self.lease_fd)
+        after = os.fstat(self.lease_fd)
+        actual = archive_file_identity(after, digest)
+        if archive_file_identity(before, digest) != actual or actual != expected:
+            fail("archive staging lease changed while held")
+        reopened = openat2_fd(
+            self.parent_fd,
+            self.lease_name,
+            os.O_RDONLY,
+            RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV,
+        )
+        try:
+            info = os.fstat(reopened)
+            if (info.st_dev, info.st_ino) != (expected.device, expected.inode):
+                fail("archive staging lease dirent changed while held")
+        finally:
+            os.close(reopened)
+        os.unlink(self.lease_name, dir_fd=self.parent_fd)
+        fsync_checked(self.parent_fd, "released archive staging lease parent")
+        os.close(self.lease_fd)
+        self.lease_fd = -1
+        self.lease_identity = None
+        self.lease_owned = False
+
     def publish(self) -> None:
         for relative in sorted(
             self.directory_fds,
@@ -1227,6 +1448,7 @@ class ArchiveDestination:
         self.validate_retained_files("immediately after publication")
         fsync_checked(self.staging_fd, "published archive destination root")
         fsync_checked(self.parent_fd, "published archive destination parent")
+        self.release_lease()
 
     def close(self) -> None:
         for descriptor in self.file_fds.values():
@@ -1248,10 +1470,22 @@ class ArchiveDestination:
         if (
             getattr(self, "parent_fd", -1) >= 0
             and self.staging_name
+            and self.staging_owned
             and not self.published
         ):
             remove_tree_at(self.parent_fd, self.staging_name)
             fsync_checked(self.parent_fd, "cleaned archive staging parent")
+            self.staging_owned = False
+        if getattr(self, "lease_fd", -1) >= 0:
+            if self.lease_identity is not None:
+                self.release_lease()
+            else:
+                os.close(self.lease_fd)
+                self.lease_fd = -1
+                if self.lease_owned:
+                    os.unlink(self.lease_name, dir_fd=self.parent_fd)
+                    fsync_checked(self.parent_fd, "released incomplete staging lease")
+                self.lease_owned = False
         if getattr(self, "parent_fd", -1) >= 0:
             os.close(self.parent_fd)
             self.parent_fd = -1

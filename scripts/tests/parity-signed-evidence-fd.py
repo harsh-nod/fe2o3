@@ -397,6 +397,80 @@ def test_retained_destination_fds_detect_same_uid_mutation() -> None:
         make_archive_writable(temp / "archive")
 
 
+def swap_paths(left: Path, right: Path) -> None:
+    temporary = left.with_name("swap-temporary")
+    left.rename(temporary)
+    right.rename(left)
+    temporary.rename(right)
+
+
+def test_retained_destination_dirents_detect_swaps() -> None:
+    with tempfile.TemporaryDirectory(prefix="fe2o3-payload-index-swap-") as raw_temp:
+        temp = Path(raw_temp)
+        source_root = temp / "source"
+        source_root.mkdir()
+        (source_root / "payload.bin").write_bytes(b"payload\n")
+        with EVIDENCE.ArchiveSnapshot(source_root, require_immutable=False) as source:
+            with EVIDENCE.ArchiveDestination(
+                temp / "archive", LEASE_DIGEST
+            ) as destination:
+                destination.copy(source, "payload.bin")
+                destination.write_index(b"index\n")
+                swap_paths(
+                    destination.staging_label / "payload.bin",
+                    destination.staging_label / "archive-index-v1.tsv",
+                )
+                expect_evidence_error(
+                    destination.publish,
+                    "changed immediately before publication",
+                )
+
+    with tempfile.TemporaryDirectory(prefix="fe2o3-same-size-swap-") as raw_temp:
+        temp = Path(raw_temp)
+        source_root = temp / "source"
+        source_root.mkdir()
+        (source_root / "left.bin").write_bytes(b"L" * 16)
+        (source_root / "right.bin").write_bytes(b"R" * 16)
+        assert (source_root / "left.bin").stat().st_size == (
+            source_root / "right.bin"
+        ).stat().st_size
+        with EVIDENCE.ArchiveSnapshot(source_root, require_immutable=False) as source:
+            with EVIDENCE.ArchiveDestination(
+                temp / "archive", LEASE_DIGEST
+            ) as destination:
+                destination.copy(source, "left.bin")
+                destination.copy(source, "right.bin")
+                destination.write_index(b"index\n")
+                swap_paths(
+                    destination.staging_label / "left.bin",
+                    destination.staging_label / "right.bin",
+                )
+                expect_evidence_error(
+                    destination.publish,
+                    "changed immediately before publication",
+                )
+
+    with tempfile.TemporaryDirectory(prefix="fe2o3-rename-out-in-") as raw_temp:
+        temp = Path(raw_temp)
+        source_root = temp / "source"
+        source_root.mkdir()
+        (source_root / "payload.bin").write_bytes(b"payload\n")
+        with EVIDENCE.ArchiveSnapshot(source_root, require_immutable=False) as source:
+            with EVIDENCE.ArchiveDestination(
+                temp / "archive", LEASE_DIGEST
+            ) as destination:
+                destination.copy(source, "payload.bin")
+                destination.write_index(b"index\n")
+                payload = destination.staging_label / "payload.bin"
+                moved = destination.staging_label / "moved.bin"
+                payload.rename(moved)
+                moved.rename(payload)
+                expect_evidence_error(
+                    destination.publish,
+                    "changed immediately before publication",
+                )
+
+
 def test_deterministic_staging_lease_recovers_after_hard_exit() -> None:
     with tempfile.TemporaryDirectory(prefix="fe2o3-staging-recovery-") as raw_temp:
         temp = Path(raw_temp)
@@ -408,16 +482,31 @@ def test_deterministic_staging_lease_recovers_after_hard_exit() -> None:
             os._exit(0)
         _, status = os.waitpid(child, 0)
         assert os.waitstatus_to_exitcode(status) == 0
-        leases = list(temp.glob(".fe2o3-archive-*"))
-        assert len(leases) == 1
+        stages = list(temp.glob(".fe2o3-archive-*.stage"))
+        leases = list(temp.glob(".fe2o3-archive-*.lease"))
+        assert len(stages) == 1 and len(leases) == 1
 
         with EVIDENCE.ArchiveDestination(output, LEASE_DIGEST) as destination:
-            assert destination.staging_label == leases[0]
+            assert destination.staging_label == stages[0]
             destination.write_index(b"recovered index\n")
             destination.publish()
         assert not list(temp.glob(".fe2o3-archive-*"))
         assert (output / "archive-index-v1.tsv").read_bytes() == b"recovered index\n"
         make_archive_writable(output)
+
+
+def test_second_live_publisher_fails_busy() -> None:
+    with tempfile.TemporaryDirectory(prefix="fe2o3-live-publisher-") as raw_temp:
+        temp = Path(raw_temp)
+        output = temp / "archive"
+        with EVIDENCE.ArchiveDestination(output, LEASE_DIGEST) as first:
+            first.write_index(b"first publisher\n")
+            expect_evidence_error(
+                lambda: EVIDENCE.ArchiveDestination(output, LEASE_DIGEST),
+                "staging lease is busy",
+            )
+            assert first.staging_label.is_dir()
+        assert not list(temp.glob(".fe2o3-archive-*"))
 
 
 def test_same_uid_publisher_is_inert_for_production() -> None:
@@ -551,7 +640,9 @@ if __name__ == "__main__":
     test_destination_parent_symlink_and_replacement_races()
     test_destination_durability_order_and_fault_boundaries()
     test_retained_destination_fds_detect_same_uid_mutation()
+    test_retained_destination_dirents_detect_swaps()
     test_deterministic_staging_lease_recovers_after_hard_exit()
+    test_second_live_publisher_fails_busy()
     test_same_uid_publisher_is_inert_for_production()
     test_bootstrap_publication_is_durable_and_no_replace()
     test_bootstrap_destination_race_has_one_winner()
