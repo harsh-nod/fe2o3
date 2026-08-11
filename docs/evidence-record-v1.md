@@ -260,19 +260,31 @@ hsaco_sha256=efe77ed0ac7f67531c46670a3c36030ed19e2d901f6858a8bee42cabd707c15b
 hsaco_bytes=9392
 ```
 
+The launcher disables Python bytecode and rejects cache files in a clean tree.
 The controller retains its committed loader/DSO fixture before the first child,
-then snapshots the complete tracked repository, vendored Cargo
-registry, Rust sysroot, and retained LLVM/ROCm/OCML provider closure twice. It
-uses separate Worker and Cargo build roots, runs commands under bounded cgroup
-and rlimit supervision, executes generated native tests through sealed file
-descriptors, requires 3/3 CTest results, and retains the final HSACO descriptors
-through comparison. It then retains the run-A HSACO descriptor through one
+then snapshots the complete tracked repository, vendored Cargo registry, Rust
+sysroot, and retained LLVM/ROCm/OCML provider closure twice. The provider set
+includes GCC C++/target/system headers and records exact justified exclusions
+for unrelated large ROCm DSOs. It uses separate Worker and Cargo build roots,
+captures generated Worker and Cargo build-script/proc-macro/backend artifacts,
+runs commands under bounded cgroup, rlimit, and irreversible Landlock write
+confinement, executes generated native tests through sealed file descriptors,
+requires 3/3 CTest results, and retains the final HSACO descriptors through a
+stable-label comparison that rejects reorder and source-inode reuse. Hostile
+tests cover `setsid`, double-fork, and writable sibling/controller-cgroup
+migration attempts. It then retains the run-A HSACO descriptor through one
 MI300X hardware test. The test compares the inherited descriptor with the
 canonical direct dirent, consumes the descriptor bytes, loads one executable,
 and dispatches alpha/zeta across all five boundary lengths with CPU oracles and
 prefix/suffix canaries. The controller stores two bounded regenerated HSACOs
 and canonical manifests in its fresh external evidence directory; no binary is
 committed.
+
+The hardware child parses and retains its ELF interpreter, direct DSO closure,
+loader cache, and exact libdrm GPU identity file. Landlock admits only those
+regular files plus the retained HSACO; other regular-file runtime and `dlopen`
+reads fail closed. `/proc`, `/sys`, and `/dev` are broader read-only
+kernel/device observation roots and are not hashed as ordinary runtime files.
 
 The accepted digest is bound to a checked Ed25519-signed transition fixture
 that records the old/new Worker and HSACO identities and both independent

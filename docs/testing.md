@@ -298,11 +298,16 @@ systemd-run --user --scope --quiet -p Delegate=yes \
   /absolute/absent/evidence-root
 ```
 
-The launcher clears the inherited environment. Before its first child, the
+The launcher invokes Python with `-B` and `PYTHONDONTWRITEBYTECODE=1`, clears
+the inherited environment, and rejects Python cache files in a clean checkout.
+Before its first child, the
 controller retains the digest-pinned loader/DSO fixture and verifies every
 configured executable by canonical path, SHA-256, version output and retained
 stat identity. Every child is descriptor-executed under a bounded delegated
-cgroup and a generated PATH allowlist. Run A and run B
+cgroup, irreversible Landlock write confinement, and a generated PATH
+allowlist. The hostile tests exercise hangs, output and memory exhaustion,
+double forks, `setsid`, and attempted migration into writable sibling and
+controller cgroups. Run A and run B
 use separately copied immutable tracked sources, vendored registries, Rust
 sysroots, LLVM/ROCm/OCML closure records, initially empty Worker build trees,
 and `CARGO_TARGET_DIR`s. Generated native tests execute directly from sealed
@@ -315,6 +320,24 @@ run-A HSACO descriptor, independently builds the ignored hardware test, retains
 its direct dynamic-runtime closure, and requires the hardware child to compare
 the direct HSACO dirent with the inherited descriptor before dispatching the
 descriptor bytes.
+
+The provider manifest includes the selected GCC C++ and target headers, system
+headers, Clang resource headers, CMake modules, LLVM libraries, ROCm headers and
+version files, and device bitcode. Large ROCm DSOs outside this compile path are
+listed by exact path, size, and dependency justification rather than silently
+omitted. Each run also retains its generated Worker objects, dependency graph,
+native tests, Cargo build-script outputs, proc-macro/backend shared objects, and
+the hardware test executable. Cross-run comparison is keyed by stable labels,
+rejects label reordering and source-inode reuse, and canonicalizes only the
+run-specific Cargo hash suffixes. Timing-only CTest and Ninja logs are excluded
+explicitly as non-input observations.
+
+For the final dispatch, the controller parses and retains the ELF interpreter,
+retains the direct `ldd` DSO closure, the loader cache, and the exact libdrm GPU
+identity file, then applies an exact-file Landlock read allowlist. Unlisted
+regular-file `dlopen` and data reads fail closed. `/proc`, `/sys`, and `/dev`
+remain readable kernel/device observation roots and are not represented as
+ordinary hashed files in the runtime manifest.
 
 The golden update is accepted only through the committed canonical transition,
 public-key, and signature fixtures. That transition binds the old/new identities
