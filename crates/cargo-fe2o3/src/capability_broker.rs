@@ -26,6 +26,7 @@
 
 #[cfg(target_os = "linux")]
 mod platform {
+    use std::collections::BTreeMap;
     use std::fs::{self, File};
     use std::io::{self, IoSlice, IoSliceMut, Read, Write};
     use std::mem::MaybeUninit;
@@ -319,7 +320,8 @@ mod platform {
     #[derive(Default)]
     struct BrokerShutdownState {
         stopping: bool,
-        active: Option<UnixStream>,
+        next_connection_id: u64,
+        active: BTreeMap<u64, UnixStream>,
     }
 
     #[derive(Default)]
@@ -349,25 +351,24 @@ mod platform {
             self.state().stopping
         }
 
-        fn register(&self, stream: &UnixStream) -> io::Result<bool> {
+        fn register(&self, stream: &UnixStream) -> io::Result<Option<u64>> {
             let retained = stream.try_clone()?;
             let mut state = self.state();
             if state.stopping {
                 let _ = stream.shutdown(Shutdown::Both);
-                return Ok(false);
+                return Ok(None);
             }
-            if state.active.is_some() {
-                return Err(io::Error::new(
-                    io::ErrorKind::AlreadyExists,
-                    "capability broker already has an active connection",
-                ));
-            }
-            state.active = Some(retained);
-            Ok(true)
+            let connection_id = state.next_connection_id;
+            state.next_connection_id =
+                state.next_connection_id.checked_add(1).ok_or_else(|| {
+                    io::Error::other("capability broker exhausted connection identifiers")
+                })?;
+            state.active.insert(connection_id, retained);
+            Ok(Some(connection_id))
         }
 
-        fn finish(&self) {
-            self.state().active.take();
+        fn finish(&self, connection_id: u64) {
+            self.state().active.remove(&connection_id);
         }
 
         fn begin(&self) {
@@ -376,9 +377,10 @@ mod platform {
                 .store(true, std::sync::atomic::Ordering::Release);
             let mut state = self.state();
             state.stopping = true;
-            if let Some(active) = state.active.take() {
+            for active in state.active.values() {
                 let _ = active.shutdown(Shutdown::Both);
             }
+            state.active.clear();
         }
 
         fn send_response(
@@ -497,10 +499,15 @@ mod platform {
         #[cfg(test)]
         fn active_socket_identity(&self) -> Option<(u64, u64)> {
             let state = self.state();
-            let active = state.active.as_ref()?;
+            let active = state.active.values().next()?;
             fs::metadata(format!("/proc/self/fd/{}", active.as_raw_fd()))
                 .ok()
                 .map(|metadata| (metadata.dev(), metadata.ino()))
+        }
+
+        #[cfg(test)]
+        fn active_connection_count(&self) -> usize {
+            self.state().active.len()
         }
     }
 
@@ -548,7 +555,7 @@ mod platform {
     impl TestPauseControl {
         fn wait_until_reached(&self) -> Option<(u64, u64)> {
             self.reached
-                .recv_timeout(Duration::from_secs(5))
+                .recv_timeout(BROKER_IO_TIMEOUT)
                 .expect("capability broker did not reach the test pause")
         }
 
@@ -781,26 +788,31 @@ mod platform {
 
     impl BrokerServer {
         fn serve(self) {
-            while !self.shutdown.is_stopping() {
-                match self.listener.accept() {
-                    Ok((mut stream, _)) => {
-                        #[cfg(test)]
-                        self.shutdown.pause_after_accept(&stream);
-                        match self.shutdown.register(&stream) {
-                            Ok(true) => {
-                                let _ = self.serve_one(&mut stream);
-                                self.shutdown.finish();
+            thread::scope(|scope| {
+                while !self.shutdown.is_stopping() {
+                    match self.listener.accept() {
+                        Ok((mut stream, _)) => {
+                            #[cfg(test)]
+                            self.shutdown.pause_after_accept(&stream);
+                            match self.shutdown.register(&stream) {
+                                Ok(Some(connection_id)) => {
+                                    let server = &self;
+                                    scope.spawn(move || {
+                                        let _ = server.serve_one(&mut stream);
+                                        server.shutdown.finish(connection_id);
+                                    });
+                                }
+                                Ok(None) => break,
+                                Err(_) => continue,
                             }
-                            Ok(false) => break,
-                            Err(_) => continue,
                         }
+                        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                            thread::sleep(Duration::from_millis(2));
+                        }
+                        Err(_) => break,
                     }
-                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                        thread::sleep(Duration::from_millis(2));
-                    }
-                    Err(_) => break,
                 }
-            }
+            });
         }
 
         fn serve_one(&self, stream: &mut UnixStream) -> io::Result<()> {
@@ -1426,6 +1438,40 @@ mod platform {
                 .collect::<Vec<_>>();
             for client in clients {
                 client.join().unwrap();
+            }
+        }
+
+        #[test]
+        fn concurrent_requests_are_registered_before_dispatch_completes() {
+            let (_temp, backend, artifact, pinned_cargo_image, session) = fixture();
+            let binding = s09_binding();
+            let broker =
+                CapabilityBroker::start(session, binding, &backend, &artifact, &pinned_cargo_image)
+                    .unwrap();
+            let pause = broker.shutdown.install_dispatch_pause();
+            let route = BrokerRouteV2::parse(broker.route()).unwrap();
+            let clients = (0..2)
+                .map(|_| {
+                    let route = route.clone();
+                    thread::spawn(move || receive_from(&route, session, binding))
+                })
+                .collect::<Vec<_>>();
+
+            assert!(pause.wait_until_reached().is_none());
+            let deadline = Instant::now() + BROKER_IO_TIMEOUT;
+            while broker.shutdown.active_connection_count() != clients.len() {
+                assert!(
+                    Instant::now() < deadline,
+                    "capability broker serialized accepted requests before dispatch"
+                );
+                thread::sleep(Duration::from_millis(1));
+            }
+            pause.release();
+            assert!(pause.wait_until_reached().is_none());
+            pause.release();
+
+            for client in clients {
+                client.join().unwrap().unwrap();
             }
         }
 
