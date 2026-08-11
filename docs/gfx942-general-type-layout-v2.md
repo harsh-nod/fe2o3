@@ -8,10 +8,17 @@ evidence.
 
 - `RustcTypeLayoutObservationV2` records exact layout facts from the active
   rustc target. Its identity binds that target's LLVM triple, data layout,
-  pointer width, canonical semantic graph, and exact layout sidecar.
+  pointer width, effective target CPU, normalized effective target-feature
+  configuration, canonical semantic graph, and exact layout sidecar. The
+  strengthened observation, projection, and candidate hash domains are V3;
+  the public V2 data APIs remain inert compatibility records.
 - A host observation remains a host observation. It is described as observed
   on gfx942 only when the active rustc target itself exactly matches the
-  canonical gfx942 triple, data layout, and pointer width.
+  canonical gfx942 triple, data layout, pointer width, `gfx942` CPU, wave64
+  feature state, and explicit `xnack-` profile. Missing, `default`, `generic`,
+  `native`, conflicting, `gfx900`, `xnack+`, and omitted-XNACK profiles fail
+  closed. Feature order and repeated declarations with the same state are
+  normalized; contradictory declarations are rejected.
 - `CanonicalGfx942LayoutProjectionV2` is derived independently from reviewed
   gfx942 scalar, array, `repr(C)`, and restricted `repr(transparent)` rules. It
   does not inherit size, alignment, offsets, stride, or padding from a target
@@ -40,21 +47,35 @@ The candidate derivation accepts only:
 It rejects `repr(Rust)`, tuples, enums and niches, unions, pointers,
 references, DSTs, packed or explicitly aligned aggregates, validity-constrained
 scalars such as `bool` and `char`, unreviewed widths including 128-bit scalars,
-zero-sized aggregate fields, padding, cycles, arithmetic overflow, target or
-projection substitution, and resource-limit violations.
+pointer-sized `usize` and `isize`, `Unit`, zero-sized aggregate fields, padding,
+cycles, arithmetic overflow, target or projection substitution, and
+resource-limit violations. Pointer-sized integer provenance is retained in the
+rustc fact layer and rejected before it can collapse to fixed-width semantic
+integer data, including through aliases, arrays, fields, and transparent
+wrappers.
 
 ## Bounds And Exactness
 
 - Root, normalized, and nested rustc type names are rendered through bounded
   writers before the general layout extractor runs.
+- Observation preflight tracks unique rustc types for graph limits while also
+  traversing every occurrence edge. It cumulatively reserves extraction,
+  rendering, graph, sidecar, and sorting work before the recursive occurrence
+  tree is allocated. Repeated-type diamonds therefore cannot hide exponential
+  reconstruction behind a small deduplicated graph budget.
 - Node, field, variant, path, total text, observation work, sidecar record,
   sidecar byte, projection work, and projection byte limits are explicit.
 - Principal adapter-owned variable-size buffers use fallible reservation.
-  Sorting and projection traversal are charged before committing their results.
+  Projection preflight checks current graph counts, supported kinds, clone and
+  render work, canonical output bytes, sidecar text, checked arithmetic, and
+  sorting before `ProjectionBuilderV2` reserves graph-sized state. Builder
+  cloning and sorting remain cumulatively metered after admission.
 - Untrusted graph input must decode canonically under dialect MIR budgets and
   exactly equal a fresh rustc observation.
-- Tests reject max-plus-one work, overflow, mutated observation bytes, sidecar
-  substitution, canonical-target substitution, and projection substitution.
+- Tests reject exact-bound-minus-one work/storage, zero-budget construction,
+  repeated-type expansion, oversized unsupported sidecars, overflow, mutated
+  observation bytes, sidecar substitution, active CPU/feature substitution,
+  canonical-target substitution, and projection substitution.
 - MI300X tests compare the reviewed rules with independent gfx942 record-layout
   probes under ROCm LLVM 22 and Ubuntu LLVM 18. A ROCm LLVM 22 object probe also
   checks the emitted ELF and AMDGPU metadata target.
