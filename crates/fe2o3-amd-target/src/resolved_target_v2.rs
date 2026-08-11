@@ -573,7 +573,7 @@ fn sha256(input: &[u8]) -> [u8; 32] {
     let mut padded = [0_u8; 192];
     padded[..input.len()].copy_from_slice(input);
     padded[input.len()] = 0x80;
-    let total = ((input.len() + 9 + 63) / 64) * 64;
+    let total = (input.len() + 9).div_ceil(64) * 64;
     let bit_len = (input.len() as u64) * 8;
     padded[total - 8..total].copy_from_slice(&bit_len.to_be_bytes());
 
