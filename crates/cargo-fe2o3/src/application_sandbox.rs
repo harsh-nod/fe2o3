@@ -50,6 +50,9 @@ impl PendingApplicationSandbox {
     pub(crate) fn start() -> Result<Self, String> {
         let (parent_socket, child_socket) = UnixDatagram::pair()
             .map_err(|error| format!("failed to create seccomp listener channel: {error}"))?;
+        parent_socket.set_nonblocking(true).map_err(|error| {
+            format!("failed to make seccomp listener channel nonblocking: {error}")
+        })?;
         let (shutdown_read, shutdown_write) = cloexec_pipe()
             .map_err(|error| format!("failed to create seccomp shutdown pipe: {error}"))?;
         let (ready_send, ready) = mpsc::sync_channel(1);
@@ -179,8 +182,13 @@ fn supervise_exec_notifications(
     shutdown: File,
     ready: mpsc::SyncSender<Result<u32, String>>,
 ) -> Result<(), String> {
-    let (listener, child_pid) = match receive_listener(socket.as_raw_fd()) {
-        Ok(received) => received,
+    let (listener, child_pid) = match wait_for_listener(socket.as_raw_fd(), shutdown.as_raw_fd()) {
+        Ok(Some(received)) => received,
+        Ok(None) => {
+            let error = "seccomp exec supervisor stopped before listener delivery".to_string();
+            let _ = ready.send(Err(error.clone()));
+            return Err(error);
+        }
         Err(error) => {
             let _ = ready.send(Err(error.clone()));
             return Err(error);
@@ -232,6 +240,43 @@ fn supervise_exec_notifications(
         respond_to_notification(listener.as_raw_fd(), notification.id, false)?;
     }
     Ok(())
+}
+
+fn wait_for_listener(socket: RawFd, shutdown: RawFd) -> Result<Option<(File, u32)>, String> {
+    loop {
+        let mut descriptors = [
+            libc::pollfd {
+                fd: shutdown,
+                events: libc::POLLIN | libc::POLLHUP,
+                revents: 0,
+            },
+            libc::pollfd {
+                fd: socket,
+                events: libc::POLLIN | libc::POLLERR | libc::POLLHUP,
+                revents: 0,
+            },
+        ];
+        // SAFETY: both descriptors remain owned by this supervisor for the poll duration.
+        let result = unsafe { libc::poll(descriptors.as_mut_ptr(), descriptors.len() as _, -1) };
+        if result < 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(format!(
+                "failed to wait for seccomp listener delivery: {error}"
+            ));
+        }
+        if descriptors[0].revents != 0 {
+            return Ok(None);
+        }
+        if descriptors[1].revents & libc::POLLIN != 0 {
+            return receive_listener(socket).map(Some);
+        }
+        if descriptors[1].revents & (libc::POLLERR | libc::POLLHUP) != 0 {
+            return Err("seccomp listener channel failed before descriptor delivery".to_string());
+        }
+    }
 }
 
 fn wait_for_notification(
@@ -370,7 +415,13 @@ fn receive_listener(socket: RawFd) -> Result<(File, u32), String> {
     header.msg_control = control.as_mut_ptr().cast();
     header.msg_controllen = unsafe { libc::CMSG_SPACE(mem::size_of::<RawFd>() as _) } as usize;
     // SAFETY: all receive buffers are writable for their declared lengths.
-    let received = unsafe { libc::recvmsg(socket, &mut header, libc::MSG_CMSG_CLOEXEC) };
+    let received = unsafe {
+        libc::recvmsg(
+            socket,
+            &mut header,
+            libc::MSG_CMSG_CLOEXEC | libc::MSG_DONTWAIT,
+        )
+    };
     if received < 0 {
         return Err(format!(
             "failed to receive seccomp listener: {}",
@@ -551,6 +602,7 @@ fn allowed_application_syscalls() -> &'static [libc::c_long] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Instant;
 
     #[test]
     fn process_creation_and_exec_replacement_are_not_allowlisted() {
@@ -586,5 +638,34 @@ mod tests {
             filter.last().unwrap().k,
             SECCOMP_RET_ERRNO | libc::EPERM as u32
         );
+    }
+
+    #[test]
+    fn shutdown_before_listener_delivery_terminates_and_joins() {
+        let (parent_socket, child_socket) = UnixDatagram::pair().unwrap();
+        parent_socket.set_nonblocking(true).unwrap();
+        let (shutdown_read, mut shutdown_write) = cloexec_pipe().unwrap();
+        let (ready_send, ready) = mpsc::sync_channel(1);
+        let worker = thread::spawn(move || {
+            supervise_exec_notifications(parent_socket, shutdown_read, ready_send)
+        });
+        drop(child_socket);
+
+        let started = Instant::now();
+        shutdown_write.write_all(&[0]).unwrap();
+        let failure = ready
+            .recv_timeout(Duration::from_secs(1))
+            .expect("supervisor reports pre-listener cancellation");
+        assert!(failure.unwrap_err().contains("before listener delivery"));
+        assert!(worker.join().unwrap().is_err());
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn dropping_pending_launch_without_listener_is_bounded() {
+        let pending = PendingApplicationSandbox::start().unwrap();
+        let started = Instant::now();
+        drop(pending);
+        assert!(started.elapsed() < Duration::from_secs(1));
     }
 }
