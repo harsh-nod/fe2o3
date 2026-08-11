@@ -20,9 +20,9 @@
 use std::collections::BTreeSet;
 
 pub const LAUNCH_KERNEL_V2_MAGIC: [u8; 8] = *b"F2LKV2\0\0";
-pub const LAUNCH_KERNEL_V2_VERSION: u16 = 3;
+pub const LAUNCH_KERNEL_V2_VERSION: u16 = 4;
 pub const LAUNCH_KERNEL_V2_LIMITATIONS: &str = "gfx942:xnack- COV6 Wave64 only; canonical tuple identities and tuple-bound proof records remain unauthenticated claims; direct host dispatch only; no cooperative grid, device enqueue, or dynamic parallelism; occupancy is declared, not derived; no export, lowering, bundle, runtime, hardware, or formal-verification claim";
-pub const VARIANT_TUPLE_DOMAIN_V2: &[u8] = b"fe2o3.launch-kernel.variant-tuple.v3\0";
+pub const VARIANT_TUPLE_DOMAIN_V2: &[u8] = b"fe2o3.launch-kernel.variant-tuple.v4\0";
 
 pub const GFX942_MAX_FLAT_WORKGROUP_SIZE_V2: u32 = 1_024;
 pub const GFX942_MAX_WAVES_PER_EXECUTION_UNIT_V2: u8 = 8;
@@ -382,18 +382,13 @@ impl Gfx942LaunchContractV2 {
         if !minimum.componentwise_le(maximum) {
             return Err(LaunchKernelValidationErrorV2::InvalidBlockRange);
         }
-        if matches!(self.block, BlockShapePolicyV2::Bounded { .. }) && minimum == maximum {
-            return Err(LaunchKernelValidationErrorV2::NonCanonicalBlockPolicy);
-        }
         self.max_grid_blocks.validate(self.rank)?;
 
-        let minimum_threads = minimum.checked_product()?;
         let maximum_threads = maximum.checked_product()?;
         if self.minimum_flat_workgroup_size == 0
             || self.minimum_flat_workgroup_size > self.maximum_flat_workgroup_size
             || self.maximum_flat_workgroup_size > GFX942_MAX_FLAT_WORKGROUP_SIZE_V2
-            || minimum_threads < u64::from(self.minimum_flat_workgroup_size)
-            || maximum_threads > u64::from(self.maximum_flat_workgroup_size)
+            || maximum_threads > u64::from(GFX942_MAX_FLAT_WORKGROUP_SIZE_V2)
         {
             return Err(LaunchKernelValidationErrorV2::InvalidFlatWorkgroupBounds);
         }
@@ -403,8 +398,30 @@ impl Gfx942LaunchContractV2 {
         {
             return Err(LaunchKernelValidationErrorV2::InvalidOccupancyBounds);
         }
-        if !self.has_admitted_full_wave_block_shape()? {
+        let admitted = self.admitted_block_summary()?;
+        if admitted.count == 0 || !admitted.has_full_wave {
             return Err(LaunchKernelValidationErrorV2::NoAdmittedBlockShape);
+        }
+        let canonical = match self.block {
+            BlockShapePolicyV2::Exact(shape) => {
+                admitted.count == 1
+                    && admitted.minimum == shape
+                    && admitted.maximum == shape
+                    && self.minimum_flat_workgroup_size == admitted.minimum_flat
+                    && self.maximum_flat_workgroup_size == admitted.maximum_flat
+                    && !self.require_full_waves
+            }
+            BlockShapePolicyV2::Bounded { minimum, maximum } => {
+                admitted.count > 1
+                    && admitted.minimum == minimum
+                    && admitted.maximum == maximum
+                    && self.minimum_flat_workgroup_size == admitted.minimum_flat
+                    && self.maximum_flat_workgroup_size == admitted.maximum_flat
+                    && (!self.require_full_waves || admitted.excluded_non_full_wave)
+            }
+        };
+        if !canonical {
+            return Err(LaunchKernelValidationErrorV2::NonCanonicalBlockPolicy);
         }
 
         let maximum_geometry = checked_geometry(self.max_grid_blocks, maximum)?;
@@ -430,23 +447,75 @@ impl Gfx942LaunchContractV2 {
                 || flat % u64::from(GFX942_REQUIRED_WAVEFRONT_WIDTH_V2.lanes()) == 0))
     }
 
-    fn has_admitted_full_wave_block_shape(self) -> Result<bool, LaunchKernelValidationErrorV2> {
+    fn admitted_block_summary(
+        self,
+    ) -> Result<AdmittedBlockSummaryV2, LaunchKernelValidationErrorV2> {
         let (minimum, maximum) = self.block.bounds();
+        let mut summary = AdmittedBlockSummaryV2::empty();
         for z in minimum.z..=maximum.z {
             for y in minimum.y..=maximum.y {
                 for x in minimum.x..=maximum.x {
                     let shape = DimensionsV2::new(x, y, z);
-                    if self.admits_block_shape(shape)?
-                        && shape.checked_product()?
-                            % u64::from(GFX942_REQUIRED_WAVEFRONT_WIDTH_V2.lanes())
-                            == 0
+                    let flat = shape.checked_product()?;
+                    if flat < u64::from(self.minimum_flat_workgroup_size)
+                        || flat > u64::from(self.maximum_flat_workgroup_size)
                     {
-                        return Ok(true);
+                        continue;
                     }
+                    let full_wave =
+                        flat % u64::from(GFX942_REQUIRED_WAVEFRONT_WIDTH_V2.lanes()) == 0;
+                    if self.require_full_waves && !full_wave {
+                        summary.excluded_non_full_wave = true;
+                        continue;
+                    }
+                    summary.include(
+                        shape,
+                        u32::try_from(flat)
+                            .map_err(|_| LaunchKernelValidationErrorV2::ArithmeticOverflow)?,
+                        full_wave,
+                    );
                 }
             }
         }
-        Ok(false)
+        Ok(summary)
+    }
+}
+
+#[derive(Clone, Copy)]
+struct AdmittedBlockSummaryV2 {
+    count: u32,
+    minimum: DimensionsV2,
+    maximum: DimensionsV2,
+    minimum_flat: u32,
+    maximum_flat: u32,
+    has_full_wave: bool,
+    excluded_non_full_wave: bool,
+}
+
+impl AdmittedBlockSummaryV2 {
+    const fn empty() -> Self {
+        Self {
+            count: 0,
+            minimum: DimensionsV2::new(u32::MAX, u32::MAX, u32::MAX),
+            maximum: DimensionsV2::new(0, 0, 0),
+            minimum_flat: u32::MAX,
+            maximum_flat: 0,
+            has_full_wave: false,
+            excluded_non_full_wave: false,
+        }
+    }
+
+    fn include(&mut self, shape: DimensionsV2, flat: u32, full_wave: bool) {
+        self.count += 1;
+        self.minimum.x = self.minimum.x.min(shape.x);
+        self.minimum.y = self.minimum.y.min(shape.y);
+        self.minimum.z = self.minimum.z.min(shape.z);
+        self.maximum.x = self.maximum.x.max(shape.x);
+        self.maximum.y = self.maximum.y.max(shape.y);
+        self.maximum.z = self.maximum.z.max(shape.z);
+        self.minimum_flat = self.minimum_flat.min(flat);
+        self.maximum_flat = self.maximum_flat.max(flat);
+        self.has_full_wave |= full_wave;
     }
 }
 
@@ -468,6 +537,9 @@ impl Gfx942ResourceLimitsV2 {
             return Err(LaunchKernelValidationErrorV2::LdsLimitExceeded);
         }
         if !valid_alignment(self.dynamic_lds_alignment, 256) {
+            return Err(LaunchKernelValidationErrorV2::InvalidLdsAlignment);
+        }
+        if self.maximum_dynamic_lds_bytes == 0 && self.dynamic_lds_alignment != 1 {
             return Err(LaunchKernelValidationErrorV2::InvalidLdsAlignment);
         }
         if self.private_segment_bytes > GFX942_MAX_PRIVATE_SEGMENT_BYTES_V2 {
@@ -586,10 +658,24 @@ impl KernelVariantV2 {
                 LaunchCapabilityV2::StaticLds,
             ));
         }
+        if self.resources.static_lds_bytes == 0
+            && self.capabilities.contains(&LaunchCapabilityV2::StaticLds)
+        {
+            return Err(LaunchKernelValidationErrorV2::RedundantCapability(
+                LaunchCapabilityV2::StaticLds,
+            ));
+        }
         if self.resources.maximum_dynamic_lds_bytes != 0
             && !self.capabilities.contains(&LaunchCapabilityV2::DynamicLds)
         {
             return Err(LaunchKernelValidationErrorV2::MissingCapability(
+                LaunchCapabilityV2::DynamicLds,
+            ));
+        }
+        if self.resources.maximum_dynamic_lds_bytes == 0
+            && self.capabilities.contains(&LaunchCapabilityV2::DynamicLds)
+        {
+            return Err(LaunchKernelValidationErrorV2::RedundantCapability(
                 LaunchCapabilityV2::DynamicLds,
             ));
         }
@@ -1098,6 +1184,7 @@ pub enum LaunchKernelValidationErrorV2 {
     UnsupportedLaunchFeature,
     NonCanonicalSet(&'static str),
     MissingCapability(LaunchCapabilityV2),
+    RedundantCapability(LaunchCapabilityV2),
     MissingProofObligation(LaunchProofKindV2),
     VariantTupleIdentityMismatch,
     ProofTupleIdentityMismatch(LaunchProofKindV2),

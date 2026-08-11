@@ -65,7 +65,7 @@ fn launch(block_x: u32, wavefront: WavefrontWidthV2) -> Gfx942LaunchContractV2 {
         minimum_flat_workgroup_size: block_x,
         maximum_flat_workgroup_size: block_x,
         wavefront,
-        require_full_waves: true,
+        require_full_waves: false,
         minimum_waves_per_execution_unit: 1,
         maximum_waves_per_execution_unit: 8,
         max_total_workitems: u64::from(max_grid_x) * u64::from(block_x),
@@ -267,9 +267,12 @@ fn canonical_tuple_rejects_every_component_substitution() {
             .launch
             .minimum_waves_per_execution_unit = 2;
     });
-    assert_tuple_substitution_rejected(|candidate| {
-        candidate.variants[0].launch.require_full_waves = false;
-    });
+    let mut redundant_full_wave = family();
+    redundant_full_wave.variants[0].launch.require_full_waves = true;
+    assert_eq!(
+        redundant_full_wave.validate(&limits()),
+        Err(LaunchKernelValidationErrorV2::NonCanonicalBlockPolicy)
+    );
     assert_tuple_substitution_rejected(|candidate| {
         candidate.variants[0].resources.private_segment_bytes += 1;
     });
@@ -538,7 +541,7 @@ fn block_policy_is_canonical_and_has_a_wave64_inhabitant() {
     launch.maximum_flat_workgroup_size = 33;
     assert_eq!(
         candidate.validate(&limits()),
-        Err(LaunchKernelValidationErrorV2::NonCanonicalBlockPolicy)
+        Err(LaunchKernelValidationErrorV2::NoAdmittedBlockShape)
     );
 
     candidate = family();
@@ -603,6 +606,56 @@ fn block_policy_is_canonical_and_has_a_wave64_inhabitant() {
             waves_per_workgroup: 1,
             total_lds_bytes: 1_024,
         })
+    );
+
+    candidate = family();
+    let launch = &mut candidate.variants[0].launch;
+    launch.block = BlockShapePolicyV2::Bounded {
+        minimum: DimensionsV2::new(63, 1, 1),
+        maximum: DimensionsV2::new(65, 1, 1),
+    };
+    launch.minimum_flat_workgroup_size = 63;
+    launch.maximum_flat_workgroup_size = 65;
+    launch.max_grid_blocks = DimensionsV2::new(1, 1, 1);
+    launch.max_total_workitems = 65;
+    launch.require_full_waves = true;
+    assert_eq!(
+        candidate.validate(&limits()),
+        Err(LaunchKernelValidationErrorV2::NonCanonicalBlockPolicy)
+    );
+
+    candidate = family();
+    let launch = &mut candidate.variants[0].launch;
+    launch.rank = 3;
+    launch.block = BlockShapePolicyV2::Bounded {
+        minimum: DimensionsV2::new(1, 1, 63),
+        maximum: DimensionsV2::new(1, 1, 65),
+    };
+    launch.minimum_flat_workgroup_size = 63;
+    launch.maximum_flat_workgroup_size = 65;
+    launch.max_grid_blocks = DimensionsV2::new(1, 1, 1);
+    launch.max_total_workitems = 65;
+    launch.require_full_waves = true;
+    assert_eq!(
+        candidate.validate(&limits()),
+        Err(LaunchKernelValidationErrorV2::NonCanonicalBlockPolicy)
+    );
+
+    candidate = family();
+    let launch = &mut candidate.variants[0].launch;
+    launch.rank = 2;
+    launch.block = BlockShapePolicyV2::Bounded {
+        minimum: DimensionsV2::new(1, 64, 1),
+        maximum: DimensionsV2::new(2, 64, 1),
+    };
+    launch.minimum_flat_workgroup_size = 64;
+    launch.maximum_flat_workgroup_size = 128;
+    launch.max_grid_blocks = DimensionsV2::new(1, 1, 1);
+    launch.max_total_workitems = 128;
+    launch.require_full_waves = true;
+    assert_eq!(
+        candidate.validate(&limits()),
+        Err(LaunchKernelValidationErrorV2::NonCanonicalBlockPolicy)
     );
 }
 
@@ -669,9 +722,9 @@ fn resource_capability_and_proof_boundaries_are_enforced() {
         ))
     );
 
-    let family = family();
+    let valid_family = family();
     assert_eq!(
-        family.validate_launch(
+        valid_family.validate_launch(
             "wg128-wave64",
             LaunchRequestV2 {
                 grid_blocks: DimensionsV2::new(1, 1, 1),
@@ -682,6 +735,45 @@ fn resource_capability_and_proof_boundaries_are_enforced() {
             &limits(),
         ),
         Err(LaunchKernelValidationErrorV2::DynamicLdsLimitExceeded)
+    );
+
+    let mut zero = family();
+    let variant = &mut zero.variants[0];
+    variant.resources = Gfx942ResourceLimitsV2 {
+        static_lds_bytes: 0,
+        maximum_dynamic_lds_bytes: 0,
+        dynamic_lds_alignment: 1,
+        private_segment_bytes: 0,
+    };
+    variant.capabilities = vec![LaunchCapabilityV2::ExactWaveMode];
+    bind_family(&mut zero);
+    zero.validate(&limits()).unwrap();
+
+    let mut noncanonical = zero.clone();
+    noncanonical.variants[0].resources.dynamic_lds_alignment = 2;
+    assert_eq!(
+        noncanonical.validate(&limits()),
+        Err(LaunchKernelValidationErrorV2::InvalidLdsAlignment)
+    );
+    noncanonical = zero.clone();
+    noncanonical.variants[0]
+        .capabilities
+        .push(LaunchCapabilityV2::StaticLds);
+    assert_eq!(
+        noncanonical.validate(&limits()),
+        Err(LaunchKernelValidationErrorV2::RedundantCapability(
+            LaunchCapabilityV2::StaticLds
+        ))
+    );
+    noncanonical = zero;
+    noncanonical.variants[0]
+        .capabilities
+        .push(LaunchCapabilityV2::DynamicLds);
+    assert_eq!(
+        noncanonical.validate(&limits()),
+        Err(LaunchKernelValidationErrorV2::RedundantCapability(
+            LaunchCapabilityV2::DynamicLds
+        ))
     );
 }
 
@@ -749,10 +841,10 @@ fn decoder_rejects_header_target_length_and_resource_mutations() {
         Err(LaunchKernelDecodeErrorV2::BadMagic)
     );
     mutated = canonical.clone();
-    mutated[8..10].copy_from_slice(&4_u16.to_le_bytes());
+    mutated[8..10].copy_from_slice(&3_u16.to_le_bytes());
     assert_eq!(
         decode_launch_kernel_family_v2(&mutated, &limits()),
-        Err(LaunchKernelDecodeErrorV2::UnsupportedVersion(4))
+        Err(LaunchKernelDecodeErrorV2::UnsupportedVersion(3))
     );
     mutated = canonical.clone();
     mutated[10] = 1;
@@ -1023,8 +1115,9 @@ fn exhaustive_small_wave_width_and_full_wave_boundaries() {
                     max_total_workitems: u64::from(block_x),
                     unsupported: UnsupportedLaunchFeaturesV2::NONE,
                 };
-                let expected =
-                    wavefront == WavefrontWidthV2::Wave64 && block_x % wavefront.lanes() == 0;
+                let expected = wavefront == WavefrontWidthV2::Wave64
+                    && block_x % wavefront.lanes() == 0
+                    && !require_full_waves;
                 bind_family(&mut candidate);
                 assert_eq!(candidate.validate(&limits()).is_ok(), expected);
                 cases += 1;
@@ -1051,7 +1144,7 @@ fn exhaustive_block_policy_canonicalization_and_admissible_set() {
             launch.require_full_waves = require_full_waves;
             launch.max_total_workitems = u64::from(block_x);
             bind_family(&mut candidate);
-            let expected = block_x % 64 == 0;
+            let expected = block_x % 64 == 0 && !require_full_waves;
             assert_eq!(candidate.validate(&limits()).is_ok(), expected);
             contract_cases += 1;
         }
@@ -1074,8 +1167,20 @@ fn exhaustive_block_policy_canonicalization_and_admissible_set() {
                 launch.max_total_workitems = u64::from(maximum);
                 bind_family(&mut candidate);
 
-                let has_full_wave = (minimum..=maximum).any(|shape| shape % 64 == 0);
-                let expected_valid = minimum != maximum && has_full_wave;
+                let admitted: Vec<_> = (minimum..=maximum)
+                    .filter(|shape| !require_full_waves || shape % 64 == 0)
+                    .collect();
+                let has_full_wave = admitted.iter().any(|shape| shape % 64 == 0);
+                let tight_bounds = admitted
+                    .first()
+                    .zip(admitted.last())
+                    .is_some_and(|(first, last)| *first == minimum && *last == maximum);
+                let meaningful_full_wave_filter =
+                    !require_full_waves || (minimum..=maximum).any(|shape| shape % 64 != 0);
+                let expected_valid = admitted.len() > 1
+                    && has_full_wave
+                    && tight_bounds
+                    && meaningful_full_wave_filter;
                 assert_eq!(
                     candidate.validate(&limits()).is_ok(),
                     expected_valid,
@@ -1083,8 +1188,7 @@ fn exhaustive_block_policy_canonicalization_and_admissible_set() {
                 );
                 contract_cases += 1;
 
-                let exercise_requests =
-                    minimum != maximum && (!require_full_waves || has_full_wave);
+                let exercise_requests = expected_valid;
                 if exercise_requests {
                     for shape in 1..=96 {
                         let expected_launch = expected_valid
@@ -1113,7 +1217,7 @@ fn exhaustive_block_policy_canonicalization_and_admissible_set() {
         }
     }
     assert_eq!(contract_cases, 9_504);
-    assert_eq!(request_cases, 640_416);
+    assert_eq!(request_cases, 202_656);
 }
 
 #[test]
