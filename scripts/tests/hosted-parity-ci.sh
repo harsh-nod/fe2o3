@@ -102,6 +102,13 @@ require_text "${PROTECTED_WORKFLOW}" 'python3 protected/scripts/parity-signed-ev
 require_text "${PROTECTED_WORKFLOW}" '--trust-policy protected/docs/parity-evidence/trust-policy-v2.tsv'
 require_text "${PROTECTED_WORKFLOW}" '--trusted-policy protected/docs/parity-row-evidence-policy-v2.tsv'
 require_text "${PROTECTED_WORKFLOW}" '--candidate-policy candidate/docs/parity-row-evidence-policy-v2.tsv'
+require_text "${PROTECTED_WORKFLOW}" 'fe2o3-protected-publisher-receipt'
+require_text "${PROTECTED_WORKFLOW}" 'fe2o3-protected-publisher-challenge'
+require_text "${PROTECTED_WORKFLOW}" '--publisher-receipt-root "${publisher_receipt_root}"'
+require_text "${PROTECTED_WORKFLOW}" '--expected-logical-destination docs/parity-evidence/archive'
+require_text "${PROTECTED_WORKFLOW}" '--expected-publisher-challenge "${publisher_challenge}"'
+require_text "${PROTECTED_WORKFLOW}" '--expected-default-tip "${BASE_SHA}"'
+require_text "${PROTECTED_WORKFLOW}" '--expected-candidate-head "${HEAD_SHA}"'
 require_text "${PROTECTED_WORKFLOW}" 'pull-requests: read'
 require_text "${PROTECTED_WORKFLOW}" 'protected/scripts/parity-protected-change-policy.sh'
 require_text "${PROTECTED_WORKFLOW}" 'gh api --paginate'
@@ -158,6 +165,12 @@ require_text "${GENERIC_WORKFLOW}" 'MERGE_HEAD_SHA: ${{ github.event.merge_group
 require_text "${GENERIC_WORKFLOW}" 'python3 "${trusted}/scripts/parity-signed-evidence.py" gate'
 require_text "${GENERIC_WORKFLOW}" '--trust-policy "${trusted}/docs/parity-evidence/trust-policy-v2.tsv"'
 require_text "${GENERIC_WORKFLOW}" '--trusted-policy "${trusted}/docs/parity-row-evidence-policy-v2.tsv"'
+require_text "${GENERIC_WORKFLOW}" 'fe2o3-protected-publisher-receipt'
+require_text "${GENERIC_WORKFLOW}" 'fe2o3-protected-publisher-challenge'
+require_text "${GENERIC_WORKFLOW}" '--publisher-receipt-root "${publisher_receipt_root}"'
+require_text "${GENERIC_WORKFLOW}" '--expected-publisher-challenge "${publisher_challenge}"'
+require_text "${GENERIC_WORKFLOW}" '--expected-default-tip "${BASE_SHA}"'
+require_text "${GENERIC_WORKFLOW}" '--expected-candidate-head "${HEAD_SHA}"'
 require_text "${GENERIC_WORKFLOW}" 'EVENT_NAME: ${{ github.event_name }}'
 require_text "${GENERIC_WORKFLOW}" 'PUSH_BEFORE_SHA: ${{ github.event.before }}'
 require_text "${GENERIC_WORKFLOW}" 'EVENT_HEAD_SHA: ${{ github.sha }}'
@@ -189,6 +202,11 @@ fi
 
 if rg -n 'python3 candidate/|candidate/scripts/|scripts/parity-row-evidence.sh gate' "${PROTECTED_WORKFLOW}"; then
   printf 'protected parity CI invokes candidate executable content\n' >&2
+  exit 1
+fi
+if rg -n -- '--publisher-receipt-root[[:space:]]+candidate' \
+  "${GENERIC_WORKFLOW}" "${PROTECTED_WORKFLOW}"; then
+  printf 'hosted parity CI accepts a candidate-owned publisher receipt\n' >&2
   exit 1
 fi
 

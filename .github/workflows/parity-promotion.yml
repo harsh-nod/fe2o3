@@ -150,6 +150,12 @@ jobs:
           test -f protected/docs/parity-evidence/trust-policy-v2.tsv
           test -d protected/docs/parity-evidence/trusted-keys
           test -f candidate/docs/parity-evidence/archive/manifests/promotion-v2.tsv
+          publisher_receipt_root="${RUNNER_TEMP}/fe2o3-protected-publisher-receipt"
+          publisher_challenge_file="${RUNNER_TEMP}/fe2o3-protected-publisher-challenge"
+          test -d "${publisher_receipt_root}"
+          test -f "${publisher_receipt_root}/publisher-receipt-v2.tsv"
+          test -f "${publisher_challenge_file}"
+          IFS= read -r publisher_challenge <"${publisher_challenge_file}"
           python3 protected/scripts/parity-signed-evidence.py gate \
             --repo candidate \
             --archive-root candidate/docs/parity-evidence/archive \
@@ -159,7 +165,12 @@ jobs:
             --trusted-policy protected/docs/parity-row-evidence-policy-v2.tsv \
             --candidate-policy candidate/docs/parity-row-evidence-policy-v2.tsv \
             --baseline-status protected/docs/cuda-oxide-parity-status.tsv \
-            --candidate-status candidate/docs/cuda-oxide-parity-status.tsv
+            --candidate-status candidate/docs/cuda-oxide-parity-status.tsv \
+            --publisher-receipt-root "${publisher_receipt_root}" \
+            --expected-logical-destination docs/parity-evidence/archive \
+            --expected-publisher-challenge "${publisher_challenge}" \
+            --expected-default-tip "${BASE_SHA}" \
+            --expected-candidate-head "${HEAD_SHA}"
 
           # No candidate executable or workflow content is invoked above.
 
@@ -287,6 +298,12 @@ jobs:
           test -f protected/docs/parity-evidence/trust-policy-v2.tsv
           test -d protected/docs/parity-evidence/trusted-keys
           test -f candidate/docs/parity-evidence/archive/manifests/promotion-v2.tsv
+          publisher_receipt_root="${RUNNER_TEMP}/fe2o3-protected-publisher-receipt"
+          publisher_challenge_file="${RUNNER_TEMP}/fe2o3-protected-publisher-challenge"
+          test -d "${publisher_receipt_root}"
+          test -f "${publisher_receipt_root}/publisher-receipt-v2.tsv"
+          test -f "${publisher_challenge_file}"
+          IFS= read -r publisher_challenge <"${publisher_challenge_file}"
           python3 protected/scripts/parity-signed-evidence.py gate \
             --repo candidate \
             --archive-root candidate/docs/parity-evidence/archive \
@@ -296,7 +313,12 @@ jobs:
             --trusted-policy protected/docs/parity-row-evidence-policy-v2.tsv \
             --candidate-policy candidate/docs/parity-row-evidence-policy-v2.tsv \
             --baseline-status protected/docs/cuda-oxide-parity-status.tsv \
-            --candidate-status candidate/docs/cuda-oxide-parity-status.tsv
+            --candidate-status candidate/docs/cuda-oxide-parity-status.tsv \
+            --publisher-receipt-root "${publisher_receipt_root}" \
+            --expected-logical-destination docs/parity-evidence/archive \
+            --expected-publisher-challenge "${publisher_challenge}" \
+            --expected-default-tip "${BASE_SHA}" \
+            --expected-candidate-head "${HEAD_SHA}"
 
           # This check only becomes merge-enforcing when a protected ruleset
           # requires the workflow and merge queue without bypass actors.
