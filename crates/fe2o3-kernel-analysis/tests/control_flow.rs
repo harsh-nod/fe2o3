@@ -399,7 +399,7 @@ fn release_complexity_frontier_ladder_accepts_boundary_and_rejects_next_entry() 
 }
 
 #[test]
-fn release_complexity_reviewer_8192_rung_ladder_rejects_at_the_same_cap() {
+fn release_complexity_reviewer_8192_rung_ladder_rejects_before_frontier_growth() {
     let error = analyze_control_flow(&two_arm_frontier_ladder(8_192)).unwrap_err();
     assert_eq!(
         error.diagnostics(),
