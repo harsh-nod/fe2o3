@@ -24,6 +24,9 @@ const COMPILER_EVIDENCE_GOLDEN: &str =
     include_str!("../../../tests/fixtures/compiler-evidence/gfx942-alpha-zeta-cov6.json");
 const COMPILER_EVIDENCE_TOOL_MANIFEST: &str =
     include_str!("../../../tests/fixtures/compiler-evidence/gfx942-mi300x-tools.json");
+const COMPILER_EVIDENCE_TRANSITION: &str = include_str!(
+    "../../../tests/fixtures/compiler-evidence/gfx942-alpha-zeta-cov6-transition-v1.json"
+);
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -63,6 +66,11 @@ struct CompilerEvidenceGoldenV1 {
     hsaco_sha256: String,
     hsaco_bytes: u64,
     max_hsaco_bytes: u64,
+    transition_path: String,
+    transition_sha256: String,
+    transition_signature_path: String,
+    transition_public_key_path: String,
+    transition_signature_algorithm: String,
     kernels: Vec<CompilerEvidenceKernelV1>,
     boundary_lengths: Vec<usize>,
 }
@@ -132,6 +140,23 @@ fn compiler_evidence_golden() -> CompilerEvidenceGoldenV1 {
     );
     assert_eq!(golden.descriptor_section, ".fe2o3.kd.v1");
     assert_eq!(golden.max_hsaco_bytes, 16 * 1024 * 1024);
+    assert_eq!(
+        golden.transition_path,
+        "tests/fixtures/compiler-evidence/gfx942-alpha-zeta-cov6-transition-v1.json"
+    );
+    assert_eq!(
+        sha256_hex(COMPILER_EVIDENCE_TRANSITION.as_bytes()),
+        golden.transition_sha256
+    );
+    assert_eq!(
+        golden.transition_signature_path,
+        "tests/fixtures/compiler-evidence/gfx942-alpha-zeta-cov6-transition-v1.sig"
+    );
+    assert_eq!(
+        golden.transition_public_key_path,
+        "tests/fixtures/compiler-evidence/gfx942-alpha-zeta-cov6-transition-v1.pub"
+    );
+    assert_eq!(golden.transition_signature_algorithm, "ed25519-sha512");
     assert!((1..=golden.max_hsaco_bytes).contains(&golden.hsaco_bytes));
     assert_eq!(golden.boundary_lengths, [1, 255, 256, 257, 1023]);
     assert_eq!(golden.kernels.len(), 2);

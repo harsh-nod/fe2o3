@@ -300,10 +300,20 @@ scripts/gfx942-cov6-compiler-evidence.sh \
 The launcher clears the inherited environment. The controller verifies every
 configured executable by canonical path, SHA-256, version output and retained
 stat identity, then exposes only a generated PATH allowlist. Run A and run B
-use distinct initially empty Worker build trees and `CARGO_TARGET_DIR`s. Each
-independently builds the Worker and Rust integration-test executable, records
-their exact identities, runs the real `rustc -> CompilerModuleHandoffV2 ->
-Worker V2` path, and must produce the checked byte-identical HSACO.
+use separately copied immutable tracked sources, vendored registries, Rust
+sysroots, LLVM/ROCm/OCML closure records, initially empty Worker build trees,
+and `CARGO_TARGET_DIR`s. Generated native tests execute directly from sealed
+descriptors and CTest must report 3/3 through descriptor-backed commands. Each
+run independently builds the Worker and Rust integration-test executable,
+records request/response/raw/final identities, runs the real `rustc ->
+CompilerModuleHandoffV2 -> Worker V2` path, and must produce the checked
+byte-identical Worker and HSACO.
+
+The golden update is accepted only through the committed canonical transition,
+public-key, and signature fixtures. That transition binds the old/new identities
+and both external reproduction-manifest digests. This is a fixture-only Ed25519
+review check with `authority=none`, not an authenticated human or production
+review service.
 
 This is only an observation of those exact artifact bytes under the recorded
 tools. It does not prove which compiler process caused them, refine source

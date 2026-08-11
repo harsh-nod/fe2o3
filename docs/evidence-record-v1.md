@@ -253,20 +253,30 @@ checked artifact facts are:
 ```text
 target=gfx942:xnack-
 code_object_version=6
-worker_build_identity=fe2o3-worker-v1-sha256-234d22f9fb347c86495e7156e53ef8eab55e939d6514973a6df373aee12f77a9
-worker_executable_sha256=764c7309af90b7c11b9a8ca14a84d449ab9f0a7f5eaf39b82b2d316ad4f3235a
+worker_build_identity=fe2o3-worker-v1-sha256-35cda985161f61e664ff46b46677d4e6fc5cea43fe8c080977db66b032b8605e
+worker_executable_sha256=2f1fea53545efa31ae719679836a7a2a4eb9e26b4bc435b77b04a6c4b80c57b2
 source_sha256=73c1ff5e2f29d245c8071bdb6c1a38af1c9ee1573b78d47a987633483b37e084
-hsaco_sha256=f5bc17f1950921e5bb8e7f64b576b7477cd82b4adffd1b6cfae3f6036c85844d
+hsaco_sha256=efe77ed0ac7f67531c46670a3c36030ed19e2d901f6858a8bee42cabd707c15b
 hsaco_bytes=9392
 ```
 
-The controller stores only two bounded regenerated HSACOs and canonical tool
-and generated-executable manifests in its fresh external evidence directory;
-no binary is committed. It uses direct LLVM/LLD library APIs for HSACO linking
-and no COMGR or command-line HSACO linker/disassembler. This is an
-exact-artifact observation only. It supplies no source refinement, compiler
-causal authentication, production authority, hardware result, compiler
-receipt, signed record, or parity promotion.
+The controller snapshots the complete tracked repository, vendored Cargo
+registry, Rust sysroot, and retained LLVM/ROCm/OCML provider closure twice. It
+uses separate Worker and Cargo build roots, runs commands under bounded cgroup
+and rlimit supervision, executes generated native tests through sealed file
+descriptors, requires 3/3 CTest results, and retains the final HSACO descriptors
+through comparison. It stores two bounded regenerated HSACOs and canonical
+manifests in its fresh external evidence directory; no binary is committed.
+
+The accepted digest is bound to a checked Ed25519-signed transition fixture
+that records the old/new Worker and HSACO identities and both independent
+reproduction-manifest digests. The key, signature, and transition are explicitly
+non-production review fixtures with `authority=none`. They prevent an unsigned
+mutable-checkout update from silently replacing this golden; they do not
+authenticate compiler causality, reviewer identity outside the fixture, source
+refinement, production authority, a hardware result, a compiler receipt, or a
+parity promotion. Linking uses direct LLVM/LLD library APIs, with no COMGR or
+command-line HSACO linker/disassembler.
 
 To archive that exact test in an isolated parity snapshot, first place the
 HSACO as a regular non-symlink file under the external archive root, then run:

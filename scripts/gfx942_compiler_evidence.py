@@ -48,6 +48,9 @@ EXPECTED_RUSTC_RELEASE = "1.96.0-nightly"
 EXPECTED_RUSTC_COMMIT = "55e86c996809902e8bbad512cfb4d2c18be446d9"
 EXPECTED_LLVM_BUILD = "7.2.4"
 EXPECTED_LLVM_PACKAGE = "22.0.0git"
+EXPECTED_TRANSITION_PUBLIC_KEY = bytes.fromhex(
+    "3acecd80720befbedbff8292a6adcac6a7b160e79d05ae4e8599dc1c1dcf2b01"
+)
 MAX_CONFIG_BYTES = 256 * 1024
 MAX_TOOL_BYTES = 256 * 1024 * 1024
 MAX_VERSION_BYTES = 64 * 1024
@@ -287,6 +290,234 @@ def validate_golden(golden: dict[str, Any], manifest_path: Path, manifest_bytes:
         raise EvidenceError("compiler-evidence tool manifest was substituted")
     if manifest_path.as_posix().split("/tests/fixtures/compiler-evidence/")[-1] != "gfx942-mi300x-tools.json":
         raise EvidenceError("unexpected tool manifest location")
+    expected_transition = {
+        "transition_path":
+            "tests/fixtures/compiler-evidence/gfx942-alpha-zeta-cov6-transition-v1.json",
+        "transition_signature_path":
+            "tests/fixtures/compiler-evidence/gfx942-alpha-zeta-cov6-transition-v1.sig",
+        "transition_public_key_path":
+            "tests/fixtures/compiler-evidence/gfx942-alpha-zeta-cov6-transition-v1.pub",
+        "transition_signature_algorithm": "ed25519-sha512",
+    }
+    for field, expected in expected_transition.items():
+        if golden.get(field) != expected:
+            raise EvidenceError(f"compiler-evidence {field} changed")
+    if not SHA256_RE.fullmatch(str(golden.get("transition_sha256"))):
+        raise EvidenceError("compiler-evidence transition digest is invalid")
+
+
+ED25519_Q = 2**255 - 19
+ED25519_L = 2**252 + 27742317777372353535851937790883648493
+ED25519_D = (-121665 * pow(121666, ED25519_Q - 2, ED25519_Q)) % ED25519_Q
+ED25519_I = pow(2, (ED25519_Q - 1) // 4, ED25519_Q)
+
+
+def ed25519_xrecover(y: int) -> int:
+    xx = (y * y - 1) * pow(ED25519_D * y * y + 1, ED25519_Q - 2, ED25519_Q)
+    x = pow(xx, (ED25519_Q + 3) // 8, ED25519_Q)
+    if (x * x - xx) % ED25519_Q:
+        x = x * ED25519_I % ED25519_Q
+    return ED25519_Q - x if x & 1 else x
+
+
+ED25519_BASE_Y = 4 * pow(5, ED25519_Q - 2, ED25519_Q) % ED25519_Q
+ED25519_BASE = (ed25519_xrecover(ED25519_BASE_Y), ED25519_BASE_Y)
+ED25519_IDENTITY = (0, 1)
+
+
+def ed25519_add(left: tuple[int, int], right: tuple[int, int]) -> tuple[int, int]:
+    x1, y1 = left
+    x2, y2 = right
+    common = ED25519_D * x1 * x2 * y1 * y2
+    return (
+        (x1 * y2 + x2 * y1) * pow(1 + common, ED25519_Q - 2, ED25519_Q)
+        % ED25519_Q,
+        (y1 * y2 + x1 * x2) * pow(1 - common, ED25519_Q - 2, ED25519_Q)
+        % ED25519_Q,
+    )
+
+
+def ed25519_scalar(point: tuple[int, int], value: int) -> tuple[int, int]:
+    result = ED25519_IDENTITY
+    while value:
+        if value & 1:
+            result = ed25519_add(result, point)
+        point = ed25519_add(point, point)
+        value >>= 1
+    return result
+
+
+def ed25519_decode(encoded: bytes) -> tuple[int, int] | None:
+    if len(encoded) != 32:
+        return None
+    value = int.from_bytes(encoded, "little")
+    y = value & ((1 << 255) - 1)
+    if y >= ED25519_Q:
+        return None
+    x = ed25519_xrecover(y)
+    if (x & 1) != (value >> 255):
+        x = ED25519_Q - x
+    point = (x, y)
+    if (
+        (-x * x + y * y - 1 - ED25519_D * x * x * y * y) % ED25519_Q
+        or ed25519_scalar(point, ED25519_L) != ED25519_IDENTITY
+        or point == ED25519_IDENTITY
+    ):
+        return None
+    return point
+
+
+def verify_ed25519(public_key: bytes, message: bytes, signature: bytes) -> bool:
+    if len(signature) != 64:
+        return False
+    public = ed25519_decode(public_key)
+    encoded_r = signature[:32]
+    point_r = ed25519_decode(encoded_r)
+    scalar_s = int.from_bytes(signature[32:], "little")
+    if public is None or point_r is None or scalar_s >= ED25519_L:
+        return False
+    challenge = int.from_bytes(
+        hashlib.sha512(encoded_r + public_key + message).digest(), "little"
+    ) % ED25519_L
+    return ed25519_scalar(ED25519_BASE, scalar_s) == ed25519_add(
+        point_r, ed25519_scalar(public, challenge)
+    )
+
+
+def read_transition_fixture(source_root: Path, relative: str, limit: int) -> bytes:
+    path = source_root / relative
+    if path.resolve(strict=True) != path or path.is_symlink():
+        raise EvidenceError(f"transition fixture path is not canonical: {relative}")
+    value = path.read_bytes()
+    if not value or len(value) > limit:
+        raise EvidenceError(f"transition fixture size is invalid: {relative}")
+    return value
+
+
+def validate_signed_transition(
+    source_root: Path,
+    golden: dict[str, Any],
+    manifest_bytes: bytes,
+) -> dict[str, Any]:
+    transition_bytes = read_transition_fixture(
+        source_root, golden["transition_path"], MAX_CONFIG_BYTES
+    )
+    signature_text = read_transition_fixture(
+        source_root, golden["transition_signature_path"], 256
+    )
+    public_text = read_transition_fixture(
+        source_root, golden["transition_public_key_path"], 128
+    )
+    try:
+        signature = bytes.fromhex(signature_text.decode("ascii").strip())
+        public_key = bytes.fromhex(public_text.decode("ascii").strip())
+        transition = json.loads(transition_bytes)
+    except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as error:
+        raise EvidenceError("signed transition fixture encoding is invalid") from error
+    if public_key != EXPECTED_TRANSITION_PUBLIC_KEY:
+        raise EvidenceError("signed transition reviewer key changed")
+    if sha256_bytes(transition_bytes) != golden["transition_sha256"]:
+        raise EvidenceError("signed transition digest changed")
+    if canonical_json(transition) != transition_bytes:
+        raise EvidenceError("signed transition is not canonical JSON")
+    if not verify_ed25519(public_key, transition_bytes, signature):
+        raise EvidenceError("signed transition review signature is invalid")
+    require_exact_keys(
+        transition,
+        {
+            "schema",
+            "authority",
+            "claim",
+            "source_commit",
+            "source_tree",
+            "tool_manifest_sha256",
+            "runtime_manifest_sha256",
+            "summary_sha256",
+            "old",
+            "new",
+            "reproductions",
+            "review",
+        },
+        "signed compiler transition",
+    )
+    if (
+        transition["schema"] != "fe2o3-non-production-gfx942-compiler-transition-v1"
+        or transition["authority"] != "none"
+        or transition["claim"] != "non-production-exact-artifact-observation-only"
+        or transition["source_commit"]
+        != "2e9cbd9533032009a56154568d21bcfb61e52141"
+        or transition["source_tree"]
+        != "c057c7c38b557cb859cb27c420841b03f395d540"
+        or transition["tool_manifest_sha256"] != sha256_bytes(manifest_bytes)
+        or transition["runtime_manifest_sha256"]
+        != "4bc10d21035d0088fcf5af4c3a09f33709eff250e83471ee05a1c572f6dc3ee7"
+        or transition["summary_sha256"]
+        != "76b1e0ebbd4822894296cfc5b29f014b4e98c4cf724663d4197ab99c14123829"
+        or transition["review"]
+        != {
+            "decision": "accept-fixture-transition",
+            "reviewer": "fe2o3-non-production-independent-review-fixture-v1",
+            "signature_algorithm": "ed25519-sha512",
+        }
+    ):
+        raise EvidenceError("signed compiler transition scope or review changed")
+    expected_old = {
+        "worker_build_identity":
+            "fe2o3-worker-v1-sha256-234d22f9fb347c86495e7156e53ef8eab55e939d6514973a6df373aee12f77a9",
+        "worker_executable_sha256":
+            "764c7309af90b7c11b9a8ca14a84d449ab9f0a7f5eaf39b82b2d316ad4f3235a",
+        "final_hsaco_sha256":
+            "f5bc17f1950921e5bb8e7f64b576b7477cd82b4adffd1b6cfae3f6036c85844d",
+        "final_hsaco_bytes": 9392,
+        "golden_sha256":
+            "fca08759e5b5dd44f53436149ee8241a06b63a77f816f5ca62c1f6a4318190ff",
+    }
+    if transition.get("old") != expected_old:
+        raise EvidenceError("signed compiler transition does not bind the previous golden")
+    new = transition.get("new")
+    expected_new = {
+        "worker_build_identity": golden["worker_build_identity"],
+        "worker_executable_sha256": golden["worker_executable_sha256"],
+        "final_hsaco_sha256": golden["hsaco_sha256"],
+        "final_hsaco_bytes": golden["hsaco_bytes"],
+        "raw_output_identity":
+            "917e86272857301f1689ea7a0dfe91ea2f836981267fdddb69b433494bea53f1",
+        "response_identity":
+            "36bb783716dec69f765de11fe8286b2e82290b251a1bbc952e1375b084c28439",
+    }
+    if new != expected_new:
+        raise EvidenceError("signed compiler transition does not bind the accepted golden")
+    expected_reproductions = [
+        {
+            "run": 1,
+            "manifest_sha256":
+                "6f119a38cd1c6782df3dcbc215819dfb6182ff38e44be9a6ca241e7f53a57dfb",
+            "compiler_transaction_sha256":
+                "5dc27484c6d8b6b2c40c97c6c302b0d307e1e600d9fe1f9859c6c659cb5ac33f",
+            "request_identity":
+                "0e80e8034dea9555f31c028f8901dc7ff5dde2668226c374fd2a54e42dbbbadb",
+            "finalization_identity":
+                "899fd406ccb2492dd0f5a2b4df8348613dc45b56cd4f8d4b6d86081271a77e5a",
+            "publication_identity":
+                "bd5b8469081bda3cc131b735eb7b345a866ae1ec9509dae1ad948f17911ede6b",
+        },
+        {
+            "run": 2,
+            "manifest_sha256":
+                "aad9d31e5d2ded8173bf129d9013658cd6d16ba5cc476a2ab2bd71b2aba56bf9",
+            "compiler_transaction_sha256":
+                "c42d51a91936d9ba763164204ae202aac4a5aedfb2ce724ed4b89a932b0d904e",
+            "request_identity":
+                "a378c1dbe461a967b0e1e1da5e00f8db8006ee7d8737a97a17d7003fd398b478",
+            "finalization_identity":
+                "d489a71ff350036fff84a784e2aee6249b6e74174f57f85d9b5caa70d1fc6bd4",
+            "publication_identity":
+                "92b76905756ffdf6345a7ac58690edeafe449fa8a1202c3473c00951dad19de9",
+        },
+    ]
+    if transition.get("reproductions") != expected_reproductions:
+        raise EvidenceError("signed transition does not bind two independent reproductions")
+    return transition
 
 
 @dataclass
@@ -1337,6 +1568,14 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
         compare_labeled_manifests(
             retained_closures[0].manifest, retained_closures[1].manifest
         )
+        first_transition = validate_signed_transition(
+            prepared[0][1].root, golden, manifest_bytes
+        )
+        second_transition = validate_signed_transition(
+            prepared[1][1].root, golden, manifest_bytes
+        )
+        if first_transition != second_transition:
+            raise EvidenceError("independent source snapshots contain different transitions")
         provider_members = build_provider_members()
         for index in (1, 2):
             provider = capture_retained_closure(
@@ -1535,6 +1774,20 @@ def self_test(repo: Path) -> None:
     golden, _ = read_bounded_json(golden_path)
     validate_manifest_document(manifest)
     validate_golden(golden, manifest_path, manifest_bytes)
+    transition = validate_signed_transition(repo, golden, manifest_bytes)
+    transition_bytes = (repo / golden["transition_path"]).read_bytes()
+    signature = bytes.fromhex(
+        (repo / golden["transition_signature_path"]).read_text("ascii").strip()
+    )
+    for label, changed_message, changed_signature, changed_key in (
+        ("transition content", transition_bytes[:-2] + b"x\n", signature, EXPECTED_TRANSITION_PUBLIC_KEY),
+        ("transition signature", transition_bytes, bytes([signature[0] ^ 1]) + signature[1:], EXPECTED_TRANSITION_PUBLIC_KEY),
+        ("transition key", transition_bytes, signature, bytes([EXPECTED_TRANSITION_PUBLIC_KEY[0] ^ 1]) + EXPECTED_TRANSITION_PUBLIC_KEY[1:]),
+    ):
+        if verify_ed25519(changed_key, changed_message, changed_signature):
+            raise AssertionError(f"{label} substitution was accepted")
+    if transition["authority"] != "none":
+        raise AssertionError("transition fixture unexpectedly grants authority")
     for label, mutate in (
         ("cargo path", lambda value: value["tools"][9].__setitem__("path", value["tools"][10]["path"])),
         ("rustc digest", lambda value: value["tools"][10].__setitem__("sha256", "0" * 64)),
