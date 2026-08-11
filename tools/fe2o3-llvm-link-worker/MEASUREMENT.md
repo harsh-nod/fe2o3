@@ -28,9 +28,21 @@ capabilities must be zero. The child installs `PR_SET_NO_NEW_PRIVS`,
 `RLIMIT_NPROC=0`, and hard memory, data, core, and file limits before
 `exec`. The native entrypoint verifies this state, and a deployed test mode
 attempts `fork`, `clone`, thread creation, and double-fork/`setsid` before
-stdin. No cgroup-v2 or seccomp guarantee is asserted. Process groups and
-descendant scans are cleanup defense only. Input, output, metadata, symbol,
-and runtime-file collection are also bounded.
+stdin. Before `exec`, the child also creates a fresh session and process group.
+The controller requires a pidfd that identifies the exact unreaped session
+leader. Teardown signals that leader through the pidfd and signals the process
+group only after rechecking that the unreaped child is still both group and
+session leader. Any descendant observed by the bounded `/proc` scan gets its
+own retained pidfd and is signaled through that descriptor; cached descendant
+PIDs are never signaled.
+
+No cgroup-v2 or seccomp guarantee is asserted. The no-fork profile is the
+primary descendant-prevention boundary; the fresh session, process-group
+signal, and descendant scan are cleanup defense only. They do not prove
+containment of a descendant created and detached between scans. Cleanup uses a
+monotonic five-second reap bound and fails closed on pidfd acquisition,
+identity, wait, or nonprogress errors. Input, output, metadata, symbol, and
+runtime-file collection are also bounded.
 
 Successful worker output is still inert. The worker verifies an exact AMDGPU
 ELF/AMDHSA target contract, code-object ABI version, symbol closure, requested
