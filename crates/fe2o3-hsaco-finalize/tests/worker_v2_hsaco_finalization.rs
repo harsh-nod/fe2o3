@@ -40,6 +40,23 @@ use reserved_fe2o3_symbols::{
 include!("fixtures/worker_v2_hsaco_test_support.rs");
 
 #[test]
+fn canonical_fixture_controls_required_workgroup_metadata_presence() {
+    let present = fixture(FixtureOptions::valid());
+    assert_eq!(
+        fe2o3_hsaco::inspect(&present.bytes).unwrap().kernels()[0].required_workgroup_size(),
+        Some([256, 1, 1])
+    );
+
+    let mut options = FixtureOptions::valid();
+    options.include_required_workgroup_size = false;
+    let omitted = fixture(options);
+    assert_eq!(
+        fe2o3_hsaco::inspect(&omitted.bytes).unwrap().kernels()[0].required_workgroup_size(),
+        None
+    );
+}
+
+#[test]
 fn missing_descriptor_source_returns_an_owning_fail_closed_blocker() {
     let fixture = fixture(FixtureOptions::valid());
     let raw =

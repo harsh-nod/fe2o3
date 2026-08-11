@@ -162,6 +162,17 @@ pub fn bind_current_recovered_launch_kernel_metadata_v2<'recovered>(
     family: &LaunchKernelFamilyV2,
     variant_name: &str,
 ) -> Result<CurrentRecoveredLaunchKernelMetadataV2<'recovered>, LaunchKernelMetadataBridgeErrorV2> {
+    let variant = validate_and_select_variant(family, variant_name)?;
+    let current = recovered
+        .acquire_launch_kernel_v2_currentness()
+        .map_err(LaunchKernelMetadataBridgeErrorV2::CurrentPublication)?;
+    bind_with_current_and_physical_override(current, recovered, family, variant, None)
+}
+
+fn validate_and_select_variant<'family>(
+    family: &'family LaunchKernelFamilyV2,
+    variant_name: &str,
+) -> Result<&'family KernelVariantV2, LaunchKernelMetadataBridgeErrorV2> {
     if family
         .variants
         .iter()
@@ -181,18 +192,26 @@ pub fn bind_current_recovered_launch_kernel_metadata_v2<'recovered>(
         .iter()
         .find(|variant| variant.variant_name == variant_name)
         .ok_or(LaunchKernelMetadataBridgeErrorV2::UnknownVariant)?;
+    Ok(variant)
+}
 
-    let current = recovered
-        .acquire_launch_kernel_v2_currentness()
-        .map_err(LaunchKernelMetadataBridgeErrorV2::CurrentPublication)?;
-    let admission = current.admission();
-    let derived = derive_metadata(
-        admission.target(),
-        admission.code_object_version(),
-        admission.artifact_identity(),
-        recovered.descriptor(),
-        admission.selected_kernel(),
-    )?;
+fn bind_with_current_and_physical_override<'recovered>(
+    current: CurrentFinalizedWorkerV2BundleAdmissionV1<'recovered>,
+    recovered: &RecoveredWorkerV2PinnedDescriptorV1,
+    family: &LaunchKernelFamilyV2,
+    variant: &KernelVariantV2,
+    physical_override: Option<&PublishedKernelPhysicalLayoutV1>,
+) -> Result<CurrentRecoveredLaunchKernelMetadataV2<'recovered>, LaunchKernelMetadataBridgeErrorV2> {
+    let derived = {
+        let admission = current.admission();
+        derive_metadata(
+            admission.target(),
+            admission.code_object_version(),
+            admission.artifact_identity(),
+            recovered.descriptor(),
+            physical_override.unwrap_or_else(|| admission.selected_kernel()),
+        )?
+    };
     validate_model_match(family, variant, &derived)?;
 
     Ok(CurrentRecoveredLaunchKernelMetadataV2 {
@@ -205,6 +224,20 @@ pub fn bind_current_recovered_launch_kernel_metadata_v2<'recovered>(
         occupancy_subject: derived.occupancy_subject,
         variant_name: variant.variant_name.clone().into_boxed_str(),
     })
+}
+
+#[cfg(test)]
+pub(crate) fn bind_current_recovered_launch_kernel_metadata_with_physical_probe_v2<'recovered>(
+    recovered: &'recovered RecoveredWorkerV2PinnedDescriptorV1,
+    family: &LaunchKernelFamilyV2,
+    variant_name: &str,
+    physical: &PublishedKernelPhysicalLayoutV1,
+) -> Result<CurrentRecoveredLaunchKernelMetadataV2<'recovered>, LaunchKernelMetadataBridgeErrorV2> {
+    let variant = validate_and_select_variant(family, variant_name)?;
+    let current = recovered
+        .acquire_launch_kernel_v2_currentness()
+        .map_err(LaunchKernelMetadataBridgeErrorV2::CurrentPublication)?;
+    bind_with_current_and_physical_override(current, recovered, family, variant, Some(physical))
 }
 
 struct DerivedLaunchMetadataV2 {
@@ -520,7 +553,23 @@ fn derive_launch_geometry(
             );
         }
     };
-    if physical.launch().wavefront_size() != 64 {
+    let physical_launch = physical.launch();
+    let physical_block = match physical_launch.required_workgroup_size() {
+        PhysicalMetadataValueV1::Known(value) => value,
+        PhysicalMetadataValueV1::Unknown => {
+            return Err(LaunchKernelMetadataBridgeErrorV2::MissingPhysicalMetadata(
+                "required workgroup size",
+            ));
+        }
+    };
+    if physical_block != [block.x(), block.y(), block.z()] {
+        return Err(
+            LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(
+                "required workgroup size",
+            ),
+        );
+    }
+    if physical_launch.wavefront_size() != 64 {
         return Err(LaunchKernelMetadataBridgeErrorV2::UnsupportedTarget);
     }
     let block = DimensionsV2::new(block.x(), block.y(), block.z());
@@ -529,8 +578,7 @@ fn derive_launch_geometry(
     let flat = checked_dimensions_product(block, "flat workgroup size")?;
     let flat = u32::try_from(flat)
         .map_err(|_| LaunchKernelMetadataBridgeErrorV2::NumericOverflow("flat workgroup size"))?;
-    if flat != launch.max_flat_workgroup_size()
-        || flat != physical.launch().max_flat_workgroup_size()
+    if flat != launch.max_flat_workgroup_size() || flat != physical_launch.max_flat_workgroup_size()
     {
         return Err(
             LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(

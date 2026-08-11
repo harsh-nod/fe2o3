@@ -27,6 +27,7 @@ struct FixtureOptions<'a> {
     include_export: bool,
     include_canonical_descriptor_section_name: bool,
     include_explicit_argument_alignments: bool,
+    include_required_workgroup_size: bool,
 }
 
 impl FixtureOptions<'static> {
@@ -43,6 +44,7 @@ impl FixtureOptions<'static> {
             include_export: true,
             include_canonical_descriptor_section_name: false,
             include_explicit_argument_alignments: false,
+            include_required_workgroup_size: true,
         }
     }
 }
@@ -314,7 +316,7 @@ fn metadata(options: FixtureOptions<'_>) -> Vec<u8> {
         explicit_argument(Some("values_len"), 8, 8, alignment, "by_value", None),
     ];
     arguments.extend(v5_hidden_arguments(16));
-    let kernel = Value::Map(vec![
+    let mut kernel = vec![
         (Value::from(".name"), Value::from(options.entry)),
         (Value::from(".symbol"), Value::from(options.descriptor)),
         (Value::from(".args"), Value::Array(arguments)),
@@ -335,7 +337,9 @@ fn metadata(options: FixtureOptions<'_>) -> Vec<u8> {
             Value::from(".max_flat_workgroup_size"),
             Value::from(options.max_flat_workgroup_size),
         ),
-        (
+    ];
+    if options.include_required_workgroup_size {
+        kernel.push((
             Value::from(".reqd_workgroup_size"),
             Value::Array(
                 options
@@ -344,8 +348,9 @@ fn metadata(options: FixtureOptions<'_>) -> Vec<u8> {
                     .map(Value::from)
                     .collect(),
             ),
-        ),
-    ]);
+        ));
+    }
+    let kernel = Value::Map(kernel);
     let root = Value::Map(vec![
         (
             Value::from("amdhsa.version"),

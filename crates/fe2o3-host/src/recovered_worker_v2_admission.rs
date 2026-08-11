@@ -2858,6 +2858,64 @@ mod tests {
     }
 
     #[test]
+    fn launch_bridge_rejects_unknown_required_workgroup_size_without_authority() {
+        let (_fixture, recovered) = recovered_launch_bridge_fixture(89);
+        let family =
+            crate::launch_kernel_v2_bridge::canonical_family_for_recovered_launch_bridge_test(
+                &recovered,
+            );
+        let physical = recovered
+            .physical_kernel()
+            .with_required_workgroup_size_for_launch_bridge_test(
+                crate::PhysicalMetadataValueV1::Unknown,
+            );
+        assert_eq!(
+            physical.launch().required_workgroup_size(),
+            crate::PhysicalMetadataValueV1::Unknown
+        );
+
+        assert!(matches!(
+            crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_with_physical_probe_v2(
+                &recovered,
+                &family,
+                "recovered-exact-wave64",
+                &physical,
+            ),
+            Err(
+                crate::LaunchKernelMetadataBridgeErrorV2::MissingPhysicalMetadata(
+                    "required workgroup size"
+                )
+            )
+        ));
+    }
+
+    #[test]
+    fn launch_bridge_rejects_mismatched_required_workgroup_size_without_authority() {
+        let (_fixture, recovered) = recovered_launch_bridge_fixture(90);
+        let family =
+            crate::launch_kernel_v2_bridge::canonical_family_for_recovered_launch_bridge_test(
+                &recovered,
+            );
+        let physical = recovered
+            .physical_kernel()
+            .with_required_workgroup_size_for_launch_bridge_test(
+                crate::PhysicalMetadataValueV1::Known([128, 2, 1]),
+            );
+
+        assert!(matches!(
+            crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_with_physical_probe_v2(
+                &recovered,
+                &family,
+                "recovered-exact-wave64",
+                &physical,
+            ),
+            Err(crate::LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(
+                "required workgroup size"
+            ))
+        ));
+    }
+
+    #[test]
     fn launch_bridge_binds_exact_recovered_physical_metadata_without_authority() {
         let (_fixture, recovered) = recovered_launch_bridge_fixture(80);
         let family =

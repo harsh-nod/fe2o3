@@ -244,6 +244,16 @@ impl PublishedKernelPhysicalLayoutV1 {
     pub const fn launch(&self) -> &PublishedPhysicalLaunchLayoutV1 {
         &self.launch
     }
+
+    #[cfg(test)]
+    pub(crate) fn with_required_workgroup_size_for_launch_bridge_test(
+        &self,
+        required_workgroup_size: PhysicalMetadataValueV1<[u32; 3]>,
+    ) -> Self {
+        let mut physical = self.clone();
+        physical.launch.required_workgroup_size = required_workgroup_size;
+        physical
+    }
 }
 
 /// Inert physical-layout inspection bound to one complete published direct-link admission.
