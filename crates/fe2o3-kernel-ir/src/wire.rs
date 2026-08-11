@@ -23,6 +23,8 @@ pub const KERNEL_IR_VERSION_V1: u16 = 1;
 pub const KERNEL_IR_VERSION_V2: u16 = 2;
 /// Additive source-bound inline-assembly wire version.
 pub const KERNEL_IR_VERSION_V3: u16 = 3;
+/// Kernel IR V4 adds signed and unsigned 128-bit scalar carrier types.
+pub const KERNEL_IR_VERSION_V4: u16 = 4;
 /// Maximum size of one encoded kernel IR module.
 pub const MAX_MODULE_BYTES_V1: usize = 16 * 1024 * 1024;
 /// Maximum UTF-8 byte length of any identifier or extension component.
@@ -211,6 +213,11 @@ pub fn encode_module_v3(module: &Module) -> Result<Vec<u8>, KernelIrEncodeError>
     encode_module(module, KERNEL_IR_VERSION_V3)
 }
 
+/// Encodes a module in the bounded canonical kernel IR V4 wire format.
+pub fn encode_module_v4(module: &Module) -> Result<Vec<u8>, KernelIrEncodeError> {
+    encode_module(module, KERNEL_IR_VERSION_V4)
+}
+
 fn encode_module(module: &Module, version: u16) -> Result<Vec<u8>, KernelIrEncodeError> {
     let mut writer = Writer::new(version);
     writer.bytes(&KERNEL_IR_MAGIC_V1)?;
@@ -260,6 +267,11 @@ pub fn decode_module_v2(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
 /// Decodes canonical V1, V2, or V3 bytes using the latest bounded reader.
 pub fn decode_module_v3(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
     decode_module(bytes, KERNEL_IR_VERSION_V3, true)
+}
+
+/// Decodes canonical V1, V2, V3, or V4 bytes using the latest bounded reader.
+pub fn decode_module_v4(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
+    decode_module(bytes, KERNEL_IR_VERSION_V4, true)
 }
 
 fn decode_module(
@@ -1000,6 +1012,14 @@ fn encode_type(writer: &mut Writer, ty: &Type, depth: usize) -> Result<(), Kerne
     match ty {
         Type::Unit => writer.u8(1)?,
         Type::Scalar(scalar) => {
+            if matches!(scalar, ScalarType::I128 | ScalarType::U128)
+                && writer.version < KERNEL_IR_VERSION_V4
+            {
+                return Err(KernelIrEncodeError::UnsupportedInVersion {
+                    version: writer.version,
+                    feature: "128-bit scalar types",
+                });
+            }
             writer.u8(2)?;
             writer.u8(scalar_type_tag(*scalar))?;
         }
@@ -1027,7 +1047,16 @@ fn decode_type(reader: &mut Reader<'_>, depth: usize) -> Result<Type, KernelIrDe
     }
     Ok(match reader.u8()? {
         1 => Type::Unit,
-        2 => Type::Scalar(decode_scalar_type(reader.u8()?)?),
+        2 => {
+            let tag = reader.u8()?;
+            if matches!(tag, 15 | 16) && reader.version < KERNEL_IR_VERSION_V4 {
+                return Err(KernelIrDecodeError::UnknownTag {
+                    kind: "scalar type",
+                    tag,
+                });
+            }
+            Type::Scalar(decode_scalar_type(tag)?)
+        }
         3 => {
             let address_space = decode_address_space(reader.u8()?)?;
             let access = decode_access_mode(reader.u8()?)?;

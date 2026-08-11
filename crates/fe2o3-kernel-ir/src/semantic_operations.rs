@@ -17,6 +17,8 @@ use crate::{
 pub const SEMANTIC_OPERATION_SCHEMA_MAGIC_V1: [u8; 8] = *b"FE2O3SO\0";
 pub const SEMANTIC_OPERATION_INSTANCE_MAGIC_V1: [u8; 8] = *b"FE2O3SI\0";
 pub const SEMANTIC_OPERATION_VERSION_V1: u16 = 1;
+/// V2 adds I128/U128 memory-element tags without changing any V1 bytes.
+pub const SEMANTIC_OPERATION_VERSION_V2: u16 = 2;
 pub const SEMANTIC_OPERATION_SCHEMA_BYTES_V1: usize = 16;
 pub const SEMANTIC_OPERATION_INSTANCE_HEADER_BYTES_V1: usize = 20;
 pub const MAX_SEMANTIC_OPERATION_INSTANCE_PAYLOAD_BYTES_V1: usize = 4096;
@@ -463,6 +465,13 @@ impl SemanticOperationSchema {
         }
     }
 
+    pub const fn v2(kind: SemanticOperationKind) -> Self {
+        Self {
+            version: SEMANTIC_OPERATION_VERSION_V2,
+            kind,
+        }
+    }
+
     pub const fn version(self) -> u16 {
         self.version
     }
@@ -507,7 +516,10 @@ pub fn decode_semantic_operation_schema(
     }
 
     let version = u16::from_le_bytes([bytes[8], bytes[9]]);
-    if version != SEMANTIC_OPERATION_VERSION_V1 {
+    if !matches!(
+        version,
+        SEMANTIC_OPERATION_VERSION_V1 | SEMANTIC_OPERATION_VERSION_V2
+    ) {
         return Err(SemanticOperationSchemaDecodeError::UnknownVersion(version));
     }
     for offset in [11, 14, 15] {
@@ -635,7 +647,7 @@ impl SemanticOperationInstanceId {
         contract: PointerDistanceContract,
     ) -> Self {
         Self {
-            schema: SemanticOperationSchema::v1(SemanticOperationKind::PointerDistance),
+            schema: memory_schema(SemanticOperationKind::PointerDistance, element),
             payload: SemanticOperationInstancePayloadV1::PointerDistance {
                 kind,
                 unit,
@@ -654,7 +666,7 @@ impl SemanticOperationInstanceId {
         contract: VolatileAccessContract,
     ) -> Self {
         Self {
-            schema: SemanticOperationSchema::v1(SemanticOperationKind::VolatileLoad),
+            schema: memory_schema(SemanticOperationKind::VolatileLoad, element),
             payload: SemanticOperationInstancePayloadV1::VolatileLoad {
                 element,
                 address_space,
@@ -671,7 +683,7 @@ impl SemanticOperationInstanceId {
         contract: VolatileAccessContract,
     ) -> Self {
         Self {
-            schema: SemanticOperationSchema::v1(SemanticOperationKind::VolatileStore),
+            schema: memory_schema(SemanticOperationKind::VolatileStore, element),
             payload: SemanticOperationInstancePayloadV1::VolatileStore {
                 element,
                 address_space,
@@ -690,7 +702,7 @@ impl SemanticOperationInstanceId {
         contract: CopyNonOverlappingContract,
     ) -> Self {
         Self {
-            schema: SemanticOperationSchema::v1(SemanticOperationKind::CopyNonOverlapping),
+            schema: memory_schema(SemanticOperationKind::CopyNonOverlapping, element),
             payload: SemanticOperationInstancePayloadV1::CopyNonOverlapping {
                 element,
                 source_address_space,
@@ -721,6 +733,20 @@ impl SemanticOperationInstanceId {
 
     pub const fn payload(self) -> SemanticOperationInstancePayloadV1 {
         self.payload
+    }
+}
+
+const fn memory_schema(
+    kind: SemanticOperationKind,
+    element: MemoryElementType,
+) -> SemanticOperationSchema {
+    if matches!(
+        element,
+        MemoryElementType::Scalar(ScalarType::I128 | ScalarType::U128)
+    ) {
+        SemanticOperationSchema::v2(kind)
+    } else {
+        SemanticOperationSchema::v1(kind)
     }
 }
 
@@ -834,7 +860,10 @@ pub fn decode_semantic_operation_instance_id(
     }
 
     let version = u16::from_le_bytes([bytes[8], bytes[9]]);
-    if version != SEMANTIC_OPERATION_VERSION_V1 {
+    if !matches!(
+        version,
+        SEMANTIC_OPERATION_VERSION_V1 | SEMANTIC_OPERATION_VERSION_V2
+    ) {
         return Err(SemanticOperationInstanceDecodeError::UnknownVersion(
             version,
         ));
@@ -893,10 +922,20 @@ pub fn decode_semantic_operation_instance_id(
         });
     }
     let payload = &bytes[SEMANTIC_OPERATION_INSTANCE_HEADER_BYTES_V1..];
+    let element_tag = match kind {
+        SemanticOperationKind::PointerDistance => Some(payload[2]),
+        SemanticOperationKind::VolatileLoad
+        | SemanticOperationKind::VolatileStore
+        | SemanticOperationKind::CopyNonOverlapping => Some(payload[0]),
+        SemanticOperationKind::LaunchInvocationIndex | SemanticOperationKind::LaunchExtent => None,
+    };
+    if version == SEMANTIC_OPERATION_VERSION_V2 && !matches!(element_tag, Some(15 | 16)) {
+        return Err(SemanticOperationInstanceDecodeError::NonCanonicalVersion { version });
+    }
     match kind {
         SemanticOperationKind::PointerDistance => {
             let distance_kind = decode_pointer_distance_kind(payload[0])?;
-            let element = decode_memory_element(payload[2])?;
+            let element = decode_memory_element(version, payload[2])?;
             let layout = decode_memory_layout(payload, 9);
             require_canonical_memory_layout(kind, element, layout)?;
             let contract = PointerDistanceContract {
@@ -919,7 +958,7 @@ pub fn decode_semantic_operation_instance_id(
             ))
         }
         SemanticOperationKind::VolatileLoad | SemanticOperationKind::VolatileStore => {
-            let element = decode_memory_element(payload[0])?;
+            let element = decode_memory_element(version, payload[0])?;
             let address_space = decode_address_space(payload[1])?;
             let layout = decode_memory_layout(payload, 7);
             require_canonical_memory_layout(kind, element, layout)?;
@@ -955,7 +994,7 @@ pub fn decode_semantic_operation_instance_id(
             }
         }
         SemanticOperationKind::CopyNonOverlapping => {
-            let element = decode_memory_element(payload[0])?;
+            let element = decode_memory_element(version, payload[0])?;
             let layout = decode_memory_layout(payload, 10);
             require_canonical_memory_layout(kind, element, layout)?;
             let contract = CopyNonOverlappingContract {
@@ -1004,6 +1043,9 @@ pub enum SemanticOperationInstanceDecodeError {
     },
     InvalidMagic,
     UnknownVersion(u16),
+    NonCanonicalVersion {
+        version: u16,
+    },
     UnsupportedFlags(u8),
     UnknownFamily(u8),
     UnknownOperation {
@@ -1053,6 +1095,10 @@ impl fmt::Display for SemanticOperationInstanceDecodeError {
                     "unknown semantic-operation instance version {version}"
                 )
             }
+            Self::NonCanonicalVersion { version } => write!(
+                formatter,
+                "semantic-operation instance version {version} is not the canonical version for its payload"
+            ),
             Self::UnsupportedFlags(flags) => {
                 write!(formatter, "unsupported semantic-operation flags {flags:#x}")
             }
@@ -1111,10 +1157,16 @@ fn memory_element_tag(element: MemoryElementType) -> u8 {
 }
 
 fn decode_memory_element(
+    version: u16,
     tag: u8,
 ) -> Result<MemoryElementType, SemanticOperationInstanceDecodeError> {
     if tag == 0 {
         Ok(MemoryElementType::Unit)
+    } else if matches!(tag, 15 | 16) && version < SEMANTIC_OPERATION_VERSION_V2 {
+        Err(SemanticOperationInstanceDecodeError::UnknownPayloadTag {
+            field: "memory element",
+            tag,
+        })
     } else {
         decode_scalar_type(tag).map(MemoryElementType::Scalar)
     }

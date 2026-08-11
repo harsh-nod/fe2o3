@@ -43,10 +43,10 @@ fn schema_decoder_rejects_unknown_dispatch_authority() {
     ));
 
     let mut unknown_version = encoded;
-    unknown_version[8..10].copy_from_slice(&2_u16.to_le_bytes());
+    unknown_version[8..10].copy_from_slice(&3_u16.to_le_bytes());
     assert_eq!(
         decode_semantic_operation_schema(&unknown_version),
-        Err(SemanticOperationSchemaDecodeError::UnknownVersion(2))
+        Err(SemanticOperationSchemaDecodeError::UnknownVersion(3))
     );
 
     let mut unknown_family = encoded;
@@ -73,6 +73,46 @@ fn schema_decoder_rejects_unknown_dispatch_authority() {
         Err(SemanticOperationSchemaDecodeError::UnknownOperation {
             family: SemanticOperationFamily::Matrix,
             opcode: 1,
+        })
+    );
+}
+
+#[test]
+fn wide_memory_elements_use_additive_v2_identity() {
+    let element = MemoryElementType::Scalar(ScalarType::I128);
+    let id = SemanticOperationInstanceId::volatile_load(
+        element,
+        AddressSpace::Global,
+        element.expected_layout(),
+        VolatileAccessContract::rust_allocation_load(),
+    );
+    assert_eq!(id.schema().version(), SEMANTIC_OPERATION_VERSION_V2);
+    let encoded = encode_semantic_operation_instance_id(id);
+    assert_eq!(encoded[8..10], SEMANTIC_OPERATION_VERSION_V2.to_le_bytes());
+    assert_eq!(decode_semantic_operation_instance_id(&encoded), Ok(id));
+
+    let mut forged_v1 = encoded.clone();
+    forged_v1[8..10].copy_from_slice(&SEMANTIC_OPERATION_VERSION_V1.to_le_bytes());
+    assert_eq!(
+        decode_semantic_operation_instance_id(&forged_v1),
+        Err(SemanticOperationInstanceDecodeError::UnknownPayloadTag {
+            field: "memory element",
+            tag: 15,
+        })
+    );
+
+    let legacy = SemanticOperationInstanceId::volatile_load(
+        MemoryElementType::Scalar(ScalarType::U64),
+        AddressSpace::Global,
+        MemoryElementType::Scalar(ScalarType::U64).expected_layout(),
+        VolatileAccessContract::rust_allocation_load(),
+    );
+    let mut noncanonical_v2 = encode_semantic_operation_instance_id(legacy);
+    noncanonical_v2[8..10].copy_from_slice(&SEMANTIC_OPERATION_VERSION_V2.to_le_bytes());
+    assert_eq!(
+        decode_semantic_operation_instance_id(&noncanonical_v2),
+        Err(SemanticOperationInstanceDecodeError::NonCanonicalVersion {
+            version: SEMANTIC_OPERATION_VERSION_V2,
         })
     );
 }
@@ -458,10 +498,10 @@ fn instance_decoder_rejects_unknown_and_malformed_payloads() {
     );
 
     let mut unknown_version = encoded.clone();
-    unknown_version[8..10].copy_from_slice(&2_u16.to_le_bytes());
+    unknown_version[8..10].copy_from_slice(&3_u16.to_le_bytes());
     assert_eq!(
         decode_semantic_operation_instance_id(&unknown_version),
-        Err(SemanticOperationInstanceDecodeError::UnknownVersion(2))
+        Err(SemanticOperationInstanceDecodeError::UnknownVersion(3))
     );
 
     let mut unknown_family = encoded.clone();

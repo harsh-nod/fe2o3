@@ -28,6 +28,53 @@ fn all_scalar_types() -> Vec<Type> {
     .collect()
 }
 
+#[test]
+fn wide_scalar_types_are_additive_v4_only() {
+    let mut module = Module::new("wide-scalars");
+    module.functions.push(Function::declaration(
+        "wide",
+        Signature::new(
+            vec![Type::Scalar(ScalarType::I128)],
+            vec![Type::Scalar(ScalarType::U128)],
+        ),
+    ));
+
+    for (version, encoded) in [
+        (KERNEL_IR_VERSION_V1, encode_module_v1(&module)),
+        (KERNEL_IR_VERSION_V2, encode_module_v2(&module)),
+        (KERNEL_IR_VERSION_V3, encode_module_v3(&module)),
+    ] {
+        assert_eq!(
+            encoded,
+            Err(KernelIrEncodeError::UnsupportedInVersion {
+                version,
+                feature: "128-bit scalar types",
+            })
+        );
+    }
+
+    let encoded = encode_module_v4(&module).unwrap();
+    assert_eq!(encoded[8..10], KERNEL_IR_VERSION_V4.to_le_bytes());
+    assert_eq!(decode_module_v4(&encoded).unwrap(), module);
+    for rejected in [
+        decode_module_v1(&encoded),
+        decode_module_v2(&encoded),
+        decode_module_v3(&encoded),
+    ] {
+        assert_eq!(rejected, Err(KernelIrDecodeError::UnknownVersion(4)));
+    }
+
+    let mut forged_v3 = encoded;
+    forged_v3[8..10].copy_from_slice(&KERNEL_IR_VERSION_V3.to_le_bytes());
+    assert!(matches!(
+        decode_module_v3(&forged_v3),
+        Err(KernelIrDecodeError::UnknownTag {
+            kind: "scalar type",
+            tag: 15 | 16,
+        })
+    ));
+}
+
 fn all_capabilities() -> BTreeSet<TargetCapability> {
     [
         TargetCapability::Float16,
