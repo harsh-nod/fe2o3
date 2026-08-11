@@ -785,10 +785,12 @@ mod tests {
             target: &str,
             table: &[u8],
             include_explicit_argument_alignments: bool,
+            include_required_workgroup_size: bool,
         ) -> Vec<u8> {
             let mut options = FixtureOptions::valid();
             options.target = target;
             options.include_explicit_argument_alignments = include_explicit_argument_alignments;
+            options.include_required_workgroup_size = include_required_workgroup_size;
             fixture_with_descriptor_table(options, Some(table)).bytes
         }
     }
@@ -910,10 +912,15 @@ mod tests {
         .unwrap()
     }
 
-    fn descriptor_launch() -> LaunchConstraintsV1 {
+    fn descriptor_launch(include_required_workgroup_size: bool) -> LaunchConstraintsV1 {
+        let block_size = if include_required_workgroup_size {
+            BlockSizeV1::Exact(DimensionsV1::new(256, 1, 1).unwrap())
+        } else {
+            BlockSizeV1::Any
+        };
         LaunchConstraintsV1::new(
             1,
-            BlockSizeV1::Exact(DimensionsV1::new(256, 1, 1).unwrap()),
+            block_size,
             DimensionsV1::new(65_535, 1, 1).unwrap(),
             256,
             0,
@@ -938,6 +945,7 @@ mod tests {
         executable_digest: DigestBytes,
         target: &str,
         canonical_digest: [u8; 32],
+        include_required_workgroup_size: bool,
     ) -> DeviceDescriptorTableV1 {
         let shared_source =
             SourceTypeRecordV1::new(SourceTypeDescriptorV1::shared_slice(ScalarTypeV1::F32));
@@ -952,7 +960,7 @@ mod tests {
             evidence(0x32, executable_digest),
             vec![],
             KernelAbiLayoutV1::new(16, 272, 8).unwrap(),
-            descriptor_launch(),
+            descriptor_launch(include_required_workgroup_size),
             vec![
                 LogicalArgumentV1::shared_slice(
                     0,
@@ -1085,14 +1093,15 @@ mod tests {
     }
 
     fn recovery_fixture(seed: u8, raw_target: &str, manifest_symbol: &str) -> RecoveryFixture {
-        recovery_fixture_with_explicit_argument_alignments(seed, raw_target, manifest_symbol, false)
+        recovery_fixture_with_physical_metadata(seed, raw_target, manifest_symbol, false, true)
     }
 
-    fn recovery_fixture_with_explicit_argument_alignments(
+    fn recovery_fixture_with_physical_metadata(
         seed: u8,
         raw_target: &str,
         manifest_symbol: &str,
         include_explicit_argument_alignments: bool,
+        include_required_workgroup_size: bool,
     ) -> RecoveryFixture {
         let source_digest = digest(seed.wrapping_add(0x40));
         let executable_digest = digest(seed.wrapping_add(0x50));
@@ -1116,11 +1125,13 @@ mod tests {
             executable_digest,
             REQUIRED_GFX942_TEST_TARGET,
             [0; 32],
+            include_required_workgroup_size,
         );
         let final_raw = canonical_hsaco_fixture::with_descriptor_table(
             REQUIRED_GFX942_TEST_TARGET,
             &encode_device_descriptor_table_v1(&final_raw_table).unwrap(),
             include_explicit_argument_alignments,
+            include_required_workgroup_size,
         );
         let finalized_hsaco = finalize_unfinalized(&final_raw).unwrap();
         let embedded_descriptor = finalized_hsaco.inspection().descriptor_table().clone();
@@ -1137,11 +1148,13 @@ mod tests {
                 executable_digest,
                 raw_target,
                 [0; 32],
+                include_required_workgroup_size,
             );
             canonical_hsaco_fixture::with_descriptor_table(
                 raw_target,
                 &encode_device_descriptor_table_v1(&substituted_raw_table).unwrap(),
                 include_explicit_argument_alignments,
+                include_required_workgroup_size,
             )
         };
         let mut fixture = make_single_hsaco_fixture_with_names_and_kernel_id(
@@ -1166,6 +1179,7 @@ mod tests {
                 executable_digest,
                 REQUIRED_GFX942_TEST_TARGET,
                 canonical_digest,
+                include_required_workgroup_size,
             )
         };
         let kernel = &fixture.container.manifest().kernels()[0];
@@ -2802,11 +2816,24 @@ mod tests {
         seed: u8,
         include_explicit_argument_alignments: bool,
     ) -> (RecoveryFixture, RecoveredWorkerV2PinnedDescriptorV1) {
-        let fixture = recovery_fixture_with_explicit_argument_alignments(
+        recovered_launch_bridge_fixture_with_physical_metadata(
+            seed,
+            include_explicit_argument_alignments,
+            true,
+        )
+    }
+
+    fn recovered_launch_bridge_fixture_with_physical_metadata(
+        seed: u8,
+        include_explicit_argument_alignments: bool,
+        include_required_workgroup_size: bool,
+    ) -> (RecoveryFixture, RecoveredWorkerV2PinnedDescriptorV1) {
+        let fixture = recovery_fixture_with_physical_metadata(
             seed,
             "gfx942",
             "vecadd",
             include_explicit_argument_alignments,
+            include_required_workgroup_size,
         );
         let recovered = recover_worker_v2_load_envelope_v1(
             &fixture.output,
@@ -2817,6 +2844,54 @@ mod tests {
         )
         .unwrap();
         (fixture, recovered)
+    }
+
+    #[test]
+    fn launch_bridge_public_path_rejects_omitted_required_workgroup_size_without_authority() {
+        let (fixture, recovered) =
+            recovered_launch_bridge_fixture_with_physical_metadata(91, true, false);
+        let (_model_fixture, model_recovered) = recovered_launch_bridge_fixture(91);
+        let envelope = WorkerV2LoadEnvelopeV1::from_bytes(&fixture.envelope).unwrap();
+        assert_eq!(
+            fe2o3_hsaco::inspect(envelope.raw_hsaco().bytes())
+                .unwrap()
+                .kernels()[0]
+                .required_workgroup_size(),
+            None
+        );
+        assert_eq!(
+            recovered
+                .physical_kernel()
+                .launch()
+                .required_workgroup_size(),
+            crate::PhysicalMetadataValueV1::Unknown
+        );
+        assert!(matches!(
+            recovered.descriptor().launch().block_size(),
+            BlockSizeV1::Any
+        ));
+
+        let family =
+            crate::launch_kernel_v2_bridge::canonical_family_for_recovered_launch_bridge_test(
+                &model_recovered,
+            );
+        assert!(matches!(
+            family.variants[0].launch.block,
+            fe2o3_kernel_ir::BlockShapePolicyV2::Exact(_)
+        ));
+
+        assert!(matches!(
+            crate::bind_current_recovered_launch_kernel_metadata_v2(
+                &recovered,
+                &family,
+                "recovered-exact-wave64"
+            ),
+            Err(
+                crate::LaunchKernelMetadataBridgeErrorV2::MissingPhysicalMetadata(
+                    "required workgroup size"
+                )
+            )
+        ));
     }
 
     #[test]

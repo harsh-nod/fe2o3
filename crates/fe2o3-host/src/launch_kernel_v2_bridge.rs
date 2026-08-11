@@ -546,6 +546,15 @@ fn derive_launch_geometry(
     descriptor: &KernelDescriptorV1,
     physical: &PublishedKernelPhysicalLayoutV1,
 ) -> Result<DerivedLaunchGeometryV2, LaunchKernelMetadataBridgeErrorV2> {
+    let physical_launch = physical.launch();
+    let physical_block = match physical_launch.required_workgroup_size() {
+        PhysicalMetadataValueV1::Known(value) => value,
+        PhysicalMetadataValueV1::Unknown => {
+            return Err(LaunchKernelMetadataBridgeErrorV2::MissingPhysicalMetadata(
+                "required workgroup size",
+            ));
+        }
+    };
     let launch = descriptor.launch();
     let block = match launch.block_size() {
         BlockSizeV1::Exact(dimensions) => dimensions,
@@ -555,15 +564,6 @@ fn derive_launch_geometry(
                     "non-exact block policy",
                 ),
             );
-        }
-    };
-    let physical_launch = physical.launch();
-    let physical_block = match physical_launch.required_workgroup_size() {
-        PhysicalMetadataValueV1::Known(value) => value,
-        PhysicalMetadataValueV1::Unknown => {
-            return Err(LaunchKernelMetadataBridgeErrorV2::MissingPhysicalMetadata(
-                "required workgroup size",
-            ));
         }
     };
     if physical_block != [block.x(), block.y(), block.z()] {
