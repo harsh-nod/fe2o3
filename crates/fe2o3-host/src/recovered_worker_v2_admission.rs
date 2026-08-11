@@ -3118,4 +3118,46 @@ mod tests {
             Err(crate::LaunchKernelMetadataBridgeErrorV2::UnknownVariant)
         ));
     }
+
+    #[test]
+    fn launch_bridge_holds_current_publication_until_the_binding_drops() {
+        let (fixture, recovered) = recovered_launch_bridge_fixture(87);
+        let family =
+            crate::launch_kernel_v2_bridge::canonical_family_for_recovered_launch_bridge_test(
+                &recovered,
+            );
+        let binding = crate::bind_current_recovered_launch_kernel_metadata_v2(
+            &recovered,
+            &family,
+            "recovered-exact-wave64",
+        )
+        .unwrap();
+
+        let output = fixture.output.clone();
+        let owner = fixture.owner.clone();
+        let turnover_owner = owner.clone();
+        let lock_probe = install_begin_build_attempt_lock_probe_v1(&output, &owner);
+        let (completed_tx, completed_rx) = std::sync::mpsc::channel();
+        let turnover = std::thread::spawn(move || {
+            let next = begin_build_attempt(
+                &output,
+                &turnover_owner,
+                BuildInvocation::from_bytes([0xd3; 32]),
+                BuildSession::from_bytes([0xd4; 16]),
+            );
+            completed_tx.send(()).unwrap();
+            next
+        });
+        lock_probe.wait_until_contended();
+        assert!(matches!(
+            completed_rx.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ));
+
+        drop(binding);
+        completed_rx.recv().unwrap();
+        let next = turnover.join().unwrap().unwrap();
+        assert_eq!(next.generation(), 2);
+        fail_build_attempt(&fixture.output, &owner, next).unwrap();
+    }
 }
