@@ -1794,6 +1794,132 @@ fn identities_bind_policy_action_generation_and_every_fact() {
 }
 
 #[test]
+fn detached_identity_mutation_matrix_fails_closed() {
+    let budgets = MemoryBudgetsV2::default();
+    let baseline_program = program(vec![allocate(16)]);
+    let execution = execute_memory_program_v2(&baseline_program, budgets).unwrap();
+    assert!(
+        execution
+            .verify_identities(&baseline_program, budgets)
+            .unwrap()
+    );
+    let record = execution.records()[0].clone();
+    assert_ne!(record.transition_identity().digest(), &[0; 32]);
+    assert!(
+        record
+            .verify_identity_for(
+                *execution.untrusted_program_identity(),
+                &baseline_program.actions()[0],
+                0,
+                budgets,
+            )
+            .unwrap()
+    );
+    for obligation in &record.obligations {
+        assert_ne!(obligation.obligation_identity().digest(), &[0; 32]);
+        assert!(obligation.verify_identity_in(&record, budgets).unwrap());
+    }
+
+    let alternate_program = program(vec![allocate_at(
+        1,
+        9,
+        AddressSpaceV2::Global,
+        0x2000,
+        16,
+        16,
+        life(0, 100),
+    )]);
+    let alternate = execute_memory_program_v2(&alternate_program, budgets).unwrap();
+    assert!(
+        !execution
+            .verify_identities(&alternate_program, budgets)
+            .unwrap()
+    );
+
+    let original = record.obligations[0].clone();
+    let reject_obligation = |mutated: MemoryObligationV2| {
+        assert!(!mutated.verify_identity_in(&record, budgets).unwrap());
+        let mut detached_record = record.clone();
+        detached_record.obligations[0] = mutated;
+        assert!(
+            !detached_record
+                .verify_identity_for(
+                    *execution.untrusted_program_identity(),
+                    &baseline_program.actions()[0],
+                    0,
+                    budgets,
+                )
+                .unwrap()
+        );
+    };
+
+    let mut mutated = original.clone();
+    mutated.program_identity = *alternate.untrusted_program_identity();
+    reject_obligation(mutated);
+    let mut mutated = original.clone();
+    mutated.action_identity = alternate.records()[0].action_identity;
+    reject_obligation(mutated);
+    let mut mutated = original.clone();
+    mutated.action_index = 1;
+    reject_obligation(mutated);
+    let mut mutated = original.clone();
+    mutated.kind = MemoryObligationKindV2::Aligned;
+    reject_obligation(mutated);
+    let mut mutated = original.clone();
+    mutated.allocation = alloc(2);
+    reject_obligation(mutated);
+    let mut mutated = original.clone();
+    mutated.allocation_generation += 1;
+    reject_obligation(mutated);
+    let mut mutated = original.clone();
+    mutated.range.start += 1;
+    reject_obligation(mutated);
+    let mut mutated = original.clone();
+    mutated.range.len += 1;
+    reject_obligation(mutated);
+    let mut mutated = original.clone();
+    mutated.epoch.0 += 1;
+    reject_obligation(mutated);
+    let mut mutated = original;
+    mutated.basis = ObligationBasisV2::ExplicitCapability;
+    reject_obligation(mutated);
+
+    for mutated_record in [
+        {
+            let mut value = record.clone();
+            value.program_identity = *alternate.untrusted_program_identity();
+            value
+        },
+        {
+            let mut value = record.clone();
+            value.action_identity = alternate.records()[0].action_identity;
+            value
+        },
+        {
+            let mut value = record.clone();
+            value.action_index = 1;
+            value
+        },
+        {
+            let mut value = record.clone();
+            value.obligations.swap(0, 1);
+            value
+        },
+    ] {
+        assert!(
+            !mutated_record
+                .verify_identity_for(
+                    *execution.untrusted_program_identity(),
+                    &baseline_program.actions()[0],
+                    0,
+                    budgets,
+                )
+                .unwrap()
+        );
+    }
+}
+
+#[test]
 fn immutable_hard_caps_and_execution_work_bound_every_scan() {
     for budgets in [
         MemoryBudgetsV2 {
@@ -1931,6 +2057,66 @@ fn truncated_collection_counts_fail_before_reservation() {
         MemoryErrorReasonV2::Decode {
             offset: 83,
             detail: "collection count exceeds remaining input",
+        }
+    );
+}
+
+#[test]
+fn allocation_bomb_inputs_fail_before_internal_growth() {
+    let empty = MemoryProgramV2::new(
+        TargetLayoutV2::gfx942_xnack_minus(),
+        vec![],
+        vec![],
+        MemoryBudgetsV2::default(),
+    )
+    .unwrap();
+    let canonical = empty.canonical_bytes(MemoryBudgetsV2::default()).unwrap();
+
+    let mut count_bomb = canonical.clone();
+    count_bomb[51..55].copy_from_slice(&u32::MAX.to_le_bytes());
+    for _ in 0..128 {
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            MemoryProgramV2::decode_canonical(&count_bomb, MemoryBudgetsV2::default())
+        }))
+        .expect("count bomb panicked")
+        .unwrap_err();
+        assert_eq!(
+            result.reason,
+            MemoryErrorReasonV2::ResourceLimit {
+                resource: "types",
+                actual: u64::from(u32::MAX),
+                max: 4_096,
+            }
+        );
+    }
+
+    let canonical_bomb = vec![0_u8; 16 * 1024 * 1024 + 1];
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        MemoryProgramV2::decode_canonical(&canonical_bomb, MemoryBudgetsV2::default())
+    }))
+    .expect("canonical-size bomb panicked")
+    .unwrap_err();
+    assert_eq!(
+        result.reason,
+        MemoryErrorReasonV2::ResourceLimit {
+            resource: "canonical bytes",
+            actual: 16 * 1024 * 1024 + 1,
+            max: 16 * 1024 * 1024,
+        }
+    );
+
+    let mut target_name_bomb = canonical[..14].to_vec();
+    target_name_bomb[12..14].copy_from_slice(&u16::MAX.to_le_bytes());
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        MemoryProgramV2::decode_canonical(&target_name_bomb, MemoryBudgetsV2::default())
+    }))
+    .expect("target-name bomb panicked")
+    .unwrap_err();
+    assert_eq!(
+        result.reason,
+        MemoryErrorReasonV2::Decode {
+            offset: 14,
+            detail: "target name too long",
         }
     );
 }

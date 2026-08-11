@@ -84,23 +84,50 @@ Mutation-negative fixtures cover each of those boundaries.
 ## Resource and Trust Boundary
 
 All externally sized collections have caller-selected budgets that may only
-narrow immutable hard caps. One cumulative validation/decode counter charges
-target entries, type sorting and map construction, type and edge traversals,
-every validity range, cycle traversal, actions, projections, and collection
-reservation. A separate hard-capped execution counter charges actions,
-allocation/loan/capability scans, recursive validity walks, state merges and
-sorts, initialized/typed-state scans, final liveness, and report traversal.
-Decoder capacities are preflighted against remaining bytes and reserved
-fallibly before parsing elements.
+narrow immutable hard caps. One meter is carried through decode, structural
+validation, canonical re-encoding, byte comparison, and program-identity
+hashing; no phase may reset it. Decode charges every input byte once, each
+collection element before reservation, and every byte compared after
+re-encoding. Validation charges target-name bytes and target entries, every
+type/action/edge/range/projection traversal, cycle scratch initialization and
+stack visits, and canonical output bytes. An in-place sort of `n` items costs
+`n * ceil(log2(n))` (`n` for zero or one item); a sorted-slice lookup costs
+`ceil(log2(n)) + 1`. All additions and products are checked before charging.
+The 1,000-range regression therefore rejects the formerly accepted 1,010-work
+budget, and tests exercise exact success and one-less failure thresholds for
+construction, canonical validation, decode, and execution.
+
+A separate hard-capped execution meter charges initial type/action traversal,
+every action, B-tree lookup or insertion at
+`2 * (ceil(log2(n)) + 1)`, linear allocation/loan/capability scans, recursive
+validity scratch and visits, each retain pass, each state sort using the sort
+formula above, initialized/typed-state lookup, final liveness, and every
+obligation's allocation lookup. Canonical action encoding charges emitted
+bytes. Every identity charges each hashed input byte plus 64 units per SHA-256
+compression block, including padding. Report sizing is a checked fixed-width
+formula plus one visit per transition; the report digest binds the meter value
+after its own work has been charged.
+
+Decoder counts are checked and byte-preflighted before allocation. Target
+strings, decoded vectors, cycle/validity scratch, canonical writers, and the
+transition-record vector reserve fallibly before growth. Canonical validation
+does not clone the program, construct a standard-library map, or use an
+allocating stable sort. `AllocationFailed` describes only those explicit
+fallible reservations. Execution still uses standard-library `BTreeMap` and
+small obligation-vector growth; allocator abort under process-wide OOM is not
+contained or reported as `AllocationFailed`. Allocation-bomb tests establish
+bounded rejection before internal growth, not global OOM recovery.
 
 Domain-separated SHA-256 identities bind codec semantics, the exact target,
 type table, ordered actions including allocation generations, and every policy
-field. Each transition and obligation repeats the program and exact action
-identity; each obligation also carries its action index and allocation
-generation. The report identity additionally binds final epoch, live count,
-execution work, and every transition and obligation field. These identities
-prevent detached-record substitution but remain unauthenticated content
-identities and grant no proof authority.
+field. Each obligation has its own identity over every obligation field and its
+program/action enclosure. Each transition has a distinct identity over every
+transition field, ordered obligation identity, and repeated obligation field.
+The report identity directly repeats every transition and obligation field and
+also binds final epoch, live count, and final execution work. Verification APIs
+recompute obligation-in-transition, transition-for-action, and full
+program-to-report enclosure; detached mutation or substitution is rejected.
+These remain unauthenticated content identities and grant no proof authority.
 
 This foundation does **not** establish:
 

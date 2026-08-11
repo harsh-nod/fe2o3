@@ -26,6 +26,8 @@ const HARD_MAX_VALIDATION_WORK: u64 = 4_000_000;
 const HARD_MAX_EXECUTION_WORK: u64 = 4_000_000;
 const PROGRAM_IDENTITY_DOMAIN: &[u8] = b"fe2o3.memory-proof-v2.program-identity.v2\0";
 const ACTION_IDENTITY_DOMAIN: &[u8] = b"fe2o3.memory-proof-v2.action-identity.v2\0";
+const OBLIGATION_IDENTITY_DOMAIN: &[u8] = b"fe2o3.memory-proof-v2.obligation-identity.v2\0";
+const TRANSITION_IDENTITY_DOMAIN: &[u8] = b"fe2o3.memory-proof-v2.transition-identity.v2\0";
 const REPORT_IDENTITY_DOMAIN: &[u8] = b"fe2o3.memory-proof-v2.report-identity.v2\0";
 const MIN_TARGET_ENTRY_BYTES: usize = 5;
 const MIN_TYPE_BYTES: usize = 21;
@@ -92,6 +94,15 @@ impl WorkMeterV2 {
 
     const fn used(self) -> u64 {
         self.used
+    }
+
+    fn with_used(resource: &'static str, used: u64, max: u64) -> Result<Self, MemoryErrorReasonV2> {
+        enforce(resource, used, max)?;
+        Ok(Self {
+            resource,
+            used,
+            max,
+        })
     }
 }
 
@@ -1149,6 +1160,7 @@ pub enum ObligationBasisV2 {
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct MemoryObligationV2 {
+    obligation_identity: MemoryObligationIdentityV2,
     pub program_identity: UntrustedMemoryProgramIdentityV2,
     pub action_identity: MemoryActionIdentityV2,
     pub action_index: u32,
@@ -1162,6 +1174,7 @@ pub struct MemoryObligationV2 {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TransitionRecordV2 {
+    transition_identity: MemoryTransitionIdentityV2,
     pub program_identity: UntrustedMemoryProgramIdentityV2,
     pub action_identity: MemoryActionIdentityV2,
     pub action_index: u32,
@@ -1185,6 +1198,12 @@ pub struct UntrustedMemoryProgramIdentityV2([u8; 32]);
 pub struct MemoryActionIdentityV2([u8; 32]);
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct MemoryObligationIdentityV2([u8; 32]);
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct MemoryTransitionIdentityV2([u8; 32]);
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct MemoryReportIdentityV2([u8; 32]);
 
 impl UntrustedMemoryProgramIdentityV2 {
@@ -1194,6 +1213,18 @@ impl UntrustedMemoryProgramIdentityV2 {
 }
 
 impl MemoryActionIdentityV2 {
+    pub const fn digest(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl MemoryObligationIdentityV2 {
+    pub const fn digest(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl MemoryTransitionIdentityV2 {
     pub const fn digest(&self) -> &[u8; 32] {
         &self.0
     }
@@ -1239,6 +1270,157 @@ impl MemoryExecutionV2 {
     pub const fn proves_race_freedom(&self) -> bool {
         false
     }
+
+    pub fn verify_identities(
+        &self,
+        program: &MemoryProgramV2,
+        budgets: MemoryBudgetsV2,
+    ) -> Result<bool, MemoryModelErrorV2> {
+        budgets
+            .validate_hard_caps()
+            .map_err(MemoryModelErrorV2::static_error)?;
+        let (canonical, validation_work) = program.canonical_bytes_with_work(budgets)?;
+        let mut validation_meter = WorkMeterV2::with_used(
+            "validation work",
+            validation_work,
+            budgets.max_validation_work,
+        )
+        .map_err(MemoryModelErrorV2::static_error)?;
+        let program_identity =
+            canonical_program_identity_v2(&canonical, budgets, &mut validation_meter)
+                .map_err(MemoryModelErrorV2::static_error)?;
+        if program_identity != self.program_identity
+            || self.records.len() != program.actions.len()
+            || self.live_allocations > budgets.max_allocations as usize
+        {
+            return Ok(false);
+        }
+
+        let mut work = WorkMeterV2::execution(budgets.max_execution_work);
+        for (index, (record, action)) in self.records.iter().zip(&program.actions).enumerate() {
+            let action_identity =
+                canonical_action_identity_v2(program_identity, index, action, &mut work)
+                    .map_err(MemoryModelErrorV2::static_error)?;
+            if !verify_transition_identity_v2(
+                record,
+                program_identity,
+                action_identity,
+                index as u32,
+                &mut work,
+            )
+            .map_err(MemoryModelErrorV2::static_error)?
+            {
+                return Ok(false);
+            }
+        }
+        let report_work = report_identity_work_v2(
+            program_identity,
+            self.final_epoch,
+            self.live_allocations,
+            self.execution_work,
+            &self.records,
+        )
+        .map_err(MemoryModelErrorV2::static_error)?;
+        work.charge(report_work)
+            .map_err(MemoryModelErrorV2::static_error)?;
+        let report_identity = hash_report_identity_v2(
+            program_identity,
+            self.final_epoch,
+            self.live_allocations,
+            self.execution_work,
+            &self.records,
+        )
+        .map_err(MemoryModelErrorV2::static_error)?;
+        Ok(report_identity == self.report_identity)
+    }
+}
+
+impl MemoryObligationV2 {
+    pub const fn obligation_identity(&self) -> &MemoryObligationIdentityV2 {
+        &self.obligation_identity
+    }
+
+    pub fn verify_identity_in(
+        &self,
+        record: &TransitionRecordV2,
+        budgets: MemoryBudgetsV2,
+    ) -> Result<bool, MemoryModelErrorV2> {
+        budgets
+            .validate_hard_caps()
+            .map_err(MemoryModelErrorV2::static_error)?;
+        let mut work = WorkMeterV2::execution(budgets.max_execution_work);
+        verify_obligation_identity_v2(self, record, &mut work)
+            .map_err(MemoryModelErrorV2::static_error)
+    }
+}
+
+impl TransitionRecordV2 {
+    pub const fn transition_identity(&self) -> &MemoryTransitionIdentityV2 {
+        &self.transition_identity
+    }
+
+    pub fn verify_identity_for(
+        &self,
+        program_identity: UntrustedMemoryProgramIdentityV2,
+        action: &MemoryActionV2,
+        action_index: u32,
+        budgets: MemoryBudgetsV2,
+    ) -> Result<bool, MemoryModelErrorV2> {
+        budgets
+            .validate_hard_caps()
+            .map_err(MemoryModelErrorV2::static_error)?;
+        let mut work = WorkMeterV2::execution(budgets.max_execution_work);
+        let action_identity = canonical_action_identity_v2(
+            program_identity,
+            action_index as usize,
+            action,
+            &mut work,
+        )
+        .map_err(MemoryModelErrorV2::static_error)?;
+        verify_transition_identity_v2(
+            self,
+            program_identity,
+            action_identity,
+            action_index,
+            &mut work,
+        )
+        .map_err(MemoryModelErrorV2::static_error)
+    }
+}
+
+fn verify_obligation_identity_v2(
+    obligation: &MemoryObligationV2,
+    record: &TransitionRecordV2,
+    work: &mut WorkMeterV2,
+) -> Result<bool, MemoryErrorReasonV2> {
+    if obligation.program_identity != record.program_identity
+        || obligation.action_identity != record.action_identity
+        || obligation.action_index != record.action_index
+    {
+        return Ok(false);
+    }
+    Ok(canonical_obligation_identity_v2(obligation, work)? == obligation.obligation_identity)
+}
+
+fn verify_transition_identity_v2(
+    record: &TransitionRecordV2,
+    program_identity: UntrustedMemoryProgramIdentityV2,
+    action_identity: MemoryActionIdentityV2,
+    action_index: u32,
+    work: &mut WorkMeterV2,
+) -> Result<bool, MemoryErrorReasonV2> {
+    if record.program_identity != program_identity
+        || record.action_identity != action_identity
+        || record.action_index != action_index
+    {
+        return Ok(false);
+    }
+    for obligation in &record.obligations {
+        if !verify_obligation_identity_v2(obligation, record, work)? {
+            return Ok(false);
+        }
+    }
+    Ok(canonical_transition_identity_v2(record, work)? == record.transition_identity)
 }
 
 #[derive(Clone, Debug)]
@@ -1317,14 +1499,22 @@ pub fn execute_memory_program_v2(
     budgets
         .validate_hard_caps()
         .map_err(MemoryModelErrorV2::static_error)?;
-    let canonical = program.canonical_bytes(budgets)?;
+    let (canonical, validation_work) = program.canonical_bytes_with_work(budgets)?;
     enforce(
         "canonical bytes",
         canonical.len() as u64,
         budgets.max_canonical_bytes as u64,
     )
     .map_err(MemoryModelErrorV2::static_error)?;
-    let program_identity = canonical_program_identity_v2(&canonical, budgets);
+    let mut validation_meter = WorkMeterV2::with_used(
+        "validation work",
+        validation_work,
+        budgets.max_validation_work,
+    )
+    .map_err(MemoryModelErrorV2::static_error)?;
+    let program_identity =
+        canonical_program_identity_v2(&canonical, budgets, &mut validation_meter)
+            .map_err(MemoryModelErrorV2::static_error)?;
     let mut records = Vec::new();
     records
         .try_reserve_exact(program.actions.len())
@@ -1360,11 +1550,45 @@ pub fn execute_memory_program_v2(
                 action_index: Some(index as u32),
                 reason,
             })?;
-        machine.action_identity = canonical_action_identity_v2(program_identity, index, action)?;
-        let obligations = machine.apply(action).map_err(|reason| MemoryModelErrorV2 {
+        machine.action_identity = canonical_action_identity_v2(
+            program_identity,
+            index,
+            action,
+            &mut machine.execution_work,
+        )
+        .map_err(|reason| MemoryModelErrorV2 {
             action_index: Some(index as u32),
             reason,
         })?;
+        let mut obligations = machine.apply(action).map_err(|reason| MemoryModelErrorV2 {
+            action_index: Some(index as u32),
+            reason,
+        })?;
+        let obligation_lookup_work = (obligations.len() as u64)
+            .checked_mul(btree_lookup_work(machine.allocations.len() as u64))
+            .ok_or(MemoryModelErrorV2 {
+                action_index: Some(index as u32),
+                reason: MemoryErrorReasonV2::ResourceLimit {
+                    resource: "execution work",
+                    actual: u64::MAX,
+                    max: budgets.max_execution_work,
+                },
+            })?;
+        machine
+            .charge_work(obligation_lookup_work)
+            .map_err(|reason| MemoryModelErrorV2 {
+                action_index: Some(index as u32),
+                reason,
+            })?;
+        for obligation in &mut obligations {
+            obligation.obligation_identity =
+                canonical_obligation_identity_v2(obligation, &mut machine.execution_work).map_err(
+                    |reason| MemoryModelErrorV2 {
+                        action_index: Some(index as u32),
+                        reason,
+                    },
+                )?;
+        }
         let total = machine
             .obligation_count
             .checked_add(obligations.len() as u64)
@@ -1383,12 +1607,21 @@ pub fn execute_memory_program_v2(
             }
         })?;
         machine.obligation_count = total;
-        machine.records.push(TransitionRecordV2 {
+        let mut record = TransitionRecordV2 {
+            transition_identity: MemoryTransitionIdentityV2([0; 32]),
             program_identity,
             action_identity: machine.action_identity,
             action_index: index as u32,
             obligations,
-        });
+        };
+        record.transition_identity =
+            canonical_transition_identity_v2(&record, &mut machine.execution_work).map_err(
+                |reason| MemoryModelErrorV2 {
+                    action_index: Some(index as u32),
+                    reason,
+                },
+            )?;
+        machine.records.push(record);
     }
     machine
         .charge_work(machine.allocations.len() as u64)
@@ -1409,7 +1642,9 @@ pub fn execute_memory_program_v2(
         live_allocations,
         machine.execution_work.used(),
         &machine.records,
-    );
+        &mut machine.execution_work,
+    )
+    .map_err(MemoryModelErrorV2::static_error)?;
     Ok(MemoryExecutionV2 {
         final_epoch: machine.epoch,
         records: machine.records,
@@ -1584,6 +1819,7 @@ impl MachineV2<'_> {
             self.allocations.len() as u64 + 1,
             self.budgets.max_allocations as u64,
         )?;
+        self.charge_work(btree_lookup_work(self.allocations.len() as u64))?;
         if self.allocations.contains_key(&id) {
             return Err(MemoryErrorReasonV2::DuplicateAllocation(id));
         }
@@ -1628,6 +1864,7 @@ impl MachineV2<'_> {
                 return Err(MemoryErrorReasonV2::OverlappingLiveAllocation);
             }
         }
+        self.charge_work(btree_lookup_work(self.allocations.len() as u64))?;
         self.allocations.insert(
             id,
             AllocationStateV2 {
@@ -1666,7 +1903,16 @@ impl MachineV2<'_> {
         &mut self,
         place: &TypedPlaceV2,
     ) -> Result<ResolvedPlaceV2, MemoryErrorReasonV2> {
-        self.charge_work(place.projections.len() as u64)?;
+        let type_lookups = (place.projections.len() as u64)
+            .checked_add(1)
+            .and_then(|lookups| lookups.checked_mul(binary_lookup_work(self.types.len() as u64)))
+            .ok_or(MemoryErrorReasonV2::ResourceLimit {
+                resource: "execution work",
+                actual: u64::MAX,
+                max: self.budgets.max_execution_work,
+            })?;
+        self.charge_work(place.projections.len() as u64 + type_lookups)?;
+        self.charge_work(btree_lookup_work(self.allocations.len() as u64))?;
         let allocation = self.live_allocation(place.provenance)?;
         let mut offset = place.base_offset;
         let mut ty = lookup_type(self.types, place.root_type)
@@ -1749,10 +1995,12 @@ impl MachineV2<'_> {
             self.loans.len() as u64 + 1,
             self.budgets.max_loans as u64,
         )?;
+        self.charge_work(btree_lookup_work(self.loans.len() as u64))?;
         if self.loans.contains_key(&loan_id) {
             return Err(MemoryErrorReasonV2::DuplicateLoan(loan_id));
         }
         let resolved = self.resolve_place(place)?;
+        self.charge_work(btree_lookup_work(self.allocations.len() as u64))?;
         let allocation = self
             .allocations
             .get(&resolved.allocation)
@@ -1766,6 +2014,7 @@ impl MachineV2<'_> {
             return Err(MemoryErrorReasonV2::InvalidLifetimeOrOwner);
         }
         self.ensure_no_alias_conflict(resolved.allocation, resolved.range, kind, None)?;
+        self.charge_work(btree_lookup_work(self.allocations.len() as u64))?;
         let allocation = self
             .allocations
             .get_mut(&resolved.allocation)
@@ -1775,6 +2024,7 @@ impl MachineV2<'_> {
             .checked_add(1)
             .ok_or(MemoryErrorReasonV2::BorrowEpochOverflow)?;
         let borrow_epoch = allocation.next_borrow_epoch;
+        self.charge_work(btree_lookup_work(self.loans.len() as u64))?;
         self.loans.insert(
             loan_id,
             LoanStateV2 {
@@ -1796,6 +2046,7 @@ impl MachineV2<'_> {
         loan_id: LoanIdV2,
         owner: OwnerIdV2,
     ) -> Result<Vec<MemoryObligationV2>, MemoryErrorReasonV2> {
+        self.charge_work(btree_lookup_work(self.loans.len() as u64))?;
         let loan = self
             .loans
             .get_mut(&loan_id)
@@ -1823,8 +2074,10 @@ impl MachineV2<'_> {
         )?;
         if let Some(value) = write {
             self.ensure_mutable(resolved.allocation)?;
+            self.charge_work(binary_lookup_work(self.types.len() as u64))?;
             let ty = lookup_type(self.types, resolved.ty).expect("resolved type exists");
             validate_typed_value(ty, value, constrained, &mut self.execution_work)?;
+            self.charge_work(btree_lookup_work(self.allocations.len() as u64))?;
             let (initialized_len, typed_len) = {
                 let allocation = self
                     .allocations
@@ -1833,8 +2086,12 @@ impl MachineV2<'_> {
                 (allocation.initialized.len(), allocation.typed.len())
             };
             self.charge_work(
-                initialized_len as u64 + typed_len as u64 + sort_work(typed_len as u64 + 1),
+                initialized_len as u64
+                    + sort_work(initialized_len as u64 + 1)
+                    + typed_len as u64
+                    + sort_work(typed_len as u64 + 1),
             )?;
+            self.charge_work(btree_lookup_work(self.allocations.len() as u64))?;
             let allocation = self
                 .allocations
                 .get_mut(&resolved.allocation)
@@ -1855,6 +2112,7 @@ impl MachineV2<'_> {
             allocation.typed.push((resolved.range, resolved.ty));
             allocation.typed.sort();
         } else {
+            self.charge_work(btree_lookup_work(self.allocations.len() as u64))?;
             let (initialized_len, typed_len) = {
                 let allocation = self
                     .allocations
@@ -1863,6 +2121,7 @@ impl MachineV2<'_> {
                 (allocation.initialized.len(), allocation.typed.len())
             };
             self.charge_work(initialized_len as u64 + u64::from(constrained) * typed_len as u64)?;
+            self.charge_work(btree_lookup_work(self.allocations.len() as u64))?;
             let allocation = self
                 .allocations
                 .get(&resolved.allocation)
@@ -1914,9 +2173,11 @@ impl MachineV2<'_> {
             self.capabilities.len() as u64 + 1,
             self.budgets.max_capabilities as u64,
         )?;
+        self.charge_work(btree_lookup_work(self.capabilities.len() as u64))?;
         if self.capabilities.contains_key(&id) {
             return Err(MemoryErrorReasonV2::DuplicateCapability(id));
         }
+        self.charge_work(btree_lookup_work(self.allocations.len() as u64))?;
         let allocation = self.live_allocation(provenance)?;
         if allocation.owner != owner
             || !(ByteRangeV2 {
@@ -1950,6 +2211,7 @@ impl MachineV2<'_> {
                 }
             ),
         )?;
+        self.charge_work(btree_lookup_work(self.capabilities.len() as u64))?;
         self.capabilities.insert(
             id,
             CapabilityStateV2 {
@@ -1976,6 +2238,7 @@ impl MachineV2<'_> {
         cast_id: Option<CapabilityIdV2>,
         write: bool,
     ) -> Result<Vec<MemoryObligationV2>, MemoryErrorReasonV2> {
+        self.charge_work(btree_lookup_work(self.allocations.len() as u64))?;
         let allocation = self.live_allocation(place.provenance)?;
         let allocation_space = allocation.address_space;
         let range = ByteRangeV2 {
@@ -1998,6 +2261,7 @@ impl MachineV2<'_> {
         }
         self.ensure_pointer_range_representable(allocation, range, place.pointer_address_space)?;
         self.authorize_actor(actor, place.provenance.allocation, range, write)?;
+        self.charge_work(btree_lookup_work(self.capabilities.len() as u64))?;
         let raw = self
             .capabilities
             .get(&raw_id)
@@ -2018,6 +2282,7 @@ impl MachineV2<'_> {
             ObligationBasisV2::ExplicitCapability,
         ));
         if place.pointer_address_space != allocation_space {
+            self.charge_work(btree_lookup_work(self.capabilities.len() as u64))?;
             let cast = self
                 .capabilities
                 .get(&cast_id.ok_or(MemoryErrorReasonV2::MissingAddressSpaceCastCapability)?)
@@ -2041,6 +2306,7 @@ impl MachineV2<'_> {
         }
         if write {
             self.ensure_mutable(place.provenance.allocation)?;
+            self.charge_work(btree_lookup_work(self.allocations.len() as u64))?;
             let (initialized_len, typed_len) = {
                 let allocation = self
                     .allocations
@@ -2048,7 +2314,10 @@ impl MachineV2<'_> {
                     .expect("live allocation exists");
                 (allocation.initialized.len(), allocation.typed.len())
             };
-            self.charge_work(initialized_len as u64 + typed_len as u64)?;
+            self.charge_work(
+                initialized_len as u64 + sort_work(initialized_len as u64 + 1) + typed_len as u64,
+            )?;
+            self.charge_work(btree_lookup_work(self.allocations.len() as u64))?;
             let allocation = self
                 .allocations
                 .get_mut(&place.provenance.allocation)
@@ -2062,6 +2331,7 @@ impl MachineV2<'_> {
                 .typed
                 .retain(|(typed_range, _)| !typed_range.overlaps(range));
         } else {
+            self.charge_work(btree_lookup_work(self.allocations.len() as u64))?;
             let initialized_len = self
                 .allocations
                 .get(&place.provenance.allocation)
@@ -2069,6 +2339,7 @@ impl MachineV2<'_> {
                 .initialized
                 .len();
             self.charge_work(initialized_len as u64)?;
+            self.charge_work(btree_lookup_work(self.allocations.len() as u64))?;
             let allocation = self
                 .allocations
                 .get(&place.provenance.allocation)
@@ -2215,9 +2486,10 @@ impl MachineV2<'_> {
     }
 
     fn raw_physical_range(
-        &self,
+        &mut self,
         place: RawPlaceV2,
     ) -> Result<(PhysicalAliasDomainV2, ByteRangeV2), MemoryErrorReasonV2> {
+        self.charge_work(btree_lookup_work(self.allocations.len() as u64))?;
         let allocation = self.live_allocation(place.provenance)?;
         let relative = ByteRangeV2 {
             start: place.byte_offset,
@@ -2247,6 +2519,7 @@ impl MachineV2<'_> {
         id: AllocationIdV2,
         owner: OwnerIdV2,
     ) -> Result<Vec<MemoryObligationV2>, MemoryErrorReasonV2> {
+        self.charge_work(btree_lookup_work(self.allocations.len() as u64))?;
         let (dead_at, allocation_owner, lifetime, len) = {
             let allocation = self
                 .allocations
@@ -2276,6 +2549,7 @@ impl MachineV2<'_> {
         {
             return Err(MemoryErrorReasonV2::ActiveBorrowAtDeallocation);
         }
+        self.charge_work(btree_lookup_work(self.allocations.len() as u64))?;
         self.allocations
             .get_mut(&id)
             .expect("allocation exists")
@@ -2314,6 +2588,7 @@ impl MachineV2<'_> {
         range: ByteRangeV2,
         write: bool,
     ) -> Result<(), MemoryErrorReasonV2> {
+        self.charge_work(btree_lookup_work(self.allocations.len() as u64))?;
         let state = self
             .allocations
             .get(&allocation)
@@ -2335,6 +2610,7 @@ impl MachineV2<'_> {
                 )
             }
             AccessActorV2::Loan { loan, borrow_epoch } => {
+                self.charge_work(btree_lookup_work(self.loans.len() as u64))?;
                 let loan_state = self
                     .loans
                     .get(&loan)
@@ -2362,7 +2638,8 @@ impl MachineV2<'_> {
         }
     }
 
-    fn ensure_mutable(&self, allocation: AllocationIdV2) -> Result<(), MemoryErrorReasonV2> {
+    fn ensure_mutable(&mut self, allocation: AllocationIdV2) -> Result<(), MemoryErrorReasonV2> {
+        self.charge_work(btree_lookup_work(self.allocations.len() as u64))?;
         let allocation = self
             .allocations
             .get(&allocation)
@@ -2464,6 +2741,7 @@ impl MachineV2<'_> {
             .provenance
             .generation;
         MemoryObligationV2 {
+            obligation_identity: MemoryObligationIdentityV2([0; 32]),
             program_identity: self.program_identity,
             action_identity: self.action_identity,
             action_index: self.action_index,
@@ -2629,6 +2907,10 @@ fn binary_lookup_work(items: u64) -> u64 {
     }
 }
 
+fn btree_lookup_work(items: u64) -> u64 {
+    binary_lookup_work(items).saturating_mul(2)
+}
+
 fn range_set_contains(ranges: &[ByteRangeV2], range: ByteRangeV2) -> bool {
     range.len == 0 || ranges.iter().any(|initialized| initialized.contains(range))
 }
@@ -2636,41 +2918,64 @@ fn range_set_contains(ranges: &[ByteRangeV2], range: ByteRangeV2) -> bool {
 fn canonical_program_identity_v2(
     canonical_program: &[u8],
     budgets: MemoryBudgetsV2,
-) -> UntrustedMemoryProgramIdentityV2 {
-    let mut digest = Sha256V2::new();
-    identity_bytes(&mut digest, PROGRAM_IDENTITY_DOMAIN);
-    identity_u16(&mut digest, VERSION);
-    identity_u32(&mut digest, budgets.max_types);
-    identity_u32(&mut digest, budgets.max_type_edges);
-    identity_u32(&mut digest, budgets.max_validity_ranges);
-    identity_u32(&mut digest, budgets.max_actions);
-    identity_u32(&mut digest, budgets.max_projections_per_place);
-    identity_u32(&mut digest, budgets.max_allocations);
-    identity_u32(&mut digest, budgets.max_loans);
-    identity_u32(&mut digest, budgets.max_capabilities);
-    identity_u32(&mut digest, budgets.max_state_ranges);
-    identity_u32(&mut digest, budgets.max_obligations);
-    identity_u32(&mut digest, budgets.max_canonical_bytes);
-    identity_u64(&mut digest, budgets.max_validation_work);
-    identity_u64(&mut digest, budgets.max_execution_work);
-    identity_bytes(&mut digest, canonical_program);
-    UntrustedMemoryProgramIdentityV2(digest.finalize())
+    work: &mut WorkMeterV2,
+) -> Result<UntrustedMemoryProgramIdentityV2, MemoryErrorReasonV2> {
+    let mut digest = MeteredSha256V2::new(work);
+    identity_bytes(&mut digest, PROGRAM_IDENTITY_DOMAIN)?;
+    identity_u16(&mut digest, VERSION)?;
+    identity_u32(&mut digest, budgets.max_types)?;
+    identity_u32(&mut digest, budgets.max_type_edges)?;
+    identity_u32(&mut digest, budgets.max_validity_ranges)?;
+    identity_u32(&mut digest, budgets.max_actions)?;
+    identity_u32(&mut digest, budgets.max_projections_per_place)?;
+    identity_u32(&mut digest, budgets.max_allocations)?;
+    identity_u32(&mut digest, budgets.max_loans)?;
+    identity_u32(&mut digest, budgets.max_capabilities)?;
+    identity_u32(&mut digest, budgets.max_state_ranges)?;
+    identity_u32(&mut digest, budgets.max_obligations)?;
+    identity_u32(&mut digest, budgets.max_canonical_bytes)?;
+    identity_u64(&mut digest, budgets.max_validation_work)?;
+    identity_u64(&mut digest, budgets.max_execution_work)?;
+    identity_bytes(&mut digest, canonical_program)?;
+    Ok(UntrustedMemoryProgramIdentityV2(digest.finalize()?))
 }
 
 fn canonical_action_identity_v2(
     program_identity: UntrustedMemoryProgramIdentityV2,
     index: usize,
     action: &MemoryActionV2,
-) -> Result<MemoryActionIdentityV2, MemoryModelErrorV2> {
+    work: &mut WorkMeterV2,
+) -> Result<MemoryActionIdentityV2, MemoryErrorReasonV2> {
     let mut writer = WriterV2::new(HARD_MAX_CANONICAL_BYTES);
-    encode_action(&mut writer, action).map_err(MemoryModelErrorV2::static_error)?;
+    encode_action(&mut writer, action)?;
     let canonical_action = writer.finish();
-    let mut digest = Sha256V2::new();
-    identity_bytes(&mut digest, ACTION_IDENTITY_DOMAIN);
-    identity_bytes(&mut digest, program_identity.digest());
-    identity_u64(&mut digest, index as u64);
-    identity_bytes(&mut digest, &canonical_action);
-    Ok(MemoryActionIdentityV2(digest.finalize()))
+    work.charge(canonical_action.len() as u64)?;
+    let mut digest = MeteredSha256V2::new(work);
+    identity_bytes(&mut digest, ACTION_IDENTITY_DOMAIN)?;
+    identity_bytes(&mut digest, program_identity.digest())?;
+    identity_u64(&mut digest, index as u64)?;
+    identity_bytes(&mut digest, &canonical_action)?;
+    Ok(MemoryActionIdentityV2(digest.finalize()?))
+}
+
+fn canonical_obligation_identity_v2(
+    obligation: &MemoryObligationV2,
+    work: &mut WorkMeterV2,
+) -> Result<MemoryObligationIdentityV2, MemoryErrorReasonV2> {
+    let mut digest = MeteredSha256V2::new(work);
+    identity_bytes(&mut digest, OBLIGATION_IDENTITY_DOMAIN)?;
+    identity_obligation_fields(&mut digest, obligation)?;
+    Ok(MemoryObligationIdentityV2(digest.finalize()?))
+}
+
+fn canonical_transition_identity_v2(
+    record: &TransitionRecordV2,
+    work: &mut WorkMeterV2,
+) -> Result<MemoryTransitionIdentityV2, MemoryErrorReasonV2> {
+    let mut digest = MeteredSha256V2::new(work);
+    identity_bytes(&mut digest, TRANSITION_IDENTITY_DOMAIN)?;
+    identity_transition_fields(&mut digest, record)?;
+    Ok(MemoryTransitionIdentityV2(digest.finalize()?))
 }
 
 fn canonical_report_identity_v2(
@@ -2679,33 +2984,124 @@ fn canonical_report_identity_v2(
     live_allocations: usize,
     execution_work: u64,
     records: &[TransitionRecordV2],
-) -> MemoryReportIdentityV2 {
-    let mut digest = Sha256V2::new();
-    identity_bytes(&mut digest, REPORT_IDENTITY_DOMAIN);
-    identity_bytes(&mut digest, program_identity.digest());
-    identity_u64(&mut digest, final_epoch.0);
-    identity_u64(&mut digest, live_allocations as u64);
-    identity_u64(&mut digest, execution_work);
-    identity_u64(&mut digest, records.len() as u64);
-    for record in records {
-        identity_bytes(&mut digest, record.program_identity.digest());
-        identity_bytes(&mut digest, record.action_identity.digest());
-        identity_u32(&mut digest, record.action_index);
-        identity_u64(&mut digest, record.obligations.len() as u64);
-        for obligation in &record.obligations {
-            identity_bytes(&mut digest, obligation.program_identity.digest());
-            identity_bytes(&mut digest, obligation.action_identity.digest());
-            identity_u32(&mut digest, obligation.action_index);
-            identity_u8(&mut digest, obligation_kind_tag(obligation.kind));
-            identity_u32(&mut digest, obligation.allocation.get());
-            identity_u64(&mut digest, obligation.allocation_generation);
-            identity_u64(&mut digest, obligation.range.start);
-            identity_u64(&mut digest, obligation.range.len);
-            identity_u64(&mut digest, obligation.epoch.0);
-            identity_u8(&mut digest, obligation_basis_tag(obligation.basis));
-        }
+    work: &mut WorkMeterV2,
+) -> Result<MemoryReportIdentityV2, MemoryErrorReasonV2> {
+    let hash_work = report_identity_work_v2(
+        program_identity,
+        final_epoch,
+        live_allocations,
+        execution_work,
+        records,
+    )?;
+    if work.used() != execution_work {
+        return Err(MemoryErrorReasonV2::IdentityMismatch {
+            resource: "report work preimage",
+        });
     }
-    MemoryReportIdentityV2(digest.finalize())
+    work.charge(hash_work)?;
+    hash_report_identity_v2(
+        program_identity,
+        final_epoch,
+        live_allocations,
+        work.used(),
+        records,
+    )
+}
+
+fn report_identity_work_v2(
+    _program_identity: UntrustedMemoryProgramIdentityV2,
+    _final_epoch: EpochV2,
+    _live_allocations: usize,
+    _execution_work: u64,
+    records: &[TransitionRecordV2],
+) -> Result<u64, MemoryErrorReasonV2> {
+    const REPORT_FIXED_BYTES: u64 = 8 + REPORT_IDENTITY_DOMAIN.len() as u64 + 40 + 32;
+    const TRANSITION_FIXED_BYTES: u64 = 40 + 40 + 40 + 4 + 8;
+    const OBLIGATION_BYTES: u64 = 40 + 40 + 40 + 4 + 1 + 4 + 8 + 8 + 8 + 8 + 1;
+    let mut message_bytes = REPORT_FIXED_BYTES;
+    for record in records {
+        message_bytes = message_bytes.checked_add(TRANSITION_FIXED_BYTES).ok_or(
+            MemoryErrorReasonV2::ResourceLimit {
+                resource: "identity work",
+                actual: u64::MAX,
+                max: HARD_MAX_EXECUTION_WORK,
+            },
+        )?;
+        message_bytes = message_bytes
+            .checked_add(
+                (record.obligations.len() as u64)
+                    .checked_mul(OBLIGATION_BYTES)
+                    .ok_or(MemoryErrorReasonV2::ResourceLimit {
+                        resource: "identity work",
+                        actual: u64::MAX,
+                        max: HARD_MAX_EXECUTION_WORK,
+                    })?,
+            )
+            .ok_or(MemoryErrorReasonV2::ResourceLimit {
+                resource: "identity work",
+                actual: u64::MAX,
+                max: HARD_MAX_EXECUTION_WORK,
+            })?;
+    }
+    identity_hash_work_v2(message_bytes)?
+        .checked_add(records.len() as u64)
+        .ok_or(MemoryErrorReasonV2::ResourceLimit {
+            resource: "identity work",
+            actual: u64::MAX,
+            max: HARD_MAX_EXECUTION_WORK,
+        })
+}
+
+fn hash_report_identity_v2(
+    program_identity: UntrustedMemoryProgramIdentityV2,
+    final_epoch: EpochV2,
+    live_allocations: usize,
+    execution_work: u64,
+    records: &[TransitionRecordV2],
+) -> Result<MemoryReportIdentityV2, MemoryErrorReasonV2> {
+    let mut digest = UnmeteredSha256V2::new();
+    identity_bytes(&mut digest, REPORT_IDENTITY_DOMAIN)?;
+    identity_bytes(&mut digest, program_identity.digest())?;
+    identity_u64(&mut digest, final_epoch.0)?;
+    identity_u64(&mut digest, live_allocations as u64)?;
+    identity_u64(&mut digest, execution_work)?;
+    identity_u64(&mut digest, records.len() as u64)?;
+    for record in records {
+        identity_bytes(&mut digest, record.transition_identity.digest())?;
+        identity_transition_fields(&mut digest, record)?;
+    }
+    Ok(MemoryReportIdentityV2(digest.finalize()))
+}
+
+fn identity_obligation_fields<D: IdentitySinkV2>(
+    digest: &mut D,
+    obligation: &MemoryObligationV2,
+) -> Result<(), MemoryErrorReasonV2> {
+    identity_bytes(digest, obligation.program_identity.digest())?;
+    identity_bytes(digest, obligation.action_identity.digest())?;
+    identity_u32(digest, obligation.action_index)?;
+    identity_u8(digest, obligation_kind_tag(obligation.kind))?;
+    identity_u32(digest, obligation.allocation.get())?;
+    identity_u64(digest, obligation.allocation_generation)?;
+    identity_u64(digest, obligation.range.start)?;
+    identity_u64(digest, obligation.range.len)?;
+    identity_u64(digest, obligation.epoch.0)?;
+    identity_u8(digest, obligation_basis_tag(obligation.basis))
+}
+
+fn identity_transition_fields<D: IdentitySinkV2>(
+    digest: &mut D,
+    record: &TransitionRecordV2,
+) -> Result<(), MemoryErrorReasonV2> {
+    identity_bytes(digest, record.program_identity.digest())?;
+    identity_bytes(digest, record.action_identity.digest())?;
+    identity_u32(digest, record.action_index)?;
+    identity_u64(digest, record.obligations.len() as u64)?;
+    for obligation in &record.obligations {
+        identity_bytes(digest, obligation.obligation_identity.digest())?;
+        identity_obligation_fields(digest, obligation)?;
+    }
+    Ok(())
 }
 
 const fn obligation_kind_tag(kind: MemoryObligationKindV2) -> u8 {
@@ -2735,25 +3131,131 @@ const fn obligation_basis_tag(basis: ObligationBasisV2) -> u8 {
     }
 }
 
-fn identity_bytes(digest: &mut Sha256V2, bytes: &[u8]) {
-    identity_u64(digest, bytes.len() as u64);
-    digest.update(bytes);
+trait IdentitySinkV2 {
+    fn update(&mut self, bytes: &[u8]) -> Result<(), MemoryErrorReasonV2>;
 }
 
-fn identity_u8(digest: &mut Sha256V2, value: u8) {
-    digest.update(&[value]);
+fn identity_hash_work_v2(message_bytes: u64) -> Result<u64, MemoryErrorReasonV2> {
+    let blocks = message_bytes
+        .checked_add(9)
+        .map(|bytes| bytes.div_ceil(64))
+        .ok_or(MemoryErrorReasonV2::ResourceLimit {
+            resource: "identity work",
+            actual: u64::MAX,
+            max: HARD_MAX_EXECUTION_WORK,
+        })?;
+    message_bytes
+        .checked_add(
+            blocks
+                .checked_mul(64)
+                .ok_or(MemoryErrorReasonV2::ResourceLimit {
+                    resource: "identity work",
+                    actual: u64::MAX,
+                    max: HARD_MAX_EXECUTION_WORK,
+                })?,
+        )
+        .ok_or(MemoryErrorReasonV2::ResourceLimit {
+            resource: "identity work",
+            actual: u64::MAX,
+            max: HARD_MAX_EXECUTION_WORK,
+        })
 }
 
-fn identity_u16(digest: &mut Sha256V2, value: u16) {
-    digest.update(&value.to_le_bytes());
+struct MeteredSha256V2<'a> {
+    digest: Sha256V2,
+    work: &'a mut WorkMeterV2,
+    message_bytes: u64,
 }
 
-fn identity_u32(digest: &mut Sha256V2, value: u32) {
-    digest.update(&value.to_le_bytes());
+impl<'a> MeteredSha256V2<'a> {
+    fn new(work: &'a mut WorkMeterV2) -> Self {
+        Self {
+            digest: Sha256V2::new(),
+            work,
+            message_bytes: 0,
+        }
+    }
+
+    fn finalize(self) -> Result<[u8; 32], MemoryErrorReasonV2> {
+        let blocks = self
+            .message_bytes
+            .checked_add(9)
+            .and_then(|bytes| bytes.checked_add(63))
+            .map(|bytes| bytes / 64)
+            .ok_or(MemoryErrorReasonV2::ResourceLimit {
+                resource: self.work.resource,
+                actual: u64::MAX,
+                max: self.work.max,
+            })?;
+        self.work.charge(
+            blocks
+                .checked_mul(64)
+                .ok_or(MemoryErrorReasonV2::ResourceLimit {
+                    resource: self.work.resource,
+                    actual: u64::MAX,
+                    max: self.work.max,
+                })?,
+        )?;
+        Ok(self.digest.finalize())
+    }
 }
 
-fn identity_u64(digest: &mut Sha256V2, value: u64) {
-    digest.update(&value.to_le_bytes());
+impl IdentitySinkV2 for MeteredSha256V2<'_> {
+    fn update(&mut self, bytes: &[u8]) -> Result<(), MemoryErrorReasonV2> {
+        self.work.charge(bytes.len() as u64)?;
+        self.message_bytes = self.message_bytes.checked_add(bytes.len() as u64).ok_or(
+            MemoryErrorReasonV2::ResourceLimit {
+                resource: self.work.resource,
+                actual: u64::MAX,
+                max: self.work.max,
+            },
+        )?;
+        self.digest.update(bytes);
+        Ok(())
+    }
+}
+
+struct UnmeteredSha256V2(Sha256V2);
+
+impl UnmeteredSha256V2 {
+    const fn new() -> Self {
+        Self(Sha256V2::new())
+    }
+
+    fn finalize(self) -> [u8; 32] {
+        self.0.finalize()
+    }
+}
+
+impl IdentitySinkV2 for UnmeteredSha256V2 {
+    fn update(&mut self, bytes: &[u8]) -> Result<(), MemoryErrorReasonV2> {
+        self.0.update(bytes);
+        Ok(())
+    }
+}
+
+fn identity_bytes<D: IdentitySinkV2>(
+    digest: &mut D,
+    bytes: &[u8],
+) -> Result<(), MemoryErrorReasonV2> {
+    identity_u64(digest, bytes.len() as u64)?;
+    digest.update(bytes)
+}
+
+fn identity_u8<D: IdentitySinkV2>(digest: &mut D, value: u8) -> Result<(), MemoryErrorReasonV2> {
+    digest.update(&[value])
+}
+
+fn identity_u16<D: IdentitySinkV2>(digest: &mut D, value: u16) -> Result<(), MemoryErrorReasonV2> {
+    digest.update(&value.to_le_bytes())
+}
+
+fn identity_u32<D: IdentitySinkV2>(digest: &mut D, value: u32) -> Result<(), MemoryErrorReasonV2> {
+    digest.update(&value.to_le_bytes())
+}
+
+fn identity_u64<D: IdentitySinkV2>(digest: &mut D, value: u64) -> Result<(), MemoryErrorReasonV2> {
+    digest.update(&value.to_le_bytes())
 }
 
 struct Sha256V2 {
@@ -2922,6 +3424,9 @@ pub enum MemoryErrorReasonV2 {
         max: u64,
     },
     AllocationFailed {
+        resource: &'static str,
+    },
+    IdentityMismatch {
         resource: &'static str,
     },
     DuplicateType,
