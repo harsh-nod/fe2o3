@@ -43,8 +43,8 @@ PATH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/+:-]{0,511}$")
 HEX_RE = re.compile(r"^(?:[0-9a-f]{2})+$")
 DEFAULT_LOCK = Path("/run/lock/fe2o3/mi300x-gfx942-evidence.lock")
 ARCHIVE_INDEX_RELATIVE = "archive-index-v1.tsv"
-PUBLISHER_RECEIPT_RELATIVE = "publisher-receipt-v1.tsv"
-PUBLISHER_CONTRACT = "external-protected-publisher-v1"
+PUBLISHER_RECEIPT_RELATIVE = "publisher-receipt-v2.tsv"
+PUBLISHER_CONTRACT = "external-protected-portable-archive-v2"
 MAX_PUBLISHER_RECEIPT_LIFETIME = 24 * 60 * 60
 PUBLISHER_RECEIPT_CLOCK_SKEW = 5 * 60
 FS_IOC_GETFLAGS = 0x80086601
@@ -961,7 +961,19 @@ def open_absolute_directory(path: Path, label: str) -> tuple[Path, int]:
         raise
 
 
-MAX_ARCHIVE_STAGING_LEASES = 64
+MAX_ARCHIVE_STAGING_ENTRIES = 128
+ARCHIVE_GLOBAL_LOCK_NAME = ".fe2o3-publisher.lock"
+ARCHIVE_STAGING_ENTRY_RE = re.compile(
+    r"^\.fe2o3-archive-[0-9a-f]{32}\.(?:lease|stage)$"
+)
+ARCHIVE_PROVISIONAL_RE = re.compile(
+    r"^(\.fe2o3-archive-[0-9a-f]{32}\.lease)\.init\."
+    r"([0-9]+)\.([0-9]+)\.([0-9]+)\.([0-9a-f]{64})$"
+)
+
+
+def archive_lease_phase(_phase: str) -> None:
+    """Test hook for hard-crash coverage; production execution is a no-op."""
 
 
 def process_start_time(pid: int) -> str | None:
@@ -1046,6 +1058,120 @@ def parse_staging_lease(raw: bytes) -> dict[str, str]:
     return values
 
 
+def acquire_archive_parent_lock(parent_fd: int) -> int:
+    parent = os.fstat(parent_fd)
+    descriptor = os.open(
+        ARCHIVE_GLOBAL_LOCK_NAME,
+        os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW,
+        0o600,
+        dir_fd=parent_fd,
+    )
+    try:
+        info = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_nlink != 1
+            or info.st_uid != os.geteuid()
+            or info.st_dev != parent.st_dev
+        ):
+            fail("archive publisher global lock has an unsafe identity")
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        reopened = openat2_fd(
+            parent_fd,
+            ARCHIVE_GLOBAL_LOCK_NAME,
+            os.O_RDONLY,
+            RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV,
+        )
+        try:
+            reopened_info = os.fstat(reopened)
+            if (reopened_info.st_dev, reopened_info.st_ino) != (
+                info.st_dev,
+                info.st_ino,
+            ):
+                fail("archive publisher global lock dirent changed")
+        finally:
+            os.close(reopened)
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def archive_staging_entries(parent_fd: int) -> list[str]:
+    entries = sorted(
+        name for name in os.listdir(parent_fd) if name.startswith(".fe2o3-archive-")
+    )
+    if len(entries) > MAX_ARCHIVE_STAGING_ENTRIES:
+        fail("evidence archive staging entries exceed the parent bound")
+    for name in entries:
+        if not (
+            ARCHIVE_STAGING_ENTRY_RE.fullmatch(name)
+            or ARCHIVE_PROVISIONAL_RE.fullmatch(name)
+        ):
+            fail(f"unrecognized evidence archive staging entry: {name}")
+    return entries
+
+
+def retained_dirent_matches(
+    parent_fd: int, name: str, descriptor: int, label: str
+) -> None:
+    expected = os.fstat(descriptor)
+    try:
+        reopened = openat2_fd(
+            parent_fd,
+            name,
+            os.O_RDONLY | os.O_NONBLOCK,
+            RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV,
+        )
+    except OSError as error:
+        fail(f"{label} dirent changed: {error}")
+    try:
+        actual = os.fstat(reopened)
+        if (actual.st_dev, actual.st_ino) != (expected.st_dev, expected.st_ino):
+            fail(f"{label} dirent changed")
+    finally:
+        os.close(reopened)
+
+
+def recover_provisional_staging_leases(
+    parent_fd: int, canonical_lease_name: str
+) -> None:
+    prefix = f"{canonical_lease_name}.init."
+    for name in archive_staging_entries(parent_fd):
+        if not name.startswith(prefix):
+            continue
+        match = ARCHIVE_PROVISIONAL_RE.fullmatch(name)
+        if match is None or match.group(1) != canonical_lease_name:
+            fail("archive provisional staging lease name is malformed")
+        uid, pid_text, start, _challenge = match.groups()[1:]
+        if int(uid) != os.geteuid() or int(pid_text) <= 0:
+            fail("archive provisional staging lease owner is invalid")
+        if not publisher_process_is_dead(int(pid_text), start):
+            fail("evidence archive provisional staging lease is busy")
+        descriptor = openat2_fd(
+            parent_fd,
+            name,
+            os.O_RDONLY,
+            RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV,
+        )
+        try:
+            info = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_nlink != 1
+                or info.st_uid != os.geteuid()
+                or info.st_size > 4096
+            ):
+                fail("archive provisional staging lease has an unsafe identity")
+            retained_dirent_matches(
+                parent_fd, name, descriptor, "archive provisional staging lease"
+            )
+            os.unlink(name, dir_fd=parent_fd)
+        finally:
+            os.close(descriptor)
+    fsync_checked(parent_fd, "recovered provisional archive staging leases")
+
+
 def recover_archive_staging_lease(
     parent_fd: int,
     lease_name: str,
@@ -1101,12 +1227,19 @@ def recover_archive_staging_lease(
             RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV,
         )
     except OSError as error:
+        if error.errno == errno.ENOENT:
+            return
         fail(f"existing archive staging lease is unsafe: {error}")
     try:
         lease_info = os.fstat(lease_fd)
-        if lease_info.st_uid != os.geteuid():
+        if (
+            not stat.S_ISREG(lease_info.st_mode)
+            or lease_info.st_nlink != 1
+            or lease_info.st_uid != os.geteuid()
+        ):
             fail("existing archive staging lease has foreign ownership")
-        values = parse_staging_lease(read_small_fd(lease_fd, 4096, "archive staging lease"))
+        lease_raw = read_small_fd(lease_fd, 4096, "archive staging lease")
+        values = parse_staging_lease(lease_raw)
         if (
             values["owner_uid"] != str(os.geteuid())
             or values["destination_name"] != destination_name
@@ -1118,27 +1251,42 @@ def recover_archive_staging_lease(
             fail("archive staging lease owner PID is invalid")
         if not publisher_process_is_dead(pid, values["owner_start_time"]):
             fail("evidence archive staging lease is busy")
+        try:
+            staging_fd = openat2_fd(
+                parent_fd,
+                staging_name,
+                os.O_RDONLY | os.O_DIRECTORY,
+                RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV,
+            )
+        except OSError as error:
+            if error.errno != errno.ENOENT:
+                fail(f"existing archive staging tree is unsafe: {error}")
+        else:
+            try:
+                staging_identity = os.fstat(staging_fd)
+                remove_directory(staging_fd)
+                retained_dirent_matches(
+                    parent_fd, staging_name, staging_fd, "archive staging tree"
+                )
+                if (staging_identity.st_dev, staging_identity.st_ino) != (
+                    os.fstat(staging_fd).st_dev,
+                    os.fstat(staging_fd).st_ino,
+                ):
+                    fail("archive staging tree changed during recovery")
+                os.rmdir(staging_name, dir_fd=parent_fd)
+            finally:
+                os.close(staging_fd)
+        if archive_file_identity(os.fstat(lease_fd), sha256_fd(lease_fd)) != (
+            archive_file_identity(lease_info, sha256_bytes(lease_raw))
+        ):
+            fail("archive staging lease changed during recovery")
+        retained_dirent_matches(
+            parent_fd, lease_name, lease_fd, "archive staging lease"
+        )
+        os.unlink(lease_name, dir_fd=parent_fd)
+        fsync_checked(parent_fd, "recovered archive staging lease parent")
     finally:
         os.close(lease_fd)
-
-    try:
-        staging_fd = openat2_fd(
-            parent_fd,
-            staging_name,
-            os.O_RDONLY | os.O_DIRECTORY,
-            RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV,
-        )
-    except OSError as error:
-        if error.errno != errno.ENOENT:
-            fail(f"existing archive staging tree is unsafe: {error}")
-    else:
-        try:
-            remove_directory(staging_fd)
-        finally:
-            os.close(staging_fd)
-        os.rmdir(staging_name, dir_fd=parent_fd)
-    os.unlink(lease_name, dir_fd=parent_fd)
-    fsync_checked(parent_fd, "recovered archive staging lease parent")
 
 
 class ArchiveDestination:
@@ -1166,6 +1314,8 @@ class ArchiveDestination:
         self.lease_fd = -1
         self.lease_owned = False
         self.lease_identity: ArchiveFileIdentity | None = None
+        self.provisional_fd = -1
+        self.provisional_name = ""
         self.directory_fds: dict[str, int] = {}
         self.file_fds: dict[str, int] = {}
         self.file_identities: dict[str, ArchiveFileIdentity] = {}
@@ -1174,31 +1324,11 @@ class ArchiveDestination:
         self.parent_identity = (parent_info.st_dev, parent_info.st_ino)
         self.published = False
         try:
-            lease_entries = [
-                name
-                for name in os.listdir(self.parent_fd)
-                if name.startswith(".fe2o3-archive-")
-                and (name.endswith(".lease") or name.endswith(".stage"))
-            ]
-            if len(lease_entries) > MAX_ARCHIVE_STAGING_LEASES * 2:
-                fail("evidence archive staging leases exceed the parent bound")
-            challenge = secrets.token_hex(32)
-            lease_value = staging_lease_bytes(
-                self.destination_name, manifest_digest, challenge
-            )
+            lock_fd = acquire_archive_parent_lock(self.parent_fd)
             try:
-                self.lease_fd = os.open(
-                    self.lease_name,
-                    os.O_RDWR
-                    | os.O_CREAT
-                    | os.O_EXCL
-                    | os.O_CLOEXEC
-                    | os.O_NOFOLLOW,
-                    0o600,
-                    dir_fd=self.parent_fd,
+                recover_provisional_staging_leases(
+                    self.parent_fd, self.lease_name
                 )
-                self.lease_owned = True
-            except FileExistsError:
                 recover_archive_staging_lease(
                     self.parent_fd,
                     self.lease_name,
@@ -1206,8 +1336,25 @@ class ArchiveDestination:
                     self.destination_name,
                     manifest_digest,
                 )
-                self.lease_fd = os.open(
-                    self.lease_name,
+                entries = archive_staging_entries(self.parent_fd)
+                if self.staging_name in entries:
+                    fail("unleased evidence archive staging tree already exists")
+                if len(entries) + 2 > MAX_ARCHIVE_STAGING_ENTRIES:
+                    fail("evidence archive staging entries exceed the parent bound")
+
+                challenge = secrets.token_hex(32)
+                start = process_start_time(os.getpid())
+                if start is None:
+                    fail("cannot establish publisher process start time")
+                self.provisional_name = (
+                    f"{self.lease_name}.init.{os.geteuid()}.{os.getpid()}."
+                    f"{start}.{challenge}"
+                )
+                lease_value = staging_lease_bytes(
+                    self.destination_name, manifest_digest, challenge
+                )
+                self.provisional_fd = os.open(
+                    self.provisional_name,
                     os.O_RDWR
                     | os.O_CREAT
                     | os.O_EXCL
@@ -1216,28 +1363,44 @@ class ArchiveDestination:
                     0o600,
                     dir_fd=self.parent_fd,
                 )
+                archive_lease_phase("provisional-created")
+                view = memoryview(lease_value)
+                while view:
+                    count = os.write(self.provisional_fd, view)
+                    if count <= 0:
+                        fail("short archive staging lease write")
+                    view = view[count:]
+                fsync_checked(self.provisional_fd, "provisional archive staging lease")
+                archive_lease_phase("provisional-written")
+                rename_noreplace_at(
+                    self.parent_fd,
+                    self.provisional_name,
+                    self.lease_name,
+                    "archive staging lease unexpectedly exists",
+                )
                 self.lease_owned = True
-            view = memoryview(lease_value)
-            while view:
-                count = os.write(self.lease_fd, view)
-                if count <= 0:
-                    fail("short archive staging lease write")
-                view = view[count:]
-            fsync_checked(self.lease_fd, "archive staging lease")
-            self.lease_identity = archive_file_identity(
-                os.fstat(self.lease_fd), sha256_bytes(lease_value)
-            )
-            try:
+                self.lease_fd = self.provisional_fd
+                self.provisional_fd = -1
+                self.provisional_name = ""
+                self.lease_identity = archive_file_identity(
+                    os.fstat(self.lease_fd), sha256_bytes(lease_value)
+                )
+                archive_lease_phase("lease-renamed")
+                fsync_checked(self.parent_fd, "published archive staging lease")
+                archive_lease_phase("lease-published")
                 os.mkdir(self.staging_name, 0o700, dir_fd=self.parent_fd)
-            except FileExistsError:
-                fail("unleased evidence archive staging tree already exists")
-            self.staging_owned = True
-            self.staging_fd = openat2_fd(
-                self.parent_fd,
-                self.staging_name,
-                os.O_RDONLY | os.O_DIRECTORY,
-                RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV,
-            )
+                self.staging_owned = True
+                archive_lease_phase("staging-mkdir")
+                fsync_checked(self.parent_fd, "created archive staging tree")
+                archive_lease_phase("staging-created")
+                self.staging_fd = openat2_fd(
+                    self.parent_fd,
+                    self.staging_name,
+                    os.O_RDONLY | os.O_DIRECTORY,
+                    RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV,
+                )
+            finally:
+                os.close(lock_fd)
         except BaseException:
             self.close()
             raise
@@ -1456,34 +1619,33 @@ class ArchiveDestination:
         finally:
             os.close(requested_parent)
 
-    def release_lease(self) -> None:
+    def release_lease(self, *, parent_locked: bool = False) -> None:
         if self.lease_fd < 0 or self.lease_identity is None:
             return
-        expected = self.lease_identity
-        before = os.fstat(self.lease_fd)
-        digest = sha256_fd(self.lease_fd)
-        after = os.fstat(self.lease_fd)
-        actual = archive_file_identity(after, digest)
-        if archive_file_identity(before, digest) != actual or actual != expected:
-            fail("archive staging lease changed while held")
-        reopened = openat2_fd(
-            self.parent_fd,
-            self.lease_name,
-            os.O_RDONLY,
-            RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV,
-        )
+        lock_fd = -1 if parent_locked else acquire_archive_parent_lock(self.parent_fd)
         try:
-            info = os.fstat(reopened)
-            if (info.st_dev, info.st_ino) != (expected.device, expected.inode):
-                fail("archive staging lease dirent changed while held")
+            expected = self.lease_identity
+            before = os.fstat(self.lease_fd)
+            digest = sha256_fd(self.lease_fd)
+            after = os.fstat(self.lease_fd)
+            actual = archive_file_identity(after, digest)
+            if archive_file_identity(before, digest) != actual or actual != expected:
+                fail("archive staging lease changed while held")
+            retained_dirent_matches(
+                self.parent_fd,
+                self.lease_name,
+                self.lease_fd,
+                "archive staging lease",
+            )
+            os.unlink(self.lease_name, dir_fd=self.parent_fd)
+            fsync_checked(self.parent_fd, "released archive staging lease parent")
+            os.close(self.lease_fd)
+            self.lease_fd = -1
+            self.lease_identity = None
+            self.lease_owned = False
         finally:
-            os.close(reopened)
-        os.unlink(self.lease_name, dir_fd=self.parent_fd)
-        fsync_checked(self.parent_fd, "released archive staging lease parent")
-        os.close(self.lease_fd)
-        self.lease_fd = -1
-        self.lease_identity = None
-        self.lease_owned = False
+            if lock_fd >= 0:
+                os.close(lock_fd)
 
     def publish(self) -> None:
         self.validate_sealed_namespace()
@@ -1530,25 +1692,50 @@ class ArchiveDestination:
         if self.staging_fd >= 0:
             os.close(self.staging_fd)
             self.staging_fd = -1
-        if (
-            getattr(self, "parent_fd", -1) >= 0
-            and self.staging_name
-            and self.staging_owned
-            and not self.published
+        if getattr(self, "parent_fd", -1) >= 0 and (
+            (self.staging_name and self.staging_owned and not self.published)
+            or self.provisional_fd >= 0
+            or self.lease_fd >= 0
         ):
-            remove_tree_at(self.parent_fd, self.staging_name)
-            fsync_checked(self.parent_fd, "cleaned archive staging parent")
-            self.staging_owned = False
-        if getattr(self, "lease_fd", -1) >= 0:
-            if self.lease_identity is not None:
-                self.release_lease()
-            else:
-                os.close(self.lease_fd)
-                self.lease_fd = -1
-                if self.lease_owned:
-                    os.unlink(self.lease_name, dir_fd=self.parent_fd)
-                    fsync_checked(self.parent_fd, "released incomplete staging lease")
-                self.lease_owned = False
+            lock_fd = acquire_archive_parent_lock(self.parent_fd)
+            try:
+                if self.staging_name and self.staging_owned and not self.published:
+                    remove_tree_at(self.parent_fd, self.staging_name)
+                    fsync_checked(self.parent_fd, "cleaned archive staging parent")
+                    self.staging_owned = False
+                if self.provisional_fd >= 0:
+                    retained_dirent_matches(
+                        self.parent_fd,
+                        self.provisional_name,
+                        self.provisional_fd,
+                        "provisional archive staging lease",
+                    )
+                    os.unlink(self.provisional_name, dir_fd=self.parent_fd)
+                    fsync_checked(
+                        self.parent_fd, "released provisional archive staging lease"
+                    )
+                    os.close(self.provisional_fd)
+                    self.provisional_fd = -1
+                    self.provisional_name = ""
+                if self.lease_fd >= 0:
+                    if self.lease_identity is not None:
+                        self.release_lease(parent_locked=True)
+                    else:
+                        retained_dirent_matches(
+                            self.parent_fd,
+                            self.lease_name,
+                            self.lease_fd,
+                            "incomplete archive staging lease",
+                        )
+                        os.unlink(self.lease_name, dir_fd=self.parent_fd)
+                        fsync_checked(
+                            self.parent_fd, "released incomplete staging lease"
+                        )
+                        os.close(self.lease_fd)
+                        self.lease_fd = -1
+                        self.lease_owned = False
+            finally:
+                os.close(lock_fd)
         if getattr(self, "parent_fd", -1) >= 0:
             os.close(self.parent_fd)
             self.parent_fd = -1
@@ -2598,33 +2785,36 @@ def parse_manifest(
 @dataclass(frozen=True)
 class PublisherReceipt:
     publisher_identity: str
-    destination_name: str
-    parent_identity: tuple[int, int]
-    root_identity: tuple[int, int]
+    logical_destination: str
     archive_identity: str
-    nonce: str
+    default_tip: str
+    candidate_head: str
+    challenge: str
     issued_at: int
     expires_at: int
     domain: str
 
 
-def publisher_archive_identity(
-    root: ArchiveSnapshot,
-    manifest_relative: str,
-    manifest: PromotionManifest,
-    closure: set[str],
-) -> str:
+def publisher_archive_identity(root: ArchiveSnapshot) -> str:
+    for relative in sorted(root.records):
+        root.validate(relative)
+    with ArchiveSnapshot(
+        root.root, require_immutable=False, root_fd=root.root_fd
+    ) as current:
+        if current.records != root.records or current.directories != root.directories:
+            fail("publisher archive tree changed after authentication")
+        return publisher_archive_identity_records(current)
+
+
+def publisher_archive_identity_records(root: ArchiveSnapshot) -> str:
     lines = [
-        "publisher_archive_identity_schema_version\t1",
-        f"manifest_path\t{manifest_relative}",
-        f"manifest_sha256\t{archive_digest(root, manifest_relative)}",
-        f"source_commit\t{manifest.source}",
-        f"source_tree\t{manifest.tree}",
-        f"target\t{manifest.target}",
-        f"hardware_lane\t{manifest.lane}",
-        f"file_count\t{len(closure)}",
+        "publisher_archive_identity_schema_version\t2",
+        f"directory_count\t{len(root.directories)}",
     ]
-    for index, relative in enumerate(sorted(closure)):
+    for index, relative in enumerate(sorted(root.directories)):
+        lines.append(f"directory\t{index:04d}\t{relative}")
+    lines.append(f"file_count\t{len(root.records)}")
+    for index, relative in enumerate(sorted(root.records)):
         size, digest = root.records[relative]
         lines.append(f"file\t{index:04d}\t{relative}\t{size}\t{digest}")
     return sha256_bytes(("\n".join(lines) + "\n").encode("ascii"))
@@ -2633,33 +2823,43 @@ def publisher_archive_identity(
 def parse_publisher_receipt(
     repo: Path,
     root: ArchiveSnapshot,
+    receipt_root: ArchiveSnapshot,
     manifest_relative: str,
     manifest: PromotionManifest,
     trust: TrustPolicy,
     *,
+    expected_logical_destination: str,
+    expected_baseline_status_sha256: str,
+    expected_candidate_status_sha256: str,
+    expected_default_tip: str,
+    expected_candidate_head: str,
+    expected_challenge: str,
     require_fresh: bool,
     expected_domain: str = "production",
 ) -> PublisherReceipt:
     if trust.domain != expected_domain:
         fail(f"publisher contract receipt requires {expected_domain}-domain trust")
+    if (
+        set(receipt_root.records) != {PUBLISHER_RECEIPT_RELATIVE}
+        or receipt_root.directories
+    ):
+        fail("publisher receipt transport must contain exactly the receipt file")
     rows, _, _ = verify_signed(
-        root, PUBLISHER_RECEIPT_RELATIVE, trust, "publisher"
+        receipt_root, PUBLISHER_RECEIPT_RELATIVE, trust, "publisher"
     )
-    _, _, signed_rows = archive_read_raw(root, PUBLISHER_RECEIPT_RELATIVE)
+    _, _, signed_rows = archive_read_raw(
+        receipt_root, PUBLISHER_RECEIPT_RELATIVE
+    )
     signing_key_id = signed_rows[-2][1]
     cursor = Cursor(rows, "publisher contract receipt")
-    if cursor.scalar("publisher_contract_receipt_schema_version") != "1":
-        fail("publisher contract receipt schema must be 1")
+    if cursor.scalar("publisher_contract_receipt_schema_version") != "2":
+        fail("publisher contract receipt schema must be 2")
     publisher_identity = cursor.scalar("publisher_identity")
     if cursor.scalar("publisher_key_role") != "publisher":
         fail("publisher contract receipt has the wrong key role")
     if cursor.scalar("destination_contract") != PUBLISHER_CONTRACT:
         fail("publisher contract receipt has an unsupported protection contract")
-    destination_name = cursor.scalar("destination_name")
-    parent_device = cursor.scalar("destination_parent_device")
-    parent_inode = cursor.scalar("destination_parent_inode")
-    root_device = cursor.scalar("destination_root_device")
-    root_inode = cursor.scalar("destination_root_inode")
+    logical_destination = cursor.scalar("logical_destination")
     archive_identity = cursor.scalar("archive_sha256")
     if cursor.scalar("manifest_path") != manifest_relative:
         fail("publisher contract receipt manifest path mismatch")
@@ -2673,64 +2873,45 @@ def parse_publisher_receipt(
         fail("publisher contract receipt target mismatch")
     if cursor.scalar("hardware_lane") != manifest.lane:
         fail("publisher contract receipt hardware lane mismatch")
-    nonce = cursor.scalar("freshness_nonce")
+    baseline_status_sha256 = cursor.scalar("baseline_status_sha256")
+    candidate_status_sha256 = cursor.scalar("candidate_status_sha256")
+    default_tip = cursor.scalar("default_tip")
+    candidate_head = cursor.scalar("candidate_head")
+    challenge = cursor.scalar("freshness_challenge")
     issued_text = cursor.scalar("issued_at_unix")
     expires_text = cursor.scalar("expires_at_unix")
     cursor.done()
-    numeric = (parent_device, parent_inode, root_device, root_inode, issued_text, expires_text)
     if (
         publisher_identity != signing_key_id
         or not ID_RE.fullmatch(publisher_identity)
-        or not valid_relative(destination_name)
-        or "/" in destination_name
-        or any(not value.isdigit() or int(value) <= 0 for value in numeric)
+        or not valid_relative(logical_destination)
+        or not (
+            logical_destination == "docs/parity-evidence/archive"
+            or logical_destination.startswith("docs/parity-evidence/archive/")
+        )
+        or any(not value.isdigit() or int(value) <= 0 for value in (issued_text, expires_text))
         or not SHA256_RE.fullmatch(archive_identity)
-        or not SHA256_RE.fullmatch(nonce)
+        or not SHA256_RE.fullmatch(baseline_status_sha256)
+        or not SHA256_RE.fullmatch(candidate_status_sha256)
+        or not COMMIT_RE.fullmatch(default_tip)
+        or not COMMIT_RE.fullmatch(candidate_head)
+        or not SHA256_RE.fullmatch(challenge)
     ):
         fail("publisher contract receipt is malformed")
-    closure = promotion_archive_closure(
-        repo, root, manifest_relative, manifest, trust
-    )
-    expected_archive = publisher_archive_identity(
-        root, manifest_relative, manifest, closure
-    )
-    if archive_identity != expected_archive:
+    if logical_destination != expected_logical_destination:
+        fail("publisher contract receipt logical destination mismatch")
+    if baseline_status_sha256 != expected_baseline_status_sha256:
+        fail("publisher contract receipt baseline transition mismatch")
+    if candidate_status_sha256 != expected_candidate_status_sha256:
+        fail("publisher contract receipt candidate transition mismatch")
+    if default_tip != expected_default_tip:
+        fail("publisher contract receipt default tip mismatch")
+    if candidate_head != expected_candidate_head:
+        fail("publisher contract receipt candidate head mismatch")
+    if challenge != expected_challenge:
+        fail("publisher contract receipt freshness challenge mismatch")
+    if archive_identity != publisher_archive_identity(root):
         fail("publisher contract receipt archive identity mismatch")
-    root_info = os.fstat(root.root_fd)
-    if destination_name != root.root.name:
-        fail("publisher contract receipt destination name mismatch")
-    if (int(root_device), int(root_inode)) != (root_info.st_dev, root_info.st_ino):
-        fail("publisher contract receipt archive root identity mismatch")
-    _, parent_fd = open_absolute_directory(
-        root.root.parent, "publisher contract destination parent"
-    )
-    try:
-        parent_info = os.fstat(parent_fd)
-        if (int(parent_device), int(parent_inode)) != (
-            parent_info.st_dev,
-            parent_info.st_ino,
-        ):
-            fail("publisher contract receipt parent identity mismatch")
-        try:
-            child_fd = openat2_fd(
-                parent_fd,
-                destination_name,
-                os.O_RDONLY | os.O_DIRECTORY,
-                RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV,
-            )
-        except OSError as error:
-            fail(f"cannot reopen publisher contract destination: {error}")
-        try:
-            child_info = os.fstat(child_fd)
-            if (child_info.st_dev, child_info.st_ino) != (
-                root_info.st_dev,
-                root_info.st_ino,
-            ):
-                fail("publisher contract destination dirent identity mismatch")
-        finally:
-            os.close(child_fd)
-    finally:
-        os.close(parent_fd)
     issued_at, expires_at = int(issued_text), int(expires_text)
     if (
         expires_at <= issued_at
@@ -2743,11 +2924,11 @@ def parse_publisher_receipt(
             fail("publisher contract receipt is stale or not yet valid")
     return PublisherReceipt(
         publisher_identity,
-        destination_name,
-        (int(parent_device), int(parent_inode)),
-        (int(root_device), int(root_inode)),
+        logical_destination,
         archive_identity,
-        nonce,
+        default_tip,
+        candidate_head,
+        challenge,
         issued_at,
         expires_at,
         trust.domain,
@@ -2820,8 +3001,6 @@ def verify_archive_index(
     )
     actual = root.records
     indexed_closure = set(closure)
-    if trust.domain == "production":
-        indexed_closure.add(PUBLISHER_RECEIPT_RELATIVE)
     expected_paths = indexed_closure | {ARCHIVE_INDEX_RELATIVE}
     if set(actual) != expected_paths:
         missing = sorted(expected_paths - set(actual))
@@ -3093,10 +3272,20 @@ def metadata_delta_is_allowed(repo: Path, source: str, trust: TrustPolicy) -> No
 
 def gate(args: argparse.Namespace) -> None:
     with ArchiveSnapshot(args.archive_root, require_immutable=False) as root:
-        gate_snapshot(args, root)
+        if args.allow_test_fixtures or args.publisher_receipt_root is None:
+            gate_snapshot(args, root, None)
+            return
+        with ArchiveSnapshot(
+            args.publisher_receipt_root, require_immutable=False
+        ) as receipt_root:
+            gate_snapshot(args, root, receipt_root)
 
 
-def gate_snapshot(args: argparse.Namespace, root: ArchiveSnapshot) -> None:
+def gate_snapshot(
+    args: argparse.Namespace,
+    root: ArchiveSnapshot,
+    receipt_root: ArchiveSnapshot | None,
+) -> None:
     repo = args.repo.resolve(strict=True)
     trust = parse_trust_policy(args.trusted_root, args.trust_policy)
     if args.allow_test_fixtures and trust.domain != "test":
@@ -3125,13 +3314,57 @@ def gate_snapshot(args: argparse.Namespace, root: ArchiveSnapshot) -> None:
         fail("candidate status source is not descended from baseline")
     manifest = parse_manifest(repo, root, args.manifest, trust)
     if not args.allow_test_fixtures:
+        required_contract = {
+            "expected logical destination": args.expected_logical_destination,
+            "expected publisher challenge": args.expected_publisher_challenge,
+            "expected default tip": args.expected_default_tip,
+            "expected candidate head": args.expected_candidate_head,
+        }
+        missing = [label for label, value in required_contract.items() if not value]
+        if missing or receipt_root is None:
+            fail(
+                "production promotion is missing protected publisher inputs: "
+                + ", ".join(missing or ["publisher receipt"])
+            )
+        if (
+            not SHA256_RE.fullmatch(args.expected_publisher_challenge)
+            or not COMMIT_RE.fullmatch(args.expected_default_tip)
+            or not COMMIT_RE.fullmatch(args.expected_candidate_head)
+        ):
+            fail("protected publisher gate inputs are malformed")
+        require_commit(repo, args.expected_default_tip, "expected default tip")
+        require_commit(repo, args.expected_candidate_head, "expected candidate head")
+        if run_git(repo, "rev-parse", "HEAD^{commit}") != args.expected_candidate_head:
+            fail("publisher candidate head does not match the gated checkout")
+        if subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repo),
+                "merge-base",
+                "--is-ancestor",
+                args.expected_default_tip,
+                args.expected_candidate_head,
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        ).returncode:
+            fail("publisher candidate head does not contain the expected default tip")
         verify_archive_index(repo, root, args.manifest, manifest, trust)
         parse_publisher_receipt(
             repo,
             root,
+            receipt_root,
             args.manifest,
             manifest,
             trust,
+            expected_logical_destination=args.expected_logical_destination,
+            expected_baseline_status_sha256=sha256_file(args.baseline_status),
+            expected_candidate_status_sha256=sha256_file(args.candidate_status),
+            expected_default_tip=args.expected_default_tip,
+            expected_candidate_head=args.expected_candidate_head,
+            expected_challenge=args.expected_publisher_challenge,
             require_fresh=True,
         )
     if manifest.baseline != baseline_commit or manifest.source != source_commit:
@@ -3428,6 +3661,19 @@ def common_trust(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--trust-policy", type=Path, required=True)
 
 
+def publisher_contract_options(
+    parser: argparse.ArgumentParser, *, include_transition_digests: bool
+) -> None:
+    parser.add_argument("--publisher-receipt-root", type=Path)
+    parser.add_argument("--expected-logical-destination")
+    parser.add_argument("--expected-publisher-challenge")
+    parser.add_argument("--expected-default-tip")
+    parser.add_argument("--expected-candidate-head")
+    if include_transition_digests:
+        parser.add_argument("--expected-baseline-status-sha256")
+        parser.add_argument("--expected-candidate-status-sha256")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -3480,6 +3726,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     validate_archive = subparsers.add_parser("validate-archive")
     common_trust(validate_archive)
+    publisher_contract_options(validate_archive, include_transition_digests=True)
     validate_archive.add_argument("--manifest", required=True)
     validate_archive.add_argument("--allow-test-fixtures", action="store_true")
 
@@ -3509,6 +3756,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     gate_parser = subparsers.add_parser("gate")
     common_trust(gate_parser)
+    publisher_contract_options(gate_parser, include_transition_digests=False)
     gate_parser.add_argument("--manifest", required=True)
     gate_parser.add_argument("--trusted-policy", type=Path, required=True)
     gate_parser.add_argument("--candidate-policy", type=Path, required=True)
@@ -3564,14 +3812,44 @@ def main() -> None:
                 args.repo.resolve(strict=True), root, args.manifest, manifest, trust
             )
             if not args.allow_test_fixtures:
-                parse_publisher_receipt(
-                    args.repo.resolve(strict=True),
-                    root,
-                    args.manifest,
-                    manifest,
-                    trust,
-                    require_fresh=False,
+                required = (
+                    args.publisher_receipt_root,
+                    args.expected_logical_destination,
+                    args.expected_publisher_challenge,
+                    args.expected_default_tip,
+                    args.expected_candidate_head,
+                    args.expected_baseline_status_sha256,
+                    args.expected_candidate_status_sha256,
                 )
+                if any(value is None for value in required):
+                    fail(
+                        "production archive validation requires complete protected "
+                        "publisher inputs"
+                    )
+                with ArchiveSnapshot(
+                    args.publisher_receipt_root, require_immutable=False
+                ) as receipt_root:
+                    parse_publisher_receipt(
+                        args.repo.resolve(strict=True),
+                        root,
+                        receipt_root,
+                        args.manifest,
+                        manifest,
+                        trust,
+                        expected_logical_destination=(
+                            args.expected_logical_destination
+                        ),
+                        expected_baseline_status_sha256=(
+                            args.expected_baseline_status_sha256
+                        ),
+                        expected_candidate_status_sha256=(
+                            args.expected_candidate_status_sha256
+                        ),
+                        expected_default_tip=args.expected_default_tip,
+                        expected_candidate_head=args.expected_candidate_head,
+                        expected_challenge=args.expected_publisher_challenge,
+                        require_fresh=False,
+                    )
         print(f"signed evidence archive is closed: {len(manifest.results)} result(s)")
     elif args.command == "check-protected-base":
         check_protected_base(args)
