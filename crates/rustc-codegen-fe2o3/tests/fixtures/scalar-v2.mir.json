@@ -1,0 +1,24 @@
+{
+  "schema": "fe2o3-normalized-rustc-scalar-mir-v2",
+  "target": "gfx942:xnack-",
+  "operations": [
+    { "mir": "Add", "type": "u8", "policy": "wrapping" },
+    { "mir": "Sub", "type": "i16", "policy": "wrapping" },
+    { "mir": "Mul", "type": "u64", "policy": "wrapping" },
+    { "mir": "AddWithOverflow", "type": "i128", "policy": "overflowing" },
+    { "mir": "checked_div", "type": "i128", "zero": "none", "min_neg_one": "none" },
+    { "mir": "wrapping_rem", "type": "i64", "zero": "trap", "min_neg_one": "zero" },
+    { "mir": "saturating_mul", "type": "u128", "policy": "saturating" },
+    { "mir": "Shl", "lhs": "u8", "rhs": "u128", "overflow_checks": true },
+    { "mir": "Shr", "lhs": "i128", "rhs": "i8", "overflow_checks": false },
+    { "mir": "FloatToInt", "from": "f64", "to": "i128", "policy": "RustSaturatingAs" },
+    { "mir": "IntToFloat", "from": "u128", "to": "f32", "policy": "RustAs" },
+    { "mir": "Eq", "type": "f32", "policy": "RustPartialEq" },
+    { "mir": "Lt", "type": "f64", "policy": "RustPartialOrd" },
+    { "mir": "total_cmp", "type": "f64", "result": "Ordering" },
+    { "mir": "bool_to_int", "from": "bool", "to": "u32" },
+    { "mir": "char_to_int", "from": "char", "to": "u32" },
+    { "mir": "int_to_char_checked", "from": "u128", "to": "char" },
+    { "mir": "int_to_bool_checked", "from": "u8", "to": "bool" }
+  ]
+}
