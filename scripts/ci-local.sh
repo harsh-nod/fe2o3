@@ -9,7 +9,7 @@ readonly REPO_ROOT
 readonly LOG_DIR="${CI_LOG_DIR:-${REPO_ROOT}/target/ci-logs}"
 readonly RUSTC_CODEGEN_TEST_PACKAGE="rustc-codegen-fe2o3"
 readonly CI_STEP_TIMEOUT_SECONDS="${FE2O3_CI_STEP_TIMEOUT_SECONDS:-3000}"
-readonly CI_STEP_KILL_AFTER_SECONDS=15
+readonly CI_STEP_KILL_AFTER_SECONDS="${FE2O3_CI_STEP_KILL_AFTER_SECONDS:-15}"
 
 readonly CPU_TEST_PACKAGES=(
   cargo-fe2o3
@@ -67,6 +67,12 @@ run_step() {
       'FE2O3_CI_STEP_TIMEOUT_SECONDS must be an integer from 1 through 3599' >&2
     return 2
   fi
+  if [[ ! "${CI_STEP_KILL_AFTER_SECONDS}" =~ ^[1-9][0-9]*$ ]] ||
+    ((CI_STEP_KILL_AFTER_SECONDS > 300)); then
+    printf '%s\n' \
+      'FE2O3_CI_STEP_KILL_AFTER_SECONDS must be an integer from 1 through 300' >&2
+    return 2
+  fi
   if ! command -v timeout >/dev/null 2>&1; then
     printf '%s\n' 'ci-local requires GNU timeout to supervise each step' >&2
     return 2
@@ -81,11 +87,23 @@ run_step() {
   set +e
   timeout --signal=TERM --kill-after="${CI_STEP_KILL_AFTER_SECONDS}s" \
     "${CI_STEP_TIMEOUT_SECONDS}s" "$@" 2>&1 | tee "${log_file}"
-  local status=${PIPESTATUS[0]}
+  local -a pipeline_status=("${PIPESTATUS[@]}")
+  local command_status="${pipeline_status[0]}"
+  local tee_status="${pipeline_status[1]}"
+  local status
   set -e
 
+  if ((command_status != 0)); then
+    status="${command_status}"
+  else
+    status="${tee_status}"
+  fi
+  if ((tee_status != 0)); then
+    printf 'step %s log write failed with status %d\n' \
+      "${name}" "${tee_status}" >&2
+  fi
   if ((status != 0)); then
-    if ((status == 124)); then
+    if ((command_status == 124)); then
       printf 'step %s timed out after %s seconds\n' \
         "${name}" "${CI_STEP_TIMEOUT_SECONDS}" >&2
     fi
