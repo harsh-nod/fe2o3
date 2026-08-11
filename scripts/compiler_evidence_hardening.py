@@ -289,9 +289,9 @@ def capture_retained_closure(
             "files": records,
         }
         manifest["manifest_sha256"] = hashlib.sha256(canonical_json(manifest)).hexdigest()
-        all_fds = [retained.fd for retained in source_files + snapshot_files]
+        all_fds = [retained.fd for retained in files]
         if len(all_fds) != len(set(all_fds)):
-            raise HardeningError(f"{label} snapshot retained duplicate descriptors")
+            raise HardeningError(f"{label} retained closure has duplicate descriptors")
         closure = RetainedClosure(label, files, manifest)
         closure.revalidate()
         return closure
@@ -378,6 +378,9 @@ def capture_snapshot(
             "files": records,
         }
         manifest["manifest_sha256"] = hashlib.sha256(canonical_json(manifest)).hexdigest()
+        all_fds = [retained.fd for retained in source_files + snapshot_files]
+        if len(all_fds) != len(set(all_fds)):
+            raise HardeningError(f"{label} snapshot retained duplicate descriptors")
         closure = SnapshotClosure(label, source_root, destination, source_files, snapshot_files, manifest)
         closure.revalidate()
         return closure
@@ -759,6 +762,11 @@ def adversarial_self_test() -> None:
             ["Cargo.lock", "src/main.rs"],
             {"commit": "1" * 40, "tree": "2" * 40},
         )
+        retained_closure = capture_retained_closure(
+            "retained-inputs",
+            [("lock", origin / "Cargo.lock"), ("source", origin / "src/main.rs")],
+            {"kind": "self-test"},
+        )
         try:
             compare_labeled_manifests(first.manifest, second.manifest)
             substituted = copy.deepcopy(second.manifest)
@@ -789,6 +797,7 @@ def adversarial_self_test() -> None:
             else:
                 raise AssertionError("source mutation after snapshot was accepted")
         finally:
+            retained_closure.close()
             first.close()
             second.close()
     print("compiler evidence retained-exec/supervisor adversarial tests: PASS")
