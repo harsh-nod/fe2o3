@@ -3,11 +3,30 @@
 //! This module is intentionally not exported by `fe2o3-kernel-ir`. It defines a
 //! bounded, canonical interchange model that can later be connected to the
 //! semantic type graph and lowering only after those trust boundaries exist.
+//!
+//! # Deliberate limitations
+//!
+//! - `SemanticTypeId` is only an opaque domain-separated commitment. This lane
+//!   does not authenticate it or infer layout from it.
+//! - Relocation cycles, pointer-sized integer recovery, exposed provenance,
+//!   function pointers, thread-local storage, and symbolic/extern targets are
+//!   unsupported and rejected.
+//! - Mutable or global targets conservatively require unique ingress. This is
+//!   stricter than Rust and can be relaxed only after an ownership proof is
+//!   attached to the graph.
+//! - Validity regions describe only initialized bytes, zero padding, booleans,
+//!   nonzero scalars, and relocation-backed pointers. Full enum/niche validity
+//!   belongs to the future semantic type-graph integration.
+//! - No lowering, linker, runtime, hardware, or Verus claim is made here.
 
 use std::collections::{BTreeSet, VecDeque};
 
 pub const DEVICE_CONSTANTS_V2_MAGIC: [u8; 4] = *b"F2C2";
 pub const DEVICE_CONSTANTS_V2_VERSION: u16 = 2;
+pub const DEVICE_CONSTANTS_V2_LIMITATIONS: &str = "opaque-untrusted-type-commitments; \
+no relocation cycles, integer-derived pointers, externs, TLS, or function pointers; \
+unique ingress for mutable/global targets; partial byte-validity vocabulary; \
+no export, lowering, linker, runtime, hardware, or formal-verification claim";
 
 const HEADER_BYTES: u64 = 20;
 const ALLOCATION_HEADER_BYTES: u64 = 74;
@@ -435,6 +454,13 @@ impl DeviceConstantGraphV2 {
             return Err(DecodeError::LengthMismatch);
         }
 
+        let minimum_body_len = u64::from(allocation_count)
+            .checked_mul(ALLOCATION_HEADER_BYTES)
+            .ok_or(DecodeError::LengthOverflow)?;
+        if minimum_body_len > body_len {
+            return Err(DecodeError::Truncated);
+        }
+
         let allocation_capacity =
             usize::try_from(allocation_count).map_err(|_| DecodeError::LengthOverflow)?;
         let mut allocations = Vec::with_capacity(allocation_capacity);
@@ -442,7 +468,7 @@ impl DeviceConstantGraphV2 {
         let mut total_regions = 0_u64;
         let mut total_relocations = 0_u64;
 
-        for _ in 0..allocation_count {
+        for allocation_index in 0..allocation_count {
             let id = AllocationId(cursor.read_u32()?);
             let schema_version = cursor.read_u16()?;
             let kind = decode_kind(cursor.read_u8()?)?;
@@ -476,6 +502,30 @@ impl DeviceConstantGraphV2 {
                 u64::from(relocation_count),
                 u64::from(limits.max_relocations),
             )?;
+
+            let current_dynamic_len = u64::from(byte_count)
+                .checked_add(
+                    u64::from(region_count)
+                        .checked_mul(VALIDITY_REGION_BYTES)
+                        .ok_or(DecodeError::LengthOverflow)?,
+                )
+                .and_then(|value| {
+                    value.checked_add(u64::from(relocation_count).checked_mul(RELOCATION_BYTES)?)
+                })
+                .ok_or(DecodeError::LengthOverflow)?;
+            let remaining_allocations = allocation_count
+                .checked_sub(allocation_index)
+                .and_then(|value| value.checked_sub(1))
+                .ok_or(DecodeError::LengthOverflow)?;
+            let future_headers = u64::from(remaining_allocations)
+                .checked_mul(ALLOCATION_HEADER_BYTES)
+                .ok_or(DecodeError::LengthOverflow)?;
+            let minimum_remaining = current_dynamic_len
+                .checked_add(future_headers)
+                .ok_or(DecodeError::LengthOverflow)?;
+            if minimum_remaining > usize_to_u64_decode(cursor.remaining())? {
+                return Err(DecodeError::Truncated);
+            }
 
             let bytes = cursor
                 .take(usize::try_from(byte_count).map_err(|_| DecodeError::LengthOverflow)?)?
@@ -993,5 +1043,9 @@ impl<'a> Cursor<'a> {
 
     fn is_finished(&self) -> bool {
         self.position == self.input.len()
+    }
+
+    fn remaining(&self) -> usize {
+        self.input.len().saturating_sub(self.position)
     }
 }

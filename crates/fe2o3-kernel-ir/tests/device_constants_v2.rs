@@ -26,7 +26,7 @@ fn bytes_region(len: u32) -> Vec<ValidityRegion> {
 fn constant(id: u32, bytes: Vec<u8>) -> Allocation {
     Allocation {
         id: AllocationId(id),
-        semantic_type: semantic_type(id as u8 + 1),
+        semantic_type: semantic_type((id as u8).wrapping_add(1)),
         kind: AllocationKind::Constant,
         alignment: 4,
         mutability: Mutability::ReadOnly,
@@ -40,7 +40,7 @@ fn constant(id: u32, bytes: Vec<u8>) -> Allocation {
 fn pointer_source(id: u32, target: u32) -> Allocation {
     Allocation {
         id: AllocationId(id),
-        semantic_type: semantic_type(id as u8 + 9),
+        semantic_type: semantic_type((id as u8).wrapping_add(9)),
         kind: AllocationKind::Constant,
         alignment: 8,
         mutability: Mutability::ReadOnly,
@@ -64,6 +64,23 @@ fn pointer_source(id: u32, target: u32) -> Allocation {
 
 fn graph(allocations: Vec<Allocation>) -> DeviceConstantGraphV2 {
     DeviceConstantGraphV2 { allocations }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(char::from(DIGITS[usize::from(byte >> 4)]));
+        output.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
+    }
+    output
+}
+
+fn next_random(state: &mut u64) -> u64 {
+    *state = state
+        .wrapping_mul(6_364_136_223_846_793_005)
+        .wrapping_add(1_442_695_040_888_963_407);
+    *state
 }
 
 #[test]
@@ -300,4 +317,310 @@ fn limits_are_checked_before_codec_allocation() {
             ..
         })
     ));
+}
+
+#[test]
+fn codec_v2_relocation_golden_is_stable() {
+    let graph = graph(vec![pointer_source(0, 1), constant(1, vec![1, 2, 3, 4])]);
+    let encoded = graph.encode_canonical(&GraphLimits::default()).unwrap();
+    assert_eq!(
+        hex(&encoded),
+        "463243320200000002000000cc000000000000000000000002000000000008000000080000000100000001000000090909090909090909090909090909090a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a00000000000000000000000008000000040000000000000008000000010000000000000000000000010000000200000000000400000004000000010000000000000002020202020202020202020202020202030303030303030303030303030303030303030303030303030303030303030301020304000000000400000000000000"
+    );
+    assert_eq!(
+        DeviceConstantGraphV2::decode_canonical(&encoded, &GraphLimits::default()).unwrap(),
+        graph
+    );
+}
+
+#[test]
+fn decoder_preflights_hostile_counts_before_reserving() {
+    let limits = GraphLimits {
+        max_allocations: u32::MAX,
+        max_relocations: u32::MAX,
+        max_validity_regions: u32::MAX,
+        ..GraphLimits::default()
+    };
+    let empty = graph(Vec::new())
+        .encode_canonical(&GraphLimits::default())
+        .unwrap();
+    let mut huge_allocation_count = empty;
+    huge_allocation_count[8..12].copy_from_slice(&u32::MAX.to_le_bytes());
+    assert_eq!(
+        DeviceConstantGraphV2::decode_canonical(&huge_allocation_count, &limits),
+        Err(DecodeError::Truncated)
+    );
+
+    let mut huge_region_count = graph(vec![constant(0, vec![1])])
+        .encode_canonical(&GraphLimits::default())
+        .unwrap();
+    huge_region_count[38..42].copy_from_slice(&u32::MAX.to_le_bytes());
+    assert_eq!(
+        DeviceConstantGraphV2::decode_canonical(&huge_region_count, &limits),
+        Err(DecodeError::Truncated)
+    );
+}
+
+#[test]
+fn decoder_rejects_structural_corruption_and_truncation() {
+    let limits = GraphLimits::default();
+    let encoded = graph(vec![pointer_source(0, 1), constant(1, vec![1, 2, 3, 4])])
+        .encode_canonical(&limits)
+        .unwrap();
+
+    for cut in 0..encoded.len() {
+        assert!(DeviceConstantGraphV2::decode_canonical(&encoded[..cut], &limits).is_err());
+    }
+
+    for offset in [0_usize, 4, 6, 8, 12, 26, 27, 28, 29, 102, 103, 104, 105] {
+        let mut corrupt = encoded.clone();
+        corrupt[offset] ^= 0xff;
+        assert!(DeviceConstantGraphV2::decode_canonical(&corrupt, &limits).is_err());
+    }
+
+    let mut appended = encoded;
+    appended.push(0);
+    assert_eq!(
+        DeviceConstantGraphV2::decode_canonical(&appended, &limits),
+        Err(DecodeError::LengthMismatch)
+    );
+}
+
+#[test]
+fn hostile_decoder_mutation_campaign_remains_canonical_and_bounded() {
+    let limits = GraphLimits {
+        max_encoded_bytes: 4_096,
+        max_total_allocation_bytes: 1_024,
+        ..GraphLimits::default()
+    };
+    let encoded = graph(vec![pointer_source(0, 1), constant(1, vec![1, 2, 3, 4])])
+        .encode_canonical(&limits)
+        .unwrap();
+    let mut state = 0x5a07_c0de_d15c_a11c_u64;
+
+    for _ in 0..100_000 {
+        let mut mutated = encoded.clone();
+        let mutations = usize::try_from(next_random(&mut state) % 4 + 1).unwrap();
+        for _ in 0..mutations {
+            let offset = usize::try_from(next_random(&mut state)).unwrap() % mutated.len();
+            let bit = u8::try_from(next_random(&mut state) % 8).unwrap();
+            mutated[offset] ^= 1_u8 << bit;
+        }
+        if let Ok(decoded) = DeviceConstantGraphV2::decode_canonical(&mutated, &limits) {
+            assert_eq!(decoded.encode_canonical(&limits).unwrap(), mutated);
+        }
+    }
+
+    for _ in 0..60_000 {
+        let len = usize::try_from(next_random(&mut state) % 513).unwrap();
+        let mut hostile = vec![0_u8; len];
+        for byte in &mut hostile {
+            *byte = u8::try_from(next_random(&mut state) >> 56).unwrap();
+        }
+        if let Ok(decoded) = DeviceConstantGraphV2::decode_canonical(&hostile, &limits) {
+            assert_eq!(decoded.encode_canonical(&limits).unwrap(), hostile);
+        }
+    }
+}
+
+fn graph_oracle_case(seed: u64) -> (DeviceConstantGraphV2, GraphLimits, bool) {
+    let mut candidate = graph(vec![
+        pointer_source(0, 2),
+        constant(1, vec![u8::try_from(seed & 0xff).unwrap()]),
+        constant(2, vec![1, 2, 3, 4]),
+    ]);
+    let mut limits = GraphLimits::default();
+    let case = seed % 16;
+    let expected = match case {
+        0 | 15 => true,
+        1 => {
+            candidate.allocations[0].bytes[0] = 1;
+            false
+        }
+        2 => {
+            candidate.allocations[0].relocations[0].target = AllocationId(99);
+            false
+        }
+        3 => {
+            candidate.allocations[0].relocations[0].addend = -1;
+            false
+        }
+        4 => {
+            candidate.allocations[0].relocations[0].capability = CapabilityPolicy::ReadWrite;
+            false
+        }
+        5 => {
+            candidate.allocations[1].id = AllocationId(9);
+            false
+        }
+        6 => {
+            candidate.allocations[2].semantic_type.digest = [0; 32];
+            false
+        }
+        7 => {
+            candidate.allocations[2].alignment = 3;
+            false
+        }
+        8 => {
+            candidate.allocations[2].bytes[0] = 2;
+            candidate.allocations[2].validity = vec![
+                ValidityRegion {
+                    offset: 0,
+                    len: 1,
+                    class: ValidityClass::Bool,
+                },
+                ValidityRegion {
+                    offset: 1,
+                    len: 3,
+                    class: ValidityClass::Bytes,
+                },
+            ];
+            false
+        }
+        9 => {
+            candidate.allocations[0].relocations.clear();
+            false
+        }
+        10 => {
+            candidate.allocations[0].relocations[0].target = AllocationId(0);
+            false
+        }
+        11 => {
+            limits.max_total_allocation_bytes = 12;
+            false
+        }
+        12 => {
+            candidate.allocations[2].validity[0].offset = 1;
+            false
+        }
+        13 => {
+            candidate.allocations[0].bytes = vec![0; 16];
+            candidate.allocations[0].validity = vec![
+                ValidityRegion {
+                    offset: 0,
+                    len: 8,
+                    class: ValidityClass::Pointer,
+                },
+                ValidityRegion {
+                    offset: 8,
+                    len: 8,
+                    class: ValidityClass::Pointer,
+                },
+            ];
+            let first = candidate.allocations[0].relocations[0];
+            candidate.allocations[0].relocations = vec![
+                Relocation {
+                    source_offset: 8,
+                    ..first
+                },
+                first,
+            ];
+            false
+        }
+        14 => {
+            candidate.allocations[0].bytes = vec![0; 16];
+            candidate.allocations[0].validity = vec![
+                ValidityRegion {
+                    offset: 0,
+                    len: 8,
+                    class: ValidityClass::Pointer,
+                },
+                ValidityRegion {
+                    offset: 8,
+                    len: 8,
+                    class: ValidityClass::Pointer,
+                },
+            ];
+            let first = candidate.allocations[0].relocations[0];
+            candidate.allocations[0].relocations = vec![
+                first,
+                Relocation {
+                    source_offset: 4,
+                    ..first
+                },
+            ];
+            false
+        }
+        _ => unreachable!(),
+    };
+    (candidate, limits, expected)
+}
+
+#[test]
+fn fifty_thousand_case_graph_oracle_matches_validator() {
+    for seed in 0..50_000_u64 {
+        let (candidate, limits, expected) = graph_oracle_case(seed);
+        let actual = candidate.validate(&limits).is_ok();
+        assert_eq!(actual, expected, "oracle mismatch for seed {seed}");
+        if actual && seed.is_multiple_of(997) {
+            let encoded = candidate.encode_canonical(&limits).unwrap();
+            assert_eq!(
+                DeviceConstantGraphV2::decode_canonical(&encoded, &limits).unwrap(),
+                candidate
+            );
+        }
+    }
+}
+
+fn relocation_chain(count: u32) -> DeviceConstantGraphV2 {
+    assert!(count > 0);
+    let mut allocations = Vec::with_capacity(usize::try_from(count).unwrap());
+    for id in 0..count - 1 {
+        allocations.push(pointer_source(id, id + 1));
+    }
+    allocations.push(constant(count - 1, vec![1]));
+    graph(allocations)
+}
+
+#[test]
+fn graph_resource_and_depth_boundaries_are_exact() {
+    let chain = relocation_chain(512);
+    let exact = GraphLimits {
+        max_allocations: 512,
+        max_relocations: 511,
+        max_validity_regions: 512,
+        max_total_allocation_bytes: 4_089,
+        max_relocation_depth: 511,
+        ..GraphLimits::default()
+    };
+    chain.validate(&exact).unwrap();
+
+    let too_shallow = GraphLimits {
+        max_relocation_depth: 510,
+        ..exact
+    };
+    assert!(matches!(
+        chain.validate(&too_shallow),
+        Err(ValidationError::ResourceLimit {
+            resource: Resource::RelocationDepth,
+            observed: 511,
+            limit: 510,
+        })
+    ));
+
+    let too_few_allocations = GraphLimits {
+        max_allocations: 511,
+        ..exact
+    };
+    assert!(matches!(
+        chain.validate(&too_few_allocations),
+        Err(ValidationError::ResourceLimit {
+            resource: Resource::Allocations,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn limitations_do_not_claim_unimplemented_trust_boundaries() {
+    for required in [
+        "untrusted-type-commitments",
+        "no relocation cycles",
+        "integer-derived pointers",
+        "unique ingress",
+        "no export",
+        "formal-verification claim",
+    ] {
+        assert!(DEVICE_CONSTANTS_V2_LIMITATIONS.contains(required));
+    }
 }
