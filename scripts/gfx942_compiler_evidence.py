@@ -877,6 +877,7 @@ def build_provider_members() -> list[tuple[str, Path]]:
             Path("/opt/rocm-7.2.4/lib/llvm/lib/clang/22/lib/amdgcn/bitcode"),
         ),
         ("rocm-info", Path("/opt/rocm-7.2.4/.info")),
+        ("rocm-include", Path("/opt/rocm-7.2.4/include")),
     )
     members: list[tuple[str, Path]] = []
     for prefix, root in roots:
@@ -889,6 +890,10 @@ def build_provider_members() -> list[tuple[str, Path]]:
     for member in sorted(library_root.iterdir()):
         if member.is_file() and not member.is_symlink():
             members.append((f"llvm-library:{member.name}", member))
+    rocm_library_root = Path("/opt/rocm-7.2.4/lib")
+    for member in sorted(rocm_library_root.glob("libamdhip64.so*")):
+        if member.is_file() and not member.is_symlink():
+            members.append((f"rocm-runtime:{member.name}", member))
     return members
 
 
@@ -1010,10 +1015,13 @@ def build_and_generate(
     generation_environment = dict(environment)
     generation_environment.update(
         {
+            "CFLAGS": "-resource-dir=/opt/rocm-7.2.4/lib/llvm/lib/clang/22",
+            "CXXFLAGS": "-resource-dir=/opt/rocm-7.2.4/lib/llvm/lib/clang/22",
             "FE2O3_GFX942_ALPHA_ZETA_OUTPUT": os.fspath(output),
             "FE2O3_LLVM_BUILD_ID": EXPECTED_LLVM_BUILD,
             "FE2O3_LLVM_LINK_WORKER": os.fspath(worker),
             "FE2O3_LLVM_LINK_WORKER_BUILD_ID": build_identity,
+            "ROCM_PATH": "/opt/rocm-7.2.4",
         }
     )
     build_test = run_command(
