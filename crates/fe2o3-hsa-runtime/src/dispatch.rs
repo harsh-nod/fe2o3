@@ -46,6 +46,93 @@ pub(crate) struct PendingDispatch {
     kernarg_digest: [u8; 32],
 }
 
+/// Feature-gated host-visible HSA allocation used only by hardware evidence.
+///
+/// The allocation comes from the reviewed CPU-owned kernarg pool, is admitted
+/// to the selected GPU agent, and remains live until this token is dropped.
+#[cfg(feature = "hardware-test-hooks")]
+pub struct ReviewedHsaHardwareTestBufferV1 {
+    address: usize,
+    byte_len: usize,
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+impl ReviewedHsaHardwareTestBufferV1 {
+    pub const fn byte_len(&self) -> usize {
+        self.byte_len
+    }
+
+    pub fn device_address(&self, byte_offset: usize) -> Result<u64, HsaRuntimeAdapterError> {
+        if byte_offset >= self.byte_len {
+            return Err(HsaRuntimeAdapterError::InvalidExecutableObservation(
+                "hardware-test HSA buffer offset",
+            ));
+        }
+        u64::try_from(self.address.checked_add(byte_offset).ok_or(
+            HsaRuntimeAdapterError::InvalidExecutableObservation(
+                "hardware-test HSA buffer address overflow",
+            ),
+        )?)
+        .map_err(|_| {
+            HsaRuntimeAdapterError::InvalidExecutableObservation(
+                "hardware-test HSA buffer address conversion",
+            )
+        })
+    }
+
+    /// Copies host-visible bytes after the caller has synchronously quiesced
+    /// every dispatch that can access this allocation.
+    pub fn read_after_synchronous_dispatch(&self) -> Vec<u8> {
+        // SAFETY: construction retains a live host-visible allocation of this
+        // exact extent. The hardware evidence caller reads only after the
+        // reviewed synchronous dispatch transition reports completion.
+        unsafe { core::slice::from_raw_parts(self.address as *const u8, self.byte_len).to_vec() }
+    }
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+impl Drop for ReviewedHsaHardwareTestBufferV1 {
+    fn drop(&mut self) {
+        // SAFETY: this token uniquely owns one live HSA pool allocation and
+        // consumes it exactly once while the enclosing adapter is still live.
+        let status =
+            unsafe { crate::sys::fe2o3_hsa_memory_free(self.address as *mut core::ffi::c_void) };
+        if status != crate::api::HSA_SUCCESS {
+            std::process::abort();
+        }
+    }
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+impl ReviewedHsaRuntimeAdapterV1 {
+    pub fn allocate_hardware_test_buffer(
+        &mut self,
+        bytes: &[u8],
+    ) -> Result<ReviewedHsaHardwareTestBufferV1, HsaRuntimeAdapterError> {
+        if bytes.is_empty() {
+            return Err(HsaRuntimeAdapterError::InvalidExecutableObservation(
+                "empty hardware-test HSA buffer",
+            ));
+        }
+        let address = self
+            .core
+            .api
+            .memory_allocate(self.core.kernarg_pool, bytes.len())
+            .map_err(HsaRuntimeAdapterError::api)?;
+        if let Err(error) = self.core.api.allow_access(self.core.agent, address) {
+            if self.core.api.memory_free(address).is_err() {
+                std::process::abort();
+            }
+            return Err(HsaRuntimeAdapterError::api(error));
+        }
+        self.core.api.write_memory(address, bytes);
+        Ok(ReviewedHsaHardwareTestBufferV1 {
+            address,
+            byte_len: bytes.len(),
+        })
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ReviewedImplicitKernargLayout {
     explicit_byte_len: usize,
@@ -737,6 +824,24 @@ mod tests {
         HsaKernelObjectIdentityV1, HsaPhysicalDeviceIdentityV1, HsaRuntimeIdentityV1,
     };
     use std::collections::{BTreeMap, VecDeque};
+
+    #[cfg(feature = "hardware-test-hooks")]
+    #[test]
+    fn hardware_test_buffer_addresses_are_extent_checked() {
+        let buffer = core::mem::ManuallyDrop::new(ReviewedHsaHardwareTestBufferV1 {
+            address: 0x1000,
+            byte_len: 16,
+        });
+        assert_eq!(buffer.byte_len(), 16);
+        assert_eq!(buffer.device_address(12).unwrap(), 0x100c);
+        assert!(buffer.device_address(16).is_err());
+
+        let overflowing = core::mem::ManuallyDrop::new(ReviewedHsaHardwareTestBufferV1 {
+            address: usize::MAX - 1,
+            byte_len: 8,
+        });
+        assert!(overflowing.device_address(4).is_err());
+    }
 
     #[derive(Default)]
     struct MockApi {

@@ -41,7 +41,8 @@ use fe2o3_host::{
 };
 #[cfg(feature = "hardware-test-hooks")]
 use fe2o3_hsa_runtime::{
-    ReviewedHsaExecutableV1, ReviewedHsaKernelV1, ReviewedHsaRuntimeAdapterV1,
+    ReviewedHsaExecutableV1, ReviewedHsaHardwareTestBufferV1, ReviewedHsaKernelV1,
+    ReviewedHsaRuntimeAdapterV1,
 };
 #[cfg(feature = "hardware-test-hooks")]
 use reserved_fe2o3_symbols::{
@@ -1051,17 +1052,42 @@ fn parse_sha256(hex: &str) -> Result<[u8; 32], String> {
 }
 
 #[cfg(feature = "hardware-test-hooks")]
-fn device_region_pointer(buffer: &DeviceBuffer<f32>, body_len: usize) -> Result<u64, BoxError> {
+fn f32_bytes(values: &[f32]) -> &[u8] {
+    // SAFETY: `f32` has no invalid bit patterns and the byte extent is checked.
+    unsafe {
+        core::slice::from_raw_parts(
+            values.as_ptr().cast::<u8>(),
+            values.len() * core::mem::size_of::<f32>(),
+        )
+    }
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+fn f32_values(bytes: &[u8]) -> Result<Vec<f32>, BoxError> {
     require(
-        buffer.len() == GUARD_PREFIX_ELEMENTS + body_len + GUARD_SUFFIX_ELEMENTS,
-        "guarded device allocation has the wrong extent",
+        bytes.len().is_multiple_of(core::mem::size_of::<f32>()),
+        "hardware-test HSA buffer has a partial f32",
     )?;
-    // SAFETY: the checked allocation contains the prefix and full body. The
-    // returned device address is never dereferenced by the host and remains
-    // borrowed by the synchronous dispatch that consumes the packed bytes.
-    let pointer = unsafe { buffer.raw_device_ptr().add(GUARD_PREFIX_ELEMENTS) };
-    require(!pointer.is_null(), "non-empty guarded allocation is null")?;
-    Ok(u64::try_from(pointer.addr())?)
+    Ok(bytes
+        .chunks_exact(core::mem::size_of::<f32>())
+        .map(|chunk| f32::from_ne_bytes(chunk.try_into().expect("exact f32 chunk")))
+        .collect())
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+fn hsa_region_pointer(
+    buffer: &ReviewedHsaHardwareTestBufferV1,
+    body_len: usize,
+) -> Result<u64, BoxError> {
+    let element_count = GUARD_PREFIX_ELEMENTS
+        .checked_add(body_len)
+        .and_then(|length| length.checked_add(GUARD_SUFFIX_ELEMENTS))
+        .ok_or("guarded HSA allocation extent overflow")?;
+    require(
+        buffer.byte_len() == element_count * core::mem::size_of::<f32>(),
+        "guarded HSA allocation has the wrong extent",
+    )?;
+    Ok(buffer.device_address(GUARD_PREFIX_ELEMENTS * core::mem::size_of::<f32>())?)
 }
 
 #[cfg(feature = "hardware-test-hooks")]
@@ -1129,7 +1155,6 @@ unsafe fn dispatch_cov6(
 #[cfg(feature = "hardware-test-hooks")]
 fn run_length_case(
     adapter: &mut ReviewedHsaRuntimeAdapterV1,
-    context: &std::sync::Arc<GpuContext>,
     executable: &ReviewedHsaExecutableV1,
     kernels: &ResolvedTwoKernels<'_>,
     length: usize,
@@ -1143,7 +1168,6 @@ fn run_length_case(
         "hardware fixture requires HIP ordinal 0",
     )?;
 
-    let stream = context.default_stream();
     let input_body = alpha_input(length);
     let b_body = zeta_input(length);
     let expected_alpha = alpha_oracle(SCALE, &input_body);
@@ -1153,15 +1177,15 @@ fn run_length_case(
     let alpha_initial = guarded(&vec![OUTPUT_FILL; length], ALPHA_PREFIX, ALPHA_SUFFIX);
     let zeta_initial = guarded(&vec![OUTPUT_FILL; length], ZETA_PREFIX, ZETA_SUFFIX);
 
-    let input = DeviceBuffer::from_host(&stream, &input_host)?;
-    let b = DeviceBuffer::from_host(&stream, &b_host)?;
-    let alpha_output = DeviceBuffer::from_host(&stream, &alpha_initial)?;
-    let zeta_output = DeviceBuffer::from_host(&stream, &zeta_initial)?;
+    let input = adapter.allocate_hardware_test_buffer(f32_bytes(&input_host))?;
+    let b = adapter.allocate_hardware_test_buffer(f32_bytes(&b_host))?;
+    let alpha_output = adapter.allocate_hardware_test_buffer(f32_bytes(&alpha_initial))?;
+    let zeta_output = adapter.allocate_hardware_test_buffer(f32_bytes(&zeta_initial))?;
 
-    let input_pointer = device_region_pointer(&input, length)?;
-    let b_pointer = device_region_pointer(&b, length)?;
-    let alpha_pointer = device_region_pointer(&alpha_output, length)?;
-    let zeta_pointer = device_region_pointer(&zeta_output, length)?;
+    let input_pointer = hsa_region_pointer(&input, length)?;
+    let b_pointer = hsa_region_pointer(&b, length)?;
+    let alpha_pointer = hsa_region_pointer(&alpha_output, length)?;
+    let zeta_pointer = hsa_region_pointer(&zeta_output, length)?;
     let alpha_kernarg =
         alpha_explicit_kernarg(SCALE, input_pointer, length, alpha_pointer, length)?;
     let zeta_kernarg = zeta_explicit_kernarg(
@@ -1196,10 +1220,10 @@ fn run_length_case(
         )?;
     }
 
-    let input_after = input.to_host_vec(&stream)?;
-    let b_after = b.to_host_vec(&stream)?;
-    let alpha_after = alpha_output.to_host_vec(&stream)?;
-    let zeta_after = zeta_output.to_host_vec(&stream)?;
+    let input_after = f32_values(&input.read_after_synchronous_dispatch())?;
+    let b_after = f32_values(&b.read_after_synchronous_dispatch())?;
+    let alpha_after = f32_values(&alpha_output.read_after_synchronous_dispatch())?;
+    let zeta_after = f32_values(&zeta_output.read_after_synchronous_dispatch())?;
     require(
         input_after == input_host,
         "alpha input changed during dispatch",
@@ -1215,7 +1239,6 @@ fn run_length_case(
 #[cfg(feature = "hardware-test-hooks")]
 fn execute_loaded_two_kernel_slice(
     adapter: &mut ReviewedHsaRuntimeAdapterV1,
-    context: &std::sync::Arc<GpuContext>,
     executable: &ReviewedHsaExecutableV1,
     executable_identity: fe2o3_host::HsaExecutableObjectIdentityV1,
 ) -> Result<(), BoxError> {
@@ -1252,7 +1275,7 @@ fn execute_loaded_two_kernel_slice(
         },
     };
     for length in HARDWARE_LENGTHS {
-        run_length_case(adapter, context, executable, &resolved, length)?;
+        run_length_case(adapter, executable, &resolved, length)?;
     }
     Ok(())
 }
@@ -1589,7 +1612,7 @@ fn run_raw_two_kernel_hardware_slice(
             load.byte_len() == bytes.len() as u64,
             "load byte length changed",
         )?;
-        execute_loaded_two_kernel_slice(&mut adapter, &context, &executable, executable_identity)
+        execute_loaded_two_kernel_slice(&mut adapter, &executable, executable_identity)
     })();
 
     // The retained kernel set has been dropped. This is the only consuming

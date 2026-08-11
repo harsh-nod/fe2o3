@@ -6,6 +6,8 @@ mod environment;
 mod lifecycle;
 mod sys;
 
+#[cfg(feature = "hardware-test-hooks")]
+pub use dispatch::ReviewedHsaHardwareTestBufferV1;
 pub use environment::{HsaRuntimeAdapterError, ReviewedHsaRuntimeAdapterV1};
 pub use lifecycle::{ReviewedHsaExecutableV1, ReviewedHsaKernelSetV1, ReviewedHsaKernelV1};
 
