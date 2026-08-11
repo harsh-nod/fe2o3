@@ -373,6 +373,7 @@ pub enum Gfx942LayoutCompatibilityErrorV2 {
     Cycle { key: String },
     ArithmeticOverflow { key: String },
     WorkBoundExceeded { actual: u64, max: u64 },
+    StorageBoundExceeded { actual: u64, max: u64 },
     AllocationFailed { resource: &'static str },
     Unsupported { key: String, detail: &'static str },
     InconsistentLayout { key: String, detail: &'static str },
@@ -405,6 +406,12 @@ impl fmt::Display for Gfx942LayoutCompatibilityErrorV2 {
                 write!(
                     formatter,
                     "layout projection work bound exceeded: {actual} > {max}"
+                )
+            }
+            Self::StorageBoundExceeded { actual, max } => {
+                write!(
+                    formatter,
+                    "layout projection storage bound exceeded: {actual} > {max}"
                 )
             }
             Self::AllocationFailed { resource } => {
@@ -446,9 +453,10 @@ pub fn derive_gfx942_layout_compatibility_candidate_v2(
     observation: &RustcTypeLayoutObservationV2,
     budgets: SemanticTypeLayoutBudgetsV2,
 ) -> Result<Gfx942LayoutCompatibilityCandidateV2, Gfx942LayoutCompatibilityErrorV2> {
-    validate_observation_integrity(observation, budgets)?;
     let target = CanonicalGfx942LayoutTargetV2::canonical();
-    let mut builder = ProjectionBuilderV2::new(observation, budgets)?;
+    let admission = preflight_projection(observation, &target, budgets)?;
+    validate_observation_integrity(observation, budgets)?;
+    let mut builder = ProjectionBuilderV2::new(observation, budgets, admission)?;
     builder.derive(observation.graph().root())?;
     let projection = builder.finish(target)?;
     let candidate_identity_sha256 = candidate_identity(
@@ -509,6 +517,330 @@ struct DerivedLayoutV2 {
     padding: Vec<RustcByteRangeV2>,
 }
 
+fn preflight_projection(
+    observation: &RustcTypeLayoutObservationV2,
+    target: &CanonicalGfx942LayoutTargetV2,
+    budgets: SemanticTypeLayoutBudgetsV2,
+) -> Result<ProjectionAdmissionV2, Gfx942LayoutCompatibilityErrorV2> {
+    if !target.is_canonical() {
+        return Err(Gfx942LayoutCompatibilityErrorV2::TargetMismatch);
+    }
+    let node_count = observation.graph().node_count();
+    if node_count > budgets.graph.max_nodes as usize {
+        return Err(inconsistent_layout(
+            "projection",
+            "semantic graph node bound exceeded before projection allocation",
+        ));
+    }
+    if observation.graph_bytes.len() > budgets.graph.max_canonical_bytes as usize {
+        return Err(inconsistent_layout(
+            "projection",
+            "semantic graph byte bound exceeded before projection allocation",
+        ));
+    }
+    if observation.layout_records.len() > budgets.max_sidecar_records as usize {
+        return Err(inconsistent_layout(
+            "projection",
+            "layout record bound exceeded before projection allocation",
+        ));
+    }
+
+    let mut work = 0_u64;
+    let mut edges = 0_u64;
+    let mut fields = 0_u64;
+    let mut graph_validation_work = 0_u64;
+    let mut projected_bytes = projection_header_size(target)?;
+    preflight_projection_work(&mut work, node_count as u64, budgets)?;
+
+    for (_, key, node) in observation.graph().nodes() {
+        if key.len() > budgets.graph.max_name_bytes as usize {
+            return Err(inconsistent_layout(
+                key,
+                "semantic graph key exceeds the current projection name bound",
+            ));
+        }
+        let record = observation
+            .layout_record(key)
+            .ok_or_else(|| inconsistent_layout(key, "rustc observation record is missing"))?;
+        let shape = preflight_projection_kind(key, &node.kind, record)?;
+        edges = edges.checked_add(shape.edges).ok_or_else(|| {
+            Gfx942LayoutCompatibilityErrorV2::ArithmeticOverflow {
+                key: key.to_owned(),
+            }
+        })?;
+        fields = fields.checked_add(shape.fields).ok_or_else(|| {
+            Gfx942LayoutCompatibilityErrorV2::ArithmeticOverflow {
+                key: key.to_owned(),
+            }
+        })?;
+        graph_validation_work = graph_validation_work
+            .checked_add(
+                1_u64
+                    .saturating_add(shape.edges)
+                    .saturating_add(shape.fields),
+            )
+            .ok_or_else(|| Gfx942LayoutCompatibilityErrorV2::ArithmeticOverflow {
+                key: key.to_owned(),
+            })?;
+
+        let key_bytes = key.len() as u64;
+        let clone_work = key_bytes
+            .checked_mul(3)
+            .and_then(|value| value.checked_add(shape.clone_work))
+            .and_then(|value| value.checked_add(sidecar_clone_work(record)))
+            .ok_or_else(|| Gfx942LayoutCompatibilityErrorV2::ArithmeticOverflow {
+                key: key.to_owned(),
+            })?;
+        preflight_projection_work(
+            &mut work,
+            1_u64
+                .saturating_add(shape.edges)
+                .saturating_add(shape.fields)
+                .saturating_add(clone_work),
+            budgets,
+        )?;
+
+        projected_bytes = projected_bytes
+            .checked_add(projection_record_size(key, shape)?)
+            .ok_or_else(|| Gfx942LayoutCompatibilityErrorV2::ArithmeticOverflow {
+                key: key.to_owned(),
+            })?;
+        if projected_bytes > u64::from(budgets.max_sidecar_bytes) {
+            return Err(Gfx942LayoutCompatibilityErrorV2::StorageBoundExceeded {
+                actual: projected_bytes,
+                max: u64::from(budgets.max_sidecar_bytes),
+            });
+        }
+    }
+
+    if edges > u64::from(budgets.graph.max_edges) {
+        return Err(inconsistent_layout(
+            "projection",
+            "semantic graph edge bound exceeded before projection allocation",
+        ));
+    }
+    if fields > u64::from(budgets.graph.max_fields) {
+        return Err(inconsistent_layout(
+            "projection",
+            "semantic graph field bound exceeded before projection allocation",
+        ));
+    }
+    if graph_validation_work > budgets.graph.max_validation_work {
+        return Err(inconsistent_layout(
+            "projection",
+            "semantic graph validation-work bound exceeded before projection allocation",
+        ));
+    }
+    preflight_projection_work(&mut work, sort_work(node_count), budgets)?;
+    preflight_projection_work(&mut work, projected_bytes, budgets)?;
+    Ok(ProjectionAdmissionV2 { node_count })
+}
+
+#[derive(Clone, Copy)]
+struct ProjectionShapeV2 {
+    edges: u64,
+    fields: u64,
+    field_offsets: u64,
+    has_array_stride: bool,
+    clone_work: u64,
+}
+
+fn preflight_projection_kind(
+    key: &str,
+    kind: &SemanticTypeKindV2,
+    record: &RustcTypeLayoutRecordV2,
+) -> Result<ProjectionShapeV2, Gfx942LayoutCompatibilityErrorV2> {
+    if record.uninhabited() {
+        return Err(layout_unsupported(
+            key,
+            "uninhabited values are not byte-copy values",
+        ));
+    }
+    let simple = ProjectionShapeV2 {
+        edges: 0,
+        fields: 0,
+        field_offsets: 0,
+        has_array_stride: false,
+        clone_work: 1,
+    };
+    match kind {
+        SemanticTypeKindV2::Scalar(SemanticScalarV2::Int {
+            bits: 8 | 16 | 32 | 64,
+            ..
+        }) => Ok(simple),
+        SemanticTypeKindV2::Scalar(SemanticScalarV2::Float { bits: 32 | 64 }) => Ok(simple),
+        SemanticTypeKindV2::Scalar(SemanticScalarV2::Int { .. }) => Err(layout_unsupported(
+            key,
+            "integer width lacks a reviewed gfx942 ABI rule",
+        )),
+        SemanticTypeKindV2::Scalar(SemanticScalarV2::Float { .. }) => Err(layout_unsupported(
+            key,
+            "float width lacks a reviewed gfx942 ABI rule",
+        )),
+        SemanticTypeKindV2::Array { .. } => Ok(ProjectionShapeV2 {
+            edges: 1,
+            has_array_stride: true,
+            clone_work: 1,
+            ..simple
+        }),
+        SemanticTypeKindV2::Struct { identity, fields } => {
+            let representation = record
+                .representation()
+                .ok_or_else(|| inconsistent_layout(key, "struct representation is missing"))?;
+            if representation.packed_alignment_bytes.is_some()
+                || representation.requested_alignment_bytes.is_some()
+                || representation.explicit_integer
+            {
+                return Err(layout_unsupported(
+                    key,
+                    "packed, explicitly aligned, or integer representations are not admitted",
+                ));
+            }
+            let aggregate = match record.aggregates() {
+                [aggregate] => aggregate,
+                _ => {
+                    return Err(inconsistent_layout(
+                        key,
+                        "struct must have one rustc aggregate record",
+                    ));
+                }
+            };
+            if !aggregate.padding().is_empty() {
+                return Err(layout_unsupported(
+                    key,
+                    "aggregate object representation contains padding",
+                ));
+            }
+            if representation.transparent {
+                if representation.c || fields.len() != 1 || aggregate.source_to_memory() != [0] {
+                    return Err(layout_unsupported(
+                        key,
+                        "the reviewed repr(transparent) subset requires exactly one field",
+                    ));
+                }
+            } else if !representation.c {
+                return Err(layout_unsupported(
+                    key,
+                    "repr(Rust) aggregate ABI is not admitted",
+                ));
+            } else if aggregate.source_to_memory().len() != fields.len()
+                || aggregate
+                    .source_to_memory()
+                    .iter()
+                    .enumerate()
+                    .any(|(index, observed)| *observed != index as u32)
+            {
+                return Err(inconsistent_layout(
+                    key,
+                    "host field memory order differs from repr(C) source order",
+                ));
+            }
+            let field_name_bytes = fields.iter().try_fold(0_u64, |total, field| {
+                total.checked_add(field.name.as_ref().map_or(0, |name| name.len() as u64))
+            });
+            let clone_work = (identity.len() as u64)
+                .checked_add(field_name_bytes.ok_or_else(|| {
+                    Gfx942LayoutCompatibilityErrorV2::ArithmeticOverflow {
+                        key: key.to_owned(),
+                    }
+                })?)
+                .and_then(|value| value.checked_add(fields.len() as u64))
+                .ok_or_else(|| Gfx942LayoutCompatibilityErrorV2::ArithmeticOverflow {
+                    key: key.to_owned(),
+                })?;
+            Ok(ProjectionShapeV2 {
+                edges: fields.len() as u64,
+                fields: fields.len() as u64,
+                field_offsets: fields.len() as u64,
+                has_array_stride: false,
+                clone_work,
+            })
+        }
+        SemanticTypeKindV2::Unit => Err(layout_unsupported(
+            key,
+            "unit is outside the reviewed fixed-width gfx942 subset",
+        )),
+        SemanticTypeKindV2::ValidityScalar { .. }
+        | SemanticTypeKindV2::Scalar(_)
+        | SemanticTypeKindV2::Tuple { .. }
+        | SemanticTypeKindV2::Union { .. }
+        | SemanticTypeKindV2::Enum { .. }
+        | SemanticTypeKindV2::RawPointer { .. }
+        | SemanticTypeKindV2::Reference { .. }
+        | SemanticTypeKindV2::Never
+        | SemanticTypeKindV2::Slice { .. }
+        | SemanticTypeKindV2::Str
+        | SemanticTypeKindV2::OpaqueDst { .. } => Err(layout_unsupported(
+            key,
+            "type kind is outside the reviewed gfx942 byte-layout subset",
+        )),
+    }
+}
+
+fn sidecar_clone_work(record: &RustcTypeLayoutRecordV2) -> u64 {
+    let mut work = record.key.len() as u64;
+    for aggregate in &record.aggregates {
+        work = work
+            .saturating_add(aggregate.path.len() as u64)
+            .saturating_add(aggregate.source_to_memory.len() as u64)
+            .saturating_add(aggregate.padding.len() as u64);
+    }
+    work
+}
+
+fn projection_header_size(
+    target: &CanonicalGfx942LayoutTargetV2,
+) -> Result<u64, Gfx942LayoutCompatibilityErrorV2> {
+    [
+        "fe2o3.gfx942-layout-projection.v2",
+        target.triple(),
+        target.cpu(),
+        target.features(),
+        target.data_layout(),
+    ]
+    .into_iter()
+    .try_fold(6_u64, |total, text| {
+        total
+            .checked_add(4)
+            .and_then(|value| value.checked_add(text.len() as u64))
+            .ok_or_else(|| Gfx942LayoutCompatibilityErrorV2::ArithmeticOverflow {
+                key: "projection header".to_owned(),
+            })
+    })
+}
+
+fn projection_record_size(
+    key: &str,
+    shape: ProjectionShapeV2,
+) -> Result<u64, Gfx942LayoutCompatibilityErrorV2> {
+    let stride_bytes = if shape.has_array_stride { 9_u64 } else { 1_u64 };
+    4_u64
+        .checked_add(key.len() as u64)
+        .and_then(|value| value.checked_add(16))
+        .and_then(|value| value.checked_add(stride_bytes))
+        .and_then(|value| value.checked_add(4))
+        .and_then(|value| value.checked_add(shape.field_offsets.saturating_mul(8)))
+        .and_then(|value| value.checked_add(4))
+        .ok_or_else(|| Gfx942LayoutCompatibilityErrorV2::ArithmeticOverflow {
+            key: key.to_owned(),
+        })
+}
+
+fn preflight_projection_work(
+    work: &mut u64,
+    amount: u64,
+    budgets: SemanticTypeLayoutBudgetsV2,
+) -> Result<(), Gfx942LayoutCompatibilityErrorV2> {
+    *work = work.saturating_add(amount);
+    if *work > budgets.max_projection_work {
+        return Err(Gfx942LayoutCompatibilityErrorV2::WorkBoundExceeded {
+            actual: *work,
+            max: budgets.max_projection_work,
+        });
+    }
+    Ok(())
+}
+
 struct ProjectionBuilderV2<'a> {
     observation: &'a RustcTypeLayoutObservationV2,
     budgets: SemanticTypeLayoutBudgetsV2,
@@ -518,12 +850,28 @@ struct ProjectionBuilderV2<'a> {
     records: Vec<Gfx942LayoutProjectionRecordV2>,
 }
 
+#[cfg(test)]
+std::thread_local! {
+    static PROJECTION_BUILDER_CONSTRUCTIONS_V2: std::cell::Cell<u64> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+#[derive(Clone, Copy)]
+struct ProjectionAdmissionV2 {
+    node_count: usize,
+}
+
 impl<'a> ProjectionBuilderV2<'a> {
     fn new(
         observation: &'a RustcTypeLayoutObservationV2,
         budgets: SemanticTypeLayoutBudgetsV2,
+        admission: ProjectionAdmissionV2,
     ) -> Result<Self, Gfx942LayoutCompatibilityErrorV2> {
-        let count = observation.graph().node_count();
+        #[cfg(test)]
+        PROJECTION_BUILDER_CONSTRUCTIONS_V2.with(|count| count.set(count.get() + 1));
+        let count = admission.node_count;
+        debug_assert_eq!(count, observation.graph().node_count());
         let mut active = Vec::new();
         active.try_reserve_exact(count).map_err(|_| {
             Gfx942LayoutCompatibilityErrorV2::AllocationFailed {
@@ -571,28 +919,59 @@ impl<'a> ProjectionBuilderV2<'a> {
     ) -> Result<DerivedLayoutV2, Gfx942LayoutCompatibilityErrorV2> {
         self.charge(1)?;
         let index = id.index() as usize;
-        if let Some(layout) = self.derived.get(index).and_then(Clone::clone) {
-            return Ok(layout);
+        if let Some(clone_work) = self
+            .derived
+            .get(index)
+            .and_then(Option::as_ref)
+            .map(derived_layout_clone_work)
+        {
+            self.charge(clone_work)?;
+            return self
+                .derived
+                .get(index)
+                .and_then(Option::as_ref)
+                .cloned()
+                .ok_or_else(|| inconsistent_layout(id.index().to_string(), "cache disappeared"));
         }
-        let key = self
+        let key_bytes = self
             .observation
             .graph()
             .key(id)
             .ok_or_else(|| inconsistent_layout(id.index().to_string(), "node key is missing"))?
+            .len() as u64;
+        self.charge(key_bytes)?;
+        let key = self
+            .observation
+            .graph()
+            .key(id)
+            .expect("node key was checked before clone")
             .to_owned();
         if self.active.get(index).copied().unwrap_or(false) {
             return Err(Gfx942LayoutCompatibilityErrorV2::Cycle { key });
         }
+        let node_clone_work = self
+            .observation
+            .graph()
+            .node(id)
+            .ok_or_else(|| inconsistent_layout(key.clone(), "node definition is missing"))
+            .map(semantic_kind_clone_work)?;
+        self.charge(node_clone_work)?;
         let node = self
             .observation
             .graph()
             .node(id)
-            .ok_or_else(|| inconsistent_layout(key.clone(), "node definition is missing"))?
+            .expect("node definition was checked before clone")
             .clone();
+        let record_clone_work = self
+            .observation
+            .layout_record(&key)
+            .ok_or_else(|| inconsistent_layout(key.clone(), "rustc observation record is missing"))
+            .map(sidecar_clone_work)?;
+        self.charge(record_clone_work)?;
         let record = self
             .observation
             .layout_record(&key)
-            .ok_or_else(|| inconsistent_layout(key.clone(), "rustc observation record is missing"))?
+            .expect("layout record was checked before clone")
             .clone();
         if record.uninhabited() {
             return Err(layout_unsupported(
@@ -611,6 +990,11 @@ impl<'a> ProjectionBuilderV2<'a> {
                 "host rustc size/alignment differs from canonical gfx942 projection",
             ));
         }
+        let projection_clone_work = key
+            .len()
+            .saturating_add(layout.field_offsets.len())
+            .saturating_add(layout.padding.len()) as u64;
+        self.charge(projection_clone_work)?;
         let projection_record = Gfx942LayoutProjectionRecordV2 {
             key: key.clone(),
             size_bytes: layout.size_bytes,
@@ -619,6 +1003,7 @@ impl<'a> ProjectionBuilderV2<'a> {
             array_stride_bytes: layout.array_stride_bytes,
             padding: layout.padding.clone(),
         };
+        self.charge(derived_layout_clone_work(&layout))?;
         self.derived[index] = Some(layout.clone());
         self.records.push(projection_record);
         Ok(layout)
@@ -867,6 +1252,56 @@ impl<'a> ProjectionBuilderV2<'a> {
             identity_sha256,
         })
     }
+}
+
+fn semantic_kind_clone_work(node: &SemanticTypeNodeV2) -> u64 {
+    match &node.kind {
+        SemanticTypeKindV2::Struct { identity, fields }
+        | SemanticTypeKindV2::Union { identity, fields } => fields.iter().fold(
+            (identity.len() as u64).saturating_add(fields.len() as u64),
+            |work, field| {
+                work.saturating_add(field.name.as_ref().map_or(0, |name| name.len()) as u64)
+            },
+        ),
+        SemanticTypeKindV2::Tuple { fields } => {
+            fields.iter().fold(fields.len() as u64, |work, field| {
+                work.saturating_add(field.name.as_ref().map_or(0, |name| name.len()) as u64)
+            })
+        }
+        SemanticTypeKindV2::Enum {
+            identity, variants, ..
+        } => variants
+            .iter()
+            .fold((identity.len() + variants.len()) as u64, |work, variant| {
+                variant.fields.iter().fold(
+                    work.saturating_add(variant.name.len() as u64)
+                        .saturating_add(variant.fields.len() as u64),
+                    |work, field| {
+                        work.saturating_add(field.name.as_ref().map_or(0, |name| name.len()) as u64)
+                    },
+                )
+            }),
+        SemanticTypeKindV2::OpaqueDst { identity, metadata } => {
+            (identity.len() as u64).saturating_add(pointer_metadata_clone_work(metadata))
+        }
+        SemanticTypeKindV2::RawPointer { metadata, .. }
+        | SemanticTypeKindV2::Reference { metadata, .. } => pointer_metadata_clone_work(metadata),
+        SemanticTypeKindV2::ValidityScalar { valid_ranges, .. } => valid_ranges.len() as u64,
+        _ => 1,
+    }
+}
+
+fn pointer_metadata_clone_work(metadata: &PointerMetadataV2) -> u64 {
+    match metadata {
+        PointerMetadataV2::VTable { trait_identity } => trait_identity.len() as u64,
+        _ => 1,
+    }
+}
+
+fn derived_layout_clone_work(layout: &DerivedLayoutV2) -> u64 {
+    1_u64
+        .saturating_add(layout.field_offsets.len() as u64)
+        .saturating_add(layout.padding.len() as u64)
 }
 
 fn simple_layout(size_bytes: u64, alignment_bytes: u64) -> DerivedLayoutV2 {
@@ -3491,6 +3926,7 @@ static UNIT_VALUE: () = ();
     fn projection_limits_fail_at_max_plus_one_and_on_overflow() {
         let results = captures();
         let c = &results.captures["C_VALUE"];
+        PROJECTION_BUILDER_CONSTRUCTIONS_V2.with(|count| count.set(0));
         let error = derive_gfx942_layout_compatibility_candidate_v2(
             c,
             SemanticTypeLayoutBudgetsV2 {
@@ -3499,10 +3935,117 @@ static UNIT_VALUE: () = ();
             },
         )
         .unwrap_err();
-        assert_eq!(
+        assert!(matches!(
             error,
-            Gfx942LayoutCompatibilityErrorV2::WorkBoundExceeded { actual: 1, max: 0 }
-        );
+            Gfx942LayoutCompatibilityErrorV2::WorkBoundExceeded { actual, max: 0 }
+                if actual > 0
+        ));
+        PROJECTION_BUILDER_CONSTRUCTIONS_V2.with(|count| assert_eq!(count.get(), 0));
+
+        let defaults = SemanticTypeLayoutBudgetsV2::default();
+        let mut low = 0_u64;
+        let mut high = defaults.max_projection_work;
+        while low < high {
+            let middle = low + (high - low) / 2;
+            let accepted = derive_gfx942_layout_compatibility_candidate_v2(
+                c,
+                SemanticTypeLayoutBudgetsV2 {
+                    max_projection_work: middle,
+                    ..defaults
+                },
+            )
+            .is_ok();
+            if accepted {
+                high = middle;
+            } else {
+                low = middle + 1;
+            }
+        }
+        let exact_work = low;
+        let exact = derive_gfx942_layout_compatibility_candidate_v2(
+            c,
+            SemanticTypeLayoutBudgetsV2 {
+                max_projection_work: exact_work,
+                ..defaults
+            },
+        )
+        .expect("exact projection work bound must succeed");
+        assert!(matches!(
+            derive_gfx942_layout_compatibility_candidate_v2(
+                c,
+                SemanticTypeLayoutBudgetsV2 {
+                    max_projection_work: exact_work - 1,
+                    ..defaults
+                },
+            ),
+            Err(Gfx942LayoutCompatibilityErrorV2::WorkBoundExceeded { .. })
+        ));
+        let plus_one = derive_gfx942_layout_compatibility_candidate_v2(
+            c,
+            SemanticTypeLayoutBudgetsV2 {
+                max_projection_work: exact_work + 1,
+                ..defaults
+            },
+        )
+        .expect("projection work bound plus one must succeed");
+        assert_eq!(exact, plus_one);
+
+        let target = CanonicalGfx942LayoutTargetV2::canonical();
+        let mut low = 0_u32;
+        let mut high = defaults.max_sidecar_bytes;
+        while low < high {
+            let middle = low + (high - low) / 2;
+            let accepted = preflight_projection(
+                c,
+                &target,
+                SemanticTypeLayoutBudgetsV2 {
+                    max_sidecar_bytes: middle,
+                    ..defaults
+                },
+            )
+            .is_ok();
+            if accepted {
+                high = middle;
+            } else {
+                low = middle + 1;
+            }
+        }
+        let exact_storage = low;
+        preflight_projection(
+            c,
+            &target,
+            SemanticTypeLayoutBudgetsV2 {
+                max_sidecar_bytes: exact_storage,
+                ..defaults
+            },
+        )
+        .expect("exact projection storage bound must succeed");
+        assert!(matches!(
+            preflight_projection(
+                c,
+                &target,
+                SemanticTypeLayoutBudgetsV2 {
+                    max_sidecar_bytes: exact_storage - 1,
+                    ..defaults
+                },
+            ),
+            Err(Gfx942LayoutCompatibilityErrorV2::StorageBoundExceeded { .. })
+        ));
+
+        PROJECTION_BUILDER_CONSTRUCTIONS_V2.with(|count| count.set(0));
+        let mut hostile = results.captures["RUST_VALUE"].clone();
+        hostile
+            .layout_records
+            .iter_mut()
+            .find(|record| !record.aggregates.is_empty())
+            .expect("rust aggregate record")
+            .aggregates[0]
+            .path = "x".repeat(512 * 1024);
+        assert!(matches!(
+            derive_gfx942_layout_compatibility_candidate_v2(&hostile, defaults),
+            Err(Gfx942LayoutCompatibilityErrorV2::Unsupported { .. })
+        ));
+        PROJECTION_BUILDER_CONSTRUCTIONS_V2.with(|count| assert_eq!(count.get(), 0));
         assert!(matches!(
             align_up(u64::MAX, 8, "overflow"),
             Err(Gfx942LayoutCompatibilityErrorV2::ArithmeticOverflow { .. })
