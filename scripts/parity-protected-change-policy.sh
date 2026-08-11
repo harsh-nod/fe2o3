@@ -30,12 +30,14 @@ readonly CANDIDATE_HEAD="$8"
 readonly -a TRUST_FILES=(
   docs/parity-row-evidence-policy-v2.tsv
   docs/parity-evidence/trust-policy-v2.tsv
+  scripts/parity-publisher-client.py
   scripts/parity-signed-evidence.py
   scripts/parity-protected-change-policy.sh
   scripts/parity-repository-rules.py
   scripts/parity-repository-rules.sh
   .github/workflows/ci.yml
   .github/workflows/parity-promotion.yml
+  .github/workflows/parity-publisher-gate.yml
   .github/CODEOWNERS
   .github/parity-trust-reviewers.txt
 )
@@ -118,7 +120,7 @@ validate_changed_paths() {
   while IFS= read -r path; do
     trusted=false
     case "${path}" in
-      docs/parity-row-evidence-policy-v2.tsv|docs/parity-evidence/trust-policy-v2.tsv|scripts/parity-signed-evidence.py|scripts/parity-protected-change-policy.sh|scripts/parity-repository-rules.py|scripts/parity-repository-rules.sh|.github/workflows/ci.yml|.github/workflows/parity-promotion.yml|.github/CODEOWNERS|.github/parity-trust-reviewers.txt)
+      docs/parity-row-evidence-policy-v2.tsv|docs/parity-evidence/trust-policy-v2.tsv|scripts/parity-publisher-client.py|scripts/parity-signed-evidence.py|scripts/parity-protected-change-policy.sh|scripts/parity-repository-rules.py|scripts/parity-repository-rules.sh|.github/workflows/ci.yml|.github/workflows/parity-promotion.yml|.github/workflows/parity-publisher-gate.yml|.github/CODEOWNERS|.github/parity-trust-reviewers.txt)
         trusted=true
         ;;
       docs/parity-evidence/trusted-keys/*)

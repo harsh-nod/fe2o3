@@ -8,6 +8,7 @@ readonly TEST_DIR
 ROOT="$(cd -- "${TEST_DIR}/../.." && pwd)"
 readonly ROOT
 readonly PROTECTED_WORKFLOW="${ROOT}/.github/workflows/parity-promotion.yml"
+readonly PUBLISHER_WORKFLOW="${ROOT}/.github/workflows/parity-publisher-gate.yml"
 readonly GENERIC_WORKFLOW="${ROOT}/.github/workflows/ci.yml"
 readonly HARDWARE_WORKFLOW="${ROOT}/.github/workflows/hardware-smoke.yml"
 readonly ROCM_WORKFLOW="${ROOT}/.github/workflows/rocm-compile.yml"
@@ -90,25 +91,12 @@ require_text() {
 require_text "${PROTECTED_WORKFLOW}" 'pull_request_target:'
 require_text "${PROTECTED_WORKFLOW}" 'merge_group:'
 require_text "${PROTECTED_WORKFLOW}" 'types: [checks_requested]'
-require_text "${PROTECTED_WORKFLOW}" 'github.event.merge_group.base_sha'
-require_text "${PROTECTED_WORKFLOW}" 'github.event.merge_group.head_sha'
-require_text "${PROTECTED_WORKFLOW}" 'merge-group base SHA is not current default tip'
-require_text "${PROTECTED_WORKFLOW}" 'merge-group trust monotonicity passed; protected PR review is externally required'
-require_text "${PROTECTED_WORKFLOW}" 'This check only becomes merge-enforcing when a protected ruleset'
 require_text "${PROTECTED_WORKFLOW}" 'path: protected'
 require_text "${PROTECTED_WORKFLOW}" 'path: candidate'
 require_text "${PROTECTED_WORKFLOW}" 'persist-credentials: false'
-require_text "${PROTECTED_WORKFLOW}" 'python3 protected/scripts/parity-signed-evidence.py gate'
-require_text "${PROTECTED_WORKFLOW}" '--trust-policy protected/docs/parity-evidence/trust-policy-v2.tsv'
-require_text "${PROTECTED_WORKFLOW}" '--trusted-policy protected/docs/parity-row-evidence-policy-v2.tsv'
-require_text "${PROTECTED_WORKFLOW}" '--candidate-policy candidate/docs/parity-row-evidence-policy-v2.tsv'
-require_text "${PROTECTED_WORKFLOW}" 'fe2o3-protected-publisher-receipt'
-require_text "${PROTECTED_WORKFLOW}" 'fe2o3-protected-publisher-challenge'
-require_text "${PROTECTED_WORKFLOW}" '--publisher-receipt-root "${publisher_receipt_root}"'
-require_text "${PROTECTED_WORKFLOW}" '--expected-logical-destination docs/parity-evidence/archive'
-require_text "${PROTECTED_WORKFLOW}" '--expected-publisher-challenge "${publisher_challenge}"'
-require_text "${PROTECTED_WORKFLOW}" '--expected-default-tip "${BASE_SHA}"'
-require_text "${PROTECTED_WORKFLOW}" '--expected-candidate-head "${HEAD_SHA}"'
+require_text "${PROTECTED_WORKFLOW}" 'uses: ./.github/workflows/parity-publisher-gate.yml'
+require_text "${PROTECTED_WORKFLOW}" 'promotion classified; publisher authorization is deferred'
+require_text "${PROTECTED_WORKFLOW}" 'path intentionally has no id-token'
 require_text "${PROTECTED_WORKFLOW}" 'pull-requests: read'
 require_text "${PROTECTED_WORKFLOW}" 'protected/scripts/parity-protected-change-policy.sh'
 require_text "${PROTECTED_WORKFLOW}" 'gh api --paginate'
@@ -122,24 +110,46 @@ require_text "${PROTECTED_WORKFLOW}" 'types: [submitted, edited, dismissed]'
 require_text "${PROTECTED_WORKFLOW}" 'BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}'
 require_text "${PROTECTED_WORKFLOW}" '[[ "${BASE_REPOSITORY}" == "${GITHUB_REPOSITORY}" ]]'
 require_text "${PROTECTED_WORKFLOW}" '[[ "${BASE_REF}" == "${DEFAULT_BRANCH}" ]]'
-require_text "${PROTECTED_WORKFLOW}" 'git init --bare "${DEFAULT_TIP_ROOT}"'
+require_text "${PROTECTED_WORKFLOW}" 'git init --bare "${default_tip_root}"'
 require_text "${PROTECTED_WORKFLOW}" 'fetch --no-tags --depth=1 --force origin'
-require_text "${PROTECTED_WORKFLOW}" '"+refs/heads/${DEFAULT_BRANCH}:${DEFAULT_REMOTE_REF}"'
-require_text "${PROTECTED_WORKFLOW}" 'if [[ "${CURRENT_DEFAULT_SHA}" != "${BASE_SHA}" ]]; then'
+require_text "${PROTECTED_WORKFLOW}" '"+refs/heads/${DEFAULT_BRANCH}:${default_remote_ref}"'
+require_text "${PROTECTED_WORKFLOW}" 'if [[ "${current_default_sha}" != "${BASE_SHA}" ]]; then'
 require_text "${PROTECTED_WORKFLOW}" 'pull request base SHA is not current default tip'
 require_text "${PROTECTED_WORKFLOW}" 'HEAD_SHA: ${{ github.event.pull_request.head.sha }}'
 require_text "${PROTECTED_WORKFLOW}" 'CHANGED_FILE_COUNT: ${{ github.event.pull_request.changed_files }}'
 require_text "${PROTECTED_WORKFLOW}" 'actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683'
+if rg -n 'parity-publisher-gate\.yml@' "${PROTECTED_WORKFLOW}"; then
+  printf 'protected publisher caller is not candidate-local\n' >&2
+  exit 1
+fi
+
+require_text "${PUBLISHER_WORKFLOW}" 'workflow_call:'
+require_text "${PUBLISHER_WORKFLOW}" 'id-token: write'
+require_text "${PUBLISHER_WORKFLOW}" 'FE2O3_PUBLISHER_REPOSITORY_OWNER_ID: ${{ github.repository_owner_id }}'
+require_text "${PUBLISHER_WORKFLOW}" 'FE2O3_PUBLISHER_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}'
+require_text "${PUBLISHER_WORKFLOW}" 'FE2O3_PUBLISHER_SERVICE_URL: ${{ vars.FE2O3_PUBLISHER_SERVICE_URL }}'
+require_text "${PUBLISHER_WORKFLOW}" 'FE2O3_PUBLISHER_SERVICE_HOST: ${{ vars.FE2O3_PUBLISHER_SERVICE_HOST }}'
+require_text "${PUBLISHER_WORKFLOW}" 'FE2O3_PUBLISHER_OIDC_AUDIENCE: ${{ vars.FE2O3_PUBLISHER_OIDC_AUDIENCE }}'
+require_text "${PUBLISHER_WORKFLOW}" 'python3 protected/scripts/parity-publisher-client.py'
+require_text "${PUBLISHER_WORKFLOW}" 'python3 protected/scripts/parity-signed-evidence.py gate'
+require_text "${PUBLISHER_WORKFLOW}" 'github.event.merge_group.base_sha'
+require_text "${PUBLISHER_WORKFLOW}" 'github.event.merge_group.head_sha'
+require_text "${PUBLISHER_WORKFLOW}" 'merge-group base SHA is not current default tip'
+require_text "${PUBLISHER_WORKFLOW}" '--publisher-receipt-root "${publisher_receipt_root}"'
+require_text "${PUBLISHER_WORKFLOW}" '--expected-default-tip "${BASE_SHA}"'
+require_text "${PUBLISHER_WORKFLOW}" '--expected-candidate-head "${HEAD_SHA}"'
 
 for path in \
   docs/parity-evidence/trust-policy-v2.tsv \
   docs/parity-evidence/trusted-keys/** \
+  scripts/parity-publisher-client.py \
   scripts/parity-signed-evidence.py \
   scripts/parity-protected-change-policy.sh \
   scripts/parity-repository-rules.py \
   scripts/parity-repository-rules.sh \
   .github/workflows/ci.yml \
   .github/workflows/parity-promotion.yml \
+  .github/workflows/parity-publisher-gate.yml \
   .github/CODEOWNERS \
   .github/parity-trust-reviewers.txt; do
   require_text "${PROTECTED_WORKFLOW}" "- ${path}"
@@ -148,36 +158,41 @@ for ownership in \
   /docs/parity-row-evidence-policy-v2.tsv \
   /docs/parity-evidence/trust-policy-v2.tsv \
   /docs/parity-evidence/trusted-keys/ \
+  /scripts/parity-publisher-client.py \
   /scripts/parity-signed-evidence.py \
   /scripts/parity-protected-change-policy.sh \
   /scripts/parity-repository-rules.py \
   /scripts/parity-repository-rules.sh \
   /.github/workflows/parity-promotion.yml \
+  /.github/workflows/parity-publisher-gate.yml \
   /.github/CODEOWNERS; do
   require_text "${CODEOWNERS}" "${ownership} @powderluv"
 done
 
 
-require_text "${GENERIC_WORKFLOW}" 'git archive "${BASE_SHA}"'
+require_text "${GENERIC_WORKFLOW}" 'direct default-branch parity promotion is forbidden; repository rules must prevent this push'
+require_text "${GENERIC_WORKFLOW}" 'name: Generic parity policy gate'
+require_text "${GENERIC_WORKFLOW}" 'name: Generic validation'
+if ! sed -n '/^  parity-policy:/,/^  validate:/p' "${GENERIC_WORKFLOW}" |
+  rg -Fx '    timeout-minutes: 10' >/dev/null; then
+  printf 'generic parity policy timeout is not exactly 10 minutes\n' >&2
+  exit 1
+fi
+if ! sed -n '/^  validate:/,$p' "${GENERIC_WORKFLOW}" |
+  rg -Fx '    timeout-minutes: 60' >/dev/null; then
+  printf 'generic validation timeout is not exactly 60 minutes\n' >&2
+  exit 1
+fi
 require_text "${GENERIC_WORKFLOW}" 'merge_group:'
 require_text "${GENERIC_WORKFLOW}" 'MERGE_BASE_SHA: ${{ github.event.merge_group.base_sha }}'
 require_text "${GENERIC_WORKFLOW}" 'MERGE_HEAD_SHA: ${{ github.event.merge_group.head_sha }}'
-require_text "${GENERIC_WORKFLOW}" 'python3 "${trusted}/scripts/parity-signed-evidence.py" gate'
-require_text "${GENERIC_WORKFLOW}" '--trust-policy "${trusted}/docs/parity-evidence/trust-policy-v2.tsv"'
-require_text "${GENERIC_WORKFLOW}" '--trusted-policy "${trusted}/docs/parity-row-evidence-policy-v2.tsv"'
-require_text "${GENERIC_WORKFLOW}" 'fe2o3-protected-publisher-receipt'
-require_text "${GENERIC_WORKFLOW}" 'fe2o3-protected-publisher-challenge'
-require_text "${GENERIC_WORKFLOW}" '--publisher-receipt-root "${publisher_receipt_root}"'
-require_text "${GENERIC_WORKFLOW}" '--expected-publisher-challenge "${publisher_challenge}"'
-require_text "${GENERIC_WORKFLOW}" '--expected-default-tip "${BASE_SHA}"'
-require_text "${GENERIC_WORKFLOW}" '--expected-candidate-head "${HEAD_SHA}"'
+require_text "${GENERIC_WORKFLOW}" 'authorized only by the protected merge-group reusable workflow'
 require_text "${GENERIC_WORKFLOW}" 'EVENT_NAME: ${{ github.event_name }}'
 require_text "${GENERIC_WORKFLOW}" 'PUSH_BEFORE_SHA: ${{ github.event.before }}'
 require_text "${GENERIC_WORKFLOW}" 'EVENT_HEAD_SHA: ${{ github.sha }}'
 require_text "${GENERIC_WORKFLOW}" 'REF_NAME: ${{ github.ref_name }}'
 require_text "${GENERIC_WORKFLOW}" 'git fetch --no-tags --prune --force origin'
-require_text "${GENERIC_WORKFLOW}" '"+refs/heads/${DEFAULT_BRANCH}:${DEFAULT_REMOTE_REF}"'
-require_text "${GENERIC_WORKFLOW}" 'BASE_SHA="$(git rev-parse --verify "${DEFAULT_REMOTE_REF}^{commit}")"'
+require_text "${GENERIC_WORKFLOW}" '"+refs/heads/${DEFAULT_BRANCH}:${default_remote_ref}"'
 require_text "${GENERIC_WORKFLOW}" 'git merge-base --is-ancestor "${BASE_SHA}" "${HEAD_SHA}"'
 require_text "${GENERIC_WORKFLOW}" 'non-default branch head does not contain current protected default tip'
 require_text "${GENERIC_WORKFLOW}" 'git diff --quiet "${BASE_SHA}" "${HEAD_SHA}"'
@@ -194,18 +209,41 @@ if rg -n 'BASE_SHA="\$\(git merge-base' "${GENERIC_WORKFLOW}"; then
   exit 1
 fi
 if rg -n 'actions/checkout@(v[0-9]+|main|master)' \
-  "${GENERIC_WORKFLOW}" "${PROTECTED_WORKFLOW}" "${HARDWARE_WORKFLOW}" "${ROCM_WORKFLOW}"; then
+  "${GENERIC_WORKFLOW}" "${PROTECTED_WORKFLOW}" "${PUBLISHER_WORKFLOW}" \
+  "${HARDWARE_WORKFLOW}" "${ROCM_WORKFLOW}"; then
   printf 'hosted CI uses a mutable checkout action reference\n' >&2
   exit 1
 fi
 
 
-if rg -n 'python3 candidate/|candidate/scripts/|scripts/parity-row-evidence.sh gate' "${PROTECTED_WORKFLOW}"; then
+if rg -n 'python3 candidate/|candidate/scripts/|scripts/parity-row-evidence.sh gate' \
+  "${PROTECTED_WORKFLOW}" "${PUBLISHER_WORKFLOW}"; then
   printf 'protected parity CI invokes candidate executable content\n' >&2
   exit 1
 fi
+if rg -n 'id-token: write|parity-publisher-client|PUBLISHER_SERVICE' \
+  "${GENERIC_WORKFLOW}"; then
+  printf 'candidate-controlled generic workflow has publisher authority\n' >&2
+  exit 1
+fi
+if [[ "$(rg -n 'id-token: write' \
+  "${PROTECTED_WORKFLOW}" "${PUBLISHER_WORKFLOW}" "${GENERIC_WORKFLOW}" |
+  wc -l)" -ne 2 ]]; then
+  printf 'publisher OIDC permission is not limited to caller and called jobs\n' >&2
+  exit 1
+fi
+if sed -n '/^  verify:/,/^  verify-merge-group:/p' "${PROTECTED_WORKFLOW}" |
+  rg -n 'id-token: write|parity-publisher-client|PUBLISHER_SERVICE'; then
+  printf 'pull-request review path has publisher authority\n' >&2
+  exit 1
+fi
+if rg -n 'python3 candidate/scripts/parity-publisher-client.py' \
+  "${GENERIC_WORKFLOW}" "${PROTECTED_WORKFLOW}" "${PUBLISHER_WORKFLOW}"; then
+  printf 'hosted parity CI invokes a candidate-owned publisher client\n' >&2
+  exit 1
+fi
 if rg -n -- '--publisher-receipt-root[[:space:]]+candidate' \
-  "${GENERIC_WORKFLOW}" "${PROTECTED_WORKFLOW}"; then
+  "${GENERIC_WORKFLOW}" "${PROTECTED_WORKFLOW}" "${PUBLISHER_WORKFLOW}"; then
   printf 'hosted parity CI accepts a candidate-owned publisher receipt\n' >&2
   exit 1
 fi

@@ -1,11 +1,13 @@
 /docs/parity-row-evidence-policy-v2.tsv @powderluv
 /docs/parity-evidence/trust-policy-v2.tsv @powderluv
 /docs/parity-evidence/trusted-keys/ @powderluv
+/scripts/parity-publisher-client.py @powderluv
 /scripts/parity-signed-evidence.py @powderluv
 /scripts/parity-protected-change-policy.sh @powderluv
 /scripts/parity-repository-rules.py @powderluv
 /scripts/parity-repository-rules.sh @powderluv
 /.github/workflows/ci.yml @powderluv
 /.github/workflows/parity-promotion.yml @powderluv
+/.github/workflows/parity-publisher-gate.yml @powderluv
 /.github/CODEOWNERS @powderluv
 /.github/parity-trust-reviewers.txt @powderluv

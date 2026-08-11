@@ -43,7 +43,11 @@ jq -e '
   .enforcement == "active" and
   .bypass_actors == [] and
   ([.rules[].type] | index("merge_queue")) != null and
-  ([.rules[].type] | index("workflows")) != null
+  ([.rules[].type] | index("workflows")) != null and
+  ([.rules[] | select(.type == "required_status_checks") |
+    .parameters.required_status_checks[].context] | sort) ==
+    (["Generic parity policy gate", "Generic validation",
+      "Protected signed-evidence gate"] | sort)
 ' "${TEST_ROOT}/rules.json" >/dev/null
 
 mutate() {

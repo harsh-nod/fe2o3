@@ -12,7 +12,11 @@ from typing import Any
 
 
 RULESET_NAME = "fe2o3-production-parity"
-CHECK_CONTEXTS = ("Generic validation", "Protected signed-evidence gate")
+CHECK_CONTEXTS = (
+    "Generic parity policy gate",
+    "Generic validation",
+    "Protected signed-evidence gate",
+)
 WORKFLOW_PATHS = (
     ".github/workflows/ci.yml",
     ".github/workflows/parity-promotion.yml",
