@@ -317,6 +317,16 @@ class PinnedTool:
         except HardeningError as error:
             raise EvidenceError(str(error)) from error
 
+    def revalidate_identity(self) -> None:
+        named = os.stat(self.path, follow_symlinks=False)
+        opened = os.fstat(self.file.fileno())
+        if exact_stat(named) != self.identity or exact_stat(opened) != self.identity:
+            raise EvidenceError(f"pinned tool changed: {self.name}")
+        try:
+            self.executable.revalidate_identity()
+        except HardeningError as error:
+            raise EvidenceError(str(error)) from error
+
     def close(self) -> None:
         self.executable.close()
         self.retained.close()
@@ -420,7 +430,7 @@ def run_command(
     limits: CommandLimits = CommandLimits(),
 ) -> Any:
     for tool in tools.values():
-        tool.revalidate()
+        tool.revalidate_identity()
     selected = executable
     command = list(arguments)
     if selected is None:
@@ -456,7 +466,7 @@ def run_command(
     except HardeningError as error:
         raise EvidenceError(str(error)) from error
     for tool in tools.values():
-        tool.revalidate()
+        tool.revalidate_identity()
     if completed.returncode != 0:
         detail = b""
         if capture:
@@ -1207,6 +1217,12 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
         if first.read_bytes() != second.read_bytes():
             raise EvidenceError("independent Worker/build/target runs were not byte-identical")
         reject_cross_run_reuse(first_executables, second_executables)
+        for closure in closures:
+            closure.revalidate()
+        for closure in retained_closures:
+            closure.revalidate()
+        for tool in tools.values():
+            tool.revalidate()
         summary = {
             "schema": "fe2o3-gfx942-two-run-compiler-evidence-summary-v1",
             "source_commit": commit,

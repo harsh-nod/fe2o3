@@ -144,6 +144,12 @@ class RetainedFile:
         }
 
     def revalidate(self) -> None:
+        self.revalidate_identity()
+        opened = os.fstat(self.fd)
+        if hash_fd(self.fd, opened.st_size) != self.sha256:
+            raise HardeningError(f"retained file content changed: {self.label}")
+
+    def revalidate_identity(self) -> None:
         named = os.stat(self.path, follow_symlinks=False)
         opened = os.fstat(self.fd)
         if stat_identity(named) != self.identity or stat_identity(opened) != self.identity:
@@ -154,8 +160,6 @@ class RetainedFile:
             )
         if self.require_read_only and opened.st_mode & 0o222:
             raise HardeningError(f"retained file became mutable: {self.label}")
-        if hash_fd(self.fd, opened.st_size) != self.sha256:
-            raise HardeningError(f"retained file content changed: {self.label}")
 
     def close(self) -> None:
         if self.fd >= 0:
@@ -210,13 +214,18 @@ class SealedExecutable:
 
     def revalidate(self) -> None:
         self.source.revalidate()
+        self.revalidate_identity()
+        value = os.fstat(self.fd)
+        if hash_fd(self.fd, value.st_size) != self.sha256:
+            raise HardeningError(f"sealed executable content changed: {self.source.label}")
+
+    def revalidate_identity(self) -> None:
+        self.source.revalidate_identity()
         value = os.fstat(self.fd)
         if not stat.S_ISREG(value.st_mode) or value.st_size != self.size:
             raise HardeningError(f"sealed executable identity changed: {self.source.label}")
         if fcntl.fcntl(self.fd, F_GET_SEALS) != REQUIRED_SEALS:
             raise HardeningError(f"sealed executable lost seals: {self.source.label}")
-        if hash_fd(self.fd, value.st_size) != self.sha256:
-            raise HardeningError(f"sealed executable content changed: {self.source.label}")
 
     def close(self) -> None:
         if self.fd >= 0:
@@ -549,7 +558,7 @@ class Supervisor:
             raise HardeningError("command environment is invalid")
         executable.revalidate()
         for guard in self.guards:
-            guard.revalidate()
+            guard.revalidate_identity()
         cwd_fd = os.open(cwd, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
         stdout_read, stdout_write = os.pipe2(os.O_CLOEXEC | os.O_NONBLOCK)
         stderr_read, stderr_write = os.pipe2(os.O_CLOEXEC | os.O_NONBLOCK)
@@ -647,7 +656,7 @@ class Supervisor:
             elapsed = time.monotonic() - start
             executable.revalidate()
             for guard in self.guards:
-                guard.revalidate()
+                guard.revalidate_identity()
             if failure is not None:
                 raise HardeningError(failure)
             if leaked:
