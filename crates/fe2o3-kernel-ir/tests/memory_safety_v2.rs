@@ -87,15 +87,35 @@ fn type_table() -> Vec<MemoryTypeV2> {
 }
 
 fn allocate(byte_len: u64) -> MemoryActionV2 {
-    MemoryActionV2::Allocate {
-        allocation: alloc(1),
-        generation: 7,
-        owner: owner(1),
-        address_space: AddressSpaceV2::Global,
-        base_address: 0x1000,
+    allocate_at(
+        1,
+        7,
+        AddressSpaceV2::Global,
+        0x1000,
         byte_len,
-        alignment: 16,
-        lifetime: life(0, 100),
+        16,
+        life(0, 100),
+    )
+}
+
+fn allocate_at(
+    allocation: u32,
+    generation: u64,
+    address_space: AddressSpaceV2,
+    base_address: u64,
+    byte_len: u64,
+    alignment: u64,
+    lifetime: LifetimeRegionV2,
+) -> MemoryActionV2 {
+    MemoryActionV2::Allocate {
+        allocation: alloc(allocation),
+        generation,
+        owner: owner(1),
+        address_space,
+        base_address,
+        byte_len,
+        alignment,
+        lifetime,
     }
 }
 
@@ -141,16 +161,18 @@ fn typed_projection_write_and_read_emit_local_obligations() {
             place: projected,
         },
     ];
-    let expected_identity = program(actions.clone())
-        .canonical_bytes(MemoryBudgetsV2::default())
-        .unwrap();
     let execution = execute(actions).unwrap();
     assert_eq!(execution.live_allocations(), 1);
     assert_eq!(execution.final_epoch(), EpochV2(0));
-    assert_eq!(
-        execution.untrusted_program_identity().canonical_bytes(),
-        expected_identity
-    );
+    assert_ne!(execution.untrusted_program_identity().digest(), &[0; 32]);
+    assert_ne!(execution.report_identity().digest(), &[0; 32]);
+    assert!(execution.records().iter().all(|record| {
+        &record.program_identity == execution.untrusted_program_identity()
+            && record
+                .obligations
+                .iter()
+                .all(|obligation| obligation.program_identity == record.program_identity)
+    }));
     assert!(
         execution.records()[2]
             .obligations
@@ -920,7 +942,7 @@ fn canonical_codec_is_deterministic_and_strict() {
         bytes,
         right.canonical_bytes(MemoryBudgetsV2::default()).unwrap()
     );
-    assert_eq!(&bytes[..12], b"FE2OMEM2\x01\x00\x00\x00");
+    assert_eq!(&bytes[..12], b"FE2OMEM2\x02\x00\x00\x00");
     assert_eq!(
         MemoryProgramV2::decode_canonical(&bytes, MemoryBudgetsV2::default()).unwrap(),
         left
@@ -1547,4 +1569,364 @@ fn independent_alias_oracle_matches_50k_borrow_pairs() {
             "left={left} right={right} {left_kind:?} {right_kind:?}"
         );
     }
+}
+
+#[test]
+fn expired_allocations_cannot_be_deallocated_or_counted_live() {
+    let expired_deallocation = execute(vec![
+        allocate_at(1, 7, AddressSpaceV2::Global, 0x1000, 16, 16, life(0, 10)),
+        MemoryActionV2::AdvanceEpoch { to: EpochV2(11) },
+        MemoryActionV2::Deallocate {
+            allocation: alloc(1),
+            owner: owner(1),
+        },
+    ])
+    .unwrap_err();
+    assert_eq!(expired_deallocation.action_index, Some(2));
+    assert_eq!(
+        expired_deallocation.reason,
+        MemoryErrorReasonV2::UseAfterFree
+    );
+
+    let expired_but_not_deallocated = execute(vec![
+        allocate_at(1, 7, AddressSpaceV2::Global, 0x1000, 16, 16, life(0, 10)),
+        MemoryActionV2::AdvanceEpoch { to: EpochV2(11) },
+    ])
+    .unwrap();
+    assert_eq!(expired_but_not_deallocated.live_allocations(), 0);
+    assert!(
+        expired_but_not_deallocated.records()[1]
+            .obligations
+            .is_empty()
+    );
+}
+
+#[test]
+fn gfx942_alias_domains_and_mutability_are_conservative() {
+    let target = TargetLayoutV2::gfx942_xnack_minus();
+    assert_eq!(
+        target.address_space_semantics(AddressSpaceV2::Global),
+        target.address_space_semantics(AddressSpaceV2::Flat)
+    );
+    assert_eq!(
+        target
+            .address_space_semantics(AddressSpaceV2::Constant)
+            .alias_domain,
+        PhysicalAliasDomainV2::GlobalFlat
+    );
+    assert_eq!(
+        target
+            .address_space_semantics(AddressSpaceV2::Constant)
+            .mutability,
+        MemoryMutabilityV2::ReadOnly
+    );
+
+    for second_space in [AddressSpaceV2::Flat, AddressSpaceV2::Constant] {
+        let error = execute(vec![
+            allocate(16),
+            MemoryActionV2::Allocate {
+                allocation: alloc(2),
+                generation: 8,
+                owner: owner(1),
+                address_space: second_space,
+                base_address: 0x1000,
+                byte_len: 16,
+                alignment: 16,
+                lifetime: life(0, 100),
+            },
+        ])
+        .unwrap_err();
+        assert_eq!(error.action_index, Some(1));
+        assert_eq!(error.reason, MemoryErrorReasonV2::OverlappingLiveAllocation);
+    }
+
+    execute(vec![
+        allocate(16),
+        MemoryActionV2::Allocate {
+            allocation: alloc(2),
+            generation: 8,
+            owner: owner(1),
+            address_space: AddressSpaceV2::Workgroup,
+            base_address: 0x1000,
+            byte_len: 16,
+            alignment: 16,
+            lifetime: life(0, 100),
+        },
+    ])
+    .unwrap();
+}
+
+#[test]
+fn constant_memory_rejects_typed_raw_and_copy_destination_writes() {
+    let constant_allocation =
+        allocate_at(1, 7, AddressSpaceV2::Constant, 0x1000, 16, 16, life(0, 100));
+    let typed_error = reason(vec![
+        constant_allocation.clone(),
+        MemoryActionV2::WriteTyped {
+            actor: AccessActorV2::Owner(owner(1)),
+            place: place(1, 0, vec![]),
+            value: TypedWriteValueV2::KnownBits(1),
+        },
+    ]);
+    assert_eq!(
+        typed_error,
+        MemoryErrorReasonV2::ReadOnlyAddressSpace(AddressSpaceV2::Constant)
+    );
+
+    let write_capability_error = reason(vec![
+        constant_allocation,
+        MemoryActionV2::GrantRawCapability {
+            capability: cap(1),
+            owner: owner(1),
+            provenance: provenance(),
+            scope: CapabilityScopeV2::Owner(owner(1)),
+            range: ByteRangeV2 { start: 0, len: 4 },
+            access: RawAccessV2::Write,
+            lifetime: life(0, 10),
+        },
+    ]);
+    assert_eq!(
+        write_capability_error,
+        MemoryErrorReasonV2::ReadOnlyAddressSpace(AddressSpaceV2::Constant)
+    );
+}
+
+#[test]
+fn identities_bind_policy_action_generation_and_every_fact() {
+    assert_eq!(
+        sha256_test_vector_v2(b""),
+        [
+            0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14, 0x9a, 0xfb, 0xf4, 0xc8, 0x99, 0x6f,
+            0xb9, 0x24, 0x27, 0xae, 0x41, 0xe4, 0x64, 0x9b, 0x93, 0x4c, 0xa4, 0x95, 0x99, 0x1b,
+            0x78, 0x52, 0xb8, 0x55,
+        ]
+    );
+    assert_eq!(
+        sha256_test_vector_v2(b"abc"),
+        [
+            0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea, 0x41, 0x41, 0x40, 0xde, 0x5d, 0xae,
+            0x22, 0x23, 0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c, 0xb4, 0x10, 0xff, 0x61,
+            0xf2, 0x00, 0x15, 0xad,
+        ]
+    );
+
+    let with_generation = |generation, base_address, budgets| {
+        let program = program(vec![allocate_at(
+            1,
+            generation,
+            AddressSpaceV2::Global,
+            base_address,
+            16,
+            16,
+            life(0, 100),
+        )]);
+        execute_memory_program_v2(&program, budgets).unwrap()
+    };
+    let baseline = with_generation(7, 0x1000, MemoryBudgetsV2::default());
+    let generation = with_generation(8, 0x1000, MemoryBudgetsV2::default());
+    let action = with_generation(7, 0x2000, MemoryBudgetsV2::default());
+    let policy = with_generation(
+        7,
+        0x1000,
+        MemoryBudgetsV2 {
+            max_execution_work: MemoryBudgetsV2::default().max_execution_work - 1,
+            ..MemoryBudgetsV2::default()
+        },
+    );
+
+    for substituted in [&generation, &action, &policy] {
+        assert_ne!(
+            baseline.untrusted_program_identity(),
+            substituted.untrusted_program_identity()
+        );
+        assert_ne!(baseline.records(), substituted.records());
+        assert_ne!(baseline.report_identity(), substituted.report_identity());
+    }
+    assert_eq!(
+        baseline.records()[0].obligations[0].allocation_generation,
+        7
+    );
+    assert_eq!(
+        generation.records()[0].obligations[0].allocation_generation,
+        8
+    );
+    for record in baseline.records() {
+        assert_eq!(
+            record.program_identity,
+            *baseline.untrusted_program_identity()
+        );
+        for obligation in &record.obligations {
+            assert_eq!(obligation.program_identity, record.program_identity);
+            assert_eq!(obligation.action_identity, record.action_identity);
+            assert_eq!(obligation.action_index, record.action_index);
+        }
+    }
+}
+
+#[test]
+fn immutable_hard_caps_and_execution_work_bound_every_scan() {
+    for budgets in [
+        MemoryBudgetsV2 {
+            max_validation_work: MemoryBudgetsV2::default().max_validation_work + 1,
+            ..MemoryBudgetsV2::default()
+        },
+        MemoryBudgetsV2 {
+            max_execution_work: MemoryBudgetsV2::default().max_execution_work + 1,
+            ..MemoryBudgetsV2::default()
+        },
+    ] {
+        assert!(matches!(
+            MemoryProgramV2::new(TargetLayoutV2::gfx942_xnack_minus(), vec![], vec![], budgets)
+                .unwrap_err()
+                .reason,
+            MemoryErrorReasonV2::ResourceLimit { resource, .. }
+                if resource == "configured validation work"
+                    || resource == "configured execution work"
+        ));
+    }
+
+    let mut actions = vec![allocate(64)];
+    for index in 1..=32 {
+        actions.push(MemoryActionV2::BeginBorrow {
+            loan: loan(index),
+            owner: owner(1),
+            place: place(1, u64::from(index), vec![]),
+            kind: BorrowKindV2::Shared,
+            lifetime: life(0, 10),
+        });
+    }
+    let program = program(actions);
+    let used = execute_memory_program_v2(&program, MemoryBudgetsV2::default())
+        .unwrap()
+        .execution_work();
+    let exact = MemoryBudgetsV2 {
+        max_execution_work: used,
+        ..MemoryBudgetsV2::default()
+    };
+    assert_eq!(
+        execute_memory_program_v2(&program, exact)
+            .unwrap()
+            .execution_work(),
+        used
+    );
+    let error = execute_memory_program_v2(
+        &program,
+        MemoryBudgetsV2 {
+            max_execution_work: used - 1,
+            ..MemoryBudgetsV2::default()
+        },
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.reason,
+        MemoryErrorReasonV2::ResourceLimit {
+            resource: "execution work",
+            actual: used,
+            max: used - 1,
+        }
+    );
+}
+
+#[test]
+fn truncated_collection_counts_fail_before_reservation() {
+    let empty = MemoryProgramV2::new(
+        TargetLayoutV2::gfx942_xnack_minus(),
+        vec![],
+        vec![],
+        MemoryBudgetsV2::default(),
+    )
+    .unwrap();
+    let canonical = empty.canonical_bytes(MemoryBudgetsV2::default()).unwrap();
+    assert_eq!(canonical.len(), 59);
+
+    let mut types = canonical[..55].to_vec();
+    types[51..55].copy_from_slice(&4_096_u32.to_le_bytes());
+    let type_error =
+        MemoryProgramV2::decode_canonical(&types, MemoryBudgetsV2::default()).unwrap_err();
+    assert_eq!(
+        type_error.reason,
+        MemoryErrorReasonV2::Decode {
+            offset: 55,
+            detail: "collection count exceeds remaining input",
+        }
+    );
+
+    let mut oversized = types.clone();
+    oversized[51..55].copy_from_slice(&100_000_u32.to_le_bytes());
+    assert!(matches!(
+        MemoryProgramV2::decode_canonical(&oversized, MemoryBudgetsV2::default())
+            .unwrap_err()
+            .reason,
+        MemoryErrorReasonV2::ResourceLimit {
+            resource: "types",
+            actual: 100_000,
+            max: 4_096,
+        }
+    ));
+
+    let mut actions = canonical.clone();
+    actions.truncate(59);
+    actions[55..59].copy_from_slice(&65_536_u32.to_le_bytes());
+    let action_error =
+        MemoryProgramV2::decode_canonical(&actions, MemoryBudgetsV2::default()).unwrap_err();
+    assert_eq!(
+        action_error.reason,
+        MemoryErrorReasonV2::Decode {
+            offset: 59,
+            detail: "collection count exceeds remaining input",
+        }
+    );
+
+    let ranged = MemoryProgramV2::new(
+        TargetLayoutV2::gfx942_xnack_minus(),
+        vec![scalar(
+            1,
+            128,
+            BitValidityV2::Ranges(vec![BitValidityRangeV2 {
+                start: 0,
+                end_inclusive: 0,
+            }]),
+        )],
+        vec![],
+        MemoryBudgetsV2::default(),
+    )
+    .unwrap();
+    let ranged_bytes = ranged.canonical_bytes(MemoryBudgetsV2::default()).unwrap();
+    let mut ranges = ranged_bytes[..83].to_vec();
+    ranges[79..83].copy_from_slice(&16_384_u32.to_le_bytes());
+    let range_error =
+        MemoryProgramV2::decode_canonical(&ranges, MemoryBudgetsV2::default()).unwrap_err();
+    assert_eq!(
+        range_error.reason,
+        MemoryErrorReasonV2::Decode {
+            offset: 83,
+            detail: "collection count exceeds remaining input",
+        }
+    );
+}
+
+#[test]
+fn u64_exclusive_end_matches_executable_range_semantics() {
+    execute(vec![allocate_at(
+        1,
+        7,
+        AddressSpaceV2::Global,
+        u64::MAX,
+        0,
+        1,
+        life(0, 100),
+    )])
+    .unwrap();
+    assert_eq!(
+        reason(vec![allocate_at(
+            1,
+            7,
+            AddressSpaceV2::Global,
+            u64::MAX,
+            1,
+            1,
+            life(0, 100),
+        )]),
+        MemoryErrorReasonV2::AddressNotRepresentable
+    );
 }
