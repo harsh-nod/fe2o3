@@ -492,6 +492,12 @@ def version_and_runtime_manifest(
         "PATH": os.fspath(path_dir),
         "TZ": "UTC",
     }
+    closure_environment = {
+        "LANG": "C",
+        "LC_ALL": "C",
+        "PATH": os.fspath(path_dir),
+        "TZ": "UTC",
+    }
     observed_tools: list[dict[str, Any]] = []
     runtime_paths: set[Path] = set()
     ldd = tools["ldd"].path
@@ -535,7 +541,7 @@ def version_and_runtime_manifest(
             closure = run_command(
                 [os.fspath(ldd), os.fspath(tool.path)],
                 Path("/"),
-                environment,
+                closure_environment,
                 tools,
                 supervisor,
                 capture=True,
