@@ -781,9 +781,14 @@ mod tests {
             "/../fe2o3-hsaco-finalize/tests/fixtures/worker_v2_hsaco_test_support.rs"
         ));
 
-        pub(super) fn with_descriptor_table(target: &str, table: &[u8]) -> Vec<u8> {
+        pub(super) fn with_descriptor_table(
+            target: &str,
+            table: &[u8],
+            include_explicit_argument_alignments: bool,
+        ) -> Vec<u8> {
             let mut options = FixtureOptions::valid();
             options.target = target;
+            options.include_explicit_argument_alignments = include_explicit_argument_alignments;
             fixture_with_descriptor_table(options, Some(table)).bytes
         }
     }
@@ -1080,6 +1085,15 @@ mod tests {
     }
 
     fn recovery_fixture(seed: u8, raw_target: &str, manifest_symbol: &str) -> RecoveryFixture {
+        recovery_fixture_with_explicit_argument_alignments(seed, raw_target, manifest_symbol, false)
+    }
+
+    fn recovery_fixture_with_explicit_argument_alignments(
+        seed: u8,
+        raw_target: &str,
+        manifest_symbol: &str,
+        include_explicit_argument_alignments: bool,
+    ) -> RecoveryFixture {
         let source_digest = digest(seed.wrapping_add(0x40));
         let executable_digest = digest(seed.wrapping_add(0x50));
         let abi = manifest_abi();
@@ -1106,6 +1120,7 @@ mod tests {
         let final_raw = canonical_hsaco_fixture::with_descriptor_table(
             REQUIRED_GFX942_TEST_TARGET,
             &encode_device_descriptor_table_v1(&final_raw_table).unwrap(),
+            include_explicit_argument_alignments,
         );
         let finalized_hsaco = finalize_unfinalized(&final_raw).unwrap();
         let embedded_descriptor = finalized_hsaco.inspection().descriptor_table().clone();
@@ -1126,6 +1141,7 @@ mod tests {
             canonical_hsaco_fixture::with_descriptor_table(
                 raw_target,
                 &encode_device_descriptor_table_v1(&substituted_raw_table).unwrap(),
+                include_explicit_argument_alignments,
             )
         };
         let mut fixture = make_single_hsaco_fixture_with_names_and_kernel_id(
@@ -2779,7 +2795,19 @@ mod tests {
     fn recovered_launch_bridge_fixture(
         seed: u8,
     ) -> (RecoveryFixture, RecoveredWorkerV2PinnedDescriptorV1) {
-        let fixture = recovery_fixture(seed, "gfx942", "vecadd");
+        recovered_launch_bridge_fixture_with_explicit_argument_alignments(seed, true)
+    }
+
+    fn recovered_launch_bridge_fixture_with_explicit_argument_alignments(
+        seed: u8,
+        include_explicit_argument_alignments: bool,
+    ) -> (RecoveryFixture, RecoveredWorkerV2PinnedDescriptorV1) {
+        let fixture = recovery_fixture_with_explicit_argument_alignments(
+            seed,
+            "gfx942",
+            "vecadd",
+            include_explicit_argument_alignments,
+        );
         let recovered = recover_worker_v2_load_envelope_v1(
             &fixture.output,
             &fixture.envelope,
@@ -2789,6 +2817,44 @@ mod tests {
         )
         .unwrap();
         (fixture, recovered)
+    }
+
+    #[test]
+    fn launch_bridge_rejects_unknown_physical_argument_alignment_without_authority() {
+        let (_fixture, recovered) =
+            recovered_launch_bridge_fixture_with_explicit_argument_alignments(88, false);
+        let (_model_fixture, model_recovered) = recovered_launch_bridge_fixture(88);
+        let family =
+            crate::launch_kernel_v2_bridge::canonical_family_for_recovered_launch_bridge_test(
+                &model_recovered,
+            );
+
+        let current = recovered.acquire_launch_kernel_v2_currentness().unwrap();
+        assert!(
+            current
+                .admission()
+                .selected_kernel()
+                .arguments()
+                .iter()
+                .all(|argument| matches!(
+                    argument.alignment(),
+                    crate::PhysicalMetadataValueV1::Unknown
+                ))
+        );
+        drop(current);
+
+        assert!(matches!(
+            crate::bind_current_recovered_launch_kernel_metadata_v2(
+                &recovered,
+                &family,
+                "recovered-exact-wave64"
+            ),
+            Err(
+                crate::LaunchKernelMetadataBridgeErrorV2::MissingPhysicalMetadata(
+                    "physical argument alignment"
+                )
+            )
+        ));
     }
 
     #[test]

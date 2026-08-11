@@ -442,12 +442,17 @@ fn validate_physical_component(
         }
         PhysicalAbiComponentKind::GlobalPointer => ExplicitValueKind::GlobalBuffer,
     };
+    let physical_alignment = match physical.alignment() {
+        PhysicalMetadataValueV1::Known(value) => value,
+        PhysicalMetadataValueV1::Unknown => {
+            return Err(LaunchKernelMetadataBridgeErrorV2::MissingPhysicalMetadata(
+                "physical argument alignment",
+            ));
+        }
+    };
     if physical.offset() != u64::from(offset)
         || physical.size() != u64::from(size)
-        || matches!(
-            physical.alignment(),
-            PhysicalMetadataValueV1::Known(value) if value != u64::from(alignment)
-        )
+        || physical_alignment != u64::from(alignment)
         || physical.value_kind() != expected_kind
     {
         return Err(

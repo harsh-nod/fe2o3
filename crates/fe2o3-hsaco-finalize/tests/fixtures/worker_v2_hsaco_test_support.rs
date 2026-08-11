@@ -26,6 +26,7 @@ struct FixtureOptions<'a> {
     descriptor_wavefront_size: u32,
     include_export: bool,
     include_canonical_descriptor_section_name: bool,
+    include_explicit_argument_alignments: bool,
 }
 
 impl FixtureOptions<'static> {
@@ -41,6 +42,7 @@ impl FixtureOptions<'static> {
             descriptor_wavefront_size: 64,
             include_export: true,
             include_canonical_descriptor_section_name: false,
+            include_explicit_argument_alignments: false,
         }
     }
 }
@@ -299,9 +301,17 @@ fn fixture_with_descriptor_table(
 }
 
 fn metadata(options: FixtureOptions<'_>) -> Vec<u8> {
+    let alignment = options.include_explicit_argument_alignments.then_some(8);
     let mut arguments = vec![
-        argument(Some("values_ptr"), 0, 8, "global_buffer", Some("global")),
-        argument(Some("values_len"), 8, 8, "by_value", None),
+        explicit_argument(
+            Some("values_ptr"),
+            0,
+            8,
+            alignment,
+            "global_buffer",
+            Some("global"),
+        ),
+        explicit_argument(Some("values_len"), 8, 8, alignment, "by_value", None),
     ];
     arguments.extend(v5_hidden_arguments(16));
     let kernel = Value::Map(vec![
@@ -350,6 +360,21 @@ fn metadata(options: FixtureOptions<'_>) -> Vec<u8> {
     let mut encoded = Vec::new();
     write_value(&mut encoded, &root).unwrap();
     encoded
+}
+
+fn explicit_argument(
+    name: Option<&str>,
+    offset: u64,
+    size: u64,
+    alignment: Option<u64>,
+    value_kind: &str,
+    address_space: Option<&str>,
+) -> Value {
+    let mut value = argument(name, offset, size, value_kind, address_space);
+    if let (Some(alignment), Value::Map(fields)) = (alignment, &mut value) {
+        fields.push((Value::from(".align"), Value::from(alignment)));
+    }
+    value
 }
 
 fn v5_hidden_arguments(base: u64) -> Vec<Value> {
