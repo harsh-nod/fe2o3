@@ -2,9 +2,9 @@
 
 use fe2o3_kernel_analysis::{
     AuthenticatedPhysicalMachineEffectErrorKindV1, AuthenticatedPhysicalMachineEffectLimitsV1,
-    AuthenticatedPhysicalMachineEffectWorkerV1, PhysicalMachineEffectBudgetV1,
-    PhysicalMachineEffectEntryRequestV1, PhysicalMachineEffectEvidenceErrorV1,
-    inspect_physical_machine_effect_worker_candidate_v1,
+    AuthenticatedPhysicalMachineEffectWorkerV1, DEFAULT_PHYSICAL_MACHINE_EFFECT_TIMEOUT_V1,
+    PhysicalMachineEffectBudgetV1, PhysicalMachineEffectEntryRequestV1,
+    PhysicalMachineEffectEvidenceErrorV1, inspect_physical_machine_effect_worker_candidate_v1,
 };
 use rustix::fs::{OFlags, SealFlags};
 use std::{
@@ -67,7 +67,7 @@ fn configured_native_worker_uses_authenticated_identity_probe() {
         return;
     };
     let native_limits = AuthenticatedPhysicalMachineEffectLimitsV1::new(
-        Duration::from_secs(30),
+        DEFAULT_PHYSICAL_MACHINE_EFFECT_TIMEOUT_V1,
         1024 * 1024,
         16 * 1024,
     )
