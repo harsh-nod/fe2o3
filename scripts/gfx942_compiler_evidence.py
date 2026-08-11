@@ -695,7 +695,7 @@ def registry_paths(lock_path: Path, registry_root: Path) -> list[str]:
         if package_root.resolve(strict=True) != package_root or package_root.is_symlink():
             raise EvidenceError(f"registry package is not canonical: {name}-{version}")
         members = sorted(path for path in package_root.rglob("*") if path.is_file())
-        if not members or not (package_root / ".cargo-checksum.json").is_file():
+        if not members:
             raise EvidenceError(f"registry package closure is incomplete: {name}-{version}")
         for member in members:
             if member.is_symlink() or member.resolve(strict=True) != member:
@@ -704,6 +704,47 @@ def registry_paths(lock_path: Path, registry_root: Path) -> list[str]:
     if not paths:
         raise EvidenceError("Cargo.lock selected no registry package sources")
     return sorted(set(paths))
+
+
+def materialize_vendor_checksums(lock_path: Path, vendor: Path, index: int) -> RetainedClosure:
+    packages = tomllib.loads(lock_path.read_text("utf-8")).get("package")
+    if not isinstance(packages, list):
+        raise EvidenceError("Cargo.lock has no package closure")
+    generated: list[tuple[str, Path]] = []
+    for package in packages:
+        source = package.get("source")
+        if not isinstance(source, str) or not source.startswith("registry+"):
+            continue
+        name = package.get("name")
+        version = package.get("version")
+        checksum = package.get("checksum")
+        if (
+            not isinstance(name, str)
+            or not isinstance(version, str)
+            or not isinstance(checksum, str)
+            or not SHA256_RE.fullmatch(checksum)
+        ):
+            raise EvidenceError("Cargo.lock registry checksum identity is invalid")
+        package_root = vendor / f"{name}-{version}"
+        files: dict[str, str] = {}
+        for member in sorted(path for path in package_root.rglob("*") if path.is_file()):
+            relative = member.relative_to(package_root).as_posix()
+            if relative == ".cargo-checksum.json":
+                raise EvidenceError("vendor checksum input was preexisting")
+            files[relative] = sha256_bytes(member.read_bytes())
+        package_root.chmod(0o755)
+        checksum_path = package_root / ".cargo-checksum.json"
+        checksum_path.write_bytes(canonical_json({"files": files, "package": checksum}))
+        checksum_path.chmod(0o444)
+        package_root.chmod(0o555)
+        generated.append((f"vendor-checksum:{name}-{version}", checksum_path))
+    if not generated:
+        raise EvidenceError("no vendor checksum manifests were generated")
+    return capture_retained_closure(
+        f"run-{index}-vendor-generated-inputs",
+        generated,
+        {"cargo_lock_sha256": sha256_bytes(lock_path.read_bytes())},
+    )
 
 
 def prepare_run_closures(
@@ -715,7 +756,14 @@ def prepare_run_closures(
     commit: str,
     tree: str,
     manifest: dict[str, Any],
-) -> tuple[Path, SnapshotClosure, SnapshotClosure, SnapshotClosure, RetainedFile]:
+) -> tuple[
+    Path,
+    SnapshotClosure,
+    SnapshotClosure,
+    SnapshotClosure,
+    RetainedClosure,
+    RetainedFile,
+]:
     run = run_root / f"run-{index}"
     if run.exists() or run.is_symlink():
         raise EvidenceError(f"run {index} work root was not absent")
@@ -739,6 +787,9 @@ def prepare_run_closures(
             "cargo_lock_sha256": sha256_bytes((source.root / "Cargo.lock").read_bytes()),
             "registry_source": os.fspath(registry_root),
         },
+    )
+    vendor_generated = materialize_vendor_checksums(
+        source.root / "Cargo.lock", cargo_home / "vendor", index
     )
     rust_root = Path(
         "/home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu"
@@ -786,7 +837,10 @@ def prepare_run_closures(
     (output_dir / "rust-sysroot-manifest.json").write_bytes(
         canonical_json(rust.manifest)
     )
-    return run, source, registry, rust, config
+    (output_dir / "cargo-vendor-generated-manifest.json").write_bytes(
+        canonical_json(vendor_generated.manifest)
+    )
+    return run, source, registry, rust, vendor_generated, config
 
 
 def build_provider_members() -> list[tuple[str, Path]]:
@@ -1055,7 +1109,7 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
         )
         prepared = []
         for index in (1, 2):
-            run, source, registry, rust, cargo_config = prepare_run_closures(
+            run, source, registry, rust, vendor_generated, cargo_config = prepare_run_closures(
                 index,
                 repo,
                 run_root,
@@ -1067,10 +1121,15 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
             )
             prepared.append((run, source))
             closures.extend((source, registry, rust))
+            retained_closures.append(vendor_generated)
+            supervisor.guards.extend(vendor_generated.files)
             generated_inputs.append(cargo_config)
         compare_labeled_manifests(closures[0].manifest, closures[3].manifest)
         compare_labeled_manifests(closures[1].manifest, closures[4].manifest)
         compare_labeled_manifests(closures[2].manifest, closures[5].manifest)
+        compare_labeled_manifests(
+            retained_closures[0].manifest, retained_closures[1].manifest
+        )
         provider_members = build_provider_members()
         for index in (1, 2):
             provider = capture_retained_closure(
@@ -1088,7 +1147,7 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
                 canonical_json(provider.manifest)
             )
         compare_labeled_manifests(
-            retained_closures[0].manifest, retained_closures[1].manifest
+            retained_closures[2].manifest, retained_closures[3].manifest
         )
         for closure in closures:
             closure.revalidate()
