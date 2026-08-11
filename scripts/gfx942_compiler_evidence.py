@@ -60,6 +60,8 @@ MAX_TOOL_BYTES = 256 * 1024 * 1024
 MAX_VERSION_BYTES = 64 * 1024
 MAX_RUNTIME_FILES = 256
 MAX_RUNTIME_BYTES = 512 * 1024 * 1024
+MAX_CAPTURE_BYTES = 16 * 1024 * 1024
+MAX_CGROUP_SAMPLES = 4096
 HARDWARE_ADDRESS_SPACE_BYTES = 4 * 1024 * 1024 * 1024 * 1024
 HARDWARE_DLOPEN_PATHS = (
     Path("/opt/rocm-7.2.4/lib/libamd_comgr.so.3.0.0"),
@@ -71,6 +73,13 @@ HARDWARE_RUNTIME_DATA_PATHS = (
     Path("/usr/share/zoneinfo/Etc/UTC"),
     Path("/opt/amdgpu/share/libdrm/amdgpu.ids"),
 )
+HARDWARE_DEVICE_PATHS = (
+    Path("/dev/kfd"),
+    *(Path(f"/dev/dri/renderD{minor}") for minor in range(128, 192, 8)),
+    Path("/dev/random"),
+)
+WORKER_V2_REQUEST_DOMAIN = b"FE2O3/DIRECT-LLVM-WORKER-REQUEST/V2\0"
+WORKER_V2_RESPONSE_DOMAIN = b"FE2O3/WORKER-V2-SEALED-RESPONSE/V1\0"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 TOOL_NAMES = (
     "shell",
@@ -160,12 +169,173 @@ def validate_hardware_runtime_configuration() -> None:
             raise EvidenceError(f"hardware runtime path is not canonical: {path}")
 
 
+def capture_hardware_device_identities() -> list[dict[str, Any]]:
+    records = []
+    for path in HARDWARE_DEVICE_PATHS:
+        if path.is_symlink() or path.resolve(strict=True) != path:
+            raise EvidenceError(f"hardware device path is not canonical: {path}")
+        metadata = os.stat(path, follow_symlinks=False)
+        if not stat.S_ISCHR(metadata.st_mode):
+            raise EvidenceError(f"hardware device is not a character node: {path}")
+        records.append(
+            {
+                "path": os.fspath(path),
+                "filesystem_device": metadata.st_dev,
+                "inode": metadata.st_ino,
+                "mode": metadata.st_mode,
+                "uid": metadata.st_uid,
+                "gid": metadata.st_gid,
+                "rdev_major": os.major(metadata.st_rdev),
+                "rdev_minor": os.minor(metadata.st_rdev),
+                "ctime_ns": metadata.st_ctime_ns,
+            }
+        )
+    return records
+
+
+def revalidate_hardware_device_identities(records: list[dict[str, Any]]) -> None:
+    if records != capture_hardware_device_identities():
+        raise EvidenceError("hardware device-node identity changed")
+
+
 def canonical_json(value: Any) -> bytes:
     return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
 
 
 def sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
+
+
+def document_record(data: bytes) -> dict[str, Any]:
+    if len(data) > MAX_CAPTURE_BYTES:
+        raise EvidenceError("evidence document exceeds its bound")
+    return {"bytes": len(data), "sha256": sha256_bytes(data)}
+
+
+def verify_bound_document(path: Path, record: dict[str, Any]) -> bytes:
+    if set(record) != {"bytes", "sha256"}:
+        raise EvidenceError("bound document record fields are not exact")
+    try:
+        data = path.read_bytes()
+    except FileNotFoundError as error:
+        raise EvidenceError(f"bound evidence document is missing: {path}") from error
+    if document_record(data) != record:
+        raise EvidenceError(f"bound evidence document changed: {path}")
+    return data
+
+
+def _bounded_hex(record: dict[str, Any], prefix: str) -> bytes:
+    encoded = record.get(f"{prefix}_hex")
+    declared_bytes = record.get(f"{prefix}_bytes")
+    declared_sha256 = record.get(f"{prefix}_sha256")
+    if (
+        not isinstance(encoded, str)
+        or not isinstance(declared_bytes, int)
+        or declared_bytes < 1
+        or declared_bytes > MAX_CAPTURE_BYTES
+        or not isinstance(declared_sha256, str)
+        or not SHA256_RE.fullmatch(declared_sha256)
+        or len(encoded) != declared_bytes * 2
+    ):
+        raise EvidenceError(f"{prefix} capture metadata is invalid")
+    try:
+        data = bytes.fromhex(encoded)
+    except ValueError as error:
+        raise EvidenceError(f"{prefix} capture is not hexadecimal") from error
+    if sha256_bytes(data) != declared_sha256:
+        raise EvidenceError(f"{prefix} capture digest changed")
+    return data
+
+
+def verify_transaction_capture(record: dict[str, Any]) -> None:
+    if record.get("schema") != "fe2o3-non-production-compiler-reproduction-record-v2":
+        raise EvidenceError("compiler transaction capture schema changed")
+    request = _bounded_hex(record, "canonical_request")
+    response = _bounded_hex(record, "canonical_response")
+    raw_output = _bounded_hex(record, "raw_output")
+    if len(request) < 46 or request[:8] != b"F3LREQ02":
+        raise EvidenceError("canonical Worker V2 request framing is invalid")
+    tag, size = struct.unpack("<HI", request[-38:-32])
+    if (tag, size) != (15, 32):
+        raise EvidenceError("canonical Worker V2 request identity field is invalid")
+    request_identity = hashlib.sha256(
+        WORKER_V2_REQUEST_DOMAIN
+        + len(request[:-38]).to_bytes(8, "little")
+        + request[:-38]
+    ).hexdigest()
+    response_identity = hashlib.sha256(
+        WORKER_V2_RESPONSE_DOMAIN
+        + len(response).to_bytes(8, "little")
+        + response
+    ).hexdigest()
+    if (
+        request_identity != request[-32:].hex()
+        or request_identity != record.get("worker_v2_request_identity")
+        or response_identity != record.get("sealed_worker_v2_response_identity")
+        or sha256_bytes(raw_output) != record.get("raw_output_identity")
+    ):
+        raise EvidenceError("compiler transaction raw bytes do not recompute their identities")
+
+
+def verify_hardware_capture(evidence_root: Path, observation: dict[str, Any]) -> None:
+    run = evidence_root / "run-1"
+    stdout = verify_bound_document(run / "hardware-stdout.bin", observation["stdout_document"])
+    stderr = verify_bound_document(run / "hardware-stderr.bin", observation["stderr_document"])
+    measurements_bytes = verify_bound_document(
+        run / "hardware-cgroup-measurements.json",
+        observation["cgroup_measurements_document"],
+    )
+    if (
+        len(stdout) + len(stderr) != observation.get("bounded_output_bytes")
+        or sha256_bytes(stdout + stderr) != observation.get("bounded_output_sha256")
+    ):
+        raise EvidenceError("raw hardware output does not reproduce its observation")
+    try:
+        measurements = json.loads(measurements_bytes)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise EvidenceError("cgroup measurements are not JSON") from error
+    if canonical_json(measurements) != measurements_bytes:
+        raise EvidenceError("cgroup measurements are not canonical JSON")
+    samples = measurements.get("samples")
+    final = measurements.get("final_files")
+    expected_names = {
+        "memory.current",
+        "memory.peak",
+        "memory.max",
+        "pids.current",
+        "pids.peak",
+        "pids.max",
+    }
+    if (
+        measurements.get("schema") != "fe2o3-cgroup-v2-command-measurement-v1"
+        or not isinstance(samples, list)
+        or not 1 <= len(samples) <= MAX_CGROUP_SAMPLES
+        or not isinstance(final, dict)
+        or set(final) != expected_names
+    ):
+        raise EvidenceError("cgroup measurement shape is invalid")
+    previous = -1
+    for sample in samples:
+        elapsed = sample.get("elapsed_nanoseconds")
+        files = sample.get("files")
+        if (
+            not isinstance(elapsed, int)
+            or elapsed <= previous
+            or not isinstance(files, dict)
+            or set(files) != expected_names
+        ):
+            raise EvidenceError("cgroup sample is invalid or reordered")
+        previous = elapsed
+        for value in files.values():
+            if value != "max" and (not isinstance(value, str) or not value.isdigit()):
+                raise EvidenceError("cgroup sample contains a non-numeric value")
+    if (
+        int(final["memory.peak"]) != observation.get("peak_memory_bytes")
+        or int(final["pids.peak"]) != observation.get("peak_processes")
+        or int(final["memory.max"]) != observation.get("physical_memory_limit_bytes")
+        or int(final["pids.max"]) != 256
+    ):
+        raise EvidenceError("cgroup final files do not reproduce peaks and limits")
 
 
 def reject_repository_python_bytecode(repo: Path) -> None:
@@ -786,6 +956,7 @@ def run_command(
     executable: SealedExecutable | None = None,
     extra_inherited_fds: tuple[int, ...] = (),
     limits: CommandLimits = CommandLimits(),
+    writable_paths: tuple[Path, ...] = (),
     readable_paths: tuple[Path, ...] | None = None,
     readable_roots: tuple[Path, ...] = (),
 ) -> Any:
@@ -822,6 +993,7 @@ def run_command(
             environment,
             limits=limits,
             inherited_fds=inherited,
+            writable_paths=writable_paths,
             readable_paths=readable_paths,
             readable_roots=readable_roots,
         )
@@ -957,8 +1129,8 @@ def version_and_runtime_manifest(
         raise EvidenceError("discovered tool loader/DSO closure differs from retained fixture")
     observed = {
         "schema": "fe2o3-observed-gfx942-tool-runtime-manifest-v1",
-        "configured_manifest_sha256": sha256_bytes(canonical_json(manifest)),
-        "runtime_manifest_sha256": runtime_digest,
+        "configured_tool_manifest_sha256": sha256_bytes(canonical_json(manifest)),
+        "observed_tool_runtime_closure_sha256": runtime_digest,
         "tools": observed_tools,
         "runtime": runtime,
     }
@@ -1967,6 +2139,8 @@ def build_and_run_hardware_observation(
     generated_file = None
     retained_test = None
     sealed_test = None
+    shm_fixture: Path | None = None
+    shm_create: Path | None = None
     try:
         environment = run_environment(run, run / "tool-path")
         hardware_target = run / "hardware-cargo-target"
@@ -2091,6 +2265,14 @@ def build_and_run_hardware_observation(
         (evidence_root / "run-1/hardware-runtime-manifest.json").write_bytes(
             canonical_json(runtime.manifest)
         )
+        device_identities = capture_hardware_device_identities()
+        shm_fixture = Path(f"/dev/shm/fe2o3-evidence-denied-{os.getpid()}.so")
+        shm_create = Path(f"/dev/shm/fe2o3-evidence-create-denied-{os.getpid()}")
+        if shm_fixture.exists() or shm_create.exists():
+            raise EvidenceError("device Landlock fixture path already exists")
+        fixture_source = min(runtime_paths, key=lambda path: path.stat().st_size)
+        shutil.copyfile(fixture_source, shm_fixture)
+        shm_fixture.chmod(0o444)
         retained_hsaco.revalidate()
         hardware_environment = dict(environment)
         hardware_environment.update(
@@ -2099,6 +2281,9 @@ def build_and_run_hardware_observation(
                 "FE2O3_GFX942_ALPHA_ZETA_HSACO": os.fspath(retained_hsaco.path),
                 "FE2O3_GFX942_ALPHA_ZETA_SHA256": retained_hsaco.sha256,
                 "FE2O3_GFX942_ALPHA_ZETA_RETAINED_FD": str(retained_hsaco.fd),
+                "FE2O3_VERIFY_DEVICE_LANDLOCK": "1",
+                "FE2O3_DEVICE_LANDLOCK_SHM_FIXTURE": os.fspath(shm_fixture),
+                "FE2O3_DEVICE_LANDLOCK_SHM_CREATE": os.fspath(shm_create),
             }
         )
         result = run_command(
@@ -2121,27 +2306,52 @@ def build_and_run_hardware_observation(
                 address_space_bytes=HARDWARE_ADDRESS_SPACE_BYTES,
                 cpu_seconds=300,
             ),
+            writable_paths=HARDWARE_DEVICE_PATHS,
             readable_paths=tuple(
-                [*runtime_paths, loader_cache, *runtime_data, retained_hsaco.path]
+                [
+                    *runtime_paths,
+                    loader_cache,
+                    *runtime_data,
+                    retained_hsaco.path,
+                    *HARDWARE_DEVICE_PATHS[:-1],
+                ]
             ),
-            readable_roots=(Path("/proc"), Path("/sys"), Path("/dev")),
+            readable_roots=(Path("/proc"), Path("/sys")),
         )
+        revalidate_hardware_device_identities(device_identities)
         retained_hsaco.revalidate()
         sealed_test.revalidate()
         retained_test.revalidate()
         revalidate_generated_executable(generated_file, executable_record)
         output = result.stdout + result.stderr
+        if b"compiler-evidence /dev/shm create/read/dlopen denial: PASS" not in output:
+            raise EvidenceError("hardware process did not prove the /dev/shm denial fixture")
+        stdout_path = evidence_root / "run-1/hardware-stdout.bin"
+        stderr_path = evidence_root / "run-1/hardware-stderr.bin"
+        cgroup_path = evidence_root / "run-1/hardware-cgroup-measurements.json"
+        stdout_path.write_bytes(result.stdout)
+        stderr_path.write_bytes(result.stderr)
+        cgroup_bytes = canonical_json(result.cgroup_measurements)
+        cgroup_path.write_bytes(cgroup_bytes)
+        stdout_record = document_record(result.stdout)
+        stderr_record = document_record(result.stderr)
+        cgroup_record = document_record(cgroup_bytes)
         observation = {
-            "schema": "fe2o3-non-production-gfx942-hardware-observation-v1",
+            "schema": "fe2o3-non-production-gfx942-hardware-observation-v2",
             "authority": "none",
             "claim": "exact-artifact-hardware-observation-only",
             "test": golden["hardware_test"],
             "target": golden["target"],
             "hsaco": retained_hsaco.record(),
             "test_executable": executable_record,
-            "runtime_manifest_sha256": runtime.manifest["manifest_sha256"],
+            "hardware_runtime_closure_manifest_sha256": runtime.manifest[
+                "manifest_sha256"
+            ],
             "elf_interpreter": os.fspath(interpreter),
-            "dlopen_fail_closed": True,
+            "regular_file_read_policy": "exact allowlist; /dev/shm denied",
+            "device_write_policy": "exact character-node allowlist",
+            "device_identities": device_identities,
+            "dev_shm_create_read_dlopen_denied": True,
             "boundary_lengths": golden["boundary_lengths"],
             "cpu_oracles_checked": True,
             "prefix_suffix_canaries_checked": True,
@@ -2153,12 +2363,22 @@ def build_and_run_hardware_observation(
             "address_space_limit_bytes": HARDWARE_ADDRESS_SPACE_BYTES,
             "bounded_output_bytes": len(output),
             "bounded_output_sha256": sha256_bytes(output),
+            "output_concatenation": "hardware-stdout.bin then hardware-stderr.bin",
+            "stdout_document": stdout_record,
+            "stderr_document": stderr_record,
+            "cgroup_measurements_document": cgroup_record,
         }
         (evidence_root / "run-1/hardware-observation.json").write_bytes(
             canonical_json(observation)
         )
         return observation
     finally:
+        for path in (shm_create, shm_fixture):
+            if path is not None:
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    pass
         if sealed_test is not None:
             sealed_test.close()
         if retained_test is not None:
@@ -2203,7 +2423,7 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
         run_root.mkdir(mode=0o700)
         evidence_root.mkdir(mode=0o700)
         supervisor.set_writable_roots(
-            (run_root, evidence_root, Path("/tmp"), Path("/dev"))
+            (run_root, evidence_root, Path("/tmp"))
         )
         bootstrap_path = run_root / "bootstrap-tool-path"
         create_allowlisted_path(bootstrap_path, manifest, tools)
@@ -2285,7 +2505,11 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
             supervisor,
             configured_runtime,
         )
-        (evidence_root / "tool-runtime-manifest.json").write_bytes(canonical_json(observed))
+        observed_tool_runtime_bytes = canonical_json(observed)
+        (evidence_root / "tool-runtime-manifest.json").write_bytes(
+            observed_tool_runtime_bytes
+        )
+        observed_tool_runtime_record = document_record(observed_tool_runtime_bytes)
         canonical_source = run_root / "canonical-execution-source"
         (
             first,
@@ -2375,6 +2599,8 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
         )
         first_transaction_record = json.loads(first_transaction_bytes)
         second_transaction_record = json.loads(second_transaction_bytes)
+        verify_transaction_capture(first_transaction_record)
+        verify_transaction_capture(second_transaction_record)
         for field in (
             "worker_identity",
             "response_identity",
@@ -2399,6 +2625,7 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
             first_hsaco,
             retained_closures,
         )
+        verify_hardware_capture(evidence_root, hardware_observation)
         first_hsaco.revalidate()
         second_hsaco.revalidate()
         git_clean(repo, bootstrap_environment, tools, supervisor)
@@ -2425,7 +2652,13 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
             ]
             if index == 1:
                 document_names.extend(
-                    ["hardware-runtime-manifest.json", "hardware-observation.json"]
+                    [
+                        "hardware-runtime-manifest.json",
+                        "hardware-observation.json",
+                        "hardware-stdout.bin",
+                        "hardware-stderr.bin",
+                        "hardware-cgroup-measurements.json",
+                    ]
                 )
             for name in document_names:
                 document = output_dir / name
@@ -2451,7 +2684,10 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
             "source_commit": commit,
             "source_tree": tree,
             "tool_manifest_sha256": sha256_bytes(manifest_bytes),
-            "runtime_manifest_sha256": manifest["runtime_manifest_sha256"],
+            "configured_tool_runtime_fixture_sha256": manifest[
+                "runtime_manifest_sha256"
+            ],
+            "observed_tool_runtime_manifest": observed_tool_runtime_record,
             "run_1": {
                 "worker_build": os.fspath(run_root / "run-1/worker-build"),
                 "cargo_target": os.fspath(run_root / "run-1/cargo-target"),
@@ -2504,6 +2740,13 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
             },
         }
         (evidence_root / "summary.json").write_bytes(canonical_json(summary))
+        verify_bound_document(
+            evidence_root / "tool-runtime-manifest.json",
+            summary["observed_tool_runtime_manifest"],
+        )
+        for transaction in (first_transaction_record, second_transaction_record):
+            verify_transaction_capture(transaction)
+        verify_hardware_capture(evidence_root, hardware_observation)
         print(f"source commit: {commit}")
         print(f"artifact SHA-256: {sha256_bytes(first_bytes)}")
         print(
@@ -2573,6 +2816,80 @@ def self_test(repo: Path) -> None:
             raise AssertionError(f"{label} substitution was accepted")
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
+        bound = root / "bound.bin"
+        bound.write_bytes(b"bound evidence")
+        bound_record = document_record(bound.read_bytes())
+        verify_bound_document(bound, bound_record)
+        bound.write_bytes(b"mutated evidence")
+        try:
+            verify_bound_document(bound, bound_record)
+        except EvidenceError:
+            pass
+        else:
+            raise AssertionError("bound document mutation was accepted")
+        bound.unlink()
+        try:
+            verify_bound_document(bound, bound_record)
+        except EvidenceError:
+            pass
+        else:
+            raise AssertionError("bound document omission was accepted")
+        try:
+            document_record(b"x" * (MAX_CAPTURE_BYTES + 1))
+        except EvidenceError:
+            pass
+        else:
+            raise AssertionError("oversize evidence document was accepted")
+
+        request_prefix = b"F3LREQ02" + b"fixture-request"
+        request_identity = hashlib.sha256(
+            WORKER_V2_REQUEST_DOMAIN
+            + len(request_prefix).to_bytes(8, "little")
+            + request_prefix
+        ).digest()
+        request = request_prefix + struct.pack("<HI", 15, 32) + request_identity
+        response = b"F3LRSP02fixture-response"
+        response_identity = hashlib.sha256(
+            WORKER_V2_RESPONSE_DOMAIN
+            + len(response).to_bytes(8, "little")
+            + response
+        ).hexdigest()
+        raw = b"raw-output"
+        transaction_fixture = {
+            "schema": "fe2o3-non-production-compiler-reproduction-record-v2",
+            "canonical_request_bytes": len(request),
+            "canonical_request_hex": request.hex(),
+            "canonical_request_sha256": sha256_bytes(request),
+            "canonical_response_bytes": len(response),
+            "canonical_response_hex": response.hex(),
+            "canonical_response_sha256": sha256_bytes(response),
+            "raw_output_bytes": len(raw),
+            "raw_output_hex": raw.hex(),
+            "raw_output_sha256": sha256_bytes(raw),
+            "raw_output_identity": sha256_bytes(raw),
+            "worker_v2_request_identity": request_identity.hex(),
+            "sealed_worker_v2_response_identity": response_identity,
+        }
+        verify_transaction_capture(transaction_fixture)
+        for label, mutate in (
+            ("omitted request", lambda value: value.pop("canonical_request_hex")),
+            (
+                "mutated response",
+                lambda value: value.__setitem__("canonical_response_hex", "00" + value["canonical_response_hex"][2:]),
+            ),
+            (
+                "oversize raw output",
+                lambda value: value.__setitem__("raw_output_bytes", MAX_CAPTURE_BYTES + 1),
+            ),
+        ):
+            changed = copy.deepcopy(transaction_fixture)
+            mutate(changed)
+            try:
+                verify_transaction_capture(changed)
+            except EvidenceError:
+                pass
+            else:
+                raise AssertionError(f"transaction {label} was accepted")
         for name in ("run", "evidence"):
             path = root / name
             path.mkdir()
