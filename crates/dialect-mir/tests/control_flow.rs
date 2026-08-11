@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
 use dialect_mir::{
+    MAX_EXECUTABLE_BLOCKS, MAX_MIR_CONTROL_FLOW_WORK_UNITS, MIR_CONTROL_FLOW_WORK_UNITS_PER_BLOCK,
     MirBasicBlock, MirBlockId, MirBody, MirBodyForm, MirControlFlowEdge, MirControlFlowError,
     MirEdge, MirTerminator, MirTerminatorKind, analyze_mir_control_flow,
 };
@@ -55,7 +56,7 @@ fn computes_diamond_dominance_and_frontiers() {
         analyze_mir_control_flow(&body(vec![branch(1, 2), goto(3), goto(3), returning()])).unwrap();
 
     assert_eq!(analysis.predecessors(MirBlockId(3)), Some(&ids(&[1, 2])));
-    assert_eq!(analysis.dominators(MirBlockId(3)), Some(&ids(&[0, 3])));
+    assert_eq!(analysis.dominators(MirBlockId(3)), Some(ids(&[0, 3])));
     assert_eq!(
         analysis.immediate_dominator(MirBlockId(3)),
         Some(Some(MirBlockId(0)))
@@ -176,10 +177,98 @@ fn generated_reducible_graphs_have_reflexive_transitive_dominance() {
             assert!(analysis.dominates(block, block));
             assert!(analysis.dominates(MirBlockId(0), block));
             for dominator in analysis.dominators(block).unwrap() {
-                for transitive in analysis.dominators(*dominator).unwrap() {
-                    assert!(analysis.dominates(*transitive, block));
+                for transitive in analysis.dominators(dominator).unwrap() {
+                    assert!(analysis.dominates(transitive, block));
                 }
             }
         }
     }
+}
+
+fn reverse_cfg(block_count: usize) -> MirBody {
+    let mut blocks = Vec::with_capacity(block_count);
+    blocks.push(goto((block_count - 1) as u32));
+    blocks.push(returning());
+    for block in 2..block_count {
+        blocks.push(goto((block - 1) as u32));
+    }
+    body(blocks)
+}
+
+#[test]
+fn release_complexity_reverse_cfg_scales_by_work_not_source_order() {
+    let work_1024 = analyze_mir_control_flow(&reverse_cfg(1024))
+        .unwrap()
+        .work_units();
+    let work_2048 = analyze_mir_control_flow(&reverse_cfg(2048))
+        .unwrap()
+        .work_units();
+    let boundary = analyze_mir_control_flow(&reverse_cfg(MAX_EXECUTABLE_BLOCKS)).unwrap();
+    let work_4096 = boundary.work_units();
+
+    assert!(work_2048 <= work_1024 * 2 + MIR_CONTROL_FLOW_WORK_UNITS_PER_BLOCK);
+    assert!(work_4096 <= work_2048 * 2 + MIR_CONTROL_FLOW_WORK_UNITS_PER_BLOCK);
+    assert!(work_4096 < MAX_MIR_CONTROL_FLOW_WORK_UNITS);
+    assert_eq!(
+        boundary.immediate_dominator(MirBlockId((MAX_EXECUTABLE_BLOCKS - 1) as u32)),
+        Some(Some(MirBlockId(0)))
+    );
+    assert_eq!(
+        boundary.immediate_dominator(MirBlockId((MAX_EXECUTABLE_BLOCKS - 2) as u32)),
+        Some(Some(MirBlockId((MAX_EXECUTABLE_BLOCKS - 1) as u32)))
+    );
+}
+
+#[test]
+fn schema_boundary_enforces_deterministic_work_and_block_budgets() {
+    let dense = body(
+        (0..MAX_EXECUTABLE_BLOCKS)
+            .map(|source| {
+                let targets = (0..MIR_CONTROL_FLOW_WORK_UNITS_PER_BLOCK)
+                    .map(|value| {
+                        let target = (source + value + 1) % MAX_EXECUTABLE_BLOCKS;
+                        (value as u128, edge(target as u32))
+                    })
+                    .collect();
+                block(MirTerminatorKind::SwitchInt {
+                    discr: dialect_mir::MirOperand::Constant(dialect_mir::MirConstant {
+                        ty: dialect_mir::MirTypeId(0),
+                        value: dialect_mir::MirConstantValue::Bool(true),
+                    }),
+                    targets,
+                    otherwise: edge(((source + 1) % MAX_EXECUTABLE_BLOCKS) as u32),
+                })
+            })
+            .collect(),
+    );
+    let exhausted = analyze_mir_control_flow(&dense).unwrap_err();
+    assert_eq!(
+        exhausted,
+        MirControlFlowError::WorkBudgetExceeded {
+            consumed: MAX_MIR_CONTROL_FLOW_WORK_UNITS + 1,
+            limit: MAX_MIR_CONTROL_FLOW_WORK_UNITS,
+        }
+    );
+    assert_eq!(
+        exhausted.to_string(),
+        format!(
+            "control-flow analysis consumed {} work units, exceeding the deterministic limit {}",
+            MAX_MIR_CONTROL_FLOW_WORK_UNITS + 1,
+            MAX_MIR_CONTROL_FLOW_WORK_UNITS
+        )
+    );
+
+    let oversized = body((0..=MAX_EXECUTABLE_BLOCKS).map(|_| returning()).collect());
+    let oversized = analyze_mir_control_flow(&oversized).unwrap_err();
+    assert_eq!(
+        oversized,
+        MirControlFlowError::BlockLimitExceeded {
+            block_count: MAX_EXECUTABLE_BLOCKS + 1,
+            limit: MAX_EXECUTABLE_BLOCKS,
+        }
+    );
+    assert_eq!(
+        oversized.to_string(),
+        "control-flow body has 4097 blocks, exceeding the schema limit 4096"
+    );
 }

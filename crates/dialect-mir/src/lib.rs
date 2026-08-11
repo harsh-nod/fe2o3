@@ -7,7 +7,8 @@ mod semantic_memory;
 mod semantic_type;
 
 pub use control_flow::{
-    MirControlFlowAnalysis, MirControlFlowEdge, MirControlFlowError, analyze_mir_control_flow,
+    MAX_MIR_CONTROL_FLOW_WORK_UNITS, MIR_CONTROL_FLOW_WORK_UNITS_PER_BLOCK, MirControlFlowAnalysis,
+    MirControlFlowEdge, MirControlFlowError, analyze_mir_control_flow,
 };
 pub use executable::{
     EXECUTABLE_MIR_VERSION, GFX942_POINTER_ABIS, GFX942_TARGET_CPU, GFX942_TARGET_DATA_LAYOUT,

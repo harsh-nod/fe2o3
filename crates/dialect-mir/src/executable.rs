@@ -1334,7 +1334,11 @@ impl<'a> Verifier<'a> {
         self.collect_values()?;
         self.control_flow = match analyze_mir_control_flow(body) {
             Ok(analysis) => Some(analysis),
-            Err(error @ MirControlFlowError::Irreducible { .. }) => {
+            Err(
+                error @ (MirControlFlowError::Irreducible { .. }
+                | MirControlFlowError::BlockLimitExceeded { .. }
+                | MirControlFlowError::WorkBudgetExceeded { .. }),
+            ) => {
                 return Err(crate::executable::error(
                     format!("{}.body", self.path),
                     error.to_string(),

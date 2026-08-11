@@ -2,7 +2,12 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 
 use crate::executable::terminator_edges;
-use crate::{MirBlockId, MirBody};
+use crate::{MAX_EXECUTABLE_BLOCKS, MirBlockId, MirBody};
+
+/// Deterministic analysis budget derived from the executable MIR block limit.
+pub const MIR_CONTROL_FLOW_WORK_UNITS_PER_BLOCK: usize = 64;
+pub const MAX_MIR_CONTROL_FLOW_WORK_UNITS: usize =
+    MAX_EXECUTABLE_BLOCKS * MIR_CONTROL_FLOW_WORK_UNITS_PER_BLOCK;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct MirControlFlowEdge {
@@ -19,6 +24,10 @@ impl fmt::Display for MirControlFlowEdge {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MirControlFlowError {
     EmptyBody,
+    BlockLimitExceeded {
+        block_count: usize,
+        limit: usize,
+    },
     InvalidEntry {
         entry: MirBlockId,
         block_count: usize,
@@ -29,12 +38,20 @@ pub enum MirControlFlowError {
         blocks: Vec<MirBlockId>,
         entries: Vec<MirControlFlowEdge>,
     },
+    WorkBudgetExceeded {
+        consumed: usize,
+        limit: usize,
+    },
 }
 
 impl fmt::Display for MirControlFlowError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::EmptyBody => formatter.write_str("control-flow body has no blocks"),
+            Self::BlockLimitExceeded { block_count, limit } => write!(
+                formatter,
+                "control-flow body has {block_count} blocks, exceeding the schema limit {limit}"
+            ),
             Self::InvalidEntry { entry, block_count } => write!(
                 formatter,
                 "entry bb{} is outside the canonical block range 0..{block_count}",
@@ -55,6 +72,10 @@ impl fmt::Display for MirControlFlowError {
                 display_blocks(blocks),
                 display_edges(entries)
             ),
+            Self::WorkBudgetExceeded { consumed, limit } => write!(
+                formatter,
+                "control-flow analysis consumed {consumed} work units, exceeding the deterministic limit {limit}"
+            ),
         }
     }
 }
@@ -67,13 +88,15 @@ pub struct MirControlFlowAnalysis {
     entry: MirBlockId,
     successors: Vec<BTreeSet<MirBlockId>>,
     predecessors: Vec<BTreeSet<MirBlockId>>,
-    dominators: Vec<BTreeSet<MirBlockId>>,
     immediate_dominators: Vec<Option<MirBlockId>>,
     dominator_tree_children: Vec<BTreeSet<MirBlockId>>,
+    dominator_preorder: Vec<usize>,
+    dominator_subtree_end: Vec<usize>,
     dominance_frontiers: Vec<BTreeSet<MirBlockId>>,
     backedges: BTreeSet<MirControlFlowEdge>,
     loop_bodies: BTreeMap<MirBlockId, BTreeSet<MirBlockId>>,
     loop_latches: BTreeMap<MirBlockId, BTreeSet<MirBlockId>>,
+    work_units: usize,
 }
 
 impl MirControlFlowAnalysis {
@@ -93,13 +116,32 @@ impl MirControlFlowAnalysis {
         self.predecessors.get(block.0 as usize)
     }
 
-    pub fn dominators(&self, block: MirBlockId) -> Option<&BTreeSet<MirBlockId>> {
-        self.dominators.get(block.0 as usize)
+    /// Materializes this block's dominators on demand from the immediate-
+    /// dominator tree. Analysis itself never stores quadratic all-sets.
+    pub fn dominators(&self, block: MirBlockId) -> Option<BTreeSet<MirBlockId>> {
+        if block.0 as usize >= self.block_count() {
+            return None;
+        }
+        let mut dominators = BTreeSet::new();
+        let mut current = block;
+        loop {
+            dominators.insert(current);
+            if current == self.entry {
+                return Some(dominators);
+            }
+            current = self.immediate_dominators[current.0 as usize]?;
+        }
     }
 
     pub fn dominates(&self, dominator: MirBlockId, block: MirBlockId) -> bool {
-        self.dominators(block)
-            .is_some_and(|set| set.contains(&dominator))
+        let dominator_index = dominator.0 as usize;
+        let block_index = block.0 as usize;
+        if dominator_index >= self.block_count() || block_index >= self.block_count() {
+            return false;
+        }
+        let start = self.dominator_preorder[dominator_index];
+        let candidate = self.dominator_preorder[block_index];
+        start <= candidate && candidate < self.dominator_subtree_end[dominator_index]
     }
 
     pub fn immediate_dominator(&self, block: MirBlockId) -> Option<Option<MirBlockId>> {
@@ -151,6 +193,33 @@ impl MirControlFlowAnalysis {
     pub fn loop_latches(&self, header: MirBlockId) -> Option<&BTreeSet<MirBlockId>> {
         self.loop_latches.get(&header)
     }
+
+    /// Deterministic work units consumed while constructing this analysis.
+    pub const fn work_units(&self) -> usize {
+        self.work_units
+    }
+}
+
+#[derive(Default)]
+struct WorkBudget {
+    consumed: usize,
+}
+
+impl WorkBudget {
+    fn charge(&mut self, units: usize) -> Result<(), MirControlFlowError> {
+        let next = self
+            .consumed
+            .checked_add(units)
+            .unwrap_or(MAX_MIR_CONTROL_FLOW_WORK_UNITS + 1);
+        if next > MAX_MIR_CONTROL_FLOW_WORK_UNITS {
+            return Err(MirControlFlowError::WorkBudgetExceeded {
+                consumed: next,
+                limit: MAX_MIR_CONTROL_FLOW_WORK_UNITS,
+            });
+        }
+        self.consumed = next;
+        Ok(())
+    }
 }
 
 /// Analyzes a body without trusting its edge metadata.
@@ -165,6 +234,12 @@ pub fn analyze_mir_control_flow(
     if block_count == 0 {
         return Err(MirControlFlowError::EmptyBody);
     }
+    if block_count > MAX_EXECUTABLE_BLOCKS {
+        return Err(MirControlFlowError::BlockLimitExceeded {
+            block_count,
+            limit: MAX_EXECUTABLE_BLOCKS,
+        });
+    }
     if body.entry.0 as usize >= block_count {
         return Err(MirControlFlowError::InvalidEntry {
             entry: body.entry,
@@ -172,10 +247,13 @@ pub fn analyze_mir_control_flow(
         });
     }
 
+    let mut budget = WorkBudget::default();
+    budget.charge(block_count)?;
     let mut successors = vec![BTreeSet::new(); block_count];
     for (source_index, block) in body.blocks.iter().enumerate() {
         let source = MirBlockId(source_index as u32);
         for edge in terminator_edges(&block.terminator.kind) {
+            budget.charge(1)?;
             if edge.target.0 as usize >= block_count {
                 return Err(MirControlFlowError::UnknownSuccessor(MirControlFlowEdge {
                     source,
@@ -189,8 +267,12 @@ pub fn analyze_mir_control_flow(
     let mut reachable = BTreeSet::new();
     let mut pending = VecDeque::from([body.entry]);
     while let Some(block) = pending.pop_front() {
+        budget.charge(1)?;
         if reachable.insert(block) {
-            pending.extend(successors[block.0 as usize].iter().copied());
+            for successor in &successors[block.0 as usize] {
+                budget.charge(1)?;
+                pending.push_back(*successor);
+            }
         }
     }
     if reachable.len() != block_count {
@@ -205,100 +287,141 @@ pub fn analyze_mir_control_flow(
     for (source_index, targets) in successors.iter().enumerate() {
         let source = MirBlockId(source_index as u32);
         for target in targets {
+            budget.charge(1)?;
             predecessors[target.0 as usize].insert(source);
         }
     }
-    let dominators = compute_dominators(body.entry, &predecessors);
-    let immediate_dominators = compute_immediate_dominators(body.entry, &dominators);
+    let reverse_postorder = compute_reverse_postorder(body.entry, &successors, &mut budget)?;
+    let immediate_dominators =
+        compute_immediate_dominators(body.entry, &predecessors, &reverse_postorder, &mut budget)?;
     let dominator_tree_children = compute_dominator_tree(&immediate_dominators);
-    let dominance_frontiers = compute_frontiers(&predecessors, &dominators);
-    let backedges = compute_backedges(&successors, &dominators);
-    if let Some(error) = find_irreducible(&successors, &backedges) {
+    let (dominator_preorder, dominator_subtree_end) =
+        compute_dominator_intervals(body.entry, &dominator_tree_children, &mut budget)?;
+    let dominance_frontiers = compute_frontiers(
+        &successors,
+        &immediate_dominators,
+        &dominator_tree_children,
+        body.entry,
+        &mut budget,
+    )?;
+    let backedges = compute_backedges(
+        &successors,
+        &dominator_preorder,
+        &dominator_subtree_end,
+        &mut budget,
+    )?;
+    if let Some(error) = find_irreducible(&successors, &backedges, &mut budget)? {
         return Err(error);
     }
-    let (loop_bodies, loop_latches) = compute_natural_loops(&predecessors, &backedges);
+    let (loop_bodies, loop_latches) =
+        compute_natural_loops(&predecessors, &backedges, &mut budget)?;
 
     Ok(MirControlFlowAnalysis {
         entry: body.entry,
         successors,
         predecessors,
-        dominators,
         immediate_dominators,
         dominator_tree_children,
+        dominator_preorder,
+        dominator_subtree_end,
         dominance_frontiers,
         backedges,
         loop_bodies,
         loop_latches,
+        work_units: budget.consumed,
     })
 }
 
-fn compute_dominators(
+fn compute_reverse_postorder(
     entry: MirBlockId,
-    predecessors: &[BTreeSet<MirBlockId>],
-) -> Vec<BTreeSet<MirBlockId>> {
-    let all = (0..predecessors.len())
-        .map(|index| MirBlockId(index as u32))
-        .collect::<BTreeSet<_>>();
-    let mut result = (0..predecessors.len())
-        .map(|index| {
-            let block = MirBlockId(index as u32);
-            if block == entry {
-                BTreeSet::from([entry])
-            } else {
-                all.clone()
+    successors: &[BTreeSet<MirBlockId>],
+    budget: &mut WorkBudget,
+) -> Result<Vec<MirBlockId>, MirControlFlowError> {
+    let mut visited = vec![false; successors.len()];
+    let mut postorder = Vec::with_capacity(successors.len());
+    let mut pending = vec![(entry, false)];
+    while let Some((block, finish)) = pending.pop() {
+        budget.charge(1)?;
+        if finish {
+            postorder.push(block);
+        } else if !visited[block.0 as usize] {
+            visited[block.0 as usize] = true;
+            pending.push((block, true));
+            for successor in successors[block.0 as usize].iter().rev() {
+                budget.charge(1)?;
+                if !visited[successor.0 as usize] {
+                    pending.push((*successor, false));
+                }
             }
-        })
-        .collect::<Vec<_>>();
-
-    loop {
-        let mut changed = false;
-        for index in 0..predecessors.len() {
-            let block = MirBlockId(index as u32);
-            if block == entry {
-                continue;
-            }
-            let mut incoming = predecessors[index].iter();
-            let mut next = incoming
-                .next()
-                .map(|predecessor| result[predecessor.0 as usize].clone())
-                .unwrap_or_default();
-            for predecessor in incoming {
-                next.retain(|candidate| result[predecessor.0 as usize].contains(candidate));
-            }
-            next.insert(block);
-            changed |= result[index] != next;
-            result[index] = next;
-        }
-        if !changed {
-            return result;
         }
     }
+    postorder.reverse();
+    Ok(postorder)
 }
 
 fn compute_immediate_dominators(
     entry: MirBlockId,
-    dominators: &[BTreeSet<MirBlockId>],
-) -> Vec<Option<MirBlockId>> {
-    dominators
-        .iter()
-        .enumerate()
-        .map(|(index, set)| {
-            let block = MirBlockId(index as u32);
-            if block == entry {
-                return None;
-            }
-            set.iter()
+    predecessors: &[BTreeSet<MirBlockId>],
+    reverse_postorder: &[MirBlockId],
+    budget: &mut WorkBudget,
+) -> Result<Vec<Option<MirBlockId>>, MirControlFlowError> {
+    let mut rpo_index = vec![usize::MAX; predecessors.len()];
+    for (index, block) in reverse_postorder.iter().enumerate() {
+        rpo_index[block.0 as usize] = index;
+    }
+    let mut immediate = vec![None; predecessors.len()];
+    immediate[entry.0 as usize] = Some(entry);
+
+    loop {
+        budget.charge(1)?;
+        let mut changed = false;
+        for block in reverse_postorder.iter().copied().skip(1) {
+            budget.charge(1)?;
+            let mut processed = predecessors[block.0 as usize]
+                .iter()
                 .copied()
-                .filter(|candidate| *candidate != block)
-                .find(|candidate| {
-                    set.iter().all(|other| {
-                        other == &block
-                            || other == candidate
-                            || dominators[candidate.0 as usize].contains(other)
-                    })
-                })
-        })
-        .collect()
+                .filter(|predecessor| immediate[predecessor.0 as usize].is_some());
+            let Some(mut next) = processed.next() else {
+                continue;
+            };
+            for predecessor in processed {
+                budget.charge(1)?;
+                next =
+                    intersect_dominator_paths(predecessor, next, &immediate, &rpo_index, budget)?;
+            }
+            if immediate[block.0 as usize] != Some(next) {
+                immediate[block.0 as usize] = Some(next);
+                changed = true;
+            }
+        }
+        if !changed {
+            immediate[entry.0 as usize] = None;
+            return Ok(immediate);
+        }
+    }
+}
+
+fn intersect_dominator_paths(
+    mut left: MirBlockId,
+    mut right: MirBlockId,
+    immediate: &[Option<MirBlockId>],
+    rpo_index: &[usize],
+    budget: &mut WorkBudget,
+) -> Result<MirBlockId, MirControlFlowError> {
+    while left != right {
+        budget.charge(1)?;
+        while rpo_index[left.0 as usize] > rpo_index[right.0 as usize] {
+            budget.charge(1)?;
+            left = immediate[left.0 as usize]
+                .expect("processed CHK predecessor has an immediate dominator");
+        }
+        while rpo_index[right.0 as usize] > rpo_index[left.0 as usize] {
+            budget.charge(1)?;
+            right = immediate[right.0 as usize]
+                .expect("processed CHK predecessor has an immediate dominator");
+        }
+    }
+    Ok(left)
 }
 
 fn compute_dominator_tree(
@@ -313,58 +436,112 @@ fn compute_dominator_tree(
     children
 }
 
+fn compute_dominator_intervals(
+    entry: MirBlockId,
+    children: &[BTreeSet<MirBlockId>],
+    budget: &mut WorkBudget,
+) -> Result<(Vec<usize>, Vec<usize>), MirControlFlowError> {
+    let mut preorder = vec![0; children.len()];
+    let mut subtree_end = vec![0; children.len()];
+    let mut clock = 0;
+    let mut pending = vec![(entry, false)];
+    while let Some((block, finish)) = pending.pop() {
+        budget.charge(1)?;
+        if finish {
+            subtree_end[block.0 as usize] = clock;
+        } else {
+            preorder[block.0 as usize] = clock;
+            clock += 1;
+            pending.push((block, true));
+            for child in children[block.0 as usize].iter().rev() {
+                pending.push((*child, false));
+            }
+        }
+    }
+    Ok((preorder, subtree_end))
+}
+
 fn compute_frontiers(
-    predecessors: &[BTreeSet<MirBlockId>],
-    dominators: &[BTreeSet<MirBlockId>],
-) -> Vec<BTreeSet<MirBlockId>> {
-    (0..predecessors.len())
-        .map(|dominator_index| {
-            let dominator = MirBlockId(dominator_index as u32);
-            (0..predecessors.len())
-                .map(|index| MirBlockId(index as u32))
-                .filter(|candidate| {
-                    let strictly_dominates = candidate != &dominator
-                        && dominators[candidate.0 as usize].contains(&dominator);
-                    !strictly_dominates
-                        && predecessors[candidate.0 as usize]
-                            .iter()
-                            .any(|predecessor| {
-                                dominators[predecessor.0 as usize].contains(&dominator)
-                            })
-                })
-                .collect()
-        })
-        .collect()
+    successors: &[BTreeSet<MirBlockId>],
+    immediate: &[Option<MirBlockId>],
+    children: &[BTreeSet<MirBlockId>],
+    entry: MirBlockId,
+    budget: &mut WorkBudget,
+) -> Result<Vec<BTreeSet<MirBlockId>>, MirControlFlowError> {
+    let mut tree_postorder = Vec::with_capacity(children.len());
+    let mut pending = vec![(entry, false)];
+    while let Some((block, finish)) = pending.pop() {
+        budget.charge(1)?;
+        if finish {
+            tree_postorder.push(block);
+        } else {
+            pending.push((block, true));
+            for child in children[block.0 as usize].iter().rev() {
+                pending.push((*child, false));
+            }
+        }
+    }
+
+    let mut frontiers = vec![BTreeSet::<MirBlockId>::new(); successors.len()];
+    for block in tree_postorder {
+        let mut frontier = BTreeSet::new();
+        for successor in &successors[block.0 as usize] {
+            budget.charge(1)?;
+            if immediate[successor.0 as usize] != Some(block) {
+                frontier.insert(*successor);
+            }
+        }
+        for child in &children[block.0 as usize] {
+            for candidate in &frontiers[child.0 as usize] {
+                budget.charge(1)?;
+                if immediate[candidate.0 as usize] != Some(block) {
+                    frontier.insert(*candidate);
+                }
+            }
+        }
+        frontiers[block.0 as usize] = frontier;
+    }
+    Ok(frontiers)
 }
 
 fn compute_backedges(
     successors: &[BTreeSet<MirBlockId>],
-    dominators: &[BTreeSet<MirBlockId>],
-) -> BTreeSet<MirControlFlowEdge> {
-    successors
-        .iter()
-        .enumerate()
-        .flat_map(|(source_index, targets)| {
-            let source = MirBlockId(source_index as u32);
-            targets.iter().copied().filter_map(move |target| {
-                dominators[source_index]
-                    .contains(&target)
-                    .then_some(MirControlFlowEdge { source, target })
-            })
-        })
-        .collect()
+    dominator_preorder: &[usize],
+    dominator_subtree_end: &[usize],
+    budget: &mut WorkBudget,
+) -> Result<BTreeSet<MirControlFlowEdge>, MirControlFlowError> {
+    let mut backedges = BTreeSet::new();
+    for (source_index, targets) in successors.iter().enumerate() {
+        let source = MirBlockId(source_index as u32);
+        for target in targets {
+            budget.charge(1)?;
+            let start = dominator_preorder[target.0 as usize];
+            let candidate = dominator_preorder[source_index];
+            if start <= candidate && candidate < dominator_subtree_end[target.0 as usize] {
+                backedges.insert(MirControlFlowEdge {
+                    source,
+                    target: *target,
+                });
+            }
+        }
+    }
+    Ok(backedges)
 }
+
+type NaturalLoops = (
+    BTreeMap<MirBlockId, BTreeSet<MirBlockId>>,
+    BTreeMap<MirBlockId, BTreeSet<MirBlockId>>,
+);
 
 fn compute_natural_loops(
     predecessors: &[BTreeSet<MirBlockId>],
     backedges: &BTreeSet<MirControlFlowEdge>,
-) -> (
-    BTreeMap<MirBlockId, BTreeSet<MirBlockId>>,
-    BTreeMap<MirBlockId, BTreeSet<MirBlockId>>,
-) {
+    budget: &mut WorkBudget,
+) -> Result<NaturalLoops, MirControlFlowError> {
     let mut bodies = BTreeMap::<_, BTreeSet<_>>::new();
     let mut latches = BTreeMap::<_, BTreeSet<_>>::new();
     for edge in backedges {
+        budget.charge(1)?;
         let mut body = BTreeSet::from([edge.target, edge.source]);
         let mut pending = VecDeque::from([edge.source]);
         while let Some(block) = pending.pop_front() {
@@ -372,6 +549,7 @@ fn compute_natural_loops(
                 continue;
             }
             for predecessor in &predecessors[block.0 as usize] {
+                budget.charge(1)?;
                 if body.insert(*predecessor) {
                     pending.push_back(*predecessor);
                 }
@@ -380,13 +558,14 @@ fn compute_natural_loops(
         bodies.entry(edge.target).or_default().extend(body);
         latches.entry(edge.target).or_default().insert(edge.source);
     }
-    (bodies, latches)
+    Ok((bodies, latches))
 }
 
 fn find_irreducible(
     successors: &[BTreeSet<MirBlockId>],
     backedges: &BTreeSet<MirControlFlowEdge>,
-) -> Option<MirControlFlowError> {
+    budget: &mut WorkBudget,
+) -> Result<Option<MirControlFlowError>, MirControlFlowError> {
     let forward = successors
         .iter()
         .enumerate()
@@ -404,96 +583,91 @@ fn find_irreducible(
                 .collect::<BTreeSet<_>>()
         })
         .collect::<Vec<_>>();
+    budget.charge(
+        forward
+            .iter()
+            .map(BTreeSet::len)
+            .sum::<usize>()
+            .saturating_add(forward.len()),
+    )?;
     for blocks in strongly_connected_components(&forward) {
+        budget.charge(blocks.len())?;
         if blocks.len() == 1 && !forward[blocks[0].0 as usize].contains(&blocks[0]) {
             continue;
         }
         let members = blocks.iter().copied().collect::<BTreeSet<_>>();
-        let entries = successors
-            .iter()
-            .enumerate()
-            .flat_map(|(source_index, targets)| {
-                let source = MirBlockId(source_index as u32);
-                targets
-                    .iter()
-                    .copied()
-                    .map(move |target| MirControlFlowEdge { source, target })
-            })
-            .filter(|edge| !members.contains(&edge.source) && members.contains(&edge.target))
-            .collect::<Vec<_>>();
-        return Some(MirControlFlowError::Irreducible { blocks, entries });
-    }
-    None
-}
-
-struct TarjanTraversal<'a> {
-    successors: &'a [BTreeSet<MirBlockId>],
-    index: usize,
-    indices: Vec<Option<usize>>,
-    lowlinks: Vec<usize>,
-    stack: Vec<MirBlockId>,
-    on_stack: BTreeSet<MirBlockId>,
-    components: Vec<Vec<MirBlockId>>,
-}
-
-impl<'a> TarjanTraversal<'a> {
-    fn new(successors: &'a [BTreeSet<MirBlockId>]) -> Self {
-        Self {
-            successors,
-            index: 0,
-            indices: vec![None; successors.len()],
-            lowlinks: vec![0; successors.len()],
-            stack: Vec::new(),
-            on_stack: BTreeSet::new(),
-            components: Vec::new(),
-        }
-    }
-
-    fn visit(&mut self, block: MirBlockId) {
-        let current = self.index;
-        self.index += 1;
-        self.indices[block.0 as usize] = Some(current);
-        self.lowlinks[block.0 as usize] = current;
-        self.stack.push(block);
-        self.on_stack.insert(block);
-
-        for successor in &self.successors[block.0 as usize] {
-            if self.indices[successor.0 as usize].is_none() {
-                self.visit(*successor);
-                self.lowlinks[block.0 as usize] =
-                    self.lowlinks[block.0 as usize].min(self.lowlinks[successor.0 as usize]);
-            } else if self.on_stack.contains(successor) {
-                self.lowlinks[block.0 as usize] = self.lowlinks[block.0 as usize].min(
-                    self.indices[successor.0 as usize].expect("visited successor has an index"),
-                );
-            }
-        }
-
-        if self.lowlinks[block.0 as usize] == current {
-            let mut component = Vec::new();
-            loop {
-                let member = self.stack.pop().expect("SCC root remains on the stack");
-                self.on_stack.remove(&member);
-                component.push(member);
-                if member == block {
-                    break;
+        let mut entries = Vec::new();
+        for (source_index, targets) in successors.iter().enumerate() {
+            let source = MirBlockId(source_index as u32);
+            for target in targets {
+                budget.charge(1)?;
+                if !members.contains(&source) && members.contains(target) {
+                    entries.push(MirControlFlowEdge {
+                        source,
+                        target: *target,
+                    });
                 }
             }
-            component.sort();
-            self.components.push(component);
         }
+        return Ok(Some(MirControlFlowError::Irreducible { blocks, entries }));
     }
+    Ok(None)
 }
 
 fn strongly_connected_components(successors: &[BTreeSet<MirBlockId>]) -> Vec<Vec<MirBlockId>> {
-    let mut traversal = TarjanTraversal::new(successors);
+    let mut visited = vec![false; successors.len()];
+    let mut finish_order = Vec::with_capacity(successors.len());
     for block_index in 0..successors.len() {
-        if traversal.indices[block_index].is_none() {
-            traversal.visit(MirBlockId(block_index as u32));
+        if visited[block_index] {
+            continue;
+        }
+        let mut pending = vec![(MirBlockId(block_index as u32), false)];
+        while let Some((block, finish)) = pending.pop() {
+            if finish {
+                finish_order.push(block);
+            } else if !visited[block.0 as usize] {
+                visited[block.0 as usize] = true;
+                pending.push((block, true));
+                pending.extend(
+                    successors[block.0 as usize]
+                        .iter()
+                        .rev()
+                        .copied()
+                        .map(|successor| (successor, false)),
+                );
+            }
         }
     }
-    traversal.components.sort();
-    traversal.components
+
+    let mut reverse = vec![BTreeSet::new(); successors.len()];
+    for (source_index, targets) in successors.iter().enumerate() {
+        for target in targets {
+            reverse[target.0 as usize].insert(MirBlockId(source_index as u32));
+        }
+    }
+    visited.fill(false);
+    let mut components = Vec::new();
+    for root in finish_order.into_iter().rev() {
+        if visited[root.0 as usize] {
+            continue;
+        }
+        visited[root.0 as usize] = true;
+        let mut component = Vec::new();
+        let mut pending = vec![root];
+        while let Some(block) = pending.pop() {
+            component.push(block);
+            for predecessor in reverse[block.0 as usize].iter().rev() {
+                if !visited[predecessor.0 as usize] {
+                    visited[predecessor.0 as usize] = true;
+                    pending.push(*predecessor);
+                }
+            }
+        }
+        component.sort();
+        components.push(component);
+    }
+    components.sort();
+    components
 }
 
 fn display_blocks(blocks: &[MirBlockId]) -> String {
