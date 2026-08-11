@@ -222,7 +222,7 @@ fn worker_parses_requests_under_bounded_resource_limits() {
 }
 
 #[test]
-fn timeout_reaps_worker_and_descendants() {
+fn timeout_reaps_worker() {
     let worker = worker();
     let started = Instant::now();
     let timeout = worker
@@ -233,28 +233,11 @@ fn timeout_reaps_worker_and_descendants() {
         &AuthenticatedPhysicalMachineEffectErrorKindV1::Timeout
     );
     assert!(started.elapsed() < Duration::from_secs(3));
+}
 
-    let descendant = worker
-        .analyze(vec![3], vec![entry()], short_limits())
-        .unwrap_err();
-    assert_eq!(
-        descendant.kind(),
-        &AuthenticatedPhysicalMachineEffectErrorKindV1::Timeout
-    );
-    let text = std::str::from_utf8(descendant.stderr()).unwrap();
-    let pid: u32 = text
-        .trim()
-        .strip_prefix("descendant=")
-        .unwrap()
-        .parse()
-        .unwrap();
-    for _ in 0..100 {
-        if !Path::new(&format!("/proc/{pid}")).exists() {
-            return;
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
-    panic!("descendant {pid} survived authenticated worker timeout");
+#[test]
+fn rapid_double_fork_and_setsid_are_denied_before_worker_input() {
+    worker().analyze(vec![11], vec![entry()], limits()).unwrap();
 }
 
 #[test]

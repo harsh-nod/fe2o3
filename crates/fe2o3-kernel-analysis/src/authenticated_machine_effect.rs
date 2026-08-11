@@ -214,6 +214,7 @@ pub enum AuthenticatedPhysicalMachineEffectErrorKindV1 {
     ProcessObservation,
     RuntimeClosureChanged,
     ConfigureResourceLimits,
+    ContainmentUnavailable,
     RuntimeClosureMismatch {
         expected: PhysicalMachineRuntimeClosureIdentityV1,
         actual: PhysicalMachineRuntimeClosureIdentityV1,
@@ -479,7 +480,9 @@ mod platform {
     use super::*;
     use rustix::{
         fs::{MemfdFlags, Mode, OFlags, SealFlags},
-        process::{Pid, Resource, Rlimit, Signal, kill_process, kill_process_group, prlimit},
+        process::{
+            Pid, Resource, Rlimit, Signal, geteuid, kill_process, kill_process_group, prlimit,
+        },
     };
     use std::{
         collections::{BTreeMap, BTreeSet},
@@ -501,6 +504,7 @@ mod platform {
     const DRAIN_GRACE: Duration = Duration::from_millis(200);
     const MAX_PROC_MAPS_BYTES: usize = 1024 * 1024;
     const MAX_PROC_STAT_BYTES: usize = 4096;
+    const MAX_PROC_STATUS_BYTES: usize = 16 * 1024;
     const WORKER_ADDRESS_SPACE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
     const WORKER_DATA_BYTES: u64 = 2 * 1024 * 1024 * 1024;
     const WORKER_FILE_BYTES: u64 = 16 * 1024 * 1024;
@@ -748,6 +752,7 @@ mod platform {
             limits: AuthenticatedPhysicalMachineEffectLimitsV1,
             expected_runtime: Option<PhysicalMachineRuntimeClosureIdentityV1>,
         ) -> Result<RawExecution, AuthenticatedPhysicalMachineEffectErrorV1> {
+            validate_no_fork_profile()?;
             validate_image(&self.image, &self.descriptor_path, self.snapshot)?;
             let mut command = Command::new(&self.descriptor_path);
             command
@@ -1128,6 +1133,7 @@ mod platform {
             (Resource::Data, WORKER_DATA_BYTES),
             (Resource::Fsize, WORKER_FILE_BYTES),
             (Resource::Core, 0),
+            (Resource::Nproc, 0),
         ] {
             prlimit(
                 Some(pid),
@@ -1143,6 +1149,38 @@ mod platform {
                     error,
                 )
             })?;
+        }
+        Ok(())
+    }
+
+    fn validate_no_fork_profile() -> Result<(), AuthenticatedPhysicalMachineEffectErrorV1> {
+        if geteuid().is_root() {
+            return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
+                AuthenticatedPhysicalMachineEffectErrorKindV1::ContainmentUnavailable,
+            ));
+        }
+        let status =
+            read_bounded_utf8("/proc/self/status", MAX_PROC_STATUS_BYTES).map_err(|error| {
+                AuthenticatedPhysicalMachineEffectErrorV1::detail(
+                    AuthenticatedPhysicalMachineEffectErrorKindV1::ContainmentUnavailable,
+                    error,
+                )
+            })?;
+        for field in ["CapInh:", "CapPrm:", "CapEff:", "CapAmb:"] {
+            let Some(value) = status
+                .lines()
+                .find_map(|line| line.strip_prefix(field))
+                .map(str::trim)
+            else {
+                return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
+                    AuthenticatedPhysicalMachineEffectErrorKindV1::ContainmentUnavailable,
+                ));
+            };
+            if u64::from_str_radix(value, 16).ok() != Some(0) {
+                return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
+                    AuthenticatedPhysicalMachineEffectErrorKindV1::ContainmentUnavailable,
+                ));
+            }
         }
         Ok(())
     }

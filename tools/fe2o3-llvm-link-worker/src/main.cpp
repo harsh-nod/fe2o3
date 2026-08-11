@@ -44,7 +44,7 @@ bool installMachineEffectResourceLimits() {
   return setBoundedLimit(RLIMIT_AS, MachineEffectAddressSpaceBytes) &&
          setBoundedLimit(RLIMIT_DATA, MachineEffectDataBytes) &&
          setBoundedLimit(RLIMIT_FSIZE, MachineEffectFileBytes) &&
-         setBoundedLimit(RLIMIT_CORE, 0);
+         setBoundedLimit(RLIMIT_CORE, 0) && setBoundedLimit(RLIMIT_NPROC, 0);
 }
 
 bool readBoundedStdin(std::vector<uint8_t> &Bytes) {

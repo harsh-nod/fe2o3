@@ -93,6 +93,7 @@ fn analysis_response(bytes: Vec<u8>) {
                 (Resource::Data, 2 * 1024 * 1024 * 1024),
                 (Resource::Fsize, 16 * 1024 * 1024),
                 (Resource::Core, 0),
+                (Resource::Nproc, 0),
             ] {
                 let limit = getrlimit(resource);
                 if limit.current.is_none_or(|value| value > expected)
@@ -100,6 +101,20 @@ fn analysis_response(bytes: Vec<u8>) {
                 {
                     std::process::exit(83);
                 }
+            }
+        }
+        11 => {
+            let escaped = Command::new("/bin/sh")
+                .args([
+                    "-c",
+                    "( /usr/bin/setsid /bin/sh -c '/bin/sleep 30 &' >/dev/null 2>&1 & ) & wait",
+                ])
+                .spawn();
+            if let Ok(mut escaped) = escaped {
+                eprintln!("containment_escape={}", escaped.id());
+                thread::sleep(Duration::from_secs(30));
+                let _ = escaped.wait();
+                std::process::exit(84);
             }
         }
         _ => {}
