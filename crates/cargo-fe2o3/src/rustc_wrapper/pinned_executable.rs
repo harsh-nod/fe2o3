@@ -1,8 +1,9 @@
 //! Fail-closed pinning for the native `rustc` executable.
 //!
 //! Linux is the only supported platform in this increment. The implementation opens the final
-//! path component with `O_NOFOLLOW`, hashes through that opened descriptor, and executes through a
-//! validated `/proc/self/fd` reference while retaining the descriptor. Other platforms return
+//! path component with `O_NOFOLLOW`, except for an exact, fully sealed `/proc/self/fd/N` input,
+//! hashes through that opened descriptor, and executes through a validated `/proc/self/fd`
+//! reference while retaining the descriptor. Other platforms return
 //! [`PinExecutableError::UnsupportedPlatform`]; they must grow an equivalent descriptor-based
 //! execution primitive rather than falling back to reopening the input pathname.
 //!
@@ -181,7 +182,7 @@ impl Error for PinExecutableError {
 mod platform {
     use super::{MAX_EXECUTABLE_BYTES, Path, PathBuf, PinExecutableError};
     use fe2o3_process_identity::LinuxObjectIdentityV3;
-    use rustix::fs::{Access, Mode, OFlags};
+    use rustix::fs::{Access, Mode, OFlags, SealFlags};
     use sha2::{Digest, Sha256};
     use std::ffi::OsStr;
     use std::fs::{File, Metadata};
@@ -194,6 +195,10 @@ mod platform {
     use std::process::{Command, ExitStatus};
 
     const HASH_CHUNK_BYTES: usize = 64 * 1024;
+    const REQUIRED_INHERITED_SEALS: SealFlags = SealFlags::WRITE
+        .union(SealFlags::GROW)
+        .union(SealFlags::SHRINK)
+        .union(SealFlags::SEAL);
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     struct ObjectSnapshot {
@@ -245,16 +250,35 @@ mod platform {
     impl PinnedExecutable {
         pub(crate) fn open(path: &Path) -> Result<Self, PinExecutableError> {
             let display_path = path.to_path_buf();
-            let fd = rustix::fs::open(
-                path,
-                OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
-                Mode::empty(),
-            )
-            .map_err(|source| PinExecutableError::Open {
-                path: display_path.clone(),
-                source: source.into(),
+            let retained_descriptor = retained_descriptor_number(path);
+            let mut open_flags = OFlags::RDONLY | OFlags::NONBLOCK | OFlags::CLOEXEC;
+            if retained_descriptor.is_none() {
+                open_flags |= OFlags::NOFOLLOW;
+            }
+            let fd = rustix::fs::open(path, open_flags, Mode::empty()).map_err(|source| {
+                PinExecutableError::Open {
+                    path: display_path.clone(),
+                    source: source.into(),
+                }
             })?;
-            Self::from_open_file(File::from(fd), display_path)
+            let file = File::from(fd);
+            if retained_descriptor.is_some()
+                && rustix::fs::fcntl_get_seals(&file).map_err(|source| {
+                    PinExecutableError::ExecutionStrategy {
+                        path: display_path.clone(),
+                        source: source.into(),
+                    }
+                })? != REQUIRED_INHERITED_SEALS
+            {
+                return Err(PinExecutableError::ExecutionStrategy {
+                    path: display_path,
+                    source: io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "inherited executable descriptor is not fully sealed",
+                    ),
+                });
+            }
+            Self::from_open_file(file, display_path)
         }
 
         pub(crate) fn from_transferred_file(
@@ -406,6 +430,19 @@ mod platform {
         fn execution_path(&self) -> &Path {
             &self.execution_path
         }
+    }
+
+    fn retained_descriptor_number(path: &Path) -> Option<i32> {
+        let text = path.to_str()?;
+        let suffix = text.strip_prefix("/proc/self/fd/")?;
+        if suffix.is_empty()
+            || !suffix.bytes().all(|byte| byte.is_ascii_digit())
+            || (suffix.len() > 1 && suffix.starts_with('0'))
+        {
+            return None;
+        }
+        let descriptor = suffix.parse::<i32>().ok()?;
+        (descriptor >= 3 && text == format!("/proc/self/fd/{descriptor}")).then_some(descriptor)
     }
 
     /// A command that cannot outlive the descriptor used by its executable pathname.
@@ -607,6 +644,44 @@ mod platform {
             assert!(matches!(
                 PinnedExecutable::open(&link),
                 Err(PinExecutableError::Open { .. })
+            ));
+        }
+
+        fn inherited_image(sealed: bool) -> (File, PathBuf) {
+            use std::io::Write;
+
+            let bytes = fs::read("/bin/true").unwrap();
+            let fd = rustix::fs::memfd_create(
+                "fe2o3-inherited-rustc-test",
+                rustix::fs::MemfdFlags::ALLOW_SEALING,
+            )
+            .unwrap();
+            let mut image = File::from(fd);
+            image.write_all(&bytes).unwrap();
+            image
+                .set_permissions(fs::Permissions::from_mode(0o555))
+                .unwrap();
+            if sealed {
+                rustix::fs::fcntl_add_seals(
+                    &image,
+                    SealFlags::WRITE | SealFlags::GROW | SealFlags::SHRINK,
+                )
+                .and_then(|()| rustix::fs::fcntl_add_seals(&image, SealFlags::SEAL))
+                .unwrap();
+            }
+            let path = PathBuf::from(format!("/proc/self/fd/{}", image.as_raw_fd()));
+            (image, path)
+        }
+
+        #[test]
+        fn accepts_only_fully_sealed_inherited_descriptors() {
+            let (_image, path) = inherited_image(true);
+            assert!(PinnedExecutable::open(&path).is_ok());
+
+            let (_image, path) = inherited_image(false);
+            assert!(matches!(
+                PinnedExecutable::open(&path),
+                Err(PinExecutableError::ExecutionStrategy { .. })
             ));
         }
 

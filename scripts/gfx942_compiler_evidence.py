@@ -909,6 +909,7 @@ def build_and_generate(
     path_dir = run / "tool-path"
     create_allowlisted_path(path_dir, manifest, tools)
     environment = clean_environment(run, path_dir, manifest)
+    environment["RUSTC"] = f"/proc/self/fd/{tools['rustc'].executable.fd}"
     worker_build = run / "worker-build"
     if worker_build.exists():
         raise EvidenceError("Worker build directory was not absent at run start")
