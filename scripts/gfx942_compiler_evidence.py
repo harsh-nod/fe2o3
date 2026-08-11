@@ -468,9 +468,7 @@ def run_command(
     for tool in tools.values():
         tool.revalidate_identity()
     if completed.returncode != 0:
-        detail = b""
-        if capture:
-            detail = completed.stdout + completed.stderr
+        detail = completed.stdout + completed.stderr
         raise EvidenceError(
             f"command failed ({completed.returncode}): {' '.join(arguments)}\n"
             + detail[-8192:].decode("utf-8", "replace")
@@ -938,13 +936,14 @@ def build_and_generate(
             "Ninja",
             "-DLLVM_DIR=/opt/rocm-7.2.4/lib/llvm/lib/cmake/llvm",
             "-DLLD_DIR=/opt/rocm-7.2.4/lib/llvm/lib/cmake/lld",
-            f"-DCMAKE_MAKE_PROGRAM={tools['ninja'].executable.proc_path}",
+            f"-DCMAKE_MAKE_PROGRAM={path_dir / 'ninja'}",
             f"-DCMAKE_CXX_COMPILER={tools['cxx'].path}",
             "-DCMAKE_CXX_COMPILER_ARG1=--driver-mode=g++",
             f"-DCMAKE_CXX_COMPILER_LAUNCHER={compiler_launcher}",
             f"-DCMAKE_CXX_LINKER_LAUNCHER={compiler_launcher}",
-            f"-DCMAKE_LINKER={tools['lld'].executable.proc_path}",
-            f"-DCMAKE_AR={tools['llvm_ar'].executable.proc_path}",
+            f"-DCMAKE_LINKER={path_dir / 'ld.lld'}",
+            f"-DCMAKE_AR={path_dir / 'ar'}",
+            f"-DCMAKE_RANLIB={path_dir / 'ranlib'}",
             "-DFE2O3_PINNED_LLVM_VERSION=22.0.0git",
             "-DFE2O3_LLVM_BUILD_ID_FILE=/opt/rocm-7.2.4/.info/version",
             "-DFE2O3_EXPECTED_LLVM_BUILD_ID=7.2.4",
