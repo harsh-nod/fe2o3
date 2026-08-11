@@ -784,6 +784,19 @@ fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
+fn process_cpu_ticks(process: u32) -> u64 {
+    let stat = fs::read_to_string(format!("/proc/{process}/stat")).unwrap();
+    let fields = stat
+        .rsplit_once(") ")
+        .expect("process stat has a parenthesized command")
+        .1
+        .split_whitespace()
+        .collect::<Vec<_>>();
+    let user = fields[11].parse::<u64>().unwrap();
+    let system = fields[12].parse::<u64>().unwrap();
+    user + system
+}
+
 fn stage_ready_restart(directory: &TestDirectory) -> (PathBuf, PathBuf) {
     let config = write_config(directory, true);
     let handoff_marker = directory.0.join("handoff-ready");
@@ -1302,6 +1315,73 @@ fn application_seccomp_rejects_process_and_double_fork_setsid_escape() {
     assert!(
         !escape_marker.exists(),
         "double-fork+setsid descendant escaped the seccomp profile"
+    );
+}
+
+#[test]
+fn stalled_application_ack_times_out_without_spinning_and_reaps_the_leader() {
+    let directory = TestDirectory::new();
+    let fixture = required_alpha_zeta_publication_fixture(&directory);
+    let published = run_wrapper_with_options(
+        &directory,
+        &fixture.config,
+        "publish-valid",
+        fixture.cov6,
+        None,
+    );
+    assert!(published.status.success(), "{}", stderr(&published));
+
+    let report = directory.0.join("stalled-ack-report.json");
+    let ready = directory.0.join("stalled-ack-ready");
+    let mut command = application_runner_command(&directory, application_fixture(), &report);
+    command
+        .arg("--fe2o3-test-stall-before-ack")
+        .arg(&ready)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let started = Instant::now();
+    let child = command.spawn().unwrap();
+    let runner = child.id();
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !ready.exists() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        ready.exists(),
+        "application did not reach the stalled ACK boundary"
+    );
+    let application = fs::read_to_string(&ready)
+        .unwrap()
+        .trim()
+        .parse::<u32>()
+        .unwrap();
+    let before = process_cpu_ticks(runner);
+    thread::sleep(Duration::from_millis(500));
+    let consumed = process_cpu_ticks(runner).saturating_sub(before);
+    // SAFETY: `_SC_CLK_TCK` is a scalar process-configuration query.
+    let ticks_per_second = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+    assert!(ticks_per_second > 0);
+    assert!(
+        consumed <= (ticks_per_second as u64 / 10).max(1),
+        "stalled ACK polling consumed {consumed} CPU ticks in 500 ms"
+    );
+
+    let rejected = child.wait_with_output().unwrap();
+    assert!(
+        !rejected.status.success(),
+        "stalled ACK unexpectedly passed"
+    );
+    assert!(
+        stderr(&rejected).contains("application handoff acknowledgment timed out"),
+        "{}",
+        stderr(&rejected)
+    );
+    assert!(started.elapsed() >= Duration::from_secs(4));
+    assert!(started.elapsed() < Duration::from_secs(10));
+    assert!(
+        !Path::new(&format!("/proc/{application}")).exists(),
+        "timed-out application leader was not killed and reaped"
     );
 }
 

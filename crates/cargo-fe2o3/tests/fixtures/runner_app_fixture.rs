@@ -5,6 +5,8 @@ use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::thread;
+use std::time::Duration;
 
 use fe2o3_artifact_transaction::{
     DurableCurrentLinkPublicationLeaseV1, reacquire_current_hsaco_publication_lease_v1,
@@ -37,6 +39,7 @@ struct FixtureControls {
     exec_replacement_images: Option<(OsString, OsString)>,
     premature_close_ack: bool,
     extra_ack_byte: bool,
+    stall_before_ack: Option<OsString>,
 }
 
 impl FixtureControls {
@@ -92,6 +95,15 @@ impl FixtureControls {
                 }
                 "--fe2o3-test-premature-close-ack" => controls.premature_close_ack = true,
                 "--fe2o3-test-extra-ack-byte" => controls.extra_ack_byte = true,
+                "--fe2o3-test-stall-before-ack" => {
+                    controls.stall_before_ack = Some(
+                        arguments
+                            .get(index + 1)
+                            .ok_or_else(|| "stall probe requires a ready marker".to_string())?
+                            .clone(),
+                    );
+                    index += 2;
+                }
                 _ => return Err(format!("unknown runner fixture control {argument:?}")),
             }
             if !matches!(
@@ -99,6 +111,7 @@ impl FixtureControls {
                 "--fe2o3-test-probe-fd"
                     | "--fe2o3-test-seccomp-process-probe"
                     | "--fe2o3-test-exec-replacement-probe"
+                    | "--fe2o3-test-stall-before-ack"
             ) {
                 index += 1;
             }
@@ -296,6 +309,11 @@ fn validate_handoff(controls: &FixtureControls) -> Result<ValidatedHandoff, Stri
     let current_token = current_lease
         .acquire_current_token()
         .map_err(|error| format!("retain current publication through acknowledgment: {error}"))?;
+    if let Some(marker) = &controls.stall_before_ack {
+        fs::write(marker, std::process::id().to_string())
+            .map_err(|error| format!("write stalled-ACK ready marker: {error}"))?;
+        thread::sleep(Duration::from_secs(30));
+    }
     let process_creation = controls
         .seccomp_escape_marker
         .as_deref()
