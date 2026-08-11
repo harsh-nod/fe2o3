@@ -112,7 +112,10 @@ fn canonical_text_parse_print_and_wire_roundtrip_are_identical() {
     let second = validated.to_canonical_text().unwrap();
     assert_eq!(first, second);
     assert!(!first.contains('\n'));
-    assert_eq!(MirExecutableModule::from_canonical_text(&first).unwrap(), validated);
+    assert_eq!(
+        MirExecutableModule::from_canonical_text(&first).unwrap(),
+        validated
+    );
 
     let bytes = validated.to_bytes().unwrap();
     let from_wire = MirExecutableModule::from_bytes(&bytes).unwrap();

@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use dialect_mir::{
     MirAddressSpace, MirBasicBlock, MirBinaryOp, MirBlockId, MirBody, MirBodyForm, MirConstant,
     MirConstantValue, MirEdge, MirExecutableModule, MirExecutableTarget, MirExecutableVersion,
-    MirFunction, MirLayout, MirLocalDecl, MirLocalId, MirLocalKind, MirOperand, MirPlace, MirRvalue,
-    MirScalarType, MirSemanticType, MirStatement, MirStatementKind, MirTerminator,
+    MirFunction, MirLayout, MirLocalDecl, MirLocalId, MirLocalKind, MirOperand, MirPlace,
+    MirRvalue, MirScalarType, MirSemanticType, MirStatement, MirStatementKind, MirTerminator,
     MirTerminatorKind, MirTypeId, MirTypeKind, analyze_mir_control_flow, promote_module_to_ssa,
 };
 
@@ -122,7 +122,12 @@ fn switch(discr: MirOperand, targets: &[(u128, u32)], otherwise: u32) -> MirTerm
     }
 }
 
-fn module(identity: &str, types: Vec<MirSemanticType>, locals: Vec<MirLocalDecl>, blocks: Vec<MirBasicBlock>) -> MirExecutableModule {
+fn module(
+    identity: &str,
+    types: Vec<MirSemanticType>,
+    locals: Vec<MirLocalDecl>,
+    blocks: Vec<MirBasicBlock>,
+) -> MirExecutableModule {
     MirExecutableModule {
         version: MirExecutableVersion::V1,
         target: MirExecutableTarget::gfx942(),
@@ -167,11 +172,19 @@ fn branching_fill() -> MirExecutableModule {
                 switch(copy(3, ids.bool_ty), &[(1, 1)], 2),
             ),
             block(
-                vec![assign(2, ids.u32_ty, MirRvalue::Use(constant(7, ids.u32_ty)))],
+                vec![assign(
+                    2,
+                    ids.u32_ty,
+                    MirRvalue::Use(constant(7, ids.u32_ty)),
+                )],
                 MirTerminatorKind::Goto(edge(3)),
             ),
             block(
-                vec![assign(2, ids.u32_ty, MirRvalue::Use(constant(0, ids.u32_ty)))],
+                vec![assign(
+                    2,
+                    ids.u32_ty,
+                    MirRvalue::Use(constant(0, ids.u32_ty)),
+                )],
                 MirTerminatorKind::Goto(edge(3)),
             ),
             block(
@@ -194,23 +207,43 @@ fn integer_match() -> MirExecutableModule {
         ],
         vec![
             block(
-                vec![assign(2, ids.u32_ty, MirRvalue::Use(constant(0, ids.u32_ty)))],
+                vec![assign(
+                    2,
+                    ids.u32_ty,
+                    MirRvalue::Use(constant(0, ids.u32_ty)),
+                )],
                 switch(copy(1, ids.u32_ty), &[(0, 1), (7, 2), (42, 3)], 4),
             ),
             block(
-                vec![assign(2, ids.u32_ty, MirRvalue::Use(constant(10, ids.u32_ty)))],
+                vec![assign(
+                    2,
+                    ids.u32_ty,
+                    MirRvalue::Use(constant(10, ids.u32_ty)),
+                )],
                 MirTerminatorKind::Goto(edge(5)),
             ),
             block(
-                vec![assign(2, ids.u32_ty, MirRvalue::Use(constant(20, ids.u32_ty)))],
+                vec![assign(
+                    2,
+                    ids.u32_ty,
+                    MirRvalue::Use(constant(20, ids.u32_ty)),
+                )],
                 MirTerminatorKind::Goto(edge(5)),
             ),
             block(
-                vec![assign(2, ids.u32_ty, MirRvalue::Use(constant(30, ids.u32_ty)))],
+                vec![assign(
+                    2,
+                    ids.u32_ty,
+                    MirRvalue::Use(constant(30, ids.u32_ty)),
+                )],
                 MirTerminatorKind::Goto(edge(5)),
             ),
             block(
-                vec![assign(2, ids.u32_ty, MirRvalue::Use(constant(99, ids.u32_ty)))],
+                vec![assign(
+                    2,
+                    ids.u32_ty,
+                    MirRvalue::Use(constant(99, ids.u32_ty)),
+                )],
                 MirTerminatorKind::Goto(edge(5)),
             ),
             block(
@@ -263,7 +296,11 @@ fn nested_loop() -> MirExecutableModule {
                 switch(copy(5, ids.bool_ty), &[(1, 2)], 8),
             ),
             block(
-                vec![assign(3, ids.u32_ty, MirRvalue::Use(constant(0, ids.u32_ty)))],
+                vec![assign(
+                    3,
+                    ids.u32_ty,
+                    MirRvalue::Use(constant(0, ids.u32_ty)),
+                )],
                 MirTerminatorKind::Goto(edge(3)),
             ),
             block(
@@ -348,10 +385,29 @@ fn branching_fixture_places_only_the_live_join_parameter() {
 #[test]
 #[ignore = "run with UPDATE_MIR_FIXTURES=1 to regenerate checked snapshots"]
 fn regenerate_serialized_vertical_fixtures() {
-    assert_eq!(std::env::var_os("UPDATE_MIR_FIXTURES").as_deref(), Some(std::ffi::OsStr::new("1")));
+    assert_eq!(
+        std::env::var_os("UPDATE_MIR_FIXTURES").as_deref(),
+        Some(std::ffi::OsStr::new("1"))
+    );
     let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
-    fs::write(directory.join("branching-fill.mir.json"), canonical(branching_fill())).unwrap();
-    fs::write(directory.join("nested-loop.mir.json"), canonical(nested_loop())).unwrap();
-    fs::write(directory.join("integer-match.mir.json"), canonical(integer_match())).unwrap();
-    fs::write(directory.join("cross-block-ssa.mir.json"), promoted_branching_fill()).unwrap();
+    fs::write(
+        directory.join("branching-fill.mir.json"),
+        canonical(branching_fill()),
+    )
+    .unwrap();
+    fs::write(
+        directory.join("nested-loop.mir.json"),
+        canonical(nested_loop()),
+    )
+    .unwrap();
+    fs::write(
+        directory.join("integer-match.mir.json"),
+        canonical(integer_match()),
+    )
+    .unwrap();
+    fs::write(
+        directory.join("cross-block-ssa.mir.json"),
+        promoted_branching_fill(),
+    )
+    .unwrap();
 }

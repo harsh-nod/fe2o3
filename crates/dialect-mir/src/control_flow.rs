@@ -426,74 +426,74 @@ fn find_irreducible(
     None
 }
 
-fn strongly_connected_components(successors: &[BTreeSet<MirBlockId>]) -> Vec<Vec<MirBlockId>> {
-    fn visit(
-        block: MirBlockId,
-        successors: &[BTreeSet<MirBlockId>],
-        index: &mut usize,
-        indices: &mut [Option<usize>],
-        lowlinks: &mut [usize],
-        stack: &mut Vec<MirBlockId>,
-        on_stack: &mut BTreeSet<MirBlockId>,
-        components: &mut Vec<Vec<MirBlockId>>,
-    ) {
-        let current = *index;
-        *index += 1;
-        indices[block.0 as usize] = Some(current);
-        lowlinks[block.0 as usize] = current;
-        stack.push(block);
-        on_stack.insert(block);
+struct TarjanTraversal<'a> {
+    successors: &'a [BTreeSet<MirBlockId>],
+    index: usize,
+    indices: Vec<Option<usize>>,
+    lowlinks: Vec<usize>,
+    stack: Vec<MirBlockId>,
+    on_stack: BTreeSet<MirBlockId>,
+    components: Vec<Vec<MirBlockId>>,
+}
 
-        for successor in &successors[block.0 as usize] {
-            if indices[successor.0 as usize].is_none() {
-                visit(
-                    *successor, successors, index, indices, lowlinks, stack, on_stack, components,
+impl<'a> TarjanTraversal<'a> {
+    fn new(successors: &'a [BTreeSet<MirBlockId>]) -> Self {
+        Self {
+            successors,
+            index: 0,
+            indices: vec![None; successors.len()],
+            lowlinks: vec![0; successors.len()],
+            stack: Vec::new(),
+            on_stack: BTreeSet::new(),
+            components: Vec::new(),
+        }
+    }
+
+    fn visit(&mut self, block: MirBlockId) {
+        let current = self.index;
+        self.index += 1;
+        self.indices[block.0 as usize] = Some(current);
+        self.lowlinks[block.0 as usize] = current;
+        self.stack.push(block);
+        self.on_stack.insert(block);
+
+        for successor in &self.successors[block.0 as usize] {
+            if self.indices[successor.0 as usize].is_none() {
+                self.visit(*successor);
+                self.lowlinks[block.0 as usize] =
+                    self.lowlinks[block.0 as usize].min(self.lowlinks[successor.0 as usize]);
+            } else if self.on_stack.contains(successor) {
+                self.lowlinks[block.0 as usize] = self.lowlinks[block.0 as usize].min(
+                    self.indices[successor.0 as usize].expect("visited successor has an index"),
                 );
-                lowlinks[block.0 as usize] =
-                    lowlinks[block.0 as usize].min(lowlinks[successor.0 as usize]);
-            } else if on_stack.contains(successor) {
-                lowlinks[block.0 as usize] = lowlinks[block.0 as usize]
-                    .min(indices[successor.0 as usize].expect("visited successor has an index"));
             }
         }
 
-        if lowlinks[block.0 as usize] == current {
+        if self.lowlinks[block.0 as usize] == current {
             let mut component = Vec::new();
             loop {
-                let member = stack.pop().expect("SCC root remains on the stack");
-                on_stack.remove(&member);
+                let member = self.stack.pop().expect("SCC root remains on the stack");
+                self.on_stack.remove(&member);
                 component.push(member);
                 if member == block {
                     break;
                 }
             }
             component.sort();
-            components.push(component);
+            self.components.push(component);
         }
     }
+}
 
-    let mut index = 0;
-    let mut indices = vec![None; successors.len()];
-    let mut lowlinks = vec![0; successors.len()];
-    let mut stack = Vec::new();
-    let mut on_stack = BTreeSet::new();
-    let mut components = Vec::new();
+fn strongly_connected_components(successors: &[BTreeSet<MirBlockId>]) -> Vec<Vec<MirBlockId>> {
+    let mut traversal = TarjanTraversal::new(successors);
     for block_index in 0..successors.len() {
-        if indices[block_index].is_none() {
-            visit(
-                MirBlockId(block_index as u32),
-                successors,
-                &mut index,
-                &mut indices,
-                &mut lowlinks,
-                &mut stack,
-                &mut on_stack,
-                &mut components,
-            );
+        if traversal.indices[block_index].is_none() {
+            traversal.visit(MirBlockId(block_index as u32));
         }
     }
-    components.sort();
-    components
+    traversal.components.sort();
+    traversal.components
 }
 
 fn display_blocks(blocks: &[MirBlockId]) -> String {

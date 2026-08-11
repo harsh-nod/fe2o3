@@ -464,11 +464,7 @@ fn rejects_repeated_join_amplification_before_transforming() {
             MirTerminatorKind::Goto(MirEdge::new(MirBlockId(join + 1)))
         };
         let statements = if diamond + 1 == diamond_count {
-            vec![assign(
-                0,
-                ids.u32_ty,
-                MirRvalue::Use(copy(1, ids.u32_ty)),
-            )]
+            vec![assign(0, ids.u32_ty, MirRvalue::Use(copy(1, ids.u32_ty)))]
         } else {
             vec![]
         };

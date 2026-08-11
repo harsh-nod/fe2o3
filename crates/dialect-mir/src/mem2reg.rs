@@ -203,9 +203,11 @@ impl SsaPlan {
 
         for (block_index, block) in body.blocks.iter().enumerate() {
             if MirBlockId(block_index as u32) == body.entry {
-                definitions[block_index].extend(promoted.iter().copied().filter(|local| {
-                    body.locals[local.0 as usize].kind == MirLocalKind::Argument
-                }));
+                definitions[block_index].extend(
+                    promoted.iter().copied().filter(|local| {
+                        body.locals[local.0 as usize].kind == MirLocalKind::Argument
+                    }),
+                );
             }
             for statement in &block.statements {
                 for local in &promoted_set {
@@ -261,17 +263,18 @@ impl SsaPlan {
         }
 
         let mut parameter_locals = vec![Vec::new(); body.blocks.len()];
-        parameter_locals[body.entry.0 as usize].extend(promoted.iter().copied().filter(|local| {
-            body.locals[local.0 as usize].kind == MirLocalKind::Argument
-        }));
+        parameter_locals[body.entry.0 as usize].extend(
+            promoted
+                .iter()
+                .copied()
+                .filter(|local| body.locals[local.0 as usize].kind == MirLocalKind::Argument),
+        );
         for local in promoted {
             let definition_blocks = definitions
                 .iter()
                 .enumerate()
                 .filter_map(|(index, locals)| {
-                    locals
-                        .contains(local)
-                        .then_some(MirBlockId(index as u32))
+                    locals.contains(local).then_some(MirBlockId(index as u32))
                 })
                 .collect::<BTreeSet<_>>();
             let frontiers = control_flow

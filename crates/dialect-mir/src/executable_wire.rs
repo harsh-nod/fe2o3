@@ -102,7 +102,8 @@ impl MirExecutableModule {
         if text.len() > MAX_EXECUTABLE_WIRE_BYTES - HEADER_BYTES {
             return Err(MirExecutableDecodeError::InputTooLarge);
         }
-        let module: Self = serde_json::from_str(text).map_err(MirExecutableDecodeError::InvalidPayload)?;
+        let module: Self =
+            serde_json::from_str(text).map_err(MirExecutableDecodeError::InvalidPayload)?;
         if module.version != MirExecutableVersion::V1 {
             return Err(MirExecutableDecodeError::Validation(
                 MirExecutableValidationError::new(

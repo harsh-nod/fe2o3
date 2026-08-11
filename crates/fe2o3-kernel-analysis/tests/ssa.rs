@@ -104,27 +104,20 @@ fn places_only_live_diamond_and_loop_parameters() {
         }],
     )
     .unwrap();
-    assert_eq!(
-        loop_placement.blocks_for(SsaVariable(7)),
-        Some(&ids(&[1]))
-    );
+    assert_eq!(loop_placement.blocks_for(SsaVariable(7)), Some(&ids(&[1])));
 }
 
 #[test]
 fn rejects_malformed_facts_in_stable_order() {
-    let control_flow = analyze_control_flow(&function(vec![
-        returning(0),
-        branch(10, 11),
-        returning(11),
-    ]))
-    .unwrap();
+    let control_flow =
+        analyze_control_flow(&function(vec![returning(0), branch(10, 11), returning(11)])).unwrap();
     let duplicate = SsaVariablePlacement {
         variable: SsaVariable(4),
         definition_blocks: ids(&[]),
         live_in_blocks: ids(&[10, 99]),
     };
-    let error = place_pruned_ssa_parameters(&control_flow, &[duplicate.clone(), duplicate])
-        .unwrap_err();
+    let error =
+        place_pruned_ssa_parameters(&control_flow, &[duplicate.clone(), duplicate]).unwrap_err();
     assert_eq!(
         error.diagnostics(),
         &[

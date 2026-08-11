@@ -41,8 +41,12 @@ impl SsaPlacement {
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum SsaPlacementDiagnostic {
-    DuplicateVariable { variable: SsaVariable },
-    MissingDefinition { variable: SsaVariable },
+    DuplicateVariable {
+        variable: SsaVariable,
+    },
+    MissingDefinition {
+        variable: SsaVariable,
+    },
     UnknownDefinitionBlock {
         variable: SsaVariable,
         block: BlockId,
@@ -68,7 +72,11 @@ impl fmt::Display for SsaPlacementDiagnostic {
                 write!(formatter, "duplicate SSA variable v{}", variable.0)
             }
             Self::MissingDefinition { variable } => {
-                write!(formatter, "SSA variable v{} has no definition block", variable.0)
+                write!(
+                    formatter,
+                    "SSA variable v{} has no definition block",
+                    variable.0
+                )
             }
             Self::UnknownDefinitionBlock { variable, block } => write!(
                 formatter,
