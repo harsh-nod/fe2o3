@@ -1936,6 +1936,11 @@ def build_and_run_hardware_observation(
         hardware_target.mkdir(mode=0o700)
         environment["CARGO_TARGET_DIR"] = os.fspath(hardware_target)
         environment["RUSTC"] = f"/proc/self/fd/{tools['rustc'].executable.fd}"
+        environment["CFLAGS"] = (
+            "-resource-dir=/opt/rocm-7.2.4/lib/llvm/lib/clang/22"
+        )
+        environment["CXXFLAGS"] = environment["CFLAGS"]
+        environment["ROCM_PATH"] = "/opt/rocm-7.2.4"
         build = run_command(
             [
                 os.fspath(tools["cargo"].path),
