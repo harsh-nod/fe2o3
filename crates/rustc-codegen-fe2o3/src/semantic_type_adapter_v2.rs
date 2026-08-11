@@ -1555,6 +1555,14 @@ fn capture_unsized_pointer<'tcx>(
         array_stride_bytes: None,
         uninhabited: false,
     });
+    let record_count = records.len() as u64;
+    if record_count > u64::from(budgets.max_sidecar_records) {
+        return Err(SemanticTypeAdapterErrorV2::BoundExceeded {
+            resource: "rustc layout sidecar records",
+            actual: record_count,
+            max: u64::from(budgets.max_sidecar_records),
+        });
+    }
     let graph = graph.finish(root)?;
     let graph_bytes = graph.canonical_bytes()?;
     Ok(PendingCaptureV2 {
@@ -1788,6 +1796,7 @@ static POINTER_NICHE: Option<&u8> = Some(&BYTE);
         pointer_niche: Option<SemanticTypeAdapterErrorV2>,
         mismatch: Option<SemanticTypeAdapterErrorV2>,
         bounded: Option<SemanticTypeAdapterErrorV2>,
+        dst_bounded: Option<SemanticTypeAdapterErrorV2>,
         reauthenticated: bool,
     }
 
@@ -1862,6 +1871,17 @@ static POINTER_NICHE: Option<&u8> = Some(&BYTE);
                         max_nodes: 1,
                         ..SemanticTypeGraphBudgetsV2::default()
                     },
+                    ..SemanticTypeCaptureBudgetsV2::default()
+                },
+            )
+            .err();
+            self.dst_bounded = capture_rustc_type_for_gfx942_v2(
+                tcx,
+                local_static_type(tcx, "SLICE_VALUE"),
+                &target,
+                revision(),
+                SemanticTypeCaptureBudgetsV2 {
+                    max_sidecar_records: 1,
                     ..SemanticTypeCaptureBudgetsV2::default()
                 },
             )
@@ -1960,6 +1980,13 @@ static POINTER_NICHE: Option<&u8> = Some(&BYTE);
             Some(SemanticTypeAdapterErrorV2::TargetMismatch { .. })
         ));
         assert!(results.bounded.is_some());
+        assert!(matches!(
+            results.dst_bounded,
+            Some(SemanticTypeAdapterErrorV2::BoundExceeded {
+                resource: "rustc layout sidecar records",
+                ..
+            })
+        ));
 
         let c = &results.captures["C_VALUE"];
         let c_record = c.layout_record(c.graph().root_key()).unwrap();
