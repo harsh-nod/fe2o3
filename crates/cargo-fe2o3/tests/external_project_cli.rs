@@ -58,6 +58,39 @@ struct ProjectFixture {
     log: PathBuf,
 }
 
+#[cfg(unix)]
+struct SameFilesystemFixture(PathBuf);
+
+#[cfg(unix)]
+impl SameFilesystemFixture {
+    fn beside(source: &Path) -> Self {
+        let parent = source.parent().expect("fixture executable has a parent");
+        loop {
+            let id = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
+            let path = parent.join(format!(
+                ".cargo-fe2o3-hardlink-fixture-{}-{id}",
+                process::id()
+            ));
+            match fs::create_dir(&path) {
+                Ok(()) => return Self(path),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("failed to create same-filesystem fixture: {error}"),
+            }
+        }
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+#[cfg(unix)]
+impl Drop for SameFilesystemFixture {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
 impl ProjectFixture {
     fn standalone() -> Self {
         let root = temp_root();
@@ -1255,9 +1288,14 @@ fn recursive_runner_configuration_fails_closed() {
 #[test]
 fn hardlink_to_cargo_fe2o3_is_rejected_as_a_recursive_runner() {
     let fixture = ProjectFixture::standalone();
-    let hardlink = fixture.root.join("cargo-fe2o3-hardlink");
-    fs::hard_link(env!("CARGO_BIN_EXE_cargo-fe2o3"), &hardlink)
-        .expect("create recursive runner hardlink");
+    let executable = Path::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
+    let hardlink_directory = SameFilesystemFixture::beside(executable);
+    let hardlink = hardlink_directory.path().join("cargo-fe2o3-hardlink");
+    fs::hard_link(executable, &hardlink).expect("create recursive runner hardlink");
+    let source = fs::metadata(executable).expect("inspect runner executable");
+    let alias = fs::metadata(&hardlink).expect("inspect runner hardlink");
+    use std::os::unix::fs::MetadataExt;
+    assert_eq!((source.dev(), source.ino()), (alias.dev(), alias.ino()));
     let runner = serde_json::json!([hardlink]);
     let mut command = fixture.command(&[
         OsString::from("run"),
