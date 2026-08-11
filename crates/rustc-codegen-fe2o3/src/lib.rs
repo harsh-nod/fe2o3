@@ -436,17 +436,6 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                     "{CODEGEN_PIPELINE_ENV}=kernel-ir-worker-v2 typed descriptor extraction failed: {error}"
                                 )
                             })?;
-                        let (semantic_witness_objects, semantic_witness_temporary) =
-                            generate_semantic_witness_host_objects(
-                                &descriptor_roots,
-                                output_dir,
-                                tcx.sess.target.llvm_target.as_ref(),
-                            )
-                            .map_err(|error| {
-                                format!(
-                                    "{CODEGEN_PIPELINE_ENV}=kernel-ir-worker-v2 semantic-witness emission failed: {error}"
-                                )
-                            })?;
                         let mir_module = mir_import::import_collection(tcx, &collection).map_err(
                             |error| {
                                 format!(
@@ -471,6 +460,29 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             &self.config.target,
                         )
                         .map_err(|error| format!("source-debug profile rejected: {error}"))?;
+                        // Incomplete collections fail at the envelope boundary without requiring
+                        // an external host-object toolchain. Complete collections still prepare
+                        // every witness before publishing the handoff.
+                        let (semantic_witness_objects, semantic_witness_temporary) = if collection
+                            .compiler_ffi_observation
+                            .is_some()
+                        {
+                            generate_semantic_witness_host_objects(
+                                    &descriptor_roots,
+                                    output_dir,
+                                    tcx.sess.target.llvm_target.as_ref(),
+                                )
+                                .map_err(|error| {
+                                    format!(
+                                        "{CODEGEN_PIPELINE_ENV}=kernel-ir-worker-v2 semantic-witness emission failed: {error}"
+                                    )
+                                })?
+                        } else {
+                            (
+                                host_object::GeneratedHostObjects::default(),
+                                TemporaryHostObjects::default(),
+                            )
+                        };
                         eprintln!(
                             "[rustc-codegen-fe2o3] selected kernel-ir-worker-v2: verified compiler-module candidate with {} kernel(s), {} function(s)",
                             module.kernels.len(),
