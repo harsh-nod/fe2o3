@@ -1640,7 +1640,7 @@ mod platform {
                 return Err(observation_error());
             }
             let file_offset = u64::from_str_radix(offset, 16).map_err(|_| observation_error())?;
-            let (major, minor) = device.split_once(':').ok_or_else(|| observation_error())?;
+            let (major, minor) = device.split_once(':').ok_or_else(observation_error)?;
             let major = u32::from_str_radix(major, 16).map_err(|_| observation_error())?;
             let minor = u32::from_str_radix(minor, 16).map_err(|_| observation_error())?;
             let inode = inode.parse::<u64>().map_err(|_| observation_error())?;
