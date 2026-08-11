@@ -454,7 +454,7 @@ fn validate_filesystem_root(root: &RetainedObject) -> Result<(), AlphaZetaProofE
     );
     let rebound = directory_snapshot(&reopened, "/")?;
     if !same_dirent_identity(rebound, root.snapshot)
-        || !same_live_dirent_identity(retained, rebound)
+        || !same_live_dirent_identity(retained, rebound, false)
     {
         return Err(AlphaZetaProofErrorV1::SourceSnapshotGenerationChanged);
     }
@@ -491,7 +491,7 @@ fn validate_retained_dirent(
     if !snapshot_matches(rebound, dirent.object.snapshot, dirent.generation_bound) {
         return Err(AlphaZetaProofErrorV1::SourceSnapshotGenerationChanged);
     }
-    if !same_live_dirent_identity(retained, rebound) {
+    if !same_live_dirent_identity(retained, rebound, dirent.generation_bound) {
         return Err(AlphaZetaProofErrorV1::SourceSnapshotGenerationChanged);
     }
     Ok(())
@@ -516,8 +516,12 @@ fn same_dirent_identity(actual: ObjectSnapshot, expected: ObjectSnapshot) -> boo
         && actual.mode & FILE_TYPE_MASK == expected.mode & FILE_TYPE_MASK
 }
 
-fn same_live_dirent_identity(actual: ObjectSnapshot, rebound: ObjectSnapshot) -> bool {
-    same_dirent_identity(actual, rebound) && actual.links == rebound.links
+fn same_live_dirent_identity(
+    actual: ObjectSnapshot,
+    rebound: ObjectSnapshot,
+    compare_links: bool,
+) -> bool {
+    same_dirent_identity(actual, rebound) && (!compare_links || actual.links == rebound.links)
 }
 
 fn snapshot_generation_identity(
