@@ -532,9 +532,10 @@ mod platform {
     use super::*;
     use rustix::{
         fs::{MemfdFlags, Mode, OFlags, SealFlags},
+        io::Errno,
         process::{
-            Pid, Resource, Rlimit, Signal, WaitId, WaitIdOptions, getrlimit, kill_process,
-            kill_process_group, setrlimit, waitid,
+            Pid, PidfdFlags, Resource, Rlimit, Signal, WaitId, WaitIdOptions, getpgid, getrlimit,
+            getsid, kill_process_group, pidfd_open, pidfd_send_signal, setrlimit, setsid, waitid,
         },
         thread::set_no_new_privs,
     };
@@ -543,7 +544,7 @@ mod platform {
         fs::{File, Metadata, OpenOptions},
         io::{self, Read, Seek, SeekFrom, Write},
         os::{
-            fd::AsRawFd,
+            fd::{AsFd, AsRawFd, OwnedFd},
             unix::{fs::MetadataExt, process::CommandExt},
         },
         path::PathBuf,
@@ -556,6 +557,7 @@ mod platform {
     const POLL_INTERVAL: Duration = Duration::from_millis(2);
     const DESCENDANT_SCAN_INTERVAL: Duration = Duration::from_millis(25);
     const DRAIN_GRACE: Duration = Duration::from_millis(200);
+    const CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
     const MAX_PROC_MAPS_BYTES: usize = 1024 * 1024;
     const MAX_RUNTIME_MAPPING_CANONICAL_BYTES: usize = 4 * 1024 * 1024;
     const MAX_PROC_STAT_BYTES: usize = 4096;
@@ -627,45 +629,122 @@ mod platform {
         observation: &'a mut ProcessObservation,
     }
 
+    #[derive(Debug)]
     struct ChildProcessGuard {
         child: Child,
-        descendants_seen: BTreeSet<u32>,
+        pidfd: OwnedFd,
+        descendant_pidfds: BTreeMap<u32, OwnedFd>,
+        cleanup_deadline: Option<Instant>,
         reaped: bool,
     }
 
     impl ChildProcessGuard {
-        fn new(child: Child) -> Self {
-            Self {
-                child,
-                descendants_seen: BTreeSet::new(),
-                reaped: false,
-            }
+        fn new(child: Child) -> Result<Self, AuthenticatedPhysicalMachineEffectErrorV1> {
+            Self::new_with_pidfd_open(child, |pid| Ok(pidfd_open(pid, PidfdFlags::empty())?))
         }
 
-        fn refresh_descendants(&mut self) {
-            self.descendants_seen.extend(descendants(self.child.id()));
+        fn new_with_pidfd_open(
+            mut child: Child,
+            open_pidfd: impl FnOnce(Pid) -> io::Result<OwnedFd>,
+        ) -> Result<Self, AuthenticatedPhysicalMachineEffectErrorV1> {
+            let pid = child_pid(&child);
+            let pidfd = match open_pidfd(pid) {
+                Ok(pidfd) => pidfd,
+                Err(error) => {
+                    terminate_without_pidfd(pid);
+                    let _ = reap_child_until(&mut child, Instant::now() + CLEANUP_TIMEOUT);
+                    return Err(containment_io(error));
+                }
+            };
+            if let Err(error) = validate_pidfd_identity(&pidfd, pid) {
+                terminate_without_pidfd(pid);
+                let _ = reap_child_until(&mut child, Instant::now() + CLEANUP_TIMEOUT);
+                return Err(containment_io(error));
+            }
+            if let Err(error) = validate_session_leader(pid) {
+                terminate_owned_process(&mut child, &pidfd, &BTreeMap::new());
+                let _ = reap_child_until(&mut child, Instant::now() + CLEANUP_TIMEOUT);
+                return Err(containment_io(error));
+            }
+            Ok(Self {
+                child,
+                pidfd,
+                descendant_pidfds: BTreeMap::new(),
+                cleanup_deadline: None,
+                reaped: false,
+            })
+        }
+
+        fn refresh_descendants(&mut self) -> io::Result<()> {
+            for raw in descendants(self.child.id()) {
+                if self.descendant_pidfds.contains_key(&raw) {
+                    continue;
+                }
+                let pid = checked_pid(raw)?;
+                let pidfd = pidfd_open(pid, PidfdFlags::empty())?;
+                validate_pidfd_identity(&pidfd, pid)?;
+                self.descendant_pidfds.insert(raw, pidfd);
+            }
+            Ok(())
         }
 
         fn terminate_and_wait(&mut self) -> io::Result<ExitStatus> {
-            self.refresh_descendants();
-            terminate_process_tree(&mut self.child, &self.descendants_seen);
+            let refresh_result = self.refresh_descendants();
+            terminate_owned_process(&mut self.child, &self.pidfd, &self.descendant_pidfds);
+            let deadline = *self
+                .cleanup_deadline
+                .get_or_insert_with(|| Instant::now() + CLEANUP_TIMEOUT);
+            wait_for_exit_until(deadline, || {
+                match waitid(
+                    WaitId::PidFd(self.pidfd.as_fd()),
+                    WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT,
+                ) {
+                    Ok(status) => Ok(status.is_some()),
+                    Err(error) => Err(io::Error::from(error)),
+                }
+            })?;
             let status = self.child.wait()?;
             self.reaped = true;
+            refresh_result?;
             Ok(status)
         }
 
         fn exited_without_reaping(&self) -> io::Result<bool> {
-            let raw = i32::try_from(self.child.id()).map_err(|_| {
-                io::Error::new(io::ErrorKind::InvalidInput, "worker PID exceeds i32")
-            })?;
-            let pid = Pid::from_raw(raw)
-                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "worker PID is zero"))?;
-            Ok(waitid(
-                WaitId::Pid(pid),
+            match waitid(
+                WaitId::PidFd(self.pidfd.as_fd()),
                 WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT,
-            )
-            .map(|status| status.is_some())?)
+            ) {
+                Ok(status) => Ok(status.is_some()),
+                Err(Errno::INTR) => Ok(false),
+                Err(error) => Err(io::Error::from(error)),
+            }
         }
+    }
+
+    fn wait_for_exit_until(
+        deadline: Instant,
+        mut observe_exit: impl FnMut() -> io::Result<bool>,
+    ) -> io::Result<()> {
+        loop {
+            match observe_exit() {
+                Ok(true) => return Ok(()),
+                Ok(false) => {}
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) => return Err(error),
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "worker did not become reapable before cleanup deadline",
+                ));
+            }
+            thread::sleep(POLL_INTERVAL.min(deadline.saturating_duration_since(now)));
+        }
+    }
+
+    fn reap_child_until(child: &mut Child, deadline: Instant) -> io::Result<()> {
+        wait_for_exit_until(deadline, || child.try_wait().map(|status| status.is_some()))
     }
 
     impl Drop for ChildProcessGuard {
@@ -938,8 +1017,7 @@ mod platform {
                 .envs(ENVIRONMENT.iter().copied())
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .process_group(0);
+                .stderr(Stdio::piped());
             configure_worker_pre_exec(&mut command);
             let child = command.spawn().map_err(|error| {
                 AuthenticatedPhysicalMachineEffectErrorV1::detail(
@@ -947,7 +1025,7 @@ mod platform {
                     error,
                 )
             })?;
-            let mut child = ChildProcessGuard::new(child);
+            let mut child = ChildProcessGuard::new(child)?;
             let stderr = child.child.stderr.take().expect("worker stderr is piped");
             let stderr = await_worker_ready(stderr, challenge, deadline)?;
             validate_worker_security_profile(child.child.id())?;
@@ -1438,6 +1516,7 @@ mod platform {
         // only direct rustix syscall wrappers and stack-only arithmetic.
         unsafe {
             command.pre_exec(|| {
+                setsid().map_err(io::Error::from)?;
                 set_no_new_privs(true).map_err(io::Error::from)?;
                 for (resource, bound) in [
                     (Resource::As, WORKER_ADDRESS_SPACE_BYTES),
@@ -2073,7 +2152,7 @@ mod platform {
         let mut acknowledged = false;
         let status = loop {
             if Instant::now() >= next_descendant_scan {
-                child.refresh_descendants();
+                child.refresh_descendants().map_err(containment_io)?;
                 next_descendant_scan = Instant::now() + DESCENDANT_SCAN_INTERVAL;
             }
             if request_state.is_none()
@@ -2350,17 +2429,67 @@ mod platform {
             .map_err(|error| AuthenticatedPhysicalMachineEffectErrorV1::detail(kind, error))
     }
 
-    fn terminate_process_tree(child: &mut Child, known_descendants: &BTreeSet<u32>) {
-        let root = Pid::from_child(child);
-        let _ = kill_process_group(root, Signal::KILL);
-        for raw in known_descendants.iter().rev() {
-            if let Ok(raw) = i32::try_from(*raw)
-                && let Some(pid) = Pid::from_raw(raw)
-            {
-                let _ = kill_process(pid, Signal::KILL);
-            }
+    fn checked_pid(raw: u32) -> io::Result<Pid> {
+        let raw = i32::try_from(raw)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "PID exceeds i32"))?;
+        Pid::from_raw(raw).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "PID is zero"))
+    }
+
+    fn child_pid(child: &Child) -> Pid {
+        Pid::from_child(child)
+    }
+
+    fn validate_session_leader(pid: Pid) -> io::Result<()> {
+        if getpgid(Some(pid))? != pid || getsid(Some(pid))? != pid {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "worker is not its session and process-group leader",
+            ));
         }
-        let _ = child.kill();
+        Ok(())
+    }
+
+    fn validate_pidfd_identity(pidfd: &OwnedFd, pid: Pid) -> io::Result<()> {
+        let record = std::fs::read_to_string(format!("/proc/self/fdinfo/{}", pidfd.as_raw_fd()))?;
+        let actual = record
+            .lines()
+            .find_map(|line| line.strip_prefix("Pid:"))
+            .and_then(|value| value.trim().parse::<i32>().ok())
+            .and_then(Pid::from_raw)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "pidfd has no live PID"))?;
+        if actual != pid {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "pidfd does not identify the spawned worker",
+            ));
+        }
+        Ok(())
+    }
+
+    fn terminate_without_pidfd(pid: Pid) {
+        // `spawn` has not reaped the child. A verified, isolated session is the
+        // only safe fallback when the kernel cannot provide the required pidfd.
+        if validate_session_leader(pid).is_ok() {
+            let _ = kill_process_group(pid, Signal::KILL);
+        }
+    }
+
+    fn terminate_owned_process(
+        child: &mut Child,
+        pidfd: &OwnedFd,
+        descendant_pidfds: &BTreeMap<u32, OwnedFd>,
+    ) {
+        // Every exact PID signal is descriptor-bound. Group signaling is used
+        // only while the leader is our unreaped child and still owns both the
+        // fresh session and its initial process group.
+        let _ = pidfd_send_signal(pidfd, Signal::KILL);
+        let pid = child_pid(child);
+        if validate_session_leader(pid).is_ok() {
+            let _ = kill_process_group(pid, Signal::KILL);
+        }
+        for pidfd in descendant_pidfds.values() {
+            let _ = pidfd_send_signal(pidfd, Signal::KILL);
+        }
     }
 
     fn descendants(root: u32) -> BTreeSet<u32> {
@@ -2480,6 +2609,87 @@ mod platform {
     mod tests {
         use super::*;
         use std::os::unix::fs::PermissionsExt;
+
+        fn spawned_session_child() -> (Child, u32) {
+            let mut command = Command::new("/bin/sleep");
+            command.arg("30");
+            configure_worker_pre_exec(&mut command);
+            let child = command.spawn().unwrap();
+            let pid = child.id();
+            (child, pid)
+        }
+
+        #[test]
+        fn cleanup_wait_is_monotonic_bounded_and_handles_interrupts() {
+            let started = Instant::now();
+            let mut polls = 0_u32;
+            let error = wait_for_exit_until(started + Duration::from_millis(20), || {
+                polls += 1;
+                Ok(false)
+            })
+            .unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+            assert!(started.elapsed() < Duration::from_secs(1));
+            assert!((2..100).contains(&polls), "unexpected poll count {polls}");
+
+            let mut interrupted = 0_u32;
+            wait_for_exit_until(Instant::now() + Duration::from_secs(1), || {
+                interrupted += 1;
+                if interrupted < 4 {
+                    Err(io::Error::from(io::ErrorKind::Interrupted))
+                } else {
+                    Ok(true)
+                }
+            })
+            .unwrap();
+            assert_eq!(interrupted, 4);
+
+            let mut child_errors = 0_u32;
+            let error = wait_for_exit_until(Instant::now() + Duration::from_secs(1), || {
+                child_errors += 1;
+                Err(io::Error::from(Errno::CHILD))
+            })
+            .unwrap_err();
+            assert_eq!(error.raw_os_error(), Some(Errno::CHILD.raw_os_error()));
+            assert_eq!(child_errors, 1);
+        }
+
+        #[test]
+        fn pidfd_open_failure_preserves_error_and_reaps_session() {
+            let (child, pid) = spawned_session_child();
+            let error = ChildProcessGuard::new_with_pidfd_open(child, |_| {
+                Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "injected pidfd_open failure",
+                ))
+            })
+            .unwrap_err();
+            assert_eq!(
+                error.kind(),
+                &AuthenticatedPhysicalMachineEffectErrorKindV1::ContainmentUnavailable
+            );
+            assert!(
+                error
+                    .detail
+                    .as_deref()
+                    .is_some_and(|detail| detail.contains("injected pidfd_open failure"))
+            );
+            assert!(!Path::new(&format!("/proc/{pid}")).exists());
+        }
+
+        #[test]
+        fn pidfd_identity_mismatch_fails_closed_and_reaps_session() {
+            let (child, pid) = spawned_session_child();
+            let error = ChildProcessGuard::new_with_pidfd_open(child, |_| {
+                Ok(pidfd_open(rustix::process::getpid(), PidfdFlags::empty())?)
+            })
+            .unwrap_err();
+            assert_eq!(
+                error.kind(),
+                &AuthenticatedPhysicalMachineEffectErrorKindV1::ContainmentUnavailable
+            );
+            assert!(!Path::new(&format!("/proc/{pid}")).exists());
+        }
 
         #[test]
         fn retained_runtime_file_mutation_is_detected_after_observation() {
