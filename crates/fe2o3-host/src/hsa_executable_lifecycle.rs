@@ -2727,7 +2727,7 @@ fn validate_nonzero_bytes(bytes: &[u8], field: &'static str) -> Result<(), HsaOb
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::worker_v2_bundle_admission::tests::{
         TestDirectory, admitted_alpha_cov6_for_lifecycle_test, admitted_for_lifecycle_test,
@@ -2823,7 +2823,7 @@ mod tests {
         186, 157, 128, 188, 5, 15, 155, 59, 206, 210, 56, 199,
     ];
 
-    struct AlphaCov6TestKernel;
+    pub(crate) struct AlphaCov6TestKernel;
 
     unsafe impl KernelMarkerV1 for AlphaCov6TestKernel {
         type Function = fn();
@@ -2876,7 +2876,7 @@ mod tests {
         bytes
     }
 
-    struct AlphaCov6TestArguments {
+    pub(crate) struct AlphaCov6TestArguments {
         observed: ObservedContext,
         scale: f32,
         input_address: usize,
@@ -2892,6 +2892,24 @@ mod tests {
         fn drop(&mut self) {
             self.drops.fetch_add(1, Ordering::SeqCst);
         }
+    }
+
+    pub(crate) fn alpha_cov6_arguments_for_lifecycle_test(
+        observed: &ObservedContext,
+    ) -> (AlphaCov6TestArguments, Arc<AtomicUsize>) {
+        let drops = Arc::new(AtomicUsize::new(0));
+        let arguments = AlphaCov6TestArguments {
+            observed: observed.clone(),
+            scale: 1.5,
+            input_address: 0x10_000,
+            output_address: 0x20_000,
+            length: 257,
+            input_owner: Box::leak(Box::new(())),
+            output_owner: Box::leak(Box::new(())),
+            bound: RefCell::new(false),
+            drops: drops.clone(),
+        };
+        (arguments, drops)
     }
 
     unsafe impl CompilerGeneratedAlphaZetaCov6ArgumentsV1<'static, AlphaCov6TestKernel>

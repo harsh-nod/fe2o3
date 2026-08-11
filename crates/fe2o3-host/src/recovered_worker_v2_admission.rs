@@ -699,6 +699,9 @@ mod tests {
     use super::*;
     #[cfg(target_os = "linux")]
     use crate::application_descriptor_handoff::consume_worker_v2_application_handoff_descriptors_v1;
+    use crate::hsa_executable_lifecycle::tests::{
+        AlphaCov6TestKernel, alpha_cov6_arguments_for_lifecycle_test,
+    };
     use crate::published_direct_link::tests::{
         Fixture, make_observed_for, make_single_hsaco_fixture_with_names_and_kernel_id,
     };
@@ -1413,6 +1416,15 @@ mod tests {
         fn kernel_object() -> crate::HsaKernelObjectIdentityV1 {
             crate::HsaKernelObjectIdentityV1::new([0xc6; 32]).unwrap()
         }
+
+        fn assert_turnover_pending(&self, stage: &str) {
+            if let Some(turnover_completed) = &self.turnover_completed {
+                assert!(
+                    !turnover_completed.load(std::sync::atomic::Ordering::SeqCst),
+                    "publication turned over before {stage}"
+                );
+            }
+        }
     }
 
     unsafe impl crate::ReviewedHsaExecutableLifecycleAdapterV1 for ExactHsaAdapter {
@@ -1450,13 +1462,14 @@ mod tests {
             _executable: &Self::Executable,
             export_symbol: &str,
         ) -> Result<(Self::Kernel, crate::HsaKernelResolutionObservationV1), Self::Error> {
+            let kernarg_segment_size = if export_symbol == "alpha" { 296 } else { 272 };
             Ok((
                 TestKernel,
                 crate::HsaKernelResolutionObservationV1::new(
                     Self::executable_object(),
                     Self::kernel_object(),
                     export_symbol,
-                    272,
+                    kernarg_segment_size,
                     16,
                 )
                 .map_err(|_| "invalid test kernel observation")?,
@@ -1470,6 +1483,7 @@ mod tests {
             geometry: crate::HsaLaunchGeometryV1,
             _kernarg: &mut [u8],
         ) -> Result<crate::HsaDispatchObservationV1, Self::Error> {
+            self.assert_turnover_pending("synchronous dispatch completed");
             crate::HsaDispatchObservationV1::new(
                 [0xc7; 16],
                 Self::executable_object(),
@@ -1484,12 +1498,7 @@ mod tests {
             &mut self,
             _executable: Self::Executable,
         ) -> Result<crate::HsaUnloadObservationV1, Self::Error> {
-            if let Some(turnover_completed) = &self.turnover_completed {
-                assert!(
-                    !turnover_completed.load(std::sync::atomic::Ordering::SeqCst),
-                    "publication turned over before recovered executable unload completed"
-                );
-            }
+            self.assert_turnover_pending("recovered executable unload completed");
             self.unloads
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let environment = Self::environment();
@@ -1513,6 +1522,7 @@ mod tests {
             implicit_byte_len: usize,
             kernarg: &mut [u8],
         ) -> Result<crate::HsaImplicitKernargInitializationObservationV1, Self::Error> {
+            self.assert_turnover_pending("generated invocation preparation completed");
             kernarg[implicit_byte_offset..implicit_byte_offset + implicit_byte_len].fill(0);
             Ok(crate::HsaImplicitKernargInitializationObservationV1::new(
                 Self::executable_object(),
@@ -2373,60 +2383,74 @@ mod tests {
 
     #[test]
     fn retained_currentness_blocks_generation_turnover_through_unload() {
-        let fixture = recovery_fixture(46, "gfx942", "vecadd");
-        let recovered = recover_worker_v2_load_envelope_v1(
-            &fixture.output,
-            &fixture.envelope,
-            fixture.compiler_transaction.clone(),
-            fixture.kernel_id,
-            &fixture.observed,
-        )
-        .unwrap();
+        const SEED: u8 = 0xa5;
+        let (admission, directory) =
+            crate::worker_v2_bundle_admission::tests::admitted_alpha_cov6_for_lifecycle_test(SEED);
+        let observed = make_observed_for(SEED.into(), "gfx942:sramecc+:xnack-");
         let (mut authenticator, _) = ExactPrerequisiteAuthenticator::new();
         let turnover_completed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let (adapter, unloads) = ExactHsaAdapter::with_turnover_probe(turnover_completed.clone());
-        let authority = recovered
-            .load_generated_synchronous_hsa_handoff_v1::<
-                HandoffKernel,
-                ExactPrerequisiteAuthenticator,
-                ExactHsaAdapter,
-            >(&mut authenticator, adapter)
+        let authenticated = AuthenticatedWorkerV2ExecutableV1::<AlphaCov6TestKernel>::authenticate(
+            admission,
+            &mut authenticator,
+        )
+        .unwrap();
+        let currentness = authenticated.acquire_retained_currentness_token().unwrap();
+        let authorized = authenticated.authorize_hsa_load(adapter).unwrap();
+        let loaded = authorized
+            .load_with_retained_currentness(&currentness)
             .unwrap();
+        let mut authority = RecoveredWorkerV2SynchronousHsaHandoffV1 {
+            loaded,
+            currentness,
+            observed: observed.clone(),
+            #[cfg(target_os = "linux")]
+            application_descriptors: None,
+        };
 
-        let output = fixture.output.clone();
-        let owner = fixture.owner.clone();
+        let output = directory.path().to_path_buf();
+        let owner = ProducerIdentity::from_codegen(
+            "fe2o3_host_worker_v2_admission",
+            Some(Path::new("tests/worker_v2_bundle_admission.rs")),
+        )
+        .unwrap();
         let completed = turnover_completed.clone();
-        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let turnover_owner = owner.clone();
+        let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(0);
+        let (completed_tx, completed_rx) = std::sync::mpsc::channel();
         let turnover = std::thread::spawn(move || {
-            started_tx.send(()).unwrap();
+            entered_tx.send(()).unwrap();
             let next = begin_build_attempt(
                 &output,
-                &owner,
+                &turnover_owner,
                 BuildInvocation::from_bytes([0xd1; 32]),
                 BuildSession::from_bytes([0xd2; 16]),
             );
             completed.store(true, std::sync::atomic::Ordering::SeqCst);
+            completed_tx.send(()).unwrap();
             next
         });
-        started_rx.recv().unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        assert!(
-            !turnover_completed.load(std::sync::atomic::Ordering::SeqCst),
-            "generation N+1 completed while generation N currentness was retained"
-        );
-        authority
-            .currentness
-            .revalidate_locked_currentness()
+        entered_rx.recv().unwrap();
+
+        let (arguments, drops) = alpha_cov6_arguments_for_lifecycle_test(&observed);
+        let prepared = authority
+            .prepare_generated_alpha_zeta_cov6_v1::<
+                AlphaCov6TestKernel,
+                ExactPrerequisiteAuthenticator,
+                _,
+            >(&mut authenticator, arguments)
             .unwrap();
+        assert_eq!(prepared.geometry().grid(), [2, 1, 1]);
+        let completion = prepared.dispatch().unwrap();
+        assert!(completion.completed_dispatch().dispatch().completed());
+        assert_eq!(drops.load(std::sync::atomic::Ordering::SeqCst), 1);
 
         authority.unload().unwrap();
         assert_eq!(unloads.load(std::sync::atomic::Ordering::SeqCst), 1);
+        completed_rx.recv().unwrap();
         let next = turnover.join().unwrap().unwrap();
-        assert_eq!(
-            next.generation(),
-            fixture.attempt.generation().checked_add(1).unwrap()
-        );
-        fail_build_attempt(&fixture.output, &fixture.owner, next).unwrap();
+        assert_eq!(next.generation(), 2);
+        fail_build_attempt(directory.path(), &owner, next).unwrap();
     }
 
     #[test]

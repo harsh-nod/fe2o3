@@ -20,10 +20,32 @@ mod worker_v2_bundle_admission;
 #[cfg(feature = "hardware-test-hooks")]
 #[doc(hidden)]
 pub mod __hardware_test {
+    use fe2o3_artifact_transaction::DurableCurrentLinkPublicationTokenV1;
+
     pub use crate::worker_v2_bundle_admission::tests::{
-        TestDirectory, admitted_alpha_zeta_cov6_hardware_for_lifecycle_test,
-        admitted_hardware_for_lifecycle_test,
+        TestDirectory, TestPublicationTurnover,
+        admitted_alpha_zeta_cov6_hardware_for_lifecycle_test, admitted_hardware_for_lifecycle_test,
+        begin_test_publication_turnover,
     };
+
+    pub fn acquire_retained_currentness_token<K>(
+        authenticated: &crate::AuthenticatedWorkerV2ExecutableV1<K>,
+    ) -> Result<DurableCurrentLinkPublicationTokenV1, crate::FinalizedWorkerV2BundleAdmissionError>
+    where
+        K: crate::CompilerGeneratedKernelExpectationV1,
+    {
+        authenticated.acquire_retained_currentness_token()
+    }
+
+    pub fn load_with_retained_currentness<K, A>(
+        authorized: crate::AuthorizedHsaLoadV1<K, A>,
+        current: &DurableCurrentLinkPublicationTokenV1,
+    ) -> Result<crate::LoadedHsaExecutableV1<K, A>, crate::HsaExecutableLoadError<A::Error>>
+    where
+        A: crate::ReviewedHsaExecutableLifecycleAdapterV1,
+    {
+        authorized.load_with_retained_currentness(current)
+    }
 }
 
 #[cfg(target_os = "linux")]

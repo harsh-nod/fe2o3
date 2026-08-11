@@ -1201,6 +1201,8 @@ pub(crate) mod tests {
         make_two_hsaco_fixture_with_kernel_ids_and_abis, physical_test_abi,
         typed_vecadd_hsaco_for_target, typed_vecadd_two_kernel_hsaco_for_target,
     };
+    #[cfg(feature = "hardware-test-hooks")]
+    use fe2o3_artifact_transaction::fail_build_attempt;
     use fe2o3_artifact_transaction::{
         AtomicPublicationIdentityV1, BuildInvocation, BuildSession, CanonicalLinkRequestIdentityV1,
         DurableLinkPublicationPlanV1, FinalizationIdentityV1, FinalizedOutputIdentityV1,
@@ -1225,12 +1227,35 @@ pub(crate) mod tests {
     };
     use std::fs;
     use std::path::{Path, PathBuf};
+    #[cfg(feature = "hardware-test-hooks")]
+    use std::sync::Arc;
+    #[cfg(feature = "hardware-test-hooks")]
+    use std::sync::atomic::AtomicBool;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     const REQUIRED_GFX942_TEST_TARGET: &str = "gfx942:xnack-";
     static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(1);
 
     pub struct TestDirectory(PathBuf);
+
+    #[cfg(feature = "hardware-test-hooks")]
+    pub struct TestPublicationTurnover {
+        completed: Arc<AtomicBool>,
+        thread: std::thread::JoinHandle<()>,
+    }
+
+    #[cfg(feature = "hardware-test-hooks")]
+    impl TestPublicationTurnover {
+        pub fn completed(&self) -> bool {
+            self.completed.load(Ordering::SeqCst)
+        }
+
+        pub fn finish(self) {
+            let completed = self.completed;
+            self.thread.join().expect("turnover thread must not panic");
+            assert!(completed.load(Ordering::SeqCst));
+        }
+    }
 
     impl TestDirectory {
         fn new() -> Self {
@@ -1242,6 +1267,38 @@ pub(crate) mod tests {
             fs::create_dir(&path).unwrap();
             Self(path)
         }
+
+        pub fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    #[cfg(feature = "hardware-test-hooks")]
+    pub fn begin_test_publication_turnover(directory: &TestDirectory) -> TestPublicationTurnover {
+        let output = directory.path().to_path_buf();
+        let owner = ProducerIdentity::from_codegen(
+            "fe2o3_host_worker_v2_admission",
+            Some(Path::new("tests/worker_v2_bundle_admission.rs")),
+        )
+        .unwrap();
+        let completed = Arc::new(AtomicBool::new(false));
+        let thread_completed = completed.clone();
+        let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(0);
+        let thread = std::thread::spawn(move || {
+            entered_tx.send(()).unwrap();
+            let next = begin_build_attempt(
+                &output,
+                &owner,
+                BuildInvocation::from_bytes([0xd3; 32]),
+                BuildSession::from_bytes([0xd4; 16]),
+            )
+            .unwrap();
+            assert_eq!(next.generation(), 2);
+            fail_build_attempt(&output, &owner, next).unwrap();
+            thread_completed.store(true, Ordering::SeqCst);
+        });
+        entered_rx.recv().unwrap();
+        TestPublicationTurnover { completed, thread }
     }
 
     impl Drop for TestDirectory {

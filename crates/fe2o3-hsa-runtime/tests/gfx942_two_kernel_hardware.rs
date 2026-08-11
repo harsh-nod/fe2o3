@@ -1225,6 +1225,71 @@ fn gfx942_cov6_alpha_then_zeta_generated_safe_spi_with_fake_authenticator() -> R
     Ok(())
 }
 
+/// Runs real alpha/zeta dispatch while generation N+1 waits for the retained publication lock.
+#[cfg(feature = "hardware-test-hooks")]
+#[test]
+#[ignore = "requires a pinned alpha/zeta COV6 HSACO, gfx942:xnack-, and uses a fake prerequisite authenticator"]
+fn gfx942_alpha_zeta_dispatch_retains_currentness_through_unload() -> Result<(), BoxError> {
+    let (bytes, _) = pinned_hsaco()?;
+    let context = GpuContext::new(0)?;
+    let observed = ObservedContext::observe(&context)?;
+    let adapter = ReviewedHsaRuntimeAdapterV1::new(context.clone())?;
+    require(
+        adapter.environment().physical_device().target().processor() == "gfx942"
+            && adapter.environment().physical_device().target().xnack()
+                == Some(FeatureState::Disabled),
+        "the turnover hardware slice requires gfx942:xnack-",
+    )?;
+
+    let (admission, publication_directory) =
+        fe2o3_host::__hardware_test::admitted_alpha_zeta_cov6_hardware_for_lifecycle_test(
+            GENERATED_SAFE_TEST_SEED,
+            bytes,
+            ALPHA_TEST_BINDING,
+            ZETA_TEST_BINDING,
+            &observed,
+        );
+    let mut fake_authenticator = ExplicitlyFakePrerequisiteAuthenticator;
+    let authenticated =
+        AuthenticatedWorkerV2ExecutableV1::<AlphaGeneratedSafeTestKernel>::authenticate(
+            admission,
+            &mut fake_authenticator,
+        )
+        .map_err(|error| format!("fake prerequisite authentication failed: {error:?}"))?;
+    let currentness =
+        fe2o3_host::__hardware_test::acquire_retained_currentness_token(&authenticated)
+            .map_err(|error| format!("currentness acquisition failed: {error:?}"))?;
+    let authorized = authenticated
+        .authorize_hsa_load(adapter)
+        .map_err(|error| format!("reviewed HSA load authorization failed: {error:?}"))?;
+    let mut loaded =
+        fe2o3_host::__hardware_test::load_with_retained_currentness(authorized, &currentness)
+            .map_err(|error| format!("reviewed HSA executable load failed: {error:?}"))?;
+
+    let turnover =
+        fe2o3_host::__hardware_test::begin_test_publication_turnover(&publication_directory);
+
+    currentness.revalidate_locked_currentness()?;
+    let executable_identity = loaded.load_observation().executable_object();
+    run_generated_safe_length_case(&mut loaded, &context, &observed, executable_identity, 257)?;
+    require(
+        !turnover.completed(),
+        "generation N+1 completed during real alpha/zeta dispatch",
+    )?;
+    currentness.revalidate_locked_currentness()?;
+    loaded
+        .unload()
+        .map_err(|error| format!("reviewed HSA executable unload failed: {error:?}"))?;
+    require(
+        !turnover.completed(),
+        "generation N+1 completed before currentness release after unload",
+    )?;
+    drop(currentness);
+
+    turnover.finish();
+    Ok(())
+}
+
 /// Executes the first general typed two-kernel gfx942 raw hardware evidence slice.
 ///
 /// This test intentionally calls the reviewed unsafe HSA adapter directly. It
