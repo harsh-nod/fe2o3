@@ -285,12 +285,21 @@ the transitive closures of exact ROCr-requested COMGR/AQL-profile dynamic
 roots, loader cache, NSS/passwd/timezone inputs, and exact libdrm GPU identity
 file. It verifies dependency discovery again while those files are retained.
 Landlock admits only those regular files plus the retained HSACO; other
-regular-file runtime and `dlopen` reads fail closed. `/proc`, `/sys`, and
-`/dev` are broader read-only kernel/device observation roots and are not hashed
-as ordinary runtime files. Guarded inputs and outputs use host-visible HSA pool
+regular-file runtime and `dlopen` reads fail closed. `/proc` and `/sys` remain
+read-only kernel observation roots. `/dev` is not authorized as a root: the
+child receives read/write access only to the stat-bound `/dev/kfd`, eight exact
+render nodes, and `/dev/random`. The same child proves that create, read, and
+`dlopen` under `/dev/shm` fail before it dispatches. Guarded inputs and outputs use host-visible HSA pool
 allocations rather than HIP `DeviceBuffer` compilation/linking. Physical memory
 is capped at 8 GiB; a separate bounded 4 TiB address-space limit admits the
 host's eight MI300X GPU mappings.
+
+The root summary separately binds the configured tool-runtime fixture and the
+observed tool-runtime document. Each compiler transaction retains bounded
+canonical Worker V2 request, response, and raw output bytes. The controller
+recomputes their protocol identities. The hardware observation binds raw
+stdout/stderr and canonical cgroup samples/final files, allowing its output
+digest, memory/process peaks, and limits to be recomputed independently.
 
 The accepted digest is bound to a checked Ed25519-signed transition fixture
 that records the old/new Worker and HSACO identities and both independent

@@ -339,8 +339,16 @@ also retains the loader cache, NSS/passwd/timezone inputs, and exact libdrm GPU
 identity file, then re-runs dependency discovery while every closure file is
 retained. Landlock admits only those regular files and the HSACO. Unlisted
 regular-file `dlopen` and data reads fail closed. `/proc`, `/sys`, and `/dev`
-remain readable kernel/device observation roots and are not represented as
-ordinary hashed files in the runtime manifest.
+do not share one policy: `/proc` and `/sys` remain read-only observation roots,
+while `/dev` has no root grant. Only stat-bound `/dev/kfd`, render nodes 128
+through 184 in steps of eight, and `/dev/random` are writable; GPU nodes are
+also readable. The hardware child verifies that `/dev/shm` create, read, and
+`dlopen` all fail before the exact GPU dispatch succeeds.
+
+The evidence directory retains bounded canonical Worker V2 request/response/raw
+output bytes, hardware stdout/stderr, and cgroup sample/final files. Their
+digests are bound through reproduction manifests and the root summary. Mutation,
+omission, and oversize self-tests exercise the corresponding verifier.
 
 The repository-golden test uses host-visible HSA pool allocations for guarded
 inputs and outputs; it does not use HIP `DeviceBuffer` compilation or linking.
