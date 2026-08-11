@@ -350,14 +350,20 @@ Individual files are limited to 256 MiB and the complete source archive to 2
 GiB, with both limits enforced from `fstat` before hashing or copying.
 
 The destination parent is independently opened by an absolute component walk
-that rejects symlinks. One deterministic, byte-bounded staging lease is used
-for each destination/manifest identity. A create-new sibling lease binds owner
-UID, PID, Linux process start time, destination, manifest, and a random
-challenge. A second live publisher fails busy. A subsequent run recovers only
-a matching lease whose exact PID/start-time owner is provably dead, and both
-per-lease contents and all lease names in a parent are bounded. This prevents
-random 2-GiB staging-tree accumulation across manifests. Private staging
-directories, copied files, and the index are then
+that rejects symlinks. A permanent parent-wide lock serializes enumeration,
+stale recovery, and creation across every manifest. Each destination/manifest
+identity uses deterministic lease and staging names. Lease initialization first
+creates a recognizable provisional name containing owner UID, PID, Linux
+process start time, and challenge; it fsyncs the complete lease and atomically
+renames it to the canonical create-new name before creating staging. Empty or
+partial provisional files left at any crash boundary can therefore be recovered
+only after the encoded PID/start-time owner is provably dead. Canonical stale
+lease, staging, and provisional dirents remain open and identity-checked while
+they are removed under the global lock, so two recoverers cannot delete a new
+winner. A live publisher fails busy. The parent admits at most 128 recognized
+lease, provisional, and staging entries, and checks the exact post-creation
+count under the same lock. Private staging directories, copied files, and the
+index are then
 created relative to retained parent/staging descriptors. Every copied-file and
 index descriptor remains open through publication and is re-read, re-hashed,
 and re-`fstat`ed immediately before and after rename. Publication
@@ -381,28 +387,50 @@ test-mode publication cannot grant production promotion authority.
 
 ## Protected Publisher Receipt
 
-Production archives reserve `publisher-receipt-v1.tsv`. The protected gate and
-production archive validator require this canonical payload to be signed in
-the production trust domain by the distinct `publisher` key role. The receipt
-binds:
+Production uses a detached `publisher-receipt-v2.tsv`. It is delivered to a
+runner-owned directory by the external protected publisher service, separate
+from the candidate checkout and containing no other files. The protected gate
+and production archive validator require the canonical payload to be signed in
+the production trust domain by the distinct `publisher` key role. Detachment
+avoids a commit self-reference: the receipt can bind the final candidate commit
+without its own bytes changing that commit. The receipt binds:
 
 - protected publisher/key identity and
-  `external-protected-publisher-v1` destination contract;
-- destination name plus publisher-observed parent and archive-root device/inode
-  identities;
-- SHA-256 identity of the complete manifest-derived archive closure;
-- manifest path/digest, source commit/tree, target, and hardware lane; and
-- a 256-bit nonce, issue time, expiry, and a maximum 24-hour lifetime.
+  `external-protected-portable-archive-v2` destination contract;
+- the canonical logical repository destination, independent of checkout-local
+  device and inode numbers;
+- SHA-256 identity of every relative file path, size, digest, and directory in
+  the transported archive, including the canonical archive index;
+- manifest path/digest, source commit/tree, target, and hardware lane;
+- baseline and candidate status-file digests, current default tip, and exact
+  candidate head; and
+- a service-issued 256-bit expected challenge, issue time, expiry, and a
+  maximum 24-hour lifetime.
 
-The promotion gate checks current receipt freshness, compares the receipt's
-parent/root identities with the descriptor-anchored destination and its current
-dirent, and recomputes the archive identity from protected parsing of every
-referenced file. The archive index
-must include the receipt, so directly placing otherwise valid evidence in Git
-without the trusted publisher signature cannot authorize production. The
+The promotion gate receives the receipt directory and expected challenge over
+the protected runner/service channel. It verifies current freshness, exact
+event default tip and candidate HEAD, status transition digests, logical
+destination, and the complete descriptor-scanned archive tree. Copying the same
+bytes to a fresh checkout therefore remains valid even though filesystem
+device/inode identities change. Any file-content, relative-path, empty-directory,
+transition, candidate, default-tip, or challenge substitution fails. Reusing a
+receipt for another transition or event fails because those values are signed
+and independently expected. The external service must issue unique challenges
+and must not reissue a consumed challenge for a different request.
+
+The detached receipt is not part of the candidate archive index. Placing a
+receipt directly in Git adds an undeclared archive file and changes the signed
+tree identity; it cannot substitute for the protected-service receipt. The
 operator bootstrap therefore requires a third public key dedicated to the
-`publisher` role. No production publisher private key or production receipt is
-present in this repository.
+`publisher` role. No production publisher private key, receipt, or expected
+challenge is present in this repository.
+
+Hosted workflows intentionally fail closed unless the protected publisher
+service populates `${RUNNER_TEMP}/fe2o3-protected-publisher-receipt` and
+`${RUNNER_TEMP}/fe2o3-protected-publisher-challenge` before the gate runs. The
+current repository does not install or authenticate such a service. Its
+publisher identity, key custody, unique-challenge state, and runner integration
+remain external activation prerequisites.
 
 `--allow-test-fixtures` requires a test-domain trust policy. A test-domain
 publisher receipt can exercise schema/signature rejection paths, but its
