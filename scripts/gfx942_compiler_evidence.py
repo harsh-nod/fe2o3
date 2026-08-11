@@ -1065,35 +1065,33 @@ def compare_generated_build_snapshots(
 
     def keyed(
         closure: SnapshotClosure,
-    ) -> tuple[dict[str, tuple[int, int]], dict[str, tuple[int, int]]]:
+    ) -> tuple[dict[str, list[tuple[int, int]]], set[tuple[int, int]]]:
         records = closure.manifest.get("files")
         if not isinstance(records, list) or len(records) != len(closure.source_files):
             raise EvidenceError("generated build manifest is incomplete")
         labels = [record.get("label") for record in records]
         if labels != sorted(labels) or len(labels) != len(set(labels)):
             raise EvidenceError("generated build manifest labels are reordered or duplicated")
-        shape: dict[str, tuple[int, int]] = {}
-        origins: dict[str, tuple[int, int]] = {}
+        shape: dict[str, list[tuple[int, int]]] = {}
+        origins: set[tuple[int, int]] = set()
         for record, retained in zip(records, closure.source_files, strict=True):
             label = record["label"]
             semantic = cargo_hash.sub("<cargo-hash>", label) if cargo_labels else label
-            if semantic in shape:
-                raise EvidenceError("generated build semantic labels are ambiguous")
             info = record["stat"]
-            shape[semantic] = (info["bytes"], info["mode"])
+            shape.setdefault(semantic, []).append((info["bytes"], info["mode"]))
             origin = os.fstat(retained.fd)
-            origins[semantic] = (origin.st_dev, origin.st_ino)
+            identity = (origin.st_dev, origin.st_ino)
+            origins.add(identity)
+        for values in shape.values():
+            values.sort()
         return shape, origins
 
     first_shape, first_origins = keyed(first)
     second_shape, second_origins = keyed(second)
     if first_shape != second_shape:
         raise EvidenceError("independent generated build closures differ by label or shape")
-    for label in first_shape:
-        if first_origins[label] == second_origins[label]:
-            raise EvidenceError(
-                f"run B reused a generated build artifact from run A: {label}"
-            )
+    if first_origins & second_origins:
+        raise EvidenceError("run B reused a generated build artifact from run A")
 
 
 def registry_paths(lock_path: Path, registry_root: Path) -> list[str]:
@@ -1390,7 +1388,11 @@ def capture_generated_build_closures(
     worker_paths = sorted(
         member.relative_to(worker_build).as_posix()
         for member in worker_build.rglob("*")
-        if member.is_file() and not member.is_symlink()
+        if (
+            member.is_file()
+            and not member.is_symlink()
+            and "Testing/Temporary" not in member.relative_to(worker_build).as_posix()
+        )
     )
     if not worker_paths or not any(name.endswith(".o") for name in worker_paths):
         raise EvidenceError("generated Worker build closure is incomplete")
@@ -1402,6 +1404,12 @@ def capture_generated_build_closures(
         {
             "kind": "generated-cmake-worker-build",
             "source_root": os.fspath(worker_build),
+            "excluded": [
+                {
+                    "path_prefix": "Testing/Temporary/",
+                    "reason": "transient CTest timing/log output, not a build input",
+                }
+            ],
         },
         allow_source_hardlinks=True,
     )
