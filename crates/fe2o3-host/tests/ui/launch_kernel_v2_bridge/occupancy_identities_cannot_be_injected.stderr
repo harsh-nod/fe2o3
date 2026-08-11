@@ -1,0 +1,18 @@
+error[E0061]: this method takes 0 arguments but 2 arguments were supplied
+ --> tests/ui/launch_kernel_v2_bridge/occupancy_identities_cannot_be_injected.rs:7:13
+  |
+7 |     binding.require_occupancy_dependent_admission(verifier, metadata);
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ --------  -------- unexpected argument #2 of type `OccupancyMetadataIdentityV2`
+  |                                                   |
+  |                                                   unexpected argument #1 of type `OccupancyVerifierIdentityV2`
+  |
+note: method defined here
+ --> src/launch_kernel_v2_bridge.rs
+  |
+  |     pub const fn require_occupancy_dependent_admission(
+  |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: remove the extra arguments
+  |
+7 -     binding.require_occupancy_dependent_admission(verifier, metadata);
+7 +     binding.require_occupancy_dependent_admission();
+  |

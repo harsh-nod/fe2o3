@@ -1,0 +1,7 @@
+error: cannot construct `CurrentRecoveredLaunchKernelMetadataV2<'_>` with struct literal syntax due to private fields
+ --> tests/ui/launch_kernel_v2_bridge/cannot_construct.rs:4:5
+  |
+4 |     CurrentRecoveredLaunchKernelMetadataV2 {}
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: private fields that were not provided

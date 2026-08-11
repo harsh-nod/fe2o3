@@ -1,0 +1,11 @@
+error[E0599]: no method named `load` found for struct `CurrentRecoveredLaunchKernelMetadataV2<'recovered>` in the current scope
+ --> tests/ui/launch_kernel_v2_bridge/no_load_or_dispatch.rs:4:13
+  |
+4 |     binding.load();
+  |             ^^^^ method not found in `CurrentRecoveredLaunchKernelMetadataV2<'_>`
+
+error[E0599]: no method named `dispatch` found for struct `CurrentRecoveredLaunchKernelMetadataV2<'recovered>` in the current scope
+ --> tests/ui/launch_kernel_v2_bridge/no_load_or_dispatch.rs:5:13
+  |
+5 |     binding.dispatch();
+  |             ^^^^^^^^ method not found in `CurrentRecoveredLaunchKernelMetadataV2<'_>`

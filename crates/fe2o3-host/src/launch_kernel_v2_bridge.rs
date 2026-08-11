@@ -152,10 +152,11 @@ impl CurrentRecoveredLaunchKernelMetadataV2<'_> {
 
 /// Binds one valid launch-model variant to current recovered physical metadata.
 ///
-/// This validates target, payload, kernel, symbol, flattened physical signature, non-occupancy
-/// launch geometry, static/private resources, and the occupancy subject. Dynamic LDS is rejected
-/// because AMDHSA does not provide the maximum and alignment required by the launch model.
-/// Occupancy-dependent admission remains unavailable even on success.
+/// This validates target, payload, kernel, symbol, the embedded descriptor's flattened signature
+/// against AMDHSA physical arguments, non-occupancy launch geometry, static/private resources, and
+/// the occupancy subject. Dynamic LDS is rejected because AMDHSA does not provide the maximum and
+/// alignment required by the launch model. Occupancy-dependent admission remains unavailable even
+/// on success.
 pub fn bind_current_recovered_launch_kernel_metadata_v2<'recovered>(
     recovered: &'recovered RecoveredWorkerV2PinnedDescriptorV1,
     family: &LaunchKernelFamilyV2,
@@ -430,17 +431,12 @@ fn validate_physical_component(
         }
         PhysicalAbiComponentKind::GlobalPointer => ExplicitValueKind::GlobalBuffer,
     };
-    let physical_alignment = match physical.alignment() {
-        PhysicalMetadataValueV1::Known(value) => value,
-        PhysicalMetadataValueV1::Unknown => {
-            return Err(LaunchKernelMetadataBridgeErrorV2::MissingPhysicalMetadata(
-                "physical argument alignment",
-            ));
-        }
-    };
     if physical.offset() != u64::from(offset)
         || physical.size() != u64::from(size)
-        || physical_alignment != u64::from(alignment)
+        || matches!(
+            physical.alignment(),
+            PhysicalMetadataValueV1::Known(value) if value != u64::from(alignment)
+        )
         || physical.value_kind() != expected_kind
     {
         return Err(
@@ -803,5 +799,118 @@ impl Error for LaunchKernelMetadataBridgeErrorV2 {
             Self::CurrentPublication(error) => Some(error),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn canonical_family_for_recovered_launch_bridge_test(
+    recovered: &RecoveredWorkerV2PinnedDescriptorV1,
+) -> LaunchKernelFamilyV2 {
+    use fe2o3_kernel_ir::{
+        Gfx942OccupancyWitnessV2, KernelFamilyIdentityV2, KernelPolicyIdentityV2,
+        KernelVariantTupleIdentityV2, LaunchCapabilityV2, OccupancyMetadataIdentityV2,
+        OccupancyVerifierIdentityV2,
+    };
+
+    let current = recovered.acquire_launch_kernel_v2_currentness().unwrap();
+    let admission = current.admission();
+    let derived = derive_metadata(
+        admission.target(),
+        admission.code_object_version(),
+        admission.artifact_identity(),
+        recovered.descriptor(),
+        admission.selected_kernel(),
+    )
+    .unwrap();
+    drop(current);
+
+    let mut capabilities = vec![LaunchCapabilityV2::ExactWaveMode];
+    if derived.resources.static_lds_bytes != 0 {
+        capabilities.push(LaunchCapabilityV2::StaticLds);
+    }
+    let variant = KernelVariantV2 {
+        kernel_identity: derived.kernel_identity,
+        policy_identity: KernelPolicyIdentityV2::from_bytes([0x72; 32]),
+        artifact_identity: derived.artifact_identity,
+        tuple_identity: KernelVariantTupleIdentityV2::from_bytes([0; 32]),
+        variant_name: "recovered-exact-wave64".to_owned(),
+        entry_name: derived.entry_name.into(),
+        launch: Gfx942LaunchContractV2 {
+            rank: derived.launch.rank,
+            block: derived.launch.block,
+            max_grid_blocks: derived.launch.max_grid_blocks,
+            minimum_flat_workgroup_size: derived.launch.minimum_flat_workgroup_size,
+            maximum_flat_workgroup_size: derived.launch.maximum_flat_workgroup_size,
+            wavefront: WavefrontWidthV2::Wave64,
+            require_full_waves: false,
+            minimum_waves_per_execution_unit: 1,
+            maximum_waves_per_execution_unit: 8,
+            max_total_workitems: derived.launch.max_total_workitems,
+            unsupported: UnsupportedLaunchFeaturesV2::NONE,
+        },
+        resources: derived.resources,
+        occupancy_witness: Some(Gfx942OccupancyWitnessV2 {
+            verifier_identity: OccupancyVerifierIdentityV2::from_bytes([0x73; 32]),
+            metadata_identity: OccupancyMetadataIdentityV2::from_bytes([0x74; 32]),
+            subject_identity: derived.occupancy_subject,
+            minimum_waves_per_execution_unit: 1,
+            maximum_waves_per_execution_unit: 8,
+        }),
+        capabilities,
+        proof_obligations: vec![],
+    };
+    let mut family = LaunchKernelFamilyV2 {
+        target: derived.target,
+        family_identity: KernelFamilyIdentityV2::from_bytes([0x71; 32]),
+        logical_name: derived.logical_name.into(),
+        signature: derived.signature,
+        variants: vec![variant],
+    };
+    rebind_launch_family_for_bridge_test(&mut family);
+    family
+}
+
+#[cfg(test)]
+pub(crate) fn rebind_launch_family_for_bridge_test(family: &mut LaunchKernelFamilyV2) {
+    use fe2o3_kernel_ir::{
+        LaunchProofKindV2, LaunchProofObligationV2, canonical_variant_tuple_identity_v2,
+    };
+
+    for variant in &mut family.variants {
+        let subject = canonical_occupancy_subject_identity_v2(
+            &family.target,
+            &family.signature,
+            variant.artifact_identity,
+            &variant.entry_name,
+            variant.resources,
+        );
+        let witness = variant
+            .occupancy_witness
+            .as_mut()
+            .expect("bridge test models always carry an inert occupancy witness");
+        witness.subject_identity = subject;
+        witness.minimum_waves_per_execution_unit = variant.launch.minimum_waves_per_execution_unit;
+        witness.maximum_waves_per_execution_unit = variant.launch.maximum_waves_per_execution_unit;
+    }
+    for variant in &mut family.variants {
+        let tuple = canonical_variant_tuple_identity_v2(
+            &family.target,
+            family.family_identity,
+            &family.logical_name,
+            &family.signature,
+            variant,
+        );
+        variant.tuple_identity = tuple;
+        variant.proof_obligations = [
+            LaunchProofKindV2::TargetAuthenticated,
+            LaunchProofKindV2::ArtifactAuthenticated,
+            LaunchProofKindV2::KernelIdentityAuthenticated,
+            LaunchProofKindV2::SignatureLayoutAuthenticated,
+            LaunchProofKindV2::PolicySelectionAuthenticated,
+            LaunchProofKindV2::GeometryAndResourcesProved,
+        ]
+        .into_iter()
+        .map(|kind| LaunchProofObligationV2::new(kind, tuple))
+        .collect();
     }
 }
