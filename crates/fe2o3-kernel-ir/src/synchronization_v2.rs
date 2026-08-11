@@ -1030,10 +1030,14 @@ fn validate_atomic(
     ) {
         return Err(ValidationError::InvalidAddressSpace(id));
     }
-    if atomic.address_space == AddressSpace::Lds
-        && atomic.scope.rank() > MemoryScope::Workgroup.rank()
-    {
-        return Err(ValidationError::InvalidScope(id));
+    match atomic.address_space {
+        AddressSpace::Global if atomic.scope != MemoryScope::System => {
+            return Err(ValidationError::InvalidScope(id));
+        }
+        AddressSpace::Lds if atomic.scope != MemoryScope::Workgroup => {
+            return Err(ValidationError::InvalidScope(id));
+        }
+        _ => {}
     }
     match atomic.coherent_allocation {
         Some(claim)
