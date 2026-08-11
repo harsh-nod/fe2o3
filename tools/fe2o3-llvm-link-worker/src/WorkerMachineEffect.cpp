@@ -1245,9 +1245,13 @@ Expected<uint64_t> directCallTargets(ArrayRef<DecodedInstruction> Instructions,
     return ImmediateTarget;
 
   if (Call.Name != "S_SWAPPC_B64_vi" || Call.Inst.size() != 2 ||
-      !Call.Inst.getOperand(1).isReg())
+      !Call.Inst.getOperand(0).isReg() || !Call.Inst.getOperand(1).isReg())
     return analysisError(Twine("indirect or unknown call: ") +
                          instructionDescription(Call, Mc));
+  if (StringRef(Mc.Registers->getName(Call.Inst.getOperand(0).getReg())) !=
+      "SGPR30_SGPR31")
+    return analysisError(
+        "S_SWAPPC destination is not ABI return pair SGPR30_SGPR31");
 
   unsigned PairRegister = Call.Inst.getOperand(1).getReg();
   auto Pair = splitSgprPair(PairRegister, Mc);

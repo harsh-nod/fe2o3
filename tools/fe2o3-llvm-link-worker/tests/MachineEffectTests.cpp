@@ -415,6 +415,7 @@ struct DecodedSite {
   uint64_t Address = 0;
   uint64_t Size = 0;
   std::string Name;
+  std::vector<std::string> RegisterOperands;
 };
 
 struct ElfMutationLayout {
@@ -492,7 +493,8 @@ ElfMutationLayout inspectElfMutationLayout(ArrayRef<uint8_t> Payload) {
 }
 
 std::vector<DecodedSite> decodeSymbolSites(ArrayRef<uint8_t> Payload,
-                                           StringRef Name) {
+                                           StringRef Name,
+                                           bool RequireValid = true) {
   StringRef Data(reinterpret_cast<const char *>(Payload.data()),
                  Payload.size());
   auto ObjectOrError =
@@ -553,12 +555,19 @@ std::vector<DecodedSite> decodeSymbolSites(ArrayRef<uint8_t> Payload,
     auto Status = Disassembler->getInstruction(Instruction, InstructionSize,
                                                Bytes.drop_front(Offset),
                                                Address + Offset, nulls());
-    require(Status == MCDisassembler::Success && InstructionSize != 0 &&
-                InstructionSize <= Bytes.size() - Offset,
-            "reviewer repro cannot decode symbol");
+    if (Status != MCDisassembler::Success || InstructionSize == 0 ||
+        InstructionSize > Bytes.size() - Offset) {
+      require(!RequireValid, "reviewer repro cannot decode symbol");
+      return {};
+    }
+    std::vector<std::string> RegisterOperands;
+    for (const MCOperand &Operand : Instruction)
+      RegisterOperands.push_back(
+          Operand.isReg() ? Registers->getName(Operand.getReg()) : "");
     Result.push_back({BaseOffset + static_cast<size_t>(Offset),
                       Address + Offset, InstructionSize,
-                      Instructions->getName(Instruction.getOpcode()).str()});
+                      Instructions->getName(Instruction.getOpcode()).str(),
+                      std::move(RegisterOperands)});
     Offset += InstructionSize;
   }
   return Result;
@@ -824,6 +833,42 @@ void cfgReviewerReproductionsFailClosed() {
     std::string Diagnostic = rejectedDiagnostic(std::move(Payload));
     require(StringRef(Diagnostic).contains("return pair was modified"),
             "return-provenance repro did not reach dataflow rejection");
+  }
+
+  {
+    std::vector<uint8_t> Payload = finalize(makeKernelBitcode(true));
+    auto Sites = decodeSymbolSites(Payload, "alpha");
+    auto Call = llvm::find_if(Sites, [](const DecodedSite &Site) {
+      return Site.Name == "S_SWAPPC_B64_vi";
+    });
+    require(Call != Sites.end() && Call->Size == 4 &&
+                Call->RegisterOperands.size() == 2 &&
+                Call->RegisterOperands[0] == "SGPR30_SGPR31",
+            "alternate-destination repro lacks ABI S_SWAPPC");
+    const uint32_t Original =
+        support::endian::read32le(Payload.data() + Call->FileOffset);
+    bool ChangedDestination = false;
+    for (unsigned Bit = 0; Bit != 32 && !ChangedDestination; ++Bit) {
+      std::vector<uint8_t> Candidate = Payload;
+      support::endian::write32le(Candidate.data() + Call->FileOffset,
+                                 Original ^ (uint32_t{1} << Bit));
+      auto Changed = decodeSymbolSites(Candidate, "alpha", false);
+      auto ChangedCall = llvm::find_if(Changed, [&](const DecodedSite &Site) {
+        return Site.Address == Call->Address &&
+               Site.Name == "S_SWAPPC_B64_vi" && Site.Size == Call->Size;
+      });
+      if (ChangedCall == Changed.end() ||
+          ChangedCall->RegisterOperands.size() != 2 ||
+          ChangedCall->RegisterOperands[0] == "SGPR30_SGPR31" ||
+          ChangedCall->RegisterOperands[1] != Call->RegisterOperands[1])
+        continue;
+      requireRejectedWith(
+          std::move(Candidate),
+          "S_SWAPPC destination is not ABI return pair SGPR30_SGPR31");
+      ChangedDestination = true;
+    }
+    require(ChangedDestination,
+            "could not encode alternate S_SWAPPC destination pair");
   }
 }
 
