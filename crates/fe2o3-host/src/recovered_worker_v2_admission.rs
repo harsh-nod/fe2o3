@@ -5,7 +5,8 @@ use crate::application_descriptor_handoff::{
 use crate::{
     AdmittedFinalizedWorkerV2BundleV1, ArtifactKernelIdentityV1, AuthenticatedWorkerV2ExecutableV1,
     CompilerGeneratedAlphaZetaCov6ArgumentsV1, CompilerGeneratedKernelExpectationV1,
-    DeviceIdentity, FinalizedWorkerV2BundleAdmissionError, GeneratedAlphaZetaCov6PrepareError,
+    CurrentFinalizedWorkerV2BundleAdmissionV1, DeviceIdentity,
+    FinalizedWorkerV2BundleAdmissionError, GeneratedAlphaZetaCov6PrepareError,
     GeneratedAlphaZetaCov6PreparedInvocationV1, HsaExecutableLoadError, HsaGeneratedDispatchError,
     HsaLaunchGeometryV1, HsaLoadAuthorizationError, LoadedHsaExecutableV1,
     MissingFinalizedWorkerV2LoadPrerequisiteV1, ObservedContext, PhysicalMetadataValueV1,
@@ -161,6 +162,13 @@ impl RecoveredWorkerV2PinnedDescriptorV1 {
         let current = self.admission.acquire_currentness()?;
         drop(current);
         Ok(())
+    }
+
+    pub(crate) fn acquire_launch_kernel_v2_currentness(
+        &self,
+    ) -> Result<CurrentFinalizedWorkerV2BundleAdmissionV1<'_>, FinalizedWorkerV2BundleAdmissionError>
+    {
+        self.admission.acquire_currentness()
     }
 
     pub const fn authenticates_prerequisites(&self) -> bool {

@@ -9,6 +9,7 @@ mod generated_vecadd;
 mod generated_worker_v2_vecadd;
 mod gfx942_ocml;
 mod hsa_executable_lifecycle;
+mod launch_kernel_v2_bridge;
 mod loaded_kernel;
 mod prepared_launch;
 mod published_direct_link;
@@ -132,6 +133,12 @@ pub use hsa_executable_lifecycle::{
     WorkerV2PrerequisiteAuthenticatorV1, WorkerV2PrerequisiteDecisionV1, WorkerV2PrerequisiteError,
     WorkerV2PrerequisiteRequestV1, WorkerV2RequiredProfileError, WorkerV2SafetyPropertiesV1,
     WorkerV2SafetyPropertyV1,
+};
+#[doc(hidden)]
+pub use launch_kernel_v2_bridge::{
+    CurrentRecoveredLaunchKernelMetadataV2, Gfx942OccupancyMetadataStatusV2,
+    LaunchKernelMetadataBridgeErrorV2, OccupancyDependentLaunchAdmissionErrorV2,
+    bind_current_recovered_launch_kernel_metadata_v2,
 };
 #[doc(hidden)]
 pub use loaded_kernel::{GeneratedAdmittedLaunch, LoadedKernelLoadError};
