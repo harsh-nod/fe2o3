@@ -4,6 +4,7 @@ use std::ops::Deref;
 
 use serde::{Deserialize, Serialize};
 
+use crate::control_flow::{MirControlFlowAnalysis, MirControlFlowError, analyze_mir_control_flow};
 use crate::{
     MirAddressSpace, MirMutability, MirScalarType, MirSemanticType, MirTypeKind,
     MirTypeValidationError,
@@ -1286,9 +1287,11 @@ struct Verifier<'a> {
     function: &'a MirFunction,
     path: String,
     value_types: BTreeMap<MirValueId, MirTypeId>,
+    value_blocks: BTreeMap<MirValueId, MirBlockId>,
     promoted: BTreeSet<MirLocalId>,
     total_statements: usize,
     next_value: u32,
+    control_flow: Option<MirControlFlowAnalysis>,
 }
 
 impl<'a> Verifier<'a> {
@@ -1298,9 +1301,11 @@ impl<'a> Verifier<'a> {
             function,
             path,
             value_types: BTreeMap::new(),
+            value_blocks: BTreeMap::new(),
             promoted: BTreeSet::new(),
             total_statements: 0,
             next_value: 0,
+            control_flow: None,
         }
     }
 
@@ -1327,6 +1332,23 @@ impl<'a> Verifier<'a> {
         self.verify_locals()?;
         self.verify_form()?;
         self.collect_values()?;
+        self.control_flow = match analyze_mir_control_flow(body) {
+            Ok(analysis) => Some(analysis),
+            Err(error @ MirControlFlowError::Irreducible { .. }) => {
+                return Err(crate::executable::error(
+                    format!("{}.body", self.path),
+                    error.to_string(),
+                ));
+            }
+            // Existing edge and reachability verification below owns these
+            // diagnostics and preserves their more precise field paths.
+            Err(
+                MirControlFlowError::EmptyBody
+                | MirControlFlowError::InvalidEntry { .. }
+                | MirControlFlowError::UnknownSuccessor(_)
+                | MirControlFlowError::UnreachableBlock(_),
+            ) => None,
+        };
 
         for (index, block) in body.blocks.iter().enumerate() {
             self.verify_block(MirBlockId(index as u32), block)?;
@@ -1431,7 +1453,12 @@ impl<'a> Verifier<'a> {
             let mut origins = BTreeSet::new();
             for (parameter_index, parameter) in block.parameters.iter().enumerate() {
                 let path = format!("{block_path}.parameters[{parameter_index}]");
-                self.collect_value(&path, parameter.value, parameter.ty)?;
+                self.collect_value(
+                    &path,
+                    MirBlockId(block_index as u32),
+                    parameter.value,
+                    parameter.ty,
+                )?;
                 if block_index == 0 && parameter.origin.is_none() {
                     return Err(error(
                         format!("{path}.origin"),
@@ -1486,6 +1513,7 @@ impl<'a> Verifier<'a> {
                     }
                     self.collect_value(
                         &format!("{block_path}.statements[{statement_index}].value"),
+                        MirBlockId(block_index as u32),
                         value,
                         ty,
                     )?;
@@ -1498,6 +1526,7 @@ impl<'a> Verifier<'a> {
     fn collect_value(
         &mut self,
         path: &str,
+        block: MirBlockId,
         value: MirValueId,
         ty: MirTypeId,
     ) -> Result<(), MirExecutableValidationError> {
@@ -1518,6 +1547,7 @@ impl<'a> Verifier<'a> {
         if self.value_types.insert(value, ty).is_some() {
             return Err(error(path, "duplicate SSA value identity"));
         }
+        self.value_blocks.insert(value, block);
         Ok(())
     }
 
@@ -1527,7 +1557,19 @@ impl<'a> Verifier<'a> {
         block: &MirBasicBlock,
     ) -> Result<(), MirExecutableValidationError> {
         let block_path = format!("{}.body.blocks[{}]", self.path, block_id.0);
-        let mut available = BTreeSet::new();
+        let mut available = self
+            .control_flow
+            .as_ref()
+            .map(|control_flow| {
+                self.value_blocks
+                    .iter()
+                    .filter_map(|(value, definition)| {
+                        (*definition != block_id && control_flow.dominates(*definition, block_id))
+                            .then_some(*value)
+                    })
+                    .collect::<BTreeSet<_>>()
+            })
+            .unwrap_or_default();
         for parameter in &block.parameters {
             available.insert(parameter.value);
         }
@@ -2012,7 +2054,7 @@ impl<'a> Verifier<'a> {
                     return Err(error(
                         path,
                         format!(
-                            "SSA value {} is not a parameter or prior definition in this block",
+                            "SSA value {} does not dominate this use or is not a prior definition in this block",
                             value.0
                         ),
                     ));

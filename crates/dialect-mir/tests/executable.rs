@@ -186,7 +186,7 @@ fn verifies_place_and_explicit_ssa_forms() {
 }
 
 #[test]
-fn rejects_cross_block_value_use_without_an_edge_argument() {
+fn accepts_dominating_cross_block_values_and_rejects_use_before_definition() {
     let mut module = ssa_module();
     let MirStatementKind::Assign { value, .. } =
         &mut module.functions[0].body.blocks[1].statements[0].kind
@@ -194,12 +194,30 @@ fn rejects_cross_block_value_use_without_an_edge_argument() {
         unreachable!();
     };
     *value = MirRvalue::Use(MirOperand::Value(MirValueId(1)));
+    module.validate().unwrap();
 
+    let MirStatementKind::Assign { value, .. } =
+        &mut module.functions[0].body.blocks[1].statements[0].kind
+    else {
+        unreachable!();
+    };
+    *value = MirRvalue::Use(MirOperand::Value(MirValueId(3)));
+    let u32_id = module.functions[0].body.locals[0].ty;
+    module.functions[0].body.blocks[1]
+        .statements
+        .push(MirStatement {
+            kind: MirStatementKind::Define {
+                value: MirValueId(3),
+                ty: u32_id,
+                rvalue: MirRvalue::Use(MirOperand::Value(MirValueId(2))),
+            },
+            span: None,
+        });
     let error = module.validate().unwrap_err();
     assert!(
         error
             .reason()
-            .contains("not a parameter or prior definition")
+            .contains("does not dominate this use or is not a prior definition")
     );
 }
 
