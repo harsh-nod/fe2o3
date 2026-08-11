@@ -1244,7 +1244,7 @@ fn public_ack_completion_does_not_replace_private_host_currentness_authority() {
 }
 
 #[test]
-fn application_handoff_timeout_kills_and_reaps_descriptor_retaining_descendant() {
+fn application_seccomp_rejects_process_and_double_fork_setsid_escape() {
     let directory = TestDirectory::new();
     let fixture = required_alpha_zeta_publication_fixture(&directory);
     let published = run_wrapper_with_options(
@@ -1256,26 +1256,33 @@ fn application_handoff_timeout_kills_and_reaps_descriptor_retaining_descendant()
     );
     assert!(published.status.success(), "{}", stderr(&published));
 
-    let report = directory.0.join("descendant-retention-report.json");
-    let pid_file = directory.0.join("descriptor-retaining-descendant.pid");
+    let report = directory.0.join("seccomp-process-report.json");
+    let escape_marker = directory.0.join("double-fork-setsid-escaped");
     let application = application_fixture();
-    let started = Instant::now();
-    let rejected = application_runner_command(&directory, application, &report)
-        .env("RUNNER_FIXTURE_FORK_RETAIN_HANDOFF", "1")
-        .env("RUNNER_FIXTURE_DESCENDANT_PID_FILE", &pid_file)
+    let completed = application_runner_command(&directory, application, &report)
+        .env("RUNNER_FIXTURE_SECCOMP_PROCESS_PROBE", "1")
+        .env("RUNNER_FIXTURE_DESCENDANT_PID_FILE", &escape_marker)
         .output()
         .unwrap();
-    assert!(!rejected.status.success(), "retained ACK descriptor passed");
+    assert!(completed.status.success(), "{}", stderr(&completed));
+    let report: JsonValue = serde_json::from_slice(&fs::read(report).unwrap()).unwrap();
+    assert_eq!(report["handoff"]["acknowledged"], true);
+    for probe in [
+        "fork",
+        "vfork",
+        "clone",
+        "clone3",
+        "unshare",
+        "setns",
+        "setsid",
+        "io_uring",
+        "double_fork_setsid",
+    ] {
+        assert_eq!(report["handoff"]["process_creation"][probe], "EPERM");
+    }
     assert!(
-        stderr(&rejected).contains("acknowledgment timed out"),
-        "{}",
-        stderr(&rejected)
-    );
-    assert!(started.elapsed() < Duration::from_secs(10));
-    let descendant = fs::read_to_string(pid_file).unwrap();
-    assert!(
-        !Path::new(&format!("/proc/{}", descendant.trim())).exists(),
-        "descriptor-retaining descendant was not killed and reaped"
+        !escape_marker.exists(),
+        "double-fork+setsid descendant escaped the seccomp profile"
     );
 }
 

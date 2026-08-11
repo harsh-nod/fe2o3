@@ -1,4 +1,5 @@
 mod application_handoff;
+mod application_sandbox;
 mod binding_wrapper;
 mod capability_broker;
 mod clean;

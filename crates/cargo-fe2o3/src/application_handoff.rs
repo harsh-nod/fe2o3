@@ -25,6 +25,7 @@ use fe2o3_worker_v2_bundle::{
 };
 use rustix::fs::{AtFlags, FileType, Mode, OFlags, ResolveFlags, fstat, openat2, statat};
 
+use crate::application_sandbox::{install_no_fork_application_profile, no_fork_application_filter};
 use crate::generation;
 use crate::project::PinnedDirectory;
 
@@ -300,6 +301,7 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
             .map_err(|error| format!("failed to inspect inherited artifact directory: {error}"))?;
         let directory_device = directory_stat.st_dev;
         let directory_inode = directory_stat.st_ino;
+        let seccomp_filter = no_fork_application_filter();
         // SAFETY: all three owning `File`s remain alive through spawn. The callback validates the
         // exact evidence and ACK descriptors before clearing only their child-side CLOEXEC flags.
         unsafe {
@@ -352,6 +354,7 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
                     rustix::io::fcntl_setfd(inherited, rustix::io::FdFlags::empty())
                         .map_err(io::Error::from)?;
                 }
+                install_no_fork_application_profile(&seccomp_filter)?;
                 Ok(())
             });
         }

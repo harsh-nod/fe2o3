@@ -1,5 +1,5 @@
 use std::env;
-use std::ffi::OsStr;
+use std::ffi::{CString, OsStr};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
@@ -96,15 +96,6 @@ fn validate_handoff() -> Result<ValidatedHandoff, String> {
     }
     if values.iter().any(Option::is_none) {
         return Err("application received an incomplete handoff environment".to_string());
-    }
-    if env::var_os("RUNNER_FIXTURE_FORK_RETAIN_HANDOFF").is_some() {
-        fork_descriptor_retaining_descendant()?;
-        return Ok(ValidatedHandoff {
-            report: serde_json::json!({"descendant_retained_handoff": true}),
-            _envelope: None,
-            _artifact_directory: None,
-            _current_lease: None,
-        });
     }
     if env::var_os("RUNNER_FIXTURE_IGNORE_HANDOFF").is_some() {
         return Ok(ValidatedHandoff {
@@ -220,6 +211,10 @@ fn validate_handoff() -> Result<ValidatedHandoff, String> {
     let current_token = current_lease
         .acquire_current_token()
         .map_err(|error| format!("retain current publication through acknowledgment: {error}"))?;
+    let process_creation = env::var_os("RUNNER_FIXTURE_SECCOMP_PROCESS_PROBE")
+        .is_some()
+        .then(seccomp_process_probe)
+        .transpose()?;
 
     if env::var_os("RUNNER_FIXTURE_PREMATURE_CLOSE_ACK").is_some() {
         drop(ack_file);
@@ -249,6 +244,7 @@ fn validate_handoff() -> Result<ValidatedHandoff, String> {
             "commitment": supplied_commitment.to_hex(),
             "descriptor": envelope_fd,
             "envelope_identity": hex(&envelope.identity().as_bytes()),
+            "process_creation": process_creation,
             "read_only": true,
         }),
         _envelope: Some(envelope_file),
@@ -257,27 +253,146 @@ fn validate_handoff() -> Result<ValidatedHandoff, String> {
     })
 }
 
-fn fork_descriptor_retaining_descendant() -> Result<(), String> {
-    let pid_file = env::var_os("RUNNER_FIXTURE_DESCENDANT_PID_FILE")
-        .map(PathBuf::from)
-        .ok_or_else(|| "descriptor-retention probe requires a descendant PID file".to_string())?;
-    // SAFETY: the child executes only async-signal-safe libc operations and never returns into
-    // Rust. It deliberately retains all inherited descriptors until runner containment kills it.
-    let pid = unsafe { libc::fork() };
-    if pid < 0 {
-        return Err(format!(
-            "fork descriptor-retaining descendant: {}",
-            std::io::Error::last_os_error()
-        ));
+fn seccomp_process_probe() -> Result<serde_json::Value, String> {
+    let escape_marker = env::var_os("RUNNER_FIXTURE_DESCENDANT_PID_FILE")
+        .ok_or_else(|| "seccomp probe requires an escape marker path".to_string())?;
+    let escape_marker = CString::new(os_bytes(&escape_marker))
+        .map_err(|_| "seccomp escape marker path contains NUL".to_string())?;
+    let no_args = [0_usize; 6];
+    let clone_args = [libc::SIGCHLD as usize, 0, 0, 0, 0, 0];
+    let clone3_args = [0_usize, 0, 0, 0, 0, 0];
+    let setns_args = [usize::MAX, 0, 0, 0, 0, 0];
+    let io_uring_args = [1_usize, 0, 0, 0, 0, 0];
+    blocked_process_creation("fork", libc::SYS_fork, no_args)?;
+    blocked_process_creation("vfork", libc::SYS_vfork, no_args)?;
+    blocked_process_creation("clone", libc::SYS_clone, clone_args)?;
+    blocked_noncreation("clone3", libc::SYS_clone3, clone3_args)?;
+    blocked_noncreation("unshare", libc::SYS_unshare, no_args)?;
+    blocked_noncreation("setns", libc::SYS_setns, setns_args)?;
+    blocked_noncreation("setsid", libc::SYS_setsid, no_args)?;
+    blocked_noncreation("io_uring_setup", libc::SYS_io_uring_setup, io_uring_args)?;
+    blocked_noncreation("io_uring_enter", libc::SYS_io_uring_enter, no_args)?;
+    blocked_noncreation("io_uring_register", libc::SYS_io_uring_register, no_args)?;
+    blocked_double_fork_setsid_escape(&escape_marker)?;
+    Ok(serde_json::json!({
+        "clone": "EPERM",
+        "clone3": "EPERM",
+        "double_fork_setsid": "EPERM",
+        "fork": "EPERM",
+        "io_uring": "EPERM",
+        "setns": "EPERM",
+        "setsid": "EPERM",
+        "unshare": "EPERM",
+        "vfork": "EPERM",
+    }))
+}
+
+fn blocked_process_creation(
+    name: &str,
+    number: libc::c_long,
+    arguments: [usize; 6],
+) -> Result<(), String> {
+    let result = raw_syscall(number, arguments);
+    if result == 0 {
+        // SAFETY: this is the unexpected child path; `_exit` is async-signal-safe and prevents it
+        // from returning into Rust or retaining inherited evidence descriptors.
+        unsafe { libc::_exit(210) };
     }
-    if pid == 0 {
-        loop {
-            // SAFETY: `pause` has no memory preconditions and waits for process-group containment.
-            unsafe { libc::pause() };
+    if result > 0 {
+        raw_wait(result as libc::pid_t);
+        return Err(format!("seccomp unexpectedly allowed {name}"));
+    }
+    expect_eperm(name)
+}
+
+fn blocked_noncreation(
+    name: &str,
+    number: libc::c_long,
+    arguments: [usize; 6],
+) -> Result<(), String> {
+    if raw_syscall(number, arguments) >= 0 {
+        return Err(format!("seccomp unexpectedly allowed {name}"));
+    }
+    expect_eperm(name)
+}
+
+fn blocked_double_fork_setsid_escape(escape_marker: &CString) -> Result<(), String> {
+    let result = raw_syscall(libc::SYS_fork, [0; 6]);
+    if result == 0 {
+        if raw_syscall(libc::SYS_setsid, [0; 6]) < 0 {
+            // SAFETY: this unexpected child cannot escape its inherited process group.
+            unsafe { libc::_exit(213) };
+        }
+        let second = raw_syscall(libc::SYS_fork, [0; 6]);
+        if second == 0 {
+            // SAFETY: the path was converted before fork; these libc calls are async-signal-safe.
+            let marker = unsafe {
+                libc::open(
+                    escape_marker.as_ptr(),
+                    libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
+                    0o600,
+                )
+            };
+            if marker >= 0 {
+                // SAFETY: the marker descriptor is owned by this unexpected grandchild.
+                unsafe {
+                    libc::write(marker, b"escaped".as_ptr().cast(), 7);
+                    libc::close(marker);
+                }
+            }
+            // SAFETY: an unexpectedly created grandchild exits immediately without Rust cleanup.
+            unsafe { libc::_exit(212) };
+        }
+        if second > 0 {
+            raw_wait(second as libc::pid_t);
+        }
+        // SAFETY: the unexpected first child has completed the exact escape sequence probe.
+        unsafe { libc::_exit(211) };
+    }
+    if result > 0 {
+        raw_wait(result as libc::pid_t);
+        return Err("seccomp unexpectedly allowed double-fork+setsid stage one".to_string());
+    }
+    expect_eperm("double-fork+setsid")
+}
+
+fn raw_syscall(number: libc::c_long, arguments: [usize; 6]) -> libc::c_long {
+    // SAFETY: all probes use the Linux syscall ABI. Seccomp rejects them before the kernel reads
+    // argument pointers; unexpected child paths use only raw syscalls and `_exit`.
+    unsafe {
+        libc::syscall(
+            number,
+            arguments[0],
+            arguments[1],
+            arguments[2],
+            arguments[3],
+            arguments[4],
+            arguments[5],
+        )
+    }
+}
+
+fn raw_wait(pid: libc::pid_t) {
+    let mut status = 0;
+    loop {
+        // SAFETY: `status` is writable and `pid` came from an unexpected successful creation.
+        let result = unsafe { libc::waitpid(pid, &mut status, 0) };
+        if result >= 0 || std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted
+        {
+            break;
         }
     }
-    fs::write(pid_file, pid.to_string())
-        .map_err(|error| format!("write descriptor-retaining descendant PID: {error}"))
+}
+
+fn expect_eperm(name: &str) -> Result<(), String> {
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::EPERM) {
+        Ok(())
+    } else {
+        Err(format!(
+            "seccomp returned {error} instead of EPERM for {name}"
+        ))
+    }
 }
 
 fn parse_fd(value: String, purpose: &str) -> Result<i32, String> {
