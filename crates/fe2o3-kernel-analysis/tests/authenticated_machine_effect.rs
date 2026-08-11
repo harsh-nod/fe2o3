@@ -212,6 +212,11 @@ fn stale_replay_stdout_substitution_and_identity_mismatch_fail_closed() {
 }
 
 #[test]
+fn worker_receives_only_the_fixed_environment_allowlist() {
+    worker().analyze(vec![9], vec![entry()], limits()).unwrap();
+}
+
+#[test]
 fn timeout_reaps_worker_and_descendants() {
     let worker = worker();
     let started = Instant::now();

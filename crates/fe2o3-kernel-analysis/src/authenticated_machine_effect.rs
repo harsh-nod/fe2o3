@@ -212,6 +212,7 @@ pub enum AuthenticatedPhysicalMachineEffectErrorKindV1 {
     PreparePinnedImage,
     Spawn,
     ProcessObservation,
+    RuntimeClosureChanged,
     RuntimeClosureMismatch {
         expected: PhysicalMachineRuntimeClosureIdentityV1,
         actual: PhysicalMachineRuntimeClosureIdentityV1,
@@ -557,6 +558,15 @@ mod platform {
         start_ticks: u64,
         executable: PhysicalMachineWorkerExecutableIdentityV1,
         runtime_closure: PhysicalMachineRuntimeClosureIdentityV1,
+        runtime_files: Vec<RuntimeFile>,
+    }
+
+    struct RuntimeFile {
+        file: File,
+        path: String,
+        snapshot: Snapshot,
+        digest: [u8; 32],
+        length: u64,
     }
 
     struct RawExecution {
@@ -599,7 +609,8 @@ mod platform {
                 toolchain_identity: PhysicalMachineToolchainIdentityV1::from_sha256_bytes([0; 32]),
             };
             debug_assert_eq!(executable, policy.executable);
-            let (analyzer, toolchain, closure) = result.probe_identities(limits)?;
+            let (analyzer, toolchain, closure) =
+                result.probe_identities(limits, Some(policy.runtime_closure))?;
             if closure != policy.runtime_closure {
                 return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
                     AuthenticatedPhysicalMachineEffectErrorKindV1::RuntimeClosureMismatch {
@@ -656,6 +667,7 @@ mod platform {
                 "--machine-effects-gfx942-v1",
                 request.canonical_bytes(),
                 limits,
+                Some(self.policy.runtime_closure),
             )?;
             validate_success(&execution.capture)?;
             if execution.observation.runtime_closure != self.policy.runtime_closure {
@@ -696,6 +708,7 @@ mod platform {
         fn probe_identities(
             &self,
             limits: AuthenticatedPhysicalMachineEffectLimitsV1,
+            expected_runtime: Option<PhysicalMachineRuntimeClosureIdentityV1>,
         ) -> Result<
             (
                 PhysicalMachineAnalyzerIdentityV1,
@@ -713,6 +726,7 @@ mod platform {
                     stdout_bytes: 4096,
                     ..limits
                 },
+                expected_runtime,
             )?;
             validate_success(&execution.capture)?;
             let (analyzer, toolchain) =
@@ -726,6 +740,7 @@ mod platform {
             argument: &str,
             request: &[u8],
             limits: AuthenticatedPhysicalMachineEffectLimitsV1,
+            expected_runtime: Option<PhysicalMachineRuntimeClosureIdentityV1>,
         ) -> Result<RawExecution, AuthenticatedPhysicalMachineEffectErrorV1> {
             validate_image(&self.image, &self.descriptor_path, self.snapshot)?;
             let mut command = Command::new(&self.descriptor_path);
@@ -744,7 +759,7 @@ mod platform {
                     error,
                 )
             })?;
-            let observation = match observe_process(child.id(), self.policy.executable) {
+            let mut observation = match observe_process(child.id(), self.policy.executable) {
                 Ok(observation) => observation,
                 Err(error) => {
                     terminate_process_tree(&mut child, &BTreeSet::new());
@@ -762,7 +777,29 @@ mod platform {
                     },
                 ));
             }
-            let capture = supervise(&mut child, request, limits)?;
+            if let Some(expected) = expected_runtime
+                && observation.runtime_closure != expected
+            {
+                terminate_process_tree(&mut child, &BTreeSet::new());
+                let _ = child.wait();
+                return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
+                    AuthenticatedPhysicalMachineEffectErrorKindV1::RuntimeClosureMismatch {
+                        expected,
+                        actual: observation.runtime_closure,
+                    },
+                ));
+            }
+            if let Err(error) = validate_runtime_files(&mut observation.runtime_files) {
+                terminate_process_tree(&mut child, &BTreeSet::new());
+                let _ = child.wait();
+                return Err(error);
+            }
+            let capture = supervise(&mut child, request, limits);
+            let runtime_result = validate_runtime_files(&mut observation.runtime_files);
+            let image_result = validate_image(&self.image, &self.descriptor_path, self.snapshot);
+            runtime_result?;
+            image_result?;
+            let capture = capture?;
             if capture.request_written != request.len() {
                 return Err(process_error(
                     AuthenticatedPhysicalMachineEffectErrorKindV1::RequestWriteIncomplete,
@@ -795,7 +832,7 @@ mod platform {
             toolchain_identity: PhysicalMachineToolchainIdentityV1::from_sha256_bytes([0; 32]),
         };
         let (analyzer_identity, toolchain_identity, runtime_closure) =
-            worker.probe_identities(limits)?;
+            worker.probe_identities(limits, None)?;
         Ok(PhysicalMachineEffectWorkerCandidateV1 {
             policy: PhysicalMachineEffectWorkerPolicyV1::new(executable, runtime_closure)?,
             analyzer_identity,
@@ -1061,12 +1098,13 @@ mod platform {
             })?
             .len();
         let executable = hash_file_identity(&mut executable, EXECUTABLE_IDENTITY_DOMAIN, size)?;
-        let runtime_closure = runtime_closure(pid, worker)?;
+        let (runtime_closure, runtime_files) = runtime_closure(pid, worker)?;
         Ok(ProcessObservation {
             process_id: pid,
             start_ticks,
             executable,
             runtime_closure,
+            runtime_files,
         })
     }
 
@@ -1102,15 +1140,17 @@ mod platform {
     fn runtime_closure(
         pid: u32,
         worker: PhysicalMachineWorkerExecutableIdentityV1,
-    ) -> Result<PhysicalMachineRuntimeClosureIdentityV1, AuthenticatedPhysicalMachineEffectErrorV1>
-    {
+    ) -> Result<
+        (PhysicalMachineRuntimeClosureIdentityV1, Vec<RuntimeFile>),
+        AuthenticatedPhysicalMachineEffectErrorV1,
+    > {
         let maps = std::fs::read_to_string(format!("/proc/{pid}/maps")).map_err(|error| {
             AuthenticatedPhysicalMachineEffectErrorV1::detail(
                 AuthenticatedPhysicalMachineEffectErrorKindV1::ProcessObservation,
                 error,
             )
         })?;
-        let mut files = BTreeMap::<(u32, u32, u64), (String, [u8; 32], u64)>::new();
+        let mut files = BTreeMap::<(u32, u32, u64), RuntimeFile>::new();
         let mut total = 0_u64;
         for line in maps.lines() {
             let mut fields = line.split_ascii_whitespace();
@@ -1161,6 +1201,11 @@ mod platform {
                 )
             })?;
             let snapshot = Snapshot::from_metadata(&metadata);
+            if writable_alias(&file) {
+                return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
+                    AuthenticatedPhysicalMachineEffectErrorKindV1::ProcessObservation,
+                ));
+            }
             if files.len() >= MAX_PHYSICAL_MACHINE_EFFECT_RUNTIME_FILES_V1
                 || metadata.len() > MAX_PHYSICAL_MACHINE_EFFECT_WORKER_BYTES_V1
                 || total > MAX_PHYSICAL_MACHINE_EFFECT_RUNTIME_BYTES_V1 - metadata.len()
@@ -1184,14 +1229,26 @@ mod platform {
                 continue;
             }
             total += metadata.len();
-            files.insert(key, (path, plain_digest, length));
+            files.insert(
+                key,
+                RuntimeFile {
+                    file,
+                    path,
+                    snapshot,
+                    digest: plain_digest,
+                    length,
+                },
+            );
         }
         if files.is_empty() {
             return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
                 AuthenticatedPhysicalMachineEffectErrorKindV1::ProcessObservation,
             ));
         }
-        let mut records = files.into_values().collect::<Vec<_>>();
+        let mut records = files
+            .values()
+            .map(|file| (file.path.as_str(), file.digest, file.length))
+            .collect::<Vec<_>>();
         records.sort();
         let mut canonical = Vec::new();
         push_u32(&mut canonical, records.len() as u32);
@@ -1206,10 +1263,13 @@ mod platform {
             canonical.extend_from_slice(&digest);
             push_u64(&mut canonical, length);
         }
-        Ok(PhysicalMachineRuntimeClosureIdentityV1 {
-            sha256: domain_hash(RUNTIME_CLOSURE_IDENTITY_DOMAIN, &canonical),
-            byte_len: canonical.len() as u64,
-        })
+        Ok((
+            PhysicalMachineRuntimeClosureIdentityV1 {
+                sha256: domain_hash(RUNTIME_CLOSURE_IDENTITY_DOMAIN, &canonical),
+                byte_len: canonical.len() as u64,
+            },
+            files.into_values().collect(),
+        ))
     }
 
     fn open_mapped_file(
@@ -1243,6 +1303,34 @@ mod platform {
             ));
         }
         Ok(file)
+    }
+
+    fn writable_alias(file: &File) -> bool {
+        OpenOptions::new()
+            .write(true)
+            .open(format!("/proc/self/fd/{}", file.as_raw_fd()))
+            .is_ok()
+    }
+
+    fn validate_runtime_files(
+        files: &mut [RuntimeFile],
+    ) -> Result<(), AuthenticatedPhysicalMachineEffectErrorV1> {
+        for runtime in files {
+            let before = Snapshot::from_metadata(&runtime.file.metadata().map_err(observation_io)?);
+            if before != runtime.snapshot || writable_alias(&runtime.file) {
+                return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
+                    AuthenticatedPhysicalMachineEffectErrorKindV1::RuntimeClosureChanged,
+                ));
+            }
+            let (digest, _, length) = hash_runtime_file(&mut runtime.file, runtime.snapshot.size)?;
+            let after = Snapshot::from_metadata(&runtime.file.metadata().map_err(observation_io)?);
+            if after != runtime.snapshot || digest != runtime.digest || length != runtime.length {
+                return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
+                    AuthenticatedPhysicalMachineEffectErrorKindV1::RuntimeClosureChanged,
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn hash_runtime_file(
@@ -1619,6 +1707,58 @@ mod platform {
             AuthenticatedPhysicalMachineEffectErrorKindV1::PersistReceipt,
             error,
         )
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::os::unix::fs::PermissionsExt;
+
+        #[test]
+        fn retained_runtime_file_mutation_is_detected_after_observation() {
+            let path = std::env::temp_dir().join(format!(
+                "fe2o3-runtime-closure-rehash-{}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_file(&path);
+            let mut writer = OpenOptions::new()
+                .create_new(true)
+                .read(true)
+                .write(true)
+                .open(&path)
+                .unwrap();
+            writer.write_all(b"observed-runtime-image").unwrap();
+            writer.sync_all().unwrap();
+            let mut file = File::open(&path).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o400)).unwrap();
+            if writable_alias(&file) {
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+                std::fs::remove_file(path).unwrap();
+                return;
+            }
+            let snapshot = Snapshot::from_metadata(&file.metadata().unwrap());
+            let (digest, _, length) = hash_runtime_file(&mut file, snapshot.size).unwrap();
+            let mut retained = [RuntimeFile {
+                file,
+                path: path.to_string_lossy().into_owned(),
+                snapshot,
+                digest,
+                length,
+            }];
+            validate_runtime_files(&mut retained).unwrap();
+
+            writer.seek(SeekFrom::Start(0)).unwrap();
+            writer.write_all(b"mutated!").unwrap();
+            writer.sync_all().unwrap();
+            let error = validate_runtime_files(&mut retained).unwrap_err();
+            assert_eq!(
+                error.kind(),
+                &AuthenticatedPhysicalMachineEffectErrorKindV1::RuntimeClosureChanged
+            );
+            drop(writer);
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+            std::fs::remove_file(path).unwrap();
+        }
     }
 }
 

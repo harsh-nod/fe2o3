@@ -1,5 +1,10 @@
 use sha2::{Digest, Sha256};
-use std::{io::{Read, Write}, process::Command, thread, time::Duration};
+use std::{
+    io::{Read, Write},
+    process::Command,
+    thread,
+    time::Duration,
+};
 
 const REQUEST_DOMAIN: &[u8] = b"FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-REQUEST/V1\0";
 const EVIDENCE_DOMAIN: &[u8] = b"FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-EVIDENCE/V1\0";
@@ -70,6 +75,17 @@ fn analysis_response(bytes: Vec<u8>) {
             return;
         }
         8 => std::process::exit(81),
+        9 => {
+            let environment = std::env::vars().collect::<std::collections::BTreeMap<_, _>>();
+            let expected = std::collections::BTreeMap::from([
+                ("LANG".to_string(), "C".to_string()),
+                ("LC_ALL".to_string(), "C".to_string()),
+                ("TZ".to_string(), "UTC".to_string()),
+            ]);
+            if environment != expected {
+                std::process::exit(82);
+            }
+        }
         _ => {}
     }
     let mode = request.payload[0];
