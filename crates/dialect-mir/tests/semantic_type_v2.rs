@@ -1353,3 +1353,458 @@ fn forged_collection_counts_are_rejected_before_allocation() {
         Err(SemanticTypeGraphErrorV2::Decode { .. })
     ));
 }
+
+fn build_nested_niche(
+    source: SemanticNicheSourceV2,
+    niche_scalar: SemanticScalarV2,
+    niche_ranges: Vec<ScalarValidityRangeV2>,
+    terminal_ranges: Vec<ScalarValidityRangeV2>,
+) -> Result<SemanticTypeGraphV2, SemanticTypeGraphErrorV2> {
+    let mut builder = SemanticTypeGraphBuilderV2::new(budgets());
+    let unit = builder.intern(
+        "unit",
+        SemanticTypeNodeV2 {
+            layout: SemanticTypeLayoutV2::sized(0, 1),
+            kind: SemanticTypeKindV2::Unit,
+        },
+    )?;
+    let terminal = builder.intern(
+        "valid-u8",
+        validity_scalar(
+            SemanticScalarV2::Int {
+                signed: false,
+                bits: 8,
+            },
+            1,
+            terminal_ranges,
+        ),
+    )?;
+    let array = builder.intern(
+        "[valid-u8;2]",
+        SemanticTypeNodeV2 {
+            layout: SemanticTypeLayoutV2::sized(2, 1),
+            kind: SemanticTypeKindV2::Array {
+                element: terminal,
+                length: 2,
+            },
+        },
+    )?;
+    let wrapper = builder.intern(
+        "Wrapper",
+        SemanticTypeNodeV2 {
+            layout: SemanticTypeLayoutV2::sized(2, 1),
+            kind: SemanticTypeKindV2::Struct {
+                identity: "crate::Wrapper".into(),
+                fields: vec![named("values", 0, array)],
+            },
+        },
+    )?;
+    let root = builder.intern(
+        "NestedOption",
+        SemanticTypeNodeV2 {
+            layout: SemanticTypeLayoutV2::sized(4, 1),
+            kind: SemanticTypeKindV2::Enum {
+                identity: "crate::NestedOption".into(),
+                discriminant: SemanticScalarV2::Int {
+                    signed: false,
+                    bits: 8,
+                },
+                encoding: SemanticEnumEncodingV2::Niche {
+                    source,
+                    niche_scalar,
+                    valid_ranges: niche_ranges,
+                    untagged_variant: 1,
+                    niche_variants_start: 0,
+                    niche_variants_end: 0,
+                    niche_start: 0,
+                },
+                variants: vec![
+                    SemanticVariantV2 {
+                        name: "None".into(),
+                        discriminant: 0,
+                        fields: vec![named("zst", 0, unit)],
+                    },
+                    SemanticVariantV2 {
+                        name: "Some".into(),
+                        discriminant: 1,
+                        fields: vec![named("wrapper", 2, wrapper)],
+                    },
+                ],
+            },
+        },
+    )?;
+    builder.finish(root)
+}
+
+fn nested_source() -> SemanticNicheSourceV2 {
+    SemanticNicheSourceV2 {
+        path: vec![
+            SemanticNichePathComponentV2::Field(0),
+            SemanticNichePathComponentV2::Field(0),
+            SemanticNichePathComponentV2::ArrayElement(1),
+        ],
+        expected_offset: 3,
+    }
+}
+
+fn nonzero_u8_ranges() -> Vec<ScalarValidityRangeV2> {
+    vec![ScalarValidityRangeV2 { start: 1, end: 255 }]
+}
+
+#[test]
+fn niche_source_is_derived_through_nested_payload_layout() {
+    let graph = build_nested_niche(
+        nested_source(),
+        SemanticScalarV2::Int {
+            signed: false,
+            bits: 8,
+        },
+        nonzero_u8_ranges(),
+        nonzero_u8_ranges(),
+    )
+    .unwrap();
+    let encoded = graph.canonical_bytes().unwrap();
+    SemanticTypeGraphV2::decode_canonical(&encoded, budgets()).unwrap();
+}
+
+#[test]
+fn niche_source_rejects_padding_missing_fields_offsets_scalars_and_ranges() {
+    let scalar = SemanticScalarV2::Int {
+        signed: false,
+        bits: 8,
+    };
+    let bad_sources = [
+        SemanticNicheSourceV2 {
+            path: vec![SemanticNichePathComponentV2::Field(1)],
+            expected_offset: 3,
+        },
+        SemanticNicheSourceV2 {
+            path: nested_source().path,
+            expected_offset: 2,
+        },
+        SemanticNicheSourceV2 {
+            path: vec![
+                SemanticNichePathComponentV2::Field(0),
+                SemanticNichePathComponentV2::Field(0),
+                SemanticNichePathComponentV2::ArrayElement(2),
+            ],
+            expected_offset: 4,
+        },
+        SemanticNicheSourceV2 {
+            path: vec![],
+            expected_offset: 0,
+        },
+    ];
+    for source in bad_sources {
+        assert!(matches!(
+            build_nested_niche(
+                source,
+                scalar,
+                nonzero_u8_ranges(),
+                nonzero_u8_ranges()
+            ),
+            Err(SemanticTypeGraphErrorV2::Invalid { .. })
+        ));
+    }
+    assert!(matches!(
+        build_nested_niche(
+            nested_source(),
+            SemanticScalarV2::Int {
+                signed: false,
+                bits: 16,
+            },
+            nonzero_u8_ranges(),
+            nonzero_u8_ranges()
+        ),
+        Err(SemanticTypeGraphErrorV2::Invalid { .. })
+    ));
+    assert!(matches!(
+        build_nested_niche(
+            nested_source(),
+            scalar,
+            vec![ScalarValidityRangeV2 { start: 2, end: 255 }],
+            nonzero_u8_ranges()
+        ),
+        Err(SemanticTypeGraphErrorV2::Invalid { .. })
+    ));
+}
+
+#[test]
+fn counterfeit_padding_niche_without_a_terminal_scalar_is_rejected() {
+    let mut builder = SemanticTypeGraphBuilderV2::new(budgets());
+    let root = builder
+        .intern(
+            "Counterfeit",
+            SemanticTypeNodeV2 {
+                layout: SemanticTypeLayoutV2::sized(8, 8),
+                kind: SemanticTypeKindV2::Enum {
+                    identity: "crate::Counterfeit".into(),
+                    discriminant: SemanticScalarV2::Int {
+                        signed: false,
+                        bits: 8,
+                    },
+                    encoding: SemanticEnumEncodingV2::Niche {
+                        source: SemanticNicheSourceV2 {
+                            path: vec![SemanticNichePathComponentV2::Field(0)],
+                            expected_offset: 0,
+                        },
+                        niche_scalar: SemanticScalarV2::Int {
+                            signed: false,
+                            bits: 64,
+                        },
+                        valid_ranges: vec![ScalarValidityRangeV2 {
+                            start: 1,
+                            end: u64::MAX as u128,
+                        }],
+                        untagged_variant: 1,
+                        niche_variants_start: 0,
+                        niche_variants_end: 0,
+                        niche_start: 0,
+                    },
+                    variants: vec![
+                        SemanticVariantV2 {
+                            name: "None".into(),
+                            discriminant: 0,
+                            fields: vec![],
+                        },
+                        SemanticVariantV2 {
+                            name: "Some".into(),
+                            discriminant: 1,
+                            fields: vec![],
+                        },
+                    ],
+                },
+            },
+        )
+        .unwrap();
+    assert!(matches!(
+        builder.finish(root),
+        Err(SemanticTypeGraphErrorV2::Invalid { .. })
+    ));
+}
+
+#[test]
+fn nominal_and_exact_definition_duplicates_are_rejected() {
+    let mut nominal = SemanticTypeGraphBuilderV2::new(budgets());
+    let byte = nominal
+        .intern(
+            "u8",
+            scalar(
+                SemanticScalarV2::Int {
+                    signed: false,
+                    bits: 8,
+                },
+                1,
+            ),
+        )
+        .unwrap();
+    let left = nominal
+        .intern(
+            "left",
+            SemanticTypeNodeV2 {
+                layout: SemanticTypeLayoutV2::sized(1, 1),
+                kind: SemanticTypeKindV2::Struct {
+                    identity: "crate::Same".into(),
+                    fields: vec![named("value", 0, byte)],
+                },
+            },
+        )
+        .unwrap();
+    let right = nominal
+        .intern(
+            "right",
+            SemanticTypeNodeV2 {
+                layout: SemanticTypeLayoutV2::sized(1, 1),
+                kind: SemanticTypeKindV2::Union {
+                    identity: "crate::Same".into(),
+                    fields: vec![named("value", 0, byte)],
+                },
+            },
+        )
+        .unwrap();
+    let root = nominal
+        .intern(
+            "root",
+            SemanticTypeNodeV2 {
+                layout: SemanticTypeLayoutV2::sized(2, 1),
+                kind: SemanticTypeKindV2::Tuple {
+                    fields: vec![unnamed(0, left), unnamed(1, right)],
+                },
+            },
+        )
+        .unwrap();
+    assert!(matches!(
+        nominal.finish(root),
+        Err(SemanticTypeGraphErrorV2::Invalid { .. })
+    ));
+
+    let mut exact = SemanticTypeGraphBuilderV2::new(budgets());
+    let first = exact
+        .intern(
+            "first",
+            scalar(
+                SemanticScalarV2::Int {
+                    signed: false,
+                    bits: 16,
+                },
+                2,
+            ),
+        )
+        .unwrap();
+    let second = exact
+        .intern(
+            "second",
+            scalar(
+                SemanticScalarV2::Int {
+                    signed: false,
+                    bits: 16,
+                },
+                2,
+            ),
+        )
+        .unwrap();
+    let root = exact
+        .intern(
+            "root",
+            SemanticTypeNodeV2 {
+                layout: SemanticTypeLayoutV2::sized(4, 2),
+                kind: SemanticTypeKindV2::Tuple {
+                    fields: vec![unnamed(0, first), unnamed(2, second)],
+                },
+            },
+        )
+        .unwrap();
+    assert!(matches!(
+        exact.finish(root),
+        Err(SemanticTypeGraphErrorV2::Invalid { .. })
+    ));
+}
+
+#[test]
+fn caller_keys_are_explicitly_part_of_untrusted_canonicalization() {
+    fn graph(key: &str) -> SemanticTypeGraphV2 {
+        let mut builder = SemanticTypeGraphBuilderV2::new(budgets());
+        let root = builder
+            .intern(
+                key,
+                SemanticTypeNodeV2 {
+                    layout: SemanticTypeLayoutV2::sized(0, 1),
+                    kind: SemanticTypeKindV2::Unit,
+                },
+            )
+            .unwrap();
+        builder.finish(root).unwrap()
+    }
+    let left = graph("caller-key-a");
+    let right = graph("caller-key-b");
+    assert_ne!(left.canonical_bytes().unwrap(), right.canonical_bytes().unwrap());
+    assert_eq!(
+        left.untrusted_canonical_encoding().unwrap().as_bytes(),
+        left.canonical_bytes().unwrap()
+    );
+}
+
+#[test]
+fn decoder_charges_all_edges_and_niche_paths_before_allocation() {
+    let encoded = build_nested_niche(
+        nested_source(),
+        SemanticScalarV2::Int {
+            signed: false,
+            bits: 8,
+        },
+        nonzero_u8_ranges(),
+        nonzero_u8_ranges(),
+    )
+    .unwrap()
+    .canonical_bytes()
+    .unwrap();
+    let mut constrained = budgets();
+    constrained.max_edges = 6;
+    assert!(matches!(
+        SemanticTypeGraphV2::decode_canonical(&encoded, constrained),
+        Err(SemanticTypeGraphErrorV2::ResourceLimit {
+            resource: "edges",
+            ..
+        })
+    ));
+}
+
+#[test]
+fn hundred_thousand_malformed_inputs_never_panic_or_decode_noncanonically() {
+    let seed = build_nested_niche(
+        nested_source(),
+        SemanticScalarV2::Int {
+            signed: false,
+            bits: 8,
+        },
+        nonzero_u8_ranges(),
+        nonzero_u8_ranges(),
+    )
+    .unwrap()
+    .canonical_bytes()
+    .unwrap();
+    let mut state = 0x8b5a_2d17_c4e3_91f0_u64;
+    for iteration in 0..100_000_u32 {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        let mut input = seed.clone();
+        let index = (state as usize) % input.len();
+        input[index] ^= ((state >> 32) as u8).wrapping_add(iteration as u8 | 1);
+        if iteration % 7 == 0 {
+            input.truncate((state as usize) % (input.len() + 1));
+        }
+        if let Ok(graph) = SemanticTypeGraphV2::decode_canonical(&input, budgets()) {
+            assert_eq!(graph.canonical_bytes().unwrap(), input);
+        }
+    }
+}
+
+#[test]
+fn validation_work_budget_stops_deep_reference_amplifier() {
+    let limited = SemanticTypeGraphBudgetsV2 {
+        max_nodes: 2_000,
+        max_edges: 2_000,
+        max_fields: 0,
+        max_variants: 0,
+        max_validity_ranges: 0,
+        max_name_bytes: 64,
+        max_canonical_bytes: 1_000_000,
+        max_validation_work: 100,
+    };
+    let mut builder = SemanticTypeGraphBuilderV2::new(limited);
+    let mut current = builder
+        .intern(
+            "base",
+            SemanticTypeNodeV2 {
+                layout: SemanticTypeLayoutV2::sized(0, 1),
+                kind: SemanticTypeKindV2::Unit,
+            },
+        )
+        .unwrap();
+    for index in 0..1_500 {
+        current = builder
+            .intern(
+                format!("ptr-{index:04}"),
+                SemanticTypeNodeV2 {
+                    layout: SemanticTypeLayoutV2::sized(8, 8),
+                    kind: SemanticTypeKindV2::Reference {
+                        referent: current,
+                        mutability: SemanticMutabilityV2::Immutable,
+                        address_space: 0,
+                        data_pointer_bytes: 8,
+                        metadata: PointerMetadataV2::None,
+                    },
+                },
+            )
+            .unwrap();
+    }
+    assert!(matches!(
+        builder.finish(current),
+        Err(SemanticTypeGraphErrorV2::ResourceLimit {
+            resource: "validation work",
+            ..
+        })
+    ));
+
+}
