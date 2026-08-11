@@ -714,6 +714,7 @@ def run_environment(run: Path, path_dir: Path) -> dict[str, str]:
     return {
         "AR": os.fspath(path_dir / "ar"),
         "CARGO_HOME": os.fspath(run / "cargo-home"),
+        "CARGO_INCREMENTAL": "0",
         "CARGO_NET_OFFLINE": "true",
         "CARGO_TARGET_DIR": os.fspath(run / "cargo-target"),
         "CC": os.fspath(path_dir / "cc"),
@@ -1026,6 +1027,47 @@ def reject_cross_run_reuse(first: dict[str, Any], second: dict[str, Any]) -> Non
             raise EvidenceError("run B reused an executable from run A")
 
 
+def compare_generated_build_snapshots(
+    first: SnapshotClosure,
+    second: SnapshotClosure,
+    *,
+    cargo_labels: bool,
+) -> None:
+    cargo_hash = re.compile(r"(?<=-)[0-9a-f]{16}(?=/|\.|$)")
+
+    def keyed(
+        closure: SnapshotClosure,
+    ) -> tuple[dict[str, tuple[int, int]], dict[str, tuple[int, int]]]:
+        records = closure.manifest.get("files")
+        if not isinstance(records, list) or len(records) != len(closure.source_files):
+            raise EvidenceError("generated build manifest is incomplete")
+        labels = [record.get("label") for record in records]
+        if labels != sorted(labels) or len(labels) != len(set(labels)):
+            raise EvidenceError("generated build manifest labels are reordered or duplicated")
+        shape: dict[str, tuple[int, int]] = {}
+        origins: dict[str, tuple[int, int]] = {}
+        for record, retained in zip(records, closure.source_files, strict=True):
+            label = record["label"]
+            semantic = cargo_hash.sub("<cargo-hash>", label) if cargo_labels else label
+            if semantic in shape:
+                raise EvidenceError("generated build semantic labels are ambiguous")
+            info = record["stat"]
+            shape[semantic] = (info["bytes"], info["mode"])
+            origin = os.fstat(retained.fd)
+            origins[semantic] = (origin.st_dev, origin.st_ino)
+        return shape, origins
+
+    first_shape, first_origins = keyed(first)
+    second_shape, second_origins = keyed(second)
+    if first_shape != second_shape:
+        raise EvidenceError("independent generated build closures differ by label or shape")
+    for label in first_shape:
+        if first_origins[label] == second_origins[label]:
+            raise EvidenceError(
+                f"run B reused a generated build artifact from run A: {label}"
+            )
+
+
 def registry_paths(lock_path: Path, registry_root: Path) -> list[str]:
     lock = tomllib.loads(lock_path.read_text("utf-8"))
     packages = lock.get("package")
@@ -1195,7 +1237,7 @@ def prepare_run_closures(
     return run, source, registry, rust, vendor_generated, config
 
 
-def build_provider_members() -> list[tuple[str, Path]]:
+def build_provider_members() -> tuple[list[tuple[str, Path]], dict[str, Any]]:
     roots = (
         ("llvm-include", Path("/opt/rocm-7.2.4/lib/llvm/include")),
         ("llvm-cmake", Path("/opt/rocm-7.2.4/lib/llvm/lib/cmake")),
@@ -1206,40 +1248,159 @@ def build_provider_members() -> list[tuple[str, Path]]:
         ),
         ("rocm-info", Path("/opt/rocm-7.2.4/.info")),
         ("rocm-include", Path("/opt/rocm-7.2.4/include")),
+        ("gcc-cxx", Path("/usr/include/c++/13")),
+        (
+            "gcc-cxx-target",
+            Path("/usr/include/x86_64-linux-gnu/c++/13"),
+        ),
+        ("system-local-include", Path("/usr/local/include")),
+        ("system-target-include", Path("/usr/include/x86_64-linux-gnu")),
+        ("system-include", Path("/usr/include")),
     )
     members: dict[Path, str] = {}
+    selected_roots = []
     for prefix, root in roots:
         if root.resolve(strict=True) != root or root.is_symlink():
             raise EvidenceError(f"build-provider root is not canonical: {root}")
+        selected_roots.append(
+            {
+                "label_prefix": prefix,
+                "path": os.fspath(root),
+                "reason": (
+                    "exact clang++ include-search root"
+                    if prefix.startswith(("gcc-cxx", "system-"))
+                    else "LLVM/LLD Worker compile or link input root"
+                ),
+            }
+        )
         for member in sorted(root.rglob("*")):
-            if member.is_file() and not member.is_symlink():
+            if member.is_file():
+                retained_path = member.resolve(strict=True)
+                if retained_path.is_symlink() or not retained_path.is_file():
+                    raise EvidenceError(
+                        f"build-provider member did not resolve to a file: {member}"
+                    )
                 members.setdefault(
-                    member,
+                    retained_path,
                     f"{prefix}:{member.relative_to(root).as_posix()}",
                 )
     library_root = Path("/opt/rocm-7.2.4/lib/llvm/lib")
     for member in sorted(library_root.iterdir()):
         if member.is_file() and not member.is_symlink():
             members.setdefault(member, f"llvm-library:{member.name}")
-    for prefix, root in (
-        ("rocm-runtime", Path("/opt/rocm-7.2.4/lib")),
-        ("amdgpu-runtime", Path("/opt/amdgpu/lib/x86_64-linux-gnu")),
-    ):
-        if root.resolve(strict=True) != root or root.is_symlink():
-            raise EvidenceError(f"runtime-provider root is not canonical: {root}")
-        for member in sorted(root.rglob("*")):
-            if (
-                member.is_file()
-                and not member.is_symlink()
-                and (member.name.endswith(".so") or ".so." in member.name)
-            ):
-                members.setdefault(
-                    member,
-                    f"{prefix}:{member.relative_to(root).as_posix()}",
-                )
-    return sorted(
-        ((label, path) for path, label in members.items()), key=lambda item: item[0]
+    excluded_large_dsos = []
+    rocm_library_root = Path("/opt/rocm-7.2.4/lib")
+    for member in sorted(rocm_library_root.rglob("*")):
+        if (
+            member.is_file()
+            and not member.is_symlink()
+            and member.stat().st_size > 512 * 1024 * 1024
+            and (member.name.endswith(".so") or ".so." in member.name)
+        ):
+            excluded_large_dsos.append(
+                {
+                    "path": os.fspath(member),
+                    "bytes": member.stat().st_size,
+                    "reason": (
+                        "not a compiler input; executable ELF/DSO and dlopen "
+                        "closures are captured separately and fail closed"
+                    ),
+                }
+            )
+    policy = {
+        "schema": "fe2o3-gfx942-build-provider-selection-v1",
+        "selected_roots": selected_roots,
+        "llvm_library_selection": {
+            "path": os.fspath(library_root),
+            "scope": "all direct regular files",
+            "reason": "CMake-imported LLVM/LLD link inputs",
+        },
+        "excluded_large_rocm_dsos": excluded_large_dsos,
+        "runtime_separation": (
+            "non-compiler ROCm DSOs are accepted only through the separately "
+            "retained executable runtime and dlopen closure"
+        ),
+    }
+    return (
+        sorted(
+            ((label, path) for path, label in members.items()),
+            key=lambda item: item[0],
+        ),
+        policy,
     )
+
+
+def generated_cargo_paths(target: Path) -> list[str]:
+    debug = target / "debug"
+    build = debug / "build"
+    deps = debug / "deps"
+    if not build.is_dir() or not deps.is_dir():
+        raise EvidenceError("Cargo generated-artifact roots are absent")
+    selected: set[Path] = set()
+    for member in build.rglob("*"):
+        if member.is_file() and not member.is_symlink():
+            selected.add(member)
+    for member in deps.glob("*.so"):
+        if member.is_file() and not member.is_symlink():
+            selected.add(member)
+    relative = sorted(member.relative_to(target).as_posix() for member in selected)
+    if (
+        not relative
+        or not any("/build-script-build" in name for name in relative)
+        or not any(name.endswith(".so") for name in relative)
+    ):
+        raise EvidenceError("Cargo build-script/proc-macro closure is incomplete")
+    return relative
+
+
+def capture_generated_build_closures(
+    index: int,
+    run: Path,
+    worker_build: Path,
+    evidence_root: Path,
+) -> tuple[SnapshotClosure, SnapshotClosure]:
+    worker_paths = sorted(
+        member.relative_to(worker_build).as_posix()
+        for member in worker_build.rglob("*")
+        if member.is_file() and not member.is_symlink()
+    )
+    if not worker_paths or not any(name.endswith(".o") for name in worker_paths):
+        raise EvidenceError("generated Worker build closure is incomplete")
+    worker = capture_snapshot(
+        f"run-{index}-generated-worker-build",
+        worker_build,
+        run / "captured-worker-build",
+        worker_paths,
+        {
+            "kind": "generated-cmake-worker-build",
+            "source_root": os.fspath(worker_build),
+        },
+        allow_source_hardlinks=True,
+    )
+    cargo_target = run / "cargo-target"
+    try:
+        cargo = capture_snapshot(
+            f"run-{index}-generated-cargo-build",
+            cargo_target,
+            run / "captured-cargo-build",
+            generated_cargo_paths(cargo_target),
+            {
+                "kind": "generated-cargo-build-script-and-proc-macro-artifacts",
+                "source_root": os.fspath(cargo_target),
+            },
+            allow_source_hardlinks=True,
+        )
+    except BaseException:
+        worker.close()
+        raise
+    output = evidence_root / f"run-{index}"
+    (output / "generated-worker-build-manifest.json").write_bytes(
+        canonical_json(worker.manifest)
+    )
+    (output / "generated-cargo-build-manifest.json").write_bytes(
+        canonical_json(cargo.manifest)
+    )
+    return worker, cargo
 
 
 def build_and_generate(
@@ -1253,7 +1414,14 @@ def build_and_generate(
     supervisor: Supervisor,
     *,
     observe_candidate: bool,
-) -> tuple[Path, dict[str, Any], RetainedFile, RetainedFile]:
+) -> tuple[
+    Path,
+    dict[str, Any],
+    RetainedFile,
+    RetainedFile,
+    SnapshotClosure,
+    SnapshotClosure,
+]:
     if run != run.parent / f"run-{index}" or not run.is_dir():
         raise EvidenceError("run root does not match its independent index")
     path_dir = run / "tool-path"
@@ -1583,9 +1751,19 @@ def build_and_generate(
         "executables": [record for _, record in generated],
     }
     (output_dir / "executables.json").write_bytes(canonical_json(executable_manifest))
+    worker_generated, cargo_generated = capture_generated_build_closures(
+        index, run, worker_build, evidence_root
+    )
     for file, _ in generated:
         file.close()
-    return output, executable_manifest, retained_hsaco, retained_transaction
+    return (
+        output,
+        executable_manifest,
+        retained_hsaco,
+        retained_transaction,
+        worker_generated,
+        cargo_generated,
+    )
 
 
 def build_from_canonical_snapshot(
@@ -1600,7 +1778,14 @@ def build_from_canonical_snapshot(
     supervisor: Supervisor,
     *,
     observe_candidate: bool,
-) -> tuple[Path, dict[str, Any], RetainedFile, RetainedFile]:
+) -> tuple[
+    Path,
+    dict[str, Any],
+    RetainedFile,
+    RetainedFile,
+    SnapshotClosure,
+    SnapshotClosure,
+]:
     archived_root = source.root
     if archived_root != run / "source":
         raise EvidenceError("independent source snapshot has an unexpected archive path")
@@ -1672,6 +1857,11 @@ def build_and_run_hardware_observation(
     sealed_test = None
     try:
         environment = run_environment(run, run / "tool-path")
+        hardware_target = run / "hardware-cargo-target"
+        if hardware_target.exists() or hardware_target.is_symlink():
+            raise EvidenceError("hardware CARGO_TARGET_DIR was not absent")
+        hardware_target.mkdir(mode=0o700)
+        environment["CARGO_TARGET_DIR"] = os.fspath(hardware_target)
         environment["RUSTC"] = f"/proc/self/fd/{tools['rustc'].executable.fd}"
         build = run_command(
             [
@@ -1711,7 +1901,7 @@ def build_and_run_hardware_observation(
         if len(executables) != 1:
             raise EvidenceError("hardware build did not produce exactly one test executable")
         generated_file, executable_record = measure_generated_executable(
-            executables[0], run / "cargo-target", "run-1 gfx942 hardware test"
+            executables[0], hardware_target, "run-1 gfx942 hardware test"
         )
         retained_test = RetainedFile.open(
             "run-1-gfx942-hardware-test", executables[0], require_executable=True
@@ -1806,13 +1996,14 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
     validate_manifest_document(manifest)
     validate_golden(golden, manifest_path, manifest_bytes)
     soft_files, hard_files = resource.getrlimit(resource.RLIMIT_NOFILE)
-    if hard_files < 131072:
-        raise EvidenceError("compiler evidence requires an RLIMIT_NOFILE hard limit of 131072")
-    if soft_files < 131072:
-        resource.setrlimit(resource.RLIMIT_NOFILE, (131072, hard_files))
+    if hard_files < 262144:
+        raise EvidenceError("compiler evidence requires an RLIMIT_NOFILE hard limit of 262144")
+    if soft_files < 262144:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (262144, hard_files))
     tools = pin_tools(manifest)
     closures: list[SnapshotClosure] = []
     retained_closures: list[RetainedClosure] = []
+    generated_build_closures: list[SnapshotClosure] = []
     generated_inputs: list[RetainedFile] = []
     retained_artifacts: list[RetainedFile] = []
     try:
@@ -1866,7 +2057,7 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
         )
         if first_transition != second_transition:
             raise EvidenceError("independent source snapshots contain different transitions")
-        provider_members = build_provider_members()
+        provider_members, provider_policy = build_provider_members()
         for index in (1, 2):
             provider = capture_retained_closure(
                 f"run-{index}-llvm-rocm-provider",
@@ -1875,6 +2066,7 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
                     "llvm_package_version": EXPECTED_LLVM_PACKAGE,
                     "llvm_build_identity": EXPECTED_LLVM_BUILD,
                     "rocm_root": "/opt/rocm-7.2.4",
+                    "selection_policy": provider_policy,
                 },
             )
             retained_closures.append(provider)
@@ -1897,7 +2089,14 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
         )
         (evidence_root / "tool-runtime-manifest.json").write_bytes(canonical_json(observed))
         canonical_source = run_root / "canonical-execution-source"
-        first, first_executables, first_hsaco, first_transaction = build_from_canonical_snapshot(
+        (
+            first,
+            first_executables,
+            first_hsaco,
+            first_transaction,
+            first_worker_generated,
+            first_cargo_generated,
+        ) = build_from_canonical_snapshot(
             1,
             prepared[0][1],
             prepared[0][0],
@@ -1909,11 +2108,27 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
             supervisor,
             observe_candidate=observe_candidate,
         )
+        generated_build_closures.extend(
+            (first_worker_generated, first_cargo_generated)
+        )
+        supervisor.guards.extend(
+            first_worker_generated.source_files
+            + first_worker_generated.snapshot_files
+            + first_cargo_generated.source_files
+            + first_cargo_generated.snapshot_files
+        )
         retained_artifacts.extend((first_hsaco, first_transaction))
         for closure in closures:
             closure.revalidate()
         git_clean(repo, bootstrap_environment, tools, supervisor)
-        second, second_executables, second_hsaco, second_transaction = build_from_canonical_snapshot(
+        (
+            second,
+            second_executables,
+            second_hsaco,
+            second_transaction,
+            second_worker_generated,
+            second_cargo_generated,
+        ) = build_from_canonical_snapshot(
             2,
             prepared[1][1],
             prepared[1][0],
@@ -1924,6 +2139,25 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
             golden,
             supervisor,
             observe_candidate=observe_candidate,
+        )
+        generated_build_closures.extend(
+            (second_worker_generated, second_cargo_generated)
+        )
+        supervisor.guards.extend(
+            second_worker_generated.source_files
+            + second_worker_generated.snapshot_files
+            + second_cargo_generated.source_files
+            + second_cargo_generated.snapshot_files
+        )
+        compare_generated_build_snapshots(
+            first_worker_generated,
+            second_worker_generated,
+            cargo_labels=False,
+        )
+        compare_generated_build_snapshots(
+            first_cargo_generated,
+            second_cargo_generated,
+            cargo_labels=True,
         )
         retained_artifacts.extend((second_hsaco, second_transaction))
         for closure in closures:
@@ -1988,6 +2222,8 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
                 "llvm-rocm-provider-manifest.json",
                 "executables.json",
                 "compiler-transaction-observation.json",
+                "generated-worker-build-manifest.json",
+                "generated-cargo-build-manifest.json",
             ]
             if index == 1:
                 document_names.append("hardware-observation.json")
@@ -2080,6 +2316,8 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
         for artifact in retained_artifacts:
             artifact.close()
         for closure in closures:
+            closure.close()
+        for closure in generated_build_closures:
             closure.close()
         for closure in retained_closures:
             closure.close()

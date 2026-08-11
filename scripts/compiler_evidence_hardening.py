@@ -29,7 +29,8 @@ F_SEAL_GROW = 0x0004
 F_SEAL_WRITE = 0x0008
 REQUIRED_SEALS = F_SEAL_SEAL | F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE
 MAX_SNAPSHOT_FILE_BYTES = 512 * 1024 * 1024
-MAX_SNAPSHOT_FILES = 32768
+MAX_SNAPSHOT_FILES = 65536
+MAX_CLOSURE_TOTAL_BYTES = 16 * 1024 * 1024 * 1024
 READ_CHUNK = 1024 * 1024
 
 
@@ -112,6 +113,7 @@ class RetainedFile:
         *,
         require_read_only: bool = False,
         require_executable: bool = False,
+        allow_hardlinks: bool = False,
     ) -> "RetainedFile":
         absolute = path.absolute()
         if path != absolute or path.is_symlink() or path.resolve(strict=True) != path:
@@ -122,8 +124,10 @@ class RetainedFile:
             opened = os.fstat(fd)
             if stat_identity(named) != stat_identity(opened):
                 raise HardeningError(f"{label} changed while being retained")
-            if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1:
-                raise HardeningError(f"{label} is not a single-link regular file")
+            if not stat.S_ISREG(opened.st_mode) or (
+                opened.st_nlink != 1 and not allow_hardlinks
+            ):
+                raise HardeningError(f"{label} is not an accepted regular file")
             if require_read_only and opened.st_mode & 0o222:
                 raise HardeningError(f"{label} is mutable by file mode")
             if require_executable and not opened.st_mode & 0o111:
@@ -307,18 +311,26 @@ def capture_retained_closure(
     label: str,
     members: Iterable[tuple[str, Path]],
     metadata: Mapping[str, Any],
+    *,
+    max_total_bytes: int = MAX_CLOSURE_TOTAL_BYTES,
 ) -> RetainedClosure:
     selected = sorted(members, key=lambda item: item[0])
     if not selected or len(selected) > MAX_SNAPSHOT_FILES:
         raise HardeningError(f"{label} retained closure count is outside the bound")
     files: list[RetainedFile] = []
     labels: set[str] = set()
+    total_bytes = 0
     try:
         for member_label, path in selected:
             if member_label in labels:
                 raise HardeningError(f"{label} retained closure has a duplicate label")
             labels.add(member_label)
-            files.append(RetainedFile.open(f"{label}:{member_label}", path))
+            retained = RetainedFile.open(f"{label}:{member_label}", path)
+            total_bytes += os.fstat(retained.fd).st_size
+            if total_bytes > max_total_bytes:
+                retained.close()
+                raise HardeningError(f"{label} retained closure exceeds its byte bound")
+            files.append(retained)
         records = []
         for (member_label, _), retained in zip(selected, files, strict=True):
             record = retained.record()
@@ -329,6 +341,8 @@ def capture_retained_closure(
             "label": label,
             "metadata": dict(metadata),
             "files": records,
+            "total_bytes": total_bytes,
+            "max_total_bytes": max_total_bytes,
         }
         manifest["manifest_sha256"] = hashlib.sha256(canonical_json(manifest)).hexdigest()
         all_fds = [retained.fd for retained in files]
@@ -358,6 +372,8 @@ def capture_snapshot(
     destination: Path,
     relative_paths: Iterable[str],
     metadata: Mapping[str, Any],
+    *,
+    allow_source_hardlinks: bool = False,
 ) -> SnapshotClosure:
     if not destination.is_absolute() or destination.exists() or destination.is_symlink():
         raise HardeningError(f"{label} snapshot destination must be an absent absolute path")
@@ -369,11 +385,20 @@ def capture_snapshot(
     source_files: list[RetainedFile] = []
     snapshot_files: list[RetainedFile] = []
     destination.mkdir(mode=0o700)
+    total_bytes = 0
     try:
         for raw in paths:
             relative = _validate_relative_path(raw)
             source = source_root / relative
-            retained = RetainedFile.open(f"{label}:origin:{relative.as_posix()}", source)
+            retained = RetainedFile.open(
+                f"{label}:origin:{relative.as_posix()}",
+                source,
+                allow_hardlinks=allow_source_hardlinks,
+            )
+            total_bytes += os.fstat(retained.fd).st_size
+            if total_bytes > MAX_CLOSURE_TOTAL_BYTES:
+                retained.close()
+                raise HardeningError(f"{label} snapshot exceeds its byte bound")
             source_files.append(retained)
             target = destination / relative
             target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -418,6 +443,8 @@ def capture_snapshot(
             "label": label,
             "metadata": dict(metadata),
             "files": records,
+            "total_bytes": total_bytes,
+            "max_total_bytes": MAX_CLOSURE_TOTAL_BYTES,
         }
         manifest["manifest_sha256"] = hashlib.sha256(canonical_json(manifest)).hexdigest()
         all_fds = [retained.fd for retained in source_files + snapshot_files]
