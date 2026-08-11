@@ -1,7 +1,11 @@
-use fe2o3_kernel_analysis::{ControlFlowDiagnostic, ControlFlowEdge, analyze_control_flow};
+use fe2o3_kernel_analysis::{
+    ControlFlowDiagnostic, ControlFlowEdge, ControlFlowResource, MAX_CONTROL_FLOW_BLOCKS,
+    MAX_CONTROL_FLOW_EDGES, MAX_CONTROL_FLOW_LOOP_BODY_MEMBERSHIPS, MAX_CONTROL_FLOW_NATURAL_LOOPS,
+    MAX_CONTROL_FLOW_WORK_UNITS, analyze_control_flow,
+};
 use fe2o3_kernel_ir::{
-    BasicBlock, BlockId, Constant, Function, Operation, OperationKind, Signature, Terminator, Type,
-    ValueDef, ValueId,
+    BasicBlock, BlockId, Constant, Function, Operation, OperationKind, Signature, SwitchCase,
+    Terminator, Type, ValueDef, ValueId,
 };
 use std::collections::BTreeSet;
 
@@ -45,6 +49,19 @@ fn block(id: u32, terminator: Terminator) -> BasicBlock {
     let mut block = BasicBlock::new(BlockId(id));
     block.terminator = Some(terminator);
     block
+}
+
+fn raw_conditional(id: u32, then_target: u32, else_target: u32) -> BasicBlock {
+    block(
+        id,
+        Terminator::ConditionalBranch {
+            condition: ValueId(u32::MAX - id),
+            then_target: BlockId(then_target),
+            then_arguments: vec![],
+            else_target: BlockId(else_target),
+            else_arguments: vec![],
+        },
+    )
 }
 
 fn ids(values: &[u32]) -> BTreeSet<BlockId> {
@@ -185,6 +202,149 @@ fn accepts_nested_natural_loops() {
     );
     assert_eq!(analysis.natural_loop_depth(BlockId(3)), Some(2));
     assert_eq!(analysis.dominance_frontier(BlockId(2)), Some(&ids(&[1, 2])));
+    let usage = analysis.resource_usage();
+    assert_eq!(
+        (
+            usage.blocks(),
+            usage.edges(),
+            usage.natural_loops(),
+            usage.natural_loop_body_memberships(),
+            usage.work_units(),
+        ),
+        (7, 8, 2, 8, 129)
+    );
+}
+
+#[test]
+fn release_complexity_wire_scale_self_loops_hit_exact_resource_boundaries() {
+    let block_count = u32::try_from(MAX_CONTROL_FLOW_BLOCKS).unwrap();
+    let blocks = (0..block_count)
+        .map(|id| {
+            let next = if id + 1 == block_count { id } else { id + 1 };
+            raw_conditional(id, id, next)
+        })
+        .collect();
+    let mut input = function(blocks);
+
+    let analysis = analyze_control_flow(&input).unwrap();
+    let usage = analysis.resource_usage();
+    assert_eq!(usage.blocks(), MAX_CONTROL_FLOW_BLOCKS);
+    assert_eq!(usage.edges(), MAX_CONTROL_FLOW_EDGES);
+    assert_eq!(usage.natural_loops(), MAX_CONTROL_FLOW_NATURAL_LOOPS);
+    assert_eq!(
+        usage.natural_loop_body_memberships(),
+        MAX_CONTROL_FLOW_LOOP_BODY_MEMBERSHIPS
+    );
+    assert_eq!(usage.work_units(), 1_507_326);
+    assert!(usage.work_units() < MAX_CONTROL_FLOW_WORK_UNITS);
+
+    input
+        .body
+        .as_mut()
+        .unwrap()
+        .blocks
+        .last_mut()
+        .unwrap()
+        .terminator = Some(Terminator::Switch {
+        selector: ValueId(0),
+        cases: vec![
+            SwitchCase {
+                value: 0,
+                target: BlockId(block_count - 1),
+                arguments: vec![],
+            },
+            SwitchCase {
+                value: 1,
+                target: BlockId(block_count - 1),
+                arguments: vec![],
+            },
+        ],
+        default_target: BlockId(block_count - 1),
+        default_arguments: vec![],
+    });
+    assert_eq!(
+        analyze_control_flow(&input).unwrap_err().diagnostics(),
+        &[ControlFlowDiagnostic::ResourceLimitExceeded {
+            resource: ControlFlowResource::Edges,
+            required: MAX_CONTROL_FLOW_EDGES + 1,
+            limit: MAX_CONTROL_FLOW_EDGES,
+        }]
+    );
+
+    input
+        .body
+        .as_mut()
+        .unwrap()
+        .blocks
+        .push(returning(block_count));
+    assert_eq!(
+        analyze_control_flow(&input).unwrap_err().diagnostics(),
+        &[ControlFlowDiagnostic::ResourceLimitExceeded {
+            resource: ControlFlowResource::Blocks,
+            required: MAX_CONTROL_FLOW_BLOCKS + 1,
+            limit: MAX_CONTROL_FLOW_BLOCKS,
+        }]
+    );
+}
+
+#[test]
+fn release_complexity_shared_multi_latch_body_is_walked_once() {
+    let chain_count = 2_048_u32;
+    let latch_count = 2_048_u32;
+    let split = 2 + chain_count;
+    let latch_start = split + 1;
+    let exit = latch_start + latch_count;
+    let mut blocks = vec![branch(0, 1), raw_conditional(1, 2, exit)];
+    blocks.extend((0..chain_count).map(|offset| {
+        let id = 2 + offset;
+        branch(
+            id,
+            if offset + 1 == chain_count {
+                split
+            } else {
+                id + 1
+            },
+        )
+    }));
+    blocks.push(block(
+        split,
+        Terminator::Switch {
+            selector: ValueId(0),
+            cases: (0..latch_count - 1)
+                .map(|offset| SwitchCase {
+                    value: u64::from(offset),
+                    target: BlockId(latch_start + offset),
+                    arguments: vec![],
+                })
+                .collect(),
+            default_target: BlockId(latch_start + latch_count - 1),
+            default_arguments: vec![],
+        },
+    ));
+    blocks.extend((0..latch_count).map(|offset| branch(latch_start + offset, 1)));
+    blocks.push(returning(exit));
+
+    let analysis = analyze_control_flow(&function(blocks)).unwrap();
+    assert_eq!(analysis.natural_loop_headers(), &ids(&[1]));
+    assert_eq!(
+        analysis.natural_loop_latches(BlockId(1)).unwrap().len(),
+        latch_count as usize
+    );
+    assert_eq!(
+        analysis.natural_loop_body(BlockId(1)).unwrap().len(),
+        (chain_count + latch_count + 2) as usize
+    );
+    let usage = analysis.resource_usage();
+    assert_eq!(
+        (
+            usage.blocks(),
+            usage.edges(),
+            usage.natural_loops(),
+            usage.natural_loop_body_memberships(),
+            usage.work_units(),
+        ),
+        (4_100, 6_147, 1, 4_098, 73_772)
+    );
 }
 
 #[test]

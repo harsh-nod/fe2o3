@@ -1,7 +1,117 @@
-use fe2o3_kernel_ir::{BlockId, Function, FunctionId};
+use fe2o3_kernel_ir::{BlockId, Function, FunctionId, MAX_BLOCKS_V1, Terminator};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
 use std::fmt;
+
+pub const MAX_CONTROL_FLOW_BLOCKS: usize = MAX_BLOCKS_V1;
+pub const MAX_CONTROL_FLOW_EDGES: usize = MAX_BLOCKS_V1 * 2;
+pub const MAX_CONTROL_FLOW_NATURAL_LOOPS: usize = MAX_BLOCKS_V1;
+pub const MAX_CONTROL_FLOW_LOOP_BODY_MEMBERSHIPS: usize = MAX_BLOCKS_V1;
+pub const MAX_CONTROL_FLOW_WORK_UNITS: usize = MAX_BLOCKS_V1 * 128;
+
+/// A separately bounded resource consumed by control-flow analysis.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum ControlFlowResource {
+    Blocks,
+    Edges,
+    NaturalLoops,
+    NaturalLoopBodyMemberships,
+    WorkUnits,
+}
+
+impl ControlFlowResource {
+    const fn limit(self) -> usize {
+        match self {
+            Self::Blocks => MAX_CONTROL_FLOW_BLOCKS,
+            Self::Edges => MAX_CONTROL_FLOW_EDGES,
+            Self::NaturalLoops => MAX_CONTROL_FLOW_NATURAL_LOOPS,
+            Self::NaturalLoopBodyMemberships => MAX_CONTROL_FLOW_LOOP_BODY_MEMBERSHIPS,
+            Self::WorkUnits => MAX_CONTROL_FLOW_WORK_UNITS,
+        }
+    }
+
+    const fn description(self) -> &'static str {
+        match self {
+            Self::Blocks => "blocks",
+            Self::Edges => "edges",
+            Self::NaturalLoops => "natural loops",
+            Self::NaturalLoopBodyMemberships => "natural-loop body memberships",
+            Self::WorkUnits => "natural-loop forest work units",
+        }
+    }
+}
+
+/// Exact deterministic resource counts for one successful analysis.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ControlFlowResourceUsage {
+    blocks: usize,
+    edges: usize,
+    natural_loops: usize,
+    natural_loop_body_memberships: usize,
+    work_units: usize,
+}
+
+impl ControlFlowResourceUsage {
+    pub const fn blocks(self) -> usize {
+        self.blocks
+    }
+
+    pub const fn edges(self) -> usize {
+        self.edges
+    }
+
+    pub const fn natural_loops(self) -> usize {
+        self.natural_loops
+    }
+
+    pub const fn natural_loop_body_memberships(self) -> usize {
+        self.natural_loop_body_memberships
+    }
+
+    pub const fn work_units(self) -> usize {
+        self.work_units
+    }
+}
+
+#[derive(Default)]
+struct ControlFlowBudget {
+    usage: ControlFlowResourceUsage,
+}
+
+impl ControlFlowBudget {
+    fn reserve(
+        &mut self,
+        resource: ControlFlowResource,
+        amount: usize,
+    ) -> Result<(), ControlFlowDiagnostic> {
+        let current = match resource {
+            ControlFlowResource::Blocks => &mut self.usage.blocks,
+            ControlFlowResource::Edges => &mut self.usage.edges,
+            ControlFlowResource::NaturalLoops => &mut self.usage.natural_loops,
+            ControlFlowResource::NaturalLoopBodyMemberships => {
+                &mut self.usage.natural_loop_body_memberships
+            }
+            ControlFlowResource::WorkUnits => &mut self.usage.work_units,
+        };
+        let limit = resource.limit();
+        let required = current
+            .checked_add(amount)
+            .unwrap_or(limit.saturating_add(1));
+        if required > limit {
+            return Err(ControlFlowDiagnostic::ResourceLimitExceeded {
+                resource,
+                required,
+                limit,
+            });
+        }
+        *current = required;
+        Ok(())
+    }
+
+    fn work(&mut self, amount: usize) -> Result<(), ControlFlowDiagnostic> {
+        self.reserve(ControlFlowResource::WorkUnits, amount)
+    }
+}
 
 /// A directed edge in a kernel IR control-flow graph.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -35,6 +145,11 @@ impl fmt::Display for ControlFlowEdge {
 pub enum ControlFlowDiagnostic {
     FunctionDeclaration,
     EmptyFunction,
+    ResourceLimitExceeded {
+        resource: ControlFlowResource,
+        required: usize,
+        limit: usize,
+    },
     DuplicateBlock {
         block: BlockId,
     },
@@ -56,6 +171,15 @@ impl fmt::Display for ControlFlowDiagnostic {
         match self {
             Self::FunctionDeclaration => formatter.write_str("function is a declaration"),
             Self::EmptyFunction => formatter.write_str("function has no entry block"),
+            Self::ResourceLimitExceeded {
+                resource,
+                required,
+                limit,
+            } => write!(
+                formatter,
+                "{} require {required} items, exceeding the deterministic limit {limit}",
+                resource.description()
+            ),
             Self::DuplicateBlock { block } => write!(formatter, "duplicate block {block}"),
             Self::MissingTerminator { block } => {
                 write!(formatter, "block {block} has no terminator")
@@ -119,6 +243,7 @@ impl Error for ControlFlowErrors {}
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ControlFlowAnalysis {
     function: FunctionId,
+    resource_usage: ControlFlowResourceUsage,
     entry: BlockId,
     blocks: BTreeSet<BlockId>,
     predecessors: BTreeMap<BlockId, BTreeSet<BlockId>>,
@@ -141,6 +266,10 @@ pub struct ControlFlowAnalysis {
 impl ControlFlowAnalysis {
     pub fn function(&self) -> &FunctionId {
         &self.function
+    }
+
+    pub const fn resource_usage(&self) -> ControlFlowResourceUsage {
+        self.resource_usage
     }
 
     pub const fn entry(&self) -> BlockId {
@@ -311,6 +440,10 @@ pub fn analyze_control_flow(function: &Function) -> Result<ControlFlowAnalysis, 
     if body.blocks.is_empty() {
         return Err(errors(function, [ControlFlowDiagnostic::EmptyFunction]));
     }
+    let mut budget = ControlFlowBudget::default();
+    if let Err(diagnostic) = budget.reserve(ControlFlowResource::Blocks, body.blocks.len()) {
+        return Err(errors(function, [diagnostic]));
+    }
 
     let mut diagnostics = BTreeSet::new();
     let mut blocks = BTreeMap::new();
@@ -333,7 +466,8 @@ pub fn analyze_control_flow(function: &Function) -> Result<ControlFlowAnalysis, 
         let Some(terminator) = &block.terminator else {
             continue;
         };
-        for target in terminator.successors() {
+        let result = visit_successors(terminator, |target| {
+            budget.reserve(ControlFlowResource::Edges, 1)?;
             let edge = ControlFlowEdge::new(block.id, target);
             if block_ids.contains(&target) {
                 successors
@@ -343,6 +477,10 @@ pub fn analyze_control_flow(function: &Function) -> Result<ControlFlowAnalysis, 
             } else {
                 diagnostics.insert(ControlFlowDiagnostic::UnknownSuccessor { edge });
             }
+            Ok(())
+        });
+        if let Err(diagnostic) = result {
+            return Err(errors(function, [diagnostic]));
         }
     }
     if !diagnostics.is_empty() {
@@ -376,10 +514,12 @@ pub fn analyze_control_flow(function: &Function) -> Result<ControlFlowAnalysis, 
     if !irreducible.is_empty() {
         return Err(errors(function, irreducible));
     }
-    let natural_loops = compute_natural_loops(&reachable, &predecessors, &backedges);
+    let natural_loops = compute_natural_loops(&reachable, &predecessors, &backedges, &mut budget)
+        .map_err(|diagnostic| errors(function, [diagnostic]))?;
 
     Ok(ControlFlowAnalysis {
         function: function.id.clone(),
+        resource_usage: budget.usage,
         entry,
         blocks: block_ids,
         predecessors,
@@ -398,6 +538,44 @@ pub fn analyze_control_flow(function: &Function) -> Result<ControlFlowAnalysis, 
         natural_loop_roots: natural_loops.roots,
         block_loop_nests: natural_loops.block_nests,
     })
+}
+
+fn visit_successors(
+    terminator: &Terminator,
+    mut visit: impl FnMut(BlockId) -> Result<(), ControlFlowDiagnostic>,
+) -> Result<(), ControlFlowDiagnostic> {
+    match terminator {
+        Terminator::Branch { target, .. } => visit(*target),
+        Terminator::ConditionalBranch {
+            then_target,
+            else_target,
+            ..
+        } => {
+            visit(*then_target)?;
+            visit(*else_target)
+        }
+        Terminator::Switch {
+            cases,
+            default_target,
+            ..
+        } => {
+            for case in cases {
+                visit(case.target)?;
+            }
+            visit(*default_target)
+        }
+        Terminator::IntegerSwitch {
+            cases,
+            default_target,
+            ..
+        } => {
+            for case in cases {
+                visit(case.target)?;
+            }
+            visit(*default_target)
+        }
+        Terminator::Return { .. } | Terminator::Unreachable => Ok(()),
+    }
 }
 
 fn errors(
@@ -644,91 +822,272 @@ fn compute_natural_loops(
     reachable: &BTreeSet<BlockId>,
     predecessors: &BTreeMap<BlockId, BTreeSet<BlockId>>,
     backedges: &BTreeSet<ControlFlowEdge>,
-) -> NaturalLoopForest {
-    let mut bodies = BTreeMap::<BlockId, BTreeSet<BlockId>>::new();
-    let mut latches = BTreeMap::<BlockId, BTreeSet<BlockId>>::new();
+    budget: &mut ControlFlowBudget,
+) -> Result<NaturalLoopForest, ControlFlowDiagnostic> {
+    let block_ids = reachable.iter().copied().collect::<Vec<_>>();
+    budget.work(block_ids.len())?;
+    let block_indices = block_ids
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(index, block)| (block, index))
+        .collect::<BTreeMap<_, _>>();
 
+    let mut predecessor_counts = vec![0_usize; block_ids.len()];
+    for (target_index, target) in block_ids.iter().copied().enumerate() {
+        for _predecessor in predecessors[&target]
+            .iter()
+            .filter(|predecessor| reachable.contains(predecessor))
+        {
+            budget.work(1)?;
+            predecessor_counts[target_index] += 1;
+        }
+    }
+    budget.work(block_ids.len())?;
+    let mut predecessor_offsets = Vec::with_capacity(block_ids.len() + 1);
+    predecessor_offsets.push(0_usize);
+    for count in predecessor_counts {
+        let next = predecessor_offsets
+            .last()
+            .copied()
+            .expect("predecessor offsets contain their zero origin")
+            + count;
+        predecessor_offsets.push(next);
+    }
+    let mut predecessor_indices =
+        Vec::with_capacity(predecessor_offsets.last().copied().unwrap_or_default());
+    for target in &block_ids {
+        for predecessor in predecessors[target]
+            .iter()
+            .filter(|predecessor| reachable.contains(predecessor))
+        {
+            budget.work(1)?;
+            predecessor_indices.push(block_indices[predecessor]);
+        }
+    }
+
+    let mut latch_counts = vec![0_usize; block_ids.len()];
     for edge in backedges {
-        let header = edge.target();
-        let latch = edge.source();
-        let mut body = BTreeSet::from([header, latch]);
-        let mut pending = if latch == header {
-            Vec::new()
-        } else {
-            vec![latch]
-        };
-        while let Some(block) = pending.pop() {
-            for predecessor in predecessors[&block]
-                .iter()
-                .rev()
-                .filter(|predecessor| reachable.contains(predecessor))
-            {
-                if body.insert(*predecessor) && *predecessor != header {
-                    pending.push(*predecessor);
+        budget.work(1)?;
+        latch_counts[block_indices[&edge.target()]] += 1;
+    }
+    budget.work(block_ids.len())?;
+    let loop_count = latch_counts.iter().filter(|count| **count != 0).count();
+    budget.reserve(ControlFlowResource::NaturalLoops, loop_count)?;
+
+    let mut latch_offsets = Vec::with_capacity(block_ids.len() + 1);
+    latch_offsets.push(0_usize);
+    for count in &latch_counts {
+        latch_offsets.push(latch_offsets.last().copied().unwrap_or_default() + count);
+    }
+    let mut latch_indices = vec![usize::MAX; backedges.len()];
+    let mut latch_cursors = latch_offsets[..block_ids.len()].to_vec();
+    for edge in backedges {
+        budget.work(1)?;
+        let header = block_indices[&edge.target()];
+        let cursor = &mut latch_cursors[header];
+        latch_indices[*cursor] = block_indices[&edge.source()];
+        *cursor += 1;
+    }
+
+    #[derive(Debug)]
+    struct IndexedNaturalLoop {
+        header: usize,
+        latches: Vec<usize>,
+        body: Vec<usize>,
+    }
+
+    let mut loops = Vec::with_capacity(loop_count);
+    let mut marks = vec![usize::MAX; block_ids.len()];
+    for header in 0..block_ids.len() {
+        if latch_counts[header] == 0 {
+            continue;
+        }
+        let generation = loops.len();
+        let latches = latch_indices[latch_offsets[header]..latch_offsets[header + 1]].to_vec();
+        let mut body = Vec::new();
+        let mut pending = Vec::new();
+
+        budget.reserve(ControlFlowResource::NaturalLoopBodyMemberships, 1)?;
+        marks[header] = generation;
+        body.push(header);
+        for latch in &latches {
+            budget.work(1)?;
+            if marks[*latch] != generation {
+                budget.reserve(ControlFlowResource::NaturalLoopBodyMemberships, 1)?;
+                marks[*latch] = generation;
+                body.push(*latch);
+                if *latch != header {
+                    pending.push(*latch);
                 }
             }
         }
-        bodies.entry(header).or_default().extend(body);
-        latches.entry(header).or_default().insert(latch);
+
+        while let Some(block) = pending.pop() {
+            budget.work(1)?;
+            for predecessor in
+                &predecessor_indices[predecessor_offsets[block]..predecessor_offsets[block + 1]]
+            {
+                budget.work(1)?;
+                if marks[*predecessor] != generation {
+                    budget.reserve(ControlFlowResource::NaturalLoopBodyMemberships, 1)?;
+                    marks[*predecessor] = generation;
+                    body.push(*predecessor);
+                    if *predecessor != header {
+                        pending.push(*predecessor);
+                    }
+                }
+            }
+        }
+        loops.push(IndexedNaturalLoop {
+            header,
+            latches,
+            body,
+        });
     }
 
-    let headers = bodies.keys().copied().collect::<BTreeSet<_>>();
-    let mut parents = BTreeMap::new();
-    for header in &headers {
-        let body = &bodies[header];
-        let parent = headers
-            .iter()
-            .copied()
-            .filter(|candidate| {
-                candidate != header
-                    && body.len() < bodies[candidate].len()
-                    && body.is_subset(&bodies[candidate])
-            })
-            .min_by_key(|candidate| (bodies[candidate].len(), *candidate));
-        if let Some(parent) = parent {
-            parents.insert(*header, parent);
+    let mut block_membership_counts = vec![0_usize; block_ids.len()];
+    for natural_loop in &loops {
+        budget.work(natural_loop.body.len())?;
+        for block in &natural_loop.body {
+            block_membership_counts[*block] += 1;
+        }
+    }
+    budget.work(block_ids.len())?;
+    let mut block_membership_offsets = Vec::with_capacity(block_ids.len() + 1);
+    block_membership_offsets.push(0_usize);
+    for count in block_membership_counts {
+        block_membership_offsets
+            .push(block_membership_offsets.last().copied().unwrap_or_default() + count);
+    }
+    let membership_count = budget.usage.natural_loop_body_memberships;
+    let mut block_memberships = vec![usize::MAX; membership_count];
+    let mut membership_cursors = block_membership_offsets[..block_ids.len()].to_vec();
+    for (loop_index, natural_loop) in loops.iter().enumerate() {
+        budget.work(natural_loop.body.len())?;
+        for block in &natural_loop.body {
+            let cursor = &mut membership_cursors[*block];
+            block_memberships[*cursor] = loop_index;
+            *cursor += 1;
         }
     }
 
-    let mut children = headers
-        .iter()
-        .copied()
-        .map(|header| (header, BTreeSet::new()))
-        .collect::<BTreeMap<_, _>>();
-    for (child, parent) in &parents {
-        children
-            .get_mut(parent)
-            .expect("a natural-loop parent is a loop header")
-            .insert(*child);
+    let memberships_for = |block: usize| {
+        &block_memberships[block_membership_offsets[block]..block_membership_offsets[block + 1]]
+    };
+    let mut indexed_parents = vec![None; loops.len()];
+    for (loop_index, natural_loop) in loops.iter().enumerate() {
+        let mut parent: Option<usize> = None;
+        for candidate in memberships_for(natural_loop.header) {
+            budget.work(1)?;
+            if *candidate == loop_index || loops[*candidate].body.len() <= natural_loop.body.len() {
+                continue;
+            }
+            // Reachable irreducible regions were rejected above, so natural
+            // loops containing this header form its strict containment chain.
+            if parent.is_none_or(|current| {
+                (
+                    loops[*candidate].body.len(),
+                    block_ids[loops[*candidate].header],
+                ) < (loops[current].body.len(), block_ids[loops[current].header])
+            }) {
+                parent = Some(*candidate);
+            }
+        }
+        indexed_parents[loop_index] = parent;
     }
-    let roots = headers
-        .iter()
-        .copied()
-        .filter(|header| !parents.contains_key(header))
-        .collect();
 
-    let block_nests = reachable
+    let mut indexed_block_nests = Vec::with_capacity(block_ids.len());
+    for block in 0..block_ids.len() {
+        let mut containing = memberships_for(block).to_vec();
+        budget.work(sort_work(containing.len()))?;
+        containing.sort_by_key(|loop_index| {
+            (
+                std::cmp::Reverse(loops[*loop_index].body.len()),
+                block_ids[loops[*loop_index].header],
+            )
+        });
+        indexed_block_nests.push(containing);
+    }
+
+    let mut bodies = BTreeMap::new();
+    let mut latches = BTreeMap::new();
+    let mut parents = BTreeMap::new();
+    let mut children = BTreeMap::new();
+    let mut roots = BTreeSet::new();
+    for (loop_index, natural_loop) in loops.iter().enumerate() {
+        budget.work(2 + natural_loop.body.len() + natural_loop.latches.len())?;
+        let header = block_ids[natural_loop.header];
+        bodies.insert(
+            header,
+            natural_loop
+                .body
+                .iter()
+                .map(|block| block_ids[*block])
+                .collect(),
+        );
+        latches.insert(
+            header,
+            natural_loop
+                .latches
+                .iter()
+                .map(|latch| block_ids[*latch])
+                .collect(),
+        );
+        children.insert(header, BTreeSet::new());
+        if let Some(parent) = indexed_parents[loop_index] {
+            parents.insert(header, block_ids[loops[parent].header]);
+        } else {
+            roots.insert(header);
+        }
+    }
+    budget.work(indexed_parents.len())?;
+    for (child, parent) in indexed_parents.iter().copied().enumerate() {
+        if let Some(parent) = parent {
+            children
+                .get_mut(&block_ids[loops[parent].header])
+                .expect("an indexed natural-loop parent is a loop header")
+                .insert(block_ids[loops[child].header]);
+        }
+    }
+    budget.work(block_ids.len() + membership_count)?;
+    let block_nests = block_ids
         .iter()
         .copied()
-        .map(|block| {
-            let mut containing = headers
-                .iter()
-                .copied()
-                .filter(|header| bodies[header].contains(&block))
-                .collect::<Vec<_>>();
-            containing.sort_by_key(|header| (std::cmp::Reverse(bodies[header].len()), *header));
-            (block, containing)
+        .zip(indexed_block_nests)
+        .map(|(block, containing)| {
+            (
+                block,
+                containing
+                    .into_iter()
+                    .map(|loop_index| block_ids[loops[loop_index].header])
+                    .collect(),
+            )
         })
         .collect();
 
-    NaturalLoopForest {
+    Ok(NaturalLoopForest {
         bodies,
         latches,
         parents,
         children,
         roots,
         block_nests,
+    })
+}
+
+fn binary_search_work(items: usize) -> usize {
+    if items <= 1 {
+        1
+    } else {
+        usize::BITS as usize - (items - 1).leading_zeros() as usize
     }
+}
+
+fn sort_work(items: usize) -> usize {
+    items
+        .saturating_mul(binary_search_work(items))
+        .saturating_mul(2)
 }
 
 fn compute_backedges(
@@ -877,4 +1236,46 @@ fn display_edges(edges: &[ControlFlowEdge]) -> String {
         .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+#[cfg(test)]
+mod resource_budget_tests {
+    use super::*;
+
+    #[test]
+    fn every_resource_accepts_its_boundary_and_rejects_the_next_item() {
+        let resources = [
+            ControlFlowResource::Blocks,
+            ControlFlowResource::Edges,
+            ControlFlowResource::NaturalLoops,
+            ControlFlowResource::NaturalLoopBodyMemberships,
+            ControlFlowResource::WorkUnits,
+        ];
+
+        for resource in resources {
+            let mut budget = ControlFlowBudget::default();
+            budget.reserve(resource, resource.limit()).unwrap();
+            assert_eq!(
+                budget.reserve(resource, 1),
+                Err(ControlFlowDiagnostic::ResourceLimitExceeded {
+                    resource,
+                    required: resource.limit() + 1,
+                    limit: resource.limit(),
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn resource_diagnostic_text_is_stable() {
+        let diagnostic = ControlFlowDiagnostic::ResourceLimitExceeded {
+            resource: ControlFlowResource::NaturalLoopBodyMemberships,
+            required: MAX_CONTROL_FLOW_LOOP_BODY_MEMBERSHIPS + 1,
+            limit: MAX_CONTROL_FLOW_LOOP_BODY_MEMBERSHIPS,
+        };
+        assert_eq!(
+            diagnostic.to_string(),
+            "natural-loop body memberships require 65537 items, exceeding the deterministic limit 65536"
+        );
+    }
 }

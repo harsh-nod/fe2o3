@@ -10,7 +10,9 @@ mod uniformity;
 
 pub use control_flow::{
     ControlFlowAnalysis, ControlFlowDiagnostic, ControlFlowEdge, ControlFlowErrors,
-    analyze_control_flow,
+    ControlFlowResource, ControlFlowResourceUsage, MAX_CONTROL_FLOW_BLOCKS, MAX_CONTROL_FLOW_EDGES,
+    MAX_CONTROL_FLOW_LOOP_BODY_MEMBERSHIPS, MAX_CONTROL_FLOW_NATURAL_LOOPS,
+    MAX_CONTROL_FLOW_WORK_UNITS, analyze_control_flow,
 };
 pub use machine_effect::*;
 pub use ssa::{
