@@ -12,11 +12,14 @@ worker bytes in a sealed memfd, derives the executable identity from those
 bytes, observes and retains the dynamic loader and every mapped DSO, and
 uses a fresh-challenge ready/done/ack handshake to enumerate the exact
 file-backed map set after loader initialization and again before permitting
-exit. New mappings and `dlopen` fail closed. It revalidates retained metadata
-and contents after execution, and its deployment policy pins the measured
-runtime-closure identity. The protocol decoder, LLVM, LLD, worker, kernel
-analyzer, operating system, and retained runtime files remain the trusted
-computing base.
+exit. Mapping additions, removals, remaps, permission changes, offset changes,
+and `dlopen` results that remain present at the second snapshot fail closed. A
+mapping loaded and removed entirely between the two snapshots is outside this
+guarantee; there is no continuous kernel-backed mapping audit. The API
+revalidates retained metadata and contents after execution, and its deployment
+policy pins the measured runtime-closure identity. The protocol decoder, LLVM,
+LLD, worker, kernel analyzer, operating system, and retained runtime files
+remain the trusted computing base.
 
 Authenticated execution uses a fail-closed no-fork profile. Real, effective,
 saved, and filesystem UIDs must be equal and nonzero; the UID map must be the
