@@ -1457,7 +1457,7 @@ fn synchronization_witnesses_bind_endpoints_participants_and_operations() {
                 operation: AtomicOperation::Load,
                 ..
             }),
-            participant_witness: ParticipantWitness::SynchronizingParticipantsMustProve,
+            participant_witness: ParticipantWitness::SynchronizingParticipants,
             operation_witness: SynchronizationOperationWitness::AtomicReadFrom {
                 region: MemoryRegion {
                     allocation: 7,
@@ -1512,7 +1512,7 @@ fn synchronization_witnesses_bind_endpoints_participants_and_operations() {
                 ordering: MemoryOrdering::Acquire,
                 ..
             }),
-            participant_witness: ParticipantWitness::SameParticipantMustProve,
+            participant_witness: ParticipantWitness::SameParticipant,
             operation_witness: SynchronizationOperationWitness::ProgramOrder,
             ..
         }
@@ -1575,7 +1575,7 @@ fn synchronization_witnesses_bind_endpoints_participants_and_operations() {
     assert!(report.obligations.iter().any(|obligation| matches!(
         obligation,
         VerifierObligation::HappensBefore {
-            participant_witness: ParticipantWitness::SameBarrierCohortMustProve,
+            participant_witness: ParticipantWitness::SameBarrierCohort,
             operation_witness: SynchronizationOperationWitness::BarrierPhase {
                 kind: BarrierKind::Workgroup,
                 expected_participants: 256,

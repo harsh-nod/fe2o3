@@ -717,9 +717,9 @@ pub enum AllocationAliasConsequence {
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ParticipantWitness {
-    SameParticipantMustProve,
-    SynchronizingParticipantsMustProve,
-    SameBarrierCohortMustProve,
+    SameParticipant,
+    SynchronizingParticipants,
+    SameBarrierCohort,
 }
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -1685,7 +1685,7 @@ fn validate_edge<'a>(
             Ok(ValidatedEdgeWitness {
                 before,
                 after,
-                participant_witness: ParticipantWitness::SameParticipantMustProve,
+                participant_witness: ParticipantWitness::SameParticipant,
                 operation_witness: SynchronizationOperationWitness::ProgramOrder,
             })
         }
@@ -1707,7 +1707,7 @@ fn validate_edge<'a>(
                         return Err(ValidationError::InvalidEdgeEndpointKind(edge_index));
                     }
                     (
-                        ParticipantWitness::SynchronizingParticipantsMustProve,
+                        ParticipantWitness::SynchronizingParticipants,
                         SynchronizationOperationWitness::AtomicReadFrom {
                             region: before_atomic.region,
                             before_operation: before_atomic.operation,
@@ -1723,7 +1723,7 @@ fn validate_edge<'a>(
                         return Err(ValidationError::InvalidEdgeEndpointKind(edge_index));
                     }
                     (
-                        ParticipantWitness::SameBarrierCohortMustProve,
+                        ParticipantWitness::SameBarrierCohort,
                         SynchronizationOperationWitness::BarrierPhase {
                             kind: before_barrier.kind,
                             expected_participants: before.participation.expected_participants,
@@ -2747,9 +2747,9 @@ fn digest_obligations(obligations: &[VerifierObligation]) -> [u8; 32] {
                 digest.event_kind(before_kind);
                 digest.event_kind(after_kind);
                 digest.u8(match participant_witness {
-                    ParticipantWitness::SameParticipantMustProve => 1,
-                    ParticipantWitness::SynchronizingParticipantsMustProve => 2,
-                    ParticipantWitness::SameBarrierCohortMustProve => 3,
+                    ParticipantWitness::SameParticipant => 1,
+                    ParticipantWitness::SynchronizingParticipants => 2,
+                    ParticipantWitness::SameBarrierCohort => 3,
                 });
                 match operation_witness {
                     SynchronizationOperationWitness::ProgramOrder => digest.u8(1),
