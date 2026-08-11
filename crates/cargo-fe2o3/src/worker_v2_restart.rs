@@ -25,8 +25,10 @@ use fe2o3_hsaco_finalize::{
 };
 use fe2o3_worker_v2_bundle::{
     MAX_WORKER_V2_ENVELOPE_INPUTS_BYTES, MAX_WORKER_V2_LOAD_ENVELOPE_BYTES,
-    WorkerV2EnvelopeInputsIdentityV1, WorkerV2EnvelopeInputsV1, WorkerV2LoadEnvelopeIdentityV1,
-    WorkerV2LoadEnvelopeV1,
+    WORKER_V2_LOAD_ENVELOPE_NAME_PREFIX_V1 as ENVELOPE_PREFIX,
+    WORKER_V2_LOAD_ENVELOPE_NAME_SUFFIX_V1 as ENVELOPE_SUFFIX, WorkerV2EnvelopeInputsIdentityV1,
+    WorkerV2EnvelopeInputsV1, WorkerV2LoadEnvelopeIdentityV1, WorkerV2LoadEnvelopeV1,
+    worker_v2_load_envelope_name_v1,
 };
 use rustix::fd::{FromRawFd, OwnedFd};
 use rustix::fs::{
@@ -49,8 +51,6 @@ const MARKER_PREFIX: &str = ".fe2o3-cargo-worker-v2-resume-v1-";
 const LOCK_SUFFIX: &str = ".lock";
 const RECORD_SUFFIX: &str = ".record";
 const TEMP_SUFFIX: &str = ".tmp-";
-const ENVELOPE_PREFIX: &str = ".fe2o3-worker-v2-load-envelope-v1-";
-const ENVELOPE_SUFFIX: &str = ".envelope";
 const ENVELOPE_INPUTS_PREFIX: &str = ".fe2o3-worker-v2-envelope-inputs-v1-";
 const ENVELOPE_INPUTS_SUFFIX: &str = ".capsule";
 const ENVELOPE_INPUTS_NAME_DOMAIN: &[u8] = b"FE2O3/WORKER-V2-ENVELOPE-INPUTS-NAME/V1\0";
@@ -617,10 +617,7 @@ fn hash_identity(domain: &[u8], update: impl FnOnce(&mut Sha256)) -> [u8; 32] {
 }
 
 pub(super) fn envelope_name(publication_identity: [u8; 32]) -> String {
-    format!(
-        "{ENVELOPE_PREFIX}{}{ENVELOPE_SUFFIX}",
-        hex(&publication_identity)
-    )
+    worker_v2_load_envelope_name_v1(publication_identity)
 }
 
 fn envelope_inputs_name(package: [u8; 32], attempt: BuildAttempt) -> String {

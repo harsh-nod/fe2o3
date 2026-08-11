@@ -7,6 +7,7 @@ mod compiler_transaction;
 mod compiler_transaction_recorder;
 mod error;
 mod inputs;
+mod load_envelope_name;
 mod model;
 
 pub use application_handoff::{
@@ -46,6 +47,10 @@ pub use inputs::{
     EnvelopeInputsDecodeError, EnvelopeInputsValidationError, MAX_WORKER_V2_ENVELOPE_INPUTS_BYTES,
     WORKER_V2_ENVELOPE_INPUTS_MAGIC, WORKER_V2_ENVELOPE_INPUTS_VERSION,
     WorkerV2EnvelopeInputsIdentityV1, WorkerV2EnvelopeInputsV1,
+};
+pub use load_envelope_name::{
+    WORKER_V2_LOAD_ENVELOPE_NAME_PREFIX_V1, WORKER_V2_LOAD_ENVELOPE_NAME_SUFFIX_V1,
+    worker_v2_load_envelope_name_v1,
 };
 pub use model::{
     DescriptorLineageV1, ExactRawHsacoV1, MAX_WORKER_V2_LOAD_ENVELOPE_BYTES,

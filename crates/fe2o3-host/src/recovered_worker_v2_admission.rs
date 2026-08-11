@@ -1556,9 +1556,14 @@ mod tests {
         seed: u8,
     ) -> ApplicationDescriptorFixture {
         fs::set_permissions(&fixture.output, fs::Permissions::from_mode(0o700)).unwrap();
-        let envelope_path = fixture
-            .output
-            .join(format!("worker-v2-application-envelope-{seed}.bin"));
+        let envelope_value = WorkerV2LoadEnvelopeV1::from_bytes(&fixture.envelope).unwrap();
+        let envelope_name = fe2o3_worker_v2_bundle::worker_v2_load_envelope_name_v1(
+            envelope_value
+                .published_claim()
+                .receipt()
+                .publication_identity(),
+        );
+        let envelope_path = fixture.output.join(envelope_name);
         let mut writer = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -1582,7 +1587,6 @@ mod tests {
         let acknowledgment_read = unsafe { OwnedFd::from_raw_fd(pipe[0]) };
         // SAFETY: successful `pipe2` returned two distinct descriptors owned by this process.
         let acknowledgment_write = unsafe { OwnedFd::from_raw_fd(pipe[1]) };
-        let envelope_value = WorkerV2LoadEnvelopeV1::from_bytes(&fixture.envelope).unwrap();
         let application =
             crate::application_descriptor_handoff::current_application_identity().unwrap();
         let expectation =
@@ -2043,6 +2047,74 @@ mod tests {
         assert!(matches!(
             error,
             crate::WorkerV2ApplicationDescriptorHandoffErrorV1::EnvelopeNotLinked
+        ));
+        assert!(read_acknowledgment(descriptors.acknowledgment_read).is_empty());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn same_directory_rename_and_noncanonical_name_are_rejected() {
+        for (fixture_seed, challenge_seed, replacement) in
+            [(46, 47, "renamed.envelope"), (48, 49, "uppercase")]
+        {
+            let fixture = recovery_fixture(fixture_seed, "gfx942", "vecadd");
+            let descriptors = application_descriptor_fixture(&fixture, challenge_seed);
+            let replacement = if replacement == "uppercase" {
+                descriptors
+                    .envelope_path
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_uppercase()
+            } else {
+                replacement.to_owned()
+            };
+            fs::rename(&descriptors.envelope_path, fixture.output.join(replacement)).unwrap();
+
+            let error = consume_worker_v2_application_handoff_descriptors_v1(
+                descriptors.envelope,
+                descriptors.artifact_directory,
+                descriptors.acknowledgment_write,
+                descriptors.expectation.commitment(),
+                descriptors.challenge,
+                fixture.compiler_transaction.clone(),
+                fixture.kernel_id,
+                &fixture.observed,
+            )
+            .unwrap_err();
+            assert!(matches!(
+                error,
+                crate::WorkerV2ApplicationDescriptorHandoffErrorV1::EnvelopeNotLinked
+            ));
+            assert!(read_acknowledgment(descriptors.acknowledgment_read).is_empty());
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn duplicate_envelope_hard_link_is_rejected() {
+        let fixture = recovery_fixture(50, "gfx942", "vecadd");
+        let descriptors = application_descriptor_fixture(&fixture, 51);
+        fs::hard_link(
+            &descriptors.envelope_path,
+            fixture.output.join("duplicate-envelope-link"),
+        )
+        .unwrap();
+
+        let error = consume_worker_v2_application_handoff_descriptors_v1(
+            descriptors.envelope,
+            descriptors.artifact_directory,
+            descriptors.acknowledgment_write,
+            descriptors.expectation.commitment(),
+            descriptors.challenge,
+            fixture.compiler_transaction.clone(),
+            fixture.kernel_id,
+            &fixture.observed,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            crate::WorkerV2ApplicationDescriptorHandoffErrorV1::UnsafeEnvelope
         ));
         assert!(read_acknowledgment(descriptors.acknowledgment_read).is_empty());
     }
