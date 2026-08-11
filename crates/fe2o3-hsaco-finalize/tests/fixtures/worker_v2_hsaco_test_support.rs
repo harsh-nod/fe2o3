@@ -27,6 +27,8 @@ struct FixtureOptions<'a> {
     include_export: bool,
     include_canonical_descriptor_section_name: bool,
     include_explicit_argument_alignments: bool,
+    include_pointee_alignment: bool,
+    pointee_alignment: u64,
     include_required_workgroup_size: bool,
     max_workgroups: [Option<u32>; 3],
     include_dynamic_lds_size: bool,
@@ -48,6 +50,8 @@ impl FixtureOptions<'static> {
             include_export: true,
             include_canonical_descriptor_section_name: false,
             include_explicit_argument_alignments: false,
+            include_pointee_alignment: false,
+            pointee_alignment: 4,
             include_required_workgroup_size: true,
             max_workgroups: [None; 3],
             include_dynamic_lds_size: false,
@@ -313,13 +317,16 @@ fn fixture_with_descriptor_table(
 fn metadata(options: FixtureOptions<'_>) -> Vec<u8> {
     let alignment = options.include_explicit_argument_alignments.then_some(8);
     let mut arguments = vec![
-        explicit_argument(
+        explicit_pointer_argument(
             Some("values_ptr"),
             0,
             8,
             alignment,
             "global_buffer",
             Some("global"),
+            options
+                .include_pointee_alignment
+                .then_some(options.pointee_alignment),
         ),
         explicit_argument(Some("values_len"), 8, 8, alignment, "by_value", None),
     ];
@@ -401,6 +408,25 @@ fn metadata(options: FixtureOptions<'_>) -> Vec<u8> {
     let mut encoded = Vec::new();
     write_value(&mut encoded, &root).unwrap();
     encoded
+}
+
+fn explicit_pointer_argument(
+    name: Option<&str>,
+    offset: u64,
+    size: u64,
+    alignment: Option<u64>,
+    value_kind: &str,
+    address_space: Option<&str>,
+    pointee_alignment: Option<u64>,
+) -> Value {
+    let mut value = explicit_argument(name, offset, size, alignment, value_kind, address_space);
+    if let (Some(pointee_alignment), Value::Map(fields)) = (pointee_alignment, &mut value) {
+        fields.push((
+            Value::from(".pointee_align"),
+            Value::from(pointee_alignment),
+        ));
+    }
+    value
 }
 
 fn explicit_argument(

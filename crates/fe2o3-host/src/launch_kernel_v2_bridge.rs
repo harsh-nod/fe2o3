@@ -13,8 +13,9 @@ use fe2o3_artifacts::{
 };
 use fe2o3_hsaco::{CodeObjectVersion, ExplicitValueKind};
 use fe2o3_kernel_descriptor::{
-    AccessMode, AliasSemantics, BlockSizeV1, KernelDescriptorV1, LaunchConstraintsV1,
-    OwnershipSemantics, PhysicalAbiComponentKind, ScalarTypeV1,
+    AccessMode, AliasSemantics, BlockSizeV1, DeviceLayoutDescriptorV1, DeviceLayoutIdentity,
+    KernelDescriptorV1, LaunchConstraintsV1, OwnershipSemantics, PhysicalAbiComponentKind,
+    RustTypeIdentity, ScalarTypeV1, SourceTypeDescriptorV1,
 };
 use fe2o3_kernel_ir::{
     AbiParameterKindV2, AbiParameterV2, ArtifactIdentityV2, BlockShapePolicyV2, DimensionsV2,
@@ -162,7 +163,9 @@ impl CurrentRecoveredLaunchKernelMetadataV2<'_> {
 /// against AMDHSA physical arguments, non-occupancy launch geometry, static/private resources, and
 /// the occupancy subject. Dynamic LDS is rejected because AMDHSA does not provide the maximum and
 /// alignment required by the launch model. Occupancy-dependent admission remains unavailable even
-/// on success.
+/// on success. The V2 semantic profile is intentionally limited to canonical descriptor scalars
+/// and scalar slices. Standalone pointers and nested reference elements are rejected because the
+/// descriptor V1 source-type schema cannot express their semantic identity.
 pub fn bind_current_recovered_launch_kernel_metadata_v2<'recovered>(
     recovered: &'recovered RecoveredWorkerV2PinnedDescriptorV1,
     family: &LaunchKernelFamilyV2,
@@ -394,9 +397,120 @@ fn validate_descriptor_artifact_abi(
                 return Err(LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(name));
             }
         }
+        validate_artifact_argument_semantics(field, argument)?;
         validate_artifact_argument_components(artifact, field, argument)?;
     }
     Ok(())
+}
+
+fn validate_artifact_argument_semantics(
+    field: &ArtifactAbiField,
+    argument: &fe2o3_kernel_descriptor::LogicalArgumentV1,
+) -> Result<(), LaunchKernelMetadataBridgeErrorV2> {
+    if field.type_identity().rust_type().bytes().as_bytes() != argument.source_type().as_bytes() {
+        return Err(
+            LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(
+                "artifact ABI source type identity",
+            ),
+        );
+    }
+    if field.type_identity().layout().bytes().as_bytes() != argument.device_layout().as_bytes() {
+        return Err(
+            LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(
+                "artifact ABI device layout identity",
+            ),
+        );
+    }
+
+    match field.kind() {
+        ArtifactAbiKind::Scalar(scalar) => validate_descriptor_semantic_identity(
+            argument,
+            SourceTypeDescriptorV1::scalar(descriptor_scalar(scalar)),
+            DeviceLayoutDescriptorV1::scalar(descriptor_scalar(scalar)),
+        ),
+        ArtifactAbiKind::Slice {
+            element_size,
+            element_alignment,
+        } => {
+            let scalar = canonical_slice_scalar(argument).ok_or(
+                LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(
+                    "artifact ABI slice semantic identity",
+                ),
+            )?;
+            if element_size != u64::from(scalar.size_bytes())
+                || element_alignment != u32::from(scalar.alignment_bytes())
+            {
+                return Err(
+                    LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(
+                        "artifact ABI slice element layout",
+                    ),
+                );
+            }
+            Ok(())
+        }
+        ArtifactAbiKind::Pointer { .. } => {
+            Err(LaunchKernelMetadataBridgeErrorV2::UnsupportedPhysicalAbi(
+                "standalone pointers without a descriptor semantic kind",
+            ))
+        }
+    }
+}
+
+fn canonical_slice_scalar(
+    argument: &fe2o3_kernel_descriptor::LogicalArgumentV1,
+) -> Option<ScalarTypeV1> {
+    const SCALARS: [ScalarTypeV1; 11] = [
+        ScalarTypeV1::I8,
+        ScalarTypeV1::U8,
+        ScalarTypeV1::I16,
+        ScalarTypeV1::U16,
+        ScalarTypeV1::I32,
+        ScalarTypeV1::U32,
+        ScalarTypeV1::I64,
+        ScalarTypeV1::U64,
+        ScalarTypeV1::F16,
+        ScalarTypeV1::F32,
+        ScalarTypeV1::F64,
+    ];
+    SCALARS.into_iter().find(|scalar| {
+        let (source, layout) = match argument.ownership() {
+            OwnershipSemantics::SharedBorrow => (
+                SourceTypeDescriptorV1::shared_slice(*scalar),
+                DeviceLayoutDescriptorV1::shared_slice(*scalar),
+            ),
+            OwnershipSemantics::UniqueBorrow => (
+                SourceTypeDescriptorV1::disjoint_slice(*scalar),
+                DeviceLayoutDescriptorV1::disjoint_slice(*scalar),
+            ),
+            OwnershipSemantics::ByValue => return false,
+        };
+        descriptor_semantic_identity_matches(argument, &source, &layout)
+    })
+}
+
+fn validate_descriptor_semantic_identity(
+    argument: &fe2o3_kernel_descriptor::LogicalArgumentV1,
+    source: SourceTypeDescriptorV1,
+    layout: DeviceLayoutDescriptorV1,
+) -> Result<(), LaunchKernelMetadataBridgeErrorV2> {
+    if descriptor_semantic_identity_matches(argument, &source, &layout) {
+        Ok(())
+    } else {
+        Err(
+            LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(
+                "artifact ABI scalar semantic identity",
+            ),
+        )
+    }
+}
+
+fn descriptor_semantic_identity_matches(
+    argument: &fe2o3_kernel_descriptor::LogicalArgumentV1,
+    source: &SourceTypeDescriptorV1,
+    layout: &DeviceLayoutDescriptorV1,
+) -> bool {
+    argument.source_type() == RustTypeIdentity::for_descriptor(source)
+        && argument.device_layout() == DeviceLayoutIdentity::for_descriptor(layout)
 }
 
 fn validate_artifact_argument_components(
@@ -654,7 +768,14 @@ fn derive_signature(
                 ),
             )?;
             let model_kind = model_parameter_kind(kind, artifact_field.ownership())?;
-            validate_physical_component(kind, offset, size, alignment, physical_argument)?;
+            validate_physical_component(
+                kind,
+                offset,
+                size,
+                alignment,
+                artifact_field,
+                physical_argument,
+            )?;
             let source_index = u16::try_from(physical_index).map_err(|_| {
                 LaunchKernelMetadataBridgeErrorV2::NumericOverflow("physical argument index")
             })?;
@@ -727,6 +848,7 @@ fn validate_physical_component(
     offset: u32,
     size: u16,
     alignment: u16,
+    artifact_field: &ArtifactAbiField,
     physical: &crate::PublishedPhysicalArgumentLayoutV1,
 ) -> Result<(), LaunchKernelMetadataBridgeErrorV2> {
     let expected_kind = match component {
@@ -753,6 +875,52 @@ fn validate_physical_component(
                 "physical argument component",
             ),
         );
+    }
+    match component {
+        PhysicalAbiComponentKind::GlobalPointer => {
+            let expected = match artifact_field.kind() {
+                ArtifactAbiKind::Slice {
+                    element_alignment, ..
+                } => u64::from(element_alignment),
+                ArtifactAbiKind::Pointer {
+                    pointee_alignment, ..
+                } => u64::from(pointee_alignment),
+                ArtifactAbiKind::Scalar(_) => {
+                    return Err(
+                        LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(
+                            "pointer component semantic kind",
+                        ),
+                    );
+                }
+            };
+            match physical.pointee_alignment() {
+                PhysicalMetadataValueV1::Known(value) if value == expected => {}
+                PhysicalMetadataValueV1::Known(_) => {
+                    return Err(
+                        LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(
+                            "physical pointee alignment",
+                        ),
+                    );
+                }
+                PhysicalMetadataValueV1::Unknown => {
+                    return Err(LaunchKernelMetadataBridgeErrorV2::MissingPhysicalMetadata(
+                        "physical pointee alignment",
+                    ));
+                }
+            }
+        }
+        PhysicalAbiComponentKind::ScalarByValue(_) | PhysicalAbiComponentKind::SliceLengthU64 => {
+            if !matches!(
+                physical.pointee_alignment(),
+                PhysicalMetadataValueV1::Unknown
+            ) {
+                return Err(
+                    LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(
+                        "non-pointer pointee alignment",
+                    ),
+                );
+            }
+        }
     }
     Ok(())
 }
@@ -1380,5 +1548,64 @@ pub(crate) fn rebind_launch_family_for_bridge_test(family: &mut LaunchKernelFami
         .into_iter()
         .map(|kind| LaunchProofObligationV2::new(kind, tuple))
         .collect();
+    }
+}
+
+#[cfg(test)]
+mod semantic_join_tests {
+    use super::*;
+    use fe2o3_artifacts::{
+        AbiField, Access, AddressSpace, AliasClass, ArgumentOwnership, DeclaredRustLayoutIdentity,
+        DeclaredRustTypeIdentity, DigestBytes, Mutability, Name, TypeIdentity,
+    };
+    use fe2o3_kernel_descriptor::{
+        DeviceLayoutRecordV1, LogicalArgumentV1, SourceTypeRecordV1, ValidName,
+    };
+
+    #[test]
+    fn standalone_and_nested_reference_profile_fails_closed() {
+        let source =
+            SourceTypeRecordV1::new(SourceTypeDescriptorV1::shared_slice(ScalarTypeV1::F32));
+        let layout =
+            DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::shared_slice(ScalarTypeV1::F32));
+        let argument = LogicalArgumentV1::shared_slice(
+            0,
+            ValidName::new("values").unwrap(),
+            &source,
+            &layout,
+            0,
+        )
+        .unwrap();
+        let field = AbiField::new(
+            Name::new("values").unwrap(),
+            0,
+            8,
+            8,
+            ArtifactAbiKind::Pointer {
+                pointee_size: 4,
+                pointee_alignment: 4,
+            },
+            Mutability::Immutable,
+            Access::ReadOnly,
+            AddressSpace::Global,
+            TypeIdentity::new(
+                DeclaredRustTypeIdentity::from_untrusted_bytes(DigestBytes::from_bytes(
+                    *source.identity().as_bytes(),
+                )),
+                DeclaredRustLayoutIdentity::from_untrusted_bytes(DigestBytes::from_bytes(
+                    *layout.identity().as_bytes(),
+                )),
+            ),
+            ArgumentOwnership::SharedBorrow,
+            AliasClass::SharedReadOnly,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            validate_artifact_argument_semantics(&field, &argument),
+            Err(LaunchKernelMetadataBridgeErrorV2::UnsupportedPhysicalAbi(
+                "standalone pointers without a descriptor semantic kind"
+            ))
+        ));
     }
 }

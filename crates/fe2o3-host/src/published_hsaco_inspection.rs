@@ -55,6 +55,7 @@ pub struct PublishedPhysicalArgumentLayoutV1 {
     address_space: PhysicalMetadataValueV1<ArgumentAddressSpace>,
     declared_access: PhysicalMetadataValueV1<ArgumentAccess>,
     actual_access: PhysicalMetadataValueV1<ArgumentAccess>,
+    pointee_alignment: PhysicalMetadataValueV1<u64>,
 }
 
 impl PublishedPhysicalArgumentLayoutV1 {
@@ -84,6 +85,11 @@ impl PublishedPhysicalArgumentLayoutV1 {
 
     pub const fn actual_access(&self) -> PhysicalMetadataValueV1<ArgumentAccess> {
         self.actual_access
+    }
+
+    /// Returns the producer-declared pointee alignment without treating omission as agreement.
+    pub const fn pointee_alignment(&self) -> PhysicalMetadataValueV1<u64> {
+        self.pointee_alignment
     }
 }
 
@@ -272,6 +278,17 @@ impl PublishedKernelPhysicalLayoutV1 {
     ) -> Self {
         let mut physical = self.clone();
         physical.launch.dynamic_shared_memory_indicator = indicator;
+        physical
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_pointee_alignment_for_launch_bridge_test(
+        &self,
+        argument_index: usize,
+        alignment: PhysicalMetadataValueV1<u64>,
+    ) -> Self {
+        let mut physical = self.clone();
+        physical.arguments[argument_index].pointee_alignment = alignment;
         physical
     }
 }
@@ -955,6 +972,9 @@ fn validate_physical_arguments(
             address_space: PhysicalMetadataValueV1::from_option(actual_argument.address_space()),
             declared_access: PhysicalMetadataValueV1::from_option(actual_argument.access()),
             actual_access: PhysicalMetadataValueV1::from_option(actual_argument.actual_access()),
+            pointee_alignment: PhysicalMetadataValueV1::from_option(
+                actual_argument.pointee_alignment(),
+            ),
         });
     }
     Ok(evidence.into_boxed_slice())

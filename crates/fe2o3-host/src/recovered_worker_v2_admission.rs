@@ -810,9 +810,38 @@ mod tests {
             duplicate_max_workgroups_x: bool,
             malformed_max_workgroups_x: bool,
         ) -> Vec<u8> {
+            with_descriptor_table_launch_and_pointee_metadata(
+                target,
+                table,
+                include_explicit_argument_alignments,
+                include_explicit_argument_alignments,
+                4,
+                include_required_workgroup_size,
+                max_workgroups,
+                include_dynamic_lds_size,
+                duplicate_max_workgroups_x,
+                malformed_max_workgroups_x,
+            )
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        pub(super) fn with_descriptor_table_launch_and_pointee_metadata(
+            target: &str,
+            table: &[u8],
+            include_explicit_argument_alignments: bool,
+            include_pointee_alignment: bool,
+            pointee_alignment: u64,
+            include_required_workgroup_size: bool,
+            max_workgroups: [Option<u32>; 3],
+            include_dynamic_lds_size: bool,
+            duplicate_max_workgroups_x: bool,
+            malformed_max_workgroups_x: bool,
+        ) -> Vec<u8> {
             let mut options = FixtureOptions::valid();
             options.target = target;
             options.include_explicit_argument_alignments = include_explicit_argument_alignments;
+            options.include_pointee_alignment = include_pointee_alignment;
+            options.pointee_alignment = pointee_alignment;
             options.include_required_workgroup_size = include_required_workgroup_size;
             options.max_workgroups = max_workgroups;
             options.include_dynamic_lds_size = include_dynamic_lds_size;
@@ -982,8 +1011,8 @@ mod tests {
 
     #[derive(Clone, Copy)]
     enum DescriptorArgumentFixture {
-        SharedSlice,
-        DisjointSlice,
+        SharedSlice(ScalarTypeV1),
+        DisjointSlice(ScalarTypeV1),
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1006,7 +1035,7 @@ mod tests {
             target,
             canonical_digest,
             launch,
-            DescriptorArgumentFixture::SharedSlice,
+            DescriptorArgumentFixture::SharedSlice(ScalarTypeV1::F32),
         )
     }
 
@@ -1023,13 +1052,10 @@ mod tests {
         argument_fixture: DescriptorArgumentFixture,
     ) -> DeviceDescriptorTableV1 {
         let (source, layout, argument) = match argument_fixture {
-            DescriptorArgumentFixture::SharedSlice => {
-                let source = SourceTypeRecordV1::new(SourceTypeDescriptorV1::shared_slice(
-                    ScalarTypeV1::F32,
-                ));
-                let layout = DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::shared_slice(
-                    ScalarTypeV1::F32,
-                ));
+            DescriptorArgumentFixture::SharedSlice(scalar) => {
+                let source = SourceTypeRecordV1::new(SourceTypeDescriptorV1::shared_slice(scalar));
+                let layout =
+                    DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::shared_slice(scalar));
                 let argument = LogicalArgumentV1::shared_slice(
                     0,
                     descriptor_name("values"),
@@ -1040,13 +1066,11 @@ mod tests {
                 .unwrap();
                 (source, layout, argument)
             }
-            DescriptorArgumentFixture::DisjointSlice => {
-                let source = SourceTypeRecordV1::new(SourceTypeDescriptorV1::disjoint_slice(
-                    ScalarTypeV1::F32,
-                ));
-                let layout = DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::disjoint_slice(
-                    ScalarTypeV1::F32,
-                ));
+            DescriptorArgumentFixture::DisjointSlice(scalar) => {
+                let source =
+                    SourceTypeRecordV1::new(SourceTypeDescriptorV1::disjoint_slice(scalar));
+                let layout =
+                    DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::disjoint_slice(scalar));
                 let argument = LogicalArgumentV1::disjoint_slice(
                     0,
                     descriptor_name("values"),
@@ -1093,6 +1117,19 @@ mod tests {
     }
 
     fn manifest_abi() -> AbiLayout {
+        manifest_slice_abi(ScalarTypeV1::F32, 4, 4, None, None)
+    }
+
+    fn manifest_slice_abi(
+        semantic_scalar: ScalarTypeV1,
+        element_size: u64,
+        element_alignment: u32,
+        source_identity_override: Option<[u8; 32]>,
+        layout_identity_override: Option<[u8; 32]>,
+    ) -> AbiLayout {
+        let source = SourceTypeRecordV1::new(SourceTypeDescriptorV1::shared_slice(semantic_scalar));
+        let layout =
+            DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::shared_slice(semantic_scalar));
         AbiLayout::new(
             16,
             8,
@@ -1104,15 +1141,21 @@ mod tests {
                     16,
                     8,
                     AbiKind::Slice {
-                        element_size: 4,
-                        element_alignment: 4,
+                        element_size,
+                        element_alignment,
                     },
                     Mutability::Immutable,
                     Access::ReadOnly,
                     AddressSpace::Global,
                     TypeIdentity::new(
-                        DeclaredRustTypeIdentity::from_untrusted_bytes(digest(0xa1)),
-                        DeclaredRustLayoutIdentity::from_untrusted_bytes(digest(0xa2)),
+                        DeclaredRustTypeIdentity::from_untrusted_bytes(DigestBytes::from_bytes(
+                            source_identity_override
+                                .unwrap_or_else(|| *source.identity().as_bytes()),
+                        )),
+                        DeclaredRustLayoutIdentity::from_untrusted_bytes(DigestBytes::from_bytes(
+                            layout_identity_override
+                                .unwrap_or_else(|| *layout.identity().as_bytes()),
+                        )),
                     ),
                     ArgumentOwnership::SharedBorrow,
                     AliasClass::SharedReadOnly,
@@ -1212,7 +1255,8 @@ mod tests {
             descriptor_launch(include_required_workgroup_size),
             [Some(65_535), Some(1), Some(1)],
             false,
-            DescriptorArgumentFixture::SharedSlice,
+            DescriptorArgumentFixture::SharedSlice(ScalarTypeV1::F32),
+            manifest_abi(),
         )
     }
 
@@ -1228,10 +1272,16 @@ mod tests {
         max_workgroups: [Option<u32>; 3],
         include_dynamic_lds_size: bool,
         argument_fixture: DescriptorArgumentFixture,
+        abi: AbiLayout,
     ) -> RecoveryFixture {
         let source_digest = digest(seed.wrapping_add(0x40));
         let executable_digest = digest(seed.wrapping_add(0x50));
-        let abi = manifest_abi();
+        let physical_pointee_alignment = match argument_fixture {
+            DescriptorArgumentFixture::SharedSlice(scalar)
+            | DescriptorArgumentFixture::DisjointSlice(scalar) => {
+                u64::from(scalar.alignment_bytes())
+            }
+        };
         let kernel_id = derive_generated_kernel_identity_v2(
             MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
             HANDOFF_MARKER_BINDING,
@@ -1253,10 +1303,12 @@ mod tests {
             descriptor_launch.clone(),
             argument_fixture,
         );
-        let final_raw = canonical_hsaco_fixture::with_descriptor_table_and_launch_metadata(
+        let final_raw = canonical_hsaco_fixture::with_descriptor_table_launch_and_pointee_metadata(
             REQUIRED_GFX942_TEST_TARGET,
             &encode_device_descriptor_table_v1(&final_raw_table).unwrap(),
             include_explicit_argument_alignments,
+            include_explicit_argument_alignments,
+            physical_pointee_alignment,
             include_required_workgroup_size,
             max_workgroups,
             include_dynamic_lds_size,
@@ -2999,7 +3051,8 @@ mod tests {
             descriptor_launch,
             max_workgroups,
             include_dynamic_lds_size,
-            DescriptorArgumentFixture::SharedSlice,
+            DescriptorArgumentFixture::SharedSlice(ScalarTypeV1::F32),
+            manifest_abi(),
         );
         let recovered = recover_worker_v2_load_envelope_v1(
             &fixture.output,
@@ -3027,6 +3080,7 @@ mod tests {
             [Some(65_535), Some(1), Some(1)],
             false,
             argument_fixture,
+            manifest_abi(),
         );
         let recovered = recover_worker_v2_load_envelope_v1(
             &fixture.output,
@@ -3037,6 +3091,145 @@ mod tests {
         )
         .unwrap();
         (fixture, recovered)
+    }
+
+    fn recovered_launch_bridge_fixture_with_abi(
+        seed: u8,
+        abi: AbiLayout,
+        argument_fixture: DescriptorArgumentFixture,
+    ) -> (RecoveryFixture, RecoveredWorkerV2PinnedDescriptorV1) {
+        let fixture = recovery_fixture_with_launch_contracts(
+            seed,
+            "gfx942",
+            "vecadd",
+            true,
+            true,
+            launch(),
+            descriptor_launch(true),
+            [Some(65_535), Some(1), Some(1)],
+            false,
+            argument_fixture,
+            abi,
+        );
+        let recovered = recover_worker_v2_load_envelope_v1(
+            &fixture.output,
+            &fixture.envelope,
+            fixture.compiler_transaction.clone(),
+            fixture.kernel_id,
+            &fixture.observed,
+        )
+        .unwrap();
+        (fixture, recovered)
+    }
+
+    #[test]
+    fn launch_bridge_joins_slice_semantics_and_element_layout_exactly() {
+        let (_fixture, recovered) = recovered_launch_bridge_fixture_with_abi(
+            101,
+            manifest_slice_abi(ScalarTypeV1::U64, 8, 8, None, None),
+            DescriptorArgumentFixture::SharedSlice(ScalarTypeV1::U64),
+        );
+        let family =
+            crate::launch_kernel_v2_bridge::canonical_family_for_recovered_launch_bridge_test(
+                &recovered,
+            );
+        crate::bind_current_recovered_launch_kernel_metadata_v2(
+            &recovered,
+            &family,
+            "recovered-exact-wave64",
+        )
+        .unwrap();
+
+        for (seed, abi, expected) in [
+            (
+                102,
+                manifest_slice_abi(ScalarTypeV1::F32, 8, 4, None, None),
+                "artifact ABI slice element layout",
+            ),
+            (
+                103,
+                manifest_slice_abi(ScalarTypeV1::F32, 4, 2, None, None),
+                "artifact ABI slice element layout",
+            ),
+            (
+                104,
+                manifest_slice_abi(ScalarTypeV1::U64, 8, 8, None, None),
+                "artifact ABI source type identity",
+            ),
+            (
+                105,
+                manifest_slice_abi(ScalarTypeV1::F32, 4, 4, Some([0xee; 32]), None),
+                "artifact ABI source type identity",
+            ),
+            (
+                106,
+                manifest_slice_abi(ScalarTypeV1::F32, 4, 4, None, Some([0xef; 32])),
+                "artifact ABI device layout identity",
+            ),
+        ] {
+            let (_fixture, recovered) = recovered_launch_bridge_fixture_with_abi(
+                seed,
+                abi,
+                DescriptorArgumentFixture::SharedSlice(ScalarTypeV1::F32),
+            );
+            let (_model_fixture, model_recovered) = recovered_launch_bridge_fixture(seed);
+            let family =
+                crate::launch_kernel_v2_bridge::canonical_family_for_recovered_launch_bridge_test(
+                    &model_recovered,
+                );
+            assert!(matches!(
+                crate::bind_current_recovered_launch_kernel_metadata_v2(
+                    &recovered,
+                    &family,
+                    "recovered-exact-wave64"
+                ),
+                Err(crate::LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(
+                    field
+                )) if field == expected
+            ));
+        }
+    }
+
+    #[test]
+    fn launch_bridge_requires_exact_physical_pointee_alignment() {
+        let (_fixture, recovered) = recovered_launch_bridge_fixture(107);
+        let family =
+            crate::launch_kernel_v2_bridge::canonical_family_for_recovered_launch_bridge_test(
+                &recovered,
+            );
+        for (alignment, expected_missing) in [
+            (crate::PhysicalMetadataValueV1::Unknown, true),
+            (crate::PhysicalMetadataValueV1::Known(8), false),
+        ] {
+            let physical = recovered
+                .physical_kernel()
+                .with_pointee_alignment_for_launch_bridge_test(0, alignment);
+            let result = crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_with_physical_probe_v2(
+                &recovered,
+                &family,
+                "recovered-exact-wave64",
+                &physical,
+            );
+            if expected_missing {
+                assert!(matches!(
+                    result,
+                    Err(
+                        crate::LaunchKernelMetadataBridgeErrorV2::MissingPhysicalMetadata(
+                            "physical pointee alignment"
+                        )
+                    )
+                ));
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(
+                        crate::LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(
+                            "physical pointee alignment"
+                        )
+                    )
+                ));
+            }
+        }
     }
 
     #[test]
@@ -3265,7 +3458,7 @@ mod tests {
     fn launch_bridge_public_path_rejects_descriptor_abi_policy_substitution() {
         let (_fixture, recovered) = recovered_launch_bridge_fixture_with_descriptor_argument(
             98,
-            DescriptorArgumentFixture::DisjointSlice,
+            DescriptorArgumentFixture::DisjointSlice(ScalarTypeV1::F32),
         );
         let (_model_fixture, model_recovered) = recovered_launch_bridge_fixture(98);
         let family =
