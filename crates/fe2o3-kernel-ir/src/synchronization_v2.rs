@@ -58,17 +58,32 @@ pub enum TargetProfile {
     Gfx942Wave64 = 1,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct TargetHardLimits {
+    pub wave_size: u32,
+    pub max_lds_bytes: u32,
+    pub max_workgroup_participants: u32,
+    pub max_cooperative_participants: u32,
+}
+
 impl TargetProfile {
-    pub const fn wave_size(self) -> u32 {
+    pub const fn hard_limits(self) -> TargetHardLimits {
         match self {
-            Self::Gfx942Wave64 => 64,
+            Self::Gfx942Wave64 => TargetHardLimits {
+                wave_size: 64,
+                max_lds_bytes: 64 * 1024,
+                max_workgroup_participants: 1_024,
+                max_cooperative_participants: 1_048_576,
+            },
         }
     }
 
+    pub const fn wave_size(self) -> u32 {
+        self.hard_limits().wave_size
+    }
+
     pub const fn max_lds_bytes(self) -> u32 {
-        match self {
-            Self::Gfx942Wave64 => 64 * 1024,
-        }
+        self.hard_limits().max_lds_bytes
     }
 }
 
@@ -1075,10 +1090,13 @@ fn validate_participation(
             }
         }
         GroupKind::Workgroup => {
+            let effective_limit = limits
+                .max_workgroup_participants
+                .min(target.hard_limits().max_workgroup_participants);
             check_limit(
                 Resource::WorkgroupParticipants,
                 u64::from(participation.expected_participants),
-                u64::from(limits.max_workgroup_participants),
+                u64::from(effective_limit),
             )?;
             if participation.active_mask.is_some()
                 || participation.convergence == ConvergenceContract::ExplicitMask
@@ -1087,10 +1105,13 @@ fn validate_participation(
             }
         }
         GroupKind::CooperativeGrid => {
+            let effective_limit = limits
+                .max_cooperative_participants
+                .min(target.hard_limits().max_cooperative_participants);
             check_limit(
                 Resource::CooperativeParticipants,
                 u64::from(participation.expected_participants),
-                u64::from(limits.max_cooperative_participants),
+                u64::from(effective_limit),
             )?;
             if participation.active_mask.is_some()
                 || participation.convergence != ConvergenceContract::UniformRequired

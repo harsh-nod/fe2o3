@@ -1157,6 +1157,58 @@ fn barriers_fences_and_participation_contracts_reject_divergence() {
 }
 
 #[test]
+fn gfx942_hard_limits_cannot_be_widened_by_policy() {
+    let hard = TargetProfile::Gfx942Wave64.hard_limits();
+    assert_eq!(hard.wave_size, 64);
+    assert_eq!(hard.max_lds_bytes, 65_536);
+    assert_eq!(hard.max_workgroup_participants, 1_024);
+    assert_eq!(hard.max_cooperative_participants, 1_048_576);
+
+    let barrier = |participants| Event {
+        id: EventId(0),
+        participation: ParticipationContract {
+            group: GroupKind::Workgroup,
+            convergence: ConvergenceContract::UniformRequired,
+            expected_participants: participants,
+            active_mask: None,
+        },
+        kind: EventKind::Barrier(Barrier {
+            kind: BarrierKind::Workgroup,
+            scope: MemoryScope::Workgroup,
+            ordering: MemoryOrdering::AcquireRelease,
+            domains: MemoryDomains::LDS,
+        }),
+    };
+    let widened = SynchronizationLimits {
+        max_workgroup_participants: u32::MAX,
+        ..SynchronizationLimits::default()
+    };
+    assert!(module(vec![barrier(1_024)]).validate(&widened).is_ok());
+    assert_eq!(
+        module(vec![barrier(1_025)]).validate(&widened),
+        Err(ValidationError::ResourceLimit {
+            resource: Resource::WorkgroupParticipants,
+            observed: 1_025,
+            limit: 1_024,
+        })
+    );
+
+    let narrowed = SynchronizationLimits {
+        max_workgroup_participants: 256,
+        ..SynchronizationLimits::default()
+    };
+    assert!(module(vec![barrier(256)]).validate(&narrowed).is_ok());
+    assert_eq!(
+        module(vec![barrier(257)]).validate(&narrowed),
+        Err(ValidationError::ResourceLimit {
+            resource: Resource::WorkgroupParticipants,
+            observed: 257,
+            limit: 256,
+        })
+    );
+}
+
+#[test]
 fn collective_shuffle_ballot_and_cooperative_group_matrix_is_explicit() {
     let limits = SynchronizationLimits::default();
     for (kind, value_type, expected) in [
@@ -1926,7 +1978,14 @@ fn review_counterexamples_are_repaired_incrementally() {
             domains: MemoryDomains::LDS,
         }),
     };
-    assert!(module(vec![oversized]).validate(&widened).is_ok());
+    assert_eq!(
+        module(vec![oversized]).validate(&widened),
+        Err(ValidationError::ResourceLimit {
+            resource: Resource::WorkgroupParticipants,
+            observed: 1_025,
+            limit: 1_024,
+        })
+    );
 
     let load_report = atomic_module(atomic(
         AtomicOperation::Load,
