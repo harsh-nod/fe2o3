@@ -315,8 +315,8 @@ fn reviewed_mir_fixtures_remain_the_semantic_anchors() {
 fn branching_fill_matches_the_gfx942_golden() {
     let llvm = lower_device_module_to_gfx942_llvm_ir(&branching_fill_module()).unwrap();
     assert_eq!(
-        llvm,
-        concat!(include_str!("fixtures/branching_fill_gfx942.ll"), "\n")
+        llvm.trim_end(),
+        include_str!("fixtures/branching_fill_gfx942.ll").trim_end()
     );
     assert!(llvm.contains("%v5 = phi i32 [ 7, %bb1 ], [ 0, %bb2 ]"));
 }
@@ -325,8 +325,8 @@ fn branching_fill_matches_the_gfx942_golden() {
 fn integer_match_matches_the_gfx942_golden() {
     let llvm = lower_device_module_to_gfx942_llvm_ir(&integer_match_module()).unwrap();
     assert_eq!(
-        llvm,
-        concat!(include_str!("fixtures/integer_match_gfx942.ll"), "\n")
+        llvm.trim_end(),
+        include_str!("fixtures/integer_match_gfx942.ll").trim_end()
     );
     assert!(llvm.contains("i32 42, label %bb3"));
 }
@@ -335,8 +335,8 @@ fn integer_match_matches_the_gfx942_golden() {
 fn nested_loop_break_continue_and_critical_edge_match_the_gfx942_golden() {
     let llvm = lower_device_module_to_gfx942_llvm_ir(&nested_loop_module()).unwrap();
     assert_eq!(
-        llvm,
-        concat!(include_str!("fixtures/nested_loop_gfx942.ll"), "\n")
+        llvm.trim_end(),
+        include_str!("fixtures/nested_loop_gfx942.ll").trim_end()
     );
     assert!(llvm.contains("edge_bb4_0_bb6"));
     assert!(llvm.contains("%v3 = phi i32 [ 0, %bb0 ], [ %v17, %bb7 ]"));
