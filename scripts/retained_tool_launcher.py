@@ -1,55 +1,44 @@
 #!/usr/bin/python3.12
-"""Execute one controller-retained tool while validating the advertised path."""
+"""Reopen, content-pin, and descriptor-execute one configured nested tool."""
 
 from __future__ import annotations
 
 import os
 import sys
-import fcntl
 import hashlib
-
-
-REQUIRED_SEALS = 0x0001 | 0x0002 | 0x0004 | 0x0008
+import stat
 
 
 def main() -> int:
     if (
-        len(sys.argv) < 8
+        len(sys.argv) < 6
         or sys.argv[1] != "--expected"
-        or sys.argv[3] != "--retained"
-        or sys.argv[5] != "--sha256"
+        or sys.argv[3] != "--sha256"
     ):
         print(
-            "retained-tool-launcher: expected --expected PATH --retained PROC_FD COMMAND...",
+            "retained-tool-launcher: expected --expected PATH --sha256 HASH COMMAND...",
             file=sys.stderr,
         )
         return 125
     expected = sys.argv[2]
-    retained = sys.argv[4]
-    expected_sha256 = sys.argv[6]
-    command = sys.argv[7:]
+    expected_sha256 = sys.argv[4]
+    command = sys.argv[5:]
     if not command or command[0] != expected:
         print("retained-tool-launcher: compiler pathname substitution", file=sys.stderr)
         return 125
-    # The direct parent may be Ninja rather than the evidence controller. Accept
-    # only a canonical proc-fd spelling and let open/exec fail closed if its
-    # controller has exited or closed the retained descriptor.
-    parts = retained.split("/")
     if (
-        len(parts) != 5
-        or parts[1] != "proc"
-        or not parts[2].isdigit()
-        or parts[3] != "fd"
-        or not parts[4].isdigit()
+        not os.path.isabs(expected)
+        or os.path.realpath(expected) != expected
+        or os.path.islink(expected)
         or len(expected_sha256) != 64
         or any(character not in "0123456789abcdef" for character in expected_sha256)
     ):
-        print("retained-tool-launcher: invalid retained descriptor", file=sys.stderr)
+        print("retained-tool-launcher: invalid configured compiler identity", file=sys.stderr)
         return 125
-    fd = os.open(retained, os.O_RDONLY)
+    before = os.stat(expected, follow_symlinks=False)
+    fd = os.open(expected, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
     try:
         opened = os.fstat(fd)
-        linked = os.readlink(retained)
         digest = hashlib.sha256()
         offset = 0
         while offset < opened.st_size:
@@ -60,12 +49,60 @@ def main() -> int:
             digest.update(chunk)
             offset += len(chunk)
         if (
-            not os.path.isfile(retained)
-            or not linked.startswith("/memfd:fe2o3-configured-tool:cxx")
-            or fcntl.fcntl(fd, 1034) != REQUIRED_SEALS
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_nlink != 1
+            or opened.st_uid != 0
+            or opened.st_gid != 0
+            or stat.S_IMODE(opened.st_mode) != 0o755
+            or (
+                before.st_dev,
+                before.st_ino,
+                before.st_mode,
+                before.st_nlink,
+                before.st_uid,
+                before.st_gid,
+                before.st_size,
+                before.st_mtime_ns,
+                before.st_ctime_ns,
+            )
+            != (
+                opened.st_dev,
+                opened.st_ino,
+                opened.st_mode,
+                opened.st_nlink,
+                opened.st_uid,
+                opened.st_gid,
+                opened.st_size,
+                opened.st_mtime_ns,
+                opened.st_ctime_ns,
+            )
             or digest.hexdigest() != expected_sha256
         ):
-            print("retained-tool-launcher: retained compiler is not sealed", file=sys.stderr)
+            print("retained-tool-launcher: configured compiler identity changed", file=sys.stderr)
+            return 125
+        after = os.stat(expected, follow_symlinks=False)
+        if (
+            after.st_dev,
+            after.st_ino,
+            after.st_mode,
+            after.st_nlink,
+            after.st_uid,
+            after.st_gid,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        ) != (
+            opened.st_dev,
+            opened.st_ino,
+            opened.st_mode,
+            opened.st_nlink,
+            opened.st_uid,
+            opened.st_gid,
+            opened.st_size,
+            opened.st_mtime_ns,
+            opened.st_ctime_ns,
+        ):
+            print("retained-tool-launcher: compiler changed during validation", file=sys.stderr)
             return 125
         os.execve(fd, [expected, *command[1:]], dict(os.environ))
     finally:

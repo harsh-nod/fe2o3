@@ -1466,8 +1466,6 @@ def build_and_generate(
             os.fspath(repo / "scripts/retained_tool_launcher.py"),
             "--expected",
             os.fspath(tools["cxx"].path),
-            "--retained",
-            tools["cxx"].executable.proc_path,
             "--sha256",
             tools["cxx"].record["sha256"],
         )
