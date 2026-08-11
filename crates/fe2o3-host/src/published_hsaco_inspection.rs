@@ -58,6 +58,32 @@ pub struct PublishedPhysicalArgumentLayoutV1 {
     pointee_alignment: PhysicalMetadataValueV1<u64>,
 }
 
+/// One runtime-populated AMDHSA ABI record retained in exact physical order.
+///
+/// The kind determines the runtime value semantics. AMDHSA does not encode a separate alignment
+/// field for hidden records; consumers must validate the code-object-version-specific canonical
+/// layout before using these descriptive facts.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PublishedPhysicalHiddenArgumentLayoutV1 {
+    offset: u64,
+    size: u64,
+    value_kind: HiddenValueKind,
+}
+
+impl PublishedPhysicalHiddenArgumentLayoutV1 {
+    pub const fn offset(self) -> u64 {
+        self.offset
+    }
+
+    pub const fn size(self) -> u64 {
+        self.size
+    }
+
+    pub const fn value_kind(self) -> HiddenValueKind {
+        self.value_kind
+    }
+}
+
 impl PublishedPhysicalArgumentLayoutV1 {
     pub const fn offset(&self) -> u64 {
         self.offset
@@ -229,6 +255,7 @@ pub struct PublishedKernelPhysicalLayoutV1 {
     export_symbol: Box<str>,
     descriptor_symbol: Box<str>,
     arguments: Box<[PublishedPhysicalArgumentLayoutV1]>,
+    hidden_arguments: Box<[PublishedPhysicalHiddenArgumentLayoutV1]>,
     launch: PublishedPhysicalLaunchLayoutV1,
 }
 
@@ -245,6 +272,11 @@ impl PublishedKernelPhysicalLayoutV1 {
 
     pub fn arguments(&self) -> &[PublishedPhysicalArgumentLayoutV1] {
         &self.arguments
+    }
+
+    /// Returns all runtime-populated physical ABI records in metadata order.
+    pub fn hidden_arguments(&self) -> &[PublishedPhysicalHiddenArgumentLayoutV1] {
+        &self.hidden_arguments
     }
 
     pub const fn launch(&self) -> &PublishedPhysicalLaunchLayoutV1 {
@@ -289,6 +321,26 @@ impl PublishedKernelPhysicalLayoutV1 {
     ) -> Self {
         let mut physical = self.clone();
         physical.arguments[argument_index].pointee_alignment = alignment;
+        physical
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_hidden_arguments_for_launch_bridge_test(
+        &self,
+        arguments: &[(u64, u64, HiddenValueKind)],
+    ) -> Self {
+        let mut physical = self.clone();
+        physical.hidden_arguments = arguments
+            .iter()
+            .map(
+                |&(offset, size, value_kind)| PublishedPhysicalHiddenArgumentLayoutV1 {
+                    offset,
+                    size,
+                    value_kind,
+                },
+            )
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
         physical
     }
 }
@@ -894,11 +946,23 @@ fn validate_kernel_physical_layout(
     }
 
     let arguments = validate_physical_arguments(expected, actual)?;
+    let hidden_arguments = actual
+        .hidden_arguments()
+        .iter()
+        .copied()
+        .map(|argument| PublishedPhysicalHiddenArgumentLayoutV1 {
+            offset: argument.offset(),
+            size: argument.size(),
+            value_kind: argument.value_kind(),
+        })
+        .collect::<Vec<_>>()
+        .into_boxed_slice();
     let launch = validate_launch_evidence(expected, actual)?;
     Ok(PublishedKernelPhysicalLayoutV1 {
         export_symbol: export.into(),
         descriptor_symbol: actual.symbol().into(),
         arguments,
+        hidden_arguments,
         launch,
     })
 }

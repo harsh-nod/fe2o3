@@ -11,7 +11,7 @@ use fe2o3_artifacts::{
     BlockSize as ArtifactBlockSize, DigestAlgorithm, Endianness as ArtifactEndianness,
     LaunchContract as ArtifactLaunchContract, PointerWidth, ScalarType as ArtifactScalarType,
 };
-use fe2o3_hsaco::{CodeObjectVersion, ExplicitValueKind};
+use fe2o3_hsaco::{CodeObjectVersion, ExplicitValueKind, HiddenValueKind};
 use fe2o3_kernel_descriptor::{
     AccessMode, AliasSemantics, BlockSizeV1, DeviceLayoutDescriptorV1, DeviceLayoutIdentity,
     KernelDescriptorV1, LaunchConstraintsV1, OwnershipSemantics, PhysicalAbiComponentKind,
@@ -32,6 +32,95 @@ use std::fmt;
 const TARGET_IDENTITY_DOMAIN_V2: &[u8] = b"fe2o3.host.launch-kernel.target.v2\0";
 const SIGNATURE_IDENTITY_DOMAIN_V2: &[u8] = b"fe2o3.host.launch-kernel.signature.v2\0";
 const SEMANTIC_PARAMETER_DOMAIN_V2: &[u8] = b"fe2o3.host.launch-kernel.semantic-parameter.v2\0";
+const PHYSICAL_SIGNATURE_DOMAIN_V2: &[u8] = b"fe2o3.host.launch-kernel.physical-signature.v2\0";
+
+/// Identity of the complete explicit and mandatory implicit ABI observed for one COV6 kernel.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct Gfx942PhysicalKernelSignatureIdentityV2([u8; 32]);
+
+impl Gfx942PhysicalKernelSignatureIdentityV2 {
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+/// Runtime value semantics of one mandatory COV6 implicit ABI record.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum Gfx942ImplicitAbiKindV2 {
+    BlockCountX,
+    BlockCountY,
+    BlockCountZ,
+    GroupSizeX,
+    GroupSizeY,
+    GroupSizeZ,
+    RemainderX,
+    RemainderY,
+    RemainderZ,
+    GlobalOffsetX,
+    GlobalOffsetY,
+    GlobalOffsetZ,
+    GridDimensions,
+}
+
+/// Exact physical position and semantics of one mandatory COV6 implicit ABI record.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Gfx942ImplicitAbiParameterV2 {
+    kind: Gfx942ImplicitAbiKindV2,
+    offset: u32,
+    size: u32,
+    alignment: u32,
+}
+
+impl Gfx942ImplicitAbiParameterV2 {
+    pub const fn kind(self) -> Gfx942ImplicitAbiKindV2 {
+        self.kind
+    }
+
+    pub const fn offset(self) -> u32 {
+        self.offset
+    }
+
+    pub const fn size(self) -> u32 {
+        self.size
+    }
+
+    pub const fn alignment(self) -> u32 {
+        self.alignment
+    }
+}
+
+/// Complete physical signature for the narrow gfx942 COV6 bridge profile.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Gfx942PhysicalKernelSignatureV2 {
+    identity: Gfx942PhysicalKernelSignatureIdentityV2,
+    explicit: KernelSignatureV2,
+    implicit_argument_offset: u32,
+    implicit_argument_bytes: u32,
+    implicit_parameters: Box<[Gfx942ImplicitAbiParameterV2]>,
+}
+
+impl Gfx942PhysicalKernelSignatureV2 {
+    pub const fn identity(&self) -> Gfx942PhysicalKernelSignatureIdentityV2 {
+        self.identity
+    }
+
+    pub const fn explicit(&self) -> &KernelSignatureV2 {
+        &self.explicit
+    }
+
+    pub const fn implicit_argument_offset(&self) -> u32 {
+        self.implicit_argument_offset
+    }
+
+    pub const fn implicit_argument_bytes(&self) -> u32 {
+        self.implicit_argument_bytes
+    }
+
+    pub fn implicit_parameters(&self) -> &[Gfx942ImplicitAbiParameterV2] {
+        &self.implicit_parameters
+    }
+}
 
 /// Why inspected gfx942 metadata cannot authorize an occupancy-dependent launch.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -72,6 +161,7 @@ pub struct CurrentRecoveredLaunchKernelMetadataV2<'recovered> {
     artifact_identity: ArtifactIdentityV2,
     kernel_identity: KernelIdentityV2,
     signature: KernelSignatureV2,
+    physical_signature: Gfx942PhysicalKernelSignatureV2,
     resources: Gfx942ResourceLimitsV2,
     occupancy_subject: OccupancySubjectIdentityV2,
     variant_name: Box<str>,
@@ -85,6 +175,7 @@ impl fmt::Debug for CurrentRecoveredLaunchKernelMetadataV2<'_> {
             .field("artifact_identity", &self.artifact_identity)
             .field("kernel_identity", &self.kernel_identity)
             .field("signature", &self.signature)
+            .field("physical_signature", &self.physical_signature)
             .field("resources", &self.resources)
             .field("occupancy_subject", &self.occupancy_subject)
             .field("variant_name", &self.variant_name)
@@ -108,6 +199,10 @@ impl CurrentRecoveredLaunchKernelMetadataV2<'_> {
 
     pub const fn signature(&self) -> &KernelSignatureV2 {
         &self.signature
+    }
+
+    pub const fn physical_signature(&self) -> &Gfx942PhysicalKernelSignatureV2 {
+        &self.physical_signature
     }
 
     pub const fn resources(&self) -> Gfx942ResourceLimitsV2 {
@@ -233,6 +328,7 @@ fn bind_with_current_and_physical_override<'recovered>(
         artifact_identity: derived.artifact_identity,
         kernel_identity: derived.kernel_identity,
         signature: derived.signature,
+        physical_signature: derived.physical_signature,
         resources: derived.resources,
         occupancy_subject: derived.occupancy_subject,
         variant_name: variant.variant_name.clone().into_boxed_str(),
@@ -260,6 +356,7 @@ struct DerivedLaunchMetadataV2 {
     logical_name: Box<str>,
     entry_name: Box<str>,
     signature: KernelSignatureV2,
+    physical_signature: Gfx942PhysicalKernelSignatureV2,
     launch: DerivedLaunchGeometryV2,
     resources: Gfx942ResourceLimitsV2,
     occupancy_subject: OccupancySubjectIdentityV2,
@@ -287,6 +384,7 @@ fn derive_metadata(
     let artifact_identity = derive_artifact_identity(artifact)?;
     let kernel_identity = KernelIdentityV2::from_bytes(*descriptor.kernel_id().as_bytes());
     let signature = derive_signature(artifact.abi(), descriptor, physical)?;
+    let physical_signature = derive_physical_signature(signature.clone(), physical)?;
     let launch = derive_launch_geometry(artifact.launch(), physical)?;
     let resources = derive_resources(artifact.launch(), physical)?;
     let occupancy_subject = canonical_occupancy_subject_identity_v2(
@@ -304,6 +402,7 @@ fn derive_metadata(
         logical_name: descriptor.logical_name().as_str().into(),
         entry_name: physical.export_symbol().into(),
         signature,
+        physical_signature,
         launch,
         resources,
         occupancy_subject,
@@ -821,6 +920,197 @@ fn derive_signature(
     };
     signature.identity = derive_signature_identity(&signature);
     Ok(signature)
+}
+
+const COV6_MANDATORY_IMPLICIT_ABI_V2: [(u64, u64, HiddenValueKind, Gfx942ImplicitAbiKindV2); 13] = [
+    (
+        0,
+        4,
+        HiddenValueKind::BlockCountX,
+        Gfx942ImplicitAbiKindV2::BlockCountX,
+    ),
+    (
+        4,
+        4,
+        HiddenValueKind::BlockCountY,
+        Gfx942ImplicitAbiKindV2::BlockCountY,
+    ),
+    (
+        8,
+        4,
+        HiddenValueKind::BlockCountZ,
+        Gfx942ImplicitAbiKindV2::BlockCountZ,
+    ),
+    (
+        12,
+        2,
+        HiddenValueKind::GroupSizeX,
+        Gfx942ImplicitAbiKindV2::GroupSizeX,
+    ),
+    (
+        14,
+        2,
+        HiddenValueKind::GroupSizeY,
+        Gfx942ImplicitAbiKindV2::GroupSizeY,
+    ),
+    (
+        16,
+        2,
+        HiddenValueKind::GroupSizeZ,
+        Gfx942ImplicitAbiKindV2::GroupSizeZ,
+    ),
+    (
+        18,
+        2,
+        HiddenValueKind::RemainderX,
+        Gfx942ImplicitAbiKindV2::RemainderX,
+    ),
+    (
+        20,
+        2,
+        HiddenValueKind::RemainderY,
+        Gfx942ImplicitAbiKindV2::RemainderY,
+    ),
+    (
+        22,
+        2,
+        HiddenValueKind::RemainderZ,
+        Gfx942ImplicitAbiKindV2::RemainderZ,
+    ),
+    (
+        40,
+        8,
+        HiddenValueKind::GlobalOffsetX,
+        Gfx942ImplicitAbiKindV2::GlobalOffsetX,
+    ),
+    (
+        48,
+        8,
+        HiddenValueKind::GlobalOffsetY,
+        Gfx942ImplicitAbiKindV2::GlobalOffsetY,
+    ),
+    (
+        56,
+        8,
+        HiddenValueKind::GlobalOffsetZ,
+        Gfx942ImplicitAbiKindV2::GlobalOffsetZ,
+    ),
+    (
+        64,
+        2,
+        HiddenValueKind::GridDimensions,
+        Gfx942ImplicitAbiKindV2::GridDimensions,
+    ),
+];
+
+fn derive_physical_signature(
+    explicit: KernelSignatureV2,
+    physical: &PublishedKernelPhysicalLayoutV1,
+) -> Result<Gfx942PhysicalKernelSignatureV2, LaunchKernelMetadataBridgeErrorV2> {
+    let launch = physical.launch();
+    let implicit_argument_offset = match launch.implicit_argument_offset() {
+        PhysicalMetadataValueV1::Known(value) => u32::try_from(value).map_err(|_| {
+            LaunchKernelMetadataBridgeErrorV2::NumericOverflow("implicit argument offset")
+        })?,
+        PhysicalMetadataValueV1::Unknown => {
+            return Err(LaunchKernelMetadataBridgeErrorV2::MissingPhysicalMetadata(
+                "COV6 implicit argument offset",
+            ));
+        }
+    };
+    let hidden = physical.hidden_arguments();
+    if let Some(optional) = hidden.get(COV6_MANDATORY_IMPLICIT_ABI_V2.len()) {
+        if optional.value_kind() == HiddenValueKind::DynamicLdsSize {
+            return Err(LaunchKernelMetadataBridgeErrorV2::UnsupportedDynamicLds);
+        }
+        return Err(LaunchKernelMetadataBridgeErrorV2::UnsupportedPhysicalAbi(
+            "optional COV6 hidden arguments",
+        ));
+    }
+    if hidden.len() != COV6_MANDATORY_IMPLICIT_ABI_V2.len() {
+        return Err(LaunchKernelMetadataBridgeErrorV2::MissingPhysicalMetadata(
+            "mandatory COV6 implicit ABI records",
+        ));
+    }
+
+    let base = u64::from(implicit_argument_offset);
+    let mut implicit_parameters = Vec::with_capacity(COV6_MANDATORY_IMPLICIT_ABI_V2.len());
+    for (actual, &(relative_offset, size, physical_kind, model_kind)) in
+        hidden.iter().zip(COV6_MANDATORY_IMPLICIT_ABI_V2.iter())
+    {
+        let expected_offset = base.checked_add(relative_offset).ok_or(
+            LaunchKernelMetadataBridgeErrorV2::NumericOverflow("implicit argument offset"),
+        )?;
+        if actual.offset() != expected_offset
+            || actual.size() != size
+            || actual.value_kind() != physical_kind
+        {
+            return Err(
+                LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(
+                    "mandatory COV6 implicit ABI record",
+                ),
+            );
+        }
+        implicit_parameters.push(Gfx942ImplicitAbiParameterV2 {
+            kind: model_kind,
+            offset: u32::try_from(expected_offset).map_err(|_| {
+                LaunchKernelMetadataBridgeErrorV2::NumericOverflow("implicit argument offset")
+            })?,
+            size: u32::try_from(size).map_err(|_| {
+                LaunchKernelMetadataBridgeErrorV2::NumericOverflow("implicit argument size")
+            })?,
+            alignment: u32::try_from(size).map_err(|_| {
+                LaunchKernelMetadataBridgeErrorV2::NumericOverflow("implicit argument alignment")
+            })?,
+        });
+    }
+    let implicit_argument_bytes = u32::try_from(launch.implicit_argument_size()).map_err(|_| {
+        LaunchKernelMetadataBridgeErrorV2::NumericOverflow("implicit argument span")
+    })?;
+    let mut value = Gfx942PhysicalKernelSignatureV2 {
+        identity: Gfx942PhysicalKernelSignatureIdentityV2([0; 32]),
+        explicit,
+        implicit_argument_offset,
+        implicit_argument_bytes,
+        implicit_parameters: implicit_parameters.into_boxed_slice(),
+    };
+    value.identity = derive_physical_signature_identity(&value);
+    Ok(value)
+}
+
+fn derive_physical_signature_identity(
+    signature: &Gfx942PhysicalKernelSignatureV2,
+) -> Gfx942PhysicalKernelSignatureIdentityV2 {
+    let mut digest = CanonicalDigestV2::new(PHYSICAL_SIGNATURE_DOMAIN_V2);
+    digest.bytes(&signature.explicit.identity.0);
+    digest.u32(signature.implicit_argument_offset);
+    digest.u32(signature.implicit_argument_bytes);
+    digest.u64(signature.implicit_parameters.len() as u64);
+    for parameter in &signature.implicit_parameters {
+        digest.u8(implicit_kind_tag(parameter.kind));
+        digest.u32(parameter.offset);
+        digest.u32(parameter.size);
+        digest.u32(parameter.alignment);
+    }
+    Gfx942PhysicalKernelSignatureIdentityV2(digest.finish())
+}
+
+const fn implicit_kind_tag(value: Gfx942ImplicitAbiKindV2) -> u8 {
+    match value {
+        Gfx942ImplicitAbiKindV2::BlockCountX => 1,
+        Gfx942ImplicitAbiKindV2::BlockCountY => 2,
+        Gfx942ImplicitAbiKindV2::BlockCountZ => 3,
+        Gfx942ImplicitAbiKindV2::GroupSizeX => 4,
+        Gfx942ImplicitAbiKindV2::GroupSizeY => 5,
+        Gfx942ImplicitAbiKindV2::GroupSizeZ => 6,
+        Gfx942ImplicitAbiKindV2::RemainderX => 7,
+        Gfx942ImplicitAbiKindV2::RemainderY => 8,
+        Gfx942ImplicitAbiKindV2::RemainderZ => 9,
+        Gfx942ImplicitAbiKindV2::GlobalOffsetX => 10,
+        Gfx942ImplicitAbiKindV2::GlobalOffsetY => 11,
+        Gfx942ImplicitAbiKindV2::GlobalOffsetZ => 12,
+        Gfx942ImplicitAbiKindV2::GridDimensions => 13,
+    }
 }
 
 fn model_parameter_kind(

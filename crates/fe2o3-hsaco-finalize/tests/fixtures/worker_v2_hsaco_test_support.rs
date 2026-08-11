@@ -29,6 +29,8 @@ struct FixtureOptions<'a> {
     include_explicit_argument_alignments: bool,
     include_pointee_alignment: bool,
     pointee_alignment: u64,
+    optional_hidden_argument: Option<(u64, u64, &'a str)>,
+    second_optional_hidden_argument: Option<(u64, u64, &'a str)>,
     include_required_workgroup_size: bool,
     max_workgroups: [Option<u32>; 3],
     include_dynamic_lds_size: bool,
@@ -52,6 +54,8 @@ impl FixtureOptions<'static> {
             include_explicit_argument_alignments: false,
             include_pointee_alignment: false,
             pointee_alignment: 4,
+            optional_hidden_argument: None,
+            second_optional_hidden_argument: None,
             include_required_workgroup_size: true,
             max_workgroups: [None; 3],
             include_dynamic_lds_size: false,
@@ -331,6 +335,24 @@ fn metadata(options: FixtureOptions<'_>) -> Vec<u8> {
         explicit_argument(Some("values_len"), 8, 8, alignment, "by_value", None),
     ];
     arguments.extend(v5_hidden_arguments(16));
+    if let Some((relative_offset, size, kind)) = options.optional_hidden_argument {
+        arguments.push(argument(
+            None,
+            16 + relative_offset,
+            size,
+            kind,
+            None,
+        ));
+    }
+    if let Some((relative_offset, size, kind)) = options.second_optional_hidden_argument {
+        arguments.push(argument(
+            None,
+            16 + relative_offset,
+            size,
+            kind,
+            None,
+        ));
+    }
     if options.include_dynamic_lds_size {
         arguments.push(argument(
             None,

@@ -136,9 +136,10 @@ pub use hsa_executable_lifecycle::{
 };
 #[doc(hidden)]
 pub use launch_kernel_v2_bridge::{
-    CurrentRecoveredLaunchKernelMetadataV2, Gfx942OccupancyMetadataStatusV2,
-    LaunchKernelMetadataBridgeErrorV2, OccupancyDependentLaunchAdmissionErrorV2,
-    bind_current_recovered_launch_kernel_metadata_v2,
+    CurrentRecoveredLaunchKernelMetadataV2, Gfx942ImplicitAbiKindV2, Gfx942ImplicitAbiParameterV2,
+    Gfx942OccupancyMetadataStatusV2, Gfx942PhysicalKernelSignatureIdentityV2,
+    Gfx942PhysicalKernelSignatureV2, LaunchKernelMetadataBridgeErrorV2,
+    OccupancyDependentLaunchAdmissionErrorV2, bind_current_recovered_launch_kernel_metadata_v2,
 };
 #[doc(hidden)]
 pub use loaded_kernel::{GeneratedAdmittedLaunch, LoadedKernelLoadError};
@@ -159,8 +160,8 @@ pub use published_hsaco_inspection::{
     InspectedPublishedDirectLinkPhysicalLayoutV1, MissingPublishedDirectLinkLoadPrerequisiteV1,
     PendingPublishedDirectLinkLoadAdmissionV1, PhysicalMetadataValueV1,
     PublishedKernelPhysicalLayoutV1, PublishedLoadAdmissionError,
-    PublishedPhysicalArgumentLayoutV1, PublishedPhysicalLaunchLayoutV1,
-    PublishedPhysicalLayoutInspectionError,
+    PublishedPhysicalArgumentLayoutV1, PublishedPhysicalHiddenArgumentLayoutV1,
+    PublishedPhysicalLaunchLayoutV1, PublishedPhysicalLayoutInspectionError,
 };
 pub use recovered_worker_v2_admission::{
     RecoveredWorkerV2AdmissionError, RecoveredWorkerV2PinnedDescriptorV1,

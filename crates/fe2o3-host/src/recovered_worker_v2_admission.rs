@@ -819,6 +819,7 @@ mod tests {
                 include_required_workgroup_size,
                 max_workgroups,
                 include_dynamic_lds_size,
+                None,
                 duplicate_max_workgroups_x,
                 malformed_max_workgroups_x,
             )
@@ -834,6 +835,7 @@ mod tests {
             include_required_workgroup_size: bool,
             max_workgroups: [Option<u32>; 3],
             include_dynamic_lds_size: bool,
+            optional_hidden_argument: Option<(u64, u64, &str)>,
             duplicate_max_workgroups_x: bool,
             malformed_max_workgroups_x: bool,
         ) -> Vec<u8> {
@@ -845,8 +847,26 @@ mod tests {
             options.include_required_workgroup_size = include_required_workgroup_size;
             options.max_workgroups = max_workgroups;
             options.include_dynamic_lds_size = include_dynamic_lds_size;
+            options.optional_hidden_argument = optional_hidden_argument;
             options.duplicate_max_workgroups_x = duplicate_max_workgroups_x;
             options.malformed_max_workgroups_x = malformed_max_workgroups_x;
+            fixture_with_descriptor_table(options, Some(table)).bytes
+        }
+
+        pub(super) fn raw_with_optional_hidden_arguments(
+            target: &str,
+            table: &[u8],
+            first: (u64, u64, &'static str),
+            second: Option<(u64, u64, &'static str)>,
+        ) -> Vec<u8> {
+            let mut options = FixtureOptions::valid();
+            options.target = target;
+            options.include_explicit_argument_alignments = true;
+            options.include_pointee_alignment = true;
+            options.include_required_workgroup_size = true;
+            options.max_workgroups = [Some(65_535), Some(1), Some(1)];
+            options.optional_hidden_argument = Some(first);
+            options.second_optional_hidden_argument = second;
             fixture_with_descriptor_table(options, Some(table)).bytes
         }
     }
@@ -1257,6 +1277,7 @@ mod tests {
             false,
             DescriptorArgumentFixture::SharedSlice(ScalarTypeV1::F32),
             manifest_abi(),
+            None,
         )
     }
 
@@ -1273,6 +1294,7 @@ mod tests {
         include_dynamic_lds_size: bool,
         argument_fixture: DescriptorArgumentFixture,
         abi: AbiLayout,
+        optional_hidden_argument: Option<(u64, u64, &'static str)>,
     ) -> RecoveryFixture {
         let source_digest = digest(seed.wrapping_add(0x40));
         let executable_digest = digest(seed.wrapping_add(0x50));
@@ -1312,6 +1334,7 @@ mod tests {
             include_required_workgroup_size,
             max_workgroups,
             include_dynamic_lds_size,
+            optional_hidden_argument,
             false,
             false,
         );
@@ -3053,6 +3076,7 @@ mod tests {
             include_dynamic_lds_size,
             DescriptorArgumentFixture::SharedSlice(ScalarTypeV1::F32),
             manifest_abi(),
+            None,
         );
         let recovered = recover_worker_v2_load_envelope_v1(
             &fixture.output,
@@ -3081,6 +3105,7 @@ mod tests {
             false,
             argument_fixture,
             manifest_abi(),
+            None,
         );
         let recovered = recover_worker_v2_load_envelope_v1(
             &fixture.output,
@@ -3110,6 +3135,36 @@ mod tests {
             false,
             argument_fixture,
             abi,
+            None,
+        );
+        let recovered = recover_worker_v2_load_envelope_v1(
+            &fixture.output,
+            &fixture.envelope,
+            fixture.compiler_transaction.clone(),
+            fixture.kernel_id,
+            &fixture.observed,
+        )
+        .unwrap();
+        (fixture, recovered)
+    }
+
+    fn recovered_launch_bridge_fixture_with_optional_hidden(
+        seed: u8,
+        optional_hidden_argument: (u64, u64, &'static str),
+    ) -> (RecoveryFixture, RecoveredWorkerV2PinnedDescriptorV1) {
+        let fixture = recovery_fixture_with_launch_contracts(
+            seed,
+            "gfx942",
+            "vecadd",
+            true,
+            true,
+            launch(),
+            descriptor_launch(true),
+            [Some(65_535), Some(1), Some(1)],
+            false,
+            DescriptorArgumentFixture::SharedSlice(ScalarTypeV1::F32),
+            manifest_abi(),
+            Some(optional_hidden_argument),
         );
         let recovered = recover_worker_v2_load_envelope_v1(
             &fixture.output,
@@ -3229,6 +3284,130 @@ mod tests {
                     )
                 ));
             }
+        }
+    }
+
+    #[test]
+    fn launch_bridge_commits_complete_mandatory_cov6_implicit_abi() {
+        let (_fixture, recovered) = recovered_launch_bridge_fixture(108);
+        let family =
+            crate::launch_kernel_v2_bridge::canonical_family_for_recovered_launch_bridge_test(
+                &recovered,
+            );
+        let binding = crate::bind_current_recovered_launch_kernel_metadata_v2(
+            &recovered,
+            &family,
+            "recovered-exact-wave64",
+        )
+        .unwrap();
+        let signature = binding.physical_signature();
+        assert_eq!(signature.explicit(), &family.signature);
+        assert_eq!(signature.implicit_argument_offset(), 16);
+        assert_eq!(signature.implicit_argument_bytes(), 256);
+        assert_eq!(signature.implicit_parameters().len(), 13);
+        assert_eq!(signature.implicit_parameters()[0].offset(), 16);
+        assert_eq!(signature.implicit_parameters()[0].size(), 4);
+        assert_eq!(signature.implicit_parameters()[0].alignment(), 4);
+        assert_eq!(
+            signature.implicit_parameters()[0].kind(),
+            crate::Gfx942ImplicitAbiKindV2::BlockCountX
+        );
+        assert_eq!(signature.implicit_parameters()[12].offset(), 80);
+        assert_eq!(signature.implicit_parameters()[12].size(), 2);
+        assert_eq!(signature.implicit_parameters()[12].alignment(), 2);
+        assert_eq!(
+            signature.implicit_parameters()[12].kind(),
+            crate::Gfx942ImplicitAbiKindV2::GridDimensions
+        );
+        assert_ne!(signature.identity().as_bytes(), &[0; 32]);
+    }
+
+    #[test]
+    fn launch_bridge_rejects_missing_reordered_and_substituted_hidden_records() {
+        let (_fixture, recovered) = recovered_launch_bridge_fixture(109);
+        let family =
+            crate::launch_kernel_v2_bridge::canonical_family_for_recovered_launch_bridge_test(
+                &recovered,
+            );
+        let canonical = recovered
+            .physical_kernel()
+            .hidden_arguments()
+            .iter()
+            .map(|argument| (argument.offset(), argument.size(), argument.value_kind()))
+            .collect::<Vec<_>>();
+
+        let shortened = recovered
+            .physical_kernel()
+            .with_hidden_arguments_for_launch_bridge_test(&canonical[..12]);
+        assert!(matches!(
+            crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_with_physical_probe_v2(
+                &recovered,
+                &family,
+                "recovered-exact-wave64",
+                &shortened,
+            ),
+            Err(crate::LaunchKernelMetadataBridgeErrorV2::MissingPhysicalMetadata(
+                "mandatory COV6 implicit ABI records"
+            ))
+        ));
+
+        for mutation in 0..3 {
+            let mut records = canonical.clone();
+            match mutation {
+                0 => records.swap(0, 1),
+                1 => records[0].1 = 8,
+                2 => records[0].2 = fe2o3_hsaco::HiddenValueKind::None,
+                _ => unreachable!(),
+            }
+            let physical = recovered
+                .physical_kernel()
+                .with_hidden_arguments_for_launch_bridge_test(&records);
+            assert!(matches!(
+                crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_with_physical_probe_v2(
+                    &recovered,
+                    &family,
+                    "recovered-exact-wave64",
+                    &physical,
+                ),
+                Err(crate::LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(
+                    "mandatory COV6 implicit ABI record"
+                ))
+            ));
+        }
+    }
+
+    #[test]
+    fn launch_bridge_public_path_rejects_every_unsupported_optional_hidden_kind() {
+        for (seed, hidden) in [
+            (110, (72, 8, "hidden_printf_buffer")),
+            (111, (80, 8, "hidden_hostcall_buffer")),
+            (112, (88, 8, "hidden_multigrid_sync_arg")),
+            (113, (96, 8, "hidden_heap_v1")),
+            (114, (104, 8, "hidden_default_queue")),
+            (115, (112, 8, "hidden_completion_action")),
+            (116, (192, 4, "hidden_private_base")),
+            (117, (196, 4, "hidden_shared_base")),
+            (118, (200, 8, "hidden_queue_ptr")),
+        ] {
+            let (_fixture, recovered) =
+                recovered_launch_bridge_fixture_with_optional_hidden(seed, hidden);
+            let (_model_fixture, model_recovered) = recovered_launch_bridge_fixture(seed);
+            let family =
+                crate::launch_kernel_v2_bridge::canonical_family_for_recovered_launch_bridge_test(
+                    &model_recovered,
+                );
+            assert!(matches!(
+                crate::bind_current_recovered_launch_kernel_metadata_v2(
+                    &recovered,
+                    &family,
+                    "recovered-exact-wave64"
+                ),
+                Err(
+                    crate::LaunchKernelMetadataBridgeErrorV2::UnsupportedPhysicalAbi(
+                        "optional COV6 hidden arguments"
+                    )
+                )
+            ));
         }
     }
 
@@ -3640,6 +3819,56 @@ mod tests {
                 malformed,
             );
             assert_eq!(fe2o3_hsaco::inspect(&raw), Err(expected));
+            assert!(finalize_unfinalized(&raw).is_err());
+        }
+    }
+
+    #[test]
+    fn launch_bridge_hidden_metadata_unknown_duplicate_and_order_fail_before_admission() {
+        let source_digest = digest(0xe3);
+        let executable_digest = digest(0xe4);
+        let artifact_launch = launch();
+        let kernel_id = derive_generated_kernel_identity_v2(
+            MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+            HANDOFF_MARKER_BINDING,
+            "logical_primary",
+            "vecadd",
+            source_digest,
+            executable_digest,
+            &manifest_abi(),
+            &artifact_launch,
+        );
+        let table = descriptor_table(
+            kernel_id,
+            "logical_primary",
+            "vecadd",
+            source_digest,
+            executable_digest,
+            REQUIRED_GFX942_TEST_TARGET,
+            [0; 32],
+            descriptor_launch(true),
+        );
+        let encoded = encode_device_descriptor_table_v1(&table).unwrap();
+
+        for (first, second) in [
+            ((72, 8, "hidden_not_real"), None),
+            ((72, 8, "hidden_hostcall_buffer"), None),
+            (
+                (80, 8, "hidden_hostcall_buffer"),
+                Some((80, 8, "hidden_hostcall_buffer")),
+            ),
+            (
+                (112, 8, "hidden_completion_action"),
+                Some((80, 8, "hidden_hostcall_buffer")),
+            ),
+        ] {
+            let raw = canonical_hsaco_fixture::raw_with_optional_hidden_arguments(
+                REQUIRED_GFX942_TEST_TARGET,
+                &encoded,
+                first,
+                second,
+            );
+            assert!(fe2o3_hsaco::inspect(&raw).is_err());
             assert!(finalize_unfinalized(&raw).is_err());
         }
     }
