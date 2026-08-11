@@ -862,45 +862,9 @@ fn run_application_boundary_result(args: &[OsString]) -> Result<std::process::Ex
 }
 
 fn scrub_application_environment(child: &mut Command) {
-    for (name, _) in env::vars_os() {
-        let bytes = os_bytes(&name);
-        if bytes.starts_with(b"FE2O3_")
-            || is_loader_sensitive_environment(bytes)
-            || matches!(
-                bytes,
-                b"RUSTFLAGS"
-                    | b"CARGO_ENCODED_RUSTFLAGS"
-                    | b"RUSTC_WRAPPER"
-                    | b"RUSTC_WORKSPACE_WRAPPER"
-            )
-        {
-            child.env_remove(name);
-        }
-    }
-}
-
-fn is_loader_sensitive_environment(name: &[u8]) -> bool {
-    const PREFIXES: &[&[u8]] = &[
-        b"LD_", b"DYLD_", b"GLIBC_", b"MALLOC_", b"NSS_", b"LC_", b"RESOLV_",
-    ];
-    const EXACT: &[&[u8]] = &[
-        b"GCONV_PATH",
-        b"GETCONF_DIR",
-        b"HOSTALIASES",
-        b"LANG",
-        b"LANGUAGE",
-        b"LIBC_FATAL_STDERR_",
-        b"LIBPATH",
-        b"LOCALDOMAIN",
-        b"LOCPATH",
-        b"NIS_PATH",
-        b"NLSPATH",
-        b"RES_OPTIONS",
-        b"SHLIB_PATH",
-        b"TZ",
-        b"TZDIR",
-    ];
-    PREFIXES.iter().any(|prefix| name.starts_with(prefix)) || EXACT.contains(&name)
+    // The application boundary has no ambient-environment allowlist. A typed Worker V2 handoff
+    // adds only its five explicit values after this reset.
+    child.env_clear();
 }
 
 fn parse_runner_u64(value: &OsStr, kind: &str) -> Result<u64, String> {
@@ -1260,8 +1224,8 @@ fn print_help() {
 #[cfg(test)]
 mod tests {
     use super::{
-        inject_application_runner_config, is_loader_sensitive_environment, normalize_invocation,
-        parse_rocminfo_target, selected_run_target,
+        inject_application_runner_config, normalize_invocation, parse_rocminfo_target,
+        selected_run_target,
     };
     use crate::project::PinnedDirectory;
     use std::ffi::OsString;
@@ -1357,32 +1321,5 @@ Agent 2
         );
         let duplicate = ["--target", "gfx942", "--target=gfx1100"].map(OsString::from);
         assert!(selected_run_target(&duplicate).is_err());
-    }
-
-    #[test]
-    fn application_boundary_classifies_loader_sensitive_environment() {
-        for name in [
-            b"LD_PRELOAD".as_slice(),
-            b"LD_LIBRARY_PATH",
-            b"LD_AUDIT",
-            b"GLIBC_TUNABLES",
-            b"GLIBC_PTHREAD_RSEQ",
-            b"GCONV_PATH",
-            b"LANG",
-            b"LANGUAGE",
-            b"LC_ALL",
-            b"LOCPATH",
-            b"MALLOC_ARENA_MAX",
-            b"MALLOC_PERTURB_",
-            b"MALLOC_TRACE",
-            b"NSS_DISABLE_AUDIT",
-            b"RES_OPTIONS",
-            b"RESOLV_HOST_CONF",
-            b"DYLD_INSERT_LIBRARIES",
-        ] {
-            assert!(is_loader_sensitive_environment(name), "{name:?}");
-        }
-        assert!(!is_loader_sensitive_environment(b"PATH"));
-        assert!(!is_loader_sensitive_environment(b"RUNNER_CHAIN_ENV"));
     }
 }

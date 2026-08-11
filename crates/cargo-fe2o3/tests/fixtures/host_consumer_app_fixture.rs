@@ -7,7 +7,10 @@ use fe2o3_host::{
     consume_inherited_worker_v2_application_handoff_v1,
 };
 use fe2o3_worker_v2_bundle::{
-    CompilerTransactionEvidenceCapsuleV2, WORKER_V2_APPLICATION_HANDOFF_COMMITMENT_ENV_V1,
+    CompilerTransactionEvidenceCapsuleV2, WORKER_V2_APPLICATION_ARTIFACT_DIR_FD_ENV_V1,
+    WORKER_V2_APPLICATION_ENVELOPE_FD_ENV_V1, WORKER_V2_APPLICATION_HANDOFF_ACK_FD_ENV_V1,
+    WORKER_V2_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
+    WORKER_V2_APPLICATION_HANDOFF_COMMITMENT_ENV_V1,
 };
 
 fn main() {
@@ -19,30 +22,29 @@ fn main() {
 
 fn run() -> Result<(), Box<dyn Error>> {
     let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
-    if arguments.len() != 4 {
-        return Err("usage: host-consumer-app CAPSULE KERNEL-ID TARGET REPORT".into());
+    if !(4..=5).contains(&arguments.len()) {
+        return Err(
+            "usage: host-consumer-app CAPSULE KERNEL-ID TARGET REPORT [TEST-CONTROL]".into(),
+        );
     }
-    for name in [
-        "LD_PRELOAD",
-        "LD_LIBRARY_PATH",
-        "LD_AUDIT",
-        "LD_PROFILE",
-        "GLIBC_TUNABLES",
-        "GCONV_PATH",
-        "HOSTALIASES",
-        "LANG",
-        "LANGUAGE",
-        "LC_ALL",
-        "LOCALDOMAIN",
-        "LOCPATH",
-        "MALLOC_ARENA_MAX",
-        "MALLOC_PERTURB_",
-        "NSS_DISABLE_AUDIT",
-        "RES_OPTIONS",
-        "RESOLV_HOST_CONF",
-    ] {
-        if std::env::var_os(name).is_some() {
-            return Err(format!("loader-sensitive environment survived: {name}").into());
+    let substitute_commitment = match arguments.get(4) {
+        None => false,
+        Some(control) if control == "--fe2o3-test-substitute-commitment" => true,
+        Some(control) => return Err(format!("unknown fixture control {control:?}").into()),
+    };
+    let handoff_names = [
+        WORKER_V2_APPLICATION_ENVELOPE_FD_ENV_V1,
+        WORKER_V2_APPLICATION_ARTIFACT_DIR_FD_ENV_V1,
+        WORKER_V2_APPLICATION_HANDOFF_COMMITMENT_ENV_V1,
+        WORKER_V2_APPLICATION_HANDOFF_ACK_FD_ENV_V1,
+        WORKER_V2_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
+    ];
+    for (name, _) in std::env::vars_os() {
+        if !handoff_names
+            .iter()
+            .any(|allowed| name == std::ffi::OsStr::new(allowed))
+        {
+            return Err(format!("unexpected application environment survived: {name:?}").into());
         }
     }
     let report = PathBuf::from(&arguments[3]);
@@ -50,7 +52,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         &report,
         br#"{"host_consumer":true,"loader_environment_clear":true,"admitted":false}"#,
     )?;
-    if std::env::var_os("RUNNER_HOST_FIXTURE_SUBSTITUTE_COMMITMENT").is_some() {
+    if substitute_commitment {
         let mut commitment = std::env::var(WORKER_V2_APPLICATION_HANDOFF_COMMITMENT_ENV_V1)?;
         commitment.replace_range(
             ..1,

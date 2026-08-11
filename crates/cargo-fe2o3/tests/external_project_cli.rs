@@ -1113,7 +1113,7 @@ fn internal_runner_args(
 
 #[cfg(unix)]
 #[test]
-fn configured_multi_argument_runner_is_chained_after_capability_scrub() {
+fn configured_multi_argument_runner_is_chained_after_empty_environment_reset() {
     let fixture = ProjectFixture::standalone();
     let runner_report = fixture.root.join("qemu-runner.json");
     let application_report = fixture.root.join("qemu-application.json");
@@ -1149,17 +1149,13 @@ fn configured_multi_argument_runner_is_chained_after_capability_scrub() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_runner_chain_report(&runner_report, "qemu", "707265736572766564");
-    assert_application_report(
-        &application_report,
-        "71656d752d7061796c6f6164",
-        "707265736572766564",
-    );
+    assert_runner_chain_report(&runner_report, "qemu", None);
+    assert_application_report(&application_report, "71656d752d7061796c6f6164", None);
 }
 
 #[cfg(unix)]
 #[test]
-fn non_utf8_environment_runner_is_chained_losslessly() {
+fn non_utf8_runner_arguments_survive_empty_environment_reset() {
     use std::os::unix::ffi::{OsStrExt, OsStringExt};
 
     let fixture = ProjectFixture::standalone();
@@ -1201,7 +1197,7 @@ fn non_utf8_environment_runner_is_chained_losslessly() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_runner_chain_report(&runner_report, "ssh", "72756e6e65722d656e762dfe");
+    assert_runner_chain_report(&runner_report, "ssh", None);
     let runner: serde_json::Value =
         serde_json::from_slice(&fs::read(&runner_report).expect("read runner report"))
             .expect("decode runner report");
@@ -1212,11 +1208,7 @@ fn non_utf8_environment_runner_is_chained_losslessly() {
             .iter()
             .any(|value| value == "686f73742dff")
     );
-    assert_application_report(
-        &application_report,
-        "7373682d7061796c6f61642dfd",
-        "72756e6e65722d656e762dfe",
-    );
+    assert_application_report(&application_report, "7373682d7061796c6f61642dfd", None);
 }
 
 #[test]
@@ -1283,14 +1275,19 @@ fn hardlink_to_cargo_fe2o3_is_rejected_as_a_recursive_runner() {
 }
 
 #[cfg(unix)]
-fn assert_runner_chain_report(path: &Path, mode: &str, preserved_environment: &str) {
+fn assert_runner_chain_report(path: &Path, mode: &str, preserved_environment: Option<&str>) {
     let report: serde_json::Value =
         serde_json::from_slice(&fs::read(path).expect("read runner report"))
             .expect("decode runner report");
     assert_eq!(report["artifact_fd_open"], false);
     assert_eq!(report["backend_fd_open"], false);
     assert_eq!(report["leaked_environment"], serde_json::json!([]));
-    assert_eq!(report["preserved_environment_hex"], preserved_environment);
+    assert_eq!(
+        report["preserved_environment_hex"],
+        preserved_environment
+            .map(serde_json::Value::from)
+            .unwrap_or(serde_json::Value::Null)
+    );
     assert!(
         report["prefix_hex"]
             .as_array()
@@ -1301,15 +1298,21 @@ fn assert_runner_chain_report(path: &Path, mode: &str, preserved_environment: &s
 }
 
 #[cfg(unix)]
-fn assert_application_report(path: &Path, payload: &str, preserved_environment: &str) {
+fn assert_application_report(path: &Path, payload: &str, preserved_environment: Option<&str>) {
     let report: serde_json::Value =
         serde_json::from_slice(&fs::read(path).expect("read application report"))
             .expect("decode application report");
     assert_eq!(report["artifact_fd_open"], false);
     assert_eq!(report["backend_fd_open"], false);
     assert_eq!(report["leaked_environment"], serde_json::json!([]));
+    assert_eq!(report["unexpected_environment"], serde_json::json!([]));
     assert_eq!(report["payload_hex"], payload);
-    assert_eq!(report["preserved_environment_hex"], preserved_environment);
+    assert_eq!(
+        report["preserved_environment_hex"],
+        preserved_environment
+            .map(serde_json::Value::from)
+            .unwrap_or(serde_json::Value::Null)
+    );
 }
 
 #[cfg(unix)]

@@ -1114,6 +1114,7 @@ fn canonical_envelope_is_consumed_through_descriptor_protocol_completion() {
     assert_eq!(report["artifact_fd_open"], false);
     assert_eq!(report["backend_fd_open"], false);
     assert_eq!(report["leaked_environment"], json!([]));
+    assert_eq!(report["unexpected_environment"], json!([]));
     assert_eq!(report["handoff"]["acknowledged"], true);
     assert_eq!(report["handoff"]["artifact_directory_read_only"], true);
     assert_eq!(report["handoff"]["read_only"], true);
@@ -1153,6 +1154,9 @@ fn real_host_consumer_reaches_exact_prerequisite_admission() {
         .env("NSS_DISABLE_AUDIT", "1")
         .env("RES_OPTIONS", "attempts:1")
         .env("RESOLV_HOST_CONF", "/untrusted/host.conf")
+        .env("PATH", "/untrusted/bin")
+        .env("TMPDIR", "/untrusted/tmp")
+        .env("ARBITRARY_APPLICATION_VARIABLE", "must-not-survive")
         .output()
         .unwrap();
     assert!(!consumed.status.success());
@@ -1162,7 +1166,7 @@ fn real_host_consumer_reaches_exact_prerequisite_admission() {
         stderr(&consumed)
     );
     assert!(
-        !stderr(&consumed).contains("loader-sensitive environment survived"),
+        !stderr(&consumed).contains("unexpected application environment survived"),
         "{}",
         stderr(&consumed)
     );
@@ -1173,7 +1177,7 @@ fn real_host_consumer_reaches_exact_prerequisite_admission() {
 
     let rejected_report = directory.0.join("host-consumer-substitution.json");
     let rejected = host_consumer_runner_command(&directory, &rejected_report)
-        .env("RUNNER_HOST_FIXTURE_SUBSTITUTE_COMMITMENT", "1")
+        .arg("--fe2o3-test-substitute-commitment")
         .output()
         .unwrap();
     assert!(!rejected.status.success());
@@ -1210,7 +1214,9 @@ fn application_handoff_close_range_blocks_unrelated_inheritable_descriptors() {
     let source = File::open("/dev/null").unwrap();
     let source_fd = source.as_raw_fd();
     let mut command = application_runner_command(&directory, application_fixture(), &report);
-    command.env("RUNNER_FIXTURE_PROBE_FD", PROBE_FD.to_string());
+    command
+        .arg("--fe2o3-test-probe-fd")
+        .arg(PROBE_FD.to_string());
     // SAFETY: this callback creates one intentionally inheritable descriptor in the runner child
     // before exec. The application pre-exec close_range must quarantine it atomically.
     unsafe {
@@ -1245,7 +1251,7 @@ fn public_ack_completion_does_not_replace_private_host_currentness_authority() {
 
     let report = directory.0.join("public-ack-report.json");
     let completed = application_runner_command(&directory, application_fixture(), &report)
-        .env("RUNNER_FIXTURE_PUBLIC_ACK_WITHOUT_REACQUIRE", "1")
+        .arg("--fe2o3-test-public-ack-without-reacquire")
         .output()
         .unwrap();
     assert!(completed.status.success(), "{}", stderr(&completed));
@@ -1273,8 +1279,8 @@ fn application_seccomp_rejects_process_and_double_fork_setsid_escape() {
     let escape_marker = directory.0.join("double-fork-setsid-escaped");
     let application = application_fixture();
     let completed = application_runner_command(&directory, application, &report)
-        .env("RUNNER_FIXTURE_SECCOMP_PROCESS_PROBE", "1")
-        .env("RUNNER_FIXTURE_DESCENDANT_PID_FILE", &escape_marker)
+        .arg("--fe2o3-test-seccomp-process-probe")
+        .arg(&escape_marker)
         .output()
         .unwrap();
     assert!(completed.status.success(), "{}", stderr(&completed));
@@ -1540,17 +1546,17 @@ fn application_handoff_rejects_child_protocol_substitution_and_omission() {
     );
     assert!(published.status.success(), "{}", stderr(&published));
 
-    for (probe, value) in [
-        ("RUNNER_FIXTURE_REUSE_HANDOFF_FD", "1"),
-        ("RUNNER_FIXTURE_REUSE_ARTIFACT_DIR_FD", "1"),
-        ("RUNNER_FIXTURE_SUBSTITUTE_COMMITMENT", "1"),
-        ("RUNNER_FIXTURE_IGNORE_HANDOFF", "1"),
-        ("RUNNER_FIXTURE_PREMATURE_CLOSE_ACK", "1"),
-        ("RUNNER_FIXTURE_EXTRA_ACK_BYTE", "1"),
+    for probe in [
+        "--fe2o3-test-reuse-handoff-fd",
+        "--fe2o3-test-reuse-artifact-dir-fd",
+        "--fe2o3-test-substitute-commitment",
+        "--fe2o3-test-ignore-handoff",
+        "--fe2o3-test-premature-close-ack",
+        "--fe2o3-test-extra-ack-byte",
     ] {
         let report = directory.0.join(format!("rejected-{probe}.json"));
         let rejected = application_runner_command(&directory, application_fixture(), &report)
-            .env(probe, value)
+            .arg(probe)
             .output()
             .unwrap();
         assert!(

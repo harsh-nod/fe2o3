@@ -1,5 +1,5 @@
 use std::env;
-use std::ffi::{CString, OsStr};
+use std::ffi::{CString, OsStr, OsString};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
@@ -25,6 +25,73 @@ struct ValidatedHandoff {
     _current_lease: Option<DurableCurrentLinkPublicationLeaseV1>,
 }
 
+#[derive(Default)]
+struct FixtureControls {
+    probe_fd: Option<i32>,
+    ignore_handoff: bool,
+    reuse_handoff_fd: bool,
+    reuse_artifact_directory_fd: bool,
+    substitute_commitment: bool,
+    public_ack_without_reacquire: bool,
+    seccomp_escape_marker: Option<OsString>,
+    premature_close_ack: bool,
+    extra_ack_byte: bool,
+}
+
+impl FixtureControls {
+    fn parse(arguments: &[OsString]) -> Result<Self, String> {
+        let mut controls = Self::default();
+        let mut index = 2;
+        while let Some(argument) = arguments.get(index) {
+            let flag = argument
+                .to_str()
+                .ok_or_else(|| "fixture control flag is not UTF-8".to_string())?;
+            match flag {
+                "--fe2o3-test-probe-fd" => {
+                    let value = arguments
+                        .get(index + 1)
+                        .and_then(|value| value.to_str())
+                        .and_then(|value| value.parse::<i32>().ok())
+                        .filter(|descriptor| *descriptor >= 3)
+                        .ok_or_else(|| "fixture probe descriptor is invalid".to_string())?;
+                    controls.probe_fd = Some(value);
+                    index += 2;
+                }
+                "--fe2o3-test-ignore-handoff" => controls.ignore_handoff = true,
+                "--fe2o3-test-reuse-handoff-fd" => controls.reuse_handoff_fd = true,
+                "--fe2o3-test-reuse-artifact-dir-fd" => {
+                    controls.reuse_artifact_directory_fd = true;
+                }
+                "--fe2o3-test-substitute-commitment" => {
+                    controls.substitute_commitment = true;
+                }
+                "--fe2o3-test-public-ack-without-reacquire" => {
+                    controls.public_ack_without_reacquire = true;
+                }
+                "--fe2o3-test-seccomp-process-probe" => {
+                    controls.seccomp_escape_marker = Some(
+                        arguments
+                            .get(index + 1)
+                            .ok_or_else(|| "seccomp probe requires an escape marker".to_string())?
+                            .clone(),
+                    );
+                    index += 2;
+                }
+                "--fe2o3-test-premature-close-ack" => controls.premature_close_ack = true,
+                "--fe2o3-test-extra-ack-byte" => controls.extra_ack_byte = true,
+                _ => return Err(format!("unknown runner fixture control {argument:?}")),
+            }
+            if !matches!(
+                flag,
+                "--fe2o3-test-probe-fd" | "--fe2o3-test-seccomp-process-probe"
+            ) {
+                index += 1;
+            }
+        }
+        Ok(controls)
+    }
+}
+
 fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
@@ -40,6 +107,7 @@ fn run() -> Result<(), String> {
     let Some(report) = args.first().map(PathBuf::from) else {
         return Err("runner fixture requires a report path".to_string());
     };
+    let controls = FixtureControls::parse(&args)?;
     let leaked_environment = env::vars_os()
         .filter_map(|(name, _)| {
             is_build_control(&name).then(|| name.to_string_lossy().into_owned())
@@ -49,13 +117,14 @@ fn run() -> Result<(), String> {
         .get(1)
         .map(|value| hex(os_bytes(value)))
         .unwrap_or_default();
-    let handoff = validate_handoff()?;
-    let probe_fd_open = env::var("RUNNER_FIXTURE_PROBE_FD")
-        .ok()
-        .and_then(|value| value.parse::<i32>().ok())
-        .is_some_and(|descriptor| {
-            fs::symlink_metadata(format!("/proc/self/fd/{descriptor}")).is_ok()
-        });
+    let unexpected_environment = env::vars_os()
+        .filter_map(|(name, _)| (!is_handoff_environment(&name)).then_some(name))
+        .map(|name| name.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    let handoff = validate_handoff(&controls)?;
+    let probe_fd_open = controls.probe_fd.is_some_and(|descriptor| {
+        fs::symlink_metadata(format!("/proc/self/fd/{descriptor}")).is_ok()
+    });
     let record = serde_json::json!({
         "artifact_fd_open": fs::symlink_metadata("/proc/self/fd/197").is_ok(),
         "backend_fd_open": fs::symlink_metadata("/proc/self/fd/198").is_ok(),
@@ -65,6 +134,7 @@ fn run() -> Result<(), String> {
         "probe_fd_open": probe_fd_open,
         "preserved_environment_hex": env::var_os("RUNNER_CHAIN_ENV")
             .map(|value| hex(os_bytes(&value))),
+        "unexpected_environment": unexpected_environment,
     });
     fs::write(
         report,
@@ -77,7 +147,7 @@ fn run() -> Result<(), String> {
     Ok(())
 }
 
-fn validate_handoff() -> Result<ValidatedHandoff, String> {
+fn validate_handoff(controls: &FixtureControls) -> Result<ValidatedHandoff, String> {
     let names = [
         WORKER_V2_APPLICATION_ENVELOPE_FD_ENV_V1,
         WORKER_V2_APPLICATION_ARTIFACT_DIR_FD_ENV_V1,
@@ -97,7 +167,7 @@ fn validate_handoff() -> Result<ValidatedHandoff, String> {
     if values.iter().any(Option::is_none) {
         return Err("application received an incomplete handoff environment".to_string());
     }
-    if env::var_os("RUNNER_FIXTURE_IGNORE_HANDOFF").is_some() {
+    if controls.ignore_handoff {
         return Ok(ValidatedHandoff {
             report: serde_json::json!({"ignored": true}),
             _envelope: None,
@@ -125,13 +195,13 @@ fn validate_handoff() -> Result<ValidatedHandoff, String> {
         .map_err(|error| format!("decode application handoff challenge: {error}"))?;
     let mut commitment = commitment?;
 
-    if env::var_os("RUNNER_FIXTURE_REUSE_HANDOFF_FD").is_some() {
+    if controls.reuse_handoff_fd {
         replace_descriptor(envelope_fd, "envelope")?;
     }
-    if env::var_os("RUNNER_FIXTURE_REUSE_ARTIFACT_DIR_FD").is_some() {
+    if controls.reuse_artifact_directory_fd {
         replace_descriptor(artifact_directory_fd, "artifact directory")?;
     }
-    if env::var_os("RUNNER_FIXTURE_SUBSTITUTE_COMMITMENT").is_some() {
+    if controls.substitute_commitment {
         let replacement = if commitment.starts_with('0') {
             "1"
         } else {
@@ -187,7 +257,7 @@ fn validate_handoff() -> Result<ValidatedHandoff, String> {
         );
     }
 
-    if env::var_os("RUNNER_FIXTURE_PUBLIC_ACK_WITHOUT_REACQUIRE").is_some() {
+    if controls.public_ack_without_reacquire {
         ack_file
             .write_all(&expectation.acknowledgment(challenge).encode_canonical())
             .map_err(|error| format!("write public protocol acknowledgment: {error}"))?;
@@ -211,19 +281,20 @@ fn validate_handoff() -> Result<ValidatedHandoff, String> {
     let current_token = current_lease
         .acquire_current_token()
         .map_err(|error| format!("retain current publication through acknowledgment: {error}"))?;
-    let process_creation = env::var_os("RUNNER_FIXTURE_SECCOMP_PROCESS_PROBE")
-        .is_some()
-        .then(seccomp_process_probe)
+    let process_creation = controls
+        .seccomp_escape_marker
+        .as_deref()
+        .map(seccomp_process_probe)
         .transpose()?;
 
-    if env::var_os("RUNNER_FIXTURE_PREMATURE_CLOSE_ACK").is_some() {
+    if controls.premature_close_ack {
         drop(ack_file);
     } else {
         let acknowledgment = expectation.acknowledgment(challenge).encode_canonical();
         ack_file
             .write_all(&acknowledgment)
             .map_err(|error| format!("write application handoff acknowledgment: {error}"))?;
-        if env::var_os("RUNNER_FIXTURE_EXTRA_ACK_BYTE").is_some() {
+        if controls.extra_ack_byte {
             ack_file
                 .write_all(&[0])
                 .map_err(|error| format!("write extra acknowledgment byte: {error}"))?;
@@ -253,10 +324,8 @@ fn validate_handoff() -> Result<ValidatedHandoff, String> {
     })
 }
 
-fn seccomp_process_probe() -> Result<serde_json::Value, String> {
-    let escape_marker = env::var_os("RUNNER_FIXTURE_DESCENDANT_PID_FILE")
-        .ok_or_else(|| "seccomp probe requires an escape marker path".to_string())?;
-    let escape_marker = CString::new(os_bytes(&escape_marker))
+fn seccomp_process_probe(escape_marker: &OsStr) -> Result<serde_json::Value, String> {
+    let escape_marker = CString::new(os_bytes(escape_marker))
         .map_err(|_| "seccomp escape marker path contains NUL".to_string())?;
     let no_args = [0_usize; 6];
     let clone_args = [libc::SIGCHLD as usize, 0, 0, 0, 0, 0];
@@ -447,16 +516,7 @@ fn validate_descriptor(
 
 fn is_build_control(name: &OsStr) -> bool {
     let bytes = os_bytes(name);
-    let handoff_control = [
-        WORKER_V2_APPLICATION_ENVELOPE_FD_ENV_V1,
-        WORKER_V2_APPLICATION_ARTIFACT_DIR_FD_ENV_V1,
-        WORKER_V2_APPLICATION_HANDOFF_COMMITMENT_ENV_V1,
-        WORKER_V2_APPLICATION_HANDOFF_ACK_FD_ENV_V1,
-        WORKER_V2_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
-    ]
-    .iter()
-    .any(|allowed| name == OsStr::new(allowed));
-    bytes.starts_with(b"FE2O3_") && !handoff_control
+    bytes.starts_with(b"FE2O3_") && !is_handoff_environment(name)
         || matches!(
             bytes,
             b"RUSTFLAGS"
@@ -464,6 +524,18 @@ fn is_build_control(name: &OsStr) -> bool {
                 | b"RUSTC_WRAPPER"
                 | b"RUSTC_WORKSPACE_WRAPPER"
         )
+}
+
+fn is_handoff_environment(name: &OsStr) -> bool {
+    [
+        WORKER_V2_APPLICATION_ENVELOPE_FD_ENV_V1,
+        WORKER_V2_APPLICATION_ARTIFACT_DIR_FD_ENV_V1,
+        WORKER_V2_APPLICATION_HANDOFF_COMMITMENT_ENV_V1,
+        WORKER_V2_APPLICATION_HANDOFF_ACK_FD_ENV_V1,
+        WORKER_V2_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
+    ]
+    .iter()
+    .any(|allowed| name == OsStr::new(allowed))
 }
 
 fn hex(bytes: &[u8]) -> String {
