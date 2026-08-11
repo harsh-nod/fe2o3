@@ -1118,6 +1118,60 @@ void everyCallEncodingUsesTheAbiReturnPair() {
   }
 }
 
+void scalarLoadWidthsUseExactMcEncodings() {
+  struct WidthCase {
+    uint8_t Opcode;
+    StringLiteral Name;
+    uint16_t Bytes;
+  };
+  constexpr std::array<WidthCase, 5> Cases = {
+      WidthCase{0x00, "S_LOAD_DWORD", 4},
+      WidthCase{0x01, "S_LOAD_DWORDX2", 8},
+      WidthCase{0x02, "S_LOAD_DWORDX4", 16},
+      WidthCase{0x03, "S_LOAD_DWORDX8", 32},
+      WidthCase{0x04, "S_LOAD_DWORDX16", 64},
+  };
+
+  for (const WidthCase &Case : Cases) {
+    auto Payload = finalize(makeKernelBitcode(false));
+    auto Sites = decodeSymbolSites(Payload, "alpha");
+    auto ScalarLoad = llvm::find_if(Sites, [](const DecodedSite &Site) {
+      return StringRef(Site.Name).starts_with("S_LOAD_DWORD") && Site.Size == 8;
+    });
+    require(ScalarLoad != Sites.end(),
+            "scalar-width fixture has no eight-byte S_LOAD");
+
+    uint32_t Low =
+        support::endian::read32le(Payload.data() + ScalarLoad->FileOffset);
+    constexpr uint32_t OpcodeMask = 0xffu << 18;
+    constexpr uint32_t DestinationMask = 0x7fu << 6;
+    Low &= ~(OpcodeMask | DestinationMask);
+    Low |= static_cast<uint32_t>(Case.Opcode) << 18;
+    support::endian::write32le(Payload.data() + ScalarLoad->FileOffset, Low);
+
+    auto Changed = decodeSymbolSites(Payload, "alpha");
+    auto ChangedLoad = llvm::find_if(Changed, [&](const DecodedSite &Site) {
+      return Site.Address == ScalarLoad->Address &&
+             StringRef(Site.Name).starts_with(Case.Name);
+    });
+    require(ChangedLoad != Changed.end(),
+            "scalar-load opcode mutation did not decode exactly");
+
+    auto Result =
+        analyzeGfx942PhysicalMachineEffects(directRequest(std::move(Payload)));
+    if (!Result)
+      fail(takeError(Result.takeError()));
+    auto Effect = llvm::find_if(Result->Effects, [&](const auto &Candidate) {
+      return Candidate.EntrySymbol == "alpha" &&
+             Candidate.FunctionSymbol == "alpha" &&
+             Candidate.InstructionOffset == ScalarLoad->Address &&
+             Candidate.Kind == PhysicalMachineEffectKind::GlobalRead;
+    });
+    require(Effect != Result->Effects.end() && Effect->ByteWidth == Case.Bytes,
+            "scalar-load effect width does not match MC opcode");
+  }
+}
+
 } // namespace
 
 int main() {
@@ -1130,5 +1184,6 @@ int main() {
   cfgReviewerReproductionsFailClosed();
   directCallEdgesAreResolvedExactly();
   everyCallEncodingUsesTheAbiReturnPair();
+  scalarLoadWidthsUseExactMcEncodings();
   return 0;
 }

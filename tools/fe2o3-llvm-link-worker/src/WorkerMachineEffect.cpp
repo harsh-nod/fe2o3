@@ -1090,6 +1090,10 @@ decodeFunction(const SymbolRecord &Function, McState &Mc) {
 }
 
 std::optional<uint16_t> memoryWidth(StringRef Name) {
+  if (Name.contains("DWORDX16"))
+    return 64;
+  if (Name.contains("DWORDX8"))
+    return 32;
   if (Name.contains("DWORDX4"))
     return 16;
   if (Name.contains("DWORDX3"))
