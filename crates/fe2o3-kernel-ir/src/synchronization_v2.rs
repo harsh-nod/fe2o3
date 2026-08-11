@@ -696,7 +696,23 @@ pub enum AllocationAliasConsequence {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VerificationReport {
+    pub module_digest: [u8; 32],
+    pub obligations_digest: [u8; 32],
+    pub report_digest: [u8; 32],
+    pub target: TargetProfile,
+    pub target_limits: TargetHardLimits,
+    pub policy_limits: SynchronizationLimits,
     pub obligations: Vec<VerifierObligation>,
+}
+
+impl VerificationReport {
+    pub fn verifies_module(
+        &self,
+        module: &SynchronizationModuleV2,
+        limits: &SynchronizationLimits,
+    ) -> Result<bool, ValidationError> {
+        Ok(self == &module.validate(limits)?)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -972,8 +988,26 @@ impl SynchronizationModuleV2 {
             usize_u64(obligations.len())?,
             u64::from(limits.max_obligations),
         )?;
+        let obligations: Vec<_> = obligations.into_iter().collect();
+        let canonical_module = encode_validated_synchronization_v2(self, limits)?;
+        let module_digest = digest_module(&canonical_module);
+        let obligations_digest = digest_obligations(&obligations);
+        let target_limits = self.target.hard_limits();
+        let report_digest = digest_report(
+            module_digest,
+            obligations_digest,
+            self.target,
+            target_limits,
+            *limits,
+        );
         Ok(VerificationReport {
-            obligations: obligations.into_iter().collect(),
+            module_digest,
+            obligations_digest,
+            report_digest,
+            target: self.target,
+            target_limits,
+            policy_limits: *limits,
+            obligations,
         })
     }
 }
@@ -1829,6 +1863,13 @@ pub fn encode_synchronization_v2(
     limits: &SynchronizationLimits,
 ) -> Result<Vec<u8>, ValidationError> {
     module.validate(limits)?;
+    encode_validated_synchronization_v2(module, limits)
+}
+
+fn encode_validated_synchronization_v2(
+    module: &SynchronizationModuleV2,
+    limits: &SynchronizationLimits,
+) -> Result<Vec<u8>, ValidationError> {
     let mut writer = Writer::new(limits.max_encoded_bytes);
     writer.bytes(&SYNCHRONIZATION_V2_MAGIC)?;
     writer.u16(SYNCHRONIZATION_V2_VERSION)?;
@@ -2511,6 +2552,370 @@ fn decode_bool(tag: u8) -> Result<bool, DecodeError> {
         1 => Ok(true),
         _ => Err(DecodeError::InvalidBoolean),
     }
+}
+
+fn digest_module(canonical_module: &[u8]) -> [u8; 32] {
+    let mut digest = DomainSeparatedDigest::new(b"fe2o3.synchronization.module.v3");
+    digest.bytes(canonical_module);
+    digest.finish()
+}
+
+fn digest_obligations(obligations: &[VerifierObligation]) -> [u8; 32] {
+    let mut digest = DomainSeparatedDigest::new(b"fe2o3.synchronization.obligations.v3");
+    digest.u32(obligations.len() as u32);
+    for obligation in obligations {
+        match obligation {
+            VerifierObligation::UniformParticipation {
+                event,
+                group,
+                expected_participants,
+                active_mask,
+            } => {
+                digest.u8(1);
+                digest.u32(event.0);
+                digest.u8(*group as u8);
+                digest.u32(*expected_participants);
+                digest.option_u64(*active_mask);
+            }
+            VerifierObligation::CooperativeParticipation {
+                event,
+                expected_participants,
+            } => {
+                digest.u8(2);
+                digest.u32(event.0);
+                digest.u32(*expected_participants);
+            }
+            VerifierObligation::HappensBefore {
+                edge,
+                before,
+                after,
+                kind,
+                scope,
+                domains,
+                before_outcome,
+                after_outcome,
+                read_from,
+            } => {
+                digest.u8(3);
+                digest.u32(*edge);
+                digest.u32(before.0);
+                digest.u32(after.0);
+                digest.u8(match kind {
+                    SynchronizationEdgeKind::ProgramOrder => 1,
+                    SynchronizationEdgeKind::SynchronizesWith => 2,
+                });
+                digest.u8(*scope as u8);
+                digest.u8(domains.bits());
+                digest.u8(*before_outcome as u8);
+                digest.u8(*after_outcome as u8);
+                digest.u8(*read_from as u8);
+            }
+            VerifierObligation::NonAtomicConflict {
+                first,
+                second,
+                address_space,
+                structurally_ordered,
+                aliasing,
+            } => {
+                digest.u8(4);
+                digest.u32(first.0);
+                digest.u32(second.0);
+                digest.u8(*address_space as u8);
+                digest.boolean(*structurally_ordered);
+                digest.u8(match aliasing {
+                    AliasingCondition::ConfirmedOverlap => 1,
+                    AliasingCondition::VerifierMustProveDisjoint => 2,
+                });
+            }
+            VerifierObligation::DischargeAllocationAlias {
+                first,
+                second,
+                address_space,
+                first_region,
+                second_region,
+                consequence,
+            } => {
+                digest.u8(5);
+                digest.u32(first.0);
+                digest.u32(second.0);
+                digest.u8(*address_space as u8);
+                digest.region(*first_region);
+                digest.region(*second_region);
+                digest.u8(match consequence {
+                    AllocationAliasConsequence::ReadOnlyOverlap => 1,
+                    AllocationAliasConsequence::NonAtomicConflict => 2,
+                    AllocationAliasConsequence::AtomicObjectCompatibility => 3,
+                });
+            }
+            VerifierObligation::ScopeCompatibility {
+                first,
+                second,
+                required_scope,
+            } => {
+                digest.u8(6);
+                digest.u32(first.0);
+                digest.u32(second.0);
+                digest.u8(*required_scope as u8);
+            }
+            VerifierObligation::AuthenticateCoherentAllocation {
+                event,
+                allocation,
+                authority,
+            } => {
+                digest.u8(7);
+                digest.u32(event.0);
+                digest.u32(*allocation);
+                digest.u64(*authority);
+            }
+            VerifierObligation::LdsBankMapping {
+                allocation,
+                base_offset,
+                bank_count,
+                bank_width,
+                element_stride,
+                swizzle,
+            } => {
+                digest.u8(8);
+                digest.u32(allocation.0);
+                digest.u32(*base_offset);
+                digest.u16(*bank_count);
+                digest.u16(*bank_width);
+                digest.u32(*element_stride);
+                match swizzle {
+                    LdsSwizzle::Linear => {
+                        digest.u8(1);
+                        digest.u8(0);
+                    }
+                    LdsSwizzle::Xor { shift } => {
+                        digest.u8(2);
+                        digest.u8(*shift);
+                    }
+                }
+            }
+        }
+    }
+    digest.finish()
+}
+
+fn digest_report(
+    module_digest: [u8; 32],
+    obligations_digest: [u8; 32],
+    target: TargetProfile,
+    target_limits: TargetHardLimits,
+    policy_limits: SynchronizationLimits,
+) -> [u8; 32] {
+    let mut digest = DomainSeparatedDigest::new(b"fe2o3.synchronization.report.v3");
+    digest.bytes(&module_digest);
+    digest.bytes(&obligations_digest);
+    digest.u8(target as u8);
+    digest.u32(target_limits.wave_size);
+    digest.u32(target_limits.max_lds_bytes);
+    digest.u32(target_limits.max_workgroup_participants);
+    digest.u32(target_limits.max_cooperative_participants);
+    digest.u32(policy_limits.max_lds_allocations);
+    digest.u32(policy_limits.max_events);
+    digest.u32(policy_limits.max_edges);
+    digest.u32(policy_limits.max_total_lds_bytes);
+    digest.u64(policy_limits.max_encoded_bytes);
+    digest.u32(policy_limits.max_obligations);
+    digest.u64(policy_limits.max_pair_checks);
+    digest.u32(policy_limits.max_workgroup_participants);
+    digest.u32(policy_limits.max_cooperative_participants);
+    digest.finish()
+}
+
+struct DomainSeparatedDigest {
+    sha256: Sha256,
+}
+
+impl DomainSeparatedDigest {
+    fn new(domain: &[u8]) -> Self {
+        let mut sha256 = Sha256::new();
+        sha256.update(&(domain.len() as u32).to_le_bytes());
+        sha256.update(domain);
+        Self { sha256 }
+    }
+
+    fn bytes(&mut self, bytes: &[u8]) {
+        self.sha256.update(bytes);
+    }
+
+    fn boolean(&mut self, value: bool) {
+        self.u8(u8::from(value));
+    }
+
+    fn u8(&mut self, value: u8) {
+        self.bytes(&[value]);
+    }
+
+    fn u16(&mut self, value: u16) {
+        self.bytes(&value.to_le_bytes());
+    }
+
+    fn u32(&mut self, value: u32) {
+        self.bytes(&value.to_le_bytes());
+    }
+
+    fn u64(&mut self, value: u64) {
+        self.bytes(&value.to_le_bytes());
+    }
+
+    fn option_u64(&mut self, value: Option<u64>) {
+        self.boolean(value.is_some());
+        self.u64(value.unwrap_or(0));
+    }
+
+    fn region(&mut self, region: MemoryRegion) {
+        self.u32(region.allocation);
+        self.u32(region.offset);
+        self.u32(region.bytes);
+    }
+
+    fn finish(self) -> [u8; 32] {
+        self.sha256.finalize()
+    }
+}
+
+struct Sha256 {
+    state: [u32; 8],
+    buffer: [u8; 64],
+    buffer_len: usize,
+    message_len: u64,
+}
+
+impl Sha256 {
+    const ROUND_CONSTANTS: [u32; 64] = [
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
+    ];
+
+    const fn new() -> Self {
+        Self {
+            state: [
+                0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+                0x5be0cd19,
+            ],
+            buffer: [0; 64],
+            buffer_len: 0,
+            message_len: 0,
+        }
+    }
+
+    fn update(&mut self, mut bytes: &[u8]) {
+        self.message_len = self
+            .message_len
+            .checked_add(bytes.len() as u64)
+            .expect("bounded synchronization digest length");
+        if self.buffer_len != 0 {
+            let count = (64 - self.buffer_len).min(bytes.len());
+            self.buffer[self.buffer_len..self.buffer_len + count].copy_from_slice(&bytes[..count]);
+            self.buffer_len += count;
+            bytes = &bytes[count..];
+            if self.buffer_len != 64 {
+                return;
+            }
+            let block = self.buffer;
+            self.compress(&block);
+            self.buffer_len = 0;
+        }
+        while bytes.len() >= 64 {
+            let block: &[u8; 64] = bytes[..64].try_into().expect("exact SHA-256 block");
+            self.compress(block);
+            bytes = &bytes[64..];
+        }
+        self.buffer[..bytes.len()].copy_from_slice(bytes);
+        self.buffer_len = bytes.len();
+    }
+
+    fn finalize(mut self) -> [u8; 32] {
+        let bit_len = self
+            .message_len
+            .checked_mul(8)
+            .expect("bounded synchronization digest bit length");
+        self.buffer[self.buffer_len] = 0x80;
+        self.buffer_len += 1;
+        if self.buffer_len > 56 {
+            self.buffer[self.buffer_len..].fill(0);
+            let block = self.buffer;
+            self.compress(&block);
+            self.buffer = [0; 64];
+        } else {
+            self.buffer[self.buffer_len..56].fill(0);
+        }
+        self.buffer[56..].copy_from_slice(&bit_len.to_be_bytes());
+        let block = self.buffer;
+        self.compress(&block);
+
+        let mut output = [0_u8; 32];
+        for (chunk, word) in output.chunks_exact_mut(4).zip(self.state) {
+            chunk.copy_from_slice(&word.to_be_bytes());
+        }
+        output
+    }
+
+    fn compress(&mut self, block: &[u8; 64]) {
+        let mut words = [0_u32; 64];
+        for (index, chunk) in block.chunks_exact(4).enumerate() {
+            words[index] = u32::from_be_bytes(chunk.try_into().expect("four-byte SHA-256 word"));
+        }
+        for index in 16..64 {
+            let s0 = words[index - 15].rotate_right(7)
+                ^ words[index - 15].rotate_right(18)
+                ^ (words[index - 15] >> 3);
+            let s1 = words[index - 2].rotate_right(17)
+                ^ words[index - 2].rotate_right(19)
+                ^ (words[index - 2] >> 10);
+            words[index] = words[index - 16]
+                .wrapping_add(s0)
+                .wrapping_add(words[index - 7])
+                .wrapping_add(s1);
+        }
+
+        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = self.state;
+        for (word, constant) in words.into_iter().zip(Self::ROUND_CONSTANTS) {
+            let sum1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+            let choose = (e & f) ^ ((!e) & g);
+            let temporary1 = h
+                .wrapping_add(sum1)
+                .wrapping_add(choose)
+                .wrapping_add(constant)
+                .wrapping_add(word);
+            let sum0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+            let majority = (a & b) ^ (a & c) ^ (b & c);
+            let temporary2 = sum0.wrapping_add(majority);
+            h = g;
+            g = f;
+            f = e;
+            e = d.wrapping_add(temporary1);
+            d = c;
+            c = b;
+            b = a;
+            a = temporary1.wrapping_add(temporary2);
+        }
+        self.state[0] = self.state[0].wrapping_add(a);
+        self.state[1] = self.state[1].wrapping_add(b);
+        self.state[2] = self.state[2].wrapping_add(c);
+        self.state[3] = self.state[3].wrapping_add(d);
+        self.state[4] = self.state[4].wrapping_add(e);
+        self.state[5] = self.state[5].wrapping_add(f);
+        self.state[6] = self.state[6].wrapping_add(g);
+        self.state[7] = self.state[7].wrapping_add(h);
+    }
+}
+
+#[cfg(test)]
+pub fn sha256_test_vector(bytes: &[u8]) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(bytes);
+    digest.finalize()
 }
 
 struct Writer {

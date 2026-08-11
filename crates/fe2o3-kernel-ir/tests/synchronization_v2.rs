@@ -430,6 +430,65 @@ fn full_schema_round_trips_and_reports_only_dynamic_obligations() {
 }
 
 #[test]
+fn report_identity_binds_module_target_limits_and_obligation_set() {
+    assert_eq!(
+        sha256_test_vector(b""),
+        [
+            0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14, 0x9a, 0xfb, 0xf4, 0xc8, 0x99, 0x6f,
+            0xb9, 0x24, 0x27, 0xae, 0x41, 0xe4, 0x64, 0x9b, 0x93, 0x4c, 0xa4, 0x95, 0x99, 0x1b,
+            0x78, 0x52, 0xb8, 0x55,
+        ]
+    );
+    assert_eq!(
+        sha256_test_vector(b"abc"),
+        [
+            0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea, 0x41, 0x41, 0x40, 0xde, 0x5d, 0xae,
+            0x22, 0x23, 0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c, 0xb4, 0x10, 0xff, 0x61,
+            0xf2, 0x00, 0x15, 0xad,
+        ]
+    );
+
+    let limits = SynchronizationLimits::default();
+    let module = full_module();
+    let report = module.validate(&limits).unwrap();
+    assert_eq!(report.target, TargetProfile::Gfx942Wave64);
+    assert_eq!(report.target_limits, module.target.hard_limits());
+    assert_eq!(report.policy_limits, limits);
+    assert!(report.verifies_module(&module, &limits).unwrap());
+
+    let mut different_module = module.clone();
+    let EventKind::NonAtomic(access) = &mut different_module.events[0].kind else {
+        unreachable!()
+    };
+    access.kind = AccessKind::ReadWrite;
+    let different_report = different_module.validate(&limits).unwrap();
+    assert_ne!(report.module_digest, different_report.module_digest);
+    assert_ne!(report.report_digest, different_report.report_digest);
+    assert!(!report.verifies_module(&different_module, &limits).unwrap());
+
+    let wider_encoding_limit = SynchronizationLimits {
+        max_encoded_bytes: limits.max_encoded_bytes + 1,
+        ..limits
+    };
+    let policy_report = module.validate(&wider_encoding_limit).unwrap();
+    assert_eq!(report.module_digest, policy_report.module_digest);
+    assert_eq!(report.obligations_digest, policy_report.obligations_digest);
+    assert_ne!(report.report_digest, policy_report.report_digest);
+    assert!(
+        !report
+            .verifies_module(&module, &wider_encoding_limit)
+            .unwrap()
+    );
+
+    let mut tampered = report.clone();
+    tampered.obligations.pop();
+    assert!(!tampered.verifies_module(&module, &limits).unwrap());
+    tampered = report.clone();
+    tampered.target_limits.max_workgroup_participants += 1;
+    assert!(!tampered.verifies_module(&module, &limits).unwrap());
+}
+
+#[test]
 fn system_atomics_require_an_authenticated_coherence_obligation() {
     let limits = SynchronizationLimits::default();
     let mut access = atomic(
@@ -2009,7 +2068,13 @@ fn review_counterexamples_are_repaired_incrementally() {
     ))
     .validate(&limits)
     .unwrap();
-    assert_eq!(load_report, store_report);
+    assert_eq!(load_report.obligations, store_report.obligations);
+    assert_eq!(
+        load_report.obligations_digest,
+        store_report.obligations_digest
+    );
+    assert_ne!(load_report.module_digest, store_report.module_digest);
+    assert_ne!(load_report.report_digest, store_report.report_digest);
 
     let collective_add = module(vec![Event {
         id: EventId(0),
@@ -2031,7 +2096,13 @@ fn review_counterexamples_are_repaired_incrementally() {
     }])
     .validate(&limits)
     .unwrap();
-    assert_eq!(collective_add, collective_min);
+    assert_eq!(collective_add.obligations, collective_min.obligations);
+    assert_eq!(
+        collective_add.obligations_digest,
+        collective_min.obligations_digest
+    );
+    assert_ne!(collective_add.module_digest, collective_min.module_digest);
+    assert_ne!(collective_add.report_digest, collective_min.report_digest);
 
     let fences = vec![
         event(
