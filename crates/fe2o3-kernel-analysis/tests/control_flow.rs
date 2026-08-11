@@ -102,9 +102,13 @@ fn computes_diamond_predecessors_reachability_and_dominators() {
     assert_eq!(analysis.reachable_blocks(), &ids(&[0, 1, 2, 3]));
     assert_eq!(analysis.predecessors(BlockId(0)), Some(&ids(&[])));
     assert_eq!(analysis.predecessors(BlockId(3)), Some(&ids(&[1, 2])));
-    assert_eq!(analysis.dominators(BlockId(1)), Some(ids(&[0, 1])));
-    assert_eq!(analysis.dominators(BlockId(2)), Some(ids(&[0, 2])));
-    assert_eq!(analysis.dominators(BlockId(3)), Some(ids(&[0, 3])));
+    let legacy_signature: fn(
+        &fe2o3_kernel_analysis::ControlFlowAnalysis,
+        BlockId,
+    ) -> Option<&BTreeSet<BlockId>> = fe2o3_kernel_analysis::ControlFlowAnalysis::dominators;
+    assert_eq!(legacy_signature(&analysis, BlockId(1)), Some(&ids(&[0, 1])));
+    assert_eq!(analysis.dominators(BlockId(2)), Some(&ids(&[0, 2])));
+    assert_eq!(analysis.dominators(BlockId(3)), Some(&ids(&[0, 3])));
     assert!(analysis.dominates(BlockId(0), BlockId(3)));
     assert!(!analysis.dominates(BlockId(1), BlockId(3)));
     assert_eq!(analysis.immediate_dominator(BlockId(0)), Some(None));
@@ -158,7 +162,7 @@ fn classifies_natural_loop_backedges() {
     ]))
     .unwrap();
 
-    assert_eq!(analysis.dominators(BlockId(3)), Some(ids(&[0, 1, 2, 3])));
+    assert_eq!(analysis.dominators(BlockId(3)), Some(&ids(&[0, 1, 2, 3])));
     assert_eq!(
         analysis.backedges(),
         &BTreeSet::from([ControlFlowEdge::new(BlockId(3), BlockId(1))])

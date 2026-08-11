@@ -2,6 +2,7 @@ use fe2o3_kernel_ir::{BlockId, Function, FunctionId, MAX_BLOCKS_V1, Terminator};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
 use std::fmt;
+use std::sync::OnceLock;
 
 pub const MAX_CONTROL_FLOW_BLOCKS: usize = MAX_BLOCKS_V1;
 pub const MAX_CONTROL_FLOW_EDGES: usize = MAX_BLOCKS_V1 * 2;
@@ -413,6 +414,63 @@ impl fmt::Display for ControlFlowErrors {
 
 impl Error for ControlFlowErrors {}
 
+/// Lazily materialized compatibility view of full dominator sets.
+///
+/// The analysis itself remains backed by the bounded immediate-dominator
+/// representation. Full sets are created only for blocks requested through
+/// the legacy `dominators` API.
+struct LegacyDominatorSets {
+    sets: BTreeMap<BlockId, OnceLock<BTreeSet<BlockId>>>,
+}
+
+impl LegacyDominatorSets {
+    fn new(reachable: &BTreeSet<BlockId>) -> Self {
+        Self {
+            sets: reachable
+                .iter()
+                .copied()
+                .map(|block| (block, OnceLock::new()))
+                .collect(),
+        }
+    }
+}
+
+impl Clone for LegacyDominatorSets {
+    fn clone(&self) -> Self {
+        let sets = self
+            .sets
+            .iter()
+            .map(|(block, source)| {
+                let target = OnceLock::new();
+                if let Some(value) = source.get() {
+                    target
+                        .set(value.clone())
+                        .expect("a fresh dominator cache entry is empty");
+                }
+                (*block, target)
+            })
+            .collect();
+        Self { sets }
+    }
+}
+
+impl fmt::Debug for LegacyDominatorSets {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("LegacyDominatorSets")
+            .field("blocks", &self.sets.keys().collect::<Vec<_>>())
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for LegacyDominatorSets {
+    fn eq(&self, other: &Self) -> bool {
+        self.sets.keys().eq(other.sets.keys())
+    }
+}
+
+impl Eq for LegacyDominatorSets {}
+
 /// Validated, deterministic control-flow facts for one function definition.
 ///
 /// Dominance and backedges are defined only for blocks reachable from the
@@ -426,6 +484,7 @@ pub struct ControlFlowAnalysis {
     blocks: BTreeSet<BlockId>,
     predecessors: BTreeMap<BlockId, BTreeSet<BlockId>>,
     reachable: BTreeSet<BlockId>,
+    legacy_dominators: LegacyDominatorSets,
     immediate_dominators: BTreeMap<BlockId, Option<BlockId>>,
     dominator_tree_children: BTreeMap<BlockId, BTreeSet<BlockId>>,
     dominator_preorder: BTreeMap<BlockId, usize>,
@@ -471,19 +530,20 @@ impl ControlFlowAnalysis {
     }
 
     /// Returns `None` for an unknown or unreachable block.
-    pub fn dominators(&self, block: BlockId) -> Option<BTreeSet<BlockId>> {
-        if !self.reachable.contains(&block) {
-            return None;
-        }
-        let mut dominators = BTreeSet::new();
-        let mut current = block;
-        loop {
-            dominators.insert(current);
-            if current == self.entry {
-                return Some(dominators);
+    pub fn dominators(&self, block: BlockId) -> Option<&BTreeSet<BlockId>> {
+        let cache = self.legacy_dominators.sets.get(&block)?;
+        Some(cache.get_or_init(|| {
+            let mut dominators = BTreeSet::new();
+            let mut current = block;
+            loop {
+                dominators.insert(current);
+                if current == self.entry {
+                    return dominators;
+                }
+                current = self.immediate_dominators[&current]
+                    .expect("a reachable non-entry block has an immediate dominator");
             }
-            current = self.immediate_dominators.get(&current).copied().flatten()?;
-        }
+        }))
     }
 
     pub fn dominates(&self, dominator: BlockId, block: BlockId) -> bool {
@@ -737,6 +797,7 @@ pub fn analyze_control_flow(function: &Function) -> Result<ControlFlowAnalysis, 
     let natural_loops = compute_natural_loops(&reachable, &predecessors, &backedges, &mut budget)
         .map_err(|diagnostic| errors(function, [diagnostic]))?;
 
+    let legacy_dominators = LegacyDominatorSets::new(&reachable);
     Ok(ControlFlowAnalysis {
         function: function.id.clone(),
         resource_usage: budget.usage,
@@ -744,6 +805,7 @@ pub fn analyze_control_flow(function: &Function) -> Result<ControlFlowAnalysis, 
         blocks: block_ids,
         predecessors,
         reachable,
+        legacy_dominators,
         immediate_dominators,
         dominator_tree_children,
         dominator_preorder,
