@@ -24,6 +24,9 @@ mod control_flow;
 mod effect_extraction;
 mod formal_memory_obligations;
 mod ir;
+#[allow(dead_code)]
+#[path = "launch_kernel_v2.rs"]
+mod launch_kernel_contract_v2;
 mod matrix;
 mod region_effects;
 pub mod scalar_ops_v2;
@@ -37,6 +40,19 @@ pub use control_flow::*;
 pub use effect_extraction::*;
 pub use formal_memory_obligations::*;
 pub use ir::*;
+#[doc(hidden)]
+pub use launch_kernel_contract_v2::{
+    AbiParameterKindV2, AbiParameterV2, AmdArchitectureV2, ArtifactIdentityV2, BlockShapePolicyV2,
+    CodeObjectVersionV2, DimensionsV2, EndiannessV2, GFX942_REQUIRED_WAVEFRONT_WIDTH_V2,
+    Gfx942LaunchContractV2, Gfx942OccupancyWitnessV2, Gfx942ResourceLimitsV2,
+    Gfx942TargetBindingV2, KernelFamilyIdentityV2, KernelIdentityV2, KernelPolicyIdentityV2,
+    KernelSignatureIdentityV2, KernelSignatureV2, KernelVariantTupleIdentityV2, KernelVariantV2,
+    LaunchCapabilityV2, LaunchKernelFamilyV2, LaunchKernelLimitsV2, LaunchKernelValidationErrorV2,
+    LaunchProofKindV2, LaunchProofObligationV2, OccupancyMetadataIdentityV2,
+    OccupancySubjectIdentityV2, OccupancyVerifierIdentityV2, SemanticTypeIdentityV2,
+    TargetIdentityV2, UnsupportedLaunchFeaturesV2, WavefrontWidthV2,
+    canonical_occupancy_subject_identity_v2, canonical_variant_tuple_identity_v2,
+};
 pub use matrix::*;
 pub use region_effects::*;
 pub use semantic_operations::*;

@@ -1134,7 +1134,10 @@ fn source_is_safe_pure_rust_and_remains_inert() {
     assert!(!source.contains("std::process"));
     assert!(!source.contains("std::fs"));
     let library = include_str!("../src/lib.rs");
-    assert!(!library.contains("launch_kernel_v2"));
+    assert!(!library.contains("pub mod launch_kernel"));
+    assert!(library.contains("mod launch_kernel_contract_v2"));
+    assert!(!library.contains("encode_launch_kernel_family_v2"));
+    assert!(!library.contains("decode_launch_kernel_family_v2"));
 }
 
 #[derive(Clone, Copy)]
