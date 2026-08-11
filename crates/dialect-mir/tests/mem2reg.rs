@@ -184,15 +184,15 @@ fn promotes_loop_carried_values_through_explicit_backedge_arguments() {
         report.functions[0].promoted_locals,
         vec![MirLocalId(1), MirLocalId(2), MirLocalId(3),]
     );
-    assert_eq!(report.inserted_parameter_count(), 10);
+    assert_eq!(report.inserted_parameter_count(), 3);
     assert_eq!(report.inserted_definition_count(), 4);
 
     let body = &output.functions[0].body;
     assert!(matches!(body.form, MirBodyForm::Ssa { .. }));
     assert_eq!(body.blocks[0].parameters.len(), 1);
-    assert_eq!(body.blocks[1].parameters.len(), 3);
-    assert_eq!(body.blocks[2].parameters.len(), 3);
-    assert_eq!(body.blocks[3].parameters.len(), 3);
+    assert_eq!(body.blocks[1].parameters.len(), 2);
+    assert!(body.blocks[2].parameters.is_empty());
+    assert!(body.blocks[3].parameters.is_empty());
 
     let MirTerminatorKind::Goto(entry_to_header) = &body.blocks[0].terminator.kind else {
         unreachable!();
@@ -203,7 +203,7 @@ fn promotes_loop_carried_values_through_explicit_backedge_arguments() {
             .iter()
             .map(value)
             .collect::<Vec<_>>(),
-        vec![MirValueId(0), MirValueId(1), MirValueId(2)]
+        vec![MirValueId(1), MirValueId(2)]
     );
 
     let MirTerminatorKind::Goto(backedge) = &body.blocks[2].terminator.kind else {
@@ -211,7 +211,7 @@ fn promotes_loop_carried_values_through_explicit_backedge_arguments() {
     };
     assert_eq!(
         backedge.arguments.iter().map(value).collect::<Vec<_>>(),
-        vec![MirValueId(6), MirValueId(10), MirValueId(9)]
+        vec![MirValueId(6), MirValueId(5)]
     );
     assert_eq!(
         body.blocks[1]
@@ -219,7 +219,7 @@ fn promotes_loop_carried_values_through_explicit_backedge_arguments() {
             .iter()
             .map(|parameter| parameter.origin.unwrap())
             .collect::<Vec<_>>(),
-        vec![MirLocalId(1), MirLocalId(2), MirLocalId(3)]
+        vec![MirLocalId(2), MirLocalId(3)]
     );
 
     let encoded = output.to_bytes().unwrap();
@@ -347,11 +347,11 @@ fn leaves_call_defined_locals_as_slots() {
         unreachable!();
     };
     assert_eq!(call.destination.as_ref().unwrap().local, MirLocalId(2));
-    assert_eq!(call.target.as_ref().unwrap().arguments.len(), 2);
+    assert_eq!(call.target.as_ref().unwrap().arguments.len(), 1);
 }
 
 #[test]
-fn rejects_global_block_argument_amplification_before_transforming() {
+fn linear_control_flow_does_not_amplify_block_arguments() {
     let (types, ids) = types();
     let argument_count = 256_u32;
     let block_count = 257_u32;
@@ -382,6 +382,110 @@ fn rejects_global_block_argument_amplification_before_transforming() {
         callables: vec![],
         functions: vec![MirFunction {
             identity: "mem2reg::amplification".into(),
+            span: None,
+            body: MirBody {
+                form: MirBodyForm::Places,
+                locals,
+                blocks,
+                entry: MirBlockId(0),
+            },
+        }],
+    };
+
+    let input = input.validate().unwrap();
+    let (output, report) = promote_module_to_ssa(&input).unwrap();
+    assert_eq!(report.inserted_parameter_count(), argument_count as usize);
+    assert!(
+        output.functions[0].body.blocks[1..]
+            .iter()
+            .all(|block| block.parameters.is_empty())
+    );
+}
+
+#[test]
+fn rejects_repeated_join_amplification_before_transforming() {
+    let (types, ids) = types();
+    let local_count = 256_u32;
+    let diamond_count = 90_u32;
+    let mut locals = vec![local(ids.u32_ty, MirLocalKind::Return, true)];
+    locals.extend((0..local_count).map(|_| local(ids.u32_ty, MirLocalKind::Temporary, true)));
+
+    let initialize = (1..=local_count)
+        .map(|local| assign(local, ids.u32_ty, MirRvalue::Use(integer(0, ids.u32_ty))))
+        .collect::<Vec<_>>();
+    let update = || {
+        (1..=local_count)
+            .map(|local| {
+                assign(
+                    local,
+                    ids.u32_ty,
+                    MirRvalue::BinaryOp {
+                        op: MirBinaryOp::Add,
+                        lhs: copy(local, ids.u32_ty),
+                        rhs: integer(1, ids.u32_ty),
+                    },
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let mut blocks = vec![MirBasicBlock {
+        parameters: vec![],
+        statements: initialize,
+        terminator: terminator(MirTerminatorKind::Goto(MirEdge::new(MirBlockId(1)))),
+    }];
+    for diamond in 0..diamond_count {
+        let decision = 1 + diamond * 4;
+        let left = decision + 1;
+        let right = decision + 2;
+        let join = decision + 3;
+        blocks.push(MirBasicBlock {
+            parameters: vec![],
+            statements: vec![],
+            terminator: terminator(MirTerminatorKind::SwitchInt {
+                discr: MirOperand::Constant(MirConstant {
+                    ty: ids.bool_ty,
+                    value: MirConstantValue::Bool(true),
+                }),
+                targets: vec![(1, MirEdge::new(MirBlockId(left)))],
+                otherwise: MirEdge::new(MirBlockId(right)),
+            }),
+        });
+        for _ in 0..2 {
+            blocks.push(MirBasicBlock {
+                parameters: vec![],
+                statements: update(),
+                terminator: terminator(MirTerminatorKind::Goto(MirEdge::new(MirBlockId(join)))),
+            });
+        }
+        let terminator_kind = if diamond + 1 == diamond_count {
+            MirTerminatorKind::Return
+        } else {
+            MirTerminatorKind::Goto(MirEdge::new(MirBlockId(join + 1)))
+        };
+        let statements = if diamond + 1 == diamond_count {
+            vec![assign(
+                0,
+                ids.u32_ty,
+                MirRvalue::Use(copy(1, ids.u32_ty)),
+            )]
+        } else {
+            vec![]
+        };
+        blocks.push(MirBasicBlock {
+            parameters: vec![],
+            statements,
+            terminator: terminator(terminator_kind),
+        });
+    }
+
+    let input = MirExecutableModule {
+        version: MirExecutableVersion::V1,
+        target: MirExecutableTarget::gfx942(),
+        types,
+        callables: vec![],
+        functions: vec![MirFunction {
+            identity: "mem2reg::join_amplification".into(),
             span: None,
             body: MirBody {
                 form: MirBodyForm::Places,

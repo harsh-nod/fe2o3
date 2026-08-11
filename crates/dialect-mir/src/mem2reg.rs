@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+use crate::control_flow::{MirControlFlowAnalysis, analyze_mir_control_flow};
 use crate::executable::terminator_edges;
 use crate::{
     MirBasicBlock, MirBlockId, MirBlockParameter, MirBody, MirBodyForm, MirCall, MirEdge,
@@ -80,11 +81,11 @@ impl std::error::Error for MirMem2RegError {}
 
 /// Promotes a bounded subset of whole-place Copy locals into explicit SSA.
 ///
-/// V1 deliberately inserts a parameter for every promoted local on every
-/// non-entry block. This is not minimal SSA, but it makes joins and backedges
-/// explicit without relying on a dominance-frontier implementation. Locals
-/// with projections, address-taking, storage markers, call destinations,
-/// drops, or non-entry initialization remain slots.
+/// Parameters are placed at live iterated-dominance-frontier blocks. Values
+/// defined in dominating blocks remain directly usable, while joins and loop
+/// headers receive explicit edge arguments. Locals with projections,
+/// address-taking, storage markers, call destinations, drops, or non-entry
+/// initialization remain slots.
 pub fn promote_module_to_ssa(
     module: &ValidatedMirExecutableModule,
 ) -> Result<(ValidatedMirExecutableModule, MirMem2RegReport), MirMem2RegError> {
@@ -102,7 +103,14 @@ pub fn promote_module_to_ssa(
         }
         let original = function.body.clone();
         let promoted = eligible_locals(source, function_index, &original);
-        let function_items = projected_output_items(function_index, &original, &promoted)?;
+        let control_flow = analyze_mir_control_flow(&original).map_err(|error| {
+            MirMem2RegError::new(
+                format!("module.functions[{function_index}].body"),
+                format!("mem2reg requires reducible canonical control flow: {error}"),
+            )
+        })?;
+        let plan = SsaPlan::build(&original, &promoted, &control_flow);
+        let function_items = projected_output_items(function_index, &original, &plan)?;
         output_items = output_items
             .checked_add(function_items)
             .ok_or_else(|| MirMem2RegError::new("module", "mem2reg output item budget overflow"))?;
@@ -115,7 +123,7 @@ pub fn promote_module_to_ssa(
             ));
         }
         let (body, inserted_parameters, inserted_definitions) =
-            transform_body(function_index, &original, &promoted)?;
+            transform_body(function_index, &original, &promoted, &control_flow, &plan)?;
         function.body = body;
         reports.push(MirMem2RegFunctionReport {
             identity: function.identity.clone(),
@@ -154,45 +162,137 @@ pub fn promote_module_to_ssa_with_registry(
 fn projected_output_items(
     function_index: usize,
     body: &MirBody,
-    promoted: &[MirLocalId],
+    plan: &SsaPlan,
 ) -> Result<usize, MirMem2RegError> {
     let path = format!("module.functions[{function_index}].body");
-    let entry_arguments = promoted
+    let parameters = plan
+        .parameter_locals
         .iter()
-        .filter(|local| body.locals[local.0 as usize].kind == MirLocalKind::Argument)
-        .count();
-    let non_entry_parameters = body
-        .blocks
-        .len()
-        .saturating_sub(1)
-        .checked_mul(promoted.len())
+        .map(Vec::len)
+        .try_fold(0_usize, usize::checked_add)
         .ok_or_else(|| MirMem2RegError::new(&path, "mem2reg parameter budget overflow"))?;
-    let definitions = body
+    let definitions = plan.definition_count;
+    let edge_arguments = body
         .blocks
         .iter()
-        .flat_map(|block| &block.statements)
-        .filter(|statement| {
-            matches!(
-                &statement.kind,
-                MirStatementKind::Assign { place, .. }
-                    if place.projection.is_empty() && promoted.contains(&place.local)
-            )
-        })
-        .count();
-    let edges = body
-        .blocks
-        .iter()
-        .map(|block| terminator_edges(&block.terminator.kind).len())
-        .try_fold(0_usize, |total, count| total.checked_add(count))
-        .ok_or_else(|| MirMem2RegError::new(&path, "mem2reg edge budget overflow"))?;
-    let edge_arguments = edges
-        .checked_mul(promoted.len())
+        .flat_map(|block| terminator_edges(&block.terminator.kind))
+        .map(|edge| plan.parameter_locals[edge.target.0 as usize].len())
+        .try_fold(0_usize, usize::checked_add)
         .ok_or_else(|| MirMem2RegError::new(&path, "mem2reg edge-argument budget overflow"))?;
-    entry_arguments
-        .checked_add(non_entry_parameters)
-        .and_then(|total| total.checked_add(definitions))
+    parameters
+        .checked_add(definitions)
         .and_then(|total| total.checked_add(edge_arguments))
         .ok_or_else(|| MirMem2RegError::new(path, "mem2reg output item budget overflow"))
+}
+
+struct SsaPlan {
+    parameter_locals: Vec<Vec<MirLocalId>>,
+    definition_count: usize,
+}
+
+impl SsaPlan {
+    fn build(
+        body: &MirBody,
+        promoted: &[MirLocalId],
+        control_flow: &MirControlFlowAnalysis,
+    ) -> Self {
+        let promoted_set = promoted.iter().copied().collect::<BTreeSet<_>>();
+        let mut definitions = vec![BTreeSet::new(); body.blocks.len()];
+        let mut upward_exposed_uses = vec![BTreeSet::new(); body.blocks.len()];
+        let mut definition_count = 0;
+
+        for (block_index, block) in body.blocks.iter().enumerate() {
+            if MirBlockId(block_index as u32) == body.entry {
+                definitions[block_index].extend(promoted.iter().copied().filter(|local| {
+                    body.locals[local.0 as usize].kind == MirLocalKind::Argument
+                }));
+            }
+            for statement in &block.statements {
+                for local in &promoted_set {
+                    if statement_reads_local(statement, *local)
+                        && !definitions[block_index].contains(local)
+                    {
+                        upward_exposed_uses[block_index].insert(*local);
+                    }
+                }
+                if let MirStatementKind::Assign { place, .. } = &statement.kind
+                    && place.projection.is_empty()
+                    && promoted_set.contains(&place.local)
+                {
+                    definitions[block_index].insert(place.local);
+                    definition_count += 1;
+                }
+            }
+            for local in &promoted_set {
+                if terminator_reads_local(&block.terminator.kind, *local)
+                    && !definitions[block_index].contains(local)
+                {
+                    upward_exposed_uses[block_index].insert(*local);
+                }
+            }
+        }
+
+        let mut live_in = vec![BTreeSet::new(); body.blocks.len()];
+        let mut live_out = vec![BTreeSet::new(); body.blocks.len()];
+        loop {
+            let mut changed = false;
+            for block_index in (0..body.blocks.len()).rev() {
+                let block = MirBlockId(block_index as u32);
+                let next_out = control_flow
+                    .successors(block)
+                    .expect("analysis covers every canonical block")
+                    .iter()
+                    .flat_map(|successor| live_in[successor.0 as usize].iter().copied())
+                    .collect::<BTreeSet<_>>();
+                let mut next_in = upward_exposed_uses[block_index].clone();
+                next_in.extend(
+                    next_out
+                        .iter()
+                        .filter(|local| !definitions[block_index].contains(local))
+                        .copied(),
+                );
+                changed |= live_out[block_index] != next_out || live_in[block_index] != next_in;
+                live_out[block_index] = next_out;
+                live_in[block_index] = next_in;
+            }
+            if !changed {
+                break;
+            }
+        }
+
+        let mut parameter_locals = vec![Vec::new(); body.blocks.len()];
+        parameter_locals[body.entry.0 as usize].extend(promoted.iter().copied().filter(|local| {
+            body.locals[local.0 as usize].kind == MirLocalKind::Argument
+        }));
+        for local in promoted {
+            let definition_blocks = definitions
+                .iter()
+                .enumerate()
+                .filter_map(|(index, locals)| {
+                    locals
+                        .contains(local)
+                        .then_some(MirBlockId(index as u32))
+                })
+                .collect::<BTreeSet<_>>();
+            let frontiers = control_flow
+                .iterated_dominance_frontier(&definition_blocks)
+                .expect("definition blocks belong to the analyzed body");
+            for block in frontiers {
+                if block != body.entry && live_in[block.0 as usize].contains(local) {
+                    parameter_locals[block.0 as usize].push(*local);
+                }
+            }
+        }
+        for locals in &mut parameter_locals {
+            locals.sort();
+            locals.dedup();
+        }
+
+        Self {
+            parameter_locals,
+            definition_count,
+        }
+    }
 }
 
 fn eligible_locals(
@@ -257,39 +357,71 @@ fn transform_body(
     function_index: usize,
     body: &MirBody,
     promoted: &[MirLocalId],
+    control_flow: &MirControlFlowAnalysis,
+    plan: &SsaPlan,
 ) -> Result<(MirBody, usize, usize), MirMem2RegError> {
     let promoted_set = promoted.iter().copied().collect::<BTreeSet<_>>();
     let mut allocator = ValueAllocator::default();
-    let mut blocks = Vec::with_capacity(body.blocks.len());
-    let mut inserted_parameters = 0;
-    let mut inserted_definitions = 0;
-
-    for (block_index, original) in body.blocks.iter().enumerate() {
-        let block_id = MirBlockId(block_index as u32);
-        let parameter_locals = if block_id == body.entry {
-            promoted
-                .iter()
-                .copied()
-                .filter(|local| body.locals[local.0 as usize].kind == MirLocalKind::Argument)
-                .collect::<Vec<_>>()
-        } else {
-            promoted.to_vec()
-        };
-        let mut current = BTreeMap::new();
-        let parameters = parameter_locals
+    let mut parameter_values = vec![Vec::new(); body.blocks.len()];
+    let mut definition_values = BTreeMap::new();
+    for (block_index, block) in body.blocks.iter().enumerate() {
+        parameter_values[block_index] = plan.parameter_locals[block_index]
             .iter()
             .map(|local| {
                 let value = allocator.allocate(function_index, block_index)?;
-                current.insert(*local, value);
-                Ok(MirBlockParameter {
-                    value,
-                    ty: body.locals[local.0 as usize].ty,
-                    origin: Some(*local),
-                })
+                Ok((*local, value))
             })
             .collect::<Result<Vec<_>, MirMem2RegError>>()?;
-        inserted_parameters += parameters.len();
+        for (statement_index, statement) in block.statements.iter().enumerate() {
+            if let MirStatementKind::Assign { place, .. } = &statement.kind
+                && place.projection.is_empty()
+                && promoted_set.contains(&place.local)
+            {
+                let value = allocator.allocate(function_index, block_index)?;
+                definition_values.insert((block_index, statement_index), (place.local, value));
+            }
+        }
+    }
 
+    enum RenameEvent {
+        Enter(MirBlockId),
+        Exit(Vec<MirLocalId>),
+    }
+
+    let mut blocks = vec![None; body.blocks.len()];
+    let mut current = BTreeMap::<MirLocalId, Vec<MirValueId>>::new();
+    let mut events = vec![RenameEvent::Enter(body.entry)];
+    while let Some(event) = events.pop() {
+        let block_id = match event {
+            RenameEvent::Enter(block) => block,
+            RenameEvent::Exit(pushed) => {
+                for local in pushed.into_iter().rev() {
+                    let values = current
+                        .get_mut(&local)
+                        .expect("a rename exit has a matching value stack");
+                    values.pop();
+                    if values.is_empty() {
+                        current.remove(&local);
+                    }
+                }
+                continue;
+            }
+        };
+        let block_index = block_id.0 as usize;
+        let original = &body.blocks[block_index];
+        let mut pushed = Vec::new();
+        let parameters = parameter_values[block_index]
+            .iter()
+            .map(|(local, value)| {
+                current.entry(*local).or_default().push(*value);
+                pushed.push(*local);
+                MirBlockParameter {
+                    value: *value,
+                    ty: body.locals[local.0 as usize].ty,
+                    origin: Some(*local),
+                }
+            })
+            .collect::<Vec<_>>();
         let mut statements = Vec::with_capacity(original.statements.len());
         for (statement_index, statement) in original.statements.iter().enumerate() {
             let path = format!(
@@ -300,8 +432,9 @@ fn transform_body(
                     if place.projection.is_empty() && promoted_set.contains(&place.local) =>
                 {
                     let rvalue = rewrite_rvalue(&path, value, &current, &promoted_set)?;
-                    let value = allocator.allocate(function_index, block_index)?;
-                    current.insert(place.local, value);
+                    let (_, value) = definition_values[&(block_index, statement_index)];
+                    current.entry(place.local).or_default().push(value);
+                    pushed.push(place.local);
                     statements.push(MirStatement {
                         kind: MirStatementKind::Define {
                             value,
@@ -310,7 +443,6 @@ fn transform_body(
                         },
                         span: statement.span.clone(),
                     });
-                    inserted_definitions += 1;
                 }
                 MirStatementKind::Assign { place, value } => {
                     statements.push(MirStatement {
@@ -336,14 +468,23 @@ fn transform_body(
             block_index,
             &mut terminator.kind,
             &current,
-            promoted,
+            &plan.parameter_locals,
             &promoted_set,
         )?;
-        blocks.push(MirBasicBlock {
+        blocks[block_index] = Some(MirBasicBlock {
             parameters,
             statements,
             terminator,
         });
+        events.push(RenameEvent::Exit(pushed));
+        for child in control_flow
+            .dominator_tree_children(block_id)
+            .expect("analysis covers every canonical block")
+            .iter()
+            .rev()
+        {
+            events.push(RenameEvent::Enter(*child));
+        }
     }
 
     Ok((
@@ -352,11 +493,14 @@ fn transform_body(
                 promoted_locals: promoted.to_vec(),
             },
             locals: body.locals.clone(),
-            blocks,
+            blocks: blocks
+                .into_iter()
+                .map(|block| block.expect("reachable dominator traversal visits every block"))
+                .collect(),
             entry: body.entry,
         },
-        inserted_parameters,
-        inserted_definitions,
+        plan.parameter_locals.iter().map(Vec::len).sum(),
+        plan.definition_count,
     ))
 }
 
@@ -385,7 +529,7 @@ impl ValueAllocator {
 fn rewrite_rvalue(
     path: &str,
     rvalue: &MirRvalue,
-    current: &BTreeMap<MirLocalId, MirValueId>,
+    current: &BTreeMap<MirLocalId, Vec<MirValueId>>,
     promoted: &BTreeSet<MirLocalId>,
 ) -> Result<MirRvalue, MirMem2RegError> {
     Ok(match rvalue {
@@ -433,7 +577,7 @@ fn rewrite_rvalue(
 fn rewrite_operand(
     path: &str,
     operand: &MirOperand,
-    current: &BTreeMap<MirLocalId, MirValueId>,
+    current: &BTreeMap<MirLocalId, Vec<MirValueId>>,
     promoted: &BTreeSet<MirLocalId>,
 ) -> Result<MirOperand, MirMem2RegError> {
     match operand {
@@ -442,7 +586,7 @@ fn rewrite_operand(
         {
             current
                 .get(&place.local)
-                .copied()
+                .and_then(|values| values.last().copied())
                 .map(MirOperand::Value)
                 .ok_or_else(|| {
                     MirMem2RegError::new(
@@ -459,14 +603,14 @@ fn rewrite_terminator(
     function_index: usize,
     block_index: usize,
     terminator: &mut MirTerminatorKind,
-    current: &BTreeMap<MirLocalId, MirValueId>,
-    promoted_order: &[MirLocalId],
+    current: &BTreeMap<MirLocalId, Vec<MirValueId>>,
+    parameter_locals: &[Vec<MirLocalId>],
     promoted: &BTreeSet<MirLocalId>,
 ) -> Result<(), MirMem2RegError> {
     let path = format!("module.functions[{function_index}].body.blocks[{block_index}].terminator");
     match terminator {
         MirTerminatorKind::Goto(edge) => {
-            rewrite_edge(&path, edge, current, promoted_order)?;
+            rewrite_edge(&path, edge, current, parameter_locals)?;
         }
         MirTerminatorKind::SwitchInt {
             discr,
@@ -475,16 +619,16 @@ fn rewrite_terminator(
         } => {
             *discr = rewrite_operand(&path, discr, current, promoted)?;
             for (_, edge) in targets {
-                rewrite_edge(&path, edge, current, promoted_order)?;
+                rewrite_edge(&path, edge, current, parameter_locals)?;
             }
-            rewrite_edge(&path, otherwise, current, promoted_order)?;
+            rewrite_edge(&path, otherwise, current, parameter_locals)?;
         }
         MirTerminatorKind::Call(call) => {
-            rewrite_call(&path, call, current, promoted_order, promoted)?;
+            rewrite_call(&path, call, current, parameter_locals, promoted)?;
         }
         MirTerminatorKind::Drop { target, unwind, .. } => {
-            rewrite_edge(&path, target, current, promoted_order)?;
-            rewrite_unwind(&path, unwind, current, promoted_order)?;
+            rewrite_edge(&path, target, current, parameter_locals)?;
+            rewrite_unwind(&path, unwind, current, parameter_locals)?;
         }
         MirTerminatorKind::Assert {
             condition,
@@ -493,8 +637,8 @@ fn rewrite_terminator(
             ..
         } => {
             *condition = rewrite_operand(&path, condition, current, promoted)?;
-            rewrite_edge(&path, target, current, promoted_order)?;
-            rewrite_unwind(&path, unwind, current, promoted_order)?;
+            rewrite_edge(&path, target, current, parameter_locals)?;
+            rewrite_unwind(&path, unwind, current, parameter_locals)?;
         }
         MirTerminatorKind::Return | MirTerminatorKind::Unreachable => {}
     }
@@ -504,27 +648,27 @@ fn rewrite_terminator(
 fn rewrite_call(
     path: &str,
     call: &mut MirCall,
-    current: &BTreeMap<MirLocalId, MirValueId>,
-    promoted_order: &[MirLocalId],
+    current: &BTreeMap<MirLocalId, Vec<MirValueId>>,
+    parameter_locals: &[Vec<MirLocalId>],
     promoted: &BTreeSet<MirLocalId>,
 ) -> Result<(), MirMem2RegError> {
     for argument in &mut call.arguments {
         *argument = rewrite_operand(path, argument, current, promoted)?;
     }
     if let Some(target) = &mut call.target {
-        rewrite_edge(path, target, current, promoted_order)?;
+        rewrite_edge(path, target, current, parameter_locals)?;
     }
-    rewrite_unwind(path, &mut call.unwind, current, promoted_order)
+    rewrite_unwind(path, &mut call.unwind, current, parameter_locals)
 }
 
 fn rewrite_unwind(
     path: &str,
     unwind: &mut MirUnwindAction,
-    current: &BTreeMap<MirLocalId, MirValueId>,
-    promoted_order: &[MirLocalId],
+    current: &BTreeMap<MirLocalId, Vec<MirValueId>>,
+    parameter_locals: &[Vec<MirLocalId>],
 ) -> Result<(), MirMem2RegError> {
     if let MirUnwindAction::Cleanup(edge) = unwind {
-        rewrite_edge(path, edge, current, promoted_order)?;
+        rewrite_edge(path, edge, current, parameter_locals)?;
     }
     Ok(())
 }
@@ -532,8 +676,8 @@ fn rewrite_unwind(
 fn rewrite_edge(
     path: &str,
     edge: &mut MirEdge,
-    current: &BTreeMap<MirLocalId, MirValueId>,
-    promoted: &[MirLocalId],
+    current: &BTreeMap<MirLocalId, Vec<MirValueId>>,
+    parameter_locals: &[Vec<MirLocalId>],
 ) -> Result<(), MirMem2RegError> {
     if !edge.arguments.is_empty() {
         return Err(MirMem2RegError::new(
@@ -541,12 +685,12 @@ fn rewrite_edge(
             "place-form input edge unexpectedly contains arguments",
         ));
     }
-    edge.arguments = promoted
+    edge.arguments = parameter_locals[edge.target.0 as usize]
         .iter()
         .map(|local| {
             current
                 .get(local)
-                .copied()
+                .and_then(|values| values.last().copied())
                 .map(MirOperand::Value)
                 .ok_or_else(|| {
                     MirMem2RegError::new(
@@ -668,6 +812,23 @@ fn inspect_terminator(
             inspect_place(place, PlaceUse::Unsupported, touched, disqualified);
         }
         MirTerminatorKind::Goto(_) | MirTerminatorKind::Return | MirTerminatorKind::Unreachable => {
+        }
+    }
+}
+
+fn terminator_reads_local(terminator: &MirTerminatorKind, local: MirLocalId) -> bool {
+    match terminator {
+        MirTerminatorKind::SwitchInt { discr, .. }
+        | MirTerminatorKind::Assert {
+            condition: discr, ..
+        } => operand_reads_local(discr, local),
+        MirTerminatorKind::Call(call) => call
+            .arguments
+            .iter()
+            .any(|operand| operand_reads_local(operand, local)),
+        MirTerminatorKind::Drop { place, .. } => place_reads_local(place, local),
+        MirTerminatorKind::Goto(_) | MirTerminatorKind::Return | MirTerminatorKind::Unreachable => {
+            false
         }
     }
 }
