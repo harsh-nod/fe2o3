@@ -234,6 +234,58 @@ class SnapshotClosure:
     def close(self) -> None:
         for retained in self.source_files:
             retained.close()
+
+
+@dataclass
+class RetainedClosure:
+    label: str
+    files: list[RetainedFile]
+    manifest: dict[str, Any]
+
+    def revalidate(self) -> None:
+        for retained in self.files:
+            retained.revalidate()
+
+    def close(self) -> None:
+        for retained in self.files:
+            retained.close()
+
+
+def capture_retained_closure(
+    label: str,
+    members: Iterable[tuple[str, Path]],
+    metadata: Mapping[str, Any],
+) -> RetainedClosure:
+    selected = sorted(members, key=lambda item: item[0])
+    if not selected or len(selected) > MAX_SNAPSHOT_FILES:
+        raise HardeningError(f"{label} retained closure count is outside the bound")
+    files: list[RetainedFile] = []
+    labels: set[str] = set()
+    try:
+        for member_label, path in selected:
+            if member_label in labels:
+                raise HardeningError(f"{label} retained closure has a duplicate label")
+            labels.add(member_label)
+            files.append(RetainedFile.open(f"{label}:{member_label}", path))
+        records = []
+        for (member_label, _), retained in zip(selected, files, strict=True):
+            record = retained.record()
+            record["label"] = member_label
+            records.append(record)
+        manifest = {
+            "schema": "fe2o3-retained-build-closure-v1",
+            "label": label,
+            "metadata": dict(metadata),
+            "files": records,
+        }
+        manifest["manifest_sha256"] = hashlib.sha256(canonical_json(manifest)).hexdigest()
+        closure = RetainedClosure(label, files, manifest)
+        closure.revalidate()
+        return closure
+    except BaseException:
+        for retained in files:
+            retained.close()
+        raise
         for retained in self.snapshot_files:
             retained.close()
 
@@ -455,6 +507,7 @@ class Supervisor:
         enable_subreaper_and_no_new_privs()
         self.cgroup_root = prepare_cgroup_delegation()
         self.sequence = 0
+        self.guards: list[RetainedFile] = []
 
     @staticmethod
     def _reap_descendants() -> None:
@@ -481,6 +534,8 @@ class Supervisor:
         if any("\0" in key or "\0" in value or "=" in key for key, value in environment.items()):
             raise HardeningError("command environment is invalid")
         executable.revalidate()
+        for guard in self.guards:
+            guard.revalidate()
         cwd_fd = os.open(cwd, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
         stdout_read, stdout_write = os.pipe2(os.O_CLOEXEC | os.O_NONBLOCK)
         stderr_read, stderr_write = os.pipe2(os.O_CLOEXEC | os.O_NONBLOCK)
@@ -571,6 +626,8 @@ class Supervisor:
             peak_processes = cgroup.peak("pids.peak")
             elapsed = time.monotonic() - start
             executable.revalidate()
+            for guard in self.guards:
+                guard.revalidate()
             if failure is not None:
                 raise HardeningError(failure)
             if leaked:

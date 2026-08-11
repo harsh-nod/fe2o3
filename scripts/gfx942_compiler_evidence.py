@@ -13,14 +13,29 @@ import hashlib
 import json
 import os
 import re
+import resource
 import shutil
 import stat
-import subprocess
 import sys
 import tempfile
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from compiler_evidence_hardening import (
+    CommandLimits,
+    HardeningError,
+    RetainedClosure,
+    RetainedFile,
+    SealedExecutable,
+    SnapshotClosure,
+    Supervisor,
+    adversarial_self_test,
+    capture_snapshot,
+    capture_retained_closure,
+    compare_labeled_manifests,
+)
 
 
 SCHEMA = "fe2o3-gfx942-compiler-tool-manifest-v1"
@@ -279,6 +294,8 @@ class PinnedTool:
     record: dict[str, Any]
     file: Any
     identity: tuple[int, int, int, int, int, int, int]
+    retained: RetainedFile
+    executable: SealedExecutable
 
     @property
     def name(self) -> str:
@@ -295,6 +312,15 @@ class PinnedTool:
             raise EvidenceError(f"pinned tool changed: {self.name}")
         if sha256_file(self.file, opened.st_size) != self.record["sha256"]:
             raise EvidenceError(f"pinned tool bytes changed: {self.name}")
+        try:
+            self.executable.revalidate()
+        except HardeningError as error:
+            raise EvidenceError(str(error)) from error
+
+    def close(self) -> None:
+        self.executable.close()
+        self.retained.close()
+        self.file.close()
 
 
 def pin_tools(manifest: dict[str, Any]) -> dict[str, PinnedTool]:
@@ -313,17 +339,23 @@ def pin_tools(manifest: dict[str, Any]) -> dict[str, PinnedTool]:
                 record["bytes"],
             ):
                 raise EvidenceError(f"tool owner or size changed: {record['name']}")
+            retained = RetainedFile.open(
+                f"configured-tool:{record['name']}", path, require_executable=True
+            )
+            executable = SealedExecutable.from_retained(retained)
             file = open(path, "rb", buffering=0)
             opened = os.fstat(file.fileno())
             if exact_stat(named) != exact_stat(opened):
+                executable.close()
+                retained.close()
                 file.close()
                 raise EvidenceError(f"tool changed while opening: {record['name']}")
-            tool = PinnedTool(record, file, exact_stat(opened))
+            tool = PinnedTool(record, file, exact_stat(opened), retained, executable)
             tool.revalidate()
             pinned[tool.name] = tool
     except BaseException:
         for tool in pinned.values():
-            tool.file.close()
+            tool.close()
         raise
     return pinned
 
@@ -331,10 +363,13 @@ def pin_tools(manifest: dict[str, Any]) -> dict[str, PinnedTool]:
 def create_allowlisted_path(directory: Path, manifest: dict[str, Any], tools: dict[str, PinnedTool]) -> None:
     directory.mkdir(mode=0o700)
     for alias, name in manifest["path_aliases"].items():
-        target = tools[name].path
+        target = tools[name].executable.proc_path
         os.symlink(target, directory / alias)
     actual = {entry.name: os.readlink(entry) for entry in directory.iterdir()}
-    expected = {alias: os.fspath(tools[name].path) for alias, name in manifest["path_aliases"].items()}
+    expected = {
+        alias: tools[name].executable.proc_path
+        for alias, name in manifest["path_aliases"].items()
+    }
     if actual != expected:
         raise EvidenceError("allowlisted PATH materialization changed")
 
@@ -350,7 +385,7 @@ def clean_environment(run: Path, path_dir: Path, manifest: dict[str, Any]) -> di
         raise EvidenceError("CARGO_TARGET_DIR was not empty at run start")
     return {
         "AR": os.fspath(path_dir / "ar"),
-        "CARGO_HOME": "/home/harsh/.cargo",
+        "CARGO_HOME": os.fspath(run / "cargo-home"),
         "CARGO_NET_OFFLINE": "true",
         "CARGO_TARGET_DIR": os.fspath(target),
         "CC": os.fspath(path_dir / "cc"),
@@ -359,10 +394,11 @@ def clean_environment(run: Path, path_dir: Path, manifest: dict[str, Any]) -> di
         "LANG": "C",
         "LC_ALL": "C",
         "LD": os.fspath(path_dir / "ld.lld"),
-        "LD_LIBRARY_PATH": "/home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/lib",
+        "LD_LIBRARY_PATH": os.fspath(run / "rust-sysroot/lib"),
         "PATH": os.fspath(path_dir),
         "RANLIB": os.fspath(path_dir / "ranlib"),
-        "RUSTC": "/home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu/bin/rustc",
+        "RUSTC": os.fspath(path_dir / "rustc"),
+        "RUSTFLAGS": f"--sysroot={run / 'rust-sysroot'}",
         "RUSTUP_TOOLCHAIN": EXPECTED_RUST_TOOLCHAIN,
         "SOURCE_DATE_EPOCH": "0",
         "TERM": "dumb",
@@ -376,26 +412,55 @@ def run_command(
     cwd: Path,
     environment: dict[str, str],
     tools: dict[str, PinnedTool],
+    supervisor: Supervisor,
     *,
     capture: bool = False,
-) -> subprocess.CompletedProcess[bytes]:
+    executable: SealedExecutable | None = None,
+    extra_inherited_fds: tuple[int, ...] = (),
+    limits: CommandLimits = CommandLimits(),
+) -> Any:
     for tool in tools.values():
         tool.revalidate()
-    completed = subprocess.run(
-        arguments,
-        cwd=cwd,
-        env=environment,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE if capture else None,
-        stderr=subprocess.PIPE if capture else None,
-        check=False,
-    )
+    selected = executable
+    command = list(arguments)
+    if selected is None:
+        first = Path(arguments[0])
+        matched = next(
+            (
+                tool
+                for tool in tools.values()
+                if first == tool.path
+                or os.fspath(first) == tool.executable.proc_path
+                or os.fspath(first) == f"/proc/self/fd/{tool.executable.fd}"
+            ),
+            None,
+        )
+        if matched is None:
+            raise EvidenceError(f"command executable is not retained: {arguments[0]}")
+        if matched.name == "ldd":
+            selected = tools["shell"].executable
+            command = ["bash", matched.executable.proc_path, *arguments[1:]]
+        else:
+            selected = matched.executable
+    inherited = [tool.executable.fd for tool in tools.values()]
+    inherited.extend(extra_inherited_fds)
+    try:
+        completed = supervisor.run(
+            selected,
+            command,
+            cwd,
+            environment,
+            limits=limits,
+            inherited_fds=inherited,
+        )
+    except HardeningError as error:
+        raise EvidenceError(str(error)) from error
     for tool in tools.values():
         tool.revalidate()
     if completed.returncode != 0:
         detail = b""
         if capture:
-            detail = (completed.stdout or b"") + (completed.stderr or b"")
+            detail = completed.stdout + completed.stderr
         raise EvidenceError(
             f"command failed ({completed.returncode}): {' '.join(arguments)}\n"
             + detail[-8192:].decode("utf-8", "replace")
@@ -404,8 +469,11 @@ def run_command(
 
 
 def version_and_runtime_manifest(
-    manifest: dict[str, Any], tools: dict[str, PinnedTool], path_dir: Path
-) -> dict[str, Any]:
+    manifest: dict[str, Any],
+    tools: dict[str, PinnedTool],
+    path_dir: Path,
+    supervisor: Supervisor,
+) -> tuple[dict[str, Any], RetainedClosure]:
     environment = {"LANG": "C", "LC_ALL": "C", "PATH": os.fspath(path_dir), "TZ": "UTC"}
     observed_tools: list[dict[str, Any]] = []
     runtime_paths: set[Path] = set()
@@ -417,6 +485,7 @@ def version_and_runtime_manifest(
             Path("/"),
             environment,
             tools,
+            supervisor,
             capture=True,
         )
         output = (completed.stdout or b"") + (completed.stderr or b"")
@@ -451,6 +520,7 @@ def version_and_runtime_manifest(
                 Path("/"),
                 environment,
                 tools,
+                supervisor,
                 capture=True,
             )
             for line in (closure.stdout or b"").decode("utf-8", "strict").splitlines():
@@ -499,13 +569,19 @@ def version_and_runtime_manifest(
             "pinned runtime closure changed: "
             f"expected {manifest['runtime_manifest_sha256']}, observed {runtime_digest}"
         )
-    return {
+    observed = {
         "schema": "fe2o3-observed-gfx942-tool-runtime-manifest-v1",
         "configured_manifest_sha256": sha256_bytes(canonical_json(manifest)),
         "runtime_manifest_sha256": runtime_digest,
         "tools": observed_tools,
         "runtime": runtime,
     }
+    retained_runtime = capture_retained_closure(
+        "configured-tool-runtime",
+        [(f"runtime:{path.as_posix()}", path) for path in sorted(runtime_paths, key=os.fspath)],
+        {"runtime_manifest_sha256": runtime_digest},
+    )
+    return observed, retained_runtime
 
 
 def require_absent_output(path: Path, label: str) -> None:
@@ -516,22 +592,38 @@ def require_absent_output(path: Path, label: str) -> None:
         raise EvidenceError(f"{label} parent or spelling is not canonical")
 
 
-def git_clean(repo: Path, environment: dict[str, str], tools: dict[str, PinnedTool]) -> str:
+def git_clean(
+    repo: Path,
+    environment: dict[str, str],
+    tools: dict[str, PinnedTool],
+    supervisor: Supervisor,
+) -> tuple[str, str, list[str]]:
     git = os.fspath(tools["git"].path)
     status = run_command(
         [git, "-c", "core.hooksPath=/dev/null", "status", "--porcelain=v1", "--untracked-files=all"],
         repo,
         environment,
         tools,
+        supervisor,
         capture=True,
     ).stdout
     if status:
         raise EvidenceError("compiler evidence requires a clean committed tree")
-    commit = run_command([git, "rev-parse", "HEAD"], repo, environment, tools, capture=True).stdout
-    value = commit.decode("ascii").strip()
-    if not re.fullmatch(r"[0-9a-f]{40}", value):
+    commit = run_command(
+        [git, "rev-parse", "HEAD"], repo, environment, tools, supervisor, capture=True
+    ).stdout.decode("ascii").strip()
+    tree = run_command(
+        [git, "rev-parse", "HEAD^{tree}"], repo, environment, tools, supervisor, capture=True
+    ).stdout.decode("ascii").strip()
+    listed = run_command(
+        [git, "ls-files", "-z"], repo, environment, tools, supervisor, capture=True
+    ).stdout
+    if not re.fullmatch(r"[0-9a-f]{40}", commit) or not re.fullmatch(r"[0-9a-f]{40}", tree):
         raise EvidenceError("source commit identity is invalid")
-    return value
+    paths = [item.decode("utf-8", "strict") for item in listed.split(b"\0") if item]
+    if not paths or len(paths) != len(set(paths)):
+        raise EvidenceError("tracked source list is empty or duplicated")
+    return commit, tree, paths
 
 
 def measure_generated_executable(path: Path, parent: Path, label: str) -> tuple[Any, dict[str, Any]]:
@@ -585,17 +677,154 @@ def reject_cross_run_reuse(first: dict[str, Any], second: dict[str, Any]) -> Non
             raise EvidenceError("run B reused an executable from run A")
 
 
-def build_and_generate(
+def registry_paths(lock_path: Path, registry_root: Path) -> list[str]:
+    lock = tomllib.loads(lock_path.read_text("utf-8"))
+    packages = lock.get("package")
+    if not isinstance(packages, list):
+        raise EvidenceError("Cargo.lock has no package closure")
+    paths: list[str] = []
+    for package in packages:
+        source = package.get("source")
+        if not isinstance(source, str) or not source.startswith("registry+"):
+            continue
+        name = package.get("name")
+        version = package.get("version")
+        if not isinstance(name, str) or not isinstance(version, str):
+            raise EvidenceError("Cargo.lock registry package identity is invalid")
+        package_root = registry_root / f"{name}-{version}"
+        if package_root.resolve(strict=True) != package_root or package_root.is_symlink():
+            raise EvidenceError(f"registry package is not canonical: {name}-{version}")
+        members = sorted(path for path in package_root.rglob("*") if path.is_file())
+        if not members or not (package_root / ".cargo-checksum.json").is_file():
+            raise EvidenceError(f"registry package closure is incomplete: {name}-{version}")
+        for member in members:
+            if member.is_symlink() or member.resolve(strict=True) != member:
+                raise EvidenceError(f"registry package member is not canonical: {member}")
+            paths.append(member.relative_to(registry_root).as_posix())
+    if not paths:
+        raise EvidenceError("Cargo.lock selected no registry package sources")
+    return sorted(set(paths))
+
+
+def prepare_run_closures(
     index: int,
     repo: Path,
     run_root: Path,
     evidence_root: Path,
+    tracked_paths: list[str],
+    commit: str,
+    tree: str,
+    manifest: dict[str, Any],
+) -> tuple[Path, SnapshotClosure, SnapshotClosure, SnapshotClosure, RetainedFile]:
+    run = run_root / f"run-{index}"
+    if run.exists() or run.is_symlink():
+        raise EvidenceError(f"run {index} work root was not absent")
+    run.mkdir(mode=0o700)
+    source = capture_snapshot(
+        f"run-{index}-repository",
+        repo,
+        run / "source",
+        tracked_paths,
+        {"git_commit": commit, "git_tree": tree},
+    )
+    cargo_home = run / "cargo-home"
+    cargo_home.mkdir(mode=0o700)
+    registry_root = Path(str(manifest["registry_source"]))
+    registry = capture_snapshot(
+        f"run-{index}-registry",
+        registry_root,
+        cargo_home / "vendor",
+        registry_paths(source.root / "Cargo.lock", registry_root),
+        {
+            "cargo_lock_sha256": sha256_bytes((source.root / "Cargo.lock").read_bytes()),
+            "registry_source": os.fspath(registry_root),
+        },
+    )
+    rust_root = Path(
+        "/home/harsh/.rustup/toolchains/nightly-2026-04-03-x86_64-unknown-linux-gnu"
+    )
+    if rust_root.resolve(strict=True) != rust_root:
+        raise EvidenceError("nightly-2026-04-03 sysroot is not canonical")
+    rust_paths = sorted(
+        member.relative_to(rust_root).as_posix()
+        for member in rust_root.rglob("*")
+        if member.is_file()
+    )
+    rust = capture_snapshot(
+        f"run-{index}-rust-sysroot",
+        rust_root,
+        run / "rust-sysroot",
+        rust_paths,
+        {
+            "rust_toolchain": EXPECTED_RUST_TOOLCHAIN,
+            "rustc_sha256": next(
+                tool["sha256"] for tool in manifest["tools"] if tool["name"] == "rustc"
+            ),
+        },
+    )
+    cargo_config = cargo_home / "config.toml"
+    cargo_config.write_text(
+        "[net]\noffline = true\n\n"
+        "[source.crates-io]\nreplace-with = \"vendored-sources\"\n\n"
+        "[source.vendored-sources]\n"
+        f'directory = "{cargo_home / "vendor"}"\n',
+        encoding="ascii",
+    )
+    cargo_config.chmod(0o444)
+    config = RetainedFile.open(
+        f"run-{index}-cargo-config", cargo_config, require_read_only=True
+    )
+    output_dir = evidence_root / f"run-{index}"
+    if not output_dir.is_dir():
+        raise EvidenceError("run evidence root was not prepared independently")
+    (output_dir / "repository-source-manifest.json").write_bytes(
+        canonical_json(source.manifest)
+    )
+    (output_dir / "cargo-registry-manifest.json").write_bytes(
+        canonical_json(registry.manifest)
+    )
+    (output_dir / "rust-sysroot-manifest.json").write_bytes(
+        canonical_json(rust.manifest)
+    )
+    return run, source, registry, rust, config
+
+
+def build_provider_members() -> list[tuple[str, Path]]:
+    roots = (
+        ("llvm-include", Path("/opt/rocm-7.2.4/lib/llvm/include")),
+        ("llvm-cmake", Path("/opt/rocm-7.2.4/lib/llvm/lib/cmake")),
+        ("clang-resource", Path("/opt/rocm-7.2.4/lib/llvm/lib/clang/22/include")),
+        ("device-bitcode", Path("/opt/rocm-7.2.4/amdgcn/bitcode")),
+        ("rocm-info", Path("/opt/rocm-7.2.4/.info")),
+    )
+    members: list[tuple[str, Path]] = []
+    for prefix, root in roots:
+        if root.resolve(strict=True) != root or root.is_symlink():
+            raise EvidenceError(f"build-provider root is not canonical: {root}")
+        for member in sorted(root.rglob("*")):
+            if member.is_file() and not member.is_symlink():
+                members.append((f"{prefix}:{member.relative_to(root).as_posix()}", member))
+    library_root = Path("/opt/rocm-7.2.4/lib/llvm/lib")
+    for member in sorted(library_root.iterdir()):
+        if member.is_file() and not member.is_symlink():
+            members.append((f"llvm-library:{member.name}", member))
+    return members
+
+
+def build_and_generate(
+    index: int,
+    repo: Path,
+    run: Path,
+    evidence_root: Path,
     manifest: dict[str, Any],
     tools: dict[str, PinnedTool],
     golden: dict[str, Any],
+    supervisor: Supervisor,
+    *,
+    observe_candidate: bool,
 ) -> tuple[Path, dict[str, Any]]:
-    run = run_root / f"run-{index}"
-    run.mkdir(mode=0o700)
+    if run != run.parent / f"run-{index}" or not run.is_dir():
+        raise EvidenceError("run root does not match its independent index")
     path_dir = run / "tool-path"
     create_allowlisted_path(path_dir, manifest, tools)
     environment = clean_environment(run, path_dir, manifest)
@@ -603,6 +832,18 @@ def build_and_generate(
     if worker_build.exists():
         raise EvidenceError("Worker build directory was not absent at run start")
     cmake = os.fspath(tools["cmake"].path)
+    compiler_launcher = ";".join(
+        (
+            tools["python"].executable.proc_path,
+            os.fspath(repo / "scripts/retained_tool_launcher.py"),
+            "--expected",
+            os.fspath(tools["cxx"].path),
+            "--retained",
+            tools["cxx"].executable.proc_path,
+            "--sha256",
+            tools["cxx"].record["sha256"],
+        )
+    )
     run_command(
         [
             cmake,
@@ -612,28 +853,33 @@ def build_and_generate(
             os.fspath(worker_build),
             "-G",
             "Ninja",
-            "-DLLVM_DIR=/opt/rocm/lib/llvm/lib/cmake/llvm",
-            "-DLLD_DIR=/opt/rocm/lib/llvm/lib/cmake/lld",
-            f"-DCMAKE_MAKE_PROGRAM={tools['ninja'].path}",
+            "-DLLVM_DIR=/opt/rocm-7.2.4/lib/llvm/lib/cmake/llvm",
+            "-DLLD_DIR=/opt/rocm-7.2.4/lib/llvm/lib/cmake/lld",
+            f"-DCMAKE_MAKE_PROGRAM={tools['ninja'].executable.proc_path}",
             f"-DCMAKE_CXX_COMPILER={tools['cxx'].path}",
             "-DCMAKE_CXX_COMPILER_ARG1=--driver-mode=g++",
-            f"-DCMAKE_LINKER={tools['lld'].path}",
-            f"-DCMAKE_AR={tools['llvm_ar'].path}",
+            f"-DCMAKE_CXX_COMPILER_LAUNCHER={compiler_launcher}",
+            f"-DCMAKE_CXX_LINKER_LAUNCHER={compiler_launcher}",
+            f"-DCMAKE_LINKER={tools['lld'].executable.proc_path}",
+            f"-DCMAKE_AR={tools['llvm_ar'].executable.proc_path}",
             "-DFE2O3_PINNED_LLVM_VERSION=22.0.0git",
-            "-DFE2O3_LLVM_BUILD_ID_FILE=/opt/rocm/.info/version",
+            "-DFE2O3_LLVM_BUILD_ID_FILE=/opt/rocm-7.2.4/.info/version",
             "-DFE2O3_EXPECTED_LLVM_BUILD_ID=7.2.4",
+            "-DFE2O3_GFX942_DEVICE_LIB_DIR=/opt/rocm-7.2.4/amdgcn/bitcode",
             "-DBUILD_TESTING=ON",
             "-DCMAKE_BUILD_TYPE=Release",
         ],
         repo,
         environment,
         tools,
+        supervisor,
     )
     run_command(
         [cmake, "--build", os.fspath(worker_build), "--parallel", "8"],
         repo,
         environment,
         tools,
+        supervisor,
     )
     worker = worker_build / "fe2o3-llvm-link-worker"
     generated: list[tuple[Any, dict[str, Any]]] = []
@@ -641,13 +887,14 @@ def build_and_generate(
         worker, worker_build, f"run-{index} Worker"
     )
     generated.append((worker_file, worker_record))
-    if worker_record["sha256"] != golden["worker_executable_sha256"]:
+    if not observe_candidate and worker_record["sha256"] != golden["worker_executable_sha256"]:
         raise EvidenceError(f"run {index} Worker executable digest changed")
     ctest_listing = run_command(
         [os.fspath(tools["ctest"].path), "--test-dir", os.fspath(worker_build), "--show-only=json-v1"],
         repo,
         environment,
         tools,
+        supervisor,
         capture=True,
     )
     listing = json.loads((ctest_listing.stdout or b"").decode("utf-8"))
@@ -665,11 +912,12 @@ def build_and_generate(
         repo,
         environment,
         tools,
+        supervisor,
     )
     for file, record in generated:
         revalidate_generated_executable(file, record)
     build_identity = (worker_build / "fe2o3-worker-build-id.txt").read_text("ascii").strip()
-    if build_identity != golden["worker_build_identity"]:
+    if not observe_candidate and build_identity != golden["worker_build_identity"]:
         raise EvidenceError(f"run {index} Worker build identity changed")
     output_dir = evidence_root / f"run-{index}"
     output_dir.mkdir(mode=0o700)
@@ -699,6 +947,7 @@ def build_and_generate(
         repo,
         environment,
         tools,
+        supervisor,
         capture=True,
     )
     test_executables: list[Path] = []
@@ -717,18 +966,40 @@ def build_and_generate(
         test_executables[0], run / "cargo-target", f"run-{index} Rust integration test"
     )
     generated.append((test_file, test_record))
-    run_command(
-        [
-            os.fspath(test_executables[0]),
-            golden["generator_test"],
-            "--ignored",
-            "--exact",
-            "--nocapture",
-        ],
-        repo,
-        generation_environment,
-        tools,
+    retained_worker = RetainedFile.open(
+        f"run-{index}-worker-exec", worker, require_executable=True
     )
+    sealed_worker = SealedExecutable.from_retained(retained_worker)
+    retained_test = RetainedFile.open(
+        f"run-{index}-rust-integration-test",
+        test_executables[0],
+        require_executable=True,
+    )
+    sealed_test = SealedExecutable.from_retained(retained_test)
+    generation_environment["FE2O3_LLVM_LINK_WORKER"] = sealed_worker.proc_path
+    try:
+        run_command(
+            [
+                os.fspath(test_executables[0]),
+                golden["generator_test"],
+                "--ignored",
+                "--exact",
+                "--nocapture",
+            ],
+            repo,
+            generation_environment,
+            tools,
+            supervisor,
+            executable=sealed_test,
+            extra_inherited_fds=(sealed_worker.fd,),
+        )
+        retained_worker.revalidate()
+        retained_test.revalidate()
+    finally:
+        sealed_test.close()
+        retained_test.close()
+        sealed_worker.close()
+        retained_worker.close()
     for file, record in generated:
         revalidate_generated_executable(file, record)
     data = output.read_bytes()
@@ -745,7 +1016,7 @@ def build_and_generate(
     return output, executable_manifest
 
 
-def controller(run_root: Path, evidence_root: Path) -> None:
+def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) -> None:
     require_absent_output(run_root, "run root")
     require_absent_output(evidence_root, "evidence root")
     script = Path(__file__)
@@ -758,8 +1029,17 @@ def controller(run_root: Path, evidence_root: Path) -> None:
     golden, _ = read_bounded_json(golden_path)
     validate_manifest_document(manifest)
     validate_golden(golden, manifest_path, manifest_bytes)
+    soft_files, hard_files = resource.getrlimit(resource.RLIMIT_NOFILE)
+    if hard_files < 131072:
+        raise EvidenceError("compiler evidence requires an RLIMIT_NOFILE hard limit of 131072")
+    if soft_files < 131072:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (131072, hard_files))
     tools = pin_tools(manifest)
+    closures: list[SnapshotClosure] = []
+    retained_closures: list[RetainedClosure] = []
+    generated_inputs: list[RetainedFile] = []
     try:
+        supervisor = Supervisor()
         run_root.mkdir(mode=0o700)
         evidence_root.mkdir(mode=0o700)
         bootstrap_path = run_root / "bootstrap-tool-path"
@@ -770,23 +1050,89 @@ def controller(run_root: Path, evidence_root: Path) -> None:
             "PATH": os.fspath(bootstrap_path),
             "TZ": "UTC",
         }
-        commit = git_clean(repo, bootstrap_environment, tools)
-        observed = version_and_runtime_manifest(manifest, tools, bootstrap_path)
+        commit, tree, tracked_paths = git_clean(
+            repo, bootstrap_environment, tools, supervisor
+        )
+        prepared = []
+        for index in (1, 2):
+            run, source, registry, rust, cargo_config = prepare_run_closures(
+                index,
+                repo,
+                run_root,
+                evidence_root,
+                tracked_paths,
+                commit,
+                tree,
+                manifest,
+            )
+            prepared.append((run, source))
+            closures.extend((source, registry, rust))
+            generated_inputs.append(cargo_config)
+        compare_labeled_manifests(closures[0].manifest, closures[3].manifest)
+        compare_labeled_manifests(closures[1].manifest, closures[4].manifest)
+        compare_labeled_manifests(closures[2].manifest, closures[5].manifest)
+        provider_members = build_provider_members()
+        for index in (1, 2):
+            provider = capture_retained_closure(
+                f"run-{index}-llvm-rocm-provider",
+                provider_members,
+                {
+                    "llvm_package_version": EXPECTED_LLVM_PACKAGE,
+                    "llvm_build_identity": EXPECTED_LLVM_BUILD,
+                    "rocm_root": "/opt/rocm-7.2.4",
+                },
+            )
+            retained_closures.append(provider)
+            supervisor.guards.extend(provider.files)
+            (evidence_root / f"run-{index}/llvm-rocm-provider-manifest.json").write_bytes(
+                canonical_json(provider.manifest)
+            )
+        compare_labeled_manifests(
+            retained_closures[0].manifest, retained_closures[1].manifest
+        )
+        for closure in closures:
+            closure.revalidate()
+        observed, runtime_closure = version_and_runtime_manifest(
+            manifest, tools, bootstrap_path, supervisor
+        )
+        retained_closures.append(runtime_closure)
+        supervisor.guards.extend(runtime_closure.files)
         (evidence_root / "tool-runtime-manifest.json").write_bytes(canonical_json(observed))
         first, first_executables = build_and_generate(
-            1, repo, run_root, evidence_root, manifest, tools, golden
+            1,
+            prepared[0][1].root,
+            prepared[0][0],
+            evidence_root,
+            manifest,
+            tools,
+            golden,
+            supervisor,
+            observe_candidate=observe_candidate,
         )
-        git_clean(repo, bootstrap_environment, tools)
+        for closure in closures:
+            closure.revalidate()
+        git_clean(repo, bootstrap_environment, tools, supervisor)
         second, second_executables = build_and_generate(
-            2, repo, run_root, evidence_root, manifest, tools, golden
+            2,
+            prepared[1][1].root,
+            prepared[1][0],
+            evidence_root,
+            manifest,
+            tools,
+            golden,
+            supervisor,
+            observe_candidate=observe_candidate,
         )
-        git_clean(repo, bootstrap_environment, tools)
+        for closure in closures:
+            closure.revalidate()
+        git_clean(repo, bootstrap_environment, tools, supervisor)
         if first.read_bytes() != second.read_bytes():
             raise EvidenceError("independent Worker/build/target runs were not byte-identical")
         reject_cross_run_reuse(first_executables, second_executables)
         summary = {
             "schema": "fe2o3-gfx942-two-run-compiler-evidence-summary-v1",
             "source_commit": commit,
+            "source_tree": tree,
             "tool_manifest_sha256": sha256_bytes(manifest_bytes),
             "runtime_manifest_sha256": manifest["runtime_manifest_sha256"],
             "run_1": {
@@ -802,14 +1148,21 @@ def controller(run_root: Path, evidence_root: Path) -> None:
             "claim": "exact-artifact-observation-only",
             "compiler_causality_authenticated": False,
             "compiler_receipt_issued": False,
+            "transition_candidate_observation": observe_candidate,
         }
         (evidence_root / "summary.json").write_bytes(canonical_json(summary))
         print(f"source commit: {commit}")
         print(f"artifact SHA-256: {golden['hsaco_sha256']}")
         print("independent pinned-tool Worker V2 compiler evidence: PASS")
     finally:
+        for generated in generated_inputs:
+            generated.close()
+        for closure in closures:
+            closure.close()
+        for closure in retained_closures:
+            closure.close()
         for tool in tools.values():
-            tool.file.close()
+            tool.close()
 
 
 def self_test(repo: Path) -> None:
@@ -884,19 +1237,21 @@ def self_test(repo: Path) -> None:
             (shadow / "cargo").write_text("substituted", encoding="ascii")
             create_allowlisted_path(allowlist, manifest, tools)
             selected = shutil.which("cargo", path=os.fspath(allowlist))
-            if selected is None or Path(selected).resolve(strict=True) != tools["cargo"].path:
+            if selected is None or os.readlink(selected) != tools["cargo"].executable.proc_path:
                 raise AssertionError("allowlisted PATH resolved a shadow Cargo")
             if str(shadow) in str(allowlist):
                 raise AssertionError("ambient PATH entered the allowlist")
         finally:
             for tool in tools.values():
-                tool.file.close()
+                tool.close()
+    adversarial_self_test()
     print("gfx942 compiler-evidence controller mutation tests: PASS")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--self-test", action="store_true")
+    parser.add_argument("--observe-transition-candidate", action="store_true")
     parser.add_argument("run_root", nargs="?")
     parser.add_argument("evidence_root", nargs="?")
     args = parser.parse_args()
@@ -904,14 +1259,22 @@ def main() -> int:
     repo = script.parent.parent
     try:
         if args.self_test:
-            if args.run_root is not None or args.evidence_root is not None:
+            if (
+                args.run_root is not None
+                or args.evidence_root is not None
+                or args.observe_transition_candidate
+            ):
                 raise EvidenceError("--self-test accepts no output paths")
             self_test(repo)
         else:
             if args.run_root is None or args.evidence_root is None:
                 raise EvidenceError("RUN_ROOT and EVIDENCE_ROOT are required")
-            controller(Path(args.run_root), Path(args.evidence_root))
-    except (EvidenceError, OSError, UnicodeError, ValueError) as error:
+            controller(
+                Path(args.run_root),
+                Path(args.evidence_root),
+                observe_candidate=args.observe_transition_candidate,
+            )
+    except (EvidenceError, HardeningError, OSError, UnicodeError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
     return 0
