@@ -1060,7 +1060,9 @@ def build_and_generate(
         require_executable=True,
     )
     sealed_test = SealedExecutable.from_retained(retained_test)
-    generation_environment["FE2O3_LLVM_LINK_WORKER"] = sealed_worker.proc_path
+    generation_environment["FE2O3_LLVM_LINK_WORKER"] = (
+        f"/proc/self/fd/{sealed_worker.fd}"
+    )
     try:
         run_command(
             [

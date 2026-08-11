@@ -473,24 +473,38 @@ mod platform {
     impl PinnedWorkerV1 {
         /// Captures `path` once and requires its exact declared content identity.
         ///
-        /// The final path component is opened with `O_NOFOLLOW`. Parent-directory resolution may
-        /// race, but substituting a different object cannot pass the authenticated content
-        /// identity unless it has the same bytes. The immutable captured image, rather than the
-        /// pathname, is used by [`Self::execute`].
+        /// The final path component is opened with `O_NOFOLLOW`. The sole exception is an exact
+        /// `/proc/self/fd/N` spelling whose referred memfd already has all required seals. That
+        /// path supports an externally retained executable without reopening its mutable source.
+        /// Parent-directory resolution of ordinary paths may race, but substituting a different
+        /// object cannot pass the authenticated content identity unless it has the same bytes.
+        /// The immutable captured image, rather than the pathname, is used by [`Self::execute`].
         pub fn open(
             path: impl AsRef<Path>,
             measurement: WorkerMeasurementV1,
         ) -> Result<Self, WorkerExecutionError> {
             let path = path.as_ref();
-            let fd = rustix::fs::open(
-                path,
-                OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
-                Mode::empty(),
-            )
-            .map_err(|error| {
+            let retained_descriptor = retained_descriptor_number(path);
+            let mut open_flags = OFlags::RDONLY | OFlags::NONBLOCK | OFlags::CLOEXEC;
+            if retained_descriptor.is_none() {
+                open_flags |= OFlags::NOFOLLOW;
+            }
+            let fd = rustix::fs::open(path, open_flags, Mode::empty()).map_err(|error| {
                 WorkerExecutionError::io(WorkerExecutionErrorKind::OpenWorker, error.into())
             })?;
             let mut source = File::from(fd);
+            if retained_descriptor.is_some()
+                && rustix::fs::fcntl_get_seals(&source).map_err(|error| {
+                    WorkerExecutionError::io(
+                        WorkerExecutionErrorKind::PreparePinnedImage,
+                        error.into(),
+                    )
+                })? != REQUIRED_SEALS
+            {
+                return Err(WorkerExecutionError::plain(
+                    WorkerExecutionErrorKind::PreparePinnedImage,
+                ));
+            }
             let initial_metadata = source.metadata().map_err(|error| {
                 WorkerExecutionError::io(WorkerExecutionErrorKind::OpenWorker, error)
             })?;
@@ -737,6 +751,19 @@ mod platform {
                 execution,
             })
         }
+    }
+
+    fn retained_descriptor_number(path: &Path) -> Option<i32> {
+        let text = path.to_str()?;
+        let suffix = text.strip_prefix("/proc/self/fd/")?;
+        if suffix.is_empty()
+            || !suffix.bytes().all(|byte| byte.is_ascii_digit())
+            || (suffix.len() > 1 && suffix.starts_with('0'))
+        {
+            return None;
+        }
+        let descriptor = suffix.parse::<i32>().ok()?;
+        (descriptor >= 3 && text == format!("/proc/self/fd/{descriptor}")).then_some(descriptor)
     }
 
     fn capture_and_seal(

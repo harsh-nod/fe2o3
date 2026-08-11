@@ -1,8 +1,10 @@
 #![cfg(target_os = "linux")]
 
 use std::{
-    fs,
-    path::Path,
+    fs::{self, File},
+    io::Write,
+    os::{fd::AsRawFd, unix::fs::PermissionsExt},
+    path::{Path, PathBuf},
     thread,
     time::{Duration, Instant},
 };
@@ -427,4 +429,41 @@ fn rejects_symlinks_and_wrong_executable_measurements() {
         WorkerExecutionErrorKind::WorkerIdentityMismatch { .. }
     ));
     let _ = fs::remove_file(link);
+}
+
+fn retained_worker_image(sealed: bool) -> (File, PathBuf, WorkerMeasurementV1) {
+    use rustix::fs::{MemfdFlags, SealFlags};
+
+    let bytes = fs::read(fixture_path()).unwrap();
+    let fd =
+        rustix::fs::memfd_create("fe2o3-retained-worker-test", MemfdFlags::ALLOW_SEALING).unwrap();
+    let mut image = File::from(fd);
+    image.write_all(&bytes).unwrap();
+    image
+        .set_permissions(fs::Permissions::from_mode(0o555))
+        .unwrap();
+    if sealed {
+        rustix::fs::fcntl_add_seals(
+            &image,
+            SealFlags::WRITE | SealFlags::GROW | SealFlags::SHRINK,
+        )
+        .and_then(|()| rustix::fs::fcntl_add_seals(&image, SealFlags::SEAL))
+        .unwrap();
+    }
+    let path = PathBuf::from(format!("/proc/self/fd/{}", image.as_raw_fd()));
+    let measurement =
+        WorkerMeasurementV1::new(ContentIdentityV1::calculate(&bytes), WORKER_ID, LLVM_ID).unwrap();
+    (image, path, measurement)
+}
+
+#[test]
+fn accepts_only_fully_sealed_inherited_worker_descriptors() {
+    let (_image, path, measurement) = retained_worker_image(true);
+    assert!(PinnedWorkerV1::open(&path, measurement).is_ok());
+
+    let (_image, path, measurement) = retained_worker_image(false);
+    assert_eq!(
+        PinnedWorkerV1::open(&path, measurement).unwrap_err().kind(),
+        &WorkerExecutionErrorKind::PreparePinnedImage
+    );
 }
