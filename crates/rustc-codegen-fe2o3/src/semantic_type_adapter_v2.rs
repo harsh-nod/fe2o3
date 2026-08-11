@@ -1,4 +1,4 @@
-//! Exact rustc type-layout capture over the untrusted dialect MIR V2 graph.
+//! Exact rustc type-layout observation over the untrusted dialect MIR V2 graph.
 //!
 //! The three boundaries in this module are intentionally distinct:
 //! [`SemanticTypeGraphV2`] bytes are untrusted transport input,
@@ -40,29 +40,29 @@ const GFX942_CANDIDATE_DOMAIN_V2: &[u8] = b"FE2O3/GFX942-LAYOUT-CANDIDATE/V2\0";
 const GFX942_POINTER_WIDTH_BITS: u16 = 64;
 const DEFAULT_MAX_SIDECAR_RECORDS: u32 = 32_768;
 const DEFAULT_MAX_SIDECAR_BYTES: u32 = 8 * 1024 * 1024;
-const DEFAULT_MAX_CAPTURE_WORK: u64 = 1_000_000;
+const DEFAULT_MAX_OBSERVATION_WORK: u64 = 1_000_000;
 const DEFAULT_MAX_PROJECTION_WORK: u64 = 1_000_000;
 const DEFAULT_MAX_TOTAL_TEXT_BYTES: u64 = 8 * 1024 * 1024;
 const DEFAULT_MAX_PATH_BYTES: u32 = 4 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SemanticTypeCaptureBudgetsV2 {
+pub struct SemanticTypeLayoutBudgetsV2 {
     pub graph: SemanticTypeGraphBudgetsV2,
     pub max_sidecar_records: u32,
     pub max_sidecar_bytes: u32,
-    pub max_capture_work: u64,
+    pub max_observation_work: u64,
     pub max_projection_work: u64,
     pub max_total_text_bytes: u64,
     pub max_path_bytes: u32,
 }
 
-impl Default for SemanticTypeCaptureBudgetsV2 {
+impl Default for SemanticTypeLayoutBudgetsV2 {
     fn default() -> Self {
         Self {
             graph: SemanticTypeGraphBudgetsV2::default(),
             max_sidecar_records: DEFAULT_MAX_SIDECAR_RECORDS,
             max_sidecar_bytes: DEFAULT_MAX_SIDECAR_BYTES,
-            max_capture_work: DEFAULT_MAX_CAPTURE_WORK,
+            max_observation_work: DEFAULT_MAX_OBSERVATION_WORK,
             max_projection_work: DEFAULT_MAX_PROJECTION_WORK,
             max_total_text_bytes: DEFAULT_MAX_TOTAL_TEXT_BYTES,
             max_path_bytes: DEFAULT_MAX_PATH_BYTES,
@@ -362,7 +362,7 @@ impl HostDeviceByteDifferentialV2 {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum DeviceCopyLayoutErrorV2 {
+pub enum Gfx942LayoutCompatibilityErrorV2 {
     TargetMismatch,
     ObservationIdentityMismatch,
     ProjectionMismatch,
@@ -371,12 +371,12 @@ pub enum DeviceCopyLayoutErrorV2 {
     WorkBoundExceeded { actual: u64, max: u64 },
     AllocationFailed { resource: &'static str },
     Unsupported { key: String, detail: &'static str },
-    InconsistentCapture { key: String, detail: &'static str },
+    InconsistentLayout { key: String, detail: &'static str },
     ByteLengthExceeded { actual: usize, max: usize },
     HostDeviceByteMismatch,
 }
 
-impl fmt::Display for DeviceCopyLayoutErrorV2 {
+impl fmt::Display for Gfx942LayoutCompatibilityErrorV2 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::TargetMismatch => {
@@ -409,11 +409,14 @@ impl fmt::Display for DeviceCopyLayoutErrorV2 {
             Self::Unsupported { key, detail } => {
                 write!(
                     formatter,
-                    "type {key:?} is not DeviceCopy-layout eligible: {detail}"
+                    "type {key:?} is not gfx942-layout compatible: {detail}"
                 )
             }
-            Self::InconsistentCapture { key, detail } => {
-                write!(formatter, "type capture {key:?} is inconsistent: {detail}")
+            Self::InconsistentLayout { key, detail } => {
+                write!(
+                    formatter,
+                    "layout observation {key:?} is inconsistent: {detail}"
+                )
             }
             Self::ByteLengthExceeded { actual, max } => {
                 write!(
@@ -428,7 +431,7 @@ impl fmt::Display for DeviceCopyLayoutErrorV2 {
     }
 }
 
-impl std::error::Error for DeviceCopyLayoutErrorV2 {}
+impl std::error::Error for Gfx942LayoutCompatibilityErrorV2 {}
 
 /// Derives and exactly compares the conservative gfx942 layout projection.
 ///
@@ -437,8 +440,8 @@ impl std::error::Error for DeviceCopyLayoutErrorV2 {}
 /// from this API and from every identity it computes.
 pub fn derive_gfx942_layout_compatibility_candidate_v2(
     observation: &RustcTypeLayoutObservationV2,
-    budgets: SemanticTypeCaptureBudgetsV2,
-) -> Result<Gfx942LayoutCompatibilityCandidateV2, DeviceCopyLayoutErrorV2> {
+    budgets: SemanticTypeLayoutBudgetsV2,
+) -> Result<Gfx942LayoutCompatibilityCandidateV2, Gfx942LayoutCompatibilityErrorV2> {
     validate_observation_integrity(observation, budgets)?;
     let target = CanonicalGfx942LayoutTargetV2::canonical();
     let mut builder = ProjectionBuilderV2::new(observation, budgets)?;
@@ -461,11 +464,11 @@ pub fn derive_gfx942_layout_compatibility_candidate_v2(
 pub fn validate_gfx942_layout_compatibility_candidate_v2(
     observation: &RustcTypeLayoutObservationV2,
     candidate: &Gfx942LayoutCompatibilityCandidateV2,
-    budgets: SemanticTypeCaptureBudgetsV2,
-) -> Result<(), DeviceCopyLayoutErrorV2> {
+    budgets: SemanticTypeLayoutBudgetsV2,
+) -> Result<(), Gfx942LayoutCompatibilityErrorV2> {
     let expected = derive_gfx942_layout_compatibility_candidate_v2(observation, budgets)?;
     if candidate != &expected {
-        return Err(DeviceCopyLayoutErrorV2::ProjectionMismatch);
+        return Err(Gfx942LayoutCompatibilityErrorV2::ProjectionMismatch);
     }
     Ok(())
 }
@@ -475,16 +478,16 @@ pub fn compare_host_device_fixture_bytes_v2(
     host_bytes: &[u8],
     gfx942_bytes: &[u8],
     max_bytes: usize,
-) -> Result<HostDeviceByteDifferentialV2, DeviceCopyLayoutErrorV2> {
+) -> Result<HostDeviceByteDifferentialV2, Gfx942LayoutCompatibilityErrorV2> {
     let actual = host_bytes.len().max(gfx942_bytes.len());
     if actual > max_bytes {
-        return Err(DeviceCopyLayoutErrorV2::ByteLengthExceeded {
+        return Err(Gfx942LayoutCompatibilityErrorV2::ByteLengthExceeded {
             actual,
             max: max_bytes,
         });
     }
     if host_bytes != gfx942_bytes {
-        return Err(DeviceCopyLayoutErrorV2::HostDeviceByteMismatch);
+        return Err(Gfx942LayoutCompatibilityErrorV2::HostDeviceByteMismatch);
     }
     Ok(HostDeviceByteDifferentialV2 {
         candidate_identity_sha256: *candidate.candidate_identity_sha256(),
@@ -504,7 +507,7 @@ struct DerivedLayoutV2 {
 
 struct ProjectionBuilderV2<'a> {
     observation: &'a RustcTypeLayoutObservationV2,
-    budgets: SemanticTypeCaptureBudgetsV2,
+    budgets: SemanticTypeLayoutBudgetsV2,
     work: u64,
     active: Vec<bool>,
     derived: Vec<Option<DerivedLayoutV2>>,
@@ -514,26 +517,26 @@ struct ProjectionBuilderV2<'a> {
 impl<'a> ProjectionBuilderV2<'a> {
     fn new(
         observation: &'a RustcTypeLayoutObservationV2,
-        budgets: SemanticTypeCaptureBudgetsV2,
-    ) -> Result<Self, DeviceCopyLayoutErrorV2> {
+        budgets: SemanticTypeLayoutBudgetsV2,
+    ) -> Result<Self, Gfx942LayoutCompatibilityErrorV2> {
         let count = observation.graph().node_count();
         let mut active = Vec::new();
-        active
-            .try_reserve_exact(count)
-            .map_err(|_| DeviceCopyLayoutErrorV2::AllocationFailed {
+        active.try_reserve_exact(count).map_err(|_| {
+            Gfx942LayoutCompatibilityErrorV2::AllocationFailed {
                 resource: "gfx942 projection traversal state",
-            })?;
+            }
+        })?;
         active.resize(count, false);
         let mut derived = Vec::new();
         derived.try_reserve_exact(count).map_err(|_| {
-            DeviceCopyLayoutErrorV2::AllocationFailed {
+            Gfx942LayoutCompatibilityErrorV2::AllocationFailed {
                 resource: "gfx942 derived layouts",
             }
         })?;
         derived.resize_with(count, || None);
         let mut records = Vec::new();
         records.try_reserve_exact(count).map_err(|_| {
-            DeviceCopyLayoutErrorV2::AllocationFailed {
+            Gfx942LayoutCompatibilityErrorV2::AllocationFailed {
                 resource: "gfx942 projection records",
             }
         })?;
@@ -547,10 +550,10 @@ impl<'a> ProjectionBuilderV2<'a> {
         })
     }
 
-    fn charge(&mut self, amount: u64) -> Result<(), DeviceCopyLayoutErrorV2> {
+    fn charge(&mut self, amount: u64) -> Result<(), Gfx942LayoutCompatibilityErrorV2> {
         self.work = self.work.checked_add(amount).unwrap_or(u64::MAX);
         if self.work > self.budgets.max_projection_work {
-            return Err(DeviceCopyLayoutErrorV2::WorkBoundExceeded {
+            return Err(Gfx942LayoutCompatibilityErrorV2::WorkBoundExceeded {
                 actual: self.work,
                 max: self.budgets.max_projection_work,
             });
@@ -561,7 +564,7 @@ impl<'a> ProjectionBuilderV2<'a> {
     fn derive(
         &mut self,
         id: SemanticTypeNodeIdV2,
-    ) -> Result<DerivedLayoutV2, DeviceCopyLayoutErrorV2> {
+    ) -> Result<DerivedLayoutV2, Gfx942LayoutCompatibilityErrorV2> {
         self.charge(1)?;
         let index = id.index() as usize;
         if let Some(layout) = self.derived.get(index).and_then(Clone::clone) {
@@ -571,26 +574,24 @@ impl<'a> ProjectionBuilderV2<'a> {
             .observation
             .graph()
             .key(id)
-            .ok_or_else(|| inconsistent_capture(id.index().to_string(), "node key is missing"))?
+            .ok_or_else(|| inconsistent_layout(id.index().to_string(), "node key is missing"))?
             .to_owned();
         if self.active.get(index).copied().unwrap_or(false) {
-            return Err(DeviceCopyLayoutErrorV2::Cycle { key });
+            return Err(Gfx942LayoutCompatibilityErrorV2::Cycle { key });
         }
         let node = self
             .observation
             .graph()
             .node(id)
-            .ok_or_else(|| inconsistent_capture(key.clone(), "node definition is missing"))?
+            .ok_or_else(|| inconsistent_layout(key.clone(), "node definition is missing"))?
             .clone();
         let record = self
             .observation
             .layout_record(&key)
-            .ok_or_else(|| {
-                inconsistent_capture(key.clone(), "rustc observation record is missing")
-            })?
+            .ok_or_else(|| inconsistent_layout(key.clone(), "rustc observation record is missing"))?
             .clone();
         if record.uninhabited() {
-            return Err(device_copy_unsupported(
+            return Err(layout_unsupported(
                 &key,
                 "uninhabited values are not byte-copy values",
             ));
@@ -601,7 +602,7 @@ impl<'a> ProjectionBuilderV2<'a> {
         if node.layout.size != Some(layout.size_bytes)
             || node.layout.align != layout.alignment_bytes
         {
-            return Err(inconsistent_capture(
+            return Err(inconsistent_layout(
                 key,
                 "host rustc size/alignment differs from canonical gfx942 projection",
             ));
@@ -624,7 +625,7 @@ impl<'a> ProjectionBuilderV2<'a> {
         key: &str,
         kind: &SemanticTypeKindV2,
         record: &RustcTypeLayoutRecordV2,
-    ) -> Result<DerivedLayoutV2, DeviceCopyLayoutErrorV2> {
+    ) -> Result<DerivedLayoutV2, Gfx942LayoutCompatibilityErrorV2> {
         match kind {
             SemanticTypeKindV2::Unit => Ok(simple_layout(0, 1)),
             SemanticTypeKindV2::Scalar(SemanticScalarV2::Int { bits, .. }) => {
@@ -634,7 +635,7 @@ impl<'a> ProjectionBuilderV2<'a> {
                     32 => (4, 4),
                     64 => (8, 8),
                     _ => {
-                        return Err(device_copy_unsupported(
+                        return Err(layout_unsupported(
                             key,
                             "integer width lacks a reviewed gfx942 ABI rule",
                         ));
@@ -647,7 +648,7 @@ impl<'a> ProjectionBuilderV2<'a> {
                     32 => (4, 4),
                     64 => (8, 8),
                     _ => {
-                        return Err(device_copy_unsupported(
+                        return Err(layout_unsupported(
                             key,
                             "float width lacks a reviewed gfx942 ABI rule",
                         ));
@@ -656,24 +657,24 @@ impl<'a> ProjectionBuilderV2<'a> {
                 Ok(simple_layout(size, align))
             }
             SemanticTypeKindV2::Scalar(_) | SemanticTypeKindV2::ValidityScalar { .. } => Err(
-                device_copy_unsupported(key, "not every scalar bit pattern is valid or supported"),
+                layout_unsupported(key, "not every scalar bit pattern is valid or supported"),
             ),
             SemanticTypeKindV2::Array { element, length } => {
                 let element = self.derive(*element)?;
                 if element.size_bytes == 0 {
-                    return Err(device_copy_unsupported(
+                    return Err(layout_unsupported(
                         key,
                         "zero-sized array elements are outside the reviewed ABI subset",
                     ));
                 }
                 let stride = align_up(element.size_bytes, element.alignment_bytes, key)?;
                 let size = stride.checked_mul(*length).ok_or_else(|| {
-                    DeviceCopyLayoutErrorV2::ArithmeticOverflow {
+                    Gfx942LayoutCompatibilityErrorV2::ArithmeticOverflow {
                         key: key.to_owned(),
                     }
                 })?;
                 if record.array_stride_bytes() != Some(stride) {
-                    return Err(inconsistent_capture(
+                    return Err(inconsistent_layout(
                         key,
                         "host array stride differs from canonical gfx942 stride",
                     ));
@@ -687,31 +688,31 @@ impl<'a> ProjectionBuilderV2<'a> {
                 })
             }
             SemanticTypeKindV2::Struct { fields, .. } => self.derive_struct(key, fields, record),
-            SemanticTypeKindV2::Tuple { .. } => Err(device_copy_unsupported(
+            SemanticTypeKindV2::Tuple { .. } => Err(layout_unsupported(
                 key,
                 "tuple repr(Rust) ABI is not admitted",
             )),
-            SemanticTypeKindV2::Union { .. } => Err(device_copy_unsupported(
+            SemanticTypeKindV2::Union { .. } => Err(layout_unsupported(
                 key,
                 "union object representation is not admitted",
             )),
-            SemanticTypeKindV2::Enum { .. } => Err(device_copy_unsupported(
+            SemanticTypeKindV2::Enum { .. } => Err(layout_unsupported(
                 key,
                 "enum discriminants and niches are not admitted",
             )),
             SemanticTypeKindV2::RawPointer { .. } | SemanticTypeKindV2::Reference { .. } => {
-                Err(device_copy_unsupported(
+                Err(layout_unsupported(
                     key,
                     "pointer provenance and address spaces are not byte-copy layout facts",
                 ))
             }
-            SemanticTypeKindV2::Never => Err(device_copy_unsupported(
+            SemanticTypeKindV2::Never => Err(layout_unsupported(
                 key,
                 "never has no inhabited object representation",
             )),
             SemanticTypeKindV2::Slice { .. }
             | SemanticTypeKindV2::Str
-            | SemanticTypeKindV2::OpaqueDst { .. } => Err(device_copy_unsupported(
+            | SemanticTypeKindV2::OpaqueDst { .. } => Err(layout_unsupported(
                 key,
                 "dynamically sized values are not copied by value",
             )),
@@ -723,15 +724,15 @@ impl<'a> ProjectionBuilderV2<'a> {
         key: &str,
         fields: &[SemanticFieldV2],
         record: &RustcTypeLayoutRecordV2,
-    ) -> Result<DerivedLayoutV2, DeviceCopyLayoutErrorV2> {
+    ) -> Result<DerivedLayoutV2, Gfx942LayoutCompatibilityErrorV2> {
         let repr = record
             .representation()
-            .ok_or_else(|| inconsistent_capture(key, "struct representation is missing"))?;
+            .ok_or_else(|| inconsistent_layout(key, "struct representation is missing"))?;
         if repr.packed_alignment_bytes.is_some()
             || repr.requested_alignment_bytes.is_some()
             || repr.explicit_integer
         {
-            return Err(device_copy_unsupported(
+            return Err(layout_unsupported(
                 key,
                 "packed, explicitly aligned, or integer representations are not admitted",
             ));
@@ -739,21 +740,21 @@ impl<'a> ProjectionBuilderV2<'a> {
         let aggregate = match record.aggregates() {
             [aggregate] => aggregate,
             _ => {
-                return Err(inconsistent_capture(
+                return Err(inconsistent_layout(
                     key,
                     "struct must have one rustc aggregate record",
                 ));
             }
         };
         if !aggregate.padding().is_empty() {
-            return Err(device_copy_unsupported(
+            return Err(layout_unsupported(
                 key,
                 "aggregate object representation contains padding",
             ));
         }
         if repr.transparent {
             if repr.c || fields.len() != 1 {
-                return Err(device_copy_unsupported(
+                return Err(layout_unsupported(
                     key,
                     "the reviewed repr(transparent) subset requires exactly one field",
                 ));
@@ -761,7 +762,7 @@ impl<'a> ProjectionBuilderV2<'a> {
             let child = self.derive(fields[0].ty)?;
             if child.size_bytes == 0 || fields[0].offset != 0 || aggregate.source_to_memory() != [0]
             {
-                return Err(inconsistent_capture(
+                return Err(inconsistent_layout(
                     key,
                     "repr(transparent) host layout differs from its single field",
                 ));
@@ -775,14 +776,14 @@ impl<'a> ProjectionBuilderV2<'a> {
             });
         }
         if !repr.c {
-            return Err(device_copy_unsupported(
+            return Err(layout_unsupported(
                 key,
                 "repr(Rust) aggregate ABI is not admitted",
             ));
         }
         let mut offsets = Vec::new();
         offsets.try_reserve_exact(fields.len()).map_err(|_| {
-            DeviceCopyLayoutErrorV2::AllocationFailed {
+            Gfx942LayoutCompatibilityErrorV2::AllocationFailed {
                 resource: "gfx942 field offsets",
             }
         })?;
@@ -792,33 +793,33 @@ impl<'a> ProjectionBuilderV2<'a> {
             self.charge(1)?;
             let child = self.derive(field.ty)?;
             if child.size_bytes == 0 {
-                return Err(device_copy_unsupported(
+                return Err(layout_unsupported(
                     key,
                     "zero-sized aggregate fields are outside the reviewed ABI subset",
                 ));
             }
             let offset = align_up(cursor, child.alignment_bytes, key)?;
             if offset != cursor {
-                return Err(device_copy_unsupported(
+                return Err(layout_unsupported(
                     key,
                     "canonical gfx942 aggregate layout contains internal padding",
                 ));
             }
             if field.offset != offset {
-                return Err(inconsistent_capture(
+                return Err(inconsistent_layout(
                     key,
                     "host field offset differs from canonical gfx942 offset",
                 ));
             }
             if aggregate.source_to_memory().get(index).copied() != Some(index as u32) {
-                return Err(inconsistent_capture(
+                return Err(inconsistent_layout(
                     key,
                     "host field memory order differs from repr(C) source order",
                 ));
             }
             offsets.push(offset);
             cursor = cursor.checked_add(child.size_bytes).ok_or_else(|| {
-                DeviceCopyLayoutErrorV2::ArithmeticOverflow {
+                Gfx942LayoutCompatibilityErrorV2::ArithmeticOverflow {
                     key: key.to_owned(),
                 }
             })?;
@@ -826,7 +827,7 @@ impl<'a> ProjectionBuilderV2<'a> {
         }
         let size = align_up(cursor, alignment, key)?;
         if size != cursor {
-            return Err(device_copy_unsupported(
+            return Err(layout_unsupported(
                 key,
                 "canonical gfx942 aggregate layout contains trailing padding",
             ));
@@ -843,9 +844,9 @@ impl<'a> ProjectionBuilderV2<'a> {
     fn finish(
         mut self,
         target: CanonicalGfx942LayoutTargetV2,
-    ) -> Result<CanonicalGfx942LayoutProjectionV2, DeviceCopyLayoutErrorV2> {
+    ) -> Result<CanonicalGfx942LayoutProjectionV2, Gfx942LayoutCompatibilityErrorV2> {
         if !target.is_canonical() {
-            return Err(DeviceCopyLayoutErrorV2::TargetMismatch);
+            return Err(Gfx942LayoutCompatibilityErrorV2::TargetMismatch);
         }
         self.charge(sort_work(self.records.len()))?;
         self.records.sort_by(|left, right| left.key.cmp(&right.key));
@@ -871,9 +872,13 @@ fn simple_layout(size_bytes: u64, alignment_bytes: u64) -> DerivedLayoutV2 {
     }
 }
 
-fn align_up(value: u64, alignment: u64, key: &str) -> Result<u64, DeviceCopyLayoutErrorV2> {
+fn align_up(
+    value: u64,
+    alignment: u64,
+    key: &str,
+) -> Result<u64, Gfx942LayoutCompatibilityErrorV2> {
     if alignment == 0 || !alignment.is_power_of_two() {
-        return Err(inconsistent_capture(
+        return Err(inconsistent_layout(
             key,
             "canonical alignment is not a nonzero power of two",
         ));
@@ -881,7 +886,7 @@ fn align_up(value: u64, alignment: u64, key: &str) -> Result<u64, DeviceCopyLayo
     value
         .checked_add(alignment - 1)
         .map(|value| value & !(alignment - 1))
-        .ok_or_else(|| DeviceCopyLayoutErrorV2::ArithmeticOverflow {
+        .ok_or_else(|| Gfx942LayoutCompatibilityErrorV2::ArithmeticOverflow {
             key: key.to_owned(),
         })
 }
@@ -893,15 +898,18 @@ fn sort_work(length: usize) -> u64 {
     (length as u64).saturating_mul(u64::from(usize::BITS - (length - 1).leading_zeros()))
 }
 
-fn inconsistent_capture(key: impl Into<String>, detail: &'static str) -> DeviceCopyLayoutErrorV2 {
-    DeviceCopyLayoutErrorV2::InconsistentCapture {
+fn inconsistent_layout(
+    key: impl Into<String>,
+    detail: &'static str,
+) -> Gfx942LayoutCompatibilityErrorV2 {
+    Gfx942LayoutCompatibilityErrorV2::InconsistentLayout {
         key: key.into(),
         detail,
     }
 }
 
-fn device_copy_unsupported(key: &str, detail: &'static str) -> DeviceCopyLayoutErrorV2 {
-    DeviceCopyLayoutErrorV2::Unsupported {
+fn layout_unsupported(key: &str, detail: &'static str) -> Gfx942LayoutCompatibilityErrorV2 {
+    Gfx942LayoutCompatibilityErrorV2::Unsupported {
         key: key.to_owned(),
         detail,
     }
@@ -964,10 +972,14 @@ impl fmt::Display for SemanticTypeAdapterErrorV2 {
                 write!(formatter, "allocation failed while building {resource}")
             }
             Self::Graph(error) => {
-                write!(formatter, "semantic type graph rejected capture: {error}")
+                write!(
+                    formatter,
+                    "semantic type graph rejected observation: {error}"
+                )
             }
-            Self::UntrustedGraphMismatch => formatter
-                .write_str("untrusted semantic type graph differs from the exact rustc capture"),
+            Self::UntrustedGraphMismatch => formatter.write_str(
+                "untrusted semantic type graph differs from the exact rustc observation",
+            ),
         }
     }
 }
@@ -999,19 +1011,19 @@ impl From<SemanticLayoutBridgeError> for SemanticTypeAdapterErrorV2 {
     }
 }
 
-struct CaptureMeterV2 {
+struct ObservationMeterV2 {
     work: u64,
     text_bytes: u64,
     max_work: u64,
     max_text_bytes: u64,
 }
 
-impl CaptureMeterV2 {
-    fn new(budgets: SemanticTypeCaptureBudgetsV2) -> Self {
+impl ObservationMeterV2 {
+    fn new(budgets: SemanticTypeLayoutBudgetsV2) -> Self {
         Self {
             work: 0,
             text_bytes: 0,
-            max_work: budgets.max_capture_work,
+            max_work: budgets.max_observation_work,
             max_text_bytes: budgets.max_total_text_bytes,
         }
     }
@@ -1051,8 +1063,8 @@ impl CaptureMeterV2 {
 fn normalize_and_preflight_layout_type<'tcx>(
     tcx: TyCtxt<'tcx>,
     ty: Ty<'tcx>,
-    budgets: SemanticTypeCaptureBudgetsV2,
-) -> Result<(Ty<'tcx>, CaptureMeterV2), SemanticTypeAdapterErrorV2> {
+    budgets: SemanticTypeLayoutBudgetsV2,
+) -> Result<(Ty<'tcx>, ObservationMeterV2), SemanticTypeAdapterErrorV2> {
     const EXTRACTION_MAX_DEPTH: u64 = 64;
     const MAX_PATH_SEGMENT_BYTES: u64 = 48;
     let required_path_bytes = 4_u64
@@ -1086,7 +1098,7 @@ fn normalize_and_preflight_layout_type<'tcx>(
             resource: "rustc layout preflight visited set",
         }
     })?;
-    let mut meter = CaptureMeterV2::new(budgets);
+    let mut meter = ObservationMeterV2::new(budgets);
     let mut total_fields = 0_u64;
     let mut total_variants = 0_u64;
 
@@ -1196,19 +1208,19 @@ fn push_preflight_type<'tcx>(
     Ok(())
 }
 
-fn charge_capture_result(
-    meter: &mut CaptureMeterV2,
-    capture: &PendingCaptureV2,
+fn charge_observation_result(
+    meter: &mut ObservationMeterV2,
+    observation: &PendingObservationV2,
 ) -> Result<(), SemanticTypeAdapterErrorV2> {
     meter.charge_work(
-        "rustc layout capture work",
-        capture.graph.node_count() as u64,
+        "rustc layout observation work",
+        observation.graph.node_count() as u64,
     )?;
     meter.charge_work(
         "rustc layout sidecar sorting work",
-        sort_work(capture.layout_records.len()),
+        sort_work(observation.layout_records.len()),
     )?;
-    for record in &capture.layout_records {
+    for record in &observation.layout_records {
         meter.charge_work("rustc layout sidecar work", 1)?;
         meter.charge_text(record.key.len())?;
         for aggregate in &record.aggregates {
@@ -1234,7 +1246,7 @@ pub fn observe_rustc_type_layout_v2<'tcx>(
     tcx: TyCtxt<'tcx>,
     ty: Ty<'tcx>,
     expected_rustc_target: &SemanticLayoutTargetV1,
-    budgets: SemanticTypeCaptureBudgetsV2,
+    budgets: SemanticTypeLayoutBudgetsV2,
 ) -> Result<RustcTypeLayoutObservationV2, SemanticTypeAdapterErrorV2> {
     let observed = rustc_semantic_layout_target_v1(tcx)?;
     if expected_rustc_target != &observed {
@@ -1246,7 +1258,7 @@ pub fn observe_rustc_type_layout_v2<'tcx>(
     let (ty, mut meter) = normalize_and_preflight_layout_type(tcx, ty, budgets)?;
 
     let mut capture = if is_unsized_pointer(ty, tcx) {
-        capture_unsized_pointer(tcx, ty, budgets)?
+        observe_unsized_pointer_layout(tcx, ty, budgets)?
     } else {
         let facts = extract_general_layout_with_limits(
             tcx,
@@ -1260,9 +1272,9 @@ pub fn observe_rustc_type_layout_v2<'tcx>(
                 max_array_elements: 1 << 24,
             },
         )?;
-        CaptureBuilderV2::new(budgets)?.finish(&facts)?
+        ObservationBuilderV2::new(budgets)?.finish(&facts)?
     };
-    charge_capture_result(&mut meter, &capture)?;
+    charge_observation_result(&mut meter, &capture)?;
     capture
         .layout_records
         .sort_by(|left, right| left.key.cmp(&right.key));
@@ -1283,7 +1295,7 @@ pub fn compare_untrusted_graph_to_rustc_observation_v2<'tcx>(
     ty: Ty<'tcx>,
     untrusted_graph_bytes: &[u8],
     expected_rustc_target: &SemanticLayoutTargetV1,
-    budgets: SemanticTypeCaptureBudgetsV2,
+    budgets: SemanticTypeLayoutBudgetsV2,
 ) -> Result<RustcTypeLayoutObservationV2, SemanticTypeAdapterErrorV2> {
     let decoded = SemanticTypeGraphV2::decode_canonical(untrusted_graph_bytes, budgets.graph)?;
     let canonical = decoded.canonical_bytes()?;
@@ -1294,21 +1306,21 @@ pub fn compare_untrusted_graph_to_rustc_observation_v2<'tcx>(
     Ok(observation)
 }
 
-struct PendingCaptureV2 {
+struct PendingObservationV2 {
     graph: SemanticTypeGraphV2,
     graph_bytes: Vec<u8>,
     layout_records: Vec<RustcTypeLayoutRecordV2>,
 }
 
-struct CaptureBuilderV2 {
-    budgets: SemanticTypeCaptureBudgetsV2,
+struct ObservationBuilderV2 {
+    budgets: SemanticTypeLayoutBudgetsV2,
     graph: SemanticTypeGraphBuilderV2,
     by_type: HashMap<String, SemanticTypeNodeIdV2>,
     records: Vec<RustcTypeLayoutRecordV2>,
 }
 
-impl CaptureBuilderV2 {
-    fn new(budgets: SemanticTypeCaptureBudgetsV2) -> Result<Self, SemanticTypeAdapterErrorV2> {
+impl ObservationBuilderV2 {
+    fn new(budgets: SemanticTypeLayoutBudgetsV2) -> Result<Self, SemanticTypeAdapterErrorV2> {
         let initial = (budgets.max_sidecar_records as usize).min(64);
         let mut by_type = HashMap::new();
         by_type
@@ -1333,11 +1345,11 @@ impl CaptureBuilderV2 {
     fn finish(
         mut self,
         root: &TypeLayoutFacts,
-    ) -> Result<PendingCaptureV2, SemanticTypeAdapterErrorV2> {
+    ) -> Result<PendingObservationV2, SemanticTypeAdapterErrorV2> {
         let root = self.intern(root, "root")?;
         let graph = self.graph.finish(root)?;
         let graph_bytes = graph.canonical_bytes()?;
-        Ok(PendingCaptureV2 {
+        Ok(PendingObservationV2 {
             graph,
             graph_bytes,
             layout_records: self.records,
@@ -1425,7 +1437,7 @@ impl CaptureBuilderV2 {
             }
             return Err(unsupported(
                 path,
-                "uninhabited type is not represented by this capture profile",
+                "uninhabited type is not represented by this observation profile",
             ));
         }
         let kind = match &facts.kind {
@@ -1465,7 +1477,7 @@ impl CaptureBuilderV2 {
                 if array.stride_bytes != array.element.size_bytes {
                     return Err(unsupported(
                         path,
-                        "array stride differs from the captured element size",
+                        "array stride differs from the observed element size",
                     ));
                 }
                 record.array_stride_bytes = Some(array.stride_bytes);
@@ -2108,11 +2120,11 @@ fn is_unsized_pointer<'tcx>(ty: Ty<'tcx>, tcx: TyCtxt<'tcx>) -> bool {
     !pointee.is_sized(tcx, TypingEnv::fully_monomorphized())
 }
 
-fn capture_unsized_pointer<'tcx>(
+fn observe_unsized_pointer_layout<'tcx>(
     tcx: TyCtxt<'tcx>,
     ty: Ty<'tcx>,
-    budgets: SemanticTypeCaptureBudgetsV2,
-) -> Result<PendingCaptureV2, SemanticTypeAdapterErrorV2> {
+    budgets: SemanticTypeLayoutBudgetsV2,
+) -> Result<PendingObservationV2, SemanticTypeAdapterErrorV2> {
     let typing_env = TypingEnv::fully_monomorphized();
     let layout_cx = LayoutCx::new(tcx, typing_env);
     let layout = layout_cx
@@ -2280,7 +2292,7 @@ fn capture_unsized_pointer<'tcx>(
     });
     let graph = graph.finish(root)?;
     let graph_bytes = graph.canonical_bytes()?;
-    Ok(PendingCaptureV2 {
+    Ok(PendingObservationV2 {
         graph,
         graph_bytes,
         layout_records: records,
@@ -2368,23 +2380,23 @@ fn candidate_identity(
 
 fn validate_observation_integrity(
     observation: &RustcTypeLayoutObservationV2,
-    budgets: SemanticTypeCaptureBudgetsV2,
-) -> Result<(), DeviceCopyLayoutErrorV2> {
+    budgets: SemanticTypeLayoutBudgetsV2,
+) -> Result<(), Gfx942LayoutCompatibilityErrorV2> {
     if observation.layout_records.len() > budgets.max_sidecar_records as usize {
-        return Err(inconsistent_capture(
+        return Err(inconsistent_layout(
             "observation",
             "layout record bound exceeded",
         ));
     }
     if observation.layout_records.len() != observation.graph.node_count() {
-        return Err(inconsistent_capture(
+        return Err(inconsistent_layout(
             "observation",
             "layout record count differs from graph node count",
         ));
     }
     for pair in observation.layout_records.windows(2) {
         if pair[0].key >= pair[1].key {
-            return Err(inconsistent_capture(
+            return Err(inconsistent_layout(
                 "observation",
                 "layout records are not strictly sorted",
             ));
@@ -2392,25 +2404,24 @@ fn validate_observation_integrity(
     }
     for (_, key, _) in observation.graph.nodes() {
         if observation.layout_record(key).is_none() {
-            return Err(inconsistent_capture(
+            return Err(inconsistent_layout(
                 key,
                 "graph node has no exact layout record",
             ));
         }
     }
-    let graph_bytes = observation.graph.canonical_bytes().map_err(|_| {
-        inconsistent_capture("observation", "semantic graph is no longer canonical")
-    })?;
+    let graph_bytes = observation
+        .graph
+        .canonical_bytes()
+        .map_err(|_| inconsistent_layout("observation", "semantic graph is no longer canonical"))?;
     if graph_bytes != observation.graph_bytes {
-        return Err(DeviceCopyLayoutErrorV2::ObservationIdentityMismatch);
+        return Err(Gfx942LayoutCompatibilityErrorV2::ObservationIdentityMismatch);
     }
-    let sidecar =
-        encode_sidecar(&observation.layout_records, budgets.max_sidecar_bytes).map_err(|_| {
-            inconsistent_capture("observation", "layout sidecar exceeds current bounds")
-        })?;
+    let sidecar = encode_sidecar(&observation.layout_records, budgets.max_sidecar_bytes)
+        .map_err(|_| inconsistent_layout("observation", "layout sidecar exceeds current bounds"))?;
     let identity = observation_identity(&observation.rustc_target, &graph_bytes, &sidecar);
     if identity != observation.identity_sha256 {
-        return Err(DeviceCopyLayoutErrorV2::ObservationIdentityMismatch);
+        return Err(Gfx942LayoutCompatibilityErrorV2::ObservationIdentityMismatch);
     }
     Ok(())
 }
@@ -2419,14 +2430,14 @@ fn encode_projection(
     target: &CanonicalGfx942LayoutTargetV2,
     records: &[Gfx942LayoutProjectionRecordV2],
     max_bytes: u32,
-) -> Result<Vec<u8>, DeviceCopyLayoutErrorV2> {
+) -> Result<Vec<u8>, Gfx942LayoutCompatibilityErrorV2> {
     if !target.is_canonical() {
-        return Err(DeviceCopyLayoutErrorV2::TargetMismatch);
+        return Err(Gfx942LayoutCompatibilityErrorV2::TargetMismatch);
     }
     let mut output = Vec::new();
     output
         .try_reserve((max_bytes as usize).min(4096))
-        .map_err(|_| DeviceCopyLayoutErrorV2::AllocationFailed {
+        .map_err(|_| Gfx942LayoutCompatibilityErrorV2::AllocationFailed {
             resource: "gfx942 projection bytes",
         })?;
     projection_bytes(&mut output, b"fe2o3.gfx942-layout-projection.v2", max_bytes)?;
@@ -2440,7 +2451,7 @@ fn encode_projection(
         max_bytes,
     )?;
     let count = u32::try_from(records.len())
-        .map_err(|_| inconsistent_capture("projection", "record count exceeds u32"))?;
+        .map_err(|_| inconsistent_layout("projection", "record count exceeds u32"))?;
     projection_extend(&mut output, &count.to_le_bytes(), max_bytes)?;
     for record in records {
         projection_bytes(&mut output, record.key.as_bytes(), max_bytes)?;
@@ -2452,13 +2463,13 @@ fn encode_projection(
         )?;
         projection_option_u64(&mut output, record.array_stride_bytes, max_bytes)?;
         let field_count = u32::try_from(record.field_offsets.len())
-            .map_err(|_| inconsistent_capture(&record.key, "field count exceeds u32"))?;
+            .map_err(|_| inconsistent_layout(&record.key, "field count exceeds u32"))?;
         projection_extend(&mut output, &field_count.to_le_bytes(), max_bytes)?;
         for offset in &record.field_offsets {
             projection_extend(&mut output, &offset.to_le_bytes(), max_bytes)?;
         }
         let padding_count = u32::try_from(record.padding.len())
-            .map_err(|_| inconsistent_capture(&record.key, "padding count exceeds u32"))?;
+            .map_err(|_| inconsistent_layout(&record.key, "padding count exceeds u32"))?;
         projection_extend(&mut output, &padding_count.to_le_bytes(), max_bytes)?;
         for range in &record.padding {
             projection_extend(&mut output, &range.start.to_le_bytes(), max_bytes)?;
@@ -2472,9 +2483,9 @@ fn projection_bytes(
     output: &mut Vec<u8>,
     bytes: &[u8],
     max_bytes: u32,
-) -> Result<(), DeviceCopyLayoutErrorV2> {
+) -> Result<(), Gfx942LayoutCompatibilityErrorV2> {
     let length = u32::try_from(bytes.len())
-        .map_err(|_| inconsistent_capture("projection", "text length exceeds u32"))?;
+        .map_err(|_| inconsistent_layout("projection", "text length exceeds u32"))?;
     projection_extend(output, &length.to_le_bytes(), max_bytes)?;
     projection_extend(output, bytes, max_bytes)
 }
@@ -2483,7 +2494,7 @@ fn projection_option_u64(
     output: &mut Vec<u8>,
     value: Option<u64>,
     max_bytes: u32,
-) -> Result<(), DeviceCopyLayoutErrorV2> {
+) -> Result<(), Gfx942LayoutCompatibilityErrorV2> {
     projection_extend(output, &[u8::from(value.is_some())], max_bytes)?;
     if let Some(value) = value {
         projection_extend(output, &value.to_le_bytes(), max_bytes)?;
@@ -2495,23 +2506,23 @@ fn projection_extend(
     output: &mut Vec<u8>,
     bytes: &[u8],
     max_bytes: u32,
-) -> Result<(), DeviceCopyLayoutErrorV2> {
+) -> Result<(), Gfx942LayoutCompatibilityErrorV2> {
     let actual = output.len().checked_add(bytes.len()).ok_or_else(|| {
-        DeviceCopyLayoutErrorV2::ArithmeticOverflow {
+        Gfx942LayoutCompatibilityErrorV2::ArithmeticOverflow {
             key: "projection bytes".to_owned(),
         }
     })?;
     if actual > max_bytes as usize {
-        return Err(inconsistent_capture(
+        return Err(inconsistent_layout(
             "projection",
             "canonical byte bound exceeded",
         ));
     }
-    output
-        .try_reserve(bytes.len())
-        .map_err(|_| DeviceCopyLayoutErrorV2::AllocationFailed {
+    output.try_reserve(bytes.len()).map_err(|_| {
+        Gfx942LayoutCompatibilityErrorV2::AllocationFailed {
             resource: "gfx942 projection bytes",
-        })?;
+        }
+    })?;
     output.extend_from_slice(bytes);
     Ok(())
 }
@@ -2707,6 +2718,10 @@ static BITS_VALUE: Bits = Bits { integer: 7 };
 static SLICE_VALUE: &[u8] = &[1, 2, 3];
 static DYN_VALUE: &dyn Marker = &MARKER;
 static BYTE: u8 = 7;
+static U64_VALUE: u64 = 11;
+static F64_VALUE: f64 = 13.0;
+static U128_VALUE: u128 = 17;
+static BOOL_VALUE: bool = true;
 static POINTER_NICHE: Option<&u8> = Some(&BYTE);
 "#;
 
@@ -2721,13 +2736,13 @@ static POINTER_NICHE: Option<&u8> = Some(&BYTE);
         work_bounded: Option<SemanticTypeAdapterErrorV2>,
         path_bounded: Option<SemanticTypeAdapterErrorV2>,
         dst_bounded: Option<SemanticTypeAdapterErrorV2>,
-        reauthenticated: bool,
+        reobserved: bool,
     }
 
     impl Callbacks for CaptureCallbacks {
         fn after_analysis<'tcx>(&mut self, _compiler: &Compiler, tcx: TyCtxt<'tcx>) -> Compilation {
             let observed = rustc_semantic_layout_target_v1(tcx).unwrap();
-            let budgets = SemanticTypeCaptureBudgetsV2::default();
+            let budgets = SemanticTypeLayoutBudgetsV2::default();
             for name in [
                 "C_VALUE",
                 "RUST_VALUE",
@@ -2740,12 +2755,16 @@ static POINTER_NICHE: Option<&u8> = Some(&BYTE);
                 "BITS_VALUE",
                 "SLICE_VALUE",
                 "DYN_VALUE",
+                "U64_VALUE",
+                "F64_VALUE",
+                "U128_VALUE",
+                "BOOL_VALUE",
             ] {
                 let ty = local_static_type(tcx, name);
                 let capture = observe_rustc_type_layout_v2(tcx, ty, &observed, budgets)
                     .unwrap_or_else(|error| panic!("capture {name}: {error}"));
                 if name == "C_VALUE" {
-                    let reauthenticated = compare_untrusted_graph_to_rustc_observation_v2(
+                    let reobserved = compare_untrusted_graph_to_rustc_observation_v2(
                         tcx,
                         ty,
                         capture.graph_bytes(),
@@ -2753,8 +2772,7 @@ static POINTER_NICHE: Option<&u8> = Some(&BYTE);
                         budgets,
                     )
                     .expect("reauthenticate exact rustc graph");
-                    self.reauthenticated =
-                        reauthenticated.identity_sha256() == capture.identity_sha256();
+                    self.reobserved = reobserved.identity_sha256() == capture.identity_sha256();
                 }
                 self.captures.insert(name.to_owned(), capture);
             }
@@ -2783,12 +2801,12 @@ static POINTER_NICHE: Option<&u8> = Some(&BYTE);
                 tcx,
                 local_static_type(tcx, "C_VALUE"),
                 &observed,
-                SemanticTypeCaptureBudgetsV2 {
+                SemanticTypeLayoutBudgetsV2 {
                     graph: SemanticTypeGraphBudgetsV2 {
                         max_nodes: 1,
                         ..SemanticTypeGraphBudgetsV2::default()
                     },
-                    ..SemanticTypeCaptureBudgetsV2::default()
+                    ..SemanticTypeLayoutBudgetsV2::default()
                 },
             )
             .err();
@@ -2796,12 +2814,12 @@ static POINTER_NICHE: Option<&u8> = Some(&BYTE);
                 tcx,
                 local_static_type(tcx, "C_VALUE"),
                 &observed,
-                SemanticTypeCaptureBudgetsV2 {
+                SemanticTypeLayoutBudgetsV2 {
                     graph: SemanticTypeGraphBudgetsV2 {
                         max_name_bytes: 4,
                         ..SemanticTypeGraphBudgetsV2::default()
                     },
-                    ..SemanticTypeCaptureBudgetsV2::default()
+                    ..SemanticTypeLayoutBudgetsV2::default()
                 },
             )
             .err();
@@ -2811,12 +2829,12 @@ static POINTER_NICHE: Option<&u8> = Some(&BYTE);
                 tcx,
                 nested_root,
                 &observed,
-                SemanticTypeCaptureBudgetsV2 {
+                SemanticTypeLayoutBudgetsV2 {
                     graph: SemanticTypeGraphBudgetsV2 {
                         max_name_bytes: nested_root_name.len() as u32,
                         ..SemanticTypeGraphBudgetsV2::default()
                     },
-                    ..SemanticTypeCaptureBudgetsV2::default()
+                    ..SemanticTypeLayoutBudgetsV2::default()
                 },
             )
             .err();
@@ -2824,9 +2842,9 @@ static POINTER_NICHE: Option<&u8> = Some(&BYTE);
                 tcx,
                 local_static_type(tcx, "C_VALUE"),
                 &observed,
-                SemanticTypeCaptureBudgetsV2 {
-                    max_capture_work: 0,
-                    ..SemanticTypeCaptureBudgetsV2::default()
+                SemanticTypeLayoutBudgetsV2 {
+                    max_observation_work: 0,
+                    ..SemanticTypeLayoutBudgetsV2::default()
                 },
             )
             .err();
@@ -2834,9 +2852,9 @@ static POINTER_NICHE: Option<&u8> = Some(&BYTE);
                 tcx,
                 local_static_type(tcx, "C_VALUE"),
                 &observed,
-                SemanticTypeCaptureBudgetsV2 {
+                SemanticTypeLayoutBudgetsV2 {
                     max_path_bytes: 3_075,
-                    ..SemanticTypeCaptureBudgetsV2::default()
+                    ..SemanticTypeLayoutBudgetsV2::default()
                 },
             )
             .err();
@@ -2844,9 +2862,9 @@ static POINTER_NICHE: Option<&u8> = Some(&BYTE);
                 tcx,
                 local_static_type(tcx, "SLICE_VALUE"),
                 &observed,
-                SemanticTypeCaptureBudgetsV2 {
+                SemanticTypeLayoutBudgetsV2 {
                     max_sidecar_records: 1,
-                    ..SemanticTypeCaptureBudgetsV2::default()
+                    ..SemanticTypeLayoutBudgetsV2::default()
                 },
             )
             .err();
@@ -2932,9 +2950,9 @@ static POINTER_NICHE: Option<&u8> = Some(&BYTE);
     }
 
     #[test]
-    fn pinned_rustc_capture_preserves_general_layout_and_trust_boundaries() {
+    fn active_rustc_observation_preserves_layout_and_trust_boundaries() {
         let results = captures();
-        assert!(results.reauthenticated);
+        assert!(results.reobserved);
         assert!(matches!(
             results.pointer_niche,
             Some(SemanticTypeAdapterErrorV2::Unsupported { .. })
@@ -3055,7 +3073,7 @@ static POINTER_NICHE: Option<&u8> = Some(&BYTE);
         let results = captures();
         let capture = &results.captures["C_VALUE"];
         let canonical = capture.graph_bytes();
-        let budgets = SemanticTypeCaptureBudgetsV2::default().graph;
+        let budgets = SemanticTypeLayoutBudgetsV2::default().graph;
         let mut state = 0x9e37_79b9_u32;
         for round in 0..25_000_u32 {
             state ^= state << 13;
@@ -3074,7 +3092,7 @@ static POINTER_NICHE: Option<&u8> = Some(&BYTE);
     fn gfx942_layout_candidate_is_exact_conservative_and_inert() {
         let results = captures();
         let c = &results.captures["C_VALUE"];
-        let budgets = SemanticTypeCaptureBudgetsV2::default();
+        let budgets = SemanticTypeLayoutBudgetsV2::default();
         let candidate = derive_gfx942_layout_compatibility_candidate_v2(c, budgets)
             .expect("padding-free repr(C) fixture is layout compatible");
         assert_eq!(candidate.observation_identity_sha256(), c.identity_sha256());
@@ -3085,6 +3103,15 @@ static POINTER_NICHE: Option<&u8> = Some(&BYTE);
         assert!(derive_gfx942_layout_compatibility_candidate_v2(array, budgets).is_ok());
         let transparent = &results.captures["TRANSPARENT_VALUE"];
         assert!(derive_gfx942_layout_compatibility_candidate_v2(transparent, budgets).is_ok());
+        for accepted in ["U64_VALUE", "F64_VALUE"] {
+            assert!(
+                derive_gfx942_layout_compatibility_candidate_v2(
+                    &results.captures[accepted],
+                    budgets,
+                )
+                .is_ok()
+            );
+        }
         for rejected in [
             "RUST_VALUE",
             "PADDED_VALUE",
@@ -3094,11 +3121,13 @@ static POINTER_NICHE: Option<&u8> = Some(&BYTE);
             "BITS_VALUE",
             "SLICE_VALUE",
             "DYN_VALUE",
+            "U128_VALUE",
+            "BOOL_VALUE",
         ] {
             let capture = &results.captures[rejected];
             assert!(matches!(
                 derive_gfx942_layout_compatibility_candidate_v2(capture, budgets),
-                Err(DeviceCopyLayoutErrorV2::Unsupported { .. })
+                Err(Gfx942LayoutCompatibilityErrorV2::Unsupported { .. })
             ));
         }
 
@@ -3111,21 +3140,28 @@ static POINTER_NICHE: Option<&u8> = Some(&BYTE);
         .unwrap();
         assert!(matches!(
             derive_gfx942_layout_compatibility_candidate_v2(&substituted_observation, budgets),
-            Err(DeviceCopyLayoutErrorV2::ObservationIdentityMismatch)
+            Err(Gfx942LayoutCompatibilityErrorV2::ObservationIdentityMismatch)
         ));
 
         let mut mutated_record = c.clone();
         mutated_record.layout_records[0].array_stride_bytes = Some(123);
         assert!(matches!(
             derive_gfx942_layout_compatibility_candidate_v2(&mutated_record, budgets),
-            Err(DeviceCopyLayoutErrorV2::ObservationIdentityMismatch)
+            Err(Gfx942LayoutCompatibilityErrorV2::ObservationIdentityMismatch)
+        ));
+
+        let mut mutated_graph_bytes = c.clone();
+        mutated_graph_bytes.graph_bytes[0] ^= 1;
+        assert!(matches!(
+            derive_gfx942_layout_compatibility_candidate_v2(&mutated_graph_bytes, budgets),
+            Err(Gfx942LayoutCompatibilityErrorV2::ObservationIdentityMismatch)
         ));
 
         let mut mutated_projection = candidate.clone();
         mutated_projection.projection.target.cpu = "gfx941".to_owned();
         assert!(matches!(
             validate_gfx942_layout_compatibility_candidate_v2(c, &mutated_projection, budgets),
-            Err(DeviceCopyLayoutErrorV2::ProjectionMismatch)
+            Err(Gfx942LayoutCompatibilityErrorV2::ProjectionMismatch)
         ));
 
         // Compiler/source digests and generations are deliberately absent
@@ -3168,11 +3204,11 @@ static POINTER_NICHE: Option<&u8> = Some(&BYTE);
         wrong[9] ^= 1;
         assert!(matches!(
             compare_host_device_fixture_bytes_v2(&candidate, host_bytes, &wrong, 16),
-            Err(DeviceCopyLayoutErrorV2::HostDeviceByteMismatch)
+            Err(Gfx942LayoutCompatibilityErrorV2::HostDeviceByteMismatch)
         ));
         assert!(matches!(
             compare_host_device_fixture_bytes_v2(&candidate, host_bytes, host_bytes, 15),
-            Err(DeviceCopyLayoutErrorV2::ByteLengthExceeded { .. })
+            Err(Gfx942LayoutCompatibilityErrorV2::ByteLengthExceeded { .. })
         ));
     }
 
@@ -3182,19 +3218,19 @@ static POINTER_NICHE: Option<&u8> = Some(&BYTE);
         let c = &results.captures["C_VALUE"];
         let error = derive_gfx942_layout_compatibility_candidate_v2(
             c,
-            SemanticTypeCaptureBudgetsV2 {
+            SemanticTypeLayoutBudgetsV2 {
                 max_projection_work: 0,
-                ..SemanticTypeCaptureBudgetsV2::default()
+                ..SemanticTypeLayoutBudgetsV2::default()
             },
         )
         .unwrap_err();
         assert_eq!(
             error,
-            DeviceCopyLayoutErrorV2::WorkBoundExceeded { actual: 1, max: 0 }
+            Gfx942LayoutCompatibilityErrorV2::WorkBoundExceeded { actual: 1, max: 0 }
         );
         assert!(matches!(
             align_up(u64::MAX, 8, "overflow"),
-            Err(DeviceCopyLayoutErrorV2::ArithmeticOverflow { .. })
+            Err(Gfx942LayoutCompatibilityErrorV2::ArithmeticOverflow { .. })
         ));
     }
 
@@ -3204,6 +3240,7 @@ static POINTER_NICHE: Option<&u8> = Some(&BYTE);
         const SOURCE: &str = r#"
 typedef struct { unsigned short left; unsigned short right; } Inner;
 typedef struct { unsigned head; Inner nested[2]; unsigned tail; } Root;
+typedef struct { float narrow; double wide; unsigned long long integer; } Wide;
 __attribute__((amdgpu_kernel)) void layout_probe(Root *out) { out[0].tail = 7; }
 "#;
         for clang in ["/opt/rocm/llvm/bin/clang", "/usr/bin/clang-18"] {
@@ -3249,6 +3286,10 @@ __attribute__((amdgpu_kernel)) void layout_probe(Root *out) { out[0].tail = 7; }
                 "4 |   Inner[2] nested",
                 "12 |   unsigned int tail",
                 "[sizeof=16, align=4]",
+                "0 |   float narrow",
+                "8 |   double wide",
+                "16 |   unsigned long long integer",
+                "[sizeof=24, align=8]",
             ] {
                 assert!(
                     dump.contains(expected),
