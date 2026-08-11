@@ -21,6 +21,11 @@ pub const WORKER_V2_APPLICATION_HANDOFF_COMMITMENT_ENV_V1: &str =
 pub const WORKER_V2_APPLICATION_HANDOFF_ACK_FD_ENV_V1: &str = "FE2O3_APPLICATION_HANDOFF_ACK_FD_V1";
 pub const WORKER_V2_APPLICATION_HANDOFF_CHALLENGE_ENV_V1: &str =
     "FE2O3_APPLICATION_HANDOFF_CHALLENGE_V1";
+/// Maximum number of visible entries admitted in a Worker V2 artifact directory.
+///
+/// Both the Cargo producer and application consumer apply this bound before filtering names so
+/// unrelated entries cannot turn descriptor handoff into an unbounded directory scan.
+pub const MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1: usize = 4_096;
 
 /// Exact digest of the application executable admitted by the Cargo runner.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

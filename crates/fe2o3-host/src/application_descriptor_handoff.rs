@@ -11,9 +11,9 @@ use crate::{
 };
 use fe2o3_worker_v2_bundle::{
     ApplicationHandoffProtocolErrorV1, CompilerTransactionEvidenceCapsuleV2,
-    MAX_WORKER_V2_LOAD_ENVELOPE_BYTES, WORKER_V2_APPLICATION_ARTIFACT_DIR_FD_ENV_V1,
-    WORKER_V2_APPLICATION_ENVELOPE_FD_ENV_V1, WORKER_V2_APPLICATION_HANDOFF_ACK_FD_ENV_V1,
-    WORKER_V2_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
+    MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1, MAX_WORKER_V2_LOAD_ENVELOPE_BYTES,
+    WORKER_V2_APPLICATION_ARTIFACT_DIR_FD_ENV_V1, WORKER_V2_APPLICATION_ENVELOPE_FD_ENV_V1,
+    WORKER_V2_APPLICATION_HANDOFF_ACK_FD_ENV_V1, WORKER_V2_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
     WORKER_V2_APPLICATION_HANDOFF_COMMITMENT_ENV_V1, WorkerV2ApplicationHandoffChallengeV1,
     WorkerV2ApplicationHandoffCommitmentV1, WorkerV2ApplicationHandoffExpectationV1,
     WorkerV2ApplicationIdentityV1, WorkerV2LoadEnvelopeV1, worker_v2_load_envelope_name_v1,
@@ -30,7 +30,6 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-const MAX_ARTIFACT_DIRECTORY_ENTRIES_V1: usize = 4_096;
 const MAX_APPLICATION_EXECUTABLE_BYTES_V1: u64 = 1 << 30;
 const ACK_DEADLINE_V1: Duration = Duration::from_secs(5);
 
@@ -600,7 +599,7 @@ fn require_canonical_envelope_link(
         entries = entries
             .checked_add(1)
             .ok_or(WorkerV2ApplicationDescriptorHandoffErrorV1::DirectoryTooLarge)?;
-        if entries > MAX_ARTIFACT_DIRECTORY_ENTRIES_V1 {
+        if entries > MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1 {
             return Err(WorkerV2ApplicationDescriptorHandoffErrorV1::DirectoryTooLarge);
         }
         let entry = entry.map_err(|error| descriptor_io("artifact directory entry", error))?;

@@ -16,9 +16,10 @@ use fe2o3_artifact_transaction::{
     DurableCurrentLinkPublicationLeaseV1, reacquire_current_hsaco_publication_lease_v1,
 };
 use fe2o3_worker_v2_bundle::{
-    MAX_WORKER_V2_LOAD_ENVELOPE_BYTES, WORKER_V2_APPLICATION_ARTIFACT_DIR_FD_ENV_V1,
-    WORKER_V2_APPLICATION_ENVELOPE_FD_ENV_V1, WORKER_V2_APPLICATION_HANDOFF_ACK_BYTES_V1,
-    WORKER_V2_APPLICATION_HANDOFF_ACK_FD_ENV_V1, WORKER_V2_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
+    MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1, MAX_WORKER_V2_LOAD_ENVELOPE_BYTES,
+    WORKER_V2_APPLICATION_ARTIFACT_DIR_FD_ENV_V1, WORKER_V2_APPLICATION_ENVELOPE_FD_ENV_V1,
+    WORKER_V2_APPLICATION_HANDOFF_ACK_BYTES_V1, WORKER_V2_APPLICATION_HANDOFF_ACK_FD_ENV_V1,
+    WORKER_V2_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
     WORKER_V2_APPLICATION_HANDOFF_COMMITMENT_ENV_V1, WORKER_V2_LOAD_ENVELOPE_NAME_PREFIX_V1,
     WORKER_V2_LOAD_ENVELOPE_NAME_SUFFIX_V1, WorkerV2ApplicationHandoffAckV1,
     WorkerV2ApplicationHandoffChallengeV1, WorkerV2ApplicationHandoffExpectationV1,
@@ -754,12 +755,31 @@ fn envelope_names(directory: &PinnedDirectory) -> Result<Vec<String>, String> {
     let scan = directory.try_clone_for_transfer()?;
     let mut entries = rustix::fs::Dir::read_from(&scan)
         .map_err(|error| format!("failed to scan artifact directory: {error}"))?;
+    collect_envelope_names(|visit| {
+        for entry in &mut entries {
+            let entry = entry.map_err(|error| format!("failed to read artifact entry: {error}"))?;
+            visit(entry.file_name().to_bytes())?;
+        }
+        Ok(())
+    })
+}
+
+fn collect_envelope_names(
+    scan: impl FnOnce(&mut dyn FnMut(&[u8]) -> Result<(), String>) -> Result<(), String>,
+) -> Result<Vec<String>, String> {
+    let mut total_entries = 0_usize;
     let mut names = Vec::new();
-    for entry in &mut entries {
-        let entry = entry.map_err(|error| format!("failed to read artifact entry: {error}"))?;
-        let bytes = entry.file_name().to_bytes();
+    scan(&mut |bytes| {
+        total_entries = total_entries.checked_add(1).ok_or_else(|| {
+            "artifact directory entry count overflowed its scan bound".to_string()
+        })?;
+        if total_entries > MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1 {
+            return Err(format!(
+                "artifact directory exceeds {MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1} visible entries"
+            ));
+        }
         if !bytes.starts_with(ENVELOPE_PREFIX) {
-            continue;
+            return Ok(());
         }
         if !is_canonical_envelope_name(bytes) {
             return Err("malformed Worker V2 envelope publication name".to_string());
@@ -774,7 +794,8 @@ fn envelope_names(directory: &PinnedDirectory) -> Result<Vec<String>, String> {
                 .expect("canonical envelope names are ASCII")
                 .to_string(),
         );
-    }
+        Ok(())
+    })?;
     names.sort_unstable();
     Ok(names)
 }
@@ -899,6 +920,106 @@ mod tests {
                 LeaderExitObservation::Running => panic!("application leader did not exit"),
             }
         }
+    }
+
+    fn canonical_envelope_name(fill: u8) -> Vec<u8> {
+        assert!(fill.is_ascii_hexdigit() && !fill.is_ascii_uppercase());
+        let mut name = Vec::with_capacity(ENVELOPE_NAME_BYTES);
+        name.extend_from_slice(ENVELOPE_PREFIX);
+        name.extend(std::iter::repeat_n(fill, 64));
+        name.extend_from_slice(ENVELOPE_SUFFIX);
+        name
+    }
+
+    #[test]
+    fn artifact_scan_accepts_exact_total_entry_bound() {
+        let mut visited = 0_usize;
+        let names = collect_envelope_names(|visit| {
+            for _ in 0..MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1 {
+                visited += 1;
+                visit(b"unrelated")?;
+            }
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(visited, MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1);
+        assert!(names.is_empty());
+    }
+
+    #[test]
+    fn artifact_scan_rejects_limit_plus_one_unrelated_entry_early() {
+        let mut visited = 0_usize;
+        let error = collect_envelope_names(|visit| {
+            for _ in 0..MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1 + 100 {
+                visited += 1;
+                visit(b"unrelated")?;
+            }
+            panic!("scan continued after the first over-limit entry");
+        })
+        .unwrap_err();
+
+        assert_eq!(visited, MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1 + 1);
+        assert_eq!(
+            error,
+            format!(
+                "artifact directory exceeds {MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1} visible entries"
+            )
+        );
+    }
+
+    #[test]
+    fn artifact_scan_counts_mixed_entries_and_sorts_canonical_candidates() {
+        let first = canonical_envelope_name(b'0');
+        let last = canonical_envelope_name(b'f');
+        let names = collect_envelope_names(|visit| {
+            for _ in 0..MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1 - 3 {
+                visit(b"unrelated")?;
+            }
+            visit(&last)?;
+            visit(b"also-unrelated")?;
+            visit(&first)
+        })
+        .unwrap();
+
+        assert_eq!(
+            names,
+            [
+                String::from_utf8(first).unwrap(),
+                String::from_utf8(last).unwrap(),
+            ]
+        );
+    }
+
+    #[test]
+    fn artifact_scan_preserves_deterministic_duplicate_candidates() {
+        let duplicate = canonical_envelope_name(b'a');
+        let names = collect_envelope_names(|visit| {
+            visit(&duplicate)?;
+            visit(&duplicate)
+        })
+        .unwrap();
+
+        let duplicate = String::from_utf8(duplicate).unwrap();
+        assert_eq!(names, [duplicate.clone(), duplicate]);
+    }
+
+    #[test]
+    fn artifact_scan_fails_closed_on_entry_error() {
+        let error = collect_envelope_names(|visit| {
+            visit(b"unrelated")?;
+            Err("failed to read artifact entry: injected EIO".to_string())
+        })
+        .unwrap_err();
+
+        assert_eq!(error, "failed to read artifact entry: injected EIO");
+    }
+
+    #[test]
+    fn artifact_scan_does_not_retain_huge_unrelated_names() {
+        let hostile = vec![b'x'; 1024 * 1024];
+        let names = collect_envelope_names(|visit| visit(&hostile)).unwrap();
+        assert!(names.is_empty());
     }
 
     fn spawn_paused_outsider() -> libc::pid_t {
