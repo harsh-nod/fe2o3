@@ -835,17 +835,19 @@ fn validate_lds(allocation: &LdsAllocation, target: TargetProfile) -> Result<(),
         .checked_mul(allocation.elements)
         .ok_or(ValidationError::ArithmeticOverflow)?;
     if extent > allocation.bytes
-        || allocation.element_stride % u32::from(allocation.bank_width) != 0
+        || !allocation
+            .element_stride
+            .is_multiple_of(u32::from(allocation.bank_width))
     {
         return Err(ValidationError::InvalidLdsAllocation(allocation.id));
     }
     if allocation.bank_count != 32 || allocation.bank_width != 4 {
         return Err(ValidationError::UnsupportedLdsBanking(allocation.id));
     }
-    if let LdsSwizzle::Xor { shift } = allocation.swizzle {
-        if !(1..=5).contains(&shift) {
-            return Err(ValidationError::UnsupportedLdsBanking(allocation.id));
-        }
+    if let LdsSwizzle::Xor { shift } = allocation.swizzle
+        && !(1..=5).contains(&shift)
+    {
+        return Err(ValidationError::UnsupportedLdsBanking(allocation.id));
     }
     Ok(())
 }
@@ -969,7 +971,7 @@ fn validate_atomic(
     }
     if !valid_alignment(atomic.alignment, 16)
         || atomic.alignment < atomic.value_type.storage_bytes()
-        || atomic.region.offset % atomic.alignment != 0
+        || !atomic.region.offset.is_multiple_of(atomic.alignment)
     {
         return Err(ValidationError::InvalidAlignment(id));
     }
@@ -1076,7 +1078,7 @@ fn validate_non_atomic(
     }
     if !valid_alignment(access.alignment, 16)
         || access.alignment < access.value_type.storage_bytes()
-        || access.region.offset % access.alignment != 0
+        || !access.region.offset.is_multiple_of(access.alignment)
     {
         return Err(ValidationError::InvalidAlignment(id));
     }

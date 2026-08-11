@@ -826,8 +826,10 @@ fn edge_kind_scope_domain_and_ordering_checks_are_exhaustive() {
 
 #[test]
 fn resource_limits_preflight_before_quadratic_or_allocating_work() {
-    let mut limits = SynchronizationLimits::default();
-    limits.max_events = 3;
+    let limits = SynchronizationLimits {
+        max_events: 3,
+        ..SynchronizationLimits::default()
+    };
     let events = (0..4)
         .map(|id| {
             event(
@@ -855,8 +857,10 @@ fn resource_limits_preflight_before_quadratic_or_allocating_work() {
         })
     ));
 
-    let mut limits = SynchronizationLimits::default();
-    limits.max_pair_checks = 5;
+    let limits = SynchronizationLimits {
+        max_pair_checks: 5,
+        ..SynchronizationLimits::default()
+    };
     let events = (0..4)
         .map(|id| {
             event(
@@ -878,8 +882,10 @@ fn resource_limits_preflight_before_quadratic_or_allocating_work() {
         })
     ));
 
-    let mut limits = SynchronizationLimits::default();
-    limits.max_obligations = 1;
+    let limits = SynchronizationLimits {
+        max_obligations: 1,
+        ..SynchronizationLimits::default()
+    };
     assert!(matches!(
         full_module().validate(&limits),
         Err(ValidationError::ResourceLimit {
@@ -980,7 +986,7 @@ fn one_hundred_thousand_semantic_cases_match_independent_oracle() {
         let value_type = types[((state >> 16) as usize) % types.len()];
         let success = ORDERINGS[((state >> 24) as usize) % ORDERINGS.len()];
         let failure = operation
-            .is_compare_exchange_for_test()
+            .compare_exchange_for_test()
             .then(|| ORDERINGS[((state >> 32) as usize) % ORDERINGS.len()]);
         let access = atomic(
             operation,
@@ -993,18 +999,17 @@ fn one_hundred_thousand_semantic_cases_match_independent_oracle() {
         );
         let expected = valid_operation_type(dialect, operation, value_type)
             && valid_ordering_for(operation, success)
-            && (!operation.is_compare_exchange_for_test()
-                || valid_failure(success, failure.unwrap()));
+            && (!operation.compare_exchange_for_test() || valid_failure(success, failure.unwrap()));
         assert_eq!(atomic_module(access).validate(&limits).is_ok(), expected);
     }
 }
 
 trait AtomicOperationTestExt {
-    fn is_compare_exchange_for_test(self) -> bool;
+    fn compare_exchange_for_test(self) -> bool;
 }
 
 impl AtomicOperationTestExt for AtomicOperation {
-    fn is_compare_exchange_for_test(self) -> bool {
+    fn compare_exchange_for_test(self) -> bool {
         matches!(
             self,
             Self::CompareExchangeStrong | Self::CompareExchangeWeak
