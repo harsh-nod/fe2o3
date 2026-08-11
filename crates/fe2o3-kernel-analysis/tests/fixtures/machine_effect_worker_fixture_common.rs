@@ -14,6 +14,12 @@ const IDENTITY_CHALLENGE_DOMAIN: &[u8] =
     b"FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-IDENTITY-CHALLENGE/V1\0";
 const IDENTITY_RESPONSE_DOMAIN: &[u8] =
     b"FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-IDENTITY-RESPONSE/V1\0";
+const READY_DOMAIN: &[u8] =
+    b"FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-WORKER-READY/V1\0";
+const DONE_DOMAIN: &[u8] =
+    b"FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-WORKER-DONE/V1\0";
+const ACK_DOMAIN: &[u8] =
+    b"FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-WORKER-ACK/V1\0";
 
 struct Entry {
     symbol: String,
@@ -31,24 +37,76 @@ struct Request {
 }
 
 pub fn run(analyzer_byte: u8, toolchain_byte: u8) {
-    let argument = std::env::args().nth(1).unwrap_or_default();
-    let mut input = Vec::new();
-    std::io::stdin().read_to_end(&mut input).unwrap();
+    let mut arguments = std::env::args().skip(1);
+    let argument = arguments.next().unwrap_or_default();
+    let challenge = parse_argument_array(
+        arguments.next().as_deref(),
+        "--fe2o3-control-challenge=",
+    )
+    .unwrap_or_else(|| std::process::exit(64));
+    let request_bytes = arguments
+        .next()
+        .and_then(|value| value.strip_prefix("--fe2o3-request-bytes=").map(str::to_owned))
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value != 0)
+        .unwrap_or_else(|| std::process::exit(64));
+    if arguments.next().is_some() {
+        std::process::exit(64);
+    }
+    write_control(std::io::stderr(), READY_DOMAIN, challenge);
+    let mut input = vec![0_u8; request_bytes];
+    std::io::stdin().read_exact(&mut input).unwrap();
     match argument.as_str() {
         "--machine-effects-gfx942-identities-v1" => {
-            identity_response(&input, analyzer_byte, toolchain_byte)
+            identity_response(&input, analyzer_byte, toolchain_byte, challenge)
         }
-        "--machine-effects-gfx942-v1" => analysis_response(input),
+        "--machine-effects-gfx942-v1" => analysis_response(input, challenge),
         _ => std::process::exit(64),
+    }
+    std::io::stdout().flush().unwrap();
+    write_control(std::io::stderr(), DONE_DOMAIN, challenge);
+    let mut ack = vec![0_u8; ACK_DOMAIN.len() + challenge.len()];
+    std::io::stdin().read_exact(&mut ack).unwrap();
+    if ack[..ACK_DOMAIN.len()] != *ACK_DOMAIN
+        || ack[ACK_DOMAIN.len()..] != challenge
+        || std::io::stdin().read(&mut [0_u8; 1]).unwrap() != 0
+    {
+        std::process::exit(70);
     }
 }
 
-fn identity_response(input: &[u8], analyzer_byte: u8, toolchain_byte: u8) {
+fn parse_argument_array(value: Option<&str>, prefix: &str) -> Option<[u8; 32]> {
+    let value = value?.strip_prefix(prefix)?;
+    if value.len() != 64 {
+        return None;
+    }
+    let mut result = [0_u8; 32];
+    for (index, byte) in result.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16).ok()?;
+    }
+    Some(result)
+}
+
+fn write_control(mut output: impl Write, domain: &[u8], challenge: [u8; 32]) {
+    output.write_all(domain).unwrap();
+    output.write_all(&challenge).unwrap();
+    output.flush().unwrap();
+}
+
+fn identity_response(
+    input: &[u8],
+    analyzer_byte: u8,
+    toolchain_byte: u8,
+    control_challenge: [u8; 32],
+) {
     let expected = IDENTITY_CHALLENGE_DOMAIN.len() + 4 + 2 + 32;
     if input.len() != expected || !input.starts_with(IDENTITY_CHALLENGE_DOMAIN) {
         std::process::exit(65);
     }
     let challenge: [u8; 32] = input[input.len() - 32..].try_into().unwrap();
+    if challenge != control_challenge {
+        std::process::exit(65);
+    }
     let mut output = Vec::new();
     output.extend_from_slice(IDENTITY_RESPONSE_DOMAIN);
     push_u32(&mut output, 0);
@@ -60,8 +118,11 @@ fn identity_response(input: &[u8], analyzer_byte: u8, toolchain_byte: u8) {
     std::io::stdout().write_all(&output).unwrap();
 }
 
-fn analysis_response(bytes: Vec<u8>) {
+fn analysis_response(bytes: Vec<u8>, control_challenge: [u8; 32]) {
     let request = parse_request(bytes).unwrap_or_else(|| std::process::exit(65));
+    if request.challenge != control_challenge {
+        std::process::exit(65);
+    }
     match request.payload.first().copied().unwrap_or(0) {
         2 => thread::sleep(Duration::from_secs(30)),
         3 => {
@@ -117,6 +178,7 @@ fn analysis_response(bytes: Vec<u8>) {
                 std::process::exit(84);
             }
         }
+        12 => load_late_runtime_library(),
         _ => {}
     }
     let mode = request.payload[0];
@@ -130,6 +192,22 @@ fn analysis_response(bytes: Vec<u8>) {
         _ => {}
     }
     std::io::stdout().write_all(&output).unwrap();
+}
+
+#[allow(unsafe_code)]
+fn load_late_runtime_library() {
+    unsafe extern "C" {
+        fn dlopen(path: *const std::ffi::c_char, flags: std::ffi::c_int) -> *mut std::ffi::c_void;
+    }
+    const RTLD_NOW: std::ffi::c_int = 2;
+    const RTLD_LOCAL: std::ffi::c_int = 0;
+    let path = c"/lib/x86_64-linux-gnu/libutil.so.1";
+    // The handle is deliberately retained so the second maps observation must
+    // detect the newly loaded DSO.
+    let handle = unsafe { dlopen(path.as_ptr(), RTLD_NOW | RTLD_LOCAL) };
+    if handle.is_null() {
+        std::process::exit(85);
+    }
 }
 
 fn parse_request(bytes: Vec<u8>) -> Option<Request> {

@@ -28,4 +28,4 @@ test = false
 bench = false
 
 [lints.rust]
-unsafe_code = "forbid"
+unsafe_code = "deny"

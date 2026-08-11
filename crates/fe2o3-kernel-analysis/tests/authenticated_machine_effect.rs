@@ -66,9 +66,16 @@ fn configured_native_worker_uses_authenticated_identity_probe() {
     let Some(path) = std::env::var_os("FE2O3_MACHINE_EFFECT_NATIVE_WORKER") else {
         return;
     };
-    let candidate = inspect_physical_machine_effect_worker_candidate_v1(&path, limits()).unwrap();
+    let native_limits = AuthenticatedPhysicalMachineEffectLimitsV1::new(
+        Duration::from_secs(30),
+        1024 * 1024,
+        16 * 1024,
+    )
+    .unwrap();
+    let candidate =
+        inspect_physical_machine_effect_worker_candidate_v1(&path, native_limits).unwrap();
     let worker =
-        AuthenticatedPhysicalMachineEffectWorkerV1::open(&path, candidate.policy(), limits())
+        AuthenticatedPhysicalMachineEffectWorkerV1::open(&path, candidate.policy(), native_limits)
             .unwrap();
     assert_eq!(worker.policy(), candidate.policy());
     assert_eq!(worker.analyzer_identity(), candidate.analyzer_identity());
@@ -238,6 +245,17 @@ fn timeout_reaps_worker() {
 #[test]
 fn rapid_double_fork_and_setsid_are_denied_before_worker_input() {
     worker().analyze(vec![11], vec![entry()], limits()).unwrap();
+}
+
+#[test]
+fn late_runtime_library_mapping_is_rejected_before_acknowledgement() {
+    let error = worker()
+        .analyze(vec![12], vec![entry()], limits())
+        .unwrap_err();
+    assert_eq!(
+        error.kind(),
+        &AuthenticatedPhysicalMachineEffectErrorKindV1::RuntimeClosureChanged
+    );
 }
 
 #[test]

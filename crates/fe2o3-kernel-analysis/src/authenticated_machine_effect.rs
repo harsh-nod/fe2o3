@@ -35,6 +35,9 @@ const IDENTITY_CHALLENGE_DOMAIN: &[u8] =
     b"FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-IDENTITY-CHALLENGE/V1\0";
 const IDENTITY_RESPONSE_DOMAIN: &[u8] =
     b"FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-IDENTITY-RESPONSE/V1\0";
+const WORKER_READY_DOMAIN: &[u8] = b"FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-WORKER-READY/V1\0";
+const WORKER_DONE_DOMAIN: &[u8] = b"FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-WORKER-DONE/V1\0";
+const WORKER_ACK_DOMAIN: &[u8] = b"FE2O3/GFX942-PHYSICAL-MACHINE-EFFECT-WORKER-ACK/V1\0";
 const SCHEMA_VERSION: u16 = 1;
 
 pub const MAX_PHYSICAL_MACHINE_EFFECT_WORKER_BYTES_V1: u64 = 512 * 1024 * 1024;
@@ -226,6 +229,7 @@ pub enum AuthenticatedPhysicalMachineEffectErrorKindV1 {
         actual: PhysicalMachineRuntimeClosureIdentityV1,
     },
     ConfigurePipe,
+    ControlHandshake,
     WriteRequest,
     RequestWriteIncomplete,
     ReadStdout,
@@ -485,6 +489,23 @@ fn domain_hash(domain: &[u8], bytes: &[u8]) -> [u8; 32] {
     digest.finalize().into()
 }
 
+fn encode_hex(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(DIGITS[(byte >> 4) as usize] as char);
+        output.push(DIGITS[(byte & 0xf) as usize] as char);
+    }
+    output
+}
+
+fn control_frame(domain: &[u8], challenge: PhysicalMachineExecutionChallengeV1) -> Vec<u8> {
+    let mut output = Vec::with_capacity(domain.len() + 32);
+    output.extend_from_slice(domain);
+    output.extend_from_slice(&challenge.as_bytes());
+    output
+}
+
 #[cfg(target_os = "linux")]
 mod platform {
     use super::*;
@@ -503,7 +524,7 @@ mod platform {
             unix::{fs::MetadataExt, process::CommandExt},
         },
         path::PathBuf,
-        process::{Child, Command, ExitStatus, Stdio},
+        process::{Child, ChildStderr, Command, ExitStatus, Stdio},
         thread,
         time::Instant,
     };
@@ -566,6 +587,11 @@ mod platform {
         }
     }
 
+    struct WorkerControlCapture {
+        done: bool,
+        stderr: Capture,
+    }
+
     struct ProcessCapture {
         status: ExitStatus,
         request_written: usize,
@@ -583,6 +609,7 @@ mod platform {
 
     struct RuntimeFile {
         file: File,
+        key: (u32, u32, u64),
         path: String,
         snapshot: Snapshot,
         digest: [u8; 32],
@@ -686,6 +713,7 @@ mod platform {
             let execution = self.run(
                 "--machine-effects-gfx942-v1",
                 request.canonical_bytes(),
+                challenge,
                 limits,
                 Some(self.policy.runtime_closure),
             )?;
@@ -742,6 +770,7 @@ mod platform {
             let execution = self.run(
                 "--machine-effects-gfx942-identities-v1",
                 &request,
+                challenge,
                 AuthenticatedPhysicalMachineEffectLimitsV1 {
                     stdout_bytes: 4096,
                     ..limits
@@ -759,15 +788,22 @@ mod platform {
             &self,
             argument: &str,
             request: &[u8],
+            challenge: PhysicalMachineExecutionChallengeV1,
             limits: AuthenticatedPhysicalMachineEffectLimitsV1,
             expected_runtime: Option<PhysicalMachineRuntimeClosureIdentityV1>,
         ) -> Result<RawExecution, AuthenticatedPhysicalMachineEffectErrorV1> {
             validate_no_fork_profile()?;
             validate_image(&self.image, &self.descriptor_path, self.snapshot)?;
+            let deadline = Instant::now() + limits.timeout;
             let mut command = Command::new(&self.descriptor_path);
             command
                 .arg0("fe2o3-llvm-link-worker")
                 .arg(argument)
+                .arg(format!(
+                    "--fe2o3-control-challenge={}",
+                    encode_hex(&challenge.as_bytes())
+                ))
+                .arg(format!("--fe2o3-request-bytes={}", request.len()))
                 .env_clear()
                 .envs(ENVIRONMENT.iter().copied())
                 .stdin(Stdio::piped())
@@ -785,6 +821,8 @@ mod platform {
                 let _ = child.wait();
                 return Err(error);
             }
+            let stderr = child.stderr.take().expect("worker stderr is piped");
+            let stderr = await_worker_ready(&mut child, stderr, challenge, deadline)?;
             let mut observation = match observe_process(child.id(), self.policy.executable) {
                 Ok(observation) => observation,
                 Err(error) => {
@@ -820,7 +858,16 @@ mod platform {
                 let _ = child.wait();
                 return Err(error);
             }
-            let capture = supervise(&mut child, request, limits);
+            let capture = supervise(
+                &mut child,
+                stderr,
+                request,
+                challenge,
+                limits,
+                deadline,
+                &mut observation,
+                self.policy.executable,
+            );
             let runtime_result = validate_runtime_files(&mut observation.runtime_files);
             let image_result = validate_image(&self.image, &self.descriptor_path, self.snapshot);
             runtime_result?;
@@ -1103,6 +1150,47 @@ mod platform {
         Ok(())
     }
 
+    fn await_worker_ready(
+        child: &mut Child,
+        mut stderr: ChildStderr,
+        challenge: PhysicalMachineExecutionChallengeV1,
+        deadline: Instant,
+    ) -> Result<ChildStderr, AuthenticatedPhysicalMachineEffectErrorV1> {
+        let expected = control_frame(WORKER_READY_DOMAIN, challenge);
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        thread::spawn(move || {
+            let mut bytes = vec![0_u8; expected.len()];
+            let result = stderr.read_exact(&mut bytes).map(|()| (stderr, bytes));
+            let _ = sender.send(result);
+        });
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let received = receiver.recv_timeout(remaining);
+        match received {
+            Ok(Ok((stderr, bytes))) if bytes == control_frame(WORKER_READY_DOMAIN, challenge) => {
+                Ok(stderr)
+            }
+            Ok(Err(error)) => {
+                terminate_process_tree(child, &BTreeSet::new());
+                let _ = child.wait();
+                Err(AuthenticatedPhysicalMachineEffectErrorV1::detail(
+                    AuthenticatedPhysicalMachineEffectErrorKindV1::ControlHandshake,
+                    error,
+                ))
+            }
+            Ok(Ok(_)) | Err(_) => {
+                terminate_process_tree(child, &BTreeSet::new());
+                let _ = child.wait();
+                Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
+                    if Instant::now() >= deadline {
+                        AuthenticatedPhysicalMachineEffectErrorKindV1::Timeout
+                    } else {
+                        AuthenticatedPhysicalMachineEffectErrorKindV1::ControlHandshake
+                    },
+                ))
+            }
+        }
+    }
+
     fn observe_process(
         pid: u32,
         worker: PhysicalMachineWorkerExecutableIdentityV1,
@@ -1329,6 +1417,7 @@ mod platform {
                 key,
                 RuntimeFile {
                     file,
+                    key,
                     path,
                     snapshot,
                     digest: plain_digest,
@@ -1366,6 +1455,38 @@ mod platform {
             },
             files.into_values().collect(),
         ))
+    }
+
+    fn runtime_file_set(
+        files: &[RuntimeFile],
+    ) -> BTreeSet<((u32, u32, u64), String, [u8; 32], u64)> {
+        files
+            .iter()
+            .map(|file| (file.key, file.path.clone(), file.digest, file.length))
+            .collect()
+    }
+
+    fn validate_post_execution_closure(
+        pid: u32,
+        worker: PhysicalMachineWorkerExecutableIdentityV1,
+        observation: &mut ProcessObservation,
+    ) -> Result<(), AuthenticatedPhysicalMachineEffectErrorV1> {
+        if process_start_ticks(pid)? != observation.start_ticks {
+            return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
+                AuthenticatedPhysicalMachineEffectErrorKindV1::RuntimeClosureChanged,
+            ));
+        }
+        let (identity, mut files) = runtime_closure(pid, worker)?;
+        if identity != observation.runtime_closure
+            || runtime_file_set(&files) != runtime_file_set(&observation.runtime_files)
+        {
+            return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
+                AuthenticatedPhysicalMachineEffectErrorKindV1::RuntimeClosureChanged,
+            ));
+        }
+        validate_runtime_files(&mut files)?;
+        observation.runtime_files.append(&mut files);
+        Ok(())
     }
 
     fn open_mapped_file(
@@ -1513,12 +1634,16 @@ mod platform {
 
     fn supervise(
         child: &mut Child,
+        stderr_pipe: ChildStderr,
         request: &[u8],
+        challenge: PhysicalMachineExecutionChallengeV1,
         limits: AuthenticatedPhysicalMachineEffectLimitsV1,
+        deadline: Instant,
+        observation: &mut ProcessObservation,
+        worker: PhysicalMachineWorkerExecutableIdentityV1,
     ) -> Result<ProcessCapture, AuthenticatedPhysicalMachineEffectErrorV1> {
         let stdin = child.stdin.take().expect("worker stdin is piped");
         let stdout_pipe = child.stdout.take().expect("worker stdout is piped");
-        let stderr_pipe = child.stderr.take().expect("worker stderr is piped");
         let (write_sender, write_receiver) = std::sync::mpsc::sync_channel(1);
         let request = request.to_vec();
         thread::spawn(move || {
@@ -1526,11 +1651,11 @@ mod platform {
             let mut written = 0;
             let result = loop {
                 match stdin.write(&request[written..]) {
-                    Ok(0) => break Ok(written),
+                    Ok(0) => break Ok((stdin, written)),
                     Ok(count) => {
                         written += count;
                         if written == request.len() {
-                            break Ok(written);
+                            break Ok((stdin, written));
                         }
                     }
                     Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
@@ -1540,20 +1665,64 @@ mod platform {
             let _ = write_sender.send(result);
         });
         let stdout_receiver = capture_pipe(stdout_pipe, limits.stdout_bytes);
-        let stderr_receiver = capture_pipe(stderr_pipe, limits.stderr_bytes);
+        let control_receiver = capture_worker_done(stderr_pipe, challenge, limits.stderr_bytes);
 
-        let started = Instant::now();
         let mut descendants_seen = BTreeSet::new();
         let mut next_descendant_scan = Instant::now();
         let mut timed_out = false;
+        let mut request_state = None;
+        let mut control_state = None;
+        let mut completed_request_written = None;
+        let mut acknowledged = false;
         let status = loop {
             if Instant::now() >= next_descendant_scan {
                 descendants_seen.extend(descendants(child.id()));
                 next_descendant_scan = Instant::now() + DESCENDANT_SCAN_INTERVAL;
             }
+            if request_state.is_none()
+                && let Ok(result) = write_receiver.try_recv()
+            {
+                request_state = Some(result);
+            }
+            if control_state.is_none()
+                && let Ok(result) = control_receiver.try_recv()
+            {
+                control_state = Some(result);
+            }
+            let can_acknowledge = matches!(request_state.as_ref(), Some(Ok(_)))
+                && matches!(control_state.as_ref(), Some(Ok(control)) if control.done)
+                && !acknowledged;
+            if can_acknowledge {
+                let (mut stdin, request_written) = request_state
+                    .take()
+                    .expect("checked request state")
+                    .map_err(|error| {
+                        AuthenticatedPhysicalMachineEffectErrorV1::detail(
+                            AuthenticatedPhysicalMachineEffectErrorKindV1::WriteRequest,
+                            error,
+                        )
+                    })?;
+                completed_request_written = Some(request_written);
+                if let Err(error) = validate_post_execution_closure(child.id(), worker, observation)
+                {
+                    terminate_process_tree(child, &descendants_seen);
+                    let _ = child.wait();
+                    return Err(error);
+                }
+                stdin
+                    .write_all(&control_frame(WORKER_ACK_DOMAIN, challenge))
+                    .map_err(|error| {
+                        AuthenticatedPhysicalMachineEffectErrorV1::detail(
+                            AuthenticatedPhysicalMachineEffectErrorKindV1::ControlHandshake,
+                            error,
+                        )
+                    })?;
+                drop(stdin);
+                acknowledged = true;
+            }
             match child.try_wait() {
                 Ok(Some(status)) => break status,
-                Ok(None) if started.elapsed() >= limits.timeout => {
+                Ok(None) if Instant::now() >= deadline => {
                     timed_out = true;
                     terminate_process_tree(child, &descendants_seen);
                     break child.wait().map_err(|error| {
@@ -1576,32 +1745,50 @@ mod platform {
         };
         descendants_seen.extend(descendants(child.id()));
         terminate_process_tree(child, &descendants_seen);
-        let request_written = write_receiver
-            .recv_timeout(DRAIN_GRACE)
-            .map_err(|_| {
+        let request_written = match completed_request_written {
+            Some(written) => written,
+            None => {
+                let request_result = match request_state {
+                    Some(result) => result,
+                    None => write_receiver.recv_timeout(DRAIN_GRACE).map_err(|_| {
+                        AuthenticatedPhysicalMachineEffectErrorV1::plain(
+                            AuthenticatedPhysicalMachineEffectErrorKindV1::ProcessTreeNotQuiescent,
+                        )
+                    })?,
+                };
+                request_result
+                    .map(|(_, written)| written)
+                    .map_err(|error| {
+                        AuthenticatedPhysicalMachineEffectErrorV1::detail(
+                            AuthenticatedPhysicalMachineEffectErrorKindV1::WriteRequest,
+                            error,
+                        )
+                    })?
+            }
+        };
+        let control = match control_state {
+            Some(result) => result,
+            None => control_receiver.recv_timeout(DRAIN_GRACE).map_err(|_| {
                 AuthenticatedPhysicalMachineEffectErrorV1::plain(
                     AuthenticatedPhysicalMachineEffectErrorKindV1::ProcessTreeNotQuiescent,
                 )
-            })?
-            .map_err(|error| {
-                AuthenticatedPhysicalMachineEffectErrorV1::detail(
-                    AuthenticatedPhysicalMachineEffectErrorKindV1::WriteRequest,
-                    error,
-                )
-            })?;
+            })?,
+        }
+        .map_err(|error| {
+            AuthenticatedPhysicalMachineEffectErrorV1::detail(
+                AuthenticatedPhysicalMachineEffectErrorKindV1::ReadStderr,
+                error,
+            )
+        })?;
         let stdout = receive_capture(
             stdout_receiver,
             AuthenticatedPhysicalMachineEffectErrorKindV1::ReadStdout,
-        )?;
-        let stderr = receive_capture(
-            stderr_receiver,
-            AuthenticatedPhysicalMachineEffectErrorKindV1::ReadStderr,
         )?;
         let capture = ProcessCapture {
             status,
             request_written,
             stdout,
-            stderr,
+            stderr: control.stderr,
         };
         if capture.stdout.overflow || capture.stderr.overflow {
             let kind = if capture.stdout.overflow {
@@ -1617,7 +1804,77 @@ mod platform {
                 &capture,
             ));
         }
+        if !control.done || !acknowledged {
+            return Err(process_error(
+                AuthenticatedPhysicalMachineEffectErrorKindV1::ControlHandshake,
+                &capture,
+            ));
+        }
         Ok(capture)
+    }
+
+    fn capture_worker_done(
+        mut stderr: ChildStderr,
+        challenge: PhysicalMachineExecutionChallengeV1,
+        limit: usize,
+    ) -> std::sync::mpsc::Receiver<io::Result<WorkerControlCapture>> {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        thread::spawn(move || {
+            let expected = control_frame(WORKER_DONE_DOMAIN, challenge);
+            let mut capture = Capture::new();
+            let mut frame = vec![0_u8; expected.len()];
+            let mut frame_bytes = 0;
+            let frame_result = loop {
+                match stderr.read(&mut frame[frame_bytes..]) {
+                    Ok(0) => break Ok(false),
+                    Ok(read) => {
+                        frame_bytes += read;
+                        if frame_bytes == frame.len() {
+                            break Ok(frame == expected);
+                        }
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                    Err(error) => break Err(error),
+                }
+            };
+            let result = match frame_result {
+                Ok(true) => Ok(WorkerControlCapture {
+                    done: true,
+                    stderr: capture,
+                }),
+                Ok(false) => {
+                    capture
+                        .bytes
+                        .extend_from_slice(&frame[..frame_bytes.min(limit)]);
+                    capture.overflow = frame_bytes > limit;
+                    let mut buffer = [0_u8; 8192];
+                    loop {
+                        match stderr.read(&mut buffer) {
+                            Ok(0) => break,
+                            Ok(read) => {
+                                let remaining = limit.saturating_sub(capture.bytes.len());
+                                capture
+                                    .bytes
+                                    .extend_from_slice(&buffer[..read.min(remaining)]);
+                                capture.overflow |= read > remaining;
+                            }
+                            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                            Err(error) => {
+                                let _ = sender.send(Err(error));
+                                return;
+                            }
+                        }
+                    }
+                    Ok(WorkerControlCapture {
+                        done: false,
+                        stderr: capture,
+                    })
+                }
+                Err(error) => Err(error),
+            };
+            let _ = sender.send(result);
+        });
+        receiver
     }
 
     fn validate_success(
