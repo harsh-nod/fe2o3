@@ -341,7 +341,7 @@ retained. Landlock admits only those regular files and the HSACO. Unlisted
 regular-file `dlopen` and data reads fail closed. `/proc`, `/sys`, and `/dev`
 do not share one policy: `/proc` and `/sys` remain read-only observation roots,
 while `/dev` has no root grant. Only stat-bound `/dev/kfd`, render nodes 128
-through 184 in steps of eight, and `/dev/random` are writable; GPU nodes are
+through 184 in steps of eight, `/dev/null`, and `/dev/random` are writable; GPU nodes are
 also readable. The hardware child verifies that `/dev/shm` create, read, and
 `dlopen` all fail before the exact GPU dispatch succeeds.
 

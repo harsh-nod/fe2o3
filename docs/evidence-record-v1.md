@@ -288,7 +288,7 @@ Landlock admits only those regular files plus the retained HSACO; other
 regular-file runtime and `dlopen` reads fail closed. `/proc` and `/sys` remain
 read-only kernel observation roots. `/dev` is not authorized as a root: the
 child receives read/write access only to the stat-bound `/dev/kfd`, eight exact
-render nodes, and `/dev/random`. The same child proves that create, read, and
+render nodes, `/dev/null`, and `/dev/random`. The same child proves that create, read, and
 `dlopen` under `/dev/shm` fail before it dispatches. Guarded inputs and outputs use host-visible HSA pool
 allocations rather than HIP `DeviceBuffer` compilation/linking. Physical memory
 is capped at 8 GiB; a separate bounded 4 TiB address-space limit admits the

@@ -76,6 +76,7 @@ HARDWARE_RUNTIME_DATA_PATHS = (
 HARDWARE_DEVICE_PATHS = (
     Path("/dev/kfd"),
     *(Path(f"/dev/dri/renderD{minor}") for minor in range(128, 192, 8)),
+    Path("/dev/null"),
     Path("/dev/random"),
 )
 WORKER_V2_REQUEST_DOMAIN = b"FE2O3/DIRECT-LLVM-WORKER-REQUEST/V2\0"
@@ -2423,7 +2424,7 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
         run_root.mkdir(mode=0o700)
         evidence_root.mkdir(mode=0o700)
         supervisor.set_writable_roots(
-            (run_root, evidence_root, Path("/tmp"))
+            (run_root, evidence_root, Path("/tmp"), Path("/dev/null"))
         )
         bootstrap_path = run_root / "bootstrap-tool-path"
         create_allowlisted_path(bootstrap_path, manifest, tools)
