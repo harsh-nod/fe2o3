@@ -1298,6 +1298,7 @@ impl MemoryExecutionV2 {
 
         let mut work = WorkMeterV2::execution(budgets.max_execution_work);
         for (index, (record, action)) in self.records.iter().zip(&program.actions).enumerate() {
+            work.charge(1).map_err(MemoryModelErrorV2::static_error)?;
             let action_identity =
                 canonical_action_identity_v2(program_identity, index, action, &mut work)
                     .map_err(MemoryModelErrorV2::static_error)?;
@@ -2409,13 +2410,10 @@ impl MachineV2<'_> {
         }
         let mut obligations =
             self.raw_access(actor, left, left_capability, left_cast_capability, false)?;
-        obligations.extend(self.raw_access(
-            actor,
-            right,
-            right_capability,
-            right_cast_capability,
-            false,
-        )?);
+        let right_obligations =
+            self.raw_access(actor, right, right_capability, right_cast_capability, false)?;
+        self.charge_work(right_obligations.len() as u64)?;
+        obligations.extend(right_obligations);
         let distance = left.byte_offset.abs_diff(right.byte_offset);
         if !distance.is_multiple_of(element_size) {
             return Err(MemoryErrorReasonV2::InvalidPointerDistance);
@@ -2469,13 +2467,15 @@ impl MachineV2<'_> {
             source_cast_capability,
             false,
         )?;
-        obligations.extend(self.raw_access(
+        let destination_obligations = self.raw_access(
             actor,
             destination,
             destination_capability,
             destination_cast_capability,
             true,
-        )?);
+        )?;
+        self.charge_work(destination_obligations.len() as u64)?;
+        obligations.extend(destination_obligations);
         obligations.push(self.obligation(
             source.provenance.allocation,
             source_range,
