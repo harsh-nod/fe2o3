@@ -33,10 +33,18 @@ do
 done
 
 for fixture_marker in \
-    'memory_safety_v2_pointer_width.rs:mutated_u64_exclusive_end_wrap_is_representable' \
-    'memory_safety_v2_physical_alias.rs:mutated_global_and_flat_tags_imply_physical_disjointness' \
-    'memory_safety_v2_target_layout.rs:mutated_constant_memory_is_writable' \
-    'memory_safety_v2_stale.rs:mutated_deallocated_storage_is_live'
+    'memory_safety_v2_oob.rs:mutated_out_of_bounds_is_accepted' \
+    'memory_safety_v2_stale.rs:mutated_stale_generation_is_accepted' \
+    'memory_safety_v2_deallocated.rs:mutated_deallocated_storage_is_live' \
+    'memory_safety_v2_alias.rs:mutated_overlapping_exclusive_loans_are_compatible' \
+    'memory_safety_v2_pointer_width.rs:mutated_one_past_workgroup_pointer_is_representable' \
+    'memory_safety_v2_pointer_wrap.rs:mutated_u64_exclusive_end_wrap_is_representable' \
+    'memory_safety_v2_physical_alias.rs:mutated_distinct_allocation_ids_imply_physical_disjointness' \
+    'memory_safety_v2_alias_domain.rs:mutated_global_and_flat_tags_imply_physical_disjointness' \
+    'memory_safety_v2_validity_canonical.rs:mutated_adjacent_validity_ranges_are_canonical' \
+    'memory_safety_v2_target_layout.rs:mutated_64_bit_workgroup_layout_is_gfx942' \
+    'memory_safety_v2_constant_write.rs:mutated_constant_memory_is_writable' \
+    'memory_safety_v2_work_reset.rs:mutated_separate_phase_budgets_imply_cumulative_admission'
 do
     fixture=${fixture_marker%%:*}
     marker=${fixture_marker#*:}
@@ -120,9 +128,13 @@ run_rejected() {
 
 run_rejected memory_safety_v2_oob mutated_out_of_bounds_is_accepted
 run_rejected memory_safety_v2_stale mutated_stale_generation_is_accepted
+run_rejected memory_safety_v2_deallocated mutated_deallocated_storage_is_live
 run_rejected memory_safety_v2_alias mutated_overlapping_exclusive_loans_are_compatible
 run_rejected memory_safety_v2_pointer_width mutated_one_past_workgroup_pointer_is_representable
+run_rejected memory_safety_v2_pointer_wrap mutated_u64_exclusive_end_wrap_is_representable
 run_rejected memory_safety_v2_physical_alias mutated_distinct_allocation_ids_imply_physical_disjointness
+run_rejected memory_safety_v2_alias_domain mutated_global_and_flat_tags_imply_physical_disjointness
 run_rejected memory_safety_v2_validity_canonical mutated_adjacent_validity_ranges_are_canonical
 run_rejected memory_safety_v2_target_layout mutated_64_bit_workgroup_layout_is_gfx942
+run_rejected memory_safety_v2_constant_write mutated_constant_memory_is_writable
 run_rejected memory_safety_v2_work_reset mutated_separate_phase_budgets_imply_cumulative_admission

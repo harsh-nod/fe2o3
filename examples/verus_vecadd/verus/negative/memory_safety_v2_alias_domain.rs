@@ -25,9 +25,9 @@ pub open spec fn physical_ranges_overlap(
         && right_start < left_start + left_len
 }
 
-pub proof fn mutated_distinct_allocation_ids_imply_physical_disjointness()
+pub proof fn mutated_global_and_flat_tags_imply_physical_disjointness()
     ensures
-        !physical_ranges_overlap(1, 0x1000, 16, 1, 0x1000, 16),
+        !physical_ranges_overlap(1, 0x1000, 16, 0, 0x1000, 16),
 {
 }
 
