@@ -851,7 +851,10 @@ def build_provider_members() -> list[tuple[str, Path]]:
         ("llvm-include", Path("/opt/rocm-7.2.4/lib/llvm/include")),
         ("llvm-cmake", Path("/opt/rocm-7.2.4/lib/llvm/lib/cmake")),
         ("clang-resource", Path("/opt/rocm-7.2.4/lib/llvm/lib/clang/22/include")),
-        ("device-bitcode", Path("/opt/rocm-7.2.4/amdgcn/bitcode")),
+        (
+            "device-bitcode",
+            Path("/opt/rocm-7.2.4/lib/llvm/lib/clang/22/lib/amdgcn/bitcode"),
+        ),
         ("rocm-info", Path("/opt/rocm-7.2.4/.info")),
     )
     members: list[tuple[str, Path]] = []
@@ -922,7 +925,8 @@ def build_and_generate(
             "-DFE2O3_PINNED_LLVM_VERSION=22.0.0git",
             "-DFE2O3_LLVM_BUILD_ID_FILE=/opt/rocm-7.2.4/.info/version",
             "-DFE2O3_EXPECTED_LLVM_BUILD_ID=7.2.4",
-            "-DFE2O3_GFX942_DEVICE_LIB_DIR=/opt/rocm-7.2.4/amdgcn/bitcode",
+            "-DFE2O3_GFX942_DEVICE_LIB_DIR="
+            "/opt/rocm-7.2.4/lib/llvm/lib/clang/22/lib/amdgcn/bitcode",
             "-DBUILD_TESTING=ON",
             "-DCMAKE_BUILD_TYPE=Release",
         ],
