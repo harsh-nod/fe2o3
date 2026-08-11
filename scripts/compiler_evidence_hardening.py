@@ -422,7 +422,7 @@ class CommandLimits:
     timeout_seconds: float = 300.0
     memory_bytes: int = 8 * 1024 * 1024 * 1024
     output_bytes: int = 16 * 1024 * 1024
-    file_bytes: int = 64 * 1024 * 1024
+    file_bytes: int = 2 * 1024 * 1024 * 1024
     open_files: int = 8192
     processes: int = 256
     cpu_seconds: int = 300
