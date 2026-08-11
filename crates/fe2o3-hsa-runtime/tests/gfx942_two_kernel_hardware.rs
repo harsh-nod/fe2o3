@@ -1055,10 +1055,7 @@ fn parse_sha256(hex: &str) -> Result<[u8; 32], String> {
 fn f32_bytes(values: &[f32]) -> &[u8] {
     // SAFETY: `f32` has no invalid bit patterns and the byte extent is checked.
     unsafe {
-        core::slice::from_raw_parts(
-            values.as_ptr().cast::<u8>(),
-            values.len() * core::mem::size_of::<f32>(),
-        )
+        core::slice::from_raw_parts(values.as_ptr().cast::<u8>(), core::mem::size_of_val(values))
     }
 }
 
