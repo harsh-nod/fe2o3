@@ -1,3 +1,4 @@
+mod control_flow;
 mod executable;
 mod executable_wire;
 mod mem2reg;
@@ -5,6 +6,9 @@ mod semantic_constant;
 mod semantic_memory;
 mod semantic_type;
 
+pub use control_flow::{
+    MirControlFlowAnalysis, MirControlFlowEdge, MirControlFlowError, analyze_mir_control_flow,
+};
 pub use executable::{
     EXECUTABLE_MIR_VERSION, GFX942_POINTER_ABIS, GFX942_TARGET_CPU, GFX942_TARGET_DATA_LAYOUT,
     GFX942_TARGET_FEATURES, GFX942_TARGET_TRIPLE, MAX_EXECUTABLE_ADDRESS_SPACE,
