@@ -6,7 +6,7 @@
 //! no runtime allocation, GPU behavior, compiler refinement, proof execution,
 //! or inter-invocation race-freedom.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt;
 
 const MAGIC: [u8; 8] = *b"FE2OMEM2";
@@ -33,6 +33,67 @@ const MIN_ACTION_BYTES: usize = 9;
 const MIN_FIELD_BYTES: usize = 12;
 const MIN_VALIDITY_RANGE_BYTES: usize = 32;
 const MIN_PROJECTION_BYTES: usize = 5;
+const GFX942_ADDRESS_SPACES: [AddressSpaceLayoutV2; 5] = [
+    AddressSpaceLayoutV2 {
+        address_space: AddressSpaceV2::Flat,
+        pointer_bits: 64,
+        pointer_alignment: 64,
+    },
+    AddressSpaceLayoutV2 {
+        address_space: AddressSpaceV2::Global,
+        pointer_bits: 64,
+        pointer_alignment: 64,
+    },
+    AddressSpaceLayoutV2 {
+        address_space: AddressSpaceV2::Workgroup,
+        pointer_bits: 32,
+        pointer_alignment: 32,
+    },
+    AddressSpaceLayoutV2 {
+        address_space: AddressSpaceV2::Constant,
+        pointer_bits: 64,
+        pointer_alignment: 64,
+    },
+    AddressSpaceLayoutV2 {
+        address_space: AddressSpaceV2::Private,
+        pointer_bits: 32,
+        pointer_alignment: 32,
+    },
+];
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct WorkMeterV2 {
+    resource: &'static str,
+    used: u64,
+    max: u64,
+}
+
+impl WorkMeterV2 {
+    const fn validation(max: u64) -> Self {
+        Self {
+            resource: "validation work",
+            used: 0,
+            max,
+        }
+    }
+
+    const fn execution(max: u64) -> Self {
+        Self {
+            resource: "execution work",
+            used: 0,
+            max,
+        }
+    }
+
+    fn charge(&mut self, amount: u64) -> Result<(), MemoryErrorReasonV2> {
+        self.used = charge_resource(self.resource, self.used, amount, self.max)?;
+        Ok(())
+    }
+
+    const fn used(self) -> u64 {
+        self.used
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MemoryBudgetsV2 {
@@ -218,33 +279,7 @@ impl TargetLayoutV2 {
             architecture: "gfx942".into(),
             xnack_disabled: true,
             little_endian: true,
-            address_spaces: vec![
-                AddressSpaceLayoutV2 {
-                    address_space: AddressSpaceV2::Flat,
-                    pointer_bits: 64,
-                    pointer_alignment: 64,
-                },
-                AddressSpaceLayoutV2 {
-                    address_space: AddressSpaceV2::Global,
-                    pointer_bits: 64,
-                    pointer_alignment: 64,
-                },
-                AddressSpaceLayoutV2 {
-                    address_space: AddressSpaceV2::Workgroup,
-                    pointer_bits: 32,
-                    pointer_alignment: 32,
-                },
-                AddressSpaceLayoutV2 {
-                    address_space: AddressSpaceV2::Constant,
-                    pointer_bits: 64,
-                    pointer_alignment: 64,
-                },
-                AddressSpaceLayoutV2 {
-                    address_space: AddressSpaceV2::Private,
-                    pointer_bits: 32,
-                    pointer_alignment: 32,
-                },
-            ],
+            address_spaces: GFX942_ADDRESS_SPACES.to_vec(),
         }
     }
     pub fn architecture(&self) -> &str {
@@ -286,7 +321,11 @@ impl TargetLayoutV2 {
         }
     }
     fn validate(&self) -> Result<(), MemoryErrorReasonV2> {
-        if self != &Self::gfx942_xnack_minus() {
+        if self.architecture != "gfx942"
+            || !self.xnack_disabled
+            || !self.little_endian
+            || self.address_spaces.as_slice() != GFX942_ADDRESS_SPACES
+        {
             Err(MemoryErrorReasonV2::UnsupportedTargetLayout)
         } else {
             Ok(())
@@ -592,46 +631,40 @@ pub struct MemoryProgramV2 {
 impl MemoryProgramV2 {
     pub fn new(
         target: TargetLayoutV2,
-        mut types: Vec<MemoryTypeV2>,
+        types: Vec<MemoryTypeV2>,
         actions: Vec<MemoryActionV2>,
         budgets: MemoryBudgetsV2,
     ) -> Result<Self, MemoryModelErrorV2> {
+        Self::new_with_work(target, types, actions, budgets).map(|(program, _work)| program)
+    }
+    pub fn new_with_work(
+        target: TargetLayoutV2,
+        mut types: Vec<MemoryTypeV2>,
+        actions: Vec<MemoryActionV2>,
+        budgets: MemoryBudgetsV2,
+    ) -> Result<(Self, u64), MemoryModelErrorV2> {
         budgets
             .validate_hard_caps()
             .map_err(MemoryModelErrorV2::static_error)?;
-        let mut validation_work = charge(
-            0,
-            target.address_spaces.len() as u64,
-            budgets.max_validation_work,
-        )
-        .map_err(MemoryModelErrorV2::static_error)?;
-        target
-            .validate()
+        let mut work = WorkMeterV2::validation(budgets.max_validation_work);
+        validate_program_envelope(&target, types.len(), actions.len(), budgets, &mut work)
             .map_err(MemoryModelErrorV2::static_error)?;
-        enforce("types", types.len() as u64, budgets.max_types as u64)
+        work.charge(sort_work(types.len() as u64))
             .map_err(MemoryModelErrorV2::static_error)?;
-        enforce("actions", actions.len() as u64, budgets.max_actions as u64)
-            .map_err(MemoryModelErrorV2::static_error)?;
-        validation_work = charge(
-            validation_work,
-            sort_work(types.len() as u64),
-            budgets.max_validation_work,
-        )
-        .map_err(MemoryModelErrorV2::static_error)?;
-        types.sort_by_key(|ty| ty.id);
+        types.sort_unstable_by_key(|ty| ty.id);
         let program = Self {
             target,
             types,
             actions,
         };
         program
-            .validate_types(budgets, &mut validation_work)
+            .validate_types(budgets, &mut work)
             .map_err(MemoryModelErrorV2::static_error)?;
         program
-            .validate_action_shapes(budgets, &mut validation_work)
+            .validate_action_shapes(budgets, &mut work)
             .map_err(MemoryModelErrorV2::static_error)?;
         let bytes = program
-            .encode_unchecked(budgets)
+            .encode_unchecked(budgets, &mut work)
             .map_err(MemoryModelErrorV2::static_error)?;
         enforce(
             "canonical bytes",
@@ -639,7 +672,7 @@ impl MemoryProgramV2 {
             budgets.max_canonical_bytes as u64,
         )
         .map_err(MemoryModelErrorV2::static_error)?;
-        Ok(program)
+        Ok((program, work.used()))
     }
     pub fn target(&self) -> &TargetLayoutV2 {
         &self.target
@@ -651,22 +684,44 @@ impl MemoryProgramV2 {
         &self.actions
     }
     pub fn canonical_bytes(&self, budgets: MemoryBudgetsV2) -> Result<Vec<u8>, MemoryModelErrorV2> {
-        Self::new(
-            self.target.clone(),
-            self.types.clone(),
-            self.actions.clone(),
+        self.canonical_bytes_with_work(budgets)
+            .map(|(bytes, _work)| bytes)
+    }
+    pub fn canonical_bytes_with_work(
+        &self,
+        budgets: MemoryBudgetsV2,
+    ) -> Result<(Vec<u8>, u64), MemoryModelErrorV2> {
+        budgets
+            .validate_hard_caps()
+            .map_err(MemoryModelErrorV2::static_error)?;
+        let mut work = WorkMeterV2::validation(budgets.max_validation_work);
+        validate_program_envelope(
+            &self.target,
+            self.types.len(),
+            self.actions.len(),
             budgets,
+            &mut work,
         )
-        .and_then(|program| {
-            program
-                .encode_unchecked(budgets)
-                .map_err(MemoryModelErrorV2::static_error)
-        })
+        .map_err(MemoryModelErrorV2::static_error)?;
+        self.validate_types(budgets, &mut work)
+            .map_err(MemoryModelErrorV2::static_error)?;
+        self.validate_action_shapes(budgets, &mut work)
+            .map_err(MemoryModelErrorV2::static_error)?;
+        let bytes = self
+            .encode_unchecked(budgets, &mut work)
+            .map_err(MemoryModelErrorV2::static_error)?;
+        Ok((bytes, work.used()))
     }
     pub fn decode_canonical(
         input: &[u8],
         budgets: MemoryBudgetsV2,
     ) -> Result<Self, MemoryModelErrorV2> {
+        Self::decode_canonical_with_work(input, budgets).map(|(program, _work)| program)
+    }
+    pub fn decode_canonical_with_work(
+        input: &[u8],
+        budgets: MemoryBudgetsV2,
+    ) -> Result<(Self, u64), MemoryModelErrorV2> {
         budgets
             .validate_hard_caps()
             .map_err(MemoryModelErrorV2::static_error)?;
@@ -683,8 +738,10 @@ impl MemoryProgramV2 {
         if reader.u16()? != VERSION || reader.u16()? != 0 {
             return Err(reader.error("unsupported version or flags"));
         }
-        let mut decode_work = 0_u64;
-        let target = decode_target(&mut reader, budgets, &mut decode_work)?;
+        let mut work = WorkMeterV2::validation(budgets.max_validation_work);
+        work.charge(input.len() as u64)
+            .map_err(MemoryModelErrorV2::static_error)?;
+        let target = decode_target(&mut reader, budgets, &mut work)?;
         let type_count = reader.count("types", budgets.max_types)?;
         let mut types = decode_collection::<MemoryTypeV2>(
             &reader,
@@ -692,10 +749,10 @@ impl MemoryProgramV2 {
             type_count,
             MIN_TYPE_BYTES,
             budgets,
-            &mut decode_work,
+            &mut work,
         )?;
         for _ in 0..type_count {
-            types.push(decode_type(&mut reader, budgets, &mut decode_work)?);
+            types.push(decode_type(&mut reader, budgets, &mut work)?);
         }
         let action_count = reader.count("actions", budgets.max_actions)?;
         let mut actions = decode_collection::<MemoryActionV2>(
@@ -704,44 +761,78 @@ impl MemoryProgramV2 {
             action_count,
             MIN_ACTION_BYTES,
             budgets,
-            &mut decode_work,
+            &mut work,
         )?;
         for _ in 0..action_count {
-            actions.push(decode_action(&mut reader, budgets, &mut decode_work)?);
+            actions.push(decode_action(&mut reader, budgets, &mut work)?);
         }
         if !reader.finished() {
             return Err(reader.error("trailing bytes"));
         }
-        let program = Self::new(target, types, actions, budgets)?;
-        if program.canonical_bytes(budgets)?.as_slice() != input {
+        validate_program_envelope(&target, types.len(), actions.len(), budgets, &mut work)
+            .map_err(MemoryModelErrorV2::static_error)?;
+        let program = Self {
+            target,
+            types,
+            actions,
+        };
+        program
+            .validate_types(budgets, &mut work)
+            .map_err(MemoryModelErrorV2::static_error)?;
+        program
+            .validate_action_shapes(budgets, &mut work)
+            .map_err(MemoryModelErrorV2::static_error)?;
+        let reencoded = program
+            .encode_unchecked(budgets, &mut work)
+            .map_err(MemoryModelErrorV2::static_error)?;
+        work.charge(input.len() as u64)
+            .map_err(MemoryModelErrorV2::static_error)?;
+        if reencoded.as_slice() != input {
             return Err(MemoryModelErrorV2::static_error(
                 MemoryErrorReasonV2::NonCanonical,
             ));
         }
-        Ok(program)
+        Ok((program, work.used()))
     }
-    fn type_map(&self) -> BTreeMap<MemoryTypeIdV2, &MemoryTypeV2> {
-        self.types.iter().map(|ty| (ty.id, ty)).collect()
+
+    fn type_index(
+        &self,
+        id: MemoryTypeIdV2,
+        work: &mut WorkMeterV2,
+    ) -> Result<usize, MemoryErrorReasonV2> {
+        work.charge(binary_lookup_work(self.types.len() as u64))?;
+        self.types
+            .binary_search_by_key(&id, |ty| ty.id)
+            .map_err(|_| MemoryErrorReasonV2::UnknownType(id))
+    }
+
+    fn find_type(
+        &self,
+        id: MemoryTypeIdV2,
+        work: &mut WorkMeterV2,
+    ) -> Result<&MemoryTypeV2, MemoryErrorReasonV2> {
+        let index = self.type_index(id, work)?;
+        Ok(&self.types[index])
     }
 
     fn validate_types(
         &self,
         budgets: MemoryBudgetsV2,
-        work: &mut u64,
+        work: &mut WorkMeterV2,
     ) -> Result<(), MemoryErrorReasonV2> {
-        *work = charge(
-            *work,
-            sort_work(self.types.len() as u64),
-            budgets.max_validation_work,
-        )?;
-        let map = self.type_map();
-        if map.len() != self.types.len() {
-            return Err(MemoryErrorReasonV2::DuplicateType);
+        work.charge(self.types.len() as u64)?;
+        for pair in self.types.windows(2) {
+            if pair[0].id == pair[1].id {
+                return Err(MemoryErrorReasonV2::DuplicateType);
+            }
+            if pair[0].id > pair[1].id {
+                return Err(MemoryErrorReasonV2::NonCanonical);
+            }
         }
         let mut edges = 0_u64;
         let mut ranges = 0_u64;
         for ty in &self.types {
-            *work = charge(*work, 1, budgets.max_validation_work)?;
+            work.charge(1)?;
             if ty.alignment == 0 || !ty.alignment.is_power_of_two() {
                 return Err(MemoryErrorReasonV2::InvalidType {
                     ty: ty.id,
@@ -763,7 +854,7 @@ impl MemoryProgramV2 {
                         });
                     }
                     if let BitValidityV2::Ranges(items) = validity {
-                        *work = charge(*work, items.len() as u64, budgets.max_validation_work)?;
+                        work.charge(items.len() as u64)?;
                         ranges += items.len() as u64;
                     }
                     validate_validity(*bit_width, validity, ty.id)?;
@@ -774,9 +865,7 @@ impl MemoryProgramV2 {
                     stride,
                 } => {
                     edges += 1;
-                    let element = map
-                        .get(element)
-                        .ok_or(MemoryErrorReasonV2::UnknownType(*element))?;
+                    let element = self.find_type(*element, work)?;
                     if *stride < element.size || *stride % element.alignment != 0 {
                         return Err(MemoryErrorReasonV2::InvalidType {
                             ty: ty.id,
@@ -802,13 +891,11 @@ impl MemoryProgramV2 {
                     }
                 }
                 MemoryTypeKindV2::Aggregate { fields } => {
-                    *work = charge(*work, fields.len() as u64, budgets.max_validation_work)?;
+                    work.charge(fields.len() as u64)?;
                     edges += fields.len() as u64;
                     let mut last = None;
                     for field in fields {
-                        let field_ty = map
-                            .get(&field.ty)
-                            .ok_or(MemoryErrorReasonV2::UnknownType(field.ty))?;
+                        let field_ty = self.find_type(field.ty, work)?;
                         if last.is_some_and(|offset| field.offset < offset) {
                             return Err(MemoryErrorReasonV2::InvalidType {
                                 ty: ty.id,
@@ -839,42 +926,56 @@ impl MemoryProgramV2 {
             ranges,
             budgets.max_validity_ranges as u64,
         )?;
-        self.reject_cycles(&map, budgets, work)
+        self.reject_cycles(edges, work)
     }
 
-    fn reject_cycles(
-        &self,
-        map: &BTreeMap<MemoryTypeIdV2, &MemoryTypeV2>,
-        budgets: MemoryBudgetsV2,
-        work: &mut u64,
-    ) -> Result<(), MemoryErrorReasonV2> {
-        let mut color = BTreeMap::<MemoryTypeIdV2, u8>::new();
-        for ty in &self.types {
-            if color.get(&ty.id) == Some(&2) {
+    fn reject_cycles(&self, edges: u64, work: &mut WorkMeterV2) -> Result<(), MemoryErrorReasonV2> {
+        let mut color = fallible_zeroed_bytes("type cycle colors", self.types.len())?;
+        work.charge(self.types.len() as u64)?;
+        let pending_capacity = u64::try_from(self.types.len())
+            .ok()
+            .and_then(|types| types.checked_add(edges))
+            .and_then(|items| items.checked_add(1))
+            .and_then(|items| usize::try_from(items).ok())
+            .ok_or(MemoryErrorReasonV2::ResourceLimit {
+                resource: "type cycle stack",
+                actual: u64::MAX,
+                max: u64::from(HARD_MAX_TYPES) + u64::from(HARD_MAX_TYPE_EDGES) + 1,
+            })?;
+        let mut pending = Vec::<(MemoryTypeIdV2, bool)>::new();
+        pending.try_reserve_exact(pending_capacity).map_err(|_| {
+            MemoryErrorReasonV2::AllocationFailed {
+                resource: "type cycle stack",
+            }
+        })?;
+        for root in 0..self.types.len() {
+            if color[root] == 2 {
                 continue;
             }
-            let mut pending = vec![(ty.id, false)];
+            pending.clear();
+            pending.push((self.types[root].id, false));
             while let Some((id, exit)) = pending.pop() {
-                *work = charge(*work, 1, budgets.max_validation_work)?;
+                work.charge(1)?;
+                let index = self.type_index(id, work)?;
                 if exit {
-                    color.insert(id, 2);
+                    color[index] = 2;
                     continue;
                 }
-                match color.get(&id).copied().unwrap_or(0) {
+                match color[index] {
                     1 => return Err(MemoryErrorReasonV2::TypeCycle(id)),
                     2 => continue,
                     _ => {}
                 }
-                color.insert(id, 1);
+                color[index] = 1;
                 pending.push((id, true));
-                let node = map.get(&id).ok_or(MemoryErrorReasonV2::UnknownType(id))?;
+                let node = &self.types[index];
                 match &node.kind {
                     MemoryTypeKindV2::Array { element, .. } => {
-                        *work = charge(*work, 1, budgets.max_validation_work)?;
+                        work.charge(1)?;
                         pending.push((*element, false));
                     }
                     MemoryTypeKindV2::Aggregate { fields } => {
-                        *work = charge(*work, fields.len() as u64, budgets.max_validation_work)?;
+                        work.charge(fields.len() as u64)?;
                         pending.extend(fields.iter().rev().map(|field| (field.ty, false)));
                     }
                     MemoryTypeKindV2::Scalar { .. } | MemoryTypeKindV2::OpaqueBytes => {}
@@ -887,21 +988,17 @@ impl MemoryProgramV2 {
     fn validate_action_shapes(
         &self,
         budgets: MemoryBudgetsV2,
-        work: &mut u64,
+        work: &mut WorkMeterV2,
     ) -> Result<(), MemoryErrorReasonV2> {
         for action in &self.actions {
-            *work = charge(*work, 1, budgets.max_validation_work)?;
+            work.charge(1)?;
             if let Some(place) = action.typed_place() {
                 enforce(
                     "place projections",
                     place.projections.len() as u64,
                     budgets.max_projections_per_place as u64,
                 )?;
-                *work = charge(
-                    *work,
-                    place.projections.len() as u64,
-                    budgets.max_validation_work,
-                )?;
+                work.charge(place.projections.len() as u64)?;
             }
         }
         Ok(())
@@ -963,12 +1060,37 @@ fn validate_validity(
     Ok(())
 }
 
-fn charge(current: u64, amount: u64, max: u64) -> Result<u64, MemoryErrorReasonV2> {
-    charge_resource("validation work", current, amount, max)
+fn validate_program_envelope(
+    target: &TargetLayoutV2,
+    type_count: usize,
+    action_count: usize,
+    budgets: MemoryBudgetsV2,
+    work: &mut WorkMeterV2,
+) -> Result<(), MemoryErrorReasonV2> {
+    let target_work = u64::try_from(target.architecture.len())
+        .ok()
+        .and_then(|name| name.checked_add(target.address_spaces.len() as u64))
+        .ok_or(MemoryErrorReasonV2::ResourceLimit {
+            resource: "validation work",
+            actual: u64::MAX,
+            max: work.max,
+        })?;
+    work.charge(target_work)?;
+    target.validate()?;
+    enforce("types", type_count as u64, budgets.max_types as u64)?;
+    enforce("actions", action_count as u64, budgets.max_actions as u64)
 }
 
-fn charge_execution(current: u64, amount: u64, max: u64) -> Result<u64, MemoryErrorReasonV2> {
-    charge_resource("execution work", current, amount, max)
+fn fallible_zeroed_bytes(
+    resource: &'static str,
+    len: usize,
+) -> Result<Vec<u8>, MemoryErrorReasonV2> {
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(len)
+        .map_err(|_| MemoryErrorReasonV2::AllocationFailed { resource })?;
+    bytes.resize(len, 0);
+    Ok(bytes)
 }
 
 fn charge_resource(
@@ -1167,7 +1289,7 @@ struct CapabilityStateV2 {
 
 struct MachineV2<'a> {
     target: &'a TargetLayoutV2,
-    types: BTreeMap<MemoryTypeIdV2, &'a MemoryTypeV2>,
+    types: &'a [MemoryTypeV2],
     epoch: EpochV2,
     allocations: BTreeMap<AllocationIdV2, AllocationStateV2>,
     loans: BTreeMap<LoanIdV2, LoanStateV2>,
@@ -1177,7 +1299,7 @@ struct MachineV2<'a> {
     program_identity: UntrustedMemoryProgramIdentityV2,
     action_identity: MemoryActionIdentityV2,
     action_index: u32,
-    execution_work: u64,
+    execution_work: WorkMeterV2,
     budgets: MemoryBudgetsV2,
 }
 
@@ -1211,15 +1333,13 @@ pub fn execute_memory_program_v2(
                 resource: "transition records",
             })
         })?;
-    let initial_execution_work = charge_execution(
-        0,
-        program.types.len() as u64 + program.actions.len() as u64,
-        budgets.max_execution_work,
-    )
-    .map_err(MemoryModelErrorV2::static_error)?;
+    let mut initial_execution_work = WorkMeterV2::execution(budgets.max_execution_work);
+    initial_execution_work
+        .charge(program.types.len() as u64 + program.actions.len() as u64)
+        .map_err(MemoryModelErrorV2::static_error)?;
     let mut machine = MachineV2 {
         target: &program.target,
-        types: program.type_map(),
+        types: &program.types,
         epoch: EpochV2(0),
         allocations: BTreeMap::new(),
         loans: BTreeMap::new(),
@@ -1287,7 +1407,7 @@ pub fn execute_memory_program_v2(
         program_identity,
         machine.epoch,
         live_allocations,
-        machine.execution_work,
+        machine.execution_work.used(),
         &machine.records,
     );
     Ok(MemoryExecutionV2 {
@@ -1296,15 +1416,13 @@ pub fn execute_memory_program_v2(
         live_allocations,
         program_identity,
         report_identity,
-        execution_work: machine.execution_work,
+        execution_work: machine.execution_work.used(),
     })
 }
 
 impl MachineV2<'_> {
     fn charge_work(&mut self, amount: u64) -> Result<(), MemoryErrorReasonV2> {
-        self.execution_work =
-            charge_execution(self.execution_work, amount, self.budgets.max_execution_work)?;
-        Ok(())
+        self.execution_work.charge(amount)
     }
 
     fn apply(
@@ -1551,9 +1669,7 @@ impl MachineV2<'_> {
         self.charge_work(place.projections.len() as u64)?;
         let allocation = self.live_allocation(place.provenance)?;
         let mut offset = place.base_offset;
-        let mut ty = *self
-            .types
-            .get(&place.root_type)
+        let mut ty = lookup_type(self.types, place.root_type)
             .ok_or(MemoryErrorReasonV2::UnknownType(place.root_type))?;
         if offset
             .checked_add(ty.size)
@@ -1574,9 +1690,7 @@ impl MachineV2<'_> {
                     offset = offset
                         .checked_add(field.offset)
                         .ok_or(MemoryErrorReasonV2::OutOfBounds)?;
-                    ty = *self
-                        .types
-                        .get(&field.ty)
+                    ty = lookup_type(self.types, field.ty)
                         .ok_or(MemoryErrorReasonV2::UnknownType(field.ty))?;
                 }
                 (
@@ -1594,9 +1708,7 @@ impl MachineV2<'_> {
                                 .ok_or(MemoryErrorReasonV2::OutOfBounds)?,
                         )
                         .ok_or(MemoryErrorReasonV2::OutOfBounds)?;
-                    ty = *self
-                        .types
-                        .get(element)
+                    ty = lookup_type(self.types, *element)
                         .ok_or(MemoryErrorReasonV2::UnknownType(*element))?;
                 }
                 _ => return Err(MemoryErrorReasonV2::InvalidProjection),
@@ -1705,20 +1817,14 @@ impl MachineV2<'_> {
         self.authorize_actor(actor, resolved.allocation, resolved.range, write.is_some())?;
         let constrained = type_has_constrained_validity(
             resolved.ty,
-            &self.types,
+            self.types,
             &mut self.execution_work,
-            self.budgets.max_execution_work,
+            self.budgets.max_type_edges,
         )?;
         if let Some(value) = write {
             self.ensure_mutable(resolved.allocation)?;
-            let ty = *self.types.get(&resolved.ty).expect("resolved type exists");
-            validate_typed_value(
-                ty,
-                value,
-                constrained,
-                &mut self.execution_work,
-                self.budgets.max_execution_work,
-            )?;
+            let ty = lookup_type(self.types, resolved.ty).expect("resolved type exists");
+            validate_typed_value(ty, value, constrained, &mut self.execution_work)?;
             let (initialized_len, typed_len) = {
                 let allocation = self
                     .allocations
@@ -2378,20 +2484,45 @@ fn address(allocation: &AllocationStateV2, offset: u64) -> Result<u64, MemoryErr
         .ok_or(MemoryErrorReasonV2::AddressNotRepresentable)
 }
 
+fn lookup_type(types: &[MemoryTypeV2], id: MemoryTypeIdV2) -> Option<&MemoryTypeV2> {
+    types
+        .binary_search_by_key(&id, |ty| ty.id)
+        .ok()
+        .and_then(|index| types.get(index))
+}
+
 fn type_has_constrained_validity(
     root: MemoryTypeIdV2,
-    types: &BTreeMap<MemoryTypeIdV2, &MemoryTypeV2>,
-    work: &mut u64,
-    max_work: u64,
+    types: &[MemoryTypeV2],
+    work: &mut WorkMeterV2,
+    max_type_edges: u32,
 ) -> Result<bool, MemoryErrorReasonV2> {
-    let mut pending = vec![root];
-    let mut seen = BTreeSet::new();
+    let mut pending = Vec::new();
+    let capacity = types.len().checked_add(max_type_edges as usize).ok_or(
+        MemoryErrorReasonV2::ResourceLimit {
+            resource: "validity walk stack",
+            actual: u64::MAX,
+            max: u64::from(HARD_MAX_TYPES) + u64::from(HARD_MAX_TYPE_EDGES),
+        },
+    )?;
+    pending
+        .try_reserve_exact(capacity)
+        .map_err(|_| MemoryErrorReasonV2::AllocationFailed {
+            resource: "validity walk stack",
+        })?;
+    pending.push(root);
+    let mut seen = fallible_zeroed_bytes("validity walk seen", types.len())?;
+    work.charge(types.len() as u64)?;
     while let Some(id) = pending.pop() {
-        *work = charge_execution(*work, 1, max_work)?;
-        if !seen.insert(id) {
+        work.charge(1 + binary_lookup_work(types.len() as u64))?;
+        let index = types
+            .binary_search_by_key(&id, |ty| ty.id)
+            .expect("validated type graph");
+        if seen[index] != 0 {
             continue;
         }
-        match &types.get(&id).expect("validated type graph").kind {
+        seen[index] = 1;
+        match &types[index].kind {
             MemoryTypeKindV2::Scalar { validity, .. } => {
                 if *validity != BitValidityV2::Any {
                     return Ok(true);
@@ -2399,7 +2530,7 @@ fn type_has_constrained_validity(
             }
             MemoryTypeKindV2::Array { element, .. } => pending.push(*element),
             MemoryTypeKindV2::Aggregate { fields } => {
-                *work = charge_execution(*work, fields.len() as u64, max_work)?;
+                work.charge(fields.len() as u64)?;
                 pending.extend(fields.iter().map(|field| field.ty));
             }
             MemoryTypeKindV2::OpaqueBytes => {}
@@ -2412,8 +2543,7 @@ fn validate_typed_value(
     ty: &MemoryTypeV2,
     value: TypedWriteValueV2,
     constrained: bool,
-    work: &mut u64,
-    max_work: u64,
+    work: &mut WorkMeterV2,
 ) -> Result<(), MemoryErrorReasonV2> {
     let MemoryTypeKindV2::Scalar {
         bit_width,
@@ -2442,7 +2572,7 @@ fn validate_typed_value(
         BitValidityV2::Char => bits <= 0x10ffff && !(0xd800..=0xdfff).contains(&(bits as u32)),
         BitValidityV2::NonZero => bits != 0,
         BitValidityV2::Ranges(ranges) => {
-            *work = charge_execution(*work, ranges.len() as u64, max_work)?;
+            work.charge(ranges.len() as u64)?;
             ranges
                 .iter()
                 .any(|range| range.start <= bits && bits <= range.end_inclusive)
@@ -2489,6 +2619,14 @@ fn sort_work(items: u64) -> u64 {
     }
     let levels = u64::from(u64::BITS - (items - 1).leading_zeros());
     items.saturating_mul(levels)
+}
+
+fn binary_lookup_work(items: u64) -> u64 {
+    if items == 0 {
+        1
+    } else {
+        u64::from(u64::BITS - (items - 1).leading_zeros()) + 1
+    }
 }
 
 fn range_set_contains(ranges: &[ByteRangeV2], range: ByteRangeV2) -> bool {
@@ -2841,7 +2979,11 @@ impl fmt::Display for MemoryModelErrorV2 {
 impl std::error::Error for MemoryModelErrorV2 {}
 
 impl MemoryProgramV2 {
-    fn encode_unchecked(&self, budgets: MemoryBudgetsV2) -> Result<Vec<u8>, MemoryErrorReasonV2> {
+    fn encode_unchecked(
+        &self,
+        budgets: MemoryBudgetsV2,
+        work: &mut WorkMeterV2,
+    ) -> Result<Vec<u8>, MemoryErrorReasonV2> {
         let mut writer = WriterV2::new(budgets.max_canonical_bytes);
         writer.bytes(&MAGIC)?;
         writer.u16(VERSION)?;
@@ -2855,7 +2997,9 @@ impl MemoryProgramV2 {
         for action in &self.actions {
             encode_action(&mut writer, action)?;
         }
-        Ok(writer.finish())
+        let bytes = writer.finish();
+        work.charge(bytes.len() as u64)?;
+        Ok(bytes)
     }
 }
 
@@ -2991,11 +3135,11 @@ fn decode_collection<T>(
     resource: &'static str,
     count: usize,
     minimum_item_bytes: usize,
-    budgets: MemoryBudgetsV2,
-    work: &mut u64,
+    _budgets: MemoryBudgetsV2,
+    work: &mut WorkMeterV2,
 ) -> Result<Vec<T>, MemoryModelErrorV2> {
     reader.preflight_collection(count, minimum_item_bytes)?;
-    *work = charge(*work, count as u64, budgets.max_validation_work)
+    work.charge(count as u64)
         .map_err(MemoryModelErrorV2::static_error)?;
     let mut values = Vec::new();
     values.try_reserve_exact(count).map_err(|_| {
@@ -3024,7 +3168,7 @@ fn encode_target(
 fn decode_target(
     reader: &mut ReaderV2<'_>,
     budgets: MemoryBudgetsV2,
-    work: &mut u64,
+    work: &mut WorkMeterV2,
 ) -> Result<TargetLayoutV2, MemoryModelErrorV2> {
     let len = reader.u16()? as usize;
     if len > 32 {
@@ -3106,7 +3250,7 @@ fn encode_type(writer: &mut WriterV2, ty: &MemoryTypeV2) -> Result<(), MemoryErr
 fn decode_type(
     reader: &mut ReaderV2<'_>,
     budgets: MemoryBudgetsV2,
-    work: &mut u64,
+    work: &mut WorkMeterV2,
 ) -> Result<MemoryTypeV2, MemoryModelErrorV2> {
     let id = decode_type_id(reader)?;
     let size = reader.u64()?;
@@ -3174,7 +3318,7 @@ fn encode_validity(
 fn decode_validity(
     reader: &mut ReaderV2<'_>,
     budgets: MemoryBudgetsV2,
-    work: &mut u64,
+    work: &mut WorkMeterV2,
 ) -> Result<BitValidityV2, MemoryModelErrorV2> {
     Ok(match reader.u8()? {
         0 => BitValidityV2::Any,
@@ -3391,7 +3535,7 @@ fn encode_action(
 fn decode_action(
     reader: &mut ReaderV2<'_>,
     budgets: MemoryBudgetsV2,
-    work: &mut u64,
+    work: &mut WorkMeterV2,
 ) -> Result<MemoryActionV2, MemoryModelErrorV2> {
     Ok(match reader.u8()? {
         1 => MemoryActionV2::Allocate {
@@ -3521,7 +3665,7 @@ fn encode_place(writer: &mut WriterV2, place: &TypedPlaceV2) -> Result<(), Memor
 fn decode_place(
     reader: &mut ReaderV2<'_>,
     budgets: MemoryBudgetsV2,
-    work: &mut u64,
+    work: &mut WorkMeterV2,
 ) -> Result<TypedPlaceV2, MemoryModelErrorV2> {
     let provenance = decode_provenance(reader)?;
     let base_offset = reader.u64()?;
@@ -3731,7 +3875,7 @@ mod internal_tests {
         let target = TargetLayoutV2::gfx942_xnack_minus();
         let mut machine = MachineV2 {
             target: &target,
-            types: BTreeMap::new(),
+            types: &[],
             epoch: EpochV2(0),
             allocations: BTreeMap::from([
                 (AllocationIdV2::new(1).unwrap(), allocation_state(1, 7)),
@@ -3750,7 +3894,7 @@ mod internal_tests {
             program_identity: UntrustedMemoryProgramIdentityV2([0; 32]),
             action_identity: MemoryActionIdentityV2([0; 32]),
             action_index: 0,
-            execution_work: 0,
+            execution_work: WorkMeterV2::execution(MemoryBudgetsV2::default().max_execution_work),
             budgets: MemoryBudgetsV2::default(),
         };
         let raw = |id, generation| RawPlaceV2 {

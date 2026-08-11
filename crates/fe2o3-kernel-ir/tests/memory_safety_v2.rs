@@ -1141,64 +1141,94 @@ fn validity_traversal_uses_the_global_work_budget_at_exact_boundaries() {
         .collect();
     let one_type = vec![scalar(1, 128, BitValidityV2::Ranges(ranges))];
 
-    for max_validation_work in [3, 1_009] {
-        let error = MemoryProgramV2::new(
-            TargetLayoutV2::gfx942_xnack_minus(),
-            one_type.clone(),
-            vec![],
-            MemoryBudgetsV2 {
-                max_validation_work,
-                ..MemoryBudgetsV2::default()
-            },
-        )
-        .unwrap_err();
-        assert_eq!(
-            error.reason,
-            MemoryErrorReasonV2::ResourceLimit {
-                resource: "validation work",
-                actual: if max_validation_work == 3 { 5 } else { 1_010 },
-                max: max_validation_work,
-            }
-        );
-    }
-
-    let accepted = MemoryProgramV2::new(
+    let reset_reproducer = MemoryProgramV2::new(
         TargetLayoutV2::gfx942_xnack_minus(),
-        one_type,
+        one_type.clone(),
         vec![],
         MemoryBudgetsV2 {
             max_validation_work: 1_010,
             ..MemoryBudgetsV2::default()
         },
     )
-    .unwrap();
-    let bytes = accepted
-        .canonical_bytes(MemoryBudgetsV2::default())
-        .unwrap();
-    let decode_error = MemoryProgramV2::decode_canonical(
-        &bytes,
-        MemoryBudgetsV2 {
-            max_validation_work: 1_005,
-            ..MemoryBudgetsV2::default()
-        },
-    )
     .unwrap_err();
-    assert_eq!(
-        decode_error.reason,
+    assert!(matches!(
+        reset_reproducer.reason,
         MemoryErrorReasonV2::ResourceLimit {
             resource: "validation work",
-            actual: 1_006,
-            max: 1_005,
+            actual: 1_014,
+            max: 1_010,
         }
-    );
-    MemoryProgramV2::decode_canonical(
-        &bytes,
+    ));
+
+    let (accepted, construction_work) = MemoryProgramV2::new_with_work(
+        TargetLayoutV2::gfx942_xnack_minus(),
+        one_type,
+        vec![],
+        MemoryBudgetsV2::default(),
+    )
+    .unwrap();
+    assert!(construction_work > 3_000);
+    let (_, exact_construction_work) = MemoryProgramV2::new_with_work(
+        TargetLayoutV2::gfx942_xnack_minus(),
+        accepted.types().to_vec(),
+        vec![],
         MemoryBudgetsV2 {
-            max_validation_work: 1_010,
+            max_validation_work: construction_work,
             ..MemoryBudgetsV2::default()
         },
     )
     .unwrap();
+    assert_eq!(exact_construction_work, construction_work);
+    assert_eq!(
+        MemoryProgramV2::new(
+            TargetLayoutV2::gfx942_xnack_minus(),
+            accepted.types().to_vec(),
+            vec![],
+            MemoryBudgetsV2 {
+                max_validation_work: construction_work - 1,
+                ..MemoryBudgetsV2::default()
+            },
+        )
+        .unwrap_err()
+        .reason,
+        MemoryErrorReasonV2::ResourceLimit {
+            resource: "validation work",
+            actual: construction_work,
+            max: construction_work - 1,
+        }
+    );
+
+    let (bytes, canonical_work) = accepted
+        .canonical_bytes_with_work(MemoryBudgetsV2::default())
+        .unwrap();
+    assert_eq!(canonical_work + 1, construction_work);
+    let (_, decode_work) =
+        MemoryProgramV2::decode_canonical_with_work(&bytes, MemoryBudgetsV2::default()).unwrap();
+    let (_, exact_decode_work) = MemoryProgramV2::decode_canonical_with_work(
+        &bytes,
+        MemoryBudgetsV2 {
+            max_validation_work: decode_work,
+            ..MemoryBudgetsV2::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(exact_decode_work, decode_work);
+    assert_eq!(
+        MemoryProgramV2::decode_canonical(
+            &bytes,
+            MemoryBudgetsV2 {
+                max_validation_work: decode_work - 1,
+                ..MemoryBudgetsV2::default()
+            },
+        )
+        .unwrap_err()
+        .reason,
+        MemoryErrorReasonV2::ResourceLimit {
+            resource: "validation work",
+            actual: decode_work,
+            max: decode_work - 1,
+        }
+    );
 }
 
 #[test]
