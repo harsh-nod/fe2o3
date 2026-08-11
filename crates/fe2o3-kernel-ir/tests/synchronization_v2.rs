@@ -73,6 +73,12 @@ fn atomic(
     failure_ordering: Option<MemoryOrdering>,
     dialect: AtomicDialect,
 ) -> AtomicAccess {
+    let coherent_allocation = (address_space == AddressSpace::Global
+        && scope == MemoryScope::System)
+        .then_some(CoherentAllocationClaim {
+            allocation: 0,
+            authority: 1,
+        });
     AtomicAccess {
         region: MemoryRegion {
             allocation: 0,
@@ -87,6 +93,7 @@ fn atomic(
         scope,
         success_ordering,
         failure_ordering,
+        coherent_allocation,
     }
 }
 
@@ -316,6 +323,9 @@ fn full_module() -> SynchronizationModuleV2 {
                 kind: SynchronizationEdgeKind::ProgramOrder,
                 scope: MemoryScope::Wavefront,
                 domains: MemoryDomains::GLOBAL,
+                before_outcome: EventOutcome::Unconditional,
+                after_outcome: EventOutcome::Unconditional,
+                read_from: ReadFromCondition::NotApplicable,
             },
             SynchronizationEdge {
                 before: EventId(1),
@@ -323,6 +333,9 @@ fn full_module() -> SynchronizationModuleV2 {
                 kind: SynchronizationEdgeKind::SynchronizesWith,
                 scope: MemoryScope::System,
                 domains: MemoryDomains::GLOBAL,
+                before_outcome: EventOutcome::Unconditional,
+                after_outcome: EventOutcome::Unconditional,
+                read_from: ReadFromCondition::NotApplicable,
             },
             SynchronizationEdge {
                 before: EventId(2),
@@ -330,6 +343,9 @@ fn full_module() -> SynchronizationModuleV2 {
                 kind: SynchronizationEdgeKind::ProgramOrder,
                 scope: MemoryScope::Wavefront,
                 domains: MemoryDomains::GLOBAL,
+                before_outcome: EventOutcome::Unconditional,
+                after_outcome: EventOutcome::Unconditional,
+                read_from: ReadFromCondition::NotApplicable,
             },
         ],
     }
@@ -349,7 +365,7 @@ fn empty_codec_golden_is_versioned_and_canonical() {
     assert_eq!(
         bytes,
         vec![
-            b'F', b'2', b'S', b'Y', b'N', b'C', b'V', b'2', 2, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,
+            b'F', b'2', b'S', b'Y', b'N', b'C', b'V', b'2', 3, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         ]
     );
@@ -391,7 +407,7 @@ fn full_schema_round_trips_and_reports_only_dynamic_obligations() {
         VerifierObligation::ScopeCompatibility {
             first: EventId(4),
             second: EventId(5),
-            required_scope: MemoryScope::Wavefront,
+            required_scope: MemoryScope::Workgroup,
         }
     )));
     assert!(report.obligations.iter().any(|obligation| matches!(
@@ -411,6 +427,238 @@ fn full_schema_round_trips_and_reports_only_dynamic_obligations() {
     sorted.sort();
     sorted.dedup();
     assert_eq!(report.obligations, sorted);
+}
+
+#[test]
+fn system_atomics_require_an_authenticated_coherence_obligation() {
+    let limits = SynchronizationLimits::default();
+    let mut access = atomic(
+        AtomicOperation::Load,
+        u32_ty(),
+        AddressSpace::Global,
+        MemoryScope::System,
+        MemoryOrdering::Acquire,
+        None,
+        AtomicDialect::Rust,
+    );
+    access.coherent_allocation = None;
+    assert_eq!(
+        atomic_module(access.clone()).validate(&limits),
+        Err(ValidationError::InvalidCoherentAllocationClaim(EventId(0)))
+    );
+    access.coherent_allocation = Some(CoherentAllocationClaim {
+        allocation: access.region.allocation,
+        authority: 7,
+    });
+    let report = atomic_module(access.clone()).validate(&limits).unwrap();
+    assert!(
+        report
+            .obligations
+            .contains(&VerifierObligation::AuthenticateCoherentAllocation {
+                event: EventId(0),
+                allocation: access.region.allocation,
+                authority: 7,
+            })
+    );
+    access.coherent_allocation.as_mut().unwrap().allocation += 1;
+    assert_eq!(
+        atomic_module(access).validate(&limits),
+        Err(ValidationError::InvalidCoherentAllocationClaim(EventId(0)))
+    );
+}
+
+#[test]
+fn overlapping_atomics_must_name_the_same_exact_object() {
+    let limits = SynchronizationLimits::default();
+    let first = atomic(
+        AtomicOperation::FetchAdd,
+        u32_ty(),
+        AddressSpace::Lds,
+        MemoryScope::Workgroup,
+        MemoryOrdering::Relaxed,
+        None,
+        AtomicDialect::Rust,
+    );
+    let second = atomic(
+        AtomicOperation::FetchAdd,
+        i64_ty(),
+        AddressSpace::Lds,
+        MemoryScope::Workgroup,
+        MemoryOrdering::Relaxed,
+        None,
+        AtomicDialect::Rust,
+    );
+    assert_eq!(
+        module(vec![
+            event(0, EventKind::Atomic(first.clone())),
+            event(1, EventKind::Atomic(second)),
+        ])
+        .validate(&limits),
+        Err(ValidationError::IncompatibleAtomicObject {
+            first: EventId(0),
+            second: EventId(1),
+        })
+    );
+
+    let mut incompatible_alignment = first.clone();
+    incompatible_alignment.alignment = 8;
+    assert_eq!(
+        module(vec![
+            event(0, EventKind::Atomic(first.clone())),
+            event(1, EventKind::Atomic(incompatible_alignment)),
+        ])
+        .validate(&limits),
+        Err(ValidationError::IncompatibleAtomicObject {
+            first: EventId(0),
+            second: EventId(1),
+        })
+    );
+
+    let mut incompatible_representation = first.clone();
+    incompatible_representation.value_type = ScalarType::Integer {
+        width: IntegerWidth::W32,
+        signed: true,
+    };
+    assert_eq!(
+        module(vec![
+            event(0, EventKind::Atomic(first)),
+            event(1, EventKind::Atomic(incompatible_representation)),
+        ])
+        .validate(&limits),
+        Err(ValidationError::IncompatibleAtomicObject {
+            first: EventId(0),
+            second: EventId(1),
+        })
+    );
+}
+
+#[test]
+fn unknown_invocation_pairs_use_conservative_address_space_scope() {
+    let limits = SynchronizationLimits::default();
+    for (address_space, narrow_scope, required) in [
+        (
+            AddressSpace::Global,
+            MemoryScope::Wavefront,
+            MemoryScope::System,
+        ),
+        (
+            AddressSpace::Lds,
+            MemoryScope::Wavefront,
+            MemoryScope::Workgroup,
+        ),
+    ] {
+        let access = atomic(
+            AtomicOperation::FetchAdd,
+            u32_ty(),
+            address_space,
+            narrow_scope,
+            MemoryOrdering::Relaxed,
+            None,
+            AtomicDialect::Rust,
+        );
+        assert_eq!(
+            module(vec![
+                event(0, EventKind::Atomic(access.clone())),
+                event(1, EventKind::Atomic(access)),
+            ])
+            .validate(&limits),
+            Err(ValidationError::IncompatibleAtomicScope {
+                first: EventId(0),
+                second: EventId(1),
+                required,
+            })
+        );
+    }
+}
+
+#[test]
+fn compare_exchange_edges_require_outcome_and_read_from_preconditions() {
+    let limits = SynchronizationLimits::default();
+    let release = atomic(
+        AtomicOperation::Store,
+        u32_ty(),
+        AddressSpace::Global,
+        MemoryScope::System,
+        MemoryOrdering::Release,
+        None,
+        AtomicDialect::Rust,
+    );
+    let acquire_cas = atomic(
+        AtomicOperation::CompareExchangeStrong,
+        u32_ty(),
+        AddressSpace::Global,
+        MemoryScope::System,
+        MemoryOrdering::AcquireRelease,
+        Some(MemoryOrdering::Relaxed),
+        AtomicDialect::Rust,
+    );
+    let mut candidate = module(vec![
+        event(0, EventKind::Atomic(release)),
+        event(1, EventKind::Atomic(acquire_cas)),
+    ]);
+    candidate.edges.push(SynchronizationEdge {
+        before: EventId(0),
+        after: EventId(1),
+        kind: SynchronizationEdgeKind::SynchronizesWith,
+        scope: MemoryScope::System,
+        domains: MemoryDomains::GLOBAL,
+        before_outcome: EventOutcome::Unconditional,
+        after_outcome: EventOutcome::Unconditional,
+        read_from: ReadFromCondition::VerifierMustProve,
+    });
+    assert_eq!(
+        candidate.validate(&limits),
+        Err(ValidationError::InvalidEdgeEndpointKind(0))
+    );
+    candidate.edges[0].after_outcome = EventOutcome::CompareExchangeFailure;
+    assert_eq!(
+        candidate.validate(&limits),
+        Err(ValidationError::InvalidEdgeEndpointKind(0))
+    );
+    candidate.edges[0].after_outcome = EventOutcome::CompareExchangeSuccess;
+    candidate.edges[0].read_from = ReadFromCondition::NotApplicable;
+    assert_eq!(
+        candidate.validate(&limits),
+        Err(ValidationError::InvalidEdgeEndpointKind(0))
+    );
+    candidate.edges[0].read_from = ReadFromCondition::VerifierMustProve;
+    let report = candidate.validate(&limits).unwrap();
+    assert!(report.obligations.iter().any(|obligation| matches!(
+        obligation,
+        VerifierObligation::HappensBefore {
+            after_outcome: EventOutcome::CompareExchangeSuccess,
+            read_from: ReadFromCondition::VerifierMustProve,
+            ..
+        }
+    )));
+
+    let EventKind::Atomic(after) = &mut candidate.events[1].kind else {
+        unreachable!()
+    };
+    after.failure_ordering = Some(MemoryOrdering::Acquire);
+    candidate.edges[0].after_outcome = EventOutcome::CompareExchangeFailure;
+    assert!(candidate.validate(&limits).is_ok());
+
+    let EventKind::Atomic(before) = &mut candidate.events[0].kind else {
+        unreachable!()
+    };
+    before.operation = AtomicOperation::CompareExchangeStrong;
+    before.success_ordering = MemoryOrdering::AcquireRelease;
+    before.failure_ordering = Some(MemoryOrdering::Acquire);
+    let EventKind::Atomic(after) = &mut candidate.events[1].kind else {
+        unreachable!()
+    };
+    after.operation = AtomicOperation::Load;
+    after.success_ordering = MemoryOrdering::Acquire;
+    after.failure_ordering = None;
+    candidate.edges[0].before_outcome = EventOutcome::CompareExchangeFailure;
+    candidate.edges[0].after_outcome = EventOutcome::Unconditional;
+    assert_eq!(
+        candidate.validate(&limits),
+        Err(ValidationError::InvalidEdgeEndpointKind(0))
+    );
+    candidate.edges[0].before_outcome = EventOutcome::CompareExchangeSuccess;
+    assert!(candidate.validate(&limits).is_ok());
 }
 
 #[test]
@@ -805,11 +1053,15 @@ fn edge_kind_scope_domain_and_ordering_checks_are_exhaustive() {
                     kind: SynchronizationEdgeKind::SynchronizesWith,
                     scope,
                     domains: MemoryDomains::GLOBAL,
+                    before_outcome: EventOutcome::Unconditional,
+                    after_outcome: EventOutcome::Unconditional,
+                    read_from: ReadFromCondition::NotApplicable,
                 });
                 let expected = release != MemoryOrdering::Relaxed
                     && acquire != MemoryOrdering::Relaxed
                     && release != MemoryOrdering::Acquire
-                    && acquire != MemoryOrdering::Release;
+                    && acquire != MemoryOrdering::Release
+                    && scope == MemoryScope::System;
                 assert_eq!(
                     candidate.validate(&limits).is_ok(),
                     expected,
@@ -1017,10 +1269,10 @@ fn codec_rejects_every_truncation_count_bombs_and_noncanonical_fields() {
     }
 
     let mut bad_version = empty.clone();
-    bad_version[8..10].copy_from_slice(&3_u16.to_le_bytes());
+    bad_version[8..10].copy_from_slice(&4_u16.to_le_bytes());
     assert_eq!(
         decode_synchronization_v2(&bad_version, &limits),
-        Err(DecodeError::UnsupportedVersion(3))
+        Err(DecodeError::UnsupportedVersion(4))
     );
     let mut bad_target = empty.clone();
     bad_target[16] = 0xff;
@@ -1116,6 +1368,188 @@ fn one_hundred_thousand_semantic_cases_match_independent_oracle() {
             && valid_ordering_for(operation, success)
             && (!operation.compare_exchange_for_test() || valid_failure(success, failure.unwrap()));
         assert_eq!(atomic_module(access).validate(&limits).is_ok(), expected);
+    }
+}
+
+#[test]
+fn one_hundred_twenty_thousand_repair_cases_match_independent_oracle() {
+    let limits = SynchronizationLimits::default();
+    let mut state = 0xd1b5_4a32_d192_ed03_u64;
+    for case in 0..120_000 {
+        state = state
+            .wrapping_mul(2_862_933_555_777_941_757)
+            .wrapping_add(3_037_000_493);
+        let (candidate, expected) = match case % 4 {
+            0 => {
+                let scope = SCOPES[((state >> 8) as usize) % SCOPES.len()];
+                let mut access = atomic(
+                    AtomicOperation::FetchAdd,
+                    u32_ty(),
+                    AddressSpace::Global,
+                    scope,
+                    MemoryOrdering::Relaxed,
+                    None,
+                    AtomicDialect::Rust,
+                );
+                let mode = ((state >> 16) & 3) as u8;
+                access.coherent_allocation = match mode {
+                    0 => None,
+                    1 => Some(CoherentAllocationClaim {
+                        allocation: access.region.allocation,
+                        authority: 9,
+                    }),
+                    2 => Some(CoherentAllocationClaim {
+                        allocation: access.region.allocation + 1,
+                        authority: 9,
+                    }),
+                    _ => Some(CoherentAllocationClaim {
+                        allocation: access.region.allocation,
+                        authority: 0,
+                    }),
+                };
+                let expected = if scope == MemoryScope::System {
+                    mode == 1
+                } else {
+                    mode == 0
+                };
+                (atomic_module(access), expected)
+            }
+            1 => {
+                let left = atomic(
+                    AtomicOperation::FetchAdd,
+                    u32_ty(),
+                    AddressSpace::Lds,
+                    MemoryScope::Workgroup,
+                    MemoryOrdering::Relaxed,
+                    None,
+                    AtomicDialect::Rust,
+                );
+                let mut right = left.clone();
+                let mode = ((state >> 24) & 3) as u8;
+                match mode {
+                    0 => {}
+                    1 => {
+                        right.value_type = i64_ty();
+                        right.region.bytes = 8;
+                        right.alignment = 8;
+                    }
+                    2 => right.alignment = 8,
+                    _ => {
+                        right.value_type = ScalarType::Integer {
+                            width: IntegerWidth::W32,
+                            signed: true,
+                        };
+                    }
+                }
+                (
+                    module(vec![
+                        event(0, EventKind::Atomic(left)),
+                        event(1, EventKind::Atomic(right)),
+                    ]),
+                    mode == 0,
+                )
+            }
+            2 => {
+                let address_space = if state & 1 == 0 {
+                    AddressSpace::Global
+                } else {
+                    AddressSpace::Lds
+                };
+                let scope = if address_space == AddressSpace::Global {
+                    SCOPES[((state >> 32) as usize) % SCOPES.len()]
+                } else if state & 2 == 0 {
+                    MemoryScope::Wavefront
+                } else {
+                    MemoryScope::Workgroup
+                };
+                let access = atomic(
+                    AtomicOperation::FetchAdd,
+                    u32_ty(),
+                    address_space,
+                    scope,
+                    MemoryOrdering::Relaxed,
+                    None,
+                    AtomicDialect::Rust,
+                );
+                let expected = match address_space {
+                    AddressSpace::Global => scope == MemoryScope::System,
+                    AddressSpace::Lds => scope == MemoryScope::Workgroup,
+                    _ => unreachable!(),
+                };
+                (
+                    module(vec![
+                        event(0, EventKind::Atomic(access.clone())),
+                        event(1, EventKind::Atomic(access)),
+                    ]),
+                    expected,
+                )
+            }
+            _ => {
+                let failure = if state & 1 == 0 {
+                    MemoryOrdering::Relaxed
+                } else {
+                    MemoryOrdering::Acquire
+                };
+                let outcome = match (state >> 40) % 3 {
+                    0 => EventOutcome::Unconditional,
+                    1 => EventOutcome::CompareExchangeSuccess,
+                    _ => EventOutcome::CompareExchangeFailure,
+                };
+                let read_from = if state & 4 == 0 {
+                    ReadFromCondition::NotApplicable
+                } else {
+                    ReadFromCondition::VerifierMustProve
+                };
+                let mut candidate = module(vec![
+                    event(
+                        0,
+                        EventKind::Atomic(atomic(
+                            AtomicOperation::Store,
+                            u32_ty(),
+                            AddressSpace::Global,
+                            MemoryScope::System,
+                            MemoryOrdering::Release,
+                            None,
+                            AtomicDialect::Rust,
+                        )),
+                    ),
+                    event(
+                        1,
+                        EventKind::Atomic(atomic(
+                            AtomicOperation::CompareExchangeStrong,
+                            u32_ty(),
+                            AddressSpace::Global,
+                            MemoryScope::System,
+                            MemoryOrdering::AcquireRelease,
+                            Some(failure),
+                            AtomicDialect::Rust,
+                        )),
+                    ),
+                ]);
+                candidate.edges.push(SynchronizationEdge {
+                    before: EventId(0),
+                    after: EventId(1),
+                    kind: SynchronizationEdgeKind::SynchronizesWith,
+                    scope: MemoryScope::System,
+                    domains: MemoryDomains::GLOBAL,
+                    before_outcome: EventOutcome::Unconditional,
+                    after_outcome: outcome,
+                    read_from,
+                });
+                let expected = read_from == ReadFromCondition::VerifierMustProve
+                    && match outcome {
+                        EventOutcome::CompareExchangeSuccess => true,
+                        EventOutcome::CompareExchangeFailure => failure == MemoryOrdering::Acquire,
+                        EventOutcome::Unconditional => false,
+                    };
+                (candidate, expected)
+            }
+        };
+        assert_eq!(
+            candidate.validate(&limits).is_ok(),
+            expected,
+            "case={case} state={state:#x}"
+        );
     }
 }
 
