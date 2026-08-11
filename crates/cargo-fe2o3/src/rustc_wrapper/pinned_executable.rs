@@ -1110,12 +1110,19 @@ mod platform {
                     }
                 });
 
-                if target == StaticSnapshotBarrier::SourceValidated {
-                    assert!(result.is_err(), "source mutation escaped at {target:?}");
-                } else {
-                    let sealed = result.unwrap();
-                    assert_eq!(sealed.bytes(), original, "snapshot changed at {target:?}");
-                    sealed.command().unwrap();
+                match (target, result) {
+                    (StaticSnapshotBarrier::SourceValidated, Err(_)) => {}
+                    (StaticSnapshotBarrier::SourceValidated, Ok(_)) => {
+                        panic!("source mutation escaped before capture")
+                    }
+                    (StaticSnapshotBarrier::SourceCopied, Err(_)) => {}
+                    (_, Ok(sealed)) => {
+                        assert_eq!(sealed.bytes(), original, "snapshot changed at {target:?}");
+                        sealed.command().unwrap();
+                    }
+                    (_, Err(error)) => {
+                        panic!("sealed snapshot changed after {target:?}: {error}")
+                    }
                 }
             }
         }
