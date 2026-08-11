@@ -7,6 +7,10 @@ pub const MAX_CONTROL_FLOW_BLOCKS: usize = MAX_BLOCKS_V1;
 pub const MAX_CONTROL_FLOW_EDGES: usize = MAX_BLOCKS_V1 * 2;
 pub const MAX_CONTROL_FLOW_NATURAL_LOOPS: usize = MAX_BLOCKS_V1;
 pub const MAX_CONTROL_FLOW_LOOP_BODY_MEMBERSHIPS: usize = MAX_BLOCKS_V1;
+pub const MAX_CONTROL_FLOW_DOMINANCE_FRONTIER_ENTRIES: usize = 512 * 517 / 2;
+pub const MAX_CONTROL_FLOW_IDF_ENTRIES: usize = MAX_BLOCKS_V1 * 2;
+pub const MAX_CONTROL_FLOW_STORAGE_ITEMS: usize = MAX_BLOCKS_V1 * 64;
+pub const MAX_SSA_PLACEMENT_OUTPUT_ITEMS: usize = MAX_BLOCKS_V1;
 pub const MAX_CONTROL_FLOW_WORK_UNITS: usize = MAX_BLOCKS_V1 * 128;
 
 /// A separately bounded resource consumed by control-flow analysis.
@@ -16,6 +20,10 @@ pub enum ControlFlowResource {
     Edges,
     NaturalLoops,
     NaturalLoopBodyMemberships,
+    DominanceFrontierEntries,
+    IteratedDominanceFrontierEntries,
+    SsaPlacementOutputItems,
+    StorageItems,
     WorkUnits,
 }
 
@@ -26,17 +34,25 @@ impl ControlFlowResource {
             Self::Edges => MAX_CONTROL_FLOW_EDGES,
             Self::NaturalLoops => MAX_CONTROL_FLOW_NATURAL_LOOPS,
             Self::NaturalLoopBodyMemberships => MAX_CONTROL_FLOW_LOOP_BODY_MEMBERSHIPS,
+            Self::DominanceFrontierEntries => MAX_CONTROL_FLOW_DOMINANCE_FRONTIER_ENTRIES,
+            Self::IteratedDominanceFrontierEntries => MAX_CONTROL_FLOW_IDF_ENTRIES,
+            Self::SsaPlacementOutputItems => MAX_SSA_PLACEMENT_OUTPUT_ITEMS,
+            Self::StorageItems => MAX_CONTROL_FLOW_STORAGE_ITEMS,
             Self::WorkUnits => MAX_CONTROL_FLOW_WORK_UNITS,
         }
     }
 
-    const fn description(self) -> &'static str {
+    pub(crate) const fn description(self) -> &'static str {
         match self {
             Self::Blocks => "blocks",
             Self::Edges => "edges",
             Self::NaturalLoops => "natural loops",
             Self::NaturalLoopBodyMemberships => "natural-loop body memberships",
-            Self::WorkUnits => "natural-loop forest work units",
+            Self::DominanceFrontierEntries => "dominance-frontier entries",
+            Self::IteratedDominanceFrontierEntries => "iterated-dominance-frontier entries",
+            Self::SsaPlacementOutputItems => "pruned-SSA output items",
+            Self::StorageItems => "aggregate analysis storage items",
+            Self::WorkUnits => "aggregate analysis work units",
         }
     }
 }
@@ -48,6 +64,10 @@ pub struct ControlFlowResourceUsage {
     edges: usize,
     natural_loops: usize,
     natural_loop_body_memberships: usize,
+    dominance_frontier_entries: usize,
+    iterated_dominance_frontier_entries: usize,
+    ssa_placement_output_items: usize,
+    storage_items: usize,
     work_units: usize,
 }
 
@@ -68,48 +88,202 @@ impl ControlFlowResourceUsage {
         self.natural_loop_body_memberships
     }
 
+    pub const fn dominance_frontier_entries(self) -> usize {
+        self.dominance_frontier_entries
+    }
+
+    pub const fn iterated_dominance_frontier_entries(self) -> usize {
+        self.iterated_dominance_frontier_entries
+    }
+
+    pub const fn ssa_placement_output_items(self) -> usize {
+        self.ssa_placement_output_items
+    }
+
+    pub const fn storage_items(self) -> usize {
+        self.storage_items
+    }
+
     pub const fn work_units(self) -> usize {
         self.work_units
     }
 }
 
 #[derive(Default)]
-struct ControlFlowBudget {
+pub(crate) struct ControlFlowBudget {
     usage: ControlFlowResourceUsage,
 }
 
 impl ControlFlowBudget {
+    pub(crate) const fn from_usage(usage: ControlFlowResourceUsage) -> Self {
+        Self { usage }
+    }
+
+    pub(crate) const fn usage(&self) -> ControlFlowResourceUsage {
+        self.usage
+    }
+
     fn reserve(
         &mut self,
         resource: ControlFlowResource,
         amount: usize,
     ) -> Result<(), ControlFlowDiagnostic> {
-        let current = match resource {
-            ControlFlowResource::Blocks => &mut self.usage.blocks,
-            ControlFlowResource::Edges => &mut self.usage.edges,
-            ControlFlowResource::NaturalLoops => &mut self.usage.natural_loops,
-            ControlFlowResource::NaturalLoopBodyMemberships => {
-                &mut self.usage.natural_loop_body_memberships
-            }
-            ControlFlowResource::WorkUnits => &mut self.usage.work_units,
+        self.reserve_with_storage(resource, amount, 0)
+    }
+
+    fn reserve_with_storage(
+        &mut self,
+        resource: ControlFlowResource,
+        amount: usize,
+        storage_amount: usize,
+    ) -> Result<(), ControlFlowDiagnostic> {
+        let current = self.resource_usage(resource);
+        let required = checked_budget_add(current, amount);
+        let storage_required = if resource == ControlFlowResource::StorageItems {
+            required
+        } else {
+            checked_budget_add(self.usage.storage_items, storage_amount)
         };
-        let limit = resource.limit();
-        let required = current
-            .checked_add(amount)
-            .unwrap_or(limit.saturating_add(1));
-        if required > limit {
-            return Err(ControlFlowDiagnostic::ResourceLimitExceeded {
+        let work_required = if resource == ControlFlowResource::WorkUnits {
+            required
+        } else {
+            self.usage.work_units
+        };
+        if required > resource.limit() {
+            return Err(resource_error(
                 resource,
                 required,
-                limit,
-            });
+                resource.limit(),
+                storage_required,
+                work_required,
+            ));
         }
-        *current = required;
+        if storage_required > MAX_CONTROL_FLOW_STORAGE_ITEMS {
+            return Err(resource_error(
+                ControlFlowResource::StorageItems,
+                storage_required,
+                MAX_CONTROL_FLOW_STORAGE_ITEMS,
+                storage_required,
+                work_required,
+            ));
+        }
+        self.set_resource_usage(resource, required);
+        if resource != ControlFlowResource::StorageItems {
+            self.usage.storage_items = storage_required;
+        }
         Ok(())
     }
 
-    fn work(&mut self, amount: usize) -> Result<(), ControlFlowDiagnostic> {
+    fn resource_usage(&self, resource: ControlFlowResource) -> usize {
+        match resource {
+            ControlFlowResource::Blocks => self.usage.blocks,
+            ControlFlowResource::Edges => self.usage.edges,
+            ControlFlowResource::NaturalLoops => self.usage.natural_loops,
+            ControlFlowResource::NaturalLoopBodyMemberships => {
+                self.usage.natural_loop_body_memberships
+            }
+            ControlFlowResource::DominanceFrontierEntries => self.usage.dominance_frontier_entries,
+            ControlFlowResource::IteratedDominanceFrontierEntries => {
+                self.usage.iterated_dominance_frontier_entries
+            }
+            ControlFlowResource::SsaPlacementOutputItems => self.usage.ssa_placement_output_items,
+            ControlFlowResource::StorageItems => self.usage.storage_items,
+            ControlFlowResource::WorkUnits => self.usage.work_units,
+        }
+    }
+
+    fn set_resource_usage(&mut self, resource: ControlFlowResource, value: usize) {
+        match resource {
+            ControlFlowResource::Blocks => self.usage.blocks = value,
+            ControlFlowResource::Edges => self.usage.edges = value,
+            ControlFlowResource::NaturalLoops => self.usage.natural_loops = value,
+            ControlFlowResource::NaturalLoopBodyMemberships => {
+                self.usage.natural_loop_body_memberships = value;
+            }
+            ControlFlowResource::DominanceFrontierEntries => {
+                self.usage.dominance_frontier_entries = value;
+            }
+            ControlFlowResource::IteratedDominanceFrontierEntries => {
+                self.usage.iterated_dominance_frontier_entries = value;
+            }
+            ControlFlowResource::SsaPlacementOutputItems => {
+                self.usage.ssa_placement_output_items = value;
+            }
+            ControlFlowResource::StorageItems => self.usage.storage_items = value,
+            ControlFlowResource::WorkUnits => self.usage.work_units = value,
+        }
+    }
+
+    pub(crate) fn storage(&mut self, amount: usize) -> Result<(), ControlFlowDiagnostic> {
+        self.reserve(ControlFlowResource::StorageItems, amount)
+    }
+
+    fn natural_loop(&mut self, amount: usize) -> Result<(), ControlFlowDiagnostic> {
+        self.reserve_with_storage(ControlFlowResource::NaturalLoops, amount, amount)
+    }
+
+    fn natural_loop_membership(&mut self, amount: usize) -> Result<(), ControlFlowDiagnostic> {
+        self.reserve_with_storage(
+            ControlFlowResource::NaturalLoopBodyMemberships,
+            amount,
+            amount,
+        )
+    }
+
+    fn dominance_frontier_entry(&mut self, amount: usize) -> Result<(), ControlFlowDiagnostic> {
+        self.reserve_with_storage(
+            ControlFlowResource::DominanceFrontierEntries,
+            amount,
+            amount,
+        )
+    }
+
+    fn idf_entry(&mut self, amount: usize) -> Result<(), ControlFlowDiagnostic> {
+        self.reserve_with_storage(
+            ControlFlowResource::IteratedDominanceFrontierEntries,
+            amount,
+            amount,
+        )
+    }
+
+    pub(crate) fn ssa_output(&mut self, amount: usize) -> Result<(), ControlFlowDiagnostic> {
+        self.reserve_with_storage(ControlFlowResource::SsaPlacementOutputItems, amount, amount)
+    }
+
+    pub(crate) fn work(&mut self, amount: usize) -> Result<(), ControlFlowDiagnostic> {
         self.reserve(ControlFlowResource::WorkUnits, amount)
+    }
+}
+
+fn checked_budget_add(current: usize, amount: usize) -> usize {
+    if let Some(required) = current.checked_add(amount) {
+        required
+    } else {
+        usize::MAX
+    }
+}
+
+fn checked_budget_mul(left: usize, right: usize) -> usize {
+    if let Some(required) = left.checked_mul(right) {
+        required
+    } else {
+        usize::MAX
+    }
+}
+
+fn resource_error(
+    resource: ControlFlowResource,
+    required: usize,
+    limit: usize,
+    storage_items: usize,
+    work_units: usize,
+) -> ControlFlowDiagnostic {
+    ControlFlowDiagnostic::ResourceLimitExceeded {
+        resource,
+        required,
+        limit,
+        storage_items,
+        work_units,
     }
 }
 
@@ -149,6 +323,8 @@ pub enum ControlFlowDiagnostic {
         resource: ControlFlowResource,
         required: usize,
         limit: usize,
+        storage_items: usize,
+        work_units: usize,
     },
     DuplicateBlock {
         block: BlockId,
@@ -175,9 +351,11 @@ impl fmt::Display for ControlFlowDiagnostic {
                 resource,
                 required,
                 limit,
+                storage_items,
+                work_units,
             } => write!(
                 formatter,
-                "{} require {required} items, exceeding the deterministic limit {limit}",
+                "{} require {required} items, exceeding the deterministic limit {limit}; aggregate storage {storage_items}, aggregate work {work_units}",
                 resource.description()
             ),
             Self::DuplicateBlock { block } => write!(formatter, "duplicate block {block}"),
@@ -345,29 +523,63 @@ impl ControlFlowAnalysis {
     /// Computes the iterated dominance frontier for SSA phi placement.
     ///
     /// Returns `None` if any definition block is unknown or unreachable. The
-    /// result is not pruned by liveness; callers should intersect it with
-    /// variable-specific live-in blocks when constructing pruned SSA.
+    /// method also fails closed to `None` if its bounded traversal exhausts a
+    /// resource limit. Use [`Self::try_iterated_dominance_frontier`] when the
+    /// resource diagnostic is required. The result is not pruned by liveness;
+    /// callers should intersect it with variable-specific live-in blocks when
+    /// constructing pruned SSA.
     pub fn iterated_dominance_frontier(
         &self,
         definition_blocks: &BTreeSet<BlockId>,
     ) -> Option<BTreeSet<BlockId>> {
+        self.try_iterated_dominance_frontier(definition_blocks)
+            .ok()
+            .flatten()
+    }
+
+    /// Fallible bounded form of [`Self::iterated_dominance_frontier`].
+    pub fn try_iterated_dominance_frontier(
+        &self,
+        definition_blocks: &BTreeSet<BlockId>,
+    ) -> Result<Option<BTreeSet<BlockId>>, ControlFlowDiagnostic> {
+        let mut budget = ControlFlowBudget::from_usage(self.resource_usage);
+        self.iterated_dominance_frontier_with_budget(definition_blocks, &mut budget)
+    }
+
+    pub(crate) fn iterated_dominance_frontier_with_budget(
+        &self,
+        definition_blocks: &BTreeSet<BlockId>,
+        budget: &mut ControlFlowBudget,
+    ) -> Result<Option<BTreeSet<BlockId>>, ControlFlowDiagnostic> {
+        budget.work(definition_blocks.len())?;
         if !definition_blocks
             .iter()
             .all(|block| self.reachable.contains(block))
         {
-            return None;
+            return Ok(None);
         }
 
+        budget.storage(definition_blocks.len())?;
         let mut phi_blocks = BTreeSet::new();
         let mut pending = definition_blocks.clone();
         while let Some(block) = pending.pop_first() {
+            budget.work(1)?;
             for frontier in &self.dominance_frontiers[&block] {
-                if phi_blocks.insert(*frontier) && !definition_blocks.contains(frontier) {
-                    pending.insert(*frontier);
+                budget.work(1)?;
+                if !phi_blocks.contains(frontier) {
+                    let enqueue = !definition_blocks.contains(frontier);
+                    budget.idf_entry(1)?;
+                    if enqueue {
+                        budget.storage(1)?;
+                    }
+                    phi_blocks.insert(*frontier);
+                    if enqueue {
+                        pending.insert(*frontier);
+                    }
                 }
             }
         }
-        Some(phi_blocks)
+        Ok(Some(phi_blocks))
     }
 
     /// Edges whose target dominates their source.
@@ -491,8 +703,14 @@ pub fn analyze_control_flow(function: &Function) -> Result<ControlFlowAnalysis, 
     let predecessors = compute_predecessors(&block_ids, &successors);
     let reachable = compute_reachable(entry, &successors);
     let reverse_postorder = compute_reverse_postorder(entry, &successors);
-    let immediate_dominators =
-        compute_immediate_dominators(entry, &reachable, &predecessors, &reverse_postorder);
+    let immediate_dominators = compute_immediate_dominators(
+        entry,
+        &reachable,
+        &predecessors,
+        &reverse_postorder,
+        &mut budget,
+    )
+    .map_err(|diagnostic| errors(function, [diagnostic]))?;
     let dominator_tree_children =
         compute_dominator_tree_children(&reachable, &immediate_dominators);
     let (dominator_preorder, dominator_subtree_end) =
@@ -503,7 +721,9 @@ pub fn analyze_control_flow(function: &Function) -> Result<ControlFlowAnalysis, 
         &successors,
         &immediate_dominators,
         &dominator_tree_children,
-    );
+        &mut budget,
+    )
+    .map_err(|diagnostic| errors(function, [diagnostic]))?;
     let backedges = compute_backedges(
         &reachable,
         &successors,
@@ -656,7 +876,9 @@ fn compute_immediate_dominators(
     reachable: &BTreeSet<BlockId>,
     predecessors: &BTreeMap<BlockId, BTreeSet<BlockId>>,
     reverse_postorder: &[BlockId],
-) -> BTreeMap<BlockId, Option<BlockId>> {
+    budget: &mut ControlFlowBudget,
+) -> Result<BTreeMap<BlockId, Option<BlockId>>, ControlFlowDiagnostic> {
+    budget.storage(checked_budget_mul(reachable.len(), 2))?;
     let rpo_index = reverse_postorder
         .iter()
         .copied()
@@ -671,18 +893,30 @@ fn compute_immediate_dominators(
     immediate.insert(entry, Some(entry));
 
     loop {
+        budget.work(1)?;
         let mut changed = false;
         for block in reverse_postorder.iter().copied().skip(1) {
-            let mut processed = predecessors[&block]
-                .iter()
-                .copied()
-                .filter(|predecessor| immediate[predecessor].is_some());
-            let Some(mut next) = processed.next() else {
+            budget.work(1)?;
+            let mut next = None;
+            for predecessor in &predecessors[&block] {
+                budget.work(1)?;
+                if immediate[predecessor].is_some() {
+                    next = Some(if let Some(current) = next {
+                        intersect_dominator_paths(
+                            *predecessor,
+                            current,
+                            &immediate,
+                            &rpo_index,
+                            budget,
+                        )?
+                    } else {
+                        *predecessor
+                    });
+                }
+            }
+            let Some(next) = next else {
                 continue;
             };
-            for predecessor in processed {
-                next = intersect_dominator_paths(predecessor, next, &immediate, &rpo_index);
-            }
             if immediate[&block] != Some(next) {
                 immediate.insert(block, Some(next));
                 changed = true;
@@ -690,7 +924,7 @@ fn compute_immediate_dominators(
         }
         if !changed {
             immediate.insert(entry, None);
-            return immediate;
+            return Ok(immediate);
         }
     }
 }
@@ -700,17 +934,21 @@ fn intersect_dominator_paths(
     mut right: BlockId,
     immediate: &BTreeMap<BlockId, Option<BlockId>>,
     rpo_index: &BTreeMap<BlockId, usize>,
-) -> BlockId {
+    budget: &mut ControlFlowBudget,
+) -> Result<BlockId, ControlFlowDiagnostic> {
     while left != right {
+        budget.work(1)?;
         while rpo_index[&left] > rpo_index[&right] {
+            budget.work(1)?;
             left = immediate[&left].expect("processed CHK predecessor has an immediate dominator");
         }
         while rpo_index[&right] > rpo_index[&left] {
+            budget.work(1)?;
             right =
                 immediate[&right].expect("processed CHK predecessor has an immediate dominator");
         }
     }
-    left
+    Ok(left)
 }
 
 fn compute_dominator_tree_children(
@@ -766,21 +1004,21 @@ fn compute_dominance_frontiers(
     successors: &BTreeMap<BlockId, BTreeSet<BlockId>>,
     immediate: &BTreeMap<BlockId, Option<BlockId>>,
     children: &BTreeMap<BlockId, BTreeSet<BlockId>>,
-) -> BTreeMap<BlockId, BTreeSet<BlockId>> {
+    budget: &mut ControlFlowBudget,
+) -> Result<BTreeMap<BlockId, BTreeSet<BlockId>>, ControlFlowDiagnostic> {
+    budget.storage(checked_budget_mul(reachable.len(), 3))?;
     let mut tree_postorder = Vec::with_capacity(reachable.len());
     let mut pending = vec![(entry, false)];
     while let Some((block, finish)) = pending.pop() {
+        budget.work(1)?;
         if finish {
             tree_postorder.push(block);
         } else {
             pending.push((block, true));
-            pending.extend(
-                children[&block]
-                    .iter()
-                    .rev()
-                    .copied()
-                    .map(|child| (child, false)),
-            );
+            for child in children[&block].iter().rev() {
+                budget.work(1)?;
+                pending.push((*child, false));
+            }
         }
     }
 
@@ -790,22 +1028,28 @@ fn compute_dominance_frontiers(
         .map(|block| (block, BTreeSet::new()))
         .collect::<BTreeMap<_, _>>();
     for block in tree_postorder {
+        budget.work(1)?;
         let mut frontier = BTreeSet::new();
         for successor in &successors[&block] {
+            budget.work(1)?;
             if reachable.contains(successor) && immediate[successor] != Some(block) {
+                budget.dominance_frontier_entry(1)?;
                 frontier.insert(*successor);
             }
         }
         for child in &children[&block] {
+            budget.work(1)?;
             for candidate in &frontiers[child] {
-                if immediate[candidate] != Some(block) {
+                budget.work(1)?;
+                if immediate[candidate] != Some(block) && !frontier.contains(candidate) {
+                    budget.dominance_frontier_entry(1)?;
                     frontier.insert(*candidate);
                 }
             }
         }
         frontiers.insert(block, frontier);
     }
-    frontiers
+    Ok(frontiers)
 }
 
 #[derive(Debug)]
@@ -873,7 +1117,7 @@ fn compute_natural_loops(
     }
     budget.work(block_ids.len())?;
     let loop_count = latch_counts.iter().filter(|count| **count != 0).count();
-    budget.reserve(ControlFlowResource::NaturalLoops, loop_count)?;
+    budget.natural_loop(loop_count)?;
 
     let mut latch_offsets = Vec::with_capacity(block_ids.len() + 1);
     latch_offsets.push(0_usize);
@@ -908,13 +1152,13 @@ fn compute_natural_loops(
         let mut body = Vec::new();
         let mut pending = Vec::new();
 
-        budget.reserve(ControlFlowResource::NaturalLoopBodyMemberships, 1)?;
+        budget.natural_loop_membership(1)?;
         marks[header] = generation;
         body.push(header);
         for latch in &latches {
             budget.work(1)?;
             if marks[*latch] != generation {
-                budget.reserve(ControlFlowResource::NaturalLoopBodyMemberships, 1)?;
+                budget.natural_loop_membership(1)?;
                 marks[*latch] = generation;
                 body.push(*latch);
                 if *latch != header {
@@ -930,7 +1174,7 @@ fn compute_natural_loops(
             {
                 budget.work(1)?;
                 if marks[*predecessor] != generation {
-                    budget.reserve(ControlFlowResource::NaturalLoopBodyMemberships, 1)?;
+                    budget.natural_loop_membership(1)?;
                     marks[*predecessor] = generation;
                     body.push(*predecessor);
                     if *predecessor != header {
@@ -1249,6 +1493,10 @@ mod resource_budget_tests {
             ControlFlowResource::Edges,
             ControlFlowResource::NaturalLoops,
             ControlFlowResource::NaturalLoopBodyMemberships,
+            ControlFlowResource::DominanceFrontierEntries,
+            ControlFlowResource::IteratedDominanceFrontierEntries,
+            ControlFlowResource::SsaPlacementOutputItems,
+            ControlFlowResource::StorageItems,
             ControlFlowResource::WorkUnits,
         ];
 
@@ -1261,6 +1509,16 @@ mod resource_budget_tests {
                     resource,
                     required: resource.limit() + 1,
                     limit: resource.limit(),
+                    storage_items: if resource == ControlFlowResource::StorageItems {
+                        resource.limit() + 1
+                    } else {
+                        0
+                    },
+                    work_units: if resource == ControlFlowResource::WorkUnits {
+                        resource.limit() + 1
+                    } else {
+                        0
+                    },
                 })
             );
         }
@@ -1272,10 +1530,56 @@ mod resource_budget_tests {
             resource: ControlFlowResource::NaturalLoopBodyMemberships,
             required: MAX_CONTROL_FLOW_LOOP_BODY_MEMBERSHIPS + 1,
             limit: MAX_CONTROL_FLOW_LOOP_BODY_MEMBERSHIPS,
+            storage_items: 65_537,
+            work_units: 123,
         };
         assert_eq!(
             diagnostic.to_string(),
-            "natural-loop body memberships require 65537 items, exceeding the deterministic limit 65536"
+            "natural-loop body memberships require 65537 items, exceeding the deterministic limit 65536; aggregate storage 65537, aggregate work 123"
         );
+    }
+
+    #[test]
+    fn idf_entries_precharge_storage_at_the_boundary_and_on_overflow() {
+        let mut budget = ControlFlowBudget::default();
+        budget.idf_entry(MAX_CONTROL_FLOW_IDF_ENTRIES).unwrap();
+        assert_eq!(
+            budget.usage(),
+            ControlFlowResourceUsage {
+                iterated_dominance_frontier_entries: MAX_CONTROL_FLOW_IDF_ENTRIES,
+                storage_items: MAX_CONTROL_FLOW_IDF_ENTRIES,
+                ..ControlFlowResourceUsage::default()
+            }
+        );
+        assert_eq!(
+            budget.idf_entry(1),
+            Err(ControlFlowDiagnostic::ResourceLimitExceeded {
+                resource: ControlFlowResource::IteratedDominanceFrontierEntries,
+                required: MAX_CONTROL_FLOW_IDF_ENTRIES + 1,
+                limit: MAX_CONTROL_FLOW_IDF_ENTRIES,
+                storage_items: MAX_CONTROL_FLOW_IDF_ENTRIES + 1,
+                work_units: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn checked_budget_arithmetic_rejects_overflow_without_mutation() {
+        let initial = ControlFlowResourceUsage {
+            work_units: 1,
+            ..ControlFlowResourceUsage::default()
+        };
+        let mut budget = ControlFlowBudget::from_usage(initial);
+        assert_eq!(
+            budget.work(usize::MAX),
+            Err(ControlFlowDiagnostic::ResourceLimitExceeded {
+                resource: ControlFlowResource::WorkUnits,
+                required: usize::MAX,
+                limit: MAX_CONTROL_FLOW_WORK_UNITS,
+                storage_items: 0,
+                work_units: usize::MAX,
+            })
+        );
+        assert_eq!(budget.usage(), initial);
     }
 }

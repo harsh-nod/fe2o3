@@ -1,6 +1,7 @@
 use fe2o3_kernel_analysis::{
     ControlFlowDiagnostic, ControlFlowEdge, ControlFlowResource, MAX_CONTROL_FLOW_BLOCKS,
-    MAX_CONTROL_FLOW_EDGES, MAX_CONTROL_FLOW_LOOP_BODY_MEMBERSHIPS, MAX_CONTROL_FLOW_NATURAL_LOOPS,
+    MAX_CONTROL_FLOW_DOMINANCE_FRONTIER_ENTRIES, MAX_CONTROL_FLOW_EDGES,
+    MAX_CONTROL_FLOW_LOOP_BODY_MEMBERSHIPS, MAX_CONTROL_FLOW_NATURAL_LOOPS,
     MAX_CONTROL_FLOW_WORK_UNITS, analyze_control_flow,
 };
 use fe2o3_kernel_ir::{
@@ -66,6 +67,24 @@ fn raw_conditional(id: u32, then_target: u32, else_target: u32) -> BasicBlock {
 
 fn ids(values: &[u32]) -> BTreeSet<BlockId> {
     values.iter().copied().map(BlockId).collect()
+}
+
+fn two_arm_frontier_ladder(rungs: u32) -> Function {
+    let left_start = 1_u32;
+    let right_start = left_start + rungs;
+    let exit = right_start + rungs;
+    let mut blocks = Vec::with_capacity((2 * rungs + 2) as usize);
+    blocks.push(raw_conditional(0, left_start, right_start));
+    for rung in 0..rungs {
+        let left = left_start + rung;
+        let right = right_start + rung;
+        let next_left = if rung + 1 == rungs { exit } else { left + 1 };
+        let next_right = if rung + 1 == rungs { exit } else { right + 1 };
+        blocks.push(raw_conditional(left, next_left, right));
+        blocks.push(branch(right, next_right));
+    }
+    blocks.push(returning(exit));
+    function(blocks)
 }
 
 #[test]
@@ -211,7 +230,7 @@ fn accepts_nested_natural_loops() {
             usage.natural_loop_body_memberships(),
             usage.work_units(),
         ),
-        (7, 8, 2, 8, 129)
+        (7, 8, 2, 8, 214)
     );
 }
 
@@ -235,7 +254,7 @@ fn release_complexity_wire_scale_self_loops_hit_exact_resource_boundaries() {
         usage.natural_loop_body_memberships(),
         MAX_CONTROL_FLOW_LOOP_BODY_MEMBERSHIPS
     );
-    assert_eq!(usage.work_units(), 1_507_326);
+    assert_eq!(usage.work_units(), 2_555_892);
     assert!(usage.work_units() < MAX_CONTROL_FLOW_WORK_UNITS);
 
     input
@@ -268,6 +287,8 @@ fn release_complexity_wire_scale_self_loops_hit_exact_resource_boundaries() {
             resource: ControlFlowResource::Edges,
             required: MAX_CONTROL_FLOW_EDGES + 1,
             limit: MAX_CONTROL_FLOW_EDGES,
+            storage_items: 0,
+            work_units: 0,
         }]
     );
 
@@ -283,6 +304,8 @@ fn release_complexity_wire_scale_self_loops_hit_exact_resource_boundaries() {
             resource: ControlFlowResource::Blocks,
             required: MAX_CONTROL_FLOW_BLOCKS + 1,
             limit: MAX_CONTROL_FLOW_BLOCKS,
+            storage_items: 0,
+            work_units: 0,
         }]
     );
 }
@@ -343,7 +366,50 @@ fn release_complexity_shared_multi_latch_body_is_walked_once() {
             usage.natural_loop_body_memberships(),
             usage.work_units(),
         ),
-        (4_100, 6_147, 1, 4_098, 73_772)
+        (4_100, 6_147, 1, 4_098, 4_327_505)
+    );
+}
+
+#[test]
+fn release_complexity_frontier_ladder_accepts_boundary_and_rejects_next_entry() {
+    let boundary = analyze_control_flow(&two_arm_frontier_ladder(512)).unwrap();
+    let usage = boundary.resource_usage();
+    assert_eq!(
+        usage.dominance_frontier_entries(),
+        MAX_CONTROL_FLOW_DOMINANCE_FRONTIER_ENTRIES
+    );
+    assert_eq!(usage.storage_items(), 137_482);
+    assert_eq!(usage.work_units(), 419_104);
+
+    let error = analyze_control_flow(&two_arm_frontier_ladder(513)).unwrap_err();
+    assert_eq!(
+        error.diagnostics(),
+        &[ControlFlowDiagnostic::ResourceLimitExceeded {
+            resource: ControlFlowResource::DominanceFrontierEntries,
+            required: MAX_CONTROL_FLOW_DOMINANCE_FRONTIER_ENTRIES + 1,
+            limit: MAX_CONTROL_FLOW_DOMINANCE_FRONTIER_ENTRIES,
+            storage_items: 137_493,
+            work_units: 409_897,
+        }]
+    );
+    assert_eq!(
+        error.to_string(),
+        "control-flow analysis of cfg failed with 1 diagnostic(s)\n  dominance-frontier entries require 132353 items, exceeding the deterministic limit 132352; aggregate storage 137493, aggregate work 409897\n"
+    );
+}
+
+#[test]
+fn release_complexity_reviewer_8192_rung_ladder_rejects_at_the_same_cap() {
+    let error = analyze_control_flow(&two_arm_frontier_ladder(8_192)).unwrap_err();
+    assert_eq!(
+        error.diagnostics(),
+        &[ControlFlowDiagnostic::ResourceLimitExceeded {
+            resource: ControlFlowResource::WorkUnits,
+            required: MAX_CONTROL_FLOW_WORK_UNITS + 1,
+            limit: MAX_CONTROL_FLOW_WORK_UNITS,
+            storage_items: 32_772,
+            work_units: MAX_CONTROL_FLOW_WORK_UNITS + 1,
+        }]
     );
 }
 
