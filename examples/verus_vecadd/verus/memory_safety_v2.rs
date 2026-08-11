@@ -106,6 +106,26 @@ pub open spec fn pointer_max(target: TargetLayout, address_space: nat) -> nat {
     }
 }
 
+pub open spec fn exclusive_end_max(target: TargetLayout, address_space: nat) -> nat {
+    if pointer_bits(target, address_space) == 64 {
+        pointer_max(target, address_space)
+    } else {
+        pointer_max(target, address_space) + 1
+    }
+}
+
+pub open spec fn alias_domain(address_space: nat) -> nat {
+    if address_space == 0 || address_space == 1 || address_space == 4 {
+        0
+    } else {
+        address_space
+    }
+}
+
+pub open spec fn address_space_writable(address_space: nat) -> bool {
+    known_address_space(address_space) && address_space != 4
+}
+
 pub open spec fn pointer_value_representable(
     target: TargetLayout,
     address_space: nat,
@@ -123,7 +143,7 @@ pub open spec fn allocation_range_representable(
     len: nat,
 ) -> bool {
     pointer_value_representable(target, address_space, base)
-        && base + len <= pointer_max(target, address_space) + 1
+        && base + len <= exclusive_end_max(target, address_space)
 }
 
 pub open spec fn pointer_range_representable(
@@ -134,7 +154,7 @@ pub open spec fn pointer_range_representable(
 ) -> bool {
     pointer_value_representable(target, address_space, allocation_base + range.start)
         && allocation_base + range.start + range.len
-            <= pointer_max(target, address_space) + 1
+            <= exclusive_end_max(target, address_space)
 }
 
 pub open spec fn range_end(range: ByteRange) -> nat {
@@ -165,7 +185,7 @@ pub open spec fn ranges_overlap(left: ByteRange, right: ByteRange) -> bool {
 }
 
 pub open spec fn physical_ranges_overlap(left: PhysicalRange, right: PhysicalRange) -> bool {
-    left.address_space == right.address_space
+    alias_domain(left.address_space) == alias_domain(right.address_space)
         && left.len > 0
         && right.len > 0
         && left.start < right.start + right.len
@@ -364,6 +384,31 @@ pub proof fn exclusive_bound_is_not_a_materialized_workgroup_pointer(target: Tar
             4_294_967_292,
             ByteRange { start: 4, len: 0 },
         ),
+{
+}
+
+pub proof fn u64_exclusive_end_matches_executable_checked_add(target: TargetLayout)
+    requires
+        gfx942_xnack_minus(target),
+    ensures
+        allocation_range_representable(target, 1, 18_446_744_073_709_551_615, 0),
+        !allocation_range_representable(target, 1, 18_446_744_073_709_551_615, 1),
+        !pointer_range_representable(
+            target,
+            1,
+            18_446_744_073_709_551_615,
+            ByteRange { start: 0, len: 1 },
+        ),
+{
+}
+
+pub proof fn global_flat_and_constant_share_a_conservative_alias_domain()
+    ensures
+        alias_domain(0) == alias_domain(1),
+        alias_domain(1) == alias_domain(4),
+        address_space_writable(0),
+        address_space_writable(1),
+        !address_space_writable(4),
 {
 }
 

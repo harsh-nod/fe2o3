@@ -14,6 +14,8 @@ for marker in \
     'pub proof fn same_allocation_element_distance_is_integral' \
     'pub proof fn gfx942_profile_fixes_pointer_widths_and_alignments' \
     'pub proof fn exclusive_bound_is_not_a_materialized_workgroup_pointer' \
+    'pub proof fn u64_exclusive_end_matches_executable_checked_add' \
+    'pub proof fn global_flat_and_constant_share_a_conservative_alias_domain' \
     'pub proof fn zero_size_storage_never_overlaps' \
     'pub proof fn admitted_live_storage_makes_copy_ranges_disjoint' \
     'pub proof fn adjacent_validity_ranges_are_not_canonical' \
@@ -21,6 +23,19 @@ for marker in \
 do
     if ! grep -Fq "$marker" "$positive"; then
         printf 'FAIL: missing proof marker %s\n' "$marker" >&2
+        exit 1
+    fi
+done
+
+for fixture_marker in \
+    'memory_safety_v2_pointer_width.rs:mutated_u64_exclusive_end_wrap_is_representable' \
+    'memory_safety_v2_physical_alias.rs:mutated_global_and_flat_tags_imply_physical_disjointness' \
+    'memory_safety_v2_target_layout.rs:mutated_constant_memory_is_writable'
+do
+    fixture=${fixture_marker%%:*}
+    marker=${fixture_marker#*:}
+    if ! grep -Fq "$marker" "$negative_dir/$fixture"; then
+        printf 'FAIL: missing negative proof marker %s in %s\n' "$marker" "$fixture" >&2
         exit 1
     fi
 done

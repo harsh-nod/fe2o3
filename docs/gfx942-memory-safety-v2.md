@@ -35,7 +35,10 @@ foundations. It supplies:
   checked projections, alignment, and by-value cycle rejection;
 - allocation identities plus generations, owners, half-open byte ranges,
   initialization, exact typed-write facts, and disjoint live numeric storage
-  ranges within each address space;
+  ranges within fixed target alias domains;
+- explicit target mutability and alias semantics: flat, global, and constant
+  addresses conservatively share one physical alias domain, while constant
+  storage is read-only;
 - nested lifetime regions, shared/exclusive loans, monotonically issued borrow
   epochs, and stale-loan rejection;
 - explicit range-, scope-, lifetime-, generation-, and access-bound capabilities
@@ -44,8 +47,9 @@ foundations. It supplies:
   nonoverlapping copy obligations;
 - a pure, deterministic transition result containing descriptive obligations;
   and
-- a canonical, versioned, bounded decoder that preflights collection counts and
-  re-encodes to reject noncanonical input.
+- a canonical V2 codec whose decoder preflights each collection against the
+  remaining minimum encoded bytes, uses fallible reservation, and re-encodes to
+  reject noncanonical input.
 
 The executable model rejects out-of-bounds or misaligned places, stale or dead
 provenance, incompatible aliases, uninitialized reads, invalid scalar bit
@@ -54,8 +58,12 @@ access, invalid address-space casts, nonintegral pointer distances, and
 overlapping copies. A 32-bit allocation's exclusive arithmetic end may equal
 `2^32`, but its base and every materialized access, zero-length, or
 pointer-distance endpoint must be at most `u32::MAX`. Zero-sized allocations
-claim no storage. Allocation IDs are single-use within one program, even after
-deallocation; a new ID may reuse dead numeric storage with a new generation.
+claim no storage. A 64-bit exclusive end must fit in `u64`, matching executable
+`checked_add`; storage starting at `u64::MAX` is therefore only valid at length
+zero. Allocation IDs are single-use within one program, even after deallocation;
+a new ID may reuse dead numeric storage with a new generation. Deallocation and
+final live counts both require the allocation lifetime to contain the current
+epoch.
 
 Scalar validity ranges are strictly ordered with a gap between neighbors.
 Overlapping or adjacent ranges and range encodings equivalent to `Any`,
@@ -68,24 +76,39 @@ all five exact gfx942 pointer widths and alignments. It proves nested bounds,
 stale generation rejection, lifetime nesting, disjoint exclusive loans,
 write-initialization, integral same-allocation element distance, the distinction
 between a 32-bit exclusive range bound and a materialized pointer, zero-sized
-non-overlap, physical-range disjointness, and the repaired validity-range
-canonicality rules. Mutation-negative fixtures cover each of those boundaries.
+non-overlap, the executable 64-bit exclusive-end limit, conservative
+flat/global/constant aliasing, constant read-only semantics, physical-range
+disjointness, and the repaired validity-range canonicality rules.
+Mutation-negative fixtures cover each of those boundaries.
 
 ## Resource and Trust Boundary
 
-All externally sized collections have caller-selected hard budgets. One
-cumulative validation-work counter charges target entries, type sorting and map
-construction, type and edge traversals, every validity range, cycle traversal,
-actions, and projections. Decoder collection counts are charged before vector
-allocation. Arithmetic uses checked executable operations; the Verus layer uses
-mathematical naturals and therefore does not stand in for executable overflow
-checks. Canonical bytes bind the exact target profile, type table, and ordered
-transition trace, but are content identity only.
+All externally sized collections have caller-selected budgets that may only
+narrow immutable hard caps. One cumulative validation/decode counter charges
+target entries, type sorting and map construction, type and edge traversals,
+every validity range, cycle traversal, actions, projections, and collection
+reservation. A separate hard-capped execution counter charges actions,
+allocation/loan/capability scans, recursive validity walks, state merges and
+sorts, initialized/typed-state scans, final liveness, and report traversal.
+Decoder capacities are preflighted against remaining bytes and reserved
+fallibly before parsing elements.
+
+Domain-separated SHA-256 identities bind codec semantics, the exact target,
+type table, ordered actions including allocation generations, and every policy
+field. Each transition and obligation repeats the program and exact action
+identity; each obligation also carries its action index and allocation
+generation. The report identity additionally binds final epoch, live count,
+execution work, and every transition and obligation field. These identities
+prevent detached-record substitution but remain unauthenticated content
+identities and grant no proof authority.
 
 This foundation does **not** establish:
 
 - that rustc or LLVM lowers Rust/MIR/Kernel IR to this model correctly;
 - that a caller-authored trace matches a runtime allocation, launch, or HSACO;
+- authenticated evidence that two target alias domains are physically disjoint
+  on a particular runtime allocation (the fixed model instead fails
+  conservatively for flat/global/constant overlap);
 - that Verus or its solver executed in an authenticated production boundary;
 - concurrent inter-invocation or inter-workgroup race freedom;
 - allocation-ID reuse within one trace, reborrows, or a parent/child lifetime
