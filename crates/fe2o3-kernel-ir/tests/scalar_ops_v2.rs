@@ -416,6 +416,16 @@ fn cast_matrix_enforces_width_validity_and_provenance() {
             cast: Cast::IntNarrow,
         },
         Operation::Cast {
+            from: int(IntWidth::W8, false),
+            to: int(IntWidth::W64, true),
+            cast: Cast::IntExtend { signed: false },
+        },
+        Operation::Cast {
+            from: ScalarType::Char,
+            to: int(IntWidth::W8, true),
+            cast: Cast::CharToInt,
+        },
+        Operation::Cast {
             from: p64,
             to: ScalarType::Pointer {
                 address_space: 3,
@@ -441,6 +451,16 @@ fn cast_matrix_enforces_width_validity_and_provenance() {
     for op in ok {
         assert!(verify(op, FloatCapabilities::ALL).is_ok(), "{op:?}")
     }
+    assert_eq!(
+        evaluate_integer_binary(
+            int(IntWidth::W8, false),
+            IntBinary::And,
+            IntMode::Checked,
+            1,
+            1,
+        ),
+        None
+    );
     for op in [
         Operation::Cast {
             from: int(IntWidth::W64, true),

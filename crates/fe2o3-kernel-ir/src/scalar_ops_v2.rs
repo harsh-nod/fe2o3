@@ -344,14 +344,14 @@ fn verify_cast(
 ) {
     let valid = match cast {
         Cast::IntExtend { signed } => match (int_parts(from), int_parts(to)) {
-            (Some((a, sa)), Some((b, sb))) => {
+            (Some((a, sa)), Some((b, _))) => {
                 if a.bits() >= b.bits() {
                     ds.push(Diagnostic::WidthRelation)
                 }
-                if sa != signed || sb != signed {
+                if sa != signed {
                     ds.push(Diagnostic::SignednessMismatch)
                 }
-                a.bits() < b.bits() && sa == signed && sb == signed
+                a.bits() < b.bits() && sa == signed
             }
             _ => false,
         },
@@ -370,9 +370,7 @@ fn verify_cast(
         Cast::FloatToInt { .. } => float_ok(from, caps, ds) && int_parts(to).is_some(),
         Cast::BoolToInt => from == ScalarType::Bool && int_parts(to).is_some(),
         Cast::IntToBoolChecked => int_parts(from).is_some() && to == ScalarType::Bool,
-        Cast::CharToInt => {
-            from == ScalarType::Char && matches!(int_parts(to),Some((w,false))if w.bits()>=32)
-        }
+        Cast::CharToInt => from == ScalarType::Char && int_parts(to).is_some(),
         Cast::IntToCharChecked => {
             matches!(int_parts(from),Some((w,false))if w.bits()>=32) && to == ScalarType::Char
         }
@@ -817,6 +815,14 @@ pub fn evaluate_integer_binary(
     left: u128,
     right: u128,
 ) -> Option<IntOutcome> {
+    if verify(
+        Operation::IntegerBinary { ty, op, mode },
+        FloatCapabilities::NONE,
+    )
+    .is_err()
+    {
+        return None;
+    }
     let (w, signed) = int_parts(ty)?;
     let m = mask(w);
     let a = left & m;
