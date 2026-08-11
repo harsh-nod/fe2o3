@@ -1483,8 +1483,8 @@ mod tests {
 
     const HANDOFF_MARKER_BINDING: [u8; 32] = [0x4b; 32];
     const HANDOFF_HOST_CONTRACT: [u8; 32] = [
-        232, 176, 203, 221, 164, 122, 120, 130, 170, 166, 91, 149, 87, 64, 62, 68, 180, 139,
-        113, 41, 225, 255, 170, 198, 216, 162, 251, 202, 101, 239, 186, 196,
+        232, 176, 203, 221, 164, 122, 120, 130, 170, 166, 91, 149, 87, 64, 62, 68, 180, 139, 113,
+        41, 225, 255, 170, 198, 216, 162, 251, 202, 101, 239, 186, 196,
     ];
 
     fn handoff_kernel() {}
@@ -4305,7 +4305,7 @@ mod tests {
             );
         assert!(matches!(
             crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &family, "absent"),
-            Err(crate::LaunchKernelMetadataBridgeErrorV2::UnknownVariant)
+            Err(crate::LaunchKernelMetadataBridgeErrorV2::UnknownModelProjection)
         ));
     }
 

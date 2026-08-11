@@ -230,10 +230,11 @@ impl Error for OccupancyDependentLaunchAdmissionErrorV2 {}
 /// Current, inert match between one occupancy-independent model projection and one recovered
 /// executable kernel.
 ///
-/// The value retains the cooperative current-publication guard and contains only identities and
-/// physical metadata derived from the recovered Worker V2 admission. Caller-supplied policy,
-/// proof, occupancy-verifier, and occupancy-metadata identities are not retained and grant no
-/// authority. The value has no transition into HSA loading or dispatch.
+/// The value retains the cooperative current-publication guard, joined artifact/descriptor facts,
+/// physical metadata derived from the recovered Worker V2 admission, and the inert caller label
+/// used to select the model projection. That label is not an HSACO-observed fact. Caller-supplied
+/// policy, proof, occupancy-verifier, and occupancy-metadata identities are not retained and grant
+/// no authority. The value has no transition into HSA loading or dispatch.
 pub struct CurrentRecoveredLaunchKernelMetadataV2<'recovered> {
     _current: CurrentFinalizedWorkerV2BundleAdmissionV1<'recovered>,
     target: Gfx942TargetBindingV2,
@@ -375,7 +376,7 @@ fn validate_and_select_projection<'family>(
             selected = Some(variant);
         }
     }
-    let selected = selected.ok_or(LaunchKernelMetadataBridgeErrorV2::UnknownVariant)?;
+    let selected = selected.ok_or(LaunchKernelMetadataBridgeErrorV2::UnknownModelProjection)?;
     validate_projection_name(&selected.entry_name, &limits)?;
     Ok(selected)
 }
@@ -1721,7 +1722,7 @@ impl CanonicalDigestV2 {
 pub enum LaunchKernelMetadataBridgeErrorV2 {
     CurrentPublication(FinalizedWorkerV2BundleAdmissionError),
     InvalidLaunchModel(LaunchKernelValidationErrorV2),
-    UnknownVariant,
+    UnknownModelProjection,
     AmbiguousModelProjection,
     UnsupportedTarget,
     UnsupportedCodeObjectVersion,
@@ -1752,7 +1753,7 @@ impl fmt::Display for LaunchKernelMetadataBridgeErrorV2 {
         match self {
             Self::CurrentPublication(error) => error.fmt(formatter),
             Self::InvalidLaunchModel(error) => write!(formatter, "invalid launch model: {error:?}"),
-            Self::UnknownVariant => {
+            Self::UnknownModelProjection => {
                 formatter.write_str("launch model projection is absent from the family")
             }
             Self::AmbiguousModelProjection => {
