@@ -162,6 +162,17 @@ pub fn bind_current_recovered_launch_kernel_metadata_v2<'recovered>(
     family: &LaunchKernelFamilyV2,
     variant_name: &str,
 ) -> Result<CurrentRecoveredLaunchKernelMetadataV2<'recovered>, LaunchKernelMetadataBridgeErrorV2> {
+    if family
+        .variants
+        .iter()
+        .any(|variant| !matches!(variant.launch.block, BlockShapePolicyV2::Exact(_)))
+    {
+        return Err(
+            LaunchKernelMetadataBridgeErrorV2::UnsupportedPhysicalLaunchContract(
+                "non-exact block policy",
+            ),
+        );
+    }
     family
         .validate(&LaunchKernelLimitsV2::default())
         .map_err(LaunchKernelMetadataBridgeErrorV2::InvalidLaunchModel)?;

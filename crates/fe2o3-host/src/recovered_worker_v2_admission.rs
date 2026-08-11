@@ -2933,6 +2933,22 @@ mod tests {
             ),
             Err(crate::LaunchKernelMetadataBridgeErrorV2::SignatureSubstitution)
         ));
+
+        candidate =
+            crate::launch_kernel_v2_bridge::canonical_family_for_recovered_launch_bridge_test(
+                &recovered,
+            );
+        candidate.signature.parameters[0].semantic_type =
+            fe2o3_kernel_ir::SemanticTypeIdentityV2::from_bytes([0x85; 32]);
+        crate::launch_kernel_v2_bridge::rebind_launch_family_for_bridge_test(&mut candidate);
+        assert!(matches!(
+            crate::bind_current_recovered_launch_kernel_metadata_v2(
+                &recovered,
+                &candidate,
+                "recovered-exact-wave64"
+            ),
+            Err(crate::LaunchKernelMetadataBridgeErrorV2::SignatureSubstitution)
+        ));
     }
 
     #[test]
@@ -2970,7 +2986,7 @@ mod tests {
             Err(crate::LaunchKernelMetadataBridgeErrorV2::LaunchGeometrySubstitution)
         ));
 
-        candidate = canonical;
+        candidate = canonical.clone();
         candidate.variants[0].resources.static_lds_bytes = 65_537;
         candidate.variants[0]
             .capabilities
@@ -2985,6 +3001,48 @@ mod tests {
             Err(
                 crate::LaunchKernelMetadataBridgeErrorV2::InvalidLaunchModel(
                     fe2o3_kernel_ir::LaunchKernelValidationErrorV2::LdsLimitExceeded
+                )
+            )
+        ));
+
+        candidate = canonical;
+        candidate.variants[0].resources.private_segment_bytes = 1_048_577;
+        crate::launch_kernel_v2_bridge::rebind_launch_family_for_bridge_test(&mut candidate);
+        assert!(matches!(
+            crate::bind_current_recovered_launch_kernel_metadata_v2(
+                &recovered,
+                &candidate,
+                "recovered-exact-wave64"
+            ),
+            Err(
+                crate::LaunchKernelMetadataBridgeErrorV2::InvalidLaunchModel(
+                    fe2o3_kernel_ir::LaunchKernelValidationErrorV2::PrivateSegmentLimitExceeded
+                )
+            )
+        ));
+    }
+
+    #[test]
+    fn launch_bridge_preflights_non_exact_policy_before_model_enumeration() {
+        let (_fixture, recovered) = recovered_launch_bridge_fixture(86);
+        let mut family =
+            crate::launch_kernel_v2_bridge::canonical_family_for_recovered_launch_bridge_test(
+                &recovered,
+            );
+        family.variants[0].launch.block = fe2o3_kernel_ir::BlockShapePolicyV2::Bounded {
+            minimum: fe2o3_kernel_ir::DimensionsV2::new(1, 1, 1),
+            maximum: fe2o3_kernel_ir::DimensionsV2::new(1_024, 1_024, 1_024),
+        };
+
+        assert!(matches!(
+            crate::bind_current_recovered_launch_kernel_metadata_v2(
+                &recovered,
+                &family,
+                "recovered-exact-wave64"
+            ),
+            Err(
+                crate::LaunchKernelMetadataBridgeErrorV2::UnsupportedPhysicalLaunchContract(
+                    "non-exact block policy"
                 )
             )
         ));
