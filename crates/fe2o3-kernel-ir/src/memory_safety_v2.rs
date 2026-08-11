@@ -1,0 +1,3056 @@
+//! Inert, bounded memory-safety and provenance model for a future Kernel IR V2.
+//!
+//! This module is deliberately not exported by `fe2o3-kernel-ir`. It is a pure,
+//! sequential transition model over caller-authored facts. Successful execution
+//! means only that this model discharged its local predicates. It authenticates
+//! no runtime allocation, GPU behavior, compiler refinement, proof execution,
+//! or inter-invocation race-freedom.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
+
+const MAGIC: [u8; 8] = *b"FE2OMEM2";
+const VERSION: u16 = 1;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MemoryBudgetsV2 {
+    pub max_types: u32,
+    pub max_type_edges: u32,
+    pub max_validity_ranges: u32,
+    pub max_actions: u32,
+    pub max_projections_per_place: u32,
+    pub max_allocations: u32,
+    pub max_loans: u32,
+    pub max_capabilities: u32,
+    pub max_state_ranges: u32,
+    pub max_obligations: u32,
+    pub max_canonical_bytes: u32,
+    pub max_validation_work: u64,
+}
+
+impl Default for MemoryBudgetsV2 {
+    fn default() -> Self {
+        Self {
+            max_types: 4_096,
+            max_type_edges: 16_384,
+            max_validity_ranges: 16_384,
+            max_actions: 65_536,
+            max_projections_per_place: 64,
+            max_allocations: 4_096,
+            max_loans: 16_384,
+            max_capabilities: 16_384,
+            max_state_ranges: 65_536,
+            max_obligations: 262_144,
+            max_canonical_bytes: 16 * 1024 * 1024,
+            max_validation_work: 4_000_000,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum AddressSpaceV2 {
+    Flat,
+    Global,
+    Workgroup,
+    Constant,
+    Private,
+}
+
+impl AddressSpaceV2 {
+    const fn tag(self) -> u8 {
+        match self {
+            Self::Flat => 0,
+            Self::Global => 1,
+            Self::Workgroup => 3,
+            Self::Constant => 4,
+            Self::Private => 5,
+        }
+    }
+    fn from_tag(tag: u8) -> Option<Self> {
+        match tag {
+            0 => Some(Self::Flat),
+            1 => Some(Self::Global),
+            3 => Some(Self::Workgroup),
+            4 => Some(Self::Constant),
+            5 => Some(Self::Private),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct AddressSpaceLayoutV2 {
+    pub address_space: AddressSpaceV2,
+    pub pointer_bits: u16,
+    pub pointer_alignment: u16,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TargetLayoutV2 {
+    architecture: String,
+    xnack_disabled: bool,
+    little_endian: bool,
+    address_spaces: Vec<AddressSpaceLayoutV2>,
+}
+
+impl TargetLayoutV2 {
+    pub fn gfx942_xnack_minus() -> Self {
+        Self {
+            architecture: "gfx942".into(),
+            xnack_disabled: true,
+            little_endian: true,
+            address_spaces: vec![
+                AddressSpaceLayoutV2 {
+                    address_space: AddressSpaceV2::Flat,
+                    pointer_bits: 64,
+                    pointer_alignment: 64,
+                },
+                AddressSpaceLayoutV2 {
+                    address_space: AddressSpaceV2::Global,
+                    pointer_bits: 64,
+                    pointer_alignment: 64,
+                },
+                AddressSpaceLayoutV2 {
+                    address_space: AddressSpaceV2::Workgroup,
+                    pointer_bits: 32,
+                    pointer_alignment: 32,
+                },
+                AddressSpaceLayoutV2 {
+                    address_space: AddressSpaceV2::Constant,
+                    pointer_bits: 64,
+                    pointer_alignment: 64,
+                },
+                AddressSpaceLayoutV2 {
+                    address_space: AddressSpaceV2::Private,
+                    pointer_bits: 32,
+                    pointer_alignment: 32,
+                },
+            ],
+        }
+    }
+    pub fn architecture(&self) -> &str {
+        &self.architecture
+    }
+    pub const fn xnack_disabled(&self) -> bool {
+        self.xnack_disabled
+    }
+    pub const fn little_endian(&self) -> bool {
+        self.little_endian
+    }
+    pub fn address_spaces(&self) -> &[AddressSpaceLayoutV2] {
+        &self.address_spaces
+    }
+    fn pointer_bits(&self, space: AddressSpaceV2) -> Option<u16> {
+        self.address_spaces
+            .iter()
+            .find(|entry| entry.address_space == space)
+            .map(|entry| entry.pointer_bits)
+    }
+    fn validate(&self) -> Result<(), MemoryErrorReasonV2> {
+        if self != &Self::gfx942_xnack_minus() {
+            Err(MemoryErrorReasonV2::UnsupportedTargetLayout)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+macro_rules! id_type {
+    ($name:ident) => {
+        #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+        pub struct $name(u32);
+        impl $name {
+            pub const fn new(value: u32) -> Option<Self> {
+                if value == 0 { None } else { Some(Self(value)) }
+            }
+            pub const fn get(self) -> u32 {
+                self.0
+            }
+        }
+    };
+}
+
+id_type!(MemoryTypeIdV2);
+id_type!(AllocationIdV2);
+id_type!(OwnerIdV2);
+id_type!(LoanIdV2);
+id_type!(CapabilityIdV2);
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct EpochV2(pub u64);
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct LifetimeRegionV2 {
+    pub start: EpochV2,
+    pub end_inclusive: EpochV2,
+}
+impl LifetimeRegionV2 {
+    pub const fn contains(self, epoch: EpochV2) -> bool {
+        self.start.0 <= epoch.0 && epoch.0 <= self.end_inclusive.0
+    }
+    fn valid(self) -> bool {
+        self.start.0 <= self.end_inclusive.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct ByteRangeV2 {
+    pub start: u64,
+    pub len: u64,
+}
+impl ByteRangeV2 {
+    pub fn end(self) -> Option<u64> {
+        self.start.checked_add(self.len)
+    }
+    pub fn contains(self, other: Self) -> bool {
+        match (self.end(), other.end()) {
+            (Some(end), Some(other_end)) => self.start <= other.start && other_end <= end,
+            _ => false,
+        }
+    }
+    pub fn overlaps(self, other: Self) -> bool {
+        if self.len == 0 || other.len == 0 {
+            return false;
+        }
+        match (self.end(), other.end()) {
+            (Some(end), Some(other_end)) => self.start < other_end && other.start < end,
+            _ => true,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct BitValidityRangeV2 {
+    pub start: u128,
+    pub end_inclusive: u128,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum BitValidityV2 {
+    Any,
+    Bool,
+    Char,
+    NonZero,
+    Ranges(Vec<BitValidityRangeV2>),
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct MemoryFieldV2 {
+    pub offset: u64,
+    pub ty: MemoryTypeIdV2,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum MemoryTypeKindV2 {
+    Scalar {
+        bit_width: u16,
+        validity: BitValidityV2,
+    },
+    Array {
+        element: MemoryTypeIdV2,
+        length: u64,
+        stride: u64,
+    },
+    Aggregate {
+        fields: Vec<MemoryFieldV2>,
+    },
+    OpaqueBytes,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct MemoryTypeV2 {
+    pub id: MemoryTypeIdV2,
+    pub size: u64,
+    pub alignment: u64,
+    pub kind: MemoryTypeKindV2,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct ProvenanceV2 {
+    pub allocation: AllocationIdV2,
+    pub generation: u64,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum ProjectionV2 {
+    Field(u32),
+    Index(u64),
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct TypedPlaceV2 {
+    pub provenance: ProvenanceV2,
+    pub base_offset: u64,
+    pub root_type: MemoryTypeIdV2,
+    pub projections: Vec<ProjectionV2>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct RawPlaceV2 {
+    pub provenance: ProvenanceV2,
+    pub pointer_address_space: AddressSpaceV2,
+    pub byte_offset: u64,
+    pub byte_len: u64,
+    pub alignment: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum BorrowKindV2 {
+    Shared,
+    Exclusive,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum AccessActorV2 {
+    Owner(OwnerIdV2),
+    Loan { loan: LoanIdV2, borrow_epoch: u64 },
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum RawAccessV2 {
+    Read,
+    Write,
+    ReadWrite,
+}
+impl RawAccessV2 {
+    fn permits(self, write: bool) -> bool {
+        matches!(
+            (self, write),
+            (Self::Read, false) | (Self::Write, true) | (Self::ReadWrite, _)
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum CapabilityScopeV2 {
+    Owner(OwnerIdV2),
+    Loan { loan: LoanIdV2, borrow_epoch: u64 },
+}
+impl CapabilityScopeV2 {
+    fn actor(self) -> AccessActorV2 {
+        match self {
+            Self::Owner(owner) => AccessActorV2::Owner(owner),
+            Self::Loan { loan, borrow_epoch } => AccessActorV2::Loan { loan, borrow_epoch },
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum TypedWriteValueV2 {
+    KnownBits(u128),
+    ValidOpaque,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum MemoryActionV2 {
+    Allocate {
+        allocation: AllocationIdV2,
+        generation: u64,
+        owner: OwnerIdV2,
+        address_space: AddressSpaceV2,
+        base_address: u64,
+        byte_len: u64,
+        alignment: u64,
+        lifetime: LifetimeRegionV2,
+    },
+    AdvanceEpoch {
+        to: EpochV2,
+    },
+    BeginBorrow {
+        loan: LoanIdV2,
+        owner: OwnerIdV2,
+        place: TypedPlaceV2,
+        kind: BorrowKindV2,
+        lifetime: LifetimeRegionV2,
+    },
+    EndBorrow {
+        loan: LoanIdV2,
+        owner: OwnerIdV2,
+    },
+    WriteTyped {
+        actor: AccessActorV2,
+        place: TypedPlaceV2,
+        value: TypedWriteValueV2,
+    },
+    ReadTyped {
+        actor: AccessActorV2,
+        place: TypedPlaceV2,
+    },
+    GrantRawCapability {
+        capability: CapabilityIdV2,
+        owner: OwnerIdV2,
+        provenance: ProvenanceV2,
+        scope: CapabilityScopeV2,
+        range: ByteRangeV2,
+        access: RawAccessV2,
+        lifetime: LifetimeRegionV2,
+    },
+    GrantAddressSpaceCastCapability {
+        capability: CapabilityIdV2,
+        owner: OwnerIdV2,
+        provenance: ProvenanceV2,
+        scope: CapabilityScopeV2,
+        range: ByteRangeV2,
+        from: AddressSpaceV2,
+        to: AddressSpaceV2,
+        lifetime: LifetimeRegionV2,
+    },
+    ReadRaw {
+        actor: AccessActorV2,
+        place: RawPlaceV2,
+        raw_capability: CapabilityIdV2,
+        cast_capability: Option<CapabilityIdV2>,
+    },
+    WriteRaw {
+        actor: AccessActorV2,
+        place: RawPlaceV2,
+        raw_capability: CapabilityIdV2,
+        cast_capability: Option<CapabilityIdV2>,
+    },
+    PointerDistance {
+        actor: AccessActorV2,
+        left: RawPlaceV2,
+        right: RawPlaceV2,
+        element_size: u64,
+        left_capability: CapabilityIdV2,
+        right_capability: CapabilityIdV2,
+        left_cast_capability: Option<CapabilityIdV2>,
+        right_cast_capability: Option<CapabilityIdV2>,
+    },
+    CopyNonOverlapping {
+        actor: AccessActorV2,
+        source: RawPlaceV2,
+        destination: RawPlaceV2,
+        source_capability: CapabilityIdV2,
+        destination_capability: CapabilityIdV2,
+        source_cast_capability: Option<CapabilityIdV2>,
+        destination_cast_capability: Option<CapabilityIdV2>,
+    },
+    Deallocate {
+        allocation: AllocationIdV2,
+        owner: OwnerIdV2,
+    },
+}
+
+impl MemoryActionV2 {
+    fn typed_place(&self) -> Option<&TypedPlaceV2> {
+        match self {
+            Self::BeginBorrow { place, .. }
+            | Self::WriteTyped { place, .. }
+            | Self::ReadTyped { place, .. } => Some(place),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MemoryProgramV2 {
+    target: TargetLayoutV2,
+    types: Vec<MemoryTypeV2>,
+    actions: Vec<MemoryActionV2>,
+}
+
+impl MemoryProgramV2 {
+    pub fn new(
+        target: TargetLayoutV2,
+        mut types: Vec<MemoryTypeV2>,
+        actions: Vec<MemoryActionV2>,
+        budgets: MemoryBudgetsV2,
+    ) -> Result<Self, MemoryModelErrorV2> {
+        let mut validation_work = charge(
+            0,
+            target.address_spaces.len() as u64,
+            budgets.max_validation_work,
+        )
+        .map_err(MemoryModelErrorV2::static_error)?;
+        target
+            .validate()
+            .map_err(MemoryModelErrorV2::static_error)?;
+        enforce("types", types.len() as u64, budgets.max_types as u64)
+            .map_err(MemoryModelErrorV2::static_error)?;
+        enforce("actions", actions.len() as u64, budgets.max_actions as u64)
+            .map_err(MemoryModelErrorV2::static_error)?;
+        validation_work = charge(
+            validation_work,
+            types.len() as u64,
+            budgets.max_validation_work,
+        )
+        .map_err(MemoryModelErrorV2::static_error)?;
+        types.sort_by_key(|ty| ty.id);
+        let program = Self {
+            target,
+            types,
+            actions,
+        };
+        program
+            .validate_types(budgets, &mut validation_work)
+            .map_err(MemoryModelErrorV2::static_error)?;
+        program
+            .validate_action_shapes(budgets, &mut validation_work)
+            .map_err(MemoryModelErrorV2::static_error)?;
+        let bytes = program
+            .encode_unchecked(budgets)
+            .map_err(MemoryModelErrorV2::static_error)?;
+        enforce(
+            "canonical bytes",
+            bytes.len() as u64,
+            budgets.max_canonical_bytes as u64,
+        )
+        .map_err(MemoryModelErrorV2::static_error)?;
+        Ok(program)
+    }
+    pub fn target(&self) -> &TargetLayoutV2 {
+        &self.target
+    }
+    pub fn types(&self) -> &[MemoryTypeV2] {
+        &self.types
+    }
+    pub fn actions(&self) -> &[MemoryActionV2] {
+        &self.actions
+    }
+    pub fn canonical_bytes(&self, budgets: MemoryBudgetsV2) -> Result<Vec<u8>, MemoryModelErrorV2> {
+        Self::new(
+            self.target.clone(),
+            self.types.clone(),
+            self.actions.clone(),
+            budgets,
+        )
+        .and_then(|program| {
+            program
+                .encode_unchecked(budgets)
+                .map_err(MemoryModelErrorV2::static_error)
+        })
+    }
+    pub fn decode_canonical(
+        input: &[u8],
+        budgets: MemoryBudgetsV2,
+    ) -> Result<Self, MemoryModelErrorV2> {
+        enforce(
+            "canonical bytes",
+            input.len() as u64,
+            budgets.max_canonical_bytes as u64,
+        )
+        .map_err(MemoryModelErrorV2::static_error)?;
+        let mut reader = ReaderV2::new(input);
+        if reader.bytes(8)? != MAGIC {
+            return Err(reader.error("bad magic"));
+        }
+        if reader.u16()? != VERSION || reader.u16()? != 0 {
+            return Err(reader.error("unsupported version or flags"));
+        }
+        let mut decode_work = 0_u64;
+        let target = decode_target(&mut reader, budgets, &mut decode_work)?;
+        let type_count = reader.count("types", budgets.max_types)?;
+        decode_work = charge(decode_work, type_count as u64, budgets.max_validation_work)
+            .map_err(MemoryModelErrorV2::static_error)?;
+        let mut types = Vec::with_capacity(type_count);
+        for _ in 0..type_count {
+            types.push(decode_type(&mut reader, budgets, &mut decode_work)?);
+        }
+        let action_count = reader.count("actions", budgets.max_actions)?;
+        decode_work = charge(
+            decode_work,
+            action_count as u64,
+            budgets.max_validation_work,
+        )
+        .map_err(MemoryModelErrorV2::static_error)?;
+        let mut actions = Vec::with_capacity(action_count);
+        for _ in 0..action_count {
+            actions.push(decode_action(&mut reader, budgets, &mut decode_work)?);
+        }
+        if !reader.finished() {
+            return Err(reader.error("trailing bytes"));
+        }
+        let program = Self::new(target, types, actions, budgets)?;
+        if program.canonical_bytes(budgets)?.as_slice() != input {
+            return Err(MemoryModelErrorV2::static_error(
+                MemoryErrorReasonV2::NonCanonical,
+            ));
+        }
+        Ok(program)
+    }
+    fn type_map(&self) -> BTreeMap<MemoryTypeIdV2, &MemoryTypeV2> {
+        self.types.iter().map(|ty| (ty.id, ty)).collect()
+    }
+
+    fn validate_types(
+        &self,
+        budgets: MemoryBudgetsV2,
+        work: &mut u64,
+    ) -> Result<(), MemoryErrorReasonV2> {
+        *work = charge(*work, self.types.len() as u64, budgets.max_validation_work)?;
+        let map = self.type_map();
+        if map.len() != self.types.len() {
+            return Err(MemoryErrorReasonV2::DuplicateType);
+        }
+        let mut edges = 0_u64;
+        let mut ranges = 0_u64;
+        for ty in &self.types {
+            *work = charge(*work, 1, budgets.max_validation_work)?;
+            if ty.alignment == 0 || !ty.alignment.is_power_of_two() {
+                return Err(MemoryErrorReasonV2::InvalidType {
+                    ty: ty.id,
+                    detail: "alignment must be a nonzero power of two",
+                });
+            }
+            match &ty.kind {
+                MemoryTypeKindV2::Scalar {
+                    bit_width,
+                    validity,
+                } => {
+                    if *bit_width == 0
+                        || *bit_width > 128
+                        || u64::from((*bit_width).div_ceil(8)) != ty.size
+                    {
+                        return Err(MemoryErrorReasonV2::InvalidType {
+                            ty: ty.id,
+                            detail: "scalar width and size disagree",
+                        });
+                    }
+                    if let BitValidityV2::Ranges(items) = validity {
+                        *work = charge(*work, items.len() as u64, budgets.max_validation_work)?;
+                        ranges += items.len() as u64;
+                    }
+                    validate_validity(*bit_width, validity, ty.id)?;
+                }
+                MemoryTypeKindV2::Array {
+                    element,
+                    length,
+                    stride,
+                } => {
+                    edges += 1;
+                    let element = map
+                        .get(element)
+                        .ok_or(MemoryErrorReasonV2::UnknownType(*element))?;
+                    if *stride < element.size || *stride % element.alignment != 0 {
+                        return Err(MemoryErrorReasonV2::InvalidType {
+                            ty: ty.id,
+                            detail: "array stride does not contain and align the element",
+                        });
+                    }
+                    let expected = if *length == 0 {
+                        0
+                    } else {
+                        stride
+                            .checked_mul(length - 1)
+                            .and_then(|n| n.checked_add(element.size))
+                            .ok_or(MemoryErrorReasonV2::InvalidType {
+                                ty: ty.id,
+                                detail: "array layout overflows",
+                            })?
+                    };
+                    if expected > ty.size {
+                        return Err(MemoryErrorReasonV2::InvalidType {
+                            ty: ty.id,
+                            detail: "array elements exceed layout",
+                        });
+                    }
+                }
+                MemoryTypeKindV2::Aggregate { fields } => {
+                    *work = charge(*work, fields.len() as u64, budgets.max_validation_work)?;
+                    edges += fields.len() as u64;
+                    let mut last = None;
+                    for field in fields {
+                        let field_ty = map
+                            .get(&field.ty)
+                            .ok_or(MemoryErrorReasonV2::UnknownType(field.ty))?;
+                        if last.is_some_and(|offset| field.offset < offset) {
+                            return Err(MemoryErrorReasonV2::InvalidType {
+                                ty: ty.id,
+                                detail: "fields are not in offset order",
+                            });
+                        }
+                        let end = field.offset.checked_add(field_ty.size).ok_or(
+                            MemoryErrorReasonV2::InvalidType {
+                                ty: ty.id,
+                                detail: "field layout overflows",
+                            },
+                        )?;
+                        if end > ty.size || field.offset % field_ty.alignment != 0 {
+                            return Err(MemoryErrorReasonV2::InvalidType {
+                                ty: ty.id,
+                                detail: "field is out of bounds or misaligned",
+                            });
+                        }
+                        last = Some(field.offset);
+                    }
+                }
+                MemoryTypeKindV2::OpaqueBytes => {}
+            }
+        }
+        enforce("type edges", edges, budgets.max_type_edges as u64)?;
+        enforce(
+            "validity ranges",
+            ranges,
+            budgets.max_validity_ranges as u64,
+        )?;
+        self.reject_cycles(&map, budgets, work)
+    }
+
+    fn reject_cycles(
+        &self,
+        map: &BTreeMap<MemoryTypeIdV2, &MemoryTypeV2>,
+        budgets: MemoryBudgetsV2,
+        work: &mut u64,
+    ) -> Result<(), MemoryErrorReasonV2> {
+        let mut color = BTreeMap::<MemoryTypeIdV2, u8>::new();
+        for ty in &self.types {
+            if color.get(&ty.id) == Some(&2) {
+                continue;
+            }
+            let mut pending = vec![(ty.id, false)];
+            while let Some((id, exit)) = pending.pop() {
+                *work = charge(*work, 1, budgets.max_validation_work)?;
+                if exit {
+                    color.insert(id, 2);
+                    continue;
+                }
+                match color.get(&id).copied().unwrap_or(0) {
+                    1 => return Err(MemoryErrorReasonV2::TypeCycle(id)),
+                    2 => continue,
+                    _ => {}
+                }
+                color.insert(id, 1);
+                pending.push((id, true));
+                let node = map.get(&id).ok_or(MemoryErrorReasonV2::UnknownType(id))?;
+                match &node.kind {
+                    MemoryTypeKindV2::Array { element, .. } => {
+                        *work = charge(*work, 1, budgets.max_validation_work)?;
+                        pending.push((*element, false));
+                    }
+                    MemoryTypeKindV2::Aggregate { fields } => {
+                        *work = charge(*work, fields.len() as u64, budgets.max_validation_work)?;
+                        pending.extend(fields.iter().rev().map(|field| (field.ty, false)));
+                    }
+                    MemoryTypeKindV2::Scalar { .. } | MemoryTypeKindV2::OpaqueBytes => {}
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_action_shapes(
+        &self,
+        budgets: MemoryBudgetsV2,
+        work: &mut u64,
+    ) -> Result<(), MemoryErrorReasonV2> {
+        for action in &self.actions {
+            *work = charge(*work, 1, budgets.max_validation_work)?;
+            if let Some(place) = action.typed_place() {
+                enforce(
+                    "place projections",
+                    place.projections.len() as u64,
+                    budgets.max_projections_per_place as u64,
+                )?;
+                *work = charge(
+                    *work,
+                    place.projections.len() as u64,
+                    budgets.max_validation_work,
+                )?;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn validate_validity(
+    width: u16,
+    validity: &BitValidityV2,
+    ty: MemoryTypeIdV2,
+) -> Result<(), MemoryErrorReasonV2> {
+    let max = if width == 128 {
+        u128::MAX
+    } else {
+        (1_u128 << width) - 1
+    };
+    match validity {
+        BitValidityV2::Any => {}
+        BitValidityV2::Bool if width == 8 => {}
+        BitValidityV2::Char if width == 32 => {}
+        BitValidityV2::NonZero => {}
+        BitValidityV2::Ranges(ranges) if !ranges.is_empty() => {
+            let mut previous = None;
+            for range in ranges {
+                if range.start > range.end_inclusive
+                    || range.end_inclusive > max
+                    || previous.is_some_and(|end: u128| range.start <= end.saturating_add(1))
+                {
+                    return Err(MemoryErrorReasonV2::InvalidType {
+                        ty,
+                        detail: "validity ranges are noncanonical",
+                    });
+                }
+                previous = Some(range.end_inclusive);
+            }
+            let duplicates_named_rule = matches!(ranges.as_slice(), [only]
+                if (only.start == 0 || only.start == 1) && only.end_inclusive == max
+                    || (width == 8 && only.start == 0 && only.end_inclusive == 1))
+                || (width == 32
+                    && matches!(ranges.as_slice(), [left, right]
+                        if left.start == 0
+                            && left.end_inclusive == 0xd7ff
+                            && right.start == 0xe000
+                            && right.end_inclusive == 0x10ffff));
+            if duplicates_named_rule {
+                return Err(MemoryErrorReasonV2::InvalidType {
+                    ty,
+                    detail: "validity ranges duplicate a named canonical rule",
+                });
+            }
+        }
+        _ => {
+            return Err(MemoryErrorReasonV2::InvalidType {
+                ty,
+                detail: "validity rule is incompatible with scalar width",
+            });
+        }
+    }
+    Ok(())
+}
+
+fn charge(current: u64, amount: u64, max: u64) -> Result<u64, MemoryErrorReasonV2> {
+    let actual = current
+        .checked_add(amount)
+        .ok_or(MemoryErrorReasonV2::ResourceLimit {
+            resource: "validation work",
+            actual: u64::MAX,
+            max,
+        })?;
+    enforce("validation work", actual, max)?;
+    Ok(actual)
+}
+
+fn enforce(resource: &'static str, actual: u64, max: u64) -> Result<(), MemoryErrorReasonV2> {
+    if actual > max {
+        Err(MemoryErrorReasonV2::ResourceLimit {
+            resource,
+            actual,
+            max,
+        })
+    } else {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum MemoryObligationKindV2 {
+    AllocationLive,
+    ProvenanceGeneration,
+    AddressRepresentable,
+    InBounds,
+    Aligned,
+    LifetimeContainsEpoch,
+    BorrowAuthorizesAccess,
+    NoConflictingAlias,
+    Initialized,
+    BitValidityCompatible,
+    ExplicitRawCapability,
+    ExplicitAddressSpaceCastCapability,
+    PointerDistanceSameAllocation,
+    PointerDistanceElementDivisibility,
+    NonOverlappingCopy,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum ObligationBasisV2 {
+    LocallyEstablished,
+    ExplicitCapability,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct MemoryObligationV2 {
+    pub kind: MemoryObligationKindV2,
+    pub allocation: AllocationIdV2,
+    pub range: ByteRangeV2,
+    pub epoch: EpochV2,
+    pub basis: ObligationBasisV2,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TransitionRecordV2 {
+    pub action_index: u32,
+    pub obligations: Vec<MemoryObligationV2>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MemoryExecutionV2 {
+    final_epoch: EpochV2,
+    records: Vec<TransitionRecordV2>,
+    live_allocations: usize,
+    program_identity: UntrustedMemoryProgramIdentityV2,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UntrustedMemoryProgramIdentityV2(Box<[u8]>);
+
+impl UntrustedMemoryProgramIdentityV2 {
+    pub fn canonical_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl MemoryExecutionV2 {
+    pub const fn final_epoch(&self) -> EpochV2 {
+        self.final_epoch
+    }
+    pub fn records(&self) -> &[TransitionRecordV2] {
+        &self.records
+    }
+    pub const fn live_allocations(&self) -> usize {
+        self.live_allocations
+    }
+    pub const fn untrusted_program_identity(&self) -> &UntrustedMemoryProgramIdentityV2 {
+        &self.program_identity
+    }
+    pub const fn grants_runtime_authority(&self) -> bool {
+        false
+    }
+    pub const fn grants_proof_authority(&self) -> bool {
+        false
+    }
+    pub const fn proves_compiler_refinement(&self) -> bool {
+        false
+    }
+    pub const fn proves_gpu_behavior(&self) -> bool {
+        false
+    }
+    pub const fn proves_race_freedom(&self) -> bool {
+        false
+    }
+}
+
+#[derive(Clone, Debug)]
+struct AllocationStateV2 {
+    provenance: ProvenanceV2,
+    owner: OwnerIdV2,
+    address_space: AddressSpaceV2,
+    base_address: u64,
+    byte_len: u64,
+    lifetime: LifetimeRegionV2,
+    dead_at: Option<EpochV2>,
+    next_borrow_epoch: u64,
+    initialized: Vec<ByteRangeV2>,
+    typed: Vec<(ByteRangeV2, MemoryTypeIdV2)>,
+}
+
+#[derive(Clone, Debug)]
+struct LoanStateV2 {
+    id: LoanIdV2,
+    allocation: AllocationIdV2,
+    owner: OwnerIdV2,
+    range: ByteRangeV2,
+    kind: BorrowKindV2,
+    lifetime: LifetimeRegionV2,
+    borrow_epoch: u64,
+    active: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum CapabilityKindV2 {
+    Raw {
+        access: RawAccessV2,
+    },
+    Cast {
+        from: AddressSpaceV2,
+        to: AddressSpaceV2,
+    },
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CapabilityStateV2 {
+    provenance: ProvenanceV2,
+    scope: CapabilityScopeV2,
+    range: ByteRangeV2,
+    lifetime: LifetimeRegionV2,
+    kind: CapabilityKindV2,
+}
+
+struct MachineV2<'a> {
+    target: &'a TargetLayoutV2,
+    types: BTreeMap<MemoryTypeIdV2, &'a MemoryTypeV2>,
+    epoch: EpochV2,
+    allocations: BTreeMap<AllocationIdV2, AllocationStateV2>,
+    loans: BTreeMap<LoanIdV2, LoanStateV2>,
+    capabilities: BTreeMap<CapabilityIdV2, CapabilityStateV2>,
+    records: Vec<TransitionRecordV2>,
+    obligation_count: u64,
+    budgets: MemoryBudgetsV2,
+}
+
+#[derive(Clone, Copy)]
+struct ResolvedPlaceV2 {
+    allocation: AllocationIdV2,
+    range: ByteRangeV2,
+    ty: MemoryTypeIdV2,
+}
+
+pub fn execute_memory_program_v2(
+    program: &MemoryProgramV2,
+    budgets: MemoryBudgetsV2,
+) -> Result<MemoryExecutionV2, MemoryModelErrorV2> {
+    let canonical = program.canonical_bytes(budgets)?;
+    enforce(
+        "canonical bytes",
+        canonical.len() as u64,
+        budgets.max_canonical_bytes as u64,
+    )
+    .map_err(MemoryModelErrorV2::static_error)?;
+    let mut machine = MachineV2 {
+        target: &program.target,
+        types: program.type_map(),
+        epoch: EpochV2(0),
+        allocations: BTreeMap::new(),
+        loans: BTreeMap::new(),
+        capabilities: BTreeMap::new(),
+        records: Vec::with_capacity(program.actions.len()),
+        obligation_count: 0,
+        budgets,
+    };
+    for (index, action) in program.actions.iter().enumerate() {
+        let obligations = machine.apply(action).map_err(|reason| MemoryModelErrorV2 {
+            action_index: Some(index as u32),
+            reason,
+        })?;
+        let total = machine
+            .obligation_count
+            .checked_add(obligations.len() as u64)
+            .ok_or(MemoryModelErrorV2 {
+                action_index: Some(index as u32),
+                reason: MemoryErrorReasonV2::ResourceLimit {
+                    resource: "obligations",
+                    actual: u64::MAX,
+                    max: budgets.max_obligations as u64,
+                },
+            })?;
+        enforce("obligations", total, budgets.max_obligations as u64).map_err(|reason| {
+            MemoryModelErrorV2 {
+                action_index: Some(index as u32),
+                reason,
+            }
+        })?;
+        machine.obligation_count = total;
+        machine.records.push(TransitionRecordV2 {
+            action_index: index as u32,
+            obligations,
+        });
+    }
+    let live_allocations = machine
+        .allocations
+        .values()
+        .filter(|allocation| allocation.dead_at.is_none())
+        .count();
+    Ok(MemoryExecutionV2 {
+        final_epoch: machine.epoch,
+        records: machine.records,
+        live_allocations,
+        program_identity: UntrustedMemoryProgramIdentityV2(canonical.into_boxed_slice()),
+    })
+}
+
+impl MachineV2<'_> {
+    fn apply(
+        &mut self,
+        action: &MemoryActionV2,
+    ) -> Result<Vec<MemoryObligationV2>, MemoryErrorReasonV2> {
+        match action {
+            MemoryActionV2::Allocate {
+                allocation,
+                generation,
+                owner,
+                address_space,
+                base_address,
+                byte_len,
+                alignment,
+                lifetime,
+            } => self.allocate(
+                *allocation,
+                *generation,
+                *owner,
+                *address_space,
+                *base_address,
+                *byte_len,
+                *alignment,
+                *lifetime,
+            ),
+            MemoryActionV2::AdvanceEpoch { to } => {
+                if to.0 <= self.epoch.0 {
+                    return Err(MemoryErrorReasonV2::EpochDidNotAdvance);
+                }
+                self.epoch = *to;
+                Ok(Vec::new())
+            }
+            MemoryActionV2::BeginBorrow {
+                loan,
+                owner,
+                place,
+                kind,
+                lifetime,
+            } => self.begin_borrow(*loan, *owner, place, *kind, *lifetime),
+            MemoryActionV2::EndBorrow { loan, owner } => self.end_borrow(*loan, *owner),
+            MemoryActionV2::WriteTyped {
+                actor,
+                place,
+                value,
+            } => self.typed_access(*actor, place, Some(*value)),
+            MemoryActionV2::ReadTyped { actor, place } => self.typed_access(*actor, place, None),
+            MemoryActionV2::GrantRawCapability {
+                capability,
+                owner,
+                provenance,
+                scope,
+                range,
+                access,
+                lifetime,
+            } => self.grant_capability(
+                *capability,
+                *owner,
+                *provenance,
+                *scope,
+                *range,
+                *lifetime,
+                CapabilityKindV2::Raw { access: *access },
+            ),
+            MemoryActionV2::GrantAddressSpaceCastCapability {
+                capability,
+                owner,
+                provenance,
+                scope,
+                range,
+                from,
+                to,
+                lifetime,
+            } => {
+                if from == to {
+                    return Err(MemoryErrorReasonV2::InvalidCapability);
+                }
+                self.grant_capability(
+                    *capability,
+                    *owner,
+                    *provenance,
+                    *scope,
+                    *range,
+                    *lifetime,
+                    CapabilityKindV2::Cast {
+                        from: *from,
+                        to: *to,
+                    },
+                )
+            }
+            MemoryActionV2::ReadRaw {
+                actor,
+                place,
+                raw_capability,
+                cast_capability,
+            } => self.raw_access(*actor, *place, *raw_capability, *cast_capability, false),
+            MemoryActionV2::WriteRaw {
+                actor,
+                place,
+                raw_capability,
+                cast_capability,
+            } => self.raw_access(*actor, *place, *raw_capability, *cast_capability, true),
+            MemoryActionV2::PointerDistance {
+                actor,
+                left,
+                right,
+                element_size,
+                left_capability,
+                right_capability,
+                left_cast_capability,
+                right_cast_capability,
+            } => self.pointer_distance(
+                *actor,
+                *left,
+                *right,
+                *element_size,
+                *left_capability,
+                *right_capability,
+                *left_cast_capability,
+                *right_cast_capability,
+            ),
+            MemoryActionV2::CopyNonOverlapping {
+                actor,
+                source,
+                destination,
+                source_capability,
+                destination_capability,
+                source_cast_capability,
+                destination_cast_capability,
+            } => self.copy_nonoverlapping(
+                *actor,
+                *source,
+                *destination,
+                *source_capability,
+                *destination_capability,
+                *source_cast_capability,
+                *destination_cast_capability,
+            ),
+            MemoryActionV2::Deallocate { allocation, owner } => {
+                self.deallocate(*allocation, *owner)
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn allocate(
+        &mut self,
+        id: AllocationIdV2,
+        generation: u64,
+        owner: OwnerIdV2,
+        space: AddressSpaceV2,
+        base: u64,
+        len: u64,
+        alignment: u64,
+        lifetime: LifetimeRegionV2,
+    ) -> Result<Vec<MemoryObligationV2>, MemoryErrorReasonV2> {
+        enforce(
+            "allocations",
+            self.allocations.len() as u64 + 1,
+            self.budgets.max_allocations as u64,
+        )?;
+        if self.allocations.contains_key(&id) {
+            return Err(MemoryErrorReasonV2::DuplicateAllocation(id));
+        }
+        if generation == 0
+            || alignment == 0
+            || !alignment.is_power_of_two()
+            || !base.is_multiple_of(alignment)
+            || !lifetime.valid()
+            || !lifetime.contains(self.epoch)
+        {
+            return Err(MemoryErrorReasonV2::InvalidAllocation);
+        }
+        let pointer_bits = self
+            .target
+            .pointer_bits(space)
+            .ok_or(MemoryErrorReasonV2::UnsupportedAddressSpace(space))?;
+        let end = base
+            .checked_add(len)
+            .ok_or(MemoryErrorReasonV2::AddressNotRepresentable)?;
+        if pointer_bits < 64 {
+            let pointer_max = (1_u64 << pointer_bits) - 1;
+            let exclusive_bound = pointer_max + 1;
+            if base > pointer_max || end > exclusive_bound {
+                return Err(MemoryErrorReasonV2::AddressNotRepresentable);
+            }
+        }
+        let candidate = ByteRangeV2 { start: base, len };
+        for existing in self.allocations.values() {
+            let existing_is_live =
+                existing.dead_at.is_none() && existing.lifetime.contains(self.epoch);
+            let existing_range = ByteRangeV2 {
+                start: existing.base_address,
+                len: existing.byte_len,
+            };
+            if existing_is_live
+                && existing.address_space == space
+                && existing_range.overlaps(candidate)
+            {
+                return Err(MemoryErrorReasonV2::OverlappingLiveAllocation);
+            }
+        }
+        self.allocations.insert(
+            id,
+            AllocationStateV2 {
+                provenance: ProvenanceV2 {
+                    allocation: id,
+                    generation,
+                },
+                owner,
+                address_space: space,
+                base_address: base,
+                byte_len: len,
+                lifetime,
+                dead_at: None,
+                next_borrow_epoch: 0,
+                initialized: Vec::new(),
+                typed: Vec::new(),
+            },
+        );
+        Ok(vec![
+            self.obligation(
+                id,
+                ByteRangeV2 { start: 0, len },
+                MemoryObligationKindV2::AddressRepresentable,
+                ObligationBasisV2::LocallyEstablished,
+            ),
+            self.obligation(
+                id,
+                ByteRangeV2 { start: 0, len },
+                MemoryObligationKindV2::LifetimeContainsEpoch,
+                ObligationBasisV2::LocallyEstablished,
+            ),
+        ])
+    }
+
+    fn resolve_place(&self, place: &TypedPlaceV2) -> Result<ResolvedPlaceV2, MemoryErrorReasonV2> {
+        let allocation = self.live_allocation(place.provenance)?;
+        let mut offset = place.base_offset;
+        let mut ty = *self
+            .types
+            .get(&place.root_type)
+            .ok_or(MemoryErrorReasonV2::UnknownType(place.root_type))?;
+        if offset
+            .checked_add(ty.size)
+            .ok_or(MemoryErrorReasonV2::OutOfBounds)?
+            > allocation.byte_len
+        {
+            return Err(MemoryErrorReasonV2::OutOfBounds);
+        }
+        if address(allocation, offset)? % ty.alignment != 0 {
+            return Err(MemoryErrorReasonV2::Misaligned);
+        }
+        for projection in &place.projections {
+            match (projection, &ty.kind) {
+                (ProjectionV2::Field(index), MemoryTypeKindV2::Aggregate { fields }) => {
+                    let field = fields
+                        .get(*index as usize)
+                        .ok_or(MemoryErrorReasonV2::InvalidProjection)?;
+                    offset = offset
+                        .checked_add(field.offset)
+                        .ok_or(MemoryErrorReasonV2::OutOfBounds)?;
+                    ty = *self
+                        .types
+                        .get(&field.ty)
+                        .ok_or(MemoryErrorReasonV2::UnknownType(field.ty))?;
+                }
+                (
+                    ProjectionV2::Index(index),
+                    MemoryTypeKindV2::Array {
+                        element,
+                        length,
+                        stride,
+                    },
+                ) if index < length => {
+                    offset = offset
+                        .checked_add(
+                            index
+                                .checked_mul(*stride)
+                                .ok_or(MemoryErrorReasonV2::OutOfBounds)?,
+                        )
+                        .ok_or(MemoryErrorReasonV2::OutOfBounds)?;
+                    ty = *self
+                        .types
+                        .get(element)
+                        .ok_or(MemoryErrorReasonV2::UnknownType(*element))?;
+                }
+                _ => return Err(MemoryErrorReasonV2::InvalidProjection),
+            }
+        }
+        let range = ByteRangeV2 {
+            start: offset,
+            len: ty.size,
+        };
+        if !(ByteRangeV2 {
+            start: 0,
+            len: allocation.byte_len,
+        })
+        .contains(range)
+        {
+            return Err(MemoryErrorReasonV2::OutOfBounds);
+        }
+        if address(allocation, offset)? % ty.alignment != 0 {
+            return Err(MemoryErrorReasonV2::Misaligned);
+        }
+        Ok(ResolvedPlaceV2 {
+            allocation: place.provenance.allocation,
+            range,
+            ty: ty.id,
+        })
+    }
+
+    fn begin_borrow(
+        &mut self,
+        loan_id: LoanIdV2,
+        owner: OwnerIdV2,
+        place: &TypedPlaceV2,
+        kind: BorrowKindV2,
+        lifetime: LifetimeRegionV2,
+    ) -> Result<Vec<MemoryObligationV2>, MemoryErrorReasonV2> {
+        enforce(
+            "loans",
+            self.loans.len() as u64 + 1,
+            self.budgets.max_loans as u64,
+        )?;
+        if self.loans.contains_key(&loan_id) {
+            return Err(MemoryErrorReasonV2::DuplicateLoan(loan_id));
+        }
+        let resolved = self.resolve_place(place)?;
+        let allocation = self
+            .allocations
+            .get(&resolved.allocation)
+            .ok_or(MemoryErrorReasonV2::UnknownAllocation(resolved.allocation))?;
+        if allocation.owner != owner
+            || !lifetime.valid()
+            || !lifetime.contains(self.epoch)
+            || lifetime.start.0 < allocation.lifetime.start.0
+            || lifetime.end_inclusive.0 > allocation.lifetime.end_inclusive.0
+        {
+            return Err(MemoryErrorReasonV2::InvalidLifetimeOrOwner);
+        }
+        self.ensure_no_alias_conflict(resolved.allocation, resolved.range, kind, None)?;
+        let allocation = self
+            .allocations
+            .get_mut(&resolved.allocation)
+            .expect("resolved allocation exists");
+        allocation.next_borrow_epoch = allocation
+            .next_borrow_epoch
+            .checked_add(1)
+            .ok_or(MemoryErrorReasonV2::BorrowEpochOverflow)?;
+        let borrow_epoch = allocation.next_borrow_epoch;
+        self.loans.insert(
+            loan_id,
+            LoanStateV2 {
+                id: loan_id,
+                allocation: resolved.allocation,
+                owner,
+                range: resolved.range,
+                kind,
+                lifetime,
+                borrow_epoch,
+                active: true,
+            },
+        );
+        Ok(self.base_obligations(resolved, true))
+    }
+
+    fn end_borrow(
+        &mut self,
+        loan_id: LoanIdV2,
+        owner: OwnerIdV2,
+    ) -> Result<Vec<MemoryObligationV2>, MemoryErrorReasonV2> {
+        let loan = self
+            .loans
+            .get_mut(&loan_id)
+            .ok_or(MemoryErrorReasonV2::UnknownLoan(loan_id))?;
+        if !loan.active || loan.owner != owner {
+            return Err(MemoryErrorReasonV2::StaleBorrow);
+        }
+        loan.active = false;
+        Ok(Vec::new())
+    }
+
+    fn typed_access(
+        &mut self,
+        actor: AccessActorV2,
+        place: &TypedPlaceV2,
+        write: Option<TypedWriteValueV2>,
+    ) -> Result<Vec<MemoryObligationV2>, MemoryErrorReasonV2> {
+        let resolved = self.resolve_place(place)?;
+        self.authorize_actor(actor, resolved.allocation, resolved.range, write.is_some())?;
+        let constrained = type_has_constrained_validity(resolved.ty, &self.types);
+        if let Some(value) = write {
+            let ty = *self.types.get(&resolved.ty).expect("resolved type exists");
+            validate_typed_value(ty, value, constrained)?;
+            let allocation = self
+                .allocations
+                .get_mut(&resolved.allocation)
+                .expect("resolved allocation exists");
+            insert_range(
+                &mut allocation.initialized,
+                resolved.range,
+                self.budgets.max_state_ranges,
+            )?;
+            allocation
+                .typed
+                .retain(|(range, _)| !range.overlaps(resolved.range));
+            enforce(
+                "typed state ranges",
+                allocation.typed.len() as u64 + 1,
+                self.budgets.max_state_ranges as u64,
+            )?;
+            allocation.typed.push((resolved.range, resolved.ty));
+            allocation.typed.sort();
+        } else {
+            let allocation = self
+                .allocations
+                .get(&resolved.allocation)
+                .expect("resolved allocation exists");
+            if !range_set_contains(&allocation.initialized, resolved.range) {
+                return Err(MemoryErrorReasonV2::UninitializedRead);
+            }
+            if constrained && !allocation.typed.contains(&(resolved.range, resolved.ty)) {
+                return Err(MemoryErrorReasonV2::IncompatibleBitValidity);
+            }
+        }
+        let mut obligations = self.base_obligations(resolved, true);
+        obligations.push(self.obligation(
+            resolved.allocation,
+            resolved.range,
+            MemoryObligationKindV2::BorrowAuthorizesAccess,
+            ObligationBasisV2::LocallyEstablished,
+        ));
+        obligations.push(self.obligation(
+            resolved.allocation,
+            resolved.range,
+            MemoryObligationKindV2::BitValidityCompatible,
+            ObligationBasisV2::LocallyEstablished,
+        ));
+        if write.is_none() {
+            obligations.push(self.obligation(
+                resolved.allocation,
+                resolved.range,
+                MemoryObligationKindV2::Initialized,
+                ObligationBasisV2::LocallyEstablished,
+            ));
+        }
+        Ok(obligations)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn grant_capability(
+        &mut self,
+        id: CapabilityIdV2,
+        owner: OwnerIdV2,
+        provenance: ProvenanceV2,
+        scope: CapabilityScopeV2,
+        range: ByteRangeV2,
+        lifetime: LifetimeRegionV2,
+        kind: CapabilityKindV2,
+    ) -> Result<Vec<MemoryObligationV2>, MemoryErrorReasonV2> {
+        enforce(
+            "capabilities",
+            self.capabilities.len() as u64 + 1,
+            self.budgets.max_capabilities as u64,
+        )?;
+        if self.capabilities.contains_key(&id) {
+            return Err(MemoryErrorReasonV2::DuplicateCapability(id));
+        }
+        let allocation = self.live_allocation(provenance)?;
+        if allocation.owner != owner
+            || !(ByteRangeV2 {
+                start: 0,
+                len: allocation.byte_len,
+            })
+            .contains(range)
+            || !lifetime.valid()
+            || !lifetime.contains(self.epoch)
+            || lifetime.start.0 < allocation.lifetime.start.0
+            || lifetime.end_inclusive.0 > allocation.lifetime.end_inclusive.0
+        {
+            return Err(MemoryErrorReasonV2::InvalidCapability);
+        }
+        self.authorize_actor(
+            scope.actor(),
+            provenance.allocation,
+            range,
+            matches!(
+                kind,
+                CapabilityKindV2::Raw {
+                    access: RawAccessV2::Write | RawAccessV2::ReadWrite
+                }
+            ),
+        )?;
+        self.capabilities.insert(
+            id,
+            CapabilityStateV2 {
+                provenance,
+                scope,
+                range,
+                lifetime,
+                kind,
+            },
+        );
+        Ok(vec![self.obligation(
+            provenance.allocation,
+            range,
+            MemoryObligationKindV2::LifetimeContainsEpoch,
+            ObligationBasisV2::LocallyEstablished,
+        )])
+    }
+
+    fn raw_access(
+        &mut self,
+        actor: AccessActorV2,
+        place: RawPlaceV2,
+        raw_id: CapabilityIdV2,
+        cast_id: Option<CapabilityIdV2>,
+        write: bool,
+    ) -> Result<Vec<MemoryObligationV2>, MemoryErrorReasonV2> {
+        let allocation = self.live_allocation(place.provenance)?;
+        let allocation_space = allocation.address_space;
+        let range = ByteRangeV2 {
+            start: place.byte_offset,
+            len: place.byte_len,
+        };
+        if !(ByteRangeV2 {
+            start: 0,
+            len: allocation.byte_len,
+        })
+        .contains(range)
+        {
+            return Err(MemoryErrorReasonV2::OutOfBounds);
+        }
+        if place.alignment == 0
+            || !place.alignment.is_power_of_two()
+            || address(allocation, range.start)? % place.alignment != 0
+        {
+            return Err(MemoryErrorReasonV2::Misaligned);
+        }
+        self.ensure_pointer_range_representable(allocation, range, place.pointer_address_space)?;
+        self.authorize_actor(actor, place.provenance.allocation, range, write)?;
+        let raw = self
+            .capabilities
+            .get(&raw_id)
+            .ok_or(MemoryErrorReasonV2::MissingRawCapability)?;
+        if raw.provenance != place.provenance
+            || raw.scope.actor() != actor
+            || !raw.range.contains(range)
+            || !raw.lifetime.contains(self.epoch)
+            || !matches!(raw.kind, CapabilityKindV2::Raw { access } if access.permits(write))
+        {
+            return Err(MemoryErrorReasonV2::InvalidCapability);
+        }
+        let mut obligations = self.base_raw_obligations(place.provenance.allocation, range);
+        obligations.push(self.obligation(
+            place.provenance.allocation,
+            range,
+            MemoryObligationKindV2::ExplicitRawCapability,
+            ObligationBasisV2::ExplicitCapability,
+        ));
+        if place.pointer_address_space != allocation_space {
+            let cast = self
+                .capabilities
+                .get(&cast_id.ok_or(MemoryErrorReasonV2::MissingAddressSpaceCastCapability)?)
+                .ok_or(MemoryErrorReasonV2::MissingAddressSpaceCastCapability)?;
+            if cast.provenance != place.provenance
+                || cast.scope.actor() != actor
+                || !cast.range.contains(range)
+                || !cast.lifetime.contains(self.epoch)
+                || !matches!(cast.kind, CapabilityKindV2::Cast { from, to } if from == allocation_space && to == place.pointer_address_space)
+            {
+                return Err(MemoryErrorReasonV2::InvalidCapability);
+            }
+            obligations.push(self.obligation(
+                place.provenance.allocation,
+                range,
+                MemoryObligationKindV2::ExplicitAddressSpaceCastCapability,
+                ObligationBasisV2::ExplicitCapability,
+            ));
+        } else if cast_id.is_some() {
+            return Err(MemoryErrorReasonV2::UnexpectedAddressSpaceCastCapability);
+        }
+        if write {
+            let allocation = self
+                .allocations
+                .get_mut(&place.provenance.allocation)
+                .expect("live allocation exists");
+            insert_range(
+                &mut allocation.initialized,
+                range,
+                self.budgets.max_state_ranges,
+            )?;
+            allocation
+                .typed
+                .retain(|(typed_range, _)| !typed_range.overlaps(range));
+        } else {
+            let allocation = self
+                .allocations
+                .get(&place.provenance.allocation)
+                .expect("live allocation exists");
+            if !range_set_contains(&allocation.initialized, range) {
+                return Err(MemoryErrorReasonV2::UninitializedRead);
+            }
+            obligations.push(self.obligation(
+                place.provenance.allocation,
+                range,
+                MemoryObligationKindV2::Initialized,
+                ObligationBasisV2::LocallyEstablished,
+            ));
+        }
+        Ok(obligations)
+    }
+
+    fn ensure_pointer_range_representable(
+        &self,
+        allocation: &AllocationStateV2,
+        range: ByteRangeV2,
+        pointer_space: AddressSpaceV2,
+    ) -> Result<(), MemoryErrorReasonV2> {
+        let pointer_bits = self
+            .target
+            .pointer_bits(pointer_space)
+            .ok_or(MemoryErrorReasonV2::UnsupportedAddressSpace(pointer_space))?;
+        let byte_start = allocation
+            .base_address
+            .checked_add(range.start)
+            .ok_or(MemoryErrorReasonV2::AddressNotRepresentable)?;
+        if pointer_bits < 64 {
+            let pointer_max = (1_u64 << pointer_bits) - 1;
+            if byte_start > pointer_max {
+                return Err(MemoryErrorReasonV2::AddressNotRepresentable);
+            }
+            if range.len != 0 {
+                let last_byte = byte_start
+                    .checked_add(range.len - 1)
+                    .ok_or(MemoryErrorReasonV2::AddressNotRepresentable)?;
+                if last_byte > pointer_max {
+                    return Err(MemoryErrorReasonV2::AddressNotRepresentable);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn pointer_distance(
+        &mut self,
+        actor: AccessActorV2,
+        left: RawPlaceV2,
+        right: RawPlaceV2,
+        element_size: u64,
+        left_capability: CapabilityIdV2,
+        right_capability: CapabilityIdV2,
+        left_cast_capability: Option<CapabilityIdV2>,
+        right_cast_capability: Option<CapabilityIdV2>,
+    ) -> Result<Vec<MemoryObligationV2>, MemoryErrorReasonV2> {
+        if element_size == 0
+            || left.byte_len != 0
+            || right.byte_len != 0
+            || left.provenance != right.provenance
+        {
+            return Err(MemoryErrorReasonV2::InvalidPointerDistance);
+        }
+        let mut obligations =
+            self.raw_access(actor, left, left_capability, left_cast_capability, false)?;
+        obligations.extend(self.raw_access(
+            actor,
+            right,
+            right_capability,
+            right_cast_capability,
+            false,
+        )?);
+        let distance = left.byte_offset.abs_diff(right.byte_offset);
+        if !distance.is_multiple_of(element_size) {
+            return Err(MemoryErrorReasonV2::InvalidPointerDistance);
+        }
+        let range = ByteRangeV2 {
+            start: left.byte_offset.min(right.byte_offset),
+            len: distance,
+        };
+        obligations.push(self.obligation(
+            left.provenance.allocation,
+            range,
+            MemoryObligationKindV2::PointerDistanceSameAllocation,
+            ObligationBasisV2::LocallyEstablished,
+        ));
+        obligations.push(self.obligation(
+            left.provenance.allocation,
+            range,
+            MemoryObligationKindV2::PointerDistanceElementDivisibility,
+            ObligationBasisV2::LocallyEstablished,
+        ));
+        Ok(obligations)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn copy_nonoverlapping(
+        &mut self,
+        actor: AccessActorV2,
+        source: RawPlaceV2,
+        destination: RawPlaceV2,
+        source_capability: CapabilityIdV2,
+        destination_capability: CapabilityIdV2,
+        source_cast_capability: Option<CapabilityIdV2>,
+        destination_cast_capability: Option<CapabilityIdV2>,
+    ) -> Result<Vec<MemoryObligationV2>, MemoryErrorReasonV2> {
+        if source.byte_len != destination.byte_len {
+            return Err(MemoryErrorReasonV2::InvalidCopy);
+        }
+        let source_range = ByteRangeV2 {
+            start: source.byte_offset,
+            len: source.byte_len,
+        };
+        let (source_space, source_physical) = self.raw_physical_range(source)?;
+        let (destination_space, destination_physical) = self.raw_physical_range(destination)?;
+        if source_space == destination_space && source_physical.overlaps(destination_physical) {
+            return Err(MemoryErrorReasonV2::OverlappingCopy);
+        }
+        let mut obligations = self.raw_access(
+            actor,
+            source,
+            source_capability,
+            source_cast_capability,
+            false,
+        )?;
+        obligations.extend(self.raw_access(
+            actor,
+            destination,
+            destination_capability,
+            destination_cast_capability,
+            true,
+        )?);
+        obligations.push(self.obligation(
+            source.provenance.allocation,
+            source_range,
+            MemoryObligationKindV2::NonOverlappingCopy,
+            ObligationBasisV2::LocallyEstablished,
+        ));
+        Ok(obligations)
+    }
+
+    fn raw_physical_range(
+        &self,
+        place: RawPlaceV2,
+    ) -> Result<(AddressSpaceV2, ByteRangeV2), MemoryErrorReasonV2> {
+        let allocation = self.live_allocation(place.provenance)?;
+        let relative = ByteRangeV2 {
+            start: place.byte_offset,
+            len: place.byte_len,
+        };
+        if !(ByteRangeV2 {
+            start: 0,
+            len: allocation.byte_len,
+        })
+        .contains(relative)
+        {
+            return Err(MemoryErrorReasonV2::OutOfBounds);
+        }
+        Ok((
+            allocation.address_space,
+            ByteRangeV2 {
+                start: address(allocation, place.byte_offset)?,
+                len: place.byte_len,
+            },
+        ))
+    }
+
+    fn deallocate(
+        &mut self,
+        id: AllocationIdV2,
+        owner: OwnerIdV2,
+    ) -> Result<Vec<MemoryObligationV2>, MemoryErrorReasonV2> {
+        let allocation = self
+            .allocations
+            .get(&id)
+            .ok_or(MemoryErrorReasonV2::UnknownAllocation(id))?;
+        if allocation.dead_at.is_some() {
+            return Err(MemoryErrorReasonV2::UseAfterFree);
+        }
+        if allocation.owner != owner {
+            return Err(MemoryErrorReasonV2::InvalidLifetimeOrOwner);
+        }
+        if self
+            .loans
+            .values()
+            .any(|loan| loan.active && loan.allocation == id)
+        {
+            return Err(MemoryErrorReasonV2::ActiveBorrowAtDeallocation);
+        }
+        let len = allocation.byte_len;
+        self.allocations
+            .get_mut(&id)
+            .expect("allocation exists")
+            .dead_at = Some(self.epoch);
+        self.capabilities
+            .retain(|_, capability| capability.provenance.allocation != id);
+        Ok(vec![self.obligation(
+            id,
+            ByteRangeV2 { start: 0, len },
+            MemoryObligationKindV2::AllocationLive,
+            ObligationBasisV2::LocallyEstablished,
+        )])
+    }
+
+    fn live_allocation(
+        &self,
+        provenance: ProvenanceV2,
+    ) -> Result<&AllocationStateV2, MemoryErrorReasonV2> {
+        let allocation = self.allocations.get(&provenance.allocation).ok_or(
+            MemoryErrorReasonV2::UnknownAllocation(provenance.allocation),
+        )?;
+        if allocation.dead_at.is_some() || !allocation.lifetime.contains(self.epoch) {
+            return Err(MemoryErrorReasonV2::UseAfterFree);
+        }
+        if allocation.provenance != provenance {
+            return Err(MemoryErrorReasonV2::ProvenanceMismatch);
+        }
+        Ok(allocation)
+    }
+
+    fn authorize_actor(
+        &self,
+        actor: AccessActorV2,
+        allocation: AllocationIdV2,
+        range: ByteRangeV2,
+        write: bool,
+    ) -> Result<(), MemoryErrorReasonV2> {
+        let state = self
+            .allocations
+            .get(&allocation)
+            .ok_or(MemoryErrorReasonV2::UnknownAllocation(allocation))?;
+        match actor {
+            AccessActorV2::Owner(owner) => {
+                if owner != state.owner {
+                    return Err(MemoryErrorReasonV2::InvalidLifetimeOrOwner);
+                }
+                self.ensure_no_alias_conflict(
+                    allocation,
+                    range,
+                    if write {
+                        BorrowKindV2::Exclusive
+                    } else {
+                        BorrowKindV2::Shared
+                    },
+                    None,
+                )
+            }
+            AccessActorV2::Loan { loan, borrow_epoch } => {
+                let loan_state = self
+                    .loans
+                    .get(&loan)
+                    .ok_or(MemoryErrorReasonV2::UnknownLoan(loan))?;
+                if !loan_state.active
+                    || loan_state.borrow_epoch != borrow_epoch
+                    || loan_state.allocation != allocation
+                    || !loan_state.lifetime.contains(self.epoch)
+                    || !loan_state.range.contains(range)
+                    || (write && loan_state.kind != BorrowKindV2::Exclusive)
+                {
+                    return Err(MemoryErrorReasonV2::StaleBorrow);
+                }
+                self.ensure_no_alias_conflict(
+                    allocation,
+                    range,
+                    if write {
+                        BorrowKindV2::Exclusive
+                    } else {
+                        BorrowKindV2::Shared
+                    },
+                    Some(loan),
+                )
+            }
+        }
+    }
+
+    fn ensure_no_alias_conflict(
+        &self,
+        allocation: AllocationIdV2,
+        range: ByteRangeV2,
+        requested: BorrowKindV2,
+        except: Option<LoanIdV2>,
+    ) -> Result<(), MemoryErrorReasonV2> {
+        let conflict = self.loans.values().any(|loan| {
+            loan.active
+                && Some(loan.id) != except
+                && loan.allocation == allocation
+                && loan.range.overlaps(range)
+                && (loan.kind == BorrowKindV2::Exclusive || requested == BorrowKindV2::Exclusive)
+        });
+        if conflict {
+            Err(MemoryErrorReasonV2::AliasConflict)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn base_obligations(
+        &self,
+        resolved: ResolvedPlaceV2,
+        include_alias: bool,
+    ) -> Vec<MemoryObligationV2> {
+        let mut result = self.base_raw_obligations(resolved.allocation, resolved.range);
+        result.push(self.obligation(
+            resolved.allocation,
+            resolved.range,
+            MemoryObligationKindV2::Aligned,
+            ObligationBasisV2::LocallyEstablished,
+        ));
+        if include_alias {
+            result.push(self.obligation(
+                resolved.allocation,
+                resolved.range,
+                MemoryObligationKindV2::NoConflictingAlias,
+                ObligationBasisV2::LocallyEstablished,
+            ));
+        }
+        result
+    }
+
+    fn base_raw_obligations(
+        &self,
+        allocation: AllocationIdV2,
+        range: ByteRangeV2,
+    ) -> Vec<MemoryObligationV2> {
+        [
+            MemoryObligationKindV2::AllocationLive,
+            MemoryObligationKindV2::ProvenanceGeneration,
+            MemoryObligationKindV2::AddressRepresentable,
+            MemoryObligationKindV2::InBounds,
+            MemoryObligationKindV2::LifetimeContainsEpoch,
+        ]
+        .into_iter()
+        .map(|kind| {
+            self.obligation(
+                allocation,
+                range,
+                kind,
+                ObligationBasisV2::LocallyEstablished,
+            )
+        })
+        .collect()
+    }
+
+    fn obligation(
+        &self,
+        allocation: AllocationIdV2,
+        range: ByteRangeV2,
+        kind: MemoryObligationKindV2,
+        basis: ObligationBasisV2,
+    ) -> MemoryObligationV2 {
+        MemoryObligationV2 {
+            kind,
+            allocation,
+            range,
+            epoch: self.epoch,
+            basis,
+        }
+    }
+}
+
+fn address(allocation: &AllocationStateV2, offset: u64) -> Result<u64, MemoryErrorReasonV2> {
+    allocation
+        .base_address
+        .checked_add(offset)
+        .ok_or(MemoryErrorReasonV2::AddressNotRepresentable)
+}
+
+fn type_has_constrained_validity(
+    root: MemoryTypeIdV2,
+    types: &BTreeMap<MemoryTypeIdV2, &MemoryTypeV2>,
+) -> bool {
+    let mut pending = vec![root];
+    let mut seen = BTreeSet::new();
+    while let Some(id) = pending.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        match &types.get(&id).expect("validated type graph").kind {
+            MemoryTypeKindV2::Scalar { validity, .. } => {
+                if *validity != BitValidityV2::Any {
+                    return true;
+                }
+            }
+            MemoryTypeKindV2::Array { element, .. } => pending.push(*element),
+            MemoryTypeKindV2::Aggregate { fields } => {
+                pending.extend(fields.iter().map(|field| field.ty));
+            }
+            MemoryTypeKindV2::OpaqueBytes => {}
+        }
+    }
+    false
+}
+
+fn validate_typed_value(
+    ty: &MemoryTypeV2,
+    value: TypedWriteValueV2,
+    constrained: bool,
+) -> Result<(), MemoryErrorReasonV2> {
+    let MemoryTypeKindV2::Scalar {
+        bit_width,
+        validity,
+    } = &ty.kind
+    else {
+        return if value == TypedWriteValueV2::ValidOpaque && !constrained {
+            Ok(())
+        } else {
+            Err(MemoryErrorReasonV2::InvalidBitPattern)
+        };
+    };
+    let TypedWriteValueV2::KnownBits(bits) = value else {
+        return if *validity == BitValidityV2::Any {
+            Ok(())
+        } else {
+            Err(MemoryErrorReasonV2::InvalidBitPattern)
+        };
+    };
+    if *bit_width < 128 && bits >= (1_u128 << *bit_width) {
+        return Err(MemoryErrorReasonV2::InvalidBitPattern);
+    }
+    let valid = match validity {
+        BitValidityV2::Any => true,
+        BitValidityV2::Bool => bits <= 1,
+        BitValidityV2::Char => bits <= 0x10ffff && !(0xd800..=0xdfff).contains(&(bits as u32)),
+        BitValidityV2::NonZero => bits != 0,
+        BitValidityV2::Ranges(ranges) => ranges
+            .iter()
+            .any(|range| range.start <= bits && bits <= range.end_inclusive),
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(MemoryErrorReasonV2::InvalidBitPattern)
+    }
+}
+
+fn insert_range(
+    ranges: &mut Vec<ByteRangeV2>,
+    range: ByteRangeV2,
+    max: u32,
+) -> Result<(), MemoryErrorReasonV2> {
+    if range.len == 0 {
+        return Ok(());
+    }
+    let mut start = range.start;
+    let mut end = range.end().ok_or(MemoryErrorReasonV2::OutOfBounds)?;
+    ranges.retain(|existing| {
+        let existing_end = existing.end().expect("validated state range");
+        if existing_end < start || end < existing.start {
+            true
+        } else {
+            start = start.min(existing.start);
+            end = end.max(existing_end);
+            false
+        }
+    });
+    ranges.push(ByteRangeV2 {
+        start,
+        len: end - start,
+    });
+    ranges.sort();
+    enforce("state ranges", ranges.len() as u64, max as u64)
+}
+
+fn range_set_contains(ranges: &[ByteRangeV2], range: ByteRangeV2) -> bool {
+    range.len == 0 || ranges.iter().any(|initialized| initialized.contains(range))
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MemoryModelErrorV2 {
+    pub action_index: Option<u32>,
+    pub reason: MemoryErrorReasonV2,
+}
+impl MemoryModelErrorV2 {
+    fn static_error(reason: MemoryErrorReasonV2) -> Self {
+        Self {
+            action_index: None,
+            reason,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MemoryErrorReasonV2 {
+    UnsupportedTargetLayout,
+    UnsupportedAddressSpace(AddressSpaceV2),
+    ResourceLimit {
+        resource: &'static str,
+        actual: u64,
+        max: u64,
+    },
+    DuplicateType,
+    UnknownType(MemoryTypeIdV2),
+    InvalidType {
+        ty: MemoryTypeIdV2,
+        detail: &'static str,
+    },
+    TypeCycle(MemoryTypeIdV2),
+    DuplicateAllocation(AllocationIdV2),
+    OverlappingLiveAllocation,
+    UnknownAllocation(AllocationIdV2),
+    InvalidAllocation,
+    AddressNotRepresentable,
+    UseAfterFree,
+    ProvenanceMismatch,
+    OutOfBounds,
+    Misaligned,
+    InvalidProjection,
+    DuplicateLoan(LoanIdV2),
+    UnknownLoan(LoanIdV2),
+    AliasConflict,
+    StaleBorrow,
+    BorrowEpochOverflow,
+    ActiveBorrowAtDeallocation,
+    InvalidLifetimeOrOwner,
+    UninitializedRead,
+    InvalidBitPattern,
+    IncompatibleBitValidity,
+    DuplicateCapability(CapabilityIdV2),
+    MissingRawCapability,
+    MissingAddressSpaceCastCapability,
+    UnexpectedAddressSpaceCastCapability,
+    InvalidCapability,
+    InvalidPointerDistance,
+    InvalidCopy,
+    OverlappingCopy,
+    EpochDidNotAdvance,
+    Decode {
+        offset: usize,
+        detail: &'static str,
+    },
+    NonCanonical,
+}
+
+impl fmt::Display for MemoryModelErrorV2 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.action_index {
+            Some(index) => write!(f, "memory V2 action {index} failed: {:?}", self.reason),
+            None => write!(f, "memory V2 program rejected: {:?}", self.reason),
+        }
+    }
+}
+impl std::error::Error for MemoryModelErrorV2 {}
+
+impl MemoryProgramV2 {
+    fn encode_unchecked(&self, budgets: MemoryBudgetsV2) -> Result<Vec<u8>, MemoryErrorReasonV2> {
+        let mut writer = WriterV2::new(budgets.max_canonical_bytes);
+        writer.bytes(&MAGIC)?;
+        writer.u16(VERSION)?;
+        writer.u16(0)?;
+        encode_target(&mut writer, &self.target)?;
+        writer.u32(self.types.len() as u32)?;
+        for ty in &self.types {
+            encode_type(&mut writer, ty)?;
+        }
+        writer.u32(self.actions.len() as u32)?;
+        for action in &self.actions {
+            encode_action(&mut writer, action)?;
+        }
+        Ok(writer.finish())
+    }
+}
+
+struct WriterV2 {
+    bytes: Vec<u8>,
+    max: u32,
+}
+impl WriterV2 {
+    fn new(max: u32) -> Self {
+        Self {
+            bytes: Vec::new(),
+            max,
+        }
+    }
+    fn append(&mut self, bytes: &[u8]) -> Result<(), MemoryErrorReasonV2> {
+        let actual = self.bytes.len().checked_add(bytes.len()).ok_or(
+            MemoryErrorReasonV2::ResourceLimit {
+                resource: "canonical bytes",
+                actual: u64::MAX,
+                max: self.max as u64,
+            },
+        )?;
+        enforce("canonical bytes", actual as u64, self.max as u64)?;
+        self.bytes.extend_from_slice(bytes);
+        Ok(())
+    }
+    fn bytes(&mut self, value: &[u8]) -> Result<(), MemoryErrorReasonV2> {
+        self.append(value)
+    }
+    fn u8(&mut self, value: u8) -> Result<(), MemoryErrorReasonV2> {
+        self.append(&[value])
+    }
+    fn u16(&mut self, value: u16) -> Result<(), MemoryErrorReasonV2> {
+        self.append(&value.to_le_bytes())
+    }
+    fn u32(&mut self, value: u32) -> Result<(), MemoryErrorReasonV2> {
+        self.append(&value.to_le_bytes())
+    }
+    fn u64(&mut self, value: u64) -> Result<(), MemoryErrorReasonV2> {
+        self.append(&value.to_le_bytes())
+    }
+    fn u128(&mut self, value: u128) -> Result<(), MemoryErrorReasonV2> {
+        self.append(&value.to_le_bytes())
+    }
+    fn finish(self) -> Vec<u8> {
+        self.bytes
+    }
+}
+
+struct ReaderV2<'a> {
+    input: &'a [u8],
+    offset: usize,
+}
+impl<'a> ReaderV2<'a> {
+    fn new(input: &'a [u8]) -> Self {
+        Self { input, offset: 0 }
+    }
+    fn error(&self, detail: &'static str) -> MemoryModelErrorV2 {
+        MemoryModelErrorV2::static_error(MemoryErrorReasonV2::Decode {
+            offset: self.offset,
+            detail,
+        })
+    }
+    fn bytes(&mut self, len: usize) -> Result<&'a [u8], MemoryModelErrorV2> {
+        let end = self
+            .offset
+            .checked_add(len)
+            .ok_or_else(|| self.error("offset overflow"))?;
+        if end > self.input.len() {
+            return Err(self.error("truncated input"));
+        }
+        let bytes = &self.input[self.offset..end];
+        self.offset = end;
+        Ok(bytes)
+    }
+    fn u8(&mut self) -> Result<u8, MemoryModelErrorV2> {
+        Ok(self.bytes(1)?[0])
+    }
+    fn u16(&mut self) -> Result<u16, MemoryModelErrorV2> {
+        Ok(u16::from_le_bytes(
+            self.bytes(2)?.try_into().expect("exact width"),
+        ))
+    }
+    fn u32(&mut self) -> Result<u32, MemoryModelErrorV2> {
+        Ok(u32::from_le_bytes(
+            self.bytes(4)?.try_into().expect("exact width"),
+        ))
+    }
+    fn u64(&mut self) -> Result<u64, MemoryModelErrorV2> {
+        Ok(u64::from_le_bytes(
+            self.bytes(8)?.try_into().expect("exact width"),
+        ))
+    }
+    fn u128(&mut self) -> Result<u128, MemoryModelErrorV2> {
+        Ok(u128::from_le_bytes(
+            self.bytes(16)?.try_into().expect("exact width"),
+        ))
+    }
+    fn count(&mut self, resource: &'static str, max: u32) -> Result<usize, MemoryModelErrorV2> {
+        let count = self.u32()?;
+        enforce(resource, count as u64, max as u64).map_err(MemoryModelErrorV2::static_error)?;
+        usize::try_from(count).map_err(|_| self.error("count does not fit usize"))
+    }
+    fn finished(&self) -> bool {
+        self.offset == self.input.len()
+    }
+}
+
+fn encode_target(
+    writer: &mut WriterV2,
+    target: &TargetLayoutV2,
+) -> Result<(), MemoryErrorReasonV2> {
+    writer.u16(target.architecture.len() as u16)?;
+    writer.bytes(target.architecture.as_bytes())?;
+    writer.u8(target.xnack_disabled as u8)?;
+    writer.u8(target.little_endian as u8)?;
+    writer.u32(target.address_spaces.len() as u32)?;
+    for entry in &target.address_spaces {
+        writer.u8(entry.address_space.tag())?;
+        writer.u16(entry.pointer_bits)?;
+        writer.u16(entry.pointer_alignment)?;
+    }
+    Ok(())
+}
+
+fn decode_target(
+    reader: &mut ReaderV2<'_>,
+    budgets: MemoryBudgetsV2,
+    work: &mut u64,
+) -> Result<TargetLayoutV2, MemoryModelErrorV2> {
+    let len = reader.u16()? as usize;
+    if len > 32 {
+        return Err(reader.error("target name too long"));
+    }
+    let architecture = std::str::from_utf8(reader.bytes(len)?)
+        .map_err(|_| reader.error("target name is not UTF-8"))?
+        .to_owned();
+    let xnack_disabled = decode_bool(reader)?;
+    let little_endian = decode_bool(reader)?;
+    let count = reader.count("target address spaces", 16)?;
+    *work = charge(*work, count as u64, budgets.max_validation_work)
+        .map_err(MemoryModelErrorV2::static_error)?;
+    let mut address_spaces = Vec::with_capacity(count);
+    for _ in 0..count {
+        let address_space = AddressSpaceV2::from_tag(reader.u8()?)
+            .ok_or_else(|| reader.error("unknown address space"))?;
+        address_spaces.push(AddressSpaceLayoutV2 {
+            address_space,
+            pointer_bits: reader.u16()?,
+            pointer_alignment: reader.u16()?,
+        });
+    }
+    Ok(TargetLayoutV2 {
+        architecture,
+        xnack_disabled,
+        little_endian,
+        address_spaces,
+    })
+}
+
+fn encode_type(writer: &mut WriterV2, ty: &MemoryTypeV2) -> Result<(), MemoryErrorReasonV2> {
+    writer.u32(ty.id.get())?;
+    writer.u64(ty.size)?;
+    writer.u64(ty.alignment)?;
+    match &ty.kind {
+        MemoryTypeKindV2::Scalar {
+            bit_width,
+            validity,
+        } => {
+            writer.u8(1)?;
+            writer.u16(*bit_width)?;
+            encode_validity(writer, validity)?;
+        }
+        MemoryTypeKindV2::Array {
+            element,
+            length,
+            stride,
+        } => {
+            writer.u8(2)?;
+            writer.u32(element.get())?;
+            writer.u64(*length)?;
+            writer.u64(*stride)?;
+        }
+        MemoryTypeKindV2::Aggregate { fields } => {
+            writer.u8(3)?;
+            writer.u32(fields.len() as u32)?;
+            for field in fields {
+                writer.u64(field.offset)?;
+                writer.u32(field.ty.get())?;
+            }
+        }
+        MemoryTypeKindV2::OpaqueBytes => writer.u8(4)?,
+    }
+    Ok(())
+}
+
+fn decode_type(
+    reader: &mut ReaderV2<'_>,
+    budgets: MemoryBudgetsV2,
+    work: &mut u64,
+) -> Result<MemoryTypeV2, MemoryModelErrorV2> {
+    let id = decode_type_id(reader)?;
+    let size = reader.u64()?;
+    let alignment = reader.u64()?;
+    let kind = match reader.u8()? {
+        1 => MemoryTypeKindV2::Scalar {
+            bit_width: reader.u16()?,
+            validity: decode_validity(reader, budgets, work)?,
+        },
+        2 => MemoryTypeKindV2::Array {
+            element: decode_type_id(reader)?,
+            length: reader.u64()?,
+            stride: reader.u64()?,
+        },
+        3 => {
+            let count = reader.count("type edges", budgets.max_type_edges)?;
+            *work = charge(*work, count as u64, budgets.max_validation_work)
+                .map_err(MemoryModelErrorV2::static_error)?;
+            let mut fields = Vec::with_capacity(count);
+            for _ in 0..count {
+                fields.push(MemoryFieldV2 {
+                    offset: reader.u64()?,
+                    ty: decode_type_id(reader)?,
+                });
+            }
+            MemoryTypeKindV2::Aggregate { fields }
+        }
+        4 => MemoryTypeKindV2::OpaqueBytes,
+        _ => return Err(reader.error("unknown type kind")),
+    };
+    Ok(MemoryTypeV2 {
+        id,
+        size,
+        alignment,
+        kind,
+    })
+}
+
+fn encode_validity(
+    writer: &mut WriterV2,
+    validity: &BitValidityV2,
+) -> Result<(), MemoryErrorReasonV2> {
+    match validity {
+        BitValidityV2::Any => writer.u8(0)?,
+        BitValidityV2::Bool => writer.u8(1)?,
+        BitValidityV2::Char => writer.u8(2)?,
+        BitValidityV2::NonZero => writer.u8(3)?,
+        BitValidityV2::Ranges(ranges) => {
+            writer.u8(4)?;
+            writer.u32(ranges.len() as u32)?;
+            for range in ranges {
+                writer.u128(range.start)?;
+                writer.u128(range.end_inclusive)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn decode_validity(
+    reader: &mut ReaderV2<'_>,
+    budgets: MemoryBudgetsV2,
+    work: &mut u64,
+) -> Result<BitValidityV2, MemoryModelErrorV2> {
+    Ok(match reader.u8()? {
+        0 => BitValidityV2::Any,
+        1 => BitValidityV2::Bool,
+        2 => BitValidityV2::Char,
+        3 => BitValidityV2::NonZero,
+        4 => {
+            let count = reader.count("validity ranges", budgets.max_validity_ranges)?;
+            *work = charge(*work, count as u64, budgets.max_validation_work)
+                .map_err(MemoryModelErrorV2::static_error)?;
+            let mut ranges = Vec::with_capacity(count);
+            for _ in 0..count {
+                ranges.push(BitValidityRangeV2 {
+                    start: reader.u128()?,
+                    end_inclusive: reader.u128()?,
+                });
+            }
+            BitValidityV2::Ranges(ranges)
+        }
+        _ => return Err(reader.error("unknown validity rule")),
+    })
+}
+
+fn encode_action(
+    writer: &mut WriterV2,
+    action: &MemoryActionV2,
+) -> Result<(), MemoryErrorReasonV2> {
+    match action {
+        MemoryActionV2::Allocate {
+            allocation,
+            generation,
+            owner,
+            address_space,
+            base_address,
+            byte_len,
+            alignment,
+            lifetime,
+        } => {
+            writer.u8(1)?;
+            writer.u32(allocation.get())?;
+            writer.u64(*generation)?;
+            writer.u32(owner.get())?;
+            writer.u8(address_space.tag())?;
+            writer.u64(*base_address)?;
+            writer.u64(*byte_len)?;
+            writer.u64(*alignment)?;
+            encode_lifetime(writer, *lifetime)?;
+        }
+        MemoryActionV2::AdvanceEpoch { to } => {
+            writer.u8(2)?;
+            writer.u64(to.0)?;
+        }
+        MemoryActionV2::BeginBorrow {
+            loan,
+            owner,
+            place,
+            kind,
+            lifetime,
+        } => {
+            writer.u8(3)?;
+            writer.u32(loan.get())?;
+            writer.u32(owner.get())?;
+            encode_place(writer, place)?;
+            writer.u8(match kind {
+                BorrowKindV2::Shared => 0,
+                BorrowKindV2::Exclusive => 1,
+            })?;
+            encode_lifetime(writer, *lifetime)?;
+        }
+        MemoryActionV2::EndBorrow { loan, owner } => {
+            writer.u8(4)?;
+            writer.u32(loan.get())?;
+            writer.u32(owner.get())?;
+        }
+        MemoryActionV2::WriteTyped {
+            actor,
+            place,
+            value,
+        } => {
+            writer.u8(5)?;
+            encode_actor(writer, *actor)?;
+            encode_place(writer, place)?;
+            match value {
+                TypedWriteValueV2::KnownBits(bits) => {
+                    writer.u8(0)?;
+                    writer.u128(*bits)?;
+                }
+                TypedWriteValueV2::ValidOpaque => writer.u8(1)?,
+            }
+        }
+        MemoryActionV2::ReadTyped { actor, place } => {
+            writer.u8(6)?;
+            encode_actor(writer, *actor)?;
+            encode_place(writer, place)?;
+        }
+        MemoryActionV2::GrantRawCapability {
+            capability,
+            owner,
+            provenance,
+            scope,
+            range,
+            access,
+            lifetime,
+        } => {
+            writer.u8(7)?;
+            writer.u32(capability.get())?;
+            writer.u32(owner.get())?;
+            encode_provenance(writer, *provenance)?;
+            encode_scope(writer, *scope)?;
+            encode_range(writer, *range)?;
+            writer.u8(match access {
+                RawAccessV2::Read => 0,
+                RawAccessV2::Write => 1,
+                RawAccessV2::ReadWrite => 2,
+            })?;
+            encode_lifetime(writer, *lifetime)?;
+        }
+        MemoryActionV2::GrantAddressSpaceCastCapability {
+            capability,
+            owner,
+            provenance,
+            scope,
+            range,
+            from,
+            to,
+            lifetime,
+        } => {
+            writer.u8(8)?;
+            writer.u32(capability.get())?;
+            writer.u32(owner.get())?;
+            encode_provenance(writer, *provenance)?;
+            encode_scope(writer, *scope)?;
+            encode_range(writer, *range)?;
+            writer.u8(from.tag())?;
+            writer.u8(to.tag())?;
+            encode_lifetime(writer, *lifetime)?;
+        }
+        MemoryActionV2::ReadRaw {
+            actor,
+            place,
+            raw_capability,
+            cast_capability,
+        } => {
+            writer.u8(9)?;
+            encode_actor(writer, *actor)?;
+            encode_raw_place(writer, *place)?;
+            writer.u32(raw_capability.get())?;
+            encode_optional_capability(writer, *cast_capability)?;
+        }
+        MemoryActionV2::WriteRaw {
+            actor,
+            place,
+            raw_capability,
+            cast_capability,
+        } => {
+            writer.u8(10)?;
+            encode_actor(writer, *actor)?;
+            encode_raw_place(writer, *place)?;
+            writer.u32(raw_capability.get())?;
+            encode_optional_capability(writer, *cast_capability)?;
+        }
+        MemoryActionV2::Deallocate { allocation, owner } => {
+            writer.u8(11)?;
+            writer.u32(allocation.get())?;
+            writer.u32(owner.get())?;
+        }
+        MemoryActionV2::PointerDistance {
+            actor,
+            left,
+            right,
+            element_size,
+            left_capability,
+            right_capability,
+            left_cast_capability,
+            right_cast_capability,
+        } => {
+            writer.u8(12)?;
+            encode_actor(writer, *actor)?;
+            encode_raw_place(writer, *left)?;
+            encode_raw_place(writer, *right)?;
+            writer.u64(*element_size)?;
+            writer.u32(left_capability.get())?;
+            writer.u32(right_capability.get())?;
+            encode_optional_capability(writer, *left_cast_capability)?;
+            encode_optional_capability(writer, *right_cast_capability)?;
+        }
+        MemoryActionV2::CopyNonOverlapping {
+            actor,
+            source,
+            destination,
+            source_capability,
+            destination_capability,
+            source_cast_capability,
+            destination_cast_capability,
+        } => {
+            writer.u8(13)?;
+            encode_actor(writer, *actor)?;
+            encode_raw_place(writer, *source)?;
+            encode_raw_place(writer, *destination)?;
+            writer.u32(source_capability.get())?;
+            writer.u32(destination_capability.get())?;
+            encode_optional_capability(writer, *source_cast_capability)?;
+            encode_optional_capability(writer, *destination_cast_capability)?;
+        }
+    }
+    Ok(())
+}
+
+fn decode_action(
+    reader: &mut ReaderV2<'_>,
+    budgets: MemoryBudgetsV2,
+    work: &mut u64,
+) -> Result<MemoryActionV2, MemoryModelErrorV2> {
+    Ok(match reader.u8()? {
+        1 => MemoryActionV2::Allocate {
+            allocation: decode_allocation_id(reader)?,
+            generation: reader.u64()?,
+            owner: decode_owner_id(reader)?,
+            address_space: decode_space(reader)?,
+            base_address: reader.u64()?,
+            byte_len: reader.u64()?,
+            alignment: reader.u64()?,
+            lifetime: decode_lifetime(reader)?,
+        },
+        2 => MemoryActionV2::AdvanceEpoch {
+            to: EpochV2(reader.u64()?),
+        },
+        3 => MemoryActionV2::BeginBorrow {
+            loan: decode_loan_id(reader)?,
+            owner: decode_owner_id(reader)?,
+            place: decode_place(reader, budgets, work)?,
+            kind: match reader.u8()? {
+                0 => BorrowKindV2::Shared,
+                1 => BorrowKindV2::Exclusive,
+                _ => return Err(reader.error("unknown borrow kind")),
+            },
+            lifetime: decode_lifetime(reader)?,
+        },
+        4 => MemoryActionV2::EndBorrow {
+            loan: decode_loan_id(reader)?,
+            owner: decode_owner_id(reader)?,
+        },
+        5 => MemoryActionV2::WriteTyped {
+            actor: decode_actor(reader)?,
+            place: decode_place(reader, budgets, work)?,
+            value: match reader.u8()? {
+                0 => TypedWriteValueV2::KnownBits(reader.u128()?),
+                1 => TypedWriteValueV2::ValidOpaque,
+                _ => return Err(reader.error("unknown typed value")),
+            },
+        },
+        6 => MemoryActionV2::ReadTyped {
+            actor: decode_actor(reader)?,
+            place: decode_place(reader, budgets, work)?,
+        },
+        7 => MemoryActionV2::GrantRawCapability {
+            capability: decode_capability_id(reader)?,
+            owner: decode_owner_id(reader)?,
+            provenance: decode_provenance(reader)?,
+            scope: decode_scope(reader)?,
+            range: decode_range(reader)?,
+            access: match reader.u8()? {
+                0 => RawAccessV2::Read,
+                1 => RawAccessV2::Write,
+                2 => RawAccessV2::ReadWrite,
+                _ => return Err(reader.error("unknown raw access")),
+            },
+            lifetime: decode_lifetime(reader)?,
+        },
+        8 => MemoryActionV2::GrantAddressSpaceCastCapability {
+            capability: decode_capability_id(reader)?,
+            owner: decode_owner_id(reader)?,
+            provenance: decode_provenance(reader)?,
+            scope: decode_scope(reader)?,
+            range: decode_range(reader)?,
+            from: decode_space(reader)?,
+            to: decode_space(reader)?,
+            lifetime: decode_lifetime(reader)?,
+        },
+        9 => MemoryActionV2::ReadRaw {
+            actor: decode_actor(reader)?,
+            place: decode_raw_place(reader)?,
+            raw_capability: decode_capability_id(reader)?,
+            cast_capability: decode_optional_capability(reader)?,
+        },
+        10 => MemoryActionV2::WriteRaw {
+            actor: decode_actor(reader)?,
+            place: decode_raw_place(reader)?,
+            raw_capability: decode_capability_id(reader)?,
+            cast_capability: decode_optional_capability(reader)?,
+        },
+        11 => MemoryActionV2::Deallocate {
+            allocation: decode_allocation_id(reader)?,
+            owner: decode_owner_id(reader)?,
+        },
+        12 => MemoryActionV2::PointerDistance {
+            actor: decode_actor(reader)?,
+            left: decode_raw_place(reader)?,
+            right: decode_raw_place(reader)?,
+            element_size: reader.u64()?,
+            left_capability: decode_capability_id(reader)?,
+            right_capability: decode_capability_id(reader)?,
+            left_cast_capability: decode_optional_capability(reader)?,
+            right_cast_capability: decode_optional_capability(reader)?,
+        },
+        13 => MemoryActionV2::CopyNonOverlapping {
+            actor: decode_actor(reader)?,
+            source: decode_raw_place(reader)?,
+            destination: decode_raw_place(reader)?,
+            source_capability: decode_capability_id(reader)?,
+            destination_capability: decode_capability_id(reader)?,
+            source_cast_capability: decode_optional_capability(reader)?,
+            destination_cast_capability: decode_optional_capability(reader)?,
+        },
+        _ => return Err(reader.error("unknown action")),
+    })
+}
+
+fn encode_place(writer: &mut WriterV2, place: &TypedPlaceV2) -> Result<(), MemoryErrorReasonV2> {
+    encode_provenance(writer, place.provenance)?;
+    writer.u64(place.base_offset)?;
+    writer.u32(place.root_type.get())?;
+    writer.u32(place.projections.len() as u32)?;
+    for projection in &place.projections {
+        match projection {
+            ProjectionV2::Field(index) => {
+                writer.u8(0)?;
+                writer.u32(*index)?;
+            }
+            ProjectionV2::Index(index) => {
+                writer.u8(1)?;
+                writer.u64(*index)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn decode_place(
+    reader: &mut ReaderV2<'_>,
+    budgets: MemoryBudgetsV2,
+    work: &mut u64,
+) -> Result<TypedPlaceV2, MemoryModelErrorV2> {
+    let provenance = decode_provenance(reader)?;
+    let base_offset = reader.u64()?;
+    let root_type = decode_type_id(reader)?;
+    let count = reader.count("place projections", budgets.max_projections_per_place)?;
+    *work = charge(*work, count as u64, budgets.max_validation_work)
+        .map_err(MemoryModelErrorV2::static_error)?;
+    let mut projections = Vec::with_capacity(count);
+    for _ in 0..count {
+        projections.push(match reader.u8()? {
+            0 => ProjectionV2::Field(reader.u32()?),
+            1 => ProjectionV2::Index(reader.u64()?),
+            _ => return Err(reader.error("unknown projection")),
+        });
+    }
+    Ok(TypedPlaceV2 {
+        provenance,
+        base_offset,
+        root_type,
+        projections,
+    })
+}
+
+fn encode_raw_place(writer: &mut WriterV2, place: RawPlaceV2) -> Result<(), MemoryErrorReasonV2> {
+    encode_provenance(writer, place.provenance)?;
+    writer.u8(place.pointer_address_space.tag())?;
+    writer.u64(place.byte_offset)?;
+    writer.u64(place.byte_len)?;
+    writer.u64(place.alignment)
+}
+fn decode_raw_place(reader: &mut ReaderV2<'_>) -> Result<RawPlaceV2, MemoryModelErrorV2> {
+    Ok(RawPlaceV2 {
+        provenance: decode_provenance(reader)?,
+        pointer_address_space: decode_space(reader)?,
+        byte_offset: reader.u64()?,
+        byte_len: reader.u64()?,
+        alignment: reader.u64()?,
+    })
+}
+
+fn encode_actor(writer: &mut WriterV2, actor: AccessActorV2) -> Result<(), MemoryErrorReasonV2> {
+    match actor {
+        AccessActorV2::Owner(owner) => {
+            writer.u8(0)?;
+            writer.u32(owner.get())
+        }
+        AccessActorV2::Loan { loan, borrow_epoch } => {
+            writer.u8(1)?;
+            writer.u32(loan.get())?;
+            writer.u64(borrow_epoch)
+        }
+    }
+}
+fn decode_actor(reader: &mut ReaderV2<'_>) -> Result<AccessActorV2, MemoryModelErrorV2> {
+    match reader.u8()? {
+        0 => Ok(AccessActorV2::Owner(decode_owner_id(reader)?)),
+        1 => Ok(AccessActorV2::Loan {
+            loan: decode_loan_id(reader)?,
+            borrow_epoch: reader.u64()?,
+        }),
+        _ => Err(reader.error("unknown actor")),
+    }
+}
+
+fn encode_scope(
+    writer: &mut WriterV2,
+    scope: CapabilityScopeV2,
+) -> Result<(), MemoryErrorReasonV2> {
+    match scope {
+        CapabilityScopeV2::Owner(owner) => {
+            writer.u8(0)?;
+            writer.u32(owner.get())
+        }
+        CapabilityScopeV2::Loan { loan, borrow_epoch } => {
+            writer.u8(1)?;
+            writer.u32(loan.get())?;
+            writer.u64(borrow_epoch)
+        }
+    }
+}
+fn decode_scope(reader: &mut ReaderV2<'_>) -> Result<CapabilityScopeV2, MemoryModelErrorV2> {
+    match reader.u8()? {
+        0 => Ok(CapabilityScopeV2::Owner(decode_owner_id(reader)?)),
+        1 => Ok(CapabilityScopeV2::Loan {
+            loan: decode_loan_id(reader)?,
+            borrow_epoch: reader.u64()?,
+        }),
+        _ => Err(reader.error("unknown capability scope")),
+    }
+}
+
+fn encode_provenance(
+    writer: &mut WriterV2,
+    provenance: ProvenanceV2,
+) -> Result<(), MemoryErrorReasonV2> {
+    writer.u32(provenance.allocation.get())?;
+    writer.u64(provenance.generation)
+}
+fn decode_provenance(reader: &mut ReaderV2<'_>) -> Result<ProvenanceV2, MemoryModelErrorV2> {
+    Ok(ProvenanceV2 {
+        allocation: decode_allocation_id(reader)?,
+        generation: reader.u64()?,
+    })
+}
+fn encode_lifetime(
+    writer: &mut WriterV2,
+    lifetime: LifetimeRegionV2,
+) -> Result<(), MemoryErrorReasonV2> {
+    writer.u64(lifetime.start.0)?;
+    writer.u64(lifetime.end_inclusive.0)
+}
+fn decode_lifetime(reader: &mut ReaderV2<'_>) -> Result<LifetimeRegionV2, MemoryModelErrorV2> {
+    Ok(LifetimeRegionV2 {
+        start: EpochV2(reader.u64()?),
+        end_inclusive: EpochV2(reader.u64()?),
+    })
+}
+fn encode_range(writer: &mut WriterV2, range: ByteRangeV2) -> Result<(), MemoryErrorReasonV2> {
+    writer.u64(range.start)?;
+    writer.u64(range.len)
+}
+fn decode_range(reader: &mut ReaderV2<'_>) -> Result<ByteRangeV2, MemoryModelErrorV2> {
+    Ok(ByteRangeV2 {
+        start: reader.u64()?,
+        len: reader.u64()?,
+    })
+}
+
+fn encode_optional_capability(
+    writer: &mut WriterV2,
+    capability: Option<CapabilityIdV2>,
+) -> Result<(), MemoryErrorReasonV2> {
+    match capability {
+        Some(id) => {
+            writer.u8(1)?;
+            writer.u32(id.get())
+        }
+        None => writer.u8(0),
+    }
+}
+fn decode_optional_capability(
+    reader: &mut ReaderV2<'_>,
+) -> Result<Option<CapabilityIdV2>, MemoryModelErrorV2> {
+    match reader.u8()? {
+        0 => Ok(None),
+        1 => Ok(Some(decode_capability_id(reader)?)),
+        _ => Err(reader.error("unknown optional capability tag")),
+    }
+}
+fn decode_bool(reader: &mut ReaderV2<'_>) -> Result<bool, MemoryModelErrorV2> {
+    match reader.u8()? {
+        0 => Ok(false),
+        1 => Ok(true),
+        _ => Err(reader.error("noncanonical boolean")),
+    }
+}
+fn decode_space(reader: &mut ReaderV2<'_>) -> Result<AddressSpaceV2, MemoryModelErrorV2> {
+    AddressSpaceV2::from_tag(reader.u8()?).ok_or_else(|| reader.error("unknown address space"))
+}
+
+macro_rules! decode_id {
+    ($name:ident, $ty:ident) => {
+        fn $name(reader: &mut ReaderV2<'_>) -> Result<$ty, MemoryModelErrorV2> {
+            $ty::new(reader.u32()?).ok_or_else(|| reader.error("zero identity"))
+        }
+    };
+}
+decode_id!(decode_type_id, MemoryTypeIdV2);
+decode_id!(decode_allocation_id, AllocationIdV2);
+decode_id!(decode_owner_id, OwnerIdV2);
+decode_id!(decode_loan_id, LoanIdV2);
+decode_id!(decode_capability_id, CapabilityIdV2);
+
+#[cfg(test)]
+mod internal_tests {
+    use super::*;
+
+    fn allocation_state(id: u32, generation: u64) -> AllocationStateV2 {
+        let allocation = AllocationIdV2::new(id).unwrap();
+        AllocationStateV2 {
+            provenance: ProvenanceV2 {
+                allocation,
+                generation,
+            },
+            owner: OwnerIdV2::new(1).unwrap(),
+            address_space: AddressSpaceV2::Global,
+            base_address: 0x1000,
+            byte_len: 16,
+            lifetime: LifetimeRegionV2 {
+                start: EpochV2(0),
+                end_inclusive: EpochV2(1),
+            },
+            dead_at: None,
+            next_borrow_epoch: 0,
+            initialized: Vec::new(),
+            typed: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn copy_rechecks_physical_overlap_across_distinct_provenance() {
+        let target = TargetLayoutV2::gfx942_xnack_minus();
+        let mut machine = MachineV2 {
+            target: &target,
+            types: BTreeMap::new(),
+            epoch: EpochV2(0),
+            allocations: BTreeMap::from([
+                (AllocationIdV2::new(1).unwrap(), allocation_state(1, 7)),
+                (AllocationIdV2::new(2).unwrap(), allocation_state(2, 8)),
+            ]),
+            loans: BTreeMap::new(),
+            capabilities: BTreeMap::new(),
+            records: Vec::new(),
+            obligation_count: 0,
+            budgets: MemoryBudgetsV2::default(),
+        };
+        let raw = |id, generation| RawPlaceV2 {
+            provenance: ProvenanceV2 {
+                allocation: AllocationIdV2::new(id).unwrap(),
+                generation,
+            },
+            pointer_address_space: AddressSpaceV2::Global,
+            byte_offset: 0,
+            byte_len: 4,
+            alignment: 4,
+        };
+
+        assert_eq!(
+            machine
+                .copy_nonoverlapping(
+                    AccessActorV2::Owner(OwnerIdV2::new(1).unwrap()),
+                    raw(1, 7),
+                    raw(2, 8),
+                    CapabilityIdV2::new(1).unwrap(),
+                    CapabilityIdV2::new(2).unwrap(),
+                    None,
+                    None,
+                )
+                .unwrap_err(),
+            MemoryErrorReasonV2::OverlappingCopy
+        );
+    }
+}
