@@ -631,7 +631,10 @@ impl<'a> ProjectionBuilderV2<'a> {
         record: &RustcTypeLayoutRecordV2,
     ) -> Result<DerivedLayoutV2, Gfx942LayoutCompatibilityErrorV2> {
         match kind {
-            SemanticTypeKindV2::Unit => Ok(simple_layout(0, 1)),
+            SemanticTypeKindV2::Unit => Err(layout_unsupported(
+                key,
+                "unit is outside the reviewed fixed-width gfx942 subset",
+            )),
             SemanticTypeKindV2::Scalar(SemanticScalarV2::Int { bits, .. }) => {
                 let (size, align) = match bits {
                     8 => (1, 1),
@@ -1732,6 +1735,11 @@ fn scalar_kind(
                 })
             }
         }
+        SourceScalarKind::PointerSizedSignedInteger { .. }
+        | SourceScalarKind::PointerSizedUnsignedInteger { .. } => Err(unsupported(
+            path,
+            "usize and isize are outside the reviewed fixed-width gfx942 subset",
+        )),
     }
 }
 
@@ -1752,6 +1760,13 @@ fn source_scalar(
             bits: u16::try_from(bits)
                 .map_err(|_| unsupported(path, "integer width exceeds u16"))?,
         },
+        SourceScalarKind::PointerSizedSignedInteger { .. }
+        | SourceScalarKind::PointerSizedUnsignedInteger { .. } => {
+            return Err(unsupported(
+                path,
+                "usize and isize are outside the reviewed fixed-width gfx942 subset",
+            ));
+        }
         SourceScalarKind::Float { bits } => SemanticScalarV2::Float {
             bits: u16::try_from(bits).map_err(|_| unsupported(path, "float width exceeds u16"))?,
         },
@@ -1775,7 +1790,19 @@ fn enum_discriminant(
             "enum variants disagree on discriminant type",
         ));
     }
-    let scalar = source_scalar(first, path)?;
+    let scalar = match first {
+        SourceScalarKind::PointerSizedSignedInteger { bits } => SemanticScalarV2::Int {
+            signed: true,
+            bits: u16::try_from(bits)
+                .map_err(|_| unsupported(path, "enum discriminant width exceeds u16"))?,
+        },
+        SourceScalarKind::PointerSizedUnsignedInteger { bits } => SemanticScalarV2::Int {
+            signed: false,
+            bits: u16::try_from(bits)
+                .map_err(|_| unsupported(path, "enum discriminant width exceeds u16"))?,
+        },
+        _ => source_scalar(first, path)?,
+    };
     if !matches!(scalar, SemanticScalarV2::Int { .. }) {
         return Err(inconsistent(path, "enum discriminant is not an integer"));
     }
@@ -2761,6 +2788,10 @@ struct Padded { byte: u8, word: u32 }
 #[repr(transparent)]
 struct Transparent(u32);
 
+type Word = usize;
+#[repr(C)] struct WordField { value: Word }
+#[repr(transparent)] struct WordTransparent(usize);
+
 struct VeryLongNestedTypeNameForBoundedPreflight(u32);
 struct R { nested: VeryLongNestedTypeNameForBoundedPreflight }
 
@@ -2814,6 +2845,11 @@ static U128_VALUE: u128 = 17;
 static BOOL_VALUE: bool = true;
 static POINTER_NICHE: Option<&u8> = Some(&BYTE);
 static EXPANSION_VALUE: L12 = unsafe { core::mem::zeroed() };
+static USIZE_ALIAS_VALUE: Word = 1;
+static ISIZE_ARRAY_VALUE: [isize; 2] = [1, 2];
+static USIZE_FIELD_VALUE: WordField = WordField { value: 1 };
+static USIZE_TRANSPARENT_VALUE: WordTransparent = WordTransparent(1);
+static UNIT_VALUE: () = ();
 "#;
 
     #[derive(Default)]
@@ -2826,6 +2862,8 @@ static EXPANSION_VALUE: L12 = unsafe { core::mem::zeroed() };
         nested_name_bounded: Option<SemanticTypeAdapterErrorV2>,
         work_bounded: Option<SemanticTypeAdapterErrorV2>,
         expansion_bounded: Option<SemanticTypeAdapterErrorV2>,
+        pointer_sized_errors: Vec<SemanticTypeAdapterErrorV2>,
+        unit_projection_error: Option<Gfx942LayoutCompatibilityErrorV2>,
         path_bounded: Option<SemanticTypeAdapterErrorV2>,
         dst_bounded: Option<SemanticTypeAdapterErrorV2>,
         reobserved: bool,
@@ -2954,6 +2992,31 @@ static EXPANSION_VALUE: L12 = unsafe { core::mem::zeroed() };
                 },
             )
             .err();
+            for name in [
+                "USIZE_ALIAS_VALUE",
+                "ISIZE_ARRAY_VALUE",
+                "USIZE_FIELD_VALUE",
+                "USIZE_TRANSPARENT_VALUE",
+            ] {
+                self.pointer_sized_errors.push(
+                    observe_rustc_type_layout_v2(
+                        tcx,
+                        local_static_type(tcx, name),
+                        &observed,
+                        budgets,
+                    )
+                    .expect_err("pointer-sized scalar provenance must fail closed"),
+                );
+            }
+            let unit = observe_rustc_type_layout_v2(
+                tcx,
+                local_static_type(tcx, "UNIT_VALUE"),
+                &observed,
+                budgets,
+            )
+            .expect("unit remains observable as inert rustc layout data");
+            self.unit_projection_error =
+                derive_gfx942_layout_compatibility_candidate_v2(&unit, budgets).err();
             self.path_bounded = observe_rustc_type_layout_v2(
                 tcx,
                 local_static_type(tcx, "C_VALUE"),
@@ -3124,6 +3187,17 @@ static EXPANSION_VALUE: L12 = unsafe { core::mem::zeroed() };
                 actual,
                 max: 200,
             }) if actual > 200
+        ));
+        assert_eq!(results.pointer_sized_errors.len(), 4);
+        assert!(results.pointer_sized_errors.iter().all(|error| matches!(
+            error,
+            SemanticTypeAdapterErrorV2::Unsupported { detail, .. }
+                if detail.contains("usize and isize")
+        )));
+        assert!(matches!(
+            results.unit_projection_error,
+            Some(Gfx942LayoutCompatibilityErrorV2::Unsupported { detail, .. })
+                if detail.contains("unit")
         ));
         assert!(matches!(
             results.path_bounded,

@@ -192,6 +192,8 @@ pub(crate) enum SourceScalarKind {
     Char,
     SignedInteger { bits: u64 },
     UnsignedInteger { bits: u64 },
+    PointerSizedSignedInteger { bits: u64 },
+    PointerSizedUnsignedInteger { bits: u64 },
     Float { bits: u64 },
 }
 
@@ -463,12 +465,12 @@ impl<'tcx> Extractor<'tcx> {
         let kind = match *ty.kind() {
             TyKind::Bool => TypeLayoutKind::Scalar(SourceScalarKind::Bool),
             TyKind::Char => TypeLayoutKind::Scalar(SourceScalarKind::Char),
-            TyKind::Int(integer) => TypeLayoutKind::Scalar(SourceScalarKind::SignedInteger {
-                bits: integer_bits(&self.layout_cx, integer),
-            }),
-            TyKind::Uint(integer) => TypeLayoutKind::Scalar(SourceScalarKind::UnsignedInteger {
-                bits: unsigned_integer_bits(&self.layout_cx, integer),
-            }),
+            TyKind::Int(integer) => {
+                TypeLayoutKind::Scalar(signed_integer_kind(&self.layout_cx, integer))
+            }
+            TyKind::Uint(integer) => {
+                TypeLayoutKind::Scalar(unsigned_integer_kind(&self.layout_cx, integer))
+            }
             TyKind::Float(float) => TypeLayoutKind::Scalar(SourceScalarKind::Float {
                 bits: float_bits(float),
             }),
@@ -941,25 +943,29 @@ fn primitive_facts(primitive: Primitive) -> ScalarPrimitiveFacts {
     }
 }
 
-fn integer_bits(layout_cx: &LayoutCx<'_>, integer: IntTy) -> u64 {
+fn signed_integer_kind(layout_cx: &LayoutCx<'_>, integer: IntTy) -> SourceScalarKind {
     match integer {
-        IntTy::I8 => 8,
-        IntTy::I16 => 16,
-        IntTy::I32 => 32,
-        IntTy::I64 => 64,
-        IntTy::I128 => 128,
-        IntTy::Isize => layout_cx.data_layout().pointer_size().bits(),
+        IntTy::I8 => SourceScalarKind::SignedInteger { bits: 8 },
+        IntTy::I16 => SourceScalarKind::SignedInteger { bits: 16 },
+        IntTy::I32 => SourceScalarKind::SignedInteger { bits: 32 },
+        IntTy::I64 => SourceScalarKind::SignedInteger { bits: 64 },
+        IntTy::I128 => SourceScalarKind::SignedInteger { bits: 128 },
+        IntTy::Isize => SourceScalarKind::PointerSizedSignedInteger {
+            bits: layout_cx.data_layout().pointer_size().bits(),
+        },
     }
 }
 
-fn unsigned_integer_bits(layout_cx: &LayoutCx<'_>, integer: UintTy) -> u64 {
+fn unsigned_integer_kind(layout_cx: &LayoutCx<'_>, integer: UintTy) -> SourceScalarKind {
     match integer {
-        UintTy::U8 => 8,
-        UintTy::U16 => 16,
-        UintTy::U32 => 32,
-        UintTy::U64 => 64,
-        UintTy::U128 => 128,
-        UintTy::Usize => layout_cx.data_layout().pointer_size().bits(),
+        UintTy::U8 => SourceScalarKind::UnsignedInteger { bits: 8 },
+        UintTy::U16 => SourceScalarKind::UnsignedInteger { bits: 16 },
+        UintTy::U32 => SourceScalarKind::UnsignedInteger { bits: 32 },
+        UintTy::U64 => SourceScalarKind::UnsignedInteger { bits: 64 },
+        UintTy::U128 => SourceScalarKind::UnsignedInteger { bits: 128 },
+        UintTy::Usize => SourceScalarKind::PointerSizedUnsignedInteger {
+            bits: layout_cx.data_layout().pointer_size().bits(),
+        },
     }
 }
 
@@ -976,12 +982,8 @@ fn source_scalar_kind(layout_cx: &LayoutCx<'_>, ty: Ty<'_>) -> Option<SourceScal
     match *ty.kind() {
         TyKind::Bool => Some(SourceScalarKind::Bool),
         TyKind::Char => Some(SourceScalarKind::Char),
-        TyKind::Int(integer) => Some(SourceScalarKind::SignedInteger {
-            bits: integer_bits(layout_cx, integer),
-        }),
-        TyKind::Uint(integer) => Some(SourceScalarKind::UnsignedInteger {
-            bits: unsigned_integer_bits(layout_cx, integer),
-        }),
+        TyKind::Int(integer) => Some(signed_integer_kind(layout_cx, integer)),
+        TyKind::Uint(integer) => Some(unsigned_integer_kind(layout_cx, integer)),
         TyKind::Float(float) => Some(SourceScalarKind::Float {
             bits: float_bits(float),
         }),

@@ -772,7 +772,17 @@ fn enum_discriminant(
             "rustc logical discriminant is not a supported scalar",
         )
     })?;
-    let scalar = source_scalar(first, &format!("{path}.discriminant"))?;
+    let scalar = match first {
+        SourceScalarKind::PointerSizedSignedInteger { bits } => MirScalarType::Int {
+            signed: true,
+            bits: bounded_scalar_bits(bits, &format!("{path}.discriminant"))?,
+        },
+        SourceScalarKind::PointerSizedUnsignedInteger { bits } => MirScalarType::Int {
+            signed: false,
+            bits: bounded_scalar_bits(bits, &format!("{path}.discriminant"))?,
+        },
+        _ => source_scalar(first, &format!("{path}.discriminant"))?,
+    };
     if !matches!(scalar, MirScalarType::Int { .. }) {
         return Err(inconsistent(path, "enum discriminant is not an integer"));
     }
@@ -1032,6 +1042,13 @@ fn verify_source_scalar(
             bits,
             signed: false,
         },
+        SourceScalarKind::PointerSizedSignedInteger { bits } => {
+            ScalarPrimitiveFacts::Integer { bits, signed: true }
+        }
+        SourceScalarKind::PointerSizedUnsignedInteger { bits } => ScalarPrimitiveFacts::Integer {
+            bits,
+            signed: false,
+        },
         SourceScalarKind::Float { bits } => ScalarPrimitiveFacts::Float { bits },
     };
     if scalar.primitive != expected {
@@ -1092,6 +1109,13 @@ fn source_scalar(
             signed: false,
             bits: bounded_scalar_bits(bits, path)?,
         }),
+        SourceScalarKind::PointerSizedSignedInteger { .. }
+        | SourceScalarKind::PointerSizedUnsignedInteger { .. } => {
+            Err(SemanticLayoutBridgeError::Unsupported {
+                path: path.to_owned(),
+                detail: "pointer-sized integers require source-kind-preserving schema support",
+            })
+        }
         SourceScalarKind::Float { bits } => Ok(MirScalarType::Float {
             bits: bounded_scalar_bits(bits, path)?,
         }),
@@ -1475,6 +1499,21 @@ mod tests {
             ),
             SourceScalarKind::UnsignedInteger { bits } => (
                 "unsigned",
+                ScalarPrimitiveFacts::Integer {
+                    bits,
+                    signed: false,
+                },
+                bits / 8,
+                (bits / 8).min(8),
+            ),
+            SourceScalarKind::PointerSizedSignedInteger { bits } => (
+                "isize",
+                ScalarPrimitiveFacts::Integer { bits, signed: true },
+                bits / 8,
+                (bits / 8).min(8),
+            ),
+            SourceScalarKind::PointerSizedUnsignedInteger { bits } => (
+                "usize",
                 ScalarPrimitiveFacts::Integer {
                     bits,
                     signed: false,
