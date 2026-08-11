@@ -60,6 +60,8 @@ const DF_1_PIE: u64 = 0x0800_0000;
 const R_X86_64_RELATIVE: u32 = 8;
 const R_X86_64_IRELATIVE: u32 = 37;
 const MAX_PROGRAM_HEADERS: usize = 1_024;
+const X86_64_LOAD_PAGE_BYTES: u64 = 4_096;
+const X86_64_MAX_USER_ADDRESS: u64 = 0x0000_7fff_ffff_ffff;
 
 /// Rejection while deriving the identity of a loader-independent application image.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -297,27 +299,56 @@ fn validate_load_segments(
         return Err(SealedStaticApplicationErrorV1::SegmentLayout);
     }
     for load in loads {
-        if load.flags & PF_R == 0
-            || load.flags & (PF_W | PF_X) == (PF_W | PF_X)
-            || load.memory_size == 0
-        {
+        if load.flags & PF_R == 0 || load.flags & (PF_W | PF_X) == (PF_W | PF_X) {
             return Err(SealedStaticApplicationErrorV1::SegmentPermissions);
+        }
+        if load.memory_size == 0
+            || load.alignment < X86_64_LOAD_PAGE_BYTES
+            || load.offset % X86_64_LOAD_PAGE_BYTES != load.virtual_address % X86_64_LOAD_PAGE_BYTES
+            || load.memory_end()? > X86_64_MAX_USER_ADDRESS
+        {
+            return Err(SealedStaticApplicationErrorV1::SegmentLayout);
         }
     }
     for (index, left) in loads.iter().enumerate() {
         for right in &loads[index + 1..] {
             if ranges_overlap(
-                left.offset,
-                left.file_end()?,
-                right.offset,
-                right.file_end()?,
-            ) || ranges_overlap(
                 left.virtual_address,
                 left.memory_end()?,
                 right.virtual_address,
                 right.memory_end()?,
             ) {
                 return Err(SealedStaticApplicationErrorV1::SegmentLayout);
+            }
+            let left_virtual_pages = loader_virtual_pages(*left)?;
+            let right_virtual_pages = loader_virtual_pages(*right)?;
+            if ranges_overlap(
+                left_virtual_pages.0,
+                left_virtual_pages.1,
+                right_virtual_pages.0,
+                right_virtual_pages.1,
+            ) {
+                return Err(SealedStaticApplicationErrorV1::SegmentLayout);
+            }
+            let left_file_pages = loader_file_pages(*left)?;
+            let right_file_pages = loader_file_pages(*right)?;
+            if ranges_overlap(
+                left_file_pages.0,
+                left_file_pages.1,
+                right_file_pages.0,
+                right_file_pages.1,
+            ) {
+                // Linux may map one raw-disjoint boundary page twice with different permissions.
+                // Writable PT_LOAD mappings are private/COW, so only an overlap in the declared
+                // file bytes or in rounded virtual pages creates a W^X mapping.
+                if ranges_overlap(
+                    left.offset,
+                    left.file_end()?,
+                    right.offset,
+                    right.file_end()?,
+                ) {
+                    return Err(SealedStaticApplicationErrorV1::SegmentLayout);
+                }
             }
         }
     }
@@ -340,6 +371,34 @@ fn validate_load_segments(
         return Err(SealedStaticApplicationErrorV1::SegmentLayout);
     }
     Ok(())
+}
+
+fn loader_virtual_pages(load: ProgramHeader) -> Result<(u64, u64), SealedStaticApplicationErrorV1> {
+    Ok((
+        align_down(load.virtual_address, X86_64_LOAD_PAGE_BYTES),
+        align_up(load.memory_end()?, X86_64_LOAD_PAGE_BYTES)?,
+    ))
+}
+
+fn loader_file_pages(load: ProgramHeader) -> Result<(u64, u64), SealedStaticApplicationErrorV1> {
+    if load.file_size == 0 {
+        return Ok((0, 0));
+    }
+    Ok((
+        align_down(load.offset, X86_64_LOAD_PAGE_BYTES),
+        align_up(load.file_end()?, X86_64_LOAD_PAGE_BYTES)?,
+    ))
+}
+
+const fn align_down(value: u64, alignment: u64) -> u64 {
+    value & !(alignment - 1)
+}
+
+fn align_up(value: u64, alignment: u64) -> Result<u64, SealedStaticApplicationErrorV1> {
+    value
+        .checked_add(alignment - 1)
+        .map(|value| align_down(value, alignment))
+        .ok_or(SealedStaticApplicationErrorV1::SegmentLayout)
 }
 
 fn validate_auxiliary_segments(
@@ -658,9 +717,14 @@ fn validate_relocations(
             let target_bytes = mapped_file_slice(bytes, loads, target, 8, PF_R | PF_W, PF_X)?;
             read_i64(target_bytes, 0)?
         };
-        if kind == R_X86_64_IRELATIVE {
-            let resolver = u64::try_from(addend)
-                .map_err(|_| SealedStaticApplicationErrorV1::RelocationMalformed)?;
+        let resolved = u64::try_from(addend)
+            .map_err(|_| SealedStaticApplicationErrorV1::RelocationMalformed)?;
+        if kind == R_X86_64_RELATIVE {
+            if !is_allowed_mapped_address(loads, resolved) {
+                return Err(SealedStaticApplicationErrorV1::RelocationMalformed);
+            }
+        } else {
+            let resolver = resolved;
             if !is_executable_address(loads, resolver) {
                 return Err(SealedStaticApplicationErrorV1::RelocationMalformed);
             }
@@ -749,6 +813,17 @@ fn is_executable_address(loads: &[ProgramHeader], address: u64) -> bool {
                 .contains_memory_range(address, 1, true)
                 .unwrap_or(false)
     })
+}
+
+fn is_allowed_mapped_address(loads: &[ProgramHeader], address: u64) -> bool {
+    address <= X86_64_MAX_USER_ADDRESS
+        && loads.iter().any(|load| {
+            load.flags & PF_R != 0
+                && load.flags & (PF_W | PF_X) != (PF_W | PF_X)
+                && load
+                    .contains_memory_range(address, 1, false)
+                    .unwrap_or(false)
+        })
 }
 
 fn is_writable_target(loads: &[ProgramHeader], address: u64, size: u64) -> bool {
@@ -1037,6 +1112,60 @@ mod tests {
     }
 
     #[test]
+    fn validates_page_rounded_load_mappings_and_file_page_alias_permissions() {
+        let code = HEADER + 2 * PROGRAM;
+        let adjacent_offset = (HEADER + 4 * PROGRAM) as u64;
+
+        let mut benign_shared_file_page = static_elf();
+        benign_shared_file_page[24..32].copy_from_slice(&0x401120_u64.to_le_bytes());
+        benign_shared_file_page[code + 8..code + 16]
+            .copy_from_slice(&adjacent_offset.to_le_bytes());
+        benign_shared_file_page[code + 16..code + 24].copy_from_slice(&0x401120_u64.to_le_bytes());
+        benign_shared_file_page[adjacent_offset as usize] = 0xc3;
+        assert!(sealed_static_application_identity_v1(&benign_shared_file_page).is_ok());
+
+        let mut adjacent_virtual_page = benign_shared_file_page.clone();
+        adjacent_virtual_page[24..32].copy_from_slice(&0x400120_u64.to_le_bytes());
+        adjacent_virtual_page[code + 16..code + 24].copy_from_slice(&0x400120_u64.to_le_bytes());
+        assert_eq!(
+            sealed_static_application_identity_v1(&adjacent_virtual_page),
+            Err(SealedStaticApplicationErrorV1::SegmentLayout)
+        );
+
+        let raw_disjoint_private_file_alias = [
+            program(PT_LOAD, PF_R, 0, 0, 0x200, 0x200, 0x1000),
+            program(PT_LOAD, PF_R | PF_X, 0x200, 0x1200, 1, 1, 0x1000),
+            program(PT_LOAD, PF_R | PF_W, 0x201, 0x2201, 0x200, 0x200, 0x1000),
+        ];
+        assert!(
+            validate_load_segments(&raw_disjoint_private_file_alias, HEADER, 0x190, 0x1200,)
+                .is_ok()
+        );
+
+        let mut overlapping_file_alias = raw_disjoint_private_file_alias;
+        overlapping_file_alias[2].offset = 0x200;
+        overlapping_file_alias[2].virtual_address = 0x2200;
+        assert_eq!(
+            validate_load_segments(&overlapping_file_alias, HEADER, 0x190, 0x1200),
+            Err(SealedStaticApplicationErrorV1::SegmentLayout)
+        );
+
+        let mut subpage_alignment = static_elf();
+        subpage_alignment[code + 48..code + 56].copy_from_slice(&0x100_u64.to_le_bytes());
+        assert_eq!(
+            sealed_static_application_identity_v1(&subpage_alignment),
+            Err(SealedStaticApplicationErrorV1::SegmentLayout)
+        );
+
+        let mut incongruent = static_elf();
+        incongruent[code + 8..code + 16].copy_from_slice(&0x1001_u64.to_le_bytes());
+        assert_eq!(
+            sealed_static_application_identity_v1(&incongruent),
+            Err(SealedStaticApplicationErrorV1::SegmentLayout)
+        );
+    }
+
+    #[test]
     fn rejects_interpreter_unknown_tls_and_executable_writable_segments() {
         let mut interpreter = static_elf();
         let stack = HEADER + 3 * PROGRAM;
@@ -1130,5 +1259,25 @@ mod tests {
             sealed_static_application_identity_v1(&resolver),
             Err(SealedStaticApplicationErrorV1::RelocationMalformed)
         );
+    }
+
+    #[test]
+    fn relative_relocations_require_bounded_mapped_nonnegative_addends() {
+        const RELA_OFFSET: usize = 0x1a0;
+
+        let mut writable_destination = static_pie();
+        writable_destination[RELA_OFFSET + 16..RELA_OFFSET + 24]
+            .copy_from_slice(&0x2000_i64.to_le_bytes());
+        assert!(sealed_static_application_identity_v1(&writable_destination).is_ok());
+
+        for addend in [-1_i64, 0x1800, 0x5000, i64::MAX] {
+            let mut malformed = static_pie();
+            malformed[RELA_OFFSET + 16..RELA_OFFSET + 24].copy_from_slice(&addend.to_le_bytes());
+            assert_eq!(
+                sealed_static_application_identity_v1(&malformed),
+                Err(SealedStaticApplicationErrorV1::RelocationMalformed),
+                "addend {addend:#x}"
+            );
+        }
     }
 }
