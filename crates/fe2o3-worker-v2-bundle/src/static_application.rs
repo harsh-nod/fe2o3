@@ -1067,6 +1067,22 @@ mod tests {
         bytes
     }
 
+    fn static_pie_with_tls() -> Vec<u8> {
+        const PROGRAMS: usize = 7;
+        let mut bytes = static_pie();
+        bytes[56..58].copy_from_slice(&(PROGRAMS as u16).to_le_bytes());
+        let table_size = (PROGRAM * PROGRAMS) as u64;
+        let phdr = HEADER;
+        bytes[phdr + 32..phdr + 40].copy_from_slice(&table_size.to_le_bytes());
+        bytes[phdr + 40..phdr + 48].copy_from_slice(&table_size.to_le_bytes());
+        write_program(
+            &mut bytes,
+            6,
+            program(PT_TLS, PF_R, 0x2100, 0x2100, 0x20, 0x40, 16),
+        );
+        bytes
+    }
+
     #[test]
     fn static_application_identity_has_an_exact_cross_component_golden() {
         assert_eq!(
@@ -1166,7 +1182,46 @@ mod tests {
     }
 
     #[test]
-    fn rejects_interpreter_unknown_tls_and_executable_writable_segments() {
+    fn admits_one_writable_load_backed_tls_segment() {
+        assert!(sealed_static_application_identity_v1(&static_pie_with_tls()).is_ok());
+    }
+
+    #[test]
+    fn rejects_malformed_executable_and_outside_tls_segments() {
+        let tls = HEADER + 6 * PROGRAM;
+
+        let mut malformed = static_pie_with_tls();
+        malformed[tls + 48..tls + 56].copy_from_slice(&3_u64.to_le_bytes());
+        assert_eq!(
+            sealed_static_application_identity_v1(&malformed),
+            Err(SealedStaticApplicationErrorV1::SegmentLayout)
+        );
+
+        let mut executable = static_pie_with_tls();
+        write_program(
+            &mut executable,
+            6,
+            program(PT_TLS, PF_R, 0x1000, 0x1000, 1, 1, 1),
+        );
+        assert_eq!(
+            sealed_static_application_identity_v1(&executable),
+            Err(SealedStaticApplicationErrorV1::SegmentPermissions)
+        );
+
+        let mut outside = static_pie_with_tls();
+        write_program(
+            &mut outside,
+            6,
+            program(PT_TLS, PF_R, 0x1c0, 0x3000, 0, 0x20, 16),
+        );
+        assert_eq!(
+            sealed_static_application_identity_v1(&outside),
+            Err(SealedStaticApplicationErrorV1::SegmentLayout)
+        );
+    }
+
+    #[test]
+    fn rejects_interpreter_unknown_and_executable_writable_segments() {
         let mut interpreter = static_elf();
         let stack = HEADER + 3 * PROGRAM;
         interpreter[stack..stack + 4].copy_from_slice(&PT_INTERP.to_le_bytes());
@@ -1188,15 +1243,6 @@ mod tests {
         assert_eq!(
             sealed_static_application_identity_v1(&writable_code),
             Err(SealedStaticApplicationErrorV1::SegmentPermissions)
-        );
-
-        let mut malformed_tls = static_pie();
-        let stack = HEADER + 5 * PROGRAM;
-        malformed_tls[stack..stack + 4].copy_from_slice(&PT_TLS.to_le_bytes());
-        malformed_tls[stack + 4..stack + 8].copy_from_slice(&PF_R.to_le_bytes());
-        assert_eq!(
-            sealed_static_application_identity_v1(&malformed_tls),
-            Err(SealedStaticApplicationErrorV1::SegmentLayout)
         );
     }
 
