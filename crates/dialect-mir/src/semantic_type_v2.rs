@@ -324,6 +324,7 @@ impl SemanticTypeGraphBuilderV2 {
         }
     }
 
+    /// Declares a node under a caller-supplied, unauthenticated key.
     pub fn declare(
         &mut self,
         key: impl Into<String>,
@@ -373,6 +374,7 @@ impl SemanticTypeGraphBuilderV2 {
         Ok(())
     }
 
+    /// Interns a definition under a caller-supplied, unauthenticated key.
     pub fn intern(
         &mut self,
         key: impl Into<String>,
@@ -456,6 +458,8 @@ impl SemanticTypeGraphV2 {
         ))
     }
 
+    /// Returns declaration-order-stable bytes, not authenticated semantic identity.
+    /// Caller keys remain part of this encoding and are not derived here.
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, SemanticTypeGraphErrorV2> {
         self.validate()?;
         let mut order: Vec<usize> = (0..self.nodes.len()).collect();
@@ -1244,7 +1248,12 @@ fn resolve_niche_source<'graph>(
                     SemanticTypeKindV2::Tuple { fields }
                     | SemanticTypeKindV2::Struct { fields, .. }
                     | SemanticTypeKindV2::Union { fields, .. } => fields,
-                    _ => return Err(invalid(key, "niche field path does not traverse an aggregate")),
+                    _ => {
+                        return Err(invalid(
+                            key,
+                            "niche field path does not traverse an aggregate",
+                        ));
+                    }
                 };
                 let field = fields
                     .get(*index as usize)
@@ -1408,19 +1417,24 @@ fn validate_enum(
             niche_variants_end,
             niche_start,
         } => {
-            let (niche_offset, terminal_scalar, terminal_ranges) = resolve_niche_source(
-                context,
-                key,
-                variants,
-                *untagged_variant,
-                source,
-            )?;
+            let (niche_offset, terminal_scalar, terminal_ranges) =
+                resolve_niche_source(context, key, variants, *untagged_variant, source)?;
             if *niche_scalar != terminal_scalar || valid_ranges.as_slice() != terminal_ranges {
                 return Err(invalid(
                     key,
                     "niche scalar and validity ranges must exactly match the terminal type",
                 ));
             }
+            context.totals.ranges = context
+                .totals
+                .ranges
+                .checked_add(valid_ranges.len() as u64)
+                .ok_or_else(|| invalid(key, "validity range count overflows u64"))?;
+            enforce(
+                "validity ranges",
+                context.totals.ranges,
+                u64::from(context.graph.budgets.max_validity_ranges),
+            )?;
             let width = niche_scalar
                 .byte_width()
                 .ok_or_else(|| invalid(key, "unsupported niche scalar width"))?;
@@ -1533,9 +1547,7 @@ fn edge_count(kind: &SemanticTypeKindV2) -> u64 {
         | SemanticTypeKindV2::Struct { fields, .. }
         | SemanticTypeKindV2::Union { fields, .. } => fields.len() as u64,
         SemanticTypeKindV2::Enum {
-            encoding,
-            variants,
-            ..
+            encoding, variants, ..
         } => variants
             .iter()
             .map(|variant| variant.fields.len() as u64)
@@ -1848,13 +1860,14 @@ fn charge_decode_total(
     resource: &'static str,
     max: u32,
 ) -> Result<(), SemanticTypeGraphErrorV2> {
-    *total = total
-        .checked_add(u64::from(count))
-        .ok_or(SemanticTypeGraphErrorV2::ResourceLimit {
-            resource,
-            actual: u64::MAX,
-            max: u64::from(max),
-        })?;
+    *total =
+        total
+            .checked_add(u64::from(count))
+            .ok_or(SemanticTypeGraphErrorV2::ResourceLimit {
+                resource,
+                actual: u64::MAX,
+                max: u64::from(max),
+            })?;
     enforce(resource, *total, u64::from(max))
 }
 
@@ -2182,17 +2195,8 @@ fn decode_enum_encoding(
         }),
         3 => {
             let path_count = reader.u32()?;
-            charge_decode_total(
-                &mut totals.edges,
-                path_count,
-                "edges",
-                budgets.max_edges,
-            )?;
-            reader.ensure_count_fits(
-                path_count,
-                5,
-                "niche path count exceeds remaining input",
-            )?;
+            charge_decode_total(&mut totals.edges, path_count, "edges", budgets.max_edges)?;
+            reader.ensure_count_fits(path_count, 5, "niche path count exceeds remaining input")?;
             let mut path = Vec::with_capacity(path_count as usize);
             for _ in 0..path_count {
                 path.push(match reader.u8()? {

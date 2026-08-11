@@ -1497,12 +1497,7 @@ fn niche_source_rejects_padding_missing_fields_offsets_scalars_and_ranges() {
     ];
     for source in bad_sources {
         assert!(matches!(
-            build_nested_niche(
-                source,
-                scalar,
-                nonzero_u8_ranges(),
-                nonzero_u8_ranges()
-            ),
+            build_nested_niche(source, scalar, nonzero_u8_ranges(), nonzero_u8_ranges()),
             Err(SemanticTypeGraphErrorV2::Invalid { .. })
         ));
     }
@@ -1697,7 +1692,10 @@ fn caller_keys_are_explicitly_part_of_untrusted_canonicalization() {
     }
     let left = graph("caller-key-a");
     let right = graph("caller-key-b");
-    assert_ne!(left.canonical_bytes().unwrap(), right.canonical_bytes().unwrap());
+    assert_ne!(
+        left.canonical_bytes().unwrap(),
+        right.canonical_bytes().unwrap()
+    );
     assert_eq!(
         left.untrusted_canonical_encoding().unwrap().as_bytes(),
         left.canonical_bytes().unwrap()
@@ -1806,5 +1804,4 @@ fn validation_work_budget_stops_deep_reference_amplifier() {
             ..
         })
     ));
-
 }
