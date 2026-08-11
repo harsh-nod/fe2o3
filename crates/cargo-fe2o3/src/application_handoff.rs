@@ -831,8 +831,14 @@ fn validate_envelope_stat(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
     use std::os::unix::process::ExitStatusExt;
 
+    const INVALID_ACK_CHILD_ENV: &str = "FE2O3_INVALID_ACK_RUST_FIXTURE_CHILD";
+    const INVALID_ACK_FD_ENV: &str = "FE2O3_INVALID_ACK_RUST_FIXTURE_FD";
+    const INVALID_ACK_PID_FILE_ENV: &str = "FE2O3_INVALID_ACK_RUST_FIXTURE_PID_FILE";
+    const INVALID_ACK_TEST_NAME: &str = "application_handoff::tests::invalid_ack_early_exit_retains_leader_until_bounded_group_cleanup";
+    const MIN_HIGH_ACK_FD: RawFd = 64;
     const REPEATED_SIGNAL_CHILD_ENV: &str = "FE2O3_ACK_POLL_REPEATED_SIGNAL_CHILD";
 
     unsafe extern "C" fn acknowledge_test_signal(_: libc::c_int) {}
@@ -879,7 +885,7 @@ mod tests {
         }
     }
 
-    fn fresh_session_command(program: &str) -> Command {
+    fn fresh_session_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
         let mut command = Command::new(program);
         // SAFETY: the callback performs only child-side session syscalls before exec.
         unsafe {
@@ -1140,16 +1146,56 @@ mod tests {
         reap_process_group(leader).unwrap();
     }
 
+    fn run_invalid_ack_child_fixture() {
+        let ack_fd = std::env::var(INVALID_ACK_FD_ENV)
+            .unwrap()
+            .parse::<RawFd>()
+            .unwrap();
+        assert!(ack_fd >= MIN_HIGH_ACK_FD);
+        // SAFETY: the environment names the exact descriptor transferred by the parent pre-exec
+        // callback. A successful exec proves the callback cleared CLOEXEC on that descriptor.
+        let flags = unsafe { libc::fcntl(ack_fd, libc::F_GETFD) };
+        assert!(flags >= 0, "inherited ACK descriptor is closed");
+        assert_eq!(flags & libc::FD_CLOEXEC, 0);
+        // SAFETY: this exec'd fixture owns the inherited ACK descriptor and closes it after the
+        // single deliberately invalid byte.
+        let mut ack = unsafe { File::from_raw_fd(ack_fd) };
+        ack.write_all(b"x").unwrap();
+        drop(ack);
+
+        let descendant = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+        std::fs::write(
+            std::env::var_os(INVALID_ACK_PID_FILE_ENV).unwrap(),
+            descendant.id().to_string(),
+        )
+        .unwrap();
+    }
+
     #[test]
     fn invalid_ack_early_exit_retains_leader_until_bounded_group_cleanup() {
+        if std::env::var_os(INVALID_ACK_CHILD_ENV).is_some() {
+            run_invalid_ack_child_fixture();
+            return;
+        }
+
         ensure_child_subreaper().unwrap();
         let pid_file = std::env::temp_dir().join(format!(
             "cargo-fe2o3-invalid-ack-descendant-{}",
             std::process::id()
         ));
-        let (mut ack_read, ack_write) = cloexec_pipe().unwrap();
+        let (mut ack_read, original_ack_write) = cloexec_pipe().unwrap();
+        let ack_write = File::from(
+            rustix::io::fcntl_dupfd_cloexec(&original_ack_write, MIN_HIGH_ACK_FD).unwrap(),
+        );
+        drop(original_ack_write);
         let ack_fd = ack_write.as_raw_fd();
-        let mut command = fresh_session_command("/bin/sh");
+        assert!(ack_fd >= MIN_HIGH_ACK_FD);
+        assert!(
+            rustix::io::fcntl_getfd(&ack_write)
+                .unwrap()
+                .contains(rustix::io::FdFlags::CLOEXEC)
+        );
+        let mut command = fresh_session_command(std::env::current_exe().unwrap());
         // SAFETY: the callback changes only the inherited ACK descriptor before exec. Session
         // establishment was registered first and both callbacks run in the single-threaded child.
         unsafe {
@@ -1161,11 +1207,12 @@ mod tests {
             });
         }
         command
-            .arg("-c")
-            .arg("eval \"printf x >&$1\"; eval \"exec $1>&-\"; sleep 30 & echo $! > \"$2\"")
-            .arg("fe2o3-invalid-ack-probe")
-            .arg(ack_fd.to_string())
-            .arg(&pid_file);
+            .arg("--exact")
+            .arg(INVALID_ACK_TEST_NAME)
+            .arg("--nocapture")
+            .env(INVALID_ACK_CHILD_ENV, "1")
+            .env(INVALID_ACK_FD_ENV, ack_fd.to_string())
+            .env(INVALID_ACK_PID_FILE_ENV, &pid_file);
         let mut application = command.spawn().unwrap();
         drop(ack_write);
 
