@@ -242,6 +242,39 @@ class SnapshotClosure:
     snapshot_files: list[RetainedFile]
     manifest: dict[str, Any]
 
+    def relocate(self, destination: Path) -> None:
+        """Rename an immutable snapshot while preserving every retained inode."""
+        if (
+            not destination.is_absolute()
+            or destination.exists()
+            or destination.is_symlink()
+        ):
+            raise HardeningError(
+                f"{self.label} relocation destination must be an absent absolute path"
+            )
+        self.revalidate()
+        old_root = self.root
+        relative_paths = [retained.path.relative_to(old_root) for retained in self.snapshot_files]
+        root_fd = os.open(old_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            opened = os.fstat(root_fd)
+            named = os.stat(old_root, follow_symlinks=False)
+            if stat_identity(opened) != stat_identity(named):
+                raise HardeningError(f"{self.label} snapshot root changed before relocation")
+            os.fchmod(root_fd, 0o755)
+            try:
+                old_root.rename(destination)
+            finally:
+                os.fchmod(root_fd, 0o555)
+        finally:
+            os.close(root_fd)
+        self.root = destination
+        for retained, relative in zip(self.snapshot_files, relative_paths, strict=True):
+            retained.path = destination / relative
+        if stat.S_IMODE(os.stat(destination, follow_symlinks=False).st_mode) != 0o555:
+            raise HardeningError(f"{self.label} relocated snapshot root is mutable")
+        self.revalidate()
+
     def revalidate(self) -> None:
         for retained in self.source_files:
             retained.revalidate()
@@ -795,6 +828,22 @@ def adversarial_self_test() -> None:
         )
         try:
             compare_labeled_manifests(first.manifest, second.manifest)
+            occupied = root / "occupied-execution-root"
+            occupied.mkdir()
+            try:
+                first.relocate(occupied)
+            except HardeningError:
+                pass
+            else:
+                raise AssertionError("preexisting relocation root was accepted")
+            occupied.rmdir()
+            canonical = root / "canonical-execution-root"
+            first.relocate(canonical)
+            if first.root != canonical or not (canonical / "Cargo.lock").is_file():
+                raise AssertionError("immutable snapshot was not relocated")
+            if stat.S_IMODE(canonical.stat().st_mode) != 0o555:
+                raise AssertionError("relocated immutable snapshot root became mutable")
+            first.relocate(root / "snapshot-a")
             substituted = copy.deepcopy(second.manifest)
             substituted["files"][0]["sha256"] = "0" * 64
             try:

@@ -1128,6 +1128,39 @@ def build_and_generate(
     return output, executable_manifest, retained_hsaco
 
 
+def build_from_canonical_snapshot(
+    index: int,
+    source: SnapshotClosure,
+    run: Path,
+    execution_root: Path,
+    evidence_root: Path,
+    manifest: dict[str, Any],
+    tools: dict[str, PinnedTool],
+    golden: dict[str, Any],
+    supervisor: Supervisor,
+    *,
+    observe_candidate: bool,
+) -> tuple[Path, dict[str, Any], RetainedFile]:
+    archived_root = source.root
+    if archived_root != run / "source":
+        raise EvidenceError("independent source snapshot has an unexpected archive path")
+    source.relocate(execution_root)
+    try:
+        return build_and_generate(
+            index,
+            source.root,
+            run,
+            evidence_root,
+            manifest,
+            tools,
+            golden,
+            supervisor,
+            observe_candidate=observe_candidate,
+        )
+    finally:
+        source.relocate(archived_root)
+
+
 def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) -> None:
     require_absent_output(run_root, "run root")
     require_absent_output(evidence_root, "evidence root")
@@ -1220,10 +1253,12 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
         retained_closures.append(runtime_closure)
         supervisor.guards.extend(runtime_closure.files)
         (evidence_root / "tool-runtime-manifest.json").write_bytes(canonical_json(observed))
-        first, first_executables, first_hsaco = build_and_generate(
+        canonical_source = run_root / "canonical-execution-source"
+        first, first_executables, first_hsaco = build_from_canonical_snapshot(
             1,
-            prepared[0][1].root,
+            prepared[0][1],
             prepared[0][0],
+            canonical_source,
             evidence_root,
             manifest,
             tools,
@@ -1235,10 +1270,11 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
         for closure in closures:
             closure.revalidate()
         git_clean(repo, bootstrap_environment, tools, supervisor)
-        second, second_executables, second_hsaco = build_and_generate(
+        second, second_executables, second_hsaco = build_from_canonical_snapshot(
             2,
-            prepared[1][1].root,
+            prepared[1][1],
             prepared[1][0],
+            canonical_source,
             evidence_root,
             manifest,
             tools,
