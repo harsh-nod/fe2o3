@@ -4,7 +4,7 @@ use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::OpenOptionsExt;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component, Path};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::PublisherError;
@@ -145,14 +145,20 @@ impl SecureLocation {
         Ok(bytes)
     }
 
-    pub(crate) fn open_or_create_database(&self) -> Result<(File, FileIdentity), PublisherError> {
+    pub(crate) fn open_or_create_ledger(
+        &self,
+    ) -> Result<(File, FileIdentity, bool), PublisherError> {
+        let mut created = false;
         let file = match openat_raw(
             self.directory.as_raw_fd(),
             &self.name,
             libc::O_RDWR | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_CREAT | libc::O_EXCL,
             0o600,
         ) {
-            Ok(file) => file,
+            Ok(file) => {
+                created = true;
+                file
+            }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => openat(
                 self.directory.as_raw_fd(),
                 &self.name,
@@ -174,23 +180,10 @@ impl SecureLocation {
         {
             return Err(PublisherError::Config);
         }
-        Ok((file, opened))
+        Ok((file, opened, created))
     }
 
-    pub(crate) fn proc_path(&self) -> Result<PathBuf, PublisherError> {
-        let name = OsStr::from_bytes(self.name.to_bytes());
-        let path =
-            PathBuf::from(format!("/proc/self/fd/{}", self.directory.as_raw_fd())).join(name);
-        if !Path::new("/proc/self/fd").is_dir() {
-            return Err(PublisherError::Config);
-        }
-        Ok(path)
-    }
-
-    pub(crate) fn verify_database_entry(
-        &self,
-        expected: FileIdentity,
-    ) -> Result<(), PublisherError> {
+    pub(crate) fn verify_ledger_entry(&self, expected: FileIdentity) -> Result<(), PublisherError> {
         let current = self.entry_identity()?;
         if current.dev != expected.dev
             || current.ino != expected.ino
@@ -410,12 +403,12 @@ mod tests {
         let temp = secure_tempdir();
         let path = temp.path().join("publisher.db");
         let location = SecureLocation::open(&path).unwrap();
-        let (_file, identity) = location.open_or_create_database().unwrap();
+        let (_file, identity, _) = location.open_or_create_ledger().unwrap();
         let moved = temp.path().join("moved.db");
         std::fs::rename(&path, &moved).unwrap();
         std::fs::write(&path, b"replacement").unwrap();
         std::fs::set_permissions(&path, Permissions::from_mode(0o600)).unwrap();
-        assert!(location.verify_database_entry(identity).is_err());
+        assert!(location.verify_ledger_entry(identity).is_err());
     }
 
     #[test]

@@ -6,7 +6,7 @@ use base64::Engine;
 use jsonwebtoken::{Algorithm, DecodingKey, Validation};
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::{Map, Value};
+use serde_json::Value;
 use tokio::time::Instant;
 
 use crate::PublisherError;
@@ -14,7 +14,7 @@ use crate::bounds::{
     MAX_CLOCK_SKEW_SECS, MAX_JSON_STRING_BYTES, MAX_JWKS_BYTES, MAX_JWKS_KEYS, MAX_JWT_BYTES,
     MAX_JWT_SEGMENT_BYTES, MAX_OIDC_LIFETIME_SECS,
 };
-use crate::canonical::{CanonicalError, parse_unique};
+use crate::canonical::{CanonicalError, canonical_bytes, parse_unique};
 use crate::config::ServiceConfig;
 use crate::jwks::JwksProvider;
 
@@ -44,8 +44,40 @@ pub struct PublisherRequest {
 
 #[derive(Clone, Debug)]
 pub struct Authorization {
-    pub replay_identity: String,
+    pub stable_projection_sha256: String,
     pub issued_at: i64,
+}
+
+#[derive(Serialize)]
+#[serde(deny_unknown_fields)]
+struct StableAuthorizationProjection<'a> {
+    actor_id: &'a str,
+    aud: &'a str,
+    base_ref: &'a str,
+    event_name: &'a str,
+    environment: &'a str,
+    head_ref: &'a str,
+    iss: &'a str,
+    job: &'a str,
+    job_workflow_ref: &'a str,
+    job_workflow_sha: &'a str,
+    policy_id: &'static str,
+    #[serde(rename = "ref")]
+    reference: &'a str,
+    repository: &'a str,
+    repository_id: &'a str,
+    repository_owner: &'a str,
+    repository_owner_id: &'a str,
+    run_attempt: &'a str,
+    run_id: &'a str,
+    run_number: &'a str,
+    runner_environment: &'a str,
+    schema_version: u32,
+    sha: &'a str,
+    sub: &'a str,
+    workflow: &'a str,
+    workflow_ref: &'a str,
+    workflow_sha: &'a str,
 }
 
 #[derive(Debug, Deserialize)]
@@ -183,9 +215,20 @@ pub async fn authenticate(
     token: &str,
     deadline: Instant,
 ) -> Result<Authorization, PublisherError> {
+    authenticate_at(config, provider, request, token, deadline, unix_now()?).await
+}
+
+async fn authenticate_at(
+    config: &ServiceConfig,
+    provider: Arc<dyn JwksProvider>,
+    request: &PublisherRequest,
+    token: &str,
+    deadline: Instant,
+    observed_at: i64,
+) -> Result<Authorization, PublisherError> {
     validate_request_shape(request)?;
-    let (header, claims) = verify_token(provider, token, deadline).await?;
-    validate_claims(config, request, &header, &claims)
+    let (_header, claims) = verify_token(provider, token, deadline).await?;
+    validate_claims(config, request, &claims, observed_at)
 }
 
 async fn verify_token(
@@ -363,8 +406,8 @@ fn validate_request_shape(request: &PublisherRequest) -> Result<(), PublisherErr
 fn validate_claims(
     config: &ServiceConfig,
     request: &PublisherRequest,
-    header: &Value,
     claims: &Value,
+    observed_at: i64,
 ) -> Result<Authorization, PublisherError> {
     let projected: GithubClaims =
         serde_json::from_value(claims.clone()).map_err(|_| PublisherError::Authentication)?;
@@ -494,51 +537,69 @@ fn validate_claims(
     }
 
     let issued_at = projected.iat;
-    let not_before = projected.nbf;
     let expires_at = projected.exp;
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| PublisherError::Authentication)?
-        .as_secs() as i64;
-    if issued_at <= 0
-        || not_before <= 0
-        || expires_at <= issued_at
-        || not_before > issued_at
-        || expires_at - issued_at > MAX_OIDC_LIFETIME_SECS
-        || issued_at > now + MAX_CLOCK_SKEW_SECS
-        || not_before > now + MAX_CLOCK_SKEW_SECS
-        || expires_at < now
-    {
-        return Err(PublisherError::Authentication);
-    }
+    validate_times(
+        issued_at,
+        projected.nbf,
+        expires_at,
+        config.minimum_token_remaining_seconds(),
+        observed_at,
+    )?;
 
-    let expected_authorization = authorization_value(header, claims, field("github_job")?);
+    let expected_authorization = stable_authorization_value(&projected, field("github_job")?)?;
     if request.oidc_authorization != expected_authorization {
         return Err(PublisherError::Authentication);
     }
     if !safe_text(&projected.jti) {
         return Err(PublisherError::Authentication);
     }
+    let projection =
+        canonical_bytes(&expected_authorization).map_err(|_| PublisherError::Authentication)?;
     Ok(Authorization {
-        replay_identity: projected.jti,
+        stable_projection_sha256: sha256(&projection),
         issued_at,
     })
 }
 
-fn authorization_value(header: &Value, claims: &Value, job: &str) -> Value {
-    let mut output = claims.as_object().cloned().unwrap_or_else(Map::new);
-    output.insert("alg".into(), Value::String("RS256".into()));
-    output.insert("job".into(), Value::String(job.into()));
-    output.insert(
-        "kid".into(),
-        Value::String(string(header, "kid").unwrap_or_default().into()),
-    );
-    output.insert("policy_id".into(), Value::String(POLICY_ID.into()));
-    output.insert("schema_version".into(), Value::Number(1.into()));
-    if let Ok(x5t) = string(header, "x5t") {
-        output.insert("x5t".into(), Value::String(x5t.into()));
-    }
-    Value::Object(output)
+fn stable_authorization_value(claims: &GithubClaims, job: &str) -> Result<Value, PublisherError> {
+    serde_json::to_value(StableAuthorizationProjection {
+        actor_id: &claims.actor_id,
+        aud: &claims.aud,
+        base_ref: &claims.base_ref,
+        event_name: &claims.event_name,
+        environment: &claims.environment,
+        head_ref: &claims.head_ref,
+        iss: &claims.iss,
+        job,
+        job_workflow_ref: &claims.job_workflow_ref,
+        job_workflow_sha: &claims.job_workflow_sha,
+        policy_id: POLICY_ID,
+        reference: &claims.reference,
+        repository: &claims.repository,
+        repository_id: &claims.repository_id,
+        repository_owner: &claims.repository_owner,
+        repository_owner_id: &claims.repository_owner_id,
+        run_attempt: &claims.run_attempt,
+        run_id: &claims.run_id,
+        run_number: &claims.run_number,
+        runner_environment: &claims.runner_environment,
+        schema_version: 1,
+        sha: &claims.sha,
+        sub: &claims.sub,
+        workflow: &claims.workflow,
+        workflow_ref: &claims.workflow_ref,
+        workflow_sha: &claims.workflow_sha,
+    })
+    .map_err(|_| PublisherError::Authentication)
+}
+
+fn sha256(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn string<'a>(value: &'a Value, name: &str) -> Result<&'a str, PublisherError> {
@@ -591,7 +652,13 @@ pub(crate) async fn validate_enrollment_token(
     let projected: GithubClaims =
         serde_json::from_value(claims).map_err(|_| PublisherError::Authentication)?;
     projected.validate_shape()?;
-    validate_times(projected.iat, projected.nbf, projected.exp)?;
+    validate_times(
+        projected.iat,
+        projected.nbf,
+        projected.exp,
+        config.minimum_token_remaining_seconds(),
+        unix_now()?,
+    )?;
     let values = BTreeMap::from([
         ("actor_id".into(), projected.actor_id),
         ("aud".into(), projected.aud),
@@ -626,11 +693,13 @@ pub(crate) async fn validate_enrollment_token(
     Ok(values)
 }
 
-fn validate_times(issued_at: i64, not_before: i64, expires_at: i64) -> Result<(), PublisherError> {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| PublisherError::Authentication)?
-        .as_secs() as i64;
+fn validate_times(
+    issued_at: i64,
+    not_before: i64,
+    expires_at: i64,
+    minimum_remaining_seconds: i64,
+    now: i64,
+) -> Result<(), PublisherError> {
     if issued_at <= 0
         || not_before <= 0
         || expires_at <= issued_at
@@ -639,10 +708,18 @@ fn validate_times(issued_at: i64, not_before: i64, expires_at: i64) -> Result<()
         || issued_at > now + MAX_CLOCK_SKEW_SECS
         || not_before > now + MAX_CLOCK_SKEW_SECS
         || expires_at < now
+        || expires_at - now < minimum_remaining_seconds
     {
         return Err(PublisherError::Authentication);
     }
     Ok(())
+}
+
+fn unix_now() -> Result<i64, PublisherError> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| PublisherError::Authentication)
+        .map(|duration| duration.as_secs() as i64)
 }
 
 #[cfg(test)]
@@ -676,7 +753,87 @@ mod tests {
             authenticate_fixture(&fixture(), StaticJwksProvider::new(jwks("fixture-key")))
                 .await
                 .unwrap();
-        assert_eq!(authorization.replay_identity, "fixture-jti-001");
+        assert_eq!(authorization.stable_projection_sha256.len(), 64);
+    }
+
+    #[tokio::test]
+    async fn expired_original_and_fresh_jti_share_only_stable_authorization() {
+        let now = unix_now().unwrap();
+        let original = fixture_with(|claims| {
+            claims.insert("iat".into(), json!(now));
+            claims.insert("nbf".into(), json!(now));
+            claims.insert("exp".into(), json!(now + 300));
+            claims.insert("jti".into(), json!("original-jti"));
+        });
+        let fresh = fixture_with(|claims| {
+            claims.insert("iat".into(), json!(now + 301));
+            claims.insert("nbf".into(), json!(now + 301));
+            claims.insert("exp".into(), json!(now + 601));
+            claims.insert("jti".into(), json!("fresh-jti"));
+        });
+        assert_ne!(original.token, fresh.token);
+        assert_eq!(original.request_body, fresh.request_body);
+        let provider = || Arc::new(StaticJwksProvider::new(jwks("fixture-key")));
+        let initial = authenticate_at(
+            &config("/tmp/not-opened.ledger".into()),
+            provider(),
+            &original.request,
+            &original.token,
+            Instant::now() + std::time::Duration::from_secs(1),
+            now,
+        )
+        .await
+        .unwrap();
+        assert!(
+            authenticate_at(
+                &config("/tmp/not-opened.ledger".into()),
+                provider(),
+                &original.request,
+                &original.token,
+                Instant::now() + std::time::Duration::from_secs(1),
+                now + 301,
+            )
+            .await
+            .is_err()
+        );
+        let recovered = authenticate_at(
+            &config("/tmp/not-opened.ledger".into()),
+            provider(),
+            &fresh.request,
+            &fresh.token,
+            Instant::now() + std::time::Duration::from_secs(1),
+            now + 301,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            initial.stable_projection_sha256,
+            recovered.stable_projection_sha256
+        );
+    }
+
+    #[tokio::test]
+    async fn token_must_outlive_request_deadline_and_recovery_grace() {
+        let config = config("/tmp/not-opened.ledger".into());
+        let now = unix_now().unwrap();
+        let remaining = config.minimum_token_remaining_seconds() - 1;
+        let fixture = fixture_with(|claims| {
+            claims.insert("iat".into(), json!(now));
+            claims.insert("nbf".into(), json!(now));
+            claims.insert("exp".into(), json!(now + remaining));
+        });
+        assert!(
+            authenticate_at(
+                &config,
+                Arc::new(StaticJwksProvider::new(jwks("fixture-key"))),
+                &fixture.request,
+                &fixture.token,
+                Instant::now() + std::time::Duration::from_secs(1),
+                now,
+            )
+            .await
+            .is_err()
+        );
     }
 
     #[tokio::test]
@@ -894,7 +1051,7 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(authorization.replay_identity, "fixture-jti-001");
+        assert_eq!(authorization.stable_projection_sha256.len(), 64);
         assert_eq!(provider.refreshes.load(Ordering::SeqCst), 1);
     }
 

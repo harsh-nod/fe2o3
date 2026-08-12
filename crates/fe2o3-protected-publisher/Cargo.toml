@@ -14,7 +14,6 @@ ed25519-dalek = { version = "=2.2.0", features = ["pem", "pkcs8"] }
 jsonwebtoken = { version = "=10.3.0", default-features = false, features = ["aws_lc_rs", "use_pem"] }
 libc.workspace = true
 reqwest = { version = "=0.12.23", default-features = false, features = ["rustls-tls"] }
-rusqlite = { version = "=0.37.0", features = ["bundled"] }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
 sha2.workspace = true

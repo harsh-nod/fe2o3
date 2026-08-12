@@ -14,13 +14,13 @@ use crate::store::{DurableStore, IssueInput};
 pub(crate) const STORE_WORKER_COUNT: usize = 1;
 
 pub(crate) struct StoreIssue {
-    pub(crate) replay_identity: String,
+    pub(crate) request_key_sha256: String,
+    pub(crate) stable_authorization_sha256: String,
     pub(crate) request_identity: String,
     pub(crate) request_sha256: String,
     pub(crate) request_body: Vec<u8>,
     pub(crate) request: PublisherRequest,
     pub(crate) issued_at: i64,
-    pub(crate) observed_at: i64,
     pub(crate) signature_domain: String,
     pub(crate) signer: Arc<dyn ReceiptSigner>,
 }
@@ -33,13 +33,13 @@ impl StoreIssue {
     ) -> Result<Vec<u8>, PublisherError> {
         store.issue_until(
             IssueInput {
-                replay_identity: &self.replay_identity,
+                request_key_sha256: &self.request_key_sha256,
+                stable_authorization_sha256: &self.stable_authorization_sha256,
                 request_identity: &self.request_identity,
                 request_sha256: &self.request_sha256,
                 request_body: &self.request_body,
                 request: &self.request,
                 issued_at: self.issued_at,
-                observed_at: self.observed_at,
                 signature_domain: &self.signature_domain,
                 signer: self.signer.as_ref(),
             },

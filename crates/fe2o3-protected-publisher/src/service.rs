@@ -5,9 +5,10 @@ use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::extract::State;
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
-use axum::http::{HeaderMap, Method, Request, StatusCode};
+use axum::http::{HeaderMap, HeaderName, Method, Request, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
+use sha2::{Digest, Sha256};
 use tokio::sync::Semaphore;
 use tokio::time::Instant;
 
@@ -22,6 +23,8 @@ use crate::receipt::{FileReceiptSigner, ReceiptSigner, raw_request_sha256, reque
 use crate::store::{DurableStore, StorePolicy};
 use crate::store_worker::{StoreIssue, StoreWorker};
 use crate::{PublisherError, ServiceConfig};
+
+const IDEMPOTENCY_KEY: HeaderName = HeaderName::from_static("idempotency-key");
 
 #[derive(Clone, Debug)]
 pub struct PublisherResponse {
@@ -51,7 +54,7 @@ impl Publisher {
             &config.signing_key_path,
         )?);
         let store = DurableStore::open_with_policy(
-            &config.database_path,
+            &config.ledger_path,
             StorePolicy::from_config(&config)?,
         )?;
         let max_inflight_requests = config.max_inflight_requests as usize;
@@ -86,10 +89,12 @@ impl Publisher {
         &self,
         body: &[u8],
         bearer: &str,
+        idempotency_key: &str,
     ) -> Result<PublisherResponse, PublisherError> {
         self.issue_until(
             body,
             bearer,
+            idempotency_key,
             Instant::now() + self.config.request_deadline(),
         )
         .await
@@ -99,8 +104,10 @@ impl Publisher {
         &self,
         body: &[u8],
         bearer: &str,
+        idempotency_key: &str,
         request_deadline: Instant,
     ) -> Result<PublisherResponse, PublisherError> {
+        let request_key_sha256 = idempotency_key_identity(idempotency_key)?;
         let value =
             parse_canonical(body, MAX_REQUEST_BYTES).map_err(|_| PublisherError::Request)?;
         let request: PublisherRequest =
@@ -119,13 +126,13 @@ impl Publisher {
             .store
             .issue_until(
                 StoreIssue {
-                    replay_identity: authorization.replay_identity,
+                    request_key_sha256,
+                    stable_authorization_sha256: authorization.stable_projection_sha256,
                     request_identity: identity,
                     request_sha256: sha256,
                     request_body: body.to_vec(),
                     request,
                     issued_at,
-                    observed_at: now,
                     signature_domain: self.config.signature_domain.clone(),
                     signer: self.signer.clone(),
                 },
@@ -158,7 +165,10 @@ async fn receipts(State(publisher): State<Arc<Publisher>>, request: Request<Body
     };
     let deadline = Instant::now() + publisher.config.request_deadline();
     match bounded_http_request(request, deadline).await {
-        Ok((body, bearer)) => match publisher.issue_until(&body, &bearer, deadline).await {
+        Ok((body, bearer, idempotency_key)) => match publisher
+            .issue_until(&body, &bearer, &idempotency_key, deadline)
+            .await
+        {
             Ok(response) => (
                 StatusCode::OK,
                 [(CONTENT_TYPE, "application/json")],
@@ -174,7 +184,7 @@ async fn receipts(State(publisher): State<Arc<Publisher>>, request: Request<Body
 async fn bounded_http_request(
     request: Request<Body>,
     deadline: Instant,
-) -> Result<(Vec<u8>, String), PublisherError> {
+) -> Result<(Vec<u8>, String, String), PublisherError> {
     if request.method() != Method::POST
         || request.uri().path() != "/v1/receipts"
         || request.uri().query().is_some()
@@ -205,11 +215,40 @@ async fn bounded_http_request(
         .filter(|value| !value.is_empty() && !value.contains(char::is_whitespace))
         .ok_or(PublisherError::Authentication)?
         .to_owned();
+    let idempotency_keys = request.headers().get_all(&IDEMPOTENCY_KEY);
+    if idempotency_keys.iter().count() != 1 {
+        return Err(PublisherError::Request);
+    }
+    let idempotency_key = idempotency_keys
+        .iter()
+        .next()
+        .and_then(|value| value.to_str().ok())
+        .ok_or(PublisherError::Request)?
+        .to_owned();
+    idempotency_key_identity(&idempotency_key)?;
     let body = tokio::time::timeout_at(deadline, to_bytes(request.into_body(), MAX_REQUEST_BYTES))
         .await
         .map_err(|_| PublisherError::Request)?
         .map_err(|_| PublisherError::Request)?;
-    Ok((body.to_vec(), bearer))
+    Ok((body.to_vec(), bearer, idempotency_key))
+}
+
+fn idempotency_key_identity(key: &str) -> Result<String, PublisherError> {
+    if key.len() != 64
+        || !key
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(PublisherError::Request);
+    }
+    let mut digest = Sha256::new();
+    digest.update(b"fe2o3-protected-publisher-idempotency-key-v1\0");
+    digest.update(key.as_bytes());
+    Ok(digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
 }
 
 fn validate_headers(headers: &HeaderMap) -> Result<(), PublisherError> {
@@ -259,7 +298,9 @@ mod tests {
 
     use crate::jwks::StaticJwksProvider;
     use crate::receipt::TestSigner;
-    use crate::test_support::{config, fixture, jwks, secure_tempdir};
+    use crate::test_support::{config, fixture, fixture_with, jwks, secure_tempdir};
+
+    const REQUEST_KEY: &str = "9a9cb28d5d7d7a631b9b4304f5a5fbbb0d24c86d192b572774ef7aa21a29c88d";
 
     fn test_publisher(
         temp: &tempfile::TempDir,
@@ -267,7 +308,7 @@ mod tests {
         signer: Arc<TestSigner>,
     ) -> Arc<Publisher> {
         let config = config(temp.path().join("publisher.db"));
-        let store = DurableStore::open(&config.database_path).unwrap();
+        let store = DurableStore::open(&config.ledger_path).unwrap();
         Publisher::for_test(config, Arc::new(provider), store, signer)
     }
 
@@ -277,12 +318,17 @@ mod tests {
         let signer = Arc::new(TestSigner::new("test-publisher-v1"));
         let publisher = test_publisher(&temp, StaticJwksProvider::new(jwks("fixture-key")), signer);
         let fixture = fixture();
+        let fresh = fixture_with(|claims| {
+            claims.insert("jti".into(), serde_json::json!("fresh-recovery-jti"));
+        });
+        assert_eq!(fixture.request_body, fresh.request_body);
+        assert_ne!(fixture.token, fresh.token);
         let first = publisher
-            .issue(&fixture.request_body, &fixture.token)
+            .issue(&fixture.request_body, &fixture.token, REQUEST_KEY)
             .await
             .unwrap();
         let second = publisher
-            .issue(&fixture.request_body, &fixture.token)
+            .issue(&fresh.request_body, &fresh.token, REQUEST_KEY)
             .await
             .unwrap();
         assert_eq!(first.body, second.body);
@@ -313,7 +359,7 @@ mod tests {
         );
         let fixture = fixture();
         let response = publisher
-            .issue(&fixture.request_body, &fixture.token)
+            .issue(&fixture.request_body, &fixture.token, REQUEST_KEY)
             .await
             .unwrap();
         let response_path = temp.path().join("response.json");
@@ -389,6 +435,7 @@ key\t0000\tpublisher\ttest-publisher-v1\tkeys/test-publisher-v1.pem\t{digest}\te
             .uri("/v1/receipts")
             .header(CONTENT_TYPE, "application/json")
             .header(AUTHORIZATION, format!("Bearer {}", fixture.token))
+            .header(&IDEMPOTENCY_KEY, REQUEST_KEY)
             .body(Body::from(fixture.request_body))
             .unwrap();
         let response = router(publisher.clone()).oneshot(request).await.unwrap();
@@ -403,6 +450,7 @@ key\t0000\tpublisher\ttest-publisher-v1\tkeys/test-publisher-v1.pem\t{digest}\te
             .uri("/v1/receipts")
             .header(CONTENT_TYPE, "application/json")
             .header(AUTHORIZATION, "Bearer x.y.z")
+            .header(&IDEMPOTENCY_KEY, REQUEST_KEY)
             .body(Body::from(vec![b'a'; MAX_REQUEST_BYTES + 1]))
             .unwrap();
         let response = router(publisher).oneshot(oversized).await.unwrap();
@@ -414,7 +462,7 @@ key\t0000\tpublisher\ttest-publisher-v1\tkeys/test-publisher-v1.pem\t{digest}\te
         let temp = secure_tempdir();
         let mut config = config(temp.path().join("publisher.db"));
         config.max_inflight_requests = 1;
-        let store = DurableStore::open(&config.database_path).unwrap();
+        let store = DurableStore::open(&config.ledger_path).unwrap();
         let publisher = Publisher::for_test(
             config,
             Arc::new(StaticJwksProvider::new(jwks("fixture-key"))),
@@ -428,6 +476,7 @@ key\t0000\tpublisher\ttest-publisher-v1\tkeys/test-publisher-v1.pem\t{digest}\te
             .uri("/v1/receipts")
             .header(CONTENT_TYPE, "application/json")
             .header(AUTHORIZATION, format!("Bearer {}", fixture.token))
+            .header(&IDEMPOTENCY_KEY, REQUEST_KEY)
             .body(Body::from(fixture.request_body.clone()))
             .unwrap();
         let response = router(publisher.clone()).oneshot(request).await.unwrap();
@@ -440,6 +489,7 @@ key\t0000\tpublisher\ttest-publisher-v1\tkeys/test-publisher-v1.pem\t{digest}\te
             .uri("/v1/receipts")
             .header(CONTENT_TYPE, "application/json")
             .header(AUTHORIZATION, format!("Bearer {}", fixture.token))
+            .header(&IDEMPOTENCY_KEY, REQUEST_KEY)
             .body(Body::from_stream(pending))
             .unwrap();
         assert!(matches!(
@@ -462,7 +512,9 @@ key\t0000\tpublisher\ttest-publisher-v1\tkeys/test-publisher-v1.pem\t{digest}\te
             Arc::new(TestSigner::new("test-publisher-v1")),
         );
         assert!(matches!(
-            outage.issue(&fixture.request_body, &fixture.token).await,
+            outage
+                .issue(&fixture.request_body, &fixture.token, REQUEST_KEY)
+                .await,
             Err(PublisherError::Jwks)
         ));
 
@@ -473,7 +525,9 @@ key\t0000\tpublisher\ttest-publisher-v1\tkeys/test-publisher-v1.pem\t{digest}\te
             Arc::new(TestSigner::failing("test-publisher-v1")),
         );
         assert!(matches!(
-            signing.issue(&fixture.request_body, &fixture.token).await,
+            signing
+                .issue(&fixture.request_body, &fixture.token, REQUEST_KEY)
+                .await,
             Err(PublisherError::Signing)
         ));
         assert_eq!(signing.store.count().await, 0);
@@ -486,7 +540,9 @@ key\t0000\tpublisher\ttest-publisher-v1\tkeys/test-publisher-v1.pem\t{digest}\te
         );
         database.store.break_for_test().await;
         assert!(matches!(
-            database.issue(&fixture.request_body, &fixture.token).await,
+            database
+                .issue(&fixture.request_body, &fixture.token, REQUEST_KEY)
+                .await,
             Err(PublisherError::Store)
         ));
     }
@@ -509,7 +565,7 @@ key\t0000\tpublisher\ttest-publisher-v1\tkeys/test-publisher-v1.pem\t{digest}\te
                 state ^= state << 5;
                 body.push((state & 0xff) as u8);
             }
-            let _ = publisher.issue(&body, &token).await;
+            let _ = publisher.issue(&body, &token, REQUEST_KEY).await;
         }
     }
 
@@ -518,7 +574,7 @@ key\t0000\tpublisher\ttest-publisher-v1\tkeys/test-publisher-v1.pem\t{digest}\te
         let temp = secure_tempdir();
         let mut config = config(temp.path().join("publisher.db"));
         config.request_deadline_milliseconds = 100;
-        let mut store = DurableStore::open(&config.database_path).unwrap();
+        let mut store = DurableStore::open(&config.ledger_path).unwrap();
         store.set_commit_delay(std::time::Duration::from_millis(250));
         let publisher = Publisher::for_test(
             config,
@@ -527,16 +583,26 @@ key\t0000\tpublisher\ttest-publisher-v1\tkeys/test-publisher-v1.pem\t{digest}\te
             Arc::new(TestSigner::new("test-publisher-v1")),
         );
         let fixture = fixture();
+        let fresh = fixture_with(|claims| {
+            claims.insert(
+                "jti".into(),
+                serde_json::json!("fresh-timeout-recovery-jti"),
+            );
+        });
+        assert_eq!(fixture.request_body, fresh.request_body);
+        assert_ne!(fixture.token, fresh.token);
         let start = Instant::now();
         assert!(matches!(
-            publisher.issue(&fixture.request_body, &fixture.token).await,
+            publisher
+                .issue(&fixture.request_body, &fixture.token, REQUEST_KEY)
+                .await,
             Err(PublisherError::Store)
         ));
         assert!(start.elapsed() < std::time::Duration::from_millis(200));
 
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
         let recovered = publisher
-            .issue(&fixture.request_body, &fixture.token)
+            .issue(&fresh.request_body, &fresh.token, REQUEST_KEY)
             .await
             .unwrap();
         assert!(recovered.body.ends_with(b"\n"));
@@ -549,7 +615,7 @@ key\t0000\tpublisher\ttest-publisher-v1\tkeys/test-publisher-v1.pem\t{digest}\te
         let temp = secure_tempdir();
         let mut config = config(temp.path().join("publisher.db"));
         config.request_deadline_milliseconds = 50;
-        let mut store = DurableStore::open(&config.database_path).unwrap();
+        let mut store = DurableStore::open(&config.ledger_path).unwrap();
         store.set_commit_delay(std::time::Duration::from_millis(200));
         let publisher = Publisher::for_test(
             config,
@@ -560,7 +626,7 @@ key\t0000\tpublisher\ttest-publisher-v1\tkeys/test-publisher-v1.pem\t{digest}\te
         let fixture = fixture();
         assert!(
             publisher
-                .issue(&fixture.request_body, &fixture.token)
+                .issue(&fixture.request_body, &fixture.token, REQUEST_KEY)
                 .await
                 .is_err()
         );

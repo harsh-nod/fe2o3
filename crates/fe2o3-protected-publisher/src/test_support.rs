@@ -21,11 +21,11 @@ pub(crate) fn secure_tempdir() -> tempfile::TempDir {
 pub(crate) const RSA_PRIVATE_KEY: &[u8] = include_bytes!("../tests/fixtures/github-test-rsa.pem");
 pub(crate) const RSA_MODULUS: &str = "uaTz1mW6Z6HS5kDdG-0E4rM9YlVXzEOetxC8TlGfTqN3k8DigVbR_Ix0kirK-vRVxZltPYRRu1gWtweq2HhaNRoF2edQsMCVOWJwY_w8BD75rsH977JEQivPlRyha7hrVq2UpTH5j6A84FjMgzUFDj2y8BlQSSKYW2EAU6aRVRn04-6uKLisdU8gifZuxBgAFV0dLB_PBWbjnAWy3gcUPwF4-LgT0X_IsNw_paz2eE0C_NgY1MDf0IsJSy70BTAQkOrzZLYLEp62Q-YghpLXB36Fa3ry0RfshiHq6XuvZdTr0VORnAoyUP5civX4ECxCAPtiNwGExd77RIjHxXH7zQ";
 
-pub(crate) fn config(database_path: PathBuf) -> ServiceConfig {
+pub(crate) fn config(ledger_path: PathBuf) -> ServiceConfig {
     ServiceConfig {
-        schema_version: 1,
+        schema_version: 2,
         listen: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-        database_path,
+        ledger_path,
         enrollment_artifact_path: PathBuf::from("/test-only/enrollment.json"),
         signing_key_id: "test-publisher-v1".into(),
         signing_key_path: PathBuf::from("/test-only/not-loaded.pem"),
@@ -46,9 +46,7 @@ pub(crate) fn config(database_path: PathBuf) -> ServiceConfig {
         network_deadline_milliseconds: 1000,
         jwks_cache_seconds: 300,
         max_receipts: 4096,
-        max_database_bytes: 64 * 1024 * 1024,
-        receipt_retention_seconds: 24 * 60 * 60,
-        sqlite_busy_timeout_milliseconds: 1000,
+        max_ledger_bytes: 64 * 1024 * 1024,
     }
 }
 
@@ -115,15 +113,34 @@ pub(crate) fn fixture_with(mutator: impl FnOnce(&mut Map<String, Value>)) -> Fix
         &EncodingKey::from_rsa_pem(RSA_PRIVATE_KEY).unwrap(),
     )
     .unwrap();
-    let mut authorization = claims.as_object().unwrap().clone();
-    authorization.insert("alg".into(), Value::String("RS256".into()));
-    authorization.insert("job".into(), Value::String("gate".into()));
-    authorization.insert("kid".into(), Value::String("fixture-key".into()));
-    authorization.insert(
-        "policy_id".into(),
-        Value::String("fe2o3-protected-local-merge-group-v3".into()),
-    );
-    authorization.insert("schema_version".into(), Value::Number(1.into()));
+    let authorization = json!({
+        "actor_id": claims["actor_id"].clone(),
+        "aud": claims["aud"].clone(),
+        "base_ref": claims["base_ref"].clone(),
+        "event_name": claims["event_name"].clone(),
+        "environment": claims["environment"].clone(),
+        "head_ref": claims["head_ref"].clone(),
+        "iss": claims["iss"].clone(),
+        "job": "gate",
+        "job_workflow_ref": claims["job_workflow_ref"].clone(),
+        "job_workflow_sha": claims["job_workflow_sha"].clone(),
+        "policy_id": "fe2o3-protected-local-merge-group-v3",
+        "ref": claims["ref"].clone(),
+        "repository": claims["repository"].clone(),
+        "repository_id": claims["repository_id"].clone(),
+        "repository_owner": claims["repository_owner"].clone(),
+        "repository_owner_id": claims["repository_owner_id"].clone(),
+        "run_attempt": claims["run_attempt"].clone(),
+        "run_id": claims["run_id"].clone(),
+        "run_number": claims["run_number"].clone(),
+        "runner_environment": claims["runner_environment"].clone(),
+        "schema_version": 1,
+        "sha": claims["sha"].clone(),
+        "sub": claims["sub"].clone(),
+        "workflow": claims["workflow"].clone(),
+        "workflow_ref": claims["workflow_ref"].clone(),
+        "workflow_sha": claims["workflow_sha"].clone(),
+    });
 
     let workflow = BTreeMap::from([
         ("fe2o3_publisher_default_branch".into(), "main".into()),
@@ -163,7 +180,7 @@ pub(crate) fn fixture_with(mutator: impl FnOnce(&mut Map<String, Value>)) -> Fix
         manifest_baseline_commit: "1".repeat(40),
         manifest_path: "promotion.tsv".into(),
         manifest_sha256: "d".repeat(64),
-        oidc_authorization: Value::Object(authorization),
+        oidc_authorization: authorization,
         request_domain: "fe2o3-protected-publisher-request-v1".into(),
         schema_version: 1,
         source_commit: "2".repeat(40),

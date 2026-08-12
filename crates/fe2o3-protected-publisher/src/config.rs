@@ -8,8 +8,8 @@ use sha2::{Digest, Sha256};
 
 use crate::PublisherError;
 use crate::bounds::{
-    MAX_CONFIG_BYTES, MAX_DATABASE_BYTES, MAX_INFLIGHT_REQUESTS, MAX_JSON_STRING_BYTES,
-    MAX_STORE_RECEIPTS, MIN_DATABASE_BYTES, RECEIPT_LIFETIME_SECS,
+    MAX_CONFIG_BYTES, MAX_INFLIGHT_REQUESTS, MAX_JSON_STRING_BYTES, MAX_LEDGER_BYTES,
+    MAX_STORE_RECEIPTS, MIN_LEDGER_BYTES,
 };
 use crate::canonical::{canonical_bytes, parse_canonical};
 use crate::secure_fs::read_owner_only;
@@ -21,7 +21,7 @@ pub const GITHUB_ISSUER: &str = "https://token.actions.githubusercontent.com";
 pub struct ServiceConfig {
     pub schema_version: u32,
     pub listen: SocketAddr,
-    pub database_path: PathBuf,
+    pub ledger_path: PathBuf,
     pub enrollment_artifact_path: PathBuf,
     pub signing_key_id: String,
     pub signing_key_path: PathBuf,
@@ -42,9 +42,7 @@ pub struct ServiceConfig {
     pub network_deadline_milliseconds: u64,
     pub jwks_cache_seconds: u64,
     pub max_receipts: u64,
-    pub max_database_bytes: u64,
-    pub receipt_retention_seconds: u64,
-    pub sqlite_busy_timeout_milliseconds: u64,
+    pub max_ledger_bytes: u64,
 }
 
 impl ServiceConfig {
@@ -71,7 +69,7 @@ impl ServiceConfig {
             &self.caller_workflow_path,
             &self.protected_workflow_path,
         ];
-        if self.schema_version != 1
+        if self.schema_version != 2
             || bounded
                 .iter()
                 .any(|value| value.is_empty() || value.len() > MAX_JSON_STRING_BYTES)
@@ -91,11 +89,7 @@ impl ServiceConfig {
             || self.jwks_cache_seconds > 3_600
             || self.max_receipts == 0
             || self.max_receipts > MAX_STORE_RECEIPTS
-            || !(MIN_DATABASE_BYTES..=MAX_DATABASE_BYTES).contains(&self.max_database_bytes)
-            || self.receipt_retention_seconds < RECEIPT_LIFETIME_SECS as u64
-            || self.receipt_retention_seconds > 365 * 24 * 60 * 60
-            || self.sqlite_busy_timeout_milliseconds == 0
-            || self.sqlite_busy_timeout_milliseconds > 1_000
+            || !(MIN_LEDGER_BYTES..=MAX_LEDGER_BYTES).contains(&self.max_ledger_bytes)
             || !valid_id(&self.signing_key_id)
             || !self.repository.contains('/')
             || !self.repository_id.bytes().all(|byte| byte.is_ascii_digit())
@@ -106,10 +100,10 @@ impl ServiceConfig {
             || self.default_branch != "main"
             || self.environment != "protected-publisher"
             || !self.listen.ip().is_loopback()
-            || !self.database_path.is_absolute()
+            || !self.ledger_path.is_absolute()
             || !self.enrollment_artifact_path.is_absolute()
             || !self.signing_key_path.is_absolute()
-            || self.enrollment_artifact_path == self.database_path
+            || self.enrollment_artifact_path == self.ledger_path
             || self.enrollment_artifact_path == self.signing_key_path
         {
             return Err(PublisherError::Config);
@@ -133,6 +127,11 @@ impl ServiceConfig {
 
     pub fn request_deadline(&self) -> Duration {
         Duration::from_millis(self.request_deadline_milliseconds)
+    }
+
+    pub fn minimum_token_remaining_seconds(&self) -> i64 {
+        let deadline_seconds = self.request_deadline_milliseconds.div_ceil(1_000) as i64;
+        deadline_seconds + crate::bounds::TOKEN_RECOVERY_GRACE_SECS
     }
 
     pub fn jwks_cache_ttl(&self) -> Duration {
@@ -223,7 +222,7 @@ mod tests {
         config.allowed_actor_ids = vec!["101".into(), "101".into()];
         assert!(config.validate().is_err());
         let mut config = base;
-        config.database_path = "relative.db".into();
+        config.ledger_path = "relative.ledger".into();
         assert!(config.validate().is_err());
         let mut config = production_config(temp.path());
         config.enrollment_artifact_path = "relative-enrollment.json".into();
@@ -234,13 +233,7 @@ mod tests {
         config.max_receipts = 0;
         assert!(config.validate().is_err());
         let mut config = base.clone();
-        config.max_database_bytes = MIN_DATABASE_BYTES - 1;
-        assert!(config.validate().is_err());
-        let mut config = base.clone();
-        config.receipt_retention_seconds = RECEIPT_LIFETIME_SECS as u64 - 1;
-        assert!(config.validate().is_err());
-        let mut config = base;
-        config.sqlite_busy_timeout_milliseconds = 1001;
+        config.max_ledger_bytes = MIN_LEDGER_BYTES - 1;
         assert!(config.validate().is_err());
     }
 

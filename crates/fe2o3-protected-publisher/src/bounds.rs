@@ -15,13 +15,15 @@ pub const MAX_JSON_STRING_BYTES: usize = 4096;
 pub const MAX_JWKS_KEYS: usize = 16;
 pub const MAX_INFLIGHT_REQUESTS: u32 = 256;
 pub const MAX_STORE_RECEIPTS: u64 = 1_000_000;
-pub const MIN_DATABASE_BYTES: u64 = 1024 * 1024;
-pub const MAX_DATABASE_BYTES: u64 = 64 * 1024 * 1024 * 1024;
+pub const MIN_LEDGER_BYTES: u64 = 1024 * 1024;
+pub const MAX_LEDGER_BYTES: u64 = 64 * 1024 * 1024 * 1024;
+pub const MAX_LEDGER_RECORD_BYTES: usize = MAX_REQUEST_BYTES + MAX_RESPONSE_BYTES + 256 * 1024;
 pub const MAX_CONFIG_BYTES: usize = 64 * 1024;
 pub const MAX_ENROLLMENT_ARTIFACT_BYTES: usize = 64 * 1024;
 pub const MAX_PRIVATE_KEY_BYTES: usize = 16 * 1024;
 pub const MAX_OIDC_LIFETIME_SECS: i64 = 10 * 60;
 pub const MAX_CLOCK_SKEW_SECS: i64 = 5 * 60;
+pub const TOKEN_RECOVERY_GRACE_SECS: i64 = 30;
 pub const RECEIPT_LIFETIME_SECS: i64 = 60 * 60;
 pub const ENROLLMENT_VALIDITY_SECS: i64 = 30 * 24 * 60 * 60;
 
