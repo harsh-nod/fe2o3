@@ -384,7 +384,7 @@ impl DurableStore {
         check_deadline(deadline)?;
 
         if let Some(existing) = self.by_request_key.get(input.request_key_sha256).cloned() {
-            let indexed = self.load_indexed(&existing)?;
+            let indexed = self.load_indexed(input.request_key_sha256, &existing)?;
             if indexed.record.request_key_sha256 != input.request_key_sha256
                 || indexed.record.request_identity != input.request_identity
                 || indexed.record.request_sha256 != input.request_sha256
@@ -531,11 +531,15 @@ impl DurableStore {
         self.verify_identity()
     }
 
-    fn load_indexed(&mut self, index: &EntryIndex) -> Result<IndexedReceipt, PublisherError> {
+    fn load_indexed(
+        &mut self,
+        expected_request_key_sha256: &str,
+        index: &EntryIndex,
+    ) -> Result<IndexedReceipt, PublisherError> {
         if self.poisoned {
             return Err(PublisherError::Store);
         }
-        let result = self.load_indexed_observational(index);
+        let result = self.load_indexed_observational(expected_request_key_sha256, index);
         if result.is_err() {
             self.poisoned = true;
         }
@@ -544,8 +548,12 @@ impl DurableStore {
 
     fn load_indexed_observational(
         &mut self,
+        expected_request_key_sha256: &str,
         index: &EntryIndex,
     ) -> Result<IndexedReceipt, PublisherError> {
+        if expected_request_key_sha256 != index.request_key_sha256 {
+            return Err(PublisherError::Store);
+        }
         self.verify_identity()?;
         let length = self
             .file
@@ -590,6 +598,7 @@ impl DurableStore {
         let decoded = decode_frame(&frame, index.sequence, index.previous_hash)?;
         if decoded.frame_length != index.frame_length
             || decoded.frame_hash != index.frame_hash
+            || decoded.record.request_key_sha256 != expected_request_key_sha256
             || decoded.record.request_key_sha256 != index.request_key_sha256
             || decoded.record.request_identity != index.request_identity
             || decoded.record.request_sha256 != index.request_sha256
