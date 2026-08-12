@@ -222,14 +222,14 @@ pub async fn authenticate(
         return Err(PublisherError::Authentication);
     }
 
-    let jwks_raw = provider.fetch(deadline).await?;
-    let jwks_value = parse_unique(&jwks_raw, MAX_JWKS_BYTES).map_err(|_| PublisherError::Jwks)?;
-    let jwks: JwksDocument =
-        serde_json::from_value(jwks_value).map_err(|_| PublisherError::Jwks)?;
-    if jwks.keys.is_empty() || jwks.keys.len() > MAX_JWKS_KEYS {
-        return Err(PublisherError::Jwks);
+    let initial = provider.fetch(deadline).await?;
+    let mut jwks = parse_jwks(&initial.bytes)?;
+    let mut matching = matching_keys(&jwks, kid);
+    if matching.is_empty() {
+        let refreshed = provider.refresh(deadline, initial.generation).await?;
+        jwks = parse_jwks(&refreshed.bytes)?;
+        matching = matching_keys(&jwks, kid);
     }
-    let matching: Vec<_> = jwks.keys.iter().filter(|key| key.kid == kid).collect();
     if matching.len() != 1 {
         return Err(PublisherError::Authentication);
     }
@@ -254,6 +254,19 @@ pub async fn authenticate(
     }
 
     validate_claims(config, request, &header, &claims)
+}
+
+fn parse_jwks(raw: &[u8]) -> Result<JwksDocument, PublisherError> {
+    let value = parse_unique(raw, MAX_JWKS_BYTES).map_err(|_| PublisherError::Jwks)?;
+    let document: JwksDocument = serde_json::from_value(value).map_err(|_| PublisherError::Jwks)?;
+    if document.keys.is_empty() || document.keys.len() > MAX_JWKS_KEYS {
+        return Err(PublisherError::Jwks);
+    }
+    Ok(document)
+}
+
+fn matching_keys<'a>(document: &'a JwksDocument, kid: &str) -> Vec<&'a Jwk> {
+    document.keys.iter().filter(|key| key.kid == kid).collect()
 }
 
 fn decode_segment(segment: &str) -> Result<Value, PublisherError> {
@@ -561,8 +574,12 @@ fn hex(value: &str, length: usize) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use super::*;
-    use crate::jwks::StaticJwksProvider;
+    use crate::jwks::{JwksSnapshot, StaticJwksProvider};
     use crate::test_support::{config, fixture, fixture_with, jwks};
     use serde_json::json;
 
@@ -752,6 +769,60 @@ mod tests {
                 .await
                 .is_ok()
         );
+    }
+
+    struct RotatingProvider {
+        refreshes: AtomicUsize,
+    }
+
+    impl JwksProvider for RotatingProvider {
+        fn fetch<'a>(
+            &'a self,
+            _deadline: Instant,
+        ) -> Pin<Box<dyn Future<Output = Result<JwksSnapshot, PublisherError>> + Send + 'a>>
+        {
+            Box::pin(async {
+                Ok(JwksSnapshot {
+                    bytes: jwks("old-key"),
+                    generation: 1,
+                })
+            })
+        }
+
+        fn refresh<'a>(
+            &'a self,
+            _deadline: Instant,
+            observed_generation: u64,
+        ) -> Pin<Box<dyn Future<Output = Result<JwksSnapshot, PublisherError>> + Send + 'a>>
+        {
+            Box::pin(async move {
+                assert_eq!(observed_generation, 1);
+                self.refreshes.fetch_add(1, Ordering::SeqCst);
+                Ok(JwksSnapshot {
+                    bytes: jwks("fixture-key"),
+                    generation: 2,
+                })
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn unknown_kid_retries_once_against_rotated_document() {
+        let fixture = fixture();
+        let provider = Arc::new(RotatingProvider {
+            refreshes: AtomicUsize::new(0),
+        });
+        let authorization = authenticate(
+            &config("/tmp/not-opened.db".into()),
+            provider.clone(),
+            &fixture.request,
+            &fixture.token,
+            Instant::now() + std::time::Duration::from_secs(1),
+        )
+        .await
+        .unwrap();
+        assert_eq!(authorization.replay_identity, "fixture-jti-001");
+        assert_eq!(provider.refreshes.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

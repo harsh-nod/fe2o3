@@ -11,7 +11,7 @@ mod store;
 mod test_support;
 
 pub use config::ServiceConfig;
-pub use jwks::{HttpsJwksProvider, JwksProvider, StaticJwksProvider};
+pub use jwks::{HttpsJwksProvider, JwksProvider, JwksSnapshot, StaticJwksProvider};
 pub use service::{Publisher, PublisherResponse, router};
 
 #[derive(Debug, thiserror::Error)]

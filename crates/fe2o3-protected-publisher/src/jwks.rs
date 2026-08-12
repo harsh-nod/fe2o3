@@ -10,11 +10,23 @@ use tokio::time::Instant;
 use crate::PublisherError;
 use crate::bounds::{MAX_JWKS_BYTES, MAX_RESPONSE_BYTES};
 
+#[derive(Clone, Debug)]
+pub struct JwksSnapshot {
+    pub bytes: Vec<u8>,
+    pub generation: u64,
+}
+
 pub trait JwksProvider: Send + Sync {
     fn fetch<'a>(
         &'a self,
         deadline: Instant,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, PublisherError>> + Send + 'a>>;
+    ) -> Pin<Box<dyn Future<Output = Result<JwksSnapshot, PublisherError>> + Send + 'a>>;
+
+    fn refresh<'a>(
+        &'a self,
+        deadline: Instant,
+        observed_generation: u64,
+    ) -> Pin<Box<dyn Future<Output = Result<JwksSnapshot, PublisherError>> + Send + 'a>>;
 }
 
 pub struct HttpsJwksProvider {
@@ -29,6 +41,7 @@ pub struct HttpsJwksProvider {
 struct CachedJwks {
     bytes: Vec<u8>,
     fresh_until: Instant,
+    generation: u64,
 }
 
 impl HttpsJwksProvider {
@@ -86,38 +99,66 @@ impl HttpsJwksProvider {
         Self::build(url, timeout, cache_ttl, Some(root))
     }
 
-    async fn fresh_cache(&self, now: Instant) -> Option<Vec<u8>> {
+    async fn fresh_cache(&self, now: Instant) -> Option<JwksSnapshot> {
         self.cache
             .read()
             .await
             .as_ref()
             .filter(|entry| now < entry.fresh_until)
-            .map(|entry| entry.bytes.clone())
+            .map(snapshot)
     }
 
-    async fn fetch_cached(&self, deadline: Instant) -> Result<Vec<u8>, PublisherError> {
-        if let Some(bytes) = self.fresh_cache(Instant::now()).await {
-            return Ok(bytes);
+    async fn fetch_cached(&self, deadline: Instant) -> Result<JwksSnapshot, PublisherError> {
+        if let Some(snapshot) = self.fresh_cache(Instant::now()).await {
+            return Ok(snapshot);
         }
         let _refresh = tokio::time::timeout_at(deadline, self.refresh.lock())
             .await
             .map_err(|_| PublisherError::Jwks)?;
-        if let Some(bytes) = self.fresh_cache(Instant::now()).await {
-            return Ok(bytes);
+        if let Some(snapshot) = self.fresh_cache(Instant::now()).await {
+            return Ok(snapshot);
         }
-        let _outbound = self
-            .outbound
-            .try_acquire()
+        self.refresh_locked(deadline).await
+    }
+
+    async fn refresh_after(
+        &self,
+        deadline: Instant,
+        observed_generation: u64,
+    ) -> Result<JwksSnapshot, PublisherError> {
+        let _refresh = tokio::time::timeout_at(deadline, self.refresh.lock())
+            .await
+            .map_err(|_| PublisherError::Jwks)?;
+        if let Some(entry) = self.cache.read().await.as_ref()
+            && entry.generation != observed_generation
+        {
+            return Ok(snapshot(entry));
+        }
+        self.refresh_locked(deadline).await
+    }
+
+    async fn refresh_locked(&self, deadline: Instant) -> Result<JwksSnapshot, PublisherError> {
+        let _outbound = tokio::time::timeout_at(deadline, self.outbound.acquire())
+            .await
+            .map_err(|_| PublisherError::Jwks)?
             .map_err(|_| PublisherError::Jwks)?;
         let bytes = self.fetch_inner(deadline).await?;
         let fresh_until = Instant::now()
             .checked_add(self.cache_ttl)
             .ok_or(PublisherError::Jwks)?;
-        *self.cache.write().await = Some(CachedJwks {
+        let mut cache = self.cache.write().await;
+        let generation = cache
+            .as_ref()
+            .map_or(1, |entry| entry.generation.saturating_add(1));
+        if generation == u64::MAX {
+            return Err(PublisherError::Jwks);
+        }
+        *cache = Some(CachedJwks {
             bytes: bytes.clone(),
             fresh_until,
+            generation,
         });
-        Ok(bytes)
+        Ok(JwksSnapshot { bytes, generation })
     }
 
     async fn fetch_inner(&self, deadline: Instant) -> Result<Vec<u8>, PublisherError> {
@@ -177,8 +218,23 @@ impl JwksProvider for HttpsJwksProvider {
     fn fetch<'a>(
         &'a self,
         deadline: Instant,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, PublisherError>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<JwksSnapshot, PublisherError>> + Send + 'a>> {
         Box::pin(self.fetch_cached(deadline))
+    }
+
+    fn refresh<'a>(
+        &'a self,
+        deadline: Instant,
+        observed_generation: u64,
+    ) -> Pin<Box<dyn Future<Output = Result<JwksSnapshot, PublisherError>> + Send + 'a>> {
+        Box::pin(self.refresh_after(deadline, observed_generation))
+    }
+}
+
+fn snapshot(entry: &CachedJwks) -> JwksSnapshot {
+    JwksSnapshot {
+        bytes: entry.bytes.clone(),
+        generation: entry.generation,
     }
 }
 
@@ -208,14 +264,25 @@ impl JwksProvider for StaticJwksProvider {
     fn fetch<'a>(
         &'a self,
         _deadline: Instant,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, PublisherError>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<JwksSnapshot, PublisherError>> + Send + 'a>> {
         Box::pin(async move {
             if self.failure {
                 Err(PublisherError::Jwks)
             } else {
-                Ok(self.bytes.as_ref().clone())
+                Ok(JwksSnapshot {
+                    bytes: self.bytes.as_ref().clone(),
+                    generation: 1,
+                })
             }
         })
+    }
+
+    fn refresh<'a>(
+        &'a self,
+        deadline: Instant,
+        _observed_generation: u64,
+    ) -> Pin<Box<dyn Future<Output = Result<JwksSnapshot, PublisherError>> + Send + 'a>> {
+        self.fetch(deadline)
     }
 }
 
@@ -315,7 +382,7 @@ mod tests {
             .fetch(Instant::now() + Duration::from_secs(1))
             .await
             .unwrap();
-        assert_eq!(body, b"{\"keys\":[]}\n");
+        assert_eq!(body.bytes, b"{\"keys\":[]}\n");
     }
 
     #[tokio::test]
@@ -392,6 +459,7 @@ mod tests {
                         .fetch(Instant::now() + Duration::from_secs(1))
                         .await
                         .unwrap()
+                        .bytes
                 })
             })
             .collect::<Vec<_>>();
@@ -404,6 +472,41 @@ mod tests {
             .fetch(Instant::now() + Duration::from_secs(1))
             .await
             .unwrap();
+        assert_eq!(issuer.request_count(), 2);
+    }
+
+    #[tokio::test]
+    async fn concurrent_forced_refreshes_singleflight_by_generation() {
+        let issuer = MockIssuer::start("jwks");
+        let provider = Arc::new(
+            HttpsJwksProvider::with_test_root(
+                &issuer.url,
+                Duration::from_secs(1),
+                Duration::from_secs(60),
+                CERT,
+            )
+            .unwrap(),
+        );
+        let first = provider
+            .fetch(Instant::now() + Duration::from_secs(1))
+            .await
+            .unwrap();
+        let calls = (0..64)
+            .map(|_| {
+                let provider = provider.clone();
+                tokio::spawn(async move {
+                    provider
+                        .refresh(Instant::now() + Duration::from_secs(2), first.generation)
+                        .await
+                        .unwrap()
+                })
+            })
+            .collect::<Vec<_>>();
+        for call in calls {
+            let refreshed = call.await.unwrap();
+            assert_eq!(refreshed.generation, 2);
+            assert_eq!(refreshed.bytes, b"{\"keys\":[]}\n");
+        }
         assert_eq!(issuer.request_count(), 2);
     }
 
@@ -441,7 +544,8 @@ mod tests {
             provider
                 .fetch(Instant::now() + Duration::from_secs(1))
                 .await
-                .unwrap(),
+                .unwrap()
+                .bytes,
             b"{\"keys\":[]}\n"
         );
     }
