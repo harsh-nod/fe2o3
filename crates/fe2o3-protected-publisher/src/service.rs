@@ -8,7 +8,7 @@ use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
 use axum::http::{HeaderMap, Method, Request, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
-use tokio::sync::{Mutex, Semaphore};
+use tokio::sync::Semaphore;
 use tokio::time::Instant;
 
 use crate::bounds::{
@@ -18,7 +18,8 @@ use crate::canonical::parse_canonical;
 use crate::jwks::{HttpsJwksProvider, JwksProvider};
 use crate::oidc::{PublisherRequest, authenticate};
 use crate::receipt::{FileReceiptSigner, ReceiptSigner, raw_request_sha256, request_identity};
-use crate::store::{DurableStore, IssueInput, StorePolicy};
+use crate::store::{DurableStore, StorePolicy};
+use crate::store_worker::{StoreIssue, StoreWorker};
 use crate::{PublisherError, ServiceConfig};
 
 #[derive(Clone, Debug)]
@@ -29,7 +30,7 @@ pub struct PublisherResponse {
 pub struct Publisher {
     config: Arc<ServiceConfig>,
     jwks: Arc<dyn JwksProvider>,
-    store: Mutex<DurableStore>,
+    store: StoreWorker,
     signer: Arc<dyn ReceiptSigner>,
     request_slots: Arc<Semaphore>,
 }
@@ -52,10 +53,11 @@ impl Publisher {
             StorePolicy::from_config(&config)?,
         )?;
         let max_inflight_requests = config.max_inflight_requests as usize;
+        let store = StoreWorker::spawn(store, max_inflight_requests)?;
         Ok(Arc::new(Self {
             config: Arc::new(config),
             jwks,
-            store: Mutex::new(store),
+            store,
             signer,
             request_slots: Arc::new(Semaphore::new(max_inflight_requests)),
         }))
@@ -72,7 +74,7 @@ impl Publisher {
         Arc::new(Self {
             config: Arc::new(config),
             jwks,
-            store: Mutex::new(store),
+            store: StoreWorker::spawn(store, max_inflight_requests).unwrap(),
             signer,
             request_slots: Arc::new(Semaphore::new(max_inflight_requests)),
         })
@@ -111,27 +113,33 @@ impl Publisher {
             .map_err(|_| PublisherError::Signing)?
             .as_secs() as i64;
         let issued_at = now.max(authorization.issued_at);
-        let mut store = tokio::time::timeout_at(request_deadline, self.store.lock())
-            .await
-            .map_err(|_| PublisherError::Store)?;
-        let body = store.issue(IssueInput {
-            replay_identity: &authorization.replay_identity,
-            request_identity: &identity,
-            request_sha256: &sha256,
-            request_body: body,
-            request: &request,
-            issued_at,
-            observed_at: now,
-            signature_domain: &self.config.signature_domain,
-            signer: self.signer.as_ref(),
-        })?;
-        if Instant::now() > request_deadline {
-            return Err(PublisherError::Store);
-        }
+        let body = self
+            .store
+            .issue_until(
+                StoreIssue {
+                    replay_identity: authorization.replay_identity,
+                    request_identity: identity,
+                    request_sha256: sha256,
+                    request_body: body.to_vec(),
+                    request,
+                    issued_at,
+                    observed_at: now,
+                    signature_domain: self.config.signature_domain.clone(),
+                    signer: self.signer.clone(),
+                },
+                request_deadline,
+            )
+            .await?;
         if body.len() > MAX_RESPONSE_BYTES {
             return Err(PublisherError::Store);
         }
         Ok(PublisherResponse { body })
+    }
+
+    pub async fn shutdown(&self) -> bool {
+        self.store
+            .shutdown_until(Instant::now() + self.config.request_deadline())
+            .await
     }
 }
 
@@ -466,7 +474,7 @@ key\t0000\tpublisher\ttest-publisher-v1\tkeys/test-publisher-v1.pem\t{digest}\te
             signing.issue(&fixture.request_body, &fixture.token).await,
             Err(PublisherError::Signing)
         ));
-        assert_eq!(signing.store.lock().await.count(), 0);
+        assert_eq!(signing.store.count().await, 0);
 
         let database_temp = secure_tempdir();
         let database = test_publisher(
@@ -474,7 +482,7 @@ key\t0000\tpublisher\ttest-publisher-v1\tkeys/test-publisher-v1.pem\t{digest}\te
             StaticJwksProvider::new(jwks("fixture-key")),
             Arc::new(TestSigner::new("test-publisher-v1")),
         );
-        database.store.lock().await.break_for_test();
+        database.store.break_for_test().await;
         assert!(matches!(
             database.issue(&fixture.request_body, &fixture.token).await,
             Err(PublisherError::Store)
@@ -501,6 +509,64 @@ key\t0000\tpublisher\ttest-publisher-v1\tkeys/test-publisher-v1.pem\t{digest}\te
             }
             let _ = publisher.issue(&body, &token).await;
         }
+    }
+
+    #[tokio::test]
+    async fn timed_out_commit_is_recoverable_by_idempotent_retry() {
+        let temp = secure_tempdir();
+        let mut config = config(temp.path().join("publisher.db"));
+        config.request_deadline_milliseconds = 100;
+        let mut store = DurableStore::open(&config.database_path).unwrap();
+        store.set_commit_delay(std::time::Duration::from_millis(250));
+        let publisher = Publisher::for_test(
+            config,
+            Arc::new(StaticJwksProvider::new(jwks("fixture-key"))),
+            store,
+            Arc::new(TestSigner::new("test-publisher-v1")),
+        );
+        let fixture = fixture();
+        let start = Instant::now();
+        assert!(matches!(
+            publisher.issue(&fixture.request_body, &fixture.token).await,
+            Err(PublisherError::Store)
+        ));
+        assert!(start.elapsed() < std::time::Duration::from_millis(200));
+
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        let recovered = publisher
+            .issue(&fixture.request_body, &fixture.token)
+            .await
+            .unwrap();
+        assert!(recovered.body.ends_with(b"\n"));
+        assert_eq!(publisher.store.count().await, 1);
+        assert!(publisher.shutdown().await);
+    }
+
+    #[tokio::test]
+    async fn stalled_store_shutdown_wait_is_bounded() {
+        let temp = secure_tempdir();
+        let mut config = config(temp.path().join("publisher.db"));
+        config.request_deadline_milliseconds = 50;
+        let mut store = DurableStore::open(&config.database_path).unwrap();
+        store.set_commit_delay(std::time::Duration::from_millis(200));
+        let publisher = Publisher::for_test(
+            config,
+            Arc::new(StaticJwksProvider::new(jwks("fixture-key"))),
+            store,
+            Arc::new(TestSigner::new("test-publisher-v1")),
+        );
+        let fixture = fixture();
+        assert!(
+            publisher
+                .issue(&fixture.request_body, &fixture.token)
+                .await
+                .is_err()
+        );
+        let start = Instant::now();
+        assert!(!publisher.shutdown().await);
+        assert!(start.elapsed() < std::time::Duration::from_millis(150));
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert!(publisher.shutdown().await);
     }
 
     #[test]

@@ -7,6 +7,7 @@ mod receipt;
 mod secure_fs;
 mod service;
 mod store;
+mod store_worker;
 #[cfg(test)]
 mod test_support;
 
