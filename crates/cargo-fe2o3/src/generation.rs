@@ -22,6 +22,8 @@ const MARKER_MAGIC: &[u8; 28] = b"fe2o3-codegen-generation-v1\0";
 const MARKER_BYTES: usize = MARKER_MAGIC.len() + 32 + 16 + 32 + 8;
 const MAX_SNAPSHOT_BYTES: u64 = 1024 * 1024 * 1024;
 const MAX_SNAPSHOT_ENTRIES: u64 = MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1 as u64;
+const MAX_SNAPSHOT_DEPTH: usize = 64;
+const MAX_SNAPSHOT_WORK: u64 = MAX_SNAPSHOT_BYTES + 16 * 1024 * 1024;
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug)]
@@ -488,57 +490,126 @@ fn write_marker(
 }
 
 fn snapshot(directory: &PinnedDirectory) -> Result<([u8; 32], u64), String> {
+    snapshot_with_limits(directory, SnapshotLimits::PRODUCTION)
+}
+
+#[derive(Clone, Copy)]
+struct SnapshotLimits {
+    directory_entries: usize,
+    entries: u64,
+    bytes: u64,
+    work: u64,
+    depth: usize,
+}
+
+impl SnapshotLimits {
+    const PRODUCTION: Self = Self {
+        directory_entries: MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1,
+        entries: MAX_SNAPSHOT_ENTRIES,
+        bytes: MAX_SNAPSHOT_BYTES,
+        work: MAX_SNAPSHOT_WORK,
+        depth: MAX_SNAPSHOT_DEPTH,
+    };
+}
+
+fn snapshot_with_limits(
+    directory: &PinnedDirectory,
+    limits: SnapshotLimits,
+) -> Result<([u8; 32], u64), String> {
     let mut hash = Sha256::new();
     update_hash(&mut hash, b"fe2o3-generated-artifact-snapshot-v1");
     let mut state = SnapshotState {
         entries: 0,
         bytes: 0,
+        work: 0,
     };
-    snapshot_directory(directory.file(), true, &mut hash, &mut state)?;
+    snapshot_directory(directory.file(), &mut hash, &mut state, limits)?;
     Ok((hash.finalize().into(), state.entries))
 }
 
 struct SnapshotState {
     entries: u64,
     bytes: u64,
+    work: u64,
+}
+
+impl SnapshotState {
+    fn admit_entry(&mut self, name_bytes: usize, limits: SnapshotLimits) -> Result<(), String> {
+        let entries = self
+            .entries
+            .checked_add(1)
+            .filter(|entries| *entries <= limits.entries)
+            .ok_or_else(|| "generated artifact snapshot has too many entries".to_string())?;
+        let name_work = u64::try_from(name_bytes)
+            .ok()
+            .and_then(|bytes| bytes.checked_add(1))
+            .ok_or_else(|| "generated artifact snapshot work counter overflowed".to_string())?;
+        let work = self
+            .work
+            .checked_add(name_work)
+            .filter(|work| *work <= limits.work)
+            .ok_or_else(|| "generated artifact snapshot exceeds its work bound".to_string())?;
+        self.entries = entries;
+        self.work = work;
+        Ok(())
+    }
+
+    fn admit_file(&mut self, size: u64, limits: SnapshotLimits) -> Result<(), String> {
+        let bytes = self
+            .bytes
+            .checked_add(size)
+            .filter(|bytes| *bytes <= limits.bytes)
+            .ok_or_else(|| "generated artifact snapshot is too large".to_string())?;
+        let work = self
+            .work
+            .checked_add(size)
+            .filter(|work| *work <= limits.work)
+            .ok_or_else(|| "generated artifact snapshot exceeds its work bound".to_string())?;
+        self.bytes = bytes;
+        self.work = work;
+        Ok(())
+    }
+}
+
+struct SnapshotFrame {
+    directory: File,
+    names: std::vec::IntoIter<OsString>,
+    depth: usize,
 }
 
 fn snapshot_directory(
     directory: &File,
-    root: bool,
     hash: &mut Sha256,
     state: &mut SnapshotState,
+    limits: SnapshotLimits,
 ) -> Result<(), String> {
-    let entries = read_base_dir(directory)
-        .map_err(|error| format!("failed to enumerate generated artifacts: {error}"))?;
-    let mut visible_entries = 0_usize;
-    let mut names = Vec::new();
-    for entry in entries {
-        let entry =
-            entry.map_err(|error| format!("failed to enumerate a generated artifact: {error}"))?;
-        visible_entries = visible_entries
-            .checked_add(1)
-            .filter(|entries| *entries <= MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1)
-            .ok_or_else(|| "generated artifact directory exceeds its scan bound".to_string())?;
-        names
-            .try_reserve(1)
-            .map_err(|_| "failed to reserve generated artifact directory scan".to_string())?;
-        names.push(entry.file_name());
-    }
-    names.sort_by(|left, right| os_bytes(left).cmp(os_bytes(right)));
+    let root = openat(
+        directory,
+        ".",
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map(File::from)
+    .map_err(|error| format!("failed to pin generated artifact root: {error}"))?;
+    let names = snapshot_names(&root, true, state, limits)?;
+    let mut stack = Vec::new();
+    stack
+        .try_reserve(1)
+        .map_err(|_| "failed to reserve generated artifact traversal stack".to_string())?;
+    stack.push(SnapshotFrame {
+        directory: root,
+        names: names.into_iter(),
+        depth: 0,
+    });
 
-    for name in names {
-        if root && name == MARKER_NAME {
+    while let Some(frame) = stack.last_mut() {
+        let Some(name) = frame.names.next() else {
+            stack.pop();
             continue;
-        }
-        state.entries = state
-            .entries
-            .checked_add(1)
-            .filter(|entries| *entries <= MAX_SNAPSHOT_ENTRIES)
-            .ok_or_else(|| "generated artifact snapshot has too many entries".to_string())?;
+        };
         update_hash(hash, os_bytes(&name));
         let descriptor = openat(
-            directory,
+            &frame.directory,
             Path::new(&name),
             OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
             Mode::empty(),
@@ -551,11 +622,7 @@ fn snapshot_directory(
                 hash.update(b"file");
                 let size = u64::try_from(stat.st_size)
                     .map_err(|_| format!("generated artifact has a negative size: {name:?}"))?;
-                state.bytes = state
-                    .bytes
-                    .checked_add(size)
-                    .filter(|bytes| *bytes <= MAX_SNAPSHOT_BYTES)
-                    .ok_or_else(|| "generated artifact snapshot is too large".to_string())?;
+                state.admit_file(size, limits)?;
                 hash.update(size.to_le_bytes());
                 let mut file = File::from(descriptor);
                 let mut remaining = size;
@@ -577,7 +644,23 @@ fn snapshot_directory(
             }
             FileType::Directory => {
                 hash.update(b"directory");
-                snapshot_directory(&File::from(descriptor), false, hash, state)?;
+                let depth = frame
+                    .depth
+                    .checked_add(1)
+                    .filter(|depth| *depth <= limits.depth)
+                    .ok_or_else(|| {
+                        "generated artifact snapshot exceeds its depth bound".to_string()
+                    })?;
+                let directory = File::from(descriptor);
+                let names = snapshot_names(&directory, false, state, limits)?;
+                stack.try_reserve(1).map_err(|_| {
+                    "failed to reserve generated artifact traversal stack".to_string()
+                })?;
+                stack.push(SnapshotFrame {
+                    directory,
+                    names: names.into_iter(),
+                    depth,
+                });
             }
             _ => {
                 return Err(format!(
@@ -587,6 +670,73 @@ fn snapshot_directory(
         }
     }
     Ok(())
+}
+
+fn snapshot_names(
+    directory: &File,
+    root: bool,
+    state: &mut SnapshotState,
+    limits: SnapshotLimits,
+) -> Result<Vec<OsString>, String> {
+    let scan = openat(
+        directory,
+        ".",
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(|error| format!("failed to pin generated artifact directory scan: {error}"))?;
+    let mut entries = rustix::fs::Dir::read_from(&scan)
+        .map_err(|error| format!("failed to enumerate generated artifacts: {error}"))?;
+    let mut visible_entries = 0_usize;
+    let mut names = Vec::new();
+    for entry in &mut entries {
+        let entry =
+            entry.map_err(|error| format!("failed to enumerate a generated artifact: {error}"))?;
+        let bytes = entry.file_name().to_bytes();
+        if is_synthetic_dot(bytes) {
+            continue;
+        }
+        visible_entries = visible_entries
+            .checked_add(1)
+            .filter(|entries| *entries <= limits.directory_entries)
+            .ok_or_else(|| "generated artifact directory exceeds its scan bound".to_string())?;
+        if root && bytes == MARKER_NAME.as_bytes() {
+            continue;
+        }
+        state.admit_entry(bytes.len(), limits)?;
+        names
+            .try_reserve(1)
+            .map_err(|_| "failed to reserve generated artifact directory scan".to_string())?;
+        names.push(copy_file_name(bytes)?);
+    }
+    names.sort_by(|left, right| os_bytes(left).cmp(os_bytes(right)));
+    Ok(names)
+}
+
+fn is_synthetic_dot(bytes: &[u8]) -> bool {
+    matches!(bytes, b"." | b"..")
+}
+
+#[cfg(unix)]
+fn copy_file_name(bytes: &[u8]) -> Result<OsString, String> {
+    use std::os::unix::ffi::OsStrExt;
+
+    let mut name = OsString::new();
+    name.try_reserve(bytes.len())
+        .map_err(|_| "failed to reserve generated artifact name".to_string())?;
+    name.push(OsStr::from_bytes(bytes));
+    Ok(name)
+}
+
+#[cfg(not(unix))]
+fn copy_file_name(bytes: &[u8]) -> Result<OsString, String> {
+    let value = std::str::from_utf8(bytes)
+        .map_err(|_| "generated artifact name is not valid UTF-8".to_string())?;
+    let mut name = OsString::new();
+    name.try_reserve(value.len())
+        .map_err(|_| "failed to reserve generated artifact name".to_string())?;
+    name.push(value);
+    Ok(name)
 }
 
 fn sync_directory(directory: &PinnedDirectory) -> Result<(), String> {
@@ -672,12 +822,160 @@ fn os_string(value: Vec<u8>) -> Result<OsString, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{MARKER_BYTES, MARKER_MAGIC, hex};
+    use super::*;
+    use std::fs;
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::os::unix::net::UnixListener;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+
+    struct TestDirectory(PathBuf);
+
+    impl TestDirectory {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "cargo-fe2o3-generation-snapshot-{}-{}",
+                std::process::id(),
+                NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+
+        fn pinned(&self) -> PinnedDirectory {
+            PinnedDirectory::open_existing(self.0.clone(), "snapshot test directory").unwrap()
+        }
+    }
+
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
 
     #[test]
     fn marker_wire_size_and_hex_are_stable() {
         assert_eq!(MARKER_MAGIC, b"fe2o3-codegen-generation-v1\0");
         assert_eq!(MARKER_BYTES, 116);
         assert_eq!(hex(&[0x00, 0x7f, 0xff]), "007fff");
+    }
+
+    #[test]
+    fn snapshot_accepts_exact_real_entry_limit_and_rejects_limit_plus_one() {
+        let directory = TestDirectory::new();
+        for index in 0..MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1 {
+            fs::write(directory.0.join(format!("entry-{index:04}")), []).unwrap();
+        }
+        let (_, entries) = snapshot(&directory.pinned()).unwrap();
+        assert_eq!(entries, MAX_SNAPSHOT_ENTRIES);
+
+        fs::write(directory.0.join("entry-over-limit"), []).unwrap();
+        let error = snapshot(&directory.pinned()).unwrap_err();
+        assert!(
+            error.contains("directory exceeds its scan bound"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn snapshot_rejects_sparse_payload_above_byte_limit_before_reading() {
+        let directory = TestDirectory::new();
+        File::create(directory.0.join("huge"))
+            .unwrap()
+            .set_len(MAX_SNAPSHOT_BYTES + 1)
+            .unwrap();
+
+        let error = snapshot(&directory.pinned()).unwrap_err();
+        assert!(error.contains("snapshot is too large"), "{error}");
+    }
+
+    #[test]
+    fn snapshot_enforces_independent_work_limit() {
+        let directory = TestDirectory::new();
+        fs::write(directory.0.join("payload"), b"12345678").unwrap();
+        let limits = SnapshotLimits {
+            directory_entries: 1,
+            entries: 1,
+            bytes: 8,
+            work: 15,
+            depth: 0,
+        };
+
+        let error = snapshot_with_limits(&directory.pinned(), limits).unwrap_err();
+        assert!(error.contains("work bound"), "{error}");
+    }
+
+    #[test]
+    fn snapshot_depth_plus_one_fails_on_a_small_thread_stack() {
+        let directory = TestDirectory::new();
+        let mut child = directory.0.clone();
+        for index in 0..=MAX_SNAPSHOT_DEPTH {
+            child.push(format!("depth-{index:02}"));
+            fs::create_dir(&child).unwrap();
+        }
+        let path = directory.0.clone();
+
+        let error = std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(move || {
+                let pinned =
+                    PinnedDirectory::open_existing(path, "small-stack snapshot directory").unwrap();
+                snapshot(&pinned).unwrap_err()
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        assert!(error.contains("depth bound"), "{error}");
+    }
+
+    #[test]
+    fn snapshot_rejects_symlinks_special_files_and_io_failures() {
+        let directory = TestDirectory::new();
+        fs::write(directory.0.join("target"), b"keep").unwrap();
+        let hostile = directory.0.join("hostile");
+        symlink("target", &hostile).unwrap();
+        assert!(snapshot(&directory.pinned()).is_err());
+
+        fs::remove_file(&hostile).unwrap();
+        let listener = UnixListener::bind(&hostile).unwrap();
+        assert!(snapshot(&directory.pinned()).is_err());
+        drop(listener);
+        fs::remove_file(&hostile).unwrap();
+
+        fs::write(&hostile, b"unreadable").unwrap();
+        fs::set_permissions(&hostile, fs::Permissions::from_mode(0o000)).unwrap();
+        let result = snapshot(&directory.pinned());
+        fs::set_permissions(&hostile, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn snapshot_counter_overflow_is_fallible() {
+        let mut state = SnapshotState {
+            entries: u64::MAX,
+            bytes: 0,
+            work: 0,
+        };
+        assert!(state.admit_entry(1, SnapshotLimits::PRODUCTION).is_err());
+
+        let mut state = SnapshotState {
+            entries: 0,
+            bytes: u64::MAX,
+            work: 0,
+        };
+        assert!(state.admit_file(1, SnapshotLimits::PRODUCTION).is_err());
+
+        let mut state = SnapshotState {
+            entries: 0,
+            bytes: 0,
+            work: u64::MAX,
+        };
+        assert!(
+            state
+                .admit_entry(usize::MAX, SnapshotLimits::PRODUCTION)
+                .is_err()
+        );
     }
 }
