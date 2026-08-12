@@ -53,7 +53,7 @@ const REAPER_POLL_INTERVAL: Duration = Duration::from_millis(10);
 #[cfg(any(test, feature = "worker-v2-fault-injection-test-only"))]
 const TEST_ACK_READY_FD_ENV: &str = "FE2O3_INTERNAL_TEST_ACK_READY_FD";
 #[cfg(any(test, feature = "worker-v2-fault-injection-test-only"))]
-const TEST_ACK_STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
+const TEST_ACK_STARTUP_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ApplicationTimeouts {

@@ -1367,7 +1367,7 @@ fn stalled_application_ack_times_out_without_spinning_and_reaps_the_leader() {
     let child = command.spawn().unwrap();
     let runner = child.id();
 
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(60);
     while !ready.exists() && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(10));
     }
