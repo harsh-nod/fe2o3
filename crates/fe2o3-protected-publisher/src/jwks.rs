@@ -739,6 +739,67 @@ mod tests {
         assert_eq!(issuer.request_count(), 1);
     }
 
+    #[tokio::test]
+    async fn cancelled_forced_refresh_releases_singleflight_and_preserves_floor() {
+        let issuer = MockIssuer::start("slow-second");
+        let provider = Arc::new(
+            HttpsJwksProvider::with_test_root(
+                &issuer.url,
+                Duration::from_secs(3),
+                Duration::from_secs(60),
+                CERT,
+            )
+            .unwrap(),
+        );
+        let initial = provider
+            .fetch(Instant::now() + Duration::from_secs(1))
+            .await
+            .unwrap();
+        let task = {
+            let provider = provider.clone();
+            tokio::spawn(async move {
+                provider
+                    .refresh(
+                        Instant::now() + Duration::from_secs(3),
+                        initial.generation,
+                        "cancelled-kid",
+                    )
+                    .await
+            })
+        };
+        for _ in 0..100 {
+            if issuer.request_count() >= 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+        assert_eq!(issuer.request_count(), 2);
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+
+        let suppressed = provider
+            .refresh(
+                Instant::now() + Duration::from_secs(1),
+                initial.generation,
+                "next-attacker-kid",
+            )
+            .await
+            .unwrap();
+        assert_eq!(suppressed.generation, initial.generation);
+        assert_eq!(issuer.request_count(), 2);
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        let recovered = provider
+            .refresh(
+                Instant::now() + Duration::from_secs(1),
+                initial.generation,
+                "legitimate-rotation-kid",
+            )
+            .await
+            .unwrap();
+        assert!(recovered.generation > initial.generation);
+        assert_eq!(issuer.request_count(), 3);
+    }
+
     #[test]
     fn system_proxy_environment_is_ignored() {
         let issuer = MockIssuer::start("jwks");

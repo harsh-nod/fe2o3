@@ -52,7 +52,7 @@ pub struct DurableStore {
     #[cfg(test)]
     maximum_write_chunk: usize,
     #[cfg(test)]
-    fail_write_after: Option<usize>,
+    fail_write_after: Option<(usize, i32)>,
     #[cfg(test)]
     after_sync: Option<Box<dyn FnOnce() + Send>>,
 }
@@ -365,17 +365,29 @@ impl DurableStore {
             }
             let record = self.load_indexed(&existing)?;
             let request_body = decode_base64(&record.request_body_base64, MAX_REQUEST_BYTES)?;
+            if record.request_key_sha256 != input.request_key_sha256
+                || record.request_identity != existing.request_identity
+                || record.request_sha256 != existing.request_sha256
+                || record.stable_authorization_sha256 != existing.stable_authorization_sha256
+            {
+                self.poisoned = true;
+                return Err(PublisherError::Store);
+            }
             if request_body != input.request_body {
                 return Err(PublisherError::ReplayConflict);
             }
             check_deadline(deadline)?;
-            return decode_base64(&record.response_body_base64, MAX_RESPONSE_BYTES);
+            let response = decode_base64(&record.response_body_base64, MAX_RESPONSE_BYTES)?;
+            self.verify_identity()?;
+            return Ok(response);
         }
         if self.request_identities.contains(input.request_identity)
             || self.request_digests.contains(input.request_sha256)
-            || self.by_request_key.len() as u64 >= self.policy.max_receipts
         {
             return Err(PublisherError::ReplayConflict);
+        }
+        if self.by_request_key.len() as u64 >= self.policy.max_receipts {
+            return Err(PublisherError::Store);
         }
         check_deadline(deadline)?;
 
@@ -456,8 +468,10 @@ impl DurableStore {
             #[cfg(test)]
             if self
                 .fail_write_after
-                .is_some_and(|threshold| written >= threshold)
+                .is_some_and(|(threshold, _)| written >= threshold)
             {
+                let (_, errno) = self.fail_write_after.unwrap();
+                let _injected = std::io::Error::from_raw_os_error(errno);
                 return Err(PublisherError::Store);
             }
             #[cfg(test)]
@@ -564,8 +578,8 @@ impl DurableStore {
     }
 
     #[cfg(test)]
-    fn fail_write_after(&mut self, bytes: usize) {
-        self.fail_write_after = Some(bytes);
+    fn fail_write_after(&mut self, bytes: usize, errno: i32) {
+        self.fail_write_after = Some((bytes, errno));
     }
 
     #[cfg(test)]
@@ -813,6 +827,33 @@ mod tests {
     }
 
     #[test]
+    fn row_and_byte_capacity_stop_new_issuance() {
+        let temp = secure_tempdir();
+        let row_path = temp.path().join("row-capacity.ledger");
+        let mut policy = StorePolicy::test_default();
+        policy.max_receipts = 1;
+        let mut store = DurableStore::open_with_policy(&row_path, policy).unwrap();
+        issue_with(&mut store, KEY_A, &fixture()).unwrap();
+        let mut second = fixture();
+        second.request.archive_sha256 = "e".repeat(64);
+        second.request_body =
+            canonical_bytes(&serde_json::to_value(&second.request).unwrap()).unwrap();
+        assert!(matches!(
+            issue_with(&mut store, KEY_B, &second),
+            Err(PublisherError::Store)
+        ));
+
+        let byte_path = temp.path().join("byte-capacity.ledger");
+        let mut store = DurableStore::open(&byte_path).unwrap();
+        store.policy.max_ledger_bytes = store.tail_offset + 1;
+        assert!(matches!(
+            issue_with(&mut store, KEY_A, &fixture()),
+            Err(PublisherError::Store)
+        ));
+        assert_eq!(store.count(), 0);
+    }
+
+    #[test]
     fn key_body_authorization_and_request_substitution_fail_closed() {
         let temp = secure_tempdir();
         let path = temp.path().join("publisher.ledger");
@@ -918,7 +959,7 @@ mod tests {
         let full = temp.path().join("full.ledger");
         let mut store = DurableStore::open(&full).unwrap();
         store.set_maximum_write_chunk(11);
-        store.fail_write_after(33);
+        store.fail_write_after(33, libc::ENOSPC);
         assert!(matches!(
             issue_with(&mut store, KEY_A, &fixture()),
             Err(PublisherError::Store)

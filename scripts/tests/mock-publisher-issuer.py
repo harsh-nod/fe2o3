@@ -39,6 +39,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         if mode == "slow":
             time.sleep(2)
+        if mode == "slow-second" and self.server.request_count == 2:
+            time.sleep(2)
         if mode == "oversize":
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -66,7 +68,7 @@ def main() -> None:
     parser.add_argument("--count-file", type=Path)
     parser.add_argument(
         "--mode",
-        choices=("jwks", "redirect", "slow", "oversize", "rotate"),
+        choices=("jwks", "redirect", "slow", "slow-second", "oversize", "rotate"),
         required=True,
     )
     args = parser.parse_args()

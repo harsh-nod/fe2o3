@@ -3,7 +3,7 @@ use std::io::Read;
 use std::os::fd::{FromRawFd, RawFd};
 use std::path::Path;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -94,7 +94,7 @@ async fn enroll_token_with_provider(
     if artifact_path != config.enrollment_artifact_path {
         return Err(PublisherError::Config);
     }
-    let token_bytes = read_nonregular_token_fd(token_fd)?;
+    let token_bytes = read_nonregular_token_fd(token_fd, config.network_deadline())?;
     let token = std::str::from_utf8(&token_bytes)
         .map_err(|_| PublisherError::Authentication)?
         .trim_end_matches(['\r', '\n']);
@@ -129,7 +129,10 @@ async fn enroll_token_with_provider(
     Ok(artifact.claim_profile_sha256)
 }
 
-fn read_nonregular_token_fd(fd: RawFd) -> Result<Zeroizing<Vec<u8>>, PublisherError> {
+fn read_nonregular_token_fd(
+    fd: RawFd,
+    timeout: Duration,
+) -> Result<Zeroizing<Vec<u8>>, PublisherError> {
     let before = fd_identity(fd)?;
     let kind = before.st_mode & libc::S_IFMT;
     if kind == libc::S_IFREG || !(kind == libc::S_IFIFO || kind == libc::S_IFSOCK) {
@@ -161,11 +164,47 @@ fn read_nonregular_token_fd(fd: RawFd) -> Result<Zeroizing<Vec<u8>>, PublisherEr
     }
     let mut file = unsafe { File::from_raw_fd(duplicated) };
     let mut bytes = Zeroizing::new(Vec::new());
-    Read::by_ref(&mut file)
-        .take(MAX_JWT_BYTES as u64 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|_| PublisherError::Authentication)?;
-    if bytes.is_empty() || bytes.len() > MAX_JWT_BYTES {
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .ok_or(PublisherError::Authentication)?;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(PublisherError::Authentication);
+        }
+        let timeout_milliseconds = remaining
+            .as_millis()
+            .saturating_add(1)
+            .min(libc::c_int::MAX as u128) as libc::c_int;
+        let mut poll = libc::pollfd {
+            fd: duplicated,
+            events: libc::POLLIN | libc::POLLHUP,
+            revents: 0,
+        };
+        let ready = unsafe { libc::poll(&mut poll, 1, timeout_milliseconds) };
+        if ready < 0 {
+            if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(PublisherError::Authentication);
+        }
+        if ready == 0 || poll.revents & (libc::POLLERR | libc::POLLNVAL) != 0 {
+            return Err(PublisherError::Authentication);
+        }
+        let mut chunk = [0u8; 4096];
+        let capacity = (MAX_JWT_BYTES + 1 - bytes.len()).min(chunk.len());
+        let count = file
+            .read(&mut chunk[..capacity])
+            .map_err(|_| PublisherError::Authentication)?;
+        if count == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&chunk[..count]);
+        if bytes.len() > MAX_JWT_BYTES {
+            return Err(PublisherError::Authentication);
+        }
+    }
+    if bytes.is_empty() {
         return Err(PublisherError::Authentication);
     }
     Ok(bytes)
@@ -266,6 +305,26 @@ mod tests {
             .await
             .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn stalled_token_pipe_obeys_enrollment_deadline() {
+        let temp = secure_tempdir();
+        let mut config = production_config(temp.path());
+        config.network_deadline_milliseconds = 25;
+        let (_writer, reader) = UnixStream::pair().unwrap();
+        let start = Instant::now();
+        assert!(
+            enroll_token_with_provider(
+                &config,
+                Arc::new(StaticJwksProvider::new(jwks("fixture-key"))),
+                reader.as_raw_fd(),
+                &config.enrollment_artifact_path,
+            )
+            .await
+            .is_err()
+        );
+        assert!(start.elapsed() < Duration::from_millis(200));
     }
 
     #[tokio::test]
