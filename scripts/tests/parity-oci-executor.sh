@@ -564,9 +564,21 @@ expect_manifest_rejection(
 PY
 
 original_source_commit="${source_commit}"
+missing_parent_prefix=''
+for candidate in $(printf '%02x\n' {0..255}); do
+  if [[ ! -e "${SOURCE_REPO}/.git/objects/${candidate}" ]]; then
+    missing_parent_prefix="${candidate}"
+    break
+  fi
+done
+if [[ -z "${missing_parent_prefix}" ]]; then
+  printf '%s\n' 'test fixture requires one absent loose-object fanout' >&2
+  exit 1
+fi
+missing_parent_id="${missing_parent_prefix}$(printf '0%.0s' {1..38})"
 cat >"${TEST_ROOT}/missing-parent.commit" <<EOF
 tree ${source_tree}
-parent ffffffffffffffffffffffffffffffffffffffff
+parent ${missing_parent_id}
 author test <test@example.invalid> 1 +0000
 committer test <test@example.invalid> 1 +0000
 
@@ -574,7 +586,8 @@ missing parent fixture
 EOF
 missing_parent_commit="$(install_commit_object "${TEST_ROOT}/missing-parent.commit")"
 write_request_for_commit "${missing_parent_commit}"
-expect_failure missing_parent_object 'cannot open Git object fanout ff' plan
+expect_failure missing_parent_object \
+  "cannot open Git object fanout ${missing_parent_prefix}" plan
 
 cat >"${TEST_ROOT}/malformed-parent.commit" <<EOF
 tree ${source_tree}
