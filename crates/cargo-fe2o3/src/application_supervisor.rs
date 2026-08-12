@@ -500,6 +500,9 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(1);
+    const CAPACITY_HELPER_ENV: &str = "FE2O3_INTERNAL_TEST_SUPERVISOR_CAPACITY";
+    const CAPACITY_HELPER_TEST: &str =
+        "application_supervisor::tests::supervisor_admission_has_fixed_capacity_and_recovers";
     const PROCESS_HELPER_ENV: &str = "FE2O3_INTERNAL_TEST_SUPERVISOR_PROCESS";
     const PROCESS_HELPER_TEST: &str =
         "application_supervisor::tests::supervisor_process_retains_admission_after_frontend_result";
@@ -523,6 +526,19 @@ mod tests {
 
     #[test]
     fn supervisor_admission_has_fixed_capacity_and_recovers() {
+        if env::var_os(CAPACITY_HELPER_ENV).is_none() {
+            let output = Command::new(env::current_exe().unwrap())
+                .args(["--exact", CAPACITY_HELPER_TEST, "--nocapture"])
+                .env(CAPACITY_HELPER_ENV, "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "isolated capacity helper failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
         let directory = test_directory();
         let mut admissions = Vec::new();
         for _ in 0..SUPERVISOR_CAPACITY {
