@@ -151,6 +151,22 @@ expect_failure() {
   fi
 }
 
+expect_failure_one_of() {
+  local name="$1"
+  local expected_a="$2"
+  local expected_b="$3"
+  shift 3
+  local output
+  if output="$("$@" 2>&1)"; then
+    printf 'expected %s to fail\n' "${name}" >&2
+    exit 1
+  fi
+  if [[ "${output}" != *"${expected_a}"* && "${output}" != *"${expected_b}"* ]]; then
+    printf '%s failed for the wrong reason:\n%s\n' "${name}" "${output}" >&2
+    exit 1
+  fi
+}
+
 write_policy() {
   local profile_digest
   profile_digest="$(sha256 "${PROFILE}")"
@@ -586,8 +602,21 @@ missing parent fixture
 EOF
 missing_parent_commit="$(install_commit_object "${TEST_ROOT}/missing-parent.commit")"
 write_request_for_commit "${missing_parent_commit}"
-expect_failure missing_parent_object \
-  "cannot open Git object fanout ${missing_parent_prefix}" plan
+expect_failure_one_of missing_parent_object \
+  "cannot open Git object fanout ${missing_parent_prefix}" \
+  "cannot read Git object ${missing_parent_id}" plan
+
+missing_parent_fanout="${SOURCE_REPO}/.git/objects/${missing_parent_prefix}"
+created_missing_parent_fanout=0
+if [[ ! -d "${missing_parent_fanout}" ]]; then
+  mkdir "${missing_parent_fanout}"
+  created_missing_parent_fanout=1
+fi
+expect_failure missing_parent_object_with_existing_fanout \
+  "cannot read Git object ${missing_parent_id}" plan
+if ((created_missing_parent_fanout)); then
+  rmdir "${missing_parent_fanout}"
+fi
 
 cat >"${TEST_ROOT}/malformed-parent.commit" <<EOF
 tree ${source_tree}
