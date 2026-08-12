@@ -815,10 +815,21 @@ mod tests {
         // Keep the post-adoption EBADF assertions outside the descriptor range concurrently used
         // by the rest of the test process. Otherwise an unrelated parallel test can reuse a just
         // closed low descriptor before this test observes it.
-        let channel_fd = unsafe { libc::fcntl(channel_source, libc::F_DUPFD_CLOEXEC, 10_000) };
-        assert!(channel_fd >= 10_000);
-        let slot_fd = unsafe { libc::fcntl(slot_source, libc::F_DUPFD_CLOEXEC, 10_001) };
-        assert!(slot_fd >= 10_001);
+        let mut limit = std::mem::MaybeUninit::<libc::rlimit>::zeroed();
+        assert_eq!(
+            unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, limit.as_mut_ptr()) },
+            0
+        );
+        let limit = unsafe { limit.assume_init() };
+        let descriptor_ceiling = limit.rlim_cur.min(10_002);
+        assert!(descriptor_ceiling >= 5);
+        let channel_minimum = i32::try_from(descriptor_ceiling - 2).unwrap();
+        let slot_minimum = channel_minimum + 1;
+        let channel_fd =
+            unsafe { libc::fcntl(channel_source, libc::F_DUPFD_CLOEXEC, channel_minimum) };
+        assert!(channel_fd >= channel_minimum);
+        let slot_fd = unsafe { libc::fcntl(slot_source, libc::F_DUPFD_CLOEXEC, slot_minimum) };
+        assert!(slot_fd >= slot_minimum);
         assert_eq!(unsafe { libc::close(channel_source) }, 0);
         assert_eq!(unsafe { libc::close(slot_source) }, 0);
         let adopted = adopt_supervisor_descriptors(
