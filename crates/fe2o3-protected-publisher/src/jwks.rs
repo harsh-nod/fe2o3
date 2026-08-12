@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -8,7 +9,10 @@ use tokio::sync::{Mutex, RwLock, Semaphore};
 use tokio::time::Instant;
 
 use crate::PublisherError;
-use crate::bounds::{MAX_JWKS_BYTES, MAX_RESPONSE_BYTES};
+use crate::bounds::{
+    JWKS_FORCED_REFRESH_FLOOR_SECS, JWKS_FORCED_REFRESH_MAX_BACKOFF_SECS,
+    MAX_CACHED_JWKS_KID_BYTES, MAX_JWKS_BYTES, MAX_NEGATIVE_JWKS_KIDS, MAX_RESPONSE_BYTES,
+};
 
 #[derive(Clone, Debug)]
 pub struct JwksSnapshot {
@@ -26,6 +30,7 @@ pub trait JwksProvider: Send + Sync {
         &'a self,
         deadline: Instant,
         observed_generation: u64,
+        unknown_kid: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<JwksSnapshot, PublisherError>> + Send + 'a>>;
 }
 
@@ -36,6 +41,8 @@ pub struct HttpsJwksProvider {
     cache: RwLock<Option<CachedJwks>>,
     refresh: Mutex<()>,
     outbound: Semaphore,
+    negative_kids: Mutex<NegativeKidState>,
+    maximum_backoff: Duration,
 }
 
 struct CachedJwks {
@@ -44,9 +51,28 @@ struct CachedJwks {
     generation: u64,
 }
 
+struct NegativeKidState {
+    entries: VecDeque<NegativeKid>,
+    next_forced_refresh: Option<Instant>,
+    backoff: Duration,
+}
+
+struct NegativeKid {
+    generation: u64,
+    kid: String,
+    retry_at: Instant,
+}
+
 impl HttpsJwksProvider {
     pub fn new(url: &str, timeout: Duration, cache_ttl: Duration) -> Result<Self, PublisherError> {
-        Self::build(url, timeout, cache_ttl, None)
+        Self::build(
+            url,
+            timeout,
+            cache_ttl,
+            None,
+            Duration::from_secs(JWKS_FORCED_REFRESH_FLOOR_SECS),
+            Duration::from_secs(JWKS_FORCED_REFRESH_MAX_BACKOFF_SECS),
+        )
     }
 
     fn build(
@@ -54,6 +80,8 @@ impl HttpsJwksProvider {
         timeout: Duration,
         cache_ttl: Duration,
         extra_root: Option<reqwest::Certificate>,
+        refresh_floor: Duration,
+        maximum_backoff: Duration,
     ) -> Result<Self, PublisherError> {
         let url = reqwest::Url::parse(url).map_err(|_| PublisherError::Config)?;
         if url.scheme() != "https"
@@ -75,7 +103,12 @@ impl HttpsJwksProvider {
             builder = builder.add_root_certificate(root);
         }
         let client = builder.build().map_err(|_| PublisherError::Config)?;
-        if cache_ttl.is_zero() || cache_ttl > Duration::from_secs(3_600) {
+        if cache_ttl.is_zero()
+            || cache_ttl > Duration::from_secs(3_600)
+            || refresh_floor.is_zero()
+            || maximum_backoff < refresh_floor
+            || maximum_backoff > Duration::from_secs(JWKS_FORCED_REFRESH_MAX_BACKOFF_SECS)
+        {
             return Err(PublisherError::Config);
         }
         Ok(Self {
@@ -85,6 +118,12 @@ impl HttpsJwksProvider {
             cache: RwLock::new(None),
             refresh: Mutex::new(()),
             outbound: Semaphore::new(1),
+            negative_kids: Mutex::new(NegativeKidState {
+                entries: VecDeque::new(),
+                next_forced_refresh: None,
+                backoff: refresh_floor,
+            }),
+            maximum_backoff,
         })
     }
 
@@ -96,7 +135,14 @@ impl HttpsJwksProvider {
         root_pem: &[u8],
     ) -> Result<Self, PublisherError> {
         let root = reqwest::Certificate::from_pem(root_pem).map_err(|_| PublisherError::Config)?;
-        Self::build(url, timeout, cache_ttl, Some(root))
+        Self::build(
+            url,
+            timeout,
+            cache_ttl,
+            Some(root),
+            Duration::from_millis(25),
+            Duration::from_millis(100),
+        )
     }
 
     async fn fresh_cache(&self, now: Instant) -> Option<JwksSnapshot> {
@@ -125,6 +171,7 @@ impl HttpsJwksProvider {
         &self,
         deadline: Instant,
         observed_generation: u64,
+        unknown_kid: &str,
     ) -> Result<JwksSnapshot, PublisherError> {
         let _refresh = tokio::time::timeout_at(deadline, self.refresh.lock())
             .await
@@ -134,7 +181,45 @@ impl HttpsJwksProvider {
         {
             return Ok(snapshot(entry));
         }
-        self.refresh_locked(deadline).await
+        let now = Instant::now();
+        let mut negative = self.negative_kids.lock().await;
+        if negative.entries.iter().any(|entry| {
+            entry.kid == unknown_kid
+                && entry.generation == observed_generation
+                && now < entry.retry_at
+        }) || negative
+            .next_forced_refresh
+            .is_some_and(|retry_at| now < retry_at)
+        {
+            remember_negative(&mut negative, unknown_kid, observed_generation, now);
+            drop(negative);
+            return self
+                .cache
+                .read()
+                .await
+                .as_ref()
+                .map(snapshot)
+                .ok_or(PublisherError::Jwks);
+        }
+        let backoff = negative.backoff;
+        negative.next_forced_refresh = now.checked_add(backoff);
+        negative.backoff = backoff
+            .checked_mul(2)
+            .unwrap_or(self.maximum_backoff)
+            .min(self.maximum_backoff);
+        drop(negative);
+        let refreshed = self.refresh_locked(deadline).await;
+        let mut negative = self.negative_kids.lock().await;
+        negative.next_forced_refresh = Instant::now().checked_add(backoff);
+        if let Ok(refreshed) = &refreshed {
+            remember_negative(
+                &mut negative,
+                unknown_kid,
+                refreshed.generation,
+                Instant::now(),
+            );
+        }
+        refreshed
     }
 
     async fn refresh_locked(&self, deadline: Instant) -> Result<JwksSnapshot, PublisherError> {
@@ -212,6 +297,17 @@ impl HttpsJwksProvider {
         }
         Ok(body)
     }
+
+    #[cfg(test)]
+    async fn negative_kid_names(&self) -> Vec<String> {
+        self.negative_kids
+            .lock()
+            .await
+            .entries
+            .iter()
+            .map(|entry| entry.kid.clone())
+            .collect()
+    }
 }
 
 impl JwksProvider for HttpsJwksProvider {
@@ -226,8 +322,9 @@ impl JwksProvider for HttpsJwksProvider {
         &'a self,
         deadline: Instant,
         observed_generation: u64,
+        unknown_kid: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<JwksSnapshot, PublisherError>> + Send + 'a>> {
-        Box::pin(self.refresh_after(deadline, observed_generation))
+        Box::pin(self.refresh_after(deadline, observed_generation, unknown_kid))
     }
 }
 
@@ -235,6 +332,21 @@ fn snapshot(entry: &CachedJwks) -> JwksSnapshot {
     JwksSnapshot {
         bytes: entry.bytes.clone(),
         generation: entry.generation,
+    }
+}
+
+fn remember_negative(state: &mut NegativeKidState, kid: &str, generation: u64, now: Instant) {
+    if kid.len() > MAX_CACHED_JWKS_KID_BYTES {
+        return;
+    }
+    state.entries.retain(|entry| entry.kid != kid);
+    state.entries.push_back(NegativeKid {
+        generation,
+        kid: kid.into(),
+        retry_at: state.next_forced_refresh.unwrap_or(now),
+    });
+    while state.entries.len() > MAX_NEGATIVE_JWKS_KIDS {
+        state.entries.pop_front();
     }
 }
 
@@ -281,6 +393,7 @@ impl JwksProvider for StaticJwksProvider {
         &'a self,
         deadline: Instant,
         _observed_generation: u64,
+        _unknown_kid: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<JwksSnapshot, PublisherError>> + Send + 'a>> {
         self.fetch(deadline)
     }
@@ -496,7 +609,11 @@ mod tests {
                 let provider = provider.clone();
                 tokio::spawn(async move {
                     provider
-                        .refresh(Instant::now() + Duration::from_secs(2), first.generation)
+                        .refresh(
+                            Instant::now() + Duration::from_secs(2),
+                            first.generation,
+                            "attacker-kid",
+                        )
                         .await
                         .unwrap()
                 })
@@ -508,6 +625,118 @@ mod tests {
             assert_eq!(refreshed.bytes, b"{\"keys\":[]}\n");
         }
         assert_eq!(issuer.request_count(), 2);
+    }
+
+    #[tokio::test]
+    async fn sequential_unknown_kid_waves_are_throttled_and_cache_is_bounded() {
+        let issuer = MockIssuer::start("jwks");
+        let provider = HttpsJwksProvider::with_test_root(
+            &issuer.url,
+            Duration::from_secs(1),
+            Duration::from_secs(60),
+            CERT,
+        )
+        .unwrap();
+        let mut snapshot = provider
+            .fetch(Instant::now() + Duration::from_secs(1))
+            .await
+            .unwrap();
+        for index in 0..MAX_NEGATIVE_JWKS_KIDS + 17 {
+            snapshot = provider
+                .refresh(
+                    Instant::now() + Duration::from_secs(1),
+                    snapshot.generation,
+                    &format!("attacker-kid-{index}"),
+                )
+                .await
+                .unwrap();
+        }
+        assert_eq!(issuer.request_count(), 2);
+        let names = provider.negative_kid_names().await;
+        assert_eq!(names.len(), MAX_NEGATIVE_JWKS_KIDS);
+        assert!(!names.iter().any(|kid| kid == "attacker-kid-0"));
+        assert!(
+            names
+                .iter()
+                .any(|kid| kid == &format!("attacker-kid-{}", MAX_NEGATIVE_JWKS_KIDS + 16))
+        );
+    }
+
+    #[tokio::test]
+    async fn legitimate_rotation_recovers_after_bounded_refresh_floor() {
+        let issuer = MockIssuer::start("rotate");
+        let provider = HttpsJwksProvider::with_test_root(
+            &issuer.url,
+            Duration::from_secs(1),
+            Duration::from_secs(60),
+            CERT,
+        )
+        .unwrap();
+        let initial = provider
+            .fetch(Instant::now() + Duration::from_secs(1))
+            .await
+            .unwrap();
+        let first = provider
+            .refresh(
+                Instant::now() + Duration::from_secs(1),
+                initial.generation,
+                "missing-one",
+            )
+            .await
+            .unwrap();
+        assert_eq!(first.bytes, b"{\"keys\":[]}\n");
+        let suppressed = provider
+            .refresh(
+                Instant::now() + Duration::from_secs(1),
+                first.generation,
+                "rotated-key",
+            )
+            .await
+            .unwrap();
+        assert_eq!(suppressed.generation, first.generation);
+        assert_eq!(issuer.request_count(), 2);
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        let rotated = provider
+            .refresh(
+                Instant::now() + Duration::from_secs(1),
+                first.generation,
+                "rotated-key",
+            )
+            .await
+            .unwrap();
+        assert_eq!(rotated.bytes, b"{\"keys\":[{\"kid\":\"rotated-key\"}]}\n");
+        assert_eq!(issuer.request_count(), 3);
+    }
+
+    #[tokio::test]
+    async fn forced_refresh_wait_uses_original_deadline() {
+        let issuer = MockIssuer::start("jwks");
+        let provider = HttpsJwksProvider::with_test_root(
+            &issuer.url,
+            Duration::from_secs(1),
+            Duration::from_secs(60),
+            CERT,
+        )
+        .unwrap();
+        let initial = provider
+            .fetch(Instant::now() + Duration::from_secs(1))
+            .await
+            .unwrap();
+        let guard = provider.refresh.lock().await;
+        let start = Instant::now();
+        assert!(
+            provider
+                .refresh(
+                    start + Duration::from_millis(25),
+                    initial.generation,
+                    "blocked-kid",
+                )
+                .await
+                .is_err()
+        );
+        assert!(start.elapsed() < Duration::from_millis(200));
+        drop(guard);
+        assert_eq!(issuer.request_count(), 1);
     }
 
     #[test]

@@ -295,7 +295,7 @@ async fn verify_token(
     let mut jwks = parse_jwks(&initial.bytes)?;
     let mut matching = matching_keys(&jwks, kid);
     if matching.is_empty() {
-        let refreshed = provider.refresh(deadline, initial.generation).await?;
+        let refreshed = provider.refresh(deadline, initial.generation, kid).await?;
         jwks = parse_jwks(&refreshed.bytes)?;
         matching = matching_keys(&jwks, kid);
     }
@@ -1095,6 +1095,7 @@ mod tests {
             &'a self,
             _deadline: Instant,
             observed_generation: u64,
+            _unknown_kid: &'a str,
         ) -> Pin<Box<dyn Future<Output = Result<JwksSnapshot, PublisherError>> + Send + 'a>>
         {
             Box::pin(async move {

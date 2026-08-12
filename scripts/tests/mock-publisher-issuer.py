@@ -45,11 +45,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(256 * 1024 + 1))
             self.end_headers()
             return
+        body = JWKS
+        if mode == "rotate" and self.server.request_count >= 3:
+            body = b'{"keys":[{"kid":"rotated-key"}]}\n'
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(JWKS)))
+        self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(JWKS)
+        self.wfile.write(body)
 
     def log_message(self, _format: str, *_arguments: object) -> None:
         pass
@@ -62,7 +65,9 @@ def main() -> None:
     parser.add_argument("--port-file", type=Path, required=True)
     parser.add_argument("--count-file", type=Path)
     parser.add_argument(
-        "--mode", choices=("jwks", "redirect", "slow", "oversize"), required=True
+        "--mode",
+        choices=("jwks", "redirect", "slow", "oversize", "rotate"),
+        required=True,
     )
     args = parser.parse_args()
 
