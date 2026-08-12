@@ -631,9 +631,13 @@ key\t0000\tpublisher\ttest-publisher-v1\tkeys/test-publisher-v1.pem\t{digest}\te
     async fn timed_out_commit_is_recoverable_by_idempotent_retry() {
         let temp = secure_tempdir();
         let mut config = config(temp.path().join("publisher.ledger"));
-        config.request_deadline_milliseconds = 100;
+        config.request_deadline_milliseconds = 500;
         let mut store = DurableStore::open(&config.ledger_path).unwrap();
-        store.set_commit_delay(std::time::Duration::from_millis(250));
+        store.set_commit_delay(std::time::Duration::from_millis(800));
+        let (admitted_tx, admitted_rx) = tokio::sync::oneshot::channel();
+        store.set_after_admission(move || {
+            let _ = admitted_tx.send(());
+        });
         let publisher = Publisher::for_test(
             config,
             Arc::new(StaticJwksProvider::new(jwks("fixture-key"))),
@@ -650,15 +654,23 @@ key\t0000\tpublisher\ttest-publisher-v1\tkeys/test-publisher-v1.pem\t{digest}\te
         assert_eq!(fixture.request_body, fresh.request_body);
         assert_ne!(fixture.token, fresh.token);
         let start = Instant::now();
-        assert!(matches!(
-            publisher
-                .issue(&fixture.request_body, &fixture.token, REQUEST_KEY)
-                .await,
-            Err(PublisherError::Store)
-        ));
-        assert!(start.elapsed() < std::time::Duration::from_millis(200));
+        let publisher_for_issue = publisher.clone();
+        let first_body = fixture.request_body.clone();
+        let first_token = fixture.token.clone();
+        let first = tokio::spawn(async move {
+            publisher_for_issue
+                .issue(&first_body, &first_token, REQUEST_KEY)
+                .await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(2), admitted_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(first.await.unwrap(), Err(PublisherError::Store)));
+        assert!(start.elapsed() < std::time::Duration::from_millis(750));
 
-        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        // Count is queued behind the admitted commit and is therefore a completion barrier.
+        assert_eq!(publisher.store.count().await, 1);
         let recovered = publisher
             .issue(&fresh.request_body, &fresh.token, REQUEST_KEY)
             .await

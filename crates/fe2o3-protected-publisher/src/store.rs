@@ -62,6 +62,8 @@ pub struct DurableStore {
     after_sync: Option<Box<dyn FnOnce() + Send>>,
     #[cfg(test)]
     before_admission: Option<BeforeAdmissionHook>,
+    #[cfg(test)]
+    after_admission: Option<Box<dyn FnOnce() + Send>>,
 }
 
 #[derive(Clone)]
@@ -188,6 +190,8 @@ impl DurableStore {
             after_sync: None,
             #[cfg(test)]
             before_admission: None,
+            #[cfg(test)]
+            after_admission: None,
         };
         store.verify_identity()?;
         store.replay(&header)?;
@@ -428,6 +432,10 @@ impl DurableStore {
 
         // Admission ends here. Synchronous writes and fdatasync are not cancellable.
         #[cfg(test)]
+        if let Some(hook) = self.after_admission.take() {
+            hook();
+        }
+        #[cfg(test)]
         std::thread::sleep(self.commit_delay);
         if self.append_authoritatively(&frame).is_err() {
             self.poisoned = true;
@@ -581,6 +589,11 @@ impl DurableStore {
     #[cfg(test)]
     fn set_before_admission(&mut self, hook: impl FnOnce(&mut Vec<u8>) + Send + 'static) {
         self.before_admission = Some(Box::new(hook));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_after_admission(&mut self, hook: impl FnOnce() + Send + 'static) {
+        self.after_admission = Some(Box::new(hook));
     }
 }
 
