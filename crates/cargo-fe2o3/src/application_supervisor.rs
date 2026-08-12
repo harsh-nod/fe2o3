@@ -735,6 +735,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use std::ffi::OsString;
+    use std::os::fd::IntoRawFd;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(1);
@@ -801,6 +802,37 @@ mod tests {
         let peer_error = validate_channel(&channel, i32::MAX).unwrap_err();
         assert!(peer_error.contains("peer identity"), "{peer_error}");
         drop(forged);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn supervisor_adoption_closes_originals_and_protects_owned_duplicates() {
+        let directory = test_directory();
+        let SupervisorAdmission { file } = SupervisorAdmission::acquire_at(&directory).unwrap();
+        let slot_fd = file.into_raw_fd();
+        let (channel, peer) = UnixStream::pair().unwrap();
+        let channel_fd = channel.into_raw_fd();
+        let adopted = adopt_supervisor_descriptors(
+            channel_fd,
+            slot_fd,
+            std::process::id() as libc::pid_t,
+            &directory,
+        )
+        .unwrap();
+
+        assert_eq!(unsafe { libc::fcntl(channel_fd, libc::F_GETFD) }, -1);
+        assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::EBADF));
+        assert_eq!(unsafe { libc::fcntl(slot_fd, libc::F_GETFD) }, -1);
+        assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::EBADF));
+        for descriptor in [adopted.channel.as_raw_fd(), adopted.slot.as_raw_fd()] {
+            assert_ne!(
+                unsafe { libc::fcntl(descriptor, libc::F_GETFD) } & libc::FD_CLOEXEC,
+                0
+            );
+        }
+
+        drop(adopted);
+        drop(peer);
         fs::remove_dir_all(directory).unwrap();
     }
 

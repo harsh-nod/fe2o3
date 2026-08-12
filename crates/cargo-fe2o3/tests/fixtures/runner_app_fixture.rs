@@ -4,7 +4,7 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::path::PathBuf;
-use std::process::ExitCode;
+use std::process::{self, ExitCode};
 use std::thread;
 use std::time::Duration;
 
@@ -42,6 +42,9 @@ struct FixtureControls {
     premature_close_ack: bool,
     extra_ack_byte: bool,
     stall_before_ack: Option<OsString>,
+    fork_fd_holder: Option<OsString>,
+    forge_supervisor_result: Option<OsString>,
+    unlock_supervisor_slot: bool,
 }
 
 impl FixtureControls {
@@ -106,6 +109,27 @@ impl FixtureControls {
                     );
                     index += 2;
                 }
+                "--fe2o3-test-fork-fd-holder" => {
+                    controls.fork_fd_holder = Some(
+                        arguments
+                            .get(index + 1)
+                            .ok_or_else(|| "FD holder probe requires a PID marker".to_string())?
+                            .clone(),
+                    );
+                    index += 2;
+                }
+                "--fe2o3-test-forge-supervisor-result" => {
+                    controls.forge_supervisor_result = Some(
+                        arguments
+                            .get(index + 1)
+                            .ok_or_else(|| "forged result probe requires a PID marker".to_string())?
+                            .clone(),
+                    );
+                    index += 2;
+                }
+                "--fe2o3-test-unlock-supervisor-slot" => {
+                    controls.unlock_supervisor_slot = true;
+                }
                 _ => return Err(format!("unknown runner fixture control {argument:?}")),
             }
             if !matches!(
@@ -114,6 +138,8 @@ impl FixtureControls {
                     | "--fe2o3-test-seccomp-process-probe"
                     | "--fe2o3-test-exec-replacement-probe"
                     | "--fe2o3-test-stall-before-ack"
+                    | "--fe2o3-test-fork-fd-holder"
+                    | "--fe2o3-test-forge-supervisor-result"
             ) {
                 index += 1;
             }
@@ -152,6 +178,32 @@ fn run() -> Result<(), String> {
         .map(|name| name.to_string_lossy().into_owned())
         .collect::<Vec<_>>();
     let handoff = validate_handoff(&controls)?;
+    let inherited_fds = inherited_descriptors();
+    let slot_unlocks = if controls.unlock_supervisor_slot {
+        inherited_fds
+            .iter()
+            .filter(|(_, target)| target.contains("/fe2o3-application-supervisors-"))
+            .map(|(descriptor, target)| {
+                // SAFETY: this hostile fixture intentionally attempts to release any leaked OFD
+                // lock and records the result. Production code never unlocks inherited slots.
+                let result = unsafe { libc::flock(*descriptor, libc::LOCK_UN) };
+                serde_json::json!({
+                    "fd": descriptor,
+                    "target": target,
+                    "unlocked": result == 0,
+                })
+            })
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    let forged_supervisor_result = if let Some(marker) = controls.forge_supervisor_result.as_ref() {
+        fs::write(marker, process::id().to_string())
+            .map_err(|error| format!("write forged result PID: {error}"))?;
+        Some(forge_supervisor_result()?)
+    } else {
+        None
+    };
     let probe_fd_open = controls.probe_fd.is_some_and(|descriptor| {
         fs::symlink_metadata(format!("/proc/self/fd/{descriptor}")).is_ok()
     });
@@ -160,21 +212,132 @@ fn run() -> Result<(), String> {
         "backend_fd_open": fs::symlink_metadata("/proc/self/fd/198").is_ok(),
         "leaked_environment": leaked_environment,
         "handoff": &handoff.report,
+        "inherited_fds": inherited_fds
+            .iter()
+            .map(|(descriptor, target)| serde_json::json!({"fd": descriptor, "target": target}))
+            .collect::<Vec<_>>(),
         "payload_hex": payload,
         "probe_fd_open": probe_fd_open,
         "preserved_environment_hex": env::var_os("RUNNER_CHAIN_ENV")
             .map(|value| hex(os_bytes(&value))),
         "unexpected_environment": unexpected_environment,
+        "slot_unlocks": slot_unlocks,
+        "forged_supervisor_result": forged_supervisor_result,
     });
     fs::write(
         report,
         serde_json::to_vec(&record).map_err(|error| format!("encode report: {error}"))?,
     )
     .map_err(|error| format!("write report: {error}"))?;
+    if controls.forge_supervisor_result.is_some() {
+        thread::sleep(Duration::from_secs(2));
+    }
+    if let Some(marker) = controls.fork_fd_holder.as_ref() {
+        // SAFETY: the hostile fixture forks once and the child performs only async-signal-safe
+        // close/sleep/exit operations so it can retain any leaked descriptor after the leader exits.
+        let child = unsafe { libc::fork() };
+        if child < 0 {
+            return Err(format!(
+                "fork FD holder: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        if child == 0 {
+            for descriptor in 0..=2 {
+                // SAFETY: the fork-only child intentionally detaches from fixture stdio.
+                unsafe { libc::close(descriptor) };
+            }
+            // SAFETY: sleep and _exit are async-signal-safe in this fork-only child.
+            unsafe {
+                libc::sleep(60);
+                libc::_exit(0);
+            }
+        }
+        fs::write(marker, child.to_string())
+            .map_err(|error| format!("write FD holder PID: {error}"))?;
+    }
     // The descriptor-derived current-publication lease and evidence descriptors remain owned by
     // the application until all handoff-dependent application work above has completed.
     drop(handoff);
     Ok(())
+}
+
+fn inherited_descriptors() -> Vec<(i32, String)> {
+    (3..1024)
+        .filter_map(|descriptor| {
+            // SAFETY: F_GETFD only probes whether this numeric descriptor survived exec.
+            if unsafe { libc::fcntl(descriptor, libc::F_GETFD) } < 0 {
+                return None;
+            }
+            let target = fs::read_link(format!("/proc/self/fd/{descriptor}"))
+                .ok()?
+                .to_string_lossy()
+                .into_owned();
+            Some((descriptor, target))
+        })
+        .collect()
+}
+
+fn forge_supervisor_result() -> Result<bool, String> {
+    let parent = unsafe { libc::getppid() };
+    let cmdline = fs::read(format!("/proc/{parent}/cmdline"))
+        .map_err(|error| format!("read supervisor command line: {error}"))?;
+    let arguments = cmdline
+        .split(|byte| *byte == 0)
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    if arguments.get(1).copied() != Some(b"__fe2o3-application-supervisor-v1") {
+        return Err(format!("unexpected supervisor command line: {arguments:?}"));
+    }
+    let channel = arguments
+        .get(2)
+        .and_then(|value| std::str::from_utf8(value).ok())
+        .and_then(|value| value.parse::<i32>().ok())
+        .ok_or_else(|| "invalid supervisor channel".to_string())?;
+    let encoded = arguments
+        .get(4)
+        .ok_or_else(|| "missing supervisor challenge".to_string())?;
+    if encoded.len() != 64 {
+        return Err("invalid supervisor challenge length".to_string());
+    }
+    let mut challenge = [0_u8; 32];
+    for (index, byte) in challenge.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(
+            std::str::from_utf8(&encoded[index * 2..index * 2 + 2])
+                .map_err(|_| "invalid supervisor challenge hex")?,
+            16,
+        )
+        .map_err(|_| "invalid supervisor challenge hex".to_string())?;
+    }
+    let mut frame = [0_u8; 50];
+    frame[..8].copy_from_slice(b"f2supv01");
+    frame[8..40].copy_from_slice(&challenge);
+    frame[40] = 2;
+    frame[41] = 1;
+    let mut offset = 0;
+    while offset < frame.len() {
+        // SAFETY: frame's unwritten suffix is readable and this hostile probe does not own the
+        // descriptor. EBADF/EPIPE is the expected secure outcome.
+        let count = unsafe {
+            libc::write(
+                channel,
+                frame[offset..].as_ptr().cast(),
+                frame.len() - offset,
+            )
+        };
+        if count < 0 {
+            let error = std::io::Error::last_os_error();
+            if matches!(error.raw_os_error(), Some(libc::EBADF) | Some(libc::EPIPE)) {
+                return Ok(false);
+            }
+            return Err(format!("forge supervisor frame: {error}"));
+        }
+        if count == 0 {
+            return Err("forge supervisor frame made no progress".to_string());
+        }
+        offset += count as usize;
+    }
+    Ok(true)
 }
 
 fn validate_handoff(controls: &FixtureControls) -> Result<ValidatedHandoff, String> {

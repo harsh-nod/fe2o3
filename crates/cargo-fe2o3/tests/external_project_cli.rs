@@ -5,6 +5,12 @@ use std::fs;
 use std::fs::OpenOptions;
 #[cfg(unix)]
 use std::io::{Read, Write};
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
+#[cfg(unix)]
+use std::os::unix::net::{UnixDatagram, UnixStream};
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::process::Stdio;
@@ -1106,8 +1112,310 @@ fn application_runner_scrubs_build_environment_and_preserves_non_utf8_argv() {
     assert_eq!(report["artifact_fd_open"], false);
     assert_eq!(report["backend_fd_open"], false);
     assert_eq!(report["leaked_environment"], serde_json::json!([]));
+    assert_eq!(report["inherited_fds"], serde_json::json!([]));
+    assert_eq!(report["slot_unlocks"], serde_json::json!([]));
     assert_eq!(report["payload_hex"], "6170706c69636174696f6e2dff");
     fs::remove_dir_all(root).expect("remove runner fixture");
+}
+
+#[cfg(unix)]
+#[test]
+fn hostile_orphan_descendants_cannot_retain_supervisor_slots() {
+    struct KillOrphans(Vec<i32>);
+    impl Drop for KillOrphans {
+        fn drop(&mut self) {
+            for child in self.0.drain(..) {
+                // SAFETY: these are exact PIDs written by the hostile fork fixture.
+                let _ = unsafe { libc::kill(child, libc::SIGKILL) };
+            }
+        }
+    }
+
+    for repetition in 0..2 {
+        let mut roots = Vec::new();
+        let mut orphans = KillOrphans(Vec::new());
+        for launch in 0..32 {
+            let root = temp_root();
+            let report = root.join("report.json");
+            let marker = root.join("holder.pid");
+            let mut arguments = internal_runner_args(
+                &root,
+                Path::new(env!("CARGO_BIN_EXE_cargo-fe2o3-runner-app-fixture")),
+                &report,
+                OsString::from("probe"),
+            );
+            arguments.push(OsString::from("--fe2o3-test-fork-fd-holder"));
+            arguments.push(marker.as_os_str().to_owned());
+            let output = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"))
+                .args(arguments)
+                .output()
+                .expect("launch hostile no-envelope application");
+            assert!(
+                output.status.success(),
+                "repetition {repetition}, launch {launch}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let report: serde_json::Value =
+                serde_json::from_slice(&fs::read(&report).expect("read holder report"))
+                    .expect("decode holder report");
+            assert_eq!(report["inherited_fds"], serde_json::json!([]));
+            let child = fs::read_to_string(&marker)
+                .expect("read holder PID")
+                .parse::<i32>()
+                .expect("parse holder PID");
+            // SAFETY: signal zero only checks the exact holder PID remains concurrent.
+            assert_eq!(unsafe { libc::kill(child, 0) }, 0);
+            orphans.0.push(child);
+            roots.push(root);
+        }
+
+        let root = temp_root();
+        let report = root.join("report.json");
+        let thirty_third = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"))
+            .args(internal_runner_args(
+                &root,
+                Path::new(env!("CARGO_BIN_EXE_cargo-fe2o3-runner-app-fixture")),
+                &report,
+                OsString::from("thirty-third"),
+            ))
+            .output()
+            .expect("launch application after 32 concurrent orphans");
+        assert!(
+            thirty_third.status.success(),
+            "orphan descendants saturated launch 33: {}",
+            String::from_utf8_lossy(&thirty_third.stderr)
+        );
+        roots.push(root);
+        drop(orphans);
+        for root in roots {
+            fs::remove_dir_all(root).expect("remove hostile holder fixture");
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn hostile_application_cannot_forge_pending_supervisor_success() {
+    use std::time::{Duration, Instant};
+
+    let root = temp_root();
+    let report = root.join("report.json");
+    let marker = root.join("application.pid");
+    let mut arguments = internal_runner_args(
+        &root,
+        Path::new(env!("CARGO_BIN_EXE_cargo-fe2o3-runner-app-fixture")),
+        &report,
+        OsString::from("probe"),
+    );
+    arguments.push(OsString::from("--fe2o3-test-forge-supervisor-result"));
+    arguments.push(marker.as_os_str().to_owned());
+    let started = Instant::now();
+    let output = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"))
+        .args(arguments)
+        .output()
+        .expect("launch supervisor forgery probe");
+    let elapsed = started.elapsed();
+    assert!(
+        output.status.success(),
+        "secure forgery probe failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        elapsed >= Duration::from_millis(1_500) && elapsed < Duration::from_secs(10),
+        "frontend accepted a forged pending result or exceeded its broad bound: {elapsed:?}"
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(&report).expect("read forgery report"))
+            .expect("decode forgery report");
+    assert_eq!(report["forged_supervisor_result"], false);
+    assert_eq!(report["inherited_fds"], serde_json::json!([]));
+    let application = fs::read_to_string(&marker)
+        .expect("read application PID")
+        .parse::<i32>()
+        .expect("parse application PID");
+    // SAFETY: the completed supervisor must already have reaped this exact application PID.
+    assert_eq!(unsafe { libc::kill(application, 0) }, -1);
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::ESRCH)
+    );
+    fs::remove_dir_all(root).expect("remove forgery fixture");
+}
+
+#[cfg(unix)]
+#[test]
+fn hostile_application_cannot_unlock_supervisor_admission() {
+    let root = temp_root();
+    let report = root.join("report.json");
+    let mut arguments = internal_runner_args(
+        &root,
+        Path::new(env!("CARGO_BIN_EXE_cargo-fe2o3-runner-app-fixture")),
+        &report,
+        OsString::from("probe"),
+    );
+    arguments.push(OsString::from("--fe2o3-test-unlock-supervisor-slot"));
+    let output = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"))
+        .args(arguments)
+        .output()
+        .expect("launch slot unlock probe");
+    assert!(
+        output.status.success(),
+        "slot unlock probe failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(&report).expect("read slot report"))
+            .expect("decode slot report");
+    assert_eq!(report["inherited_fds"], serde_json::json!([]));
+    assert_eq!(report["slot_unlocks"], serde_json::json!([]));
+    fs::remove_dir_all(root).expect("remove slot fixture");
+}
+
+#[cfg(unix)]
+#[test]
+fn hidden_supervisor_rejects_malformed_descriptors_without_abort() {
+    use std::os::fd::IntoRawFd;
+    use std::time::{Duration, Instant};
+
+    fn invoke(channel: i32, slot: i32, inherited: &[i32]) -> Output {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
+        command.args([
+            OsString::from("__fe2o3-application-supervisor-v1"),
+            OsString::from(channel.to_string()),
+            OsString::from(slot.to_string()),
+            OsString::from("00".repeat(32)),
+            OsString::from("runner"),
+        ]);
+        let inherited = inherited.to_vec();
+        // SAFETY: the callback changes only FD_CLOEXEC on test-owned descriptors so the hidden
+        // CLI receives the exact malformed descriptor configuration under review.
+        unsafe {
+            command.pre_exec(move || {
+                for descriptor in &inherited {
+                    let flags = libc::fcntl(*descriptor, libc::F_GETFD);
+                    if flags < 0
+                        || libc::fcntl(*descriptor, libc::F_SETFD, flags & !libc::FD_CLOEXEC) != 0
+                    {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                }
+                Ok(())
+            });
+        }
+        command
+            .output()
+            .expect("invoke malformed hidden supervisor")
+    }
+
+    fn reject(label: &str, started: Instant, output: Output) {
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "{label} exceeded bounded rejection"
+        );
+        assert!(!output.status.success(), "{label} unexpectedly succeeded");
+        assert!(output.status.code().is_some(), "{label} aborted by signal");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("cargo-fe2o3 application supervisor:"),
+            "{label} did not return a normal diagnostic: {stderr}"
+        );
+        assert!(!stderr.contains("fatal runtime error"), "{label}: {stderr}");
+    }
+
+    for (label, channel, slot) in [
+        ("exact absent descriptors", 999_999, 999_998),
+        ("negative descriptors", -1, -2),
+        ("stdio descriptors", 1, 2),
+    ] {
+        let started = Instant::now();
+        reject(label, started, invoke(channel, slot, &[]));
+    }
+
+    let root = temp_root();
+    let regular_path = root.join("regular");
+    let regular = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(&regular_path)
+        .expect("create malformed regular descriptor");
+    let directory = fs::File::open(&root).expect("open malformed directory descriptor");
+    let (stream, stream_peer) = UnixStream::pair().expect("create hidden CLI stream");
+    let (datagram, datagram_peer) = UnixDatagram::pair().expect("create hidden CLI datagram");
+
+    let started = Instant::now();
+    reject(
+        "aliased numeric descriptor",
+        started,
+        invoke(
+            stream.as_raw_fd(),
+            stream.as_raw_fd(),
+            &[stream.as_raw_fd()],
+        ),
+    );
+    let stream_alias = unsafe { libc::dup(stream.as_raw_fd()) };
+    assert!(stream_alias >= 0);
+    let started = Instant::now();
+    reject(
+        "aliased socket descriptions",
+        started,
+        invoke(
+            stream.as_raw_fd(),
+            stream_alias,
+            &[stream.as_raw_fd(), stream_alias],
+        ),
+    );
+    // SAFETY: dup returned this test-owned descriptor and no Rust owner wraps it.
+    unsafe { libc::close(stream_alias) };
+
+    for (label, channel, slot, inherited) in [
+        (
+            "regular channel",
+            regular.as_raw_fd(),
+            directory.as_raw_fd(),
+            vec![regular.as_raw_fd(), directory.as_raw_fd()],
+        ),
+        (
+            "directory channel",
+            directory.as_raw_fd(),
+            regular.as_raw_fd(),
+            vec![directory.as_raw_fd(), regular.as_raw_fd()],
+        ),
+        (
+            "datagram channel",
+            datagram.as_raw_fd(),
+            regular.as_raw_fd(),
+            vec![datagram.as_raw_fd(), regular.as_raw_fd()],
+        ),
+        (
+            "noncanonical regular slot",
+            stream.as_raw_fd(),
+            regular.as_raw_fd(),
+            vec![stream.as_raw_fd(), regular.as_raw_fd()],
+        ),
+    ] {
+        let started = Instant::now();
+        reject(label, started, invoke(channel, slot, &inherited));
+    }
+
+    let reused_number = {
+        let file = OpenOptions::new()
+            .read(true)
+            .open(&regular_path)
+            .expect("open descriptor for reuse probe");
+        file.into_raw_fd()
+    };
+    // SAFETY: into_raw_fd transferred ownership of this exact descriptor to the test.
+    unsafe { libc::close(reused_number) };
+    let started = Instant::now();
+    reject(
+        "closed descriptor reuse",
+        started,
+        invoke(reused_number, 999_998, &[]),
+    );
+
+    drop((stream_peer, datagram_peer));
+    fs::remove_dir_all(root).expect("remove malformed descriptor fixture");
 }
 
 #[cfg(unix)]
