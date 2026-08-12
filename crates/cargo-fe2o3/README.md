@@ -209,14 +209,33 @@ io_uring. Missing kernel support for the required seccomp listener or
 `close_range(CLOSE_RANGE_CLOEXEC)` fails launch without leaving a blocked
 supervisor.
 
-Descriptor-bearing launches run in a dedicated supervisor process, not in the
-Cargo-facing runner process. The frontend first locks one of 32 fixed
-per-UID admission slots, starts the supervisor, and authenticates a bounded
-inherited stream with a fresh challenge. The supervisor inherits that locked
-slot, becomes the application's actual parent, starts the seccomp worker, and
-owns every application authority and ACK descriptor. The protocol and slot
-descriptors remain close-on-exec for the application. Saturated admission
-therefore rejects a 33rd supervisor before any application is spawned.
+Application launches run in a dedicated supervisor process, not in the
+Cargo-facing runner process. The frontend first locks one of 32 fixed per-UID
+admission slots, starts the supervisor, and authenticates a bounded inherited
+stream with a fresh challenge. Before Rust acquires either hidden-CLI
+descriptor, the supervisor uses raw libc operations to prove that both numbers
+are open, distinct, correctly typed, peer-bound, and members of the fixed slot
+pool. It sets and verifies `FD_CLOEXEC`, duplicates each with
+`F_DUPFD_CLOEXEC`, and closes the attacker-selected numbers before sending
+READY. The inherited slot's open-file-description lock survives that adoption.
+
+The supervisor becomes the application's actual parent, starts the seccomp
+worker for required-envelope launches, and owns every application authority and
+ACK descriptor. Immediately before every application or configured-runner exec,
+including the no-envelope path, `close_range(CLOSE_RANGE_CLOEXEC)` protects all
+non-stdio descriptors. Required-envelope launch then clears `FD_CLOEXEC` only
+for its exact envelope, artifact-directory, ACK, and test-only readiness ABI.
+The protocol channel, admission slot, seccomp-parent socket, evidence and build
+directories, and unrelated Cargo descriptors cannot survive exec. Consequently
+an application or orphan descendant cannot release or retain a slot. Saturated
+admission still rejects a 33rd live supervisor before any application is
+spawned.
+
+The random challenge remains visible in the hidden supervisor argv and is not a
+bearer secret or the sole protocol authority. A result is accepted only over
+the inherited stream bound to the expected peer, and that stream is never part
+of the application ABI. Reading the parent's command line therefore does not
+let an application forge READY or a pending completion result.
 
 Application teardown never performs a blocking child wait after an ACK,
 validation, or containment failure. The dedicated process retains the `Child`
