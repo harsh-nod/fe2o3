@@ -9,12 +9,18 @@ dashboard.
 
 The binary serves only with `--serve --config PATH` and only on a configured
 loopback address. Before service startup, an operator must validate a real
-GitHub merge-group token through an inherited pipe or socket descriptor:
+GitHub merge-group token through an inherited FIFO or `AF_UNIX` socket
+descriptor that the trusted launcher opened with `O_NONBLOCK` before `exec`:
 
 ```text
-token-producer | fe2o3-protected-publisher --enroll --config CONFIG \
-  --token-fd 0 --artifact ARTIFACT
+trusted-nonblocking-launcher --producer TOKEN_PRODUCER -- \
+  fe2o3-protected-publisher --enroll --config CONFIG \
+    --token-fd INHERITED_NONBLOCKING_FD --artifact ARTIFACT
 ```
+
+That launcher name is illustrative; no production launcher is shipped. An
+ordinary shell pipeline normally supplies a blocking descriptor and does not
+satisfy this contract.
 
 The token must never appear in a regular file, argv, environment, log, or
 artifact. Enrollment rejects regular-file, directory, terminal, and other
@@ -38,9 +44,11 @@ or other dependencies never make or retain internal copies. Root,
 `CAP_SYS_PTRACE`, kernel compromise, swap/hibernation, and physical memory are
 outside this boundary.
 
-The reader duplicates the inherited descriptor with close-on-exec, verifies
-its identity, temporarily adds `O_NONBLOCK` to the shared open-file status
-flags, and restores the original flags before returning. One absolute read
+The reader requires and rechecks `O_NONBLOCK`, duplicates the inherited
+descriptor with close-on-exec only for bounded local ownership, and never calls
+`F_SETFL`. A duplicate shares the original open-file description, so it would
+not isolate status flag changes. The trusted launcher must keep that description
+nonblocking and must not mutate its flags after handoff. One absolute read
 deadline covers polling and all chunks. `poll`, `read`, `EINTR`, spurious
 readiness, and `EAGAIN` are retried only while time remains; readiness never
 permits a blocking read or a read after the deadline. EOF terminates input,
@@ -276,7 +284,8 @@ scripts/test-protected-publisher-service.sh
 It runs debug and release Rust tests, hostile body and client transport tests,
 fresh-token recovery, key/body/authorization collisions, descriptor races,
 torn/corrupt/duplicate frames, maximum-ref restart, append/replay decoder
-closure, short-write and ENOSPC injection, nonblocking enrollment races and
+closure, short-write and ENOSPC injection, blocking-FD rejection, immutable
+status-flag observation, nonblocking FIFO/socket enrollment races, and
 socket-family rejection, JWKS concurrency/waves/rotation/deadlines,
 client-service conformance, the synthetic AF_UNIX nondumpable/core-limit secret
 process probe, strict Clippy, formatting, and diff checks.

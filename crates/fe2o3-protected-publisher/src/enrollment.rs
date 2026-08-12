@@ -159,7 +159,8 @@ pub(crate) fn read_nonregular_token_fd_with_hooks(
     if kind == libc::S_IFSOCK {
         require_unix_socket(fd)?;
     }
-    let mut duplicated = NonblockingDuplicate::new(fd)?;
+    require_nonblocking(fd)?;
+    let duplicated = DescriptorDuplicate::new(fd)?;
     let opened = fd_identity(duplicated.fd)?;
     if before.st_dev != opened.st_dev
         || before.st_ino != opened.st_ino
@@ -172,15 +173,16 @@ pub(crate) fn read_nonregular_token_fd_with_hooks(
     if kind == libc::S_IFSOCK {
         require_unix_socket(duplicated.fd)?;
     }
-    let read_result = read_token_until(
+    require_nonblocking(duplicated.fd)?;
+    let result = read_token_until(
         duplicated.fd,
         deadline,
         &mut after_readiness,
         &mut after_would_block,
         &mut after_scratch_clear,
     );
-    duplicated.restore()?;
-    read_result
+    require_nonblocking(duplicated.fd)?;
+    result
 }
 
 fn read_token_until(
@@ -225,6 +227,7 @@ fn read_token_until(
         if Instant::now() >= deadline {
             return Err(PublisherError::Authentication);
         }
+        require_nonblocking(fd).map_err(|_| PublisherError::Authentication)?;
         let mut chunk = Zeroizing::new([0u8; 4096]);
         let capacity = (MAX_JWT_BYTES + 1 - bytes.len()).min(chunk.len());
         let count = unsafe { libc::read(fd, chunk.as_mut_ptr().cast(), capacity) };
@@ -256,60 +259,34 @@ fn read_token_until(
     Ok(bytes)
 }
 
-struct NonblockingDuplicate {
+struct DescriptorDuplicate {
     fd: RawFd,
-    original_status_flags: libc::c_int,
-    restored: bool,
 }
 
-impl NonblockingDuplicate {
+impl DescriptorDuplicate {
     fn new(fd: RawFd) -> Result<Self, PublisherError> {
         let duplicated = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 3) };
         if duplicated < 0 {
             return Err(PublisherError::Config);
         }
-        let original_status_flags = unsafe { libc::fcntl(duplicated, libc::F_GETFL) };
-        if original_status_flags < 0
-            || unsafe {
-                libc::fcntl(
-                    duplicated,
-                    libc::F_SETFL,
-                    original_status_flags | libc::O_NONBLOCK,
-                )
-            } < 0
-        {
-            unsafe {
-                libc::close(duplicated);
-            }
-            return Err(PublisherError::Config);
-        }
-        Ok(Self {
-            fd: duplicated,
-            original_status_flags,
-            restored: false,
-        })
-    }
-
-    fn restore(&mut self) -> Result<(), PublisherError> {
-        if unsafe { libc::fcntl(self.fd, libc::F_SETFL, self.original_status_flags) } < 0 {
-            return Err(PublisherError::Authentication);
-        }
-        self.restored = true;
-        Ok(())
+        Ok(Self { fd: duplicated })
     }
 }
 
-impl Drop for NonblockingDuplicate {
+impl Drop for DescriptorDuplicate {
     fn drop(&mut self) {
-        if !self.restored {
-            unsafe {
-                libc::fcntl(self.fd, libc::F_SETFL, self.original_status_flags);
-            }
-        }
         unsafe {
             libc::close(self.fd);
         }
     }
+}
+
+fn require_nonblocking(fd: RawFd) -> Result<(), PublisherError> {
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 || flags & libc::O_NONBLOCK == 0 {
+        return Err(PublisherError::Config);
+    }
+    Ok(())
 }
 
 fn require_unix_socket(fd: RawFd) -> Result<(), PublisherError> {
@@ -363,12 +340,14 @@ fn is_hex(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::fs::File;
+    use std::fs::{File, OpenOptions};
     use std::io::Write;
     use std::net::{TcpListener, TcpStream};
     use std::os::fd::AsRawFd;
+    use std::os::unix::fs::OpenOptionsExt;
     use std::os::unix::net::UnixStream;
-    use std::sync::mpsc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Arc as StdArc, Barrier, mpsc};
     use std::thread;
 
     use super::*;
@@ -385,12 +364,17 @@ mod tests {
         config
     }
 
+    fn make_nonblocking(stream: &UnixStream) {
+        stream.set_nonblocking(true).unwrap();
+    }
+
     #[tokio::test]
     async fn enrollment_binds_exact_runtime_projection_without_raw_token() {
         let temp = secure_tempdir();
         let config = production_config(temp.path());
         let fixture = fixture();
         let (mut writer, reader) = UnixStream::pair().unwrap();
+        make_nonblocking(&reader);
         writer.write_all(fixture.token.as_bytes()).unwrap();
         writer.shutdown(std::net::Shutdown::Write).unwrap();
         let digest = enroll_token_with_provider(
@@ -415,18 +399,84 @@ mod tests {
     }
 
     #[test]
-    fn unix_socketpair_is_accepted_and_status_flags_are_restored() {
+    fn unix_socketpair_is_accepted_without_status_flag_mutation() {
         let fixture = fixture();
         let (mut writer, reader) = UnixStream::pair().unwrap();
+        make_nonblocking(&reader);
         let original_flags = unsafe { libc::fcntl(reader.as_raw_fd(), libc::F_GETFL) };
+        let observed = reader.try_clone().unwrap();
+        let stop = StdArc::new(AtomicBool::new(false));
+        let changed = StdArc::new(AtomicBool::new(false));
+        let samples = StdArc::new(AtomicUsize::new(0));
+        let barrier = StdArc::new(Barrier::new(2));
+        let observer = {
+            let stop = stop.clone();
+            let changed = changed.clone();
+            let samples = samples.clone();
+            let barrier = barrier.clone();
+            thread::spawn(move || {
+                barrier.wait();
+                while !stop.load(Ordering::Acquire) {
+                    let flags = unsafe { libc::fcntl(observed.as_raw_fd(), libc::F_GETFL) };
+                    samples.fetch_add(1, Ordering::Relaxed);
+                    if flags != original_flags {
+                        changed.store(true, Ordering::Release);
+                    }
+                }
+            })
+        };
         writer.write_all(fixture.token.as_bytes()).unwrap();
         writer.shutdown(std::net::Shutdown::Write).unwrap();
+        barrier.wait();
         let bytes = read_nonregular_token_fd(reader.as_raw_fd(), Duration::from_secs(1)).unwrap();
+        stop.store(true, Ordering::Release);
+        observer.join().unwrap();
         assert_eq!(&*bytes, fixture.token.as_bytes());
+        assert!(samples.load(Ordering::Relaxed) > 0);
+        assert!(!changed.load(Ordering::Acquire));
         assert_eq!(
             unsafe { libc::fcntl(reader.as_raw_fd(), libc::F_GETFL) },
             original_flags
         );
+    }
+
+    #[test]
+    fn blocking_descriptor_is_rejected_without_flag_mutation() {
+        let (_writer, reader) = UnixStream::pair().unwrap();
+        let original_flags = unsafe { libc::fcntl(reader.as_raw_fd(), libc::F_GETFL) };
+        assert_eq!(original_flags & libc::O_NONBLOCK, 0);
+        assert!(matches!(
+            read_nonregular_token_fd(reader.as_raw_fd(), Duration::from_millis(20)),
+            Err(PublisherError::Config)
+        ));
+        assert_eq!(
+            unsafe { libc::fcntl(reader.as_raw_fd(), libc::F_GETFL) },
+            original_flags
+        );
+    }
+
+    #[test]
+    fn nonblocking_fifo_is_accepted() {
+        let temp = secure_tempdir();
+        let path = temp.path().join("token.fifo");
+        let path_bytes = std::os::unix::ffi::OsStrExt::as_bytes(path.as_os_str());
+        let path_c = std::ffi::CString::new(path_bytes).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(path_c.as_ptr(), 0o600) }, 0);
+        let reader = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC | libc::O_NOFOLLOW)
+            .open(&path)
+            .unwrap();
+        let mut writer = OpenOptions::new()
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC | libc::O_NOFOLLOW)
+            .open(&path)
+            .unwrap();
+        let fixture = fixture();
+        writer.write_all(fixture.token.as_bytes()).unwrap();
+        drop(writer);
+        let bytes = read_nonregular_token_fd(reader.as_raw_fd(), Duration::from_secs(1)).unwrap();
+        assert_eq!(&*bytes, fixture.token.as_bytes());
     }
 
     #[test]
@@ -450,6 +500,7 @@ mod tests {
         let expected = fixture.token.into_bytes();
         let token = expected.clone();
         let (mut writer, reader) = UnixStream::pair().unwrap();
+        make_nonblocking(&reader);
         let competitor = reader.try_clone().unwrap();
         let (drained_tx, drained_rx) = mpsc::sync_channel(0);
         let producer = thread::spawn(move || {
@@ -495,6 +546,7 @@ mod tests {
         let fixture = fixture();
         let token = fixture.token.clone().into_bytes();
         let (mut writer, reader) = UnixStream::pair().unwrap();
+        make_nonblocking(&reader);
         let producer = thread::spawn(move || {
             for chunk in token.chunks(11) {
                 writer.write_all(chunk).unwrap();
@@ -507,6 +559,7 @@ mod tests {
         assert_eq!(&*bytes, fixture.token.as_bytes());
 
         let (writer, reader) = UnixStream::pair().unwrap();
+        make_nonblocking(&reader);
         writer.shutdown(std::net::Shutdown::Write).unwrap();
         assert!(matches!(
             read_nonregular_token_fd(reader.as_raw_fd(), Duration::from_millis(100)),
@@ -514,6 +567,7 @@ mod tests {
         ));
 
         let (mut writer, reader) = UnixStream::pair().unwrap();
+        make_nonblocking(&reader);
         writer.write_all(&vec![b'a'; MAX_JWT_BYTES + 1]).unwrap();
         writer.shutdown(std::net::Shutdown::Write).unwrap();
         assert!(matches!(
@@ -548,6 +602,7 @@ mod tests {
         let mut config = production_config(temp.path());
         config.network_deadline_milliseconds = 40;
         let (_writer, reader) = UnixStream::pair().unwrap();
+        make_nonblocking(&reader);
         let start = Instant::now();
         assert!(
             enroll_token_with_provider(
@@ -592,6 +647,7 @@ mod tests {
         ];
         for fixture in cases {
             let (mut writer, reader) = UnixStream::pair().unwrap();
+            make_nonblocking(&reader);
             writer.write_all(fixture.token.as_bytes()).unwrap();
             writer.shutdown(std::net::Shutdown::Write).unwrap();
             assert!(
@@ -614,7 +670,10 @@ mod tests {
         assert!(!main.contains("--token-file"));
         assert!(!main.contains("--token="));
         assert!(main.contains("--token-fd"));
+        let forbidden_flag_mutation = ["F_SET", "FL"].concat();
+        assert!(!include_str!("enrollment.rs").contains(&forbidden_flag_mutation));
         assert!(!docs.contains("--token-file"));
         assert!(docs.contains("--token-fd"));
+        assert!(docs.contains(&format!("never calls\n`{forbidden_flag_mutation}`")));
     }
 }
