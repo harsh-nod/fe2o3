@@ -2,7 +2,7 @@ use std::fs::File;
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
 
@@ -21,6 +21,8 @@ pub struct DurableStore {
     location: SecureLocation,
     database_file: File,
     database_identity: FileIdentity,
+    #[cfg(test)]
+    commit_delay: Duration,
 }
 
 #[derive(Clone, Copy)]
@@ -148,6 +150,8 @@ impl DurableStore {
             location,
             database_file,
             database_identity,
+            #[cfg(test)]
+            commit_delay: Duration::ZERO,
         };
         store.initialize()?;
         store.verify_identity()?;
@@ -156,23 +160,7 @@ impl DurableStore {
     }
 
     fn verify_identity(&self) -> Result<(), PublisherError> {
-        self.location
-            .verify_database_entry(self.database_identity)?;
-        let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
-        if unsafe { libc::fstat(self.database_file.as_raw_fd(), stat.as_mut_ptr()) } != 0 {
-            return Err(PublisherError::Store);
-        }
-        let stat = unsafe { stat.assume_init() };
-        if stat.st_dev != self.database_identity.dev
-            || stat.st_ino != self.database_identity.ino
-            || stat.st_mode != self.database_identity.mode
-            || stat.st_uid != self.database_identity.uid
-            || stat.st_gid != self.database_identity.gid
-            || stat.st_nlink != self.database_identity.nlink
-        {
-            return Err(PublisherError::Store);
-        }
-        Ok(())
+        verify_identity_parts(&self.location, &self.database_file, self.database_identity)
     }
 
     fn initialize(&mut self) -> Result<(), PublisherError> {
@@ -245,11 +233,22 @@ impl DurableStore {
     }
 
     pub(crate) fn issue(&mut self, input: IssueInput<'_>) -> Result<Vec<u8>, PublisherError> {
-        self.verify_identity()?;
+        self.issue_until(input, Instant::now() + Duration::from_secs(60))
+    }
+
+    pub(crate) fn issue_until(
+        &mut self,
+        input: IssueInput<'_>,
+        deadline: Instant,
+    ) -> Result<Vec<u8>, PublisherError> {
+        check_deadline(deadline)?;
+        verify_identity_parts(&self.location, &self.database_file, self.database_identity)?;
+        check_deadline(deadline)?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|_| PublisherError::Store)?;
+        check_deadline(deadline)?;
         let retire_before = input
             .observed_at
             .checked_sub(self.policy.retention_seconds)
@@ -267,6 +266,7 @@ impl DurableStore {
                 params![input.observed_at, retire_before],
             )
             .map_err(|_| PublisherError::Store)?;
+        check_deadline(deadline)?;
         let replay = transaction
             .query_row(
                 "SELECT request_identity, request_sha256, request_body, response_body
@@ -293,8 +293,8 @@ impl DurableStore {
             if stored_body != input.request_body {
                 return Err(PublisherError::ReplayConflict);
             }
+            check_deadline(deadline)?;
             transaction.commit().map_err(|_| PublisherError::Store)?;
-            self.verify_identity()?;
             return Ok(response);
         }
 
@@ -317,6 +317,7 @@ impl DurableStore {
         if count >= self.policy.max_receipts {
             return Err(PublisherError::Store);
         }
+        check_deadline(deadline)?;
 
         let ReceiptArtifact {
             evidence_identity,
@@ -329,6 +330,7 @@ impl DurableStore {
             input.signature_domain,
             input.signer,
         )?;
+        check_deadline(deadline)?;
         transaction
             .execute(
                 "INSERT INTO receipts (
@@ -355,11 +357,16 @@ impl DurableStore {
                     PublisherError::Store
                 }
             })?;
+        verify_identity_parts(&self.location, &self.database_file, self.database_identity)?;
+        check_deadline(deadline)?;
+        #[cfg(test)]
+        std::thread::sleep(self.commit_delay);
         transaction.commit().map_err(|_| PublisherError::Store)?;
-        self.verify_identity()?;
-        self.connection
-            .execute_batch("PRAGMA wal_checkpoint(PASSIVE);")
-            .map_err(|_| PublisherError::Store)?;
+        // A successful FULL-synchronous WAL commit is the authority boundary. Any
+        // later maintenance failure must not hide an already durable receipt.
+        let _ = self
+            .connection
+            .execute_batch("PRAGMA wal_checkpoint(PASSIVE);");
         Ok(response)
     }
 
@@ -386,6 +393,42 @@ impl DurableStore {
         self.connection
             .execute_batch("DROP TABLE receipts;")
             .unwrap();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_commit_delay(&mut self, delay: Duration) {
+        self.commit_delay = delay;
+    }
+}
+
+fn verify_identity_parts(
+    location: &SecureLocation,
+    database_file: &File,
+    database_identity: FileIdentity,
+) -> Result<(), PublisherError> {
+    location.verify_database_entry(database_identity)?;
+    let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+    if unsafe { libc::fstat(database_file.as_raw_fd(), stat.as_mut_ptr()) } != 0 {
+        return Err(PublisherError::Store);
+    }
+    let stat = unsafe { stat.assume_init() };
+    if stat.st_dev != database_identity.dev
+        || stat.st_ino != database_identity.ino
+        || stat.st_mode != database_identity.mode
+        || stat.st_uid != database_identity.uid
+        || stat.st_gid != database_identity.gid
+        || stat.st_nlink != database_identity.nlink
+    {
+        return Err(PublisherError::Store);
+    }
+    Ok(())
+}
+
+fn check_deadline(deadline: Instant) -> Result<(), PublisherError> {
+    if Instant::now() >= deadline {
+        Err(PublisherError::Store)
+    } else {
+        Ok(())
     }
 }
 
@@ -697,6 +740,40 @@ mod tests {
         ));
         assert!(start.elapsed() < Duration::from_millis(500));
         locker.connection.execute_batch("ROLLBACK;").unwrap();
+    }
+
+    #[test]
+    fn expired_work_never_begins_and_commit_completion_is_authoritative() {
+        let temp = secure_tempdir();
+        let mut store = DurableStore::open(&temp.path().join("publisher.db")).unwrap();
+        let fixture = fixture();
+        let identity = request_identity(&fixture.request_body);
+        let sha256 = raw_request_sha256(&fixture.request_body);
+        let signer = TestSigner::new("test-publisher-v1");
+        let make_input = || IssueInput {
+            replay_identity: "jti-deadline",
+            request_identity: &identity,
+            request_sha256: &sha256,
+            request_body: &fixture.request_body,
+            request: &fixture.request,
+            issued_at: 1_800_000_000,
+            observed_at: 1_800_000_000,
+            signature_domain: "test",
+            signer: &signer,
+        };
+        assert!(matches!(
+            store.issue_until(make_input(), Instant::now() - Duration::from_millis(1)),
+            Err(PublisherError::Store)
+        ));
+        assert_eq!(store.count(), 0);
+
+        store.set_commit_delay(Duration::from_millis(40));
+        let deadline = Instant::now() + Duration::from_millis(20);
+        let response = store.issue_until(make_input(), deadline).unwrap();
+        assert!(Instant::now() >= deadline);
+        assert_eq!(store.count(), 1);
+        store.set_commit_delay(Duration::ZERO);
+        assert_eq!(store.issue(make_input()).unwrap(), response);
     }
 
     #[test]
