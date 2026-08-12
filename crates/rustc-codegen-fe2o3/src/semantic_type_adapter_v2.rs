@@ -31,12 +31,18 @@ use crate::rust_type_layout_general::{
     TypeLayoutKind, VariantLayoutFacts, extract_general_layout_with_limits,
 };
 use crate::semantic_layout_bridge::{
-    SemanticLayoutBridgeError, SemanticLayoutTargetV1, rustc_semantic_layout_target_v1,
+    MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_COMPONENT_BYTES_V1,
+    MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_DECLARATIONS_V1,
+    MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_PARSE_WORK_V1,
+    MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_SOURCE_BYTES_V1,
+    SEMANTIC_LAYOUT_ACTIVE_FEATURE_INPUT_BOUNDS_SCHEMA_V1,
+    SEMANTIC_LAYOUT_ACTIVE_FEATURE_INPUT_BOUNDS_VERSION_V1, SemanticLayoutBridgeError,
+    SemanticLayoutTargetV1, rustc_semantic_layout_target_v1,
 };
 
-const OBSERVATION_DOMAIN_V2: &[u8] = b"FE2O3/RUSTC-TYPE-LAYOUT-OBSERVATION/V3\0";
-const GFX942_PROJECTION_DOMAIN_V2: &[u8] = b"FE2O3/GFX942-LAYOUT-PROJECTION/V3\0";
-const GFX942_CANDIDATE_DOMAIN_V2: &[u8] = b"FE2O3/GFX942-LAYOUT-CANDIDATE/V3\0";
+const OBSERVATION_DOMAIN_V2: &[u8] = b"FE2O3/RUSTC-TYPE-LAYOUT-OBSERVATION/V4\0";
+const GFX942_PROJECTION_DOMAIN_V2: &[u8] = b"FE2O3/GFX942-LAYOUT-PROJECTION/V4\0";
+const GFX942_CANDIDATE_DOMAIN_V2: &[u8] = b"FE2O3/GFX942-LAYOUT-CANDIDATE/V4\0";
 const GFX942_POINTER_WIDTH_BITS: u16 = 64;
 const GFX942_LAYOUT_ACTIVE_FEATURES_V2: &str = "-wavefrontsize32,+wavefrontsize64,-xnack";
 const DEFAULT_MAX_SIDECAR_RECORDS: u32 = 32_768;
@@ -2833,6 +2839,15 @@ fn encode_sidecar(
 fn observation_identity(target: &SemanticLayoutTargetV1, graph: &[u8], sidecar: &[u8]) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(OBSERVATION_DOMAIN_V2);
+    hash_component(
+        &mut digest,
+        SEMANTIC_LAYOUT_ACTIVE_FEATURE_INPUT_BOUNDS_SCHEMA_V1.as_bytes(),
+    );
+    digest.update(SEMANTIC_LAYOUT_ACTIVE_FEATURE_INPUT_BOUNDS_VERSION_V1.to_le_bytes());
+    digest.update((MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_SOURCE_BYTES_V1 as u64).to_le_bytes());
+    digest.update((MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_DECLARATIONS_V1 as u64).to_le_bytes());
+    digest.update((MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_COMPONENT_BYTES_V1 as u64).to_le_bytes());
+    digest.update((MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_PARSE_WORK_V1 as u64).to_le_bytes());
     hash_component(&mut digest, target.llvm_target().as_bytes());
     hash_component(&mut digest, target.data_layout().as_bytes());
     digest.update(target.default_pointer_width_bits().to_le_bytes());
@@ -3921,6 +3936,19 @@ pub extern "C" fn k() {}
             canonical
                 .has_exact_codegen_profile(GFX942_TARGET_CPU, GFX942_LAYOUT_ACTIVE_FEATURES_V2)
         );
+
+        let gfx900 = amdgcn_target_profile(
+            "gfx900",
+            &[
+                "-Ctarget-cpu=gfx900",
+                "-Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32",
+            ],
+        );
+        assert_eq!(gfx900.active_cpu(), Some("gfx900"));
+        assert!(
+            !gfx900.has_exact_codegen_profile(GFX942_TARGET_CPU, GFX942_LAYOUT_ACTIVE_FEATURES_V2)
+        );
+        assert!(!target_is_exact_canonical_gfx942(&gfx900));
 
         let uppercase_cpu = amdgcn_target_profile(
             "uppercase_cpu",

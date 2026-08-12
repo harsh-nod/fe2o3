@@ -8,7 +8,7 @@ use fe2o3_rustc_front::StableTypeIdentityV1;
 use rustc_codegen_fe2o3::semantic_layout_bridge::{
     MAX_SEMANTIC_LAYOUT_DEPTH_V1, MAX_SEMANTIC_LAYOUT_FIELDS_V1,
     MAX_SEMANTIC_LAYOUT_TARGET_TEXT_BYTES_V1, MAX_SEMANTIC_LAYOUT_TYPE_TEXT_BYTES_V1,
-    SEMANTIC_LAYOUT_EVIDENCE_SCHEMA_V2, SEMANTIC_LAYOUT_EVIDENCE_VERSION_V2,
+    SEMANTIC_LAYOUT_EVIDENCE_SCHEMA_V3, SEMANTIC_LAYOUT_EVIDENCE_VERSION_V3,
     SemanticLayoutBridgeError, SemanticLayoutEvidenceV1, SemanticLayoutTargetV1,
 };
 
@@ -59,8 +59,8 @@ fn g2_layout_evidence_is_versioned_target_bound_and_canonical() {
     )
     .unwrap();
 
-    assert_eq!(first.schema(), SEMANTIC_LAYOUT_EVIDENCE_SCHEMA_V2);
-    assert_eq!(first.version(), SEMANTIC_LAYOUT_EVIDENCE_VERSION_V2);
+    assert_eq!(first.schema(), SEMANTIC_LAYOUT_EVIDENCE_SCHEMA_V3);
+    assert_eq!(first.version(), SEMANTIC_LAYOUT_EVIDENCE_VERSION_V3);
     assert_eq!(first.target(), &target);
     assert_eq!(first.source_type_identity(), source_identity());
     assert_eq!(first.semantic_type(), &address_space_pointer());
@@ -68,9 +68,12 @@ fn g2_layout_evidence_is_versioned_target_bound_and_canonical() {
     assert_eq!(
         std::str::from_utf8(first.canonical_bytes()).unwrap(),
         concat!(
-            "fe2o3.semantic-layout-evidence.v2|",
+            "fe2o3.semantic-layout-evidence.v3|",
             "target(llvm=11:test-target;data-layout=9:e-p:64:64;default-pointer-bits=64;",
-            "cpu=unavailable;features=unavailable)|",
+            "cpu=unavailable;features=unavailable;",
+            "feature-input-policy=52:fe2o3.semantic-layout-active-feature-input-bounds.v1;",
+            "feature-input-policy-version=1;feature-source-bytes=4096;",
+            "feature-declarations=512;feature-component-bytes=128;feature-parse-work=4352)|",
             "source-type=5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
             "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a|",
             "semantic-type=mir.type.v1{layout(size=8;align=8);",

@@ -9,9 +9,10 @@ evidence.
 - `RustcTypeLayoutObservationV2` records exact layout facts from the active
   rustc target. Its identity binds that target's LLVM triple, data layout,
   pointer width, effective target CPU, normalized effective target-feature
-  configuration, canonical semantic graph, and exact layout sidecar. The
-  strengthened observation, projection, and candidate hash domains are V3;
-  semantic-layout evidence uses the profile-aware V2 canonical schema, while
+  configuration, canonical semantic graph, exact layout sidecar, and the
+  raw-feature admission policy with all four limits. The strengthened
+  observation, projection, and candidate hash domains are V4;
+  semantic-layout evidence uses the profile-aware V3 canonical schema, while
   the public V2 compatibility APIs remain inert records.
 - A host observation remains a host observation. It is described as observed
   on gfx942 only when the active rustc target itself exactly matches the
@@ -19,7 +20,9 @@ evidence.
   feature state, and explicit `xnack-` profile. Missing, `default`, `generic`,
   `native`, conflicting, `gfx900`, `xnack+`, and omitted-XNACK profiles fail
   closed. Feature order and repeated declarations with the same state are
-  normalized; contradictory declarations are rejected.
+  normalized without case folding; contradictory declarations are rejected.
+  Noncanonical case, whitespace aliases, Unicode/confusables, and unknown
+  extra features cannot satisfy the exact profile.
 - `CanonicalGfx942LayoutProjectionV2` is derived independently from reviewed
   gfx942 scalar, array, `repr(C)`, and restricted `repr(transparent)` rules. It
   does not inherit size, alignment, offsets, stride, or padding from a target
@@ -66,6 +69,10 @@ wrappers.
   reconstruction behind a small deduplicated graph budget.
 - Node, field, variant, path, total text, observation work, sidecar record,
   sidecar byte, projection work, and projection byte limits are explicit.
+- Each raw target-spec and active `-Ctarget-feature` source is admitted before
+  either feature map is built. Byte, declaration, component-length, and parse
+  work limits are checked with overflow-safe counters, and their versioned
+  policy and numeric values are committed by layout identities.
 - Principal adapter-owned variable-size buffers use fallible reservation.
   Projection preflight checks current graph counts, supported kinds, clone and
   render work, canonical output bytes, sidecar text, checked arithmetic, and

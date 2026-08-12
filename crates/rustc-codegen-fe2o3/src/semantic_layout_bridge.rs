@@ -30,6 +30,10 @@ pub const SEMANTIC_LAYOUT_EVIDENCE_VERSION_V1: u16 = 1;
 pub const SEMANTIC_LAYOUT_EVIDENCE_SCHEMA_V2: &str = "fe2o3.semantic-layout-evidence.v2";
 /// Numeric version paired with [`SEMANTIC_LAYOUT_EVIDENCE_SCHEMA_V2`].
 pub const SEMANTIC_LAYOUT_EVIDENCE_VERSION_V2: u16 = 2;
+/// Active schema emitted after exact-profile and raw-feature admission hardening.
+pub const SEMANTIC_LAYOUT_EVIDENCE_SCHEMA_V3: &str = "fe2o3.semantic-layout-evidence.v3";
+/// Numeric version paired with [`SEMANTIC_LAYOUT_EVIDENCE_SCHEMA_V3`].
+pub const SEMANTIC_LAYOUT_EVIDENCE_VERSION_V3: u16 = 3;
 /// Versioned identity for active rustc target-feature raw input admission.
 pub const SEMANTIC_LAYOUT_ACTIVE_FEATURE_INPUT_BOUNDS_SCHEMA_V1: &str =
     "fe2o3.semantic-layout-active-feature-input-bounds.v1";
@@ -176,6 +180,18 @@ impl SemanticLayoutTargetV1 {
         write_optional_text(output, self.active_cpu());
         output.push_str(";features=");
         write_optional_text(output, self.active_features());
+        write!(
+            output,
+            ";feature-input-policy={}:{};feature-input-policy-version={};feature-source-bytes={};feature-declarations={};feature-component-bytes={};feature-parse-work={}",
+            SEMANTIC_LAYOUT_ACTIVE_FEATURE_INPUT_BOUNDS_SCHEMA_V1.len(),
+            SEMANTIC_LAYOUT_ACTIVE_FEATURE_INPUT_BOUNDS_SCHEMA_V1,
+            SEMANTIC_LAYOUT_ACTIVE_FEATURE_INPUT_BOUNDS_VERSION_V1,
+            MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_SOURCE_BYTES_V1,
+            MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_DECLARATIONS_V1,
+            MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_COMPONENT_BYTES_V1,
+            MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_PARSE_WORK_V1,
+        )
+        .expect("writing to a String cannot fail");
         output.push(')');
     }
 }
@@ -217,8 +233,14 @@ fn normalize_active_features(
     target_features: &str,
     codegen_features: &str,
 ) -> Result<String, SemanticLayoutBridgeError> {
-    let mut effective = parse_feature_component("rustc target-spec features", target_features)?;
-    for (name, enabled) in parse_feature_component(
+    preflight_feature_source("rustc target-spec features", target_features)?;
+    preflight_feature_source(
+        "rustc active -Ctarget-feature configuration",
+        codegen_features,
+    )?;
+    let mut effective =
+        parse_admitted_feature_component("rustc target-spec features", target_features)?;
+    for (name, enabled) in parse_admitted_feature_component(
         "rustc active -Ctarget-feature configuration",
         codegen_features,
     )? {
@@ -238,11 +260,10 @@ fn normalize_active_features(
     Ok(output)
 }
 
-fn parse_feature_component(
+fn parse_admitted_feature_component(
     field: &'static str,
     features: &str,
 ) -> Result<BTreeMap<String, bool>, SemanticLayoutBridgeError> {
-    preflight_feature_source(field, features)?;
     let mut parsed = BTreeMap::new();
     if features.is_empty() {
         return Ok(parsed);
@@ -479,7 +500,7 @@ impl SemanticLayoutEvidenceV1 {
         let semantic_text = semantic_type
             .canonical_text()
             .map_err(SemanticLayoutBridgeError::DialectValidation)?;
-        let mut canonical = String::from(SEMANTIC_LAYOUT_EVIDENCE_SCHEMA_V2);
+        let mut canonical = String::from(SEMANTIC_LAYOUT_EVIDENCE_SCHEMA_V3);
         canonical.push('|');
         observed_target.write_canonical(&mut canonical);
         canonical.push_str("|source-type=");
@@ -502,11 +523,11 @@ impl SemanticLayoutEvidenceV1 {
     }
 
     pub const fn schema(&self) -> &'static str {
-        SEMANTIC_LAYOUT_EVIDENCE_SCHEMA_V2
+        SEMANTIC_LAYOUT_EVIDENCE_SCHEMA_V3
     }
 
     pub const fn version(&self) -> u16 {
-        SEMANTIC_LAYOUT_EVIDENCE_VERSION_V2
+        SEMANTIC_LAYOUT_EVIDENCE_VERSION_V3
     }
 
     pub const fn target(&self) -> &SemanticLayoutTargetV1 {
@@ -1784,6 +1805,36 @@ mod tests {
             "fe2o3.semantic-layout-active-feature-input-bounds.v1"
         );
         assert_eq!(SEMANTIC_LAYOUT_ACTIVE_FEATURE_INPUT_BOUNDS_VERSION_V1, 1);
+
+        let oversized_second = "x".repeat(MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_SOURCE_BYTES_V1 + 1);
+        assert!(matches!(
+            SemanticLayoutTargetV1::new_with_codegen_profile(
+                "amdgcn-amd-amdhsa",
+                "e-p:64:64",
+                64,
+                "gfx942",
+                "+conflict,-conflict",
+                &oversized_second,
+            ),
+            Err(SemanticLayoutBridgeError::BoundExceeded {
+                field: "rustc active -Ctarget-feature configuration bytes",
+                ..
+            })
+        ));
+        assert!(matches!(
+            SemanticLayoutTargetV1::new_with_codegen_profile(
+                "amdgcn-amd-amdhsa",
+                "e-p:64:64",
+                64,
+                "gfx942",
+                &oversized_second,
+                "+conflict,-conflict",
+            ),
+            Err(SemanticLayoutBridgeError::BoundExceeded {
+                field: "rustc target-spec features bytes",
+                ..
+            })
+        ));
 
         let byte_boundary =
             feature_source_with_shape(MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_SOURCE_BYTES_V1, 32);
