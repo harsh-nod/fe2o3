@@ -184,6 +184,15 @@ pub async fn authenticate(
     deadline: Instant,
 ) -> Result<Authorization, PublisherError> {
     validate_request_shape(request)?;
+    let (header, claims) = verify_token(provider, token, deadline).await?;
+    validate_claims(config, request, &header, &claims)
+}
+
+async fn verify_token(
+    provider: Arc<dyn JwksProvider>,
+    token: &str,
+    deadline: Instant,
+) -> Result<(Value, Value), PublisherError> {
     if token.is_empty() || token.len() > MAX_JWT_BYTES || !token.is_ascii() {
         return Err(PublisherError::Authentication);
     }
@@ -253,7 +262,7 @@ pub async fn authenticate(
         return Err(PublisherError::Authentication);
     }
 
-    validate_claims(config, request, &header, &claims)
+    Ok((header, claims))
 }
 
 fn parse_jwks(raw: &[u8]) -> Result<JwksDocument, PublisherError> {
@@ -570,6 +579,70 @@ fn hex(value: &str, length: usize) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+pub(crate) async fn validate_enrollment_token(
+    config: &ServiceConfig,
+    provider: Arc<dyn JwksProvider>,
+    token: &str,
+    deadline: Instant,
+) -> Result<BTreeMap<String, String>, PublisherError> {
+    let (_header, claims) = verify_token(provider, token, deadline).await?;
+    let projected: GithubClaims =
+        serde_json::from_value(claims).map_err(|_| PublisherError::Authentication)?;
+    projected.validate_shape()?;
+    validate_times(projected.iat, projected.nbf, projected.exp)?;
+    let values = BTreeMap::from([
+        ("actor_id".into(), projected.actor_id),
+        ("aud".into(), projected.aud),
+        ("base_ref".into(), projected.base_ref),
+        ("check_run_id".into(), projected.check_run_id),
+        ("event_name".into(), projected.event_name),
+        ("environment".into(), projected.environment),
+        ("exp".into(), projected.exp.to_string()),
+        ("head_ref".into(), projected.head_ref),
+        ("iat".into(), projected.iat.to_string()),
+        ("iss".into(), projected.iss),
+        ("job_workflow_ref".into(), projected.job_workflow_ref),
+        ("job_workflow_sha".into(), projected.job_workflow_sha),
+        ("jti".into(), projected.jti),
+        ("nbf".into(), projected.nbf.to_string()),
+        ("ref".into(), projected.reference),
+        ("repository".into(), projected.repository),
+        ("repository_id".into(), projected.repository_id),
+        ("repository_owner".into(), projected.repository_owner),
+        ("repository_owner_id".into(), projected.repository_owner_id),
+        ("run_attempt".into(), projected.run_attempt),
+        ("run_id".into(), projected.run_id),
+        ("run_number".into(), projected.run_number),
+        ("runner_environment".into(), projected.runner_environment),
+        ("sha".into(), projected.sha),
+        ("sub".into(), projected.sub),
+        ("workflow".into(), projected.workflow),
+        ("workflow_ref".into(), projected.workflow_ref),
+        ("workflow_sha".into(), projected.workflow_sha),
+    ]);
+    crate::enrollment::validate_claim_profile(config, &values)?;
+    Ok(values)
+}
+
+fn validate_times(issued_at: i64, not_before: i64, expires_at: i64) -> Result<(), PublisherError> {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| PublisherError::Authentication)?
+        .as_secs() as i64;
+    if issued_at <= 0
+        || not_before <= 0
+        || expires_at <= issued_at
+        || not_before > issued_at
+        || expires_at - issued_at > MAX_OIDC_LIFETIME_SECS
+        || issued_at > now + MAX_CLOCK_SKEW_SECS
+        || not_before > now + MAX_CLOCK_SKEW_SECS
+        || expires_at < now
+    {
+        return Err(PublisherError::Authentication);
+    }
+    Ok(())
 }
 
 #[cfg(test)]

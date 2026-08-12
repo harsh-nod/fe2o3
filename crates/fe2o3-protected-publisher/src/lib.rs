@@ -1,6 +1,7 @@
 mod bounds;
 mod canonical;
 mod config;
+mod enrollment;
 mod jwks;
 mod oidc;
 mod receipt;
@@ -12,6 +13,7 @@ mod store_worker;
 mod test_support;
 
 pub use config::ServiceConfig;
+pub use enrollment::enroll_token;
 pub use jwks::{HttpsJwksProvider, JwksProvider, JwksSnapshot, StaticJwksProvider};
 pub use service::{Publisher, PublisherResponse, router};
 

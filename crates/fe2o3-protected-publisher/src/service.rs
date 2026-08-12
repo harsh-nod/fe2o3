@@ -15,6 +15,7 @@ use crate::bounds::{
     MAX_HTTP_HEADER_BYTES, MAX_HTTP_HEADERS, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES,
 };
 use crate::canonical::parse_canonical;
+use crate::enrollment::require_enrollment;
 use crate::jwks::{HttpsJwksProvider, JwksProvider};
 use crate::oidc::{PublisherRequest, authenticate};
 use crate::receipt::{FileReceiptSigner, ReceiptSigner, raw_request_sha256, request_identity};
@@ -38,6 +39,7 @@ pub struct Publisher {
 impl Publisher {
     pub fn open(config: ServiceConfig) -> Result<Arc<Self>, PublisherError> {
         config.validate()?;
+        require_enrollment(&config)?;
         let service_identity = config.service_identity()?;
         let jwks = Arc::new(HttpsJwksProvider::new(
             &config.jwks_url,
@@ -583,5 +585,20 @@ key\t0000\tpublisher\ttest-publisher-v1\tkeys/test-publisher-v1.pem\t{digest}\te
             assert!(!text.contains("PRIVATE KEY"));
             assert!(!text.contains("fixture-jti"));
         }
+    }
+
+    #[test]
+    fn production_open_requires_enrollment_before_key_or_database_access() {
+        let temp = secure_tempdir();
+        let mut config = config(temp.path().join("publisher.db"));
+        config.signature_domain = "production".into();
+        config.jwks_url = format!("{}/.well-known/jwks", crate::config::GITHUB_ISSUER);
+        config.signing_key_path = temp.path().join("absent-key.pem");
+        config.enrollment_artifact_path = temp.path().join("absent-enrollment.json");
+        assert!(matches!(
+            Publisher::open(config),
+            Err(PublisherError::Config)
+        ));
+        assert!(!temp.path().join("publisher.db").exists());
     }
 }

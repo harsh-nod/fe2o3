@@ -1,10 +1,11 @@
 use std::ffi::{CStr, CString, OsStr};
 use std::fs::{File, OpenOptions};
-use std::io::Read;
+use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::PublisherError;
 
@@ -128,7 +129,7 @@ impl SecureLocation {
     ) -> Result<Vec<u8>, PublisherError> {
         let (mut file, opened) = self.open_existing_owner_only(max_bytes)?;
         let mut bytes = Vec::new();
-        file.by_ref()
+        std::io::Read::by_ref(&mut file)
             .take(max_bytes as u64 + 1)
             .read_to_end(&mut bytes)
             .map_err(|_| PublisherError::Config)?;
@@ -223,6 +224,65 @@ impl SecureLocation {
 
 pub(crate) fn read_owner_only(path: &Path, max_bytes: usize) -> Result<Vec<u8>, PublisherError> {
     SecureLocation::open(path)?.read_existing_owner_only(max_bytes)
+}
+
+pub(crate) fn write_new_owner_only(
+    path: &Path,
+    bytes: &[u8],
+    max_bytes: usize,
+) -> Result<(), PublisherError> {
+    static NONCE: AtomicU64 = AtomicU64::new(0);
+
+    if bytes.len() > max_bytes {
+        return Err(PublisherError::Config);
+    }
+    let location = SecureLocation::open(path)?;
+    for _ in 0..64 {
+        let nonce = NONCE.fetch_add(1, Ordering::Relaxed);
+        let temporary = CString::new(format!(
+            ".fe2o3-publisher-{}-{nonce}.tmp",
+            std::process::id()
+        ))
+        .map_err(|_| PublisherError::Config)?;
+        let mut file = match openat_raw(
+            location.directory.as_raw_fd(),
+            &temporary,
+            libc::O_WRONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_CREAT | libc::O_EXCL,
+            0o600,
+        ) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(_) => return Err(PublisherError::Config),
+        };
+        let result = (|| {
+            file.write_all(bytes).map_err(|_| PublisherError::Config)?;
+            file.sync_all().map_err(|_| PublisherError::Config)?;
+            if unsafe {
+                libc::renameat2(
+                    location.directory.as_raw_fd(),
+                    temporary.as_ptr(),
+                    location.directory.as_raw_fd(),
+                    location.name.as_ptr(),
+                    libc::RENAME_NOREPLACE,
+                )
+            } != 0
+            {
+                return Err(PublisherError::Config);
+            }
+            location.sync().map_err(|_| PublisherError::Config)?;
+            if location.read_existing_owner_only(max_bytes)? != bytes {
+                return Err(PublisherError::Config);
+            }
+            Ok(())
+        })();
+        if result.is_err() {
+            unsafe {
+                libc::unlinkat(location.directory.as_raw_fd(), temporary.as_ptr(), 0);
+            }
+        }
+        return result;
+    }
+    Err(PublisherError::Config)
 }
 
 fn validate_owner_file(identity: FileIdentity, max_bytes: usize) -> Result<(), PublisherError> {
@@ -375,5 +435,15 @@ mod tests {
                 })
                 .is_err()
         );
+    }
+
+    #[test]
+    fn atomic_owner_file_creation_never_replaces_an_existing_artifact() {
+        let temp = secure_tempdir();
+        let path = temp.path().join("enrollment.json");
+        write_new_owner_only(&path, b"first", 16).unwrap();
+        assert_eq!(read_owner_only(&path, 16).unwrap(), b"first");
+        assert!(write_new_owner_only(&path, b"second", 16).is_err());
+        assert_eq!(read_owner_only(&path, 16).unwrap(), b"first");
     }
 }

@@ -26,6 +26,7 @@ pub(crate) fn config(database_path: PathBuf) -> ServiceConfig {
         schema_version: 1,
         listen: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
         database_path,
+        enrollment_artifact_path: PathBuf::from("/test-only/enrollment.json"),
         signing_key_id: "test-publisher-v1".into(),
         signing_key_path: PathBuf::from("/test-only/not-loaded.pem"),
         signature_domain: "test".into(),

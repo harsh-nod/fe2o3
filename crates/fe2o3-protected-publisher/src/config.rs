@@ -22,6 +22,7 @@ pub struct ServiceConfig {
     pub schema_version: u32,
     pub listen: SocketAddr,
     pub database_path: PathBuf,
+    pub enrollment_artifact_path: PathBuf,
     pub signing_key_id: String,
     pub signing_key_path: PathBuf,
     pub signature_domain: String,
@@ -106,7 +107,10 @@ impl ServiceConfig {
             || self.environment != "protected-publisher"
             || !self.listen.ip().is_loopback()
             || !self.database_path.is_absolute()
+            || !self.enrollment_artifact_path.is_absolute()
             || !self.signing_key_path.is_absolute()
+            || self.enrollment_artifact_path == self.database_path
+            || self.enrollment_artifact_path == self.signing_key_path
         {
             return Err(PublisherError::Config);
         }
@@ -221,6 +225,9 @@ mod tests {
         let mut config = base;
         config.database_path = "relative.db".into();
         assert!(config.validate().is_err());
+        let mut config = production_config(temp.path());
+        config.enrollment_artifact_path = "relative-enrollment.json".into();
+        assert!(config.validate().is_err());
 
         let base = production_config(temp.path());
         let mut config = base.clone();
@@ -289,6 +296,9 @@ mod tests {
         mutations.push(changed);
         let mut changed = base;
         changed.signing_key_path = temp.path().join("rotated.pem");
+        mutations.push(changed);
+        let mut changed = production_config(temp.path());
+        changed.enrollment_artifact_path = temp.path().join("rotated-enrollment.json");
         mutations.push(changed);
 
         assert!(

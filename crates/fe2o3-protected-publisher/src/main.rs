@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use fe2o3_protected_publisher::{Publisher, ServiceConfig, router};
+use fe2o3_protected_publisher::{Publisher, ServiceConfig, enroll_token, router};
 
 #[tokio::main]
 async fn main() {
@@ -12,11 +12,24 @@ async fn main() {
 
 async fn run() -> Result<(), ()> {
     let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
-    if arguments.len() != 3 || arguments[0] != "--serve" || arguments[1] != "--config" {
-        return Err(());
-    }
     unsafe {
         libc::umask(0o077);
+    }
+    if arguments.len() == 7
+        && arguments[0] == "--enroll"
+        && arguments[1] == "--config"
+        && arguments[3] == "--token-file"
+        && arguments[5] == "--artifact"
+    {
+        let config = ServiceConfig::load(Path::new(&arguments[2])).map_err(|_| ())?;
+        let digest = enroll_token(&config, Path::new(&arguments[4]), Path::new(&arguments[6]))
+            .await
+            .map_err(|_| ())?;
+        println!("enrollment_claim_profile_sha256={digest}");
+        return Ok(());
+    }
+    if arguments.len() != 3 || arguments[0] != "--serve" || arguments[1] != "--config" {
+        return Err(());
     }
     let config = ServiceConfig::load(Path::new(&arguments[2])).map_err(|_| ())?;
     let listen = config.listen;
