@@ -2,11 +2,11 @@ use fe2o3_amd_target::AmdTargetId;
 use rmpv::ValueRef;
 
 use crate::{
-    ArgumentAccess, ArgumentAddressSpace, CodeObjectVersion, ExplicitArgument, ExplicitValueKind,
-    Gfx1250Revision, HiddenArgument, HiddenValueKind, InspectedHsaco, InspectedKernel,
-    InspectionError, KernelKind, MAX_ARGUMENTS_PER_KERNEL, MAX_KERNARG_BYTES, MAX_KERNELS,
-    MetadataVersion, ParsedExplicitArgument, hidden_argument, inspected_hsaco,
-    messagepack::decode_bounded,
+    ArgumentAccess, ArgumentAddressSpace, COV6_IMPLICIT_ARGUMENT_BYTES, CodeObjectVersion,
+    ExplicitArgument, ExplicitValueKind, Gfx1250Revision, HiddenArgument, HiddenValueKind,
+    InspectedHsaco, InspectedKernel, InspectionError, KernelKind, MAX_ARGUMENTS_PER_KERNEL,
+    MAX_KERNARG_BYTES, MAX_KERNELS, MetadataVersion, ParsedExplicitArgument, hidden_argument,
+    inspected_hsaco, messagepack::decode_bounded,
 };
 
 const TARGET_PREFIX: &str = "amdgcn-amd-amdhsa--";
@@ -371,6 +371,12 @@ fn parse_arguments(
         return Err(InspectionError::InvalidImplicitArgumentSpan);
     };
 
+    if code_object_version == CodeObjectVersion::V6
+        && !hidden_arguments.is_empty()
+        && implicit_argument_size != COV6_IMPLICIT_ARGUMENT_BYTES
+    {
+        return Err(InspectionError::InvalidImplicitArgumentSpan);
+    }
     validate_hidden_argument_layout(
         &hidden_arguments,
         code_object_version,

@@ -314,6 +314,13 @@ impl PublishedKernelPhysicalLayoutV1 {
     }
 
     #[cfg(test)]
+    pub(crate) fn with_implicit_argument_size_for_launch_bridge_test(&self, size: u64) -> Self {
+        let mut physical = self.clone();
+        physical.launch.implicit_argument_size = size;
+        physical
+    }
+
+    #[cfg(test)]
     pub(crate) fn with_pointee_alignment_for_launch_bridge_test(
         &self,
         argument_index: usize,

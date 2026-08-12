@@ -11,7 +11,9 @@ use fe2o3_artifacts::{
     BlockSize as ArtifactBlockSize, DigestAlgorithm, Endianness as ArtifactEndianness,
     LaunchContract as ArtifactLaunchContract, PointerWidth, ScalarType as ArtifactScalarType,
 };
-use fe2o3_hsaco::{CodeObjectVersion, ExplicitValueKind, HiddenValueKind};
+use fe2o3_hsaco::{
+    COV6_IMPLICIT_ARGUMENT_BYTES, CodeObjectVersion, ExplicitValueKind, HiddenValueKind,
+};
 use fe2o3_kernel_descriptor::{
     AccessMode, AliasSemantics, BlockSizeV1, DeviceLayoutDescriptorV1, DeviceLayoutIdentity,
     KernelDescriptorV1, LaunchConstraintsV1, OwnershipSemantics, PhysicalAbiComponentKind,
@@ -1093,6 +1095,13 @@ fn derive_physical_signature(
     physical: &PublishedKernelPhysicalLayoutV1,
 ) -> Result<Gfx942PhysicalKernelSignatureV2, LaunchKernelMetadataBridgeErrorV2> {
     let launch = physical.launch();
+    if launch.implicit_argument_size() != COV6_IMPLICIT_ARGUMENT_BYTES {
+        return Err(
+            LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(
+                "COV6 implicit argument span",
+            ),
+        );
+    }
     let implicit_argument_offset = match launch.implicit_argument_offset() {
         PhysicalMetadataValueV1::Known(value) => u32::try_from(value).map_err(|_| {
             LaunchKernelMetadataBridgeErrorV2::NumericOverflow("implicit argument offset")

@@ -42,6 +42,8 @@ pub const MAX_KERNELS: usize = 256;
 pub const MAX_ARGUMENTS_PER_KERNEL: usize = 512;
 /// Maximum accepted kernel argument segment size (1 MiB).
 pub const MAX_KERNARG_BYTES: u64 = 1024 * 1024;
+/// Exact implicit kernarg suffix required when code object V6 metadata declares hidden records.
+pub const COV6_IMPLICIT_ARGUMENT_BYTES: u64 = 256;
 /// Maximum number of static ELF symbols scanned during explicit binding.
 pub const MAX_ELF_SYMBOLS: usize = 32 * 1024;
 

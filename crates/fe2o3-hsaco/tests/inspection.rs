@@ -1,11 +1,11 @@
 use std::{env, fs};
 
 use fe2o3_hsaco::{
-    ArgumentAddressSpace, CodeObjectVersion, ExplicitValueKind, Gfx1250Revision, HiddenValueKind,
-    InspectionError, KernelBindingError, KernelKind, MAX_ARGUMENTS_PER_KERNEL, MAX_ELF_NOTES,
-    MAX_ELF_SYMBOLS, MAX_HSACO_BYTES, MAX_KERNELS, MAX_MESSAGEPACK_COLLECTION_ITEMS,
-    MAX_MESSAGEPACK_DEPTH, MAX_METADATA_BYTES, MessagePackLimit, inspect,
-    inspect_and_bind_kernel_descriptors,
+    ArgumentAddressSpace, COV6_IMPLICIT_ARGUMENT_BYTES, CodeObjectVersion, ExplicitValueKind,
+    Gfx1250Revision, HiddenValueKind, InspectionError, KernelBindingError, KernelKind,
+    MAX_ARGUMENTS_PER_KERNEL, MAX_ELF_NOTES, MAX_ELF_SYMBOLS, MAX_HSACO_BYTES, MAX_KERNARG_BYTES,
+    MAX_KERNELS, MAX_MESSAGEPACK_COLLECTION_ITEMS, MAX_MESSAGEPACK_DEPTH, MAX_METADATA_BYTES,
+    MessagePackLimit, inspect, inspect_and_bind_kernel_descriptors,
 };
 use rmpv::{Value, encode::write_value};
 
@@ -856,15 +856,12 @@ fn rejects_unknown_argument_fields_that_may_change_abi_semantics() {
 fn binds_and_preserves_the_complete_implicit_argument_span() {
     let mut trailing = valid_kernel("k", "k.kd");
     set_field(&mut trailing, ".kernarg_segment_size", Value::from(400));
-    let inspected = inspect(&hsaco(
-        &encode(&metadata((1, 2), vec![trailing])),
+    assert_kernel_error(
+        trailing,
         4,
-        &[b"AMDGPU\0"],
-    ))
-    .unwrap();
-    let kernel = &inspected.kernels()[0];
-    assert_eq!(kernel.implicit_argument_offset(), Some(16));
-    assert_eq!(kernel.implicit_argument_size(), 384);
+        (1, 2),
+        InspectionError::InvalidImplicitArgumentSpan,
+    );
 
     let mut aligned_gap_arguments = vec![argument(Some("value"), 0, 12, "by_value", None)];
     aligned_gap_arguments.extend(v5_hidden_arguments(16));
@@ -936,6 +933,71 @@ fn binds_and_preserves_the_complete_implicit_argument_span() {
         (1, 2),
         InspectionError::InvalidImplicitArgumentSpan,
     );
+}
+
+#[test]
+fn cov6_hidden_abi_requires_the_exact_implicit_span() {
+    for implicit_bytes in [68, 252, 256, 260, MAX_KERNARG_BYTES - 16] {
+        let mut kernel = valid_kernel("k", "k.kd");
+        set_field(
+            &mut kernel,
+            ".kernarg_segment_size",
+            Value::from(16 + implicit_bytes),
+        );
+        let result = inspect(&hsaco(
+            &encode(&metadata((1, 2), vec![kernel])),
+            4,
+            &[b"AMDGPU\0"],
+        ));
+        if implicit_bytes == COV6_IMPLICIT_ARGUMENT_BYTES {
+            assert_eq!(
+                result.unwrap().kernels()[0].implicit_argument_size(),
+                COV6_IMPLICIT_ARGUMENT_BYTES
+            );
+        } else {
+            assert_eq!(result, Err(InspectionError::InvalidImplicitArgumentSpan));
+        }
+    }
+
+    let explicit = vec![
+        argument(Some("a_ptr"), 0, 8, "global_buffer", Some("global")),
+        argument(Some("a_len"), 8, 8, "by_value", None),
+    ];
+    let mut descriptor_free = valid_kernel("k", "k.kd");
+    set_field(&mut descriptor_free, ".args", Value::Array(explicit));
+    set_field(
+        &mut descriptor_free,
+        ".kernarg_segment_size",
+        Value::from(16),
+    );
+    let inspected = inspect(&hsaco(
+        &encode(&metadata((1, 2), vec![descriptor_free])),
+        4,
+        &[b"AMDGPU\0"],
+    ))
+    .unwrap();
+    assert_eq!(inspected.kernels()[0].implicit_argument_size(), 0);
+}
+
+#[test]
+fn cov4_and_cov5_keep_their_version_specific_implicit_spans() {
+    let cov4 = inspect(&hsaco(
+        &encode(&metadata((1, 1), vec![valid_v4_kernel("k", "k.kd")])),
+        2,
+        &[b"AMDGPU\0"],
+    ))
+    .unwrap();
+    assert_eq!(cov4.kernels()[0].implicit_argument_size(), 56);
+
+    let mut cov5 = valid_kernel("k", "k.kd");
+    set_field(&mut cov5, ".kernarg_segment_size", Value::from(400));
+    let cov5 = inspect(&hsaco(
+        &encode(&metadata((1, 2), vec![cov5])),
+        3,
+        &[b"AMDGPU\0"],
+    ))
+    .unwrap();
+    assert_eq!(cov5.kernels()[0].implicit_argument_size(), 384);
 }
 
 #[test]
@@ -1957,6 +2019,11 @@ fn requires_a_binding_for_every_metadata_kernel() {
 #[test]
 fn preserves_observed_gfx1151_gfx942_and_gfx950_descriptor_words() {
     let mut local_kernel = valid_kernel("vecadd", "vecadd.kd");
+    let mut local_arguments = (0..6)
+        .map(|index| argument(Some(&format!("arg{index}")), index * 8, 8, "by_value", None))
+        .collect::<Vec<_>>();
+    local_arguments.extend(v5_hidden_arguments(48));
+    set_field(&mut local_kernel, ".args", Value::Array(local_arguments));
     set_field(&mut local_kernel, ".kernarg_segment_size", Value::from(304));
     let mut fixture = binding_fixture(local_kernel);
     write_u32(&mut fixture.bytes, fixture.descriptor_offset + 8, 304);
@@ -1980,6 +2047,11 @@ fn preserves_observed_gfx1151_gfx942_and_gfx950_descriptor_words() {
 
     for target in ["gfx942", "gfx950"] {
         let mut kernel = valid_kernel("vecadd", "vecadd.kd");
+        let mut arguments = (0..4)
+            .map(|index| argument(Some(&format!("arg{index}")), index * 8, 8, "by_value", None))
+            .collect::<Vec<_>>();
+        arguments.extend(v5_hidden_arguments(32));
+        set_field(&mut kernel, ".args", Value::Array(arguments));
         set_field(&mut kernel, ".private_segment_fixed_size", Value::from(0));
         set_field(&mut kernel, ".kernarg_segment_size", Value::from(288));
         set_field(&mut kernel, ".wavefront_size", Value::from(64));

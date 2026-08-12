@@ -4,10 +4,11 @@
 use std::{fmt, ops::Range};
 
 use fe2o3_hsaco::{
-    ArgumentAccess, ArgumentAddressSpace, CodeObjectVersion as InspectedCodeObjectVersion,
-    ExplicitArgument, ExplicitValueKind, InspectedHsaco, InspectedKernel, InspectedKernelBindings,
-    KernelBindingError, KernelDescriptorBinding, MAX_ELF_SECTIONS, MAX_ELF_SEGMENTS,
-    MAX_HSACO_BYTES, inspect_and_bind_kernel_descriptors,
+    ArgumentAccess, ArgumentAddressSpace, COV6_IMPLICIT_ARGUMENT_BYTES,
+    CodeObjectVersion as InspectedCodeObjectVersion, ExplicitArgument, ExplicitValueKind,
+    InspectedHsaco, InspectedKernel, InspectedKernelBindings, KernelBindingError,
+    KernelDescriptorBinding, MAX_ELF_SECTIONS, MAX_ELF_SEGMENTS, MAX_HSACO_BYTES,
+    inspect_and_bind_kernel_descriptors,
 };
 use fe2o3_kernel_descriptor::{
     AccessMode, AliasSemantics, BlockSizeV1, CANONICAL_CODE_OBJECT_DIGEST_OFFSET,
@@ -144,7 +145,6 @@ const GENERAL_V3_COV6_COMPILER_NAME_V1: &str = "rustc-codegen-fe2o3";
 const GENERAL_V3_COV6_PRODUCER_NAME_V1: &str = "rustc-codegen-fe2o3-worker-v2";
 const GENERAL_V3_COV6_PRODUCER_VERSION_V1: &str = "typed-general-gfx942-cov6-v1";
 const GENERAL_V3_COV6_DEVICE_TARGET_V1: &str = "gfx942:xnack-";
-const GENERAL_V3_COV6_IMPLICIT_KERNARG_BYTES_V1: u64 = 256;
 
 /// Failure while locating, checking, finalizing, or rechecking a descriptor table.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -868,17 +868,24 @@ fn kernarg_segment_sizes_match_v1(
     let metadata_size = metadata.kernarg_segment_size();
     let bound_descriptor_size = u64::from(bound_descriptor_size);
 
-    if descriptor_total == metadata_size && descriptor_total == bound_descriptor_size {
-        return true;
+    if is_general_v3_cov6_profile_v1(table) {
+        if metadata.hidden_arguments().is_empty() {
+            return general_v3_cov6_implicit_span_is_canonical_v1(
+                metadata.implicit_argument_size(),
+                false,
+            ) && metadata.implicit_argument_offset().is_none()
+                && metadata_size == u64::from(layout.explicit_argument_size())
+                && bound_descriptor_size == metadata_size
+                && general_v3_cov6_total_kernarg_size_v1(metadata_size) == Some(descriptor_total);
+        }
+        return general_v3_cov6_implicit_span_is_canonical_v1(
+            metadata.implicit_argument_size(),
+            true,
+        ) && descriptor_total == metadata_size
+            && descriptor_total == bound_descriptor_size;
     }
 
-    is_general_v3_cov6_profile_v1(table)
-        && metadata.hidden_arguments().is_empty()
-        && metadata.implicit_argument_offset().is_none()
-        && metadata.implicit_argument_size() == 0
-        && metadata_size == u64::from(layout.explicit_argument_size())
-        && bound_descriptor_size == metadata_size
-        && general_v3_cov6_total_kernarg_size_v1(metadata_size) == Some(descriptor_total)
+    descriptor_total == metadata_size && descriptor_total == bound_descriptor_size
 }
 
 fn is_general_v3_cov6_profile_v1(table: &DeviceDescriptorTableV1) -> bool {
@@ -890,12 +897,25 @@ fn is_general_v3_cov6_profile_v1(table: &DeviceDescriptorTableV1) -> bool {
 }
 
 fn general_v3_cov6_total_kernarg_size_v1(explicit_size: u64) -> Option<u64> {
-    explicit_size.checked_add(GENERAL_V3_COV6_IMPLICIT_KERNARG_BYTES_V1)
+    explicit_size.checked_add(COV6_IMPLICIT_ARGUMENT_BYTES)
+}
+
+const fn general_v3_cov6_implicit_span_is_canonical_v1(
+    implicit_size: u64,
+    has_hidden_records: bool,
+) -> bool {
+    if has_hidden_records {
+        implicit_size == COV6_IMPLICIT_ARGUMENT_BYTES
+    } else {
+        implicit_size == 0
+    }
 }
 
 #[cfg(test)]
 mod kernarg_reconciliation_tests {
-    use super::general_v3_cov6_total_kernarg_size_v1;
+    use super::{
+        general_v3_cov6_implicit_span_is_canonical_v1, general_v3_cov6_total_kernarg_size_v1,
+    };
 
     #[test]
     fn general_v3_cov6_total_size_rejects_overflow() {
@@ -905,6 +925,16 @@ mod kernarg_reconciliation_tests {
             general_v3_cov6_total_kernarg_size_v1(u64::MAX - 256),
             Some(u64::MAX)
         );
+    }
+
+    #[test]
+    fn general_v3_cov6_span_is_exact_or_explicit_only_legacy() {
+        assert!(general_v3_cov6_implicit_span_is_canonical_v1(0, false));
+        assert!(!general_v3_cov6_implicit_span_is_canonical_v1(0, true));
+        for size in [68, 255, 257, u64::MAX] {
+            assert!(!general_v3_cov6_implicit_span_is_canonical_v1(size, true));
+        }
+        assert!(general_v3_cov6_implicit_span_is_canonical_v1(256, true));
     }
 }
 

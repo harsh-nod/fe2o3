@@ -3323,6 +3323,31 @@ mod tests {
     }
 
     #[test]
+    fn launch_bridge_independently_rejects_noncanonical_cov6_implicit_spans() {
+        let (_fixture, recovered) = recovered_launch_bridge_fixture(120);
+        let family =
+            crate::launch_kernel_v2_bridge::canonical_family_for_recovered_launch_bridge_test(
+                &recovered,
+            );
+        for size in [0, 68, 255, 257, u64::MAX] {
+            let physical = recovered
+                .physical_kernel()
+                .with_implicit_argument_size_for_launch_bridge_test(size);
+            assert!(matches!(
+                crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_with_physical_probe_v2(
+                    &recovered,
+                    &family,
+                    "recovered-exact-wave64",
+                    &physical,
+                ),
+                Err(crate::LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(
+                    "COV6 implicit argument span"
+                ))
+            ));
+        }
+    }
+
+    #[test]
     fn launch_bridge_rejects_missing_reordered_and_substituted_hidden_records() {
         let (_fixture, recovered) = recovered_launch_bridge_fixture(109);
         let family =
