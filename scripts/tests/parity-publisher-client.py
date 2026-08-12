@@ -706,7 +706,13 @@ def test_oidc_authorization_matrix() -> None:
         assert authorization["environment"] == CLIENT.OIDC_ENVIRONMENT
         assert authorization["event_name"] == "merge_group"
         assert authorization["job"] == "gate"
-        assert authorization["alg"] == "RS256"
+        assert "alg" not in authorization
+        assert "kid" not in authorization
+        assert "jti" not in authorization
+        assert "iat" not in authorization
+        assert "nbf" not in authorization
+        assert "exp" not in authorization
+        assert "check_run_id" not in authorization
         assert "x5t" not in authorization
         assert authorization["ref"] == fixture.queue_ref
         assert authorization["sub"] == (
@@ -736,7 +742,7 @@ def test_oidc_authorization_matrix() -> None:
         x5t_token = fixture.oidc_token(header_overrides={"x5t": fixture.x5t})
         x5t_request, _ = fixture.expected(x5t_args, token=x5t_token)
         x5t_authorization = json.loads(x5t_request)["oidc_authorization"]
-        assert x5t_authorization["x5t"] == fixture.x5t
+        assert "x5t" not in x5t_authorization
         fixture.write_transport(
             x5t_args,
             oidc_token=x5t_token,
@@ -744,6 +750,25 @@ def test_oidc_authorization_matrix() -> None:
         )
         process = fixture.run(x5t_args)
         assert process.returncode == 0, process.stderr
+
+        fresh_token = fixture.oidc_token(
+            claim_overrides={"jti": "fresh-jti-for-stable-request"}
+        )
+        fresh_request, _ = fixture.expected(args, token=fresh_token)
+        assert fresh_token != fixture.oidc_token_value
+        assert fresh_request == request
+
+        short_lived = fixture.oidc_token(
+            claim_overrides={"exp": int(time.time()) + 39}
+        )
+        try:
+            CLIENT.oidc_authorization(
+                short_lived, args, fixture.environment, fixture.audience
+            )
+        except CLIENT.ClientError as error:
+            assert "freshness" in str(error)
+        else:
+            raise AssertionError("short-lived token was accepted")
 
         claim_cases: tuple[tuple[str, object], ...] = (
             ("iss", "https://issuer.example.invalid"),
@@ -1134,6 +1159,40 @@ def test_network_transport_dns_connect_tls_failures() -> None:
             thread.join(timeout=2)
 
 
+def test_stable_idempotency_key_is_high_entropy_and_descriptor_checked() -> None:
+    with tempfile.TemporaryDirectory(prefix="fe2o3-publisher-request-key-") as raw_temp:
+        runner = Path(raw_temp)
+        first_digest = "a" * 64
+        second_digest = "b" * 64
+        first = CLIENT.stable_idempotency_key(runner, first_digest)
+        assert len(first) == 64
+        assert CLIENT.SHA256_RE.fullmatch(first)
+        assert CLIENT.stable_idempotency_key(runner, first_digest) == first
+        second = CLIENT.stable_idempotency_key(runner, second_digest)
+        assert second != first
+
+        path = runner / f".fe2o3-publisher-idempotency-{first_digest}"
+        metadata = path.stat()
+        assert stat.S_IMODE(metadata.st_mode) == 0o600
+        assert metadata.st_nlink == 1
+        os.link(path, runner / "hardlink")
+        try:
+            CLIENT.stable_idempotency_key(runner, first_digest)
+        except CLIENT.ClientError as error:
+            assert "metadata" in str(error)
+        else:
+            raise AssertionError("hard-linked idempotency key was accepted")
+
+        symlink_digest = "c" * 64
+        os.symlink(path, runner / f".fe2o3-publisher-idempotency-{symlink_digest}")
+        try:
+            CLIENT.stable_idempotency_key(runner, symlink_digest)
+        except CLIENT.ClientError as error:
+            assert "unavailable" in str(error)
+        else:
+            raise AssertionError("symlink idempotency key was accepted")
+
+
 if __name__ == "__main__":
     test_success_and_test_domain_guard()
     test_identity_config_and_replay_rejections()
@@ -1141,4 +1200,5 @@ if __name__ == "__main__":
     test_environment_subject_regression()
     test_transport_failures_bounds_and_redaction()
     test_network_transport_dns_connect_tls_failures()
+    test_stable_idempotency_key_is_high_entropy_and_descriptor_checked()
     print("protected publisher client adversarial tests passed")

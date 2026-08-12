@@ -314,8 +314,11 @@ mod tests {
     #[test]
     fn shipped_cli_has_no_token_path_or_token_value_option() {
         let main = include_str!("main.rs");
+        let docs = include_str!("../../../docs/protected-publisher-service-v1.md");
         assert!(!main.contains("--token-file"));
         assert!(!main.contains("--token="));
         assert!(main.contains("--token-fd"));
+        assert!(!docs.contains("--token-file"));
+        assert!(docs.contains("--token-fd"));
     }
 }
