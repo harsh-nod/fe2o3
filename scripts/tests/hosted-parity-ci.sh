@@ -140,6 +140,16 @@ require_text "${PUBLISHER_WORKFLOW}" 'merge-group base SHA is not current defaul
 require_text "${PUBLISHER_WORKFLOW}" '--publisher-receipt-root "${publisher_receipt_root}"'
 require_text "${PUBLISHER_WORKFLOW}" '--expected-default-tip "${BASE_SHA}"'
 require_text "${PUBLISHER_WORKFLOW}" '--expected-candidate-head "${HEAD_SHA}"'
+if sed -n '/^on:/,/^permissions:/p' "${PUBLISHER_WORKFLOW}" |
+  rg -n '^[[:space:]]+(inputs|secrets):' >/dev/null; then
+  printf 'publisher reusable workflow unexpectedly accepts caller data\n' >&2
+  exit 1
+fi
+if sed -n '/^  verify-merge-group:/,$p' "${PROTECTED_WORKFLOW}" |
+  rg -n '^[[:space:]]+(with|secrets):' >/dev/null; then
+  printf 'publisher caller unexpectedly forwards caller-controlled data\n' >&2
+  exit 1
+fi
 
 for path in \
   docs/parity-evidence/trust-policy-v2.tsv \
