@@ -141,7 +141,9 @@ sidecar. Startup traverses every parent component with
 `openat(O_DIRECTORY|O_NOFOLLOW)`, retains the owner-only directory descriptor,
 opens or creates one 0600 single-link ledger with `openat(O_NOFOLLOW)`, and
 holds an exclusive nonblocking advisory lock. The ledger descriptor remains
-open for the process lifetime.
+open for the process lifetime. Shutdown explicitly applies `LOCK_UN` before
+close so a transient fork-inherited open-file description cannot extend the
+lock until its close-on-exec boundary.
 
 The file header binds the format and configuration-derived service identity.
 Each append-only frame contains:

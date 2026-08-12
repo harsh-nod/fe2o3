@@ -594,6 +594,16 @@ impl DurableStore {
     }
 }
 
+impl Drop for DurableStore {
+    fn drop(&mut self) {
+        // Unlock the shared open-file description before close, including any
+        // transient fork inheritance that has not reached close-on-exec yet.
+        unsafe {
+            libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
+}
+
 fn ledger_header(policy: &StorePolicy) -> Vec<u8> {
     let mut header = Vec::with_capacity(LEDGER_MAGIC.len() + policy.ledger_domain.len() + 1);
     header.extend_from_slice(LEDGER_MAGIC);
@@ -1296,6 +1306,21 @@ mod tests {
         assert!(DurableStore::open(&path).is_err());
         drop(store);
         assert!(DurableStore::open(&path).is_ok());
+    }
+
+    #[test]
+    fn drop_unlocks_a_transiently_duplicated_open_file_description() {
+        let temp = secure_tempdir();
+        let path = temp.path().join("publisher.ledger");
+        let store = DurableStore::open(&path).unwrap();
+        let inherited = unsafe { libc::fcntl(store.file.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 3) };
+        assert!(inherited >= 0);
+        drop(store);
+        let reopened = DurableStore::open(&path).unwrap();
+        unsafe {
+            libc::close(inherited);
+        }
+        drop(reopened);
     }
 
     #[test]
