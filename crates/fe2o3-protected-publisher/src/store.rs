@@ -158,17 +158,10 @@ impl DurableStore {
     ) -> Result<Self, PublisherError> {
         policy.validate()?;
         let location = SecureLocation::open(path)?;
-        let (mut file, identity, _created) = location.open_or_create_ledger()?;
+        let header = ledger_header(&policy);
+        let (file, identity) = location.open_or_create_ledger(&header)?;
         if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
             return Err(PublisherError::Store);
-        }
-        let header = ledger_header(&policy);
-        if identity.size == 0 {
-            // Creation and flock are separate syscalls. Whichever contender
-            // owns the lock initializes an otherwise valid empty ledger.
-            file.write_all(&header).map_err(|_| PublisherError::Store)?;
-            file.sync_data().map_err(|_| PublisherError::Store)?;
-            location.sync()?;
         }
 
         let mut store = Self {
@@ -947,6 +940,19 @@ mod tests {
         drop(store);
         let mut reopened = DurableStore::open(&path).unwrap();
         assert_eq!(issue_with(&mut reopened, KEY_A, &fixture).unwrap(), first);
+    }
+
+    #[test]
+    fn preexisting_empty_and_partial_headers_fail_closed_unchanged() {
+        let temp = secure_tempdir();
+        let header = ledger_header(&StorePolicy::test_default());
+        for prefix in 0..header.len() {
+            let path = temp.path().join(format!("legacy-prefix-{prefix}.ledger"));
+            std::fs::write(&path, &header[..prefix]).unwrap();
+            std::fs::set_permissions(&path, Permissions::from_mode(0o600)).unwrap();
+            assert!(DurableStore::open(&path).is_err(), "prefix {prefix}");
+            assert_eq!(std::fs::read(&path).unwrap(), &header[..prefix]);
+        }
     }
 
     #[test]

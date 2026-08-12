@@ -161,13 +161,28 @@ normal cache expiry. Negative entries store at most 256 KID bytes each.
 The issuance store is not SQLite and has no pathname reopen, journal, WAL, or
 sidecar. Startup traverses every parent component with
 `openat(O_DIRECTORY|O_NOFOLLOW)`, retains the owner-only directory descriptor,
-opens or creates one 0600 single-link ledger with `openat(O_NOFOLLOW)`, and
-holds an exclusive nonblocking advisory lock. The ledger descriptor remains
-open for the process lifetime. Shutdown explicitly applies `LOCK_UN` before
-close so a transient fork-inherited open-file description cannot extend the
-lock until its close-on-exec boundary. File creation and locking are separate
-syscalls; if contenders observe a valid empty ledger, only the exclusive lock
-holder initializes and syncs its header.
+and opens an existing 0600 single-link ledger with `openat(O_NOFOLLOW)` plus
+full pre/open/post metadata equality. If the name is absent, startup creates an
+anonymous `O_TMPFILE` inode in that retained directory, writes the complete
+bounded header with short-write and `EINTR` handling, verifies its size and
+identity, calls `fdatasync`, and atomically publishes it no-replace with
+`linkat`. It then `fsync`s the parent, reopens and revalidates the final name,
+and only then acquires the exclusive nonblocking advisory lock and replays.
+
+Direct `linkat(AT_EMPTY_PATH)` is attempted first. On the Linux errors that
+indicate an unprivileged or unsupported direct form, publication uses the Linux
+`O_TMPFILE` recipe with `/proc/self/fd/<retained-fd>` as the `linkat` source and
+`AT_SYMLINK_FOLLOW`, targeting the retained destination dirfd. The source still
+names the already-open anonymous inode; the final destination is never resolved
+through `/proc`. Missing or incompatible procfs behavior fails startup closed.
+No named temporary ledger exists to leak before publication. Concurrent
+initializers either publish the one complete inode or observe `EEXIST`, sync the
+parent, and open that same complete final object. A preexisting empty file or
+any exact partial header is rejected unchanged; it is never repaired in place.
+
+The ledger descriptor remains open for the process lifetime. Shutdown
+explicitly applies `LOCK_UN` before close so a transient fork-inherited
+open-file description cannot extend the lock until its close-on-exec boundary.
 
 The file header binds the format and configuration-derived service identity.
 Each append-only frame contains:
@@ -246,6 +261,7 @@ equivalent reviewed facility. None is implemented or claimed here.
 | forced JWKS refresh backoff | 1-30 seconds |
 | ledger records | configured, 1-1,000,000 |
 | ledger bytes | configured, 1 MiB-64 GiB |
+| initial ledger header | 4,096 bytes |
 | ledger decoded request / request base64 | 65,536 / 87,384 bytes |
 | ledger decoded response / response base64 | 524,288 / 699,052 bytes |
 | decoded receipt / receipt base64 | 262,144 / 349,528 bytes |
@@ -270,8 +286,12 @@ most 65,536 bytes. This placeholder example is intentionally unusable:
 Configuration, enrollment, key, and ledger paths must be absolute. Authority
 files are checked before open, on the opened descriptor, after open/read, and
 against retained directories. The implementation requires Linux `openat`,
-`fstatat`, `renameat2`, `flock`, and local crash-consistent `fdatasync`/directory
-sync semantics. Deployments without those semantics must fail closed.
+`fstatat`, `O_TMPFILE`, `linkat` with `AT_EMPTY_PATH` or the exact
+`/proc/self/fd` fallback above, `renameat2`, `flock`, and local crash-consistent
+`fdatasync`/directory `fsync` semantics. It assumes procfs faithfully exposes
+the calling process's retained descriptor links and the local filesystem gives
+the documented atomic no-replace link and sync ordering. Deployments without
+those semantics fail closed and are unsupported.
 
 ## Validation
 
@@ -288,7 +308,9 @@ closure, short-write and ENOSPC injection, blocking-FD rejection, immutable
 status-flag observation, nonblocking FIFO/socket enrollment races, and
 socket-family rejection, JWKS concurrency/waves/rotation/deadlines,
 client-service conformance, the synthetic AF_UNIX nondumpable/core-limit secret
-process probe, strict Clippy, formatting, and diff checks.
+process probe, every partial initial-header write, six initialization crash
+boundaries, 24-process concurrent first publication, strict Clippy, formatting,
+and diff checks.
 `cargo audit`, repository fsck, repeated stress, and a clean exact-commit
 MI300X replay are separate validation steps.
 

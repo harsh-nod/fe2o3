@@ -18,7 +18,10 @@ open-file status flags. Unknown JWKS keys share singleflight refresh, a bounded
 negative cache, and issuer-wide refresh backoff. Configuration, enrollment,
 key, and ledger authority is descriptor-checked through retained owner-only
 directories. Every candidate ledger frame passes the same canonical decoder
-and semantic validator used during restart before it can be appended.
+and semantic validator used during restart before it can be appended. A new
+ledger header is fully written and synced in an anonymous same-directory inode,
+published atomically no-replace, parent-synced, reopened, locked, and replayed;
+no empty or partial final ledger is initialized in place.
 
 This crate is inert by default. It is not deployed, production-ready, or an
 acceptance/parity claim. See `docs/protected-publisher-service-v1.md` for the
