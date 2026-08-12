@@ -40,7 +40,10 @@ pub(crate) fn config(database_path: PathBuf) -> ServiceConfig {
         caller_workflow_path: ".github/workflows/parity-promotion.yml".into(),
         protected_workflow_path: ".github/workflows/parity-publisher-gate.yml".into(),
         allowed_actor_ids: vec!["101".into()],
+        request_deadline_milliseconds: 2000,
+        max_inflight_requests: 16,
         network_deadline_milliseconds: 1000,
+        jwks_cache_seconds: 300,
     }
 }
 

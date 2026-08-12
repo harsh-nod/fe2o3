@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use reqwest::header::{CONTENT_LENGTH, CONTENT_TYPE};
+use tokio::sync::{Mutex, RwLock, Semaphore};
 use tokio::time::Instant;
 
 use crate::PublisherError;
@@ -19,16 +20,26 @@ pub trait JwksProvider: Send + Sync {
 pub struct HttpsJwksProvider {
     client: reqwest::Client,
     url: reqwest::Url,
+    cache_ttl: Duration,
+    cache: RwLock<Option<CachedJwks>>,
+    refresh: Mutex<()>,
+    outbound: Semaphore,
+}
+
+struct CachedJwks {
+    bytes: Vec<u8>,
+    fresh_until: Instant,
 }
 
 impl HttpsJwksProvider {
-    pub fn new(url: &str, timeout: Duration) -> Result<Self, PublisherError> {
-        Self::build(url, timeout, None)
+    pub fn new(url: &str, timeout: Duration, cache_ttl: Duration) -> Result<Self, PublisherError> {
+        Self::build(url, timeout, cache_ttl, None)
     }
 
     fn build(
         url: &str,
         timeout: Duration,
+        cache_ttl: Duration,
         extra_root: Option<reqwest::Certificate>,
     ) -> Result<Self, PublisherError> {
         let url = reqwest::Url::parse(url).map_err(|_| PublisherError::Config)?;
@@ -43,6 +54,7 @@ impl HttpsJwksProvider {
         let mut builder = reqwest::Client::builder()
             .https_only(true)
             .redirect(reqwest::redirect::Policy::none())
+            .no_proxy()
             .connect_timeout(timeout)
             .timeout(timeout)
             .user_agent("fe2o3-protected-publisher/1");
@@ -50,17 +62,62 @@ impl HttpsJwksProvider {
             builder = builder.add_root_certificate(root);
         }
         let client = builder.build().map_err(|_| PublisherError::Config)?;
-        Ok(Self { client, url })
+        if cache_ttl.is_zero() || cache_ttl > Duration::from_secs(3_600) {
+            return Err(PublisherError::Config);
+        }
+        Ok(Self {
+            client,
+            url,
+            cache_ttl,
+            cache: RwLock::new(None),
+            refresh: Mutex::new(()),
+            outbound: Semaphore::new(1),
+        })
     }
 
     #[cfg(test)]
     fn with_test_root(
         url: &str,
         timeout: Duration,
+        cache_ttl: Duration,
         root_pem: &[u8],
     ) -> Result<Self, PublisherError> {
         let root = reqwest::Certificate::from_pem(root_pem).map_err(|_| PublisherError::Config)?;
-        Self::build(url, timeout, Some(root))
+        Self::build(url, timeout, cache_ttl, Some(root))
+    }
+
+    async fn fresh_cache(&self, now: Instant) -> Option<Vec<u8>> {
+        self.cache
+            .read()
+            .await
+            .as_ref()
+            .filter(|entry| now < entry.fresh_until)
+            .map(|entry| entry.bytes.clone())
+    }
+
+    async fn fetch_cached(&self, deadline: Instant) -> Result<Vec<u8>, PublisherError> {
+        if let Some(bytes) = self.fresh_cache(Instant::now()).await {
+            return Ok(bytes);
+        }
+        let _refresh = tokio::time::timeout_at(deadline, self.refresh.lock())
+            .await
+            .map_err(|_| PublisherError::Jwks)?;
+        if let Some(bytes) = self.fresh_cache(Instant::now()).await {
+            return Ok(bytes);
+        }
+        let _outbound = self
+            .outbound
+            .try_acquire()
+            .map_err(|_| PublisherError::Jwks)?;
+        let bytes = self.fetch_inner(deadline).await?;
+        let fresh_until = Instant::now()
+            .checked_add(self.cache_ttl)
+            .ok_or(PublisherError::Jwks)?;
+        *self.cache.write().await = Some(CachedJwks {
+            bytes: bytes.clone(),
+            fresh_until,
+        });
+        Ok(bytes)
     }
 
     async fn fetch_inner(&self, deadline: Instant) -> Result<Vec<u8>, PublisherError> {
@@ -121,7 +178,7 @@ impl JwksProvider for HttpsJwksProvider {
         &'a self,
         deadline: Instant,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, PublisherError>> + Send + 'a>> {
-        Box::pin(self.fetch_inner(deadline))
+        Box::pin(self.fetch_cached(deadline))
     }
 }
 
@@ -175,7 +232,7 @@ mod tests {
 
     struct MockIssuer {
         child: Child,
-        _directory: tempfile::TempDir,
+        directory: tempfile::TempDir,
         url: String,
     }
 
@@ -183,6 +240,7 @@ mod tests {
         fn start(mode: &str) -> Self {
             let directory = secure_tempdir();
             let port_file = directory.path().join("port");
+            let count_file = directory.path().join("count");
             let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
             let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
             let mut child = Command::new("python3")
@@ -196,6 +254,7 @@ mod tests {
                     fixture.join("mock-issuer-key.pem").to_str().unwrap(),
                 ])
                 .args(["--port-file", port_file.to_str().unwrap()])
+                .args(["--count-file", count_file.to_str().unwrap()])
                 .args(["--mode", mode])
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
@@ -205,9 +264,17 @@ mod tests {
             let port = wait_for_port(&port_file, &mut child);
             Self {
                 child,
-                _directory: directory,
+                directory,
                 url: format!("https://localhost:{port}/jwks"),
             }
+        }
+
+        fn request_count(&self) -> usize {
+            std::fs::read_to_string(self.directory.path().join("count"))
+                .unwrap_or_else(|_| "0".into())
+                .trim()
+                .parse()
+                .unwrap()
         }
     }
 
@@ -220,8 +287,10 @@ mod tests {
 
     fn wait_for_port(path: &PathBuf, child: &mut Child) -> u16 {
         for _ in 0..200 {
-            if let Ok(value) = std::fs::read_to_string(path) {
-                return value.trim().parse().unwrap();
+            if let Ok(value) = std::fs::read_to_string(path)
+                && let Ok(port) = value.trim().parse()
+            {
+                return port;
             }
             assert!(
                 child.try_wait().unwrap().is_none(),
@@ -235,8 +304,13 @@ mod tests {
     #[tokio::test]
     async fn validated_https_fetches_bounded_jwks() {
         let issuer = MockIssuer::start("jwks");
-        let provider =
-            HttpsJwksProvider::with_test_root(&issuer.url, Duration::from_secs(1), CERT).unwrap();
+        let provider = HttpsJwksProvider::with_test_root(
+            &issuer.url,
+            Duration::from_secs(1),
+            Duration::from_secs(60),
+            CERT,
+        )
+        .unwrap();
         let body = provider
             .fetch(Instant::now() + Duration::from_secs(1))
             .await
@@ -247,7 +321,12 @@ mod tests {
     #[tokio::test]
     async fn untrusted_cert_redirect_and_oversize_fail_closed() {
         let untrusted = MockIssuer::start("jwks");
-        let provider = HttpsJwksProvider::new(&untrusted.url, Duration::from_secs(1)).unwrap();
+        let provider = HttpsJwksProvider::new(
+            &untrusted.url,
+            Duration::from_secs(1),
+            Duration::from_secs(60),
+        )
+        .unwrap();
         assert!(
             provider
                 .fetch(Instant::now() + Duration::from_secs(1))
@@ -257,9 +336,13 @@ mod tests {
 
         for mode in ["redirect", "oversize"] {
             let issuer = MockIssuer::start(mode);
-            let provider =
-                HttpsJwksProvider::with_test_root(&issuer.url, Duration::from_secs(1), CERT)
-                    .unwrap();
+            let provider = HttpsJwksProvider::with_test_root(
+                &issuer.url,
+                Duration::from_secs(1),
+                Duration::from_secs(60),
+                CERT,
+            )
+            .unwrap();
             assert!(
                 provider
                     .fetch(Instant::now() + Duration::from_secs(1))
@@ -272,9 +355,13 @@ mod tests {
     #[tokio::test]
     async fn slow_response_obeys_one_absolute_deadline() {
         let issuer = MockIssuer::start("slow");
-        let provider =
-            HttpsJwksProvider::with_test_root(&issuer.url, Duration::from_millis(75), CERT)
-                .unwrap();
+        let provider = HttpsJwksProvider::with_test_root(
+            &issuer.url,
+            Duration::from_millis(75),
+            Duration::from_secs(60),
+            CERT,
+        )
+        .unwrap();
         let start = Instant::now();
         assert!(
             provider
@@ -283,5 +370,79 @@ mod tests {
                 .is_err()
         );
         assert!(start.elapsed() < Duration::from_millis(500));
+    }
+
+    #[tokio::test]
+    async fn concurrent_cache_misses_singleflight_and_refresh_after_expiry() {
+        let issuer = MockIssuer::start("jwks");
+        let provider = Arc::new(
+            HttpsJwksProvider::with_test_root(
+                &issuer.url,
+                Duration::from_secs(1),
+                Duration::from_millis(25),
+                CERT,
+            )
+            .unwrap(),
+        );
+        let calls = (0..64)
+            .map(|_| {
+                let provider = provider.clone();
+                tokio::spawn(async move {
+                    provider
+                        .fetch(Instant::now() + Duration::from_secs(1))
+                        .await
+                        .unwrap()
+                })
+            })
+            .collect::<Vec<_>>();
+        for call in calls {
+            assert_eq!(call.await.unwrap(), b"{\"keys\":[]}\n");
+        }
+        assert_eq!(issuer.request_count(), 1);
+        tokio::time::sleep(Duration::from_millis(35)).await;
+        provider
+            .fetch(Instant::now() + Duration::from_secs(1))
+            .await
+            .unwrap();
+        assert_eq!(issuer.request_count(), 2);
+    }
+
+    #[test]
+    fn system_proxy_environment_is_ignored() {
+        let issuer = MockIssuer::start("jwks");
+        let status = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "jwks::tests::proxy_environment_child",
+                "--nocapture",
+            ])
+            .env("FE2O3_TEST_PROXY_JWKS_URL", &issuer.url)
+            .env("HTTPS_PROXY", "http://127.0.0.1:9")
+            .env("ALL_PROXY", "http://127.0.0.1:9")
+            .env("NO_PROXY", "")
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+
+    #[tokio::test]
+    async fn proxy_environment_child() {
+        let Ok(url) = std::env::var("FE2O3_TEST_PROXY_JWKS_URL") else {
+            return;
+        };
+        let provider = HttpsJwksProvider::with_test_root(
+            &url,
+            Duration::from_secs(1),
+            Duration::from_secs(60),
+            CERT,
+        )
+        .unwrap();
+        assert_eq!(
+            provider
+                .fetch(Instant::now() + Duration::from_secs(1))
+                .await
+                .unwrap(),
+            b"{\"keys\":[]}\n"
+        );
     }
 }

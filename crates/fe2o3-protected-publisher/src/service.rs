@@ -8,7 +8,8 @@ use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
 use axum::http::{HeaderMap, Method, Request, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Semaphore};
+use tokio::time::Instant;
 
 use crate::bounds::{
     MAX_HTTP_HEADER_BYTES, MAX_HTTP_HEADERS, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES,
@@ -30,6 +31,7 @@ pub struct Publisher {
     jwks: Arc<dyn JwksProvider>,
     store: Mutex<DurableStore>,
     signer: Arc<dyn ReceiptSigner>,
+    request_slots: Arc<Semaphore>,
 }
 
 impl Publisher {
@@ -39,17 +41,20 @@ impl Publisher {
         let jwks = Arc::new(HttpsJwksProvider::new(
             &config.jwks_url,
             config.network_deadline(),
+            config.jwks_cache_ttl(),
         )?);
         let signer = Arc::new(FileReceiptSigner::load(
             service_identity,
             &config.signing_key_path,
         )?);
         let store = DurableStore::open(&config.database_path)?;
+        let max_inflight_requests = config.max_inflight_requests as usize;
         Ok(Arc::new(Self {
             config: Arc::new(config),
             jwks,
             store: Mutex::new(store),
             signer,
+            request_slots: Arc::new(Semaphore::new(max_inflight_requests)),
         }))
     }
 
@@ -60,11 +65,13 @@ impl Publisher {
         store: DurableStore,
         signer: Arc<dyn ReceiptSigner>,
     ) -> Arc<Self> {
+        let max_inflight_requests = config.max_inflight_requests as usize;
         Arc::new(Self {
             config: Arc::new(config),
             jwks,
             store: Mutex::new(store),
             signer,
+            request_slots: Arc::new(Semaphore::new(max_inflight_requests)),
         })
     }
 
@@ -112,7 +119,11 @@ pub fn router(publisher: Arc<Publisher>) -> Router {
 }
 
 async fn receipts(State(publisher): State<Arc<Publisher>>, request: Request<Body>) -> Response {
-    match bounded_http_request(request).await {
+    let Ok(_slot) = publisher.request_slots.clone().try_acquire_owned() else {
+        return error_response(&PublisherError::Store);
+    };
+    let deadline = Instant::now() + publisher.config.request_deadline();
+    match bounded_http_request(request, deadline).await {
         Ok((body, bearer)) => match publisher.issue(&body, &bearer).await {
             Ok(response) => (
                 StatusCode::OK,
@@ -126,7 +137,10 @@ async fn receipts(State(publisher): State<Arc<Publisher>>, request: Request<Body
     }
 }
 
-async fn bounded_http_request(request: Request<Body>) -> Result<(Vec<u8>, String), PublisherError> {
+async fn bounded_http_request(
+    request: Request<Body>,
+    deadline: Instant,
+) -> Result<(Vec<u8>, String), PublisherError> {
     if request.method() != Method::POST
         || request.uri().path() != "/v1/receipts"
         || request.uri().query().is_some()
@@ -157,8 +171,9 @@ async fn bounded_http_request(request: Request<Body>) -> Result<(Vec<u8>, String
         .filter(|value| !value.is_empty() && !value.contains(char::is_whitespace))
         .ok_or(PublisherError::Authentication)?
         .to_owned();
-    let body = to_bytes(request.into_body(), MAX_REQUEST_BYTES)
+    let body = tokio::time::timeout_at(deadline, to_bytes(request.into_body(), MAX_REQUEST_BYTES))
         .await
+        .map_err(|_| PublisherError::Request)?
         .map_err(|_| PublisherError::Request)?;
     Ok((body.to_vec(), bearer))
 }
@@ -358,6 +373,51 @@ key\t0000\tpublisher\ttest-publisher-v1\tkeys/test-publisher-v1.pem\t{digest}\te
             .unwrap();
         let response = router(publisher).oneshot(oversized).await.unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn inbound_admission_and_body_deadline_fail_closed() {
+        let temp = secure_tempdir();
+        let mut config = config(temp.path().join("publisher.db"));
+        config.max_inflight_requests = 1;
+        let store = DurableStore::open(&config.database_path).unwrap();
+        let publisher = Publisher::for_test(
+            config,
+            Arc::new(StaticJwksProvider::new(jwks("fixture-key"))),
+            store,
+            Arc::new(TestSigner::new("test-publisher-v1")),
+        );
+        let held = publisher.request_slots.clone().try_acquire_owned().unwrap();
+        let fixture = fixture();
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri("/v1/receipts")
+            .header(CONTENT_TYPE, "application/json")
+            .header(AUTHORIZATION, format!("Bearer {}", fixture.token))
+            .body(Body::from(fixture.request_body.clone()))
+            .unwrap();
+        let response = router(publisher.clone()).oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        drop(held);
+
+        let pending = futures_util::stream::pending::<
+            Result<axum::body::Bytes, std::io::Error>,
+        >();
+        let expired = Request::builder()
+            .method(Method::POST)
+            .uri("/v1/receipts")
+            .header(CONTENT_TYPE, "application/json")
+            .header(AUTHORIZATION, format!("Bearer {}", fixture.token))
+            .body(Body::from_stream(pending))
+            .unwrap();
+        assert!(matches!(
+            bounded_http_request(
+                expired,
+                Instant::now() - std::time::Duration::from_millis(1)
+            )
+            .await,
+            Err(PublisherError::Request)
+        ));
     }
 
     #[tokio::test]

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::PublisherError;
-use crate::bounds::{MAX_CONFIG_BYTES, MAX_JSON_STRING_BYTES};
+use crate::bounds::{MAX_CONFIG_BYTES, MAX_INFLIGHT_REQUESTS, MAX_JSON_STRING_BYTES};
 use crate::canonical::{canonical_bytes, parse_canonical};
 
 pub const GITHUB_ISSUER: &str = "https://token.actions.githubusercontent.com";
@@ -34,7 +34,10 @@ pub struct ServiceConfig {
     pub caller_workflow_path: String,
     pub protected_workflow_path: String,
     pub allowed_actor_ids: Vec<String>,
+    pub request_deadline_milliseconds: u64,
+    pub max_inflight_requests: u32,
     pub network_deadline_milliseconds: u64,
+    pub jwks_cache_seconds: u64,
 }
 
 impl ServiceConfig {
@@ -92,6 +95,13 @@ impl ServiceConfig {
             || self.allowed_actor_ids.len() > 64
             || self.network_deadline_milliseconds == 0
             || self.network_deadline_milliseconds > 10_000
+            || self.request_deadline_milliseconds == 0
+            || self.request_deadline_milliseconds > 30_000
+            || self.network_deadline_milliseconds > self.request_deadline_milliseconds
+            || self.max_inflight_requests == 0
+            || self.max_inflight_requests > MAX_INFLIGHT_REQUESTS
+            || self.jwks_cache_seconds == 0
+            || self.jwks_cache_seconds > 3_600
             || !valid_id(&self.signing_key_id)
             || !self.repository.contains('/')
             || !self.repository_id.bytes().all(|byte| byte.is_ascii_digit())
@@ -122,6 +132,14 @@ impl ServiceConfig {
 
     pub fn network_deadline(&self) -> Duration {
         Duration::from_millis(self.network_deadline_milliseconds)
+    }
+
+    pub fn request_deadline(&self) -> Duration {
+        Duration::from_millis(self.request_deadline_milliseconds)
+    }
+
+    pub fn jwks_cache_ttl(&self) -> Duration {
+        Duration::from_secs(self.jwks_cache_seconds)
     }
 
     pub fn queue_prefix(&self) -> String {

@@ -8,6 +8,7 @@ import http.server
 from pathlib import Path
 import signal
 import ssl
+import threading
 import time
 
 
@@ -16,10 +17,19 @@ JWKS = b'{"keys":[]}\n'
 
 class Server(http.server.ThreadingHTTPServer):
     mode: str
+    count_file: Path | None
+    request_count: int
+    count_lock: threading.Lock
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self) -> None:
+        with self.server.count_lock:
+            self.server.request_count += 1
+            if self.server.count_file is not None:
+                self.server.count_file.write_text(
+                    f"{self.server.request_count}\n", encoding="ascii"
+                )
         mode = self.server.mode
         if mode == "redirect":
             self.send_response(302)
@@ -50,6 +60,7 @@ def main() -> None:
     parser.add_argument("--cert", type=Path, required=True)
     parser.add_argument("--key", type=Path, required=True)
     parser.add_argument("--port-file", type=Path, required=True)
+    parser.add_argument("--count-file", type=Path)
     parser.add_argument(
         "--mode", choices=("jwks", "redirect", "slow", "oversize"), required=True
     )
@@ -57,6 +68,9 @@ def main() -> None:
 
     server = Server(("127.0.0.1", 0), Handler)
     server.mode = args.mode
+    server.count_file = args.count_file
+    server.request_count = 0
+    server.count_lock = threading.Lock()
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.load_cert_chain(args.cert, args.key)
