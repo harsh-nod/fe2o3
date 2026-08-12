@@ -3476,6 +3476,18 @@ static UNIT_VALUE: () = ();
         }
     }
 
+    #[derive(Default)]
+    struct TargetProfileCallbacks {
+        observed: Option<Result<SemanticLayoutTargetV1, SemanticLayoutBridgeError>>,
+    }
+
+    impl Callbacks for TargetProfileCallbacks {
+        fn after_analysis<'tcx>(&mut self, _compiler: &Compiler, tcx: TyCtxt<'tcx>) -> Compilation {
+            self.observed = Some(rustc_semantic_layout_target_v1(tcx));
+            Compilation::Stop
+        }
+    }
+
     fn local_static_type<'tcx>(tcx: TyCtxt<'tcx>, name: &str) -> Ty<'tcx> {
         let definition = tcx
             .iter_local_def_id()
@@ -3509,6 +3521,44 @@ static UNIT_VALUE: () = ();
         }
     }
 
+    struct AmdgcnProbeFiles {
+        source: PathBuf,
+        output: PathBuf,
+    }
+
+    impl AmdgcnProbeFiles {
+        fn create(case: &str) -> Self {
+            let stem = format!(
+                "fe2o3-semantic-type-v2-amdgcn-profile-{}-{case}",
+                std::process::id()
+            );
+            let source = std::env::temp_dir().join(format!("{stem}.rs"));
+            let output = std::env::temp_dir().join(format!("{stem}.rmeta"));
+            fs::write(
+                &source,
+                r#"
+#![feature(no_core, lang_items)]
+#![no_core]
+
+#[lang = "pointee_sized"] trait PointeeSized {}
+#[lang = "meta_sized"] trait MetaSized: PointeeSized {}
+#[lang = "sized"] trait Sized: MetaSized {}
+
+pub extern "C" fn k() {}
+"#,
+            )
+            .expect("write amdgcn target-profile probe");
+            Self { source, output }
+        }
+    }
+
+    impl Drop for AmdgcnProbeFiles {
+        fn drop(&mut self) {
+            let _ = fs::remove_file(&self.source);
+            let _ = fs::remove_file(&self.output);
+        }
+    }
+
     fn captures() -> CaptureCallbacks {
         let fixture = FixtureFiles::create();
         let sysroot = Command::new("rustc")
@@ -3536,6 +3586,48 @@ static UNIT_VALUE: () = ();
         let mut callbacks = CaptureCallbacks::default();
         rustc_driver::run_compiler(&args, &mut callbacks);
         callbacks
+    }
+
+    fn amdgcn_target_profile(case: &str, codegen_args: &[&str]) -> SemanticLayoutTargetV1 {
+        let fixture = AmdgcnProbeFiles::create(case);
+        let sysroot = Command::new("rustc")
+            .args(["--print", "sysroot"])
+            .output()
+            .expect("query pinned rustc sysroot");
+        assert!(sysroot.status.success());
+        let sysroot = String::from_utf8(sysroot.stdout).unwrap();
+        let mut args = vec![
+            "rustc".to_owned(),
+            "--crate-name".to_owned(),
+            format!("fe2o3_semantic_type_v2_amdgcn_profile_{case}"),
+            "--crate-type".to_owned(),
+            "lib".to_owned(),
+            "--edition".to_owned(),
+            "2024".to_owned(),
+            "--emit".to_owned(),
+            "metadata".to_owned(),
+            "--target".to_owned(),
+            GFX942_TARGET_TRIPLE.to_owned(),
+            "--sysroot".to_owned(),
+            sysroot.trim().to_owned(),
+            "-o".to_owned(),
+            fixture.output.display().to_string(),
+        ];
+        args.extend(codegen_args.iter().map(|argument| (*argument).to_owned()));
+        args.push(fixture.source.display().to_string());
+        let mut callbacks = TargetProfileCallbacks::default();
+        rustc_driver::run_compiler(&args, &mut callbacks);
+        callbacks
+            .observed
+            .expect("rustc target-profile callback did not run")
+            .expect("active amdgcn target profile should parse")
+    }
+
+    fn target_is_exact_canonical_gfx942(target: &SemanticLayoutTargetV1) -> bool {
+        target.llvm_target() == GFX942_TARGET_TRIPLE
+            && target.data_layout() == GFX942_TARGET_DATA_LAYOUT
+            && target.default_pointer_width_bits() == GFX942_POINTER_WIDTH_BITS
+            && target.has_exact_codegen_profile(GFX942_TARGET_CPU, GFX942_LAYOUT_ACTIVE_FEATURES_V2)
     }
 
     fn retarget_observation(
@@ -3809,6 +3901,76 @@ static UNIT_VALUE: () = ();
             validate_observation_integrity(&mutated, SemanticTypeLayoutBudgetsV2::default()),
             Err(Gfx942LayoutCompatibilityErrorV2::ObservationIdentityMismatch)
         ));
+    }
+
+    #[test]
+    fn real_rustc_amdgcn_session_preserves_noncanonical_profile_case() {
+        let canonical = amdgcn_target_profile(
+            "canonical",
+            &[
+                "-Ctarget-cpu=gfx942",
+                "-Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32",
+            ],
+        );
+        assert_eq!(canonical.active_cpu(), Some("gfx942"));
+        assert_eq!(
+            canonical.active_features(),
+            Some("-wavefrontsize32,+wavefrontsize64,-xnack")
+        );
+        assert!(
+            canonical
+                .has_exact_codegen_profile(GFX942_TARGET_CPU, GFX942_LAYOUT_ACTIVE_FEATURES_V2)
+        );
+
+        let uppercase_cpu = amdgcn_target_profile(
+            "uppercase_cpu",
+            &[
+                "-Ctarget-cpu=GFX942",
+                "-Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32",
+            ],
+        );
+        assert_eq!(uppercase_cpu.active_cpu(), Some("GFX942"));
+        assert!(
+            !uppercase_cpu
+                .has_exact_codegen_profile(GFX942_TARGET_CPU, GFX942_LAYOUT_ACTIVE_FEATURES_V2)
+        );
+        assert!(!target_is_exact_canonical_gfx942(&uppercase_cpu));
+
+        let uppercase_feature = amdgcn_target_profile(
+            "uppercase_feature",
+            &[
+                "-Ctarget-cpu=gfx942",
+                "-Ctarget-feature=-xnack,+Wavefrontsize64,-wavefrontsize32",
+            ],
+        );
+        assert_eq!(uppercase_feature.active_cpu(), Some("gfx942"));
+        assert_eq!(
+            uppercase_feature.active_features(),
+            Some("+Wavefrontsize64,-wavefrontsize32,-xnack")
+        );
+        assert!(
+            !uppercase_feature
+                .has_exact_codegen_profile(GFX942_TARGET_CPU, GFX942_LAYOUT_ACTIVE_FEATURES_V2)
+        );
+        assert!(!target_is_exact_canonical_gfx942(&uppercase_feature));
+
+        let mixed_case_partial = amdgcn_target_profile(
+            "mixed_case_partial",
+            &[
+                "-Ctarget-cpu=gfx942",
+                "-Ctarget-feature=-Xnack,+wavefrontsize64,-wavefrontsize32",
+            ],
+        );
+        assert_eq!(mixed_case_partial.active_cpu(), Some("gfx942"));
+        assert_eq!(
+            mixed_case_partial.active_features(),
+            Some("-Xnack,-wavefrontsize32,+wavefrontsize64")
+        );
+        assert!(
+            !mixed_case_partial
+                .has_exact_codegen_profile(GFX942_TARGET_CPU, GFX942_LAYOUT_ACTIVE_FEATURES_V2)
+        );
+        assert!(!target_is_exact_canonical_gfx942(&mixed_case_partial));
     }
 
     #[test]
