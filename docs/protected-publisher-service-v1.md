@@ -7,8 +7,10 @@ evidence by itself, and does not change any parity row.
 
 ## Scope
 
-The binary starts only with both `--serve` and `--config PATH`. Its listener
-must be a loopback address. A production design therefore needs a separately
+The binary serves only with both `--serve` and `--config PATH`. Before serving,
+an operator must run `--enroll --config PATH --token-file PATH --artifact PATH`
+with a real GitHub merge-group OIDC token. Its listener must remain a loopback
+address. A production design therefore needs a separately
 reviewed TLS frontend on the same host or private network namespace. The
 frontend must preserve the request body and `Authorization` header byte for
 byte, reject redirects, and never log either value.
@@ -24,6 +26,14 @@ returns the canonical response expected by that client.
 There is no static bearer secret and no test mode in the production binary.
 The RSA and Ed25519 material used by Rust tests is test-only and cannot pass a
 production configuration or trust policy.
+
+Enrollment verifies RS256 against the configured live GitHub JWKS endpoint,
+projects every required claim, and writes a new canonical owner-only artifact
+bound to the complete configuration digest. It stores only the token SHA-256,
+never the raw token. The artifact is valid for 30 days, cannot be overwritten
+in place, and is required before key or database access. A synthetic fixture
+can exercise only the crate-private test hook; it cannot satisfy the shipped
+enrollment command because that command uses the fixed GitHub issuer and JWKS.
 
 ## Authentication Profile
 
@@ -65,6 +75,10 @@ stale keys are never used after expiry. Connect, headers, and every response
 chunk share one absolute monotonic deadline. A redirect, non-200 response,
 wrong final URL, wrong content type, invalid length, oversized body, timeout,
 TLS failure, malformed JWKS, or outage fails closed.
+If a verified header names an unknown `kid`, authentication forces at most one
+singleflight refresh for the observed cache generation, under the same
+deadline and outbound semaphore, and retries only against that refreshed
+document. Concurrent rotation misses therefore share one fetch.
 
 ## Bounds
 
@@ -86,7 +100,10 @@ possible:
 | individual JSON string encoding | 4,096 bytes |
 | JWKS keys | 16 |
 | private key file | 16,384 bytes |
+| enrollment token/artifact | 65,536 bytes each |
 | admitted HTTP requests | configured, 1 through 256 |
+| durable SQLite workers | exactly 1 |
+| durable work queue | configured admitted-request count, 1 through 256 |
 | request absolute deadline | configured, 1 through 30,000 milliseconds |
 | JWKS fetch deadline | configured, at most request deadline and 10,000 milliseconds |
 | JWKS fresh-cache lifetime | configured, 1 through 3,600 seconds |
@@ -146,6 +163,20 @@ then returns the exact stored bytes. Reusing a `jti` with different request
 identity, digest, or body is a conflict. Database errors and uniqueness
 surprises fail closed.
 
+SQLite and filesystem operations are synchronous and are not presented as
+cancellable. One dedicated blocking worker owns the connection, with a bounded
+nonblocking queue. The request's absolute monotonic deadline is propagated to
+the worker and checked before `BEGIN`, after lock acquisition and bounded SQL
+stages, before signing/insert, and immediately before commit admission. Work
+that reaches the worker after expiry cannot begin a transaction. Once commit
+has been admitted, the worker runs it to an authoritative result even if the
+HTTP waiter reaches its deadline. A successful FULL-synchronous commit is not
+hidden by a later checkpoint or response timeout: an exact retry returns the
+stored bytes. Queue saturation, worker loss, and bounded shutdown timeout fail
+closed. Graceful shutdown stops admission, drains or rejects queued work, and
+waits no longer than the configured request deadline; a filesystem that stalls
+longer makes shutdown fail rather than claiming cancellation.
+
 Retention never deletes an identity. After the configured retention period,
 at most 64 expired rows per issuance have their request and response payloads
 replaced by permanent identity tombstones. A tombstoned replay fails closed;
@@ -155,12 +186,21 @@ issuance stops at the configured row ceiling or SQLite main-database page
 ceiling, while committed duplicates remain readable. The SQLite busy timeout
 is capped at one second.
 
-The database and key paths must be absolute; their directories must be real and
-owner-only. The configuration and key final path components are opened with
-`O_NOFOLLOW` and `O_CLOEXEC`, then owner, mode, regular-file type, link count,
-and size are validated from the open descriptor. The service sets umask 0077
-before opening runtime state and zeroizes the temporary PEM string after key
-parsing. Private bytes are never formatted or logged.
+The configuration, enrollment, database, and key paths must be absolute. Every
+directory component is traversed with `openat(O_DIRECTORY|O_NOFOLLOW)` and the
+retained parent directory must be owner-only. Configuration, enrollment, and
+key files require a single-link owner-only regular file; full
+device/inode/mode/uid/gid/link/size/mtime/ctime metadata must agree before
+open, on the opened descriptor, after open, and after bounded read. SQLite is
+opened through `/proc/self/fd/<retained-dir-fd>/<name>` without create flags,
+then its device/inode/mode/uid/gid/link identity is checked immediately and at
+issuance/commit boundaries while a retained descriptor and advisory lock stay
+open. This requires Linux procfs with ordinary `openat`, `renameat2`, `fstatat`,
+and SQLite local-filesystem semantics. SQLite legitimately changes size and
+timestamps, so those mutable fields cannot remain equal to startup metadata.
+Deployments without these kernel facilities fail closed. The service sets
+umask 0077 before opening runtime state and zeroizes the temporary PEM string
+after key parsing. Private bytes are never formatted or logged.
 
 ## Configuration Schema
 
@@ -168,7 +208,7 @@ The configuration is canonical JSON schema version 1, owner-controlled, and
 bounded to 65,536 bytes. Example placeholders are intentionally unusable:
 
 ```json
-{"allowed_actor_ids":["ACTOR_ID"],"audience":"https://publisher.example/github-actions","caller_workflow_path":".github/workflows/parity-promotion.yml","database_path":"/var/lib/fe2o3-publisher/publisher.db","default_branch":"main","environment":"protected-publisher","issuer":"https://token.actions.githubusercontent.com","jwks_cache_seconds":300,"jwks_url":"https://token.actions.githubusercontent.com/.well-known/jwks","listen":"127.0.0.1:9443","max_database_bytes":1073741824,"max_inflight_requests":32,"max_receipts":100000,"network_deadline_milliseconds":5000,"protected_workflow_path":".github/workflows/parity-publisher-gate.yml","receipt_retention_seconds":86400,"repository":"powderluv/fe2o3","repository_id":"1233498266","repository_owner_id":"74956","request_deadline_milliseconds":10000,"schema_version":1,"signature_domain":"production","signing_key_id":"operator-publisher-v1","signing_key_path":"/run/secrets/fe2o3-publisher/operator-publisher-v1.pem","sqlite_busy_timeout_milliseconds":500}
+{"allowed_actor_ids":["ACTOR_ID"],"audience":"https://publisher.example/github-actions","caller_workflow_path":".github/workflows/parity-promotion.yml","database_path":"/var/lib/fe2o3-publisher/publisher.db","default_branch":"main","enrollment_artifact_path":"/var/lib/fe2o3-publisher/github-enrollment.json","environment":"protected-publisher","issuer":"https://token.actions.githubusercontent.com","jwks_cache_seconds":300,"jwks_url":"https://token.actions.githubusercontent.com/.well-known/jwks","listen":"127.0.0.1:9443","max_database_bytes":1073741824,"max_inflight_requests":32,"max_receipts":100000,"network_deadline_milliseconds":5000,"protected_workflow_path":".github/workflows/parity-publisher-gate.yml","receipt_retention_seconds":86400,"repository":"powderluv/fe2o3","repository_id":"1233498266","repository_owner_id":"74956","request_deadline_milliseconds":10000,"schema_version":1,"signature_domain":"production","signing_key_id":"operator-publisher-v1","signing_key_path":"/run/secrets/fe2o3-publisher/operator-publisher-v1.pem","sqlite_busy_timeout_milliseconds":500}
 ```
 
 ## Dependency Rationale
@@ -222,8 +262,12 @@ No item is established merely because the reference tests pass.
    key until every old receipt has expired and every rollback window closes.
 5. Install canonical production configuration as an owner-only, single-link
    0600 regular file. Compute and enroll its digest-derived service identity
-   with the intended public key. Record a nonauthority enrollment run and
-   compare every observed required GitHub claim with this profile.
+   with the intended public key. From the exact protected merge-group job,
+   capture a short-lived token into an owner-only single-link file, run the
+   enrollment command once, securely remove the token file, and independently
+   compare every observed required claim and printed profile digest. Synthetic
+   fixtures never satisfy this step. Repeat after any configuration change or
+   before the 30-day artifact expires.
 6. Terminate TLS in a separately reviewed local frontend using a publicly or
    privately pinned trust chain. Expose only POST `/v1/receipts`; reject HTTP,
    redirects, alternate hosts, query strings, content encodings, and oversized
@@ -247,14 +291,17 @@ No item is established merely because the reference tests pass.
     network policy, key custody, database recovery, GitHub settings, and actual
     enrolled claims.
 
-The reference remains single-node and loopback-only. Its SQLite page ceiling
+The reference remains single-node, single-worker, Linux-specific, and
+loopback-only. Its SQLite page ceiling
 does not account for short-lived WAL and filesystem metadata overhead. It does
 not provide an inbound TLS frontend, raw HTTP request-smuggling defense at that
 frontend, distributed rate limiting, HSM-backed signing, supervision, backup,
 restore, corruption repair, monitoring, or tested physical power-loss
-recovery. Tests use a synthetic issuer profile rather than an enrolled live
-GitHub token. These are deployment blockers, not properties established by
-this crate.
+recovery. Tests use a synthetic issuer profile through a crate-private hook;
+no real GitHub merge-group enrollment token was available during this work.
+The production enrollment path exists but remains unvalidated against such a
+token. These are deployment blockers, not properties established by this
+crate.
 
 Only after those external controls and separately reviewed hardware/proof
 evidence exist may a protected promotion be evaluated. This reference layer
