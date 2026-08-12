@@ -7,6 +7,8 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use zeroize::Zeroizing;
+
 use crate::PublisherError;
 
 const MAX_LEDGER_INITIAL_HEADER_BYTES: usize = 4096;
@@ -154,6 +156,31 @@ impl SecureLocation {
         Ok(bytes)
     }
 
+    pub(crate) fn read_existing_owner_only_secret(
+        &self,
+        max_bytes: usize,
+    ) -> Result<Zeroizing<Vec<u8>>, PublisherError> {
+        let (mut file, opened) = self.open_existing_owner_only(max_bytes)?;
+        let mut bytes = Zeroizing::new(Vec::with_capacity(max_bytes.saturating_add(1)));
+        std::io::Read::by_ref(&mut file)
+            .take(max_bytes as u64 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| PublisherError::Config)?;
+        if bytes.len() > max_bytes
+            || fstat(file.as_raw_fd())? != opened
+            || self.entry_identity()? != opened
+            || !self
+                .directory_identity()?
+                .same_stable_object(self.directory_identity)
+            || !self
+                .path_directory_identity()?
+                .same_stable_object(self.directory_identity)
+        {
+            return Err(PublisherError::Config);
+        }
+        Ok(bytes)
+    }
+
     pub(crate) fn open_or_create_ledger(
         &self,
         header: &[u8],
@@ -240,6 +267,7 @@ impl SecureLocation {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(_) => return Err(PublisherError::Config),
         };
+        validate_ledger_file(before)?;
         let file = openat(
             self.directory.as_raw_fd(),
             &self.name,
@@ -250,10 +278,7 @@ impl SecureLocation {
         let after = self.entry_identity()?;
         if before != opened
             || opened != after
-            || !opened.is_regular()
-            || !opened.is_owner_only()
-            || opened.mode & 0o777 != 0o600
-            || opened.nlink != 1
+            || validate_ledger_file(opened).is_err()
             || !self
                 .directory_identity()?
                 .same_stable_object(self.directory_identity)
@@ -430,6 +455,13 @@ pub(crate) fn read_owner_only(path: &Path, max_bytes: usize) -> Result<Vec<u8>, 
     SecureLocation::open(path)?.read_existing_owner_only(max_bytes)
 }
 
+pub(crate) fn read_owner_only_secret(
+    path: &Path,
+    max_bytes: usize,
+) -> Result<Zeroizing<Vec<u8>>, PublisherError> {
+    SecureLocation::open(path)?.read_existing_owner_only_secret(max_bytes)
+}
+
 pub(crate) fn write_new_owner_only(
     path: &Path,
     bytes: &[u8],
@@ -495,6 +527,17 @@ fn validate_owner_file(identity: FileIdentity, max_bytes: usize) -> Result<(), P
         || identity.nlink != 1
         || identity.size < 0
         || identity.size as u64 > max_bytes as u64
+    {
+        return Err(PublisherError::Config);
+    }
+    Ok(())
+}
+
+fn validate_ledger_file(identity: FileIdentity) -> Result<(), PublisherError> {
+    if !identity.is_regular()
+        || !identity.is_owner_only()
+        || identity.mode & 0o777 != 0o600
+        || identity.nlink != 1
     {
         return Err(PublisherError::Config);
     }
