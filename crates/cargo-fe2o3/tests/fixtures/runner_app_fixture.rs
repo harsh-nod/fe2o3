@@ -475,8 +475,14 @@ fn validate_handoff(controls: &FixtureControls) -> Result<ValidatedHandoff, Stri
         .acquire_current_token()
         .map_err(|error| format!("retain current publication through acknowledgment: {error}"))?;
     if let Some(marker) = &controls.stall_before_ack {
-        fs::write(marker, std::process::id().to_string())
+        let marker = PathBuf::from(marker);
+        let mut temporary_name = marker.as_os_str().to_os_string();
+        temporary_name.push(format!(".{}.tmp", std::process::id()));
+        let temporary = PathBuf::from(temporary_name);
+        fs::write(&temporary, std::process::id().to_string())
             .map_err(|error| format!("write stalled-ACK ready marker: {error}"))?;
+        fs::rename(&temporary, &marker)
+            .map_err(|error| format!("publish stalled-ACK ready marker: {error}"))?;
         if let Some(descriptor) = env::var_os(TEST_ACK_READY_FD_ENV) {
             let descriptor = descriptor
                 .to_str()
