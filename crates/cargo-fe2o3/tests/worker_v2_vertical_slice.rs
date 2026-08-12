@@ -801,6 +801,122 @@ fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
+const CHILD_COMMITMENT_MISMATCH_DIAGNOSTIC: &[u8] =
+    b"host consumer fixture: application handoff commitment does not bind the envelope and current executable";
+const PARENT_TRUNCATED_ACK_DIAGNOSTIC: &[u8] = b"cargo-fe2o3 application runner: invalid application handoff acknowledgment: application handoff acknowledgment is truncated (0 bytes)";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CommitmentRejectionDiagnostic {
+    CompletedParentZeroByteAcknowledgment,
+}
+
+impl CommitmentRejectionDiagnostic {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::CompletedParentZeroByteAcknowledgment => {
+                "completed-parent-zero-byte-acknowledgment"
+            }
+        }
+    }
+}
+
+fn classify_commitment_rejection_diagnostic(
+    stderr: &[u8],
+) -> Option<CommitmentRejectionDiagnostic> {
+    let stderr = stderr.strip_suffix(b"\n").unwrap_or(stderr);
+    let child_prefix = stderr.strip_suffix(PARENT_TRUNCATED_ACK_DIAGNOSTIC)?;
+    if CHILD_COMMITMENT_MISMATCH_DIAGNOSTIC.starts_with(child_prefix)
+        || child_prefix.strip_suffix(b"\n") == Some(CHILD_COMMITMENT_MISMATCH_DIAGNOSTIC)
+    {
+        Some(CommitmentRejectionDiagnostic::CompletedParentZeroByteAcknowledgment)
+    } else {
+        None
+    }
+}
+
+#[test]
+fn commitment_rejection_diagnostic_classifier_is_exact() {
+    let expected = Some(CommitmentRejectionDiagnostic::CompletedParentZeroByteAcknowledgment);
+    for prefix_length in 0..=CHILD_COMMITMENT_MISMATCH_DIAGNOSTIC.len() {
+        let child_prefix = &CHILD_COMMITMENT_MISMATCH_DIAGNOSTIC[..prefix_length];
+        for parent_trailing_lf in [false, true] {
+            let mut completed = child_prefix.to_vec();
+            completed.extend_from_slice(PARENT_TRUNCATED_ACK_DIAGNOSTIC);
+            if parent_trailing_lf {
+                completed.push(b'\n');
+            }
+            assert_eq!(
+                classify_commitment_rejection_diagnostic(&completed),
+                expected,
+                "rejected child prefix length {prefix_length} with parent trailing LF {parent_trailing_lf}"
+            );
+        }
+
+        assert_eq!(classify_commitment_rejection_diagnostic(child_prefix), None);
+        let mut child_only_with_lf = child_prefix.to_vec();
+        child_only_with_lf.push(b'\n');
+        assert_eq!(
+            classify_commitment_rejection_diagnostic(&child_only_with_lf),
+            None
+        );
+    }
+
+    for parent_trailing_lf in [false, true] {
+        let mut complete_child_line = CHILD_COMMITMENT_MISMATCH_DIAGNOSTIC.to_vec();
+        complete_child_line.push(b'\n');
+        complete_child_line.extend_from_slice(PARENT_TRUNCATED_ACK_DIAGNOSTIC);
+        if parent_trailing_lf {
+            complete_child_line.push(b'\n');
+        }
+        assert_eq!(
+            classify_commitment_rejection_diagnostic(&complete_child_line),
+            expected
+        );
+    }
+
+    for invalid in [
+        [
+            PARENT_TRUNCATED_ACK_DIAGNOSTIC,
+            CHILD_COMMITMENT_MISMATCH_DIAGNOSTIC,
+        ]
+        .concat(),
+        [
+            PARENT_TRUNCATED_ACK_DIAGNOSTIC,
+            b"\n",
+            CHILD_COMMITMENT_MISMATCH_DIAGNOSTIC,
+        ]
+        .concat(),
+        [PARENT_TRUNCATED_ACK_DIAGNOSTIC, b"\r\n"].concat(),
+        [PARENT_TRUNCATED_ACK_DIAGNOSTIC, b"\n\n"].concat(),
+        [PARENT_TRUNCATED_ACK_DIAGNOSTIC, b"extra"].concat(),
+        [b"extra", PARENT_TRUNCATED_ACK_DIAGNOSTIC].concat(),
+        [
+            &CHILD_COMMITMENT_MISMATCH_DIAGNOSTIC[..1],
+            b"\n",
+            PARENT_TRUNCATED_ACK_DIAGNOSTIC,
+        ]
+        .concat(),
+        [
+            CHILD_COMMITMENT_MISMATCH_DIAGNOSTIC,
+            b"\r\n",
+            PARENT_TRUNCATED_ACK_DIAGNOSTIC,
+        ]
+        .concat(),
+        b"cargo-fe2o3 application runner: application handoff acknowledgment timed out".to_vec(),
+        b"cargo-fe2o3 application runner: application containment failed".to_vec(),
+        b"cargo-fe2o3 application runner: invalid application handoff acknowledgment: application handoff acknowledgment is truncated (1 bytes)".to_vec(),
+        b"host consumer fixture: arbitrary child errorcargo-fe2o3 application runner: invalid application handoff acknowledgment: application handoff acknowledgment is truncated (0 bytes)".to_vec(),
+        b"AmdWavecargo-fe2o3 application runner: invalid application handoff acknowledgment: application handoff acknowledgment is truncated (0 bytes)".to_vec(),
+    ] {
+        assert_eq!(
+            classify_commitment_rejection_diagnostic(&invalid),
+            None,
+            "accepted invalid diagnostic: {}",
+            String::from_utf8_lossy(&invalid)
+        );
+    }
+}
+
 #[cfg(feature = "worker-v2-fault-injection-test-only")]
 fn process_cpu_ticks(process: u32) -> u64 {
     let stat = fs::read_to_string(format!("/proc/{process}/stat")).unwrap();
@@ -1234,16 +1350,32 @@ fn real_host_consumer_reaches_exact_prerequisite_admission() {
         .output()
         .unwrap();
     assert!(!rejected.status.success());
-    assert!(
-        stderr(&rejected).contains("commitment"),
-        "{}",
-        stderr(&rejected)
+    let rejected_stderr = stderr(&rejected);
+    // The mutated-input integration and direct typed helper unit test are decomposed coverage. This
+    // terminal parent EOF record proves bounded containment and error propagation, not that this
+    // integration invocation observed the exact typed child error before containment won the race.
+    let classification =
+        classify_commitment_rejection_diagnostic(&rejected.stderr).unwrap_or_else(|| {
+            panic!("unexpected commitment rejection diagnostic:\n{rejected_stderr}")
+        });
+    eprintln!(
+        "commitment rejection diagnostic class: {}",
+        classification.label()
     );
-    assert!(
-        !stderr(&rejected).contains("AmdWave"),
-        "{}",
-        stderr(&rejected)
+    assert_eq!(
+        classification,
+        CommitmentRejectionDiagnostic::CompletedParentZeroByteAcknowledgment
     );
+    assert!(!rejected_stderr.contains("AmdWave"), "{rejected_stderr}");
+    assert!(
+        !rejected_stderr.contains("unexpected application environment survived"),
+        "{rejected_stderr}"
+    );
+    let rejected_report: JsonValue =
+        serde_json::from_slice(&fs::read(rejected_report).unwrap()).unwrap();
+    assert_eq!(rejected_report["host_consumer"], true);
+    assert_eq!(rejected_report["loader_environment_clear"], true);
+    assert_eq!(rejected_report["admitted"], false);
 }
 
 #[test]
