@@ -273,7 +273,13 @@ fn parse_admitted_feature_component(
     while start < bytes.len() {
         let mut end = start;
         while end < bytes.len() && bytes[end] != b',' {
-            end += 1;
+            end = end.checked_add(1).ok_or_else(|| {
+                feature_bound_exceeded(
+                    feature_bound_field(field, "bytes"),
+                    usize::MAX,
+                    MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_SOURCE_BYTES_V1,
+                )
+            })?;
         }
         let declaration = &features[start..end];
         let (enabled, name) = match declaration.as_bytes().first() {
@@ -293,7 +299,13 @@ fn parse_admitted_feature_component(
                 parsed.insert(name.to_owned(), enabled);
             }
         }
-        start = end.saturating_add(1);
+        start = end.checked_add(1).ok_or_else(|| {
+            feature_bound_exceeded(
+                feature_bound_field(field, "bytes"),
+                usize::MAX,
+                MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_SOURCE_BYTES_V1,
+            )
+        })?;
     }
     Ok(parsed)
 }
@@ -324,7 +336,13 @@ fn preflight_feature_source(
             validate_feature_declaration(field, &bytes[component_start..index])?;
             declarations = charge_feature_declaration(field, declarations)?;
             charge_feature_parse_work(field, &mut parse_work, 1)?;
-            component_start = index.saturating_add(1);
+            component_start = index.checked_add(1).ok_or_else(|| {
+                feature_bound_exceeded(
+                    feature_bound_field(field, "bytes"),
+                    usize::MAX,
+                    MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_SOURCE_BYTES_V1,
+                )
+            })?;
             component_len = 0;
         } else {
             component_len = component_len.checked_add(1).ok_or_else(|| {
@@ -1974,20 +1992,32 @@ mod tests {
                 .has_exact_codegen_profile("gfx942", "-wavefrontsize32,+wavefrontsize64,-xnack")
         );
 
-        let duplicates_100k = repeated_feature(100_000, "+xnack");
-        for _ in 0..3 {
-            let result = std::panic::catch_unwind(|| {
-                SemanticLayoutTargetV1::new_with_codegen_profile(
-                    "amdgcn-amd-amdhsa",
-                    "e-p:64:64",
-                    64,
-                    "gfx942",
-                    "",
-                    &duplicates_100k,
-                )
-            });
-            assert!(result.is_ok());
-            assert!(result.unwrap().is_err());
+        let hostile_sources = [
+            repeated_feature(100_000, "+xnack"),
+            format!("+{}", "a".repeat(100_000)),
+            ",".repeat(100_000),
+            indexed_unknown_features(100_000),
+            "+xna\u{0441}k".to_owned(),
+        ];
+        for source in &hostile_sources {
+            for (target_features, codegen_features) in
+                [(source.as_str(), ""), ("", source.as_str())]
+            {
+                for _ in 0..3 {
+                    let result = std::panic::catch_unwind(|| {
+                        SemanticLayoutTargetV1::new_with_codegen_profile(
+                            "amdgcn-amd-amdhsa",
+                            "e-p:64:64",
+                            64,
+                            "gfx942",
+                            target_features,
+                            codegen_features,
+                        )
+                    });
+                    assert!(result.is_ok());
+                    assert!(result.unwrap().is_err());
+                }
+            }
         }
     }
 
