@@ -43,6 +43,8 @@ pub mod semantic_type_adapter_v2;
 mod semantic_witness;
 mod source_debug;
 mod static_registration;
+#[cfg(test)]
+mod test_temp_dir;
 mod trusted_device_items;
 mod typed_artifact;
 mod worker_v2_producer;

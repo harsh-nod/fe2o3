@@ -1633,6 +1633,7 @@ mod tests {
     use crate::rust_type_layout_general::{
         AdtRepresentationFacts, ArrayLayoutFacts, EnumTagLayoutFacts, PointerLayoutFacts,
     };
+    use crate::test_temp_dir::TestTempDir;
 
     fn target() -> SemanticLayoutTargetV1 {
         SemanticLayoutTargetV1::new("test-target", "e-p:64:64", 64).unwrap()
@@ -2564,15 +2565,16 @@ mod tests {
     }
 
     struct CompilerFixture {
+        _directory: TestTempDir,
         source: PathBuf,
         output: PathBuf,
     }
 
     impl CompilerFixture {
         fn create() -> Self {
-            let stem = format!("fe2o3-g2-layout-bridge-{}", std::process::id());
-            let source = std::env::temp_dir().join(format!("{stem}.rs"));
-            let output = std::env::temp_dir().join(format!("{stem}.rmeta"));
+            let directory = TestTempDir::create("fe2o3-g2-layout-bridge");
+            let source = directory.path().join("fixture.rs");
+            let output = directory.path().join("fixture.rmeta");
             fs::write(
                 &source,
                 r#"
@@ -2583,14 +2585,11 @@ mod tests {
                 "#,
             )
             .expect("write bridge fixture");
-            Self { source, output }
-        }
-    }
-
-    impl Drop for CompilerFixture {
-        fn drop(&mut self) {
-            let _ = fs::remove_file(&self.source);
-            let _ = fs::remove_file(&self.output);
+            Self {
+                _directory: directory,
+                source,
+                output,
+            }
         }
     }
 

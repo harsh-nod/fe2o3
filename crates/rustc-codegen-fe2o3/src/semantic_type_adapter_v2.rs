@@ -3212,10 +3212,13 @@ mod tests {
     use std::io::Write as _;
     use std::path::PathBuf;
     use std::process::{Command, Stdio};
+    use std::sync::{Arc, Barrier};
 
     use rustc_driver::{Callbacks, Compilation};
     use rustc_hir::def::DefKind;
     use rustc_interface::interface::Compiler;
+
+    use crate::test_temp_dir::TestTempDir;
 
     use super::*;
 
@@ -3515,40 +3518,37 @@ static UNIT_VALUE: () = ();
     }
 
     struct FixtureFiles {
+        _directory: TestTempDir,
         source: PathBuf,
         output: PathBuf,
     }
 
     impl FixtureFiles {
         fn create() -> Self {
-            let stem = format!("fe2o3-semantic-type-v2-{}", std::process::id());
-            let source = std::env::temp_dir().join(format!("{stem}.rs"));
-            let output = std::env::temp_dir().join(format!("{stem}.rmeta"));
+            let directory = TestTempDir::create("fe2o3-semantic-type-v2");
+            let source = directory.path().join("fixture.rs");
+            let output = directory.path().join("fixture.rmeta");
             fs::write(&source, FIXTURE).expect("write semantic type fixture");
-            Self { source, output }
-        }
-    }
-
-    impl Drop for FixtureFiles {
-        fn drop(&mut self) {
-            let _ = fs::remove_file(&self.source);
-            let _ = fs::remove_file(&self.output);
+            Self {
+                _directory: directory,
+                source,
+                output,
+            }
         }
     }
 
     struct AmdgcnProbeFiles {
+        _directory: TestTempDir,
         source: PathBuf,
         output: PathBuf,
     }
 
     impl AmdgcnProbeFiles {
         fn create(case: &str) -> Self {
-            let stem = format!(
-                "fe2o3-semantic-type-v2-amdgcn-profile-{}-{case}",
-                std::process::id()
-            );
-            let source = std::env::temp_dir().join(format!("{stem}.rs"));
-            let output = std::env::temp_dir().join(format!("{stem}.rmeta"));
+            let prefix = format!("fe2o3-semantic-type-v2-amdgcn-profile-{case}");
+            let directory = TestTempDir::create(&prefix);
+            let source = directory.path().join("probe.rs");
+            let output = directory.path().join("probe.rmeta");
             fs::write(
                 &source,
                 r#"
@@ -3563,15 +3563,39 @@ pub extern "C" fn k() {}
 "#,
             )
             .expect("write amdgcn target-profile probe");
-            Self { source, output }
+            Self {
+                _directory: directory,
+                source,
+                output,
+            }
         }
     }
 
-    impl Drop for AmdgcnProbeFiles {
-        fn drop(&mut self) {
-            let _ = fs::remove_file(&self.source);
-            let _ = fs::remove_file(&self.output);
-        }
+    #[test]
+    fn compiler_fixture_paths_are_unique_under_parallel_creation() {
+        const WORKERS: usize = 32;
+        let created = Arc::new(Barrier::new(WORKERS));
+        let checked = Arc::new(Barrier::new(WORKERS));
+        let threads = (0..WORKERS)
+            .map(|_| {
+                let created = Arc::clone(&created);
+                let checked = Arc::clone(&checked);
+                std::thread::spawn(move || {
+                    let fixture = FixtureFiles::create();
+                    let source = fixture.source.clone();
+                    created.wait();
+                    assert!(source.is_file());
+                    checked.wait();
+                    source
+                })
+            })
+            .collect::<Vec<_>>();
+        let paths = threads
+            .into_iter()
+            .map(|thread| thread.join().expect("fixture thread panicked"))
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(paths.len(), WORKERS);
+        assert!(paths.iter().all(|path| !path.exists()));
     }
 
     fn captures() -> CaptureCallbacks {
@@ -4339,10 +4363,8 @@ __attribute__((amdgpu_kernel)) void layout_probe(Root *out) { out[0].tail = 7; }
             }
         }
 
-        let object = std::env::temp_dir().join(format!(
-            "fe2o3-gfx942-layout-probe-{}.o",
-            std::process::id()
-        ));
+        let directory = TestTempDir::create("fe2o3-gfx942-layout-probe");
+        let object = directory.path().join("probe.o");
         let mut child = Command::new("/opt/rocm/llvm/bin/clang")
             .args([
                 "-x",
@@ -4377,7 +4399,6 @@ __attribute__((amdgpu_kernel)) void layout_probe(Root *out) { out[0].tail = 7; }
             .arg(&object)
             .output()
             .expect("inspect gfx942 code object");
-        let _ = fs::remove_file(&object);
         assert!(readelf.status.success());
         let inspection = String::from_utf8(readelf.stdout).unwrap();
         assert!(inspection.contains("Machine:                           EM_AMDGPU"));

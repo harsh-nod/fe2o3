@@ -1089,6 +1089,8 @@ mod tests {
     use rustc_middle::ty::{Ty, TyCtxt};
     use rustc_span::Symbol;
 
+    use crate::test_temp_dir::TestTempDir;
+
     use super::{
         AdtKind, EnumTagEncodingFacts, ExtractionLimits, GeneralLayoutExtractError, LimitKind,
         RelocationKind, SourceScalarKind, TypeLayoutFacts, TypeLayoutKind, extract_general_layout,
@@ -1206,24 +1208,22 @@ const FUNCTION: fn() = target;
     }
 
     struct CompilerFixture {
+        _directory: TestTempDir,
         source: PathBuf,
         output: PathBuf,
     }
 
     impl CompilerFixture {
         fn create() -> Self {
-            let stem = format!("fe2o3-layout-general-{}", std::process::id());
-            let source = std::env::temp_dir().join(format!("{stem}.rs"));
-            let output = std::env::temp_dir().join(format!("{stem}.rmeta"));
+            let directory = TestTempDir::create("fe2o3-layout-general");
+            let source = directory.path().join("fixture.rs");
+            let output = directory.path().join("fixture.rmeta");
             fs::write(&source, FIXTURE_SOURCE).expect("write rustc layout fixture");
-            Self { source, output }
-        }
-    }
-
-    impl Drop for CompilerFixture {
-        fn drop(&mut self) {
-            let _ = fs::remove_file(&self.source);
-            let _ = fs::remove_file(&self.output);
+            Self {
+                _directory: directory,
+                source,
+                output,
+            }
         }
     }
 
