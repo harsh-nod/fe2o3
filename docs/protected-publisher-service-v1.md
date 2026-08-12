@@ -18,9 +18,19 @@ token-producer | fe2o3-protected-publisher --enroll --config CONFIG \
 
 The token must never appear in a regular file, argv, environment, log, or
 artifact. Enrollment rejects regular-file, directory, terminal, and other
-unexpected descriptors using `fstat`; only FIFOs and Unix sockets are
-accepted. The bounded token buffer is zeroized on drop. The artifact stores a
-token SHA-256, not token bytes.
+unexpected descriptors using `fstat`; only FIFOs and sockets whose
+`getsockname` family is exactly `AF_UNIX` are accepted. Merely having
+`S_IFSOCK` mode is insufficient: IPv4, IPv6, and other socket families are
+rejected before token input. The bounded token buffer is zeroized on drop. The
+artifact stores a token SHA-256, not token bytes.
+
+The reader duplicates the inherited descriptor with close-on-exec, verifies
+its identity, temporarily adds `O_NONBLOCK` to the shared open-file status
+flags, and restores the original flags before returning. One absolute read
+deadline covers polling and all chunks. `poll`, `read`, `EINTR`, spurious
+readiness, and `EAGAIN` are retried only while time remains; readiness never
+permits a blocking read or a read after the deadline. EOF terminates input,
+empty input fails, and byte `16,385` fails rather than being truncated.
 
 The service accepts only `POST /v1/receipts` with canonical JSON, one
 `Authorization: Bearer ...` header, and one `Idempotency-Key` header. A
@@ -151,6 +161,15 @@ identity mismatches, duplicate keys/requests/evidence, complete checksum
 corruption, and an incompatible header. No automatic migration from SQLite is
 attempted.
 
+Before write admission, issuance constructs the exact canonical
+`LedgerRecord` and complete frame, including its hash, then invokes the same
+frame decoder, canonical parser, base64 decoder, digest checks, and semantic
+record validator used by restart replay. Decoder failure therefore occurs
+before append and `fdatasync`; such a record is never written or acknowledged.
+The generic canonical JSON string limit remains 4,096 bytes. Only the ledger
+record and generated response parsers use their separately bounded base64
+field limits.
+
 EOF inside a prefix or a structurally valid frame is classified as an
 unacknowledged torn tail, truncated to the previous complete frame, and
 `fdatasync`ed before service. A complete frame with a bad hash is corruption
@@ -201,7 +220,10 @@ equivalent reviewed facility. None is implemented or claimed here.
 | forced JWKS refresh backoff | 1-30 seconds |
 | ledger records | configured, 1-1,000,000 |
 | ledger bytes | configured, 1 MiB-64 GiB |
-| ledger record payload | 832 KiB |
+| ledger decoded request / request base64 | 65,536 / 87,384 bytes |
+| ledger decoded response / response base64 | 524,288 / 699,052 bytes |
+| decoded receipt / receipt base64 | 262,144 / 349,528 bytes |
+| ledger record payload / complete frame | 851,968 / 852,056 bytes |
 | enrollment/config artifacts | 65,536 bytes each |
 | private key | 16,384 bytes |
 
@@ -235,10 +257,12 @@ scripts/test-protected-publisher-service.sh
 
 It runs debug and release Rust tests, hostile body and client transport tests,
 fresh-token recovery, key/body/authorization collisions, descriptor races,
-torn/corrupt/duplicate frames, short-write and ENOSPC injection, JWKS
-concurrency/waves/rotation/deadlines, client-service conformance, strict
-Clippy, formatting, and diff checks. `cargo audit`, repository fsck, repeated
-stress, and a clean exact-commit MI300X replay are separate validation steps.
+torn/corrupt/duplicate frames, maximum-ref restart, append/replay decoder
+closure, short-write and ENOSPC injection, nonblocking enrollment races and
+socket-family rejection, JWKS concurrency/waves/rotation/deadlines,
+client-service conformance, strict Clippy, formatting, and diff checks.
+`cargo audit`, repository fsck, repeated stress, and a clean exact-commit
+MI300X replay are separate validation steps.
 
 ## Nonclaims
 

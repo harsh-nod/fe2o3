@@ -1,6 +1,4 @@
-use std::fs::File;
-use std::io::Read;
-use std::os::fd::{FromRawFd, RawFd};
+use std::os::fd::RawFd;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -133,40 +131,56 @@ fn read_nonregular_token_fd(
     fd: RawFd,
     timeout: Duration,
 ) -> Result<Zeroizing<Vec<u8>>, PublisherError> {
+    read_nonregular_token_fd_with_hooks(fd, timeout, |_| {}, || {})
+}
+
+fn read_nonregular_token_fd_with_hooks(
+    fd: RawFd,
+    timeout: Duration,
+    mut after_readiness: impl FnMut(RawFd),
+    mut after_would_block: impl FnMut(),
+) -> Result<Zeroizing<Vec<u8>>, PublisherError> {
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .ok_or(PublisherError::Authentication)?;
     let before = fd_identity(fd)?;
     let kind = before.st_mode & libc::S_IFMT;
     if kind == libc::S_IFREG || !(kind == libc::S_IFIFO || kind == libc::S_IFSOCK) {
         return Err(PublisherError::Config);
     }
-    let duplicated = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 3) };
-    if duplicated < 0 {
-        return Err(PublisherError::Config);
+    if kind == libc::S_IFSOCK {
+        require_unix_socket(fd)?;
     }
-    let opened = match fd_identity(duplicated) {
-        Ok(identity) => identity,
-        Err(error) => {
-            unsafe {
-                libc::close(duplicated);
-            }
-            return Err(error);
-        }
-    };
+    let mut duplicated = NonblockingDuplicate::new(fd)?;
+    let opened = fd_identity(duplicated.fd)?;
     if before.st_dev != opened.st_dev
         || before.st_ino != opened.st_ino
         || before.st_mode != opened.st_mode
         || before.st_uid != opened.st_uid
         || before.st_gid != opened.st_gid
     {
-        unsafe {
-            libc::close(duplicated);
-        }
         return Err(PublisherError::Config);
     }
-    let mut file = unsafe { File::from_raw_fd(duplicated) };
+    if kind == libc::S_IFSOCK {
+        require_unix_socket(duplicated.fd)?;
+    }
+    let read_result = read_token_until(
+        duplicated.fd,
+        deadline,
+        &mut after_readiness,
+        &mut after_would_block,
+    );
+    duplicated.restore()?;
+    read_result
+}
+
+fn read_token_until(
+    fd: RawFd,
+    deadline: Instant,
+    after_readiness: &mut impl FnMut(RawFd),
+    after_would_block: &mut impl FnMut(),
+) -> Result<Zeroizing<Vec<u8>>, PublisherError> {
     let mut bytes = Zeroizing::new(Vec::new());
-    let deadline = Instant::now()
-        .checked_add(timeout)
-        .ok_or(PublisherError::Authentication)?;
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
@@ -177,7 +191,7 @@ fn read_nonregular_token_fd(
             .saturating_add(1)
             .min(libc::c_int::MAX as u128) as libc::c_int;
         let mut poll = libc::pollfd {
-            fd: duplicated,
+            fd,
             events: libc::POLLIN | libc::POLLHUP,
             revents: 0,
         };
@@ -191,11 +205,31 @@ fn read_nonregular_token_fd(
         if ready == 0 || poll.revents & (libc::POLLERR | libc::POLLNVAL) != 0 {
             return Err(PublisherError::Authentication);
         }
+        if poll.revents & (libc::POLLIN | libc::POLLHUP) == 0 {
+            continue;
+        }
+        if Instant::now() >= deadline {
+            return Err(PublisherError::Authentication);
+        }
+        after_readiness(fd);
+        if Instant::now() >= deadline {
+            return Err(PublisherError::Authentication);
+        }
         let mut chunk = [0u8; 4096];
         let capacity = (MAX_JWT_BYTES + 1 - bytes.len()).min(chunk.len());
-        let count = file
-            .read(&mut chunk[..capacity])
-            .map_err(|_| PublisherError::Authentication)?;
+        let count = unsafe { libc::read(fd, chunk.as_mut_ptr().cast(), capacity) };
+        if count < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::WouldBlock {
+                after_would_block();
+                continue;
+            }
+            if error.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(PublisherError::Authentication);
+        }
+        let count = count as usize;
         if count == 0 {
             break;
         }
@@ -208,6 +242,83 @@ fn read_nonregular_token_fd(
         return Err(PublisherError::Authentication);
     }
     Ok(bytes)
+}
+
+struct NonblockingDuplicate {
+    fd: RawFd,
+    original_status_flags: libc::c_int,
+    restored: bool,
+}
+
+impl NonblockingDuplicate {
+    fn new(fd: RawFd) -> Result<Self, PublisherError> {
+        let duplicated = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 3) };
+        if duplicated < 0 {
+            return Err(PublisherError::Config);
+        }
+        let original_status_flags = unsafe { libc::fcntl(duplicated, libc::F_GETFL) };
+        if original_status_flags < 0
+            || unsafe {
+                libc::fcntl(
+                    duplicated,
+                    libc::F_SETFL,
+                    original_status_flags | libc::O_NONBLOCK,
+                )
+            } < 0
+        {
+            unsafe {
+                libc::close(duplicated);
+            }
+            return Err(PublisherError::Config);
+        }
+        Ok(Self {
+            fd: duplicated,
+            original_status_flags,
+            restored: false,
+        })
+    }
+
+    fn restore(&mut self) -> Result<(), PublisherError> {
+        if unsafe { libc::fcntl(self.fd, libc::F_SETFL, self.original_status_flags) } < 0 {
+            return Err(PublisherError::Authentication);
+        }
+        self.restored = true;
+        Ok(())
+    }
+}
+
+impl Drop for NonblockingDuplicate {
+    fn drop(&mut self) {
+        if !self.restored {
+            unsafe {
+                libc::fcntl(self.fd, libc::F_SETFL, self.original_status_flags);
+            }
+        }
+        unsafe {
+            libc::close(self.fd);
+        }
+    }
+}
+
+fn require_unix_socket(fd: RawFd) -> Result<(), PublisherError> {
+    let mut address = std::mem::MaybeUninit::<libc::sockaddr_storage>::zeroed();
+    let mut length = std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
+    if unsafe {
+        libc::getsockname(
+            fd,
+            address.as_mut_ptr().cast::<libc::sockaddr>(),
+            &mut length,
+        )
+    } != 0
+        || length < std::mem::size_of::<libc::sa_family_t>() as libc::socklen_t
+    {
+        return Err(PublisherError::Config);
+    }
+    let address = unsafe { address.assume_init() };
+    if address.ss_family as libc::c_int != libc::AF_UNIX {
+        return Err(PublisherError::Config);
+    }
+    Ok(())
 }
 
 fn fd_identity(fd: RawFd) -> Result<libc::stat, PublisherError> {
@@ -240,9 +351,13 @@ fn is_hex(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::fs::File;
     use std::io::Write;
+    use std::net::{TcpListener, TcpStream};
     use std::os::fd::AsRawFd;
     use std::os::unix::net::UnixStream;
+    use std::sync::mpsc;
+    use std::thread;
 
     use super::*;
     use crate::config::GITHUB_ISSUER;
@@ -287,6 +402,113 @@ mod tests {
         assert!(require_enrollment(&changed).is_err());
     }
 
+    #[test]
+    fn unix_socketpair_is_accepted_and_status_flags_are_restored() {
+        let fixture = fixture();
+        let (mut writer, reader) = UnixStream::pair().unwrap();
+        let original_flags = unsafe { libc::fcntl(reader.as_raw_fd(), libc::F_GETFL) };
+        writer.write_all(fixture.token.as_bytes()).unwrap();
+        writer.shutdown(std::net::Shutdown::Write).unwrap();
+        let bytes = read_nonregular_token_fd(reader.as_raw_fd(), Duration::from_secs(1)).unwrap();
+        assert_eq!(&*bytes, fixture.token.as_bytes());
+        assert_eq!(
+            unsafe { libc::fcntl(reader.as_raw_fd(), libc::F_GETFL) },
+            original_flags
+        );
+    }
+
+    #[test]
+    fn tcp_socket_descriptor_is_rejected_before_read() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        assert!(matches!(
+            read_nonregular_token_fd(client.as_raw_fd(), Duration::from_millis(50)),
+            Err(PublisherError::Config)
+        ));
+        assert!(matches!(
+            read_nonregular_token_fd(server.as_raw_fd(), Duration::from_millis(50)),
+            Err(PublisherError::Config)
+        ));
+    }
+
+    #[test]
+    fn competing_reader_and_repeated_eagain_cannot_escape_deadline_loop() {
+        let fixture = fixture();
+        let expected = fixture.token.into_bytes();
+        let token = expected.clone();
+        let (mut writer, reader) = UnixStream::pair().unwrap();
+        let competitor = reader.try_clone().unwrap();
+        let (drained_tx, drained_rx) = mpsc::sync_channel(0);
+        let producer = thread::spawn(move || {
+            for byte in [b'a', b'b', b'c'] {
+                writer.write_all(&[byte]).unwrap();
+                drained_rx.recv().unwrap();
+            }
+            for chunk in token.chunks(37) {
+                writer.write_all(chunk).unwrap();
+                thread::sleep(Duration::from_millis(1));
+            }
+            writer.shutdown(std::net::Shutdown::Write).unwrap();
+        });
+        let mut drained = 0usize;
+        let bytes = read_nonregular_token_fd_with_hooks(
+            reader.as_raw_fd(),
+            Duration::from_secs(2),
+            |_| {
+                if drained < 3 {
+                    let mut scratch = [0u8; 16];
+                    let count = unsafe {
+                        libc::read(
+                            competitor.as_raw_fd(),
+                            scratch.as_mut_ptr().cast(),
+                            scratch.len(),
+                        )
+                    };
+                    assert_eq!(count, 1);
+                    drained += 1;
+                }
+            },
+            || drained_tx.send(()).unwrap(),
+        )
+        .unwrap();
+        producer.join().unwrap();
+        assert_eq!(drained, 3);
+        assert_eq!(&*bytes, expected.as_slice());
+    }
+
+    #[test]
+    fn partial_chunks_eof_and_total_byte_bound_are_exact() {
+        let fixture = fixture();
+        let token = fixture.token.clone().into_bytes();
+        let (mut writer, reader) = UnixStream::pair().unwrap();
+        let producer = thread::spawn(move || {
+            for chunk in token.chunks(11) {
+                writer.write_all(chunk).unwrap();
+                thread::sleep(Duration::from_millis(1));
+            }
+            writer.shutdown(std::net::Shutdown::Write).unwrap();
+        });
+        let bytes = read_nonregular_token_fd(reader.as_raw_fd(), Duration::from_secs(2)).unwrap();
+        producer.join().unwrap();
+        assert_eq!(&*bytes, fixture.token.as_bytes());
+
+        let (writer, reader) = UnixStream::pair().unwrap();
+        writer.shutdown(std::net::Shutdown::Write).unwrap();
+        assert!(matches!(
+            read_nonregular_token_fd(reader.as_raw_fd(), Duration::from_millis(100)),
+            Err(PublisherError::Authentication)
+        ));
+
+        let (mut writer, reader) = UnixStream::pair().unwrap();
+        writer.write_all(&vec![b'a'; MAX_JWT_BYTES + 1]).unwrap();
+        writer.shutdown(std::net::Shutdown::Write).unwrap();
+        assert!(matches!(
+            read_nonregular_token_fd(reader.as_raw_fd(), Duration::from_millis(100)),
+            Err(PublisherError::Authentication)
+        ));
+    }
+
     #[tokio::test]
     async fn regular_file_token_descriptor_is_rejected() {
         let temp = secure_tempdir();
@@ -311,7 +533,7 @@ mod tests {
     async fn stalled_token_pipe_obeys_enrollment_deadline() {
         let temp = secure_tempdir();
         let mut config = production_config(temp.path());
-        config.network_deadline_milliseconds = 25;
+        config.network_deadline_milliseconds = 40;
         let (_writer, reader) = UnixStream::pair().unwrap();
         let start = Instant::now();
         assert!(
@@ -324,7 +546,9 @@ mod tests {
             .await
             .is_err()
         );
-        assert!(start.elapsed() < Duration::from_millis(200));
+        let elapsed = start.elapsed();
+        assert!(elapsed >= Duration::from_millis(25));
+        assert!(elapsed < Duration::from_millis(500));
     }
 
     #[tokio::test]
