@@ -403,35 +403,33 @@ fn load_marker(
         Mode::empty(),
     ) {
         Ok(descriptor) => descriptor,
-        Err(rustix::io::Errno::NOENT) => return Ok(None),
-        Err(_) => return Ok(None),
+        Err(rustix::io::Errno::NOENT) => {
+            snapshot(directory)?;
+            return Ok(None);
+        }
+        Err(error) => {
+            return Err(format!("failed to open codegen generation marker: {error}"));
+        }
     };
-    let stat = fstat(&descriptor)
-        .map_err(|error| format!("failed to inspect codegen generation marker: {error}"))?;
-    if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile
-        || stat.st_nlink != 1
-        || stat.st_size != MARKER_BYTES as i64
-    {
-        return Ok(None);
-    }
+    let mut file = File::from(descriptor);
+    validate_marker(directory, &file)?;
     let mut bytes = [0_u8; MARKER_BYTES];
-    File::from(descriptor)
-        .read_exact(&mut bytes)
+    file.read_exact(&mut bytes)
         .map_err(|error| format!("failed to read codegen generation marker: {error}"))?;
     if &bytes[..MARKER_MAGIC.len()] != MARKER_MAGIC {
-        return Ok(None);
+        return Err("refusing malformed codegen generation marker".to_string());
     }
     let semantic_start = MARKER_MAGIC.len();
     let semantic_end = semantic_start + 32;
-    if bytes[semantic_start..semantic_end] != expected_semantic {
-        return Ok(None);
-    }
+    let semantic: [u8; 32] = bytes[semantic_start..semantic_end]
+        .try_into()
+        .expect("fixed generation semantic length");
     let token_end = semantic_end + 16;
     let token = bytes[semantic_end..token_end]
         .try_into()
         .expect("fixed generation token length");
     if token == [0; 16] {
-        return Ok(None);
+        return Err("refusing zero-token codegen generation marker".to_string());
     }
     let snapshot_end = token_end + 32;
     let expected_snapshot: [u8; 32] = bytes[token_end..snapshot_end]
@@ -442,13 +440,33 @@ fn load_marker(
             .try_into()
             .expect("fixed snapshot count length"),
     );
-    let Ok((snapshot, entries)) = snapshot(directory) else {
-        return Ok(None);
-    };
-    if snapshot != expected_snapshot || entries != expected_entries {
+    if expected_entries > MAX_SNAPSHOT_ENTRIES {
+        return Err("refusing out-of-range codegen generation marker entry count".to_string());
+    }
+    let (snapshot, entries) = snapshot(directory)?;
+    validate_marker(directory, &file)?;
+    if semantic != expected_semantic || snapshot != expected_snapshot || entries != expected_entries
+    {
         return Ok(None);
     }
     Ok(Some(token))
+}
+
+fn validate_marker(directory: &PinnedDirectory, marker: &File) -> Result<(), String> {
+    let opened = fstat(marker)
+        .map_err(|error| format!("failed to inspect codegen generation marker: {error}"))?;
+    let linked = statat(directory.file(), MARKER_NAME, AtFlags::SYMLINK_NOFOLLOW)
+        .map_err(|error| format!("failed to inspect linked codegen generation marker: {error}"))?;
+    if FileType::from_raw_mode(opened.st_mode) != FileType::RegularFile
+        || opened.st_nlink != 1
+        || opened.st_size != MARKER_BYTES as i64
+        || opened.st_dev != linked.st_dev
+        || opened.st_ino != linked.st_ino
+        || opened.st_mode & 0o077 != 0
+    {
+        return Err("refusing unsafe codegen generation marker".to_string());
+    }
+    Ok(())
 }
 
 fn write_marker(
@@ -855,6 +873,32 @@ mod tests {
         }
     }
 
+    fn committed_generation() -> (TestDirectory, [u8; 32]) {
+        let directory = TestDirectory::new();
+        let semantic = [0x5a; 32];
+        let mut generation = PreparedGeneration::prepare(&directory.pinned(), semantic).unwrap();
+        fs::write(directory.0.join("fe2o3/payload"), b"keep").unwrap();
+        generation.commit().unwrap();
+        drop(generation);
+        (directory, semantic)
+    }
+
+    fn rejected_prepare(directory: &TestDirectory, semantic: [u8; 32]) -> String {
+        match PreparedGeneration::prepare(&directory.pinned(), semantic) {
+            Ok(_) => panic!("hostile committed generation unexpectedly allowed a rebuild"),
+            Err(error) => error,
+        }
+    }
+
+    fn assert_committed_artifacts_preserved(directory: &TestDirectory) {
+        assert_eq!(
+            fs::read(directory.0.join("fe2o3/payload")).unwrap(),
+            b"keep"
+        );
+        assert!(directory.0.join("fe2o3/.fe2o3-owned-v1").is_file());
+        assert!(directory.0.join("fe2o3/.codegen-generation-v1").exists());
+    }
+
     #[test]
     fn marker_wire_size_and_hex_are_stable() {
         assert_eq!(MARKER_MAGIC, b"fe2o3-codegen-generation-v1\0");
@@ -977,5 +1021,98 @@ mod tests {
                 .admit_entry(usize::MAX, SnapshotLimits::PRODUCTION)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn valid_snapshot_mismatch_is_the_only_destructive_rebuild_path() {
+        let (directory, semantic) = committed_generation();
+        fs::write(directory.0.join("fe2o3/payload"), b"changed").unwrap();
+
+        let generation = PreparedGeneration::prepare(&directory.pinned(), semantic).unwrap();
+        assert!(generation.pending);
+        assert!(!directory.0.join("fe2o3/payload").exists());
+        assert!(directory.0.join("fe2o3/.fe2o3-owned-v1").is_file());
+    }
+
+    #[test]
+    fn over_limit_marker_scan_error_preserves_committed_artifacts() {
+        let (directory, semantic) = committed_generation();
+        let artifact = directory.0.join("fe2o3");
+        let existing_entries = 3;
+        for index in 0..=MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1 - existing_entries {
+            fs::write(artifact.join(format!("filler-{index:04}")), []).unwrap();
+        }
+
+        let error = rejected_prepare(&directory, semantic);
+        assert!(error.contains("scan bound"), "{error}");
+        assert_committed_artifacts_preserved(&directory);
+    }
+
+    #[test]
+    fn depth_and_byte_marker_scan_errors_preserve_committed_artifacts() {
+        let (directory, semantic) = committed_generation();
+        let mut child = directory.0.join("fe2o3");
+        for index in 0..=MAX_SNAPSHOT_DEPTH {
+            child.push(format!("depth-{index:02}"));
+            fs::create_dir(&child).unwrap();
+        }
+        let error = rejected_prepare(&directory, semantic);
+        assert!(error.contains("depth bound"), "{error}");
+        assert_committed_artifacts_preserved(&directory);
+
+        fs::remove_dir_all(directory.0.join("fe2o3/depth-00")).unwrap();
+        File::create(directory.0.join("fe2o3/huge"))
+            .unwrap()
+            .set_len(MAX_SNAPSHOT_BYTES + 1)
+            .unwrap();
+        let error = rejected_prepare(&directory, semantic);
+        assert!(error.contains("snapshot is too large"), "{error}");
+        assert_committed_artifacts_preserved(&directory);
+    }
+
+    #[test]
+    fn hostile_entry_and_io_marker_scan_errors_preserve_committed_artifacts() {
+        let (directory, semantic) = committed_generation();
+        let hostile = directory.0.join("fe2o3/hostile");
+        symlink("payload", &hostile).unwrap();
+        assert!(rejected_prepare(&directory, semantic).contains("generated artifact"));
+        assert_committed_artifacts_preserved(&directory);
+
+        fs::remove_file(&hostile).unwrap();
+        let listener = UnixListener::bind(&hostile).unwrap();
+        assert!(rejected_prepare(&directory, semantic).contains("generated artifact"));
+        assert_committed_artifacts_preserved(&directory);
+        drop(listener);
+        fs::remove_file(&hostile).unwrap();
+
+        fs::write(&hostile, b"unreadable").unwrap();
+        fs::set_permissions(&hostile, fs::Permissions::from_mode(0o000)).unwrap();
+        let error = rejected_prepare(&directory, semantic);
+        fs::set_permissions(&hostile, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(error.contains("generated artifact"), "{error}");
+        assert_committed_artifacts_preserved(&directory);
+    }
+
+    #[test]
+    fn malformed_or_unsafe_marker_preserves_committed_artifacts() {
+        let (directory, semantic) = committed_generation();
+        let marker = directory.0.join("fe2o3/.codegen-generation-v1");
+        fs::write(&marker, b"truncated").unwrap();
+
+        let error = rejected_prepare(&directory, semantic);
+        assert!(
+            error.contains("unsafe codegen generation marker"),
+            "{error}"
+        );
+        assert_committed_artifacts_preserved(&directory);
+
+        fs::remove_file(&marker).unwrap();
+        symlink("payload", &marker).unwrap();
+        let error = rejected_prepare(&directory, semantic);
+        assert!(
+            error.contains("failed to open codegen generation marker"),
+            "{error}"
+        );
+        assert_committed_artifacts_preserved(&directory);
     }
 }
