@@ -287,9 +287,7 @@ pub(crate) fn consume_worker_v2_application_handoff_descriptors_v1(
     } = inspect_envelope(&directory, &envelope)?;
     let application = current_application_identity()?;
     let expectation = WorkerV2ApplicationHandoffExpectationV1::new(&decoded, application);
-    if expectation.commitment() != commitment {
-        return Err(WorkerV2ApplicationDescriptorHandoffErrorV1::CommitmentMismatch);
-    }
+    validate_application_commitment(expectation.commitment(), commitment)?;
 
     let retained = RetainedWorkerV2ApplicationDescriptorsV1 {
         directory,
@@ -318,6 +316,17 @@ pub(crate) fn consume_worker_v2_application_handoff_descriptors_v1(
         .map_err(WorkerV2ApplicationDescriptorHandoffErrorV1::RecoveryCurrentness)?;
     emit_acknowledgment(&acknowledgment, expectation.acknowledgment(challenge))?;
     Ok(recovered.retain_application_descriptors(retained))
+}
+
+fn validate_application_commitment(
+    expected: WorkerV2ApplicationHandoffCommitmentV1,
+    supplied: WorkerV2ApplicationHandoffCommitmentV1,
+) -> Result<(), WorkerV2ApplicationDescriptorHandoffErrorV1> {
+    if expected == supplied {
+        Ok(())
+    } else {
+        Err(WorkerV2ApplicationDescriptorHandoffErrorV1::CommitmentMismatch)
+    }
 }
 
 fn handoff_environment_names() -> [&'static str; 5] {
@@ -1020,5 +1029,27 @@ impl Error for WorkerV2ApplicationDescriptorHandoffErrorV1 {
             Self::RecoveryCurrentness(error) => Some(error),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn substituted_application_commitment_is_rejected_before_acknowledgment() {
+        let expected = WorkerV2ApplicationHandoffCommitmentV1::from_hex(&"11".repeat(32)).unwrap();
+        let supplied = WorkerV2ApplicationHandoffCommitmentV1::from_hex(&"22".repeat(32)).unwrap();
+
+        let error = validate_application_commitment(expected, supplied).unwrap_err();
+        assert!(matches!(
+            error,
+            WorkerV2ApplicationDescriptorHandoffErrorV1::CommitmentMismatch
+        ));
+        assert_eq!(
+            error.to_string(),
+            "application handoff commitment does not bind the envelope and current executable"
+        );
+        assert!(validate_application_commitment(expected, expected).is_ok());
     }
 }
