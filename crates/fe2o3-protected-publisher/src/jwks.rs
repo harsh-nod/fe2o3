@@ -23,6 +23,14 @@ pub struct HttpsJwksProvider {
 
 impl HttpsJwksProvider {
     pub fn new(url: &str, timeout: Duration) -> Result<Self, PublisherError> {
+        Self::build(url, timeout, None)
+    }
+
+    fn build(
+        url: &str,
+        timeout: Duration,
+        extra_root: Option<reqwest::Certificate>,
+    ) -> Result<Self, PublisherError> {
         let url = reqwest::Url::parse(url).map_err(|_| PublisherError::Config)?;
         if url.scheme() != "https"
             || url.host_str().is_none()
@@ -32,15 +40,27 @@ impl HttpsJwksProvider {
         {
             return Err(PublisherError::Config);
         }
-        let client = reqwest::Client::builder()
+        let mut builder = reqwest::Client::builder()
             .https_only(true)
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(timeout)
             .timeout(timeout)
-            .user_agent("fe2o3-protected-publisher/1")
-            .build()
-            .map_err(|_| PublisherError::Config)?;
+            .user_agent("fe2o3-protected-publisher/1");
+        if let Some(root) = extra_root {
+            builder = builder.add_root_certificate(root);
+        }
+        let client = builder.build().map_err(|_| PublisherError::Config)?;
         Ok(Self { client, url })
+    }
+
+    #[cfg(test)]
+    fn with_test_root(
+        url: &str,
+        timeout: Duration,
+        root_pem: &[u8],
+    ) -> Result<Self, PublisherError> {
+        let root = reqwest::Certificate::from_pem(root_pem).map_err(|_| PublisherError::Config)?;
+        Self::build(url, timeout, Some(root))
     }
 
     async fn fetch_inner(&self, deadline: Instant) -> Result<Vec<u8>, PublisherError> {
@@ -139,5 +159,129 @@ impl JwksProvider for StaticJwksProvider {
                 Ok(self.bytes.as_ref().clone())
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+    use std::process::{Child, Command, Stdio};
+    use std::thread;
+
+    use super::*;
+    use crate::test_support::secure_tempdir;
+
+    const CERT: &[u8] = include_bytes!("../tests/fixtures/mock-issuer-ca.pem");
+
+    struct MockIssuer {
+        child: Child,
+        _directory: tempfile::TempDir,
+        url: String,
+    }
+
+    impl MockIssuer {
+        fn start(mode: &str) -> Self {
+            let directory = secure_tempdir();
+            let port_file = directory.path().join("port");
+            let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+            let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+            let mut child = Command::new("python3")
+                .arg(root.join("scripts/tests/mock-publisher-issuer.py"))
+                .args([
+                    "--cert",
+                    fixture.join("mock-issuer-cert.pem").to_str().unwrap(),
+                ])
+                .args([
+                    "--key",
+                    fixture.join("mock-issuer-key.pem").to_str().unwrap(),
+                ])
+                .args(["--port-file", port_file.to_str().unwrap()])
+                .args(["--mode", mode])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap();
+            let port = wait_for_port(&port_file, &mut child);
+            Self {
+                child,
+                _directory: directory,
+                url: format!("https://localhost:{port}/jwks"),
+            }
+        }
+    }
+
+    impl Drop for MockIssuer {
+        fn drop(&mut self) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+
+    fn wait_for_port(path: &PathBuf, child: &mut Child) -> u16 {
+        for _ in 0..200 {
+            if let Ok(value) = std::fs::read_to_string(path) {
+                return value.trim().parse().unwrap();
+            }
+            assert!(
+                child.try_wait().unwrap().is_none(),
+                "mock issuer exited early"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+        panic!("mock issuer did not publish its port");
+    }
+
+    #[tokio::test]
+    async fn validated_https_fetches_bounded_jwks() {
+        let issuer = MockIssuer::start("jwks");
+        let provider =
+            HttpsJwksProvider::with_test_root(&issuer.url, Duration::from_secs(1), CERT).unwrap();
+        let body = provider
+            .fetch(Instant::now() + Duration::from_secs(1))
+            .await
+            .unwrap();
+        assert_eq!(body, b"{\"keys\":[]}\n");
+    }
+
+    #[tokio::test]
+    async fn untrusted_cert_redirect_and_oversize_fail_closed() {
+        let untrusted = MockIssuer::start("jwks");
+        let provider = HttpsJwksProvider::new(&untrusted.url, Duration::from_secs(1)).unwrap();
+        assert!(
+            provider
+                .fetch(Instant::now() + Duration::from_secs(1))
+                .await
+                .is_err()
+        );
+
+        for mode in ["redirect", "oversize"] {
+            let issuer = MockIssuer::start(mode);
+            let provider =
+                HttpsJwksProvider::with_test_root(&issuer.url, Duration::from_secs(1), CERT)
+                    .unwrap();
+            assert!(
+                provider
+                    .fetch(Instant::now() + Duration::from_secs(1))
+                    .await
+                    .is_err()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn slow_response_obeys_one_absolute_deadline() {
+        let issuer = MockIssuer::start("slow");
+        let provider =
+            HttpsJwksProvider::with_test_root(&issuer.url, Duration::from_millis(75), CERT)
+                .unwrap();
+        let start = Instant::now();
+        assert!(
+            provider
+                .fetch(start + Duration::from_millis(75))
+                .await
+                .is_err()
+        );
+        assert!(start.elapsed() < Duration::from_millis(500));
     }
 }
