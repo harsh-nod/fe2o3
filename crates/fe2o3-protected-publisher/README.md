@@ -22,6 +22,10 @@ and semantic validator used during restart before it can be appended. A new
 ledger header is fully written and synced in an anonymous same-directory inode,
 published atomically no-replace, parent-synced, reopened, locked, and replayed;
 no empty or partial final ledger is initialized in place.
+Idempotent recovery uses bounded positional frame reads and cannot disturb the
+append cursor or live sequence/hash state. Any indexed-read or validation
+failure poisons the live store and blocks subsequent acknowledgement while
+leaving the durable ledger unchanged for independent restart replay.
 
 This crate is inert by default. It is not deployed, production-ready, or an
 acceptance/parity claim. See `docs/protected-publisher-service-v1.md` for the
