@@ -224,3 +224,48 @@ impl ReceiptSigner for TestSigner {
         }
     }
 }
+
+#[cfg(test)]
+mod file_signer_tests {
+    use super::*;
+    use ed25519_dalek::pkcs8::EncodePrivateKey;
+    use ed25519_dalek::pkcs8::spki::der::pem::LineEnding;
+    use ed25519_dalek::{Signature, Verifier};
+    use std::fs::hard_link;
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    use crate::test_support::secure_tempdir;
+
+    #[test]
+    fn owner_only_single_link_pkcs8_key_signs() {
+        let temp = secure_tempdir();
+        let path = temp.path().join("publisher.pem");
+        let key = SigningKey::from_bytes(&[19; 32]);
+        let pem = key.to_pkcs8_pem(LineEnding::LF).unwrap();
+        std::fs::write(&path, pem.as_bytes()).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let signer = FileReceiptSigner::load("publisher-v1".into(), &path).unwrap();
+        let message = b"bounded publisher receipt";
+        let signature = Signature::from_bytes(&signer.sign(message).unwrap());
+        key.verifying_key().verify(message, &signature).unwrap();
+    }
+
+    #[test]
+    fn permissive_symlink_and_hardlink_keys_reject() {
+        let temp = secure_tempdir();
+        let path = temp.path().join("publisher.pem");
+        let key = SigningKey::from_bytes(&[23; 32]);
+        let pem = key.to_pkcs8_pem(LineEnding::LF).unwrap();
+        std::fs::write(&path, pem.as_bytes()).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(FileReceiptSigner::load("publisher-v1".into(), &path).is_err());
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let link = temp.path().join("publisher-link.pem");
+        symlink(&path, &link).unwrap();
+        assert!(FileReceiptSigner::load("publisher-v1".into(), &link).is_err());
+        let hard = temp.path().join("publisher-hard.pem");
+        hard_link(&path, &hard).unwrap();
+        assert!(FileReceiptSigner::load("publisher-v1".into(), &hard).is_err());
+    }
+}

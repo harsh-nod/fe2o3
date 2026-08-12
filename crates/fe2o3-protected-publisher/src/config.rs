@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::PublisherError;
 use crate::bounds::{MAX_CONFIG_BYTES, MAX_JSON_STRING_BYTES};
@@ -11,7 +11,7 @@ use crate::canonical::parse_canonical;
 
 pub const GITHUB_ISSUER: &str = "https://token.actions.githubusercontent.com";
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ServiceConfig {
     pub schema_version: u32,
@@ -117,4 +117,67 @@ pub fn valid_id(value: &str) -> bool {
         && bytes.all(|byte| {
             byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"._-".contains(&byte)
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::canonical::canonical_bytes;
+    use crate::test_support::{config, secure_tempdir};
+
+    fn production_config(root: &Path) -> ServiceConfig {
+        let mut config = config(root.join("publisher.db"));
+        config.signing_key_path = root.join("publisher.pem");
+        config.signature_domain = "production".into();
+        config.jwks_url = format!("{GITHUB_ISSUER}/.well-known/jwks");
+        config
+    }
+
+    #[test]
+    fn canonical_production_config_loads_exactly() {
+        let temp = secure_tempdir();
+        let config = production_config(temp.path());
+        assert!(config.validate().is_ok());
+        let path = temp.path().join("config.json");
+        let value = serde_json::to_value(&config).unwrap();
+        std::fs::write(&path, canonical_bytes(&value).unwrap()).unwrap();
+        let loaded = ServiceConfig::load(&path).unwrap();
+        assert_eq!(loaded.repository, "powderluv/fe2o3");
+        assert_eq!(loaded.listen.ip(), std::net::Ipv4Addr::LOCALHOST);
+    }
+
+    #[test]
+    fn deployment_boundary_mutations_reject() {
+        let temp = secure_tempdir();
+        let base = production_config(temp.path());
+
+        let mut config = base.clone();
+        config.listen = "0.0.0.0:9443".parse().unwrap();
+        assert!(config.validate().is_err());
+        let mut config = base.clone();
+        config.jwks_url = "https://attacker.invalid/jwks".into();
+        assert!(config.validate().is_err());
+        let mut config = base.clone();
+        config.issuer = "https://attacker.invalid".into();
+        assert!(config.validate().is_err());
+        let mut config = base.clone();
+        config.signature_domain = "test".into();
+        assert!(config.validate().is_err());
+        let mut config = base.clone();
+        config.allowed_actor_ids = vec!["101".into(), "101".into()];
+        assert!(config.validate().is_err());
+        let mut config = base;
+        config.database_path = "relative.db".into();
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn noncanonical_and_duplicate_config_json_rejects() {
+        let temp = secure_tempdir();
+        let path = temp.path().join("config.json");
+        std::fs::write(&path, b"{\"schema_version\":1,\"schema_version\":1}\n").unwrap();
+        assert!(ServiceConfig::load(&path).is_err());
+        std::fs::write(&path, b"{ \"schema_version\": 1 }\n").unwrap();
+        assert!(ServiceConfig::load(&path).is_err());
+    }
 }
