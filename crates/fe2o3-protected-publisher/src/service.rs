@@ -307,7 +307,7 @@ mod tests {
         provider: StaticJwksProvider,
         signer: Arc<TestSigner>,
     ) -> Arc<Publisher> {
-        let config = config(temp.path().join("publisher.db"));
+        let config = config(temp.path().join("publisher.ledger"));
         let store = DurableStore::open(&config.ledger_path).unwrap();
         Publisher::for_test(config, Arc::new(provider), store, signer)
     }
@@ -458,9 +458,35 @@ key\t0000\tpublisher\ttest-publisher-v1\tkeys/test-publisher-v1.pem\t{digest}\te
     }
 
     #[tokio::test]
+    async fn idempotency_header_is_single_and_canonical() {
+        let temp = secure_tempdir();
+        let publisher = test_publisher(
+            &temp,
+            StaticJwksProvider::new(jwks("fixture-key")),
+            Arc::new(TestSigner::new("test-publisher-v1")),
+        );
+        for keys in [vec![], vec!["short"], vec![REQUEST_KEY, REQUEST_KEY]] {
+            let fixture = fixture();
+            let mut request = Request::builder()
+                .method(Method::POST)
+                .uri("/v1/receipts")
+                .header(CONTENT_TYPE, "application/json")
+                .header(AUTHORIZATION, format!("Bearer {}", fixture.token));
+            for key in keys {
+                request = request.header(&IDEMPOTENCY_KEY, key);
+            }
+            let response = router(publisher.clone())
+                .oneshot(request.body(Body::from(fixture.request_body)).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        }
+    }
+
+    #[tokio::test]
     async fn inbound_admission_and_body_deadline_fail_closed() {
         let temp = secure_tempdir();
-        let mut config = config(temp.path().join("publisher.db"));
+        let mut config = config(temp.path().join("publisher.ledger"));
         config.max_inflight_requests = 1;
         let store = DurableStore::open(&config.ledger_path).unwrap();
         let publisher = Publisher::for_test(
@@ -503,7 +529,7 @@ key\t0000\tpublisher\ttest-publisher-v1\tkeys/test-publisher-v1.pem\t{digest}\te
     }
 
     #[tokio::test]
-    async fn outage_signing_and_database_failures_do_not_emit_receipts() {
+    async fn outage_signing_and_ledger_failures_do_not_emit_receipts() {
         let fixture = fixture();
         let outage_temp = secure_tempdir();
         let outage = test_publisher(
@@ -532,15 +558,15 @@ key\t0000\tpublisher\ttest-publisher-v1\tkeys/test-publisher-v1.pem\t{digest}\te
         ));
         assert_eq!(signing.store.count().await, 0);
 
-        let database_temp = secure_tempdir();
-        let database = test_publisher(
-            &database_temp,
+        let ledger_temp = secure_tempdir();
+        let ledger = test_publisher(
+            &ledger_temp,
             StaticJwksProvider::new(jwks("fixture-key")),
             Arc::new(TestSigner::new("test-publisher-v1")),
         );
-        database.store.break_for_test().await;
+        ledger.store.break_for_test().await;
         assert!(matches!(
-            database
+            ledger
                 .issue(&fixture.request_body, &fixture.token, REQUEST_KEY)
                 .await,
             Err(PublisherError::Store)
@@ -572,7 +598,7 @@ key\t0000\tpublisher\ttest-publisher-v1\tkeys/test-publisher-v1.pem\t{digest}\te
     #[tokio::test]
     async fn timed_out_commit_is_recoverable_by_idempotent_retry() {
         let temp = secure_tempdir();
-        let mut config = config(temp.path().join("publisher.db"));
+        let mut config = config(temp.path().join("publisher.ledger"));
         config.request_deadline_milliseconds = 100;
         let mut store = DurableStore::open(&config.ledger_path).unwrap();
         store.set_commit_delay(std::time::Duration::from_millis(250));
@@ -613,7 +639,7 @@ key\t0000\tpublisher\ttest-publisher-v1\tkeys/test-publisher-v1.pem\t{digest}\te
     #[tokio::test]
     async fn stalled_store_shutdown_wait_is_bounded() {
         let temp = secure_tempdir();
-        let mut config = config(temp.path().join("publisher.db"));
+        let mut config = config(temp.path().join("publisher.ledger"));
         config.request_deadline_milliseconds = 50;
         let mut store = DurableStore::open(&config.ledger_path).unwrap();
         store.set_commit_delay(std::time::Duration::from_millis(200));
@@ -654,9 +680,9 @@ key\t0000\tpublisher\ttest-publisher-v1\tkeys/test-publisher-v1.pem\t{digest}\te
     }
 
     #[test]
-    fn production_open_requires_enrollment_before_key_or_database_access() {
+    fn production_open_requires_enrollment_before_key_or_ledger_access() {
         let temp = secure_tempdir();
-        let mut config = config(temp.path().join("publisher.db"));
+        let mut config = config(temp.path().join("publisher.ledger"));
         config.signature_domain = "production".into();
         config.jwks_url = format!("{}/.well-known/jwks", crate::config::GITHUB_ISSUER);
         config.signing_key_path = temp.path().join("absent-key.pem");
@@ -665,6 +691,6 @@ key\t0000\tpublisher\ttest-publisher-v1\tkeys/test-publisher-v1.pem\t{digest}\te
             Publisher::open(config),
             Err(PublisherError::Config)
         ));
-        assert!(!temp.path().join("publisher.db").exists());
+        assert!(!temp.path().join("publisher.ledger").exists());
     }
 }

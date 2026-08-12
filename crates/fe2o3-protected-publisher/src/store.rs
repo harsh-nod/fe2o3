@@ -974,6 +974,23 @@ mod tests {
     }
 
     #[test]
+    fn parent_directory_rename_and_replacement_fail_stop() {
+        let temp = secure_tempdir();
+        let state = temp.path().join("state");
+        std::fs::create_dir(&state).unwrap();
+        std::fs::set_permissions(&state, Permissions::from_mode(0o700)).unwrap();
+        let path = state.join("publisher.ledger");
+        let mut store = DurableStore::open(&path).unwrap();
+        std::fs::rename(&state, temp.path().join("moved-state")).unwrap();
+        std::fs::create_dir(&state).unwrap();
+        std::fs::set_permissions(&state, Permissions::from_mode(0o700)).unwrap();
+        assert!(matches!(
+            issue_with(&mut store, KEY_A, &fixture()),
+            Err(PublisherError::Store)
+        ));
+    }
+
+    #[test]
     fn deadline_before_admission_rejects_and_admitted_commit_is_authoritative() {
         let temp = secure_tempdir();
         let path = temp.path().join("publisher.ledger");

@@ -105,6 +105,7 @@ impl ServiceConfig {
             || !self.signing_key_path.is_absolute()
             || self.enrollment_artifact_path == self.ledger_path
             || self.enrollment_artifact_path == self.signing_key_path
+            || self.ledger_path == self.signing_key_path
         {
             return Err(PublisherError::Config);
         }
@@ -173,7 +174,7 @@ mod tests {
     use std::os::unix::fs::{PermissionsExt, symlink};
 
     fn production_config(root: &Path) -> ServiceConfig {
-        let mut config = config(root.join("publisher.db"));
+        let mut config = config(root.join("publisher.ledger"));
         config.signing_key_path = root.join("publisher.pem");
         config.signature_domain = "production".into();
         config.jwks_url = format!("{GITHUB_ISSUER}/.well-known/jwks");

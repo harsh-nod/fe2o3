@@ -4,7 +4,7 @@ use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::OpenOptionsExt;
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::PublisherError;
@@ -68,6 +68,7 @@ impl FileIdentity {
 pub(crate) struct SecureLocation {
     directory: File,
     directory_identity: FileIdentity,
+    parent_path: PathBuf,
     name: CString,
 }
 
@@ -90,6 +91,7 @@ impl SecureLocation {
         Ok(Self {
             directory,
             directory_identity,
+            parent_path: parent.to_owned(),
             name,
         })
     }
@@ -139,6 +141,9 @@ impl SecureLocation {
             || !self
                 .directory_identity()?
                 .same_stable_object(self.directory_identity)
+            || !self
+                .path_directory_identity()?
+                .same_stable_object(self.directory_identity)
         {
             return Err(PublisherError::Config);
         }
@@ -177,6 +182,9 @@ impl SecureLocation {
             || !self
                 .directory_identity()?
                 .same_stable_object(self.directory_identity)
+            || !self
+                .path_directory_identity()?
+                .same_stable_object(self.directory_identity)
         {
             return Err(PublisherError::Config);
         }
@@ -196,6 +204,9 @@ impl SecureLocation {
             || !self
                 .directory_identity()?
                 .same_stable_object(self.directory_identity)
+            || !self
+                .path_directory_identity()?
+                .same_stable_object(self.directory_identity)
         {
             return Err(PublisherError::Store);
         }
@@ -212,6 +223,11 @@ impl SecureLocation {
 
     fn directory_identity(&self) -> Result<FileIdentity, PublisherError> {
         fstat(self.directory.as_raw_fd())
+    }
+
+    fn path_directory_identity(&self) -> Result<FileIdentity, PublisherError> {
+        let directory = open_directory_without_symlinks(&self.parent_path)?;
+        fstat(directory.as_raw_fd())
     }
 }
 
@@ -399,9 +415,9 @@ mod tests {
     }
 
     #[test]
-    fn database_entry_substitution_is_detected() {
+    fn ledger_entry_substitution_is_detected() {
         let temp = secure_tempdir();
-        let path = temp.path().join("publisher.db");
+        let path = temp.path().join("publisher.ledger");
         let location = SecureLocation::open(&path).unwrap();
         let (_file, identity, _) = location.open_or_create_ledger().unwrap();
         let moved = temp.path().join("moved.db");
