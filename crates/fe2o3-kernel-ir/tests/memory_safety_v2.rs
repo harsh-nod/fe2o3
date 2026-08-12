@@ -2093,6 +2093,58 @@ fn immutable_hard_caps_and_execution_work_bound_every_scan() {
 }
 
 #[test]
+fn report_identity_work_accounts_for_every_policy_field() {
+    const STALE_REPORT_LIMIT: u64 = 40_943;
+    const EXACT_REPORT_LIMIT: u64 = 41_315;
+
+    let program = MemoryProgramV2::new(
+        TargetLayoutV2::gfx942_xnack_minus(),
+        Vec::new(),
+        vec![allocate(16)],
+        MemoryBudgetsV2::default(),
+    )
+    .unwrap();
+    let stale = MemoryBudgetsV2 {
+        max_execution_work: STALE_REPORT_LIMIT,
+        ..MemoryBudgetsV2::default()
+    };
+    let error = execute_memory_program_v2(&program, stale).unwrap_err();
+    assert_eq!(
+        error.reason,
+        MemoryErrorReasonV2::ResourceLimit {
+            resource: "execution work",
+            actual: EXACT_REPORT_LIMIT,
+            max: STALE_REPORT_LIMIT,
+        }
+    );
+
+    let exact = MemoryBudgetsV2 {
+        max_execution_work: EXACT_REPORT_LIMIT,
+        ..MemoryBudgetsV2::default()
+    };
+    let execution = execute_memory_program_v2(&program, exact).unwrap();
+    assert_eq!(execution.records().len(), 1);
+    assert_eq!(execution.records()[0].obligations.len(), 2);
+    assert_eq!(execution.execution_work(), EXACT_REPORT_LIMIT);
+    assert!(execution.verify_identities(&program, exact).unwrap());
+
+    let one_below = MemoryBudgetsV2 {
+        max_execution_work: EXACT_REPORT_LIMIT - 1,
+        ..MemoryBudgetsV2::default()
+    };
+    assert_eq!(
+        execute_memory_program_v2(&program, one_below)
+            .unwrap_err()
+            .reason,
+        MemoryErrorReasonV2::ResourceLimit {
+            resource: "execution work",
+            actual: EXACT_REPORT_LIMIT,
+            max: EXACT_REPORT_LIMIT - 1,
+        }
+    );
+}
+
+#[test]
 fn truncated_collection_counts_fail_before_reservation() {
     let empty = MemoryProgramV2::new(
         TargetLayoutV2::gfx942_xnack_minus(),

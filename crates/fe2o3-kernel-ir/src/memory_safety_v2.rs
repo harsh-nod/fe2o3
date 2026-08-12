@@ -1393,7 +1393,7 @@ impl MemoryExecutionV2 {
                 return Ok(false);
             }
         }
-        let report_work = report_identity_work_v2(
+        let report_preflight = preflight_report_identity_v2(
             program_identity,
             self.validation_work,
             self.final_epoch,
@@ -1402,9 +1402,11 @@ impl MemoryExecutionV2 {
             &self.records,
         )
         .map_err(MemoryModelErrorV2::static_error)?;
-        work.charge(report_work)
+        let charged_report = report_preflight
+            .charge(&mut work)
             .map_err(MemoryModelErrorV2::static_error)?;
         let report_identity = hash_report_identity_v2(
+            charged_report,
             program_identity,
             self.validation_work,
             self.final_epoch,
@@ -3420,7 +3422,7 @@ fn canonical_report_identity_v2(
     records: &[TransitionRecordV2],
     work: &mut WorkMeterV2,
 ) -> Result<MemoryReportIdentityV2, MemoryErrorReasonV2> {
-    let hash_work = report_identity_work_v2(
+    let report_preflight = preflight_report_identity_v2(
         program_identity,
         validation_work,
         final_epoch,
@@ -3433,8 +3435,9 @@ fn canonical_report_identity_v2(
             resource: "report work preimage",
         });
     }
-    work.charge(hash_work)?;
+    let charged_report = report_preflight.charge(work)?;
     hash_report_identity_v2(
+        charged_report,
         program_identity,
         validation_work,
         final_epoch,
@@ -3444,52 +3447,69 @@ fn canonical_report_identity_v2(
     )
 }
 
-fn report_identity_work_v2(
-    _program_identity: UntrustedMemoryProgramIdentityV2,
-    _validation_work: u64,
-    _final_epoch: EpochV2,
-    _live_allocations: usize,
-    _execution_work: u64,
-    records: &[TransitionRecordV2],
-) -> Result<u64, MemoryErrorReasonV2> {
-    const REPORT_FIXED_BYTES: u64 = 8 + REPORT_IDENTITY_DOMAIN.len() as u64 + 40 + 8 + 32;
-    const TRANSITION_FIXED_BYTES: u64 = 40 + 40 + 40 + 4 + 8;
-    const OBLIGATION_BYTES: u64 = 40 + 4 + 40 + 40 + 4 + 1 + 4 + 8 + 8 + 8 + 8 + 1;
-    let mut message_bytes = REPORT_FIXED_BYTES;
-    for record in records {
-        message_bytes = message_bytes.checked_add(TRANSITION_FIXED_BYTES).ok_or(
-            MemoryErrorReasonV2::ResourceLimit {
-                resource: "identity work",
-                actual: u64::MAX,
-                max: HARD_MAX_EXECUTION_WORK,
-            },
-        )?;
-        message_bytes = message_bytes
-            .checked_add(
-                (record.obligations.len() as u64)
-                    .checked_mul(OBLIGATION_BYTES)
-                    .ok_or(MemoryErrorReasonV2::ResourceLimit {
-                        resource: "identity work",
-                        actual: u64::MAX,
-                        max: HARD_MAX_EXECUTION_WORK,
-                    })?,
-            )
-            .ok_or(MemoryErrorReasonV2::ResourceLimit {
-                resource: "identity work",
-                actual: u64::MAX,
-                max: HARD_MAX_EXECUTION_WORK,
-            })?;
+// The final execution-work value is part of the report identity. Count the exact
+// immutable encoding first, then consume a single-use token before hashing it.
+struct ReportIdentityPreflightV2 {
+    message_bytes: u64,
+    work: u64,
+}
+
+struct ChargedReportIdentityV2 {
+    message_bytes: u64,
+}
+
+impl ReportIdentityPreflightV2 {
+    fn charge(
+        self,
+        work: &mut WorkMeterV2,
+    ) -> Result<ChargedReportIdentityV2, MemoryErrorReasonV2> {
+        work.charge(self.work)?;
+        Ok(ChargedReportIdentityV2 {
+            message_bytes: self.message_bytes,
+        })
     }
-    identity_hash_work_v2(message_bytes)?
-        .checked_add(records.len() as u64)
+}
+
+fn preflight_report_identity_v2(
+    program_identity: UntrustedMemoryProgramIdentityV2,
+    validation_work: u64,
+    final_epoch: EpochV2,
+    live_allocations: usize,
+    execution_work: u64,
+    records: &[TransitionRecordV2],
+) -> Result<ReportIdentityPreflightV2, MemoryErrorReasonV2> {
+    let mut counter = CountingIdentitySinkV2::new();
+    encode_report_identity_v2(
+        &mut counter,
+        program_identity,
+        validation_work,
+        final_epoch,
+        live_allocations,
+        execution_work,
+        records,
+    )?;
+    let message_bytes = counter.written();
+    let record_count =
+        u64::try_from(records.len()).map_err(|_| MemoryErrorReasonV2::ResourceLimit {
+            resource: "identity work",
+            actual: u64::MAX,
+            max: HARD_MAX_EXECUTION_WORK,
+        })?;
+    let work = identity_hash_work_v2(message_bytes)?
+        .checked_add(record_count)
         .ok_or(MemoryErrorReasonV2::ResourceLimit {
             resource: "identity work",
             actual: u64::MAX,
             max: HARD_MAX_EXECUTION_WORK,
-        })
+        })?;
+    Ok(ReportIdentityPreflightV2 {
+        message_bytes,
+        work,
+    })
 }
 
 fn hash_report_identity_v2(
+    preflight: ChargedReportIdentityV2,
     program_identity: UntrustedMemoryProgramIdentityV2,
     validation_work: u64,
     final_epoch: EpochV2,
@@ -3498,18 +3518,44 @@ fn hash_report_identity_v2(
     records: &[TransitionRecordV2],
 ) -> Result<MemoryReportIdentityV2, MemoryErrorReasonV2> {
     let mut digest = UnmeteredSha256V2::new();
-    identity_bytes(&mut digest, REPORT_IDENTITY_DOMAIN)?;
-    identity_bytes(&mut digest, program_identity.digest())?;
-    identity_u64(&mut digest, validation_work)?;
-    identity_u64(&mut digest, final_epoch.0)?;
-    identity_u64(&mut digest, live_allocations as u64)?;
-    identity_u64(&mut digest, execution_work)?;
-    identity_u64(&mut digest, records.len() as u64)?;
-    for record in records {
-        identity_bytes(&mut digest, record.transition_identity.digest())?;
-        identity_transition_fields(&mut digest, record)?;
+    encode_report_identity_v2(
+        &mut digest,
+        program_identity,
+        validation_work,
+        final_epoch,
+        live_allocations,
+        execution_work,
+        records,
+    )?;
+    if digest.message_bytes() != preflight.message_bytes {
+        return Err(MemoryErrorReasonV2::IdentityMismatch {
+            resource: "report identity preflight",
+        });
     }
     Ok(MemoryReportIdentityV2(digest.finalize()))
+}
+
+fn encode_report_identity_v2<D: IdentitySinkV2>(
+    digest: &mut D,
+    program_identity: UntrustedMemoryProgramIdentityV2,
+    validation_work: u64,
+    final_epoch: EpochV2,
+    live_allocations: usize,
+    execution_work: u64,
+    records: &[TransitionRecordV2],
+) -> Result<(), MemoryErrorReasonV2> {
+    identity_bytes(digest, REPORT_IDENTITY_DOMAIN)?;
+    identity_bytes(digest, program_identity.digest())?;
+    identity_u64(digest, validation_work)?;
+    identity_u64(digest, final_epoch.0)?;
+    identity_u64(digest, live_allocations as u64)?;
+    identity_u64(digest, execution_work)?;
+    identity_u64(digest, records.len() as u64)?;
+    for record in records {
+        identity_bytes(digest, record.transition_identity.digest())?;
+        identity_transition_fields(digest, record)?;
+    }
+    Ok(())
 }
 
 fn identity_obligation_fields<D: IdentitySinkV2>(
@@ -3596,6 +3642,39 @@ trait IdentitySinkV2 {
     fn update(&mut self, bytes: &[u8]) -> Result<(), MemoryErrorReasonV2>;
 }
 
+struct CountingIdentitySinkV2 {
+    message_bytes: u64,
+}
+
+impl CountingIdentitySinkV2 {
+    const fn new() -> Self {
+        Self { message_bytes: 0 }
+    }
+
+    const fn written(&self) -> u64 {
+        self.message_bytes
+    }
+}
+
+impl IdentitySinkV2 for CountingIdentitySinkV2 {
+    fn update(&mut self, bytes: &[u8]) -> Result<(), MemoryErrorReasonV2> {
+        let byte_count =
+            u64::try_from(bytes.len()).map_err(|_| MemoryErrorReasonV2::ResourceLimit {
+                resource: "identity work",
+                actual: u64::MAX,
+                max: HARD_MAX_EXECUTION_WORK,
+            })?;
+        self.message_bytes = self.message_bytes.checked_add(byte_count).ok_or(
+            MemoryErrorReasonV2::ResourceLimit {
+                resource: "identity work",
+                actual: u64::MAX,
+                max: HARD_MAX_EXECUTION_WORK,
+            },
+        )?;
+        Ok(())
+    }
+}
+
 fn identity_hash_work_v2(message_bytes: u64) -> Result<u64, MemoryErrorReasonV2> {
     let blocks = message_bytes
         .checked_add(9)
@@ -3676,21 +3755,44 @@ impl IdentitySinkV2 for MeteredSha256V2<'_> {
     }
 }
 
-struct UnmeteredSha256V2(Sha256V2);
+struct UnmeteredSha256V2 {
+    digest: Sha256V2,
+    message_bytes: u64,
+}
 
 impl UnmeteredSha256V2 {
     const fn new() -> Self {
-        Self(Sha256V2::new())
+        Self {
+            digest: Sha256V2::new(),
+            message_bytes: 0,
+        }
+    }
+
+    const fn message_bytes(&self) -> u64 {
+        self.message_bytes
     }
 
     fn finalize(self) -> [u8; 32] {
-        self.0.finalize()
+        self.digest.finalize()
     }
 }
 
 impl IdentitySinkV2 for UnmeteredSha256V2 {
     fn update(&mut self, bytes: &[u8]) -> Result<(), MemoryErrorReasonV2> {
-        self.0.update(bytes);
+        let byte_count =
+            u64::try_from(bytes.len()).map_err(|_| MemoryErrorReasonV2::ResourceLimit {
+                resource: "identity work",
+                actual: u64::MAX,
+                max: HARD_MAX_EXECUTION_WORK,
+            })?;
+        self.message_bytes = self.message_bytes.checked_add(byte_count).ok_or(
+            MemoryErrorReasonV2::ResourceLimit {
+                resource: "identity work",
+                actual: u64::MAX,
+                max: HARD_MAX_EXECUTION_WORK,
+            },
+        )?;
+        self.digest.update(bytes);
         Ok(())
     }
 }
@@ -5141,5 +5243,180 @@ mod internal_tests {
             );
             assert_eq!(work.used(), 0, "projection rejection must precede encoding");
         }
+    }
+
+    fn report_test_action(allocation: u32) -> MemoryActionV2 {
+        MemoryActionV2::Allocate {
+            allocation: AllocationIdV2::new(allocation).unwrap(),
+            generation: 7,
+            owner: OwnerIdV2::new(1).unwrap(),
+            address_space: AddressSpaceV2::Global,
+            base_address: 0x1000 * u64::from(allocation),
+            byte_len: 16,
+            alignment: 16,
+            lifetime: LifetimeRegionV2 {
+                start: EpochV2(0),
+                end_inclusive: EpochV2(100),
+            },
+        }
+    }
+
+    fn report_work_boundary(records: &[TransitionRecordV2]) -> (u64, u64, MemoryReportIdentityV2) {
+        let program_identity = UntrustedMemoryProgramIdentityV2([0x6b; 32]);
+        let preflight =
+            preflight_report_identity_v2(program_identity, 17, EpochV2(3), 2, 0, records).unwrap();
+        let message_bytes = preflight.message_bytes;
+        let exact_work = preflight.work;
+
+        let mut exact = WorkMeterV2::execution(exact_work);
+        let identity = canonical_report_identity_v2(
+            program_identity,
+            17,
+            EpochV2(3),
+            2,
+            0,
+            records,
+            &mut exact,
+        )
+        .unwrap();
+        assert_eq!(exact.used(), exact_work);
+
+        let mut one_below = WorkMeterV2::execution(exact_work - 1);
+        assert_eq!(
+            canonical_report_identity_v2(
+                program_identity,
+                17,
+                EpochV2(3),
+                2,
+                0,
+                records,
+                &mut one_below,
+            )
+            .unwrap_err(),
+            MemoryErrorReasonV2::ResourceLimit {
+                resource: "execution work",
+                actual: exact_work,
+                max: exact_work - 1,
+            }
+        );
+        (message_bytes, exact_work, identity)
+    }
+
+    #[test]
+    fn report_identity_uses_one_encoder_for_zero_one_and_maximum_counts() {
+        let (empty_bytes, empty_work, _) = report_work_boundary(&[]);
+
+        let default_budgets = MemoryBudgetsV2::default();
+        let allocation_program = MemoryProgramV2::new(
+            TargetLayoutV2::gfx942_xnack_minus(),
+            Vec::new(),
+            vec![report_test_action(1)],
+            default_budgets,
+        )
+        .unwrap();
+        let allocation = execute_memory_program_v2(&allocation_program, default_budgets).unwrap();
+        assert_eq!(allocation.records.len(), 1);
+        assert_eq!(allocation.records[0].obligations.len(), 2);
+
+        let mut one_obligation = allocation.records[0].clone();
+        one_obligation.obligations.truncate(1);
+        let (one_bytes, one_work, baseline_identity) =
+            report_work_boundary(std::slice::from_ref(&one_obligation));
+        assert!(one_bytes > empty_bytes);
+        assert!(one_work > empty_work);
+
+        let mut policy_mutations = Vec::new();
+        macro_rules! mutate_policy_field {
+            ($field:ident) => {{
+                let mut budgets = one_obligation.admitted_budgets;
+                budgets.$field -= 1;
+                policy_mutations.push(budgets);
+            }};
+        }
+        mutate_policy_field!(max_types);
+        mutate_policy_field!(max_type_edges);
+        mutate_policy_field!(max_validity_ranges);
+        mutate_policy_field!(max_actions);
+        mutate_policy_field!(max_projections_per_place);
+        mutate_policy_field!(max_allocations);
+        mutate_policy_field!(max_loans);
+        mutate_policy_field!(max_capabilities);
+        mutate_policy_field!(max_state_ranges);
+        mutate_policy_field!(max_obligations);
+        mutate_policy_field!(max_canonical_bytes);
+        mutate_policy_field!(max_validation_work);
+        mutate_policy_field!(max_execution_work);
+        assert_eq!(policy_mutations.len(), 13);
+
+        for budgets in policy_mutations {
+            let mut record_mutation = one_obligation.clone();
+            record_mutation.admitted_budgets = budgets;
+            let (mutated_bytes, mutated_work, mutated_identity) =
+                report_work_boundary(std::slice::from_ref(&record_mutation));
+            assert_eq!(mutated_bytes, one_bytes);
+            assert_eq!(mutated_work, one_work);
+            assert_ne!(mutated_identity, baseline_identity);
+
+            let mut obligation_mutation = one_obligation.clone();
+            obligation_mutation.obligations[0].admitted_budgets = budgets;
+            let (mutated_bytes, mutated_work, mutated_identity) =
+                report_work_boundary(std::slice::from_ref(&obligation_mutation));
+            assert_eq!(mutated_bytes, one_bytes);
+            assert_eq!(mutated_work, one_work);
+            assert_ne!(mutated_identity, baseline_identity);
+        }
+
+        let mixed_actions = vec![
+            report_test_action(1),
+            MemoryActionV2::AdvanceEpoch { to: EpochV2(1) },
+            MemoryActionV2::Deallocate {
+                allocation: AllocationIdV2::new(1).unwrap(),
+                owner: OwnerIdV2::new(1).unwrap(),
+            },
+        ];
+        let probe_program = MemoryProgramV2::new(
+            TargetLayoutV2::gfx942_xnack_minus(),
+            Vec::new(),
+            mixed_actions.clone(),
+            default_budgets,
+        )
+        .unwrap();
+        let probe = execute_memory_program_v2(&probe_program, default_budgets).unwrap();
+        let obligation_count = probe
+            .records
+            .iter()
+            .map(|record| record.obligations.len())
+            .sum::<usize>();
+        assert!(obligation_count > 0);
+
+        let maximum_budgets = MemoryBudgetsV2 {
+            max_actions: u32::try_from(mixed_actions.len()).unwrap(),
+            max_obligations: u32::try_from(obligation_count).unwrap(),
+            ..default_budgets
+        };
+        let maximum_program = MemoryProgramV2::new(
+            TargetLayoutV2::gfx942_xnack_minus(),
+            Vec::new(),
+            mixed_actions,
+            maximum_budgets,
+        )
+        .unwrap();
+        let maximum = execute_memory_program_v2(&maximum_program, maximum_budgets).unwrap();
+        assert_eq!(maximum.records.len(), maximum_budgets.max_actions as usize);
+        assert_eq!(
+            maximum
+                .records
+                .iter()
+                .map(|record| record.obligations.len())
+                .sum::<usize>(),
+            maximum_budgets.max_obligations as usize
+        );
+        assert_ne!(
+            maximum.records[0].action_identity,
+            maximum.records[1].action_identity
+        );
+        let (maximum_bytes, maximum_work, _) = report_work_boundary(&maximum.records);
+        assert!(maximum_bytes > one_bytes);
+        assert!(maximum_work > one_work);
     }
 }
