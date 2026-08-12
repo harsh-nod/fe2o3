@@ -46,6 +46,22 @@ pub(crate) struct ApplicationSandboxGuard {
     worker: Option<JoinHandle<Result<(), String>>>,
 }
 
+pub(crate) struct SandboxAdmissionFailure {
+    message: String,
+    cleanup: Option<ApplicationSandboxGuard>,
+}
+
+impl SandboxAdmissionFailure {
+    pub(crate) fn into_parts(mut self) -> (String, ApplicationSandboxGuard) {
+        (
+            self.message,
+            self.cleanup
+                .take()
+                .expect("sandbox admission failure owns cleanup state"),
+        )
+    }
+}
+
 impl PendingApplicationSandbox {
     pub(crate) fn start() -> Result<Self, String> {
         let (parent_socket, child_socket) = UnixDatagram::pair()
@@ -75,30 +91,73 @@ impl PendingApplicationSandbox {
             .as_raw_fd()
     }
 
-    pub(crate) fn complete(mut self, child_id: u32) -> Result<ApplicationSandboxGuard, String> {
+    pub(crate) fn complete(
+        mut self,
+        child_id: u32,
+    ) -> Result<ApplicationSandboxGuard, SandboxAdmissionFailure> {
         drop(self.child_socket.take());
-        let supervised_id =
-            self.ready
-                .recv_timeout(SUPERVISOR_READY_TIMEOUT)
-                .map_err(|error| {
-                    format!("seccomp exec supervisor did not admit initial exec: {error}")
-                })??;
+        let supervised_id = match self.ready.recv_timeout(SUPERVISOR_READY_TIMEOUT) {
+            Ok(Ok(supervised_id)) => supervised_id,
+            Ok(Err(error)) => return Err(self.failure(error)),
+            Err(error) => {
+                return Err(self.failure(format!(
+                    "seccomp exec supervisor did not admit initial exec: {error}"
+                )));
+            }
+        };
         if supervised_id != child_id {
-            return Err(format!(
+            return Err(self.failure(format!(
                 "seccomp exec supervisor admitted PID {supervised_id}, expected {child_id}"
-            ));
+            )));
         }
         Ok(ApplicationSandboxGuard {
             shutdown: self.shutdown.take(),
             worker: self.worker.take(),
         })
     }
+
+    fn failure(&mut self, message: String) -> SandboxAdmissionFailure {
+        let mut cleanup = ApplicationSandboxGuard {
+            shutdown: self.shutdown.take(),
+            worker: self.worker.take(),
+        };
+        cleanup.request_shutdown();
+        SandboxAdmissionFailure {
+            message,
+            cleanup: Some(cleanup),
+        }
+    }
+
+    #[cfg(test)]
+    fn test_stalled_pending(
+        release: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        completed: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> Self {
+        use std::sync::atomic::Ordering;
+
+        let (parent_socket, child_socket) = UnixDatagram::pair().unwrap();
+        let (_ready_send, ready) = mpsc::sync_channel(1);
+        let worker = thread::spawn(move || {
+            drop(parent_socket);
+            while !release.load(Ordering::Acquire) {
+                thread::sleep(Duration::from_millis(5));
+            }
+            completed.store(true, Ordering::Release);
+            Ok(())
+        });
+        Self {
+            child_socket: Some(child_socket),
+            ready,
+            shutdown: None,
+            worker: Some(worker),
+        }
+    }
 }
 
 impl Drop for PendingApplicationSandbox {
     fn drop(&mut self) {
         drop(self.child_socket.take());
-        let _ = stop_supervisor(&mut self.shutdown, &mut self.worker);
+        let _ = stop_supervisor_without_blocking(&mut self.shutdown, &mut self.worker);
     }
 }
 
@@ -148,7 +207,7 @@ impl ApplicationSandboxGuard {
 
 impl Drop for ApplicationSandboxGuard {
     fn drop(&mut self) {
-        let _ = stop_supervisor(&mut self.shutdown, &mut self.worker);
+        let _ = stop_supervisor_without_blocking(&mut self.shutdown, &mut self.worker);
     }
 }
 
@@ -511,12 +570,18 @@ fn cloexec_pipe() -> io::Result<(File, File)> {
     })
 }
 
-fn stop_supervisor(
+fn stop_supervisor_without_blocking(
     shutdown: &mut Option<File>,
     worker: &mut Option<JoinHandle<Result<(), String>>>,
 ) -> Result<(), String> {
     if let Some(mut shutdown) = shutdown.take() {
         let _ = shutdown.write_all(&[0]);
+    }
+    if worker.as_ref().is_some_and(|worker| !worker.is_finished()) {
+        // Dropping a JoinHandle detaches only this already-signalled worker. The dedicated
+        // application supervisor process remains the fail-stop lifetime boundary.
+        drop(worker.take());
+        return Ok(());
     }
     let Some(worker) = worker.take() else {
         return Ok(());
@@ -640,6 +705,8 @@ fn allowed_application_syscalls() -> &'static [libc::c_long] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Instant;
 
     #[test]
@@ -705,5 +772,31 @@ mod tests {
         let started = Instant::now();
         drop(pending);
         assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn dropping_stalled_pending_admission_never_joins() {
+        let release = Arc::new(AtomicBool::new(false));
+        let completed = Arc::new(AtomicBool::new(false));
+        let pending = PendingApplicationSandbox::test_stalled_pending(
+            Arc::clone(&release),
+            Arc::clone(&completed),
+        );
+
+        let started = Instant::now();
+        drop(pending);
+        assert!(
+            started.elapsed() < Duration::from_millis(250),
+            "stalled pending sandbox drop blocked for {:?}",
+            started.elapsed()
+        );
+        assert!(!completed.load(Ordering::Acquire));
+
+        release.store(true, Ordering::Release);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !completed.load(Ordering::Acquire) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(completed.load(Ordering::Acquire));
     }
 }

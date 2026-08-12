@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, SyncSender};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread;
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use fe2o3_artifact_transaction::{
@@ -96,6 +97,7 @@ impl Drop for ReaperReservation {
 struct ReapJob {
     child: Child,
     process_group: libc::pid_t,
+    process_group_terminal: bool,
     sandbox: Option<ApplicationSandboxGuard>,
     _reservation: ReaperReservation,
     leader_status: Option<ExitStatus>,
@@ -113,12 +115,28 @@ struct ReapJob {
 struct ReaperSupervisor {
     capacity: usize,
     reserved: AtomicUsize,
-    worker_started: AtomicBool,
     worker_count: AtomicUsize,
+    worker: Mutex<ReaperWorker>,
     jobs: Mutex<Vec<ReapJob>>,
     wake: Condvar,
-    #[cfg(test)]
     shutdown: AtomicBool,
+    #[cfg(test)]
+    fail_worker_start: AtomicBool,
+    #[cfg(test)]
+    panic_worker: AtomicBool,
+}
+
+#[derive(Clone, Debug)]
+enum ReaperWorkerPhase {
+    Unstarted,
+    Running,
+    Dead(String),
+    Stopped,
+}
+
+struct ReaperWorker {
+    phase: ReaperWorkerPhase,
+    handle: Option<JoinHandle<()>>,
 }
 
 impl ReaperSupervisor {
@@ -126,12 +144,18 @@ impl ReaperSupervisor {
         Arc::new(Self {
             capacity,
             reserved: AtomicUsize::new(0),
-            worker_started: AtomicBool::new(false),
             worker_count: AtomicUsize::new(0),
+            worker: Mutex::new(ReaperWorker {
+                phase: ReaperWorkerPhase::Unstarted,
+                handle: None,
+            }),
             jobs: Mutex::new(Vec::with_capacity(capacity)),
             wake: Condvar::new(),
-            #[cfg(test)]
             shutdown: AtomicBool::new(false),
+            #[cfg(test)]
+            fail_worker_start: AtomicBool::new(false),
+            #[cfg(test)]
+            panic_worker: AtomicBool::new(false),
         })
     }
 
@@ -152,10 +176,15 @@ impl ReaperSupervisor {
                 Ordering::Acquire,
             ) {
                 Ok(_) => {
-                    return Ok(ReaperReservation {
+                    let reservation = ReaperReservation {
                         supervisor: Arc::clone(self),
                         released: false,
-                    });
+                    };
+                    if let Err(error) = self.ensure_worker() {
+                        drop(reservation);
+                        return Err(error);
+                    }
+                    return Ok(reservation);
                 }
                 Err(observed) => current = observed,
             }
@@ -163,38 +192,95 @@ impl ReaperSupervisor {
     }
 
     fn ensure_worker(self: &Arc<Self>) -> Result<(), String> {
-        if self
-            .worker_started
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-        {
-            return Ok(());
+        let mut worker = self
+            .worker
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match &worker.phase {
+            ReaperWorkerPhase::Running
+                if worker
+                    .handle
+                    .as_ref()
+                    .is_some_and(|handle| !handle.is_finished()) =>
+            {
+                return Ok(());
+            }
+            ReaperWorkerPhase::Running => {
+                worker.phase = ReaperWorkerPhase::Dead(
+                    "application cleanup worker exited before lifecycle publication caught up"
+                        .to_string(),
+                );
+            }
+            ReaperWorkerPhase::Dead(error) => {
+                return Err(format!(
+                    "application cleanup supervisor is dead and fails closed: {error}"
+                ));
+            }
+            ReaperWorkerPhase::Stopped => {
+                return Err("application cleanup supervisor is stopped and fails closed".into());
+            }
+            ReaperWorkerPhase::Unstarted => {}
+        }
+        if let ReaperWorkerPhase::Dead(error) = &worker.phase {
+            return Err(format!(
+                "application cleanup supervisor is dead and fails closed: {error}"
+            ));
+        }
+        #[cfg(test)]
+        if self.fail_worker_start.load(Ordering::Acquire) {
+            return Err("injected application cleanup worker startup failure".to_string());
         }
         let supervisor = Arc::clone(self);
-        match thread::Builder::new()
+        let spawned = thread::Builder::new()
             .name("fe2o3-bounded-application-reaper".into())
-            .spawn(move || supervisor.run())
-        {
-            Ok(_) => {
+            .spawn(move || {
+                let runner = Arc::clone(&supervisor);
+                let result =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| runner.run()));
+                supervisor.worker_exited(result);
+            });
+        match spawned {
+            Ok(handle) => {
+                // Publication happens only after spawn returned a live, retained JoinHandle.
+                worker.handle = Some(handle);
+                worker.phase = ReaperWorkerPhase::Running;
                 self.worker_count.fetch_add(1, Ordering::Release);
                 Ok(())
             }
-            Err(error) => {
-                self.worker_started.store(false, Ordering::Release);
-                Err(format!(
-                    "failed to start bounded application cleanup supervisor: {error}"
-                ))
-            }
+            Err(error) => Err(format!(
+                "failed to start bounded application cleanup supervisor: {error}"
+            )),
         }
     }
 
     fn transfer(&self, job: ReapJob) {
+        let worker = self
+            .worker
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut jobs = self
             .jobs
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         debug_assert!(jobs.len() < self.capacity);
         jobs.push(job);
+        if matches!(
+            worker.phase,
+            ReaperWorkerPhase::Dead(_) | ReaperWorkerPhase::Stopped
+        ) {
+            let message = match &worker.phase {
+                ReaperWorkerPhase::Dead(error) => error.clone(),
+                ReaperWorkerPhase::Stopped => "cleanup worker stopped".to_string(),
+                _ => unreachable!(),
+            };
+            if let Some(completion) = jobs.last_mut().and_then(|job| job.completion.take()) {
+                let _ = completion.send(Err(format!(
+                    "application cleanup ownership retained after worker failure: {message}"
+                )));
+            }
+        }
+        drop(jobs);
+        drop(worker);
         self.wake.notify_one();
     }
 
@@ -205,7 +291,6 @@ impl ReaperSupervisor {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             while jobs.is_empty() {
-                #[cfg(test)]
                 if self.shutdown.load(Ordering::Acquire) {
                     return;
                 }
@@ -214,58 +299,154 @@ impl ReaperSupervisor {
                     .wait(jobs)
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
             }
-            let mut completed_jobs = Vec::new();
-            let mut index = 0;
-            while index < jobs.len() {
-                #[cfg(test)]
-                if jobs[index]
-                    .test_hold
-                    .as_ref()
-                    .is_some_and(|hold| hold.load(Ordering::Acquire))
-                {
-                    index += 1;
-                    continue;
+            drop(jobs);
+            #[cfg(test)]
+            if self.panic_worker.swap(false, Ordering::AcqRel) {
+                panic!("injected application cleanup worker panic");
+            }
+            self.poll_jobs_once();
+            thread::sleep(REAPER_POLL_INTERVAL);
+        }
+    }
+
+    fn poll_jobs_once(&self) {
+        let mut jobs = self
+            .jobs
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut completed_jobs = Vec::new();
+        let mut index = 0;
+        while index < jobs.len() {
+            #[cfg(test)]
+            if jobs[index]
+                .test_hold
+                .as_ref()
+                .is_some_and(|hold| hold.load(Ordering::Acquire))
+            {
+                index += 1;
+                continue;
+            }
+            match try_reap_job(&mut jobs[index]) {
+                Ok(true) => {
+                    completed_jobs.push(jobs.swap_remove(index));
                 }
-                match try_reap_job(&mut jobs[index]) {
-                    Ok(true) => {
-                        completed_jobs.push(jobs.swap_remove(index));
+                Ok(false) => index += 1,
+                Err(error) => {
+                    if jobs[index].last_retryable_error.as_deref() != Some(&error) {
+                        eprintln!(
+                            "cargo-fe2o3 application cleanup supervisor retained a slot after a retryable error: {error}"
+                        );
+                        jobs[index].last_retryable_error = Some(error.clone());
                     }
-                    Ok(false) => index += 1,
-                    Err(error) => {
-                        if jobs[index].last_retryable_error.as_deref() != Some(&error) {
-                            eprintln!(
-                                "cargo-fe2o3 application cleanup supervisor retained a slot after a retryable error: {error}"
-                            );
-                            jobs[index].last_retryable_error = Some(error.clone());
-                        }
-                        if let Some(completion) = jobs[index].completion.take() {
-                            let _ = completion.send(Err(format!(
+                    if let Some(completion) = jobs[index].completion.take() {
+                        let _ = completion.send(Err(format!(
                                 "application cleanup remains pending with its fixed-capacity supervisor slot retained after retryable error: {error}"
                             )));
-                        }
-                        index += 1;
                     }
+                    index += 1;
                 }
             }
-            drop(jobs);
-            for mut completed in completed_jobs {
-                let result = match (completed.leader_status, completed.completion_error.take()) {
-                    (_, Some(error)) => Err(error),
-                    (Some(status), None) => Ok(status),
-                    (None, None) => Err(
-                        "application cleanup completed without retaining leader status".to_string(),
-                    ),
-                };
-                if let Some(completion) = completed.completion.take() {
-                    let _ = completion.send(result);
+        }
+        drop(jobs);
+        for mut completed in completed_jobs {
+            let result = match (completed.leader_status, completed.completion_error.take()) {
+                (_, Some(error)) => Err(error),
+                (Some(status), None) => Ok(status),
+                (None, None) => {
+                    Err("application cleanup completed without retaining leader status".to_string())
                 }
-                #[cfg(test)]
-                if let Some(observed) = completed.test_completed.as_ref() {
-                    observed.store(true, Ordering::Release);
+            };
+            if let Some(completion) = completed.completion.take() {
+                let _ = completion.send(result);
+            }
+            #[cfg(test)]
+            if let Some(observed) = completed.test_completed.as_ref() {
+                observed.store(true, Ordering::Release);
+            }
+        }
+    }
+
+    fn worker_exited(&self, result: std::thread::Result<()>) {
+        let failure = result.err().map(|payload| {
+            payload
+                .downcast_ref::<&str>()
+                .map(|message| (*message).to_string())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "unknown panic payload".to_string())
+        });
+        let mut worker = self
+            .worker
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        worker.phase = if let Some(error) = &failure {
+            ReaperWorkerPhase::Dead(format!("cleanup worker panicked: {error}"))
+        } else if self.shutdown.load(Ordering::Acquire) {
+            ReaperWorkerPhase::Stopped
+        } else {
+            ReaperWorkerPhase::Dead("cleanup worker exited unexpectedly".to_string())
+        };
+        drop(worker);
+        if let Some(error) = failure {
+            let mut jobs = self
+                .jobs
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            for job in &mut *jobs {
+                if let Some(completion) = job.completion.take() {
+                    let _ = completion.send(Err(format!(
+                        "application cleanup ownership retained after cleanup worker panic: {error}"
+                    )));
                 }
+            }
+        }
+        self.wake.notify_all();
+    }
+
+    fn has_pending(&self) -> bool {
+        self.reserved.load(Ordering::Acquire) != 0
+    }
+
+    fn finish_process(self: &Arc<Self>) -> Result<(), String> {
+        while self.has_pending() {
+            let dead = {
+                let worker = self
+                    .worker
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                matches!(worker.phase, ReaperWorkerPhase::Dead(_))
+            };
+            if dead {
+                // The dedicated supervisor process itself is the bounded fallback worker. It
+                // admits no new jobs after worker death and retains ownership until they finish.
+                self.poll_jobs_once();
             }
             thread::sleep(REAPER_POLL_INTERVAL);
         }
+        self.shutdown.store(true, Ordering::Release);
+        self.wake.notify_all();
+        loop {
+            let finished = {
+                let worker = self
+                    .worker
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                worker.handle.as_ref().is_none_or(JoinHandle::is_finished)
+            };
+            if finished {
+                break;
+            }
+            thread::sleep(REAPER_POLL_INTERVAL);
+        }
+        let mut worker = self
+            .worker
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(handle) = worker.handle.take() {
+            handle
+                .join()
+                .map_err(|_| "application cleanup worker join observed a panic".to_string())?;
+        }
+        Ok(())
     }
 
     #[cfg(test)]
@@ -278,6 +459,14 @@ impl ReaperSupervisor {
 fn application_reaper() -> &'static Arc<ReaperSupervisor> {
     static REAPER: OnceLock<Arc<ReaperSupervisor>> = OnceLock::new();
     REAPER.get_or_init(|| ReaperSupervisor::new(MAX_PENDING_APPLICATION_REAPS))
+}
+
+pub(crate) fn application_cleanup_is_pending() -> bool {
+    application_reaper().has_pending()
+}
+
+pub(crate) fn finish_application_cleanup_supervisor() -> Result<(), String> {
+    application_reaper().finish_process()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -766,8 +955,9 @@ impl PendingApplicationAck {
             .complete(child.id())
         {
             Ok(sandbox) => sandbox,
-            Err(message) => {
-                return Err(self.failure(message, None));
+            Err(failure) => {
+                let (message, sandbox) = failure.into_parts();
+                return Err(self.failure(message, Some(sandbox)));
             }
         };
         #[cfg(any(test, feature = "worker-v2-fault-injection-test-only"))]
@@ -1118,6 +1308,10 @@ fn wait_for_leader_exit_without_reaping(leader: libc::pid_t) -> Result<(), Strin
     }
 }
 
+pub(crate) fn wait_for_application_exit_without_reaping(child: &Child) -> Result<(), String> {
+    wait_for_leader_exit_without_reaping(child.id() as libc::pid_t)
+}
+
 fn transfer_application_cleanup(
     child: Child,
     process_group: libc::pid_t,
@@ -1129,6 +1323,7 @@ fn transfer_application_cleanup(
     supervisor.transfer(ReapJob {
         child,
         process_group,
+        process_group_terminal: false,
         sandbox: cleanup.sandbox.take(),
         _reservation: cleanup.reaper,
         leader_status: None,
@@ -1156,6 +1351,14 @@ fn transfer_application_cleanup(
 }
 
 fn try_reap_job(job: &mut ReapJob) -> Result<bool, String> {
+    try_reap_job_with(job, kill_process_group, reap_process_group_nonblocking)
+}
+
+fn try_reap_job_with(
+    job: &mut ReapJob,
+    mut signal_group: impl FnMut(libc::pid_t) -> Result<(), String>,
+    mut reap_group: impl FnMut(libc::pid_t) -> Result<bool, String>,
+) -> Result<bool, String> {
     #[cfg(test)]
     if job
         .test_retryable_error
@@ -1164,21 +1367,27 @@ fn try_reap_job(job: &mut ReapJob) -> Result<bool, String> {
     {
         return Err("injected retryable nonblocking reap failure".to_string());
     }
-    kill_process_group(job.process_group)?;
-    if job.leader_status.is_none() {
-        match job.child.try_wait() {
-            Ok(Some(status)) => job.leader_status = Some(status),
-            Ok(None) => return Ok(false),
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => return Ok(false),
-            Err(error) => {
-                return Err(format!(
-                    "failed to nonblockingly reap application leader: {error}"
-                ));
+    if !job.process_group_terminal {
+        signal_group(job.process_group)?;
+        if job.leader_status.is_none() {
+            match job.child.try_wait() {
+                Ok(Some(status)) => job.leader_status = Some(status),
+                Ok(None) => return Ok(false),
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => return Ok(false),
+                Err(error) => {
+                    return Err(format!(
+                        "failed to nonblockingly reap application leader: {error}"
+                    ));
+                }
             }
         }
-    }
-    if !reap_process_group_nonblocking(job.process_group)? {
-        return Ok(false);
+        if !reap_group(job.process_group)? {
+            return Ok(false);
+        }
+        // ECHILD is terminal for this owned group after the leader has been reaped. From this
+        // point the numeric PGID can be recycled, so sandbox shutdown must never signal or wait
+        // on it again.
+        job.process_group_terminal = true;
     }
     let Some(sandbox) = job.sandbox.as_mut() else {
         return Ok(true);
@@ -2049,6 +2258,7 @@ mod tests {
             supervisor.transfer(ReapJob {
                 child,
                 process_group,
+                process_group_terminal: false,
                 sandbox: None,
                 _reservation: reservation,
                 leader_status: None,
@@ -2171,6 +2381,7 @@ mod tests {
             supervisor.transfer(ReapJob {
                 child,
                 process_group,
+                process_group_terminal: false,
                 sandbox,
                 _reservation: reservation,
                 leader_status: None,
@@ -2204,6 +2415,77 @@ mod tests {
     }
 
     #[test]
+    fn terminal_process_group_is_never_reused_for_sandbox_only_polling() {
+        let supervisor = ReaperSupervisor::new(1);
+        let reservation = supervisor.reserve().unwrap();
+        let child = fresh_session_command("/bin/true").spawn().unwrap();
+        let process_group = child.id() as libc::pid_t;
+        wait_for_leader_exit_without_reaping(process_group).unwrap();
+        let release = Arc::new(AtomicBool::new(false));
+        let mut job = ReapJob {
+            child,
+            process_group,
+            process_group_terminal: false,
+            sandbox: Some(ApplicationSandboxGuard::test_stalled_guard(Arc::clone(
+                &release,
+            ))),
+            _reservation: reservation,
+            leader_status: None,
+            completion: None,
+            completion_error: None,
+            last_retryable_error: None,
+            test_hold: None,
+            test_completed: None,
+            test_retryable_error: None,
+        };
+        let signals = std::cell::Cell::new(0_u32);
+
+        assert!(
+            !try_reap_job_with(
+                &mut job,
+                |_| {
+                    signals.set(signals.get() + 1);
+                    Ok(())
+                },
+                |_| Ok(true),
+            )
+            .unwrap()
+        );
+        assert!(job.process_group_terminal);
+        assert_eq!(signals.get(), 1);
+
+        // Treat the numeric identity as if the kernel had already assigned it to an unrelated
+        // process. Sandbox-only retries must not touch either signal or wait operations.
+        assert!(
+            !try_reap_job_with(
+                &mut job,
+                |_| panic!("terminal/reused PGID was signalled"),
+                |_| panic!("terminal/reused PGID was waited on"),
+            )
+            .unwrap()
+        );
+        assert_eq!(signals.get(), 1);
+
+        release.store(true, Ordering::Release);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut completed = false;
+        while !completed && Instant::now() < deadline {
+            completed = try_reap_job_with(
+                &mut job,
+                |_| panic!("terminal/reused PGID was signalled during final sandbox shutdown"),
+                |_| panic!("terminal/reused PGID was waited on during final sandbox shutdown"),
+            )
+            .unwrap();
+            if !completed {
+                thread::sleep(Duration::from_millis(5));
+            }
+        }
+        assert!(completed, "sandbox cleanup did not finish after release");
+        assert!(job.process_group_terminal);
+        supervisor.stop_for_test();
+    }
+
+    #[test]
     fn retryable_reap_error_is_observable_and_retains_capacity_until_recovery() {
         let supervisor = ReaperSupervisor::new(1);
         let fail = Arc::new(AtomicBool::new(true));
@@ -2218,6 +2500,7 @@ mod tests {
         supervisor.transfer(ReapJob {
             child,
             process_group,
+            process_group_terminal: false,
             sandbox: None,
             _reservation: reservation,
             leader_status: None,
@@ -2252,6 +2535,62 @@ mod tests {
         assert_eq!(supervisor.reserved.load(Ordering::Acquire), 0);
         assert!(!process_exists(process_group));
         supervisor.stop_for_test();
+    }
+
+    #[test]
+    fn worker_start_failure_never_publishes_a_reservation() {
+        let supervisor = ReaperSupervisor::new(1);
+        supervisor.fail_worker_start.store(true, Ordering::Release);
+        let error = match supervisor.reserve() {
+            Ok(_) => panic!("reservation succeeded without a cleanup worker"),
+            Err(error) => error,
+        };
+        assert!(error.contains("startup failure"), "{error}");
+        assert_eq!(supervisor.reserved.load(Ordering::Acquire), 0);
+        assert_eq!(supervisor.worker_count.load(Ordering::Acquire), 0);
+        assert!(supervisor.jobs.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn worker_panic_is_observable_fails_closed_and_uses_process_fallback() {
+        let supervisor = ReaperSupervisor::new(1);
+        let reservation = supervisor.reserve().unwrap();
+        let child = fresh_session_command("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let process_group = child.id() as libc::pid_t;
+        let (completion, result) = mpsc::sync_channel(1);
+        supervisor.panic_worker.store(true, Ordering::Release);
+        supervisor.transfer(ReapJob {
+            child,
+            process_group,
+            process_group_terminal: false,
+            sandbox: None,
+            _reservation: reservation,
+            leader_status: None,
+            completion: Some(completion),
+            completion_error: None,
+            last_retryable_error: None,
+            test_hold: None,
+            test_completed: None,
+            test_retryable_error: None,
+        });
+
+        let error = result
+            .recv_timeout(Duration::from_secs(2))
+            .expect("worker panic was not reported")
+            .unwrap_err();
+        assert!(error.contains("worker panic"), "{error}");
+        let admission = match supervisor.reserve() {
+            Ok(_) => panic!("dead cleanup worker admitted new ownership"),
+            Err(error) => error,
+        };
+        assert!(admission.contains("fails closed"), "{admission}");
+
+        supervisor.finish_process().unwrap();
+        assert_eq!(supervisor.reserved.load(Ordering::Acquire), 0);
+        assert!(!process_exists(process_group));
     }
 
     #[test]

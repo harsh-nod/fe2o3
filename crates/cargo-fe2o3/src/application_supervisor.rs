@@ -1,0 +1,617 @@
+//! Dedicated process boundary for descriptor-bearing Cargo applications.
+
+use std::env;
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Read, Write};
+use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, RawFd};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::os::unix::net::UnixStream;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, ExitStatus};
+use std::time::{Duration, Instant};
+
+pub(crate) const INTERNAL_SUPERVISOR_ARG: &str = "__fe2o3-application-supervisor-v1";
+
+const SUPERVISOR_CAPACITY: usize = 8;
+const SUPERVISOR_READY_TIMEOUT: Duration = Duration::from_secs(5);
+const SUPERVISOR_EXIT_TIMEOUT: Duration = Duration::from_secs(5);
+const PROTOCOL_MAGIC: [u8; 8] = *b"f2supv01";
+const PROTOCOL_READY: u8 = 1;
+const PROTOCOL_STATUS: u8 = 2;
+const PROTOCOL_ERROR: u8 = 3;
+const PROTOCOL_HEADER_BYTES: usize = 8 + 32 + 1 + 1 + 4 + 4;
+const MAX_PROTOCOL_MESSAGE_BYTES: usize = 64 * 1024;
+
+pub(crate) fn run_frontend(args: &[std::ffi::OsString]) -> Result<ExitStatus, String> {
+    let admission = SupervisorAdmission::acquire()?;
+    let (mut frontend, supervisor_channel) = UnixStream::pair()
+        .map_err(|error| format!("create application supervisor channel: {error}"))?;
+    set_cloexec(frontend.as_raw_fd())?;
+    set_cloexec(supervisor_channel.as_raw_fd())?;
+    let challenge = random_challenge()?;
+    let executable = env::current_exe()
+        .map_err(|error| format!("locate application supervisor executable: {error}"))?;
+    let channel_fd = supervisor_channel.as_raw_fd();
+    let slot_fd = admission.file.as_raw_fd();
+    let mut command = Command::new(executable);
+    command
+        .arg(INTERNAL_SUPERVISOR_ARG)
+        .arg(channel_fd.to_string())
+        .arg(slot_fd.to_string())
+        .arg(hex_encode(&challenge))
+        .args(args)
+        .process_group(0);
+    // SAFETY: the callback changes only two inherited descriptor flags via async-signal-safe
+    // fcntl calls. Both owning values remain live through spawn.
+    unsafe {
+        command.pre_exec(move || {
+            clear_cloexec_raw(channel_fd)?;
+            clear_cloexec_raw(slot_fd)?;
+            Ok(())
+        });
+    }
+    let mut supervisor = command
+        .spawn()
+        .map_err(|error| format!("start dedicated application supervisor: {error}"))?;
+    drop(supervisor_channel);
+    drop(admission);
+
+    let ready = match read_frame(&mut frontend, Some(SUPERVISOR_READY_TIMEOUT)) {
+        Ok(frame) => frame,
+        Err(error) => {
+            terminate_failed_start(&mut supervisor);
+            return Err(format!(
+                "application supervisor startup handshake failed: {error}"
+            ));
+        }
+    };
+    if ready.challenge != challenge || ready.kind != PROTOCOL_READY || ready.pending {
+        terminate_failed_start(&mut supervisor);
+        return Err("application supervisor startup handshake was not authentic".to_string());
+    }
+
+    let result = read_frame(&mut frontend, None)
+        .map_err(|error| format!("application supervisor result channel failed: {error}"))?;
+    if result.challenge != challenge || !matches!(result.kind, PROTOCOL_STATUS | PROTOCOL_ERROR) {
+        return Err("application supervisor returned an unauthenticated result".to_string());
+    }
+    if !result.pending {
+        let status = wait_for_exit(&mut supervisor, SUPERVISOR_EXIT_TIMEOUT).ok_or_else(|| {
+            "application supervisor reported completion but did not exit within its bound"
+                .to_string()
+        })?;
+        if !status.success() {
+            return Err(format!(
+                "application supervisor exited unsuccessfully after reporting completion: {status}"
+            ));
+        }
+    }
+    match result.kind {
+        PROTOCOL_STATUS => Ok(ExitStatus::from_raw(result.raw_status)),
+        PROTOCOL_ERROR => Err(String::from_utf8(result.message)
+            .map_err(|_| "application supervisor error was not UTF-8".to_string())?),
+        _ => unreachable!(),
+    }
+}
+
+pub(crate) fn run_supervisor(
+    args: &[std::ffi::OsString],
+    run_application: impl FnOnce(&[std::ffi::OsString]) -> Result<ExitStatus, String>,
+    cleanup_pending: impl Fn() -> bool,
+    finish_cleanup: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    if args.len() < 4 {
+        return Err(
+            "application supervisor requires channel, slot, challenge, and runner arguments"
+                .to_string(),
+        );
+    }
+    let channel_fd = parse_fd(&args[0], "protocol channel")?;
+    let slot_fd = parse_fd(&args[1], "admission slot")?;
+    if channel_fd == slot_fd {
+        return Err("application supervisor descriptors alias".to_string());
+    }
+    let challenge = parse_challenge(&args[2])?;
+    // SAFETY: the frontend transfers these two descriptors exactly once in the hidden command.
+    let mut channel = unsafe { UnixStream::from_raw_fd(channel_fd) };
+    // SAFETY: ownership is transferred by the same authenticated inherited command channel.
+    let slot = unsafe { File::from_raw_fd(slot_fd) };
+    validate_channel(&channel)?;
+    validate_slot(&slot)?;
+    write_frame(&mut channel, &Frame::ready(challenge))?;
+
+    let result = run_application(&args[3..]);
+    let pending = cleanup_pending();
+    if pending {
+        let reported = write_frame(&mut channel, &Frame::result(challenge, true, &result));
+        drop(channel);
+        let finished = finish_cleanup();
+        reported?;
+        finished?;
+    } else {
+        let finish = finish_cleanup();
+        let result = match (result, finish) {
+            (result, Ok(())) => result,
+            (Ok(_), Err(error)) => Err(error),
+            (Err(application), Err(cleanup)) => Err(format!(
+                "{application}; supervisor shutdown failed: {cleanup}"
+            )),
+        };
+        write_frame(&mut channel, &Frame::result(challenge, false, &result))?;
+    }
+    drop(slot);
+    Ok(())
+}
+
+struct SupervisorAdmission {
+    file: File,
+}
+
+impl SupervisorAdmission {
+    fn acquire() -> Result<Self, String> {
+        Self::acquire_at(&admission_directory())
+    }
+
+    fn acquire_at(directory: &Path) -> Result<Self, String> {
+        prepare_admission_directory(directory)?;
+        for slot in 0..SUPERVISOR_CAPACITY {
+            let path = directory.join(format!("slot-{slot}"));
+            let file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .mode(0o600)
+                .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+                .open(&path)
+                .map_err(|error| format!("open application supervisor slot: {error}"))?;
+            validate_slot_metadata(&file)?;
+            // SAFETY: flock acts on this owned regular-file descriptor and does not dereference
+            // memory. The open file description and lock transfer together across exec.
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+                return Ok(Self { file });
+            }
+            let error = io::Error::last_os_error();
+            if !error
+                .raw_os_error()
+                .is_some_and(|code| code == libc::EWOULDBLOCK || code == libc::EAGAIN)
+            {
+                return Err(format!("lock application supervisor slot: {error}"));
+            }
+        }
+        Err(format!(
+            "application supervisor admission is saturated at {SUPERVISOR_CAPACITY} processes"
+        ))
+    }
+}
+
+fn admission_directory() -> PathBuf {
+    PathBuf::from(format!(
+        "/tmp/fe2o3-application-supervisors-{}",
+        // SAFETY: geteuid has no memory preconditions.
+        unsafe { libc::geteuid() }
+    ))
+}
+
+fn prepare_admission_directory(path: &Path) -> Result<(), String> {
+    match fs::create_dir(path) {
+        Ok(()) => {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+                .map_err(|error| format!("secure application supervisor directory: {error}"))?;
+        }
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(error) => {
+            return Err(format!(
+                "create application supervisor admission directory: {error}"
+            ));
+        }
+    }
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("inspect application supervisor directory: {error}"))?;
+    if !metadata.file_type().is_dir()
+        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.mode() & 0o777 != 0o700
+    {
+        return Err("application supervisor admission directory is not private".to_string());
+    }
+    Ok(())
+}
+
+fn validate_slot(file: &File) -> Result<(), String> {
+    validate_slot_metadata(file)?;
+    // Re-taking an inherited flock on the same open description is a no-op. If a malformed
+    // caller supplied an unlocked slot, this acquires it before any application is launched.
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        return Err(format!(
+            "application supervisor did not inherit its admission lock: {}",
+            io::Error::last_os_error()
+        ));
+    }
+    Ok(())
+}
+
+fn validate_slot_metadata(file: &File) -> Result<(), String> {
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("inspect application supervisor slot: {error}"))?;
+    if !metadata.file_type().is_file()
+        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.nlink() != 1
+        || metadata.mode() & 0o777 != 0o600
+    {
+        return Err("application supervisor admission slot is unsafe".to_string());
+    }
+    Ok(())
+}
+
+fn validate_channel(channel: &UnixStream) -> Result<(), String> {
+    let metadata = channel
+        .fstat()
+        .map_err(|error| format!("inspect application supervisor channel: {error}"))?;
+    if (metadata.st_mode & libc::S_IFMT) != libc::S_IFSOCK {
+        return Err("application supervisor protocol descriptor is not a socket".to_string());
+    }
+    let mut kind = 0_i32;
+    let mut length = std::mem::size_of::<i32>() as libc::socklen_t;
+    // SAFETY: kind and length are writable getsockopt outputs for this socket descriptor.
+    if unsafe {
+        libc::getsockopt(
+            channel.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_TYPE,
+            std::ptr::from_mut(&mut kind).cast(),
+            &mut length,
+        )
+    } != 0
+        || kind != libc::SOCK_STREAM
+        || length as usize != std::mem::size_of::<i32>()
+    {
+        return Err("application supervisor protocol descriptor is not a stream socket".into());
+    }
+    Ok(())
+}
+
+trait UnixStreamStat {
+    fn fstat(&self) -> io::Result<libc::stat>;
+}
+
+impl UnixStreamStat for UnixStream {
+    fn fstat(&self) -> io::Result<libc::stat> {
+        let mut stat = std::mem::MaybeUninit::<libc::stat>::zeroed();
+        // SAFETY: stat is writable and the stream owns a live descriptor.
+        if unsafe { libc::fstat(self.as_raw_fd(), stat.as_mut_ptr()) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: successful fstat initialized the complete record.
+        Ok(unsafe { stat.assume_init() })
+    }
+}
+
+struct Frame {
+    challenge: [u8; 32],
+    kind: u8,
+    pending: bool,
+    raw_status: i32,
+    message: Vec<u8>,
+}
+
+impl Frame {
+    fn ready(challenge: [u8; 32]) -> Self {
+        Self {
+            challenge,
+            kind: PROTOCOL_READY,
+            pending: false,
+            raw_status: 0,
+            message: Vec::new(),
+        }
+    }
+
+    fn result(challenge: [u8; 32], pending: bool, result: &Result<ExitStatus, String>) -> Self {
+        match result {
+            Ok(status) => Self {
+                challenge,
+                kind: PROTOCOL_STATUS,
+                pending,
+                raw_status: (*status).into_raw(),
+                message: Vec::new(),
+            },
+            Err(error) => Self {
+                challenge,
+                kind: PROTOCOL_ERROR,
+                pending,
+                raw_status: 0,
+                message: error.as_bytes().to_vec(),
+            },
+        }
+    }
+}
+
+fn write_frame(channel: &mut UnixStream, frame: &Frame) -> Result<(), String> {
+    if frame.message.len() > MAX_PROTOCOL_MESSAGE_BYTES {
+        return Err("application supervisor result exceeds its protocol bound".to_string());
+    }
+    let mut header = [0_u8; PROTOCOL_HEADER_BYTES];
+    header[..8].copy_from_slice(&PROTOCOL_MAGIC);
+    header[8..40].copy_from_slice(&frame.challenge);
+    header[40] = frame.kind;
+    header[41] = u8::from(frame.pending);
+    header[42..46].copy_from_slice(&frame.raw_status.to_le_bytes());
+    header[46..50].copy_from_slice(&(frame.message.len() as u32).to_le_bytes());
+    channel
+        .write_all(&header)
+        .and_then(|()| channel.write_all(&frame.message))
+        .map_err(|error| format!("write application supervisor protocol: {error}"))
+}
+
+fn read_frame(channel: &mut UnixStream, timeout: Option<Duration>) -> Result<Frame, String> {
+    if let Some(timeout) = timeout {
+        wait_readable(channel.as_raw_fd(), timeout)?;
+    }
+    let mut header = [0_u8; PROTOCOL_HEADER_BYTES];
+    channel
+        .read_exact(&mut header)
+        .map_err(|error| format!("read application supervisor protocol header: {error}"))?;
+    if header[..8] != PROTOCOL_MAGIC || header[41] > 1 {
+        return Err("application supervisor protocol header is invalid".to_string());
+    }
+    let challenge = header[8..40].try_into().unwrap();
+    let raw_status = i32::from_le_bytes(header[42..46].try_into().unwrap());
+    let message_len = u32::from_le_bytes(header[46..50].try_into().unwrap()) as usize;
+    if message_len > MAX_PROTOCOL_MESSAGE_BYTES {
+        return Err("application supervisor protocol message exceeds its bound".to_string());
+    }
+    let mut message = vec![0; message_len];
+    channel
+        .read_exact(&mut message)
+        .map_err(|error| format!("read application supervisor protocol body: {error}"))?;
+    Ok(Frame {
+        challenge,
+        kind: header[40],
+        pending: header[41] == 1,
+        raw_status,
+        message,
+    })
+}
+
+fn wait_readable(fd: RawFd, timeout: Duration) -> Result<(), String> {
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .ok_or_else(|| "application supervisor startup deadline overflowed".to_string())?;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let milliseconds = i32::try_from(remaining.as_millis().max(1)).unwrap_or(i32::MAX);
+        let mut descriptor = libc::pollfd {
+            fd,
+            events: libc::POLLIN | libc::POLLHUP,
+            revents: 0,
+        };
+        // SAFETY: descriptor is a writable one-element poll array.
+        let result = unsafe { libc::poll(&mut descriptor, 1, milliseconds) };
+        if result > 0 {
+            return Ok(());
+        }
+        if result == 0 {
+            if Instant::now() >= deadline {
+                return Err("application supervisor startup handshake timed out".to_string());
+            }
+            continue;
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::Interrupted {
+            return Err(format!("poll application supervisor protocol: {error}"));
+        }
+    }
+}
+
+fn wait_for_exit(child: &mut Child, timeout: Duration) -> Option<ExitStatus> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Some(status),
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            _ => return None,
+        }
+    }
+}
+
+fn terminate_failed_start(child: &mut Child) {
+    let process_group = child.id() as libc::pid_t;
+    // SAFETY: the frontend created the supervisor as this fresh process-group leader.
+    let _ = unsafe { libc::kill(-process_group, libc::SIGKILL) };
+    let _ = wait_for_exit(child, SUPERVISOR_EXIT_TIMEOUT);
+}
+
+fn set_cloexec(fd: RawFd) -> Result<(), String> {
+    // SAFETY: the caller borrows a live descriptor for this fcntl operation.
+    let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
+    rustix::io::fcntl_setfd(borrowed, rustix::io::FdFlags::CLOEXEC)
+        .map_err(|error| format!("protect application supervisor descriptor: {error}"))
+}
+
+fn clear_cloexec_raw(fd: RawFd) -> io::Result<()> {
+    // SAFETY: the pre-exec child inherited this live descriptor from its parent.
+    let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
+    rustix::io::fcntl_setfd(borrowed, rustix::io::FdFlags::empty()).map_err(io::Error::from)
+}
+
+fn parse_fd(value: &std::ffi::OsStr, kind: &str) -> Result<RawFd, String> {
+    value
+        .to_str()
+        .and_then(|value| value.parse::<RawFd>().ok())
+        .filter(|fd| *fd >= 3)
+        .ok_or_else(|| format!("application supervisor {kind} descriptor is invalid"))
+}
+
+fn random_challenge() -> Result<[u8; 32], String> {
+    let mut challenge = [0_u8; 32];
+    let mut offset = 0;
+    while offset < challenge.len() {
+        // SAFETY: the remaining challenge slice is writable for the supplied length.
+        let result = unsafe {
+            libc::getrandom(
+                challenge[offset..].as_mut_ptr().cast(),
+                challenge.len() - offset,
+                0,
+            )
+        };
+        if result > 0 {
+            offset += result as usize;
+            continue;
+        }
+        if result == 0 {
+            return Err("getrandom returned no application supervisor challenge bytes".into());
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::Interrupted {
+            return Err(format!(
+                "generate application supervisor protocol challenge: {error}"
+            ));
+        }
+    }
+    Ok(challenge)
+}
+
+fn parse_challenge(value: &std::ffi::OsStr) -> Result<[u8; 32], String> {
+    let value = value
+        .to_str()
+        .ok_or_else(|| "application supervisor challenge is not UTF-8".to_string())?;
+    if value.len() != 64 {
+        return Err("application supervisor challenge has the wrong length".to_string());
+    }
+    let mut challenge = [0_u8; 32];
+    for (index, byte) in challenge.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16)
+            .map_err(|_| "application supervisor challenge is not hexadecimal".to_string())?;
+    }
+    Ok(challenge)
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsString;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(1);
+    const PROCESS_HELPER_ENV: &str = "FE2O3_INTERNAL_TEST_SUPERVISOR_PROCESS";
+    const PROCESS_HELPER_TEST: &str =
+        "application_supervisor::tests::supervisor_process_retains_admission_after_frontend_result";
+
+    fn test_directory() -> PathBuf {
+        env::temp_dir().join(format!(
+            "cargo-fe2o3-supervisor-admission-{}-{}",
+            std::process::id(),
+            NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed)
+        ))
+    }
+
+    #[test]
+    fn supervisor_protocol_rejects_challenge_substitution() {
+        let (mut writer, mut reader) = UnixStream::pair().unwrap();
+        write_frame(&mut writer, &Frame::ready([7; 32])).unwrap();
+        let frame = read_frame(&mut reader, Some(Duration::from_secs(1))).unwrap();
+        assert_ne!(frame.challenge, [8; 32]);
+        assert_eq!(frame.kind, PROTOCOL_READY);
+    }
+
+    #[test]
+    fn supervisor_admission_has_fixed_capacity_and_recovers() {
+        let directory = test_directory();
+        let mut admissions = Vec::new();
+        for _ in 0..SUPERVISOR_CAPACITY {
+            admissions.push(SupervisorAdmission::acquire_at(&directory).unwrap());
+        }
+        let error = match SupervisorAdmission::acquire_at(&directory) {
+            Ok(_) => panic!("supervisor admission exceeded fixed capacity"),
+            Err(error) => error,
+        };
+        assert!(error.contains("saturated"), "{error}");
+        admissions.pop();
+        admissions.push(SupervisorAdmission::acquire_at(&directory).unwrap());
+        drop(admissions);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn supervisor_process_retains_admission_after_frontend_result() {
+        if env::var_os(PROCESS_HELPER_ENV).is_some() {
+            let channel = env::var_os("FE2O3_INTERNAL_TEST_SUPERVISOR_CHANNEL").unwrap();
+            let slot = env::var_os("FE2O3_INTERNAL_TEST_SUPERVISOR_SLOT").unwrap();
+            let challenge = env::var_os("FE2O3_INTERNAL_TEST_SUPERVISOR_CHALLENGE").unwrap();
+            run_supervisor(
+                &[channel, slot, challenge, OsString::from("runner-argument")],
+                |_| Err("injected pending cleanup".to_string()),
+                || true,
+                || {
+                    std::thread::sleep(Duration::from_secs(2));
+                    Ok(())
+                },
+            )
+            .unwrap();
+            return;
+        }
+
+        let directory = test_directory();
+        let mut admissions = (0..SUPERVISOR_CAPACITY)
+            .map(|_| SupervisorAdmission::acquire_at(&directory).unwrap())
+            .collect::<Vec<_>>();
+        let inherited = admissions.pop().unwrap();
+        let (mut frontend, supervisor_channel) = UnixStream::pair().unwrap();
+        set_cloexec(frontend.as_raw_fd()).unwrap();
+        set_cloexec(supervisor_channel.as_raw_fd()).unwrap();
+        let challenge = [9_u8; 32];
+        let channel_fd = supervisor_channel.as_raw_fd();
+        let slot_fd = inherited.file.as_raw_fd();
+        let mut command = Command::new(env::current_exe().unwrap());
+        command
+            .args(["--exact", PROCESS_HELPER_TEST, "--nocapture"])
+            .env(PROCESS_HELPER_ENV, "1")
+            .env(
+                "FE2O3_INTERNAL_TEST_SUPERVISOR_CHANNEL",
+                channel_fd.to_string(),
+            )
+            .env("FE2O3_INTERNAL_TEST_SUPERVISOR_SLOT", slot_fd.to_string())
+            .env(
+                "FE2O3_INTERNAL_TEST_SUPERVISOR_CHALLENGE",
+                hex_encode(&challenge),
+            );
+        // SAFETY: this test callback changes only the two inherited descriptor flags.
+        unsafe {
+            command.pre_exec(move || {
+                clear_cloexec_raw(channel_fd)?;
+                clear_cloexec_raw(slot_fd)?;
+                Ok(())
+            });
+        }
+        let mut process = command.spawn().unwrap();
+        drop(supervisor_channel);
+        drop(inherited);
+
+        let ready = read_frame(&mut frontend, Some(Duration::from_secs(5))).unwrap();
+        assert_eq!(ready.challenge, challenge);
+        assert_eq!(ready.kind, PROTOCOL_READY);
+        let result = read_frame(&mut frontend, Some(Duration::from_secs(5))).unwrap();
+        assert_eq!(result.challenge, challenge);
+        assert_eq!(result.kind, PROTOCOL_ERROR);
+        assert!(result.pending);
+        assert!(process.try_wait().unwrap().is_none());
+        let saturated = match SupervisorAdmission::acquire_at(&directory) {
+            Ok(_) => panic!("inherited supervisor slot was released before cleanup"),
+            Err(error) => error,
+        };
+        assert!(saturated.contains("saturated"), "{saturated}");
+
+        let status = wait_for_exit(&mut process, Duration::from_secs(5)).unwrap();
+        assert!(status.success());
+        admissions.push(SupervisorAdmission::acquire_at(&directory).unwrap());
+        drop(admissions);
+        fs::remove_dir_all(directory).unwrap();
+    }
+}

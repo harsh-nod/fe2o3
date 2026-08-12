@@ -1,5 +1,6 @@
 mod application_handoff;
 mod application_sandbox;
+mod application_supervisor;
 mod binding_wrapper;
 mod capability_broker;
 mod clean;
@@ -42,9 +43,15 @@ fn main() -> ExitCode {
     let raw_args = env::args_os().skip(1).collect::<Vec<_>>();
     if raw_args
         .first()
+        .is_some_and(|argument| argument == application_supervisor::INTERNAL_SUPERVISOR_ARG)
+    {
+        return run_application_supervisor(&raw_args[1..]);
+    }
+    if raw_args
+        .first()
         .is_some_and(|argument| argument == INTERNAL_RUNNER_ARG)
     {
-        return run_application_boundary(&raw_args[1..]);
+        return run_application_boundary_frontend(&raw_args[1..]);
     }
     if env::var_os(BINDING_WRAPPER_MODE_ENV).is_some() {
         return match binding_wrapper::run(raw_args) {
@@ -726,11 +733,26 @@ fn host_rustc_target() -> Result<String, String> {
         .ok_or_else(|| "rustc -vV output did not contain a host target".to_string())
 }
 
-fn run_application_boundary(args: &[OsString]) -> ExitCode {
-    match run_application_boundary_result(args) {
+fn run_application_boundary_frontend(args: &[OsString]) -> ExitCode {
+    match application_supervisor::run_frontend(args) {
         Ok(status) => ExitCode::from(binding_wrapper::exit_code(status)),
         Err(error) => {
             eprintln!("cargo-fe2o3 application runner: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run_application_supervisor(args: &[OsString]) -> ExitCode {
+    match application_supervisor::run_supervisor(
+        args,
+        run_application_boundary_result,
+        application_handoff::application_cleanup_is_pending,
+        application_handoff::finish_application_cleanup_supervisor,
+    ) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("cargo-fe2o3 application supervisor: {error}");
             ExitCode::FAILURE
         }
     }
@@ -853,6 +875,23 @@ fn run_application_boundary_result(args: &[OsString]) -> Result<std::process::Ex
                 };
             }
         };
+        if let Err(error) = application_handoff::wait_for_application_exit_without_reaping(&process)
+        {
+            drop(handoff);
+            drop(artifact_dir);
+            return match application_handoff::terminate_application_group(
+                process,
+                active_handoff.into_cleanup(),
+            ) {
+                Ok(_) => Err(error),
+                Err(containment) => Err(format!(
+                    "{error}; application containment failed: {containment}"
+                )),
+            };
+        }
+        // The application retains its currentness token through all descriptor-dependent work.
+        // Observe its exit without reaping before reacquiring the runner's token, avoiding a
+        // scheduler race while preserving the leader identity for process-group containment.
         if let Err(error) = handoff.validate_retained_currentness() {
             drop(handoff);
             drop(artifact_dir);

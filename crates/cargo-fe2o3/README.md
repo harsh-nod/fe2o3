@@ -209,23 +209,44 @@ io_uring. Missing kernel support for the required seccomp listener or
 `close_range(CLOSE_RANGE_CLOEXEC)` fails launch without leaving a blocked
 supervisor.
 
-Application teardown never performs a blocking `wait` after an ACK, validation,
-or containment failure. Before spawn, the runner reserves one of eight cleanup
-slots. A single fixed supervisor owns any child that does not become reapable
-within the caller cleanup deadline, retains the `Child` identity, and retries
-`try_wait` plus process-group `waitpid(WNOHANG)` until the leader and adopted
-descendants are reaped. Seccomp-supervisor shutdown is also polled rather than
-joined on the reaper path, so one stalled shutdown cannot prevent unrelated
-child reaps. Retryable wait or signal errors are reported once, retain their
-child and cleanup slot, and continue to be retried. ACK and parent authority
-descriptors are closed before transfer. Saturated cleanup capacity rejects new
-descriptor handoffs before spawn.
+Descriptor-bearing launches run in a dedicated supervisor process, not in the
+Cargo-facing runner process. The frontend first locks one of eight fixed
+per-UID admission slots, starts the supervisor, and authenticates a bounded
+inherited stream with a fresh challenge. The supervisor inherits that locked
+slot, becomes the application's actual parent, starts the seccomp worker, and
+owns every application authority and ACK descriptor. The protocol and slot
+descriptors remain close-on-exec for the application. Saturated admission
+therefore rejects a ninth supervisor before any application is spawned.
+
+Application teardown never performs a blocking child wait after an ACK,
+validation, or containment failure. The dedicated process retains the `Child`
+identity and uses `try_wait` plus process-group `waitpid(WNOHANG)`. Its one
+cleanup worker is published only after thread creation succeeds, its retained
+`JoinHandle` is monitored, panics are reported, and later admission fails
+closed after worker death. The process itself finishes already-owned jobs if
+that worker dies. If cleanup exceeds the frontend deadline, the supervisor
+reports a precise pending result and remains alive after the frontend exits;
+the kernel's configured child adopter then owns the supervisor status. The
+supervisor releases its global slot and exits only after process and sandbox
+cleanup become terminal. No additional helper process is created per retry.
+
+Once the retained leader has been reaped and group wait reports `ECHILD`, the
+process-group identity is permanently terminal. Sandbox-thread polling is a
+separate state and never signals or waits on that numeric PGID again. Pending
+and active sandbox drops only request shutdown and may join a worker that is
+already finished; no drop or admission-timeout path performs an unbounded
+join. A stalled sandbox worker retains the dedicated process and its slot but
+does not block process containment or cause stale-PGID signalling.
 
 This does not make Linux `SIGKILL` synchronous. A task stuck in uninterruptible
-kernel sleep can remain unreapable indefinitely; it keeps one fixed cleanup
-slot occupied, and the runner reports cleanup pending within its deadline.
-This bound prevents caller hangs and unbounded cleanup workers, but it cannot
-recover a task until the kernel operation itself returns.
+kernel sleep can remain unreapable indefinitely; its dedicated supervisor and
+one fixed admission slot also remain indefinitely. The frontend still reports
+cleanup pending within its deadline, but neither fe2o3 nor the kernel can
+complete reaping until that kernel operation returns. If the frontend exits
+while cleanup is pending, eventual supervisor-status reaping depends on the
+host's kernel reparent/adopter configuration. The private `/tmp` admission
+directory excludes other UIDs; hostile processes with the same UID remain
+outside this boundary.
 
 This no-fork/no-re-exec startup boundary does not constrain arbitrary
 same-process behavior. The syscall profile still permits operations including
