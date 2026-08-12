@@ -809,9 +809,18 @@ mod tests {
     fn supervisor_adoption_closes_originals_and_protects_owned_duplicates() {
         let directory = test_directory();
         let SupervisorAdmission { file } = SupervisorAdmission::acquire_at(&directory).unwrap();
-        let slot_fd = file.into_raw_fd();
+        let slot_source = file.into_raw_fd();
         let (channel, peer) = UnixStream::pair().unwrap();
-        let channel_fd = channel.into_raw_fd();
+        let channel_source = channel.into_raw_fd();
+        // Keep the post-adoption EBADF assertions outside the descriptor range concurrently used
+        // by the rest of the test process. Otherwise an unrelated parallel test can reuse a just
+        // closed low descriptor before this test observes it.
+        let channel_fd = unsafe { libc::fcntl(channel_source, libc::F_DUPFD_CLOEXEC, 10_000) };
+        assert!(channel_fd >= 10_000);
+        let slot_fd = unsafe { libc::fcntl(slot_source, libc::F_DUPFD_CLOEXEC, 10_001) };
+        assert!(slot_fd >= 10_001);
+        assert_eq!(unsafe { libc::close(channel_source) }, 0);
+        assert_eq!(unsafe { libc::close(slot_source) }, 0);
         let adopted = adopt_supervisor_descriptors(
             channel_fd,
             slot_fd,
