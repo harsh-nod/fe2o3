@@ -123,10 +123,15 @@ impl SemanticLayoutTargetV1 {
         target_features: &str,
         codegen_features: &str,
     ) -> Result<Self, SemanticLayoutBridgeError> {
+        preflight_feature_source("rustc target-spec features", target_features)?;
+        preflight_feature_source(
+            "rustc active -Ctarget-feature configuration",
+            codegen_features,
+        )?;
         let mut target = Self::new(llvm_target, data_layout, default_pointer_width_bits)?;
         target.active_codegen_profile = Some(Box::new(ActiveCodegenProfileV1 {
             cpu: normalize_active_cpu(active_cpu)?,
-            features: normalize_active_features(target_features, codegen_features)?,
+            features: normalize_admitted_active_features(target_features, codegen_features)?,
         }));
         Ok(target)
     }
@@ -229,15 +234,10 @@ fn normalize_active_cpu(cpu: &str) -> Result<Option<String>, SemanticLayoutBridg
     Ok(Some(cpu.to_owned()))
 }
 
-fn normalize_active_features(
+fn normalize_admitted_active_features(
     target_features: &str,
     codegen_features: &str,
 ) -> Result<String, SemanticLayoutBridgeError> {
-    preflight_feature_source("rustc target-spec features", target_features)?;
-    preflight_feature_source(
-        "rustc active -Ctarget-feature configuration",
-        codegen_features,
-    )?;
     let mut effective =
         parse_admitted_feature_component("rustc target-spec features", target_features)?;
     for (name, enabled) in parse_admitted_feature_component(
@@ -1825,6 +1825,20 @@ mod tests {
         assert_eq!(SEMANTIC_LAYOUT_ACTIVE_FEATURE_INPUT_BOUNDS_VERSION_V1, 1);
 
         let oversized_second = "x".repeat(MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_SOURCE_BYTES_V1 + 1);
+        assert!(matches!(
+            SemanticLayoutTargetV1::new_with_codegen_profile(
+                "",
+                "",
+                0,
+                "Native",
+                "+conflict,-conflict",
+                &oversized_second,
+            ),
+            Err(SemanticLayoutBridgeError::BoundExceeded {
+                field: "rustc active -Ctarget-feature configuration bytes",
+                ..
+            })
+        ));
         assert!(matches!(
             SemanticLayoutTargetV1::new_with_codegen_profile(
                 "amdgcn-amd-amdhsa",
