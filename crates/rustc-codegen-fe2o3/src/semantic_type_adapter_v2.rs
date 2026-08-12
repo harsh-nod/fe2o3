@@ -3731,7 +3731,7 @@ static UNIT_VALUE: () = ();
 
         let reordered = retarget_observation(
             host,
-            "GFX942",
+            "gfx942",
             "-wavefrontsize32,+wavefrontsize64,+wavefrontsize64",
             "-xnack",
         );
@@ -3739,11 +3739,44 @@ static UNIT_VALUE: () = ();
         assert_eq!(gfx942.rustc_target(), reordered.rustc_target());
         assert_eq!(gfx942.identity_sha256(), reordered.identity_sha256());
 
+        let uppercase_cpu = retarget_observation(
+            host,
+            "GFX942",
+            "-wavefrontsize32,+wavefrontsize64,+wavefrontsize64",
+            "-xnack",
+        );
+        assert_eq!(uppercase_cpu.rustc_target().active_cpu(), Some("GFX942"));
+        assert!(!uppercase_cpu.was_observed_on_canonical_gfx942_target());
+        assert_ne!(uppercase_cpu.rustc_target(), gfx942.rustc_target());
+        assert_ne!(uppercase_cpu.identity_sha256(), gfx942.identity_sha256());
+
+        let mixed_case_features = retarget_observation(
+            host,
+            "gfx942",
+            "-Wavefrontsize32,+wavefrontsize64",
+            "-Xnack",
+        );
+        assert_eq!(
+            mixed_case_features.rustc_target().active_features(),
+            Some("-Wavefrontsize32,-Xnack,+wavefrontsize64")
+        );
+        assert!(!mixed_case_features.was_observed_on_canonical_gfx942_target());
+        assert_ne!(
+            mixed_case_features.identity_sha256(),
+            gfx942.identity_sha256()
+        );
+
         for observation in [
             retarget_observation(
                 host,
                 "gfx900",
                 "-wavefrontsize32,+wavefrontsize64",
+                "-xnack",
+            ),
+            retarget_observation(
+                host,
+                "gfx942",
+                "-wavefrontsize32,+wavefrontsize64,+unknown-layout-extra",
                 "-xnack",
             ),
             retarget_observation(

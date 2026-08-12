@@ -30,8 +30,22 @@ pub const SEMANTIC_LAYOUT_EVIDENCE_VERSION_V1: u16 = 1;
 pub const SEMANTIC_LAYOUT_EVIDENCE_SCHEMA_V2: &str = "fe2o3.semantic-layout-evidence.v2";
 /// Numeric version paired with [`SEMANTIC_LAYOUT_EVIDENCE_SCHEMA_V2`].
 pub const SEMANTIC_LAYOUT_EVIDENCE_VERSION_V2: u16 = 2;
+/// Versioned identity for active rustc target-feature raw input admission.
+pub const SEMANTIC_LAYOUT_ACTIVE_FEATURE_INPUT_BOUNDS_SCHEMA_V1: &str =
+    "fe2o3.semantic-layout-active-feature-input-bounds.v1";
+/// Numeric version paired with [`SEMANTIC_LAYOUT_ACTIVE_FEATURE_INPUT_BOUNDS_SCHEMA_V1`].
+pub const SEMANTIC_LAYOUT_ACTIVE_FEATURE_INPUT_BOUNDS_VERSION_V1: u16 = 1;
 /// Maximum byte length of either exact rustc target identity component.
 pub const MAX_SEMANTIC_LAYOUT_TARGET_TEXT_BYTES_V1: usize = 16 * 1024;
+/// Maximum byte length of one raw active rustc target-feature source.
+pub const MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_SOURCE_BYTES_V1: usize = 4 * 1024;
+/// Maximum comma-delimited declarations in one raw active feature source.
+pub const MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_DECLARATIONS_V1: usize = 512;
+/// Maximum byte length of one raw active feature declaration, including sign.
+pub const MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_COMPONENT_BYTES_V1: usize = 128;
+/// Maximum cumulative parse work for one raw active feature source.
+pub const MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_PARSE_WORK_V1: usize =
+    MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_SOURCE_BYTES_V1 + 256;
 /// Maximum nesting depth accepted before recursive dialect validation.
 pub const MAX_SEMANTIC_LAYOUT_DEPTH_V1: usize = 64;
 /// Maximum number of semantic type nodes in one evidence record.
@@ -176,26 +190,27 @@ fn write_optional_text(output: &mut String, value: Option<&str>) {
 }
 
 fn normalize_active_cpu(cpu: &str) -> Result<Option<String>, SemanticLayoutBridgeError> {
-    let cpu = cpu.trim();
-    if cpu.is_empty()
-        || cpu.eq_ignore_ascii_case("default")
+    if cpu.is_empty() || matches!(cpu, "default" | "generic" | "native" | "baseline") {
+        return Ok(None);
+    }
+    if cpu.eq_ignore_ascii_case("default")
         || cpu.eq_ignore_ascii_case("generic")
         || cpu.eq_ignore_ascii_case("native")
         || cpu.eq_ignore_ascii_case("baseline")
     {
-        return Ok(None);
-    }
-    validate_target_text("rustc active target CPU", cpu)?;
-    if cpu
-        .bytes()
-        .any(|byte| byte.is_ascii_whitespace() || byte == b',')
-    {
         return Err(SemanticLayoutBridgeError::InvalidTarget {
             field: "rustc active target CPU",
-            detail: "must be one unambiguous CPU name".to_owned(),
+            detail: "ambiguous CPU aliases must use exact lowercase spelling".to_owned(),
         });
     }
-    Ok(Some(cpu.to_ascii_lowercase()))
+    validate_target_text("rustc active target CPU", cpu)?;
+    if !cpu.bytes().all(is_active_profile_name_byte) {
+        return Err(SemanticLayoutBridgeError::InvalidTarget {
+            field: "rustc active target CPU",
+            detail: "must be one exact ASCII LLVM CPU name".to_owned(),
+        });
+    }
+    Ok(Some(cpu.to_owned()))
 }
 
 fn normalize_active_features(
@@ -227,43 +242,207 @@ fn parse_feature_component(
     field: &'static str,
     features: &str,
 ) -> Result<BTreeMap<String, bool>, SemanticLayoutBridgeError> {
+    preflight_feature_source(field, features)?;
     let mut parsed = BTreeMap::new();
-    if features.trim().is_empty() {
+    if features.is_empty() {
         return Ok(parsed);
     }
-    for declaration in features.split(',') {
-        let declaration = declaration.trim();
+    let bytes = features.as_bytes();
+    let mut start = 0_usize;
+    while start < bytes.len() {
+        let mut end = start;
+        while end < bytes.len() && bytes[end] != b',' {
+            end += 1;
+        }
+        let declaration = &features[start..end];
         let (enabled, name) = match declaration.as_bytes().first() {
             Some(b'+') => (true, &declaration[1..]),
             Some(b'-') => (false, &declaration[1..]),
-            _ => {
+            _ => unreachable!("feature preflight validates every declaration sign"),
+        };
+        match parsed.get(name) {
+            Some(previous) if *previous != enabled => {
                 return Err(SemanticLayoutBridgeError::InvalidTarget {
                     field,
-                    detail: "each feature must have an explicit `+` or `-` state".to_owned(),
+                    detail: format!("feature `{name}` has conflicting states"),
                 });
             }
-        };
-        if name.is_empty()
-            || !name
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
-        {
-            return Err(SemanticLayoutBridgeError::InvalidTarget {
-                field,
-                detail: "feature names must be nonempty ASCII identifiers".to_owned(),
-            });
+            Some(_) => {}
+            None => {
+                parsed.insert(name.to_owned(), enabled);
+            }
         }
-        let name = name.to_ascii_lowercase();
-        if let Some(previous) = parsed.insert(name.clone(), enabled)
-            && previous != enabled
-        {
-            return Err(SemanticLayoutBridgeError::InvalidTarget {
-                field,
-                detail: format!("feature `{name}` has conflicting states"),
-            });
-        }
+        start = end.saturating_add(1);
     }
     Ok(parsed)
+}
+
+fn preflight_feature_source(
+    field: &'static str,
+    features: &str,
+) -> Result<(), SemanticLayoutBridgeError> {
+    if features.len() > MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_SOURCE_BYTES_V1 {
+        return Err(SemanticLayoutBridgeError::BoundExceeded {
+            field: feature_bound_field(field, "bytes"),
+            actual: features.len(),
+            limit: MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_SOURCE_BYTES_V1,
+        });
+    }
+    if features.is_empty() {
+        return Ok(());
+    }
+
+    let bytes = features.as_bytes();
+    let mut declarations = 0_usize;
+    let mut component_start = 0_usize;
+    let mut component_len = 0_usize;
+    let mut parse_work = 0_usize;
+    for (index, byte) in bytes.iter().copied().enumerate() {
+        charge_feature_parse_work(field, &mut parse_work, 1)?;
+        if byte == b',' {
+            validate_feature_declaration(field, &bytes[component_start..index])?;
+            declarations = charge_feature_declaration(field, declarations)?;
+            charge_feature_parse_work(field, &mut parse_work, 1)?;
+            component_start = index.saturating_add(1);
+            component_len = 0;
+        } else {
+            component_len = component_len.checked_add(1).ok_or_else(|| {
+                feature_bound_exceeded(
+                    feature_bound_field(field, "component bytes"),
+                    usize::MAX,
+                    MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_COMPONENT_BYTES_V1,
+                )
+            })?;
+            if component_len > MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_COMPONENT_BYTES_V1 {
+                return Err(feature_bound_exceeded(
+                    feature_bound_field(field, "component bytes"),
+                    component_len,
+                    MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_COMPONENT_BYTES_V1,
+                ));
+            }
+        }
+    }
+    validate_feature_declaration(field, &bytes[component_start..])?;
+    let _ = charge_feature_declaration(field, declarations)?;
+    charge_feature_parse_work(field, &mut parse_work, 1)
+}
+
+fn charge_feature_declaration(
+    field: &'static str,
+    previous: usize,
+) -> Result<usize, SemanticLayoutBridgeError> {
+    let declarations = previous.checked_add(1).ok_or_else(|| {
+        feature_bound_exceeded(
+            feature_bound_field(field, "declarations"),
+            usize::MAX,
+            MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_DECLARATIONS_V1,
+        )
+    })?;
+    if declarations > MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_DECLARATIONS_V1 {
+        return Err(feature_bound_exceeded(
+            feature_bound_field(field, "declarations"),
+            declarations,
+            MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_DECLARATIONS_V1,
+        ));
+    }
+    Ok(declarations)
+}
+
+fn charge_feature_parse_work(
+    field: &'static str,
+    work: &mut usize,
+    additional: usize,
+) -> Result<(), SemanticLayoutBridgeError> {
+    *work = work.checked_add(additional).ok_or_else(|| {
+        feature_bound_exceeded(
+            feature_bound_field(field, "parse work"),
+            usize::MAX,
+            MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_PARSE_WORK_V1,
+        )
+    })?;
+    if *work > MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_PARSE_WORK_V1 {
+        return Err(feature_bound_exceeded(
+            feature_bound_field(field, "parse work"),
+            *work,
+            MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_PARSE_WORK_V1,
+        ));
+    }
+    Ok(())
+}
+
+fn validate_feature_declaration(
+    field: &'static str,
+    declaration: &[u8],
+) -> Result<(), SemanticLayoutBridgeError> {
+    if declaration.is_empty() {
+        return Err(SemanticLayoutBridgeError::InvalidTarget {
+            field,
+            detail: "feature declarations must not be empty".to_owned(),
+        });
+    }
+    if declaration.len() > MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_COMPONENT_BYTES_V1 {
+        return Err(feature_bound_exceeded(
+            feature_bound_field(field, "component bytes"),
+            declaration.len(),
+            MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_COMPONENT_BYTES_V1,
+        ));
+    }
+    let Some((&sign, name)) = declaration.split_first() else {
+        unreachable!("empty declarations returned above");
+    };
+    if !matches!(sign, b'+' | b'-') {
+        return Err(SemanticLayoutBridgeError::InvalidTarget {
+            field,
+            detail: "each feature must have an explicit `+` or `-` state".to_owned(),
+        });
+    }
+    if name.is_empty() || !name.iter().copied().all(is_active_profile_name_byte) {
+        return Err(SemanticLayoutBridgeError::InvalidTarget {
+            field,
+            detail: "feature names must be exact nonempty ASCII LLVM identifiers".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+fn is_active_profile_name_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.')
+}
+
+fn feature_bound_field(field: &'static str, resource: &'static str) -> &'static str {
+    match (field, resource) {
+        ("rustc target-spec features", "bytes") => "rustc target-spec features bytes",
+        ("rustc target-spec features", "declarations") => "rustc target-spec features declarations",
+        ("rustc target-spec features", "component bytes") => {
+            "rustc target-spec features component bytes"
+        }
+        ("rustc target-spec features", "parse work") => "rustc target-spec features parse work",
+        ("rustc active -Ctarget-feature configuration", "bytes") => {
+            "rustc active -Ctarget-feature configuration bytes"
+        }
+        ("rustc active -Ctarget-feature configuration", "declarations") => {
+            "rustc active -Ctarget-feature configuration declarations"
+        }
+        ("rustc active -Ctarget-feature configuration", "component bytes") => {
+            "rustc active -Ctarget-feature configuration component bytes"
+        }
+        ("rustc active -Ctarget-feature configuration", "parse work") => {
+            "rustc active -Ctarget-feature configuration parse work"
+        }
+        _ => "rustc active target-feature source",
+    }
+}
+
+fn feature_bound_exceeded(
+    field: &'static str,
+    actual: usize,
+    limit: usize,
+) -> SemanticLayoutBridgeError {
+    SemanticLayoutBridgeError::BoundExceeded {
+        field,
+        actual,
+        limit,
+    }
 }
 
 /// Canonical, target-bound semantic type/layout evidence produced by rustc.
@@ -1421,12 +1600,12 @@ mod tests {
     }
 
     #[test]
-    fn active_codegen_profile_is_normalized_and_identity_bound() {
+    fn active_codegen_profile_preserves_exact_spelling_and_identity() {
         let first = SemanticLayoutTargetV1::new_with_codegen_profile(
             "amdgcn-amd-amdhsa",
             "e-p:64:64",
             64,
-            "GFX942",
+            "gfx942",
             "+wavefrontsize64,-wavefrontsize32",
             "-xnack,+wavefrontsize64",
         )
@@ -1445,6 +1624,42 @@ mod tests {
         assert_eq!(
             first.active_features(),
             Some("-wavefrontsize32,+wavefrontsize64,-xnack")
+        );
+
+        let uppercase_cpu = SemanticLayoutTargetV1::new_with_codegen_profile(
+            "amdgcn-amd-amdhsa",
+            "e-p:64:64",
+            64,
+            "GFX942",
+            "+wavefrontsize64,-wavefrontsize32",
+            "-xnack,+wavefrontsize64",
+        )
+        .unwrap();
+        assert_eq!(uppercase_cpu.active_cpu(), Some("GFX942"));
+        assert_ne!(first, uppercase_cpu);
+        assert!(
+            !uppercase_cpu
+                .has_exact_codegen_profile("gfx942", "-wavefrontsize32,+wavefrontsize64,-xnack")
+        );
+
+        let mixed_case_features = SemanticLayoutTargetV1::new_with_codegen_profile(
+            "amdgcn-amd-amdhsa",
+            "e-p:64:64",
+            64,
+            "gfx942",
+            "+Wavefrontsize64,-wavefrontsize32",
+            "-Xnack",
+        )
+        .unwrap();
+        assert_eq!(mixed_case_features.active_cpu(), Some("gfx942"));
+        assert_eq!(
+            mixed_case_features.active_features(),
+            Some("+Wavefrontsize64,-Xnack,-wavefrontsize32")
+        );
+        assert_ne!(first, mixed_case_features);
+        assert!(
+            !mixed_case_features
+                .has_exact_codegen_profile("gfx942", "-wavefrontsize32,+wavefrontsize64,-xnack")
         );
 
         let unavailable = SemanticLayoutTargetV1::new_with_codegen_profile(
@@ -1480,6 +1695,249 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn active_codegen_profile_rejects_whitespace_and_confusables() {
+        for cpu in [
+            " gfx942",
+            "gfx942 ",
+            "gfx942\n",
+            "gfx942,gfx900",
+            "g\u{0445}x942",
+            "Native",
+        ] {
+            assert!(
+                SemanticLayoutTargetV1::new_with_codegen_profile(
+                    "amdgcn-amd-amdhsa",
+                    "e-p:64:64",
+                    64,
+                    cpu,
+                    "",
+                    "-xnack",
+                )
+                .is_err(),
+                "CPU `{cpu}` must not be normalized into a valid profile"
+            );
+        }
+        for feature_source in [
+            " +xnack",
+            "+xnack ",
+            "+xnack, -wavefrontsize32",
+            "+xnack\n",
+            "+xnack,,+wavefrontsize64",
+            ",+xnack",
+            "+xnack,",
+            "+xna\u{0441}k",
+        ] {
+            assert!(
+                SemanticLayoutTargetV1::new_with_codegen_profile(
+                    "amdgcn-amd-amdhsa",
+                    "e-p:64:64",
+                    64,
+                    "gfx942",
+                    "",
+                    feature_source,
+                )
+                .is_err(),
+                "feature source `{feature_source}` must fail closed"
+            );
+        }
+    }
+
+    fn repeated_feature(declarations: usize, declaration: &str) -> String {
+        std::iter::repeat_n(declaration, declarations)
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    fn feature_source_with_shape(total_bytes: usize, declarations: usize) -> String {
+        assert!(declarations > 0);
+        assert!(total_bytes >= declarations * 2 + declarations.saturating_sub(1));
+        let commas = declarations - 1;
+        let mut component_bytes = total_bytes - commas;
+        let mut parts = Vec::with_capacity(declarations);
+        for remaining in (1..=declarations).rev() {
+            let min_for_rest = (remaining - 1) * 2;
+            let len = (component_bytes - min_for_rest)
+                .min(MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_COMPONENT_BYTES_V1);
+            assert!(len >= 2);
+            parts.push(format!("+{}", "a".repeat(len - 1)));
+            component_bytes -= len;
+        }
+        let source = parts.join(",");
+        assert_eq!(source.len(), total_bytes);
+        source
+    }
+
+    fn indexed_unknown_features(declarations: usize) -> String {
+        (0..declarations)
+            .map(|index| format!("+unknown{index}"))
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    #[test]
+    fn active_feature_raw_sources_are_bounded_before_normalization() {
+        assert_eq!(
+            SEMANTIC_LAYOUT_ACTIVE_FEATURE_INPUT_BOUNDS_SCHEMA_V1,
+            "fe2o3.semantic-layout-active-feature-input-bounds.v1"
+        );
+        assert_eq!(SEMANTIC_LAYOUT_ACTIVE_FEATURE_INPUT_BOUNDS_VERSION_V1, 1);
+
+        let byte_boundary =
+            feature_source_with_shape(MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_SOURCE_BYTES_V1, 32);
+        SemanticLayoutTargetV1::new_with_codegen_profile(
+            "amdgcn-amd-amdhsa",
+            "e-p:64:64",
+            64,
+            "gfx942",
+            "",
+            &byte_boundary,
+        )
+        .unwrap();
+        let byte_over =
+            feature_source_with_shape(MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_SOURCE_BYTES_V1 + 1, 33);
+        assert!(matches!(
+            SemanticLayoutTargetV1::new_with_codegen_profile(
+                "amdgcn-amd-amdhsa",
+                "e-p:64:64",
+                64,
+                "gfx942",
+                "",
+                &byte_over,
+            ),
+            Err(SemanticLayoutBridgeError::BoundExceeded {
+                field: "rustc active -Ctarget-feature configuration bytes",
+                actual,
+                limit: MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_SOURCE_BYTES_V1,
+            }) if actual == MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_SOURCE_BYTES_V1 + 1
+        ));
+
+        let declaration_boundary =
+            repeated_feature(MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_DECLARATIONS_V1, "+xnack");
+        SemanticLayoutTargetV1::new_with_codegen_profile(
+            "amdgcn-amd-amdhsa",
+            "e-p:64:64",
+            64,
+            "gfx942",
+            &declaration_boundary,
+            &declaration_boundary,
+        )
+        .unwrap();
+        let declaration_over =
+            repeated_feature(MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_DECLARATIONS_V1 + 1, "+a");
+        assert!(matches!(
+            SemanticLayoutTargetV1::new_with_codegen_profile(
+                "amdgcn-amd-amdhsa",
+                "e-p:64:64",
+                64,
+                "gfx942",
+                "",
+                &declaration_over,
+            ),
+            Err(SemanticLayoutBridgeError::BoundExceeded {
+                field: "rustc active -Ctarget-feature configuration declarations",
+                actual,
+                limit: MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_DECLARATIONS_V1,
+            }) if actual == MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_DECLARATIONS_V1 + 1
+        ));
+
+        let component_boundary = format!(
+            "+{}",
+            "a".repeat(MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_COMPONENT_BYTES_V1 - 1)
+        );
+        SemanticLayoutTargetV1::new_with_codegen_profile(
+            "amdgcn-amd-amdhsa",
+            "e-p:64:64",
+            64,
+            "gfx942",
+            "",
+            &component_boundary,
+        )
+        .unwrap();
+        let component_over = format!(
+            "+{}",
+            "a".repeat(MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_COMPONENT_BYTES_V1)
+        );
+        assert!(matches!(
+            SemanticLayoutTargetV1::new_with_codegen_profile(
+                "amdgcn-amd-amdhsa",
+                "e-p:64:64",
+                64,
+                "gfx942",
+                "",
+                &component_over,
+            ),
+            Err(SemanticLayoutBridgeError::BoundExceeded {
+                field: "rustc active -Ctarget-feature configuration component bytes",
+                actual,
+                limit: MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_COMPONENT_BYTES_V1,
+            }) if actual == MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_COMPONENT_BYTES_V1 + 1
+        ));
+
+        let work_boundary_declarations = MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_DECLARATIONS_V1;
+        let work_boundary_bytes =
+            MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_PARSE_WORK_V1 - work_boundary_declarations;
+        let work_boundary =
+            feature_source_with_shape(work_boundary_bytes, work_boundary_declarations);
+        SemanticLayoutTargetV1::new_with_codegen_profile(
+            "amdgcn-amd-amdhsa",
+            "e-p:64:64",
+            64,
+            "gfx942",
+            &work_boundary,
+            "",
+        )
+        .unwrap();
+        let work_over =
+            feature_source_with_shape(work_boundary_bytes + 1, work_boundary_declarations);
+        assert!(matches!(
+            SemanticLayoutTargetV1::new_with_codegen_profile(
+                "amdgcn-amd-amdhsa",
+                "e-p:64:64",
+                64,
+                "gfx942",
+                &work_over,
+                "",
+            ),
+            Err(SemanticLayoutBridgeError::BoundExceeded {
+                field: "rustc target-spec features parse work",
+                actual,
+                limit: MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_PARSE_WORK_V1,
+            }) if actual == MAX_SEMANTIC_LAYOUT_ACTIVE_FEATURE_PARSE_WORK_V1 + 1
+        ));
+
+        let unknowns = indexed_unknown_features(300);
+        let unknown_profile = SemanticLayoutTargetV1::new_with_codegen_profile(
+            "amdgcn-amd-amdhsa",
+            "e-p:64:64",
+            64,
+            "gfx942",
+            "",
+            &unknowns,
+        )
+        .unwrap();
+        assert!(
+            !unknown_profile
+                .has_exact_codegen_profile("gfx942", "-wavefrontsize32,+wavefrontsize64,-xnack")
+        );
+
+        let duplicates_100k = repeated_feature(100_000, "+xnack");
+        for _ in 0..3 {
+            let result = std::panic::catch_unwind(|| {
+                SemanticLayoutTargetV1::new_with_codegen_profile(
+                    "amdgcn-amd-amdhsa",
+                    "e-p:64:64",
+                    64,
+                    "gfx942",
+                    "",
+                    &duplicates_100k,
+                )
+            });
+            assert!(result.is_ok());
+            assert!(result.unwrap().is_err());
+        }
     }
 
     fn scalar_facts(source: SourceScalarKind) -> TypeLayoutFacts {
