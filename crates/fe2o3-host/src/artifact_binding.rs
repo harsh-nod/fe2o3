@@ -2586,6 +2586,27 @@ mod tests {
     }
 
     #[test]
+    fn amd_wave_requires_finer_capability_observation() {
+        let error = validate_fixture(
+            FixtureSpec {
+                required_capabilities: vec![Capability::AmdWave],
+                ..FixtureSpec::default()
+            },
+            &context(1, 0, "gfx942"),
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error,
+            ArtifactBindingError::InsufficientCapabilityObservation(Capability::AmdWave)
+        );
+        assert_eq!(
+            error.to_string(),
+            "HIP observations are too coarse to establish required capability AmdWave"
+        );
+    }
+
+    #[test]
     fn unobserved_specialized_capabilities_remain_unsupported() {
         let observed = context(1, 0, "gfx942");
         for capability in [
