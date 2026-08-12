@@ -24,6 +24,8 @@ import urllib.parse
 import urllib.request
 
 
+REQUEST_SCHEMA_VERSION = 1
+REQUEST_DOMAIN = "fe2o3-protected-publisher-request-v1"
 OIDC_HOST = "token.actions.githubusercontent.com"
 RECEIPT_NAME = "publisher-receipt-v2.tsv"
 MAX_OIDC_RESPONSE_BYTES = 64 * 1024
@@ -45,6 +47,7 @@ OIDC_DEFAULT_BRANCH = "main"
 OIDC_REPOSITORY = "powderluv/fe2o3"
 OIDC_REPOSITORY_ID = "1233498266"
 OIDC_REPOSITORY_OWNER_ID = "74956"
+OIDC_ENVIRONMENT = "protected-publisher"
 CALLER_WORKFLOW_PATH = ".github/workflows/parity-promotion.yml"
 PROTECTED_WORKFLOW_PATH = ".github/workflows/parity-publisher-gate.yml"
 MAX_PUBLISHER_RECEIPT_LIFETIME = 24 * 60 * 60
@@ -106,6 +109,7 @@ WORKFLOW_ENV = (
     "GITHUB_REF",
     "GITHUB_SHA",
     "GITHUB_ACTOR_ID",
+    "FE2O3_PUBLISHER_GITHUB_ENVIRONMENT",
     "FE2O3_PUBLISHER_DEFAULT_BRANCH",
 )
 
@@ -563,8 +567,11 @@ def workflow_identity(environment: dict[str, str]) -> dict[str, str]:
     if values["GITHUB_WORKFLOW"] != "Protected parity promotion":
         fail("GitHub workflow name is outside the OIDC authorization matrix")
     default_branch = values["FE2O3_PUBLISHER_DEFAULT_BRANCH"]
+    publisher_environment = values["FE2O3_PUBLISHER_GITHUB_ENVIRONMENT"]
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,254}", default_branch):
         fail("GitHub default branch is malformed")
+    if publisher_environment != OIDC_ENVIRONMENT:
+        fail("GitHub publisher environment is outside the OIDC authorization matrix")
     if default_branch != OIDC_DEFAULT_BRANCH:
         fail("GitHub default branch is outside the OIDC authorization matrix")
     queue_prefix = f"refs/heads/gh-readonly-queue/{default_branch}/"
@@ -642,6 +649,7 @@ def oidc_authorization(
         "aud": audience,
         "base_ref": "",
         "event_name": OIDC_EVENT,
+        "environment": OIDC_ENVIRONMENT,
         "head_ref": "",
         "iss": OIDC_ISSUER,
         "job_workflow_ref": (
@@ -743,7 +751,8 @@ def build_request(
         "manifest_path": args.manifest,
         "manifest_sha256": manifest_digest,
         "oidc_authorization": authorization,
-        "schema_version": 1,
+        "request_domain": REQUEST_DOMAIN,
+        "schema_version": REQUEST_SCHEMA_VERSION,
         "source_commit": manifest["source_commit"],
         "source_tree": manifest["source_tree"],
         "target": manifest["target"],

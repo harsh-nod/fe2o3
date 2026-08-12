@@ -463,6 +463,7 @@ row is valid:
 
 | Field | Exact production requirement |
 | --- | --- |
+| Request protocol | Canonical JSON schema `1` with request domain `fe2o3-protected-publisher-request-v1`; any noncanonical encoding, extra field, missing field, duplicate member, or type-confused member fails closed |
 | JOSE members | Exactly `alg,kid,typ` or `alg,kid,typ,x5t`; any other, missing, duplicate, or type-confused member fails closed |
 | `alg`, `typ`, `kid` | `RS256`, `JWT`, and a bounded printable key ID that selects a currently trusted key from GitHub's issuer JWKS |
 | Optional `x5t` | Canonical unpadded base64url for exactly one 20-byte SHA-1 certificate thumbprint; the exact value is copied into `oidc_authorization` |
@@ -472,6 +473,7 @@ row is valid:
 | `workflow_ref`, `workflow_sha` | `powderluv/fe2o3/.github/workflows/parity-promotion.yml@MERGE_GROUP_REF`; exact merge-group candidate SHA |
 | `job_workflow_ref`, `job_workflow_sha` | `powderluv/fe2o3/.github/workflows/parity-publisher-gate.yml@MERGE_GROUP_REF`; the same exact merge-group candidate SHA |
 | `job`, `event_name` | `gate`; `merge_group` |
+| `environment` | `protected-publisher`; the called reusable workflow job also declares the same GitHub Actions environment |
 | `ref` | Exact `refs/heads/gh-readonly-queue/main/...` merge-group ref |
 | `base_ref`, `head_ref` | Present as exact empty strings; these claims are reserved for pull-request workflows |
 | `sub` | Exact default GitHub subject `repo:powderluv/fe2o3:ref:MERGE_GROUP_REF`, with `:` in values percent-encoded |

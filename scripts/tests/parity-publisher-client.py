@@ -128,6 +128,7 @@ class Fixture:
             "ACTIONS_ID_TOKEN_REQUEST_TOKEN": self.secret_request_token,
             "ACTIONS_ID_TOKEN_REQUEST_URL": self.oidc_base,
             "FE2O3_PUBLISHER_CLIENT_TEST_DOMAIN": "1",
+            "FE2O3_PUBLISHER_GITHUB_ENVIRONMENT": CLIENT.OIDC_ENVIRONMENT,
             "FE2O3_PUBLISHER_OIDC_AUDIENCE": self.audience,
             "FE2O3_PUBLISHER_SERVICE_HOST": "publisher.example.invalid",
             "FE2O3_PUBLISHER_SERVICE_URL": self.service_url,
@@ -246,6 +247,7 @@ class Fixture:
             "base_ref": "",
             "check_run_id": "505",
             "event_name": "merge_group",
+            "environment": CLIENT.OIDC_ENVIRONMENT,
             "exp": now + 300,
             "head_ref": "",
             "iat": now,
@@ -634,6 +636,11 @@ def test_oidc_authorization_matrix() -> None:
         request, _ = fixture.expected(args)
         authorization = json.loads(request)["oidc_authorization"]
         assert authorization["policy_id"] == CLIENT.OIDC_POLICY_ID
+        request_payload = json.loads(request)
+        assert request == CLIENT.canonical_json(request_payload)
+        assert request_payload["request_domain"] == CLIENT.REQUEST_DOMAIN
+        assert request_payload["schema_version"] == CLIENT.REQUEST_SCHEMA_VERSION
+        assert authorization["environment"] == CLIENT.OIDC_ENVIRONMENT
         assert authorization["event_name"] == "merge_group"
         assert authorization["job"] == "gate"
         assert authorization["alg"] == "RS256"
@@ -687,6 +694,7 @@ def test_oidc_authorization_matrix() -> None:
             ),
             ("job_workflow_sha", fixture.default_tip),
             ("event_name", "pull_request_target"),
+            ("environment", "unprotected"),
             ("ref", "refs/heads/main"),
             ("base_ref", "refs/heads/main"),
             ("check_run_id", "not-numeric"),

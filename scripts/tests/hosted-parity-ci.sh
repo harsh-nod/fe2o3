@@ -124,11 +124,13 @@ if rg -n 'parity-publisher-gate\.yml@' "${PROTECTED_WORKFLOW}"; then
 fi
 
 require_text "${PUBLISHER_WORKFLOW}" 'workflow_call:'
+require_text "${PUBLISHER_WORKFLOW}" 'environment: protected-publisher'
 require_text "${PUBLISHER_WORKFLOW}" 'id-token: write'
 require_text "${PUBLISHER_WORKFLOW}" 'FE2O3_PUBLISHER_REPOSITORY_OWNER_ID: ${{ github.repository_owner_id }}'
 require_text "${PUBLISHER_WORKFLOW}" 'FE2O3_PUBLISHER_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}'
 require_text "${PUBLISHER_WORKFLOW}" 'FE2O3_PUBLISHER_SERVICE_URL: ${{ vars.FE2O3_PUBLISHER_SERVICE_URL }}'
 require_text "${PUBLISHER_WORKFLOW}" 'FE2O3_PUBLISHER_SERVICE_HOST: ${{ vars.FE2O3_PUBLISHER_SERVICE_HOST }}'
+require_text "${PUBLISHER_WORKFLOW}" 'FE2O3_PUBLISHER_GITHUB_ENVIRONMENT: protected-publisher'
 require_text "${PUBLISHER_WORKFLOW}" 'FE2O3_PUBLISHER_OIDC_AUDIENCE: ${{ vars.FE2O3_PUBLISHER_OIDC_AUDIENCE }}'
 require_text "${PUBLISHER_WORKFLOW}" 'python3 protected/scripts/parity-publisher-client.py'
 require_text "${PUBLISHER_WORKFLOW}" 'python3 protected/scripts/parity-signed-evidence.py gate'
