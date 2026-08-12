@@ -30,9 +30,10 @@ completion, private/shared-base, queue-pointer, and dynamic-LDS records therefor
 from the physical signature or acquire unmodeled typed semantics.
 
 Occupancy-dependent fields do not participate in the bridge. Minimum/maximum waves per execution
-unit, occupancy witnesses and subjects, variant tuple and policy identities, capabilities, and
-proof records are neither validated nor retained. The bridge exposes no occupancy identity and
-cannot admit occupancy-dependent execution.
+unit, occupancy witnesses and subjects, free-form variant names, variant tuple and policy
+identities, capabilities, and proof records are neither validated nor retained. Matching scans the
+bounded family using only occupancy-independent physical and artifact facts. The bridge exposes no
+variant label or occupancy identity and cannot admit occupancy-dependent execution.
 
 The value retains cooperative publication currentness but grants no load, dispatch, compiler,
 Rust-type, Verus, proof, policy, or parity authority. It is not GPU execution evidence.

@@ -3188,12 +3188,7 @@ mod tests {
             crate::launch_kernel_v2_bridge::canonical_family_for_recovered_launch_bridge_test(
                 &recovered,
             );
-        crate::bind_current_recovered_launch_kernel_metadata_v2(
-            &recovered,
-            &family,
-            "recovered-exact-wave64",
-        )
-        .unwrap();
+        crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &family).unwrap();
 
         for (seed, abi, expected) in [
             (
@@ -3236,7 +3231,6 @@ mod tests {
                 crate::bind_current_recovered_launch_kernel_metadata_v2(
                     &recovered,
                     &family,
-                    "recovered-exact-wave64"
                 ),
                 Err(crate::LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(
                     field
@@ -3276,14 +3270,11 @@ mod tests {
                 crate::launch_kernel_v2_bridge::canonical_family_for_recovered_launch_bridge_test(
                     &recovered,
                 );
-            let omitted_identity = crate::bind_current_recovered_launch_kernel_metadata_v2(
-                &recovered,
-                &family,
-                "recovered-exact-wave64",
-            )
-            .unwrap()
-            .physical_signature()
-            .identity();
+            let omitted_identity =
+                crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &family)
+                    .unwrap()
+                    .physical_signature()
+                    .identity();
             let physical_type = match scalar {
                 ScalarTypeV1::I8 => fe2o3_hsaco::ExplicitValueType::I8,
                 ScalarTypeV1::U8 => fe2o3_hsaco::ExplicitValueType::U8,
@@ -3310,7 +3301,6 @@ mod tests {
             let binding = crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_with_physical_probe_v2(
                 &recovered,
                 &family,
-                "recovered-exact-wave64",
                 &complete,
             )
             .unwrap_or_else(|error| panic!("{scalar:?}: {error:?}"));
@@ -3333,7 +3323,6 @@ mod tests {
                 crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_with_physical_probe_v2(
                     &recovered,
                     &family,
-                    "recovered-exact-wave64",
                     &contradictory,
                 ),
                 Err(crate::LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(
@@ -3348,7 +3337,6 @@ mod tests {
                 crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_with_physical_probe_v2(
                     &recovered,
                     &family,
-                    "recovered-exact-wave64",
                     &contradictory_pointer,
                 ),
                 Err(crate::LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(
@@ -3375,7 +3363,6 @@ mod tests {
             let result = crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_with_physical_probe_v2(
                 &recovered,
                 &family,
-                "recovered-exact-wave64",
                 &physical,
             );
             if expected_missing {
@@ -3407,12 +3394,8 @@ mod tests {
             crate::launch_kernel_v2_bridge::canonical_family_for_recovered_launch_bridge_test(
                 &recovered,
             );
-        let binding = crate::bind_current_recovered_launch_kernel_metadata_v2(
-            &recovered,
-            &family,
-            "recovered-exact-wave64",
-        )
-        .unwrap();
+        let binding =
+            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &family).unwrap();
         let signature = binding.physical_signature();
         assert_eq!(signature.explicit(), &family.signature);
         assert_eq!(signature.implicit_argument_offset(), 16);
@@ -3450,7 +3433,6 @@ mod tests {
                 crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_with_physical_probe_v2(
                     &recovered,
                     &family,
-                    "recovered-exact-wave64",
                     &physical,
                 ),
                 Err(crate::LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(
@@ -3481,7 +3463,6 @@ mod tests {
             crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_with_physical_probe_v2(
                 &recovered,
                 &family,
-                "recovered-exact-wave64",
                 &shortened,
             ),
             Err(crate::LaunchKernelMetadataBridgeErrorV2::MissingPhysicalMetadata(
@@ -3504,7 +3485,6 @@ mod tests {
                 crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_with_physical_probe_v2(
                     &recovered,
                     &family,
-                    "recovered-exact-wave64",
                     &physical,
                 ),
                 Err(crate::LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(
@@ -3535,11 +3515,7 @@ mod tests {
                     &model_recovered,
                 );
             assert!(matches!(
-                crate::bind_current_recovered_launch_kernel_metadata_v2(
-                    &recovered,
-                    &family,
-                    "recovered-exact-wave64"
-                ),
+                crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &family,),
                 Err(
                     crate::LaunchKernelMetadataBridgeErrorV2::UnsupportedPhysicalAbi(
                         "optional COV6 hidden arguments"
@@ -3584,11 +3560,7 @@ mod tests {
         ));
 
         assert!(matches!(
-            crate::bind_current_recovered_launch_kernel_metadata_v2(
-                &recovered,
-                &family,
-                "recovered-exact-wave64"
-            ),
+            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &family,),
             Err(
                 crate::LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(
                     "artifact launch block size"
@@ -3622,11 +3594,7 @@ mod tests {
         drop(current);
 
         assert!(matches!(
-            crate::bind_current_recovered_launch_kernel_metadata_v2(
-                &recovered,
-                &family,
-                "recovered-exact-wave64"
-            ),
+            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &family,),
             Err(
                 crate::LaunchKernelMetadataBridgeErrorV2::MissingPhysicalMetadata(
                     "physical argument alignment"
@@ -3656,7 +3624,6 @@ mod tests {
             crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_with_physical_probe_v2(
                 &recovered,
                 &family,
-                "recovered-exact-wave64",
                 &physical,
             ),
             Err(
@@ -3684,7 +3651,6 @@ mod tests {
             crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_with_physical_probe_v2(
                 &recovered,
                 &family,
-                "recovered-exact-wave64",
                 &physical,
             ),
             Err(crate::LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(
@@ -3715,11 +3681,7 @@ mod tests {
             crate::PhysicalMetadataValueV1::Known(2)
         );
         assert!(matches!(
-            crate::bind_current_recovered_launch_kernel_metadata_v2(
-                &recovered,
-                &family,
-                "recovered-exact-wave64"
-            ),
+            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &family,),
             Err(
                 crate::LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(
                     "artifact maximum grid"
@@ -3758,11 +3720,7 @@ mod tests {
             0
         );
         assert!(matches!(
-            crate::bind_current_recovered_launch_kernel_metadata_v2(
-                &recovered,
-                &family,
-                "recovered-exact-wave64"
-            ),
+            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &family,),
             Err(
                 crate::LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(
                     "artifact dynamic LDS limit"
@@ -3792,11 +3750,7 @@ mod tests {
             fe2o3_kernel_descriptor::OwnershipSemantics::UniqueBorrow
         );
         assert!(matches!(
-            crate::bind_current_recovered_launch_kernel_metadata_v2(
-                &recovered,
-                &family,
-                "recovered-exact-wave64"
-            ),
+            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &family,),
             Err(
                 crate::LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(
                     "artifact ABI argument ownership"
@@ -3820,12 +3774,7 @@ mod tests {
                 &recovered,
             );
 
-        crate::bind_current_recovered_launch_kernel_metadata_v2(
-            &recovered,
-            &family,
-            "recovered-exact-wave64",
-        )
-        .unwrap();
+        crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &family).unwrap();
 
         for axis in 0..3 {
             let mut observed = limits.map(crate::PhysicalMetadataValueV1::Known);
@@ -3837,7 +3786,6 @@ mod tests {
                 crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_with_physical_probe_v2(
                     &recovered,
                     &family,
-                    "recovered-exact-wave64",
                     &physical,
                 ),
                 Err(crate::LaunchKernelMetadataBridgeErrorV2::PhysicalLaunchLimitExceeded {
@@ -3878,7 +3826,6 @@ mod tests {
                 crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_with_physical_probe_v2(
                     &recovered,
                     &family,
-                    "recovered-exact-wave64",
                     &physical,
                 ),
                 Err(crate::LaunchKernelMetadataBridgeErrorV2::MissingPhysicalMetadata(field))
@@ -3904,7 +3851,6 @@ mod tests {
             crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_with_physical_probe_v2(
                 &recovered,
                 &family,
-                "recovered-exact-wave64",
                 &physical,
             ),
             Err(crate::LaunchKernelMetadataBridgeErrorV2::UnsupportedDynamicLds)
@@ -4018,12 +3964,8 @@ mod tests {
             crate::launch_kernel_v2_bridge::canonical_family_for_recovered_launch_bridge_test(
                 &recovered,
             );
-        let binding = crate::bind_current_recovered_launch_kernel_metadata_v2(
-            &recovered,
-            &family,
-            "recovered-exact-wave64",
-        )
-        .unwrap();
+        let binding =
+            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &family).unwrap();
 
         assert_eq!(binding.target(), family.target);
         assert_eq!(
@@ -4078,7 +4020,7 @@ mod tests {
             binding.resource_projection().dynamic_lds(),
             crate::Gfx942DynamicLdsProjectionV2::ArtifactForbidsAndPhysicalAbiOmits
         );
-        assert_eq!(binding.model_projection_name(), "recovered-exact-wave64");
+        assert!(!format!("{binding:?}").contains("recovered-exact-wave64"));
         assert!(!binding.authenticates_compiler_or_verus_provenance());
         assert!(!binding.authenticates_rust_type_or_effect_semantics());
         assert!(!binding.authenticates_policy_or_proof_claims());
@@ -4106,11 +4048,7 @@ mod tests {
         candidate.target.identity = fe2o3_kernel_ir::TargetIdentityV2::from_bytes([0x81; 32]);
         crate::launch_kernel_v2_bridge::rebind_launch_family_for_bridge_test(&mut candidate);
         assert!(matches!(
-            crate::bind_current_recovered_launch_kernel_metadata_v2(
-                &recovered,
-                &candidate,
-                "recovered-exact-wave64"
-            ),
+            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &candidate,),
             Err(crate::LaunchKernelMetadataBridgeErrorV2::TargetSubstitution)
         ));
 
@@ -4118,11 +4056,7 @@ mod tests {
         candidate.logical_name = "substituted-logical-name".to_owned();
         crate::launch_kernel_v2_bridge::rebind_launch_family_for_bridge_test(&mut candidate);
         assert!(matches!(
-            crate::bind_current_recovered_launch_kernel_metadata_v2(
-                &recovered,
-                &candidate,
-                "recovered-exact-wave64"
-            ),
+            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &candidate,),
             Err(crate::LaunchKernelMetadataBridgeErrorV2::LogicalNameSubstitution)
         ));
 
@@ -4130,11 +4064,7 @@ mod tests {
         candidate.variants[0].entry_name = "substituted_entry".to_owned();
         crate::launch_kernel_v2_bridge::rebind_launch_family_for_bridge_test(&mut candidate);
         assert!(matches!(
-            crate::bind_current_recovered_launch_kernel_metadata_v2(
-                &recovered,
-                &candidate,
-                "recovered-exact-wave64"
-            ),
+            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &candidate,),
             Err(crate::LaunchKernelMetadataBridgeErrorV2::EntryNameSubstitution)
         ));
 
@@ -4143,11 +4073,7 @@ mod tests {
             fe2o3_kernel_ir::ArtifactIdentityV2::from_bytes([0x82; 32]);
         crate::launch_kernel_v2_bridge::rebind_launch_family_for_bridge_test(&mut candidate);
         assert!(matches!(
-            crate::bind_current_recovered_launch_kernel_metadata_v2(
-                &recovered,
-                &candidate,
-                "recovered-exact-wave64"
-            ),
+            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &candidate,),
             Err(crate::LaunchKernelMetadataBridgeErrorV2::ArtifactSubstitution)
         ));
 
@@ -4156,11 +4082,7 @@ mod tests {
             fe2o3_kernel_ir::KernelIdentityV2::from_bytes([0x83; 32]);
         crate::launch_kernel_v2_bridge::rebind_launch_family_for_bridge_test(&mut candidate);
         assert!(matches!(
-            crate::bind_current_recovered_launch_kernel_metadata_v2(
-                &recovered,
-                &candidate,
-                "recovered-exact-wave64"
-            ),
+            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &candidate,),
             Err(crate::LaunchKernelMetadataBridgeErrorV2::KernelSubstitution)
         ));
 
@@ -4169,11 +4091,7 @@ mod tests {
             fe2o3_kernel_ir::KernelSignatureIdentityV2::from_bytes([0x84; 32]);
         crate::launch_kernel_v2_bridge::rebind_launch_family_for_bridge_test(&mut candidate);
         assert!(matches!(
-            crate::bind_current_recovered_launch_kernel_metadata_v2(
-                &recovered,
-                &candidate,
-                "recovered-exact-wave64"
-            ),
+            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &candidate,),
             Err(crate::LaunchKernelMetadataBridgeErrorV2::SignatureSubstitution)
         ));
 
@@ -4185,11 +4103,7 @@ mod tests {
             fe2o3_kernel_ir::SemanticTypeIdentityV2::from_bytes([0x85; 32]);
         crate::launch_kernel_v2_bridge::rebind_launch_family_for_bridge_test(&mut candidate);
         assert!(matches!(
-            crate::bind_current_recovered_launch_kernel_metadata_v2(
-                &recovered,
-                &candidate,
-                "recovered-exact-wave64"
-            ),
+            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &candidate,),
             Err(crate::LaunchKernelMetadataBridgeErrorV2::SignatureSubstitution)
         ));
     }
@@ -4206,11 +4120,7 @@ mod tests {
         candidate.variants[0].resources.private_segment_bytes += 1;
         crate::launch_kernel_v2_bridge::rebind_launch_family_for_bridge_test(&mut candidate);
         assert!(matches!(
-            crate::bind_current_recovered_launch_kernel_metadata_v2(
-                &recovered,
-                &candidate,
-                "recovered-exact-wave64"
-            ),
+            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &candidate,),
             Err(crate::LaunchKernelMetadataBridgeErrorV2::ResourceSubstitution)
         ));
 
@@ -4221,11 +4131,7 @@ mod tests {
                 * u64::from(candidate.variants[0].launch.maximum_flat_workgroup_size);
         crate::launch_kernel_v2_bridge::rebind_launch_family_for_bridge_test(&mut candidate);
         assert!(matches!(
-            crate::bind_current_recovered_launch_kernel_metadata_v2(
-                &recovered,
-                &candidate,
-                "recovered-exact-wave64"
-            ),
+            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &candidate,),
             Err(crate::LaunchKernelMetadataBridgeErrorV2::LaunchGeometrySubstitution)
         ));
 
@@ -4236,11 +4142,7 @@ mod tests {
             .push(fe2o3_kernel_ir::LaunchCapabilityV2::StaticLds);
         crate::launch_kernel_v2_bridge::rebind_launch_family_for_bridge_test(&mut candidate);
         assert!(matches!(
-            crate::bind_current_recovered_launch_kernel_metadata_v2(
-                &recovered,
-                &candidate,
-                "recovered-exact-wave64"
-            ),
+            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &candidate,),
             Err(crate::LaunchKernelMetadataBridgeErrorV2::ResourceSubstitution)
         ));
 
@@ -4248,11 +4150,7 @@ mod tests {
         candidate.variants[0].resources.private_segment_bytes = 1_048_577;
         crate::launch_kernel_v2_bridge::rebind_launch_family_for_bridge_test(&mut candidate);
         assert!(matches!(
-            crate::bind_current_recovered_launch_kernel_metadata_v2(
-                &recovered,
-                &candidate,
-                "recovered-exact-wave64"
-            ),
+            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &candidate,),
             Err(crate::LaunchKernelMetadataBridgeErrorV2::ResourceSubstitution)
         ));
     }
@@ -4270,11 +4168,7 @@ mod tests {
         };
 
         assert!(matches!(
-            crate::bind_current_recovered_launch_kernel_metadata_v2(
-                &recovered,
-                &family,
-                "recovered-exact-wave64"
-            ),
+            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &family,),
             Err(
                 crate::LaunchKernelMetadataBridgeErrorV2::UnsupportedPhysicalLaunchContract(
                     "non-exact block policy"
@@ -4309,7 +4203,6 @@ mod tests {
             crate::bind_current_recovered_launch_kernel_metadata_v2(
                 recovered,
                 family,
-                "recovered-exact-wave64"
             ),
             Err(crate::LaunchKernelMetadataBridgeErrorV2::InvalidLaunchModel(
                 fe2o3_kernel_ir::LaunchKernelValidationErrorV2::ResourceLimit {
@@ -4358,19 +4251,16 @@ mod tests {
             crate::launch_kernel_v2_bridge::canonical_family_for_recovered_launch_bridge_test(
                 &recovered,
             );
-        let first = crate::bind_current_recovered_launch_kernel_metadata_v2(
-            &recovered,
-            &family,
-            "recovered-exact-wave64",
-        )
-        .unwrap();
+        let first =
+            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &family).unwrap();
         let physical_signature = first.physical_signature().identity();
         let launch = first.launch_projection();
         let resources = first.resource_projection();
         drop(first);
 
-        family.variants[0].launch.minimum_waves_per_execution_unit = 0;
-        family.variants[0].launch.maximum_waves_per_execution_unit = u8::MAX;
+        family.variants[0].variant_name = "occupancy-waves-2-7-policy-deadbeef".to_owned();
+        family.variants[0].launch.minimum_waves_per_execution_unit = 2;
+        family.variants[0].launch.maximum_waves_per_execution_unit = 7;
         family.variants[0].occupancy_witness = None;
         family.variants[0].tuple_identity =
             fe2o3_kernel_ir::KernelVariantTupleIdentityV2::from_bytes([0; 32]);
@@ -4378,15 +4268,12 @@ mod tests {
             fe2o3_kernel_ir::KernelPolicyIdentityV2::from_bytes([0; 32]);
         family.variants[0].capabilities.clear();
         family.variants[0].proof_obligations.clear();
-        let rebound = crate::bind_current_recovered_launch_kernel_metadata_v2(
-            &recovered,
-            &family,
-            "recovered-exact-wave64",
-        )
-        .unwrap();
+        let rebound =
+            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &family).unwrap();
         assert_eq!(rebound.physical_signature().identity(), physical_signature);
         assert_eq!(rebound.launch_projection(), launch);
         assert_eq!(rebound.resource_projection(), resources);
+        assert!(!format!("{rebound:?}").contains("occupancy-waves-2-7-policy-deadbeef"));
         assert_eq!(
             rebound.occupancy_status(),
             crate::Gfx942OccupancyMetadataStatusV2::NoReviewedPhysicalDerivation
@@ -4395,21 +4282,27 @@ mod tests {
     }
 
     #[test]
-    fn launch_bridge_rejects_ambiguous_projection_name_without_model_authority() {
+    fn launch_bridge_accepts_duplicate_occupancy_free_projections_without_labels() {
         let (_fixture, recovered) = recovered_launch_bridge_fixture(119);
         let mut family =
             crate::launch_kernel_v2_bridge::canonical_family_for_recovered_launch_bridge_test(
                 &recovered,
             );
-        family.variants.push(family.variants[0].clone());
-        assert!(matches!(
-            crate::bind_current_recovered_launch_kernel_metadata_v2(
-                &recovered,
-                &family,
-                "recovered-exact-wave64"
-            ),
-            Err(crate::LaunchKernelMetadataBridgeErrorV2::AmbiguousModelProjection)
-        ));
+        let mut duplicate = family.variants[0].clone();
+        duplicate.variant_name = "occupancy-waves-2-7-policy-deadbeef".to_owned();
+        duplicate.launch.minimum_waves_per_execution_unit = 2;
+        duplicate.launch.maximum_waves_per_execution_unit = 7;
+        duplicate.occupancy_witness = None;
+        duplicate.tuple_identity =
+            fe2o3_kernel_ir::KernelVariantTupleIdentityV2::from_bytes([0xaa; 32]);
+        duplicate.policy_identity = fe2o3_kernel_ir::KernelPolicyIdentityV2::from_bytes([0xbb; 32]);
+        duplicate.capabilities.clear();
+        duplicate.proof_obligations.clear();
+        family.variants.push(duplicate);
+
+        let binding =
+            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &family).unwrap();
+        assert!(!format!("{binding:?}").contains("occupancy-waves-2-7-policy-deadbeef"));
     }
 
     #[test]
@@ -4425,26 +4318,24 @@ mod tests {
         fs::write(artifact, bytes).unwrap();
 
         assert!(matches!(
-            crate::bind_current_recovered_launch_kernel_metadata_v2(
-                &recovered,
-                &family,
-                "recovered-exact-wave64"
-            ),
+            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &family,),
             Err(crate::LaunchKernelMetadataBridgeErrorV2::CurrentPublication(_))
         ));
     }
 
     #[test]
-    fn launch_bridge_rejects_unknown_variant_before_acquiring_authority() {
+    fn launch_bridge_does_not_validate_or_select_by_variant_label() {
         let (_fixture, recovered) = recovered_launch_bridge_fixture(85);
-        let family =
+        let mut family =
             crate::launch_kernel_v2_bridge::canonical_family_for_recovered_launch_bridge_test(
                 &recovered,
             );
-        assert!(matches!(
-            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &family, "absent"),
-            Err(crate::LaunchKernelMetadataBridgeErrorV2::UnknownModelProjection)
-        ));
+        family.variants[0].variant_name.clear();
+        crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &family).unwrap();
+
+        family.variants[0].variant_name =
+            "x".repeat(fe2o3_kernel_ir::LaunchKernelLimitsV2::default().max_name_bytes + 1);
+        crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &family).unwrap();
     }
 
     #[test]
@@ -4454,12 +4345,8 @@ mod tests {
             crate::launch_kernel_v2_bridge::canonical_family_for_recovered_launch_bridge_test(
                 &recovered,
             );
-        let binding = crate::bind_current_recovered_launch_kernel_metadata_v2(
-            &recovered,
-            &family,
-            "recovered-exact-wave64",
-        )
-        .unwrap();
+        let binding =
+            crate::bind_current_recovered_launch_kernel_metadata_v2(&recovered, &family).unwrap();
 
         let output = fixture.output.clone();
         let owner = fixture.owner.clone();

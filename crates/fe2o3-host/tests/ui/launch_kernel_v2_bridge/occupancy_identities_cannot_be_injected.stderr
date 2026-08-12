@@ -34,3 +34,9 @@ error[E0599]: no method named `variant_name` found for reference `&CurrentRecove
    |
 10 |     let _ = binding.variant_name();
    |                     ^^^^^^^^^^^^ method not found in `&CurrentRecoveredLaunchKernelMetadataV2<'_>`
+
+error[E0599]: no method named `model_projection_name` found for reference `&CurrentRecoveredLaunchKernelMetadataV2<'_>` in the current scope
+  --> tests/ui/launch_kernel_v2_bridge/occupancy_identities_cannot_be_injected.rs:11:21
+   |
+11 |     let _ = binding.model_projection_name();
+   |                     ^^^^^^^^^^^^^^^^^^^^^ method not found in `&CurrentRecoveredLaunchKernelMetadataV2<'_>`

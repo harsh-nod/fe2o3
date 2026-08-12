@@ -236,14 +236,13 @@ impl fmt::Display for OccupancyDependentLaunchAdmissionErrorV2 {
 
 impl Error for OccupancyDependentLaunchAdmissionErrorV2 {}
 
-/// Current, inert match between one occupancy-independent model projection and one recovered
+/// Current, inert match between an occupancy-independent family projection and one recovered
 /// executable kernel.
 ///
 /// The value retains the cooperative current-publication guard, joined artifact/descriptor facts,
-/// physical metadata derived from the recovered Worker V2 admission, and the inert caller label
-/// used to select the model projection. That label is not an HSACO-observed fact. Caller-supplied
-/// policy, proof, occupancy-verifier, and occupancy-metadata identities are not retained and grant
-/// no authority. The value has no transition into HSA loading or dispatch.
+/// physical metadata derived from the recovered Worker V2 admission. Caller-supplied variant
+/// labels, policy, proof, occupancy-verifier, and occupancy-metadata identities are neither read
+/// nor retained and grant no authority. The value has no transition into HSA loading or dispatch.
 pub struct CurrentRecoveredLaunchKernelMetadataV2<'recovered> {
     _current: CurrentFinalizedWorkerV2BundleAdmissionV1<'recovered>,
     target: Gfx942TargetBindingV2,
@@ -252,7 +251,6 @@ pub struct CurrentRecoveredLaunchKernelMetadataV2<'recovered> {
     physical_signature: Gfx942PhysicalKernelSignatureV2,
     launch: Gfx942PhysicalLaunchProjectionV2,
     resources: Gfx942PhysicalResourceProjectionV2,
-    model_projection_name: Box<str>,
 }
 
 impl fmt::Debug for CurrentRecoveredLaunchKernelMetadataV2<'_> {
@@ -265,7 +263,6 @@ impl fmt::Debug for CurrentRecoveredLaunchKernelMetadataV2<'_> {
             .field("physical_signature", &self.physical_signature)
             .field("launch", &self.launch)
             .field("resources", &self.resources)
-            .field("model_projection_name", &self.model_projection_name)
             .field("occupancy_status", &self.occupancy_status())
             .finish_non_exhaustive()
     }
@@ -294,10 +291,6 @@ impl CurrentRecoveredLaunchKernelMetadataV2<'_> {
 
     pub const fn resource_projection(&self) -> Gfx942PhysicalResourceProjectionV2 {
         self.resources
-    }
-
-    pub fn model_projection_name(&self) -> &str {
-        &self.model_projection_name
     }
 
     pub const fn occupancy_status(&self) -> Gfx942OccupancyMetadataStatusV2 {
@@ -335,37 +328,35 @@ impl CurrentRecoveredLaunchKernelMetadataV2<'_> {
     }
 }
 
-/// Binds one named occupancy-independent launch-model projection to current recovered metadata.
+/// Binds one occupancy-independent launch-family projection to current recovered metadata.
 ///
 /// This validates target, payload, kernel, symbol, the embedded descriptor's flattened signature
 /// against AMDHSA physical arguments, non-occupancy launch geometry, and static/private resources.
-/// Occupancy bounds, witnesses, subjects, variant tuples, policy identities, capabilities, and
-/// proof records are neither read nor retained. Dynamic LDS is rejected because the narrow model
-/// has no complete physical maximum/alignment derivation. The V2 semantic profile is intentionally
-/// limited to canonical descriptor scalars and scalar slices. Standalone pointers and nested
-/// reference elements are rejected because descriptor V1 cannot express their semantic identity.
+/// Occupancy bounds, witnesses, subjects, free-form variant names, variant tuples, policy
+/// identities, capabilities, and proof records are neither read nor retained. Dynamic LDS is
+/// rejected because the narrow model has no complete physical maximum/alignment derivation. The V2
+/// semantic profile is intentionally limited to canonical descriptor scalars and scalar slices.
+/// Standalone pointers and nested reference elements are rejected because descriptor V1 cannot
+/// express their semantic identity.
 pub fn bind_current_recovered_launch_kernel_metadata_v2<'recovered>(
     recovered: &'recovered RecoveredWorkerV2PinnedDescriptorV1,
     family: &LaunchKernelFamilyV2,
-    projection_name: &str,
 ) -> Result<CurrentRecoveredLaunchKernelMetadataV2<'recovered>, LaunchKernelMetadataBridgeErrorV2> {
-    let variant = validate_and_select_projection(family, projection_name)?;
+    validate_projection_family_preflight(family)?;
     let current = recovered
         .acquire_launch_kernel_v2_currentness()
         .map_err(LaunchKernelMetadataBridgeErrorV2::CurrentPublication)?;
-    bind_with_current_and_physical_override(current, recovered, family, variant, None)
+    bind_with_current_and_physical_override(current, recovered, family, None)
 }
 
-fn validate_and_select_projection<'family>(
-    family: &'family LaunchKernelFamilyV2,
-    projection_name: &str,
-) -> Result<&'family KernelVariantV2, LaunchKernelMetadataBridgeErrorV2> {
+fn validate_projection_family_preflight(
+    family: &LaunchKernelFamilyV2,
+) -> Result<(), LaunchKernelMetadataBridgeErrorV2> {
     let limits = LaunchKernelLimitsV2::default();
     family
         .validate_variant_count(&limits)
         .map_err(LaunchKernelMetadataBridgeErrorV2::InvalidLaunchModel)?;
-    validate_projection_name(projection_name, &limits)?;
-    validate_projection_name(&family.logical_name, &limits)?;
+    validate_logical_name(&family.logical_name, &limits)?;
     if family.signature.parameters.len() > limits.max_parameters {
         return Err(LaunchKernelMetadataBridgeErrorV2::InvalidLaunchModel(
             LaunchKernelValidationErrorV2::ResourceLimit {
@@ -375,22 +366,10 @@ fn validate_and_select_projection<'family>(
             },
         ));
     }
-    let mut selected = None;
-    for variant in &family.variants {
-        validate_projection_name(&variant.variant_name, &limits)?;
-        if variant.variant_name == projection_name {
-            if selected.is_some() {
-                return Err(LaunchKernelMetadataBridgeErrorV2::AmbiguousModelProjection);
-            }
-            selected = Some(variant);
-        }
-    }
-    let selected = selected.ok_or(LaunchKernelMetadataBridgeErrorV2::UnknownModelProjection)?;
-    validate_projection_name(&selected.entry_name, &limits)?;
-    Ok(selected)
+    Ok(())
 }
 
-fn validate_projection_name(
+fn validate_logical_name(
     name: &str,
     limits: &LaunchKernelLimitsV2,
 ) -> Result<(), LaunchKernelMetadataBridgeErrorV2> {
@@ -421,7 +400,6 @@ fn bind_with_current_and_physical_override<'recovered>(
     current: CurrentFinalizedWorkerV2BundleAdmissionV1<'recovered>,
     recovered: &RecoveredWorkerV2PinnedDescriptorV1,
     family: &LaunchKernelFamilyV2,
-    variant: &KernelVariantV2,
     physical_override: Option<&PublishedKernelPhysicalLayoutV1>,
 ) -> Result<CurrentRecoveredLaunchKernelMetadataV2<'recovered>, LaunchKernelMetadataBridgeErrorV2> {
     let derived = {
@@ -434,7 +412,7 @@ fn bind_with_current_and_physical_override<'recovered>(
             physical_override.unwrap_or_else(|| admission.selected_kernel()),
         )?
     };
-    validate_model_match(family, variant, &derived)?;
+    validate_any_model_projection(family, &derived)?;
 
     Ok(CurrentRecoveredLaunchKernelMetadataV2 {
         _current: current,
@@ -444,7 +422,6 @@ fn bind_with_current_and_physical_override<'recovered>(
         physical_signature: derived.physical_signature,
         launch: derived.launch,
         resources: derived.resources,
-        model_projection_name: variant.variant_name.clone().into_boxed_str(),
     })
 }
 
@@ -452,14 +429,13 @@ fn bind_with_current_and_physical_override<'recovered>(
 pub(crate) fn bind_current_recovered_launch_kernel_metadata_with_physical_probe_v2<'recovered>(
     recovered: &'recovered RecoveredWorkerV2PinnedDescriptorV1,
     family: &LaunchKernelFamilyV2,
-    projection_name: &str,
     physical: &PublishedKernelPhysicalLayoutV1,
 ) -> Result<CurrentRecoveredLaunchKernelMetadataV2<'recovered>, LaunchKernelMetadataBridgeErrorV2> {
-    let variant = validate_and_select_projection(family, projection_name)?;
+    validate_projection_family_preflight(family)?;
     let current = recovered
         .acquire_launch_kernel_v2_currentness()
         .map_err(LaunchKernelMetadataBridgeErrorV2::CurrentPublication)?;
-    bind_with_current_and_physical_override(current, recovered, family, variant, Some(physical))
+    bind_with_current_and_physical_override(current, recovered, family, Some(physical))
 }
 
 struct DerivedLaunchMetadataV2 {
@@ -1690,6 +1666,23 @@ fn validate_model_match(
     Ok(())
 }
 
+fn validate_any_model_projection(
+    family: &LaunchKernelFamilyV2,
+    derived: &DerivedLaunchMetadataV2,
+) -> Result<(), LaunchKernelMetadataBridgeErrorV2> {
+    let mut first_mismatch = None;
+    for variant in &family.variants {
+        match validate_model_match(family, variant, derived) {
+            Ok(()) => return Ok(()),
+            Err(error) if first_mismatch.is_none() => first_mismatch = Some(error),
+            Err(_) => {}
+        }
+    }
+
+    // Family cardinality is checked before current publication is acquired.
+    Err(first_mismatch.expect("validated launch family has at least one variant"))
+}
+
 fn validate_launch_geometry_match(
     model: Gfx942LaunchContractV2,
     derived: Gfx942PhysicalLaunchProjectionV2,
@@ -1812,8 +1805,6 @@ impl CanonicalDigestV2 {
 pub enum LaunchKernelMetadataBridgeErrorV2 {
     CurrentPublication(FinalizedWorkerV2BundleAdmissionError),
     InvalidLaunchModel(LaunchKernelValidationErrorV2),
-    UnknownModelProjection,
-    AmbiguousModelProjection,
     UnsupportedTarget,
     UnsupportedCodeObjectVersion,
     UnsupportedDigestAlgorithm,
@@ -1843,12 +1834,6 @@ impl fmt::Display for LaunchKernelMetadataBridgeErrorV2 {
         match self {
             Self::CurrentPublication(error) => error.fmt(formatter),
             Self::InvalidLaunchModel(error) => write!(formatter, "invalid launch model: {error:?}"),
-            Self::UnknownModelProjection => {
-                formatter.write_str("launch model projection is absent from the family")
-            }
-            Self::AmbiguousModelProjection => {
-                formatter.write_str("launch model projection name is ambiguous")
-            }
             Self::UnsupportedTarget => {
                 formatter.write_str("launch metadata bridge requires gfx942:xnack- Wave64")
             }

@@ -8,6 +8,7 @@ fn inject_caller_claims(binding: &CurrentRecoveredLaunchKernelMetadataV2<'_>) {
     let _ = binding.occupancy_subject();
     let _ = binding.resources();
     let _ = binding.variant_name();
+    let _ = binding.model_projection_name();
 }
 
 fn main() {}
