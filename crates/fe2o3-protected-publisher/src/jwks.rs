@@ -469,11 +469,16 @@ mod tests {
         }
 
         fn request_count(&self) -> usize {
-            std::fs::read_to_string(self.directory.path().join("count"))
-                .unwrap_or_else(|_| "0".into())
-                .trim()
-                .parse()
-                .unwrap()
+            let path = self.directory.path().join("count");
+            for _ in 0..100 {
+                if let Ok(value) = std::fs::read_to_string(&path)
+                    && let Ok(count) = value.trim().parse()
+                {
+                    return count;
+                }
+                thread::sleep(Duration::from_millis(1));
+            }
+            panic!("mock issuer did not publish a complete request count")
         }
     }
 
