@@ -205,13 +205,17 @@ attempted.
 An idempotent lookup reads its indexed frame with bounded positional `read_at`
 operations. It validates against sequence, previous hash, frame hash, frame
 length, request key, request identity, request digest, and stable authorization
-stored in the index. Lookup never seeks the shared file cursor and never
-changes the live append sequence, chain head, tail offset, or index. Any
-positional-read, EOF, bounded-`EINTR`, identity, frame, canonical/base64,
-digest, semantic, or index-validation failure poisons the process-lifetime
-store before returning. A poisoned store cannot append, commit, acknowledge,
-or serve a later retry. The original durable bytes are not modified by lookup;
-restart independently replays those bytes.
+stored in the index. Only after every index field matches that validated
+durable record are the caller's request key, request identity, request digest,
+stable authorization, and canonical request body compared with the decoded
+record. A genuine caller conflict then returns `ReplayConflict` without
+poisoning. Lookup never seeks the shared file cursor and never changes the live
+append sequence, chain head, tail offset, or index. Any positional-read, EOF,
+bounded-`EINTR`, identity, frame, canonical/base64, digest, semantic, or
+index-validation failure poisons the process-lifetime store before returning.
+A poisoned store cannot append, commit, acknowledge, or serve a later retry.
+The original durable bytes are not modified by lookup; restart independently
+replays those bytes.
 
 Before write admission, issuance constructs the exact canonical
 `LedgerRecord` and complete frame, including its hash, then invokes the same

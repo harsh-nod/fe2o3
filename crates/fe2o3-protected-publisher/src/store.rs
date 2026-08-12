@@ -1340,6 +1340,9 @@ mod tests {
             "previous-hash",
             "frame-hash",
             "request-key",
+            "request-identity",
+            "request-digest",
+            "stable-authorization",
         ] {
             let temp = secure_tempdir();
             let path = temp.path().join(format!("index-{name}.ledger"));
@@ -1359,9 +1362,74 @@ mod tests {
                         };
                         index.request_key_sha256.replace_range(..1, replacement);
                     }
+                    "request-identity" => {
+                        let replacement = if index.request_identity.starts_with('0') {
+                            "1"
+                        } else {
+                            "0"
+                        };
+                        index.request_identity.replace_range(..1, replacement);
+                    }
+                    "request-digest" => {
+                        let replacement = if index.request_sha256.starts_with('0') {
+                            "1"
+                        } else {
+                            "0"
+                        };
+                        index.request_sha256.replace_range(..1, replacement);
+                    }
+                    "stable-authorization" => {
+                        let replacement = if index.stable_authorization_sha256.starts_with('0') {
+                            "1"
+                        } else {
+                            "0"
+                        };
+                        index
+                            .stable_authorization_sha256
+                            .replace_range(..1, replacement);
+                    }
                     _ => unreachable!(),
                 }
             });
+        }
+    }
+
+    #[test]
+    fn hostile_prechecked_index_substitution_bypasses_poison() {
+        for name in ["request-identity", "request-digest", "stable-authorization"] {
+            let temp = secure_tempdir();
+            let path = temp.path().join(format!("hostile-precheck-{name}.ledger"));
+            let first = fixture();
+            let second = distinct_fixture();
+            let mut store = DurableStore::open(&path).unwrap();
+            issue_with(&mut store, KEY_A, &first).unwrap();
+            let durable = std::fs::read(&path).unwrap();
+            let index = store.by_request_key.get_mut(&key_digest(KEY_A)).unwrap();
+            let field = match name {
+                "request-identity" => &mut index.request_identity,
+                "request-digest" => &mut index.request_sha256,
+                "stable-authorization" => &mut index.stable_authorization_sha256,
+                _ => unreachable!(),
+            };
+            let replacement = if field.starts_with('0') { "1" } else { "0" };
+            field.replace_range(..1, replacement);
+
+            assert!(matches!(
+                issue_with(&mut store, KEY_A, &first),
+                Err(PublisherError::Store)
+            ));
+            assert!(store.poisoned, "{name} did not poison");
+            assert!(matches!(
+                issue_with(&mut store, KEY_A, &first),
+                Err(PublisherError::Store)
+            ));
+            assert!(matches!(
+                issue_with(&mut store, KEY_B, &second),
+                Err(PublisherError::Store)
+            ));
+            assert_eq!(std::fs::read(&path).unwrap(), durable);
+            drop(store);
+            assert_eq!(DurableStore::open(&path).unwrap().count(), 1);
         }
     }
 
@@ -1564,7 +1632,7 @@ mod tests {
         let path = temp.path().join("publisher.ledger");
         let mut store = DurableStore::open(&path).unwrap();
         let first = fixture();
-        issue_with(&mut store, KEY_A, &first).unwrap();
+        let response = issue_with(&mut store, KEY_A, &first).unwrap();
 
         let mut changed_body = fixture();
         changed_body.request.archive_sha256 = "e".repeat(64);
@@ -1574,10 +1642,13 @@ mod tests {
             issue_with(&mut store, KEY_A, &changed_body),
             Err(PublisherError::ReplayConflict)
         ));
+        assert!(!store.poisoned);
+        assert_eq!(issue_with(&mut store, KEY_A, &first).unwrap(), response);
         assert!(matches!(
             issue_with(&mut store, KEY_B, &first),
             Err(PublisherError::ReplayConflict)
         ));
+        assert!(!store.poisoned);
 
         let mut changed_auth = fixture();
         changed_auth.request.oidc_authorization["actor_id"] = Value::String("202".into());
@@ -1587,6 +1658,11 @@ mod tests {
             issue_with(&mut store, KEY_A, &changed_auth),
             Err(PublisherError::ReplayConflict)
         ));
+        assert!(!store.poisoned);
+        assert_eq!(issue_with(&mut store, KEY_A, &first).unwrap(), response);
+        issue_with(&mut store, KEY_B, &changed_body).unwrap();
+        drop(store);
+        assert_eq!(DurableStore::open(&path).unwrap().count(), 2);
     }
 
     #[test]
