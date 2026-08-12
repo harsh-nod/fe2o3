@@ -42,6 +42,8 @@ use crate::project::{PinnedDirectory, is_synthetic_dot_entry};
 pub(crate) const RUNNER_CONTEXT_VERSION: &str = "3";
 #[cfg(feature = "worker-v2-fault-injection-test-only")]
 pub(crate) const RUNNER_SHORT_TIMEOUT_TEST_CONTEXT_VERSION: &str = "3-test-short-timeouts";
+#[cfg(feature = "worker-v2-fault-injection-test-only")]
+pub(crate) const RUNNER_SCHEDULER_TOLERANT_TEST_CONTEXT_VERSION: &str = "3-test-scheduler-tolerant";
 pub(crate) const RUNNER_EXPECTS_ENVELOPE: &str = "required";
 pub(crate) const RUNNER_EXPECTS_NO_ENVELOPE: &str = "none";
 
@@ -77,6 +79,13 @@ impl ApplicationTimeouts {
         ack: Duration::from_secs(2),
         cleanup: Duration::from_millis(500),
         wait_for_test_ready: true,
+    };
+
+    #[cfg(any(test, feature = "worker-v2-fault-injection-test-only"))]
+    pub(crate) const TEST_SCHEDULER_TOLERANT: Self = Self {
+        ack: Duration::from_secs(30),
+        cleanup: Duration::from_secs(5),
+        wait_for_test_ready: false,
     };
 }
 
@@ -2594,5 +2603,12 @@ mod tests {
     fn short_test_timeouts_are_internal_and_distinct_from_production() {
         assert!(ApplicationTimeouts::TEST_SHORT.ack < ApplicationTimeouts::PRODUCTION.ack);
         assert!(ApplicationTimeouts::TEST_SHORT.cleanup < ApplicationTimeouts::PRODUCTION.cleanup);
+        assert!(
+            ApplicationTimeouts::TEST_SCHEDULER_TOLERANT.ack > ApplicationTimeouts::PRODUCTION.ack
+        );
+        assert!(
+            ApplicationTimeouts::TEST_SCHEDULER_TOLERANT.cleanup
+                > ApplicationTimeouts::PRODUCTION.cleanup
+        );
     }
 }

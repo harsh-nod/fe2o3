@@ -609,7 +609,11 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<std::ffi::OsStr>,
 {
-    application_runner_command_with_context(directory, application, "3", arguments)
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    let context = "3-test-scheduler-tolerant";
+    #[cfg(not(feature = "worker-v2-fault-injection-test-only"))]
+    let context = "3";
+    application_runner_command_with_context(directory, application, context, arguments)
 }
 
 fn application_runner_command_with_context<I, S>(
