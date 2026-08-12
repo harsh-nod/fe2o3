@@ -2456,14 +2456,16 @@ mod tests {
 
         // Treat the numeric identity as if the kernel had already assigned it to an unrelated
         // process. Sandbox-only retries must not touch either signal or wait operations.
-        assert!(
-            !try_reap_job_with(
-                &mut job,
-                |_| panic!("terminal/reused PGID was signalled"),
-                |_| panic!("terminal/reused PGID was waited on"),
-            )
-            .unwrap()
-        );
+        for simulated_reuse in 0..100 {
+            assert!(
+                !try_reap_job_with(
+                    &mut job,
+                    |_| panic!("terminal/reused PGID was signalled at reuse {simulated_reuse}"),
+                    |_| panic!("terminal/reused PGID was waited on at reuse {simulated_reuse}"),
+                )
+                .unwrap()
+            );
+        }
         assert_eq!(signals.get(), 1);
 
         release.store(true, Ordering::Release);
@@ -2541,11 +2543,16 @@ mod tests {
     fn worker_start_failure_never_publishes_a_reservation() {
         let supervisor = ReaperSupervisor::new(1);
         supervisor.fail_worker_start.store(true, Ordering::Release);
-        let error = match supervisor.reserve() {
-            Ok(_) => panic!("reservation succeeded without a cleanup worker"),
-            Err(error) => error,
-        };
-        assert!(error.contains("startup failure"), "{error}");
+        for attempt in 0..100 {
+            let error = match supervisor.reserve() {
+                Ok(_) => panic!("reservation {attempt} succeeded without a cleanup worker"),
+                Err(error) => error,
+            };
+            assert!(
+                error.contains("startup failure"),
+                "attempt={attempt}: {error}"
+            );
+        }
         assert_eq!(supervisor.reserved.load(Ordering::Acquire), 0);
         assert_eq!(supervisor.worker_count.load(Ordering::Acquire), 0);
         assert!(supervisor.jobs.lock().unwrap().is_empty());
