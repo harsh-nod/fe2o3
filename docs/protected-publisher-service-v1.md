@@ -143,7 +143,9 @@ opens or creates one 0600 single-link ledger with `openat(O_NOFOLLOW)`, and
 holds an exclusive nonblocking advisory lock. The ledger descriptor remains
 open for the process lifetime. Shutdown explicitly applies `LOCK_UN` before
 close so a transient fork-inherited open-file description cannot extend the
-lock until its close-on-exec boundary.
+lock until its close-on-exec boundary. File creation and locking are separate
+syscalls; if contenders observe a valid empty ledger, only the exclusive lock
+holder initializes and syncs its header.
 
 The file header binds the format and configuration-derived service identity.
 Each append-only frame contains:

@@ -158,20 +158,17 @@ impl DurableStore {
     ) -> Result<Self, PublisherError> {
         policy.validate()?;
         let location = SecureLocation::open(path)?;
-        let (mut file, identity, created) = location.open_or_create_ledger()?;
+        let (mut file, identity, _created) = location.open_or_create_ledger()?;
         if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
             return Err(PublisherError::Store);
         }
         let header = ledger_header(&policy);
-        if created {
-            if identity.size != 0 {
-                return Err(PublisherError::Store);
-            }
+        if identity.size == 0 {
+            // Creation and flock are separate syscalls. Whichever contender
+            // owns the lock initializes an otherwise valid empty ledger.
             file.write_all(&header).map_err(|_| PublisherError::Store)?;
             file.sync_data().map_err(|_| PublisherError::Store)?;
             location.sync()?;
-        } else if identity.size == 0 {
-            return Err(PublisherError::Store);
         }
 
         let mut store = Self {
@@ -1327,14 +1324,20 @@ mod tests {
     fn concurrent_open_has_one_owner() {
         let temp = secure_tempdir();
         let path = Arc::new(temp.path().join("publisher.ledger"));
-        let barrier = Arc::new(Barrier::new(8));
+        let start = Arc::new(Barrier::new(8));
+        let attempted = Arc::new(Barrier::new(8));
         let handles = (0..8)
             .map(|_| {
                 let path = path.clone();
-                let barrier = barrier.clone();
+                let start = start.clone();
+                let attempted = attempted.clone();
                 thread::spawn(move || {
-                    barrier.wait();
-                    DurableStore::open(&path).is_ok()
+                    start.wait();
+                    let store = DurableStore::open(&path);
+                    let opened = store.is_ok();
+                    attempted.wait();
+                    drop(store);
+                    opened
                 })
             })
             .collect::<Vec<_>>();
