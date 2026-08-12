@@ -87,17 +87,27 @@ fn fake_rustc(mode: &str) {
     )
     .unwrap();
     if mode == "stop-after-handoff" {
+        let parent = rustix::process::getppid().unwrap();
+        let parent_pid = u32::try_from(parent.as_raw_nonzero().get()).unwrap();
         fs::write(
             env::var_os("FE2O3_FIXTURE_HANDOFF_MARKER").unwrap(),
-            b"ready",
+            format!("{parent_pid}:{}\n", process_start_time(parent_pid)),
         )
         .unwrap();
-        rustix::process::kill_process(
-            rustix::process::getppid().unwrap(),
-            rustix::process::Signal::STOP,
-        )
-        .unwrap();
+        rustix::process::kill_process(parent, rustix::process::Signal::STOP).unwrap();
     }
+}
+
+fn process_start_time(pid: u32) -> u64 {
+    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+    stat.rsplit_once(") ")
+        .unwrap()
+        .1
+        .split_whitespace()
+        .nth(19)
+        .unwrap()
+        .parse()
+        .unwrap()
 }
 
 fn stage_restart() {

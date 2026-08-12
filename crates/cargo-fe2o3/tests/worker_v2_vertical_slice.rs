@@ -811,28 +811,50 @@ fn process_cpu_ticks(process: u32) -> u64 {
     user + system
 }
 
+fn process_start_time(process: u32) -> Option<u64> {
+    let stat = fs::read_to_string(format!("/proc/{process}/stat")).ok()?;
+    stat.rsplit_once(") ")?
+        .1
+        .split_whitespace()
+        .nth(19)?
+        .parse()
+        .ok()
+}
+
 fn stage_ready_restart(directory: &TestDirectory) -> (PathBuf, PathBuf) {
     let config = write_config(directory, true);
-    let handoff_marker = directory.0.join("handoff-ready");
+    let handoff_marker = directory.0.join(format!(
+        "handoff-ready-{}",
+        NEXT_TEST.fetch_add(1, Ordering::Relaxed)
+    ));
+    assert!(!handoff_marker.exists());
     let mut options = VerticalRunOptions::new("stop-after-handoff");
     options.handoff = Some(&handoff_marker);
     let request = start_wrapper(directory, Some(&config), options).unwrap();
 
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let mut wrapper_pid = None;
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut wrapper_identity = None;
     while Instant::now() < deadline {
-        if let Some(pid) = request.wrapper_pid() {
+        if let (Some(pid), Ok(marker)) =
+            (request.wrapper_pid(), fs::read_to_string(&handoff_marker))
+            && let Some((reported_pid, reported_start)) = marker.trim().split_once(':')
+            && reported_pid.parse::<u32>().ok() == Some(pid)
+            && process_start_time(pid) == reported_start.parse::<u64>().ok()
+        {
             let status = fs::read_to_string(format!("/proc/{pid}/status")).unwrap_or_default();
-            if handoff_marker.exists() && status.lines().any(|line| line.starts_with("State:\tT")) {
-                wrapper_pid = Some(pid);
+            if status.lines().any(|line| line.starts_with("State:\tT")) {
+                wrapper_identity = Some((pid, reported_start.parse::<u64>().unwrap()));
                 break;
             }
         }
         thread::sleep(Duration::from_millis(10));
     }
-    let wrapper_pid = wrapper_pid.expect("vertical wrapper did not stop after handoff");
+    let (wrapper_pid, wrapper_start) =
+        wrapper_identity.expect("vertical wrapper did not publish and enter its unique stop state");
+    assert_eq!(process_start_time(wrapper_pid), Some(wrapper_start));
     let status = fs::read_to_string(format!("/proc/{wrapper_pid}/status")).unwrap();
     assert!(status.lines().any(|line| line.starts_with("State:\tT")));
+    assert_eq!(process_start_time(wrapper_pid), Some(wrapper_start));
     assert_eq!(unsafe { libc::kill(wrapper_pid as i32, libc::SIGKILL) }, 0);
     assert!(!request.wait().status.success());
 
