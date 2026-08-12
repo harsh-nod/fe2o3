@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 pub(crate) const INTERNAL_SUPERVISOR_ARG: &str = "__fe2o3-application-supervisor-v1";
 
-const SUPERVISOR_CAPACITY: usize = 8;
+const SUPERVISOR_CAPACITY: usize = 32;
 const SUPERVISOR_READY_TIMEOUT: Duration = Duration::from_secs(5);
 const SUPERVISOR_EXIT_TIMEOUT: Duration = Duration::from_secs(5);
 const PROTOCOL_MAGIC: [u8; 8] = *b"f2supv01";

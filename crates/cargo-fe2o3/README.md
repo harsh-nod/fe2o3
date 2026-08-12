@@ -210,13 +210,13 @@ io_uring. Missing kernel support for the required seccomp listener or
 supervisor.
 
 Descriptor-bearing launches run in a dedicated supervisor process, not in the
-Cargo-facing runner process. The frontend first locks one of eight fixed
+Cargo-facing runner process. The frontend first locks one of 32 fixed
 per-UID admission slots, starts the supervisor, and authenticates a bounded
 inherited stream with a fresh challenge. The supervisor inherits that locked
 slot, becomes the application's actual parent, starts the seccomp worker, and
 owns every application authority and ACK descriptor. The protocol and slot
 descriptors remain close-on-exec for the application. Saturated admission
-therefore rejects a ninth supervisor before any application is spawned.
+therefore rejects a 33rd supervisor before any application is spawned.
 
 Application teardown never performs a blocking child wait after an ACK,
 validation, or containment failure. The dedicated process retains the `Child`
