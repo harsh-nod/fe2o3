@@ -63,6 +63,7 @@ HOST_RE = re.compile(
 )
 SAFE_TEXT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/@:+-]{0,511}$")
 X5T_RE = re.compile(r"^[A-Za-z0-9_-]{27}$")
+REF_FORBIDDEN_RE = re.compile(r"[\000-\037\177 ~^:?*\\[]")
 OIDC_HEADER_KEY_SETS = (
     frozenset(("alg", "kid", "typ")),
     frozenset(("alg", "kid", "typ", "x5t")),
@@ -235,6 +236,10 @@ class FixtureTransport:
             fail("test transport fixture schema is invalid")
         self.responses = list(value["responses"])
 
+    def assert_consumed(self) -> None:
+        if self.responses:
+            fail("test transport has unused duplicate responses")
+
     def request(
         self,
         method: str,
@@ -397,6 +402,37 @@ def checked_response(
     if content_type != "application/json":
         fail(f"{label} has an invalid content type")
     return response.body
+
+
+def valid_git_ref_name(ref: str) -> bool:
+    if (
+        not ref
+        or len(ref) > 1024
+        or ref == "@"
+        or ref.startswith("/")
+        or ref.endswith("/")
+        or ref.endswith(".")
+        or ref.endswith(".lock")
+        or "//" in ref
+        or ".." in ref
+        or "@{" in ref
+        or REF_FORBIDDEN_RE.search(ref)
+    ):
+        return False
+    return not any(
+        component in ("", ".", "..")
+        or component.startswith(".")
+        or component.endswith(".lock")
+        for component in ref.split("/")
+    )
+
+
+def valid_branch_name(branch: str) -> bool:
+    return (
+        bool(branch)
+        and not branch.startswith(("-", "/", "refs/"))
+        and valid_git_ref_name(f"refs/heads/{branch}")
+    )
 
 
 def required_environment(environment: dict[str, str], name: str) -> str:
@@ -568,8 +604,10 @@ def workflow_identity(environment: dict[str, str]) -> dict[str, str]:
         fail("GitHub workflow name is outside the OIDC authorization matrix")
     default_branch = values["FE2O3_PUBLISHER_DEFAULT_BRANCH"]
     publisher_environment = values["FE2O3_PUBLISHER_GITHUB_ENVIRONMENT"]
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,254}", default_branch):
+    if not valid_branch_name(default_branch):
         fail("GitHub default branch is malformed")
+    if not valid_git_ref_name(values["GITHUB_REF"]):
+        fail("GitHub ref is malformed")
     if publisher_environment != OIDC_ENVIRONMENT:
         fail("GitHub publisher environment is outside the OIDC authorization matrix")
     if default_branch != OIDC_DEFAULT_BRANCH:
@@ -1074,6 +1112,8 @@ def acquire(args: argparse.Namespace, environment: dict[str, str]) -> None:
         MAX_SERVICE_RESPONSE_BYTES,
         "protected publisher service request",
     )
+    if isinstance(transport, FixtureTransport):
+        transport.assert_consumed()
     service = require_exact_keys(
         json_no_duplicates(service_raw, "protected publisher response"),
         {"challenge", "publisher_receipt_base64", "request_sha256", "schema_version"},

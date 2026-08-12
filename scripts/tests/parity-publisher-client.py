@@ -6,15 +6,19 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import http.server
 import importlib.util
 import json
 import os
 from pathlib import Path
 import shutil
+import socket
+import ssl
 import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from typing import Any, Callable
 
@@ -35,6 +39,19 @@ def load(path: Path, name: str) -> Any:
 
 CLIENT = load(CLIENT_PATH, "parity_publisher_client_tested")
 EVIDENCE = load(EVIDENCE_PATH, "parity_signed_evidence_publisher_test")
+
+
+class LocalHttpsHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        body = b'{"ok":true}\n'
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, _format: str, *_args: object) -> None:
+        pass
 
 
 class Fixture:
@@ -565,6 +582,25 @@ def test_identity_config_and_replay_rejections() -> None:
                 lambda args, _env: setattr(args, "default_tip", "a" * 40),
             ),
             (
+                "missing-publisher-environment",
+                "configuration is missing",
+                lambda _args, env: env.pop("FE2O3_PUBLISHER_GITHUB_ENVIRONMENT"),
+            ),
+            (
+                "wrong-publisher-environment",
+                "publisher environment is outside",
+                lambda _args, env: env.__setitem__(
+                    "FE2O3_PUBLISHER_GITHUB_ENVIRONMENT", "unprotected"
+                ),
+            ),
+            (
+                "malformed-queue-ref",
+                "GitHub ref is malformed",
+                lambda _args, env: env.__setitem__(
+                    "GITHUB_REF", f"{fixture.queue_ref}/../evil"
+                ),
+            ),
+            (
                 "replay-run",
                 "authorization matrix",
                 lambda _args, env: env.__setitem__("GITHUB_RUN_ATTEMPT", "2"),
@@ -767,6 +803,31 @@ def test_oidc_authorization_matrix() -> None:
         assert process.returncode == 2
         assert "duplicate JSON member" in process.stderr
 
+        duplicate_claim_args = fixture.args("duplicate-environment-claim")
+        header_segment, claims_segment, signature_segment = (
+            fixture.oidc_token_value.split(".")
+        )
+        claims_raw = base64.urlsafe_b64decode(
+            claims_segment + "=" * ((4 - len(claims_segment) % 4) % 4)
+        )
+        claims = json.loads(claims_raw)
+        duplicate_claim_items = []
+        for key in sorted(claims):
+            duplicate_claim_items.append(
+                f"{json.dumps(key)}:{json.dumps(claims[key], separators=(',', ':'))}"
+            )
+            if key == "environment":
+                duplicate_claim_items.append('"environment":"duplicate"')
+        duplicate_claims_segment = base64.urlsafe_b64encode(
+            ("{" + ",".join(duplicate_claim_items) + "}").encode("ascii")
+        ).rstrip(b"=").decode("ascii")
+        duplicate_claim_token = ".".join(
+            (header_segment, duplicate_claims_segment, signature_segment)
+        )
+        fixture.write_transport(duplicate_claim_args, oidc_token=duplicate_claim_token)
+        process = fixture.run(duplicate_claim_args)
+        assert process.returncode == 2 and "duplicate JSON member" in process.stderr
+
         args = fixture.args("archive-substitution")
         fixture.candidate_status.write_bytes(b"source_commit\t" + b"2" * 40 + b"\n")
         fixture.write_transport(args)
@@ -840,6 +901,33 @@ def test_transport_failures_bounds_and_redaction() -> None:
         assert process.returncode == 2
         assert "response does not match the request" in process.stderr
 
+        args = fixture.args("noncanonical-service-json")
+        request, _ = fixture.expected(args)
+        receipt = fixture.receipt(args)
+        noncanonical_service = json.dumps(
+            {
+                "challenge": fixture.challenge,
+                "publisher_receipt_base64": base64.b64encode(receipt).decode("ascii"),
+                "request_sha256": hashlib.sha256(request).hexdigest(),
+                "schema_version": 1,
+            },
+            indent=2,
+            sort_keys=True,
+        ).encode("ascii")
+        fixture.write_transport(args, service_raw=noncanonical_service)
+        process = fixture.run(args)
+        assert process.returncode == 2
+        assert "not canonical JSON" in process.stderr
+
+        args = fixture.args("unused-duplicate-response")
+        fixture.write_transport(args)
+        transport = json.loads(args.test_transport_fixture.read_text("ascii"))
+        transport["responses"].append(transport["responses"][-1])
+        args.test_transport_fixture.write_bytes(CLIENT.canonical_json(transport))
+        process = fixture.run(args)
+        assert process.returncode == 2
+        assert "unused duplicate responses" in process.stderr
+
         args = fixture.args("parser-value-error")
         fixture.write_transport(args)
         transport = json.loads(args.test_transport_fixture.read_text("ascii"))
@@ -887,9 +975,89 @@ def test_transport_failures_bounds_and_redaction() -> None:
         assert secret_receipt.decode("ascii") not in output
 
 
+def expect_network_failure(name: str, url: str) -> None:
+    secret = f"{name}-secret-never-log"
+    try:
+        CLIENT.bounded_request(
+            CLIENT.NetworkTransport(),
+            "GET",
+            url,
+            {"Authorization": f"Bearer {secret}"},
+            None,
+            128,
+            name,
+            time.monotonic() + 1.5,
+        )
+    except CLIENT.ClientError as error:
+        message = str(error)
+        assert "failed" in message or "deadline exceeded" in message, message
+        assert secret not in message
+        return
+    raise AssertionError(f"network failure unexpectedly succeeded: {name}")
+
+
+def unused_local_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def test_network_transport_dns_connect_tls_failures() -> None:
+    expect_network_failure(
+        "publisher DNS request",
+        "https://publisher-dns-failure.fe2o3.invalid/receipt",
+    )
+    expect_network_failure(
+        "publisher connect request",
+        f"https://127.0.0.1:{unused_local_port()}/receipt",
+    )
+
+    with tempfile.TemporaryDirectory(prefix="fe2o3-publisher-tls-") as raw_temp:
+        root = Path(raw_temp)
+        key = root / "key.pem"
+        cert = root / "cert.pem"
+        subprocess.run(
+            [
+                "openssl",
+                "req",
+                "-x509",
+                "-newkey",
+                "rsa:2048",
+                "-nodes",
+                "-days",
+                "1",
+                "-subj",
+                "/CN=localhost",
+                "-keyout",
+                key,
+                "-out",
+                cert,
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        server = http.server.HTTPServer(("127.0.0.1", 0), LocalHttpsHandler)
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(certfile=cert, keyfile=key)
+        server.socket = context.wrap_socket(server.socket, server_side=True)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            port = int(server.server_address[1])
+            expect_network_failure(
+                "publisher TLS request", f"https://127.0.0.1:{port}/"
+            )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+
 if __name__ == "__main__":
     test_success_and_test_domain_guard()
     test_identity_config_and_replay_rejections()
     test_oidc_authorization_matrix()
     test_transport_failures_bounds_and_redaction()
+    test_network_transport_dns_connect_tls_failures()
     print("protected publisher client adversarial tests passed")

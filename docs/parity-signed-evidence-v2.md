@@ -474,7 +474,7 @@ row is valid:
 | `job_workflow_ref`, `job_workflow_sha` | `powderluv/fe2o3/.github/workflows/parity-publisher-gate.yml@MERGE_GROUP_REF`; the same exact merge-group candidate SHA |
 | `job`, `event_name` | `gate`; `merge_group` |
 | `environment` | `protected-publisher`; the called reusable workflow job also declares the same GitHub Actions environment |
-| `ref` | Exact `refs/heads/gh-readonly-queue/main/...` merge-group ref |
+| `ref` | Exact syntactically valid `refs/heads/gh-readonly-queue/main/...` merge-group ref; malformed, ambiguous, or branch-like values outside that queue prefix fail closed before subject construction |
 | `base_ref`, `head_ref` | Present as exact empty strings; these claims are reserved for pull-request workflows |
 | `sub` | Exact default GitHub subject `repo:powderluv/fe2o3:ref:MERGE_GROUP_REF`, with `:` in values percent-encoded |
 | `runner_environment` | `github-hosted` |
