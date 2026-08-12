@@ -1,13 +1,16 @@
 use std::collections::BTreeSet;
+use std::io::Read;
 use std::net::SocketAddr;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::PublisherError;
 use crate::bounds::{MAX_CONFIG_BYTES, MAX_JSON_STRING_BYTES};
-use crate::canonical::parse_canonical;
+use crate::canonical::{canonical_bytes, parse_canonical};
 
 pub const GITHUB_ISSUER: &str = "https://token.actions.githubusercontent.com";
 
@@ -36,11 +39,27 @@ pub struct ServiceConfig {
 
 impl ServiceConfig {
     pub fn load(path: &Path) -> Result<Self, PublisherError> {
-        let metadata = std::fs::symlink_metadata(path).map_err(|_| PublisherError::Config)?;
-        if !metadata.file_type().is_file() || metadata.len() > MAX_CONFIG_BYTES as u64 {
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+            .open(path)
+            .map_err(|_| PublisherError::Config)?;
+        let metadata = file.metadata().map_err(|_| PublisherError::Config)?;
+        if !metadata.file_type().is_file()
+            || metadata.len() > MAX_CONFIG_BYTES as u64
+            || metadata.mode() & 0o077 != 0
+            || metadata.nlink() != 1
+            || metadata.uid() != unsafe { libc::geteuid() }
+        {
             return Err(PublisherError::Config);
         }
-        let raw = std::fs::read(path).map_err(|_| PublisherError::Config)?;
+        let mut raw = Vec::new();
+        file.take(MAX_CONFIG_BYTES as u64 + 1)
+            .read_to_end(&mut raw)
+            .map_err(|_| PublisherError::Config)?;
+        if raw.len() > MAX_CONFIG_BYTES {
+            return Err(PublisherError::Config);
+        }
         let value = parse_canonical(&raw, MAX_CONFIG_BYTES).map_err(|_| PublisherError::Config)?;
         let config: Self = serde_json::from_value(value).map_err(|_| PublisherError::Config)?;
         config.validate()?;
@@ -108,6 +127,18 @@ impl ServiceConfig {
     pub fn queue_prefix(&self) -> String {
         format!("refs/heads/gh-readonly-queue/{}/", self.default_branch)
     }
+
+    pub fn config_sha256(&self) -> Result<String, PublisherError> {
+        let value = serde_json::to_value(self).map_err(|_| PublisherError::Config)?;
+        let bytes = canonical_bytes(&value).map_err(|_| PublisherError::Config)?;
+        let digest = Sha256::digest(bytes);
+        Ok(digest.iter().map(|byte| format!("{byte:02x}")).collect())
+    }
+
+    pub fn service_identity(&self) -> Result<String, PublisherError> {
+        let digest = self.config_sha256()?;
+        Ok(format!("c{}", &digest[..63]))
+    }
 }
 
 pub fn valid_id(value: &str) -> bool {
@@ -124,6 +155,8 @@ mod tests {
     use super::*;
     use crate::canonical::canonical_bytes;
     use crate::test_support::{config, secure_tempdir};
+    use std::fs::hard_link;
+    use std::os::unix::fs::{PermissionsExt, symlink};
 
     fn production_config(root: &Path) -> ServiceConfig {
         let mut config = config(root.join("publisher.db"));
@@ -133,6 +166,11 @@ mod tests {
         config
     }
 
+    fn write_secure(path: &Path, bytes: &[u8]) {
+        std::fs::write(path, bytes).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
     #[test]
     fn canonical_production_config_loads_exactly() {
         let temp = secure_tempdir();
@@ -140,10 +178,13 @@ mod tests {
         assert!(config.validate().is_ok());
         let path = temp.path().join("config.json");
         let value = serde_json::to_value(&config).unwrap();
-        std::fs::write(&path, canonical_bytes(&value).unwrap()).unwrap();
+        write_secure(&path, &canonical_bytes(&value).unwrap());
         let loaded = ServiceConfig::load(&path).unwrap();
         assert_eq!(loaded.repository, "powderluv/fe2o3");
         assert_eq!(loaded.listen.ip(), std::net::Ipv4Addr::LOCALHOST);
+        assert_eq!(loaded.config_sha256().unwrap().len(), 64);
+        assert_eq!(loaded.service_identity().unwrap().len(), 64);
+        assert!(valid_id(&loaded.service_identity().unwrap()));
     }
 
     #[test]
@@ -175,9 +216,60 @@ mod tests {
     fn noncanonical_and_duplicate_config_json_rejects() {
         let temp = secure_tempdir();
         let path = temp.path().join("config.json");
-        std::fs::write(&path, b"{\"schema_version\":1,\"schema_version\":1}\n").unwrap();
+        write_secure(&path, b"{\"schema_version\":1,\"schema_version\":1}\n");
         assert!(ServiceConfig::load(&path).is_err());
-        std::fs::write(&path, b"{ \"schema_version\": 1 }\n").unwrap();
+        write_secure(&path, b"{ \"schema_version\": 1 }\n");
         assert!(ServiceConfig::load(&path).is_err());
+    }
+
+    #[test]
+    fn config_file_must_be_owner_only_single_link_and_not_a_symlink() {
+        let temp = secure_tempdir();
+        let config = production_config(temp.path());
+        let bytes = canonical_bytes(&serde_json::to_value(config).unwrap()).unwrap();
+        let path = temp.path().join("config.json");
+        std::fs::write(&path, &bytes).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+        assert!(ServiceConfig::load(&path).is_err());
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let symlink_path = temp.path().join("config-symlink.json");
+        symlink(&path, &symlink_path).unwrap();
+        assert!(ServiceConfig::load(&symlink_path).is_err());
+
+        let hardlink_path = temp.path().join("config-hardlink.json");
+        hard_link(&path, &hardlink_path).unwrap();
+        assert!(ServiceConfig::load(&path).is_err());
+        assert!(ServiceConfig::load(&hardlink_path).is_err());
+    }
+
+    #[test]
+    fn every_authority_config_mutation_changes_service_identity() {
+        let temp = secure_tempdir();
+        let base = production_config(temp.path());
+        let identity = base.service_identity().unwrap();
+        let mut mutations = Vec::new();
+
+        let mut changed = base.clone();
+        changed.audience.push_str("/changed");
+        mutations.push(changed);
+        let mut changed = base.clone();
+        changed.repository_id.push('7');
+        mutations.push(changed);
+        let mut changed = base.clone();
+        changed.allowed_actor_ids = vec!["202".into()];
+        mutations.push(changed);
+        let mut changed = base.clone();
+        changed.caller_workflow_path.push_str(".changed");
+        mutations.push(changed);
+        let mut changed = base;
+        changed.signing_key_path = temp.path().join("rotated.pem");
+        mutations.push(changed);
+
+        assert!(
+            mutations
+                .iter()
+                .all(|changed| changed.service_identity().unwrap() != identity)
+        );
     }
 }

@@ -35,12 +35,13 @@ pub struct Publisher {
 impl Publisher {
     pub fn open(config: ServiceConfig) -> Result<Arc<Self>, PublisherError> {
         config.validate()?;
+        let service_identity = config.service_identity()?;
         let jwks = Arc::new(HttpsJwksProvider::new(
             &config.jwks_url,
             config.network_deadline(),
         )?);
         let signer = Arc::new(FileReceiptSigner::load(
-            config.signing_key_id.clone(),
+            service_identity,
             &config.signing_key_path,
         )?);
         let store = DurableStore::open(&config.database_path)?;
