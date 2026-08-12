@@ -1164,9 +1164,7 @@ fn try_reap_job(job: &mut ReapJob) -> Result<bool, String> {
     {
         return Err("injected retryable nonblocking reap failure".to_string());
     }
-    if let Err(error) = kill_process_group(job.process_group) {
-        return Err(error);
-    }
+    kill_process_group(job.process_group)?;
     if job.leader_status.is_none() {
         match job.child.try_wait() {
             Ok(Some(status)) => job.leader_status = Some(status),
