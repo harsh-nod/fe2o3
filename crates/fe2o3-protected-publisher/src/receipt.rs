@@ -4,7 +4,7 @@ use base64::Engine;
 use ed25519_dalek::pkcs8::DecodePrivateKey;
 use ed25519_dalek::{Signer, SigningKey};
 use sha2::{Digest, Sha256};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::PublisherError;
 use crate::bounds::{MAX_PRIVATE_KEY_BYTES, MAX_RECEIPT_BYTES, RECEIPT_LIFETIME_SECS};
@@ -24,13 +24,20 @@ pub struct FileReceiptSigner {
 
 impl FileReceiptSigner {
     pub fn load(key_id: String, path: &Path) -> Result<Self, PublisherError> {
+        crate::process_security::harden_process_for_secrets()?;
         if !valid_id(&key_id) {
             return Err(PublisherError::Config);
         }
         let bytes = read_owner_only(path, MAX_PRIVATE_KEY_BYTES)?;
-        let mut pem = String::from_utf8(bytes).map_err(|_| PublisherError::Config)?;
+        let pem = match String::from_utf8(bytes) {
+            Ok(pem) => Zeroizing::new(pem),
+            Err(error) => {
+                let mut bytes = error.into_bytes();
+                bytes.zeroize();
+                return Err(PublisherError::Config);
+            }
+        };
         let key = SigningKey::from_pkcs8_pem(&pem);
-        pem.zeroize();
         let key = key.map_err(|_| PublisherError::Config)?;
         Ok(Self { key_id, key })
     }

@@ -5,7 +5,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::PublisherError;
 use crate::bounds::{ENROLLMENT_VALIDITY_SECS, MAX_ENROLLMENT_ARTIFACT_BYTES, MAX_JWT_BYTES};
@@ -74,6 +74,7 @@ pub async fn enroll_token(
     token_fd: RawFd,
     artifact_path: &Path,
 ) -> Result<String, PublisherError> {
+    crate::process_security::harden_process_for_secrets()?;
     config.validate()?;
     let provider = Arc::new(HttpsJwksProvider::new(
         &config.jwks_url,
@@ -89,13 +90,18 @@ async fn enroll_token_with_provider(
     token_fd: RawFd,
     artifact_path: &Path,
 ) -> Result<String, PublisherError> {
+    crate::process_security::harden_process_for_secrets()?;
     if artifact_path != config.enrollment_artifact_path {
         return Err(PublisherError::Config);
     }
-    let token_bytes = read_nonregular_token_fd(token_fd, config.network_deadline())?;
-    let token = std::str::from_utf8(&token_bytes)
-        .map_err(|_| PublisherError::Authentication)?
-        .trim_end_matches(['\r', '\n']);
+    let mut token_bytes = read_nonregular_token_fd(token_fd, config.network_deadline())?;
+    while token_bytes
+        .last()
+        .is_some_and(|byte| *byte == b'\r' || *byte == b'\n')
+    {
+        token_bytes.pop();
+    }
+    let token = std::str::from_utf8(&token_bytes).map_err(|_| PublisherError::Authentication)?;
     let projection = validate_enrollment_token(
         config,
         provider,
@@ -131,14 +137,16 @@ fn read_nonregular_token_fd(
     fd: RawFd,
     timeout: Duration,
 ) -> Result<Zeroizing<Vec<u8>>, PublisherError> {
-    read_nonregular_token_fd_with_hooks(fd, timeout, |_| {}, || {})
+    read_nonregular_token_fd_with_hooks(fd, timeout, |_| {}, || {}, |_| {})
 }
 
-fn read_nonregular_token_fd_with_hooks(
+#[cfg_attr(test, allow(clippy::too_many_arguments))]
+pub(crate) fn read_nonregular_token_fd_with_hooks(
     fd: RawFd,
     timeout: Duration,
     mut after_readiness: impl FnMut(RawFd),
     mut after_would_block: impl FnMut(),
+    mut after_scratch_clear: impl FnMut(&[u8]),
 ) -> Result<Zeroizing<Vec<u8>>, PublisherError> {
     let deadline = Instant::now()
         .checked_add(timeout)
@@ -169,6 +177,7 @@ fn read_nonregular_token_fd_with_hooks(
         deadline,
         &mut after_readiness,
         &mut after_would_block,
+        &mut after_scratch_clear,
     );
     duplicated.restore()?;
     read_result
@@ -179,8 +188,9 @@ fn read_token_until(
     deadline: Instant,
     after_readiness: &mut impl FnMut(RawFd),
     after_would_block: &mut impl FnMut(),
+    after_scratch_clear: &mut impl FnMut(&[u8]),
 ) -> Result<Zeroizing<Vec<u8>>, PublisherError> {
-    let mut bytes = Zeroizing::new(Vec::new());
+    let mut bytes = Zeroizing::new(Vec::with_capacity(MAX_JWT_BYTES + 1));
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
@@ -215,7 +225,7 @@ fn read_token_until(
         if Instant::now() >= deadline {
             return Err(PublisherError::Authentication);
         }
-        let mut chunk = [0u8; 4096];
+        let mut chunk = Zeroizing::new([0u8; 4096]);
         let capacity = (MAX_JWT_BYTES + 1 - bytes.len()).min(chunk.len());
         let count = unsafe { libc::read(fd, chunk.as_mut_ptr().cast(), capacity) };
         if count < 0 {
@@ -234,6 +244,8 @@ fn read_token_until(
             break;
         }
         bytes.extend_from_slice(&chunk[..count]);
+        chunk[..count].zeroize();
+        after_scratch_clear(&chunk[..count]);
         if bytes.len() > MAX_JWT_BYTES {
             return Err(PublisherError::Authentication);
         }
@@ -470,6 +482,7 @@ mod tests {
                 }
             },
             || drained_tx.send(()).unwrap(),
+            |scratch| assert!(scratch.iter().all(|byte| *byte == 0)),
         )
         .unwrap();
         producer.join().unwrap();

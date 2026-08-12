@@ -21,8 +21,22 @@ artifact. Enrollment rejects regular-file, directory, terminal, and other
 unexpected descriptors using `fstat`; only FIFOs and sockets whose
 `getsockname` family is exactly `AF_UNIX` are accepted. Merely having
 `S_IFSOCK` mode is insufficient: IPv4, IPv6, and other socket families are
-rejected before token input. The bounded token buffer is zeroized on drop. The
-artifact stores a token SHA-256, not token bytes.
+rejected before token input. Before argument handling, configuration loading,
+signing-key loading, enrollment input, or HTTP bearer extraction, the process
+sets and verifies `PR_SET_DUMPABLE=0` and soft and hard `RLIMIT_CORE=0`; failure
+stops startup or the request path. The artifact stores a token SHA-256, not
+token bytes.
+
+Enrollment preallocates one bounded owned token allocation and wraps it and each
+read scratch array in zeroizing ownership. The HTTP adapter removes the bearer
+header, copies its payload once into a zeroizing secret wrapper, and does not
+materialize a service-owned ordinary bearer `String`. Signing-key PEM ownership
+is also zeroizing, including invalid UTF-8 handling. These are narrow process
+and owned-buffer properties: they do not prove that kernel transport buffers,
+Axum/HTTP header storage, `jsonwebtoken`, cryptographic libraries, allocators,
+or other dependencies never make or retain internal copies. Root,
+`CAP_SYS_PTRACE`, kernel compromise, swap/hibernation, and physical memory are
+outside this boundary.
 
 The reader duplicates the inherited descriptor with close-on-exec, verifies
 its identity, temporarily adds `O_NONBLOCK` to the shared open-file status
@@ -264,7 +278,8 @@ fresh-token recovery, key/body/authorization collisions, descriptor races,
 torn/corrupt/duplicate frames, maximum-ref restart, append/replay decoder
 closure, short-write and ENOSPC injection, nonblocking enrollment races and
 socket-family rejection, JWKS concurrency/waves/rotation/deadlines,
-client-service conformance, strict Clippy, formatting, and diff checks.
+client-service conformance, the synthetic AF_UNIX nondumpable/core-limit secret
+process probe, strict Clippy, formatting, and diff checks.
 `cargo audit`, repository fsck, repeated stress, and a clean exact-commit
 MI300X replay are separate validation steps.
 

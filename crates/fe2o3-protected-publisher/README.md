@@ -9,8 +9,11 @@ already committed receipt after the original JWT expires.
 
 Enrollment accepts a token only through an inherited FIFO or an `AF_UNIX`
 socket, never a token pathname, argv value, environment value, TCP socket, or
-other socket family. The duplicated descriptor is read nonblocking under one
-absolute deadline. Unknown JWKS keys share singleflight refresh, a bounded
+other socket family. Before any key or token read, the process verifies that it
+is nondumpable and both core limits are zero. Service-owned bearer, enrollment
+scratch, token, and signing-key PEM buffers use zeroizing ownership; dependency
+and kernel copies are not claimed absent. The duplicated descriptor is read
+nonblocking under one absolute deadline. Unknown JWKS keys share singleflight refresh, a bounded
 negative cache, and issuer-wide refresh backoff. Configuration, enrollment,
 key, and ledger authority is descriptor-checked through retained owner-only
 directories. Every candidate ledger frame passes the same canonical decoder

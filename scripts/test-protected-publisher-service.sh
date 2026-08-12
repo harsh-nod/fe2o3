@@ -7,6 +7,8 @@ cd -- "${repo}"
 export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-"${repo}/target/protected-publisher-conformance"}
 
 cargo test --locked -p fe2o3-protected-publisher
+python3 scripts/tests/protected-publisher-secret-memory.py \
+  "${CARGO_TARGET_DIR}/debug/fe2o3-protected-publisher"
 cargo test --locked --release -p fe2o3-protected-publisher
 python3 scripts/tests/parity-publisher-client.py
 cargo clippy --locked -p fe2o3-protected-publisher --all-targets --all-features -- -D warnings

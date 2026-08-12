@@ -1,10 +1,28 @@
 use std::path::Path;
 
-use fe2o3_protected_publisher::{Publisher, ServiceConfig, enroll_token, router};
+use fe2o3_protected_publisher::{
+    Publisher, ServiceConfig, enroll_token, harden_process_for_secrets, router,
+};
 
-#[tokio::main]
-async fn main() {
-    if run().await.is_err() {
+fn main() {
+    unsafe {
+        libc::umask(0o077);
+    }
+    if harden_process_for_secrets().is_err() {
+        eprintln!("fe2o3 protected publisher: process hardening failed closed");
+        std::process::exit(2);
+    }
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(_) => {
+            eprintln!("fe2o3 protected publisher: runtime startup failed closed");
+            std::process::exit(2);
+        }
+    };
+    if runtime.block_on(run()).is_err() {
         eprintln!("fe2o3 protected publisher: startup or serving failed closed");
         std::process::exit(2);
     }
@@ -12,9 +30,6 @@ async fn main() {
 
 async fn run() -> Result<(), ()> {
     let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
-    unsafe {
-        libc::umask(0o077);
-    }
     if arguments.len() == 7
         && arguments[0] == "--enroll"
         && arguments[1] == "--config"

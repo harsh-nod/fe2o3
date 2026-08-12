@@ -11,6 +11,9 @@ use axum::routing::post;
 use sha2::{Digest, Sha256};
 use tokio::sync::Semaphore;
 use tokio::time::Instant;
+#[cfg(test)]
+use zeroize::Zeroize;
+use zeroize::Zeroizing;
 
 use crate::bounds::{
     MAX_HTTP_HEADER_BYTES, MAX_HTTP_HEADERS, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES,
@@ -41,6 +44,7 @@ pub struct Publisher {
 
 impl Publisher {
     pub fn open(config: ServiceConfig) -> Result<Arc<Self>, PublisherError> {
+        crate::process_security::harden_process_for_secrets()?;
         config.validate()?;
         require_enrollment(&config)?;
         let service_identity = config.service_identity()?;
@@ -107,6 +111,7 @@ impl Publisher {
         idempotency_key: &str,
         request_deadline: Instant,
     ) -> Result<PublisherResponse, PublisherError> {
+        crate::process_security::harden_process_for_secrets()?;
         let request_key_sha256 = idempotency_key_identity(idempotency_key)?;
         let value =
             parse_canonical(body, MAX_REQUEST_BYTES).map_err(|_| PublisherError::Request)?;
@@ -160,13 +165,16 @@ pub fn router(publisher: Arc<Publisher>) -> Router {
 }
 
 async fn receipts(State(publisher): State<Arc<Publisher>>, request: Request<Body>) -> Response {
+    if let Err(error) = crate::process_security::harden_process_for_secrets() {
+        return error_response(&error);
+    }
     let Ok(_slot) = publisher.request_slots.clone().try_acquire_owned() else {
         return error_response(&PublisherError::Store);
     };
     let deadline = Instant::now() + publisher.config.request_deadline();
     match bounded_http_request(request, deadline).await {
         Ok((body, bearer, idempotency_key)) => match publisher
-            .issue_until(&body, &bearer, &idempotency_key, deadline)
+            .issue_until(&body, bearer.expose(), &idempotency_key, deadline)
             .await
         {
             Ok(response) => (
@@ -182,9 +190,9 @@ async fn receipts(State(publisher): State<Arc<Publisher>>, request: Request<Body
 }
 
 async fn bounded_http_request(
-    request: Request<Body>,
+    mut request: Request<Body>,
     deadline: Instant,
-) -> Result<(Vec<u8>, String, String), PublisherError> {
+) -> Result<(Vec<u8>, SecretBearer, String), PublisherError> {
     if request.method() != Method::POST
         || request.uri().path() != "/v1/receipts"
         || request.uri().query().is_some()
@@ -201,20 +209,15 @@ async fn bounded_http_request(
     if content_type != Some("application/json") {
         return Err(PublisherError::Request);
     }
-    let authorization = request.headers().get_all(AUTHORIZATION);
-    if authorization.iter().count() != 1 {
+    if request.headers().get_all(AUTHORIZATION).iter().count() != 1 {
         return Err(PublisherError::Authentication);
     }
-    let authorization = authorization
-        .iter()
-        .next()
-        .and_then(|value| value.to_str().ok())
+    let authorization = request
+        .headers_mut()
+        .remove(AUTHORIZATION)
         .ok_or(PublisherError::Authentication)?;
-    let bearer = authorization
-        .strip_prefix("Bearer ")
-        .filter(|value| !value.is_empty() && !value.contains(char::is_whitespace))
-        .ok_or(PublisherError::Authentication)?
-        .to_owned();
+    let bearer = SecretBearer::from_authorization(authorization.as_bytes())?;
+    drop(authorization);
     let idempotency_keys = request.headers().get_all(&IDEMPOTENCY_KEY);
     if idempotency_keys.iter().count() != 1 {
         return Err(PublisherError::Request);
@@ -231,6 +234,35 @@ async fn bounded_http_request(
         .map_err(|_| PublisherError::Request)?
         .map_err(|_| PublisherError::Request)?;
     Ok((body.to_vec(), bearer, idempotency_key))
+}
+
+struct SecretBearer(Zeroizing<Vec<u8>>);
+
+impl SecretBearer {
+    fn from_authorization(value: &[u8]) -> Result<Self, PublisherError> {
+        let bearer = value
+            .strip_prefix(b"Bearer ")
+            .filter(|value| {
+                !value.is_empty()
+                    && value.len() <= crate::bounds::MAX_JWT_BYTES
+                    && value.is_ascii()
+                    && !value.iter().any(u8::is_ascii_whitespace)
+            })
+            .ok_or(PublisherError::Authentication)?;
+        let mut owned = Vec::with_capacity(bearer.len());
+        owned.extend_from_slice(bearer);
+        Ok(Self(Zeroizing::new(owned)))
+    }
+
+    fn expose(&self) -> &str {
+        std::str::from_utf8(&self.0).expect("SecretBearer admission requires ASCII")
+    }
+
+    #[cfg(test)]
+    fn clear_and_observe(&mut self) -> bool {
+        self.0.zeroize();
+        self.0.iter().all(|byte| *byte == 0)
+    }
 }
 
 fn idempotency_key_identity(key: &str) -> Result<String, PublisherError> {
@@ -677,6 +709,13 @@ key\t0000\tpublisher\ttest-publisher-v1\tkeys/test-publisher-v1.pem\t{digest}\te
             assert!(!text.contains("PRIVATE KEY"));
             assert!(!text.contains("fixture-jti"));
         }
+    }
+
+    #[test]
+    fn service_bearer_uses_observable_zeroizing_ownership() {
+        let mut bearer = SecretBearer::from_authorization(b"Bearer synthetic.jwt.value").unwrap();
+        assert_eq!(bearer.expose(), "synthetic.jwt.value");
+        assert!(bearer.clear_and_observe());
     }
 
     #[test]
