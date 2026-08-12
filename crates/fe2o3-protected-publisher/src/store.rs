@@ -1294,8 +1294,8 @@ mod tests {
                 .is_err()
         );
         assert_eq!(store.count(), 0);
-        store.set_commit_delay(Duration::from_millis(75));
-        let deadline = Instant::now() + Duration::from_millis(20);
+        store.set_commit_delay(Duration::from_millis(600));
+        let deadline = Instant::now() + Duration::from_millis(500);
         let response = store.issue_until(make_input(), deadline).unwrap();
         assert!(Instant::now() >= deadline);
         assert_eq!(issue_with(&mut store, KEY_A, &fixture).unwrap(), response);
