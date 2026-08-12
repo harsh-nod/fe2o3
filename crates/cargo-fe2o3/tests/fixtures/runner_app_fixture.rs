@@ -20,6 +20,8 @@ use fe2o3_worker_v2_bundle::{
     WorkerV2ApplicationIdentityV1, WorkerV2LoadEnvelopeV1,
 };
 
+const TEST_ACK_READY_FD_ENV: &str = "FE2O3_INTERNAL_TEST_ACK_READY_FD";
+
 struct ValidatedHandoff {
     report: serde_json::Value,
     _envelope: Option<File>,
@@ -312,6 +314,20 @@ fn validate_handoff(controls: &FixtureControls) -> Result<ValidatedHandoff, Stri
     if let Some(marker) = &controls.stall_before_ack {
         fs::write(marker, std::process::id().to_string())
             .map_err(|error| format!("write stalled-ACK ready marker: {error}"))?;
+        if let Some(descriptor) = env::var_os(TEST_ACK_READY_FD_ENV) {
+            let descriptor = descriptor
+                .to_str()
+                .and_then(|value| value.parse::<i32>().ok())
+                .filter(|descriptor| *descriptor >= 3)
+                .ok_or_else(|| "test ACK readiness descriptor is invalid".to_string())?;
+            // SAFETY: the feature-gated internal runner context transfers ownership of this
+            // write-only descriptor exclusively to the static test fixture.
+            let mut ready = unsafe { File::from_raw_fd(descriptor) };
+            validate_descriptor(&ready, rustix::fs::OFlags::WRONLY, "test ACK readiness")?;
+            ready
+                .write_all(&[1])
+                .map_err(|error| format!("write test ACK readiness: {error}"))?;
+        }
         thread::sleep(Duration::from_secs(30));
     }
     let process_creation = controls
@@ -622,6 +638,7 @@ fn is_handoff_environment(name: &OsStr) -> bool {
         WORKER_V2_APPLICATION_HANDOFF_COMMITMENT_ENV_V1,
         WORKER_V2_APPLICATION_HANDOFF_ACK_FD_ENV_V1,
         WORKER_V2_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
+        TEST_ACK_READY_FD_ENV,
     ]
     .iter()
     .any(|allowed| name == OsStr::new(allowed))

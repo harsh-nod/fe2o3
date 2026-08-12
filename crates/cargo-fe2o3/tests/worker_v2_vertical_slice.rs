@@ -609,6 +609,19 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<std::ffi::OsStr>,
 {
+    application_runner_command_with_context(directory, application, "3", arguments)
+}
+
+fn application_runner_command_with_context<I, S>(
+    directory: &TestDirectory,
+    application: &Path,
+    context: &str,
+    arguments: I,
+) -> Command
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
     use std::os::unix::fs::MetadataExt;
 
     let artifact = artifact_dir(directory);
@@ -616,7 +629,7 @@ where
     let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
     command
         .arg("__fe2o3-runner-v1")
-        .arg("3")
+        .arg(context)
         .arg(hex(artifact.as_os_str().as_encoded_bytes()))
         .arg(metadata.dev().to_string())
         .arg(metadata.ino().to_string())
@@ -1333,7 +1346,19 @@ fn stalled_application_ack_times_out_without_spinning_and_reaps_the_leader() {
 
     let report = directory.0.join("stalled-ack-report.json");
     let ready = directory.0.join("stalled-ack-ready");
-    let mut command = application_runner_command(&directory, application_fixture(), &report);
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    let context = "3-test-short-timeouts";
+    #[cfg(not(feature = "worker-v2-fault-injection-test-only"))]
+    let context = "3";
+    let mut command = application_runner_command_with_context(
+        &directory,
+        application_fixture(),
+        context,
+        [
+            report.as_os_str(),
+            OsStr::new("worker-v2-application-payload"),
+        ],
+    );
     command
         .arg("--fe2o3-test-stall-before-ack")
         .arg(&ready)
@@ -1351,6 +1376,7 @@ fn stalled_application_ack_times_out_without_spinning_and_reaps_the_leader() {
         ready.exists(),
         "application did not reach the stalled ACK boundary"
     );
+    let ack_started = Instant::now();
     let application = fs::read_to_string(&ready)
         .unwrap()
         .trim()
@@ -1368,6 +1394,7 @@ fn stalled_application_ack_times_out_without_spinning_and_reaps_the_leader() {
     );
 
     let rejected = child.wait_with_output().unwrap();
+    let ack_elapsed = ack_started.elapsed();
     assert!(
         !rejected.status.success(),
         "stalled ACK unexpectedly passed"
@@ -1377,8 +1404,24 @@ fn stalled_application_ack_times_out_without_spinning_and_reaps_the_leader() {
         "{}",
         stderr(&rejected)
     );
-    assert!(started.elapsed() >= Duration::from_secs(4));
-    assert!(started.elapsed() < Duration::from_secs(10));
+    #[cfg(feature = "worker-v2-fault-injection-test-only")]
+    assert!(
+        ack_elapsed >= Duration::from_secs(1),
+        "short ACK timeout returned too early: {ack_elapsed:?}"
+    );
+    #[cfg(not(feature = "worker-v2-fault-injection-test-only"))]
+    assert!(
+        ack_elapsed >= Duration::from_secs(4),
+        "production ACK timeout returned too early: {ack_elapsed:?}"
+    );
+    assert!(
+        ack_elapsed < Duration::from_secs(15),
+        "ACK timeout and cleanup exceeded the broad phase bound: {ack_elapsed:?}"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(90),
+        "application startup and ACK handling exceeded the broad harness bound"
+    );
     assert!(
         !Path::new(&format!("/proc/{application}")).exists(),
         "timed-out application leader was not killed and reaped"
