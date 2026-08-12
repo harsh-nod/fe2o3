@@ -4,7 +4,7 @@ use serde::de::{self, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Number, Value};
 
-use crate::bounds::{BoundError, preflight_json};
+use crate::bounds::{BoundError, preflight_json, preflight_json_with_string_limit};
 
 #[derive(Debug, thiserror::Error)]
 pub enum CanonicalError {
@@ -104,6 +104,10 @@ impl<'de> Deserialize<'de> for UniqueValue {
 
 pub fn parse_unique(raw: &[u8], limit: usize) -> Result<Value, CanonicalError> {
     preflight_json(raw, limit)?;
+    parse_unique_preflighted(raw)
+}
+
+fn parse_unique_preflighted(raw: &[u8]) -> Result<Value, CanonicalError> {
     let mut deserializer = serde_json::Deserializer::from_slice(raw);
     let UniqueValue(value) =
         UniqueValue::deserialize(&mut deserializer).map_err(|_| CanonicalError::Json)?;
@@ -119,6 +123,19 @@ pub fn canonical_bytes(value: &Value) -> Result<Vec<u8>, CanonicalError> {
 
 pub fn parse_canonical(raw: &[u8], limit: usize) -> Result<Value, CanonicalError> {
     let value = parse_unique(raw, limit)?;
+    if canonical_bytes(&value)? != raw {
+        return Err(CanonicalError::NonCanonical);
+    }
+    Ok(value)
+}
+
+pub(crate) fn parse_canonical_with_string_limit(
+    raw: &[u8],
+    byte_limit: usize,
+    string_byte_limit: usize,
+) -> Result<Value, CanonicalError> {
+    preflight_json_with_string_limit(raw, byte_limit, string_byte_limit)?;
+    let value = parse_unique_preflighted(raw)?;
     if canonical_bytes(&value)? != raw {
         return Err(CanonicalError::NonCanonical);
     }

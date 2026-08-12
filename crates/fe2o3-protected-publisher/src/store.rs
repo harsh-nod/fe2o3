@@ -16,10 +16,12 @@ use sha2::{Digest, Sha256};
 use crate::PublisherError;
 use crate::ServiceConfig;
 use crate::bounds::{
-    MAX_LEDGER_BYTES, MAX_LEDGER_RECORD_BYTES, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES,
-    MAX_STORE_RECEIPTS, MIN_LEDGER_BYTES,
+    MAX_LEDGER_BYTES, MAX_LEDGER_FRAME_BYTES, MAX_LEDGER_RECORD_BYTES,
+    MAX_LEDGER_REQUEST_BASE64_BYTES, MAX_LEDGER_REQUEST_BODY_BYTES,
+    MAX_LEDGER_RESPONSE_BASE64_BYTES, MAX_LEDGER_RESPONSE_BODY_BYTES, MAX_RECEIPT_BASE64_BYTES,
+    MAX_RECEIPT_BYTES, MAX_STORE_RECEIPTS, MIN_LEDGER_BYTES,
 };
-use crate::canonical::{canonical_bytes, parse_canonical};
+use crate::canonical::{canonical_bytes, parse_canonical, parse_canonical_with_string_limit};
 use crate::oidc::PublisherRequest;
 use crate::receipt::{
     ReceiptArtifact, ReceiptSigner, build_artifact, raw_request_sha256, request_identity,
@@ -32,6 +34,9 @@ const FRAME_VERSION: u32 = 1;
 const FRAME_PREFIX_BYTES: usize = 8 + 4 + 4 + 8 + 32;
 const FRAME_HASH_BYTES: usize = 32;
 const ZERO_HASH: [u8; 32] = [0; 32];
+
+#[cfg(test)]
+type BeforeAdmissionHook = Box<dyn FnOnce(&mut Vec<u8>) + Send>;
 
 pub struct DurableStore {
     file: File,
@@ -55,6 +60,8 @@ pub struct DurableStore {
     fail_write_after: Option<(usize, i32)>,
     #[cfg(test)]
     after_sync: Option<Box<dyn FnOnce() + Send>>,
+    #[cfg(test)]
+    before_admission: Option<BeforeAdmissionHook>,
 }
 
 #[derive(Clone)]
@@ -118,7 +125,7 @@ pub(crate) struct IssueInput<'a> {
     pub signer: &'a dyn ReceiptSigner,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 struct LedgerRecord {
     evidence_identity: String,
@@ -189,6 +196,8 @@ impl DurableStore {
             fail_write_after: None,
             #[cfg(test)]
             after_sync: None,
+            #[cfg(test)]
+            before_admission: None,
         };
         store.verify_identity()?;
         store.replay(&header)?;
@@ -265,46 +274,21 @@ impl DurableStore {
         self.file
             .read_exact(&mut prefix)
             .map_err(|_| PublisherError::Store)?;
-        if &prefix[..8] != FRAME_MAGIC {
-            return Err(PublisherError::Store);
-        }
-        let version = u32::from_be_bytes(prefix[8..12].try_into().unwrap());
-        let payload_length = u32::from_be_bytes(prefix[12..16].try_into().unwrap()) as usize;
-        let sequence = u64::from_be_bytes(prefix[16..24].try_into().unwrap());
-        let previous_hash: [u8; 32] = prefix[24..56].try_into().unwrap();
-        if version != FRAME_VERSION
-            || payload_length == 0
-            || payload_length > MAX_LEDGER_RECORD_BYTES
-            || sequence != self.next_sequence
-            || previous_hash != self.tail_hash
-        {
-            return Err(PublisherError::Store);
-        }
-        let frame_length = FRAME_PREFIX_BYTES
-            .checked_add(payload_length)
-            .and_then(|value| value.checked_add(FRAME_HASH_BYTES))
-            .ok_or(PublisherError::Store)? as u64;
-        if remaining < frame_length {
+        let frame_length = frame_length_from_prefix(&prefix, self.next_sequence, self.tail_hash)?;
+        if remaining < frame_length as u64 {
             return Ok(None);
         }
-        let mut payload = vec![0; payload_length];
+        let mut frame = Vec::with_capacity(frame_length);
+        frame.extend_from_slice(&prefix);
+        let rest_length = frame_length
+            .checked_sub(FRAME_PREFIX_BYTES)
+            .ok_or(PublisherError::Store)?;
+        let mut rest = vec![0; rest_length];
         self.file
-            .read_exact(&mut payload)
+            .read_exact(&mut rest)
             .map_err(|_| PublisherError::Store)?;
-        let mut stored_hash = [0u8; 32];
-        self.file
-            .read_exact(&mut stored_hash)
-            .map_err(|_| PublisherError::Store)?;
-        let computed_hash = frame_hash(&prefix, &payload);
-        if stored_hash != computed_hash {
-            return Err(PublisherError::Store);
-        }
-        let record = decode_record(&payload)?;
-        Ok(Some(DecodedFrame {
-            frame_hash: computed_hash,
-            frame_length,
-            record,
-        }))
+        frame.extend_from_slice(&rest);
+        decode_frame(&frame, self.next_sequence, self.tail_hash).map(Some)
     }
 
     fn index_record(
@@ -364,7 +348,11 @@ impl DurableStore {
                 return Err(PublisherError::ReplayConflict);
             }
             let record = self.load_indexed(&existing)?;
-            let request_body = decode_base64(&record.request_body_base64, MAX_REQUEST_BYTES)?;
+            let request_body = decode_base64(
+                &record.request_body_base64,
+                MAX_LEDGER_REQUEST_BASE64_BYTES,
+                MAX_LEDGER_REQUEST_BODY_BYTES,
+            )?;
             if record.request_key_sha256 != input.request_key_sha256
                 || record.request_identity != existing.request_identity
                 || record.request_sha256 != existing.request_sha256
@@ -377,7 +365,11 @@ impl DurableStore {
                 return Err(PublisherError::ReplayConflict);
             }
             check_deadline(deadline)?;
-            let response = decode_base64(&record.response_body_base64, MAX_RESPONSE_BYTES)?;
+            let response = decode_base64(
+                &record.response_body_base64,
+                MAX_LEDGER_RESPONSE_BASE64_BYTES,
+                MAX_LEDGER_RESPONSE_BODY_BYTES,
+            )?;
             self.verify_identity()?;
             return Ok(response);
         }
@@ -415,20 +407,30 @@ impl DurableStore {
             schema_version: 1,
             stable_authorization_sha256: input.stable_authorization_sha256.into(),
         };
-        validate_record(&record)?;
-        if self.evidence_identities.contains(&record.evidence_identity) {
-            return Err(PublisherError::ReplayConflict);
-        }
         let payload =
             canonical_bytes(&serde_json::to_value(&record).map_err(|_| PublisherError::Store)?)
                 .map_err(|_| PublisherError::Store)?;
-        if payload.len() > MAX_LEDGER_RECORD_BYTES {
+        let frame = encode_frame(self.next_sequence, self.tail_hash, &payload)?;
+        #[cfg(test)]
+        let mut frame = frame;
+        #[cfg(test)]
+        if let Some(hook) = self.before_admission.take() {
+            hook(&mut frame);
+        }
+        // Append admission uses the exact decoder and record validation used by restart.
+        let decoded = decode_frame(&frame, self.next_sequence, self.tail_hash)?;
+        if decoded.record != record {
             return Err(PublisherError::Store);
         }
-        let frame = encode_frame(self.next_sequence, self.tail_hash, &payload)?;
+        if self
+            .evidence_identities
+            .contains(&decoded.record.evidence_identity)
+        {
+            return Err(PublisherError::ReplayConflict);
+        }
         let new_tail = self
             .tail_offset
-            .checked_add(frame.len() as u64)
+            .checked_add(decoded.frame_length)
             .filter(|tail| *tail <= self.policy.max_ledger_bytes)
             .ok_or(PublisherError::Store)?;
         check_deadline(deadline)?;
@@ -441,16 +443,15 @@ impl DurableStore {
             self.poisoned = true;
             return Err(PublisherError::Store);
         }
-        let frame_hash: [u8; 32] = frame[frame.len() - FRAME_HASH_BYTES..].try_into().unwrap();
         let frame_offset = self.tail_offset;
         self.tail_offset = new_tail;
-        self.tail_hash = frame_hash;
+        self.tail_hash = decoded.frame_hash;
         self.next_sequence = self
             .next_sequence
             .checked_add(1)
             .ok_or(PublisherError::Store)?;
         if self
-            .index_record(frame_offset, frame.len() as u64, &record)
+            .index_record(frame_offset, decoded.frame_length, &decoded.record)
             .is_err()
         {
             self.poisoned = true;
@@ -586,6 +587,11 @@ impl DurableStore {
     fn set_after_sync(&mut self, hook: impl FnOnce() + Send + 'static) {
         self.after_sync = Some(Box::new(hook));
     }
+
+    #[cfg(test)]
+    fn set_before_admission(&mut self, hook: impl FnOnce(&mut Vec<u8>) + Send + 'static) {
+        self.before_admission = Some(Box::new(hook));
+    }
 }
 
 fn ledger_header(policy: &StorePolicy) -> Vec<u8> {
@@ -601,6 +607,7 @@ fn encode_frame(
     previous_hash: [u8; 32],
     payload: &[u8],
 ) -> Result<Vec<u8>, PublisherError> {
+    checked_frame_length(payload.len())?;
     let payload_length = u32::try_from(payload.len()).map_err(|_| PublisherError::Store)?;
     let mut prefix = Vec::with_capacity(FRAME_PREFIX_BYTES);
     prefix.extend_from_slice(FRAME_MAGIC);
@@ -616,6 +623,65 @@ fn encode_frame(
     Ok(frame)
 }
 
+fn checked_frame_length(payload_length: usize) -> Result<usize, PublisherError> {
+    if payload_length == 0 || payload_length > MAX_LEDGER_RECORD_BYTES {
+        return Err(PublisherError::Store);
+    }
+    let frame_length = FRAME_PREFIX_BYTES
+        .checked_add(payload_length)
+        .and_then(|value| value.checked_add(FRAME_HASH_BYTES))
+        .ok_or(PublisherError::Store)?;
+    if frame_length > MAX_LEDGER_FRAME_BYTES {
+        return Err(PublisherError::Store);
+    }
+    Ok(frame_length)
+}
+
+fn frame_length_from_prefix(
+    prefix: &[u8; FRAME_PREFIX_BYTES],
+    expected_sequence: u64,
+    expected_previous_hash: [u8; 32],
+) -> Result<usize, PublisherError> {
+    if &prefix[..8] != FRAME_MAGIC
+        || u32::from_be_bytes(prefix[8..12].try_into().unwrap()) != FRAME_VERSION
+        || u64::from_be_bytes(prefix[16..24].try_into().unwrap()) != expected_sequence
+        || <[u8; 32]>::try_from(&prefix[24..56]).unwrap() != expected_previous_hash
+    {
+        return Err(PublisherError::Store);
+    }
+    checked_frame_length(u32::from_be_bytes(prefix[12..16].try_into().unwrap()) as usize)
+}
+
+fn decode_frame(
+    frame: &[u8],
+    expected_sequence: u64,
+    expected_previous_hash: [u8; 32],
+) -> Result<DecodedFrame, PublisherError> {
+    if frame.len() < FRAME_PREFIX_BYTES {
+        return Err(PublisherError::Store);
+    }
+    let prefix: &[u8; FRAME_PREFIX_BYTES] = frame[..FRAME_PREFIX_BYTES]
+        .try_into()
+        .map_err(|_| PublisherError::Store)?;
+    let frame_length = frame_length_from_prefix(prefix, expected_sequence, expected_previous_hash)?;
+    if frame.len() != frame_length {
+        return Err(PublisherError::Store);
+    }
+    let payload_end = frame_length
+        .checked_sub(FRAME_HASH_BYTES)
+        .ok_or(PublisherError::Store)?;
+    let payload = &frame[FRAME_PREFIX_BYTES..payload_end];
+    let computed_hash = frame_hash(prefix, payload);
+    if frame[payload_end..] != computed_hash {
+        return Err(PublisherError::Store);
+    }
+    Ok(DecodedFrame {
+        frame_hash: computed_hash,
+        frame_length: frame_length as u64,
+        record: decode_record(payload)?,
+    })
+}
+
 fn frame_hash(prefix: &[u8], payload: &[u8]) -> [u8; 32] {
     let mut hash = Sha256::new();
     hash.update(b"fe2o3-protected-publisher-ledger-frame-v1\0");
@@ -625,8 +691,12 @@ fn frame_hash(prefix: &[u8], payload: &[u8]) -> [u8; 32] {
 }
 
 fn decode_record(payload: &[u8]) -> Result<LedgerRecord, PublisherError> {
-    let value =
-        parse_canonical(payload, MAX_LEDGER_RECORD_BYTES).map_err(|_| PublisherError::Store)?;
+    let value = parse_canonical_with_string_limit(
+        payload,
+        MAX_LEDGER_RECORD_BYTES,
+        MAX_LEDGER_RESPONSE_BASE64_BYTES,
+    )
+    .map_err(|_| PublisherError::Store)?;
     let record: LedgerRecord = serde_json::from_value(value).map_err(|_| PublisherError::Store)?;
     validate_record(&record)?;
     Ok(record)
@@ -637,13 +707,13 @@ fn validate_issue_input(input: &IssueInput<'_>) -> Result<(), PublisherError> {
         || !is_digest(input.stable_authorization_sha256)
         || !is_digest(input.request_identity)
         || !is_digest(input.request_sha256)
-        || input.request_body.len() > MAX_REQUEST_BYTES
+        || input.request_body.len() > MAX_LEDGER_REQUEST_BODY_BYTES
         || request_identity(input.request_body) != input.request_identity
         || raw_request_sha256(input.request_body) != input.request_sha256
     {
         return Err(PublisherError::Store);
     }
-    let request_value = parse_canonical(input.request_body, MAX_REQUEST_BYTES)
+    let request_value = parse_canonical(input.request_body, MAX_LEDGER_REQUEST_BODY_BYTES)
         .map_err(|_| PublisherError::Store)?;
     let parsed: PublisherRequest =
         serde_json::from_value(request_value).map_err(|_| PublisherError::Store)?;
@@ -669,18 +739,28 @@ fn validate_record(record: &LedgerRecord) -> Result<(), PublisherError> {
         || !is_digest(&record.request_key_sha256)
         || !is_digest(&record.request_sha256)
         || !is_digest(&record.stable_authorization_sha256)
+        || record.request_body_base64.len() > MAX_LEDGER_REQUEST_BASE64_BYTES
+        || record.response_body_base64.len() > MAX_LEDGER_RESPONSE_BASE64_BYTES
     {
         return Err(PublisherError::Store);
     }
-    let request = decode_base64(&record.request_body_base64, MAX_REQUEST_BYTES)?;
-    let response = decode_base64(&record.response_body_base64, MAX_RESPONSE_BYTES)?;
+    let request = decode_base64(
+        &record.request_body_base64,
+        MAX_LEDGER_REQUEST_BASE64_BYTES,
+        MAX_LEDGER_REQUEST_BODY_BYTES,
+    )?;
+    let response = decode_base64(
+        &record.response_body_base64,
+        MAX_LEDGER_RESPONSE_BASE64_BYTES,
+        MAX_LEDGER_RESPONSE_BODY_BYTES,
+    )?;
     if request_identity(&request) != record.request_identity
         || raw_request_sha256(&request) != record.request_sha256
     {
         return Err(PublisherError::Store);
     }
-    let request_value =
-        parse_canonical(&request, MAX_REQUEST_BYTES).map_err(|_| PublisherError::Store)?;
+    let request_value = parse_canonical(&request, MAX_LEDGER_REQUEST_BODY_BYTES)
+        .map_err(|_| PublisherError::Store)?;
     let request: PublisherRequest =
         serde_json::from_value(request_value).map_err(|_| PublisherError::Store)?;
     let projection =
@@ -688,8 +768,12 @@ fn validate_record(record: &LedgerRecord) -> Result<(), PublisherError> {
     if sha256_hex(&projection) != record.stable_authorization_sha256 {
         return Err(PublisherError::Store);
     }
-    let response_value =
-        parse_canonical(&response, MAX_RESPONSE_BYTES).map_err(|_| PublisherError::Store)?;
+    let response_value = parse_canonical_with_string_limit(
+        &response,
+        MAX_LEDGER_RESPONSE_BODY_BYTES,
+        MAX_RECEIPT_BASE64_BYTES,
+    )
+    .map_err(|_| PublisherError::Store)?;
     let response_object = response_value.as_object().ok_or(PublisherError::Store)?;
     if response_object.len() != 4
         || response_object
@@ -707,7 +791,7 @@ fn validate_record(record: &LedgerRecord) -> Result<(), PublisherError> {
         .get("publisher_receipt_base64")
         .and_then(Value::as_str)
         .ok_or(PublisherError::Store)?;
-    let receipt = decode_base64(receipt, crate::bounds::MAX_RECEIPT_BYTES)?;
+    let receipt = decode_base64(receipt, MAX_RECEIPT_BASE64_BYTES, MAX_RECEIPT_BYTES)?;
     if domain_hash(
         b"fe2o3-protected-publisher-evidence-identity-v1\0",
         &receipt,
@@ -718,14 +802,19 @@ fn validate_record(record: &LedgerRecord) -> Result<(), PublisherError> {
     Ok(())
 }
 
-fn decode_base64(value: &str, limit: usize) -> Result<Vec<u8>, PublisherError> {
-    if value.len() > limit.saturating_mul(4).div_ceil(3).saturating_add(4) {
+fn decode_base64(
+    value: &str,
+    encoded_limit: usize,
+    decoded_limit: usize,
+) -> Result<Vec<u8>, PublisherError> {
+    if value.len() > encoded_limit {
         return Err(PublisherError::Store);
     }
     let decoded = base64::engine::general_purpose::STANDARD
         .decode(value)
         .map_err(|_| PublisherError::Store)?;
-    if decoded.len() > limit || base64::engine::general_purpose::STANDARD.encode(&decoded) != value
+    if decoded.len() > decoded_limit
+        || base64::engine::general_purpose::STANDARD.encode(&decoded) != value
     {
         return Err(PublisherError::Store);
     }
@@ -773,7 +862,7 @@ mod tests {
 
     use super::*;
     use crate::receipt::TestSigner;
-    use crate::test_support::{fixture, secure_tempdir};
+    use crate::test_support::{Fixture, fixture, secure_tempdir};
 
     const KEY_A: &str = "71a1de4805f764bdf13f374906476fbc60d23f0e4f93f6d63c33f2c4029d6605";
     const KEY_B: &str = "88578b21c1dbb86eace7b852723ab32b7564856518468168165f75890dd14b8e";
@@ -811,6 +900,33 @@ mod tests {
         })
     }
 
+    fn fixture_with_reference(reference: &str) -> Fixture {
+        let mut fixture = fixture();
+        let caller = format!("powderluv/fe2o3/.github/workflows/parity-promotion.yml@{reference}");
+        let protected =
+            format!("powderluv/fe2o3/.github/workflows/parity-publisher-gate.yml@{reference}");
+        fixture.request.oidc_authorization["ref"] = Value::String(reference.into());
+        fixture.request.oidc_authorization["workflow_ref"] = Value::String(caller.clone());
+        fixture.request.oidc_authorization["job_workflow_ref"] = Value::String(protected.clone());
+        fixture
+            .request
+            .workflow
+            .insert("github_ref".into(), reference.into());
+        fixture
+            .request
+            .workflow
+            .insert("github_workflow_ref".into(), caller);
+        fixture.request_body =
+            canonical_bytes(&serde_json::to_value(&fixture.request).unwrap()).unwrap();
+        fixture
+    }
+
+    fn reference_with_length(length: usize) -> String {
+        let prefix = "refs/heads/gh-readonly-queue/main/";
+        assert!(length > prefix.len());
+        format!("{prefix}pr-{}", "x".repeat(length - prefix.len() - 3))
+    }
+
     #[test]
     fn exact_retry_returns_identical_durable_bytes() {
         let temp = secure_tempdir();
@@ -824,6 +940,112 @@ mod tests {
         drop(store);
         let mut reopened = DurableStore::open(&path).unwrap();
         assert_eq!(issue_with(&mut reopened, KEY_A, &fixture).unwrap(), first);
+    }
+
+    #[test]
+    fn maximum_merge_queue_ref_commits_and_restarts() {
+        let temp = secure_tempdir();
+        let path = temp.path().join("maximum-ref.ledger");
+        let reference = reference_with_length(234);
+        let fixture = fixture_with_reference(&reference);
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&fixture.request_body);
+        assert_eq!(reference.len(), 234);
+        assert!((3_500..=3_900).contains(&fixture.request_body.len()));
+        assert!((4_600..=5_200).contains(&encoded.len()));
+        assert!(encoded.len() > crate::bounds::MAX_JSON_STRING_BYTES);
+
+        let mut store = DurableStore::open(&path).unwrap();
+        let response = issue_with(&mut store, KEY_A, &fixture).unwrap();
+        drop(store);
+        let mut reopened = DurableStore::open(&path).unwrap();
+        assert_eq!(
+            issue_with(&mut reopened, KEY_A, &fixture).unwrap(),
+            response
+        );
+    }
+
+    #[test]
+    fn accepted_request_corpus_is_restart_decodable() {
+        let temp = secure_tempdir();
+        let prefix = "refs/heads/gh-readonly-queue/main/";
+        let references = [
+            format!("{prefix}pr-1"),
+            reference_with_length(64),
+            reference_with_length(128),
+            reference_with_length(234),
+            format!("{prefix}pr-\u{e9}"),
+        ];
+        for (index, reference) in references.iter().enumerate() {
+            let path = temp.path().join(format!("corpus-{index}.ledger"));
+            let fixture = fixture_with_reference(reference);
+            let mut store = DurableStore::open(&path).unwrap();
+            let response = issue_with(&mut store, KEY_A, &fixture).unwrap();
+            drop(store);
+            let mut reopened = DurableStore::open(&path).unwrap();
+            assert_eq!(
+                issue_with(&mut reopened, KEY_A, &fixture).unwrap(),
+                response
+            );
+        }
+    }
+
+    #[test]
+    fn decoded_base64_and_frame_bounds_are_exact_and_overflow_safe() {
+        for (decoded_limit, encoded_limit) in [
+            (
+                MAX_LEDGER_REQUEST_BODY_BYTES,
+                MAX_LEDGER_REQUEST_BASE64_BYTES,
+            ),
+            (
+                MAX_LEDGER_RESPONSE_BODY_BYTES,
+                MAX_LEDGER_RESPONSE_BASE64_BYTES,
+            ),
+            (MAX_RECEIPT_BYTES, MAX_RECEIPT_BASE64_BYTES),
+        ] {
+            let exact = vec![0u8; decoded_limit];
+            let exact_encoded = base64::engine::general_purpose::STANDARD.encode(&exact);
+            assert_eq!(exact_encoded.len(), encoded_limit);
+            assert_eq!(
+                decode_base64(&exact_encoded, encoded_limit, decoded_limit).unwrap(),
+                exact
+            );
+
+            let over = vec![0u8; decoded_limit + 1];
+            let over_encoded = base64::engine::general_purpose::STANDARD.encode(over);
+            assert!(decode_base64(&over_encoded, encoded_limit, decoded_limit).is_err());
+            let mut encoded_over = exact_encoded;
+            encoded_over.push('A');
+            assert!(decode_base64(&encoded_over, encoded_limit, decoded_limit).is_err());
+        }
+
+        assert_eq!(
+            checked_frame_length(MAX_LEDGER_RECORD_BYTES).unwrap(),
+            MAX_LEDGER_FRAME_BYTES
+        );
+        assert!(checked_frame_length(MAX_LEDGER_RECORD_BYTES + 1).is_err());
+        assert!(checked_frame_length(usize::MAX).is_err());
+        assert!(encode_frame(1, ZERO_HASH, &vec![0; MAX_LEDGER_RECORD_BYTES]).is_ok());
+        assert!(encode_frame(1, ZERO_HASH, &vec![0; MAX_LEDGER_RECORD_BYTES + 1]).is_err());
+    }
+
+    #[test]
+    fn restart_rejected_frame_is_never_written_or_acknowledged() {
+        let temp = secure_tempdir();
+        let path = temp.path().join("preflight.ledger");
+        let mut store = DurableStore::open(&path).unwrap();
+        let initial_length = std::fs::metadata(&path).unwrap().len();
+        store.set_before_admission(|frame| {
+            let payload_byte = FRAME_PREFIX_BYTES + 1;
+            frame[payload_byte] ^= 1;
+        });
+        assert!(matches!(
+            issue_with(&mut store, KEY_A, &fixture()),
+            Err(PublisherError::Store)
+        ));
+        assert_eq!(store.count(), 0);
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), initial_length);
+        drop(store);
+        assert_eq!(DurableStore::open(&path).unwrap().count(), 0);
     }
 
     #[test]

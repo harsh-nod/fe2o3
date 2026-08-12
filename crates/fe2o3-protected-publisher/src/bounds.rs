@@ -21,7 +21,13 @@ pub const MAX_INFLIGHT_REQUESTS: u32 = 256;
 pub const MAX_STORE_RECEIPTS: u64 = 1_000_000;
 pub const MIN_LEDGER_BYTES: u64 = 1024 * 1024;
 pub const MAX_LEDGER_BYTES: u64 = 64 * 1024 * 1024 * 1024;
+pub const MAX_LEDGER_REQUEST_BODY_BYTES: usize = MAX_REQUEST_BYTES;
+pub const MAX_LEDGER_RESPONSE_BODY_BYTES: usize = MAX_RESPONSE_BYTES;
+pub const MAX_LEDGER_REQUEST_BASE64_BYTES: usize = MAX_LEDGER_REQUEST_BODY_BYTES.div_ceil(3) * 4;
+pub const MAX_LEDGER_RESPONSE_BASE64_BYTES: usize = MAX_LEDGER_RESPONSE_BODY_BYTES.div_ceil(3) * 4;
+pub const MAX_RECEIPT_BASE64_BYTES: usize = MAX_RECEIPT_BYTES.div_ceil(3) * 4;
 pub const MAX_LEDGER_RECORD_BYTES: usize = MAX_REQUEST_BYTES + MAX_RESPONSE_BYTES + 256 * 1024;
+pub const MAX_LEDGER_FRAME_BYTES: usize = MAX_LEDGER_RECORD_BYTES + 88;
 pub const MAX_CONFIG_BYTES: usize = 64 * 1024;
 pub const MAX_ENROLLMENT_ARTIFACT_BYTES: usize = 64 * 1024;
 pub const MAX_PRIVATE_KEY_BYTES: usize = 16 * 1024;
@@ -46,6 +52,14 @@ pub enum BoundError {
 }
 
 pub fn preflight_json(raw: &[u8], byte_limit: usize) -> Result<(), BoundError> {
+    preflight_json_with_string_limit(raw, byte_limit, MAX_JSON_STRING_BYTES)
+}
+
+pub(crate) fn preflight_json_with_string_limit(
+    raw: &[u8],
+    byte_limit: usize,
+    string_byte_limit: usize,
+) -> Result<(), BoundError> {
     if raw.len() > byte_limit {
         return Err(BoundError::Bytes);
     }
@@ -61,7 +75,7 @@ pub fn preflight_json(raw: &[u8], byte_limit: usize) -> Result<(), BoundError> {
     for &byte in raw {
         if in_string {
             string_bytes = string_bytes.checked_add(1).ok_or(BoundError::Work)?;
-            if string_bytes > MAX_JSON_STRING_BYTES {
+            if string_bytes > string_byte_limit {
                 return Err(BoundError::String);
             }
             if escaped {
@@ -145,5 +159,15 @@ mod tests {
             preflight_json(many.as_bytes(), many.len()),
             Err(BoundError::Keys)
         );
+    }
+
+    #[test]
+    fn a_specialized_parser_does_not_weaken_generic_string_bounds() {
+        let raw = format!("\"{}\"", "a".repeat(MAX_JSON_STRING_BYTES + 1));
+        assert_eq!(
+            preflight_json(raw.as_bytes(), raw.len()),
+            Err(BoundError::String)
+        );
+        assert!(preflight_json_with_string_limit(raw.as_bytes(), raw.len(), raw.len()).is_ok());
     }
 }
