@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::fd::AsRawFd;
+use std::os::unix::fs::FileExt;
 use std::path::Path;
 use std::time::Instant;
 
@@ -34,9 +35,21 @@ const FRAME_VERSION: u32 = 1;
 const FRAME_PREFIX_BYTES: usize = 8 + 4 + 4 + 8 + 32;
 const FRAME_HASH_BYTES: usize = 32;
 const ZERO_HASH: [u8; 32] = [0; 32];
+const MAX_INDEXED_READ_INTERRUPTS: usize = 8;
 
 #[cfg(test)]
 type BeforeAdmissionHook = Box<dyn FnOnce(&mut Vec<u8>) + Send>;
+
+#[cfg(test)]
+type BeforeIndexedDecodeHook = Box<dyn FnOnce(&mut Vec<u8>) + Send>;
+
+#[cfg(test)]
+enum IndexedReadFault {
+    ErrorOnCall { call: usize, calls: usize },
+    ErrorAfterBytes { bytes: usize, observed: usize },
+    EofOnCall { call: usize, calls: usize },
+    Interrupt { remaining: usize },
+}
 
 pub struct DurableStore {
     file: File,
@@ -64,15 +77,30 @@ pub struct DurableStore {
     before_admission: Option<BeforeAdmissionHook>,
     #[cfg(test)]
     after_admission: Option<Box<dyn FnOnce() + Send>>,
+    #[cfg(test)]
+    maximum_indexed_read_chunk: usize,
+    #[cfg(test)]
+    indexed_read_fault: Option<IndexedReadFault>,
+    #[cfg(test)]
+    before_indexed_decode: Option<BeforeIndexedDecodeHook>,
 }
 
 #[derive(Clone)]
 struct EntryIndex {
     frame_offset: u64,
     frame_length: u64,
+    sequence: u64,
+    previous_hash: [u8; 32],
+    frame_hash: [u8; 32],
+    request_key_sha256: String,
     request_identity: String,
     request_sha256: String,
     stable_authorization_sha256: String,
+}
+
+struct IndexedReceipt {
+    request_body: Vec<u8>,
+    response_body: Vec<u8>,
 }
 
 #[derive(Clone)]
@@ -192,6 +220,12 @@ impl DurableStore {
             before_admission: None,
             #[cfg(test)]
             after_admission: None,
+            #[cfg(test)]
+            maximum_indexed_read_chunk: usize::MAX,
+            #[cfg(test)]
+            indexed_read_fault: None,
+            #[cfg(test)]
+            before_indexed_decode: None,
         };
         store.verify_identity()?;
         store.replay(&header)?;
@@ -233,7 +267,14 @@ impl DurableStore {
                     break;
                 }
             };
-            self.index_record(offset, decoded.frame_length, &decoded.record)?;
+            self.index_record(
+                offset,
+                decoded.frame_length,
+                self.next_sequence,
+                self.tail_hash,
+                decoded.frame_hash,
+                &decoded.record,
+            )?;
             self.tail_hash = decoded.frame_hash;
             self.next_sequence = self
                 .next_sequence
@@ -289,6 +330,9 @@ impl DurableStore {
         &mut self,
         frame_offset: u64,
         frame_length: u64,
+        sequence: u64,
+        previous_hash: [u8; 32],
+        frame_hash: [u8; 32],
         record: &LedgerRecord,
     ) -> Result<(), PublisherError> {
         if self.by_request_key.len() as u64 >= self.policy.max_receipts
@@ -308,6 +352,10 @@ impl DurableStore {
             EntryIndex {
                 frame_offset,
                 frame_length,
+                sequence,
+                previous_hash,
+                frame_hash,
+                request_key_sha256: record.request_key_sha256.clone(),
                 request_identity: record.request_identity.clone(),
                 request_sha256: record.request_sha256.clone(),
                 stable_authorization_sha256: record.stable_authorization_sha256.clone(),
@@ -341,31 +389,12 @@ impl DurableStore {
             {
                 return Err(PublisherError::ReplayConflict);
             }
-            let record = self.load_indexed(&existing)?;
-            let request_body = decode_base64(
-                &record.request_body_base64,
-                MAX_LEDGER_REQUEST_BASE64_BYTES,
-                MAX_LEDGER_REQUEST_BODY_BYTES,
-            )?;
-            if record.request_key_sha256 != input.request_key_sha256
-                || record.request_identity != existing.request_identity
-                || record.request_sha256 != existing.request_sha256
-                || record.stable_authorization_sha256 != existing.stable_authorization_sha256
-            {
-                self.poisoned = true;
-                return Err(PublisherError::Store);
-            }
-            if request_body != input.request_body {
+            let indexed = self.load_indexed(&existing)?;
+            if indexed.request_body != input.request_body {
                 return Err(PublisherError::ReplayConflict);
             }
             check_deadline(deadline)?;
-            let response = decode_base64(
-                &record.response_body_base64,
-                MAX_LEDGER_RESPONSE_BASE64_BYTES,
-                MAX_LEDGER_RESPONSE_BODY_BYTES,
-            )?;
-            self.verify_identity()?;
-            return Ok(response);
+            return Ok(indexed.response_body);
         }
         if self.request_identities.contains(input.request_identity)
             || self.request_digests.contains(input.request_sha256)
@@ -442,14 +471,20 @@ impl DurableStore {
             return Err(PublisherError::Store);
         }
         let frame_offset = self.tail_offset;
+        let frame_sequence = self.next_sequence;
+        let previous_hash = self.tail_hash;
         self.tail_offset = new_tail;
         self.tail_hash = decoded.frame_hash;
-        self.next_sequence = self
-            .next_sequence
-            .checked_add(1)
-            .ok_or(PublisherError::Store)?;
+        self.next_sequence = frame_sequence.checked_add(1).ok_or(PublisherError::Store)?;
         if self
-            .index_record(frame_offset, decoded.frame_length, &decoded.record)
+            .index_record(
+                frame_offset,
+                decoded.frame_length,
+                frame_sequence,
+                previous_hash,
+                decoded.frame_hash,
+                &decoded.record,
+            )
             .is_err()
         {
             self.poisoned = true;
@@ -496,43 +531,162 @@ impl DurableStore {
         self.verify_identity()
     }
 
-    fn load_indexed(&mut self, index: &EntryIndex) -> Result<LedgerRecord, PublisherError> {
+    fn load_indexed(&mut self, index: &EntryIndex) -> Result<IndexedReceipt, PublisherError> {
+        if self.poisoned {
+            return Err(PublisherError::Store);
+        }
+        let result = self.load_indexed_observational(index);
+        if result.is_err() {
+            self.poisoned = true;
+        }
+        result
+    }
+
+    fn load_indexed_observational(
+        &mut self,
+        index: &EntryIndex,
+    ) -> Result<IndexedReceipt, PublisherError> {
+        self.verify_identity()?;
         let length = self
             .file
             .metadata()
             .map_err(|_| PublisherError::Store)?
             .len();
-        if index
+        let frame_end = index
             .frame_offset
             .checked_add(index.frame_length)
-            .is_none_or(|end| end > length)
+            .ok_or(PublisherError::Store)?;
+        if index.frame_offset < self.header_len
+            || index.frame_length < (FRAME_PREFIX_BYTES + FRAME_HASH_BYTES) as u64
+            || index.frame_length > MAX_LEDGER_FRAME_BYTES as u64
+            || frame_end > self.tail_offset
+            || frame_end > length
         {
             return Err(PublisherError::Store);
         }
-        let saved_sequence = self.next_sequence;
-        let saved_hash = self.tail_hash;
-        self.next_sequence = u64::from_be_bytes({
-            self.file
-                .seek(SeekFrom::Start(index.frame_offset + 16))
-                .map_err(|_| PublisherError::Store)?;
-            let mut value = [0u8; 8];
-            self.file
-                .read_exact(&mut value)
-                .map_err(|_| PublisherError::Store)?;
-            value
-        });
-        self.file
-            .seek(SeekFrom::Start(index.frame_offset + 24))
-            .map_err(|_| PublisherError::Store)?;
-        self.file
-            .read_exact(&mut self.tail_hash)
-            .map_err(|_| PublisherError::Store)?;
-        let decoded = self.read_frame(index.frame_offset, index.frame_length);
-        self.next_sequence = saved_sequence;
-        self.tail_hash = saved_hash;
-        decoded?
-            .ok_or(PublisherError::Store)
-            .map(|frame| frame.record)
+
+        let mut prefix = [0u8; FRAME_PREFIX_BYTES];
+        self.read_exact_indexed_at(&mut prefix, index.frame_offset)?;
+        let frame_length = frame_length_from_prefix(&prefix, index.sequence, index.previous_hash)?;
+        if frame_length as u64 != index.frame_length {
+            return Err(PublisherError::Store);
+        }
+        let mut frame = Vec::with_capacity(frame_length);
+        frame.extend_from_slice(&prefix);
+        let mut rest = vec![0u8; frame_length - FRAME_PREFIX_BYTES];
+        self.read_exact_indexed_at(
+            &mut rest,
+            index
+                .frame_offset
+                .checked_add(FRAME_PREFIX_BYTES as u64)
+                .ok_or(PublisherError::Store)?,
+        )?;
+        frame.extend_from_slice(&rest);
+        #[cfg(test)]
+        if let Some(hook) = self.before_indexed_decode.take() {
+            hook(&mut frame);
+        }
+
+        let decoded = decode_frame(&frame, index.sequence, index.previous_hash)?;
+        if decoded.frame_length != index.frame_length
+            || decoded.frame_hash != index.frame_hash
+            || decoded.record.request_key_sha256 != index.request_key_sha256
+            || decoded.record.request_identity != index.request_identity
+            || decoded.record.request_sha256 != index.request_sha256
+            || decoded.record.stable_authorization_sha256 != index.stable_authorization_sha256
+        {
+            return Err(PublisherError::Store);
+        }
+        let request_body = decode_base64(
+            &decoded.record.request_body_base64,
+            MAX_LEDGER_REQUEST_BASE64_BYTES,
+            MAX_LEDGER_REQUEST_BODY_BYTES,
+        )?;
+        let response_body = decode_base64(
+            &decoded.record.response_body_base64,
+            MAX_LEDGER_RESPONSE_BASE64_BYTES,
+            MAX_LEDGER_RESPONSE_BODY_BYTES,
+        )?;
+        self.verify_identity()?;
+        Ok(IndexedReceipt {
+            request_body,
+            response_body,
+        })
+    }
+
+    fn read_exact_indexed_at(
+        &mut self,
+        buffer: &mut [u8],
+        offset: u64,
+    ) -> Result<(), PublisherError> {
+        let mut filled = 0usize;
+        let mut interruptions = 0usize;
+        while filled < buffer.len() {
+            let read_offset = offset
+                .checked_add(filled as u64)
+                .ok_or(PublisherError::Store)?;
+            match self.read_indexed_at(&mut buffer[filled..], read_offset) {
+                Ok(0) => return Err(PublisherError::Store),
+                Ok(count) if count <= buffer.len() - filled => {
+                    filled = filled.checked_add(count).ok_or(PublisherError::Store)?;
+                }
+                Ok(_) => return Err(PublisherError::Store),
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
+                    interruptions = interruptions.checked_add(1).ok_or(PublisherError::Store)?;
+                    if interruptions > MAX_INDEXED_READ_INTERRUPTS {
+                        return Err(PublisherError::Store);
+                    }
+                }
+                Err(_) => return Err(PublisherError::Store),
+            }
+        }
+        Ok(())
+    }
+
+    fn read_indexed_at(&mut self, buffer: &mut [u8], offset: u64) -> std::io::Result<usize> {
+        #[cfg(test)]
+        let mut limit = buffer.len().min(self.maximum_indexed_read_chunk);
+        #[cfg(not(test))]
+        let limit = buffer.len();
+
+        #[cfg(test)]
+        if let Some(fault) = self.indexed_read_fault.as_mut() {
+            match fault {
+                IndexedReadFault::ErrorOnCall { call, calls } => {
+                    *calls += 1;
+                    if *calls == *call {
+                        return Err(std::io::Error::from_raw_os_error(libc::EIO));
+                    }
+                }
+                IndexedReadFault::ErrorAfterBytes { bytes, observed } => {
+                    if *observed >= *bytes {
+                        return Err(std::io::Error::from_raw_os_error(libc::EIO));
+                    }
+                    limit = limit.min(*bytes - *observed);
+                }
+                IndexedReadFault::EofOnCall { call, calls } => {
+                    *calls += 1;
+                    if *calls == *call {
+                        return Ok(0);
+                    }
+                }
+                IndexedReadFault::Interrupt { remaining } => {
+                    if *remaining > 0 {
+                        *remaining -= 1;
+                        return Err(std::io::Error::from(std::io::ErrorKind::Interrupted));
+                    }
+                }
+            }
+        }
+
+        let count = self.file.read_at(&mut buffer[..limit], offset)?;
+        #[cfg(test)]
+        if let Some(IndexedReadFault::ErrorAfterBytes { observed, .. }) =
+            self.indexed_read_fault.as_mut()
+        {
+            *observed = observed.saturating_add(count);
+        }
+        Ok(count)
     }
 
     fn verify_identity(&self) -> Result<(), PublisherError> {
@@ -594,6 +748,36 @@ impl DurableStore {
     #[cfg(test)]
     pub(crate) fn set_after_admission(&mut self, hook: impl FnOnce() + Send + 'static) {
         self.after_admission = Some(Box::new(hook));
+    }
+
+    #[cfg(test)]
+    fn set_maximum_indexed_read_chunk(&mut self, bytes: usize) {
+        self.maximum_indexed_read_chunk = bytes.max(1);
+    }
+
+    #[cfg(test)]
+    fn fail_indexed_read_on_call(&mut self, call: usize) {
+        self.indexed_read_fault = Some(IndexedReadFault::ErrorOnCall { call, calls: 0 });
+    }
+
+    #[cfg(test)]
+    fn fail_indexed_read_after(&mut self, bytes: usize) {
+        self.indexed_read_fault = Some(IndexedReadFault::ErrorAfterBytes { bytes, observed: 0 });
+    }
+
+    #[cfg(test)]
+    fn eof_indexed_read_on_call(&mut self, call: usize) {
+        self.indexed_read_fault = Some(IndexedReadFault::EofOnCall { call, calls: 0 });
+    }
+
+    #[cfg(test)]
+    fn interrupt_indexed_reads(&mut self, count: usize) {
+        self.indexed_read_fault = Some(IndexedReadFault::Interrupt { remaining: count });
+    }
+
+    #[cfg(test)]
+    fn set_before_indexed_decode(&mut self, hook: impl FnOnce(&mut Vec<u8>) + Send + 'static) {
+        self.before_indexed_decode = Some(Box::new(hook));
     }
 }
 
@@ -913,6 +1097,52 @@ mod tests {
         })
     }
 
+    fn distinct_fixture() -> Fixture {
+        let mut value = fixture();
+        value.request.archive_sha256 = "e".repeat(64);
+        value.request_body =
+            canonical_bytes(&serde_json::to_value(&value.request).unwrap()).unwrap();
+        value
+    }
+
+    fn assert_poisoned_lookup_failure(path: &Path, configure: impl FnOnce(&mut DurableStore)) {
+        let first = fixture();
+        let second = distinct_fixture();
+        let mut store = DurableStore::open(path).unwrap();
+        let response = issue_with(&mut store, KEY_A, &first).unwrap();
+        let durable_before = std::fs::read(path).unwrap();
+        store.file.seek(SeekFrom::Start(17)).unwrap();
+        configure(&mut store);
+
+        assert!(matches!(
+            issue_with(&mut store, KEY_A, &first),
+            Err(PublisherError::Store)
+        ));
+        assert_eq!(store.file.stream_position().unwrap(), 17);
+        assert!(store.poisoned);
+        assert!(matches!(
+            issue_with(&mut store, KEY_B, &second),
+            Err(PublisherError::Store)
+        ));
+        assert_eq!(std::fs::read(path).unwrap(), durable_before);
+        drop(store);
+
+        let mut reopened = DurableStore::open(path).unwrap();
+        assert_eq!(reopened.count(), 1);
+        assert_eq!(issue_with(&mut reopened, KEY_A, &first).unwrap(), response);
+    }
+
+    fn rewrite_local_frame_record(frame: &mut [u8], mutate: impl FnOnce(&mut LedgerRecord)) {
+        let payload_end = frame.len() - FRAME_HASH_BYTES;
+        let mut record = decode_record(&frame[FRAME_PREFIX_BYTES..payload_end]).unwrap();
+        mutate(&mut record);
+        let payload = canonical_bytes(&serde_json::to_value(record).unwrap()).unwrap();
+        assert_eq!(payload.len(), payload_end - FRAME_PREFIX_BYTES);
+        frame[FRAME_PREFIX_BYTES..payload_end].copy_from_slice(&payload);
+        let hash = frame_hash(&frame[..FRAME_PREFIX_BYTES], &payload);
+        frame[payload_end..].copy_from_slice(&hash);
+    }
+
     fn fixture_with_reference(reference: &str) -> Fixture {
         let mut fixture = fixture();
         let caller = format!("powderluv/fe2o3/.github/workflows/parity-promotion.yml@{reference}");
@@ -953,6 +1183,232 @@ mod tests {
         drop(store);
         let mut reopened = DurableStore::open(&path).unwrap();
         assert_eq!(issue_with(&mut reopened, KEY_A, &fixture).unwrap(), first);
+    }
+
+    #[test]
+    fn indexed_retry_is_observational_under_short_reads_and_eintr() {
+        let temp = secure_tempdir();
+        let path = temp.path().join("publisher.ledger");
+        let mut store = DurableStore::open(&path).unwrap();
+        let first = fixture();
+        let response = issue_with(&mut store, KEY_A, &first).unwrap();
+        let sequence = store.next_sequence;
+        let hash = store.tail_hash;
+        let tail = store.tail_offset;
+        let index = store.by_request_key.clone();
+        store.file.seek(SeekFrom::Start(19)).unwrap();
+        store.set_maximum_indexed_read_chunk(1);
+        store.interrupt_indexed_reads(MAX_INDEXED_READ_INTERRUPTS);
+
+        assert_eq!(issue_with(&mut store, KEY_A, &first).unwrap(), response);
+        assert_eq!(store.next_sequence, sequence);
+        assert_eq!(store.tail_hash, hash);
+        assert_eq!(store.tail_offset, tail);
+        assert_eq!(store.by_request_key.len(), index.len());
+        for (key, expected) in index {
+            let actual = store.by_request_key.get(&key).unwrap();
+            assert_eq!(actual.frame_offset, expected.frame_offset);
+            assert_eq!(actual.frame_length, expected.frame_length);
+            assert_eq!(actual.sequence, expected.sequence);
+            assert_eq!(actual.previous_hash, expected.previous_hash);
+            assert_eq!(actual.frame_hash, expected.frame_hash);
+        }
+        assert_eq!(store.file.stream_position().unwrap(), 19);
+
+        issue_with(&mut store, KEY_B, &distinct_fixture()).unwrap();
+        drop(store);
+        assert_eq!(DurableStore::open(&path).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn indexed_read_call_eof_and_eintr_failures_poison_without_append() {
+        for (name, configure) in [
+            (
+                "first-read-eio",
+                DurableStore::fail_indexed_read_on_call as fn(&mut DurableStore, usize),
+            ),
+            (
+                "second-read-eio",
+                DurableStore::fail_indexed_read_on_call as fn(&mut DurableStore, usize),
+            ),
+            (
+                "first-read-eof",
+                DurableStore::eof_indexed_read_on_call as fn(&mut DurableStore, usize),
+            ),
+            (
+                "second-read-eof",
+                DurableStore::eof_indexed_read_on_call as fn(&mut DurableStore, usize),
+            ),
+        ] {
+            let temp = secure_tempdir();
+            let path = temp.path().join(format!("{name}.ledger"));
+            let call = if name.starts_with("first") { 1 } else { 2 };
+            assert_poisoned_lookup_failure(&path, |store| configure(store, call));
+        }
+
+        let temp = secure_tempdir();
+        let path = temp.path().join("eintr-exhaustion.ledger");
+        assert_poisoned_lookup_failure(&path, |store| {
+            store.interrupt_indexed_reads(MAX_INDEXED_READ_INTERRUPTS + 1);
+        });
+    }
+
+    #[test]
+    fn every_indexed_partial_read_boundary_poison_fails_closed() {
+        let temp = secure_tempdir();
+        let path = temp.path().join("partial.ledger");
+        let first = fixture();
+        let second = distinct_fixture();
+        let mut store = DurableStore::open(&path).unwrap();
+        issue_with(&mut store, KEY_A, &first).unwrap();
+        let frame_length = store
+            .by_request_key
+            .get(&key_digest(KEY_A))
+            .unwrap()
+            .frame_length as usize;
+        let durable = std::fs::read(&path).unwrap();
+
+        for boundary in 0..frame_length {
+            store.fail_indexed_read_after(boundary);
+            assert!(matches!(
+                issue_with(&mut store, KEY_A, &first),
+                Err(PublisherError::Store)
+            ));
+            assert!(matches!(
+                issue_with(&mut store, KEY_B, &second),
+                Err(PublisherError::Store)
+            ));
+            assert_eq!(
+                std::fs::read(&path).unwrap(),
+                durable,
+                "boundary {boundary}"
+            );
+            drop(store);
+            store = DurableStore::open(&path).unwrap();
+            assert_eq!(store.count(), 1);
+        }
+    }
+
+    #[test]
+    fn malformed_local_frames_and_index_mismatches_poison_without_disk_mutation() {
+        type FrameMutation = fn(&mut Vec<u8>);
+        let cases: [(&str, FrameMutation); 4] = [
+            ("canonical", |frame| {
+                let payload_end = frame.len() - FRAME_HASH_BYTES;
+                frame[FRAME_PREFIX_BYTES] = b'!';
+                let hash = frame_hash(
+                    &frame[..FRAME_PREFIX_BYTES],
+                    &frame[FRAME_PREFIX_BYTES..payload_end],
+                );
+                frame[payload_end..].copy_from_slice(&hash);
+            }),
+            ("base64", |frame| {
+                rewrite_local_frame_record(frame, |record| {
+                    record.request_body_base64.replace_range(..1, "!");
+                });
+            }),
+            ("digest", |frame| {
+                rewrite_local_frame_record(frame, |record| {
+                    let replacement = if record.request_sha256.starts_with('0') {
+                        "1"
+                    } else {
+                        "0"
+                    };
+                    record.request_sha256.replace_range(..1, replacement);
+                });
+            }),
+            ("semantic", |frame| {
+                rewrite_local_frame_record(frame, |record| {
+                    assert!(record.record_domain.pop().is_some());
+                    record.record_domain.push('2');
+                });
+            }),
+        ];
+        for (name, mutate) in cases {
+            let temp = secure_tempdir();
+            let path = temp.path().join(format!("{name}.ledger"));
+            assert_poisoned_lookup_failure(&path, |store| {
+                store.set_before_indexed_decode(mutate);
+            });
+        }
+
+        for name in [
+            "offset",
+            "length",
+            "sequence",
+            "previous-hash",
+            "frame-hash",
+            "request-key",
+        ] {
+            let temp = secure_tempdir();
+            let path = temp.path().join(format!("index-{name}.ledger"));
+            assert_poisoned_lookup_failure(&path, |store| {
+                let index = store.by_request_key.get_mut(&key_digest(KEY_A)).unwrap();
+                match name {
+                    "offset" => index.frame_offset += 1,
+                    "length" => index.frame_length -= 1,
+                    "sequence" => index.sequence += 1,
+                    "previous-hash" => index.previous_hash[0] ^= 1,
+                    "frame-hash" => index.frame_hash[0] ^= 1,
+                    "request-key" => {
+                        let replacement = if index.request_key_sha256.starts_with('0') {
+                            "1"
+                        } else {
+                            "0"
+                        };
+                        index.request_key_sha256.replace_range(..1, replacement);
+                    }
+                    _ => unreachable!(),
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn serialized_concurrent_exact_retries_remain_idempotent() {
+        let temp = secure_tempdir();
+        let path = temp.path().join("concurrent-retries.ledger");
+        let mut store = DurableStore::open(&path).unwrap();
+        let expected = issue_with(&mut store, KEY_A, &fixture()).unwrap();
+        let store = Arc::new(std::sync::Mutex::new(store));
+        let start = Arc::new(Barrier::new(16));
+        let threads = (0..16)
+            .map(|_| {
+                let store = store.clone();
+                let start = start.clone();
+                let expected = expected.clone();
+                thread::spawn(move || {
+                    start.wait();
+                    let actual = issue_with(&mut store.lock().unwrap(), KEY_A, &fixture()).unwrap();
+                    assert_eq!(actual, expected);
+                })
+            })
+            .collect::<Vec<_>>();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        let store = match Arc::try_unwrap(store) {
+            Ok(store) => store.into_inner().unwrap(),
+            Err(_) => panic!("retry workers retained the store"),
+        };
+        assert_eq!(store.count(), 1);
+        drop(store);
+        assert_eq!(DurableStore::open(&path).unwrap().count(), 1);
+    }
+
+    #[test]
+    #[ignore = "external LD_PRELOAD control proving indexed retry uses no lseek"]
+    fn hostile_transient_index_seek_error_must_not_corrupt_later_append_state() {
+        let temp = secure_tempdir();
+        let path = temp.path().join("publisher.ledger");
+        let mut store = DurableStore::open(&path).unwrap();
+        let first = fixture();
+        let response = issue_with(&mut store, KEY_A, &first).unwrap();
+
+        assert_eq!(issue_with(&mut store, KEY_A, &first).unwrap(), response);
+        issue_with(&mut store, KEY_B, &distinct_fixture()).unwrap();
+        drop(store);
+        assert_eq!(DurableStore::open(&path).unwrap().count(), 2);
     }
 
     #[test]
