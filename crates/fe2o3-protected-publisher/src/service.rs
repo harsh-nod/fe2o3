@@ -18,7 +18,7 @@ use crate::canonical::parse_canonical;
 use crate::jwks::{HttpsJwksProvider, JwksProvider};
 use crate::oidc::{PublisherRequest, authenticate};
 use crate::receipt::{FileReceiptSigner, ReceiptSigner, raw_request_sha256, request_identity};
-use crate::store::{DurableStore, IssueInput};
+use crate::store::{DurableStore, IssueInput, StorePolicy};
 use crate::{PublisherError, ServiceConfig};
 
 #[derive(Clone, Debug)]
@@ -47,7 +47,10 @@ impl Publisher {
             service_identity,
             &config.signing_key_path,
         )?);
-        let store = DurableStore::open(&config.database_path)?;
+        let store = DurableStore::open_with_policy(
+            &config.database_path,
+            StorePolicy::from_config(&config)?,
+        )?;
         let max_inflight_requests = config.max_inflight_requests as usize;
         Ok(Arc::new(Self {
             config: Arc::new(config),
@@ -80,11 +83,25 @@ impl Publisher {
         body: &[u8],
         bearer: &str,
     ) -> Result<PublisherResponse, PublisherError> {
+        self.issue_until(
+            body,
+            bearer,
+            Instant::now() + self.config.request_deadline(),
+        )
+        .await
+    }
+
+    async fn issue_until(
+        &self,
+        body: &[u8],
+        bearer: &str,
+        request_deadline: Instant,
+    ) -> Result<PublisherResponse, PublisherError> {
         let value =
             parse_canonical(body, MAX_REQUEST_BYTES).map_err(|_| PublisherError::Request)?;
         let request: PublisherRequest =
             serde_json::from_value(value).map_err(|_| PublisherError::Request)?;
-        let deadline = tokio::time::Instant::now() + self.config.network_deadline();
+        let deadline = request_deadline.min(Instant::now() + self.config.network_deadline());
         let authorization =
             authenticate(&self.config, self.jwks.clone(), &request, bearer, deadline).await?;
         let identity = request_identity(body);
@@ -94,16 +111,23 @@ impl Publisher {
             .map_err(|_| PublisherError::Signing)?
             .as_secs() as i64;
         let issued_at = now.max(authorization.issued_at);
-        let body = self.store.lock().await.issue(IssueInput {
+        let mut store = tokio::time::timeout_at(request_deadline, self.store.lock())
+            .await
+            .map_err(|_| PublisherError::Store)?;
+        let body = store.issue(IssueInput {
             replay_identity: &authorization.replay_identity,
             request_identity: &identity,
             request_sha256: &sha256,
             request_body: body,
             request: &request,
             issued_at,
+            observed_at: now,
             signature_domain: &self.config.signature_domain,
             signer: self.signer.as_ref(),
         })?;
+        if Instant::now() > request_deadline {
+            return Err(PublisherError::Store);
+        }
         if body.len() > MAX_RESPONSE_BYTES {
             return Err(PublisherError::Store);
         }
@@ -124,7 +148,7 @@ async fn receipts(State(publisher): State<Arc<Publisher>>, request: Request<Body
     };
     let deadline = Instant::now() + publisher.config.request_deadline();
     match bounded_http_request(request, deadline).await {
-        Ok((body, bearer)) => match publisher.issue(&body, &bearer).await {
+        Ok((body, bearer)) => match publisher.issue_until(&body, &bearer, deadline).await {
             Ok(response) => (
                 StatusCode::OK,
                 [(CONTENT_TYPE, "application/json")],
@@ -400,9 +424,7 @@ key\t0000\tpublisher\ttest-publisher-v1\tkeys/test-publisher-v1.pem\t{digest}\te
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         drop(held);
 
-        let pending = futures_util::stream::pending::<
-            Result<axum::body::Bytes, std::io::Error>,
-        >();
+        let pending = futures_util::stream::pending::<Result<axum::body::Bytes, std::io::Error>>();
         let expired = Request::builder()
             .method(Method::POST)
             .uri("/v1/receipts")

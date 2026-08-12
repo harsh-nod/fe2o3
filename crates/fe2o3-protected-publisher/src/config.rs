@@ -9,7 +9,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::PublisherError;
-use crate::bounds::{MAX_CONFIG_BYTES, MAX_INFLIGHT_REQUESTS, MAX_JSON_STRING_BYTES};
+use crate::bounds::{
+    MAX_CONFIG_BYTES, MAX_DATABASE_BYTES, MAX_INFLIGHT_REQUESTS, MAX_JSON_STRING_BYTES,
+    MAX_STORE_RECEIPTS, MIN_DATABASE_BYTES, RECEIPT_LIFETIME_SECS,
+};
 use crate::canonical::{canonical_bytes, parse_canonical};
 
 pub const GITHUB_ISSUER: &str = "https://token.actions.githubusercontent.com";
@@ -38,6 +41,10 @@ pub struct ServiceConfig {
     pub max_inflight_requests: u32,
     pub network_deadline_milliseconds: u64,
     pub jwks_cache_seconds: u64,
+    pub max_receipts: u64,
+    pub max_database_bytes: u64,
+    pub receipt_retention_seconds: u64,
+    pub sqlite_busy_timeout_milliseconds: u64,
 }
 
 impl ServiceConfig {
@@ -102,6 +109,13 @@ impl ServiceConfig {
             || self.max_inflight_requests > MAX_INFLIGHT_REQUESTS
             || self.jwks_cache_seconds == 0
             || self.jwks_cache_seconds > 3_600
+            || self.max_receipts == 0
+            || self.max_receipts > MAX_STORE_RECEIPTS
+            || !(MIN_DATABASE_BYTES..=MAX_DATABASE_BYTES).contains(&self.max_database_bytes)
+            || self.receipt_retention_seconds < RECEIPT_LIFETIME_SECS as u64
+            || self.receipt_retention_seconds > 365 * 24 * 60 * 60
+            || self.sqlite_busy_timeout_milliseconds == 0
+            || self.sqlite_busy_timeout_milliseconds > 1_000
             || !valid_id(&self.signing_key_id)
             || !self.repository.contains('/')
             || !self.repository_id.bytes().all(|byte| byte.is_ascii_digit())
@@ -227,6 +241,20 @@ mod tests {
         assert!(config.validate().is_err());
         let mut config = base;
         config.database_path = "relative.db".into();
+        assert!(config.validate().is_err());
+
+        let base = production_config(temp.path());
+        let mut config = base.clone();
+        config.max_receipts = 0;
+        assert!(config.validate().is_err());
+        let mut config = base.clone();
+        config.max_database_bytes = MIN_DATABASE_BYTES - 1;
+        assert!(config.validate().is_err());
+        let mut config = base.clone();
+        config.receipt_retention_seconds = RECEIPT_LIFETIME_SECS as u64 - 1;
+        assert!(config.validate().is_err());
+        let mut config = base;
+        config.sqlite_busy_timeout_milliseconds = 1001;
         assert!(config.validate().is_err());
     }
 

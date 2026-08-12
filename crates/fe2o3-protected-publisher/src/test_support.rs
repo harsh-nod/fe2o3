@@ -44,6 +44,10 @@ pub(crate) fn config(database_path: PathBuf) -> ServiceConfig {
         max_inflight_requests: 16,
         network_deadline_milliseconds: 1000,
         jwks_cache_seconds: 300,
+        max_receipts: 4096,
+        max_database_bytes: 64 * 1024 * 1024,
+        receipt_retention_seconds: 24 * 60 * 60,
+        sqlite_busy_timeout_milliseconds: 1000,
     }
 }
 
