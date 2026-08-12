@@ -8,12 +8,12 @@ use fe2o3_artifacts::{
     AbiKind, AbiLayout, AddressSpace, ArtifactContainerV1, BlockSize,
     DirectLinkContainerIdentityV1, DirectLinkFinalizedPayloadIdentityV1,
     ManifestClaimDirectLinkCurrentPublicationTokenV1, ManifestClaimDirectLinkPublicationBridgeV1,
-    SelectedNativeKernel, ValidatedDirectLinkBundleEvidenceV1,
+    ScalarType as ArtifactScalarType, SelectedNativeKernel, ValidatedDirectLinkBundleEvidenceV1,
 };
 use fe2o3_hsaco::{
     ArgumentAccess, ArgumentAddressSpace, CodeObjectVersion, ExplicitArgument, ExplicitValueKind,
-    Gfx1250Revision, HiddenValueKind, InspectedKernel, InspectedKernelBindings, KernelBindingError,
-    KernelDescriptorBinding, KernelKind, inspect_and_bind_kernel_descriptors,
+    ExplicitValueType, Gfx1250Revision, HiddenValueKind, InspectedKernel, InspectedKernelBindings,
+    KernelBindingError, KernelDescriptorBinding, KernelKind, inspect_and_bind_kernel_descriptors,
 };
 use std::fmt;
 
@@ -52,6 +52,7 @@ pub struct PublishedPhysicalArgumentLayoutV1 {
     size: u64,
     alignment: PhysicalMetadataValueV1<u64>,
     value_kind: ExplicitValueKind,
+    value_type: PhysicalMetadataValueV1<ExplicitValueType>,
     address_space: PhysicalMetadataValueV1<ArgumentAddressSpace>,
     declared_access: PhysicalMetadataValueV1<ArgumentAccess>,
     actual_access: PhysicalMetadataValueV1<ArgumentAccess>,
@@ -99,6 +100,11 @@ impl PublishedPhysicalArgumentLayoutV1 {
 
     pub const fn value_kind(&self) -> ExplicitValueKind {
         self.value_kind
+    }
+
+    /// Returns the normalized deprecated physical value type without treating omission as agreement.
+    pub const fn value_type(&self) -> PhysicalMetadataValueV1<ExplicitValueType> {
+        self.value_type
     }
 
     pub const fn address_space(&self) -> PhysicalMetadataValueV1<ArgumentAddressSpace> {
@@ -328,6 +334,17 @@ impl PublishedKernelPhysicalLayoutV1 {
     ) -> Self {
         let mut physical = self.clone();
         physical.arguments[argument_index].pointee_alignment = alignment;
+        physical
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_value_type_for_launch_bridge_test(
+        &self,
+        argument_index: usize,
+        value_type: PhysicalMetadataValueV1<ExplicitValueType>,
+    ) -> Self {
+        let mut physical = self.clone();
+        physical.arguments[argument_index].value_type = value_type;
         physical
     }
 
@@ -993,11 +1010,12 @@ fn validate_physical_arguments(
     let mut expected_arguments = Vec::new();
     for field in abi.fields() {
         match field.kind() {
-            AbiKind::Scalar(_) => expected_arguments.push(ExpectedPhysicalArgument {
+            AbiKind::Scalar(scalar) => expected_arguments.push(ExpectedPhysicalArgument {
                 offset: field.offset(),
                 size: field.size(),
                 alignment: u64::from(field.alignment()),
                 value_kind: ExplicitValueKind::ByValue,
+                value_type: Some(physical_value_type(scalar)),
                 address_space: None,
             }),
             AbiKind::Pointer { .. } => expected_arguments.push(ExpectedPhysicalArgument {
@@ -1005,6 +1023,7 @@ fn validate_physical_arguments(
                 size: field.size(),
                 alignment: u64::from(field.alignment()),
                 value_kind: pointer_value_kind(field.address_space()),
+                value_type: None,
                 address_space: map_address_space(field.address_space()),
             }),
             AbiKind::Slice { .. } => {
@@ -1014,6 +1033,7 @@ fn validate_physical_arguments(
                     size: pointer_bytes,
                     alignment: u64::from(field.alignment()),
                     value_kind: pointer_value_kind(field.address_space()),
+                    value_type: None,
                     address_space: map_address_space(field.address_space()),
                 });
                 expected_arguments.push(ExpectedPhysicalArgument {
@@ -1021,6 +1041,7 @@ fn validate_physical_arguments(
                     size: pointer_bytes,
                     alignment: u64::from(field.alignment()),
                     value_kind: ExplicitValueKind::ByValue,
+                    value_type: Some(ExplicitValueType::U64),
                     address_space: None,
                 });
             }
@@ -1040,6 +1061,7 @@ fn validate_physical_arguments(
             size: actual_argument.size(),
             alignment: PhysicalMetadataValueV1::from_option(actual_argument.alignment()),
             value_kind: actual_argument.value_kind(),
+            value_type: PhysicalMetadataValueV1::from_option(actual_argument.value_type()),
             address_space: PhysicalMetadataValueV1::from_option(actual_argument.address_space()),
             declared_access: PhysicalMetadataValueV1::from_option(actual_argument.access()),
             actual_access: PhysicalMetadataValueV1::from_option(actual_argument.actual_access()),
@@ -1057,6 +1079,7 @@ struct ExpectedPhysicalArgument {
     size: u64,
     alignment: u64,
     value_kind: ExplicitValueKind,
+    value_type: Option<ExplicitValueType>,
     address_space: Option<ArgumentAddressSpace>,
 }
 
@@ -1071,11 +1094,31 @@ fn validate_argument(
             .alignment()
             .is_some_and(|alignment| alignment != expected.alignment)
         || actual.value_kind() != expected.value_kind
+        || actual
+            .value_type()
+            .zip(expected.value_type)
+            .is_some_and(|(actual, expected)| actual != expected)
         || actual.address_space() != expected.address_space
     {
         return physical_mismatch(kernel, "physical argument layout");
     }
     Ok(())
+}
+
+const fn physical_value_type(value: ArtifactScalarType) -> ExplicitValueType {
+    match value {
+        ArtifactScalarType::I8 => ExplicitValueType::I8,
+        ArtifactScalarType::U8 => ExplicitValueType::U8,
+        ArtifactScalarType::I16 => ExplicitValueType::I16,
+        ArtifactScalarType::U16 => ExplicitValueType::U16,
+        ArtifactScalarType::I32 => ExplicitValueType::I32,
+        ArtifactScalarType::U32 => ExplicitValueType::U32,
+        ArtifactScalarType::I64 => ExplicitValueType::I64,
+        ArtifactScalarType::U64 => ExplicitValueType::U64,
+        ArtifactScalarType::F16 => ExplicitValueType::F16,
+        ArtifactScalarType::F32 => ExplicitValueType::F32,
+        ArtifactScalarType::F64 => ExplicitValueType::F64,
+    }
 }
 
 fn pointer_value_kind(address_space: AddressSpace) -> ExplicitValueKind {

@@ -2,10 +2,10 @@ use std::{env, fs};
 
 use fe2o3_hsaco::{
     ArgumentAddressSpace, COV6_IMPLICIT_ARGUMENT_BYTES, CodeObjectVersion, ExplicitValueKind,
-    Gfx1250Revision, HiddenValueKind, InspectionError, KernelBindingError, KernelKind,
-    MAX_ARGUMENTS_PER_KERNEL, MAX_ELF_NOTES, MAX_ELF_SYMBOLS, MAX_HSACO_BYTES, MAX_KERNARG_BYTES,
-    MAX_KERNELS, MAX_MESSAGEPACK_COLLECTION_ITEMS, MAX_MESSAGEPACK_DEPTH, MAX_METADATA_BYTES,
-    MessagePackLimit, inspect, inspect_and_bind_kernel_descriptors,
+    ExplicitValueType, Gfx1250Revision, HiddenValueKind, InspectionError, KernelBindingError,
+    KernelKind, MAX_ARGUMENTS_PER_KERNEL, MAX_ELF_NOTES, MAX_ELF_SYMBOLS, MAX_HSACO_BYTES,
+    MAX_KERNARG_BYTES, MAX_KERNELS, MAX_MESSAGEPACK_COLLECTION_ITEMS, MAX_MESSAGEPACK_DEPTH,
+    MAX_METADATA_BYTES, MessagePackLimit, inspect, inspect_and_bind_kernel_descriptors,
 };
 use rmpv::{Value, encode::write_value};
 
@@ -811,7 +811,7 @@ fn preserves_all_recognized_explicit_argument_qualifiers() {
     let mut argument = argument(Some("buffer"), 0, 8, "global_buffer", Some("global"));
     as_map_mut(&mut argument).extend([
         (Value::from(".type_name"), Value::from("const float*")),
-        (Value::from(".value_type"), Value::from("deprecated")),
+        (Value::from(".value_type"), Value::from("f32")),
         (Value::from(".align"), Value::from(8)),
         (Value::from(".pointee_align"), Value::from(16)),
         (Value::from(".access"), Value::from("read_only")),
@@ -829,6 +829,7 @@ fn preserves_all_recognized_explicit_argument_qualifiers() {
     let argument = &inspected.kernels()[0].explicit_arguments()[0];
 
     assert_eq!(argument.type_name(), Some("const float*"));
+    assert_eq!(argument.value_type(), Some(ExplicitValueType::F32));
     assert_eq!(argument.alignment(), Some(8));
     assert_eq!(argument.pointee_alignment(), Some(16));
     assert_eq!(
@@ -843,6 +844,53 @@ fn preserves_all_recognized_explicit_argument_qualifiers() {
     assert_eq!(argument.is_restrict(), Some(false));
     assert_eq!(argument.is_volatile(), Some(true));
     assert_eq!(argument.is_pipe(), Some(false));
+}
+
+#[test]
+fn normalizes_every_closed_explicit_value_type_and_rejects_aliases() {
+    for (spelling, expected) in [
+        ("struct", ExplicitValueType::Struct),
+        ("i8", ExplicitValueType::I8),
+        ("u8", ExplicitValueType::U8),
+        ("i16", ExplicitValueType::I16),
+        ("u16", ExplicitValueType::U16),
+        ("f16", ExplicitValueType::F16),
+        ("i32", ExplicitValueType::I32),
+        ("u32", ExplicitValueType::U32),
+        ("f32", ExplicitValueType::F32),
+        ("i64", ExplicitValueType::I64),
+        ("u64", ExplicitValueType::U64),
+        ("f64", ExplicitValueType::F64),
+    ] {
+        let mut argument = argument(Some("value"), 0, 8, "by_value", None);
+        as_map_mut(&mut argument).push((Value::from(".value_type"), Value::from(spelling)));
+        let mut kernel = valid_kernel("k", "k.kd");
+        set_field(&mut kernel, ".args", Value::Array(vec![argument]));
+        set_field(&mut kernel, ".kernarg_segment_size", Value::from(8));
+        let inspected = inspect(&hsaco(
+            &encode(&metadata((1, 2), vec![kernel])),
+            4,
+            &[b"AMDGPU\0"],
+        ))
+        .unwrap_or_else(|error| panic!("{spelling}: {error:?}"));
+        assert_eq!(
+            inspected.kernels()[0].explicit_arguments()[0].value_type(),
+            Some(expected)
+        );
+    }
+
+    for spelling in ["", "I32", "uint64", "ptr", "i128", "deprecated"] {
+        let mut argument = argument(Some("value"), 0, 8, "by_value", None);
+        as_map_mut(&mut argument).push((Value::from(".value_type"), Value::from(spelling)));
+        assert_argument_error(vec![argument], InspectionError::UnknownValueType);
+    }
+
+    let mut duplicate = argument(Some("value"), 0, 8, "by_value", None);
+    as_map_mut(&mut duplicate).extend([
+        (Value::from(".value_type"), Value::from("u64")),
+        (Value::from(".value_type"), Value::from("u64")),
+    ]);
+    assert_argument_error(vec![duplicate], InspectionError::DuplicateMapKey);
 }
 
 #[test]

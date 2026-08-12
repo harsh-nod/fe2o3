@@ -6,14 +6,14 @@ use std::{fmt, ops::Range};
 use fe2o3_hsaco::{
     ArgumentAccess, ArgumentAddressSpace, COV6_IMPLICIT_ARGUMENT_BYTES,
     CodeObjectVersion as InspectedCodeObjectVersion, ExplicitArgument, ExplicitValueKind,
-    InspectedHsaco, InspectedKernel, InspectedKernelBindings, KernelBindingError,
-    KernelDescriptorBinding, MAX_ELF_SECTIONS, MAX_ELF_SEGMENTS, MAX_HSACO_BYTES,
-    inspect_and_bind_kernel_descriptors,
+    ExplicitValueType, InspectedHsaco, InspectedKernel, InspectedKernelBindings,
+    KernelBindingError, KernelDescriptorBinding, MAX_ELF_SECTIONS, MAX_ELF_SEGMENTS,
+    MAX_HSACO_BYTES, inspect_and_bind_kernel_descriptors,
 };
 use fe2o3_kernel_descriptor::{
     AccessMode, AliasSemantics, BlockSizeV1, CANONICAL_CODE_OBJECT_DIGEST_OFFSET,
     CanonicalCodeObjectDigest, CodeObjectVersion, DecodeError, DeviceDescriptorTableV1,
-    KernelDescriptorV1, MAX_DESCRIPTOR_TABLE_BYTES, PhysicalAbiComponentKind,
+    KernelDescriptorV1, MAX_DESCRIPTOR_TABLE_BYTES, PhysicalAbiComponentKind, ScalarTypeV1,
     decode_device_descriptor_table_v1,
 };
 
@@ -756,11 +756,11 @@ fn validate_kernel_physical_abi(
     }
     let mut physical_index = 0usize;
     for logical in descriptor.arguments() {
-        let element_alignment = table
+        let element_scalar = table
             .type_records()
             .iter()
             .find(|record| record.identity() == logical.source_type())
-            .map(|record| record.descriptor().scalar_type().alignment_bytes())
+            .map(|record| record.descriptor().scalar_type())
             .ok_or_else(|| FinalizationError::PhysicalArgumentMismatch {
                 entry_name: entry_name.to_owned(),
                 index: physical_index,
@@ -777,7 +777,7 @@ fn validate_kernel_physical_abi(
                 offset,
                 size,
                 alignment,
-                element_alignment,
+                element_scalar,
                 argument,
             )?;
             physical_index += 1;
@@ -948,7 +948,7 @@ fn validate_physical_argument(
     offset: u32,
     size: u16,
     alignment: u16,
-    element_alignment: u16,
+    element_scalar: ScalarTypeV1,
     metadata: &ExplicitArgument,
 ) -> Result<(), FinalizationError> {
     let mismatch = |field| FinalizationError::PhysicalArgumentMismatch {
@@ -968,6 +968,17 @@ fn validate_physical_argument(
     {
         return Err(mismatch(".align"));
     }
+    let expected_value_type = match kind {
+        PhysicalAbiComponentKind::ScalarByValue(scalar) => physical_value_type(scalar),
+        PhysicalAbiComponentKind::GlobalPointer => physical_value_type(element_scalar),
+        PhysicalAbiComponentKind::SliceLengthU64 => ExplicitValueType::U64,
+    };
+    if metadata
+        .value_type()
+        .is_some_and(|value| value != expected_value_type)
+    {
+        return Err(mismatch(".value_type"));
+    }
     match kind {
         PhysicalAbiComponentKind::GlobalPointer => {
             if metadata.value_kind() != ExplicitValueKind::GlobalBuffer {
@@ -978,7 +989,7 @@ fn validate_physical_argument(
             }
             if metadata
                 .pointee_alignment()
-                .is_some_and(|value| value != u64::from(element_alignment))
+                .is_some_and(|value| value != u64::from(element_scalar.alignment_bytes()))
             {
                 return Err(mismatch(".pointee_align"));
             }
@@ -1038,6 +1049,22 @@ fn validate_physical_argument(
         return Err(mismatch(".is_pipe"));
     }
     Ok(())
+}
+
+const fn physical_value_type(value: ScalarTypeV1) -> ExplicitValueType {
+    match value {
+        ScalarTypeV1::I8 => ExplicitValueType::I8,
+        ScalarTypeV1::U8 => ExplicitValueType::U8,
+        ScalarTypeV1::I16 => ExplicitValueType::I16,
+        ScalarTypeV1::U16 => ExplicitValueType::U16,
+        ScalarTypeV1::I32 => ExplicitValueType::I32,
+        ScalarTypeV1::U32 => ExplicitValueType::U32,
+        ScalarTypeV1::I64 => ExplicitValueType::I64,
+        ScalarTypeV1::U64 => ExplicitValueType::U64,
+        ScalarTypeV1::F16 => ExplicitValueType::F16,
+        ScalarTypeV1::F32 => ExplicitValueType::F32,
+        ScalarTypeV1::F64 => ExplicitValueType::F64,
+    }
 }
 
 fn actual_access_is_subset(contract: ArgumentAccess, actual: ArgumentAccess) -> bool {

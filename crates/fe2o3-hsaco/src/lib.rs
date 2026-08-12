@@ -101,6 +101,26 @@ pub enum ExplicitValueKind {
     Queue,
 }
 
+/// Canonical scalar spelling retained from the deprecated AMDHSA `.value_type` field.
+///
+/// Current LLVM may omit this field. When present, inspection preserves the declaration so
+/// higher-level exact profiles can reject contradictions instead of silently discarding it.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum ExplicitValueType {
+    Struct,
+    I8,
+    U8,
+    I16,
+    U16,
+    F16,
+    I32,
+    U32,
+    F32,
+    I64,
+    U64,
+    F64,
+}
+
 /// Runtime-populated argument kind declared by AMDHSA metadata.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HiddenValueKind {
@@ -177,6 +197,7 @@ pub struct ExplicitArgument {
     size: u64,
     alignment: Option<u64>,
     value_kind: ExplicitValueKind,
+    value_type: Option<ExplicitValueType>,
     address_space: Option<ArgumentAddressSpace>,
     access: Option<ArgumentAccess>,
     actual_access: Option<ArgumentAccess>,
@@ -216,6 +237,11 @@ impl ExplicitArgument {
     /// Returns the physical AMDHSA value kind.
     pub const fn value_kind(&self) -> ExplicitValueKind {
         self.value_kind
+    }
+
+    /// Returns the canonical deprecated `.value_type` declaration, retaining omission as `None`.
+    pub const fn value_type(&self) -> Option<ExplicitValueType> {
+        self.value_type
     }
 
     /// Returns the optional address-space qualifier.
@@ -515,6 +541,7 @@ pub(crate) struct ParsedExplicitArgument {
     pub(crate) size: u64,
     pub(crate) alignment: Option<u64>,
     pub(crate) value_kind: ExplicitValueKind,
+    pub(crate) value_type: Option<ExplicitValueType>,
     pub(crate) address_space: Option<ArgumentAddressSpace>,
     pub(crate) access: Option<ArgumentAccess>,
     pub(crate) actual_access: Option<ArgumentAccess>,
@@ -534,6 +561,7 @@ impl From<ParsedExplicitArgument> for ExplicitArgument {
             size: argument.size,
             alignment: argument.alignment,
             value_kind: argument.value_kind,
+            value_type: argument.value_type,
             address_space: argument.address_space,
             access: argument.access,
             actual_access: argument.actual_access,

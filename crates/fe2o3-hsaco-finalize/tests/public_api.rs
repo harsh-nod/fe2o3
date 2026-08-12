@@ -922,6 +922,27 @@ fn cross_checks_each_mapped_explicit_argument_fact() {
     )
     .unwrap();
 
+    let mut matching_value_types = metadata_kernel("vecadd", "vecadd.kd", 272);
+    map_mut(&mut arguments_mut(&mut matching_value_types)[0])
+        .push((Value::from(".value_type"), Value::from("f32")));
+    map_mut(&mut arguments_mut(&mut matching_value_types)[1])
+        .push((Value::from(".value_type"), Value::from("u64")));
+    finalize_unfinalized(&fixture_for_kernel(matching_value_types, TableOptions::standard()).bytes)
+        .unwrap();
+
+    for (index, value_type) in [
+        (0, "i32"),
+        (0, "f64"),
+        (1, "i64"),
+        (1, "u32"),
+        (1, "struct"),
+    ] {
+        let mut contradictory = metadata_kernel("vecadd", "vecadd.kd", 272);
+        map_mut(&mut arguments_mut(&mut contradictory)[index])
+            .push((Value::from(".value_type"), Value::from(value_type)));
+        assert_physical_mismatch(contradictory, TableOptions::standard(), ".value_type");
+    }
+
     let mut restrict = metadata_kernel("vecadd", "vecadd.kd", 272);
     map_mut(&mut arguments_mut(&mut restrict)[0])
         .push((Value::from(".is_restrict"), Value::from(true)));

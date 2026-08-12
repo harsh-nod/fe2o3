@@ -3246,6 +3246,119 @@ mod tests {
     }
 
     #[test]
+    fn launch_bridge_joins_every_scalar_and_slice_value_type_declaration() {
+        let scalars = [
+            ScalarTypeV1::I8,
+            ScalarTypeV1::U8,
+            ScalarTypeV1::I16,
+            ScalarTypeV1::U16,
+            ScalarTypeV1::I32,
+            ScalarTypeV1::U32,
+            ScalarTypeV1::I64,
+            ScalarTypeV1::U64,
+            ScalarTypeV1::F16,
+            ScalarTypeV1::F32,
+            ScalarTypeV1::F64,
+        ];
+        for (index, scalar) in scalars.into_iter().enumerate() {
+            let (_fixture, recovered) = recovered_launch_bridge_fixture_with_abi(
+                121 + u8::try_from(index).unwrap(),
+                manifest_slice_abi(
+                    scalar,
+                    u64::from(scalar.size_bytes()),
+                    u32::from(scalar.alignment_bytes()),
+                    None,
+                    None,
+                ),
+                DescriptorArgumentFixture::SharedSlice(scalar),
+            );
+            let family =
+                crate::launch_kernel_v2_bridge::canonical_family_for_recovered_launch_bridge_test(
+                    &recovered,
+                );
+            let omitted_identity = crate::bind_current_recovered_launch_kernel_metadata_v2(
+                &recovered,
+                &family,
+                "recovered-exact-wave64",
+            )
+            .unwrap()
+            .physical_signature()
+            .identity();
+            let physical_type = match scalar {
+                ScalarTypeV1::I8 => fe2o3_hsaco::ExplicitValueType::I8,
+                ScalarTypeV1::U8 => fe2o3_hsaco::ExplicitValueType::U8,
+                ScalarTypeV1::I16 => fe2o3_hsaco::ExplicitValueType::I16,
+                ScalarTypeV1::U16 => fe2o3_hsaco::ExplicitValueType::U16,
+                ScalarTypeV1::I32 => fe2o3_hsaco::ExplicitValueType::I32,
+                ScalarTypeV1::U32 => fe2o3_hsaco::ExplicitValueType::U32,
+                ScalarTypeV1::I64 => fe2o3_hsaco::ExplicitValueType::I64,
+                ScalarTypeV1::U64 => fe2o3_hsaco::ExplicitValueType::U64,
+                ScalarTypeV1::F16 => fe2o3_hsaco::ExplicitValueType::F16,
+                ScalarTypeV1::F32 => fe2o3_hsaco::ExplicitValueType::F32,
+                ScalarTypeV1::F64 => fe2o3_hsaco::ExplicitValueType::F64,
+            };
+            let with_pointer_type = recovered
+                .physical_kernel()
+                .with_value_type_for_launch_bridge_test(
+                    0,
+                    crate::PhysicalMetadataValueV1::Known(physical_type),
+                );
+            let complete = with_pointer_type.with_value_type_for_launch_bridge_test(
+                1,
+                crate::PhysicalMetadataValueV1::Known(fe2o3_hsaco::ExplicitValueType::U64),
+            );
+            let binding = crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_with_physical_probe_v2(
+                &recovered,
+                &family,
+                "recovered-exact-wave64",
+                &complete,
+            )
+            .unwrap_or_else(|error| panic!("{scalar:?}: {error:?}"));
+            assert_eq!(
+                binding.physical_signature().explicit_value_types(),
+                [
+                    crate::PhysicalMetadataValueV1::Known(physical_type),
+                    crate::PhysicalMetadataValueV1::Known(fe2o3_hsaco::ExplicitValueType::U64),
+                ]
+            );
+            let declared_identity = binding.physical_signature().identity();
+            drop(binding);
+            assert_ne!(declared_identity, omitted_identity);
+
+            let contradictory = complete.with_value_type_for_launch_bridge_test(
+                1,
+                crate::PhysicalMetadataValueV1::Known(fe2o3_hsaco::ExplicitValueType::I32),
+            );
+            assert!(matches!(
+                crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_with_physical_probe_v2(
+                    &recovered,
+                    &family,
+                    "recovered-exact-wave64",
+                    &contradictory,
+                ),
+                Err(crate::LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(
+                    "physical argument value type"
+                ))
+            ));
+            let contradictory_pointer = complete.with_value_type_for_launch_bridge_test(
+                0,
+                crate::PhysicalMetadataValueV1::Known(fe2o3_hsaco::ExplicitValueType::Struct),
+            );
+            assert!(matches!(
+                crate::launch_kernel_v2_bridge::bind_current_recovered_launch_kernel_metadata_with_physical_probe_v2(
+                    &recovered,
+                    &family,
+                    "recovered-exact-wave64",
+                    &contradictory_pointer,
+                ),
+                Err(crate::LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(
+                    "physical argument value type"
+                ))
+            ));
+        }
+    }
+
+    #[test]
     fn launch_bridge_requires_exact_physical_pointee_alignment() {
         let (_fixture, recovered) = recovered_launch_bridge_fixture(107);
         let family =

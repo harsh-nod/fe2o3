@@ -54,6 +54,7 @@ pub enum InspectionError {
     UnknownArgumentField,
     UnsupportedValueKindForCodeObjectVersion,
     UnknownValueKind,
+    UnknownValueType,
     UnknownAddressSpace,
     UnknownAccess,
     InvalidArgumentRange,
@@ -154,6 +155,9 @@ impl fmt::Display for InspectionError {
             ),
             Self::UnknownValueKind => {
                 formatter.write_str("kernel argument has an unknown value kind")
+            }
+            Self::UnknownValueType => {
+                formatter.write_str("kernel argument has an unknown value type")
             }
             Self::UnknownAddressSpace => {
                 formatter.write_str("kernel argument has an unknown address space")

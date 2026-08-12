@@ -12,7 +12,8 @@ use fe2o3_artifacts::{
     LaunchContract as ArtifactLaunchContract, PointerWidth, ScalarType as ArtifactScalarType,
 };
 use fe2o3_hsaco::{
-    COV6_IMPLICIT_ARGUMENT_BYTES, CodeObjectVersion, ExplicitValueKind, HiddenValueKind,
+    COV6_IMPLICIT_ARGUMENT_BYTES, CodeObjectVersion, ExplicitValueKind, ExplicitValueType,
+    HiddenValueKind,
 };
 use fe2o3_kernel_descriptor::{
     AccessMode, AliasSemantics, BlockSizeV1, DeviceLayoutDescriptorV1, DeviceLayoutIdentity,
@@ -33,7 +34,7 @@ use std::fmt;
 const TARGET_IDENTITY_DOMAIN_V2: &[u8] = b"fe2o3.host.launch-kernel.target.v2\0";
 const SIGNATURE_IDENTITY_DOMAIN_V2: &[u8] = b"fe2o3.host.launch-kernel.signature.v2\0";
 const SEMANTIC_PARAMETER_DOMAIN_V2: &[u8] = b"fe2o3.host.launch-kernel.semantic-parameter.v2\0";
-const PHYSICAL_SIGNATURE_DOMAIN_V2: &[u8] = b"fe2o3.host.launch-kernel.physical-signature.v2\0";
+const PHYSICAL_SIGNATURE_DOMAIN_V3: &[u8] = b"fe2o3.host.launch-kernel.physical-signature.v3\0";
 
 /// Identity of the complete explicit and mandatory implicit ABI observed for one COV6 kernel.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -98,6 +99,7 @@ pub struct Gfx942PhysicalKernelSignatureV2 {
     explicit: KernelSignatureV2,
     implicit_argument_offset: u32,
     implicit_argument_bytes: u32,
+    explicit_value_types: Box<[PhysicalMetadataValueV1<ExplicitValueType>]>,
     implicit_parameters: Box<[Gfx942ImplicitAbiParameterV2]>,
 }
 
@@ -116,6 +118,11 @@ impl Gfx942PhysicalKernelSignatureV2 {
 
     pub const fn implicit_argument_bytes(&self) -> u32 {
         self.implicit_argument_bytes
+    }
+
+    /// Returns each normalized physical `.value_type` declaration in explicit ABI order.
+    pub fn explicit_value_types(&self) -> &[PhysicalMetadataValueV1<ExplicitValueType>] {
+        &self.explicit_value_types
     }
 
     pub fn implicit_parameters(&self) -> &[Gfx942ImplicitAbiParameterV2] {
@@ -960,6 +967,7 @@ fn derive_signature(
                 size,
                 alignment,
                 artifact_field,
+                argument,
                 physical_argument,
             )?;
             let source_index = u16::try_from(physical_index).map_err(|_| {
@@ -1161,11 +1169,18 @@ fn derive_physical_signature(
     let implicit_argument_bytes = u32::try_from(launch.implicit_argument_size()).map_err(|_| {
         LaunchKernelMetadataBridgeErrorV2::NumericOverflow("implicit argument span")
     })?;
+    let explicit_value_types = physical
+        .arguments()
+        .iter()
+        .map(crate::PublishedPhysicalArgumentLayoutV1::value_type)
+        .collect::<Vec<_>>()
+        .into_boxed_slice();
     let mut value = Gfx942PhysicalKernelSignatureV2 {
         identity: Gfx942PhysicalKernelSignatureIdentityV2([0; 32]),
         explicit,
         implicit_argument_offset,
         implicit_argument_bytes,
+        explicit_value_types,
         implicit_parameters: implicit_parameters.into_boxed_slice(),
     };
     value.identity = derive_physical_signature_identity(&value);
@@ -1175,10 +1190,20 @@ fn derive_physical_signature(
 fn derive_physical_signature_identity(
     signature: &Gfx942PhysicalKernelSignatureV2,
 ) -> Gfx942PhysicalKernelSignatureIdentityV2 {
-    let mut digest = CanonicalDigestV2::new(PHYSICAL_SIGNATURE_DOMAIN_V2);
+    let mut digest = CanonicalDigestV2::new(PHYSICAL_SIGNATURE_DOMAIN_V3);
     digest.bytes(&signature.explicit.identity.0);
     digest.u32(signature.implicit_argument_offset);
     digest.u32(signature.implicit_argument_bytes);
+    digest.u64(signature.explicit_value_types.len() as u64);
+    for value_type in &signature.explicit_value_types {
+        match value_type {
+            PhysicalMetadataValueV1::Unknown => digest.u8(0),
+            PhysicalMetadataValueV1::Known(value_type) => {
+                digest.u8(1);
+                digest.u8(explicit_value_type_tag(*value_type));
+            }
+        }
+    }
     digest.u64(signature.implicit_parameters.len() as u64);
     for parameter in &signature.implicit_parameters {
         digest.u8(implicit_kind_tag(parameter.kind));
@@ -1233,6 +1258,7 @@ fn validate_physical_component(
     size: u16,
     alignment: u16,
     artifact_field: &ArtifactAbiField,
+    logical_argument: &fe2o3_kernel_descriptor::LogicalArgumentV1,
     physical: &crate::PublishedPhysicalArgumentLayoutV1,
 ) -> Result<(), LaunchKernelMetadataBridgeErrorV2> {
     let expected_kind = match component {
@@ -1257,6 +1283,28 @@ fn validate_physical_component(
         return Err(
             LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(
                 "physical argument component",
+            ),
+        );
+    }
+    let expected_value_type = match component {
+        PhysicalAbiComponentKind::ScalarByValue(scalar) => explicit_value_type(scalar),
+        PhysicalAbiComponentKind::SliceLengthU64 => ExplicitValueType::U64,
+        PhysicalAbiComponentKind::GlobalPointer => {
+            let scalar = canonical_slice_scalar(logical_argument).ok_or(
+                LaunchKernelMetadataBridgeErrorV2::UnsupportedPhysicalAbi(
+                    "pointer value type without canonical slice semantics",
+                ),
+            )?;
+            explicit_value_type(scalar)
+        }
+    };
+    if matches!(
+        physical.value_type(),
+        PhysicalMetadataValueV1::Known(value_type) if value_type != expected_value_type
+    ) {
+        return Err(
+            LaunchKernelMetadataBridgeErrorV2::RecoveredMetadataInconsistent(
+                "physical argument value type",
             ),
         );
     }
@@ -1307,6 +1355,39 @@ fn validate_physical_component(
         }
     }
     Ok(())
+}
+
+const fn explicit_value_type(value: ScalarTypeV1) -> ExplicitValueType {
+    match value {
+        ScalarTypeV1::I8 => ExplicitValueType::I8,
+        ScalarTypeV1::U8 => ExplicitValueType::U8,
+        ScalarTypeV1::I16 => ExplicitValueType::I16,
+        ScalarTypeV1::U16 => ExplicitValueType::U16,
+        ScalarTypeV1::I32 => ExplicitValueType::I32,
+        ScalarTypeV1::U32 => ExplicitValueType::U32,
+        ScalarTypeV1::I64 => ExplicitValueType::I64,
+        ScalarTypeV1::U64 => ExplicitValueType::U64,
+        ScalarTypeV1::F16 => ExplicitValueType::F16,
+        ScalarTypeV1::F32 => ExplicitValueType::F32,
+        ScalarTypeV1::F64 => ExplicitValueType::F64,
+    }
+}
+
+const fn explicit_value_type_tag(value: ExplicitValueType) -> u8 {
+    match value {
+        ExplicitValueType::Struct => 0,
+        ExplicitValueType::I8 => 1,
+        ExplicitValueType::U8 => 2,
+        ExplicitValueType::I16 => 3,
+        ExplicitValueType::U16 => 4,
+        ExplicitValueType::F16 => 5,
+        ExplicitValueType::I32 => 6,
+        ExplicitValueType::U32 => 7,
+        ExplicitValueType::F32 => 8,
+        ExplicitValueType::I64 => 9,
+        ExplicitValueType::U64 => 10,
+        ExplicitValueType::F64 => 11,
+    }
 }
 
 fn derive_semantic_parameter_identity(

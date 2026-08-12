@@ -3,10 +3,10 @@ use rmpv::ValueRef;
 
 use crate::{
     ArgumentAccess, ArgumentAddressSpace, COV6_IMPLICIT_ARGUMENT_BYTES, CodeObjectVersion,
-    ExplicitArgument, ExplicitValueKind, Gfx1250Revision, HiddenArgument, HiddenValueKind,
-    InspectedHsaco, InspectedKernel, InspectionError, KernelKind, MAX_ARGUMENTS_PER_KERNEL,
-    MAX_KERNARG_BYTES, MAX_KERNELS, MetadataVersion, ParsedExplicitArgument, hidden_argument,
-    inspected_hsaco, messagepack::decode_bounded,
+    ExplicitArgument, ExplicitValueKind, ExplicitValueType, Gfx1250Revision, HiddenArgument,
+    HiddenValueKind, InspectedHsaco, InspectedKernel, InspectionError, KernelKind,
+    MAX_ARGUMENTS_PER_KERNEL, MAX_KERNARG_BYTES, MAX_KERNELS, MetadataVersion,
+    ParsedExplicitArgument, hidden_argument, inspected_hsaco, messagepack::decode_bounded,
 };
 
 const TARGET_PREFIX: &str = "amdgcn-amd-amdhsa--";
@@ -302,6 +302,7 @@ fn parse_arguments(
         let is_restrict = optional_boolean(map, ".is_restrict")?;
         let is_volatile = optional_boolean(map, ".is_volatile")?;
         let is_pipe = optional_boolean(map, ".is_pipe")?;
+        let value_type = optional_value_type(map)?;
         let value_kind = expect_string(required(map, ".value_kind")?, ".value_kind")?;
         match parse_value_kind(value_kind, code_object_version)? {
             ParsedValueKind::Explicit(value_kind) => {
@@ -325,6 +326,7 @@ fn parse_arguments(
                     size,
                     alignment,
                     value_kind,
+                    value_type,
                     address_space,
                     access,
                     actual_access,
@@ -597,9 +599,7 @@ fn validate_argument_fields(map: &[MapEntry<'_>]) -> Result<(), InspectionError>
     }
     optional_string(map, ".name")?;
     optional_string(map, ".type_name")?;
-    // This key is deprecated and explicitly unused, but LLVM still accepts it
-    // for compatibility with old producers.
-    optional_string(map, ".value_type")?;
+    optional_value_type(map)?;
     for field in [".is_const", ".is_restrict", ".is_volatile", ".is_pipe"] {
         optional_boolean(map, field)?;
     }
@@ -929,6 +929,28 @@ fn optional_address_space(
         _ => return Err(InspectionError::UnknownAddressSpace),
     };
     Ok(Some(address_space))
+}
+
+fn optional_value_type(map: &[MapEntry<'_>]) -> Result<Option<ExplicitValueType>, InspectionError> {
+    let Some(value) = optional_string(map, ".value_type")? else {
+        return Ok(None);
+    };
+    let value_type = match value {
+        "struct" => ExplicitValueType::Struct,
+        "i8" => ExplicitValueType::I8,
+        "u8" => ExplicitValueType::U8,
+        "i16" => ExplicitValueType::I16,
+        "u16" => ExplicitValueType::U16,
+        "f16" => ExplicitValueType::F16,
+        "i32" => ExplicitValueType::I32,
+        "u32" => ExplicitValueType::U32,
+        "f32" => ExplicitValueType::F32,
+        "i64" => ExplicitValueType::I64,
+        "u64" => ExplicitValueType::U64,
+        "f64" => ExplicitValueType::F64,
+        _ => return Err(InspectionError::UnknownValueType),
+    };
+    Ok(Some(value_type))
 }
 
 fn optional_access(

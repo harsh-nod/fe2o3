@@ -83,11 +83,13 @@ Physical argument names are observations from the code object. This crate does
 not infer logical slices or aggregates from adjacent pieces, and it does not
 assume that manifest logical names equal physical metadata names.
 
-Argument maps accept the keys documented by the local LLVM AMDGPU usage schema,
-including the deprecated and unused `.value_type` compatibility key. The
-inspector also accepts and preserves the older producer extension `.align`.
-Unknown argument keys are rejected because a future key may change the physical
-ABI. Optional qualifiers preserve whether the producer emitted them.
+Argument maps accept the keys documented by the local LLVM AMDGPU usage schema.
+The deprecated `.value_type` compatibility key is normalized into a closed
+enum and preserved when present, so exact consumers can reject contradictory
+type declarations. The inspector also accepts and preserves the older producer
+extension `.align`. Unknown argument keys and value-type spellings are
+rejected because they may change physical ABI semantics. Optional qualifiers
+preserve whether the producer emitted them.
 
 Register requirements, spill counts, workgroup processor mode, dynamic-stack
 use, and temporary GFX1250-family revision data are retained as execution
