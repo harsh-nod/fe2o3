@@ -288,7 +288,7 @@ class Fixture:
             "run_number": self.environment["GITHUB_RUN_NUMBER"],
             "runner_environment": "github-hosted",
             "sha": self.candidate_head,
-            "sub": f"repo:powderluv/fe2o3:ref:{self.queue_ref}",
+            "sub": "repo:powderluv/fe2o3:environment:protected-publisher",
             "workflow": "Protected parity promotion",
             "workflow_ref": self.environment["GITHUB_WORKFLOW_REF"],
             "workflow_sha": self.candidate_head,
@@ -504,6 +504,31 @@ def expect_failure(
     assert fixture.secret_request_token not in process.stdout + process.stderr
 
 
+def token_with_duplicate_claim(token: str, claim: str, value: object) -> str:
+    header_segment, claims_segment, signature_segment = token.split(".")
+    claims_raw = base64.urlsafe_b64decode(
+        claims_segment + "=" * ((4 - len(claims_segment) % 4) % 4)
+    )
+    claims = json.loads(claims_raw)
+    duplicate_claim_items = []
+    for key in sorted(claims):
+        duplicate_claim_items.append(
+            f"{json.dumps(key)}:{json.dumps(claims[key], separators=(',', ':'))}"
+        )
+        if key == claim:
+            duplicate_claim_items.append(
+                f"{json.dumps(claim)}:{json.dumps(value, separators=(',', ':'))}"
+            )
+    duplicate_claims_segment = base64.urlsafe_b64encode(
+        ("{" + ",".join(duplicate_claim_items) + "}").encode("ascii")
+    ).rstrip(b"=").decode("ascii")
+    return ".".join((header_segment, duplicate_claims_segment, signature_segment))
+
+
+def stale_ref_subject(fixture: Fixture) -> str:
+    return f"repo:powderluv/fe2o3:ref:{fixture.queue_ref}"
+
+
 def test_success_and_test_domain_guard() -> None:
     with tempfile.TemporaryDirectory(prefix="fe2o3-publisher-client-") as raw_temp:
         fixture = Fixture(Path(raw_temp))
@@ -671,7 +696,9 @@ def test_oidc_authorization_matrix() -> None:
         args = fixture.args("matrix-request")
         request, _ = fixture.expected(args)
         authorization = json.loads(request)["oidc_authorization"]
+        assert CLIENT.OIDC_POLICY_ID == "fe2o3-protected-local-merge-group-v3"
         assert authorization["policy_id"] == CLIENT.OIDC_POLICY_ID
+        assert authorization["schema_version"] == 1
         request_payload = json.loads(request)
         assert request == CLIENT.canonical_json(request_payload)
         assert request_payload["request_domain"] == CLIENT.REQUEST_DOMAIN
@@ -682,6 +709,10 @@ def test_oidc_authorization_matrix() -> None:
         assert authorization["alg"] == "RS256"
         assert "x5t" not in authorization
         assert authorization["ref"] == fixture.queue_ref
+        assert authorization["sub"] == (
+            "repo:powderluv/fe2o3:environment:protected-publisher"
+        )
+        assert stale_ref_subject(fixture) != authorization["sub"]
         assert authorization["sha"] == fixture.candidate_head
         assert authorization["job_workflow_ref"] == (
             "powderluv/fe2o3/.github/workflows/"
@@ -693,6 +724,13 @@ def test_oidc_authorization_matrix() -> None:
             f"parity-promotion.yml@{fixture.queue_ref}"
         )
         assert authorization["workflow_sha"] == fixture.candidate_head
+
+        assert CLIENT.oidc_environment_subject(
+            "powderluv/fe2o3", "protected-publisher"
+        ) == "repo:powderluv/fe2o3:environment:protected-publisher"
+        assert CLIENT.oidc_environment_subject(
+            "powderluv/fe2o3", "protected:publisher"
+        ) == "repo:powderluv/fe2o3:environment:protected%3Apublisher"
 
         x5t_args = fixture.args("documented-x5t-header")
         x5t_token = fixture.oidc_token(header_overrides={"x5t": fixture.x5t})
@@ -735,7 +773,32 @@ def test_oidc_authorization_matrix() -> None:
             ("base_ref", "refs/heads/main"),
             ("check_run_id", "not-numeric"),
             ("head_ref", "refs/heads/feature"),
+            ("sub", stale_ref_subject(fixture)),
+            ("sub", "repo:powderluv/fe2o3:pull_request"),
+            ("sub", "repo:powderluv/fe2o3:environment:unprotected"),
+            (
+                "sub",
+                "repo:powderluv@74956/fe2o3@1233498266:"
+                "environment:protected-publisher",
+            ),
+            (
+                "sub",
+                "repository_id:1233498266:repository_owner_id:74956:"
+                "environment:protected-publisher",
+            ),
+            (
+                "sub",
+                "repo:powderluv/fe2o3:repository_id:1233498266:"
+                "environment:protected-publisher",
+            ),
+            (
+                "sub",
+                "repo:powderluv/fe2o3-renamed:environment:protected-publisher",
+            ),
             ("sub", "repo:attacker/fe2o3:ref:refs/heads/main"),
+            ("sub", True),
+            ("environment", True),
+            ("ref", True),
             ("runner_environment", "self-hosted"),
             ("jti", ""),
             ("iat", True),
@@ -803,30 +866,17 @@ def test_oidc_authorization_matrix() -> None:
         assert process.returncode == 2
         assert "duplicate JSON member" in process.stderr
 
-        duplicate_claim_args = fixture.args("duplicate-environment-claim")
-        header_segment, claims_segment, signature_segment = (
-            fixture.oidc_token_value.split(".")
-        )
-        claims_raw = base64.urlsafe_b64decode(
-            claims_segment + "=" * ((4 - len(claims_segment) % 4) % 4)
-        )
-        claims = json.loads(claims_raw)
-        duplicate_claim_items = []
-        for key in sorted(claims):
-            duplicate_claim_items.append(
-                f"{json.dumps(key)}:{json.dumps(claims[key], separators=(',', ':'))}"
+        for claim in ("environment", "ref", "sub"):
+            duplicate_claim_args = fixture.args(f"duplicate-{claim}-claim")
+            duplicate_claim_token = token_with_duplicate_claim(
+                fixture.oidc_token_value, claim, "duplicate"
             )
-            if key == "environment":
-                duplicate_claim_items.append('"environment":"duplicate"')
-        duplicate_claims_segment = base64.urlsafe_b64encode(
-            ("{" + ",".join(duplicate_claim_items) + "}").encode("ascii")
-        ).rstrip(b"=").decode("ascii")
-        duplicate_claim_token = ".".join(
-            (header_segment, duplicate_claims_segment, signature_segment)
-        )
-        fixture.write_transport(duplicate_claim_args, oidc_token=duplicate_claim_token)
-        process = fixture.run(duplicate_claim_args)
-        assert process.returncode == 2 and "duplicate JSON member" in process.stderr
+            fixture.write_transport(
+                duplicate_claim_args, oidc_token=duplicate_claim_token
+            )
+            process = fixture.run(duplicate_claim_args)
+            assert process.returncode == 2
+            assert "duplicate JSON member" in process.stderr
 
         args = fixture.args("archive-substitution")
         fixture.candidate_status.write_bytes(b"source_commit\t" + b"2" * 40 + b"\n")
@@ -835,6 +885,36 @@ def test_oidc_authorization_matrix() -> None:
         process = fixture.run(args)
         assert process.returncode == 2
         assert "response does not match the request" in process.stderr
+
+
+def test_environment_subject_regression() -> None:
+    with tempfile.TemporaryDirectory(prefix="fe2o3-publisher-env-sub-") as raw_temp:
+        fixture = Fixture(Path(raw_temp))
+        args = fixture.args("environment-subject")
+        token = fixture.oidc_token(
+            claim_overrides={
+                "sub": "repo:powderluv/fe2o3:environment:protected-publisher"
+            }
+        )
+        authorization = CLIENT.oidc_authorization(
+            token, args, fixture.environment, fixture.audience
+        )
+        assert authorization["sub"] == (
+            "repo:powderluv/fe2o3:environment:protected-publisher"
+        )
+        assert authorization["ref"] == fixture.queue_ref
+
+        stale_token = fixture.oidc_token(
+            claim_overrides={"sub": stale_ref_subject(fixture)}
+        )
+        try:
+            CLIENT.oidc_authorization(
+                stale_token, args, fixture.environment, fixture.audience
+            )
+        except CLIENT.ClientError as error:
+            assert "authorization matrix: sub" in str(error)
+        else:
+            raise AssertionError("stale ref-based OIDC subject was accepted")
 
 
 def test_transport_failures_bounds_and_redaction() -> None:
@@ -1058,6 +1138,7 @@ if __name__ == "__main__":
     test_success_and_test_domain_guard()
     test_identity_config_and_replay_rejections()
     test_oidc_authorization_matrix()
+    test_environment_subject_regression()
     test_transport_failures_bounds_and_redaction()
     test_network_transport_dns_connect_tls_failures()
     print("protected publisher client adversarial tests passed")

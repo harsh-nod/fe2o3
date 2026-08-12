@@ -39,7 +39,8 @@ MAX_OIDC_TOKEN_LIFETIME = 10 * 60
 OIDC_CLOCK_SKEW = 5 * 60
 OIDC_ISSUER = "https://token.actions.githubusercontent.com"
 OIDC_ALGORITHM = "RS256"
-OIDC_POLICY_ID = "fe2o3-protected-local-merge-group-v2"
+OIDC_POLICY_ID = "fe2o3-protected-local-merge-group-v3"
+OIDC_AUTHORIZATION_SCHEMA_VERSION = 1
 OIDC_EVENT = "merge_group"
 OIDC_JOB = "gate"
 OIDC_RUNNER_ENVIRONMENT = "github-hosted"
@@ -427,6 +428,17 @@ def valid_git_ref_name(ref: str) -> bool:
     )
 
 
+def oidc_subject_component(value: str) -> str:
+    return value.replace(":", "%3A")
+
+
+def oidc_environment_subject(repository: str, environment_name: str) -> str:
+    return (
+        f"repo:{oidc_subject_component(repository)}:environment:"
+        f"{oidc_subject_component(environment_name)}"
+    )
+
+
 def valid_branch_name(branch: str) -> bool:
     return (
         bool(branch)
@@ -679,9 +691,10 @@ def oidc_authorization(
     ):
         fail("GitHub workflow SHA does not match the merge-group candidate")
     repository = identity["github_repository"]
-    default_branch = identity["fe2o3_publisher_default_branch"]
     ref = identity["github_ref"]
-    subject = f"repo:{repository}:ref:{ref.replace(':', '%3A')}"
+    subject = oidc_environment_subject(
+        repository, identity["fe2o3_publisher_github_environment"]
+    )
     expected_strings = {
         "actor_id": identity["github_actor_id"],
         "aud": audience,
@@ -716,7 +729,7 @@ def oidc_authorization(
         "job": identity["github_job"],
         "kid": header["kid"],
         "policy_id": OIDC_POLICY_ID,
-        "schema_version": 1,
+        "schema_version": OIDC_AUTHORIZATION_SCHEMA_VERSION,
     }
     if "x5t" in header:
         resolved["x5t"] = header["x5t"]

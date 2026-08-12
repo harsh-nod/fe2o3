@@ -474,17 +474,21 @@ row is valid:
 | `job_workflow_ref`, `job_workflow_sha` | `powderluv/fe2o3/.github/workflows/parity-publisher-gate.yml@MERGE_GROUP_REF`; the same exact merge-group candidate SHA |
 | `job`, `event_name` | `gate`; `merge_group` |
 | `environment` | `protected-publisher`; the called reusable workflow job also declares the same GitHub Actions environment |
-| `ref` | Exact syntactically valid `refs/heads/gh-readonly-queue/main/...` merge-group ref; malformed, ambiguous, or branch-like values outside that queue prefix fail closed before subject construction |
+| `ref` | Exact syntactically valid `refs/heads/gh-readonly-queue/main/...` merge-group ref; malformed, ambiguous, or branch-like values outside that queue prefix fail closed before request construction |
 | `base_ref`, `head_ref` | Present as exact empty strings; these claims are reserved for pull-request workflows |
-| `sub` | Exact default GitHub subject `repo:powderluv/fe2o3:ref:MERGE_GROUP_REF`, with `:` in values percent-encoded |
+| `sub` | Exact default GitHub environment-job subject `repo:powderluv/fe2o3:environment:protected-publisher`; GitHub percent-encodes `:` inside metadata values as `%3A` |
 | `runner_environment` | `github-hosted` |
 | `iat`, `nbf`, `exp` | JSON integers, never booleans; `nbf <= iat < exp`, at most ten minutes lifetime, current within five-minute clock skew |
 | `jti` | Nonempty exact token identifier, accepted once by durable service state |
 
 This matrix combines GitHub's documented same-commit local-call behavior with
 the documented meanings of `workflow_ref`, `workflow_sha`,
-`job_workflow_ref`, and `job_workflow_sha`. Before enabling issuance, an
-operator must run a non-authoritative merge-group enrollment against the
+`job_workflow_ref`, and `job_workflow_sha`. Because the `gate` job references
+the `protected-publisher` GitHub environment, GitHub's default OIDC subject is
+the environment form above. The merge-queue ref remains a separate exact
+`ref`, `workflow_ref`, and `job_workflow_ref` binding; it is not part of `sub`.
+Before enabling issuance, an operator must run a non-authoritative merge-group
+enrollment against the
 disabled service and confirm these exact values without logging the token. Any
 GitHub behavior that emits a different ref or SHA remains fail closed and
 requires a reviewed matrix update.
@@ -493,9 +497,13 @@ The request carries this resolved row as canonical
 `oidc_authorization` schema version 1. It also includes exact `sha`, run ID,
 run number, run attempt, actor ID, repository owner, `check_run_id`, workflow
 name, JOSE key ID, and the fixed policy ID
-`fe2o3-protected-local-merge-group-v2`. The client decodes these fields only to bind
-the request; when the JOSE header includes `x5t`, the request also contains its
-exact value. Client decoding does not authenticate the JWT. The two accepted
+`fe2o3-protected-local-merge-group-v3`. The enclosing request remains canonical
+JSON schema `1` with request domain `fe2o3-protected-publisher-request-v1`, and
+the authorization row remains schema version `1` because its member set and
+types did not change. The new policy ID distinguishes this environment-subject
+matrix from the old ref-subject matrix. The client decodes these fields only to
+bind the request; when the JOSE header includes `x5t`, the request also contains
+its exact value. Client decoding does not authenticate the JWT. The two accepted
 header shapes correspond to GitHub's current JOSE parameter reference and its
 documented token example; expanding either set requires a reviewed client and
 service policy change.
@@ -522,25 +530,27 @@ verified claim above byte-for-byte and type-for-type with
 `oidc_authorization`. Request values alone are never authority. Independently
 provisioned service policy supplies the
 repository and owner IDs, issuer, audience, workflow paths, default branch,
-runner type, event, and job. The service queries GitHub using `check_run_id` and
-run ID/attempt to confirm that `job=gate`, the event/ref/candidate are current,
-both workflow SHAs equal the candidate head, both workflow refs use the exact
-merge-group ref, and the transition is still pending in that one-entry merge
-group. Before signing, it independently fetches both candidate and current
-default-tip trees from GitHub and requires byte-identical blobs for every trust
-path enumerated by the reusable workflow, including both workflow files, the
-publisher client, evidence verifier, protected-change policy, repository-rule
-tools, trust policy, trusted keys, CODEOWNERS, and reviewer policy. The service
-also requires that the candidate changes parity status without mixing a trust
-change. Request-supplied digests or assertions cannot satisfy these checks. A
+runner type, event, job, environment name, and required repository OIDC subject
+settings: `use_default=true`, `use_immutable_subject=false`, and exact
+`sub_claim_prefix=repo:powderluv/fe2o3`. The service queries GitHub using
+`check_run_id` and run ID/attempt to confirm that `job=gate`, the
+event/ref/candidate are current, the job references the protected publisher
+environment, both workflow SHAs equal the candidate head, both workflow refs
+use the exact merge-group ref, and the transition is still pending in that
+one-entry merge group. Before signing, it independently fetches both candidate
+and current default-tip trees from GitHub and requires byte-identical blobs for
+every trust path enumerated by the reusable workflow, including both workflow
+files, the publisher client, evidence verifier, protected-change policy,
+repository-rule tools, trust policy, trusted keys, CODEOWNERS, and reviewer
+policy. The service also requires that the candidate changes parity status
+without mixing a trust change. Request-supplied digests or assertions cannot
+satisfy these checks. A
 subject customization, omitted claim, boolean in place of an integer, extra
-allowed event, changed workflow ref/SHA, or protected-blob difference fails
-closed until the matrix and implementation are deliberately updated.
-The checked-in matrix accepts GitHub's legacy default repository subject form.
-An operator must confirm that this repository has not opted into the newer
-immutable-ID subject form. Opt-in, rename, transfer, or any emitted immutable
-subject fails closed until both client and service receive a reviewed matrix
-update; the service must not accept both forms through a wildcard.
+allowed event, changed workflow ref/SHA, protected-blob difference, immutable
+subject opt-in, custom subject template, repository rename or transfer,
+alternate repository prefix, or any emitted immutable-ID subject fails closed
+until the matrix and implementation are deliberately updated. The service must
+not accept multiple subject forms through a wildcard.
 The service must durably reserve every request digest, `jti`, and challenge with
 create-once semantics before signing, atomically mark the pair consumed, and
 reject retries, replays, stale runs, superseded default tips, and reuse across
@@ -552,9 +562,15 @@ only its production public key.
 
 The repository includes neither that service nor production service
 configuration, private keys, one-time state, or installed repository rules.
+The `protected-publisher` GitHub environment is also not provisioned or deployed
+by this repository. It is an operational blocker, not active production
+authority. Before activation, administrators must independently create that
+environment with no-bypass protection, required reviewers, and deployment
+branch restrictions appropriate to the protected merge queue, then provision a
+service policy that matches the matrix above exactly.
 Production therefore remains fail closed until an administrator provisions
-them and verifies the active no-bypass ruleset. The client test transport is
-available only behind both `--test-domain` and an explicit test-domain
+those dependencies and verifies the active no-bypass ruleset. The client test
+transport is available only behind both `--test-domain` and an explicit test-domain
 environment guard, accepts only test-domain trust, and cannot emit a
 production-acceptable receipt.
 
