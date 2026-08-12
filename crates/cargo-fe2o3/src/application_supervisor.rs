@@ -3,7 +3,7 @@
 use std::env;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
-use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, RawFd};
+use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
@@ -128,13 +128,14 @@ fn run_supervisor_at(
     if channel_fd == slot_fd {
         return Err("application supervisor descriptors alias".to_string());
     }
+    let AdoptedSupervisorDescriptors { mut channel, slot } = adopt_supervisor_descriptors(
+        channel_fd,
+        slot_fd,
+        // SAFETY: getppid has no memory preconditions and no descriptor side effects.
+        unsafe { libc::getppid() },
+        admission_directory,
+    )?;
     let challenge = parse_challenge(&args[2])?;
-    // SAFETY: the frontend transfers these two descriptors exactly once in the hidden command.
-    let mut channel = unsafe { UnixStream::from_raw_fd(channel_fd) };
-    // SAFETY: ownership is transferred by the same authenticated inherited command channel.
-    let slot = unsafe { File::from_raw_fd(slot_fd) };
-    validate_channel(&channel, unsafe { libc::getppid() })?;
-    validate_slot(&slot, admission_directory)?;
     write_frame(&mut channel, &Frame::ready(challenge))?;
 
     let result = run_application(&args[3..]);
@@ -234,15 +235,23 @@ fn prepare_admission_directory(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(test)]
 fn validate_slot(file: &File, directory: &Path) -> Result<(), String> {
-    validate_slot_metadata(file)?;
-    let inherited = file
-        .metadata()
-        .map_err(|error| format!("inspect inherited application supervisor slot: {error}"))?;
+    validate_slot_raw(file.as_raw_fd(), directory)
+}
+
+fn validate_slot_raw(fd: RawFd, directory: &Path) -> Result<(), String> {
+    raw_descriptor_flags(fd, "application supervisor slot")?;
+    let inherited = raw_fstat(fd, "application supervisor slot")?;
+    validate_slot_stat(&inherited)?;
+    let status = raw_status_flags(fd, "application supervisor slot")?;
+    if status & libc::O_ACCMODE != libc::O_RDWR {
+        return Err("application supervisor admission slot is not read-write".to_string());
+    }
     prepare_admission_directory(directory)?;
     let canonical = (0..SUPERVISOR_CAPACITY).any(|slot| {
         fs::symlink_metadata(directory.join(format!("slot-{slot}"))).is_ok_and(|metadata| {
-            metadata.dev() == inherited.dev() && metadata.ino() == inherited.ino()
+            metadata.dev() == inherited.st_dev && metadata.ino() == inherited.st_ino
         })
     });
     if !canonical {
@@ -252,7 +261,7 @@ fn validate_slot(file: &File, directory: &Path) -> Result<(), String> {
     }
     // Re-taking an inherited flock on the same open description is a no-op. If a malformed
     // caller supplied an unlocked slot, this acquires it before any application is launched.
-    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+    if unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) } != 0 {
         return Err(format!(
             "application supervisor did not inherit its admission lock: {}",
             io::Error::last_os_error()
@@ -262,23 +271,29 @@ fn validate_slot(file: &File, directory: &Path) -> Result<(), String> {
 }
 
 fn validate_slot_metadata(file: &File) -> Result<(), String> {
-    let metadata = file
-        .metadata()
-        .map_err(|error| format!("inspect application supervisor slot: {error}"))?;
-    if !metadata.file_type().is_file()
-        || metadata.uid() != unsafe { libc::geteuid() }
-        || metadata.nlink() != 1
-        || metadata.mode() & 0o777 != 0o600
+    let stat = raw_fstat(file.as_raw_fd(), "application supervisor slot")?;
+    validate_slot_stat(&stat)
+}
+
+fn validate_slot_stat(stat: &libc::stat) -> Result<(), String> {
+    if stat.st_mode & libc::S_IFMT != libc::S_IFREG
+        || stat.st_uid != unsafe { libc::geteuid() }
+        || stat.st_nlink != 1
+        || stat.st_mode & 0o777 != 0o600
     {
         return Err("application supervisor admission slot is unsafe".to_string());
     }
     Ok(())
 }
 
+#[cfg(test)]
 fn validate_channel(channel: &UnixStream, expected_parent: libc::pid_t) -> Result<(), String> {
-    let metadata = channel
-        .fstat()
-        .map_err(|error| format!("inspect application supervisor channel: {error}"))?;
+    validate_channel_raw(channel.as_raw_fd(), expected_parent)
+}
+
+fn validate_channel_raw(fd: RawFd, expected_parent: libc::pid_t) -> Result<(), String> {
+    raw_descriptor_flags(fd, "application supervisor protocol")?;
+    let metadata = raw_fstat(fd, "application supervisor channel")?;
     if (metadata.st_mode & libc::S_IFMT) != libc::S_IFSOCK {
         return Err("application supervisor protocol descriptor is not a socket".to_string());
     }
@@ -287,7 +302,7 @@ fn validate_channel(channel: &UnixStream, expected_parent: libc::pid_t) -> Resul
     // SAFETY: kind and length are writable getsockopt outputs for this socket descriptor.
     if unsafe {
         libc::getsockopt(
-            channel.as_raw_fd(),
+            fd,
             libc::SOL_SOCKET,
             libc::SO_TYPE,
             std::ptr::from_mut(&mut kind).cast(),
@@ -304,7 +319,7 @@ fn validate_channel(channel: &UnixStream, expected_parent: libc::pid_t) -> Resul
     // SAFETY: credentials and its length are writable SO_PEERCRED outputs for this stream.
     if unsafe {
         libc::getsockopt(
-            channel.as_raw_fd(),
+            fd,
             libc::SOL_SOCKET,
             libc::SO_PEERCRED,
             credentials.as_mut_ptr().cast(),
@@ -326,22 +341,6 @@ fn validate_channel(channel: &UnixStream, expected_parent: libc::pid_t) -> Resul
         );
     }
     Ok(())
-}
-
-trait UnixStreamStat {
-    fn fstat(&self) -> io::Result<libc::stat>;
-}
-
-impl UnixStreamStat for UnixStream {
-    fn fstat(&self) -> io::Result<libc::stat> {
-        let mut stat = std::mem::MaybeUninit::<libc::stat>::zeroed();
-        // SAFETY: stat is writable and the stream owns a live descriptor.
-        if unsafe { libc::fstat(self.as_raw_fd(), stat.as_mut_ptr()) } != 0 {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: successful fstat initialized the complete record.
-        Ok(unsafe { stat.assume_init() })
-    }
 }
 
 #[derive(Debug)]
@@ -513,17 +512,176 @@ fn terminate_failed_start(child: &mut Child) {
     let _ = wait_for_exit(child, SUPERVISOR_EXIT_TIMEOUT);
 }
 
+struct AdoptedSupervisorDescriptors {
+    channel: UnixStream,
+    slot: File,
+}
+
+fn adopt_supervisor_descriptors(
+    channel_fd: RawFd,
+    slot_fd: RawFd,
+    expected_parent: libc::pid_t,
+    admission_directory: &Path,
+) -> Result<AdoptedSupervisorDescriptors, String> {
+    if channel_fd == slot_fd {
+        return Err("application supervisor descriptors alias".to_string());
+    }
+
+    // The hidden CLI is attacker-controlled. Prove both raw numbers safe with libc before any
+    // Rust borrowed/owned descriptor API can acquire them.
+    validate_channel_raw(channel_fd, expected_parent)?;
+    validate_slot_raw(slot_fd, admission_directory)?;
+    set_and_verify_cloexec_raw(channel_fd, "application supervisor protocol")?;
+    set_and_verify_cloexec_raw(slot_fd, "application supervisor slot")?;
+
+    let channel_duplicate = duplicate_cloexec_raw(channel_fd, "application supervisor protocol")?;
+    let slot_duplicate = match duplicate_cloexec_raw(slot_fd, "application supervisor slot") {
+        Ok(descriptor) => descriptor,
+        Err(error) => {
+            close_after_failed_adoption(channel_duplicate);
+            return Err(error);
+        }
+    };
+    if let Err(error) = verify_cloexec_raw(channel_duplicate, "duplicated supervisor protocol")
+        .and_then(|()| verify_cloexec_raw(slot_duplicate, "duplicated supervisor slot"))
+    {
+        close_after_failed_adoption(channel_duplicate);
+        close_after_failed_adoption(slot_duplicate);
+        return Err(error);
+    }
+
+    // Duplicates now retain the channel and the slot's open-file-description lock. Close both
+    // attacker-selected numbers before wrapping only the validated fresh descriptors.
+    if let Err(error) = close_adopted_original(channel_fd, "application supervisor protocol") {
+        close_after_failed_adoption(channel_duplicate);
+        close_after_failed_adoption(slot_duplicate);
+        return Err(error);
+    }
+    if let Err(error) = close_adopted_original(slot_fd, "application supervisor slot") {
+        close_after_failed_adoption(channel_duplicate);
+        close_after_failed_adoption(slot_duplicate);
+        return Err(error);
+    }
+
+    // SAFETY: F_DUPFD_CLOEXEC returned two distinct newly owned descriptors after complete raw
+    // validation, and both attacker-selected originals have been explicitly closed.
+    let channel = unsafe { UnixStream::from_raw_fd(channel_duplicate) };
+    // SAFETY: the second validated duplicate owns the inherited regular-file open description.
+    let slot = unsafe { File::from_raw_fd(slot_duplicate) };
+    Ok(AdoptedSupervisorDescriptors { channel, slot })
+}
+
 fn set_cloexec(fd: RawFd) -> Result<(), String> {
-    // SAFETY: the caller borrows a live descriptor for this fcntl operation.
-    let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
-    rustix::io::fcntl_setfd(borrowed, rustix::io::FdFlags::CLOEXEC)
-        .map_err(|error| format!("protect application supervisor descriptor: {error}"))
+    set_and_verify_cloexec_raw(fd, "application supervisor descriptor")
 }
 
 fn clear_cloexec_raw(fd: RawFd) -> io::Result<()> {
-    // SAFETY: the pre-exec child inherited this live descriptor from its parent.
-    let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
-    rustix::io::fcntl_setfd(borrowed, rustix::io::FdFlags::empty()).map_err(io::Error::from)
+    let flags = raw_fcntl_get(fd, libc::F_GETFD)?;
+    raw_fcntl_set(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC)?;
+    let verified = raw_fcntl_get(fd, libc::F_GETFD)?;
+    if verified & libc::FD_CLOEXEC != 0 {
+        return Err(io::Error::from_raw_os_error(libc::EIO));
+    }
+    Ok(())
+}
+
+fn raw_descriptor_flags(fd: RawFd, kind: &str) -> Result<i32, String> {
+    raw_fcntl_get(fd, libc::F_GETFD)
+        .map_err(|error| format!("{kind} descriptor is not open: {error}"))
+}
+
+fn raw_status_flags(fd: RawFd, kind: &str) -> Result<i32, String> {
+    raw_fcntl_get(fd, libc::F_GETFL)
+        .map_err(|error| format!("inspect {kind} status flags: {error}"))
+}
+
+fn raw_fstat(fd: RawFd, kind: &str) -> Result<libc::stat, String> {
+    let mut stat = std::mem::MaybeUninit::<libc::stat>::zeroed();
+    loop {
+        // SAFETY: stat is writable and fstat does not acquire ownership of the raw descriptor.
+        if unsafe { libc::fstat(fd, stat.as_mut_ptr()) } == 0 {
+            // SAFETY: successful fstat initialized the complete record.
+            return Ok(unsafe { stat.assume_init() });
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::Interrupted {
+            return Err(format!("inspect {kind}: {error}"));
+        }
+    }
+}
+
+fn set_and_verify_cloexec_raw(fd: RawFd, kind: &str) -> Result<(), String> {
+    let flags = raw_descriptor_flags(fd, kind)?;
+    raw_fcntl_set(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC)
+        .map_err(|error| format!("protect {kind} descriptor: {error}"))?;
+    verify_cloexec_raw(fd, kind)
+}
+
+fn verify_cloexec_raw(fd: RawFd, kind: &str) -> Result<(), String> {
+    let flags = raw_descriptor_flags(fd, kind)?;
+    if flags & libc::FD_CLOEXEC == 0 {
+        return Err(format!("{kind} descriptor did not retain close-on-exec"));
+    }
+    Ok(())
+}
+
+fn duplicate_cloexec_raw(fd: RawFd, kind: &str) -> Result<RawFd, String> {
+    loop {
+        // SAFETY: fcntl duplicates the validated raw descriptor and returns a new owned number.
+        let duplicate = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 3) };
+        if duplicate >= 0 {
+            return Ok(duplicate);
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::Interrupted {
+            return Err(format!("duplicate {kind} descriptor: {error}"));
+        }
+    }
+}
+
+fn close_adopted_original(fd: RawFd, kind: &str) -> Result<(), String> {
+    // SAFETY: adoption has already duplicated this validated descriptor; this consumes only the
+    // original inherited number. Linux closes it even when reporting EINTR, so it is never retried.
+    if unsafe { libc::close(fd) } == 0 {
+        Ok(())
+    } else {
+        Err(format!(
+            "close original {kind} descriptor: {}",
+            io::Error::last_os_error()
+        ))
+    }
+}
+
+fn close_after_failed_adoption(fd: RawFd) {
+    // SAFETY: the descriptor was freshly returned by F_DUPFD_CLOEXEC and is not wrapped elsewhere.
+    let _ = unsafe { libc::close(fd) };
+}
+
+fn raw_fcntl_get(fd: RawFd, operation: libc::c_int) -> io::Result<i32> {
+    loop {
+        // SAFETY: F_GETFD/F_GETFL inspect only the supplied raw descriptor.
+        let result = unsafe { libc::fcntl(fd, operation) };
+        if result >= 0 {
+            return Ok(result);
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    }
+}
+
+fn raw_fcntl_set(fd: RawFd, operation: libc::c_int, value: i32) -> io::Result<()> {
+    loop {
+        // SAFETY: F_SETFD changes descriptor flags for only this raw descriptor.
+        if unsafe { libc::fcntl(fd, operation, value) } == 0 {
+            return Ok(());
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    }
 }
 
 fn parse_fd(value: &std::ffi::OsStr, kind: &str) -> Result<RawFd, String> {
