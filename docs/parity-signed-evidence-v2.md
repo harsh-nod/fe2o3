@@ -41,6 +41,12 @@ provisions runner-held private keys. PEM files under scripts/tests/fixtures
 are explicitly test-only. Their trust domain is test, which production gating
 rejects.
 
+An opt-in Rust reference publisher and conformance harness are specified in
+`docs/protected-publisher-service-v1.md`. They implement the server side of the
+existing receipt protocol but remain loopback-only, undeployed, and
+nonauthoritative. Their presence does not satisfy repository protection, key
+custody, enrollment, recovery, hardware evidence, or parity requirements.
+
 ## Operator Provisioning
 
 1. Generate separate Ed25519 attestor, publisher, and reviewer keys outside the
