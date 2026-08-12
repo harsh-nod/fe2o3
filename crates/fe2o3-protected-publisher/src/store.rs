@@ -99,6 +99,7 @@ struct EntryIndex {
 }
 
 struct IndexedReceipt {
+    record: LedgerRecord,
     request_body: Vec<u8>,
     response_body: Vec<u8>,
 }
@@ -383,14 +384,13 @@ impl DurableStore {
         check_deadline(deadline)?;
 
         if let Some(existing) = self.by_request_key.get(input.request_key_sha256).cloned() {
-            if existing.request_identity != input.request_identity
-                || existing.request_sha256 != input.request_sha256
-                || existing.stable_authorization_sha256 != input.stable_authorization_sha256
-            {
-                return Err(PublisherError::ReplayConflict);
-            }
             let indexed = self.load_indexed(&existing)?;
-            if indexed.request_body != input.request_body {
+            if indexed.record.request_key_sha256 != input.request_key_sha256
+                || indexed.record.request_identity != input.request_identity
+                || indexed.record.request_sha256 != input.request_sha256
+                || indexed.record.stable_authorization_sha256 != input.stable_authorization_sha256
+                || indexed.request_body != input.request_body
+            {
                 return Err(PublisherError::ReplayConflict);
             }
             check_deadline(deadline)?;
@@ -609,6 +609,7 @@ impl DurableStore {
         )?;
         self.verify_identity()?;
         Ok(IndexedReceipt {
+            record: decoded.record,
             request_body,
             response_body,
         })
