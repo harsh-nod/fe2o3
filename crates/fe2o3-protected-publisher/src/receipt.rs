@@ -1,5 +1,3 @@
-use std::io::Read;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
 
 use base64::Engine;
@@ -12,6 +10,7 @@ use crate::PublisherError;
 use crate::bounds::{MAX_PRIVATE_KEY_BYTES, MAX_RECEIPT_BYTES, RECEIPT_LIFETIME_SECS};
 use crate::config::valid_id;
 use crate::oidc::PublisherRequest;
+use crate::secure_fs::read_owner_only;
 
 pub trait ReceiptSigner: Send + Sync {
     fn key_id(&self) -> &str;
@@ -28,33 +27,8 @@ impl FileReceiptSigner {
         if !valid_id(&key_id) {
             return Err(PublisherError::Config);
         }
-        let before = std::fs::symlink_metadata(path).map_err(|_| PublisherError::Config)?;
-        if !before.file_type().is_file()
-            || before.len() > MAX_PRIVATE_KEY_BYTES as u64
-            || before.mode() & 0o077 != 0
-            || before.nlink() != 1
-            || before.uid() != unsafe { libc::geteuid() }
-        {
-            return Err(PublisherError::Config);
-        }
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
-            .open(path)
-            .map_err(|_| PublisherError::Config)?;
-        let opened = file.metadata().map_err(|_| PublisherError::Config)?;
-        if (opened.dev(), opened.ino(), opened.size())
-            != (before.dev(), before.ino(), before.size())
-        {
-            return Err(PublisherError::Config);
-        }
-        let mut pem = String::new();
-        file.take(MAX_PRIVATE_KEY_BYTES as u64 + 1)
-            .read_to_string(&mut pem)
-            .map_err(|_| PublisherError::Config)?;
-        if pem.len() > MAX_PRIVATE_KEY_BYTES {
-            return Err(PublisherError::Config);
-        }
+        let bytes = read_owner_only(path, MAX_PRIVATE_KEY_BYTES)?;
+        let mut pem = String::from_utf8(bytes).map_err(|_| PublisherError::Config)?;
         let key = SigningKey::from_pkcs8_pem(&pem);
         pem.zeroize();
         let key = key.map_err(|_| PublisherError::Config)?;

@@ -4,6 +4,7 @@ mod config;
 mod jwks;
 mod oidc;
 mod receipt;
+mod secure_fs;
 mod service;
 mod store;
 #[cfg(test)]

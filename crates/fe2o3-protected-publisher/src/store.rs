@@ -1,5 +1,6 @@
-use std::fs::Permissions;
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::fs::File;
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::time::Duration;
 
@@ -12,10 +13,14 @@ use crate::bounds::{
 };
 use crate::oidc::PublisherRequest;
 use crate::receipt::{ReceiptArtifact, ReceiptSigner, build_artifact};
+use crate::secure_fs::{FileIdentity, SecureLocation};
 
 pub struct DurableStore {
     connection: Connection,
     policy: StorePolicy,
+    location: SecureLocation,
+    database_file: File,
+    database_identity: FileIdentity,
 }
 
 #[derive(Clone, Copy)]
@@ -87,33 +92,28 @@ impl DurableStore {
         policy: StorePolicy,
     ) -> Result<Self, PublisherError> {
         policy.validate()?;
-        let parent = path.parent().ok_or(PublisherError::Config)?;
-        let canonical_parent = parent.canonicalize().map_err(|_| PublisherError::Config)?;
-        let parent_metadata =
-            std::fs::symlink_metadata(parent).map_err(|_| PublisherError::Config)?;
-        if canonical_parent != parent
-            || !parent_metadata.file_type().is_dir()
-            || parent_metadata.uid() != unsafe { libc::geteuid() }
-            || parent_metadata.mode() & 0o077 != 0
-        {
-            return Err(PublisherError::Config);
+        let location = SecureLocation::open(path)?;
+        let (database_file, database_identity) = location.open_or_create_database()?;
+        if unsafe { libc::flock(database_file.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) } != 0 {
+            return Err(PublisherError::Store);
         }
-        if let Ok(metadata) = std::fs::symlink_metadata(path)
-            && (!metadata.file_type().is_file()
-                || metadata.uid() != unsafe { libc::geteuid() }
-                || metadata.nlink() != 1)
-        {
-            return Err(PublisherError::Config);
-        }
+        let sqlite_path = location.proc_path()?;
         let connection = Connection::open_with_flags(
-            path,
-            OpenFlags::SQLITE_OPEN_READ_WRITE
-                | OpenFlags::SQLITE_OPEN_CREATE
-                | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            &sqlite_path,
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )
         .map_err(|_| PublisherError::Store)?;
-        std::fs::set_permissions(path, Permissions::from_mode(0o600))
-            .map_err(|_| PublisherError::Store)?;
+        location.verify_database_entry(database_identity)?;
+        let sqlite_metadata = std::fs::metadata(&sqlite_path).map_err(|_| PublisherError::Store)?;
+        if sqlite_metadata.dev() != database_identity.dev
+            || sqlite_metadata.ino() != database_identity.ino
+            || sqlite_metadata.mode() != database_identity.mode
+            || sqlite_metadata.uid() != database_identity.uid
+            || sqlite_metadata.gid() != database_identity.gid
+            || sqlite_metadata.nlink() != database_identity.nlink
+        {
+            return Err(PublisherError::Store);
+        }
         connection
             .execute_batch(
                 "PRAGMA journal_mode=WAL;
@@ -142,12 +142,37 @@ impl DurableStore {
         if applied_pages > max_pages {
             return Err(PublisherError::Store);
         }
-        let mut store = Self { connection, policy };
+        let mut store = Self {
+            connection,
+            policy,
+            location,
+            database_file,
+            database_identity,
+        };
         store.initialize()?;
-        std::fs::File::open(parent)
-            .and_then(|directory| directory.sync_all())
-            .map_err(|_| PublisherError::Store)?;
+        store.verify_identity()?;
+        store.location.sync()?;
         Ok(store)
+    }
+
+    fn verify_identity(&self) -> Result<(), PublisherError> {
+        self.location
+            .verify_database_entry(self.database_identity)?;
+        let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+        if unsafe { libc::fstat(self.database_file.as_raw_fd(), stat.as_mut_ptr()) } != 0 {
+            return Err(PublisherError::Store);
+        }
+        let stat = unsafe { stat.assume_init() };
+        if stat.st_dev != self.database_identity.dev
+            || stat.st_ino != self.database_identity.ino
+            || stat.st_mode != self.database_identity.mode
+            || stat.st_uid != self.database_identity.uid
+            || stat.st_gid != self.database_identity.gid
+            || stat.st_nlink != self.database_identity.nlink
+        {
+            return Err(PublisherError::Store);
+        }
+        Ok(())
     }
 
     fn initialize(&mut self) -> Result<(), PublisherError> {
@@ -220,6 +245,7 @@ impl DurableStore {
     }
 
     pub(crate) fn issue(&mut self, input: IssueInput<'_>) -> Result<Vec<u8>, PublisherError> {
+        self.verify_identity()?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -268,6 +294,7 @@ impl DurableStore {
                 return Err(PublisherError::ReplayConflict);
             }
             transaction.commit().map_err(|_| PublisherError::Store)?;
+            self.verify_identity()?;
             return Ok(response);
         }
 
@@ -329,6 +356,7 @@ impl DurableStore {
                 }
             })?;
         transaction.commit().map_err(|_| PublisherError::Store)?;
+        self.verify_identity()?;
         self.connection
             .execute_batch("PRAGMA wal_checkpoint(PASSIVE);")
             .map_err(|_| PublisherError::Store)?;
@@ -363,6 +391,7 @@ impl DurableStore {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::PermissionsExt;
     use std::process::Command;
     use std::sync::{Arc, Barrier};
     use std::thread;
@@ -690,6 +719,7 @@ mod tests {
             )
             .unwrap();
         drop(connection);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
 
         let store = DurableStore::open_with_policy(&path, StorePolicy::test_default()).unwrap();
         let version: i64 = store

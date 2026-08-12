@@ -1,7 +1,5 @@
 use std::collections::BTreeSet;
-use std::io::Read;
 use std::net::SocketAddr;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -14,6 +12,7 @@ use crate::bounds::{
     MAX_STORE_RECEIPTS, MIN_DATABASE_BYTES, RECEIPT_LIFETIME_SECS,
 };
 use crate::canonical::{canonical_bytes, parse_canonical};
+use crate::secure_fs::read_owner_only;
 
 pub const GITHUB_ISSUER: &str = "https://token.actions.githubusercontent.com";
 
@@ -49,27 +48,7 @@ pub struct ServiceConfig {
 
 impl ServiceConfig {
     pub fn load(path: &Path) -> Result<Self, PublisherError> {
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
-            .open(path)
-            .map_err(|_| PublisherError::Config)?;
-        let metadata = file.metadata().map_err(|_| PublisherError::Config)?;
-        if !metadata.file_type().is_file()
-            || metadata.len() > MAX_CONFIG_BYTES as u64
-            || metadata.mode() & 0o077 != 0
-            || metadata.nlink() != 1
-            || metadata.uid() != unsafe { libc::geteuid() }
-        {
-            return Err(PublisherError::Config);
-        }
-        let mut raw = Vec::new();
-        file.take(MAX_CONFIG_BYTES as u64 + 1)
-            .read_to_end(&mut raw)
-            .map_err(|_| PublisherError::Config)?;
-        if raw.len() > MAX_CONFIG_BYTES {
-            return Err(PublisherError::Config);
-        }
+        let raw = read_owner_only(path, MAX_CONFIG_BYTES)?;
         let value = parse_canonical(&raw, MAX_CONFIG_BYTES).map_err(|_| PublisherError::Config)?;
         let config: Self = serde_json::from_value(value).map_err(|_| PublisherError::Config)?;
         config.validate()?;
