@@ -48,36 +48,53 @@ pub struct Authorization {
     pub issued_at: i64,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct StableAuthorizationProjection<'a> {
-    actor_id: &'a str,
-    aud: &'a str,
-    base_ref: &'a str,
-    event_name: &'a str,
-    environment: &'a str,
-    head_ref: &'a str,
-    iss: &'a str,
-    job: &'a str,
-    job_workflow_ref: &'a str,
-    job_workflow_sha: &'a str,
-    policy_id: &'static str,
+pub(crate) struct StableAuthorizationProjection {
+    actor_id: String,
+    aud: String,
+    base_ref: String,
+    event_name: String,
+    environment: String,
+    head_ref: String,
+    iss: String,
+    job: String,
+    job_workflow_ref: String,
+    job_workflow_sha: String,
+    policy_id: String,
     #[serde(rename = "ref")]
-    reference: &'a str,
-    repository: &'a str,
-    repository_id: &'a str,
-    repository_owner: &'a str,
-    repository_owner_id: &'a str,
-    run_attempt: &'a str,
-    run_id: &'a str,
-    run_number: &'a str,
-    runner_environment: &'a str,
+    reference: String,
+    repository: String,
+    repository_id: String,
+    repository_owner: String,
+    repository_owner_id: String,
+    run_attempt: String,
+    run_id: String,
+    run_number: String,
+    runner_environment: String,
     schema_version: u32,
-    sha: &'a str,
-    sub: &'a str,
-    workflow: &'a str,
-    workflow_ref: &'a str,
-    workflow_sha: &'a str,
+    sha: String,
+    sub: String,
+    workflow: String,
+    workflow_ref: String,
+    workflow_sha: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EphemeralAuthorizationProjection {
+    check_run_id: String,
+    exp: i64,
+    iat: i64,
+    jti: String,
+    nbf: i64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EnrollmentProjection {
+    pub(crate) ephemeral: EphemeralAuthorizationProjection,
+    pub(crate) stable: StableAuthorizationProjection,
 }
 
 #[derive(Debug, Deserialize)]
@@ -562,35 +579,39 @@ fn validate_claims(
 }
 
 fn stable_authorization_value(claims: &GithubClaims, job: &str) -> Result<Value, PublisherError> {
-    serde_json::to_value(StableAuthorizationProjection {
-        actor_id: &claims.actor_id,
-        aud: &claims.aud,
-        base_ref: &claims.base_ref,
-        event_name: &claims.event_name,
-        environment: &claims.environment,
-        head_ref: &claims.head_ref,
-        iss: &claims.iss,
-        job,
-        job_workflow_ref: &claims.job_workflow_ref,
-        job_workflow_sha: &claims.job_workflow_sha,
-        policy_id: POLICY_ID,
-        reference: &claims.reference,
-        repository: &claims.repository,
-        repository_id: &claims.repository_id,
-        repository_owner: &claims.repository_owner,
-        repository_owner_id: &claims.repository_owner_id,
-        run_attempt: &claims.run_attempt,
-        run_id: &claims.run_id,
-        run_number: &claims.run_number,
-        runner_environment: &claims.runner_environment,
+    serde_json::to_value(stable_authorization(claims, job))
+        .map_err(|_| PublisherError::Authentication)
+}
+
+fn stable_authorization(claims: &GithubClaims, job: &str) -> StableAuthorizationProjection {
+    StableAuthorizationProjection {
+        actor_id: claims.actor_id.clone(),
+        aud: claims.aud.clone(),
+        base_ref: claims.base_ref.clone(),
+        event_name: claims.event_name.clone(),
+        environment: claims.environment.clone(),
+        head_ref: claims.head_ref.clone(),
+        iss: claims.iss.clone(),
+        job: job.into(),
+        job_workflow_ref: claims.job_workflow_ref.clone(),
+        job_workflow_sha: claims.job_workflow_sha.clone(),
+        policy_id: POLICY_ID.into(),
+        reference: claims.reference.clone(),
+        repository: claims.repository.clone(),
+        repository_id: claims.repository_id.clone(),
+        repository_owner: claims.repository_owner.clone(),
+        repository_owner_id: claims.repository_owner_id.clone(),
+        run_attempt: claims.run_attempt.clone(),
+        run_id: claims.run_id.clone(),
+        run_number: claims.run_number.clone(),
+        runner_environment: claims.runner_environment.clone(),
         schema_version: 1,
-        sha: &claims.sha,
-        sub: &claims.sub,
-        workflow: &claims.workflow,
-        workflow_ref: &claims.workflow_ref,
-        workflow_sha: &claims.workflow_sha,
-    })
-    .map_err(|_| PublisherError::Authentication)
+        sha: claims.sha.clone(),
+        sub: claims.sub.clone(),
+        workflow: claims.workflow.clone(),
+        workflow_ref: claims.workflow_ref.clone(),
+        workflow_sha: claims.workflow_sha.clone(),
+    }
 }
 
 fn sha256(bytes: &[u8]) -> String {
@@ -647,50 +668,101 @@ pub(crate) async fn validate_enrollment_token(
     provider: Arc<dyn JwksProvider>,
     token: &str,
     deadline: Instant,
-) -> Result<BTreeMap<String, String>, PublisherError> {
+) -> Result<EnrollmentProjection, PublisherError> {
     let (_header, claims) = verify_token(provider, token, deadline).await?;
     let projected: GithubClaims =
         serde_json::from_value(claims).map_err(|_| PublisherError::Authentication)?;
     projected.validate_shape()?;
-    validate_times(
-        projected.iat,
-        projected.nbf,
-        projected.exp,
-        config.minimum_token_remaining_seconds(),
-        unix_now()?,
-    )?;
-    let values = BTreeMap::from([
-        ("actor_id".into(), projected.actor_id),
-        ("aud".into(), projected.aud),
-        ("base_ref".into(), projected.base_ref),
-        ("check_run_id".into(), projected.check_run_id),
-        ("event_name".into(), projected.event_name),
-        ("environment".into(), projected.environment),
-        ("exp".into(), projected.exp.to_string()),
-        ("head_ref".into(), projected.head_ref),
-        ("iat".into(), projected.iat.to_string()),
-        ("iss".into(), projected.iss),
-        ("job_workflow_ref".into(), projected.job_workflow_ref),
-        ("job_workflow_sha".into(), projected.job_workflow_sha),
-        ("jti".into(), projected.jti),
-        ("nbf".into(), projected.nbf.to_string()),
-        ("ref".into(), projected.reference),
-        ("repository".into(), projected.repository),
-        ("repository_id".into(), projected.repository_id),
-        ("repository_owner".into(), projected.repository_owner),
-        ("repository_owner_id".into(), projected.repository_owner_id),
-        ("run_attempt".into(), projected.run_attempt),
-        ("run_id".into(), projected.run_id),
-        ("run_number".into(), projected.run_number),
-        ("runner_environment".into(), projected.runner_environment),
-        ("sha".into(), projected.sha),
-        ("sub".into(), projected.sub),
-        ("workflow".into(), projected.workflow),
-        ("workflow_ref".into(), projected.workflow_ref),
-        ("workflow_sha".into(), projected.workflow_sha),
+    let projection = EnrollmentProjection {
+        stable: stable_authorization(&projected, "gate"),
+        ephemeral: EphemeralAuthorizationProjection {
+            check_run_id: projected.check_run_id,
+            exp: projected.exp,
+            iat: projected.iat,
+            jti: projected.jti,
+            nbf: projected.nbf,
+        },
+    };
+    validate_enrollment_projection(config, &projection, unix_now()?)?;
+    Ok(projection)
+}
+
+pub(crate) fn validate_enrollment_projection(
+    config: &ServiceConfig,
+    projection: &EnrollmentProjection,
+    observed_at: i64,
+) -> Result<(), PublisherError> {
+    let stable_value =
+        serde_json::to_value(&projection.stable).map_err(|_| PublisherError::Authentication)?;
+    let mut claims = stable_value
+        .as_object()
+        .cloned()
+        .ok_or(PublisherError::Authentication)?;
+    for local in ["job", "policy_id", "schema_version"] {
+        claims.remove(local).ok_or(PublisherError::Authentication)?;
+    }
+    claims.insert(
+        "check_run_id".into(),
+        Value::String(projection.ephemeral.check_run_id.clone()),
+    );
+    claims.insert("exp".into(), Value::from(projection.ephemeral.exp));
+    claims.insert("iat".into(), Value::from(projection.ephemeral.iat));
+    claims.insert(
+        "jti".into(),
+        Value::String(projection.ephemeral.jti.clone()),
+    );
+    claims.insert("nbf".into(), Value::from(projection.ephemeral.nbf));
+
+    let stable = &projection.stable;
+    let workflow = BTreeMap::from([
+        (
+            "fe2o3_publisher_default_branch".into(),
+            config.default_branch.clone(),
+        ),
+        (
+            "fe2o3_publisher_github_environment".into(),
+            stable.environment.clone(),
+        ),
+        (
+            "fe2o3_publisher_repository_owner_id".into(),
+            stable.repository_owner_id.clone(),
+        ),
+        ("github_actor_id".into(), stable.actor_id.clone()),
+        ("github_event_name".into(), stable.event_name.clone()),
+        ("github_job".into(), stable.job.clone()),
+        ("github_ref".into(), stable.reference.clone()),
+        ("github_repository".into(), stable.repository.clone()),
+        ("github_repository_id".into(), stable.repository_id.clone()),
+        ("github_run_attempt".into(), stable.run_attempt.clone()),
+        ("github_run_id".into(), stable.run_id.clone()),
+        ("github_run_number".into(), stable.run_number.clone()),
+        ("github_sha".into(), stable.sha.clone()),
+        ("github_workflow".into(), stable.workflow.clone()),
+        ("github_workflow_ref".into(), stable.workflow_ref.clone()),
+        ("github_workflow_sha".into(), stable.workflow_sha.clone()),
     ]);
-    crate::enrollment::validate_claim_profile(config, &values)?;
-    Ok(values)
+    let request = PublisherRequest {
+        archive_sha256: "a".repeat(64),
+        baseline_status_sha256: "b".repeat(64),
+        candidate_head: stable.sha.clone(),
+        candidate_status_sha256: "c".repeat(64),
+        default_tip: "1".repeat(40),
+        hardware_lane: "enrollment-profile".into(),
+        logical_destination: "docs/parity-evidence/archive".into(),
+        manifest_baseline_commit: "2".repeat(40),
+        manifest_path: "enrollment-profile.tsv".into(),
+        manifest_sha256: "d".repeat(64),
+        oidc_authorization: stable_value,
+        request_domain: "fe2o3-protected-publisher-request-v1".into(),
+        schema_version: 1,
+        source_commit: "3".repeat(40),
+        source_tree: "4".repeat(40),
+        target: "enrollment-profile".into(),
+        workflow,
+    };
+    validate_request_shape(&request)?;
+    validate_claims(config, &request, &Value::Object(claims), observed_at)?;
+    Ok(())
 }
 
 fn validate_times(

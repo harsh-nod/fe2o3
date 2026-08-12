@@ -18,11 +18,16 @@ async fn run() -> Result<(), ()> {
     if arguments.len() == 7
         && arguments[0] == "--enroll"
         && arguments[1] == "--config"
-        && arguments[3] == "--token-file"
+        && arguments[3] == "--token-fd"
         && arguments[5] == "--artifact"
     {
         let config = ServiceConfig::load(Path::new(&arguments[2])).map_err(|_| ())?;
-        let digest = enroll_token(&config, Path::new(&arguments[4]), Path::new(&arguments[6]))
+        let token_fd = arguments[4]
+            .to_str()
+            .and_then(|value| value.parse::<libc::c_int>().ok())
+            .filter(|fd| *fd >= 0)
+            .ok_or(())?;
+        let digest = enroll_token(&config, token_fd, Path::new(&arguments[6]))
             .await
             .map_err(|_| ())?;
         println!("enrollment_claim_profile_sha256={digest}");
