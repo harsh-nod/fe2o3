@@ -46,8 +46,9 @@ pub(crate) fn run_frontend(args: &[std::ffi::OsString]) -> Result<ExitStatus, St
     // fcntl calls. Both owning values remain live through spawn.
     unsafe {
         command.pre_exec(move || {
-            clear_cloexec_raw(channel_fd)?;
-            clear_cloexec_raw(slot_fd)?;
+            crate::application_exec::protect_all_nonstdio_descriptors()?;
+            crate::application_exec::expose_descriptor(channel_fd)?;
+            crate::application_exec::expose_descriptor(slot_fd)?;
             Ok(())
         });
     }
@@ -575,16 +576,6 @@ fn set_cloexec(fd: RawFd) -> Result<(), String> {
     set_and_verify_cloexec_raw(fd, "application supervisor descriptor")
 }
 
-fn clear_cloexec_raw(fd: RawFd) -> io::Result<()> {
-    let flags = raw_fcntl_get(fd, libc::F_GETFD)?;
-    raw_fcntl_set(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC)?;
-    let verified = raw_fcntl_get(fd, libc::F_GETFD)?;
-    if verified & libc::FD_CLOEXEC != 0 {
-        return Err(io::Error::from_raw_os_error(libc::EIO));
-    }
-    Ok(())
-}
-
 fn raw_descriptor_flags(fd: RawFd, kind: &str) -> Result<i32, String> {
     raw_fcntl_get(fd, libc::F_GETFD)
         .map_err(|error| format!("{kind} descriptor is not open: {error}"))
@@ -894,8 +885,9 @@ mod tests {
         // SAFETY: this test callback changes only the two inherited descriptor flags.
         unsafe {
             command.pre_exec(move || {
-                clear_cloexec_raw(channel_fd)?;
-                clear_cloexec_raw(slot_fd)?;
+                crate::application_exec::protect_all_nonstdio_descriptors()?;
+                crate::application_exec::expose_descriptor(channel_fd)?;
+                crate::application_exec::expose_descriptor(slot_fd)?;
                 Ok(())
             });
         }

@@ -752,15 +752,7 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
         unsafe {
             command.pre_exec(move || {
                 establish_fresh_application_session()?;
-                if libc::syscall(
-                    libc::SYS_close_range,
-                    3_u32,
-                    u32::MAX,
-                    libc::CLOSE_RANGE_CLOEXEC,
-                ) != 0
-                {
-                    return Err(io::Error::last_os_error());
-                }
+                crate::application_exec::protect_all_nonstdio_descriptors()?;
                 let descriptor = BorrowedFd::borrow_raw(envelope_fd);
                 let flags = rustix::io::fcntl_getfd(descriptor).map_err(io::Error::from)?;
                 let status = rustix::fs::fcntl_getfl(descriptor).map_err(io::Error::from)?;
@@ -803,12 +795,10 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
                     {
                         return Err(io::Error::from_raw_os_error(libc::ESTALE));
                     }
-                    rustix::io::fcntl_setfd(test_ready, rustix::io::FdFlags::empty())
-                        .map_err(io::Error::from)?;
+                    crate::application_exec::expose_descriptor(test_ready_fd)?;
                 }
-                for inherited in [descriptor, directory, ack] {
-                    rustix::io::fcntl_setfd(inherited, rustix::io::FdFlags::empty())
-                        .map_err(io::Error::from)?;
+                for inherited in [envelope_fd, artifact_directory_fd, ack_fd] {
+                    crate::application_exec::expose_descriptor(inherited)?;
                 }
                 install_application_profile(&seccomp_filter, supervisor_socket)?;
                 Ok(())

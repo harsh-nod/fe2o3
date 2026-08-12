@@ -1,3 +1,4 @@
+mod application_exec;
 mod application_handoff;
 mod application_sandbox;
 mod application_supervisor;
@@ -924,6 +925,7 @@ fn run_application_boundary_result(args: &[OsString]) -> Result<std::process::Ex
         command
     };
     scrub_application_environment(&mut child);
+    application_exec::configure_descriptor_free_application(&mut child);
     child
         .status()
         .map_err(|error| format!("failed to launch Cargo runner/application: {error}"))
