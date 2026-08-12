@@ -11,7 +11,7 @@ publish = false
 axum = "=0.8.4"
 base64 = "=0.22.1"
 ed25519-dalek = { version = "=2.2.0", features = ["pem", "pkcs8"] }
-jsonwebtoken = { version = "=9.3.1", default-features = false, features = ["use_pem"] }
+jsonwebtoken = { version = "=10.3.0", default-features = false, features = ["rust_crypto", "use_pem"] }
 libc.workspace = true
 reqwest = { version = "=0.12.23", default-features = false, features = ["rustls-tls"] }
 rusqlite = { version = "=0.37.0", features = ["bundled"] }

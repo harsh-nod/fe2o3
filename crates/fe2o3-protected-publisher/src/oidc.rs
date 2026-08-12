@@ -4,7 +4,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use jsonwebtoken::{Algorithm, DecodingKey, Validation};
-use serde::{Deserialize, Serialize};
+use serde::de::Error as _;
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 use tokio::time::Instant;
 
@@ -67,6 +68,112 @@ struct Jwk {
     x5c: Vec<String>,
     #[serde(default)]
     x5t: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubClaims {
+    actor_id: String,
+    aud: String,
+    base_ref: String,
+    check_run_id: String,
+    event_name: String,
+    environment: String,
+    exp: i64,
+    head_ref: String,
+    iat: i64,
+    iss: String,
+    job_workflow_ref: String,
+    job_workflow_sha: String,
+    jti: String,
+    nbf: i64,
+    #[serde(rename = "ref")]
+    reference: String,
+    repository: String,
+    repository_id: String,
+    repository_owner: String,
+    repository_owner_id: String,
+    run_attempt: String,
+    run_id: String,
+    run_number: String,
+    runner_environment: String,
+    sha: String,
+    sub: String,
+    workflow: String,
+    workflow_ref: String,
+    workflow_sha: String,
+    #[serde(default, deserialize_with = "deserialize_optional_claim")]
+    actor: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_claim")]
+    ref_type: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_claim")]
+    repository_visibility: Option<String>,
+    #[serde(flatten)]
+    provider_metadata: BTreeMap<String, Value>,
+}
+
+fn deserialize_optional_claim<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    match Value::deserialize(deserializer)? {
+        Value::String(value) => Ok(Some(value)),
+        _ => Err(D::Error::custom("optional GitHub claim must be a string")),
+    }
+}
+
+impl GithubClaims {
+    fn validate_shape(&self) -> Result<(), PublisherError> {
+        let required_text = [
+            &self.actor_id,
+            &self.aud,
+            &self.base_ref,
+            &self.check_run_id,
+            &self.event_name,
+            &self.environment,
+            &self.head_ref,
+            &self.iss,
+            &self.job_workflow_ref,
+            &self.job_workflow_sha,
+            &self.jti,
+            &self.reference,
+            &self.repository,
+            &self.repository_id,
+            &self.repository_owner,
+            &self.repository_owner_id,
+            &self.run_attempt,
+            &self.run_id,
+            &self.run_number,
+            &self.runner_environment,
+            &self.sha,
+            &self.sub,
+            &self.workflow,
+            &self.workflow_ref,
+            &self.workflow_sha,
+        ];
+        let optional_text = [
+            self.actor.as_deref(),
+            self.ref_type.as_deref(),
+            self.repository_visibility.as_deref(),
+        ];
+        const RESERVED: [&str; 5] = ["alg", "job", "kid", "policy_id", "schema_version"];
+        if required_text.iter().any(|value| !bounded_claim_text(value))
+            || optional_text
+                .iter()
+                .flatten()
+                .any(|value| !bounded_claim_text(value))
+            || self.provider_metadata.keys().any(|name| {
+                name.is_empty()
+                    || name.len() > 128
+                    || !name
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+                    || RESERVED.contains(&name.as_str())
+            })
+        {
+            return Err(PublisherError::Authentication);
+        }
+        Ok(())
+    }
 }
 
 pub async fn authenticate(
@@ -237,45 +344,9 @@ fn validate_claims(
     header: &Value,
     claims: &Value,
 ) -> Result<Authorization, PublisherError> {
-    let expected_claim_keys = BTreeSet::from([
-        "actor_id",
-        "aud",
-        "base_ref",
-        "check_run_id",
-        "event_name",
-        "environment",
-        "exp",
-        "head_ref",
-        "iat",
-        "iss",
-        "job_workflow_ref",
-        "job_workflow_sha",
-        "jti",
-        "nbf",
-        "ref",
-        "repository",
-        "repository_id",
-        "repository_owner",
-        "repository_owner_id",
-        "run_attempt",
-        "run_id",
-        "run_number",
-        "runner_environment",
-        "sha",
-        "sub",
-        "workflow",
-        "workflow_ref",
-        "workflow_sha",
-    ]);
-    let claim_map = claims.as_object().ok_or(PublisherError::Authentication)?;
-    if claim_map
-        .keys()
-        .map(String::as_str)
-        .collect::<BTreeSet<_>>()
-        != expected_claim_keys
-    {
-        return Err(PublisherError::Authentication);
-    }
+    let projected: GithubClaims =
+        serde_json::from_value(claims.clone()).map_err(|_| PublisherError::Authentication)?;
+    projected.validate_shape()?;
 
     let workflow = &request.workflow;
     let expected_workflow_keys = BTreeSet::from([
@@ -305,7 +376,7 @@ fn validate_claims(
             .map(String::as_str)
             .ok_or(PublisherError::Authentication)
     };
-    let reference = string(claims, "ref")?;
+    let reference = projected.reference.as_str();
     if !reference.starts_with(&config.queue_prefix())
         || field("github_repository")? != config.repository
         || field("github_repository_id")? != config.repository_id
@@ -347,47 +418,62 @@ fn validate_claims(
         config.environment.replace(':', "%3A")
     );
     let exact = [
-        ("actor_id", field("github_actor_id")?),
-        ("aud", config.audience.as_str()),
-        ("base_ref", ""),
-        ("event_name", "merge_group"),
-        ("environment", config.environment.as_str()),
-        ("head_ref", ""),
-        ("iss", config.issuer.as_str()),
-        ("job_workflow_ref", job_ref.as_str()),
-        ("job_workflow_sha", request.candidate_head.as_str()),
-        ("ref", reference),
-        ("repository", config.repository.as_str()),
-        ("repository_id", config.repository_id.as_str()),
-        ("repository_owner", owner),
-        ("repository_owner_id", config.repository_owner_id.as_str()),
-        ("run_attempt", field("github_run_attempt")?),
-        ("run_id", field("github_run_id")?),
-        ("run_number", field("github_run_number")?),
-        ("runner_environment", "github-hosted"),
-        ("sha", request.candidate_head.as_str()),
-        ("sub", subject.as_str()),
-        ("workflow", "Protected parity promotion"),
-        ("workflow_ref", caller_ref.as_str()),
-        ("workflow_sha", request.candidate_head.as_str()),
+        (projected.actor_id.as_str(), field("github_actor_id")?),
+        (projected.aud.as_str(), config.audience.as_str()),
+        (projected.base_ref.as_str(), ""),
+        (projected.event_name.as_str(), "merge_group"),
+        (projected.environment.as_str(), config.environment.as_str()),
+        (projected.head_ref.as_str(), ""),
+        (projected.iss.as_str(), config.issuer.as_str()),
+        (projected.job_workflow_ref.as_str(), job_ref.as_str()),
+        (
+            projected.job_workflow_sha.as_str(),
+            request.candidate_head.as_str(),
+        ),
+        (projected.reference.as_str(), reference),
+        (projected.repository.as_str(), config.repository.as_str()),
+        (
+            projected.repository_id.as_str(),
+            config.repository_id.as_str(),
+        ),
+        (projected.repository_owner.as_str(), owner),
+        (
+            projected.repository_owner_id.as_str(),
+            config.repository_owner_id.as_str(),
+        ),
+        (projected.run_attempt.as_str(), field("github_run_attempt")?),
+        (projected.run_id.as_str(), field("github_run_id")?),
+        (projected.run_number.as_str(), field("github_run_number")?),
+        (projected.runner_environment.as_str(), "github-hosted"),
+        (projected.sha.as_str(), request.candidate_head.as_str()),
+        (projected.sub.as_str(), subject.as_str()),
+        (projected.workflow.as_str(), "Protected parity promotion"),
+        (projected.workflow_ref.as_str(), caller_ref.as_str()),
+        (
+            projected.workflow_sha.as_str(),
+            request.candidate_head.as_str(),
+        ),
     ];
-    if exact
-        .iter()
-        .any(|(name, expected)| string(claims, name).ok() != Some(*expected))
+    if exact.iter().any(|(actual, expected)| actual != expected)
         || field("github_workflow_ref")? != caller_ref
-        || !positive_decimal(string(claims, "check_run_id")?)
+        || !positive_decimal(&projected.check_run_id)
     {
         return Err(PublisherError::Authentication);
     }
-    for name in ["run_attempt", "run_id", "run_number", "actor_id"] {
-        if !positive_decimal(string(claims, name)?) {
+    for value in [
+        &projected.run_attempt,
+        &projected.run_id,
+        &projected.run_number,
+        &projected.actor_id,
+    ] {
+        if !positive_decimal(value) {
             return Err(PublisherError::Authentication);
         }
     }
 
-    let issued_at = integer(claims, "iat")?;
-    let not_before = integer(claims, "nbf")?;
-    let expires_at = integer(claims, "exp")?;
+    let issued_at = projected.iat;
+    let not_before = projected.nbf;
+    let expires_at = projected.exp;
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| PublisherError::Authentication)?
@@ -408,12 +494,11 @@ fn validate_claims(
     if request.oidc_authorization != expected_authorization {
         return Err(PublisherError::Authentication);
     }
-    let jti = string(claims, "jti")?;
-    if !safe_text(jti) {
+    if !safe_text(&projected.jti) {
         return Err(PublisherError::Authentication);
     }
     Ok(Authorization {
-        replay_identity: jti.to_owned(),
+        replay_identity: projected.jti,
         issued_at,
     })
 }
@@ -448,17 +533,16 @@ fn string<'a>(value: &'a Value, name: &str) -> Result<&'a str, PublisherError> {
     Ok(value)
 }
 
-fn integer(value: &Value, name: &str) -> Result<i64, PublisherError> {
-    value
-        .get(name)
-        .and_then(Value::as_i64)
-        .ok_or(PublisherError::Authentication)
-}
-
 fn positive_decimal(value: &str) -> bool {
     !value.is_empty()
         && value.bytes().all(|byte| byte.is_ascii_digit())
         && value.parse::<u64>().is_ok_and(|number| number > 0)
+}
+
+fn bounded_claim_text(value: &str) -> bool {
+    value.len() <= MAX_JSON_STRING_BYTES
+        && value.is_ascii()
+        && value.bytes().all(|byte| (0x20..=0x7e).contains(&byte))
 }
 
 fn safe_text(value: &str) -> bool {
@@ -506,6 +590,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn documented_and_future_provider_metadata_is_tolerated_but_not_authoritative() {
+        let fixture = fixture_with(|claims| {
+            claims.insert("actor".into(), json!("powderluv"));
+            claims.insert("ref_type".into(), json!("branch"));
+            claims.insert("repository_visibility".into(), json!("public"));
+            claims.insert("enterprise_id".into(), json!("909"));
+            claims.insert("provider_feature".into(), json!({"version": 2}));
+        });
+        assert!(
+            authenticate_fixture(&fixture, StaticJwksProvider::new(jwks("fixture-key")))
+                .await
+                .is_ok()
+        );
+
+        for (name, replacement) in [
+            ("actor", json!(7)),
+            ("ref_type", json!(["branch"])),
+            ("repository_visibility", Value::Null),
+            ("policy_id", json!("attacker-policy")),
+        ] {
+            let fixture = fixture_with(|claims| {
+                claims.insert(name.into(), replacement);
+            });
+            assert!(
+                authenticate_fixture(&fixture, StaticJwksProvider::new(jwks("fixture-key")))
+                    .await
+                    .is_err(),
+                "accepted invalid provider claim {name}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn malformed_time_claim_types_and_duplicate_json_reject() {
+        for (name, replacement) in [
+            ("exp", json!("1800000000")),
+            ("iat", json!(1.5)),
+            ("nbf", json!(u64::MAX)),
+            ("exp", Value::Null),
+            ("iat", json!(true)),
+        ] {
+            let fixture = fixture_with(|claims| {
+                claims.insert(name.into(), replacement);
+            });
+            assert!(
+                authenticate_fixture(&fixture, StaticJwksProvider::new(jwks("fixture-key")))
+                    .await
+                    .is_err(),
+                "accepted malformed {name}"
+            );
+        }
+
+        let duplicate =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(br#"{"exp":1,"exp":2}"#);
+        assert!(decode_segment(&duplicate).is_err());
+    }
+
+    #[tokio::test]
     async fn stale_future_and_invalid_lifetimes_fail_closed() {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -520,9 +662,9 @@ mod tests {
             ),
             (
                 "future",
-                json!(now + 301),
-                json!(now + 600),
-                json!(now + 301),
+                json!(now + MAX_CLOCK_SKEW_SECS + 10),
+                json!(now + MAX_CLOCK_SKEW_SECS + 100),
+                json!(now + MAX_CLOCK_SKEW_SECS + 10),
             ),
             (
                 "long",
@@ -537,7 +679,7 @@ mod tests {
                 json!(now + 1),
             ),
         ];
-        for (_name, iat, exp, nbf) in cases {
+        for (name, iat, exp, nbf) in cases {
             let fixture = fixture_with(|claims| {
                 claims.insert("iat".into(), iat);
                 claims.insert("exp".into(), exp);
@@ -546,7 +688,8 @@ mod tests {
             assert!(
                 authenticate_fixture(&fixture, StaticJwksProvider::new(jwks("fixture-key")))
                     .await
-                    .is_err()
+                    .is_err(),
+                "accepted invalid lifetime case {name}"
             );
         }
     }
