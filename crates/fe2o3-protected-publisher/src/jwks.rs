@@ -134,14 +134,33 @@ impl HttpsJwksProvider {
         cache_ttl: Duration,
         root_pem: &[u8],
     ) -> Result<Self, PublisherError> {
+        Self::with_test_root_and_refresh_bounds(
+            url,
+            timeout,
+            cache_ttl,
+            root_pem,
+            Duration::from_millis(25),
+            Duration::from_millis(100),
+        )
+    }
+
+    #[cfg(test)]
+    fn with_test_root_and_refresh_bounds(
+        url: &str,
+        timeout: Duration,
+        cache_ttl: Duration,
+        root_pem: &[u8],
+        refresh_floor: Duration,
+        maximum_backoff: Duration,
+    ) -> Result<Self, PublisherError> {
         let root = reqwest::Certificate::from_pem(root_pem).map_err(|_| PublisherError::Config)?;
         Self::build(
             url,
             timeout,
             cache_ttl,
             Some(root),
-            Duration::from_millis(25),
-            Duration::from_millis(100),
+            refresh_floor,
+            maximum_backoff,
         )
     }
 
@@ -743,11 +762,13 @@ mod tests {
     async fn cancelled_forced_refresh_releases_singleflight_and_preserves_floor() {
         let issuer = MockIssuer::start("slow-second");
         let provider = Arc::new(
-            HttpsJwksProvider::with_test_root(
+            HttpsJwksProvider::with_test_root_and_refresh_bounds(
                 &issuer.url,
                 Duration::from_secs(3),
                 Duration::from_secs(60),
                 CERT,
+                Duration::from_secs(1),
+                Duration::from_secs(2),
             )
             .unwrap(),
         );
@@ -787,7 +808,7 @@ mod tests {
             .unwrap();
         assert_eq!(suppressed.generation, initial.generation);
         assert_eq!(issuer.request_count(), 2);
-        tokio::time::sleep(Duration::from_millis(30)).await;
+        tokio::time::sleep(Duration::from_millis(1_050)).await;
         let recovered = provider
             .refresh(
                 Instant::now() + Duration::from_secs(1),
