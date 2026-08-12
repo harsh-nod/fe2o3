@@ -100,10 +100,14 @@ struct ReapJob {
     _reservation: ReaperReservation,
     leader_status: Option<ExitStatus>,
     completion: Option<SyncSender<Result<ExitStatus, String>>>,
+    completion_error: Option<String>,
+    last_retryable_error: Option<String>,
     #[cfg(test)]
     test_hold: Option<Arc<AtomicBool>>,
     #[cfg(test)]
     test_completed: Option<Arc<AtomicBool>>,
+    #[cfg(test)]
+    test_retryable_error: Option<Arc<AtomicBool>>,
 }
 
 struct ReaperSupervisor {
@@ -226,17 +230,29 @@ impl ReaperSupervisor {
                     Ok(true) => {
                         completed_jobs.push(jobs.swap_remove(index));
                     }
-                    Ok(false) | Err(_) => index += 1,
+                    Ok(false) => index += 1,
+                    Err(error) => {
+                        if jobs[index].last_retryable_error.as_deref() != Some(&error) {
+                            eprintln!(
+                                "cargo-fe2o3 application cleanup supervisor retained a slot after a retryable error: {error}"
+                            );
+                            jobs[index].last_retryable_error = Some(error.clone());
+                        }
+                        if let Some(completion) = jobs[index].completion.take() {
+                            let _ = completion.send(Err(format!(
+                                "application cleanup remains pending with its fixed-capacity supervisor slot retained after retryable error: {error}"
+                            )));
+                        }
+                        index += 1;
+                    }
                 }
             }
             drop(jobs);
             for mut completed in completed_jobs {
-                let result = match completed.leader_status {
-                    Some(status) => match completed.sandbox.take() {
-                        Some(sandbox) => sandbox.finish().map(|()| status),
-                        None => Ok(status),
-                    },
-                    None => Err(
+                let result = match (completed.leader_status, completed.completion_error.take()) {
+                    (_, Some(error)) => Err(error),
+                    (Some(status), None) => Ok(status),
+                    (None, None) => Err(
                         "application cleanup completed without retaining leader status".to_string(),
                     ),
                 };
@@ -1117,10 +1133,14 @@ fn transfer_application_cleanup(
         _reservation: cleanup.reaper,
         leader_status: None,
         completion: Some(completion),
+        completion_error: None,
+        last_retryable_error: None,
         #[cfg(test)]
         test_hold: cleanup.test_hold.take(),
         #[cfg(test)]
         test_completed: None,
+        #[cfg(test)]
+        test_retryable_error: None,
     });
     match completed.recv_timeout(timeout) {
         Ok(result) => result,
@@ -1136,6 +1156,14 @@ fn transfer_application_cleanup(
 }
 
 fn try_reap_job(job: &mut ReapJob) -> Result<bool, String> {
+    #[cfg(test)]
+    if job
+        .test_retryable_error
+        .as_ref()
+        .is_some_and(|fail| fail.load(Ordering::Acquire))
+    {
+        return Err("injected retryable nonblocking reap failure".to_string());
+    }
     if let Err(error) = kill_process_group(job.process_group) {
         return Err(error);
     }
@@ -1151,7 +1179,27 @@ fn try_reap_job(job: &mut ReapJob) -> Result<bool, String> {
             }
         }
     }
-    reap_process_group_nonblocking(job.process_group)
+    if !reap_process_group_nonblocking(job.process_group)? {
+        return Ok(false);
+    }
+    let Some(sandbox) = job.sandbox.as_mut() else {
+        return Ok(true);
+    };
+    sandbox.request_shutdown();
+    match sandbox.try_finish() {
+        Ok(false) => Ok(false),
+        Ok(true) => {
+            job.sandbox.take();
+            Ok(true)
+        }
+        Err(error) => {
+            job.sandbox.take();
+            job.completion_error = Some(format!(
+                "application process reaped but seccomp supervisor cleanup failed: {error}"
+            ));
+            Ok(true)
+        }
+    }
 }
 
 fn reap_process_group_nonblocking(process_group: libc::pid_t) -> Result<bool, String> {
@@ -2007,8 +2055,11 @@ mod tests {
                 _reservation: reservation,
                 leader_status: None,
                 completion: None,
+                completion_error: None,
+                last_retryable_error: None,
                 test_hold: Some(Arc::clone(&hold)),
                 test_completed: Some(observed),
+                test_retryable_error: None,
             });
         }
 
@@ -2097,6 +2148,111 @@ mod tests {
         assert_eq!(supervisor.reserved.load(Ordering::Acquire), 0);
         assert!(!process_exists(process_group));
         assert_eq!(supervisor.worker_count.load(Ordering::Acquire), 1);
+        supervisor.stop_for_test();
+    }
+
+    #[test]
+    fn stalled_sandbox_shutdown_does_not_block_unrelated_reaps() {
+        let supervisor = ReaperSupervisor::new(2);
+        let release = Arc::new(AtomicBool::new(false));
+        let stalled_completed = Arc::new(AtomicBool::new(false));
+        let unrelated_completed = Arc::new(AtomicBool::new(false));
+
+        for (sandbox, completed) in [
+            (
+                Some(ApplicationSandboxGuard::test_stalled_guard(Arc::clone(
+                    &release,
+                ))),
+                Arc::clone(&stalled_completed),
+            ),
+            (None, Arc::clone(&unrelated_completed)),
+        ] {
+            let reservation = supervisor.reserve().unwrap();
+            let child = fresh_session_command("/bin/true").spawn().unwrap();
+            let process_group = child.id() as libc::pid_t;
+            supervisor.transfer(ReapJob {
+                child,
+                process_group,
+                sandbox,
+                _reservation: reservation,
+                leader_status: None,
+                completion: None,
+                completion_error: None,
+                last_retryable_error: None,
+                test_hold: None,
+                test_completed: Some(completed),
+                test_retryable_error: None,
+            });
+        }
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !unrelated_completed.load(Ordering::Acquire) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(unrelated_completed.load(Ordering::Acquire));
+        assert!(!stalled_completed.load(Ordering::Acquire));
+        assert_eq!(supervisor.reserved.load(Ordering::Acquire), 1);
+        assert_eq!(supervisor.worker_count.load(Ordering::Acquire), 1);
+
+        release.store(true, Ordering::Release);
+        supervisor.wake.notify_all();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !stalled_completed.load(Ordering::Acquire) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(stalled_completed.load(Ordering::Acquire));
+        assert_eq!(supervisor.reserved.load(Ordering::Acquire), 0);
+        supervisor.stop_for_test();
+    }
+
+    #[test]
+    fn retryable_reap_error_is_observable_and_retains_capacity_until_recovery() {
+        let supervisor = ReaperSupervisor::new(1);
+        let fail = Arc::new(AtomicBool::new(true));
+        let completed = Arc::new(AtomicBool::new(false));
+        let reservation = supervisor.reserve().unwrap();
+        let child = fresh_session_command("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let process_group = child.id() as libc::pid_t;
+        let (completion, result) = mpsc::sync_channel(1);
+        supervisor.transfer(ReapJob {
+            child,
+            process_group,
+            sandbox: None,
+            _reservation: reservation,
+            leader_status: None,
+            completion: Some(completion),
+            completion_error: None,
+            last_retryable_error: None,
+            test_hold: None,
+            test_completed: Some(Arc::clone(&completed)),
+            test_retryable_error: Some(Arc::clone(&fail)),
+        });
+
+        let error = result
+            .recv_timeout(Duration::from_secs(2))
+            .expect("retryable reap error was not reported")
+            .unwrap_err();
+        assert!(error.contains("retained"), "{error}");
+        assert!(error.contains("retryable"), "{error}");
+        let saturation = match supervisor.reserve() {
+            Ok(_) => panic!("retryable cleanup error released its reserved slot"),
+            Err(error) => error,
+        };
+        assert!(saturation.contains("saturated"));
+        assert!(process_exists(process_group));
+
+        fail.store(false, Ordering::Release);
+        supervisor.wake.notify_all();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !completed.load(Ordering::Acquire) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(completed.load(Ordering::Acquire));
+        assert_eq!(supervisor.reserved.load(Ordering::Acquire), 0);
+        assert!(!process_exists(process_group));
         supervisor.stop_for_test();
     }
 

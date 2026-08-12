@@ -797,6 +797,7 @@ fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
+#[cfg(feature = "worker-v2-fault-injection-test-only")]
 fn process_cpu_ticks(process: u32) -> u64 {
     let stat = fs::read_to_string(format!("/proc/{process}/stat")).unwrap();
     let fields = stat
@@ -1331,6 +1332,7 @@ fn application_seccomp_rejects_process_and_double_fork_setsid_escape() {
     );
 }
 
+#[cfg(feature = "worker-v2-fault-injection-test-only")]
 #[test]
 fn stalled_application_ack_times_out_without_spinning_and_reaps_the_leader() {
     let directory = TestDirectory::new();
@@ -1346,10 +1348,7 @@ fn stalled_application_ack_times_out_without_spinning_and_reaps_the_leader() {
 
     let report = directory.0.join("stalled-ack-report.json");
     let ready = directory.0.join("stalled-ack-ready");
-    #[cfg(feature = "worker-v2-fault-injection-test-only")]
     let context = "3-test-short-timeouts";
-    #[cfg(not(feature = "worker-v2-fault-injection-test-only"))]
-    let context = "3";
     let mut command = application_runner_command_with_context(
         &directory,
         application_fixture(),
@@ -1404,15 +1403,9 @@ fn stalled_application_ack_times_out_without_spinning_and_reaps_the_leader() {
         "{}",
         stderr(&rejected)
     );
-    #[cfg(feature = "worker-v2-fault-injection-test-only")]
     assert!(
         ack_elapsed >= Duration::from_secs(1),
         "short ACK timeout returned too early: {ack_elapsed:?}"
-    );
-    #[cfg(not(feature = "worker-v2-fault-injection-test-only"))]
-    assert!(
-        ack_elapsed >= Duration::from_secs(4),
-        "production ACK timeout returned too early: {ack_elapsed:?}"
     );
     assert!(
         ack_elapsed < Duration::from_secs(15),

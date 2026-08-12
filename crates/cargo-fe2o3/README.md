@@ -214,9 +214,12 @@ or containment failure. Before spawn, the runner reserves one of eight cleanup
 slots. A single fixed supervisor owns any child that does not become reapable
 within the caller cleanup deadline, retains the `Child` identity, and retries
 `try_wait` plus process-group `waitpid(WNOHANG)` until the leader and adopted
-descendants are reaped. ACK and parent authority descriptors are closed before
-that transfer. Saturated cleanup capacity rejects new descriptor handoffs
-before spawn.
+descendants are reaped. Seccomp-supervisor shutdown is also polled rather than
+joined on the reaper path, so one stalled shutdown cannot prevent unrelated
+child reaps. Retryable wait or signal errors are reported once, retain their
+child and cleanup slot, and continue to be retried. ACK and parent authority
+descriptors are closed before transfer. Saturated cleanup capacity rejects new
+descriptor handoffs before spawn.
 
 This does not make Linux `SIGKILL` synchronous. A task stuck in uninterruptible
 kernel sleep can remain unreapable indefinitely; it keeps one fixed cleanup

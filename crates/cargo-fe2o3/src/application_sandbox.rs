@@ -103,8 +103,46 @@ impl Drop for PendingApplicationSandbox {
 }
 
 impl ApplicationSandboxGuard {
-    pub(crate) fn finish(mut self) -> Result<(), String> {
-        stop_supervisor(&mut self.shutdown, &mut self.worker)
+    pub(crate) fn request_shutdown(&mut self) {
+        if let Some(mut shutdown) = self.shutdown.take() {
+            let _ = shutdown.write_all(&[0]);
+        }
+    }
+
+    pub(crate) fn try_finish(&mut self) -> Result<bool, String> {
+        self.request_shutdown();
+        if self
+            .worker
+            .as_ref()
+            .is_some_and(|worker| !worker.is_finished())
+        {
+            return Ok(false);
+        }
+        let Some(worker) = self.worker.take() else {
+            return Ok(true);
+        };
+        worker
+            .join()
+            .map_err(|_| "seccomp exec supervisor panicked".to_string())??;
+        Ok(true)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_stalled_guard(
+        release: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> Self {
+        use std::sync::atomic::Ordering;
+
+        let worker = thread::spawn(move || {
+            while !release.load(Ordering::Acquire) {
+                thread::sleep(Duration::from_millis(5));
+            }
+            Ok(())
+        });
+        Self {
+            shutdown: None,
+            worker: Some(worker),
+        }
     }
 }
 
