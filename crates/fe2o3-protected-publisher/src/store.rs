@@ -232,6 +232,7 @@ impl DurableStore {
         transaction.commit().map_err(|_| PublisherError::Store)
     }
 
+    #[cfg(test)]
     pub(crate) fn issue(&mut self, input: IssueInput<'_>) -> Result<Vec<u8>, PublisherError> {
         self.issue_until(input, Instant::now() + Duration::from_secs(60))
     }
