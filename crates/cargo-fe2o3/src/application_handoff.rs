@@ -10,6 +10,10 @@ use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, RawFd};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc::{self, SyncSender};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use fe2o3_artifact_transaction::{
@@ -35,6 +39,8 @@ use crate::generation;
 use crate::project::{PinnedDirectory, is_synthetic_dot_entry};
 
 pub(crate) const RUNNER_CONTEXT_VERSION: &str = "3";
+#[cfg(feature = "worker-v2-fault-injection-test-only")]
+pub(crate) const RUNNER_SHORT_TIMEOUT_TEST_CONTEXT_VERSION: &str = "3-test-short-timeouts";
 pub(crate) const RUNNER_EXPECTS_ENVELOPE: &str = "required";
 pub(crate) const RUNNER_EXPECTS_NO_ENVELOPE: &str = "none";
 
@@ -42,7 +48,221 @@ const ENVELOPE_PREFIX: &[u8] = WORKER_V2_LOAD_ENVELOPE_NAME_PREFIX_V1.as_bytes()
 const ENVELOPE_SUFFIX: &[u8] = WORKER_V2_LOAD_ENVELOPE_NAME_SUFFIX_V1.as_bytes();
 const ENVELOPE_NAME_BYTES: usize = ENVELOPE_PREFIX.len() + 64 + ENVELOPE_SUFFIX.len();
 const MAX_ENVELOPE_CANDIDATES: usize = 256;
-const ACK_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_PENDING_APPLICATION_REAPS: usize = 8;
+const REAPER_POLL_INTERVAL: Duration = Duration::from_millis(10);
+#[cfg(any(test, feature = "worker-v2-fault-injection-test-only"))]
+const TEST_ACK_READY_FD_ENV: &str = "FE2O3_INTERNAL_TEST_ACK_READY_FD";
+#[cfg(any(test, feature = "worker-v2-fault-injection-test-only"))]
+const TEST_ACK_STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ApplicationTimeouts {
+    ack: Duration,
+    cleanup: Duration,
+    #[cfg(any(test, feature = "worker-v2-fault-injection-test-only"))]
+    wait_for_test_ready: bool,
+}
+
+impl ApplicationTimeouts {
+    pub(crate) const PRODUCTION: Self = Self {
+        ack: Duration::from_secs(5),
+        cleanup: Duration::from_secs(2),
+        #[cfg(any(test, feature = "worker-v2-fault-injection-test-only"))]
+        wait_for_test_ready: false,
+    };
+
+    #[cfg(any(test, feature = "worker-v2-fault-injection-test-only"))]
+    pub(crate) const TEST_SHORT: Self = Self {
+        ack: Duration::from_secs(2),
+        cleanup: Duration::from_millis(500),
+        wait_for_test_ready: true,
+    };
+}
+
+struct ReaperReservation {
+    supervisor: Arc<ReaperSupervisor>,
+    released: bool,
+}
+
+impl Drop for ReaperReservation {
+    fn drop(&mut self) {
+        if !self.released {
+            self.supervisor.reserved.fetch_sub(1, Ordering::AcqRel);
+            self.released = true;
+        }
+    }
+}
+
+struct ReapJob {
+    child: Child,
+    process_group: libc::pid_t,
+    sandbox: Option<ApplicationSandboxGuard>,
+    _reservation: ReaperReservation,
+    leader_status: Option<ExitStatus>,
+    completion: Option<SyncSender<Result<ExitStatus, String>>>,
+    #[cfg(test)]
+    test_hold: Option<Arc<AtomicBool>>,
+    #[cfg(test)]
+    test_completed: Option<Arc<AtomicBool>>,
+}
+
+struct ReaperSupervisor {
+    capacity: usize,
+    reserved: AtomicUsize,
+    worker_started: AtomicBool,
+    worker_count: AtomicUsize,
+    jobs: Mutex<Vec<ReapJob>>,
+    wake: Condvar,
+    #[cfg(test)]
+    shutdown: AtomicBool,
+}
+
+impl ReaperSupervisor {
+    fn new(capacity: usize) -> Arc<Self> {
+        Arc::new(Self {
+            capacity,
+            reserved: AtomicUsize::new(0),
+            worker_started: AtomicBool::new(false),
+            worker_count: AtomicUsize::new(0),
+            jobs: Mutex::new(Vec::with_capacity(capacity)),
+            wake: Condvar::new(),
+            #[cfg(test)]
+            shutdown: AtomicBool::new(false),
+        })
+    }
+
+    fn reserve(self: &Arc<Self>) -> Result<ReaperReservation, String> {
+        self.ensure_worker()?;
+        let mut current = self.reserved.load(Ordering::Acquire);
+        loop {
+            if current >= self.capacity {
+                return Err(format!(
+                    "application cleanup supervisor is saturated at {} pending handoffs",
+                    self.capacity
+                ));
+            }
+            match self.reserved.compare_exchange_weak(
+                current,
+                current + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    return Ok(ReaperReservation {
+                        supervisor: Arc::clone(self),
+                        released: false,
+                    });
+                }
+                Err(observed) => current = observed,
+            }
+        }
+    }
+
+    fn ensure_worker(self: &Arc<Self>) -> Result<(), String> {
+        if self
+            .worker_started
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return Ok(());
+        }
+        let supervisor = Arc::clone(self);
+        match thread::Builder::new()
+            .name("fe2o3-bounded-application-reaper".into())
+            .spawn(move || supervisor.run())
+        {
+            Ok(_) => {
+                self.worker_count.fetch_add(1, Ordering::Release);
+                Ok(())
+            }
+            Err(error) => {
+                self.worker_started.store(false, Ordering::Release);
+                Err(format!(
+                    "failed to start bounded application cleanup supervisor: {error}"
+                ))
+            }
+        }
+    }
+
+    fn transfer(&self, job: ReapJob) {
+        let mut jobs = self
+            .jobs
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        debug_assert!(jobs.len() < self.capacity);
+        jobs.push(job);
+        self.wake.notify_one();
+    }
+
+    fn run(self: Arc<Self>) {
+        loop {
+            let mut jobs = self
+                .jobs
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            while jobs.is_empty() {
+                #[cfg(test)]
+                if self.shutdown.load(Ordering::Acquire) {
+                    return;
+                }
+                jobs = self
+                    .wake
+                    .wait(jobs)
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+            }
+            let mut completed_jobs = Vec::new();
+            let mut index = 0;
+            while index < jobs.len() {
+                #[cfg(test)]
+                if jobs[index]
+                    .test_hold
+                    .as_ref()
+                    .is_some_and(|hold| hold.load(Ordering::Acquire))
+                {
+                    index += 1;
+                    continue;
+                }
+                match try_reap_job(&mut jobs[index]) {
+                    Ok(true) => {
+                        completed_jobs.push(jobs.swap_remove(index));
+                    }
+                    Ok(false) | Err(_) => index += 1,
+                }
+            }
+            drop(jobs);
+            for mut completed in completed_jobs {
+                let result = match completed.leader_status {
+                    Some(status) => match completed.sandbox.take() {
+                        Some(sandbox) => sandbox.finish().map(|()| status),
+                        None => Ok(status),
+                    },
+                    None => Err(
+                        "application cleanup completed without retaining leader status".to_string(),
+                    ),
+                };
+                if let Some(completion) = completed.completion.take() {
+                    let _ = completion.send(result);
+                }
+                #[cfg(test)]
+                if let Some(observed) = completed.test_completed.as_ref() {
+                    observed.store(true, Ordering::Release);
+                }
+            }
+            thread::sleep(REAPER_POLL_INTERVAL);
+        }
+    }
+
+    #[cfg(test)]
+    fn stop_for_test(&self) {
+        self.shutdown.store(true, Ordering::Release);
+        self.wake.notify_all();
+    }
+}
+
+fn application_reaper() -> &'static Arc<ReaperSupervisor> {
+    static REAPER: OnceLock<Arc<ReaperSupervisor>> = OnceLock::new();
+    REAPER.get_or_init(|| ReaperSupervisor::new(MAX_PENDING_APPLICATION_REAPS))
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct FileSnapshot {
@@ -267,19 +487,32 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
             .map_err(|error| format!("failed to rewind inherited envelope for child: {error}"))
     }
 
-    pub(crate) fn configure_child(
+    pub(crate) fn configure_child_with_timeouts(
         &mut self,
         command: &mut Command,
         application: WorkerV2ApplicationIdentityV1,
+        timeouts: ApplicationTimeouts,
     ) -> Result<PendingApplicationAck, String> {
         self.revalidate()?;
+        let reaper = application_reaper().reserve()?;
         let expectation = WorkerV2ApplicationHandoffExpectationV1::new(&self.envelope, application);
         let challenge = random_challenge()?;
         ensure_child_subreaper()?;
         let (ack_read, ack_write) = cloexec_pipe()?;
+        #[cfg(any(test, feature = "worker-v2-fault-injection-test-only"))]
+        let (test_ready_read, test_ready_write) = if timeouts.wait_for_test_ready {
+            let (read, write) = cloexec_pipe()?;
+            command.env(TEST_ACK_READY_FD_ENV, write.as_raw_fd().to_string());
+            (Some(read), Some(write))
+        } else {
+            command.env_remove(TEST_ACK_READY_FD_ENV);
+            (None, None)
+        };
         let envelope_fd = self.file.as_raw_fd();
         let artifact_directory_fd = self.artifact_directory_file.as_raw_fd();
         let ack_fd = ack_write.as_raw_fd();
+        #[cfg(any(test, feature = "worker-v2-fault-injection-test-only"))]
+        let test_ready_fd = test_ready_write.as_ref().map(AsRawFd::as_raw_fd);
         let expected = self.snapshot;
         command
             .env(
@@ -355,6 +588,19 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
                 {
                     return Err(io::Error::from_raw_os_error(libc::ESTALE));
                 }
+                #[cfg(any(test, feature = "worker-v2-fault-injection-test-only"))]
+                if let Some(test_ready_fd) = test_ready_fd {
+                    let test_ready = BorrowedFd::borrow_raw(test_ready_fd);
+                    let flags = rustix::io::fcntl_getfd(test_ready).map_err(io::Error::from)?;
+                    let status = rustix::fs::fcntl_getfl(test_ready).map_err(io::Error::from)?;
+                    if !flags.contains(rustix::io::FdFlags::CLOEXEC)
+                        || status & OFlags::ACCMODE != OFlags::WRONLY
+                    {
+                        return Err(io::Error::from_raw_os_error(libc::ESTALE));
+                    }
+                    rustix::io::fcntl_setfd(test_ready, rustix::io::FdFlags::empty())
+                        .map_err(io::Error::from)?;
+                }
                 for inherited in [descriptor, directory, ack] {
                     rustix::io::fcntl_setfd(inherited, rustix::io::FdFlags::empty())
                         .map_err(io::Error::from)?;
@@ -369,60 +615,109 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
             expectation,
             challenge,
             sandbox: Some(sandbox),
+            reaper: Some(reaper),
+            timeouts,
+            #[cfg(any(test, feature = "worker-v2-fault-injection-test-only"))]
+            test_ready_read,
+            #[cfg(any(test, feature = "worker-v2-fault-injection-test-only"))]
+            test_ready_parent_write: test_ready_write,
         })
     }
 }
 
-pub(crate) fn terminate_application_group(child: &mut Child) -> Result<(), String> {
+pub(crate) fn terminate_application_group(
+    mut child: Child,
+    cleanup: ApplicationCleanup,
+) -> Result<ExitStatus, String> {
     let process_group = child.id() as libc::pid_t;
     let mut failures = Vec::new();
-    let group_killed = match kill_process_group(process_group) {
-        Ok(()) => true,
-        Err(error) => {
-            failures.push(error);
-            false
-        }
-    };
+    if let Err(error) = kill_process_group(process_group) {
+        failures.push(error);
+    }
     match child.kill() {
         Ok(()) => {}
         Err(error) if error.kind() == io::ErrorKind::InvalidInput => {}
         Err(error) => failures.push(format!("failed to kill application leader: {error}")),
     }
-    if let Err(error) = child.wait() {
-        failures.push(format!("failed to reap application leader: {error}"));
-    }
-    if group_killed && let Err(error) = reap_process_group(process_group) {
-        failures.push(error);
-    }
+    let status = match transfer_application_cleanup(child, process_group, cleanup) {
+        Ok(status) => Some(status),
+        Err(error) => {
+            failures.push(error);
+            None
+        }
+    };
     if failures.is_empty() {
-        Ok(())
+        Ok(status.expect("successful application termination retained its exit status"))
     } else {
         Err(failures.join("; "))
     }
 }
 
-pub(crate) fn wait_and_contain_application_group(child: &mut Child) -> Result<ExitStatus, String> {
+pub(crate) fn wait_and_contain_application_group(
+    child: Child,
+    cleanup: ApplicationCleanup,
+) -> Result<ExitStatus, String> {
     let process_group = child.id() as libc::pid_t;
-    wait_for_leader_exit_without_reaping(process_group)?;
+    if let Err(error) = wait_for_leader_exit_without_reaping(process_group) {
+        return match terminate_application_group(child, cleanup) {
+            Ok(_) => Err(error),
+            Err(containment) => Err(format!(
+                "{error}; application containment failed: {containment}"
+            )),
+        };
+    }
 
     let mut failures = Vec::new();
     if let Err(error) = kill_process_group(process_group) {
         failures.push(error);
     }
-    let status = match child.wait() {
+    let status = match transfer_application_cleanup(child, process_group, cleanup) {
         Ok(status) => Some(status),
         Err(error) => {
-            failures.push(format!("failed to reap pinned Cargo application: {error}"));
+            failures.push(error);
             None
         }
     };
-    if let Err(error) = reap_process_group(process_group) {
-        failures.push(error);
-    }
     if failures.is_empty() {
         Ok(status.expect("successful child wait produced an exit status"))
     } else {
         Err(failures.join("; "))
+    }
+}
+
+pub(crate) struct ApplicationCleanup {
+    reaper: ReaperReservation,
+    sandbox: Option<ApplicationSandboxGuard>,
+    timeout: Duration,
+    #[cfg(test)]
+    test_hold: Option<Arc<AtomicBool>>,
+}
+
+pub(crate) struct ApplicationHandoffGuard {
+    cleanup: Option<ApplicationCleanup>,
+}
+
+impl ApplicationHandoffGuard {
+    pub(crate) fn into_cleanup(mut self) -> ApplicationCleanup {
+        self.cleanup
+            .take()
+            .expect("active application handoff owns cleanup state")
+    }
+}
+
+pub(crate) struct ApplicationHandoffFailure {
+    message: String,
+    cleanup: Option<ApplicationCleanup>,
+}
+
+impl ApplicationHandoffFailure {
+    pub(crate) fn into_parts(mut self) -> (String, ApplicationCleanup) {
+        (
+            self.message,
+            self.cleanup
+                .take()
+                .expect("application handoff failure owns cleanup state"),
+        )
     }
 }
 
@@ -432,25 +727,80 @@ pub(crate) struct PendingApplicationAck {
     expectation: WorkerV2ApplicationHandoffExpectationV1,
     challenge: WorkerV2ApplicationHandoffChallengeV1,
     sandbox: Option<PendingApplicationSandbox>,
+    reaper: Option<ReaperReservation>,
+    timeouts: ApplicationTimeouts,
+    #[cfg(any(test, feature = "worker-v2-fault-injection-test-only"))]
+    test_ready_read: Option<File>,
+    #[cfg(any(test, feature = "worker-v2-fault-injection-test-only"))]
+    test_ready_parent_write: Option<File>,
 }
 
 impl PendingApplicationAck {
     pub(crate) fn await_after_spawn(
         mut self,
         child: &mut Child,
-    ) -> Result<ApplicationSandboxGuard, String> {
+    ) -> Result<ApplicationHandoffGuard, ApplicationHandoffFailure> {
         drop(self.parent_write.take());
-        let sandbox = self
+        #[cfg(any(test, feature = "worker-v2-fault-injection-test-only"))]
+        drop(self.test_ready_parent_write.take());
+        let sandbox = match self
             .sandbox
             .take()
             .expect("pending acknowledgment owns its sandbox")
-            .complete(child.id())?;
-        let bytes = read_application_handoff_ack(&mut self.read, child, ACK_TIMEOUT)?;
-        let ack = WorkerV2ApplicationHandoffAckV1::decode_canonical(&bytes)
-            .map_err(|error| format!("invalid application handoff acknowledgment: {error}"))?;
-        ack.validate(self.expectation, self.challenge)
-            .map_err(|error| format!("rejected application handoff acknowledgment: {error}"))?;
-        Ok(sandbox)
+            .complete(child.id())
+        {
+            Ok(sandbox) => sandbox,
+            Err(message) => {
+                return Err(self.failure(message, None));
+            }
+        };
+        #[cfg(any(test, feature = "worker-v2-fault-injection-test-only"))]
+        if let Some(mut ready) = self.test_ready_read.take()
+            && let Err(message) = read_test_ack_ready(&mut ready)
+        {
+            return Err(self.failure(message, Some(sandbox)));
+        }
+        let result = read_application_handoff_ack(&mut self.read, child, self.timeouts.ack)
+            .and_then(|bytes| {
+                WorkerV2ApplicationHandoffAckV1::decode_canonical(&bytes)
+                    .map_err(|error| format!("invalid application handoff acknowledgment: {error}"))
+            })
+            .and_then(|ack| {
+                ack.validate(self.expectation, self.challenge)
+                    .map_err(|error| {
+                        format!("rejected application handoff acknowledgment: {error}")
+                    })
+            });
+        match result {
+            Ok(()) => Ok(ApplicationHandoffGuard {
+                cleanup: Some(self.cleanup(Some(sandbox))),
+            }),
+            Err(message) => Err(self.failure(message, Some(sandbox))),
+        }
+    }
+
+    fn cleanup(&mut self, sandbox: Option<ApplicationSandboxGuard>) -> ApplicationCleanup {
+        ApplicationCleanup {
+            reaper: self
+                .reaper
+                .take()
+                .expect("pending acknowledgment owns a reaper reservation"),
+            sandbox,
+            timeout: self.timeouts.cleanup,
+            #[cfg(test)]
+            test_hold: None,
+        }
+    }
+
+    fn failure(
+        &mut self,
+        message: String,
+        sandbox: Option<ApplicationSandboxGuard>,
+    ) -> ApplicationHandoffFailure {
+        ApplicationHandoffFailure {
+            message,
+            cleanup: Some(self.cleanup(sandbox)),
+        }
     }
 }
 
@@ -486,6 +836,29 @@ fn read_application_handoff_ack(
             observe_leader_exit_without_reaping_until(child.id() as libc::pid_t, Some(deadline))?;
     }
     Ok(bytes)
+}
+
+#[cfg(any(test, feature = "worker-v2-fault-injection-test-only"))]
+fn read_test_ack_ready(read: &mut File) -> Result<(), String> {
+    let deadline = Instant::now()
+        .checked_add(TEST_ACK_STARTUP_TIMEOUT)
+        .ok_or_else(|| "test ACK startup deadline overflowed".to_string())?;
+    loop {
+        poll_readable(read.as_raw_fd(), deadline).map_err(|error| {
+            format!("test ACK readiness failed before ACK timing began: {error}")
+        })?;
+        let mut byte = [0_u8; 1];
+        match read.read(&mut byte) {
+            Ok(1) if byte == [1] => return Ok(()),
+            Ok(0) => {
+                return Err("test ACK readiness descriptor closed before readiness".to_string());
+            }
+            Ok(_) => return Err("test ACK readiness descriptor returned invalid data".to_string()),
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(format!("failed to read test ACK readiness: {error}")),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -729,25 +1102,100 @@ fn wait_for_leader_exit_without_reaping(leader: libc::pid_t) -> Result<(), Strin
     }
 }
 
-fn reap_process_group(process_group: libc::pid_t) -> Result<(), String> {
-    loop {
+fn transfer_application_cleanup(
+    child: Child,
+    process_group: libc::pid_t,
+    mut cleanup: ApplicationCleanup,
+) -> Result<ExitStatus, String> {
+    let supervisor = Arc::clone(&cleanup.reaper.supervisor);
+    let timeout = cleanup.timeout;
+    let (completion, completed) = mpsc::sync_channel(1);
+    supervisor.transfer(ReapJob {
+        child,
+        process_group,
+        sandbox: cleanup.sandbox.take(),
+        _reservation: cleanup.reaper,
+        leader_status: None,
+        completion: Some(completion),
+        #[cfg(test)]
+        test_hold: cleanup.test_hold.take(),
+        #[cfg(test)]
+        test_completed: None,
+    });
+    match completed.recv_timeout(timeout) {
+        Ok(result) => result,
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(format!(
+            "application cleanup remains pending in the fixed-capacity supervisor after {} ms",
+            timeout.as_millis()
+        )),
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(
+            "application cleanup supervisor lost its completion channel while retaining the child"
+                .to_string(),
+        ),
+    }
+}
+
+fn try_reap_job(job: &mut ReapJob) -> Result<bool, String> {
+    if let Err(error) = kill_process_group(job.process_group) {
+        return Err(error);
+    }
+    if job.leader_status.is_none() {
+        match job.child.try_wait() {
+            Ok(Some(status)) => job.leader_status = Some(status),
+            Ok(None) => return Ok(false),
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => return Ok(false),
+            Err(error) => {
+                return Err(format!(
+                    "failed to nonblockingly reap application leader: {error}"
+                ));
+            }
+        }
+    }
+    reap_process_group_nonblocking(job.process_group)
+}
+
+fn reap_process_group_nonblocking(process_group: libc::pid_t) -> Result<bool, String> {
+    reap_process_group_nonblocking_with(|| {
         let mut status = 0;
-        // SAFETY: `status` is writable and the negative PID selects children in the application
-        // process group. Subreaper ownership makes orphaned descendants waitable by this runner.
-        let result = unsafe { libc::waitpid(-process_group, &mut status, 0) };
-        if result > 0 {
-            continue;
+        // SAFETY: `status` is writable, the negative PID selects adopted children in the dedicated
+        // application process group, and WNOHANG guarantees this supervisor never blocks.
+        let result = unsafe { libc::waitpid(-process_group, &mut status, libc::WNOHANG) };
+        if result >= 0 {
+            Ok(result)
+        } else {
+            Err(io::Error::last_os_error())
         }
-        let error = io::Error::last_os_error();
-        if error.kind() == io::ErrorKind::Interrupted {
-            continue;
+    })
+}
+
+fn reap_process_group_nonblocking_with(
+    mut wait: impl FnMut() -> io::Result<libc::pid_t>,
+) -> Result<bool, String> {
+    const MAX_REAPS_PER_POLL: usize = 64;
+    let mut reaped = 0;
+    loop {
+        match wait() {
+            Ok(result) if result > 0 => {
+                reaped += 1;
+                if reaped == MAX_REAPS_PER_POLL {
+                    return Ok(false);
+                }
+            }
+            Ok(0) => return Ok(false),
+            Ok(_) => {
+                return Err(
+                    "nonblocking application process-group reap returned an invalid PID"
+                        .to_string(),
+                );
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) if error.raw_os_error() == Some(libc::ECHILD) => return Ok(true),
+            Err(error) => {
+                return Err(format!(
+                    "failed to nonblockingly reap application process-group descendants: {error}"
+                ));
+            }
         }
-        if error.raw_os_error() == Some(libc::ECHILD) {
-            return Ok(());
-        }
-        return Err(format!(
-            "failed to reap application process-group descendants: {error}"
-        ));
     }
 }
 
@@ -895,6 +1343,15 @@ mod tests {
             command.pre_exec(establish_fresh_application_session);
         }
         command
+    }
+
+    fn test_cleanup() -> ApplicationCleanup {
+        ApplicationCleanup {
+            reaper: application_reaper().reserve().unwrap(),
+            sandbox: None,
+            timeout: Duration::from_secs(2),
+            test_hold: None,
+        }
     }
 
     fn wait_for_raw_child(child: libc::pid_t) {
@@ -1074,7 +1531,7 @@ mod tests {
     fn unrelated_same_session_process_cannot_join_or_be_killed() {
         let mut application = fresh_session_command("/bin/sleep");
         application.arg("30");
-        let mut application = application.spawn().unwrap();
+        let application = application.spawn().unwrap();
         let leader = application.id() as libc::pid_t;
         // SAFETY: the spawned child is live and its pre-exec callback completed before `spawn`.
         assert_eq!(unsafe { libc::getsid(leader) }, leader);
@@ -1121,7 +1578,7 @@ mod tests {
         let outsider_session = unsafe { libc::getsid(outsider) };
         let runner_session = unsafe { libc::getsid(0) };
 
-        let containment = terminate_application_group(&mut application);
+        let containment = terminate_application_group(application, test_cleanup());
         let outsider_survived = process_exists(outsider);
         // SAFETY: the outsider is this test's child and is intentionally paused until cleanup.
         unsafe { libc::kill(outsider, libc::SIGKILL) };
@@ -1136,7 +1593,7 @@ mod tests {
             outsider_survived,
             "application containment killed the outsider"
         );
-        assert_eq!(application.wait().unwrap().signal(), Some(libc::SIGKILL));
+        assert_eq!(containment.unwrap().signal(), Some(libc::SIGKILL));
     }
 
     #[test]
@@ -1150,7 +1607,7 @@ mod tests {
         assert_eq!(unsafe { libc::kill(-leader, 0) }, 0);
         kill_process_group(leader).unwrap();
         assert!(child.wait().unwrap().success());
-        reap_process_group(leader).unwrap();
+        assert!(reap_process_group_nonblocking(leader).unwrap());
     }
 
     fn run_invalid_ack_child_fixture() {
@@ -1234,7 +1691,7 @@ mod tests {
             .env(INVALID_ACK_CHILD_ENV, "1")
             .env(INVALID_ACK_FD_ENV, ack_fd.to_string())
             .env(INVALID_ACK_PID_FILE_ENV, &pid_file);
-        let mut application = command.spawn().unwrap();
+        let application = command.spawn().unwrap();
         drop(ack_write);
 
         await_nonreaping_exit(&application);
@@ -1264,7 +1721,7 @@ mod tests {
         let outsider_session = unsafe { libc::getsid(outsider) };
         let runner_session = unsafe { libc::getsid(0) };
         let started = Instant::now();
-        let containment = terminate_application_group(&mut application);
+        let containment = terminate_application_group(application, test_cleanup());
         let elapsed = started.elapsed();
         let descendant_survived = process_exists(descendant);
         let outsider_survived = process_exists(outsider);
@@ -1285,7 +1742,7 @@ mod tests {
     #[test]
     fn ack_exit_observation_retries_eintr_and_echild_fails_closed() {
         let mut command = fresh_session_command("/bin/true");
-        let mut child = command.spawn().unwrap();
+        let child = command.spawn().unwrap();
         let leader = child.id() as libc::pid_t;
         wait_for_leader_exit_without_reaping(leader).unwrap();
 
@@ -1313,7 +1770,7 @@ mod tests {
         .unwrap();
         assert_eq!(attempts, 2);
         assert_eq!(observation, LeaderExitObservation::Exited);
-        terminate_application_group(&mut child).unwrap();
+        terminate_application_group(child, test_cleanup()).unwrap();
 
         let error = observe_leader_exit_without_reaping(leader).unwrap_err();
         assert!(error.contains("without reaping"), "{error}");
@@ -1435,7 +1892,7 @@ mod tests {
     fn early_exit_without_ack_remains_waitable_until_cleanup() {
         let (mut ack_read, ack_write) = cloexec_pipe().unwrap();
         let mut command = fresh_session_command("/bin/true");
-        let mut child = command.spawn().unwrap();
+        let child = command.spawn().unwrap();
         drop(ack_write);
         assert!(
             read_application_handoff_ack(&mut ack_read, &child, Duration::from_secs(1))
@@ -1448,21 +1905,31 @@ mod tests {
             LeaderExitObservation::Exited
         );
         let started = Instant::now();
-        terminate_application_group(&mut child).unwrap();
+        terminate_application_group(child, test_cleanup()).unwrap();
         assert!(started.elapsed() < Duration::from_secs(2));
     }
 
     #[test]
     fn successful_wait_contains_before_reaping_leader() {
-        for _ in 0..32 {
+        for _ in 0..100 {
             let mut command = fresh_session_command("/bin/true");
-            let mut child = command.spawn().unwrap();
+            let child = command.spawn().unwrap();
             assert!(
-                wait_and_contain_application_group(&mut child)
+                wait_and_contain_application_group(child, test_cleanup())
                     .unwrap()
                     .success()
             );
         }
+    }
+
+    #[test]
+    fn successful_wait_observation_error_still_transfers_and_reaps() {
+        let mut command = fresh_session_command("/bin/true");
+        let mut child = command.spawn().unwrap();
+        assert!(child.wait().unwrap().success());
+        let error = wait_and_contain_application_group(child, test_cleanup()).unwrap_err();
+        assert!(error.contains("observe application leader"), "{error}");
+        assert!(!error.contains("cleanup remains pending"), "{error}");
     }
 
     #[test]
@@ -1478,8 +1945,8 @@ mod tests {
             .arg("sleep 30 & echo $! > \"$1\"")
             .arg("fe2o3-descendant-probe")
             .arg(&pid_file);
-        let mut child = command.spawn().unwrap();
-        let status = wait_and_contain_application_group(&mut child).unwrap();
+        let child = command.spawn().unwrap();
+        let status = wait_and_contain_application_group(child, test_cleanup()).unwrap();
         let descendant = std::fs::read_to_string(&pid_file)
             .unwrap()
             .trim()
@@ -1492,5 +1959,150 @@ mod tests {
             !process_exists(descendant),
             "session descendant survived cleanup"
         );
+    }
+
+    #[test]
+    fn nonblocking_group_reap_retries_eintr_and_reports_pending_and_complete() {
+        let mut attempts = 0;
+        let pending = reap_process_group_nonblocking_with(|| {
+            attempts += 1;
+            match attempts {
+                1 => Err(io::Error::from(io::ErrorKind::Interrupted)),
+                2 => Ok(41),
+                3 => Ok(0),
+                _ => unreachable!(),
+            }
+        })
+        .unwrap();
+        assert!(!pending);
+        assert_eq!(attempts, 3);
+
+        let complete =
+            reap_process_group_nonblocking_with(|| Err(io::Error::from_raw_os_error(libc::ECHILD)))
+                .unwrap();
+        assert!(complete);
+    }
+
+    #[test]
+    fn bounded_supervisor_saturates_recovers_and_uses_one_worker() {
+        let supervisor = ReaperSupervisor::new(2);
+        let hold = Arc::new(AtomicBool::new(true));
+        let mut completed = Vec::new();
+        let mut pids = Vec::new();
+
+        for _ in 0..2 {
+            let reservation = supervisor.reserve().unwrap();
+            let child = fresh_session_command("/bin/sleep")
+                .arg("30")
+                .spawn()
+                .unwrap();
+            let process_group = child.id() as libc::pid_t;
+            let observed = Arc::new(AtomicBool::new(false));
+            completed.push(Arc::clone(&observed));
+            pids.push(process_group);
+            supervisor.transfer(ReapJob {
+                child,
+                process_group,
+                sandbox: None,
+                _reservation: reservation,
+                leader_status: None,
+                completion: None,
+                test_hold: Some(Arc::clone(&hold)),
+                test_completed: Some(observed),
+            });
+        }
+
+        let saturation = match supervisor.reserve() {
+            Ok(_) => panic!("supervisor admitted work beyond its fixed capacity"),
+            Err(error) => error,
+        };
+        assert!(saturation.contains("saturated"));
+        assert_eq!(supervisor.worker_count.load(Ordering::Acquire), 1);
+        assert_eq!(supervisor.jobs.lock().unwrap().len(), 2);
+        for pid in &pids {
+            assert!(process_exists(*pid));
+        }
+
+        hold.store(false, Ordering::Release);
+        supervisor.wake.notify_all();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while completed
+            .iter()
+            .any(|observed| !observed.load(Ordering::Acquire))
+            && Instant::now() < deadline
+        {
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            completed
+                .iter()
+                .all(|observed| observed.load(Ordering::Acquire)),
+            "supervisor did not eventually reap every retained child"
+        );
+        assert_eq!(supervisor.reserved.load(Ordering::Acquire), 0);
+        for pid in pids {
+            assert!(!process_exists(pid));
+        }
+        drop(supervisor.reserve().unwrap());
+        assert_eq!(supervisor.worker_count.load(Ordering::Acquire), 1);
+        supervisor.stop_for_test();
+    }
+
+    #[test]
+    fn cleanup_pending_returns_within_injected_bound_and_eventually_reaps() {
+        let supervisor = ReaperSupervisor::new(1);
+        let hold = Arc::new(AtomicBool::new(true));
+        let reservation = supervisor.reserve().unwrap();
+        let child = fresh_session_command("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let process_group = child.id() as libc::pid_t;
+        let timeout = Duration::from_millis(80);
+        let started = Instant::now();
+        let error = transfer_application_cleanup(
+            child,
+            process_group,
+            ApplicationCleanup {
+                reaper: reservation,
+                sandbox: None,
+                timeout,
+                test_hold: Some(Arc::clone(&hold)),
+            },
+        )
+        .unwrap_err();
+        let elapsed = started.elapsed();
+        assert!(error.contains("cleanup remains pending"), "{error}");
+        assert!(
+            elapsed >= timeout,
+            "cleanup returned too early: {elapsed:?}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "cleanup exceeded its broad scheduler bound: {elapsed:?}"
+        );
+        let saturation = match supervisor.reserve() {
+            Ok(_) => panic!("supervisor admitted work beyond its fixed capacity"),
+            Err(error) => error,
+        };
+        assert!(saturation.contains("saturated"));
+        assert!(process_exists(process_group));
+
+        hold.store(false, Ordering::Release);
+        supervisor.wake.notify_all();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while supervisor.reserved.load(Ordering::Acquire) != 0 && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(supervisor.reserved.load(Ordering::Acquire), 0);
+        assert!(!process_exists(process_group));
+        assert_eq!(supervisor.worker_count.load(Ordering::Acquire), 1);
+        supervisor.stop_for_test();
+    }
+
+    #[test]
+    fn short_test_timeouts_are_internal_and_distinct_from_production() {
+        assert!(ApplicationTimeouts::TEST_SHORT.ack < ApplicationTimeouts::PRODUCTION.ack);
+        assert!(ApplicationTimeouts::TEST_SHORT.cleanup < ApplicationTimeouts::PRODUCTION.cleanup);
     }
 }

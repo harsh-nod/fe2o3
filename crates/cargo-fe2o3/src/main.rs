@@ -743,12 +743,21 @@ fn run_application_boundary_result(args: &[OsString]) -> Result<std::process::Ex
                 .to_string(),
         );
     }
-    if args[0] != application_handoff::RUNNER_CONTEXT_VERSION {
-        return Err(format!(
-            "unsupported application runner context {:?}",
-            args[0]
-        ));
-    }
+    let application_timeouts = match args[0].to_str() {
+        Some(application_handoff::RUNNER_CONTEXT_VERSION) => {
+            application_handoff::ApplicationTimeouts::PRODUCTION
+        }
+        #[cfg(feature = "worker-v2-fault-injection-test-only")]
+        Some(application_handoff::RUNNER_SHORT_TIMEOUT_TEST_CONTEXT_VERSION) => {
+            application_handoff::ApplicationTimeouts::TEST_SHORT
+        }
+        _ => {
+            return Err(format!(
+                "unsupported application runner context {:?}",
+                args[0]
+            ));
+        }
+    };
     let artifact_path = PathBuf::from(hex_decode_os(&args[1])?);
     let artifact_device = parse_runner_u64(&args[2], "artifact directory device")?;
     let artifact_inode = parse_runner_u64(&args[3], "artifact directory inode")?;
@@ -821,16 +830,23 @@ fn run_application_boundary_result(args: &[OsString]) -> Result<std::process::Ex
             .map_err(|error| format!("failed to prepare sealed application: {error}"))?;
         child.args(&args[application_index + 1..]);
         scrub_application_environment(child.as_command_mut());
-        let pending_ack = handoff.configure_child(child.as_command_mut(), application_identity)?;
+        let pending_ack = handoff.configure_child_with_timeouts(
+            child.as_command_mut(),
+            application_identity,
+            application_timeouts,
+        )?;
         let mut process = child
             .as_command_mut()
             .spawn()
             .map_err(|error| format!("failed to launch pinned Cargo application: {error}"))?;
-        let sandbox = match pending_ack.await_after_spawn(&mut process) {
-            Ok(sandbox) => sandbox,
-            Err(error) => {
-                return match application_handoff::terminate_application_group(&mut process) {
-                    Ok(()) => Err(error),
+        let active_handoff = match pending_ack.await_after_spawn(&mut process) {
+            Ok(active_handoff) => active_handoff,
+            Err(failure) => {
+                let (error, cleanup) = failure.into_parts();
+                drop(handoff);
+                drop(artifact_dir);
+                return match application_handoff::terminate_application_group(process, cleanup) {
+                    Ok(_) => Err(error),
                     Err(containment) => Err(format!(
                         "{error}; application containment failed: {containment}"
                     )),
@@ -838,15 +854,22 @@ fn run_application_boundary_result(args: &[OsString]) -> Result<std::process::Ex
             }
         };
         if let Err(error) = handoff.validate_retained_currentness() {
-            return match application_handoff::terminate_application_group(&mut process) {
-                Ok(()) => Err(error),
+            drop(handoff);
+            drop(artifact_dir);
+            return match application_handoff::terminate_application_group(
+                process,
+                active_handoff.into_cleanup(),
+            ) {
+                Ok(_) => Err(error),
                 Err(containment) => Err(format!(
                     "{error}; application containment failed: {containment}"
                 )),
             };
         }
-        let status = application_handoff::wait_and_contain_application_group(&mut process)?;
-        sandbox.finish()?;
+        let cleanup = active_handoff.into_cleanup();
+        drop(handoff);
+        drop(artifact_dir);
+        let status = application_handoff::wait_and_contain_application_group(process, cleanup)?;
         return Ok(status);
     }
 
