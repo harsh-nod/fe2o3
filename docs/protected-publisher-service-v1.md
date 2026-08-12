@@ -180,7 +180,7 @@ exactly pinned in the crate manifest and transitively frozen in `Cargo.lock`:
 | --- | --- |
 | Axum 0.8.4 / Tokio 1.47.1 | small loopback HTTP service and absolute async deadlines |
 | Reqwest 0.12.23 with rustls | validated HTTPS JWKS with redirects disabled |
-| jsonwebtoken 10.3.0 with RustCrypto | RS256 primitive after independent bounded parsing and manual typed time validation |
+| jsonwebtoken 10.3.0 with AWS-LC | RS256 primitive after independent bounded parsing and manual typed time validation |
 | rusqlite 0.37.0, bundled SQLite | deterministic transactional replay store |
 | ed25519-dalek 2.2.0 | existing receipt-compatible Ed25519 signatures |
 | serde/serde_json | typed exact schemas after bounded duplicate-free parsing |
