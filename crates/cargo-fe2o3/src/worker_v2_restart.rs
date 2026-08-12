@@ -65,6 +65,17 @@ const LEGACY_MARKER_BYTES: usize =
 
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(1);
 
+fn count_restart_artifact_entry(entries: &mut usize, name: &[u8]) -> Result<bool, ()> {
+    if matches!(name, b"." | b"..") {
+        return Ok(false);
+    }
+    *entries = entries
+        .checked_add(1)
+        .filter(|entries| *entries <= MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1)
+        .ok_or(())?;
+    Ok(true)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorkerV2EnvelopeModeV1 {
     /// Preserve the inert HSACO publication flow without claiming load or launch authority.
@@ -893,11 +904,12 @@ impl WorkerV2ResumeStoreV1 {
         let mut residue = Vec::new();
         for entry in &mut directory {
             let entry = entry.map_err(std::io::Error::from)?;
-            entries = entries
-                .checked_add(1)
-                .filter(|entries| *entries <= MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1)
-                .ok_or_else(|| self.invalid("artifact directory exceeds its scan bound"))?;
             let bytes = entry.file_name().to_bytes();
+            if !count_restart_artifact_entry(&mut entries, bytes)
+                .map_err(|()| self.invalid("artifact directory exceeds its scan bound"))?
+            {
+                continue;
+            }
             if !bytes.starts_with(package_prefix.as_bytes()) {
                 continue;
             }
@@ -943,11 +955,12 @@ impl WorkerV2ResumeStoreV1 {
         let mut residue = Vec::new();
         for entry in &mut directory {
             let entry = entry.map_err(std::io::Error::from)?;
-            entries = entries
-                .checked_add(1)
-                .filter(|entries| *entries <= MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1)
-                .ok_or_else(|| self.invalid("artifact directory exceeds its scan bound"))?;
             let bytes = entry.file_name().to_bytes();
+            if !count_restart_artifact_entry(&mut entries, bytes)
+                .map_err(|()| self.invalid("artifact directory exceeds its scan bound"))?
+            {
+                continue;
+            }
             if !bytes.starts_with(package_prefix.as_bytes()) {
                 continue;
             }
@@ -2353,6 +2366,18 @@ mod tests {
         let path = store.display_path.join(&store.marker_name);
         fs::write(&path, bytes).unwrap();
         fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    #[test]
+    fn restart_scans_accept_exact_real_entry_bound_and_reject_limit_plus_one() {
+        let mut entries = 0_usize;
+        assert!(!count_restart_artifact_entry(&mut entries, b".").unwrap());
+        assert!(!count_restart_artifact_entry(&mut entries, b"..").unwrap());
+        for _ in 0..MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1 {
+            assert!(count_restart_artifact_entry(&mut entries, b"real").unwrap());
+        }
+        assert_eq!(entries, MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1);
+        assert!(count_restart_artifact_entry(&mut entries, b"over-limit").is_err());
     }
 
     #[test]

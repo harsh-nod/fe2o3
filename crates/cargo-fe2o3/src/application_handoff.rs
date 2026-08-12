@@ -32,7 +32,7 @@ use crate::application_sandbox::{
     no_fork_application_filter,
 };
 use crate::generation;
-use crate::project::PinnedDirectory;
+use crate::project::{PinnedDirectory, is_synthetic_dot_entry};
 
 pub(crate) const RUNNER_CONTEXT_VERSION: &str = "3";
 pub(crate) const RUNNER_EXPECTS_ENVELOPE: &str = "required";
@@ -770,6 +770,9 @@ fn collect_envelope_names(
     let mut total_entries = 0_usize;
     let mut names = Vec::new();
     scan(&mut |bytes| {
+        if is_synthetic_dot_entry(bytes) {
+            return Ok(());
+        }
         total_entries = total_entries.checked_add(1).ok_or_else(|| {
             "artifact directory entry count overflowed its scan bound".to_string()
         })?;
@@ -941,6 +944,8 @@ mod tests {
     fn artifact_scan_accepts_exact_total_entry_bound() {
         let mut visited = 0_usize;
         let names = collect_envelope_names(|visit| {
+            visit(b".")?;
+            visit(b"..")?;
             for _ in 0..MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1 {
                 visited += 1;
                 visit(b"unrelated")?;
@@ -957,6 +962,8 @@ mod tests {
     fn artifact_scan_rejects_limit_plus_one_unrelated_entry_early() {
         let mut visited = 0_usize;
         let error = collect_envelope_names(|visit| {
+            visit(b".")?;
+            visit(b"..")?;
             for _ in 0..MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1 + 100 {
                 visited += 1;
                 visit(b"unrelated")?;

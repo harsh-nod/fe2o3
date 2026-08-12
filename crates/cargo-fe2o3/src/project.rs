@@ -14,6 +14,10 @@ const MANIFEST_PATH: &str = "--manifest-path";
 const TARGET_DIR: &str = "--target-dir";
 const CONFIG: &str = "--config";
 
+pub(crate) fn is_synthetic_dot_entry(name: &[u8]) -> bool {
+    matches!(name, b"." | b"..")
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CargoRouting {
     manifest_path: Option<OsString>,

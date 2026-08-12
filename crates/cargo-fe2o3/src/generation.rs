@@ -1,4 +1,4 @@
-use crate::project::PinnedDirectory;
+use crate::project::{PinnedDirectory, is_synthetic_dot_entry};
 use crate::worker_v2::WorkerV2ConfigIdentity;
 use cap_primitives::fs::{read_base_dir, remove_open_dir_all};
 use fe2o3_worker_v2_bundle::MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1;
@@ -711,7 +711,7 @@ fn snapshot_names(
         let entry =
             entry.map_err(|error| format!("failed to enumerate a generated artifact: {error}"))?;
         let bytes = entry.file_name().to_bytes();
-        if is_synthetic_dot(bytes) {
+        if is_synthetic_dot_entry(bytes) {
             continue;
         }
         visible_entries = visible_entries
@@ -729,10 +729,6 @@ fn snapshot_names(
     }
     names.sort_by(|left, right| os_bytes(left).cmp(os_bytes(right)));
     Ok(names)
-}
-
-fn is_synthetic_dot(bytes: &[u8]) -> bool {
-    matches!(bytes, b"." | b"..")
 }
 
 #[cfg(unix)]

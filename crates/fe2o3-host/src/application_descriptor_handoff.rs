@@ -596,12 +596,7 @@ fn require_canonical_envelope_link(
     for entry in std::fs::read_dir(descriptor_directory_path(directory))
         .map_err(|error| descriptor_io("artifact directory", error))?
     {
-        entries = entries
-            .checked_add(1)
-            .ok_or(WorkerV2ApplicationDescriptorHandoffErrorV1::DirectoryTooLarge)?;
-        if entries > MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1 {
-            return Err(WorkerV2ApplicationDescriptorHandoffErrorV1::DirectoryTooLarge);
-        }
+        count_handoff_artifact_entry(&mut entries)?;
         let entry = entry.map_err(|error| descriptor_io("artifact directory entry", error))?;
         let metadata = entry
             .path()
@@ -622,6 +617,16 @@ fn require_canonical_envelope_link(
     if links != 1 || canonical_entries != 1 || canonical_links != 1 {
         return Err(WorkerV2ApplicationDescriptorHandoffErrorV1::EnvelopeNotLinked);
     }
+    Ok(())
+}
+
+fn count_handoff_artifact_entry(
+    entries: &mut usize,
+) -> Result<(), WorkerV2ApplicationDescriptorHandoffErrorV1> {
+    *entries = entries
+        .checked_add(1)
+        .filter(|entries| *entries <= MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1)
+        .ok_or(WorkerV2ApplicationDescriptorHandoffErrorV1::DirectoryTooLarge)?;
     Ok(())
 }
 
@@ -775,6 +780,19 @@ mod static_identity_tests {
                 0x7e, 0x68, 0xfa, 0x93,
             ]
         );
+    }
+
+    #[test]
+    fn child_handoff_scan_accepts_exact_entry_bound_and_rejects_limit_plus_one() {
+        let mut entries = 0_usize;
+        for _ in 0..MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1 {
+            count_handoff_artifact_entry(&mut entries).unwrap();
+        }
+        assert_eq!(entries, MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1);
+        assert!(matches!(
+            count_handoff_artifact_entry(&mut entries),
+            Err(WorkerV2ApplicationDescriptorHandoffErrorV1::DirectoryTooLarge)
+        ));
     }
 }
 
