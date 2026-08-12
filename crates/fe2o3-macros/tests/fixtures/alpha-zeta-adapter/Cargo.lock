@@ -164,6 +164,7 @@ dependencies = [
  "fe2o3-hsaco",
  "fe2o3-hsaco-finalize",
  "fe2o3-kernel-descriptor",
+ "fe2o3-kernel-ir",
  "fe2o3-worker-v2-bundle",
  "libc",
  "reserved-fe2o3-symbols",
@@ -201,6 +202,10 @@ dependencies = [
  "fe2o3-amd-target",
  "sha2",
 ]
+
+[[package]]
+name = "fe2o3-kernel-ir"
+version = "0.1.0"
 
 [[package]]
 name = "fe2o3-macros"
