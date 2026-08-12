@@ -1,0 +1,31 @@
+[package]
+name = "fe2o3-protected-publisher"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+axum = "=0.8.4"
+base64 = "=0.22.1"
+ed25519-dalek = { version = "=2.2.0", features = ["pem", "pkcs8"] }
+jsonwebtoken = { version = "=9.3.1", default-features = false, features = ["use_pem"] }
+libc.workspace = true
+reqwest = { version = "=0.12.23", default-features = false, features = ["rustls-tls"] }
+rusqlite = { version = "=0.37.0", features = ["bundled"] }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
+sha2.workspace = true
+thiserror = "=2.0.16"
+tokio = { version = "=1.47.1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+zeroize = "=1.9.0"
+
+[dev-dependencies]
+tempfile = "=3.21.0"
+tower = { version = "=0.5.2", features = ["util"] }
+
+[[bin]]
+name = "fe2o3-protected-publisher"
+path = "src/main.rs"
