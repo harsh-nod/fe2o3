@@ -1073,6 +1073,7 @@ mod tests {
 
     const KEY_A: &str = "71a1de4805f764bdf13f374906476fbc60d23f0e4f93f6d63c33f2c4029d6605";
     const KEY_B: &str = "88578b21c1dbb86eace7b852723ab32b7564856518468168165f75890dd14b8e";
+    const KEY_C: &str = "9c3d7e4182a605bf104ed8793a47cbf62169d508eacc638f725b1df4803ae796";
 
     fn key_digest(key: &str) -> String {
         domain_hash(
@@ -1110,6 +1111,14 @@ mod tests {
     fn distinct_fixture() -> Fixture {
         let mut value = fixture();
         value.request.archive_sha256 = "e".repeat(64);
+        value.request_body =
+            canonical_bytes(&serde_json::to_value(&value.request).unwrap()).unwrap();
+        value
+    }
+
+    fn third_fixture() -> Fixture {
+        let mut value = fixture();
+        value.request.archive_sha256 = "d".repeat(64);
         value.request_body =
             canonical_bytes(&serde_json::to_value(&value.request).unwrap()).unwrap();
         value
@@ -1910,5 +1919,251 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    fn mutate_index_field(index: &mut EntryIndex, field: &str) {
+        fn flip_first(value: &mut String) {
+            let replacement = if value.starts_with('0') { "1" } else { "0" };
+            value.replace_range(..1, replacement);
+        }
+        match field {
+            "offset" => index.frame_offset += 1,
+            "length" => index.frame_length -= 1,
+            "sequence" => index.sequence += 1,
+            "previous-hash" => index.previous_hash[0] ^= 1,
+            "frame-hash" => index.frame_hash[0] ^= 1,
+            "request-key" => flip_first(&mut index.request_key_sha256),
+            "request-identity" => flip_first(&mut index.request_identity),
+            "request-digest" => flip_first(&mut index.request_sha256),
+            "stable-authorization" => flip_first(&mut index.stable_authorization_sha256),
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn all_nine_index_substitutions_poison_before_exact_or_conflicting_return() {
+        for first_attempt in ["exact", "conflict"] {
+            for field in [
+                "offset",
+                "length",
+                "sequence",
+                "previous-hash",
+                "frame-hash",
+                "request-key",
+                "request-identity",
+                "request-digest",
+                "stable-authorization",
+            ] {
+                let temp = secure_tempdir();
+                let path = temp.path().join(format!("{first_attempt}-{field}.ledger"));
+                let original = fixture();
+                let conflicting = distinct_fixture();
+                let mut store = DurableStore::open(&path).unwrap();
+                let response = issue_with(&mut store, KEY_A, &original).unwrap();
+                let durable = std::fs::read(&path).unwrap();
+                let index = store.by_request_key.get_mut(&key_digest(KEY_A)).unwrap();
+                mutate_index_field(index, field);
+
+                let first = if first_attempt == "exact" {
+                    issue_with(&mut store, KEY_A, &original)
+                } else {
+                    issue_with(&mut store, KEY_A, &conflicting)
+                };
+                assert!(
+                    matches!(first, Err(PublisherError::Store)),
+                    "{first_attempt}/{field}"
+                );
+                assert!(store.poisoned, "{first_attempt}/{field}");
+                assert!(matches!(
+                    issue_with(&mut store, KEY_A, &original),
+                    Err(PublisherError::Store)
+                ));
+                assert!(matches!(
+                    issue_with(&mut store, KEY_B, &conflicting),
+                    Err(PublisherError::Store)
+                ));
+                assert_eq!(std::fs::read(&path).unwrap(), durable);
+                drop(store);
+
+                let mut restarted = DurableStore::open(&path).unwrap();
+                assert_eq!(
+                    issue_with(&mut restarted, KEY_A, &original).unwrap(),
+                    response
+                );
+                issue_with(&mut restarted, KEY_B, &conflicting).unwrap();
+                drop(restarted);
+                assert_eq!(DurableStore::open(&path).unwrap().count(), 2);
+            }
+        }
+    }
+
+    #[test]
+    fn hostile_whole_index_substitution_must_poison_map_binding() {
+        for (slot_key, source_key, first_attempt) in
+            [(KEY_A, KEY_B, "exact"), (KEY_B, KEY_A, "conflict")]
+        {
+            let temp = secure_tempdir();
+            let path = temp
+                .path()
+                .join(format!("whole-index-{first_attempt}.ledger"));
+            let first = fixture();
+            let second = distinct_fixture();
+            let third = third_fixture();
+            let mut store = DurableStore::open(&path).unwrap();
+            issue_with(&mut store, KEY_A, &first).unwrap();
+            issue_with(&mut store, KEY_B, &second).unwrap();
+            let durable = std::fs::read(&path).unwrap();
+            let substituted = store
+                .by_request_key
+                .get(&key_digest(source_key))
+                .unwrap()
+                .clone();
+            store
+                .by_request_key
+                .insert(key_digest(slot_key), substituted);
+
+            let slot_fixture = if slot_key == KEY_A { &first } else { &second };
+            let conflicting = if slot_key == KEY_A { &second } else { &first };
+            let first_result = if first_attempt == "exact" {
+                issue_with(&mut store, slot_key, slot_fixture)
+            } else {
+                issue_with(&mut store, slot_key, conflicting)
+            };
+            assert!(matches!(first_result, Err(PublisherError::Store)));
+            assert!(
+                store.poisoned,
+                "valid-frame substitution was treated as caller conflict"
+            );
+            assert!(matches!(
+                issue_with(&mut store, slot_key, slot_fixture),
+                Err(PublisherError::Store)
+            ));
+            assert!(matches!(
+                issue_with(&mut store, slot_key, conflicting),
+                Err(PublisherError::Store)
+            ));
+            assert!(matches!(
+                issue_with(&mut store, KEY_C, &third),
+                Err(PublisherError::Store)
+            ));
+            assert!(store.poisoned);
+            assert_eq!(std::fs::read(&path).unwrap(), durable);
+            drop(store);
+
+            let mut restarted = DurableStore::open(&path).unwrap();
+            assert_eq!(restarted.count(), 2);
+            issue_with(&mut restarted, KEY_A, &first).unwrap();
+            issue_with(&mut restarted, KEY_B, &second).unwrap();
+            issue_with(&mut restarted, KEY_C, &third).unwrap();
+            drop(restarted);
+            assert_eq!(DurableStore::open(&path).unwrap().count(), 3);
+        }
+    }
+
+    fn worker_issue(key: &str, value: Fixture) -> crate::store_worker::StoreIssue {
+        let request_identity = request_identity(&value.request_body);
+        let request_sha256 = raw_request_sha256(&value.request_body);
+        let stable_authorization_sha256 = projection_digest(&value.request);
+        crate::store_worker::StoreIssue {
+            request_key_sha256: key_digest(key),
+            stable_authorization_sha256,
+            request_identity,
+            request_sha256,
+            request_body: value.request_body,
+            request: value.request,
+            issued_at: 1_800_000_000,
+            signature_domain: "test".into(),
+            signer: Arc::new(TestSigner::new("test-publisher-v1")),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn queued_exact_conflicting_and_distinct_requests_cannot_ack_after_poison() {
+        use std::sync::mpsc;
+
+        let temp = secure_tempdir();
+        let path = temp.path().join("worker-poison-race.ledger");
+        let mut store = DurableStore::open(&path).unwrap();
+        issue_with(&mut store, KEY_A, &fixture()).unwrap();
+        let durable = std::fs::read(&path).unwrap();
+        let (entered_tx, entered_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::sync_channel(1);
+        store.set_before_indexed_decode(move |frame| {
+            entered_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            frame[FRAME_PREFIX_BYTES] ^= 1;
+        });
+        let worker = Arc::new(crate::store_worker::StoreWorker::spawn(store, 128).unwrap());
+        let exact_worker = worker.clone();
+        let exact = tokio::spawn(async move {
+            exact_worker
+                .issue_until(
+                    worker_issue(KEY_A, fixture()),
+                    tokio::time::Instant::now() + Duration::from_secs(10),
+                )
+                .await
+        });
+        tokio::task::spawn_blocking(move || entered_rx.recv().unwrap())
+            .await
+            .unwrap();
+
+        let mut queued = Vec::new();
+        for ordinal in 0..63 {
+            let worker = worker.clone();
+            queued.push(tokio::spawn(async move {
+                let (key, value) = match ordinal % 3 {
+                    0 => (KEY_A, fixture()),
+                    1 => (KEY_A, distinct_fixture()),
+                    _ => (KEY_B, distinct_fixture()),
+                };
+                worker
+                    .issue_until(
+                        worker_issue(key, value),
+                        tokio::time::Instant::now() + Duration::from_secs(10),
+                    )
+                    .await
+            }));
+        }
+        release_tx.send(()).unwrap();
+        assert!(matches!(exact.await.unwrap(), Err(PublisherError::Store)));
+        for result in queued {
+            assert!(matches!(result.await.unwrap(), Err(PublisherError::Store)));
+        }
+        assert_eq!(std::fs::read(&path).unwrap(), durable);
+        drop(worker);
+        assert_eq!(DurableStore::open(&path).unwrap().count(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn worker_unwind_disconnects_without_acknowledging() {
+        let temp = secure_tempdir();
+        let path = temp.path().join("worker-panic.ledger");
+        let mut store = DurableStore::open(&path).unwrap();
+        issue_with(&mut store, KEY_A, &fixture()).unwrap();
+        let durable = std::fs::read(&path).unwrap();
+        store.set_before_indexed_decode(|_| panic!("hostile lookup unwind"));
+        let worker = crate::store_worker::StoreWorker::spawn(store, 8).unwrap();
+
+        assert!(matches!(
+            worker
+                .issue_until(
+                    worker_issue(KEY_A, fixture()),
+                    tokio::time::Instant::now() + Duration::from_secs(10),
+                )
+                .await,
+            Err(PublisherError::Store)
+        ));
+        assert!(matches!(
+            worker
+                .issue_until(
+                    worker_issue(KEY_B, distinct_fixture()),
+                    tokio::time::Instant::now() + Duration::from_secs(10),
+                )
+                .await,
+            Err(PublisherError::Store)
+        ));
+        assert_eq!(std::fs::read(&path).unwrap(), durable);
+        drop(worker);
+        assert_eq!(DurableStore::open(&path).unwrap().count(), 1);
     }
 }

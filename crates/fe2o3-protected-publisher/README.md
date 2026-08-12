@@ -23,8 +23,10 @@ ledger header is fully written and synced in an anonymous same-directory inode,
 published atomically no-replace, parent-synced, reopened, locked, and replayed;
 no empty or partial final ledger is initialized in place.
 Idempotent recovery uses bounded positional frame reads and cannot disturb the
-append cursor or live sequence/hash state. It validates every index field
-against the durable frame before comparing caller identity or authorization.
+append cursor or live sequence/hash state. It requires the requested map slot,
+the cached index key, and the decoded durable record key to agree, and validates
+every index field against the durable frame before comparing caller identity or
+authorization.
 Any indexed-read or index/frame validation failure poisons the live store and
 blocks subsequent acknowledgement while leaving the durable ledger unchanged
 for independent restart replay; a validated frame with a different caller
