@@ -22,11 +22,13 @@ is independently pinned to safe Rust `fn(u32) -> ()`, its full MIR CFG identity,
 and the fixed untyped registration contract. Extra collected functions, calls,
 roles, registrations, or metadata reject.
 
-The active rustc full-MIR identity includes source-bearing data. Consequently,
-the positive fixture is compiled from its checked-in relative path. A copied or
-rewritten fixture is a different program and rejects. Statement, operation,
-type, call, and CFG substitutions are therefore vetoed before any downstream
-lowering. Malformed Rust/MIR rejected by rustc never reaches admission.
+The fixed closure is pinned with the repository's portable MIR semantic
+encoder after compiler collection. That identity excludes checkout paths,
+source diagnostics, and build observations, but binds function roles, types,
+statements, operations, operands, constants, CFG, and resolved internal calls.
+The same checked source therefore authenticates in a different worktree while
+a semantic rewrite rejects. Malformed Rust/MIR rejected by rustc never reaches
+admission.
 
 The selector also rejects a non-exact target, any `-Cllvm-args` or `-Cpasses`
 pipeline, and unsupported collection shapes. Every rejection is fatal and has
@@ -34,24 +36,21 @@ no legacy or artifact fallback.
 
 ## Deliberate stop
 
-Scalar V1 at predecessor `d63bc81d190f4a33a5e22b9b22da6df24c86b3a3`
-cannot soundly consume this admission. Its reviewed contract can invent an
-export role, derive symbols from colliding leaf names, charge resource budgets
-after growth, and omit the `xnack-` binding in LLVM. V2 therefore emits no
-Kernel IR, LLVM IR, LLD input, HSACO, or hardware claim after successful
-admission.
+Repaired Scalar V1 now supplies a sealed, role-preserving composition contract.
+V2 constructs it only after authenticating the exact collected root, helper,
+and direct-call edge. The contract retains the `KernelEntry` identity and exact
+collected export symbol while deriving an identity- and role-bound symbol for
+the `InternalHelper`; lowering that helper emits internal LLVM linkage. V1 also
+precharges its CFG and operation budgets and binds the reviewed data layout,
+`gfx942`, wave64, and `xnack-` in direct LLVM.
 
-The next handoff requires a repaired Scalar V1 API that:
-
-1. consumes the authenticated `InternalHelper` identity without assigning an
-   export role or deriving a symbol from a leaf name;
-2. preserves the authenticated root export contract when composing Kernel IR;
-3. charges every existing resource budget before allocations or CFG/value
-   growth; and
-4. binds exact `gfx942:xnack-` in direct compiler-module LLVM output.
-
-After that repair is reviewed, the next dependency is direct COV6/LLD
-production followed by execution on matching gfx942 hardware.
+V2 still emits no Kernel IR, LLVM IR, LLD input, HSACO, or hardware claim after
+successful admission. The remaining frontend dependency is an authenticated
+executable-MIR capture/import for the exact collected helper. That importer
+must preserve the helper identity consumed by the composition contract rather
+than rebuilding authority from serialized MIR or a function name. Once that
+bridge is reviewed, the next dependencies are kernel-root body composition,
+direct COV6/LLD production, and execution on matching gfx942 hardware.
 
 ## Boundary limitation
 

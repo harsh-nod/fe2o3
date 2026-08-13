@@ -1094,6 +1094,28 @@ impl MirModule {
         Ok(encoder.finish())
     }
 
+    /// Computes the path-independent semantic identity used by the collected
+    /// scalar-control-flow V2 pilot.
+    ///
+    /// Collection and target admission remain separate authority checks. This
+    /// digest binds the complete reachable portable-MIR closure while omitting
+    /// checkout paths, source diagnostics, and build observations.
+    pub(crate) fn collected_scalar_control_flow_digest_v2(
+        &self,
+        kernel_export_name: &str,
+    ) -> Result<PortableMirSemanticDigestV2, MirImportError> {
+        let (functions, functions_by_path) =
+            self.portable_semantic_closure_v2(kernel_export_name)?;
+        let mut encoder = PortableMirSemanticEncoderV2::new();
+        encoder.text("fe2o3.collected-scalar-control-flow.v2")?;
+        encoder.text(kernel_export_name)?;
+        encoder.len(functions.len())?;
+        for function in functions {
+            encoder.function(function, &functions_by_path)?;
+        }
+        Ok(encoder.finish())
+    }
+
     fn portable_semantic_closure_v2<'a>(
         &'a self,
         kernel_export_name: &str,

@@ -10,18 +10,27 @@ use rustc_middle::ty::{EarlyBinder, Instance, InstanceKind, TyCtxt, TyKind, Typi
 
 use crate::AmdGpuTarget;
 use crate::collector::{CollectedFunction, CollectedFunctionRole, CollectionResult};
+use crate::executable_scalar_control_flow_v1::{
+    AuthenticatedScalarControlFlowCompositionV1, ExecutableScalarControlFlowErrorV1,
+};
 use crate::scalar_mir_v2::EXACT_SCALAR_V2_TARGET;
 
 pub(crate) const COLLECTED_SCALAR_CONTROL_FLOW_PIPELINE_V2: &str =
     "collected-executable-scalar-control-flow-v2";
-pub(crate) const REPAIRED_V1_DEPENDENCY: &str = "executable lowering is disabled until repaired Scalar V1 supplies an authenticated internal-helper contract, charges all budgets before growth, and direct LLVM binds exact gfx942:xnack-";
+pub(crate) const NEXT_LOWERING_DEPENDENCY: &str = "repaired Scalar V1 accepted the role-preserving composition contract; executable-MIR capture/import for the authenticated helper remains required before lowering";
 const FIXED_KERNEL_EXPORT: &str = "scalar_control_flow_v1";
 const FIXED_LOGICAL_NAME: &str = "scalar_control_flow_v1";
+const PORTABLE_CLOSURE_IDENTITY: [u8; 32] = [
+    0x47, 0xf3, 0xdd, 0x95, 0x22, 0x68, 0x91, 0x3b, 0x8f, 0xe9, 0xec, 0xe9, 0x94, 0x6c, 0x1a, 0x5f,
+    0xaf, 0x42, 0xac, 0xbd, 0xe3, 0x54, 0x4d, 0xf5, 0x1b, 0x4d, 0xd8, 0x3e, 0xde, 0x6b, 0x03, 0x65,
+];
 
+#[cfg(test)]
 const ROOT_CFG_IDENTITY: [u8; 32] = [
     0xa3, 0xb2, 0xfb, 0x44, 0x1d, 0x62, 0x53, 0x21, 0x26, 0xd4, 0x4c, 0x05, 0x1c, 0xa1, 0x62, 0x56,
     0xb2, 0xbe, 0x79, 0xf5, 0x9b, 0x26, 0xef, 0x4d, 0x20, 0x51, 0x0b, 0xcd, 0x33, 0x1b, 0xa6, 0x21,
 ];
+#[cfg(test)]
 const HELPER_CFG_IDENTITY: [u8; 32] = [
     0xbd, 0xed, 0x0e, 0x3d, 0xa6, 0x30, 0x3a, 0x42, 0xb6, 0x3c, 0xd2, 0x35, 0x28, 0x4c, 0xce, 0xc6,
     0xa0, 0x3e, 0x92, 0xb7, 0xb2, 0xf5, 0xc4, 0xe7, 0x6b, 0x41, 0x29, 0x85, 0x97, 0xe8, 0x6c, 0x2d,
@@ -50,14 +59,18 @@ struct ObservedClosureV2<I> {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AuthenticatedCollectedScalarControlFlowV2 {
-    kernel_export: String,
+    composition: AuthenticatedScalarControlFlowCompositionV1,
     root_cfg_identity: [u8; 32],
     helper_cfg_identity: [u8; 32],
 }
 
 impl AuthenticatedCollectedScalarControlFlowV2 {
     pub(crate) fn kernel_export(&self) -> &str {
-        &self.kernel_export
+        self.composition.kernel_export_symbol()
+    }
+
+    pub(crate) const fn composition(&self) -> &AuthenticatedScalarControlFlowCompositionV1 {
+        &self.composition
     }
 
     pub(crate) fn root_identity_hex(&self) -> String {
@@ -88,6 +101,10 @@ pub(crate) enum CollectedExecutableScalarControlFlowErrorV2 {
         detail: String,
     },
     CallTargetSubstitution,
+    PortableMir {
+        detail: String,
+    },
+    Composition(ExecutableScalarControlFlowErrorV1),
 }
 
 impl fmt::Display for CollectedExecutableScalarControlFlowErrorV2 {
@@ -121,11 +138,26 @@ impl fmt::Display for CollectedExecutableScalarControlFlowErrorV2 {
             Self::CallTargetSubstitution => formatter.write_str(
                 "collected scalar-control-flow V2 root call does not target the exact collected helper instance",
             ),
+            Self::PortableMir { detail } => write!(
+                formatter,
+                "collected scalar-control-flow V2 portable MIR rejected: {detail}"
+            ),
+            Self::Composition(error) => write!(
+                formatter,
+                "collected scalar-control-flow V2 composition authority failed: {error}"
+            ),
         }
     }
 }
 
-impl Error for CollectedExecutableScalarControlFlowErrorV2 {}
+impl Error for CollectedExecutableScalarControlFlowErrorV2 {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Composition(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 pub(crate) fn authenticate_collected_executable_scalar_control_flow_v2<'tcx>(
     tcx: TyCtxt<'tcx>,
@@ -152,8 +184,21 @@ pub(crate) fn authenticate_collected_executable_scalar_control_flow_v2<'tcx>(
 
     let observed = observe_closure(tcx, root, helper)?;
     admit_observed_closure(&observed)?;
+    let portable_identity = crate::mir_import::import_collection(tcx, collection)
+        .and_then(|module| module.collected_scalar_control_flow_digest_v2(FIXED_KERNEL_EXPORT))
+        .map_err(
+            |error| CollectedExecutableScalarControlFlowErrorV2::PortableMir {
+                detail: error.to_string(),
+            },
+        )?;
+    require_portable_closure_identity(*portable_identity.as_bytes())?;
+    let composition =
+        AuthenticatedScalarControlFlowCompositionV1::from_authenticated_collected_pair(
+            tcx, root, helper,
+        )
+        .map_err(CollectedExecutableScalarControlFlowErrorV2::Composition)?;
     Ok(AuthenticatedCollectedScalarControlFlowV2 {
-        kernel_export: root.export_name.clone(),
+        composition,
         root_cfg_identity: observed.functions[0].cfg_identity,
         helper_cfg_identity: observed.functions[1].cfg_identity,
     })
@@ -272,8 +317,6 @@ fn admit_observed_closure<I: Eq>(
     }
     require_signature(root, ExactSignatureV2::KernelU32ToUnit, "root")?;
     require_signature(helper, ExactSignatureV2::HelperU32ToU32, "helper")?;
-    require_cfg_identity(helper, HELPER_CFG_IDENTITY, "helper")?;
-    require_cfg_identity(root, ROOT_CFG_IDENTITY, "root")?;
     if observed.root_call_target != helper.identity {
         return Err(CollectedExecutableScalarControlFlowErrorV2::CallTargetSubstitution);
     }
@@ -300,17 +343,15 @@ fn require_signature<I>(
     Ok(())
 }
 
-fn require_cfg_identity<I>(
-    function: &ObservedFunctionV2<I>,
-    expected: [u8; 32],
-    role: &'static str,
+fn require_portable_closure_identity(
+    actual: [u8; 32],
 ) -> Result<(), CollectedExecutableScalarControlFlowErrorV2> {
-    if function.cfg_identity != expected {
+    if actual != PORTABLE_CLOSURE_IDENTITY {
         return Err(
             CollectedExecutableScalarControlFlowErrorV2::IdentityMismatch {
-                role,
-                expected,
-                actual: function.cfg_identity,
+                role: "portable closure",
+                expected: PORTABLE_CLOSURE_IDENTITY,
+                actual,
             },
         );
     }
@@ -500,25 +541,6 @@ mod tests {
 
     #[test]
     fn role_identity_signature_and_call_substitutions_are_distinct_rejections() {
-        let mut wrong_root = observed();
-        wrong_root.functions[0].cfg_identity[0] ^= 1;
-        assert!(matches!(
-            admit_observed_closure(&wrong_root),
-            Err(CollectedExecutableScalarControlFlowErrorV2::IdentityMismatch { role: "root", .. })
-        ));
-
-        let mut wrong_helper = observed();
-        wrong_helper.functions[1].cfg_identity[0] ^= 1;
-        assert!(matches!(
-            admit_observed_closure(&wrong_helper),
-            Err(
-                CollectedExecutableScalarControlFlowErrorV2::IdentityMismatch {
-                    role: "helper",
-                    ..
-                }
-            )
-        ));
-
         let mut wrong_signature = observed();
         wrong_signature.functions[1].signature = ExactSignatureV2::KernelU32ToUnit;
         assert!(matches!(
@@ -545,27 +567,21 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_statement_operation_type_and_cfg_substitutions_fail_closed() {
+    fn portable_closure_identity_substitutions_fail_closed() {
+        require_portable_closure_identity(PORTABLE_CLOSURE_IDENTITY).unwrap();
         for byte in [0, 7, 31] {
-            let mut changed_body = observed();
-            changed_body.functions[1].cfg_identity[byte] ^= 1;
+            let mut changed_body = PORTABLE_CLOSURE_IDENTITY;
+            changed_body[byte] ^= 1;
             assert!(matches!(
-                admit_observed_closure(&changed_body),
+                require_portable_closure_identity(changed_body),
                 Err(
                     CollectedExecutableScalarControlFlowErrorV2::IdentityMismatch {
-                        role: "helper",
+                        role: "portable closure",
                         ..
                     }
                 )
             ));
         }
-
-        let mut changed_type = observed();
-        changed_type.functions[1].signature = ExactSignatureV2::KernelU32ToUnit;
-        assert!(matches!(
-            admit_observed_closure(&changed_type),
-            Err(CollectedExecutableScalarControlFlowErrorV2::AbiMismatch { role: "helper", .. })
-        ));
     }
 
     #[test]

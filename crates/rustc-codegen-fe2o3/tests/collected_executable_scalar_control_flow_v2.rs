@@ -127,7 +127,7 @@ fn assert_rejected_without_fallback(output: &Output, expected: &str) {
 }
 
 #[test]
-fn authenticated_fixture_stops_at_the_repaired_v1_dependency() {
+fn authenticated_fixture_builds_role_preserving_contract_then_stops_at_mir_capture() {
     let workspace = workspace();
     let backend = build_backend(&workspace);
     let output = TestOutputDir::new(&workspace);
@@ -153,8 +153,9 @@ fn authenticated_fixture_stops_at_the_repaired_v1_dependency() {
         "missing authenticated export diagnostic\n{stderr}"
     );
     assert!(stderr.contains("exact reachable InternalHelper MIR"));
-    assert!(stderr.contains("charges all budgets before growth"));
-    assert!(stderr.contains("direct LLVM binds exact gfx942:xnack-"));
+    assert!(stderr.contains("sealed as internal symbol"));
+    assert!(stderr.contains("role-preserving composition contract"));
+    assert!(stderr.contains("executable-MIR capture/import"));
     assert!(stderr.contains("no Kernel IR, LLVM, LLD, HSACO, or legacy fallback was entered"));
     assert!(!stderr.contains("define amdgpu_kernel"));
     assert_eq!(
@@ -247,7 +248,7 @@ fn target_pipeline_identity_abi_and_collection_substitutions_reject_without_fall
             "gfx942:xnack-",
             PIPELINE,
         ),
-        "helper MIR identity mismatch",
+        "portable closure MIR identity mismatch",
     );
 
     let wrong_helper_type_source = FIXTURE
@@ -290,7 +291,7 @@ fn target_pipeline_identity_abi_and_collection_substitutions_reject_without_fall
                 "gfx942:xnack-",
                 PIPELINE,
             ),
-            "helper MIR identity mismatch",
+            "portable closure MIR identity mismatch",
         );
     }
 
