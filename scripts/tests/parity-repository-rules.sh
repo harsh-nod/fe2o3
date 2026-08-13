@@ -9,9 +9,30 @@ ROOT="$(cd -- "${TEST_DIR}/../.." && pwd)"
 readonly ROOT
 readonly TOOL="${ROOT}/scripts/parity-repository-rules.py"
 readonly WRAPPER="${ROOT}/scripts/parity-repository-rules.sh"
+readonly SYNTAX_CHECK="${ROOT}/scripts/tests/python-syntax-only.sh"
 TEST_ROOT="$(mktemp -d)"
 readonly TEST_ROOT
 trap 'rm -rf "${TEST_ROOT}"' EXIT
+
+assert_clean_checkout() {
+  local stage="$1"
+  local status artifacts
+  status="$(git -C "${ROOT}" status --porcelain=v1 --untracked-files=all)"
+  artifacts="$(
+    find "${ROOT}" -path "${ROOT}/.git" -prune -o \
+      -path "${ROOT}/target" -prune -o \
+      \( -type d -name __pycache__ -o -type f \
+      \( -name '*.pyc' -o -name '*.pyo' \) \) -print
+  )"
+  if [[ -n "${status}" || -n "${artifacts}" ]]; then
+    printf 'checkout is not clean %s repository-rule tests\n' "${stage}" >&2
+    [[ -z "${status}" ]] || printf '%s\n' "${status}" >&2
+    [[ -z "${artifacts}" ]] || printf '%s\n' "${artifacts}" >&2
+    exit 1
+  fi
+}
+
+assert_clean_checkout before
 
 expect_failure() {
   local name="$1"
@@ -89,6 +110,7 @@ expect_failure bad_repository_id 'invalid repository ID' \
   --actions-integration-id 15368 --default-branch main
 
 bash -n "${WRAPPER}" "${BASH_SOURCE[0]}"
-python3 -m py_compile "${TOOL}"
+"${SYNTAX_CHECK}" "${TOOL}"
 shellcheck "${WRAPPER}" "${BASH_SOURCE[0]}"
+assert_clean_checkout after
 printf 'parity repository rule tests passed\n'

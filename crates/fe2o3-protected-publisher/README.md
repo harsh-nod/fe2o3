@@ -1,0 +1,50 @@
+# fe2o3-protected-publisher
+
+Opt-in, loopback-only reference service for GitHub OIDC authorization and
+client-compatible protected publisher receipts. Issuance uses a bounded
+single worker and an fd-bound, checksummed, hash-chained append-only ledger.
+A CSPRNG client request key is durably bound to the canonical request digest
+and stable authorization projection, so a fresh valid token can recover an
+already committed receipt after the original JWT expires.
+
+Enrollment accepts a token only through an inherited FIFO or an `AF_UNIX`
+socket, never a token pathname, argv value, environment value, TCP socket, or
+other socket family. Before any key or token read, the process verifies that it
+is nondumpable and both core limits are zero. Service-owned bearer, enrollment
+scratch, token, and signing-key PEM buffers use zeroizing ownership; dependency
+and kernel copies are not claimed absent. The inherited descriptor must already
+be nonblocking; the reader verifies that contract and never mutates shared
+open-file status flags. Unknown JWKS keys share singleflight refresh, a bounded
+negative cache, and issuer-wide refresh backoff. Configuration, enrollment,
+key, and ledger authority is descriptor-checked through retained owner-only
+directories. Every candidate ledger frame passes the same canonical decoder
+and semantic validator used during restart before it can be appended. A new
+ledger header is fully written and synced in an anonymous same-directory inode,
+published atomically no-replace, parent-synced, reopened, locked, and replayed;
+no empty or partial final ledger is initialized in place.
+Idempotent recovery uses bounded positional frame reads and cannot disturb the
+append cursor or live sequence/hash state. It requires the requested map slot,
+the cached index key, and the decoded durable record key to agree, and validates
+every index field against the durable frame before comparing caller identity or
+authorization.
+The HTTP/1 accept loop acquires an inflight permit before parsing, applies one
+accepted-at deadline to the entire connection, preflights exact header byte and
+count bounds, and disables keep-alive. Excess or incomplete connections cannot
+sit outside the configured admission limit.
+Any indexed-read or index/frame validation failure poisons the live store and
+blocks subsequent acknowledgement while leaving the durable ledger unchanged
+for independent restart replay; a validated frame with a different caller
+request returns a non-poisoning replay conflict.
+The ledger-v3 format has three independently checksummed commit checkpoints in
+its fixed header. Frame bytes are synced before the next checkpoint generation
+is written and synced; only then is a receipt acknowledged. Replay validates
+the complete checkpoint-declared prefix and never infers commitment by scanning
+damaged frame metadata. Bytes beyond that prefix are unacknowledged tail and may
+be truncated, while any corruption inside it fails startup without modifying
+the file. Ledger-v1 and ledger-v2 files fail closed and are never migrated or
+rewritten implicitly.
+
+This crate is inert by default. It is not deployed, production-ready, or an
+acceptance/parity claim. See `docs/protected-publisher-service-v1.md` for the
+wire contract, bounds, ledger format, recovery behavior, limitations, tests,
+and external controls still required.

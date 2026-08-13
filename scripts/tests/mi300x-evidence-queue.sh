@@ -9,6 +9,7 @@ ROOT="$(cd -- "${TEST_DIR}/../.." && pwd)"
 readonly ROOT
 readonly QUEUE="${ROOT}/scripts/mi300x-evidence-queue.sh"
 readonly TOOL="${ROOT}/scripts/parity-row-evidence.sh"
+readonly SYNTAX_CHECK="${ROOT}/scripts/tests/python-syntax-only.sh"
 readonly PRIVATE_KEY="${TEST_DIR}/fixtures/evidence-test-attestor-private.pem"
 TEST_ROOT="$(mktemp -d)"
 readonly TEST_ROOT
@@ -452,5 +453,5 @@ expect_failure lock_symlink 'unsafe canonical MI300X lock ownership, mode, or li
 
 bash -n "${QUEUE}" "${BASH_SOURCE[0]}"
 shellcheck "${QUEUE}" "${BASH_SOURCE[0]}"
-python3 -m py_compile "${ROOT}/scripts/parity-signed-evidence.py"
+"${SYNTAX_CHECK}" "${ROOT}/scripts/parity-signed-evidence.py"
 printf 'signed MI300X evidence queue tests passed\n'

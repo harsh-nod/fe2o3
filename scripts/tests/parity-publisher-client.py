@@ -6,17 +6,24 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import http.server
 import importlib.util
 import json
 import os
 from pathlib import Path
 import shutil
+import socket
+import ssl
 import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from typing import Any, Callable
+
+
+sys.dont_write_bytecode = True
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -37,6 +44,19 @@ CLIENT = load(CLIENT_PATH, "parity_publisher_client_tested")
 EVIDENCE = load(EVIDENCE_PATH, "parity_signed_evidence_publisher_test")
 
 
+class LocalHttpsHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        body = b'{"ok":true}\n'
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, _format: str, *_args: object) -> None:
+        pass
+
+
 class Fixture:
     def __init__(self, root: Path) -> None:
         self.root = root
@@ -47,7 +67,7 @@ class Fixture:
         self.repo.mkdir()
         self.archive.mkdir()
         self.trusted.mkdir()
-        self.runner.mkdir()
+        self.runner.mkdir(mode=0o700)
         self.default_tip = "3" * 40
         self.candidate_head = "4" * 40
         self.challenge = "5" * 64
@@ -128,6 +148,7 @@ class Fixture:
             "ACTIONS_ID_TOKEN_REQUEST_TOKEN": self.secret_request_token,
             "ACTIONS_ID_TOKEN_REQUEST_URL": self.oidc_base,
             "FE2O3_PUBLISHER_CLIENT_TEST_DOMAIN": "1",
+            "FE2O3_PUBLISHER_GITHUB_ENVIRONMENT": CLIENT.OIDC_ENVIRONMENT,
             "FE2O3_PUBLISHER_OIDC_AUDIENCE": self.audience,
             "FE2O3_PUBLISHER_SERVICE_HOST": "publisher.example.invalid",
             "FE2O3_PUBLISHER_SERVICE_URL": self.service_url,
@@ -152,6 +173,7 @@ class Fixture:
             "GITHUB_WORKFLOW": "Protected parity promotion",
             "FE2O3_PUBLISHER_DEFAULT_BRANCH": "main",
             "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "PYTHONDONTWRITEBYTECODE": "1",
             "RUNNER_TEMP": str(self.runner),
         }
         self.oidc_token_value = self.oidc_token()
@@ -246,6 +268,7 @@ class Fixture:
             "base_ref": "",
             "check_run_id": "505",
             "event_name": "merge_group",
+            "environment": CLIENT.OIDC_ENVIRONMENT,
             "exp": now + 300,
             "head_ref": "",
             "iat": now,
@@ -269,7 +292,7 @@ class Fixture:
             "run_number": self.environment["GITHUB_RUN_NUMBER"],
             "runner_environment": "github-hosted",
             "sha": self.candidate_head,
-            "sub": f"repo:powderluv/fe2o3:ref:{self.queue_ref}",
+            "sub": "repo:powderluv/fe2o3:environment:protected-publisher",
             "workflow": "Protected parity promotion",
             "workflow_ref": self.environment["GITHUB_WORKFLOW_REF"],
             "workflow_sha": self.candidate_head,
@@ -485,6 +508,31 @@ def expect_failure(
     assert fixture.secret_request_token not in process.stdout + process.stderr
 
 
+def token_with_duplicate_claim(token: str, claim: str, value: object) -> str:
+    header_segment, claims_segment, signature_segment = token.split(".")
+    claims_raw = base64.urlsafe_b64decode(
+        claims_segment + "=" * ((4 - len(claims_segment) % 4) % 4)
+    )
+    claims = json.loads(claims_raw)
+    duplicate_claim_items = []
+    for key in sorted(claims):
+        duplicate_claim_items.append(
+            f"{json.dumps(key)}:{json.dumps(claims[key], separators=(',', ':'))}"
+        )
+        if key == claim:
+            duplicate_claim_items.append(
+                f"{json.dumps(claim)}:{json.dumps(value, separators=(',', ':'))}"
+            )
+    duplicate_claims_segment = base64.urlsafe_b64encode(
+        ("{" + ",".join(duplicate_claim_items) + "}").encode("ascii")
+    ).rstrip(b"=").decode("ascii")
+    return ".".join((header_segment, duplicate_claims_segment, signature_segment))
+
+
+def stale_ref_subject(fixture: Fixture) -> str:
+    return f"repo:powderluv/fe2o3:ref:{fixture.queue_ref}"
+
+
 def test_success_and_test_domain_guard() -> None:
     with tempfile.TemporaryDirectory(prefix="fe2o3-publisher-client-") as raw_temp:
         fixture = Fixture(Path(raw_temp))
@@ -563,6 +611,25 @@ def test_identity_config_and_replay_rejections() -> None:
                 lambda args, _env: setattr(args, "default_tip", "a" * 40),
             ),
             (
+                "missing-publisher-environment",
+                "configuration is missing",
+                lambda _args, env: env.pop("FE2O3_PUBLISHER_GITHUB_ENVIRONMENT"),
+            ),
+            (
+                "wrong-publisher-environment",
+                "publisher environment is outside",
+                lambda _args, env: env.__setitem__(
+                    "FE2O3_PUBLISHER_GITHUB_ENVIRONMENT", "unprotected"
+                ),
+            ),
+            (
+                "malformed-queue-ref",
+                "GitHub ref is malformed",
+                lambda _args, env: env.__setitem__(
+                    "GITHUB_REF", f"{fixture.queue_ref}/../evil"
+                ),
+            ),
+            (
                 "replay-run",
                 "authorization matrix",
                 lambda _args, env: env.__setitem__("GITHUB_RUN_ATTEMPT", "2"),
@@ -633,12 +700,29 @@ def test_oidc_authorization_matrix() -> None:
         args = fixture.args("matrix-request")
         request, _ = fixture.expected(args)
         authorization = json.loads(request)["oidc_authorization"]
+        assert CLIENT.OIDC_POLICY_ID == "fe2o3-protected-local-merge-group-v3"
         assert authorization["policy_id"] == CLIENT.OIDC_POLICY_ID
+        assert authorization["schema_version"] == 1
+        request_payload = json.loads(request)
+        assert request == CLIENT.canonical_json(request_payload)
+        assert request_payload["request_domain"] == CLIENT.REQUEST_DOMAIN
+        assert request_payload["schema_version"] == CLIENT.REQUEST_SCHEMA_VERSION
+        assert authorization["environment"] == CLIENT.OIDC_ENVIRONMENT
         assert authorization["event_name"] == "merge_group"
         assert authorization["job"] == "gate"
-        assert authorization["alg"] == "RS256"
+        assert "alg" not in authorization
+        assert "kid" not in authorization
+        assert "jti" not in authorization
+        assert "iat" not in authorization
+        assert "nbf" not in authorization
+        assert "exp" not in authorization
+        assert "check_run_id" not in authorization
         assert "x5t" not in authorization
         assert authorization["ref"] == fixture.queue_ref
+        assert authorization["sub"] == (
+            "repo:powderluv/fe2o3:environment:protected-publisher"
+        )
+        assert stale_ref_subject(fixture) != authorization["sub"]
         assert authorization["sha"] == fixture.candidate_head
         assert authorization["job_workflow_ref"] == (
             "powderluv/fe2o3/.github/workflows/"
@@ -651,11 +735,18 @@ def test_oidc_authorization_matrix() -> None:
         )
         assert authorization["workflow_sha"] == fixture.candidate_head
 
+        assert CLIENT.oidc_environment_subject(
+            "powderluv/fe2o3", "protected-publisher"
+        ) == "repo:powderluv/fe2o3:environment:protected-publisher"
+        assert CLIENT.oidc_environment_subject(
+            "powderluv/fe2o3", "protected:publisher"
+        ) == "repo:powderluv/fe2o3:environment:protected%3Apublisher"
+
         x5t_args = fixture.args("documented-x5t-header")
         x5t_token = fixture.oidc_token(header_overrides={"x5t": fixture.x5t})
         x5t_request, _ = fixture.expected(x5t_args, token=x5t_token)
         x5t_authorization = json.loads(x5t_request)["oidc_authorization"]
-        assert x5t_authorization["x5t"] == fixture.x5t
+        assert "x5t" not in x5t_authorization
         fixture.write_transport(
             x5t_args,
             oidc_token=x5t_token,
@@ -663,6 +754,25 @@ def test_oidc_authorization_matrix() -> None:
         )
         process = fixture.run(x5t_args)
         assert process.returncode == 0, process.stderr
+
+        fresh_token = fixture.oidc_token(
+            claim_overrides={"jti": "fresh-jti-for-stable-request"}
+        )
+        fresh_request, _ = fixture.expected(args, token=fresh_token)
+        assert fresh_token != fixture.oidc_token_value
+        assert fresh_request == request
+
+        short_lived = fixture.oidc_token(
+            claim_overrides={"exp": int(time.time()) + 39}
+        )
+        try:
+            CLIENT.oidc_authorization(
+                short_lived, args, fixture.environment, fixture.audience
+            )
+        except CLIENT.ClientError as error:
+            assert "freshness" in str(error)
+        else:
+            raise AssertionError("short-lived token was accepted")
 
         claim_cases: tuple[tuple[str, object], ...] = (
             ("iss", "https://issuer.example.invalid"),
@@ -687,11 +797,37 @@ def test_oidc_authorization_matrix() -> None:
             ),
             ("job_workflow_sha", fixture.default_tip),
             ("event_name", "pull_request_target"),
+            ("environment", "unprotected"),
             ("ref", "refs/heads/main"),
             ("base_ref", "refs/heads/main"),
             ("check_run_id", "not-numeric"),
             ("head_ref", "refs/heads/feature"),
+            ("sub", stale_ref_subject(fixture)),
+            ("sub", "repo:powderluv/fe2o3:pull_request"),
+            ("sub", "repo:powderluv/fe2o3:environment:unprotected"),
+            (
+                "sub",
+                "repo:powderluv@74956/fe2o3@1233498266:"
+                "environment:protected-publisher",
+            ),
+            (
+                "sub",
+                "repository_id:1233498266:repository_owner_id:74956:"
+                "environment:protected-publisher",
+            ),
+            (
+                "sub",
+                "repo:powderluv/fe2o3:repository_id:1233498266:"
+                "environment:protected-publisher",
+            ),
+            (
+                "sub",
+                "repo:powderluv/fe2o3-renamed:environment:protected-publisher",
+            ),
             ("sub", "repo:attacker/fe2o3:ref:refs/heads/main"),
+            ("sub", True),
+            ("environment", True),
+            ("ref", True),
             ("runner_environment", "self-hosted"),
             ("jti", ""),
             ("iat", True),
@@ -759,6 +895,18 @@ def test_oidc_authorization_matrix() -> None:
         assert process.returncode == 2
         assert "duplicate JSON member" in process.stderr
 
+        for claim in ("environment", "ref", "sub"):
+            duplicate_claim_args = fixture.args(f"duplicate-{claim}-claim")
+            duplicate_claim_token = token_with_duplicate_claim(
+                fixture.oidc_token_value, claim, "duplicate"
+            )
+            fixture.write_transport(
+                duplicate_claim_args, oidc_token=duplicate_claim_token
+            )
+            process = fixture.run(duplicate_claim_args)
+            assert process.returncode == 2
+            assert "duplicate JSON member" in process.stderr
+
         args = fixture.args("archive-substitution")
         fixture.candidate_status.write_bytes(b"source_commit\t" + b"2" * 40 + b"\n")
         fixture.write_transport(args)
@@ -766,6 +914,36 @@ def test_oidc_authorization_matrix() -> None:
         process = fixture.run(args)
         assert process.returncode == 2
         assert "response does not match the request" in process.stderr
+
+
+def test_environment_subject_regression() -> None:
+    with tempfile.TemporaryDirectory(prefix="fe2o3-publisher-env-sub-") as raw_temp:
+        fixture = Fixture(Path(raw_temp))
+        args = fixture.args("environment-subject")
+        token = fixture.oidc_token(
+            claim_overrides={
+                "sub": "repo:powderluv/fe2o3:environment:protected-publisher"
+            }
+        )
+        authorization = CLIENT.oidc_authorization(
+            token, args, fixture.environment, fixture.audience
+        )
+        assert authorization["sub"] == (
+            "repo:powderluv/fe2o3:environment:protected-publisher"
+        )
+        assert authorization["ref"] == fixture.queue_ref
+
+        stale_token = fixture.oidc_token(
+            claim_overrides={"sub": stale_ref_subject(fixture)}
+        )
+        try:
+            CLIENT.oidc_authorization(
+                stale_token, args, fixture.environment, fixture.audience
+            )
+        except CLIENT.ClientError as error:
+            assert "authorization matrix: sub" in str(error)
+        else:
+            raise AssertionError("stale ref-based OIDC subject was accepted")
 
 
 def test_transport_failures_bounds_and_redaction() -> None:
@@ -832,6 +1010,33 @@ def test_transport_failures_bounds_and_redaction() -> None:
         assert process.returncode == 2
         assert "response does not match the request" in process.stderr
 
+        args = fixture.args("noncanonical-service-json")
+        request, _ = fixture.expected(args)
+        receipt = fixture.receipt(args)
+        noncanonical_service = json.dumps(
+            {
+                "challenge": fixture.challenge,
+                "publisher_receipt_base64": base64.b64encode(receipt).decode("ascii"),
+                "request_sha256": hashlib.sha256(request).hexdigest(),
+                "schema_version": 1,
+            },
+            indent=2,
+            sort_keys=True,
+        ).encode("ascii")
+        fixture.write_transport(args, service_raw=noncanonical_service)
+        process = fixture.run(args)
+        assert process.returncode == 2
+        assert "not canonical JSON" in process.stderr
+
+        args = fixture.args("unused-duplicate-response")
+        fixture.write_transport(args)
+        transport = json.loads(args.test_transport_fixture.read_text("ascii"))
+        transport["responses"].append(transport["responses"][-1])
+        args.test_transport_fixture.write_bytes(CLIENT.canonical_json(transport))
+        process = fixture.run(args)
+        assert process.returncode == 2
+        assert "unused duplicate responses" in process.stderr
+
         args = fixture.args("parser-value-error")
         fixture.write_transport(args)
         transport = json.loads(args.test_transport_fixture.read_text("ascii"))
@@ -879,9 +1084,125 @@ def test_transport_failures_bounds_and_redaction() -> None:
         assert secret_receipt.decode("ascii") not in output
 
 
+def expect_network_failure(name: str, url: str) -> None:
+    secret = f"{name}-secret-never-log"
+    try:
+        CLIENT.bounded_request(
+            CLIENT.NetworkTransport(),
+            "GET",
+            url,
+            {"Authorization": f"Bearer {secret}"},
+            None,
+            128,
+            name,
+            time.monotonic() + 1.5,
+        )
+    except CLIENT.ClientError as error:
+        message = str(error)
+        assert "failed" in message or "deadline exceeded" in message, message
+        assert secret not in message
+        return
+    raise AssertionError(f"network failure unexpectedly succeeded: {name}")
+
+
+def unused_local_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def test_network_transport_dns_connect_tls_failures() -> None:
+    expect_network_failure(
+        "publisher DNS request",
+        "https://publisher-dns-failure.fe2o3.invalid/receipt",
+    )
+    expect_network_failure(
+        "publisher connect request",
+        f"https://127.0.0.1:{unused_local_port()}/receipt",
+    )
+
+    with tempfile.TemporaryDirectory(prefix="fe2o3-publisher-tls-") as raw_temp:
+        root = Path(raw_temp)
+        key = root / "key.pem"
+        cert = root / "cert.pem"
+        subprocess.run(
+            [
+                "openssl",
+                "req",
+                "-x509",
+                "-newkey",
+                "rsa:2048",
+                "-nodes",
+                "-days",
+                "1",
+                "-subj",
+                "/CN=localhost",
+                "-keyout",
+                key,
+                "-out",
+                cert,
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        server = http.server.HTTPServer(("127.0.0.1", 0), LocalHttpsHandler)
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(certfile=cert, keyfile=key)
+        server.socket = context.wrap_socket(server.socket, server_side=True)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            port = int(server.server_address[1])
+            expect_network_failure(
+                "publisher TLS request", f"https://127.0.0.1:{port}/"
+            )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+
+def test_stable_idempotency_key_is_high_entropy_and_descriptor_checked() -> None:
+    with tempfile.TemporaryDirectory(prefix="fe2o3-publisher-request-key-") as raw_temp:
+        runner = Path(raw_temp)
+        first_digest = "a" * 64
+        second_digest = "b" * 64
+        first = CLIENT.stable_idempotency_key(runner, first_digest)
+        assert len(first) == 64
+        assert CLIENT.SHA256_RE.fullmatch(first)
+        assert CLIENT.stable_idempotency_key(runner, first_digest) == first
+        second = CLIENT.stable_idempotency_key(runner, second_digest)
+        assert second != first
+
+        path = runner / f".fe2o3-publisher-idempotency-{first_digest}"
+        metadata = path.stat()
+        assert stat.S_IMODE(metadata.st_mode) == 0o600
+        assert metadata.st_nlink == 1
+        os.link(path, runner / "hardlink")
+        try:
+            CLIENT.stable_idempotency_key(runner, first_digest)
+        except CLIENT.ClientError as error:
+            assert "metadata" in str(error)
+        else:
+            raise AssertionError("hard-linked idempotency key was accepted")
+
+        symlink_digest = "c" * 64
+        os.symlink(path, runner / f".fe2o3-publisher-idempotency-{symlink_digest}")
+        try:
+            CLIENT.stable_idempotency_key(runner, symlink_digest)
+        except CLIENT.ClientError as error:
+            assert "unavailable" in str(error)
+        else:
+            raise AssertionError("symlink idempotency key was accepted")
+
+
 if __name__ == "__main__":
     test_success_and_test_domain_guard()
     test_identity_config_and_replay_rejections()
     test_oidc_authorization_matrix()
+    test_environment_subject_regression()
     test_transport_failures_bounds_and_redaction()
+    test_network_transport_dns_connect_tls_failures()
+    test_stable_idempotency_key_is_high_entropy_and_descriptor_checked()
     print("protected publisher client adversarial tests passed")

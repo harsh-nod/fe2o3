@@ -8,6 +8,7 @@ readonly TEST_DIR
 ROOT="$(cd -- "${TEST_DIR}/../.." && pwd)"
 readonly ROOT
 readonly TOOL="${ROOT}/scripts/parity-row-evidence.sh"
+readonly SYNTAX_CHECK="${ROOT}/scripts/tests/python-syntax-only.sh"
 readonly ATTESTOR_PRIVATE="${TEST_DIR}/fixtures/evidence-test-attestor-private.pem"
 readonly REVIEWER_PRIVATE="${TEST_DIR}/fixtures/evidence-test-reviewer-private.pem"
 TEST_ROOT="$(mktemp -d)"
@@ -20,6 +21,26 @@ trap cleanup EXIT
 readonly REPO="${TEST_ROOT}/repo"
 readonly ARCHIVE="${TEST_ROOT}/archive"
 readonly TRUSTED="${TEST_ROOT}/trusted"
+
+assert_clean_checkout() {
+  local stage="$1"
+  local status artifacts
+  status="$(git -C "${ROOT}" status --porcelain=v1 --untracked-files=all)"
+  artifacts="$(
+    find "${ROOT}" -path "${ROOT}/.git" -prune -o \
+      -path "${ROOT}/target" -prune -o \
+      \( -type d -name __pycache__ -o -type f \
+      \( -name '*.pyc' -o -name '*.pyo' \) \) -print
+  )"
+  if [[ -n "${status}" || -n "${artifacts}" ]]; then
+    printf 'checkout is not clean %s row-evidence tests\n' "${stage}" >&2
+    [[ -z "${status}" ]] || printf '%s\n' "${status}" >&2
+    [[ -z "${artifacts}" ]] || printf '%s\n' "${artifacts}" >&2
+    exit 1
+  fi
+}
+
+assert_clean_checkout before
 
 expect_failure() {
   local name="$1"
@@ -958,6 +979,7 @@ expect_failure archive_index_extra 'archive index closure mismatch' \
 chmod -R u+w "${INGEST_DESTINATION}" "${INDEX_TAMPERED}" "${INDEX_EXTRA}"
 
 bash -n "${TOOL}" "${BASH_SOURCE[0]}"
-python3 -m py_compile "${ROOT}/scripts/parity-signed-evidence.py"
+"${SYNTAX_CHECK}" "${ROOT}/scripts/parity-signed-evidence.py"
 shellcheck "${TOOL}" "${BASH_SOURCE[0]}"
+assert_clean_checkout after
 printf 'signed parity row evidence tests passed\n'

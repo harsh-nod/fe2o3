@@ -124,11 +124,13 @@ if rg -n 'parity-publisher-gate\.yml@' "${PROTECTED_WORKFLOW}"; then
 fi
 
 require_text "${PUBLISHER_WORKFLOW}" 'workflow_call:'
+require_text "${PUBLISHER_WORKFLOW}" 'environment: protected-publisher'
 require_text "${PUBLISHER_WORKFLOW}" 'id-token: write'
 require_text "${PUBLISHER_WORKFLOW}" 'FE2O3_PUBLISHER_REPOSITORY_OWNER_ID: ${{ github.repository_owner_id }}'
 require_text "${PUBLISHER_WORKFLOW}" 'FE2O3_PUBLISHER_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}'
 require_text "${PUBLISHER_WORKFLOW}" 'FE2O3_PUBLISHER_SERVICE_URL: ${{ vars.FE2O3_PUBLISHER_SERVICE_URL }}'
 require_text "${PUBLISHER_WORKFLOW}" 'FE2O3_PUBLISHER_SERVICE_HOST: ${{ vars.FE2O3_PUBLISHER_SERVICE_HOST }}'
+require_text "${PUBLISHER_WORKFLOW}" 'FE2O3_PUBLISHER_GITHUB_ENVIRONMENT: protected-publisher'
 require_text "${PUBLISHER_WORKFLOW}" 'FE2O3_PUBLISHER_OIDC_AUDIENCE: ${{ vars.FE2O3_PUBLISHER_OIDC_AUDIENCE }}'
 require_text "${PUBLISHER_WORKFLOW}" 'python3 protected/scripts/parity-publisher-client.py'
 require_text "${PUBLISHER_WORKFLOW}" 'python3 protected/scripts/parity-signed-evidence.py gate'
@@ -138,6 +140,16 @@ require_text "${PUBLISHER_WORKFLOW}" 'merge-group base SHA is not current defaul
 require_text "${PUBLISHER_WORKFLOW}" '--publisher-receipt-root "${publisher_receipt_root}"'
 require_text "${PUBLISHER_WORKFLOW}" '--expected-default-tip "${BASE_SHA}"'
 require_text "${PUBLISHER_WORKFLOW}" '--expected-candidate-head "${HEAD_SHA}"'
+if sed -n '/^on:/,/^permissions:/p' "${PUBLISHER_WORKFLOW}" |
+  rg -n '^[[:space:]]+(inputs|secrets):' >/dev/null; then
+  printf 'publisher reusable workflow unexpectedly accepts caller data\n' >&2
+  exit 1
+fi
+if sed -n '/^  verify-merge-group:/,$p' "${PROTECTED_WORKFLOW}" |
+  rg -n '^[[:space:]]+(with|secrets):' >/dev/null; then
+  printf 'publisher caller unexpectedly forwards caller-controlled data\n' >&2
+  exit 1
+fi
 
 for path in \
   docs/parity-evidence/trust-policy-v2.tsv \

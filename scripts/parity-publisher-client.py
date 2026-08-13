@@ -9,9 +9,11 @@ import binascii
 import hashlib
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 import re
+import secrets
 import signal
 import ssl
 import stat
@@ -24,6 +26,8 @@ import urllib.parse
 import urllib.request
 
 
+REQUEST_SCHEMA_VERSION = 1
+REQUEST_DOMAIN = "fe2o3-protected-publisher-request-v1"
 OIDC_HOST = "token.actions.githubusercontent.com"
 RECEIPT_NAME = "publisher-receipt-v2.tsv"
 MAX_OIDC_RESPONSE_BYTES = 64 * 1024
@@ -35,9 +39,11 @@ MAX_TEST_DEADLINE_MILLISECONDS = 1000
 MAX_BEARER_TOKEN_BYTES = 16 * 1024
 MAX_OIDC_TOKEN_LIFETIME = 10 * 60
 OIDC_CLOCK_SKEW = 5 * 60
+TOKEN_RECOVERY_GRACE_SECONDS = 30
 OIDC_ISSUER = "https://token.actions.githubusercontent.com"
 OIDC_ALGORITHM = "RS256"
-OIDC_POLICY_ID = "fe2o3-protected-local-merge-group-v2"
+OIDC_POLICY_ID = "fe2o3-protected-local-merge-group-v3"
+OIDC_AUTHORIZATION_SCHEMA_VERSION = 1
 OIDC_EVENT = "merge_group"
 OIDC_JOB = "gate"
 OIDC_RUNNER_ENVIRONMENT = "github-hosted"
@@ -45,6 +51,7 @@ OIDC_DEFAULT_BRANCH = "main"
 OIDC_REPOSITORY = "powderluv/fe2o3"
 OIDC_REPOSITORY_ID = "1233498266"
 OIDC_REPOSITORY_OWNER_ID = "74956"
+OIDC_ENVIRONMENT = "protected-publisher"
 CALLER_WORKFLOW_PATH = ".github/workflows/parity-promotion.yml"
 PROTECTED_WORKFLOW_PATH = ".github/workflows/parity-publisher-gate.yml"
 MAX_PUBLISHER_RECEIPT_LIFETIME = 24 * 60 * 60
@@ -60,6 +67,7 @@ HOST_RE = re.compile(
 )
 SAFE_TEXT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/@:+-]{0,511}$")
 X5T_RE = re.compile(r"^[A-Za-z0-9_-]{27}$")
+REF_FORBIDDEN_RE = re.compile(r"[\000-\037\177 ~^:?*\\[]")
 OIDC_HEADER_KEY_SETS = (
     frozenset(("alg", "kid", "typ")),
     frozenset(("alg", "kid", "typ", "x5t")),
@@ -106,6 +114,7 @@ WORKFLOW_ENV = (
     "GITHUB_REF",
     "GITHUB_SHA",
     "GITHUB_ACTOR_ID",
+    "FE2O3_PUBLISHER_GITHUB_ENVIRONMENT",
     "FE2O3_PUBLISHER_DEFAULT_BRANCH",
 )
 
@@ -230,6 +239,10 @@ class FixtureTransport:
         if not isinstance(value["responses"], list):
             fail("test transport fixture schema is invalid")
         self.responses = list(value["responses"])
+
+    def assert_consumed(self) -> None:
+        if self.responses:
+            fail("test transport has unused duplicate responses")
 
     def request(
         self,
@@ -393,6 +406,48 @@ def checked_response(
     if content_type != "application/json":
         fail(f"{label} has an invalid content type")
     return response.body
+
+
+def valid_git_ref_name(ref: str) -> bool:
+    if (
+        not ref
+        or len(ref) > 1024
+        or ref == "@"
+        or ref.startswith("/")
+        or ref.endswith("/")
+        or ref.endswith(".")
+        or ref.endswith(".lock")
+        or "//" in ref
+        or ".." in ref
+        or "@{" in ref
+        or REF_FORBIDDEN_RE.search(ref)
+    ):
+        return False
+    return not any(
+        component in ("", ".", "..")
+        or component.startswith(".")
+        or component.endswith(".lock")
+        for component in ref.split("/")
+    )
+
+
+def oidc_subject_component(value: str) -> str:
+    return value.replace(":", "%3A")
+
+
+def oidc_environment_subject(repository: str, environment_name: str) -> str:
+    return (
+        f"repo:{oidc_subject_component(repository)}:environment:"
+        f"{oidc_subject_component(environment_name)}"
+    )
+
+
+def valid_branch_name(branch: str) -> bool:
+    return (
+        bool(branch)
+        and not branch.startswith(("-", "/", "refs/"))
+        and valid_git_ref_name(f"refs/heads/{branch}")
+    )
 
 
 def required_environment(environment: dict[str, str], name: str) -> str:
@@ -563,8 +618,13 @@ def workflow_identity(environment: dict[str, str]) -> dict[str, str]:
     if values["GITHUB_WORKFLOW"] != "Protected parity promotion":
         fail("GitHub workflow name is outside the OIDC authorization matrix")
     default_branch = values["FE2O3_PUBLISHER_DEFAULT_BRANCH"]
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,254}", default_branch):
+    publisher_environment = values["FE2O3_PUBLISHER_GITHUB_ENVIRONMENT"]
+    if not valid_branch_name(default_branch):
         fail("GitHub default branch is malformed")
+    if not valid_git_ref_name(values["GITHUB_REF"]):
+        fail("GitHub ref is malformed")
+    if publisher_environment != OIDC_ENVIRONMENT:
+        fail("GitHub publisher environment is outside the OIDC authorization matrix")
     if default_branch != OIDC_DEFAULT_BRANCH:
         fail("GitHub default branch is outside the OIDC authorization matrix")
     queue_prefix = f"refs/heads/gh-readonly-queue/{default_branch}/"
@@ -592,6 +652,8 @@ def oidc_authorization(
     args: argparse.Namespace,
     environment: dict[str, str],
     audience: str,
+    minimum_remaining_seconds: int = NETWORK_TIMEOUT_SECONDS
+    + TOKEN_RECOVERY_GRACE_SECONDS,
 ) -> dict[str, Any]:
     if not COMMIT_RE.fullmatch(args.default_tip) or not COMMIT_RE.fullmatch(
         args.candidate_head
@@ -634,14 +696,16 @@ def oidc_authorization(
     ):
         fail("GitHub workflow SHA does not match the merge-group candidate")
     repository = identity["github_repository"]
-    default_branch = identity["fe2o3_publisher_default_branch"]
     ref = identity["github_ref"]
-    subject = f"repo:{repository}:ref:{ref.replace(':', '%3A')}"
+    subject = oidc_environment_subject(
+        repository, identity["fe2o3_publisher_github_environment"]
+    )
     expected_strings = {
         "actor_id": identity["github_actor_id"],
         "aud": audience,
         "base_ref": "",
         "event_name": OIDC_EVENT,
+        "environment": OIDC_ENVIRONMENT,
         "head_ref": "",
         "iss": OIDC_ISSUER,
         "job_workflow_ref": (
@@ -666,18 +730,13 @@ def oidc_authorization(
         "workflow_sha": args.candidate_head,
     }
     resolved: dict[str, Any] = {
-        "alg": header["alg"],
         "job": identity["github_job"],
-        "kid": header["kid"],
         "policy_id": OIDC_POLICY_ID,
-        "schema_version": 1,
+        "schema_version": OIDC_AUTHORIZATION_SCHEMA_VERSION,
     }
-    if "x5t" in header:
-        resolved["x5t"] = header["x5t"]
     check_run_id = claim_string(claims, "check_run_id")
     if not check_run_id.isdigit() or int(check_run_id) <= 0:
         fail("GitHub OIDC claim is malformed: check_run_id")
-    resolved["check_run_id"] = check_run_id
     for name, expected in expected_strings.items():
         actual = claim_string(
             claims, name, allow_empty=name in ("base_ref", "head_ref")
@@ -695,11 +754,116 @@ def oidc_authorization(
         or expires_at - issued_at > MAX_OIDC_TOKEN_LIFETIME
         or not_before > now + OIDC_CLOCK_SKEW
         or expires_at < now
+        or expires_at - now < minimum_remaining_seconds
     ):
         fail("GitHub OIDC token freshness is outside the authorization matrix")
-    resolved.update({"exp": expires_at, "iat": issued_at, "nbf": not_before})
-    resolved["jti"] = claim_string(claims, "jti")
+    claim_string(claims, "jti")
     return resolved
+
+
+def stable_idempotency_key(runner_temp: Path, request_digest: str) -> str:
+    if not SHA256_RE.fullmatch(request_digest):
+        fail("publisher request digest is malformed")
+    runner = Path(os.path.abspath(runner_temp))
+    name = f".fe2o3-publisher-idempotency-{request_digest}"
+    identity = lambda value: (
+        value.st_dev,
+        value.st_ino,
+        value.st_mode,
+        value.st_uid,
+        value.st_gid,
+        value.st_nlink,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
+    try:
+        directory_fd = os.open(
+            runner, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
+        )
+    except OSError:
+        fail("RUNNER_TEMP must be a real directory")
+    try:
+        directory = os.fstat(directory_fd)
+        if (
+            not stat.S_ISDIR(directory.st_mode)
+            or directory.st_uid != os.geteuid()
+            or directory.st_mode & 0o022
+        ):
+            fail("RUNNER_TEMP is not owner-controlled")
+        try:
+            descriptor = os.open(
+                name,
+                os.O_WRONLY
+                | os.O_CREAT
+                | os.O_EXCL
+                | os.O_CLOEXEC
+                | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=directory_fd,
+            )
+        except FileExistsError:
+            descriptor = -1
+        except OSError:
+            fail("publisher idempotency key creation failed")
+        if descriptor >= 0:
+            try:
+                os.fchmod(descriptor, 0o600)
+                write_all(
+                    descriptor,
+                    f"{secrets.token_hex(32)}\n".encode("ascii"),
+                    "publisher idempotency key",
+                )
+                os.fsync(descriptor)
+                os.fsync(directory_fd)
+            finally:
+                os.close(descriptor)
+        try:
+            before = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            descriptor = os.open(
+                name,
+                os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                dir_fd=directory_fd,
+            )
+        except OSError:
+            fail("publisher idempotency key is unavailable")
+        try:
+            opened = os.fstat(descriptor)
+            if (
+                identity(before) != identity(opened)
+                or not stat.S_ISREG(opened.st_mode)
+                or opened.st_uid != os.geteuid()
+                or stat.S_IMODE(opened.st_mode) != 0o600
+                or opened.st_nlink != 1
+                or opened.st_size != 65
+            ):
+                fail("publisher idempotency key metadata is invalid")
+            chunks: list[bytes] = []
+            total = 0
+            while total <= 65:
+                chunk = os.read(descriptor, 66 - total)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
+            raw = b"".join(chunks)
+            if len(raw) > 65 or os.read(descriptor, 1):
+                fail("publisher idempotency key exceeds its bound")
+            after = os.fstat(descriptor)
+            final = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            if identity(opened) != identity(after) or identity(opened) != identity(final):
+                fail("publisher idempotency key changed during read")
+        finally:
+            os.close(descriptor)
+    finally:
+        os.close(directory_fd)
+    try:
+        key = raw.decode("ascii").removesuffix("\n")
+    except UnicodeError:
+        fail("publisher idempotency key is malformed")
+    if not SHA256_RE.fullmatch(key):
+        fail("publisher idempotency key is malformed")
+    return key
 
 
 def build_request(
@@ -743,7 +907,8 @@ def build_request(
         "manifest_path": args.manifest,
         "manifest_sha256": manifest_digest,
         "oidc_authorization": authorization,
-        "schema_version": 1,
+        "request_domain": REQUEST_DOMAIN,
+        "schema_version": REQUEST_SCHEMA_VERSION,
         "source_commit": manifest["source_commit"],
         "source_tree": manifest["source_tree"],
         "target": manifest["target"],
@@ -1038,11 +1203,20 @@ def acquire(args: argparse.Namespace, environment: dict[str, str]) -> None:
     if type(token) is not str:
         fail("GitHub OIDC response token is malformed")
     token = validate_bearer_token(token, "GitHub OIDC response token")
-    authorization = oidc_authorization(token, args, environment, audience)
+    authorization = oidc_authorization(
+        token,
+        args,
+        environment,
+        audience,
+        math.ceil(deadline_seconds) + TOKEN_RECOVERY_GRACE_SECONDS,
+    )
     request_body, expected, evidence = build_request(
         args, environment, authorization
     )
     request_digest = hashlib.sha256(request_body).hexdigest()
+    idempotency_key = stable_idempotency_key(
+        Path(required_environment(environment, "RUNNER_TEMP")), request_digest
+    )
 
     service_response = bounded_request(
         transport,
@@ -1052,6 +1226,7 @@ def acquire(args: argparse.Namespace, environment: dict[str, str]) -> None:
             "Authorization": f"Bearer {token}",
             "Accept": "application/json",
             "Content-Type": "application/json",
+            "Idempotency-Key": idempotency_key,
             "User-Agent": "fe2o3-parity-publisher-client/1",
         },
         request_body,
@@ -1065,6 +1240,8 @@ def acquire(args: argparse.Namespace, environment: dict[str, str]) -> None:
         MAX_SERVICE_RESPONSE_BYTES,
         "protected publisher service request",
     )
+    if isinstance(transport, FixtureTransport):
+        transport.assert_consumed()
     service = require_exact_keys(
         json_no_duplicates(service_raw, "protected publisher response"),
         {"challenge", "publisher_receipt_base64", "request_sha256", "schema_version"},

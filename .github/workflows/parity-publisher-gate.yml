@@ -10,6 +10,7 @@ jobs:
   gate:
     name: Protected publisher authorization
     runs-on: ubuntu-24.04
+    environment: protected-publisher
     timeout-minutes: 10
     permissions:
       contents: read
@@ -81,6 +82,7 @@ jobs:
           FE2O3_PUBLISHER_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           FE2O3_PUBLISHER_SERVICE_URL: ${{ vars.FE2O3_PUBLISHER_SERVICE_URL }}
           FE2O3_PUBLISHER_SERVICE_HOST: ${{ vars.FE2O3_PUBLISHER_SERVICE_HOST }}
+          FE2O3_PUBLISHER_GITHUB_ENVIRONMENT: protected-publisher
           FE2O3_PUBLISHER_OIDC_AUDIENCE: ${{ vars.FE2O3_PUBLISHER_OIDC_AUDIENCE }}
           FE2O3_PUBLISHER_REPOSITORY_OWNER_ID: ${{ github.repository_owner_id }}
         run: |

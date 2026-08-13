@@ -17,6 +17,9 @@ from types import SimpleNamespace
 from concurrent.futures import ThreadPoolExecutor
 
 
+sys.dont_write_bytecode = True
+
+
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location(
     "parity_signed_evidence", ROOT / "scripts/parity-signed-evidence.py"
