@@ -2,8 +2,10 @@
 
 set -Eeuo pipefail
 
-readonly TEST_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-readonly REPO_ROOT="$(cd -- "${TEST_DIR}/../.." && pwd)"
+TEST_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+readonly TEST_DIR
+REPO_ROOT="$(cd -- "${TEST_DIR}/../.." && pwd)"
+readonly REPO_ROOT
 readonly SYNTAX_CHECK="${REPO_ROOT}/scripts/tests/python-syntax-only.sh"
 
 export PYTHONDONTWRITEBYTECODE=1
