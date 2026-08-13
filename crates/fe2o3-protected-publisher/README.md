@@ -35,10 +35,14 @@ Any indexed-read or index/frame validation failure poisons the live store and
 blocks subsequent acknowledgement while leaving the durable ledger unchanged
 for independent restart replay; a validated frame with a different caller
 request returns a non-poisoning replay conflict.
-The ledger-v2 format ends every committed frame with an authenticated fixed
-trailer and redundant length, so replay cannot erase a complete record merely
-because its forward length was corrupted. Ledger-v1 files fail closed and are
-never migrated or rewritten implicitly.
+The ledger-v3 format has three independently checksummed commit checkpoints in
+its fixed header. Frame bytes are synced before the next checkpoint generation
+is written and synced; only then is a receipt acknowledged. Replay validates
+the complete checkpoint-declared prefix and never infers commitment by scanning
+damaged frame metadata. Bytes beyond that prefix are unacknowledged tail and may
+be truncated, while any corruption inside it fails startup without modifying
+the file. Ledger-v1 and ledger-v2 files fail closed and are never migrated or
+rewritten implicitly.
 
 This crate is inert by default. It is not deployed, production-ready, or an
 acceptance/parity claim. See `docs/protected-publisher-service-v1.md` for the

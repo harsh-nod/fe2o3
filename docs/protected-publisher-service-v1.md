@@ -199,8 +199,11 @@ The ledger descriptor remains open for the process lifetime. Shutdown
 explicitly applies `LOCK_UN` before close so a transient fork-inherited
 open-file description cannot extend the lock until its close-on-exec boundary.
 
-The file header binds the format and configuration-derived service identity.
-Each append-only frame contains:
+The file header binds the format and configuration-derived service identity. It
+also contains three fixed-size, independently recognizable checkpoint copies.
+Each checkpoint contains its own magic and version, generation, committed tail
+offset, committed frame-chain head, a SHA-256 checksum over those fields, and a
+fixed end magic. Each append-only frame contains:
 
 ```text
 magic | version | payload_length | sequence | previous_frame_hash
@@ -211,10 +214,11 @@ SHA256(commit_domain || frame_prefix || record || frame_hash || trailer_fields)
 fixed_commit_magic
 ```
 
-The ledger and frame are explicitly version 2. Version 1 ledgers are rejected
-unchanged; startup performs no implicit reinterpretation or migration. An
-operator must retain the old binary for read-only export and provision a new
-ledger through a separately reviewed migration procedure.
+The ledger, checkpoint, frame, frame-hash domain, and commit-hash domain are
+explicitly version 3. Version 1 and version 2 ledgers are rejected unchanged;
+startup performs no implicit reinterpretation or migration. An operator must
+retain the matching old binary for read-only export and provision a new ledger
+through a separately reviewed migration procedure.
 
 Records contain separate request-key, request, stable-authorization, and
 evidence identities plus exact request/response bytes in canonical base64.
@@ -249,17 +253,29 @@ The generic canonical JSON string limit remains 4,096 bytes. Only the ledger
 record and generated response parsers use their separately bounded base64
 field limits.
 
-EOF before a complete authenticated commit trailer is classified as an
-unacknowledged torn tail, truncated to the previous complete frame, and
-`fdatasync`ed before service. Before truncation, replay scans the bounded
-candidate frame for the independently recognizable trailer. This detects a
-committed frame even when its forward payload length was corrupted upward.
-Any mutation of a complete frame, including its length, payload, frame hash,
-redundant length, sequence, commit hash, or commit magic, fails startup without
-modifying the file. Short writes are retried. A write error, injected ENOSPC,
-identity loss, or sync failure poisons the live store and prevents
-acknowledgement; restart can remove only a byte prefix that never reached a
-complete commit trailer.
+Append first writes the complete frame with short-write and `EINTR` handling and
+calls `fdatasync`. It then overwrites the three checkpoint copies in order with
+the next generation and new tail offset/hash, again handling short writes, and
+calls `fdatasync` a second time. A receipt is acknowledged only after both syncs
+and descriptor/path identity validation succeed. During an interrupted
+checkpoint update, any valid higher generation is authoritative; valid copies
+of the same generation must be identical. A write failure can therefore leave
+an unacknowledged record durable, but the stable request key makes its retry
+idempotent.
+
+Startup selects the highest valid checkpoint within the configured row and
+file bounds, then decodes exactly the complete prefix it declares. Every frame,
+sequence, chain hash, record, final offset, generation count, and checkpoint
+chain head must agree. Any ambiguity or corruption in that committed prefix,
+including forward length plus trailer or magic corruption, fails startup
+without modifying the file. Replay does not scan for a trailer or infer a
+commit boundary from frame bytes. Only bytes physically beyond a fully
+validated checkpoint tail are classified as an unacknowledged partial append;
+those bytes are truncated and `fdatasync`ed before service. If no checkpoint
+copy is valid, the file is rejected unchanged. A single corrupted checkpoint
+copy is tolerated by the other copies; corruption that defeats their checksum
+is not repaired in place. Ledger size and checkpoint bounds are checked before
+any recovery write.
 
 Before append and after `fdatasync`, the retained descriptor and directory
 entry must still agree on device, inode, mode, UID, GID, and link count. A
@@ -345,8 +361,11 @@ scripts/test-protected-publisher-service.sh
 
 It runs debug and release Rust tests, hostile body and client transport tests,
 fresh-token recovery, key/body/authorization collisions, descriptor races,
-torn/corrupt/duplicate frames, maximum-ref restart, append/replay decoder
-closure, short-write and ENOSPC injection, blocking-FD rejection, immutable
+torn/corrupt/duplicate frames, every committed and uncommitted truncation
+boundary, first/middle/last length-plus-trailer corruption, every checkpoint
+byte, partial checkpoint generations and writes, maximum-ref restart,
+append/replay decoder closure, short-write and ENOSPC injection, blocking-FD
+rejection, immutable
 status-flag observation, nonblocking FIFO/socket enrollment races, and
 socket-family rejection, JWKS concurrency/waves/rotation/deadlines,
 client-service conformance, the synthetic AF_UNIX nondumpable/core-limit secret
@@ -364,7 +383,9 @@ production supervisor, production monitoring/rate limiting, external rollback
 anchor, online ledger compaction, tested backup/restore, or tested physical
 power-loss/full-disk recovery. Injected write failures are not physical storage
 qualification. Advisory locking is not a defense against root or the service
-UID. No real GitHub merge-group enrollment token was available.
+UID. The three checkpoint copies detect corruption but are not claimed as three
+independent physical storage failure domains. No real GitHub merge-group
+enrollment token was available.
 
 Candidate status remains rejected until a fresh hostile independent review
 accepts the exact code, deployment, GitHub controls, enrolled real claims,
