@@ -100,6 +100,32 @@ fn all_capabilities() -> BTreeSet<TargetCapability> {
     .collect()
 }
 
+#[test]
+fn exact_gfx942_xnack_minus_binding_round_trips_in_every_kernel_ir_wire_version() {
+    let mut module = Module::new("exact-gfx942-target-binding");
+    module
+        .required_capabilities
+        .insert(gfx942_xnack_minus_target_capability());
+
+    for (encode, decode) in [
+        (
+            encode_module_v1 as fn(&Module) -> Result<Vec<u8>, KernelIrEncodeError>,
+            decode_module_v1 as fn(&[u8]) -> Result<Module, KernelIrDecodeError>,
+        ),
+        (encode_module_v2, decode_module_v2),
+        (encode_module_v3, decode_module_v3),
+        (encode_module_v4, decode_module_v4),
+    ] {
+        let encoded = encode(&module).expect("exact target binding encodes");
+        let decoded = decode(&encoded).expect("exact target binding decodes");
+        assert_eq!(decoded, module);
+        assert_eq!(
+            decoded.required_capabilities,
+            BTreeSet::from([gfx942_xnack_minus_target_capability()])
+        );
+    }
+}
+
 fn all_operations() -> Vec<Operation> {
     let constants = vec![
         Constant::Bool(false),
