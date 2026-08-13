@@ -509,11 +509,15 @@ fn caller_output_bound_is_enforced_on_the_candidate() {
         limits(),
     )
     .unwrap_err();
-    assert!(matches!(
-        error,
-        FirstBuildWorkerV2Error::CandidateExecution(ref execution)
+    let is_output_limit = matches!(
+        &error,
+        FirstBuildWorkerV2Error::CandidateExecution(execution)
             if execution.kind() == &WorkerExecutionErrorKind::OutputLimitExceeded
-    ));
+    );
+    assert!(
+        is_output_limit,
+        "unexpected candidate output-bound error: {error:#?}"
+    );
 }
 
 #[test]
