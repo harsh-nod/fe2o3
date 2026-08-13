@@ -23,17 +23,18 @@ const COLLECTED_AUTHORITY_DOMAIN_V2: &[u8] = b"fe2o3.scalar-control-flow.collect
 const REVIEWED_RUSTC_RELEASE: &str = "1.96.0-nightly";
 const REVIEWED_RUSTC_COMMIT: &str = "55e86c996809902e8bbad512cfb4d2c18be446d9";
 const REVIEWED_RUSTC_LLVM: &str = "22.1.2";
+const REVIEWED_CRATE_METADATA: &str = "fe2o3-scalar-control-flow-v2-reviewed";
 const PORTABLE_CLOSURE_IDENTITY: [u8; 32] = [
     0x47, 0xf3, 0xdd, 0x95, 0x22, 0x68, 0x91, 0x3b, 0x8f, 0xe9, 0xec, 0xe9, 0x94, 0x6c, 0x1a, 0x5f,
     0xaf, 0x42, 0xac, 0xbd, 0xe3, 0x54, 0x4d, 0xf5, 0x1b, 0x4d, 0xd8, 0x3e, 0xde, 0x6b, 0x03, 0x65,
 ];
 const ROOT_CFG_IDENTITY: [u8; 32] = [
-    0x9a, 0x21, 0x79, 0xa1, 0x3a, 0x84, 0x27, 0xe1, 0x7e, 0x22, 0x4b, 0xe6, 0x51, 0x68, 0xc3, 0x9b,
-    0x34, 0xc2, 0x12, 0xcf, 0x9f, 0x10, 0x01, 0xa0, 0x3d, 0x04, 0x0b, 0xd6, 0xcd, 0x32, 0x48, 0x1c,
+    0xd0, 0xaa, 0xb4, 0xf6, 0x79, 0xd2, 0x2a, 0xe1, 0x63, 0xeb, 0x64, 0x08, 0xb1, 0xbe, 0xe8, 0x2e,
+    0x3c, 0x87, 0xe9, 0x6a, 0x69, 0x4a, 0xe4, 0x9f, 0x9c, 0x66, 0x40, 0x8e, 0xa7, 0x67, 0x73, 0x0f,
 ];
 const HELPER_CFG_IDENTITY: [u8; 32] = [
-    0xb0, 0x63, 0x4e, 0xea, 0x02, 0xb2, 0x3d, 0x62, 0xec, 0x50, 0xb4, 0x48, 0xd6, 0x32, 0xdf, 0x02,
-    0xd5, 0x52, 0xc6, 0x25, 0x1b, 0x65, 0x42, 0x39, 0xd4, 0x1f, 0x64, 0xd3, 0x79, 0xab, 0x8e, 0x19,
+    0x81, 0x0b, 0xaa, 0x38, 0x2d, 0x5a, 0xba, 0x35, 0xb6, 0xfc, 0x56, 0x7a, 0xe0, 0x25, 0x28, 0x3e,
+    0x06, 0x56, 0xfe, 0x3e, 0x12, 0xc0, 0x7b, 0x12, 0x07, 0xd0, 0xa5, 0xe7, 0x53, 0x53, 0x21, 0xdc,
 ];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -52,6 +53,7 @@ struct CompilerSemanticsV2 {
     target_cpu: Option<String>,
     target_features: String,
     rustc_codegen_opt_level: String,
+    crate_metadata: Vec<String>,
     remap_path_destinations: Vec<String>,
 }
 
@@ -288,6 +290,7 @@ fn observe_compiler_semantics(tcx: TyCtxt<'_>) -> CompilerSemanticsV2 {
         target_cpu: tcx.sess.opts.cg.target_cpu.clone(),
         target_features: tcx.sess.opts.cg.target_feature.clone(),
         rustc_codegen_opt_level: tcx.sess.opts.cg.opt_level.clone(),
+        crate_metadata: tcx.sess.opts.cg.metadata.clone(),
         remap_path_destinations: tcx
             .sess
             .opts
@@ -348,8 +351,16 @@ fn require_compiler_semantics(
             "rustc target CPU/features must be unset, found {:?}/{:?}",
             observed.target_cpu, observed.target_features
         ))
+    } else if observed.crate_metadata != [REVIEWED_CRATE_METADATA] {
+        Some(format!(
+            "crate metadata must be exactly {REVIEWED_CRATE_METADATA:?}, found {:?}",
+            observed.crate_metadata
+        ))
     } else if observed.remap_path_destinations
-        != ["/fe2o3-reviewed-workspace/scalar-control-flow-v1.rs"]
+        != [
+            "/fe2o3-reviewed-workspace/scalar-control-flow-v1.rs",
+            "/fe2o3-reviewed-workspace",
+        ]
     {
         Some(format!(
             "source remapping must contain exactly one canonical fixture destination, found {:?}",
@@ -391,7 +402,10 @@ fn require_compiler_semantics(
     }
     hash_field(&mut digest, observed.target_features.as_bytes());
     hash_field(&mut digest, observed.rustc_codegen_opt_level.as_bytes());
-    hash_field(&mut digest, observed.remap_path_destinations[0].as_bytes());
+    hash_field(&mut digest, observed.crate_metadata[0].as_bytes());
+    for destination in &observed.remap_path_destinations {
+        hash_field(&mut digest, destination.as_bytes());
+    }
     Ok(digest.finalize().into())
 }
 
@@ -727,8 +741,10 @@ mod tests {
             target_cpu: None,
             target_features: String::new(),
             rustc_codegen_opt_level: "0".to_owned(),
+            crate_metadata: vec![REVIEWED_CRATE_METADATA.to_owned()],
             remap_path_destinations: vec![
                 "/fe2o3-reviewed-workspace/scalar-control-flow-v1.rs".to_owned(),
+                "/fe2o3-reviewed-workspace".to_owned(),
             ],
         }
     }
@@ -910,6 +926,10 @@ mod tests {
             .remap_path_destinations
             .push("/attacker.rs".to_owned());
         assert!(require_compiler_semantics(&extra_remap).is_err());
+
+        let mut metadata_substitution = compiler_semantics();
+        metadata_substitution.crate_metadata = vec!["attacker".to_owned()];
+        assert!(require_compiler_semantics(&metadata_substitution).is_err());
 
         let mut different_compiler = compiler_semantics();
         different_compiler.rustc_commit = "0000000000000000000000000000000000000000";

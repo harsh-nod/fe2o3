@@ -33,10 +33,14 @@ admission.
 The selector pins the rustc release, commit, and bundled LLVM version. It also
 requires the reviewed panic strategy, overflow/debug-assertion behavior,
 optimization level, MIR optimization and pass overrides, target CPU/features,
-LLVM arguments/passes, and canonical source-remap destination. The remap source
-is checkout-specific and therefore excluded; exact full rustc MIR identities
-after remapping are pinned for both functions. The compiler-semantics
-commitment is domain-separated and included in the sealed collected authority.
+LLVM arguments/passes, fixed crate metadata/disambiguator, and canonical
+source-remap destination. The fixed crate metadata prevents checkout paths from
+entering rustc's stable local definition identities. The exact cwd remap also
+removes the checkout root from rustc's stable source-file context. Remap sources
+are checkout-specific and therefore excluded; both canonical destinations and
+the exact full rustc MIR identities after remapping are pinned for both
+functions. The compiler-semantics commitment is domain-separated and included
+in the sealed collected authority.
 
 The selector also rejects a non-exact `gfx942:xnack-` device target and
 unsupported collection shapes. Every rejection is fatal and has no legacy or

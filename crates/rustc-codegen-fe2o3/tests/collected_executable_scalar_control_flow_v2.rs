@@ -452,7 +452,9 @@ fn compile_path(
             "fe2o3_scalar_control_flow_v1_fixture",
             "-C",
             "overflow-checks=off",
+            "-Cmetadata=fe2o3-scalar-control-flow-v2-reviewed",
             "-Zmir-enable-passes=-JumpThreading",
+            "-Zremap-cwd-prefix=/fe2o3-reviewed-workspace",
         ])
         .args(extra_args)
         .arg(format!(
@@ -708,6 +710,10 @@ fn target_pipeline_identity_abi_and_collection_substitutions_reject_without_fall
             "--remap-path-prefix=/tmp=/attacker",
             "compiler semantics mismatch: source remapping must contain exactly one canonical fixture destination",
         ),
+        (
+            "-Cmetadata=attacker",
+            "compiler semantics mismatch: crate metadata must be exactly",
+        ),
     ] {
         let output = TestOutputDir::new(&workspace);
         assert_rejected_without_fallback(
@@ -758,7 +764,7 @@ fn target_pipeline_identity_abi_and_collection_substitutions_reject_without_fall
             "gfx942:xnack-",
             PIPELINE,
         ),
-        "helper MIR identity mismatch",
+        "MIR identity mismatch",
     );
 
     let wrong_helper_type_source = FIXTURE
@@ -801,7 +807,7 @@ fn target_pipeline_identity_abi_and_collection_substitutions_reject_without_fall
                 "gfx942:xnack-",
                 PIPELINE,
             ),
-            "helper MIR identity mismatch",
+            "MIR identity mismatch",
         );
     }
 
