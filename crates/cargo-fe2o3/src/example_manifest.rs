@@ -793,13 +793,18 @@ fn inspect(root: &std::path::Path, dynamic: &str) {
             .iter()
             .find(|entry| entry.package == "fe2o3-pipeline")
             .expect("pipeline entry");
+        let scalar_gemm = manifest
+            .entries
+            .iter()
+            .find(|entry| entry.package == "fe2o3-scalar-gemm-v1")
+            .expect("scalar GEMM entry");
         let verus = manifest
             .entries
             .iter()
             .find(|entry| entry.package == "verus-vecadd")
             .expect("verus entry");
 
-        assert_eq!(manifest.entries.len(), 25);
+        assert_eq!(manifest.entries.len(), 26);
         assert_eq!(
             pipeline.artifacts,
             ["bias_stage.hsaco", "scale_stage.hsaco"]
@@ -808,5 +813,9 @@ fn inspect(root: &std::path::Path, dynamic: &str) {
         assert!(!verus.rocm_compile);
         assert!(!verus.gpu_smoke);
         assert!(verus.artifacts.is_empty());
+        assert!(scalar_gemm.rustc_check);
+        assert!(!scalar_gemm.rocm_compile);
+        assert!(!scalar_gemm.gpu_smoke);
+        assert!(scalar_gemm.artifacts.is_empty());
     }
 }

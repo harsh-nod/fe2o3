@@ -19,6 +19,7 @@ fe2o3-raw-neighbors|true|true|true|raw_neighbors.hsaco
 fe2o3-raw-output-shift|true|true|true|raw_output_shift.hsaco
 fe2o3-raw-parenthesized-sub|true|true|true|raw_parenthesized_sub.hsaco
 fe2o3-saxpy|true|true|true|saxpy.hsaco
+fe2o3-scalar-gemm-v1|true|false|false|-
 fe2o3-scale|true|true|true|scale.hsaco
 fe2o3-shift|true|true|true|shift.hsaco
 fe2o3-stencil|true|true|true|stencil.hsaco
