@@ -109,7 +109,6 @@ mod tests {
     fn canonical_source_retains_the_exact_entry_and_ordered_recurrence() {
         for required in [
             "pub fn scalar_gemm_v1(",
-            "launch(required = [256, 1, 1], max = [256, 1, 1])",
             "if p < output_extent",
             "let row = p / (n as usize)",
             "let col = p % (n as usize)",

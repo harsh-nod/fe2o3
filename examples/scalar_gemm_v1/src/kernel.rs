@@ -3,7 +3,6 @@ use fe2o3_device::{DisjointSlice, kernel, thread};
 #[kernel(
     typed,
     namespace = "53bf3c83481a081d4ab0e2b32039f9c89be5de3937a84aca0c40800c8d6b0413",
-    launch(required = [256, 1, 1], max = [256, 1, 1]),
     control_flow(loop_bounds(4294967295))
 )]
 pub fn scalar_gemm_v1(a: &[f32], b: &[f32], mut c: DisjointSlice<f32>, m: u32, n: u32, k: u32) {
