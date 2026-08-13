@@ -31,7 +31,9 @@ pub use executable::{
     MirTerminatorKind, MirTypeId, MirUnaryOp, MirUnwindAction, MirValueId,
     ValidatedMirExecutableModule,
 };
-pub use executable_wire::{MAX_EXECUTABLE_WIRE_BYTES, MirExecutableDecodeError};
+pub use executable_wire::{
+    MAX_EXECUTABLE_WIRE_BYTES, MirExecutableDecodeError, MirExecutableSemanticDigestV1,
+};
 pub use mem2reg::{
     MAX_MEM2REG_LIVENESS_STORAGE_ITEMS, MAX_MEM2REG_LIVENESS_WORK_UNITS, MAX_MEM2REG_OUTPUT_ITEMS,
     MirMem2RegError, MirMem2RegFunctionReport, MirMem2RegFunctionResourceReport, MirMem2RegReport,

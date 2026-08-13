@@ -6,8 +6,8 @@ use dialect_mir::{
     MirCallReturn, MirCallSignature, MirCallable, MirExecutableDecodeError, MirExecutableModule,
     MirExecutableTarget, MirExecutableVersion, MirExternalCallRegistry, MirExternalCallReturn,
     MirExternalCallSignature, MirFunction, MirLayout, MirLocalDecl, MirLocalId, MirLocalKind,
-    MirMutability, MirOperand, MirPlace, MirRvalue, MirScalarType, MirSemanticType, MirStatement,
-    MirStatementKind, MirTerminator, MirTerminatorKind, MirTypeId, MirTypeKind,
+    MirMutability, MirOperand, MirPlace, MirRvalue, MirScalarType, MirSemanticType, MirSourceSpan,
+    MirStatement, MirStatementKind, MirTerminator, MirTerminatorKind, MirTypeId, MirTypeKind,
     ValidatedMirExecutableModule,
 };
 
@@ -126,6 +126,57 @@ fn canonical_text_parse_print_and_wire_roundtrip_are_identical() {
         MirExecutableModule::from_canonical_text(&with_whitespace),
         Err(MirExecutableDecodeError::NonCanonical)
     ));
+}
+
+#[test]
+fn semantic_digest_ignores_observational_metadata_and_binds_execution() {
+    let baseline = module().validate().unwrap();
+
+    let mut relocated = module();
+    relocated.functions[0].span = Some(MirSourceSpan {
+        file: "/different/worktree/kernel.rs".into(),
+        byte_start: 11,
+        byte_end: 19,
+        line: 2,
+        column: 4,
+    });
+    relocated.functions[0].body.locals[1].name = Some("renamed_debug_local".into());
+    relocated.functions[0].body.locals[1].span = relocated.functions[0].span.clone();
+    relocated.functions[0].body.blocks[0].statements[0].span = relocated.functions[0].span.clone();
+    relocated.functions[0].body.blocks[0].terminator.span = relocated.functions[0].span.clone();
+    let relocated = relocated.validate().unwrap();
+    assert_ne!(
+        baseline.to_canonical_text().unwrap(),
+        relocated.to_canonical_text().unwrap()
+    );
+    assert_eq!(
+        baseline.semantic_digest_v1(),
+        relocated.semantic_digest_v1()
+    );
+
+    let mut changed_body = module();
+    let MirStatementKind::Assign { value, .. } =
+        &mut changed_body.functions[0].body.blocks[0].statements[0].kind
+    else {
+        unreachable!();
+    };
+    *value = MirRvalue::Use(MirOperand::Move(MirPlace::local(
+        MirLocalId(1),
+        MirTypeId(0),
+    )));
+    let changed_body = changed_body.validate().unwrap();
+    assert_ne!(
+        baseline.semantic_digest_v1(),
+        changed_body.semantic_digest_v1()
+    );
+
+    let mut changed_identity = module();
+    changed_identity.functions[0].identity = "wire::other::<u32>".into();
+    let changed_identity = changed_identity.validate().unwrap();
+    assert_ne!(
+        baseline.semantic_digest_v1(),
+        changed_identity.semantic_digest_v1()
+    );
 }
 
 #[test]

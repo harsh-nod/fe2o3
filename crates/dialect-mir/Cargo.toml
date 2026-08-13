@@ -13,6 +13,7 @@ name = "dialect_mir"
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2.workspace = true
 
 [dev-dependencies]
 fe2o3-compiler-ffi.workspace = true

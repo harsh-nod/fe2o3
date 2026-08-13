@@ -1,5 +1,7 @@
 use std::fmt;
 
+use sha2::{Digest as _, Sha256};
+
 use crate::{
     EXECUTABLE_MIR_VERSION, MirExecutableModule, MirExecutableValidationError,
     MirExecutableVersion, MirExternalCallRegistry, ValidatedMirExecutableModule,
@@ -8,6 +10,31 @@ use crate::{
 const MAGIC: &[u8; 8] = b"F2MEXE01";
 const FLAGS: u16 = 0;
 const HEADER_BYTES: usize = 16;
+const EXECUTABLE_MIR_SEMANTIC_DIGEST_DOMAIN_V1: &[u8] = b"fe2o3.executable-mir.semantic-digest.v1";
+
+/// Domain-separated commitment to every executable-MIR semantic field.
+///
+/// Source spans and local debug names are excluded because they cannot affect
+/// execution. All remaining validated module fields, including the exact
+/// target, type and callable tables, function identities, bodies, edges, and
+/// unwind actions, are committed through the canonical serializer.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct MirExecutableSemanticDigestV1([u8; 32]);
+
+impl MirExecutableSemanticDigestV1 {
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl fmt::Display for MirExecutableSemanticDigestV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for byte in self.0 {
+            write!(formatter, "{byte:02x}")?;
+        }
+        Ok(())
+    }
+}
 
 /// Hard pre-parse limit for an executable MIR module. Structural limits are
 /// checked after decoding and canonical re-encoding is required.
@@ -199,6 +226,32 @@ impl MirExecutableModule {
 }
 
 impl ValidatedMirExecutableModule {
+    /// Commits the complete executable semantics while remaining independent
+    /// of checkout paths, source coordinates, and local debug names.
+    pub fn semantic_digest_v1(&self) -> MirExecutableSemanticDigestV1 {
+        let mut semantic_module = self.as_module().clone();
+        for function in &mut semantic_module.functions {
+            function.span = None;
+            for local in &mut function.body.locals {
+                local.name = None;
+                local.span = None;
+            }
+            for block in &mut function.body.blocks {
+                for statement in &mut block.statements {
+                    statement.span = None;
+                }
+                block.terminator.span = None;
+            }
+        }
+        let payload = serde_json::to_vec(&semantic_module)
+            .expect("validated executable MIR consists only of serializable values");
+        let mut digest = Sha256::new();
+        digest.update(EXECUTABLE_MIR_SEMANTIC_DIGEST_DOMAIN_V1);
+        digest.update((payload.len() as u64).to_le_bytes());
+        digest.update(payload);
+        MirExecutableSemanticDigestV1(digest.finalize().into())
+    }
+
     /// Prints deterministic, compact JSON with no ambient formatting state.
     pub fn to_canonical_text(&self) -> Result<String, MirExecutableValidationError> {
         let text = serde_json::to_string(self.as_module())

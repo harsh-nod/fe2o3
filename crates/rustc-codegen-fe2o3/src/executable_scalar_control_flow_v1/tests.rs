@@ -20,7 +20,7 @@ fn decode(source: &str) -> ValidatedMirExecutableModule {
 
 fn authority(source: &ValidatedMirExecutableModule) -> AuthenticatedScalarControlFlowFunctionV1 {
     AuthenticatedScalarControlFlowFunctionV1::for_test(
-        &source.functions[0].identity,
+        source,
         source.functions[0].identity.rsplit("::").next().unwrap(),
         CollectedFunctionRole::DeviceFfiExport,
     )
@@ -31,7 +31,7 @@ fn helper_authority(
     source: &ValidatedMirExecutableModule,
 ) -> AuthenticatedScalarControlFlowFunctionV1 {
     AuthenticatedScalarControlFlowFunctionV1::for_test(
-        &source.functions[0].identity,
+        source,
         source.functions[0].identity.rsplit("::").next().unwrap(),
         CollectedFunctionRole::InternalHelper,
     )
@@ -341,7 +341,7 @@ fn raw_division_fails_before_kernel_ir_or_llvm_is_returned() {
 fn authority_rejects_kernel_role_and_forged_identities() {
     let source = decode(NESTED_LOOP);
     let kernel = AuthenticatedScalarControlFlowFunctionV1::for_test(
-        &source.functions[0].identity,
+        &source,
         "nested_loop",
         CollectedFunctionRole::KernelEntry,
     )
@@ -352,6 +352,28 @@ fn authority_rejects_kernel_role_and_forged_identities() {
     ));
 
     let trusted = authority(&source);
+    let mut substituted_body = source.clone().into_unvalidated();
+    let operation = substituted_body.functions[0]
+        .body
+        .blocks
+        .iter_mut()
+        .flat_map(|block| &mut block.statements)
+        .find_map(|statement| match &mut statement.kind {
+            MirStatementKind::Assign {
+                value: MirRvalue::BinaryOp { op, .. },
+                ..
+            } if *op == MirBinaryOp::Lt => Some(op),
+            _ => None,
+        })
+        .expect("nested-loop fixture has an Lt operation");
+    *operation = MirBinaryOp::Eq;
+    let substituted_body = substituted_body.validate().unwrap();
+    let error = lower_executable_scalar_control_flow_v1(&substituted_body, &trusted)
+        .expect_err("the same identity with a substituted body must reject before lowering");
+    assert!(
+        matches!(error, ExecutableScalarControlFlowErrorV1::Authority { ref detail } if detail.contains("semantic digest"))
+    );
+
     let mut forged = source.into_unvalidated();
     forged.functions[0].identity = "attacker::forged_export".to_owned();
     let forged = forged.validate().unwrap();
@@ -367,8 +389,11 @@ fn authority_rejects_kernel_role_and_forged_identities() {
 fn authenticated_helper_stays_internal_under_root_composition() {
     let source = decode(NESTED_LOOP);
     let helper = helper_authority(&source);
+    let mut root_source = source.clone().into_unvalidated();
+    root_source.functions[0].identity = "fixture::kernel_root".to_owned();
+    let root_source = root_source.validate().unwrap();
     let composition = AuthenticatedScalarControlFlowCompositionV1::for_test(
-        "fixture::kernel_root",
+        &root_source,
         "scalar_control_flow_v1",
         helper.clone(),
     )
@@ -404,7 +429,7 @@ fn authenticated_helper_stays_internal_under_root_composition() {
 
     let export = authority(&source);
     let invalid = AuthenticatedScalarControlFlowCompositionV1::for_test(
-        "fixture::kernel_root",
+        &root_source,
         "scalar_control_flow_v1",
         export,
     )
@@ -413,6 +438,68 @@ fn authenticated_helper_stays_internal_under_root_composition() {
         invalid,
         ExecutableScalarControlFlowErrorV1::Authority { .. }
     ));
+}
+
+#[test]
+fn artifact_and_composition_substitutions_fail_closed() {
+    let source = decode(NESTED_LOOP);
+    let helper = helper_authority(&source);
+    let mut root_source = source.clone().into_unvalidated();
+    root_source.functions[0].identity = "fixture::kernel_root".to_owned();
+    let root_source = root_source.validate().unwrap();
+    let composition = AuthenticatedScalarControlFlowCompositionV1::for_test(
+        &root_source,
+        "scalar_control_flow_v1",
+        helper.clone(),
+    )
+    .unwrap();
+    let artifact = lower_executable_scalar_control_flow_v1(&source, &helper).unwrap();
+
+    let mut role = artifact.clone();
+    role.function_role = FunctionRole::DeviceFfiExport;
+    assert!(composition.clone().bind_internal_helper(role).is_err());
+
+    let mut kernel_role = artifact.clone();
+    kernel_role.kernel_ir.functions[0].role = FunctionRole::DeviceFfiExport;
+    assert!(
+        composition
+            .clone()
+            .bind_internal_helper(kernel_role)
+            .is_err()
+    );
+
+    let mut kernel_body = artifact.clone();
+    kernel_body.kernel_ir.functions[0]
+        .body
+        .as_mut()
+        .unwrap()
+        .blocks[0]
+        .operations
+        .clear();
+    assert!(
+        composition
+            .clone()
+            .bind_internal_helper(kernel_body)
+            .is_err()
+    );
+
+    let mut llvm = artifact.clone();
+    llvm.gfx942_llvm = "define i32 @substituted(i32 %x) { ret i32 %x }\n".to_owned();
+    assert!(composition.clone().bind_internal_helper(llvm).is_err());
+
+    let composed = composition.bind_internal_helper(artifact).unwrap();
+    composed.verify_integrity().unwrap();
+
+    let mut root_export = composed.clone();
+    root_export.kernel_export_symbol = "substituted_export".to_owned();
+    assert!(root_export.verify_integrity().is_err());
+
+    let mut nested_llvm = composed;
+    nested_llvm
+        .internal_helper
+        .gfx942_llvm
+        .push_str("; substituted\n");
+    assert!(nested_llvm.verify_integrity().is_err());
 }
 
 #[test]

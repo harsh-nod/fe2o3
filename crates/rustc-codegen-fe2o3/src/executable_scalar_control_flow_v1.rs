@@ -3,11 +3,11 @@
 //! This first adapter is intentionally a collected-device-function lowering
 //! prerequisite. It accepts one validated place-form executable-MIR function
 //! only when a compiler-sealed authority authenticates the same canonical
-//! identity and preserves its `InternalHelper` or `DeviceFfiExport` role. It
-//! preflights resource bounds, promotes with verified `dialect-mir` mem2reg,
-//! admits scalar expressions through Scalar V2, and emits verified Kernel IR
-//! plus exact gfx942:xnack- LLVM text. It grants no linking, code-object,
-//! loading, or launch authority.
+//! identity, exact executable-MIR semantic digest, and collected
+//! `InternalHelper` or `DeviceFfiExport` role. It preflights resource bounds,
+//! promotes with verified `dialect-mir` mem2reg, admits scalar expressions
+//! through Scalar V2, and emits verified Kernel IR plus exact gfx942:xnack-
+//! LLVM text. It grants no linking, code-object, loading, or launch authority.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -19,10 +19,10 @@ use dialect_amdgcn::{
 };
 use dialect_mir::{
     GFX942_TARGET_DATA_LAYOUT, MirBasicBlock, MirBinaryOp, MirBlockId, MirBodyForm, MirConstant,
-    MirConstantValue, MirEdge, MirFunction, MirLocalId, MirLocalKind, MirMem2RegError,
-    MirMem2RegReport, MirOperand, MirRvalue, MirScalarType, MirStatement, MirStatementKind,
-    MirTerminatorKind, MirTypeId, MirTypeKind, MirValueId, ValidatedMirExecutableModule,
-    analyze_mir_control_flow, promote_module_to_ssa,
+    MirConstantValue, MirEdge, MirExecutableSemanticDigestV1, MirFunction, MirLocalId,
+    MirLocalKind, MirMem2RegError, MirMem2RegReport, MirOperand, MirRvalue, MirScalarType,
+    MirStatement, MirStatementKind, MirTerminatorKind, MirTypeId, MirTypeKind, MirValueId,
+    ValidatedMirExecutableModule, analyze_mir_control_flow, promote_module_to_ssa,
 };
 use fe2o3_kernel_ir::scalar_ops_v2::{
     IntBinary, IntMode, IntWidth, Operation as ScalarOperation, Predicate, ScalarOperationV2,
@@ -49,17 +49,23 @@ pub const MAX_SCALAR_CONTROL_FLOW_LOOP_DEPTH_V1: usize = 8;
 pub const MAX_SCALAR_CONTROL_FLOW_OPERATIONS_V1: usize = 4_096;
 
 const SCALAR_CONTROL_FLOW_SYMBOL_DOMAIN_V1: &[u8] = b"fe2o3.scalar-control-flow.symbol.v1";
+const SCALAR_CONTROL_FLOW_ARTIFACT_DOMAIN_V1: &[u8] = b"fe2o3.scalar-control-flow.artifact.v1";
+const SCALAR_CONTROL_FLOW_COMPOSITION_DOMAIN_V1: &[u8] =
+    b"fe2o3.scalar-control-flow.composition.v1";
 const MAX_SCALAR_CONTROL_FLOW_SYMBOL_STEM_BYTES_V1: usize = 64;
 
 /// Compiler-sealed authority for one exact collected device function.
 ///
-/// This value cannot be constructed from executable-MIR bytes. The compiler
-/// derives it from the collected function role and canonical rustc identity.
+/// Construction requires both compiler-collected role/identity evidence and
+/// the exact validated executable-MIR module that will be lowered. Neither
+/// structural MIR nor a matching identity string can independently grant this
+/// authority.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AuthenticatedScalarControlFlowFunctionV1 {
     canonical_identity: String,
     emitted_symbol: String,
     role: FunctionRole,
+    executable_mir_semantic_digest: MirExecutableSemanticDigestV1,
 }
 
 impl AuthenticatedScalarControlFlowFunctionV1 {
@@ -67,11 +73,25 @@ impl AuthenticatedScalarControlFlowFunctionV1 {
     pub(crate) fn from_collected(
         tcx: TyCtxt<'_>,
         function: &CollectedFunction<'_>,
+        executable_mir: &ValidatedMirExecutableModule,
     ) -> Result<Self, ExecutableScalarControlFlowErrorV1> {
+        let [mir_function] = executable_mir.functions.as_slice() else {
+            return Err(ExecutableScalarControlFlowErrorV1::Authority {
+                detail: "authenticated executable MIR must contain exactly one function".to_owned(),
+            });
+        };
+        let canonical_identity = tcx.def_path_str(function.instance.def_id());
+        if mir_function.identity != canonical_identity {
+            return Err(ExecutableScalarControlFlowErrorV1::Authority {
+                detail: "collected function identity does not match imported executable MIR"
+                    .to_owned(),
+            });
+        }
         Self::from_authenticated_parts(
-            tcx.def_path_str(function.instance.def_id()),
+            canonical_identity,
             &function.export_name,
             function.role,
+            executable_mir.semantic_digest_v1(),
         )
     }
 
@@ -79,6 +99,7 @@ impl AuthenticatedScalarControlFlowFunctionV1 {
         canonical_identity: String,
         export_name: &str,
         role: CollectedFunctionRole,
+        executable_mir_semantic_digest: MirExecutableSemanticDigestV1,
     ) -> Result<Self, ExecutableScalarControlFlowErrorV1> {
         let role = match role {
             CollectedFunctionRole::InternalHelper => FunctionRole::InternalHelper,
@@ -100,6 +121,7 @@ impl AuthenticatedScalarControlFlowFunctionV1 {
             canonical_identity,
             emitted_symbol,
             role,
+            executable_mir_semantic_digest,
         })
     }
 
@@ -115,25 +137,41 @@ impl AuthenticatedScalarControlFlowFunctionV1 {
         self.role
     }
 
+    pub const fn executable_mir_semantic_digest(&self) -> MirExecutableSemanticDigestV1 {
+        self.executable_mir_semantic_digest
+    }
+
     #[cfg(test)]
     fn for_test(
-        canonical_identity: &str,
+        executable_mir: &ValidatedMirExecutableModule,
         export_name: &str,
         role: CollectedFunctionRole,
     ) -> Result<Self, ExecutableScalarControlFlowErrorV1> {
-        Self::from_authenticated_parts(canonical_identity.to_owned(), export_name, role)
+        let [function] = executable_mir.functions.as_slice() else {
+            return Err(ExecutableScalarControlFlowErrorV1::Authority {
+                detail: "test executable MIR must contain exactly one function".to_owned(),
+            });
+        };
+        Self::from_authenticated_parts(
+            function.identity.clone(),
+            export_name,
+            role,
+            executable_mir.semantic_digest_v1(),
+        )
     }
 }
 
 /// Sealed role-preserving handoff for one collected kernel root and helper.
 ///
 /// Construction is crate-private so a caller cannot create this contract from
-/// names or executable-MIR bytes. The collected V2 admission layer constructs
-/// it only after authenticating the exact root-to-helper call edge.
+/// names or executable-MIR bytes. It requires an authenticated collected
+/// root/helper pair plus exact imported executable-MIR modules for both
+/// functions. Collected V2 deliberately stops before this import boundary.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AuthenticatedScalarControlFlowCompositionV1 {
     kernel_entry_identity: String,
     kernel_export_symbol: String,
+    kernel_entry_semantic_digest: MirExecutableSemanticDigestV1,
     internal_helper: AuthenticatedScalarControlFlowFunctionV1,
 }
 
@@ -143,6 +181,8 @@ impl AuthenticatedScalarControlFlowCompositionV1 {
         tcx: TyCtxt<'_>,
         root: &CollectedFunction<'_>,
         helper: &CollectedFunction<'_>,
+        root_executable_mir: &ValidatedMirExecutableModule,
+        helper_executable_mir: &ValidatedMirExecutableModule,
     ) -> Result<Self, ExecutableScalarControlFlowErrorV1> {
         if root.role != CollectedFunctionRole::KernelEntry {
             return Err(ExecutableScalarControlFlowErrorV1::Authority {
@@ -157,10 +197,27 @@ impl AuthenticatedScalarControlFlowCompositionV1 {
                         .to_owned(),
             });
         }
+        let [root_mir_function] = root_executable_mir.functions.as_slice() else {
+            return Err(ExecutableScalarControlFlowErrorV1::Authority {
+                detail: "authenticated root executable MIR must contain exactly one function"
+                    .to_owned(),
+            });
+        };
+        let root_identity = tcx.def_path_str(root.instance.def_id());
+        if root_mir_function.identity != root_identity {
+            return Err(ExecutableScalarControlFlowErrorV1::Authority {
+                detail: "collected root identity does not match imported executable MIR".to_owned(),
+            });
+        }
         Ok(Self {
-            kernel_entry_identity: tcx.def_path_str(root.instance.def_id()),
+            kernel_entry_identity: root_identity,
             kernel_export_symbol: root.export_name.clone(),
-            internal_helper: AuthenticatedScalarControlFlowFunctionV1::from_collected(tcx, helper)?,
+            kernel_entry_semantic_digest: root_executable_mir.semantic_digest_v1(),
+            internal_helper: AuthenticatedScalarControlFlowFunctionV1::from_collected(
+                tcx,
+                helper,
+                helper_executable_mir,
+            )?,
         })
     }
 
@@ -172,6 +229,10 @@ impl AuthenticatedScalarControlFlowCompositionV1 {
         &self.kernel_export_symbol
     }
 
+    pub const fn kernel_entry_semantic_digest(&self) -> MirExecutableSemanticDigestV1 {
+        self.kernel_entry_semantic_digest
+    }
+
     pub const fn internal_helper_authority(&self) -> &AuthenticatedScalarControlFlowFunctionV1 {
         &self.internal_helper
     }
@@ -180,25 +241,33 @@ impl AuthenticatedScalarControlFlowCompositionV1 {
         self,
         artifact: ExecutableScalarControlFlowArtifactV1,
     ) -> Result<ScalarControlFlowCompositionArtifactV1, ExecutableScalarControlFlowErrorV1> {
-        if artifact.function_role != FunctionRole::InternalHelper
-            || artifact.canonical_function_identity != self.internal_helper.canonical_identity
-            || artifact.emitted_symbol != self.internal_helper.emitted_symbol
-        {
+        artifact.verify_integrity(&self.internal_helper)?;
+        if artifact.function_role != FunctionRole::InternalHelper {
             return Err(ExecutableScalarControlFlowErrorV1::Authority {
                 detail: "lowered scalar control-flow artifact does not match the authenticated internal helper"
                     .to_owned(),
             });
         }
-        Ok(ScalarControlFlowCompositionArtifactV1 {
+        let composition_commitment = scalar_composition_commitment(
+            &self.kernel_entry_identity,
+            &self.kernel_export_symbol,
+            self.kernel_entry_semantic_digest,
+            artifact.artifact_commitment,
+        );
+        let composed = ScalarControlFlowCompositionArtifactV1 {
             kernel_entry_identity: self.kernel_entry_identity,
             kernel_export_symbol: self.kernel_export_symbol,
+            kernel_entry_semantic_digest: self.kernel_entry_semantic_digest,
             internal_helper: artifact,
-        })
+            composition_commitment,
+        };
+        composed.verify_integrity()?;
+        Ok(composed)
     }
 
     #[cfg(test)]
     fn for_test(
-        kernel_entry_identity: &str,
+        kernel_entry_executable_mir: &ValidatedMirExecutableModule,
         kernel_export_symbol: &str,
         internal_helper: AuthenticatedScalarControlFlowFunctionV1,
     ) -> Result<Self, ExecutableScalarControlFlowErrorV1> {
@@ -207,9 +276,15 @@ impl AuthenticatedScalarControlFlowCompositionV1 {
                 detail: "test composition helper must retain InternalHelper role".to_owned(),
             });
         }
+        let [kernel_entry] = kernel_entry_executable_mir.functions.as_slice() else {
+            return Err(ExecutableScalarControlFlowErrorV1::Authority {
+                detail: "test root executable MIR must contain exactly one function".to_owned(),
+            });
+        };
         Ok(Self {
-            kernel_entry_identity: kernel_entry_identity.to_owned(),
+            kernel_entry_identity: kernel_entry.identity.clone(),
             kernel_export_symbol: kernel_export_symbol.to_owned(),
+            kernel_entry_semantic_digest: kernel_entry_executable_mir.semantic_digest_v1(),
             internal_helper,
         })
     }
@@ -237,14 +312,112 @@ pub struct ScalarControlFlowSummaryV1 {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExecutableScalarControlFlowArtifactV1 {
-    pub canonical_function_identity: String,
-    pub emitted_symbol: String,
-    pub function_role: FunctionRole,
-    pub kernel_ir: Module,
-    pub scalar_operations: Vec<LocatedScalarOperationV2>,
-    pub mem2reg: MirMem2RegReport,
-    pub summary: ScalarControlFlowSummaryV1,
-    pub gfx942_llvm: String,
+    canonical_function_identity: String,
+    emitted_symbol: String,
+    function_role: FunctionRole,
+    executable_mir_semantic_digest: MirExecutableSemanticDigestV1,
+    kernel_ir: Module,
+    sealed_verified_kernel_ir: Module,
+    scalar_operations: Vec<LocatedScalarOperationV2>,
+    mem2reg: MirMem2RegReport,
+    summary: ScalarControlFlowSummaryV1,
+    gfx942_llvm: String,
+    gfx942_llvm_digest: [u8; 32],
+    artifact_commitment: [u8; 32],
+}
+
+impl ExecutableScalarControlFlowArtifactV1 {
+    pub fn canonical_function_identity(&self) -> &str {
+        &self.canonical_function_identity
+    }
+
+    pub fn emitted_symbol(&self) -> &str {
+        &self.emitted_symbol
+    }
+
+    pub const fn function_role(&self) -> FunctionRole {
+        self.function_role
+    }
+
+    pub const fn executable_mir_semantic_digest(&self) -> MirExecutableSemanticDigestV1 {
+        self.executable_mir_semantic_digest
+    }
+
+    pub const fn kernel_ir(&self) -> &Module {
+        &self.kernel_ir
+    }
+
+    pub fn scalar_operations(&self) -> &[LocatedScalarOperationV2] {
+        &self.scalar_operations
+    }
+
+    pub const fn mem2reg(&self) -> &MirMem2RegReport {
+        &self.mem2reg
+    }
+
+    pub const fn summary(&self) -> ScalarControlFlowSummaryV1 {
+        self.summary
+    }
+
+    pub fn gfx942_llvm(&self) -> &str {
+        &self.gfx942_llvm
+    }
+
+    pub const fn gfx942_llvm_digest(&self) -> &[u8; 32] {
+        &self.gfx942_llvm_digest
+    }
+
+    fn verify_integrity(
+        &self,
+        authority: &AuthenticatedScalarControlFlowFunctionV1,
+    ) -> Result<(), ExecutableScalarControlFlowErrorV1> {
+        if self.canonical_function_identity != authority.canonical_identity
+            || self.emitted_symbol != authority.emitted_symbol
+            || self.function_role != authority.role
+            || self.executable_mir_semantic_digest != authority.executable_mir_semantic_digest
+        {
+            return Err(ExecutableScalarControlFlowErrorV1::Authority {
+                detail:
+                    "lowered artifact metadata or executable-MIR body commitment was substituted"
+                        .to_owned(),
+            });
+        }
+        self.verify_self_integrity()
+    }
+
+    fn verify_self_integrity(&self) -> Result<(), ExecutableScalarControlFlowErrorV1> {
+        if self.kernel_ir != self.sealed_verified_kernel_ir {
+            return Err(ExecutableScalarControlFlowErrorV1::Authority {
+                detail: "lowered artifact Kernel IR body was substituted".to_owned(),
+            });
+        }
+        verify_module(&self.kernel_ir)
+            .map_err(ExecutableScalarControlFlowErrorV1::InvalidKernelIr)?;
+        let regenerated = lower_device_module_to_gfx942_xnack_minus_llvm_ir(&self.kernel_ir)
+            .map_err(ExecutableScalarControlFlowErrorV1::Backend)?;
+        if regenerated != self.gfx942_llvm {
+            return Err(ExecutableScalarControlFlowErrorV1::Authority {
+                detail: "lowered artifact LLVM is not the exact output of its verified Kernel IR"
+                    .to_owned(),
+            });
+        }
+        let llvm_digest = sha256_bytes(self.gfx942_llvm.as_bytes());
+        let artifact_commitment = scalar_artifact_commitment(
+            &self.canonical_function_identity,
+            &self.emitted_symbol,
+            self.function_role,
+            self.executable_mir_semantic_digest,
+            llvm_digest,
+            self.summary,
+        );
+        if llvm_digest != self.gfx942_llvm_digest || artifact_commitment != self.artifact_commitment
+        {
+            return Err(ExecutableScalarControlFlowErrorV1::Authority {
+                detail: "lowered artifact integrity commitment was substituted".to_owned(),
+            });
+        }
+        Ok(())
+    }
 }
 
 /// Root-preserving composition handoff after one internal helper is lowered.
@@ -254,9 +427,50 @@ pub struct ExecutableScalarControlFlowArtifactV1 {
 /// without promoting the helper to external linkage.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ScalarControlFlowCompositionArtifactV1 {
-    pub kernel_entry_identity: String,
-    pub kernel_export_symbol: String,
-    pub internal_helper: ExecutableScalarControlFlowArtifactV1,
+    kernel_entry_identity: String,
+    kernel_export_symbol: String,
+    kernel_entry_semantic_digest: MirExecutableSemanticDigestV1,
+    internal_helper: ExecutableScalarControlFlowArtifactV1,
+    composition_commitment: [u8; 32],
+}
+
+impl ScalarControlFlowCompositionArtifactV1 {
+    pub fn kernel_entry_identity(&self) -> &str {
+        &self.kernel_entry_identity
+    }
+
+    pub fn kernel_export_symbol(&self) -> &str {
+        &self.kernel_export_symbol
+    }
+
+    pub const fn kernel_entry_semantic_digest(&self) -> MirExecutableSemanticDigestV1 {
+        self.kernel_entry_semantic_digest
+    }
+
+    pub const fn internal_helper(&self) -> &ExecutableScalarControlFlowArtifactV1 {
+        &self.internal_helper
+    }
+
+    pub fn verify_integrity(&self) -> Result<(), ExecutableScalarControlFlowErrorV1> {
+        if self.internal_helper.function_role != FunctionRole::InternalHelper {
+            return Err(ExecutableScalarControlFlowErrorV1::Authority {
+                detail: "composed scalar control-flow helper role was substituted".to_owned(),
+            });
+        }
+        self.internal_helper.verify_self_integrity()?;
+        let expected = scalar_composition_commitment(
+            &self.kernel_entry_identity,
+            &self.kernel_export_symbol,
+            self.kernel_entry_semantic_digest,
+            self.internal_helper.artifact_commitment,
+        );
+        if expected != self.composition_commitment {
+            return Err(ExecutableScalarControlFlowErrorV1::Authority {
+                detail: "scalar control-flow composition authority was substituted".to_owned(),
+            });
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -352,6 +566,15 @@ pub fn lower_executable_scalar_control_flow_v1(
     if source.functions.len() != 1 {
         return Err(resource_limit("function count", 1, source.functions.len()));
     }
+    let actual_semantic_digest = source.semantic_digest_v1();
+    if actual_semantic_digest != authority.executable_mir_semantic_digest {
+        return Err(ExecutableScalarControlFlowErrorV1::Authority {
+            detail: format!(
+                "authenticated executable MIR semantic digest {} does not match lowering input {}",
+                authority.executable_mir_semantic_digest, actual_semantic_digest
+            ),
+        });
+    }
     let source_function = &source.functions[0];
     if source_function.identity != authority.canonical_identity {
         return Err(ExecutableScalarControlFlowErrorV1::Authority {
@@ -431,22 +654,37 @@ pub fn lower_executable_scalar_control_flow_v1(
     verify_module(&kernel_ir).map_err(ExecutableScalarControlFlowErrorV1::InvalidKernelIr)?;
     let gfx942_llvm = lower_device_module_to_gfx942_xnack_minus_llvm_ir(&kernel_ir)
         .map_err(ExecutableScalarControlFlowErrorV1::Backend)?;
-
-    Ok(ExecutableScalarControlFlowArtifactV1 {
+    let summary = ScalarControlFlowSummaryV1 {
+        blocks: analysis.block_count(),
+        loops: loop_headers.len(),
+        maximum_loop_depth,
+        kernel_ir_operations: operation_count,
+    };
+    let gfx942_llvm_digest = sha256_bytes(gfx942_llvm.as_bytes());
+    let artifact_commitment = scalar_artifact_commitment(
+        &authority.canonical_identity,
+        &authority.emitted_symbol,
+        authority.role,
+        authority.executable_mir_semantic_digest,
+        gfx942_llvm_digest,
+        summary,
+    );
+    let artifact = ExecutableScalarControlFlowArtifactV1 {
         canonical_function_identity: authority.canonical_identity.clone(),
         emitted_symbol: authority.emitted_symbol.clone(),
         function_role: authority.role,
+        executable_mir_semantic_digest: authority.executable_mir_semantic_digest,
+        sealed_verified_kernel_ir: kernel_ir.clone(),
         kernel_ir,
         scalar_operations,
         mem2reg,
-        summary: ScalarControlFlowSummaryV1 {
-            blocks: analysis.block_count(),
-            loops: loop_headers.len(),
-            maximum_loop_depth,
-            kernel_ir_operations: operation_count,
-        },
+        summary,
         gfx942_llvm,
-    })
+        gfx942_llvm_digest,
+        artifact_commitment,
+    };
+    artifact.verify_integrity(authority)?;
+    Ok(artifact)
 }
 
 struct FunctionLowerer<'module, 'function, 'target> {
@@ -1276,6 +1514,65 @@ fn projected_edge_operations(edge: &MirEdge) -> usize {
 
 fn projected_operand_operations(operand: &MirOperand) -> usize {
     usize::from(matches!(operand, MirOperand::Constant(_)))
+}
+
+fn sha256_bytes(bytes: &[u8]) -> [u8; 32] {
+    Sha256::digest(bytes).into()
+}
+
+fn scalar_artifact_commitment(
+    canonical_identity: &str,
+    emitted_symbol: &str,
+    role: FunctionRole,
+    executable_mir_semantic_digest: MirExecutableSemanticDigestV1,
+    llvm_digest: [u8; 32],
+    summary: ScalarControlFlowSummaryV1,
+) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    hash_commitment_field(&mut digest, SCALAR_CONTROL_FLOW_ARTIFACT_DOMAIN_V1);
+    hash_commitment_field(&mut digest, canonical_identity.as_bytes());
+    hash_commitment_field(&mut digest, emitted_symbol.as_bytes());
+    hash_commitment_field(&mut digest, function_role_label(role));
+    hash_commitment_field(&mut digest, executable_mir_semantic_digest.as_bytes());
+    hash_commitment_field(&mut digest, &llvm_digest);
+    for value in [
+        summary.blocks,
+        summary.loops,
+        summary.maximum_loop_depth,
+        summary.kernel_ir_operations,
+    ] {
+        hash_commitment_field(&mut digest, &(value as u64).to_le_bytes());
+    }
+    digest.finalize().into()
+}
+
+fn scalar_composition_commitment(
+    kernel_entry_identity: &str,
+    kernel_export_symbol: &str,
+    kernel_entry_semantic_digest: MirExecutableSemanticDigestV1,
+    internal_artifact_commitment: [u8; 32],
+) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    hash_commitment_field(&mut digest, SCALAR_CONTROL_FLOW_COMPOSITION_DOMAIN_V1);
+    hash_commitment_field(&mut digest, kernel_entry_identity.as_bytes());
+    hash_commitment_field(&mut digest, kernel_export_symbol.as_bytes());
+    hash_commitment_field(&mut digest, kernel_entry_semantic_digest.as_bytes());
+    hash_commitment_field(&mut digest, &internal_artifact_commitment);
+    digest.finalize().into()
+}
+
+fn hash_commitment_field(digest: &mut Sha256, bytes: &[u8]) {
+    digest.update((bytes.len() as u64).to_le_bytes());
+    digest.update(bytes);
+}
+
+fn function_role_label(role: FunctionRole) -> &'static [u8] {
+    match role {
+        FunctionRole::KernelEntry => b"kernel-entry",
+        FunctionRole::InternalHelper => b"internal-helper",
+        FunctionRole::DeviceFfiExport => b"device-ffi-export",
+        FunctionRole::ExternalImport => b"external-import",
+    }
 }
 
 fn identity_bound_function_symbol(
