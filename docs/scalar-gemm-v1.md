@@ -16,7 +16,7 @@ C[row, col] = sum(t = 0..k, A[row, t] * B[t, col])
 The source signature is:
 
 ```rust,ignore
-pub fn scalar_gemm(
+pub fn scalar_gemm_v1(
     a: &[f32],
     b: &[f32],
     c: DisjointSlice<f32>,
