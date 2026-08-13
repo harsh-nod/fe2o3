@@ -5,6 +5,7 @@ mod artifact_binding;
 mod cooperative_launch;
 mod generated_alpha_zeta_cov6;
 mod generated_argument_plan;
+mod generated_scalar_gemm_v1;
 mod generated_vecadd;
 mod generated_worker_v2_vecadd;
 mod gfx942_ocml;
@@ -107,6 +108,15 @@ pub use generated_argument_plan::{
     GeneratedPackingComponentV1,
 };
 #[doc(hidden)]
+pub use generated_scalar_gemm_v1::{
+    CompilerGeneratedScalarGemmV1Arguments, GeneratedScalarGemmV1ArgumentBinding,
+    GeneratedScalarGemmV1Completion, GeneratedScalarGemmV1PrepareError,
+    GeneratedScalarGemmV1PrepareResult, GeneratedScalarGemmV1PreparedInvocation,
+    GeneratedScalarGemmV1ReadDeviceSlice, GeneratedScalarGemmV1ReadWriteDeviceSlice,
+    ScalarGemmV1ArgumentError, ScalarGemmV1DispatchIdentity, ScalarGemmV1GeometryError,
+    ScalarGemmV1PhysicalKernargError, ScalarGemmV1ProfileError,
+};
+#[doc(hidden)]
 pub use generated_vecadd::{
     GeneratedVecAddKernelV1, GeneratedVecAddLoadError, GeneratedVecAddPrepareError,
     GeneratedVecAddPreparedV1, GeneratedVecAddProfileError,
@@ -204,23 +214,29 @@ pub mod __generated {
         AuthenticatedKernelArtifactV1, CompilerGeneratedAlphaZetaCov6ArgumentsV1,
         CompilerGeneratedArgumentLayoutV1, CompilerGeneratedKernelContractV1,
         CompilerGeneratedKernelExpectationV1, CompilerGeneratedKernelProfileV1,
-        CompilerGeneratedSemanticWitnessErrorV1, GeneratedAdmittedLaunch,
-        GeneratedAlphaZetaCov6ArgumentBindingV1, GeneratedAlphaZetaCov6ArgumentError,
-        GeneratedAlphaZetaCov6CompletionV1, GeneratedAlphaZetaCov6GeometryError,
-        GeneratedAlphaZetaCov6PhysicalKernargError, GeneratedAlphaZetaCov6PrepareError,
-        GeneratedAlphaZetaCov6PrepareResultV1, GeneratedAlphaZetaCov6PreparedInvocationV1,
-        GeneratedArgumentFieldProperty, GeneratedArgumentLayoutError, GeneratedArgumentPackError,
-        GeneratedArgumentPackingError, GeneratedArgumentPackingPlanV1,
-        GeneratedArtifactAuthenticationError, GeneratedDeviceScalarV1, GeneratedKernelBindingV1,
-        GeneratedKernelProfileError, GeneratedMarkerBindingError, GeneratedPackingComponentKindV1,
-        GeneratedPackingComponentV1, GeneratedReadDeviceSlice, GeneratedReadWriteDeviceSlice,
-        GeneratedSliceArgumentPairV1, GeneratedVecAddKernelV1, GeneratedVecAddLoadError,
-        GeneratedVecAddPrepareError, GeneratedVecAddPreparedV1, GeneratedVecAddProfileError,
-        GeneratedWorkerV2VecAddBindError, GeneratedWorkerV2VecAddCompletionV1,
-        GeneratedWorkerV2VecAddExecutorV1, GeneratedWorkerV2VecAddPrepareError,
-        GeneratedWorkerV2VecAddPreparedV1, GeneratedWriteDeviceSlice, LoadedKernelLoadError,
-        ValidatedCompilerGeneratedSemanticWitnessV1, semantic_witness_from_backend_v1,
-        validate_compiler_generated_semantic_witness_v1,
+        CompilerGeneratedScalarGemmV1Arguments, CompilerGeneratedSemanticWitnessErrorV1,
+        GeneratedAdmittedLaunch, GeneratedAlphaZetaCov6ArgumentBindingV1,
+        GeneratedAlphaZetaCov6ArgumentError, GeneratedAlphaZetaCov6CompletionV1,
+        GeneratedAlphaZetaCov6GeometryError, GeneratedAlphaZetaCov6PhysicalKernargError,
+        GeneratedAlphaZetaCov6PrepareError, GeneratedAlphaZetaCov6PrepareResultV1,
+        GeneratedAlphaZetaCov6PreparedInvocationV1, GeneratedArgumentFieldProperty,
+        GeneratedArgumentLayoutError, GeneratedArgumentPackError, GeneratedArgumentPackingError,
+        GeneratedArgumentPackingPlanV1, GeneratedArtifactAuthenticationError,
+        GeneratedDeviceScalarV1, GeneratedKernelBindingV1, GeneratedKernelProfileError,
+        GeneratedMarkerBindingError, GeneratedPackingComponentKindV1, GeneratedPackingComponentV1,
+        GeneratedReadDeviceSlice, GeneratedReadWriteDeviceSlice,
+        GeneratedScalarGemmV1ArgumentBinding, GeneratedScalarGemmV1Completion,
+        GeneratedScalarGemmV1PrepareError, GeneratedScalarGemmV1PrepareResult,
+        GeneratedScalarGemmV1PreparedInvocation, GeneratedScalarGemmV1ReadDeviceSlice,
+        GeneratedScalarGemmV1ReadWriteDeviceSlice, GeneratedSliceArgumentPairV1,
+        GeneratedVecAddKernelV1, GeneratedVecAddLoadError, GeneratedVecAddPrepareError,
+        GeneratedVecAddPreparedV1, GeneratedVecAddProfileError, GeneratedWorkerV2VecAddBindError,
+        GeneratedWorkerV2VecAddCompletionV1, GeneratedWorkerV2VecAddExecutorV1,
+        GeneratedWorkerV2VecAddPrepareError, GeneratedWorkerV2VecAddPreparedV1,
+        GeneratedWriteDeviceSlice, LoadedKernelLoadError, ScalarGemmV1ArgumentError,
+        ScalarGemmV1DispatchIdentity, ScalarGemmV1GeometryError, ScalarGemmV1PhysicalKernargError,
+        ScalarGemmV1ProfileError, ValidatedCompilerGeneratedSemanticWitnessV1,
+        semantic_witness_from_backend_v1, validate_compiler_generated_semantic_witness_v1,
     };
     pub use fe2o3_artifacts::{
         AbiField, AbiKind, Access, AddressSpace, AliasClass, ArgumentOwnership, Mutability, Name,

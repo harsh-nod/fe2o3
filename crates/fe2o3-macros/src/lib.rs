@@ -1213,6 +1213,12 @@ fn expand_general_typed_kernel_with_imports(
         kernel_binding.as_bytes(),
         generated_host_contract.as_bytes(),
     )?;
+    let generated_scalar_gemm_v1_adapter = generated_scalar_gemm_v1_adapter(
+        &input,
+        &model,
+        kernel_binding.as_bytes(),
+        generated_host_contract.as_bytes(),
+    )?;
     let control_flow_contract =
         analyze_kernel_control_flow_v1(&input, options.control_flow.as_ref())?;
     lower_bounded_for_loops_v1(&mut input, options.control_flow.as_ref())?;
@@ -1344,6 +1350,7 @@ fn expand_general_typed_kernel_with_imports(
 
             #generated_host_arguments
             #generated_alpha_zeta_cov6_adapter
+            #generated_scalar_gemm_v1_adapter
 
             const _: () = {
                 // SAFETY: the associated constants are only a lexical
@@ -1721,6 +1728,7 @@ fn generated_general_typed_arguments_v1(
     arguments: &[GeneralTypedArgumentKindV1],
 ) -> proc_macro2::TokenStream {
     debug_assert_eq!(input.sig.inputs.len(), arguments.len());
+    let scalar_gemm_v1 = exact_scalar_gemm_v1(input, arguments);
     let fields = input
         .sig
         .inputs
@@ -1737,8 +1745,27 @@ fn generated_general_typed_arguments_v1(
         .collect::<Vec<_>>();
     let field_types = arguments
         .iter()
-        .map(|argument| match argument {
+        .enumerate()
+        .map(|(index, argument)| match argument {
             GeneralTypedArgumentKindV1::Scalar(scalar) => scalar.rust_type_tokens(),
+            GeneralTypedArgumentKindV1::SharedSlice(GeneralTypedScalarV1::F32)
+                if scalar_gemm_v1 && index < 2 =>
+            {
+                quote!(
+                    __fe2o3_kernel_host::__generated::GeneratedScalarGemmV1ReadDeviceSlice<
+                        'allocation,
+                    >
+                )
+            }
+            GeneralTypedArgumentKindV1::ExclusiveSlice(GeneralTypedScalarV1::F32)
+                if scalar_gemm_v1 && index == 2 =>
+            {
+                quote!(
+                    __fe2o3_kernel_host::__generated::GeneratedScalarGemmV1ReadWriteDeviceSlice<
+                        'allocation,
+                    >
+                )
+            }
             GeneralTypedArgumentKindV1::SharedSlice(scalar) => {
                 let scalar = scalar.rust_type_tokens();
                 quote!(
@@ -1814,6 +1841,214 @@ fn generated_general_typed_arguments_v1(
 enum AlphaZetaCov6MacroRoleV1 {
     Alpha,
     Zeta,
+}
+
+const SCALAR_GEMM_V1_ARGUMENT_NAMES: &[&str] = &["a", "b", "c", "m", "n", "k"];
+
+fn exact_scalar_gemm_v1(input: &ItemFn, arguments: &[GeneralTypedArgumentKindV1]) -> bool {
+    let names = input
+        .sig
+        .inputs
+        .iter()
+        .map(|argument| match argument {
+            FnArg::Typed(argument) => match argument.pat.as_ref() {
+                Pat::Ident(pattern) => pattern.ident.to_string(),
+                _ => unreachable!("general typed validation requires identifier patterns"),
+            },
+            FnArg::Receiver(_) => unreachable!("general typed validation rejects receivers"),
+        })
+        .collect::<Vec<_>>();
+
+    input.sig.ident == "scalar_gemm_v1"
+        && names
+            .iter()
+            .map(String::as_str)
+            .eq(SCALAR_GEMM_V1_ARGUMENT_NAMES.iter().copied())
+        && arguments
+            == [
+                GeneralTypedArgumentKindV1::SharedSlice(GeneralTypedScalarV1::F32),
+                GeneralTypedArgumentKindV1::SharedSlice(GeneralTypedScalarV1::F32),
+                GeneralTypedArgumentKindV1::ExclusiveSlice(GeneralTypedScalarV1::F32),
+                GeneralTypedArgumentKindV1::Scalar(GeneralTypedScalarV1::U32),
+                GeneralTypedArgumentKindV1::Scalar(GeneralTypedScalarV1::U32),
+                GeneralTypedArgumentKindV1::Scalar(GeneralTypedScalarV1::U32),
+            ]
+}
+
+fn generated_scalar_gemm_v1_adapter(
+    input: &ItemFn,
+    model: &GeneralTypedSignatureModelV1,
+    kernel_binding: [u8; 32],
+    generated_host_contract: [u8; 32],
+) -> syn::Result<proc_macro2::TokenStream> {
+    if !exact_scalar_gemm_v1(input, &model.arguments) {
+        return Ok(quote! {});
+    }
+
+    let layout = generated_scalar_gemm_v1_layout(model);
+    let kernel_binding_identity = kernel_binding;
+    let generated_host_contract_identity = generated_host_contract;
+
+    Ok(quote! {
+        // SAFETY: this implementation is emitted only for the exact Scalar
+        // GEMM V1 name, argument names, source types, effects, ABI, and launch
+        // profile. Every pointer/length pair and access record comes from the
+        // same retained generated capability, and the scalar dimensions are
+        // bound from this non-cloneable `Arguments` value.
+        unsafe impl<'allocation>
+            __fe2o3_kernel_host::__generated::CompilerGeneratedScalarGemmV1Arguments<
+                'allocation,
+                Marker,
+            > for Arguments<'allocation>
+        {
+            fn dispatch_identity_v1(
+            ) -> __fe2o3_kernel_host::__generated::ScalarGemmV1DispatchIdentity {
+                __fe2o3_kernel_host::__generated::ScalarGemmV1DispatchIdentity::new(
+                    [#(#kernel_binding_identity),*],
+                    [#(#generated_host_contract_identity),*],
+                )
+            }
+
+            fn generated_argument_layout_v1() -> Result<
+                __fe2o3_kernel_host::__generated::CompilerGeneratedArgumentLayoutV1,
+                __fe2o3_kernel_host::__generated::GeneratedArgumentLayoutError,
+            > {
+                #layout
+            }
+
+            fn bind_arguments_v1(
+                &self,
+                plan: &__fe2o3_kernel_host::__generated::GeneratedArgumentPackingPlanV1,
+            ) -> Result<
+                __fe2o3_kernel_host::__generated::GeneratedScalarGemmV1ArgumentBinding<
+                    'allocation,
+                >,
+                __fe2o3_kernel_host::__generated::GeneratedArgumentPackError,
+            > {
+                let inputs = vec![
+                    self.a.bind_input_v1(plan, 0)?,
+                    self.b.bind_input_v1(plan, 1)?,
+                    self.c.bind_input_v1(plan, 2)?,
+                    plan.scalar_u32(3, self.m)?,
+                    plan.scalar_u32(4, self.n)?,
+                    plan.scalar_u32(5, self.k)?,
+                ];
+                let accesses = vec![
+                    self.a.argument_access_v1(),
+                    self.b.argument_access_v1(),
+                    self.c.argument_access_v1(),
+                ];
+                // SAFETY: inputs contain each exact source argument once and
+                // access records are regenerated from the same retained slice
+                // capabilities in source order.
+                Ok(unsafe {
+                    __fe2o3_kernel_host::__generated::GeneratedScalarGemmV1ArgumentBinding::
+                        from_compiler_generated_parts_v1(
+                            inputs,
+                            accesses,
+                            [self.m, self.n, self.k],
+                        )
+                })
+            }
+        }
+
+        pub type Prepared<'loaded, 'allocation, P, A> =
+            __fe2o3_kernel_host::__generated::GeneratedScalarGemmV1PreparedInvocation<
+                'loaded,
+                'allocation,
+                P,
+                Marker,
+                A,
+                Arguments<'allocation>,
+            >;
+
+        impl<'allocation> Arguments<'allocation> {
+            /// Safely prepares this exact generated Scalar GEMM V1 invocation.
+            #[allow(clippy::type_complexity)]
+            pub fn prepare<'loaded, P, A, Authenticator>(
+                self,
+                executable: &'loaded mut __fe2o3_kernel_host::LoadedHsaExecutableV1<P, A>,
+                observed: &__fe2o3_kernel_host::ObservedContext,
+                authenticator: &mut Authenticator,
+            ) -> __fe2o3_kernel_host::__generated::GeneratedScalarGemmV1PrepareResult<
+                'loaded,
+                'allocation,
+                P,
+                Marker,
+                A,
+                Self,
+                Authenticator::Error,
+            >
+            where
+                A: __fe2o3_kernel_host::ReviewedHsaImplicitKernargAdapterV1,
+                Authenticator:
+                    __fe2o3_kernel_host::WorkerV2PrerequisiteAuthenticatorV1<Marker>,
+            {
+                executable.prepare_generated_scalar_gemm_v1::<
+                    Marker,
+                    Authenticator,
+                    Self,
+                >(observed, authenticator, self)
+            }
+        }
+    })
+}
+
+fn generated_scalar_gemm_v1_layout(
+    model: &GeneralTypedSignatureModelV1,
+) -> proc_macro2::TokenStream {
+    let fields = model
+        .arguments
+        .iter()
+        .zip(model.abi.fields())
+        .map(|(kind, field)| generated_scalar_gemm_v1_field(field.name().as_str(), *kind, field))
+        .collect::<Vec<_>>();
+    let size = model.abi.size();
+    let alignment = model.abi.alignment();
+
+    quote! {
+        __fe2o3_kernel_host::__generated::CompilerGeneratedArgumentLayoutV1::new(
+            #size,
+            #alignment,
+            __fe2o3_kernel_host::__generated::PointerWidth::Bits64,
+            vec![#(#fields),*],
+        )
+    }
+}
+
+fn generated_scalar_gemm_v1_field(
+    source_name: &str,
+    kind: GeneralTypedArgumentKindV1,
+    field: &AbiField,
+) -> proc_macro2::TokenStream {
+    if kind != GeneralTypedArgumentKindV1::Scalar(GeneralTypedScalarV1::U32) {
+        return generated_alpha_zeta_cov6_field_v1(source_name, kind, field);
+    }
+
+    let offset = field.offset();
+    let size = field.size();
+    let alignment = field.alignment();
+    quote! {
+        __fe2o3_kernel_host::__generated::AbiField::new(
+            __fe2o3_kernel_host::__generated::Name::new(#source_name)
+                .expect("generated Scalar GEMM V1 argument name is valid"),
+            #offset,
+            #size,
+            #alignment,
+            __fe2o3_kernel_host::__generated::AbiKind::Scalar(
+                __fe2o3_kernel_host::__generated::ScalarType::U32,
+            ),
+            __fe2o3_kernel_host::__generated::Mutability::Immutable,
+            __fe2o3_kernel_host::__generated::Access::ByValue,
+            __fe2o3_kernel_host::__generated::AddressSpace::Value,
+            <u32 as __fe2o3_kernel_host::__generated::GeneratedDeviceScalarV1>::
+                scalar_type_identity_v1(
+                    __fe2o3_kernel_host::__generated::PointerWidth::Bits64,
+                ),
+            __fe2o3_kernel_host::__generated::ArgumentOwnership::ByValue,
+            __fe2o3_kernel_host::__generated::AliasClass::Value,
+        ).expect("generated Scalar GEMM V1 ABI field is valid")
+    }
 }
 
 impl AlphaZetaCov6MacroRoleV1 {
@@ -2116,8 +2351,12 @@ fn model_general_typed_signature_v1(
         .enumerate()
         .map(|(index, argument)| parse_general_typed_argument_v1(argument, index + 1))
         .collect::<syn::Result<Vec<_>>>()?;
-    let exact_argument_names = exact_alpha_zeta_cov6_role_v1(input, &arguments)
-        .map(AlphaZetaCov6MacroRoleV1::argument_names);
+    let exact_argument_names = if exact_scalar_gemm_v1(input, &arguments) {
+        Some(SCALAR_GEMM_V1_ARGUMENT_NAMES)
+    } else {
+        exact_alpha_zeta_cov6_role_v1(input, &arguments)
+            .map(AlphaZetaCov6MacroRoleV1::argument_names)
+    };
     let abi = general_typed_abi_v1(&arguments, exact_argument_names, &input.sig)?;
     let launch = general_typed_launch_v1(options.launch.as_ref(), &input.sig)?;
     let logical_name = input.sig.ident.to_string();
@@ -3423,7 +3662,7 @@ mod tests {
     use proc_macro_crate::FoundCrate;
     use quote::{ToTokens, quote};
     use reserved_fe2o3_symbols::{
-        GeneratedHostContractIdV3, MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+        CrateBindingIdV1, GeneratedHostContractIdV3, MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
         TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3, TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
         artifact_length_symbol_v1, artifact_pointer_symbol_v1, derive_crate_binding_id_v1,
         derive_kernel_binding_id_v1, host_kernel_symbol_v1, semantic_witness_length_symbol_v1,
@@ -4478,6 +4717,91 @@ mod tests {
         let (_, rebound_binding, rebound_contract) = expand(alpha, other_crate_binding);
         assert_ne!(alpha_binding, rebound_binding);
         assert_ne!(alpha_contract, rebound_contract);
+    }
+
+    #[test]
+    fn scalar_gemm_v1_host_contract_matches_the_normative_rustc_identity() {
+        let input: ItemFn = parse_quote! {
+            pub fn scalar_gemm_v1(
+                a: &[f32],
+                b: &[f32],
+                c: DisjointSlice<f32>,
+                m: u32,
+                n: u32,
+                k: u32,
+            ) {}
+        };
+        let options = parse_kernel_options(quote!(
+            typed,
+            launch(required = [256, 1, 1], max = [256, 1, 1])
+        ))
+        .unwrap();
+        let crate_binding = CrateBindingIdV1::from_hex(
+            "53bf3c83481a081d4ab0e2b32039f9c89be5de3937a84aca0c40800c8d6b0413",
+        )
+        .unwrap();
+        let kernel_binding = derive_kernel_binding_id_v1(
+            crate_binding,
+            MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+            "scalar_gemm_v1",
+            "scalar_gemm_v1",
+        );
+        let model =
+            model_general_typed_signature_v1(&input, &options, kernel_binding.as_bytes()).unwrap();
+
+        assert_eq!(model.abi.size(), 64);
+        assert_eq!(model.abi.alignment(), 8);
+        assert_eq!(
+            model
+                .abi
+                .fields()
+                .iter()
+                .map(|field| field.name().as_str())
+                .collect::<Vec<_>>(),
+            ["a", "b", "c", "m", "n", "k"]
+        );
+        assert_eq!(
+            model
+                .abi
+                .fields()
+                .iter()
+                .map(|field| field.offset())
+                .collect::<Vec<_>>(),
+            [0, 16, 32, 48, 52, 56]
+        );
+        assert_eq!(
+            hex(model.generated_host_contract_identity.as_bytes()),
+            "55108b826b645a8f8cb648c046504786a7034df7bdddc0fbcb5f7698d2205ca0"
+        );
+
+        let lookalike: ItemFn = parse_quote! {
+            pub fn scalar_gemm_lookalike(
+                a: &[f32],
+                b: &[f32],
+                c: DisjointSlice<f32>,
+                m: u32,
+                n: u32,
+                k: u32,
+            ) {}
+        };
+        let lookalike_binding = derive_kernel_binding_id_v1(
+            crate_binding,
+            MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+            "scalar_gemm_lookalike",
+            "scalar_gemm_lookalike",
+        );
+        let lookalike =
+            model_general_typed_signature_v1(&lookalike, &options, lookalike_binding.as_bytes())
+                .unwrap();
+        assert_eq!(
+            lookalike
+                .abi
+                .fields()
+                .iter()
+                .map(|field| field.name().as_str())
+                .collect::<Vec<_>>(),
+            ["arg0", "arg1", "arg2", "arg3", "arg4", "arg5"]
+        );
     }
 
     #[test]
