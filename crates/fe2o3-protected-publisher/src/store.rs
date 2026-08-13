@@ -2078,26 +2078,25 @@ mod tests {
         let source = temp.path().join("source.ledger");
         let mut store = DurableStore::open(&source).unwrap();
         issue_with(&mut store, KEY_A, &fixture()).unwrap();
-        let header_len = store.header_len as usize;
+        issue_with(&mut store, KEY_B, &distinct_fixture()).unwrap();
+        issue_with(&mut store, KEY_C, &third_fixture()).unwrap();
+        let boundaries = frame_boundaries(&store);
         drop(store);
         let durable = std::fs::read(&source).unwrap();
-        let frame_length = durable.len() - header_len;
 
-        for frame_index in 0..frame_length {
-            let mut mutated = durable.clone();
-            mutated[header_len + frame_index] ^= 1;
-            let path = temp.path().join(format!("mutation-{frame_index}.ledger"));
-            std::fs::write(&path, &mutated).unwrap();
-            std::fs::set_permissions(&path, Permissions::from_mode(0o600)).unwrap();
-            assert!(
-                DurableStore::open(&path).is_err(),
-                "frame byte {frame_index} was accepted"
-            );
-            assert_eq!(
-                std::fs::read(&path).unwrap(),
-                mutated,
-                "frame byte {frame_index} was modified during rejection"
-            );
+        for (position, (frame_offset, frame_length)) in boundaries.iter().copied().enumerate() {
+            for frame_index in 0..frame_length {
+                let mut mutated = durable.clone();
+                mutated[frame_offset + frame_index] ^= 1;
+                let path = temp
+                    .path()
+                    .join(format!("mutation-{position}-{frame_index}.ledger"));
+                assert_restart_rejects_unchanged(
+                    &path,
+                    &mutated,
+                    &format!("frame {position} byte {frame_index}"),
+                );
+            }
         }
     }
 
@@ -2122,6 +2121,27 @@ mod tests {
                 "single checkpoint-region byte {region_index}"
             );
             assert_eq!(std::fs::read(&path).unwrap(), mutated);
+        }
+
+        for surviving_copy in 0..CHECKPOINT_COPIES {
+            for copy_index in 0..CHECKPOINT_COPY_BYTES {
+                let mut mutated = durable.clone();
+                for copy in 0..CHECKPOINT_COPIES {
+                    if copy != surviving_copy {
+                        mutated[checkpoint_offset + copy * CHECKPOINT_COPY_BYTES + copy_index] ^= 1;
+                    }
+                }
+                let path = temp
+                    .path()
+                    .join(format!("two-copy-{surviving_copy}-{copy_index}.ledger"));
+                write_ledger(&path, &mutated);
+                assert_eq!(
+                    DurableStore::open(&path).unwrap().count(),
+                    1,
+                    "checkpoint byte {copy_index} with copy {surviving_copy} intact"
+                );
+                assert_eq!(std::fs::read(&path).unwrap(), mutated);
+            }
         }
 
         for copy_index in 0..CHECKPOINT_COPY_BYTES {
