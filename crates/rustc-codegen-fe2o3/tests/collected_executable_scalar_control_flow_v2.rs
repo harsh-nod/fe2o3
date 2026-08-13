@@ -1,10 +1,12 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 const PIPELINE: &str = "collected-executable-scalar-control-flow-v2";
 const FIXTURE: &str = include_str!("fixtures/executable-scalar-control-flow-v1.rs");
 static NEXT_OUTPUT: AtomicU64 = AtomicU64::new(0);
+static BACKEND: OnceLock<PathBuf> = OnceLock::new();
 
 struct TestOutputDir(PathBuf);
 
@@ -37,18 +39,22 @@ fn workspace() -> PathBuf {
 }
 
 fn build_backend(workspace: &Path) -> PathBuf {
-    let output = Command::new(env!("CARGO"))
-        .current_dir(workspace)
-        .args(["build", "--locked", "-p", "rustc-codegen-fe2o3"])
-        .output()
-        .expect("build rustc backend");
-    assert!(
-        output.status.success(),
-        "backend build failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    workspace.join("target/debug/librustc_codegen_fe2o3.so")
+    BACKEND
+        .get_or_init(|| {
+            let output = Command::new(env!("CARGO"))
+                .current_dir(workspace)
+                .args(["build", "--locked", "-p", "rustc-codegen-fe2o3"])
+                .output()
+                .expect("build rustc backend");
+            assert!(
+                output.status.success(),
+                "backend build failed\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            workspace.join("target/debug/librustc_codegen_fe2o3.so")
+        })
+        .clone()
 }
 
 fn compile(
