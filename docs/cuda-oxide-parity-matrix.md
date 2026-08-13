@@ -397,11 +397,12 @@ The detailed dependencies and exit criteria are in
   Rust source integration, dynamic launch-byte admission, LDS initialization
   transfer, general barrier convergence proof, and GPU semantic execution are
   absent in the general paths. The bounded
-  [gfx942 wave/LDS V1](gfx942-wave-lds-v1.md) exception adds one compiler-created
+  [gfx942 wave/LDS V2](gfx942-wave-lds-v2.md) exception adds one compiler-created
   1,024-byte static-LDS capability, exact 256-thread barrier schedule, Verus
   ownership/participation proof, and numerical MI300X run from verified Kernel
-  IR. It does not join genuine Rust source to the executed HSACO.
-- Rows 65, 72, and 73: the gfx942 wave/LDS V1 slice lowers a logically masked
+  IR. V2 also binds the full canonical `gfx942:xnack-` identity through Kernel
+  IR and Worker V2. It does not join genuine Rust source to the executed HSACO.
+- Rows 65, 72, and 73: the gfx942 wave/LDS V2 slice lowers a logically masked
   `u32` wave64 sum through one ballot and six XOR shuffles and lowers the same
   activity contract to an exact 256-thread static-LDS reduction with 18
   barriers. LLVM shape, gfx942:xnack- assembly and metadata, host-oracle MI300X

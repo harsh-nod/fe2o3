@@ -29,10 +29,12 @@ policies, FP8/MX and MFMA/LDS contracts, composite O0 debug metadata, and a
 closed diagnostic/assembly surface. Device-library and tile interop are narrow:
 the former demonstrates one directly linked OCML operation, and the latter one
 BF16 XOR4 tile/stream contract. The bounded
-[gfx942 wave/LDS V1 slice](docs/gfx942-wave-lds-v1.md) additionally carries one
+[gfx942 wave/LDS V2 slice](docs/gfx942-wave-lds-v2.md) additionally carries one
 masked `u32` wave64 reduction and one 256-thread static-LDS reduction through
 exact compiler/LLVM checks, Verus proofs, and direct LLVM/LLD MI300X execution.
-Its genuine Rust source path still stops before an authenticated HSACO. The
+V2 admits only the full canonical `gfx942:xnack-` target, persists that binding
+in Kernel IR, and checks it against the Worker V2 envelope. Its genuine Rust
+source path still stops before an authenticated HSACO. The
 dashboard records the exact commits, tests, target lanes, evidence strengths,
 and limitations for each Partial row.
 
@@ -216,9 +218,10 @@ turn the foundations below into end-to-end features.
   dynamic LDS, scoped atomics, fences, and convergence-bearing workgroup
   barriers. The experimental AMD lowering emits LDS, scoped integer atomics,
   fences, workgroup barriers, and explicit wave32/wave64 lane, ballot, vote,
-  and bounded shuffle operations. The exact gfx942 wave/LDS V1 path adds an
+  and bounded shuffle operations. The exact gfx942 wave/LDS V2 path adds an
   authenticated Rust-facing wave64 active-mask reduction and non-forgeable
-  1,024-byte static-LDS reduction capability. Its independently constructed
+  1,024-byte static-LDS reduction capability with fail-closed canonical
+  `gfx942:xnack-` Kernel IR and Worker target binding. Its independently constructed
   Kernel IR has passed numerical MI300X execution, but the genuine Rust fixture
   reaches only verified Kernel IR. Dynamic-LDS launch-byte plumbing, broad
   atomics and collectives, general source-to-HSACO finalization, and compiler
@@ -525,7 +528,7 @@ turn the foundations below into end-to-end features.
   authenticated Verus refinement remain parity work. The alpha/zeta hardware
   result covers only MI300X `gfx942:xnack-`; architecture-family breadth is
   absent. LDS, atomics, waves, collectives, fences, and barriers have bounded
-  source/compiler paths. The exact gfx942 wave/LDS V1 Kernel IR also has one
+  source/compiler paths. The exact gfx942 wave/LDS V2 Kernel IR also has one
   numerical MI300X result, but it is not joined to the genuine Rust artifact.
   These facilities are not yet broadly available from ordinary Rust kernels or
   validated across the full operation, type, target, and hardware matrix.
