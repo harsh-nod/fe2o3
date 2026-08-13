@@ -642,6 +642,7 @@ fn lower_workgroup(
     lower_workgroup_with_scratch(lowerer, block, scratch, value, ty, kind, size, location)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn lower_workgroup_with_scratch(
     lowerer: &mut FunctionLowerer<'_, '_>,
     block: &mut BasicBlock,
