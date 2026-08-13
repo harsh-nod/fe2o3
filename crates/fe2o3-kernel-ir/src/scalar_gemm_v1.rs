@@ -329,10 +329,13 @@ pub fn verify_scalar_gemm_v1_module(
     if !requirements.is_exact() {
         return Err(ScalarGemmV1Error::UnsupportedTargetRequirements);
     }
+    // Run the bounded structural verifier before comparing an untrusted graph
+    // with the canonical graph. This keeps malformed and oversized inputs on
+    // the verifier's resource-limited path.
+    verify_module(module).map_err(ScalarGemmV1Error::InvalidKernelIr)?;
     if module != &scalar_gemm_v1_module() {
         return Err(ScalarGemmV1Error::NonCanonicalKernelIr);
     }
-    verify_module(module).map_err(ScalarGemmV1Error::InvalidKernelIr)?;
     Ok(())
 }
 

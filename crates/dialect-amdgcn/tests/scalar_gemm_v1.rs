@@ -12,6 +12,14 @@ fn lowers_exact_cyclic_ssa_gemm_to_strict_gfx942_llvm() {
     assert_eq!(output.requirements(), requirements());
     let llvm = output.as_str();
 
+    assert!(llvm.contains(concat!(
+        "define amdgpu_kernel void @scalar_gemm_v1(",
+        "ptr addrspace(1) %arg0.data, i64 %arg0.len, ",
+        "ptr addrspace(1) %arg1.data, i64 %arg1.len, ",
+        "ptr addrspace(1) %arg2.data, i64 %arg2.len, ",
+        "i32 %arg3, i32 %arg4, i32 %arg5)"
+    )));
+
     for required in [
         "target triple = \"amdgcn-amd-amdhsa\"",
         "target datalayout = \"e-p:64:64-p1:64:64",
@@ -28,11 +36,23 @@ fn lowers_exact_cyclic_ssa_gemm_to_strict_gfx942_llvm() {
         "\"target-cpu\"=\"gfx942\"",
         "\"target-features\"=\"-wavefrontsize32,+wavefrontsize64,-xnack\"",
         "\"fp-contract\"=\"off\"",
+        "\"amdgpu-flat-work-group-size\"=\"256,256\"",
+        "!0 = !{i32 256, i32 1, i32 1}",
+        "%v10 = mul i64 %v7, %v8",
+        "br i1 %v11, label %bb1, label %bb5",
     ] {
         assert!(llvm.contains(required), "missing {required:?}\n{llvm}");
     }
     assert_eq!(llvm.matches("load float").count(), 2, "{llvm}");
     assert_eq!(llvm.matches("store float").count(), 1, "{llvm}");
+    assert_eq!(llvm.matches("define amdgpu_kernel").count(), 1, "{llvm}");
+    assert!(!llvm.contains("@__fe2o3_scalar_gemm_v1_impl"), "{llvm}");
+    let guard = llvm.find("br i1 %v11").unwrap();
+    let division = llvm.find("%v15 = udiv i64 %v6, %v8").unwrap();
+    assert!(
+        guard < division,
+        "division must remain below the active guard\n{llvm}"
+    );
     for forbidden in [
         "llvm.fma",
         "llvm.fmuladd",
@@ -115,12 +135,34 @@ fn lowering_rejects_reordered_or_contraction_shaped_arithmetic_and_extra_roots()
 
 #[test]
 fn generic_lowering_still_rejects_integer_divide_and_remainder() {
-    let error = dialect_amdgcn::lower_compiler_module_to_gfx942_llvm_ir(&scalar_gemm_v1_module())
-        .expect_err("generic gfx942 profile must not inherit GEMM division support");
-    assert!(
-        error.to_string().contains("does not lower Divide"),
-        "{error}"
-    );
+    fn assert_all_generic_entries_reject(module: &Module, operation: &str) {
+        let kernel = KernelId::new(SCALAR_GEMM_V1_KERNEL_ID);
+        let errors = [
+            dialect_amdgcn::lower_compiler_module_to_gfx942_llvm_ir(module).unwrap_err(),
+            dialect_amdgcn::lower_kernel_to_gfx942_llvm_ir(module, &kernel).unwrap_err(),
+        ];
+        for error in errors {
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("does not lower {operation}")),
+                "{error}"
+            );
+        }
+        assert!(dialect_amdgcn::lower_compiler_module_to_llvm_ir(module).is_err());
+        assert!(dialect_amdgcn::lower_kernel_to_llvm_ir(module, &kernel).is_err());
+    }
+
+    assert_all_generic_entries_reject(&scalar_gemm_v1_module(), "Divide");
+
+    let mut remainder_only = scalar_gemm_v1_module();
+    remainder_only.functions[0].body.as_mut().unwrap().blocks[1].operations[0].kind =
+        OperationKind::Binary {
+            op: BinaryOp::Add,
+            lhs: ValueId(6),
+            rhs: ValueId(8),
+        };
+    assert_all_generic_entries_reject(&remainder_only, "Remainder");
 }
 
 #[test]
@@ -202,7 +244,7 @@ fn upstream_llvm_verifies_and_codegen_preserves_separate_mul_add() {
         multiply < add,
         "GEMM add must follow multiply:\n{recurrence}"
     );
-    for forbidden in ["v_fma", "v_fmac"] {
+    for forbidden in ["v_fma", "v_fmac", "v_mad", "v_mac"] {
         assert!(
             !recurrence.contains(forbidden),
             "found {forbidden:?} in GEMM recurrence:\n{recurrence}"
