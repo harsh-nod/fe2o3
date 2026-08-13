@@ -274,6 +274,7 @@ fn hangs_and_blocked_stdin_are_timed_out() {
         .execute(&request(2, 2 * 1024 * 1024, 1024), limits())
         .unwrap_err();
     assert_eq!(error.kind(), &WorkerExecutionErrorKind::Timeout);
+    assert!(format!("{error:?}").contains("request_written="));
     assert!(started.elapsed() < Duration::from_secs(3));
 }
 

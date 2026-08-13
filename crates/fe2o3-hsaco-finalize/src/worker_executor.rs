@@ -223,6 +223,24 @@ impl WorkerExecutionError {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    fn timeout(capture: &ProcessCapture, request_len: usize) -> Self {
+        Self {
+            kind: Box::new(WorkerExecutionErrorKind::Timeout),
+            stdout: capture.stdout.bytes.clone(),
+            stderr: capture.stderr.bytes.clone(),
+            detail: Some(format!(
+                "request_written={}/{} stdout_bytes={} stdout_eof={} stderr_bytes={} stderr_eof={}",
+                capture.request_written,
+                request_len,
+                capture.stdout.bytes.len(),
+                capture.stdout.eof,
+                capture.stderr.bytes.len(),
+                capture.stderr.eof,
+            )),
+        }
+    }
+
     pub const fn kind(&self) -> &WorkerExecutionErrorKind {
         &self.kind
     }
@@ -965,10 +983,7 @@ mod platform {
                     let capture = partial_capture(request_written, stdout, stderr);
                     terminate_process_tree(child, &descendants_seen);
                     let _ = child.wait();
-                    return Err(WorkerExecutionError::process(
-                        WorkerExecutionErrorKind::Timeout,
-                        &capture,
-                    ));
+                    return Err(WorkerExecutionError::timeout(&capture, request.len()));
                 }
                 Ok(None) => thread::sleep(POLL_INTERVAL),
                 Err(error) => {

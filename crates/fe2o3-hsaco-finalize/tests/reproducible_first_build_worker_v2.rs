@@ -449,15 +449,12 @@ fn candidate_and_v2_identity_corruption_are_distinguished() {
         limits(),
     )
     .unwrap_err();
+    let FirstBuildWorkerV2Error::AuthorizedExecution(error) = v2_error else {
+        panic!("unexpected error: {v2_error:?}");
+    };
     assert!(matches!(
-        v2_error,
-        FirstBuildWorkerV2Error::AuthorizedExecution(ref error)
-            if matches!(
-                error.kind(),
-                WorkerExecutionErrorKind::DecodeResponse(
-                    WorkerProtocolError::RequestIdentityMismatch
-                )
-            )
+        error.kind(),
+        WorkerExecutionErrorKind::DecodeResponse(WorkerProtocolError::RequestIdentityMismatch)
     ));
 }
 
