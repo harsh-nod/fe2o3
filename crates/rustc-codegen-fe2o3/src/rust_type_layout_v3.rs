@@ -39,6 +39,15 @@ const ZETA_ARGUMENT_KINDS: [GeneralTypedArgumentKindV3; 4] = [
     GeneralTypedArgumentKindV3::DisjointSlice(RustScalarElementTypeV1::F32),
 ];
 const ZETA_ARGUMENT_NAMES: [&str; 4] = ["a", "b", "bias", "output"];
+const SCALAR_GEMM_V1_ARGUMENT_KINDS: [GeneralTypedArgumentKindV3; 6] = [
+    GeneralTypedArgumentKindV3::SharedSlice(RustScalarElementTypeV1::F32),
+    GeneralTypedArgumentKindV3::SharedSlice(RustScalarElementTypeV1::F32),
+    GeneralTypedArgumentKindV3::DisjointSlice(RustScalarElementTypeV1::F32),
+    GeneralTypedArgumentKindV3::Scalar(RustScalarElementTypeV1::U32),
+    GeneralTypedArgumentKindV3::Scalar(RustScalarElementTypeV1::U32),
+    GeneralTypedArgumentKindV3::Scalar(RustScalarElementTypeV1::U32),
+];
+const SCALAR_GEMM_V1_ARGUMENT_NAMES: [&str; 6] = ["a", "b", "c", "m", "n", "k"];
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) enum GeneralTypedArgumentKindV3 {
@@ -467,6 +476,9 @@ fn build_abi(
         ("zeta", "zeta") if argument_kinds == ZETA_ARGUMENT_KINDS => {
             Some(ZETA_ARGUMENT_NAMES.as_slice())
         }
+        ("scalar_gemm_v1", "scalar_gemm_v1") if argument_kinds == SCALAR_GEMM_V1_ARGUMENT_KINDS => {
+            Some(SCALAR_GEMM_V1_ARGUMENT_NAMES.as_slice())
+        }
         _ => None,
     };
     let mut offset = 0_u64;
@@ -756,6 +768,13 @@ mod tests {
         ]
     }
 
+    fn scalar_gemm_v1_arguments() -> Vec<GeneralTypedArgumentV3> {
+        SCALAR_GEMM_V1_ARGUMENT_KINDS
+            .into_iter()
+            .map(argument)
+            .collect()
+    }
+
     fn launch() -> LaunchContract {
         LaunchContract::new(
             1,
@@ -823,6 +842,42 @@ mod tests {
             [0, 16, 32, 40]
         );
         assert_eq!(zeta.fields()[3].access(), Access::ReadWrite);
+    }
+
+    #[test]
+    fn scalar_gemm_v1_reconstructs_the_normative_explicit_cov6_abi() {
+        let abi = build_abi(
+            "scalar_gemm_v1",
+            "scalar_gemm_v1",
+            &scalar_gemm_v1_arguments(),
+        )
+        .unwrap();
+        assert_eq!(abi.size(), 64);
+        assert_eq!(abi.alignment(), 8);
+        assert_eq!(
+            abi.fields()
+                .iter()
+                .map(|field| field.name().as_str())
+                .collect::<Vec<_>>(),
+            ["a", "b", "c", "m", "n", "k"]
+        );
+        assert_eq!(
+            abi.fields()
+                .iter()
+                .map(|field| field.offset())
+                .collect::<Vec<_>>(),
+            [0, 16, 32, 48, 52, 56]
+        );
+        assert_eq!(
+            abi.fields()
+                .iter()
+                .map(|field| field.size())
+                .collect::<Vec<_>>(),
+            [16, 16, 16, 4, 4, 4]
+        );
+        assert_eq!(abi.fields()[0].access(), Access::ReadOnly);
+        assert_eq!(abi.fields()[1].access(), Access::ReadOnly);
+        assert_eq!(abi.fields()[2].access(), Access::ReadWrite);
     }
 
     #[test]

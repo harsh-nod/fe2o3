@@ -21,6 +21,8 @@ use sha2::{Digest as _, Sha256};
 
 const PIPELINE: &str = "collected-executable-scalar-control-flow-v2";
 const FIXTURE: &str = include_str!("fixtures/executable-scalar-control-flow-v1.rs");
+const SCALAR_GEMM_PIPELINE: &str = "collected-scalar-gemm-v1";
+const SCALAR_GEMM_FIXTURE: &str = include_str!("fixtures/scalar-gemm-v1/src/kernel.rs");
 const BUILD_HELPER_ENV: &str = "FE2O3_SCALAR_CF_ISOLATED_BUILD_HELPER";
 const BUILD_HELPER_SOCKET_ENV: &str = "FE2O3_SCALAR_CF_BUILD_SOCKET_FD";
 const BUILD_HELPER_WORKSPACE_ENV: &str = "FE2O3_SCALAR_CF_BUILD_WORKSPACE";
@@ -31,6 +33,7 @@ const TERMINATION_GRACE: Duration = Duration::from_secs(2);
 const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(20);
 static NEXT_OUTPUT: AtomicU64 = AtomicU64::new(0);
 static BACKEND: OnceLock<PinnedBackend> = OnceLock::new();
+static FRONTEND_DEPENDENCIES: OnceLock<Result<(), String>> = OnceLock::new();
 
 const REQUIRED_MEMFD_SEALS: libc::c_int =
     libc::F_SEAL_SEAL | libc::F_SEAL_SHRINK | libc::F_SEAL_GROW | libc::F_SEAL_WRITE;
@@ -661,6 +664,128 @@ fn compile_path(
         .expect("compile scalar-control-flow fixture within deadline")
 }
 
+fn build_frontend_dependencies(workspace: &Path) -> Result<(), String> {
+    FRONTEND_DEPENDENCIES
+        .get_or_init(|| {
+            let mut command = Command::new(env!("CARGO"));
+            command
+                .current_dir(workspace)
+                .args([
+                    "build",
+                    "--locked",
+                    "-p",
+                    "fe2o3-device",
+                    "-p",
+                    "fe2o3-host",
+                ])
+                .env("CARGO_INCREMENTAL", "0");
+            let output = run_bounded(
+                &mut command,
+                BACKEND_BUILD_TIMEOUT,
+                "scalar GEMM frontend dependency build",
+            )?;
+            if output.status.success() {
+                Ok(())
+            } else {
+                Err(format!(
+                    "scalar GEMM frontend dependency build failed:\n{}",
+                    String::from_utf8_lossy(&output.stderr)
+                ))
+            }
+        })
+        .clone()
+}
+
+fn compile_scalar_gemm(
+    workspace: &Path,
+    backend: &PinnedBackend,
+    output: &TestOutputDir,
+    source: &str,
+    target: &str,
+    extra_args: &[&str],
+) -> Output {
+    build_frontend_dependencies(workspace).expect("build scalar GEMM frontend dependencies");
+    backend
+        .verify()
+        .expect("sealed backend identity before scalar GEMM rustc");
+    let source_path = output.0.join("scalar-gemm-v1.rs");
+    std::fs::write(&source_path, source).expect("write scalar GEMM fixture");
+    let device = workspace.join("target/debug/libfe2o3_device.rlib");
+    let host = workspace.join("target/debug/libfe2o3_host.rlib");
+    let manifest_directory =
+        workspace.join("crates/rustc-codegen-fe2o3/tests/fixtures/scalar-gemm-v1");
+    assert!(device.is_file(), "missing {}", device.display());
+    assert!(host.is_file(), "missing {}", host.display());
+
+    let mut command = Command::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()));
+    command
+        .current_dir(workspace)
+        .arg(&source_path)
+        .arg(format!(
+            "--remap-path-prefix={}=/fe2o3-reviewed-workspace/scalar-gemm-v1.rs",
+            source_path.display()
+        ))
+        .args([
+            "--edition=2024",
+            "--crate-name",
+            "fe2o3_scalar_gemm_v1_fixture",
+            "--extern",
+        ])
+        .arg(format!("fe2o3_device={}", device.display()))
+        .arg("--extern")
+        .arg(format!("fe2o3_host={}", host.display()))
+        .arg("-L")
+        .arg(format!(
+            "dependency={}",
+            workspace.join("target/debug/deps").display()
+        ))
+        .args([
+            "-C",
+            "overflow-checks=off",
+            "-Cmetadata=fe2o3-scalar-gemm-v1-reviewed",
+            "-Zmir-enable-passes=-JumpThreading",
+            "-Zremap-cwd-prefix=/fe2o3-reviewed-workspace",
+        ])
+        .args(extra_args)
+        .arg(format!(
+            "-Zcodegen-backend={}",
+            backend.load_path().display()
+        ))
+        .arg("-o")
+        .arg(output.0.join("scalar-gemm-v1"))
+        .env("FE2O3_VERBOSE", "1")
+        .env("FE2O3_DUMP_LLVM", "1")
+        .env("CARGO_MANIFEST_DIR", manifest_directory)
+        .env("FE2O3_TARGET", target)
+        .env("FE2O3_CODEGEN_PIPELINE", SCALAR_GEMM_PIPELINE)
+        .env("FE2O3_HSACO_DIR", output.0.join("artifacts"));
+    let backend_descriptor = backend.file.as_raw_fd();
+    unsafe {
+        command.pre_exec(move || set_close_on_exec(backend_descriptor, false));
+    }
+    run_bounded(&mut command, COMPILER_TIMEOUT, "scalar GEMM rustc")
+        .expect("compile scalar GEMM fixture within deadline")
+}
+
+fn assert_scalar_gemm_emitted_nothing(output: &TestOutputDir) {
+    assert!(
+        !output.0.join("scalar-gemm-v1").exists(),
+        "admission-only scalar GEMM emitted a linked output"
+    );
+    let artifacts = std::fs::read_dir(output.0.join("artifacts"))
+        .expect("read scalar GEMM artifact directory")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("enumerate scalar GEMM artifacts");
+    assert!(
+        artifacts.is_empty(),
+        "admission-only scalar GEMM emitted artifacts: {:?}",
+        artifacts
+            .iter()
+            .map(|entry| entry.path())
+            .collect::<Vec<_>>()
+    );
+}
+
 fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
@@ -1095,6 +1220,53 @@ fn main() {}
         ),
         "requires exactly two collected functions, found 3",
     );
+}
+
+#[test]
+fn scalar_gemm_v1_admits_only_the_reviewed_full_portable_mir() {
+    let workspace = workspace();
+    let backend = build_backend(&workspace);
+    let output = TestOutputDir::new(&workspace);
+    let compiled = compile_scalar_gemm(
+        &workspace,
+        backend,
+        &output,
+        SCALAR_GEMM_FIXTURE,
+        "gfx942:xnack-",
+        &[],
+    );
+    let admission_stderr = stderr(&compiled);
+    assert!(
+        !compiled.status.success()
+            && admission_stderr.contains("authenticated collected KernelEntry")
+            && admission_stderr.contains("af4ca76c4517b779bca4b7a63bcae09a23cad947e740b2e51f872d7cc0d6d002")
+            && admission_stderr.contains("no executable authority, Kernel IR, LLVM, LLD, COMGR, HSACO, or legacy fallback was entered"),
+        "reviewed scalar GEMM did not stop at the authenticated admission checkpoint:\n{admission_stderr}"
+    );
+    assert_scalar_gemm_emitted_nothing(&output);
+
+    let mutated_source = SCALAR_GEMM_FIXTURE.replace(
+        "let product = a[a_index] * b[b_index];",
+        "let product = a[a_index] + b[b_index];",
+    );
+    assert_ne!(mutated_source, SCALAR_GEMM_FIXTURE);
+    let mutated_output = TestOutputDir::new(&workspace);
+    let mutated = compile_scalar_gemm(
+        &workspace,
+        backend,
+        &mutated_output,
+        &mutated_source,
+        "gfx942:xnack-",
+        &[],
+    );
+    let mutated_stderr = stderr(&mutated);
+    assert!(
+        !mutated.status.success()
+            && mutated_stderr.contains("portable MIR identity mismatch")
+            && !mutated_stderr.contains("authenticated collected KernelEntry"),
+        "same-shape arithmetic mutation was not rejected by full portable MIR identity:\n{mutated_stderr}"
+    );
+    assert_scalar_gemm_emitted_nothing(&mutated_output);
 }
 
 #[test]

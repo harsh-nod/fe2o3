@@ -18,6 +18,7 @@ mod amdgpu_llvm;
 #[allow(dead_code)]
 mod closure_profile_v1;
 mod collected_executable_scalar_control_flow_v2;
+mod collected_scalar_gemm_v1;
 mod collector;
 mod compiler_descriptor;
 mod compiler_ffi_adapter;
@@ -176,6 +177,7 @@ enum CodegenPipeline {
     KernelIrV1,
     KernelIrWorkerV2,
     CollectedExecutableScalarControlFlowV2,
+    CollectedScalarGemmV1,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -236,9 +238,15 @@ impl PipelineSelection {
             {
                 Self::Valid(CodegenPipeline::CollectedExecutableScalarControlFlowV2)
             }
+            Some(value)
+                if value == collected_scalar_gemm_v1::COLLECTED_SCALAR_GEMM_PIPELINE_V1 =>
+            {
+                Self::Valid(CodegenPipeline::CollectedScalarGemmV1)
+            }
             Some(value) => Self::Invalid(format!(
-                "{CODEGEN_PIPELINE_ENV} must be unset or exactly `legacy-v1`, `kernel-ir-v1`, `kernel-ir-worker-v2`, or `{}`; found {value:?}",
-                collected_executable_scalar_control_flow_v2::COLLECTED_SCALAR_CONTROL_FLOW_PIPELINE_V2
+                "{CODEGEN_PIPELINE_ENV} must be unset or exactly `legacy-v1`, `kernel-ir-v1`, `kernel-ir-worker-v2`, `{}`, or `{}`; found {value:?}",
+                collected_executable_scalar_control_flow_v2::COLLECTED_SCALAR_CONTROL_FLOW_PIPELINE_V2,
+                collected_scalar_gemm_v1::COLLECTED_SCALAR_GEMM_PIPELINE_V1,
             )),
         }
     }
@@ -451,6 +459,60 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                         Err(error) => tcx.dcx().fatal(format!(
                             "[rustc-codegen-fe2o3] {} rejected the collected program without fallback: {error}",
                             collected_executable_scalar_control_flow_v2::COLLECTED_SCALAR_CONTROL_FLOW_PIPELINE_V2,
+                        )),
+                    }
+                } else if matches!(
+                    codegen_pipeline,
+                    PipelineSelection::Valid(CodegenPipeline::CollectedScalarGemmV1)
+                ) {
+                    let admission = (|| -> Result<_, String> {
+                        let collection = collector::collect_device_functions(
+                            tcx,
+                            mono_partitions.codegen_units,
+                            self.config.verbose,
+                        )
+                        .map_err(|error| error.to_string())?;
+                        let frontend_record =
+                            frontend_record_bridge::extract_frontend_record_v1(tcx, &collection)
+                                .map_err(|error| {
+                                    format!("frontend record extraction failed: {error}")
+                                })?;
+                        if self.config.verbose {
+                            eprintln!(
+                                "[rustc-codegen-fe2o3] validated scalar GEMM frontend record: {} function(s), {} canonical byte(s)",
+                                frontend_record.unit().functions().len(),
+                                frontend_record.canonical_bytes().len()
+                            );
+                        }
+                        collector::dump_device_functions(tcx, &collection.functions);
+                        let custom_llvm_pipeline = !tcx.sess.opts.cg.llvm_args.is_empty()
+                            || !tcx.sess.opts.cg.passes.is_empty();
+                        collected_scalar_gemm_v1::authenticate_collected_scalar_gemm_v1(
+                            tcx,
+                            &collection,
+                            &self.config.target,
+                            custom_llvm_pipeline,
+                        )
+                        .map_err(|error| error.to_string())
+                    })();
+                    match admission {
+                        Ok(admission) => tcx.dcx().fatal(format!(
+                            "[rustc-codegen-fe2o3] {} authenticated collected KernelEntry `{}` export `{}` with exact reviewed path-independent portable MIR {}; exact ABI/roles A:&[f32], B:&[f32], C:DisjointSlice<f32>, m:u32, n:u32, k:u32; explicit kernarg {} bytes, complete kernarg {} bytes; row-major sequential f32 source semantics; target {}; COV{}; compiler semantics {}; sealed collected authority {}; {}; no executable authority, Kernel IR, LLVM, LLD, COMGR, HSACO, or legacy fallback was entered",
+                            collected_scalar_gemm_v1::COLLECTED_SCALAR_GEMM_PIPELINE_V1,
+                            admission.root_instance_identity(),
+                            admission.kernel_export(),
+                            admission.portable_mir_semantic_hex(),
+                            collected_scalar_gemm_v1::SCALAR_GEMM_EXPLICIT_KERNARG_BYTES_V1,
+                            collected_scalar_gemm_v1::SCALAR_GEMM_COMPLETE_KERNARG_BYTES_V1,
+                            collected_scalar_gemm_v1::EXACT_SCALAR_GEMM_TARGET_V1,
+                            collected_scalar_gemm_v1::SCALAR_GEMM_CODE_OBJECT_VERSION_V1,
+                            admission.compiler_semantics_hex(),
+                            admission.authority_hex(),
+                            collected_scalar_gemm_v1::NEXT_LOWERING_DEPENDENCY,
+                        )),
+                        Err(error) => tcx.dcx().fatal(format!(
+                            "[rustc-codegen-fe2o3] {} rejected the collected program without fallback: {error}",
+                            collected_scalar_gemm_v1::COLLECTED_SCALAR_GEMM_PIPELINE_V1,
                         )),
                     }
                 } else if matches!(
@@ -722,6 +784,12 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             CodegenPipeline::CollectedExecutableScalarControlFlowV2 => {
                                 Err(amdgpu_llvm::EmitError::Preflight {
                                     reason: "internal error: collected executable scalar-control-flow V2 entered the legacy artifact transaction"
+                                        .to_owned(),
+                                })
+                            }
+                            CodegenPipeline::CollectedScalarGemmV1 => {
+                                Err(amdgpu_llvm::EmitError::Preflight {
+                                    reason: "internal error: collected scalar GEMM V1 entered the legacy artifact transaction"
                                         .to_owned(),
                                 })
                             }
