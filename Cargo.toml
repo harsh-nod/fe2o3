@@ -57,6 +57,7 @@ members = [
     "examples/raw_gather",
     "examples/raw_neighbors",
     "examples/raw_output_shift",
+    "examples/scalar_gemm_v1",
     "examples/saxpy",
     "examples/scale",
     "examples/shift",
