@@ -5,8 +5,9 @@
 //! on a host or unsupported compilation path. The initial profile admits only
 //! `u32`, `i32`, and `f32`, a full wave64, and power-of-two workgroups no larger
 //! than 256 invocations.
-//! The current Rust frontend does not recognize these reserved hooks, so this
-//! source API is not yet an executable kernel path.
+//! The bounded V1 compiler path recognizes the authenticated operations in this
+//! module. Producing and launching a code object remains a separate compiler and
+//! runtime admission boundary.
 
 use core::fmt;
 use core::marker::PhantomData;
@@ -17,8 +18,20 @@ use crate::{Group, SubgroupTile, Workgroup};
 /// Version of the bounded gfx942 collective contract.
 pub const GFX942_COLLECTIVE_CONTRACT_VERSION_V1: u16 = 1;
 
+/// Version of the exact wave64/static-LDS vertical-slice contract.
+pub const GFX942_WAVE_LDS_VERTICAL_SLICE_VERSION_V1: u16 = 1;
+
 /// Largest workgroup admitted by the first LDS collective profile.
 pub const MAX_GFX942_WORKGROUP_COLLECTIVE_SIZE: u32 = 256;
+
+/// Number of `u32` slots in the first compiler-created static-LDS capability.
+pub const GFX942_STATIC_LDS_U32X256_SLOTS: u32 = 256;
+
+/// Byte extent of [`Gfx942StaticLdsU32x256`].
+pub const GFX942_STATIC_LDS_U32X256_BYTES: u32 = GFX942_STATIC_LDS_U32X256_SLOTS * 4;
+
+/// Required alignment of [`Gfx942StaticLdsU32x256`].
+pub const GFX942_STATIC_LDS_U32X256_ALIGNMENT: u32 = 4;
 
 mod sealed {
     pub trait CollectiveElement {}
@@ -161,12 +174,113 @@ impl Gfx942Collectives {
         unreachable!("gfx942 collective authority must be created by authenticated lowering")
     }
 
+    /// Allocates the exact static-LDS region used by the V1 workgroup slice.
+    ///
+    /// The returned capability has no exposed pointer and cannot be copied or
+    /// forged in safe Rust. Authenticated lowering replaces this call with one
+    /// 1,024-byte, four-byte-aligned AMDGPU workgroup-address-space allocation.
+    ///
+    /// # Safety
+    ///
+    /// `self` must be the compiler-created capability for this exact gfx942
+    /// kernel. This constructor may execute only in a 256x1x1 launch profile.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_gfx942_static_lds_u32x256_v1"]
+    pub unsafe fn static_lds_u32x256(&self) -> Gfx942StaticLdsU32x256 {
+        unreachable!("gfx942 static LDS must be allocated by authenticated lowering")
+    }
+
+    /// Reduces logically active `u32` values across one physical wave64.
+    ///
+    /// `active_flag == 0` makes the calling lane contribute zero; every other
+    /// value makes it contribute `value`. The result is the wrapping sum of the
+    /// logically active values and is returned to every lane. Lowering records
+    /// the logical mask with a wave64 ballot and uses a fixed six-shuffle XOR
+    /// tree.
+    ///
+    /// # Safety
+    ///
+    /// `self` must describe the current gfx942 wave64 epoch. All 64 physical
+    /// lanes must be active and execute this exact call convergently. The
+    /// lane-local `active_flag` may differ, but each lane must evaluate it once
+    /// for this call. This logical mask does not authorize a partially active
+    /// physical EXEC mask.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_gfx942_wave64_reduce_active_u32_v1"]
+    pub unsafe fn wave64_reduce_sum_active_u32(&self, active_flag: u32, value: u32) -> u32 {
+        let _ = (active_flag, value);
+        unreachable!("gfx942 wave64 reduction must be lowered by the fe2o3 backend")
+    }
+
+    /// Reduces logically active `u32` values across one 256-thread workgroup.
+    ///
+    /// Every thread writes exactly one statically allocated LDS slot. A fixed
+    /// acquire-release barrier schedule separates initialization, reduction
+    /// reads, reduction writes, and the final shared read. Inactive logical
+    /// threads write zero and still participate in every physical barrier.
+    ///
+    /// # Safety
+    ///
+    /// `self` and `scratch` must originate from authenticated lowering for the
+    /// same 256x1x1 gfx942 workgroup. Every physical work-item must execute this
+    /// exact call convergently and in the same barrier sequence. `active_flag`
+    /// has the same lane-local logical semantics as
+    /// [`Self::wave64_reduce_sum_active_u32`].
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_gfx942_workgroup256_reduce_active_u32_v1"]
+    pub unsafe fn workgroup256_reduce_sum_active_u32(
+        &self,
+        scratch: &mut Gfx942StaticLdsU32x256,
+        active_flag: u32,
+        value: u32,
+    ) -> u32 {
+        let _ = (scratch, active_flag, value);
+        unreachable!("gfx942 workgroup reduction must be lowered by the fe2o3 backend")
+    }
+
     #[cfg(test)]
     fn for_host_test() -> Self {
         Self {
             _private: (),
             _not_send_sync: PhantomData,
         }
+    }
+}
+
+/// Compiler-created authority for one exact static LDS allocation.
+///
+/// This capability represents `[u32; 256]` in AMDGPU address space 3. It is
+/// neither `Copy`, `Clone`, `Send`, nor `Sync`, exposes no pointer, and has no
+/// safe constructor. Its Rust size is not the represented device allocation
+/// size; the constants above describe the compiler contract.
+#[rustc_diagnostic_item = "fe2o3_device_gfx942_static_lds_u32x256_type_v1"]
+pub struct Gfx942StaticLdsU32x256 {
+    _private: (),
+    _not_send_sync: PhantomData<*mut ()>,
+}
+
+impl Gfx942StaticLdsU32x256 {
+    pub const fn slots(&self) -> u32 {
+        GFX942_STATIC_LDS_U32X256_SLOTS
+    }
+
+    pub const fn byte_len(&self) -> u32 {
+        GFX942_STATIC_LDS_U32X256_BYTES
+    }
+
+    pub const fn alignment(&self) -> u32 {
+        GFX942_STATIC_LDS_U32X256_ALIGNMENT
+    }
+}
+
+impl fmt::Debug for Gfx942StaticLdsU32x256 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Gfx942StaticLdsU32x256")
+            .field("slots", &GFX942_STATIC_LDS_U32X256_SLOTS)
+            .field("byte_len", &GFX942_STATIC_LDS_U32X256_BYTES)
+            .field("alignment", &GFX942_STATIC_LDS_U32X256_ALIGNMENT)
+            .finish_non_exhaustive()
     }
 }
 

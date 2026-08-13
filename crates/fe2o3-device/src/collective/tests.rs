@@ -1,5 +1,7 @@
 use super::{
-    GFX942_COLLECTIVE_CONTRACT_VERSION_V1, Gfx942CollectiveElement, Gfx942Collectives,
+    GFX942_COLLECTIVE_CONTRACT_VERSION_V1, GFX942_STATIC_LDS_U32X256_ALIGNMENT,
+    GFX942_STATIC_LDS_U32X256_BYTES, GFX942_STATIC_LDS_U32X256_SLOTS,
+    GFX942_WAVE_LDS_VERTICAL_SLICE_VERSION_V1, Gfx942CollectiveElement, Gfx942Collectives,
     MAX_GFX942_WORKGROUP_COLLECTIVE_SIZE, WorkgroupCollectiveScratch,
     WorkgroupCollectiveScratchError,
 };
@@ -26,6 +28,17 @@ fn xor_reduce<T: Gfx942CollectiveElement>(input: &[T]) -> Vec<T> {
         offset >>= 1;
     }
     values
+}
+
+fn masked_xor_reduce_u32(input: &[u32], active: &[bool]) -> Vec<u32> {
+    assert_eq!(input.len(), 64);
+    assert_eq!(active.len(), 64);
+    let masked = input
+        .iter()
+        .zip(active)
+        .map(|(&value, &active)| if active { value } else { 0 })
+        .collect::<Vec<_>>();
+    xor_reduce(&masked)
 }
 
 fn inclusive_scan<T: Gfx942CollectiveElement>(input: &[T]) -> Vec<T> {
@@ -79,13 +92,35 @@ fn contract_and_type_matrix_are_exact() {
     fn admitted<T: Gfx942CollectiveElement>() {}
 
     assert_eq!(GFX942_COLLECTIVE_CONTRACT_VERSION_V1, 1);
+    assert_eq!(GFX942_WAVE_LDS_VERTICAL_SLICE_VERSION_V1, 1);
     assert_eq!(MAX_GFX942_WORKGROUP_COLLECTIVE_SIZE, 256);
+    assert_eq!(GFX942_STATIC_LDS_U32X256_SLOTS, 256);
+    assert_eq!(GFX942_STATIC_LDS_U32X256_BYTES, 1_024);
+    assert_eq!(GFX942_STATIC_LDS_U32X256_ALIGNMENT, 4);
     admitted::<u32>();
     admitted::<i32>();
     admitted::<f32>();
     assert_eq!(add(u32::MAX, 1), 0);
     assert_eq!(add(i32::MAX, 1), i32::MIN);
     assert_eq!(add(1.25_f32, 2.5), 3.75);
+}
+
+#[test]
+fn wave64_masked_reduction_ignores_every_inactive_lane() {
+    let input = (1..=64_u32).collect::<Vec<_>>();
+    let active = (0..64).map(|lane| lane % 3 != 1).collect::<Vec<_>>();
+    let expected = input
+        .iter()
+        .zip(&active)
+        .filter_map(|(&value, &active)| active.then_some(value))
+        .fold(0_u32, u32::wrapping_add);
+    assert_eq!(
+        masked_xor_reduce_u32(&input, &active),
+        std::vec![expected; 64]
+    );
+
+    let none = std::vec![false; 64];
+    assert_eq!(masked_xor_reduce_u32(&input, &none), std::vec![0; 64]);
 }
 
 #[test]
@@ -209,6 +244,8 @@ fn compiler_authority_and_collective_hooks_panic_closed_on_host() {
     assert!(catch_unwind(|| unsafe { Gfx942Collectives::from_compiler() }).is_err());
 
     let context = Gfx942Collectives::for_host_test();
+    assert!(catch_unwind(|| unsafe { context.static_lds_u32x256() }).is_err());
+    assert!(catch_unwind(|| unsafe { context.wave64_reduce_sum_active_u32(1, 7) }).is_err());
     let lane = WaveLane::<Wave64>::from_model_snapshot(7).unwrap();
     let tile = SubgroupTile::<64>::from_wave64_snapshot(&lane);
     assert!(

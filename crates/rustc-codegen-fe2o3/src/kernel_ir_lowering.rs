@@ -527,6 +527,7 @@ enum LocalBinding {
     },
     DeviceMathCapability,
     Gfx942CollectiveCapability,
+    Gfx942StaticLdsU32x256(ValueId),
     OptionPointer {
         discriminant: ValueId,
         payload: ValueId,
@@ -951,6 +952,7 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     self.locals.get(&place.local),
                     Some(LocalBinding::DeviceMathCapability)
                         | Some(LocalBinding::Gfx942CollectiveCapability)
+                        | Some(LocalBinding::Gfx942StaticLdsU32x256(_))
                 ) {
                     let binding = self.locals[&place.local];
                     return self.bind_local(destination.local, binding, location);
@@ -994,7 +996,8 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     | LocalBinding::FieldlessEnum { discriminant } => discriminant,
                     LocalBinding::Value(_)
                     | LocalBinding::DeviceMathCapability
-                    | LocalBinding::Gfx942CollectiveCapability => {
+                    | LocalBinding::Gfx942CollectiveCapability
+                    | LocalBinding::Gfx942StaticLdsU32x256(_) => {
                         return Err(diagnostic(
                             TranslationDiagnosticCode::UnsupportedType,
                             location,
@@ -1554,7 +1557,8 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 Some(
                     TrustedDeviceItem::DisjointSlice
                     | TrustedDeviceItem::ThreadIndex
-                    | TrustedDeviceItem::Gfx942CollectivesContext,
+                    | TrustedDeviceItem::Gfx942CollectivesContext
+                    | TrustedDeviceItem::Gfx942StaticLdsU32x256Type,
                 ) => {
                     return Err(diagnostic(
                         TranslationDiagnosticCode::UnsupportedCall,
@@ -1591,6 +1595,9 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 }
                 Some(
                     TrustedDeviceItem::Gfx942CollectivesFromCompiler
+                    | TrustedDeviceItem::Gfx942StaticLdsU32x256
+                    | TrustedDeviceItem::Gfx942Wave64ReduceActiveU32
+                    | TrustedDeviceItem::Gfx942Workgroup256ReduceActiveU32
                     | TrustedDeviceItem::Gfx942Wave64ReduceSum
                     | TrustedDeviceItem::Gfx942Wave64InclusiveScanSum
                     | TrustedDeviceItem::Gfx942Wave64ExclusiveScanSum
@@ -2088,7 +2095,8 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     LocalBinding::OptionPointer { .. }
                     | LocalBinding::FieldlessEnum { .. }
                     | LocalBinding::DeviceMathCapability
-                    | LocalBinding::Gfx942CollectiveCapability,
+                    | LocalBinding::Gfx942CollectiveCapability
+                    | LocalBinding::Gfx942StaticLdsU32x256(_),
                 ) => Err(diagnostic(
                     TranslationDiagnosticCode::UnsupportedType,
                     location.clone(),
@@ -2138,7 +2146,8 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     LocalBinding::Value(_)
                     | LocalBinding::FieldlessEnum { .. }
                     | LocalBinding::DeviceMathCapability
-                    | LocalBinding::Gfx942CollectiveCapability,
+                    | LocalBinding::Gfx942CollectiveCapability
+                    | LocalBinding::Gfx942StaticLdsU32x256(_),
                 ) => Err(diagnostic(
                     TranslationDiagnosticCode::UnsupportedType,
                     location.clone(),
@@ -2378,7 +2387,8 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 LocalBinding::OptionPointer { .. }
                 | LocalBinding::FieldlessEnum { .. }
                 | LocalBinding::DeviceMathCapability
-                | LocalBinding::Gfx942CollectiveCapability,
+                | LocalBinding::Gfx942CollectiveCapability
+                | LocalBinding::Gfx942StaticLdsU32x256(_),
             ) => Err(diagnostic(
                 TranslationDiagnosticCode::UnsupportedType,
                 location.clone(),
@@ -2404,7 +2414,8 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 Some(
                     LocalBinding::OptionPointer { .. }
                     | LocalBinding::DeviceMathCapability
-                    | LocalBinding::Gfx942CollectiveCapability,
+                    | LocalBinding::Gfx942CollectiveCapability
+                    | LocalBinding::Gfx942StaticLdsU32x256(_),
                 ) => Err(diagnostic(
                     TranslationDiagnosticCode::UnsupportedType,
                     location.clone(),

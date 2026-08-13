@@ -10,6 +10,64 @@ use dialect_mir::MirType;
 use fe2o3_kernel_ir::OperationKind;
 
 #[test]
+fn active_wave64_and_static_lds_reduction_reach_exact_gfx942_ir() {
+    let module = translate_and_verify_for_target(
+        &wave_lds_v1_module(true),
+        &AmdGpuTarget::new("gfx942:xnack-"),
+    )
+    .expect("authenticated wave/LDS V1");
+    let operations = operations(&module);
+    assert_eq!(
+        operations
+            .iter()
+            .filter(|operation| matches!(operation, OperationKind::WorkgroupMemory(_)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        operations
+            .iter()
+            .filter(|operation| matches!(operation, OperationKind::WorkgroupBarrier(_)))
+            .count(),
+        18
+    );
+    assert_eq!(
+        operations
+            .iter()
+            .filter(|operation| matches!(operation, OperationKind::Wave(_)))
+            .count(),
+        8,
+        "one ballot, one lane-id, and six shuffles"
+    );
+
+    let llvm =
+        dialect_amdgcn::lower_compiler_module_to_gfx942_llvm_ir(&module).expect("wave/LDS V1 LLVM");
+    assert_eq!(llvm.matches("call i64 @llvm.amdgcn.ballot.i64").count(), 1);
+    assert_eq!(llvm.matches("call i32 @llvm.amdgcn.ds.bpermute").count(), 6);
+    assert_eq!(
+        llvm.matches("call void @llvm.amdgcn.s.barrier()").count(),
+        18
+    );
+    assert!(llvm.contains("addrspace(3) global [256 x i32] undef, align 4"));
+    assert!(llvm.contains("\"target-cpu\"=\"gfx942\""));
+    assert!(llvm.contains("\"target-features\"=\"-wavefrontsize32,+wavefrontsize64\""));
+}
+
+#[test]
+fn static_lds_authority_cannot_be_replaced_by_an_ordinary_local() {
+    let error = translate_and_verify_for_target(
+        &wave_lds_v1_module(false),
+        &AmdGpuTarget::new("gfx942:xnack-"),
+    )
+    .unwrap_err();
+    assert!(error.diagnostics().iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("static LDS did not originate from the authenticated compiler constructor")
+    }));
+}
+
+#[test]
 fn wave64_sum_profiles_reach_shuffle_llvm_for_all_admitted_types() {
     for (item, shape, expected_add) in [
         (
@@ -283,6 +341,81 @@ fn barrier_module() -> MirModule {
                     call(TrustedDeviceItem::Gfx942BarrierWait, Vec::new(), 2, 2),
                 ),
                 block(2, MirTerminatorKind::Return),
+            ],
+            frontend_contract: None,
+        }],
+    }
+}
+
+fn wave_lds_v1_module(with_scratch: bool) -> MirModule {
+    let scratch_block = if with_scratch {
+        block(
+            1,
+            call(
+                TrustedDeviceItem::Gfx942StaticLdsU32x256,
+                vec![operand(3)],
+                4,
+                2,
+            ),
+        )
+    } else {
+        block(1, MirTerminatorKind::Goto { target: 2 })
+    };
+    MirModule {
+        functions: vec![MirFunction {
+            export_name: "gfx942_wave_lds_v1".to_owned(),
+            rust_path: "tests::gfx942_wave_lds_v1".to_owned(),
+            kind: MirFunctionKind::KernelEntry,
+            typed_profile: Some(MirKernelProfile::GeneralScalarSliceRustcLayoutV3),
+            arg_count: 2,
+            local_count: 7,
+            locals: vec![
+                local(0, MirLocalRole::Return, MirTypeShape::Unit),
+                local(1, MirLocalRole::Arg, MirTypeShape::U32),
+                local(2, MirLocalRole::Arg, MirTypeShape::U32),
+                local(
+                    3,
+                    MirLocalRole::Temp,
+                    adt("fe2o3_device::Gfx942Collectives"),
+                ),
+                local(
+                    4,
+                    MirLocalRole::Temp,
+                    adt("fe2o3_device::Gfx942StaticLdsU32x256"),
+                ),
+                local(5, MirLocalRole::Temp, MirTypeShape::U32),
+                local(6, MirLocalRole::Temp, MirTypeShape::U32),
+            ],
+            blocks: vec![
+                block(
+                    0,
+                    call(
+                        TrustedDeviceItem::Gfx942CollectivesFromCompiler,
+                        Vec::new(),
+                        3,
+                        1,
+                    ),
+                ),
+                scratch_block,
+                block(
+                    2,
+                    call(
+                        TrustedDeviceItem::Gfx942Wave64ReduceActiveU32,
+                        vec![operand(3), operand(1), operand(2)],
+                        5,
+                        3,
+                    ),
+                ),
+                block(
+                    3,
+                    call(
+                        TrustedDeviceItem::Gfx942Workgroup256ReduceActiveU32,
+                        vec![operand(3), operand(4), operand(1), operand(2)],
+                        6,
+                        4,
+                    ),
+                ),
+                block(4, MirTerminatorKind::Return),
             ],
             frontend_contract: None,
         }],

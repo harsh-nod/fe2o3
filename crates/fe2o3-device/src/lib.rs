@@ -33,8 +33,10 @@ pub mod views;
 pub mod wave;
 
 pub use collective::{
-    GFX942_COLLECTIVE_CONTRACT_VERSION_V1, Gfx942CollectiveElement, Gfx942Collectives,
-    MAX_GFX942_WORKGROUP_COLLECTIVE_SIZE, WorkgroupCollectiveScratch,
+    GFX942_COLLECTIVE_CONTRACT_VERSION_V1, GFX942_STATIC_LDS_U32X256_ALIGNMENT,
+    GFX942_STATIC_LDS_U32X256_BYTES, GFX942_STATIC_LDS_U32X256_SLOTS,
+    GFX942_WAVE_LDS_VERTICAL_SLICE_VERSION_V1, Gfx942CollectiveElement, Gfx942Collectives,
+    Gfx942StaticLdsU32x256, MAX_GFX942_WORKGROUP_COLLECTIVE_SIZE, WorkgroupCollectiveScratch,
     WorkgroupCollectiveScratchError,
 };
 pub use diagnostics::{clock32, debugtrap, trap};
