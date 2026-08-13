@@ -5,6 +5,8 @@ use dialect_mir::{
 };
 use fe2o3_kernel_ir::scalar_ops_v2::{IntBinary, IntMode, Operation as ScalarOperation, Predicate};
 use fe2o3_kernel_ir::{FunctionRole, OperationKind, Terminator};
+use std::io::Write as _;
+use std::process::{Command, Stdio};
 
 use super::*;
 
@@ -16,11 +18,22 @@ fn decode(source: &str) -> ValidatedMirExecutableModule {
     MirExecutableModule::from_canonical_text(source).expect("canonical executable MIR")
 }
 
-fn authority(source: &ValidatedMirExecutableModule) -> AuthenticatedScalarControlFlowExportV1 {
-    AuthenticatedScalarControlFlowExportV1::for_test(
+fn authority(source: &ValidatedMirExecutableModule) -> AuthenticatedScalarControlFlowFunctionV1 {
+    AuthenticatedScalarControlFlowFunctionV1::for_test(
         &source.functions[0].identity,
         source.functions[0].identity.rsplit("::").next().unwrap(),
         CollectedFunctionRole::DeviceFfiExport,
+    )
+    .unwrap()
+}
+
+fn helper_authority(
+    source: &ValidatedMirExecutableModule,
+) -> AuthenticatedScalarControlFlowFunctionV1 {
+    AuthenticatedScalarControlFlowFunctionV1::for_test(
+        &source.functions[0].identity,
+        source.functions[0].identity.rsplit("::").next().unwrap(),
+        CollectedFunctionRole::InternalHelper,
     )
     .unwrap()
 }
@@ -325,16 +338,16 @@ fn raw_division_fails_before_kernel_ir_or_llvm_is_returned() {
 }
 
 #[test]
-fn export_authority_rejects_helpers_and_forged_identities() {
+fn authority_rejects_kernel_role_and_forged_identities() {
     let source = decode(NESTED_LOOP);
-    let helper = AuthenticatedScalarControlFlowExportV1::for_test(
+    let kernel = AuthenticatedScalarControlFlowFunctionV1::for_test(
         &source.functions[0].identity,
         "nested_loop",
-        CollectedFunctionRole::InternalHelper,
+        CollectedFunctionRole::KernelEntry,
     )
-    .expect_err("an ordinary helper must not gain export authority");
+    .expect_err("the u32-returning device-function profile must reject a kernel entry");
     assert!(matches!(
-        helper,
+        kernel,
         ExecutableScalarControlFlowErrorV1::Authority { .. }
     ));
 
@@ -346,6 +359,58 @@ fn export_authority_rejects_helpers_and_forged_identities() {
         .expect_err("a structurally valid forged identity must reject");
     assert!(matches!(
         error,
+        ExecutableScalarControlFlowErrorV1::Authority { .. }
+    ));
+}
+
+#[test]
+fn authenticated_helper_stays_internal_under_root_composition() {
+    let source = decode(NESTED_LOOP);
+    let helper = helper_authority(&source);
+    let composition = AuthenticatedScalarControlFlowCompositionV1::for_test(
+        "fixture::kernel_root",
+        "scalar_control_flow_v1",
+        helper.clone(),
+    )
+    .unwrap();
+    assert_eq!(composition.kernel_entry_identity(), "fixture::kernel_root");
+    assert_eq!(composition.kernel_export_symbol(), "scalar_control_flow_v1");
+    assert_eq!(
+        composition.internal_helper_authority().role(),
+        FunctionRole::InternalHelper
+    );
+
+    let artifact = lower_executable_scalar_control_flow_v1(&source, &helper).unwrap();
+    assert_eq!(artifact.function_role, FunctionRole::InternalHelper);
+    assert_eq!(
+        artifact.kernel_ir.functions[0].role,
+        FunctionRole::InternalHelper
+    );
+    assert!(artifact.gfx942_llvm.contains(&format!(
+        "define internal i32 @{}(i32 %arg0)",
+        artifact.emitted_symbol
+    )));
+    assert!(!artifact.gfx942_llvm.contains(&format!(
+        "define i32 @{}(i32 %arg0)",
+        artifact.emitted_symbol
+    )));
+
+    let composed = composition.bind_internal_helper(artifact).unwrap();
+    assert_eq!(composed.kernel_export_symbol, "scalar_control_flow_v1");
+    assert_eq!(
+        composed.internal_helper.function_role,
+        FunctionRole::InternalHelper
+    );
+
+    let export = authority(&source);
+    let invalid = AuthenticatedScalarControlFlowCompositionV1::for_test(
+        "fixture::kernel_root",
+        "scalar_control_flow_v1",
+        export,
+    )
+    .expect_err("a device export cannot occupy the internal-helper slot");
+    assert!(matches!(
+        invalid,
         ExecutableScalarControlFlowErrorV1::Authority { .. }
     ));
 }
@@ -424,6 +489,64 @@ fn operation_boundary_is_preflighted_exactly() {
             actual: 4_097,
         }
     ));
+}
+
+#[test]
+fn configured_llvm_tools_accept_exact_target_bound_output() {
+    let (Ok(llvm_as), Ok(llc)) = (
+        std::env::var("FE2O3_TEST_LLVM_AS"),
+        std::env::var("FE2O3_TEST_LLC"),
+    ) else {
+        return;
+    };
+    let llvm = lower(&decode(NESTED_LOOP)).unwrap().gfx942_llvm;
+
+    let mut assembler = Command::new(llvm_as)
+        .args(["-o", "-", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("configured llvm-as must start");
+    assembler
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(llvm.as_bytes())
+        .unwrap();
+    let assembled = assembler.wait_with_output().unwrap();
+    assert!(
+        assembled.status.success(),
+        "llvm-as rejected exact V1 output: {}",
+        String::from_utf8_lossy(&assembled.stderr)
+    );
+
+    let mut compiler = Command::new(llc)
+        .args([
+            "-march=amdgcn",
+            "-mcpu=gfx942",
+            "-filetype=obj",
+            "-o",
+            "/dev/null",
+            "-",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("configured llc must start");
+    compiler
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(&assembled.stdout)
+        .unwrap();
+    let compiled = compiler.wait_with_output().unwrap();
+    assert!(
+        compiled.status.success(),
+        "llc rejected exact V1 output: {}",
+        String::from_utf8_lossy(&compiled.stderr)
+    );
 }
 
 #[test]

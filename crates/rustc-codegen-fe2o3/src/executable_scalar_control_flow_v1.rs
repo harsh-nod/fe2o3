@@ -1,12 +1,13 @@
 //! Bounded executable-MIR scalar control flow through Kernel IR and gfx942 LLVM.
 //!
-//! This first adapter is intentionally a device-export lowering prerequisite.
-//! It accepts one validated place-form executable-MIR function only when a
-//! compiler-sealed collected-function authority authenticates the same
-//! canonical identity as a device FFI export. It preflights resource bounds,
-//! promotes with verified `dialect-mir` mem2reg, admits scalar expressions
-//! through Scalar V2, and emits verified Kernel IR plus exact gfx942:xnack-
-//! LLVM text. It grants no linking, code-object, loading, or launch authority.
+//! This first adapter is intentionally a collected-device-function lowering
+//! prerequisite. It accepts one validated place-form executable-MIR function
+//! only when a compiler-sealed authority authenticates the same canonical
+//! identity and preserves its `InternalHelper` or `DeviceFfiExport` role. It
+//! preflights resource bounds, promotes with verified `dialect-mir` mem2reg,
+//! admits scalar expressions through Scalar V2, and emits verified Kernel IR
+//! plus exact gfx942:xnack- LLVM text. It grants no linking, code-object,
+//! loading, or launch authority.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -28,9 +29,9 @@ use fe2o3_kernel_ir::scalar_ops_v2::{
     ScalarType as ScalarTypeV2,
 };
 use fe2o3_kernel_ir::{
-    BasicBlock, BinaryOp, BlockId, ComparePredicate, Constant, Function, IntegerSwitchCase, Module,
-    Operation, OperationKind, ScalarType, Signature, TargetCapability, Terminator, Type, ValueDef,
-    ValueId, VerificationErrors, WaveWidth, verify_module,
+    BasicBlock, BinaryOp, BlockId, ComparePredicate, Constant, Function, FunctionRole,
+    IntegerSwitchCase, Module, Operation, OperationKind, ScalarType, Signature, TargetCapability,
+    Terminator, Type, ValueDef, ValueId, VerificationErrors, WaveWidth, verify_module,
 };
 use rustc_middle::ty::TyCtxt;
 use sha2::{Digest as _, Sha256};
@@ -50,17 +51,18 @@ pub const MAX_SCALAR_CONTROL_FLOW_OPERATIONS_V1: usize = 4_096;
 const SCALAR_CONTROL_FLOW_SYMBOL_DOMAIN_V1: &[u8] = b"fe2o3.scalar-control-flow.symbol.v1";
 const MAX_SCALAR_CONTROL_FLOW_SYMBOL_STEM_BYTES_V1: usize = 64;
 
-/// Compiler-sealed authority for one exact device-FFI export.
+/// Compiler-sealed authority for one exact collected device function.
 ///
 /// This value cannot be constructed from executable-MIR bytes. The compiler
 /// derives it from the collected function role and canonical rustc identity.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AuthenticatedScalarControlFlowExportV1 {
+pub struct AuthenticatedScalarControlFlowFunctionV1 {
     canonical_identity: String,
     emitted_symbol: String,
+    role: FunctionRole,
 }
 
-impl AuthenticatedScalarControlFlowExportV1 {
+impl AuthenticatedScalarControlFlowFunctionV1 {
     #[allow(dead_code)]
     pub(crate) fn from_collected(
         tcx: TyCtxt<'_>,
@@ -78,21 +80,26 @@ impl AuthenticatedScalarControlFlowExportV1 {
         export_name: &str,
         role: CollectedFunctionRole,
     ) -> Result<Self, ExecutableScalarControlFlowErrorV1> {
-        if role != CollectedFunctionRole::DeviceFfiExport {
-            return Err(ExecutableScalarControlFlowErrorV1::Authority {
-                detail: "scalar control-flow V1 requires compiler-authenticated DeviceFfiExport authority"
-                    .to_owned(),
-            });
-        }
+        let role = match role {
+            CollectedFunctionRole::InternalHelper => FunctionRole::InternalHelper,
+            CollectedFunctionRole::DeviceFfiExport => FunctionRole::DeviceFfiExport,
+            CollectedFunctionRole::KernelEntry => {
+                return Err(ExecutableScalarControlFlowErrorV1::Authority {
+                    detail: "scalar control-flow V1 cannot lower a KernelEntry through its u32-returning device-function profile"
+                        .to_owned(),
+                });
+            }
+        };
         if canonical_identity.is_empty() {
             return Err(ExecutableScalarControlFlowErrorV1::Authority {
                 detail: "authenticated canonical function identity is empty".to_owned(),
             });
         }
-        let emitted_symbol = identity_bound_export_symbol(&canonical_identity, export_name);
+        let emitted_symbol = identity_bound_function_symbol(&canonical_identity, export_name, role);
         Ok(Self {
             canonical_identity,
             emitted_symbol,
+            role,
         })
     }
 
@@ -104,6 +111,10 @@ impl AuthenticatedScalarControlFlowExportV1 {
         &self.emitted_symbol
     }
 
+    pub const fn role(&self) -> FunctionRole {
+        self.role
+    }
+
     #[cfg(test)]
     fn for_test(
         canonical_identity: &str,
@@ -111,6 +122,96 @@ impl AuthenticatedScalarControlFlowExportV1 {
         role: CollectedFunctionRole,
     ) -> Result<Self, ExecutableScalarControlFlowErrorV1> {
         Self::from_authenticated_parts(canonical_identity.to_owned(), export_name, role)
+    }
+}
+
+/// Sealed role-preserving handoff for one collected kernel root and helper.
+///
+/// Construction is crate-private so a caller cannot create this contract from
+/// names or executable-MIR bytes. The collected V2 admission layer constructs
+/// it only after authenticating the exact root-to-helper call edge.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuthenticatedScalarControlFlowCompositionV1 {
+    kernel_entry_identity: String,
+    kernel_export_symbol: String,
+    internal_helper: AuthenticatedScalarControlFlowFunctionV1,
+}
+
+impl AuthenticatedScalarControlFlowCompositionV1 {
+    #[allow(dead_code)]
+    pub(crate) fn from_authenticated_collected_pair(
+        tcx: TyCtxt<'_>,
+        root: &CollectedFunction<'_>,
+        helper: &CollectedFunction<'_>,
+    ) -> Result<Self, ExecutableScalarControlFlowErrorV1> {
+        if root.role != CollectedFunctionRole::KernelEntry {
+            return Err(ExecutableScalarControlFlowErrorV1::Authority {
+                detail: "scalar control-flow composition root is not an authenticated KernelEntry"
+                    .to_owned(),
+            });
+        }
+        if helper.role != CollectedFunctionRole::InternalHelper {
+            return Err(ExecutableScalarControlFlowErrorV1::Authority {
+                detail:
+                    "scalar control-flow composition helper is not an authenticated InternalHelper"
+                        .to_owned(),
+            });
+        }
+        Ok(Self {
+            kernel_entry_identity: tcx.def_path_str(root.instance.def_id()),
+            kernel_export_symbol: root.export_name.clone(),
+            internal_helper: AuthenticatedScalarControlFlowFunctionV1::from_collected(tcx, helper)?,
+        })
+    }
+
+    pub fn kernel_entry_identity(&self) -> &str {
+        &self.kernel_entry_identity
+    }
+
+    pub fn kernel_export_symbol(&self) -> &str {
+        &self.kernel_export_symbol
+    }
+
+    pub const fn internal_helper_authority(&self) -> &AuthenticatedScalarControlFlowFunctionV1 {
+        &self.internal_helper
+    }
+
+    pub fn bind_internal_helper(
+        self,
+        artifact: ExecutableScalarControlFlowArtifactV1,
+    ) -> Result<ScalarControlFlowCompositionArtifactV1, ExecutableScalarControlFlowErrorV1> {
+        if artifact.function_role != FunctionRole::InternalHelper
+            || artifact.canonical_function_identity != self.internal_helper.canonical_identity
+            || artifact.emitted_symbol != self.internal_helper.emitted_symbol
+        {
+            return Err(ExecutableScalarControlFlowErrorV1::Authority {
+                detail: "lowered scalar control-flow artifact does not match the authenticated internal helper"
+                    .to_owned(),
+            });
+        }
+        Ok(ScalarControlFlowCompositionArtifactV1 {
+            kernel_entry_identity: self.kernel_entry_identity,
+            kernel_export_symbol: self.kernel_export_symbol,
+            internal_helper: artifact,
+        })
+    }
+
+    #[cfg(test)]
+    fn for_test(
+        kernel_entry_identity: &str,
+        kernel_export_symbol: &str,
+        internal_helper: AuthenticatedScalarControlFlowFunctionV1,
+    ) -> Result<Self, ExecutableScalarControlFlowErrorV1> {
+        if internal_helper.role != FunctionRole::InternalHelper {
+            return Err(ExecutableScalarControlFlowErrorV1::Authority {
+                detail: "test composition helper must retain InternalHelper role".to_owned(),
+            });
+        }
+        Ok(Self {
+            kernel_entry_identity: kernel_entry_identity.to_owned(),
+            kernel_export_symbol: kernel_export_symbol.to_owned(),
+            internal_helper,
+        })
     }
 }
 
@@ -138,11 +239,24 @@ pub struct ScalarControlFlowSummaryV1 {
 pub struct ExecutableScalarControlFlowArtifactV1 {
     pub canonical_function_identity: String,
     pub emitted_symbol: String,
+    pub function_role: FunctionRole,
     pub kernel_ir: Module,
     pub scalar_operations: Vec<LocatedScalarOperationV2>,
     pub mem2reg: MirMem2RegReport,
     pub summary: ScalarControlFlowSummaryV1,
     pub gfx942_llvm: String,
+}
+
+/// Root-preserving composition handoff after one internal helper is lowered.
+///
+/// The root is not yet translated to Kernel IR by V1. This value records the
+/// collected root export authority and the exactly matched internal artifact
+/// without promoting the helper to external linkage.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ScalarControlFlowCompositionArtifactV1 {
+    pub kernel_entry_identity: String,
+    pub kernel_export_symbol: String,
+    pub internal_helper: ExecutableScalarControlFlowArtifactV1,
 }
 
 #[derive(Debug)]
@@ -228,12 +342,12 @@ impl Error for ExecutableScalarControlFlowErrorV1 {
 /// Lowers the first closed executable-MIR scalar control-flow profile.
 ///
 /// The authority must originate from compiler collection, match the executable
-/// MIR's complete canonical identity, and carry `DeviceFfiExport` role. The
-/// returned LLVM is produced only after resource preflight, mem2reg, Scalar V2
-/// admission, and complete Kernel IR verification all succeed.
+/// MIR's complete canonical identity, and carry an admitted device-function
+/// role. The returned LLVM is produced only after resource preflight, mem2reg,
+/// Scalar V2 admission, and complete Kernel IR verification all succeed.
 pub fn lower_executable_scalar_control_flow_v1(
     source: &ValidatedMirExecutableModule,
-    authority: &AuthenticatedScalarControlFlowExportV1,
+    authority: &AuthenticatedScalarControlFlowFunctionV1,
 ) -> Result<ExecutableScalarControlFlowArtifactV1, ExecutableScalarControlFlowErrorV1> {
     if source.functions.len() != 1 {
         return Err(resource_limit("function count", 1, source.functions.len()));
@@ -299,8 +413,7 @@ pub fn lower_executable_scalar_control_flow_v1(
 
     let target = AmdGpuTarget::new(EXACT_SCALAR_V2_TARGET);
     let (mut kernel_function, scalar_operations, operation_count) =
-        FunctionLowerer::new(ssa.as_module(), function, &target)?
-            .lower(authority.emitted_symbol())?;
+        FunctionLowerer::new(ssa.as_module(), function, &target)?.lower(authority)?;
     if operation_count != projected_operation_count {
         return Err(unsupported(
             "module.functions[0].body",
@@ -322,6 +435,7 @@ pub fn lower_executable_scalar_control_flow_v1(
     Ok(ExecutableScalarControlFlowArtifactV1 {
         canonical_function_identity: authority.canonical_identity.clone(),
         emitted_symbol: authority.emitted_symbol.clone(),
+        function_role: authority.role,
         kernel_ir,
         scalar_operations,
         mem2reg,
@@ -391,7 +505,7 @@ impl<'module, 'function, 'target> FunctionLowerer<'module, 'function, 'target> {
 
     fn lower(
         mut self,
-        emitted_symbol: &str,
+        authority: &AuthenticatedScalarControlFlowFunctionV1,
     ) -> Result<(Function, Vec<LocatedScalarOperationV2>, usize), ExecutableScalarControlFlowErrorV1>
     {
         let return_ty = self.local_type(MirLocalId(0), "function return")?;
@@ -471,12 +585,21 @@ impl<'module, 'function, 'target> FunctionLowerer<'module, 'function, 'target> {
             blocks.push(self.lower_block(MirBlockId(block_index as u32), &block)?);
         }
 
-        let function = Function::device_ffi_export(
-            emitted_symbol,
-            Signature::new(parameter_types, vec![return_ty]),
-            parameters,
-            blocks,
-        );
+        let signature = Signature::new(parameter_types, vec![return_ty]);
+        let function = match authority.role {
+            FunctionRole::InternalHelper => {
+                Function::internal_helper(authority.emitted_symbol(), signature, parameters, blocks)
+            }
+            FunctionRole::DeviceFfiExport => Function::device_ffi_export(
+                authority.emitted_symbol(),
+                signature,
+                parameters,
+                blocks,
+            ),
+            FunctionRole::KernelEntry | FunctionRole::ExternalImport => {
+                unreachable!("sealed scalar V1 authority admits only device definitions")
+            }
+        };
         Ok((function, self.scalar_operations, self.operation_count))
     }
 
@@ -1155,11 +1278,25 @@ fn projected_operand_operations(operand: &MirOperand) -> usize {
     usize::from(matches!(operand, MirOperand::Constant(_)))
 }
 
-fn identity_bound_export_symbol(canonical_identity: &str, export_name: &str) -> String {
+fn identity_bound_function_symbol(
+    canonical_identity: &str,
+    export_name: &str,
+    role: FunctionRole,
+) -> String {
     let mut digest = Sha256::new();
     hash_symbol_field(&mut digest, SCALAR_CONTROL_FLOW_SYMBOL_DOMAIN_V1);
     hash_symbol_field(&mut digest, canonical_identity.as_bytes());
     hash_symbol_field(&mut digest, export_name.as_bytes());
+    hash_symbol_field(
+        &mut digest,
+        match role {
+            FunctionRole::InternalHelper => b"internal-helper",
+            FunctionRole::DeviceFfiExport => b"device-ffi-export",
+            FunctionRole::KernelEntry | FunctionRole::ExternalImport => {
+                unreachable!("sealed scalar V1 authority admits only device definitions")
+            }
+        },
+    );
     let digest = digest.finalize();
 
     let mut stem = String::with_capacity(MAX_SCALAR_CONTROL_FLOW_SYMBOL_STEM_BYTES_V1);
