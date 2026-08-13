@@ -7,6 +7,7 @@ mod oidc;
 mod process_security;
 mod receipt;
 mod secure_fs;
+mod server;
 mod service;
 mod store;
 mod store_worker;
@@ -17,6 +18,7 @@ pub use config::ServiceConfig;
 pub use enrollment::enroll_token;
 pub use jwks::{HttpsJwksProvider, JwksProvider, JwksSnapshot, StaticJwksProvider};
 pub use process_security::harden_process_for_secrets;
+pub use server::serve;
 pub use service::{Publisher, PublisherResponse, router};
 
 #[derive(Debug, thiserror::Error)]

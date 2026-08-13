@@ -59,6 +59,21 @@ The service accepts only `POST /v1/receipts` with canonical JSON, one
 separately reviewed local TLS frontend is still required. It must preserve the
 body and both headers exactly and must never log them.
 
+The loopback listener serves HTTP/1 only and disables keep-alive. Immediately
+after `accept`, the service either acquires one configured inflight permit or
+closes the connection. That permit remains held through header read, parser,
+handler, response, and connection close. Before Hyper or Axum sees a request, a
+bounded `httparse` preflight requires a complete syntactically valid header,
+at most 32 wire headers, and at most 32,768 bytes including the request line and
+delimiters. Hyper independently retains the same count/buffer limits.
+
+One absolute deadline starts at accepted connection admission. It covers idle
+time, all header chunks, parser admission, body reads, authentication, durable
+issuance, and response service; the handler consumes the accepted-at deadline
+instead of creating a new one. On shutdown, the listener closes first and
+admitted connections drain only until the same configured bound, after which
+remaining tasks are aborted and shutdown reports failure.
+
 ## Stable Recovery
 
 `Idempotency-Key` is exactly 64 lowercase hexadecimal characters representing

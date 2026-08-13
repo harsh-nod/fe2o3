@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use fe2o3_protected_publisher::{
-    Publisher, ServiceConfig, enroll_token, harden_process_for_secrets, router,
+    Publisher, ServiceConfig, enroll_token, harden_process_for_secrets, serve,
 };
 
 fn main() {
@@ -57,10 +57,7 @@ async fn run() -> Result<(), ()> {
     let listener = tokio::net::TcpListener::bind(listen)
         .await
         .map_err(|_| ())?;
-    let result = axum::serve(listener, router(publisher.clone()))
-        .with_graceful_shutdown(shutdown())
-        .await
-        .map_err(|_| ());
+    let result = serve(listener, publisher.clone(), shutdown()).await;
     let stopped = publisher.shutdown().await;
     if stopped { result } else { Err(()) }
 }

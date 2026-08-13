@@ -11,6 +11,9 @@ publish = false
 axum = "=0.8.4"
 base64 = "=0.22.1"
 ed25519-dalek = { version = "=2.2.0", features = ["pem", "pkcs8"] }
+hyper = { version = "=1.11.0", features = ["http1", "server"] }
+hyper-util = { version = "=0.1.20", features = ["http1", "server", "service", "tokio"] }
+httparse = "=1.10.1"
 jsonwebtoken = { version = "=10.3.0", default-features = false, features = ["aws_lc_rs", "use_pem"] }
 libc.workspace = true
 reqwest = { version = "=0.12.23", default-features = false, features = ["rustls-tls"] }
@@ -18,7 +21,7 @@ serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
 sha2.workspace = true
 thiserror = "=2.0.16"
-tokio = { version = "=1.47.1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "=1.47.1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 zeroize = "=1.9.0"
 
 [dev-dependencies]

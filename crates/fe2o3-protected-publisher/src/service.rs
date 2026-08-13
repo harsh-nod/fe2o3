@@ -9,6 +9,7 @@ use axum::http::{HeaderMap, HeaderName, Method, Request, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use sha2::{Digest, Sha256};
+use tokio::sync::OwnedSemaphorePermit;
 use tokio::sync::Semaphore;
 use tokio::time::Instant;
 #[cfg(test)]
@@ -28,6 +29,9 @@ use crate::store_worker::{StoreIssue, StoreWorker};
 use crate::{PublisherError, ServiceConfig};
 
 const IDEMPOTENCY_KEY: HeaderName = HeaderName::from_static("idempotency-key");
+
+#[derive(Clone, Copy)]
+pub(crate) struct ConnectionDeadline(pub(crate) Instant);
 
 #[derive(Clone, Debug)]
 pub struct PublisherResponse {
@@ -155,6 +159,22 @@ impl Publisher {
             .shutdown_until(Instant::now() + self.config.request_deadline())
             .await
     }
+
+    pub(crate) fn try_admit_connection(&self) -> Result<OwnedSemaphorePermit, PublisherError> {
+        self.request_slots
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| PublisherError::Store)
+    }
+
+    pub(crate) fn request_deadline(&self) -> std::time::Duration {
+        self.config.request_deadline()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn available_request_slots(&self) -> usize {
+        self.request_slots.available_permits()
+    }
 }
 
 pub fn router(publisher: Arc<Publisher>) -> Router {
@@ -168,10 +188,21 @@ async fn receipts(State(publisher): State<Arc<Publisher>>, request: Request<Body
     if let Err(error) = crate::process_security::harden_process_for_secrets() {
         return error_response(&error);
     }
-    let Ok(_slot) = publisher.request_slots.clone().try_acquire_owned() else {
-        return error_response(&PublisherError::Store);
+    let connection_deadline = request.extensions().get::<ConnectionDeadline>().copied();
+    let _direct_slot = if connection_deadline.is_none() {
+        match publisher.try_admit_connection() {
+            Ok(slot) => Some(slot),
+            Err(error) => return error_response(&error),
+        }
+    } else {
+        None
     };
-    let deadline = Instant::now() + publisher.config.request_deadline();
+    let deadline = connection_deadline
+        .map(|deadline| deadline.0)
+        .unwrap_or_else(|| Instant::now() + publisher.request_deadline());
+    if Instant::now() >= deadline {
+        return error_response(&PublisherError::Store);
+    }
     match bounded_http_request(request, deadline).await {
         Ok((body, bearer, idempotency_key)) => match publisher
             .issue_until(&body, bearer.expose(), &idempotency_key, deadline)
@@ -703,8 +734,16 @@ key\t0000\tpublisher\ttest-publisher-v1\tkeys/test-publisher-v1.pem\t{digest}\te
         let start = Instant::now();
         assert!(!publisher.shutdown().await);
         assert!(start.elapsed() < std::time::Duration::from_millis(150));
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        assert!(publisher.shutdown().await);
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if publisher.shutdown().await {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
     }
 
     #[test]
