@@ -29,11 +29,16 @@ use crate::receipt::{
 };
 use crate::secure_fs::{FileIdentity, SecureLocation};
 
-const LEDGER_MAGIC: &[u8] = b"fe2o3-protected-publisher-ledger-v1\0";
-const FRAME_MAGIC: &[u8; 8] = b"F2O3REC1";
-const FRAME_VERSION: u32 = 1;
+const LEDGER_MAGIC: &[u8] = b"fe2o3-protected-publisher-ledger-v2\0";
+#[cfg(test)]
+const LEGACY_LEDGER_MAGIC: &[u8] = b"fe2o3-protected-publisher-ledger-v1\0";
+const FRAME_MAGIC: &[u8; 8] = b"F2O3REC2";
+const FRAME_VERSION: u32 = 2;
 const FRAME_PREFIX_BYTES: usize = 8 + 4 + 4 + 8 + 32;
 const FRAME_HASH_BYTES: usize = 32;
+const FRAME_TRAILER_MAGIC: &[u8; 8] = b"F2O3CMT2";
+const FRAME_TRAILER_BYTES: usize = 8 + 8 + 8 + 32 + 32 + 8;
+const MIN_FRAME_BYTES: usize = FRAME_PREFIX_BYTES + 1 + FRAME_HASH_BYTES + FRAME_TRAILER_BYTES;
 const ZERO_HASH: [u8; 32] = [0; 32];
 const MAX_INDEXED_READ_INTERRUPTS: usize = 8;
 
@@ -312,6 +317,9 @@ impl DurableStore {
             .map_err(|_| PublisherError::Store)?;
         let frame_length = frame_length_from_prefix(&prefix, self.next_sequence, self.tail_hash)?;
         if remaining < frame_length as u64 {
+            if self.has_committed_frame_boundary(offset, remaining)? {
+                return Err(PublisherError::Store);
+            }
             return Ok(None);
         }
         let mut frame = Vec::with_capacity(frame_length);
@@ -325,6 +333,47 @@ impl DurableStore {
             .map_err(|_| PublisherError::Store)?;
         frame.extend_from_slice(&rest);
         decode_frame(&frame, self.next_sequence, self.tail_hash).map(Some)
+    }
+
+    fn has_committed_frame_boundary(
+        &mut self,
+        offset: u64,
+        remaining: u64,
+    ) -> Result<bool, PublisherError> {
+        if remaining < MIN_FRAME_BYTES as u64 {
+            return Ok(false);
+        }
+        let scan_length = usize::try_from(remaining.min(MAX_LEDGER_FRAME_BYTES as u64))
+            .map_err(|_| PublisherError::Store)?;
+        self.file
+            .seek(SeekFrom::Start(offset))
+            .map_err(|_| PublisherError::Store)?;
+        let mut bytes = vec![0u8; scan_length];
+        self.file
+            .read_exact(&mut bytes)
+            .map_err(|_| PublisherError::Store)?;
+        for magic_start in (FRAME_TRAILER_BYTES - FRAME_TRAILER_MAGIC.len()
+            ..=scan_length.saturating_sub(FRAME_TRAILER_MAGIC.len()))
+            .filter(|start| {
+                bytes[*start..*start + FRAME_TRAILER_MAGIC.len()] == *FRAME_TRAILER_MAGIC
+            })
+        {
+            let trailer_end = magic_start + FRAME_TRAILER_MAGIC.len();
+            if trailer_end < FRAME_TRAILER_BYTES {
+                continue;
+            }
+            let trailer = &bytes[trailer_end - FRAME_TRAILER_BYTES..trailer_end];
+            let declared = u64::from_be_bytes(trailer[..8].try_into().unwrap());
+            let inverse = u64::from_be_bytes(trailer[8..16].try_into().unwrap());
+            let sequence = u64::from_be_bytes(trailer[16..24].try_into().unwrap());
+            if declared == trailer_end as u64
+                && inverse == !declared
+                && sequence == self.next_sequence
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     fn index_record(
@@ -565,7 +614,7 @@ impl DurableStore {
             .checked_add(index.frame_length)
             .ok_or(PublisherError::Store)?;
         if index.frame_offset < self.header_len
-            || index.frame_length < (FRAME_PREFIX_BYTES + FRAME_HASH_BYTES) as u64
+            || index.frame_length < MIN_FRAME_BYTES as u64
             || index.frame_length > MAX_LEDGER_FRAME_BYTES as u64
             || frame_end > self.tail_offset
             || frame_end > length
@@ -823,10 +872,13 @@ fn encode_frame(
     prefix.extend_from_slice(&sequence.to_be_bytes());
     prefix.extend_from_slice(&previous_hash);
     let hash = frame_hash(&prefix, payload);
-    let mut frame = Vec::with_capacity(prefix.len() + payload.len() + hash.len());
+    let frame_length = checked_frame_length(payload.len())? as u64;
+    let trailer = frame_trailer(&prefix, payload, hash, frame_length, sequence);
+    let mut frame = Vec::with_capacity(frame_length as usize);
     frame.extend_from_slice(&prefix);
     frame.extend_from_slice(payload);
     frame.extend_from_slice(&hash);
+    frame.extend_from_slice(&trailer);
     Ok(frame)
 }
 
@@ -837,6 +889,7 @@ fn checked_frame_length(payload_length: usize) -> Result<usize, PublisherError> 
     let frame_length = FRAME_PREFIX_BYTES
         .checked_add(payload_length)
         .and_then(|value| value.checked_add(FRAME_HASH_BYTES))
+        .and_then(|value| value.checked_add(FRAME_TRAILER_BYTES))
         .ok_or(PublisherError::Store)?;
     if frame_length > MAX_LEDGER_FRAME_BYTES {
         return Err(PublisherError::Store);
@@ -864,7 +917,7 @@ fn decode_frame(
     expected_sequence: u64,
     expected_previous_hash: [u8; 32],
 ) -> Result<DecodedFrame, PublisherError> {
-    if frame.len() < FRAME_PREFIX_BYTES {
+    if frame.len() < MIN_FRAME_BYTES {
         return Err(PublisherError::Store);
     }
     let prefix: &[u8; FRAME_PREFIX_BYTES] = frame[..FRAME_PREFIX_BYTES]
@@ -875,11 +928,24 @@ fn decode_frame(
         return Err(PublisherError::Store);
     }
     let payload_end = frame_length
-        .checked_sub(FRAME_HASH_BYTES)
+        .checked_sub(FRAME_HASH_BYTES + FRAME_TRAILER_BYTES)
         .ok_or(PublisherError::Store)?;
     let payload = &frame[FRAME_PREFIX_BYTES..payload_end];
     let computed_hash = frame_hash(prefix, payload);
-    if frame[payload_end..] != computed_hash {
+    let hash_end = payload_end + FRAME_HASH_BYTES;
+    if frame[payload_end..hash_end] != computed_hash {
+        return Err(PublisherError::Store);
+    }
+    let trailer = &frame[hash_end..];
+    if trailer
+        != frame_trailer(
+            prefix,
+            payload,
+            computed_hash,
+            frame_length as u64,
+            expected_sequence,
+        )
+    {
         return Err(PublisherError::Store);
     }
     Ok(DecodedFrame {
@@ -891,10 +957,38 @@ fn decode_frame(
 
 fn frame_hash(prefix: &[u8], payload: &[u8]) -> [u8; 32] {
     let mut hash = Sha256::new();
-    hash.update(b"fe2o3-protected-publisher-ledger-frame-v1\0");
+    hash.update(b"fe2o3-protected-publisher-ledger-frame-v2\0");
     hash.update(prefix);
     hash.update(payload);
     hash.finalize().into()
+}
+
+fn frame_trailer(
+    prefix: &[u8],
+    payload: &[u8],
+    frame_hash: [u8; 32],
+    frame_length: u64,
+    sequence: u64,
+) -> [u8; FRAME_TRAILER_BYTES] {
+    let inverse_length = !frame_length;
+    let mut commit = Sha256::new();
+    commit.update(b"fe2o3-protected-publisher-ledger-commit-v2\0");
+    commit.update(prefix);
+    commit.update(payload);
+    commit.update(frame_hash);
+    commit.update(frame_length.to_be_bytes());
+    commit.update(inverse_length.to_be_bytes());
+    commit.update(sequence.to_be_bytes());
+    let commit_hash: [u8; 32] = commit.finalize().into();
+
+    let mut trailer = [0u8; FRAME_TRAILER_BYTES];
+    trailer[..8].copy_from_slice(&frame_length.to_be_bytes());
+    trailer[8..16].copy_from_slice(&inverse_length.to_be_bytes());
+    trailer[16..24].copy_from_slice(&sequence.to_be_bytes());
+    trailer[24..56].copy_from_slice(&frame_hash);
+    trailer[56..88].copy_from_slice(&commit_hash);
+    trailer[88..].copy_from_slice(FRAME_TRAILER_MAGIC);
+    trailer
 }
 
 fn decode_record(payload: &[u8]) -> Result<LedgerRecord, PublisherError> {
@@ -1152,14 +1246,23 @@ mod tests {
     }
 
     fn rewrite_local_frame_record(frame: &mut [u8], mutate: impl FnOnce(&mut LedgerRecord)) {
-        let payload_end = frame.len() - FRAME_HASH_BYTES;
+        let payload_end = frame.len() - FRAME_HASH_BYTES - FRAME_TRAILER_BYTES;
         let mut record = decode_record(&frame[FRAME_PREFIX_BYTES..payload_end]).unwrap();
         mutate(&mut record);
         let payload = canonical_bytes(&serde_json::to_value(record).unwrap()).unwrap();
         assert_eq!(payload.len(), payload_end - FRAME_PREFIX_BYTES);
         frame[FRAME_PREFIX_BYTES..payload_end].copy_from_slice(&payload);
         let hash = frame_hash(&frame[..FRAME_PREFIX_BYTES], &payload);
-        frame[payload_end..].copy_from_slice(&hash);
+        frame[payload_end..payload_end + FRAME_HASH_BYTES].copy_from_slice(&hash);
+        let sequence = u64::from_be_bytes(frame[16..24].try_into().unwrap());
+        let trailer = frame_trailer(
+            &frame[..FRAME_PREFIX_BYTES],
+            &payload,
+            hash,
+            frame.len() as u64,
+            sequence,
+        );
+        frame[payload_end + FRAME_HASH_BYTES..].copy_from_slice(&trailer);
     }
 
     fn fixture_with_reference(reference: &str) -> Fixture {
@@ -1313,13 +1416,22 @@ mod tests {
         type FrameMutation = fn(&mut Vec<u8>);
         let cases: [(&str, FrameMutation); 4] = [
             ("canonical", |frame| {
-                let payload_end = frame.len() - FRAME_HASH_BYTES;
+                let payload_end = frame.len() - FRAME_HASH_BYTES - FRAME_TRAILER_BYTES;
                 frame[FRAME_PREFIX_BYTES] = b'!';
                 let hash = frame_hash(
                     &frame[..FRAME_PREFIX_BYTES],
                     &frame[FRAME_PREFIX_BYTES..payload_end],
                 );
-                frame[payload_end..].copy_from_slice(&hash);
+                frame[payload_end..payload_end + FRAME_HASH_BYTES].copy_from_slice(&hash);
+                let sequence = u64::from_be_bytes(frame[16..24].try_into().unwrap());
+                let trailer = frame_trailer(
+                    &frame[..FRAME_PREFIX_BYTES],
+                    &frame[FRAME_PREFIX_BYTES..payload_end],
+                    hash,
+                    frame.len() as u64,
+                    sequence,
+                );
+                frame[payload_end + FRAME_HASH_BYTES..].copy_from_slice(&trailer);
             }),
             ("base64", |frame| {
                 rewrite_local_frame_record(frame, |record| {
@@ -1509,6 +1621,23 @@ mod tests {
             assert!(DurableStore::open(&path).is_err(), "prefix {prefix}");
             assert_eq!(std::fs::read(&path).unwrap(), &header[..prefix]);
         }
+    }
+
+    #[test]
+    fn legacy_v1_ledgers_are_rejected_without_migration_or_mutation() {
+        let temp = secure_tempdir();
+        let policy = StorePolicy::test_default();
+        let mut legacy = Vec::new();
+        legacy.extend_from_slice(LEGACY_LEDGER_MAGIC);
+        legacy.extend_from_slice(policy.ledger_domain.as_bytes());
+        legacy.push(b'\n');
+        legacy.extend_from_slice(b"complete-v1-ledger-bytes-must-not-be-reinterpreted");
+        let path = temp.path().join("legacy-v1.ledger");
+        std::fs::write(&path, &legacy).unwrap();
+        std::fs::set_permissions(&path, Permissions::from_mode(0o600)).unwrap();
+
+        assert!(DurableStore::open_with_policy(&path, policy).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), legacy);
     }
 
     #[test]
@@ -1703,7 +1832,8 @@ mod tests {
             let bytes = std::fs::read(&duplicate_path).unwrap();
             bytes[store.header_len as usize..].to_vec()
         };
-        let first_payload = &first_frame[FRAME_PREFIX_BYTES..first_frame.len() - FRAME_HASH_BYTES];
+        let first_payload = &first_frame
+            [FRAME_PREFIX_BYTES..first_frame.len() - FRAME_HASH_BYTES - FRAME_TRAILER_BYTES];
         let duplicate = encode_frame(2, store.tail_hash, first_payload).unwrap();
         drop(store);
         let mut file = std::fs::OpenOptions::new()
@@ -1713,6 +1843,57 @@ mod tests {
         file.write_all(&duplicate).unwrap();
         file.sync_data().unwrap();
         assert!(DurableStore::open(&duplicate_path).is_err());
+    }
+
+    #[test]
+    fn every_complete_frame_byte_mutation_rejects_without_disk_mutation() {
+        let temp = secure_tempdir();
+        let source = temp.path().join("source.ledger");
+        let mut store = DurableStore::open(&source).unwrap();
+        issue_with(&mut store, KEY_A, &fixture()).unwrap();
+        let header_len = store.header_len as usize;
+        drop(store);
+        let durable = std::fs::read(&source).unwrap();
+        let frame_length = durable.len() - header_len;
+
+        for frame_index in 0..frame_length {
+            let mut mutated = durable.clone();
+            mutated[header_len + frame_index] ^= 1;
+            let path = temp.path().join(format!("mutation-{frame_index}.ledger"));
+            std::fs::write(&path, &mutated).unwrap();
+            std::fs::set_permissions(&path, Permissions::from_mode(0o600)).unwrap();
+            assert!(
+                DurableStore::open(&path).is_err(),
+                "frame byte {frame_index} was accepted"
+            );
+            assert_eq!(
+                std::fs::read(&path).unwrap(),
+                mutated,
+                "frame byte {frame_index} was modified during rejection"
+            );
+        }
+    }
+
+    #[test]
+    fn upward_length_corruption_cannot_erase_a_committed_record() {
+        let temp = secure_tempdir();
+        let path = temp.path().join("upward-length.ledger");
+        let mut store = DurableStore::open(&path).unwrap();
+        issue_with(&mut store, KEY_A, &fixture()).unwrap();
+        let payload_length_offset = store.header_len as usize + 12;
+        drop(store);
+        let mut mutated = std::fs::read(&path).unwrap();
+        let original = u32::from_be_bytes(
+            mutated[payload_length_offset..payload_length_offset + 4]
+                .try_into()
+                .unwrap(),
+        );
+        mutated[payload_length_offset..payload_length_offset + 4]
+            .copy_from_slice(&(original + 1).to_be_bytes());
+        std::fs::write(&path, &mutated).unwrap();
+
+        assert!(DurableStore::open(&path).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), mutated);
     }
 
     #[test]
@@ -1726,18 +1907,19 @@ mod tests {
         let bytes = std::fs::read(&source).unwrap();
         let header = &bytes[..header_len];
         let frame = &bytes[header_len..];
-        for (index, cut) in [0, 1, 7, 31, 55, 56, 80, frame.len() / 2, frame.len() - 1]
-            .into_iter()
-            .enumerate()
-        {
-            let path = temp.path().join(format!("torn-{index}.ledger"));
+        for cut in 0..frame.len() {
+            let path = temp.path().join(format!("torn-{cut}.ledger"));
             let mut partial = header.to_vec();
             partial.extend_from_slice(&frame[..cut]);
             std::fs::write(&path, partial).unwrap();
             std::fs::set_permissions(&path, Permissions::from_mode(0o600)).unwrap();
             let reopened = DurableStore::open(&path).unwrap();
-            assert_eq!(reopened.count(), 0);
-            assert_eq!(std::fs::metadata(&path).unwrap().len(), header_len as u64);
+            assert_eq!(reopened.count(), 0, "partial boundary {cut}");
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().len(),
+                header_len as u64,
+                "partial boundary {cut}"
+            );
         }
         let complete = temp.path().join("complete.ledger");
         std::fs::write(&complete, bytes).unwrap();

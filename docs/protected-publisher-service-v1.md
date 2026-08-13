@@ -191,7 +191,15 @@ Each append-only frame contains:
 magic | version | payload_length | sequence | previous_frame_hash
 canonical_record_json
 SHA256(frame_domain || frame_prefix || canonical_record_json)
+frame_length | NOT(frame_length) | sequence | frame_hash
+SHA256(commit_domain || frame_prefix || record || frame_hash || trailer_fields)
+fixed_commit_magic
 ```
+
+The ledger and frame are explicitly version 2. Version 1 ledgers are rejected
+unchanged; startup performs no implicit reinterpretation or migration. An
+operator must retain the old binary for read-only export and provision a new
+ledger through a separately reviewed migration procedure.
 
 Records contain separate request-key, request, stable-authorization, and
 evidence identities plus exact request/response bytes in canonical base64.
@@ -226,13 +234,17 @@ The generic canonical JSON string limit remains 4,096 bytes. Only the ledger
 record and generated response parsers use their separately bounded base64
 field limits.
 
-EOF inside a prefix or a structurally valid frame is classified as an
+EOF before a complete authenticated commit trailer is classified as an
 unacknowledged torn tail, truncated to the previous complete frame, and
-`fdatasync`ed before service. A complete frame with a bad hash is corruption
-and fails startup rather than being truncated. Short writes are retried. A
-write error, injected ENOSPC, identity loss, or sync failure poisons the live
-store and prevents acknowledgement; restart can remove only the incomplete
-tail.
+`fdatasync`ed before service. Before truncation, replay scans the bounded
+candidate frame for the independently recognizable trailer. This detects a
+committed frame even when its forward payload length was corrupted upward.
+Any mutation of a complete frame, including its length, payload, frame hash,
+redundant length, sequence, commit hash, or commit magic, fails startup without
+modifying the file. Short writes are retried. A write error, injected ENOSPC,
+identity loss, or sync failure poisons the live store and prevents
+acknowledgement; restart can remove only a byte prefix that never reached a
+complete commit trailer.
 
 Before append and after `fdatasync`, the retained descriptor and directory
 entry must still agree on device, inode, mode, UID, GID, and link count. A
