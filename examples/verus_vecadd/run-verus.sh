@@ -114,6 +114,22 @@ require_source "$script_dir/verus/negative/lds_read_before_barrier.rs" \
 require_source "$script_dir/verus/negative/lds_out_of_bounds_read.rs" \
     'mutated_unbounded_lds_read_is_in_bounds'
 
+gfx942_wave_lds="$script_dir/verus/gfx942_wave_lds_v1.rs"
+require_source "$gfx942_wave_lds" 'pub open spec fn gfx942_wave64_contract'
+require_source "$gfx942_wave_lds" 'pub proof fn gfx942_inactive_values_do_not_change_wave_reduction'
+require_source "$gfx942_wave_lds" 'pub open spec fn gfx942_static_lds_u32x256_is_exact'
+require_source "$gfx942_wave_lds" 'pub proof fn gfx942_distinct_threads_own_disjoint_lds_slots'
+require_source "$gfx942_wave_lds" 'pub proof fn gfx942_barrier_enables_legal_stage_partner_read'
+require_source "$gfx942_wave_lds" 'pub open spec fn gfx942_barrier_trace_is_uniform'
+require_source "$gfx942_wave_lds" 'Deliberate refinement boundary'
+forbid_source "$gfx942_wave_lds" 'admit('
+forbid_source "$gfx942_wave_lds" 'assume(false'
+forbid_source "$gfx942_wave_lds" '#[verifier::external_body]'
+require_source "$script_dir/verus/negative/gfx942_wave_wrong_extent.rs" \
+    'mutated_gfx942_wave63_is_wave64'
+require_source "$script_dir/verus/negative/gfx942_lds_missing_barrier_lane.rs" \
+    'mutated_missing_barrier_lane_is_complete'
+
 if [ "$source_failures" -ne 0 ]; then
     printf 'Source-shape checks failed: %s missing marker(s)\n' "$source_failures" >&2
     exit 1
@@ -291,6 +307,7 @@ run_pass vecadd "$script_dir/verus/vecadd.rs"
 run_pass fill "$script_dir/verus/fill.rs"
 run_pass elementwise "$script_dir/verus/elementwise.rs"
 run_pass wave_lds "$script_dir/verus/wave_lds.rs"
+run_pass gfx942_wave_lds_v1 "$script_dir/verus/gfx942_wave_lds_v1.rs"
 run_pass two_kernel "$script_dir/verus/two_kernel.rs"
 run_rejected fill_missing_bounds \
     "$script_dir/verus/negative/fill_missing_bounds.rs" \
@@ -394,9 +411,17 @@ run_rejected lds_out_of_bounds_read \
     "$script_dir/verus/negative/lds_out_of_bounds_read.rs" \
     'mutated_unbounded_lds_read_is_in_bounds' \
     'postcondition.*not satisfied|postcondition failure'
+run_rejected gfx942_wave_wrong_extent \
+    "$script_dir/verus/negative/gfx942_wave_wrong_extent.rs" \
+    'mutated_gfx942_wave63_is_wave64' \
+    'postcondition.*not satisfied|postcondition failure'
+run_rejected gfx942_lds_missing_barrier_lane \
+    "$script_dir/verus/negative/gfx942_lds_missing_barrier_lane.rs" \
+    'mutated_missing_barrier_lane_is_complete' \
+    'postcondition.*not satisfied|postcondition failure'
 
 if [ "$failures" -ne 0 ]; then
     printf 'Verus fixture run failed: %s unexpected result(s)\n' "$failures" >&2
     exit 1
 fi
-printf 'Verus fixture run passed: 5 proof harnesses, 24 expected rejections\n'
+printf 'Verus fixture run passed: 6 proof harnesses, 26 expected rejections\n'
