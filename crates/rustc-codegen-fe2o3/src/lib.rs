@@ -17,7 +17,7 @@ extern crate rustc_span;
 mod amdgpu_llvm;
 #[allow(dead_code)]
 mod closure_profile_v1;
-mod collected_executable_scalar_control_flow_v1;
+mod collected_executable_scalar_control_flow_v2;
 mod collector;
 mod compiler_descriptor;
 mod compiler_ffi_adapter;
@@ -175,7 +175,7 @@ enum CodegenPipeline {
     LegacyV1,
     KernelIrV1,
     KernelIrWorkerV2,
-    ExecutableScalarControlFlowV1,
+    CollectedExecutableScalarControlFlowV2,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -232,13 +232,13 @@ impl PipelineSelection {
             }
             Some(value)
                 if value
-                    == collected_executable_scalar_control_flow_v1::COLLECTED_SCALAR_CONTROL_FLOW_PIPELINE_V1 =>
+                    == collected_executable_scalar_control_flow_v2::COLLECTED_SCALAR_CONTROL_FLOW_PIPELINE_V2 =>
             {
-                Self::Valid(CodegenPipeline::ExecutableScalarControlFlowV1)
+                Self::Valid(CodegenPipeline::CollectedExecutableScalarControlFlowV2)
             }
             Some(value) => Self::Invalid(format!(
                 "{CODEGEN_PIPELINE_ENV} must be unset or exactly `legacy-v1`, `kernel-ir-v1`, `kernel-ir-worker-v2`, or `{}`; found {value:?}",
-                collected_executable_scalar_control_flow_v1::COLLECTED_SCALAR_CONTROL_FLOW_PIPELINE_V1
+                collected_executable_scalar_control_flow_v2::COLLECTED_SCALAR_CONTROL_FLOW_PIPELINE_V2
             )),
         }
     }
@@ -400,7 +400,9 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                 let codegen_pipeline = self.config.codegen_pipeline.clone();
                 if matches!(
                     codegen_pipeline,
-                    PipelineSelection::Valid(CodegenPipeline::ExecutableScalarControlFlowV1)
+                    PipelineSelection::Valid(
+                        CodegenPipeline::CollectedExecutableScalarControlFlowV2
+                    )
                 ) {
                     let lowering = (|| -> Result<_, String> {
                         let collection = collector::collect_device_functions(
@@ -422,32 +424,28 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             );
                         }
                         collector::dump_device_functions(tcx, &collection.functions);
-                        collected_executable_scalar_control_flow_v1::lower_collected_executable_scalar_control_flow_v1(
+                        let custom_llvm_pipeline = !tcx.sess.opts.cg.llvm_args.is_empty()
+                            || !tcx.sess.opts.cg.passes.is_empty();
+                        collected_executable_scalar_control_flow_v2::authenticate_collected_executable_scalar_control_flow_v2(
                             tcx,
                             &collection,
                             &self.config.target,
-                            false,
+                            custom_llvm_pipeline,
                         )
                         .map_err(|error| error.to_string())
                     })();
                     match lowering {
-                        Ok(artifact) => {
-                            eprintln!(
-                                "[rustc-codegen-fe2o3] selected {}: authenticated one kernel/one helper closure, {} helper block(s), {} natural loop(s), direct gfx942 LLVM",
-                                collected_executable_scalar_control_flow_v1::COLLECTED_SCALAR_CONTROL_FLOW_PIPELINE_V1,
-                                artifact.helper.summary.blocks,
-                                artifact.helper.summary.loops,
-                            );
-                            if self.config.dump_llvm {
-                                eprintln!(
-                                    "\n=== fe2o3 collected scalar-control-flow V1 gfx942 LLVM ===\n{}\n===============================================================\n",
-                                    artifact.gfx942_llvm
-                                );
-                            }
-                        }
+                        Ok(admission) => tcx.dcx().fatal(format!(
+                            "[rustc-codegen-fe2o3] {} authenticated collected KernelEntry export `{}` with root MIR {} and exact reachable InternalHelper MIR {}; {}; no Kernel IR, LLVM, LLD, HSACO, or legacy fallback was entered",
+                            collected_executable_scalar_control_flow_v2::COLLECTED_SCALAR_CONTROL_FLOW_PIPELINE_V2,
+                            admission.kernel_export(),
+                            admission.root_identity_hex(),
+                            admission.helper_identity_hex(),
+                            collected_executable_scalar_control_flow_v2::REPAIRED_V1_DEPENDENCY,
+                        )),
                         Err(error) => tcx.dcx().fatal(format!(
                             "[rustc-codegen-fe2o3] {} rejected the collected program without fallback: {error}",
-                            collected_executable_scalar_control_flow_v1::COLLECTED_SCALAR_CONTROL_FLOW_PIPELINE_V1,
+                            collected_executable_scalar_control_flow_v2::COLLECTED_SCALAR_CONTROL_FLOW_PIPELINE_V2,
                         )),
                     }
                 } else if matches!(
@@ -716,9 +714,9 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                         .to_owned(),
                                 })
                             }
-                            CodegenPipeline::ExecutableScalarControlFlowV1 => {
+                            CodegenPipeline::CollectedExecutableScalarControlFlowV2 => {
                                 Err(amdgpu_llvm::EmitError::Preflight {
-                                    reason: "internal error: executable scalar-control-flow V1 entered the legacy artifact transaction"
+                                    reason: "internal error: collected executable scalar-control-flow V2 entered the legacy artifact transaction"
                                         .to_owned(),
                                 })
                             }

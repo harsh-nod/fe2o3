@@ -1,15 +1,8 @@
-//! Identity-bound collected entry for the executable scalar-control-flow pilot.
+//! Source-authenticated admission for the collected scalar-control-flow V2 pilot.
 
 use std::error::Error;
 use std::fmt;
 
-use dialect_amdgcn::{LoweringErrors, lower_compiler_module_to_gfx942_llvm_ir};
-use dialect_mir::{MirExecutableDecodeError, MirExecutableModule};
-use fe2o3_kernel_ir::{
-    BasicBlock, BlockId, Function, FunctionRole, Kernel, LaunchDomain, LaunchExtent, Module,
-    Operation, OperationKind, ScalarType, Signature, TargetCapability, Terminator, Type, ValueDef,
-    ValueId, VerificationErrors, WaveWidth, WorkgroupSize, verify_module,
-};
 use rustc_abi::ExternAbi;
 use rustc_hir::Safety;
 use rustc_middle::mir::{Operand, TerminatorKind};
@@ -17,21 +10,13 @@ use rustc_middle::ty::{EarlyBinder, Instance, InstanceKind, TyCtxt, TyKind, Typi
 
 use crate::AmdGpuTarget;
 use crate::collector::{CollectedFunction, CollectedFunctionRole, CollectionResult};
-use crate::executable_scalar_control_flow_v1::{
-    ExecutableScalarControlFlowArtifactV1, ExecutableScalarControlFlowErrorV1,
-    lower_executable_scalar_control_flow_v1,
-};
 use crate::scalar_mir_v2::EXACT_SCALAR_V2_TARGET;
 
-pub(crate) const COLLECTED_SCALAR_CONTROL_FLOW_PIPELINE_V1: &str =
-    "executable-scalar-control-flow-v1";
-const FIXED_KERNEL_ID: &str = "scalar_control_flow_v1";
-const FIXED_ENTRY_ID: &str = "__fe2o3_scalar_control_flow_v1_entry";
-const FIXED_HELPER_ID: &str = "__fe2o3_scalar_control_flow_v1_helper";
+pub(crate) const COLLECTED_SCALAR_CONTROL_FLOW_PIPELINE_V2: &str =
+    "collected-executable-scalar-control-flow-v2";
+pub(crate) const REPAIRED_V1_DEPENDENCY: &str = "executable lowering is disabled until repaired Scalar V1 supplies an authenticated internal-helper contract, charges all budgets before growth, and direct LLVM binds exact gfx942:xnack-";
+const FIXED_KERNEL_EXPORT: &str = "scalar_control_flow_v1";
 const FIXED_LOGICAL_NAME: &str = "scalar_control_flow_v1";
-const FIXED_WORKGROUP_X: u32 = 64;
-const FIXED_HELPER_MIR: &str =
-    include_str!("../../dialect-mir/tests/fixtures/nested-loop.mir.json");
 
 const ROOT_CFG_IDENTITY: [u8; 32] = [
     0xa3, 0xb2, 0xfb, 0x44, 0x1d, 0x62, 0x53, 0x21, 0x26, 0xd4, 0x4c, 0x05, 0x1c, 0xa1, 0x62, 0x56,
@@ -43,35 +28,49 @@ const HELPER_CFG_IDENTITY: [u8; 32] = [
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ExactSignatureV1 {
+enum ExactSignatureV2 {
     KernelU32ToUnit,
     HelperU32ToU32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct ObservedFunctionV1<I> {
+struct ObservedFunctionV2<I> {
     identity: I,
     role: CollectedFunctionRole,
-    signature: ExactSignatureV1,
+    signature: ExactSignatureV2,
     cfg_identity: [u8; 32],
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct ObservedClosureV1<I> {
-    functions: Vec<ObservedFunctionV1<I>>,
+struct ObservedClosureV2<I> {
+    functions: Vec<ObservedFunctionV2<I>>,
     root_call_target: I,
     helper_call_count: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CollectedExecutableScalarControlFlowArtifactV1 {
-    pub(crate) helper: ExecutableScalarControlFlowArtifactV1,
-    pub(crate) kernel_ir: Module,
-    pub(crate) gfx942_llvm: String,
+pub(crate) struct AuthenticatedCollectedScalarControlFlowV2 {
+    kernel_export: String,
+    root_cfg_identity: [u8; 32],
+    helper_cfg_identity: [u8; 32],
+}
+
+impl AuthenticatedCollectedScalarControlFlowV2 {
+    pub(crate) fn kernel_export(&self) -> &str {
+        &self.kernel_export
+    }
+
+    pub(crate) fn root_identity_hex(&self) -> String {
+        encode_hex(&self.root_cfg_identity)
+    }
+
+    pub(crate) fn helper_identity_hex(&self) -> String {
+        encode_hex(&self.helper_cfg_identity)
+    }
 }
 
 #[derive(Debug)]
-pub(crate) enum CollectedExecutableScalarControlFlowErrorV1 {
+pub(crate) enum CollectedExecutableScalarControlFlowErrorV2 {
     WrongTarget {
         actual: String,
     },
@@ -89,25 +88,21 @@ pub(crate) enum CollectedExecutableScalarControlFlowErrorV1 {
         detail: String,
     },
     CallTargetSubstitution,
-    FixtureDecode(MirExecutableDecodeError),
-    Helper(ExecutableScalarControlFlowErrorV1),
-    InvalidKernelIr(VerificationErrors),
-    Backend(LoweringErrors),
 }
 
-impl fmt::Display for CollectedExecutableScalarControlFlowErrorV1 {
+impl fmt::Display for CollectedExecutableScalarControlFlowErrorV2 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::WrongTarget { actual } => write!(
                 formatter,
-                "collected scalar-control-flow V1 requires exact target `{EXACT_SCALAR_V2_TARGET}`, found `{actual}`"
+                "collected scalar-control-flow V2 requires exact target `{EXACT_SCALAR_V2_TARGET}`, found `{actual}`"
             ),
             Self::CustomPipeline => formatter.write_str(
-                "collected scalar-control-flow V1 rejects custom LLVM pipeline selection",
+                "collected scalar-control-flow V2 rejects custom LLVM pipeline selection",
             ),
             Self::UnsupportedCollection { detail } => write!(
                 formatter,
-                "unsupported collected scalar-control-flow V1 shape: {detail}"
+                "unsupported collected scalar-control-flow V2 shape: {detail}"
             ),
             Self::IdentityMismatch {
                 role,
@@ -115,67 +110,34 @@ impl fmt::Display for CollectedExecutableScalarControlFlowErrorV1 {
                 actual,
             } => write!(
                 formatter,
-                "collected scalar-control-flow V1 {role} MIR identity mismatch: expected {}, found {}",
+                "collected scalar-control-flow V2 {role} MIR identity mismatch: expected {}, found {}",
                 encode_hex(expected),
                 encode_hex(actual)
             ),
             Self::AbiMismatch { role, detail } => write!(
                 formatter,
-                "collected scalar-control-flow V1 {role} ABI mismatch: {detail}"
+                "collected scalar-control-flow V2 {role} ABI mismatch: {detail}"
             ),
             Self::CallTargetSubstitution => formatter.write_str(
-                "collected scalar-control-flow V1 root call does not target the exact collected helper instance",
-            ),
-            Self::FixtureDecode(error) => write!(
-                formatter,
-                "fixed scalar-control-flow V1 executable-MIR fixture is invalid: {error}"
-            ),
-            Self::Helper(error) => write!(
-                formatter,
-                "fixed scalar-control-flow V1 helper lowering failed: {error}"
-            ),
-            Self::InvalidKernelIr(error) => write!(
-                formatter,
-                "collected scalar-control-flow V1 Kernel IR is invalid: {error}"
-            ),
-            Self::Backend(error) => write!(
-                formatter,
-                "collected scalar-control-flow V1 direct gfx942 LLVM lowering failed: {error}"
+                "collected scalar-control-flow V2 root call does not target the exact collected helper instance",
             ),
         }
     }
 }
 
-impl Error for CollectedExecutableScalarControlFlowErrorV1 {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::FixtureDecode(error) => Some(error),
-            Self::Helper(error) => Some(error),
-            Self::InvalidKernelIr(error) => Some(error),
-            Self::Backend(error) => Some(error),
-            Self::WrongTarget { .. }
-            | Self::CustomPipeline
-            | Self::UnsupportedCollection { .. }
-            | Self::IdentityMismatch { .. }
-            | Self::AbiMismatch { .. }
-            | Self::CallTargetSubstitution => None,
-        }
-    }
-}
+impl Error for CollectedExecutableScalarControlFlowErrorV2 {}
 
-pub(crate) fn lower_collected_executable_scalar_control_flow_v1<'tcx>(
+pub(crate) fn authenticate_collected_executable_scalar_control_flow_v2<'tcx>(
     tcx: TyCtxt<'tcx>,
     collection: &CollectionResult<'tcx>,
     target: &AmdGpuTarget,
     custom_llvm_pipeline: bool,
-) -> Result<
-    CollectedExecutableScalarControlFlowArtifactV1,
-    CollectedExecutableScalarControlFlowErrorV1,
-> {
+) -> Result<AuthenticatedCollectedScalarControlFlowV2, CollectedExecutableScalarControlFlowErrorV2>
+{
     admit_execution_context(target.as_str(), custom_llvm_pipeline)?;
 
     let (root, helper) = exact_collected_pair(&collection.functions)?;
-    if root.export_name != FIXED_KERNEL_ID
+    if root.export_name != FIXED_KERNEL_EXPORT
         || root.logical_name.as_deref() != Some(FIXED_LOGICAL_NAME)
         || root.typed_profile.is_some()
         || root.kernel_binding.is_some()
@@ -190,20 +152,24 @@ pub(crate) fn lower_collected_executable_scalar_control_flow_v1<'tcx>(
 
     let observed = observe_closure(tcx, root, helper)?;
     admit_observed_closure(&observed)?;
-    lower_fixed_helper_and_compose_kernel()
+    Ok(AuthenticatedCollectedScalarControlFlowV2 {
+        kernel_export: root.export_name.clone(),
+        root_cfg_identity: observed.functions[0].cfg_identity,
+        helper_cfg_identity: observed.functions[1].cfg_identity,
+    })
 }
 
 fn admit_execution_context(
     target: &str,
     custom_llvm_pipeline: bool,
-) -> Result<(), CollectedExecutableScalarControlFlowErrorV1> {
+) -> Result<(), CollectedExecutableScalarControlFlowErrorV2> {
     if target != EXACT_SCALAR_V2_TARGET {
-        return Err(CollectedExecutableScalarControlFlowErrorV1::WrongTarget {
+        return Err(CollectedExecutableScalarControlFlowErrorV2::WrongTarget {
             actual: target.to_owned(),
         });
     }
     if custom_llvm_pipeline {
-        return Err(CollectedExecutableScalarControlFlowErrorV1::CustomPipeline);
+        return Err(CollectedExecutableScalarControlFlowErrorV2::CustomPipeline);
     }
     Ok(())
 }
@@ -212,7 +178,7 @@ fn exact_collected_pair<'a, 'tcx>(
     functions: &'a [CollectedFunction<'tcx>],
 ) -> Result<
     (&'a CollectedFunction<'tcx>, &'a CollectedFunction<'tcx>),
-    CollectedExecutableScalarControlFlowErrorV1,
+    CollectedExecutableScalarControlFlowErrorV2,
 > {
     if functions.len() != 2 {
         return Err(unsupported_collection(format!(
@@ -242,7 +208,7 @@ fn observe_closure<'tcx>(
     tcx: TyCtxt<'tcx>,
     root: &CollectedFunction<'tcx>,
     helper: &CollectedFunction<'tcx>,
-) -> Result<ObservedClosureV1<Instance<'tcx>>, CollectedExecutableScalarControlFlowErrorV1> {
+) -> Result<ObservedClosureV2<Instance<'tcx>>, CollectedExecutableScalarControlFlowErrorV2> {
     let root_cfg = collected_cfg_identity(root, "root")?;
     let helper_cfg = collected_cfg_identity(helper, "helper")?;
     let root_signature = exact_signature(tcx, root.instance, "root")?;
@@ -255,15 +221,15 @@ fn observe_closure<'tcx>(
         )));
     }
     let helper_calls = direct_calls(tcx, helper.instance)?;
-    Ok(ObservedClosureV1 {
+    Ok(ObservedClosureV2 {
         functions: vec![
-            ObservedFunctionV1 {
+            ObservedFunctionV2 {
                 identity: root.instance,
                 role: root.role,
                 signature: root_signature,
                 cfg_identity: root_cfg,
             },
-            ObservedFunctionV1 {
+            ObservedFunctionV2 {
                 identity: helper.instance,
                 role: helper.role,
                 signature: helper_signature,
@@ -276,8 +242,8 @@ fn observe_closure<'tcx>(
 }
 
 fn admit_observed_closure<I: Eq>(
-    observed: &ObservedClosureV1<I>,
-) -> Result<(), CollectedExecutableScalarControlFlowErrorV1> {
+    observed: &ObservedClosureV2<I>,
+) -> Result<(), CollectedExecutableScalarControlFlowErrorV2> {
     if observed.functions.len() != 2 {
         return Err(unsupported_collection(format!(
             "requires exactly two observed functions, found {}",
@@ -304,12 +270,12 @@ fn admit_observed_closure<I: Eq>(
             "device FFI exports and other collected roles are not admitted",
         ));
     }
-    require_signature(root, ExactSignatureV1::KernelU32ToUnit, "root")?;
-    require_signature(helper, ExactSignatureV1::HelperU32ToU32, "helper")?;
-    require_cfg_identity(root, ROOT_CFG_IDENTITY, "root")?;
+    require_signature(root, ExactSignatureV2::KernelU32ToUnit, "root")?;
+    require_signature(helper, ExactSignatureV2::HelperU32ToU32, "helper")?;
     require_cfg_identity(helper, HELPER_CFG_IDENTITY, "helper")?;
+    require_cfg_identity(root, ROOT_CFG_IDENTITY, "root")?;
     if observed.root_call_target != helper.identity {
-        return Err(CollectedExecutableScalarControlFlowErrorV1::CallTargetSubstitution);
+        return Err(CollectedExecutableScalarControlFlowErrorV2::CallTargetSubstitution);
     }
     if observed.helper_call_count != 0 {
         return Err(unsupported_collection(format!(
@@ -321,12 +287,12 @@ fn admit_observed_closure<I: Eq>(
 }
 
 fn require_signature<I>(
-    function: &ObservedFunctionV1<I>,
-    expected: ExactSignatureV1,
+    function: &ObservedFunctionV2<I>,
+    expected: ExactSignatureV2,
     role: &'static str,
-) -> Result<(), CollectedExecutableScalarControlFlowErrorV1> {
+) -> Result<(), CollectedExecutableScalarControlFlowErrorV2> {
     if function.signature != expected {
-        return Err(CollectedExecutableScalarControlFlowErrorV1::AbiMismatch {
+        return Err(CollectedExecutableScalarControlFlowErrorV2::AbiMismatch {
             role,
             detail: format!("expected {expected:?}, found {:?}", function.signature),
         });
@@ -335,13 +301,13 @@ fn require_signature<I>(
 }
 
 fn require_cfg_identity<I>(
-    function: &ObservedFunctionV1<I>,
+    function: &ObservedFunctionV2<I>,
     expected: [u8; 32],
     role: &'static str,
-) -> Result<(), CollectedExecutableScalarControlFlowErrorV1> {
+) -> Result<(), CollectedExecutableScalarControlFlowErrorV2> {
     if function.cfg_identity != expected {
         return Err(
-            CollectedExecutableScalarControlFlowErrorV1::IdentityMismatch {
+            CollectedExecutableScalarControlFlowErrorV2::IdentityMismatch {
                 role,
                 expected,
                 actual: function.cfg_identity,
@@ -355,7 +321,7 @@ fn exact_signature<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
     role: &'static str,
-) -> Result<ExactSignatureV1, CollectedExecutableScalarControlFlowErrorV1> {
+) -> Result<ExactSignatureV2, CollectedExecutableScalarControlFlowErrorV2> {
     if !matches!(instance.def, InstanceKind::Item(_)) {
         return Err(abi_mismatch(
             role,
@@ -382,9 +348,9 @@ fn exact_signature<'tcx>(
         ));
     }
     if signature.output() == tcx.types.unit {
-        Ok(ExactSignatureV1::KernelU32ToUnit)
+        Ok(ExactSignatureV2::KernelU32ToUnit)
     } else if matches!(signature.output().kind(), TyKind::Uint(UintTy::U32)) {
-        Ok(ExactSignatureV1::HelperU32ToU32)
+        Ok(ExactSignatureV2::HelperU32ToU32)
     } else {
         Err(abi_mismatch(
             role,
@@ -396,7 +362,7 @@ fn exact_signature<'tcx>(
 fn direct_calls<'tcx>(
     tcx: TyCtxt<'tcx>,
     caller: Instance<'tcx>,
-) -> Result<Vec<Instance<'tcx>>, CollectedExecutableScalarControlFlowErrorV1> {
+) -> Result<Vec<Instance<'tcx>>, CollectedExecutableScalarControlFlowErrorV2> {
     if !tcx.is_mir_available(caller.def_id()) {
         return Err(unsupported_collection("collected function has no MIR"));
     }
@@ -437,7 +403,7 @@ fn direct_calls<'tcx>(
 fn collected_cfg_identity(
     function: &CollectedFunction<'_>,
     role: &'static str,
-) -> Result<[u8; 32], CollectedExecutableScalarControlFlowErrorV1> {
+) -> Result<[u8; 32], CollectedExecutableScalarControlFlowErrorV2> {
     function
         .dead_branches
         .as_ref()
@@ -445,72 +411,10 @@ fn collected_cfg_identity(
         .ok_or_else(|| unsupported_collection(format!("{role} has no compiler MIR observation")))
 }
 
-fn lower_fixed_helper_and_compose_kernel() -> Result<
-    CollectedExecutableScalarControlFlowArtifactV1,
-    CollectedExecutableScalarControlFlowErrorV1,
-> {
-    let executable = MirExecutableModule::from_canonical_text(FIXED_HELPER_MIR)
-        .map_err(CollectedExecutableScalarControlFlowErrorV1::FixtureDecode)?;
-    let mut helper = lower_executable_scalar_control_flow_v1(&executable)
-        .map_err(CollectedExecutableScalarControlFlowErrorV1::Helper)?;
-    let mut helper_function = helper
-        .kernel_ir
-        .functions
-        .pop()
-        .expect("validated fixed helper module has one function");
-    helper_function.id = FIXED_HELPER_ID.into();
-    helper_function.role = FunctionRole::InternalHelper;
-
-    let u32_type = Type::Scalar(ScalarType::U32);
-    let mut entry_block = BasicBlock::new(BlockId(0));
-    entry_block.operations.push(Operation::effect_free(
-        ValueDef::new(ValueId(1), u32_type.clone()),
-        OperationKind::Call {
-            callee: FIXED_HELPER_ID.into(),
-            arguments: vec![ValueId(0)],
-        },
-    ));
-    entry_block.terminator = Some(Terminator::Return { values: vec![] });
-    let mut entry = Function::kernel_entry(
-        FIXED_ENTRY_ID,
-        Signature::new(vec![u32_type], vec![]),
-        vec![ValueId(0)],
-        vec![entry_block],
-    );
-    entry
-        .required_capabilities
-        .insert(TargetCapability::WaveWidth(WaveWidth::Wave64));
-
-    let mut kernel = Kernel::new(
-        FIXED_KERNEL_ID,
-        FIXED_ENTRY_ID,
-        LaunchDomain::D1 {
-            x: LaunchExtent::Dynamic,
-        },
-    );
-    kernel.workgroup_size = Some(WorkgroupSize::new(FIXED_WORKGROUP_X, 1, 1));
-    kernel
-        .required_capabilities
-        .insert(TargetCapability::WaveWidth(WaveWidth::Wave64));
-
-    let mut kernel_ir = Module::new("rustc::collected_scalar_control_flow_v1");
-    kernel_ir.functions = vec![entry, helper_function];
-    kernel_ir.kernels.push(kernel);
-    verify_module(&kernel_ir)
-        .map_err(CollectedExecutableScalarControlFlowErrorV1::InvalidKernelIr)?;
-    let gfx942_llvm = lower_compiler_module_to_gfx942_llvm_ir(&kernel_ir)
-        .map_err(CollectedExecutableScalarControlFlowErrorV1::Backend)?;
-    Ok(CollectedExecutableScalarControlFlowArtifactV1 {
-        helper,
-        kernel_ir,
-        gfx942_llvm,
-    })
-}
-
 fn unsupported_collection(
     detail: impl Into<String>,
-) -> CollectedExecutableScalarControlFlowErrorV1 {
-    CollectedExecutableScalarControlFlowErrorV1::UnsupportedCollection {
+) -> CollectedExecutableScalarControlFlowErrorV2 {
+    CollectedExecutableScalarControlFlowErrorV2::UnsupportedCollection {
         detail: detail.into(),
     }
 }
@@ -518,8 +422,8 @@ fn unsupported_collection(
 fn abi_mismatch(
     role: &'static str,
     detail: impl Into<String>,
-) -> CollectedExecutableScalarControlFlowErrorV1 {
-    CollectedExecutableScalarControlFlowErrorV1::AbiMismatch {
+) -> CollectedExecutableScalarControlFlowErrorV2 {
+    CollectedExecutableScalarControlFlowErrorV2::AbiMismatch {
         role,
         detail: detail.into(),
     }
@@ -539,19 +443,19 @@ fn encode_hex(bytes: &[u8; 32]) -> String {
 mod tests {
     use super::*;
 
-    fn observed() -> ObservedClosureV1<u8> {
-        ObservedClosureV1 {
+    fn observed() -> ObservedClosureV2<u8> {
+        ObservedClosureV2 {
             functions: vec![
-                ObservedFunctionV1 {
+                ObservedFunctionV2 {
                     identity: 1,
                     role: CollectedFunctionRole::KernelEntry,
-                    signature: ExactSignatureV1::KernelU32ToUnit,
+                    signature: ExactSignatureV2::KernelU32ToUnit,
                     cfg_identity: ROOT_CFG_IDENTITY,
                 },
-                ObservedFunctionV1 {
+                ObservedFunctionV2 {
                     identity: 2,
                     role: CollectedFunctionRole::InternalHelper,
-                    signature: ExactSignatureV1::HelperU32ToU32,
+                    signature: ExactSignatureV2::HelperU32ToU32,
                     cfg_identity: HELPER_CFG_IDENTITY,
                 },
             ],
@@ -561,38 +465,8 @@ mod tests {
     }
 
     #[test]
-    fn exact_observation_composes_kernel_helper_and_direct_gfx942_llvm() {
+    fn exact_observation_is_admitted_without_constructing_an_export() {
         admit_observed_closure(&observed()).unwrap();
-        let artifact = lower_fixed_helper_and_compose_kernel().unwrap();
-
-        assert_eq!(artifact.kernel_ir.kernels.len(), 1);
-        assert_eq!(artifact.kernel_ir.functions.len(), 2);
-        assert_eq!(artifact.helper.summary.blocks, 9);
-        assert_eq!(artifact.helper.summary.loops, 2);
-        assert_eq!(artifact.helper.summary.maximum_loop_depth, 2);
-        assert!(
-            artifact
-                .gfx942_llvm
-                .starts_with("target triple = \"amdgcn-amd-amdhsa\"")
-        );
-        assert!(
-            artifact
-                .gfx942_llvm
-                .contains("define amdgpu_kernel void @scalar_control_flow_v1(i32 %arg0)"),
-            "{}",
-            artifact.gfx942_llvm
-        );
-        assert!(
-            artifact
-                .gfx942_llvm
-                .contains("define internal i32 @__fe2o3_scalar_control_flow_v1_helper(i32 %arg0)")
-        );
-        assert!(
-            artifact
-                .gfx942_llvm
-                .contains("call i32 @__fe2o3_scalar_control_flow_v1_helper(i32 %arg0)")
-        );
-        assert!(artifact.gfx942_llvm.contains("\"target-cpu\"=\"gfx942\""));
     }
 
     #[test]
@@ -601,19 +475,26 @@ mod tests {
         missing.functions.pop();
         assert!(matches!(
             admit_observed_closure(&missing),
-            Err(CollectedExecutableScalarControlFlowErrorV1::UnsupportedCollection { .. })
+            Err(CollectedExecutableScalarControlFlowErrorV2::UnsupportedCollection { .. })
         ));
 
         let mut additional = observed();
-        additional.functions.push(ObservedFunctionV1 {
+        additional.functions.push(ObservedFunctionV2 {
             identity: 3,
             role: CollectedFunctionRole::DeviceFfiExport,
-            signature: ExactSignatureV1::HelperU32ToU32,
+            signature: ExactSignatureV2::HelperU32ToU32,
             cfg_identity: HELPER_CFG_IDENTITY,
         });
         assert!(matches!(
             admit_observed_closure(&additional),
-            Err(CollectedExecutableScalarControlFlowErrorV1::UnsupportedCollection { .. })
+            Err(CollectedExecutableScalarControlFlowErrorV2::UnsupportedCollection { .. })
+        ));
+
+        let mut wrong_role = observed();
+        wrong_role.functions[0].role = CollectedFunctionRole::DeviceFfiExport;
+        assert!(matches!(
+            admit_observed_closure(&wrong_role),
+            Err(CollectedExecutableScalarControlFlowErrorV2::UnsupportedCollection { .. })
         ));
     }
 
@@ -623,7 +504,7 @@ mod tests {
         wrong_root.functions[0].cfg_identity[0] ^= 1;
         assert!(matches!(
             admit_observed_closure(&wrong_root),
-            Err(CollectedExecutableScalarControlFlowErrorV1::IdentityMismatch { role: "root", .. })
+            Err(CollectedExecutableScalarControlFlowErrorV2::IdentityMismatch { role: "root", .. })
         ));
 
         let mut wrong_helper = observed();
@@ -631,7 +512,7 @@ mod tests {
         assert!(matches!(
             admit_observed_closure(&wrong_helper),
             Err(
-                CollectedExecutableScalarControlFlowErrorV1::IdentityMismatch {
+                CollectedExecutableScalarControlFlowErrorV2::IdentityMismatch {
                     role: "helper",
                     ..
                 }
@@ -639,17 +520,17 @@ mod tests {
         ));
 
         let mut wrong_signature = observed();
-        wrong_signature.functions[1].signature = ExactSignatureV1::KernelU32ToUnit;
+        wrong_signature.functions[1].signature = ExactSignatureV2::KernelU32ToUnit;
         assert!(matches!(
             admit_observed_closure(&wrong_signature),
-            Err(CollectedExecutableScalarControlFlowErrorV1::AbiMismatch { role: "helper", .. })
+            Err(CollectedExecutableScalarControlFlowErrorV2::AbiMismatch { role: "helper", .. })
         ));
 
         let mut substituted = observed();
         substituted.root_call_target = 3;
         assert!(matches!(
             admit_observed_closure(&substituted),
-            Err(CollectedExecutableScalarControlFlowErrorV1::CallTargetSubstitution)
+            Err(CollectedExecutableScalarControlFlowErrorV2::CallTargetSubstitution)
         ));
     }
 
@@ -659,8 +540,32 @@ mod tests {
         observed.helper_call_count = 1;
         assert_eq!(
             admit_observed_closure(&observed).unwrap_err().to_string(),
-            "unsupported collected scalar-control-flow V1 shape: fixed helper must have no direct calls, found 1"
+            "unsupported collected scalar-control-flow V2 shape: fixed helper must have no direct calls, found 1"
         );
+    }
+
+    #[test]
+    fn unsupported_statement_operation_type_and_cfg_substitutions_fail_closed() {
+        for byte in [0, 7, 31] {
+            let mut changed_body = observed();
+            changed_body.functions[1].cfg_identity[byte] ^= 1;
+            assert!(matches!(
+                admit_observed_closure(&changed_body),
+                Err(
+                    CollectedExecutableScalarControlFlowErrorV2::IdentityMismatch {
+                        role: "helper",
+                        ..
+                    }
+                )
+            ));
+        }
+
+        let mut changed_type = observed();
+        changed_type.functions[1].signature = ExactSignatureV2::KernelU32ToUnit;
+        assert!(matches!(
+            admit_observed_closure(&changed_type),
+            Err(CollectedExecutableScalarControlFlowErrorV2::AbiMismatch { role: "helper", .. })
+        ));
     }
 
     #[test]
@@ -670,13 +575,13 @@ mod tests {
             admit_execution_context("gfx942:xnack+", false)
                 .unwrap_err()
                 .to_string(),
-            "collected scalar-control-flow V1 requires exact target `gfx942:xnack-`, found `gfx942:xnack+`"
+            "collected scalar-control-flow V2 requires exact target `gfx942:xnack-`, found `gfx942:xnack+`"
         );
         assert_eq!(
             admit_execution_context(EXACT_SCALAR_V2_TARGET, true)
                 .unwrap_err()
                 .to_string(),
-            "collected scalar-control-flow V1 rejects custom LLVM pipeline selection"
+            "collected scalar-control-flow V2 rejects custom LLVM pipeline selection"
         );
     }
 }
