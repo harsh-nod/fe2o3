@@ -7,34 +7,53 @@ use rustc_abi::ExternAbi;
 use rustc_hir::Safety;
 use rustc_middle::mir::{Operand, TerminatorKind};
 use rustc_middle::ty::{EarlyBinder, Instance, InstanceKind, TyCtxt, TyKind, TypingEnv, UintTy};
+use sha2::{Digest as _, Sha256};
 
 use crate::AmdGpuTarget;
 use crate::collector::{CollectedFunction, CollectedFunctionRole, CollectionResult};
-use crate::executable_scalar_control_flow_v1::{
-    AuthenticatedScalarControlFlowCompositionV1, ExecutableScalarControlFlowErrorV1,
-};
 use crate::scalar_mir_v2::EXACT_SCALAR_V2_TARGET;
 
 pub(crate) const COLLECTED_SCALAR_CONTROL_FLOW_PIPELINE_V2: &str =
     "collected-executable-scalar-control-flow-v2";
-pub(crate) const NEXT_LOWERING_DEPENDENCY: &str = "repaired Scalar V1 accepted the role-preserving composition contract; executable-MIR capture/import for the authenticated helper remains required before lowering";
+pub(crate) const NEXT_LOWERING_DEPENDENCY: &str = "exact executable-MIR capture/import remains required before constructing any body-bound Scalar V1 lowering authority";
 const FIXED_KERNEL_EXPORT: &str = "scalar_control_flow_v1";
 const FIXED_LOGICAL_NAME: &str = "scalar_control_flow_v1";
+const COMPILER_SEMANTICS_DOMAIN_V2: &[u8] = b"fe2o3.scalar-control-flow.compiler-semantics.v2";
+const COLLECTED_AUTHORITY_DOMAIN_V2: &[u8] = b"fe2o3.scalar-control-flow.collected-authority.v2";
+const REVIEWED_RUSTC_RELEASE: &str = "1.96.0-nightly";
+const REVIEWED_RUSTC_COMMIT: &str = "55e86c996809902e8bbad512cfb4d2c18be446d9";
+const REVIEWED_RUSTC_LLVM: &str = "22.1.2";
 const PORTABLE_CLOSURE_IDENTITY: [u8; 32] = [
     0x47, 0xf3, 0xdd, 0x95, 0x22, 0x68, 0x91, 0x3b, 0x8f, 0xe9, 0xec, 0xe9, 0x94, 0x6c, 0x1a, 0x5f,
     0xaf, 0x42, 0xac, 0xbd, 0xe3, 0x54, 0x4d, 0xf5, 0x1b, 0x4d, 0xd8, 0x3e, 0xde, 0x6b, 0x03, 0x65,
 ];
-
-#[cfg(test)]
 const ROOT_CFG_IDENTITY: [u8; 32] = [
-    0xa3, 0xb2, 0xfb, 0x44, 0x1d, 0x62, 0x53, 0x21, 0x26, 0xd4, 0x4c, 0x05, 0x1c, 0xa1, 0x62, 0x56,
-    0xb2, 0xbe, 0x79, 0xf5, 0x9b, 0x26, 0xef, 0x4d, 0x20, 0x51, 0x0b, 0xcd, 0x33, 0x1b, 0xa6, 0x21,
+    0x9a, 0x21, 0x79, 0xa1, 0x3a, 0x84, 0x27, 0xe1, 0x7e, 0x22, 0x4b, 0xe6, 0x51, 0x68, 0xc3, 0x9b,
+    0x34, 0xc2, 0x12, 0xcf, 0x9f, 0x10, 0x01, 0xa0, 0x3d, 0x04, 0x0b, 0xd6, 0xcd, 0x32, 0x48, 0x1c,
 ];
-#[cfg(test)]
 const HELPER_CFG_IDENTITY: [u8; 32] = [
-    0xbd, 0xed, 0x0e, 0x3d, 0xa6, 0x30, 0x3a, 0x42, 0xb6, 0x3c, 0xd2, 0x35, 0x28, 0x4c, 0xce, 0xc6,
-    0xa0, 0x3e, 0x92, 0xb7, 0xb2, 0xf5, 0xc4, 0xe7, 0x6b, 0x41, 0x29, 0x85, 0x97, 0xe8, 0x6c, 0x2d,
+    0xb0, 0x63, 0x4e, 0xea, 0x02, 0xb2, 0x3d, 0x62, 0xec, 0x50, 0xb4, 0x48, 0xd6, 0x32, 0xdf, 0x02,
+    0xd5, 0x52, 0xc6, 0x25, 0x1b, 0x65, 0x42, 0x39, 0xd4, 0x1f, 0x64, 0xd3, 0x79, 0xab, 0x8e, 0x19,
 ];
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct CompilerSemanticsV2 {
+    rustc_release: &'static str,
+    rustc_commit: &'static str,
+    llvm_version: &'static str,
+    panic_strategy: String,
+    overflow_checks: bool,
+    optimize: String,
+    debug_assertions: bool,
+    mir_opt_level: usize,
+    mir_enable_passes: Vec<(String, bool)>,
+    llvm_args: Vec<String>,
+    llvm_passes: Vec<String>,
+    target_cpu: Option<String>,
+    target_features: String,
+    rustc_codegen_opt_level: String,
+    remap_path_destinations: Vec<String>,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ExactSignatureV2 {
@@ -59,18 +78,27 @@ struct ObservedClosureV2<I> {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AuthenticatedCollectedScalarControlFlowV2 {
-    composition: AuthenticatedScalarControlFlowCompositionV1,
+    kernel_export: String,
+    root_instance_identity: String,
+    helper_instance_identity: String,
     root_cfg_identity: [u8; 32],
     helper_cfg_identity: [u8; 32],
+    portable_mir_semantic_commitment: [u8; 32],
+    compiler_semantics_commitment: [u8; 32],
+    authority_commitment: [u8; 32],
 }
 
 impl AuthenticatedCollectedScalarControlFlowV2 {
     pub(crate) fn kernel_export(&self) -> &str {
-        self.composition.kernel_export_symbol()
+        &self.kernel_export
     }
 
-    pub(crate) const fn composition(&self) -> &AuthenticatedScalarControlFlowCompositionV1 {
-        &self.composition
+    pub(crate) fn root_instance_identity(&self) -> &str {
+        &self.root_instance_identity
+    }
+
+    pub(crate) fn helper_instance_identity(&self) -> &str {
+        &self.helper_instance_identity
     }
 
     pub(crate) fn root_identity_hex(&self) -> String {
@@ -80,6 +108,18 @@ impl AuthenticatedCollectedScalarControlFlowV2 {
     pub(crate) fn helper_identity_hex(&self) -> String {
         encode_hex(&self.helper_cfg_identity)
     }
+
+    pub(crate) fn compiler_semantics_hex(&self) -> String {
+        encode_hex(&self.compiler_semantics_commitment)
+    }
+
+    pub(crate) fn portable_mir_semantic_hex(&self) -> String {
+        encode_hex(&self.portable_mir_semantic_commitment)
+    }
+
+    pub(crate) fn authority_hex(&self) -> String {
+        encode_hex(&self.authority_commitment)
+    }
 }
 
 #[derive(Debug)]
@@ -88,6 +128,9 @@ pub(crate) enum CollectedExecutableScalarControlFlowErrorV2 {
         actual: String,
     },
     CustomPipeline,
+    CompilerSemantics {
+        detail: String,
+    },
     UnsupportedCollection {
         detail: String,
     },
@@ -104,7 +147,6 @@ pub(crate) enum CollectedExecutableScalarControlFlowErrorV2 {
     PortableMir {
         detail: String,
     },
-    Composition(ExecutableScalarControlFlowErrorV1),
 }
 
 impl fmt::Display for CollectedExecutableScalarControlFlowErrorV2 {
@@ -116,6 +158,10 @@ impl fmt::Display for CollectedExecutableScalarControlFlowErrorV2 {
             ),
             Self::CustomPipeline => formatter.write_str(
                 "collected scalar-control-flow V2 rejects custom LLVM pipeline selection",
+            ),
+            Self::CompilerSemantics { detail } => write!(
+                formatter,
+                "collected scalar-control-flow V2 compiler semantics mismatch: {detail}"
             ),
             Self::UnsupportedCollection { detail } => write!(
                 formatter,
@@ -142,20 +188,13 @@ impl fmt::Display for CollectedExecutableScalarControlFlowErrorV2 {
                 formatter,
                 "collected scalar-control-flow V2 portable MIR rejected: {detail}"
             ),
-            Self::Composition(error) => write!(
-                formatter,
-                "collected scalar-control-flow V2 composition authority failed: {error}"
-            ),
         }
     }
 }
 
 impl Error for CollectedExecutableScalarControlFlowErrorV2 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Composition(error) => Some(error),
-            _ => None,
-        }
+        None
     }
 }
 
@@ -167,6 +206,8 @@ pub(crate) fn authenticate_collected_executable_scalar_control_flow_v2<'tcx>(
 ) -> Result<AuthenticatedCollectedScalarControlFlowV2, CollectedExecutableScalarControlFlowErrorV2>
 {
     admit_execution_context(target.as_str(), custom_llvm_pipeline)?;
+    let compiler_semantics = observe_compiler_semantics(tcx);
+    let compiler_semantics_commitment = require_compiler_semantics(&compiler_semantics)?;
 
     let (root, helper) = exact_collected_pair(&collection.functions)?;
     if root.export_name != FIXED_KERNEL_EXPORT
@@ -191,16 +232,28 @@ pub(crate) fn authenticate_collected_executable_scalar_control_flow_v2<'tcx>(
                 detail: error.to_string(),
             },
         )?;
-    require_portable_closure_identity(*portable_identity.as_bytes())?;
-    let composition =
-        AuthenticatedScalarControlFlowCompositionV1::from_authenticated_collected_pair(
-            tcx, root, helper,
-        )
-        .map_err(CollectedExecutableScalarControlFlowErrorV2::Composition)?;
+    let portable_mir_semantic_commitment = *portable_identity.as_bytes();
+    require_portable_closure_identity(portable_mir_semantic_commitment)?;
+    let root_instance_identity = tcx.def_path_str(root.instance.def_id());
+    let helper_instance_identity = tcx.def_path_str(helper.instance.def_id());
+    let authority_commitment = collected_authority_commitment(
+        portable_mir_semantic_commitment,
+        observed.functions[0].cfg_identity,
+        observed.functions[1].cfg_identity,
+        compiler_semantics_commitment,
+        &root_instance_identity,
+        &helper_instance_identity,
+        &root.export_name,
+    );
     Ok(AuthenticatedCollectedScalarControlFlowV2 {
-        composition,
+        kernel_export: root.export_name.clone(),
+        root_instance_identity,
+        helper_instance_identity,
         root_cfg_identity: observed.functions[0].cfg_identity,
         helper_cfg_identity: observed.functions[1].cfg_identity,
+        portable_mir_semantic_commitment,
+        compiler_semantics_commitment,
+        authority_commitment,
     })
 }
 
@@ -217,6 +270,155 @@ fn admit_execution_context(
         return Err(CollectedExecutableScalarControlFlowErrorV2::CustomPipeline);
     }
     Ok(())
+}
+
+fn observe_compiler_semantics(tcx: TyCtxt<'_>) -> CompilerSemanticsV2 {
+    CompilerSemanticsV2 {
+        rustc_release: env!("FE2O3_BUILD_RUSTC_RELEASE"),
+        rustc_commit: env!("FE2O3_BUILD_RUSTC_COMMIT"),
+        llvm_version: env!("FE2O3_BUILD_RUSTC_LLVM"),
+        panic_strategy: format!("{:?}", tcx.sess.panic_strategy()),
+        overflow_checks: tcx.sess.overflow_checks(),
+        optimize: format!("{:?}", tcx.sess.opts.optimize),
+        debug_assertions: tcx.sess.opts.debug_assertions,
+        mir_opt_level: tcx.sess.mir_opt_level(),
+        mir_enable_passes: tcx.sess.opts.unstable_opts.mir_enable_passes.clone(),
+        llvm_args: tcx.sess.opts.cg.llvm_args.clone(),
+        llvm_passes: tcx.sess.opts.cg.passes.clone(),
+        target_cpu: tcx.sess.opts.cg.target_cpu.clone(),
+        target_features: tcx.sess.opts.cg.target_feature.clone(),
+        rustc_codegen_opt_level: tcx.sess.opts.cg.opt_level.clone(),
+        remap_path_destinations: tcx
+            .sess
+            .opts
+            .remap_path_prefix
+            .iter()
+            .map(|(_, destination)| destination.display().to_string())
+            .collect(),
+    }
+}
+
+fn require_compiler_semantics(
+    observed: &CompilerSemanticsV2,
+) -> Result<[u8; 32], CollectedExecutableScalarControlFlowErrorV2> {
+    let expected_mir_passes = [("JumpThreading".to_owned(), false)];
+    let mismatch = if observed.rustc_release != REVIEWED_RUSTC_RELEASE {
+        Some(format!(
+            "rustc release must be {REVIEWED_RUSTC_RELEASE}, found {}",
+            observed.rustc_release
+        ))
+    } else if observed.rustc_commit != REVIEWED_RUSTC_COMMIT {
+        Some(format!(
+            "rustc commit must be {REVIEWED_RUSTC_COMMIT}, found {}",
+            observed.rustc_commit
+        ))
+    } else if observed.llvm_version != REVIEWED_RUSTC_LLVM {
+        Some(format!(
+            "rustc LLVM must be {REVIEWED_RUSTC_LLVM}, found {}",
+            observed.llvm_version
+        ))
+    } else if observed.panic_strategy != "Unwind" {
+        Some(format!(
+            "panic strategy must be Unwind, found {}",
+            observed.panic_strategy
+        ))
+    } else if observed.overflow_checks {
+        Some("overflow checks must be disabled".to_owned())
+    } else if observed.optimize != "No" || observed.rustc_codegen_opt_level != "0" {
+        Some(format!(
+            "rustc optimization must be No/0, found {}/{}",
+            observed.optimize, observed.rustc_codegen_opt_level
+        ))
+    } else if !observed.debug_assertions {
+        Some("debug assertions must be enabled".to_owned())
+    } else if observed.mir_opt_level != 1 {
+        Some(format!(
+            "effective MIR optimization level must be 1, found {}",
+            observed.mir_opt_level
+        ))
+    } else if observed.mir_enable_passes != expected_mir_passes {
+        Some(format!(
+            "MIR pass overrides must be exactly -JumpThreading, found {:?}",
+            observed.mir_enable_passes
+        ))
+    } else if !observed.llvm_args.is_empty() || !observed.llvm_passes.is_empty() {
+        Some("custom LLVM arguments or passes are forbidden".to_owned())
+    } else if observed.target_cpu.is_some() || !observed.target_features.is_empty() {
+        Some(format!(
+            "rustc target CPU/features must be unset, found {:?}/{:?}",
+            observed.target_cpu, observed.target_features
+        ))
+    } else if observed.remap_path_destinations
+        != ["/fe2o3-reviewed-workspace/scalar-control-flow-v1.rs"]
+    {
+        Some(format!(
+            "source remapping must contain exactly one canonical fixture destination, found {:?}",
+            observed.remap_path_destinations
+        ))
+    } else {
+        None
+    };
+    if let Some(detail) = mismatch {
+        return Err(CollectedExecutableScalarControlFlowErrorV2::CompilerSemantics { detail });
+    }
+
+    let mut digest = Sha256::new();
+    hash_field(&mut digest, COMPILER_SEMANTICS_DOMAIN_V2);
+    hash_field(&mut digest, observed.rustc_release.as_bytes());
+    hash_field(&mut digest, observed.rustc_commit.as_bytes());
+    hash_field(&mut digest, observed.llvm_version.as_bytes());
+    hash_field(&mut digest, observed.panic_strategy.as_bytes());
+    hash_field(&mut digest, &[u8::from(observed.overflow_checks)]);
+    hash_field(&mut digest, observed.optimize.as_bytes());
+    hash_field(&mut digest, &[u8::from(observed.debug_assertions)]);
+    hash_field(&mut digest, &(observed.mir_opt_level as u64).to_le_bytes());
+    for (name, enabled) in &observed.mir_enable_passes {
+        hash_field(&mut digest, name.as_bytes());
+        hash_field(&mut digest, &[u8::from(*enabled)]);
+    }
+    for argument in &observed.llvm_args {
+        hash_field(&mut digest, argument.as_bytes());
+    }
+    for pass in &observed.llvm_passes {
+        hash_field(&mut digest, pass.as_bytes());
+    }
+    match &observed.target_cpu {
+        Some(cpu) => {
+            hash_field(&mut digest, &[1]);
+            hash_field(&mut digest, cpu.as_bytes());
+        }
+        None => hash_field(&mut digest, &[0]),
+    }
+    hash_field(&mut digest, observed.target_features.as_bytes());
+    hash_field(&mut digest, observed.rustc_codegen_opt_level.as_bytes());
+    hash_field(&mut digest, observed.remap_path_destinations[0].as_bytes());
+    Ok(digest.finalize().into())
+}
+
+fn collected_authority_commitment(
+    portable_identity: [u8; 32],
+    root_cfg_identity: [u8; 32],
+    helper_cfg_identity: [u8; 32],
+    compiler_semantics: [u8; 32],
+    root_instance_identity: &str,
+    helper_instance_identity: &str,
+    kernel_export: &str,
+) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    hash_field(&mut digest, COLLECTED_AUTHORITY_DOMAIN_V2);
+    hash_field(&mut digest, &portable_identity);
+    hash_field(&mut digest, &root_cfg_identity);
+    hash_field(&mut digest, &helper_cfg_identity);
+    hash_field(&mut digest, &compiler_semantics);
+    hash_field(&mut digest, root_instance_identity.as_bytes());
+    hash_field(&mut digest, helper_instance_identity.as_bytes());
+    hash_field(&mut digest, kernel_export.as_bytes());
+    digest.finalize().into()
+}
+
+fn hash_field(digest: &mut Sha256, bytes: &[u8]) {
+    digest.update((bytes.len() as u64).to_le_bytes());
+    digest.update(bytes);
 }
 
 fn exact_collected_pair<'a, 'tcx>(
@@ -317,6 +519,8 @@ fn admit_observed_closure<I: Eq>(
     }
     require_signature(root, ExactSignatureV2::KernelU32ToUnit, "root")?;
     require_signature(helper, ExactSignatureV2::HelperU32ToU32, "helper")?;
+    require_cfg_identity(root, ROOT_CFG_IDENTITY, "root")?;
+    require_cfg_identity(helper, HELPER_CFG_IDENTITY, "helper")?;
     if observed.root_call_target != helper.identity {
         return Err(CollectedExecutableScalarControlFlowErrorV2::CallTargetSubstitution);
     }
@@ -367,6 +571,12 @@ fn exact_signature<'tcx>(
         return Err(abi_mismatch(
             role,
             format!("expected an ordinary item, found {:?}", instance.def),
+        ));
+    }
+    if !instance.args.is_empty() {
+        return Err(abi_mismatch(
+            role,
+            "fixed scalar-control-flow V2 does not admit generic instances",
         ));
     }
     let signature = tcx
@@ -452,6 +662,23 @@ fn collected_cfg_identity(
         .ok_or_else(|| unsupported_collection(format!("{role} has no compiler MIR observation")))
 }
 
+fn require_cfg_identity<I>(
+    function: &ObservedFunctionV2<I>,
+    expected: [u8; 32],
+    role: &'static str,
+) -> Result<(), CollectedExecutableScalarControlFlowErrorV2> {
+    if function.cfg_identity != expected {
+        return Err(
+            CollectedExecutableScalarControlFlowErrorV2::IdentityMismatch {
+                role,
+                expected,
+                actual: function.cfg_identity,
+            },
+        );
+    }
+    Ok(())
+}
+
 fn unsupported_collection(
     detail: impl Into<String>,
 ) -> CollectedExecutableScalarControlFlowErrorV2 {
@@ -483,6 +710,28 @@ fn encode_hex(bytes: &[u8; 32]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn compiler_semantics() -> CompilerSemanticsV2 {
+        CompilerSemanticsV2 {
+            rustc_release: REVIEWED_RUSTC_RELEASE,
+            rustc_commit: REVIEWED_RUSTC_COMMIT,
+            llvm_version: REVIEWED_RUSTC_LLVM,
+            panic_strategy: "Unwind".to_owned(),
+            overflow_checks: false,
+            optimize: "No".to_owned(),
+            debug_assertions: true,
+            mir_opt_level: 1,
+            mir_enable_passes: vec![("JumpThreading".to_owned(), false)],
+            llvm_args: Vec::new(),
+            llvm_passes: Vec::new(),
+            target_cpu: None,
+            target_features: String::new(),
+            rustc_codegen_opt_level: "0".to_owned(),
+            remap_path_destinations: vec![
+                "/fe2o3-reviewed-workspace/scalar-control-flow-v1.rs".to_owned(),
+            ],
+        }
+    }
 
     fn observed() -> ObservedClosureV2<u8> {
         ObservedClosureV2 {
@@ -554,6 +803,13 @@ mod tests {
             admit_observed_closure(&substituted),
             Err(CollectedExecutableScalarControlFlowErrorV2::CallTargetSubstitution)
         ));
+
+        let mut changed_mir = observed();
+        changed_mir.functions[0].cfg_identity[0] ^= 1;
+        assert!(matches!(
+            admit_observed_closure(&changed_mir),
+            Err(CollectedExecutableScalarControlFlowErrorV2::IdentityMismatch { role: "root", .. })
+        ));
     }
 
     #[test]
@@ -599,5 +855,64 @@ mod tests {
                 .to_string(),
             "collected scalar-control-flow V2 rejects custom LLVM pipeline selection"
         );
+    }
+
+    #[test]
+    fn compiler_semantics_commitment_rejects_mir_and_codegen_mutations() {
+        let baseline = require_compiler_semantics(&compiler_semantics()).unwrap();
+        assert_eq!(
+            baseline,
+            require_compiler_semantics(&compiler_semantics()).unwrap()
+        );
+
+        let mut panic_abort = compiler_semantics();
+        panic_abort.panic_strategy = "Abort".to_owned();
+        assert!(matches!(
+            require_compiler_semantics(&panic_abort),
+            Err(CollectedExecutableScalarControlFlowErrorV2::CompilerSemantics { .. })
+        ));
+
+        let mut changed_mir_passes = compiler_semantics();
+        changed_mir_passes.mir_enable_passes.clear();
+        assert!(require_compiler_semantics(&changed_mir_passes).is_err());
+
+        let mut optimized = compiler_semantics();
+        optimized.optimize = "More".to_owned();
+        optimized.rustc_codegen_opt_level = "2".to_owned();
+        assert!(require_compiler_semantics(&optimized).is_err());
+
+        let mut target_cpu = compiler_semantics();
+        target_cpu.target_cpu = Some("native".to_owned());
+        assert!(require_compiler_semantics(&target_cpu).is_err());
+
+        let mut target_features = compiler_semantics();
+        target_features.target_features = "+avx2".to_owned();
+        assert!(require_compiler_semantics(&target_features).is_err());
+
+        let mut llvm_argument = compiler_semantics();
+        llvm_argument.llvm_args.push("-verify-each".to_owned());
+        assert!(require_compiler_semantics(&llvm_argument).is_err());
+
+        let mut overflow_checks = compiler_semantics();
+        overflow_checks.overflow_checks = true;
+        assert!(require_compiler_semantics(&overflow_checks).is_err());
+
+        let mut debug_assertions = compiler_semantics();
+        debug_assertions.debug_assertions = false;
+        assert!(require_compiler_semantics(&debug_assertions).is_err());
+
+        let mut remap_substitution = compiler_semantics();
+        remap_substitution.remap_path_destinations = vec!["/attacker.rs".to_owned()];
+        assert!(require_compiler_semantics(&remap_substitution).is_err());
+
+        let mut extra_remap = compiler_semantics();
+        extra_remap
+            .remap_path_destinations
+            .push("/attacker.rs".to_owned());
+        assert!(require_compiler_semantics(&extra_remap).is_err());
+
+        let mut different_compiler = compiler_semantics();
+        different_compiler.rustc_commit = "0000000000000000000000000000000000000000";
+        assert!(require_compiler_semantics(&different_compiler).is_err());
     }
 }

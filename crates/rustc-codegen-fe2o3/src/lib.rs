@@ -436,15 +436,16 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                     })();
                     match lowering {
                         Ok(admission) => tcx.dcx().fatal(format!(
-                            "[rustc-codegen-fe2o3] {} authenticated collected KernelEntry export `{}` with root MIR {} and exact reachable InternalHelper MIR {} sealed as internal symbol `{}`; {}; no Kernel IR, LLVM, LLD, HSACO, or legacy fallback was entered",
+                            "[rustc-codegen-fe2o3] {} authenticated collected KernelEntry `{}` export `{}` with exact reviewed root MIR {} and exact reachable InternalHelper `{}` MIR {}; path-independent portable MIR semantics {}; compiler semantics {}; sealed collected authority {}; {}; no executable authority, Kernel IR, LLVM, LLD, HSACO, or legacy fallback was entered",
                             collected_executable_scalar_control_flow_v2::COLLECTED_SCALAR_CONTROL_FLOW_PIPELINE_V2,
+                            admission.root_instance_identity(),
                             admission.kernel_export(),
                             admission.root_identity_hex(),
+                            admission.helper_instance_identity(),
                             admission.helper_identity_hex(),
-                            admission
-                                .composition()
-                                .internal_helper_authority()
-                                .emitted_symbol(),
+                            admission.portable_mir_semantic_hex(),
+                            admission.compiler_semantics_hex(),
+                            admission.authority_hex(),
                             collected_executable_scalar_control_flow_v2::NEXT_LOWERING_DEPENDENCY,
                         )),
                         Err(error) => tcx.dcx().fatal(format!(

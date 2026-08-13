@@ -30,27 +30,39 @@ The same checked source therefore authenticates in a different worktree while
 a semantic rewrite rejects. Malformed Rust/MIR rejected by rustc never reaches
 admission.
 
-The selector also rejects a non-exact target, any `-Cllvm-args` or `-Cpasses`
-pipeline, and unsupported collection shapes. Every rejection is fatal and has
-no legacy or artifact fallback.
+The selector pins the rustc release, commit, and bundled LLVM version. It also
+requires the reviewed panic strategy, overflow/debug-assertion behavior,
+optimization level, MIR optimization and pass overrides, target CPU/features,
+LLVM arguments/passes, and canonical source-remap destination. The remap source
+is checkout-specific and therefore excluded; exact full rustc MIR identities
+after remapping are pinned for both functions. The compiler-semantics
+commitment is domain-separated and included in the sealed collected authority.
+
+The selector also rejects a non-exact `gfx942:xnack-` device target and
+unsupported collection shapes. Every rejection is fatal and has no legacy or
+artifact fallback.
 
 ## Deliberate stop
 
-Repaired Scalar V1 now supplies a sealed, role-preserving composition contract.
-V2 constructs it only after authenticating the exact collected root, helper,
-and direct-call edge. The contract retains the `KernelEntry` identity and exact
-collected export symbol while deriving an identity- and role-bound symbol for
-the `InternalHelper`; lowering that helper emits internal LLVM linkage. V1 also
-precharges its CFG and operation budgets and binds the reviewed data layout,
-`gfx942`, wave64, and `xnack-` in direct LLVM.
+Repaired Scalar V1 supplies a sealed, role-preserving composition contract, but
+V2 does not construct it. V2 authenticates the exact collected root, helper,
+direct-call edge, full rustc MIR identities, portable MIR semantics, and
+compiler semantics, then returns only a sealed collected authority.
+Constructing V1 authority additionally requires exact validated executable-MIR
+imports for both functions. That contract retains the `KernelEntry` identity,
+body digest, and exact collected export symbol while deriving an identity- and
+role-bound symbol for the `InternalHelper`; lowering that helper emits internal
+LLVM linkage. V1 also precharges its CFG and operation budgets and binds the
+reviewed data layout, `gfx942`, wave64, and `xnack-` in direct LLVM.
 
 V2 still emits no Kernel IR, LLVM IR, LLD input, HSACO, or hardware claim after
 successful admission. The remaining frontend dependency is an authenticated
-executable-MIR capture/import for the exact collected helper. That importer
-must preserve the helper identity consumed by the composition contract rather
-than rebuilding authority from serialized MIR or a function name. Once that
-bridge is reviewed, the next dependencies are kernel-root body composition,
-direct COV6/LLD production, and execution on matching gfx942 hardware.
+executable-MIR capture/import for the exact collected root and helper. That
+importer must bind each exact executable body digest to its collected evidence
+rather than rebuilding authority from serialized MIR or a function name. Once
+that bridge is reviewed, the next dependencies are kernel-root body
+composition, direct COV6/LLD production, and execution on matching gfx942
+hardware.
 
 ## Boundary limitation
 
