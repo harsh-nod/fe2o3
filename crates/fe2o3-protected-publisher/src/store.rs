@@ -29,16 +29,25 @@ use crate::receipt::{
 };
 use crate::secure_fs::{FileIdentity, SecureLocation};
 
-const LEDGER_MAGIC: &[u8] = b"fe2o3-protected-publisher-ledger-v2\0";
+const LEDGER_MAGIC: &[u8] = b"fe2o3-protected-publisher-ledger-v3\0";
 #[cfg(test)]
-const LEGACY_LEDGER_MAGIC: &[u8] = b"fe2o3-protected-publisher-ledger-v1\0";
-const FRAME_MAGIC: &[u8; 8] = b"F2O3REC2";
-const FRAME_VERSION: u32 = 2;
+const LEGACY_LEDGER_MAGICS: [&[u8]; 2] = [
+    b"fe2o3-protected-publisher-ledger-v1\0",
+    b"fe2o3-protected-publisher-ledger-v2\0",
+];
+const FRAME_MAGIC: &[u8; 8] = b"F2O3REC3";
+const FRAME_VERSION: u32 = 3;
 const FRAME_PREFIX_BYTES: usize = 8 + 4 + 4 + 8 + 32;
 const FRAME_HASH_BYTES: usize = 32;
-const FRAME_TRAILER_MAGIC: &[u8; 8] = b"F2O3CMT2";
+const FRAME_TRAILER_MAGIC: &[u8; 8] = b"F2O3CMT3";
 const FRAME_TRAILER_BYTES: usize = 8 + 8 + 8 + 32 + 32 + 8;
 const MIN_FRAME_BYTES: usize = FRAME_PREFIX_BYTES + 1 + FRAME_HASH_BYTES + FRAME_TRAILER_BYTES;
+const CHECKPOINT_MAGIC: &[u8; 8] = b"F2O3CP3!";
+const CHECKPOINT_END_MAGIC: &[u8; 8] = b"F2O3END3";
+const CHECKPOINT_VERSION: u32 = 3;
+const CHECKPOINT_COPY_BYTES: usize = 8 + 4 + 4 + 8 + 8 + 32 + 32 + 8;
+const CHECKPOINT_COPIES: usize = 3;
+const CHECKPOINT_REGION_BYTES: usize = CHECKPOINT_COPY_BYTES * CHECKPOINT_COPIES;
 const ZERO_HASH: [u8; 32] = [0; 32];
 const MAX_INDEXED_READ_INTERRUPTS: usize = 8;
 
@@ -61,6 +70,8 @@ pub struct DurableStore {
     policy: StorePolicy,
     location: SecureLocation,
     identity: FileIdentity,
+    checkpoint_offset: u64,
+    checkpoint_generation: u64,
     header_len: u64,
     tail_offset: u64,
     next_sequence: u64,
@@ -76,6 +87,8 @@ pub struct DurableStore {
     maximum_write_chunk: usize,
     #[cfg(test)]
     fail_write_after: Option<(usize, i32)>,
+    #[cfg(test)]
+    fail_checkpoint_write_after: Option<(usize, i32)>,
     #[cfg(test)]
     after_sync: Option<Box<dyn FnOnce() + Send>>,
     #[cfg(test)]
@@ -182,6 +195,13 @@ struct DecodedFrame {
     record: LedgerRecord,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CommitCheckpoint {
+    generation: u64,
+    tail_offset: u64,
+    tail_hash: [u8; 32],
+}
+
 impl DurableStore {
     #[cfg(test)]
     pub fn open(path: &Path) -> Result<Self, PublisherError> {
@@ -194,7 +214,11 @@ impl DurableStore {
     ) -> Result<Self, PublisherError> {
         policy.validate()?;
         let location = SecureLocation::open(path)?;
-        let header = ledger_header(&policy);
+        let header = ledger_header(&policy)?;
+        let checkpoint_offset = header
+            .len()
+            .checked_sub(CHECKPOINT_REGION_BYTES)
+            .ok_or(PublisherError::Store)? as u64;
         let (file, identity) = location.open_or_create_ledger(&header)?;
         if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
             return Err(PublisherError::Store);
@@ -205,6 +229,8 @@ impl DurableStore {
             policy,
             location,
             identity,
+            checkpoint_offset,
+            checkpoint_generation: 0,
             header_len: header.len() as u64,
             tail_offset: header.len() as u64,
             next_sequence: 1,
@@ -220,6 +246,8 @@ impl DurableStore {
             maximum_write_chunk: usize::MAX,
             #[cfg(test)]
             fail_write_after: None,
+            #[cfg(test)]
+            fail_checkpoint_write_after: None,
             #[cfg(test)]
             after_sync: None,
             #[cfg(test)]
@@ -255,24 +283,29 @@ impl DurableStore {
         self.file
             .read_exact(&mut header)
             .map_err(|_| PublisherError::Store)?;
-        if header != expected_header {
+        let checkpoint_offset =
+            usize::try_from(self.checkpoint_offset).map_err(|_| PublisherError::Store)?;
+        if header[..checkpoint_offset] != expected_header[..checkpoint_offset] {
+            return Err(PublisherError::Store);
+        }
+
+        let checkpoint = select_checkpoint(
+            &header[checkpoint_offset..],
+            self.header_len,
+            self.policy.max_receipts,
+            self.policy.max_ledger_bytes,
+        )?;
+        if checkpoint.tail_offset > length {
             return Err(PublisherError::Store);
         }
 
         let mut offset = self.header_len;
-        while offset < length {
-            let remaining = length - offset;
+        while offset < checkpoint.tail_offset {
+            let remaining = checkpoint.tail_offset - offset;
             if remaining < FRAME_PREFIX_BYTES as u64 {
-                self.recover_torn_tail(offset)?;
-                break;
+                return Err(PublisherError::Store);
             }
-            let decoded = match self.read_frame(offset, remaining)? {
-                Some(frame) => frame,
-                None => {
-                    self.recover_torn_tail(offset)?;
-                    break;
-                }
-            };
+            let decoded = self.read_frame(offset, remaining)?;
             self.index_record(
                 offset,
                 decoded.frame_length,
@@ -291,6 +324,16 @@ impl DurableStore {
                 .ok_or(PublisherError::Store)?;
             self.tail_offset = offset;
         }
+        if offset != checkpoint.tail_offset
+            || self.next_sequence.checked_sub(1) != Some(checkpoint.generation)
+            || self.tail_hash != checkpoint.tail_hash
+        {
+            return Err(PublisherError::Store);
+        }
+        self.checkpoint_generation = checkpoint.generation;
+        if length > checkpoint.tail_offset {
+            self.recover_torn_tail(checkpoint.tail_offset)?;
+        }
         Ok(())
     }
 
@@ -303,11 +346,7 @@ impl DurableStore {
         Ok(())
     }
 
-    fn read_frame(
-        &mut self,
-        offset: u64,
-        remaining: u64,
-    ) -> Result<Option<DecodedFrame>, PublisherError> {
+    fn read_frame(&mut self, offset: u64, remaining: u64) -> Result<DecodedFrame, PublisherError> {
         self.file
             .seek(SeekFrom::Start(offset))
             .map_err(|_| PublisherError::Store)?;
@@ -317,10 +356,7 @@ impl DurableStore {
             .map_err(|_| PublisherError::Store)?;
         let frame_length = frame_length_from_prefix(&prefix, self.next_sequence, self.tail_hash)?;
         if remaining < frame_length as u64 {
-            if self.has_committed_frame_boundary(offset, remaining)? {
-                return Err(PublisherError::Store);
-            }
-            return Ok(None);
+            return Err(PublisherError::Store);
         }
         let mut frame = Vec::with_capacity(frame_length);
         frame.extend_from_slice(&prefix);
@@ -332,48 +368,7 @@ impl DurableStore {
             .read_exact(&mut rest)
             .map_err(|_| PublisherError::Store)?;
         frame.extend_from_slice(&rest);
-        decode_frame(&frame, self.next_sequence, self.tail_hash).map(Some)
-    }
-
-    fn has_committed_frame_boundary(
-        &mut self,
-        offset: u64,
-        remaining: u64,
-    ) -> Result<bool, PublisherError> {
-        if remaining < MIN_FRAME_BYTES as u64 {
-            return Ok(false);
-        }
-        let scan_length = usize::try_from(remaining.min(MAX_LEDGER_FRAME_BYTES as u64))
-            .map_err(|_| PublisherError::Store)?;
-        self.file
-            .seek(SeekFrom::Start(offset))
-            .map_err(|_| PublisherError::Store)?;
-        let mut bytes = vec![0u8; scan_length];
-        self.file
-            .read_exact(&mut bytes)
-            .map_err(|_| PublisherError::Store)?;
-        for magic_start in (FRAME_TRAILER_BYTES - FRAME_TRAILER_MAGIC.len()
-            ..=scan_length.saturating_sub(FRAME_TRAILER_MAGIC.len()))
-            .filter(|start| {
-                bytes[*start..*start + FRAME_TRAILER_MAGIC.len()] == *FRAME_TRAILER_MAGIC
-            })
-        {
-            let trailer_end = magic_start + FRAME_TRAILER_MAGIC.len();
-            if trailer_end < FRAME_TRAILER_BYTES {
-                continue;
-            }
-            let trailer = &bytes[trailer_end - FRAME_TRAILER_BYTES..trailer_end];
-            let declared = u64::from_be_bytes(trailer[..8].try_into().unwrap());
-            let inverse = u64::from_be_bytes(trailer[8..16].try_into().unwrap());
-            let sequence = u64::from_be_bytes(trailer[16..24].try_into().unwrap());
-            if declared == trailer_end as u64
-                && inverse == !declared
-                && sequence == self.next_sequence
-            {
-                return Ok(true);
-            }
-        }
-        Ok(false)
+        decode_frame(&frame, self.next_sequence, self.tail_hash)
     }
 
     fn index_record(
@@ -522,6 +517,16 @@ impl DurableStore {
         let frame_offset = self.tail_offset;
         let frame_sequence = self.next_sequence;
         let previous_hash = self.tail_hash;
+        let checkpoint = CommitCheckpoint {
+            generation: frame_sequence,
+            tail_offset: new_tail,
+            tail_hash: decoded.frame_hash,
+        };
+        if self.persist_checkpoint(checkpoint).is_err() {
+            self.poisoned = true;
+            return Err(PublisherError::Store);
+        }
+        self.checkpoint_generation = checkpoint.generation;
         self.tail_offset = new_tail;
         self.tail_hash = decoded.frame_hash;
         self.next_sequence = frame_sequence.checked_add(1).ok_or(PublisherError::Store)?;
@@ -577,6 +582,74 @@ impl DurableStore {
         if let Some(hook) = self.after_sync.take() {
             hook();
         }
+        self.verify_identity()
+    }
+
+    fn persist_checkpoint(&mut self, checkpoint: CommitCheckpoint) -> Result<(), PublisherError> {
+        if checkpoint.generation
+            != self
+                .checkpoint_generation
+                .checked_add(1)
+                .ok_or(PublisherError::Store)?
+            || checkpoint.tail_offset <= self.tail_offset
+            || checkpoint.tail_offset > self.policy.max_ledger_bytes
+            || checkpoint.tail_hash == ZERO_HASH
+        {
+            return Err(PublisherError::Store);
+        }
+        let encoded = encode_checkpoint(checkpoint);
+        #[cfg(test)]
+        let mut total_written = 0usize;
+        for copy in 0..CHECKPOINT_COPIES {
+            let copy_offset = self
+                .checkpoint_offset
+                .checked_add(
+                    u64::try_from(
+                        copy.checked_mul(CHECKPOINT_COPY_BYTES)
+                            .ok_or(PublisherError::Store)?,
+                    )
+                    .map_err(|_| PublisherError::Store)?,
+                )
+                .ok_or(PublisherError::Store)?;
+            let mut written = 0usize;
+            while written < encoded.len() {
+                #[cfg(test)]
+                if self
+                    .fail_checkpoint_write_after
+                    .is_some_and(|(threshold, _)| total_written >= threshold)
+                {
+                    let (_, errno) = self.fail_checkpoint_write_after.unwrap();
+                    let _injected = std::io::Error::from_raw_os_error(errno);
+                    return Err(PublisherError::Store);
+                }
+                let offset = copy_offset
+                    .checked_add(u64::try_from(written).map_err(|_| PublisherError::Store)?)
+                    .ok_or(PublisherError::Store)?;
+                #[cfg(test)]
+                let end = encoded
+                    .len()
+                    .min(written.saturating_add(self.maximum_write_chunk));
+                #[cfg(not(test))]
+                let end = encoded.len();
+                let count = loop {
+                    match self.file.write_at(&encoded[written..end], offset) {
+                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                        result => break result.map_err(|_| PublisherError::Store)?,
+                    }
+                };
+                if count == 0 {
+                    return Err(PublisherError::Store);
+                }
+                written = written.checked_add(count).ok_or(PublisherError::Store)?;
+                #[cfg(test)]
+                {
+                    total_written = total_written
+                        .checked_add(count)
+                        .ok_or(PublisherError::Store)?;
+                }
+            }
+        }
+        self.file.sync_data().map_err(|_| PublisherError::Store)?;
         self.verify_identity()
     }
 
@@ -795,6 +868,11 @@ impl DurableStore {
     }
 
     #[cfg(test)]
+    fn fail_checkpoint_write_after(&mut self, bytes: usize, errno: i32) {
+        self.fail_checkpoint_write_after = Some((bytes, errno));
+    }
+
+    #[cfg(test)]
     fn set_after_sync(&mut self, hook: impl FnOnce() + Send + 'static) {
         self.after_sync = Some(Box::new(hook));
     }
@@ -850,12 +928,129 @@ impl Drop for DurableStore {
     }
 }
 
-fn ledger_header(policy: &StorePolicy) -> Vec<u8> {
-    let mut header = Vec::with_capacity(LEDGER_MAGIC.len() + policy.ledger_domain.len() + 1);
+fn ledger_header(policy: &StorePolicy) -> Result<Vec<u8>, PublisherError> {
+    let static_bytes = LEDGER_MAGIC
+        .len()
+        .checked_add(policy.ledger_domain.len())
+        .and_then(|length| length.checked_add(1))
+        .ok_or(PublisherError::Store)?;
+    let header_len = static_bytes
+        .checked_add(CHECKPOINT_REGION_BYTES)
+        .ok_or(PublisherError::Store)?;
+    let tail_offset = u64::try_from(header_len).map_err(|_| PublisherError::Store)?;
+    if tail_offset > policy.max_ledger_bytes {
+        return Err(PublisherError::Store);
+    }
+    let mut header = Vec::with_capacity(header_len);
     header.extend_from_slice(LEDGER_MAGIC);
     header.extend_from_slice(policy.ledger_domain.as_bytes());
     header.push(b'\n');
-    header
+    let initial = encode_checkpoint(CommitCheckpoint {
+        generation: 0,
+        tail_offset,
+        tail_hash: ZERO_HASH,
+    });
+    for _ in 0..CHECKPOINT_COPIES {
+        header.extend_from_slice(&initial);
+    }
+    if header.len() != header_len {
+        return Err(PublisherError::Store);
+    }
+    Ok(header)
+}
+
+fn encode_checkpoint(checkpoint: CommitCheckpoint) -> [u8; CHECKPOINT_COPY_BYTES] {
+    let mut encoded = [0u8; CHECKPOINT_COPY_BYTES];
+    encoded[..8].copy_from_slice(CHECKPOINT_MAGIC);
+    encoded[8..12].copy_from_slice(&CHECKPOINT_VERSION.to_be_bytes());
+    encoded[16..24].copy_from_slice(&checkpoint.generation.to_be_bytes());
+    encoded[24..32].copy_from_slice(&checkpoint.tail_offset.to_be_bytes());
+    encoded[32..64].copy_from_slice(&checkpoint.tail_hash);
+    let mut digest = Sha256::new();
+    digest.update(b"fe2o3-protected-publisher-ledger-checkpoint-v3\0");
+    digest.update(&encoded[..64]);
+    digest.update(CHECKPOINT_END_MAGIC);
+    let checksum: [u8; 32] = digest.finalize().into();
+    encoded[64..96].copy_from_slice(&checksum);
+    encoded[96..].copy_from_slice(CHECKPOINT_END_MAGIC);
+    encoded
+}
+
+fn decode_checkpoint(encoded: &[u8]) -> Option<CommitCheckpoint> {
+    if encoded.len() != CHECKPOINT_COPY_BYTES
+        || &encoded[..8] != CHECKPOINT_MAGIC
+        || u32::from_be_bytes(encoded[8..12].try_into().ok()?) != CHECKPOINT_VERSION
+        || encoded[12..16] != [0; 4]
+        || &encoded[96..] != CHECKPOINT_END_MAGIC
+    {
+        return None;
+    }
+    let mut digest = Sha256::new();
+    digest.update(b"fe2o3-protected-publisher-ledger-checkpoint-v3\0");
+    digest.update(&encoded[..64]);
+    digest.update(CHECKPOINT_END_MAGIC);
+    let checksum: [u8; 32] = digest.finalize().into();
+    if encoded[64..96] != checksum {
+        return None;
+    }
+    Some(CommitCheckpoint {
+        generation: u64::from_be_bytes(encoded[16..24].try_into().ok()?),
+        tail_offset: u64::from_be_bytes(encoded[24..32].try_into().ok()?),
+        tail_hash: encoded[32..64].try_into().ok()?,
+    })
+}
+
+fn select_checkpoint(
+    region: &[u8],
+    header_len: u64,
+    max_receipts: u64,
+    max_ledger_bytes: u64,
+) -> Result<CommitCheckpoint, PublisherError> {
+    if region.len() != CHECKPOINT_REGION_BYTES {
+        return Err(PublisherError::Store);
+    }
+    let mut valid = Vec::with_capacity(CHECKPOINT_COPIES);
+    for encoded in region.chunks_exact(CHECKPOINT_COPY_BYTES) {
+        let Some(checkpoint) = decode_checkpoint(encoded) else {
+            continue;
+        };
+        let minimum_tail = header_len
+            .checked_add(
+                checkpoint
+                    .generation
+                    .checked_mul(MIN_FRAME_BYTES as u64)
+                    .ok_or(PublisherError::Store)?,
+            )
+            .ok_or(PublisherError::Store)?;
+        let maximum_tail = header_len
+            .checked_add(
+                checkpoint
+                    .generation
+                    .checked_mul(MAX_LEDGER_FRAME_BYTES as u64)
+                    .ok_or(PublisherError::Store)?,
+            )
+            .ok_or(PublisherError::Store)?;
+        if checkpoint.generation > max_receipts
+            || checkpoint.tail_offset < minimum_tail
+            || checkpoint.tail_offset > maximum_tail
+            || checkpoint.tail_offset > max_ledger_bytes
+            || (checkpoint.generation == 0
+                && (checkpoint.tail_offset != header_len || checkpoint.tail_hash != ZERO_HASH))
+            || (checkpoint.generation != 0 && checkpoint.tail_hash == ZERO_HASH)
+        {
+            return Err(PublisherError::Store);
+        }
+        if valid.iter().any(|other: &CommitCheckpoint| {
+            other.generation == checkpoint.generation && *other != checkpoint
+        }) {
+            return Err(PublisherError::Store);
+        }
+        valid.push(checkpoint);
+    }
+    valid
+        .into_iter()
+        .max_by_key(|checkpoint| checkpoint.generation)
+        .ok_or(PublisherError::Store)
 }
 
 fn encode_frame(
@@ -957,7 +1152,7 @@ fn decode_frame(
 
 fn frame_hash(prefix: &[u8], payload: &[u8]) -> [u8; 32] {
     let mut hash = Sha256::new();
-    hash.update(b"fe2o3-protected-publisher-ledger-frame-v2\0");
+    hash.update(b"fe2o3-protected-publisher-ledger-frame-v3\0");
     hash.update(prefix);
     hash.update(payload);
     hash.finalize().into()
@@ -972,7 +1167,7 @@ fn frame_trailer(
 ) -> [u8; FRAME_TRAILER_BYTES] {
     let inverse_length = !frame_length;
     let mut commit = Sha256::new();
-    commit.update(b"fe2o3-protected-publisher-ledger-commit-v2\0");
+    commit.update(b"fe2o3-protected-publisher-ledger-commit-v3\0");
     commit.update(prefix);
     commit.update(payload);
     commit.update(frame_hash);
@@ -1263,6 +1458,26 @@ mod tests {
             sequence,
         );
         frame[payload_end + FRAME_HASH_BYTES..].copy_from_slice(&trailer);
+    }
+
+    fn write_ledger(path: &Path, bytes: &[u8]) {
+        std::fs::write(path, bytes).unwrap();
+        std::fs::set_permissions(path, Permissions::from_mode(0o600)).unwrap();
+    }
+
+    fn assert_restart_rejects_unchanged(path: &Path, bytes: &[u8], label: &str) {
+        write_ledger(path, bytes);
+        assert!(DurableStore::open(path).is_err(), "accepted {label}");
+        assert_eq!(std::fs::read(path).unwrap(), bytes, "modified {label}");
+    }
+
+    fn frame_boundaries(store: &DurableStore) -> Vec<(usize, usize)> {
+        let mut entries = store.by_request_key.values().collect::<Vec<_>>();
+        entries.sort_by_key(|entry| entry.sequence);
+        entries
+            .into_iter()
+            .map(|entry| (entry.frame_offset as usize, entry.frame_length as usize))
+            .collect()
     }
 
     fn fixture_with_reference(reference: &str) -> Fixture {
@@ -1613,7 +1828,7 @@ mod tests {
     #[test]
     fn preexisting_empty_and_partial_headers_fail_closed_unchanged() {
         let temp = secure_tempdir();
-        let header = ledger_header(&StorePolicy::test_default());
+        let header = ledger_header(&StorePolicy::test_default()).unwrap();
         for prefix in 0..header.len() {
             let path = temp.path().join(format!("legacy-prefix-{prefix}.ledger"));
             std::fs::write(&path, &header[..prefix]).unwrap();
@@ -1624,20 +1839,22 @@ mod tests {
     }
 
     #[test]
-    fn legacy_v1_ledgers_are_rejected_without_migration_or_mutation() {
+    fn legacy_v1_and_v2_ledgers_are_rejected_without_migration_or_mutation() {
         let temp = secure_tempdir();
         let policy = StorePolicy::test_default();
-        let mut legacy = Vec::new();
-        legacy.extend_from_slice(LEGACY_LEDGER_MAGIC);
-        legacy.extend_from_slice(policy.ledger_domain.as_bytes());
-        legacy.push(b'\n');
-        legacy.extend_from_slice(b"complete-v1-ledger-bytes-must-not-be-reinterpreted");
-        let path = temp.path().join("legacy-v1.ledger");
-        std::fs::write(&path, &legacy).unwrap();
-        std::fs::set_permissions(&path, Permissions::from_mode(0o600)).unwrap();
+        for (version, magic) in LEGACY_LEDGER_MAGICS.iter().enumerate() {
+            let mut legacy = Vec::new();
+            legacy.extend_from_slice(magic);
+            legacy.extend_from_slice(policy.ledger_domain.as_bytes());
+            legacy.push(b'\n');
+            legacy.extend_from_slice(b"complete-legacy-ledger-bytes-must-not-be-reinterpreted");
+            let path = temp.path().join(format!("legacy-v{}.ledger", version + 1));
+            std::fs::write(&path, &legacy).unwrap();
+            std::fs::set_permissions(&path, Permissions::from_mode(0o600)).unwrap();
 
-        assert!(DurableStore::open_with_policy(&path, policy).is_err());
-        assert_eq!(std::fs::read(&path).unwrap(), legacy);
+            assert!(DurableStore::open_with_policy(&path, policy.clone()).is_err());
+            assert_eq!(std::fs::read(&path).unwrap(), legacy);
+        }
     }
 
     #[test]
@@ -1825,7 +2042,7 @@ mod tests {
         std::fs::write(&path, bytes).unwrap();
         assert!(DurableStore::open(&path).is_err());
 
-        let duplicate_path = temp.path().join("duplicate.ledger");
+        let duplicate_path = temp.path().join("committed-duplicate.ledger");
         let mut store = DurableStore::open(&duplicate_path).unwrap();
         issue_with(&mut store, KEY_A, &fixture()).unwrap();
         let first_frame = {
@@ -1834,15 +2051,25 @@ mod tests {
         };
         let first_payload = &first_frame
             [FRAME_PREFIX_BYTES..first_frame.len() - FRAME_HASH_BYTES - FRAME_TRAILER_BYTES];
-        let duplicate = encode_frame(2, store.tail_hash, first_payload).unwrap();
+        let first_hash = store.tail_hash;
+        let checkpoint_offset = store.checkpoint_offset as usize;
+        let duplicate = encode_frame(2, first_hash, first_payload).unwrap();
         drop(store);
-        let mut file = std::fs::OpenOptions::new()
-            .append(true)
-            .open(&duplicate_path)
-            .unwrap();
-        file.write_all(&duplicate).unwrap();
-        file.sync_data().unwrap();
+        let mut committed = std::fs::read(&duplicate_path).unwrap();
+        committed.extend_from_slice(&duplicate);
+        let duplicate_hash = decode_frame(&duplicate, 2, first_hash).unwrap().frame_hash;
+        let checkpoint = encode_checkpoint(CommitCheckpoint {
+            generation: 2,
+            tail_offset: committed.len() as u64,
+            tail_hash: duplicate_hash,
+        });
+        for copy in 0..CHECKPOINT_COPIES {
+            let start = checkpoint_offset + copy * CHECKPOINT_COPY_BYTES;
+            committed[start..start + CHECKPOINT_COPY_BYTES].copy_from_slice(&checkpoint);
+        }
+        std::fs::write(&duplicate_path, &committed).unwrap();
         assert!(DurableStore::open(&duplicate_path).is_err());
+        assert_eq!(std::fs::read(&duplicate_path).unwrap(), committed);
     }
 
     #[test]
@@ -1872,6 +2099,215 @@ mod tests {
                 "frame byte {frame_index} was modified during rejection"
             );
         }
+    }
+
+    #[test]
+    fn every_checkpoint_byte_has_redundant_recognition_or_fails_closed() {
+        let temp = secure_tempdir();
+        let source = temp.path().join("checkpoint-source.ledger");
+        let mut store = DurableStore::open(&source).unwrap();
+        issue_with(&mut store, KEY_A, &fixture()).unwrap();
+        let checkpoint_offset = store.checkpoint_offset as usize;
+        drop(store);
+        let durable = std::fs::read(&source).unwrap();
+
+        for region_index in 0..CHECKPOINT_REGION_BYTES {
+            let mut mutated = durable.clone();
+            mutated[checkpoint_offset + region_index] ^= 1;
+            let path = temp.path().join(format!("one-copy-{region_index}.ledger"));
+            write_ledger(&path, &mutated);
+            assert_eq!(
+                DurableStore::open(&path).unwrap().count(),
+                1,
+                "single checkpoint-region byte {region_index}"
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), mutated);
+        }
+
+        for copy_index in 0..CHECKPOINT_COPY_BYTES {
+            let mut mutated = durable.clone();
+            for copy in 0..CHECKPOINT_COPIES {
+                mutated[checkpoint_offset + copy * CHECKPOINT_COPY_BYTES + copy_index] ^= 1;
+            }
+            let path = temp.path().join(format!("all-copies-{copy_index}.ledger"));
+            assert_restart_rejects_unchanged(
+                &path,
+                &mutated,
+                &format!("same byte {copy_index} in every checkpoint copy"),
+            );
+        }
+    }
+
+    #[test]
+    fn checkpoint_generation_selection_handles_partial_updates_without_ambiguity() {
+        let temp = secure_tempdir();
+        let source = temp.path().join("checkpoint-generations.ledger");
+        let mut store = DurableStore::open(&source).unwrap();
+        issue_with(&mut store, KEY_A, &fixture()).unwrap();
+        let checkpoint_offset = store.checkpoint_offset as usize;
+        let header_len = store.header_len;
+        let committed = CommitCheckpoint {
+            generation: store.checkpoint_generation,
+            tail_offset: store.tail_offset,
+            tail_hash: store.tail_hash,
+        };
+        drop(store);
+        let durable = std::fs::read(&source).unwrap();
+        let initial = encode_checkpoint(CommitCheckpoint {
+            generation: 0,
+            tail_offset: header_len,
+            tail_hash: ZERO_HASH,
+        });
+
+        for new_copies in 1..CHECKPOINT_COPIES {
+            let mut partial_update = durable.clone();
+            for copy in new_copies..CHECKPOINT_COPIES {
+                let start = checkpoint_offset + copy * CHECKPOINT_COPY_BYTES;
+                partial_update[start..start + CHECKPOINT_COPY_BYTES].copy_from_slice(&initial);
+            }
+            let path = temp.path().join(format!("new-copies-{new_copies}.ledger"));
+            write_ledger(&path, &partial_update);
+            assert_eq!(DurableStore::open(&path).unwrap().count(), 1);
+            assert_eq!(std::fs::read(&path).unwrap(), partial_update);
+        }
+
+        let conflicting = encode_checkpoint(CommitCheckpoint {
+            tail_offset: committed.tail_offset + 1,
+            ..committed
+        });
+        let mut ambiguous = durable.clone();
+        let second = checkpoint_offset + CHECKPOINT_COPY_BYTES;
+        ambiguous[second..second + CHECKPOINT_COPY_BYTES].copy_from_slice(&conflicting);
+        let path = temp.path().join("same-generation-conflict.ledger");
+        assert_restart_rejects_unchanged(&path, &ambiguous, "same-generation checkpoint conflict");
+    }
+
+    #[test]
+    fn checkpoint_short_write_boundaries_never_lose_an_acknowledged_record() {
+        for cut in [
+            0, 1, 15, 16, 23, 24, 31, 32, 63, 64, 95, 96, 103, 104, 105, 207, 208, 209, 311,
+        ] {
+            let temp = secure_tempdir();
+            let path = temp.path().join(format!("checkpoint-short-{cut}.ledger"));
+            let mut store = DurableStore::open(&path).unwrap();
+            let header_len = store.header_len;
+            let checkpoint_offset = store.checkpoint_offset as usize;
+            store.set_maximum_write_chunk(1);
+            store.fail_checkpoint_write_after(cut, libc::ENOSPC);
+            assert!(matches!(
+                issue_with(&mut store, KEY_A, &fixture()),
+                Err(PublisherError::Store)
+            ));
+            assert!(store.poisoned);
+            let interrupted = std::fs::read(&path).unwrap();
+            let selected = select_checkpoint(
+                &interrupted[checkpoint_offset..header_len as usize],
+                header_len,
+                StorePolicy::test_default().max_receipts,
+                StorePolicy::test_default().max_ledger_bytes,
+            )
+            .unwrap();
+            drop(store);
+
+            let reopened = DurableStore::open(&path).unwrap();
+            assert_eq!(reopened.count() as u64, selected.generation, "cut {cut}");
+            assert_eq!(reopened.tail_offset, selected.tail_offset, "cut {cut}");
+        }
+    }
+
+    #[test]
+    fn multi_frame_length_and_every_trailer_byte_corruption_fails_unchanged() {
+        let temp = secure_tempdir();
+        let source = temp.path().join("multi-frame-source.ledger");
+        let mut store = DurableStore::open(&source).unwrap();
+        issue_with(&mut store, KEY_A, &fixture()).unwrap();
+        issue_with(&mut store, KEY_B, &distinct_fixture()).unwrap();
+        issue_with(&mut store, KEY_C, &third_fixture()).unwrap();
+        let boundaries = frame_boundaries(&store);
+        drop(store);
+        let durable = std::fs::read(&source).unwrap();
+
+        for (position, (frame_offset, frame_length)) in boundaries.iter().copied().enumerate() {
+            let length_offset = frame_offset + 12;
+            let original = u32::from_be_bytes(
+                durable[length_offset..length_offset + 4]
+                    .try_into()
+                    .unwrap(),
+            );
+            let trailer_offset = frame_offset + frame_length - FRAME_TRAILER_BYTES;
+            for trailer_index in 0..FRAME_TRAILER_BYTES {
+                let mut mutated = durable.clone();
+                mutated[length_offset..length_offset + 4]
+                    .copy_from_slice(&original.checked_add(1).unwrap().to_be_bytes());
+                mutated[trailer_offset + trailer_index] ^= 1;
+                let path = temp
+                    .path()
+                    .join(format!("length-trailer-{position}-{trailer_index}.ledger"));
+                assert_restart_rejects_unchanged(
+                    &path,
+                    &mutated,
+                    &format!("frame {position} forward length plus trailer {trailer_index}"),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn multi_frame_length_extremes_and_false_boundaries_never_trigger_committed_truncation() {
+        let temp = secure_tempdir();
+        let source = temp.path().join("length-extremes-source.ledger");
+        let mut store = DurableStore::open(&source).unwrap();
+        issue_with(&mut store, KEY_A, &fixture()).unwrap();
+        issue_with(&mut store, KEY_B, &distinct_fixture()).unwrap();
+        issue_with(&mut store, KEY_C, &third_fixture()).unwrap();
+        let boundaries = frame_boundaries(&store);
+        let committed_tail = store.tail_offset as usize;
+        drop(store);
+        let durable = std::fs::read(&source).unwrap();
+
+        for (position, (frame_offset, _)) in boundaries.iter().copied().enumerate() {
+            let length_offset = frame_offset + 12;
+            let original = u32::from_be_bytes(
+                durable[length_offset..length_offset + 4]
+                    .try_into()
+                    .unwrap(),
+            );
+            for replacement in [
+                0,
+                1,
+                original - 1,
+                original + 1,
+                MAX_LEDGER_RECORD_BYTES as u32 + 1,
+                u32::MAX,
+            ] {
+                let mut mutated = durable.clone();
+                mutated[length_offset..length_offset + 4]
+                    .copy_from_slice(&replacement.to_be_bytes());
+                let path = temp
+                    .path()
+                    .join(format!("length-{position}-{replacement}.ledger"));
+                assert_restart_rejects_unchanged(
+                    &path,
+                    &mutated,
+                    &format!("frame {position} length {replacement}"),
+                );
+            }
+        }
+
+        let mut false_boundaries = durable.clone();
+        for _ in 0..128 {
+            false_boundaries.extend_from_slice(FRAME_TRAILER_MAGIC);
+            false_boundaries.extend_from_slice(CHECKPOINT_MAGIC);
+            false_boundaries.extend_from_slice(FRAME_MAGIC);
+        }
+        let path = temp.path().join("false-uncommitted-boundaries.ledger");
+        write_ledger(&path, &false_boundaries);
+        let reopened = DurableStore::open(&path).unwrap();
+        assert_eq!(reopened.count(), 3);
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().len(),
+            committed_tail as u64
+        );
     }
 
     #[test]
@@ -1905,11 +2341,12 @@ mod tests {
         let header_len = store.header_len as usize;
         drop(store);
         let bytes = std::fs::read(&source).unwrap();
-        let header = &bytes[..header_len];
+        let header = ledger_header(&StorePolicy::test_default()).unwrap();
+        assert_eq!(header.len(), header_len);
         let frame = &bytes[header_len..];
         for cut in 0..frame.len() {
             let path = temp.path().join(format!("torn-{cut}.ledger"));
-            let mut partial = header.to_vec();
+            let mut partial = header.clone();
             partial.extend_from_slice(&frame[..cut]);
             std::fs::write(&path, partial).unwrap();
             std::fs::set_permissions(&path, Permissions::from_mode(0o600)).unwrap();
@@ -1920,11 +2357,37 @@ mod tests {
                 header_len as u64,
                 "partial boundary {cut}"
             );
+
+            let committed_path = temp.path().join(format!("committed-cut-{cut}.ledger"));
+            let committed_partial = &bytes[..header_len + cut];
+            assert_restart_rejects_unchanged(
+                &committed_path,
+                committed_partial,
+                &format!("committed frame truncation {cut}"),
+            );
         }
         let complete = temp.path().join("complete.ledger");
         std::fs::write(&complete, bytes).unwrap();
         std::fs::set_permissions(&complete, Permissions::from_mode(0o600)).unwrap();
         assert_eq!(DurableStore::open(&complete).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn ledger_size_bound_rejects_before_any_tail_recovery() {
+        let temp = secure_tempdir();
+        let path = temp.path().join("oversized-uncommitted-tail.ledger");
+        let mut policy = StorePolicy::test_default();
+        policy.max_ledger_bytes = MIN_LEDGER_BYTES;
+        let store = DurableStore::open_with_policy(&path, policy.clone()).unwrap();
+        drop(store);
+        let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.set_len(policy.max_ledger_bytes + 1).unwrap();
+        file.sync_data().unwrap();
+        drop(file);
+        let oversized = std::fs::read(&path).unwrap();
+
+        assert!(DurableStore::open_with_policy(&path, policy).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), oversized);
     }
 
     #[test]
