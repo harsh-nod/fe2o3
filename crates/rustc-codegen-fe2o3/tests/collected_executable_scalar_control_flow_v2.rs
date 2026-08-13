@@ -1,12 +1,17 @@
 use std::ffi::CString;
 use std::fs::{File, OpenOptions};
 use std::io::{Read as _, Write as _};
-use std::os::fd::{AsRawFd as _, FromRawFd as _};
+use std::mem::{self, MaybeUninit};
+use std::os::fd::{AsRawFd as _, FromRawFd as _, RawFd};
+use std::os::unix::ffi::OsStrExt as _;
 use std::os::unix::fs::{
     DirBuilderExt as _, FileExt as _, OpenOptionsExt as _, PermissionsExt as _,
 };
+use std::os::unix::net::UnixDatagram;
+use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
+use std::ptr;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -14,6 +19,10 @@ use sha2::{Digest as _, Sha256};
 
 const PIPELINE: &str = "collected-executable-scalar-control-flow-v2";
 const FIXTURE: &str = include_str!("fixtures/executable-scalar-control-flow-v1.rs");
+const BUILD_HELPER_ENV: &str = "FE2O3_SCALAR_CF_ISOLATED_BUILD_HELPER";
+const BUILD_HELPER_SOCKET_ENV: &str = "FE2O3_SCALAR_CF_BUILD_SOCKET_FD";
+const BUILD_HELPER_WORKSPACE_ENV: &str = "FE2O3_SCALAR_CF_BUILD_WORKSPACE";
+const BUILD_HELPER_MOUNT_ENV: &str = "FE2O3_SCALAR_CF_BUILD_MOUNT";
 static NEXT_OUTPUT: AtomicU64 = AtomicU64::new(0);
 static BACKEND: OnceLock<PinnedBackend> = OnceLock::new();
 
@@ -33,9 +42,9 @@ impl PinnedBackend {
 
     fn verify(&self) -> Result<(), String> {
         let descriptor_flags = unsafe { libc::fcntl(self.file.as_raw_fd(), libc::F_GETFD) };
-        if descriptor_flags < 0 || descriptor_flags & libc::FD_CLOEXEC != 0 {
+        if descriptor_flags < 0 || descriptor_flags & libc::FD_CLOEXEC == 0 {
             return Err(format!(
-                "backend descriptor is not inheritable by rustc: {descriptor_flags:#x}"
+                "backend descriptor is not close-on-exec in the parent: {descriptor_flags:#x}"
             ));
         }
         let seals = unsafe { libc::fcntl(self.file.as_raw_fd(), libc::F_GET_SEALS) };
@@ -109,8 +118,16 @@ struct TestOutputDir(PathBuf);
 
 impl TestOutputDir {
     fn new(workspace: &Path) -> Self {
-        let path = workspace.join(format!(
-            "target/rustc-codegen-fe2o3-test-output/collected-scalar-cf-{}-{}",
+        let parent = workspace.join("target/rustc-codegen-fe2o3-test-output");
+        let mut parent_builder = std::fs::DirBuilder::new();
+        parent_builder.recursive(true).mode(0o700);
+        parent_builder
+            .create(&parent)
+            .expect("create owner-only scalar-control-flow output parent");
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700))
+            .expect("secure scalar-control-flow output parent");
+        let path = parent.join(format!(
+            "collected-scalar-cf-{}-{}",
             std::process::id(),
             NEXT_OUTPUT.fetch_add(1, Ordering::Relaxed)
         ));
@@ -144,21 +161,47 @@ fn workspace() -> PathBuf {
 fn build_backend(workspace: &Path) -> &'static PinnedBackend {
     BACKEND.get_or_init(|| {
         let build_root = PrivateBuildRoot::new(workspace);
-        let target_dir = build_root.0.join("target");
-        let output = Command::new(env!("CARGO"))
-            .current_dir(workspace)
-            .args(["build", "--locked", "-p", "rustc-codegen-fe2o3"])
-            .env("CARGO_TARGET_DIR", &target_dir)
-            .output()
-            .expect("build rustc backend");
+        let (parent_socket, child_socket) = UnixDatagram::pair().expect("create backend FD socket");
+        set_close_on_exec(child_socket.as_raw_fd(), false)
+            .expect("make backend helper socket inheritable");
+        let child = Command::new("unshare")
+            .args(["--user", "--map-root-user", "--mount", "--fork", "--"])
+            .arg(std::env::current_exe().expect("current integration test executable"))
+            .args(["--ignored", "--exact", "isolated_backend_build_helper"])
+            .env(BUILD_HELPER_ENV, "1")
+            .env(
+                BUILD_HELPER_SOCKET_ENV,
+                child_socket.as_raw_fd().to_string(),
+            )
+            .env(BUILD_HELPER_WORKSPACE_ENV, workspace)
+            .env(BUILD_HELPER_MOUNT_ENV, &build_root.0)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("launch namespaced backend build helper");
+        drop(child_socket);
+        let hostile_path = build_root.0.join("target/debug/librustc_codegen_fe2o3.so");
+        std::fs::create_dir_all(hostile_path.parent().unwrap())
+            .expect("create same-UID hostile backend path");
+        std::fs::write(&hostile_path, b"same-uid path substitution")
+            .expect("substitute nominal backend path outside helper namespace");
+        let received = receive_backend_descriptor(parent_socket.as_raw_fd());
+        let output = child
+            .wait_with_output()
+            .expect("wait for namespaced backend build helper");
+        assert_eq!(
+            std::fs::read(&hostile_path).expect("read hostile parent-namespace path"),
+            b"same-uid path substitution",
+            "namespaced build must never expose or consume its target through the parent path"
+        );
         assert!(
             output.status.success(),
-            "backend build failed\nstdout:\n{}\nstderr:\n{}",
+            "namespaced backend build failed\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
-        pin_backend(&target_dir.join("debug/librustc_codegen_fe2o3.so"))
-            .expect("pin exact backend in a sealed memfd")
+        let file = received.expect("receive sealed backend from private mount namespace");
+        pinned_backend_from_file(file).expect("verify transferred sealed backend")
     })
 }
 
@@ -185,7 +228,8 @@ fn pin_backend(path: &Path) -> Result<PinnedBackend, String> {
     }
     let sha256 = Sha256::digest(&bytes).into();
     let name = CString::new("fe2o3-scalar-cf-backend").expect("static memfd name");
-    let raw_fd = unsafe { libc::memfd_create(name.as_ptr(), libc::MFD_ALLOW_SEALING) };
+    let raw_fd =
+        unsafe { libc::memfd_create(name.as_ptr(), libc::MFD_ALLOW_SEALING | libc::MFD_CLOEXEC) };
     if raw_fd < 0 {
         return Err(format!(
             "create backend memfd: {}",
@@ -208,6 +252,150 @@ fn pin_backend(path: &Path) -> Result<PinnedBackend, String> {
     };
     pinned.verify()?;
     Ok(pinned)
+}
+
+fn pinned_backend_from_file(file: File) -> Result<PinnedBackend, String> {
+    let len = usize::try_from(
+        file.metadata()
+            .map_err(|error| format!("stat transferred backend memfd: {error}"))?
+            .len(),
+    )
+    .map_err(|_| "transferred backend length does not fit usize".to_owned())?;
+    if len == 0 {
+        return Err("transferred backend memfd is empty".to_owned());
+    }
+    let mut bytes = vec![0_u8; len];
+    file.read_exact_at(&mut bytes, 0)
+        .map_err(|error| format!("read transferred backend memfd: {error}"))?;
+    let pinned = PinnedBackend {
+        file,
+        len,
+        sha256: Sha256::digest(bytes).into(),
+    };
+    pinned.verify()?;
+    Ok(pinned)
+}
+
+fn set_close_on_exec(descriptor: RawFd, enabled: bool) -> std::io::Result<()> {
+    let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFD) };
+    if flags < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let updated = if enabled {
+        flags | libc::FD_CLOEXEC
+    } else {
+        flags & !libc::FD_CLOEXEC
+    };
+    if unsafe { libc::fcntl(descriptor, libc::F_SETFD, updated) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+fn send_backend_descriptor(socket: RawFd, descriptor: RawFd) -> std::io::Result<()> {
+    const MESSAGE: u64 = 0x4645_324f_3342_454e;
+    let mut io_vector = libc::iovec {
+        iov_base: ptr::from_ref(&MESSAGE).cast_mut().cast(),
+        iov_len: mem::size_of_val(&MESSAGE),
+    };
+    let mut control = [0_usize; 8];
+    let mut header = unsafe { mem::zeroed::<libc::msghdr>() };
+    header.msg_iov = &mut io_vector;
+    header.msg_iovlen = 1;
+    header.msg_control = control.as_mut_ptr().cast();
+    header.msg_controllen = unsafe { libc::CMSG_SPACE(mem::size_of::<RawFd>() as _) } as usize;
+    unsafe {
+        let cmsg = libc::CMSG_FIRSTHDR(&header);
+        (*cmsg).cmsg_level = libc::SOL_SOCKET;
+        (*cmsg).cmsg_type = libc::SCM_RIGHTS;
+        (*cmsg).cmsg_len = libc::CMSG_LEN(mem::size_of::<RawFd>() as _) as usize;
+        ptr::write_unaligned(libc::CMSG_DATA(cmsg).cast::<RawFd>(), descriptor);
+    }
+    let sent = unsafe { libc::sendmsg(socket, &header, libc::MSG_NOSIGNAL) };
+    if sent == mem::size_of_val(&MESSAGE) as isize {
+        Ok(())
+    } else if sent < 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Err(std::io::Error::from_raw_os_error(libc::EIO))
+    }
+}
+
+fn receive_backend_descriptor(socket: RawFd) -> Result<File, String> {
+    const MESSAGE: u64 = 0x4645_324f_3342_454e;
+    let mut message = MaybeUninit::<u64>::zeroed();
+    let mut io_vector = libc::iovec {
+        iov_base: message.as_mut_ptr().cast(),
+        iov_len: mem::size_of::<u64>(),
+    };
+    let mut control = [0_usize; 8];
+    let mut header = unsafe { mem::zeroed::<libc::msghdr>() };
+    header.msg_iov = &mut io_vector;
+    header.msg_iovlen = 1;
+    header.msg_control = control.as_mut_ptr().cast();
+    header.msg_controllen = unsafe { libc::CMSG_SPACE(mem::size_of::<RawFd>() as _) } as usize;
+    let received = unsafe { libc::recvmsg(socket, &mut header, libc::MSG_CMSG_CLOEXEC) };
+    if received < 0 {
+        return Err(format!(
+            "receive backend descriptor: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    if received as usize != mem::size_of::<u64>()
+        || header.msg_flags & (libc::MSG_TRUNC | libc::MSG_CTRUNC) != 0
+    {
+        return Err("backend descriptor transfer was truncated".to_owned());
+    }
+    let message = unsafe { message.assume_init() };
+    if message != MESSAGE {
+        return Err("backend descriptor transfer header is invalid".to_owned());
+    }
+    let descriptor = unsafe {
+        let cmsg = libc::CMSG_FIRSTHDR(&header);
+        if cmsg.is_null()
+            || (*cmsg).cmsg_level != libc::SOL_SOCKET
+            || (*cmsg).cmsg_type != libc::SCM_RIGHTS
+            || (*cmsg).cmsg_len != libc::CMSG_LEN(mem::size_of::<RawFd>() as _) as usize
+            || !libc::CMSG_NXTHDR(&header, cmsg).is_null()
+        {
+            return Err("backend descriptor transfer control data is invalid".to_owned());
+        }
+        ptr::read_unaligned(libc::CMSG_DATA(cmsg).cast::<RawFd>())
+    };
+    if descriptor < 0 {
+        return Err("backend descriptor transfer returned an invalid descriptor".to_owned());
+    }
+    Ok(unsafe { File::from_raw_fd(descriptor) })
+}
+
+fn mount_private_build_tmpfs(path: &Path) -> Result<(), String> {
+    if unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0) } != 0 {
+        return Err(format!(
+            "make isolated build helper non-dumpable: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let source = CString::new("fe2o3-scalar-cf-build").unwrap();
+    let target = CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| "private build mount path contains NUL".to_owned())?;
+    let filesystem = CString::new("tmpfs").unwrap();
+    let options = CString::new("mode=0700").unwrap();
+    let result = unsafe {
+        libc::mount(
+            source.as_ptr(),
+            target.as_ptr(),
+            filesystem.as_ptr(),
+            libc::MS_NODEV | libc::MS_NOSUID,
+            options.as_ptr().cast(),
+        )
+    };
+    if result != 0 {
+        return Err(format!(
+            "mount isolated backend build tmpfs: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(())
 }
 
 fn compile(
@@ -278,6 +466,10 @@ fn compile_path(
         .env("FE2O3_TARGET", target)
         .env("FE2O3_CODEGEN_PIPELINE", pipeline)
         .env("FE2O3_HSACO_DIR", output.0.join("artifacts"));
+    let backend_descriptor = backend.file.as_raw_fd();
+    unsafe {
+        command.pre_exec(move || set_close_on_exec(backend_descriptor, false));
+    }
     command
         .output()
         .expect("compile scalar-control-flow fixture")
@@ -310,6 +502,43 @@ fn assert_rejected_without_fallback(output: &Output, expected: &str) {
             && !stderr.contains("emitted scalar_control_flow_v1"),
         "rejection entered a legacy/artifact fallback\n{stderr}"
     );
+}
+
+#[test]
+#[ignore = "invoked only through the private user/mount namespace build protocol"]
+fn isolated_backend_build_helper() {
+    if std::env::var_os(BUILD_HELPER_ENV).as_deref() != Some(std::ffi::OsStr::new("1")) {
+        return;
+    }
+    let workspace = PathBuf::from(
+        std::env::var_os(BUILD_HELPER_WORKSPACE_ENV).expect("isolated build workspace"),
+    );
+    let mount = PathBuf::from(
+        std::env::var_os(BUILD_HELPER_MOUNT_ENV).expect("isolated build mount point"),
+    );
+    let socket_descriptor: RawFd = std::env::var(BUILD_HELPER_SOCKET_ENV)
+        .expect("isolated build socket descriptor")
+        .parse()
+        .expect("numeric isolated build socket descriptor");
+    mount_private_build_tmpfs(&mount).expect("isolate backend build output in a private tmpfs");
+    let target_dir = mount.join("target");
+    let output = Command::new(env!("CARGO"))
+        .current_dir(&workspace)
+        .args(["build", "--locked", "-p", "rustc-codegen-fe2o3"])
+        .env("CARGO_TARGET_DIR", &target_dir)
+        .env("CARGO_INCREMENTAL", "0")
+        .output()
+        .expect("build rustc backend in private mount namespace");
+    assert!(
+        output.status.success(),
+        "isolated backend build failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let pinned = pin_backend(&target_dir.join("debug/librustc_codegen_fe2o3.so"))
+        .expect("pin namespaced backend in a sealed memfd");
+    send_backend_descriptor(socket_descriptor, pinned.file.as_raw_fd())
+        .expect("transfer sealed backend descriptor");
 }
 
 #[test]
@@ -353,6 +582,17 @@ fn authenticated_fixture_seals_semantics_then_stops_before_executable_authority(
     assert!(baseline_stderr.contains(
         "no executable authority, Kernel IR, LLVM, LLD, HSACO, or legacy fallback was entered"
     ));
+    eprintln!(
+        "V2_IDENTITIES root={} helper={} portable={} compiler={} authority={}",
+        hex_after(&baseline_stderr, "exact reviewed root MIR "),
+        hex_after(
+            &baseline_stderr,
+            "exact reachable InternalHelper `nested_match_helper` MIR ",
+        ),
+        hex_after(&baseline_stderr, "path-independent portable MIR semantics "),
+        hex_after(&baseline_stderr, "compiler semantics "),
+        hex_after(&baseline_stderr, "sealed collected authority "),
+    );
     assert!(!baseline_stderr.contains("define amdgpu_kernel"));
     assert_eq!(
         std::fs::read_dir(output.0.join("artifacts"))
