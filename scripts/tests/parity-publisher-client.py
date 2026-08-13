@@ -64,7 +64,7 @@ class Fixture:
         self.repo.mkdir()
         self.archive.mkdir()
         self.trusted.mkdir()
-        self.runner.mkdir()
+        self.runner.mkdir(mode=0o700)
         self.default_tip = "3" * 40
         self.candidate_head = "4" * 40
         self.challenge = "5" * 64
