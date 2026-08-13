@@ -19,8 +19,8 @@ for marker in \
     'pub proof fn active_invocation_has_unique_coordinates' \
     'pub proof fn active_accesses_are_in_bounds' \
     'pub proof fn active_input_reads_are_initialized' \
-    'pub proof fn distinct_invocations_have_distinct_writes' \
-    'pub proof fn every_output_is_initialized_by_its_unique_invocation' \
+    'pub proof fn distinct_active_invocations_have_distinct_output_indices' \
+    'pub proof fn every_output_has_unique_canonical_invocation' \
     'pub proof fn exact_dot_has_fixed_sequential_recurrence'
 do
     if ! grep -Fq "$marker" "$proof"; then
