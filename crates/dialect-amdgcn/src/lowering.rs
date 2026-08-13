@@ -18,10 +18,10 @@ use fe2o3_kernel_ir::{
     MATRIX_CAPABILITY_NAMESPACE, MatrixElement, MatrixOperation, MatrixOperationKind,
     MemoryElementType, MemoryIntrinsicOperation, MemoryOrdering, Module, ModuleId,
     NarrowFloatFormat, Operation, OperationKind, PointerDistanceContract, PointerDistanceKind,
-    PointerDistanceUnit, ScalarType, Signature, SynchronizationScope, TargetCapability, Terminator,
-    Type, ValueId, VerificationErrors, WaveOperation, WaveOperationKind, WaveWidth,
-    WidenedFloatBinaryOp, WorkgroupMemoryExtent, WorkgroupSize, analyze_control_flow,
-    verify_module,
+    PointerDistanceUnit, ScalarGemmTargetRequirementsV1, ScalarGemmV1Error, ScalarType, Signature,
+    SynchronizationScope, TargetCapability, Terminator, Type, ValueId, VerificationErrors,
+    WaveOperation, WaveOperationKind, WaveWidth, WidenedFloatBinaryOp, WorkgroupMemoryExtent,
+    WorkgroupSize, analyze_control_flow, verify_module, verify_scalar_gemm_v1_module,
 };
 
 use crate::{AMDGPU_TRIPLE, AmdgcnIntrinsic, Dim};
@@ -41,6 +41,7 @@ enum LoweringTarget {
     Baseline,
     Gfx942StrictFloatV1,
     Gfx942XnackMinusV1,
+    Gfx942ScalarGemmV1,
 }
 
 impl LoweringTarget {
@@ -61,7 +62,7 @@ impl LoweringTarget {
     }
 
     const fn supports_gfx942_xnack_minus_binding(self) -> bool {
-        matches!(self, Self::Gfx942StrictFloatV1)
+        matches!(self, Self::Gfx942StrictFloatV1 | Self::Gfx942ScalarGemmV1)
     }
 
     const fn llvm_function_attributes(self) -> &'static str {
@@ -70,22 +71,27 @@ impl LoweringTarget {
             Self::Gfx942StrictFloatV1 | Self::Gfx942XnackMinusV1 => {
                 " \"target-cpu\"=\"gfx942\" \"denormal-fp-math-f32\"=\"ieee,ieee\" \"unsafe-fp-math\"=\"false\" \"no-infs-fp-math\"=\"false\" \"no-nans-fp-math\"=\"false\" \"no-signed-zeros-fp-math\"=\"false\" \"approx-func-fp-math\"=\"false\""
             }
+            Self::Gfx942ScalarGemmV1 => {
+                " \"target-cpu\"=\"gfx942\" \"denormal-fp-math-f32\"=\"ieee,ieee\" \"unsafe-fp-math\"=\"false\" \"no-infs-fp-math\"=\"false\" \"no-nans-fp-math\"=\"false\" \"no-signed-zeros-fp-math\"=\"false\" \"approx-func-fp-math\"=\"false\" \"fp-contract\"=\"off\""
+            }
         }
     }
 
     const fn data_layout(self) -> Option<&'static str> {
         match self {
-            Self::Gfx942XnackMinusV1 => Some(GFX942_XNACK_MINUS_DATA_LAYOUT),
+            Self::Gfx942XnackMinusV1 | Self::Gfx942ScalarGemmV1 => {
+                Some(GFX942_XNACK_MINUS_DATA_LAYOUT)
+            }
             Self::Baseline | Self::Gfx942StrictFloatV1 => None,
         }
     }
 
     const fn wave_target_feature(self, width: WaveWidth) -> &'static str {
         match (self, width) {
-            (Self::Gfx942XnackMinusV1, WaveWidth::Wave32) => {
+            (Self::Gfx942XnackMinusV1 | Self::Gfx942ScalarGemmV1, WaveWidth::Wave32) => {
                 " \"target-features\"=\"+wavefrontsize32,-wavefrontsize64,-xnack\""
             }
-            (Self::Gfx942XnackMinusV1, WaveWidth::Wave64) => {
+            (Self::Gfx942XnackMinusV1 | Self::Gfx942ScalarGemmV1, WaveWidth::Wave64) => {
                 " \"target-features\"=\"-wavefrontsize32,+wavefrontsize64,-xnack\""
             }
             (_, WaveWidth::Wave32) => " \"target-features\"=\"+wavefrontsize32,-wavefrontsize64\"",
@@ -507,6 +513,139 @@ pub fn lower_compiler_module_to_gfx942_llvm_ir(module: &Module) -> Result<String
         None,
         true,
     )
+}
+
+/// Exact target-bound scalar GEMM V1 LLVM output.
+///
+/// The code-object version remains an authenticated downstream build input;
+/// textual LLVM IR cannot itself encode COV6 authority.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ScalarGemmGfx942LlvmV1 {
+    llvm_ir: String,
+    requirements: ScalarGemmTargetRequirementsV1,
+}
+
+impl ScalarGemmGfx942LlvmV1 {
+    pub fn as_str(&self) -> &str {
+        &self.llvm_ir
+    }
+
+    pub fn into_string(self) -> String {
+        self.llvm_ir
+    }
+
+    /// Requirements retained for downstream artifact inspection. This does
+    /// not claim that a COV6 code object has been emitted or inspected.
+    pub const fn requirements(&self) -> ScalarGemmTargetRequirementsV1 {
+        self.requirements
+    }
+}
+
+#[derive(Debug)]
+pub enum ScalarGemmLoweringErrorV1 {
+    Profile(ScalarGemmV1Error),
+    Lowering(LoweringErrors),
+    NonCanonicalOutput(&'static str),
+}
+
+impl fmt::Display for ScalarGemmLoweringErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Profile(error) => error.fmt(formatter),
+            Self::Lowering(error) => error.fmt(formatter),
+            Self::NonCanonicalOutput(reason) => {
+                write!(
+                    formatter,
+                    "scalar GEMM V1 LLVM output failed closed: {reason}"
+                )
+            }
+        }
+    }
+}
+
+impl Error for ScalarGemmLoweringErrorV1 {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Profile(error) => Some(error),
+            Self::Lowering(error) => Some(error),
+            Self::NonCanonicalOutput(_) => None,
+        }
+    }
+}
+
+/// Verifies and lowers only the canonical scalar GEMM V1 graph for
+/// gfx942:xnack-/COV6. This performs no linking or code-object construction.
+pub fn lower_scalar_gemm_v1_to_gfx942_llvm_ir(
+    module: &Module,
+    requirements: ScalarGemmTargetRequirementsV1,
+) -> Result<ScalarGemmGfx942LlvmV1, ScalarGemmLoweringErrorV1> {
+    verify_scalar_gemm_v1_module(module, requirements)
+        .map_err(ScalarGemmLoweringErrorV1::Profile)?;
+    let llvm_ir = lower_compiler_module_to_llvm_ir_for_target(
+        module,
+        LoweringTarget::Gfx942ScalarGemmV1,
+        None,
+        true,
+    )
+    .map_err(ScalarGemmLoweringErrorV1::Lowering)?;
+    audit_scalar_gemm_v1_llvm(&llvm_ir)?;
+    Ok(ScalarGemmGfx942LlvmV1 {
+        llvm_ir,
+        requirements,
+    })
+}
+
+fn audit_scalar_gemm_v1_llvm(llvm: &str) -> Result<(), ScalarGemmLoweringErrorV1> {
+    let required = [
+        ("target datalayout =", "missing exact gfx942 data layout"),
+        (
+            "\"target-cpu\"=\"gfx942\"",
+            "missing gfx942 processor binding",
+        ),
+        (
+            "\"target-features\"=\"-wavefrontsize32,+wavefrontsize64,-xnack\"",
+            "missing exact wave64/xnack- feature binding",
+        ),
+        ("\"fp-contract\"=\"off\"", "missing disabled FP contraction"),
+        ("udiv i64", "missing unsigned row division"),
+        ("urem i64", "missing unsigned column remainder"),
+        ("fmul float", "missing sequential f32 multiply"),
+        ("fadd float", "missing sequential f32 accumulation"),
+    ];
+    for (needle, reason) in required {
+        if !llvm.contains(needle) {
+            return Err(ScalarGemmLoweringErrorV1::NonCanonicalOutput(reason));
+        }
+    }
+    for forbidden in [
+        "llvm.fma",
+        "llvm.fmuladd",
+        " fmul fast ",
+        " fadd fast ",
+        " contract ",
+        " reassoc ",
+        "COMGR",
+        "comgr",
+    ] {
+        if llvm.contains(forbidden) {
+            return Err(ScalarGemmLoweringErrorV1::NonCanonicalOutput(
+                "forbidden contraction, reassociation, or COMGR marker",
+            ));
+        }
+    }
+    let multiply = llvm.find("fmul float").expect("required above");
+    let accumulate = llvm.find("fadd float").expect("required above");
+    if multiply >= accumulate {
+        return Err(ScalarGemmLoweringErrorV1::NonCanonicalOutput(
+            "f32 accumulation does not follow its multiply",
+        ));
+    }
+    if llvm.matches("load float").count() != 2 || llvm.matches("store float").count() != 1 {
+        return Err(ScalarGemmLoweringErrorV1::NonCanonicalOutput(
+            "LLVM memory effects are not exactly two f32 loads and one f32 store",
+        ));
+    }
+    Ok(())
 }
 
 /// Lowers a verified helper-only module for the strict gfx942 profile.
@@ -3066,7 +3205,7 @@ impl<'a> FunctionLowerer<'a> {
             }
             OperationKind::Binary { op, lhs, .. } => {
                 let ty = self.value_type(*lhs);
-                if !supported_binary(*op, ty) {
+                if !supported_binary(*op, ty, self.target) {
                     return Err(LoweringErrors::one(
                         location,
                         LoweringDiagnosticCode::UnsupportedOperation,
@@ -5463,13 +5602,16 @@ fn supported_atomic_address_scope(
     }
 }
 
-fn supported_binary(op: BinaryOp, ty: &Type) -> bool {
+fn supported_binary(op: BinaryOp, ty: &Type, target: LoweringTarget) -> bool {
     let Some(scalar) = ty.as_scalar() else {
         return false;
     };
     match op {
         BinaryOp::Add | BinaryOp::Subtract | BinaryOp::Multiply => {
             supported_integer(scalar) || scalar == ScalarType::F32
+        }
+        BinaryOp::Divide | BinaryOp::Remainder => {
+            target == LoweringTarget::Gfx942ScalarGemmV1 && supported_integer(scalar)
         }
         BinaryOp::BitXor => supported_integer(scalar),
         _ => false,
@@ -5844,6 +5986,16 @@ fn binary_opcode(op: BinaryOp, ty: &Type) -> &'static str {
         (BinaryOp::Add, false) => "add",
         (BinaryOp::Subtract, false) => "sub",
         (BinaryOp::Multiply, false) => "mul",
+        (BinaryOp::Divide, false) if ty.as_scalar().is_some_and(ScalarType::is_signed_integer) => {
+            "sdiv"
+        }
+        (BinaryOp::Divide, false) => "udiv",
+        (BinaryOp::Remainder, false)
+            if ty.as_scalar().is_some_and(ScalarType::is_signed_integer) =>
+        {
+            "srem"
+        }
+        (BinaryOp::Remainder, false) => "urem",
         (BinaryOp::BitXor, false) => "xor",
         (BinaryOp::Add, true) => "fadd",
         (BinaryOp::Subtract, true) => "fsub",

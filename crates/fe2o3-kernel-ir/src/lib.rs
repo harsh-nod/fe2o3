@@ -29,6 +29,7 @@ mod ir;
 mod launch_kernel_contract_v2;
 mod matrix;
 mod region_effects;
+mod scalar_gemm_v1;
 pub mod scalar_ops_v2;
 mod semantic_operations;
 mod standard_atomics;
@@ -55,6 +56,7 @@ pub use launch_kernel_contract_v2::{
 };
 pub use matrix::*;
 pub use region_effects::*;
+pub use scalar_gemm_v1::*;
 pub use semantic_operations::*;
 pub use standard_atomics::*;
 pub use types::*;
