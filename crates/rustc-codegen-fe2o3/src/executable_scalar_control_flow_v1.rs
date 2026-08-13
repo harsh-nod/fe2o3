@@ -1,22 +1,27 @@
 //! Bounded executable-MIR scalar control flow through Kernel IR and gfx942 LLVM.
 //!
-//! This first adapter is intentionally a helper-only prerequisite. It accepts
-//! one validated place-form executable-MIR function, promotes it with the
-//! verified `dialect-mir` mem2reg pass, admits its scalar expressions through
-//! Scalar V2, and emits a verified Kernel IR device function plus direct LLVM
-//! text. It does not grant linking, code-object, loading, or launch authority.
+//! This first adapter is intentionally a device-export lowering prerequisite.
+//! It accepts one validated place-form executable-MIR function only when a
+//! compiler-sealed collected-function authority authenticates the same
+//! canonical identity as a device FFI export. It preflights resource bounds,
+//! promotes with verified `dialect-mir` mem2reg, admits scalar expressions
+//! through Scalar V2, and emits verified Kernel IR plus exact gfx942:xnack-
+//! LLVM text. It grants no linking, code-object, loading, or launch authority.
 
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
-use dialect_amdgcn::{LoweringErrors, lower_device_module_to_gfx942_llvm_ir};
+use dialect_amdgcn::{
+    GFX942_XNACK_MINUS_DATA_LAYOUT, LoweringErrors,
+    lower_device_module_to_gfx942_xnack_minus_llvm_ir,
+};
 use dialect_mir::{
-    MirBasicBlock, MirBinaryOp, MirBlockId, MirBodyForm, MirConstant, MirConstantValue, MirEdge,
-    MirFunction, MirLocalId, MirLocalKind, MirMem2RegError, MirMem2RegReport, MirOperand,
-    MirRvalue, MirScalarType, MirStatement, MirStatementKind, MirTerminatorKind, MirTypeId,
-    MirTypeKind, MirValueId, ValidatedMirExecutableModule, analyze_mir_control_flow,
-    promote_module_to_ssa,
+    GFX942_TARGET_DATA_LAYOUT, MirBasicBlock, MirBinaryOp, MirBlockId, MirBodyForm, MirConstant,
+    MirConstantValue, MirEdge, MirFunction, MirLocalId, MirLocalKind, MirMem2RegError,
+    MirMem2RegReport, MirOperand, MirRvalue, MirScalarType, MirStatement, MirStatementKind,
+    MirTerminatorKind, MirTypeId, MirTypeKind, MirValueId, ValidatedMirExecutableModule,
+    analyze_mir_control_flow, promote_module_to_ssa,
 };
 use fe2o3_kernel_ir::scalar_ops_v2::{
     IntBinary, IntMode, IntWidth, Operation as ScalarOperation, Predicate, ScalarOperationV2,
@@ -27,8 +32,11 @@ use fe2o3_kernel_ir::{
     Operation, OperationKind, ScalarType, Signature, TargetCapability, Terminator, Type, ValueDef,
     ValueId, VerificationErrors, WaveWidth, verify_module,
 };
+use rustc_middle::ty::TyCtxt;
+use sha2::{Digest as _, Sha256};
 
 use crate::AmdGpuTarget;
+use crate::collector::{CollectedFunction, CollectedFunctionRole};
 use crate::scalar_mir_v2::{
     EXACT_SCALAR_V2_TARGET, RustcMirBinaryV2, RustcScalarAdmissionErrorV2, RustcScalarExpressionV2,
     RustcScalarRequestV2, admit_rustc_scalar_operation_v2,
@@ -38,6 +46,73 @@ pub const MAX_SCALAR_CONTROL_FLOW_BLOCKS_V1: usize = 128;
 pub const MAX_SCALAR_CONTROL_FLOW_LOOPS_V1: usize = 16;
 pub const MAX_SCALAR_CONTROL_FLOW_LOOP_DEPTH_V1: usize = 8;
 pub const MAX_SCALAR_CONTROL_FLOW_OPERATIONS_V1: usize = 4_096;
+
+const SCALAR_CONTROL_FLOW_SYMBOL_DOMAIN_V1: &[u8] = b"fe2o3.scalar-control-flow.symbol.v1";
+const MAX_SCALAR_CONTROL_FLOW_SYMBOL_STEM_BYTES_V1: usize = 64;
+
+/// Compiler-sealed authority for one exact device-FFI export.
+///
+/// This value cannot be constructed from executable-MIR bytes. The compiler
+/// derives it from the collected function role and canonical rustc identity.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuthenticatedScalarControlFlowExportV1 {
+    canonical_identity: String,
+    emitted_symbol: String,
+}
+
+impl AuthenticatedScalarControlFlowExportV1 {
+    #[allow(dead_code)]
+    pub(crate) fn from_collected(
+        tcx: TyCtxt<'_>,
+        function: &CollectedFunction<'_>,
+    ) -> Result<Self, ExecutableScalarControlFlowErrorV1> {
+        Self::from_authenticated_parts(
+            tcx.def_path_str(function.instance.def_id()),
+            &function.export_name,
+            function.role,
+        )
+    }
+
+    fn from_authenticated_parts(
+        canonical_identity: String,
+        export_name: &str,
+        role: CollectedFunctionRole,
+    ) -> Result<Self, ExecutableScalarControlFlowErrorV1> {
+        if role != CollectedFunctionRole::DeviceFfiExport {
+            return Err(ExecutableScalarControlFlowErrorV1::Authority {
+                detail: "scalar control-flow V1 requires compiler-authenticated DeviceFfiExport authority"
+                    .to_owned(),
+            });
+        }
+        if canonical_identity.is_empty() {
+            return Err(ExecutableScalarControlFlowErrorV1::Authority {
+                detail: "authenticated canonical function identity is empty".to_owned(),
+            });
+        }
+        let emitted_symbol = identity_bound_export_symbol(&canonical_identity, export_name);
+        Ok(Self {
+            canonical_identity,
+            emitted_symbol,
+        })
+    }
+
+    pub fn canonical_identity(&self) -> &str {
+        &self.canonical_identity
+    }
+
+    pub fn emitted_symbol(&self) -> &str {
+        &self.emitted_symbol
+    }
+
+    #[cfg(test)]
+    fn for_test(
+        canonical_identity: &str,
+        export_name: &str,
+        role: CollectedFunctionRole,
+    ) -> Result<Self, ExecutableScalarControlFlowErrorV1> {
+        Self::from_authenticated_parts(canonical_identity.to_owned(), export_name, role)
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ScalarControlFlowLocationV1 {
@@ -61,6 +136,8 @@ pub struct ScalarControlFlowSummaryV1 {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExecutableScalarControlFlowArtifactV1 {
+    pub canonical_function_identity: String,
+    pub emitted_symbol: String,
     pub kernel_ir: Module,
     pub scalar_operations: Vec<LocatedScalarOperationV2>,
     pub mem2reg: MirMem2RegReport,
@@ -70,6 +147,9 @@ pub struct ExecutableScalarControlFlowArtifactV1 {
 
 #[derive(Debug)]
 pub enum ExecutableScalarControlFlowErrorV1 {
+    Authority {
+        detail: String,
+    },
     ResourceLimit {
         resource: &'static str,
         limit: usize,
@@ -91,6 +171,12 @@ pub enum ExecutableScalarControlFlowErrorV1 {
 impl fmt::Display for ExecutableScalarControlFlowErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Authority { detail } => {
+                write!(
+                    formatter,
+                    "scalar control-flow export authority rejected: {detail}"
+                )
+            }
             Self::ResourceLimit {
                 resource,
                 limit,
@@ -134,22 +220,33 @@ impl Error for ExecutableScalarControlFlowErrorV1 {
             Self::Scalar { source, .. } => Some(source),
             Self::InvalidKernelIr(error) => Some(error),
             Self::Backend(error) => Some(error),
-            Self::ResourceLimit { .. } | Self::Unsupported { .. } => None,
+            Self::Authority { .. } | Self::ResourceLimit { .. } | Self::Unsupported { .. } => None,
         }
     }
 }
 
 /// Lowers the first closed executable-MIR scalar control-flow profile.
 ///
-/// The returned LLVM is produced only after mem2reg, Scalar V2 admission, and
-/// complete Kernel IR verification all succeed.
+/// The authority must originate from compiler collection, match the executable
+/// MIR's complete canonical identity, and carry `DeviceFfiExport` role. The
+/// returned LLVM is produced only after resource preflight, mem2reg, Scalar V2
+/// admission, and complete Kernel IR verification all succeed.
 pub fn lower_executable_scalar_control_flow_v1(
     source: &ValidatedMirExecutableModule,
+    authority: &AuthenticatedScalarControlFlowExportV1,
 ) -> Result<ExecutableScalarControlFlowArtifactV1, ExecutableScalarControlFlowErrorV1> {
     if source.functions.len() != 1 {
         return Err(resource_limit("function count", 1, source.functions.len()));
     }
     let source_function = &source.functions[0];
+    if source_function.identity != authority.canonical_identity {
+        return Err(ExecutableScalarControlFlowErrorV1::Authority {
+            detail: format!(
+                "authenticated identity {:?} does not match executable MIR identity {:?}",
+                authority.canonical_identity, source_function.identity
+            ),
+        });
+    }
     if !matches!(source_function.body.form, MirBodyForm::Places) {
         return Err(unsupported(
             "module.functions[0].body.form",
@@ -162,13 +259,19 @@ pub fn lower_executable_scalar_control_flow_v1(
         MAX_SCALAR_CONTROL_FLOW_BLOCKS_V1,
     )?;
 
-    let (ssa, mem2reg) =
-        promote_module_to_ssa(source).map_err(ExecutableScalarControlFlowErrorV1::Mem2Reg)?;
-    let function = &ssa.functions[0];
-    let analysis = analyze_mir_control_flow(&function.body).map_err(|error| {
+    if source.target.data_layout != GFX942_TARGET_DATA_LAYOUT
+        || source.target.data_layout != GFX942_XNACK_MINUS_DATA_LAYOUT
+    {
+        return Err(unsupported(
+            "module.target.data_layout",
+            "scalar control-flow V1 requires the canonical gfx942:xnack- LLVM data layout",
+        ));
+    }
+
+    let analysis = analyze_mir_control_flow(&source_function.body).map_err(|error| {
         unsupported(
             "module.functions[0].body",
-            format!("control-flow analysis failed after mem2reg: {error}"),
+            format!("control-flow analysis failed before mem2reg: {error}"),
         )
     })?;
     let loop_headers = analysis.loop_headers().collect::<Vec<_>>();
@@ -177,29 +280,35 @@ pub fn lower_executable_scalar_control_flow_v1(
         loop_headers.len(),
         MAX_SCALAR_CONTROL_FLOW_LOOPS_V1,
     )?;
-    let maximum_loop_depth = (0..analysis.block_count())
-        .map(|block| {
-            let block = MirBlockId(block as u32);
-            loop_headers
-                .iter()
-                .filter(|header| {
-                    analysis
-                        .loop_body(**header)
-                        .is_some_and(|body| body.contains(&block))
-                })
-                .count()
-        })
-        .max()
-        .unwrap_or(0);
+    let maximum_loop_depth = maximum_loop_depth(&analysis, &loop_headers);
     check_limit(
         "natural loop nesting depth",
         maximum_loop_depth,
         MAX_SCALAR_CONTROL_FLOW_LOOP_DEPTH_V1,
     )?;
+    let projected_operation_count = projected_kernel_ir_operation_count(source_function)?;
+    check_limit(
+        "Kernel IR operation count",
+        projected_operation_count,
+        MAX_SCALAR_CONTROL_FLOW_OPERATIONS_V1,
+    )?;
+
+    let (ssa, mem2reg) =
+        promote_module_to_ssa(source).map_err(ExecutableScalarControlFlowErrorV1::Mem2Reg)?;
+    let function = &ssa.functions[0];
 
     let target = AmdGpuTarget::new(EXACT_SCALAR_V2_TARGET);
     let (mut kernel_function, scalar_operations, operation_count) =
-        FunctionLowerer::new(ssa.as_module(), function, &target)?.lower()?;
+        FunctionLowerer::new(ssa.as_module(), function, &target)?
+            .lower(authority.emitted_symbol())?;
+    if operation_count != projected_operation_count {
+        return Err(unsupported(
+            "module.functions[0].body",
+            format!(
+                "preflight projected {projected_operation_count} Kernel IR operations but lowering produced {operation_count}"
+            ),
+        ));
+    }
     kernel_function
         .required_capabilities
         .insert(TargetCapability::WaveWidth(WaveWidth::Wave64));
@@ -207,10 +316,12 @@ pub fn lower_executable_scalar_control_flow_v1(
     let mut kernel_ir = Module::new(format!("{}::scalar_control_flow_v1", function.identity));
     kernel_ir.functions.push(kernel_function);
     verify_module(&kernel_ir).map_err(ExecutableScalarControlFlowErrorV1::InvalidKernelIr)?;
-    let gfx942_llvm = lower_device_module_to_gfx942_llvm_ir(&kernel_ir)
+    let gfx942_llvm = lower_device_module_to_gfx942_xnack_minus_llvm_ir(&kernel_ir)
         .map_err(ExecutableScalarControlFlowErrorV1::Backend)?;
 
     Ok(ExecutableScalarControlFlowArtifactV1 {
+        canonical_function_identity: authority.canonical_identity.clone(),
+        emitted_symbol: authority.emitted_symbol.clone(),
         kernel_ir,
         scalar_operations,
         mem2reg,
@@ -280,6 +391,7 @@ impl<'module, 'function, 'target> FunctionLowerer<'module, 'function, 'target> {
 
     fn lower(
         mut self,
+        emitted_symbol: &str,
     ) -> Result<(Function, Vec<LocatedScalarOperationV2>, usize), ExecutableScalarControlFlowErrorV1>
     {
         let return_ty = self.local_type(MirLocalId(0), "function return")?;
@@ -359,15 +471,8 @@ impl<'module, 'function, 'target> FunctionLowerer<'module, 'function, 'target> {
             blocks.push(self.lower_block(MirBlockId(block_index as u32), &block)?);
         }
 
-        let symbol = self
-            .function
-            .identity
-            .rsplit("::")
-            .next()
-            .filter(|symbol| !symbol.is_empty())
-            .ok_or_else(|| unsupported("module.functions[0].identity", "missing symbol stem"))?;
         let function = Function::device_ffi_export(
-            symbol,
+            emitted_symbol,
             Signature::new(parameter_types, vec![return_ty]),
             parameters,
             blocks,
@@ -931,6 +1036,163 @@ impl<'module, 'function, 'target> FunctionLowerer<'module, 'function, 'target> {
     }
 }
 
+fn maximum_loop_depth(
+    analysis: &dialect_mir::MirControlFlowAnalysis,
+    loop_headers: &[MirBlockId],
+) -> usize {
+    (0..analysis.block_count())
+        .map(|block| {
+            let block = MirBlockId(block as u32);
+            loop_headers
+                .iter()
+                .filter(|header| {
+                    analysis
+                        .loop_body(**header)
+                        .is_some_and(|body| body.contains(&block))
+                })
+                .count()
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+fn projected_kernel_ir_operation_count(
+    function: &MirFunction,
+) -> Result<usize, ExecutableScalarControlFlowErrorV1> {
+    let mut count = 0_usize;
+    for block in &function.body.blocks {
+        for statement in &block.statements {
+            let increment = match &statement.kind {
+                MirStatementKind::Assign { value, .. }
+                | MirStatementKind::Define { rvalue: value, .. } => {
+                    projected_rvalue_operations(value)
+                }
+                MirStatementKind::Nop
+                | MirStatementKind::SetDiscriminant { .. }
+                | MirStatementKind::StorageLive(_)
+                | MirStatementKind::StorageDead(_)
+                | MirStatementKind::Deinit(_) => 0,
+            };
+            count = count.checked_add(increment).ok_or_else(|| {
+                resource_limit(
+                    "Kernel IR operation count",
+                    MAX_SCALAR_CONTROL_FLOW_OPERATIONS_V1,
+                    usize::MAX,
+                )
+            })?;
+        }
+        count = count
+            .checked_add(projected_terminator_operations(&block.terminator.kind))
+            .ok_or_else(|| {
+                resource_limit(
+                    "Kernel IR operation count",
+                    MAX_SCALAR_CONTROL_FLOW_OPERATIONS_V1,
+                    usize::MAX,
+                )
+            })?;
+    }
+    Ok(count)
+}
+
+fn projected_rvalue_operations(rvalue: &MirRvalue) -> usize {
+    match rvalue {
+        MirRvalue::Use(operand) => projected_operand_operations(operand),
+        MirRvalue::BinaryOp { lhs, rhs, .. } | MirRvalue::CheckedBinaryOp { lhs, rhs, .. } => {
+            1 + projected_operand_operations(lhs) + projected_operand_operations(rhs)
+        }
+        MirRvalue::UnaryOp { operand, .. }
+        | MirRvalue::Cast { operand, .. }
+        | MirRvalue::Repeat { operand, .. } => projected_operand_operations(operand),
+        MirRvalue::Aggregate { operands, .. } => {
+            operands.iter().map(projected_operand_operations).sum()
+        }
+        MirRvalue::Ref { .. }
+        | MirRvalue::AddressOf { .. }
+        | MirRvalue::Len(_)
+        | MirRvalue::Discriminant(_)
+        | MirRvalue::ThreadIndex1d => 0,
+    }
+}
+
+fn projected_terminator_operations(terminator: &MirTerminatorKind) -> usize {
+    match terminator {
+        MirTerminatorKind::Goto(edge) => projected_edge_operations(edge),
+        MirTerminatorKind::SwitchInt {
+            discr,
+            targets,
+            otherwise,
+        } => {
+            projected_operand_operations(discr)
+                + targets
+                    .iter()
+                    .map(|(_, edge)| projected_edge_operations(edge))
+                    .sum::<usize>()
+                + projected_edge_operations(otherwise)
+        }
+        MirTerminatorKind::Call(call) => {
+            call.arguments
+                .iter()
+                .map(projected_operand_operations)
+                .sum::<usize>()
+                + call.target.as_ref().map_or(0, projected_edge_operations)
+        }
+        MirTerminatorKind::Drop { target, .. } => projected_edge_operations(target),
+        MirTerminatorKind::Assert {
+            condition, target, ..
+        } => projected_operand_operations(condition) + projected_edge_operations(target),
+        MirTerminatorKind::Return | MirTerminatorKind::Unreachable => 0,
+    }
+}
+
+fn projected_edge_operations(edge: &MirEdge) -> usize {
+    edge.arguments
+        .iter()
+        .map(projected_operand_operations)
+        .sum()
+}
+
+fn projected_operand_operations(operand: &MirOperand) -> usize {
+    usize::from(matches!(operand, MirOperand::Constant(_)))
+}
+
+fn identity_bound_export_symbol(canonical_identity: &str, export_name: &str) -> String {
+    let mut digest = Sha256::new();
+    hash_symbol_field(&mut digest, SCALAR_CONTROL_FLOW_SYMBOL_DOMAIN_V1);
+    hash_symbol_field(&mut digest, canonical_identity.as_bytes());
+    hash_symbol_field(&mut digest, export_name.as_bytes());
+    let digest = digest.finalize();
+
+    let mut stem = String::with_capacity(MAX_SCALAR_CONTROL_FLOW_SYMBOL_STEM_BYTES_V1);
+    for byte in export_name.bytes() {
+        let normalized = if byte.is_ascii_alphanumeric() || byte == b'_' {
+            byte as char
+        } else {
+            '_'
+        };
+        if stem.len() == MAX_SCALAR_CONTROL_FLOW_SYMBOL_STEM_BYTES_V1 {
+            break;
+        }
+        stem.push(normalized);
+    }
+    if stem.is_empty() {
+        stem.push_str("fe2o3_export");
+    } else if !stem.as_bytes()[0].is_ascii_alphabetic() && stem.as_bytes()[0] != b'_' {
+        stem.insert(0, '_');
+    }
+
+    let mut symbol = format!("{stem}__fe2o3_scf_v1_");
+    for byte in digest {
+        use fmt::Write as _;
+        write!(symbol, "{byte:02x}").expect("writing to String cannot fail");
+    }
+    symbol
+}
+
+fn hash_symbol_field(digest: &mut Sha256, field: &[u8]) {
+    digest.update((field.len() as u64).to_le_bytes());
+    digest.update(field);
+}
+
 fn check_limit(
     resource: &'static str,
     actual: usize,
@@ -968,3 +1230,6 @@ fn unsupported(
 fn statement_location(location: ScalarControlFlowLocationV1) -> String {
     format!("bb{}.statements[{}]", location.block.0, location.statement)
 }
+
+#[cfg(test)]
+mod tests;

@@ -122,18 +122,25 @@ gfx942 goldens.
 
 `rustc-codegen-fe2o3::executable_scalar_control_flow_v1` now supplies the first
 structured bridge from those canonical executable-MIR fixtures. It accepts one
-validated place-form function with at most 128 blocks, runs verified mem2reg,
-bounds natural loops to 16 with nesting depth at most 8, and admits `u32` add,
-equality, and less-than expressions through Scalar V2 with their real SSA
-operands. It then builds and verifies Kernel IR for constants, block-local
-scalar slots, branches, typed switches, loop-carried block arguments, and one
-`u32` return before invoking this direct gfx942 LLVM path. Raw division,
-additional functions, unsupported statements/types, and resource expansion
-fail before LLVM is returned. The result is a helper-only compiler artifact;
-whole collected-kernel composition, broader Scalar V2 operations and result
-forms, and code-object construction remain separate work.
+validated place-form function only with a compiler-sealed collected-function
+authority that authenticates the same complete canonical identity and
+`DeviceFfiExport` role. Before mem2reg it bounds blocks to 128, natural loops
+to 16, loop nesting depth to 8, and projected Kernel IR operations to 4096.
+It then runs verified mem2reg and admits `u32` add, equality, and less-than
+expressions through Scalar V2 with their real SSA operands. The adapter builds
+and verifies Kernel IR for constants, block-local scalar slots, branches,
+typed switches, loop-carried block arguments, and one `u32` return. Its LLVM
+symbol retains a readable export stem and a domain-separated SHA-256 suffix
+over the complete canonical identity and authenticated export name. Raw
+division, forged identities, ordinary helpers, additional functions,
+unsupported statements/types, and resource expansion fail before LLVM is
+returned. Whole collected-kernel composition, broader Scalar V2 operations
+and result forms, and code-object construction remain separate work.
 
 The crate has no in-process LLVM target-machine/code-object API. Consequently
-these control-flow tests stop at exact, target-bound LLVM text. Code-object
-construction, object validation, Worker transport, and hardware dispatch remain
-separate wiring obligations; no COMGR or command-line tool is used here.
+these control-flow tests stop at exact, target-bound LLVM text. The exact
+device-lowering entry point emits the reviewed gfx942 data layout,
+`target-cpu=gfx942`, wave64 features, and `-xnack` on every definition.
+Code-object construction, object validation, Worker transport, and hardware
+dispatch remain separate wiring obligations; no COMGR or command-line tool is
+used here.
