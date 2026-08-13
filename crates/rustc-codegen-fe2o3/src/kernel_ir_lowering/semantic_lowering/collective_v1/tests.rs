@@ -1,5 +1,5 @@
 use crate::AmdGpuTarget;
-use crate::kernel_ir_lowering::translate_and_verify_for_target;
+use crate::kernel_ir_lowering::{exact_gfx942_xnack_minus_target, translate_and_verify_for_target};
 use crate::mir_import::{
     MirBlock, MirCallee, MirFunction, MirFunctionKind, MirImportedType, MirKernelProfile, MirLocal,
     MirLocalRole, MirModule, MirOperandRef, MirPlaceRef, MirTerminator, MirTerminatorKind,
@@ -7,7 +7,34 @@ use crate::mir_import::{
 };
 use crate::trusted_device_items::TrustedDeviceItem;
 use dialect_mir::MirType;
-use fe2o3_kernel_ir::OperationKind;
+use fe2o3_kernel_ir::{
+    AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE, AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME,
+    OperationKind, TargetCapability,
+};
+
+#[test]
+fn collective_target_authority_accepts_only_exact_canonical_gfx942_xnack_minus() {
+    assert!(exact_gfx942_xnack_minus_target(&AmdGpuTarget::new("gfx942:xnack-")).is_some());
+
+    for rejected in [
+        "gfx942",
+        "gfx942:xnack+",
+        "gfx942:sramecc+:xnack-",
+        "gfx942:sramecc-:xnack-",
+        "gfx942:xnack-:sramecc+",
+        "gfx942:xnack-:xnack-",
+        "gfx942:xnack-:xnack+",
+        "gfx942:future+",
+        "gfx941",
+        "gfx950",
+        "gfx1100",
+    ] {
+        assert!(
+            exact_gfx942_xnack_minus_target(&AmdGpuTarget::new(rejected)).is_none(),
+            "unexpectedly admitted {rejected}"
+        );
+    }
+}
 
 #[test]
 fn active_wave64_and_static_lds_reduction_reach_exact_gfx942_ir() {
@@ -17,6 +44,16 @@ fn active_wave64_and_static_lds_reduction_reach_exact_gfx942_ir() {
     )
     .expect("authenticated wave/LDS V1");
     let operations = operations(&module);
+    let target_binding = TargetCapability::Extension {
+        namespace: AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE.to_owned(),
+        name: AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME.to_owned(),
+    };
+    assert!(module.required_capabilities.contains(&target_binding));
+    assert!(
+        module.functions[0]
+            .required_capabilities
+            .contains(&target_binding)
+    );
     assert_eq!(
         operations
             .iter()
@@ -192,7 +229,7 @@ fn collective_calls_reject_wrong_target_type_context_and_arity() {
     assert!(wrong_target.diagnostics().iter().any(|diagnostic| {
         diagnostic
             .message
-            .contains("requires exact gfx942 General V3")
+            .contains("requires exact gfx942:xnack- General V3")
     }));
 
     let unsupported_type = translate_and_verify_for_target(
@@ -201,7 +238,7 @@ fn collective_calls_reject_wrong_target_type_context_and_arity() {
             MirTypeShape::F64,
             true,
         ),
-        &AmdGpuTarget::new("gfx942"),
+        &AmdGpuTarget::new("gfx942:xnack-"),
     )
     .unwrap_err();
     assert!(unsupported_type.diagnostics().iter().any(|diagnostic| {
@@ -216,7 +253,7 @@ fn collective_calls_reject_wrong_target_type_context_and_arity() {
             MirTypeShape::U32,
             false,
         ),
-        &AmdGpuTarget::new("gfx942"),
+        &AmdGpuTarget::new("gfx942:xnack-"),
     )
     .unwrap_err();
     assert!(forged_context.diagnostics().iter().any(|diagnostic| {
@@ -239,8 +276,8 @@ fn collective_calls_reject_wrong_target_type_context_and_arity() {
         panic!("call")
     };
     operands.pop();
-    let error =
-        translate_and_verify_for_target(&wrong_arity, &AmdGpuTarget::new("gfx942")).unwrap_err();
+    let error = translate_and_verify_for_target(&wrong_arity, &AmdGpuTarget::new("gfx942:xnack-"))
+        .unwrap_err();
     assert!(
         error
             .diagnostics()

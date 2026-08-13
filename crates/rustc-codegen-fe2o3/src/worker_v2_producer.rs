@@ -17,7 +17,10 @@ use fe2o3_compiler_ffi::{
     CompilerModuleKindV1, CompilerModuleSymbolManifestErrorV1, CompilerModuleSymbolManifestV1,
     CompilerModuleSymbolRoleV1,
 };
-use fe2o3_kernel_ir::{Module, TargetCapability, WaveWidth, WorkgroupSize};
+use fe2o3_kernel_ir::{
+    AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE, AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME,
+    Module, TargetCapability, WaveWidth, WorkgroupSize,
+};
 use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
@@ -59,11 +62,11 @@ pub(crate) fn publish_worker_v2_compiler_module_with_descriptors(
 ) -> Result<CompilerModuleHandoffReceiptV1, WorkerV2ProducerError> {
     let attempt = attempt.ok_or(WorkerV2ProducerError::MissingBuildAttempt)?;
     let envelope = envelope.ok_or(WorkerV2ProducerError::MissingCompilerFfiEnvelope)?;
+    validate_exact_target_binding(envelope.target(), module)?;
     let module = bind_g1_launch_contract(module)?;
     let module = bind_exact_target_wave_mode(envelope, &module)?;
-    let target = envelope.target().as_amd_target_id();
     let mut compiler_module =
-        construct_inert_compiler_module_text_for_target_v1(&module, Some(target.processor()))
+        construct_inert_compiler_module_text_for_target_v1(&module, Some(envelope.target()))
             .map_err(WorkerV2ProducerError::CompilerModule)?;
     if let Some(source_debug) = source_debug {
         compiler_module = bind_source_debug_metadata_v1(compiler_module, source_debug)
@@ -249,6 +252,52 @@ fn bind_exact_target_wave_mode(
     Ok(bound)
 }
 
+fn validate_exact_target_binding(
+    envelope_target: fe2o3_compiler_ffi::DeviceTargetV1,
+    module: &Module,
+) -> Result<(), WorkerV2ProducerError> {
+    let bindings = module
+        .required_capabilities
+        .iter()
+        .chain(
+            module
+                .functions
+                .iter()
+                .flat_map(|function| &function.required_capabilities),
+        )
+        .chain(
+            module
+                .kernels
+                .iter()
+                .flat_map(|kernel| &kernel.required_capabilities),
+        )
+        .filter_map(|capability| match capability {
+            TargetCapability::Extension { namespace, name }
+                if namespace == AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE =>
+            {
+                Some(name.clone())
+            }
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    if bindings.is_empty() {
+        return Ok(());
+    }
+
+    let envelope_target = envelope_target.to_string();
+    if bindings.len() == 1
+        && bindings.contains(AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME)
+        && envelope_target == AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME
+    {
+        return Ok(());
+    }
+
+    Err(WorkerV2ProducerError::TargetBindingMismatch {
+        module: bindings.into_iter().collect(),
+        envelope: envelope_target,
+    })
+}
+
 fn validate_envelope_module_roles(
     envelope: &CompilerFfiEnvelopeV1,
     module: &InertCompilerModuleTextV1,
@@ -290,6 +339,10 @@ pub(crate) enum WorkerV2ProducerError {
         target: String,
         width: WaveWidth,
     },
+    TargetBindingMismatch {
+        module: Vec<String>,
+        envelope: String,
+    },
     ConflictingWorkgroupSize {
         kernel: String,
         declared: WorkgroupSize,
@@ -328,6 +381,10 @@ impl fmt::Display for WorkerV2ProducerError {
             Self::UnsupportedWaveMode { target, width } => write!(
                 formatter,
                 "compiler module requires {width:?}, which target {target} does not support"
+            ),
+            Self::TargetBindingMismatch { module, envelope } => write!(
+                formatter,
+                "compiler-module exact target bindings {module:?} do not match Worker V2 envelope target {envelope:?}"
             ),
             Self::ConflictingWorkgroupSize {
                 kernel,
@@ -386,6 +443,7 @@ impl Error for WorkerV2ProducerError {
             | Self::MissingExternalDeclaration(_)
             | Self::MissingCompilerDefinition(_)
             | Self::UnsupportedWaveMode { .. }
+            | Self::TargetBindingMismatch { .. }
             | Self::ConflictingWorkgroupSize { .. } => None,
         }
     }
@@ -572,6 +630,87 @@ mod tests {
         module.functions = vec![entry, export, import];
         module.kernels.push(kernel);
         module
+    }
+
+    fn target_bound_module(binding: &str) -> Module {
+        let mut module = complete_module();
+        let capability = TargetCapability::Extension {
+            namespace: AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE.to_owned(),
+            name: binding.to_owned(),
+        };
+        module.required_capabilities.insert(capability.clone());
+        module.functions[0].required_capabilities.insert(capability);
+        module
+    }
+
+    #[test]
+    fn exact_target_binding_matches_only_the_full_worker_envelope_target() {
+        let exact = target_bound_module(AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME);
+        validate_exact_target_binding(target(), &exact).unwrap();
+
+        for wrong in [
+            "gfx942",
+            "gfx942:xnack+",
+            "gfx942:sramecc+:xnack-",
+            "gfx942:sramecc-:xnack-",
+            "gfx950:xnack-",
+        ] {
+            let error =
+                validate_exact_target_binding(DeviceTargetV1::parse(wrong).unwrap(), &exact)
+                    .unwrap_err();
+            assert!(matches!(
+                error,
+                WorkerV2ProducerError::TargetBindingMismatch { .. }
+            ));
+        }
+
+        let unknown = target_bound_module("gfx942:xnack-:future+");
+        assert!(matches!(
+            validate_exact_target_binding(target(), &unknown),
+            Err(WorkerV2ProducerError::TargetBindingMismatch { .. })
+        ));
+
+        let mut conflicting = exact;
+        conflicting
+            .required_capabilities
+            .insert(TargetCapability::Extension {
+                namespace: AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE.to_owned(),
+                name: "gfx942:xnack+".to_owned(),
+            });
+        assert!(matches!(
+            validate_exact_target_binding(target(), &conflicting),
+            Err(WorkerV2ProducerError::TargetBindingMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn exact_target_binding_survives_worker_v2_handoff_authority() {
+        let directory = TestDirectory::new();
+        let producer = producer();
+        let attempt = begin_attempt(&directory.0, &producer);
+        let envelope = envelope();
+        let module = target_bound_module(AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME);
+
+        publish_worker_v2_compiler_module(
+            &directory.0,
+            &producer,
+            Some(attempt),
+            Some(&envelope),
+            &module,
+        )
+        .unwrap();
+        let consumed =
+            consume_compiler_module_handoff_v1(&directory.0, &producer, attempt).unwrap();
+        let handoff = CompilerModuleHandoffV2::decode(consumed.bytes()).unwrap();
+        assert_eq!(
+            handoff.target().to_string(),
+            AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME
+        );
+        assert!(
+            std::str::from_utf8(handoff.module_bytes())
+                .unwrap()
+                .contains("\"target-cpu\"=\"gfx942\"")
+        );
     }
 
     #[test]

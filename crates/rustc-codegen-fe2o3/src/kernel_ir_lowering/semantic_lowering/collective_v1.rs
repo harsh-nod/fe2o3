@@ -10,7 +10,7 @@ use fe2o3_kernel_ir::{
     ComparePredicate, Constant, Convergence, Fence, IndexKind, IntrinsicKind, IntrinsicOperation,
     MemoryAccess, MemoryOrdering, Operation, OperationKind, ScalarType, SynchronizationScope,
     Terminator, Type, ValueId, WaveOperation, WaveOperationKind, WaveWidth, WorkgroupBarrier,
-    WorkgroupMemory, WorkgroupMemoryExtent,
+    WorkgroupMemory, WorkgroupMemoryExtent, gfx942_xnack_minus_target_capability,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -340,7 +340,7 @@ fn reject_context(call: SessionRecognizedSemanticCall<'_>) -> HandlerClaim {
         TranslationDiagnosticCode::UnsupportedCall,
         call.location.clone(),
         format!(
-            "session-recognized collective call `{}` requires exact gfx942 General V3, a one-dimensional power-of-two workgroup no larger than 256, and wave64-compatible width for wave operations",
+            "session-recognized collective call `{}` requires exact gfx942:xnack- General V3, a one-dimensional power-of-two workgroup no larger than 256, and wave64-compatible width for wave operations",
             call.callee.identity()
         ),
     ))
@@ -365,6 +365,9 @@ fn lower_context_constructor(
         LocalBinding::Gfx942CollectiveCapability,
         call.location.clone(),
     )?;
+    lowerer
+        .required_capabilities
+        .insert(gfx942_xnack_minus_target_capability());
     branch_to_target(lowerer, call)
 }
 

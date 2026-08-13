@@ -5,9 +5,10 @@ use std::fmt::Write as _;
 
 use fe2o3_kernel_descriptor::Gfx942LaunchBoundsV1;
 use fe2o3_kernel_ir::{
-    AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAME, AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAMESPACE,
-    AMDGPU_GFX942_INLINE_ASSEMBLY_CAPABILITY_NAME,
-    AMDGPU_GFX942_INLINE_ASSEMBLY_CAPABILITY_NAMESPACE, AddressSpace as KernelAddressSpace,
+    AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE, AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAME,
+    AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAMESPACE, AMDGPU_GFX942_INLINE_ASSEMBLY_CAPABILITY_NAME,
+    AMDGPU_GFX942_INLINE_ASSEMBLY_CAPABILITY_NAMESPACE,
+    AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME, AddressSpace as KernelAddressSpace,
     AmdGpuDiagnosticOperation, AssemblyConstraint, AssemblyOperandKind, AssemblyOption, Atomic,
     AtomicKind, Axis, BF16_F32_M16N16K16_CAPABILITY, BasicBlock, BinaryOp, BlockId, CastKind,
     ComparePredicate, Constant, DiagnosticCode as VerificationDiagnosticCode, F32MathFunction,
@@ -52,6 +53,10 @@ impl LoweringTarget {
     }
 
     const fn supports_gfx942_diagnostics(self) -> bool {
+        matches!(self, Self::Gfx942StrictFloatV1)
+    }
+
+    const fn supports_gfx942_xnack_minus_binding(self) -> bool {
         matches!(self, Self::Gfx942StrictFloatV1)
     }
 
@@ -2381,6 +2386,10 @@ fn validate_capabilities(
                 if target.supports_gfx942_diagnostics()
                     && namespace == AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAMESPACE
                     && name == AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAME => {}
+            TargetCapability::Extension { namespace, name }
+                if target.supports_gfx942_xnack_minus_binding()
+                    && namespace == AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE
+                    && name == AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME => {}
             _ => {
                 return Err(LoweringErrors::one(
                     location,

@@ -225,11 +225,23 @@ fn translate_and_verify_for_target_with_policy(
         .ok()
         .filter(|target| target.processor() == "gfx942")
         .map(|_| Gfx942FloatTarget);
-    translate_and_verify_with_float_target(mir, float_target, strict_float_policy)
+    let collective_target = exact_gfx942_xnack_minus_target(target);
+    translate_and_verify_with_targets(mir, float_target, collective_target, strict_float_policy)
 }
 
 #[derive(Clone, Copy, Debug)]
 struct Gfx942FloatTarget;
+
+#[derive(Clone, Copy, Debug)]
+struct Gfx942WaveLdsTargetV2;
+
+fn exact_gfx942_xnack_minus_target(target: &AmdGpuTarget) -> Option<Gfx942WaveLdsTargetV2> {
+    const EXACT: &str = "gfx942:xnack-";
+    let parsed = AmdTargetId::parse(target.as_str()).ok()?;
+    let expected = AmdTargetId::parse(EXACT).expect("exact gfx942 target is canonical");
+    (parsed == expected && parsed.to_string() == EXACT && target.as_str() == EXACT)
+        .then_some(Gfx942WaveLdsTargetV2)
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum StrictFloatPolicy {
@@ -246,6 +258,15 @@ struct InternalDefinitionContract {
 fn translate_and_verify_with_float_target(
     mir: &MirModule,
     float_target: Option<Gfx942FloatTarget>,
+    strict_float_policy: StrictFloatPolicy,
+) -> Result<Module, TranslationErrors> {
+    translate_and_verify_with_targets(mir, float_target, None, strict_float_policy)
+}
+
+fn translate_and_verify_with_targets(
+    mir: &MirModule,
+    float_target: Option<Gfx942FloatTarget>,
+    collective_target: Option<Gfx942WaveLdsTargetV2>,
     strict_float_policy: StrictFloatPolicy,
 ) -> Result<Module, TranslationErrors> {
     let mut functions = mir.functions.iter().collect::<Vec<_>>();
@@ -344,6 +365,7 @@ fn translate_and_verify_with_float_target(
                 .copied()
                 .flatten(),
             float_target,
+            collective_target,
             strict_float_policy,
         )
         .lower()
@@ -548,6 +570,7 @@ struct FunctionLowerer<'function, 'declarations> {
     trap_block: Option<BlockId>,
     workgroup_size: Option<WorkgroupSize>,
     float_target: Option<Gfx942FloatTarget>,
+    collective_target: Option<Gfx942WaveLdsTargetV2>,
     strict_float_policy: StrictFloatPolicy,
     control_flow_ssa: control_flow_ssa::ControlFlowSsaPlan,
     block_parameters: BTreeMap<usize, BTreeMap<usize, ValueId>>,
@@ -561,6 +584,7 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
         internal_definitions: &'declarations BTreeMap<String, InternalDefinitionContract>,
         workgroup_size: Option<WorkgroupSize>,
         float_target: Option<Gfx942FloatTarget>,
+        collective_target: Option<Gfx942WaveLdsTargetV2>,
         strict_float_policy: StrictFloatPolicy,
     ) -> Self {
         Self {
@@ -576,6 +600,7 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
             trap_block: None,
             workgroup_size,
             float_target,
+            collective_target,
             strict_float_policy,
             control_flow_ssa: control_flow_ssa::ControlFlowSsaPlan::default(),
             block_parameters: BTreeMap::new(),
@@ -810,12 +835,13 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
     }
 
     fn is_gfx942_wave64_collective_context(&self) -> bool {
-        self.gfx942_collective_workgroup_size()
+        self.collective_target
+            .and(self.gfx942_collective_workgroup_size())
             .is_some_and(|size| size.is_multiple_of(64))
     }
 
     fn is_gfx942_collective_v1_context(&self) -> bool {
-        self.gfx942_collective_workgroup_size().is_some()
+        self.collective_target.is_some() && self.gfx942_collective_workgroup_size().is_some()
     }
 
     fn lower_block(&mut self, source: &MirBlock) -> Result<BasicBlock, TranslationDiagnostic> {

@@ -9,9 +9,10 @@ use crate::amdgpu_llvm::{EmitError, PreparedDeviceKernel};
 use crate::trusted_device_items::TrustedDeviceItem;
 use fe2o3_compiler_ffi::{
     COMPILER_DESCRIPTOR_SECTION_NAME_V1, CompilerDescriptorSourceIdentityV1,
-    CompilerDescriptorSourceV1,
+    CompilerDescriptorSourceV1, DeviceTargetV1,
 };
 use fe2o3_kernel_ir::{
+    AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE, AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME,
     AccessMode, AddressSpace, BasicBlock, BinaryOp, BlockId, ComparePredicate, Constant,
     F32MathFunction, F32MathImplementation, FloatOperation, FunctionBody, FunctionRole,
     IntrinsicOperation, KernelId, MemoryAccess, Module, Operation, OperationKind, TargetCapability,
@@ -114,6 +115,7 @@ pub(crate) enum CompilerModuleConstructionError {
     DescriptorKernelEntryClosureMismatch,
     DescriptorSymbolClosureMismatch,
     UnsupportedFloatTarget(String),
+    UnsupportedTargetBinding(String),
     SourceDebug(crate::source_debug::SourceDebugError),
     Lowering(dialect_amdgcn::LoweringErrors),
 }
@@ -135,6 +137,10 @@ impl fmt::Display for CompilerModuleConstructionError {
             Self::UnsupportedFloatTarget(target) => write!(
                 formatter,
                 "compiler-module float contracts require exact gfx942 lowering; found target `{target}`"
+            ),
+            Self::UnsupportedTargetBinding(target) => write!(
+                formatter,
+                "compiler-module exact target binding requires gfx942:xnack-; found target `{target}`"
             ),
             Self::SourceDebug(error) => {
                 write!(formatter, "source-debug metadata rejected: {error}")
@@ -179,26 +185,51 @@ pub(crate) fn construct_inert_compiler_module_text_v1(
 
 pub(crate) fn construct_inert_compiler_module_text_for_target_v1(
     module: &Module,
-    target_processor: Option<&str>,
+    target: Option<DeviceTargetV1>,
 ) -> Result<InertCompilerModuleTextV1, CompilerModuleConstructionError> {
     enforce_compiler_module_bounds(module)?;
     let has_float_contracts = module
         .functions
         .iter()
         .any(|function| FloatOperation::from_intrinsic_id(&function.id).is_some());
-    let llvm_ir = match (has_float_contracts, target_processor) {
-        (true, Some("gfx942")) => dialect_amdgcn::lower_compiler_module_to_gfx942_llvm_ir(module),
-        (true, Some(target)) => {
-            return Err(CompilerModuleConstructionError::UnsupportedFloatTarget(
-                target.to_owned(),
+    let has_exact_target_binding = module.effective_capabilities().iter().any(|capability| {
+        matches!(
+            capability,
+            TargetCapability::Extension { namespace, name }
+                if namespace == AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE
+                    && name == AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME
+        )
+    });
+    let exact_target = DeviceTargetV1::parse(AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME)
+        .expect("exact gfx942 target binding is canonical");
+    let llvm_ir = match (has_float_contracts, has_exact_target_binding, target) {
+        (_, true, Some(target)) if target == exact_target => {
+            dialect_amdgcn::lower_compiler_module_to_gfx942_llvm_ir(module)
+        }
+        (_, true, Some(target)) => {
+            return Err(CompilerModuleConstructionError::UnsupportedTargetBinding(
+                target.to_string(),
             ));
         }
-        (true, None) => {
+        (_, true, None) => {
+            return Err(CompilerModuleConstructionError::UnsupportedTargetBinding(
+                "<unbound>".to_owned(),
+            ));
+        }
+        (true, false, Some(target)) if target.as_amd_target_id().processor() == "gfx942" => {
+            dialect_amdgcn::lower_compiler_module_to_gfx942_llvm_ir(module)
+        }
+        (true, false, Some(target)) => {
+            return Err(CompilerModuleConstructionError::UnsupportedFloatTarget(
+                target.to_string(),
+            ));
+        }
+        (true, false, None) => {
             return Err(CompilerModuleConstructionError::UnsupportedFloatTarget(
                 "<unbound>".to_owned(),
             ));
         }
-        (false, _) => dialect_amdgcn::lower_compiler_module_to_llvm_ir(module),
+        (false, false, _) => dialect_amdgcn::lower_compiler_module_to_llvm_ir(module),
     }
     .map_err(CompilerModuleConstructionError::Lowering)?;
 
@@ -2437,13 +2468,19 @@ mod tests {
                 if target == "<unbound>"
         ));
         assert!(matches!(
-            construct_inert_compiler_module_text_for_target_v1(&module, Some("gfx1100")),
+            construct_inert_compiler_module_text_for_target_v1(
+                &module,
+                Some(DeviceTargetV1::parse("gfx1100").unwrap())
+            ),
             Err(CompilerModuleConstructionError::UnsupportedFloatTarget(target))
                 if target == "gfx1100"
         ));
 
-        let compiled = construct_inert_compiler_module_text_for_target_v1(&module, Some("gfx942"))
-            .expect("gfx942 float compiler module");
+        let compiled = construct_inert_compiler_module_text_for_target_v1(
+            &module,
+            Some(DeviceTargetV1::parse("gfx942").unwrap()),
+        )
+        .expect("gfx942 float compiler module");
         assert!(compiled.llvm_ir().contains("\"target-cpu\"=\"gfx942\""));
         assert!(
             compiled
@@ -2458,6 +2495,41 @@ mod tests {
                 .iter()
                 .any(|symbol| symbol.starts_with("__fe2o3_ir_float_v1_"))
         );
+    }
+
+    #[test]
+    fn exact_target_bound_module_cannot_lower_through_a_processor_only_alias() {
+        let mut module = inert_compiler_module_fixture();
+        module
+            .required_capabilities
+            .insert(TargetCapability::Extension {
+                namespace: AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE.to_owned(),
+                name: AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME.to_owned(),
+            });
+
+        let exact = construct_inert_compiler_module_text_for_target_v1(
+            &module,
+            Some(DeviceTargetV1::parse("gfx942:xnack-").unwrap()),
+        )
+        .expect("exact target-bound module");
+        assert!(exact.llvm_ir().contains("\"target-cpu\"=\"gfx942\""));
+
+        for wrong in [
+            "gfx942",
+            "gfx942:xnack+",
+            "gfx942:sramecc+:xnack-",
+            "gfx942:sramecc-:xnack-",
+            "gfx950:xnack-",
+        ] {
+            assert!(matches!(
+                construct_inert_compiler_module_text_for_target_v1(
+                    &module,
+                    Some(DeviceTargetV1::parse(wrong).unwrap())
+                ),
+                Err(CompilerModuleConstructionError::UnsupportedTargetBinding(target))
+                    if target == wrong
+            ));
+        }
     }
 
     #[test]

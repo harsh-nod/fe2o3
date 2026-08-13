@@ -486,6 +486,39 @@ mod tests {
     }
 
     #[test]
+    fn exact_gfx942_xnack_minus_identity_has_no_spelling_or_feature_alias() {
+        let exact = AmdTargetId::parse("gfx942:xnack-").unwrap();
+        assert_eq!(exact.to_string(), "gfx942:xnack-");
+        assert_eq!(exact.processor(), "gfx942");
+        assert_eq!(exact.sramecc(), None);
+        assert_eq!(exact.xnack(), Some(FeatureState::Disabled));
+
+        for different in [
+            "gfx942",
+            "gfx942:xnack+",
+            "gfx942:sramecc+:xnack-",
+            "gfx942:sramecc-:xnack-",
+            "gfx942:xnack-:sramecc+",
+        ] {
+            let parsed = AmdTargetId::parse(different).unwrap();
+            assert_ne!(parsed, exact, "unexpected exact-target alias {different}");
+        }
+
+        for invalid in [
+            "gfx942:xnack-:xnack-",
+            "gfx942:xnack-:xnack+",
+            "gfx942:future+",
+            "GFX942:xnack-",
+            "gfx941",
+        ] {
+            assert!(
+                AmdTargetId::parse(invalid).is_err(),
+                "unexpectedly parsed invalid target {invalid}"
+            );
+        }
+    }
+
+    #[test]
     fn elf_machine_mapping_matches_independent_llvm_literals() {
         const EXPECTED: &[(&str, u32)] = &[
             ("gfx600", 0x20),

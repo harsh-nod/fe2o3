@@ -784,6 +784,20 @@ impl InlineAssembly {
 pub const AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAMESPACE: &str = "fe2o3.amdgpu";
 pub const AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAME: &str = "diagnostics.gfx942.v1";
 
+/// Canonical extension namespace for an exact AMD target-ID binding.
+pub const AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE: &str = "fe2o3.amdgpu.target";
+
+/// The only target authorized by the bounded gfx942 wave/LDS V2 profile.
+pub const AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME: &str = "gfx942:xnack-";
+
+/// Returns the exact target binding carried by authenticated gfx942 wave/LDS IR.
+pub fn gfx942_xnack_minus_target_capability() -> TargetCapability {
+    TargetCapability::Extension {
+        namespace: AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE.to_owned(),
+        name: AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME.to_owned(),
+    }
+}
+
 /// One closed diagnostic or instrumentation operation for gfx942.
 ///
 /// These operations are lane-local and non-convergent. They neither imply a

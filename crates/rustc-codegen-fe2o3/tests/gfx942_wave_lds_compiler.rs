@@ -100,15 +100,39 @@ fn rust_source_reaches_verified_wave_and_lds_kernel_ir() {
 }
 
 #[test]
-fn rust_source_fails_closed_without_exact_gfx942() {
+fn rust_source_fails_closed_for_every_non_exact_gfx942_xnack_minus_target() {
     let _lock = backend_test_lock();
-    let output = backend_build(&workspace(), "gfx1100");
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    for target in [
+        "gfx942",
+        "gfx942:xnack+",
+        "gfx942:sramecc+:xnack-",
+        "gfx942:sramecc-:xnack-",
+        "gfx942:xnack-:sramecc+",
+        "gfx942:xnack-:xnack-",
+        "gfx942:xnack-:xnack+",
+        "gfx942:future+",
+        "gfx941",
+        "gfx950",
+        "gfx1100",
+    ] {
+        let output = backend_build(&workspace(), target);
+        let stderr = String::from_utf8_lossy(&output.stderr);
 
-    assert!(!output.status.success());
-    assert!(
-        stderr.contains("requires exact gfx942 General V3"),
-        "wrong-target source missed the wave/LDS profile gate:\n{stderr}"
-    );
-    assert!(!stderr.contains("selected kernel-ir-worker-v2: verified"));
+        assert!(
+            !output.status.success(),
+            "target {target} unexpectedly built"
+        );
+        assert!(
+            stderr.contains("requires exact gfx942:xnack- General V3")
+                || stderr.contains("invalid")
+                || stderr.contains("unknown")
+                || stderr.contains("duplicate")
+                || stderr.contains("conflicting"),
+            "target {target} missed every exact-target rejection boundary:\n{stderr}"
+        );
+        assert!(
+            !stderr.contains("selected kernel-ir-worker-v2: verified"),
+            "target {target} reached verified Kernel IR:\n{stderr}"
+        );
+    }
 }
