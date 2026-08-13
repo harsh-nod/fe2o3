@@ -210,6 +210,8 @@ run_backend_build() {
 run_verus() {
   run_step verus-fixtures \
     "${REPO_ROOT}/examples/verus_vecadd/run-verus.sh" --require
+  run_step scalar-gemm-verus \
+    "${REPO_ROOT}/examples/scalar_gemm_v1/run-verus.sh" --require
 }
 
 run_parity_matrix_checks() {
