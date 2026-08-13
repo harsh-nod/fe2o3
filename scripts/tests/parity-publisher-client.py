@@ -170,6 +170,7 @@ class Fixture:
             "GITHUB_WORKFLOW": "Protected parity promotion",
             "FE2O3_PUBLISHER_DEFAULT_BRANCH": "main",
             "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "PYTHONDONTWRITEBYTECODE": "1",
             "RUNNER_TEMP": str(self.runner),
         }
         self.oidc_token_value = self.oidc_token()
