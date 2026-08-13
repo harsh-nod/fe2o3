@@ -154,16 +154,7 @@ impl std::error::Error for RustcScalarAdmissionErrorV2 {}
 pub fn lower_rustc_scalar_v2(
     request: RustcScalarRequestV2<'_>,
 ) -> Result<RustcScalarArtifactV2, RustcScalarAdmissionErrorV2> {
-    if request.target.as_str() != EXACT_SCALAR_V2_TARGET {
-        return Err(RustcScalarAdmissionErrorV2::WrongTarget {
-            expected: EXACT_SCALAR_V2_TARGET,
-            actual: request.target.as_str().to_owned(),
-        });
-    }
-    if request.custom_llvm_pipeline {
-        return Err(RustcScalarAdmissionErrorV2::CustomLlvmPipeline);
-    }
-    let operation = normalize_expression(request.expression)?;
+    let operation = normalize_request(request)?;
     let arity = operation_arity(operation);
     let kernel_ir = ScalarOperationV2::new(
         operation,
@@ -176,6 +167,30 @@ pub fn lower_rustc_scalar_v2(
         kernel_ir,
         gfx942_llvm,
     })
+}
+
+pub(crate) fn admit_rustc_scalar_operation_v2(
+    request: RustcScalarRequestV2<'_>,
+    arguments: Vec<ValueId>,
+) -> Result<ScalarOperationV2, RustcScalarAdmissionErrorV2> {
+    let operation = normalize_request(request)?;
+    ScalarOperationV2::new(operation, arguments)
+        .map_err(RustcScalarAdmissionErrorV2::InvalidKernelIr)
+}
+
+fn normalize_request(
+    request: RustcScalarRequestV2<'_>,
+) -> Result<Operation, RustcScalarAdmissionErrorV2> {
+    if request.target.as_str() != EXACT_SCALAR_V2_TARGET {
+        return Err(RustcScalarAdmissionErrorV2::WrongTarget {
+            expected: EXACT_SCALAR_V2_TARGET,
+            actual: request.target.as_str().to_owned(),
+        });
+    }
+    if request.custom_llvm_pipeline {
+        return Err(RustcScalarAdmissionErrorV2::CustomLlvmPipeline);
+    }
+    normalize_expression(request.expression)
 }
 
 fn normalize_expression(
