@@ -10,10 +10,12 @@ use std::os::unix::fs::{
 use std::os::unix::net::UnixDatagram;
 use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::ptr;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use sha2::{Digest as _, Sha256};
 
@@ -23,6 +25,10 @@ const BUILD_HELPER_ENV: &str = "FE2O3_SCALAR_CF_ISOLATED_BUILD_HELPER";
 const BUILD_HELPER_SOCKET_ENV: &str = "FE2O3_SCALAR_CF_BUILD_SOCKET_FD";
 const BUILD_HELPER_WORKSPACE_ENV: &str = "FE2O3_SCALAR_CF_BUILD_WORKSPACE";
 const BUILD_HELPER_MOUNT_ENV: &str = "FE2O3_SCALAR_CF_BUILD_MOUNT";
+const BACKEND_BUILD_TIMEOUT: Duration = Duration::from_secs(600);
+const COMPILER_TIMEOUT: Duration = Duration::from_secs(120);
+const TERMINATION_GRACE: Duration = Duration::from_secs(2);
+const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(20);
 static NEXT_OUTPUT: AtomicU64 = AtomicU64::new(0);
 static BACKEND: OnceLock<PinnedBackend> = OnceLock::new();
 
@@ -158,13 +164,192 @@ fn workspace() -> PathBuf {
         .expect("canonical workspace")
 }
 
+struct CapturedChild {
+    child: Child,
+    stdout: Option<thread::JoinHandle<std::io::Result<Vec<u8>>>>,
+    stderr: Option<thread::JoinHandle<std::io::Result<Vec<u8>>>>,
+    process_group: libc::pid_t,
+    running: bool,
+}
+
+impl CapturedChild {
+    fn spawn(command: &mut Command, context: &str) -> Result<Self, String> {
+        let parent = unsafe { libc::getpid() };
+        command
+            .process_group(0)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        unsafe {
+            command.pre_exec(move || {
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if libc::getppid() != parent {
+                    return Err(std::io::Error::from_raw_os_error(libc::ECHILD));
+                }
+                Ok(())
+            });
+        }
+        let mut child = command
+            .spawn()
+            .map_err(|error| format!("spawn {context}: {error}"))?;
+        let process_group = libc::pid_t::try_from(child.id())
+            .map_err(|_| format!("{context} PID does not fit pid_t"))?;
+        let mut stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| format!("capture {context} stdout"))?;
+        let mut stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| format!("capture {context} stderr"))?;
+        Ok(Self {
+            child,
+            stdout: Some(thread::spawn(move || {
+                let mut bytes = Vec::new();
+                stdout.read_to_end(&mut bytes)?;
+                Ok(bytes)
+            })),
+            stderr: Some(thread::spawn(move || {
+                let mut bytes = Vec::new();
+                stderr.read_to_end(&mut bytes)?;
+                Ok(bytes)
+            })),
+            process_group,
+            running: true,
+        })
+    }
+
+    fn try_wait(&mut self, context: &str) -> Result<Option<ExitStatus>, String> {
+        let status = self
+            .child
+            .try_wait()
+            .map_err(|error| format!("poll {context}: {error}"))?;
+        if status.is_some() {
+            self.running = false;
+        }
+        Ok(status)
+    }
+
+    fn terminate(&mut self) {
+        if !self.running {
+            return;
+        }
+        unsafe {
+            libc::kill(-self.process_group, libc::SIGTERM);
+        }
+        let grace = Instant::now() + TERMINATION_GRACE;
+        while Instant::now() < grace {
+            if self.child.try_wait().ok().flatten().is_some() {
+                self.running = false;
+                return;
+            }
+            thread::sleep(PROCESS_POLL_INTERVAL);
+        }
+        unsafe {
+            libc::kill(-self.process_group, libc::SIGKILL);
+        }
+        let _ = self.child.wait();
+        self.running = false;
+    }
+
+    fn finish(mut self, status: ExitStatus, context: &str) -> Result<Output, String> {
+        let stdout = self
+            .stdout
+            .take()
+            .expect("stdout reader is present")
+            .join()
+            .map_err(|_| format!("{context} stdout reader panicked"))?
+            .map_err(|error| format!("read {context} stdout: {error}"))?;
+        let stderr = self
+            .stderr
+            .take()
+            .expect("stderr reader is present")
+            .join()
+            .map_err(|_| format!("{context} stderr reader panicked"))?
+            .map_err(|error| format!("read {context} stderr: {error}"))?;
+        Ok(Output {
+            status,
+            stdout,
+            stderr,
+        })
+    }
+
+    fn wait_until(mut self, deadline: Instant, context: &str) -> Result<Output, String> {
+        loop {
+            if let Some(status) = self.try_wait(context)? {
+                return self.finish(status, context);
+            }
+            if Instant::now() >= deadline {
+                self.terminate();
+                return Err(format!("{context} exceeded its monotonic deadline"));
+            }
+            thread::sleep(PROCESS_POLL_INTERVAL);
+        }
+    }
+}
+
+impl Drop for CapturedChild {
+    fn drop(&mut self) {
+        if self.running {
+            self.terminate();
+        }
+    }
+}
+
+fn run_bounded(command: &mut Command, timeout: Duration, context: &str) -> Result<Output, String> {
+    CapturedChild::spawn(command, context)?.wait_until(Instant::now() + timeout, context)
+}
+
+fn receive_backend_from_child(
+    mut child: CapturedChild,
+    socket: RawFd,
+    deadline: Instant,
+    context: &str,
+) -> Result<(File, Output), String> {
+    loop {
+        let mut pollfd = libc::pollfd {
+            fd: socket,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let polled = unsafe { libc::poll(&mut pollfd, 1, 20) };
+        if polled < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() != std::io::ErrorKind::Interrupted {
+                return Err(format!("poll {context} descriptor socket: {error}"));
+            }
+        } else if polled > 0 && pollfd.revents & libc::POLLIN != 0 {
+            let file = receive_backend_descriptor(socket)?;
+            let output = child.wait_until(deadline, context)?;
+            return Ok((file, output));
+        }
+
+        if let Some(status) = child.try_wait(context)? {
+            let output = child.finish(status, context)?;
+            return Err(format!(
+                "{context} exited before transferring a descriptor: {status}\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        if Instant::now() >= deadline {
+            child.terminate();
+            return Err(format!(
+                "{context} exceeded its monotonic descriptor-transfer deadline"
+            ));
+        }
+    }
+}
+
 fn build_backend(workspace: &Path) -> &'static PinnedBackend {
     BACKEND.get_or_init(|| {
         let build_root = PrivateBuildRoot::new(workspace);
         let (parent_socket, child_socket) = UnixDatagram::pair().expect("create backend FD socket");
         set_close_on_exec(child_socket.as_raw_fd(), false)
             .expect("make backend helper socket inheritable");
-        let child = Command::new("unshare")
+        let mut command = Command::new("unshare");
+        command
             .args(["--user", "--map-root-user", "--mount", "--fork", "--"])
             .arg(std::env::current_exe().expect("current integration test executable"))
             .args(["--ignored", "--exact", "isolated_backend_build_helper"])
@@ -174,10 +359,8 @@ fn build_backend(workspace: &Path) -> &'static PinnedBackend {
                 child_socket.as_raw_fd().to_string(),
             )
             .env(BUILD_HELPER_WORKSPACE_ENV, workspace)
-            .env(BUILD_HELPER_MOUNT_ENV, &build_root.0)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
+            .env(BUILD_HELPER_MOUNT_ENV, &build_root.0);
+        let child = CapturedChild::spawn(&mut command, "namespaced backend build helper")
             .expect("launch namespaced backend build helper");
         drop(child_socket);
         let hostile_path = build_root.0.join("target/debug/librustc_codegen_fe2o3.so");
@@ -185,10 +368,13 @@ fn build_backend(workspace: &Path) -> &'static PinnedBackend {
             .expect("create same-UID hostile backend path");
         std::fs::write(&hostile_path, b"same-uid path substitution")
             .expect("substitute nominal backend path outside helper namespace");
-        let received = receive_backend_descriptor(parent_socket.as_raw_fd());
-        let output = child
-            .wait_with_output()
-            .expect("wait for namespaced backend build helper");
+        let (file, output) = receive_backend_from_child(
+            child,
+            parent_socket.as_raw_fd(),
+            Instant::now() + BACKEND_BUILD_TIMEOUT,
+            "namespaced backend build helper",
+        )
+        .expect("receive sealed backend from bounded private mount namespace");
         assert_eq!(
             std::fs::read(&hostile_path).expect("read hostile parent-namespace path"),
             b"same-uid path substitution",
@@ -200,7 +386,6 @@ fn build_backend(workspace: &Path) -> &'static PinnedBackend {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
-        let file = received.expect("receive sealed backend from private mount namespace");
         pinned_backend_from_file(file).expect("verify transferred sealed backend")
     })
 }
@@ -472,9 +657,8 @@ fn compile_path(
     unsafe {
         command.pre_exec(move || set_close_on_exec(backend_descriptor, false));
     }
-    command
-        .output()
-        .expect("compile scalar-control-flow fixture")
+    run_bounded(&mut command, COMPILER_TIMEOUT, "scalar-control-flow rustc")
+        .expect("compile scalar-control-flow fixture within deadline")
 }
 
 fn stderr(output: &Output) -> String {
@@ -524,13 +708,18 @@ fn isolated_backend_build_helper() {
         .expect("numeric isolated build socket descriptor");
     mount_private_build_tmpfs(&mount).expect("isolate backend build output in a private tmpfs");
     let target_dir = mount.join("target");
-    let output = Command::new(env!("CARGO"))
+    let mut command = Command::new(env!("CARGO"));
+    command
         .current_dir(&workspace)
         .args(["build", "--locked", "-p", "rustc-codegen-fe2o3"])
         .env("CARGO_TARGET_DIR", &target_dir)
-        .env("CARGO_INCREMENTAL", "0")
-        .output()
-        .expect("build rustc backend in private mount namespace");
+        .env("CARGO_INCREMENTAL", "0");
+    let output = run_bounded(
+        &mut command,
+        BACKEND_BUILD_TIMEOUT,
+        "private namespace backend cargo build",
+    )
+    .expect("build rustc backend in private mount namespace within deadline");
     assert!(
         output.status.success(),
         "isolated backend build failed\nstdout:\n{}\nstderr:\n{}",
@@ -541,6 +730,70 @@ fn isolated_backend_build_helper() {
         .expect("pin namespaced backend in a sealed memfd");
     send_backend_descriptor(socket_descriptor, pinned.file.as_raw_fd())
         .expect("transfer sealed backend descriptor");
+}
+
+#[test]
+fn backend_helper_early_exit_fails_within_deadline() {
+    let (parent_socket, child_socket) = UnixDatagram::pair().expect("create regression FD socket");
+    set_close_on_exec(child_socket.as_raw_fd(), false)
+        .expect("make regression child socket inheritable");
+    let mut command = Command::new("/bin/sh");
+    command.args(["-c", "exit 23"]);
+    let child = CapturedChild::spawn(&mut command, "early-exit regression helper")
+        .expect("spawn early-exit regression helper");
+    drop(child_socket);
+    let started = Instant::now();
+    let error = receive_backend_from_child(
+        child,
+        parent_socket.as_raw_fd(),
+        started + Duration::from_secs(2),
+        "early-exit regression helper",
+    )
+    .expect_err("helper exit before descriptor transfer must fail closed");
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "early helper exit was not detected before the deadline"
+    );
+    assert!(
+        error.contains("exited before transferring a descriptor") && error.contains("status: 23"),
+        "unexpected early-exit diagnostic: {error}"
+    );
+}
+
+#[test]
+fn subprocess_timeout_reaps_its_descendant_group() {
+    let workspace = workspace();
+    let output = TestOutputDir::new(&workspace);
+    let pid_file = output.0.join("timed-out-descendant.pid");
+    let mut command = Command::new("/bin/sh");
+    command
+        .args(["-c", "sleep 30 & echo $! > \"$PID_FILE\"; wait"])
+        .env("PID_FILE", &pid_file);
+    let error = run_bounded(
+        &mut command,
+        Duration::from_millis(200),
+        "descendant cleanup regression",
+    )
+    .expect_err("long-running subprocess must hit its deadline");
+    assert!(
+        error.contains("exceeded its monotonic deadline"),
+        "unexpected timeout diagnostic: {error}"
+    );
+    let descendant: libc::pid_t = std::fs::read_to_string(&pid_file)
+        .expect("read timed-out descendant PID")
+        .trim()
+        .parse()
+        .expect("numeric timed-out descendant PID");
+    let probe = unsafe { libc::kill(descendant, 0) };
+    assert_eq!(
+        probe, -1,
+        "timed-out descendant {descendant} survived cleanup"
+    );
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::ESRCH),
+        "timed-out descendant still exists"
+    );
 }
 
 #[test]
