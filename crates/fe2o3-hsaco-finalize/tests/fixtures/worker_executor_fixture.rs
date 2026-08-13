@@ -24,12 +24,13 @@ fn main() {
     io::stdin().read_exact(&mut prefix).unwrap();
     let is_v2 = &prefix[..8] == b"F3LREQ02";
     let legacy_mode = prefix[14];
-    if !is_v2 && legacy_mode == 2 {
+    let is_legacy_control = prefix[14..46].iter().all(|byte| *byte == legacy_mode);
+    if !is_v2 && is_legacy_control && legacy_mode == 2 {
         loop {
             thread::sleep(Duration::from_secs(60));
         }
     }
-    if !is_v2 && legacy_mode == 9 {
+    if !is_v2 && is_legacy_control && legacy_mode == 9 {
         exit(0);
     }
     let mut request = prefix.to_vec();

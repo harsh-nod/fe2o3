@@ -47,13 +47,17 @@ fn pinned() -> PinnedWorkerV1 {
 }
 
 fn request(mode: u8, input_bytes: usize, output_bytes: u64) -> WorkerRequestV1 {
+    request_with_id([mode; 32], vec![mode; input_bytes], output_bytes)
+}
+
+fn request_with_id(request_id: [u8; 32], input: Vec<u8>, output_bytes: u64) -> WorkerRequestV1 {
     WorkerRequestV1::new(
-        [mode; 32],
+        request_id,
         LLVM_ID,
         DeviceTargetV1::parse("gfx942:xnack-").unwrap(),
         CodeObjectVersion::V6,
         WorkerOptionsV1::new(WorkerOptimizationLevelV1::O2, true, true),
-        vec![WorkerInputV1::new(WorkerInputKindV1::LlvmBitcode, vec![mode; input_bytes]).unwrap()],
+        vec![WorkerInputV1::new(WorkerInputKindV1::LlvmBitcode, input).unwrap()],
         vec![],
         vec![],
         WorkerOutputConstraintsV1::new(output_bytes).unwrap(),
@@ -276,6 +280,25 @@ fn hangs_and_blocked_stdin_are_timed_out() {
     assert_eq!(error.kind(), &WorkerExecutionErrorKind::Timeout);
     assert!(format!("{error:?}").contains("request_written="));
     assert!(started.elapsed() < Duration::from_secs(3));
+}
+
+#[test]
+fn workflow_request_id_prefixes_do_not_alias_legacy_control_modes() {
+    for prefix in [2, 9] {
+        let mut request_id = [0x5a; 32];
+        request_id[0] = prefix;
+        let request = request_with_id(request_id, b"workflow_kernel".to_vec(), 1024);
+        assert_eq!(
+            pinned()
+                .execute(&request, limits())
+                .unwrap()
+                .response()
+                .output()
+                .unwrap()
+                .bytes(),
+            b"fixture-output"
+        );
+    }
 }
 
 #[test]
