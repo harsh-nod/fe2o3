@@ -33,27 +33,31 @@ const MAX_COMPILER_MODULE_CALL_EDGES: usize = 131_072;
 /// Maximum textual LLVM bytes returned by compiler-module construction.
 pub const MAX_COMPILER_MODULE_TEXT_BYTES: usize = 16 * 1024 * 1024;
 
+/// Canonical LLVM data layout for the exact gfx942:xnack- device profile.
+pub const GFX942_XNACK_MINUS_DATA_LAYOUT: &str = "e-p:64:64-p1:64:64-p2:32:32-p3:32:32-p4:64:64-p5:32:32-p6:32:32-p7:160:256:256:32-p8:128:128:128:48-p9:192:256:256:32-i64:64-v16:16-v24:32-v32:32-v48:64-v96:128-v192:256-v256:256-v512:512-v1024:1024-v2048:2048-n32:64-S32-A5-G1-ni:7:8:9";
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum LoweringTarget {
     Baseline,
     Gfx942StrictFloatV1,
+    Gfx942XnackMinusV1,
 }
 
 impl LoweringTarget {
     const fn supports_narrow_float(self) -> bool {
-        matches!(self, Self::Gfx942StrictFloatV1)
+        !matches!(self, Self::Baseline)
     }
 
     const fn supports_gfx942_inline_assembly(self) -> bool {
-        matches!(self, Self::Gfx942StrictFloatV1)
+        !matches!(self, Self::Baseline)
     }
 
     const fn supports_gfx942_matrix(self) -> bool {
-        matches!(self, Self::Gfx942StrictFloatV1)
+        !matches!(self, Self::Baseline)
     }
 
     const fn supports_gfx942_diagnostics(self) -> bool {
-        matches!(self, Self::Gfx942StrictFloatV1)
+        !matches!(self, Self::Baseline)
     }
 
     const fn supports_gfx942_xnack_minus_binding(self) -> bool {
@@ -63,9 +67,29 @@ impl LoweringTarget {
     const fn llvm_function_attributes(self) -> &'static str {
         match self {
             Self::Baseline => "",
-            Self::Gfx942StrictFloatV1 => {
+            Self::Gfx942StrictFloatV1 | Self::Gfx942XnackMinusV1 => {
                 " \"target-cpu\"=\"gfx942\" \"denormal-fp-math-f32\"=\"ieee,ieee\" \"unsafe-fp-math\"=\"false\" \"no-infs-fp-math\"=\"false\" \"no-nans-fp-math\"=\"false\" \"no-signed-zeros-fp-math\"=\"false\" \"approx-func-fp-math\"=\"false\""
             }
+        }
+    }
+
+    const fn data_layout(self) -> Option<&'static str> {
+        match self {
+            Self::Gfx942XnackMinusV1 => Some(GFX942_XNACK_MINUS_DATA_LAYOUT),
+            Self::Baseline | Self::Gfx942StrictFloatV1 => None,
+        }
+    }
+
+    const fn wave_target_feature(self, width: WaveWidth) -> &'static str {
+        match (self, width) {
+            (Self::Gfx942XnackMinusV1, WaveWidth::Wave32) => {
+                " \"target-features\"=\"+wavefrontsize32,-wavefrontsize64,-xnack\""
+            }
+            (Self::Gfx942XnackMinusV1, WaveWidth::Wave64) => {
+                " \"target-features\"=\"-wavefrontsize32,+wavefrontsize64,-xnack\""
+            }
+            (_, WaveWidth::Wave32) => " \"target-features\"=\"+wavefrontsize32,-wavefrontsize64\"",
+            (_, WaveWidth::Wave64) => " \"target-features\"=\"-wavefrontsize32,+wavefrontsize64\"",
         }
     }
 }
@@ -494,6 +518,22 @@ pub fn lower_device_module_to_gfx942_llvm_ir(module: &Module) -> Result<String, 
     lower_compiler_module_to_llvm_ir_for_target(
         module,
         LoweringTarget::Gfx942StrictFloatV1,
+        None,
+        false,
+    )
+}
+
+/// Lowers a verified helper-only module for the exact gfx942:xnack- profile.
+///
+/// In addition to the strict gfx942 processor and floating-point attributes,
+/// this entry point emits the reviewed target data layout and binds `-xnack`
+/// in every defined function's target-feature set.
+pub fn lower_device_module_to_gfx942_xnack_minus_llvm_ir(
+    module: &Module,
+) -> Result<String, LoweringErrors> {
+    lower_compiler_module_to_llvm_ir_for_target(
+        module,
+        LoweringTarget::Gfx942XnackMinusV1,
         None,
         false,
     )
@@ -1984,7 +2024,11 @@ fn emit_compiler_module(
     let convergent_attribute = has_convergent.then_some(kernels.len() + usize::from(has_readnone));
 
     let mut output = CapacityLimitedText::new(MAX_COMPILER_MODULE_TEXT_BYTES);
-    writeln!(output, "target triple = \"{AMDGPU_TRIPLE}\"\n").unwrap();
+    writeln!(output, "target triple = \"{AMDGPU_TRIPLE}\"").unwrap();
+    if let Some(data_layout) = target.data_layout() {
+        writeln!(output, "target datalayout = \"{data_layout}\"").unwrap();
+    }
+    writeln!(output).unwrap();
 
     let mut has_lds = false;
     for lowerer in kernels {
@@ -2046,7 +2090,9 @@ fn emit_compiler_module(
     }
 
     for (index, lowerer) in kernels.iter().enumerate() {
-        let wave_attribute = lowerer.wave_width.map_or("", wave_target_feature);
+        let wave_attribute = lowerer
+            .wave_width
+            .map_or("", |width| target.wave_target_feature(width));
         let workgroup_x = lowerer
             .workgroup_x
             .expect("compiler-module kernel requires a workgroup size");
@@ -2312,13 +2358,6 @@ fn llvm_result_type(signature: &Signature) -> &'static str {
         [] => "void",
         [result] => llvm_type(result),
         _ => unreachable!("compiler-module preflight rejected multi-value returns"),
-    }
-}
-
-fn wave_target_feature(width: WaveWidth) -> &'static str {
-    match width {
-        WaveWidth::Wave32 => " \"target-features\"=\"+wavefrontsize32,-wavefrontsize64\"",
-        WaveWidth::Wave64 => " \"target-features\"=\"-wavefrontsize32,+wavefrontsize64\"",
     }
 }
 
@@ -3657,7 +3696,7 @@ impl<'a> FunctionLowerer<'a> {
         float: &FloatOperation,
         location: &LoweringLocation,
     ) -> Result<(), LoweringErrors> {
-        if self.target != LoweringTarget::Gfx942StrictFloatV1 {
+        if matches!(self.target, LoweringTarget::Baseline) {
             return Err(LoweringErrors::one(
                 location.clone(),
                 LoweringDiagnosticCode::UnsupportedFloatOperation,
@@ -3682,7 +3721,11 @@ impl<'a> FunctionLowerer<'a> {
 
     fn emit(&self) -> Result<String, LoweringErrors> {
         let mut output = String::new();
-        writeln!(output, "target triple = \"{AMDGPU_TRIPLE}\"\n").unwrap();
+        writeln!(output, "target triple = \"{AMDGPU_TRIPLE}\"").unwrap();
+        if let Some(data_layout) = self.target.data_layout() {
+            writeln!(output, "target datalayout = \"{data_layout}\"").unwrap();
+        }
+        writeln!(output).unwrap();
         let float_requirements = FloatRequirements::collect(std::iter::once(self));
         let has_workgroup_barrier = self.has_workgroup_barrier();
         let has_matrix_lds = self.has_matrix_kind(|kind| {
@@ -3787,10 +3830,9 @@ impl<'a> FunctionLowerer<'a> {
 
         self.emit_body(&mut output)?;
         writeln!(output, "}}\n").unwrap();
-        let wave_attribute = self.wave_width.map_or("", |width| match width {
-            WaveWidth::Wave32 => " \"target-features\"=\"+wavefrontsize32,-wavefrontsize64\"",
-            WaveWidth::Wave64 => " \"target-features\"=\"-wavefrontsize32,+wavefrontsize64\"",
-        });
+        let wave_attribute = self
+            .wave_width
+            .map_or("", |width| self.target.wave_target_feature(width));
         writeln!(
             output,
             "attributes #0 = {{ nounwind \"amdgpu-flat-work-group-size\"=\"{0},{0}\"{wave_attribute}{target_attributes} }}",
@@ -3836,7 +3878,9 @@ impl<'a> FunctionLowerer<'a> {
             .unwrap();
         } else {
             let result = llvm_result_type(&self.function.signature);
-            let wave_attribute = self.wave_width.map_or("", wave_target_feature);
+            let wave_attribute = self
+                .wave_width
+                .map_or("", |width| self.target.wave_target_feature(width));
             let linkage = match self.function.role {
                 FunctionRole::InternalHelper => "internal ",
                 FunctionRole::DeviceFfiExport => "",

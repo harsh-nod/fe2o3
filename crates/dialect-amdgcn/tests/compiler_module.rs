@@ -1,5 +1,6 @@
 use dialect_amdgcn::{
-    LoweringDiagnosticCode, lower_compiler_module_to_llvm_ir, lower_device_module_to_gfx942_llvm_ir,
+    GFX942_XNACK_MINUS_DATA_LAYOUT, LoweringDiagnosticCode, lower_compiler_module_to_llvm_ir,
+    lower_device_module_to_gfx942_llvm_ir, lower_device_module_to_gfx942_xnack_minus_llvm_ir,
 };
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, BasicBlock, BinaryOp, BlockId, Function, FunctionId,
@@ -226,6 +227,25 @@ fn helper_only_gfx942_modules_require_explicit_wave_modes() {
     assert!(llvm.contains("%v3 = phi i32 [ 11, %bb1 ], [ 22, %bb2 ]"));
     assert!(!llvm.contains("amdgpu_kernel"));
     assert!(!llvm.contains("!reqd_work_group_size"));
+}
+
+#[test]
+fn exact_gfx942_xnack_minus_device_modules_bind_layout_and_features() {
+    let mut module = Module::new("tests::exact_gfx942_xnack_minus");
+    let mut helper = void_helper("exact_helper", &[]);
+    helper
+        .required_capabilities
+        .insert(TargetCapability::WaveWidth(WaveWidth::Wave64));
+    module.functions.push(helper);
+
+    let llvm = lower_device_module_to_gfx942_xnack_minus_llvm_ir(&module).unwrap();
+    assert!(llvm.contains(&format!(
+        "target datalayout = \"{GFX942_XNACK_MINUS_DATA_LAYOUT}\""
+    )));
+    assert!(llvm.contains("\"target-cpu\"=\"gfx942\""));
+    assert!(llvm.contains("\"target-features\"=\"-wavefrontsize32,+wavefrontsize64,-xnack\""));
+    assert!(llvm.contains("define internal void @exact_helper()"));
+    assert!(!llvm.contains("amdgpu_kernel"));
 }
 
 #[test]
