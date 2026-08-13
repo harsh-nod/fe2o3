@@ -406,30 +406,47 @@ mod tests {
         let original_flags = unsafe { libc::fcntl(reader.as_raw_fd(), libc::F_GETFL) };
         let observed = reader.try_clone().unwrap();
         let stop = StdArc::new(AtomicBool::new(false));
+        let reading = StdArc::new(AtomicBool::new(false));
         let changed = StdArc::new(AtomicBool::new(false));
         let samples = StdArc::new(AtomicUsize::new(0));
         let barrier = StdArc::new(Barrier::new(2));
+        let (sampled_tx, sampled_rx) = mpsc::sync_channel(1);
         let observer = {
             let stop = stop.clone();
+            let reading = reading.clone();
             let changed = changed.clone();
             let samples = samples.clone();
             let barrier = barrier.clone();
             thread::spawn(move || {
                 barrier.wait();
+                let mut notified = false;
                 while !stop.load(Ordering::Acquire) {
                     let flags = unsafe { libc::fcntl(observed.as_raw_fd(), libc::F_GETFL) };
-                    samples.fetch_add(1, Ordering::Relaxed);
                     if flags != original_flags {
                         changed.store(true, Ordering::Release);
+                    }
+                    if reading.load(Ordering::Acquire) {
+                        samples.fetch_add(1, Ordering::Relaxed);
+                        if !notified {
+                            sampled_tx.send(()).unwrap();
+                            notified = true;
+                        }
                     }
                 }
             })
         };
-        writer.write_all(fixture.token.as_bytes()).unwrap();
-        writer.shutdown(std::net::Shutdown::Write).unwrap();
+        let token = fixture.token.clone();
+        let writer = thread::spawn(move || {
+            sampled_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+            writer.write_all(token.as_bytes()).unwrap();
+            writer.shutdown(std::net::Shutdown::Write).unwrap();
+        });
         barrier.wait();
+        reading.store(true, Ordering::Release);
         let bytes = read_nonregular_token_fd(reader.as_raw_fd(), Duration::from_secs(1)).unwrap();
+        reading.store(false, Ordering::Release);
         stop.store(true, Ordering::Release);
+        writer.join().unwrap();
         observer.join().unwrap();
         assert_eq!(&*bytes, fixture.token.as_bytes());
         assert!(samples.load(Ordering::Relaxed) > 0);
