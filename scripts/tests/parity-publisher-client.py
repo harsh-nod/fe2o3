@@ -23,6 +23,9 @@ import time
 from typing import Any, Callable
 
 
+sys.dont_write_bytecode = True
+
+
 ROOT = Path(__file__).resolve().parents[2]
 CLIENT_PATH = ROOT / "scripts/parity-publisher-client.py"
 EVIDENCE_PATH = ROOT / "scripts/parity-signed-evidence.py"
