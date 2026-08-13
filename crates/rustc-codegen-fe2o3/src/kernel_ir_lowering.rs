@@ -255,6 +255,7 @@ struct InternalDefinitionContract {
     signature: Signature,
 }
 
+#[cfg(test)]
 fn translate_and_verify_with_float_target(
     mir: &MirModule,
     float_target: Option<Gfx942FloatTarget>,
