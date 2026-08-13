@@ -3,11 +3,11 @@
 use fe2o3_verifier::{
     SCALAR_GEMM_COVERAGE_PROFILE_V1, SCALAR_GEMM_F32_NUMERICAL_CONTRACT_V1,
     SCALAR_GEMM_GLOBAL_ADDRESS_SPACE_V1, SCALAR_GEMM_MAX_GRID_THREADS_V1,
-    SCALAR_GEMM_ROOT_SYMBOL_V1, SCALAR_GEMM_TARGET_V1, ScalarGemmBufferRegionV1,
-    ScalarGemmHostAdmissionErrorV1, ScalarGemmHostRequestV1, ScalarGemmModelErrorV1,
-    ScalarGemmShapeV1, ScalarGemmToolchainV1, admit_scalar_gemm_host_v1,
+    SCALAR_GEMM_MAX_MODEL_WORK_ITEMS_V1, SCALAR_GEMM_ROOT_SYMBOL_V1, SCALAR_GEMM_TARGET_V1,
+    ScalarGemmBufferRegionV1, ScalarGemmHostAdmissionErrorV1, ScalarGemmHostRequestV1,
+    ScalarGemmModelErrorV1, ScalarGemmShapeV1, ScalarGemmToolchainV1, admit_scalar_gemm_host_v1,
     evaluate_scalar_gemm_abstract_invocation_v1, scalar_gemm_accesses_are_in_bounds_v1,
-    scalar_gemm_complete_launch_initializes_output_v1, scalar_gemm_f32_oracle_v1,
+    scalar_gemm_canonical_domain_initializes_output_v1, scalar_gemm_f32_oracle_v1,
     scalar_gemm_flattened_index_is_correct_v1, scalar_gemm_output_initialized_by_invocation_v1,
     scalar_gemm_writers_are_injective_v1,
 };
@@ -259,6 +259,84 @@ fn rejects_partial_and_exact_output_aliases_but_allows_shared_inputs() {
 }
 
 #[test]
+fn rejects_address_aliases_even_when_allocation_ids_disagree() {
+    let shape = ScalarGemmShapeV1::checked(2, 2, 2).unwrap();
+    let mut exact = valid_request(shape, &ROOT, &[]);
+    exact.c_region = ScalarGemmBufferRegionV1::new(
+        99,
+        SCALAR_GEMM_GLOBAL_ADDRESS_SPACE_V1,
+        0x1_0000,
+        shape.c_bytes(),
+        0,
+        shape.c_bytes(),
+    );
+    assert_eq!(
+        admit_scalar_gemm_host_v1(exact),
+        Err(ScalarGemmHostAdmissionErrorV1::OutputAliasesInput { input: "A" })
+    );
+
+    let mut partial = valid_request(shape, &ROOT, &[]);
+    partial.c_region = ScalarGemmBufferRegionV1::new(
+        99,
+        SCALAR_GEMM_GLOBAL_ADDRESS_SPACE_V1,
+        0x1_0004,
+        shape.c_bytes(),
+        0,
+        shape.c_bytes(),
+    );
+    assert_eq!(
+        admit_scalar_gemm_host_v1(partial),
+        Err(ScalarGemmHostAdmissionErrorV1::OutputAliasesInput { input: "A" })
+    );
+
+    let mut adjacent = valid_request(shape, &ROOT, &[]);
+    adjacent.c_region = ScalarGemmBufferRegionV1::new(
+        99,
+        SCALAR_GEMM_GLOBAL_ADDRESS_SPACE_V1,
+        0x1_0000 + shape.a_bytes(),
+        shape.c_bytes(),
+        0,
+        shape.c_bytes(),
+    );
+    assert!(admit_scalar_gemm_host_v1(adjacent).is_ok());
+}
+
+#[test]
+fn rejects_null_and_misaligned_nonempty_regions() {
+    let shape = ScalarGemmShapeV1::checked(1, 1, 1).unwrap();
+    let mut null = valid_request(shape, &ROOT, &[]);
+    null.a_region = ScalarGemmBufferRegionV1::new(
+        1,
+        SCALAR_GEMM_GLOBAL_ADDRESS_SPACE_V1,
+        0,
+        shape.a_bytes(),
+        0,
+        shape.a_bytes(),
+    );
+    assert_eq!(
+        admit_scalar_gemm_host_v1(null),
+        Err(ScalarGemmHostAdmissionErrorV1::NullRegion { field: "A" })
+    );
+
+    let mut misaligned = valid_request(shape, &ROOT, &[]);
+    misaligned.b_region = ScalarGemmBufferRegionV1::new(
+        2,
+        SCALAR_GEMM_GLOBAL_ADDRESS_SPACE_V1,
+        0x2_0001,
+        shape.b_bytes(),
+        0,
+        shape.b_bytes(),
+    );
+    assert_eq!(
+        admit_scalar_gemm_host_v1(misaligned),
+        Err(ScalarGemmHostAdmissionErrorV1::MisalignedRegion {
+            field: "B",
+            required_alignment: align_of::<f32>(),
+        })
+    );
+}
+
+#[test]
 fn rejects_wrong_target_profile_toolchain_roots_and_calls() {
     let shape = ScalarGemmShapeV1::checked(1, 1, 1).unwrap();
 
@@ -332,23 +410,132 @@ fn flattened_indices_bounds_initialization_and_writers_hold_exhaustively() {
             for k in 0..=5 {
                 let shape = ScalarGemmShapeV1::checked(m, n, k).unwrap();
                 for p in 0..=shape.output_elements_u64() + 2 {
-                    assert!(scalar_gemm_flattened_index_is_correct_v1(shape, p));
+                    let active = p < shape.output_elements_u64();
+                    assert_eq!(scalar_gemm_flattened_index_is_correct_v1(shape, p), active);
                     for t in 0..=k.saturating_add(1) {
-                        assert!(scalar_gemm_accesses_are_in_bounds_v1(shape, p, t));
+                        assert_eq!(
+                            scalar_gemm_accesses_are_in_bounds_v1(shape, p, t),
+                            active && t < k
+                        );
                     }
-                    if p < shape.output_elements_u64() {
+                    if active {
                         assert!(scalar_gemm_output_initialized_by_invocation_v1(shape, p, p));
-                        assert!(scalar_gemm_complete_launch_initializes_output_v1(shape, p));
+                        assert!(scalar_gemm_canonical_domain_initializes_output_v1(shape, p));
+                    } else {
+                        assert!(!scalar_gemm_output_initialized_by_invocation_v1(
+                            shape, p, p
+                        ));
+                        assert!(!scalar_gemm_canonical_domain_initializes_output_v1(
+                            shape, p
+                        ));
                     }
                 }
                 for left in 0..=shape.output_elements_u64() + 1 {
                     for right in 0..=shape.output_elements_u64() + 1 {
-                        assert!(scalar_gemm_writers_are_injective_v1(shape, left, right));
+                        assert_eq!(
+                            scalar_gemm_writers_are_injective_v1(shape, left, right),
+                            left < shape.output_elements_u64()
+                                && right < shape.output_elements_u64()
+                        );
                     }
                 }
             }
         }
     }
+}
+
+#[test]
+fn index_properties_hold_for_boundary_biased_shapes() {
+    let mut state = 0x6a09_e667_f3bc_c909_u64;
+    for _ in 0..10_000 {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        let m = (state as u32) & 0xffff;
+        let n = ((state >> 16) as u32) & 0xffff;
+        let k = ((state >> 32) as u32) & 0xffff;
+        let shape = ScalarGemmShapeV1::checked(m, n, k).unwrap();
+        let output_count = shape.output_elements_u64();
+        let candidates = [
+            0,
+            output_count.saturating_sub(1),
+            output_count,
+            output_count.saturating_add(1),
+        ];
+        for p in candidates {
+            let active = p < output_count;
+            assert_eq!(scalar_gemm_flattened_index_is_correct_v1(shape, p), active);
+            for t in [0, k.saturating_sub(1), k] {
+                assert_eq!(
+                    scalar_gemm_accesses_are_in_bounds_v1(shape, p, t),
+                    active && t < k
+                );
+            }
+            if let Some(invocation) = shape.invocation(p) {
+                assert_eq!(
+                    u64::from(invocation.row()) * u64::from(n) + u64::from(invocation.col()),
+                    p
+                );
+            }
+        }
+    }
+
+    let max_k = ScalarGemmShapeV1::checked(1, 1, u32::MAX).unwrap();
+    let mut recurrence = max_k.dot_recurrence(0).unwrap();
+    assert_eq!(
+        recurrence.size_hint(),
+        (u32::MAX as usize, Some(u32::MAX as usize))
+    );
+    let first = recurrence.next().unwrap();
+    assert_eq!((first.t(), first.a_index(), first.b_index()), (0, 0, 0));
+    assert_eq!(recurrence.size_hint().0, (u32::MAX - 1) as usize);
+
+    let max_output = ScalarGemmShapeV1::checked(u32::MAX, 1, 0).unwrap();
+    let last = u64::from(u32::MAX) - 1;
+    let invocation = max_output.invocation(last).unwrap();
+    assert_eq!((invocation.row(), invocation.col()), (u32::MAX - 1, 0));
+    assert!(scalar_gemm_flattened_index_is_correct_v1(max_output, last));
+    assert!(!scalar_gemm_flattened_index_is_correct_v1(
+        max_output,
+        u64::from(u32::MAX)
+    ));
+}
+
+#[test]
+fn executable_models_reject_attacker_sized_work_before_lengths_or_iteration() {
+    let huge_k = ScalarGemmShapeV1::checked(1, 1, u32::MAX).unwrap();
+    assert_eq!(
+        huge_k.dot_recurrence(0).unwrap().size_hint().0,
+        u32::MAX as usize
+    );
+    assert_eq!(
+        evaluate_scalar_gemm_abstract_invocation_v1(
+            huge_k,
+            0,
+            &[] as &[()],
+            &[] as &[()],
+            (),
+            |_, _| (),
+            |_, _| (),
+        ),
+        Err(ScalarGemmModelErrorV1::WorkLimitExceeded {
+            required: u64::from(u32::MAX) + 1,
+            limit: SCALAR_GEMM_MAX_MODEL_WORK_ITEMS_V1,
+        })
+    );
+    assert_eq!(
+        scalar_gemm_f32_oracle_v1(huge_k, &[], &[], &mut []),
+        Err(ScalarGemmModelErrorV1::WorkLimitExceeded {
+            required: u64::from(u32::MAX) + 1,
+            limit: SCALAR_GEMM_MAX_MODEL_WORK_ITEMS_V1,
+        })
+    );
+
+    let overflowing_work = ScalarGemmShapeV1::checked(1 << 30, 5, u32::MAX).unwrap();
+    assert_eq!(
+        scalar_gemm_f32_oracle_v1(overflowing_work, &[], &[], &mut []),
+        Err(ScalarGemmModelErrorV1::WorkCountOverflow)
+    );
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

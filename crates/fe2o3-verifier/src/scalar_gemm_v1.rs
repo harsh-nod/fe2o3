@@ -7,8 +7,13 @@ pub const SCALAR_GEMM_GLOBAL_ADDRESS_SPACE_V1: u32 = 1;
 pub const SCALAR_GEMM_WORKGROUP_THREADS_V1: u64 = 256;
 pub const SCALAR_GEMM_MAX_GRID_THREADS_V1: u64 =
     (u32::MAX as u64 / SCALAR_GEMM_WORKGROUP_THREADS_V1) * SCALAR_GEMM_WORKGROUP_THREADS_V1;
+/// CPU model/oracle work is deliberately bounded because these entry points can
+/// receive attacker-controlled dimensions. The lazy recurrence remains
+/// available for inspecting larger shapes without executing the full model.
+pub const SCALAR_GEMM_MAX_MODEL_WORK_ITEMS_V1: u64 = 16 * 1024 * 1024;
 
 const F32_BYTES: u64 = size_of::<f32>() as u64;
+const F32_ALIGNMENT: usize = align_of::<f32>();
 
 /// Checked dimensions and host-representable extents for scalar GEMM V1.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -203,10 +208,23 @@ impl ScalarGemmBufferRegionV1 {
         self.base_address
             .checked_add(region_end)
             .ok_or(ScalarGemmHostAdmissionErrorV1::PointerEndOverflow { field })?;
+        let region_start = self
+            .base_address
+            .checked_add(self.byte_offset)
+            .ok_or(ScalarGemmHostAdmissionErrorV1::PointerEndOverflow { field })?;
+        if self.byte_len != 0 && region_start == 0 {
+            return Err(ScalarGemmHostAdmissionErrorV1::NullRegion { field });
+        }
+        if self.byte_len != 0 && region_start % F32_ALIGNMENT != 0 {
+            return Err(ScalarGemmHostAdmissionErrorV1::MisalignedRegion {
+                field,
+                required_alignment: F32_ALIGNMENT,
+            });
+        }
         Ok(())
     }
 
-    fn overlaps(self, other: Self) -> bool {
+    fn overlaps_declared_allocation(self, other: Self) -> bool {
         if self.declared_allocation_id != other.declared_allocation_id
             || self.byte_len == 0
             || other.byte_len == 0
@@ -216,6 +234,18 @@ impl ScalarGemmBufferRegionV1 {
         let self_end = self.byte_offset + self.byte_len;
         let other_end = other.byte_offset + other.byte_len;
         self.byte_offset < other_end && other.byte_offset < self_end
+    }
+
+    fn overlaps_declared_address(self, other: Self) -> bool {
+        if self.byte_len == 0 || other.byte_len == 0 {
+            return false;
+        }
+        // Admission validates all four additions before this method is called.
+        let self_start = self.base_address + self.byte_offset;
+        let self_end = self_start + self.byte_len;
+        let other_start = other.base_address + other.byte_offset;
+        let other_end = other_start + other.byte_len;
+        self_start < other_end && other_start < self_end
     }
 }
 
@@ -309,10 +339,18 @@ pub fn admit_scalar_gemm_host_v1(
     require_consistent_allocation_metadata("A", request.a_region, "C", request.c_region)?;
     require_consistent_allocation_metadata("B", request.b_region, "C", request.c_region)?;
 
-    if request.c_region.overlaps(request.a_region) {
+    if request
+        .c_region
+        .overlaps_declared_allocation(request.a_region)
+        || request.c_region.overlaps_declared_address(request.a_region)
+    {
         return Err(ScalarGemmHostAdmissionErrorV1::OutputAliasesInput { input: "A" });
     }
-    if request.c_region.overlaps(request.b_region) {
+    if request
+        .c_region
+        .overlaps_declared_allocation(request.b_region)
+        || request.c_region.overlaps_declared_address(request.b_region)
+    {
         return Err(ScalarGemmHostAdmissionErrorV1::OutputAliasesInput { input: "B" });
     }
     if request.declared_target != SCALAR_GEMM_TARGET_V1 {
@@ -452,7 +490,9 @@ impl Iterator for ScalarGemmDotRecurrenceV1 {
             return None;
         }
         let t = self.next_t;
-        self.next_t += 1;
+        // `t < k <= u32::MAX`, so saturation is unreachable and this is the
+        // exact successor even for a recurrence whose declared k is u32::MAX.
+        self.next_t = t.saturating_add(1);
         let row = u64::from(self.invocation.row);
         let col = u64::from(self.invocation.col);
         let k = u64::from(self.shape.k);
@@ -479,16 +519,16 @@ pub fn scalar_gemm_flattened_index_is_correct_v1(shape: ScalarGemmShapeV1, p: u6
                 && invocation.row < shape.m
                 && invocation.col < shape.n
         }
-        None => p >= shape.c_elements,
+        None => false,
     }
 }
 
 pub fn scalar_gemm_accesses_are_in_bounds_v1(shape: ScalarGemmShapeV1, p: u64, t: u32) -> bool {
     let Some(invocation) = shape.invocation(p) else {
-        return true;
+        return false;
     };
     if t >= shape.k {
-        return true;
+        return false;
     }
     let a_index = u64::from(invocation.row) * u64::from(shape.k) + u64::from(t);
     let b_index = u64::from(t) * u64::from(shape.n) + u64::from(invocation.col);
@@ -502,7 +542,8 @@ pub fn scalar_gemm_writers_are_injective_v1(
 ) -> bool {
     match (shape.invocation(left_p), shape.invocation(right_p)) {
         (Some(left), Some(right)) if left_p != right_p => left.p != right.p,
-        _ => true,
+        (Some(_), Some(_)) => true,
+        _ => false,
     }
 }
 
@@ -516,7 +557,9 @@ pub fn scalar_gemm_output_initialized_by_invocation_v1(
         .is_some_and(|invocation| output_index < shape.c_elements && invocation.p == output_index)
 }
 
-pub fn scalar_gemm_complete_launch_initializes_output_v1(
+/// Abstract domain property only. This does not attest that a GPU launch
+/// actually covered the canonical invocation domain.
+pub fn scalar_gemm_canonical_domain_initializes_output_v1(
     shape: ScalarGemmShapeV1,
     output_index: u64,
 ) -> bool {
@@ -540,6 +583,12 @@ where
     Multiply: FnMut(&T, &T) -> T,
     Add: FnMut(T, T) -> T,
 {
+    let required_work = if p < shape.c_elements {
+        u64::from(shape.k).saturating_add(1)
+    } else {
+        0
+    };
+    require_model_work_items(required_work)?;
     require_model_length("A", a.len(), shape.a_len)?;
     require_model_length("B", b.len(), shape.b_len)?;
     let Some(steps) = shape.dot_recurrence(p) else {
@@ -562,6 +611,11 @@ pub fn scalar_gemm_f32_oracle_v1(
     b: &[f32],
     c: &mut [f32],
 ) -> Result<(), ScalarGemmModelErrorV1> {
+    let required_work = shape
+        .c_elements
+        .checked_mul(u64::from(shape.k).saturating_add(1))
+        .ok_or(ScalarGemmModelErrorV1::WorkCountOverflow)?;
+    require_model_work_items(required_work)?;
     require_model_length("A", a.len(), shape.a_len)?;
     require_model_length("B", b.len(), shape.b_len)?;
     require_model_length("C", c.len(), shape.c_len)?;
@@ -600,6 +654,16 @@ fn require_model_length(
             field,
             expected,
             observed,
+        });
+    }
+    Ok(())
+}
+
+fn require_model_work_items(required: u64) -> Result<(), ScalarGemmModelErrorV1> {
+    if required > SCALAR_GEMM_MAX_MODEL_WORK_ITEMS_V1 {
+        return Err(ScalarGemmModelErrorV1::WorkLimitExceeded {
+            required,
+            limit: SCALAR_GEMM_MAX_MODEL_WORK_ITEMS_V1,
         });
     }
     Ok(())
@@ -662,6 +726,13 @@ pub enum ScalarGemmHostAdmissionErrorV1 {
     WrongAddressSpace {
         field: &'static str,
     },
+    NullRegion {
+        field: &'static str,
+    },
+    MisalignedRegion {
+        field: &'static str,
+        required_alignment: usize,
+    },
     AllocationIdentityMismatch {
         left: &'static str,
         right: &'static str,
@@ -717,6 +788,14 @@ impl fmt::Display for ScalarGemmHostAdmissionErrorV1 {
             Self::WrongAddressSpace { field } => {
                 write!(formatter, "{field} is not in the global address space")
             }
+            Self::NullRegion { field } => write!(formatter, "{field} has a null nonempty region"),
+            Self::MisalignedRegion {
+                field,
+                required_alignment,
+            } => write!(
+                formatter,
+                "{field} is not aligned to {required_alignment} bytes"
+            ),
             Self::AllocationIdentityMismatch { left, right } => write!(
                 formatter,
                 "{left} and {right} disagree about one allocation identity"
@@ -749,6 +828,11 @@ pub enum ScalarGemmModelErrorV1 {
         expected: usize,
         observed: usize,
     },
+    WorkCountOverflow,
+    WorkLimitExceeded {
+        required: u64,
+        limit: u64,
+    },
 }
 
 impl fmt::Display for ScalarGemmModelErrorV1 {
@@ -761,6 +845,11 @@ impl fmt::Display for ScalarGemmModelErrorV1 {
             } => write!(
                 formatter,
                 "{field} model length mismatch: expected {expected}, observed {observed}"
+            ),
+            Self::WorkCountOverflow => formatter.write_str("scalar GEMM model work count overflow"),
+            Self::WorkLimitExceeded { required, limit } => write!(
+                formatter,
+                "scalar GEMM model requires {required} work items, exceeding limit {limit}"
             ),
         }
     }

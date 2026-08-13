@@ -149,14 +149,15 @@ pub use result::{
 pub use scalar_gemm_v1::{
     SCALAR_GEMM_COVERAGE_PROFILE_V1, SCALAR_GEMM_F32_NUMERICAL_CONTRACT_V1,
     SCALAR_GEMM_GLOBAL_ADDRESS_SPACE_V1, SCALAR_GEMM_MAX_GRID_THREADS_V1,
-    SCALAR_GEMM_ROOT_SYMBOL_V1, SCALAR_GEMM_TARGET_V1, SCALAR_GEMM_WORKGROUP_THREADS_V1,
-    ScalarGemmBufferRegionV1, ScalarGemmDotRecurrenceV1, ScalarGemmDotStepV1,
-    ScalarGemmF32NumericalContractV1, ScalarGemmHostAdmissionErrorV1, ScalarGemmHostAdmissionV1,
-    ScalarGemmHostRequestV1, ScalarGemmInvocationV1, ScalarGemmModelErrorV1, ScalarGemmShapeV1,
-    ScalarGemmToolchainV1, admit_scalar_gemm_host_v1, evaluate_scalar_gemm_abstract_invocation_v1,
-    scalar_gemm_accesses_are_in_bounds_v1, scalar_gemm_complete_launch_initializes_output_v1,
-    scalar_gemm_f32_oracle_v1, scalar_gemm_flattened_index_is_correct_v1,
-    scalar_gemm_output_initialized_by_invocation_v1, scalar_gemm_writers_are_injective_v1,
+    SCALAR_GEMM_MAX_MODEL_WORK_ITEMS_V1, SCALAR_GEMM_ROOT_SYMBOL_V1, SCALAR_GEMM_TARGET_V1,
+    SCALAR_GEMM_WORKGROUP_THREADS_V1, ScalarGemmBufferRegionV1, ScalarGemmDotRecurrenceV1,
+    ScalarGemmDotStepV1, ScalarGemmF32NumericalContractV1, ScalarGemmHostAdmissionErrorV1,
+    ScalarGemmHostAdmissionV1, ScalarGemmHostRequestV1, ScalarGemmInvocationV1,
+    ScalarGemmModelErrorV1, ScalarGemmShapeV1, ScalarGemmToolchainV1, admit_scalar_gemm_host_v1,
+    evaluate_scalar_gemm_abstract_invocation_v1, scalar_gemm_accesses_are_in_bounds_v1,
+    scalar_gemm_canonical_domain_initializes_output_v1, scalar_gemm_f32_oracle_v1,
+    scalar_gemm_flattened_index_is_correct_v1, scalar_gemm_output_initialized_by_invocation_v1,
+    scalar_gemm_writers_are_injective_v1,
 };
 pub use static_view_proof::{
     STATIC_VIEW_PROOF_EVIDENCE_DOMAIN_V1, STATIC_VIEW_PROOF_OBLIGATION_DOMAIN_V1,
