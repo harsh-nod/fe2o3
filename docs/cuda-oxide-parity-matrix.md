@@ -396,7 +396,19 @@ The detailed dependencies and exit criteria are in
   conditional or cyclic barrier placement under the bounded proof. Ordinary
   Rust source integration, dynamic launch-byte admission, LDS initialization
   transfer, general barrier convergence proof, and GPU semantic execution are
-  absent.
+  absent in the general paths. The bounded
+  [gfx942 wave/LDS V1](gfx942-wave-lds-v1.md) exception adds one compiler-created
+  1,024-byte static-LDS capability, exact 256-thread barrier schedule, Verus
+  ownership/participation proof, and numerical MI300X run from verified Kernel
+  IR. It does not join genuine Rust source to the executed HSACO.
+- Rows 65, 72, and 73: the gfx942 wave/LDS V1 slice lowers a logically masked
+  `u32` wave64 sum through one ballot and six XOR shuffles and lowers the same
+  activity contract to an exact 256-thread static-LDS reduction with 18
+  barriers. LLVM shape, gfx942:xnack- assembly and metadata, host-oracle MI300X
+  execution, and an exact Verus model are present. Broader operations and
+  types, scans in this proof/hardware lane, wave32 and target breadth, partial
+  physical EXEC masks, authenticated source-to-HSACO finalization, and compiler
+  refinement remain absent, so all three rows remain Partial.
 - Row 74: observed capabilities retain exact live
   contexts. Cooperative admission retains the exact loaded function and stream
   and conservatively accepts one workgroup until per-function occupancy is

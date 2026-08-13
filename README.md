@@ -28,8 +28,13 @@ managed barriers and standard atomics, static proof-carrying tiles, launch
 policies, FP8/MX and MFMA/LDS contracts, composite O0 debug metadata, and a
 closed diagnostic/assembly surface. Device-library and tile interop are narrow:
 the former demonstrates one directly linked OCML operation, and the latter one
-BF16 XOR4 tile/stream contract. The dashboard records the exact commits, tests,
-target lanes, evidence strengths, and limitations for each Partial row.
+BF16 XOR4 tile/stream contract. The bounded
+[gfx942 wave/LDS V1 slice](docs/gfx942-wave-lds-v1.md) additionally carries one
+masked `u32` wave64 reduction and one 256-thread static-LDS reduction through
+exact compiler/LLVM checks, Verus proofs, and direct LLVM/LLD MI300X execution.
+Its genuine Rust source path still stops before an authenticated HSACO. The
+dashboard records the exact commits, tests, target lanes, evidence strengths,
+and limitations for each Partial row.
 
 The intended end state is:
 
@@ -211,11 +216,13 @@ turn the foundations below into end-to-end features.
   dynamic LDS, scoped atomics, fences, and convergence-bearing workgroup
   barriers. The experimental AMD lowering emits LDS, scoped integer atomics,
   fences, workgroup barriers, and explicit wave32/wave64 lane, ballot, vote,
-  and bounded shuffle operations. These paths have produced target-specific
-  code objects, and a branded dynamic-LDS API enforces bounded disjoint
-  typestates. Dynamic-LDS launch-byte plumbing, broad atomics and wave
-  collectives, GPU semantic execution, and general source-to-IR integration
-  remain fail-closed gaps.
+  and bounded shuffle operations. The exact gfx942 wave/LDS V1 path adds an
+  authenticated Rust-facing wave64 active-mask reduction and non-forgeable
+  1,024-byte static-LDS reduction capability. Its independently constructed
+  Kernel IR has passed numerical MI300X execution, but the genuine Rust fixture
+  reaches only verified Kernel IR. Dynamic-LDS launch-byte plumbing, broad
+  atomics and collectives, general source-to-HSACO finalization, and compiler
+  refinement remain fail-closed gaps.
 - `fe2o3-host` has a `PreparedLaunch<K>` geometry/resource checker and a
   `LoadedKernel<K>` authority that owns the exact HIP module and function and
   can bind only matching prepared launches. Argument admission reserves
@@ -313,8 +320,9 @@ turn the foundations below into end-to-end features.
   trusted inputs.
 - `examples/regression-manifest-v1.txt` is the authoritative package/artifact
   inventory for ordinary checks, ROCm compilation, and GPU smoke tests.
-- The Verus vecadd, fill, active-wave, and LDS harnesses prove bounded
-  source-model properties under documented assumptions. The exact control,
+- The Verus vecadd, fill, active-wave, LDS, and exact gfx942 wave/LDS
+  harnesses prove bounded source-model properties under documented
+  assumptions. The exact control,
   index, guarded memory access, and write body of the production `f32` vecadd
   kernel is mechanically shared with Verus through explicit thread and
   arithmetic adapters. Positive harnesses and paired expected-rejection
@@ -517,9 +525,10 @@ turn the foundations below into end-to-end features.
   authenticated Verus refinement remain parity work. The alpha/zeta hardware
   result covers only MI300X `gfx942:xnack-`; architecture-family breadth is
   absent. LDS, atomics, waves, collectives, fences, and barriers have bounded
-  source/compiler paths, but are not yet broadly available from ordinary Rust
-  kernels or validated across the full operation, type, target, and hardware
-  matrix.
+  source/compiler paths. The exact gfx942 wave/LDS V1 Kernel IR also has one
+  numerical MI300X result, but it is not joined to the genuine Rust artifact.
+  These facilities are not yet broadly available from ordinary Rust kernels or
+  validated across the full operation, type, target, and hardware matrix.
 
 The evidence-gated comparison with cuda-oxide is tracked in the
 [parity matrix](docs/cuda-oxide-parity-matrix.md) and the generated
