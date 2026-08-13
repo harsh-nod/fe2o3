@@ -110,6 +110,40 @@ fn exact_alpha_zeta_generated_adapter_rejects_unsafe_escape_hatches() {
         ("private_fields", &["private"]),
         ("non_clone", &["no method named `clone`"]),
         ("raw_pointer_escape", &["field `input`"]),
+        (
+            "scalar_lifetime_escape",
+            &["lifetime may not live long enough"],
+        ),
+        (
+            "scalar_private_fields",
+            &["fields `a`, `b`, `c`, `m`, `n` and `k`", "are private"],
+        ),
+        ("scalar_raw_pointer_escape", &["field `a`", "is private"]),
+        (
+            "scalar_capability_raw_pointer_escape",
+            &["no method named `device_pointer`"],
+        ),
+        ("scalar_non_clone", &["no method named `clone`"]),
+        (
+            "scalar_abi_substitution",
+            &[
+                "error[E0277]",
+                "CompilerGeneratedScalarGemmV1Arguments",
+                "is not implemented",
+            ],
+        ),
+        (
+            "scalar_wrong_mutability",
+            &[
+                "error[E0277]",
+                "CompilerGeneratedScalarGemmV1Arguments",
+                "is not implemented",
+            ],
+        ),
+        (
+            "scalar_double_launch",
+            &["error[E0382]", "use of moved value: `prepared`"],
+        ),
     ];
 
     for (bin, expected_diagnostics) in cases {

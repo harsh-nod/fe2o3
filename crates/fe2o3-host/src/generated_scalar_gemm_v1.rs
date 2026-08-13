@@ -21,7 +21,7 @@ use crate::{
 };
 use fe2o3_artifacts::{
     AbiField, AbiKind, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize, Mutability,
-    PointerWidth, ScalarType,
+    PointerWidth, ScalarType, TargetIdentity,
 };
 use fe2o3_core::{DeviceBuffer, DevicePtr};
 use std::alloc::{Layout, alloc_zeroed, dealloc, handle_alloc_error};
@@ -515,14 +515,20 @@ fn validate_profile<
     {
         return Err(ScalarGemmV1ProfileError::KernelIdentitySubstitution);
     }
-    if artifact.target().triple().as_str() != "amdgcn-amd-amdhsa"
-        || artifact.target().architecture().as_str() != SCALAR_GEMM_V1_TARGET
-        || artifact.target().pointer_width() != PointerWidth::Bits64
+    validate_target(artifact.target())?;
+    validate_abi(artifact.abi())?;
+    validate_launch(artifact.launch())?;
+    Ok(())
+}
+
+fn validate_target(target: &TargetIdentity) -> Result<(), ScalarGemmV1ProfileError> {
+    if target.triple().as_str() != "amdgcn-amd-amdhsa"
+        || target.architecture().as_str() != SCALAR_GEMM_V1_TARGET
+        || target.pointer_width() != PointerWidth::Bits64
+        || target.endianness() != fe2o3_artifacts::Endianness::Little
     {
         return Err(ScalarGemmV1ProfileError::TargetMismatch);
     }
-    validate_abi(artifact.abi())?;
-    validate_launch(artifact.launch())?;
     Ok(())
 }
 
@@ -1071,7 +1077,7 @@ mod tests {
     use super::*;
     use crate::KernelId;
     use crate::generated_argument_plan::validate_argument_packing;
-    use fe2o3_artifacts::{AbiLayout, Dimensions, LaunchContract, Name};
+    use fe2o3_artifacts::{AbiLayout, Dimensions, Endianness, IdentityText, LaunchContract, Name};
 
     fn scalar_u32(name: &str, offset: u64) -> AbiField {
         AbiField::new(
@@ -1264,6 +1270,29 @@ mod tests {
         assert_eq!(
             validate_launch(&wrong_grid),
             Err(ScalarGemmV1ProfileError::LaunchMismatch)
+        );
+    }
+
+    #[test]
+    fn target_identity_is_exact_gfx942_xnack_minus() {
+        let target = |architecture: &str| {
+            TargetIdentity::new(
+                IdentityText::new("amdgcn-amd-amdhsa").unwrap(),
+                IdentityText::new(architecture).unwrap(),
+                PointerWidth::Bits64,
+                Endianness::Little,
+                vec![],
+            )
+            .unwrap()
+        };
+        assert_eq!(validate_target(&target(SCALAR_GEMM_V1_TARGET)), Ok(()));
+        assert_eq!(
+            validate_target(&target("gfx942")),
+            Err(ScalarGemmV1ProfileError::TargetMismatch)
+        );
+        assert_eq!(
+            validate_target(&target("gfx942:xnack+")),
+            Err(ScalarGemmV1ProfileError::TargetMismatch)
         );
     }
 

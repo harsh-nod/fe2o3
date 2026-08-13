@@ -4805,6 +4805,100 @@ mod tests {
     }
 
     #[test]
+    fn scalar_gemm_v1_emits_only_the_narrow_generated_launch_adapter() {
+        let input: ItemFn = parse_quote! {
+            pub fn scalar_gemm_v1(
+                a: &[f32],
+                b: &[f32],
+                c: DisjointSlice<f32>,
+                m: u32,
+                n: u32,
+                k: u32,
+            ) {}
+        };
+        let options = parse_kernel_options(quote!(
+            typed,
+            launch(required = [256, 1, 1], max = [256, 1, 1])
+        ))
+        .unwrap();
+        let crate_binding = CrateBindingIdV1::from_hex(
+            "53bf3c83481a081d4ab0e2b32039f9c89be5de3937a84aca0c40800c8d6b0413",
+        )
+        .unwrap();
+        let kernel_binding = derive_kernel_binding_id_v1(
+            crate_binding,
+            MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+            "scalar_gemm_v1",
+            "scalar_gemm_v1",
+        );
+        let model =
+            model_general_typed_signature_v1(&input, &options, kernel_binding.as_bytes()).unwrap();
+        let arguments = generated_general_typed_arguments_v1(&input, &model.arguments).to_string();
+        let adapter = super::generated_scalar_gemm_v1_adapter(
+            &input,
+            &model,
+            kernel_binding.as_bytes(),
+            *model.generated_host_contract_identity.as_bytes(),
+        )
+        .unwrap()
+        .to_string();
+
+        assert!(arguments.contains("GeneratedScalarGemmV1ReadDeviceSlice"));
+        assert!(arguments.contains("GeneratedScalarGemmV1ReadWriteDeviceSlice"));
+        for required in [
+            "CompilerGeneratedScalarGemmV1Arguments",
+            "ScalarGemmV1DispatchIdentity :: new",
+            "GeneratedScalarGemmV1ArgumentBinding",
+            "plan . scalar_u32 (3 , self . m)",
+            "plan . scalar_u32 (4 , self . n)",
+            "plan . scalar_u32 (5 , self . k)",
+            "pub type Prepared",
+            "prepare_generated_scalar_gemm_v1",
+        ] {
+            assert!(
+                adapter.contains(required),
+                "missing `{required}` in {adapter}"
+            );
+        }
+        for forbidden in ["from_raw", "device_pointer", "GeneratedAlphaZeta", "COMGR"] {
+            assert!(
+                !adapter.contains(forbidden),
+                "found forbidden `{forbidden}` in {adapter}"
+            );
+        }
+
+        let renamed: ItemFn = parse_quote! {
+            pub fn scalar_gemm_lookalike(
+                a: &[f32],
+                b: &[f32],
+                c: DisjointSlice<f32>,
+                m: u32,
+                n: u32,
+                k: u32,
+            ) {}
+        };
+        let renamed_binding = derive_kernel_binding_id_v1(
+            crate_binding,
+            MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+            "scalar_gemm_lookalike",
+            "scalar_gemm_lookalike",
+        );
+        let renamed_model =
+            model_general_typed_signature_v1(&renamed, &options, renamed_binding.as_bytes())
+                .unwrap();
+        assert!(
+            super::generated_scalar_gemm_v1_adapter(
+                &renamed,
+                &renamed_model,
+                renamed_binding.as_bytes(),
+                *renamed_model.generated_host_contract_identity.as_bytes(),
+            )
+            .unwrap()
+            .is_empty()
+        );
+    }
+
+    #[test]
     fn typed_kernel_symbol_stem_matches_the_backend_contract() {
         let valid = parse_quote!(vecadd);
         validate_typed_kernel_symbol_stem(&valid).unwrap();
