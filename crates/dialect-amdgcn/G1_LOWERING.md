@@ -116,13 +116,22 @@ input graph dimensions before this path can be wired to collection.
 
 `lower_device_module_to_gfx942_llvm_ir` admits the same verified helper and
 device-export subset without inventing a kernel entry. Every definition must
-carry an exact wave32 or wave64 mode. This is the backend test boundary used by
-the branching-fill, integer-match, and nested-loop gfx942 goldens. Those tests
-use manually transcribed kernel-IR modules corresponding to the reviewed MIR
-fixtures. They assert only that the source fixtures remain identifiable; there
-is no structured adapter or content hash tying the transcription to MIR. The
-MIR-to-kernel-IR adapter remains frontend work and cannot be added in this lane
-without changing the shared workspace dependency graph.
+carry an exact wave32 or wave64 mode. This remains the backend test boundary
+used by the manually transcribed branching-fill, integer-match, and nested-loop
+gfx942 goldens.
+
+`rustc-codegen-fe2o3::executable_scalar_control_flow_v1` now supplies the first
+structured bridge from those canonical executable-MIR fixtures. It accepts one
+validated place-form function with at most 128 blocks, runs verified mem2reg,
+bounds natural loops to 16 with nesting depth at most 8, and admits `u32` add,
+equality, and less-than expressions through Scalar V2 with their real SSA
+operands. It then builds and verifies Kernel IR for constants, block-local
+scalar slots, branches, typed switches, loop-carried block arguments, and one
+`u32` return before invoking this direct gfx942 LLVM path. Raw division,
+additional functions, unsupported statements/types, and resource expansion
+fail before LLVM is returned. The result is a helper-only compiler artifact;
+whole collected-kernel composition, broader Scalar V2 operations and result
+forms, and code-object construction remain separate work.
 
 The crate has no in-process LLVM target-machine/code-object API. Consequently
 these control-flow tests stop at exact, target-bound LLVM text. Code-object

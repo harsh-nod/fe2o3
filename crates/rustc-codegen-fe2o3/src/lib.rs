@@ -21,6 +21,7 @@ mod collector;
 mod compiler_descriptor;
 mod compiler_ffi_adapter;
 mod device_ffi;
+pub mod executable_scalar_control_flow_v1;
 mod frontend_record_bridge;
 mod host_object;
 mod kernel_ir_codegen;
