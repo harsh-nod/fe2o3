@@ -370,7 +370,7 @@ dependencies = [
  "fe2o3-compiler-ffi",
  "serde",
  "serde_json",
- "sha2",
+ "sha2 0.11.0",
 ]
 
 [[package]]
