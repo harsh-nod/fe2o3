@@ -16,8 +16,8 @@ use fe2o3_hsaco::MAX_HSACO_BYTES;
 use fe2o3_hsaco_finalize::{
     ContentIdentityV1, FinalizedWorkerV2HsacoIdentityV1, LinkOptionV1, PinnedWorkerV1,
     ROW_SOFTMAX_V1_PROVIDER_ITEM_COUNT, RowSoftmaxV1AuthorityPolicyV1,
-    RowSoftmaxV1DirectWorkerExpectationV1, RowSoftmaxV1DirectWorkerPinsV1,
-    RowSoftmaxV1OcmlProviderPinsV1, RowSoftmaxV1ProviderManifestV1,
+    RowSoftmaxV1CompilerClosurePolicyV1, RowSoftmaxV1DirectWorkerExpectationV1,
+    RowSoftmaxV1DirectWorkerPinsV1, RowSoftmaxV1OcmlProviderPinsV1, RowSoftmaxV1ProviderManifestV1,
     WorkerDeviceLibraryProviderEvidenceV1, WorkerExecutionLimitsV1, WorkerMeasurementV1,
     WorkerOutputConstraintsV1, execute_reproducible_first_build_worker_v2,
     finalize_row_softmax_v1_structural_worker_v2_hsaco_v1,
@@ -38,6 +38,10 @@ const HANDOFF_ATTEMPT_ENV: &str = "FE2O3_ROW_SOFTMAX_V1_HANDOFF_ATTEMPT";
 const HANDOFF_SHA256_ENV: &str = "FE2O3_ROW_SOFTMAX_V1_HANDOFF_SHA256";
 const FRONTEND_AUTHORITY_ENV: &str = "FE2O3_ROW_SOFTMAX_V1_FRONTEND_AUTHORITY_SHA256";
 const BROKER_SHA256_ENV: &str = "FE2O3_ROW_SOFTMAX_V1_BROKER_SHA256";
+const CARGO_EXECUTABLE_SHA256_ENV: &str = "FE2O3_ROW_SOFTMAX_V1_CARGO_EXECUTABLE_SHA256";
+const RUSTC_EXECUTABLE_SHA256_ENV: &str = "FE2O3_ROW_SOFTMAX_V1_RUSTC_EXECUTABLE_SHA256";
+const RUSTC_RUNTIME_TREE_SHA256_ENV: &str = "FE2O3_ROW_SOFTMAX_V1_RUSTC_RUNTIME_TREE_SHA256";
+const CODEGEN_BACKEND_SHA256_ENV: &str = "FE2O3_ROW_SOFTMAX_V1_CODEGEN_BACKEND_SHA256";
 const PROVIDER_STABLE_CRATE_ID_ENV: &str = "FE2O3_ROW_SOFTMAX_V1_PROVIDER_STABLE_CRATE_ID";
 const PROVIDER_CRATE_HASH_ENV: &str = "FE2O3_ROW_SOFTMAX_V1_PROVIDER_CRATE_HASH";
 const PROVIDER_DEFINITIONS_ENV: &str = "FE2O3_ROW_SOFTMAX_V1_PROVIDER_DEFINITION_IDENTITIES";
@@ -58,7 +62,7 @@ const OCML_PROVIDER_BASENAMES: [&str; 4] = [
     "oclc_finite_only_off.bc",
 ];
 
-const REQUIRED_ENVIRONMENT: [&str; 22] = [
+const REQUIRED_ENVIRONMENT: [&str; 26] = [
     WORKER_ENV,
     WORKER_SHA256_ENV,
     WORKER_BYTES_ENV,
@@ -71,6 +75,10 @@ const REQUIRED_ENVIRONMENT: [&str; 22] = [
     HANDOFF_SHA256_ENV,
     FRONTEND_AUTHORITY_ENV,
     BROKER_SHA256_ENV,
+    CARGO_EXECUTABLE_SHA256_ENV,
+    RUSTC_EXECUTABLE_SHA256_ENV,
+    RUSTC_RUNTIME_TREE_SHA256_ENV,
+    CODEGEN_BACKEND_SHA256_ENV,
     PROVIDER_STABLE_CRATE_ID_ENV,
     PROVIDER_CRATE_HASH_ENV,
     PROVIDER_DEFINITIONS_ENV,
@@ -184,8 +192,20 @@ fn authority_policy(attempt: BuildAttempt) -> RowSoftmaxV1AuthorityPolicyV1 {
         required_identity_list::<ROW_SOFTMAX_V1_PROVIDER_ITEM_COUNT, 32>(PROVIDER_SOURCES_ENV),
     )
     .expect("independently pinned rustc/provider manifest");
-    RowSoftmaxV1AuthorityPolicyV1::new(provider, attempt, required_sha256(BROKER_SHA256_ENV))
-        .expect("independently pinned managed build authority")
+    let compiler_closure = RowSoftmaxV1CompilerClosurePolicyV1::new(
+        required_sha256(CARGO_EXECUTABLE_SHA256_ENV),
+        required_sha256(RUSTC_EXECUTABLE_SHA256_ENV),
+        required_sha256(RUSTC_RUNTIME_TREE_SHA256_ENV),
+        required_sha256(CODEGEN_BACKEND_SHA256_ENV),
+    )
+    .expect("independently pinned compiler closure");
+    RowSoftmaxV1AuthorityPolicyV1::new(
+        provider,
+        attempt,
+        required_sha256(BROKER_SHA256_ENV),
+        compiler_closure,
+    )
+    .expect("independently pinned managed build authority")
 }
 
 fn production_handoff(
