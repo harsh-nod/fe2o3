@@ -1394,11 +1394,8 @@ fn compile_row_softmax_with_device(
             "same-length row descriptor symbol substitution was accepted"
         );
 
-        let authority = decode_compiler_owned_module_section(
-            module,
-            ".fe2o3.row-softmax-auth.v1",
-        )
-        .expect("decode retained row-softmax authority section");
+        let authority = decode_compiler_owned_module_section(module, ".fe2o3.row-softmax-auth.v1")
+            .expect("decode retained row-softmax authority section");
         let exponential = decode_compiler_owned_module_section(module, ".fe2o3.row-exp.v1")
             .expect("decode retained row exponential-boundary section");
         assert_eq!(
@@ -1422,17 +1419,11 @@ fn compile_row_softmax_with_device(
             independently_expected_row_exp_boundary()
         );
 
-        let renamed_section = module.replacen(
-            ".fe2o3.row-softmax-auth.v1",
-            ".fe2o3.row-auth.v1",
-            1,
-        );
+        let renamed_section =
+            module.replacen(".fe2o3.row-softmax-auth.v1", ".fe2o3.row-auth.v1", 1);
         assert!(
-            decode_compiler_owned_module_section(
-                &renamed_section,
-                ".fe2o3.row-softmax-auth.v1"
-            )
-            .is_err(),
+            decode_compiler_owned_module_section(&renamed_section, ".fe2o3.row-softmax-auth.v1")
+                .is_err(),
             "legacy row authority section name was accepted"
         );
     }

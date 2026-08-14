@@ -23,8 +23,7 @@ use fe2o3_kernel_ir::{
     ScalarGemmTargetRequirementsV1, ScalarGemmV1Error, ScalarType, Signature, SynchronizationScope,
     TargetCapability, Terminator, TiledGemmV1Error, TiledGemmV1Profile, Type, ValueId,
     VerificationErrors, WaveOperation, WaveOperationKind, WaveWidth, WidenedFloatBinaryOp,
-    WorkgroupMemoryExtent, WorkgroupSize, analyze_control_flow,
-    encode_module_v4,
+    WorkgroupMemoryExtent, WorkgroupSize, analyze_control_flow, encode_module_v4,
     gfx942_xnack_minus_target_capability, verify_module, verify_scalar_gemm_v1_module,
     verify_tiled_gemm_v1_module,
 };
@@ -42,8 +41,7 @@ pub const MAX_COMPILER_MODULE_TEXT_BYTES: usize = 16 * 1024 * 1024;
 /// Canonical LLVM data layout for the exact gfx942:xnack- device profile.
 pub const GFX942_XNACK_MINUS_DATA_LAYOUT: &str = "e-p:64:64-p1:64:64-p2:32:32-p3:32:32-p4:64:64-p5:32:32-p6:32:32-p7:160:256:256:32-p8:128:128:128:48-p9:192:256:256:32-i64:64-v16:16-v24:32-v32:32-v48:64-v96:128-v192:256-v256:256-v512:512-v1024:1024-v2048:2048-n32:64-S32-A5-G1-ni:7:8:9";
 
-const ROW_SOFTMAX_MODULE_BINDING_DOMAIN_V1: &[u8] =
-    b"fe2o3.row-softmax.canonical-module.v1";
+const ROW_SOFTMAX_MODULE_BINDING_DOMAIN_V1: &[u8] = b"fe2o3.row-softmax.canonical-module.v1";
 const REVIEWED_ROW_SOFTMAX_MODULE_V4_COMMITMENT: [u8; 32] = [
     0x1e, 0x1b, 0x14, 0xc6, 0x84, 0x2f, 0xfd, 0x09, 0x10, 0x3e, 0xb5, 0x5e, 0xb3, 0x9b, 0x1b, 0xca,
     0xe9, 0xc0, 0xda, 0x81, 0x59, 0x7f, 0xed, 0x61, 0x86, 0x76, 0x75, 0x62, 0x33, 0x72, 0x30, 0xe6,
@@ -106,9 +104,7 @@ impl LoweringTarget {
             Self::Gfx942XnackMinusV1
             | Self::Gfx942RowSoftmaxV1
             | Self::Gfx942ScalarGemmV1
-            | Self::Gfx942TiledGemmV1 => {
-                Some(GFX942_XNACK_MINUS_DATA_LAYOUT)
-            }
+            | Self::Gfx942TiledGemmV1 => Some(GFX942_XNACK_MINUS_DATA_LAYOUT),
             Self::Baseline | Self::Gfx942StrictFloatV1 => None,
         }
     }
@@ -117,16 +113,16 @@ impl LoweringTarget {
         match (self, width) {
             (
                 Self::Gfx942XnackMinusV1
-                    | Self::Gfx942RowSoftmaxV1
-                    | Self::Gfx942ScalarGemmV1
-                    | Self::Gfx942TiledGemmV1,
+                | Self::Gfx942RowSoftmaxV1
+                | Self::Gfx942ScalarGemmV1
+                | Self::Gfx942TiledGemmV1,
                 WaveWidth::Wave32,
             ) => " \"target-features\"=\"+wavefrontsize32,-wavefrontsize64,-xnack\"",
             (
                 Self::Gfx942XnackMinusV1
-                    | Self::Gfx942RowSoftmaxV1
-                    | Self::Gfx942ScalarGemmV1
-                    | Self::Gfx942TiledGemmV1,
+                | Self::Gfx942RowSoftmaxV1
+                | Self::Gfx942ScalarGemmV1
+                | Self::Gfx942TiledGemmV1,
                 WaveWidth::Wave64,
             ) => " \"target-features\"=\"-wavefrontsize32,+wavefrontsize64,-xnack\"",
             (_, WaveWidth::Wave32) => " \"target-features\"=\"+wavefrontsize32,-wavefrontsize64\"",

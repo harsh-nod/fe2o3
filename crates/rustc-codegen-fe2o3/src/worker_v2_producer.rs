@@ -192,10 +192,7 @@ pub(crate) fn publish_prepared_row_softmax_v1_worker_handoff(
     let module = std::str::from_utf8(handoff.module_bytes())
         .map_err(|_| WorkerV2ProducerError::MissingRowSoftmaxBindings)?;
     let authority_section =
-        module_asm_commitment_section(
-            ".fe2o3.row-softmax-auth.v1",
-            &frontend_authority_commitment,
-        );
+        module_asm_commitment_section(".fe2o3.row-softmax-auth.v1", &frontend_authority_commitment);
     let exponential_section =
         module_asm_commitment_section(".fe2o3.row-exp.v1", &exponential_boundary_commitment);
     if !module.contains(&authority_section) || !module.contains(&exponential_section) {

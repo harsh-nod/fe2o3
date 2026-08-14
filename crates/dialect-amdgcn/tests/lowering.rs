@@ -2126,13 +2126,10 @@ fn excluded_operations_constants_casts_and_comparisons_have_located_errors() {
     );
     let exact_float_compare = exact_gfx942_xnack_minus(float_compare);
     assert_eq!(
-        lower_kernel_to_gfx942_xnack_minus_llvm_ir(
-            &exact_float_compare,
-            &KernelId::new("fill"),
-        )
-        .unwrap_err()
-        .diagnostics()[0]
-        .code,
+        lower_kernel_to_gfx942_xnack_minus_llvm_ir(&exact_float_compare, &KernelId::new("fill"),)
+            .unwrap_err()
+            .diagnostics()[0]
+            .code,
         LoweringDiagnosticCode::UnsupportedOperation
     );
 }

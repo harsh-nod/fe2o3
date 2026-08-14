@@ -390,9 +390,8 @@ pub(crate) fn construct_inert_row_softmax_v1_module_text(
             "module differs from the reviewed canonical row_softmax_v1 graph".to_owned(),
         ));
     }
-    let row_profile =
-        dialect_amdgcn::authenticate_gfx942_row_softmax_lowering_profile_v1(module)
-            .map_err(CompilerModuleConstructionError::Lowering)?;
+    let row_profile = dialect_amdgcn::authenticate_gfx942_row_softmax_lowering_profile_v1(module)
+        .map_err(CompilerModuleConstructionError::Lowering)?;
     let llvm_ir =
         dialect_amdgcn::lower_authenticated_row_softmax_module_to_gfx942_xnack_minus_llvm_ir_v1(
             module,
