@@ -216,13 +216,15 @@ std::vector<uint8_t> makeBitcode(StringRef ModuleName, StringRef Definition,
 
 std::vector<uint8_t>
 makeFloatConsumerBitcode(StringRef Entry, ArrayRef<StringRef> Imports,
-                         ArrayRef<StringRef> UnusedDeclarations) {
+                         ArrayRef<StringRef> UnusedDeclarations,
+                         uint8_t CodeObjectVersion = 5) {
   LLVMContext Context;
   Module ModuleValue("float-consumer", Context);
   std::unique_ptr<TargetMachine> Machine = createMachine("gfx942");
   ModuleValue.setTargetTriple(Triple(AmdGpuTriple));
   ModuleValue.setDataLayout(Machine->createDataLayout());
-  ModuleValue.addModuleFlag(Module::Error, "amdhsa_code_object_version", 500);
+  ModuleValue.addModuleFlag(Module::Error, "amdhsa_code_object_version",
+                            CodeObjectVersion * 100);
   Type *F32 = Type::getFloatTy(Context);
   FunctionType *Signature = FunctionType::get(F32, {F32}, false);
   Function *Defined = Function::Create(Signature, GlobalValue::ExternalLinkage,
@@ -244,9 +246,10 @@ makeFloatConsumerBitcode(StringRef Entry, ArrayRef<StringRef> Imports,
   return std::vector<uint8_t>(Buffer.begin(), Buffer.end());
 }
 
-std::vector<uint8_t> makeFloatConsumerBitcode(StringRef Entry,
-                                              StringRef Import) {
-  return makeFloatConsumerBitcode(Entry, ArrayRef<StringRef>(Import), {});
+std::vector<uint8_t> makeFloatConsumerBitcode(StringRef Entry, StringRef Import,
+                                              uint8_t CodeObjectVersion = 5) {
+  return makeFloatConsumerBitcode(Entry, ArrayRef<StringRef>(Import), {},
+                                  CodeObjectVersion);
 }
 
 std::vector<uint8_t> makeOcmlKernelBitcode() {
@@ -658,10 +661,12 @@ Request makeV2Request(Input CompilerModule,
                       std::vector<Input> ExternalProviders,
                       std::vector<std::string> Imports,
                       std::vector<std::string> Exports,
-                      std::vector<std::string> FinalSymbols) {
+                      std::vector<std::string> FinalSymbols,
+                      uint8_t CodeObjectVersion = 5) {
   std::vector<Input> Inputs = ExternalProviders;
   Inputs.push_back(CompilerModule);
-  Request Result = makeRequest(std::move(Inputs), FinalSymbols);
+  Request Result =
+      makeRequest(std::move(Inputs), FinalSymbols, "gfx942", CodeObjectVersion);
   Result.Protocol = ProtocolVersion::V2;
   Result.WorkerBuildIdentity = FE2O3_WORKER_BUILD_ID;
   Result.WorkerExecutableDigest.fill(0x51);
@@ -1050,11 +1055,13 @@ makeSyntheticPolicy(SyntheticDeviceLibraryDirectory &Directory,
   return Result;
 }
 
-Request makeOcmlRequest(StringRef Import = "__ocml_sin_f32") {
-  return makeV2Request(
-      makeInput(InputKind::LlvmBitcode,
-                makeFloatConsumerBitcode("ocml_entry", Import)),
-      {}, {Import.str()}, {"ocml_entry"}, {Import.str(), "ocml_entry"});
+Request makeOcmlRequest(StringRef Import = "__ocml_sin_f32",
+                        uint8_t CodeObjectVersion = 5) {
+  return makeV2Request(makeInput(InputKind::LlvmBitcode,
+                                 makeFloatConsumerBitcode("ocml_entry", Import,
+                                                          CodeObjectVersion)),
+                       {}, {Import.str()}, {"ocml_entry"},
+                       {Import.str(), "ocml_entry"}, CodeObjectVersion);
 }
 
 Request makeOcmlKernelRequest() {
@@ -1079,6 +1086,13 @@ void testSyntheticOcmlPipeline() {
           "required OCML helper was removed from the closure");
   require(!hasObjectSymbol(Linked.LinkedOutput->Bytes, "__ocml_dead_decoy"),
           "dead OCML provider definition escaped global DCE");
+
+  Request Cov6Exp = makeOcmlRequest("__ocml_exp_f32", 6);
+  Response Cov6Linked = runSuccessWithPolicy(Cov6Exp, ValidPolicy,
+                                             {"__ocml_exp_f32", "ocml_entry"});
+  requireDiagnostic(Cov6Linked,
+                    "device_library.check=identity status=ok "
+                    "provider=gfx942-ocml-v1 roots=[__ocml_exp_f32] files=4");
 
   Response KernelLinked =
       runSuccessWithPolicy(makeOcmlKernelRequest(), ValidPolicy,
@@ -1219,6 +1233,10 @@ void testSyntheticOcmlPipeline() {
   WrongCodeObject.CodeObjectVersion = 4;
   requireFailureWithPolicy(WrongCodeObject, ValidPolicy,
                            Stage::InputValidation);
+  Request MismatchedCodeObject = Cov6Exp;
+  MismatchedCodeObject.CodeObjectVersion = 5;
+  requireFailureWithPolicy(MismatchedCodeObject, ValidPolicy,
+                           Stage::BitcodeLink);
 
   Gfx942DeviceLibraryPolicy WrongDigest = ValidPolicy;
   WrongDigest.Files[0].Digest[0] ^= 0xff;

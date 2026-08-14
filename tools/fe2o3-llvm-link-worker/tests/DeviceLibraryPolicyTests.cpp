@@ -124,6 +124,14 @@ int main() {
           "OCML namespace classification failed");
   require(!isOcmlImportNamespace("ordinary_external"),
           "ordinary import was classified as OCML");
+  require(isSupportedGfx942OcmlCodeObjectVersion(5),
+          "gfx942 OCML rejected code-object V5");
+  require(isSupportedGfx942OcmlCodeObjectVersion(6),
+          "gfx942 OCML rejected code-object V6");
+  require(!isSupportedGfx942OcmlCodeObjectVersion(4),
+          "gfx942 OCML accepted code-object V4");
+  require(!isSupportedGfx942OcmlCodeObjectVersion(7),
+          "gfx942 OCML accepted an unknown code-object version");
 
   Fixture Valid;
   auto Loaded = loadGfx942DeviceLibraries({"__ocml_sin_f32"}, Valid.Policy);

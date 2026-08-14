@@ -29,6 +29,7 @@ struct Gfx942DeviceLibraryPolicy {
 
 bool isSupportedGfx942OcmlImport(llvm::StringRef Symbol);
 bool isOcmlImportNamespace(llvm::StringRef Symbol);
+bool isSupportedGfx942OcmlCodeObjectVersion(uint8_t Version);
 
 llvm::Expected<Gfx942DeviceLibraryPolicy> measuredGfx942DeviceLibraryPolicy();
 

@@ -1528,10 +1528,10 @@ Response executeImpl(const Request &RequestValue,
   if (!BuiltinOcmlImports.empty()) {
     TargetParts Parts = parseTarget(RequestValue.Target);
     if (RequestValue.Protocol != ProtocolVersion::V2 || Parts.Cpu != "gfx942" ||
-        RequestValue.CodeObjectVersion != 5)
+        !isSupportedGfx942OcmlCodeObjectVersion(RequestValue.CodeObjectVersion))
       return failure(RequestValue, Stage::InputValidation,
                      {"measured OCML providers require Worker V2, gfx942, and "
-                      "code-object V5"});
+                      "code-object V5 or V6"});
     Expected<Gfx942DeviceLibraryPolicy> Measured =
         TestPolicy ? Expected<Gfx942DeviceLibraryPolicy>(*TestPolicy)
                    : measuredGfx942DeviceLibraryPolicy();

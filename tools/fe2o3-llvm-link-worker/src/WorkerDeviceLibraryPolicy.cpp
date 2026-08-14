@@ -163,6 +163,10 @@ bool isOcmlImportNamespace(StringRef Symbol) {
   return Symbol.starts_with("__ocml_");
 }
 
+bool isSupportedGfx942OcmlCodeObjectVersion(uint8_t Version) {
+  return Version == 5 || Version == 6;
+}
+
 Expected<Gfx942DeviceLibraryPolicy> measuredGfx942DeviceLibraryPolicy() {
 #if FE2O3_GFX942_DEVICE_LIBS_ENABLED
   auto Ocml = parseDigest(FE2O3_GFX942_OCML_SHA256);
