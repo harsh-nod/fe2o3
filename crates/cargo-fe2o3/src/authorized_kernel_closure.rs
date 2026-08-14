@@ -1,8 +1,14 @@
 //! Pre-Cargo host-code policy for authority-bearing kernel compilations.
 
 use std::collections::{BTreeMap, BTreeSet};
+#[cfg(target_os = "linux")]
+use std::ffi::{CStr, CString, OsStr};
 use std::fs::{self, Metadata, OpenOptions};
 use std::io::Read;
+#[cfg(target_os = "linux")]
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+#[cfg(target_os = "linux")]
+use std::os::unix::ffi::OsStrExt;
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
@@ -105,6 +111,7 @@ pub(crate) struct AuthorizedKernelClosureV1 {
     snapshot: Vec<u8>,
     source_trees: Vec<ObservedSourceTree>,
     lockfile: ObservedFile,
+    mutation_journal: MutationJournal,
 }
 
 struct ObservedSourceTree {
@@ -114,8 +121,12 @@ struct ObservedSourceTree {
 }
 
 impl ObservedSourceTree {
-    fn capture(root: PathBuf, excluded: Option<PathBuf>) -> Result<Self, String> {
-        let digest = canonical_tree_digest(&root, excluded.as_deref())?;
+    fn capture(
+        root: PathBuf,
+        excluded: Option<PathBuf>,
+        mutation_journal: Option<&MutationJournal>,
+    ) -> Result<Self, String> {
+        let digest = canonical_tree_digest_monitored(&root, excluded.as_deref(), mutation_journal)?;
         Ok(Self {
             root,
             excluded,
@@ -139,6 +150,185 @@ struct ObservedFile {
     path: PathBuf,
     digest: [u8; 32],
     size: u64,
+}
+
+#[cfg(target_os = "linux")]
+struct MutationJournal {
+    descriptor: OwnedFd,
+    watch_by_path: std::sync::Mutex<BTreeMap<PathBuf, i32>>,
+    path_by_watch: std::sync::Mutex<BTreeMap<i32, PathBuf>>,
+    excluded: Vec<PathBuf>,
+}
+
+#[cfg(target_os = "linux")]
+impl MutationJournal {
+    fn new(excluded: Vec<PathBuf>) -> Result<Self, String> {
+        let descriptor = unsafe { libc::inotify_init1(libc::IN_CLOEXEC | libc::IN_NONBLOCK) };
+        if descriptor < 0 {
+            return Err(format!(
+                "cannot start authoritative source mutation journal: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        Ok(Self {
+            descriptor: unsafe { OwnedFd::from_raw_fd(descriptor) },
+            watch_by_path: std::sync::Mutex::new(BTreeMap::new()),
+            path_by_watch: std::sync::Mutex::new(BTreeMap::new()),
+            excluded,
+        })
+    }
+
+    fn watch_directory(&self, directory: &Path) -> Result<(), String> {
+        let mut watch_by_path = self
+            .watch_by_path
+            .lock()
+            .map_err(|_| "authoritative mutation journal path map was poisoned".to_owned())?;
+        if watch_by_path.contains_key(directory) {
+            return Ok(());
+        }
+        let path = CString::new(directory.as_os_str().as_bytes()).map_err(|_| {
+            format!(
+                "authoritative source directory contains a NUL byte: {}",
+                directory.display()
+            )
+        })?;
+        let mask = libc::IN_ATTRIB
+            | libc::IN_CLOSE_WRITE
+            | libc::IN_CREATE
+            | libc::IN_DELETE
+            | libc::IN_DELETE_SELF
+            | libc::IN_MODIFY
+            | libc::IN_MOVE_SELF
+            | libc::IN_MOVED_FROM
+            | libc::IN_MOVED_TO
+            | libc::IN_DONT_FOLLOW
+            | libc::IN_EXCL_UNLINK
+            | libc::IN_ONLYDIR;
+        let watch =
+            unsafe { libc::inotify_add_watch(self.descriptor.as_raw_fd(), path.as_ptr(), mask) };
+        if watch < 0 {
+            return Err(format!(
+                "cannot journal authoritative source directory {}: {}",
+                directory.display(),
+                std::io::Error::last_os_error()
+            ));
+        }
+        self.path_by_watch
+            .lock()
+            .map_err(|_| "authoritative mutation journal watch map was poisoned".to_owned())?
+            .insert(watch, directory.to_path_buf());
+        watch_by_path.insert(directory.to_path_buf(), watch);
+        Ok(())
+    }
+
+    fn ensure_quiet(&self) -> Result<(), String> {
+        let mut storage = [0_u64; 1024];
+        loop {
+            let bytes = unsafe {
+                libc::read(
+                    self.descriptor.as_raw_fd(),
+                    storage.as_mut_ptr().cast(),
+                    std::mem::size_of_val(&storage),
+                )
+            };
+            if bytes < 0 {
+                let error = std::io::Error::last_os_error();
+                if error.kind() == std::io::ErrorKind::WouldBlock {
+                    return Ok(());
+                }
+                return Err(format!(
+                    "cannot read authoritative source mutation journal: {error}"
+                ));
+            }
+            if bytes == 0 {
+                return Err("authoritative source mutation journal closed unexpectedly".to_owned());
+            }
+            self.reject_events(storage.as_ptr().cast(), bytes as usize)?;
+        }
+    }
+
+    fn reject_events(&self, bytes: *const u8, length: usize) -> Result<(), String> {
+        let paths = self
+            .path_by_watch
+            .lock()
+            .map_err(|_| "authoritative mutation journal watch map was poisoned".to_owned())?;
+        let mut offset = 0_usize;
+        while offset < length {
+            if length - offset < std::mem::size_of::<libc::inotify_event>() {
+                return Err(
+                    "authoritative source mutation journal returned a partial event".to_owned(),
+                );
+            }
+            let event = unsafe {
+                std::ptr::read_unaligned(bytes.add(offset).cast::<libc::inotify_event>())
+            };
+            let record_length = std::mem::size_of::<libc::inotify_event>()
+                .checked_add(event.len as usize)
+                .ok_or_else(|| {
+                    "authoritative source mutation journal event length overflowed".to_owned()
+                })?;
+            if record_length > length - offset {
+                return Err(
+                    "authoritative source mutation journal returned a truncated event".to_owned(),
+                );
+            }
+            if event.mask & libc::IN_Q_OVERFLOW != 0 {
+                return Err(
+                    "authoritative source mutation journal overflowed; closure authority is denied"
+                        .to_owned(),
+                );
+            }
+            let base = paths.get(&event.wd).ok_or_else(|| {
+                format!(
+                    "authoritative source mutation journal reported unknown watch {}",
+                    event.wd
+                )
+            })?;
+            let path = if event.len == 0 {
+                base.clone()
+            } else {
+                let name = unsafe {
+                    CStr::from_ptr(
+                        bytes
+                            .add(offset + std::mem::size_of::<libc::inotify_event>())
+                            .cast(),
+                    )
+                };
+                base.join(OsStr::from_bytes(name.to_bytes()))
+            };
+            if !self
+                .excluded
+                .iter()
+                .any(|excluded| path == *excluded || path.starts_with(excluded))
+            {
+                return Err(format!(
+                    "authoritative source closure mutated after preflight: {} (inotify mask 0x{:x})",
+                    path.display(),
+                    event.mask
+                ));
+            }
+            offset += record_length;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+struct MutationJournal;
+
+#[cfg(not(target_os = "linux"))]
+impl MutationJournal {
+    fn new(_excluded: Vec<PathBuf>) -> Result<Self, String> {
+        Err("authoritative source mutation journaling requires Linux".to_owned())
+    }
+
+    fn watch_directory(&self, _directory: &Path) -> Result<(), String> {
+        Err("authoritative source mutation journaling requires Linux".to_owned())
+    }
+
+    fn ensure_quiet(&self) -> Result<(), String> {
+        Err("authoritative source mutation journaling requires Linux".to_owned())
+    }
 }
 
 impl ObservedFile {
@@ -197,10 +387,12 @@ impl AuthorizedKernelClosureV1 {
     }
 
     pub(crate) fn revalidate(&self) -> Result<(), String> {
+        self.mutation_journal.ensure_quiet()?;
         for tree in &self.source_trees {
             tree.revalidate()?;
         }
-        self.lockfile.revalidate(MAX_LOCK_BYTES as u64)
+        self.lockfile.revalidate(MAX_LOCK_BYTES as u64)?;
+        self.mutation_journal.ensure_quiet()
     }
 
     fn from_metadata(
@@ -260,6 +452,7 @@ impl AuthorizedKernelClosureV1 {
             .get("target_directory")
             .and_then(Value::as_str)
             .map(PathBuf::from);
+        let mutation_journal = MutationJournal::new(target_directory.iter().cloned().collect())?;
         let mut snapshot = b"fe2o3-authorized-kernel-closure-content-v2\0".to_vec();
         append_field(&mut snapshot, cargo_digest);
         let mut source_trees = Vec::with_capacity(closure.len());
@@ -280,6 +473,7 @@ impl AuthorizedKernelClosureV1 {
                     .as_ref()
                     .filter(|target| target.starts_with(root))
                     .cloned(),
+                Some(&mutation_journal),
             )?;
             let tree_digest = observed_tree.digest;
             validate_host_code_package(package, &tree_digest)?;
@@ -311,6 +505,7 @@ impl AuthorizedKernelClosureV1 {
             .and_then(Value::as_str)
             .ok_or_else(|| "authoritative Cargo metadata has no workspace root".to_owned())?;
         let lock_path = Path::new(workspace_root).join("Cargo.lock");
+        mutation_journal.watch_directory(Path::new(workspace_root))?;
         let lockfile = ObservedFile::capture(lock_path, MAX_LOCK_BYTES as u64)?;
         if lockfile.size == 0 {
             return Err(format!(
@@ -318,10 +513,12 @@ impl AuthorizedKernelClosureV1 {
             ));
         }
         append_field(&mut snapshot, &lockfile.digest);
+        mutation_journal.ensure_quiet()?;
         Ok(Self {
             snapshot,
             source_trees,
             lockfile,
+            mutation_journal,
         })
     }
 }
@@ -542,8 +739,16 @@ fn validate_expected_tree(
 }
 
 fn canonical_tree_digest(root: &Path, excluded: Option<&Path>) -> Result<[u8; 32], String> {
+    canonical_tree_digest_monitored(root, excluded, None)
+}
+
+fn canonical_tree_digest_monitored(
+    root: &Path,
+    excluded: Option<&Path>,
+    mutation_journal: Option<&MutationJournal>,
+) -> Result<[u8; 32], String> {
     let mut files = Vec::new();
-    collect_tree_files(root, root, excluded, &mut files)?;
+    collect_tree_files(root, root, excluded, mutation_journal, &mut files)?;
     files.sort_by(|left, right| left.0.cmp(&right.0));
     if files.len() > MAX_SOURCE_TREE_FILES {
         return Err(format!(
@@ -578,6 +783,7 @@ fn collect_tree_files(
     root: &Path,
     directory: &Path,
     excluded: Option<&Path>,
+    mutation_journal: Option<&MutationJournal>,
     files: &mut Vec<(String, PathBuf)>,
 ) -> Result<(), String> {
     if excluded.is_some_and(|excluded| directory == excluded || directory.starts_with(excluded)) {
@@ -594,6 +800,9 @@ fn collect_tree_files(
             "authoritative source directory must be a real directory: {}",
             directory.display()
         ));
+    }
+    if let Some(mutation_journal) = mutation_journal {
+        mutation_journal.watch_directory(directory)?;
     }
     let entries = fs::read_dir(directory).map_err(|error| {
         format!(
@@ -625,7 +834,7 @@ fn collect_tree_files(
             ));
         }
         if metadata.is_dir() {
-            collect_tree_files(root, &path, excluded, files)?;
+            collect_tree_files(root, &path, excluded, mutation_journal, files)?;
         } else if metadata.is_file() {
             let relative = path
                 .strip_prefix(root)
@@ -932,10 +1141,33 @@ mod tests {
         .unwrap();
         let library = source.join("lib.rs");
         fs::write(&library, b"pub fn reviewed() {}\n").unwrap();
-        let observed = ObservedSourceTree::capture(directory.path().to_path_buf(), None).unwrap();
+        let observed =
+            ObservedSourceTree::capture(directory.path().to_path_buf(), None, None).unwrap();
 
         fs::write(&library, b"pub fn injected_after_preflight() {}\n").unwrap();
         let error = observed.revalidate().unwrap_err();
         assert!(error.contains("source closure changed after preflight"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn restored_proc_macro_mutation_remains_in_the_journal() {
+        let directory = TestDirectory::new();
+        let source = directory.path().join("src");
+        fs::create_dir(&source).unwrap();
+        let library = source.join("lib.rs");
+        let reviewed = b"pub fn reviewed() {}\n";
+        fs::write(&library, reviewed).unwrap();
+        let journal = MutationJournal::new(Vec::new()).unwrap();
+        let observed =
+            ObservedSourceTree::capture(directory.path().to_path_buf(), None, Some(&journal))
+                .unwrap();
+        journal.ensure_quiet().unwrap();
+
+        fs::write(&library, b"pub fn injected() {}\n").unwrap();
+        fs::write(&library, reviewed).unwrap();
+        observed.revalidate().unwrap();
+        let error = journal.ensure_quiet().unwrap_err();
+        assert!(error.contains("source closure mutated after preflight"));
     }
 }
