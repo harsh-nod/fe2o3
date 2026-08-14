@@ -571,7 +571,7 @@ pub(crate) fn bind_row_softmax_frontend_authority_v1(
 }
 
 fn append_commitment_section(llvm_ir: &mut String, section: &str, bytes: &[u8]) {
-    llvm_ir.push_str("\nmodule asm \".section ");
+    llvm_ir.push_str("module asm \".section ");
     llvm_ir.push_str(section);
     llvm_ir.push_str(",\\22\\22,@progbits\"\nmodule asm \".balign 8\"\n");
     append_module_asm_bytes(llvm_ir, bytes);

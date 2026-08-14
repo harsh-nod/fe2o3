@@ -598,6 +598,28 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
     };
     if let Some(managed) = managed_attempt {
         if status.success() {
+            #[cfg(feature = "compiler-handoff-observation-test-only")]
+            if let Some(request) = managed.compiler_handoff_observation.as_ref() {
+                let observation = if managed.worker_v2.is_some() {
+                    Err(
+                        "test-only compiler-handoff observation cannot replace a configured Worker V2 consumer"
+                            .to_owned(),
+                    )
+                } else {
+                    crate::compiler_handoff_observation::publish_and_wait_for_consumption(
+                        request,
+                        &managed.output_dir,
+                        &managed.producer,
+                        managed.attempt,
+                    )
+                };
+                if let Err(primary) = observation {
+                    let cleanup =
+                        fail_build_attempt(&managed.output_dir, &managed.producer, managed.attempt)
+                            .err();
+                    return Err(BindingWrapperError::ManagedCompletion { primary, cleanup });
+                }
+            }
             complete_managed_attempt(managed)?;
         } else if let Err(cleanup) =
             fail_build_attempt(&managed.output_dir, &managed.producer, managed.attempt)
@@ -1725,6 +1747,8 @@ struct ManagedAttempt {
     protected_source_path: Option<PathBuf>,
     compile_environment_profile: Option<WorkerV2CompileEnvironmentProfileV1>,
     worker_v2: Option<ManagedWorkerV2>,
+    #[cfg(feature = "compiler-handoff-observation-test-only")]
+    compiler_handoff_observation: Option<crate::compiler_handoff_observation::Request>,
 }
 
 enum ManagedWorkerV2 {
@@ -1805,6 +1829,16 @@ fn prepare_managed_attempt(
     output_dir: &Path,
     managed_rustc_args: &[OsString],
 ) -> Result<ManagedAttempt, BindingWrapperError> {
+    #[cfg(feature = "compiler-handoff-observation-test-only")]
+    let compiler_handoff_observation = {
+        let ordered_metadata = ordered_metadata_values(compile.argv())?;
+        crate::compiler_handoff_observation::Request::for_compile(
+            compile.crate_name(),
+            compile.source_path(),
+            &ordered_metadata,
+        )
+        .map_err(BindingWrapperError::BuildObservation)?
+    };
     let compile_environment_profile = worker_v2.as_ref().and_then(|config| {
         config.compile_environment_profile(compile.crate_name(), compile.source_path(), current_dir)
     });
@@ -1868,6 +1902,8 @@ fn prepare_managed_attempt(
         protected_source_path,
         compile_environment_profile,
         worker_v2,
+        #[cfg(feature = "compiler-handoff-observation-test-only")]
+        compiler_handoff_observation,
     })
 }
 

@@ -5,6 +5,8 @@ mod application_supervisor;
 mod binding_wrapper;
 mod capability_broker;
 mod clean;
+#[cfg(feature = "compiler-handoff-observation-test-only")]
+mod compiler_handoff_observation;
 mod example_manifest;
 mod generation;
 mod inert_rustc_invocation_capture;
