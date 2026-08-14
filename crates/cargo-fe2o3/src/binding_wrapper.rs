@@ -33,6 +33,7 @@ use reserved_fe2o3_symbols::{
 use sha2::{Digest, Sha256};
 
 use crate::capability_broker;
+use crate::inert_rustc_invocation_capture::InertRustcInvocationCaptureV2;
 use crate::pinned_codegen_backend::PinnedCodegenBackend;
 use crate::pinned_executable::{PinExecutableError, PinnedExecutable};
 use crate::project::PinnedDirectory;
@@ -461,6 +462,31 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
         .is_some()
         .then(|| materialize_s09_child_environment(command.as_command_mut(), std::env::vars_os()))
         .transpose()?;
+    let inert_rustc_invocation = complete_s09_environment
+        .as_ref()
+        .map(|environment| {
+            let capabilities = compiler_capabilities.as_ref().ok_or_else(|| {
+                BindingWrapperError::BuildObservation(
+                    "S09 invocation capture has no compiler capabilities".to_owned(),
+                )
+            })?;
+            let capture = InertRustcInvocationCaptureV2::capture(
+                command.as_command(),
+                command.configured_argv0(),
+                &execution_directory,
+                &environment.entries,
+                *pinned_rustc.sha256(),
+                capabilities.backend_sha256(),
+            )
+            .map_err(|error| {
+                BindingWrapperError::BuildObservation(format!(
+                    "cannot capture inert prepared rustc invocation: {error}"
+                ))
+            })?;
+            debug_assert_eq!(capture.descriptor().amd_target(), "gfx942:xnack-");
+            Ok::<_, BindingWrapperError>((capture.digest(), capture))
+        })
+        .transpose()?;
     let protected_source_tree_sha256 = if worker_build_observation.is_some() {
         let source = managed_attempt
             .as_ref()
@@ -503,7 +529,10 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
             .expect("S09 process-consistency expectation exists")
             .finalize(observation.prepared_rustc_command_sha256)?;
     }
-    let status = match command.status() {
+    let status = command.status();
+    // Keep the in-memory descriptor alive across the exact spawn it describes.
+    drop(inert_rustc_invocation);
+    let status = match status {
         Ok(status) => status,
         Err(error) => {
             if let Some(managed) = managed_attempt {
@@ -1327,6 +1356,10 @@ impl CompilerCapabilities {
 
     const fn pinned_cargo_image_sha256(&self) -> Option<[u8; 32]> {
         self.pinned_cargo_image_sha256
+    }
+
+    fn backend_sha256(&self) -> [u8; 32] {
+        *self.backend.sha256()
     }
 
     fn create_s09_private_tmpdir(

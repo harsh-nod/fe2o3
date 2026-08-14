@@ -7,6 +7,7 @@ mod capability_broker;
 mod clean;
 mod example_manifest;
 mod generation;
+mod inert_rustc_invocation_capture;
 mod inspect;
 mod non_production_reproduction;
 #[allow(dead_code)]
