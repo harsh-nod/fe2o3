@@ -31,8 +31,8 @@ pub use managed_memory::{
     ManagedReclamationReceipt, ManagedResidencyState,
 };
 pub use memory::{
-    DeviceBuffer, DeviceBufferIdentity, DeviceBufferRangeError, DeviceBufferRegion,
-    DeviceBufferView, DeviceBufferViewMut,
+    DeviceBuffer, DeviceBufferIdentity, DeviceBufferRangeError, DeviceBufferRangeSplitMut,
+    DeviceBufferRegion, DeviceBufferView, DeviceBufferViewMut,
 };
 pub use memory_topology::{
     AllocationIdentity, AllocationKind, ContextIdentity, MemoryCapabilities,

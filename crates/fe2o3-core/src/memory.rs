@@ -114,6 +114,14 @@ pub struct DeviceBufferViewMut<'allocation, T: DeviceCopy> {
     _exclusive: PhantomData<&'allocation mut DeviceBuffer<T>>,
 }
 
+/// Prefix, selected range, and suffix returned by
+/// [`DeviceBuffer::split_range_mut`].
+pub type DeviceBufferRangeSplitMut<'allocation, T> = (
+    DeviceBufferViewMut<'allocation, T>,
+    DeviceBufferViewMut<'allocation, T>,
+    DeviceBufferViewMut<'allocation, T>,
+);
+
 unsafe impl<T: DeviceCopy> Send for DeviceBuffer<T> {}
 unsafe impl<T: DeviceCopy> Sync for DeviceBuffer<T> {}
 
@@ -224,6 +232,32 @@ impl<T: DeviceCopy> DeviceBuffer<T> {
         Ok((
             DeviceBufferViewMut::from_checked(buffer, left),
             DeviceBufferViewMut::from_checked(buffer, right),
+        ))
+    }
+
+    /// Splits this allocation into the prefix before `range`, the selected
+    /// range, and the suffix after it.
+    ///
+    /// All three views retain this allocation's identity and carry adjacent,
+    /// non-overlapping allocation-relative byte intervals. This is useful for
+    /// placing checked guard regions immediately around a kernel argument in
+    /// one physical allocation. The exclusive borrow prevents the parent
+    /// buffer from being used or dropped until all three views are gone.
+    pub fn split_range_mut(
+        &mut self,
+        range: core::ops::Range<usize>,
+    ) -> core::result::Result<DeviceBufferRangeSplitMut<'_, T>, DeviceBufferRangeError> {
+        let selected = checked_region(self.ptr, self.len, range.clone())?;
+        let prefix = checked_region(self.ptr, self.len, ..range.start)?;
+        let suffix = checked_region(self.ptr, self.len, range.end..)?;
+        debug_assert_eq!(prefix.byte_end, selected.byte_start);
+        debug_assert_eq!(selected.byte_end, suffix.byte_start);
+
+        let buffer = &*self;
+        Ok((
+            DeviceBufferViewMut::from_checked(buffer, prefix),
+            DeviceBufferViewMut::from_checked(buffer, selected),
+            DeviceBufferViewMut::from_checked(buffer, suffix),
         ))
     }
 
@@ -761,6 +795,58 @@ mod tests {
         assert_eq!(middle.region_byte_range(), 12..20);
         assert_eq!(end.region_byte_range(), 20..32);
         assert_eq!(end.as_device_ptr().as_raw().addr(), 0x2014);
+    }
+
+    #[test]
+    fn split_range_mut_returns_adjacent_guarded_regions() {
+        let mut buffer = test_buffer(0x5000_usize as *mut u32, 12);
+        let identity = buffer.allocation_identity();
+        let (prefix, selected, suffix) = buffer.split_range_mut(2..10).unwrap();
+
+        assert_eq!(prefix.allocation_identity(), identity);
+        assert_eq!(selected.allocation_identity(), identity);
+        assert_eq!(suffix.allocation_identity(), identity);
+        assert_eq!(prefix.region_byte_range(), 0..8);
+        assert_eq!(selected.region_byte_range(), 8..40);
+        assert_eq!(suffix.region_byte_range(), 40..48);
+        assert_eq!(prefix.as_device_ptr().as_raw().addr(), 0x5000);
+        assert_eq!(selected.as_device_ptr().as_raw().addr(), 0x5008);
+        assert_eq!(suffix.as_device_ptr().as_raw().addr(), 0x5028);
+    }
+
+    #[test]
+    fn split_range_mut_preserves_empty_selected_region() {
+        let mut buffer = test_buffer(0x6000_usize as *mut u32, 4);
+        let (prefix, selected, suffix) = buffer.split_range_mut(2..2).unwrap();
+
+        assert_eq!(prefix.region_byte_range(), 0..8);
+        assert!(selected.is_empty());
+        assert_eq!(selected.region_byte_range(), 8..8);
+        assert_eq!(selected.as_device_ptr().as_raw().addr(), 0x6008);
+        assert_eq!(suffix.region_byte_range(), 8..16);
+    }
+
+    #[test]
+    fn split_range_mut_rejects_reversed_and_out_of_bounds_ranges() {
+        let mut buffer = test_buffer(0x7000_usize as *mut u32, 8);
+        let range = |start, end| core::ops::Range { start, end };
+
+        assert_eq!(
+            buffer.split_range_mut(range(5, 4)).unwrap_err(),
+            DeviceBufferRangeError::OutOfBounds {
+                start: 5,
+                end: 4,
+                allocation_len: 8,
+            }
+        );
+        assert_eq!(
+            buffer.split_range_mut(1..9).unwrap_err(),
+            DeviceBufferRangeError::OutOfBounds {
+                start: 1,
+                end: 9,
+                allocation_len: 8,
+            }
+        );
     }
 
     #[test]
