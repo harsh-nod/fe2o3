@@ -117,6 +117,7 @@ pub(crate) enum CompilerModuleConstructionError {
     UnsupportedFloatTarget(String),
     UnsupportedTargetBinding(String),
     SourceDebug(crate::source_debug::SourceDebugError),
+    ScalarGemmLowering(String),
     Lowering(dialect_amdgcn::LoweringErrors),
 }
 
@@ -144,6 +145,9 @@ impl fmt::Display for CompilerModuleConstructionError {
             ),
             Self::SourceDebug(error) => {
                 write!(formatter, "source-debug metadata rejected: {error}")
+            }
+            Self::ScalarGemmLowering(error) => {
+                write!(formatter, "exact scalar GEMM lowering rejected: {error}")
             }
             Self::Lowering(error) => write!(formatter, "{error}"),
         }
@@ -293,6 +297,37 @@ pub(crate) fn construct_inert_compiler_module_text_for_target_v1(
     })
 }
 
+/// Constructs the exact reviewed gfx942:xnack-/COV6 scalar GEMM LLVM module.
+///
+/// This keeps the scalar-specific floating-point and target audit in the same
+/// path that later embeds compiler-authenticated descriptor source bytes.
+pub(crate) fn construct_inert_scalar_gemm_v1_module_text(
+    module: &Module,
+) -> Result<InertCompilerModuleTextV1, CompilerModuleConstructionError> {
+    enforce_compiler_module_bounds(module)?;
+    let llvm_ir = dialect_amdgcn::lower_scalar_gemm_v1_to_gfx942_llvm_ir(
+        module,
+        fe2o3_kernel_ir::ScalarGemmTargetRequirementsV1::gfx942_xnack_minus_cov6(),
+    )
+    .map_err(|error| CompilerModuleConstructionError::ScalarGemmLowering(error.to_string()))?
+    .into_string();
+
+    Ok(InertCompilerModuleTextV1 {
+        llvm_ir,
+        kernel_entries: vec![fe2o3_kernel_ir::SCALAR_GEMM_V1_KERNEL_ID.to_owned()],
+        device_definitions: Vec::new(),
+        internal_helpers: Vec::new(),
+        device_ffi_exports: Vec::new(),
+        external_declarations: Vec::new(),
+        descriptor_source_identity: None,
+        unbound_target_properties: [
+            UnboundCompilerModuleTargetPropertyV1::DataLayout,
+            UnboundCompilerModuleTargetPropertyV1::TargetProcessor,
+            UnboundCompilerModuleTargetPropertyV1::CodeObjectVersion,
+        ],
+    })
+}
+
 fn ocml_link_imports(module: &Module) -> impl Iterator<Item = &'static str> + '_ {
     module.functions.iter().filter_map(|function| {
         let FloatOperation::F32Math {
@@ -379,11 +414,30 @@ pub(crate) fn bind_compiler_descriptor_source_v1(
     Ok(module)
 }
 
+/// Binds the exact single-use scalar frontend authority into compiler-owned
+/// non-allocatable module assembly retained by the Worker V2 request.
+pub(crate) fn bind_scalar_gemm_frontend_authority_v1(
+    mut module: InertCompilerModuleTextV1,
+    authority: [u8; 32],
+) -> Result<InertCompilerModuleTextV1, CompilerModuleConstructionError> {
+    module
+        .llvm_ir
+        .push_str("\nmodule asm \".section .fe2o3.scalar-auth.v1,\\22\\22,@progbits\"\n");
+    module.llvm_ir.push_str("module asm \".balign 8\"\n");
+    append_module_asm_bytes(&mut module.llvm_ir, &authority);
+    enforce_source_debug_text_bound(&module.llvm_ir)?;
+    Ok(module)
+}
+
 fn append_descriptor_module_assembly(llvm_ir: &mut String, bytes: &[u8]) {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
     llvm_ir.push_str("\nmodule asm \".section ");
     llvm_ir.push_str(COMPILER_DESCRIPTOR_SECTION_NAME_V1);
     llvm_ir.push_str(",\\22\\22,@progbits\"\nmodule asm \".balign 8\"\n");
+    append_module_asm_bytes(llvm_ir, bytes);
+}
+
+fn append_module_asm_bytes(llvm_ir: &mut String, bytes: &[u8]) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
     for chunk in bytes.chunks(16) {
         llvm_ir.push_str("module asm \".byte ");
         for (index, byte) in chunk.iter().copied().enumerate() {

@@ -12,6 +12,9 @@ use fe2o3_artifacts::{
     Dimensions, Endianness, IdentityText, Mutability as ArtifactMutability, PointerWidth,
     RustScalarElementTypeV1, ScalarType, TargetIdentity,
 };
+use fe2o3_compiler_ffi::{
+    CodeObjectVersion, CompilerDescriptorSourceV1, CompilerFfiEnvelopeV1, DeviceTargetV1,
+};
 use fe2o3_kernel_ir::{Module, scalar_gemm_v1_module};
 use rustc_abi::ExternAbi;
 use rustc_hir::{Mutability, Safety};
@@ -31,7 +34,6 @@ pub(crate) const SCALAR_GEMM_CODE_OBJECT_VERSION_V1: u16 = 6;
 pub(crate) const SCALAR_GEMM_EXPLICIT_KERNARG_BYTES_V1: u64 = 64;
 pub(crate) const SCALAR_GEMM_COMPLETE_KERNARG_BYTES_V1: u64 = 320;
 pub(crate) const SCALAR_GEMM_KERNEL_SYMBOL_V1: &str = "scalar_gemm_v1";
-pub(crate) const NEXT_LOWERING_DEPENDENCY: &str = "attempt-scoped Worker V2 publication, measured upstream LLVM/LLD execution, raw-HSACO inspection, and checked host launch admission remain required";
 
 const FIXED_KERNEL_EXPORT: &str = SCALAR_GEMM_KERNEL_SYMBOL_V1;
 const FIXED_LOGICAL_NAME: &str = SCALAR_GEMM_KERNEL_SYMBOL_V1;
@@ -97,6 +99,7 @@ struct ScalarGemmFrontendAuthorityV1 {
     root_instance_identity: String,
     portable_mir_semantic_commitment: [u8; 32],
     compiler_semantics_commitment: [u8; 32],
+    descriptor_source_commitment: [u8; 32],
     authority_commitment: [u8; 32],
 }
 
@@ -108,6 +111,7 @@ struct ScalarGemmFrontendAuthorityV1 {
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct ScalarGemmFrontendReceiptV1 {
     authority: Option<ScalarGemmFrontendAuthorityV1>,
+    descriptor_source: Option<CompilerDescriptorSourceV1>,
 }
 
 impl ScalarGemmFrontendReceiptV1 {
@@ -172,9 +176,19 @@ impl ScalarGemmFrontendReceiptV1 {
             .authority
             .take()
             .ok_or(CollectedScalarGemmErrorV1::ReceiptAlreadyConsumed)?;
+        let descriptor_source = self
+            .descriptor_source
+            .take()
+            .ok_or(CollectedScalarGemmErrorV1::ReceiptAlreadyConsumed)?;
         validate_frontend_authority(&authority)?;
+        if descriptor_source.identity().sha256() != &authority.descriptor_source_commitment {
+            return Err(CollectedScalarGemmErrorV1::ReceiptBindingMismatch {
+                field: "descriptor source",
+            });
+        }
         Ok(AuthenticatedScalarGemmModuleV1 {
             module: scalar_gemm_v1_module(),
+            descriptor_source,
             authority_commitment: authority.authority_commitment,
         })
     }
@@ -187,6 +201,7 @@ impl ScalarGemmFrontendReceiptV1 {
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct AuthenticatedScalarGemmModuleV1 {
     module: Module,
+    descriptor_source: CompilerDescriptorSourceV1,
     authority_commitment: [u8; 32],
 }
 
@@ -195,8 +210,8 @@ impl AuthenticatedScalarGemmModuleV1 {
         &self.authority_commitment
     }
 
-    pub(crate) fn into_module(self) -> Module {
-        self.module
+    pub(crate) fn into_parts(self) -> (Module, CompilerDescriptorSourceV1) {
+        (self.module, self.descriptor_source)
     }
 }
 
@@ -295,6 +310,32 @@ pub(crate) fn authenticate_collected_scalar_gemm_v1<'tcx>(
         .general_typed_contract
         .as_ref()
         .ok_or_else(|| layout_mismatch("General V3 contract is absent after layout admission"))?;
+    let descriptor_roots = crate::compiler_descriptor::typed_descriptor_roots_from_collection(
+        tcx,
+        &collection.functions,
+    )
+    .map_err(|error| layout_mismatch(format!("descriptor evidence rejected: {error}")))?;
+    let module = scalar_gemm_v1_module();
+    let compiler_module = crate::kernel_ir_codegen::construct_inert_scalar_gemm_v1_module_text(
+        &module,
+    )
+    .map_err(|error| unsupported_collection(format!("exact LLVM lowering failed: {error}")))?;
+    let target = DeviceTargetV1::parse(EXACT_SCALAR_GEMM_TARGET_V1)
+        .expect("fixed scalar GEMM target is valid");
+    let envelope =
+        CompilerFfiEnvelopeV1::for_module_without_device_ffi(target, CodeObjectVersion::V6)
+            .map_err(|error| {
+                unsupported_collection(format!("compiler envelope failed: {error}"))
+            })?;
+    let descriptor_source = crate::compiler_descriptor::construct_compiler_descriptor_source_v1(
+        &envelope,
+        &module,
+        &compiler_module,
+        &descriptor_roots,
+    )
+    .map_err(|error| layout_mismatch(format!("descriptor source rejected: {error}")))?
+    .ok_or_else(|| layout_mismatch("compiler descriptor source is absent"))?;
+    let descriptor_source_commitment = *descriptor_source.identity().sha256();
     let target_identity = scalar_gemm_target_identity()?;
     let imported = crate::mir_import::import_collection(tcx, collection).map_err(|error| {
         CollectedScalarGemmErrorV1::PortableMir {
@@ -338,11 +379,13 @@ pub(crate) fn authenticate_collected_scalar_gemm_v1<'tcx>(
         root_instance_identity,
         portable_mir_semantic_commitment,
         compiler_semantics_commitment,
+        descriptor_source_commitment,
         authority_commitment: [0; 32],
     };
     authority.authority_commitment = collected_authority_commitment(&authority);
     Ok(ScalarGemmFrontendReceiptV1 {
         authority: Some(authority),
+        descriptor_source: Some(descriptor_source),
     })
 }
 
@@ -783,6 +826,7 @@ fn collected_authority_commitment(authority: &ScalarGemmFrontendAuthorityV1) -> 
     hash_field(&mut digest, COLLECTED_AUTHORITY_DOMAIN_V1);
     hash_field(&mut digest, &authority.portable_mir_semantic_commitment);
     hash_field(&mut digest, &authority.compiler_semantics_commitment);
+    hash_field(&mut digest, &authority.descriptor_source_commitment);
     hash_field(&mut digest, authority.root_instance_identity.as_bytes());
     hash_field(&mut digest, authority.kernel_export.as_bytes());
     hash_field(&mut digest, authority.target.as_bytes());
@@ -834,6 +878,8 @@ fn validate_frontend_authority(
         != compiler_semantics_commitment(&reviewed_compiler_semantics())
     {
         Some("compiler semantics")
+    } else if authority.descriptor_source_commitment == [0; 32] {
+        Some("descriptor source")
     } else {
         None
     };
@@ -855,6 +901,8 @@ pub(crate) fn exact_frontend_receipt_for_test() -> ScalarGemmFrontendReceiptV1 {
         compiler_semantics_commitment(&reviewed_compiler_semantics());
     let abi_binding_commitment = exact_abi_binding_commitment();
     let launch_binding_commitment = exact_launch_binding_commitment();
+    let descriptor_source = crate::compiler_descriptor::scalar_gemm_v1_descriptor_source_for_test();
+    let descriptor_source_commitment = *descriptor_source.identity().sha256();
     let mut authority = ScalarGemmFrontendAuthorityV1 {
         target: EXACT_SCALAR_GEMM_TARGET_V1.to_owned(),
         code_object_version: SCALAR_GEMM_CODE_OBJECT_VERSION_V1,
@@ -866,11 +914,13 @@ pub(crate) fn exact_frontend_receipt_for_test() -> ScalarGemmFrontendReceiptV1 {
         root_instance_identity: REVIEWED_ROOT_INSTANCE_IDENTITY.to_owned(),
         portable_mir_semantic_commitment: PORTABLE_MIR_SEMANTIC_IDENTITY,
         compiler_semantics_commitment,
+        descriptor_source_commitment,
         authority_commitment: [0; 32],
     };
     authority.authority_commitment = collected_authority_commitment(&authority);
     ScalarGemmFrontendReceiptV1 {
         authority: Some(authority),
+        descriptor_source: Some(descriptor_source),
     }
 }
 
@@ -1002,7 +1052,7 @@ mod tests {
         let baseline = collected_authority_commitment(
             baseline_receipt.authority.as_ref().expect("test authority"),
         );
-        let mutations: [fn(&mut ScalarGemmFrontendAuthorityV1); 10] = [
+        let mutations: [fn(&mut ScalarGemmFrontendAuthorityV1); 11] = [
             |authority| authority.portable_mir_semantic_commitment[0] ^= 1,
             |authority| authority.compiler_semantics_commitment[0] ^= 1,
             |authority| authority.root_instance_identity.push_str("_other"),
@@ -1013,6 +1063,7 @@ mod tests {
             |authority| authority.complete_kernarg_bytes = 319,
             |authority| authority.abi_binding_commitment[0] ^= 1,
             |authority| authority.launch_binding_commitment[0] ^= 1,
+            |authority| authority.descriptor_source_commitment[0] ^= 1,
         ];
         for mutate in mutations {
             let mut receipt = exact_test_receipt();
@@ -1049,10 +1100,9 @@ mod tests {
     fn frontend_receipt_is_single_use() {
         let mut receipt = exact_test_receipt();
         let authenticated = receipt.consume().expect("first consumption");
-        assert_eq!(
-            authenticated.into_module(),
-            fe2o3_kernel_ir::scalar_gemm_v1_module()
-        );
+        let (module, descriptor_source) = authenticated.into_parts();
+        assert_eq!(module, fe2o3_kernel_ir::scalar_gemm_v1_module());
+        assert_eq!(descriptor_source.table().kernels().len(), 1);
         assert!(matches!(
             receipt.consume(),
             Err(CollectedScalarGemmErrorV1::ReceiptAlreadyConsumed)

@@ -509,6 +509,14 @@ fn descriptor_capabilities(module: &Module) -> Result<Vec<CapabilityV1>, Compile
     for capability in effective {
         match capability {
             TargetCapability::Int64 => {}
+            TargetCapability::Extension { namespace, name }
+                if namespace == fe2o3_kernel_ir::AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE
+                    && name
+                        == fe2o3_kernel_ir::AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME =>
+            {
+                // Exact target binding is represented by the descriptor table's
+                // device target, not as an executable kernel capability.
+            }
             TargetCapability::Subgroups | TargetCapability::SubgroupSize(64) => {
                 result.insert(CapabilityV1::Subgroup);
                 result.insert(CapabilityV1::AmdWave);
@@ -793,6 +801,136 @@ impl fmt::Display for CompilerDescriptorError {
 }
 
 impl std::error::Error for CompilerDescriptorError {}
+
+#[cfg(test)]
+pub(crate) fn scalar_gemm_v1_descriptor_source_for_test() -> CompilerDescriptorSourceV1 {
+    use fe2o3_artifacts::{
+        PointerWidth, RustDisjointIndexSpaceV1, RustLayoutEvidenceV1, RustPhysicalComponentKindV1,
+        RustPhysicalComponentV1, RustPointerMutabilityV1, RustScalarElementTypeV1,
+        RustSourceTypeShapeV1, RustTypeEvidenceV1, RustcAbiClassV1,
+    };
+    use reserved_fe2o3_symbols::GeneratedHostContractIdV3;
+
+    fn layout(kind: GeneralTypedArgumentKindV3) -> RustLayoutEvidenceV1 {
+        let (shape, abi, size, alignment, components) = match kind {
+            GeneralTypedArgumentKindV3::SharedSlice(element) => (
+                RustSourceTypeShapeV1::shared_slice(element),
+                RustcAbiClassV1::ScalarPair,
+                16,
+                8,
+                vec![
+                    RustPhysicalComponentV1::new(
+                        0,
+                        8,
+                        8,
+                        RustPhysicalComponentKindV1::Pointer {
+                            mutability: RustPointerMutabilityV1::Const,
+                            pointee: element,
+                        },
+                    )
+                    .unwrap(),
+                    RustPhysicalComponentV1::new(8, 8, 8, RustPhysicalComponentKindV1::Usize)
+                        .unwrap(),
+                ],
+            ),
+            GeneralTypedArgumentKindV3::DisjointSlice(element) => (
+                RustSourceTypeShapeV1::disjoint_slice(element, RustDisjointIndexSpaceV1::Index1D),
+                RustcAbiClassV1::ScalarPair,
+                16,
+                8,
+                vec![
+                    RustPhysicalComponentV1::new(
+                        0,
+                        8,
+                        8,
+                        RustPhysicalComponentKindV1::Pointer {
+                            mutability: RustPointerMutabilityV1::Mut,
+                            pointee: element,
+                        },
+                    )
+                    .unwrap(),
+                    RustPhysicalComponentV1::new(8, 8, 8, RustPhysicalComponentKindV1::Usize)
+                        .unwrap(),
+                ],
+            ),
+            GeneralTypedArgumentKindV3::Scalar(element) => (
+                RustSourceTypeShapeV1::scalar(element),
+                RustcAbiClassV1::Scalar,
+                4,
+                4,
+                vec![
+                    RustPhysicalComponentV1::new(
+                        0,
+                        4,
+                        4,
+                        RustPhysicalComponentKindV1::Scalar { scalar: element },
+                    )
+                    .unwrap(),
+                ],
+            ),
+        };
+        RustLayoutEvidenceV1::new(
+            RustTypeEvidenceV1::new(shape),
+            abi,
+            PointerWidth::Bits64,
+            size,
+            alignment,
+            components,
+        )
+        .unwrap()
+    }
+
+    let kinds = [
+        GeneralTypedArgumentKindV3::SharedSlice(RustScalarElementTypeV1::F32),
+        GeneralTypedArgumentKindV3::SharedSlice(RustScalarElementTypeV1::F32),
+        GeneralTypedArgumentKindV3::DisjointSlice(RustScalarElementTypeV1::F32),
+        GeneralTypedArgumentKindV3::Scalar(RustScalarElementTypeV1::U32),
+        GeneralTypedArgumentKindV3::Scalar(RustScalarElementTypeV1::U32),
+        GeneralTypedArgumentKindV3::Scalar(RustScalarElementTypeV1::U32),
+    ];
+    let names = ["a", "b", "c", "m", "n", "k"];
+    let offsets = [0, 16, 32, 48, 52, 56];
+    let arguments = kinds
+        .into_iter()
+        .enumerate()
+        .map(|(index, kind)| TypedDescriptorArgumentV1 {
+            name: names[index].to_owned(),
+            kind: descriptor_argument_kind(kind),
+            access: match kind {
+                GeneralTypedArgumentKindV3::Scalar(_) => AccessMode::ByValue,
+                GeneralTypedArgumentKindV3::SharedSlice(_) => AccessMode::ReadOnly,
+                GeneralTypedArgumentKindV3::DisjointSlice(_) => AccessMode::ReadWrite,
+            },
+            offset: offsets[index],
+            layout: layout(kind),
+        })
+        .collect::<Vec<_>>();
+    let root = TypedDescriptorRootV1 {
+        logical_name: "scalar_gemm_v1".to_owned(),
+        export_name: "scalar_gemm_v1".to_owned(),
+        profile: TypedKernelProfile::GeneralScalarSliceRustcLayoutV3 {
+            generated_host_contract_identity: GeneratedHostContractIdV3::from_bytes([0x55; 32]),
+        },
+        kernel_binding: KernelBindingIdV1::from_bytes([
+            0x78, 0x9a, 0xde, 0xdf, 0xdc, 0x3b, 0xe1, 0xfb, 0x60, 0x51, 0x8d, 0xd2, 0xc7, 0x46,
+            0x0c, 0x3e, 0xf8, 0xe6, 0xb9, 0x00, 0x52, 0x7d, 0x1b, 0xcb, 0x22, 0x89, 0xba, 0xa1,
+            0xe0, 0x14, 0x69, 0x3e,
+        ]),
+        arguments: TypedArgumentListV1::new(arguments).unwrap(),
+        explicit_argument_bytes: 64,
+        kernarg_alignment_bytes: 8,
+    };
+    let module = fe2o3_kernel_ir::scalar_gemm_v1_module();
+    let compiler_module =
+        crate::kernel_ir_codegen::construct_inert_scalar_gemm_v1_module_text(&module).unwrap();
+    let target = fe2o3_compiler_ffi::DeviceTargetV1::parse("gfx942:xnack-").unwrap();
+    let envelope =
+        CompilerFfiEnvelopeV1::for_module_without_device_ffi(target, CodeObjectVersion::V6)
+            .unwrap();
+    construct_compiler_descriptor_source_v1(&envelope, &module, &compiler_module, &[root])
+        .unwrap()
+        .unwrap()
+}
 
 #[cfg(test)]
 mod tests {
