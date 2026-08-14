@@ -1113,8 +1113,83 @@ fn materialize_reviewed_child_environment(
         Some(WorkerV2CompileEnvironmentProfileV1::ScalarGemmV1Gfx942) => {
             materialize_scalar_gemm_v1_child_environment(command, inherited).map(Some)
         }
+        Some(WorkerV2CompileEnvironmentProfileV1::RowSoftmaxV1Gfx942) => {
+            materialize_row_softmax_v1_child_environment(command, inherited).map(Some)
+        }
         None => Ok(None),
     }
+}
+
+fn materialize_row_softmax_v1_child_environment(
+    command: &mut Command,
+    inherited: impl IntoIterator<Item = (OsString, OsString)>,
+) -> Result<CompleteReviewedChildEnvironmentV2, BindingWrapperError> {
+    let inherited = inherited.into_iter().collect::<BTreeMap<_, _>>();
+    for name in inherited.keys() {
+        if rejected_s09_inherited_environment(name) {
+            return Err(BindingWrapperError::BuildObservation(format!(
+                "row-softmax child environment rejects inherited variable {name:?}"
+            )));
+        }
+    }
+    let required = |name: &'static str| {
+        inherited.get(OsStr::new(name)).ok_or_else(|| {
+            BindingWrapperError::BuildObservation(format!(
+                "row-softmax child environment is missing required {name}"
+            ))
+        })
+    };
+    let manifest_dir = required("CARGO_MANIFEST_DIR")?;
+    if !canonical_absolute_utf8_path(manifest_dir) {
+        return Err(BindingWrapperError::BuildObservation(
+            "row-softmax child environment has invalid CARGO_MANIFEST_DIR".to_owned(),
+        ));
+    }
+    if required("FE2O3_CODEGEN_PIPELINE")? != ROW_SOFTMAX_V1_PIPELINE {
+        return Err(BindingWrapperError::BuildObservation(
+            "row-softmax child environment has changed FE2O3_CODEGEN_PIPELINE".to_owned(),
+        ));
+    }
+    if required(TARGET_ENV)? != "gfx942:xnack-" {
+        return Err(BindingWrapperError::BuildObservation(
+            "row-softmax child environment requires FE2O3_TARGET=gfx942:xnack-".to_owned(),
+        ));
+    }
+    let mut final_environment = BTreeMap::from([
+        (OsString::from("CARGO_MANIFEST_DIR"), manifest_dir.clone()),
+        (
+            OsString::from("FE2O3_CODEGEN_PIPELINE"),
+            OsString::from(ROW_SOFTMAX_V1_PIPELINE),
+        ),
+        (OsString::from(TARGET_ENV), OsString::from("gfx942:xnack-")),
+    ]);
+    let explicit = command
+        .get_envs()
+        .map(|(name, value)| (name.to_owned(), value.map(OsString::from)))
+        .collect::<Vec<_>>();
+    for (name, value) in explicit {
+        if apply_managed_loader_environment(&mut final_environment, &name, value.as_deref())? {
+            continue;
+        }
+        if !managed_s09_child_environment(&name) {
+            return Err(BindingWrapperError::BuildObservation(format!(
+                "row-softmax command has unreviewed explicit environment mutation {name:?}"
+            )));
+        }
+        match value {
+            Some(value) => {
+                final_environment.insert(name, value);
+            }
+            None => {
+                final_environment.remove(&name);
+            }
+        }
+    }
+    command.env_clear();
+    command.envs(&final_environment);
+    Ok(CompleteReviewedChildEnvironmentV2 {
+        entries: final_environment.into_iter().collect(),
+    })
 }
 
 fn materialize_s09_child_environment(
@@ -2000,9 +2075,19 @@ fn prepare_managed_attempt(
         )
         .map_err(BindingWrapperError::BuildObservation)?
     };
-    let compile_environment_profile = worker_v2.as_ref().and_then(|config| {
-        config.compile_environment_profile(compile.crate_name(), compile.source_path(), current_dir)
-    });
+    let compile_environment_profile = if std::env::var_os("FE2O3_CODEGEN_PIPELINE").as_deref()
+        == Some(OsStr::new(ROW_SOFTMAX_V1_PIPELINE))
+    {
+        Some(WorkerV2CompileEnvironmentProfileV1::RowSoftmaxV1Gfx942)
+    } else {
+        worker_v2.as_ref().and_then(|config| {
+            config.compile_environment_profile(
+                compile.crate_name(),
+                compile.source_path(),
+                current_dir,
+            )
+        })
+    };
     let protected_source_path = worker_v2
         .as_ref()
         .and_then(PreparedWorkerV2Config::source_debug_profile)
@@ -2738,12 +2823,13 @@ mod tests {
         LinuxObjectIdentityV3, OBSERVED_PARENT_PID_BUILD_OBSERVATION_ENV_V2,
         OBSERVED_PARENT_START_TIME_BUILD_OBSERVATION_ENV_V2,
         PINNED_CARGO_IMAGE_BUILD_OBSERVATION_ENV_V2, PreparedRustcConsistencyExpectation,
-        ROW_SOFTMAX_EFFECTIVE_RUSTC_ARGV_DOMAIN_V1, WORKER_BUILD_IDENTITY_OBSERVATION_ENV_V2,
-        WORKER_CONFIG_BUILD_OBSERVATION_ENV_V2, WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2,
-        append_prepared_rustc_arguments, canonicalize_rustc_metadata,
-        configure_build_observation_environment, configure_worker_build_observation_environment,
-        decode_managed_rustc_args, derive_build_attempt_input_with_config_identity,
-        is_cargo_stdin_probe, materialize_reviewed_child_environment,
+        ROW_SOFTMAX_EFFECTIVE_RUSTC_ARGV_DOMAIN_V1, ROW_SOFTMAX_V1_PIPELINE,
+        WORKER_BUILD_IDENTITY_OBSERVATION_ENV_V2, WORKER_CONFIG_BUILD_OBSERVATION_ENV_V2,
+        WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2, append_prepared_rustc_arguments,
+        canonicalize_rustc_metadata, configure_build_observation_environment,
+        configure_worker_build_observation_environment, decode_managed_rustc_args,
+        derive_build_attempt_input_with_config_identity, is_cargo_stdin_probe,
+        materialize_reviewed_child_environment, materialize_row_softmax_v1_child_environment,
         materialize_s09_child_environment, materialize_scalar_gemm_v1_child_environment,
         measure_build_executable, observe_pinned_cargo_image_and_parent, ordered_metadata_values,
         os_bytes, prepared_rustc_command_sha256, process_start_time_ticks,
@@ -3837,6 +3923,66 @@ mod tests {
             inherited.push((OsString::from(name), OsString::from("forbidden")));
             let error = materialize_s09_child_environment(&mut command, inherited).unwrap_err();
             assert!(error.to_string().contains(name));
+        }
+    }
+
+    #[test]
+    fn row_softmax_environment_is_complete_and_rejects_loader_controls() {
+        let fixed = || {
+            [
+                (
+                    OsString::from("CARGO_MANIFEST_DIR"),
+                    OsString::from("/workspace/row"),
+                ),
+                (
+                    OsString::from("FE2O3_CODEGEN_PIPELINE"),
+                    OsString::from(ROW_SOFTMAX_V1_PIPELINE),
+                ),
+                (
+                    OsString::from("FE2O3_TARGET"),
+                    OsString::from("gfx942:xnack-"),
+                ),
+            ]
+        };
+        let mut command = Command::new("/proc/self/fd/194");
+        command
+            .env("LANG", "C.UTF-8")
+            .env("PATH", "/usr/bin")
+            .env("TMPDIR", "/proc/self/fd/197/private")
+            .env("LD_LIBRARY_PATH", "/proc/self/fd/193")
+            .env_remove("LD_PRELOAD")
+            .env("FE2O3_BUILD_ATTEMPT_V1", "attempt");
+        let complete = materialize_row_softmax_v1_child_environment(&mut command, fixed())
+            .expect("materialize reviewed row-softmax environment");
+        assert!(complete.entries.contains(&(
+            OsString::from("LD_LIBRARY_PATH"),
+            OsString::from("/proc/self/fd/193")
+        )));
+        assert!(
+            !complete
+                .entries
+                .iter()
+                .any(|(name, _)| name == "LD_PRELOAD")
+        );
+
+        for name in [
+            "LD_PRELOAD",
+            "LD_AUDIT",
+            "LD_LIBRARY_PATH",
+            "LD_DEBUG",
+            "DYLD_INSERT_LIBRARIES",
+            "GLIBC_TUNABLES",
+        ] {
+            let mut command = Command::new("/proc/self/fd/194");
+            command
+                .env("LANG", "C.UTF-8")
+                .env("PATH", "/usr/bin")
+                .env("TMPDIR", "/proc/self/fd/197/private");
+            let mut inherited = fixed().to_vec();
+            inherited.push((OsString::from(name), OsString::from("attacker")));
+            let error =
+                materialize_row_softmax_v1_child_environment(&mut command, inherited).unwrap_err();
+            assert!(error.to_string().contains(name), "{error}");
         }
     }
 

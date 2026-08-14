@@ -180,6 +180,7 @@ impl WorkerV2PipelineV1 {
 pub(crate) enum WorkerV2CompileEnvironmentProfileV1 {
     S09AlphaGfx942O0,
     ScalarGemmV1Gfx942,
+    RowSoftmaxV1Gfx942,
 }
 
 impl WorkerV2SourceDebugProfileV1 {
