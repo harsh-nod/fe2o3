@@ -5,6 +5,7 @@ members = [
     "crates/dialect-mir",
     "crates/fe2o3-amd-target",
     "crates/fe2o3-artifact-transaction",
+    "crates/fe2o3-build-authority",
     "crates/fe2o3-completion",
     "crates/fe2o3-compiler-ffi",
     "crates/fe2o3-artifacts",
@@ -79,6 +80,7 @@ dialect-amdgcn = { path = "crates/dialect-amdgcn" }
 dialect-mir = { path = "crates/dialect-mir" }
 fe2o3-amd-target = { path = "crates/fe2o3-amd-target" }
 fe2o3-artifact-transaction = { path = "crates/fe2o3-artifact-transaction" }
+fe2o3-build-authority = { path = "crates/fe2o3-build-authority" }
 fe2o3-completion = { path = "crates/fe2o3-completion" }
 fe2o3-compiler-ffi = { path = "crates/fe2o3-compiler-ffi" }
 fe2o3-artifacts = { path = "crates/fe2o3-artifacts" }
