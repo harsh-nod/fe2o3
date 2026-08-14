@@ -20,7 +20,7 @@ use fe2o3_compiler_ffi::{
     CompilerFfiEnvelopeError, CompilerFfiEnvelopeV1, CompilerFfiLinkRoleV1,
     CompilerFfiSourceOwnerV1, CompilerModuleHandoffErrorV2, CompilerModuleHandoffV2,
     CompilerModuleKindV1, CompilerModuleSymbolManifestErrorV1, CompilerModuleSymbolManifestV1,
-    CompilerModuleSymbolRoleV1, DeviceTargetV1,
+    CompilerModuleSymbolRoleV1, DeviceTargetV1, decode_row_softmax_compiler_sections_v1,
 };
 use fe2o3_kernel_ir::{
     AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE, AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME,
@@ -190,28 +190,20 @@ pub(crate) fn publish_prepared_row_softmax_v1_worker_handoff(
     attempt: BuildAttempt,
     prepared: PreparedRowSoftmaxV1WorkerHandoffV1,
 ) -> Result<CompilerModuleHandoffReceiptV1, WorkerV2ProducerError> {
+    let sections = decode_row_softmax_compiler_sections_v1(prepared.handoff.module_bytes())
+        .map_err(|_| WorkerV2ProducerError::MissingRowSoftmaxBindings)?;
+    if sections.authority_transcript() != prepared.authority_transcript
+        || sections.authority() != &prepared.frontend_authority_commitment
+        || sections.exponential_boundary() != &prepared.exponential_boundary_commitment
+    {
+        return Err(WorkerV2ProducerError::MissingRowSoftmaxBindings);
+    }
     let PreparedRowSoftmaxV1WorkerHandoffV1 {
-        authority_transcript,
+        authority_transcript: _,
         frontend_authority_commitment,
         exponential_boundary_commitment,
         handoff,
     } = prepared;
-    let module = std::str::from_utf8(handoff.module_bytes())
-        .map_err(|_| WorkerV2ProducerError::MissingRowSoftmaxBindings)?;
-    let authority_section =
-        module_asm_commitment_section(".fe2o3.row-softmax-auth.v1", &frontend_authority_commitment);
-    let transcript_section = module_asm_commitment_section(
-        ".fe2o3.row-softmax-authority-transcript.v1",
-        &authority_transcript,
-    );
-    let exponential_section =
-        module_asm_commitment_section(".fe2o3.row-exp.v1", &exponential_boundary_commitment);
-    if !module.contains(&transcript_section)
-        || !module.contains(&authority_section)
-        || !module.contains(&exponential_section)
-    {
-        return Err(WorkerV2ProducerError::MissingRowSoftmaxBindings);
-    }
     let receipt = publish_compiler_module_handoff_v1(
         output_dir,
         producer,
@@ -239,6 +231,7 @@ fn module_asm_byte_line(bytes: &[u8]) -> String {
     line
 }
 
+#[cfg(test)]
 fn module_asm_commitment_section(section: &str, bytes: &[u8]) -> String {
     let mut text = format!(
         "\nmodule asm \".section {section},\\22\\22,@progbits\"\nmodule asm \".balign 8\"\n"
@@ -930,6 +923,8 @@ mod tests {
     use fe2o3_compiler_ffi::{
         CodeObjectVersion, CompilerFfiContractV1, CompilerFfiEnvelopeBuilderV1,
         CompilerFfiLinkRoleV1, CompilerFfiSourceOwnerV1, CompilerModuleHandoffV2, DeviceTargetV1,
+        ROW_SOFTMAX_AUTHORITY_SECTION_NAME_V1, ROW_SOFTMAX_AUTHORITY_TRANSCRIPT_SECTION_NAME_V1,
+        ROW_SOFTMAX_EXPONENTIAL_BOUNDARY_SECTION_NAME_V1,
     };
     use fe2o3_hsaco_finalize::{
         ContentIdentityV1, RowSoftmaxV1DirectWorkerExpectationV1, RowSoftmaxV1DirectWorkerPinsV1,
@@ -1359,6 +1354,161 @@ mod tests {
             consume_compiler_module_handoff_v1(&rejected_directory.0, &producer, rejected_attempt,),
             Err(PublicationError::NotPublished)
         ));
+    }
+
+    #[test]
+    fn row_publication_rejects_nonclosed_section_suffixes_before_publishing_attempt() {
+        let producer = producer();
+        let cases = [
+            ("leading", vec![0, 1, 2, 3], true, false, false, 16),
+            ("duplicate", vec![0, 1, 1, 2, 3], false, false, false, 16),
+            ("reordered", vec![1, 0, 2, 3], false, false, false, 16),
+            ("trailing", vec![0, 1, 2, 3], false, true, false, 16),
+            ("truncated", vec![0, 1, 2, 3], false, false, true, 16),
+            (
+                "noncanonical chunks",
+                vec![0, 1, 2, 3],
+                false,
+                false,
+                false,
+                8,
+            ),
+        ];
+
+        for (name, order, leading, trailing, truncate, descriptor_width) in cases {
+            let directory = TestDirectory::new();
+            let attempt = begin_attempt(&directory.0, &producer);
+            let mut receipt = exact_row_frontend_receipt_for_test();
+            let prepared =
+                prepare_row_softmax_v1_worker_handoff(receipt.consume().unwrap()).unwrap();
+            let malformed = rebuild_prepared_row_sections(
+                prepared,
+                &order,
+                leading,
+                trailing,
+                truncate,
+                descriptor_width,
+            );
+
+            assert!(
+                matches!(
+                    publish_prepared_row_softmax_v1_worker_handoff(
+                        &directory.0,
+                        &producer,
+                        attempt,
+                        malformed,
+                    ),
+                    Err(WorkerV2ProducerError::MissingRowSoftmaxBindings)
+                ),
+                "publication accepted {name} row section suffix"
+            );
+            assert!(
+                matches!(
+                    consume_compiler_module_handoff_v1(&directory.0, &producer, attempt),
+                    Err(PublicationError::NotPublished)
+                ),
+                "publication consumed the {name} build attempt"
+            );
+        }
+    }
+
+    fn rebuild_prepared_row_sections(
+        prepared: PreparedRowSoftmaxV1WorkerHandoffV1,
+        order: &[usize],
+        leading: bool,
+        trailing: bool,
+        truncate: bool,
+        descriptor_width: usize,
+    ) -> PreparedRowSoftmaxV1WorkerHandoffV1 {
+        let PreparedRowSoftmaxV1WorkerHandoffV1 {
+            authority_transcript,
+            frontend_authority_commitment,
+            exponential_boundary_commitment,
+            handoff,
+        } = prepared;
+        let decoded = decode_row_softmax_compiler_sections_v1(handoff.module_bytes()).unwrap();
+        let names = [
+            fe2o3_compiler_ffi::COMPILER_DESCRIPTOR_SECTION_NAME_V1,
+            ROW_SOFTMAX_AUTHORITY_TRANSCRIPT_SECTION_NAME_V1,
+            ROW_SOFTMAX_AUTHORITY_SECTION_NAME_V1,
+            ROW_SOFTMAX_EXPONENTIAL_BOUNDARY_SECTION_NAME_V1,
+        ];
+        let bytes = [
+            decoded.descriptor(),
+            decoded.authority_transcript(),
+            decoded.authority().as_slice(),
+            decoded.exponential_boundary().as_slice(),
+        ];
+        let descriptor_header = test_module_assembly_section_header(names[0]);
+        let descriptor_position = handoff
+            .module_bytes()
+            .windows(descriptor_header.len())
+            .position(|window| window == descriptor_header.as_bytes())
+            .unwrap();
+        let mut module = handoff.module_bytes()[..descriptor_position].to_vec();
+        if leading {
+            append_test_module_assembly_section(
+                &mut module,
+                ".fe2o3.unreviewed-leading.v1",
+                &[0x44],
+                16,
+            );
+        }
+        for index in order.iter().copied() {
+            let width = if index == 0 { descriptor_width } else { 16 };
+            append_test_module_assembly_section(&mut module, names[index], bytes[index], width);
+        }
+        if trailing {
+            append_test_module_assembly_section(
+                &mut module,
+                ".fe2o3.unreviewed-trailing.v1",
+                &[0x55],
+                16,
+            );
+        }
+        if truncate {
+            assert_eq!(module.pop(), Some(b'\n'));
+        }
+
+        let handoff = CompilerModuleHandoffV2::new(
+            handoff.kind(),
+            handoff.target(),
+            handoff.code_object_version(),
+            handoff.envelope().clone(),
+            handoff.symbol_manifest().clone(),
+            &module,
+        )
+        .unwrap();
+        PreparedRowSoftmaxV1WorkerHandoffV1 {
+            authority_transcript,
+            frontend_authority_commitment,
+            exponential_boundary_commitment,
+            handoff,
+        }
+    }
+
+    fn append_test_module_assembly_section(
+        module: &mut Vec<u8>,
+        section: &str,
+        bytes: &[u8],
+        chunk_width: usize,
+    ) {
+        module.extend_from_slice(test_module_assembly_section_header(section).as_bytes());
+        module.extend_from_slice(b"module asm \".balign 8\"\n");
+        for chunk in bytes.chunks(chunk_width) {
+            module.extend_from_slice(b"module asm \".byte ");
+            for (index, byte) in chunk.iter().enumerate() {
+                if index != 0 {
+                    module.extend_from_slice(b", ");
+                }
+                module.extend_from_slice(format!("0x{byte:02x}").as_bytes());
+            }
+            module.extend_from_slice(b"\"\n");
+        }
+    }
+
+    fn test_module_assembly_section_header(section: &str) -> String {
+        format!("module asm \".section {section},\\22\\22,@progbits\"\n")
     }
 
     fn producer() -> ProducerIdentity {
