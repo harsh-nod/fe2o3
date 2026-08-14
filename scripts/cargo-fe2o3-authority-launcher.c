@@ -4,6 +4,8 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <linux/fs.h>
+#include <linux/magic.h>
+#include <stddef.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -19,6 +21,7 @@
 #include <sys/syscall.h>
 #include <sys/sysmacros.h>
 #include <sys/types.h>
+#include <sys/vfs.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -71,6 +74,13 @@
 #ifndef FE2O3_AUTHORITY_TEST_PREEXEC_DELAY_MILLISECONDS
 #define FE2O3_AUTHORITY_TEST_PREEXEC_DELAY_MILLISECONDS 0U
 #endif
+#ifndef FE2O3_AUTHORITY_TEST_FORCE_PROC_FD_CLOSE
+#define FE2O3_AUTHORITY_TEST_FORCE_PROC_FD_CLOSE 0
+#endif
+#if FE2O3_AUTHORITY_TEST_FORCE_PROC_FD_CLOSE != 0 &&                         \
+    FE2O3_AUTHORITY_TEST_FORCE_PROC_FD_CLOSE != 1
+#error "test-only proc descriptor fallback selector must be zero or one"
+#endif
 
 #define FE2O3_LAUNCHER_PATH FE2O3_AUTHORITY_TEST_LAUNCHER_PATH
 #define FE2O3_EXECUTABLE_PATH FE2O3_AUTHORITY_TEST_EXECUTABLE_PATH
@@ -91,6 +101,7 @@
   FE2O3_AUTHORITY_TEST_HANDSHAKE_DELAY_MILLISECONDS
 #define FE2O3_PREEXEC_DELAY_MILLISECONDS                                      \
   FE2O3_AUTHORITY_TEST_PREEXEC_DELAY_MILLISECONDS
+#define FE2O3_FORCE_PROC_FD_CLOSE FE2O3_AUTHORITY_TEST_FORCE_PROC_FD_CLOSE
 
 __attribute__((used, section(".rodata.fe2o3_test_only"))) static const char
     FE2O3_TEST_ONLY_MARKER[] = "FE2O3_AUTHORITY_TEST_ONLY_BUILD";
@@ -134,6 +145,9 @@ __attribute__((used, section(".rodata.fe2o3_test_only"))) static const char
 #ifdef FE2O3_AUTHORITY_TEST_PREEXEC_DELAY_MILLISECONDS
 #error "test-only delay is forbidden in production"
 #endif
+#ifdef FE2O3_AUTHORITY_TEST_FORCE_PROC_FD_CLOSE
+#error "test-only descriptor fallback selector is forbidden in production"
+#endif
 
 #define FE2O3_LAUNCHER_PATH                                                   \
   "/usr/libexec/fe2o3/cargo-fe2o3-authority-launcher"
@@ -149,6 +163,7 @@ __attribute__((used, section(".rodata.fe2o3_test_only"))) static const char
 #define FE2O3_KILL_GRACE_MILLISECONDS 5000U
 #define FE2O3_HANDSHAKE_DELAY_MILLISECONDS 0U
 #define FE2O3_PREEXEC_DELAY_MILLISECONDS 0U
+#define FE2O3_FORCE_PROC_FD_CLOSE 0
 #endif
 
 #if !FE2O3_AUTHORITY_TEST_ONLY && FE2O3_REQUIRE_IMMUTABLE != 1
@@ -172,6 +187,8 @@ __attribute__((used, section(".rodata.fe2o3_test_only"))) static const char
 #define FE2O3_MAX_REAPS_PER_PASS 65536U
 #define FE2O3_MAX_CHILD_LIST_READS 256U
 #define FE2O3_CHILD_LIST_BUFFER_BYTES 4096U
+#define FE2O3_DESCRIPTOR_LIST_BUFFER_BYTES 4096U
+#define FE2O3_LINUX_SIGNAL_COUNT 64
 
 enum trusted_object_kind {
   TRUSTED_EXECUTABLE,
@@ -183,6 +200,21 @@ struct supervisor {
   int children_fd;
   bool leader_reaped;
   int leader_status;
+};
+
+struct linux_directory_entry64 {
+  uint64_t inode;
+  int64_t offset;
+  unsigned short record_length;
+  unsigned char type;
+  char name[];
+};
+
+struct linux_kernel_sigaction {
+  uintptr_t handler;
+  unsigned long flags;
+  uintptr_t restorer;
+  uint64_t mask;
 };
 
 /*
@@ -202,24 +234,25 @@ static int fail(const char *message) {
 static void record_signal(int signal_number) { caught_signal = signal_number; }
 
 static int reset_signal_state(void) {
-  static const int signals[] = {
-      SIGHUP,  SIGINT,  SIGQUIT, SIGTERM, SIGPIPE,
-      SIGALRM, SIGCHLD, SIGUSR1, SIGUSR2,
+  const struct linux_kernel_sigaction action = {
+      .handler = 0,
+      .flags = 0,
+      .restorer = 0,
+      .mask = 0,
   };
-  struct sigaction action;
-  memset(&action, 0, sizeof(action));
-  action.sa_handler = SIG_DFL;
-  if (sigemptyset(&action.sa_mask) != 0) {
-    return -1;
-  }
-  for (size_t index = 0; index < sizeof(signals) / sizeof(signals[0]);
-       ++index) {
-    if (sigaction(signals[index], &action, NULL) != 0) {
+  for (int signal_number = 1; signal_number <= FE2O3_LINUX_SIGNAL_COUNT;
+       ++signal_number) {
+    if (signal_number == SIGKILL || signal_number == SIGSTOP) {
+      continue;
+    }
+    if (syscall(SYS_rt_sigaction, signal_number, &action, NULL,
+                sizeof(action.mask)) != 0) {
       return -1;
     }
   }
-  sigset_t empty;
-  if (sigemptyset(&empty) != 0 || sigprocmask(SIG_SETMASK, &empty, NULL) != 0) {
+  const uint64_t empty_mask = 0;
+  if (syscall(SYS_rt_sigprocmask, SIG_SETMASK, &empty_mask, NULL,
+              sizeof(empty_mask)) != 0) {
     return -1;
   }
   return 0;
@@ -457,25 +490,115 @@ static int validate_self(int launcher_fd) {
   return 0;
 }
 
+static int parse_descriptor_name(const char *name, size_t capacity,
+                                 int *descriptor) {
+  const char *end = memchr(name, '\0', capacity);
+  if (end == NULL) {
+    errno = EPROTO;
+    return -1;
+  }
+  const size_t length = (size_t)(end - name);
+  if ((length == 1U && name[0] == '.') ||
+      (length == 2U && name[0] == '.' && name[1] == '.')) {
+    return 0;
+  }
+  if (length == 0U) {
+    errno = EPROTO;
+    return -1;
+  }
+  uint64_t value = 0;
+  for (size_t index = 0; index < length; ++index) {
+    if (name[index] < '0' || name[index] > '9') {
+      errno = EPROTO;
+      return -1;
+    }
+    const uint64_t digit = (uint64_t)(name[index] - '0');
+    if (value > (uint64_t)(INT_MAX - (int)digit) / 10U) {
+      errno = EOVERFLOW;
+      return -1;
+    }
+    value = value * 10U + digit;
+  }
+  *descriptor = (int)value;
+  return 1;
+}
+
+static bool preserved_child_descriptor(int file_fd) {
+  return file_fd == FE2O3_POLICY_FD || file_fd == FE2O3_CAPABILITY_FD ||
+         file_fd == FE2O3_EXECUTABLE_FD;
+}
+
+static int close_descriptors_from_proc(bool preserve_child_descriptors) {
+  struct statfs filesystem;
+  int directory_fd = open("/proc/self/fd",
+                          O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+  if (directory_fd < 0 || fstatfs(directory_fd, &filesystem) != 0 ||
+      filesystem.f_type != (long)PROC_SUPER_MAGIC) {
+    if (directory_fd >= 0) {
+      close(directory_fd);
+    }
+    return -1;
+  }
+
+  _Alignas(struct linux_directory_entry64)
+      char buffer[FE2O3_DESCRIPTOR_LIST_BUFFER_BYTES];
+  for (;;) {
+    const long length =
+        syscall(SYS_getdents64, directory_fd, buffer, sizeof(buffer));
+    if (length < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      close(directory_fd);
+      return -1;
+    }
+    if (length == 0) {
+      break;
+    }
+    size_t offset = 0;
+    while (offset < (size_t)length) {
+      const size_t minimum = offsetof(struct linux_directory_entry64, name) + 1U;
+      if ((size_t)length - offset < minimum) {
+        close(directory_fd);
+        errno = EPROTO;
+        return -1;
+      }
+      const struct linux_directory_entry64 *entry =
+          (const struct linux_directory_entry64 *)(buffer + offset);
+      const size_t record_length = (size_t)entry->record_length;
+      if (record_length < minimum || record_length > (size_t)length - offset) {
+        close(directory_fd);
+        errno = EPROTO;
+        return -1;
+      }
+      int file_fd = -1;
+      const int parsed = parse_descriptor_name(
+          entry->name,
+          record_length - offsetof(struct linux_directory_entry64, name),
+          &file_fd);
+      if (parsed < 0) {
+        close(directory_fd);
+        return -1;
+      }
+      if (parsed == 1 && file_fd >= 3 && file_fd != directory_fd &&
+          !(preserve_child_descriptors && preserved_child_descriptor(file_fd)) &&
+          close(file_fd) != 0 && errno != EBADF) {
+        close(directory_fd);
+        return -1;
+      }
+      offset += record_length;
+    }
+  }
+  return close(directory_fd);
+}
+
 static int close_all_inherited_descriptors(void) {
-#ifdef SYS_close_range
+#if defined(SYS_close_range) && !FE2O3_FORCE_PROC_FD_CLOSE
   if (syscall(SYS_close_range, 3U, UINT_MAX, 0U) == 0) {
     return 0;
   }
-  if (errno != ENOSYS && errno != EINVAL) {
-    return -1;
-  }
 #endif
-  long maximum = sysconf(_SC_OPEN_MAX);
-  if (maximum < 0 || maximum > 1048576) {
-    maximum = 1048576;
-  }
-  for (int file_fd = 3; file_fd < maximum; ++file_fd) {
-    if (close(file_fd) != 0 && errno != EBADF) {
-      return -1;
-    }
-  }
-  return 0;
+  return close_descriptors_from_proc(false);
 }
 
 static int verify_standard_descriptor(int file_fd) {
@@ -502,19 +625,15 @@ static int install_dev_null(int destination_fd) {
   int null_fd =
       open("/dev/null", access_flags | O_CLOEXEC | O_NOFOLLOW | O_NOCTTY);
   struct stat info;
-  if (null_fd < 0 || fstat(null_fd, &info) != 0 || !S_ISCHR(info.st_mode) ||
-      major(info.st_rdev) != 1U || minor(info.st_rdev) != 3U) {
-    if (null_fd >= 0) {
-      close(null_fd);
-    }
+  if (null_fd < 0) {
     return -1;
   }
-  if (null_fd != destination_fd) {
-    if (dup3(null_fd, destination_fd, 0) < 0) {
-      close(null_fd);
-      return -1;
-    }
+  if (null_fd != destination_fd || fstat(null_fd, &info) != 0 ||
+      !S_ISCHR(info.st_mode) ||
+      major(info.st_rdev) != 1U || minor(info.st_rdev) != 3U) {
     close(null_fd);
+    errno = EPROTO;
+    return -1;
   }
   return verify_standard_descriptor(destination_fd);
 }
@@ -534,18 +653,44 @@ static int normalize_standard_descriptors(void) {
   return 0;
 }
 
-static int normalize_initial_process_state(void) {
+static int normalize_resource_limits(void) {
   const struct rlimit no_core = {
       .rlim_cur = 0,
       .rlim_max = 0,
   };
-  struct rlimit observed_core;
-  if (reset_signal_state() != 0 ||
-      setrlimit(RLIMIT_CORE, &no_core) != 0 ||
-      getrlimit(RLIMIT_CORE, &observed_core) != 0 ||
-      observed_core.rlim_cur != 0 || observed_core.rlim_max != 0 ||
-      prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) != 0 ||
+  struct rlimit core;
+  struct rlimit files;
+  struct rlimit processes;
+  if (setrlimit(RLIMIT_CORE, &no_core) != 0 ||
+      getrlimit(RLIMIT_CORE, &core) != 0 || core.rlim_cur != 0 ||
+      core.rlim_max != 0 || getrlimit(RLIMIT_NOFILE, &files) != 0 ||
+      getrlimit(RLIMIT_NPROC, &processes) != 0 || processes.rlim_cur == 0 ||
+      processes.rlim_max == 0) {
+    return -1;
+  }
+
+  const rlim_t minimum_files = (rlim_t)FE2O3_EXECUTABLE_FD + 1U;
+  if (files.rlim_max != RLIM_INFINITY && files.rlim_max < minimum_files) {
+    errno = EMFILE;
+    return -1;
+  }
+  if (files.rlim_cur != RLIM_INFINITY && files.rlim_cur < minimum_files) {
+    files.rlim_cur = minimum_files;
+    if (setrlimit(RLIMIT_NOFILE, &files) != 0 ||
+        getrlimit(RLIMIT_NOFILE, &files) != 0 ||
+        files.rlim_cur < minimum_files) {
+      return -1;
+    }
+  }
+  /* Other inherited limits remain policy inputs for cargo-fe2o3. This
+   * foundation changes only limits needed for descriptors, fork, and cores. */
+  return 0;
+}
+
+static int normalize_initial_process_state(void) {
+  if (prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) != 0 ||
       prctl(PR_GET_DUMPABLE, 0, 0, 0, 0) != 0 ||
+      reset_signal_state() != 0 || normalize_resource_limits() != 0 ||
       prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 ||
       prctl(PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) != 1 ||
       normalize_standard_descriptors() != 0 ||
@@ -557,25 +702,17 @@ static int normalize_initial_process_state(void) {
   return 0;
 }
 
-static bool child_descriptor_is_preserved(int file_fd) {
-  return file_fd == FE2O3_POLICY_FD || file_fd == FE2O3_CAPABILITY_FD ||
-         file_fd == FE2O3_EXECUTABLE_FD;
-}
-
 static int close_child_descriptors(void) {
-  long maximum = sysconf(_SC_OPEN_MAX);
-  if (maximum < 0 || maximum > 1048576) {
-    maximum = 1048576;
+#if defined(SYS_close_range) && !FE2O3_FORCE_PROC_FD_CLOSE
+  const int lower_result =
+      (int)syscall(SYS_close_range, 3U, FE2O3_POLICY_FD - 1U, 0U);
+  const int upper_result =
+      (int)syscall(SYS_close_range, FE2O3_EXECUTABLE_FD + 1U, UINT_MAX, 0U);
+  if (lower_result == 0 && upper_result == 0) {
+    return 0;
   }
-  for (int file_fd = 3; file_fd < maximum; ++file_fd) {
-    if (child_descriptor_is_preserved(file_fd)) {
-      continue;
-    }
-    if (close(file_fd) != 0 && errno != EBADF) {
-      return -1;
-    }
-  }
-  return 0;
+#endif
+  return close_descriptors_from_proc(true);
 }
 
 static int monotonic_milliseconds(uint64_t *value) {

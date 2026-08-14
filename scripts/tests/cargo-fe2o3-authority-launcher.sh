@@ -25,20 +25,75 @@ CURRENT_UID="$(id -u)"
 readonly CURRENT_UID
 CURRENT_GID="$(id -g)"
 readonly CURRENT_GID
-BACKGROUND_WATCHDOGS=()
+declare -A BACKGROUND_WATCHDOGS=()
+
+watchdog_start_time() {
+  local process_id="$1"
+  local process_state
+  local remainder
+  local -a fields=()
+  [[ -r "/proc/${process_id}/stat" ]] || return 1
+  process_state="$(<"/proc/${process_id}/stat")"
+  remainder="${process_state##*) }"
+  read -r -a fields <<<"${remainder}"
+  ((${#fields[@]} > 19)) || return 1
+  [[ "${fields[2]}" == "${process_id}" ]] || return 1
+  printf '%s\n' "${fields[19]}"
+}
+
+watchdog_identity_matches() {
+  local process_id="$1"
+  local expected_start="$2"
+  local observed_start
+  observed_start="$(watchdog_start_time "${process_id}")" || return 1
+  [[ "${observed_start}" == "${expected_start}" ]]
+}
+
+watchdog_group_exists() {
+  kill -0 -- "-$1" 2>/dev/null
+}
+
+forget_watchdog() {
+  unset 'BACKGROUND_WATCHDOGS['"$1"']'
+}
+
+watchdog_registered() {
+  [[ -n "${BACKGROUND_WATCHDOGS[$1]+registered}" ]]
+}
+
+wait_registered_watchdog() {
+  local process_id="$1"
+  local status=0
+  wait "${process_id}" || status=$?
+  forget_watchdog "${process_id}"
+  return "${status}"
+}
+
+terminate_registered_watchdog() {
+  local process_id="$1"
+  local start_time
+  local status=0
+  watchdog_registered "${process_id}" || return 0
+  start_time="${BACKGROUND_WATCHDOGS[${process_id}]}"
+  if watchdog_identity_matches "${process_id}" "${start_time}"; then
+    kill -TERM -- "-${process_id}" 2>/dev/null || true
+    for _ in {1..100}; do
+      watchdog_group_exists "${process_id}" || break
+      sleep 0.01
+    done
+    if watchdog_group_exists "${process_id}"; then
+      kill -KILL -- "-${process_id}" 2>/dev/null || true
+    fi
+  fi
+  wait "${process_id}" 2>/dev/null || status=$?
+  forget_watchdog "${process_id}"
+  return "${status}"
+}
 
 cleanup() {
   local process_id
-  for process_id in "${BACKGROUND_WATCHDOGS[@]}"; do
-    if kill -0 "${process_id}" 2>/dev/null; then
-      kill -TERM "${process_id}" 2>/dev/null || true
-      for _ in {1..100}; do
-        kill -0 "${process_id}" 2>/dev/null || break
-        sleep 0.01
-      done
-      kill -KILL "${process_id}" 2>/dev/null || true
-    fi
-    wait "${process_id}" 2>/dev/null || true
+  for process_id in "${!BACKGROUND_WATCHDOGS[@]}"; do
+    terminate_registered_watchdog "${process_id}" || true
   done
   chmod -R u+w -- "${TEST_ROOT}" 2>/dev/null || true
   rm -rf -- "${TEST_ROOT}"
@@ -59,11 +114,26 @@ run_watchdog() {
 }
 
 start_watchdog() {
+  local process_id
+  local start_time=""
   /usr/bin/timeout --signal=TERM \
     --kill-after="${WATCHDOG_KILL_SECONDS}s" \
     "${WATCHDOG_SECONDS}s" "$@" &
-  STARTED_WATCHDOG_PID=$!
-  BACKGROUND_WATCHDOGS+=("${STARTED_WATCHDOG_PID}")
+  process_id=$!
+  for _ in {1..200}; do
+    if start_time="$(watchdog_start_time "${process_id}")"; then
+      break
+    fi
+    kill -0 "${process_id}" 2>/dev/null || break
+    sleep 0.005
+  done
+  if [[ -z "${start_time}" ]]; then
+    kill -TERM "${process_id}" 2>/dev/null || true
+    wait "${process_id}" 2>/dev/null || true
+    fail 'cannot establish watchdog process-group identity'
+  fi
+  BACKGROUND_WATCHDOGS["${process_id}"]="${start_time}"
+  STARTED_WATCHDOG_PID="${process_id}"
 }
 
 expect_failure() {
@@ -125,6 +195,7 @@ compile_launcher() {
   local preexec_delay="${8:-0}"
   local expected_uid="${9:-${CURRENT_UID}}"
   local expected_gid="${10:-${CURRENT_GID}}"
+  local force_proc_fd_close="${11:-0}"
 
   run_watchdog /usr/bin/cc \
     -std=c11 -O2 -fPIE -static-pie \
@@ -138,6 +209,7 @@ compile_launcher() {
     "-DFE2O3_AUTHORITY_TEST_EXPECTED_UID=${expected_uid}" \
     "-DFE2O3_AUTHORITY_TEST_EXPECTED_GID=${expected_gid}" \
     -DFE2O3_AUTHORITY_TEST_REQUIRE_IMMUTABLE=0 \
+    "-DFE2O3_AUTHORITY_TEST_FORCE_PROC_FD_CLOSE=${force_proc_fd_close}" \
     "-DFE2O3_AUTHORITY_TEST_HANDSHAKE_TIMEOUT_MILLISECONDS=${handshake_timeout}U" \
     "-DFE2O3_AUTHORITY_TEST_EXECUTION_TIMEOUT_MILLISECONDS=${execution_timeout}U" \
     -DFE2O3_AUTHORITY_TEST_TERM_GRACE_MILLISECONDS=100U \
@@ -191,6 +263,23 @@ mkdir -m 0755 \
   "${LAUNCHER_DIR}" "${EXECUTABLE_DIR}" "${POLICY_DIR}" \
   "${PRELOAD_DIR}" "${FIXTURE_DIR}"
 mkdir -m 0700 "${BUILD_DIR}"
+
+watchdog_cleanup_pids="${TEST_ROOT}/watchdog-cleanup.pids"
+# shellcheck disable=SC2016  # Expanded by the independently bounded child.
+start_watchdog /bin/bash -c \
+  'trap "" TERM; sleep 300 & child=$!; printf "%s\n%s\n" "$$" "${child}" >"$1"; wait' \
+  watchdog-cleanup "${watchdog_cleanup_pids}"
+watchdog_cleanup_pid="${STARTED_WATCHDOG_PID}"
+for _ in {1..200}; do
+  [[ "$(wc -l <"${watchdog_cleanup_pids}" 2>/dev/null || true)" == 2 ]] && break
+  sleep 0.005
+done
+[[ -s "${watchdog_cleanup_pids}" ]] ||
+  fail 'watchdog cleanup fixture did not record its process group'
+terminate_registered_watchdog "${watchdog_cleanup_pid}" || true
+watchdog_registered "${watchdog_cleanup_pid}" &&
+  fail 'terminated watchdog remained registered'
+assert_recorded_processes_gone watchdog_cleanup "${watchdog_cleanup_pids}" 2
 
 cat >"${FIXTURE_DIR}/cargo-fixture.c" <<'EOF'
 #define _GNU_SOURCE
@@ -341,22 +430,33 @@ static bool exact_descriptor_set(void) {
 }
 
 static bool normalized_process_state(void) {
-  static const int signals[] = {
-      SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGPIPE, SIGCHLD,
-  };
   sigset_t mask;
   struct rlimit core_limit;
+  struct rlimit descriptor_limit;
+  struct rlimit process_limit;
   if (sigprocmask(SIG_SETMASK, NULL, &mask) != 0 ||
       getrlimit(RLIMIT_CORE, &core_limit) != 0 || core_limit.rlim_cur != 0 ||
       core_limit.rlim_max != 0 ||
+      getrlimit(RLIMIT_NOFILE, &descriptor_limit) != 0 ||
+      descriptor_limit.rlim_cur < 243 || descriptor_limit.rlim_max < 243 ||
+      getrlimit(RLIMIT_NPROC, &process_limit) != 0 ||
+      process_limit.rlim_cur == 0 || process_limit.rlim_max == 0 ||
       prctl(PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) != 1) {
     return false;
   }
-  for (size_t index = 0; index < sizeof(signals) / sizeof(signals[0]);
-       ++index) {
+  for (int signal_number = 1; signal_number < NSIG; ++signal_number) {
+    if (signal_number == SIGKILL || signal_number == SIGSTOP) {
+      continue;
+    }
     struct sigaction action;
-    if (sigismember(&mask, signals[index]) != 0 ||
-        sigaction(signals[index], NULL, &action) != 0 ||
+    errno = 0;
+    if (sigaction(signal_number, NULL, &action) != 0) {
+      if (errno == EINVAL) {
+        continue;
+      }
+      return false;
+    }
+    if (sigismember(&mask, signal_number) != 0 ||
         action.sa_handler != SIG_DFL) {
       return false;
     }
@@ -494,6 +594,7 @@ cat >"${FIXTURE_DIR}/process-state-shim.c" <<'EOF'
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/resource.h>
 #include <unistd.h>
 
 static int fail(const char *message) {
@@ -503,13 +604,25 @@ static int fail(const char *message) {
 
 static int poison_state(void) {
   sigset_t blocked;
-  if (signal(SIGCHLD, SIG_IGN) == SIG_ERR || sigemptyset(&blocked) != 0) {
+  const int ignored[] = {
+      SIGCHLD, SIGURG, SIGWINCH, SIGXFSZ, SIGRTMIN + 5,
+  };
+  for (size_t index = 0; index < sizeof(ignored) / sizeof(ignored[0]);
+       ++index) {
+    if (ignored[index] > SIGRTMAX || signal(ignored[index], SIG_IGN) == SIG_ERR) {
+      return -1;
+    }
+  }
+  if (sigemptyset(&blocked) != 0) {
     return -1;
   }
-  const int signals[] = {SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGCHLD};
+  const int signals[] = {
+      SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGCHLD, SIGVTALRM, SIGUSR2,
+      SIGRTMIN + 6,
+  };
   for (size_t index = 0; index < sizeof(signals) / sizeof(signals[0]);
        ++index) {
-    if (sigaddset(&blocked, signals[index]) != 0) {
+    if (signals[index] > SIGRTMAX || sigaddset(&blocked, signals[index]) != 0) {
       return -1;
     }
   }
@@ -522,6 +635,25 @@ static int poison_state(void) {
   }
   close(null_fd);
   return 0;
+}
+
+static int lower_descriptor_soft_limit(void) {
+  struct rlimit limit;
+  if (getrlimit(RLIMIT_NOFILE, &limit) != 0 || limit.rlim_max < 243) {
+    return -1;
+  }
+  limit.rlim_cur = 64;
+  return setrlimit(RLIMIT_NOFILE, &limit);
+}
+
+static int lower_descriptor_hard_limit(void) {
+  const struct rlimit limit = {.rlim_cur = 64, .rlim_max = 64};
+  return setrlimit(RLIMIT_NOFILE, &limit);
+}
+
+static int remove_process_creation_limit(void) {
+  const struct rlimit limit = {.rlim_cur = 0, .rlim_max = 0};
+  return setrlimit(RLIMIT_NPROC, &limit);
 }
 
 static int close_standard_descriptors(void) {
@@ -586,6 +718,18 @@ int main(int argc, char **argv) {
   } else if (strcmp(argv[1], "environment") == 0) {
     if (poison_environment() != 0) {
       return fail("cannot install poisoned environment");
+    }
+  } else if (strcmp(argv[1], "low-nofile") == 0) {
+    if (lower_descriptor_soft_limit() != 0) {
+      return fail("cannot lower descriptor soft limit");
+    }
+  } else if (strcmp(argv[1], "low-hard-nofile") == 0) {
+    if (lower_descriptor_hard_limit() != 0) {
+      return fail("cannot lower descriptor hard limit");
+    }
+  } else if (strcmp(argv[1], "zero-nproc") == 0) {
+    if (remove_process_creation_limit() != 0) {
+      return fail("cannot remove process creation capacity");
     }
   } else {
     return fail("unknown shim mode");
@@ -765,6 +909,11 @@ fi
 
 compile_launcher "${BASE_LAUNCHER}"
 
+readonly PROC_FALLBACK_LAUNCHER="${LAUNCHER_DIR}/proc-fallback-launcher"
+compile_launcher "${PROC_FALLBACK_LAUNCHER}" \
+  "${EXECUTABLE}" "${POLICY}" "${PRELOAD}" 2000 5000 0 0 \
+  "${CURRENT_UID}" "${CURRENT_GID}" 1
+
 probe_output="$(run_watchdog "${BASE_LAUNCHER}" -- probe baseline)"
 for expected in \
   'version=one' 'policy=policy-one' 'token=baseline' \
@@ -793,6 +942,30 @@ for expected in \
   [[ "${shim_output}" == *"${expected}"* ]] ||
     fail "inherited-state shim probe omitted ${expected}"
 done
+proc_fallback_output="$(
+  run_watchdog "${FIXTURE_DIR}/process-state-shim" poison \
+    "${PROC_FALLBACK_LAUNCHER}" -- probe proc-fallback
+)"
+for expected in \
+  'token=proc-fallback' 'process-state=normalized' \
+  'descriptors=exact' 'fd242=closed'; do
+  [[ "${proc_fallback_output}" == *"${expected}"* ]] ||
+    fail "proc descriptor fallback probe omitted ${expected}"
+done
+
+low_nofile_output="$(
+  run_watchdog "${FIXTURE_DIR}/process-state-shim" low-nofile \
+    "${BASE_LAUNCHER}" -- probe low-nofile
+)"
+[[ "${low_nofile_output}" == *'token=low-nofile'* ]] ||
+  fail 'launcher did not restore the descriptor capacity required by its contract'
+expect_failure low_hard_nofile 'cannot normalize inherited process state' \
+  "${FIXTURE_DIR}/process-state-shim" low-hard-nofile \
+  "${BASE_LAUNCHER}" -- probe rejected
+expect_failure zero_nproc 'cannot normalize inherited process state' \
+  "${FIXTURE_DIR}/process-state-shim" zero-nproc \
+  "${BASE_LAUNCHER}" -- probe rejected
+
 run_watchdog "${FIXTURE_DIR}/process-state-shim" closed-stdio \
   "${BASE_LAUNCHER}" -- probe closed-stdio
 expect_failure invalid_standard_output 'cannot normalize inherited process state' \
@@ -943,7 +1116,10 @@ mv "${POLICY}" "${POLICY}.opened"
 printf '%s' 'policy-two' >"${POLICY}"
 chmod 0444 "${POLICY}"
 substitution_status=0
-wait "${substitution_watchdog_pid}" || substitution_status=$?
+wait_registered_watchdog "${substitution_watchdog_pid}" ||
+  substitution_status=$?
+watchdog_registered "${substitution_watchdog_pid}" &&
+  fail 'completed substitution watchdog remained registered'
 if ((substitution_status != 0)); then
   printf 'substitution launcher failed:\n%s\n' \
     "$(<"${substitution_error}")" >&2
@@ -971,7 +1147,9 @@ wait_for_child "${handshake_watchdog_pid}" \
 handshake_launcher_pid="$(<"${TEST_ROOT}/handshake-launcher.pid")"
 wait_for_child "${handshake_launcher_pid}" "${TEST_ROOT}/handshake-child.pid"
 handshake_status=0
-wait "${handshake_watchdog_pid}" || handshake_status=$?
+wait_registered_watchdog "${handshake_watchdog_pid}" || handshake_status=$?
+watchdog_registered "${handshake_watchdog_pid}" &&
+  fail 'completed handshake watchdog remained registered'
 ((handshake_status != 0)) || fail 'delayed child handshake unexpectedly succeeded'
 [[ "$(<"${handshake_output}")" == *'handshake exceeded its bounded contract'* ]] ||
   fail 'handshake timeout failed for the wrong reason'
