@@ -31,6 +31,7 @@ pub use protocol_v1::{
     GRANT_V1_PAYLOAD_LEN, GrantV1, IDENTITY_V1_LEN, NONCE_V1_LEN, PROTECTED_AUTHORITY_ARGV0_V1,
     PROTOCOL_V1_HEADER_LEN, PROTOCOL_V1_MAGIC, PROTOCOL_V1_MAX_ARGUMENT_BYTES,
     PROTOCOL_V1_MAX_ARGUMENTS, PROTOCOL_V1_MAX_TOTAL_ARGUMENT_BYTES, PROTOCOL_V1_VERSION,
-    ProtocolErrorV1, ProtocolFrameV1, ProtocolIdentityFieldV1, ProtocolTargetV1,
+    ProtocolErrorV1, ProtocolFrameV1, ProtocolIdentityFieldV1, ProtocolPhaseV1,
+    ProtocolStateErrorV1, ProtocolStateV1, ProtocolTargetV1, TranscriptFieldV1,
     argv_identity_sha256_v1, decode_protocol_frame_v1, encode_protocol_frame_v1,
 };

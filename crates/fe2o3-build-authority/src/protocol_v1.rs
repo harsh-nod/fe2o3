@@ -940,6 +940,358 @@ pub enum ProtocolFrameV1 {
     Accept(AcceptV1),
 }
 
+/// A phase in the pure Protocol V1 transcript validator.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProtocolPhaseV1 {
+    /// No challenge has been accepted.
+    AwaitChallenge,
+    /// A matching challenge was accepted; Attest is required next.
+    AwaitAttest,
+    /// A matching attestation was accepted; Grant or Deny is required next.
+    AwaitDecision,
+    /// A matching zero-rights foundation grant was accepted; Accept is required next.
+    AwaitAccept,
+    /// The matching admission identity was accepted.
+    Complete,
+    /// A matching typed denial terminated the transcript.
+    Denied,
+}
+
+/// A field whose value did not remain continuous across a Protocol V1 transcript.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum TranscriptFieldV1 {
+    /// Challenge nonce.
+    Nonce,
+    /// Policy content identity.
+    PolicyIdentity,
+    /// Launcher executable identity.
+    LauncherExecutableIdentity,
+    /// `cargo-fe2o3` executable identity.
+    CargoFe2o3ExecutableIdentity,
+    /// Complete child argument-vector identity.
+    ChildArgumentVectorIdentity,
+    /// Nonzero policy serial.
+    PolicySerial,
+    /// Compiler pins and canonical closure identity.
+    CompilerClosure,
+    /// Fixed target.
+    Target,
+    /// Selected pipeline.
+    Pipeline,
+    /// Standalone foundation profile.
+    Profile,
+    /// Zero foundation publication rights.
+    PublicationRights,
+    /// Attestation commitment.
+    AttestationIdentity,
+    /// Admission identity.
+    AdmissionIdentity,
+}
+
+impl fmt::Display for TranscriptFieldV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let name = match self {
+            Self::Nonce => "nonce",
+            Self::PolicyIdentity => "policy identity",
+            Self::LauncherExecutableIdentity => "launcher executable identity",
+            Self::CargoFe2o3ExecutableIdentity => "cargo-fe2o3 executable identity",
+            Self::ChildArgumentVectorIdentity => "child argument-vector identity",
+            Self::PolicySerial => "policy serial",
+            Self::CompilerClosure => "compiler closure",
+            Self::Target => "target",
+            Self::Pipeline => "pipeline",
+            Self::Profile => "profile",
+            Self::PublicationRights => "publication rights",
+            Self::AttestationIdentity => "attestation identity",
+            Self::AdmissionIdentity => "admission identity",
+        };
+        formatter.write_str(name)
+    }
+}
+
+/// Why the pure Protocol V1 transcript validator rejected a typed frame.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ProtocolStateErrorV1 {
+    /// The frame type was not valid in the current phase.
+    UnexpectedFrame {
+        /// Phase before the rejected transition.
+        phase: ProtocolPhaseV1,
+        /// Rejected frame type.
+        actual: FrameKindV1,
+    },
+    /// A frame was supplied after a terminal state.
+    TerminalState {
+        /// Terminal phase that rejected the frame.
+        phase: ProtocolPhaseV1,
+    },
+    /// A transcript field did not match the policy or preceding frame.
+    TranscriptMismatch {
+        /// Field whose continuity check failed.
+        field: TranscriptFieldV1,
+    },
+}
+
+impl fmt::Display for ProtocolStateErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnexpectedFrame { phase, actual } => {
+                write!(formatter, "unexpected {actual:?} frame in {phase:?}")
+            }
+            Self::TerminalState { phase } => {
+                write!(formatter, "Protocol V1 transcript is already {phase:?}")
+            }
+            Self::TranscriptMismatch { field } => {
+                write!(formatter, "Protocol V1 transcript {field} mismatch")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ProtocolStateErrorV1 {}
+
+/// Pure, inert validation state for one Policy V1 transcript.
+///
+/// This state machine checks canonical message order and continuity only. It
+/// does not authenticate a process, channel, peer, service, or fresh random
+/// source, and completion does not confer publication authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProtocolStateV1 {
+    policy: PolicyV1,
+    phase: ProtocolPhaseV1,
+    challenge: Option<ChallengeV1>,
+    attestation: Option<AttestV1>,
+    grant: Option<GrantV1>,
+    denial_reason: Option<DenyReasonV1>,
+}
+
+impl ProtocolStateV1 {
+    /// Creates an inert transcript validator bound to one canonical policy.
+    pub const fn new(policy: PolicyV1) -> Self {
+        Self {
+            policy,
+            phase: ProtocolPhaseV1::AwaitChallenge,
+            challenge: None,
+            attestation: None,
+            grant: None,
+            denial_reason: None,
+        }
+    }
+
+    /// Returns the current transcript phase.
+    pub const fn phase(self) -> ProtocolPhaseV1 {
+        self.phase
+    }
+
+    /// Returns the denial reason only after a matching Deny terminated the transcript.
+    pub const fn denial_reason(self) -> Option<DenyReasonV1> {
+        self.denial_reason
+    }
+
+    /// Returns the accepted admission identity only after a complete transcript.
+    pub const fn accepted_admission_identity(self) -> Option<[u8; 32]> {
+        if matches!(self.phase, ProtocolPhaseV1::Complete) {
+            match self.grant {
+                Some(grant) => Some(grant.admission_identity),
+                None => None,
+            }
+        } else {
+            None
+        }
+    }
+
+    /// Validates and applies one typed frame without changing state on failure.
+    pub fn advance(&mut self, frame: ProtocolFrameV1) -> Result<(), ProtocolStateErrorV1> {
+        match self.phase {
+            ProtocolPhaseV1::AwaitChallenge => {
+                let ProtocolFrameV1::Challenge(challenge) = frame else {
+                    return Err(self.unexpected(frame));
+                };
+                self.validate_challenge(challenge)?;
+                self.challenge = Some(challenge);
+                self.phase = ProtocolPhaseV1::AwaitAttest;
+            }
+            ProtocolPhaseV1::AwaitAttest => {
+                let ProtocolFrameV1::Attest(attestation) = frame else {
+                    return Err(self.unexpected(frame));
+                };
+                self.validate_attestation(attestation)?;
+                self.attestation = Some(attestation);
+                self.phase = ProtocolPhaseV1::AwaitDecision;
+            }
+            ProtocolPhaseV1::AwaitDecision => match frame {
+                ProtocolFrameV1::Grant(grant) => {
+                    self.validate_grant(grant)?;
+                    self.grant = Some(grant);
+                    self.phase = ProtocolPhaseV1::AwaitAccept;
+                }
+                ProtocolFrameV1::Deny(denial) => {
+                    self.validate_denial(denial)?;
+                    self.denial_reason = Some(denial.reason);
+                    self.phase = ProtocolPhaseV1::Denied;
+                }
+                _ => return Err(self.unexpected(frame)),
+            },
+            ProtocolPhaseV1::AwaitAccept => {
+                let ProtocolFrameV1::Accept(acceptance) = frame else {
+                    return Err(self.unexpected(frame));
+                };
+                self.validate_acceptance(acceptance)?;
+                self.phase = ProtocolPhaseV1::Complete;
+            }
+            ProtocolPhaseV1::Complete | ProtocolPhaseV1::Denied => {
+                return Err(ProtocolStateErrorV1::TerminalState { phase: self.phase });
+            }
+        }
+        Ok(())
+    }
+
+    fn unexpected(self, frame: ProtocolFrameV1) -> ProtocolStateErrorV1 {
+        ProtocolStateErrorV1::UnexpectedFrame {
+            phase: self.phase,
+            actual: frame.kind(),
+        }
+    }
+
+    fn validate_challenge(self, value: ChallengeV1) -> Result<(), ProtocolStateErrorV1> {
+        ensure_transcript(
+            value.policy_identity == self.policy.identity_sha256(),
+            TranscriptFieldV1::PolicyIdentity,
+        )?;
+        ensure_transcript(
+            value.launcher_executable_identity == self.policy.launcher_executable_sha256(),
+            TranscriptFieldV1::LauncherExecutableIdentity,
+        )?;
+        ensure_transcript(
+            value.cargo_fe2o3_executable_identity == self.policy.cargo_fe2o3_executable_sha256(),
+            TranscriptFieldV1::CargoFe2o3ExecutableIdentity,
+        )?;
+        ensure_transcript(
+            value.child_argv_identity == self.policy.child_argv_sha256(),
+            TranscriptFieldV1::ChildArgumentVectorIdentity,
+        )?;
+        ensure_transcript(
+            value.policy_serial == self.policy.serial(),
+            TranscriptFieldV1::PolicySerial,
+        )?;
+        ensure_transcript(
+            value.profile() == self.policy.profile(),
+            TranscriptFieldV1::Profile,
+        )
+    }
+
+    fn validate_attestation(self, value: AttestV1) -> Result<(), ProtocolStateErrorV1> {
+        let challenge = self
+            .challenge
+            .expect("AwaitAttest state always retains its challenge");
+        ensure_transcript(value.nonce == challenge.nonce, TranscriptFieldV1::Nonce)?;
+        ensure_transcript(
+            value.policy_identity == challenge.policy_identity,
+            TranscriptFieldV1::PolicyIdentity,
+        )?;
+        ensure_transcript(
+            value.launcher_executable_identity == challenge.launcher_executable_identity,
+            TranscriptFieldV1::LauncherExecutableIdentity,
+        )?;
+        ensure_transcript(
+            value.cargo_fe2o3_executable_identity == challenge.cargo_fe2o3_executable_identity,
+            TranscriptFieldV1::CargoFe2o3ExecutableIdentity,
+        )?;
+        ensure_transcript(
+            value.child_argv_identity == challenge.child_argv_identity,
+            TranscriptFieldV1::ChildArgumentVectorIdentity,
+        )?;
+        ensure_transcript(
+            value.compiler_closure == self.policy.compiler_closure(),
+            TranscriptFieldV1::CompilerClosure,
+        )?;
+        ensure_transcript(
+            value.target() == ProtocolTargetV1::Gfx942XnackMinus,
+            TranscriptFieldV1::Target,
+        )?;
+        ensure_transcript(
+            value.pipeline == self.policy.selected_pipeline(),
+            TranscriptFieldV1::Pipeline,
+        )?;
+        ensure_transcript(
+            value.profile() == self.policy.profile(),
+            TranscriptFieldV1::Profile,
+        )?;
+        ensure_transcript(
+            value.publication_rights() == self.policy.publication_rights(),
+            TranscriptFieldV1::PublicationRights,
+        )
+    }
+
+    fn validate_grant(self, value: GrantV1) -> Result<(), ProtocolStateErrorV1> {
+        let attestation = self
+            .attestation
+            .expect("AwaitDecision state always retains its attestation");
+        ensure_transcript(value.nonce == attestation.nonce, TranscriptFieldV1::Nonce)?;
+        ensure_transcript(
+            value.policy_identity == attestation.policy_identity,
+            TranscriptFieldV1::PolicyIdentity,
+        )?;
+        ensure_transcript(
+            value.attestation_identity == attestation.attestation_identity,
+            TranscriptFieldV1::AttestationIdentity,
+        )?;
+        ensure_transcript(
+            value.target() == attestation.target(),
+            TranscriptFieldV1::Target,
+        )?;
+        ensure_transcript(
+            value.pipeline == attestation.pipeline,
+            TranscriptFieldV1::Pipeline,
+        )?;
+        ensure_transcript(
+            value.profile() == attestation.profile(),
+            TranscriptFieldV1::Profile,
+        )?;
+        ensure_transcript(
+            value.publication_rights() == attestation.publication_rights(),
+            TranscriptFieldV1::PublicationRights,
+        )
+    }
+
+    fn validate_denial(self, value: DenyV1) -> Result<(), ProtocolStateErrorV1> {
+        let attestation = self
+            .attestation
+            .expect("AwaitDecision state always retains its attestation");
+        ensure_transcript(value.nonce == attestation.nonce, TranscriptFieldV1::Nonce)?;
+        ensure_transcript(
+            value.policy_identity == attestation.policy_identity,
+            TranscriptFieldV1::PolicyIdentity,
+        )?;
+        ensure_transcript(
+            value.attestation_identity == attestation.attestation_identity,
+            TranscriptFieldV1::AttestationIdentity,
+        )
+    }
+
+    fn validate_acceptance(self, value: AcceptV1) -> Result<(), ProtocolStateErrorV1> {
+        let grant = self
+            .grant
+            .expect("AwaitAccept state always retains its grant");
+        ensure_transcript(
+            value.admission_identity == grant.admission_identity,
+            TranscriptFieldV1::AdmissionIdentity,
+        )
+    }
+}
+
+fn ensure_transcript(
+    condition: bool,
+    field: TranscriptFieldV1,
+) -> Result<(), ProtocolStateErrorV1> {
+    if condition {
+        Ok(())
+    } else {
+        Err(ProtocolStateErrorV1::TranscriptMismatch { field })
+    }
+}
+
 impl ProtocolFrameV1 {
     /// Returns the assigned message type.
     pub const fn kind(self) -> FrameKindV1 {
