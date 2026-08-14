@@ -131,6 +131,14 @@ assert_test_elf() {
     /usr/bin/grep -Fx \
       'FE2O3_RUSTC_TRAMPOLINE_REPLAY_GATE_POST_EXEC_REQUIRED' >/dev/null ||
     fail 'test trampoline lacks the post-exec replay-gate marker'
+  /usr/bin/strings --all -- "${executable}" |
+    /usr/bin/grep -Fx \
+      'FE2O3_RUSTC_TRAMPOLINE_DUMPABLE_NOT_PRESERVED_ACROSS_EXEC' >/dev/null ||
+    fail 'test trampoline lacks the dumpability reset marker'
+  /usr/bin/strings --all -- "${executable}" |
+    /usr/bin/grep -Fx \
+      'FE2O3_RUSTC_TRAMPOLINE_PRODUCTION_BLOCKED_UNTIL_KERNEL_UNTRACEABLE_EXEC_BOUNDARY_OR_STATIC_BINDING_WRAPPER' >/dev/null ||
+    fail 'test trampoline lacks the untraceable-exec production blocker'
 }
 
 compile_test_trampoline() {
@@ -152,6 +160,7 @@ cat >"${TEST_ROOT}/wrapper.c" <<'EOF'
 #include <poll.h>
 #include <signal.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/prctl.h>
 #include <sys/resource.h>
@@ -162,6 +171,17 @@ extern char **environ;
 
 int main(int argc, char **argv) {
   for (int index = 1; index < argc; ++index) {
+    if (strcmp(argv[index], "--fe2o3-test-dumpable-exec-reset") == 0) {
+      const char *pre_exec = getenv("FE2O3_TRAMPOLINE_PRE_EXEC_DUMPABLE");
+      const char *production = getenv("FE2O3_TRAMPOLINE_PRODUCTION_STATUS");
+      const int post_exec = prctl(PR_GET_DUMPABLE, 0, 0, 0, 0);
+      if (pre_exec == NULL || production == NULL || post_exec < 0) {
+        return 95;
+      }
+      printf("DUMPABLE_EXEC_BOUNDARY=%s:%d\n", pre_exec, post_exec);
+      printf("PRODUCTION_STATUS=%s\n", production);
+      return fflush(stdout) == 0 ? 0 : 92;
+    }
     if (strcmp(argv[index], "--fe2o3-test-post-exec-replay-gate") == 0) {
       struct pollfd broker = {.fd = 190, .events = POLLIN, .revents = 0};
       puts("POST_EXEC_BROKER_V3_GATE_READY");
@@ -392,12 +412,15 @@ def expected_success_output(binding, bootstrap_identity):
         "ENV[4]=FE2O3_AUTHORITY_CARGO_ENVIRONMENT_SHA256=" + binding[104:136].hex(),
         "ENV[5]=FE2O3_AUTHORITY_TARGET=gfx942:xnack-",
         "ENV[6]=FE2O3_AUTHORITY_PIPELINE=collected-tiled-gemm-v1",
-        "ENV[7]=HOME=/nonexistent",
-        "ENV[8]=LANG=C",
-        "ENV[9]=LC_ALL=C",
-        "ENV[10]=PATH=/usr/bin:/bin",
-        "ENV[11]=SOURCE_DATE_EPOCH=0",
-        "ENV[12]=TZ=UTC",
+        "ENV[7]=FE2O3_TRAMPOLINE_PRE_EXEC_DUMPABLE=0",
+        "ENV[8]=FE2O3_TRAMPOLINE_PRODUCTION_STATUS="
+        "blocked-untraceable-exec-boundary-required",
+        "ENV[9]=HOME=/nonexistent",
+        "ENV[10]=LANG=C",
+        "ENV[11]=LC_ALL=C",
+        "ENV[12]=PATH=/usr/bin:/bin",
+        "ENV[13]=SOURCE_DATE_EPOCH=0",
+        "ENV[14]=TZ=UTC",
         "FD[190]",
         "SIGNAL_STATE=1:0",
         "NO_NEW_PRIVS=1",
@@ -450,12 +473,16 @@ def run_scenario(scenario, trampoline_path, wrapper_path, alternate_path,
         arguments = ["attacker-controlled-trampoline-path", ""]
     elif scenario == "delayed-replayed-frame":
         arguments.append("--fe2o3-test-post-exec-replay-gate")
+    elif scenario == "dumpable-exec-reset":
+        arguments.append("--fe2o3-test-dumpable-exec-reset")
     hostile_environment = {
         "LD_PRELOAD": preload_path,
         "LD_LIBRARY_PATH": "/attacker/library/path",
         "RUSTC": "/attacker/rustc",
         "RUSTC_WRAPPER": "/attacker/wrapper",
         "FE2O3_BROKER_V3_BINDING_SHA256": "f" * 64,
+        "FE2O3_TRAMPOLINE_PRE_EXEC_DUMPABLE": "attacker-override",
+        "FE2O3_TRAMPOLINE_PRODUCTION_STATUS": "attacker-override",
         "UNRELATED_HOSTILE_VALUE": "must-not-survive",
     }
 
@@ -491,7 +518,9 @@ def run_scenario(scenario, trampoline_path, wrapper_path, alternate_path,
     os.close(error_write)
     os.close(leaked_descriptor)
 
-    expected_failure = scenario not in {"success", "pathname-substitution"}
+    expected_failure = scenario not in {
+        "success", "pathname-substitution", "dumpable-exec-reset"
+    }
     early_output = b""
     try:
         if scenario not in {
@@ -608,9 +637,16 @@ def run_scenario(scenario, trampoline_path, wrapper_path, alternate_path,
         else:
             assert exit_code == 0, (scenario, exit_code, output, errors)
             assert errors == "", (scenario, errors)
-            assert output == expected_success_output(binding, bootstrap_identity), (
-                scenario, output, expected_success_output(binding, bootstrap_identity)
-            )
+            if scenario == "dumpable-exec-reset":
+                assert output == (
+                    "DUMPABLE_EXEC_BOUNDARY=0:1\n"
+                    "PRODUCTION_STATUS="
+                    "blocked-untraceable-exec-boundary-required\n"
+                ), (scenario, output)
+            else:
+                assert output == expected_success_output(binding, bootstrap_identity), (
+                    scenario, output, expected_success_output(binding, bootstrap_identity)
+                )
         assert not os.path.exists(preload_marker), (scenario, "LD_PRELOAD survived")
     finally:
         if original_path_bytes is not None:
@@ -713,6 +749,7 @@ readonly SCENARIOS=(
   nonregular-descriptor
   replayed-frame
   delayed-replayed-frame
+  dumpable-exec-reset
   peer-death
   timeout
 )

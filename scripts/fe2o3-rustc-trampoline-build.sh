@@ -241,6 +241,16 @@ verify_elf() {
       'FE2O3_RUSTC_TRAMPOLINE_REPLAY_GATE_POST_EXEC_REQUIRED' >/dev/null; then
     fail 'rustc trampoline lacks the post-exec replay-gate marker'
   fi
+  if ! run_clean /usr/bin/strings --all -- "${executable}" |
+    run_clean /usr/bin/grep -Fx \
+      'FE2O3_RUSTC_TRAMPOLINE_DUMPABLE_NOT_PRESERVED_ACROSS_EXEC' >/dev/null; then
+    fail 'rustc trampoline lacks the dumpability reset marker'
+  fi
+  if ! run_clean /usr/bin/strings --all -- "${executable}" |
+    run_clean /usr/bin/grep -Fx \
+      'FE2O3_RUSTC_TRAMPOLINE_PRODUCTION_BLOCKED_UNTIL_KERNEL_UNTRACEABLE_EXEC_BOUNDARY_OR_STATIC_BINDING_WRAPPER' >/dev/null; then
+    fail 'rustc trampoline lacks the untraceable-exec production blocker'
+  fi
   if run_clean /usr/bin/strings --all -- "${executable}" |
     run_clean /usr/bin/grep -Fx \
       'FE2O3_RUSTC_TRAMPOLINE_TEST_ONLY_BUILD' >/dev/null; then
@@ -339,3 +349,5 @@ readonly INSTALLED_IDENTITY="${installed_identity}"
 run_clean /usr/bin/sha256sum -- "${ARTIFACT_REF}"
 printf '%s\n' \
   'non-authoritative foundation: Rust broker, seccomp, and policy integration remain required' >&2
+printf '%s\n' \
+  'production blocked: kernel-untraceable exec boundary or static binding-wrapper bootstrap required' >&2

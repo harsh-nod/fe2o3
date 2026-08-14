@@ -79,6 +79,13 @@ __attribute__((used, section(".rodata.fe2o3_foundation_marker"))) static const
 __attribute__((used, section(".rodata.fe2o3_replay_gate_marker"))) static const
     char fe2o3_replay_gate_marker[] =
         "FE2O3_RUSTC_TRAMPOLINE_REPLAY_GATE_POST_EXEC_REQUIRED";
+__attribute__((used, section(".rodata.fe2o3_dumpable_marker"))) static const char
+    fe2o3_dumpable_marker[] =
+        "FE2O3_RUSTC_TRAMPOLINE_DUMPABLE_NOT_PRESERVED_ACROSS_EXEC";
+__attribute__((used, section(".rodata.fe2o3_production_blocker_marker"))) static
+    const char fe2o3_production_blocker_marker[] =
+        "FE2O3_RUSTC_TRAMPOLINE_PRODUCTION_BLOCKED_UNTIL_KERNEL_UNTRACEABLE_"
+        "EXEC_BOUNDARY_OR_STATIC_BINDING_WRAPPER";
 
 static const uint8_t fe2o3_broker_magic[8] = {'F', '2', 'A', 'U',
                                                'B', 'R', '3', 0};
@@ -380,6 +387,9 @@ static int normalize_process_state(void) {
     return -1;
   }
   const struct rlimit no_core = {.rlim_cur = 0, .rlim_max = 0};
+  /* PR_SET_DUMPABLE protects this image only. Linux applies its dumpability
+   * policy again during exec, so the dynamic wrapper must not treat this call
+   * as a surviving anti-ptrace boundary. */
   if (setrlimit(RLIMIT_CORE, &no_core) != 0 ||
       prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) != 0 ||
       prctl(PR_GET_DUMPABLE, 0, 0, 0, 0) != 0 ||
@@ -938,6 +948,9 @@ int main(int argument_count, char *arguments[]) {
       read_le16(&binding[98]) == 1U
           ? "FE2O3_AUTHORITY_PIPELINE=collected-row-softmax-v1"
           : "FE2O3_AUTHORITY_PIPELINE=collected-tiled-gemm-v1",
+      "FE2O3_TRAMPOLINE_PRE_EXEC_DUMPABLE=0",
+      "FE2O3_TRAMPOLINE_PRODUCTION_STATUS=blocked-untraceable-exec-boundary-"
+      "required",
       "HOME=/nonexistent",
       "LANG=C",
       "LC_ALL=C",
