@@ -132,11 +132,7 @@ fn build_or_run(args: &[OsString]) -> ExitCode {
                     && report.contains("backend_open=false")
                     && report.contains("artifact_open=false")
             }
-            Ok("exec-wrapper") => {
-                report.contains("mode=exec-wrapper")
-                    && report.contains("backend_open=true")
-                    && report.contains("artifact_open=true")
-            }
+            Ok("exec-wrapper" | "execveat-wrapper") => !status.success() && report.is_empty(),
             _ => false,
         };
         if !expected {

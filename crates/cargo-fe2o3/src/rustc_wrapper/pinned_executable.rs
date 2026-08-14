@@ -224,7 +224,7 @@ mod platform {
     use std::os::unix::fs::FileExt;
     use std::os::unix::fs::MetadataExt;
     use std::os::unix::process::CommandExt;
-    use std::process::{Command, ExitStatus};
+    use std::process::{Child, Command, ExitStatus, Output};
 
     const HASH_CHUNK_BYTES: usize = 64 * 1024;
     const REQUIRED_INHERITED_SEALS: SealFlags = SealFlags::WRITE
@@ -789,6 +789,14 @@ mod platform {
 
         pub(crate) fn status(&mut self) -> io::Result<ExitStatus> {
             self.command.status()
+        }
+
+        pub(crate) fn spawn(&mut self) -> io::Result<Child> {
+            self.command.spawn()
+        }
+
+        pub(crate) fn output(&mut self) -> io::Result<Output> {
+            self.command.output()
         }
     }
 

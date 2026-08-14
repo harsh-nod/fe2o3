@@ -8,23 +8,22 @@
 //! the exact profile-specific descriptor count and positional types before installing capabilities
 //! in the caller-selected compiler process for a compile-shaped wrapper invocation.
 //!
-//! This boundary prevents accidental descriptor inheritance through Cargo and pathname
-//! substitution between orchestration and rustc. It is not an OS sandbox against project code or
-//! hostile code already running as the same user. Cargo children inherit the routing values, so a
-//! hostile build script can deliberately replay the wrapper, and a procedural macro executes
-//! inside rustc after the descriptors are installed. Both are trusted by this design. The
-//! directory is opened `O_RDONLY`, but still grants descriptor-relative namespace mutation. The
+//! An independent seccomp exec boundary additionally grants a one-use broker permit only to a
+//! direct Cargo child stopped while requesting the pinned wrapper image. Inherited route material
+//! therefore cannot authorize build-script or procedural-macro replay. A procedural macro still
+//! executes inside an already-authorized rustc process and can observe that compilation's
+//! descriptors. The directory is opened `O_RDONLY`, but still grants descriptor-relative namespace
+//! mutation. The
 //! receiver treats that route as untrusted: before connecting, it independently observes its own
 //! running `cargo-fe2o3` image and requires the advertised broker to have the same uid, executable
 //! object, and bytes. This closes a self-consistent route redirected to an arbitrary mock
 //! executable. A substitute running the same executable object and bytes remains inside the
 //! executable-authentication boundary, but it has no public broker-server entry point and must
-//! still possess the fresh build session and per-broker secret. The route is inherited by trusted
-//! Cargo children and is therefore not a sandbox boundary against hostile same-user project code
-//! that can read or rewrite another child's environment or ptrace the broker. Untrusted build
-//! dependencies require a separate process sandbox.
+//! still possess a kernel-observed one-use invocation permit. This is not a sandbox against hostile
+//! same-user code that can ptrace or inject into another process; untrusted build dependencies
+//! require a separate process sandbox.
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod platform {
     use std::collections::BTreeMap;
     use std::fs::{self, File};
@@ -53,6 +52,7 @@ mod platform {
     };
     use sha2::{Digest, Sha256};
 
+    use crate::cargo_invocation_boundary::{InvocationAuthorizationRegistryV1, ProcessIdentityV1};
     use crate::pinned_codegen_backend::PinnedCodegenBackend;
     use crate::pinned_executable::{PinExecutableError, PinnedExecutable};
     use crate::project::PinnedDirectory;
@@ -78,18 +78,26 @@ mod platform {
     const RECEIVED_DESCRIPTOR_FLOOR: i32 = 199;
     pub(crate) const INVOCATION_AUTHORITY_CHILD_FD_V1: i32 =
         fe2o3_artifact_transaction::BROKERED_INVOCATION_AUTHORITY_CHILD_FD_V1;
-    const BROKER_IO_TIMEOUT: Duration = Duration::from_secs(30);
+    const BROKER_AUTHENTICATION_TIMEOUT: Duration = Duration::from_secs(30);
+    const BROKER_INVOCATION_FRAME_TIMEOUT: Duration = Duration::from_secs(30);
+    const BROKER_INVOCATION_LIFETIME: Duration = Duration::from_secs(6 * 60 * 60);
+    #[cfg(test)]
+    const BROKER_IO_TIMEOUT: Duration = BROKER_AUTHENTICATION_TIMEOUT;
     const MAX_ACTIVE_CONNECTIONS: usize = 64;
 
     #[derive(Clone, Copy)]
     struct BrokerLimits {
         max_active_connections: usize,
-        io_timeout: Duration,
+        authentication_timeout: Duration,
+        invocation_frame_timeout: Duration,
+        invocation_lifetime: Duration,
     }
 
     const PRODUCTION_BROKER_LIMITS: BrokerLimits = BrokerLimits {
         max_active_connections: MAX_ACTIVE_CONNECTIONS,
-        io_timeout: BROKER_IO_TIMEOUT,
+        authentication_timeout: BROKER_AUTHENTICATION_TIMEOUT,
+        invocation_frame_timeout: BROKER_INVOCATION_FRAME_TIMEOUT,
+        invocation_lifetime: BROKER_INVOCATION_LIFETIME,
     };
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -288,7 +296,7 @@ mod platform {
             Ok(())
         }
 
-        fn authenticate_client(self, stream: &UnixStream) -> Result<(), String> {
+        fn authenticate_client(self, stream: &UnixStream) -> Result<ProcessIdentityV1, String> {
             let credentials = rustix::net::sockopt::socket_peercred(stream)
                 .map_err(|error| format!("cannot inspect capability broker client: {error}"))?;
             let client_pid = u32::try_from(credentials.pid.as_raw_nonzero().get())
@@ -297,19 +305,7 @@ mod platform {
                 return Err("capability broker client uid does not match the broker".into());
             }
             let initial_start = process_start_time_ticks(client_pid)?;
-            let path = PathBuf::from(format!("/proc/{client_pid}/exe"));
-            let executable = File::open(&path).map_err(|error| {
-                format!(
-                    "cannot open capability broker client executable {}: {error}",
-                    path.display()
-                )
-            })?;
-            let metadata = executable.metadata().map_err(|error| {
-                format!(
-                    "cannot inspect capability broker client executable {}: {error}",
-                    path.display()
-                )
-            })?;
+            let (executable, metadata) = pin_process_executable(client_pid)?;
             if process_start_time_ticks(client_pid)? != initial_start {
                 return Err("capability broker client PID was reused while authenticating".into());
             }
@@ -318,12 +314,14 @@ mod platform {
                 metadata.ino(),
                 metadata.mode(),
             ) != self.object_identity()
+                || executable.sha256() != &self.executable_sha256
             {
                 return Err(
-                    "capability broker client is not the exact cargo-fe2o3 executable".into(),
+                    "capability broker client is not the exact pinned cargo-fe2o3 object and bytes"
+                        .into(),
                 );
             }
-            Ok(())
+            ProcessIdentityV1::observe(client_pid)
         }
     }
 
@@ -399,6 +397,7 @@ mod platform {
 
     pub(crate) struct CapabilityBroker {
         route: String,
+        invocation_authorization: InvocationAuthorizationRegistryV1,
         shutdown: Arc<BrokerShutdown>,
         worker: Option<JoinHandle<()>>,
     }
@@ -666,7 +665,7 @@ mod platform {
 
         #[cfg(test)]
         fn wait_for_request_read(&self) {
-            let deadline = std::time::Instant::now() + BROKER_IO_TIMEOUT;
+            let deadline = std::time::Instant::now() + BROKER_AUTHENTICATION_TIMEOUT;
             while !self
                 .request_read_started
                 .load(std::sync::atomic::Ordering::Acquire)
@@ -777,7 +776,7 @@ mod platform {
     impl TestPauseControl {
         fn wait_until_reached(&self) -> Option<(u64, u64)> {
             self.reached
-                .recv_timeout(BROKER_IO_TIMEOUT)
+                .recv_timeout(BROKER_AUTHENTICATION_TIMEOUT)
                 .expect("capability broker did not reach the test pause")
         }
 
@@ -814,7 +813,11 @@ mod platform {
             pinned_cargo_image: &PinnedExecutable,
             limits: BrokerLimits,
         ) -> Result<Self, String> {
-            if limits.max_active_connections == 0 || limits.io_timeout.is_zero() {
+            if limits.max_active_connections == 0
+                || limits.authentication_timeout.is_zero()
+                || limits.invocation_frame_timeout.is_zero()
+                || limits.invocation_lifetime.is_zero()
+            {
                 return Err("capability broker limits must be nonzero".to_owned());
             }
             let endpoint = random_endpoint().map_err(|error| {
@@ -851,6 +854,8 @@ mod platform {
             }
             .encode();
             let shutdown = Arc::new(BrokerShutdown::new(limits.max_active_connections));
+            let invocation_authorization = InvocationAuthorizationRegistryV1::new();
+            let worker_invocation_authorization = invocation_authorization.clone();
             let worker_shutdown = Arc::clone(&shutdown);
             let worker = thread::Builder::new()
                 .name("fe2o3-capability-broker".to_string())
@@ -864,7 +869,10 @@ mod platform {
                         backend,
                         artifact,
                         pinned_cargo_image,
-                        io_timeout: limits.io_timeout,
+                        authentication_timeout: limits.authentication_timeout,
+                        invocation_frame_timeout: limits.invocation_frame_timeout,
+                        invocation_lifetime: limits.invocation_lifetime,
+                        invocation_authorization: worker_invocation_authorization,
                         client_authentication: Mutex::new(()),
                         shutdown: worker_shutdown,
                     }
@@ -873,6 +881,7 @@ mod platform {
                 .map_err(|error| format!("failed to start capability broker: {error}"))?;
             Ok(Self {
                 route,
+                invocation_authorization,
                 shutdown,
                 worker: Some(worker),
             })
@@ -880,6 +889,10 @@ mod platform {
 
         pub(crate) fn route(&self) -> &str {
             &self.route
+        }
+
+        pub(crate) fn invocation_authorization(&self) -> InvocationAuthorizationRegistryV1 {
+            self.invocation_authorization.clone()
         }
     }
 
@@ -1018,7 +1031,7 @@ mod platform {
         let mut stream = UnixStream::connect_addr(&address)
             .map_err(|error| format!("failed to connect to capability broker: {error}"))?;
         stream
-            .set_read_timeout(Some(BROKER_IO_TIMEOUT))
+            .set_read_timeout(Some(BROKER_AUTHENTICATION_TIMEOUT))
             .map_err(|error| format!("failed to bound capability broker read: {error}"))?;
         let authentication = PEER_AUTHENTICATION
             .lock()
@@ -1130,7 +1143,10 @@ mod platform {
         backend: File,
         artifact: File,
         pinned_cargo_image: File,
-        io_timeout: Duration,
+        authentication_timeout: Duration,
+        invocation_frame_timeout: Duration,
+        invocation_lifetime: Duration,
+        invocation_authorization: InvocationAuthorizationRegistryV1,
         client_authentication: Mutex<()>,
         shutdown: Arc<BrokerShutdown>,
     }
@@ -1143,7 +1159,8 @@ mod platform {
                         Ok((stream, _)) => {
                             let stream = Arc::new(stream);
                             let accepted_at = Instant::now();
-                            let deadline = BrokerDeadline::new(accepted_at, self.io_timeout);
+                            let deadline =
+                                BrokerDeadline::new(accepted_at, self.authentication_timeout);
                             #[cfg(test)]
                             self.shutdown.pause_after_accept(&stream);
                             match self.shutdown.register(&stream, deadline) {
@@ -1209,10 +1226,18 @@ mod platform {
                 .client_authentication
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            self.executable
+            let client = self
+                .executable
                 .authenticate_client(stream)
                 .map_err(|error| io::Error::new(io::ErrorKind::PermissionDenied, error))?;
             drop(authentication);
+            #[cfg(test)]
+            self.invocation_authorization
+                .authorize_test_process(client)
+                .map_err(|error| io::Error::new(io::ErrorKind::PermissionDenied, error))?;
+            self.invocation_authorization
+                .consume(client)
+                .map_err(|error| io::Error::new(io::ErrorKind::PermissionDenied, error))?;
             deadline.require_remaining()?;
             let mut request = vec![0_u8; REQUEST_BYTES];
             #[cfg(test)]
@@ -1259,13 +1284,22 @@ mod platform {
             let response = response_bytes(&self.secret, challenge, request_auth);
             self.shutdown
                 .send_response(stream, &response, &descriptors, deadline)?;
-            self.serve_invocation_authority(stream)
+            self.serve_invocation_authority(stream, client)
         }
 
-        fn serve_invocation_authority(&self, stream: &UnixStream) -> io::Result<()> {
-            let deadline = BrokerDeadline::new(Instant::now(), self.io_timeout);
+        fn serve_invocation_authority(
+            &self,
+            stream: &UnixStream,
+            client: ProcessIdentityV1,
+        ) -> io::Result<()> {
+            let liveness = InvocationLiveness {
+                client,
+                started_at: Instant::now(),
+                frame_timeout: self.invocation_frame_timeout,
+                lifetime: self.invocation_lifetime,
+            };
             let mut encoded = [0_u8; BROKERED_INVOCATION_REQUEST_BYTES_V1];
-            deadline.read_exact(stream, &mut encoded)?;
+            liveness.read_frame(stream, &mut encoded)?;
             let request = BrokeredInvocationCapabilityRequestV1::decode(&encoded)
                 .map_err(|error| io::Error::new(io::ErrorKind::PermissionDenied, error))?;
             let claim = match request {
@@ -1290,9 +1324,8 @@ mod platform {
             let mut stream = stream;
             stream.write_all(BROKERED_INVOCATION_PREPARED_V1)?;
 
-            let deadline = BrokerDeadline::new(Instant::now(), self.io_timeout);
             let mut encoded = [0_u8; BROKERED_INVOCATION_REQUEST_BYTES_V1];
-            deadline.read_exact(stream, &mut encoded)?;
+            liveness.read_frame(stream, &mut encoded)?;
             if BrokeredInvocationCapabilityRequestV1::decode(&encoded)
                 != Ok(BrokeredInvocationCapabilityRequestV1::Consume(claim))
             {
@@ -1302,6 +1335,74 @@ mod platform {
                 ));
             }
             stream.write_all(BROKERED_INVOCATION_ADMITTED_V1)
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    struct InvocationLiveness {
+        client: ProcessIdentityV1,
+        started_at: Instant,
+        frame_timeout: Duration,
+        lifetime: Duration,
+    }
+
+    impl InvocationLiveness {
+        fn read_frame(self, stream: &UnixStream, buffer: &mut [u8]) -> io::Result<()> {
+            let mut stream = stream;
+            let mut offset = 0;
+            let mut frame_deadline = None;
+            while offset < buffer.len() {
+                let now = Instant::now();
+                if now.duration_since(self.started_at) >= self.lifetime {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "invocation capability exceeded its total lifetime",
+                    ));
+                }
+                let deadline = frame_deadline
+                    .get_or_insert_with(|| now + self.frame_timeout)
+                    .to_owned();
+                stream.set_read_timeout(Some(
+                    deadline
+                        .checked_duration_since(now)
+                        .filter(|remaining| !remaining.is_zero())
+                        .unwrap_or(Duration::from_millis(1)),
+                ))?;
+                match stream.read(&mut buffer[offset..]) {
+                    Ok(0) => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::UnexpectedEof,
+                            "invocation capability frame ended early",
+                        ));
+                    }
+                    Ok(read) => offset += read,
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                        ) && offset == 0 =>
+                    {
+                        self.client.require_current().map_err(|error| {
+                            io::Error::new(io::ErrorKind::PermissionDenied, error)
+                        })?;
+                        frame_deadline = None;
+                    }
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                        ) =>
+                    {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "invocation capability frame deadline expired",
+                        ));
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            Ok(())
         }
     }
 
@@ -1799,7 +1900,9 @@ mod platform {
                 pinned_cargo_image,
                 BrokerLimits {
                     max_active_connections,
-                    io_timeout,
+                    authentication_timeout: io_timeout,
+                    invocation_frame_timeout: io_timeout,
+                    invocation_lifetime: io_timeout,
                 },
             )
             .unwrap()
@@ -1946,6 +2049,43 @@ mod platform {
                     .is_err(),
                 "broker admitted an invocation other than its exact prepared claim"
             );
+        }
+
+        #[test]
+        fn invocation_authority_refreshes_bounded_phases_for_slow_frontends() {
+            let (_temp, backend, artifact, pinned_cargo_image, session) = fixture();
+            let binding = ordinary_binding();
+            let broker = CapabilityBroker::start_with_limits(
+                session,
+                binding,
+                &backend,
+                &artifact,
+                &pinned_cargo_image,
+                BrokerLimits {
+                    max_active_connections: 1,
+                    authentication_timeout: Duration::from_secs(5),
+                    invocation_frame_timeout: Duration::from_millis(50),
+                    invocation_lifetime: Duration::from_secs(1),
+                },
+            )
+            .unwrap();
+            let route = BrokerRouteV2::parse(broker.route()).unwrap();
+            let mut transferred = receive_from(&route, session, binding).unwrap();
+            let authority = transferred.invocation_authority.take().unwrap();
+            let attempt =
+                BuildAttempt::from_env_value(&format!("1:{}:{}", "42".repeat(16), "24".repeat(32)))
+                    .unwrap();
+            let claim = BrokeredInvocationCapabilityClaimV1::new(attempt, [0x24; 32]).unwrap();
+
+            thread::sleep(Duration::from_millis(150));
+            authority.prepare(claim).unwrap();
+            thread::sleep(Duration::from_millis(150));
+            authority
+                .exchange(
+                    BrokeredInvocationCapabilityRequestV1::Consume(claim),
+                    BROKERED_INVOCATION_ADMITTED_V1,
+                )
+                .unwrap();
         }
 
         fn raw_descriptor_set(
@@ -2754,18 +2894,23 @@ mod platform {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub(crate) use platform::*;
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
 mod unsupported {
-    use fe2o3_artifact_transaction::BuildSession;
+    use std::process::Command;
 
+    use fe2o3_artifact_transaction::{BrokeredInvocationCapabilityClaimV1, BuildSession};
+
+    use crate::cargo_invocation_boundary::InvocationAuthorizationRegistryV1;
     use crate::pinned_codegen_backend::PinnedCodegenBackend;
     use crate::pinned_executable::PinnedExecutable;
     use crate::project::PinnedDirectory;
 
     pub(crate) const CAPABILITY_BROKER_ENV: &str = "FE2O3_CAPABILITY_BROKER_V1";
+    pub(crate) const INVOCATION_AUTHORITY_CHILD_FD_V1: i32 =
+        fe2o3_artifact_transaction::BROKERED_INVOCATION_AUTHORITY_CHILD_FD_V1;
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub(crate) enum CapabilityProfileV1 {
@@ -2801,12 +2946,36 @@ mod unsupported {
         pub(crate) fn route(&self) -> &str {
             ""
         }
+
+        pub(crate) fn invocation_authorization(&self) -> InvocationAuthorizationRegistryV1 {
+            InvocationAuthorizationRegistryV1::new()
+        }
+    }
+
+    pub(crate) struct BrokeredInvocationAuthorityV1;
+
+    impl BrokeredInvocationAuthorityV1 {
+        pub(crate) fn release(self) -> Result<(), String> {
+            Err("Cargo capability transport requires Linux".to_owned())
+        }
+
+        pub(crate) fn prepare(
+            &self,
+            _claim: BrokeredInvocationCapabilityClaimV1,
+        ) -> Result<(), String> {
+            Err("Cargo capability transport requires Linux".to_owned())
+        }
+
+        pub(crate) fn inherit_for_child(&self, _command: &mut Command) -> Result<(), String> {
+            Err("Cargo capability transport requires Linux".to_owned())
+        }
     }
 
     pub(crate) struct BrokeredCapabilities {
         pub(crate) backend: PinnedCodegenBackend,
         pub(crate) artifact: PinnedDirectory,
         pub(crate) pinned_cargo_image: Option<PinnedExecutable>,
+        pub(crate) invocation_authority: Option<BrokeredInvocationAuthorityV1>,
     }
 
     pub(crate) fn receive(
@@ -2817,5 +2986,5 @@ mod unsupported {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
 pub(crate) use unsupported::*;

@@ -2,8 +2,10 @@ mod application_exec;
 mod application_handoff;
 mod application_sandbox;
 mod application_supervisor;
+mod authorized_kernel_closure;
 mod binding_wrapper;
 mod capability_broker;
+mod cargo_invocation_boundary;
 mod clean;
 #[cfg(feature = "compiler-handoff-observation-test-only")]
 mod compiler_handoff_observation;
@@ -38,6 +40,7 @@ const DEFAULT_TARGET: &str = "gfx1100";
 const BINDING_WRAPPER_MODE_ENV: &str = "FE2O3_BINDING_WRAPPER_MODE_V1";
 const MANAGED_RUSTC_ARGS_ENV: &str = "FE2O3_MANAGED_RUSTC_ARGS_V1";
 const BUILD_SESSION_ENV: &str = "FE2O3_BUILD_SESSION_V1";
+const AUTHORITY_BEARING_ROW_PIPELINE: &str = "collected-row-softmax-v1";
 const INTERNAL_RUNNER_ARG: &str = "__fe2o3-runner-v1";
 const BACKEND_BUILD_CHILD_FD: std::os::fd::RawFd = 196;
 const ARTIFACT_CHILD_FD: std::os::fd::RawFd =
@@ -264,7 +267,38 @@ fn smoke(args: &[String]) -> ExitCode {
 fn cargo_with_backend_result(command: &str, args: &[OsString]) -> Result<(), String> {
     let project = project::CargoProject::discover(args)?;
     reject_preexisting_rustc_wrappers(&project, args)?;
-    let mut context = BackendRunContext::prepare(project, args)?;
+    let worker_v2 = worker_v2::PreparedWorkerV2Config::from_environment_for_cargo_setup()
+        .map_err(|error| format!("Worker V2 setup failed: {error}"))?;
+    let cargo_declaration = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
+    let cargo_path = binding_wrapper::resolve_command_executable(
+        &cargo_declaration,
+        &project.invocation_dir().child_path(),
+    )
+    .map_err(|error| format!("failed to resolve Cargo executable: {error}"))?;
+    let pinned_cargo = pinned_executable::PinnedExecutable::open(&cargo_path)
+        .map_err(|error| format!("failed to pin Cargo executable: {error}"))?;
+    let requires_authorized_closure = env::var("FE2O3_CODEGEN_PIPELINE").as_deref()
+        == Ok(AUTHORITY_BEARING_ROW_PIPELINE)
+        || worker_v2
+            .as_ref()
+            .and_then(worker_v2::PreparedWorkerV2Config::source_debug_profile)
+            .is_some();
+    let authorized_closure = requires_authorized_closure
+        .then(|| {
+            authorized_kernel_closure::AuthorizedKernelClosureV1::observe(
+                &project,
+                args,
+                &pinned_cargo,
+            )
+        })
+        .transpose()?;
+    let mut context = BackendRunContext::prepare(
+        project,
+        args,
+        worker_v2,
+        pinned_cargo,
+        authorized_closure.as_ref(),
+    )?;
     run_cargo_with_backend(&mut context, command, args)
 }
 
@@ -273,6 +307,7 @@ struct BackendRunContext {
     project: project::CargoProject,
     backend: PathBuf,
     pinned_backend: pinned_codegen_backend::PinnedCodegenBackend,
+    pinned_cargo: pinned_executable::PinnedExecutable,
     _worker_v2: Option<worker_v2::PreparedWorkerV2Config>,
     worker_v2_identity: Option<worker_v2::WorkerV2ConfigIdentity>,
     target_dir: project::PinnedDirectory,
@@ -280,19 +315,30 @@ struct BackendRunContext {
     managed_rustc_args: OsString,
     binding_wrapper: PathBuf,
     build_session: fe2o3_artifact_transaction::BuildSession,
+    requires_locked_closure: bool,
 }
 
 impl BackendRunContext {
-    fn prepare(project: project::CargoProject, args: &[OsString]) -> Result<Self, String> {
+    fn prepare(
+        project: project::CargoProject,
+        args: &[OsString],
+        worker_v2: Option<worker_v2::PreparedWorkerV2Config>,
+        pinned_cargo: pinned_executable::PinnedExecutable,
+        authorized_closure: Option<&authorized_kernel_closure::AuthorizedKernelClosureV1>,
+    ) -> Result<Self, String> {
         let target = amd_gpu_target();
         let target_dir = project.open_or_create_target()?;
         let backend = find_or_build_backend(&target_dir)?;
         let pinned_backend = pinned_codegen_backend::PinnedCodegenBackend::open(&backend)
             .map_err(|error| format!("failed to pin codegen backend: {error}"))?;
-        let worker_v2 = worker_v2::PreparedWorkerV2Config::from_environment_for_cargo_setup()
-            .map_err(|error| format!("Worker V2 setup failed: {error}"))?;
         let worker_v2_identity = worker_v2.as_ref().map(|config| config.identity());
-        let cargo_configuration = project.semantic_configuration(args)?;
+        let mut cargo_configuration = project.semantic_configuration(args)?;
+        if let Some(authorized_closure) = authorized_closure {
+            cargo_configuration.extend_from_slice(b"fe2o3-authorized-kernel-closure-v1\0");
+            cargo_configuration
+                .extend_from_slice(&(authorized_closure.snapshot().len() as u64).to_le_bytes());
+            cargo_configuration.extend_from_slice(authorized_closure.snapshot());
+        }
         let semantic = generation::semantic_identity(
             &target,
             pinned_backend.sha256(),
@@ -314,6 +360,7 @@ impl BackendRunContext {
             project,
             backend,
             pinned_backend,
+            pinned_cargo,
             _worker_v2: worker_v2,
             worker_v2_identity,
             target_dir,
@@ -321,6 +368,7 @@ impl BackendRunContext {
             managed_rustc_args,
             binding_wrapper,
             build_session,
+            requires_locked_closure: authorized_closure.is_some(),
         })
     }
 }
@@ -339,18 +387,24 @@ fn run_cargo_with_backend(
         context.target
     );
 
-    let cargo_declaration = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
-    let cargo_path = binding_wrapper::resolve_command_executable(
-        &cargo_declaration,
-        &context.project.invocation_dir().child_path(),
-    )
-    .map_err(|error| format!("failed to resolve Cargo executable: {error}"))?;
-    let pinned_cargo = pinned_executable::PinnedExecutable::open(&cargo_path)
-        .map_err(|error| format!("failed to pin Cargo executable: {error}"))?;
-    let mut cargo = pinned_cargo
+    let pinned_wrapper = pinned_executable::PinnedExecutable::open(&context.binding_wrapper)
+        .map_err(|error| format!("failed to pin cargo-fe2o3 wrapper: {error}"))?;
+    let mut cargo = context
+        .pinned_cargo
         .command()
         .map_err(|error| format!("failed to prepare pinned Cargo executable: {error}"))?;
     let mut forwarded_args = args.to_vec();
+    if context.requires_locked_closure
+        && !forwarded_args
+            .iter()
+            .any(|argument| matches!(argument.to_str(), Some("--locked" | "--frozen")))
+    {
+        let position = forwarded_args
+            .iter()
+            .position(|argument| argument == "--")
+            .unwrap_or(forwarded_args.len());
+        forwarded_args.insert(position, OsString::from("--locked"));
+    }
     if command == "run" {
         let expects_envelope = context
             ._worker_v2
@@ -385,8 +439,15 @@ fn run_cargo_with_backend(
         capability_binding,
         &context.pinned_backend,
         artifact_dir,
-        &pinned_cargo,
+        &context.pinned_cargo,
     )?;
+    let invocation_authorization = capability_broker.invocation_authorization();
+    let pending_invocation_boundary =
+        cargo_invocation_boundary::PendingCargoInvocationBoundary::start(
+            &context.pinned_cargo,
+            &pinned_wrapper,
+            invocation_authorization.clone(),
+        )?;
     cargo
         .as_command_mut()
         .arg(command)
@@ -417,8 +478,24 @@ fn run_cargo_with_backend(
                 .env_remove(worker_v2::WORKER_V2_EXPECTED_ID_ENV);
         }
     }
-    let status = cargo.status();
+    pending_invocation_boundary.configure_child(cargo.as_command_mut());
+    let mut cargo_child = cargo
+        .spawn()
+        .map_err(|error| format!("failed to run pinned Cargo: {error}"))?;
+    let invocation_boundary =
+        match pending_invocation_boundary.complete(cargo_child.id(), invocation_authorization) {
+            Ok(boundary) => boundary,
+            Err(error) => {
+                let _ = cargo_child.kill();
+                let _ = cargo_child.wait();
+                return Err(error);
+            }
+        };
+    let status = cargo_child.wait();
+    let boundary_result = invocation_boundary.finish();
     drop(capability_broker);
+
+    boundary_result?;
 
     match status {
         Ok(status) if status.success() => {

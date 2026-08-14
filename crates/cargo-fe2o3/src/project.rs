@@ -276,6 +276,49 @@ impl CargoProject {
         }
         Ok(snapshot)
     }
+
+    pub(crate) fn authority_metadata_args(
+        &self,
+        args: &[OsString],
+    ) -> Result<Vec<OsString>, String> {
+        let routing = CargoRouting::parse(args)?;
+        let mut metadata_args = routing.metadata_args;
+        let mut index = 0;
+        while index < args.len() {
+            let argument = &args[index];
+            if matches!(
+                argument.to_str(),
+                Some("--features" | "-F" | "--filter-platform")
+            ) {
+                metadata_args.push(argument.clone());
+                index += 1;
+                let value = args.get(index).ok_or_else(|| {
+                    format!("{} requires an argument", argument.to_string_lossy())
+                })?;
+                metadata_args.push(value.clone());
+            } else if matches!(
+                argument.to_str(),
+                Some("--all-features" | "--no-default-features")
+            ) || split_joined_option(argument, "--features")?.is_some()
+                || split_joined_option(argument, "--filter-platform")?.is_some()
+            {
+                metadata_args.push(argument.clone());
+            }
+            index += 1;
+        }
+        if !metadata_args.iter().any(|argument| {
+            matches!(argument.to_str(), Some("--filter-platform"))
+                || argument
+                    .to_str()
+                    .is_some_and(|argument| argument.starts_with("--filter-platform="))
+        }) {
+            metadata_args.extend([
+                OsString::from("--filter-platform"),
+                OsString::from("x86_64-unknown-linux-gnu"),
+            ]);
+        }
+        Ok(metadata_args)
+    }
 }
 
 fn append_snapshot_field(snapshot: &mut Vec<u8>, value: &[u8]) {

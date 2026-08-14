@@ -10,7 +10,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-const AUDIT_ARCH_X86_64: u32 = 0xc000_003e;
+pub(crate) const AUDIT_ARCH_X86_64: u32 = 0xc000_003e;
 const BPF_LOAD_WORD_ABSOLUTE: u16 = 0x20;
 const BPF_JUMP_EQUAL: u16 = 0x15;
 const BPF_RETURN: u16 = 0x06;
@@ -236,6 +236,21 @@ pub(crate) fn no_fork_application_filter() -> Vec<libc::sock_filter> {
     filter
 }
 
+/// Leaves Cargo unrestricted except for making every descendant exec observable by the parent.
+pub(crate) fn cargo_exec_notification_filter() -> Vec<libc::sock_filter> {
+    vec![
+        statement(BPF_LOAD_WORD_ABSOLUTE, SECCOMP_DATA_ARCH_OFFSET),
+        jump(BPF_JUMP_EQUAL, AUDIT_ARCH_X86_64, 1, 0),
+        statement(BPF_RETURN, SECCOMP_RET_KILL_PROCESS),
+        statement(BPF_LOAD_WORD_ABSOLUTE, SECCOMP_DATA_NUMBER_OFFSET),
+        jump(BPF_JUMP_EQUAL, libc::SYS_execve as u32, 0, 1),
+        statement(BPF_RETURN, SECCOMP_RET_USER_NOTIF),
+        jump(BPF_JUMP_EQUAL, libc::SYS_execveat as u32, 0, 1),
+        statement(BPF_RETURN, SECCOMP_RET_USER_NOTIF),
+        statement(BPF_RETURN, SECCOMP_RET_ALLOW),
+    ]
+}
+
 /// Installs a permanent, single-threaded profile and transfers its notification listener to the
 /// already-running parent supervisor. The supervisor admits exactly the controlled initial exec;
 /// both exec variants remain trapped after the application image begins.
@@ -339,7 +354,10 @@ fn supervise_exec_notifications(
     Ok(())
 }
 
-fn wait_for_listener(socket: RawFd, shutdown: RawFd) -> Result<Option<(File, u32)>, String> {
+pub(crate) fn wait_for_listener(
+    socket: RawFd,
+    shutdown: RawFd,
+) -> Result<Option<(File, u32)>, String> {
     loop {
         let mut descriptors = [
             libc::pollfd {
@@ -376,7 +394,7 @@ fn wait_for_listener(socket: RawFd, shutdown: RawFd) -> Result<Option<(File, u32
     }
 }
 
-fn wait_for_notification(
+pub(crate) fn wait_for_notification(
     listener: RawFd,
     shutdown: RawFd,
 ) -> Result<Option<libc::seccomp_notif>, String> {
@@ -435,7 +453,11 @@ fn wait_for_notification(
     }
 }
 
-fn respond_to_notification(listener: RawFd, id: u64, permit_initial: bool) -> Result<(), String> {
+pub(crate) fn respond_to_notification(
+    listener: RawFd,
+    id: u64,
+    permit_initial: bool,
+) -> Result<(), String> {
     let response = libc::seccomp_notif_resp {
         id,
         val: 0,
@@ -555,7 +577,7 @@ fn receive_listener(socket: RawFd) -> Result<(File, u32), String> {
     Ok((unsafe { File::from_raw_fd(descriptor) }, message.pid))
 }
 
-fn cloexec_pipe() -> io::Result<(File, File)> {
+pub(crate) fn cloexec_pipe() -> io::Result<(File, File)> {
     let mut descriptors = [-1_i32; 2];
     // SAFETY: successful pipe2 initializes both output descriptors.
     if unsafe { libc::pipe2(descriptors.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
@@ -570,7 +592,7 @@ fn cloexec_pipe() -> io::Result<(File, File)> {
     })
 }
 
-fn stop_supervisor_without_blocking(
+pub(crate) fn stop_supervisor_without_blocking(
     shutdown: &mut Option<File>,
     worker: &mut Option<JoinHandle<Result<(), String>>>,
 ) -> Result<(), String> {
