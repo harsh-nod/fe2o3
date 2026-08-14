@@ -585,6 +585,80 @@ fn build_script_execveat_cannot_replay_the_genuine_wrapper_and_live_broker() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn substituted_multithreaded_image_cannot_replay_wrapper_from_non_leader_thread() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = ProjectFixture::standalone();
+    let staged_wrapper = fixture.root.join("cargo-fe2o3-observed-wrapper");
+    let genuine_wrapper = fixture.root.join("cargo-fe2o3-genuine-wrapper");
+    let displaced_wrapper = fixture.root.join("cargo-fe2o3-displaced-wrapper");
+    let substitute = fixture.root.join("cargo-fe2o3-hostile-substitute");
+    let race_trace = fixture.root.join("wrapper-race.log");
+    let thread_trace = fixture.root.join("multithreaded-image.log");
+    let compiler_report = fixture.root.join("multithreaded-compiler.log");
+
+    fs::copy(env!("CARGO_BIN_EXE_cargo-fe2o3"), &staged_wrapper)
+        .expect("stage independently replaceable cargo-fe2o3 wrapper");
+    fs::hard_link(&staged_wrapper, &genuine_wrapper).expect("retain genuine wrapper hard link");
+    fs::copy(
+        env!("CARGO_BIN_EXE_cargo-fe2o3-build-script-fixture"),
+        &substitute,
+    )
+    .expect("stage hostile multithreaded image");
+    let mut permissions = fs::metadata(&substitute).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&substitute, permissions).expect("make hostile substitute executable");
+
+    let mut command = Command::new(&staged_wrapper);
+    command
+        .arg("build")
+        .current_dir(&fixture.cwd)
+        .env("CARGO", env!("CARGO_BIN_EXE_cargo-fe2o3-cargo-fixture"))
+        .env("FE2O3_BACKEND", &fixture.backend)
+        .env("FE2O3_TARGET", "gfx942")
+        .env("FE2O3_TEST_CARGO_LOG", &fixture.log)
+        .env("FE2O3_TEST_WORKSPACE_ROOT", &fixture.workspace)
+        .env("FE2O3_TEST_TARGET_DIRECTORY", &fixture.target)
+        .env(
+            "FE2O3_TEST_BUILD_SCRIPT_MODE",
+            "multithreaded-substitute-wrapper",
+        )
+        .env("FE2O3_TEST_BUILD_SCRIPT_REPORT", &compiler_report)
+        .env(
+            "FE2O3_TEST_BUILD_SCRIPT_FIXTURE",
+            env!("CARGO_BIN_EXE_cargo-fe2o3-build-script-fixture"),
+        )
+        .env("FE2O3_TEST_GENUINE_WRAPPER", &genuine_wrapper)
+        .env("FE2O3_TEST_WRAPPER_SUBSTITUTE", &substitute)
+        .env("FE2O3_TEST_DISPLACED_WRAPPER", &displaced_wrapper)
+        .env("FE2O3_TEST_WRAPPER_RACE_TRACE", &race_trace)
+        .env("FE2O3_TEST_MULTITHREADED_TRACE", &thread_trace)
+        .env_remove("RUSTC_WRAPPER")
+        .env_remove("RUSTC_WORKSPACE_WRAPPER");
+
+    let output = command
+        .output()
+        .expect("run multithreaded wrapper replay probe");
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let race = fs::read_to_string(race_trace).expect("read wrapper substitution trace");
+    assert!(race.contains("substituted=true"), "{race}");
+    let thread = fs::read_to_string(thread_trace).expect("read hostile image trace");
+    assert!(thread.contains("non_leader=true"), "{thread}");
+    assert!(thread.contains("backend_open=false"), "{thread}");
+    assert!(thread.contains("artifact_open=false"), "{thread}");
+    assert!(
+        !compiler_report.exists(),
+        "non-leader replay reached its attacker-selected compiler or artifact authority"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn real_cargo_build_script_cannot_replay_the_genuine_wrapper_and_live_broker() {
     let fixture = ProjectFixture::standalone();
     fs::write(

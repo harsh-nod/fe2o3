@@ -6,7 +6,13 @@ use std::process::ExitCode;
 const REPORT_ENV: &str = "FE2O3_TEST_BUILD_SCRIPT_REPORT";
 
 fn main() -> ExitCode {
-    match env::args_os().nth(1).as_deref() {
+    let mode = env::args_os().nth(1);
+    if env::var_os("FE2O3_TEST_MULTITHREADED_SUBSTITUTE").is_some()
+        && mode.as_deref() != Some(std::ffi::OsStr::new("--crate-name"))
+    {
+        return multithreaded_substitute();
+    }
+    match mode.as_deref() {
         Some(mode) if mode == "ordinary" => ordinary_child(),
         Some(mode) if mode == "exec-wrapper" => exec_wrapper(),
         Some(mode) if mode == "execveat-wrapper" => execveat_wrapper(),
@@ -16,6 +22,39 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+fn multithreaded_substitute() -> ExitCode {
+    use std::os::unix::process::CommandExt;
+    use std::process::Command;
+
+    let genuine_wrapper = required_path("FE2O3_TEST_GENUINE_WRAPPER");
+    let trace = required_path("FE2O3_TEST_MULTITHREADED_TRACE");
+    let forwarded = env::args_os().skip(1).collect::<Vec<_>>();
+    let tgid = std::process::id();
+    let (backend_open, artifact_open) = descriptor_state();
+    let worker = std::thread::spawn(move || {
+        // SAFETY: gettid takes no arguments and has no memory effects.
+        let tid = unsafe { libc::syscall(libc::SYS_gettid) } as u32;
+        fs::write(
+            &trace,
+            format!(
+                "tgid={tgid}\ntid={tid}\nnon_leader={}\nbackend_open={backend_open}\nartifact_open={artifact_open}\n",
+                tid != tgid
+            ),
+        )
+        .expect("record hostile multithreaded image state");
+        let error = Command::new(genuine_wrapper).args(forwarded).exec();
+        eprintln!("non-leader thread could not exec the genuine wrapper: {error}");
+        ExitCode::FAILURE
+    });
+    worker.join().unwrap_or(ExitCode::FAILURE)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn multithreaded_substitute() -> ExitCode {
+    ExitCode::FAILURE
 }
 
 #[cfg(target_os = "linux")]

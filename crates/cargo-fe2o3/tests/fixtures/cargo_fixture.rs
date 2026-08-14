@@ -4,6 +4,8 @@ use std::fs::{self, OpenOptions};
 #[cfg(unix)]
 use std::io::Read;
 use std::io::Write;
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::MetadataExt;
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
@@ -116,11 +118,21 @@ fn build_or_run(args: &[OsString]) -> ExitCode {
     }
     if let Some(mode) = env::var_os("FE2O3_TEST_BUILD_SCRIPT_MODE") {
         let fixture = required_path("FE2O3_TEST_BUILD_SCRIPT_FIXTURE");
-        let status = match Command::new(fixture).arg(mode).status() {
-            Ok(status) => status,
-            Err(error) => {
-                eprintln!("fake Cargo could not launch build-script probe: {error}");
-                return ExitCode::FAILURE;
+        let status = if mode == "multithreaded-substitute-wrapper" {
+            match multithreaded_substitute_wrapper(&fixture) {
+                Ok(status) => status,
+                Err(error) => {
+                    eprintln!("fake Cargo could not run wrapper substitution probe: {error}");
+                    return ExitCode::FAILURE;
+                }
+            }
+        } else {
+            match Command::new(fixture).arg(mode).status() {
+                Ok(status) => status,
+                Err(error) => {
+                    eprintln!("fake Cargo could not launch build-script probe: {error}");
+                    return ExitCode::FAILURE;
+                }
             }
         };
         let report = required_path("FE2O3_TEST_BUILD_SCRIPT_REPORT");
@@ -132,7 +144,9 @@ fn build_or_run(args: &[OsString]) -> ExitCode {
                     && report.contains("backend_open=false")
                     && report.contains("artifact_open=false")
             }
-            Ok("exec-wrapper" | "execveat-wrapper") => !status.success() && report.is_empty(),
+            Ok("exec-wrapper" | "execveat-wrapper" | "multithreaded-substitute-wrapper") => {
+                !status.success() && report.is_empty()
+            }
             _ => false,
         };
         if !expected {
@@ -232,6 +246,91 @@ fn build_or_run(args: &[OsString]) -> ExitCode {
         return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS
+}
+
+#[cfg(target_os = "linux")]
+fn multithreaded_substitute_wrapper(
+    attacker_compiler: &Path,
+) -> Result<std::process::ExitStatus, String> {
+    use std::time::{Duration, Instant};
+
+    let wrapper = required_path("RUSTC_WORKSPACE_WRAPPER");
+    let substitute = required_path("FE2O3_TEST_WRAPPER_SUBSTITUTE");
+    let displaced = required_path("FE2O3_TEST_DISPLACED_WRAPPER");
+    let genuine = required_path("FE2O3_TEST_GENUINE_WRAPPER");
+    let race_trace = required_path("FE2O3_TEST_WRAPPER_RACE_TRACE");
+    let identity =
+        fs::metadata(&genuine).map_err(|error| format!("inspect genuine wrapper: {error}"))?;
+    let supervisor = u32::try_from(unsafe { libc::getppid() })
+        .map_err(|_| "supervisor PID is negative".to_string())?;
+    let baseline = matching_process_descriptors(supervisor, identity.dev(), identity.ino());
+    let observed_wrapper = wrapper.clone();
+    let racer = std::thread::spawn(move || -> Result<(), String> {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let observed = matching_process_descriptors(supervisor, identity.dev(), identity.ino());
+            if observed > baseline {
+                fs::rename(&observed_wrapper, &displaced)
+                    .map_err(|error| format!("displace observed wrapper pathname: {error}"))?;
+                fs::rename(&substitute, &observed_wrapper)
+                    .map_err(|error| format!("install hostile wrapper substitute: {error}"))?;
+                fs::write(
+                    race_trace,
+                    format!(
+                        "supervisor={supervisor}\nbaseline_fds={baseline}\nobserved_fds={observed}\nsubstituted=true\n"
+                    ),
+                )
+                .map_err(|error| format!("record wrapper substitution: {error}"))?;
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(
+                    "timed out waiting for the supervisor to open the wrapper image".into(),
+                );
+            }
+            std::thread::yield_now();
+        }
+    });
+
+    let source = required_path("FE2O3_TEST_BUILD_SCRIPT_REPORT").with_extension("rs");
+    fs::write(&source, "pub fn replayed() {}\n")
+        .map_err(|error| format!("write multithreaded replay source: {error}"))?;
+    let status = Command::new(&wrapper)
+        .arg(attacker_compiler)
+        .args([
+            "--crate-name",
+            "multithreaded_substitute_replay",
+            "--crate-type",
+            "lib",
+            "--emit=metadata",
+            "-Cmetadata=multithreaded-substitute-replay",
+        ])
+        .arg(source)
+        .env("FE2O3_TEST_MULTITHREADED_SUBSTITUTE", "1")
+        .status()
+        .map_err(|error| format!("launch observed wrapper pathname: {error}"))?;
+    racer
+        .join()
+        .map_err(|_| "wrapper substitution racer panicked".to_string())??;
+    Ok(status)
+}
+
+#[cfg(target_os = "linux")]
+fn matching_process_descriptors(pid: u32, device: u64, inode: u64) -> usize {
+    fs::read_dir(format!("/proc/{pid}/fd"))
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .filter_map(|entry| fs::metadata(entry.path()).ok())
+        .filter(|metadata| metadata.dev() == device && metadata.ino() == inode)
+        .count()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn multithreaded_substitute_wrapper(
+    _attacker_compiler: &Path,
+) -> Result<std::process::ExitStatus, String> {
+    Err("multithreaded wrapper substitution requires Linux".to_string())
 }
 
 fn vertical_worker_v2_invocation() -> ExitCode {
