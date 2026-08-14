@@ -1,22 +1,22 @@
 #![cfg(target_os = "linux")]
 
 use std::{
-    env, fs,
+    env,
     fs::OpenOptions,
     io::Write,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
 };
 
 use fe2o3_artifact_transaction::{
-    BuildInvocation, BuildSession, ConsumedCompilerModuleHandoffV1, ProducerIdentity,
-    begin_build_attempt, consume_compiler_module_handoff_v1, publish_compiler_module_handoff_v1,
+    BuildAttempt, ConsumedCompilerModuleHandoffV1, ProducerIdentity,
+    consume_compiler_module_handoff_v1,
 };
 use fe2o3_compiler_ffi::{CodeObjectVersion as CompilerCodeObjectVersion, CompilerModuleHandoffV2};
 use fe2o3_hsaco::MAX_HSACO_BYTES;
 use fe2o3_hsaco_finalize::{
     ContentIdentityV1, FinalizedWorkerV2HsacoIdentityV1, LinkOptionV1, PinnedWorkerV1,
-    RowSoftmaxV1DirectWorkerExpectationV1, WorkerExecutionLimitsV1, WorkerMeasurementV1,
+    RowSoftmaxV1DirectWorkerExpectationV1, RowSoftmaxV1DirectWorkerPinsV1,
+    RowSoftmaxV1OcmlProviderPinsV1, WorkerExecutionLimitsV1, WorkerMeasurementV1,
     WorkerOutputConstraintsV1, execute_reproducible_first_build_worker_v2,
     finalize_row_softmax_v1_structural_worker_v2_hsaco_v1,
     inspect_row_softmax_v1_direct_worker_hsaco_v1,
@@ -25,13 +25,45 @@ use fe2o3_kernel_descriptor::CodeObjectVersion;
 use object::{Object, ObjectSymbol};
 
 const WORKER_ENV: &str = "FE2O3_ROW_SOFTMAX_V1_WORKER";
+const WORKER_SHA256_ENV: &str = "FE2O3_ROW_SOFTMAX_V1_WORKER_SHA256";
+const WORKER_BYTES_ENV: &str = "FE2O3_ROW_SOFTMAX_V1_WORKER_BYTES";
 const WORKER_BUILD_ID_ENV: &str = "FE2O3_ROW_SOFTMAX_V1_WORKER_BUILD_ID";
 const LLVM_BUILD_ID_ENV: &str = "FE2O3_ROW_SOFTMAX_V1_LLVM_BUILD_ID";
-const HANDOFF_ENV: &str = "FE2O3_ROW_SOFTMAX_V1_HANDOFF";
+const HANDOFF_ROOT_ENV: &str = "FE2O3_ROW_SOFTMAX_V1_HANDOFF_ROOT";
+const HANDOFF_PRODUCER_CRATE_ENV: &str = "FE2O3_ROW_SOFTMAX_V1_HANDOFF_PRODUCER_CRATE";
+const HANDOFF_PRODUCER_SOURCE_ENV: &str = "FE2O3_ROW_SOFTMAX_V1_HANDOFF_PRODUCER_SOURCE";
+const HANDOFF_ATTEMPT_ENV: &str = "FE2O3_ROW_SOFTMAX_V1_HANDOFF_ATTEMPT";
 const HANDOFF_SHA256_ENV: &str = "FE2O3_ROW_SOFTMAX_V1_HANDOFF_SHA256";
 const FRONTEND_AUTHORITY_ENV: &str = "FE2O3_ROW_SOFTMAX_V1_FRONTEND_AUTHORITY_SHA256";
+const OCML_SHA256_ENVS: [&str; 4] = [
+    "FE2O3_ROW_SOFTMAX_V1_OCML_SHA256",
+    "FE2O3_ROW_SOFTMAX_V1_ISA942_SHA256",
+    "FE2O3_ROW_SOFTMAX_V1_UNSAFE_MATH_OFF_SHA256",
+    "FE2O3_ROW_SOFTMAX_V1_FINITE_ONLY_OFF_SHA256",
+];
+const PROVIDER_MANIFEST_ENV: &str = "FE2O3_ROW_SOFTMAX_V1_PROVIDER_MANIFEST_SHA256";
 const OUTPUT_ENV: &str = "FE2O3_ROW_SOFTMAX_V1_OUTPUT";
 const TARGET: &str = "gfx942:xnack-";
+
+const REQUIRED_ENVIRONMENT: [&str; 17] = [
+    WORKER_ENV,
+    WORKER_SHA256_ENV,
+    WORKER_BYTES_ENV,
+    WORKER_BUILD_ID_ENV,
+    LLVM_BUILD_ID_ENV,
+    HANDOFF_ROOT_ENV,
+    HANDOFF_PRODUCER_CRATE_ENV,
+    HANDOFF_PRODUCER_SOURCE_ENV,
+    HANDOFF_ATTEMPT_ENV,
+    HANDOFF_SHA256_ENV,
+    FRONTEND_AUTHORITY_ENV,
+    OCML_SHA256_ENVS[0],
+    OCML_SHA256_ENVS[1],
+    OCML_SHA256_ENVS[2],
+    OCML_SHA256_ENVS[3],
+    PROVIDER_MANIFEST_ENV,
+    OUTPUT_ENV,
+];
 
 fn required_env(name: &str) -> String {
     env::var(name).unwrap_or_else(|_| panic!("required row-softmax native pin {name} is absent"))
@@ -56,67 +88,87 @@ fn hex_nibble(name: &str, value: u8) -> u8 {
     }
 }
 
-struct TestDirectory(PathBuf);
-
-impl TestDirectory {
-    fn new() -> Self {
-        static NEXT: AtomicU64 = AtomicU64::new(1);
-        let path = env::temp_dir().join(format!(
-            "fe2o3-row-softmax-v1-worker-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::create_dir(&path).expect("create row-softmax handoff directory");
-        Self(path)
-    }
+fn required_u64(name: &str) -> u64 {
+    let value = required_env(name);
+    let decoded = value
+        .parse::<u64>()
+        .unwrap_or_else(|_| panic!("{name} must contain a canonical positive decimal integer"));
+    assert_ne!(decoded, 0, "{name} must not be zero");
+    assert_eq!(decoded.to_string(), value, "{name} is not canonical");
+    decoded
 }
 
-impl Drop for TestDirectory {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
+fn configured_environment_is_present() -> bool {
+    let present = REQUIRED_ENVIRONMENT
+        .iter()
+        .filter(|name| env::var_os(name).is_some())
+        .count();
+    if present == 0 {
+        eprintln!(
+            "skipping configured row-softmax direct-worker integration: environment is absent"
+        );
+        return false;
     }
+    assert_eq!(
+        present,
+        REQUIRED_ENVIRONMENT.len(),
+        "partial row-softmax native configuration is forbidden; required variables: {}",
+        REQUIRED_ENVIRONMENT.join(",")
+    );
+    true
 }
 
-fn canonical_handoff() -> (
+fn worker_pins() -> RowSoftmaxV1DirectWorkerPinsV1 {
+    RowSoftmaxV1DirectWorkerPinsV1::new(
+        ContentIdentityV1::from_parts(
+            required_sha256(WORKER_SHA256_ENV),
+            required_u64(WORKER_BYTES_ENV),
+        ),
+        &required_env(WORKER_BUILD_ID_ENV),
+        &required_env(LLVM_BUILD_ID_ENV),
+        RowSoftmaxV1OcmlProviderPinsV1::new(
+            OCML_SHA256_ENVS.map(required_sha256),
+            required_sha256(PROVIDER_MANIFEST_ENV),
+        )
+        .expect("independently pinned gfx942 OCML provider closure"),
+    )
+    .expect("independently pinned row-softmax worker")
+}
+
+fn production_handoff(
+    expected_worker: RowSoftmaxV1DirectWorkerPinsV1,
+) -> (
+    ConsumedCompilerModuleHandoffV1,
     CompilerModuleHandoffV2,
     RowSoftmaxV1DirectWorkerExpectationV1,
 ) {
-    let path = PathBuf::from(required_env(HANDOFF_ENV));
-    let bytes = fs::read(&path).expect("read rustc-produced row-softmax Worker V2 handoff");
-    let handoff = CompilerModuleHandoffV2::decode(&bytes)
+    let producer_source = required_env(HANDOFF_PRODUCER_SOURCE_ENV);
+    let producer = ProducerIdentity::from_codegen(
+        &required_env(HANDOFF_PRODUCER_CRATE_ENV),
+        (producer_source != "-").then(|| Path::new(&producer_source)),
+    )
+    .expect("reconstruct production rustc producer identity");
+    let attempt = BuildAttempt::from_env_value(&required_env(HANDOFF_ATTEMPT_ENV))
+        .expect("decode production rustc build attempt");
+    let consumed = consume_compiler_module_handoff_v1(
+        Path::new(&required_env(HANDOFF_ROOT_ENV)),
+        &producer,
+        attempt,
+    )
+    .expect("consume production rustc row-softmax handoff slot");
+    let handoff = CompilerModuleHandoffV2::decode(consumed.bytes())
         .expect("strictly decode rustc-produced row-softmax Worker V2 handoff");
     assert_eq!(handoff.target().to_string(), TARGET);
     assert_eq!(handoff.code_object_version(), CompilerCodeObjectVersion::V6);
-    assert_eq!(handoff.canonical_bytes(), bytes);
+    assert_eq!(handoff.canonical_bytes(), consumed.bytes());
     let expectation = RowSoftmaxV1DirectWorkerExpectationV1::from_pinned_rustc_handoff(
         &handoff,
         required_sha256(HANDOFF_SHA256_ENV),
         required_sha256(FRONTEND_AUTHORITY_ENV),
+        expected_worker,
     )
     .expect("admit exact pinned row-softmax rustc handoff");
-    (handoff, expectation)
-}
-
-fn consumed_handoff(
-    directory: &TestDirectory,
-    handoff: &CompilerModuleHandoffV2,
-) -> ConsumedCompilerModuleHandoffV1 {
-    let producer = ProducerIdentity::from_codegen(
-        "row_softmax_v1_direct_llvm_worker",
-        Some(Path::new("tests/row_softmax_v1_direct_llvm_worker.rs")),
-    )
-    .expect("row-softmax test producer");
-    let attempt = begin_build_attempt(
-        &directory.0,
-        &producer,
-        BuildInvocation::from_bytes([0x52; 32]),
-        BuildSession::from_bytes([0x94; 16]),
-    )
-    .expect("begin row-softmax handoff attempt");
-    publish_compiler_module_handoff_v1(&directory.0, &producer, attempt, handoff.canonical_bytes())
-        .expect("publish row-softmax handoff");
-    consume_compiler_module_handoff_v1(&directory.0, &producer, attempt)
-        .expect("consume row-softmax handoff")
+    (consumed, handoff, expectation)
 }
 
 fn link_options() -> Vec<LinkOptionV1> {
@@ -137,11 +189,13 @@ struct ProducedRowSoftmax {
     finalized_output_identity: ContentIdentityV1,
 }
 
-fn produce_inspect_and_finalize(worker: &PinnedWorkerV1) -> ProducedRowSoftmax {
-    let (handoff, expectation) = canonical_handoff();
-    let directory = TestDirectory::new();
+fn produce_inspect_and_finalize(
+    worker: &PinnedWorkerV1,
+    consumed_handoff: ConsumedCompilerModuleHandoffV1,
+    expectation: RowSoftmaxV1DirectWorkerExpectationV1,
+) -> ProducedRowSoftmax {
     let evidence = execute_reproducible_first_build_worker_v2(
-        consumed_handoff(&directory, &handoff),
+        consumed_handoff,
         worker,
         Vec::new(),
         link_options(),
@@ -173,6 +227,12 @@ fn produce_inspect_and_finalize(worker: &PinnedWorkerV1) -> ProducedRowSoftmax {
     assert_eq!(
         inspected
             .exchange()
+            .measured_ocml_provider_manifest_identity(),
+        expectation.worker_pins().provider().manifest_identity()
+    );
+    assert_eq!(
+        inspected
+            .exchange()
             .embedded_frontend_authority_commitment(),
         expectation.frontend_authority_commitment()
     );
@@ -181,6 +241,12 @@ fn produce_inspect_and_finalize(worker: &PinnedWorkerV1) -> ProducedRowSoftmax {
     assert!(!inspected.grants_publication_authority());
     assert!(!inspected.grants_load_authority());
     assert!(!inspected.grants_launch_authority());
+    assert!(!inspected.exchange().proves_no_comgr_linkage());
+    assert!(
+        inspected
+            .exchange()
+            .no_comgr_requires_measured_worker_build_manifest()
+    );
 
     let raw_bytes = inspected.structural().exact_bytes().to_vec();
     assert_eq!(
@@ -209,14 +275,6 @@ fn produce_inspect_and_finalize(worker: &PinnedWorkerV1) -> ProducedRowSoftmax {
     let bytes = finalized.exact_finalized_bytes().to_vec();
     assert!(finalized.finalized_output_identity().matches(&bytes));
     assert_ocml_symbol_closure(&bytes);
-    for forbidden in [b"amd_comgr".as_slice(), b"libamd_comgr".as_slice()] {
-        assert!(
-            !bytes
-                .windows(forbidden.len())
-                .any(|window| window == forbidden),
-            "row-softmax HSACO contains forbidden COMGR reference"
-        );
-    }
 
     ProducedRowSoftmax {
         bytes,
@@ -247,21 +305,24 @@ fn assert_ocml_symbol_closure(bytes: &[u8]) {
 }
 
 #[test]
-#[ignore = "requires the measured upstream LLVM/LLD worker and pinned gfx942 OCML closure"]
 fn real_worker_produces_deterministic_finalized_row_softmax_v1_cov6_hsaco() {
+    if !configured_environment_is_present() {
+        return;
+    }
+    let expected_worker = worker_pins();
     let worker_path = PathBuf::from(required_env(WORKER_ENV));
-    let worker_bytes = fs::read(&worker_path).expect("read row-softmax worker executable");
     let measurement = WorkerMeasurementV1::new(
-        ContentIdentityV1::calculate(&worker_bytes),
+        expected_worker.executable(),
         required_env(WORKER_BUILD_ID_ENV),
         required_env(LLVM_BUILD_ID_ENV),
     )
     .expect("exact row-softmax worker measurement");
     let worker =
         PinnedWorkerV1::open(&worker_path, measurement).expect("open measured row-softmax worker");
+    let (consumed, _handoff, expectation) = production_handoff(expected_worker);
 
-    let first = produce_inspect_and_finalize(&worker);
-    let second = produce_inspect_and_finalize(&worker);
+    let first = produce_inspect_and_finalize(&worker, consumed.clone(), expectation);
+    let second = produce_inspect_and_finalize(&worker, consumed, expectation);
     assert_eq!(
         first.bytes, second.bytes,
         "repeated row-softmax links changed bytes"
