@@ -101,6 +101,7 @@ const HANDOFF_OBSERVATION_ACK_MAGIC: &[u8] = b"FE2O3-CARGO-WRAPPER-HANDOFF-OBSER
 const HANDOFF_OBSERVATION_DIRECTORY_ENV: &str =
     "FE2O3_COMPILER_HANDOFF_OBSERVATION_DIRECTORY_TEST_ONLY_V1";
 const HANDOFF_OBSERVATION_CRATE_ENV: &str = "FE2O3_COMPILER_HANDOFF_OBSERVATION_CRATE_TEST_ONLY_V1";
+const BROKER_PATH_SUBSTITUTION_MARKER: &str = "fe2o3-test-hostile-broker-path-substitution";
 const MAX_HANDOFF_OBSERVATION_BYTES: usize = 32 * 1024;
 const BUILD_HELPER_ENV: &str = "FE2O3_SCALAR_CF_ISOLATED_BUILD_HELPER";
 const BUILD_HELPER_SOCKET_ENV: &str = "FE2O3_SCALAR_CF_BUILD_SOCKET_FD";
@@ -2735,10 +2736,67 @@ fn build_and_pin_handoff_broker(
         String::from_utf8_lossy(&built.stdout),
         String::from_utf8_lossy(&built.stderr),
     );
-    Arc::new(
-        PinnedBrokerExecutable::open(&cargo_target.join("debug/cargo-fe2o3"))
-            .expect("pin the exact built cargo-fe2o3 object"),
+    let broker = cargo_target.join("debug/cargo-fe2o3");
+    std::fs::set_permissions(&broker, std::fs::Permissions::from_mode(0o500))
+        .expect("make the test-owned cargo-fe2o3 object non-writable before pinning");
+    Arc::new(PinnedBrokerExecutable::open(&broker).expect("pin the exact built cargo-fe2o3 object"))
+}
+
+fn substitute_handoff_broker_path(cargo_target: &Path, broker: &PinnedBrokerExecutable) -> PathBuf {
+    broker
+        .verify()
+        .expect("verify broker immediately before pathname substitution");
+    let broker_path = cargo_target.join("debug/cargo-fe2o3");
+    let retained_path = cargo_target.join("debug/.cargo-fe2o3-retained-test-object");
+    std::fs::rename(&broker_path, &retained_path)
+        .expect("retain the pinned broker object under a different pathname");
+
+    let mut replacement = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o700)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(&broker_path)
+        .expect("install same-UID broker pathname substitution");
+    writeln!(
+        replacement,
+        "#!/bin/sh\nprintf '%s\\n' '{BROKER_PATH_SUBSTITUTION_MARKER}' >&2\nexit 97"
     )
+    .expect("write hostile broker pathname substitution");
+    replacement
+        .sync_all()
+        .expect("persist hostile broker pathname substitution");
+    File::open(broker_path.parent().expect("broker has a parent directory"))
+        .and_then(|directory| directory.sync_all())
+        .expect("persist broker pathname substitution directory entry");
+
+    let replacement_metadata = replacement
+        .metadata()
+        .expect("inspect hostile broker pathname substitution");
+    assert_eq!(replacement_metadata.uid(), unsafe { libc::geteuid() });
+    drop(replacement);
+    let replacement_sha256: [u8; 32] = Sha256::digest(
+        std::fs::read(&broker_path).expect("read hostile broker pathname substitution"),
+    )
+    .into();
+    assert_ne!(
+        replacement_sha256,
+        broker
+            .sha256()
+            .expect("hash retained broker after pathname substitution")
+    );
+    let replaced = run_bounded(
+        &mut Command::new(&broker_path),
+        Duration::from_secs(10),
+        "hostile broker pathname substitution probe",
+    )
+    .expect("run hostile broker pathname substitution probe");
+    assert_eq!(replaced.status.code(), Some(97));
+    assert!(stderr(&replaced).contains(BROKER_PATH_SUBSTITUTION_MARKER));
+    broker
+        .verify()
+        .expect("pathname substitution changed the retained broker object");
+    retained_path
 }
 
 fn compile_clean_external_row_softmax_crate_with_handoff(
@@ -3989,6 +4047,8 @@ fn clean_external_cargo_fe2o3_produces_row_softmax_worker_v2_handoffs() {
     let cargo_output = TestOutputDir::new(&workspace);
     let cargo_target = cargo_output.0.join("cargo-target");
     let broker = build_and_pin_handoff_broker(&workspace, &cargo_target);
+    let retained_broker_path = substitute_handoff_broker_path(&cargo_target, &broker);
+    assert!(retained_broker_path.is_file());
     let mut roots = Vec::new();
     for package_name in [
         "fe2o3-row-softmax-external-a",
@@ -4015,7 +4075,8 @@ fn clean_external_cargo_fe2o3_produces_row_softmax_worker_v2_handoffs() {
                 && external_stderr.contains("build completed without an authorized device backend")
                 && !external_stderr.contains("root instance must have")
                 && !external_stderr.contains("portable MIR identity mismatch")
-                && !external_stderr.contains("rustc FnAbi identity mismatch"),
+                && !external_stderr.contains("rustc FnAbi identity mismatch")
+                && !external_stderr.contains(BROKER_PATH_SUBSTITUTION_MARKER),
             "clean external cargo-fe2o3 crate missed row-softmax handoff production:\n{external_stderr}"
         );
         let root = admitted_row_softmax_root(&external_stderr).unwrap_or_else(|| {
