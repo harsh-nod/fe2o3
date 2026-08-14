@@ -19,6 +19,7 @@ mod amdgpu_llvm;
 #[allow(dead_code)]
 mod closure_profile_v1;
 mod collected_executable_scalar_control_flow_v2;
+mod collected_row_softmax_v1;
 mod collected_scalar_gemm_v1;
 mod collected_tiled_gemm_v1;
 mod collector;
@@ -181,6 +182,7 @@ enum CodegenPipeline {
     KernelIrV1,
     KernelIrWorkerV2,
     CollectedExecutableScalarControlFlowV2,
+    CollectedRowSoftmaxV1,
     CollectedScalarGemmV1,
     CollectedTiledGemmV1,
 }
@@ -249,15 +251,21 @@ impl PipelineSelection {
                 Self::Valid(CodegenPipeline::CollectedScalarGemmV1)
             }
             Some(value)
+                if value == collected_row_softmax_v1::COLLECTED_ROW_SOFTMAX_PIPELINE_V1 =>
+            {
+                Self::Valid(CodegenPipeline::CollectedRowSoftmaxV1)
+            }
+            Some(value)
                 if value == collected_tiled_gemm_v1::COLLECTED_TILED_GEMM_PIPELINE_V1 =>
             {
                 Self::Valid(CodegenPipeline::CollectedTiledGemmV1)
             }
             Some(value) => Self::Invalid(format!(
-                "{CODEGEN_PIPELINE_ENV} must be unset or exactly `legacy-v1`, `kernel-ir-v1`, `kernel-ir-worker-v2`, `{}`, `{}`, or `{}`; found {value:?}",
+                "{CODEGEN_PIPELINE_ENV} must be unset or exactly `legacy-v1`, `kernel-ir-v1`, `kernel-ir-worker-v2`, `{}`, `{}`, `{}`, or `{}`; found {value:?}",
                 collected_executable_scalar_control_flow_v2::COLLECTED_SCALAR_CONTROL_FLOW_PIPELINE_V2,
                 collected_scalar_gemm_v1::COLLECTED_SCALAR_GEMM_PIPELINE_V1,
                 collected_tiled_gemm_v1::COLLECTED_TILED_GEMM_PIPELINE_V1,
+                collected_row_softmax_v1::COLLECTED_ROW_SOFTMAX_PIPELINE_V1,
             )),
         }
     }
@@ -470,6 +478,98 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                         Err(error) => tcx.dcx().fatal(format!(
                             "[rustc-codegen-fe2o3] {} rejected the collected program without fallback: {error}",
                             collected_executable_scalar_control_flow_v2::COLLECTED_SCALAR_CONTROL_FLOW_PIPELINE_V2,
+                        )),
+                    }
+                } else if matches!(
+                    codegen_pipeline,
+                    PipelineSelection::Valid(CodegenPipeline::CollectedRowSoftmaxV1)
+                ) {
+                    let admission = (|| -> Result<_, String> {
+                        let collection = collector::collect_device_functions(
+                            tcx,
+                            mono_partitions.codegen_units,
+                            self.config.verbose,
+                        )
+                        .map_err(|error| error.to_string())?;
+                        let frontend_record =
+                            frontend_record_bridge::extract_frontend_record_v1(tcx, &collection)
+                                .map_err(|error| {
+                                    format!("frontend record extraction failed: {error}")
+                                })?;
+                        if self.config.verbose {
+                            eprintln!(
+                                "[rustc-codegen-fe2o3] validated row-softmax frontend record: {} function(s), {} canonical byte(s)",
+                                frontend_record.unit().functions().len(),
+                                frontend_record.canonical_bytes().len()
+                            );
+                        }
+                        collector::dump_device_functions(tcx, &collection.functions);
+                        let custom_llvm_pipeline = !tcx.sess.opts.cg.llvm_args.is_empty()
+                            || !tcx.sess.opts.cg.passes.is_empty();
+                        let mut receipt =
+                            collected_row_softmax_v1::authenticate_collected_row_softmax_v1(
+                                tcx,
+                                &collection,
+                                &self.config.target,
+                                custom_llvm_pipeline,
+                            )
+                            .map_err(|error| error.to_string())?;
+                        let root_instance_identity = receipt.root_instance_identity().to_owned();
+                        let kernel_export = receipt.kernel_export().to_owned();
+                        let portable_mir_semantic = receipt.portable_mir_semantic_hex();
+                        let compiler_semantics = receipt.compiler_semantics_hex();
+                        let frontend_authority = receipt.authority_hex();
+                        let authenticated = receipt.consume().map_err(|error| error.to_string())?;
+                        let (module, authority_commitment, exponential_boundary_commitment) =
+                            authenticated.into_parts();
+                        let canonical_bytes =
+                            fe2o3_kernel_ir::encode_module_v4(&module).map_err(|error| {
+                                format!("canonical module encoding failed: {error}")
+                            })?;
+                        if authority_commitment == [0; 32]
+                            || exponential_boundary_commitment == [0; 32]
+                        {
+                            return Err(
+                                "row-softmax canonical selection lost a private receipt binding"
+                                    .to_owned(),
+                            );
+                        }
+                        Ok((
+                            root_instance_identity,
+                            kernel_export,
+                            portable_mir_semantic,
+                            compiler_semantics,
+                            frontend_authority,
+                            module.id.as_str().to_owned(),
+                            canonical_bytes.len(),
+                        ))
+                    })();
+                    match admission {
+                        Ok((
+                            root_instance_identity,
+                            kernel_export,
+                            portable_mir_semantic,
+                            compiler_semantics,
+                            frontend_authority,
+                            module_id,
+                            canonical_bytes,
+                        )) => tcx.dcx().fatal(format!(
+                            "[rustc-codegen-fe2o3] {} consumed its private single-use frontend receipt for exact collected KernelEntry `{}` export `{}` with reviewed path-independent portable MIR {}; exact ABI input:&[f32], output:DisjointSlice<f32>, explicit kernarg {} bytes and required COV6 complete kernarg {} bytes; fixed one-row 64-element profile, exact one-wave/workgroup 64x1x1 and one-block grid with no LDS; target {}; compiler semantics {}; sealed frontend authority {}; selected canonical Kernel IR module `{}` ({} V4 wire bytes) and stopped at the fail-closed source-authenticated boundary; exp implementation and approximation/error contract, NaN/infinity policy, exact-real softmax equivalence, runtime length admission, compiler refinement, final machine-body semantics, memory/race proof, LLVM lowering, OCML bitcode/linking, COMGR, artifact publication, load, and launch remain unauthenticated and were not entered",
+                            collected_row_softmax_v1::COLLECTED_ROW_SOFTMAX_PIPELINE_V1,
+                            root_instance_identity,
+                            kernel_export,
+                            portable_mir_semantic,
+                            collected_row_softmax_v1::ROW_SOFTMAX_EXPLICIT_KERNARG_BYTES_V1,
+                            collected_row_softmax_v1::ROW_SOFTMAX_COMPLETE_KERNARG_BYTES_V1,
+                            collected_row_softmax_v1::EXACT_ROW_SOFTMAX_TARGET_V1,
+                            compiler_semantics,
+                            frontend_authority,
+                            module_id,
+                            canonical_bytes,
+                        )),
+                        Err(error) => tcx.dcx().fatal(format!(
+                            "[rustc-codegen-fe2o3] {} rejected the collected program without fallback: {error}",
+                            collected_row_softmax_v1::COLLECTED_ROW_SOFTMAX_PIPELINE_V1,
                         )),
                     }
                 } else if matches!(
@@ -978,6 +1078,12 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             CodegenPipeline::CollectedScalarGemmV1 => {
                                 Err(amdgpu_llvm::EmitError::Preflight {
                                     reason: "internal error: collected scalar GEMM V1 entered the legacy artifact transaction"
+                                        .to_owned(),
+                                })
+                            }
+                            CodegenPipeline::CollectedRowSoftmaxV1 => {
+                                Err(amdgpu_llvm::EmitError::Preflight {
+                                    reason: "internal error: collected row softmax V1 entered the legacy artifact transaction"
                                         .to_owned(),
                                 })
                             }
@@ -2080,6 +2186,10 @@ mod tests {
             PipelineSelection::from_value(Some(OsStr::new("collected-tiled-gemm-v1"))),
             PipelineSelection::Valid(CodegenPipeline::CollectedTiledGemmV1)
         );
+        assert_eq!(
+            PipelineSelection::from_value(Some(OsStr::new("collected-row-softmax-v1"))),
+            PipelineSelection::Valid(CodegenPipeline::CollectedRowSoftmaxV1)
+        );
 
         for invalid in [
             "",
@@ -2089,6 +2199,9 @@ mod tests {
             "collected-tiled-gemm",
             "collected_tiled_gemm_v1",
             "COLLECTED-TILED-GEMM-V1",
+            "collected-row-softmax",
+            "collected_row_softmax_v1",
+            "COLLECTED-ROW-SOFTMAX-V1",
             "true",
             "1",
         ] {
@@ -2100,6 +2213,7 @@ mod tests {
             assert!(message.contains("kernel-ir-v1"));
             assert!(message.contains("kernel-ir-worker-v2"));
             assert!(message.contains("collected-tiled-gemm-v1"));
+            assert!(message.contains("collected-row-softmax-v1"));
         }
     }
 

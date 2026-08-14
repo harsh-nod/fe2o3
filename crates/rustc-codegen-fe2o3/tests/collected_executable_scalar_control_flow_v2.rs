@@ -30,6 +30,8 @@ const SCALAR_GEMM_PIPELINE: &str = "collected-scalar-gemm-v1";
 const SCALAR_GEMM_FIXTURE: &str = include_str!("../../../examples/scalar_gemm_v1/src/kernel.rs");
 const TILED_GEMM_PIPELINE: &str = "collected-tiled-gemm-v1";
 const TILED_GEMM_FIXTURE: &str = include_str!("fixtures/collected-tiled-gemm-v1/src/lib.rs");
+const ROW_SOFTMAX_PIPELINE: &str = "collected-row-softmax-v1";
+const ROW_SOFTMAX_FIXTURE: &str = include_str!("fixtures/collected-row-softmax-v1/src/lib.rs");
 const BUILD_HELPER_ENV: &str = "FE2O3_SCALAR_CF_ISOLATED_BUILD_HELPER";
 const BUILD_HELPER_SOCKET_ENV: &str = "FE2O3_SCALAR_CF_BUILD_SOCKET_FD";
 const BUILD_HELPER_WORKSPACE_ENV: &str = "FE2O3_SCALAR_CF_BUILD_WORKSPACE";
@@ -951,6 +953,125 @@ fn compile_tiled_gemm(
         .expect("compile tiled GEMM fixture within deadline")
 }
 
+fn compile_row_softmax(
+    workspace: &Path,
+    backend: &PinnedBackend,
+    output: &TestOutputDir,
+    source: &str,
+    target: &str,
+    extra_args: &[&str],
+) -> Output {
+    compile_row_softmax_with_cargo_metadata(
+        workspace,
+        backend,
+        output,
+        source,
+        target,
+        // This keeps the manually frozen fixture namespace internally
+        // consistent. Production admission validates only the token shape.
+        "3a4d867f29d87610",
+        extra_args,
+    )
+}
+
+fn compile_row_softmax_with_cargo_metadata(
+    workspace: &Path,
+    backend: &PinnedBackend,
+    output: &TestOutputDir,
+    source: &str,
+    target: &str,
+    cargo_metadata: &str,
+    extra_args: &[&str],
+) -> Output {
+    build_frontend_dependencies(workspace).expect("build row-softmax frontend dependencies");
+    backend
+        .verify()
+        .expect("sealed backend identity before row-softmax rustc");
+    let source_path = output.0.join("row-softmax-v1.rs");
+    std::fs::write(&source_path, source).expect("write row-softmax fixture");
+    let cargo_target = std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| workspace.join("target"));
+    let device = cargo_target.join("debug/libfe2o3_device.rlib");
+    let host = cargo_target.join("debug/libfe2o3_host.rlib");
+    let manifest_directory =
+        workspace.join("crates/rustc-codegen-fe2o3/tests/fixtures/collected-row-softmax-v1");
+    assert!(device.is_file(), "missing {}", device.display());
+    assert!(host.is_file(), "missing {}", host.display());
+
+    let mut command = Command::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()));
+    command
+        .current_dir(workspace)
+        .arg(&source_path)
+        .arg(format!(
+            "--remap-path-prefix={}=/fe2o3-reviewed-workspace/row-softmax-v1.rs",
+            source_path.display()
+        ))
+        .args([
+            "--edition=2024",
+            "--crate-type",
+            "lib",
+            "--crate-name",
+            "fe2o3_collected_row_softmax_v1_fixture",
+            "--extern",
+        ])
+        .arg(format!("fe2o3_device={}", device.display()))
+        .arg("--extern")
+        .arg(format!("fe2o3_host={}", host.display()))
+        .arg("-L")
+        .arg(format!(
+            "dependency={}",
+            cargo_target.join("debug/deps").display()
+        ))
+        .args(["-C", "overflow-checks=off"])
+        .arg(format!("-Cmetadata={cargo_metadata}"))
+        .args([
+            "-Cmetadata=fe2o3-row-softmax-v1-reviewed",
+            "-Zmir-enable-passes=-JumpThreading",
+        ])
+        .args(extra_args)
+        .arg(format!(
+            "-Zcodegen-backend={}",
+            backend.load_path().display()
+        ))
+        .arg("-o")
+        .arg(output.0.join("row-softmax-v1"))
+        .env("FE2O3_VERBOSE", "1")
+        .env("CARGO_MANIFEST_DIR", manifest_directory)
+        .env(
+            "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2",
+            "c1ab2dc02fa023687ac7394e15746c39668b5d46ad47c40eae012bc3f42d05c0",
+        )
+        .env("FE2O3_TARGET", target)
+        .env("FE2O3_CODEGEN_PIPELINE", ROW_SOFTMAX_PIPELINE)
+        .env("FE2O3_HSACO_DIR", output.0.join("artifacts"));
+    let backend_descriptor = backend.file.as_raw_fd();
+    unsafe {
+        command.pre_exec(move || set_close_on_exec(backend_descriptor, false));
+    }
+    run_bounded(&mut command, COMPILER_TIMEOUT, "row-softmax rustc")
+        .expect("compile row-softmax fixture within deadline")
+}
+
+fn assert_row_softmax_published_nothing(output: &TestOutputDir) {
+    assert!(
+        !output.0.join("row-softmax-v1").exists(),
+        "row-softmax boundary emitted a linked output"
+    );
+    let artifacts = std::fs::read_dir(output.0.join("artifacts"))
+        .expect("read row-softmax artifact directory")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("enumerate row-softmax artifacts");
+    assert!(
+        artifacts.is_empty(),
+        "row-softmax boundary published artifacts: {:?}",
+        artifacts
+            .iter()
+            .map(|entry| entry.path())
+            .collect::<Vec<_>>()
+    );
+}
+
 fn assert_tiled_gemm_published_no_handoff(output: &TestOutputDir) {
     let artifacts = std::fs::read_dir(output.0.join("artifacts"))
         .expect("read tiled GEMM artifact directory")
@@ -1706,6 +1827,199 @@ fn tiled_gemm_v1_source_authentication_and_adversaries_fail_closed() {
         "compiler-semantics adversary minted tiled authority:\n{semantics_stderr}"
     );
     assert_tiled_gemm_published_no_handoff(&semantics_output);
+}
+
+#[test]
+fn row_softmax_v1_source_authentication_and_adversaries_stop_at_canonical_ir() {
+    if isolated_backend_environment_is_unavailable() {
+        return;
+    }
+    let workspace = workspace();
+    let backend = build_backend(&workspace);
+
+    let exact_output = TestOutputDir::new(&workspace);
+    let exact = compile_row_softmax(
+        &workspace,
+        backend,
+        &exact_output,
+        ROW_SOFTMAX_FIXTURE,
+        "gfx942:xnack-",
+        &[],
+    );
+    let exact_stderr = stderr(&exact);
+    assert!(
+        !exact.status.success()
+            && exact_stderr.contains("consumed its private single-use frontend receipt")
+            && exact_stderr.contains("exact ABI input:&[f32], output:DisjointSlice<f32>")
+            && exact_stderr.contains("fixed one-row 64-element profile")
+            && exact_stderr.contains("selected canonical Kernel IR module `fe2o3::row_softmax_v1`")
+            && exact_stderr.contains("stopped at the fail-closed source-authenticated boundary")
+            && exact_stderr.contains("exp implementation and approximation/error contract")
+            && exact_stderr.contains("OCML bitcode/linking")
+            && exact_stderr.contains("COMGR")
+            && !exact_stderr.contains("rejected the collected program without fallback")
+            && !exact_stderr.contains("__ocml_exp_f32"),
+        "reviewed row softmax missed its canonical boundary:\n{exact_stderr}"
+    );
+    assert_row_softmax_published_nothing(&exact_output);
+
+    let arithmetic_source = ROW_SOFTMAX_FIXTURE.replace("value > maximum", "value >= maximum");
+    assert_ne!(arithmetic_source, ROW_SOFTMAX_FIXTURE);
+    let arithmetic_output = TestOutputDir::new(&workspace);
+    let arithmetic = compile_row_softmax(
+        &workspace,
+        backend,
+        &arithmetic_output,
+        &arithmetic_source,
+        "gfx942:xnack-",
+        &[],
+    );
+    let arithmetic_stderr = stderr(&arithmetic);
+    assert!(
+        !arithmetic.status.success()
+            && arithmetic_stderr.contains("portable MIR identity mismatch")
+            && !arithmetic_stderr.contains("selected canonical Kernel IR module"),
+        "same-name arithmetic mutation minted row-softmax authority:\n{arithmetic_stderr}"
+    );
+    assert_row_softmax_published_nothing(&arithmetic_output);
+
+    let extent_source = ROW_SOFTMAX_FIXTURE.replace(
+        "const ROW_ELEMENTS: usize = 64;",
+        "const ROW_ELEMENTS: usize = 63;",
+    );
+    assert_ne!(extent_source, ROW_SOFTMAX_FIXTURE);
+    let extent_output = TestOutputDir::new(&workspace);
+    let extent = compile_row_softmax(
+        &workspace,
+        backend,
+        &extent_output,
+        &extent_source,
+        "gfx942:xnack-",
+        &[],
+    );
+    let extent_stderr = stderr(&extent);
+    assert!(
+        !extent.status.success()
+            && extent_stderr.contains("portable MIR identity mismatch")
+            && !extent_stderr.contains("selected canonical Kernel IR module"),
+        "63-element source mutation minted row-softmax authority:\n{extent_stderr}"
+    );
+    assert_row_softmax_published_nothing(&extent_output);
+
+    let helper_source = ROW_SOFTMAX_FIXTURE
+        .replace("math.exp_f32(", "exp_lookalike(&math, ")
+        .replacen(
+            "const ROW_ELEMENTS: usize = 64;",
+            "const ROW_ELEMENTS: usize = 64;\n\nfn exp_lookalike(math: &DeviceMath, value: f32) -> f32 {\n    math.exp_f32(value)\n}",
+            1,
+        );
+    assert_ne!(helper_source, ROW_SOFTMAX_FIXTURE);
+    let helper_output = TestOutputDir::new(&workspace);
+    let helper = compile_row_softmax(
+        &workspace,
+        backend,
+        &helper_output,
+        &helper_source,
+        "gfx942:xnack-",
+        &[],
+    );
+    let helper_stderr = stderr(&helper);
+    assert!(
+        !helper.status.success()
+            && helper_stderr.contains("requires exactly one collected function and no helpers")
+            && !helper_stderr.contains("selected canonical Kernel IR module"),
+        "lookalike exp helper entered the reviewed closure:\n{helper_stderr}"
+    );
+    assert_row_softmax_published_nothing(&helper_output);
+
+    let abi_source = ROW_SOFTMAX_FIXTURE
+        .replacen("input: &[f32]", "input: &mut [f32]", 1)
+        .replace(
+            "fn(&[f32], DisjointSlice<f32>)",
+            "fn(&mut [f32], DisjointSlice<f32>)",
+        );
+    assert_ne!(abi_source, ROW_SOFTMAX_FIXTURE);
+    let abi_output = TestOutputDir::new(&workspace);
+    let abi = compile_row_softmax(
+        &workspace,
+        backend,
+        &abi_output,
+        &abi_source,
+        "gfx942:xnack-",
+        &[],
+    );
+    let abi_stderr = stderr(&abi);
+    assert!(
+        !abi.status.success()
+            && (abi_stderr.contains("ABI mismatch")
+                || abi_stderr.contains("argument kinds")
+                || abi_stderr.contains("generated host-contract identity")
+                || abi_stderr.contains("#[kernel(typed)] requires"))
+            && !abi_stderr.contains("selected canonical Kernel IR module"),
+        "ABI adversary minted row-softmax authority:\n{abi_stderr}"
+    );
+    assert_row_softmax_published_nothing(&abi_output);
+
+    let contract_source = ROW_SOFTMAX_FIXTURE.replacen(
+        "3, 0, 0, 0, 64, 0, 0,\n    0, 1",
+        "3, 0, 0, 0, 32, 0, 0,\n    0, 1",
+        1,
+    );
+    assert_ne!(contract_source, ROW_SOFTMAX_FIXTURE);
+    let contract_output = TestOutputDir::new(&workspace);
+    let contract = compile_row_softmax(
+        &workspace,
+        backend,
+        &contract_output,
+        &contract_source,
+        "gfx942:xnack-",
+        &[],
+    );
+    let contract_stderr = stderr(&contract);
+    assert!(
+        !contract.status.success()
+            && contract_stderr.contains("frontend contract bytes do not match")
+            && !contract_stderr.contains("selected canonical Kernel IR module"),
+        "frontend-contract adversary minted row-softmax authority:\n{contract_stderr}"
+    );
+    assert_row_softmax_published_nothing(&contract_output);
+
+    let target_output = TestOutputDir::new(&workspace);
+    let target = compile_row_softmax(
+        &workspace,
+        backend,
+        &target_output,
+        ROW_SOFTMAX_FIXTURE,
+        "gfx942:xnack+",
+        &[],
+    );
+    let target_stderr = stderr(&target);
+    assert!(
+        !target.status.success()
+            && target_stderr.contains("requires exact target `gfx942:xnack-`")
+            && !target_stderr.contains("selected canonical Kernel IR module"),
+        "wrong target minted row-softmax authority:\n{target_stderr}"
+    );
+    assert_row_softmax_published_nothing(&target_output);
+
+    let semantics_output = TestOutputDir::new(&workspace);
+    let semantics = compile_row_softmax(
+        &workspace,
+        backend,
+        &semantics_output,
+        ROW_SOFTMAX_FIXTURE,
+        "gfx942:xnack-",
+        &["-Copt-level=1"],
+    );
+    let semantics_stderr = stderr(&semantics);
+    assert!(
+        !semantics.status.success()
+            && semantics_stderr.contains("compiler semantics mismatch")
+            && semantics_stderr.contains("rustc optimization must be No/0")
+            && !semantics_stderr.contains("selected canonical Kernel IR module"),
+        "compiler-semantics adversary minted row-softmax authority:\n{semantics_stderr}"
+    );
+    assert_row_softmax_published_nothing(&semantics_output);
 }
 
 #[test]
