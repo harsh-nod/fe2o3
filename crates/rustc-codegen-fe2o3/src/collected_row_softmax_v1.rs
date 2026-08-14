@@ -1911,40 +1911,107 @@ mod tests {
     }
 
     #[test]
-    fn authority_commitment_binds_every_field_and_copied_digests_fail_closed() {
+    fn resigned_receipt_mutations_fail_at_the_exact_individual_binding() {
         let baseline_receipt = exact_frontend_receipt_for_test();
         let baseline = collected_authority_commitment(
             baseline_receipt.authority.as_ref().expect("test authority"),
         );
-        let mutations: [fn(&mut RowSoftmaxFrontendAuthorityV1); 17] = [
-            |value| value.portable_mir_semantic_commitment[0] ^= 1,
-            |value| value.compiler_semantics_commitment[0] ^= 1,
-            |value| value.canonical_module_commitment[0] ^= 1,
-            |value| value.root_instance_identity.push_str("_other"),
-            |value| value.kernel_export.push_str("_other"),
-            |value| value.target = "gfx942:xnack+".to_owned(),
-            |value| value.code_object_version = 5,
-            |value| value.explicit_kernarg_bytes = 31,
-            |value| value.complete_kernarg_bytes = 287,
-            |value| value.row_elements = 63,
-            |value| value.abi_binding_commitment[0] ^= 1,
-            |value| value.fn_abi_binding_commitment[0] ^= 1,
-            |value| value.launch_binding_commitment[0] ^= 1,
-            |value| value.correspondence_commitment[0] ^= 1,
-            |value| value.exponential_boundary_commitment[0] ^= 1,
-            |value| value.frontend_contract_commitment[0] ^= 1,
-            |value| {
-                value.cargo_metadata_build_observation.ordered_tokens[0] =
-                    "fedcba9876543210".to_owned()
-            },
+        let mutations: [(fn(&mut RowSoftmaxFrontendAuthorityV1), &'static str); 18] = [
+            (
+                |value| value.portable_mir_semantic_commitment[0] ^= 1,
+                "portable MIR",
+            ),
+            (
+                |value| value.compiler_semantics_commitment[0] ^= 1,
+                "compiler semantics",
+            ),
+            (
+                |value| value.canonical_module_commitment[0] ^= 1,
+                "canonical module",
+            ),
+            (
+                |value| value.root_instance_identity.push_str("_other"),
+                "root instance",
+            ),
+            (
+                |value| value.kernel_export.push_str("_other"),
+                "kernel export",
+            ),
+            (|value| value.target = "gfx942:xnack+".to_owned(), "target"),
+            (|value| value.code_object_version = 5, "code-object version"),
+            (
+                |value| value.explicit_kernarg_bytes = 31,
+                "kernarg ABI sizes",
+            ),
+            (
+                |value| value.complete_kernarg_bytes = 287,
+                "kernarg ABI sizes",
+            ),
+            (|value| value.row_elements = 63, "row extent"),
+            (|value| value.abi_binding_commitment[0] ^= 1, "explicit ABI"),
+            (
+                |value| value.fn_abi_binding_commitment[0] ^= 1,
+                "rustc FnAbi",
+            ),
+            (
+                |value| value.launch_binding_commitment[0] ^= 1,
+                "launch contract",
+            ),
+            (
+                |value| value.correspondence_commitment[0] ^= 1,
+                "reviewed source-to-canonical-module correspondence",
+            ),
+            (
+                |value| value.exponential_boundary_commitment[0] ^= 1,
+                "unresolved exponential boundary",
+            ),
+            (
+                |value| value.frontend_contract_commitment[0] ^= 1,
+                "frontend contract",
+            ),
+            (
+                |value| {
+                    value.cargo_metadata_build_observation.ordered_tokens[0] =
+                        "fedcba9876543210".to_owned()
+                },
+                "ordered Cargo metadata build observation",
+            ),
+            (
+                |value| value.cargo_metadata_build_observation.commitment[0] ^= 1,
+                "ordered Cargo metadata build observation",
+            ),
         ];
-        for mutate in mutations {
+        for (mutate, expected_field) in mutations {
             let mut receipt = exact_frontend_receipt_for_test();
             let authority = receipt.authority.as_mut().expect("test authority");
             mutate(authority);
             assert_ne!(baseline, collected_authority_commitment(authority));
-            assert!(receipt.consume().is_err());
+            authority.authority_commitment = collected_authority_commitment(authority);
+            match receipt.consume() {
+                Err(CollectedRowSoftmaxErrorV1::ReceiptBindingMismatch { field }) => {
+                    assert_eq!(field, expected_field)
+                }
+                other => panic!(
+                    "re-signed mutation for {expected_field:?} reached the wrong result: {other:?}"
+                ),
+            }
         }
+    }
+
+    #[test]
+    fn stale_outer_authority_commitment_fails_at_that_binding() {
+        let mut receipt = exact_frontend_receipt_for_test();
+        receipt
+            .authority
+            .as_mut()
+            .expect("test authority")
+            .authority_commitment[0] ^= 1;
+        assert!(matches!(
+            receipt.consume(),
+            Err(CollectedRowSoftmaxErrorV1::ReceiptBindingMismatch {
+                field: "authority commitment"
+            })
+        ));
     }
 
     #[test]
