@@ -18,6 +18,7 @@ mod external_device_library_manifest;
 mod external_device_library_provider_set;
 mod module_handoff;
 mod module_handoff_v2;
+mod row_softmax_sections;
 mod symbol_manifest;
 
 pub use descriptor_source::{
@@ -52,6 +53,13 @@ pub use module_handoff::{
 pub use module_handoff_v2::{
     CompilerModuleHandoffErrorV2, CompilerModuleHandoffIdentityV2, CompilerModuleHandoffPartsV2,
     CompilerModuleHandoffV2, MAX_COMPILER_MODULE_HANDOFF_BYTES_V2,
+};
+pub use row_softmax_sections::{
+    DecodedRowSoftmaxCompilerSectionsV1, MAX_ROW_SOFTMAX_AUTHORITY_TRANSCRIPT_BYTES_V1,
+    ROW_SOFTMAX_AUTHORITY_BYTES_V1, ROW_SOFTMAX_AUTHORITY_SECTION_NAME_V1,
+    ROW_SOFTMAX_AUTHORITY_TRANSCRIPT_SECTION_NAME_V1, ROW_SOFTMAX_EXPONENTIAL_BOUNDARY_BYTES_V1,
+    ROW_SOFTMAX_EXPONENTIAL_BOUNDARY_SECTION_NAME_V1, RowSoftmaxCompilerSectionsErrorV1,
+    decode_row_softmax_compiler_sections_v1,
 };
 pub use symbol_manifest::{
     CompilerModuleSymbolManifestErrorV1, CompilerModuleSymbolManifestIdentityV1,
