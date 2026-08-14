@@ -15,6 +15,9 @@ readonly REPLACED_SYMLINK="${TEST_ROOT}/replaced-symlink"
 readonly SYMLINK_VICTIM="${TEST_ROOT}/symlink-victim"
 readonly VERIFY_SYMLINK="${TEST_ROOT}/verify-symlink"
 readonly PUBLIC_OUTPUT_DIRECTORY="${TEST_ROOT}/public-output"
+readonly FILE_OVERLAP_ELF="${TEST_ROOT}/file-overlap-elf"
+readonly VIRTUAL_OVERLAP_ELF="${TEST_ROOT}/virtual-overlap-elf"
+readonly WRITABLE_EXECUTABLE_ELF="${TEST_ROOT}/writable-executable-elf"
 readonly TEST_TRAMPOLINE="${TEST_ROOT}/test-trampoline"
 readonly WRAPPER="${TEST_ROOT}/cargo-fe2o3-wrapper"
 readonly ALTERNATE_WRAPPER="${TEST_ROOT}/alternate-wrapper"
@@ -51,6 +54,48 @@ expect_build_failure() {
     /usr/bin/sed -n '1,120p' "${output}" >&2
     fail "build failure did not contain: ${expected}"
   }
+}
+
+make_load_mutant() {
+  local source="$1"
+  local destination="$2"
+  local mutation="$3"
+  /usr/bin/cp -- "${source}" "${destination}"
+  chmod 0755 "${destination}"
+  /usr/bin/python3 - "${destination}" "${mutation}" <<'PY'
+import struct
+import sys
+
+path, mutation = sys.argv[1:]
+with open(path, "r+b") as stream:
+    image = bytearray(stream.read())
+    assert image[:4] == b"\x7fELF" and image[4] == 2 and image[5] == 1
+    program_offset = struct.unpack_from("<Q", image, 32)[0]
+    program_size = struct.unpack_from("<H", image, 54)[0]
+    program_count = struct.unpack_from("<H", image, 56)[0]
+    loads = []
+    for index in range(program_count):
+        offset = program_offset + index * program_size
+        if struct.unpack_from("<I", image, offset)[0] == 1:
+            loads.append(offset)
+    assert len(loads) == 4
+    first, second = loads[:2]
+    if mutation == "file-overlap":
+        struct.pack_into("<Q", image, second + 8,
+                         struct.unpack_from("<Q", image, first + 8)[0])
+    elif mutation == "virtual-overlap":
+        first_virtual = struct.unpack_from("<Q", image, first + 16)[0]
+        struct.pack_into("<Q", image, second + 16, first_virtual)
+        struct.pack_into("<Q", image, second + 24, first_virtual)
+    elif mutation == "writable-executable":
+        struct.pack_into("<I", image, second + 4, 7)
+    else:
+        raise AssertionError(mutation)
+    stream.seek(0)
+    stream.write(image)
+    stream.truncate()
+PY
+  chmod 0555 "${destination}"
 }
 
 assert_test_elf() {
@@ -546,6 +591,17 @@ run_watchdog "${BUILD}" "${PRODUCTION_TWO}"
 cmp --silent -- "${PRODUCTION_ONE}" "${PRODUCTION_TWO}" ||
   fail 'production trampoline build is not reproducible across output names'
 run_watchdog "${BUILD}" --verify "${PRODUCTION_ONE}"
+
+make_load_mutant "${PRODUCTION_ONE}" "${FILE_OVERLAP_ELF}" file-overlap
+expect_build_failure 'rustc trampoline PT_LOAD file ranges overlap' \
+  "${BUILD}" --verify "${FILE_OVERLAP_ELF}"
+make_load_mutant "${PRODUCTION_ONE}" "${VIRTUAL_OVERLAP_ELF}" virtual-overlap
+expect_build_failure 'rustc trampoline PT_LOAD virtual ranges overlap' \
+  "${BUILD}" --verify "${VIRTUAL_OVERLAP_ELF}"
+make_load_mutant "${PRODUCTION_ONE}" "${WRITABLE_EXECUTABLE_ELF}" \
+  writable-executable
+expect_build_failure 'rustc trampoline PT_LOAD is writable and executable' \
+  "${BUILD}" --verify "${WRITABLE_EXECUTABLE_ELF}"
 
 mkdir -- "${PUBLIC_OUTPUT_DIRECTORY}"
 chmod 0755 "${PUBLIC_OUTPUT_DIRECTORY}"

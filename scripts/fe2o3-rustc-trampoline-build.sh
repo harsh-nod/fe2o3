@@ -138,18 +138,78 @@ verify_elf() {
   # shellcheck disable=SC2016
   if ! printf '%s\n' "${program_headers}" |
     run_clean /usr/bin/awk '
+      function hexadecimal(value, result, index_value, digit) {
+        value = tolower(value)
+        sub(/^0x/, "", value)
+        if (value == "") return -1
+        result = 0
+        for (index_value = 1; index_value <= length(value); ++index_value) {
+          digit = index("0123456789abcdef", substr(value, index_value, 1))
+          if (digit == 0) return -1
+          result = (result * 16) + digit - 1
+        }
+        return result
+      }
+      function power_of_two(value) {
+        if (value < 1) return 0
+        while (value > 1) {
+          if (value % 2 != 0) return 0
+          value /= 2
+        }
+        return 1
+      }
+      function overlaps(left_start, left_end, right_start, right_end) {
+        return left_start < right_end && right_start < left_end
+      }
       function flags(first, last, value, position) {
         value = ""
         for (position = first; position <= last; ++position) value = value $position
         return value
       }
+      BEGIN { loads = 0 }
       $1 == "LOAD" {
-        ++loads
+        offset = hexadecimal($2)
+        virtual_address = hexadecimal($3)
+        file_size = hexadecimal($5)
+        memory_size = hexadecimal($6)
+        alignment = hexadecimal($NF)
         value = flags(7, NF - 1)
-        if (value != "R" && value != "RE" && value != "RW") bad = 1
-        if (index(value, "W") && index(value, "E")) bad = 1
+        if (offset < 0 || virtual_address < 0 || file_size < 0 ||
+            memory_size < 0 || alignment < 0 || file_size > memory_size ||
+            !power_of_two(alignment) ||
+            offset % alignment != virtual_address % alignment) {
+          print "rustc trampoline PT_LOAD size or alignment is invalid" > "/dev/stderr"
+          bad = 1
+        }
+        if (value != "R" && value != "RE" && value != "RW") {
+          print "rustc trampoline PT_LOAD permissions are outside policy" > "/dev/stderr"
+          bad = 1
+        }
+        if (index(value, "W") && index(value, "E")) {
+          print "rustc trampoline PT_LOAD is writable and executable" > "/dev/stderr"
+          bad = 1
+        }
+        file_start[loads] = offset
+        file_end[loads] = offset + file_size
+        virtual_start[loads] = virtual_address
+        virtual_end[loads] = virtual_address + memory_size
+        for (previous = 0; previous < loads; ++previous) {
+          if (file_size > 0 && file_end[previous] > file_start[previous] &&
+              overlaps(file_start[loads], file_end[loads],
+                       file_start[previous], file_end[previous])) {
+            print "rustc trampoline PT_LOAD file ranges overlap" > "/dev/stderr"
+            bad = 1
+          }
+          if (memory_size > 0 && virtual_end[previous] > virtual_start[previous] &&
+              overlaps(virtual_start[loads], virtual_end[loads],
+                       virtual_start[previous], virtual_end[previous])) {
+            print "rustc trampoline PT_LOAD virtual ranges overlap" > "/dev/stderr"
+            bad = 1
+          }
+        }
         if (value == "RE") ++executable
         if (value == "RW") ++writable
+        ++loads
       }
       $1 == "GNU_RELRO" { ++relro; if (flags(7, NF - 1) != "R") bad = 1 }
       $1 == "GNU_STACK" { ++stack; if (flags(7, NF - 1) != "RW") bad = 1 }
@@ -159,7 +219,7 @@ verify_elf() {
                relro == 1 && stack == 1 && !bad)
       }
     '; then
-    fail 'rustc trampoline program headers violate W^X, RELRO, or stack policy'
+    fail 'rustc trampoline program headers violate range, W^X, RELRO, or stack policy'
   fi
   if printf '%s\n' "${dynamic_tags}" |
     run_clean /usr/bin/grep -E '\((NEEDED|RPATH|RUNPATH)\)' >/dev/null; then
