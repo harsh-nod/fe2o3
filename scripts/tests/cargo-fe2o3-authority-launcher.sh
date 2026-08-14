@@ -235,6 +235,13 @@ assert_recorded_processes_gone() {
   for process_id in "${pids[@]}"; do
     [[ "${process_id}" =~ ^[1-9][0-9]*$ ]] ||
       fail "${name} recorded malformed PID ${process_id}"
+    for _ in {1..200}; do
+      if [[ ! -e "/proc/${process_id}" ]] &&
+        ! kill -0 "${process_id}" 2>/dev/null; then
+        break
+      fi
+      sleep 0.005
+    done
     if [[ -e "/proc/${process_id}" ]] ||
       kill -0 "${process_id}" 2>/dev/null; then
       fail "${name} leaked descendant process ${process_id}"
