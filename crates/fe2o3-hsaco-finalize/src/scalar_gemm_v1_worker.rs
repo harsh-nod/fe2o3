@@ -29,7 +29,7 @@ const SCALAR_GEMM_V1_EXPLICIT_KERNARG_BYTES: u64 = 64;
 const SCALAR_GEMM_V1_TOTAL_KERNARG_BYTES: u64 = 320;
 const SCALAR_GEMM_V1_SUCCESS_DIAGNOSTICS: [&str; 5] = [
     "post_link.check=exports status=ok symbols=[scalar_gemm_v1,scalar_gemm_v1.kd]",
-    "post_link.check=metadata status=ok kernels=1 target=amdgcn-amd-amdhsa--gfx942:xnack-",
+    "post_link.check=metadata status=ok kernels=1 target=amdgcn-amd-amdhsa--gfx942%3Axnack-",
     "post_link.check=target status=ok arch=gfx942 code_object_version=6 e_flags=0x64c",
     "post_link.check=unresolved status=ok symbols=[]",
     "post_link.kernel name=scalar_gemm_v1 symbol=scalar_gemm_v1.kd kernarg_size=320 group_size=0 private_size=0 kernarg_align=8 wavefront_size=64 max_workgroup_size=256 reqd_workgroup_size=[256,1,1]",

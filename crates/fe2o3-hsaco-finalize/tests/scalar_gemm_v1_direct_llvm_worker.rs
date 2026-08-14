@@ -139,8 +139,10 @@ fn produce_and_inspect(worker: &PinnedWorkerV1) -> Vec<u8> {
         WorkerExecutionLimitsV1::default(),
     )
     .expect("direct LLVM/LLD scalar GEMM production");
-    let inspected = inspect_scalar_gemm_v1_worker_v2_hsaco_v1(evidence)
-        .expect("exact scalar GEMM Worker V2 inspection");
+    let diagnostics = evidence.authorized().response().diagnostics().to_vec();
+    let inspected = inspect_scalar_gemm_v1_worker_v2_hsaco_v1(evidence).unwrap_or_else(|error| {
+        panic!("exact scalar GEMM Worker V2 inspection: {error:?}; diagnostics={diagnostics:?}")
+    });
 
     assert_eq!(inspected.target().to_string(), TARGET);
     assert_eq!(inspected.code_object_version(), CodeObjectVersion::V6);
