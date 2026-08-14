@@ -18,6 +18,7 @@ use fe2o3_kernel_ir::{
     IntrinsicOperation, KernelId, MemoryAccess, Module, Operation, OperationKind, TargetCapability,
     Terminator, Type, ValueDef, ValueId, WorkgroupSize, verify_module,
 };
+use sha2::{Digest as _, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
@@ -28,6 +29,10 @@ const VECADD_KERNEL: &str = "vecadd";
 const WORKGROUP_X: u32 = 256;
 pub(crate) const TILED_GEMM_FRONTEND_TEST_LLVM_FILE: &str =
     "tiled_gemm_frontend_v1.imported.gfx942-xnack-.ll";
+const REVIEWED_ROW_SOFTMAX_V1_LLVM_SHA256: [u8; 32] = [
+    0x0a, 0x33, 0x13, 0x67, 0x53, 0x44, 0x43, 0x7b, 0xc7, 0xb8, 0x94, 0xad, 0x2f, 0x4d, 0xad, 0xb3,
+    0x81, 0x07, 0xd9, 0x02, 0x96, 0xa9, 0x66, 0x5b, 0x76, 0x32, 0x34, 0xac, 0xd2, 0x40, 0x5a, 0xcc,
+];
 
 const MAX_COMPILER_MODULE_ID_BYTES: usize = 256;
 const MAX_COMPILER_MODULE_SYMBOL_BYTES: usize = 256;
@@ -123,6 +128,7 @@ pub(crate) enum CompilerModuleConstructionError {
     SourceDebug(crate::source_debug::SourceDebugError),
     ScalarGemmLowering(String),
     TiledGemmLowering(String),
+    RowSoftmaxLowering(String),
     Lowering(dialect_amdgcn::LoweringErrors),
 }
 
@@ -156,6 +162,9 @@ impl fmt::Display for CompilerModuleConstructionError {
             }
             Self::TiledGemmLowering(error) => {
                 write!(formatter, "exact tiled GEMM lowering rejected: {error}")
+            }
+            Self::RowSoftmaxLowering(error) => {
+                write!(formatter, "exact row-softmax lowering rejected: {error}")
             }
             Self::Lowering(error) => write!(formatter, "{error}"),
         }
@@ -367,6 +376,58 @@ pub(crate) fn construct_inert_tiled_gemm_v1_module_text(
     })
 }
 
+/// Lowers only the source-authenticated canonical row-softmax graph through
+/// the existing generic gfx942 dialect path.
+///
+/// The result retains exactly one unresolved OCML import. This function does
+/// not locate OCML bitcode, invoke a worker, link, or construct an artifact.
+pub(crate) fn construct_inert_row_softmax_v1_module_text(
+    module: &Module,
+) -> Result<InertCompilerModuleTextV1, CompilerModuleConstructionError> {
+    enforce_compiler_module_bounds(module)?;
+    if module != &crate::collected_row_softmax_v1::canonical_row_softmax_v1_module() {
+        return Err(CompilerModuleConstructionError::RowSoftmaxLowering(
+            "module differs from the reviewed canonical row_softmax_v1 graph".to_owned(),
+        ));
+    }
+    let llvm_ir = dialect_amdgcn::lower_device_module_to_gfx942_xnack_minus_llvm_ir(module)
+        .map_err(CompilerModuleConstructionError::Lowering)?;
+    if <[u8; 32]>::from(Sha256::digest(llvm_ir.as_bytes())) != REVIEWED_ROW_SOFTMAX_V1_LLVM_SHA256 {
+        return Err(CompilerModuleConstructionError::RowSoftmaxLowering(
+            "generic gfx942 LLVM digest differs from the reviewed row_softmax_v1 lowering"
+                .to_owned(),
+        ));
+    }
+    let declaration = "declare float @__ocml_exp_f32(float)";
+    let call = "call float @__ocml_exp_f32(float ";
+    if llvm_ir.matches(declaration).count() != 1
+        || llvm_ir.matches(call).count() != 2
+        || llvm_ir.contains("__fe2o3_ir_float_v1_exp_f32")
+    {
+        return Err(CompilerModuleConstructionError::RowSoftmaxLowering(
+            "generic gfx942 lowering did not preserve the exact two-call OCML exp closure"
+                .to_owned(),
+        ));
+    }
+
+    Ok(InertCompilerModuleTextV1 {
+        llvm_ir,
+        kernel_entries: vec![
+            crate::collected_row_softmax_v1::ROW_SOFTMAX_KERNEL_SYMBOL_V1.to_owned(),
+        ],
+        device_definitions: Vec::new(),
+        internal_helpers: Vec::new(),
+        device_ffi_exports: Vec::new(),
+        external_declarations: vec!["__ocml_exp_f32".to_owned()],
+        descriptor_source_identity: None,
+        unbound_target_properties: [
+            UnboundCompilerModuleTargetPropertyV1::DataLayout,
+            UnboundCompilerModuleTargetPropertyV1::TargetProcessor,
+            UnboundCompilerModuleTargetPropertyV1::CodeObjectVersion,
+        ],
+    })
+}
+
 fn ocml_link_imports(module: &Module) -> impl Iterator<Item = &'static str> + '_ {
     module.functions.iter().filter_map(|function| {
         let FloatOperation::F32Math {
@@ -480,6 +541,30 @@ pub(crate) fn bind_tiled_gemm_frontend_authority_v1(
     append_module_asm_bytes(&mut module.llvm_ir, &authority);
     enforce_source_debug_text_bound(&module.llvm_ir)?;
     Ok(module)
+}
+
+/// Binds the private row frontend authority and the retained abstract-exp proof
+/// boundary into distinct compiler-owned, non-allocatable sections.
+pub(crate) fn bind_row_softmax_frontend_authority_v1(
+    mut module: InertCompilerModuleTextV1,
+    authority: [u8; 32],
+    exponential_boundary: [u8; 32],
+) -> Result<InertCompilerModuleTextV1, CompilerModuleConstructionError> {
+    append_commitment_section(&mut module.llvm_ir, ".fe2o3.row-auth.v1", &authority);
+    append_commitment_section(
+        &mut module.llvm_ir,
+        ".fe2o3.row-exp.v1",
+        &exponential_boundary,
+    );
+    enforce_source_debug_text_bound(&module.llvm_ir)?;
+    Ok(module)
+}
+
+fn append_commitment_section(llvm_ir: &mut String, section: &str, bytes: &[u8]) {
+    llvm_ir.push_str("\nmodule asm \".section ");
+    llvm_ir.push_str(section);
+    llvm_ir.push_str(",\\22\\22,@progbits\"\nmodule asm \".balign 8\"\n");
+    append_module_asm_bytes(llvm_ir, bytes);
 }
 
 fn append_descriptor_module_assembly(llvm_ir: &mut String, bytes: &[u8]) {
@@ -2866,6 +2951,66 @@ mod tests {
         assert!(matches!(
             result,
             Err(CompilerModuleConstructionError::Lowering(_))
+        ));
+    }
+
+    #[test]
+    fn exact_row_softmax_uses_only_the_generic_gfx942_ocml_exp_lowering() {
+        let module = crate::collected_row_softmax_v1::canonical_row_softmax_v1_module();
+        let first = construct_inert_row_softmax_v1_module_text(&module).unwrap();
+        let second = construct_inert_row_softmax_v1_module_text(&module).unwrap();
+        assert_eq!(
+            <[u8; 32]>::from(Sha256::digest(first.llvm_ir().as_bytes())),
+            REVIEWED_ROW_SOFTMAX_V1_LLVM_SHA256,
+        );
+        assert_eq!(first, second);
+        assert_eq!(first.kernel_entries(), &["row_softmax_v1"]);
+        assert_eq!(first.external_declarations(), &["__ocml_exp_f32"]);
+        assert!(first.internal_helpers().is_empty());
+        assert!(first.device_ffi_exports().is_empty());
+        assert_eq!(
+            first
+                .llvm_ir()
+                .matches("declare float @__ocml_exp_f32(float)")
+                .count(),
+            1
+        );
+        assert_eq!(
+            first
+                .llvm_ir()
+                .matches("call float @__ocml_exp_f32(float ")
+                .count(),
+            2
+        );
+
+        let mut renamed = module;
+        renamed.id = "fe2o3::row_softmax_v1_substitution".into();
+        assert!(matches!(
+            construct_inert_row_softmax_v1_module_text(&renamed),
+            Err(CompilerModuleConstructionError::RowSoftmaxLowering(_))
+        ));
+    }
+
+    #[test]
+    fn row_softmax_module_role_closure_rejects_import_substitutions() {
+        let module = crate::collected_row_softmax_v1::canonical_row_softmax_v1_module();
+        let lowered = construct_inert_row_softmax_v1_module_text(&module).unwrap();
+        let descriptor = crate::compiler_descriptor::row_softmax_v1_descriptor_source_for_test();
+        let exact = bind_compiler_descriptor_source_v1(lowered, &descriptor).unwrap();
+        crate::worker_v2_producer::validate_exact_row_softmax_module_closure(&exact).unwrap();
+
+        let mut omitted = exact.clone();
+        omitted.external_declarations.clear();
+        assert!(matches!(
+            crate::worker_v2_producer::validate_exact_row_softmax_module_closure(&omitted),
+            Err(crate::worker_v2_producer::WorkerV2ProducerError::RowSoftmaxClosureMismatch)
+        ));
+
+        let mut substituted = exact;
+        substituted.external_declarations = vec!["__ocml_exp2_f32".to_owned()];
+        assert!(matches!(
+            crate::worker_v2_producer::validate_exact_row_softmax_module_closure(&substituted),
+            Err(crate::worker_v2_producer::WorkerV2ProducerError::RowSoftmaxClosureMismatch)
         ));
     }
 

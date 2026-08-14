@@ -311,9 +311,12 @@ pub(crate) fn construct_compiler_descriptor_source_v1(
         module,
         compiler_module,
         typed_roots,
-        WORKGROUP_X,
-        u32::MAX,
-        false,
+        DescriptorConstructionProfileV1 {
+            workgroup_x: WORKGROUP_X,
+            max_grid_x: u32::MAX,
+            allow_exact_tiled_matrix: false,
+            producer_version: "typed-general-gfx942-cov6-v1",
+        },
     )
 }
 
@@ -336,10 +339,48 @@ pub(crate) fn construct_tiled_gemm_v1_compiler_descriptor_source_v1(
         module,
         compiler_module,
         typed_roots,
-        fe2o3_kernel_ir::TILED_GEMM_V1_LANES,
-        1,
-        true,
+        DescriptorConstructionProfileV1 {
+            workgroup_x: fe2o3_kernel_ir::TILED_GEMM_V1_LANES,
+            max_grid_x: 1,
+            allow_exact_tiled_matrix: true,
+            producer_version: "typed-tiled-gemm-gfx942-cov6-v1",
+        },
     )
+}
+
+/// Constructs the exact two-slice WG64 row-softmax descriptor source.
+///
+/// The generic descriptor path remains WG256. This profile is reachable only
+/// for the private canonical row-softmax graph selected by rustc admission.
+pub(crate) fn construct_row_softmax_v1_compiler_descriptor_source_v1(
+    envelope: &CompilerFfiEnvelopeV1,
+    module: &Module,
+    compiler_module: &InertCompilerModuleTextV1,
+    typed_roots: &[TypedDescriptorRootV1],
+) -> Result<Option<CompilerDescriptorSourceV1>, CompilerDescriptorError> {
+    if module != &crate::collected_row_softmax_v1::canonical_row_softmax_v1_module() {
+        return Err(CompilerDescriptorError::NonCanonicalRowSoftmaxModule);
+    }
+    construct_compiler_descriptor_source_with_profile_v1(
+        envelope,
+        module,
+        compiler_module,
+        typed_roots,
+        DescriptorConstructionProfileV1 {
+            workgroup_x: crate::collected_row_softmax_v1::ROW_SOFTMAX_ELEMENTS_V1,
+            max_grid_x: 1,
+            allow_exact_tiled_matrix: false,
+            producer_version: "typed-row-softmax-gfx942-cov6-v1",
+        },
+    )
+}
+
+#[derive(Clone, Copy)]
+struct DescriptorConstructionProfileV1 {
+    workgroup_x: u32,
+    max_grid_x: u32,
+    allow_exact_tiled_matrix: bool,
+    producer_version: &'static str,
 }
 
 fn construct_compiler_descriptor_source_with_profile_v1(
@@ -347,9 +388,7 @@ fn construct_compiler_descriptor_source_with_profile_v1(
     module: &Module,
     compiler_module: &InertCompilerModuleTextV1,
     typed_roots: &[TypedDescriptorRootV1],
-    workgroup_x: u32,
-    max_grid_x: u32,
-    allow_exact_tiled_matrix: bool,
+    profile: DescriptorConstructionProfileV1,
 ) -> Result<Option<CompilerDescriptorSourceV1>, CompilerDescriptorError> {
     if typed_roots.is_empty() {
         return Ok(None);
@@ -391,7 +430,7 @@ fn construct_compiler_descriptor_source_with_profile_v1(
         device_layouts.push(layout);
     }
 
-    let module_capabilities = descriptor_capabilities(module, allow_exact_tiled_matrix)?;
+    let module_capabilities = descriptor_capabilities(module, profile.allow_exact_tiled_matrix)?;
     let mut seen_exports = BTreeSet::new();
     let mut kernels = Vec::with_capacity(typed_roots.len());
     for root in typed_roots {
@@ -406,10 +445,10 @@ fn construct_compiler_descriptor_source_with_profile_v1(
             .iter()
             .find(|kernel| kernel.id.as_str() == root.export_name)
             .ok_or_else(|| CompilerDescriptorError::MissingTypedKernel(root.export_name.clone()))?;
-        if kernel.workgroup_size != Some(WorkgroupSize::new(workgroup_x, 1, 1)) {
+        if kernel.workgroup_size != Some(WorkgroupSize::new(profile.workgroup_x, 1, 1)) {
             return Err(CompilerDescriptorError::UnexpectedWorkgroupSize {
                 kernel: root.export_name.clone(),
-                expected_x: workgroup_x,
+                expected_x: profile.workgroup_x,
             });
         }
 
@@ -481,9 +520,9 @@ fn construct_compiler_descriptor_source_with_profile_v1(
             )?,
             LaunchConstraintsV1::new(
                 1,
-                BlockSizeV1::Exact(DimensionsV1::new(workgroup_x, 1, 1)?),
-                DimensionsV1::new(max_grid_x, 1, 1)?,
-                workgroup_x,
+                BlockSizeV1::Exact(DimensionsV1::new(profile.workgroup_x, 1, 1)?),
+                DimensionsV1::new(profile.max_grid_x, 1, 1)?,
+                profile.workgroup_x,
                 0,
                 0,
             )?,
@@ -497,11 +536,7 @@ fn construct_compiler_descriptor_source_with_profile_v1(
     {
         "typed-vecadd-gfx942-cov6-v1"
     } else {
-        if allow_exact_tiled_matrix {
-            "typed-tiled-gemm-gfx942-cov6-v1"
-        } else {
-            "typed-general-gfx942-cov6-v1"
-        }
+        profile.producer_version
     };
     let table = DeviceDescriptorTableV1::new(
         CanonicalCodeObjectDigest::from_bytes([0; 32]),
@@ -757,6 +792,7 @@ pub(crate) enum CompilerDescriptorError {
         expected_x: u32,
     },
     NonCanonicalTiledGemmModule,
+    NonCanonicalRowSoftmaxModule,
     UnsupportedCapability(String),
     Validation(ValidationError),
     Source(CompilerDescriptorSourceErrorV1),
@@ -863,6 +899,9 @@ impl fmt::Display for CompilerDescriptorError {
             ),
             Self::NonCanonicalTiledGemmModule => formatter.write_str(
                 "tiled GEMM descriptor construction requires the exact canonical tiled_gemm_v1 module",
+            ),
+            Self::NonCanonicalRowSoftmaxModule => formatter.write_str(
+                "row-softmax descriptor construction requires the exact canonical row_softmax_v1 module",
             ),
             Self::UnsupportedCapability(capability) => write!(
                 formatter,
@@ -1094,6 +1133,103 @@ pub(crate) fn tiled_gemm_v1_descriptor_source_for_test() -> CompilerDescriptorSo
         CompilerFfiEnvelopeV1::for_module_without_device_ffi(target, CodeObjectVersion::V6)
             .unwrap();
     construct_tiled_gemm_v1_compiler_descriptor_source_v1(
+        &envelope,
+        &module,
+        &compiler_module,
+        &[root],
+    )
+    .unwrap()
+    .unwrap()
+}
+
+#[cfg(test)]
+pub(crate) fn row_softmax_v1_descriptor_source_for_test() -> CompilerDescriptorSourceV1 {
+    use fe2o3_artifacts::{
+        PointerWidth, RustDisjointIndexSpaceV1, RustLayoutEvidenceV1, RustPhysicalComponentKindV1,
+        RustPhysicalComponentV1, RustPointerMutabilityV1, RustScalarElementTypeV1,
+        RustSourceTypeShapeV1, RustTypeEvidenceV1, RustcAbiClassV1,
+    };
+    use reserved_fe2o3_symbols::GeneratedHostContractIdV3;
+
+    fn layout(kind: GeneralTypedArgumentKindV3) -> RustLayoutEvidenceV1 {
+        let (element, disjoint) = match kind {
+            GeneralTypedArgumentKindV3::SharedSlice(element) => (element, false),
+            GeneralTypedArgumentKindV3::DisjointSlice(element) => (element, true),
+            GeneralTypedArgumentKindV3::Scalar(_) => {
+                unreachable!("row-softmax profile has no scalar")
+            }
+        };
+        let shape = if disjoint {
+            RustSourceTypeShapeV1::disjoint_slice(element, RustDisjointIndexSpaceV1::Index1D)
+        } else {
+            RustSourceTypeShapeV1::shared_slice(element)
+        };
+        RustLayoutEvidenceV1::new(
+            RustTypeEvidenceV1::new(shape),
+            RustcAbiClassV1::ScalarPair,
+            PointerWidth::Bits64,
+            16,
+            8,
+            vec![
+                RustPhysicalComponentV1::new(
+                    0,
+                    8,
+                    8,
+                    RustPhysicalComponentKindV1::Pointer {
+                        mutability: if disjoint {
+                            RustPointerMutabilityV1::Mut
+                        } else {
+                            RustPointerMutabilityV1::Const
+                        },
+                        pointee: element,
+                    },
+                )
+                .unwrap(),
+                RustPhysicalComponentV1::new(8, 8, 8, RustPhysicalComponentKindV1::Usize).unwrap(),
+            ],
+        )
+        .unwrap()
+    }
+
+    let kinds = [
+        GeneralTypedArgumentKindV3::SharedSlice(RustScalarElementTypeV1::F32),
+        GeneralTypedArgumentKindV3::DisjointSlice(RustScalarElementTypeV1::F32),
+    ];
+    let names = ["input", "output"];
+    let arguments = kinds
+        .into_iter()
+        .enumerate()
+        .map(|(index, kind)| TypedDescriptorArgumentV1 {
+            name: names[index].to_owned(),
+            kind: descriptor_argument_kind(kind),
+            access: match kind {
+                GeneralTypedArgumentKindV3::SharedSlice(_) => AccessMode::ReadOnly,
+                GeneralTypedArgumentKindV3::DisjointSlice(_) => AccessMode::ReadWrite,
+                GeneralTypedArgumentKindV3::Scalar(_) => unreachable!(),
+            },
+            offset: (index as u32) * 16,
+            layout: layout(kind),
+        })
+        .collect::<Vec<_>>();
+    let root = TypedDescriptorRootV1 {
+        logical_name: "row_softmax_v1".to_owned(),
+        export_name: "row_softmax_v1".to_owned(),
+        profile: TypedKernelProfile::GeneralScalarSliceRustcLayoutV3 {
+            generated_host_contract_identity: GeneratedHostContractIdV3::from_bytes([0x73; 32]),
+        },
+        kernel_binding: KernelBindingIdV1::from_bytes([0x72; 32]),
+        arguments: TypedArgumentListV1::new(arguments).unwrap(),
+        explicit_argument_bytes: 32,
+        kernarg_alignment_bytes: 8,
+    };
+    let module = crate::collected_row_softmax_v1::canonical_row_softmax_v1_module();
+    let compiler_module =
+        crate::kernel_ir_codegen::construct_inert_row_softmax_v1_module_text(&module).unwrap();
+    let envelope = crate::worker_v2_producer::construct_row_softmax_v1_compiler_envelope(
+        crate::collected_row_softmax_v1::exponential_boundary_commitment(),
+    )
+    .unwrap();
+    construct_row_softmax_v1_compiler_descriptor_source_v1(
         &envelope,
         &module,
         &compiler_module,
@@ -1782,5 +1918,50 @@ mod tests {
             first.table().kernels()[0].executable_ir_evidence(),
             second.table().kernels()[0].executable_ir_evidence()
         );
+    }
+
+    #[test]
+    fn exact_row_softmax_descriptor_is_two_slices_cov6_wg64_and_288_bytes() {
+        let source = row_softmax_v1_descriptor_source_for_test();
+        let kernels = source.table().kernels();
+        assert_eq!(kernels.len(), 1);
+        let kernel = &kernels[0];
+        assert_eq!(kernel.entry_name().as_str(), "row_softmax_v1");
+        assert_eq!(kernel.descriptor_symbol().as_str(), "row_softmax_v1.kd");
+        assert_eq!(kernel.abi_layout().explicit_argument_size(), 32);
+        assert_eq!(kernel.abi_layout().kernarg_segment_size(), 288);
+        assert_eq!(kernel.abi_layout().kernarg_segment_alignment(), 8);
+        assert_eq!(kernel.arguments().len(), 2);
+        assert_eq!(kernel.arguments()[0].access(), AccessMode::ReadOnly);
+        assert_eq!(kernel.arguments()[1].access(), AccessMode::ReadWrite);
+        assert_eq!(
+            kernel.launch().block_size(),
+            BlockSizeV1::Exact(DimensionsV1::new(64, 1, 1).unwrap())
+        );
+        assert_eq!(
+            kernel.launch().max_grid(),
+            DimensionsV1::new(1, 1, 1).unwrap()
+        );
+        assert_eq!(kernel.launch().max_flat_workgroup_size(), 64);
+
+        let exact_module = crate::collected_row_softmax_v1::canonical_row_softmax_v1_module();
+        let exact_llvm =
+            crate::kernel_ir_codegen::construct_inert_row_softmax_v1_module_text(&exact_module)
+                .unwrap();
+        let envelope = crate::worker_v2_producer::construct_row_softmax_v1_compiler_envelope(
+            crate::collected_row_softmax_v1::exponential_boundary_commitment(),
+        )
+        .unwrap();
+        let mut substituted = exact_module;
+        substituted.id = "fe2o3::row_softmax_v1_substitution".into();
+        assert!(matches!(
+            construct_row_softmax_v1_compiler_descriptor_source_v1(
+                &envelope,
+                &substituted,
+                &exact_llvm,
+                &[],
+            ),
+            Err(CompilerDescriptorError::NonCanonicalRowSoftmaxModule)
+        ));
     }
 }

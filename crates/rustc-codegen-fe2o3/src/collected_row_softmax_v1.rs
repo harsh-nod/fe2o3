@@ -1,10 +1,11 @@
 //! Source-authenticated admission for one fixed row-softmax V1 profile.
 //!
 //! This layer authenticates one exact rustc root and consumes a private receipt
-//! to select one canonical Kernel IR module. It deliberately stops there. In
-//! particular, the canonical exp operation has no authenticated implementation
-//! or numerical refinement contract, and this module grants no LLVM, link,
-//! machine-body, load, launch, memory-safety, or race-freedom authority.
+//! to select one canonical Kernel IR module and descriptor source. Its proof
+//! deliberately stops there: downstream compiler code may lower and publish an
+//! inert handoff, but this source receipt grants no exp implementation,
+//! numerical refinement, LLVM, link, machine-body, load, launch, memory-safety,
+//! or race-freedom authority.
 
 use std::collections::BTreeSet;
 use std::error::Error;
@@ -15,6 +16,7 @@ use fe2o3_artifacts::{
     BlockSize, Capability, Dimensions, Endianness, IdentityText, LaunchContract,
     Mutability as ArtifactMutability, PointerWidth, RustScalarElementTypeV1, TargetIdentity,
 };
+use fe2o3_compiler_ffi::CompilerDescriptorSourceV1;
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, Axis, BasicBlock, BinaryOp, BlockId, ComparePredicate, Constant,
     F32MathFunction, FloatOperation, Function, IndexKind, IntrinsicKind, IntrinsicOperation,
@@ -227,6 +229,7 @@ struct RowSoftmaxFrontendAuthorityV1 {
     cargo_metadata_build_observation: CargoMetadataBuildObservationV1,
     provider_authority: crate::mir_import::RowSoftmaxProviderAuthorityV1,
     managed_build_authority: ManagedBuildAuthorityV1,
+    descriptor_source_commitment: [u8; 32],
     authority_commitment: [u8; 32],
 }
 
@@ -234,6 +237,7 @@ struct RowSoftmaxFrontendAuthorityV1 {
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct RowSoftmaxFrontendReceiptV1 {
     authority: Option<RowSoftmaxFrontendAuthorityV1>,
+    descriptor_source: Option<CompilerDescriptorSourceV1>,
 }
 
 impl RowSoftmaxFrontendReceiptV1 {
@@ -257,6 +261,14 @@ impl RowSoftmaxFrontendReceiptV1 {
         encode_hex(&self.authority().authority_commitment)
     }
 
+    pub(crate) fn authority_commitment(&self) -> &[u8; 32] {
+        &self.authority().authority_commitment
+    }
+
+    pub(crate) fn exponential_boundary_commitment(&self) -> &[u8; 32] {
+        &self.authority().exponential_boundary_commitment
+    }
+
     pub(crate) fn consume(
         &mut self,
     ) -> Result<AuthenticatedRowSoftmaxModuleV1, CollectedRowSoftmaxErrorV1> {
@@ -264,7 +276,16 @@ impl RowSoftmaxFrontendReceiptV1 {
             .authority
             .take()
             .ok_or(CollectedRowSoftmaxErrorV1::ReceiptAlreadyConsumed)?;
+        let descriptor_source = self
+            .descriptor_source
+            .take()
+            .ok_or(CollectedRowSoftmaxErrorV1::ReceiptAlreadyConsumed)?;
         validate_frontend_authority(&authority)?;
+        if descriptor_source.identity().sha256() != &authority.descriptor_source_commitment {
+            return Err(CollectedRowSoftmaxErrorV1::ReceiptBindingMismatch {
+                field: "descriptor source",
+            });
+        }
         let module = canonical_row_softmax_v1_module();
         require_canonical_module(&module)?;
         if canonical_module_commitment(&module)? != authority.canonical_module_commitment {
@@ -274,6 +295,7 @@ impl RowSoftmaxFrontendReceiptV1 {
         }
         Ok(AuthenticatedRowSoftmaxModuleV1 {
             module,
+            descriptor_source,
             authority_commitment: authority.authority_commitment,
             exponential_boundary_commitment: authority.exponential_boundary_commitment,
         })
@@ -290,17 +312,22 @@ impl RowSoftmaxFrontendReceiptV1 {
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct AuthenticatedRowSoftmaxModuleV1 {
     module: Module,
+    descriptor_source: CompilerDescriptorSourceV1,
     authority_commitment: [u8; 32],
     exponential_boundary_commitment: [u8; 32],
 }
 
 impl AuthenticatedRowSoftmaxModuleV1 {
-    pub(crate) fn into_parts(self) -> (Module, [u8; 32], [u8; 32]) {
-        (
-            self.module,
-            self.authority_commitment,
-            self.exponential_boundary_commitment,
-        )
+    pub(crate) const fn authority_commitment(&self) -> &[u8; 32] {
+        &self.authority_commitment
+    }
+
+    pub(crate) const fn exponential_boundary_commitment(&self) -> &[u8; 32] {
+        &self.exponential_boundary_commitment
+    }
+
+    pub(crate) fn into_parts(self) -> (Module, CompilerDescriptorSourceV1) {
+        (self.module, self.descriptor_source)
     }
 }
 
@@ -470,6 +497,30 @@ pub(crate) fn authenticate_collected_row_softmax_v1<'tcx>(
     let module = canonical_row_softmax_v1_module();
     require_canonical_module(&module)?;
     let canonical_module_commitment = canonical_module_commitment(&module)?;
+    let descriptor_roots = crate::compiler_descriptor::typed_descriptor_roots_from_collection(
+        tcx,
+        &collection.functions,
+    )
+    .map_err(|error| layout_mismatch(format!("descriptor evidence rejected: {error}")))?;
+    let compiler_module = crate::kernel_ir_codegen::construct_inert_row_softmax_v1_module_text(
+        &module,
+    )
+    .map_err(|error| unsupported_collection(format!("exact LLVM lowering failed: {error}")))?;
+    let exponential_boundary_commitment = exponential_boundary_commitment();
+    let envelope = crate::worker_v2_producer::construct_row_softmax_v1_compiler_envelope(
+        exponential_boundary_commitment,
+    )
+    .map_err(|error| unsupported_collection(format!("compiler envelope failed: {error}")))?;
+    let descriptor_source =
+        crate::compiler_descriptor::construct_row_softmax_v1_compiler_descriptor_source_v1(
+            &envelope,
+            &module,
+            &compiler_module,
+            &descriptor_roots,
+        )
+        .map_err(|error| layout_mismatch(format!("descriptor source rejected: {error}")))?
+        .ok_or_else(|| layout_mismatch("compiler descriptor source is absent"))?;
+    let descriptor_source_commitment = *descriptor_source.identity().sha256();
     let mut authority = RowSoftmaxFrontendAuthorityV1 {
         target: EXACT_ROW_SOFTMAX_TARGET_V1.to_owned(),
         code_object_version: ROW_SOFTMAX_CODE_OBJECT_VERSION_V1,
@@ -480,7 +531,7 @@ pub(crate) fn authenticate_collected_row_softmax_v1<'tcx>(
         fn_abi_binding_commitment,
         launch_binding_commitment: exact_launch_binding_commitment(),
         correspondence_commitment: reviewed_correspondence_commitment(),
-        exponential_boundary_commitment: exponential_boundary_commitment(),
+        exponential_boundary_commitment,
         frontend_contract_commitment: sha256(EXACT_FRONTEND_CONTRACT_V1),
         canonical_module_commitment,
         kernel_export: root.export_name.clone(),
@@ -491,11 +542,13 @@ pub(crate) fn authenticate_collected_row_softmax_v1<'tcx>(
             .cargo_metadata_build_observation,
         provider_authority,
         managed_build_authority,
+        descriptor_source_commitment,
         authority_commitment: [0; 32],
     };
     authority.authority_commitment = collected_authority_commitment(&authority);
     Ok(RowSoftmaxFrontendReceiptV1 {
         authority: Some(authority),
+        descriptor_source: Some(descriptor_source),
     })
 }
 
@@ -1094,7 +1147,7 @@ fn row_softmax_target_identity() -> Result<TargetIdentity, CollectedRowSoftmaxEr
     .map_err(|error| unsupported_collection(format!("invalid target identity: {error}")))
 }
 
-fn canonical_row_softmax_v1_module() -> Module {
+pub(crate) fn canonical_row_softmax_v1_module() -> Module {
     let input_slice = Type::slice(Type::F32, AddressSpace::Global, AccessMode::ReadOnly);
     let output_slice = Type::slice(Type::F32, AddressSpace::Global, AccessMode::ReadWrite);
     let input_pointer = Type::pointer(Type::F32, AddressSpace::Global, AccessMode::ReadOnly);
@@ -1467,6 +1520,7 @@ fn collected_authority_commitment(authority: &RowSoftmaxFrontendAuthorityV1) -> 
     hash_field(&mut digest, &authority.portable_mir_semantic_commitment);
     hash_field(&mut digest, &authority.compiler_semantics_commitment);
     hash_field(&mut digest, &authority.canonical_module_commitment);
+    hash_field(&mut digest, &authority.descriptor_source_commitment);
     hash_field(&mut digest, authority.root_instance_identity.as_bytes());
     hash_field(&mut digest, authority.kernel_export.as_bytes());
     hash_field(&mut digest, authority.target.as_bytes());
@@ -1567,6 +1621,8 @@ fn validate_frontend_authority(
         Some("frontend contract")
     } else if authority.canonical_module_commitment != REVIEWED_CANONICAL_MODULE_V4_COMMITMENT {
         Some("canonical module")
+    } else if authority.descriptor_source_commitment == [0; 32] {
+        Some("descriptor source")
     } else if authority.kernel_export != FIXED_KERNEL_EXPORT {
         Some("kernel export")
     } else if !is_kernel_root_build_identity(&authority.root_instance_identity) {
@@ -1616,7 +1672,7 @@ fn reviewed_correspondence_commitment() -> [u8; 32] {
     domain_commitment(CORRESPONDENCE_DOMAIN_V1, REVIEWED_CORRESPONDENCE_V1)
 }
 
-fn exponential_boundary_commitment() -> [u8; 32] {
+pub(crate) fn exponential_boundary_commitment() -> [u8; 32] {
     domain_commitment(EXPONENTIAL_BOUNDARY_DOMAIN_V1, EXPONENTIAL_BOUNDARY_V1)
 }
 
@@ -1628,8 +1684,9 @@ fn domain_commitment(domain: &[u8], value: &[u8]) -> [u8; 32] {
 }
 
 #[cfg(test)]
-fn exact_frontend_receipt_for_test() -> RowSoftmaxFrontendReceiptV1 {
+pub(crate) fn exact_frontend_receipt_for_test() -> RowSoftmaxFrontendReceiptV1 {
     let module = canonical_row_softmax_v1_module();
+    let descriptor_source = crate::compiler_descriptor::row_softmax_v1_descriptor_source_for_test();
     let compiler_semantics = reviewed_compiler_semantics("0123456789abcdef");
     let admitted_compiler_semantics =
         require_compiler_semantics(&compiler_semantics).expect("reviewed compiler semantics");
@@ -1655,11 +1712,13 @@ fn exact_frontend_receipt_for_test() -> RowSoftmaxFrontendReceiptV1 {
             .cargo_metadata_build_observation,
         provider_authority: crate::mir_import::RowSoftmaxProviderAuthorityV1::canonical_for_test(),
         managed_build_authority: ManagedBuildAuthorityV1::canonical_for_test(),
+        descriptor_source_commitment: *descriptor_source.identity().sha256(),
         authority_commitment: [0; 32],
     };
     authority.authority_commitment = collected_authority_commitment(&authority);
     RowSoftmaxFrontendReceiptV1 {
         authority: Some(authority),
+        descriptor_source: Some(descriptor_source),
     }
 }
 
@@ -1793,7 +1852,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_profile_is_closed_and_non_executable() {
+    fn exact_source_profile_is_closed_without_executable_authority() {
         assert!(admit_execution_context(EXACT_ROW_SOFTMAX_TARGET_V1, false).is_ok());
         for target in [
             "gfx942",
@@ -2043,10 +2102,14 @@ mod tests {
     fn receipt_is_private_single_use_and_selects_only_the_canonical_module() {
         let mut receipt = exact_frontend_receipt_for_test();
         let authenticated = receipt.consume().expect("first consumption");
-        let (module, authority, exponential) = authenticated.into_parts();
+        assert_ne!(authenticated.authority_commitment(), &[0; 32]);
+        assert_eq!(
+            authenticated.exponential_boundary_commitment(),
+            &exponential_boundary_commitment()
+        );
+        let (module, descriptor_source) = authenticated.into_parts();
         assert_eq!(module, canonical_row_softmax_v1_module());
-        assert_ne!(authority, [0; 32]);
-        assert_eq!(exponential, exponential_boundary_commitment());
+        assert_eq!(descriptor_source.table().kernels().len(), 1);
         assert!(matches!(
             receipt.consume(),
             Err(CollectedRowSoftmaxErrorV1::ReceiptAlreadyConsumed)
@@ -2102,7 +2165,7 @@ mod tests {
         let baseline = collected_authority_commitment(
             baseline_receipt.authority.as_ref().expect("test authority"),
         );
-        let mutations: [ReceiptMutation; 21] = [
+        let mutations: [ReceiptMutation; 22] = [
             (
                 |value| value.portable_mir_semantic_commitment[0] ^= 1,
                 "portable MIR",
@@ -2114,6 +2177,10 @@ mod tests {
             (
                 |value| value.canonical_module_commitment[0] ^= 1,
                 "canonical module",
+            ),
+            (
+                |value| value.descriptor_source_commitment[0] ^= 1,
+                "descriptor source",
             ),
             (
                 |value| value.root_instance_identity.push_str("_other"),
@@ -2208,6 +2275,19 @@ mod tests {
             receipt.consume(),
             Err(CollectedRowSoftmaxErrorV1::ReceiptBindingMismatch {
                 field: "authority commitment"
+            })
+        ));
+    }
+
+    #[test]
+    fn descriptor_bytes_must_match_the_receipt_bound_identity() {
+        let mut receipt = exact_frontend_receipt_for_test();
+        receipt.descriptor_source =
+            Some(crate::compiler_descriptor::scalar_gemm_v1_descriptor_source_for_test());
+        assert!(matches!(
+            receipt.consume(),
+            Err(CollectedRowSoftmaxErrorV1::ReceiptBindingMismatch {
+                field: "descriptor source"
             })
         ));
     }

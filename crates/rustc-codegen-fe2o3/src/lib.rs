@@ -484,7 +484,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                     codegen_pipeline,
                     PipelineSelection::Valid(CodegenPipeline::CollectedRowSoftmaxV1)
                 ) {
-                    let admission = (|| -> Result<_, String> {
+                    let preparation = (|| -> Result<_, String> {
                         let attempt = build_attempt.ok_or_else(|| {
                             format!(
                                 "{} requires a managed {BUILD_ATTEMPT_ENV}",
@@ -526,42 +526,54 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                         let portable_mir_semantic = receipt.portable_mir_semantic_hex();
                         let compiler_semantics = receipt.compiler_semantics_hex();
                         let frontend_authority = receipt.authority_hex();
-                        let authenticated = receipt.consume().map_err(|error| error.to_string())?;
-                        let (module, authority_commitment, exponential_boundary_commitment) =
-                            authenticated.into_parts();
-                        let canonical_bytes =
-                            fe2o3_kernel_ir::encode_module_v4(&module).map_err(|error| {
-                                format!("canonical module encoding failed: {error}")
-                            })?;
-                        if authority_commitment == [0; 32]
-                            || exponential_boundary_commitment == [0; 32]
+                        let frontend_authority_commitment = *receipt.authority_commitment();
+                        let exponential_boundary_commitment =
+                            *receipt.exponential_boundary_commitment();
+                        let authenticated_module =
+                            receipt.consume().map_err(|error| error.to_string())?;
+                        let handoff = worker_v2_producer::prepare_row_softmax_v1_worker_handoff(
+                            authenticated_module,
+                        )
+                        .map_err(|error| error.to_string())?;
+                        if handoff.frontend_authority_commitment() != &frontend_authority_commitment
+                            || handoff.exponential_boundary_commitment()
+                                != &exponential_boundary_commitment
                         {
                             return Err(
-                                "row-softmax canonical selection lost a private receipt binding"
+                                "prepared row-softmax handoff lost a private receipt binding"
                                     .to_owned(),
                             );
                         }
+                        let canonical_handoff_bytes = handoff.handoff().canonical_bytes().len();
+                        let llvm_bytes = handoff.handoff().module_bytes().len();
+                        let publication =
+                            worker_v2_producer::publish_prepared_row_softmax_v1_worker_handoff(
+                                output_dir, &producer, attempt, handoff,
+                            )
+                            .map_err(|error| error.to_string())?;
                         Ok((
                             root_instance_identity,
                             kernel_export,
                             portable_mir_semantic,
                             compiler_semantics,
                             frontend_authority,
-                            module.id.as_str().to_owned(),
-                            canonical_bytes.len(),
+                            canonical_handoff_bytes,
+                            llvm_bytes,
+                            publication.length(),
                         ))
                     })();
-                    match admission {
+                    match preparation {
                         Ok((
                             root_instance_identity,
                             kernel_export,
                             portable_mir_semantic,
                             compiler_semantics,
                             frontend_authority,
-                            module_id,
-                            canonical_bytes,
-                        )) => tcx.dcx().fatal(format!(
-                            "[rustc-codegen-fe2o3] {} consumed its private single-use frontend receipt for exact collected KernelEntry `{}` export `{}` with reviewed path-independent portable MIR {}; exact ABI input:&[f32], output:DisjointSlice<f32>, explicit kernarg {} bytes and required COV6 complete kernarg {} bytes; fixed one-row 64-element profile, exact one-wave/workgroup 64x1x1 and one-block grid with no LDS; target {}; compiler semantics {}; sealed frontend authority {}; selected canonical Kernel IR module `{}` ({} V4 wire bytes) and stopped at the fail-closed source-authenticated boundary; exp implementation and approximation/error contract, NaN/infinity policy, exact-real softmax equivalence, runtime length admission, compiler refinement, final machine-body semantics, memory/race proof, LLVM lowering, OCML bitcode/linking, COMGR, artifact publication, load, and launch remain unauthenticated and were not entered",
+                            canonical_handoff_bytes,
+                            llvm_bytes,
+                            publication_bytes,
+                        )) => eprintln!(
+                            "[rustc-codegen-fe2o3] {} consumed its private single-use frontend receipt for exact collected KernelEntry `{}` export `{}` with reviewed path-independent portable MIR {}; exact ABI input:&[f32], output:DisjointSlice<f32>, explicit kernarg {} bytes and required COV6 complete kernarg {} bytes; fixed one-row 64-element profile, exact one-wave/workgroup 64x1x1 and one-block grid with no LDS; target {}; COV{}; compiler semantics {}; sealed frontend authority {}; selected canonical Kernel IR module `fe2o3::row_softmax_v1`, lowered it through the generic gfx942 dialect path, and published an inert Worker V2 compiler-module handoff ({} canonical bytes, {} LLVM bytes, {} receipt bytes) with exact compiler descriptor, frontend-authority, exponential-boundary, and `__ocml_exp_f32` unresolved-import bindings; the source proof still grants no exponential implementation, approximation/error contract, NaN/infinity policy, exact-real softmax equivalence, runtime length admission, compiler refinement, final machine-body semantics, memory/race proof, OCML provider-bitcode identity, link result, worker execution, HSACO, COMGR, load, or launch authority",
                             collected_row_softmax_v1::COLLECTED_ROW_SOFTMAX_PIPELINE_V1,
                             root_instance_identity,
                             kernel_export,
@@ -569,11 +581,13 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             collected_row_softmax_v1::ROW_SOFTMAX_EXPLICIT_KERNARG_BYTES_V1,
                             collected_row_softmax_v1::ROW_SOFTMAX_COMPLETE_KERNARG_BYTES_V1,
                             collected_row_softmax_v1::EXACT_ROW_SOFTMAX_TARGET_V1,
+                            collected_row_softmax_v1::ROW_SOFTMAX_CODE_OBJECT_VERSION_V1,
                             compiler_semantics,
                             frontend_authority,
-                            module_id,
-                            canonical_bytes,
-                        )),
+                            canonical_handoff_bytes,
+                            llvm_bytes,
+                            publication_bytes,
+                        ),
                         Err(error) => tcx.dcx().fatal(format!(
                             "[rustc-codegen-fe2o3] {} rejected the collected program without fallback: {error}",
                             collected_row_softmax_v1::COLLECTED_ROW_SOFTMAX_PIPELINE_V1,
