@@ -1225,7 +1225,7 @@ fn main() {}
 }
 
 #[test]
-fn scalar_gemm_v1_admits_only_the_reviewed_full_portable_mir() {
+fn scalar_gemm_v1_frontend_receipt_selects_only_the_reviewed_full_portable_mir() {
     let workspace = workspace();
     let backend = build_backend(&workspace);
     let output = TestOutputDir::new(&workspace);
@@ -1240,10 +1240,11 @@ fn scalar_gemm_v1_admits_only_the_reviewed_full_portable_mir() {
     let admission_stderr = stderr(&compiled);
     assert!(
         !compiled.status.success()
-            && admission_stderr.contains("authenticated collected KernelEntry")
+            && admission_stderr.contains("consumed its single-use frontend receipt")
             && admission_stderr.contains("af4ca76c4517b779bca4b7a63bcae09a23cad947e740b2e51f872d7cc0d6d002")
-            && admission_stderr.contains("no executable authority, Kernel IR, LLVM, LLD, COMGR, HSACO, or legacy fallback was entered"),
-        "reviewed scalar GEMM did not stop at the authenticated admission checkpoint:\n{admission_stderr}"
+            && admission_stderr.contains("prepared exact inert Worker V2 compiler-module handoff")
+            && admission_stderr.contains("no handoff publication, worker execution, LLD, COMGR, HSACO, load, launch, or legacy fallback was entered"),
+        "reviewed scalar GEMM did not stop at the frontend-to-handoff checkpoint:\n{admission_stderr}"
     );
     assert_scalar_gemm_emitted_nothing(&output);
 
@@ -1265,10 +1266,54 @@ fn scalar_gemm_v1_admits_only_the_reviewed_full_portable_mir() {
     assert!(
         !mutated.status.success()
             && mutated_stderr.contains("portable MIR identity mismatch")
-            && !mutated_stderr.contains("authenticated collected KernelEntry"),
+            && !mutated_stderr.contains("prepared exact inert Worker V2 compiler-module handoff"),
         "same-shape arithmetic mutation was not rejected by full portable MIR identity:\n{mutated_stderr}"
     );
     assert_scalar_gemm_emitted_nothing(&mutated_output);
+
+    let copied_digest_source = mutated_source.replacen(
+        "use fe2o3_device",
+        "const CLAIMED_PORTABLE_MIR: &str = \"af4ca76c4517b779bca4b7a63bcae09a23cad947e740b2e51f872d7cc0d6d002\";\nuse fe2o3_device",
+        1,
+    );
+    assert_ne!(copied_digest_source, mutated_source);
+    let copied_digest_output = TestOutputDir::new(&workspace);
+    let copied_digest = compile_scalar_gemm(
+        &workspace,
+        backend,
+        &copied_digest_output,
+        &copied_digest_source,
+        "gfx942:xnack-",
+        &[],
+    );
+    let copied_digest_stderr = stderr(&copied_digest);
+    assert!(
+        !copied_digest.status.success()
+            && copied_digest_stderr.contains("portable MIR identity mismatch")
+            && !copied_digest_stderr
+                .contains("prepared exact inert Worker V2 compiler-module handoff"),
+        "a copied digest claim minted frontend authority:\n{copied_digest_stderr}"
+    );
+    assert_scalar_gemm_emitted_nothing(&copied_digest_output);
+
+    let wrong_target_output = TestOutputDir::new(&workspace);
+    let wrong_target = compile_scalar_gemm(
+        &workspace,
+        backend,
+        &wrong_target_output,
+        SCALAR_GEMM_FIXTURE,
+        "gfx942:xnack+",
+        &[],
+    );
+    let wrong_target_stderr = stderr(&wrong_target);
+    assert!(
+        !wrong_target.status.success()
+            && wrong_target_stderr.contains("requires exact target `gfx942:xnack-`")
+            && !wrong_target_stderr
+                .contains("prepared exact inert Worker V2 compiler-module handoff"),
+        "wrong target minted frontend authority:\n{wrong_target_stderr}"
+    );
+    assert_scalar_gemm_emitted_nothing(&wrong_target_output);
 }
 
 #[test]

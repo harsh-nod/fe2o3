@@ -465,7 +465,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                     codegen_pipeline,
                     PipelineSelection::Valid(CodegenPipeline::CollectedScalarGemmV1)
                 ) {
-                    let admission = (|| -> Result<_, String> {
+                    let preparation = (|| -> Result<_, String> {
                         let collection = collector::collect_device_functions(
                             tcx,
                             mono_partitions.codegen_units,
@@ -487,27 +487,64 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                         collector::dump_device_functions(tcx, &collection.functions);
                         let custom_llvm_pipeline = !tcx.sess.opts.cg.llvm_args.is_empty()
                             || !tcx.sess.opts.cg.passes.is_empty();
-                        collected_scalar_gemm_v1::authenticate_collected_scalar_gemm_v1(
-                            tcx,
-                            &collection,
-                            &self.config.target,
-                            custom_llvm_pipeline,
+                        let mut receipt =
+                            collected_scalar_gemm_v1::authenticate_collected_scalar_gemm_v1(
+                                tcx,
+                                &collection,
+                                &self.config.target,
+                                custom_llvm_pipeline,
+                            )
+                            .map_err(|error| error.to_string())?;
+                        let root_instance_identity = receipt.root_instance_identity().to_owned();
+                        let kernel_export = receipt.kernel_export().to_owned();
+                        let portable_mir_semantic = receipt.portable_mir_semantic_hex();
+                        let compiler_semantics = receipt.compiler_semantics_hex();
+                        let frontend_authority = receipt.authority_hex();
+                        let frontend_authority_commitment = *receipt.authority_commitment();
+                        let authenticated_module =
+                            receipt.consume().map_err(|error| error.to_string())?;
+                        let handoff = worker_v2_producer::prepare_scalar_gemm_v1_worker_handoff(
+                            authenticated_module,
                         )
-                        .map_err(|error| error.to_string())
+                        .map_err(|error| error.to_string())?;
+                        if handoff.frontend_authority_commitment() != &frontend_authority_commitment
+                        {
+                            return Err(
+                                "prepared scalar GEMM handoff lost frontend authority binding"
+                                    .to_owned(),
+                            );
+                        }
+                        Ok((
+                            root_instance_identity,
+                            kernel_export,
+                            portable_mir_semantic,
+                            compiler_semantics,
+                            frontend_authority,
+                            handoff,
+                        ))
                     })();
-                    match admission {
-                        Ok(admission) => tcx.dcx().fatal(format!(
-                            "[rustc-codegen-fe2o3] {} authenticated collected KernelEntry `{}` export `{}` with exact reviewed path-independent portable MIR {}; exact ABI/roles A:&[f32], B:&[f32], C:DisjointSlice<f32>, m:u32, n:u32, k:u32; explicit kernarg {} bytes, complete kernarg {} bytes; row-major sequential f32 source semantics; target {}; COV{}; compiler semantics {}; sealed collected authority {}; {}; no executable authority, Kernel IR, LLVM, LLD, COMGR, HSACO, or legacy fallback was entered",
+                    match preparation {
+                        Ok((
+                            root_instance_identity,
+                            kernel_export,
+                            portable_mir_semantic,
+                            compiler_semantics,
+                            frontend_authority,
+                            prepared,
+                        )) => tcx.dcx().fatal(format!(
+                            "[rustc-codegen-fe2o3] {} consumed its single-use frontend receipt for exact collected KernelEntry `{}` export `{}` with reviewed path-independent portable MIR {}; exact ABI/roles A:&[f32], B:&[f32], C:DisjointSlice<f32>, m:u32, n:u32, k:u32; explicit kernarg {} bytes, complete kernarg {} bytes; exact 256x1x1 one-dimensional launch; row-major sequential f32 source semantics; target {}; COV{}; compiler semantics {}; sealed frontend authority {}; prepared exact inert Worker V2 compiler-module handoff ({} canonical bytes, {} LLVM bytes) from canonical scalar GEMM Kernel IR; {}; no handoff publication, worker execution, LLD, COMGR, HSACO, load, launch, or legacy fallback was entered",
                             collected_scalar_gemm_v1::COLLECTED_SCALAR_GEMM_PIPELINE_V1,
-                            admission.root_instance_identity(),
-                            admission.kernel_export(),
-                            admission.portable_mir_semantic_hex(),
+                            root_instance_identity,
+                            kernel_export,
+                            portable_mir_semantic,
                             collected_scalar_gemm_v1::SCALAR_GEMM_EXPLICIT_KERNARG_BYTES_V1,
                             collected_scalar_gemm_v1::SCALAR_GEMM_COMPLETE_KERNARG_BYTES_V1,
                             collected_scalar_gemm_v1::EXACT_SCALAR_GEMM_TARGET_V1,
                             collected_scalar_gemm_v1::SCALAR_GEMM_CODE_OBJECT_VERSION_V1,
-                            admission.compiler_semantics_hex(),
-                            admission.authority_hex(),
+                            compiler_semantics,
+                            frontend_authority,
+                            prepared.handoff().canonical_bytes().len(),
+                            prepared.handoff().module_bytes().len(),
                             collected_scalar_gemm_v1::NEXT_LOWERING_DEPENDENCY,
                         )),
                         Err(error) => tcx.dcx().fatal(format!(

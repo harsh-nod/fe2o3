@@ -1,5 +1,6 @@
-//! Attempt-scoped publication of one inert compiler module for the Worker V2 pipeline.
+//! Preparation and attempt-scoped publication of inert Worker V2 compiler modules.
 
+use crate::collected_scalar_gemm_v1::AuthenticatedScalarGemmModuleV1;
 use crate::compiler_descriptor::{
     CompilerDescriptorError, TypedDescriptorRootV1, construct_compiler_descriptor_source_v1,
 };
@@ -13,13 +14,15 @@ use fe2o3_artifact_transaction::{
     CompilerModuleHandoffReceiptV1, ProducerIdentity, publish_compiler_module_handoff_v1,
 };
 use fe2o3_compiler_ffi::{
-    CompilerFfiEnvelopeV1, CompilerModuleHandoffErrorV2, CompilerModuleHandoffV2,
-    CompilerModuleKindV1, CompilerModuleSymbolManifestErrorV1, CompilerModuleSymbolManifestV1,
-    CompilerModuleSymbolRoleV1,
+    CodeObjectVersion, CompilerFfiEnvelopeError, CompilerFfiEnvelopeV1,
+    CompilerModuleHandoffErrorV2, CompilerModuleHandoffV2, CompilerModuleKindV1,
+    CompilerModuleSymbolManifestErrorV1, CompilerModuleSymbolManifestV1,
+    CompilerModuleSymbolRoleV1, DeviceTargetV1,
 };
 use fe2o3_kernel_ir::{
     AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE, AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME,
-    Module, TargetCapability, WaveWidth, WorkgroupSize,
+    Module, SCALAR_GEMM_V1_KERNEL_ID, ScalarGemmTargetRequirementsV1, TargetCapability, WaveWidth,
+    WorkgroupSize,
 };
 use std::collections::BTreeSet;
 use std::error::Error;
@@ -27,6 +30,80 @@ use std::fmt;
 use std::path::Path;
 
 const G1_WORKGROUP_X: u32 = 256;
+const SCALAR_GEMM_V1_DESCRIPTOR: &str = "scalar_gemm_v1.kd";
+
+/// Inert Worker V2 compiler-module handoff retained with the frontend authority
+/// that selected its canonical scalar GEMM Kernel IR.
+///
+/// This value grants no publication, worker, link, artifact, load, or launch
+/// authority. Its fields are private and it is consumed by later stages.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct PreparedScalarGemmV1WorkerHandoffV1 {
+    frontend_authority_commitment: [u8; 32],
+    handoff: CompilerModuleHandoffV2,
+}
+
+impl PreparedScalarGemmV1WorkerHandoffV1 {
+    pub(crate) const fn frontend_authority_commitment(&self) -> &[u8; 32] {
+        &self.frontend_authority_commitment
+    }
+
+    pub(crate) const fn handoff(&self) -> &CompilerModuleHandoffV2 {
+        &self.handoff
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn into_handoff(self) -> CompilerModuleHandoffV2 {
+        self.handoff
+    }
+}
+
+/// Consumes exact frontend authority and prepares the canonical scalar GEMM V1
+/// compiler-module handoff expected by the existing Worker V2 validator.
+///
+/// Canonical Kernel IR is selected before this function and cannot be supplied
+/// by a caller. This path uses no COMGR, subprocess compiler, or command-line
+/// linker and performs no publication or worker execution.
+pub(crate) fn prepare_scalar_gemm_v1_worker_handoff(
+    authenticated: AuthenticatedScalarGemmModuleV1,
+) -> Result<PreparedScalarGemmV1WorkerHandoffV1, WorkerV2ProducerError> {
+    let frontend_authority_commitment = *authenticated.authority_commitment();
+    let module = authenticated.into_module();
+    let llvm = dialect_amdgcn::lower_scalar_gemm_v1_to_gfx942_llvm_ir(
+        &module,
+        ScalarGemmTargetRequirementsV1::gfx942_xnack_minus_cov6(),
+    )
+    .map_err(WorkerV2ProducerError::ScalarGemmLowering)?;
+    let target = DeviceTargetV1::parse(AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME)
+        .expect("fixed scalar GEMM target is valid");
+    let envelope =
+        CompilerFfiEnvelopeV1::for_module_without_device_ffi(target, CodeObjectVersion::V6)
+            .map_err(WorkerV2ProducerError::CompilerEnvelope)?;
+    let symbol_manifest = CompilerModuleSymbolManifestV1::new([
+        (
+            CompilerModuleSymbolRoleV1::KernelEntry,
+            SCALAR_GEMM_V1_KERNEL_ID,
+        ),
+        (
+            CompilerModuleSymbolRoleV1::KernelDescriptor,
+            SCALAR_GEMM_V1_DESCRIPTOR,
+        ),
+    ])
+    .map_err(WorkerV2ProducerError::SymbolManifest)?;
+    let handoff = CompilerModuleHandoffV2::new(
+        CompilerModuleKindV1::LlvmTextIr,
+        target,
+        CodeObjectVersion::V6,
+        envelope,
+        symbol_manifest,
+        llvm.as_str().as_bytes(),
+    )
+    .map_err(WorkerV2ProducerError::Handoff)?;
+    Ok(PreparedScalarGemmV1WorkerHandoffV1 {
+        frontend_authority_commitment,
+        handoff,
+    })
+}
 
 /// Constructs and publishes one canonical, inert compiler-module handoff.
 ///
@@ -349,6 +426,8 @@ pub(crate) enum WorkerV2ProducerError {
         required: WorkgroupSize,
     },
     CompilerModule(CompilerModuleConstructionError),
+    ScalarGemmLowering(dialect_amdgcn::ScalarGemmLoweringErrorV1),
+    CompilerEnvelope(CompilerFfiEnvelopeError),
     CompilerDescriptor(CompilerDescriptorError),
     SymbolManifest(CompilerModuleSymbolManifestErrorV1),
     Handoff(CompilerModuleHandoffErrorV2),
@@ -401,6 +480,18 @@ impl fmt::Display for WorkerV2ProducerError {
                     "whole compiler-module construction failed: {error}"
                 )
             }
+            Self::ScalarGemmLowering(error) => {
+                write!(
+                    formatter,
+                    "scalar GEMM V1 canonical lowering failed: {error}"
+                )
+            }
+            Self::CompilerEnvelope(error) => {
+                write!(
+                    formatter,
+                    "scalar GEMM V1 FFI-free envelope failed: {error}"
+                )
+            }
             Self::CompilerDescriptor(error) => {
                 write!(
                     formatter,
@@ -433,6 +524,8 @@ impl Error for WorkerV2ProducerError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::CompilerModule(error) => Some(error),
+            Self::ScalarGemmLowering(error) => Some(error),
+            Self::CompilerEnvelope(error) => Some(error),
             Self::CompilerDescriptor(error) => Some(error),
             Self::SymbolManifest(error) => Some(error),
             Self::TargetCapabilities(error) => Some(error),
@@ -452,6 +545,7 @@ impl Error for WorkerV2ProducerError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::collected_scalar_gemm_v1::exact_frontend_receipt_for_test;
     use fe2o3_artifact_transaction::{
         BuildInvocation, BuildSession, CompilerModuleHandoffErrorV1 as PublicationError,
         begin_build_attempt, consume_compiler_module_handoff_v1,
@@ -498,6 +592,65 @@ mod tests {
 
     fn target() -> DeviceTargetV1 {
         DeviceTargetV1::parse("gfx942:xnack-").unwrap()
+    }
+
+    #[test]
+    fn consumed_frontend_receipt_prepares_exact_scalar_gemm_worker_v2_handoff() {
+        let mut receipt = exact_frontend_receipt_for_test();
+        let authenticated = receipt.consume().expect("consume exact frontend receipt");
+        let expected_authority = *authenticated.authority_commitment();
+        let prepared = prepare_scalar_gemm_v1_worker_handoff(authenticated)
+            .expect("prepare exact scalar GEMM handoff");
+        let handoff = prepared.handoff();
+        let canonical = dialect_amdgcn::lower_scalar_gemm_v1_to_gfx942_llvm_ir(
+            &fe2o3_kernel_ir::scalar_gemm_v1_module(),
+            ScalarGemmTargetRequirementsV1::gfx942_xnack_minus_cov6(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            prepared.frontend_authority_commitment(),
+            &expected_authority
+        );
+        assert_eq!(handoff.kind(), CompilerModuleKindV1::LlvmTextIr);
+        assert_eq!(handoff.target(), target());
+        assert_eq!(handoff.code_object_version(), CodeObjectVersion::V6);
+        assert_eq!(handoff.module_bytes(), canonical.as_str().as_bytes());
+        assert!(
+            handoff
+                .envelope()
+                .directional_symbols()
+                .imports()
+                .next()
+                .is_none()
+        );
+        assert!(
+            handoff
+                .envelope()
+                .directional_symbols()
+                .exports()
+                .next()
+                .is_none()
+        );
+        assert_eq!(
+            handoff
+                .symbol_manifest()
+                .symbols(CompilerModuleSymbolRoleV1::KernelEntry)
+                .collect::<Vec<_>>(),
+            [SCALAR_GEMM_V1_KERNEL_ID]
+        );
+        assert_eq!(
+            handoff
+                .symbol_manifest()
+                .symbols(CompilerModuleSymbolRoleV1::KernelDescriptor)
+                .collect::<Vec<_>>(),
+            [SCALAR_GEMM_V1_DESCRIPTOR]
+        );
+        assert!(!handoff.authenticates_compiler_origin());
+        assert!(!handoff.grants_worker_authority());
+        assert!(!handoff.grants_link_authority());
+        assert!(!handoff.grants_load_authority());
+        assert!(!handoff.grants_launch_authority());
     }
 
     fn producer() -> ProducerIdentity {

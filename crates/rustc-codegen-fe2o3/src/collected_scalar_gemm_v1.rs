@@ -1,7 +1,8 @@
 //! Source-authenticated admission for the fixed scalar GEMM V1 profile.
 //!
-//! This checkpoint authenticates one exact collected rustc root. It deliberately
-//! does not construct executable lowering authority.
+//! This checkpoint authenticates one exact collected rustc root and mints a
+//! private receipt whose consumption selects one canonical Kernel IR module.
+//! Neither the receipt nor that selection grants executable authority.
 
 use std::error::Error;
 use std::fmt;
@@ -11,6 +12,7 @@ use fe2o3_artifacts::{
     Dimensions, Endianness, IdentityText, Mutability as ArtifactMutability, PointerWidth,
     RustScalarElementTypeV1, ScalarType, TargetIdentity,
 };
+use fe2o3_kernel_ir::{Module, scalar_gemm_v1_module};
 use rustc_abi::ExternAbi;
 use rustc_hir::{Mutability, Safety};
 use rustc_middle::ty::{FloatTy, Instance, InstanceKind, Ty, TyCtxt, TyKind, TypingEnv, UintTy};
@@ -29,16 +31,23 @@ pub(crate) const SCALAR_GEMM_CODE_OBJECT_VERSION_V1: u16 = 6;
 pub(crate) const SCALAR_GEMM_EXPLICIT_KERNARG_BYTES_V1: u64 = 64;
 pub(crate) const SCALAR_GEMM_COMPLETE_KERNARG_BYTES_V1: u64 = 320;
 pub(crate) const SCALAR_GEMM_KERNEL_SYMBOL_V1: &str = "scalar_gemm_v1";
-pub(crate) const NEXT_LOWERING_DEPENDENCY: &str = "body-bound executable lowering, checked host launch admission, and upstream LLVM/LLD COV6 finalization remain required";
+pub(crate) const NEXT_LOWERING_DEPENDENCY: &str = "attempt-scoped Worker V2 publication, measured upstream LLVM/LLD execution, raw-HSACO inspection, and checked host launch admission remain required";
 
 const FIXED_KERNEL_EXPORT: &str = SCALAR_GEMM_KERNEL_SYMBOL_V1;
 const FIXED_LOGICAL_NAME: &str = SCALAR_GEMM_KERNEL_SYMBOL_V1;
+const REVIEWED_ROOT_INSTANCE_IDENTITY: &str =
+    "__fe2o3_host_kernel_v1_789adedfdc3be1fb60518dd2c7460c3ef8e6b900527d1bcb2289baa1e014693e";
 const REVIEWED_RUSTC_RELEASE: &str = "1.96.0-nightly";
 const REVIEWED_RUSTC_COMMIT: &str = "55e86c996809902e8bbad512cfb4d2c18be446d9";
 const REVIEWED_RUSTC_LLVM: &str = "22.1.2";
 const REVIEWED_CRATE_METADATA: &str = "fe2o3-scalar-gemm-v1-reviewed";
 const COMPILER_SEMANTICS_DOMAIN_V1: &[u8] = b"fe2o3.scalar-gemm.compiler-semantics.v1";
 const COLLECTED_AUTHORITY_DOMAIN_V1: &[u8] = b"fe2o3.scalar-gemm.collected-authority.v1";
+const ABI_BINDING_DOMAIN_V1: &[u8] = b"fe2o3.scalar-gemm.abi-binding.v1";
+const LAUNCH_BINDING_DOMAIN_V1: &[u8] = b"fe2o3.scalar-gemm.launch-binding.v1";
+const EXACT_ABI_BINDING_V1: &[u8] = b"ptr64;size=64;align=8;a@0:16:8:slice-f32:shared-readonly;b@16:16:8:slice-f32:shared-readonly;c@32:16:8:slice-f32:exclusive-readwrite;m@48:4:4:u32;n@52:4:4:u32;k@56:4:4:u32";
+const EXACT_LAUNCH_BINDING_V1: &[u8] =
+    b"rank=1;block=exact(256,1,1);max-grid=(4294967295,1,1);static-shared=0;dynamic-shared=0";
 
 // Reviewed from the exact fixture through path-independent portable-MIR
 // collection under the compiler-semantics profile below.
@@ -76,8 +85,14 @@ struct CompilerSemanticsV1 {
     remap_path_destinations: Vec<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct AuthenticatedCollectedScalarGemmV1 {
+#[derive(Debug, Eq, PartialEq)]
+struct ScalarGemmFrontendAuthorityV1 {
+    target: String,
+    code_object_version: u16,
+    explicit_kernarg_bytes: u64,
+    complete_kernarg_bytes: u64,
+    abi_binding_commitment: [u8; 32],
+    launch_binding_commitment: [u8; 32],
     kernel_export: String,
     root_instance_identity: String,
     portable_mir_semantic_commitment: [u8; 32],
@@ -85,25 +100,103 @@ pub(crate) struct AuthenticatedCollectedScalarGemmV1 {
     authority_commitment: [u8; 32],
 }
 
-impl AuthenticatedCollectedScalarGemmV1 {
+/// Opaque, single-use authority produced only by exact rustc admission.
+///
+/// The private state and absence of `Clone`/`Copy` prevent downstream code from
+/// manufacturing authority from a copied digest. Consumption additionally
+/// invalidates the value so an accidental replay fails closed at runtime.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct ScalarGemmFrontendReceiptV1 {
+    authority: Option<ScalarGemmFrontendAuthorityV1>,
+}
+
+impl ScalarGemmFrontendReceiptV1 {
     pub(crate) fn kernel_export(&self) -> &str {
-        &self.kernel_export
+        &self
+            .authority
+            .as_ref()
+            .expect("unconsumed scalar GEMM receipt")
+            .kernel_export
     }
 
     pub(crate) fn root_instance_identity(&self) -> &str {
-        &self.root_instance_identity
+        &self
+            .authority
+            .as_ref()
+            .expect("unconsumed scalar GEMM receipt")
+            .root_instance_identity
     }
 
     pub(crate) fn portable_mir_semantic_hex(&self) -> String {
-        encode_hex(&self.portable_mir_semantic_commitment)
+        encode_hex(
+            &self
+                .authority
+                .as_ref()
+                .expect("unconsumed scalar GEMM receipt")
+                .portable_mir_semantic_commitment,
+        )
     }
 
     pub(crate) fn compiler_semantics_hex(&self) -> String {
-        encode_hex(&self.compiler_semantics_commitment)
+        encode_hex(
+            &self
+                .authority
+                .as_ref()
+                .expect("unconsumed scalar GEMM receipt")
+                .compiler_semantics_commitment,
+        )
     }
 
     pub(crate) fn authority_hex(&self) -> String {
-        encode_hex(&self.authority_commitment)
+        encode_hex(
+            &self
+                .authority
+                .as_ref()
+                .expect("unconsumed scalar GEMM receipt")
+                .authority_commitment,
+        )
+    }
+
+    pub(crate) fn authority_commitment(&self) -> &[u8; 32] {
+        &self
+            .authority
+            .as_ref()
+            .expect("unconsumed scalar GEMM receipt")
+            .authority_commitment
+    }
+
+    pub(crate) fn consume(
+        &mut self,
+    ) -> Result<AuthenticatedScalarGemmModuleV1, CollectedScalarGemmErrorV1> {
+        let authority = self
+            .authority
+            .take()
+            .ok_or(CollectedScalarGemmErrorV1::ReceiptAlreadyConsumed)?;
+        validate_frontend_authority(&authority)?;
+        Ok(AuthenticatedScalarGemmModuleV1 {
+            module: scalar_gemm_v1_module(),
+            authority_commitment: authority.authority_commitment,
+        })
+    }
+}
+
+/// Canonical Kernel IR selected by consuming an unforgeable frontend receipt.
+///
+/// Its fields remain private and the value is neither cloneable nor publicly
+/// constructible. The Worker V2 preparation path consumes it by value.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedScalarGemmModuleV1 {
+    module: Module,
+    authority_commitment: [u8; 32],
+}
+
+impl AuthenticatedScalarGemmModuleV1 {
+    pub(crate) const fn authority_commitment(&self) -> &[u8; 32] {
+        &self.authority_commitment
+    }
+
+    pub(crate) fn into_module(self) -> Module {
+        self.module
     }
 }
 
@@ -131,6 +224,10 @@ pub(crate) enum CollectedScalarGemmErrorV1 {
     },
     PortableMir {
         detail: String,
+    },
+    ReceiptAlreadyConsumed,
+    ReceiptBindingMismatch {
+        field: &'static str,
     },
 }
 
@@ -168,6 +265,12 @@ impl fmt::Display for CollectedScalarGemmErrorV1 {
                 formatter,
                 "collected scalar GEMM V1 portable MIR rejected: {detail}"
             ),
+            Self::ReceiptAlreadyConsumed => formatter
+                .write_str("collected scalar GEMM V1 frontend receipt was already consumed"),
+            Self::ReceiptBindingMismatch { field } => write!(
+                formatter,
+                "collected scalar GEMM V1 frontend receipt binding mismatch: {field}"
+            ),
         }
     }
 }
@@ -179,7 +282,7 @@ pub(crate) fn authenticate_collected_scalar_gemm_v1<'tcx>(
     collection: &CollectionResult<'tcx>,
     target: &AmdGpuTarget,
     custom_llvm_pipeline: bool,
-) -> Result<AuthenticatedCollectedScalarGemmV1, CollectedScalarGemmErrorV1> {
+) -> Result<ScalarGemmFrontendReceiptV1, CollectedScalarGemmErrorV1> {
     admit_execution_context(target.as_str(), custom_llvm_pipeline)?;
     let compiler_semantics = observe_compiler_semantics(tcx);
     let compiler_semantics_commitment = require_compiler_semantics(&compiler_semantics)?;
@@ -217,18 +320,29 @@ pub(crate) fn authenticate_collected_scalar_gemm_v1<'tcx>(
     }
 
     let root_instance_identity = tcx.def_path_str(root.instance.def_id());
-    let authority_commitment = collected_authority_commitment(
-        portable_mir_semantic_commitment,
-        compiler_semantics_commitment,
-        &root_instance_identity,
-        &root.export_name,
-    );
-    Ok(AuthenticatedCollectedScalarGemmV1 {
+    if root_instance_identity != REVIEWED_ROOT_INSTANCE_IDENTITY {
+        return Err(unsupported_collection(format!(
+            "root instance must be exactly `{REVIEWED_ROOT_INSTANCE_IDENTITY}`, found `{root_instance_identity}`"
+        )));
+    }
+    let abi_binding_commitment = exact_abi_binding_commitment();
+    let launch_binding_commitment = exact_launch_binding_commitment();
+    let mut authority = ScalarGemmFrontendAuthorityV1 {
+        target: EXACT_SCALAR_GEMM_TARGET_V1.to_owned(),
+        code_object_version: SCALAR_GEMM_CODE_OBJECT_VERSION_V1,
+        explicit_kernarg_bytes: SCALAR_GEMM_EXPLICIT_KERNARG_BYTES_V1,
+        complete_kernarg_bytes: SCALAR_GEMM_COMPLETE_KERNARG_BYTES_V1,
+        abi_binding_commitment,
+        launch_binding_commitment,
         kernel_export: root.export_name.clone(),
         root_instance_identity,
         portable_mir_semantic_commitment,
         compiler_semantics_commitment,
-        authority_commitment,
+        authority_commitment: [0; 32],
+    };
+    authority.authority_commitment = collected_authority_commitment(&authority);
+    Ok(ScalarGemmFrontendReceiptV1 {
+        authority: Some(authority),
     })
 }
 
@@ -371,9 +485,13 @@ fn require_layout(root: &CollectedFunction<'_>) -> Result<(), CollectedScalarGem
         )));
     }
     let abi = contract.abi();
-    if abi.size() != SCALAR_GEMM_EXPLICIT_KERNARG_BYTES_V1 || abi.alignment() != 8 {
+    if abi.size() != SCALAR_GEMM_EXPLICIT_KERNARG_BYTES_V1
+        || abi.alignment() != 8
+        || abi.pointer_width() != PointerWidth::Bits64
+    {
         return Err(layout_mismatch(format!(
-            "explicit kernarg must be exactly 64 bytes aligned to 8, found {} bytes aligned to {}",
+            "explicit kernarg must be exactly 64-bit, 64 bytes aligned to 8, found {:?}, {} bytes aligned to {}",
+            abi.pointer_width(),
             abi.size(),
             abi.alignment()
         )));
@@ -381,6 +499,7 @@ fn require_layout(root: &CollectedFunction<'_>) -> Result<(), CollectedScalarGem
     let expected_names = ["a", "b", "c", "m", "n", "k"];
     let expected_offsets = [0, 16, 32, 48, 52, 56];
     let expected_sizes = [16, 16, 16, 4, 4, 4];
+    let expected_alignments = [8, 8, 8, 4, 4, 4];
     if abi.fields().len() != expected_names.len() {
         return Err(layout_mismatch(format!(
             "expected six ABI fields, found {}",
@@ -391,15 +510,19 @@ fn require_layout(root: &CollectedFunction<'_>) -> Result<(), CollectedScalarGem
         if field.name().as_str() != expected_names[index]
             || field.offset() != expected_offsets[index]
             || field.size() != expected_sizes[index]
+            || field.alignment() != expected_alignments[index]
+            || field.type_identity() != contract.arguments()[index].type_identity()
         {
             return Err(layout_mismatch(format!(
-                "field {index} must be {}@{} size {}, found {}@{} size {}",
+                "field {index} must be {}@{} size {} align {} with its rustc-derived type identity, found {}@{} size {} align {}",
                 expected_names[index],
                 expected_offsets[index],
                 expected_sizes[index],
+                expected_alignments[index],
                 field.name().as_str(),
                 field.offset(),
-                field.size()
+                field.size(),
+                field.alignment(),
             )));
         }
         match index {
@@ -576,6 +699,10 @@ fn require_compiler_semantics(
         return Err(CollectedScalarGemmErrorV1::CompilerSemantics { detail });
     }
 
+    Ok(compiler_semantics_commitment(observed))
+}
+
+fn compiler_semantics_commitment(observed: &CompilerSemanticsV1) -> [u8; 32] {
     let mut digest = Sha256::new();
     hash_field(&mut digest, COMPILER_SEMANTICS_DOMAIN_V1);
     hash_field(&mut digest, observed.rustc_release.as_bytes());
@@ -611,7 +738,31 @@ fn require_compiler_semantics(
     for destination in &observed.remap_path_destinations {
         hash_field(&mut digest, destination.as_bytes());
     }
-    Ok(digest.finalize().into())
+    digest.finalize().into()
+}
+
+fn reviewed_compiler_semantics() -> CompilerSemanticsV1 {
+    CompilerSemanticsV1 {
+        rustc_release: REVIEWED_RUSTC_RELEASE,
+        rustc_commit: REVIEWED_RUSTC_COMMIT,
+        llvm_version: REVIEWED_RUSTC_LLVM,
+        panic_strategy: "Unwind".to_owned(),
+        overflow_checks: false,
+        optimize: "No".to_owned(),
+        debug_assertions: true,
+        mir_opt_level: 1,
+        mir_enable_passes: vec![("JumpThreading".to_owned(), false)],
+        llvm_args: Vec::new(),
+        llvm_passes: Vec::new(),
+        target_cpu: None,
+        target_features: String::new(),
+        rustc_codegen_opt_level: "0".to_owned(),
+        crate_metadata: vec![REVIEWED_CRATE_METADATA.to_owned()],
+        remap_path_destinations: vec![
+            "/fe2o3-reviewed-workspace/scalar-gemm-v1.rs".to_owned(),
+            "/fe2o3-reviewed-workspace".to_owned(),
+        ],
+    }
 }
 
 fn scalar_gemm_target_identity() -> Result<TargetIdentity, CollectedScalarGemmErrorV1> {
@@ -627,31 +778,100 @@ fn scalar_gemm_target_identity() -> Result<TargetIdentity, CollectedScalarGemmEr
     .map_err(|error| unsupported_collection(format!("invalid target identity: {error}")))
 }
 
-fn collected_authority_commitment(
-    portable_mir_semantic_commitment: [u8; 32],
-    compiler_semantics: [u8; 32],
-    root_instance_identity: &str,
-    kernel_export: &str,
-) -> [u8; 32] {
+fn collected_authority_commitment(authority: &ScalarGemmFrontendAuthorityV1) -> [u8; 32] {
     let mut digest = Sha256::new();
     hash_field(&mut digest, COLLECTED_AUTHORITY_DOMAIN_V1);
-    hash_field(&mut digest, &portable_mir_semantic_commitment);
-    hash_field(&mut digest, &compiler_semantics);
-    hash_field(&mut digest, root_instance_identity.as_bytes());
-    hash_field(&mut digest, kernel_export.as_bytes());
-    hash_field(
-        &mut digest,
-        &SCALAR_GEMM_CODE_OBJECT_VERSION_V1.to_le_bytes(),
-    );
-    hash_field(
-        &mut digest,
-        &SCALAR_GEMM_EXPLICIT_KERNARG_BYTES_V1.to_le_bytes(),
-    );
-    hash_field(
-        &mut digest,
-        &SCALAR_GEMM_COMPLETE_KERNARG_BYTES_V1.to_le_bytes(),
-    );
+    hash_field(&mut digest, &authority.portable_mir_semantic_commitment);
+    hash_field(&mut digest, &authority.compiler_semantics_commitment);
+    hash_field(&mut digest, authority.root_instance_identity.as_bytes());
+    hash_field(&mut digest, authority.kernel_export.as_bytes());
+    hash_field(&mut digest, authority.target.as_bytes());
+    hash_field(&mut digest, &authority.code_object_version.to_le_bytes());
+    hash_field(&mut digest, &authority.explicit_kernarg_bytes.to_le_bytes());
+    hash_field(&mut digest, &authority.complete_kernarg_bytes.to_le_bytes());
+    hash_field(&mut digest, &authority.abi_binding_commitment);
+    hash_field(&mut digest, &authority.launch_binding_commitment);
     digest.finalize().into()
+}
+
+fn exact_abi_binding_commitment() -> [u8; 32] {
+    domain_commitment(ABI_BINDING_DOMAIN_V1, EXACT_ABI_BINDING_V1)
+}
+
+fn exact_launch_binding_commitment() -> [u8; 32] {
+    domain_commitment(LAUNCH_BINDING_DOMAIN_V1, EXACT_LAUNCH_BINDING_V1)
+}
+
+fn domain_commitment(domain: &[u8], value: &[u8]) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    hash_field(&mut digest, domain);
+    hash_field(&mut digest, value);
+    digest.finalize().into()
+}
+
+fn validate_frontend_authority(
+    authority: &ScalarGemmFrontendAuthorityV1,
+) -> Result<(), CollectedScalarGemmErrorV1> {
+    let field = if authority.target != EXACT_SCALAR_GEMM_TARGET_V1 {
+        Some("target")
+    } else if authority.code_object_version != SCALAR_GEMM_CODE_OBJECT_VERSION_V1 {
+        Some("code-object version")
+    } else if authority.explicit_kernarg_bytes != SCALAR_GEMM_EXPLICIT_KERNARG_BYTES_V1
+        || authority.complete_kernarg_bytes != SCALAR_GEMM_COMPLETE_KERNARG_BYTES_V1
+    {
+        Some("kernarg ABI sizes")
+    } else if authority.abi_binding_commitment != exact_abi_binding_commitment() {
+        Some("explicit ABI")
+    } else if authority.launch_binding_commitment != exact_launch_binding_commitment() {
+        Some("launch contract")
+    } else if authority.kernel_export != FIXED_KERNEL_EXPORT {
+        Some("kernel export")
+    } else if authority.root_instance_identity != REVIEWED_ROOT_INSTANCE_IDENTITY {
+        Some("root instance")
+    } else if authority.portable_mir_semantic_commitment != PORTABLE_MIR_SEMANTIC_IDENTITY {
+        Some("portable MIR")
+    } else if authority.compiler_semantics_commitment
+        != compiler_semantics_commitment(&reviewed_compiler_semantics())
+    {
+        Some("compiler semantics")
+    } else {
+        None
+    };
+    if let Some(field) = field {
+        return Err(CollectedScalarGemmErrorV1::ReceiptBindingMismatch { field });
+    }
+    let expected_authority = collected_authority_commitment(authority);
+    if authority.authority_commitment != expected_authority {
+        return Err(CollectedScalarGemmErrorV1::ReceiptBindingMismatch {
+            field: "authority commitment",
+        });
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+pub(crate) fn exact_frontend_receipt_for_test() -> ScalarGemmFrontendReceiptV1 {
+    let compiler_semantics_commitment =
+        compiler_semantics_commitment(&reviewed_compiler_semantics());
+    let abi_binding_commitment = exact_abi_binding_commitment();
+    let launch_binding_commitment = exact_launch_binding_commitment();
+    let mut authority = ScalarGemmFrontendAuthorityV1 {
+        target: EXACT_SCALAR_GEMM_TARGET_V1.to_owned(),
+        code_object_version: SCALAR_GEMM_CODE_OBJECT_VERSION_V1,
+        explicit_kernarg_bytes: SCALAR_GEMM_EXPLICIT_KERNARG_BYTES_V1,
+        complete_kernarg_bytes: SCALAR_GEMM_COMPLETE_KERNARG_BYTES_V1,
+        abi_binding_commitment,
+        launch_binding_commitment,
+        kernel_export: FIXED_KERNEL_EXPORT.to_owned(),
+        root_instance_identity: REVIEWED_ROOT_INSTANCE_IDENTITY.to_owned(),
+        portable_mir_semantic_commitment: PORTABLE_MIR_SEMANTIC_IDENTITY,
+        compiler_semantics_commitment,
+        authority_commitment: [0; 32],
+    };
+    authority.authority_commitment = collected_authority_commitment(&authority);
+    ScalarGemmFrontendReceiptV1 {
+        authority: Some(authority),
+    }
 }
 
 fn hash_field(digest: &mut Sha256, bytes: &[u8]) {
@@ -692,27 +912,11 @@ mod tests {
     use super::*;
 
     fn compiler_semantics() -> CompilerSemanticsV1 {
-        CompilerSemanticsV1 {
-            rustc_release: REVIEWED_RUSTC_RELEASE,
-            rustc_commit: REVIEWED_RUSTC_COMMIT,
-            llvm_version: REVIEWED_RUSTC_LLVM,
-            panic_strategy: "Unwind".to_owned(),
-            overflow_checks: false,
-            optimize: "No".to_owned(),
-            debug_assertions: true,
-            mir_opt_level: 1,
-            mir_enable_passes: vec![("JumpThreading".to_owned(), false)],
-            llvm_args: Vec::new(),
-            llvm_passes: Vec::new(),
-            target_cpu: None,
-            target_features: String::new(),
-            rustc_codegen_opt_level: "0".to_owned(),
-            crate_metadata: vec![REVIEWED_CRATE_METADATA.to_owned()],
-            remap_path_destinations: vec![
-                "/fe2o3-reviewed-workspace/scalar-gemm-v1.rs".to_owned(),
-                "/fe2o3-reviewed-workspace".to_owned(),
-            ],
-        }
+        reviewed_compiler_semantics()
+    }
+
+    fn exact_test_receipt() -> ScalarGemmFrontendReceiptV1 {
+        exact_frontend_receipt_for_test()
     }
 
     #[test]
@@ -794,22 +998,64 @@ mod tests {
 
     #[test]
     fn authority_commitment_binds_every_authority_field() {
-        let baseline = collected_authority_commitment([1; 32], [2; 32], "root", "export");
-        assert_ne!(
-            baseline,
-            collected_authority_commitment([3; 32], [2; 32], "root", "export")
+        let baseline_receipt = exact_test_receipt();
+        let baseline = collected_authority_commitment(
+            baseline_receipt.authority.as_ref().expect("test authority"),
         );
-        assert_ne!(
-            baseline,
-            collected_authority_commitment([1; 32], [4; 32], "root", "export")
+        let mutations: [fn(&mut ScalarGemmFrontendAuthorityV1); 10] = [
+            |authority| authority.portable_mir_semantic_commitment[0] ^= 1,
+            |authority| authority.compiler_semantics_commitment[0] ^= 1,
+            |authority| authority.root_instance_identity.push_str("_other"),
+            |authority| authority.kernel_export.push_str("_other"),
+            |authority| authority.target = "gfx942:xnack+".to_owned(),
+            |authority| authority.code_object_version = 5,
+            |authority| authority.explicit_kernarg_bytes = 63,
+            |authority| authority.complete_kernarg_bytes = 319,
+            |authority| authority.abi_binding_commitment[0] ^= 1,
+            |authority| authority.launch_binding_commitment[0] ^= 1,
+        ];
+        for mutate in mutations {
+            let mut receipt = exact_test_receipt();
+            let authority = receipt.authority.as_mut().expect("test authority");
+            mutate(authority);
+            assert_ne!(baseline, collected_authority_commitment(authority));
+        }
+    }
+
+    #[test]
+    fn copied_digest_does_not_mint_frontend_authority() {
+        let mut receipt = exact_test_receipt();
+        let authority = receipt.authority.as_mut().unwrap();
+        authority.compiler_semantics_commitment = [0x5a; 32];
+        assert!(matches!(
+            receipt.consume(),
+            Err(CollectedScalarGemmErrorV1::ReceiptBindingMismatch {
+                field: "compiler semantics"
+            })
+        ));
+    }
+
+    #[test]
+    fn wrong_target_receipt_fails_closed() {
+        let mut receipt = exact_test_receipt();
+        receipt.authority.as_mut().unwrap().target = "gfx942:xnack+".to_owned();
+        assert!(matches!(
+            receipt.consume(),
+            Err(CollectedScalarGemmErrorV1::ReceiptBindingMismatch { field: "target" })
+        ));
+    }
+
+    #[test]
+    fn frontend_receipt_is_single_use() {
+        let mut receipt = exact_test_receipt();
+        let authenticated = receipt.consume().expect("first consumption");
+        assert_eq!(
+            authenticated.into_module(),
+            fe2o3_kernel_ir::scalar_gemm_v1_module()
         );
-        assert_ne!(
-            baseline,
-            collected_authority_commitment([1; 32], [2; 32], "other", "export")
-        );
-        assert_ne!(
-            baseline,
-            collected_authority_commitment([1; 32], [2; 32], "root", "other")
-        );
+        assert!(matches!(
+            receipt.consume(),
+            Err(CollectedScalarGemmErrorV1::ReceiptAlreadyConsumed)
+        ));
     }
 }
