@@ -79,11 +79,17 @@ mod platform {
     pub(crate) const INVOCATION_AUTHORITY_CHILD_FD_V1: i32 =
         fe2o3_artifact_transaction::BROKERED_INVOCATION_AUTHORITY_CHILD_FD_V1;
     const BROKER_AUTHENTICATION_TIMEOUT: Duration = Duration::from_secs(30);
+    const BROKER_CLIENT_RESPONSE_TIMEOUT: Duration = Duration::from_secs(60);
+    const _: () = assert!(
+        BROKER_CLIENT_RESPONSE_TIMEOUT.as_secs()
+            >= BROKER_AUTHENTICATION_TIMEOUT.as_secs().saturating_mul(2)
+    );
     const BROKER_INVOCATION_FRAME_TIMEOUT: Duration = Duration::from_secs(30);
     const BROKER_INVOCATION_LIFETIME: Duration = Duration::from_secs(6 * 60 * 60);
     #[cfg(test)]
     const BROKER_IO_TIMEOUT: Duration = BROKER_AUTHENTICATION_TIMEOUT;
     const MAX_ACTIVE_CONNECTIONS: usize = 64;
+    const MAX_CONCURRENT_AUTHENTICATIONS: usize = 8;
 
     #[derive(Clone, Copy)]
     struct BrokerLimits {
@@ -186,8 +192,6 @@ mod platform {
 
     static CURRENT_EXECUTABLE_OBSERVATION: OnceLock<Result<CurrentExecutableObservation, String>> =
         OnceLock::new();
-    static PEER_AUTHENTICATION: Mutex<()> = Mutex::new(());
-
     fn current_executable_observation() -> Result<CurrentExecutableObservation, String> {
         CURRENT_EXECUTABLE_OBSERVATION
             .get_or_init(|| {
@@ -407,12 +411,14 @@ mod platform {
         stopping: bool,
         next_connection_id: u64,
         active: BTreeMap<u64, Arc<UnixStream>>,
+        active_authentications: usize,
     }
 
     struct BrokerShutdown {
         // This mutex is the shutdown/SCM_RIGHTS linearization point and owns the wakeup socket.
         state: Mutex<BrokerShutdownState>,
-        slot_available: Condvar,
+        authentication_available: Condvar,
+        max_concurrent_authentications: usize,
         max_active_connections: usize,
         #[cfg(test)]
         accept_pause: Mutex<Option<Arc<TestPause>>>,
@@ -434,8 +440,6 @@ mod platform {
         caught_worker_panics: std::sync::atomic::AtomicUsize,
         #[cfg(test)]
         admission_rejections: std::sync::atomic::AtomicUsize,
-        #[cfg(test)]
-        admission_wait_started: std::sync::atomic::AtomicBool,
     }
 
     impl BrokerShutdown {
@@ -443,7 +447,9 @@ mod platform {
             assert!(max_active_connections != 0);
             Self {
                 state: Mutex::new(BrokerShutdownState::default()),
-                slot_available: Condvar::new(),
+                authentication_available: Condvar::new(),
+                max_concurrent_authentications: max_active_connections
+                    .min(MAX_CONCURRENT_AUTHENTICATIONS),
                 max_active_connections,
                 #[cfg(test)]
                 accept_pause: Mutex::new(None),
@@ -465,8 +471,6 @@ mod platform {
                 caught_worker_panics: std::sync::atomic::AtomicUsize::new(0),
                 #[cfg(test)]
                 admission_rejections: std::sync::atomic::AtomicUsize::new(0),
-                #[cfg(test)]
-                admission_wait_started: std::sync::atomic::AtomicBool::new(false),
             }
         }
 
@@ -486,29 +490,19 @@ mod platform {
             deadline: BrokerDeadline,
         ) -> io::Result<Option<ConnectionRegistryGuard>> {
             let mut state = self.state();
-            while !state.stopping && state.active.len() >= self.max_active_connections {
-                #[cfg(test)]
-                self.admission_wait_started
-                    .store(true, std::sync::atomic::Ordering::Release);
-                let remaining = match deadline.remaining() {
-                    Ok(remaining) => remaining,
-                    Err(error) => {
-                        #[cfg(test)]
-                        self.admission_rejections
-                            .fetch_add(1, std::sync::atomic::Ordering::Release);
-                        let _ = stream.shutdown(Shutdown::Both);
-                        return Err(error);
-                    }
-                };
-                let (next_state, _) = self
-                    .slot_available
-                    .wait_timeout(state, remaining)
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                state = next_state;
-            }
             if state.stopping {
                 let _ = stream.shutdown(Shutdown::Both);
                 return Ok(None);
+            }
+            if state.active.len() >= self.max_active_connections {
+                #[cfg(test)]
+                self.admission_rejections
+                    .fetch_add(1, std::sync::atomic::Ordering::Release);
+                let _ = stream.shutdown(Shutdown::Both);
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "capability broker is at active connection capacity",
+                ));
             }
             if let Err(error) = deadline.require_remaining() {
                 #[cfg(test)]
@@ -530,10 +524,45 @@ mod platform {
         }
 
         fn finish(&self, connection_id: u64) {
-            let removed = self.state().active.remove(&connection_id).is_some();
-            if removed {
-                self.slot_available.notify_one();
+            self.state().active.remove(&connection_id);
+        }
+
+        fn begin_authentication(
+            self: &Arc<Self>,
+            deadline: BrokerDeadline,
+        ) -> io::Result<AuthenticationRegistryGuard> {
+            let mut state = self.state();
+            while !state.stopping
+                && state.active_authentications >= self.max_concurrent_authentications
+            {
+                let remaining = deadline.remaining()?;
+                let (next_state, _) = self
+                    .authentication_available
+                    .wait_timeout(state, remaining)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                state = next_state;
             }
+            if state.stopping {
+                return Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "capability broker is shutting down",
+                ));
+            }
+            deadline.require_remaining()?;
+            state.active_authentications += 1;
+            Ok(AuthenticationRegistryGuard {
+                shutdown: Arc::clone(self),
+            })
+        }
+
+        fn finish_authentication(&self) {
+            let mut state = self.state();
+            state.active_authentications = state
+                .active_authentications
+                .checked_sub(1)
+                .expect("authentication registry guard must own an active slot");
+            drop(state);
+            self.authentication_available.notify_one();
         }
 
         fn begin(&self) {
@@ -547,7 +576,7 @@ mod platform {
             }
             state.active.clear();
             drop(state);
-            self.slot_available.notify_all();
+            self.authentication_available.notify_all();
         }
 
         fn send_response(
@@ -644,6 +673,14 @@ mod platform {
         }
 
         #[cfg(test)]
+        fn remove_worker_pause(&self) {
+            self.worker_pause
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
+        }
+
+        #[cfg(test)]
         fn install_locked_dispatch_pause(&self) -> TestPauseControl {
             Self::install_pause(&self.locked_dispatch_pause)
         }
@@ -729,6 +766,16 @@ mod platform {
     impl Drop for ConnectionRegistryGuard {
         fn drop(&mut self) {
             self.shutdown.finish(self.connection_id);
+        }
+    }
+
+    struct AuthenticationRegistryGuard {
+        shutdown: Arc<BrokerShutdown>,
+    }
+
+    impl Drop for AuthenticationRegistryGuard {
+        fn drop(&mut self) {
+            self.shutdown.finish_authentication();
         }
     }
 
@@ -873,7 +920,8 @@ mod platform {
                         invocation_frame_timeout: limits.invocation_frame_timeout,
                         invocation_lifetime: limits.invocation_lifetime,
                         invocation_authorization: worker_invocation_authorization,
-                        client_authentication: Mutex::new(()),
+                        #[cfg(test)]
+                        test_invocation_authorization: Mutex::new(()),
                         shutdown: worker_shutdown,
                     }
                     .serve();
@@ -1031,13 +1079,9 @@ mod platform {
         let mut stream = UnixStream::connect_addr(&address)
             .map_err(|error| format!("failed to connect to capability broker: {error}"))?;
         stream
-            .set_read_timeout(Some(BROKER_AUTHENTICATION_TIMEOUT))
+            .set_read_timeout(Some(BROKER_CLIENT_RESPONSE_TIMEOUT))
             .map_err(|error| format!("failed to bound capability broker read: {error}"))?;
-        let authentication = PEER_AUTHENTICATION
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
         route.peer.authenticate(&stream)?;
-        drop(authentication);
         let challenge = random_bytes()
             .map_err(|error| format!("failed to allocate broker client challenge: {error}"))?;
         let request = request_bytes(session, binding, challenge, &route.secret);
@@ -1147,7 +1191,8 @@ mod platform {
         invocation_frame_timeout: Duration,
         invocation_lifetime: Duration,
         invocation_authorization: InvocationAuthorizationRegistryV1,
-        client_authentication: Mutex<()>,
+        #[cfg(test)]
+        test_invocation_authorization: Mutex<()>,
         shutdown: Arc<BrokerShutdown>,
     }
 
@@ -1222,15 +1267,18 @@ mod platform {
 
         fn serve_one(&self, stream: &UnixStream, deadline: BrokerDeadline) -> io::Result<()> {
             deadline.require_remaining()?;
-            let authentication = self
-                .client_authentication
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let authentication = self.shutdown.begin_authentication(deadline)?;
+            let deadline = BrokerDeadline::new(Instant::now(), self.authentication_timeout);
             let client = self
                 .executable
                 .authenticate_client(stream)
                 .map_err(|error| io::Error::new(io::ErrorKind::PermissionDenied, error))?;
             drop(authentication);
+            #[cfg(test)]
+            let test_authorization = self
+                .test_invocation_authorization
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             #[cfg(test)]
             self.invocation_authorization
                 .authorize_test_process(client)
@@ -1238,6 +1286,8 @@ mod platform {
             self.invocation_authorization
                 .consume(client)
                 .map_err(|error| io::Error::new(io::ErrorKind::PermissionDenied, error))?;
+            #[cfg(test)]
+            drop(test_authorization);
             deadline.require_remaining()?;
             let mut request = vec![0_u8; REQUEST_BYTES];
             #[cfg(test)]
@@ -2294,7 +2344,7 @@ mod platform {
 
         #[test]
         fn active_connection_limit_rejects_max_plus_one_and_recovers() {
-            const TEST_LIMIT: usize = MAX_ACTIVE_CONNECTIONS;
+            const TEST_LIMIT: usize = 4;
             let (_temp, backend, artifact, pinned_cargo_image, session) = fixture();
             let binding = ordinary_binding();
             let broker = start_test_broker(
@@ -2304,32 +2354,44 @@ mod platform {
                 &artifact,
                 &pinned_cargo_image,
                 TEST_LIMIT,
-                Duration::from_secs(5),
+                BROKER_IO_TIMEOUT,
             );
+            let pause = broker.shutdown.install_worker_pause();
             let route = BrokerRouteV2::parse(broker.route()).unwrap();
             let address = endpoint_address(&route.endpoint).unwrap();
             let stalled = (0..TEST_LIMIT)
                 .map(|_| UnixStream::connect_addr(&address).unwrap())
                 .collect::<Vec<_>>();
-            wait_until(
-                || broker.shutdown.active_connection_count() == TEST_LIMIT,
-                "capability broker did not fill its configured admission limit",
-            );
+            for reached in 0..TEST_LIMIT {
+                assert!(
+                    pause
+                        .reached
+                        .recv_timeout(BROKER_IO_TIMEOUT)
+                        .unwrap_or_else(|_| {
+                            panic!(
+                                "only {reached} capacity workers paused; {} registered",
+                                broker.shutdown.active_connection_count()
+                            )
+                        })
+                        .is_none(),
+                    "capacity worker pause unexpectedly reported a socket"
+                );
+            }
+            assert_eq!(broker.shutdown.active_connection_count(), TEST_LIMIT);
 
-            let mut excess = UnixStream::connect_addr(&address).unwrap();
-            excess
-                .set_read_timeout(Some(Duration::from_secs(6)))
-                .unwrap();
-            wait_until(
-                || {
-                    broker
-                        .shutdown
-                        .admission_wait_started
-                        .load(Ordering::Acquire)
-                },
-                "capability broker did not begin bounded overload admission",
-            );
             let rejection_started = Instant::now();
+            let mut excess = UnixStream::connect_addr(&address).unwrap();
+            wait_until(
+                || broker.shutdown.admission_rejections.load(Ordering::Acquire) == 1,
+                "capability broker did not reject overload admission",
+            );
+            assert!(
+                rejection_started.elapsed() < PROMPT_SHUTDOWN_BOUND,
+                "limit-plus-one connection waited for an active slot"
+            );
+            excess
+                .set_read_timeout(Some(PROMPT_SHUTDOWN_BOUND))
+                .unwrap();
             let mut byte = [0_u8; 1];
             assert!(
                 !matches!(
@@ -2343,13 +2405,17 @@ mod platform {
                 "limit-plus-one connection remained live"
             );
             assert!(
-                rejection_started.elapsed() < Duration::from_secs(6),
-                "limit-plus-one connection was not rejected within its connection deadline"
+                rejection_started.elapsed() < PROMPT_SHUTDOWN_BOUND,
+                "limit-plus-one connection was not rejected promptly"
             );
             assert!(broker.shutdown.active_connection_count() <= TEST_LIMIT);
             assert_eq!(received_descriptor_count(&excess), 0);
 
             drop(excess);
+            for _ in 0..TEST_LIMIT {
+                pause.release();
+            }
+            broker.shutdown.remove_worker_pause();
             drop(stalled);
             wait_until(
                 || broker.shutdown.active_connection_count() == 0,
