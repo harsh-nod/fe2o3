@@ -728,20 +728,6 @@ fn validate_path(path: &str) -> Result<(), AuthorityCargoEnvironmentPathErrorV1>
 }
 
 fn forbidden_channel(name: &str) -> Option<ForbiddenCargoEnvironmentChannelV1> {
-    if [
-        "SECRET",
-        "TOKEN",
-        "PASSWORD",
-        "PASSWD",
-        "CREDENTIAL",
-        "API_KEY",
-        "PRIVATE_KEY",
-    ]
-    .into_iter()
-    .any(|marker| name.contains(marker))
-    {
-        return Some(ForbiddenCargoEnvironmentChannelV1::SecretLike);
-    }
     if name.starts_with("LD_") || name.starts_with("DYLD_") {
         return Some(ForbiddenCargoEnvironmentChannelV1::DynamicLoader);
     }
@@ -787,6 +773,20 @@ fn forbidden_channel(name: &str) -> Option<ForbiddenCargoEnvironmentChannelV1> {
         )
     {
         return Some(ForbiddenCargoEnvironmentChannelV1::RegistryCredentialGitSsh);
+    }
+    if [
+        "SECRET",
+        "TOKEN",
+        "PASSWORD",
+        "PASSWD",
+        "CREDENTIAL",
+        "API_KEY",
+        "PRIVATE_KEY",
+    ]
+    .into_iter()
+    .any(|marker| name.contains(marker))
+    {
+        return Some(ForbiddenCargoEnvironmentChannelV1::SecretLike);
     }
     None
 }
