@@ -38,8 +38,10 @@ pub(crate) const TILED_GEMM_KERNEL_SYMBOL_V1: &str = "tiled_gemm_v1";
 
 const FIXED_KERNEL_EXPORT: &str = TILED_GEMM_KERNEL_SYMBOL_V1;
 const FIXED_LOGICAL_NAME: &str = TILED_GEMM_KERNEL_SYMBOL_V1;
-const REVIEWED_ROOT_INSTANCE_IDENTITY: &str =
-    "__fe2o3_host_kernel_v1_e81f6647397a26ed285264c5197ea93db7dc3b50fd9e0b635ebb4a988916250e";
+const KERNEL_ROOT_BUILD_IDENTITY_PREFIX: &str = "__fe2o3_host_kernel_v1_";
+#[cfg(test)]
+const REPRESENTATIVE_ROOT_INSTANCE_IDENTITY: &str =
+    "__fe2o3_host_kernel_v1_0000000000000000000000000000000000000000000000000000000000000000";
 const REVIEWED_RUSTC_RELEASE: &str = "1.96.0-nightly";
 const REVIEWED_RUSTC_COMMIT: &str = "55e86c996809902e8bbad512cfb4d2c18be446d9";
 const REVIEWED_RUSTC_LLVM: &str = "22.1.2";
@@ -364,9 +366,9 @@ pub(crate) fn authenticate_collected_tiled_gemm_v1<'tcx>(
     }
 
     let root_instance_identity = tcx.def_path_str(root.instance.def_id());
-    if root_instance_identity != REVIEWED_ROOT_INSTANCE_IDENTITY {
+    if !is_kernel_root_build_identity(&root_instance_identity) {
         return Err(unsupported_collection(format!(
-            "root instance must be exactly `{REVIEWED_ROOT_INSTANCE_IDENTITY}`, found `{root_instance_identity}`"
+            "root instance must have the exact reviewed kernel-root prefix followed by 64 lowercase hexadecimal build-identity digits, found `{root_instance_identity}`"
         )));
     }
 
@@ -983,7 +985,17 @@ fn reviewed_compiler_semantics() -> CompilerSemanticsV1 {
 }
 
 fn is_cargo_crate_metadata(value: &str) -> bool {
-    value.len() == 16
+    is_lowercase_hex(value, 16)
+}
+
+fn is_kernel_root_build_identity(value: &str) -> bool {
+    value
+        .strip_prefix(KERNEL_ROOT_BUILD_IDENTITY_PREFIX)
+        .is_some_and(|suffix| is_lowercase_hex(suffix, 64))
+}
+
+fn is_lowercase_hex(value: &str, width: usize) -> bool {
+    value.len() == width
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
@@ -1068,7 +1080,7 @@ fn validate_frontend_authority(
         Some("frontend contract")
     } else if authority.kernel_export != FIXED_KERNEL_EXPORT {
         Some("kernel export")
-    } else if authority.root_instance_identity != REVIEWED_ROOT_INSTANCE_IDENTITY {
+    } else if !is_kernel_root_build_identity(&authority.root_instance_identity) {
         Some("root instance")
     } else if authority.portable_mir_semantic_commitment != PORTABLE_MIR_SEMANTIC_IDENTITY {
         Some("portable MIR")
@@ -1114,7 +1126,7 @@ pub(crate) fn exact_frontend_receipt_for_test() -> TiledGemmFrontendReceiptV1 {
         correspondence_commitment,
         frontend_contract_commitment,
         kernel_export: FIXED_KERNEL_EXPORT.to_owned(),
-        root_instance_identity: REVIEWED_ROOT_INSTANCE_IDENTITY.to_owned(),
+        root_instance_identity: REPRESENTATIVE_ROOT_INSTANCE_IDENTITY.to_owned(),
         portable_mir_semantic_commitment: PORTABLE_MIR_SEMANTIC_IDENTITY,
         compiler_semantics_commitment,
         descriptor_source_commitment,
@@ -1294,6 +1306,33 @@ mod tests {
             require_compiler_semantics(&extra_metadata),
             Err(CollectedTiledGemmErrorV1::CompilerSemantics { .. })
         ));
+    }
+
+    #[test]
+    fn kernel_root_build_identity_is_shape_checked_and_receipt_bound() {
+        for identity in [
+            REPRESENTATIVE_ROOT_INSTANCE_IDENTITY,
+            "__fe2o3_host_kernel_v1_e81f6647397a26ed285264c5197ea93db7dc3b50fd9e0b635ebb4a988916250e",
+            "__fe2o3_host_kernel_v1_dcbf71c097f487359c0fa4a17a5c63312ab6013c8a57b1d75db0f656d1d4fdc5",
+        ] {
+            assert!(is_kernel_root_build_identity(identity));
+        }
+        for identity in [
+            "__fe2o3_host_kernel_v1_",
+            "__fe2o3_host_kernel_v1_e81f6647397a26ed285264c5197ea93db7dc3b50fd9e0b635ebb4a988916250",
+            "__fe2o3_host_kernel_v1_E81F6647397A26ED285264C5197EA93DB7DC3B50FD9E0B635EBB4A988916250E",
+            "__fe2o3_host_kernel_v2_e81f6647397a26ed285264c5197ea93db7dc3b50fd9e0b635ebb4a988916250e",
+        ] {
+            assert!(!is_kernel_root_build_identity(identity));
+        }
+
+        let mut receipt = exact_test_receipt();
+        let authority = receipt.authority.as_mut().expect("test authority");
+        authority.root_instance_identity =
+            "__fe2o3_host_kernel_v1_dcbf71c097f487359c0fa4a17a5c63312ab6013c8a57b1d75db0f656d1d4fdc5"
+                .to_owned();
+        authority.authority_commitment = collected_authority_commitment(authority);
+        assert!(validate_frontend_authority(authority).is_ok());
     }
 
     #[test]
