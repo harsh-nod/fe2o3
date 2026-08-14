@@ -192,6 +192,7 @@ struct RowSoftmaxFrontendAuthorityV1 {
     portable_mir_semantic_commitment: [u8; 32],
     compiler_semantics_commitment: [u8; 32],
     cargo_metadata_build_observation: CargoMetadataBuildObservationV1,
+    provider_authority: crate::mir_import::RowSoftmaxProviderAuthorityV1,
     authority_commitment: [u8; 32],
 }
 
@@ -389,6 +390,10 @@ pub(crate) fn authenticate_collected_row_softmax_v1<'tcx>(
             detail: error.to_string(),
         }
     })?;
+    let provider_authority = crate::mir_import::observe_row_softmax_provider_authority_v1(tcx)
+        .map_err(|error| CollectedRowSoftmaxErrorV1::PortableMir {
+            detail: error.to_string(),
+        })?;
     let portable_mir_semantic_commitment = imported
         .portable_semantic_digest_v2(crate::mir_import::MirSemanticAdmissionInputsV2::new(
             FIXED_KERNEL_EXPORT,
@@ -436,6 +441,7 @@ pub(crate) fn authenticate_collected_row_softmax_v1<'tcx>(
         compiler_semantics_commitment: admitted_compiler_semantics.normalized_commitment,
         cargo_metadata_build_observation: admitted_compiler_semantics
             .cargo_metadata_build_observation,
+        provider_authority,
         authority_commitment: [0; 32],
     };
     authority.authority_commitment = collected_authority_commitment(&authority);
@@ -1363,6 +1369,40 @@ fn collected_authority_commitment(authority: &RowSoftmaxFrontendAuthorityV1) -> 
         &mut digest,
         &authority.cargo_metadata_build_observation.commitment,
     );
+    hash_field(
+        &mut digest,
+        authority.provider_authority.provider.crate_name.as_bytes(),
+    );
+    hash_field(
+        &mut digest,
+        &authority
+            .provider_authority
+            .provider
+            .stable_crate_id
+            .to_le_bytes(),
+    );
+    hash_field(
+        &mut digest,
+        &authority.provider_authority.provider.crate_hash,
+    );
+    hash_field(
+        &mut digest,
+        &authority
+            .provider_authority
+            .provider
+            .cargo_metadata_build_observation,
+    );
+    hash_field(
+        &mut digest,
+        &authority.provider_authority.provider.source_identity,
+    );
+    for identity in &authority.provider_authority.definition_identities {
+        hash_field(&mut digest, identity);
+    }
+    for identity in &authority.provider_authority.source_identities {
+        hash_field(&mut digest, identity);
+    }
+    hash_field(&mut digest, &authority.provider_authority.commitment);
     digest.finalize().into()
 }
 
@@ -1373,6 +1413,7 @@ fn validate_frontend_authority(
         .cargo_metadata_build_observation
         .validate()
         .is_err();
+    let provider_authority_is_invalid = authority.provider_authority.validate().is_err();
     let field = if authority.target != EXACT_ROW_SOFTMAX_TARGET_V1 {
         Some("target")
     } else if authority.code_object_version != ROW_SOFTMAX_CODE_OBJECT_VERSION_V1 {
@@ -1409,6 +1450,8 @@ fn validate_frontend_authority(
         Some("compiler semantics")
     } else if metadata_observation_is_invalid {
         Some("ordered Cargo metadata build observation")
+    } else if provider_authority_is_invalid {
+        Some("row-softmax trusted provider authority")
     } else {
         None
     };
@@ -1472,6 +1515,7 @@ fn exact_frontend_receipt_for_test() -> RowSoftmaxFrontendReceiptV1 {
         compiler_semantics_commitment: admitted_compiler_semantics.normalized_commitment,
         cargo_metadata_build_observation: admitted_compiler_semantics
             .cargo_metadata_build_observation,
+        provider_authority: crate::mir_import::RowSoftmaxProviderAuthorityV1::canonical_for_test(),
         authority_commitment: [0; 32],
     };
     authority.authority_commitment = collected_authority_commitment(&authority);
@@ -1919,7 +1963,7 @@ mod tests {
         let baseline = collected_authority_commitment(
             baseline_receipt.authority.as_ref().expect("test authority"),
         );
-        let mutations: [ReceiptMutation; 18] = [
+        let mutations: [ReceiptMutation; 19] = [
             (
                 |value| value.portable_mir_semantic_commitment[0] ^= 1,
                 "portable MIR",
@@ -1982,6 +2026,10 @@ mod tests {
             (
                 |value| value.cargo_metadata_build_observation.commitment[0] ^= 1,
                 "ordered Cargo metadata build observation",
+            ),
+            (
+                |value| value.provider_authority.source_identities[0][0] ^= 1,
+                "row-softmax trusted provider authority",
             ),
         ];
         for (mutate, expected_field) in mutations {

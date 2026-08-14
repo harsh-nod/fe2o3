@@ -984,6 +984,36 @@ fn compile_row_softmax_with_cargo_metadata(
     extra_args: &[&str],
 ) -> Output {
     build_frontend_dependencies(workspace).expect("build row-softmax frontend dependencies");
+    let cargo_target = std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| workspace.join("target"));
+    let device = cargo_target.join("debug/libfe2o3_device.rlib");
+    let host = cargo_target.join("debug/libfe2o3_host.rlib");
+    compile_row_softmax_with_device(
+        workspace,
+        backend,
+        output,
+        source,
+        target,
+        cargo_metadata,
+        extra_args,
+        &device,
+        &host,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compile_row_softmax_with_device(
+    workspace: &Path,
+    backend: &PinnedBackend,
+    output: &TestOutputDir,
+    source: &str,
+    target: &str,
+    cargo_metadata: &str,
+    extra_args: &[&str],
+    device: &Path,
+    host: &Path,
+) -> Output {
     backend
         .verify()
         .expect("sealed backend identity before row-softmax rustc");
@@ -992,8 +1022,6 @@ fn compile_row_softmax_with_cargo_metadata(
     let cargo_target = std::env::var_os("CARGO_TARGET_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| workspace.join("target"));
-    let device = cargo_target.join("debug/libfe2o3_device.rlib");
-    let host = cargo_target.join("debug/libfe2o3_host.rlib");
     let manifest_directory =
         workspace.join("crates/rustc-codegen-fe2o3/tests/fixtures/collected-row-softmax-v1");
     assert!(device.is_file(), "missing {}", device.display());
@@ -1022,6 +1050,15 @@ fn compile_row_softmax_with_cargo_metadata(
         .arg(format!(
             "dependency={}",
             cargo_target.join("debug/deps").display()
+        ))
+        .arg("-L")
+        .arg(format!(
+            "dependency={}",
+            device
+                .parent()
+                .expect("device rlib has a target profile directory")
+                .join("deps")
+                .display()
         ))
         .args(["-C", "overflow-checks=off"])
         .arg(format!("-Cmetadata={cargo_metadata}"))
@@ -1131,6 +1168,123 @@ fn admitted_row_softmax_root(stderr: &str) -> Option<&str> {
     let marker = "exact collected KernelEntry `";
     let tail = stderr.rsplit_once(marker)?.1;
     tail.split_once('`').map(|(root, _)| root)
+}
+
+fn copy_source_tree(source: &Path, destination: &Path) {
+    std::fs::create_dir_all(destination).expect("create copied source directory");
+    for entry in std::fs::read_dir(source).expect("read source directory") {
+        let entry = entry.expect("read source entry");
+        let target = destination.join(entry.file_name());
+        if entry.file_type().expect("read source entry type").is_dir() {
+            copy_source_tree(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), target).expect("copy source file");
+        }
+    }
+}
+
+fn build_hostile_same_name_device_provider(
+    workspace: &Path,
+    output: &TestOutputDir,
+) -> (PathBuf, PathBuf) {
+    let crate_root = output.0.join("hostile-fe2o3-device");
+    copy_source_tree(
+        &workspace.join("crates/fe2o3-device/src"),
+        &crate_root.join("src"),
+    );
+    std::fs::write(
+        crate_root.join("Cargo.toml"),
+        format!(
+            "[package]\nname = \"fe2o3-device\"\nversion = \"0.1.0\"\nedition = \"2024\"\npublish = false\n\n[dependencies]\nfe2o3-macros = {{ path = {:?} }}\n\n[lib]\nname = \"fe2o3_device\"\n",
+            workspace.join("crates/fe2o3-macros")
+        ),
+    )
+    .expect("write hostile provider manifest");
+    let host_root = output.0.join("hostile-fe2o3-host");
+    std::fs::create_dir_all(host_root.join("src")).expect("create hostile host source root");
+    std::fs::write(
+        host_root.join("Cargo.toml"),
+        format!(
+            "[package]\nname = \"fe2o3-host\"\nversion = \"0.1.0\"\nedition = \"2024\"\npublish = false\n\n[dependencies]\nfe2o3-device = {{ path = {:?} }}\n\n[lib]\nname = \"fe2o3_host\"\n",
+            crate_root
+        ),
+    )
+    .expect("write hostile host manifest");
+    std::fs::write(
+        host_root.join("src/lib.rs"),
+        r"#![no_std]
+
+pub mod __generated {
+    use core::marker::PhantomData;
+
+    pub struct GeneratedReadDeviceSlice<'allocation, T>(PhantomData<&'allocation T>);
+    pub struct GeneratedReadWriteDeviceSlice<'allocation, T>(PhantomData<&'allocation mut T>);
+
+    #[derive(Clone, Copy)]
+    pub enum CompilerGeneratedKernelProfileV1 {
+        ManifestDerivedScalarSliceV1 {
+            generated_host_contract_identity: [u8; 32],
+        },
+    }
+
+    pub struct ValidatedCompilerGeneratedSemanticWitnessV1;
+    pub struct CompilerGeneratedSemanticWitnessErrorV1;
+
+    pub unsafe trait CompilerGeneratedKernelExpectationV1:
+        fe2o3_device::KernelMarkerV1
+    {
+        const PROFILE: CompilerGeneratedKernelProfileV1;
+        const KERNEL_BINDING_ID_V1: [u8; 32];
+        fn semantic_witness_v1() -> Result<
+            ValidatedCompilerGeneratedSemanticWitnessV1,
+            CompilerGeneratedSemanticWitnessErrorV1,
+        >;
+    }
+
+    pub unsafe fn semantic_witness_from_backend_v1(
+        _pointer: *const u8,
+        _length: usize,
+        _binding: [u8; 32],
+        _contract: [u8; 32],
+    ) -> Result<
+        ValidatedCompilerGeneratedSemanticWitnessV1,
+        CompilerGeneratedSemanticWitnessErrorV1,
+    > {
+        Err(CompilerGeneratedSemanticWitnessErrorV1)
+    }
+}
+",
+    )
+    .expect("write hostile host source");
+    std::fs::write(
+        output.0.join("Cargo.toml"),
+        "[workspace]\nmembers = [\"hostile-fe2o3-device\", \"hostile-fe2o3-host\"]\nresolver = \"3\"\n",
+    )
+    .expect("write hostile provider workspace manifest");
+    let target = output.0.join("hostile-target");
+    let mut command = Command::new(env!("CARGO"));
+    command
+        .current_dir(workspace)
+        .args(["build", "--workspace", "--manifest-path"])
+        .arg(output.0.join("Cargo.toml"))
+        .arg("--target-dir")
+        .arg(&target)
+        .env("CARGO_INCREMENTAL", "0");
+    let built = run_bounded(
+        &mut command,
+        BACKEND_BUILD_TIMEOUT,
+        "hostile same-name provider workspace",
+    )
+    .expect("build hostile provider workspace within deadline");
+    assert!(
+        built.status.success(),
+        "hostile provider workspace failed to build:\n{}",
+        stderr(&built)
+    );
+    (
+        target.join("debug/libfe2o3_device.rlib"),
+        target.join("debug/libfe2o3_host.rlib"),
+    )
 }
 
 fn assert_tiled_gemm_published_no_handoff(output: &TestOutputDir) {
@@ -2081,6 +2235,42 @@ fn row_softmax_v1_source_authentication_and_adversaries_stop_at_canonical_ir() {
         "compiler-semantics adversary minted row-softmax authority:\n{semantics_stderr}"
     );
     assert_row_softmax_published_nothing(&semantics_output);
+}
+
+#[test]
+fn row_softmax_rejects_a_hostile_same_name_device_provider() {
+    if isolated_backend_environment_is_unavailable() {
+        return;
+    }
+    let workspace = workspace();
+    let backend = build_backend(&workspace);
+    build_frontend_dependencies(&workspace).expect("build reviewed frontend dependencies");
+    let output = TestOutputDir::new(&workspace);
+    let (hostile_device, hostile_host) =
+        build_hostile_same_name_device_provider(&workspace, &output);
+    let compiled = compile_row_softmax_with_device(
+        &workspace,
+        backend,
+        &output,
+        ROW_SOFTMAX_FIXTURE,
+        "gfx942:xnack-",
+        "3a4d867f29d87610",
+        &[],
+        &hostile_device,
+        &hostile_host,
+    );
+    let compiler_stderr = stderr(&compiled);
+    assert!(
+        !compiled.status.success()
+            && !compiler_stderr.contains("selected canonical Kernel IR module")
+            && (compiler_stderr.contains("trusted-provider marker")
+                || compiler_stderr.contains("genuine external `fe2o3_device::DisjointSlice` type")
+                || compiler_stderr.contains("expected exact argument order")
+                || compiler_stderr
+                    .contains("diagnostic item does not resolve to the trusted function")),
+        "hostile same-name provider minted row-softmax authority:\n{compiler_stderr}"
+    );
+    assert_row_softmax_published_nothing(&output);
 }
 
 #[test]

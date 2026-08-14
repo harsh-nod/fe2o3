@@ -126,6 +126,105 @@ pub enum MirKernelProfile {
 }
 
 const MATRIX_SOURCE_ABI_DOMAIN_V2: &[u8] = fe2o3_kernel_ir::MATRIX_SOURCE_ABI_RECORD_DOMAIN_V2;
+const ROW_SOFTMAX_PROVIDER_AUTHORITY_DOMAIN_V1: &[u8] =
+    b"FE2O3/ROW-SOFTMAX-PROVIDER-AUTHORITY/V1\0";
+
+pub(crate) const ROW_SOFTMAX_TRUSTED_ITEMS_V1: [TrustedDeviceItem; 8] = [
+    TrustedDeviceItem::DisjointSlice,
+    TrustedDeviceItem::ThreadIndex,
+    TrustedDeviceItem::ThreadIndex1d,
+    TrustedDeviceItem::ThreadIndexGet,
+    TrustedDeviceItem::DisjointSliceGetMutAt,
+    TrustedDeviceItem::DeviceMath(dialect_amdgcn::DeviceMathDiagnosticItem::Context),
+    TrustedDeviceItem::DeviceMath(dialect_amdgcn::DeviceMathDiagnosticItem::ContextFromCompiler),
+    TrustedDeviceItem::DeviceMath(dialect_amdgcn::DeviceMathDiagnosticItem::F32(
+        fe2o3_kernel_ir::F32MathFunction::Exp,
+    )),
+];
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct RowSoftmaxProviderAuthorityV1 {
+    pub(crate) provider: crate::trusted_device_items::ReviewedRowSoftmaxProviderDefinitionV1,
+    pub(crate) definition_identities: Vec<[u8; 16]>,
+    pub(crate) source_identities: Vec<[u8; 32]>,
+    pub(crate) commitment: [u8; 32],
+}
+
+impl RowSoftmaxProviderAuthorityV1 {
+    fn canonical_commitment(&self) -> Result<[u8; 32], &'static str> {
+        if self.provider.crate_name != "fe2o3_device"
+            || self.provider.stable_crate_id == 0
+            || self.provider.crate_hash == [0; 16]
+            || self.provider.cargo_metadata_build_observation == [0; 32]
+            || self.provider.source_identity == [0; 32]
+            || self.definition_identities.len() != ROW_SOFTMAX_TRUSTED_ITEMS_V1.len()
+            || self.source_identities.len() != ROW_SOFTMAX_TRUSTED_ITEMS_V1.len()
+            || self
+                .definition_identities
+                .iter()
+                .any(|identity| identity == &[0; 16])
+            || self
+                .source_identities
+                .iter()
+                .any(|identity| identity == &[0; 32])
+            || self.provider.source_identity != self.source_identities[0]
+        {
+            return Err("row-softmax provider authority is incomplete");
+        }
+        let mut digest = Sha256::new();
+        row_provider_field(&mut digest, ROW_SOFTMAX_PROVIDER_AUTHORITY_DOMAIN_V1);
+        row_provider_field(&mut digest, self.provider.crate_name.as_bytes());
+        row_provider_field(&mut digest, &self.provider.stable_crate_id.to_le_bytes());
+        row_provider_field(&mut digest, &self.provider.crate_hash);
+        row_provider_field(&mut digest, &self.provider.cargo_metadata_build_observation);
+        for ((item, definition), source) in ROW_SOFTMAX_TRUSTED_ITEMS_V1
+            .iter()
+            .zip(&self.definition_identities)
+            .zip(&self.source_identities)
+        {
+            row_provider_field(&mut digest, item.canonical_path().as_bytes());
+            row_provider_field(&mut digest, definition);
+            row_provider_field(&mut digest, source);
+        }
+        Ok(digest.finalize().into())
+    }
+
+    pub(crate) fn validate(&self) -> Result<(), &'static str> {
+        if self.canonical_commitment()? != self.commitment {
+            return Err("row-softmax provider authority commitment mismatch");
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn canonical_for_test() -> Self {
+        let mut authority = Self {
+            provider: crate::trusted_device_items::ReviewedRowSoftmaxProviderDefinitionV1 {
+                crate_name: "fe2o3_device".to_owned(),
+                stable_crate_id: 1,
+                crate_hash: [2; 16],
+                cargo_metadata_build_observation: [3; 32],
+                source_identity: [4; 32],
+            },
+            definition_identities: (0..ROW_SOFTMAX_TRUSTED_ITEMS_V1.len())
+                .map(|index| [u8::try_from(index + 5).expect("small identity"); 16])
+                .collect(),
+            source_identities: (0..ROW_SOFTMAX_TRUSTED_ITEMS_V1.len())
+                .map(|index| [u8::try_from(index + 4).expect("small identity"); 32])
+                .collect(),
+            commitment: [0; 32],
+        };
+        authority.commitment = authority
+            .canonical_commitment()
+            .expect("synthetic row-softmax provider authority");
+        authority
+    }
+}
+
+fn row_provider_field(digest: &mut Sha256, bytes: &[u8]) {
+    digest.update((bytes.len() as u64).to_le_bytes());
+    digest.update(bytes);
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum MatrixRustPassModeV1 {
@@ -1493,6 +1592,60 @@ fn trusted_adt_item(tcx: TyCtxt<'_>, ty: Ty<'_>) -> Option<TrustedDeviceItem> {
     };
     semantic_features::classify(tcx, definition.did())
         .map(SessionRecognizedSemanticItem::trusted_device_item)
+}
+
+pub(crate) fn observe_row_softmax_provider_authority_v1(
+    tcx: TyCtxt<'_>,
+) -> Result<RowSoftmaxProviderAuthorityV1, MirImportError> {
+    let mut provider: Option<crate::trusted_device_items::ReviewedRowSoftmaxProviderDefinitionV1> =
+        None;
+    let mut provider_crate = None;
+    let mut definition_identities = Vec::with_capacity(ROW_SOFTMAX_TRUSTED_ITEMS_V1.len());
+    let mut source_identities = Vec::with_capacity(ROW_SOFTMAX_TRUSTED_ITEMS_V1.len());
+    for item in ROW_SOFTMAX_TRUSTED_ITEMS_V1 {
+        let definition = crate::trusted_device_items::definition(tcx, item).ok_or_else(|| {
+            MirImportError::new(format!(
+                "row-softmax provider omitted reviewed definition `{}`",
+                item.canonical_path()
+            ))
+        })?;
+        if provider_crate.is_some_and(|expected| expected != definition.krate) {
+            return Err(MirImportError::new(format!(
+                "row-softmax definition `{}` came from a different provider crate",
+                item.canonical_path()
+            )));
+        }
+        provider_crate.get_or_insert(definition.krate);
+        let observation =
+            crate::trusted_device_items::reviewed_row_softmax_provider_definition(tcx, definition)
+                .map_err(MirImportError::new)?;
+        if let Some(expected) = &provider
+            && (expected.crate_name != observation.crate_name
+                || expected.stable_crate_id != observation.stable_crate_id
+                || expected.crate_hash != observation.crate_hash
+                || expected.cargo_metadata_build_observation
+                    != observation.cargo_metadata_build_observation)
+        {
+            return Err(MirImportError::new(format!(
+                "row-softmax definition `{}` changed provider identity",
+                item.canonical_path()
+            )));
+        }
+        definition_identities.push(tcx.def_path_hash(definition).0.to_le_bytes());
+        source_identities.push(observation.source_identity);
+        provider.get_or_insert(observation);
+    }
+    let mut authority = RowSoftmaxProviderAuthorityV1 {
+        provider: provider.expect("the reviewed row-softmax item set is nonempty"),
+        definition_identities,
+        source_identities,
+        commitment: [0; 32],
+    };
+    authority.commitment = authority
+        .canonical_commitment()
+        .map_err(MirImportError::new)?;
+    authority.validate().map_err(MirImportError::new)?;
+    Ok(authority)
 }
 
 fn import_bf16_fragment_layout<'tcx>(

@@ -3,8 +3,8 @@
 //! Recognition starts from a rustc [`DefId`]. Diagnostic-item equality is only
 //! accepted after the provider definition is anchored to the reviewed sibling
 //! `fe2o3-device` source tree used to build this backend. The imported matrix
-//! record binds that source identity, rustc's observed stable crate ID and full
-//! crate hash, and the managed Cargo metadata observation.
+//! and row-softmax records bind that source identity, rustc's observed stable
+//! crate ID and full crate hash, and the managed Cargo metadata observation.
 //!
 //! This remains a compiler build-observation boundary, not cryptographic
 //! package authentication. A publisher signature or transparency-log identity
@@ -19,17 +19,28 @@ use sha2::{Digest as _, Sha256};
 use dialect_amdgcn::{
     DeviceMathDiagnosticItem, DeviceValueDiagnosticItem, Fe2o3DeviceDiagnosticItem,
 };
-use fe2o3_kernel_ir::{NarrowFloatFormat, WidenedFloatBinaryOp};
+use fe2o3_kernel_ir::{F32MathFunction, NarrowFloatFormat, WidenedFloatBinaryOp};
 
 const CARGO_METADATA_BUILD_OBSERVATION_ENV_V2: &str = "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2";
 
 const MATRIX_PROVIDER_SOURCE_IDENTITY_DOMAIN_V2: &[u8] =
     b"FE2O3/MATRIX-PROVIDER-SOURCE-IDENTITY/V2\0";
+const ROW_SOFTMAX_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
+    b"FE2O3/ROW-SOFTMAX-PROVIDER-SOURCE-IDENTITY/V1\0";
 const REVIEWED_FE2O3_DEVICE_SOURCE_ROOT: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../fe2o3-device/src");
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ReviewedMatrixProviderObservationV2 {
+    pub(crate) crate_name: String,
+    pub(crate) stable_crate_id: u64,
+    pub(crate) crate_hash: [u8; 16],
+    pub(crate) cargo_metadata_build_observation: [u8; 32],
+    pub(crate) source_identity: [u8; 32],
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ReviewedRowSoftmaxProviderDefinitionV1 {
     pub(crate) crate_name: String,
     pub(crate) stable_crate_id: u64,
     pub(crate) crate_hash: [u8; 16],
@@ -467,6 +478,13 @@ pub(crate) fn definition(tcx: TyCtxt<'_>, item: TrustedDeviceItem) -> Option<Def
                     .then_some(*marker)
                 })
             }
+            TrustedDeviceItem::DeviceMath(math) => {
+                HALF_MATH_DIAGNOSTIC_ITEMS.iter().find_map(|(marker, _)| {
+                    (dialect_amdgcn::recognize_fe2o3_device_diagnostic_item(marker)
+                        == Some(Fe2o3DeviceDiagnosticItem::Math(math)))
+                    .then_some(*marker)
+                })
+            }
             _ => None,
         })?;
     let def_id = tcx.get_diagnostic_item(Symbol::intern(marker))?;
@@ -534,9 +552,25 @@ pub(crate) fn rejected_provider(tcx: TyCtxt<'_>, def_id: DefId) -> Option<Reject
 fn provider_rule(tcx: TyCtxt<'_>, def_id: DefId, item: TrustedDeviceItem) -> Result<(), String> {
     if matrix_provider_bound_item(item) {
         reviewed_matrix_provider_observation(tcx, def_id).map(|_| ())
+    } else if row_softmax_provider_bound_item(item) {
+        reviewed_row_softmax_provider_definition(tcx, def_id).map(|_| ())
     } else {
         named_external_provider(tcx, def_id.krate).map(|_| ())
     }
+}
+
+const fn row_softmax_provider_bound_item(item: TrustedDeviceItem) -> bool {
+    matches!(
+        item,
+        TrustedDeviceItem::DisjointSlice
+            | TrustedDeviceItem::ThreadIndex
+            | TrustedDeviceItem::ThreadIndex1d
+            | TrustedDeviceItem::ThreadIndexGet
+            | TrustedDeviceItem::DisjointSliceGetMutAt
+            | TrustedDeviceItem::DeviceMath(DeviceMathDiagnosticItem::Context)
+            | TrustedDeviceItem::DeviceMath(DeviceMathDiagnosticItem::ContextFromCompiler)
+            | TrustedDeviceItem::DeviceMath(DeviceMathDiagnosticItem::F32(F32MathFunction::Exp))
+    )
 }
 
 const fn matrix_provider_bound_item(item: TrustedDeviceItem) -> bool {
@@ -586,7 +620,38 @@ pub(crate) fn reviewed_matrix_provider_observation(
     })
 }
 
+pub(crate) fn reviewed_row_softmax_provider_definition(
+    tcx: TyCtxt<'_>,
+    provider_definition: DefId,
+) -> Result<ReviewedRowSoftmaxProviderDefinitionV1, String> {
+    let crate_num = provider_definition.krate;
+    let crate_name = named_external_provider(tcx, crate_num)?;
+    let stable_crate_id = tcx.stable_crate_id(crate_num).as_u64();
+    let source_identity = reviewed_provider_source_identity(
+        tcx,
+        provider_definition,
+        ROW_SOFTMAX_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1,
+    )?;
+    let cargo_metadata_build_observation =
+        decode_sha256_environment(CARGO_METADATA_BUILD_OBSERVATION_ENV_V2)?;
+    Ok(ReviewedRowSoftmaxProviderDefinitionV1 {
+        crate_name,
+        stable_crate_id,
+        crate_hash: tcx.crate_hash(crate_num).as_u128().to_le_bytes(),
+        cargo_metadata_build_observation,
+        source_identity,
+    })
+}
+
 fn reviewed_matrix_source_identity(tcx: TyCtxt<'_>, def_id: DefId) -> Result<[u8; 32], String> {
+    reviewed_provider_source_identity(tcx, def_id, MATRIX_PROVIDER_SOURCE_IDENTITY_DOMAIN_V2)
+}
+
+fn reviewed_provider_source_identity(
+    tcx: TyCtxt<'_>,
+    def_id: DefId,
+    domain: &[u8],
+) -> Result<[u8; 32], String> {
     let file_name = tcx
         .sess
         .source_map()
@@ -617,7 +682,7 @@ fn reviewed_matrix_source_identity(tcx: TyCtxt<'_>, def_id: DefId) -> Result<[u8
     })?;
     let relative = relative.to_string_lossy();
     let mut hasher = Sha256::new();
-    hasher.update(MATRIX_PROVIDER_SOURCE_IDENTITY_DOMAIN_V2);
+    hasher.update(domain);
     hasher.update((relative.len() as u64).to_le_bytes());
     hasher.update(relative.as_bytes());
     hasher.update((source_bytes.len() as u64).to_le_bytes());
