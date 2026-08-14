@@ -16,6 +16,19 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
 fn main() -> ExitCode {
+    if env::var_os("FE2O3_TEST_EXPECT_CALLER_LOADER_ENV_SCRUBBED_V1").is_some() {
+        for (name, value) in env::vars_os() {
+            let name = name.to_string_lossy();
+            let is_loader =
+                name.starts_with("LD_") || name.starts_with("DYLD_") || name == "GLIBC_TUNABLES";
+            let is_managed_rustc_runtime =
+                name == "LD_LIBRARY_PATH" && value == OsStr::new("/proc/self/fd/193");
+            if is_loader && !is_managed_rustc_runtime {
+                eprintln!("fake Cargo inherited caller dynamic-loader variable {name}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
     let args = env::args_os().collect::<Vec<_>>();
     if args.get(1).is_none_or(|argument| argument != "config")
         && let Err(error) = record_invocation(&args)

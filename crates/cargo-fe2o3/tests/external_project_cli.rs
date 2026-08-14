@@ -541,6 +541,24 @@ fn inherited_cargo_target_dir_controls_generated_output() {
     assert!(records[1].hsaco_dir.is_empty());
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn ordinary_build_accepts_caller_loader_state_but_scrubs_managed_children() {
+    let fixture = ProjectFixture::standalone();
+    let mut command = fixture.command(&[OsString::from("build")]);
+    command
+        .env("LD_LIBRARY_PATH", "/ordinary/non-authoritative/runtime")
+        .env("FE2O3_TEST_EXPECT_CALLER_LOADER_ENV_SCRUBBED_V1", "1");
+
+    let output = command.output().expect("run ordinary loader compatibility probe");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(fixture.target.join("fe2o3/fixture.hsaco").is_file());
+}
+
 #[test]
 fn managed_selector_stays_child_only_after_backend_source_replacement() {
     let fixture = ProjectFixture::standalone();
@@ -1285,8 +1303,10 @@ fn loader_injection_environment_is_rejected_before_artifact_authority() {
         "GLIBC_TUNABLES",
     ] {
         let fixture = ProjectFixture::standalone();
-        let mut command = fixture.command(&[OsString::from("build")]);
-        command.env(variable, "/definitely/not/a/fe2o3-loader-object.so");
+        let mut command = fixture.authority_command(&[OsString::from("build")]);
+        command
+            .env("FE2O3_CODEGEN_PIPELINE", "collected-row-softmax-v1")
+            .env(variable, "/definitely/not/a/fe2o3-loader-object.so");
         let output = command.output().expect("run loader rejection probe");
         assert!(!output.status.success());
         assert!(

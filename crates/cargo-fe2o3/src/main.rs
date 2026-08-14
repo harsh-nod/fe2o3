@@ -291,7 +291,10 @@ fn smoke(args: &[String]) -> ExitCode {
 }
 
 fn cargo_with_backend_result(command: &str, args: &[OsString]) -> Result<(), String> {
-    reject_dynamic_loader_environment()?;
+    if authority_sensitive_request_selected() {
+        reject_dynamic_loader_environment()?;
+    }
+    scrub_process_dynamic_loader_environment();
     reject_preexisting_compiler_environment()?;
     let worker_v2 = worker_v2::PreparedWorkerV2Config::from_environment_for_cargo_setup()
         .map_err(|error| format!("Worker V2 setup failed: {error}"))?;
@@ -400,6 +403,15 @@ fn cargo_with_backend_result(command: &str, args: &[OsString]) -> Result<(), Str
         authorized_closure,
     )?;
     run_cargo_with_backend(&mut context, command, args)
+}
+
+fn authority_sensitive_request_selected() -> bool {
+    env::var_os(worker_v2::CODEGEN_PIPELINE_ENV).as_deref()
+        == Some(OsStr::new(AUTHORITY_BEARING_ROW_PIPELINE))
+        // A Worker V2 manifest can select the source-debug authority profile. Treat the
+        // unparsed selection as authority-sensitive so mutable manifest contents cannot
+        // downgrade the loader check that precedes manifest authentication.
+        || env::var_os(worker_v2::WORKER_V2_CONFIG_ENV).is_some()
 }
 
 fn preflight_declared_authority_backend(expected: [u8; 32]) -> Result<(), String> {
@@ -1554,6 +1566,18 @@ fn reject_dynamic_loader_environment() -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn scrub_process_dynamic_loader_environment() {
+    let names = env::vars_os()
+        .map(|(name, _)| name)
+        .filter(|name| is_dynamic_loader_environment_name(name))
+        .collect::<Vec<_>>();
+    for name in names {
+        // SAFETY: cargo-fe2o3 performs this one-time environment normalization before starting
+        // any worker or supervisor threads. The variables stay absent for the process lifetime.
+        unsafe { env::remove_var(name) };
+    }
 }
 
 pub(crate) fn is_dynamic_loader_injection_environment_name(name: &OsStr) -> bool {
