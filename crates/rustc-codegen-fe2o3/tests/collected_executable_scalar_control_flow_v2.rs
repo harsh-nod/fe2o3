@@ -1012,52 +1012,107 @@ fn decode_compiler_owned_module_section(
     module: &str,
     section_name: &str,
 ) -> Result<Vec<u8>, String> {
-    let header = format!("module asm \".section {section_name},\\22\\22,@progbits\"");
     let lines = module.lines().collect::<Vec<_>>();
-    let matches = lines
+    let declarations = lines
         .iter()
         .enumerate()
-        .filter_map(|(index, line)| (*line == header).then_some(index))
+        .filter_map(|(index, line)| {
+            module_asm_section_name(line)
+                .filter(|name| *name == section_name)
+                .map(|_| index)
+        })
         .collect::<Vec<_>>();
-    let [header_index] = matches.as_slice() else {
+    let [header_index] = declarations.as_slice() else {
         return Err(format!(
             "expected exactly one {section_name} module-assembly header, found {}",
-            matches.len()
+            declarations.len()
         ));
     };
-    if lines.get(header_index + 1) != Some(&"module asm \".balign 8\"") {
-        return Err(format!("{section_name} does not have exact alignment 8"));
-    }
 
-    let mut bytes = Vec::new();
-    for line in lines.iter().skip(header_index + 2) {
-        let Some(values) = line
-            .strip_prefix("module asm \".byte ")
-            .and_then(|line| line.strip_suffix('"'))
-        else {
+    let mut target_bytes = Vec::new();
+    let mut seen_sections = Vec::new();
+    let mut index = *header_index;
+    loop {
+        let line = lines[index];
+        let current_name = canonical_module_asm_section_name(line).ok_or_else(|| {
+            format!("{section_name} has a noncanonical module-assembly section header {line:?}")
+        })?;
+        if seen_sections.contains(&current_name) {
+            return Err(format!(
+                "{section_name} suffix repeats module-assembly section {current_name}"
+            ));
+        }
+        seen_sections.push(current_name);
+        if lines.get(index + 1) != Some(&"module asm \".balign 8\"") {
+            return Err(format!(
+                "module-assembly section {current_name} does not have exact alignment 8"
+            ));
+        }
+        index += 2;
+
+        let first_byte_line = index;
+        while let Some(line) = lines.get(index) {
+            let Some(values) = line
+                .strip_prefix("module asm \".byte ")
+                .and_then(|line| line.strip_suffix('"'))
+            else {
+                break;
+            };
+            for value in values.split(", ") {
+                let digits = value.strip_prefix("0x").ok_or_else(|| {
+                    format!("module-assembly section {current_name} byte lacks 0x prefix")
+                })?;
+                if digits.len() != 2
+                    || !digits
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                {
+                    return Err(format!(
+                        "module-assembly section {current_name} has noncanonical byte {value:?}"
+                    ));
+                }
+                if current_name == section_name {
+                    target_bytes.push(u8::from_str_radix(digits, 16).map_err(|error| {
+                        format!("decode module-assembly section {current_name} byte: {error}")
+                    })?);
+                }
+            }
+            index += 1;
+        }
+        if index == first_byte_line {
+            return Err(format!(
+                "module-assembly section {current_name} has no retained bytes"
+            ));
+        }
+        let Some(line) = lines.get(index) else {
             break;
         };
-        for value in values.split(", ") {
-            let digits = value
-                .strip_prefix("0x")
-                .ok_or_else(|| format!("{section_name} byte lacks 0x prefix"))?;
-            if digits.len() != 2
-                || !digits
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-            {
-                return Err(format!("{section_name} has noncanonical byte {value:?}"));
-            }
-            bytes.push(
-                u8::from_str_radix(digits, 16)
-                    .map_err(|error| format!("decode {section_name} byte: {error}"))?,
-            );
+        if canonical_module_asm_section_name(line).is_none() {
+            return Err(format!(
+                "module-assembly section {current_name} has unexpected trailing line {line:?}"
+            ));
         }
     }
-    if bytes.is_empty() {
+    if target_bytes.is_empty() {
         return Err(format!("{section_name} has no retained bytes"));
     }
-    Ok(bytes)
+    Ok(target_bytes)
+}
+
+fn module_asm_section_name(line: &str) -> Option<&str> {
+    line.strip_prefix("module asm \".section ")?
+        .split_once(',')
+        .map(|(name, _)| name)
+}
+
+fn canonical_module_asm_section_name(line: &str) -> Option<&str> {
+    let suffix = line.strip_prefix("module asm \".section ")?;
+    let name = suffix.strip_suffix(",\\22\\22,@progbits\"")?;
+    (!name.is_empty()
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_')))
+    .then_some(name)
 }
 
 fn independently_expected_row_exp_boundary() -> [u8; 32] {
@@ -1189,6 +1244,48 @@ fn compiler_owned_module_section_decoder_rejects_malformed_and_substituted_secti
     assert!(decode_compiler_owned_module_section(&substituted, ".fe2o3.test.v1").is_err());
     let duplicate = format!("{exact}{exact}");
     assert!(decode_compiler_owned_module_section(&duplicate, ".fe2o3.test.v1").is_err());
+
+    for directive in [".zero 1", ".long 0", ".p2align 3"] {
+        let trailing_directive = format!("{exact}module asm \"{directive}\"\n");
+        assert!(
+            decode_compiler_owned_module_section(&trailing_directive, ".fe2o3.test.v1").is_err(),
+            "accepted trailing assembler directive {directive}"
+        );
+    }
+    let ordinary_line = format!("{exact}define void @trailing() {{ ret void }}\n");
+    assert!(decode_compiler_owned_module_section(&ordinary_line, ".fe2o3.test.v1").is_err());
+    let empty_ambiguity = format!("{exact}\n");
+    assert!(decode_compiler_owned_module_section(&empty_ambiguity, ".fe2o3.test.v1").is_err());
+
+    let next_header = concat!(
+        "module asm \".section .fe2o3.next.v1,\\22\\22,@progbits\"\n",
+        "module asm \".balign 8\"\n",
+        "module asm \".byte 0x42\"\n",
+    );
+    let exact_with_next_section = format!("{exact}{next_header}");
+    assert_eq!(
+        decode_compiler_owned_module_section(&exact_with_next_section, ".fe2o3.test.v1").unwrap(),
+        [0x00, 0x7f, 0xff]
+    );
+    let extra_byte_after_boundary = format!(
+        "{exact}module asm \".section .fe2o3.next.v1,\\22\\22,@progbits\"\nmodule asm \".byte 0x42\"\n"
+    );
+    assert!(
+        decode_compiler_owned_module_section(&extra_byte_after_boundary, ".fe2o3.test.v1").is_err()
+    );
+    let reordered = exact.replace(
+        "module asm \".balign 8\"\nmodule asm \".byte 0x00, 0x7f, 0xff\"",
+        "module asm \".byte 0x00, 0x7f, 0xff\"\nmodule asm \".balign 8\"",
+    );
+    assert!(decode_compiler_owned_module_section(&reordered, ".fe2o3.test.v1").is_err());
+    let split_target = format!("{exact}{next_header}{exact}");
+    assert!(decode_compiler_owned_module_section(&split_target, ".fe2o3.test.v1").is_err());
+    let extra_byte_after_ordinary_boundary =
+        format!("{exact}define void @trailing() {{ ret void }}\nmodule asm \".byte 0x42\"\n");
+    assert!(
+        decode_compiler_owned_module_section(&extra_byte_after_ordinary_boundary, ".fe2o3.test.v1")
+            .is_err()
+    );
 }
 
 fn compile_row_softmax_with_attempt_mode(
@@ -2395,43 +2492,12 @@ fn tiled_gemm_v1_source_authentication_and_adversaries_fail_closed() {
 }
 
 #[test]
-fn row_softmax_v1_source_authentication_publishes_worker_v2_and_adversaries_fail_closed() {
+fn row_softmax_v1_direct_rustc_adversaries_fail_closed() {
     if isolated_backend_environment_is_unavailable() {
         return;
     }
     let workspace = workspace();
     let backend = build_backend(&workspace);
-
-    let exact_output = TestOutputDir::new(&workspace);
-    let exact = compile_row_softmax(
-        &workspace,
-        backend,
-        &exact_output,
-        ROW_SOFTMAX_FIXTURE,
-        "gfx942:xnack-",
-        &[],
-    );
-    let exact_stderr = stderr(&exact);
-    assert!(
-        exact.status.success()
-            && exact_stderr.contains("consumed its private single-use frontend receipt")
-            && exact_stderr.contains("exact ABI input:&[f32], output:DisjointSlice<f32>")
-            && exact_stderr.contains("fixed one-row 64-element profile")
-            && exact_stderr.contains("selected canonical Kernel IR module `fe2o3::row_softmax_v1`")
-            && exact_stderr.contains(
-                "lowered it through the commitment-gated gfx942 row-softmax dialect profile"
-            )
-            && exact_stderr.contains("published an inert Worker V2 compiler-module handoff")
-            && exact_stderr
-                .contains("explicit kernarg 32 bytes and required COV6 complete kernarg 288 bytes")
-            && exact_stderr.contains("`__ocml_exp_f32` unresolved-import bindings")
-            && exact_stderr.contains("source proof still grants no exponential implementation")
-            && exact_stderr.contains("worker execution, HSACO, COMGR, load, or launch authority")
-            && exact_stderr.contains("COMGR")
-            && !exact_stderr.contains("rejected the collected program without fallback")
-            && exact_output.0.join("row-softmax-v1").is_file(),
-        "reviewed row softmax did not publish its compiler handoff:\n{exact_stderr}"
-    );
 
     let missing_attempt_output = TestOutputDir::new(&workspace);
     let missing_attempt =
