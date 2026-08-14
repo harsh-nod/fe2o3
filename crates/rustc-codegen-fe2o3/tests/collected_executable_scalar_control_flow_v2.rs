@@ -1176,7 +1176,7 @@ fn compile_row_softmax_with_device(
         for required in [
             "declare float @__ocml_exp_f32(float)",
             ".fe2o3.kd.v1",
-            ".fe2o3.row-auth.v1",
+            ".fe2o3.row-softmax-auth.v1",
             ".fe2o3.row-exp.v1",
         ] {
             assert!(

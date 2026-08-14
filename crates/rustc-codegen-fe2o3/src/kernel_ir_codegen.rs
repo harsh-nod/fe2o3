@@ -550,7 +550,11 @@ pub(crate) fn bind_row_softmax_frontend_authority_v1(
     authority: [u8; 32],
     exponential_boundary: [u8; 32],
 ) -> Result<InertCompilerModuleTextV1, CompilerModuleConstructionError> {
-    append_commitment_section(&mut module.llvm_ir, ".fe2o3.row-auth.v1", &authority);
+    append_commitment_section(
+        &mut module.llvm_ir,
+        ".fe2o3.row-softmax-auth.v1",
+        &authority,
+    );
     append_commitment_section(
         &mut module.llvm_ir,
         ".fe2o3.row-exp.v1",
