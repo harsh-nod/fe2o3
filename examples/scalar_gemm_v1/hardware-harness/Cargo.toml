@@ -1,0 +1,13 @@
+[package]
+name = "fe2o3-scalar-gemm-v1-hardware-harness"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+fe2o3-core = { path = "../../../crates/fe2o3-core" }
+fe2o3-host = { path = "../../../crates/fe2o3-host" }
+fe2o3-hsa-runtime = { path = "../../../crates/fe2o3-hsa-runtime" }
+fe2o3-scalar-gemm-v1 = { path = ".." }
