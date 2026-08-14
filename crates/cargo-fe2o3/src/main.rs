@@ -292,13 +292,8 @@ fn cargo_with_backend_result(command: &str, args: &[OsString]) -> Result<(), Str
             )
         })
         .transpose()?;
-    let mut context = BackendRunContext::prepare(
-        project,
-        args,
-        worker_v2,
-        pinned_cargo,
-        authorized_closure.as_ref(),
-    )?;
+    let mut context =
+        BackendRunContext::prepare(project, args, worker_v2, pinned_cargo, authorized_closure)?;
     run_cargo_with_backend(&mut context, command, args)
 }
 
@@ -316,6 +311,7 @@ struct BackendRunContext {
     binding_wrapper: PathBuf,
     build_session: fe2o3_artifact_transaction::BuildSession,
     requires_locked_closure: bool,
+    authorized_closure: Option<authorized_kernel_closure::AuthorizedKernelClosureV1>,
 }
 
 impl BackendRunContext {
@@ -324,7 +320,7 @@ impl BackendRunContext {
         args: &[OsString],
         worker_v2: Option<worker_v2::PreparedWorkerV2Config>,
         pinned_cargo: pinned_executable::PinnedExecutable,
-        authorized_closure: Option<&authorized_kernel_closure::AuthorizedKernelClosureV1>,
+        authorized_closure: Option<authorized_kernel_closure::AuthorizedKernelClosureV1>,
     ) -> Result<Self, String> {
         let target = amd_gpu_target();
         let target_dir = project.open_or_create_target()?;
@@ -333,7 +329,7 @@ impl BackendRunContext {
             .map_err(|error| format!("failed to pin codegen backend: {error}"))?;
         let worker_v2_identity = worker_v2.as_ref().map(|config| config.identity());
         let mut cargo_configuration = project.semantic_configuration(args)?;
-        if let Some(authorized_closure) = authorized_closure {
+        if let Some(authorized_closure) = authorized_closure.as_ref() {
             cargo_configuration.extend_from_slice(b"fe2o3-authorized-kernel-closure-v1\0");
             cargo_configuration
                 .extend_from_slice(&(authorized_closure.snapshot().len() as u64).to_le_bytes());
@@ -369,6 +365,7 @@ impl BackendRunContext {
             binding_wrapper,
             build_session,
             requires_locked_closure: authorized_closure.is_some(),
+            authorized_closure,
         })
     }
 }
@@ -496,6 +493,9 @@ fn run_cargo_with_backend(
     drop(capability_broker);
 
     boundary_result?;
+    if let Some(authorized_closure) = context.authorized_closure.as_ref() {
+        authorized_closure.revalidate()?;
+    }
 
     match status {
         Ok(status) if status.success() => {

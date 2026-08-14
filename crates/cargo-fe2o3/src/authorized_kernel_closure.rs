@@ -103,6 +103,60 @@ const TRUSTED_FE2O3_HIP_SYS_TREE: &str =
 
 pub(crate) struct AuthorizedKernelClosureV1 {
     snapshot: Vec<u8>,
+    source_trees: Vec<ObservedSourceTree>,
+    lockfile: ObservedFile,
+}
+
+struct ObservedSourceTree {
+    root: PathBuf,
+    excluded: Option<PathBuf>,
+    digest: [u8; 32],
+}
+
+impl ObservedSourceTree {
+    fn capture(root: PathBuf, excluded: Option<PathBuf>) -> Result<Self, String> {
+        let digest = canonical_tree_digest(&root, excluded.as_deref())?;
+        Ok(Self {
+            root,
+            excluded,
+            digest,
+        })
+    }
+
+    fn revalidate(&self) -> Result<(), String> {
+        let current = canonical_tree_digest(&self.root, self.excluded.as_deref())?;
+        if current != self.digest {
+            return Err(format!(
+                "authoritative source closure changed after preflight under {}",
+                self.root.display()
+            ));
+        }
+        Ok(())
+    }
+}
+
+struct ObservedFile {
+    path: PathBuf,
+    digest: [u8; 32],
+    size: u64,
+}
+
+impl ObservedFile {
+    fn capture(path: PathBuf, limit: u64) -> Result<Self, String> {
+        let (digest, size) = hash_regular_file(&path, limit)?;
+        Ok(Self { path, digest, size })
+    }
+
+    fn revalidate(&self, limit: u64) -> Result<(), String> {
+        let (digest, size) = hash_regular_file(&self.path, limit)?;
+        if digest != self.digest || size != self.size {
+            return Err(format!(
+                "authoritative input changed after preflight: {}",
+                self.path.display()
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl AuthorizedKernelClosureV1 {
@@ -140,6 +194,13 @@ impl AuthorizedKernelClosureV1 {
 
     pub(crate) fn snapshot(&self) -> &[u8] {
         &self.snapshot
+    }
+
+    pub(crate) fn revalidate(&self) -> Result<(), String> {
+        for tree in &self.source_trees {
+            tree.revalidate()?;
+        }
+        self.lockfile.revalidate(MAX_LOCK_BYTES as u64)
     }
 
     fn from_metadata(
@@ -198,9 +259,10 @@ impl AuthorizedKernelClosureV1 {
         let target_directory = metadata
             .get("target_directory")
             .and_then(Value::as_str)
-            .map(Path::new);
+            .map(PathBuf::from);
         let mut snapshot = b"fe2o3-authorized-kernel-closure-content-v2\0".to_vec();
         append_field(&mut snapshot, cargo_digest);
+        let mut source_trees = Vec::with_capacity(closure.len());
         for id in &closure {
             let package = package_by_id
                 .get(id)
@@ -212,7 +274,14 @@ impl AuthorizedKernelClosureV1 {
                     manifest.display()
                 )
             })?;
-            let tree_digest = canonical_tree_digest(root, target_directory)?;
+            let observed_tree = ObservedSourceTree::capture(
+                root.to_path_buf(),
+                target_directory
+                    .as_ref()
+                    .filter(|target| target.starts_with(root))
+                    .cloned(),
+            )?;
+            let tree_digest = observed_tree.digest;
             validate_host_code_package(package, &tree_digest)?;
             append_field(&mut snapshot, id.as_bytes());
             for field in ["name", "version", "source", "checksum", "manifest_path"] {
@@ -234,6 +303,7 @@ impl AuthorizedKernelClosureV1 {
                 append_field(&mut snapshot, dependency.as_bytes());
             }
             append_field(&mut snapshot, &tree_digest);
+            source_trees.push(observed_tree);
         }
 
         let workspace_root = metadata
@@ -241,19 +311,18 @@ impl AuthorizedKernelClosureV1 {
             .and_then(Value::as_str)
             .ok_or_else(|| "authoritative Cargo metadata has no workspace root".to_owned())?;
         let lock_path = Path::new(workspace_root).join("Cargo.lock");
-        let lock = fs::read(&lock_path).map_err(|error| {
-            format!(
-                "cannot read authoritative lockfile {}: {error}",
-                lock_path.display()
-            )
-        })?;
-        if lock.is_empty() || lock.len() > MAX_LOCK_BYTES {
+        let lockfile = ObservedFile::capture(lock_path, MAX_LOCK_BYTES as u64)?;
+        if lockfile.size == 0 {
             return Err(format!(
                 "authoritative lockfile must contain 1 through {MAX_LOCK_BYTES} bytes"
             ));
         }
-        append_field(&mut snapshot, &Sha256::digest(&lock));
-        Ok(Self { snapshot })
+        append_field(&mut snapshot, &lockfile.digest);
+        Ok(Self {
+            snapshot,
+            source_trees,
+            lockfile,
+        })
     }
 }
 
@@ -849,5 +918,24 @@ mod tests {
             let root = crates.join(name);
             assert_eq!(hex(&canonical_tree_digest(&root, None).unwrap()), expected);
         }
+    }
+
+    #[test]
+    fn proc_macro_mutation_after_preflight_fails_revalidation() {
+        let directory = TestDirectory::new();
+        let source = directory.path().join("src");
+        fs::create_dir(&source).unwrap();
+        fs::write(
+            directory.path().join("Cargo.toml"),
+            b"[lib]\nproc-macro=true\n",
+        )
+        .unwrap();
+        let library = source.join("lib.rs");
+        fs::write(&library, b"pub fn reviewed() {}\n").unwrap();
+        let observed = ObservedSourceTree::capture(directory.path().to_path_buf(), None).unwrap();
+
+        fs::write(&library, b"pub fn injected_after_preflight() {}\n").unwrap();
+        let error = observed.revalidate().unwrap_err();
+        assert!(error.contains("source closure changed after preflight"));
     }
 }
