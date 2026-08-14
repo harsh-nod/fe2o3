@@ -11,6 +11,12 @@ use std::collections::BTreeSet;
 use std::error::Error;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
+use std::fs::File;
+use std::io::{Read as _, Write as _};
+use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd, RawFd};
+use std::os::unix::net::UnixStream;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use fe2o3_artifacts::{
     AbiKind, Access, AddressSpace as ArtifactAddressSpace, AliasClass, ArgumentOwnership,
@@ -1194,51 +1200,263 @@ fn effective_rustc_argv_identity(argv: &[OsString]) -> [u8; 32] {
     digest.finalize().into()
 }
 
-fn consume_brokered_invocation_authority(
-    attempt: fe2o3_artifact_transaction::BuildAttempt,
-    effective_argv_sha256: [u8; 32],
-) -> Result<[u8; 32], CollectedRowSoftmaxErrorV1> {
-    use std::io::{Read as _, Write as _};
-    use std::os::fd::{FromRawFd as _, RawFd};
-    use std::os::unix::net::UnixStream;
-    use std::path::Path;
-    use std::time::Duration;
+const MAX_INVOCATION_PEER_PROC_BYTES: usize = 4096;
 
-    const INVOCATION_AUTHORITY_FD: RawFd =
-        fe2o3_artifact_transaction::BROKERED_INVOCATION_AUTHORITY_CHILD_FD_V1;
-    let expected_broker = embedded_cargo_fe2o3_executable_identity()?;
+struct RetainedInvocationAuthorityPeer {
+    pid: u32,
+    uid: u32,
+    start_time_ticks: u64,
+    pidfd: OwnedFd,
+}
+
+impl RetainedInvocationAuthorityPeer {
+    fn retain(stream: &UnixStream) -> Result<Self, String> {
+        let credentials = invocation_peer_credentials(stream)?;
+        if credentials.pid <= 0 || credentials.uid != unsafe { libc::geteuid() } {
+            return Err(
+                "invocation-capability socket has no same-UID positive-PID peer".to_owned(),
+            );
+        }
+        let pid = u32::try_from(credentials.pid)
+            .map_err(|_| "invocation-capability peer PID exceeds u32".to_owned())?;
+        let pidfd = invocation_peer_pidfd(stream)?;
+        let retained = Self {
+            pid,
+            uid: credentials.uid,
+            start_time_ticks: invocation_peer_start_time_ticks(pid)?,
+            pidfd,
+        };
+        retained.require_live()?;
+        let confirmed = invocation_peer_credentials(stream)?;
+        if confirmed.pid != credentials.pid
+            || confirmed.uid != credentials.uid
+            || confirmed.gid != credentials.gid
+        {
+            return Err("invocation-capability peer credentials changed while retaining it".into());
+        }
+        retained.require_live()?;
+        Ok(retained)
+    }
+
+    fn require_live(&self) -> Result<(), String> {
+        if self.uid != unsafe { libc::geteuid() } {
+            return Err("retained invocation-capability peer UID changed".to_owned());
+        }
+        if invocation_peer_pidfd_pid(&self.pidfd)? != self.pid {
+            return Err(
+                "retained invocation-capability pidfd does not identify SO_PEERCRED PID".to_owned(),
+            );
+        }
+        if invocation_peer_start_time_ticks(self.pid)? != self.start_time_ticks {
+            return Err("retained invocation-capability peer start time changed".to_owned());
+        }
+        require_invocation_peer_pidfd_live(&self.pidfd)?;
+        if invocation_peer_pidfd_pid(&self.pidfd)? != self.pid
+            || invocation_peer_start_time_ticks(self.pid)? != self.start_time_ticks
+        {
+            return Err(
+                "retained invocation-capability peer changed during liveness check".to_owned(),
+            );
+        }
+        Ok(())
+    }
+
+    fn measure_executable(&self) -> Result<[u8; 32], String> {
+        self.require_live()?;
+        let executable_path = PathBuf::from(format!("/proc/{}/exe", self.pid));
+        let executable = File::open(&executable_path).map_err(|error| {
+            format!(
+                "cannot pin invocation-capability peer executable {}: {error}",
+                executable_path.display()
+            )
+        })?;
+        self.require_live()?;
+        let descriptor_path = PathBuf::from(format!("/proc/self/fd/./{}", executable.as_raw_fd()));
+        let sha256 = fe2o3_process_identity::measure_executable_sha256_v3(&descriptor_path)
+            .map_err(|error| {
+                format!("cannot measure pinned invocation-capability peer executable: {error}")
+            })?;
+        self.require_live()?;
+        Ok(sha256)
+    }
+}
+
+fn invocation_peer_credentials(stream: &UnixStream) -> Result<libc::ucred, String> {
     let mut credentials = libc::ucred {
         pid: 0,
         uid: 0,
         gid: 0,
     };
-    let mut credentials_bytes = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
-    // SAFETY: the pointers name a correctly sized initialized `ucred`, and getsockopt only reads
-    // the process-local reserved descriptor without taking ownership of it.
-    if unsafe {
+    let expected_bytes = libc::socklen_t::try_from(std::mem::size_of::<libc::ucred>())
+        .expect("ucred size fits socklen_t");
+    let mut credentials_bytes = expected_bytes;
+    // SAFETY: the output pointers name one initialized `ucred` and its exact byte count.
+    let result = unsafe {
         libc::getsockopt(
-            INVOCATION_AUTHORITY_FD,
+            stream.as_raw_fd(),
             libc::SOL_SOCKET,
             libc::SO_PEERCRED,
             std::ptr::addr_of_mut!(credentials).cast(),
             &mut credentials_bytes,
         )
-    } != 0
-        || credentials_bytes as usize != std::mem::size_of::<libc::ucred>()
-        || credentials.pid <= 0
-        || credentials.uid != unsafe { libc::geteuid() }
-    {
-        return Err(CollectedRowSoftmaxErrorV1::CompilerSemantics {
-            detail: "brokered managed-wrapper invocation capability has no authenticated peer"
-                .to_owned(),
-        });
+    };
+    if result != 0 || credentials_bytes != expected_bytes {
+        return Err(format!(
+            "cannot read invocation-capability SO_PEERCRED: {}",
+            std::io::Error::last_os_error()
+        ));
     }
-    let broker_path = format!("/proc/{}/exe", credentials.pid);
-    let observed_broker = fe2o3_process_identity::measure_executable_sha256_v3(Path::new(
-        &broker_path,
-    ))
-    .map_err(|error| CollectedRowSoftmaxErrorV1::CompilerSemantics {
-        detail: format!("cannot authenticate invocation-capability broker executable: {error}"),
+    Ok(credentials)
+}
+
+fn invocation_peer_pidfd(stream: &UnixStream) -> Result<OwnedFd, String> {
+    let mut raw_pidfd: libc::c_int = -1;
+    let expected_bytes = libc::socklen_t::try_from(std::mem::size_of::<libc::c_int>())
+        .expect("pidfd size fits socklen_t");
+    let mut pidfd_bytes = expected_bytes;
+    // SAFETY: the output pointers name one initialized `c_int` and its exact byte count.
+    let result = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERPIDFD,
+            std::ptr::addr_of_mut!(raw_pidfd).cast(),
+            &mut pidfd_bytes,
+        )
+    };
+    if result != 0 || pidfd_bytes != expected_bytes || raw_pidfd < 0 {
+        if raw_pidfd >= 0 {
+            // SAFETY: a successful `SO_PEERPIDFD` returned this new owned descriptor.
+            drop(unsafe { OwnedFd::from_raw_fd(raw_pidfd) });
+        }
+        return Err(format!(
+            "cannot retain invocation-capability peer with SO_PEERPIDFD: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    // SAFETY: successful `SO_PEERPIDFD` returned one new descriptor owned by this process.
+    let pidfd = unsafe { OwnedFd::from_raw_fd(raw_pidfd) };
+    let descriptor_flags = unsafe { libc::fcntl(pidfd.as_raw_fd(), libc::F_GETFD) };
+    if descriptor_flags < 0
+        || unsafe {
+            libc::fcntl(
+                pidfd.as_raw_fd(),
+                libc::F_SETFD,
+                descriptor_flags | libc::FD_CLOEXEC,
+            )
+        } != 0
+    {
+        return Err(format!(
+            "cannot make invocation-capability peer pidfd close-on-exec: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(pidfd)
+}
+
+fn read_bounded_invocation_peer_proc(path: &Path, label: &str) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::with_capacity(MAX_INVOCATION_PEER_PROC_BYTES + 1);
+    File::open(path)
+        .map_err(|error| format!("cannot open {label} {}: {error}", path.display()))?
+        .take(
+            u64::try_from(MAX_INVOCATION_PEER_PROC_BYTES + 1)
+                .expect("bounded proc record size fits u64"),
+        )
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("cannot read {label} {}: {error}", path.display()))?;
+    if bytes.is_empty() || bytes.len() > MAX_INVOCATION_PEER_PROC_BYTES {
+        return Err(format!(
+            "{label} {} must contain 1 through {MAX_INVOCATION_PEER_PROC_BYTES} bytes",
+            path.display()
+        ));
+    }
+    Ok(bytes)
+}
+
+fn invocation_peer_start_time_ticks(pid: u32) -> Result<u64, String> {
+    let path = PathBuf::from(format!("/proc/{pid}/stat"));
+    let bytes = read_bounded_invocation_peer_proc(&path, "invocation-capability peer stat")?;
+    let close = bytes
+        .iter()
+        .rposition(|byte| *byte == b')')
+        .ok_or_else(|| "invocation-capability peer stat has no command terminator".to_owned())?;
+    let recorded_pid = bytes[..close]
+        .split(|byte| *byte == b' ')
+        .next()
+        .and_then(|value| std::str::from_utf8(value).ok())
+        .and_then(|value| value.parse::<u32>().ok());
+    if recorded_pid != Some(pid) {
+        return Err("invocation-capability peer stat PID differs from its proc entry".to_owned());
+    }
+    bytes[close + 1..]
+        .split(u8::is_ascii_whitespace)
+        .filter(|field| !field.is_empty())
+        .nth(19)
+        .and_then(|value| std::str::from_utf8(value).ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value != 0)
+        .ok_or_else(|| "invocation-capability peer stat has no valid start time".to_owned())
+}
+
+fn invocation_peer_pidfd_pid(pidfd: &OwnedFd) -> Result<u32, String> {
+    let path = PathBuf::from(format!("/proc/self/fdinfo/{}", pidfd.as_raw_fd()));
+    let bytes = read_bounded_invocation_peer_proc(&path, "invocation-capability pidfd info")?;
+    let record = std::str::from_utf8(&bytes)
+        .map_err(|_| "invocation-capability pidfd info is not UTF-8".to_owned())?;
+    record
+        .lines()
+        .find_map(|line| line.strip_prefix("Pid:"))
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .filter(|pid| *pid != 0)
+        .ok_or_else(|| "invocation-capability pidfd has no live positive PID".to_owned())
+}
+
+fn require_invocation_peer_pidfd_live(pidfd: &OwnedFd) -> Result<(), String> {
+    let mut descriptor = libc::pollfd {
+        fd: pidfd.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    for _ in 0..8 {
+        // SAFETY: the pointer names one initialized poll descriptor and timeout zero cannot block.
+        let result = unsafe { libc::poll(std::ptr::addr_of_mut!(descriptor), 1, 0) };
+        if result == 0 && descriptor.revents == 0 {
+            return Ok(());
+        }
+        if result > 0 || descriptor.revents != 0 {
+            return Err("invocation-capability peer exited during authentication".to_owned());
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return Err(format!(
+                "cannot poll invocation-capability peer pidfd: {error}"
+            ));
+        }
+    }
+    Err("invocation-capability peer pidfd polling was repeatedly interrupted".to_owned())
+}
+
+fn consume_brokered_invocation_authority(
+    attempt: fe2o3_artifact_transaction::BuildAttempt,
+    effective_argv_sha256: [u8; 32],
+) -> Result<[u8; 32], CollectedRowSoftmaxErrorV1> {
+    const INVOCATION_AUTHORITY_FD: RawFd =
+        fe2o3_artifact_transaction::BROKERED_INVOCATION_AUTHORITY_CHILD_FD_V1;
+    // SAFETY: this function is the unique consumer of the fixed descriptor installed by the
+    // managed wrapper. Taking ownership early also closes it on every authentication error.
+    let mut stream = unsafe { UnixStream::from_raw_fd(INVOCATION_AUTHORITY_FD) };
+    let expected_broker = embedded_cargo_fe2o3_executable_identity()?;
+    let peer = RetainedInvocationAuthorityPeer::retain(&stream).map_err(|detail| {
+        CollectedRowSoftmaxErrorV1::CompilerSemantics {
+            detail: format!("cannot retain invocation-capability broker peer: {detail}"),
+        }
+    })?;
+    let observed_broker = peer.measure_executable().map_err(|detail| {
+        CollectedRowSoftmaxErrorV1::CompilerSemantics {
+            detail: format!(
+                "cannot authenticate invocation-capability broker executable: {detail}"
+            ),
+        }
     })?;
     if observed_broker != expected_broker {
         return Err(CollectedRowSoftmaxErrorV1::CompilerSemantics {
@@ -1257,9 +1475,6 @@ fn consume_brokered_invocation_authority(
     .map_err(|error| CollectedRowSoftmaxErrorV1::CompilerSemantics {
         detail: format!("invalid brokered managed-wrapper invocation claim: {error}"),
     })?;
-    // SAFETY: successful peer authentication above leaves this function as the unique consumer
-    // of the fixed descriptor installed by cargo-fe2o3 for this rustc process.
-    let mut stream = unsafe { UnixStream::from_raw_fd(INVOCATION_AUTHORITY_FD) };
     let timeout = Some(Duration::from_secs(30));
     stream.set_read_timeout(timeout).map_err(|error| {
         CollectedRowSoftmaxErrorV1::CompilerSemantics {
@@ -1290,6 +1505,12 @@ fn consume_brokered_invocation_authority(
             detail: "broker returned a malformed managed-wrapper invocation admission".to_owned(),
         });
     }
+    peer.require_live()
+        .map_err(|detail| CollectedRowSoftmaxErrorV1::CompilerSemantics {
+            detail: format!(
+                "invocation-capability broker peer did not survive admission: {detail}"
+            ),
+        })?;
     Ok(observed_broker)
 }
 
@@ -2143,6 +2364,205 @@ fn encode_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+    use std::os::unix::net::UnixListener;
+    use std::process::{Child, Command, Stdio};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::thread;
+    use std::time::Instant;
+
+    const INVOCATION_PEER_HELPER_ENV: &str = "FE2O3_ROW_INVOCATION_PEER_HELPER_SOCKET";
+    const INVOCATION_PEER_HELPER_TEST: &str =
+        "collected_row_softmax_v1::tests::invocation_peer_process_helper";
+    static NEXT_INVOCATION_PEER_TEST: AtomicU64 = AtomicU64::new(1);
+
+    struct InvocationPeerFixture {
+        directory: PathBuf,
+        child: Option<Child>,
+        stream: UnixStream,
+        executable: PathBuf,
+        expected_sha256: [u8; 32],
+    }
+
+    impl InvocationPeerFixture {
+        fn spawn() -> Self {
+            let directory = std::env::temp_dir().join(format!(
+                "fe2o3-row-invocation-peer-{}-{}",
+                std::process::id(),
+                NEXT_INVOCATION_PEER_TEST.fetch_add(1, Ordering::Relaxed)
+            ));
+            let mut builder = fs::DirBuilder::new();
+            use std::os::unix::fs::DirBuilderExt as _;
+            builder.mode(0o700);
+            builder
+                .create(&directory)
+                .expect("create private invocation peer test directory");
+            let executable = directory.join("cargo-fe2o3-peer");
+            fs::copy(
+                std::env::current_exe().expect("locate invocation peer test executable"),
+                &executable,
+            )
+            .expect("copy invocation peer test executable");
+            fs::set_permissions(&executable, fs::Permissions::from_mode(0o500))
+                .expect("make invocation peer test executable owner-only");
+            let expected_sha256 = fe2o3_process_identity::measure_executable_sha256_v3(&executable)
+                .expect("measure invocation peer test executable");
+            let socket = directory.join("peer.sock");
+            let listener = UnixListener::bind(&socket).expect("bind invocation peer test socket");
+            listener
+                .set_nonblocking(true)
+                .expect("make invocation peer listener nonblocking");
+            let mut child = Command::new(&executable)
+                .args(["--exact", INVOCATION_PEER_HELPER_TEST, "--nocapture"])
+                .env(INVOCATION_PEER_HELPER_ENV, &socket)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("spawn invocation peer helper");
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        if let Some(status) = child.try_wait().expect("poll invocation peer helper")
+                        {
+                            panic!("invocation peer helper exited before connect: {status}");
+                        }
+                        assert!(
+                            Instant::now() < deadline,
+                            "invocation peer helper connect timed out"
+                        );
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("accept invocation peer helper: {error}"),
+                }
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(10)))
+                .expect("bound invocation peer helper ready read");
+            let mut ready = [0_u8; 1];
+            stream
+                .read_exact(&mut ready)
+                .expect("read invocation peer helper ready byte");
+            assert_eq!(ready, [1]);
+            Self {
+                directory,
+                child: Some(child),
+                stream,
+                executable,
+                expected_sha256,
+            }
+        }
+
+        fn retain(&self) -> RetainedInvocationAuthorityPeer {
+            let peer = RetainedInvocationAuthorityPeer::retain(&self.stream)
+                .expect("retain exact invocation peer");
+            assert_eq!(
+                peer.pid,
+                self.child.as_ref().expect("live helper child").id()
+            );
+            peer
+        }
+
+        fn substitute_executable_path(&self) {
+            let retained = self.directory.join("retained-running-peer");
+            fs::rename(&self.executable, &retained)
+                .expect("retain running invocation peer executable object");
+            fs::copy("/bin/false", &self.executable)
+                .expect("install same-UID invocation peer pathname substitution");
+            let metadata = fs::metadata(&self.executable)
+                .expect("inspect invocation peer pathname substitution");
+            assert_eq!(metadata.uid(), unsafe { libc::geteuid() });
+            assert_ne!(
+                fe2o3_process_identity::measure_executable_sha256_v3(&self.executable)
+                    .expect("measure invocation peer pathname substitution"),
+                self.expected_sha256
+            );
+        }
+
+        fn release_and_wait(&mut self) {
+            self.stream
+                .write_all(&[1])
+                .expect("release invocation peer helper");
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                let child = self.child.as_mut().expect("live invocation peer helper");
+                if let Some(status) = child.try_wait().expect("poll invocation peer helper exit") {
+                    assert!(status.success(), "invocation peer helper failed: {status}");
+                    self.child = None;
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "invocation peer helper exit timed out"
+                );
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+
+    impl Drop for InvocationPeerFixture {
+        fn drop(&mut self) {
+            if let Some(child) = self.child.as_mut() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            let _ = fs::remove_dir_all(&self.directory);
+        }
+    }
+
+    #[test]
+    fn invocation_peer_process_helper() {
+        let Some(socket) = std::env::var_os(INVOCATION_PEER_HELPER_ENV) else {
+            return;
+        };
+        let mut stream = UnixStream::connect(socket).expect("connect invocation peer helper");
+        stream
+            .write_all(&[1])
+            .expect("publish invocation peer helper ready byte");
+        let mut release = [0_u8; 1];
+        stream
+            .read_exact(&mut release)
+            .expect("read invocation peer helper release byte");
+        assert_eq!(release, [1]);
+    }
+
+    #[test]
+    fn retained_invocation_peer_ignores_same_uid_path_substitution() {
+        let mut fixture = InvocationPeerFixture::spawn();
+        let peer = fixture.retain();
+        fixture.substitute_executable_path();
+        assert_eq!(
+            peer.measure_executable()
+                .expect("measure retained running invocation peer"),
+            fixture.expected_sha256
+        );
+        fixture.release_and_wait();
+    }
+
+    #[test]
+    fn retained_invocation_peer_rejects_pidfd_substitution_and_exit() {
+        let mut fixture = InvocationPeerFixture::spawn();
+        let mut peer = fixture.retain();
+        let (self_socket, _self_peer) = UnixStream::pair().expect("create self pidfd socket");
+        let substituted = invocation_peer_pidfd(&self_socket).expect("retain self pidfd");
+        let original = std::mem::replace(&mut peer.pidfd, substituted);
+        assert!(
+            peer.require_live()
+                .expect_err("substituted pidfd must fail")
+                .contains("does not identify SO_PEERCRED PID")
+        );
+        peer.pidfd = original;
+        peer.require_live().expect("restore exact peer pidfd");
+        fixture.release_and_wait();
+        assert!(
+            peer.require_live()
+                .expect_err("exited peer must fail")
+                .contains("no live positive PID")
+        );
+    }
 
     fn managed_argv() -> Vec<OsString> {
         [
