@@ -2,24 +2,28 @@
 //!
 //! The ignored hardware test executes only an exact SHA-256-pinned COV6 image
 //! after checking its physical metadata and digest-pinned, observed LLVM 22
-//! disassembly. The disassembly is observational and does not authenticate the
-//! tool's provenance. Its executable-byte pin does not pin the dynamic loader,
-//! shared libraries, or host process environment.
+//! disassembly. The exact verified objdump ELF is copied into a sealed memfd and
+//! executed only through that descriptor under a no-descendant seccomp profile
+//! and pidfd supervision. The disassembly remains observational and does not
+//! authenticate the tool's provenance, dynamic loader, shared libraries, or
+//! host process environment.
 //! It deliberately bypasses production prerequisite authentication and cannot
 //! grant protected compiler or execution evidence. In particular, it does not
 //! establish compiler origin, source/proof binding, production publication,
 //! load or launch authority, exact real-number equivalence, or race freedom.
 
 use fe2o3_host::HsaLaunchGeometryV1;
-use fe2o3_hsaco::{ArgumentAddressSpace, ExplicitValueKind};
+use fe2o3_hsaco::{ArgumentAccess, ArgumentAddressSpace, ExplicitValueKind, ExplicitValueType};
 use sha2::{Digest, Sha256};
 
 #[cfg(any(test, feature = "hardware-test-hooks"))]
 use std::io::{Read, Seek, SeekFrom, Write};
 #[cfg(any(test, feature = "hardware-test-hooks"))]
+use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
+#[cfg(any(test, feature = "hardware-test-hooks"))]
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 #[cfg(any(test, feature = "hardware-test-hooks"))]
-use std::os::unix::process::CommandExt;
+use std::os::unix::{ffi::OsStrExt, process::ExitStatusExt};
 
 #[cfg(feature = "hardware-test-hooks")]
 use fe2o3_amd_target::FeatureState;
@@ -65,11 +69,9 @@ const OUTPUT_SUFFIX: f32 = f32::from_bits(0x7fc0_d002);
 #[cfg(feature = "hardware-test-hooks")]
 const OUTPUT_POISON: f32 = f32::from_bits(0x7fc0_d0ff);
 
-// A sequential 64-term FP32 sum has gamma_63 about 3.8e-6. The 3e-5 relative
-// envelope leaves roughly 8x that bound for reduction order and approximate
-// hardware exp, while the absolute term covers tiny probabilities and the
-// separate 6e-5 bound checks normalization. This is evidence tolerance, not a
-// claim of correctly rounded exp or exact real-number equivalence.
+// This conservative evidence envelope covers ordinary FP32 reduction order and
+// approximate hardware exp for the finite corpus below. It is not a derived
+// device error model, a correctly-rounded-exp claim, or exact real equivalence.
 const SOFTMAX_ABSOLUTE_TOLERANCE: f32 = 3.0e-6;
 const SOFTMAX_RELATIVE_TOLERANCE: f32 = 3.0e-5;
 const SOFTMAX_SUM_TOLERANCE: f32 = 6.0e-5;
@@ -121,10 +123,21 @@ fn parse_exact_sha256(variable: &str, hex: &str) -> Result<[u8; 32], BoxError> {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ArgumentFact {
+    name: Option<String>,
+    type_name: Option<String>,
     offset: u64,
     size: u64,
+    alignment: Option<u64>,
     kind: ExplicitValueKind,
+    value_type: Option<ExplicitValueType>,
     address_space: Option<ArgumentAddressSpace>,
+    access: Option<ArgumentAccess>,
+    actual_access: Option<ArgumentAccess>,
+    pointee_alignment: Option<u64>,
+    is_const: Option<bool>,
+    is_restrict: Option<bool>,
+    is_volatile: Option<bool>,
+    is_pipe: Option<bool>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -181,24 +194,47 @@ impl MetadataFacts {
             sgpr_spill_count: 0,
             vgpr_spill_count: 0,
             uses_dynamic_stack: false,
-            arguments: [
-                (0_u64, ExplicitValueKind::GlobalBuffer),
-                (8, ExplicitValueKind::ByValue),
-                (16, ExplicitValueKind::GlobalBuffer),
-                (24, ExplicitValueKind::ByValue),
-            ]
-            .into_iter()
-            .map(|(offset, kind)| ArgumentFact {
-                offset,
-                size: 8,
-                kind,
-                address_space: if kind == ExplicitValueKind::GlobalBuffer {
-                    Some(ArgumentAddressSpace::Global)
-                } else {
-                    None
-                },
-            })
-            .collect(),
+            arguments: (0_u64..2)
+                .flat_map(|slice| {
+                    let base = slice * 16;
+                    [
+                        ArgumentFact {
+                            name: Some(format!("arg{slice}.data")),
+                            type_name: None,
+                            offset: base,
+                            size: 8,
+                            alignment: None,
+                            kind: ExplicitValueKind::GlobalBuffer,
+                            value_type: None,
+                            address_space: Some(ArgumentAddressSpace::Global),
+                            access: None,
+                            actual_access: None,
+                            pointee_alignment: None,
+                            is_const: None,
+                            is_restrict: None,
+                            is_volatile: None,
+                            is_pipe: None,
+                        },
+                        ArgumentFact {
+                            name: Some(format!("arg{slice}.len")),
+                            type_name: None,
+                            offset: base + 8,
+                            size: 8,
+                            alignment: None,
+                            kind: ExplicitValueKind::ByValue,
+                            value_type: None,
+                            address_space: None,
+                            access: None,
+                            actual_access: None,
+                            pointee_alignment: None,
+                            is_const: None,
+                            is_restrict: None,
+                            is_volatile: None,
+                            is_pipe: None,
+                        },
+                    ]
+                })
+                .collect(),
             binding_count: 1,
             binding_kernel_index: 0,
             descriptor_kernarg_size: COMPLETE_KERNARG_BYTES as u32,
@@ -212,13 +248,94 @@ impl MetadataFacts {
 }
 
 fn validate_metadata(facts: &MetadataFacts, kernel_symbol: &str) -> Result<(), BoxError> {
+    let expected = MetadataFacts::expected(kernel_symbol);
     require(
-        facts == &MetadataFacts::expected(kernel_symbol),
+        facts.arguments.len() == expected.arguments.len(),
+        "Row Softmax V1 must expose exactly four physical slice fields",
+    )?;
+    for (index, argument) in facts.arguments.iter().enumerate() {
+        validate_argument_fact(index, argument)?;
+    }
+    let mut normalized = facts.clone();
+    normalized.arguments = expected.arguments.clone();
+    require(
+        normalized == expected,
         format!(
             "Row Softmax V1 metadata or descriptor differs from the exact \
              gfx942:xnack- COV6/WG64/288-byte two-slice profile: {facts:#?}"
         ),
     )
+}
+
+fn validate_argument_fact(index: usize, argument: &ArgumentFact) -> Result<(), BoxError> {
+    let slice = index / 2;
+    let pointer = index.is_multiple_of(2);
+    let expected_name = if pointer {
+        format!("arg{slice}.data")
+    } else {
+        format!("arg{slice}.len")
+    };
+    require(
+        argument.name.as_deref() == Some(expected_name.as_str()),
+        format!("argument {index} must retain exact name `{expected_name}`"),
+    )?;
+    require(
+        argument.type_name.is_none(),
+        format!("argument {index} has an unauthenticated source type spelling"),
+    )?;
+    require(
+        argument.offset == index as u64 * 8
+            && argument.size == 8
+            && matches!(argument.alignment, None | Some(8)),
+        format!("argument {index} has a contradictory physical extent or alignment"),
+    )?;
+    require(
+        argument.is_volatile != Some(true) && argument.is_pipe != Some(true),
+        format!("argument {index} has an unsupported volatile or pipe qualifier"),
+    )?;
+
+    if pointer {
+        let input = slice == 0;
+        let expected_access = if input {
+            ArgumentAccess::ReadOnly
+        } else {
+            ArgumentAccess::ReadWrite
+        };
+        require(
+            argument.kind == ExplicitValueKind::GlobalBuffer
+                && matches!(argument.value_type, None | Some(ExplicitValueType::F32))
+                && argument.address_space == Some(ArgumentAddressSpace::Global)
+                && matches!(argument.pointee_alignment, None | Some(4))
+                && (argument.access.is_none() || argument.access == Some(expected_access))
+                && if input {
+                    matches!(
+                        argument.actual_access,
+                        None | Some(ArgumentAccess::ReadOnly)
+                    ) && matches!(argument.is_const, None | Some(true))
+                        && matches!(argument.is_restrict, None | Some(false))
+                } else {
+                    matches!(
+                        argument.actual_access,
+                        None | Some(ArgumentAccess::WriteOnly | ArgumentAccess::ReadWrite)
+                    ) && matches!(argument.is_const, None | Some(false))
+                        && matches!(argument.is_restrict, None | Some(true))
+                },
+            format!("argument {index} contradicts the exact f32 slice pointer contract"),
+        )?;
+    } else {
+        require(
+            argument.kind == ExplicitValueKind::ByValue
+                && matches!(argument.value_type, None | Some(ExplicitValueType::U64))
+                && argument.address_space.is_none()
+                && argument.access.is_none()
+                && argument.actual_access.is_none()
+                && argument.pointee_alignment.is_none()
+                && argument.is_const != Some(true)
+                && argument.is_restrict != Some(true),
+            format!("argument {index} contradicts the exact u64 slice-length contract"),
+        )?;
+    }
+    Ok(())
 }
 
 #[cfg(feature = "hardware-test-hooks")]
@@ -261,10 +378,21 @@ fn inspect_metadata(bytes: &[u8], kernel_symbol: &str) -> Result<BoundKernelEntr
             .explicit_arguments()
             .iter()
             .map(|argument| ArgumentFact {
+                name: argument.name().map(str::to_owned),
+                type_name: argument.type_name().map(str::to_owned),
                 offset: argument.offset(),
                 size: argument.size(),
+                alignment: argument.alignment(),
                 kind: argument.value_kind(),
+                value_type: argument.value_type(),
                 address_space: argument.address_space(),
+                access: argument.access(),
+                actual_access: argument.actual_access(),
+                pointee_alignment: argument.pointee_alignment(),
+                is_const: argument.is_const(),
+                is_restrict: argument.is_restrict(),
+                is_volatile: argument.is_volatile(),
+                is_pipe: argument.is_pipe(),
             })
             .collect(),
         binding_count: bound.bindings().len(),
@@ -364,7 +492,13 @@ fn parse_instruction(line: &str) -> Result<DisassembledInstruction, BoxError> {
     })
 }
 
-fn validate_isa(
+/// Checks only bounded, symbol-scoped text shape reported by pinned objdump.
+///
+/// Mnemonic presence and absence do not establish CFG, dataflow, reachability,
+/// natural-exponential scaling, or semantic use of any observed instruction.
+/// This observation provides no machine-code semantic validation and is not a
+/// substitute for the separate finite numerical execution checks.
+fn validate_observational_isa_shape(
     disassembly: &str,
     kernel_symbol: &str,
     entry: BoundKernelEntry,
@@ -443,13 +577,13 @@ fn validate_isa(
         instructions
             .iter()
             .any(|instruction| instruction.mnemonic.starts_with("global_load_")),
-        "final ISA has no global-load instruction",
+        "observed ISA shape has no global-load mnemonic",
     )?;
     require(
         instructions
             .iter()
             .any(|instruction| instruction.mnemonic.starts_with("global_store_")),
-        "final ISA has no global-store instruction",
+        "observed ISA shape has no global-store mnemonic",
     )?;
     let terminators = instructions
         .iter()
@@ -458,7 +592,7 @@ fn validate_isa(
         .collect::<Vec<_>>();
     require(
         terminators.len() == 1,
-        "final ISA must contain exactly one kernel termination instruction",
+        "observed ISA shape must contain exactly one termination mnemonic",
     )?;
     require(
         instructions[terminators[0].0 + 1..]
@@ -479,20 +613,20 @@ fn validate_isa(
             !instructions
                 .iter()
                 .any(|instruction| instruction.mnemonic.starts_with(family)),
-            format!("final ISA contains forbidden {description} family `{family}`"),
+            format!("observed ISA shape contains forbidden {description} family `{family}`"),
         )?;
     }
     require(
         !instructions
             .iter()
             .any(|instruction| instruction.mnemonic.contains("atomic")),
-        "final ISA contains an atomic instruction",
+        "observed ISA shape contains an atomic mnemonic",
     )?;
     require(
         !instructions
             .iter()
             .any(|instruction| instruction.mnemonic.contains("mfma")),
-        "Row Softmax V1 final ISA contains an unrelated matrix instruction",
+        "Row Softmax V1 observed ISA shape contains an unrelated matrix mnemonic",
     )
 }
 
@@ -514,7 +648,40 @@ fn representative_inputs() -> Vec<[f32; ELEMENTS]> {
     dominant_pair[41] = 100.0;
     dominant_pair[23] = 99.0;
 
-    vec![uniform, centered_ramp, repeated_ties, dominant_pair]
+    let mut finite_extrema = [f32::MIN; ELEMENTS];
+    finite_extrema[3] = f32::MAX;
+    finite_extrema[37] = 0.0;
+
+    let mut subnormals = [0.0; ELEMENTS];
+    for (index, value) in subnormals.iter_mut().enumerate() {
+        *value = match index % 4 {
+            0 => f32::from_bits(1),
+            1 => -f32::from_bits(1),
+            2 => f32::from_bits(0x007f_ffff),
+            _ => -f32::from_bits(0x007f_ffff),
+        };
+    }
+
+    let mut near_ties = [1.0; ELEMENTS];
+    for (index, value) in near_ties.iter_mut().enumerate() {
+        *value = f32::from_bits(1.0_f32.to_bits() + (index % 8) as u32);
+    }
+
+    let mut large_translation = [0.0; ELEMENTS];
+    for (index, value) in large_translation.iter_mut().enumerate() {
+        *value = 1_048_576.0 + (index % 8) as f32 * 0.125;
+    }
+
+    vec![
+        uniform,
+        centered_ramp,
+        repeated_ties,
+        dominant_pair,
+        finite_extrema,
+        subnormals,
+        near_ties,
+        large_translation,
+    ]
 }
 
 /// Computes stable softmax in f64 and rounds each result to f32.
@@ -899,22 +1066,276 @@ fn collect_finished_reader(
 }
 
 #[cfg(any(test, feature = "hardware-test-hooks"))]
-fn terminate_process_group(child: &mut std::process::Child, already_reaped: bool) {
-    let process_group = -(child.id() as i32);
-    // SAFETY: the child established a process group whose id is its captured
-    // pid before exec. SIGKILL is used only to bound this observational tool.
-    unsafe {
-        libc::kill(process_group, libc::SIGKILL);
+fn pipe(flags: libc::c_int) -> Result<(OwnedFd, OwnedFd), BoxError> {
+    let mut descriptors = [-1; 2];
+    // SAFETY: pipe2 initializes both entries on success; ownership transfers
+    // exactly once to the returned OwnedFd values.
+    if unsafe { libc::pipe2(descriptors.as_mut_ptr(), flags) } != 0 {
+        return Err(std::io::Error::last_os_error().into());
     }
-    if !already_reaped {
-        let _ = child.kill();
-        let _ = child.wait();
+    // SAFETY: successful pipe2 returned two fresh owned descriptors.
+    Ok(unsafe {
+        (
+            OwnedFd::from_raw_fd(descriptors[0]),
+            OwnedFd::from_raw_fd(descriptors[1]),
+        )
+    })
+}
+
+#[cfg(any(test, feature = "hardware-test-hooks"))]
+fn pidfd_open(pid: libc::pid_t) -> Result<OwnedFd, BoxError> {
+    // SAFETY: pidfd_open has no pointer arguments and the positive child pid
+    // remains owned by this supervisor.
+    let descriptor = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) } as libc::c_int;
+    if descriptor < 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    // SAFETY: pidfd_open returned a fresh owned descriptor.
+    let descriptor = unsafe { OwnedFd::from_raw_fd(descriptor) };
+    let fdinfo = std::fs::read_to_string(format!("/proc/self/fdinfo/{}", descriptor.as_raw_fd()))?;
+    let observed = fdinfo
+        .lines()
+        .find_map(|line| line.strip_prefix("Pid:\t"))
+        .ok_or("pidfd fdinfo omitted its live PID")?;
+    require(
+        observed.parse::<libc::pid_t>()? == pid,
+        "pidfd does not identify the exact objdump child",
+    )?;
+    Ok(descriptor)
+}
+
+#[cfg(any(test, feature = "hardware-test-hooks"))]
+fn pidfd_exited(pidfd: RawFd) -> Result<bool, BoxError> {
+    let mut pollfd = libc::pollfd {
+        fd: pidfd,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    // SAFETY: poll receives one live pollfd and a zero timeout.
+    let result = unsafe { libc::poll(&mut pollfd, 1, 0) };
+    if result < 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    Ok(result == 1 && pollfd.revents & (libc::POLLIN | libc::POLLHUP) != 0)
+}
+
+#[cfg(any(test, feature = "hardware-test-hooks"))]
+fn reap_pid_until(
+    pid: libc::pid_t,
+    deadline: std::time::Instant,
+) -> Result<std::process::ExitStatus, BoxError> {
+    loop {
+        let mut raw_status = 0;
+        // SAFETY: waitpid observes only the exact child owned by this process.
+        let result = unsafe { libc::waitpid(pid, &mut raw_status, libc::WNOHANG) };
+        if result == pid {
+            return Ok(std::process::ExitStatus::from_raw(raw_status));
+        }
+        if result < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() != std::io::ErrorKind::Interrupted {
+                return Err(error.into());
+            }
+        }
+        require(
+            std::time::Instant::now() < deadline,
+            "objdump child did not become reapable before the cleanup deadline",
+        )?;
+        std::thread::sleep(std::time::Duration::from_millis(2));
     }
 }
 
 #[cfg(any(test, feature = "hardware-test-hooks"))]
-fn bounded_command_output<I, S>(
-    executable: &std::path::Path,
+fn terminate_and_reap(pid: libc::pid_t, pidfd: RawFd) -> Result<(), BoxError> {
+    // SAFETY: pidfd_send_signal targets the retained identity, not a reused
+    // numeric pid. The remaining arguments are the documented null defaults.
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_pidfd_send_signal,
+            pidfd,
+            libc::SIGKILL,
+            std::ptr::null::<libc::siginfo_t>(),
+            0,
+        )
+    };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    reap_pid_until(
+        pid,
+        std::time::Instant::now() + std::time::Duration::from_secs(5),
+    )?;
+    Ok(())
+}
+
+#[cfg(any(test, feature = "hardware-test-hooks"))]
+fn contain_or_abort(pid: libc::pid_t, pidfd: RawFd, already_reaped: bool) {
+    if !already_reaped && terminate_and_reap(pid, pidfd).is_err() {
+        std::process::abort();
+    }
+}
+
+#[cfg(any(test, feature = "hardware-test-hooks"))]
+fn seccomp_filter(executable_descriptor: RawFd) -> Vec<libc::sock_filter> {
+    const LOAD_WORD_ABSOLUTE: u16 = 0x20;
+    const JUMP_EQUAL: u16 = 0x15;
+    const JUMP_GREATER_EQUAL: u16 = 0x35;
+    const RETURN: u16 = 0x06;
+    const KILL_PROCESS: u32 = 0x8000_0000;
+    const ALLOW: u32 = 0x7fff_0000;
+    const ERRNO_EPERM: u32 = 0x0005_0000 | libc::EPERM as u32;
+    const AUDIT_ARCH_X86_64: u32 = 0xc000_003e;
+    const X32_SYSCALL_BIT: u32 = 0x4000_0000;
+    const OFFSET_NR: u32 = 0;
+    const OFFSET_ARCH: u32 = 4;
+    const OFFSET_ARG0: u32 = 16;
+    const OFFSET_ARG4: u32 = 48;
+
+    let statement = |code, value| libc::sock_filter {
+        code,
+        jt: 0,
+        jf: 0,
+        k: value,
+    };
+    let jump = |value, yes, no| libc::sock_filter {
+        code: JUMP_EQUAL,
+        jt: yes,
+        jf: no,
+        k: value,
+    };
+    let mut filter = vec![
+        statement(LOAD_WORD_ABSOLUTE, OFFSET_ARCH),
+        jump(AUDIT_ARCH_X86_64, 1, 0),
+        statement(RETURN, KILL_PROCESS),
+        statement(LOAD_WORD_ABSOLUTE, OFFSET_NR),
+        libc::sock_filter {
+            code: JUMP_GREATER_EQUAL,
+            jt: 0,
+            jf: 1,
+            k: X32_SYSCALL_BIT,
+        },
+        statement(RETURN, KILL_PROCESS),
+    ];
+    for denied in [
+        libc::SYS_clone,
+        libc::SYS_clone3,
+        libc::SYS_fork,
+        libc::SYS_vfork,
+        libc::SYS_setsid,
+        libc::SYS_unshare,
+        libc::SYS_setns,
+        libc::SYS_execve,
+    ] {
+        filter.push(jump(denied as u32, 0, 1));
+        filter.push(statement(RETURN, ERRNO_EPERM));
+    }
+    filter.extend([
+        jump(libc::SYS_execveat as u32, 0, 5),
+        statement(LOAD_WORD_ABSOLUTE, OFFSET_ARG0),
+        jump(executable_descriptor as u32, 0, 2),
+        statement(LOAD_WORD_ABSOLUTE, OFFSET_ARG4),
+        jump(libc::AT_EMPTY_PATH as u32, 1, 0),
+        statement(RETURN, ERRNO_EPERM),
+        statement(RETURN, ALLOW),
+    ]);
+    filter
+}
+
+#[cfg(any(test, feature = "hardware-test-hooks"))]
+#[derive(Clone, Copy)]
+struct ChildExecPlan {
+    executable: RawFd,
+    stdout: RawFd,
+    stderr: RawFd,
+    ready: RawFd,
+    devnull: RawFd,
+    argv: *const *const libc::c_char,
+    environment: *const *const libc::c_char,
+    filter: *mut libc::sock_filter,
+    filter_len: u16,
+}
+
+#[cfg(any(test, feature = "hardware-test-hooks"))]
+unsafe fn child_exec_descriptor(plan: ChildExecPlan) -> ! {
+    const READY_DESCRIPTOR: RawFd = 197;
+    const EXECUTABLE_DESCRIPTOR: RawFd = 198;
+    let duplicate = |source: RawFd, destination: RawFd, flags: libc::c_int| {
+        if source == destination {
+            0
+        } else {
+            // SAFETY: child setup duplicates live descriptors before exec.
+            unsafe { libc::dup3(source, destination, flags) }
+        }
+    };
+    if duplicate(plan.devnull, libc::STDIN_FILENO, 0) < 0
+        || duplicate(plan.stdout, libc::STDOUT_FILENO, 0) < 0
+        || duplicate(plan.stderr, libc::STDERR_FILENO, 0) < 0
+        || duplicate(plan.ready, READY_DESCRIPTOR, libc::O_CLOEXEC) < 0
+        || duplicate(plan.executable, EXECUTABLE_DESCRIPTOR, libc::O_CLOEXEC) < 0
+    {
+        // SAFETY: terminal child failure avoids non-async-signal-safe cleanup.
+        unsafe { libc::_exit(126) };
+    }
+    // SAFETY: close_range leaves only stdio and the two fixed descriptors.
+    if unsafe { libc::syscall(libc::SYS_close_range, 3_u32, 196_u32, 0_u32) } != 0
+        || unsafe {
+            libc::syscall(
+                libc::SYS_close_range,
+                199_u32,
+                u32::MAX,
+                libc::CLOSE_RANGE_UNSHARE,
+            )
+        } != 0
+        || unsafe { libc::setsid() } < 0
+    {
+        // SAFETY: terminal child failure avoids non-async-signal-safe cleanup.
+        unsafe { libc::_exit(126) };
+    }
+    let zero_limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    if unsafe { libc::setrlimit(libc::RLIMIT_NPROC, &zero_limit) } != 0
+        || unsafe { libc::setrlimit(libc::RLIMIT_CORE, &zero_limit) } != 0
+        || unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) } != 0
+    {
+        // SAFETY: terminal child failure avoids non-async-signal-safe cleanup.
+        unsafe { libc::_exit(126) };
+    }
+    let program = libc::sock_fprog {
+        len: plan.filter_len,
+        filter: plan.filter,
+    };
+    if unsafe {
+        libc::prctl(
+            libc::PR_SET_SECCOMP,
+            libc::SECCOMP_MODE_FILTER,
+            &program as *const libc::sock_fprog,
+        )
+    } != 0
+        || unsafe { libc::write(READY_DESCRIPTOR, [1_u8].as_ptr().cast(), 1) } != 1
+    {
+        // SAFETY: terminal child failure avoids non-async-signal-safe cleanup.
+        unsafe { libc::_exit(126) };
+    }
+    // SAFETY: the sealed descriptor and C vectors remain live in this forked
+    // address space; AT_EMPTY_PATH binds execution to that descriptor.
+    unsafe {
+        libc::syscall(
+            libc::SYS_execveat,
+            EXECUTABLE_DESCRIPTOR,
+            c"".as_ptr(),
+            plan.argv,
+            plan.environment,
+            libc::AT_EMPTY_PATH,
+        );
+        libc::_exit(127);
+    }
+}
+
+#[cfg(any(test, feature = "hardware-test-hooks"))]
+fn bounded_descriptor_output<I, S>(
+    executable: &std::fs::File,
     arguments: I,
     deadline: std::time::Duration,
     output_limit: usize,
@@ -924,67 +1345,135 @@ where
     S: AsRef<std::ffi::OsStr>,
 {
     require(
-        !deadline.is_zero() && output_limit != 0,
+        !deadline.is_zero() && output_limit.checked_add(1).is_some(),
         "llvm-objdump subprocess bounds must be nonzero",
     )?;
-    let mut command = std::process::Command::new(executable);
-    command
-        .args(arguments)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    // SAFETY: setpgid is async-signal-safe and the closure performs no other
-    // operation between fork and exec.
-    unsafe {
-        command.pre_exec(|| {
-            if libc::setpgid(0, 0) == 0 {
-                Ok(())
-            } else {
-                Err(std::io::Error::last_os_error())
-            }
-        });
+    let expires = std::time::Instant::now()
+        .checked_add(deadline)
+        .ok_or("llvm-objdump deadline overflowed")?;
+    let mut argv = vec![std::ffi::CString::new("llvm-objdump")?];
+    for argument in arguments {
+        argv.push(std::ffi::CString::new(argument.as_ref().as_bytes())?);
     }
-    let mut child = command.spawn()?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or("llvm-objdump stdout was not piped")?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or("llvm-objdump stderr was not piped")?;
+    let mut argv_pointers = argv.iter().map(|value| value.as_ptr()).collect::<Vec<_>>();
+    argv_pointers.push(std::ptr::null());
+    let environment = [
+        c"LANG=C".as_ptr(),
+        c"LC_ALL=C".as_ptr(),
+        c"TZ=UTC".as_ptr(),
+        c"PATH=/usr/bin:/bin".as_ptr(),
+        std::ptr::null(),
+    ];
+    let (stdout_read, stdout_write) = pipe(libc::O_CLOEXEC)?;
+    let (stderr_read, stderr_write) = pipe(libc::O_CLOEXEC)?;
+    let (ready_read, ready_write) = pipe(libc::O_CLOEXEC | libc::O_NONBLOCK)?;
+    let devnull = std::fs::OpenOptions::new().read(true).open("/dev/null")?;
+    let mut filter = seccomp_filter(198);
+    let filter_len = u16::try_from(filter.len()).map_err(|_| "seccomp filter is too large")?;
+
+    // SAFETY: all allocations and C vectors are complete before fork. The child
+    // performs only direct syscalls before descriptor-bound execveat or _exit.
+    let pid = unsafe { libc::fork() };
+    if pid < 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    if pid == 0 {
+        // SAFETY: this is the dedicated post-fork child path described above.
+        unsafe {
+            child_exec_descriptor(ChildExecPlan {
+                executable: executable.as_raw_fd(),
+                stdout: stdout_write.as_raw_fd(),
+                stderr: stderr_write.as_raw_fd(),
+                ready: ready_write.as_raw_fd(),
+                devnull: devnull.as_raw_fd(),
+                argv: argv_pointers.as_ptr(),
+                environment: environment.as_ptr(),
+                filter: filter.as_mut_ptr(),
+                filter_len,
+            })
+        }
+    }
+    drop(stdout_write);
+    drop(stderr_write);
+    drop(ready_write);
+
+    let pidfd = match pidfd_open(pid) {
+        Ok(pidfd) => pidfd,
+        Err(error) => {
+            // SAFETY: pid is the unreaped child returned by fork.
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+            let _ = reap_pid_until(
+                pid,
+                std::time::Instant::now() + std::time::Duration::from_secs(5),
+            );
+            return Err(error);
+        }
+    };
+    // SAFETY: ownership of each pipe read descriptor transfers to one File.
+    let stdout = unsafe { std::fs::File::from_raw_fd(stdout_read.into_raw_fd()) };
+    // SAFETY: ownership of each pipe read descriptor transfers to one File.
+    let stderr = unsafe { std::fs::File::from_raw_fd(stderr_read.into_raw_fd()) };
     let mut stdout_thread = Some(bounded_reader(stdout, output_limit, "stdout"));
     let mut stderr_thread = Some(bounded_reader(stderr, output_limit, "stderr"));
     let mut stdout_bytes = None;
     let mut stderr_bytes = None;
     let mut status = None;
-    let expires = std::time::Instant::now() + deadline;
+    let mut containment_ready = false;
 
     loop {
         if let Err(error) = collect_finished_reader(&mut stdout_thread, &mut stdout_bytes, "stdout")
         {
-            terminate_process_group(&mut child, status.is_some());
+            contain_or_abort(pid, pidfd.as_raw_fd(), status.is_some());
             return Err(error);
         }
         if let Err(error) = collect_finished_reader(&mut stderr_thread, &mut stderr_bytes, "stderr")
         {
-            terminate_process_group(&mut child, status.is_some());
+            contain_or_abort(pid, pidfd.as_raw_fd(), status.is_some());
             return Err(error);
         }
-        if status.is_none() {
-            match child.try_wait() {
-                Ok(observed) => status = observed,
-                Err(error) => {
-                    terminate_process_group(&mut child, false);
+        if !containment_ready {
+            let mut byte = 0_u8;
+            // SAFETY: ready_read is a live nonblocking pipe descriptor.
+            let count =
+                unsafe { libc::read(ready_read.as_raw_fd(), (&mut byte as *mut u8).cast(), 1) };
+            if count == 1 {
+                if byte != 1 {
+                    contain_or_abort(pid, pidfd.as_raw_fd(), status.is_some());
+                    return Err("objdump containment handshake was malformed".into());
+                }
+                containment_ready = true;
+            } else if count < 0 {
+                let error = std::io::Error::last_os_error();
+                if error.kind() != std::io::ErrorKind::WouldBlock
+                    && error.kind() != std::io::ErrorKind::Interrupted
+                {
+                    contain_or_abort(pid, pidfd.as_raw_fd(), status.is_some());
                     return Err(error.into());
                 }
             }
         }
-        if status.is_some() && stdout_bytes.is_some() && stderr_bytes.is_some() {
+        if status.is_none() {
+            match pidfd_exited(pidfd.as_raw_fd()) {
+                Ok(true) => match reap_pid_until(pid, expires) {
+                    Ok(observed) => status = Some(observed),
+                    Err(_) => std::process::abort(),
+                },
+                Ok(false) => {}
+                Err(error) => {
+                    contain_or_abort(pid, pidfd.as_raw_fd(), false);
+                    return Err(error);
+                }
+            }
+        }
+        if status.is_some() && !containment_ready {
+            return Err("objdump exited before the containment handshake".into());
+        }
+        if status.is_some() && containment_ready && stdout_bytes.is_some() && stderr_bytes.is_some()
+        {
             break;
         }
         if std::time::Instant::now() >= expires {
-            terminate_process_group(&mut child, status.is_some());
+            contain_or_abort(pid, pidfd.as_raw_fd(), status.is_some());
             return Err("llvm-objdump exceeded its execution deadline".into());
         }
         std::thread::sleep(std::time::Duration::from_millis(2));
@@ -999,11 +1488,8 @@ where
 
 #[cfg(any(test, feature = "hardware-test-hooks"))]
 struct PrivateExecutableMaterialization {
-    directory: std::path::PathBuf,
-    path: std::path::PathBuf,
     file: std::fs::File,
-    device: u64,
-    inode: u64,
+    byte_len: u64,
     digest: [u8; 32],
 }
 
@@ -1011,82 +1497,66 @@ struct PrivateExecutableMaterialization {
 impl PrivateExecutableMaterialization {
     fn new(bytes: &[u8]) -> Result<Self, BoxError> {
         require(
-            !bytes.is_empty() && bytes.len() as u64 <= MAX_LLVM_OBJDUMP_BYTES,
-            "private llvm-objdump materialization has an invalid bounded length",
+            bytes.starts_with(b"\x7fELF") && bytes.len() as u64 <= MAX_LLVM_OBJDUMP_BYTES,
+            "llvm-objdump must be a bounded ELF executable image",
         )?;
-        let directory = create_private_directory("objdump")?;
-        let path = directory.join("llvm-objdump");
-        let result = (|| -> Result<Self, BoxError> {
-            let mut file = std::fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(&path)?;
-            file.write_all(bytes)?;
-            file.flush()?;
-            file.sync_all()?;
-            let written_metadata = file.metadata()?;
-            require(
-                written_metadata.len() == bytes.len() as u64,
-                "private llvm-objdump materialization has the wrong written length",
-            )?;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o500))?;
-            std::fs::File::open(&directory)?.sync_all()?;
-            drop(file);
-            let file = std::fs::OpenOptions::new().read(true).open(&path)?;
-            let metadata = file.metadata()?;
-            require(
-                metadata.dev() == written_metadata.dev()
-                    && metadata.ino() == written_metadata.ino()
-                    && metadata.len() == written_metadata.len(),
-                "private llvm-objdump identity changed while reopening it read-only",
-            )?;
-            let materialized = Self {
-                directory: directory.clone(),
-                path: path.clone(),
-                file,
-                device: metadata.dev(),
-                inode: metadata.ino(),
-                digest: sha256(bytes),
-            };
-            materialized.verify(bytes)?;
-            Ok(materialized)
-        })();
-        if result.is_err() {
-            let _ = std::fs::remove_file(&path);
-            let _ = std::fs::remove_dir(&directory);
+        // SAFETY: memfd_create returns a fresh descriptor or a negative error.
+        let descriptor = unsafe {
+            libc::syscall(
+                libc::SYS_memfd_create,
+                c"fe2o3-row-softmax-v1-objdump".as_ptr(),
+                libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING,
+            )
+        } as libc::c_int;
+        if descriptor < 0 {
+            return Err(std::io::Error::last_os_error().into());
         }
-        result
+        // SAFETY: memfd_create returned a fresh owned descriptor.
+        let mut file = unsafe { std::fs::File::from_raw_fd(descriptor) };
+        file.write_all(bytes)?;
+        file.flush()?;
+        file.sync_all()?;
+        // SAFETY: fchmod and fcntl operate on this live private descriptor.
+        if unsafe { libc::fchmod(file.as_raw_fd(), 0o500) } != 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        let required_seals =
+            libc::F_SEAL_WRITE | libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL;
+        // SAFETY: F_ADD_SEALS accepts the integer seal mask for this memfd.
+        if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_ADD_SEALS, required_seals) } != 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        let materialized = Self {
+            file,
+            byte_len: bytes.len() as u64,
+            digest: sha256(bytes),
+        };
+        materialized.verify(bytes)?;
+        Ok(materialized)
     }
 
     fn verify(&self, expected: &[u8]) -> Result<(), BoxError> {
         let retained_metadata = self.file.metadata()?;
-        let path_metadata = std::fs::symlink_metadata(&self.path)?;
+        // SAFETY: F_GET_SEALS reads the immutable seal mask.
+        let seals = unsafe { libc::fcntl(self.file.as_raw_fd(), libc::F_GET_SEALS) };
+        let required_seals =
+            libc::F_SEAL_WRITE | libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL;
         require(
-            retained_metadata.dev() == self.device
-                && retained_metadata.ino() == self.inode
-                && path_metadata.dev() == self.device
-                && path_metadata.ino() == self.inode
-                && path_metadata.file_type().is_file()
-                && !path_metadata.file_type().is_symlink()
-                && path_metadata.nlink() == 1
-                && path_metadata.len() == expected.len() as u64
-                && path_metadata.permissions().mode() & 0o777 == 0o500,
-            "private llvm-objdump identity or permissions changed",
+            seals >= 0
+                && seals & required_seals == required_seals
+                && retained_metadata.len() == self.byte_len
+                && retained_metadata.permissions().mode() & 0o777 == 0o500,
+            "sealed llvm-objdump descriptor identity or permissions changed",
         )?;
         let mut retained = self.file.try_clone()?;
         retained.seek(SeekFrom::Start(0))?;
         let mut retained_bytes = Vec::new();
         retained.read_to_end(&mut retained_bytes)?;
-        let path_bytes = std::fs::read(&self.path)?;
         require(
             retained_bytes == expected
-                && path_bytes == expected
                 && sha256(&retained_bytes) == self.digest
-                && sha256(&path_bytes) == self.digest
                 && sha256(expected) == self.digest,
-            "private llvm-objdump bytes changed",
+            "sealed llvm-objdump descriptor bytes changed",
         )
     }
 
@@ -1115,20 +1585,9 @@ impl PrivateExecutableMaterialization {
         S: AsRef<std::ffi::OsStr>,
     {
         self.verify(expected)?;
-        let output = bounded_command_output(&self.path, arguments, deadline, output_limit)?;
+        let output = bounded_descriptor_output(&self.file, arguments, deadline, output_limit)?;
         self.verify(expected)?;
         Ok(output)
-    }
-}
-
-#[cfg(any(test, feature = "hardware-test-hooks"))]
-impl Drop for PrivateExecutableMaterialization {
-    fn drop(&mut self) {
-        if std::fs::remove_file(&self.path).is_err()
-            || std::fs::remove_dir(&self.directory).is_err()
-        {
-            std::process::abort();
-        }
     }
 }
 
@@ -1277,7 +1736,10 @@ fn read_pinned_artifact() -> Result<PinnedArtifact, BoxError> {
 }
 
 #[cfg(feature = "hardware-test-hooks")]
-fn inspect_final_isa(artifact: &PinnedArtifact, entry: BoundKernelEntry) -> Result<(), BoxError> {
+fn inspect_observational_isa_shape(
+    artifact: &PinnedArtifact,
+    entry: BoundKernelEntry,
+) -> Result<(), BoxError> {
     let materialized = PrivateArtifactMaterialization::new(&artifact.bytes)?;
     let arguments = [
         std::ffi::OsString::from(format!("--disassemble-symbols={}", artifact.kernel_symbol)),
@@ -1296,7 +1758,7 @@ fn inspect_final_isa(artifact: &PinnedArtifact, entry: BoundKernelEntry) -> Resu
     )?;
     let disassembly = String::from_utf8(output.stdout)
         .map_err(|_| "digest-pinned llvm-objdump emitted non-UTF-8 output")?;
-    validate_isa(&disassembly, &artifact.kernel_symbol, entry)?;
+    validate_observational_isa_shape(&disassembly, &artifact.kernel_symbol, entry)?;
     materialized.verify(&artifact.bytes)?;
     artifact.objdump.verify_bytes()?;
     require(
@@ -1475,7 +1937,7 @@ fn execute_one_row(
 #[cfg(feature = "hardware-test-hooks")]
 fn run_non_authoritative_hardware_evidence(artifact: PinnedArtifact) -> Result<(), BoxError> {
     let entry = inspect_metadata(&artifact.bytes, &artifact.kernel_symbol)?;
-    inspect_final_isa(&artifact, entry)?;
+    inspect_observational_isa_shape(&artifact, entry)?;
     let context = GpuContext::new(0)?;
     let mut adapter = ReviewedHsaRuntimeAdapterV1::new(context)?;
     let physical_target = adapter.environment().physical_device().target();
@@ -1496,7 +1958,7 @@ fn run_non_authoritative_hardware_evidence(artifact: PinnedArtifact) -> Result<(
                 && load.byte_len() == artifact.bytes.len() as u64,
             "loaded Row Softmax V1 bytes differ from the pinned artifact",
         )?;
-        // SAFETY: inspection admitted exactly one matching export and descriptor.
+        // SAFETY: inspection checked exactly one matching export and descriptor.
         let (kernels, resolutions) =
             unsafe { adapter.resolve_kernel_set(&executable, [artifact.kernel_symbol.as_str()]) }?;
         require(
@@ -1527,7 +1989,7 @@ fn run_non_authoritative_hardware_evidence(artifact: PinnedArtifact) -> Result<(
     execution
 }
 
-/// Executes four representative 64-element FP32 Row Softmax V1 rows.
+/// Executes eight representative 64-element FP32 Row Softmax V1 rows.
 ///
 /// This ignored test bypasses production prerequisite authentication and grants
 /// no protected evidence. Its guards detect only changed values within each
@@ -1535,7 +1997,9 @@ fn run_non_authoritative_hardware_evidence(artifact: PinnedArtifact) -> Result<(
 /// value-preserving writes, same-value races, or output-inert reads. Its finite
 /// numerical checks do not bind the HSACO to Rust source or a Verus proof, prove
 /// race freedom, grant publication/load/launch authority, or establish exact
-/// real-number softmax. NaN and infinity are outside this V1 evidence policy.
+/// real-number softmax. The separate mnemonic observation proves no CFG,
+/// dataflow, reachability, natural-exp scaling, or semantic use. NaN and
+/// infinity are outside this V1 evidence policy.
 ///
 /// ```text
 /// FE2O3_RUN_GFX942_ROW_SOFTMAX_V1_HARDWARE=1 \
@@ -1603,27 +2067,38 @@ mod tests {
         let expected = MetadataFacts::expected(ROW_SOFTMAX_V1_EXPORT);
         validate_metadata(&expected, ROW_SOFTMAX_V1_EXPORT).unwrap();
 
+        let mut qualified = expected.clone();
+        for slice in 0..2 {
+            let pointer = &mut qualified.arguments[slice * 2];
+            pointer.alignment = Some(8);
+            pointer.value_type = Some(ExplicitValueType::F32);
+            pointer.pointee_alignment = Some(4);
+            pointer.access = Some(if slice == 0 {
+                ArgumentAccess::ReadOnly
+            } else {
+                ArgumentAccess::ReadWrite
+            });
+            pointer.actual_access = pointer.access;
+            pointer.is_const = Some(slice == 0);
+            pointer.is_restrict = Some(slice == 1);
+            pointer.is_volatile = Some(false);
+            pointer.is_pipe = Some(false);
+            let length = &mut qualified.arguments[slice * 2 + 1];
+            length.alignment = Some(8);
+            length.value_type = Some(ExplicitValueType::U64);
+            length.is_const = Some(false);
+            length.is_restrict = Some(false);
+            length.is_volatile = Some(false);
+            length.is_pipe = Some(false);
+        }
+        validate_metadata(&qualified, ROW_SOFTMAX_V1_EXPORT).unwrap();
+
         let mut expanded_four_slice = expected.clone();
         expanded_four_slice.kernarg_size = 320;
         expanded_four_slice.implicit_offset = Some(64);
-        expanded_four_slice.arguments = (0_u64..4)
-            .flat_map(|index| {
-                [
-                    ArgumentFact {
-                        offset: index * 16,
-                        size: 8,
-                        kind: ExplicitValueKind::GlobalBuffer,
-                        address_space: Some(ArgumentAddressSpace::Global),
-                    },
-                    ArgumentFact {
-                        offset: index * 16 + 8,
-                        size: 8,
-                        kind: ExplicitValueKind::ByValue,
-                        address_space: None,
-                    },
-                ]
-            })
-            .collect();
+        expanded_four_slice
+            .arguments
+            .extend(expected.arguments.clone());
         expanded_four_slice.descriptor_kernarg_size = 320;
         assert!(validate_metadata(&expanded_four_slice, ROW_SOFTMAX_V1_EXPORT).is_err());
 
@@ -1658,12 +2133,43 @@ mod tests {
             mutate(&mut hostile);
             assert!(validate_metadata(&hostile, ROW_SOFTMAX_V1_EXPORT).is_err());
         }
+
+        let argument_mutations: &[fn(&mut MetadataFacts)] = &[
+            |facts| facts.arguments[0].name = Some("input.data".to_owned()),
+            |facts| facts.arguments[1].name = None,
+            |facts| facts.arguments[0].type_name = Some("float*".to_owned()),
+            |facts| facts.arguments[0].alignment = Some(4),
+            |facts| facts.arguments[1].alignment = Some(4),
+            |facts| facts.arguments[0].value_type = Some(ExplicitValueType::U64),
+            |facts| facts.arguments[1].value_type = Some(ExplicitValueType::F32),
+            |facts| facts.arguments[0].access = Some(ArgumentAccess::ReadWrite),
+            |facts| facts.arguments[2].access = Some(ArgumentAccess::ReadOnly),
+            |facts| facts.arguments[0].actual_access = Some(ArgumentAccess::ReadWrite),
+            |facts| facts.arguments[2].actual_access = Some(ArgumentAccess::ReadOnly),
+            |facts| facts.arguments[0].pointee_alignment = Some(8),
+            |facts| facts.arguments[1].pointee_alignment = Some(4),
+            |facts| facts.arguments[0].is_const = Some(false),
+            |facts| facts.arguments[2].is_const = Some(true),
+            |facts| facts.arguments[0].is_restrict = Some(true),
+            |facts| facts.arguments[2].is_restrict = Some(false),
+            |facts| facts.arguments[0].is_volatile = Some(true),
+            |facts| facts.arguments[2].is_pipe = Some(true),
+            |facts| facts.arguments[1].access = Some(ArgumentAccess::ReadOnly),
+            |facts| facts.arguments[3].address_space = Some(ArgumentAddressSpace::Global),
+            |facts| facts.arguments[1].is_const = Some(true),
+            |facts| facts.arguments[3].is_restrict = Some(true),
+        ];
+        for mutate in argument_mutations {
+            let mut hostile = expected.clone();
+            mutate(&mut hostile);
+            assert!(validate_metadata(&hostile, ROW_SOFTMAX_V1_EXPORT).is_err());
+        }
     }
 
     #[test]
-    fn isa_validator_rejects_missing_effects_and_forbidden_families() {
+    fn observational_isa_shape_rejects_missing_effects_and_forbidden_families() {
         let valid = valid_disassembly();
-        validate_isa(&valid, ROW_SOFTMAX_V1_EXPORT, valid_entry()).unwrap();
+        validate_observational_isa_shape(&valid, ROW_SOFTMAX_V1_EXPORT, valid_entry()).unwrap();
 
         for hostile in [
             valid.replace("global_store_dword", "v_mov_b32"),
@@ -1676,18 +2182,40 @@ mod tests {
             valid.replace("v_exp_f32", "v_mfma_f32_16x16x16_bf16"),
             valid.replace("000000001000:", "0000000000001000:"),
         ] {
-            assert!(validate_isa(&hostile, ROW_SOFTMAX_V1_EXPORT, valid_entry()).is_err());
+            assert!(
+                validate_observational_isa_shape(&hostile, ROW_SOFTMAX_V1_EXPORT, valid_entry())
+                    .is_err()
+            );
         }
     }
 
     #[test]
-    fn isa_validator_rejects_exp_owned_only_by_a_helper() {
+    fn observational_isa_shape_rejects_exp_owned_only_by_a_helper() {
         let scalar_kernel = valid_disassembly().replace("v_exp_f32 v0, v0", "v_add_f32 v0, v1");
         let helper = "\n0000000000002000 <helper>:\n\
                       \tv_exp_f32 v0, v0 // 000000002000: DEADBEEF\n\
                       \ts_endpgm // 000000002004: DEADBEEF\n";
         let hostile = format!("{scalar_kernel}{helper}");
-        assert!(validate_isa(&hostile, ROW_SOFTMAX_V1_EXPORT, valid_entry()).is_err());
+        assert!(
+            validate_observational_isa_shape(&hostile, ROW_SOFTMAX_V1_EXPORT, valid_entry())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn observational_isa_shape_does_not_claim_register_dataflow() {
+        let unrelated_registers = valid_disassembly()
+            .replace("v_exp_f32 v0, v0", "v_exp_f32 v7, v9")
+            .replace(
+                "global_store_dword v[0:1], v0",
+                "global_store_dword v[4:5], v42",
+            );
+        validate_observational_isa_shape(
+            &unrelated_registers,
+            ROW_SOFTMAX_V1_EXPORT,
+            valid_entry(),
+        )
+        .unwrap();
     }
 
     #[test]
@@ -1720,14 +2248,15 @@ mod tests {
 
     #[test]
     fn private_objdump_execution_ignores_caller_path_substitution() {
+        assert!(PrivateExecutableMaterialization::new(b"#!/bin/sh\nexit 0\n").is_err());
         let caller_directory = create_private_directory("caller-objdump").unwrap();
         let caller_path = caller_directory.join("llvm-objdump");
         let substitute_path = caller_directory.join("hostile-objdump");
-        let captured = b"#!/bin/sh\ncase \"$1\" in\n  --version) printf 'AMD LLVM version 22.0.0git\\n' ;;\n  --disassemble-symbols=row_softmax_v1) printf 'captured disassembly\\n' ;;\n  *) exit 64 ;;\nesac\n";
-        let substituted = b"#!/bin/sh\nprintf 'substituted caller executable\\n'\n";
+        let captured = std::fs::read(std::fs::canonicalize("/bin/sh").unwrap()).unwrap();
+        let substituted = std::fs::read(std::fs::canonicalize("/bin/false").unwrap()).unwrap();
         for (path, bytes) in [
             (&caller_path, captured.as_slice()),
-            (&substitute_path, substituted),
+            (&substitute_path, &substituted),
         ] {
             let mut file = std::fs::OpenOptions::new()
                 .write(true)
@@ -1743,48 +2272,56 @@ mod tests {
 
         std::fs::rename(&substitute_path, &caller_path).unwrap();
         assert_eq!(std::fs::read(&caller_path).unwrap(), substituted);
-        let version = executable.output(captured, ["--version"]).unwrap();
-        assert!(version.status.success() && version.stderr.is_empty());
-        assert_eq!(
-            observed_llvm_22_version(&version.stdout).unwrap(),
-            "AMD LLVM version 22.0.0git"
-        );
-        let disassembly = executable
-            .output(captured, ["--disassemble-symbols=row_softmax_v1"])
+        let output = executable
+            .output(&captured, ["-c", "printf 'captured descriptor\\n'"])
             .unwrap();
-        assert!(disassembly.status.success() && disassembly.stderr.is_empty());
-        assert_eq!(disassembly.stdout, b"captured disassembly\n");
-        executable.verify(captured).unwrap();
+        assert!(output.status.success() && output.stderr.is_empty());
+        assert_eq!(output.stdout, b"captured descriptor\n");
+        executable.verify(&captured).unwrap();
 
         std::fs::remove_file(caller_path).unwrap();
         std::fs::remove_dir(caller_directory).unwrap();
     }
 
     #[test]
-    fn private_objdump_execution_enforces_output_and_time_bounds() {
-        let noisy = b"#!/bin/sh\nwhile :; do printf '0123456789abcdef'; done\n";
-        let noisy_executable = PrivateExecutableMaterialization::new(noisy).unwrap();
+    fn private_objdump_execution_enforces_output_bound() {
+        let shell = std::fs::read(std::fs::canonicalize("/bin/sh").unwrap()).unwrap();
+        let noisy_executable = PrivateExecutableMaterialization::new(&shell).unwrap();
         let overflow = noisy_executable
             .output_with_limits(
-                noisy,
-                std::iter::empty::<&str>(),
-                std::time::Duration::from_secs(1),
+                &shell,
+                ["-c", "while :; do printf '0123456789abcdef'; done"],
+                std::time::Duration::from_secs(5),
                 128,
             )
             .unwrap_err();
         assert!(overflow.to_string().contains("exceeded"));
+    }
 
-        let sleeping = b"#!/bin/sh\nsleep 30\n";
-        let sleeping_executable = PrivateExecutableMaterialization::new(sleeping).unwrap();
-        let timeout = sleeping_executable
+    #[test]
+    fn seccomp_contains_double_fork_setsid_pipe_holder() {
+        let shell = std::fs::read(std::fs::canonicalize("/bin/sh").unwrap()).unwrap();
+        let executable = PrivateExecutableMaterialization::new(&shell).unwrap();
+        let directory = create_private_directory("escape-marker").unwrap();
+        let marker = directory.join("escaped");
+        let command = format!(
+            "( ( /usr/bin/setsid /bin/sh -c 'printf escaped > {}; /bin/sleep 30' & ) & ); \
+             printf containment-returned",
+            marker.display()
+        );
+        let output = executable
             .output_with_limits(
-                sleeping,
-                std::iter::empty::<&str>(),
-                std::time::Duration::from_millis(50),
-                128,
+                &shell,
+                ["-c", command.as_str()],
+                std::time::Duration::from_secs(10),
+                4096,
             )
-            .unwrap_err();
-        assert!(timeout.to_string().contains("deadline"));
+            .unwrap();
+        assert!(!marker.exists());
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        assert!(!output.stderr.is_empty());
+        std::fs::remove_dir(directory).unwrap();
     }
 
     #[test]
@@ -1832,8 +2369,10 @@ mod tests {
 
     #[test]
     fn stable_oracle_covers_representative_rows_and_translation_invariance() {
-        for input in representative_inputs() {
-            let expected = softmax_oracle(&input).unwrap();
+        let inputs = representative_inputs();
+        assert_eq!(inputs.len(), 8);
+        for input in &inputs {
+            let expected = softmax_oracle(input).unwrap();
             assert_eq!(expected.len(), ELEMENTS);
             assert!(
                 expected
@@ -1853,6 +2392,25 @@ mod tests {
 
         let uniform = softmax_oracle(&[0.0; ELEMENTS]).unwrap();
         assert!(uniform.iter().all(|value| *value == 1.0 / 64.0));
+
+        let extrema = softmax_oracle(&inputs[4]).unwrap();
+        assert_eq!(extrema[3], 1.0);
+        assert!(
+            extrema
+                .iter()
+                .enumerate()
+                .all(|(index, value)| index == 3 || *value == 0.0)
+        );
+
+        let subnormals = softmax_oracle(&inputs[5]).unwrap();
+        assert!(subnormals.iter().all(|value| *value == 1.0 / 64.0));
+
+        let untranslated_large: [f32; ELEMENTS] =
+            std::array::from_fn(|index| (index % 8) as f32 * 0.125);
+        assert_eq!(
+            softmax_oracle(&inputs[7]).unwrap(),
+            softmax_oracle(&untranslated_large).unwrap()
+        );
     }
 
     #[test]
