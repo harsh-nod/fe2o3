@@ -51,11 +51,6 @@ impl PreparedScalarGemmV1WorkerHandoffV1 {
     pub(crate) const fn handoff(&self) -> &CompilerModuleHandoffV2 {
         &self.handoff
     }
-
-    #[allow(dead_code)]
-    pub(crate) fn into_handoff(self) -> CompilerModuleHandoffV2 {
-        self.handoff
-    }
 }
 
 /// Consumes exact frontend authority and prepares the canonical scalar GEMM V1
