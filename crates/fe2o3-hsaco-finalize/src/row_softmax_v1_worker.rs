@@ -31,6 +31,8 @@ const TARGET: &str = "gfx942:xnack-";
 const OCML_EXP_F32: &str = "__ocml_exp_f32";
 const FRONTEND_AUTHORITY_SECTION: &str = ".fe2o3.row-softmax-auth.v1";
 const FRONTEND_AUTHORITY_BYTES: usize = 32;
+const EXPONENTIAL_BOUNDARY_SECTION: &str = ".fe2o3.row-exp.v1";
+const EXPONENTIAL_BOUNDARY_BYTES: usize = 32;
 const MEASURED_OCML_PROVIDER_FILE_COUNT: usize = 4;
 const OCML_PROVIDER_IDENTITY: &str = "gfx942-ocml-v1";
 const OCML_PROVIDER_BASENAMES: [&str; MEASURED_OCML_PROVIDER_FILE_COUNT] = [
@@ -660,7 +662,9 @@ fn validate_handoff_profile(
     validate_envelope(handoff.envelope())?;
     validate_manifest(handoff.symbol_manifest())?;
 
-    let (descriptor_bytes, authority) = decode_bound_sections(handoff.module_bytes())?;
+    let sections = decode_bound_sections(handoff.module_bytes())?;
+    let descriptor_bytes = sections.descriptor;
+    let authority = sections.authority;
     if authority.as_slice() != expected_frontend_authority {
         return Err(profile_mismatch("frontend-authority commitment"));
     }
@@ -811,34 +815,49 @@ fn validate_build_identity_pin(
     Ok(())
 }
 
+struct DecodedBoundSectionsV1 {
+    descriptor: Vec<u8>,
+    authority: [u8; FRONTEND_AUTHORITY_BYTES],
+}
+
 fn decode_bound_sections(
     module: &[u8],
-) -> Result<(Vec<u8>, Vec<u8>), RowSoftmaxV1DirectWorkerErrorV1> {
-    let descriptor_header = module_assembly_section_header(COMPILER_DESCRIPTOR_SECTION_NAME_V1);
-    let authority_header = module_assembly_section_header(FRONTEND_AUTHORITY_SECTION);
-    let descriptor_positions = positions(module, descriptor_header.as_bytes());
-    let authority_positions = positions(module, authority_header.as_bytes());
-    let ([descriptor_position], [authority_position]) = (
-        descriptor_positions.as_slice(),
-        authority_positions.as_slice(),
-    ) else {
+) -> Result<DecodedBoundSectionsV1, RowSoftmaxV1DirectWorkerErrorV1> {
+    let sections = [
+        COMPILER_DESCRIPTOR_SECTION_NAME_V1,
+        FRONTEND_AUTHORITY_SECTION,
+        EXPONENTIAL_BOUNDARY_SECTION,
+    ];
+    let headers = sections.map(module_assembly_section_header);
+    let positions = headers
+        .each_ref()
+        .map(|header| positions(module, header.as_bytes()));
+    let [[descriptor_position], [_], [_]] = positions.each_ref().map(Vec::as_slice) else {
         return Err(profile_mismatch("bound compiler section closure"));
     };
-    if *descriptor_position == 0
-        || *authority_position <= descriptor_position + descriptor_header.len()
-    {
-        return Err(profile_mismatch("bound compiler section order"));
+    if *descriptor_position == 0 || module[descriptor_position - 1] != b'\n' {
+        return Err(profile_mismatch("bound compiler section boundary"));
     }
-    let descriptor_start = descriptor_position + descriptor_header.len();
-    let authority_start = authority_position + authority_header.len();
-    let descriptor = decode_module_assembly_bytes(&module[descriptor_start..*authority_position])
+
+    let mut offset = *descriptor_position;
+    let descriptor = decode_module_assembly_section(module, &mut offset, &headers[0])
         .ok_or_else(|| profile_mismatch("compiler descriptor section encoding"))?;
-    let authority = decode_module_assembly_bytes(&module[authority_start..])
-        .ok_or_else(|| profile_mismatch("frontend-authority section encoding"))?;
-    if authority.len() != FRONTEND_AUTHORITY_BYTES {
-        return Err(profile_mismatch("frontend-authority commitment size"));
+    let authority = decode_module_assembly_section(module, &mut offset, &headers[1])
+        .ok_or_else(|| profile_mismatch("frontend-authority section encoding"))?
+        .try_into()
+        .map_err(|_| profile_mismatch("frontend-authority commitment size"))?;
+    let _exponential: [u8; EXPONENTIAL_BOUNDARY_BYTES] =
+        decode_module_assembly_section(module, &mut offset, &headers[2])
+            .ok_or_else(|| profile_mismatch("exponential-boundary section encoding"))?
+            .try_into()
+            .map_err(|_| profile_mismatch("exponential-boundary commitment size"))?;
+    if offset != module.len() {
+        return Err(profile_mismatch("bound compiler section trailing bytes"));
     }
-    Ok((descriptor, authority))
+    Ok(DecodedBoundSectionsV1 {
+        descriptor,
+        authority,
+    })
 }
 
 fn positions(bytes: &[u8], needle: &[u8]) -> Vec<usize> {
@@ -850,19 +869,26 @@ fn positions(bytes: &[u8], needle: &[u8]) -> Vec<usize> {
 }
 
 fn module_assembly_section_header(section: &str) -> String {
-    format!("\nmodule asm \".section {section},\\22\\22,@progbits\"\nmodule asm \".balign 8\"\n")
+    format!("module asm \".section {section},\\22\\22,@progbits\"\n")
 }
 
-fn decode_module_assembly_bytes(encoded: &[u8]) -> Option<Vec<u8>> {
+fn decode_module_assembly_section(
+    module: &[u8],
+    offset: &mut usize,
+    header: &str,
+) -> Option<Vec<u8>> {
+    const ALIGNMENT: &[u8] = b"module asm \".balign 8\"\n";
+    const SECTION_PREFIX: &[u8] = b"module asm \".section ";
     const PREFIX: &[u8] = b"module asm \".byte ";
     const SUFFIX: &[u8] = b"\"\n";
 
-    if encoded.is_empty() {
-        return None;
-    }
-    let mut remaining = encoded;
+    consume_exact_bytes(module, offset, header.as_bytes())?;
+    consume_exact_bytes(module, offset, ALIGNMENT)?;
+
     let mut result = Vec::new();
-    while !remaining.is_empty() {
+    let mut chunk_lengths = Vec::new();
+    while *offset < module.len() && !module[*offset..].starts_with(SECTION_PREFIX) {
+        let remaining = &module[*offset..];
         let end = remaining
             .windows(SUFFIX.len())
             .position(|window| window == SUFFIX)?;
@@ -883,12 +909,26 @@ fn decode_module_assembly_bytes(encoded: &[u8]) -> Option<Vec<u8>> {
             result.push((decode_hex_nibble(*high)? << 4) | decode_hex_nibble(*low)?);
             count += 1;
         }
-        if count == 0 || count > 16 || (line_end != remaining.len() && count != 16) {
+        if count == 0 || count > 16 {
             return None;
         }
-        remaining = &remaining[line_end..];
+        chunk_lengths.push(count);
+        *offset = offset.checked_add(line_end)?;
+    }
+    let (last, preceding) = chunk_lengths.split_last()?;
+    if preceding.iter().any(|count| *count != 16) || !(1..=16).contains(last) {
+        return None;
     }
     Some(result)
+}
+
+fn consume_exact_bytes(input: &[u8], offset: &mut usize, expected: &[u8]) -> Option<()> {
+    let remaining = input.get(*offset..)?;
+    if !remaining.starts_with(expected) {
+        return None;
+    }
+    *offset = offset.checked_add(expected.len())?;
+    Some(())
 }
 
 const fn decode_hex_nibble(value: u8) -> Option<u8> {
@@ -959,6 +999,8 @@ mod tests {
 
     const OUTPUT: &[u8] = b"linked-row";
     const AUTHORITY: [u8; FRONTEND_AUTHORITY_BYTES] = [0xa5; FRONTEND_AUTHORITY_BYTES];
+    const EXPONENTIAL_BOUNDARY: [u8; EXPONENTIAL_BOUNDARY_BYTES] =
+        [0x91; EXPONENTIAL_BOUNDARY_BYTES];
     const OCML_ABI: &str = "C(f32[size=4,align=4])->f32[size=4,align=4]";
     const PROVIDER_DIGESTS: [[u8; 32]; MEASURED_OCML_PROVIDER_FILE_COUNT] =
         [[0x41; 32], [0x42; 32], [0x43; 32], [0x44; 32]];
@@ -992,6 +1034,11 @@ entry:
             descriptor,
         );
         append_module_assembly_section(&mut module, FRONTEND_AUTHORITY_SECTION, authority);
+        append_module_assembly_section(
+            &mut module,
+            EXPONENTIAL_BOUNDARY_SECTION,
+            &EXPONENTIAL_BOUNDARY,
+        );
         let envelope = exact_envelope();
         CompilerModuleHandoffV2::new(
             CompilerModuleKindV1::LlvmTextIr,
@@ -1044,7 +1091,7 @@ entry:
     }
 
     fn exact_envelope() -> CompilerFfiEnvelopeV1 {
-        let semantic_identity = [0x91; 32];
+        let semantic_identity = EXPONENTIAL_BOUNDARY;
         let semantic_text = lower_hex(&semantic_identity);
         let fields = DeviceFfiContractFieldsV1 {
             direction: DEVICE_FFI_DIRECTION_IMPORT_V1,
@@ -1433,6 +1480,7 @@ entry:
 
     fn append_module_assembly_section(module: &mut Vec<u8>, section: &str, bytes: &[u8]) {
         module.extend_from_slice(module_assembly_section_header(section).as_bytes());
+        module.extend_from_slice(b"module asm \".balign 8\"\n");
         for chunk in bytes.chunks(16) {
             module.extend_from_slice(b"module asm \".byte ");
             for (index, byte) in chunk.iter().copied().enumerate() {
