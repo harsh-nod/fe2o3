@@ -197,21 +197,22 @@ impl RowSoftmaxProviderAuthorityV1 {
     }
 
     #[cfg(test)]
-    pub(crate) fn canonical_for_test() -> Self {
+    pub(crate) fn canonical_for_test(cargo_metadata_build_observation: [u8; 32]) -> Self {
+        let source_identities = [
+            [4; 32], [5; 32], [5; 32], [5; 32], [4; 32], [6; 32], [6; 32], [6; 32],
+        ];
         let mut authority = Self {
             provider: crate::trusted_device_items::ReviewedRowSoftmaxProviderDefinitionV1 {
                 crate_name: "fe2o3_device".to_owned(),
                 stable_crate_id: 1,
                 crate_hash: [2; 16],
-                cargo_metadata_build_observation: [3; 32],
+                cargo_metadata_build_observation,
                 source_identity: [4; 32],
             },
             definition_identities: (0..ROW_SOFTMAX_TRUSTED_ITEMS_V1.len())
                 .map(|index| [u8::try_from(index + 5).expect("small identity"); 16])
                 .collect(),
-            source_identities: (0..ROW_SOFTMAX_TRUSTED_ITEMS_V1.len())
-                .map(|index| [u8::try_from(index + 4).expect("small identity"); 32])
-                .collect(),
+            source_identities: source_identities.to_vec(),
             commitment: [0; 32],
         };
         authority.commitment = authority

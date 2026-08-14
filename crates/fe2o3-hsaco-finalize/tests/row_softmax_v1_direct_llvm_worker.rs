@@ -15,9 +15,11 @@ use fe2o3_compiler_ffi::{CodeObjectVersion as CompilerCodeObjectVersion, Compile
 use fe2o3_hsaco::MAX_HSACO_BYTES;
 use fe2o3_hsaco_finalize::{
     ContentIdentityV1, FinalizedWorkerV2HsacoIdentityV1, LinkOptionV1, PinnedWorkerV1,
+    ROW_SOFTMAX_V1_PROVIDER_ITEM_COUNT, RowSoftmaxV1AuthorityPolicyV1,
     RowSoftmaxV1DirectWorkerExpectationV1, RowSoftmaxV1DirectWorkerPinsV1,
-    RowSoftmaxV1OcmlProviderPinsV1, WorkerDeviceLibraryProviderEvidenceV1, WorkerExecutionLimitsV1,
-    WorkerMeasurementV1, WorkerOutputConstraintsV1, execute_reproducible_first_build_worker_v2,
+    RowSoftmaxV1OcmlProviderPinsV1, RowSoftmaxV1ProviderManifestV1,
+    WorkerDeviceLibraryProviderEvidenceV1, WorkerExecutionLimitsV1, WorkerMeasurementV1,
+    WorkerOutputConstraintsV1, execute_reproducible_first_build_worker_v2,
     finalize_row_softmax_v1_structural_worker_v2_hsaco_v1,
     inspect_row_softmax_v1_direct_worker_hsaco_v1,
 };
@@ -35,6 +37,11 @@ const HANDOFF_PRODUCER_SOURCE_ENV: &str = "FE2O3_ROW_SOFTMAX_V1_HANDOFF_PRODUCER
 const HANDOFF_ATTEMPT_ENV: &str = "FE2O3_ROW_SOFTMAX_V1_HANDOFF_ATTEMPT";
 const HANDOFF_SHA256_ENV: &str = "FE2O3_ROW_SOFTMAX_V1_HANDOFF_SHA256";
 const FRONTEND_AUTHORITY_ENV: &str = "FE2O3_ROW_SOFTMAX_V1_FRONTEND_AUTHORITY_SHA256";
+const BROKER_SHA256_ENV: &str = "FE2O3_ROW_SOFTMAX_V1_BROKER_SHA256";
+const PROVIDER_STABLE_CRATE_ID_ENV: &str = "FE2O3_ROW_SOFTMAX_V1_PROVIDER_STABLE_CRATE_ID";
+const PROVIDER_CRATE_HASH_ENV: &str = "FE2O3_ROW_SOFTMAX_V1_PROVIDER_CRATE_HASH";
+const PROVIDER_DEFINITIONS_ENV: &str = "FE2O3_ROW_SOFTMAX_V1_PROVIDER_DEFINITION_IDENTITIES";
+const PROVIDER_SOURCES_ENV: &str = "FE2O3_ROW_SOFTMAX_V1_PROVIDER_SOURCE_IDENTITIES";
 const OCML_SHA256_ENVS: [&str; 4] = [
     "FE2O3_ROW_SOFTMAX_V1_OCML_SHA256",
     "FE2O3_ROW_SOFTMAX_V1_ISA942_SHA256",
@@ -51,7 +58,7 @@ const OCML_PROVIDER_BASENAMES: [&str; 4] = [
     "oclc_finite_only_off.bc",
 ];
 
-const REQUIRED_ENVIRONMENT: [&str; 17] = [
+const REQUIRED_ENVIRONMENT: [&str; 22] = [
     WORKER_ENV,
     WORKER_SHA256_ENV,
     WORKER_BYTES_ENV,
@@ -63,6 +70,11 @@ const REQUIRED_ENVIRONMENT: [&str; 17] = [
     HANDOFF_ATTEMPT_ENV,
     HANDOFF_SHA256_ENV,
     FRONTEND_AUTHORITY_ENV,
+    BROKER_SHA256_ENV,
+    PROVIDER_STABLE_CRATE_ID_ENV,
+    PROVIDER_CRATE_HASH_ENV,
+    PROVIDER_DEFINITIONS_ENV,
+    PROVIDER_SOURCES_ENV,
     OCML_SHA256_ENVS[0],
     OCML_SHA256_ENVS[1],
     OCML_SHA256_ENVS[2],
@@ -76,14 +88,34 @@ fn required_env(name: &str) -> String {
 }
 
 fn required_sha256(name: &str) -> [u8; 32] {
-    let value = required_env(name);
-    assert_eq!(value.len(), 64, "{name} must contain exactly 64 hex digits");
-    let mut decoded = [0; 32];
+    let decoded = required_hex::<32>(name, &required_env(name));
+    assert_ne!(decoded, [0; 32], "{name} must not be zero");
+    decoded
+}
+
+fn required_hex<const N: usize>(name: &str, value: &str) -> [u8; N] {
+    assert_eq!(
+        value.len(),
+        N * 2,
+        "{name} must contain exactly {} hex digits",
+        N * 2
+    );
+    let mut decoded = [0; N];
     for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
         decoded[index] = (hex_nibble(name, pair[0]) << 4) | hex_nibble(name, pair[1]);
     }
-    assert_ne!(decoded, [0; 32], "{name} must not be zero");
     decoded
+}
+
+fn required_identity_list<const N: usize, const WIDTH: usize>(name: &str) -> [[u8; WIDTH]; N] {
+    let value = required_env(name);
+    let fields = value.split(':').collect::<Vec<_>>();
+    assert_eq!(
+        fields.len(),
+        N,
+        "{name} must contain exactly {N} identities"
+    );
+    std::array::from_fn(|index| required_hex::<WIDTH>(name, fields[index]))
 }
 
 fn hex_nibble(name: &str, value: u8) -> u8 {
@@ -141,6 +173,21 @@ fn worker_pins() -> RowSoftmaxV1DirectWorkerPinsV1 {
     .expect("independently pinned row-softmax worker")
 }
 
+fn authority_policy(attempt: BuildAttempt) -> RowSoftmaxV1AuthorityPolicyV1 {
+    let provider = RowSoftmaxV1ProviderManifestV1::new(
+        required_u64(PROVIDER_STABLE_CRATE_ID_ENV),
+        required_hex::<16>(
+            PROVIDER_CRATE_HASH_ENV,
+            &required_env(PROVIDER_CRATE_HASH_ENV),
+        ),
+        required_identity_list::<ROW_SOFTMAX_V1_PROVIDER_ITEM_COUNT, 16>(PROVIDER_DEFINITIONS_ENV),
+        required_identity_list::<ROW_SOFTMAX_V1_PROVIDER_ITEM_COUNT, 32>(PROVIDER_SOURCES_ENV),
+    )
+    .expect("independently pinned rustc/provider manifest");
+    RowSoftmaxV1AuthorityPolicyV1::new(provider, attempt, required_sha256(BROKER_SHA256_ENV))
+        .expect("independently pinned managed build authority")
+}
+
 fn production_handoff(
     expected_worker: RowSoftmaxV1DirectWorkerPinsV1,
 ) -> (
@@ -171,6 +218,7 @@ fn production_handoff(
         &handoff,
         required_sha256(HANDOFF_SHA256_ENV),
         required_sha256(FRONTEND_AUTHORITY_ENV),
+        authority_policy(attempt),
         expected_worker,
     )
     .expect("admit exact pinned row-softmax rustc handoff");

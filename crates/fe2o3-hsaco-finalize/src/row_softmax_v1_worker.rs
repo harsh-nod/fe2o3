@@ -26,6 +26,9 @@ use crate::{
     WorkerDeviceLibraryProviderEvidenceV1, WorkerInputKindV1, WorkerOptimizationLevelV1,
     WorkerOptionsV1, WorkerProtocolError, WorkerRequestV2, WorkerResponseV2, WorkerStageV1,
     inspect_row_softmax_v1_structural_worker_v2_hsaco_v1,
+    row_softmax_authority::{
+        RowSoftmaxV1AuthorityPolicyV1, validate_row_softmax_v1_authority_transcript,
+    },
 };
 
 const TARGET: &str = "gfx942:xnack-";
@@ -137,6 +140,7 @@ impl RowSoftmaxV1DirectWorkerPinsV1 {
 pub struct RowSoftmaxV1DirectWorkerExpectationV1 {
     handoff_sha256: [u8; 32],
     frontend_authority_commitment: [u8; FRONTEND_AUTHORITY_BYTES],
+    authority_policy: Option<RowSoftmaxV1AuthorityPolicyV1>,
     descriptor: RowSoftmaxV1StructuralDescriptorExpectationV1,
     worker: RowSoftmaxV1DirectWorkerPinsV1,
 }
@@ -147,6 +151,23 @@ impl RowSoftmaxV1DirectWorkerExpectationV1 {
         handoff: &CompilerModuleHandoffV2,
         expected_handoff_sha256: [u8; 32],
         expected_frontend_authority_commitment: [u8; FRONTEND_AUTHORITY_BYTES],
+        expected_authority_policy: RowSoftmaxV1AuthorityPolicyV1,
+        expected_worker: RowSoftmaxV1DirectWorkerPinsV1,
+    ) -> Result<Self, RowSoftmaxV1DirectWorkerErrorV1> {
+        Self::from_pinned_rustc_handoff_inner(
+            handoff,
+            expected_handoff_sha256,
+            expected_frontend_authority_commitment,
+            Some(expected_authority_policy),
+            expected_worker,
+        )
+    }
+
+    fn from_pinned_rustc_handoff_inner(
+        handoff: &CompilerModuleHandoffV2,
+        expected_handoff_sha256: [u8; 32],
+        expected_frontend_authority_commitment: [u8; FRONTEND_AUTHORITY_BYTES],
+        expected_authority_policy: Option<RowSoftmaxV1AuthorityPolicyV1>,
         expected_worker: RowSoftmaxV1DirectWorkerPinsV1,
     ) -> Result<Self, RowSoftmaxV1DirectWorkerErrorV1> {
         if expected_handoff_sha256 == [0; 32]
@@ -157,14 +178,34 @@ impl RowSoftmaxV1DirectWorkerExpectationV1 {
         if expected_frontend_authority_commitment == [0; FRONTEND_AUTHORITY_BYTES] {
             return Err(profile_mismatch("frontend-authority commitment"));
         }
-        let descriptor =
-            validate_handoff_profile(handoff, &expected_frontend_authority_commitment)?;
+        let descriptor = validate_handoff_profile(
+            handoff,
+            &expected_frontend_authority_commitment,
+            expected_authority_policy,
+        )?;
         Ok(Self {
             handoff_sha256: expected_handoff_sha256,
             frontend_authority_commitment: expected_frontend_authority_commitment,
+            authority_policy: expected_authority_policy,
             descriptor,
             worker: expected_worker,
         })
+    }
+
+    #[cfg(test)]
+    fn from_pinned_rustc_handoff_for_test(
+        handoff: &CompilerModuleHandoffV2,
+        expected_handoff_sha256: [u8; 32],
+        expected_frontend_authority_commitment: [u8; FRONTEND_AUTHORITY_BYTES],
+        expected_worker: RowSoftmaxV1DirectWorkerPinsV1,
+    ) -> Result<Self, RowSoftmaxV1DirectWorkerErrorV1> {
+        Self::from_pinned_rustc_handoff_inner(
+            handoff,
+            expected_handoff_sha256,
+            expected_frontend_authority_commitment,
+            None,
+            expected_worker,
+        )
     }
 
     pub const fn handoff_sha256(&self) -> &[u8; 32] {
@@ -173,6 +214,10 @@ impl RowSoftmaxV1DirectWorkerExpectationV1 {
 
     pub const fn frontend_authority_commitment(&self) -> &[u8; 32] {
         &self.frontend_authority_commitment
+    }
+
+    const fn authority_policy(&self) -> Option<RowSoftmaxV1AuthorityPolicyV1> {
+        self.authority_policy
     }
 
     pub const fn descriptor_expectation(self) -> RowSoftmaxV1StructuralDescriptorExpectationV1 {
@@ -642,7 +687,11 @@ fn validate_request(
     if handoff.identity().sha256() != expected.handoff_sha256() {
         return Err(profile_mismatch("pinned rustc handoff identity"));
     }
-    let descriptor = validate_handoff_profile(&handoff, expected.frontend_authority_commitment())?;
+    let descriptor = validate_handoff_profile(
+        &handoff,
+        expected.frontend_authority_commitment(),
+        expected.authority_policy(),
+    )?;
     if descriptor != expected.descriptor_expectation() {
         return Err(profile_mismatch("compiler descriptor expectation"));
     }
@@ -652,6 +701,7 @@ fn validate_request(
 fn validate_handoff_profile(
     handoff: &CompilerModuleHandoffV2,
     expected_frontend_authority: &[u8; FRONTEND_AUTHORITY_BYTES],
+    expected_authority_policy: Option<RowSoftmaxV1AuthorityPolicyV1>,
 ) -> Result<RowSoftmaxV1StructuralDescriptorExpectationV1, RowSoftmaxV1DirectWorkerErrorV1> {
     if handoff.kind() != CompilerModuleKindV1::LlvmTextIr {
         return Err(profile_mismatch("rustc handoff module kind"));
@@ -681,6 +731,15 @@ fn validate_handoff_profile(
     }
     let source = CompilerDescriptorSourceV1::decode(&descriptor_bytes)
         .map_err(|_| profile_mismatch("compiler descriptor source"))?;
+    if let Some(policy) = expected_authority_policy {
+        validate_row_softmax_v1_authority_transcript(
+            &sections.authority_transcript,
+            *source.identity().sha256(),
+            sections.exponential_boundary,
+            policy,
+        )
+        .map_err(|_| profile_mismatch("frontend-authority policy"))?;
+    }
     let table = source.table();
     if table.canonical_code_object_digest() != CanonicalCodeObjectDigest::from_bytes([0; 32])
         || table.compiler().name().as_str() != "rustc-codegen-fe2o3"
@@ -1119,7 +1178,7 @@ entry:
     fn exact_expectation(
         handoff: &CompilerModuleHandoffV2,
     ) -> RowSoftmaxV1DirectWorkerExpectationV1 {
-        RowSoftmaxV1DirectWorkerExpectationV1::from_pinned_rustc_handoff(
+        RowSoftmaxV1DirectWorkerExpectationV1::from_pinned_rustc_handoff_for_test(
             handoff,
             *handoff.identity().sha256(),
             AUTHORITY,
@@ -1618,7 +1677,7 @@ entry:
             ),
         ]));
         assert!(matches!(
-            RowSoftmaxV1DirectWorkerExpectationV1::from_pinned_rustc_handoff(
+            RowSoftmaxV1DirectWorkerExpectationV1::from_pinned_rustc_handoff_for_test(
                 &transcript_mismatch,
                 *transcript_mismatch.identity().sha256(),
                 AUTHORITY,
@@ -1637,7 +1696,7 @@ entry:
             (EXPONENTIAL_BOUNDARY_SECTION, changed_exponential.as_slice()),
         ]));
         assert!(matches!(
-            RowSoftmaxV1DirectWorkerExpectationV1::from_pinned_rustc_handoff(
+            RowSoftmaxV1DirectWorkerExpectationV1::from_pinned_rustc_handoff_for_test(
                 &exponential_mismatch,
                 *exponential_mismatch.identity().sha256(),
                 AUTHORITY,
@@ -2135,7 +2194,7 @@ entry:
             exact_worker_pins().provider(),
         )
         .unwrap();
-        let expected = RowSoftmaxV1DirectWorkerExpectationV1::from_pinned_rustc_handoff(
+        let expected = RowSoftmaxV1DirectWorkerExpectationV1::from_pinned_rustc_handoff_for_test(
             &handoff,
             *handoff.identity().sha256(),
             AUTHORITY,
@@ -2158,7 +2217,7 @@ entry:
         descriptor[symbol] = b's';
         let wrong_descriptor = handoff_with(&descriptor, &AUTHORITY, b"");
         assert!(
-            RowSoftmaxV1DirectWorkerExpectationV1::from_pinned_rustc_handoff(
+            RowSoftmaxV1DirectWorkerExpectationV1::from_pinned_rustc_handoff_for_test(
                 &wrong_descriptor,
                 *wrong_descriptor.identity().sha256(),
                 AUTHORITY,
@@ -2173,7 +2232,7 @@ entry:
             b"",
         );
         assert!(
-            RowSoftmaxV1DirectWorkerExpectationV1::from_pinned_rustc_handoff(
+            RowSoftmaxV1DirectWorkerExpectationV1::from_pinned_rustc_handoff_for_test(
                 &wrong_authority,
                 *wrong_authority.identity().sha256(),
                 AUTHORITY,
@@ -2206,7 +2265,7 @@ entry:
     fn handoff_pin_and_authority_must_be_nonzero_and_exact() {
         let handoff = exact_handoff();
         assert!(
-            RowSoftmaxV1DirectWorkerExpectationV1::from_pinned_rustc_handoff(
+            RowSoftmaxV1DirectWorkerExpectationV1::from_pinned_rustc_handoff_for_test(
                 &handoff,
                 [0; 32],
                 AUTHORITY,
@@ -2215,7 +2274,7 @@ entry:
             .is_err()
         );
         assert!(
-            RowSoftmaxV1DirectWorkerExpectationV1::from_pinned_rustc_handoff(
+            RowSoftmaxV1DirectWorkerExpectationV1::from_pinned_rustc_handoff_for_test(
                 &handoff,
                 *handoff.identity().sha256(),
                 [0; FRONTEND_AUTHORITY_BYTES],
@@ -2226,7 +2285,7 @@ entry:
         let mut wrong = *handoff.identity().sha256();
         wrong[0] ^= 1;
         assert!(
-            RowSoftmaxV1DirectWorkerExpectationV1::from_pinned_rustc_handoff(
+            RowSoftmaxV1DirectWorkerExpectationV1::from_pinned_rustc_handoff_for_test(
                 &handoff,
                 wrong,
                 AUTHORITY,

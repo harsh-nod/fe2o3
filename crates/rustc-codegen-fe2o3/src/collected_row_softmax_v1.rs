@@ -208,12 +208,12 @@ impl ManagedBuildAuthorityV1 {
     }
 
     #[cfg(test)]
-    fn canonical_for_test() -> Self {
+    fn canonical_for_test(cargo_metadata_transcript: [u8; 32]) -> Self {
         Self {
             generation: 1,
             session: [0x11; 16],
             invocation: [0x22; 32],
-            cargo_metadata_transcript: [0x03; 32],
+            cargo_metadata_transcript,
             broker_executable: [0x04; 32],
         }
     }
@@ -1046,14 +1046,7 @@ fn admit_managed_build_authority(
     observed_invocation: [u8; 32],
     broker_executable: [u8; 32],
 ) -> Result<ManagedBuildAuthorityV1, CollectedRowSoftmaxErrorV1> {
-    let mut digest = Sha256::new();
-    digest.update(CARGO_METADATA_BUILD_OBSERVATION_DOMAIN_V2);
-    digest.update((metadata.ordered_tokens.len() as u64).to_le_bytes());
-    for token in &metadata.ordered_tokens {
-        digest.update((token.len() as u64).to_le_bytes());
-        digest.update(token.as_bytes());
-    }
-    let expected_metadata_transcript: [u8; 32] = digest.finalize().into();
+    let expected_metadata_transcript = cargo_metadata_build_transcript(metadata);
     if observed_metadata_transcript != expected_metadata_transcript {
         return Err(CollectedRowSoftmaxErrorV1::CompilerSemantics {
             detail: format!(
@@ -1085,6 +1078,17 @@ fn admit_managed_build_authority(
             detail: detail.to_owned(),
         })?;
     Ok(authority)
+}
+
+fn cargo_metadata_build_transcript(metadata: &CargoMetadataBuildObservationV1) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(CARGO_METADATA_BUILD_OBSERVATION_DOMAIN_V2);
+    digest.update((metadata.ordered_tokens.len() as u64).to_le_bytes());
+    for token in &metadata.ordered_tokens {
+        digest.update((token.len() as u64).to_le_bytes());
+        digest.update(token.as_bytes());
+    }
+    digest.finalize().into()
 }
 
 fn observe_managed_wrapper_effective_rustc_argv() -> Result<[u8; 32], CollectedRowSoftmaxErrorV1> {
@@ -2020,6 +2024,9 @@ pub(crate) fn exact_frontend_receipt_for_test() -> RowSoftmaxFrontendReceiptV1 {
     let compiler_semantics = reviewed_compiler_semantics("0123456789abcdef");
     let admitted_compiler_semantics =
         require_compiler_semantics(&compiler_semantics).expect("reviewed compiler semantics");
+    let metadata_transcript = cargo_metadata_build_transcript(
+        &admitted_compiler_semantics.cargo_metadata_build_observation,
+    );
     let mut authority = RowSoftmaxFrontendAuthorityV1 {
         target: EXACT_ROW_SOFTMAX_TARGET_V1.to_owned(),
         code_object_version: ROW_SOFTMAX_CODE_OBJECT_VERSION_V1,
@@ -2040,8 +2047,10 @@ pub(crate) fn exact_frontend_receipt_for_test() -> RowSoftmaxFrontendReceiptV1 {
         compiler_semantics_commitment: admitted_compiler_semantics.normalized_commitment,
         cargo_metadata_build_observation: admitted_compiler_semantics
             .cargo_metadata_build_observation,
-        provider_authority: crate::mir_import::RowSoftmaxProviderAuthorityV1::canonical_for_test(),
-        managed_build_authority: ManagedBuildAuthorityV1::canonical_for_test(),
+        provider_authority: crate::mir_import::RowSoftmaxProviderAuthorityV1::canonical_for_test(
+            metadata_transcript,
+        ),
+        managed_build_authority: ManagedBuildAuthorityV1::canonical_for_test(metadata_transcript),
         descriptor_source_commitment: *descriptor_source.identity().sha256(),
         authority_commitment: [0; 32],
     };
@@ -2052,6 +2061,46 @@ pub(crate) fn exact_frontend_receipt_for_test() -> RowSoftmaxFrontendReceiptV1 {
         authority_transcript: Some(authority_transcript),
         descriptor_source: Some(descriptor_source),
     }
+}
+
+#[cfg(test)]
+pub(crate) fn exact_authority_policy_for_test()
+-> fe2o3_hsaco_finalize::RowSoftmaxV1AuthorityPolicyV1 {
+    use fe2o3_hsaco_finalize::{RowSoftmaxV1AuthorityPolicyV1, RowSoftmaxV1ProviderManifestV1};
+
+    let receipt = exact_frontend_receipt_for_test();
+    let authority = receipt.authority();
+    let provider = &authority.provider_authority;
+    let definitions = provider
+        .definition_identities
+        .as_slice()
+        .try_into()
+        .expect("exact row test provider definition count");
+    let sources = provider
+        .source_identities
+        .as_slice()
+        .try_into()
+        .expect("exact row test provider source count");
+    let manifest = RowSoftmaxV1ProviderManifestV1::new(
+        provider.provider.stable_crate_id,
+        provider.provider.crate_hash,
+        definitions,
+        sources,
+    )
+    .expect("exact row test provider manifest");
+    let attempt = fe2o3_artifact_transaction::BuildAttempt::from_env_value(&format!(
+        "{}:{}:{}",
+        authority.managed_build_authority.generation,
+        encode_hex(&authority.managed_build_authority.session),
+        encode_hex(&authority.managed_build_authority.invocation),
+    ))
+    .expect("exact row test build attempt");
+    RowSoftmaxV1AuthorityPolicyV1::new(
+        manifest,
+        attempt,
+        authority.managed_build_authority.broker_executable,
+    )
+    .expect("exact row test authority policy")
 }
 
 fn hash_field(digest: &mut Sha256, bytes: &[u8]) {
@@ -2081,10 +2130,10 @@ fn layout_mismatch(detail: impl Into<String>) -> CollectedRowSoftmaxErrorV1 {
     }
 }
 
-fn encode_hex(bytes: &[u8; 32]) -> String {
+fn encode_hex(bytes: &[u8]) -> String {
     use fmt::Write as _;
 
-    let mut encoded = String::with_capacity(64);
+    let mut encoded = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
         let _ = write!(encoded, "{byte:02x}");
     }

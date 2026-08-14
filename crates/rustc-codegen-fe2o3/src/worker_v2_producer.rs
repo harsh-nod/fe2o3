@@ -917,7 +917,10 @@ impl Error for WorkerV2ProducerError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::collected_row_softmax_v1::exact_frontend_receipt_for_test as exact_row_frontend_receipt_for_test;
+    use crate::collected_row_softmax_v1::{
+        exact_authority_policy_for_test,
+        exact_frontend_receipt_for_test as exact_row_frontend_receipt_for_test,
+    };
     use crate::collected_scalar_gemm_v1::exact_frontend_receipt_for_test;
     use crate::collected_tiled_gemm_v1::exact_frontend_receipt_for_test as exact_tiled_frontend_receipt_for_test;
     use fe2o3_artifact_transaction::{
@@ -1211,6 +1214,7 @@ mod tests {
             handoff,
             *handoff.identity().sha256(),
             expected_authority,
+            exact_authority_policy_for_test(),
             worker,
         )
         .expect("production rustc row handoff is admitted by the direct worker profile");

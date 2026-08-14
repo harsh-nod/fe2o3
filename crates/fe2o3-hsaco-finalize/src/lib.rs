@@ -22,6 +22,7 @@ mod compiler_ffi_observation;
 mod first_build_worker_v2;
 mod link_plan;
 mod request_construction;
+mod row_softmax_authority;
 mod row_softmax_v1_artifact;
 mod row_softmax_v1_worker;
 mod scalar_gemm_v1_worker;
@@ -88,6 +89,12 @@ pub use reserved_fe2o3_symbols::{
     GENERAL_TYPED_V3_SEMANTIC_WITNESS_MAGIC_V1, GENERAL_TYPED_V3_SEMANTIC_WITNESS_VERSION_V1,
     MAX_GENERAL_TYPED_V3_SEMANTIC_WITNESS_BYTES_V1, TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3,
     derive_device_ffi_contract_id_v1,
+};
+pub use row_softmax_authority::{
+    MAX_ROW_SOFTMAX_V1_AUTHORITY_TRANSCRIPT_BYTES, MAX_ROW_SOFTMAX_V1_REVIEWED_SOURCE_BYTES,
+    ROW_SOFTMAX_V1_PROVIDER_ITEM_COUNT, ROW_SOFTMAX_V1_PROVIDER_ITEMS,
+    RowSoftmaxV1AuthorityPolicyErrorV1, RowSoftmaxV1AuthorityPolicyV1, RowSoftmaxV1ProviderItemV1,
+    RowSoftmaxV1ProviderManifestV1, derive_row_softmax_v1_provider_source_identity_v1,
 };
 pub use row_softmax_v1_artifact::{
     FinalizedRowSoftmaxV1StructuralHsacoV1, InspectedRowSoftmaxV1StructuralWorkerV2HsacoV1,
