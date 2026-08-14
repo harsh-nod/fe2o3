@@ -183,6 +183,10 @@ REQUIRED_SEALS = (
     fcntl.F_SEAL_SEAL | fcntl.F_SEAL_SHRINK |
     fcntl.F_SEAL_GROW | fcntl.F_SEAL_WRITE
 )
+GOLDEN_BINDING_IDENTITY = bytes.fromhex(
+    "2a9cae7959e9efd207de5f859e100688"
+    "479f359469847efed8533356d714a591"
+)
 
 
 def digest(label):
@@ -209,6 +213,23 @@ def make_binding(trampoline_bytes, wrapper_bytes):
     value[264:296] = digest("codegen-backend")
     value[296] = 0
     return bytes(value)
+
+
+def verify_rust_codec_golden_identity():
+    value = bytearray(BINDING_LEN)
+    value[0:32] = bytes([1]) * 32
+    value[32:64] = bytes([2]) * 32
+    value[64:96] = bytes([3]) * 32
+    struct.pack_into("<H", value, 96, 1)
+    struct.pack_into("<H", value, 98, 2)
+    struct.pack_into("<I", value, 100, 0)
+    for index, seed in enumerate(range(4, 10)):
+        offset = 104 + index * 32
+        value[offset:offset + 32] = bytes([seed]) * 32
+    value[296] = 1
+    value[304:336] = bytes([10]) * 32
+    observed = sha256(DOMAIN + struct.pack("<Q", BINDING_LEN) + value)
+    assert observed == GOLDEN_BINDING_IDENTITY
 
 
 def sealed_memfd(data, mode, *, sealed=True, read_only=True):
@@ -498,6 +519,7 @@ def run_scenario(scenario, trampoline_path, wrapper_path, alternate_path,
 if __name__ == "__main__":
     if len(sys.argv) != 7:
         raise SystemExit("usage: broker-harness scenario trampoline wrapper alternate preload marker")
+    verify_rust_codec_golden_identity()
     run_scenario(*sys.argv[1:])
 PY
 chmod 0555 "${HARNESS}"
