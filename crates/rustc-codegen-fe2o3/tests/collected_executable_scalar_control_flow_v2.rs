@@ -1074,6 +1074,7 @@ fn assert_row_softmax_published_nothing(output: &TestOutputDir) {
 
 fn compile_clean_external_row_softmax_crate(
     workspace: &Path,
+    cargo_target: &Path,
     package_name: &str,
 ) -> (Output, TestOutputDir) {
     let output = TestOutputDir::new(workspace);
@@ -1110,6 +1111,7 @@ fn compile_clean_external_row_softmax_crate(
             "--manifest-path",
         ])
         .arg(&manifest)
+        .env("CARGO_TARGET_DIR", cargo_target)
         .env_remove("CARGO_INCREMENTAL")
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
         .env("FE2O3_TARGET", "gfx942:xnack-")
@@ -2084,12 +2086,15 @@ fn row_softmax_v1_source_authentication_and_adversaries_stop_at_canonical_ir() {
 #[test]
 fn clean_external_cargo_fe2o3_accepts_variable_generated_row_softmax_roots() {
     let workspace = workspace();
+    let cargo_output = TestOutputDir::new(&workspace);
+    let cargo_target = cargo_output.0.join("cargo-target");
     let mut roots = Vec::new();
     for package_name in [
         "fe2o3-row-softmax-external-a",
         "fe2o3-row-softmax-external-b",
     ] {
-        let (external, output) = compile_clean_external_row_softmax_crate(&workspace, package_name);
+        let (external, output) =
+            compile_clean_external_row_softmax_crate(&workspace, &cargo_target, package_name);
         let external_stderr = stderr(&external);
         assert!(
             !external.status.success()
