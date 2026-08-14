@@ -66,6 +66,12 @@ const LAUNCH_BINDING_DOMAIN_V1: &[u8] = b"fe2o3.row-softmax.launch-binding.v1";
 const CORRESPONDENCE_DOMAIN_V1: &[u8] = b"fe2o3.row-softmax.reviewed-correspondence.v1";
 const EXPONENTIAL_BOUNDARY_DOMAIN_V1: &[u8] = b"fe2o3.row-softmax.exponential-boundary.v1";
 const MODULE_BINDING_DOMAIN_V1: &[u8] = b"fe2o3.row-softmax.canonical-module.v1";
+// Reviewed independently from the constructor below. This binds the exact V4
+// graph while leaving the named exp operation's implementation unresolved.
+const REVIEWED_CANONICAL_MODULE_V4_COMMITMENT: [u8; 32] = [
+    0x1e, 0x1b, 0x14, 0xc6, 0x84, 0x2f, 0xfd, 0x09, 0x10, 0x3e, 0xb5, 0x5e, 0xb3, 0x9b, 0x1b, 0xca,
+    0xe9, 0xc0, 0xda, 0x81, 0x59, 0x7f, 0xed, 0x61, 0x86, 0x76, 0x75, 0x62, 0x33, 0x72, 0x30, 0xe6,
+];
 const EXACT_ABI_BINDING_V1: &[u8] = b"ptr64;size=32;align=8;input@0:16:8:slice-f32:shared-readonly;output@16:16:8:slice-f32:exclusive-readwrite;lengths=exactly-64-by-host-precondition";
 const EXACT_LAUNCH_BINDING_V1: &[u8] =
     b"rank=1;block=exact(64,1,1);grid=exact(1,1,1);static-shared=0;dynamic-shared=0;wave=64;cov=6";
@@ -1269,6 +1275,16 @@ fn require_canonical_module(module: &Module) -> Result<(), CollectedRowSoftmaxEr
     verify_module(module).map_err(|error| CollectedRowSoftmaxErrorV1::CanonicalModule {
         detail: error.to_string(),
     })?;
+    let actual_commitment = canonical_module_commitment(module)?;
+    if actual_commitment != REVIEWED_CANONICAL_MODULE_V4_COMMITMENT {
+        return Err(CollectedRowSoftmaxErrorV1::CanonicalModule {
+            detail: format!(
+                "V4 module commitment differs from the independently reviewed digest: expected {}, found {}",
+                encode_hex(&REVIEWED_CANONICAL_MODULE_V4_COMMITMENT),
+                encode_hex(&actual_commitment),
+            ),
+        });
+    }
     if module != &canonical_row_softmax_v1_module() {
         return Err(CollectedRowSoftmaxErrorV1::CanonicalModule {
             detail: "module differs from the exact private row-softmax V1 graph".to_owned(),
@@ -1353,7 +1369,6 @@ fn collected_authority_commitment(authority: &RowSoftmaxFrontendAuthorityV1) -> 
 fn validate_frontend_authority(
     authority: &RowSoftmaxFrontendAuthorityV1,
 ) -> Result<(), CollectedRowSoftmaxErrorV1> {
-    let expected_module = canonical_module_commitment(&canonical_row_softmax_v1_module())?;
     let metadata_observation_is_invalid = authority
         .cargo_metadata_build_observation
         .validate()
@@ -1380,7 +1395,7 @@ fn validate_frontend_authority(
         Some("unresolved exponential boundary")
     } else if authority.frontend_contract_commitment != sha256(EXACT_FRONTEND_CONTRACT_V1) {
         Some("frontend contract")
-    } else if authority.canonical_module_commitment != expected_module {
+    } else if authority.canonical_module_commitment != REVIEWED_CANONICAL_MODULE_V4_COMMITMENT {
         Some("canonical module")
     } else if authority.kernel_export != FIXED_KERNEL_EXPORT {
         Some("kernel export")
@@ -1506,6 +1521,86 @@ fn encode_hex(bytes: &[u8; 32]) -> String {
 mod tests {
     use super::*;
 
+    #[derive(Debug, Eq, PartialEq)]
+    enum ReviewedRowSoftmaxOperation {
+        SliceData(u32),
+        LocalInvocationIndexX,
+        Constant(Constant),
+        Compare(ComparePredicate, u32, u32),
+        Select(u32, u32, u32),
+        Binary(BinaryOp, u32, u32),
+        GetElementPointer(u32, u32),
+        Load(u32, MemoryAccess),
+        AbstractExp(u32),
+        Store(u32, u32, MemoryAccess),
+    }
+
+    fn reviewed_operation(operation: &Operation) -> (Option<u32>, ReviewedRowSoftmaxOperation) {
+        let result = match operation.results.as_slice() {
+            [] => None,
+            [result] => Some(result.id.0),
+            results => panic!(
+                "reviewed row-softmax operation has {} results",
+                results.len()
+            ),
+        };
+        let kind = match &operation.kind {
+            OperationKind::SliceData { slice } => ReviewedRowSoftmaxOperation::SliceData(slice.0),
+            OperationKind::Intrinsic(intrinsic)
+                if intrinsic.kind
+                    == (IntrinsicKind::InvocationIndex {
+                        kind: IndexKind::Local,
+                        axis: Axis::X,
+                    })
+                    && intrinsic.result_type == Type::INDEX =>
+            {
+                ReviewedRowSoftmaxOperation::LocalInvocationIndexX
+            }
+            OperationKind::Constant(constant) => {
+                ReviewedRowSoftmaxOperation::Constant(constant.clone())
+            }
+            OperationKind::Compare {
+                predicate,
+                lhs,
+                rhs,
+            } => ReviewedRowSoftmaxOperation::Compare(*predicate, lhs.0, rhs.0),
+            OperationKind::Select {
+                condition,
+                true_value,
+                false_value,
+            } => ReviewedRowSoftmaxOperation::Select(condition.0, true_value.0, false_value.0),
+            OperationKind::Binary { op, lhs, rhs } => {
+                ReviewedRowSoftmaxOperation::Binary(*op, lhs.0, rhs.0)
+            }
+            OperationKind::GetElementPointer { base, offset } => {
+                ReviewedRowSoftmaxOperation::GetElementPointer(base.0, offset.0)
+            }
+            OperationKind::Load { pointer, access } => {
+                ReviewedRowSoftmaxOperation::Load(pointer.0, *access)
+            }
+            OperationKind::Call { callee, arguments }
+                if callee.as_str() == "__fe2o3_ir_float_v1_exp_f32" && arguments.len() == 1 =>
+            {
+                ReviewedRowSoftmaxOperation::AbstractExp(arguments[0].0)
+            }
+            OperationKind::Store {
+                pointer,
+                value,
+                access,
+            } => ReviewedRowSoftmaxOperation::Store(pointer.0, value.0, *access),
+            unexpected => panic!("unexpected reviewed row-softmax operation: {unexpected:?}"),
+        };
+        (result, kind)
+    }
+
+    fn parameter_oracle(block: &BasicBlock) -> Vec<(u32, Type)> {
+        block
+            .parameters
+            .iter()
+            .map(|parameter| (parameter.id.0, parameter.ty.clone()))
+            .collect()
+    }
+
     #[test]
     fn exact_profile_is_closed_and_non_executable() {
         assert!(admit_execution_context(EXACT_ROW_SOFTMAX_TARGET_V1, false).is_ok());
@@ -1539,6 +1634,10 @@ mod tests {
     fn canonical_module_is_exact_but_exp_implementation_remains_unresolved() {
         let module = canonical_row_softmax_v1_module();
         require_canonical_module(&module).expect("canonical row-softmax module");
+        assert_eq!(
+            canonical_module_commitment(&module).expect("canonical V4 commitment"),
+            REVIEWED_CANONICAL_MODULE_V4_COMMITMENT
+        );
         assert_eq!(module.id.as_str(), CANONICAL_MODULE_ID);
         assert_eq!(module.kernels.len(), 1);
         assert_eq!(module.functions.len(), 2);
@@ -1565,6 +1664,192 @@ mod tests {
                 .functions
                 .iter()
                 .all(|function| !function.id.as_str().contains("__ocml"))
+        );
+    }
+
+    #[test]
+    fn canonical_graph_matches_the_independent_fixed_row_algorithm_oracle() {
+        use ReviewedRowSoftmaxOperation as Op;
+
+        let module = canonical_row_softmax_v1_module();
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.id.as_str() == CANONICAL_FUNCTION_ID)
+            .expect("canonical row-softmax entry");
+        let body = function.body.as_ref().expect("defined row-softmax entry");
+        assert_eq!(body.parameters, [ValueId(0), ValueId(1)]);
+        let global_f32 = MemoryAccess::new(AddressSpace::Global, 4);
+        let expected: Vec<(
+            u32,
+            Vec<(u32, Type)>,
+            Vec<(Option<u32>, ReviewedRowSoftmaxOperation)>,
+            Terminator,
+        )> = vec![
+            (
+                0,
+                vec![],
+                vec![
+                    (Some(2), Op::SliceData(0)),
+                    (Some(3), Op::SliceData(1)),
+                    (Some(4), Op::LocalInvocationIndexX),
+                    (Some(5), Op::Constant(Constant::Index(0))),
+                    (Some(6), Op::Compare(ComparePredicate::Equal, 4, 5)),
+                    (Some(7), Op::Constant(Constant::Index(64))),
+                    (Some(8), Op::Constant(Constant::Index(1))),
+                ],
+                Terminator::ConditionalBranch {
+                    condition: ValueId(6),
+                    then_target: BlockId(1),
+                    then_arguments: vec![],
+                    else_target: BlockId(10),
+                    else_arguments: vec![],
+                },
+            ),
+            (
+                1,
+                vec![],
+                vec![(
+                    Some(9),
+                    Op::Constant(Constant::F32Bits(f32::NEG_INFINITY.to_bits())),
+                )],
+                Terminator::Branch {
+                    target: BlockId(2),
+                    arguments: vec![ValueId(5), ValueId(9)],
+                },
+            ),
+            (
+                2,
+                vec![(10, Type::INDEX), (11, Type::F32)],
+                vec![(Some(12), Op::Compare(ComparePredicate::LessThan, 10, 7))],
+                Terminator::ConditionalBranch {
+                    condition: ValueId(12),
+                    then_target: BlockId(3),
+                    then_arguments: vec![],
+                    else_target: BlockId(4),
+                    else_arguments: vec![ValueId(11)],
+                },
+            ),
+            (
+                3,
+                vec![],
+                vec![
+                    (Some(13), Op::GetElementPointer(2, 10)),
+                    (Some(14), Op::Load(13, global_f32)),
+                    (Some(15), Op::Compare(ComparePredicate::GreaterThan, 14, 11)),
+                    (Some(16), Op::Select(15, 14, 11)),
+                    (Some(17), Op::Binary(BinaryOp::Add, 10, 8)),
+                ],
+                Terminator::Branch {
+                    target: BlockId(2),
+                    arguments: vec![ValueId(17), ValueId(16)],
+                },
+            ),
+            (
+                4,
+                vec![(18, Type::F32)],
+                vec![(Some(19), Op::Constant(Constant::F32Bits(0.0_f32.to_bits())))],
+                Terminator::Branch {
+                    target: BlockId(5),
+                    arguments: vec![ValueId(5), ValueId(19), ValueId(18)],
+                },
+            ),
+            (
+                5,
+                vec![(20, Type::INDEX), (21, Type::F32), (22, Type::F32)],
+                vec![(Some(23), Op::Compare(ComparePredicate::LessThan, 20, 7))],
+                Terminator::ConditionalBranch {
+                    condition: ValueId(23),
+                    then_target: BlockId(6),
+                    then_arguments: vec![],
+                    else_target: BlockId(7),
+                    else_arguments: vec![ValueId(22), ValueId(21)],
+                },
+            ),
+            (
+                6,
+                vec![],
+                vec![
+                    (Some(24), Op::GetElementPointer(2, 20)),
+                    (Some(25), Op::Load(24, global_f32)),
+                    (Some(26), Op::Binary(BinaryOp::Subtract, 25, 22)),
+                    (Some(27), Op::AbstractExp(26)),
+                    (Some(28), Op::Binary(BinaryOp::Add, 21, 27)),
+                    (Some(29), Op::Binary(BinaryOp::Add, 20, 8)),
+                ],
+                Terminator::Branch {
+                    target: BlockId(5),
+                    arguments: vec![ValueId(29), ValueId(28), ValueId(22)],
+                },
+            ),
+            (
+                7,
+                vec![(30, Type::F32), (31, Type::F32)],
+                vec![],
+                Terminator::Branch {
+                    target: BlockId(8),
+                    arguments: vec![ValueId(5), ValueId(30), ValueId(31)],
+                },
+            ),
+            (
+                8,
+                vec![(32, Type::INDEX), (33, Type::F32), (34, Type::F32)],
+                vec![(Some(35), Op::Compare(ComparePredicate::LessThan, 32, 7))],
+                Terminator::ConditionalBranch {
+                    condition: ValueId(35),
+                    then_target: BlockId(9),
+                    then_arguments: vec![],
+                    else_target: BlockId(11),
+                    else_arguments: vec![],
+                },
+            ),
+            (
+                9,
+                vec![],
+                vec![
+                    (Some(36), Op::GetElementPointer(2, 32)),
+                    (Some(37), Op::Load(36, global_f32)),
+                    (Some(38), Op::Binary(BinaryOp::Subtract, 37, 33)),
+                    (Some(39), Op::AbstractExp(38)),
+                    (Some(40), Op::Binary(BinaryOp::Divide, 39, 34)),
+                    (Some(41), Op::GetElementPointer(3, 32)),
+                    (None, Op::Store(41, 40, global_f32)),
+                    (Some(42), Op::Binary(BinaryOp::Add, 32, 8)),
+                ],
+                Terminator::Branch {
+                    target: BlockId(8),
+                    arguments: vec![ValueId(42), ValueId(33), ValueId(34)],
+                },
+            ),
+            (10, vec![], vec![], Terminator::Return { values: vec![] }),
+            (11, vec![], vec![], Terminator::Return { values: vec![] }),
+        ];
+
+        assert_eq!(body.blocks.len(), expected.len());
+        for (block, (id, parameters, operations, terminator)) in body.blocks.iter().zip(expected) {
+            assert_eq!(block.id, BlockId(id));
+            assert_eq!(parameter_oracle(block), parameters, "parameters in bb{id}");
+            assert_eq!(
+                block
+                    .operations
+                    .iter()
+                    .map(reviewed_operation)
+                    .collect::<Vec<_>>(),
+                operations,
+                "operations in bb{id}"
+            );
+            assert_eq!(block.terminator.as_ref(), Some(&terminator), "bb{id}");
+        }
+
+        // The oracle names abstract exp calls only. It proves graph ordering and
+        // loop carries, not any exponential approximation or exceptional policy.
+        assert_eq!(
+            body.blocks
+                .iter()
+                .flat_map(|block| &block.operations)
+                .filter(|operation| matches!(reviewed_operation(operation).1, Op::AbstractExp(_)))
+                .count(),
+            2
         );
     }
 
