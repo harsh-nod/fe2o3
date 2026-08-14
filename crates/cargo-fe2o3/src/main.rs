@@ -48,6 +48,14 @@ const ARTIFACT_CHILD_FD: std::os::fd::RawFd =
 const BACKEND_CHILD_FD: std::os::fd::RawFd =
     fe2o3_artifact_transaction::BROKERED_CODEGEN_BACKEND_CHILD_FD_V1;
 
+const COMPILER_SELECTION_ENVIRONMENT: &[&str] = &[
+    "RUSTC",
+    "CARGO_BUILD_RUSTC",
+    "RUSTC_WRAPPER",
+    "CARGO_BUILD_RUSTC_WRAPPER",
+    "RUSTC_WORKSPACE_WRAPPER",
+];
+
 fn main() -> ExitCode {
     let raw_args = env::args_os().skip(1).collect::<Vec<_>>();
     if raw_args
@@ -265,8 +273,10 @@ fn smoke(args: &[String]) -> ExitCode {
 }
 
 fn cargo_with_backend_result(command: &str, args: &[OsString]) -> Result<(), String> {
+    reject_dynamic_loader_environment()?;
+    reject_preexisting_compiler_environment()?;
     let project = project::CargoProject::discover(args)?;
-    reject_preexisting_rustc_wrappers(&project, args)?;
+    reject_configured_compiler_selection(&project, args)?;
     let worker_v2 = worker_v2::PreparedWorkerV2Config::from_environment_for_cargo_setup()
         .map_err(|error| format!("Worker V2 setup failed: {error}"))?;
     let cargo_declaration = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
@@ -467,6 +477,7 @@ fn run_cargo_with_backend(
         // Authority builds do not admit unpinned C tools, ROCm headers, or native libraries.
         cargo.as_command_mut().env("FE2O3_HIP_SYS_DISABLE", "1");
     }
+    remove_dynamic_loader_environment(cargo.as_command_mut());
     match context.worker_v2_identity {
         Some(identity) => {
             cargo
@@ -1114,25 +1125,91 @@ fn random_build_session() -> Result<fe2o3_artifact_transaction::BuildSession, St
     Err("failed to obtain a nonzero build-session nonce".to_string())
 }
 
-fn reject_preexisting_rustc_wrappers(
-    project: &project::CargoProject,
-    args: &[OsString],
-) -> Result<(), String> {
-    for variable in ["RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER"] {
+fn reject_preexisting_compiler_environment() -> Result<(), String> {
+    for variable in COMPILER_SELECTION_ENVIRONMENT {
         if let Some(value) = env::var_os(variable) {
+            if variable.ends_with("WRAPPER") {
+                return Err(format!(
+                    "cargo fe2o3 cannot compose its binding-identity wrapper with preexisting {variable}={value:?}"
+                ));
+            }
             return Err(format!(
-                "cargo fe2o3 cannot compose its binding-identity wrapper with preexisting {variable}={value:?}"
-            ));
-        }
-    }
-    for key in ["build.rustc-wrapper", "build.rustc-workspace-wrapper"] {
-        if let Some(value) = project.cargo_config_value(args, key)? {
-            return Err(format!(
-                "cargo fe2o3 cannot compose its binding-identity wrapper with configured {key}={value}"
+                "cargo fe2o3 rejects preexisting compiler selection {variable}={value:?}"
             ));
         }
     }
     Ok(())
+}
+
+fn reject_configured_compiler_selection(
+    project: &project::CargoProject,
+    args: &[OsString],
+) -> Result<(), String> {
+    for key in [
+        "build.rustc",
+        "build.rustc-wrapper",
+        "build.rustc-workspace-wrapper",
+    ] {
+        if let Some(value) = project.cargo_config_value(args, key)? {
+            if key.ends_with("wrapper") {
+                return Err(format!(
+                    "cargo fe2o3 cannot compose its binding-identity wrapper with configured {key}={value}"
+                ));
+            }
+            return Err(format!(
+                "cargo fe2o3 rejects configured compiler selection {key}={value}"
+            ));
+        }
+    }
+    if let Some(serde_json::Value::Object(configured)) = project.cargo_config_value(args, "env")? {
+        for name in configured.keys() {
+            if is_dynamic_loader_environment_name(OsStr::new(name)) {
+                return Err(format!(
+                    "cargo fe2o3 rejects configured dynamic-loader environment env.{name}"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn reject_dynamic_loader_environment() -> Result<(), String> {
+    for (name, value) in env::vars_os() {
+        if is_dynamic_loader_injection_environment_name(&name) {
+            return Err(format!(
+                "cargo fe2o3 rejects dynamic-loader injection variable {name:?}={value:?}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn is_dynamic_loader_injection_environment_name(name: &OsStr) -> bool {
+    matches!(
+        os_bytes(name),
+        b"LD_PRELOAD" | b"LD_AUDIT" | b"GLIBC_TUNABLES"
+    )
+}
+
+pub(crate) fn is_dynamic_loader_environment_name(name: &OsStr) -> bool {
+    let name = os_bytes(name);
+    name.starts_with(b"LD_") || name.starts_with(b"DYLD_") || name == b"GLIBC_TUNABLES"
+}
+
+pub(crate) fn remove_dynamic_loader_environment(command: &mut Command) {
+    for (name, _) in env::vars_os() {
+        if is_dynamic_loader_environment_name(&name) {
+            command.env_remove(name);
+        }
+    }
+    for name in [
+        "LD_PRELOAD",
+        "LD_AUDIT",
+        "LD_LIBRARY_PATH",
+        "GLIBC_TUNABLES",
+    ] {
+        command.env_remove(name);
+    }
 }
 
 fn find_or_build_backend(target_dir: &project::PinnedDirectory) -> Result<PathBuf, String> {
@@ -1181,6 +1258,7 @@ fn find_or_build_backend(target_dir: &project::PinnedDirectory) -> Result<PathBu
                 .map(|byte| format!("{byte:02x}"))
                 .collect::<String>(),
         );
+    remove_dynamic_loader_environment(&mut command);
     for name in [
         TARGET_ENV,
         BACKEND_ENV,

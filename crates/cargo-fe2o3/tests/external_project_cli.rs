@@ -987,6 +987,106 @@ fn configured_rustc_wrappers_are_rejected_before_build() {
     }
 }
 
+#[test]
+fn arbitrary_rustc_environment_is_rejected_before_artifact_authority() {
+    for variable in ["RUSTC", "CARGO_BUILD_RUSTC"] {
+        let fixture = ProjectFixture::standalone();
+        let mut command = fixture.command(&[OsString::from("build")]);
+        command.env(variable, "/tmp/attacker-rustc");
+        let output = command
+            .output()
+            .expect("run rustc override rejection probe");
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("rejects preexisting compiler selection"),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!fixture.target.join("fe2o3").exists());
+        assert!(
+            !fixture.log.exists(),
+            "Cargo ran before rejecting {variable}"
+        );
+    }
+}
+
+#[test]
+fn configured_arbitrary_rustc_is_rejected_before_artifact_authority() {
+    let fixture = ProjectFixture::standalone();
+    let mut command = fixture.command(&[OsString::from("build")]);
+    command.env("FE2O3_TEST_RUSTC_JSON", r#""/tmp/attacker-rustc""#);
+    let output = command
+        .output()
+        .expect("run configured rustc rejection probe");
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("rejects configured compiler selection build.rustc"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!fixture.target.join("fe2o3").exists());
+    assert!(
+        fixture
+            .invocations()
+            .iter()
+            .all(|invocation| invocation.args.get(1).is_none_or(|arg| arg != b"build")),
+        "Cargo build ran after config rejection"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn loader_injection_environment_is_rejected_before_artifact_authority() {
+    for variable in ["LD_PRELOAD", "LD_AUDIT"] {
+        let fixture = ProjectFixture::standalone();
+        let mut command = fixture.command(&[OsString::from("build")]);
+        command.env(variable, "/definitely/not/a/fe2o3-loader-object.so");
+        let output = command.output().expect("run loader rejection probe");
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("rejects dynamic-loader injection variable"),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!fixture.target.join("fe2o3").exists());
+        assert!(
+            !fixture.log.exists(),
+            "Cargo ran before rejecting {variable}"
+        );
+    }
+}
+
+#[test]
+fn configured_loader_environment_is_rejected_before_artifact_authority() {
+    let fixture = ProjectFixture::standalone();
+    let mut command = fixture.command(&[OsString::from("build")]);
+    command.env(
+        "FE2O3_TEST_ENV_CONFIG_JSON",
+        r#"{"LD_PRELOAD":{"value":"/tmp/attacker.so","force":true}}"#,
+    );
+    let output = command
+        .output()
+        .expect("run configured loader rejection probe");
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("rejects configured dynamic-loader environment env.LD_PRELOAD"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!fixture.target.join("fe2o3").exists());
+    assert!(
+        fixture
+            .invocations()
+            .iter()
+            .all(|invocation| invocation.args.get(1).is_none_or(|arg| arg != b"build")),
+        "Cargo build ran after config rejection"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn run_forwards_non_utf8_application_argv_losslessly() {

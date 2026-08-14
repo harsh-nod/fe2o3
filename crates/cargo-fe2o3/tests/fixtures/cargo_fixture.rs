@@ -47,6 +47,10 @@ fn config_get(args: &[OsString]) -> ExitCode {
         env::var_os("FE2O3_TEST_RUSTC_WRAPPER_JSON")
     } else if key == "build.rustc-workspace-wrapper" {
         env::var_os("FE2O3_TEST_RUSTC_WORKSPACE_WRAPPER_JSON")
+    } else if key == "build.rustc" {
+        env::var_os("FE2O3_TEST_RUSTC_JSON")
+    } else if key == "env" {
+        env::var_os("FE2O3_TEST_ENV_CONFIG_JSON")
     } else if key == "build" {
         env::var_os("FE2O3_TEST_BUILD_CONFIG_JSON")
     } else if key.starts_with("target.") && key.ends_with(".runner") {

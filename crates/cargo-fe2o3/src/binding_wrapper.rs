@@ -313,6 +313,7 @@ impl From<PinExecutableError> for BindingWrapperError {
 }
 
 pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperError> {
+    reject_dynamic_loader_environment()?;
     reject_uninspectable_rustc_args(&argv)?;
     if crate::non_production_reproduction::enabled() {
         canonicalize_rustc_metadata(&mut argv);
@@ -412,6 +413,7 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
     let rustc_path = resolve_command_executable(invocation.executable(), &execution_directory)?;
     let pinned_rustc = PinnedExecutable::open(&rustc_path)?;
     let mut command = pinned_rustc.command()?;
+    crate::remove_dynamic_loader_environment(command.as_command_mut());
     append_prepared_rustc_arguments(
         command.as_command_mut(),
         invocation.forwarded_args(),
@@ -648,6 +650,17 @@ fn configure_build_observation_environment(
         command.env_remove(CRATE_BINDING_ID_ENV_V1);
         command.env_remove(CARGO_METADATA_BUILD_OBSERVATION_ENV_V2);
     }
+}
+
+fn reject_dynamic_loader_environment() -> Result<(), BindingWrapperError> {
+    for (name, value) in std::env::vars_os() {
+        if crate::is_dynamic_loader_environment_name(&name) {
+            return Err(BindingWrapperError::BuildObservation(format!(
+                "binding wrapper rejects dynamic-loader injection variable {name:?}={value:?}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn configure_worker_build_observation_environment(
