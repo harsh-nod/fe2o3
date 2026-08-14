@@ -233,9 +233,12 @@ fn helper_only_gfx942_modules_require_explicit_wave_modes() {
 fn exact_gfx942_xnack_minus_device_modules_bind_layout_and_features() {
     let mut module = Module::new("tests::exact_gfx942_xnack_minus");
     let mut helper = void_helper("exact_helper", &[]);
+    let exact_target = fe2o3_kernel_ir::gfx942_xnack_minus_target_capability();
+    module.required_capabilities.insert(exact_target.clone());
     helper
         .required_capabilities
         .insert(TargetCapability::WaveWidth(WaveWidth::Wave64));
+    helper.required_capabilities.insert(exact_target);
     module.functions.push(helper);
 
     let llvm = lower_device_module_to_gfx942_xnack_minus_llvm_ir(&module).unwrap();

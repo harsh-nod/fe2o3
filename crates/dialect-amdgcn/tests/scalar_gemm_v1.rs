@@ -138,8 +138,9 @@ fn generic_lowering_still_rejects_integer_divide_and_remainder() {
     fn assert_all_generic_entries_reject(module: &Module, operation: &str) {
         let kernel = KernelId::new(SCALAR_GEMM_V1_KERNEL_ID);
         let errors = [
-            dialect_amdgcn::lower_compiler_module_to_gfx942_llvm_ir(module).unwrap_err(),
-            dialect_amdgcn::lower_kernel_to_gfx942_llvm_ir(module, &kernel).unwrap_err(),
+            dialect_amdgcn::lower_device_module_to_gfx942_xnack_minus_llvm_ir(module).unwrap_err(),
+            dialect_amdgcn::lower_kernel_to_gfx942_xnack_minus_llvm_ir(module, &kernel)
+                .unwrap_err(),
         ];
         for error in errors {
             assert!(

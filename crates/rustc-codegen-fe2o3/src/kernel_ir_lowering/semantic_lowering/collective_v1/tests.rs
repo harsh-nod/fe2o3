@@ -77,8 +77,8 @@ fn active_wave64_and_static_lds_reduction_reach_exact_gfx942_ir() {
         "one ballot, one lane-id, and six shuffles"
     );
 
-    let llvm =
-        dialect_amdgcn::lower_compiler_module_to_gfx942_llvm_ir(&module).expect("wave/LDS V1 LLVM");
+    let llvm = dialect_amdgcn::lower_device_module_to_gfx942_xnack_minus_llvm_ir(&module)
+        .expect("wave/LDS V1 LLVM");
     assert_eq!(llvm.matches("call i64 @llvm.amdgcn.ballot.i64").count(), 1);
     assert_eq!(llvm.matches("call i32 @llvm.amdgcn.ds.bpermute").count(), 6);
     assert_eq!(
@@ -87,7 +87,7 @@ fn active_wave64_and_static_lds_reduction_reach_exact_gfx942_ir() {
     );
     assert!(llvm.contains("addrspace(3) global [256 x i32] undef, align 4"));
     assert!(llvm.contains("\"target-cpu\"=\"gfx942\""));
-    assert!(llvm.contains("\"target-features\"=\"-wavefrontsize32,+wavefrontsize64\""));
+    assert!(llvm.contains("\"target-features\"=\"-wavefrontsize32,+wavefrontsize64,-xnack\""));
 }
 
 #[test]
@@ -140,7 +140,7 @@ fn wave64_sum_profiles_reach_shuffle_llvm_for_all_admitted_types() {
                 .any(|operation| matches!(operation, OperationKind::WorkgroupMemory(_)))
         );
 
-        let llvm = dialect_amdgcn::lower_compiler_module_to_gfx942_llvm_ir(&module)
+        let llvm = dialect_amdgcn::lower_device_module_to_gfx942_xnack_minus_llvm_ir(&module)
             .expect("wave collective LLVM");
         assert!(llvm.contains("@llvm.amdgcn.ds.bpermute"));
         assert!(llvm.contains(expected_add));
@@ -176,7 +176,7 @@ fn workgroup_sum_profiles_reach_real_lds_and_barrier_llvm() {
                 .iter()
                 .any(|operation| matches!(operation, OperationKind::WorkgroupBarrier(_)))
         );
-        let llvm = dialect_amdgcn::lower_compiler_module_to_gfx942_llvm_ir(&module)
+        let llvm = dialect_amdgcn::lower_device_module_to_gfx942_xnack_minus_llvm_ir(&module)
             .expect("workgroup collective LLVM");
         assert!(llvm.contains("addrspace(3) global [256 x i32]"));
         assert!(llvm.contains("call void @llvm.amdgcn.s.barrier()"));
@@ -206,7 +206,7 @@ fn gfx942_deferred_barrier_is_release_then_physical_wait() {
         1
     );
 
-    let llvm = dialect_amdgcn::lower_compiler_module_to_gfx942_llvm_ir(&module)
+    let llvm = dialect_amdgcn::lower_device_module_to_gfx942_xnack_minus_llvm_ir(&module)
         .expect("deferred barrier LLVM");
     assert!(llvm.contains("fence syncscope(\"workgroup\") release"));
     assert!(llvm.contains("call void @llvm.amdgcn.s.barrier()"));
@@ -350,6 +350,7 @@ fn collective_module(
                 block(2, MirTerminatorKind::Return),
             ],
             frontend_contract: None,
+            matrix_frontend_abi: None,
         }],
     }
 }
@@ -380,6 +381,7 @@ fn barrier_module() -> MirModule {
                 block(2, MirTerminatorKind::Return),
             ],
             frontend_contract: None,
+            matrix_frontend_abi: None,
         }],
     }
 }
@@ -455,6 +457,7 @@ fn wave_lds_v1_module(with_scratch: bool) -> MirModule {
                 block(4, MirTerminatorKind::Return),
             ],
             frontend_contract: None,
+            matrix_frontend_abi: None,
         }],
     }
 }

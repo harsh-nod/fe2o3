@@ -13,6 +13,7 @@ extern crate rustc_metadata;
 extern crate rustc_middle;
 extern crate rustc_session;
 extern crate rustc_span;
+extern crate rustc_target;
 
 mod amdgpu_llvm;
 #[allow(dead_code)]
@@ -87,6 +88,8 @@ pub const VERIFY_KERNEL_IR_ENV: &str = "FE2O3_VERIFY_KERNEL_IR";
 pub const CODEGEN_PIPELINE_ENV: &str = "FE2O3_CODEGEN_PIPELINE";
 pub const HSACO_DIR_ENV: &str = "FE2O3_HSACO_DIR";
 pub const BUILD_ATTEMPT_ENV: &str = "FE2O3_BUILD_ATTEMPT_V1";
+pub const TILED_GEMM_FRONTEND_TEST_LLVM_DIR_ENV: &str =
+    "FE2O3_TEST_RETAIN_TILED_GEMM_FRONTEND_LLVM_DIR";
 
 pub struct Fe2o3CodegenBackend {
     config: BackendConfig,
@@ -813,6 +816,21 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                             "{CODEGEN_PIPELINE_ENV}=kernel-ir-v1 MIR translation failed: {errors}"
                                         ),
                                     })?;
+                                if let Some(directory) =
+                                    env::var_os(TILED_GEMM_FRONTEND_TEST_LLVM_DIR_ENV)
+                                {
+                                    let directory = PathBuf::from(directory);
+                                    kernel_ir_codegen::retain_tiled_gemm_frontend_test_llvm(
+                                        &module,
+                                        &directory,
+                                    )?;
+                                    eprintln!(
+                                        "[rustc-codegen-fe2o3] retained test-only tiled GEMM imported LLVM observation: {}",
+                                        directory
+                                            .join(kernel_ir_codegen::TILED_GEMM_FRONTEND_TEST_LLVM_FILE)
+                                            .display()
+                                    );
+                                }
                                 eprintln!(
                                     "[rustc-codegen-fe2o3] selected kernel-ir-v1: verified {} kernel(s), {} function(s)",
                                     module.kernels.len(),

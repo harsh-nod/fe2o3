@@ -1,0 +1,9 @@
+[package]
+name = "matrix-provider-impostor-fnabi"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+matrix-provider = { package = "fe2o3-device", path = "../provider-fnabi" }

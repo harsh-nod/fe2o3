@@ -126,6 +126,54 @@ fn exact_gfx942_xnack_minus_binding_round_trips_in_every_kernel_ir_wire_version(
     }
 }
 
+#[test]
+fn matrix_source_observation_and_projection_digests_round_trip_in_every_wire_version() {
+    fn bytes(record: &mut Vec<u8>, value: &[u8]) {
+        record.extend_from_slice(&(value.len() as u32).to_le_bytes());
+        record.extend_from_slice(value);
+    }
+
+    let mut module = Module::new("matrix-source-and-projection-digests");
+    let provider = MatrixProviderIdentityV2 {
+        crate_name: "fe2o3_device".to_owned(),
+        stable_crate_id: 1,
+        crate_hash: [2; 16],
+        cargo_metadata_build_observation: [3; 32],
+        source_identity: [4; 32],
+        definition_identities: vec![[5; 16]; 6],
+    };
+    let mut record = MATRIX_SOURCE_ABI_RECORD_DOMAIN_V2.to_vec();
+    bytes(&mut record, provider.crate_name.as_bytes());
+    record.extend_from_slice(&provider.stable_crate_id.to_le_bytes());
+    bytes(&mut record, &provider.crate_hash);
+    bytes(&mut record, &provider.cargo_metadata_build_observation);
+    bytes(&mut record, &provider.source_identity);
+    record.extend_from_slice(&(provider.definition_identities.len() as u32).to_le_bytes());
+    for identity in &provider.definition_identities {
+        bytes(&mut record, identity);
+    }
+    record.push(0);
+    let observation = MatrixSourceAbiObservationV2::new_untrusted_claim(provider, record).unwrap();
+    module.required_capabilities.extend([
+        observation.capability(),
+        MatrixProjectedKernargPolicyV1::canonical().capability(),
+    ]);
+
+    for (encode, decode) in [
+        (
+            encode_module_v1 as fn(&Module) -> Result<Vec<u8>, KernelIrEncodeError>,
+            decode_module_v1 as fn(&[u8]) -> Result<Module, KernelIrDecodeError>,
+        ),
+        (encode_module_v2, decode_module_v2),
+        (encode_module_v3, decode_module_v3),
+        (encode_module_v4, decode_module_v4),
+    ] {
+        let encoded = encode(&module).expect("matrix ABI digest encodes");
+        let decoded = decode(&encoded).expect("matrix ABI digest decodes");
+        assert_eq!(decoded, module);
+    }
+}
+
 fn all_operations() -> Vec<Operation> {
     let constants = vec![
         Constant::Bool(false),

@@ -1,4 +1,8 @@
 use crate::collector::CollectionResult;
+use crate::rust_type_layout_general::{
+    AdtKind, BackendRepresentationFacts, ScalarPrimitiveFacts, SourceScalarKind, TypeLayoutFacts,
+    TypeLayoutKind, extract_general_layout,
+};
 use crate::semantic_features::{self, SessionRecognizedSemanticItem};
 use crate::trusted_device_items::TrustedDeviceItem;
 use dialect_mir::{MirAttr, MirOp, MirOpRecord, MirType};
@@ -16,14 +20,16 @@ use reserved_fe2o3_symbols::{
     parse_device_ffi_effects_v1, parse_device_ffi_physical_abi_v1,
     validate_device_ffi_effect_abi_v1,
 };
+use rustc_abi::{CanonAbi, Reg, RegKind};
 use rustc_hir::def_id::LOCAL_CRATE;
 use rustc_middle::mir::{
     AggregateKind, BasicBlock, BinOp, Body, ConstOperand, Local, NonDivergingIntrinsic, Operand,
     Place, ProjectionElem, Rvalue, SourceInfo, StatementKind, TerminatorKind, UnOp,
 };
 use rustc_middle::ty::{
-    FloatTy, Instance, IntTy, Mutability, Ty, TyCtxt, TyKind, TypingEnv, UintTy,
+    self, FloatTy, Instance, IntTy, Mutability, Ty, TyCtxt, TyKind, TypingEnv, UintTy,
 };
+use rustc_target::callconv::{ArgAttributes, ArgExtension, PassMode};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
@@ -103,6 +109,7 @@ pub struct MirFunction {
     pub locals: Vec<MirLocal>,
     pub blocks: Vec<MirBlock>,
     pub frontend_contract: Option<crate::collector::AuthenticatedKernelFrontendContractV1>,
+    pub(crate) matrix_frontend_abi: Option<MatrixFrontendAbiV2>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -116,6 +123,646 @@ pub enum MirFunctionKind {
 pub enum MirKernelProfile {
     VecAddRustcLayoutV2,
     GeneralScalarSliceRustcLayoutV3,
+}
+
+const MATRIX_SOURCE_ABI_DOMAIN_V2: &[u8] = fe2o3_kernel_ir::MATRIX_SOURCE_ABI_RECORD_DOMAIN_V2;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MatrixRustPassModeV1 {
+    CastI64,
+    Indirect {
+        pointee_size: u64,
+        pointee_align: u64,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct MatrixFragmentLayoutV1 {
+    pub(crate) repr_c: bool,
+    pub(crate) size: u64,
+    pub(crate) alignment: u64,
+    pub(crate) field_count: u8,
+    pub(crate) field_offset: u64,
+    pub(crate) array_length: u64,
+    pub(crate) array_stride: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct MatrixBf16LayoutV1 {
+    pub(crate) repr_transparent: bool,
+    pub(crate) size: u64,
+    pub(crate) alignment: u64,
+    pub(crate) field_count: u8,
+    pub(crate) field_offset: u64,
+    pub(crate) scalar_bits: u64,
+    pub(crate) scalar_unsigned: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct MatrixArgAttributesV2 {
+    pub(crate) regular: u8,
+    pub(crate) extension: u8,
+    pub(crate) pointee_size: u64,
+    pub(crate) pointee_alignment: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct MatrixRegV2 {
+    pub(crate) kind: u8,
+    pub(crate) size: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum MatrixPassModeV2 {
+    Ignore,
+    Direct(MatrixArgAttributesV2),
+    Pair(MatrixArgAttributesV2, MatrixArgAttributesV2),
+    Cast {
+        pad_i32: bool,
+        prefix: Box<[Option<MatrixRegV2>; 8]>,
+        rest_offset: Option<u64>,
+        rest: MatrixRegV2,
+        rest_total: u64,
+        rest_consecutive: bool,
+        attrs: MatrixArgAttributesV2,
+    },
+    Indirect {
+        attrs: MatrixArgAttributesV2,
+        meta_attrs: Option<MatrixArgAttributesV2>,
+        on_stack: bool,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MatrixSourceTypeRoleV2 {
+    Unit,
+    DeviceMatrixReference,
+    Bf16Fragment,
+    F32Fragment,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct MatrixArgAbiFactsV2 {
+    pub(crate) role: MatrixSourceTypeRoleV2,
+    pub(crate) layout: TypeLayoutFacts,
+    pub(crate) mode: MatrixPassModeV2,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct MatrixFnAbiFactsV2 {
+    pub(crate) convention: u8,
+    pub(crate) c_variadic: bool,
+    pub(crate) fixed_count: u32,
+    pub(crate) can_unwind: bool,
+    pub(crate) arguments: Vec<MatrixArgAbiFactsV2>,
+    pub(crate) result: MatrixArgAbiFactsV2,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct MatrixObservedSourceAbiV2 {
+    pub(crate) provider: crate::trusted_device_items::ReviewedMatrixProviderObservationV2,
+    pub(crate) definition_identities: Vec<[u8; 16]>,
+    pub(crate) receiver_layout: TypeLayoutFacts,
+    pub(crate) lhs_layout: TypeLayoutFacts,
+    pub(crate) rhs_layout: TypeLayoutFacts,
+    pub(crate) accumulator_layout: TypeLayoutFacts,
+    pub(crate) result_layout: TypeLayoutFacts,
+    pub(crate) kernel_abi: MatrixFnAbiFactsV2,
+    pub(crate) method_abi: MatrixFnAbiFactsV2,
+    pub(crate) kernel_source_structure: [MatrixSourceTypeRoleV2; 4],
+    pub(crate) method_source_structure: [MatrixSourceTypeRoleV2; 5],
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct MatrixFrontendAbiV2 {
+    pub(crate) digest: [u8; 32],
+    pub(crate) observed_source: MatrixObservedSourceAbiV2,
+    pub(crate) projected_kernarg: fe2o3_kernel_ir::MatrixProjectedKernargPolicyV1,
+}
+
+impl MatrixFrontendAbiV2 {
+    fn from_observed(observed_source: MatrixObservedSourceAbiV2) -> Result<Self, &'static str> {
+        let canonical_record = observed_source.canonical_record()?;
+        Ok(Self {
+            digest: Sha256::digest(&canonical_record).into(),
+            observed_source,
+            projected_kernarg: fe2o3_kernel_ir::MatrixProjectedKernargPolicyV1::canonical(),
+        })
+    }
+
+    pub(crate) fn validate(&self) -> Result<(), &'static str> {
+        let canonical_record = self.observed_source.canonical_record()?;
+        if Sha256::digest(&canonical_record).as_slice() != self.digest {
+            return Err("matrix rustc source ABI observation digest mismatch");
+        }
+        self.projected_kernarg.validate()?;
+        Ok(())
+    }
+
+    pub(crate) fn kernel_ir_binding(
+        &self,
+    ) -> Result<fe2o3_kernel_ir::MatrixFrontendBindingV2, &'static str> {
+        self.validate()?;
+        let provider = &self.observed_source.provider;
+        let observed_source = fe2o3_kernel_ir::MatrixSourceAbiObservationV2::new_untrusted_claim(
+            fe2o3_kernel_ir::MatrixProviderIdentityV2 {
+                crate_name: provider.crate_name.clone(),
+                stable_crate_id: provider.stable_crate_id,
+                crate_hash: provider.crate_hash,
+                cargo_metadata_build_observation: provider.cargo_metadata_build_observation,
+                source_identity: provider.source_identity,
+                definition_identities: self.observed_source.definition_identities.clone(),
+            },
+            self.observed_source.canonical_record()?,
+        )?;
+        if observed_source.digest != self.digest {
+            return Err("matrix source ABI digest changed at the Kernel IR boundary");
+        }
+        Ok(fe2o3_kernel_ir::MatrixFrontendBindingV2 {
+            observed_source,
+            projected_kernarg: self.projected_kernarg.clone(),
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn canonical_for_test() -> Self {
+        Self::from_observed(MatrixObservedSourceAbiV2::synthetic_for_test())
+            .expect("synthetic matrix observation must serialize")
+    }
+}
+
+impl MatrixObservedSourceAbiV2 {
+    fn canonical_record(&self) -> Result<Vec<u8>, &'static str> {
+        if self.provider.crate_name != "fe2o3_device"
+            || self.provider.stable_crate_id == 0
+            || self.provider.crate_hash == [0; 16]
+            || self.provider.cargo_metadata_build_observation == [0; 32]
+            || self.provider.source_identity == [0; 32]
+            || self.definition_identities.len() != 6
+            || self
+                .definition_identities
+                .iter()
+                .any(|identity| identity == &[0; 16])
+        {
+            return Err("matrix rustc source ABI provider identity is incomplete");
+        }
+        let mut writer = MatrixSourceAbiWriterV2::new();
+        writer.raw_bytes(MATRIX_SOURCE_ABI_DOMAIN_V2);
+        writer.text(&self.provider.crate_name)?;
+        writer.u64(self.provider.stable_crate_id);
+        writer.bytes(&self.provider.crate_hash)?;
+        writer.bytes(&self.provider.cargo_metadata_build_observation)?;
+        writer.bytes(&self.provider.source_identity)?;
+        writer.len(self.definition_identities.len())?;
+        for identity in &self.definition_identities {
+            writer.bytes(identity)?;
+        }
+        for layout in [
+            &self.receiver_layout,
+            &self.lhs_layout,
+            &self.rhs_layout,
+            &self.accumulator_layout,
+            &self.result_layout,
+        ] {
+            writer.layout(layout)?;
+        }
+        writer.fn_abi(&self.kernel_abi)?;
+        writer.fn_abi(&self.method_abi)?;
+        for role in self.kernel_source_structure {
+            writer.source_role(role);
+        }
+        for role in self.method_source_structure {
+            writer.source_role(role);
+        }
+        Ok(writer.finish())
+    }
+
+    #[cfg(test)]
+    fn synthetic_for_test() -> Self {
+        fn layout(name: &str) -> TypeLayoutFacts {
+            TypeLayoutFacts {
+                rust_type: name.to_owned(),
+                size_bytes: 0,
+                abi_alignment_bytes: 1,
+                unadjusted_abi_alignment_bytes: 1,
+                maximum_requested_alignment_bytes: None,
+                uninhabited: false,
+                backend_representation: BackendRepresentationFacts::Memory,
+                largest_niche: None,
+                kind: TypeLayoutKind::Tuple(Vec::new()),
+            }
+        }
+        fn arg(role: MatrixSourceTypeRoleV2, name: &str) -> MatrixArgAbiFactsV2 {
+            MatrixArgAbiFactsV2 {
+                role,
+                layout: layout(name),
+                mode: MatrixPassModeV2::Ignore,
+            }
+        }
+        let provider = crate::trusted_device_items::ReviewedMatrixProviderObservationV2 {
+            crate_name: "fe2o3_device".to_owned(),
+            stable_crate_id: 1,
+            crate_hash: [2; 16],
+            cargo_metadata_build_observation: [3; 32],
+            source_identity: [4; 32],
+        };
+        let kernel_abi = MatrixFnAbiFactsV2 {
+            convention: 1,
+            c_variadic: false,
+            fixed_count: 3,
+            can_unwind: false,
+            arguments: vec![
+                arg(MatrixSourceTypeRoleV2::Bf16Fragment, "lhs"),
+                arg(MatrixSourceTypeRoleV2::Bf16Fragment, "rhs"),
+                arg(MatrixSourceTypeRoleV2::F32Fragment, "accumulator"),
+            ],
+            result: arg(MatrixSourceTypeRoleV2::Unit, "unit"),
+        };
+        let method_abi = MatrixFnAbiFactsV2 {
+            convention: 1,
+            c_variadic: false,
+            fixed_count: 4,
+            can_unwind: false,
+            arguments: vec![
+                arg(MatrixSourceTypeRoleV2::DeviceMatrixReference, "receiver"),
+                arg(MatrixSourceTypeRoleV2::Bf16Fragment, "lhs"),
+                arg(MatrixSourceTypeRoleV2::Bf16Fragment, "rhs"),
+                arg(MatrixSourceTypeRoleV2::F32Fragment, "accumulator"),
+            ],
+            result: arg(MatrixSourceTypeRoleV2::F32Fragment, "result"),
+        };
+        Self {
+            provider,
+            definition_identities: vec![[5; 16], [6; 16], [7; 16], [8; 16], [9; 16], [10; 16]],
+            receiver_layout: layout("receiver"),
+            lhs_layout: layout("lhs"),
+            rhs_layout: layout("rhs"),
+            accumulator_layout: layout("accumulator"),
+            result_layout: layout("result"),
+            kernel_abi,
+            method_abi,
+            kernel_source_structure: [
+                MatrixSourceTypeRoleV2::Bf16Fragment,
+                MatrixSourceTypeRoleV2::Bf16Fragment,
+                MatrixSourceTypeRoleV2::F32Fragment,
+                MatrixSourceTypeRoleV2::Unit,
+            ],
+            method_source_structure: [
+                MatrixSourceTypeRoleV2::DeviceMatrixReference,
+                MatrixSourceTypeRoleV2::Bf16Fragment,
+                MatrixSourceTypeRoleV2::Bf16Fragment,
+                MatrixSourceTypeRoleV2::F32Fragment,
+                MatrixSourceTypeRoleV2::F32Fragment,
+            ],
+        }
+    }
+}
+
+struct MatrixSourceAbiWriterV2 {
+    bytes: Vec<u8>,
+}
+
+impl MatrixSourceAbiWriterV2 {
+    fn new() -> Self {
+        Self { bytes: Vec::new() }
+    }
+
+    fn finish(self) -> Vec<u8> {
+        self.bytes
+    }
+
+    fn boolean(&mut self, value: bool) {
+        self.bytes.push(u8::from(value));
+    }
+
+    fn tag(&mut self, value: u8) {
+        self.bytes.push(value);
+    }
+
+    fn u32(&mut self, value: u32) {
+        self.bytes.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn u64(&mut self, value: u64) {
+        self.bytes.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn u128(&mut self, value: u128) {
+        self.bytes.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn len(&mut self, value: usize) -> Result<(), &'static str> {
+        self.u32(u32::try_from(value).map_err(|_| "matrix source ABI record length overflowed")?);
+        Ok(())
+    }
+
+    fn bytes(&mut self, value: &[u8]) -> Result<(), &'static str> {
+        self.len(value.len())?;
+        self.bytes.extend_from_slice(value);
+        Ok(())
+    }
+
+    fn raw_bytes(&mut self, value: &[u8]) {
+        self.bytes.extend_from_slice(value);
+    }
+
+    fn text(&mut self, value: &str) -> Result<(), &'static str> {
+        self.bytes(value.as_bytes())
+    }
+
+    fn optional_u64(&mut self, value: Option<u64>) {
+        self.boolean(value.is_some());
+        if let Some(value) = value {
+            self.u64(value);
+        }
+    }
+
+    fn optional_u128(&mut self, value: Option<u128>) {
+        self.boolean(value.is_some());
+        if let Some(value) = value {
+            self.u128(value);
+        }
+    }
+
+    fn source_role(&mut self, role: MatrixSourceTypeRoleV2) {
+        self.tag(match role {
+            MatrixSourceTypeRoleV2::Unit => 0,
+            MatrixSourceTypeRoleV2::DeviceMatrixReference => 1,
+            MatrixSourceTypeRoleV2::Bf16Fragment => 2,
+            MatrixSourceTypeRoleV2::F32Fragment => 3,
+        });
+    }
+
+    fn layout(&mut self, facts: &TypeLayoutFacts) -> Result<(), &'static str> {
+        self.text(&facts.rust_type)?;
+        self.u64(facts.size_bytes);
+        self.u64(facts.abi_alignment_bytes);
+        self.u64(facts.unadjusted_abi_alignment_bytes);
+        self.optional_u64(facts.maximum_requested_alignment_bytes);
+        self.boolean(facts.uninhabited);
+        self.backend_representation(&facts.backend_representation);
+        self.boolean(facts.largest_niche.is_some());
+        if let Some(niche) = facts.largest_niche {
+            self.u64(niche.offset_bytes);
+            self.scalar_primitive(niche.primitive);
+            self.u128(niche.valid_range_start);
+            self.u128(niche.valid_range_end);
+        }
+        match &facts.kind {
+            TypeLayoutKind::Scalar(source) => {
+                self.tag(0);
+                self.source_scalar(*source);
+            }
+            TypeLayoutKind::Pointer(pointer) => {
+                self.tag(1);
+                self.tag(match pointer.kind {
+                    crate::rust_type_layout_general::PointerKind::SharedReference => 0,
+                    crate::rust_type_layout_general::PointerKind::MutableReference => 1,
+                    crate::rust_type_layout_general::PointerKind::ConstRaw => 2,
+                    crate::rust_type_layout_general::PointerKind::MutRaw => 3,
+                });
+                self.u32(pointer.address_space);
+                self.layout(&pointer.pointee)?;
+            }
+            TypeLayoutKind::Array(array) => {
+                self.tag(2);
+                self.u64(array.length);
+                self.u64(array.stride_bytes);
+                self.layout(&array.element)?;
+            }
+            TypeLayoutKind::Tuple(fields) => {
+                self.tag(3);
+                self.fields(fields)?;
+            }
+            TypeLayoutKind::Adt(adt) => {
+                self.tag(4);
+                self.text(&adt.definition)?;
+                self.tag(match adt.kind {
+                    AdtKind::Struct => 0,
+                    AdtKind::Enum => 1,
+                    AdtKind::Union => 2,
+                });
+                self.boolean(adt.representation.c);
+                self.boolean(adt.representation.transparent);
+                self.boolean(adt.representation.explicit_integer);
+                self.optional_u64(adt.representation.packed_alignment_bytes);
+                self.optional_u64(adt.representation.requested_alignment_bytes);
+                self.boolean(adt.tag.is_some());
+                if let Some(tag) = adt.tag {
+                    self.u64(tag.offset_bytes);
+                    self.scalar_layout(tag.scalar);
+                    match tag.encoding {
+                        crate::rust_type_layout_general::EnumTagEncodingFacts::Direct => {
+                            self.tag(0)
+                        }
+                        crate::rust_type_layout_general::EnumTagEncodingFacts::Niche {
+                            untagged_variant,
+                            niche_variants_start,
+                            niche_variants_end,
+                            niche_start,
+                        } => {
+                            self.tag(1);
+                            self.u32(untagged_variant);
+                            self.u32(niche_variants_start);
+                            self.u32(niche_variants_end);
+                            self.u128(niche_start);
+                        }
+                    }
+                }
+                self.len(adt.variants.len())?;
+                for variant in &adt.variants {
+                    self.u32(variant.source_index);
+                    self.text(&variant.name)?;
+                    self.optional_u128(variant.discriminant_bits);
+                    self.boolean(variant.discriminant_type.is_some());
+                    if let Some(discriminant_type) = &variant.discriminant_type {
+                        self.text(discriminant_type)?;
+                    }
+                    self.boolean(variant.discriminant_scalar.is_some());
+                    if let Some(discriminant_scalar) = variant.discriminant_scalar {
+                        self.source_scalar(discriminant_scalar);
+                    }
+                    self.boolean(variant.uninhabited);
+                    self.fields(&variant.fields)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn fields(
+        &mut self,
+        fields: &[crate::rust_type_layout_general::FieldLayoutFacts],
+    ) -> Result<(), &'static str> {
+        self.len(fields.len())?;
+        for field in fields {
+            self.len(field.source_index)?;
+            self.len(field.memory_index)?;
+            self.boolean(field.name.is_some());
+            if let Some(name) = &field.name {
+                self.text(name)?;
+            }
+            self.u64(field.offset_bytes);
+            self.layout(&field.layout)?;
+        }
+        Ok(())
+    }
+
+    fn source_scalar(&mut self, scalar: SourceScalarKind) {
+        match scalar {
+            SourceScalarKind::Bool => self.tag(0),
+            SourceScalarKind::Char => self.tag(1),
+            SourceScalarKind::SignedInteger { bits } => {
+                self.tag(2);
+                self.u64(bits);
+            }
+            SourceScalarKind::UnsignedInteger { bits } => {
+                self.tag(3);
+                self.u64(bits);
+            }
+            SourceScalarKind::PointerSizedSignedInteger { bits } => {
+                self.tag(4);
+                self.u64(bits);
+            }
+            SourceScalarKind::PointerSizedUnsignedInteger { bits } => {
+                self.tag(5);
+                self.u64(bits);
+            }
+            SourceScalarKind::Float { bits } => {
+                self.tag(6);
+                self.u64(bits);
+            }
+        }
+    }
+
+    fn scalar_primitive(&mut self, primitive: ScalarPrimitiveFacts) {
+        match primitive {
+            ScalarPrimitiveFacts::Pointer { address_space } => {
+                self.tag(0);
+                self.u32(address_space);
+            }
+            ScalarPrimitiveFacts::Integer { bits, signed } => {
+                self.tag(1);
+                self.u64(bits);
+                self.boolean(signed);
+            }
+            ScalarPrimitiveFacts::Float { bits } => {
+                self.tag(2);
+                self.u64(bits);
+            }
+        }
+    }
+
+    fn scalar_layout(&mut self, scalar: crate::rust_type_layout_general::ScalarLayoutFacts) {
+        self.scalar_primitive(scalar.primitive);
+        self.u64(scalar.size_bytes);
+        self.u64(scalar.abi_alignment_bytes);
+        self.boolean(scalar.initialized);
+        self.u128(scalar.valid_range_start);
+        self.u128(scalar.valid_range_end);
+    }
+
+    fn backend_representation(&mut self, backend: &BackendRepresentationFacts) {
+        match backend {
+            BackendRepresentationFacts::Scalar(scalar) => {
+                self.tag(0);
+                self.scalar_layout(*scalar);
+            }
+            BackendRepresentationFacts::ScalarPair {
+                first,
+                second,
+                second_offset_bytes,
+            } => {
+                self.tag(1);
+                self.scalar_layout(*first);
+                self.scalar_layout(*second);
+                self.u64(*second_offset_bytes);
+            }
+            BackendRepresentationFacts::Memory => self.tag(2),
+        }
+    }
+
+    fn fn_abi(&mut self, abi: &MatrixFnAbiFactsV2) -> Result<(), &'static str> {
+        self.tag(abi.convention);
+        self.boolean(abi.c_variadic);
+        self.u32(abi.fixed_count);
+        self.boolean(abi.can_unwind);
+        self.len(abi.arguments.len())?;
+        for argument in &abi.arguments {
+            self.arg_abi(argument)?;
+        }
+        self.arg_abi(&abi.result)
+    }
+
+    fn arg_abi(&mut self, argument: &MatrixArgAbiFactsV2) -> Result<(), &'static str> {
+        self.source_role(argument.role);
+        self.layout(&argument.layout)?;
+        self.pass_mode(&argument.mode);
+        Ok(())
+    }
+
+    fn attrs(&mut self, attrs: MatrixArgAttributesV2) {
+        self.tag(attrs.regular);
+        self.tag(attrs.extension);
+        self.u64(attrs.pointee_size);
+        self.optional_u64(attrs.pointee_alignment);
+    }
+
+    fn reg(&mut self, reg: MatrixRegV2) {
+        self.tag(reg.kind);
+        self.u64(reg.size);
+    }
+
+    fn pass_mode(&mut self, mode: &MatrixPassModeV2) {
+        match mode {
+            MatrixPassModeV2::Ignore => self.tag(0),
+            MatrixPassModeV2::Direct(attrs) => {
+                self.tag(1);
+                self.attrs(*attrs);
+            }
+            MatrixPassModeV2::Pair(first, second) => {
+                self.tag(2);
+                self.attrs(*first);
+                self.attrs(*second);
+            }
+            MatrixPassModeV2::Cast {
+                pad_i32,
+                prefix,
+                rest_offset,
+                rest,
+                rest_total,
+                rest_consecutive,
+                attrs,
+            } => {
+                self.tag(3);
+                self.boolean(*pad_i32);
+                for reg in prefix.iter() {
+                    self.boolean(reg.is_some());
+                    if let Some(reg) = reg {
+                        self.reg(*reg);
+                    }
+                }
+                self.optional_u64(*rest_offset);
+                self.reg(*rest);
+                self.u64(*rest_total);
+                self.boolean(*rest_consecutive);
+                self.attrs(*attrs);
+            }
+            MatrixPassModeV2::Indirect {
+                attrs,
+                meta_attrs,
+                on_stack,
+            } => {
+                self.tag(4);
+                self.attrs(*attrs);
+                self.boolean(meta_attrs.is_some());
+                if let Some(meta_attrs) = meta_attrs {
+                    self.attrs(*meta_attrs);
+                }
+                self.boolean(*on_stack);
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -296,6 +943,7 @@ pub(crate) struct MirExternalImport {
 enum MirCalleeIdentity {
     SessionRecognized(SessionRecognizedSemanticItem),
     ExternalImport(MirExternalImport),
+    RejectedTrustedProvider { path: String, marker: &'static str },
     Untrusted(String),
 }
 
@@ -323,10 +971,17 @@ impl MirCallee {
         }
     }
 
+    fn rejected_trusted_provider(path: String, marker: &'static str) -> Self {
+        Self {
+            identity: MirCalleeIdentity::RejectedTrustedProvider { path, marker },
+        }
+    }
+
     pub(crate) fn identity(&self) -> &str {
         match &self.identity {
             MirCalleeIdentity::SessionRecognized(item) => item.canonical_path(),
             MirCalleeIdentity::ExternalImport(import) => &import.symbol,
+            MirCalleeIdentity::RejectedTrustedProvider { path, .. } => path,
             MirCalleeIdentity::Untrusted(identity) => identity,
         }
     }
@@ -334,7 +989,9 @@ impl MirCallee {
     pub(crate) fn session_recognized_item(&self) -> Option<SessionRecognizedSemanticItem> {
         match &self.identity {
             MirCalleeIdentity::SessionRecognized(item) => Some(*item),
-            MirCalleeIdentity::ExternalImport(_) | MirCalleeIdentity::Untrusted(_) => None,
+            MirCalleeIdentity::ExternalImport(_)
+            | MirCalleeIdentity::RejectedTrustedProvider { .. }
+            | MirCalleeIdentity::Untrusted(_) => None,
         }
     }
 
@@ -346,7 +1003,18 @@ impl MirCallee {
     pub(crate) fn external_import_evidence(&self) -> Option<&MirExternalImport> {
         match &self.identity {
             MirCalleeIdentity::ExternalImport(import) => Some(import),
-            MirCalleeIdentity::SessionRecognized(_) | MirCalleeIdentity::Untrusted(_) => None,
+            MirCalleeIdentity::SessionRecognized(_)
+            | MirCalleeIdentity::RejectedTrustedProvider { .. }
+            | MirCalleeIdentity::Untrusted(_) => None,
+        }
+    }
+
+    pub(crate) fn rejected_provider_marker(&self) -> Option<&'static str> {
+        match &self.identity {
+            MirCalleeIdentity::RejectedTrustedProvider { marker, .. } => Some(*marker),
+            MirCalleeIdentity::SessionRecognized(_)
+            | MirCalleeIdentity::ExternalImport(_)
+            | MirCalleeIdentity::Untrusted(_) => None,
         }
     }
 
@@ -683,6 +1351,682 @@ const fn code_object_version_number(version: CodeObjectVersion) -> u16 {
     }
 }
 
+fn import_matrix_source_abi_v2<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    body: &Body<'tcx>,
+) -> Result<Option<MatrixFrontendAbiV2>, MirImportError> {
+    let argument_types = (1..=body.arg_count)
+        .map(|index| body.local_decls[Local::from_usize(index)].ty)
+        .collect::<Vec<_>>();
+    let contains_matrix_fragment = argument_types.iter().any(|ty| {
+        trusted_adt_item(tcx, *ty).is_some_and(|item| {
+            matches!(
+                item,
+                TrustedDeviceItem::Bf16MfmaFragment | TrustedDeviceItem::F32AccumulatorFragment
+            )
+        })
+    });
+    if !contains_matrix_fragment {
+        return Ok(None);
+    }
+    let [lhs, rhs, accumulator] = argument_types.as_slice() else {
+        return Err(MirImportError::new(
+            "matrix frontend source ABI requires exactly three source parameters",
+        ));
+    };
+    for (role, ty, expected) in [
+        ("lhs", *lhs, TrustedDeviceItem::Bf16MfmaFragment),
+        ("rhs", *rhs, TrustedDeviceItem::Bf16MfmaFragment),
+        (
+            "accumulator",
+            *accumulator,
+            TrustedDeviceItem::F32AccumulatorFragment,
+        ),
+    ] {
+        if trusted_adt_item(tcx, ty) != Some(expected) {
+            return Err(MirImportError::new(format!(
+                "matrix frontend {role} parameter is not the genuine external `{}` type",
+                expected.canonical_path()
+            )));
+        }
+    }
+    if !matches!(body.local_decls[Local::from_usize(0)].ty.kind(), TyKind::Tuple(fields) if fields.is_empty())
+    {
+        return Err(MirImportError::new(
+            "matrix frontend kernel must return the unit type",
+        ));
+    }
+
+    let (bf16_fragment, bf16) = import_bf16_fragment_layout(tcx, *lhs)?;
+    let (rhs_fragment, rhs_bf16) = import_bf16_fragment_layout(tcx, *rhs)?;
+    if rhs_fragment != bf16_fragment || rhs_bf16 != bf16 {
+        return Err(MirImportError::new(
+            "matrix lhs and rhs fragment physical layouts disagree",
+        ));
+    }
+    let _f32_fragment = import_f32_fragment_layout(tcx, *accumulator)?;
+    let _rust_pass_modes = import_matrix_rust_fn_abi(tcx, instance, &argument_types)?;
+    let method_instance = matrix_method_instance(tcx, body)?;
+    validate_matrix_method_fn_abi(tcx, method_instance)?;
+
+    let provider_definition = match lhs.kind() {
+        TyKind::Adt(definition, _) => definition.did(),
+        _ => unreachable!("trusted fragment identity requires an ADT"),
+    };
+    let provider_crate = provider_definition.krate;
+    let provider =
+        crate::trusted_device_items::reviewed_matrix_provider_observation(tcx, provider_definition)
+            .map_err(MirImportError::new)?;
+    let definition_identities = [
+        TrustedDeviceItem::DeviceMatrix,
+        TrustedDeviceItem::DeviceMatrixFromCompiler,
+        TrustedDeviceItem::DeviceValue(dialect_amdgcn::DeviceValueDiagnosticItem::Bf16),
+        TrustedDeviceItem::Bf16MfmaFragment,
+        TrustedDeviceItem::F32AccumulatorFragment,
+        TrustedDeviceItem::DeviceMatrixMultiplyAccumulate,
+    ]
+    .into_iter()
+    .map(|item| {
+        crate::trusted_device_items::definition(tcx, item)
+            .filter(|def_id| def_id.krate == provider_crate)
+            .map(|def_id| tcx.def_path_hash(def_id).0.to_le_bytes())
+            .ok_or_else(|| {
+                MirImportError::new(format!(
+                    "matrix provider omitted reviewed definition `{}`",
+                    item.canonical_path()
+                ))
+            })
+    })
+    .collect::<Result<Vec<_>, _>>()?;
+
+    let method_roles = [
+        MatrixSourceTypeRoleV2::DeviceMatrixReference,
+        MatrixSourceTypeRoleV2::Bf16Fragment,
+        MatrixSourceTypeRoleV2::Bf16Fragment,
+        MatrixSourceTypeRoleV2::F32Fragment,
+        MatrixSourceTypeRoleV2::F32Fragment,
+    ];
+    let kernel_roles = [
+        MatrixSourceTypeRoleV2::Bf16Fragment,
+        MatrixSourceTypeRoleV2::Bf16Fragment,
+        MatrixSourceTypeRoleV2::F32Fragment,
+        MatrixSourceTypeRoleV2::Unit,
+    ];
+    let kernel_abi = import_matrix_fn_abi_facts(tcx, instance, &kernel_roles)?;
+    let method_abi = import_matrix_fn_abi_facts(tcx, method_instance, &method_roles)?;
+    let receiver_layout = method_abi.arguments[0].layout.clone();
+    let lhs_layout = extract_general_layout(tcx, *lhs).map_err(|error| {
+        MirImportError::new(format!("failed to retain matrix lhs rustc layout: {error}"))
+    })?;
+    let rhs_layout = extract_general_layout(tcx, *rhs).map_err(|error| {
+        MirImportError::new(format!("failed to retain matrix rhs rustc layout: {error}"))
+    })?;
+    let accumulator_layout = extract_general_layout(tcx, *accumulator).map_err(|error| {
+        MirImportError::new(format!(
+            "failed to retain matrix accumulator rustc layout: {error}"
+        ))
+    })?;
+    let result_layout = method_abi.result.layout.clone();
+    let observed_source = MatrixObservedSourceAbiV2 {
+        provider,
+        definition_identities,
+        receiver_layout,
+        lhs_layout,
+        rhs_layout,
+        accumulator_layout,
+        result_layout,
+        kernel_abi,
+        method_abi,
+        kernel_source_structure: kernel_roles,
+        method_source_structure: method_roles,
+    };
+    let evidence =
+        MatrixFrontendAbiV2::from_observed(observed_source).map_err(MirImportError::new)?;
+    evidence.validate().map_err(MirImportError::new)?;
+    Ok(Some(evidence))
+}
+
+fn trusted_adt_item(tcx: TyCtxt<'_>, ty: Ty<'_>) -> Option<TrustedDeviceItem> {
+    let TyKind::Adt(definition, _) = ty.kind() else {
+        return None;
+    };
+    semantic_features::classify(tcx, definition.did())
+        .map(SessionRecognizedSemanticItem::trusted_device_item)
+}
+
+fn import_bf16_fragment_layout<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> Result<(MatrixFragmentLayoutV1, MatrixBf16LayoutV1), MirImportError> {
+    let facts = extract_general_layout(tcx, ty).map_err(|error| {
+        MirImportError::new(format!(
+            "failed to extract Bf16MfmaFragment rustc layout: {error}"
+        ))
+    })?;
+    let (fragment, element) = import_fragment_container(
+        &facts,
+        "Bf16MfmaFragment",
+        MatrixFragmentLayoutV1 {
+            repr_c: true,
+            size: 8,
+            alignment: 2,
+            field_count: 1,
+            field_offset: 0,
+            array_length: 4,
+            array_stride: 2,
+        },
+    )?;
+    let bf16 = import_bf16_layout(element)?;
+    Ok((fragment, bf16))
+}
+
+fn import_f32_fragment_layout<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> Result<MatrixFragmentLayoutV1, MirImportError> {
+    let facts = extract_general_layout(tcx, ty).map_err(|error| {
+        MirImportError::new(format!(
+            "failed to extract F32AccumulatorFragment rustc layout: {error}"
+        ))
+    })?;
+    let (fragment, element) = import_fragment_container(
+        &facts,
+        "F32AccumulatorFragment",
+        MatrixFragmentLayoutV1 {
+            repr_c: true,
+            size: 16,
+            alignment: 4,
+            field_count: 1,
+            field_offset: 0,
+            array_length: 4,
+            array_stride: 4,
+        },
+    )?;
+    validate_scalar_layout(
+        element,
+        "F32AccumulatorFragment element",
+        SourceScalarKind::Float { bits: 32 },
+        ScalarPrimitiveFacts::Float { bits: 32 },
+        4,
+        4,
+        u128::from(u32::MAX),
+    )?;
+    Ok(fragment)
+}
+
+fn import_fragment_container<'a>(
+    facts: &'a TypeLayoutFacts,
+    role: &str,
+    expected: MatrixFragmentLayoutV1,
+) -> Result<(MatrixFragmentLayoutV1, &'a TypeLayoutFacts), MirImportError> {
+    let TypeLayoutKind::Adt(adt) = &facts.kind else {
+        return Err(matrix_layout_error(role, "outer type is not an ADT"));
+    };
+    let [variant] = adt.variants.as_slice() else {
+        return Err(matrix_layout_error(
+            role,
+            "outer type does not have one variant",
+        ));
+    };
+    let [field] = variant.fields.as_slice() else {
+        return Err(matrix_layout_error(
+            role,
+            "outer type does not have one field",
+        ));
+    };
+    let TypeLayoutKind::Array(array) = &field.layout.kind else {
+        return Err(matrix_layout_error(role, "field is not an array"));
+    };
+    let observed = MatrixFragmentLayoutV1 {
+        repr_c: adt.representation.c,
+        size: facts.size_bytes,
+        alignment: facts.abi_alignment_bytes,
+        field_count: u8::try_from(variant.fields.len()).unwrap_or(u8::MAX),
+        field_offset: field.offset_bytes,
+        array_length: array.length,
+        array_stride: array.stride_bytes,
+    };
+    if adt.kind != AdtKind::Struct
+        || adt.representation.transparent
+        || adt.tag.is_some()
+        || !matches!(
+            facts.backend_representation,
+            BackendRepresentationFacts::Memory
+        )
+        || !matches!(
+            field.layout.backend_representation,
+            BackendRepresentationFacts::Memory
+        )
+        || facts.uninhabited
+        || observed != expected
+    {
+        return Err(matrix_layout_error(
+            role,
+            "repr, size, alignment, field offset, or array layout drifted",
+        ));
+    }
+    Ok((observed, &array.element))
+}
+
+fn import_bf16_layout(facts: &TypeLayoutFacts) -> Result<MatrixBf16LayoutV1, MirImportError> {
+    let role = "Bf16MfmaFragment inner Bf16";
+    let TypeLayoutKind::Adt(adt) = &facts.kind else {
+        return Err(matrix_layout_error(role, "Bf16 is not an ADT"));
+    };
+    let [variant] = adt.variants.as_slice() else {
+        return Err(matrix_layout_error(role, "Bf16 does not have one variant"));
+    };
+    let [field] = variant.fields.as_slice() else {
+        return Err(matrix_layout_error(role, "Bf16 does not have one field"));
+    };
+    if adt.kind != AdtKind::Struct
+        || !adt.representation.transparent
+        || adt.representation.c
+        || adt.tag.is_some()
+        || facts.size_bytes != 2
+        || facts.abi_alignment_bytes != 2
+        || field.offset_bytes != 0
+    {
+        return Err(matrix_layout_error(
+            role,
+            "transparent wrapper representation, size, alignment, or field offset drifted",
+        ));
+    }
+    validate_scalar_layout(
+        &field.layout,
+        role,
+        SourceScalarKind::UnsignedInteger { bits: 16 },
+        ScalarPrimitiveFacts::Integer {
+            bits: 16,
+            signed: false,
+        },
+        2,
+        2,
+        u128::from(u16::MAX),
+    )?;
+    validate_scalar_layout(
+        facts,
+        role,
+        SourceScalarKind::UnsignedInteger { bits: 16 },
+        ScalarPrimitiveFacts::Integer {
+            bits: 16,
+            signed: false,
+        },
+        2,
+        2,
+        u128::from(u16::MAX),
+    )?;
+    Ok(MatrixBf16LayoutV1 {
+        repr_transparent: adt.representation.transparent,
+        size: facts.size_bytes,
+        alignment: facts.abi_alignment_bytes,
+        field_count: u8::try_from(variant.fields.len()).unwrap_or(u8::MAX),
+        field_offset: field.offset_bytes,
+        scalar_bits: 16,
+        scalar_unsigned: true,
+    })
+}
+
+fn validate_scalar_layout(
+    facts: &TypeLayoutFacts,
+    role: &str,
+    source: SourceScalarKind,
+    primitive: ScalarPrimitiveFacts,
+    size: u64,
+    alignment: u64,
+    valid_range_end: u128,
+) -> Result<(), MirImportError> {
+    let BackendRepresentationFacts::Scalar(scalar) = facts.backend_representation else {
+        return Err(matrix_layout_error(
+            role,
+            "backend representation is not scalar",
+        ));
+    };
+    if facts.size_bytes != size
+        || facts.abi_alignment_bytes != alignment
+        || scalar.primitive != primitive
+        || scalar.size_bytes != size
+        || scalar.abi_alignment_bytes != alignment
+        || !scalar.initialized
+        || scalar.valid_range_start != 0
+        || scalar.valid_range_end != valid_range_end
+        || (!matches!(facts.kind, TypeLayoutKind::Adt(_))
+            && facts.kind != TypeLayoutKind::Scalar(source))
+    {
+        return Err(matrix_layout_error(
+            role,
+            "source scalar or backend scalar ABI drifted",
+        ));
+    }
+    Ok(())
+}
+
+fn import_matrix_rust_fn_abi<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    argument_types: &[Ty<'tcx>],
+) -> Result<[MatrixRustPassModeV1; 3], MirImportError> {
+    let query = TypingEnv::fully_monomorphized().as_query_input((instance, ty::List::empty()));
+    let abi = tcx.fn_abi_of_instance(query).map_err(|error| {
+        MirImportError::new(format!(
+            "failed to compute matrix kernel rustc FnAbi: {error:?}"
+        ))
+    })?;
+    if abi.conv != CanonAbi::Rust
+        || abi.c_variadic
+        || abi.fixed_count != 3
+        || abi.args.len() != 3
+        || !matches!(abi.ret.mode, PassMode::Ignore)
+        || abi.ret.layout.size.bytes() != 0
+    {
+        return Err(MirImportError::new(
+            "matrix kernel rustc FnAbi header is not exact Rust(args=3)->unit",
+        ));
+    }
+    for (index, (argument, expected_ty)) in abi.args.iter().zip(argument_types).enumerate() {
+        if argument.layout.ty != *expected_ty {
+            return Err(MirImportError::new(format!(
+                "matrix kernel rustc FnAbi argument {index} type disagrees with MIR"
+            )));
+        }
+    }
+    let lhs = import_cast_i64_mode(&abi.args[0].mode, "lhs")?;
+    let rhs = import_cast_i64_mode(&abi.args[1].mode, "rhs")?;
+    let accumulator = match &abi.args[2].mode {
+        PassMode::Indirect {
+            attrs,
+            meta_attrs: None,
+            on_stack: false,
+        } if attrs.pointee_size.bytes() == 16
+            && attrs.pointee_align.is_some_and(|align| align.bytes() == 4) =>
+        {
+            MatrixRustPassModeV1::Indirect {
+                pointee_size: attrs.pointee_size.bytes(),
+                pointee_align: attrs
+                    .pointee_align
+                    .expect("guard requires accumulator pointee alignment")
+                    .bytes(),
+            }
+        }
+        _ => {
+            return Err(MirImportError::new(
+                "matrix accumulator rustc FnAbi must be indirect(size=16, align=4)",
+            ));
+        }
+    };
+    Ok([lhs, rhs, accumulator])
+}
+
+fn matrix_method_instance<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    body: &Body<'tcx>,
+) -> Result<Instance<'tcx>, MirImportError> {
+    let mut matches = body.basic_blocks.iter().filter_map(|block| {
+        let TerminatorKind::Call { func, .. } = &block.terminator().kind else {
+            return None;
+        };
+        let Operand::Constant(constant) = func else {
+            return None;
+        };
+        let TyKind::FnDef(def_id, args) = constant.const_.ty().kind() else {
+            return None;
+        };
+        let instance = Instance::try_resolve(tcx, TypingEnv::fully_monomorphized(), *def_id, args)
+            .ok()
+            .flatten()?;
+        (semantic_features::classify(tcx, instance.def_id())
+            .map(SessionRecognizedSemanticItem::trusted_device_item)
+            == Some(TrustedDeviceItem::DeviceMatrixMultiplyAccumulate))
+        .then_some(instance)
+    });
+    let instance = matches.next().ok_or_else(|| {
+        MirImportError::new(
+            "matrix source ABI observation requires one resolved multiply_accumulate call",
+        )
+    })?;
+    if matches.next().is_some() {
+        return Err(MirImportError::new(
+            "matrix source ABI observation supports exactly one multiply_accumulate call",
+        ));
+    }
+    Ok(instance)
+}
+
+fn validate_matrix_method_fn_abi<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+) -> Result<(), MirImportError> {
+    let query = TypingEnv::fully_monomorphized().as_query_input((instance, ty::List::empty()));
+    let abi = tcx.fn_abi_of_instance(query).map_err(|error| {
+        MirImportError::new(format!(
+            "failed to compute matrix method rustc FnAbi: {error:?}"
+        ))
+    })?;
+    if abi.conv != CanonAbi::Rust || abi.c_variadic || abi.fixed_count != 4 || abi.args.len() != 4 {
+        return Err(MirImportError::new(
+            "matrix method rustc FnAbi header is not exact Rust(args=4)",
+        ));
+    }
+    require_matrix_source_type(
+        tcx,
+        abi.args[0].layout.ty,
+        MatrixSourceTypeRoleV2::DeviceMatrixReference,
+    )?;
+    require_matrix_source_type(
+        tcx,
+        abi.args[1].layout.ty,
+        MatrixSourceTypeRoleV2::Bf16Fragment,
+    )?;
+    require_matrix_source_type(
+        tcx,
+        abi.args[2].layout.ty,
+        MatrixSourceTypeRoleV2::Bf16Fragment,
+    )?;
+    require_matrix_source_type(
+        tcx,
+        abi.args[3].layout.ty,
+        MatrixSourceTypeRoleV2::F32Fragment,
+    )?;
+    require_matrix_source_type(tcx, abi.ret.layout.ty, MatrixSourceTypeRoleV2::F32Fragment)?;
+    if !matches!(abi.args[0].mode, PassMode::Direct(_)) {
+        return Err(MirImportError::new(
+            "matrix method receiver rustc FnAbi must be direct",
+        ));
+    }
+    import_cast_i64_mode(&abi.args[1].mode, "method lhs")?;
+    import_cast_i64_mode(&abi.args[2].mode, "method rhs")?;
+    require_indirect_fragment_mode(&abi.args[3].mode, "method accumulator")?;
+    require_indirect_fragment_mode(&abi.ret.mode, "method result")?;
+    Ok(())
+}
+
+fn require_indirect_fragment_mode(mode: &PassMode, role: &str) -> Result<(), MirImportError> {
+    match mode {
+        PassMode::Indirect {
+            attrs,
+            meta_attrs: None,
+            on_stack: false,
+        } if attrs.pointee_size.bytes() == 16
+            && attrs.pointee_align.is_some_and(|align| align.bytes() == 4) =>
+        {
+            Ok(())
+        }
+        _ => Err(MirImportError::new(format!(
+            "matrix {role} rustc FnAbi must be indirect(size=16, align=4)"
+        ))),
+    }
+}
+
+fn import_matrix_fn_abi_facts<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    roles: &[MatrixSourceTypeRoleV2],
+) -> Result<MatrixFnAbiFactsV2, MirImportError> {
+    let query = TypingEnv::fully_monomorphized().as_query_input((instance, ty::List::empty()));
+    let abi = tcx.fn_abi_of_instance(query).map_err(|error| {
+        MirImportError::new(format!("failed to retain matrix rustc FnAbi: {error:?}"))
+    })?;
+    let Some((result_role, argument_roles)) = roles.split_last() else {
+        return Err(MirImportError::new("matrix source ABI role list is empty"));
+    };
+    if abi.conv != CanonAbi::Rust
+        || abi.c_variadic
+        || abi.args.len() != argument_roles.len()
+        || usize::try_from(abi.fixed_count).ok() != Some(argument_roles.len())
+    {
+        return Err(MirImportError::new(
+            "matrix rustc FnAbi disagrees with the exact source parameter structure",
+        ));
+    }
+    let arguments = abi
+        .args
+        .iter()
+        .zip(argument_roles)
+        .map(|(argument, role)| import_matrix_arg_abi(tcx, argument, *role))
+        .collect::<Result<Vec<_>, _>>()?;
+    let result = import_matrix_arg_abi(tcx, &abi.ret, *result_role)?;
+    Ok(MatrixFnAbiFactsV2 {
+        convention: 1,
+        c_variadic: abi.c_variadic,
+        fixed_count: abi.fixed_count,
+        can_unwind: abi.can_unwind,
+        arguments,
+        result,
+    })
+}
+
+fn import_matrix_arg_abi<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    argument: &rustc_target::callconv::ArgAbi<'tcx, Ty<'tcx>>,
+    role: MatrixSourceTypeRoleV2,
+) -> Result<MatrixArgAbiFactsV2, MirImportError> {
+    require_matrix_source_type(tcx, argument.layout.ty, role)?;
+    let layout = extract_general_layout(tcx, argument.layout.ty).map_err(|error| {
+        MirImportError::new(format!(
+            "failed to retain matrix rustc FnAbi layout: {error}"
+        ))
+    })?;
+    Ok(MatrixArgAbiFactsV2 {
+        role,
+        layout,
+        mode: import_matrix_pass_mode(&argument.mode),
+    })
+}
+
+fn require_matrix_source_type(
+    tcx: TyCtxt<'_>,
+    ty: Ty<'_>,
+    role: MatrixSourceTypeRoleV2,
+) -> Result<(), MirImportError> {
+    let exact = match role {
+        MatrixSourceTypeRoleV2::Unit => {
+            matches!(ty.kind(), TyKind::Tuple(fields) if fields.is_empty())
+        }
+        MatrixSourceTypeRoleV2::DeviceMatrixReference => matches!(
+            ty.kind(),
+            TyKind::Ref(_, pointee, Mutability::Not)
+                if trusted_adt_item(tcx, *pointee) == Some(TrustedDeviceItem::DeviceMatrix)
+        ),
+        MatrixSourceTypeRoleV2::Bf16Fragment => {
+            trusted_adt_item(tcx, ty) == Some(TrustedDeviceItem::Bf16MfmaFragment)
+        }
+        MatrixSourceTypeRoleV2::F32Fragment => {
+            trusted_adt_item(tcx, ty) == Some(TrustedDeviceItem::F32AccumulatorFragment)
+        }
+    };
+    if exact {
+        Ok(())
+    } else {
+        Err(MirImportError::new(format!(
+            "matrix rustc FnAbi source type does not match role {role:?}"
+        )))
+    }
+}
+
+fn import_matrix_pass_mode(mode: &PassMode) -> MatrixPassModeV2 {
+    match mode {
+        PassMode::Ignore => MatrixPassModeV2::Ignore,
+        PassMode::Direct(attrs) => MatrixPassModeV2::Direct(import_matrix_attrs(*attrs)),
+        PassMode::Pair(first, second) => {
+            MatrixPassModeV2::Pair(import_matrix_attrs(*first), import_matrix_attrs(*second))
+        }
+        PassMode::Cast { pad_i32, cast } => MatrixPassModeV2::Cast {
+            pad_i32: *pad_i32,
+            prefix: Box::new(cast.prefix.map(|reg| reg.map(import_matrix_reg))),
+            rest_offset: cast.rest_offset.map(|offset| offset.bytes()),
+            rest: import_matrix_reg(cast.rest.unit),
+            rest_total: cast.rest.total.bytes(),
+            rest_consecutive: cast.rest.is_consecutive,
+            attrs: import_matrix_attrs(cast.attrs),
+        },
+        PassMode::Indirect {
+            attrs,
+            meta_attrs,
+            on_stack,
+        } => MatrixPassModeV2::Indirect {
+            attrs: import_matrix_attrs(*attrs),
+            meta_attrs: meta_attrs.map(import_matrix_attrs),
+            on_stack: *on_stack,
+        },
+    }
+}
+
+fn import_matrix_attrs(attrs: ArgAttributes) -> MatrixArgAttributesV2 {
+    MatrixArgAttributesV2 {
+        regular: attrs.regular.bits(),
+        extension: match attrs.arg_ext {
+            ArgExtension::None => 0,
+            ArgExtension::Zext => 1,
+            ArgExtension::Sext => 2,
+        },
+        pointee_size: attrs.pointee_size.bytes(),
+        pointee_alignment: attrs.pointee_align.map(|alignment| alignment.bytes()),
+    }
+}
+
+fn import_matrix_reg(reg: Reg) -> MatrixRegV2 {
+    MatrixRegV2 {
+        kind: match reg.kind {
+            RegKind::Integer => 0,
+            RegKind::Float => 1,
+            RegKind::Vector => 2,
+        },
+        size: reg.size.bytes(),
+    }
+}
+
+fn import_cast_i64_mode(
+    mode: &PassMode,
+    role: &str,
+) -> Result<MatrixRustPassModeV1, MirImportError> {
+    let PassMode::Cast {
+        pad_i32: false,
+        cast,
+    } = mode
+    else {
+        return Err(MirImportError::new(format!(
+            "matrix {role} rustc FnAbi must be Cast(i64)"
+        )));
+    };
+    if cast.prefix.iter().any(Option::is_some)
+        || cast.rest_offset.is_some()
+        || cast.rest.unit.kind != RegKind::Integer
+        || cast.rest.unit.size.bytes() != 8
+        || cast.rest.total.bytes() != 8
+        || cast.rest.is_consecutive
+    {
+        return Err(MirImportError::new(format!(
+            "matrix {role} rustc FnAbi cast target is not exact i64"
+        )));
+    }
+    Ok(MatrixRustPassModeV1::CastI64)
+}
+
+fn matrix_layout_error(role: &str, detail: &str) -> MirImportError {
+    MirImportError::new(format!("matrix frontend {role} layout rejected: {detail}"))
+}
+
 pub fn import_collection<'tcx>(
     tcx: TyCtxt<'tcx>,
     collection: &CollectionResult<'tcx>,
@@ -711,6 +2055,12 @@ pub fn import_collection<'tcx>(
                 ))
             })?;
         let rust_path = imported_rust_path(tcx, def_id);
+        let matrix_frontend_abi =
+            if function.role == crate::collector::CollectedFunctionRole::KernelEntry {
+                import_matrix_source_abi_v2(tcx, function.instance, body)?
+            } else {
+                None
+            };
         functions.push(import_body(
             MirBodyImportContext {
                 tcx,
@@ -724,6 +2074,7 @@ pub fn import_collection<'tcx>(
             MirKernelMetadata {
                 typed_profile: import_kernel_profile(function.typed_profile),
                 frontend_contract: function.frontend_contract.clone(),
+                matrix_frontend_abi,
             },
         ));
     }
@@ -1022,6 +2373,15 @@ impl MirFunction {
                 "non-kernel function `{}` carries a typed kernel profile",
                 self.rust_path
             )));
+        }
+        if self.kind != MirFunctionKind::KernelEntry && self.matrix_frontend_abi.is_some() {
+            return Err(MirImportError::new(format!(
+                "non-kernel function `{}` carries matrix frontend ABI evidence",
+                self.rust_path
+            )));
+        }
+        if let Some(evidence) = &self.matrix_frontend_abi {
+            evidence.validate().map_err(MirImportError::new)?;
         }
         Ok(())
     }
@@ -1424,6 +2784,13 @@ impl PortableMirSemanticEncoderV2 {
         self.text(&function.export_name)?;
         self.tag(function.kind.canonical_order_v1());
         self.kernel_profile(function.typed_profile);
+        if let Some(evidence) = &function.matrix_frontend_abi {
+            evidence.validate().map_err(MirImportError::new)?;
+            // Rustc provider and ABI build observations are retained on the
+            // imported function and Kernel IR operation, not folded into the
+            // portable semantic policy identity.
+            self.text("fe2o3.matrix-source-abi-required.v2")?;
+        }
         self.usize(function.arg_count)?;
         self.usize(function.local_count)?;
         self.len(function.locals.len())?;
@@ -1841,6 +3208,11 @@ impl PortableMirSemanticEncoderV2 {
                 self.u16(import.code_object_version);
                 self.text(&import.semantic_identity)?;
             }
+            MirCalleeIdentity::RejectedTrustedProvider { path, marker } => {
+                return Err(MirImportError::new(format!(
+                    "portable MIR rejects `{path}` at trusted-provider marker `{marker}`"
+                )));
+            }
         }
         Ok(())
     }
@@ -2205,6 +3577,7 @@ impl MirTerminatorKind {
 struct MirKernelMetadata {
     typed_profile: Option<MirKernelProfile>,
     frontend_contract: Option<crate::collector::AuthenticatedKernelFrontendContractV1>,
+    matrix_frontend_abi: Option<MatrixFrontendAbiV2>,
 }
 
 struct MirBodyImportContext<'a, 'tcx> {
@@ -2282,6 +3655,7 @@ fn import_body<'tcx>(
         locals,
         blocks,
         frontend_contract: kernel_metadata.frontend_contract,
+        matrix_frontend_abi: kernel_metadata.matrix_frontend_abi,
     }
 }
 
@@ -2354,6 +3728,13 @@ fn import_type_shape<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> MirTypeShape {
                 element: Box::new(import_type_shape(tcx, args.type_at(0))),
             },
             Some(item @ TrustedDeviceItem::ThreadIndex) => MirTypeShape::Adt {
+                identity: item.canonical_path().to_owned(),
+            },
+            Some(
+                item @ (TrustedDeviceItem::DeviceMatrix
+                | TrustedDeviceItem::Bf16MfmaFragment
+                | TrustedDeviceItem::F32AccumulatorFragment),
+            ) => MirTypeShape::Adt {
                 identity: item.canonical_path().to_owned(),
             },
             Some(TrustedDeviceItem::DeviceValue(
@@ -2836,6 +4217,10 @@ fn call_identity<'tcx>(
     Some(
         if let Some(item) = semantic_features::classify(tcx, resolved_def_id) {
             MirCallee::session_recognized(item)
+        } else if let Some(marker) =
+            crate::trusted_device_items::rejected_provider_marker(tcx, resolved_def_id)
+        {
+            MirCallee::rejected_trusted_provider(imported_rust_path(tcx, resolved_def_id), marker)
         } else if let Some(import) = compiler_ffi_imports
             .classify(tcx, resolved_def_id)
             .or_else(|| compiler_ffi_imports.classify(tcx, *def_id))
@@ -3098,6 +4483,7 @@ mod tests {
                 kind: MirFunctionKind::KernelEntry,
                 typed_profile: None,
                 frontend_contract: None,
+                matrix_frontend_abi: None,
                 arg_count: 3,
                 local_count: 17,
                 locals: vec![
@@ -3155,6 +4541,7 @@ mod tests {
                 kind: MirFunctionKind::KernelEntry,
                 typed_profile: None,
                 frontend_contract: None,
+                matrix_frontend_abi: None,
                 arg_count: 3,
                 local_count: 17,
                 locals: vec![MirLocal {
@@ -3226,6 +4613,7 @@ mod tests {
                 kind: MirFunctionKind::KernelEntry,
                 typed_profile: None,
                 frontend_contract: None,
+                matrix_frontend_abi: None,
                 arg_count: 1,
                 local_count: 3,
                 locals: Vec::new(),
@@ -3302,6 +4690,7 @@ mod tests {
                 kind: MirFunctionKind::KernelEntry,
                 typed_profile: None,
                 frontend_contract: None,
+                matrix_frontend_abi: None,
                 arg_count: 0,
                 local_count: 1,
                 locals: Vec::new(),
@@ -3864,6 +5253,7 @@ mod tests {
                         },
                     ],
                     frontend_contract: None,
+                    matrix_frontend_abi: None,
                 },
                 MirFunction {
                     export_name: "helper".to_owned(),
@@ -3890,6 +5280,7 @@ mod tests {
                         }),
                     }],
                     frontend_contract: None,
+                    matrix_frontend_abi: None,
                 },
             ],
         }
@@ -3945,6 +5336,7 @@ mod tests {
             locals: Vec::new(),
             blocks,
             frontend_contract: None,
+            matrix_frontend_abi: None,
         }
     }
 

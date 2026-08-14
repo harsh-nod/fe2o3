@@ -109,6 +109,38 @@ fn allocation_mut(module: &mut Module, index: usize) -> &mut WorkgroupMemory {
     memory
 }
 
+fn untrusted_frontend_binding() -> MatrixFrontendBindingV2 {
+    fn bytes(record: &mut Vec<u8>, value: &[u8]) {
+        record.extend_from_slice(&(value.len() as u32).to_le_bytes());
+        record.extend_from_slice(value);
+    }
+
+    let provider = MatrixProviderIdentityV2 {
+        crate_name: "fe2o3_device".to_owned(),
+        stable_crate_id: 1,
+        crate_hash: [2; 16],
+        cargo_metadata_build_observation: [3; 32],
+        source_identity: [4; 32],
+        definition_identities: vec![[5; 16]; 6],
+    };
+    let mut record = MATRIX_SOURCE_ABI_RECORD_DOMAIN_V2.to_vec();
+    bytes(&mut record, provider.crate_name.as_bytes());
+    record.extend_from_slice(&provider.stable_crate_id.to_le_bytes());
+    bytes(&mut record, &provider.crate_hash);
+    bytes(&mut record, &provider.cargo_metadata_build_observation);
+    bytes(&mut record, &provider.source_identity);
+    record.extend_from_slice(&(provider.definition_identities.len() as u32).to_le_bytes());
+    for identity in &provider.definition_identities {
+        bytes(&mut record, identity);
+    }
+    record.push(0);
+    MatrixFrontendBindingV2 {
+        observed_source: MatrixSourceAbiObservationV2::new_untrusted_claim(provider, record)
+            .unwrap(),
+        projected_kernarg: MatrixProjectedKernargPolicyV1::canonical(),
+    }
+}
+
 #[test]
 fn exact_matrix_and_lds_profiles_verify_with_explicit_effects() {
     let module = matrix_module();
@@ -141,6 +173,69 @@ fn exact_matrix_and_lds_profiles_verify_with_explicit_effects() {
         namespace: MATRIX_CAPABILITY_NAMESPACE.to_string(),
         name: LDS_TILE_16X16_XOR4_CAPABILITY.to_string(),
     }));
+}
+
+#[test]
+fn structured_source_record_and_projected_policy_are_integrity_checked_in_kernel_ir() {
+    let mut exact = matrix_module();
+    operation_mut(&mut exact, 2).frontend_binding = Some(untrusted_frontend_binding());
+    exact.functions[0].required_capabilities = exact.functions[0].derived_capabilities();
+    verify_module(&exact).unwrap();
+
+    let mut bytes = exact.clone();
+    operation_mut(&mut bytes, 2)
+        .frontend_binding
+        .as_mut()
+        .unwrap()
+        .observed_source
+        .canonical_record
+        .push(1);
+    assert!(
+        verify_module(&bytes)
+            .unwrap_err()
+            .contains(DiagnosticCode::InvalidSemanticOperation)
+    );
+
+    let mut provider = exact.clone();
+    operation_mut(&mut provider, 2)
+        .frontend_binding
+        .as_mut()
+        .unwrap()
+        .observed_source
+        .provider
+        .crate_hash[0] ^= 1;
+    assert!(
+        verify_module(&provider)
+            .unwrap_err()
+            .contains(DiagnosticCode::InvalidSemanticOperation)
+    );
+
+    let mut digest = exact.clone();
+    operation_mut(&mut digest, 2)
+        .frontend_binding
+        .as_mut()
+        .unwrap()
+        .observed_source
+        .digest[0] ^= 1;
+    assert!(
+        verify_module(&digest)
+            .unwrap_err()
+            .contains(DiagnosticCode::InvalidSemanticOperation)
+    );
+
+    let mut projection = exact;
+    operation_mut(&mut projection, 2)
+        .frontend_binding
+        .as_mut()
+        .unwrap()
+        .projected_kernarg
+        .parameters[8]
+        .offset += 2;
+    assert!(
+        verify_module(&projection)
+            .unwrap_err()
+            .contains(DiagnosticCode::InvalidSemanticOperation)
+    );
 }
 
 #[test]

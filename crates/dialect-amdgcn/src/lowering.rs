@@ -15,13 +15,16 @@ use fe2o3_kernel_ir::{
     F32MathImplementation, FloatConversionKind, FloatOperation, Function, FunctionId, FunctionRole,
     IndexKind, IndexedControlFlow, InlineAssembly, InlineAssemblyTarget, IntrinsicKind, Kernel,
     KernelId, LDS_TILE_16X16_XOR4_CAPABILITY, LaunchDomain, LaunchExtent,
-    MATRIX_CAPABILITY_NAMESPACE, MatrixElement, MatrixOperation, MatrixOperationKind,
-    MemoryElementType, MemoryIntrinsicOperation, MemoryOrdering, Module, ModuleId,
-    NarrowFloatFormat, Operation, OperationKind, PointerDistanceContract, PointerDistanceKind,
-    PointerDistanceUnit, ScalarGemmTargetRequirementsV1, ScalarGemmV1Error, ScalarType, Signature,
-    SynchronizationScope, TargetCapability, Terminator, Type, ValueId, VerificationErrors,
-    WaveOperation, WaveOperationKind, WaveWidth, WidenedFloatBinaryOp, WorkgroupMemoryExtent,
-    WorkgroupSize, analyze_control_flow, verify_module, verify_scalar_gemm_v1_module,
+    MATRIX_CAPABILITY_NAMESPACE, MATRIX_PROJECTED_KERNARG_POLICY_NAMESPACE_V1,
+    MATRIX_SOURCE_ABI_OBSERVATION_NAMESPACE_V2, MatrixElement, MatrixFrontendBindingV2,
+    MatrixOperation, MatrixOperationKind, MatrixProjectedKernargPolicyV1, MemoryElementType,
+    MemoryIntrinsicOperation, MemoryOrdering, Module, ModuleId, NarrowFloatFormat, Operation,
+    OperationKind, PointerDistanceContract, PointerDistanceKind, PointerDistanceUnit,
+    ScalarGemmTargetRequirementsV1, ScalarGemmV1Error, ScalarType, Signature, SynchronizationScope,
+    TargetCapability, Terminator, Type, ValueId, VerificationErrors, WaveOperation,
+    WaveOperationKind, WaveWidth, WidenedFloatBinaryOp, WorkgroupMemoryExtent, WorkgroupSize,
+    analyze_control_flow, gfx942_xnack_minus_target_capability, verify_module,
+    verify_scalar_gemm_v1_module,
 };
 
 use crate::{AMDGPU_TRIPLE, AmdgcnIntrinsic, Dim};
@@ -62,16 +65,16 @@ impl LoweringTarget {
     }
 
     const fn supports_gfx942_xnack_minus_binding(self) -> bool {
-        matches!(self, Self::Gfx942StrictFloatV1 | Self::Gfx942ScalarGemmV1)
+        matches!(self, Self::Gfx942XnackMinusV1 | Self::Gfx942ScalarGemmV1)
     }
 
     const fn llvm_function_attributes(self) -> &'static str {
         match self {
             Self::Baseline => "",
-            Self::Gfx942StrictFloatV1 | Self::Gfx942XnackMinusV1 => {
+            Self::Gfx942StrictFloatV1 => {
                 " \"target-cpu\"=\"gfx942\" \"denormal-fp-math-f32\"=\"ieee,ieee\" \"unsafe-fp-math\"=\"false\" \"no-infs-fp-math\"=\"false\" \"no-nans-fp-math\"=\"false\" \"no-signed-zeros-fp-math\"=\"false\" \"approx-func-fp-math\"=\"false\""
             }
-            Self::Gfx942ScalarGemmV1 => {
+            Self::Gfx942XnackMinusV1 | Self::Gfx942ScalarGemmV1 => {
                 " \"target-cpu\"=\"gfx942\" \"denormal-fp-math-f32\"=\"ieee,ieee\" \"unsafe-fp-math\"=\"false\" \"no-infs-fp-math\"=\"false\" \"no-nans-fp-math\"=\"false\" \"no-signed-zeros-fp-math\"=\"false\" \"approx-func-fp-math\"=\"false\" \"fp-contract\"=\"off\""
             }
         }
@@ -382,6 +385,19 @@ pub fn lower_kernel_to_gfx942_llvm_ir(
     lower_kernel_to_llvm_ir_for_target(module, kernel_id, LoweringTarget::Gfx942StrictFloatV1)
 }
 
+/// Lowers one kernel only when Kernel IR retains the exact gfx942:xnack- binding.
+///
+/// Unlike [`lower_kernel_to_gfx942_llvm_ir`], this API requires the target
+/// identity on the module, kernel, and entry function. It emits the canonical
+/// gfx942 data layout, explicit `-xnack`, exact wave-width features, and the
+/// strict floating-point attribute set on the kernel definition.
+pub fn lower_kernel_to_gfx942_xnack_minus_llvm_ir(
+    module: &Module,
+    kernel_id: &KernelId,
+) -> Result<String, LoweringErrors> {
+    lower_kernel_to_llvm_ir_for_target(module, kernel_id, LoweringTarget::Gfx942XnackMinusV1)
+}
+
 fn lower_kernel_to_llvm_ir_for_target(
     module: &Module,
     kernel_id: &KernelId,
@@ -460,6 +476,10 @@ fn lower_kernel_to_llvm_ir_for_target(
         "entry function",
         target,
     )?;
+    if target == LoweringTarget::Gfx942XnackMinusV1 {
+        require_exact_kernel_binding(module, kernel, entry)?;
+    }
+    validate_matrix_frontend_abi_binding(module, kernel, entry, target)?;
     let wave_widths = [module_wave, kernel_wave, function_wave]
         .into_iter()
         .flatten()
@@ -741,6 +761,12 @@ fn lower_compiler_module_to_llvm_ir_for_target(
     kernels.sort_by(|lhs, rhs| lhs.id.cmp(&rhs.id));
     let mut functions = module.functions.iter().collect::<Vec<_>>();
     functions.sort_by(|lhs, rhs| lhs.id.cmp(&rhs.id));
+    for kernel in &kernels {
+        let entry = module
+            .function(&kernel.entry)
+            .expect("verify_module established the kernel entry");
+        validate_matrix_frontend_abi_binding(module, kernel, entry, target)?;
+    }
 
     let launch_policy_map = validate_launch_policies(module, &kernels, launch_policies)?;
 
@@ -2568,6 +2594,14 @@ fn validate_capabilities(
                 if target.supports_gfx942_xnack_minus_binding()
                     && namespace == AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE
                     && name == AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME => {}
+            TargetCapability::Extension { namespace, name }
+                if target == LoweringTarget::Gfx942XnackMinusV1
+                    && matches!(
+                        namespace.as_str(),
+                        MATRIX_SOURCE_ABI_OBSERVATION_NAMESPACE_V2
+                            | MATRIX_PROJECTED_KERNARG_POLICY_NAMESPACE_V1
+                    )
+                    && is_lower_hex_digest(name) => {}
             _ => {
                 return Err(LoweringErrors::one(
                     location,
@@ -2578,6 +2612,130 @@ fn validate_capabilities(
         }
     }
     Ok(wave_width)
+}
+
+fn is_lower_hex_digest(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn require_exact_kernel_binding(
+    module: &Module,
+    kernel: &Kernel,
+    entry: &Function,
+) -> Result<(), LoweringErrors> {
+    let required = gfx942_xnack_minus_target_capability();
+    for (location, owner, capabilities) in [
+        (
+            LoweringLocation::module(module),
+            "module",
+            &module.required_capabilities,
+        ),
+        (
+            LoweringLocation::kernel(module, kernel),
+            "kernel",
+            &kernel.required_capabilities,
+        ),
+        (
+            LoweringLocation::function(module, kernel, entry),
+            "entry function",
+            &entry.required_capabilities,
+        ),
+    ] {
+        if !capabilities.contains(&required) {
+            return Err(LoweringErrors::one(
+                location,
+                LoweringDiagnosticCode::UnsupportedCapability,
+                format!("exact gfx942:xnack- lowering requires {required:?} on the {owner}"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_matrix_frontend_abi_binding(
+    module: &Module,
+    kernel: &Kernel,
+    entry: &Function,
+    target: LoweringTarget,
+) -> Result<(), LoweringErrors> {
+    let bindings = entry
+        .body
+        .iter()
+        .flat_map(|body| &body.blocks)
+        .flat_map(|block| &block.operations)
+        .filter_map(|operation| match &operation.kind {
+            OperationKind::Matrix(matrix) => matrix.frontend_binding.as_ref(),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let owners = [
+        &module.required_capabilities,
+        &kernel.required_capabilities,
+        &entry.required_capabilities,
+    ];
+    let has_claim_capability = owners.iter().any(|capabilities| {
+        capabilities.iter().any(|capability| {
+            matches!(
+                capability,
+                TargetCapability::Extension { namespace, .. }
+                    if matches!(
+                        namespace.as_str(),
+                        MATRIX_SOURCE_ABI_OBSERVATION_NAMESPACE_V2
+                            | MATRIX_PROJECTED_KERNARG_POLICY_NAMESPACE_V1
+                    )
+            )
+        })
+    });
+    if bindings.is_empty() && !has_claim_capability {
+        return Ok(());
+    }
+    if target != LoweringTarget::Gfx942XnackMinusV1 {
+        return Err(LoweringErrors::one(
+            LoweringLocation::function(module, kernel, entry),
+            LoweringDiagnosticCode::UnsupportedCapability,
+            "matrix source ABI observations and projected kernarg policy are admitted only by exact gfx942:xnack- lowering",
+        ));
+    }
+    require_exact_kernel_binding(module, kernel, entry)?;
+    let [binding] = bindings.as_slice() else {
+        return Err(LoweringErrors::one(
+            LoweringLocation::function(module, kernel, entry),
+            LoweringDiagnosticCode::UnsupportedCapability,
+            "exactly one matrix operation must carry the structured rustc source ABI observation and projected kernarg policy",
+        ));
+    };
+    binding.validate().map_err(|reason| {
+        LoweringErrors::one(
+            LoweringLocation::function(module, kernel, entry),
+            LoweringDiagnosticCode::UnsupportedCapability,
+            reason,
+        )
+    })?;
+    let required = binding.capabilities();
+    for capabilities in owners {
+        if required
+            .iter()
+            .any(|capability| !capabilities.contains(capability))
+        {
+            return Err(LoweringErrors::one(
+                LoweringLocation::function(module, kernel, entry),
+                LoweringDiagnosticCode::UnsupportedCapability,
+                "matrix source-observation and projected-policy digests must be bound on the module, kernel, and entry function",
+            ));
+        }
+    }
+    let expected = [vec![Type::Scalar(ScalarType::Bf16); 8], vec![Type::F32; 4]].concat();
+    if entry.signature.parameters != expected || !entry.signature.results.is_empty() {
+        return Err(LoweringErrors::one(
+            LoweringLocation::function(module, kernel, entry),
+            LoweringDiagnosticCode::UnsupportedParameter,
+            "the matrix projected kernarg policy requires exactly 8 BF16 and 4 F32 parameters and no result",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_launch(module: &Module, kernel: &Kernel) -> Result<WorkgroupSize, LoweringErrors> {
@@ -2694,6 +2852,63 @@ struct FunctionLowerer<'a> {
     bindings: BTreeMap<ValueId, ValueBinding>,
     control_flow: IndexedControlFlow,
     split_edges: Vec<bool>,
+}
+
+fn matrix_frontend_binding(function: &Function) -> Option<&MatrixFrontendBindingV2> {
+    function
+        .body
+        .iter()
+        .flat_map(|body| &body.blocks)
+        .flat_map(|block| &block.operations)
+        .find_map(|operation| match &operation.kind {
+            OperationKind::Matrix(matrix) => matrix.frontend_binding.as_ref(),
+            _ => None,
+        })
+}
+
+fn emit_matrix_projected_kernarg_policy(
+    output: &mut dyn fmt::Write,
+    policy: &MatrixProjectedKernargPolicyV1,
+) {
+    writeln!(
+        output,
+        "; fe2o3.projected-kernarg-policy.v1 sha256={}",
+        lower_hex(&policy.digest)
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "; fe2o3.projected-kernarg explicit-size={} implicit-bytes={} segment-size={} segment-align={} source=compiler-policy-not-rustc-observation",
+        policy.explicit_argument_size,
+        policy.implicit_argument_bytes,
+        policy.kernarg_segment_size,
+        policy.kernarg_segment_alignment,
+    )
+    .unwrap();
+    for (index, parameter) in policy.parameters.iter().enumerate() {
+        let kind = match parameter.element {
+            MatrixElement::Bf16 => "bf16",
+            MatrixElement::F32 => "f32",
+        };
+        writeln!(
+            output,
+            "; fe2o3.projected-kernarg.param index={index} source={} lane={} type={kind} offset={} size={} align={}",
+            parameter.source,
+            parameter.lane,
+            parameter.offset,
+            parameter.size,
+            parameter.alignment,
+        )
+        .unwrap();
+    }
+}
+
+fn lower_hex(bytes: &[u8]) -> String {
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        write!(encoded, "{byte:02x}").unwrap();
+    }
+    encoded
 }
 
 impl<'a> FunctionLowerer<'a> {
@@ -3863,6 +4078,9 @@ impl<'a> FunctionLowerer<'a> {
         writeln!(output, "target triple = \"{AMDGPU_TRIPLE}\"").unwrap();
         if let Some(data_layout) = self.target.data_layout() {
             writeln!(output, "target datalayout = \"{data_layout}\"").unwrap();
+        }
+        if let Some(binding) = matrix_frontend_binding(self.function) {
+            emit_matrix_projected_kernarg_policy(&mut output, &binding.projected_kernarg);
         }
         writeln!(output).unwrap();
         let float_requirements = FloatRequirements::collect(std::iter::once(self));

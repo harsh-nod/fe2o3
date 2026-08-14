@@ -172,6 +172,7 @@ fn loop_fixture() -> MirModule {
             kind: MirFunctionKind::KernelEntry,
             typed_profile: None,
             frontend_contract: None,
+            matrix_frontend_abi: None,
             arg_count: 0,
             local_count: 4,
             locals: vec![
@@ -252,6 +253,7 @@ fn enum_fixture() -> MirModule {
             kind: MirFunctionKind::KernelEntry,
             typed_profile: None,
             frontend_contract: None,
+            matrix_frontend_abi: None,
             arg_count: 0,
             local_count: 3,
             locals: vec![

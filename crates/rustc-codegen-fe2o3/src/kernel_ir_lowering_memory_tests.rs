@@ -81,7 +81,7 @@ fn recognized_memory_calls_reach_verified_ir_and_gfx942_llvm() {
             && *contract == CopyNonOverlappingContract::supported_rust()
     ));
 
-    let llvm = dialect_amdgcn::lower_compiler_module_to_gfx942_llvm_ir(&module)
+    let llvm = dialect_amdgcn::lower_device_module_to_gfx942_xnack_minus_llvm_ir(&module)
         .expect("gfx942 memory LLVM");
     assert!(llvm.contains("sdiv exact i64"));
     assert!(llvm.contains("load volatile float, ptr addrspace(1)"));
@@ -288,6 +288,7 @@ fn memory_module() -> MirModule {
                 block(4, Vec::new(), MirTerminatorKind::Return),
             ],
             frontend_contract: None,
+            matrix_frontend_abi: None,
         }],
     }
 }

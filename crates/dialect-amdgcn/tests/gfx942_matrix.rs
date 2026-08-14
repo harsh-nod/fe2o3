@@ -4,8 +4,9 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use dialect_amdgcn::{
-    LoweringDiagnosticCode, lower_compiler_module_to_gfx942_llvm_ir,
-    lower_kernel_to_gfx942_llvm_ir, lower_kernel_to_llvm_ir,
+    GFX942_XNACK_MINUS_DATA_LAYOUT, LoweringDiagnosticCode,
+    lower_compiler_module_to_gfx942_llvm_ir, lower_kernel_to_gfx942_llvm_ir,
+    lower_kernel_to_gfx942_xnack_minus_llvm_ir, lower_kernel_to_llvm_ir,
 };
 use fe2o3_kernel_ir::*;
 
@@ -120,6 +121,87 @@ fn matrix_module() -> Module {
     module
 }
 
+fn hand_built_untrusted_frontend_binding() -> MatrixFrontendBindingV2 {
+    fn bytes(record: &mut Vec<u8>, value: &[u8]) {
+        record.extend_from_slice(&(value.len() as u32).to_le_bytes());
+        record.extend_from_slice(value);
+    }
+
+    let provider = MatrixProviderIdentityV2 {
+        crate_name: "fe2o3_device".to_owned(),
+        stable_crate_id: 1,
+        crate_hash: [2; 16],
+        cargo_metadata_build_observation: [3; 32],
+        source_identity: [4; 32],
+        definition_identities: vec![[5; 16]; 6],
+    };
+    let mut record = MATRIX_SOURCE_ABI_RECORD_DOMAIN_V2.to_vec();
+    bytes(&mut record, provider.crate_name.as_bytes());
+    record.extend_from_slice(&provider.stable_crate_id.to_le_bytes());
+    bytes(&mut record, &provider.crate_hash);
+    bytes(&mut record, &provider.cargo_metadata_build_observation);
+    bytes(&mut record, &provider.source_identity);
+    record.extend_from_slice(&(provider.definition_identities.len() as u32).to_le_bytes());
+    for identity in &provider.definition_identities {
+        bytes(&mut record, identity);
+    }
+    record.extend_from_slice(b"hand-built-public-layout-and-fnabi-claim");
+    MatrixFrontendBindingV2 {
+        observed_source: MatrixSourceAbiObservationV2::new_untrusted_claim(provider, record)
+            .unwrap(),
+        projected_kernarg: MatrixProjectedKernargPolicyV1::canonical(),
+    }
+}
+
+fn hand_built_frontend_claim_module() -> Module {
+    let binding = hand_built_untrusted_frontend_binding();
+    let parameters = [vec![Type::Scalar(ScalarType::Bf16); 8], vec![Type::F32; 4]].concat();
+    let matrix = MatrixOperation::multiply_accumulate(
+        [ValueId(0), ValueId(1), ValueId(2), ValueId(3)],
+        [ValueId(4), ValueId(5), ValueId(6), ValueId(7)],
+        [ValueId(8), ValueId(9), ValueId(10), ValueId(11)],
+    )
+    .with_frontend_binding(binding.clone());
+    let operation = Operation::new(
+        (12..16)
+            .map(|id| ValueDef::new(ValueId(id), Type::F32))
+            .collect(),
+        OperationKind::Matrix(matrix),
+    );
+    let mut function = Function::kernel_entry(
+        "matrix_frontend_impl",
+        Signature::new(parameters, vec![]),
+        (0..12).map(ValueId).collect(),
+        vec![BasicBlock {
+            id: BlockId(0),
+            parameters: vec![],
+            operations: vec![operation],
+            terminator: Some(Terminator::Return { values: vec![] }),
+        }],
+    );
+    let target = gfx942_xnack_minus_target_capability();
+    function.required_capabilities = function.derived_capabilities();
+    function.required_capabilities.insert(target.clone());
+
+    let mut kernel = Kernel::new(
+        "matrix_frontend_kernel",
+        "matrix_frontend_impl",
+        LaunchDomain::D1 {
+            x: LaunchExtent::Dynamic,
+        },
+    );
+    kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+    kernel.required_capabilities.insert(target.clone());
+    kernel.required_capabilities.extend(binding.capabilities());
+
+    let mut module = Module::new("tests::hand_built_frontend_claim");
+    module.required_capabilities.insert(target);
+    module.required_capabilities.extend(binding.capabilities());
+    module.functions.push(function);
+    module.kernels.push(kernel);
+    module
+}
+
 #[test]
 fn exact_gfx942_matrix_profile_lowers_mfma_and_xor4_lds() {
     let llvm = lower_kernel_to_gfx942_llvm_ir(&matrix_module(), &"matrix_kernel".into()).unwrap();
@@ -138,6 +220,88 @@ fn exact_gfx942_matrix_profile_lowers_mfma_and_xor4_lds() {
             .count(),
         2
     );
+}
+
+#[test]
+fn exact_xnack_minus_kernel_api_requires_and_emits_the_retained_target_identity() {
+    let mut module = matrix_module();
+    let target = gfx942_xnack_minus_target_capability();
+    module.required_capabilities.insert(target.clone());
+    module.functions[0]
+        .required_capabilities
+        .insert(target.clone());
+    module.kernels[0]
+        .required_capabilities
+        .insert(target.clone());
+
+    let generic = lower_kernel_to_gfx942_llvm_ir(&module, &module.kernels[0].id)
+        .expect_err("generic gfx942 profile cannot consume an exact target binding");
+    assert!(generic.to_string().contains("gfx942:xnack-"));
+    let llvm = lower_kernel_to_gfx942_xnack_minus_llvm_ir(&module, &module.kernels[0].id).unwrap();
+    assert!(llvm.contains(GFX942_XNACK_MINUS_DATA_LAYOUT));
+    assert!(llvm.contains("-wavefrontsize32,+wavefrontsize64,-xnack"));
+    assert!(llvm.contains("\"fp-contract\"=\"off\""));
+
+    for owner in 0..3 {
+        let mut mutated = module.clone();
+        match owner {
+            0 => {
+                mutated.required_capabilities.remove(&target);
+            }
+            1 => {
+                mutated.kernels[0].required_capabilities.remove(&target);
+            }
+            2 => {
+                mutated.functions[0].required_capabilities.remove(&target);
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            lower_kernel_to_gfx942_xnack_minus_llvm_ir(&mutated, &mutated.kernels[0].id).is_err()
+        );
+    }
+}
+
+#[test]
+fn public_capability_or_hand_built_record_never_becomes_observed_abi_evidence() {
+    let binding = hand_built_untrusted_frontend_binding();
+    let target = gfx942_xnack_minus_target_capability();
+    let mut capability_only = matrix_module();
+    for capabilities in [
+        &mut capability_only.required_capabilities,
+        &mut capability_only.kernels[0].required_capabilities,
+        &mut capability_only.functions[0].required_capabilities,
+    ] {
+        capabilities.insert(target.clone());
+        capabilities.insert(binding.observed_source.capability());
+    }
+    let errors = lower_kernel_to_gfx942_xnack_minus_llvm_ir(
+        &capability_only,
+        &capability_only.kernels[0].id,
+    )
+    .expect_err("a public digest capability cannot stand in for a structured record");
+    assert!(
+        errors
+            .to_string()
+            .contains("exactly one matrix operation must carry the structured rustc source ABI")
+    );
+
+    let hand_built = hand_built_frontend_claim_module();
+    let llvm = lower_kernel_to_gfx942_xnack_minus_llvm_ir(&hand_built, &hand_built.kernels[0].id)
+        .expect("integrity-valid public IR remains lowerable without an authentication claim");
+    assert!(llvm.contains("llvm.amdgcn.mfma.f32.16x16x16bf16.1k"));
+    assert!(llvm.contains("fe2o3.projected-kernarg-policy.v1"));
+    for forbidden in [
+        MATRIX_SOURCE_ABI_OBSERVATION_NAMESPACE_V2,
+        "observed-source-abi",
+        "authenticated",
+        "cargo-metadata-build-observation",
+    ] {
+        assert!(
+            !llvm.contains(forbidden),
+            "generic dialect output claimed unestablished source evidence `{forbidden}`:\n{llvm}"
+        );
+    }
 }
 
 #[test]

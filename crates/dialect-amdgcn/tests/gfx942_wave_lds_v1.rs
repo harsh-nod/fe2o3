@@ -4,7 +4,8 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use dialect_amdgcn::{
-    LoweringDiagnosticCode, lower_kernel_to_gfx942_llvm_ir, lower_kernel_to_llvm_ir,
+    LoweringDiagnosticCode, lower_kernel_to_gfx942_llvm_ir,
+    lower_kernel_to_gfx942_xnack_minus_llvm_ir, lower_kernel_to_llvm_ir,
 };
 use fe2o3_kernel_ir::*;
 
@@ -435,16 +436,28 @@ fn verified_ir_and_llvm_preserve_the_exact_wave_lds_shape() {
 }
 
 #[test]
-fn exact_target_binding_is_accepted_only_by_the_gfx942_lowerer() {
+fn exact_target_binding_is_accepted_only_by_the_xnack_minus_lowerer() {
     let mut module = active_wave_lds_module();
-    module
+    let exact_target = gfx942_xnack_minus_target_capability();
+    module.required_capabilities.insert(exact_target.clone());
+    module.kernels[0]
         .required_capabilities
-        .insert(gfx942_xnack_minus_target_capability());
+        .insert(exact_target.clone());
+    module.functions[0]
+        .required_capabilities
+        .insert(exact_target);
     verify_module(&module).expect("exact target-bound module verifies");
 
-    let strict = lower_kernel_to_gfx942_llvm_ir(&module, &KernelId::new(KERNEL))
-        .expect("gfx942 lowerer accepts exact binding");
-    assert!(strict.contains("\"target-cpu\"=\"gfx942\""));
+    let generic = lower_kernel_to_gfx942_llvm_ir(&module, &KernelId::new(KERNEL)).unwrap_err();
+    assert_eq!(
+        generic.diagnostics()[0].code,
+        LoweringDiagnosticCode::UnsupportedCapability
+    );
+
+    let exact = lower_kernel_to_gfx942_xnack_minus_llvm_ir(&module, &KernelId::new(KERNEL))
+        .expect("exact gfx942:xnack- lowerer accepts the retained binding");
+    assert!(exact.contains("\"target-cpu\"=\"gfx942\""));
+    assert!(exact.contains("-wavefrontsize32,+wavefrontsize64,-xnack"));
 
     let baseline = lower_kernel_to_llvm_ir(&module, &KernelId::new(KERNEL)).unwrap_err();
     assert_eq!(

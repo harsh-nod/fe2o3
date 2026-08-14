@@ -7,7 +7,11 @@
 //!
 //! The internal diagnostic-item attributes are semantic identities consumed by
 //! the backend pinned to this repository's nightly toolchain. They do not
-//! authenticate this crate's package source or contents.
+//! authenticate this crate's package source or contents. The bounded matrix
+//! importer additionally anchors definitions to the reviewed source tree and
+//! records rustc's exact stable crate ID, full crate hash, source identity, and
+//! managed Cargo build observation. Package signatures and transparency-log
+//! authentication remain outside that slice.
 
 #[cfg(test)]
 extern crate std;

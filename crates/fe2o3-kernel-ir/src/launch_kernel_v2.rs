@@ -1256,11 +1256,15 @@ impl Sha256V2 {
     }
 }
 
-#[cfg(test)]
-pub fn sha256_test_vector_v2(bytes: &[u8]) -> [u8; 32] {
+pub(crate) fn sha256_v2(bytes: &[u8]) -> [u8; 32] {
     let mut digest = Sha256V2::new();
     digest.update(bytes);
     digest.finalize()
+}
+
+#[cfg(test)]
+pub fn sha256_test_vector_v2(bytes: &[u8]) -> [u8; 32] {
+    sha256_v2(bytes)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

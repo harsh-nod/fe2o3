@@ -1,0 +1,13 @@
+[workspace]
+members = [
+    "consumer-exact",
+    "consumer-fnabi",
+    "consumer-layout",
+]
+exclude = ["provider-exact", "provider-fnabi", "provider-layout"]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false

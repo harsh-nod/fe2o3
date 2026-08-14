@@ -31,9 +31,10 @@ use fe2o3_amd_target::AmdTargetId;
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, AmdGpuDiagnosticOperation, BasicBlock, BinaryOp, BlockId,
     ComparePredicate, Constant, FloatConversionKind, FloatOperation, Function, FunctionId, Kernel,
-    LaunchDomain, LaunchExtent, MemoryAccess, Module, Operation, OperationKind, ScalarType,
-    Signature, SwitchCase, TargetCapability, Terminator, Type, ValueDef, ValueId, WorkgroupSize,
-    verify_module,
+    LaunchDomain, LaunchExtent, MATRIX_PROJECTED_KERNARG_POLICY_NAMESPACE_V1,
+    MATRIX_SOURCE_ABI_OBSERVATION_NAMESPACE_V2, MatrixFrontendBindingV2, MemoryAccess, Module,
+    Operation, OperationKind, ScalarType, Signature, SwitchCase, TargetCapability, Terminator,
+    Type, ValueDef, ValueId, WorkgroupSize, gfx942_xnack_minus_target_capability, verify_module,
 };
 use reserved_fe2o3_symbols::{
     DeviceFfiAddressSpaceV1, DeviceFfiPhysicalResultV1, DeviceFfiPhysicalTypeV1,
@@ -426,6 +427,25 @@ fn translate_and_verify_with_targets(
     module.kernels = kernel_entries
         .into_iter()
         .map(|(kernel, entry, workgroup_size)| {
+            let exact_target = gfx942_xnack_minus_target_capability();
+            let retained_bindings = module
+                .function(&entry)
+                .into_iter()
+                .flat_map(|function| &function.required_capabilities)
+                .filter(|capability| {
+                    *capability == &exact_target
+                        || matches!(
+                            capability,
+                            TargetCapability::Extension { namespace, .. }
+                                if matches!(
+                                    namespace.as_str(),
+                                    MATRIX_SOURCE_ABI_OBSERVATION_NAMESPACE_V2
+                                        | MATRIX_PROJECTED_KERNARG_POLICY_NAMESPACE_V1
+                                )
+                        )
+                })
+                .cloned()
+                .collect();
             let mut kernel = Kernel::new(
                 kernel,
                 entry,
@@ -434,6 +454,7 @@ fn translate_and_verify_with_targets(
                 },
             );
             kernel.workgroup_size = workgroup_size;
+            kernel.required_capabilities = retained_bindings;
             kernel
         })
         .collect();
@@ -551,6 +572,10 @@ enum LocalBinding {
     DeviceMathCapability,
     Gfx942CollectiveCapability,
     Gfx942StaticLdsU32x256(ValueId),
+    DeviceMatrixValueCapability,
+    DeviceMatrixReferenceCapability,
+    Bf16MfmaFragment([ValueId; 4]),
+    F32AccumulatorFragment([ValueId; 4]),
     OptionPointer {
         discriminant: ValueId,
         payload: ValueId,
@@ -630,9 +655,9 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
             ));
         }
 
-        let mut parameter_values = Vec::with_capacity(args.len());
+        let mut parameter_values = Vec::with_capacity(signature.parameters.len());
         for arg in args {
-            let ty = lower_parameter_type(&arg.ty.shape).ok_or_else(|| {
+            let types = lower_function_parameter_types(&arg.ty.shape).ok_or_else(|| {
                 diagnostic(
                     TranslationDiagnosticCode::UnsupportedType,
                     TranslationLocation::function(self.function),
@@ -642,21 +667,45 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     ),
                 )
             })?;
-            let id = ValueId(self.next_value);
-            self.next_value = self.next_value.checked_add(1).ok_or_else(|| {
-                diagnostic(
-                    TranslationDiagnosticCode::MalformedMir,
-                    TranslationLocation::function(self.function),
-                    "function has too many SSA values",
-                )
-            })?;
+            let values = types
+                .into_iter()
+                .map(|ty| {
+                    let value =
+                        self.fresh_value(ty, &TranslationLocation::function(self.function))?;
+                    Ok(value.id)
+                })
+                .collect::<Result<Vec<_>, TranslationDiagnostic>>()?;
+            let binding = match (arg.ty.shape.clone(), values.as_slice()) {
+                (shape, [value]) if !is_matrix_fragment_shape(&shape) => {
+                    LocalBinding::Value(*value)
+                }
+                (shape, [v0, v1, v2, v3])
+                    if is_trusted_adt_shape(&shape, TrustedDeviceItem::Bf16MfmaFragment) =>
+                {
+                    LocalBinding::Bf16MfmaFragment([*v0, *v1, *v2, *v3])
+                }
+                (shape, [v0, v1, v2, v3])
+                    if is_trusted_adt_shape(&shape, TrustedDeviceItem::F32AccumulatorFragment) =>
+                {
+                    LocalBinding::F32AccumulatorFragment([*v0, *v1, *v2, *v3])
+                }
+                _ => {
+                    return Err(diagnostic(
+                        TranslationDiagnosticCode::UnsupportedType,
+                        TranslationLocation::function(self.function),
+                        format!(
+                            "argument local{} has an invalid lowered value shape",
+                            arg.index
+                        ),
+                    ));
+                }
+            };
             self.bind_local(
                 arg.index,
-                LocalBinding::Value(id),
+                binding,
                 TranslationLocation::function(self.function),
             )?;
-            self.value_types.insert(id, ty.clone());
-            parameter_values.push(id);
+            parameter_values.extend(values);
         }
 
         let return_local = self
@@ -845,6 +894,12 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
         self.collective_target.is_some() && self.gfx942_collective_workgroup_size().is_some()
     }
 
+    fn is_exact_gfx942_wave64_matrix_context(&self) -> bool {
+        self.function.kind == MirFunctionKind::KernelEntry
+            && self.collective_target.is_some()
+            && self.workgroup_size == Some(WorkgroupSize::new(64, 1, 1))
+    }
+
     fn lower_block(&mut self, source: &MirBlock) -> Result<BasicBlock, TranslationDiagnostic> {
         let mut block = BasicBlock::new(self.block_id(
             source.index,
@@ -968,21 +1023,56 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                         "reference assignment must have one place operand",
                     ));
                 };
-                if !place.projection.is_empty() {
-                    return Err(diagnostic(
-                        TranslationDiagnosticCode::UnsupportedProjection,
-                        location,
-                        "projected reference rvalues are not supported",
-                    ));
-                }
                 if matches!(
                     self.locals.get(&place.local),
                     Some(LocalBinding::DeviceMathCapability)
                         | Some(LocalBinding::Gfx942CollectiveCapability)
                         | Some(LocalBinding::Gfx942StaticLdsU32x256(_))
                 ) {
+                    if !place.projection.is_empty() {
+                        return Err(diagnostic(
+                            TranslationDiagnosticCode::UnsupportedProjection,
+                            location,
+                            "projected reference rvalues are not supported",
+                        ));
+                    }
                     let binding = self.locals[&place.local];
                     return self.bind_local(destination.local, binding, location);
+                }
+                if matches!(
+                    self.locals.get(&place.local),
+                    Some(LocalBinding::DeviceMatrixValueCapability)
+                ) {
+                    let exact_value = place.projection.is_empty()
+                        && matches!(
+                            self.imported_local_shape(place.local),
+                            Some(shape) if is_trusted_adt_shape(shape, TrustedDeviceItem::DeviceMatrix)
+                        );
+                    let exact_reference = destination.projection.is_empty()
+                        && matches!(
+                            self.imported_local_shape(destination.local),
+                            Some(MirTypeShape::Reference { pointee, mutable: false })
+                                if is_trusted_adt_shape(pointee, TrustedDeviceItem::DeviceMatrix)
+                        );
+                    if !exact_value || !exact_reference {
+                        return Err(diagnostic(
+                            TranslationDiagnosticCode::UnsupportedType,
+                            location,
+                            "DeviceMatrix autoref requires an unprojected DeviceMatrix source and exact unprojected &DeviceMatrix destination",
+                        ));
+                    }
+                    return self.bind_local(
+                        destination.local,
+                        LocalBinding::DeviceMatrixReferenceCapability,
+                        location,
+                    );
+                }
+                if !place.projection.is_empty() {
+                    return Err(diagnostic(
+                        TranslationDiagnosticCode::UnsupportedProjection,
+                        location,
+                        "projected reference rvalues are not supported",
+                    ));
                 }
                 let value = self.plain_local(place.local, &location)?;
                 self.bind_plain_destination(destination, value, location)
@@ -1024,7 +1114,11 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     LocalBinding::Value(_)
                     | LocalBinding::DeviceMathCapability
                     | LocalBinding::Gfx942CollectiveCapability
-                    | LocalBinding::Gfx942StaticLdsU32x256(_) => {
+                    | LocalBinding::Gfx942StaticLdsU32x256(_)
+                    | LocalBinding::DeviceMatrixValueCapability
+                    | LocalBinding::DeviceMatrixReferenceCapability
+                    | LocalBinding::Bf16MfmaFragment(_)
+                    | LocalBinding::F32AccumulatorFragment(_) => {
                         return Err(diagnostic(
                             TranslationDiagnosticCode::UnsupportedType,
                             location,
@@ -1416,6 +1510,16 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 "projected call destinations are not supported",
             ));
         }
+        if let Some(marker) = callee.rejected_provider_marker() {
+            return Err(diagnostic(
+                TranslationDiagnosticCode::UnsupportedCall,
+                location,
+                format!(
+                    "trusted-provider rejection: diagnostic item `{marker}` is defined by `{}` instead of the external `fe2o3_device` provider",
+                    callee.identity()
+                ),
+            ));
+        }
 
         if let Some(TrustedDeviceItem::DeviceMath(math)) = callee.trusted_item() {
             return self.lower_device_math_call(
@@ -1585,7 +1689,10 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     TrustedDeviceItem::DisjointSlice
                     | TrustedDeviceItem::ThreadIndex
                     | TrustedDeviceItem::Gfx942CollectivesContext
-                    | TrustedDeviceItem::Gfx942StaticLdsU32x256Type,
+                    | TrustedDeviceItem::Gfx942StaticLdsU32x256Type
+                    | TrustedDeviceItem::DeviceMatrix
+                    | TrustedDeviceItem::Bf16MfmaFragment
+                    | TrustedDeviceItem::F32AccumulatorFragment,
                 ) => {
                     return Err(diagnostic(
                         TranslationDiagnosticCode::UnsupportedCall,
@@ -1632,7 +1739,9 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     | TrustedDeviceItem::Gfx942WorkgroupInclusiveScanSum
                     | TrustedDeviceItem::Gfx942WorkgroupExclusiveScanSum
                     | TrustedDeviceItem::Gfx942BarrierArrive
-                    | TrustedDeviceItem::Gfx942BarrierWait,
+                    | TrustedDeviceItem::Gfx942BarrierWait
+                    | TrustedDeviceItem::DeviceMatrixFromCompiler
+                    | TrustedDeviceItem::DeviceMatrixMultiplyAccumulate,
                 ) => {
                     unreachable!("collective operations are handled by semantic lowering")
                 }
@@ -1940,6 +2049,38 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
         Ok(())
     }
 
+    fn require_matrix_frontend_abi(
+        &mut self,
+        location: &TranslationLocation,
+    ) -> Result<MatrixFrontendBindingV2, TranslationDiagnostic> {
+        validate_matrix_frontend_function_abi(self.function)?;
+        let evidence = self.function.matrix_frontend_abi.as_ref().ok_or_else(|| {
+            diagnostic(
+                TranslationDiagnosticCode::UnsupportedType,
+                location.clone(),
+                "matrix fragment flattening requires a rustc-bound source ABI observation",
+            )
+        })?;
+        evidence.validate().map_err(|reason| {
+            diagnostic(
+                TranslationDiagnosticCode::UnsupportedType,
+                location.clone(),
+                reason,
+            )
+        })?;
+        let binding = evidence.kernel_ir_binding().map_err(|reason| {
+            diagnostic(
+                TranslationDiagnosticCode::UnsupportedType,
+                location.clone(),
+                reason,
+            )
+        })?;
+        self.required_capabilities
+            .insert(gfx942_xnack_minus_target_capability());
+        self.required_capabilities.extend(binding.capabilities());
+        Ok(binding)
+    }
+
     fn require_float_argument_types(
         &self,
         float: &FloatOperation,
@@ -2123,7 +2264,11 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     | LocalBinding::FieldlessEnum { .. }
                     | LocalBinding::DeviceMathCapability
                     | LocalBinding::Gfx942CollectiveCapability
-                    | LocalBinding::Gfx942StaticLdsU32x256(_),
+                    | LocalBinding::Gfx942StaticLdsU32x256(_)
+                    | LocalBinding::DeviceMatrixValueCapability
+                    | LocalBinding::DeviceMatrixReferenceCapability
+                    | LocalBinding::Bf16MfmaFragment(_)
+                    | LocalBinding::F32AccumulatorFragment(_),
                 ) => Err(diagnostic(
                     TranslationDiagnosticCode::UnsupportedType,
                     location.clone(),
@@ -2174,7 +2319,11 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     | LocalBinding::FieldlessEnum { .. }
                     | LocalBinding::DeviceMathCapability
                     | LocalBinding::Gfx942CollectiveCapability
-                    | LocalBinding::Gfx942StaticLdsU32x256(_),
+                    | LocalBinding::Gfx942StaticLdsU32x256(_)
+                    | LocalBinding::DeviceMatrixValueCapability
+                    | LocalBinding::DeviceMatrixReferenceCapability
+                    | LocalBinding::Bf16MfmaFragment(_)
+                    | LocalBinding::F32AccumulatorFragment(_),
                 ) => Err(diagnostic(
                     TranslationDiagnosticCode::UnsupportedType,
                     location.clone(),
@@ -2415,7 +2564,11 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 | LocalBinding::FieldlessEnum { .. }
                 | LocalBinding::DeviceMathCapability
                 | LocalBinding::Gfx942CollectiveCapability
-                | LocalBinding::Gfx942StaticLdsU32x256(_),
+                | LocalBinding::Gfx942StaticLdsU32x256(_)
+                | LocalBinding::DeviceMatrixValueCapability
+                | LocalBinding::DeviceMatrixReferenceCapability
+                | LocalBinding::Bf16MfmaFragment(_)
+                | LocalBinding::F32AccumulatorFragment(_),
             ) => Err(diagnostic(
                 TranslationDiagnosticCode::UnsupportedType,
                 location.clone(),
@@ -2442,7 +2595,11 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     LocalBinding::OptionPointer { .. }
                     | LocalBinding::DeviceMathCapability
                     | LocalBinding::Gfx942CollectiveCapability
-                    | LocalBinding::Gfx942StaticLdsU32x256(_),
+                    | LocalBinding::Gfx942StaticLdsU32x256(_)
+                    | LocalBinding::DeviceMatrixValueCapability
+                    | LocalBinding::DeviceMatrixReferenceCapability
+                    | LocalBinding::Bf16MfmaFragment(_)
+                    | LocalBinding::F32AccumulatorFragment(_),
                 ) => Err(diagnostic(
                     TranslationDiagnosticCode::UnsupportedType,
                     location.clone(),
@@ -2542,6 +2699,7 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
 }
 
 fn declared_function_signature(function: &MirFunction) -> Result<Signature, TranslationDiagnostic> {
+    validate_matrix_frontend_function_abi(function)?;
     let mut args = function
         .locals
         .iter()
@@ -2562,7 +2720,7 @@ fn declared_function_signature(function: &MirFunction) -> Result<Signature, Tran
     let parameters = args
         .into_iter()
         .map(|arg| {
-            lower_parameter_type(&arg.ty.shape).ok_or_else(|| {
+            lower_function_parameter_types(&arg.ty.shape).ok_or_else(|| {
                 diagnostic(
                     TranslationDiagnosticCode::UnsupportedType,
                     TranslationLocation::function(function),
@@ -2573,7 +2731,10 @@ fn declared_function_signature(function: &MirFunction) -> Result<Signature, Tran
                 )
             })
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .flatten()
+        .collect();
 
     let return_local = function
         .locals
@@ -2624,6 +2785,56 @@ fn declared_function_signature(function: &MirFunction) -> Result<Signature, Tran
     Ok(Signature::new(parameters, results))
 }
 
+fn validate_matrix_frontend_function_abi(
+    function: &MirFunction,
+) -> Result<(), TranslationDiagnostic> {
+    let mut args = function
+        .locals
+        .iter()
+        .filter(|local| local.role == crate::mir_import::MirLocalRole::Arg)
+        .collect::<Vec<_>>();
+    args.sort_by_key(|local| local.index);
+    let has_fragment = args
+        .iter()
+        .any(|argument| is_matrix_fragment_shape(&argument.ty.shape));
+    if !has_fragment && function.matrix_frontend_abi.is_none() {
+        return Ok(());
+    }
+    let Some(evidence) = &function.matrix_frontend_abi else {
+        return Err(diagnostic(
+            TranslationDiagnosticCode::UnsupportedType,
+            TranslationLocation::function(function),
+            "matrix fragment flattening requires a rustc-bound source ABI observation",
+        ));
+    };
+    evidence.validate().map_err(|reason| {
+        diagnostic(
+            TranslationDiagnosticCode::UnsupportedType,
+            TranslationLocation::function(function),
+            reason,
+        )
+    })?;
+    let expected = [
+        TrustedDeviceItem::Bf16MfmaFragment,
+        TrustedDeviceItem::Bf16MfmaFragment,
+        TrustedDeviceItem::F32AccumulatorFragment,
+    ];
+    if function.kind != MirFunctionKind::KernelEntry
+        || args.len() != expected.len()
+        || !args
+            .iter()
+            .zip(expected)
+            .all(|(argument, item)| is_trusted_adt_shape(&argument.ty.shape, item))
+    {
+        return Err(diagnostic(
+            TranslationDiagnosticCode::UnsupportedType,
+            TranslationLocation::function(function),
+            "matrix frontend ABI requires a kernel entry with exact (Bf16MfmaFragment, Bf16MfmaFragment, F32AccumulatorFragment) parameters",
+        ));
+    }
+    Ok(())
+}
+
 fn lower_parameter_type(shape: &MirTypeShape) -> Option<Type> {
     if let Some(scalar) = lower_scalar_type(shape) {
         return Some(scalar);
@@ -2645,6 +2856,28 @@ fn lower_parameter_type(shape: &MirTypeShape) -> Option<Type> {
         )),
         _ => None,
     }
+}
+
+fn lower_function_parameter_types(shape: &MirTypeShape) -> Option<Vec<Type>> {
+    if is_trusted_adt_shape(shape, TrustedDeviceItem::Bf16MfmaFragment) {
+        return Some(vec![Type::Scalar(ScalarType::Bf16); 4]);
+    }
+    if is_trusted_adt_shape(shape, TrustedDeviceItem::F32AccumulatorFragment) {
+        return Some(vec![Type::F32; 4]);
+    }
+    Some(vec![lower_parameter_type(shape)?])
+}
+
+fn is_matrix_fragment_shape(shape: &MirTypeShape) -> bool {
+    is_trusted_adt_shape(shape, TrustedDeviceItem::Bf16MfmaFragment)
+        || is_trusted_adt_shape(shape, TrustedDeviceItem::F32AccumulatorFragment)
+}
+
+fn is_trusted_adt_shape(shape: &MirTypeShape, item: TrustedDeviceItem) -> bool {
+    matches!(
+        shape,
+        MirTypeShape::Adt { identity } if identity == item.canonical_path()
+    )
 }
 
 fn is_readonly_f32_slice(shape: &MirTypeShape) -> bool {
@@ -3419,6 +3652,7 @@ mod tests {
                 kind: MirFunctionKind::KernelEntry,
                 typed_profile: None,
                 frontend_contract: None,
+                matrix_frontend_abi: None,
                 arg_count: 0,
                 local_count: 4,
                 locals: vec![
@@ -3866,6 +4100,7 @@ mod tests {
                 kind: MirFunctionKind::KernelEntry,
                 typed_profile: None,
                 frontend_contract: None,
+                matrix_frontend_abi: None,
                 arg_count: argument_shapes.len(),
                 local_count: locals.len(),
                 locals,
@@ -3950,6 +4185,7 @@ mod tests {
                 kind: MirFunctionKind::KernelEntry,
                 typed_profile: None,
                 frontend_contract: None,
+                matrix_frontend_abi: None,
                 arg_count: 0,
                 local_count: 4,
                 locals: vec![
@@ -3990,6 +4226,7 @@ mod tests {
                 kind: MirFunctionKind::KernelEntry,
                 typed_profile: None,
                 frontend_contract: None,
+                matrix_frontend_abi: None,
                 arg_count: 2,
                 local_count: 5,
                 locals: vec![
@@ -4064,6 +4301,7 @@ mod tests {
                 kind: MirFunctionKind::KernelEntry,
                 typed_profile: None,
                 frontend_contract: None,
+                matrix_frontend_abi: None,
                 arg_count: 3,
                 local_count: 6,
                 locals: vec![
@@ -4136,6 +4374,7 @@ mod tests {
                 kind: MirFunctionKind::KernelEntry,
                 typed_profile: None,
                 frontend_contract: None,
+                matrix_frontend_abi: None,
                 arg_count: argument_shapes.len(),
                 local_count: locals.len(),
                 locals,
@@ -4182,6 +4421,7 @@ mod tests {
             kind,
             typed_profile: None,
             frontend_contract: None,
+            matrix_frontend_abi: None,
             arg_count,
             local_count: locals.len(),
             locals,
@@ -4202,6 +4442,7 @@ mod tests {
             frontend_contract: Some(
                 crate::collector::AuthenticatedKernelFrontendContractV1::for_test(contract),
             ),
+            matrix_frontend_abi: None,
             arg_count: 0,
             local_count: 1,
             locals: vec![local(0, MirLocalRole::Return, MirTypeShape::Unit)],

@@ -2618,6 +2618,18 @@ impl<'tcx> DeviceCollector<'tcx> {
                 None,
             ));
         };
+        if let Some(rejection) = crate::trusted_device_items::rejected_provider(self.tcx, *def_id) {
+            return Err(self.reachable_error(
+                caller,
+                &format!(
+                    "trusted-provider rejection: diagnostic item `{}` is defined by `{}` but is not bound to the reviewed `fe2o3_device` compilation unit: {}",
+                    rejection.marker,
+                    self.tcx.def_path_str(*def_id),
+                    rejection.reason,
+                ),
+                None,
+            ));
+        }
         let callee_path = self.tcx.def_path_str(*def_id);
         if callee_path.contains("::panicking::")
             || callee_path.contains("::panic_fmt")
@@ -2796,6 +2808,20 @@ impl<'tcx> DeviceCollector<'tcx> {
                 );
             }
             return Ok(());
+        }
+        if let Some(rejection) =
+            crate::trusted_device_items::rejected_provider(self.tcx, resolved.def_id())
+        {
+            return Err(self.reachable_error(
+                caller,
+                &format!(
+                    "trusted-provider rejection: diagnostic item `{}` is defined by `{}` but is not bound to the reviewed `fe2o3_device` compilation unit: {}",
+                    rejection.marker,
+                    self.tcx.def_path_str(resolved.def_id()),
+                    rejection.reason,
+                ),
+                None,
+            ));
         }
 
         if !self.tcx.is_mir_available(resolved.def_id()) {

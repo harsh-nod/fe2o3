@@ -20,10 +20,14 @@ use fe2o3_kernel_ir::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::fs;
+use std::path::Path;
 
 const FILL_KERNEL: &str = "fill";
 const VECADD_KERNEL: &str = "vecadd";
 const WORKGROUP_X: u32 = 256;
+pub(crate) const TILED_GEMM_FRONTEND_TEST_LLVM_FILE: &str =
+    "tiled_gemm_frontend_v1.imported.gfx942-xnack-.ll";
 
 const MAX_COMPILER_MODULE_ID_BYTES: usize = 256;
 const MAX_COMPILER_MODULE_SYMBOL_BYTES: usize = 256;
@@ -208,7 +212,7 @@ pub(crate) fn construct_inert_compiler_module_text_for_target_v1(
         .expect("exact gfx942 target binding is canonical");
     let llvm_ir = match (has_float_contracts, has_exact_target_binding, target) {
         (_, true, Some(target)) if target == exact_target => {
-            dialect_amdgcn::lower_compiler_module_to_gfx942_llvm_ir(module)
+            dialect_amdgcn::lower_device_module_to_gfx942_xnack_minus_llvm_ir(module)
         }
         (_, true, Some(target)) => {
             return Err(CompilerModuleConstructionError::UnsupportedTargetBinding(
@@ -809,6 +813,99 @@ pub(crate) fn prepare_fill_collection(
         name: kernel_name.to_string(),
         llvm_ir,
     }])
+}
+
+/// Retains an audited, test-only observation of the rustc-imported matrix module.
+///
+/// This writes textual LLVM IR and grants no artifact, publication, load, or
+/// execution authority. The ordinary production export gate still runs after
+/// this observation is retained.
+pub(crate) fn retain_tiled_gemm_frontend_test_llvm(
+    module: &Module,
+    directory: &Path,
+) -> Result<(), EmitError> {
+    verify_module(module).map_err(|errors| {
+        reject(format!(
+            "test-only tiled GEMM retention received invalid kernel IR: {errors}"
+        ))
+    })?;
+    let [kernel] = module.kernels.as_slice() else {
+        return Err(reject(
+            "test-only tiled GEMM retention requires exactly one kernel",
+        ));
+    };
+    if kernel.id.as_str() != "tiled_gemm_frontend_v1" || module.functions.len() != 1 {
+        return Err(reject(
+            "test-only tiled GEMM retention accepts only the exact imported frontend fixture",
+        ));
+    }
+    let llvm = dialect_amdgcn::lower_kernel_to_gfx942_xnack_minus_llvm_ir(module, &kernel.id)
+        .map_err(|errors| {
+            reject(format!(
+                "test-only tiled GEMM exact gfx942:xnack- lowering failed: {errors}"
+            ))
+        })?;
+    audit_tiled_gemm_frontend_test_llvm(&llvm)?;
+    fs::create_dir_all(directory).map_err(|error| {
+        reject(format!(
+            "cannot create test-only tiled GEMM retention directory: {error}"
+        ))
+    })?;
+    let path = directory.join(TILED_GEMM_FRONTEND_TEST_LLVM_FILE);
+    let retained =
+        format!("; TEST-ONLY RUSTC IMPORT OBSERVATION; NO ARTIFACT OR EXECUTION AUTHORITY\n{llvm}");
+    fs::write(&path, retained).map_err(|error| {
+        reject(format!(
+            "cannot retain test-only tiled GEMM LLVM observation at {}: {error}",
+            path.display()
+        ))
+    })?;
+    Ok(())
+}
+
+fn audit_tiled_gemm_frontend_test_llvm(llvm: &str) -> Result<(), EmitError> {
+    for required in [
+        "target triple = \"amdgcn-amd-amdhsa\"",
+        dialect_amdgcn::GFX942_XNACK_MINUS_DATA_LAYOUT,
+        "llvm.amdgcn.mfma.f32.16x16x16bf16.1k",
+        "\"target-cpu\"=\"gfx942\"",
+        "\"target-features\"=\"-wavefrontsize32,+wavefrontsize64,-xnack\"",
+        "\"denormal-fp-math-f32\"=\"ieee,ieee\"",
+        "\"unsafe-fp-math\"=\"false\"",
+        "\"fp-contract\"=\"off\"",
+        "fe2o3.projected-kernarg-policy.v1 sha256=",
+        "fe2o3.projected-kernarg explicit-size=32 implicit-bytes=256 segment-size=288 segment-align=8 source=compiler-policy-not-rustc-observation",
+        "fe2o3.projected-kernarg.param index=0 source=0 lane=0 type=bf16 offset=0 size=2 align=2",
+        "fe2o3.projected-kernarg.param index=7 source=1 lane=3 type=bf16 offset=14 size=2 align=2",
+        "fe2o3.projected-kernarg.param index=8 source=2 lane=0 type=f32 offset=16 size=4 align=4",
+        "fe2o3.projected-kernarg.param index=11 source=2 lane=3 type=f32 offset=28 size=4 align=4",
+        "define amdgpu_kernel void @tiled_gemm_frontend_v1(i16 %arg0, i16 %arg1, i16 %arg2, i16 %arg3, i16 %arg4, i16 %arg5, i16 %arg6, i16 %arg7, float %arg8, float %arg9, float %arg10, float %arg11)",
+    ] {
+        if !llvm.contains(required) {
+            return Err(reject(format!(
+                "test-only tiled GEMM LLVM audit is missing `{required}`"
+            )));
+        }
+    }
+    for forbidden in [
+        "DeviceMatrix",
+        "fe2o3_device",
+        "panicking",
+        "panic",
+        "unreachable",
+        "+xnack",
+        "+wavefrontsize32",
+        "fast ",
+        "matrix-frontend-physical-abi",
+        "fe2o3.kernarg",
+    ] {
+        if llvm.contains(forbidden) {
+            return Err(reject(format!(
+                "test-only tiled GEMM LLVM audit found forbidden `{forbidden}`"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn legalize_fill_body(body: &mut FunctionBody, parameters: &[Type]) -> Result<(), EmitError> {

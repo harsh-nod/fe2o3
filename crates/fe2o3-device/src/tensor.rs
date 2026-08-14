@@ -1,8 +1,12 @@
 //! Bounded target-neutral matrix fragments and LDS tile interop.
 //!
 //! V1 admits one exact profile: a full wave64 cooperates on a 16x16x16 BF16
-//! multiply with four FP32 accumulator registers per lane. Only authenticated
-//! gfx942 lowering may replace the fail-closed device intrinsic stub.
+//! multiply with four FP32 accumulator registers per lane. The managed backend
+//! replaces the fail-closed matrix stubs only after binding this reviewed crate
+//! compilation, its rustc-observed source ABI, and exact `gfx942:xnack-` policy.
+//! This is a build-observation boundary, not cryptographic package-source
+//! authentication. LDS method lowering and a complete tiled GEMM remain later
+//! frontend increments.
 
 use core::marker::PhantomData;
 
@@ -80,15 +84,16 @@ impl DeviceMatrix {
     #[inline(never)]
     #[rustc_diagnostic_item = "fe2o3_device_matrix_context_from_compiler_v1"]
     pub unsafe fn from_compiler() -> Self {
-        unreachable!("DeviceMatrix must be created by authenticated device lowering")
+        unreachable!("DeviceMatrix must be created by provider-bound device lowering")
     }
 
     /// Performs one full-wave BF16 multiply-accumulate.
     ///
     /// Every active lane must call uniformly with V1-distributed fragments.
     /// Gfx942 maps this to `llvm.amdgcn.mfma.f32.16x16x16bf16.1k` with zero
-    /// control immediates. The current Rust frontend does not yet recognize
-    /// this diagnostic item; unsupported paths retain the panic stub.
+    /// control immediates. The bounded rustc frontend recognizes this call only
+    /// for the reviewed provider and exact observed source ABI; every other path
+    /// retains the panic stub.
     ///
     /// # Safety
     ///
@@ -104,7 +109,7 @@ impl DeviceMatrix {
         accumulator: F32AccumulatorFragment,
     ) -> F32AccumulatorFragment {
         let _ = (self, lhs, rhs, accumulator);
-        unreachable!("matrix operation requires authenticated gfx942 wave64 lowering")
+        unreachable!("matrix operation requires provider-bound gfx942 wave64 lowering")
     }
 
     #[cfg(test)]

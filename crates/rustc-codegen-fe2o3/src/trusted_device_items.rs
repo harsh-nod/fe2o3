@@ -1,25 +1,47 @@
 //! Semantic identities recognized by device lowering.
 //!
-//! Recognition starts from a rustc [`DefId`]. Each semantic item in the genuine
-//! `fe2o3-device` crate carries a unique `rustc_diagnostic_item` marker. The
-//! backend asks rustc for the marker's resolved [`DefId`] and requires exact
-//! equality with the candidate definition. Paths carried by imported MIR are
-//! used for diagnostics and typed IR symbol names only.
+//! Recognition starts from a rustc [`DefId`]. Diagnostic-item equality is only
+//! accepted after the provider definition is anchored to the reviewed sibling
+//! `fe2o3-device` source tree used to build this backend. The imported matrix
+//! record binds that source identity, rustc's observed stable crate ID and full
+//! crate hash, and the managed Cargo metadata observation.
 //!
-//! This is a compiler dependency trust boundary, not package authentication.
-//! A substituted dependency can copy these internal markers. Reproducible
-//! dependency resolution and artifact provenance must authenticate the crate
-//! that provides them.
+//! This remains a compiler build-observation boundary, not cryptographic
+//! package authentication. A publisher signature or transparency-log identity
+//! must be checked before the managed build when that stronger claim is needed.
 
 use rustc_hir::def_id::{DefId, LOCAL_CRATE};
 use rustc_hir::lang_items::LangItem;
 use rustc_middle::ty::{TyCtxt, TyKind};
 use rustc_span::Symbol;
+use sha2::{Digest as _, Sha256};
 
 use dialect_amdgcn::{
     DeviceMathDiagnosticItem, DeviceValueDiagnosticItem, Fe2o3DeviceDiagnosticItem,
 };
 use fe2o3_kernel_ir::{NarrowFloatFormat, WidenedFloatBinaryOp};
+
+const CARGO_METADATA_BUILD_OBSERVATION_ENV_V2: &str = "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2";
+
+const MATRIX_PROVIDER_SOURCE_IDENTITY_DOMAIN_V2: &[u8] =
+    b"FE2O3/MATRIX-PROVIDER-SOURCE-IDENTITY/V2\0";
+const REVIEWED_FE2O3_DEVICE_SOURCE_ROOT: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../fe2o3-device/src");
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ReviewedMatrixProviderObservationV2 {
+    pub(crate) crate_name: String,
+    pub(crate) stable_crate_id: u64,
+    pub(crate) crate_hash: [u8; 16],
+    pub(crate) cargo_metadata_build_observation: [u8; 32],
+    pub(crate) source_identity: [u8; 32],
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct RejectedTrustedProvider {
+    pub(crate) marker: &'static str,
+    pub(crate) reason: String,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TrustedHalfOperation {
@@ -84,6 +106,11 @@ pub(crate) enum TrustedDeviceItem {
     Gfx942WorkgroupExclusiveScanSum,
     Gfx942BarrierArrive,
     Gfx942BarrierWait,
+    DeviceMatrix,
+    DeviceMatrixFromCompiler,
+    Bf16MfmaFragment,
+    F32AccumulatorFragment,
+    DeviceMatrixMultiplyAccumulate,
     DeviceValue(DeviceValueDiagnosticItem),
     DeviceMath(DeviceMathDiagnosticItem),
     HalfOperation(TrustedHalfOperation),
@@ -231,6 +258,31 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         TrustedDeviceItem::Gfx942BarrierWait,
         "fe2o3_device_gfx942_barrier_wait_v1",
         "fe2o3_device::sync::gfx942_barrier_wait",
+    ),
+    (
+        TrustedDeviceItem::DeviceMatrix,
+        "fe2o3_device_matrix_context_v1",
+        "fe2o3_device::DeviceMatrix",
+    ),
+    (
+        TrustedDeviceItem::DeviceMatrixFromCompiler,
+        "fe2o3_device_matrix_context_from_compiler_v1",
+        "fe2o3_device::DeviceMatrix::from_compiler",
+    ),
+    (
+        TrustedDeviceItem::Bf16MfmaFragment,
+        "fe2o3_device_bf16_mfma_fragment_v1",
+        "fe2o3_device::Bf16MfmaFragment",
+    ),
+    (
+        TrustedDeviceItem::F32AccumulatorFragment,
+        "fe2o3_device_f32_accumulator_fragment_v1",
+        "fe2o3_device::F32AccumulatorFragment",
+    ),
+    (
+        TrustedDeviceItem::DeviceMatrixMultiplyAccumulate,
+        "fe2o3_device_matrix_mfma_bf16_f32_m16n16k16_v1",
+        "fe2o3_device::DeviceMatrix::multiply_accumulate",
     ),
     (
         TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VMovB32),
@@ -385,12 +437,26 @@ impl TrustedDeviceItem {
     }
 }
 
-pub(crate) fn classify(tcx: TyCtxt<'_>, def_id: DefId) -> Option<TrustedDeviceItem> {
-    if def_id.krate == LOCAL_CRATE {
-        return None;
-    }
+pub(crate) fn definition(tcx: TyCtxt<'_>, item: TrustedDeviceItem) -> Option<DefId> {
+    let marker = TRUSTED_ITEMS
+        .iter()
+        .find_map(|(candidate, marker, _)| (*candidate == item).then_some(*marker))
+        .or_else(|| match item {
+            TrustedDeviceItem::DeviceValue(value) => {
+                HALF_MATH_DIAGNOSTIC_ITEMS.iter().find_map(|(marker, _)| {
+                    (dialect_amdgcn::recognize_fe2o3_device_diagnostic_item(marker)
+                        == Some(Fe2o3DeviceDiagnosticItem::Value(value)))
+                    .then_some(*marker)
+                })
+            }
+            _ => None,
+        })?;
+    let def_id = tcx.get_diagnostic_item(Symbol::intern(marker))?;
+    (classify(tcx, def_id) == Some(item)).then_some(def_id)
+}
 
-    TRUSTED_ITEMS
+pub(crate) fn classify(tcx: TyCtxt<'_>, def_id: DefId) -> Option<TrustedDeviceItem> {
+    let direct = TRUSTED_ITEMS
         .iter()
         .find_map(|(item, marker, _)| {
             (tcx.get_diagnostic_item(Symbol::intern(marker)) == Some(def_id)).then_some(*item)
@@ -409,8 +475,147 @@ pub(crate) fn classify(tcx: TyCtxt<'_>, def_id: DefId) -> Option<TrustedDeviceIt
                     Fe2o3DeviceDiagnosticItem::Math(math) => TrustedDeviceItem::DeviceMath(math),
                 })
             })
+        });
+    if let Some(item) = direct {
+        return provider_rule(tcx, def_id, item).is_ok().then_some(item);
+    }
+    classify_half_operation(tcx, def_id).map(TrustedDeviceItem::HalfOperation)
+}
+
+pub(crate) fn rejected_provider_marker(tcx: TyCtxt<'_>, def_id: DefId) -> Option<&'static str> {
+    rejected_provider(tcx, def_id).map(|rejection| rejection.marker)
+}
+
+pub(crate) fn rejected_provider(tcx: TyCtxt<'_>, def_id: DefId) -> Option<RejectedTrustedProvider> {
+    let (item, marker) = TRUSTED_ITEMS
+        .iter()
+        .find_map(|(item, marker, _)| {
+            (tcx.get_diagnostic_item(Symbol::intern(marker)) == Some(def_id))
+                .then_some((*item, *marker))
         })
-        .or_else(|| classify_half_operation(tcx, def_id).map(TrustedDeviceItem::HalfOperation))
+        .or_else(|| {
+            HALF_MATH_DIAGNOSTIC_ITEMS.iter().find_map(|(marker, _)| {
+                if tcx.get_diagnostic_item(Symbol::intern(marker)) != Some(def_id) {
+                    return None;
+                }
+                let recognized = dialect_amdgcn::recognize_fe2o3_device_diagnostic_item(marker)?;
+                let item = match recognized {
+                    Fe2o3DeviceDiagnosticItem::Value(value) => {
+                        TrustedDeviceItem::DeviceValue(value)
+                    }
+                    Fe2o3DeviceDiagnosticItem::Math(math) => TrustedDeviceItem::DeviceMath(math),
+                };
+                Some((item, *marker))
+            })
+        })?;
+    provider_rule(tcx, def_id, item)
+        .err()
+        .map(|reason| RejectedTrustedProvider { marker, reason })
+}
+
+fn provider_rule(tcx: TyCtxt<'_>, def_id: DefId, item: TrustedDeviceItem) -> Result<(), String> {
+    if matrix_provider_bound_item(item) {
+        reviewed_matrix_provider_observation(tcx, def_id).map(|_| ())
+    } else {
+        named_external_provider(tcx, def_id.krate).map(|_| ())
+    }
+}
+
+const fn matrix_provider_bound_item(item: TrustedDeviceItem) -> bool {
+    matches!(
+        item,
+        TrustedDeviceItem::DeviceMatrix
+            | TrustedDeviceItem::DeviceMatrixFromCompiler
+            | TrustedDeviceItem::Bf16MfmaFragment
+            | TrustedDeviceItem::F32AccumulatorFragment
+            | TrustedDeviceItem::DeviceMatrixMultiplyAccumulate
+    )
+}
+
+fn named_external_provider(
+    tcx: TyCtxt<'_>,
+    crate_num: rustc_hir::def_id::CrateNum,
+) -> Result<String, String> {
+    if crate_num == LOCAL_CRATE {
+        return Err("provider is the local compilation crate".to_owned());
+    }
+    let crate_name = tcx.crate_name(crate_num).as_str().to_owned();
+    if crate_name != "fe2o3_device" {
+        return Err(format!("provider crate name is `{crate_name}`"));
+    }
+    Ok(crate_name)
+}
+
+pub(crate) fn reviewed_matrix_provider_observation(
+    tcx: TyCtxt<'_>,
+    provider_definition: DefId,
+) -> Result<ReviewedMatrixProviderObservationV2, String> {
+    let crate_num = provider_definition.krate;
+    let crate_name = named_external_provider(tcx, crate_num)?;
+    let stable_crate_id = tcx.stable_crate_id(crate_num).as_u64();
+    let source_identity = reviewed_matrix_source_identity(tcx, provider_definition)?;
+    let cargo_metadata_build_observation =
+        decode_sha256_environment(CARGO_METADATA_BUILD_OBSERVATION_ENV_V2)?;
+    Ok(ReviewedMatrixProviderObservationV2 {
+        crate_name,
+        stable_crate_id,
+        crate_hash: tcx.crate_hash(crate_num).as_u128().to_le_bytes(),
+        cargo_metadata_build_observation,
+        source_identity,
+    })
+}
+
+fn reviewed_matrix_source_identity(tcx: TyCtxt<'_>, def_id: DefId) -> Result<[u8; 32], String> {
+    let file_name = tcx
+        .sess
+        .source_map()
+        .span_to_filename(tcx.def_span(def_id))
+        .prefer_local_unconditionally()
+        .to_string_lossy()
+        .into_owned();
+    let source = std::fs::canonicalize(&file_name).map_err(|error| {
+        format!("provider source file `{file_name}` is unavailable to the managed build: {error}")
+    })?;
+    let reviewed_root =
+        std::fs::canonicalize(REVIEWED_FE2O3_DEVICE_SOURCE_ROOT).map_err(|error| {
+            format!(
+                "reviewed fe2o3-device source root is unavailable to the managed build: {error}"
+            )
+        })?;
+    let relative = source.strip_prefix(&reviewed_root).map_err(|_| {
+        format!(
+            "provider source file `{}` is outside the reviewed fe2o3-device source root",
+            source.display()
+        )
+    })?;
+    let source_bytes = std::fs::read(&source).map_err(|error| {
+        format!(
+            "provider source file `{}` cannot be observed by the managed build: {error}",
+            source.display()
+        )
+    })?;
+    let relative = relative.to_string_lossy();
+    let mut hasher = Sha256::new();
+    hasher.update(MATRIX_PROVIDER_SOURCE_IDENTITY_DOMAIN_V2);
+    hasher.update((relative.len() as u64).to_le_bytes());
+    hasher.update(relative.as_bytes());
+    hasher.update((source_bytes.len() as u64).to_le_bytes());
+    hasher.update(source_bytes);
+    Ok(hasher.finalize().into())
+}
+
+fn decode_sha256_environment(name: &str) -> Result<[u8; 32], String> {
+    let value = std::env::var(name).map_err(|_| format!("managed build omitted {name}"))?;
+    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(format!("managed build supplied malformed {name}"));
+    }
+    let mut digest = [0_u8; 32];
+    for (output, pair) in digest.iter_mut().zip(value.as_bytes().chunks_exact(2)) {
+        let text = std::str::from_utf8(pair).expect("ASCII hex is UTF-8");
+        *output = u8::from_str_radix(text, 16)
+            .map_err(|_| format!("managed build supplied malformed {name}"))?;
+    }
+    Ok(digest)
 }
 
 fn half_math_path(item: Fe2o3DeviceDiagnosticItem) -> &'static str {
@@ -574,6 +779,11 @@ mod tests {
             TrustedDeviceItem::Gfx942WorkgroupExclusiveScanSum,
             TrustedDeviceItem::Gfx942BarrierArrive,
             TrustedDeviceItem::Gfx942BarrierWait,
+            TrustedDeviceItem::DeviceMatrix,
+            TrustedDeviceItem::DeviceMatrixFromCompiler,
+            TrustedDeviceItem::Bf16MfmaFragment,
+            TrustedDeviceItem::F32AccumulatorFragment,
+            TrustedDeviceItem::DeviceMatrixMultiplyAccumulate,
             TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VMovB32),
             TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VAddU32),
             TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VSubU32),

@@ -9,6 +9,7 @@ use fe2o3_artifacts::{
     AbiLayout, BlockSize, Capability, Dimensions, Endianness, IdentityText, LaunchContract,
     PointerWidth, TargetIdentity,
 };
+use fe2o3_kernel_ir::MatrixOperation;
 use fe2o3_rustc_front::{
     FrontendLaunchBoundsV1, FrontendWorkgroupDimensionsV1, KernelFrontendContractV1,
 };
@@ -21,6 +22,559 @@ const S09_CRATE_NAME: &str = "fe2o3_typed_alias_spoof";
 const S09_MODULE_PATH: &str = "general_genuine";
 const S09_LOGICAL_NAME: &str = "alpha";
 const S09_EXPORT_NAME: &str = "alpha";
+
+fn matrix_frontend_binding(
+    function: &Function,
+) -> Option<&fe2o3_kernel_ir::MatrixFrontendBindingV2> {
+    operations(function)
+        .into_iter()
+        .find_map(|operation| match &operation.kind {
+            OperationKind::Matrix(matrix) => matrix.frontend_binding.as_ref(),
+            _ => None,
+        })
+}
+
+#[test]
+fn exact_genuine_matrix_call_lowers_to_the_existing_gfx942_mfma_contract() {
+    let module = translate_and_verify_for_target(
+        &MirModule {
+            functions: vec![matrix_frontend_function()],
+        },
+        &AmdGpuTarget::new("gfx942:xnack-"),
+    )
+    .expect("exact matrix frontend slice");
+
+    assert_eq!(
+        module.kernels[0].workgroup_size,
+        Some(WorkgroupSize::new(64, 1, 1))
+    );
+    let function = function(&module, "tests::tiled_gemm_frontend_v1");
+    assert_eq!(
+        function.signature.parameters,
+        [vec![Type::Scalar(ScalarType::Bf16); 8], vec![Type::F32; 4]].concat()
+    );
+    let matrix = operations(function)
+        .into_iter()
+        .find_map(|operation| match &operation.kind {
+            OperationKind::Matrix(matrix) => Some(matrix),
+            _ => None,
+        })
+        .expect("one matrix operation");
+    assert_eq!(
+        matrix.kind,
+        MatrixOperation::multiply_accumulate(
+            [ValueId(0), ValueId(1), ValueId(2), ValueId(3)],
+            [ValueId(4), ValueId(5), ValueId(6), ValueId(7)],
+            [ValueId(8), ValueId(9), ValueId(10), ValueId(11)],
+        )
+        .kind
+    );
+    let frontend = matrix.frontend_binding.as_ref().expect("rustc ABI binding");
+
+    let generic = dialect_amdgcn::lower_kernel_to_gfx942_llvm_ir(&module, &module.kernels[0].id)
+        .expect_err("generic gfx942 lowering must not erase exact xnack-minus identity");
+    assert!(generic.to_string().contains("gfx942:xnack-"), "{generic}");
+    let llvm =
+        dialect_amdgcn::lower_kernel_to_gfx942_xnack_minus_llvm_ir(&module, &module.kernels[0].id)
+            .expect("exact dialect matrix validation and lowering");
+    assert!(llvm.contains("llvm.amdgcn.mfma.f32.16x16x16bf16.1k"));
+    assert!(llvm.contains("-wavefrontsize32,+wavefrontsize64,-xnack"));
+    assert!(llvm.contains("\"fp-contract\"=\"off\""));
+    assert!(llvm.contains(dialect_amdgcn::GFX942_XNACK_MINUS_DATA_LAYOUT));
+    assert!(llvm.contains("fe2o3.projected-kernarg-policy.v1 sha256="));
+    assert!(llvm.contains(
+        "fe2o3.projected-kernarg explicit-size=32 implicit-bytes=256 segment-size=288 segment-align=8 source=compiler-policy-not-rustc-observation"
+    ));
+    assert!(!llvm.contains("rustc-observed evidence"));
+    let target = fe2o3_kernel_ir::gfx942_xnack_minus_target_capability();
+    let abi = frontend.capabilities();
+    for capabilities in [
+        &module.required_capabilities,
+        &module.kernels[0].required_capabilities,
+        &function.required_capabilities,
+    ] {
+        assert!(capabilities.contains(&target));
+        assert!(abi.iter().all(|binding| capabilities.contains(binding)));
+    }
+}
+
+#[test]
+fn matrix_frontend_rejects_arity_argument_result_receiver_and_identity_substitutions() {
+    let exact = matrix_frontend_function();
+
+    let mut wrong_arity = exact.clone();
+    matrix_call_mut(&mut wrong_arity).operands.pop();
+    assert_matrix_error(wrong_arity, "expects 4 operand(s), found 3");
+
+    let mut wrong_lhs = exact.clone();
+    wrong_lhs.locals[1].ty = imported(matrix_shape(TrustedDeviceItem::F32AccumulatorFragment));
+    assert_matrix_error(
+        wrong_lhs,
+        "matrix frontend ABI requires a kernel entry with exact",
+    );
+
+    let mut wrong_result = exact.clone();
+    wrong_result.locals[6].ty = imported(matrix_shape(TrustedDeviceItem::Bf16MfmaFragment));
+    assert_matrix_error(
+        wrong_result,
+        "matrix multiply-accumulate destination must have exact type",
+    );
+
+    let mut forged_receiver = exact.clone();
+    matrix_call_mut(&mut forged_receiver).operands[0] = operand(1);
+    assert_matrix_error(
+        forged_receiver,
+        "DeviceMatrix receiver must be an exact unprojected &DeviceMatrix",
+    );
+
+    let mut local_marker_spoof = exact;
+    *matrix_call_mut(&mut local_marker_spoof).callee = Some(MirCallee::untrusted_for_test(
+        TrustedDeviceItem::DeviceMatrixMultiplyAccumulate.canonical_path(),
+    ));
+    assert_matrix_error(
+        local_marker_spoof,
+        "local5 is a Rust aggregate, not one kernel IR value",
+    );
+}
+
+#[test]
+fn matrix_frontend_rejects_malformed_reference_propagation_and_receiver_places() {
+    let mut mutable_destination = matrix_frontend_function();
+    mutable_destination.locals[5].ty = imported(MirTypeShape::Reference {
+        pointee: Box::new(matrix_shape(TrustedDeviceItem::DeviceMatrix)),
+        mutable: true,
+    });
+    assert_matrix_error(
+        mutable_destination,
+        "DeviceMatrix autoref requires an unprojected DeviceMatrix source and exact unprojected &DeviceMatrix destination",
+    );
+
+    let mut projected_destination = matrix_frontend_function();
+    projected_destination.blocks[1].statements[0]
+        .destination
+        .as_mut()
+        .unwrap()
+        .projection
+        .push(MirProjectionElem::Field(0));
+    assert_matrix_error(
+        projected_destination,
+        "DeviceMatrix autoref requires an unprojected DeviceMatrix source and exact unprojected &DeviceMatrix destination",
+    );
+
+    let mut projected_source = matrix_frontend_function();
+    let MirOperandRef::Place(source) = &mut projected_source.blocks[1].statements[0].operands[0]
+    else {
+        unreachable!()
+    };
+    source.projection.push(MirProjectionElem::Field(0));
+    assert_matrix_error(
+        projected_source,
+        "DeviceMatrix autoref requires an unprojected DeviceMatrix source and exact unprojected &DeviceMatrix destination",
+    );
+
+    let mut projected_receiver = matrix_frontend_function();
+    let MirOperandRef::Place(receiver) = &mut matrix_call_mut(&mut projected_receiver).operands[0]
+    else {
+        unreachable!()
+    };
+    receiver.projection.push(MirProjectionElem::Deref);
+    assert_matrix_error(
+        projected_receiver,
+        "DeviceMatrix receiver must be an exact unprojected &DeviceMatrix",
+    );
+}
+
+#[test]
+fn matrix_frontend_rejects_missing_or_mutated_source_abi_and_projection() {
+    let mut missing = matrix_frontend_function();
+    missing.matrix_frontend_abi = None;
+    assert_matrix_error(
+        missing,
+        "matrix fragment flattening requires a rustc-bound source ABI observation",
+    );
+
+    let mut layout = matrix_frontend_function();
+    layout
+        .matrix_frontend_abi
+        .as_mut()
+        .unwrap()
+        .observed_source
+        .lhs_layout
+        .size_bytes = 9;
+    assert_matrix_error(layout, "source ABI observation digest mismatch");
+
+    let mut provider_content = matrix_frontend_function();
+    provider_content
+        .matrix_frontend_abi
+        .as_mut()
+        .unwrap()
+        .observed_source
+        .provider
+        .crate_hash[0] ^= 1;
+    assert_matrix_error(provider_content, "source ABI observation digest mismatch");
+
+    let mut provider_source = matrix_frontend_function();
+    provider_source
+        .matrix_frontend_abi
+        .as_mut()
+        .unwrap()
+        .observed_source
+        .provider
+        .source_identity[0] ^= 1;
+    assert_matrix_error(provider_source, "source ABI observation digest mismatch");
+
+    let mut method_fn_abi = matrix_frontend_function();
+    method_fn_abi
+        .matrix_frontend_abi
+        .as_mut()
+        .unwrap()
+        .observed_source
+        .method_abi
+        .can_unwind = true;
+    assert_matrix_error(method_fn_abi, "source ABI observation digest mismatch");
+
+    let mut source_structure = matrix_frontend_function();
+    source_structure
+        .matrix_frontend_abi
+        .as_mut()
+        .unwrap()
+        .observed_source
+        .method_source_structure[0] = crate::mir_import::MatrixSourceTypeRoleV2::Bf16Fragment;
+    assert_matrix_error(source_structure, "source ABI observation digest mismatch");
+
+    let mut kernarg = matrix_frontend_function();
+    kernarg
+        .matrix_frontend_abi
+        .as_mut()
+        .unwrap()
+        .projected_kernarg
+        .parameters[8]
+        .offset = 18;
+    assert_matrix_error(kernarg, "projected kernarg policy differs");
+
+    let mut kernarg_segment = matrix_frontend_function();
+    kernarg_segment
+        .matrix_frontend_abi
+        .as_mut()
+        .unwrap()
+        .projected_kernarg
+        .kernarg_segment_size = 32;
+    assert_matrix_error(kernarg_segment, "projected kernarg policy differs");
+
+    let mut explicit_size = matrix_frontend_function();
+    explicit_size
+        .matrix_frontend_abi
+        .as_mut()
+        .unwrap()
+        .projected_kernarg
+        .explicit_argument_size = 34;
+    assert_matrix_error(explicit_size, "projected kernarg policy differs");
+
+    let mut kernarg_alignment = matrix_frontend_function();
+    kernarg_alignment
+        .matrix_frontend_abi
+        .as_mut()
+        .unwrap()
+        .projected_kernarg
+        .kernarg_segment_alignment = 4;
+    assert_matrix_error(kernarg_alignment, "projected kernarg policy differs");
+
+    let mut digest = matrix_frontend_function();
+    digest.matrix_frontend_abi.as_mut().unwrap().digest[0] ^= 1;
+    assert_matrix_error(digest, "source ABI observation digest mismatch");
+
+    let errors = translate_and_verify_for_target_with_policy(
+        &MirModule {
+            functions: vec![matrix_frontend_function()],
+        },
+        &AmdGpuTarget::new("gfx942:xnack-"),
+        StrictFloatPolicy::CustomLlvmPipeline,
+    )
+    .expect_err("custom LLVM pipeline must not enter matrix lowering");
+    assert!(
+        errors
+            .to_string()
+            .contains("rejects custom -Cllvm-args and -Cpasses"),
+        "{errors}"
+    );
+}
+
+#[test]
+fn exact_dialect_rejects_target_and_abi_binding_mutations() {
+    let module = translate_and_verify_for_target(
+        &MirModule {
+            functions: vec![matrix_frontend_function()],
+        },
+        &AmdGpuTarget::new("gfx942:xnack-"),
+    )
+    .expect("exact matrix frontend IR");
+    let target = fe2o3_kernel_ir::gfx942_xnack_minus_target_capability();
+    let abi = matrix_frontend_binding(&module.functions[0])
+        .expect("matrix frontend binding")
+        .capabilities();
+
+    for owner in 0..3 {
+        let mut mutated = module.clone();
+        match owner {
+            0 => {
+                mutated.required_capabilities.remove(&target);
+            }
+            1 => {
+                mutated.kernels[0].required_capabilities.remove(&target);
+            }
+            2 => {
+                mutated.functions[0].required_capabilities.remove(&target);
+            }
+            _ => unreachable!(),
+        }
+        let errors = dialect_amdgcn::lower_kernel_to_gfx942_xnack_minus_llvm_ir(
+            &mutated,
+            &mutated.kernels[0].id,
+        )
+        .expect_err("missing exact target binding");
+        assert!(errors.to_string().contains("requires"), "{errors}");
+    }
+
+    let mut wrong_abi = module;
+    wrong_abi.kernels[0].required_capabilities.remove(&abi[0]);
+    let errors = dialect_amdgcn::lower_kernel_to_gfx942_xnack_minus_llvm_ir(
+        &wrong_abi,
+        &wrong_abi.kernels[0].id,
+    )
+    .expect_err("missing source ABI binding");
+    assert!(
+        errors.to_string().contains("digests must be bound"),
+        "{errors}"
+    );
+}
+
+#[test]
+fn matrix_frontend_rejects_every_non_exact_target_and_non_kernel_placement() {
+    for target in [
+        "gfx942",
+        "gfx942:xnack+",
+        "gfx942:sramecc+:xnack-",
+        "gfx942:xnack-:sramecc+",
+        "gfx941:xnack-",
+        "gfx950:xnack-",
+        "gfx1100",
+    ] {
+        let errors = translate_and_verify_for_target(
+            &MirModule {
+                functions: vec![matrix_frontend_function()],
+            },
+            &AmdGpuTarget::new(target),
+        )
+        .expect_err("non-exact matrix target");
+        assert!(
+            errors
+                .to_string()
+                .contains("requires the exact gfx942:xnack- one-wave 64x1x1 kernel context"),
+            "target {target}: {errors}"
+        );
+    }
+
+    let mut helper = matrix_frontend_function();
+    helper.kind = MirFunctionKind::InternalHelper;
+    let errors = translate_and_verify_for_target(
+        &MirModule {
+            functions: vec![helper],
+        },
+        &AmdGpuTarget::new("gfx942:xnack-"),
+    )
+    .expect_err("matrix operation in a non-kernel helper");
+    assert!(
+        errors
+            .to_string()
+            .contains("matrix frontend ABI requires a kernel entry")
+    );
+
+    let errors = translate_and_verify_for_target(
+        &MirModule {
+            functions: vec![matrix_frontend_function_with_workgroup(128)],
+        },
+        &AmdGpuTarget::new("gfx942:xnack-"),
+    )
+    .expect_err("two-wave matrix workgroup");
+    assert!(
+        errors
+            .to_string()
+            .contains("one-wave 64x1x1 kernel context")
+    );
+}
+
+#[test]
+fn divergent_matrix_placement_is_rejected_by_the_existing_amdgcn_validator() {
+    let mut module = translate_and_verify_for_target(
+        &MirModule {
+            functions: vec![matrix_frontend_function()],
+        },
+        &AmdGpuTarget::new("gfx942:xnack-"),
+    )
+    .expect("exact matrix frontend IR");
+    let abi = matrix_frontend_binding(&module.functions[0])
+        .expect("matrix frontend binding")
+        .capabilities();
+    for capability in &abi {
+        module.required_capabilities.remove(capability);
+        module.kernels[0].required_capabilities.remove(capability);
+    }
+    let function = &mut module.functions[0];
+    for capability in &abi {
+        function.required_capabilities.remove(capability);
+    }
+    function
+        .signature
+        .parameters
+        .push(Type::Scalar(ScalarType::Bool));
+    let body = function.body.as_mut().unwrap();
+    for operation in body
+        .blocks
+        .iter_mut()
+        .flat_map(|block| &mut block.operations)
+    {
+        if let OperationKind::Matrix(matrix) = &mut operation.kind {
+            matrix.frontend_binding = None;
+        }
+    }
+    body.parameters.push(ValueId(16));
+    let matrix_operations = std::mem::take(&mut body.blocks[1].operations);
+    body.blocks[1].terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(16),
+        then_target: BlockId(3),
+        then_arguments: Vec::new(),
+        else_target: BlockId(2),
+        else_arguments: Vec::new(),
+    });
+    let mut divergent = BasicBlock::new(BlockId(3));
+    divergent.operations = matrix_operations;
+    divergent.terminator = Some(Terminator::Branch {
+        target: BlockId(2),
+        arguments: Vec::new(),
+    });
+    body.blocks.push(divergent);
+
+    let errors =
+        dialect_amdgcn::lower_kernel_to_gfx942_xnack_minus_llvm_ir(&module, &module.kernels[0].id)
+            .expect_err("divergent matrix placement");
+    assert!(errors.to_string().contains("convergent matrix"), "{errors}");
+}
+
+fn matrix_frontend_function() -> MirFunction {
+    matrix_frontend_function_with_workgroup(64)
+}
+
+fn matrix_frontend_function_with_workgroup(workgroup_x: u32) -> MirFunction {
+    let dimensions = FrontendWorkgroupDimensionsV1::new([workgroup_x, 1, 1]).unwrap();
+    let launch = FrontendLaunchBoundsV1::new(Some(dimensions), Some(dimensions), None).unwrap();
+    let frontend_contract = Some(
+        crate::collector::AuthenticatedKernelFrontendContractV1::for_test(
+            KernelFrontendContractV1::new(Some(launch), None).unwrap(),
+        ),
+    );
+    let matrix = matrix_shape(TrustedDeviceItem::DeviceMatrix);
+    MirFunction {
+        export_name: "tiled_gemm_frontend_v1".to_string(),
+        rust_path: "tests::tiled_gemm_frontend_v1".to_string(),
+        kind: MirFunctionKind::KernelEntry,
+        typed_profile: None,
+        arg_count: 3,
+        local_count: 7,
+        locals: vec![
+            local(0, MirLocalRole::Return, MirTypeShape::Unit),
+            local(
+                1,
+                MirLocalRole::Arg,
+                matrix_shape(TrustedDeviceItem::Bf16MfmaFragment),
+            ),
+            local(
+                2,
+                MirLocalRole::Arg,
+                matrix_shape(TrustedDeviceItem::Bf16MfmaFragment),
+            ),
+            local(
+                3,
+                MirLocalRole::Arg,
+                matrix_shape(TrustedDeviceItem::F32AccumulatorFragment),
+            ),
+            local(4, MirLocalRole::Temp, matrix.clone()),
+            local(
+                5,
+                MirLocalRole::Temp,
+                MirTypeShape::Reference {
+                    pointee: Box::new(matrix),
+                    mutable: false,
+                },
+            ),
+            local(
+                6,
+                MirLocalRole::Temp,
+                matrix_shape(TrustedDeviceItem::F32AccumulatorFragment),
+            ),
+        ],
+        blocks: vec![
+            block(
+                0,
+                Vec::new(),
+                call(
+                    TrustedDeviceItem::DeviceMatrixFromCompiler,
+                    Vec::new(),
+                    4,
+                    1,
+                ),
+            ),
+            block(
+                1,
+                vec![assign(0, place(5), vec![operand(4)], MirRvalueKind::Ref)],
+                call(
+                    TrustedDeviceItem::DeviceMatrixMultiplyAccumulate,
+                    vec![operand(5), operand(1), operand(2), operand(3)],
+                    6,
+                    2,
+                ),
+            ),
+            block(2, Vec::new(), MirTerminatorKind::Return),
+        ],
+        frontend_contract,
+        matrix_frontend_abi: Some(crate::mir_import::MatrixFrontendAbiV2::canonical_for_test()),
+    }
+}
+
+fn matrix_shape(item: TrustedDeviceItem) -> MirTypeShape {
+    MirTypeShape::Adt {
+        identity: item.canonical_path().to_string(),
+    }
+}
+
+struct MatrixCallMut<'a> {
+    callee: &'a mut Option<MirCallee>,
+    operands: &'a mut Vec<MirOperandRef>,
+}
+
+fn matrix_call_mut(function: &mut MirFunction) -> MatrixCallMut<'_> {
+    let MirTerminatorKind::Call {
+        callee, operands, ..
+    } = &mut function.blocks[1]
+        .terminator
+        .as_mut()
+        .expect("matrix call")
+        .kind
+    else {
+        unreachable!("matrix fixture block must end in a call")
+    };
+    MatrixCallMut { callee, operands }
+}
+
+fn assert_matrix_error(function: MirFunction, expected: &str) {
+    let errors = translate_and_verify_for_target(
+        &MirModule {
+            functions: vec![function],
+        },
+        &AmdGpuTarget::new("gfx942:xnack-"),
+    )
+    .expect_err("matrix substitution must fail closed");
+    assert!(errors.to_string().contains(expected), "{errors}");
+}
 
 #[derive(Debug)]
 struct S09SealedOwnerPathFixture {
@@ -204,7 +758,7 @@ fn alpha_zeta_share_semantic_helper_lowering_and_emit_fmul_fadd() {
         )));
     }
 
-    let llvm = dialect_amdgcn::lower_compiler_module_to_gfx942_llvm_ir(&module)
+    let llvm = dialect_amdgcn::lower_device_module_to_gfx942_xnack_minus_llvm_ir(&module)
         .expect("gfx942 compiler-module LLVM");
     assert!(llvm.contains("fmul float"), "{llvm}");
     assert_eq!(llvm.matches("fadd float").count(), 2, "{llvm}");
@@ -1041,6 +1595,7 @@ fn s09_alpha(rust_path: &str) -> MirFunction {
             block(7, vec![], MirTerminatorKind::Unreachable),
         ],
         frontend_contract: None,
+        matrix_frontend_abi: None,
     }
 }
 
@@ -1253,6 +1808,7 @@ fn kernel(
             block(6, Vec::new(), MirTerminatorKind::Unreachable),
         ],
         frontend_contract: None,
+        matrix_frontend_abi: None,
     }
 }
 

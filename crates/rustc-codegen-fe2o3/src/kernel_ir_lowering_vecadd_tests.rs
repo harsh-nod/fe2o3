@@ -210,6 +210,7 @@ fn vecadd_fixture() -> MirModule {
             kind: MirFunctionKind::KernelEntry,
             typed_profile: None,
             frontend_contract: None,
+            matrix_frontend_abi: None,
             arg_count: 3,
             local_count: 17,
             locals: vec![
