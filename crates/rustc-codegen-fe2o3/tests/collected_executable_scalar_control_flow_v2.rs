@@ -19,7 +19,9 @@ use std::time::{Duration, Instant};
 
 use fe2o3_artifact_transaction::{
     BuildInvocation, BuildSession, ProducerIdentity, begin_build_attempt,
+    consume_compiler_module_handoff_v1,
 };
+use fe2o3_compiler_ffi::CompilerModuleHandoffV2;
 use sha2::{Digest as _, Sha256};
 
 const PIPELINE: &str = "collected-executable-scalar-control-flow-v2";
@@ -30,6 +32,7 @@ const BUILD_HELPER_ENV: &str = "FE2O3_SCALAR_CF_ISOLATED_BUILD_HELPER";
 const BUILD_HELPER_SOCKET_ENV: &str = "FE2O3_SCALAR_CF_BUILD_SOCKET_FD";
 const BUILD_HELPER_WORKSPACE_ENV: &str = "FE2O3_SCALAR_CF_BUILD_WORKSPACE";
 const BUILD_HELPER_MOUNT_ENV: &str = "FE2O3_SCALAR_CF_BUILD_MOUNT";
+const SCALAR_GEMM_HANDOFF_OUTPUT_ENV: &str = "FE2O3_SCALAR_GEMM_V1_HANDOFF_OUTPUT";
 const BACKEND_BUILD_TIMEOUT: Duration = Duration::from_secs(600);
 const COMPILER_TIMEOUT: Duration = Duration::from_secs(120);
 const TERMINATION_GRACE: Duration = Duration::from_secs(2);
@@ -782,8 +785,36 @@ fn compile_scalar_gemm(
     unsafe {
         command.pre_exec(move || set_close_on_exec(backend_descriptor, false));
     }
-    run_bounded(&mut command, COMPILER_TIMEOUT, "scalar GEMM rustc")
-        .expect("compile scalar GEMM fixture within deadline")
+    let result = run_bounded(&mut command, COMPILER_TIMEOUT, "scalar GEMM rustc")
+        .expect("compile scalar GEMM fixture within deadline");
+    if result.status.success()
+        && let Some(destination) = std::env::var_os(SCALAR_GEMM_HANDOFF_OUTPUT_ENV)
+    {
+        let consumed =
+            consume_compiler_module_handoff_v1(&output.0.join("artifacts"), &producer, attempt)
+                .expect(
+                    "consume exact scalar GEMM frontend handoff for configured integration output",
+                );
+        let decoded = CompilerModuleHandoffV2::decode(consumed.bytes())
+            .expect("frontend published one canonical Worker V2 handoff");
+        assert_eq!(decoded.canonical_bytes(), consumed.bytes());
+        assert!(
+            std::str::from_utf8(decoded.module_bytes())
+                .expect("scalar compiler module is textual LLVM")
+                .contains(".fe2o3.scalar-auth.v1")
+        );
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(destination)
+            .expect("create fresh scalar GEMM frontend handoff output");
+        file.write_all(consumed.bytes())
+            .expect("write exact scalar GEMM frontend handoff");
+        file.sync_all()
+            .expect("sync exact scalar GEMM frontend handoff");
+    }
+    result
 }
 
 fn assert_scalar_gemm_published_no_handoff(output: &TestOutputDir) {

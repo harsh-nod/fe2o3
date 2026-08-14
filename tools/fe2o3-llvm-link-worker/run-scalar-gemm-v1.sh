@@ -78,9 +78,24 @@ if "$llvm_readelf" --dynamic-table "$worker" | grep -qi comgr; then
   exit 70
 fi
 
+frontend_handoff="$build_dir/scalar-gemm-v1.frontend-handoff-v2"
+FE2O3_SCALAR_GEMM_V1_HANDOFF_OUTPUT="$frontend_handoff" \
+RUSTC="$rustc_bin" \
+LD_LIBRARY_PATH="$toolchain_lib" \
+  "$cargo_bin" test --manifest-path "$repo_root/Cargo.toml" --locked \
+    -p rustc-codegen-fe2o3 \
+    --test collected_executable_scalar_control_flow_v2 \
+    scalar_gemm_v1_frontend_receipt_selects_only_the_reviewed_full_portable_mir \
+    -- --exact
+if [[ ! -s $frontend_handoff || -L $frontend_handoff ]]; then
+  printf 'error: rustc frontend integration did not produce a regular scalar GEMM handoff\n' >&2
+  exit 70
+fi
+
 FE2O3_SCALAR_GEMM_V1_WORKER="$worker" \
 FE2O3_SCALAR_GEMM_V1_WORKER_BUILD_ID="$worker_build_id" \
 FE2O3_SCALAR_GEMM_V1_LLVM_BUILD_ID="$llvm_build_id" \
+FE2O3_SCALAR_GEMM_V1_HANDOFF="$frontend_handoff" \
 FE2O3_SCALAR_GEMM_V1_OUTPUT="$output_hsaco" \
 RUSTC="$rustc_bin" \
 LD_LIBRARY_PATH="$toolchain_lib" \
@@ -96,6 +111,7 @@ if [[ ! -s $output_hsaco || -L $output_hsaco ]]; then
 fi
 "$llvm_readelf" --file-headers --notes --dyn-symbols "$output_hsaco"
 sha256sum "$worker" "$output_hsaco"
+sha256sum "$frontend_handoff"
 printf 'worker build identity: %s\n' "$worker_build_id"
 printf 'LLVM build identity: %s\n' "$llvm_build_id"
 printf 'scalar GEMM gfx942:xnack- COV6 artifact: PASS (%s)\n' "$output_hsaco"
