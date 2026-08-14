@@ -3,11 +3,14 @@ set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 proof="$script_dir/verus/tiled_gemm_host_contract.rs"
+lds_proof="$script_dir/verus/lds_tiled_slice1.rs"
 a_wrong="$script_dir/verus/negative/a_register_wrong.rs"
 b_wrong="$script_dir/verus/negative/b_register_wrong.rs"
 accumulator_wrong="$script_dir/verus/negative/accumulator_register_wrong.rs"
 xor4_wrong="$script_dir/verus/negative/xor4_wrong.rs"
 xor2_permutation_wrong="$script_dir/verus/negative/xor2_permutation_wrong.rs"
+lds_epoch_wrong="$script_dir/verus/negative/lds_epoch_wrong.rs"
+lds_product_wrong="$script_dir/verus/negative/lds_product_wrong.rs"
 version_file="$script_dir/verus/VERUS_VERSION"
 sha256_file="$script_dir/verus/VERUS_SHA256"
 
@@ -177,6 +180,23 @@ if ! grep -Fq 'verification results:: 73 verified, 0 errors' "$positive_log"; th
 fi
 printf 'PASS: tiled GEMM host contract verified (73 verified, 0 errors)\n'
 
+lds_positive_log="$tmp_dir/lds-positive.log"
+if run_verus "$lds_proof" >"$lds_positive_log" 2>&1; then
+    :
+else
+    status=$?
+    printf 'FAIL: Slice 1 LDS tiled GEMM proof did not verify (status %s)\n' \
+        "$status" >&2
+    cat "$lds_positive_log" >&2
+    exit 1
+fi
+if ! grep -Fq 'verification results:: 93 verified, 0 errors' "$lds_positive_log"; then
+    printf 'FAIL: Slice 1 LDS proof emitted an unexpected verification summary\n' >&2
+    cat "$lds_positive_log" >&2
+    exit 1
+fi
+printf 'PASS: Slice 1 LDS tiled GEMM model verified (93 verified, 0 errors)\n'
+
 run_rejected() {
     name=$1
     file=$2
@@ -211,7 +231,7 @@ run_rejected() {
         cat "$log" >&2
         exit 1
     fi
-    printf 'XFAIL: %s rejected at the official-layout correspondence check\n' "$name"
+    printf 'XFAIL: %s rejected at the expected proof obligation\n' "$name"
 }
 
 run_rejected a_register_wrong "$a_wrong" 'mutated_a_matches_official_table_v1'
@@ -223,5 +243,11 @@ run_rejected xor4_wrong "$xor4_wrong" 'mutated_xor4_matches_official_storage_v1'
 run_rejected xor2_permutation_wrong \
     "$xor2_permutation_wrong" \
     'mutated_two_bit_permutation_matches_official_xor2_v1'
+run_rejected lds_epoch_wrong \
+    "$lds_epoch_wrong" \
+    'mutated_cross_epoch_read_is_initialized_v1'
+run_rejected lds_product_wrong \
+    "$lds_product_wrong" \
+    'mutated_lds_result_has_extra_unit_v1'
 
-printf 'Verus fixture run passed: 23 public theorems, 5 expected rejections\n'
+printf 'Verus fixture run passed: host and LDS models, 7 expected rejections\n'
