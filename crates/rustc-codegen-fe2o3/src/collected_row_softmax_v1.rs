@@ -68,6 +68,7 @@ const COMPILER_SEMANTICS_DOMAIN_V1: &[u8] = b"fe2o3.row-softmax.compiler-semanti
 const CARGO_METADATA_OBSERVATION_DOMAIN_V1: &[u8] =
     b"fe2o3.row-softmax.cargo-metadata-observation.v1";
 const CARGO_METADATA_BUILD_OBSERVATION_ENV_V2: &str = "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2";
+const EXPECTED_COMPILER_CLOSURE_SHA256_ENV_V1: &str = "FE2O3_EXPECTED_COMPILER_CLOSURE_SHA256_V1";
 const CARGO_METADATA_BUILD_OBSERVATION_DOMAIN_V2: &[u8] =
     b"FE2O3/CARGO-METADATA-BUILD-OBSERVATION/V2\0";
 const ROW_SOFTMAX_EFFECTIVE_RUSTC_ARGV_DOMAIN_V1: &[u8] =
@@ -199,6 +200,7 @@ struct ManagedBuildAuthorityV1 {
     session: [u8; 16],
     invocation: [u8; 32],
     cargo_metadata_transcript: [u8; 32],
+    compiler_closure: [u8; 32],
     broker_executable: [u8; 32],
 }
 
@@ -210,6 +212,9 @@ impl ManagedBuildAuthorityV1 {
         if self.cargo_metadata_transcript == [0; 32] {
             return Err("row-softmax wrapper Cargo metadata transcript is absent");
         }
+        if self.compiler_closure == [0; 32] {
+            return Err("row-softmax compiler closure identity is absent");
+        }
         Ok(())
     }
 
@@ -220,6 +225,7 @@ impl ManagedBuildAuthorityV1 {
             session: [0x11; 16],
             invocation: [0x22; 32],
             cargo_metadata_transcript,
+            compiler_closure: exact_compiler_closure_policy_for_test().identity_sha256(),
             broker_executable: [0x04; 32],
         }
     }
@@ -1034,12 +1040,16 @@ fn require_managed_build_authority(
 ) -> Result<ManagedBuildAuthorityV1, CollectedRowSoftmaxErrorV1> {
     let observed = decode_lower_sha256_environment(CARGO_METADATA_BUILD_OBSERVATION_ENV_V2)
         .map_err(|detail| CollectedRowSoftmaxErrorV1::CompilerSemantics { detail })?;
+    let compiler_closure =
+        require_nonzero_lower_sha256_environment(EXPECTED_COMPILER_CLOSURE_SHA256_ENV_V1)
+            .map_err(|detail| CollectedRowSoftmaxErrorV1::CompilerSemantics { detail })?;
     let observed_invocation = observe_managed_wrapper_effective_rustc_argv()?;
     let broker_executable = consume_brokered_invocation_authority(attempt, observed_invocation)?;
     admit_managed_build_authority(
         attempt,
         metadata,
         observed,
+        compiler_closure,
         observed_invocation,
         broker_executable,
     )
@@ -1049,6 +1059,7 @@ fn admit_managed_build_authority(
     attempt: fe2o3_artifact_transaction::BuildAttempt,
     metadata: &CargoMetadataBuildObservationV1,
     observed_metadata_transcript: [u8; 32],
+    compiler_closure: [u8; 32],
     observed_invocation: [u8; 32],
     broker_executable: [u8; 32],
 ) -> Result<ManagedBuildAuthorityV1, CollectedRowSoftmaxErrorV1> {
@@ -1076,6 +1087,7 @@ fn admit_managed_build_authority(
         session: *attempt.session().as_bytes(),
         invocation: observed_invocation,
         cargo_metadata_transcript: observed_metadata_transcript,
+        compiler_closure,
         broker_executable,
     };
     authority
@@ -1566,6 +1578,33 @@ fn decode_lower_sha256_environment(name: &str) -> Result<[u8; 32], String> {
     let mut digest = [0; 32];
     for (output, pair) in digest.iter_mut().zip(value.as_bytes().chunks_exact(2)) {
         *output = (lower_hex_value(pair[0]) << 4) | lower_hex_value(pair[1]);
+    }
+    Ok(digest)
+}
+
+fn require_nonzero_lower_sha256_environment(name: &str) -> Result<[u8; 32], String> {
+    let value = std::env::var(name).ok();
+    decode_required_nonzero_lower_sha256(name, value.as_deref())
+}
+
+fn decode_required_nonzero_lower_sha256(
+    name: &str,
+    encoded: Option<&str>,
+) -> Result<[u8; 32], String> {
+    let encoded = encoded.ok_or_else(|| format!("managed wrapper omitted {name}"))?;
+    if encoded.len() != 64
+        || !encoded
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(format!("managed wrapper supplied malformed {name}"));
+    }
+    let mut digest = [0; 32];
+    for (output, pair) in digest.iter_mut().zip(encoded.as_bytes().chunks_exact(2)) {
+        *output = (lower_hex_value(pair[0]) << 4) | lower_hex_value(pair[1]);
+    }
+    if digest == [0; 32] {
+        return Err(format!("managed wrapper supplied zero {name}"));
     }
     Ok(digest)
 }
@@ -2123,6 +2162,10 @@ fn collected_authority_transcript(authority: &RowSoftmaxFrontendAuthorityV1) -> 
     );
     push_transcript_field(
         &mut transcript,
+        &authority.managed_build_authority.compiler_closure,
+    );
+    push_transcript_field(
+        &mut transcript,
         &authority.managed_build_authority.broker_executable,
     );
     assert!(
@@ -2285,6 +2328,15 @@ pub(crate) fn exact_frontend_receipt_for_test() -> RowSoftmaxFrontendReceiptV1 {
 }
 
 #[cfg(test)]
+fn exact_compiler_closure_policy_for_test()
+-> fe2o3_hsaco_finalize::RowSoftmaxV1CompilerClosurePolicyV1 {
+    fe2o3_hsaco_finalize::RowSoftmaxV1CompilerClosurePolicyV1::new(
+        [0x05; 32], [0x06; 32], [0x07; 32], [0x08; 32],
+    )
+    .expect("exact row test compiler closure")
+}
+
+#[cfg(test)]
 pub(crate) fn exact_authority_policy_for_test()
 -> fe2o3_hsaco_finalize::RowSoftmaxV1AuthorityPolicyV1 {
     use fe2o3_hsaco_finalize::{RowSoftmaxV1AuthorityPolicyV1, RowSoftmaxV1ProviderManifestV1};
@@ -2320,6 +2372,7 @@ pub(crate) fn exact_authority_policy_for_test()
         manifest,
         attempt,
         authority.managed_build_authority.broker_executable,
+        exact_compiler_closure_policy_for_test(),
     )
     .expect("exact row test authority policy")
 }
@@ -2644,17 +2697,43 @@ mod tests {
         .expect("canonical test attempt");
 
         assert!(
-            admit_managed_build_authority(attempt, &metadata, transcript, [0x44; 32], [0x66; 32],)
-                .is_ok()
+            admit_managed_build_authority(
+                attempt, &metadata, transcript, [0x77; 32], [0x44; 32], [0x66; 32],
+            )
+            .is_ok()
         );
-        let mismatch =
-            admit_managed_build_authority(attempt, &metadata, transcript, [0x55; 32], [0x66; 32])
-                .expect_err("substituted observed argv must fail");
+        let mismatch = admit_managed_build_authority(
+            attempt, &metadata, transcript, [0x77; 32], [0x55; 32], [0x66; 32],
+        )
+        .expect_err("substituted observed argv must fail");
         assert!(matches!(
             mismatch,
             CollectedRowSoftmaxErrorV1::CompilerSemantics { detail }
                 if detail.contains("effective rustc argv does not match build attempt invocation")
         ));
+    }
+
+    #[test]
+    fn compiler_closure_environment_is_canonical_nonzero_and_exact() {
+        let name = EXPECTED_COMPILER_CLOSURE_SHA256_ENV_V1;
+        let canonical = "01".repeat(32);
+        assert_eq!(
+            decode_required_nonzero_lower_sha256(name, Some(&canonical)).unwrap(),
+            [1; 32]
+        );
+        for malformed in [
+            None,
+            Some("00".repeat(32)),
+            Some("01".repeat(31)),
+            Some(format!("{}00", "01".repeat(32))),
+            Some("AA".repeat(32)),
+            Some(format!("{}\n", "01".repeat(32))),
+        ] {
+            assert!(
+                decode_required_nonzero_lower_sha256(name, malformed.as_deref()).is_err(),
+                "accepted {malformed:?}"
+            );
+        }
     }
 
     #[derive(Debug, Eq, PartialEq)]
@@ -3069,7 +3148,7 @@ mod tests {
         let baseline = collected_authority_commitment(
             baseline_receipt.authority.as_ref().expect("test authority"),
         );
-        let mutations: [ReceiptMutation; 23] = [
+        let mutations: [ReceiptMutation; 24] = [
             (
                 |value| value.portable_mir_semantic_commitment[0] ^= 1,
                 "portable MIR",
@@ -3148,6 +3227,10 @@ mod tests {
             (
                 |value| value.managed_build_authority.cargo_metadata_transcript[0] ^= 1,
                 "wrapper Cargo metadata transcript",
+            ),
+            (
+                |value| value.managed_build_authority.compiler_closure = [0; 32],
+                "managed wrapper build attempt",
             ),
             (
                 |value| value.managed_build_authority.broker_executable = [0; 32],

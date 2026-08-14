@@ -12,6 +12,8 @@ const METADATA_DOMAIN: &[u8] = b"fe2o3.row-softmax.cargo-metadata-observation.v1
 const METADATA_TRANSCRIPT_DOMAIN: &[u8] = b"FE2O3/CARGO-METADATA-BUILD-OBSERVATION/V2\0";
 const PROVIDER_DOMAIN: &[u8] = b"FE2O3/ROW-SOFTMAX-PROVIDER-AUTHORITY/V1\0";
 const PROVIDER_SOURCE_DOMAIN: &[u8] = b"FE2O3/ROW-SOFTMAX-PROVIDER-SOURCE-IDENTITY/V1\0";
+const COMPILER_CLOSURE_DOMAIN: &[u8] = b"fe2o3-compiler-closure-identity-v1\0";
+const RUSTC_EXECUTABLE_RUNTIME_DOMAIN: &[u8] = b"fe2o3-rustc-executable-runtime-identity-v1\0";
 const ABI_DOMAIN: &[u8] = b"fe2o3.row-softmax.abi-binding.v1";
 const LAUNCH_DOMAIN: &[u8] = b"fe2o3.row-softmax.launch-binding.v1";
 const CORRESPONDENCE_DOMAIN: &[u8] = b"fe2o3.row-softmax.reviewed-correspondence.v1";
@@ -152,12 +154,80 @@ impl RowSoftmaxV1ProviderManifestV1 {
     }
 }
 
+/// Independently provisioned content pins for the complete compiler closure.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RowSoftmaxV1CompilerClosurePolicyV1 {
+    cargo_executable_sha256: [u8; 32],
+    rustc_executable_sha256: [u8; 32],
+    rustc_runtime_tree_sha256: [u8; 32],
+    codegen_backend_sha256: [u8; 32],
+    identity_sha256: [u8; 32],
+}
+
+impl RowSoftmaxV1CompilerClosurePolicyV1 {
+    pub fn new(
+        cargo_executable_sha256: [u8; 32],
+        rustc_executable_sha256: [u8; 32],
+        rustc_runtime_tree_sha256: [u8; 32],
+        codegen_backend_sha256: [u8; 32],
+    ) -> Result<Self, RowSoftmaxV1AuthorityPolicyErrorV1> {
+        for (field, value) in [
+            ("Cargo executable identity", cargo_executable_sha256),
+            ("rustc executable identity", rustc_executable_sha256),
+            (
+                "complete rustc runtime-tree identity",
+                rustc_runtime_tree_sha256,
+            ),
+            ("codegen backend identity", codegen_backend_sha256),
+        ] {
+            if value == [0; 32] {
+                return Err(invalid_policy(field));
+            }
+        }
+        let rustc_identity_sha256 =
+            rustc_executable_runtime_identity(rustc_executable_sha256, rustc_runtime_tree_sha256);
+        let identity_sha256 = compiler_closure_identity(
+            cargo_executable_sha256,
+            rustc_identity_sha256,
+            codegen_backend_sha256,
+        );
+        Ok(Self {
+            cargo_executable_sha256,
+            rustc_executable_sha256,
+            rustc_runtime_tree_sha256,
+            codegen_backend_sha256,
+            identity_sha256,
+        })
+    }
+
+    pub const fn cargo_executable_sha256(self) -> [u8; 32] {
+        self.cargo_executable_sha256
+    }
+
+    pub const fn rustc_executable_sha256(self) -> [u8; 32] {
+        self.rustc_executable_sha256
+    }
+
+    pub const fn rustc_runtime_tree_sha256(self) -> [u8; 32] {
+        self.rustc_runtime_tree_sha256
+    }
+
+    pub const fn codegen_backend_sha256(self) -> [u8; 32] {
+        self.codegen_backend_sha256
+    }
+
+    pub const fn identity_sha256(self) -> [u8; 32] {
+        self.identity_sha256
+    }
+}
+
 /// Independent build and provider policy required to interpret a row authority transcript.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RowSoftmaxV1AuthorityPolicyV1 {
     provider: RowSoftmaxV1ProviderManifestV1,
     attempt: BuildAttempt,
     broker_executable_sha256: [u8; 32],
+    compiler_closure: RowSoftmaxV1CompilerClosurePolicyV1,
 }
 
 impl RowSoftmaxV1AuthorityPolicyV1 {
@@ -165,6 +235,7 @@ impl RowSoftmaxV1AuthorityPolicyV1 {
         provider: RowSoftmaxV1ProviderManifestV1,
         attempt: BuildAttempt,
         broker_executable_sha256: [u8; 32],
+        compiler_closure: RowSoftmaxV1CompilerClosurePolicyV1,
     ) -> Result<Self, RowSoftmaxV1AuthorityPolicyErrorV1> {
         if attempt.session().as_bytes() == &[0; 16]
             || attempt.invocation().as_bytes() == &[0; 32]
@@ -176,11 +247,16 @@ impl RowSoftmaxV1AuthorityPolicyV1 {
             provider,
             attempt,
             broker_executable_sha256,
+            compiler_closure,
         })
     }
 
     pub(crate) const fn attempt(&self) -> BuildAttempt {
         self.attempt
+    }
+
+    pub const fn compiler_closure(&self) -> RowSoftmaxV1CompilerClosurePolicyV1 {
+        self.compiler_closure
     }
 }
 
@@ -342,6 +418,10 @@ pub(crate) fn validate_row_softmax_v1_authority_transcript(
     decoder.expect("build session", policy.attempt.session().as_bytes())?;
     decoder.expect("build invocation", policy.attempt.invocation().as_bytes())?;
     decoder.expect("managed Cargo metadata transcript", &metadata_transcript)?;
+    decoder.expect(
+        "compiler closure identity",
+        &policy.compiler_closure.identity_sha256,
+    )?;
     decoder.expect("broker executable", &policy.broker_executable_sha256)?;
     if !decoder.finished() {
         return Err(malformed_transcript("trailing fields"));
@@ -397,6 +477,30 @@ fn cargo_metadata_transcript(generated: &[u8]) -> [u8; 32] {
         digest.update((token.len() as u64).to_le_bytes());
         digest.update(token);
     }
+    digest.finalize().into()
+}
+
+fn rustc_executable_runtime_identity(
+    rustc_executable_sha256: [u8; 32],
+    rustc_runtime_tree_sha256: [u8; 32],
+) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(RUSTC_EXECUTABLE_RUNTIME_DOMAIN);
+    digest.update(rustc_executable_sha256);
+    digest.update(rustc_runtime_tree_sha256);
+    digest.finalize().into()
+}
+
+fn compiler_closure_identity(
+    cargo_executable_sha256: [u8; 32],
+    rustc_identity_sha256: [u8; 32],
+    codegen_backend_sha256: [u8; 32],
+) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(COMPILER_CLOSURE_DOMAIN);
+    digest.update(cargo_executable_sha256);
+    digest.update(rustc_identity_sha256);
+    digest.update(codegen_backend_sha256);
     digest.finalize().into()
 }
 
@@ -491,6 +595,10 @@ mod tests {
     const GENERATED: &[u8] = b"0123456789abcdef";
     const DESCRIPTOR: [u8; 32] = [0x51; 32];
     const BROKER: [u8; 32] = [0x52; 32];
+    const CARGO: [u8; 32] = [0x53; 32];
+    const RUSTC: [u8; 32] = [0x54; 32];
+    const RUSTC_RUNTIME: [u8; 32] = [0x55; 32];
+    const BACKEND: [u8; 32] = [0x56; 32];
 
     fn attempt() -> BuildAttempt {
         BuildAttempt::from_env_value(
@@ -517,7 +625,22 @@ mod tests {
     }
 
     fn policy() -> RowSoftmaxV1AuthorityPolicyV1 {
-        RowSoftmaxV1AuthorityPolicyV1::new(manifest(), attempt(), BROKER).unwrap()
+        RowSoftmaxV1AuthorityPolicyV1::new(
+            manifest(),
+            attempt(),
+            BROKER,
+            compiler_closure_policy(CARGO, RUSTC, RUSTC_RUNTIME, BACKEND),
+        )
+        .unwrap()
+    }
+
+    fn compiler_closure_policy(
+        cargo: [u8; 32],
+        rustc: [u8; 32],
+        runtime: [u8; 32],
+        backend: [u8; 32],
+    ) -> RowSoftmaxV1CompilerClosurePolicyV1 {
+        RowSoftmaxV1CompilerClosurePolicyV1::new(cargo, rustc, runtime, backend).unwrap()
     }
 
     fn canonical_fields() -> Vec<Vec<u8>> {
@@ -569,6 +692,7 @@ mod tests {
             attempt().session().as_bytes().to_vec(),
             attempt().invocation().as_bytes().to_vec(),
             metadata_transcript.to_vec(),
+            policy().compiler_closure.identity_sha256.to_vec(),
             BROKER.to_vec(),
         ]);
         fields
@@ -584,11 +708,18 @@ mod tests {
     }
 
     fn validate(transcript: &[u8]) -> Result<(), RowSoftmaxV1AuthorityPolicyErrorV1> {
+        validate_with_policy(transcript, policy())
+    }
+
+    fn validate_with_policy(
+        transcript: &[u8],
+        policy: RowSoftmaxV1AuthorityPolicyV1,
+    ) -> Result<(), RowSoftmaxV1AuthorityPolicyErrorV1> {
         validate_row_softmax_v1_authority_transcript(
             transcript,
             DESCRIPTOR,
             domain_commitment(EXPONENTIAL_DOMAIN, EXPONENTIAL_BOUNDARY),
-            policy(),
+            policy,
         )
     }
 
@@ -605,6 +736,87 @@ mod tests {
             changed[index][0] ^= 1;
             assert!(validate(&encode(&changed)).is_err(), "field {index}");
         }
+    }
+
+    #[test]
+    fn compiler_closure_identity_matches_the_canonical_domains() {
+        let rustc_identity = Sha256::digest(
+            [
+                RUSTC_EXECUTABLE_RUNTIME_DOMAIN,
+                RUSTC.as_slice(),
+                RUSTC_RUNTIME.as_slice(),
+            ]
+            .concat(),
+        );
+        let expected = Sha256::digest(
+            [
+                COMPILER_CLOSURE_DOMAIN,
+                CARGO.as_slice(),
+                rustc_identity.as_slice(),
+                BACKEND.as_slice(),
+            ]
+            .concat(),
+        );
+        assert_eq!(
+            policy().compiler_closure.identity_sha256,
+            expected.as_slice()
+        );
+    }
+
+    #[test]
+    fn every_compiler_closure_component_is_nonzero_and_commitment_bound() {
+        let baseline = policy().compiler_closure.identity_sha256;
+        let substitutions = [
+            compiler_closure_policy([0x63; 32], RUSTC, RUSTC_RUNTIME, BACKEND),
+            compiler_closure_policy(CARGO, [0x64; 32], RUSTC_RUNTIME, BACKEND),
+            compiler_closure_policy(CARGO, RUSTC, [0x65; 32], BACKEND),
+            compiler_closure_policy(CARGO, RUSTC, RUSTC_RUNTIME, [0x66; 32]),
+        ];
+        for substitution in substitutions {
+            assert_ne!(substitution.identity_sha256, baseline);
+            let substituted_policy =
+                RowSoftmaxV1AuthorityPolicyV1::new(manifest(), attempt(), BROKER, substitution)
+                    .unwrap();
+            assert!(
+                validate_with_policy(&encode(&canonical_fields()), substituted_policy).is_err()
+            );
+        }
+        for index in 0..4 {
+            let mut components = [CARGO, RUSTC, RUSTC_RUNTIME, BACKEND];
+            components[index] = [0; 32];
+            assert!(
+                RowSoftmaxV1CompilerClosurePolicyV1::new(
+                    components[0],
+                    components[1],
+                    components[2],
+                    components[3],
+                )
+                .is_err(),
+                "component {index}"
+            );
+        }
+    }
+
+    #[test]
+    fn compiler_closure_transcript_absence_zero_corruption_and_trailing_fail_closed() {
+        let fields = canonical_fields();
+        let closure_index = fields.len() - 2;
+
+        let mut absent = fields.clone();
+        absent.remove(closure_index);
+        assert!(validate(&encode(&absent)).is_err());
+
+        let mut zero = fields.clone();
+        zero[closure_index] = vec![0; 32];
+        assert!(validate(&encode(&zero)).is_err());
+
+        let mut corrupted = fields.clone();
+        corrupted[closure_index][0] ^= 1;
+        assert!(validate(&encode(&corrupted)).is_err());
+
+        let mut trailing = encode(&fields);
+        trailing.extend_from_slice(&0_u64.to_le_bytes());
+        assert!(validate(&trailing).is_err());
     }
 
     #[test]

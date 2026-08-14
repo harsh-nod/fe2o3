@@ -971,9 +971,10 @@ const fn profile_mismatch(field: &'static str) -> RowSoftmaxV1DirectWorkerErrorV
 mod tests {
     use super::*;
     use crate::{
-        RowSoftmaxV1ProviderManifestV1, WORKER_REQUEST_MAGIC_V1, WORKER_RESPONSE_MAGIC_V2,
-        WORKER_RESPONSE_MAGIC_V3, WorkerEvidenceClassV1, WorkerInputV1, WorkerOutputConstraintsV1,
-        WorkerRequestV1, worker_protocol_v2::SealedWorkerRequestV2Parts,
+        RowSoftmaxV1CompilerClosurePolicyV1, RowSoftmaxV1ProviderManifestV1,
+        WORKER_REQUEST_MAGIC_V1, WORKER_RESPONSE_MAGIC_V2, WORKER_RESPONSE_MAGIC_V3,
+        WorkerEvidenceClassV1, WorkerInputV1, WorkerOutputConstraintsV1, WorkerRequestV1,
+        worker_protocol_v2::SealedWorkerRequestV2Parts,
     };
     use fe2o3_artifact_transaction::BuildAttempt;
     use fe2o3_compiler_ffi::{
@@ -1103,7 +1104,11 @@ entry:
         ];
         let provider =
             RowSoftmaxV1ProviderManifestV1::new(7, [0x41; 16], definitions, sources).unwrap();
-        RowSoftmaxV1AuthorityPolicyV1::new(provider, attempt, [0x42; 32]).unwrap()
+        let compiler_closure = RowSoftmaxV1CompilerClosurePolicyV1::new(
+            [0x43; 32], [0x44; 32], [0x45; 32], [0x46; 32],
+        )
+        .unwrap();
+        RowSoftmaxV1AuthorityPolicyV1::new(provider, attempt, [0x42; 32], compiler_closure).unwrap()
     }
 
     fn exact_worker_pins() -> RowSoftmaxV1DirectWorkerPinsV1 {

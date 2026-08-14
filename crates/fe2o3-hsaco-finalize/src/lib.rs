@@ -93,7 +93,8 @@ pub use reserved_fe2o3_symbols::{
 pub use row_softmax_authority::{
     MAX_ROW_SOFTMAX_V1_AUTHORITY_TRANSCRIPT_BYTES, MAX_ROW_SOFTMAX_V1_REVIEWED_SOURCE_BYTES,
     ROW_SOFTMAX_V1_PROVIDER_ITEM_COUNT, ROW_SOFTMAX_V1_PROVIDER_ITEMS,
-    RowSoftmaxV1AuthorityPolicyErrorV1, RowSoftmaxV1AuthorityPolicyV1, RowSoftmaxV1ProviderItemV1,
+    RowSoftmaxV1AuthorityPolicyErrorV1, RowSoftmaxV1AuthorityPolicyV1,
+    RowSoftmaxV1CompilerClosurePolicyV1, RowSoftmaxV1ProviderItemV1,
     RowSoftmaxV1ProviderManifestV1, derive_row_softmax_v1_provider_source_identity_v1,
 };
 pub use row_softmax_v1_artifact::{
