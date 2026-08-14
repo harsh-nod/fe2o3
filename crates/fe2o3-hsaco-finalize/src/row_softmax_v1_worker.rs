@@ -440,6 +440,7 @@ pub fn validate_row_softmax_v1_direct_worker_exchange_v1(
     source: &InertFirstBuildWorkerV2EvidenceV1,
     expected: RowSoftmaxV1DirectWorkerExpectationV1,
 ) -> Result<ValidatedRowSoftmaxV1DirectWorkerExchangeV1, RowSoftmaxV1DirectWorkerErrorV1> {
+    validate_evidence_attempt_binding(source.attempt(), expected)?;
     if source.handoff_identity().as_bytes() != expected.handoff_sha256() {
         return Err(profile_mismatch("consumed rustc handoff identity"));
     }
@@ -478,6 +479,18 @@ pub fn validate_row_softmax_v1_direct_worker_exchange_v1(
         return Err(profile_mismatch("linked output identity"));
     }
     Ok(validated)
+}
+
+fn validate_evidence_attempt_binding(
+    source_attempt: fe2o3_artifact_transaction::BuildAttempt,
+    expected: RowSoftmaxV1DirectWorkerExpectationV1,
+) -> Result<(), RowSoftmaxV1DirectWorkerErrorV1> {
+    if let Some(policy) = expected.authority_policy()
+        && source_attempt != policy.attempt()
+    {
+        return Err(profile_mismatch("consumed Worker evidence build attempt"));
+    }
+    Ok(())
 }
 
 /// Validates the exact exchange, then consumes it through row structural admission.
@@ -1796,6 +1809,7 @@ entry:
         assert!(!validated.proves_no_comgr_linkage());
         assert!(validated.no_comgr_requires_measured_worker_build_manifest());
     }
+
 
     #[test]
     fn dual_v3_bootstrap_and_exact_replay_are_admitted_as_one_exchange() {

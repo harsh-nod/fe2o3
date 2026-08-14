@@ -178,6 +178,10 @@ impl RowSoftmaxV1AuthorityPolicyV1 {
             broker_executable_sha256,
         })
     }
+
+    pub(crate) const fn attempt(&self) -> BuildAttempt {
+        self.attempt
+    }
 }
 
 /// Failure to construct or match an independently provisioned row authority policy.
