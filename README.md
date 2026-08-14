@@ -38,6 +38,15 @@ source path still stops before an authenticated HSACO. The
 dashboard records the exact commits, tests, target lanes, evidence strengths,
 and limitations for each Partial row.
 
+The public [tiled GEMM V1 host scaffold](examples/tiled_gemm_v1/README.md)
+adds unforgeable shape, extent, launch-geometry, and exact parsed-target
+witnesses for one `16x16x16` BF16/F32 wave64 profile. Its bitwise host evidence
+is restricted to a pinned finite BF16 corpus and is checked independently in
+debug, release, doctest, Clippy, and dedicated CI lanes. Exact target and rustc
+physical-ABI-bound matrix lowering, LDS movement, full GEMM loops, HSACO,
+hardware execution, and proofs remain open. This scaffold does not promote a
+CUDA-Oxide parity row.
+
 The intended end state is:
 
 ```text
