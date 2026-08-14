@@ -10,10 +10,10 @@ use fe2o3_build_authority::{
 };
 
 const CACHE_IDENTITY: [u8; 32] = [0xa5; 32];
-const GOLDEN_WIRE_HEX: &str = "46324155454e56310100200009000000f10000000300000000000000000000000a001000434152474f5f484f4d452f617574686f726974792f636172676f11000400434152474f5f4e45545f4f46464c494e457472756510001100434152474f5f5441524745545f4449522f617574686f726974792f7461726765740c000d004645324f335f5441524745546766783934323a786e61636b2d04000f00484f4d452f617574686f726974792f686f6d65040007004c414e47432e5554462d38060007004c435f414c4c432e5554462d3806000e00544d504449522f617574686f726974792f746d7002000300545a555443";
+const GOLDEN_WIRE_HEX: &str = "46324155454e5631010040000900000011010000030000000000000000000000a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a50a001000434152474f5f484f4d452f617574686f726974792f636172676f11000400434152474f5f4e45545f4f46464c494e457472756510001100434152474f5f5441524745545f4449522f617574686f726974792f7461726765740c000d004645324f335f5441524745546766783934323a786e61636b2d04000f00484f4d452f617574686f726974792f686f6d65040007004c414e47432e5554462d38060007004c435f414c4c432e5554462d3806000e00544d504449522f617574686f726974792f746d7002000300545a555443";
 const GOLDEN_IDENTITY: [u8; 32] = [
-    0xc6, 0x4b, 0x6a, 0xf7, 0x2d, 0xbe, 0x77, 0x39, 0x2a, 0x30, 0x8e, 0xbd, 0xbf, 0x89, 0x6a, 0x78,
-    0xa2, 0x3b, 0x08, 0x03, 0x31, 0x8a, 0x75, 0x45, 0xd3, 0x47, 0x55, 0xda, 0x71, 0xd7, 0x52, 0x2b,
+    0x3d, 0x99, 0x2a, 0x1f, 0xc6, 0x09, 0x93, 0xc4, 0xa6, 0xd7, 0xce, 0x52, 0xaf, 0x8e, 0x6e, 0x89,
+    0x96, 0xe6, 0xfd, 0x49, 0x8e, 0xf8, 0xc3, 0xf1, 0xed, 0x9c, 0xb1, 0x6d, 0xe6, 0xd7, 0x76, 0xa3,
 ];
 
 fn golden_entries() -> Vec<(Vec<u8>, Vec<u8>)> {
@@ -82,6 +82,7 @@ fn raw_wire(entries: &[(Vec<u8>, Vec<u8>)]) -> Vec<u8> {
     wire.extend_from_slice(&(total_len as u32).to_le_bytes());
     wire.extend_from_slice(&3_u32.to_le_bytes());
     wire.extend_from_slice(&[0; 8]);
+    wire.extend_from_slice(&CACHE_IDENTITY);
     for (name, value) in entries {
         wire.extend_from_slice(&(name.len() as u16).to_le_bytes());
         wire.extend_from_slice(&(value.len() as u16).to_le_bytes());
@@ -96,16 +97,16 @@ fn roundtrip_and_cross_implementation_golden_are_stable() {
     let environment = golden_environment();
     let wire = environment.encode();
 
-    assert_eq!(wire.len(), 241);
+    assert_eq!(wire.len(), 273);
     assert_eq!(hex(&wire), GOLDEN_WIRE_HEX);
     assert_eq!(&wire[..8], &AUTHORITY_CARGO_ENVIRONMENT_MAGIC_V1);
     assert_eq!(environment.identity_sha256(), GOLDEN_IDENTITY);
     assert_eq!(
-        authority_cargo_environment_identity_sha256_v1(&wire, CACHE_IDENTITY),
+        authority_cargo_environment_identity_sha256_v1(&wire),
         Ok(GOLDEN_IDENTITY)
     );
     assert_eq!(
-        decode_authority_cargo_environment_v1(&wire, CACHE_IDENTITY),
+        decode_authority_cargo_environment_v1(&wire),
         Ok(environment.clone())
     );
     assert_eq!(environment.provisioned_cargo_cache_sha256(), CACHE_IDENTITY);
@@ -197,10 +198,16 @@ fn every_valid_field_and_cache_byte_is_identity_sensitive() {
     for byte_index in 0..32 {
         let mut cache = CACHE_IDENTITY;
         cache[byte_index] ^= 1;
+        let changed = from_entries(&entries, cache).unwrap();
+        assert_ne!(changed.encode(), golden_environment().encode());
         assert_ne!(
-            from_entries(&entries, cache).unwrap().identity_sha256(),
+            changed.identity_sha256(),
             original,
             "cache byte {byte_index}"
+        );
+        assert_eq!(
+            decode_authority_cargo_environment_v1(&changed.encode()),
+            Ok(changed)
         );
     }
 }
@@ -212,7 +219,7 @@ fn every_single_wire_bit_mutation_fails_or_changes_identity() {
         for bit in 0..8 {
             let mut changed = wire.clone();
             changed[byte_index] ^= 1 << bit;
-            if let Ok(decoded) = decode_authority_cargo_environment_v1(&changed, CACHE_IDENTITY) {
+            if let Ok(decoded) = decode_authority_cargo_environment_v1(&changed) {
                 assert_eq!(decoded.encode(), changed, "byte {byte_index}, bit {bit}");
                 assert_ne!(
                     decoded.identity_sha256(),
@@ -511,13 +518,13 @@ fn wire_header_and_bounds_rejection_corpus_fails_closed() {
     let wire = golden_environment().encode();
     for length in [0, 1, 31] {
         assert_eq!(
-            decode_authority_cargo_environment_v1(&wire[..length], CACHE_IDENTITY),
+            decode_authority_cargo_environment_v1(&wire[..length]),
             Err(AuthorityCargoEnvironmentErrorV1::InvalidWireLength { actual: length })
         );
     }
     let oversized = vec![0; AUTHORITY_CARGO_ENVIRONMENT_MAX_WIRE_LEN_V1 + 1];
     assert_eq!(
-        decode_authority_cargo_environment_v1(&oversized, CACHE_IDENTITY),
+        decode_authority_cargo_environment_v1(&oversized),
         Err(AuthorityCargoEnvironmentErrorV1::InvalidWireLength {
             actual: AUTHORITY_CARGO_ENVIRONMENT_MAX_WIRE_LEN_V1 + 1,
         })
@@ -526,28 +533,28 @@ fn wire_header_and_bounds_rejection_corpus_fails_closed() {
     let mut changed = wire.clone();
     changed[0] ^= 1;
     assert_eq!(
-        decode_authority_cargo_environment_v1(&changed, CACHE_IDENTITY),
+        decode_authority_cargo_environment_v1(&changed),
         Err(AuthorityCargoEnvironmentErrorV1::InvalidMagic)
     );
 
     let mut changed = wire.clone();
     set_u16(&mut changed, 8, 2);
     assert_eq!(
-        decode_authority_cargo_environment_v1(&changed, CACHE_IDENTITY),
+        decode_authority_cargo_environment_v1(&changed),
         Err(AuthorityCargoEnvironmentErrorV1::UnsupportedVersion { actual: 2 })
     );
 
     let mut changed = wire.clone();
     set_u16(&mut changed, 10, 31);
     assert_eq!(
-        decode_authority_cargo_environment_v1(&changed, CACHE_IDENTITY),
+        decode_authority_cargo_environment_v1(&changed),
         Err(AuthorityCargoEnvironmentErrorV1::InvalidHeaderLength { actual: 31 })
     );
 
     let mut changed = wire.clone();
     set_u16(&mut changed, 12, 8);
     assert_eq!(
-        decode_authority_cargo_environment_v1(&changed, CACHE_IDENTITY),
+        decode_authority_cargo_environment_v1(&changed),
         Err(AuthorityCargoEnvironmentErrorV1::InvalidEntryCount { actual: 8 })
     );
 
@@ -555,15 +562,22 @@ fn wire_header_and_bounds_rejection_corpus_fails_closed() {
         let mut changed = wire.clone();
         changed[offset] = 1;
         assert_eq!(
-            decode_authority_cargo_environment_v1(&changed, CACHE_IDENTITY),
+            decode_authority_cargo_environment_v1(&changed),
             Err(AuthorityCargoEnvironmentErrorV1::NonzeroHeaderReserved)
         );
     }
 
     let mut changed = wire.clone();
+    changed[32..64].fill(0);
+    assert_eq!(
+        decode_authority_cargo_environment_v1(&changed),
+        Err(AuthorityCargoEnvironmentErrorV1::ZeroCargoCacheIdentity)
+    );
+
+    let mut changed = wire.clone();
     set_u32(&mut changed, 16, 240);
     assert_eq!(
-        decode_authority_cargo_environment_v1(&changed, CACHE_IDENTITY),
+        decode_authority_cargo_environment_v1(&changed),
         Err(AuthorityCargoEnvironmentErrorV1::InvalidDeclaredLength { actual: 240 })
     );
 
@@ -571,7 +585,7 @@ fn wire_header_and_bounds_rejection_corpus_fails_closed() {
         let mut changed = wire.clone();
         set_u32(&mut changed, 20, mode);
         assert_eq!(
-            decode_authority_cargo_environment_v1(&changed, CACHE_IDENTITY),
+            decode_authority_cargo_environment_v1(&changed),
             Err(AuthorityCargoEnvironmentErrorV1::InvalidMode { actual: mode })
         );
     }
@@ -579,8 +593,8 @@ fn wire_header_and_bounds_rejection_corpus_fails_closed() {
     let mut trailing = wire;
     trailing.push(0);
     assert_eq!(
-        decode_authority_cargo_environment_v1(&trailing, CACHE_IDENTITY),
-        Err(AuthorityCargoEnvironmentErrorV1::InvalidDeclaredLength { actual: 241 })
+        decode_authority_cargo_environment_v1(&trailing),
+        Err(AuthorityCargoEnvironmentErrorV1::InvalidDeclaredLength { actual: 273 })
     );
 }
 
@@ -591,21 +605,21 @@ fn malformed_duplicate_and_reordered_wire_entries_fail_closed() {
     let mut reordered = entries.clone();
     reordered.swap(0, 1);
     assert_eq!(
-        decode_authority_cargo_environment_v1(&raw_wire(&reordered), CACHE_IDENTITY),
+        decode_authority_cargo_environment_v1(&raw_wire(&reordered)),
         Err(AuthorityCargoEnvironmentErrorV1::NonCanonicalEntryOrder { index: 0 })
     );
 
     let mut duplicate = entries.clone();
     duplicate[1] = duplicate[0].clone();
     assert_eq!(
-        decode_authority_cargo_environment_v1(&raw_wire(&duplicate), CACHE_IDENTITY),
+        decode_authority_cargo_environment_v1(&raw_wire(&duplicate)),
         Err(AuthorityCargoEnvironmentErrorV1::NonCanonicalEntryOrder { index: 1 })
     );
 
     let mut wire = raw_wire(&entries);
-    set_u16(&mut wire, 32, 0);
+    set_u16(&mut wire, 64, 0);
     assert_eq!(
-        decode_authority_cargo_environment_v1(&wire, CACHE_IDENTITY),
+        decode_authority_cargo_environment_v1(&wire),
         Err(AuthorityCargoEnvironmentErrorV1::InvalidWireNameLength {
             index: 0,
             actual: 0,
@@ -613,9 +627,9 @@ fn malformed_duplicate_and_reordered_wire_entries_fail_closed() {
     );
 
     let mut wire = raw_wire(&entries);
-    set_u16(&mut wire, 34, 256);
+    set_u16(&mut wire, 66, 256);
     assert_eq!(
-        decode_authority_cargo_environment_v1(&wire, CACHE_IDENTITY),
+        decode_authority_cargo_environment_v1(&wire),
         Err(AuthorityCargoEnvironmentErrorV1::InvalidWireValueLength {
             index: 0,
             actual: 256,
@@ -627,14 +641,14 @@ fn malformed_duplicate_and_reordered_wire_entries_fail_closed() {
     let truncated_len = truncated.len() as u32;
     set_u32(&mut truncated, 16, truncated_len);
     assert_eq!(
-        decode_authority_cargo_environment_v1(&truncated, CACHE_IDENTITY),
+        decode_authority_cargo_environment_v1(&truncated),
         Err(AuthorityCargoEnvironmentErrorV1::TruncatedEntry { index: 8 })
     );
 
     let mut non_utf8_value = entries;
     non_utf8_value[0].1[0] = 0xff;
     assert_eq!(
-        decode_authority_cargo_environment_v1(&raw_wire(&non_utf8_value), CACHE_IDENTITY),
+        decode_authority_cargo_environment_v1(&raw_wire(&non_utf8_value)),
         Err(AuthorityCargoEnvironmentErrorV1::NonUtf8VariableValue {
             name: "CARGO_HOME".to_owned(),
         })

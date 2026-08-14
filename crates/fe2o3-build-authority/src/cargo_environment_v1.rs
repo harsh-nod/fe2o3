@@ -9,7 +9,7 @@ pub const AUTHORITY_CARGO_ENVIRONMENT_MAGIC_V1: [u8; 8] = *b"F2AUENV1";
 /// Authority Cargo Environment V1 wire version.
 pub const AUTHORITY_CARGO_ENVIRONMENT_VERSION_V1: u16 = 1;
 /// Exact Authority Cargo Environment V1 header length.
-pub const AUTHORITY_CARGO_ENVIRONMENT_HEADER_LEN_V1: u16 = 32;
+pub const AUTHORITY_CARGO_ENVIRONMENT_HEADER_LEN_V1: u16 = 64;
 /// Exact number of variables in the Authority Cargo Environment V1 allowlist.
 pub const AUTHORITY_CARGO_ENVIRONMENT_ENTRY_COUNT_V1: u16 = 9;
 /// Maximum encoded Authority Cargo Environment V1 byte length.
@@ -27,7 +27,6 @@ const MODE_FROZEN: u32 = 1 << 1;
 const REQUIRED_MODE: u32 = MODE_OFFLINE | MODE_FROZEN;
 const MAX_VARIABLE_NAME_LEN: usize = 64;
 const ENTRY_HEADER_LEN: usize = 4;
-const CACHE_IDENTITY_LABEL: &[u8] = b"PROVISIONED-CARGO-CACHE-SHA256\0";
 
 /// One variable in the exact Authority Cargo Environment V1 allowlist.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -303,10 +302,7 @@ impl AuthorityCargoEnvironmentV1 {
         self.provisioned_cargo_cache_sha256
     }
 
-    /// Encodes the mode and exact sorted environment map.
-    ///
-    /// The separately provisioned cache identity is deliberately not encoded as
-    /// a path or environment variable. It is mixed into [`Self::identity_sha256`].
+    /// Encodes the cache identity, mode, and exact sorted environment map.
     pub fn encode(&self) -> Vec<u8> {
         encode_authority_cargo_environment_v1(self)
     }
@@ -314,7 +310,7 @@ impl AuthorityCargoEnvironmentV1 {
     /// Computes the identity suitable for Broker V3's
     /// `cargo_environment_identity` field.
     pub fn identity_sha256(&self) -> [u8; 32] {
-        hash_environment_and_cache(&self.encode(), self.provisioned_cargo_cache_sha256)
+        hash_environment(&self.encode())
     }
 }
 
@@ -549,6 +545,7 @@ pub fn encode_authority_cargo_environment_v1(environment: &AuthorityCargoEnviron
     encoded.extend_from_slice(&(total_len as u32).to_le_bytes());
     encoded.extend_from_slice(&REQUIRED_MODE.to_le_bytes());
     encoded.extend_from_slice(&[0; 8]);
+    encoded.extend_from_slice(&environment.provisioned_cargo_cache_sha256);
     for (name, value) in entries {
         encoded.extend_from_slice(&(name.len() as u16).to_le_bytes());
         encoded.extend_from_slice(&(value.len() as u16).to_le_bytes());
@@ -559,10 +556,9 @@ pub fn encode_authority_cargo_environment_v1(environment: &AuthorityCargoEnviron
     encoded
 }
 
-/// Decodes exact sorted wire bytes using a separately supplied cache identity.
+/// Decodes exact sorted wire bytes, including the provisioned cache identity.
 pub fn decode_authority_cargo_environment_v1(
     encoded: &[u8],
-    provisioned_cargo_cache_sha256: [u8; 32],
 ) -> Result<AuthorityCargoEnvironmentV1, AuthorityCargoEnvironmentErrorV1> {
     let header_len = usize::from(AUTHORITY_CARGO_ENVIRONMENT_HEADER_LEN_V1);
     if !(header_len..=AUTHORITY_CARGO_ENVIRONMENT_MAX_WIRE_LEN_V1).contains(&encoded.len()) {
@@ -602,6 +598,9 @@ pub fn decode_authority_cargo_environment_v1(
     if mode != REQUIRED_MODE {
         return Err(AuthorityCargoEnvironmentErrorV1::InvalidMode { actual: mode });
     }
+    let provisioned_cargo_cache_sha256 = encoded[32..64]
+        .try_into()
+        .expect("fixed Authority Cargo Environment V1 header bounds");
 
     let mut cursor = header_len;
     let mut entries = Vec::with_capacity(usize::from(entry_count));
@@ -652,13 +651,9 @@ pub fn decode_authority_cargo_environment_v1(
 /// Validates wire bytes and computes the Broker V3 Cargo-environment identity.
 pub fn authority_cargo_environment_identity_sha256_v1(
     encoded: &[u8],
-    provisioned_cargo_cache_sha256: [u8; 32],
 ) -> Result<[u8; 32], AuthorityCargoEnvironmentErrorV1> {
-    decode_authority_cargo_environment_v1(encoded, provisioned_cargo_cache_sha256)?;
-    Ok(hash_environment_and_cache(
-        encoded,
-        provisioned_cargo_cache_sha256,
-    ))
+    decode_authority_cargo_environment_v1(encoded)?;
+    Ok(hash_environment(encoded))
 }
 
 fn validate_variable_name(name: &str) -> Result<(), AuthorityCargoEnvironmentErrorV1> {
@@ -791,16 +786,11 @@ fn forbidden_channel(name: &str) -> Option<ForbiddenCargoEnvironmentChannelV1> {
     None
 }
 
-fn hash_environment_and_cache(
-    encoded: &[u8],
-    provisioned_cargo_cache_sha256: [u8; 32],
-) -> [u8; 32] {
+fn hash_environment(encoded: &[u8]) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(AUTHORITY_CARGO_ENVIRONMENT_IDENTITY_DOMAIN_V1);
     digest.update((encoded.len() as u64).to_le_bytes());
     digest.update(encoded);
-    digest.update(CACHE_IDENTITY_LABEL);
-    digest.update(provisioned_cargo_cache_sha256);
     digest.finalize().into()
 }
 
