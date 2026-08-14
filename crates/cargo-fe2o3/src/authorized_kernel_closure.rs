@@ -354,6 +354,7 @@ impl AuthorizedKernelClosureV1 {
         project: &CargoProject,
         args: &[std::ffi::OsString],
         cargo: &PinnedExecutable,
+        rustc: &crate::PinnedRustc,
     ) -> Result<Self, String> {
         let mut command = cargo
             .command()
@@ -362,7 +363,9 @@ impl AuthorizedKernelClosureV1 {
             .as_command_mut()
             .args(["metadata", "--format-version", "1"])
             .args(project.authority_metadata_args(args)?)
+            .args(["--frozen", "--offline"])
             .current_dir(project.invocation_dir().child_path());
+        crate::configure_authority_cargo_child(command.as_command_mut(), rustc)?;
         let output = command
             .output()
             .map_err(|error| format!("failed to run pinned Cargo metadata: {error}"))?;

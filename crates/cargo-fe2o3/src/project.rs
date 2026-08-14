@@ -166,7 +166,12 @@ pub(crate) struct CargoProject {
 }
 
 impl CargoProject {
-    pub(crate) fn discover(args: &[OsString]) -> Result<Self, String> {
+    pub(crate) fn discover(
+        args: &[OsString],
+        pinned_cargo: Option<&crate::pinned_executable::PinnedExecutable>,
+        authority_rustc: Option<&crate::PinnedRustc>,
+        authority: bool,
+    ) -> Result<Self, String> {
         let routing = CargoRouting::parse(args)?;
         let invocation_path = std::env::current_dir()
             .map_err(|error| format!("failed to resolve the invocation directory: {error}"))?;
@@ -174,7 +179,13 @@ impl CargoProject {
             lexical_absolute(&invocation_path, Path::new("/"))?,
             "Cargo invocation directory",
         )?;
-        let output = metadata_output(&invocation_dir, &routing.metadata_args)?;
+        let output = metadata_output(
+            &invocation_dir,
+            &routing.metadata_args,
+            pinned_cargo,
+            authority_rustc,
+            authority,
+        )?;
         if !output.status.success() {
             return Err(format!(
                 "could not resolve Cargo project metadata: {}",
@@ -227,20 +238,29 @@ impl CargoProject {
         &self,
         args: &[OsString],
         key: &str,
+        pinned_cargo: &crate::pinned_executable::PinnedExecutable,
+        authority_rustc: Option<&crate::PinnedRustc>,
     ) -> Result<Option<serde_json::Value>, String> {
         let routing = CargoRouting::parse(args)?;
-        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
-        let mut command = Command::new(cargo);
-        command.args([
+        let mut command = pinned_cargo
+            .command()
+            .map_err(|error| format!("failed to prepare pinned Cargo config query: {error}"))?;
+        command.as_command_mut().args([
             "config",
             "get",
             "-Z",
             "unstable-options",
             "--format=json-value",
         ]);
-        command.args(&routing.config_args);
-        command.arg(key);
-        command.current_dir(self.invocation_dir.child_path());
+        command.as_command_mut().args(&routing.config_args);
+        if let Some(rustc) = authority_rustc {
+            command.as_command_mut().args(["--frozen", "--offline"]);
+            crate::configure_authority_cargo_child(command.as_command_mut(), rustc)?;
+        }
+        command.as_command_mut().arg(key);
+        command
+            .as_command_mut()
+            .current_dir(self.invocation_dir.child_path());
         let output = command
             .output()
             .map_err(|error| format!("failed to query Cargo configuration `{key}`: {error}"))?;
@@ -261,14 +281,19 @@ impl CargoProject {
         ))
     }
 
-    pub(crate) fn semantic_configuration(&self, args: &[OsString]) -> Result<Vec<u8>, String> {
+    pub(crate) fn semantic_configuration(
+        &self,
+        args: &[OsString],
+        pinned_cargo: &crate::pinned_executable::PinnedExecutable,
+        authority_rustc: Option<&crate::PinnedRustc>,
+    ) -> Result<Vec<u8>, String> {
         let mut snapshot = b"fe2o3-cargo-configuration-v1\0".to_vec();
         for argument in args.iter().take_while(|argument| *argument != "--") {
             append_snapshot_field(&mut snapshot, os_bytes(argument));
         }
         for key in ["build", "target", "profile"] {
             append_snapshot_field(&mut snapshot, key.as_bytes());
-            let value = self.cargo_config_value(args, key)?;
+            let value = self.cargo_config_value(args, key, pinned_cargo, authority_rustc)?;
             let encoded = serde_json::to_vec(&value).map_err(|error| {
                 format!("failed to encode Cargo configuration `{key}`: {error}")
             })?;
@@ -329,15 +354,41 @@ fn append_snapshot_field(snapshot: &mut Vec<u8>, value: &[u8]) {
 fn metadata_output(
     invocation_dir: &PinnedDirectory,
     routing_args: &[OsString],
+    pinned_cargo: Option<&crate::pinned_executable::PinnedExecutable>,
+    authority_rustc: Option<&crate::PinnedRustc>,
+    authority: bool,
 ) -> Result<Output, String> {
-    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
-    let mut command = Command::new(cargo);
-    command.args(["metadata", "--no-deps", "--format-version", "1"]);
-    command.args(routing_args);
-    command.current_dir(invocation_dir.child_path());
-    command
-        .output()
-        .map_err(|error| format!("failed to run cargo metadata: {error}"))
+    if let Some(pinned_cargo) = pinned_cargo {
+        let mut command = pinned_cargo
+            .command()
+            .map_err(|error| format!("failed to prepare pinned Cargo metadata query: {error}"))?;
+        command
+            .as_command_mut()
+            .args(["metadata", "--no-deps", "--format-version", "1"])
+            .args(routing_args)
+            .current_dir(invocation_dir.child_path());
+        if authority {
+            command.as_command_mut().args(["--frozen", "--offline"]);
+            crate::configure_authority_cargo_child(
+                command.as_command_mut(),
+                authority_rustc.ok_or_else(|| {
+                    "authority Cargo metadata has no independently pinned rustc".to_owned()
+                })?,
+            )?;
+        }
+        command
+            .output()
+            .map_err(|error| format!("failed to run pinned cargo metadata: {error}"))
+    } else {
+        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
+        let mut command = Command::new(cargo);
+        command.args(["metadata", "--no-deps", "--format-version", "1"]);
+        command.args(routing_args);
+        command.current_dir(invocation_dir.child_path());
+        command
+            .output()
+            .map_err(|error| format!("failed to run cargo metadata: {error}"))
+    }
 }
 
 fn metadata_path(record: &serde_json::Value, key: &str) -> Result<PathBuf, String> {

@@ -373,14 +373,16 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
             {
                 reject_authority_linker_arguments(compile.argv())?;
             }
-            let capability_binding = capability_broker::CapabilityBindingV2::new(
-                capability_profile,
-                worker_v2
-                    .as_ref()
-                    .map(|config| *config.identity().as_bytes()),
-                expected_rustc_sha256,
-            )
-            .map_err(BindingWrapperError::CapabilityBroker)?;
+            let capability_binding =
+                capability_broker::CapabilityBindingV2::from_environment_for_client(
+                    capability_profile,
+                    worker_v2
+                        .as_ref()
+                        .map(|config| *config.identity().as_bytes()),
+                )
+                .map_err(BindingWrapperError::CapabilityBroker)?;
+            authenticate_pinned_rustc(&pinned_rustc, capability_binding.rustc_executable_sha256())?;
+            validate_rustc_lib_tree_descriptor(capability_binding)?;
             let compiler_capabilities = CompilerCapabilities::from_environment(capability_binding)?;
             let current_dir =
                 std::env::current_dir().map_err(BindingWrapperError::CurrentDirectory)?;
@@ -669,8 +671,17 @@ fn configure_build_observation_environment(
 }
 
 fn reject_dynamic_loader_environment() -> Result<(), BindingWrapperError> {
+    let authority_sensitive = std::env::var_os("FE2O3_CODEGEN_PIPELINE").as_deref()
+        == Some(OsStr::new(ROW_SOFTMAX_V1_PIPELINE))
+        || std::env::var_os(crate::worker_v2::WORKER_V2_CONFIG_ENV).is_some();
     for (name, value) in std::env::vars_os() {
         if crate::is_dynamic_loader_injection_environment_name(&name) {
+            // Cargo itself adds LD_LIBRARY_PATH for ordinary rustc wrappers. It is not forwarded:
+            // configure_managed_rustc_loader replaces it with the retained fd 193 path. Authority
+            // profiles reject it because their protected launcher contract is fail-closed.
+            if name == OsStr::new("LD_LIBRARY_PATH") && !authority_sensitive {
+                continue;
+            }
             return Err(BindingWrapperError::BuildObservation(format!(
                 "binding wrapper rejects dynamic-loader injection variable {name:?}={value:?}"
             )));
@@ -688,17 +699,17 @@ fn configure_managed_rustc_loader(command: &mut Command) {
 }
 
 fn expected_rustc_sha256() -> Result<[u8; 32], BindingWrapperError> {
-    let value = std::env::var_os(crate::EXPECTED_RUSTC_SHA256_ENV).ok_or_else(|| {
-        BindingWrapperError::BuildObservation(format!(
-            "binding wrapper is missing {}",
-            crate::EXPECTED_RUSTC_SHA256_ENV
-        ))
+    expected_sha256(crate::EXPECTED_RUSTC_SHA256_ENV)
+}
+
+fn expected_sha256(name: &'static str) -> Result<[u8; 32], BindingWrapperError> {
+    let value = std::env::var_os(name).ok_or_else(|| {
+        BindingWrapperError::BuildObservation(format!("binding wrapper is missing {name}"))
     })?;
     let encoded = os_bytes(&value);
     if encoded.len() != 64 {
         return Err(BindingWrapperError::BuildObservation(format!(
-            "{} is not a canonical SHA-256 digest",
-            crate::EXPECTED_RUSTC_SHA256_ENV
+            "{name} is not a canonical SHA-256 digest"
         )));
     }
     let mut digest = [0_u8; 32];
@@ -710,14 +721,12 @@ fn expected_rustc_sha256() -> Result<[u8; 32], BindingWrapperError> {
         };
         let high = nibble(pair[0]).ok_or_else(|| {
             BindingWrapperError::BuildObservation(format!(
-                "{} is not a canonical SHA-256 digest",
-                crate::EXPECTED_RUSTC_SHA256_ENV
+                "{name} is not a canonical SHA-256 digest"
             ))
         })?;
         let low = nibble(pair[1]).ok_or_else(|| {
             BindingWrapperError::BuildObservation(format!(
-                "{} is not a canonical SHA-256 digest",
-                crate::EXPECTED_RUSTC_SHA256_ENV
+                "{name} is not a canonical SHA-256 digest"
             ))
         })?;
         *output = (high << 4) | low;
@@ -732,6 +741,47 @@ fn authenticate_pinned_rustc(
     if rustc.sha256() != &expected_sha256 {
         return Err(BindingWrapperError::BuildObservation(
             "Cargo selected a rustc executable that does not match the parent-pinned compiler"
+                .to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_rustc_lib_tree_descriptor(
+    binding: capability_broker::CapabilityBindingV2,
+) -> Result<(), BindingWrapperError> {
+    // SAFETY: Cargo must inherit this fixed descriptor from the parent. fstat/fcntl do not take
+    // ownership, and the descriptor remains live through the rustc transition.
+    let descriptor = unsafe { BorrowedFd::borrow_raw(RUSTC_LIBRARY_CHILD_FD) };
+    let stat = rustix::fs::fstat(descriptor).map_err(|error| {
+        BindingWrapperError::BuildObservation(format!(
+            "binding wrapper cannot inspect inherited rustc lib-tree fd {RUSTC_LIBRARY_CHILD_FD}: {error}"
+        ))
+    })?;
+    if stat.st_mode & libc::S_IFMT != libc::S_IFDIR {
+        return Err(BindingWrapperError::BuildObservation(format!(
+            "binding wrapper inherited rustc lib-tree fd {RUSTC_LIBRARY_CHILD_FD} is not a directory"
+        )));
+    }
+    let status = rustix::fs::fcntl_getfl(descriptor).map_err(|error| {
+        BindingWrapperError::BuildObservation(format!(
+            "binding wrapper cannot inspect inherited rustc lib-tree fd flags: {error}"
+        ))
+    })?;
+    if status & rustix::fs::OFlags::ACCMODE != rustix::fs::OFlags::RDONLY {
+        return Err(BindingWrapperError::BuildObservation(
+            "binding wrapper inherited rustc lib-tree descriptor is writable".to_owned(),
+        ));
+    }
+    let observed = crate::compiler_toolchain::retained_object_binding_sha256_v1(
+        &binding.compiler_closure_sha256(),
+        stat.st_dev,
+        stat.st_ino,
+        stat.st_mode,
+    );
+    if observed != binding.retained_object_binding_sha256() {
+        return Err(BindingWrapperError::BuildObservation(
+            "binding wrapper inherited rustc lib-tree descriptor does not match the broker-authenticated retained object"
                 .to_owned(),
         ));
     }
@@ -1185,6 +1235,24 @@ fn materialize_row_softmax_v1_child_environment(
             }
         }
     }
+    let closure = final_environment
+        .get(OsStr::new(crate::EXPECTED_COMPILER_CLOSURE_SHA256_ENV))
+        .ok_or_else(|| {
+            BindingWrapperError::BuildObservation(
+                "row-softmax command has no broker-authenticated compiler closure".to_owned(),
+            )
+        })?;
+    let closure = os_bytes(closure);
+    if closure.len() != 64
+        || closure.iter().all(|byte| *byte == b'0')
+        || !closure
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+    {
+        return Err(BindingWrapperError::BuildObservation(
+            "row-softmax command has a noncanonical compiler closure".to_owned(),
+        ));
+    }
     command.env_clear();
     command.envs(&final_environment);
     Ok(CompleteReviewedChildEnvironmentV2 {
@@ -1504,6 +1572,7 @@ fn managed_s09_child_environment(name: &OsStr) -> bool {
             | b"FE2O3_OBSERVED_PARENT_START_TIME_BUILD_OBSERVATION_V2"
             | b"FE2O3_WORKER_V2_SOURCE_DEBUG_PROFILE_V1"
             | b"FE2O3_CRATE_BINDING_ID_V1"
+            | b"FE2O3_EXPECTED_COMPILER_CLOSURE_SHA256_V1"
     )
 }
 
@@ -1842,6 +1911,7 @@ fn validate_expected_worker_v2_identity(
 }
 
 struct CompilerCapabilities {
+    binding: capability_broker::CapabilityBindingV2,
     backend: PinnedCodegenBackend,
     artifact: PinnedDirectory,
     invocation_authority: Option<capability_broker::BrokeredInvocationAuthorityV1>,
@@ -1876,6 +1946,7 @@ impl CompilerCapabilities {
             .map(|image| *image.sha256());
         let output_dir = transferred.artifact.child_path();
         Ok(Self {
+            binding,
             backend: transferred.backend,
             artifact: transferred.artifact,
             invocation_authority,
@@ -1894,6 +1965,10 @@ impl CompilerCapabilities {
 
     fn backend_sha256(&self) -> [u8; 32] {
         *self.backend.sha256()
+    }
+
+    const fn compiler_closure_sha256(&self) -> [u8; 32] {
+        self.binding.compiler_closure_sha256()
     }
 
     fn create_reviewed_private_tmpdir(
@@ -1943,6 +2018,10 @@ impl CompilerCapabilities {
         command.env(
             CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2,
             hex(&self.backend.sha256()[..]),
+        );
+        command.env(
+            crate::EXPECTED_COMPILER_CLOSURE_SHA256_ENV,
+            hex(&self.compiler_closure_sha256()),
         );
         if let Some(authority) = &self.invocation_authority {
             authority
@@ -3951,8 +4030,14 @@ mod tests {
             .env("TMPDIR", "/proc/self/fd/197/private")
             .env("LD_LIBRARY_PATH", "/proc/self/fd/193")
             .env_remove("LD_PRELOAD")
+            .env(crate::EXPECTED_COMPILER_CLOSURE_SHA256_ENV, "ab".repeat(32))
             .env("FE2O3_BUILD_ATTEMPT_V1", "attempt");
-        let complete = materialize_row_softmax_v1_child_environment(&mut command, fixed())
+        let mut inherited = fixed().to_vec();
+        inherited.push((
+            OsString::from(crate::EXPECTED_COMPILER_CLOSURE_SHA256_ENV),
+            OsString::from("01".repeat(32)),
+        ));
+        let complete = materialize_row_softmax_v1_child_environment(&mut command, inherited)
             .expect("materialize reviewed row-softmax environment");
         assert!(complete.entries.contains(&(
             OsString::from("LD_LIBRARY_PATH"),
@@ -3964,6 +4049,10 @@ mod tests {
                 .iter()
                 .any(|(name, _)| name == "LD_PRELOAD")
         );
+        assert!(complete.entries.contains(&(
+            OsString::from(crate::EXPECTED_COMPILER_CLOSURE_SHA256_ENV),
+            OsString::from("ab".repeat(32)),
+        )));
 
         for name in [
             "LD_PRELOAD",
@@ -3977,7 +4066,8 @@ mod tests {
             command
                 .env("LANG", "C.UTF-8")
                 .env("PATH", "/usr/bin")
-                .env("TMPDIR", "/proc/self/fd/197/private");
+                .env("TMPDIR", "/proc/self/fd/197/private")
+                .env(crate::EXPECTED_COMPILER_CLOSURE_SHA256_ENV, "ab".repeat(32));
             let mut inherited = fixed().to_vec();
             inherited.push((OsString::from(name), OsString::from("attacker")));
             let error =

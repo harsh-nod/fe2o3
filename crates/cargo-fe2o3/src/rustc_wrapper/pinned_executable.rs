@@ -427,6 +427,109 @@ mod platform {
             &self.sha256
         }
 
+        pub(crate) fn seal_executable_image(&self) -> Result<Self, PinExecutableError> {
+            let initial = self
+                .file
+                .metadata()
+                .map_err(|source| PinExecutableError::Inspect {
+                    path: self.display_path.clone(),
+                    source,
+                })?;
+            if !self
+                .snapshot
+                .same_execution_object(ObjectSnapshot::from_metadata(&initial))
+            {
+                return Err(PinExecutableError::ExecutionObjectChanged {
+                    path: self.display_path.clone(),
+                });
+            }
+            let image_fd = rustix::fs::memfd_create(
+                "fe2o3-sealed-executable",
+                MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING,
+            )
+            .map_err(|source| PinExecutableError::ExecutionStrategy {
+                path: self.display_path.clone(),
+                source: source.into(),
+            })?;
+            let mut image = File::from(image_fd);
+            let mut source = self
+                .file
+                .try_clone()
+                .map_err(|source| PinExecutableError::Read {
+                    path: self.display_path.clone(),
+                    source,
+                })?;
+            source
+                .seek(SeekFrom::Start(0))
+                .map_err(|source| PinExecutableError::Rewind {
+                    path: self.display_path.clone(),
+                    source,
+                })?;
+            let captured = copy_exact(
+                &mut source,
+                &mut image,
+                &self.display_path,
+                self.snapshot.size,
+            )?;
+            if captured != self.sha256 {
+                return Err(PinExecutableError::SnapshotDigestMismatch {
+                    path: self.display_path.clone(),
+                });
+            }
+            let final_source =
+                self.file
+                    .metadata()
+                    .map_err(|source| PinExecutableError::Inspect {
+                        path: self.display_path.clone(),
+                        source,
+                    })?;
+            if !self
+                .snapshot
+                .same_execution_object(ObjectSnapshot::from_metadata(&final_source))
+            {
+                return Err(PinExecutableError::ChangedDuringRead {
+                    path: self.display_path.clone(),
+                });
+            }
+            rustix::fs::fchmod(&image, Mode::RUSR | Mode::XUSR).map_err(|source| {
+                PinExecutableError::ExecutionStrategy {
+                    path: self.display_path.clone(),
+                    source: source.into(),
+                }
+            })?;
+            let seals = SealFlags::WRITE | SealFlags::GROW | SealFlags::SHRINK | SealFlags::SEAL;
+            rustix::fs::fcntl_add_seals(
+                &image,
+                SealFlags::WRITE | SealFlags::GROW | SealFlags::SHRINK,
+            )
+            .and_then(|()| rustix::fs::fcntl_add_seals(&image, SealFlags::SEAL))
+            .map_err(|source| PinExecutableError::ExecutionStrategy {
+                path: self.display_path.clone(),
+                source: source.into(),
+            })?;
+            require_exact_seals(&image, seals, &self.display_path)?;
+            let writable_path = PathBuf::from(format!("/proc/self/fd/{}", image.as_raw_fd()));
+            let read_only_fd = rustix::fs::open(
+                &writable_path,
+                OFlags::RDONLY | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(|source| PinExecutableError::ExecutionStrategy {
+                path: self.display_path.clone(),
+                source: source.into(),
+            })?;
+            let file = File::from(read_only_fd);
+            require_exact_seals(&file, seals, &self.display_path)?;
+            drop(image);
+            let sealed = Self::from_transferred_file(file, self.display_path.clone())?;
+            if sealed.sha256 != self.sha256 {
+                return Err(PinExecutableError::SnapshotDigestMismatch {
+                    path: self.display_path.clone(),
+                });
+            }
+            Ok(sealed)
+        }
+
         #[cfg(test)]
         pub(crate) fn sealed_static_application_identity(
             &self,
@@ -1095,6 +1198,23 @@ mod platform {
             assert_eq!(sealed.bytes(), original);
             assert_eq!(sealed.identity(), identity);
             assert_eq!(command.as_command().get_program(), sealed.execution_path);
+        }
+
+        #[test]
+        fn sealed_executable_image_is_independent_of_later_source_mutation() {
+            let root = TestDirectory::new();
+            let path = root.path().join("cargo-image");
+            write_executable(&path, b"#!/bin/sh\nexit 0\n");
+            let source = PinnedExecutable::open(&path).unwrap();
+            let expected = *source.sha256();
+            let sealed = source.seal_executable_image().unwrap();
+
+            write_executable(&path, b"#!/bin/sh\nexit 41\n");
+            assert_eq!(sealed.sha256(), &expected);
+            assert_ne!(PinnedExecutable::open(&path).unwrap().sha256(), &expected);
+            sealed
+                .command()
+                .expect("sealed Cargo image remains executable");
         }
 
         #[test]
