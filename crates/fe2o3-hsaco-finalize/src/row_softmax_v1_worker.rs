@@ -13,9 +13,10 @@ use fe2o3_compiler_ffi::{
     CompilerModuleSymbolManifestV1, CompilerModuleSymbolRoleV1,
 };
 use fe2o3_kernel_descriptor::{
-    CanonicalCodeObjectDigest, CodeObjectVersion, ROW_SOFTMAX_V1_DESCRIPTOR_SYMBOL,
-    ROW_SOFTMAX_V1_ENTRY_NAME, RowSoftmaxV1StructuralDescriptorErrorV1,
-    RowSoftmaxV1StructuralDescriptorExpectationV1, admit_row_softmax_v1_structural_descriptor_v1,
+    CanonicalCodeObjectDigest, CodeObjectVersion, MAX_DESCRIPTOR_TABLE_BYTES,
+    ROW_SOFTMAX_V1_DESCRIPTOR_SYMBOL, ROW_SOFTMAX_V1_ENTRY_NAME,
+    RowSoftmaxV1StructuralDescriptorErrorV1, RowSoftmaxV1StructuralDescriptorExpectationV1,
+    admit_row_softmax_v1_structural_descriptor_v1,
 };
 use sha2::{Digest, Sha256};
 
@@ -853,22 +854,35 @@ fn decode_bound_sections(
     }
 
     let mut offset = *descriptor_position;
-    let descriptor = decode_module_assembly_section(module, &mut offset, &headers[0])
-        .ok_or_else(|| profile_mismatch("compiler descriptor section encoding"))?;
-    let authority_transcript = decode_module_assembly_section(module, &mut offset, &headers[1])
-        .filter(|transcript| {
-            !transcript.is_empty() && transcript.len() <= MAX_FRONTEND_AUTHORITY_TRANSCRIPT_BYTES
-        })
-        .ok_or_else(|| profile_mismatch("frontend-authority transcript encoding"))?;
-    let authority = decode_module_assembly_section(module, &mut offset, &headers[2])
-        .ok_or_else(|| profile_mismatch("frontend-authority section encoding"))?
-        .try_into()
-        .map_err(|_| profile_mismatch("frontend-authority commitment size"))?;
-    let exponential_boundary: [u8; EXPONENTIAL_BOUNDARY_BYTES] =
-        decode_module_assembly_section(module, &mut offset, &headers[3])
-            .ok_or_else(|| profile_mismatch("exponential-boundary section encoding"))?
+    let descriptor = decode_module_assembly_section(
+        module,
+        &mut offset,
+        &headers[0],
+        MAX_DESCRIPTOR_TABLE_BYTES,
+    )
+    .ok_or_else(|| profile_mismatch("compiler descriptor section encoding"))?;
+    let authority_transcript = decode_module_assembly_section(
+        module,
+        &mut offset,
+        &headers[1],
+        MAX_FRONTEND_AUTHORITY_TRANSCRIPT_BYTES,
+    )
+    .filter(|transcript| !transcript.is_empty())
+    .ok_or_else(|| profile_mismatch("frontend-authority transcript encoding"))?;
+    let authority =
+        decode_module_assembly_section(module, &mut offset, &headers[2], FRONTEND_AUTHORITY_BYTES)
+            .ok_or_else(|| profile_mismatch("frontend-authority section encoding"))?
             .try_into()
-            .map_err(|_| profile_mismatch("exponential-boundary commitment size"))?;
+            .map_err(|_| profile_mismatch("frontend-authority commitment size"))?;
+    let exponential_boundary: [u8; EXPONENTIAL_BOUNDARY_BYTES] = decode_module_assembly_section(
+        module,
+        &mut offset,
+        &headers[3],
+        EXPONENTIAL_BOUNDARY_BYTES,
+    )
+    .ok_or_else(|| profile_mismatch("exponential-boundary section encoding"))?
+    .try_into()
+    .map_err(|_| profile_mismatch("exponential-boundary commitment size"))?;
     if offset != module.len() {
         return Err(profile_mismatch("bound compiler section trailing bytes"));
     }
@@ -896,6 +910,7 @@ fn decode_module_assembly_section(
     module: &[u8],
     offset: &mut usize,
     header: &str,
+    max_bytes: usize,
 ) -> Option<Vec<u8>> {
     const ALIGNMENT: &[u8] = b"module asm \".balign 8\"\n";
     const SECTION_PREFIX: &[u8] = b"module asm \".section ";
@@ -918,6 +933,9 @@ fn decode_module_assembly_section(
             .strip_suffix(SUFFIX)?;
         let mut count = 0usize;
         for value in values.split(|byte| *byte == b',') {
+            if result.len() == max_bytes {
+                return None;
+            }
             let value = if count == 0 {
                 value
             } else {
