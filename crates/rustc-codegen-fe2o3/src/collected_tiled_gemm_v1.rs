@@ -44,7 +44,8 @@ const REVIEWED_RUSTC_RELEASE: &str = "1.96.0-nightly";
 const REVIEWED_RUSTC_COMMIT: &str = "55e86c996809902e8bbad512cfb4d2c18be446d9";
 const REVIEWED_RUSTC_LLVM: &str = "22.1.2";
 const REVIEWED_CRATE_METADATA: &str = "fe2o3-tiled-gemm-v1-reviewed";
-const REVIEWED_CARGO_CRATE_METADATA: &str = "4ceb166423714bdc";
+const REPRESENTATIVE_CARGO_CRATE_METADATA: &str = "0000000000000000";
+const CARGO_CRATE_METADATA_DOMAIN_V1: &[u8] = b"cargo-generated-build-identity-v1";
 const COMPILER_SEMANTICS_DOMAIN_V1: &[u8] = b"fe2o3.tiled-gemm.compiler-semantics.v1";
 const COLLECTED_AUTHORITY_DOMAIN_V1: &[u8] = b"fe2o3.tiled-gemm.collected-authority.v1";
 const ABI_BINDING_DOMAIN_V1: &[u8] = b"fe2o3.tiled-gemm.abi-binding.v1";
@@ -888,9 +889,12 @@ fn require_compiler_semantics(
             "rustc target CPU/features must be unset, found {:?}/{:?}",
             observed.target_cpu, observed.target_features
         ))
-    } else if observed.crate_metadata != [REVIEWED_CARGO_CRATE_METADATA, REVIEWED_CRATE_METADATA] {
+    } else if observed.crate_metadata.len() != 2
+        || !is_cargo_crate_metadata(&observed.crate_metadata[0])
+        || observed.crate_metadata[1] != REVIEWED_CRATE_METADATA
+    {
         Some(format!(
-            "crate metadata must be exactly the Cargo fixture identity and {REVIEWED_CRATE_METADATA:?}, found {:?}",
+            "crate metadata must be exactly one Cargo-generated 16-digit lowercase hexadecimal build identity followed by {REVIEWED_CRATE_METADATA:?}, found {:?}",
             observed.crate_metadata
         ))
     } else if observed.remap_path_destinations != ["/fe2o3-reviewed-workspace/tiled-gemm-v1.rs"] {
@@ -938,8 +942,15 @@ fn compiler_semantics_commitment(observed: &CompilerSemanticsV1) -> [u8; 32] {
     }
     hash_field(&mut digest, observed.target_features.as_bytes());
     hash_field(&mut digest, observed.rustc_codegen_opt_level.as_bytes());
-    for metadata in &observed.crate_metadata {
-        hash_field(&mut digest, metadata.as_bytes());
+    for (index, metadata) in observed.crate_metadata.iter().enumerate() {
+        if index == 0 && is_cargo_crate_metadata(metadata) {
+            // Cargo's disambiguator is an exact build observation, not a
+            // portable compiler-semantic identity. The managed wrapper binds
+            // its full ordered value separately.
+            hash_field(&mut digest, CARGO_CRATE_METADATA_DOMAIN_V1);
+        } else {
+            hash_field(&mut digest, metadata.as_bytes());
+        }
     }
     for destination in &observed.remap_path_destinations {
         hash_field(&mut digest, destination.as_bytes());
@@ -964,11 +975,18 @@ fn reviewed_compiler_semantics() -> CompilerSemanticsV1 {
         target_features: String::new(),
         rustc_codegen_opt_level: "0".to_owned(),
         crate_metadata: vec![
-            REVIEWED_CARGO_CRATE_METADATA.to_owned(),
+            REPRESENTATIVE_CARGO_CRATE_METADATA.to_owned(),
             REVIEWED_CRATE_METADATA.to_owned(),
         ],
         remap_path_destinations: vec!["/fe2o3-reviewed-workspace/tiled-gemm-v1.rs".to_owned()],
     }
+}
+
+fn is_cargo_crate_metadata(value: &str) -> bool {
+    value.len() == 16
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn tiled_gemm_target_identity() -> Result<TargetIdentity, CollectedTiledGemmErrorV1> {
@@ -1233,6 +1251,49 @@ mod tests {
                 Err(CollectedTiledGemmErrorV1::CompilerSemantics { .. })
             ));
         }
+    }
+
+    #[test]
+    fn cargo_build_metadata_is_shape_checked_but_not_a_semantic_identity() {
+        let baseline = compiler_semantics();
+        let baseline_commitment =
+            require_compiler_semantics(&baseline).expect("reviewed compiler semantics");
+
+        let mut alternate_build = baseline.clone();
+        alternate_build.crate_metadata[0] = "5d7a2a9305c2e2b4".to_owned();
+        assert_eq!(
+            require_compiler_semantics(&alternate_build)
+                .expect("alternate Cargo build identity has the reviewed shape"),
+            baseline_commitment
+        );
+
+        for cargo_metadata in [
+            "5d7a2a9305c2e2b",
+            "5d7a2a9305c2e2b44",
+            "5D7A2A9305C2E2B4",
+            "5d7a2a9305c2e2bg",
+        ] {
+            let mut malformed = baseline.clone();
+            malformed.crate_metadata[0] = cargo_metadata.to_owned();
+            assert!(matches!(
+                require_compiler_semantics(&malformed),
+                Err(CollectedTiledGemmErrorV1::CompilerSemantics { .. })
+            ));
+        }
+
+        let mut wrong_reviewed_metadata = baseline.clone();
+        wrong_reviewed_metadata.crate_metadata[1] = "attacker".to_owned();
+        assert!(matches!(
+            require_compiler_semantics(&wrong_reviewed_metadata),
+            Err(CollectedTiledGemmErrorV1::CompilerSemantics { .. })
+        ));
+
+        let mut extra_metadata = baseline;
+        extra_metadata.crate_metadata.push("attacker".to_owned());
+        assert!(matches!(
+            require_compiler_semantics(&extra_metadata),
+            Err(CollectedTiledGemmErrorV1::CompilerSemantics { .. })
+        ));
     }
 
     #[test]
