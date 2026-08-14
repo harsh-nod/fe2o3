@@ -999,6 +999,8 @@ fn compile_row_softmax_with_cargo_metadata(
         extra_args,
         &device,
         &host,
+        true,
+        "a59650cf8d1bfc6168915cb817dbab3a0fa6a8839291231bbf4149a749913937",
     )
 }
 
@@ -1013,6 +1015,8 @@ fn compile_row_softmax_with_device(
     extra_args: &[&str],
     device: &Path,
     host: &Path,
+    managed_attempt: bool,
+    cargo_metadata_observation: &str,
 ) -> Output {
     backend
         .verify()
@@ -1026,6 +1030,20 @@ fn compile_row_softmax_with_device(
         workspace.join("crates/rustc-codegen-fe2o3/tests/fixtures/collected-row-softmax-v1");
     assert!(device.is_file(), "missing {}", device.display());
     assert!(host.is_file(), "missing {}", host.display());
+    let attempt = managed_attempt.then(|| {
+        let producer = ProducerIdentity::from_codegen(
+            "fe2o3_collected_row_softmax_v1_fixture",
+            Some(&source_path),
+        )
+        .expect("row-softmax fixture producer");
+        begin_build_attempt(
+            &output.0.join("artifacts"),
+            &producer,
+            BuildInvocation::from_bytes(Sha256::digest(source.as_bytes()).into()),
+            BuildSession::from_bytes([0x52; 16]),
+        )
+        .expect("begin row-softmax managed fixture attempt")
+    });
 
     let mut command = Command::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()));
     command
@@ -1077,11 +1095,16 @@ fn compile_row_softmax_with_device(
         .env("CARGO_MANIFEST_DIR", manifest_directory)
         .env(
             "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2",
-            "c1ab2dc02fa023687ac7394e15746c39668b5d46ad47c40eae012bc3f42d05c0",
+            cargo_metadata_observation,
         )
         .env("FE2O3_TARGET", target)
         .env("FE2O3_CODEGEN_PIPELINE", ROW_SOFTMAX_PIPELINE)
         .env("FE2O3_HSACO_DIR", output.0.join("artifacts"));
+    if let Some(attempt) = attempt {
+        command.env("FE2O3_BUILD_ATTEMPT_V1", attempt.to_env_value());
+    } else {
+        command.env_remove("FE2O3_BUILD_ATTEMPT_V1");
+    }
     let backend_descriptor = backend.file.as_raw_fd();
     unsafe {
         command.pre_exec(move || set_close_on_exec(backend_descriptor, false));
@@ -1099,13 +1122,19 @@ fn assert_row_softmax_published_nothing(output: &TestOutputDir) {
         .expect("read row-softmax artifact directory")
         .collect::<Result<Vec<_>, _>>()
         .expect("enumerate row-softmax artifacts");
+    let published = artifacts
+        .iter()
+        .filter(|entry| {
+            !matches!(
+                entry.file_name().to_str(),
+                Some(".fe2o3-attempts-v1" | ".fe2o3-artifacts.lock")
+            )
+        })
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
     assert!(
-        artifacts.is_empty(),
-        "row-softmax boundary published artifacts: {:?}",
-        artifacts
-            .iter()
-            .map(|entry| entry.path())
-            .collect::<Vec<_>>()
+        published.is_empty(),
+        "row-softmax boundary published artifacts: {published:?}"
     );
 }
 
@@ -2258,6 +2287,8 @@ fn row_softmax_rejects_a_hostile_same_name_device_provider() {
         &[],
         &hostile_device,
         &hostile_host,
+        true,
+        "a59650cf8d1bfc6168915cb817dbab3a0fa6a8839291231bbf4149a749913937",
     );
     let compiler_stderr = stderr(&compiled);
     assert!(
@@ -2271,6 +2302,67 @@ fn row_softmax_rejects_a_hostile_same_name_device_provider() {
         "hostile same-name provider minted row-softmax authority:\n{compiler_stderr}"
     );
     assert_row_softmax_published_nothing(&output);
+}
+
+#[test]
+fn row_softmax_requires_managed_wrapper_attempt_and_exact_metadata_transcript() {
+    if isolated_backend_environment_is_unavailable() {
+        return;
+    }
+    let workspace = workspace();
+    let backend = build_backend(&workspace);
+    build_frontend_dependencies(&workspace).expect("build reviewed frontend dependencies");
+    let cargo_target = std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| workspace.join("target"));
+    let device = cargo_target.join("debug/libfe2o3_device.rlib");
+    let host = cargo_target.join("debug/libfe2o3_host.rlib");
+
+    let direct_output = TestOutputDir::new(&workspace);
+    let direct = compile_row_softmax_with_device(
+        &workspace,
+        backend,
+        &direct_output,
+        ROW_SOFTMAX_FIXTURE,
+        "gfx942:xnack-",
+        "3a4d867f29d87610",
+        &[],
+        &device,
+        &host,
+        false,
+        "a59650cf8d1bfc6168915cb817dbab3a0fa6a8839291231bbf4149a749913937",
+    );
+    let direct_stderr = stderr(&direct);
+    assert!(
+        !direct.status.success()
+            && direct_stderr.contains("requires a managed FE2O3_BUILD_ATTEMPT_V1")
+            && !direct_stderr.contains("selected canonical Kernel IR module"),
+        "direct rustc minted row-softmax authority:\n{direct_stderr}"
+    );
+
+    let fabricated_output = TestOutputDir::new(&workspace);
+    let fabricated = compile_row_softmax_with_device(
+        &workspace,
+        backend,
+        &fabricated_output,
+        ROW_SOFTMAX_FIXTURE,
+        "gfx942:xnack-",
+        "3a4d867f29d87610",
+        &[],
+        &device,
+        &host,
+        true,
+        "0000000000000000000000000000000000000000000000000000000000000000",
+    );
+    let fabricated_stderr = stderr(&fabricated);
+    assert!(
+        !fabricated.status.success()
+            && fabricated_stderr.contains("managed wrapper Cargo metadata transcript")
+            && fabricated_stderr.contains("does not match rustc's ordered -Cmetadata values")
+            && !fabricated_stderr.contains("selected canonical Kernel IR module"),
+        "fabricated wrapper observation minted row-softmax authority:\n{fabricated_stderr}"
+    );
+    assert_row_softmax_published_nothing(&fabricated_output);
 }
 
 #[test]

@@ -58,6 +58,9 @@ const REVIEWED_CRATE_METADATA: &str = "fe2o3-row-softmax-v1-reviewed";
 const COMPILER_SEMANTICS_DOMAIN_V1: &[u8] = b"fe2o3.row-softmax.compiler-semantics.v1";
 const CARGO_METADATA_OBSERVATION_DOMAIN_V1: &[u8] =
     b"fe2o3.row-softmax.cargo-metadata-observation.v1";
+const CARGO_METADATA_BUILD_OBSERVATION_ENV_V2: &str = "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2";
+const CARGO_METADATA_BUILD_OBSERVATION_DOMAIN_V2: &[u8] =
+    b"FE2O3/CARGO-METADATA-BUILD-OBSERVATION/V2\0";
 const CARGO_GENERATED_METADATA_SHAPE_V1: &[u8] = b"one-16-byte-lowercase-hex-token";
 const COLLECTED_AUTHORITY_DOMAIN_V1: &[u8] = b"fe2o3.row-softmax.collected-authority.v1";
 const ABI_BINDING_DOMAIN_V1: &[u8] = b"fe2o3.row-softmax.abi-binding.v1";
@@ -174,6 +177,36 @@ struct AdmittedCompilerSemanticsV1 {
 }
 
 #[derive(Debug, Eq, PartialEq)]
+struct ManagedBuildAuthorityV1 {
+    generation: u64,
+    session: [u8; 16],
+    invocation: [u8; 32],
+    cargo_metadata_transcript: [u8; 32],
+}
+
+impl ManagedBuildAuthorityV1 {
+    fn validate(&self) -> Result<(), &'static str> {
+        if self.generation == 0 || self.session == [0; 16] || self.invocation == [0; 32] {
+            return Err("row-softmax requires a non-direct managed wrapper build attempt");
+        }
+        if self.cargo_metadata_transcript == [0; 32] {
+            return Err("row-softmax wrapper Cargo metadata transcript is absent");
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn canonical_for_test() -> Self {
+        Self {
+            generation: 1,
+            session: [0x11; 16],
+            invocation: [0x22; 32],
+            cargo_metadata_transcript: [0x03; 32],
+        }
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
 struct RowSoftmaxFrontendAuthorityV1 {
     target: String,
     code_object_version: u16,
@@ -193,6 +226,7 @@ struct RowSoftmaxFrontendAuthorityV1 {
     compiler_semantics_commitment: [u8; 32],
     cargo_metadata_build_observation: CargoMetadataBuildObservationV1,
     provider_authority: crate::mir_import::RowSoftmaxProviderAuthorityV1,
+    managed_build_authority: ManagedBuildAuthorityV1,
     authority_commitment: [u8; 32],
 }
 
@@ -369,10 +403,15 @@ pub(crate) fn authenticate_collected_row_softmax_v1<'tcx>(
     collection: &CollectionResult<'tcx>,
     target: &AmdGpuTarget,
     custom_llvm_pipeline: bool,
+    build_attempt: fe2o3_artifact_transaction::BuildAttempt,
 ) -> Result<RowSoftmaxFrontendReceiptV1, CollectedRowSoftmaxErrorV1> {
     admit_execution_context(target.as_str(), custom_llvm_pipeline)?;
     let compiler_semantics = observe_compiler_semantics(tcx);
     let admitted_compiler_semantics = require_compiler_semantics(&compiler_semantics)?;
+    let managed_build_authority = require_managed_build_authority(
+        build_attempt,
+        &admitted_compiler_semantics.cargo_metadata_build_observation,
+    )?;
     let root = exact_collected_root(&collection.functions)?;
     require_registration(root)?;
     require_signature(tcx, root.instance)?;
@@ -394,6 +433,15 @@ pub(crate) fn authenticate_collected_row_softmax_v1<'tcx>(
         .map_err(|error| CollectedRowSoftmaxErrorV1::PortableMir {
             detail: error.to_string(),
         })?;
+    if provider_authority.provider.cargo_metadata_build_observation
+        != managed_build_authority.cargo_metadata_transcript
+    {
+        return Err(CollectedRowSoftmaxErrorV1::CompilerSemantics {
+            detail:
+                "trusted provider and managed wrapper observed different Cargo metadata transcripts"
+                    .to_owned(),
+        });
+    }
     let portable_mir_semantic_commitment = imported
         .portable_semantic_digest_v2(crate::mir_import::MirSemanticAdmissionInputsV2::new(
             FIXED_KERNEL_EXPORT,
@@ -442,6 +490,7 @@ pub(crate) fn authenticate_collected_row_softmax_v1<'tcx>(
         cargo_metadata_build_observation: admitted_compiler_semantics
             .cargo_metadata_build_observation,
         provider_authority,
+        managed_build_authority,
         authority_commitment: [0; 32],
     };
     authority.authority_commitment = collected_authority_commitment(&authority);
@@ -881,6 +930,75 @@ fn require_compiler_semantics(
         cargo_metadata_build_observation: cargo_metadata_build_observation
             .expect("metadata shape checked above"),
     })
+}
+
+fn require_managed_build_authority(
+    attempt: fe2o3_artifact_transaction::BuildAttempt,
+    metadata: &CargoMetadataBuildObservationV1,
+) -> Result<ManagedBuildAuthorityV1, CollectedRowSoftmaxErrorV1> {
+    let observed = decode_lower_sha256_environment(CARGO_METADATA_BUILD_OBSERVATION_ENV_V2)
+        .map_err(|detail| CollectedRowSoftmaxErrorV1::CompilerSemantics { detail })?;
+    admit_managed_build_authority(attempt, metadata, observed)
+}
+
+fn admit_managed_build_authority(
+    attempt: fe2o3_artifact_transaction::BuildAttempt,
+    metadata: &CargoMetadataBuildObservationV1,
+    observed_metadata_transcript: [u8; 32],
+) -> Result<ManagedBuildAuthorityV1, CollectedRowSoftmaxErrorV1> {
+    let mut digest = Sha256::new();
+    digest.update(CARGO_METADATA_BUILD_OBSERVATION_DOMAIN_V2);
+    digest.update((metadata.ordered_tokens.len() as u64).to_le_bytes());
+    for token in &metadata.ordered_tokens {
+        digest.update((token.len() as u64).to_le_bytes());
+        digest.update(token.as_bytes());
+    }
+    let expected_metadata_transcript: [u8; 32] = digest.finalize().into();
+    if observed_metadata_transcript != expected_metadata_transcript {
+        return Err(CollectedRowSoftmaxErrorV1::CompilerSemantics {
+            detail: format!(
+                "managed wrapper Cargo metadata transcript does not match rustc's ordered -Cmetadata values: expected {}, found {}",
+                encode_hex(&expected_metadata_transcript),
+                encode_hex(&observed_metadata_transcript)
+            ),
+        });
+    }
+    let authority = ManagedBuildAuthorityV1 {
+        generation: attempt.generation(),
+        session: *attempt.session().as_bytes(),
+        invocation: *attempt.invocation().as_bytes(),
+        cargo_metadata_transcript: observed_metadata_transcript,
+    };
+    authority
+        .validate()
+        .map_err(|detail| CollectedRowSoftmaxErrorV1::CompilerSemantics {
+            detail: detail.to_owned(),
+        })?;
+    Ok(authority)
+}
+
+fn decode_lower_sha256_environment(name: &str) -> Result<[u8; 32], String> {
+    let value = std::env::var(name).map_err(|_| format!("managed wrapper omitted {name}"))?;
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(format!("managed wrapper supplied malformed {name}"));
+    }
+    let mut digest = [0; 32];
+    for (output, pair) in digest.iter_mut().zip(value.as_bytes().chunks_exact(2)) {
+        *output = (lower_hex_value(pair[0]) << 4) | lower_hex_value(pair[1]);
+    }
+    Ok(digest)
+}
+
+fn lower_hex_value(byte: u8) -> u8 {
+    match byte {
+        b'0'..=b'9' => byte - b'0',
+        b'a'..=b'f' => byte - b'a' + 10,
+        _ => unreachable!("lowercase hexadecimal shape checked before decoding"),
+    }
 }
 
 fn compiler_semantics_commitment(observed: &CompilerSemanticsV1) -> [u8; 32] {
@@ -1403,6 +1521,16 @@ fn collected_authority_commitment(authority: &RowSoftmaxFrontendAuthorityV1) -> 
         hash_field(&mut digest, identity);
     }
     hash_field(&mut digest, &authority.provider_authority.commitment);
+    hash_field(
+        &mut digest,
+        &authority.managed_build_authority.generation.to_le_bytes(),
+    );
+    hash_field(&mut digest, &authority.managed_build_authority.session);
+    hash_field(&mut digest, &authority.managed_build_authority.invocation);
+    hash_field(
+        &mut digest,
+        &authority.managed_build_authority.cargo_metadata_transcript,
+    );
     digest.finalize().into()
 }
 
@@ -1414,6 +1542,7 @@ fn validate_frontend_authority(
         .validate()
         .is_err();
     let provider_authority_is_invalid = authority.provider_authority.validate().is_err();
+    let managed_build_authority_is_invalid = authority.managed_build_authority.validate().is_err();
     let field = if authority.target != EXACT_ROW_SOFTMAX_TARGET_V1 {
         Some("target")
     } else if authority.code_object_version != ROW_SOFTMAX_CODE_OBJECT_VERSION_V1 {
@@ -1452,6 +1581,15 @@ fn validate_frontend_authority(
         Some("ordered Cargo metadata build observation")
     } else if provider_authority_is_invalid {
         Some("row-softmax trusted provider authority")
+    } else if managed_build_authority_is_invalid {
+        Some("managed wrapper build attempt")
+    } else if authority.managed_build_authority.cargo_metadata_transcript
+        != authority
+            .provider_authority
+            .provider
+            .cargo_metadata_build_observation
+    {
+        Some("wrapper Cargo metadata transcript")
     } else {
         None
     };
@@ -1516,6 +1654,7 @@ fn exact_frontend_receipt_for_test() -> RowSoftmaxFrontendReceiptV1 {
         cargo_metadata_build_observation: admitted_compiler_semantics
             .cargo_metadata_build_observation,
         provider_authority: crate::mir_import::RowSoftmaxProviderAuthorityV1::canonical_for_test(),
+        managed_build_authority: ManagedBuildAuthorityV1::canonical_for_test(),
         authority_commitment: [0; 32],
     };
     authority.authority_commitment = collected_authority_commitment(&authority);
@@ -1963,7 +2102,7 @@ mod tests {
         let baseline = collected_authority_commitment(
             baseline_receipt.authority.as_ref().expect("test authority"),
         );
-        let mutations: [ReceiptMutation; 19] = [
+        let mutations: [ReceiptMutation; 21] = [
             (
                 |value| value.portable_mir_semantic_commitment[0] ^= 1,
                 "portable MIR",
@@ -2030,6 +2169,14 @@ mod tests {
             (
                 |value| value.provider_authority.source_identities[0][0] ^= 1,
                 "row-softmax trusted provider authority",
+            ),
+            (
+                |value| value.managed_build_authority.invocation = [0; 32],
+                "managed wrapper build attempt",
+            ),
+            (
+                |value| value.managed_build_authority.cargo_metadata_transcript[0] ^= 1,
+                "wrapper Cargo metadata transcript",
             ),
         ];
         for (mutate, expected_field) in mutations {

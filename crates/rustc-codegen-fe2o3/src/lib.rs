@@ -485,6 +485,12 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                     PipelineSelection::Valid(CodegenPipeline::CollectedRowSoftmaxV1)
                 ) {
                     let admission = (|| -> Result<_, String> {
+                        let attempt = build_attempt.ok_or_else(|| {
+                            format!(
+                                "{} requires a managed {BUILD_ATTEMPT_ENV}",
+                                collected_row_softmax_v1::COLLECTED_ROW_SOFTMAX_PIPELINE_V1,
+                            )
+                        })?;
                         let collection = collector::collect_device_functions(
                             tcx,
                             mono_partitions.codegen_units,
@@ -512,6 +518,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                 &collection,
                                 &self.config.target,
                                 custom_llvm_pipeline,
+                                attempt,
                             )
                             .map_err(|error| error.to_string())?;
                         let root_instance_identity = receipt.root_instance_identity().to_owned();
