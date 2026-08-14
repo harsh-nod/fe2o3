@@ -40,6 +40,7 @@ const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(20);
 static NEXT_OUTPUT: AtomicU64 = AtomicU64::new(0);
 static BACKEND: OnceLock<PinnedBackend> = OnceLock::new();
 static FRONTEND_DEPENDENCIES: OnceLock<Result<(), String>> = OnceLock::new();
+static USER_MOUNT_NAMESPACE: OnceLock<Result<(), String>> = OnceLock::new();
 
 const REQUIRED_MEMFD_SEALS: libc::c_int =
     libc::F_SEAL_SEAL | libc::F_SEAL_SHRINK | libc::F_SEAL_GROW | libc::F_SEAL_WRITE;
@@ -308,6 +309,46 @@ impl Drop for CapturedChild {
 
 fn run_bounded(command: &mut Command, timeout: Duration, context: &str) -> Result<Output, String> {
     CapturedChild::spawn(command, context)?.wait_until(Instant::now() + timeout, context)
+}
+
+fn isolated_backend_environment_is_unavailable() -> bool {
+    let result = USER_MOUNT_NAMESPACE.get_or_init(|| {
+        let output = run_bounded(
+            Command::new("unshare")
+                .args(["--user", "--map-root-user", "--mount", "--fork", "--"])
+                .arg("true"),
+            Duration::from_secs(10),
+            "user/mount namespace capability probe",
+        )?;
+        if output.status.success() {
+            return Ok(());
+        }
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if is_known_namespace_policy_denial(&stderr) {
+            return Err(format!(
+                "host policy disables the required user/mount namespace: {}",
+                stderr.trim()
+            ));
+        }
+        panic!(
+            "user/mount namespace probe failed for an unexpected reason\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            stderr
+        );
+    });
+    if let Err(reason) = result {
+        eprintln!("SKIP isolated backend test: {reason}");
+        true
+    } else {
+        false
+    }
+}
+
+fn is_known_namespace_policy_denial(stderr: &str) -> bool {
+    stderr.contains("/proc/self/uid_map: Operation not permitted")
+        || stderr.contains("unshare failed: Operation not permitted")
+        || stderr.contains("unshare: Operation not permitted")
 }
 
 fn receive_backend_from_child(
@@ -941,6 +982,24 @@ fn backend_helper_early_exit_fails_within_deadline() {
 }
 
 #[test]
+fn namespace_probe_skips_only_known_host_policy_denials() {
+    assert!(is_known_namespace_policy_denial(
+        "unshare: write failed /proc/self/uid_map: Operation not permitted"
+    ));
+    assert!(is_known_namespace_policy_denial(
+        "unshare: unshare failed: Operation not permitted"
+    ));
+    for unexpected in [
+        "unshare: command not found",
+        "unshare: write failed /proc/self/gid_map: Invalid argument",
+        "backend build failed",
+        "",
+    ] {
+        assert!(!is_known_namespace_policy_denial(unexpected));
+    }
+}
+
+#[test]
 fn subprocess_timeout_reaps_its_descendant_group() {
     let workspace = workspace();
     let output = TestOutputDir::new(&workspace);
@@ -978,6 +1037,9 @@ fn subprocess_timeout_reaps_its_descendant_group() {
 
 #[test]
 fn authenticated_fixture_seals_semantics_then_stops_before_executable_authority() {
+    if isolated_backend_environment_is_unavailable() {
+        return;
+    }
     let workspace = workspace();
     let backend = build_backend(&workspace);
     let output = TestOutputDir::new(&workspace);
@@ -1069,6 +1131,9 @@ fn authenticated_fixture_seals_semantics_then_stops_before_executable_authority(
 
 #[test]
 fn target_pipeline_identity_abi_and_collection_substitutions_reject_without_fallback() {
+    if isolated_backend_environment_is_unavailable() {
+        return;
+    }
     let workspace = workspace();
     let backend = build_backend(&workspace);
 
@@ -1279,6 +1344,9 @@ fn main() {}
 
 #[test]
 fn scalar_gemm_v1_frontend_receipt_selects_only_the_reviewed_full_portable_mir() {
+    if isolated_backend_environment_is_unavailable() {
+        return;
+    }
     let workspace = workspace();
     let backend = build_backend(&workspace);
     let output = TestOutputDir::new(&workspace);
