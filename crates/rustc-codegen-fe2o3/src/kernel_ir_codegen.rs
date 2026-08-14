@@ -122,6 +122,7 @@ pub(crate) enum CompilerModuleConstructionError {
     UnsupportedTargetBinding(String),
     SourceDebug(crate::source_debug::SourceDebugError),
     ScalarGemmLowering(String),
+    TiledGemmLowering(String),
     Lowering(dialect_amdgcn::LoweringErrors),
 }
 
@@ -152,6 +153,9 @@ impl fmt::Display for CompilerModuleConstructionError {
             }
             Self::ScalarGemmLowering(error) => {
                 write!(formatter, "exact scalar GEMM lowering rejected: {error}")
+            }
+            Self::TiledGemmLowering(error) => {
+                write!(formatter, "exact tiled GEMM lowering rejected: {error}")
             }
             Self::Lowering(error) => write!(formatter, "{error}"),
         }
@@ -332,6 +336,37 @@ pub(crate) fn construct_inert_scalar_gemm_v1_module_text(
     })
 }
 
+/// Constructs the exact reviewed gfx942:xnack-/COV6 tiled GEMM LLVM module.
+///
+/// This calls the dedicated canonical lowering API directly. It performs no
+/// code-object construction, linking, publication, execution, or COMGR work.
+pub(crate) fn construct_inert_tiled_gemm_v1_module_text(
+    module: &Module,
+) -> Result<InertCompilerModuleTextV1, CompilerModuleConstructionError> {
+    enforce_compiler_module_bounds(module)?;
+    let llvm_ir = dialect_amdgcn::lower_tiled_gemm_v1_to_gfx942_llvm_ir(
+        module,
+        fe2o3_kernel_ir::TiledGemmV1Profile::exact_gfx942_xnack_minus_cov6(),
+    )
+    .map_err(|error| CompilerModuleConstructionError::TiledGemmLowering(error.to_string()))?
+    .into_string();
+
+    Ok(InertCompilerModuleTextV1 {
+        llvm_ir,
+        kernel_entries: vec![fe2o3_kernel_ir::TILED_GEMM_V1_KERNEL_ID.to_owned()],
+        device_definitions: Vec::new(),
+        internal_helpers: Vec::new(),
+        device_ffi_exports: Vec::new(),
+        external_declarations: Vec::new(),
+        descriptor_source_identity: None,
+        unbound_target_properties: [
+            UnboundCompilerModuleTargetPropertyV1::DataLayout,
+            UnboundCompilerModuleTargetPropertyV1::TargetProcessor,
+            UnboundCompilerModuleTargetPropertyV1::CodeObjectVersion,
+        ],
+    })
+}
+
 fn ocml_link_imports(module: &Module) -> impl Iterator<Item = &'static str> + '_ {
     module.functions.iter().filter_map(|function| {
         let FloatOperation::F32Math {
@@ -427,6 +462,20 @@ pub(crate) fn bind_scalar_gemm_frontend_authority_v1(
     module
         .llvm_ir
         .push_str("\nmodule asm \".section .fe2o3.scalar-auth.v1,\\22\\22,@progbits\"\n");
+    module.llvm_ir.push_str("module asm \".balign 8\"\n");
+    append_module_asm_bytes(&mut module.llvm_ir, &authority);
+    enforce_source_debug_text_bound(&module.llvm_ir)?;
+    Ok(module)
+}
+
+/// Binds the single-use tiled frontend authority to the exact LLVM handoff.
+pub(crate) fn bind_tiled_gemm_frontend_authority_v1(
+    mut module: InertCompilerModuleTextV1,
+    authority: [u8; 32],
+) -> Result<InertCompilerModuleTextV1, CompilerModuleConstructionError> {
+    module
+        .llvm_ir
+        .push_str("\nmodule asm \".section .fe2o3.tiled-auth.v1,\\22\\22,@progbits\"\n");
     module.llvm_ir.push_str("module asm \".balign 8\"\n");
     append_module_asm_bytes(&mut module.llvm_ir, &authority);
     enforce_source_debug_text_bound(&module.llvm_ir)?;

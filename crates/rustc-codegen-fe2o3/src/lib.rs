@@ -20,6 +20,7 @@ mod amdgpu_llvm;
 mod closure_profile_v1;
 mod collected_executable_scalar_control_flow_v2;
 mod collected_scalar_gemm_v1;
+mod collected_tiled_gemm_v1;
 mod collector;
 mod compiler_descriptor;
 mod compiler_ffi_adapter;
@@ -181,6 +182,7 @@ enum CodegenPipeline {
     KernelIrWorkerV2,
     CollectedExecutableScalarControlFlowV2,
     CollectedScalarGemmV1,
+    CollectedTiledGemmV1,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -246,10 +248,16 @@ impl PipelineSelection {
             {
                 Self::Valid(CodegenPipeline::CollectedScalarGemmV1)
             }
+            Some(value)
+                if value == collected_tiled_gemm_v1::COLLECTED_TILED_GEMM_PIPELINE_V1 =>
+            {
+                Self::Valid(CodegenPipeline::CollectedTiledGemmV1)
+            }
             Some(value) => Self::Invalid(format!(
-                "{CODEGEN_PIPELINE_ENV} must be unset or exactly `legacy-v1`, `kernel-ir-v1`, `kernel-ir-worker-v2`, `{}`, or `{}`; found {value:?}",
+                "{CODEGEN_PIPELINE_ENV} must be unset or exactly `legacy-v1`, `kernel-ir-v1`, `kernel-ir-worker-v2`, `{}`, `{}`, or `{}`; found {value:?}",
                 collected_executable_scalar_control_flow_v2::COLLECTED_SCALAR_CONTROL_FLOW_PIPELINE_V2,
                 collected_scalar_gemm_v1::COLLECTED_SCALAR_GEMM_PIPELINE_V1,
+                collected_tiled_gemm_v1::COLLECTED_TILED_GEMM_PIPELINE_V1,
             )),
         }
     }
@@ -462,6 +470,114 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                         Err(error) => tcx.dcx().fatal(format!(
                             "[rustc-codegen-fe2o3] {} rejected the collected program without fallback: {error}",
                             collected_executable_scalar_control_flow_v2::COLLECTED_SCALAR_CONTROL_FLOW_PIPELINE_V2,
+                        )),
+                    }
+                } else if matches!(
+                    codegen_pipeline,
+                    PipelineSelection::Valid(CodegenPipeline::CollectedTiledGemmV1)
+                ) {
+                    let preparation = (|| -> Result<_, String> {
+                        let attempt = build_attempt.ok_or_else(|| {
+                            format!(
+                                "{} requires a managed {BUILD_ATTEMPT_ENV}",
+                                collected_tiled_gemm_v1::COLLECTED_TILED_GEMM_PIPELINE_V1,
+                            )
+                        })?;
+                        let collection = collector::collect_device_functions(
+                            tcx,
+                            mono_partitions.codegen_units,
+                            self.config.verbose,
+                        )
+                        .map_err(|error| error.to_string())?;
+                        let frontend_record =
+                            frontend_record_bridge::extract_frontend_record_v1(tcx, &collection)
+                                .map_err(|error| {
+                                    format!("frontend record extraction failed: {error}")
+                                })?;
+                        if self.config.verbose {
+                            eprintln!(
+                                "[rustc-codegen-fe2o3] validated tiled GEMM frontend record: {} function(s), {} canonical byte(s)",
+                                frontend_record.unit().functions().len(),
+                                frontend_record.canonical_bytes().len()
+                            );
+                        }
+                        collector::dump_device_functions(tcx, &collection.functions);
+                        let custom_llvm_pipeline = !tcx.sess.opts.cg.llvm_args.is_empty()
+                            || !tcx.sess.opts.cg.passes.is_empty();
+                        let mut receipt =
+                            collected_tiled_gemm_v1::authenticate_collected_tiled_gemm_v1(
+                                tcx,
+                                &collection,
+                                &self.config.target,
+                                custom_llvm_pipeline,
+                            )
+                            .map_err(|error| error.to_string())?;
+                        let root_instance_identity = receipt.root_instance_identity().to_owned();
+                        let kernel_export = receipt.kernel_export().to_owned();
+                        let portable_mir_semantic = receipt.portable_mir_semantic_hex();
+                        let compiler_semantics = receipt.compiler_semantics_hex();
+                        let frontend_authority = receipt.authority_hex();
+                        let frontend_authority_commitment = *receipt.authority_commitment();
+                        let authenticated_module =
+                            receipt.consume().map_err(|error| error.to_string())?;
+                        let handoff = worker_v2_producer::prepare_tiled_gemm_v1_worker_handoff(
+                            authenticated_module,
+                        )
+                        .map_err(|error| error.to_string())?;
+                        if handoff.frontend_authority_commitment() != &frontend_authority_commitment
+                        {
+                            return Err(
+                                "prepared tiled GEMM handoff lost frontend authority binding"
+                                    .to_owned(),
+                            );
+                        }
+                        let canonical_handoff_bytes = handoff.handoff().canonical_bytes().len();
+                        let llvm_bytes = handoff.handoff().module_bytes().len();
+                        let publication =
+                            worker_v2_producer::publish_prepared_tiled_gemm_v1_worker_handoff(
+                                output_dir, &producer, attempt, handoff,
+                            )
+                            .map_err(|error| error.to_string())?;
+                        Ok((
+                            root_instance_identity,
+                            kernel_export,
+                            portable_mir_semantic,
+                            compiler_semantics,
+                            frontend_authority,
+                            canonical_handoff_bytes,
+                            llvm_bytes,
+                            publication.length(),
+                        ))
+                    })();
+                    match preparation {
+                        Ok((
+                            root_instance_identity,
+                            kernel_export,
+                            portable_mir_semantic,
+                            compiler_semantics,
+                            frontend_authority,
+                            canonical_handoff_bytes,
+                            llvm_bytes,
+                            publication_bytes,
+                        )) => eprintln!(
+                            "[rustc-codegen-fe2o3] {} consumed its single-use frontend receipt for exact collected KernelEntry `{}` export `{}` with reviewed path-independent portable MIR {}; exact ABI/roles A:&[u16] and B:&[u16] as bit-preserving BF16 carriers, C:&[f32], D:DisjointSlice<f32>; explicit kernarg {} bytes, complete COV6 kernarg {} bytes; exact one-wave 64x1x1 one-tile launch with no LDS; target {}; COV{}; compiler semantics {}; sealed frontend authority {}; selected canonical fe2o3::tiled_gemm_v1 and lowered it through dialect_amdgcn::lower_tiled_gemm_v1_to_gfx942_llvm_ir; published exact inert Worker V2 compiler-module handoff ({} canonical bytes, {} LLVM bytes, {} receipt bytes) with compiler descriptor and frontend-authority sections; source/MIR authentication to canonical-module selection is a bounded reviewed correspondence, not a compiler-refinement proof; Worker execution, final HSACO construction or inspection, load, launch, COMGR, and the separate 32/288-byte fragment probe were not entered",
+                            collected_tiled_gemm_v1::COLLECTED_TILED_GEMM_PIPELINE_V1,
+                            root_instance_identity,
+                            kernel_export,
+                            portable_mir_semantic,
+                            collected_tiled_gemm_v1::TILED_GEMM_EXPLICIT_KERNARG_BYTES_V1,
+                            collected_tiled_gemm_v1::TILED_GEMM_COMPLETE_KERNARG_BYTES_V1,
+                            collected_tiled_gemm_v1::EXACT_TILED_GEMM_TARGET_V1,
+                            collected_tiled_gemm_v1::TILED_GEMM_CODE_OBJECT_VERSION_V1,
+                            compiler_semantics,
+                            frontend_authority,
+                            canonical_handoff_bytes,
+                            llvm_bytes,
+                            publication_bytes,
+                        ),
+                        Err(error) => tcx.dcx().fatal(format!(
+                            "[rustc-codegen-fe2o3] {} rejected the collected program without fallback: {error}",
+                            collected_tiled_gemm_v1::COLLECTED_TILED_GEMM_PIPELINE_V1,
                         )),
                     }
                 } else if matches!(
@@ -862,6 +978,12 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             CodegenPipeline::CollectedScalarGemmV1 => {
                                 Err(amdgpu_llvm::EmitError::Preflight {
                                     reason: "internal error: collected scalar GEMM V1 entered the legacy artifact transaction"
+                                        .to_owned(),
+                                })
+                            }
+                            CodegenPipeline::CollectedTiledGemmV1 => {
+                                Err(amdgpu_llvm::EmitError::Preflight {
+                                    reason: "internal error: collected tiled GEMM V1 entered the legacy artifact transaction"
                                         .to_owned(),
                                 })
                             }
@@ -1950,8 +2072,26 @@ mod tests {
             PipelineSelection::from_value(Some(OsStr::new("kernel-ir-worker-v2"))),
             PipelineSelection::Valid(CodegenPipeline::KernelIrWorkerV2)
         );
+        assert_eq!(
+            PipelineSelection::from_value(Some(OsStr::new("collected-scalar-gemm-v1"))),
+            PipelineSelection::Valid(CodegenPipeline::CollectedScalarGemmV1)
+        );
+        assert_eq!(
+            PipelineSelection::from_value(Some(OsStr::new("collected-tiled-gemm-v1"))),
+            PipelineSelection::Valid(CodegenPipeline::CollectedTiledGemmV1)
+        );
 
-        for invalid in ["", "legacy", "kernel-ir", "worker-v2", "true", "1"] {
+        for invalid in [
+            "",
+            "legacy",
+            "kernel-ir",
+            "worker-v2",
+            "collected-tiled-gemm",
+            "collected_tiled_gemm_v1",
+            "COLLECTED-TILED-GEMM-V1",
+            "true",
+            "1",
+        ] {
             let selection = PipelineSelection::from_value(Some(OsStr::new(invalid)));
             let error = selection.resolve().expect_err("selector must be exact");
             let message = error.to_string();
@@ -1959,6 +2099,7 @@ mod tests {
             assert!(message.contains("legacy-v1"));
             assert!(message.contains("kernel-ir-v1"));
             assert!(message.contains("kernel-ir-worker-v2"));
+            assert!(message.contains("collected-tiled-gemm-v1"));
         }
     }
 

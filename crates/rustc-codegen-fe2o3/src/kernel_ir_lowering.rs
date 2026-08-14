@@ -1703,6 +1703,20 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                         ),
                     ));
                 }
+                Some(
+                    TrustedDeviceItem::Bf16MfmaFragmentFromBits
+                    | TrustedDeviceItem::F32AccumulatorFragmentFromValues
+                    | TrustedDeviceItem::F32AccumulatorFragmentIntoValues,
+                ) => {
+                    return Err(diagnostic(
+                        TranslationDiagnosticCode::UnsupportedCall,
+                        location,
+                        format!(
+                            "trusted device item `{}` is reserved for the source-authenticated collected tiled GEMM V1 profile",
+                            callee.identity()
+                        ),
+                    ));
+                }
                 Some(TrustedDeviceItem::DeviceValue(_)) => {
                     return Err(diagnostic(
                         TranslationDiagnosticCode::UnsupportedCall,

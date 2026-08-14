@@ -19,7 +19,10 @@ use fe2o3_kernel_descriptor::{
     KernelDescriptorV1, KernelId, LaunchConstraintsV1, LogicalArgumentV1, ProducerIdentityV1,
     ScalarTypeV1, SourceTypeDescriptorV1, SourceTypeRecordV1, Text, ValidName, ValidationError,
 };
-use fe2o3_kernel_ir::{Module, TargetCapability, WaveWidth, WorkgroupSize};
+use fe2o3_kernel_ir::{
+    BF16_F32_M16N16K16_CAPABILITY, MATRIX_CAPABILITY_NAMESPACE, Module, TargetCapability,
+    WaveWidth, WorkgroupSize,
+};
 use reserved_fe2o3_symbols::{KernelBindingIdV1, MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1};
 use rustc_middle::ty::TyCtxt;
 use sha2::{Digest, Sha256};
@@ -303,6 +306,51 @@ pub(crate) fn construct_compiler_descriptor_source_v1(
     compiler_module: &InertCompilerModuleTextV1,
     typed_roots: &[TypedDescriptorRootV1],
 ) -> Result<Option<CompilerDescriptorSourceV1>, CompilerDescriptorError> {
+    construct_compiler_descriptor_source_with_profile_v1(
+        envelope,
+        module,
+        compiler_module,
+        typed_roots,
+        WORKGROUP_X,
+        u32::MAX,
+        false,
+    )
+}
+
+/// Constructs the source-authenticated one-wave tiled GEMM descriptor input.
+///
+/// The existing generic/scalar path remains fixed at WG256. This entry point
+/// admits WG64 and matrix capabilities only for the exact canonical tiled GEMM
+/// module; it does not relax descriptor policy for any caller-supplied graph.
+pub(crate) fn construct_tiled_gemm_v1_compiler_descriptor_source_v1(
+    envelope: &CompilerFfiEnvelopeV1,
+    module: &Module,
+    compiler_module: &InertCompilerModuleTextV1,
+    typed_roots: &[TypedDescriptorRootV1],
+) -> Result<Option<CompilerDescriptorSourceV1>, CompilerDescriptorError> {
+    if module != &fe2o3_kernel_ir::tiled_gemm_v1_module() {
+        return Err(CompilerDescriptorError::NonCanonicalTiledGemmModule);
+    }
+    construct_compiler_descriptor_source_with_profile_v1(
+        envelope,
+        module,
+        compiler_module,
+        typed_roots,
+        fe2o3_kernel_ir::TILED_GEMM_V1_LANES,
+        1,
+        true,
+    )
+}
+
+fn construct_compiler_descriptor_source_with_profile_v1(
+    envelope: &CompilerFfiEnvelopeV1,
+    module: &Module,
+    compiler_module: &InertCompilerModuleTextV1,
+    typed_roots: &[TypedDescriptorRootV1],
+    workgroup_x: u32,
+    max_grid_x: u32,
+    allow_exact_tiled_matrix: bool,
+) -> Result<Option<CompilerDescriptorSourceV1>, CompilerDescriptorError> {
     if typed_roots.is_empty() {
         return Ok(None);
     }
@@ -343,7 +391,7 @@ pub(crate) fn construct_compiler_descriptor_source_v1(
         device_layouts.push(layout);
     }
 
-    let module_capabilities = descriptor_capabilities(module)?;
+    let module_capabilities = descriptor_capabilities(module, allow_exact_tiled_matrix)?;
     let mut seen_exports = BTreeSet::new();
     let mut kernels = Vec::with_capacity(typed_roots.len());
     for root in typed_roots {
@@ -358,10 +406,11 @@ pub(crate) fn construct_compiler_descriptor_source_v1(
             .iter()
             .find(|kernel| kernel.id.as_str() == root.export_name)
             .ok_or_else(|| CompilerDescriptorError::MissingTypedKernel(root.export_name.clone()))?;
-        if kernel.workgroup_size != Some(WorkgroupSize::new(WORKGROUP_X, 1, 1)) {
-            return Err(CompilerDescriptorError::UnexpectedWorkgroupSize(
-                root.export_name.clone(),
-            ));
+        if kernel.workgroup_size != Some(WorkgroupSize::new(workgroup_x, 1, 1)) {
+            return Err(CompilerDescriptorError::UnexpectedWorkgroupSize {
+                kernel: root.export_name.clone(),
+                expected_x: workgroup_x,
+            });
         }
 
         let arguments = root
@@ -432,9 +481,9 @@ pub(crate) fn construct_compiler_descriptor_source_v1(
             )?,
             LaunchConstraintsV1::new(
                 1,
-                BlockSizeV1::Exact(DimensionsV1::new(WORKGROUP_X, 1, 1)?),
-                DimensionsV1::new(u32::MAX, 1, 1)?,
-                WORKGROUP_X,
+                BlockSizeV1::Exact(DimensionsV1::new(workgroup_x, 1, 1)?),
+                DimensionsV1::new(max_grid_x, 1, 1)?,
+                workgroup_x,
                 0,
                 0,
             )?,
@@ -448,7 +497,11 @@ pub(crate) fn construct_compiler_descriptor_source_v1(
     {
         "typed-vecadd-gfx942-cov6-v1"
     } else {
-        "typed-general-gfx942-cov6-v1"
+        if allow_exact_tiled_matrix {
+            "typed-tiled-gemm-gfx942-cov6-v1"
+        } else {
+            "typed-general-gfx942-cov6-v1"
+        }
     };
     let table = DeviceDescriptorTableV1::new(
         CanonicalCodeObjectDigest::from_bytes([0; 32]),
@@ -491,7 +544,10 @@ fn descriptor_records(
     }
 }
 
-fn descriptor_capabilities(module: &Module) -> Result<Vec<CapabilityV1>, CompilerDescriptorError> {
+fn descriptor_capabilities(
+    module: &Module,
+    allow_exact_tiled_matrix: bool,
+) -> Result<Vec<CapabilityV1>, CompilerDescriptorError> {
     let mut result = BTreeSet::new();
     let mut effective = module.effective_capabilities();
     effective.extend(
@@ -523,6 +579,17 @@ fn descriptor_capabilities(module: &Module) -> Result<Vec<CapabilityV1>, Compile
             }
             TargetCapability::WaveWidth(WaveWidth::Wave64) => {
                 result.insert(CapabilityV1::AmdWave);
+            }
+            TargetCapability::BFloat16 if allow_exact_tiled_matrix => {
+                result.insert(CapabilityV1::MatrixMultiply);
+            }
+            TargetCapability::Extension { namespace, name }
+                if allow_exact_tiled_matrix
+                    && namespace == MATRIX_CAPABILITY_NAMESPACE
+                    && name == BF16_F32_M16N16K16_CAPABILITY =>
+            {
+                result.insert(CapabilityV1::MatrixMultiply);
+                result.insert(CapabilityV1::AmdMfma);
             }
             unsupported => {
                 return Err(CompilerDescriptorError::UnsupportedCapability(format!(
@@ -685,7 +752,11 @@ pub(crate) enum CompilerDescriptorError {
     UnsupportedCodeObjectVersion(CodeObjectVersion),
     DuplicateTypedKernel(String),
     MissingTypedKernel(String),
-    UnexpectedWorkgroupSize(String),
+    UnexpectedWorkgroupSize {
+        kernel: String,
+        expected_x: u32,
+    },
+    NonCanonicalTiledGemmModule,
     UnsupportedCapability(String),
     Validation(ValidationError),
     Source(CompilerDescriptorSourceErrorV1),
@@ -786,13 +857,16 @@ impl fmt::Display for CompilerDescriptorError {
                     "typed descriptor kernel `{kernel}` is absent from kernel IR"
                 )
             }
-            Self::UnexpectedWorkgroupSize(kernel) => write!(
+            Self::UnexpectedWorkgroupSize { kernel, expected_x } => write!(
                 formatter,
-                "typed descriptor kernel `{kernel}` does not have the exact 256x1x1 workgroup"
+                "typed descriptor kernel `{kernel}` does not have the exact {expected_x}x1x1 workgroup"
+            ),
+            Self::NonCanonicalTiledGemmModule => formatter.write_str(
+                "tiled GEMM descriptor construction requires the exact canonical tiled_gemm_v1 module",
             ),
             Self::UnsupportedCapability(capability) => write!(
                 formatter,
-                "typed vecadd descriptor cannot represent capability {capability}"
+                "typed descriptor cannot represent capability {capability}"
             ),
             Self::Validation(error) => write!(formatter, "invalid typed descriptor: {error}"),
             Self::Source(error) => write!(formatter, "invalid compiler descriptor source: {error}"),
@@ -930,6 +1004,103 @@ pub(crate) fn scalar_gemm_v1_descriptor_source_for_test() -> CompilerDescriptorS
     construct_compiler_descriptor_source_v1(&envelope, &module, &compiler_module, &[root])
         .unwrap()
         .unwrap()
+}
+
+#[cfg(test)]
+pub(crate) fn tiled_gemm_v1_descriptor_source_for_test() -> CompilerDescriptorSourceV1 {
+    use fe2o3_artifacts::{
+        PointerWidth, RustDisjointIndexSpaceV1, RustLayoutEvidenceV1, RustPhysicalComponentKindV1,
+        RustPhysicalComponentV1, RustPointerMutabilityV1, RustScalarElementTypeV1,
+        RustSourceTypeShapeV1, RustTypeEvidenceV1, RustcAbiClassV1,
+    };
+    use reserved_fe2o3_symbols::GeneratedHostContractIdV3;
+
+    fn layout(kind: GeneralTypedArgumentKindV3) -> RustLayoutEvidenceV1 {
+        let (element, disjoint) = match kind {
+            GeneralTypedArgumentKindV3::SharedSlice(element) => (element, false),
+            GeneralTypedArgumentKindV3::DisjointSlice(element) => (element, true),
+            GeneralTypedArgumentKindV3::Scalar(_) => unreachable!("tiled profile has no scalar"),
+        };
+        let shape = if disjoint {
+            RustSourceTypeShapeV1::disjoint_slice(element, RustDisjointIndexSpaceV1::Index1D)
+        } else {
+            RustSourceTypeShapeV1::shared_slice(element)
+        };
+        RustLayoutEvidenceV1::new(
+            RustTypeEvidenceV1::new(shape),
+            RustcAbiClassV1::ScalarPair,
+            PointerWidth::Bits64,
+            16,
+            8,
+            vec![
+                RustPhysicalComponentV1::new(
+                    0,
+                    8,
+                    8,
+                    RustPhysicalComponentKindV1::Pointer {
+                        mutability: if disjoint {
+                            RustPointerMutabilityV1::Mut
+                        } else {
+                            RustPointerMutabilityV1::Const
+                        },
+                        pointee: element,
+                    },
+                )
+                .unwrap(),
+                RustPhysicalComponentV1::new(8, 8, 8, RustPhysicalComponentKindV1::Usize).unwrap(),
+            ],
+        )
+        .unwrap()
+    }
+
+    let kinds = [
+        GeneralTypedArgumentKindV3::SharedSlice(RustScalarElementTypeV1::U16),
+        GeneralTypedArgumentKindV3::SharedSlice(RustScalarElementTypeV1::U16),
+        GeneralTypedArgumentKindV3::SharedSlice(RustScalarElementTypeV1::F32),
+        GeneralTypedArgumentKindV3::DisjointSlice(RustScalarElementTypeV1::F32),
+    ];
+    let names = ["a", "b", "c", "d"];
+    let arguments = kinds
+        .into_iter()
+        .enumerate()
+        .map(|(index, kind)| TypedDescriptorArgumentV1 {
+            name: names[index].to_owned(),
+            kind: descriptor_argument_kind(kind),
+            access: match kind {
+                GeneralTypedArgumentKindV3::SharedSlice(_) => AccessMode::ReadOnly,
+                GeneralTypedArgumentKindV3::DisjointSlice(_) => AccessMode::ReadWrite,
+                GeneralTypedArgumentKindV3::Scalar(_) => unreachable!(),
+            },
+            offset: (index as u32) * 16,
+            layout: layout(kind),
+        })
+        .collect::<Vec<_>>();
+    let root = TypedDescriptorRootV1 {
+        logical_name: "tiled_gemm_v1".to_owned(),
+        export_name: "tiled_gemm_v1".to_owned(),
+        profile: TypedKernelProfile::GeneralScalarSliceRustcLayoutV3 {
+            generated_host_contract_identity: GeneratedHostContractIdV3::from_bytes([0x66; 32]),
+        },
+        kernel_binding: KernelBindingIdV1::from_bytes([0x74; 32]),
+        arguments: TypedArgumentListV1::new(arguments).unwrap(),
+        explicit_argument_bytes: 64,
+        kernarg_alignment_bytes: 8,
+    };
+    let module = fe2o3_kernel_ir::tiled_gemm_v1_module();
+    let compiler_module =
+        crate::kernel_ir_codegen::construct_inert_tiled_gemm_v1_module_text(&module).unwrap();
+    let target = fe2o3_compiler_ffi::DeviceTargetV1::parse("gfx942:xnack-").unwrap();
+    let envelope =
+        CompilerFfiEnvelopeV1::for_module_without_device_ffi(target, CodeObjectVersion::V6)
+            .unwrap();
+    construct_tiled_gemm_v1_compiler_descriptor_source_v1(
+        &envelope,
+        &module,
+        &compiler_module,
+        &[root],
+    )
+    .unwrap()
+    .unwrap()
 }
 
 #[cfg(test)]

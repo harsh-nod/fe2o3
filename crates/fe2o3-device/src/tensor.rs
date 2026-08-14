@@ -44,6 +44,16 @@ impl Bf16MfmaFragment {
         Self(values)
     }
 
+    /// Reinterprets four physical `u16` values as one BF16 MFMA fragment.
+    ///
+    /// The collected tiled GEMM profile admits this only as a bit-preserving
+    /// source-to-Kernel-IR bridge. It performs no numeric conversion.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_bf16_mfma_fragment_from_bits_v1"]
+    pub fn from_bits(bits: [u16; 4]) -> Self {
+        Self(bits.map(Bf16::from_bits))
+    }
+
     pub const fn to_array(self) -> [Bf16; 4] {
         self.0
     }
@@ -60,6 +70,20 @@ impl F32AccumulatorFragment {
 
     pub const fn new(values: [f32; 4]) -> Self {
         Self(values)
+    }
+
+    /// Creates one lane's exact four-value FP32 accumulator fragment.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_f32_accumulator_fragment_from_values_v1"]
+    pub fn from_values(values: [f32; 4]) -> Self {
+        Self(values)
+    }
+
+    /// Returns the four FP32 results uniquely owned by this lane.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_f32_accumulator_fragment_into_values_v1"]
+    pub fn into_values(self) -> [f32; 4] {
+        self.0
     }
 
     pub const fn to_array(self) -> [f32; 4] {

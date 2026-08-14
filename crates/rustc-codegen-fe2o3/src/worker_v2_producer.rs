@@ -1,6 +1,7 @@
 //! Preparation and attempt-scoped publication of inert Worker V2 compiler modules.
 
 use crate::collected_scalar_gemm_v1::AuthenticatedScalarGemmModuleV1;
+use crate::collected_tiled_gemm_v1::AuthenticatedTiledGemmModuleV1;
 use crate::compiler_descriptor::{
     CompilerDescriptorError, TypedDescriptorRootV1, construct_compiler_descriptor_source_v1,
 };
@@ -30,6 +31,7 @@ use std::path::Path;
 
 const G1_WORKGROUP_X: u32 = 256;
 const SCALAR_GEMM_V1_DESCRIPTOR: &str = "scalar_gemm_v1.kd";
+const TILED_GEMM_V1_DESCRIPTOR: &str = "tiled_gemm_v1.kd";
 
 /// Inert Worker V2 compiler-module handoff retained with the frontend authority
 /// that selected its canonical scalar GEMM Kernel IR.
@@ -43,6 +45,24 @@ pub(crate) struct PreparedScalarGemmV1WorkerHandoffV1 {
 }
 
 impl PreparedScalarGemmV1WorkerHandoffV1 {
+    pub(crate) const fn frontend_authority_commitment(&self) -> &[u8; 32] {
+        &self.frontend_authority_commitment
+    }
+
+    pub(crate) const fn handoff(&self) -> &CompilerModuleHandoffV2 {
+        &self.handoff
+    }
+}
+
+/// Typed, inert Worker V2 handoff for the source-authenticated canonical tiled
+/// GEMM. It is distinct from the 32/288-byte fragment-level frontend probe.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct PreparedTiledGemmV1WorkerHandoffV1 {
+    frontend_authority_commitment: [u8; 32],
+    handoff: CompilerModuleHandoffV2,
+}
+
+impl PreparedTiledGemmV1WorkerHandoffV1 {
     pub(crate) const fn frontend_authority_commitment(&self) -> &[u8; 32] {
         &self.frontend_authority_commitment
     }
@@ -87,6 +107,39 @@ pub(crate) fn publish_prepared_scalar_gemm_v1_worker_handoff(
     .map_err(WorkerV2ProducerError::Publication)?;
     eprintln!(
         "[rustc-codegen-fe2o3] published scalar GEMM Worker V2 handoff bound to frontend authority {authority_hex}"
+    );
+    Ok(receipt)
+}
+
+pub(crate) fn publish_prepared_tiled_gemm_v1_worker_handoff(
+    output_dir: &Path,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    prepared: PreparedTiledGemmV1WorkerHandoffV1,
+) -> Result<CompilerModuleHandoffReceiptV1, WorkerV2ProducerError> {
+    let PreparedTiledGemmV1WorkerHandoffV1 {
+        frontend_authority_commitment,
+        handoff,
+    } = prepared;
+    let authority_hex = hex(&frontend_authority_commitment);
+    let module = std::str::from_utf8(handoff.module_bytes())
+        .map_err(|_| WorkerV2ProducerError::MissingTiledFrontendAuthority)?;
+    if !module.contains(".fe2o3.tiled-auth.v1")
+        || !frontend_authority_commitment
+            .chunks(16)
+            .all(|chunk| module.contains(&module_asm_byte_line(chunk)))
+    {
+        return Err(WorkerV2ProducerError::MissingTiledFrontendAuthority);
+    }
+    let receipt = publish_compiler_module_handoff_v1(
+        output_dir,
+        producer,
+        attempt,
+        handoff.canonical_bytes(),
+    )
+    .map_err(WorkerV2ProducerError::Publication)?;
+    eprintln!(
+        "[rustc-codegen-fe2o3] published tiled GEMM Worker V2 handoff bound to frontend authority {authority_hex}"
     );
     Ok(receipt)
 }
@@ -150,6 +203,55 @@ pub(crate) fn prepare_scalar_gemm_v1_worker_handoff(
     )
     .map_err(WorkerV2ProducerError::Handoff)?;
     Ok(PreparedScalarGemmV1WorkerHandoffV1 {
+        frontend_authority_commitment,
+        handoff,
+    })
+}
+
+/// Consumes exact source authority and prepares only the canonical WG64 tiled
+/// GEMM LLVM handoff. Lowering uses upstream LLVM-facing text and the Worker V2
+/// protocol; neither this path nor its publication invokes COMGR.
+pub(crate) fn prepare_tiled_gemm_v1_worker_handoff(
+    authenticated: AuthenticatedTiledGemmModuleV1,
+) -> Result<PreparedTiledGemmV1WorkerHandoffV1, WorkerV2ProducerError> {
+    let frontend_authority_commitment = *authenticated.authority_commitment();
+    let (module, descriptor_source) = authenticated.into_parts();
+    let compiler_module =
+        crate::kernel_ir_codegen::construct_inert_tiled_gemm_v1_module_text(&module)
+            .map_err(WorkerV2ProducerError::CompilerModule)?;
+    let compiler_module = bind_compiler_descriptor_source_v1(compiler_module, &descriptor_source)
+        .map_err(WorkerV2ProducerError::CompilerModule)?;
+    let compiler_module = crate::kernel_ir_codegen::bind_tiled_gemm_frontend_authority_v1(
+        compiler_module,
+        frontend_authority_commitment,
+    )
+    .map_err(WorkerV2ProducerError::CompilerModule)?;
+    let target = DeviceTargetV1::parse(AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME)
+        .expect("fixed tiled GEMM target is valid");
+    let envelope =
+        CompilerFfiEnvelopeV1::for_module_without_device_ffi(target, CodeObjectVersion::V6)
+            .map_err(WorkerV2ProducerError::CompilerEnvelope)?;
+    let symbol_manifest = CompilerModuleSymbolManifestV1::new([
+        (
+            CompilerModuleSymbolRoleV1::KernelEntry,
+            fe2o3_kernel_ir::TILED_GEMM_V1_KERNEL_ID,
+        ),
+        (
+            CompilerModuleSymbolRoleV1::KernelDescriptor,
+            TILED_GEMM_V1_DESCRIPTOR,
+        ),
+    ])
+    .map_err(WorkerV2ProducerError::SymbolManifest)?;
+    let handoff = CompilerModuleHandoffV2::new(
+        CompilerModuleKindV1::LlvmTextIr,
+        target,
+        CodeObjectVersion::V6,
+        envelope,
+        symbol_manifest,
+        compiler_module.llvm_ir().as_bytes(),
+    )
+    .map_err(WorkerV2ProducerError::Handoff)?;
+    Ok(PreparedTiledGemmV1WorkerHandoffV1 {
         frontend_authority_commitment,
         handoff,
     })
@@ -460,6 +562,7 @@ pub(crate) enum WorkerV2ProducerError {
     MissingBuildAttempt,
     MissingCompilerFfiEnvelope,
     MissingScalarFrontendAuthority,
+    MissingTiledFrontendAuthority,
     MissingExternalDeclaration(String),
     MissingCompilerDefinition(String),
     TargetCapabilities(CapabilityDerivationError),
@@ -495,6 +598,9 @@ impl fmt::Display for WorkerV2ProducerError {
             }
             Self::MissingScalarFrontendAuthority => formatter.write_str(
                 "scalar GEMM compiler-module handoff lost its embedded frontend authority",
+            ),
+            Self::MissingTiledFrontendAuthority => formatter.write_str(
+                "tiled GEMM compiler-module handoff lost its embedded frontend authority",
             ),
             Self::MissingExternalDeclaration(symbol) => write!(
                 formatter,
@@ -536,7 +642,7 @@ impl fmt::Display for WorkerV2ProducerError {
             Self::CompilerEnvelope(error) => {
                 write!(
                     formatter,
-                    "scalar GEMM V1 FFI-free envelope failed: {error}"
+                    "exact FFI-free compiler envelope failed: {error}"
                 )
             }
             Self::CompilerDescriptor(error) => {
@@ -580,6 +686,7 @@ impl Error for WorkerV2ProducerError {
             Self::MissingBuildAttempt
             | Self::MissingCompilerFfiEnvelope
             | Self::MissingScalarFrontendAuthority
+            | Self::MissingTiledFrontendAuthority
             | Self::MissingExternalDeclaration(_)
             | Self::MissingCompilerDefinition(_)
             | Self::UnsupportedWaveMode { .. }
@@ -593,6 +700,7 @@ impl Error for WorkerV2ProducerError {
 mod tests {
     use super::*;
     use crate::collected_scalar_gemm_v1::exact_frontend_receipt_for_test;
+    use crate::collected_tiled_gemm_v1::exact_frontend_receipt_for_test as exact_tiled_frontend_receipt_for_test;
     use fe2o3_artifact_transaction::{
         BuildInvocation, BuildSession, CompilerModuleHandoffErrorV1 as PublicationError,
         begin_build_attempt, consume_compiler_module_handoff_v1,
@@ -700,6 +808,76 @@ mod tests {
                 .symbols(CompilerModuleSymbolRoleV1::KernelDescriptor)
                 .collect::<Vec<_>>(),
             [SCALAR_GEMM_V1_DESCRIPTOR]
+        );
+        assert!(!handoff.authenticates_compiler_origin());
+        assert!(!handoff.grants_worker_authority());
+        assert!(!handoff.grants_link_authority());
+        assert!(!handoff.grants_load_authority());
+        assert!(!handoff.grants_launch_authority());
+    }
+
+    #[test]
+    fn consumed_tiled_receipt_prepares_only_the_exact_wg64_gfx942_handoff() {
+        let mut receipt = exact_tiled_frontend_receipt_for_test();
+        let authenticated = receipt.consume().expect("consume exact tiled receipt");
+        let expected_authority = *authenticated.authority_commitment();
+        let prepared = prepare_tiled_gemm_v1_worker_handoff(authenticated)
+            .expect("prepare exact tiled GEMM handoff");
+        let handoff = prepared.handoff();
+        let canonical = dialect_amdgcn::lower_tiled_gemm_v1_to_gfx942_llvm_ir(
+            &fe2o3_kernel_ir::tiled_gemm_v1_module(),
+            fe2o3_kernel_ir::TiledGemmV1Profile::exact_gfx942_xnack_minus_cov6(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            prepared.frontend_authority_commitment(),
+            &expected_authority
+        );
+        assert_eq!(handoff.kind(), CompilerModuleKindV1::LlvmTextIr);
+        assert_eq!(handoff.target(), target());
+        assert_eq!(handoff.code_object_version(), CodeObjectVersion::V6);
+        assert!(
+            handoff
+                .module_bytes()
+                .starts_with(canonical.as_str().as_bytes())
+        );
+        let module_text = std::str::from_utf8(handoff.module_bytes()).unwrap();
+        assert!(module_text.contains("\"amdgpu-flat-work-group-size\"=\"64,64\""));
+        assert!(module_text.contains("!0 = !{i32 64, i32 1, i32 1}"));
+        assert_eq!(
+            module_text.matches(" = load i16, ptr addrspace(1)").count(),
+            8
+        );
+        assert_eq!(
+            module_text
+                .matches(" = load float, ptr addrspace(1)")
+                .count(),
+            4
+        );
+        assert_eq!(module_text.matches("store float ").count(), 4);
+        assert_eq!(
+            module_text
+                .matches("call <4 x float> @llvm.amdgcn.mfma.f32.16x16x16bf16.1k(")
+                .count(),
+            1
+        );
+        assert!(module_text.contains("module asm \".section .fe2o3.kd.v1"));
+        assert!(module_text.contains("module asm \".section .fe2o3.tiled-auth.v1"));
+        assert!(!module_text.contains(".fe2o3.scalar-auth.v1"));
+        assert_eq!(
+            handoff
+                .symbol_manifest()
+                .symbols(CompilerModuleSymbolRoleV1::KernelEntry)
+                .collect::<Vec<_>>(),
+            [fe2o3_kernel_ir::TILED_GEMM_V1_KERNEL_ID]
+        );
+        assert_eq!(
+            handoff
+                .symbol_manifest()
+                .symbols(CompilerModuleSymbolRoleV1::KernelDescriptor)
+                .collect::<Vec<_>>(),
+            [TILED_GEMM_V1_DESCRIPTOR]
         );
         assert!(!handoff.authenticates_compiler_origin());
         assert!(!handoff.grants_worker_authority());

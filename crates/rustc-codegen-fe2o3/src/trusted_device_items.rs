@@ -109,7 +109,10 @@ pub(crate) enum TrustedDeviceItem {
     DeviceMatrix,
     DeviceMatrixFromCompiler,
     Bf16MfmaFragment,
+    Bf16MfmaFragmentFromBits,
     F32AccumulatorFragment,
+    F32AccumulatorFragmentFromValues,
+    F32AccumulatorFragmentIntoValues,
     DeviceMatrixMultiplyAccumulate,
     DeviceValue(DeviceValueDiagnosticItem),
     DeviceMath(DeviceMathDiagnosticItem),
@@ -275,9 +278,24 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         "fe2o3_device::Bf16MfmaFragment",
     ),
     (
+        TrustedDeviceItem::Bf16MfmaFragmentFromBits,
+        "fe2o3_device_bf16_mfma_fragment_from_bits_v1",
+        "fe2o3_device::Bf16MfmaFragment::from_bits",
+    ),
+    (
         TrustedDeviceItem::F32AccumulatorFragment,
         "fe2o3_device_f32_accumulator_fragment_v1",
         "fe2o3_device::F32AccumulatorFragment",
+    ),
+    (
+        TrustedDeviceItem::F32AccumulatorFragmentFromValues,
+        "fe2o3_device_f32_accumulator_fragment_from_values_v1",
+        "fe2o3_device::F32AccumulatorFragment::from_values",
+    ),
+    (
+        TrustedDeviceItem::F32AccumulatorFragmentIntoValues,
+        "fe2o3_device_f32_accumulator_fragment_into_values_v1",
+        "fe2o3_device::F32AccumulatorFragment::into_values",
     ),
     (
         TrustedDeviceItem::DeviceMatrixMultiplyAccumulate,
@@ -527,7 +545,10 @@ const fn matrix_provider_bound_item(item: TrustedDeviceItem) -> bool {
         TrustedDeviceItem::DeviceMatrix
             | TrustedDeviceItem::DeviceMatrixFromCompiler
             | TrustedDeviceItem::Bf16MfmaFragment
+            | TrustedDeviceItem::Bf16MfmaFragmentFromBits
             | TrustedDeviceItem::F32AccumulatorFragment
+            | TrustedDeviceItem::F32AccumulatorFragmentFromValues
+            | TrustedDeviceItem::F32AccumulatorFragmentIntoValues
             | TrustedDeviceItem::DeviceMatrixMultiplyAccumulate
     )
 }
@@ -783,6 +804,9 @@ mod tests {
             TrustedDeviceItem::DeviceMatrixFromCompiler,
             TrustedDeviceItem::Bf16MfmaFragment,
             TrustedDeviceItem::F32AccumulatorFragment,
+            TrustedDeviceItem::Bf16MfmaFragmentFromBits,
+            TrustedDeviceItem::F32AccumulatorFragmentFromValues,
+            TrustedDeviceItem::F32AccumulatorFragmentIntoValues,
             TrustedDeviceItem::DeviceMatrixMultiplyAccumulate,
             TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VMovB32),
             TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VAddU32),
