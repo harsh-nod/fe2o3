@@ -728,14 +728,7 @@ fn row_softmax_rejects_workgroup_wave_grid_and_tiled_abi_substitution() {
 
 #[test]
 fn row_softmax_rejects_capability_target_symbol_and_descriptor_substitution() {
-    for capabilities in [
-        vec![CapabilityV1::AmdWave],
-        vec![
-            CapabilityV1::Subgroup,
-            CapabilityV1::Shuffle,
-            CapabilityV1::AmdWave,
-        ],
-    ] {
+    for capabilities in [vec![], vec![CapabilityV1::Subgroup, CapabilityV1::AmdWave]] {
         let table = row_softmax_descriptor_table(capabilities);
         let fixture = fixture_with_descriptor_table(row_softmax_options(), Some(&table));
         assert!(matches!(
@@ -1004,7 +997,7 @@ fn row_softmax_options() -> FixtureOptions<'static> {
 }
 
 fn row_softmax_capabilities() -> Vec<CapabilityV1> {
-    vec![CapabilityV1::Subgroup, CapabilityV1::AmdWave]
+    vec![CapabilityV1::AmdWave]
 }
 
 fn row_softmax_expectation() -> RowSoftmaxV1StructuralDescriptorExpectationV1 {
