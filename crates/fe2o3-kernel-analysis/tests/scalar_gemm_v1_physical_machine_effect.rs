@@ -11,9 +11,14 @@ use fe2o3_kernel_analysis::{
 };
 use std::{path::Path, time::Duration};
 
+const SCALAR_CODE_OFFSET: u64 = 0x1b00;
+const SCALAR_CODE_SIZE: u64 = 0x0ad0;
+
 #[derive(Clone)]
 struct Function<'a> {
     symbol: &'a str,
+    code_offset: u64,
+    code_size: u64,
     callees: Vec<&'a str>,
 }
 
@@ -59,61 +64,60 @@ fn request(profile: &ScalarGemmV1PhysicalMachineEffectProfileV1) -> PhysicalMach
 fn scalar_function() -> Function<'static> {
     Function {
         symbol: SCALAR_GEMM_V1_PHYSICAL_ENTRY_SYMBOL,
+        code_offset: SCALAR_CODE_OFFSET,
+        code_size: SCALAR_CODE_SIZE,
         callees: Vec::new(),
     }
 }
 
 fn scalar_effects(extra_write: bool) -> Vec<Effect<'static>> {
     let mut effects = Vec::new();
-    for (site, width, kind) in [
-        (0, 8, 2),
-        (4, 8, 2),
-        (8, 8, 2),
-        (12, 4, 2),
-        (16, 4, 2),
-        (20, 4, 2),
-        (24, 4, 2),
-        (28, 4, 2),
-        (32, 4, 3),
+    for (offset, width, kind) in [
+        (0x1b0c, 8, 2),
+        (0x1b14, 8, 2),
+        (0x1b1c, 8, 2),
+        (0x1b24, 4, 2),
+        (0x1b2c, 4, 2),
+        (0x1b34, 4, 2),
+        (0x2490, 4, 2),
+        (0x24a4, 4, 2),
+        (0x25c0, 4, 3),
     ] {
         effects.push(Effect {
             entry: SCALAR_GEMM_V1_PHYSICAL_ENTRY_SYMBOL,
             function: SCALAR_GEMM_V1_PHYSICAL_ENTRY_SYMBOL,
-            offset: 0x100 + site,
+            offset,
             kind: 1,
             width: 8,
         });
         effects.push(Effect {
             entry: SCALAR_GEMM_V1_PHYSICAL_ENTRY_SYMBOL,
             function: SCALAR_GEMM_V1_PHYSICAL_ENTRY_SYMBOL,
-            offset: 0x100 + site,
+            offset,
             kind,
             width,
         });
     }
-    let return_offset = if extra_write {
+    if extra_write {
         effects.push(Effect {
             entry: SCALAR_GEMM_V1_PHYSICAL_ENTRY_SYMBOL,
             function: SCALAR_GEMM_V1_PHYSICAL_ENTRY_SYMBOL,
-            offset: 0x124,
+            offset: 0x25c4,
             kind: 1,
             width: 8,
         });
         effects.push(Effect {
             entry: SCALAR_GEMM_V1_PHYSICAL_ENTRY_SYMBOL,
             function: SCALAR_GEMM_V1_PHYSICAL_ENTRY_SYMBOL,
-            offset: 0x124,
+            offset: 0x25c4,
             kind: 3,
             width: 4,
         });
-        0x128
-    } else {
-        0x124
-    };
+    }
     effects.push(Effect {
         entry: SCALAR_GEMM_V1_PHYSICAL_ENTRY_SYMBOL,
         function: SCALAR_GEMM_V1_PHYSICAL_ENTRY_SYMBOL,
-        offset: return_offset,
+        offset: 0x25cc,
         kind: 4,
         width: 0,
     });
@@ -124,6 +128,24 @@ fn evidence(
     request: &PhysicalMachineEffectRequestV1,
     target: u16,
     descriptor_identity: PhysicalMachineDescriptorIdentityV1,
+    functions: &[Function<'_>],
+    effects: &[Effect<'_>],
+) -> Vec<u8> {
+    evidence_with_entry_range(
+        request,
+        target,
+        descriptor_identity,
+        (SCALAR_CODE_OFFSET, SCALAR_CODE_SIZE),
+        functions,
+        effects,
+    )
+}
+
+fn evidence_with_entry_range(
+    request: &PhysicalMachineEffectRequestV1,
+    target: u16,
+    descriptor_identity: PhysicalMachineDescriptorIdentityV1,
+    entry_range: (u64, u64),
     functions: &[Function<'_>],
     effects: &[Effect<'_>],
 ) -> Vec<u8> {
@@ -144,22 +166,16 @@ fn evidence(
     for (index, entry) in request.entries().iter().enumerate() {
         push_text(&mut output, entry.symbol());
         output.extend_from_slice(&descriptor_identity.as_bytes());
-        push_u64(&mut output, 0x100 + index as u64 * 0x100);
-        push_u64(&mut output, 0x40);
+        assert_eq!(index, 0);
+        push_u64(&mut output, entry_range.0);
+        push_u64(&mut output, entry_range.1);
     }
 
     push_u32(&mut output, functions.len() as u32);
     for function in functions {
         push_text(&mut output, function.symbol);
-        push_u64(
-            &mut output,
-            if function.symbol == SCALAR_GEMM_V1_PHYSICAL_ENTRY_SYMBOL {
-                0x100
-            } else {
-                0x180
-            },
-        );
-        push_u64(&mut output, 0x40);
+        push_u64(&mut output, function.code_offset);
+        push_u64(&mut output, function.code_size);
         push_u16(&mut output, function.callees.len() as u16);
         for callee in &function.callees {
             push_text(&mut output, callee);
@@ -321,6 +337,8 @@ fn extra_entry_write_expansion_and_open_calls_fail_closed() {
 
     let open = Function {
         symbol: SCALAR_GEMM_V1_PHYSICAL_ENTRY_SYMBOL,
+        code_offset: SCALAR_CODE_OFFSET,
+        code_size: SCALAR_CODE_SIZE,
         callees: vec!["missing"],
     };
     assert_eq!(
@@ -339,10 +357,14 @@ fn extra_entry_write_expansion_and_open_calls_fail_closed() {
 
     let helper = Function {
         symbol: "helper",
+        code_offset: 0x2600,
+        code_size: 0x40,
         callees: Vec::new(),
     };
     let calling = Function {
         symbol: SCALAR_GEMM_V1_PHYSICAL_ENTRY_SYMBOL,
+        code_offset: SCALAR_CODE_OFFSET,
+        code_size: SCALAR_CODE_SIZE,
         callees: vec!["helper"],
     };
     assert_eq!(
@@ -417,9 +439,111 @@ fn underreported_effects_and_zero_descriptor_identity_fail_closed() {
     ));
 }
 
+#[test]
+fn same_budget_site_relocations_and_broken_pairs_fail_closed() {
+    let profile = profile(hsaco(), descriptor(0x33));
+    let request = request(&profile);
+
+    let assert_effect_set_rejected = |effects: Vec<Effect<'static>>| {
+        let evidence = PhysicalMachineEffectEvidenceV1::decode_canonical_for(
+            &request,
+            &evidence(
+                &request,
+                1,
+                descriptor(0x33),
+                &[scalar_function()],
+                &effects,
+            ),
+        )
+        .unwrap();
+        assert!(matches!(
+            profile.validate_evidence(&evidence),
+            Err(ScalarGemmV1PhysicalMachineEffectErrorV1::EffectSet)
+        ));
+    };
+
+    let mut relocated_pair = scalar_effects(false);
+    relocated_pair[0].offset = 0x1b10;
+    relocated_pair[1].offset = 0x1b10;
+    assert_effect_set_rejected(relocated_pair);
+
+    let mut swapped_pair_offsets = scalar_effects(false);
+    swapped_pair_offsets[0].offset = 0x1b14;
+    swapped_pair_offsets[1].offset = 0x1b14;
+    swapped_pair_offsets[2].offset = 0x1b0c;
+    swapped_pair_offsets[3].offset = 0x1b0c;
+    assert_eq!(
+        PhysicalMachineEffectEvidenceV1::decode_canonical_for(
+            &request,
+            &evidence(
+                &request,
+                1,
+                descriptor(0x33),
+                &[scalar_function()],
+                &swapped_pair_offsets,
+            ),
+        ),
+        Err(PhysicalMachineEffectEvidenceErrorV1::NonCanonicalOrder)
+    );
+
+    let mut broken_pair = scalar_effects(false);
+    broken_pair[1].offset = 0x1b10;
+    assert_effect_set_rejected(broken_pair);
+
+    let mut swapped_read_widths = scalar_effects(false);
+    swapped_read_widths[1].width = 4;
+    swapped_read_widths[7].width = 8;
+    assert_effect_set_rejected(swapped_read_widths);
+}
+
+#[test]
+fn entry_and_function_range_substitutions_fail_closed() {
+    let profile = profile(hsaco(), descriptor(0x33));
+    let request = request(&profile);
+
+    let changed_entry = PhysicalMachineEffectEvidenceV1::decode_canonical_for(
+        &request,
+        &evidence_with_entry_range(
+            &request,
+            1,
+            descriptor(0x33),
+            (SCALAR_CODE_OFFSET - 4, SCALAR_CODE_SIZE + 4),
+            &[scalar_function()],
+            &scalar_effects(false),
+        ),
+    )
+    .unwrap();
+    assert!(matches!(
+        profile.validate_evidence(&changed_entry),
+        Err(ScalarGemmV1PhysicalMachineEffectErrorV1::EntryRange)
+    ));
+
+    let changed_function = Function {
+        symbol: SCALAR_GEMM_V1_PHYSICAL_ENTRY_SYMBOL,
+        code_offset: SCALAR_CODE_OFFSET,
+        code_size: SCALAR_CODE_SIZE + 4,
+        callees: Vec::new(),
+    };
+    let changed_function = PhysicalMachineEffectEvidenceV1::decode_canonical_for(
+        &request,
+        &evidence(
+            &request,
+            1,
+            descriptor(0x33),
+            &[changed_function],
+            &scalar_effects(false),
+        ),
+    )
+    .unwrap();
+    assert!(matches!(
+        profile.validate_evidence(&changed_function),
+        Err(ScalarGemmV1PhysicalMachineEffectErrorV1::FunctionRange)
+    ));
+}
+
 #[cfg(target_os = "linux")]
 #[test]
-fn authenticated_worker_result_is_profile_bound_and_inert() {
+fn authenticated_fixture_with_nonproduction_layout_is_rejected() {
     let limits = AuthenticatedPhysicalMachineEffectLimitsV1::new(
         Duration::from_secs(30),
         1024 * 1024,
@@ -431,19 +555,8 @@ fn authenticated_worker_result_is_profile_bound_and_inert() {
     let worker =
         AuthenticatedPhysicalMachineEffectWorkerV1::open(fixture, candidate.policy(), limits)
             .unwrap();
-    let authenticated = profile(hsaco(), descriptor(0x33))
-        .analyze(&worker, limits)
-        .unwrap();
-
-    assert!(authenticated.authenticates_analyzer_execution());
-    assert!(!authenticated.establishes_compiler_refinement());
-    assert!(!authenticated.establishes_logical_buffer_address_refinement());
-    assert!(!authenticated.establishes_memory_safety());
-    assert!(!authenticated.establishes_out_of_bounds_absence());
-    assert!(!authenticated.establishes_race_freedom());
-    assert!(!authenticated.grants_publication_authority());
-    assert!(!authenticated.grants_load_authority());
-    assert!(!authenticated.grants_launch_authority());
-    assert_eq!(authenticated.descriptor_identity(), descriptor(0x33));
-    assert_eq!(authenticated.evidence().entry_points().len(), 1);
+    assert!(matches!(
+        profile(hsaco(), descriptor(0x33)).analyze(&worker, limits),
+        Err(ScalarGemmV1PhysicalMachineEffectErrorV1::EntryRange)
+    ));
 }

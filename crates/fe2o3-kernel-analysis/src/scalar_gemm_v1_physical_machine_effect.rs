@@ -24,6 +24,56 @@ const LOGICAL_GLOBAL_READ_SITES: u32 = 2;
 const LOGICAL_GLOBAL_WRITE_SITES: u32 = 1;
 const RETURN_SITES: u32 = 1;
 
+const SCALAR_GEMM_V1_CODE_OFFSET: u64 = 0x1b00;
+const SCALAR_GEMM_V1_CODE_SIZE: u64 = 0x0ad0;
+
+#[derive(Clone, Copy)]
+struct ScalarGemmV1PhysicalEffectSiteV1 {
+    instruction_offset: u64,
+    kind: PhysicalMachineEffectKindV1,
+    byte_width: u16,
+}
+
+impl ScalarGemmV1PhysicalEffectSiteV1 {
+    const fn new(
+        instruction_offset: u64,
+        kind: PhysicalMachineEffectKindV1,
+        byte_width: u16,
+    ) -> Self {
+        Self {
+            instruction_offset,
+            kind,
+            byte_width,
+        }
+    }
+}
+
+/// Canonically ordered static effects emitted by the native LLVM analyzer for
+/// finalized artifact ac1da70c69a5038b887b459dece40802668c41bcf98f621d7d1273d2f61ba2c9.
+/// Each memory instruction must contribute an adjacent address/access pair at
+/// one exact instruction offset.
+const SCALAR_GEMM_V1_PHYSICAL_EFFECT_SITES: [ScalarGemmV1PhysicalEffectSiteV1; 19] = [
+    ScalarGemmV1PhysicalEffectSiteV1::new(0x1b0c, PhysicalMachineEffectKindV1::GlobalAddress, 8),
+    ScalarGemmV1PhysicalEffectSiteV1::new(0x1b0c, PhysicalMachineEffectKindV1::GlobalRead, 8),
+    ScalarGemmV1PhysicalEffectSiteV1::new(0x1b14, PhysicalMachineEffectKindV1::GlobalAddress, 8),
+    ScalarGemmV1PhysicalEffectSiteV1::new(0x1b14, PhysicalMachineEffectKindV1::GlobalRead, 8),
+    ScalarGemmV1PhysicalEffectSiteV1::new(0x1b1c, PhysicalMachineEffectKindV1::GlobalAddress, 8),
+    ScalarGemmV1PhysicalEffectSiteV1::new(0x1b1c, PhysicalMachineEffectKindV1::GlobalRead, 8),
+    ScalarGemmV1PhysicalEffectSiteV1::new(0x1b24, PhysicalMachineEffectKindV1::GlobalAddress, 8),
+    ScalarGemmV1PhysicalEffectSiteV1::new(0x1b24, PhysicalMachineEffectKindV1::GlobalRead, 4),
+    ScalarGemmV1PhysicalEffectSiteV1::new(0x1b2c, PhysicalMachineEffectKindV1::GlobalAddress, 8),
+    ScalarGemmV1PhysicalEffectSiteV1::new(0x1b2c, PhysicalMachineEffectKindV1::GlobalRead, 4),
+    ScalarGemmV1PhysicalEffectSiteV1::new(0x1b34, PhysicalMachineEffectKindV1::GlobalAddress, 8),
+    ScalarGemmV1PhysicalEffectSiteV1::new(0x1b34, PhysicalMachineEffectKindV1::GlobalRead, 4),
+    ScalarGemmV1PhysicalEffectSiteV1::new(0x2490, PhysicalMachineEffectKindV1::GlobalAddress, 8),
+    ScalarGemmV1PhysicalEffectSiteV1::new(0x2490, PhysicalMachineEffectKindV1::GlobalRead, 4),
+    ScalarGemmV1PhysicalEffectSiteV1::new(0x24a4, PhysicalMachineEffectKindV1::GlobalAddress, 8),
+    ScalarGemmV1PhysicalEffectSiteV1::new(0x24a4, PhysicalMachineEffectKindV1::GlobalRead, 4),
+    ScalarGemmV1PhysicalEffectSiteV1::new(0x25c0, PhysicalMachineEffectKindV1::GlobalAddress, 8),
+    ScalarGemmV1PhysicalEffectSiteV1::new(0x25c0, PhysicalMachineEffectKindV1::GlobalWrite, 4),
+    ScalarGemmV1PhysicalEffectSiteV1::new(0x25cc, PhysicalMachineEffectKindV1::Return, 0),
+];
+
 /// Static-site budget for the exact Scalar GEMM V1 gfx942 lowering.
 ///
 /// The six kernarg reads precede two logical f32 reads from A/B and one logical
@@ -160,6 +210,11 @@ impl ScalarGemmV1PhysicalMachineEffectProfileV1 {
         if entry.descriptor_identity() != self.descriptor_identity {
             return Err(ScalarGemmV1PhysicalMachineEffectErrorV1::DescriptorSubstitution);
         }
+        if entry.code_offset() != SCALAR_GEMM_V1_CODE_OFFSET
+            || entry.code_size() != SCALAR_GEMM_V1_CODE_SIZE
+        {
+            return Err(ScalarGemmV1PhysicalMachineEffectErrorV1::EntryRange);
+        }
 
         let [function] = evidence.functions() else {
             return Err(ScalarGemmV1PhysicalMachineEffectErrorV1::CallGraphNotClosed);
@@ -169,45 +224,28 @@ impl ScalarGemmV1PhysicalMachineEffectProfileV1 {
         {
             return Err(ScalarGemmV1PhysicalMachineEffectErrorV1::CallGraphNotClosed);
         }
+        if function.code_offset() != SCALAR_GEMM_V1_CODE_OFFSET
+            || function.code_size() != SCALAR_GEMM_V1_CODE_SIZE
+        {
+            return Err(ScalarGemmV1PhysicalMachineEffectErrorV1::FunctionRange);
+        }
 
-        let mut counts = [0_u32; 4];
-        let mut four_byte_reads = 0_u32;
-        let mut eight_byte_reads = 0_u32;
-        for effect in evidence.effects() {
+        if evidence.effects().len() != SCALAR_GEMM_V1_PHYSICAL_EFFECT_SITES.len() {
+            return Err(ScalarGemmV1PhysicalMachineEffectErrorV1::EffectSet);
+        }
+        for (effect, expected) in evidence
+            .effects()
+            .iter()
+            .zip(SCALAR_GEMM_V1_PHYSICAL_EFFECT_SITES)
+        {
             if effect.entry_symbol() != SCALAR_GEMM_V1_PHYSICAL_ENTRY_SYMBOL
                 || effect.function_symbol() != SCALAR_GEMM_V1_PHYSICAL_ENTRY_SYMBOL
+                || effect.instruction_offset() != expected.instruction_offset
+                || effect.kind() != expected.kind
+                || effect.byte_width() != expected.byte_width
             {
                 return Err(ScalarGemmV1PhysicalMachineEffectErrorV1::EffectSet);
             }
-            match effect.kind() {
-                PhysicalMachineEffectKindV1::GlobalAddress if effect.byte_width() == 8 => {
-                    counts[0] += 1;
-                }
-                PhysicalMachineEffectKindV1::GlobalRead if effect.byte_width() == 4 => {
-                    counts[1] += 1;
-                    four_byte_reads += 1;
-                }
-                PhysicalMachineEffectKindV1::GlobalRead if effect.byte_width() == 8 => {
-                    counts[1] += 1;
-                    eight_byte_reads += 1;
-                }
-                PhysicalMachineEffectKindV1::GlobalWrite if effect.byte_width() == 4 => {
-                    counts[2] += 1;
-                }
-                PhysicalMachineEffectKindV1::Return if effect.byte_width() == 0 => {
-                    counts[3] += 1;
-                }
-                _ => return Err(ScalarGemmV1PhysicalMachineEffectErrorV1::EffectSet),
-            }
-        }
-        let expected = [
-            SCALAR_GEMM_V1_PHYSICAL_EFFECT_BUDGET.max_global_addresses(),
-            SCALAR_GEMM_V1_PHYSICAL_EFFECT_BUDGET.max_global_reads(),
-            SCALAR_GEMM_V1_PHYSICAL_EFFECT_BUDGET.max_global_writes(),
-            SCALAR_GEMM_V1_PHYSICAL_EFFECT_BUDGET.max_returns(),
-        ];
-        if counts != expected || four_byte_reads != 5 || eight_byte_reads != 3 {
-            return Err(ScalarGemmV1PhysicalMachineEffectErrorV1::EffectSet);
         }
         Ok(())
     }
@@ -296,7 +334,9 @@ pub enum ScalarGemmV1PhysicalMachineEffectErrorV1 {
     TargetSubstitution,
     EntryPointSet,
     DescriptorSubstitution,
+    EntryRange,
     CallGraphNotClosed,
+    FunctionRange,
     EffectSet,
 }
 
