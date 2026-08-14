@@ -24,6 +24,12 @@ pub const SCALAR_GEMM_PROOF_TARGET_V1: &str = "gfx942:xnack-";
 pub const MAX_SCALAR_GEMM_PROOF_SOURCE_BYTES_V1: usize = 256 * 1024;
 pub const MAX_SCALAR_GEMM_PROOF_REVIEWS_V1: usize = 4096;
 
+const SCALAR_GEMM_PROOF_SOURCE_BYTE_LEN_V1: u64 = 6_879;
+const SCALAR_GEMM_PROOF_SOURCE_CONTENT_IDENTITY_V1: Digest = Digest::from_bytes([
+    0x98, 0x80, 0x3a, 0x62, 0x48, 0x8e, 0x1a, 0xf2, 0xfb, 0xc8, 0x86, 0xb1, 0xda, 0x5d, 0xdc, 0x68,
+    0x0b, 0x16, 0xd3, 0x5a, 0x8a, 0x8a, 0x5c, 0x22, 0xd4, 0x95, 0x91, 0x28, 0xdd, 0x2d, 0xa5, 0xfe,
+]);
+
 pub const SCALAR_GEMM_PROOF_REQUIRED_PROPERTIES_V1: [ProofProperty; 7] = [
     ProofProperty::Bounds,
     ProofProperty::AddressOverflowFreedom,
@@ -51,6 +57,14 @@ impl ScalarGemmProofSourceV1 {
         }
         let byte_len = bytes.len() as u64;
         let content_identity = sha256(bytes);
+        if byte_len != SCALAR_GEMM_PROOF_SOURCE_BYTE_LEN_V1
+            || content_identity != SCALAR_GEMM_PROOF_SOURCE_CONTENT_IDENTITY_V1
+        {
+            return Err(ScalarGemmProofErrorV1::PinnedSourceMismatch {
+                expected_byte_len: SCALAR_GEMM_PROOF_SOURCE_BYTE_LEN_V1,
+                actual_byte_len: byte_len,
+            });
+        }
         let mut identity_bytes = Vec::with_capacity(96);
         identity_bytes.extend_from_slice(b"FE2SGS1\0");
         put_text(&mut identity_bytes, SCALAR_GEMM_PROOF_SOURCE_PATH_V1);
@@ -302,6 +316,9 @@ impl ScalarGemmProofProfileV1 {
 }
 
 /// Caller expectations for one exact review decision.
+///
+/// The freshness identity is caller-supplied inert data. This type does not
+/// authenticate its origin or make it durable.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ScalarGemmProofReviewV1 {
     profile_identity: Digest,
@@ -337,7 +354,10 @@ impl ScalarGemmProofReviewV1 {
     }
 }
 
-/// Bounded process-local duplicate detector layered over persistent freshness.
+/// Bounded process-local duplicate detector for caller-supplied inert identities.
+///
+/// A new ledger has no knowledge of an earlier ledger and therefore permits
+/// the same review again. This type provides no durable replay protection.
 #[derive(Debug)]
 pub struct ScalarGemmProofReviewLedgerV1 {
     max_records: usize,
@@ -347,7 +367,7 @@ pub struct ScalarGemmProofReviewLedgerV1 {
     challenges: BTreeSet<Digest>,
     transcripts: BTreeSet<Digest>,
     results: BTreeSet<Digest>,
-    persistent_bindings: BTreeSet<Digest>,
+    caller_binding_identities: BTreeSet<Digest>,
     review_nonces: BTreeSet<Digest>,
 }
 
@@ -361,7 +381,7 @@ impl ScalarGemmProofReviewLedgerV1 {
             challenges: BTreeSet::new(),
             transcripts: BTreeSet::new(),
             results: BTreeSet::new(),
-            persistent_bindings: BTreeSet::new(),
+            caller_binding_identities: BTreeSet::new(),
             review_nonces: BTreeSet::new(),
         }
     }
@@ -399,7 +419,7 @@ impl ScalarGemmProofReviewLedgerV1 {
             || self.transcripts.contains(&freshness.transcript())
             || self.results.contains(&freshness.result())
             || self
-                .persistent_bindings
+                .caller_binding_identities
                 .contains(&freshness.persistent_binding_identity())
             || self.review_nonces.contains(&review_nonce)
         {
@@ -422,7 +442,7 @@ impl ScalarGemmProofReviewLedgerV1 {
         self.challenges.insert(freshness.challenge());
         self.transcripts.insert(freshness.transcript());
         self.results.insert(freshness.result());
-        self.persistent_bindings
+        self.caller_binding_identities
             .insert(freshness.persistent_binding_identity());
         self.review_nonces.insert(review_nonce);
     }
@@ -614,7 +634,7 @@ pub fn review_scalar_gemm_proof_v1(
     }
     let freshness = execution
         .freshness()
-        .ok_or(ScalarGemmProofErrorV1::MissingPersistentFreshness)?;
+        .ok_or(ScalarGemmProofErrorV1::MissingCallerSuppliedFreshness)?;
     if freshness != review.freshness {
         return Err(ScalarGemmProofErrorV1::FreshnessSubstitution);
     }
@@ -751,9 +771,19 @@ fn sha256(bytes: &[u8]) -> Digest {
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum ScalarGemmProofErrorV1 {
-    SourceLengthOutOfRange { max: usize },
-    ZeroIdentity { field: &'static str },
-    IdentityMismatch { field: &'static str },
+    SourceLengthOutOfRange {
+        max: usize,
+    },
+    PinnedSourceMismatch {
+        expected_byte_len: u64,
+        actual_byte_len: u64,
+    },
+    ZeroIdentity {
+        field: &'static str,
+    },
+    IdentityMismatch {
+        field: &'static str,
+    },
     UnexpectedTool,
     UnexpectedModel,
     DependencyCapacity,
@@ -767,6 +797,10 @@ pub enum ScalarGemmProofErrorV1 {
     TrustedInventorySubstitution,
     PropertySubstitution,
     ProofOutcomeSubstitution,
+    MissingCallerSuppliedFreshness,
+    /// Compatibility spelling for a missing caller-supplied inert identity.
+    ///
+    /// This variant does not imply that the identity is durable or authentic.
     MissingPersistentFreshness,
     FreshnessSubstitution,
     Replay,
@@ -780,6 +814,13 @@ impl fmt::Display for ScalarGemmProofErrorV1 {
             Self::SourceLengthOutOfRange { max } => {
                 write!(formatter, "scalar proof source length must be in 1..={max}")
             }
+            Self::PinnedSourceMismatch {
+                expected_byte_len,
+                actual_byte_len,
+            } => write!(
+                formatter,
+                "scalar proof source does not match the pinned {expected_byte_len}-byte content identity (received {actual_byte_len} bytes)"
+            ),
             Self::ZeroIdentity { field } => write!(formatter, "{field} identity is zero"),
             Self::IdentityMismatch { field } => write!(formatter, "{field} identity differs"),
             Self::UnexpectedTool => formatter.write_str("unexpected scalar proof tool"),
@@ -807,13 +848,14 @@ impl fmt::Display for ScalarGemmProofErrorV1 {
             Self::ProofOutcomeSubstitution => {
                 formatter.write_str("scalar proof outcome is not proved")
             }
-            Self::MissingPersistentFreshness => {
-                formatter.write_str("scalar proof lacks persistent freshness")
-            }
+            Self::MissingCallerSuppliedFreshness | Self::MissingPersistentFreshness => formatter
+                .write_str("scalar proof lacks its caller-supplied inert freshness identity"),
             Self::FreshnessSubstitution => {
-                formatter.write_str("scalar proof freshness substitution")
+                formatter.write_str("scalar proof caller-supplied freshness identity substitution")
             }
-            Self::Replay => formatter.write_str("reviewed scalar proof replay"),
+            Self::Replay => {
+                formatter.write_str("duplicate scalar proof in this process-local review ledger")
+            }
             Self::ReviewCapacityOutOfRange => formatter.write_str("review capacity out of range"),
             Self::ReviewCapacityReached => formatter.write_str("review capacity reached"),
         }

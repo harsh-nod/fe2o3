@@ -272,6 +272,14 @@ fn exact_scalar_profile_binds_source_transcript_result_and_artifact() {
 
     assert_eq!(source.path(), SCALAR_GEMM_PROOF_SOURCE_PATH_V1);
     assert_eq!(source.byte_len(), SOURCE.len() as u64);
+    assert_eq!(
+        source.content_identity(),
+        Digest::from_bytes([
+            0x98, 0x80, 0x3a, 0x62, 0x48, 0x8e, 0x1a, 0xf2, 0xfb, 0xc8, 0x86, 0xb1, 0xda, 0x5d,
+            0xdc, 0x68, 0x0b, 0x16, 0xd3, 0x5a, 0x8a, 0x8a, 0x5c, 0x22, 0xd4, 0x95, 0x91, 0x28,
+            0xdd, 0x2d, 0xa5, 0xfe,
+        ])
+    );
     assert_eq!(reviewed.source_identity(), source.identity());
     assert_eq!(reviewed.proof_target(), profile.proof_target());
     assert_eq!(reviewed.transcript_identity(), digest(26));
@@ -300,16 +308,14 @@ fn exact_scalar_profile_binds_source_transcript_result_and_artifact() {
 }
 
 #[test]
-fn source_mutation_cannot_reuse_the_sealed_proof_target() {
-    let original = source();
+fn coherent_source_reprofiling_is_rejected_at_measurement() {
     let mut mutated = SOURCE.to_vec();
-    mutated.push(b'\n');
-    let mutated = ScalarGemmProofSourceV1::measure(&mutated).unwrap();
-    assert_ne!(original.content_identity(), mutated.content_identity());
+    mutated[0] ^= 1;
     assert_eq!(
-        profile_with(mutated, target(original), digest(26), digest(27)),
-        Err(ScalarGemmProofErrorV1::IdentityMismatch {
-            field: "scalar proof source"
+        ScalarGemmProofSourceV1::measure(&mutated),
+        Err(ScalarGemmProofErrorV1::PinnedSourceMismatch {
+            expected_byte_len: SOURCE.len() as u64,
+            actual_byte_len: SOURCE.len() as u64,
         })
     );
 }
@@ -482,7 +488,7 @@ fn non_proved_result_and_freshness_substitution_are_rejected() {
 }
 
 #[test]
-fn replay_is_rejected_without_consuming_an_extra_record() {
+fn duplicate_is_rejected_within_one_process_local_ledger() {
     let profile = profile();
     let capsule = exact_capsule(&profile);
     let mut ledger = ScalarGemmProofReviewLedgerV1::new();
@@ -504,4 +510,31 @@ fn replay_is_rejected_without_consuming_an_extra_record() {
         Err(ScalarGemmProofErrorV1::Replay)
     );
     assert_eq!(ledger.recorded_count(), 1);
+}
+
+#[test]
+fn replay_is_explicitly_permitted_after_ledger_recreation() {
+    let profile = profile();
+    let capsule = exact_capsule(&profile);
+    let review = review(&profile, &capsule, freshness(), digest(37));
+
+    let first = review_scalar_gemm_proof_v1(
+        &profile,
+        &capsule,
+        review,
+        &mut ScalarGemmProofReviewLedgerV1::new(),
+    )
+    .unwrap();
+    let replayed = review_scalar_gemm_proof_v1(
+        &profile,
+        &capsule,
+        review,
+        &mut ScalarGemmProofReviewLedgerV1::new(),
+    )
+    .unwrap();
+
+    assert_eq!(first, replayed);
+    assert!(!replayed.grants_proof_authority());
+    assert!(!replayed.grants_load_authority());
+    assert!(!replayed.grants_launch_authority());
 }
