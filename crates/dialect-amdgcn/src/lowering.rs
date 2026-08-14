@@ -3638,14 +3638,16 @@ impl<'a> FunctionLowerer<'a> {
             }
             OperationKind::Compare { lhs, .. } => {
                 let ty = self.value_type(*lhs);
-                if !ty
-                    .as_scalar()
-                    .is_some_and(|scalar| scalar == ScalarType::Bool || supported_integer(scalar))
-                {
+                if !ty.as_scalar().is_some_and(|scalar| {
+                    scalar == ScalarType::Bool
+                        || supported_integer(scalar)
+                        || (scalar == ScalarType::F32
+                            && self.target == LoweringTarget::Gfx942XnackMinusV1)
+                }) {
                     return Err(LoweringErrors::one(
                         location,
                         LoweringDiagnosticCode::UnsupportedOperation,
-                        "G1 lowers only integer and boolean comparisons",
+                        "G1 lowers comparisons only for supported scalar values",
                     ));
                 }
             }
@@ -4786,8 +4788,9 @@ impl<'a> FunctionLowerer<'a> {
                 let (rhs_name, _) = self.value(*rhs);
                 writeln!(
                     output,
-                    "  {} = icmp {} {} {}, {}",
+                    "  {} = {} {} {} {}, {}",
                     result_name.expect("validated result"),
+                    compare_opcode(lhs_ty),
                     compare_predicate(*predicate, lhs_ty),
                     llvm_type(lhs_ty),
                     lhs_name,
@@ -6036,6 +6039,11 @@ fn supported_binary(op: BinaryOp, ty: &Type, target: LoweringTarget) -> bool {
         BinaryOp::Add | BinaryOp::Subtract | BinaryOp::Multiply => {
             supported_integer(scalar) || scalar == ScalarType::F32
         }
+        BinaryOp::Divide
+            if scalar == ScalarType::F32 && target == LoweringTarget::Gfx942XnackMinusV1 =>
+        {
+            true
+        }
         BinaryOp::Divide | BinaryOp::Remainder => {
             matches!(
                 target,
@@ -6429,12 +6437,23 @@ fn binary_opcode(op: BinaryOp, ty: &Type) -> &'static str {
         (BinaryOp::Add, true) => "fadd",
         (BinaryOp::Subtract, true) => "fsub",
         (BinaryOp::Multiply, true) => "fmul",
+        (BinaryOp::Divide, true) => "fdiv",
         _ => unreachable!("preflight rejected unsupported binary operation"),
     }
 }
 
 fn compare_predicate(predicate: ComparePredicate, ty: &Type) -> &'static str {
     let scalar = ty.as_scalar().expect("validated scalar comparison");
+    if scalar == ScalarType::F32 {
+        return match predicate {
+            ComparePredicate::Equal => "oeq",
+            ComparePredicate::NotEqual => "une",
+            ComparePredicate::LessThan => "olt",
+            ComparePredicate::LessThanOrEqual => "ole",
+            ComparePredicate::GreaterThan => "ogt",
+            ComparePredicate::GreaterThanOrEqual => "oge",
+        };
+    }
     let signed = scalar.is_signed_integer();
     match predicate {
         ComparePredicate::Equal => "eq",
@@ -6447,6 +6466,14 @@ fn compare_predicate(predicate: ComparePredicate, ty: &Type) -> &'static str {
         ComparePredicate::GreaterThan => "ugt",
         ComparePredicate::GreaterThanOrEqual if signed => "sge",
         ComparePredicate::GreaterThanOrEqual => "uge",
+    }
+}
+
+fn compare_opcode(ty: &Type) -> &'static str {
+    if ty.as_scalar() == Some(ScalarType::F32) {
+        "fcmp"
+    } else {
+        "icmp"
     }
 }
 
@@ -6499,5 +6526,18 @@ mod tests {
             compare_predicate(ComparePredicate::LessThan, &Type::INDEX),
             "ult"
         );
+        assert_eq!(
+            compare_predicate(
+                ComparePredicate::GreaterThan,
+                &Type::Scalar(ScalarType::F32)
+            ),
+            "ogt"
+        );
+        assert_eq!(
+            compare_predicate(ComparePredicate::NotEqual, &Type::Scalar(ScalarType::F32)),
+            "une"
+        );
+        assert_eq!(compare_opcode(&Type::Scalar(ScalarType::F32)), "fcmp");
+        assert_eq!(compare_opcode(&Type::INDEX), "icmp");
     }
 }

@@ -4,7 +4,9 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use dialect_amdgcn::{LoweringDiagnosticCode, lower_kernel_to_llvm_ir};
+use dialect_amdgcn::{
+    LoweringDiagnosticCode, lower_kernel_to_gfx942_xnack_minus_llvm_ir, lower_kernel_to_llvm_ir,
+};
 use fe2o3_kernel_ir::*;
 
 struct TemporaryDirectory(PathBuf);
@@ -297,6 +299,16 @@ fn fill_module() -> Module {
     let mut module = Module::new("tests::fill");
     module.functions.push(function);
     module.kernels.push(kernel);
+    module
+}
+
+fn exact_gfx942_xnack_minus(mut module: Module) -> Module {
+    let target = gfx942_xnack_minus_target_capability();
+    module.required_capabilities.insert(target.clone());
+    module.functions[0]
+        .required_capabilities
+        .insert(target.clone());
+    module.kernels[0].required_capabilities.insert(target);
     module
 }
 
@@ -2048,6 +2060,10 @@ fn excluded_operations_constants_casts_and_comparisons_have_located_errors() {
     );
     assert_eq!(error.diagnostics()[0].location.block, Some(BlockId(0)));
     assert_eq!(error.diagnostics()[0].location.operation, Some(0));
+    let exact_divide = exact_gfx942_xnack_minus(divide);
+    let exact_divide_llvm =
+        lower_kernel_to_gfx942_xnack_minus_llvm_ir(&exact_divide, &KernelId::new("fill")).unwrap();
+    assert!(exact_divide_llvm.contains("fdiv float %arg1, %arg1"));
 
     let mut nan = fill_module();
     nan.functions[0].body.as_mut().unwrap().blocks[0]
@@ -2104,6 +2120,11 @@ fn excluded_operations_constants_casts_and_comparisons_have_located_errors() {
         first_code(&float_compare, "fill"),
         LoweringDiagnosticCode::UnsupportedOperation
     );
+    let exact_float_compare = exact_gfx942_xnack_minus(float_compare);
+    let llvm_ir =
+        lower_kernel_to_gfx942_xnack_minus_llvm_ir(&exact_float_compare, &KernelId::new("fill"))
+            .unwrap();
+    assert!(llvm_ir.contains("fcmp olt float %arg1, %arg1"));
 }
 
 #[test]
