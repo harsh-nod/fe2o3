@@ -3,7 +3,8 @@ use fe2o3_build_authority::{
     AUTHORITY_CARGO_ENVIRONMENT_IDENTITY_DOMAIN_V1, AUTHORITY_CARGO_ENVIRONMENT_MAGIC_V1,
     AUTHORITY_CARGO_ENVIRONMENT_MAX_PATH_LEN_V1, AUTHORITY_CARGO_ENVIRONMENT_MAX_WIRE_LEN_V1,
     AUTHORITY_CARGO_ENVIRONMENT_TARGET_V1, AUTHORITY_CARGO_ENVIRONMENT_VERSION_V1,
-    AuthorityCargoEnvironmentErrorV1, AuthorityCargoEnvironmentPathErrorV1,
+    AUTHORITY_CARGO_MODE_ARGV_V1, AuthorityCargoEnvironmentErrorV1,
+    AuthorityCargoEnvironmentPathErrorV1,
     AuthorityCargoEnvironmentV1, AuthorityCargoEnvironmentVariableV1, CapabilityBindingV3,
     ForbiddenCargoEnvironmentChannelV1, PipelineV1, authority_cargo_environment_identity_sha256_v1,
     decode_authority_cargo_environment_v1,
@@ -112,6 +113,11 @@ fn roundtrip_and_cross_implementation_golden_are_stable() {
     assert_eq!(environment.provisioned_cargo_cache_sha256(), CACHE_IDENTITY);
     assert!(environment.offline());
     assert!(environment.frozen());
+    assert_eq!(
+        environment.cargo_mode_argv(),
+        ["--offline", "--frozen"]
+    );
+    assert_eq!(environment.cargo_mode_argv(), AUTHORITY_CARGO_MODE_ARGV_V1);
     assert_eq!(
         AUTHORITY_CARGO_ENVIRONMENT_IDENTITY_DOMAIN_V1,
         b"FE2O3/AUTHORITY-CARGO-ENVIRONMENT/V1\0"
@@ -390,6 +396,19 @@ fn path_rejection_corpus_is_strict_and_bounded() {
             },
         })
     );
+}
+
+#[test]
+fn lexical_paths_deliberately_do_not_claim_object_separation() {
+    let mut entries = golden_entries();
+    for index in [0, 2, 4, 7] {
+        entries[index].1 = b"/authority/shared".to_vec();
+    }
+    assert!(from_entries(&entries, CACHE_IDENTITY).is_ok());
+
+    entries[2].1 = b"/authority/shared/target".to_vec();
+    entries[7].1 = b"/authority/shared/target/tmp".to_vec();
+    assert!(from_entries(&entries, CACHE_IDENTITY).is_ok());
 }
 
 #[test]

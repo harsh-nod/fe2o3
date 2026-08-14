@@ -18,6 +18,8 @@ pub const AUTHORITY_CARGO_ENVIRONMENT_MAX_WIRE_LEN_V1: usize = 3_072;
 pub const AUTHORITY_CARGO_ENVIRONMENT_MAX_PATH_LEN_V1: usize = 255;
 /// The only GPU target accepted by Authority Cargo Environment V1.
 pub const AUTHORITY_CARGO_ENVIRONMENT_TARGET_V1: &str = "gfx942:xnack-";
+/// Exact canonical Cargo mode arguments required by Authority Cargo Environment V1.
+pub const AUTHORITY_CARGO_MODE_ARGV_V1: [&str; 2] = ["--offline", "--frozen"];
 /// Domain for a canonical Authority Cargo Environment V1 identity.
 pub const AUTHORITY_CARGO_ENVIRONMENT_IDENTITY_DOMAIN_V1: &[u8] =
     b"FE2O3/AUTHORITY-CARGO-ENVIRONMENT/V1\0";
@@ -173,6 +175,11 @@ impl fmt::Display for AuthorityCargoEnvironmentPathErrorV1 {
 /// This value performs no environment mutation or filesystem access. Its paths
 /// are only lexically canonical, and its cache digest is only declared data;
 /// neither property authenticates a filesystem object.
+///
+/// Lexical validation does not resolve symlinks, mounts, hard links, or other
+/// aliases. The four paths may be equal, nested, or resolve to overlapping
+/// objects. An authority integration must authenticate the retained filesystem
+/// objects and enforce its required ownership, permissions, and separation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AuthorityCargoEnvironmentV1 {
     cargo_home: String,
@@ -272,7 +279,7 @@ impl AuthorityCargoEnvironmentV1 {
     /// Returns the exact canonical sorted environment map.
     ///
     /// A caller can use this same array for metadata, configuration probes, and
-    /// the build. This crate does not install the values into a process.
+    /// the build. This crate does not clear or install a process environment.
     pub fn environment(&self) -> [(&'static str, &str); 9] {
         [
             ("CARGO_HOME", &self.cargo_home),
@@ -295,6 +302,16 @@ impl AuthorityCargoEnvironmentV1 {
     /// Reports the mandatory Cargo frozen mode.
     pub const fn frozen(&self) -> bool {
         true
+    }
+
+    /// Returns the exact Cargo mode arguments required for this environment.
+    ///
+    /// An authority caller must pass these arguments to Cargo in this order and
+    /// bind the complete resulting Cargo argv into its protected argv identity.
+    /// The encoded mode bits describe this requirement but do not enforce the
+    /// arguments in another process.
+    pub const fn cargo_mode_argv(&self) -> [&'static str; 2] {
+        AUTHORITY_CARGO_MODE_ARGV_V1
     }
 
     /// Returns the separately provisioned, declared Cargo-cache identity.
