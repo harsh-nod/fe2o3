@@ -13,9 +13,11 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/prctl.h>
+#include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
+#include <sys/sysmacros.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -183,6 +185,12 @@ struct supervisor {
   int leader_status;
 };
 
+/*
+ * This launcher is a pre-exec foundation, not an authoritative build service.
+ * It does not provide cgroup survival after launcher SIGKILL, fs-verity, a
+ * trusted caller, or post-exec cargo-fe2o3 policy integration.
+ */
+
 static volatile sig_atomic_t caught_signal = 0;
 
 static int fail(const char *message) {
@@ -192,6 +200,30 @@ static int fail(const char *message) {
 }
 
 static void record_signal(int signal_number) { caught_signal = signal_number; }
+
+static int reset_signal_state(void) {
+  static const int signals[] = {
+      SIGHUP,  SIGINT,  SIGQUIT, SIGTERM, SIGPIPE,
+      SIGALRM, SIGCHLD, SIGUSR1, SIGUSR2,
+  };
+  struct sigaction action;
+  memset(&action, 0, sizeof(action));
+  action.sa_handler = SIG_DFL;
+  if (sigemptyset(&action.sa_mask) != 0) {
+    return -1;
+  }
+  for (size_t index = 0; index < sizeof(signals) / sizeof(signals[0]);
+       ++index) {
+    if (sigaction(signals[index], &action, NULL) != 0) {
+      return -1;
+    }
+  }
+  sigset_t empty;
+  if (sigemptyset(&empty) != 0 || sigprocmask(SIG_SETMASK, &empty, NULL) != 0) {
+    return -1;
+  }
+  return 0;
+}
 
 static int install_signal_handlers(void) {
   struct sigaction action;
@@ -443,6 +475,85 @@ static int close_all_inherited_descriptors(void) {
       return -1;
     }
   }
+  return 0;
+}
+
+static int verify_standard_descriptor(int file_fd) {
+  struct stat info;
+  const int status_flags = fcntl(file_fd, F_GETFL);
+  int descriptor_flags = fcntl(file_fd, F_GETFD);
+  if (status_flags < 0 || descriptor_flags < 0 || fstat(file_fd, &info) != 0 ||
+      (status_flags & O_PATH) != 0) {
+    return -1;
+  }
+  const int access_mode = status_flags & O_ACCMODE;
+  if ((file_fd == STDIN_FILENO && access_mode == O_WRONLY) ||
+      (file_fd != STDIN_FILENO && access_mode == O_RDONLY)) {
+    errno = EBADF;
+    return -1;
+  }
+  descriptor_flags &= ~FD_CLOEXEC;
+  return fcntl(file_fd, F_SETFD, descriptor_flags);
+}
+
+static int install_dev_null(int destination_fd) {
+  const int access_flags =
+      destination_fd == STDIN_FILENO ? O_RDONLY : O_WRONLY;
+  int null_fd =
+      open("/dev/null", access_flags | O_CLOEXEC | O_NOFOLLOW | O_NOCTTY);
+  struct stat info;
+  if (null_fd < 0 || fstat(null_fd, &info) != 0 || !S_ISCHR(info.st_mode) ||
+      major(info.st_rdev) != 1U || minor(info.st_rdev) != 3U) {
+    if (null_fd >= 0) {
+      close(null_fd);
+    }
+    return -1;
+  }
+  if (null_fd != destination_fd) {
+    if (dup3(null_fd, destination_fd, 0) < 0) {
+      close(null_fd);
+      return -1;
+    }
+    close(null_fd);
+  }
+  return verify_standard_descriptor(destination_fd);
+}
+
+static int normalize_standard_descriptors(void) {
+  for (int file_fd = STDIN_FILENO; file_fd <= STDERR_FILENO; ++file_fd) {
+    if (fcntl(file_fd, F_GETFD) >= 0) {
+      if (verify_standard_descriptor(file_fd) != 0) {
+        return -1;
+      }
+      continue;
+    }
+    if (errno != EBADF || install_dev_null(file_fd) != 0) {
+      return -1;
+    }
+  }
+  return 0;
+}
+
+static int normalize_initial_process_state(void) {
+  const struct rlimit no_core = {
+      .rlim_cur = 0,
+      .rlim_max = 0,
+  };
+  struct rlimit observed_core;
+  if (reset_signal_state() != 0 ||
+      setrlimit(RLIMIT_CORE, &no_core) != 0 ||
+      getrlimit(RLIMIT_CORE, &observed_core) != 0 ||
+      observed_core.rlim_cur != 0 || observed_core.rlim_max != 0 ||
+      prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) != 0 ||
+      prctl(PR_GET_DUMPABLE, 0, 0, 0, 0) != 0 ||
+      prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 ||
+      prctl(PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) != 1 ||
+      normalize_standard_descriptors() != 0 ||
+      close_all_inherited_descriptors() != 0 || clearenv() != 0 ||
+      chdir("/") != 0) {
+    return -1;
+  }
+  umask(0077);
   return 0;
 }
 
@@ -841,7 +952,8 @@ static void authority_child(char **arguments, pid_t expected_parent,
       recv(FE2O3_CAPABILITY_FD, response, sizeof(response), 0) !=
           (ssize_t)sizeof(response) ||
       memcmp(response, allow, sizeof(allow)) != 0 ||
-      delay_milliseconds(FE2O3_PREEXEC_DELAY_MILLISECONDS) != 0) {
+      delay_milliseconds(FE2O3_PREEXEC_DELAY_MILLISECONDS) != 0 ||
+      reset_signal_state() != 0) {
     _exit(fail("cannot establish bounded child authority capabilities"));
   }
 
@@ -861,11 +973,11 @@ static int child_exit_status(const struct supervisor *supervisor) {
 }
 
 int main(int argc, char **argv) {
+  if (normalize_initial_process_state() != 0) {
+    return fail("cannot normalize inherited process state");
+  }
   if (validate_arguments(argc, argv) != 0) {
     return fail("expected -- followed by one to 256 bounded cargo-fe2o3 arguments");
-  }
-  if (close_all_inherited_descriptors() != 0) {
-    return fail("cannot close inherited descriptors");
   }
 
   int launcher_fd = open_trusted_object(FE2O3_LAUNCHER_PATH,
@@ -895,17 +1007,15 @@ int main(int argc, char **argv) {
   }
 
   int subreaper_state = 0;
-  if (clearenv() != 0 || chdir("/") != 0 ||
-      prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 ||
-      prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0 ||
+  if (prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0 ||
       prctl(PR_GET_CHILD_SUBREAPER, &subreaper_state, 0, 0, 0) != 0 ||
-      subreaper_state != 1 || install_signal_handlers() != 0) {
+      subreaper_state != 1 || prctl(PR_GET_DUMPABLE, 0, 0, 0, 0) != 0 ||
+      prctl(PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) != 1 ||
+      install_signal_handlers() != 0) {
     close(executable_fd);
     close(policy_fd);
     return fail("cannot establish clean bounded supervisor state");
   }
-  umask(0077);
-
   int children_fd = open_self_children();
   bool found_child = false;
   if (children_fd < 0 ||
