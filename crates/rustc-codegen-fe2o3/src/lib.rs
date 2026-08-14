@@ -466,6 +466,12 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                     PipelineSelection::Valid(CodegenPipeline::CollectedScalarGemmV1)
                 ) {
                     let preparation = (|| -> Result<_, String> {
+                        let attempt = build_attempt.ok_or_else(|| {
+                            format!(
+                                "{} requires a managed {BUILD_ATTEMPT_ENV}",
+                                collected_scalar_gemm_v1::COLLECTED_SCALAR_GEMM_PIPELINE_V1,
+                            )
+                        })?;
                         let collection = collector::collect_device_functions(
                             tcx,
                             mono_partitions.codegen_units,
@@ -514,13 +520,22 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                     .to_owned(),
                             );
                         }
+                        let canonical_handoff_bytes = handoff.handoff().canonical_bytes().len();
+                        let llvm_bytes = handoff.handoff().module_bytes().len();
+                        let publication =
+                            worker_v2_producer::publish_prepared_scalar_gemm_v1_worker_handoff(
+                                output_dir, &producer, attempt, handoff,
+                            )
+                            .map_err(|error| error.to_string())?;
                         Ok((
                             root_instance_identity,
                             kernel_export,
                             portable_mir_semantic,
                             compiler_semantics,
                             frontend_authority,
-                            handoff,
+                            canonical_handoff_bytes,
+                            llvm_bytes,
+                            publication.length(),
                         ))
                     })();
                     match preparation {
@@ -530,9 +545,11 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             portable_mir_semantic,
                             compiler_semantics,
                             frontend_authority,
-                            prepared,
-                        )) => tcx.dcx().fatal(format!(
-                            "[rustc-codegen-fe2o3] {} consumed its single-use frontend receipt for exact collected KernelEntry `{}` export `{}` with reviewed path-independent portable MIR {}; exact ABI/roles A:&[f32], B:&[f32], C:DisjointSlice<f32>, m:u32, n:u32, k:u32; explicit kernarg {} bytes, complete kernarg {} bytes; exact 256x1x1 one-dimensional launch; row-major sequential f32 source semantics; target {}; COV{}; compiler semantics {}; sealed frontend authority {}; prepared exact inert Worker V2 compiler-module handoff ({} canonical bytes, {} LLVM bytes) from canonical scalar GEMM Kernel IR; {}; no handoff publication, worker execution, LLD, COMGR, HSACO, load, launch, or legacy fallback was entered",
+                            canonical_handoff_bytes,
+                            llvm_bytes,
+                            publication_bytes,
+                        )) => eprintln!(
+                            "[rustc-codegen-fe2o3] {} consumed its single-use frontend receipt for exact collected KernelEntry `{}` export `{}` with reviewed path-independent portable MIR {}; exact ABI/roles A:&[f32], B:&[f32], C:DisjointSlice<f32>, m:u32, n:u32, k:u32; explicit kernarg {} bytes, complete kernarg {} bytes; exact 256x1x1 one-dimensional launch; row-major sequential f32 source semantics; target {}; COV{}; compiler semantics {}; sealed frontend authority {}; published exact inert Worker V2 compiler-module handoff ({} canonical bytes, {} LLVM bytes, {} receipt bytes) with compiler descriptor and frontend-authority sections from canonical scalar GEMM Kernel IR; measured Worker execution, raw-HSACO inspection, finalization, durable HSACO publication, load, launch, and COMGR were not entered by the backend",
                             collected_scalar_gemm_v1::COLLECTED_SCALAR_GEMM_PIPELINE_V1,
                             root_instance_identity,
                             kernel_export,
@@ -543,10 +560,10 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             collected_scalar_gemm_v1::SCALAR_GEMM_CODE_OBJECT_VERSION_V1,
                             compiler_semantics,
                             frontend_authority,
-                            prepared.handoff().canonical_bytes().len(),
-                            prepared.handoff().module_bytes().len(),
-                            collected_scalar_gemm_v1::NEXT_LOWERING_DEPENDENCY,
-                        )),
+                            canonical_handoff_bytes,
+                            llvm_bytes,
+                            publication_bytes,
+                        ),
                         Err(error) => tcx.dcx().fatal(format!(
                             "[rustc-codegen-fe2o3] {} rejected the collected program without fallback: {error}",
                             collected_scalar_gemm_v1::COLLECTED_SCALAR_GEMM_PIPELINE_V1,

@@ -28,6 +28,7 @@ pub(crate) const WORKER_V2_EXPECTED_ID_ENV: &str = "FE2O3_WORKER_V2_EXPECTED_ID_
 pub(crate) const WORKER_V2_SOURCE_DEBUG_PROFILE_ENV: &str =
     "FE2O3_WORKER_V2_SOURCE_DEBUG_PROFILE_V1";
 const WORKER_V2_PIPELINE: &str = "kernel-ir-worker-v2";
+const SCALAR_GEMM_V1_PIPELINE: &str = "collected-scalar-gemm-v1";
 const CONFIG_FORMAT: &str = "fe2o3-worker-v2-config-v2";
 const S09_ALPHA_DEBUG_PROFILE: &str = "s09-alpha-gfx942-o0-v1";
 const MAX_CONFIG_BYTES: usize = 1024 * 1024;
@@ -184,7 +185,10 @@ impl PreparedWorkerV2Config {
         pipeline: Option<&OsStr>,
         config_path: Option<&OsStr>,
     ) -> Result<Option<Self>, WorkerV2ConfigError> {
-        let selected = pipeline == Some(OsStr::new(WORKER_V2_PIPELINE));
+        let selected = pipeline.is_some_and(|pipeline| {
+            pipeline == OsStr::new(WORKER_V2_PIPELINE)
+                || pipeline == OsStr::new(SCALAR_GEMM_V1_PIPELINE)
+        });
         match (selected, config_path) {
             (false, None) => Ok(None),
             (false, Some(_)) => Err(WorkerV2ConfigError::UnexpectedConfiguration),
@@ -488,11 +492,11 @@ impl fmt::Display for WorkerV2ConfigError {
         match self {
             Self::MissingConfiguration => write!(
                 formatter,
-                "{CODEGEN_PIPELINE_ENV}={WORKER_V2_PIPELINE} requires {WORKER_V2_CONFIG_ENV}"
+                "a Worker V2 codegen pipeline requires {WORKER_V2_CONFIG_ENV}"
             ),
             Self::UnexpectedConfiguration => write!(
                 formatter,
-                "{WORKER_V2_CONFIG_ENV} is valid only with {CODEGEN_PIPELINE_ENV}={WORKER_V2_PIPELINE}"
+                "{WORKER_V2_CONFIG_ENV} is valid only with {CODEGEN_PIPELINE_ENV}={WORKER_V2_PIPELINE} or {SCALAR_GEMM_V1_PIPELINE}"
             ),
             Self::Io { kind, path, error } => {
                 write!(
@@ -1016,6 +1020,10 @@ mod tests {
         );
         assert!(matches!(
             PreparedWorkerV2Config::from_selection(Some(OsStr::new(WORKER_V2_PIPELINE)), None),
+            Err(WorkerV2ConfigError::MissingConfiguration)
+        ));
+        assert!(matches!(
+            PreparedWorkerV2Config::from_selection(Some(OsStr::new(SCALAR_GEMM_V1_PIPELINE)), None),
             Err(WorkerV2ConfigError::MissingConfiguration)
         ));
         assert!(matches!(

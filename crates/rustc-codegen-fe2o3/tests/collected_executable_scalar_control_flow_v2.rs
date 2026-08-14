@@ -17,6 +17,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use fe2o3_artifact_transaction::{
+    BuildInvocation, BuildSession, ProducerIdentity, begin_build_attempt,
+};
 use sha2::{Digest as _, Sha256};
 
 const PIPELINE: &str = "collected-executable-scalar-control-flow-v2";
@@ -716,6 +719,19 @@ fn compile_scalar_gemm(
         workspace.join("crates/rustc-codegen-fe2o3/tests/fixtures/scalar-gemm-v1");
     assert!(device.is_file(), "missing {}", device.display());
     assert!(host.is_file(), "missing {}", host.display());
+    let producer =
+        ProducerIdentity::from_codegen("fe2o3_scalar_gemm_v1_fixture", Some(&source_path))
+            .expect("scalar GEMM fixture producer");
+    let attempt = begin_build_attempt(
+        &output.0.join("artifacts"),
+        &producer,
+        BuildInvocation::from_bytes(Sha256::digest(source.as_bytes()).into()),
+        BuildSession::from_bytes([
+            0x53, 0x47, 0x56, 0x31, 0x53, 0x47, 0x56, 0x31, 0x53, 0x47, 0x56, 0x31, 0x53, 0x47,
+            0x56, 0x31,
+        ]),
+    )
+    .expect("begin scalar GEMM managed fixture attempt");
 
     let mut command = Command::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()));
     command
@@ -760,6 +776,7 @@ fn compile_scalar_gemm(
         .env("CARGO_MANIFEST_DIR", manifest_directory)
         .env("FE2O3_TARGET", target)
         .env("FE2O3_CODEGEN_PIPELINE", SCALAR_GEMM_PIPELINE)
+        .env("FE2O3_BUILD_ATTEMPT_V1", attempt.to_env_value())
         .env("FE2O3_HSACO_DIR", output.0.join("artifacts"));
     let backend_descriptor = backend.file.as_raw_fd();
     unsafe {
@@ -769,18 +786,23 @@ fn compile_scalar_gemm(
         .expect("compile scalar GEMM fixture within deadline")
 }
 
-fn assert_scalar_gemm_emitted_nothing(output: &TestOutputDir) {
+fn assert_scalar_gemm_published_no_handoff(output: &TestOutputDir) {
     assert!(
         !output.0.join("scalar-gemm-v1").exists(),
-        "admission-only scalar GEMM emitted a linked output"
+        "rejected scalar GEMM emitted a linked output"
     );
     let artifacts = std::fs::read_dir(output.0.join("artifacts"))
         .expect("read scalar GEMM artifact directory")
         .collect::<Result<Vec<_>, _>>()
         .expect("enumerate scalar GEMM artifacts");
     assert!(
-        artifacts.is_empty(),
-        "admission-only scalar GEMM emitted artifacts: {:?}",
+        artifacts.iter().all(|entry| {
+            !entry
+                .file_name()
+                .to_string_lossy()
+                .contains("compiler-module")
+        }),
+        "rejected scalar GEMM published a compiler handoff: {:?}",
         artifacts
             .iter()
             .map(|entry| entry.path())
@@ -1239,14 +1261,24 @@ fn scalar_gemm_v1_frontend_receipt_selects_only_the_reviewed_full_portable_mir()
     );
     let admission_stderr = stderr(&compiled);
     assert!(
-        !compiled.status.success()
+        compiled.status.success()
             && admission_stderr.contains("consumed its single-use frontend receipt")
             && admission_stderr.contains("af4ca76c4517b779bca4b7a63bcae09a23cad947e740b2e51f872d7cc0d6d002")
-            && admission_stderr.contains("prepared exact inert Worker V2 compiler-module handoff")
-            && admission_stderr.contains("no handoff publication, worker execution, LLD, COMGR, HSACO, load, launch, or legacy fallback was entered"),
-        "reviewed scalar GEMM did not stop at the frontend-to-handoff checkpoint:\n{admission_stderr}"
+            && admission_stderr.contains("published exact inert Worker V2 compiler-module handoff")
+            && admission_stderr.contains("compiler descriptor and frontend-authority sections")
+            && admission_stderr.contains("measured Worker execution, raw-HSACO inspection, finalization, durable HSACO publication, load, launch, and COMGR were not entered by the backend"),
+        "reviewed scalar GEMM did not publish its authenticated handoff:\n{admission_stderr}"
     );
-    assert_scalar_gemm_emitted_nothing(&output);
+    assert!(output.0.join("scalar-gemm-v1").is_file());
+    assert!(
+        std::fs::read_dir(output.0.join("artifacts"))
+            .unwrap()
+            .any(|entry| entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains("compiler-module"))
+    );
 
     let mutated_source = SCALAR_GEMM_FIXTURE.replace(
         "let product = a[a_index] * b[b_index];",
@@ -1266,10 +1298,10 @@ fn scalar_gemm_v1_frontend_receipt_selects_only_the_reviewed_full_portable_mir()
     assert!(
         !mutated.status.success()
             && mutated_stderr.contains("portable MIR identity mismatch")
-            && !mutated_stderr.contains("prepared exact inert Worker V2 compiler-module handoff"),
+            && !mutated_stderr.contains("published exact inert Worker V2 compiler-module handoff"),
         "same-shape arithmetic mutation was not rejected by full portable MIR identity:\n{mutated_stderr}"
     );
-    assert_scalar_gemm_emitted_nothing(&mutated_output);
+    assert_scalar_gemm_published_no_handoff(&mutated_output);
 
     let copied_digest_source = mutated_source.replacen(
         "use fe2o3_device",
@@ -1291,10 +1323,10 @@ fn scalar_gemm_v1_frontend_receipt_selects_only_the_reviewed_full_portable_mir()
         !copied_digest.status.success()
             && copied_digest_stderr.contains("portable MIR identity mismatch")
             && !copied_digest_stderr
-                .contains("prepared exact inert Worker V2 compiler-module handoff"),
+                .contains("published exact inert Worker V2 compiler-module handoff"),
         "a copied digest claim minted frontend authority:\n{copied_digest_stderr}"
     );
-    assert_scalar_gemm_emitted_nothing(&copied_digest_output);
+    assert_scalar_gemm_published_no_handoff(&copied_digest_output);
 
     let wrong_target_output = TestOutputDir::new(&workspace);
     let wrong_target = compile_scalar_gemm(
@@ -1310,10 +1342,10 @@ fn scalar_gemm_v1_frontend_receipt_selects_only_the_reviewed_full_portable_mir()
         !wrong_target.status.success()
             && wrong_target_stderr.contains("requires exact target `gfx942:xnack-`")
             && !wrong_target_stderr
-                .contains("prepared exact inert Worker V2 compiler-module handoff"),
+                .contains("published exact inert Worker V2 compiler-module handoff"),
         "wrong target minted frontend authority:\n{wrong_target_stderr}"
     );
-    assert_scalar_gemm_emitted_nothing(&wrong_target_output);
+    assert_scalar_gemm_published_no_handoff(&wrong_target_output);
 }
 
 #[test]
