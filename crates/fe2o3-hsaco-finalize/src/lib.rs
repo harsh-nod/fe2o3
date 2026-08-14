@@ -23,6 +23,7 @@ mod first_build_worker_v2;
 mod link_plan;
 mod request_construction;
 mod scalar_gemm_v1_worker;
+mod tiled_gemm_v1_artifact;
 mod worker_executor;
 mod worker_protocol;
 mod worker_protocol_v2;
@@ -90,6 +91,11 @@ pub use scalar_gemm_v1_worker::{
     InspectedScalarGemmV1WorkerV2HsacoV1, ScalarGemmV1WorkerExchangeIdentityV1,
     ScalarGemmV1WorkerValidationErrorV1, ValidatedScalarGemmV1WorkerExchangeV1,
     inspect_scalar_gemm_v1_worker_v2_hsaco_v1, validate_scalar_gemm_v1_worker_exchange_v1,
+};
+pub use tiled_gemm_v1_artifact::{
+    FinalizedTiledGemmV1StructuralHsacoV1, InspectedTiledGemmV1StructuralWorkerV2HsacoV1,
+    TiledGemmV1StructuralArtifactErrorV1, finalize_tiled_gemm_v1_structural_worker_v2_hsaco_v1,
+    inspect_tiled_gemm_v1_structural_worker_v2_hsaco_v1,
 };
 pub use worker_executor::{
     DEFAULT_WORKER_STDERR_BYTES, DEFAULT_WORKER_TIMEOUT, InertCompilerHandoffExecutionV2,

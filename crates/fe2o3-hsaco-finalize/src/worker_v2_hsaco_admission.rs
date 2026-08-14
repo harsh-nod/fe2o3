@@ -14,7 +14,10 @@ use fe2o3_hsaco::{
     CodeObjectVersion as InspectedCodeObjectVersion, KernelBindingError,
     inspect_and_bind_kernel_descriptors,
 };
-use fe2o3_kernel_descriptor::{CodeObjectVersion, DeviceTargetV1};
+use fe2o3_kernel_descriptor::{
+    CodeObjectVersion, DeviceTargetV1, TILED_GEMM_V1_MAX_FLAT_WORKGROUP_SIZE,
+    TILED_GEMM_V1_WORKGROUP_SIZE,
+};
 use object::{Object, ObjectSection, ObjectSymbol};
 use sha2::{Digest, Sha256};
 
@@ -61,6 +64,12 @@ impl WorkerV2RawLaunchContractV1 {
     const GFX942_G1: Self = Self {
         required_workgroup_size: REQUIRED_WORKGROUP_SIZE,
         max_flat_workgroup_size: REQUIRED_MAX_FLAT_WORKGROUP_SIZE,
+        wavefront_size: REQUIRED_WAVEFRONT_SIZE,
+    };
+
+    pub(crate) const TILED_GEMM_V1: Self = Self {
+        required_workgroup_size: TILED_GEMM_V1_WORKGROUP_SIZE,
+        max_flat_workgroup_size: TILED_GEMM_V1_MAX_FLAT_WORKGROUP_SIZE,
         wavefront_size: REQUIRED_WAVEFRONT_SIZE,
     };
 
@@ -322,6 +331,26 @@ pub enum WorkerV2RawHsacoInspectionError {
         kernel: String,
         actual: u32,
     },
+    TiledGemmV1RequiredWorkgroupSizeMismatch {
+        kernel: String,
+        actual: Option<[u32; 3]>,
+        expected: [u32; 3],
+    },
+    TiledGemmV1MaxFlatWorkgroupSizeMismatch {
+        kernel: String,
+        actual: u32,
+        expected: u32,
+    },
+    TiledGemmV1MetadataWavefrontSizeMismatch {
+        kernel: String,
+        actual: u32,
+        expected: u32,
+    },
+    TiledGemmV1DescriptorWavefrontSizeMismatch {
+        kernel: String,
+        actual: u32,
+        expected: u32,
+    },
 }
 
 impl fmt::Display for WorkerV2RawHsacoInspectionError {
@@ -383,6 +412,38 @@ impl fmt::Display for WorkerV2RawHsacoInspectionError {
                 formatter,
                 "kernel {kernel} descriptor wavefront is {actual}, expected {REQUIRED_WAVEFRONT_SIZE}"
             ),
+            Self::TiledGemmV1RequiredWorkgroupSizeMismatch {
+                kernel,
+                actual,
+                expected,
+            } => write!(
+                formatter,
+                "tiled GEMM V1 kernel {kernel} requires {actual:?}, expected {expected:?}"
+            ),
+            Self::TiledGemmV1MaxFlatWorkgroupSizeMismatch {
+                kernel,
+                actual,
+                expected,
+            } => write!(
+                formatter,
+                "tiled GEMM V1 kernel {kernel} max flat workgroup is {actual}, expected {expected}"
+            ),
+            Self::TiledGemmV1MetadataWavefrontSizeMismatch {
+                kernel,
+                actual,
+                expected,
+            } => write!(
+                formatter,
+                "tiled GEMM V1 kernel {kernel} metadata wavefront is {actual}, expected {expected}"
+            ),
+            Self::TiledGemmV1DescriptorWavefrontSizeMismatch {
+                kernel,
+                actual,
+                expected,
+            } => write!(
+                formatter,
+                "tiled GEMM V1 kernel {kernel} descriptor wavefront is {actual}, expected {expected}"
+            ),
         }
     }
 }
@@ -402,6 +463,13 @@ impl Error for WorkerV2RawHsacoInspectionError {
 /// symbol roles are recovered from the exact manifest retained in the first-build evidence.
 pub fn inspect_worker_v2_raw_hsaco_v1(
     source: InertFirstBuildWorkerV2EvidenceV1,
+) -> Result<InspectedRawWorkerV2HsacoV1, WorkerV2RawHsacoInspectionError> {
+    inspect_worker_v2_raw_hsaco_with_launch_v1(source, WorkerV2RawLaunchContractV1::GFX942_G1)
+}
+
+pub(crate) fn inspect_worker_v2_raw_hsaco_with_launch_v1(
+    source: InertFirstBuildWorkerV2EvidenceV1,
+    launch: WorkerV2RawLaunchContractV1,
 ) -> Result<InspectedRawWorkerV2HsacoV1, WorkerV2RawHsacoInspectionError> {
     validate_lineage(&source)?;
     let target = source.plan().target();
@@ -482,38 +550,34 @@ pub fn inspect_worker_v2_raw_hsaco_v1(
         );
     }
     for (kernel, binding) in metadata.kernels().iter().zip(inspected.bindings()) {
-        if kernel.required_workgroup_size() != Some(REQUIRED_WORKGROUP_SIZE) {
-            return Err(
-                WorkerV2RawHsacoInspectionError::RequiredWorkgroupSizeMismatch {
-                    kernel: kernel.name().to_owned(),
-                    actual: kernel.required_workgroup_size(),
-                },
-            );
+        if kernel.required_workgroup_size() != Some(launch.required_workgroup_size()) {
+            return Err(required_workgroup_size_mismatch(
+                launch,
+                kernel.name(),
+                kernel.required_workgroup_size(),
+            ));
         }
-        if kernel.max_flat_workgroup_size() != REQUIRED_MAX_FLAT_WORKGROUP_SIZE {
-            return Err(
-                WorkerV2RawHsacoInspectionError::MaxFlatWorkgroupSizeMismatch {
-                    kernel: kernel.name().to_owned(),
-                    actual: kernel.max_flat_workgroup_size(),
-                },
-            );
+        if kernel.max_flat_workgroup_size() != launch.max_flat_workgroup_size() {
+            return Err(max_flat_workgroup_size_mismatch(
+                launch,
+                kernel.name(),
+                kernel.max_flat_workgroup_size(),
+            ));
         }
-        if kernel.wavefront_size() != REQUIRED_WAVEFRONT_SIZE {
-            return Err(
-                WorkerV2RawHsacoInspectionError::MetadataWavefrontSizeMismatch {
-                    kernel: kernel.name().to_owned(),
-                    actual: kernel.wavefront_size(),
-                },
-            );
+        if kernel.wavefront_size() != launch.wavefront_size() {
+            return Err(metadata_wavefront_size_mismatch(
+                launch,
+                kernel.name(),
+                kernel.wavefront_size(),
+            ));
         }
         let descriptor_wavefront = binding.descriptor().wavefront_size();
-        if descriptor_wavefront != REQUIRED_WAVEFRONT_SIZE {
-            return Err(
-                WorkerV2RawHsacoInspectionError::DescriptorWavefrontSizeMismatch {
-                    kernel: kernel.name().to_owned(),
-                    actual: descriptor_wavefront,
-                },
-            );
+        if descriptor_wavefront != launch.wavefront_size() {
+            return Err(descriptor_wavefront_size_mismatch(
+                launch,
+                kernel.name(),
+                descriptor_wavefront,
+            ));
         }
     }
 
@@ -528,6 +592,7 @@ pub fn inspect_worker_v2_raw_hsaco_v1(
             &symbol_manifest,
             &observed_kernels,
             &expected_defined_symbols,
+            launch,
         ),
         target,
         code_object_version,
@@ -535,7 +600,7 @@ pub fn inspect_worker_v2_raw_hsaco_v1(
         symbol_manifest,
         observed_kernels,
         expected_defined_symbols,
-        launch: WorkerV2RawLaunchContractV1::GFX942_G1,
+        launch,
     };
     let response_identity =
         calculate_response_identity(source.authorized().response().canonical_bytes());
@@ -548,6 +613,82 @@ pub fn inspect_worker_v2_raw_hsaco_v1(
         policy,
         source,
     })
+}
+
+fn required_workgroup_size_mismatch(
+    launch: WorkerV2RawLaunchContractV1,
+    kernel: &str,
+    actual: Option<[u32; 3]>,
+) -> WorkerV2RawHsacoInspectionError {
+    if launch == WorkerV2RawLaunchContractV1::GFX942_G1 {
+        WorkerV2RawHsacoInspectionError::RequiredWorkgroupSizeMismatch {
+            kernel: kernel.to_owned(),
+            actual,
+        }
+    } else {
+        WorkerV2RawHsacoInspectionError::TiledGemmV1RequiredWorkgroupSizeMismatch {
+            kernel: kernel.to_owned(),
+            actual,
+            expected: launch.required_workgroup_size(),
+        }
+    }
+}
+
+fn max_flat_workgroup_size_mismatch(
+    launch: WorkerV2RawLaunchContractV1,
+    kernel: &str,
+    actual: u32,
+) -> WorkerV2RawHsacoInspectionError {
+    if launch == WorkerV2RawLaunchContractV1::GFX942_G1 {
+        WorkerV2RawHsacoInspectionError::MaxFlatWorkgroupSizeMismatch {
+            kernel: kernel.to_owned(),
+            actual,
+        }
+    } else {
+        WorkerV2RawHsacoInspectionError::TiledGemmV1MaxFlatWorkgroupSizeMismatch {
+            kernel: kernel.to_owned(),
+            actual,
+            expected: launch.max_flat_workgroup_size(),
+        }
+    }
+}
+
+fn metadata_wavefront_size_mismatch(
+    launch: WorkerV2RawLaunchContractV1,
+    kernel: &str,
+    actual: u32,
+) -> WorkerV2RawHsacoInspectionError {
+    if launch == WorkerV2RawLaunchContractV1::GFX942_G1 {
+        WorkerV2RawHsacoInspectionError::MetadataWavefrontSizeMismatch {
+            kernel: kernel.to_owned(),
+            actual,
+        }
+    } else {
+        WorkerV2RawHsacoInspectionError::TiledGemmV1MetadataWavefrontSizeMismatch {
+            kernel: kernel.to_owned(),
+            actual,
+            expected: launch.wavefront_size(),
+        }
+    }
+}
+
+fn descriptor_wavefront_size_mismatch(
+    launch: WorkerV2RawLaunchContractV1,
+    kernel: &str,
+    actual: u32,
+) -> WorkerV2RawHsacoInspectionError {
+    if launch == WorkerV2RawLaunchContractV1::GFX942_G1 {
+        WorkerV2RawHsacoInspectionError::DescriptorWavefrontSizeMismatch {
+            kernel: kernel.to_owned(),
+            actual,
+        }
+    } else {
+        WorkerV2RawHsacoInspectionError::TiledGemmV1DescriptorWavefrontSizeMismatch {
+            kernel: kernel.to_owned(),
+            actual,
+            expected: launch.wavefront_size(),
+        }
+    }
 }
 
 fn validate_lineage(
@@ -683,6 +824,7 @@ fn calculate_policy_identity(
     manifest: &CompilerModuleSymbolManifestV1,
     observed_kernels: &[ObservedWorkerV2KernelSymbolsV1],
     expected_defined_symbols: &[String],
+    launch: WorkerV2RawLaunchContractV1,
 ) -> WorkerV2RawHsacoPolicyIdentityV1 {
     let mut hasher = Sha256::new();
     hasher.update(POLICY_IDENTITY_DOMAIN_V1);
@@ -697,11 +839,11 @@ fn calculate_policy_identity(
         hash_text(&mut hasher, &kernel.descriptor);
     }
     hash_strings(&mut hasher, expected_defined_symbols);
-    for dimension in REQUIRED_WORKGROUP_SIZE {
+    for dimension in launch.required_workgroup_size() {
         hasher.update(dimension.to_le_bytes());
     }
-    hasher.update(REQUIRED_MAX_FLAT_WORKGROUP_SIZE.to_le_bytes());
-    hasher.update(REQUIRED_WAVEFRONT_SIZE.to_le_bytes());
+    hasher.update(launch.max_flat_workgroup_size().to_le_bytes());
+    hasher.update(launch.wavefront_size().to_le_bytes());
     WorkerV2RawHsacoPolicyIdentityV1(hasher.finalize().into())
 }
 

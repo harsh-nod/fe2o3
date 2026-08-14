@@ -20,17 +20,21 @@ use fe2o3_compiler_ffi::{
 use fe2o3_hsaco_finalize::{
     CanonicalDescriptorSectionObservationV1, ContentIdentityV1,
     DescriptorSourceEvidenceRequirementV1, FinalizationError, LinkOptionV1, PinnedWorkerV1,
-    WorkerExecutionLimitsV1, WorkerMeasurementV1, WorkerOutputConstraintsV1,
-    WorkerV2HsacoFinalizationError, execute_reproducible_first_build_worker_v2,
-    finalize_inspected_worker_v2_hsaco_v1, inspect_unfinalized, inspect_worker_v2_raw_hsaco_v1,
-    verify_finalized,
+    TiledGemmV1StructuralArtifactErrorV1, WorkerExecutionLimitsV1, WorkerMeasurementV1,
+    WorkerOutputConstraintsV1, WorkerV2HsacoFinalizationError, WorkerV2RawHsacoInspectionError,
+    execute_reproducible_first_build_worker_v2, finalize_inspected_worker_v2_hsaco_v1,
+    finalize_tiled_gemm_v1_structural_worker_v2_hsaco_v1,
+    inspect_tiled_gemm_v1_structural_worker_v2_hsaco_v1, inspect_unfinalized,
+    inspect_worker_v2_raw_hsaco_v1, verify_finalized,
 };
 use fe2o3_kernel_descriptor::{
-    BlockSizeV1, BuildEvidenceV1, CanonicalCodeObjectDigest, CodeObjectVersion, CompilerIdentityV1,
-    DeviceDescriptorTableV1, DeviceLayoutDescriptorV1, DeviceLayoutRecordV1, DeviceTargetV1,
-    DimensionsV1, EvidenceDigest, EvidenceIdentity, KernelAbiLayoutV1, KernelDescriptorV1,
-    KernelId, LaunchConstraintsV1, LogicalArgumentV1, ProducerIdentityV1, ScalarTypeV1,
-    SourceTypeDescriptorV1, SourceTypeRecordV1, Text, ValidName, encode_device_descriptor_table_v1,
+    AccessMode, BlockSizeV1, BuildEvidenceV1, CanonicalCodeObjectDigest, CapabilityV1,
+    CodeObjectVersion, CompilerIdentityV1, DeviceDescriptorTableV1, DeviceLayoutDescriptorV1,
+    DeviceLayoutRecordV1, DeviceTargetV1, DimensionsV1, EvidenceDigest, EvidenceIdentity,
+    KernelAbiLayoutV1, KernelDescriptorV1, KernelId, LaunchConstraintsV1, LogicalArgumentV1,
+    ProducerIdentityV1, ScalarTypeV1, SourceTypeDescriptorV1, SourceTypeRecordV1, Text,
+    TiledGemmV1StructuralDescriptorErrorV1, TiledGemmV1StructuralDescriptorExpectationV1,
+    ValidName, encode_device_descriptor_table_v1,
 };
 use reserved_fe2o3_symbols::{
     DEVICE_FFI_DIRECTION_EXPORT_V1, DeviceFfiContractFieldsV1, DeviceFfiDirectionV1,
@@ -238,6 +242,384 @@ fn finalization_identity_binds_lineage_separately_from_finalized_content() {
     assert_ne!(first.identity(), changed.identity());
 }
 
+#[test]
+fn structural_tiled_gemm_v1_finalizes_as_four_slices_and_320_bytes() {
+    let options = tiled_options();
+    let table = tiled_descriptor_table(tiled_capabilities());
+    let fixture = fixture_with_descriptor_table(options, Some(&table));
+    let raw_bytes = fixture.bytes.clone();
+    let inspected = inspect_tiled_gemm_v1_structural_worker_v2_hsaco_v1(
+        evidence_for(
+            fixture.bytes,
+            "gfx942:xnack-",
+            0x81,
+            0x91,
+            "tiled_gemm_v1",
+            "tiled_gemm_v1.kd",
+        ),
+        tiled_expectation(),
+    )
+    .unwrap();
+
+    assert_eq!(inspected.target().to_string(), "gfx942:xnack-");
+    assert_eq!(inspected.code_object_version(), CodeObjectVersion::V6);
+    assert_eq!(
+        inspected.descriptor_admission().workgroup_size(),
+        [64, 1, 1]
+    );
+    assert_eq!(
+        inspected.descriptor_admission().explicit_kernarg_bytes(),
+        64
+    );
+    assert_eq!(inspected.descriptor_admission().total_kernarg_bytes(), 320);
+    assert!(!inspected.authenticates_compiler_origin());
+    assert!(!inspected.validates_kernel_body());
+    assert!(!inspected.proves_bf16_isa_semantics());
+    assert!(!inspected.proves_mfma_isa_semantics());
+    assert!(!inspected.grants_launch_authority());
+
+    let finalized = finalize_tiled_gemm_v1_structural_worker_v2_hsaco_v1(inspected).unwrap();
+    let verified = verify_finalized(finalized.exact_finalized_bytes()).unwrap();
+    let kernel = &verified.hsaco().kernels()[0];
+    assert_eq!(kernel.kernarg_segment_size(), 320);
+    assert_eq!(kernel.implicit_argument_offset(), Some(64));
+    assert_eq!(kernel.implicit_argument_size(), 256);
+    assert_eq!(kernel.explicit_arguments().len(), 8);
+    for (index, argument) in kernel.explicit_arguments().iter().enumerate() {
+        assert_eq!(argument.offset(), u64::try_from(index).unwrap() * 8);
+    }
+    assert_eq!(kernel.required_workgroup_size(), Some([64, 1, 1]));
+    assert_eq!(kernel.max_flat_workgroup_size(), 64);
+    assert_eq!(kernel.group_segment_fixed_size(), 0);
+    assert!(finalized.raw_output_identity().matches(&raw_bytes));
+    assert!(
+        finalized
+            .finalized_output_identity()
+            .matches(finalized.exact_finalized_bytes())
+    );
+    assert!(finalized.canonical_descriptor_finalization_ran());
+    assert!(!finalized.validates_kernel_body());
+    assert!(!finalized.proves_bf16_isa_semantics());
+    assert!(!finalized.proves_mfma_isa_semantics());
+    assert!(!finalized.proves_verus_verification());
+    assert!(!finalized.grants_publication_authority());
+    assert!(!finalized.grants_load_authority());
+    assert!(!finalized.grants_launch_authority());
+}
+
+#[test]
+fn structural_tiled_gemm_admission_accepts_arbitrary_text_without_body_authority() {
+    let table = tiled_descriptor_table(tiled_capabilities());
+    for (fill, source_identity, executable_identity) in [(0x00, 0x86, 0x96), (0xff, 0x87, 0x97)] {
+        let mut fixture = fixture_with_descriptor_table(tiled_options(), Some(&table));
+        fixture.bytes[fixture.text_offset..fixture.text_offset + 64].fill(fill);
+        let inspected = inspect_tiled_gemm_v1_structural_worker_v2_hsaco_v1(
+            evidence_for(
+                fixture.bytes,
+                "gfx942:xnack-",
+                source_identity,
+                executable_identity,
+                "tiled_gemm_v1",
+                "tiled_gemm_v1.kd",
+            ),
+            tiled_expectation(),
+        )
+        .unwrap();
+
+        assert!(!inspected.validates_kernel_body());
+        assert!(!inspected.proves_bf16_isa_semantics());
+        assert!(!inspected.proves_mfma_isa_semantics());
+        assert!(!inspected.grants_launch_authority());
+    }
+}
+
+#[test]
+fn tiled_gemm_rejects_wg256_and_288_byte_frontend_probe_substitution() {
+    let table = tiled_descriptor_table(tiled_capabilities());
+    let wrong_required = fixture_with_descriptor_table(
+        FixtureOptions {
+            required_workgroup_size: [256, 1, 1],
+            max_flat_workgroup_size: 256,
+            ..tiled_options()
+        },
+        Some(&table),
+    );
+    let wrong_required = inspect_tiled_gemm_v1_structural_worker_v2_hsaco_v1(
+        evidence_for(
+            wrong_required.bytes,
+            "gfx942:xnack-",
+            0x82,
+            0x92,
+            "tiled_gemm_v1",
+            "tiled_gemm_v1.kd",
+        ),
+        tiled_expectation(),
+    )
+    .unwrap_err();
+    let TiledGemmV1StructuralArtifactErrorV1::RawInspection(wrong_required) = wrong_required else {
+        panic!("tiled required-workgroup mismatch did not retain raw inspection error");
+    };
+    assert_eq!(
+        wrong_required,
+        WorkerV2RawHsacoInspectionError::TiledGemmV1RequiredWorkgroupSizeMismatch {
+            kernel: "tiled_gemm_v1".to_owned(),
+            actual: Some([256, 1, 1]),
+            expected: [64, 1, 1],
+        }
+    );
+    assert_eq!(
+        wrong_required.to_string(),
+        "tiled GEMM V1 kernel tiled_gemm_v1 requires Some([256, 1, 1]), expected [64, 1, 1]"
+    );
+
+    let wrong_max = fixture_with_descriptor_table(
+        FixtureOptions {
+            max_flat_workgroup_size: 256,
+            ..tiled_options()
+        },
+        Some(&table),
+    );
+    let wrong_max = inspect_tiled_gemm_v1_structural_worker_v2_hsaco_v1(
+        evidence_for(
+            wrong_max.bytes,
+            "gfx942:xnack-",
+            0x82,
+            0x92,
+            "tiled_gemm_v1",
+            "tiled_gemm_v1.kd",
+        ),
+        tiled_expectation(),
+    )
+    .unwrap_err();
+    let TiledGemmV1StructuralArtifactErrorV1::RawInspection(wrong_max) = wrong_max else {
+        panic!("tiled max-flat-workgroup mismatch did not retain raw inspection error");
+    };
+    assert_eq!(
+        wrong_max,
+        WorkerV2RawHsacoInspectionError::TiledGemmV1MaxFlatWorkgroupSizeMismatch {
+            kernel: "tiled_gemm_v1".to_owned(),
+            actual: 256,
+            expected: 64,
+        }
+    );
+    assert_eq!(
+        wrong_max.to_string(),
+        "tiled GEMM V1 kernel tiled_gemm_v1 max flat workgroup is 256, expected 64"
+    );
+
+    let fragment_probe_span = fixture_with_descriptor_table(
+        FixtureOptions {
+            kernarg_segment_size_override: Some(288),
+            ..tiled_options()
+        },
+        Some(&table),
+    );
+    assert!(matches!(
+        inspect_tiled_gemm_v1_structural_worker_v2_hsaco_v1(
+            evidence_for(
+                fragment_probe_span.bytes,
+                "gfx942:xnack-",
+                0x83,
+                0x93,
+                "tiled_gemm_v1",
+                "tiled_gemm_v1.kd",
+            ),
+            tiled_expectation(),
+        ),
+        Err(TiledGemmV1StructuralArtifactErrorV1::RawInspection(_))
+    ));
+}
+
+#[test]
+fn tiled_gemm_rejects_capability_target_symbol_offset_and_lds_drift() {
+    for capabilities in [
+        vec![
+            CapabilityV1::Subgroup,
+            CapabilityV1::MatrixMultiply,
+            CapabilityV1::AmdWave,
+        ],
+        vec![
+            CapabilityV1::Subgroup,
+            CapabilityV1::MatrixMultiply,
+            CapabilityV1::AmdWave,
+            CapabilityV1::AmdWmma,
+        ],
+    ] {
+        let table = tiled_descriptor_table(capabilities);
+        let fixture = fixture_with_descriptor_table(tiled_options(), Some(&table));
+        assert!(matches!(
+            inspect_tiled_gemm_v1_structural_worker_v2_hsaco_v1(
+                evidence_for(
+                    fixture.bytes,
+                    "gfx942:xnack-",
+                    0x84,
+                    0x94,
+                    "tiled_gemm_v1",
+                    "tiled_gemm_v1.kd",
+                ),
+                tiled_expectation(),
+            ),
+            Err(TiledGemmV1StructuralArtifactErrorV1::DescriptorPolicy(
+                TiledGemmV1StructuralDescriptorErrorV1::CapabilityProvenance
+            ))
+        ));
+    }
+
+    let table = tiled_descriptor_table(tiled_capabilities());
+    for (options, target, entry, descriptor) in [
+        (
+            FixtureOptions {
+                target: "gfx942",
+                ..tiled_options()
+            },
+            "gfx942",
+            "tiled_gemm_v1",
+            "tiled_gemm_v1.kd",
+        ),
+        (
+            FixtureOptions {
+                entry: "tiled_gemm_v1_alias",
+                descriptor: "tiled_gemm_v1_alias.kd",
+                ..tiled_options()
+            },
+            "gfx942:xnack-",
+            "tiled_gemm_v1_alias",
+            "tiled_gemm_v1_alias.kd",
+        ),
+        (
+            FixtureOptions {
+                tiled_first_argument_offset: 1,
+                ..tiled_options()
+            },
+            "gfx942:xnack-",
+            "tiled_gemm_v1",
+            "tiled_gemm_v1.kd",
+        ),
+        (
+            FixtureOptions {
+                group_segment_fixed_size: 1024,
+                ..tiled_options()
+            },
+            "gfx942:xnack-",
+            "tiled_gemm_v1",
+            "tiled_gemm_v1.kd",
+        ),
+        (
+            FixtureOptions {
+                wavefront_size: 32,
+                descriptor_wavefront_size: 32,
+                ..tiled_options()
+            },
+            "gfx942:xnack-",
+            "tiled_gemm_v1",
+            "tiled_gemm_v1.kd",
+        ),
+    ] {
+        let fixture = fixture_with_descriptor_table(options, Some(&table));
+        assert!(
+            inspect_tiled_gemm_v1_structural_worker_v2_hsaco_v1(
+                evidence_for(fixture.bytes, target, 0x85, 0x95, entry, descriptor,),
+                tiled_expectation(),
+            )
+            .is_err()
+        );
+    }
+}
+
+fn tiled_options() -> FixtureOptions<'static> {
+    FixtureOptions {
+        target: "gfx942:xnack-",
+        // ELF OSABI byte 4 encodes AMDGPU HSA code object V6.
+        code_object_version: 4,
+        entry: "tiled_gemm_v1",
+        descriptor: "tiled_gemm_v1.kd",
+        required_workgroup_size: [64, 1, 1],
+        max_flat_workgroup_size: 64,
+        include_explicit_argument_alignments: true,
+        abi: FixtureAbi::TiledGemmV1,
+        ..FixtureOptions::valid()
+    }
+}
+
+fn tiled_capabilities() -> Vec<CapabilityV1> {
+    vec![
+        CapabilityV1::Subgroup,
+        CapabilityV1::MatrixMultiply,
+        CapabilityV1::AmdWave,
+        CapabilityV1::AmdMfma,
+    ]
+}
+
+fn tiled_expectation() -> TiledGemmV1StructuralDescriptorExpectationV1 {
+    TiledGemmV1StructuralDescriptorExpectationV1::new(
+        KernelId::from_bytes([0x71; 32]),
+        build_evidence(0x72, 0x73),
+        build_evidence(0x74, 0x75),
+    )
+    .unwrap()
+}
+
+fn tiled_descriptor_table(capabilities: Vec<CapabilityV1>) -> Vec<u8> {
+    let u16_source =
+        SourceTypeRecordV1::new(SourceTypeDescriptorV1::shared_slice(ScalarTypeV1::U16));
+    let u16_layout =
+        DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::shared_slice(ScalarTypeV1::U16));
+    let f32_source =
+        SourceTypeRecordV1::new(SourceTypeDescriptorV1::shared_slice(ScalarTypeV1::F32));
+    let f32_layout =
+        DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::shared_slice(ScalarTypeV1::F32));
+    let output_source =
+        SourceTypeRecordV1::new(SourceTypeDescriptorV1::disjoint_slice(ScalarTypeV1::F32));
+    let output_layout =
+        DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::disjoint_slice(ScalarTypeV1::F32));
+    let kernel = KernelDescriptorV1::new(
+        KernelId::from_bytes([0x71; 32]),
+        name("tiled_gemm_v1"),
+        name("tiled_gemm_v1"),
+        name("tiled_gemm_v1.kd"),
+        build_evidence(0x72, 0x73),
+        build_evidence(0x74, 0x75),
+        capabilities,
+        KernelAbiLayoutV1::new(64, 320, 8).unwrap(),
+        LaunchConstraintsV1::new(
+            1,
+            BlockSizeV1::Exact(DimensionsV1::new(64, 1, 1).unwrap()),
+            DimensionsV1::new(u32::MAX, 1, 1).unwrap(),
+            64,
+            0,
+            0,
+        )
+        .unwrap(),
+        vec![
+            LogicalArgumentV1::shared_slice(0, name("a"), &u16_source, &u16_layout, 0).unwrap(),
+            LogicalArgumentV1::shared_slice(1, name("b"), &u16_source, &u16_layout, 16).unwrap(),
+            LogicalArgumentV1::shared_slice(2, name("c"), &f32_source, &f32_layout, 32).unwrap(),
+            LogicalArgumentV1::disjoint_slice(
+                3,
+                name("d"),
+                &output_source,
+                &output_layout,
+                AccessMode::ReadWrite,
+                48,
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    let table = DeviceDescriptorTableV1::new(
+        CanonicalCodeObjectDigest::from_bytes([0; 32]),
+        CodeObjectVersion::V6,
+        CompilerIdentityV1::new(text("rustc-codegen-fe2o3"), text("test"), [0x76; 20]),
+        ProducerIdentityV1::new(text("rustc-codegen-fe2o3-worker-v2"), text("test")),
+        DeviceTargetV1::parse("gfx942:xnack-").unwrap(),
+        vec![u16_source, f32_source, output_source],
+        vec![u16_layout, f32_layout, output_layout],
+        vec![kernel],
+    )
+    .unwrap();
+    encode_device_descriptor_table_v1(&table).unwrap()
+}
+
 fn prepare(
     bytes: Vec<u8>,
     target: &str,
@@ -331,6 +713,24 @@ fn evidence(
     invocation_seed: u8,
     semantic_seed: u8,
 ) -> fe2o3_hsaco_finalize::InertFirstBuildWorkerV2EvidenceV1 {
+    evidence_for(
+        bytes,
+        target,
+        invocation_seed,
+        semantic_seed,
+        "vecadd",
+        "vecadd.kd",
+    )
+}
+
+fn evidence_for(
+    bytes: Vec<u8>,
+    target: &str,
+    invocation_seed: u8,
+    semantic_seed: u8,
+    entry: &str,
+    descriptor: &str,
+) -> fe2o3_hsaco_finalize::InertFirstBuildWorkerV2EvidenceV1 {
     let directory = TestDirectory::new();
     let producer = ProducerIdentity::from_codegen(
         "worker_v2_hsaco_finalization_fixture",
@@ -344,7 +744,7 @@ fn evidence(
         BuildSession::from_bytes([invocation_seed.wrapping_add(1); 16]),
     )
     .unwrap();
-    let handoff = compiler_handoff(&bytes, target, semantic_seed);
+    let handoff = compiler_handoff(&bytes, target, semantic_seed, entry, descriptor);
     publish_compiler_module_handoff_v1(&directory.0, &producer, attempt, handoff.canonical_bytes())
         .unwrap();
     let consumed = consume_compiler_module_handoff_v1(&directory.0, &producer, attempt).unwrap();
@@ -383,12 +783,18 @@ fn link_options() -> Vec<LinkOptionV1> {
     .collect()
 }
 
-fn compiler_handoff(bytes: &[u8], target: &str, semantic_seed: u8) -> CompilerModuleHandoffV2 {
+fn compiler_handoff(
+    bytes: &[u8],
+    target: &str,
+    semantic_seed: u8,
+    entry: &str,
+    descriptor: &str,
+) -> CompilerModuleHandoffV2 {
     const PAYLOAD_MARKER: &[u8] = b"FE2O3/TEST-HSACO-PAYLOAD/V1\0";
     let target = CompilerDeviceTargetV1::parse(target).unwrap();
     let manifest = CompilerModuleSymbolManifestV1::new([
-        (CompilerModuleSymbolRoleV1::KernelEntry, "vecadd"),
-        (CompilerModuleSymbolRoleV1::KernelDescriptor, "vecadd.kd"),
+        (CompilerModuleSymbolRoleV1::KernelEntry, entry),
+        (CompilerModuleSymbolRoleV1::KernelDescriptor, descriptor),
         (CompilerModuleSymbolRoleV1::DeviceFfiExport, "ffi_export"),
     ])
     .unwrap();

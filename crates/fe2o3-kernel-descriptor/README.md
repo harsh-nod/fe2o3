@@ -33,6 +33,35 @@ manifest, table, and executable entry can grant that selector authority.
 The table contains device information only. Host targets and host layouts will
 belong to a separate host-binding schema.
 
+## Canonical tiled GEMM V1 structural descriptor profile
+
+`admit_tiled_gemm_v1_structural_descriptor_v1` is a sealed, fail-closed policy
+for the declared ABI and metadata of direct-global `tiled_gemm_v1`. It requires
+COV6 on `gfx942:xnack-`, wave64 execution, one `[64, 1, 1]` workgroup with
+maximum flat size 64, zero static and dynamic LDS, and the exact subgroup,
+matrix-multiply, AMD-wave, and AMD-MFMA capability declarations. Its four
+logical slices are `A: &[u16]`, `B: &[u16]`, `C: &[f32]`, and
+`D: DisjointSlice<f32>` with exact pointer/length physical offsets
+`0, 8, ..., 56`. The kernarg span is 64 explicit bytes followed by the
+256-byte COV6 implicit suffix, for 320 bytes total.
+
+The `u16` scalar and layout records establish only the storage-level type of A
+and B. The capability and build-evidence records are declarations. Descriptor
+admission does not inspect a kernel body, authenticate code origin, or prove
+BF16 or MFMA instruction semantics.
+
+The 288-byte fragment-level frontend evidence probe is a different profile. It
+describes eight BF16 fragments and four F32 fragments as by-value arguments and
+has only 32 explicit bytes. Its constants remain available to describe that
+frontend boundary, but the structural tiled GEMM admission API deliberately
+rejects it. The 288-byte and 320-byte profiles are never interchangeable.
+
+The expected source and executable-IR evidence supplied to admission must
+match exactly and capability omission or substitution fails closed. These V1
+evidence records are still caller-provided declarations; successful admission
+does not authenticate their compiler origin or grant publication, load, or
+launch authority.
+
 ## V2 target requirements
 
 V2 binds each kernel ID to declared static and maximum dynamic LDS bytes, one

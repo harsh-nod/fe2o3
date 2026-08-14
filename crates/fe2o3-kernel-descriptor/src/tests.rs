@@ -138,6 +138,29 @@ fn round_trip_reencodes_byte_identically() {
 }
 
 #[test]
+fn v1_capability_tags_remain_closed_and_stable() {
+    use crate::encode::capability_tag;
+
+    let capabilities = [
+        CapabilityV1::Subgroup,
+        CapabilityV1::Ballot,
+        CapabilityV1::Shuffle,
+        CapabilityV1::WorkgroupMemory,
+        CapabilityV1::MatrixMultiply,
+        CapabilityV1::AsyncCopy,
+        CapabilityV1::Atomics,
+        CapabilityV1::AmdWave,
+        CapabilityV1::AmdMfma,
+        CapabilityV1::AmdWmma,
+        CapabilityV1::AmdDsPermute,
+    ];
+    assert_eq!(
+        capabilities.map(capability_tag),
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    );
+}
+
+#[test]
 fn golden_wire_and_digests_are_stable() {
     let table = fixture();
     let encoded = encode_device_descriptor_table_v1(&table).expect("encode");

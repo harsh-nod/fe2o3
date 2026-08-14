@@ -14,6 +14,13 @@ const SYMTAB_SECTION_INDEX: usize = 5;
 const CANONICAL_DESCRIPTOR_SECTION_INDEX: usize = 6;
 const SHSTRTAB_SECTION_INDEX: usize = 7;
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+#[allow(dead_code)]
+enum FixtureAbi {
+    SliceF32,
+    TiledGemmV1,
+}
+
 #[derive(Clone, Copy)]
 struct FixtureOptions<'a> {
     target: &'a str,
@@ -36,6 +43,10 @@ struct FixtureOptions<'a> {
     include_dynamic_lds_size: bool,
     duplicate_max_workgroups_x: bool,
     malformed_max_workgroups_x: bool,
+    abi: FixtureAbi,
+    tiled_first_argument_offset: u64,
+    kernarg_segment_size_override: Option<u64>,
+    group_segment_fixed_size: u64,
 }
 
 impl FixtureOptions<'static> {
@@ -61,6 +72,10 @@ impl FixtureOptions<'static> {
             include_dynamic_lds_size: false,
             duplicate_max_workgroups_x: false,
             malformed_max_workgroups_x: false,
+            abi: FixtureAbi::SliceF32,
+            tiled_first_argument_offset: 0,
+            kernarg_segment_size_override: None,
+            group_segment_fixed_size: 0,
         }
     }
 }
@@ -154,7 +169,16 @@ fn fixture_with_descriptor_table(
         bytes.extend_from_slice(table);
     }
 
-    write_u32(&mut bytes, descriptor_offset + 8, 272);
+    write_u32(
+        &mut bytes,
+        descriptor_offset,
+        u32::try_from(options.group_segment_fixed_size).unwrap(),
+    );
+    write_u32(
+        &mut bytes,
+        descriptor_offset + 8,
+        u32::try_from(kernarg_segment_size(options)).unwrap(),
+    );
     write_i64(
         &mut bytes,
         descriptor_offset + 16,
@@ -319,26 +343,60 @@ fn fixture_with_descriptor_table(
 }
 
 fn metadata(options: FixtureOptions<'_>) -> Vec<u8> {
-    let alignment = options.include_explicit_argument_alignments.then_some(8);
-    let mut arguments = vec![
-        explicit_pointer_argument(
-            Some("values_ptr"),
-            0,
-            8,
-            alignment,
-            "global_buffer",
-            Some("global"),
-            options
-                .include_pointee_alignment
-                .then_some(options.pointee_alignment),
-        ),
-        explicit_argument(Some("values_len"), 8, 8, alignment, "by_value", None),
-    ];
-    arguments.extend(v5_hidden_arguments(16));
+    let explicit_bytes = match options.abi {
+        FixtureAbi::SliceF32 => 16,
+        FixtureAbi::TiledGemmV1 => 64,
+    };
+    let mut arguments = match options.abi {
+        FixtureAbi::SliceF32 => {
+            let alignment = options.include_explicit_argument_alignments.then_some(8);
+            vec![
+                explicit_pointer_argument(
+                    Some("values_ptr"),
+                    0,
+                    8,
+                    alignment,
+                    "global_buffer",
+                    Some("global"),
+                    options
+                        .include_pointee_alignment
+                        .then_some(options.pointee_alignment),
+                ),
+                explicit_argument(Some("values_len"), 8, 8, alignment, "by_value", None),
+            ]
+        }
+        FixtureAbi::TiledGemmV1 => (0..4)
+            .flat_map(|index| {
+                let base = if index == 0 {
+                    options.tiled_first_argument_offset
+                } else {
+                    index * 16
+                };
+                let value_type = if index < 2 { "u16" } else { "f32" };
+                let alignment = options.include_explicit_argument_alignments.then_some(8);
+                [
+                    typed_explicit_pointer_argument(
+                        &format!("arg{index}.data"),
+                        base,
+                        alignment,
+                        value_type,
+                    ),
+                    typed_explicit_argument(
+                        &format!("arg{index}.len"),
+                        base + 8,
+                        8,
+                        alignment,
+                        "u64",
+                    ),
+                ]
+            })
+            .collect(),
+    };
+    arguments.extend(v5_hidden_arguments(explicit_bytes));
     if let Some((relative_offset, size, kind)) = options.optional_hidden_argument {
         arguments.push(argument(
             None,
-            16 + relative_offset,
+            explicit_bytes + relative_offset,
             size,
             kind,
             None,
@@ -347,7 +405,7 @@ fn metadata(options: FixtureOptions<'_>) -> Vec<u8> {
     if let Some((relative_offset, size, kind)) = options.second_optional_hidden_argument {
         arguments.push(argument(
             None,
-            16 + relative_offset,
+            explicit_bytes + relative_offset,
             size,
             kind,
             None,
@@ -356,7 +414,7 @@ fn metadata(options: FixtureOptions<'_>) -> Vec<u8> {
     if options.include_dynamic_lds_size {
         arguments.push(argument(
             None,
-            136,
+            explicit_bytes + 120,
             4,
             "hidden_dynamic_lds_size",
             None,
@@ -366,9 +424,15 @@ fn metadata(options: FixtureOptions<'_>) -> Vec<u8> {
         (Value::from(".name"), Value::from(options.entry)),
         (Value::from(".symbol"), Value::from(options.descriptor)),
         (Value::from(".args"), Value::Array(arguments)),
-        (Value::from(".kernarg_segment_size"), Value::from(272)),
+        (
+            Value::from(".kernarg_segment_size"),
+            Value::from(kernarg_segment_size(options)),
+        ),
         (Value::from(".kernarg_segment_align"), Value::from(8)),
-        (Value::from(".group_segment_fixed_size"), Value::from(0)),
+        (
+            Value::from(".group_segment_fixed_size"),
+            Value::from(options.group_segment_fixed_size),
+        ),
         (Value::from(".private_segment_fixed_size"), Value::from(0)),
         (
             Value::from(".wavefront_size"),
@@ -430,6 +494,48 @@ fn metadata(options: FixtureOptions<'_>) -> Vec<u8> {
     let mut encoded = Vec::new();
     write_value(&mut encoded, &root).unwrap();
     encoded
+}
+
+fn kernarg_segment_size(options: FixtureOptions<'_>) -> u64 {
+    options.kernarg_segment_size_override.unwrap_or(match options.abi {
+        FixtureAbi::SliceF32 => 272,
+        FixtureAbi::TiledGemmV1 => 320,
+    })
+}
+
+fn typed_explicit_argument(
+    name: &str,
+    offset: u64,
+    size: u64,
+    alignment: Option<u64>,
+    value_type: &str,
+) -> Value {
+    let mut value = explicit_argument(Some(name), offset, size, alignment, "by_value", None);
+    if let Value::Map(fields) = &mut value {
+        fields.push((Value::from(".value_type"), Value::from(value_type)));
+    }
+    value
+}
+
+fn typed_explicit_pointer_argument(
+    name: &str,
+    offset: u64,
+    alignment: Option<u64>,
+    value_type: &str,
+) -> Value {
+    let mut value = explicit_pointer_argument(
+        Some(name),
+        offset,
+        8,
+        alignment,
+        "global_buffer",
+        Some("global"),
+        None,
+    );
+    if let Value::Map(fields) = &mut value {
+        fields.push((Value::from(".value_type"), Value::from(value_type)));
+    }
+    value
 }
 
 fn explicit_pointer_argument(

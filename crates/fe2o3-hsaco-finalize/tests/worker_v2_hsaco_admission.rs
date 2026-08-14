@@ -195,19 +195,39 @@ fn rejects_required_size_max_flat_and_wavefront_launch_mismatches() {
         required_workgroup_size: [128, 2, 1],
         ..FixtureOptions::valid()
     });
-    assert!(matches!(
-        inspect_worker_v2_raw_hsaco_v1(evidence(wrong_required.bytes, "vecadd", "vecadd.kd")),
-        Err(WorkerV2RawHsacoInspectionError::RequiredWorkgroupSizeMismatch { .. })
-    ));
+    let wrong_required =
+        inspect_worker_v2_raw_hsaco_v1(evidence(wrong_required.bytes, "vecadd", "vecadd.kd"))
+            .unwrap_err();
+    assert_eq!(
+        wrong_required,
+        WorkerV2RawHsacoInspectionError::RequiredWorkgroupSizeMismatch {
+            kernel: "vecadd".to_owned(),
+            actual: Some([128, 2, 1]),
+        }
+    );
+    assert_eq!(
+        wrong_required.to_string(),
+        "kernel vecadd requires Some([128, 2, 1]), expected [256, 1, 1]"
+    );
 
     let wrong_max = fixture(FixtureOptions {
         max_flat_workgroup_size: 512,
         ..FixtureOptions::valid()
     });
-    assert!(matches!(
-        inspect_worker_v2_raw_hsaco_v1(evidence(wrong_max.bytes, "vecadd", "vecadd.kd")),
-        Err(WorkerV2RawHsacoInspectionError::MaxFlatWorkgroupSizeMismatch { .. })
-    ));
+    let wrong_max =
+        inspect_worker_v2_raw_hsaco_v1(evidence(wrong_max.bytes, "vecadd", "vecadd.kd"))
+            .unwrap_err();
+    assert_eq!(
+        wrong_max,
+        WorkerV2RawHsacoInspectionError::MaxFlatWorkgroupSizeMismatch {
+            kernel: "vecadd".to_owned(),
+            actual: 512,
+        }
+    );
+    assert_eq!(
+        wrong_max.to_string(),
+        "kernel vecadd max flat workgroup is 512, expected 256"
+    );
 
     let wave32 = fixture(FixtureOptions {
         wavefront_size: 32,

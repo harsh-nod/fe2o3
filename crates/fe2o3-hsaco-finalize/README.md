@@ -158,3 +158,41 @@ HSA loading authority, or grants kernel-launch authority. On `mi300x`, the ignor
 `worker_v2_real_source_links_an_external_bitcode_provider` tests pass with an unoptimized Debug
 worker for `gfx942:xnack-`, through durable publication. Those tests do not load or launch the HSACO,
 and no optimized Release-worker result is claimed.
+
+### Tiled GEMM V1 structural artifact policy
+
+`inspect_tiled_gemm_v1_structural_worker_v2_hsaco_v1` is a separate sealed
+specialization of Worker V2 raw admission. It preserves the existing generic
+WG256 policy and selects an exact WG64 contract only for the declared
+direct-global `tiled_gemm_v1` profile. Admission requires COV6,
+`gfx942:xnack-`, wave64, required workgroup `[64, 1, 1]`, maximum flat
+workgroup 64, zero LDS, exact entry and descriptor symbols, and one embedded
+unfinalized canonical descriptor table.
+
+Metadata must contain eight explicit fields for four slices: each global
+pointer is followed by its `u64` length at offsets `0, 8, ..., 56`. A and B use
+`u16` storage; C and D use `f32`. The explicit span is 64 bytes and the COV6
+implicit suffix starts at offset 64 with size 256, producing a 320-byte kernarg
+segment. Descriptor admission additionally requires exact subgroup, matrix,
+AMD-wave, and AMD-MFMA declarations plus the direct-global zero-LDS logical
+argument contract.
+
+This policy does not inspect `.text` or bind it to a trusted lowering. `u16`
+storage does not prove BF16 interpretation, and an AMD-MFMA capability
+declaration does not prove that the body contains or correctly uses an MFMA
+instruction. Synthetic tests intentionally use arbitrary `.text` bytes to
+make that boundary executable.
+
+`finalize_tiled_gemm_v1_structural_worker_v2_hsaco_v1` uses the existing
+in-process LLVM/LLD Worker V2 lineage and canonical finalizer. It independently
+verifies the finalized structural envelope, reruns exact metadata checks, and
+requires the finalized descriptor admission to equal the raw admission. It
+adds no COMGR or shell linker path. Canonical finalization does not add
+kernel-body or ISA-semantic validation.
+
+The older 288-byte frontend probe remains a separate evidence profile: eight
+BF16 plus four F32 by-value fragments and 32 explicit bytes. Substitution
+between that probe and this structural 320-byte profile fails closed. Neither
+typed result authenticates compiler or code origin, validates the kernel body,
+proves BF16/MFMA semantics or Verus verification, or grants publication, load,
+or launch authority.

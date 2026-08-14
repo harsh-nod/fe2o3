@@ -764,15 +764,21 @@ fn trailing_bytes_reserved_fields_and_unknown_tags_are_rejected() {
         );
     }
 
-    let mut unknown_capability = encoded;
-    write_u16(&mut unknown_capability, kernel.capability_tags[0], u16::MAX);
-    assert!(matches!(
-        rejected(&unknown_capability),
-        DecodeError::UnknownTag {
-            kind: "capability",
-            tag: u16::MAX
-        }
-    ));
+    for unknown_tag in [12, u16::MAX] {
+        let mut unknown_capability = encoded.clone();
+        write_u16(
+            &mut unknown_capability,
+            kernel.capability_tags[0],
+            unknown_tag,
+        );
+        assert_eq!(
+            rejected(&unknown_capability),
+            DecodeError::UnknownTag {
+                kind: "capability",
+                tag: unknown_tag,
+            }
+        );
+    }
 }
 
 #[test]
