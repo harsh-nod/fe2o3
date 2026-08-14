@@ -7,9 +7,9 @@ use std::fs::{self, OpenOptions};
 use std::io::Read;
 use std::io::Write;
 #[cfg(target_os = "linux")]
-use std::os::unix::fs::MetadataExt;
-#[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd;
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::MetadataExt;
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
