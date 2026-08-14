@@ -270,6 +270,34 @@ fn derives_exact_plan_and_returns_only_inert_dual_execution_evidence() {
         evidence.authorized().evidence_class(),
         WorkerEvidenceClassV2::CompilerFfiLink
     );
+    assert!(
+        evidence
+            .bootstrap()
+            .response()
+            .response_identity()
+            .is_none()
+    );
+    assert!(
+        evidence
+            .bootstrap()
+            .response()
+            .device_library_provider()
+            .is_none()
+    );
+    assert!(
+        evidence
+            .exact_replay()
+            .response()
+            .response_identity()
+            .is_none()
+    );
+    assert!(
+        evidence
+            .exact_replay()
+            .response()
+            .device_library_provider()
+            .is_none()
+    );
     assert_eq!(evidence.output_bytes(), OUTPUT);
     assert_eq!(
         evidence.output_identity(),

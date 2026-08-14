@@ -47,7 +47,10 @@ const SUCCESS_DIAGNOSTICS: [&str; 6] = [
     "post_link.check=unresolved status=ok symbols=[]",
     "post_link.kernel name=row_softmax_v1 symbol=row_softmax_v1.kd kernarg_size=288 group_size=0 private_size=0 kernarg_align=8 wavefront_size=64 max_workgroup_size=64 reqd_workgroup_size=[64,1,1]",
 ];
+#[cfg(test)]
 const EXCHANGE_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/ROW-SOFTMAX-V1/DIRECT-WORKER-EXCHANGE/V1\0";
+const DUAL_EXCHANGE_IDENTITY_DOMAIN_V1: &[u8] =
+    b"FE2O3/ROW-SOFTMAX-V1/DIRECT-WORKER-DUAL-EXCHANGE/V1\0";
 
 /// Independent pins for the worker-owned gfx942 OCML provider closure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -379,7 +382,7 @@ impl Error for RowSoftmaxV1DirectWorkerErrorV1 {
     }
 }
 
-/// Validates exact request, response, handoff, OCML import, and provider-check evidence.
+/// Validates both authenticated V3 exchanges, the handoff, OCML import, and provider evidence.
 pub fn validate_row_softmax_v1_direct_worker_exchange_v1(
     source: &InertFirstBuildWorkerV2EvidenceV1,
     expected: RowSoftmaxV1DirectWorkerExpectationV1,
@@ -387,26 +390,32 @@ pub fn validate_row_softmax_v1_direct_worker_exchange_v1(
     if source.handoff_identity().as_bytes() != expected.handoff_sha256() {
         return Err(profile_mismatch("consumed rustc handoff identity"));
     }
-    let exchange = InertDecodedWorkerExchangeV2::decode(
+    let bootstrap = InertDecodedWorkerExchangeV2::decode(
+        source.bootstrap_request_bytes(),
+        source.bootstrap().response().canonical_bytes(),
+    )
+    .map_err(RowSoftmaxV1DirectWorkerErrorV1::WorkerProtocol)?;
+    let replay = InertDecodedWorkerExchangeV2::decode(
         source.authorized_request_bytes(),
         source.authorized().response().canonical_bytes(),
     )
     .map_err(RowSoftmaxV1DirectWorkerErrorV1::WorkerProtocol)?;
-    let validated = validate_exchange_parts(
-        &exchange,
+    let validated = validate_dual_exchange_parts(
+        &bootstrap,
+        &replay,
         source.compiler_envelope(),
         source.symbol_manifest(),
         expected,
     )?;
 
-    if source.plan().target() != exchange.request().target() {
+    if source.plan().target() != replay.request().target() {
         return Err(profile_mismatch("link-plan target"));
     }
-    if source.worker_measurement().executable() != exchange.request().worker_executable()
+    if source.worker_measurement().executable() != replay.request().worker_executable()
         || source.worker_measurement().worker_build_identity()
-            != exchange.request().worker_build_identity()
+            != replay.request().worker_build_identity()
         || source.worker_measurement().llvm_build_identity()
-            != exchange.request().llvm_build_identity()
+            != replay.request().llvm_build_identity()
     {
         return Err(profile_mismatch("measured Worker V2 identity"));
     }
@@ -435,26 +444,134 @@ pub fn inspect_row_softmax_v1_direct_worker_hsaco_v1(
     })
 }
 
+#[cfg(test)]
 fn validate_exchange_parts(
     exchange: &InertDecodedWorkerExchangeV2,
     envelope: &CompilerFfiEnvelopeV1,
     manifest: &CompilerModuleSymbolManifestV1,
     expected: RowSoftmaxV1DirectWorkerExpectationV1,
 ) -> Result<ValidatedRowSoftmaxV1DirectWorkerExchangeV1, RowSoftmaxV1DirectWorkerErrorV1> {
+    let linked_output =
+        validate_exchange_parts_with_output_policy(exchange, envelope, manifest, expected, true)?;
+    Ok(ValidatedRowSoftmaxV1DirectWorkerExchangeV1 {
+        identity: calculate_exchange_identity(exchange.request(), exchange.response()),
+        compiler_module: exchange.request().compiler_module().identity(),
+        linked_output,
+        frontend_authority_commitment: expected.frontend_authority_commitment,
+        provider_manifest_identity: *expected.worker.provider.manifest_identity(),
+    })
+}
+
+fn validate_dual_exchange_parts(
+    bootstrap: &InertDecodedWorkerExchangeV2,
+    replay: &InertDecodedWorkerExchangeV2,
+    envelope: &CompilerFfiEnvelopeV1,
+    manifest: &CompilerModuleSymbolManifestV1,
+    expected: RowSoftmaxV1DirectWorkerExpectationV1,
+) -> Result<ValidatedRowSoftmaxV1DirectWorkerExchangeV1, RowSoftmaxV1DirectWorkerErrorV1> {
+    validate_matching_requests(bootstrap.request(), replay.request())?;
+    validate_matching_responses(bootstrap.response(), replay.response())?;
+    let bootstrap_output =
+        validate_exchange_parts_with_output_policy(bootstrap, envelope, manifest, expected, false)?;
+    let replay_output =
+        validate_exchange_parts_with_output_policy(replay, envelope, manifest, expected, true)?;
+    if bootstrap_output != replay_output {
+        return Err(profile_mismatch("bootstrap/replay linked output identity"));
+    }
+    Ok(ValidatedRowSoftmaxV1DirectWorkerExchangeV1 {
+        identity: calculate_dual_exchange_identity(bootstrap, replay),
+        compiler_module: replay.request().compiler_module().identity(),
+        linked_output: replay_output,
+        frontend_authority_commitment: expected.frontend_authority_commitment,
+        provider_manifest_identity: *expected.worker.provider.manifest_identity(),
+    })
+}
+
+fn validate_exchange_parts_with_output_policy(
+    exchange: &InertDecodedWorkerExchangeV2,
+    envelope: &CompilerFfiEnvelopeV1,
+    manifest: &CompilerModuleSymbolManifestV1,
+    expected: RowSoftmaxV1DirectWorkerExpectationV1,
+    require_exact_output_bound: bool,
+) -> Result<ContentIdentityV1, RowSoftmaxV1DirectWorkerErrorV1> {
     let request = exchange.request();
     validate_request(request, envelope, manifest, expected)?;
-    validate_response(request, exchange.response(), expected)?;
+    validate_response(
+        request,
+        exchange.response(),
+        expected,
+        require_exact_output_bound,
+    )?;
     let output = exchange
         .response()
         .output()
         .ok_or_else(|| profile_mismatch("completed response output"))?;
-    Ok(ValidatedRowSoftmaxV1DirectWorkerExchangeV1 {
-        identity: calculate_exchange_identity(request, exchange.response()),
-        compiler_module: request.compiler_module().identity(),
-        linked_output: output.identity(),
-        frontend_authority_commitment: expected.frontend_authority_commitment,
-        provider_manifest_identity: *expected.worker.provider.manifest_identity(),
-    })
+    Ok(output.identity())
+}
+
+fn validate_matching_requests(
+    bootstrap: &WorkerRequestV2,
+    replay: &WorkerRequestV2,
+) -> Result<(), RowSoftmaxV1DirectWorkerErrorV1> {
+    if bootstrap.request_id() == replay.request_id()
+        || bootstrap.identity() == replay.identity()
+        || bootstrap.llvm_build_identity() != replay.llvm_build_identity()
+        || bootstrap.worker_build_identity() != replay.worker_build_identity()
+        || bootstrap.worker_executable() != replay.worker_executable()
+        || bootstrap.target() != replay.target()
+        || bootstrap.code_object_version() != replay.code_object_version()
+        || bootstrap.options() != replay.options()
+        || bootstrap.compiler_envelope_identity() != replay.compiler_envelope_identity()
+        || bootstrap.compiler_module() != replay.compiler_module()
+        || bootstrap.external_providers() != replay.external_providers()
+        || bootstrap.import_symbols() != replay.import_symbols()
+        || bootstrap.export_symbols() != replay.export_symbols()
+        || bootstrap.final_symbols() != replay.final_symbols()
+        || bootstrap.output_constraints().max_bytes() < replay.output_constraints().max_bytes()
+    {
+        return Err(profile_mismatch("bootstrap/replay request closure"));
+    }
+    Ok(())
+}
+
+fn validate_matching_responses(
+    bootstrap: &WorkerResponseV2,
+    replay: &WorkerResponseV2,
+) -> Result<(), RowSoftmaxV1DirectWorkerErrorV1> {
+    let bootstrap_provider = bootstrap
+        .device_library_provider()
+        .ok_or_else(|| profile_mismatch("bootstrap structured OCML provider evidence"))?;
+    let replay_provider = replay
+        .device_library_provider()
+        .ok_or_else(|| profile_mismatch("replay structured OCML provider evidence"))?;
+    let bootstrap_identity = bootstrap
+        .response_identity()
+        .ok_or_else(|| profile_mismatch("bootstrap authenticated response identity"))?;
+    let replay_identity = replay
+        .response_identity()
+        .ok_or_else(|| profile_mismatch("replay authenticated response identity"))?;
+    if bootstrap_provider != replay_provider {
+        return Err(profile_mismatch(
+            "bootstrap/replay ordered OCML provider closure",
+        ));
+    }
+    let bootstrap_output = bootstrap
+        .output()
+        .ok_or_else(|| profile_mismatch("bootstrap completed response output"))?;
+    let replay_output = replay
+        .output()
+        .ok_or_else(|| profile_mismatch("replay completed response output"))?;
+    if bootstrap_identity == replay_identity
+        || bootstrap.compiler_envelope_identity() != replay.compiler_envelope_identity()
+        || bootstrap.worker_build_identity() != replay.worker_build_identity()
+        || bootstrap.stage() != replay.stage()
+        || bootstrap.diagnostics() != replay.diagnostics()
+        || bootstrap_output.identity() != replay_output.identity()
+        || bootstrap_output.bytes() != replay_output.bytes()
+    {
+        return Err(profile_mismatch("bootstrap/replay response closure"));
+    }
+    Ok(())
 }
 
 fn validate_request(
@@ -615,6 +732,7 @@ fn validate_response(
     request: &WorkerRequestV2,
     response: &WorkerResponseV2,
     expected: RowSoftmaxV1DirectWorkerExpectationV1,
+    require_exact_output_bound: bool,
 ) -> Result<(), RowSoftmaxV1DirectWorkerErrorV1> {
     if !response.binds_request(request) {
         return Err(profile_mismatch("response request binding"));
@@ -647,7 +765,9 @@ fn validate_response(
     if output.request_identity() != request.identity()
         || output.compiler_envelope_identity() != request.compiler_envelope_identity()
         || !output.identity().matches(output.bytes())
-        || output.identity().byte_len() != request.output_constraints().max_bytes()
+        || (require_exact_output_bound
+            && output.identity().byte_len() != request.output_constraints().max_bytes())
+        || output.identity().byte_len() > request.output_constraints().max_bytes()
     {
         return Err(profile_mismatch("response output binding"));
     }
@@ -779,6 +899,7 @@ const fn decode_hex_nibble(value: u8) -> Option<u8> {
     }
 }
 
+#[cfg(test)]
 fn calculate_exchange_identity(
     request: &WorkerRequestV2,
     response: &WorkerResponseV2,
@@ -789,6 +910,21 @@ fn calculate_exchange_identity(
     digest.update(request.canonical_bytes());
     digest.update((response.canonical_bytes().len() as u64).to_le_bytes());
     digest.update(response.canonical_bytes());
+    RowSoftmaxV1DirectWorkerExchangeIdentityV1(digest.finalize().into())
+}
+
+fn calculate_dual_exchange_identity(
+    bootstrap: &InertDecodedWorkerExchangeV2,
+    replay: &InertDecodedWorkerExchangeV2,
+) -> RowSoftmaxV1DirectWorkerExchangeIdentityV1 {
+    let mut digest = Sha256::new();
+    digest.update(DUAL_EXCHANGE_IDENTITY_DOMAIN_V1);
+    for exchange in [bootstrap, replay] {
+        digest.update((exchange.request().canonical_bytes().len() as u64).to_le_bytes());
+        digest.update(exchange.request().canonical_bytes());
+        digest.update((exchange.response().canonical_bytes().len() as u64).to_le_bytes());
+        digest.update(exchange.response().canonical_bytes());
+    }
     RowSoftmaxV1DirectWorkerExchangeIdentityV1(digest.finalize().into())
 }
 
@@ -973,6 +1109,29 @@ entry:
         providers: Vec<WorkerInputV1>,
         final_symbols: Vec<String>,
     ) -> WorkerRequestV2 {
+        request_with_output_bound(
+            handoff,
+            request_id,
+            target,
+            code_object_version,
+            imports,
+            providers,
+            final_symbols,
+            OUTPUT.len() as u64,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn request_with_output_bound(
+        handoff: &CompilerModuleHandoffV2,
+        request_id: u8,
+        target: fe2o3_kernel_descriptor::DeviceTargetV1,
+        code_object_version: CodeObjectVersion,
+        imports: Vec<String>,
+        providers: Vec<WorkerInputV1>,
+        final_symbols: Vec<String>,
+        output_bound: u64,
+    ) -> WorkerRequestV2 {
         WorkerRequestV2::from_sealed_parts(SealedWorkerRequestV2Parts {
             request_id: [request_id; 32],
             llvm_build_identity: "upstream-llvm-22-row".to_owned(),
@@ -993,7 +1152,7 @@ entry:
             import_symbols: imports,
             export_symbols: Vec::new(),
             final_symbols,
-            output: WorkerOutputConstraintsV1::new(OUTPUT.len() as u64).unwrap(),
+            output: WorkerOutputConstraintsV1::new(output_bound).unwrap(),
         })
         .unwrap()
     }
@@ -1007,6 +1166,19 @@ entry:
             vec![OCML_EXP_F32.to_owned()],
             Vec::new(),
             exact_final_symbols(),
+        )
+    }
+
+    fn bootstrap_request(handoff: &CompilerModuleHandoffV2, request_id: u8) -> WorkerRequestV2 {
+        request_with_output_bound(
+            handoff,
+            request_id,
+            descriptor_target(),
+            CodeObjectVersion::V6,
+            vec![OCML_EXP_F32.to_owned()],
+            Vec::new(),
+            exact_final_symbols(),
+            4096,
         )
     }
 
@@ -1165,6 +1337,31 @@ entry:
         )
     }
 
+    fn validate_dual(
+        handoff: &CompilerModuleHandoffV2,
+        bootstrap_request: &WorkerRequestV2,
+        bootstrap_response: &[u8],
+        replay_request: &WorkerRequestV2,
+        replay_response: &[u8],
+        expected: RowSoftmaxV1DirectWorkerExpectationV1,
+    ) -> Result<ValidatedRowSoftmaxV1DirectWorkerExchangeV1, RowSoftmaxV1DirectWorkerErrorV1> {
+        let bootstrap = InertDecodedWorkerExchangeV2::decode(
+            bootstrap_request.canonical_bytes(),
+            bootstrap_response,
+        )
+        .map_err(RowSoftmaxV1DirectWorkerErrorV1::WorkerProtocol)?;
+        let replay =
+            InertDecodedWorkerExchangeV2::decode(replay_request.canonical_bytes(), replay_response)
+                .map_err(RowSoftmaxV1DirectWorkerErrorV1::WorkerProtocol)?;
+        validate_dual_exchange_parts(
+            &bootstrap,
+            &replay,
+            handoff.envelope(),
+            handoff.symbol_manifest(),
+            expected,
+        )
+    }
+
     fn success_diagnostics() -> Vec<&'static str> {
         SUCCESS_DIAGNOSTICS.to_vec()
     }
@@ -1316,6 +1513,92 @@ entry:
         assert!(!validated.grants_launch_authority());
         assert!(!validated.proves_no_comgr_linkage());
         assert!(validated.no_comgr_requires_measured_worker_build_manifest());
+    }
+
+    #[test]
+    fn dual_v3_bootstrap_and_exact_replay_are_admitted_as_one_exchange() {
+        let handoff = exact_handoff();
+        let expected = exact_expectation(&handoff);
+        let bootstrap_request = bootstrap_request(&handoff, 0x12);
+        let replay_request = exact_request(&handoff, 0x13);
+        let validated = validate_dual(
+            &handoff,
+            &bootstrap_request,
+            &response(&bootstrap_request, &success_diagnostics()),
+            &replay_request,
+            &response(&replay_request, &success_diagnostics()),
+            expected,
+        )
+        .unwrap();
+
+        assert_ne!(validated.identity().as_bytes(), &[0; 32]);
+        assert_eq!(
+            validated.linked_output_identity(),
+            ContentIdentityV1::calculate(OUTPUT)
+        );
+    }
+
+    #[test]
+    fn bootstrap_legacy_v2_response_is_rejected_even_when_replay_is_v3() {
+        let handoff = exact_handoff();
+        let expected = exact_expectation(&handoff);
+        let bootstrap_request = bootstrap_request(&handoff, 0x14);
+        let replay_request = exact_request(&handoff, 0x15);
+        let error = validate_dual(
+            &handoff,
+            &bootstrap_request,
+            &response_without_provider(&bootstrap_request, &success_diagnostics()),
+            &replay_request,
+            &response(&replay_request, &success_diagnostics()),
+            expected,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            RowSoftmaxV1DirectWorkerErrorV1::ProfileMismatch(
+                "bootstrap structured OCML provider evidence"
+            )
+        ));
+    }
+
+    #[test]
+    fn identical_outputs_cannot_hide_bootstrap_replay_provider_substitution() {
+        let handoff = exact_handoff();
+        let expected = exact_expectation(&handoff);
+        let bootstrap_request = bootstrap_request(&handoff, 0x16);
+        let replay_request = exact_request(&handoff, 0x17);
+        let mut reordered = exact_provider_files();
+        reordered.swap(0, 1);
+        let error = validate_dual(
+            &handoff,
+            &bootstrap_request,
+            &response_with_provider_files(&bootstrap_request, &success_diagnostics(), &reordered),
+            &replay_request,
+            &response(&replay_request, &success_diagnostics()),
+            expected,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            RowSoftmaxV1DirectWorkerErrorV1::ProfileMismatch(
+                "bootstrap/replay ordered OCML provider closure"
+            )
+        ));
+    }
+
+    #[test]
+    fn substituted_bootstrap_response_identity_is_rejected_before_row_admission() {
+        let handoff = exact_handoff();
+        let bootstrap_request = bootstrap_request(&handoff, 0x18);
+        let mut substituted = response(&bootstrap_request, &success_diagnostics());
+        *substituted.last_mut().unwrap() ^= 1;
+
+        assert!(matches!(
+            InertDecodedWorkerExchangeV2::decode(bootstrap_request.canonical_bytes(), &substituted),
+            Err(WorkerProtocolError::ResponseIdentityMismatch)
+        ));
     }
 
     #[test]

@@ -17,7 +17,7 @@ use crate::{
     LinkOptionV1, LinkOutputV1, LinkPlanError, MultiInputLinkPlanV1, PinnedWorkerV1,
     ProvenanceNodeV1, WorkerExecutionError, WorkerExecutionLimitsV1, WorkerInputKindV1,
     WorkerInputV1, WorkerMeasurementV1, WorkerOutputConstraintsV1, WorkerProtocolError,
-    WorkerRequestConstructionError,
+    WorkerRequestConstructionError, WorkerResponseV2,
     request_construction::{
         construct_first_build_worker_request_v2_from_consumed_handoff,
         construct_worker_request_v2_from_consumed_handoff, decode_link_options,
@@ -25,7 +25,7 @@ use crate::{
 };
 
 const FIRST_BUILD_EVIDENCE_DOMAIN_V1: &[u8] =
-    b"FE2O3/REPRODUCIBLE-FIRST-BUILD-V2-REPLAY-EVIDENCE/V1\0";
+    b"FE2O3/REPRODUCIBLE-FIRST-BUILD-V2-AUTHENTICATED-REPLAY-EVIDENCE/V1\0";
 
 /// Stable identity of one successful reproducible first-build workflow.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -458,8 +458,10 @@ fn calculate_evidence_identity(
     hasher.update(plan.identity().as_bytes());
     hasher.update(candidate.response().request_id());
     hasher.update(candidate.response().request_identity());
+    hash_authenticated_response_evidence(&mut hasher, candidate.response());
     hasher.update(authorized.response().request_id());
     hasher.update(authorized.response().request_identity());
+    hash_authenticated_response_evidence(&mut hasher, authorized.response());
     hasher.update(
         authorized
             .response()
@@ -468,6 +470,23 @@ fn calculate_evidence_identity(
     );
     hash_content(&mut hasher, plan.output().identity());
     FirstBuildWorkerV2IdentityV1(hasher.finalize().into())
+}
+
+fn hash_authenticated_response_evidence(hasher: &mut Sha256, response: &WorkerResponseV2) {
+    match response.response_identity() {
+        Some(identity) => {
+            hasher.update([1]);
+            hasher.update(identity);
+        }
+        None => hasher.update([0]),
+    }
+    match response.device_library_provider() {
+        Some(provider) => {
+            hasher.update([1]);
+            hasher.update(provider.manifest_identity());
+        }
+        None => hasher.update([0]),
+    }
 }
 
 fn hash_attempt(hasher: &mut Sha256, attempt: BuildAttempt) {
