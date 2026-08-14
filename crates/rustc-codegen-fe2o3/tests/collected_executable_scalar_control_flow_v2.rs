@@ -68,6 +68,19 @@ const EXPECTED_ROW_FN_ABI_COMMITMENT: [u8; 32] = [
 const REVIEWED_ROW_METADATA: &str = "fe2o3-row-softmax-v1-reviewed";
 const ROW_AUTHORITY_DOMAIN: &[u8] = b"fe2o3.row-softmax.collected-authority.v1";
 const ROW_METADATA_DOMAIN: &[u8] = b"fe2o3.row-softmax.cargo-metadata-observation.v1";
+const ROW_PROVIDER_DOMAIN: &[u8] = b"FE2O3/ROW-SOFTMAX-PROVIDER-AUTHORITY/V1\0";
+const ROW_PROVIDER_SOURCE_DOMAIN: &[u8] = b"FE2O3/ROW-SOFTMAX-PROVIDER-SOURCE-IDENTITY/V1\0";
+const CARGO_METADATA_TRANSCRIPT_DOMAIN: &[u8] = b"FE2O3/CARGO-METADATA-BUILD-OBSERVATION/V2\0";
+const ROW_PROVIDER_PATHS: [&[u8]; 8] = [
+    b"fe2o3_device::DisjointSlice",
+    b"fe2o3_device::ThreadIndex",
+    b"fe2o3_device::thread::index_1d",
+    b"fe2o3_device::ThreadIndex::get",
+    b"fe2o3_device::DisjointSlice::<T>::get_mut_at",
+    b"fe2o3_device::DeviceMath",
+    b"fe2o3_device::DeviceMath::from_compiler",
+    b"fe2o3_device::DeviceMath::exp_f32",
+];
 const ROW_ABI_DOMAIN: &[u8] = b"fe2o3.row-softmax.abi-binding.v1";
 const ROW_LAUNCH_DOMAIN: &[u8] = b"fe2o3.row-softmax.launch-binding.v1";
 const ROW_CORRESPONDENCE_DOMAIN: &[u8] = b"fe2o3.row-softmax.reviewed-correspondence.v1";
@@ -1145,12 +1158,14 @@ fn canonical_module_asm_section_name(line: &str) -> Option<&str> {
 struct ExactRowCompilerModule<'a> {
     llvm_body: &'a str,
     descriptor: Vec<u8>,
+    authority_transcript: Vec<u8>,
     authority: Vec<u8>,
     exponential: Vec<u8>,
 }
 
 fn decode_exact_row_compiler_module(module: &str) -> Result<ExactRowCompilerModule<'_>, String> {
     const DESCRIPTOR: &str = ".fe2o3.kd.v1";
+    const AUTHORITY_TRANSCRIPT: &str = ".fe2o3.row-softmax-authority-transcript.v1";
     const AUTHORITY: &str = ".fe2o3.row-softmax-auth.v1";
     const EXPONENTIAL: &str = ".fe2o3.row-exp.v1";
 
@@ -1174,14 +1189,16 @@ fn decode_exact_row_compiler_module(module: &str) -> Result<ExactRowCompilerModu
     }
     let sections = decode_exact_compiler_owned_suffix(
         &module[boundary_index + 1..],
-        &[DESCRIPTOR, AUTHORITY, EXPONENTIAL],
+        &[DESCRIPTOR, AUTHORITY_TRANSCRIPT, AUTHORITY, EXPONENTIAL],
     )?;
-    let [descriptor, authority, exponential] = sections.try_into().map_err(|_| {
-        "row-softmax compiler-owned section cardinality differs from exactly three".to_owned()
-    })?;
+    let [descriptor, authority_transcript, authority, exponential] =
+        sections.try_into().map_err(|_| {
+            "row-softmax compiler-owned section cardinality differs from exactly four".to_owned()
+        })?;
     Ok(ExactRowCompilerModule {
         llvm_body,
         descriptor,
+        authority_transcript,
         authority,
         exponential,
     })
@@ -1353,6 +1370,10 @@ fn independently_expected_cargo_row_authority(
     crate_name: &str,
     ordered_metadata: &[String],
     descriptor_bytes: &[u8],
+    transcript: &[u8],
+    attempt: &BuildAttempt,
+    workspace: &Path,
+    cargo_target: &Path,
 ) -> Result<[u8; 32], String> {
     let [generated_metadata, reviewed_metadata] = ordered_metadata else {
         return Err("wrapper did not observe exactly two ordered Cargo metadata values".to_owned());
@@ -1384,8 +1405,9 @@ fn independently_expected_cargo_row_authority(
     }
     let metadata_commitment: [u8; 32] = metadata_digest.finalize().into();
 
-    let mut authority = Sha256::new();
-    for field in [
+    let expected_metadata_transcript = cargo_metadata_transcript(ordered_metadata);
+    let mut decoder = AuthorityTranscriptDecoder::new(transcript)?;
+    for expected in [
         ROW_AUTHORITY_DOMAIN,
         &EXPECTED_ROW_PORTABLE_MIR_COMMITMENT,
         &EXPECTED_ROW_COMPILER_SEMANTICS_COMMITMENT,
@@ -1408,9 +1430,174 @@ fn independently_expected_cargo_row_authority(
         reviewed_metadata.as_bytes(),
         &metadata_commitment,
     ] {
-        hash_expected_field(&mut authority, field);
+        decoder.expect(expected)?;
     }
-    Ok(authority.finalize().into())
+
+    decoder.expect(b"fe2o3_device")?;
+    let stable_crate_id = decoder.array::<8>()?;
+    let crate_hash = decoder.array::<16>()?;
+    if u64::from_le_bytes(stable_crate_id) == 0 || crate_hash == [0; 16] {
+        return Err("authority transcript has an empty provider crate identity".to_owned());
+    }
+    decoder.expect(&expected_metadata_transcript)?;
+    let provider_source = decoder.array::<32>()?;
+    let definitions = (0..ROW_PROVIDER_PATHS.len())
+        .map(|_| decoder.array::<16>())
+        .collect::<Result<Vec<_>, _>>()?;
+    let sources = (0..ROW_PROVIDER_PATHS.len())
+        .map(|_| decoder.array::<32>())
+        .collect::<Result<Vec<_>, _>>()?;
+    if definitions.iter().any(|identity| identity == &[0; 16])
+        || sources.iter().any(|identity| identity == &[0; 32])
+        || sources.first() != Some(&provider_source)
+    {
+        return Err("authority transcript has incomplete provider identities".to_owned());
+    }
+    let observed_source_identities = independently_observed_provider_sources(workspace)?;
+    if sources
+        .iter()
+        .any(|identity| !observed_source_identities.contains(identity))
+    {
+        return Err(
+            "authority transcript names a provider source outside reviewed files".to_owned(),
+        );
+    }
+    let provider_commitment = decoder.array::<32>()?;
+    let mut expected_provider = Sha256::new();
+    hash_expected_field(&mut expected_provider, ROW_PROVIDER_DOMAIN);
+    hash_expected_field(&mut expected_provider, b"fe2o3_device");
+    hash_expected_field(&mut expected_provider, &stable_crate_id);
+    hash_expected_field(&mut expected_provider, &crate_hash);
+    hash_expected_field(&mut expected_provider, &expected_metadata_transcript);
+    for ((path, definition), source) in ROW_PROVIDER_PATHS.iter().zip(&definitions).zip(&sources) {
+        hash_expected_field(&mut expected_provider, path);
+        hash_expected_field(&mut expected_provider, definition);
+        hash_expected_field(&mut expected_provider, source);
+    }
+    if provider_commitment != <[u8; 32]>::from(expected_provider.finalize()) {
+        return Err("authority transcript provider commitment differs".to_owned());
+    }
+
+    decoder.expect(&attempt.generation().to_le_bytes())?;
+    decoder.expect(attempt.session().as_bytes())?;
+    decoder.expect(attempt.invocation().as_bytes())?;
+    decoder.expect(&expected_metadata_transcript)?;
+    let broker = std::fs::read(cargo_target.join("debug/cargo-fe2o3"))
+        .map_err(|error| format!("read independently built cargo-fe2o3 broker: {error}"))?;
+    decoder.expect(&Sha256::digest(broker))?;
+    if !decoder.finished() {
+        return Err("authority transcript has trailing fields".to_owned());
+    }
+    Ok(Sha256::digest(transcript).into())
+}
+
+struct AuthorityTranscriptDecoder<'a> {
+    bytes: &'a [u8],
+    offset: usize,
+}
+
+impl<'a> AuthorityTranscriptDecoder<'a> {
+    fn new(bytes: &'a [u8]) -> Result<Self, String> {
+        if bytes.is_empty() || bytes.len() > 4096 {
+            return Err("authority transcript length is invalid".to_owned());
+        }
+        Ok(Self { bytes, offset: 0 })
+    }
+
+    fn field(&mut self) -> Result<&'a [u8], String> {
+        let length_end = self
+            .offset
+            .checked_add(8)
+            .ok_or_else(|| "authority transcript length overflow".to_owned())?;
+        let encoded: [u8; 8] = self
+            .bytes
+            .get(self.offset..length_end)
+            .ok_or_else(|| "authority transcript field length is truncated".to_owned())?
+            .try_into()
+            .expect("field length has exact width");
+        let length = usize::try_from(u64::from_le_bytes(encoded))
+            .map_err(|_| "authority transcript field exceeds usize".to_owned())?;
+        let end = length_end
+            .checked_add(length)
+            .ok_or_else(|| "authority transcript field length overflow".to_owned())?;
+        let field = self
+            .bytes
+            .get(length_end..end)
+            .ok_or_else(|| "authority transcript field is truncated".to_owned())?;
+        self.offset = end;
+        Ok(field)
+    }
+
+    fn expect(&mut self, expected: &[u8]) -> Result<(), String> {
+        if self.field()? != expected {
+            return Err("authority transcript fixed field differs".to_owned());
+        }
+        Ok(())
+    }
+
+    fn array<const N: usize>(&mut self) -> Result<[u8; N], String> {
+        self.field()?
+            .try_into()
+            .map_err(|_| format!("authority transcript field is not {N} bytes"))
+    }
+
+    fn finished(&self) -> bool {
+        self.offset == self.bytes.len()
+    }
+}
+
+fn cargo_metadata_transcript(ordered_metadata: &[String]) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(CARGO_METADATA_TRANSCRIPT_DOMAIN);
+    digest.update((ordered_metadata.len() as u64).to_le_bytes());
+    for token in ordered_metadata {
+        digest.update((token.len() as u64).to_le_bytes());
+        digest.update(token.as_bytes());
+    }
+    digest.finalize().into()
+}
+
+fn independently_observed_provider_sources(workspace: &Path) -> Result<Vec<[u8; 32]>, String> {
+    let root = workspace.join("crates/fe2o3-device/src");
+    let mut files = Vec::new();
+    collect_regular_files(&root, &mut files)?;
+    files
+        .into_iter()
+        .map(|path| {
+            let relative = path
+                .strip_prefix(&root)
+                .map_err(|_| "provider source escaped its reviewed root".to_owned())?;
+            let relative = relative.to_string_lossy();
+            let bytes = std::fs::read(&path)
+                .map_err(|error| format!("read provider source {}: {error}", path.display()))?;
+            let mut digest = Sha256::new();
+            digest.update(ROW_PROVIDER_SOURCE_DOMAIN);
+            digest.update((relative.len() as u64).to_le_bytes());
+            digest.update(relative.as_bytes());
+            digest.update((bytes.len() as u64).to_le_bytes());
+            digest.update(bytes);
+            Ok(digest.finalize().into())
+        })
+        .collect()
+}
+
+fn collect_regular_files(directory: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
+    for entry in std::fs::read_dir(directory)
+        .map_err(|error| format!("read provider source directory: {error}"))?
+    {
+        let entry = entry.map_err(|error| format!("read provider source entry: {error}"))?;
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("inspect provider source entry: {error}"))?;
+        if file_type.is_dir() {
+            collect_regular_files(&entry.path(), files)?;
+        } else if file_type.is_file() {
+            files.push(entry.path());
+        } else {
+            return Err("provider source closure contains a non-file entry".to_owned());
+        }
+    }
+    Ok(())
 }
 
 fn expected_domain_commitment(domain: &[u8], value: &[u8]) -> [u8; 32] {
@@ -1526,7 +1713,7 @@ fn require_exact_row_descriptor_source(bytes: &[u8]) -> Result<(), String> {
 
 fn validate_exact_row_softmax_handoff<F>(bytes: &[u8], expected_authority: F) -> Result<(), String>
 where
-    F: FnOnce(&[u8]) -> Result<[u8; 32], String>,
+    F: FnOnce(&[u8], &[u8]) -> Result<[u8; 32], String>,
 {
     let handoff = CompilerModuleHandoffV2::decode(bytes)
         .map_err(|error| format!("decode exact row-softmax Worker V2 handoff: {error}"))?;
@@ -1606,9 +1793,14 @@ where
         return Err("same-length row descriptor symbol substitution was accepted".to_owned());
     }
 
+    let authority_transcript = exact_module.authority_transcript;
     let authority = exact_module.authority;
     let exponential = exact_module.exponential;
-    if authority.as_slice() != expected_authority(&descriptor_bytes)? {
+    if authority.len() != 32
+        || authority.as_slice()
+            != <[u8; 32]>::from(Sha256::digest(&authority_transcript)).as_slice()
+        || authority.as_slice() != expected_authority(&descriptor_bytes, &authority_transcript)?
+    {
         return Err(format!(
             "row-softmax authority commitment differs from the independent expectation: actual {}",
             encode_lower_hex(&authority)
@@ -2174,6 +2366,7 @@ fn observe_and_validate_external_row_handoff(
     observation_directory: &Path,
     expected_crate_name: &str,
     crate_root: &Path,
+    workspace: &Path,
     cargo_target: &Path,
     cancelled: &std::sync::mpsc::Receiver<()>,
 ) -> Result<(), String> {
@@ -2248,11 +2441,15 @@ fn observe_and_validate_external_row_handoff(
         return Err("consumed wrapper handoff evidence or authority surface differs".to_owned());
     }
     let structural_validation =
-        validate_exact_row_softmax_handoff(consumed.bytes(), |descriptor| {
+        validate_exact_row_softmax_handoff(consumed.bytes(), |descriptor, transcript| {
             independently_expected_cargo_row_authority(
                 &observation.crate_name,
                 &observation.ordered_metadata,
                 descriptor,
+                transcript,
+                &observation.attempt,
+                workspace,
+                &cargo_target,
             )
         });
     if !matches!(
@@ -2442,12 +2639,14 @@ fn compile_clean_external_row_softmax_crate_with_handoff(
     let observer_directory = observation_directory.clone();
     let observer_crate = expected_crate_name.clone();
     let observer_root = crate_root.clone();
+    let observer_workspace = workspace.to_path_buf();
     let observer_target = cargo_target.to_path_buf();
     let observer = thread::spawn(move || {
         observe_and_validate_external_row_handoff(
             &observer_directory,
             &observer_crate,
             &observer_root,
+            &observer_workspace,
             &observer_target,
             &cancel_receiver,
         )
