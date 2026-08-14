@@ -464,10 +464,15 @@ fn validate_isa(
     )?;
 
     for (family, description) in [
+        ("s_branch", "branch"),
+        ("s_cbranch", "conditional branch"),
         ("s_call", "call"),
         ("s_swappc", "call"),
         ("s_getpc", "call sequence"),
         ("s_setpc", "call/return sequence"),
+        ("flat_", "flat-memory access"),
+        ("buffer_", "buffer-memory access"),
+        ("image_", "image-memory access"),
         ("scratch_", "scratch-memory access"),
         ("ds_", "LDS access in the direct-global slice"),
     ] {
@@ -1462,6 +1467,11 @@ mod tests {
             valid.replace("global_store_dwordx4", "v_mov_b32"),
             valid.replace("global_load_dword", "v_mov_b32"),
             valid.replace("s_endpgm", "s_call_b64 s[0:1]"),
+            valid.replace("s_endpgm", "s_branch 4"),
+            valid.replace("s_endpgm", "s_cbranch_scc0 4"),
+            valid.replace("s_endpgm", "flat_load_dword v0, v[0:1]"),
+            valid.replace("s_endpgm", "buffer_load_dword v0, off, s[0:3], 0"),
+            valid.replace("s_endpgm", "image_load v0, v0, s[0:7] dmask:0x1"),
             valid.replace("s_endpgm", "scratch_store_dword off, v0"),
             valid.replace("s_endpgm", "global_atomic_add v0, v1, v2"),
             valid.replace("s_endpgm", "ds_write_b32 v0, v1"),

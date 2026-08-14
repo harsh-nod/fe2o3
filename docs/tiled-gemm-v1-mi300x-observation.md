@@ -26,8 +26,9 @@ The canonical LLVM tool path during the run was
 `/opt/rocm-7.2.4/lib/llvm/bin/llvm-objdump`. The test first required exact COV6,
 `gfx942:xnack-`, WG64, wave64, 320-byte kernarg, zero-LDS, one-entry metadata and
 descriptor facts. Its bounded disassembly policy required exactly one retained
-`v_mfma_f32_16x16x16_bf16`, at least one global store, and no admitted control,
-call, atomic, flat, buffer, scratch, or LDS instruction forms.
+`v_mfma_f32_16x16x16_bf16`, at least one global load and global store, and no
+admitted branch, call, atomic, flat, buffer, image, scratch, or LDS instruction
+forms.
 
 ## Command
 
