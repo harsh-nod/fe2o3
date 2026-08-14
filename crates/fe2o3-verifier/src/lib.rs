@@ -23,6 +23,7 @@ mod plan;
 mod proof_capsule;
 mod result;
 mod scalar_gemm_hardware_evidence;
+mod scalar_gemm_proof;
 mod scalar_gemm_v1;
 mod static_view_proof;
 
@@ -163,6 +164,14 @@ pub use scalar_gemm_hardware_evidence::{
     ScalarGemmKernelAdmissionObservationV1, ScalarGemmOutputObservationV1,
     ScalarGemmProtectedHardwareEvidenceV1, ScalarGemmUnloadObservationV1,
     ScalarGemmWorkerExchangeObservationV1,
+};
+pub use scalar_gemm_proof::{
+    MAX_SCALAR_GEMM_PROOF_REVIEWS_V1, MAX_SCALAR_GEMM_PROOF_SOURCE_BYTES_V1,
+    ReviewedScalarGemmProofV1, SCALAR_GEMM_PROOF_DOMAIN_V1, SCALAR_GEMM_PROOF_MODEL_VERSION_V1,
+    SCALAR_GEMM_PROOF_REQUIRED_PROPERTIES_V1, SCALAR_GEMM_PROOF_REVIEW_DOMAIN_V1,
+    SCALAR_GEMM_PROOF_SOURCE_PATH_V1, SCALAR_GEMM_PROOF_TARGET_V1, SCALAR_GEMM_PROOF_VERSION_V1,
+    ScalarGemmProofErrorV1, ScalarGemmProofProfileV1, ScalarGemmProofReviewLedgerV1,
+    ScalarGemmProofReviewV1, ScalarGemmProofSourceV1, review_scalar_gemm_proof_v1,
 };
 pub use scalar_gemm_v1::{
     SCALAR_GEMM_COVERAGE_PROFILE_V1, SCALAR_GEMM_F32_NUMERICAL_CONTRACT_V1,
