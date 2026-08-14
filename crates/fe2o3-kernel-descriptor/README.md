@@ -62,6 +62,30 @@ evidence records are still caller-provided declarations; successful admission
 does not authenticate their compiler origin or grant publication, load, or
 launch authority.
 
+## Row-softmax V1 structural descriptor profile
+
+`admit_row_softmax_v1_structural_descriptor_v1` is an independent sealed
+profile for the intended fixed one-row, 64-element F32 row-softmax boundary.
+It requires COV6 on `gfx942:xnack-`, one wave64 `[64, 1, 1]` workgroup, a
+declared maximum grid of `[1, 1, 1]`, zero static and dynamic LDS, and exactly
+the subgroup and AMD-wave capability declarations. Its ABI is
+`input: &[f32]` followed by `output: DisjointSlice<f32>`, with pointer/length
+pairs at offsets `0/8` and `16/24`. The explicit span is 32 bytes and the COV6
+implicit suffix is 256 bytes, producing a 288-byte kernarg segment.
+
+V1 slice descriptors encode the presence and physical location of each `u64`
+length, not its runtime value. The constant row length of 64 is therefore a
+host-profile requirement that this structural admission cannot validate.
+Likewise, unique output ownership is an unauthenticated descriptor declaration;
+it does not prove runtime non-aliasing or race freedom.
+
+Admission checks no instruction body. It does not establish that the entry
+computes a maximum, calls or implements `exp`, reduces a denominator,
+normalizes outputs, handles NaN or infinity in any specified way, meets an
+error budget, or computes functional softmax at all. It also does not
+authenticate source/compiler origin, prove Verus verification, or grant
+publication, load, or launch authority.
+
 ## V2 target requirements
 
 V2 binds each kernel ID to declared static and maximum dynamic LDS bytes, one

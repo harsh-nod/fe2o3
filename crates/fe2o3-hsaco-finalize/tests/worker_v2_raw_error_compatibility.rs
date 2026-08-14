@@ -108,3 +108,46 @@ fn tiled_launch_error_variants_retain_dynamic_expectations() {
         "tiled GEMM V1 kernel tiled_gemm_v1 descriptor wavefront is 32, expected 64"
     );
 }
+
+#[test]
+fn row_softmax_launch_errors_are_distinct_without_changing_legacy_wording() {
+    let required = WorkerV2RawHsacoInspectionError::RowSoftmaxV1RequiredWorkgroupSizeMismatch {
+        kernel: "row_softmax_v1".to_owned(),
+        actual: Some([256, 1, 1]),
+        expected: [64, 1, 1],
+    };
+    assert_eq!(
+        required.to_string(),
+        "row-softmax V1 kernel row_softmax_v1 requires Some([256, 1, 1]), expected [64, 1, 1]"
+    );
+
+    let max_flat = WorkerV2RawHsacoInspectionError::RowSoftmaxV1MaxFlatWorkgroupSizeMismatch {
+        kernel: "row_softmax_v1".to_owned(),
+        actual: 256,
+        expected: 64,
+    };
+    assert_eq!(
+        max_flat.to_string(),
+        "row-softmax V1 kernel row_softmax_v1 max flat workgroup is 256, expected 64"
+    );
+
+    let metadata = WorkerV2RawHsacoInspectionError::RowSoftmaxV1MetadataWavefrontSizeMismatch {
+        kernel: "row_softmax_v1".to_owned(),
+        actual: 32,
+        expected: 64,
+    };
+    assert_eq!(
+        metadata.to_string(),
+        "row-softmax V1 kernel row_softmax_v1 metadata wavefront is 32, expected 64"
+    );
+
+    let descriptor = WorkerV2RawHsacoInspectionError::RowSoftmaxV1DescriptorWavefrontSizeMismatch {
+        kernel: "row_softmax_v1".to_owned(),
+        actual: 32,
+        expected: 64,
+    };
+    assert_eq!(
+        descriptor.to_string(),
+        "row-softmax V1 kernel row_softmax_v1 descriptor wavefront is 32, expected 64"
+    );
+}

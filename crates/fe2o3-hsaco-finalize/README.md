@@ -196,3 +196,32 @@ between that probe and this structural 320-byte profile fails closed. Neither
 typed result authenticates compiler or code origin, validates the kernel body,
 proves BF16/MFMA semantics or Verus verification, or grants publication, load,
 or launch authority.
+
+### Row-softmax V1 structural artifact policy
+
+`inspect_row_softmax_v1_structural_worker_v2_hsaco_v1` is a separate sealed
+Worker V2 specialization for `row_softmax_v1`. It requires COV6,
+`gfx942:xnack-`, wave64, required workgroup `[64, 1, 1]`, maximum flat
+workgroup 64, explicit maximum-workgroup metadata `[1, 1, 1]`, zero LDS, exact
+entry and descriptor symbols, and one unfinalized canonical descriptor table.
+The bound executable entry must be a real function symbol in an executable
+mapping, but its instruction bytes are not interpreted.
+
+Metadata and the canonical descriptor must agree on two F32 slice pairs:
+`input: &[f32]` and `output: DisjointSlice<f32>`, with pointer/length fields at
+offsets `0, 8, 16, 24`. The explicit span is 32 bytes and the COV6 implicit
+suffix starts there with size 256, for 288 bytes total. Capability and build
+evidence remain unauthenticated declarations.
+
+The fixed row length of 64 is not present as a runtime value in descriptor or
+AMDHSA metadata, so artifact admission cannot validate either slice length or
+an actual host launch. Arbitrary `.text` remains structurally admissible. No
+result proves functional softmax, an `exp` implementation, reduction order,
+NaN/infinity behavior, numerical error bounds, memory safety, non-aliasing,
+race freedom, or Verus verification. It authenticates neither source nor
+compiler origin and grants no publication, HSA load, or launch authority.
+
+`finalize_row_softmax_v1_structural_worker_v2_hsaco_v1` uses the same existing
+upstream LLVM/LLD Worker V2 lineage and canonical descriptor finalizer. It adds
+no COMGR path and independently repeats the exact structural checks after
+digest finalization.

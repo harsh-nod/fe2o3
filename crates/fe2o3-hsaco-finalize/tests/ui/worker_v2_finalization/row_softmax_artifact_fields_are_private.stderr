@@ -1,0 +1,23 @@
+error[E0616]: field `raw` of struct `InspectedRowSoftmaxV1StructuralWorkerV2HsacoV1` is private
+ --> tests/ui/worker_v2_finalization/row_softmax_artifact_fields_are_private.rs:9:24
+  |
+9 |     let _ = &inspected.raw;
+  |                        ^^^ private field
+
+error[E0616]: field `descriptor` of struct `InspectedRowSoftmaxV1StructuralWorkerV2HsacoV1` is private
+  --> tests/ui/worker_v2_finalization/row_softmax_artifact_fields_are_private.rs:10:23
+   |
+10 |     let _ = inspected.descriptor;
+   |                       ^^^^^^^^^^ private field
+
+error[E0616]: field `finalized` of struct `FinalizedRowSoftmaxV1StructuralHsacoV1` is private
+  --> tests/ui/worker_v2_finalization/row_softmax_artifact_fields_are_private.rs:11:24
+   |
+11 |     let _ = &finalized.finalized;
+   |                        ^^^^^^^^^ private field
+
+error[E0616]: field `descriptor` of struct `FinalizedRowSoftmaxV1StructuralHsacoV1` is private
+  --> tests/ui/worker_v2_finalization/row_softmax_artifact_fields_are_private.rs:12:23
+   |
+12 |     let _ = finalized.descriptor;
+   |                       ^^^^^^^^^^ private field

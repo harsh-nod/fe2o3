@@ -19,6 +19,7 @@ const SHSTRTAB_SECTION_INDEX: usize = 7;
 enum FixtureAbi {
     SliceF32,
     TiledGemmV1,
+    RowSoftmaxV1,
 }
 
 #[derive(Clone, Copy)]
@@ -45,6 +46,7 @@ struct FixtureOptions<'a> {
     malformed_max_workgroups_x: bool,
     abi: FixtureAbi,
     tiled_first_argument_offset: u64,
+    row_softmax_first_argument_offset: u64,
     kernarg_segment_size_override: Option<u64>,
     group_segment_fixed_size: u64,
 }
@@ -74,6 +76,7 @@ impl FixtureOptions<'static> {
             malformed_max_workgroups_x: false,
             abi: FixtureAbi::SliceF32,
             tiled_first_argument_offset: 0,
+            row_softmax_first_argument_offset: 0,
             kernarg_segment_size_override: None,
             group_segment_fixed_size: 0,
         }
@@ -346,6 +349,7 @@ fn metadata(options: FixtureOptions<'_>) -> Vec<u8> {
     let explicit_bytes = match options.abi {
         FixtureAbi::SliceF32 => 16,
         FixtureAbi::TiledGemmV1 => 64,
+        FixtureAbi::RowSoftmaxV1 => 32,
     };
     let mut arguments = match options.abi {
         FixtureAbi::SliceF32 => {
@@ -380,6 +384,31 @@ fn metadata(options: FixtureOptions<'_>) -> Vec<u8> {
                         base,
                         alignment,
                         value_type,
+                    ),
+                    typed_explicit_argument(
+                        &format!("arg{index}.len"),
+                        base + 8,
+                        8,
+                        alignment,
+                        "u64",
+                    ),
+                ]
+            })
+            .collect(),
+        FixtureAbi::RowSoftmaxV1 => (0..2)
+            .flat_map(|index| {
+                let base = if index == 0 {
+                    options.row_softmax_first_argument_offset
+                } else {
+                    index * 16
+                };
+                let alignment = options.include_explicit_argument_alignments.then_some(8);
+                [
+                    typed_explicit_pointer_argument(
+                        &format!("arg{index}.data"),
+                        base,
+                        alignment,
+                        "f32",
                     ),
                     typed_explicit_argument(
                         &format!("arg{index}.len"),
@@ -500,6 +529,7 @@ fn kernarg_segment_size(options: FixtureOptions<'_>) -> u64 {
     options.kernarg_segment_size_override.unwrap_or(match options.abi {
         FixtureAbi::SliceF32 => 272,
         FixtureAbi::TiledGemmV1 => 320,
+        FixtureAbi::RowSoftmaxV1 => 288,
     })
 }
 

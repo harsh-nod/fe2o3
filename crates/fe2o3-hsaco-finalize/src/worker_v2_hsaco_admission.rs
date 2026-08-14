@@ -15,7 +15,8 @@ use fe2o3_hsaco::{
     inspect_and_bind_kernel_descriptors,
 };
 use fe2o3_kernel_descriptor::{
-    CodeObjectVersion, DeviceTargetV1, TILED_GEMM_V1_MAX_FLAT_WORKGROUP_SIZE,
+    CodeObjectVersion, DeviceTargetV1, ROW_SOFTMAX_V1_MAX_FLAT_WORKGROUP_SIZE,
+    ROW_SOFTMAX_V1_WORKGROUP_SIZE, TILED_GEMM_V1_MAX_FLAT_WORKGROUP_SIZE,
     TILED_GEMM_V1_WORKGROUP_SIZE,
 };
 use object::{Object, ObjectSection, ObjectSymbol};
@@ -60,6 +61,13 @@ pub struct WorkerV2RawLaunchContractV1 {
     wavefront_size: u32,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorkerV2RawLaunchDiagnosticProfileV1 {
+    LegacyGfx942G1,
+    TiledGemmV1,
+    RowSoftmaxV1,
+}
+
 impl WorkerV2RawLaunchContractV1 {
     const GFX942_G1: Self = Self {
         required_workgroup_size: REQUIRED_WORKGROUP_SIZE,
@@ -70,6 +78,12 @@ impl WorkerV2RawLaunchContractV1 {
     pub(crate) const TILED_GEMM_V1: Self = Self {
         required_workgroup_size: TILED_GEMM_V1_WORKGROUP_SIZE,
         max_flat_workgroup_size: TILED_GEMM_V1_MAX_FLAT_WORKGROUP_SIZE,
+        wavefront_size: REQUIRED_WAVEFRONT_SIZE,
+    };
+
+    pub(crate) const ROW_SOFTMAX_V1: Self = Self {
+        required_workgroup_size: ROW_SOFTMAX_V1_WORKGROUP_SIZE,
+        max_flat_workgroup_size: ROW_SOFTMAX_V1_MAX_FLAT_WORKGROUP_SIZE,
         wavefront_size: REQUIRED_WAVEFRONT_SIZE,
     };
 
@@ -351,6 +365,26 @@ pub enum WorkerV2RawHsacoInspectionError {
         actual: u32,
         expected: u32,
     },
+    RowSoftmaxV1RequiredWorkgroupSizeMismatch {
+        kernel: String,
+        actual: Option<[u32; 3]>,
+        expected: [u32; 3],
+    },
+    RowSoftmaxV1MaxFlatWorkgroupSizeMismatch {
+        kernel: String,
+        actual: u32,
+        expected: u32,
+    },
+    RowSoftmaxV1MetadataWavefrontSizeMismatch {
+        kernel: String,
+        actual: u32,
+        expected: u32,
+    },
+    RowSoftmaxV1DescriptorWavefrontSizeMismatch {
+        kernel: String,
+        actual: u32,
+        expected: u32,
+    },
 }
 
 impl fmt::Display for WorkerV2RawHsacoInspectionError {
@@ -444,6 +478,38 @@ impl fmt::Display for WorkerV2RawHsacoInspectionError {
                 formatter,
                 "tiled GEMM V1 kernel {kernel} descriptor wavefront is {actual}, expected {expected}"
             ),
+            Self::RowSoftmaxV1RequiredWorkgroupSizeMismatch {
+                kernel,
+                actual,
+                expected,
+            } => write!(
+                formatter,
+                "row-softmax V1 kernel {kernel} requires {actual:?}, expected {expected:?}"
+            ),
+            Self::RowSoftmaxV1MaxFlatWorkgroupSizeMismatch {
+                kernel,
+                actual,
+                expected,
+            } => write!(
+                formatter,
+                "row-softmax V1 kernel {kernel} max flat workgroup is {actual}, expected {expected}"
+            ),
+            Self::RowSoftmaxV1MetadataWavefrontSizeMismatch {
+                kernel,
+                actual,
+                expected,
+            } => write!(
+                formatter,
+                "row-softmax V1 kernel {kernel} metadata wavefront is {actual}, expected {expected}"
+            ),
+            Self::RowSoftmaxV1DescriptorWavefrontSizeMismatch {
+                kernel,
+                actual,
+                expected,
+            } => write!(
+                formatter,
+                "row-softmax V1 kernel {kernel} descriptor wavefront is {actual}, expected {expected}"
+            ),
         }
     }
 }
@@ -464,12 +530,17 @@ impl Error for WorkerV2RawHsacoInspectionError {
 pub fn inspect_worker_v2_raw_hsaco_v1(
     source: InertFirstBuildWorkerV2EvidenceV1,
 ) -> Result<InspectedRawWorkerV2HsacoV1, WorkerV2RawHsacoInspectionError> {
-    inspect_worker_v2_raw_hsaco_with_launch_v1(source, WorkerV2RawLaunchContractV1::GFX942_G1)
+    inspect_worker_v2_raw_hsaco_with_launch_v1(
+        source,
+        WorkerV2RawLaunchContractV1::GFX942_G1,
+        WorkerV2RawLaunchDiagnosticProfileV1::LegacyGfx942G1,
+    )
 }
 
 pub(crate) fn inspect_worker_v2_raw_hsaco_with_launch_v1(
     source: InertFirstBuildWorkerV2EvidenceV1,
     launch: WorkerV2RawLaunchContractV1,
+    diagnostic_profile: WorkerV2RawLaunchDiagnosticProfileV1,
 ) -> Result<InspectedRawWorkerV2HsacoV1, WorkerV2RawHsacoInspectionError> {
     validate_lineage(&source)?;
     let target = source.plan().target();
@@ -553,6 +624,7 @@ pub(crate) fn inspect_worker_v2_raw_hsaco_with_launch_v1(
         if kernel.required_workgroup_size() != Some(launch.required_workgroup_size()) {
             return Err(required_workgroup_size_mismatch(
                 launch,
+                diagnostic_profile,
                 kernel.name(),
                 kernel.required_workgroup_size(),
             ));
@@ -560,6 +632,7 @@ pub(crate) fn inspect_worker_v2_raw_hsaco_with_launch_v1(
         if kernel.max_flat_workgroup_size() != launch.max_flat_workgroup_size() {
             return Err(max_flat_workgroup_size_mismatch(
                 launch,
+                diagnostic_profile,
                 kernel.name(),
                 kernel.max_flat_workgroup_size(),
             ));
@@ -567,6 +640,7 @@ pub(crate) fn inspect_worker_v2_raw_hsaco_with_launch_v1(
         if kernel.wavefront_size() != launch.wavefront_size() {
             return Err(metadata_wavefront_size_mismatch(
                 launch,
+                diagnostic_profile,
                 kernel.name(),
                 kernel.wavefront_size(),
             ));
@@ -575,6 +649,7 @@ pub(crate) fn inspect_worker_v2_raw_hsaco_with_launch_v1(
         if descriptor_wavefront != launch.wavefront_size() {
             return Err(descriptor_wavefront_size_mismatch(
                 launch,
+                diagnostic_profile,
                 kernel.name(),
                 descriptor_wavefront,
             ));
@@ -617,76 +692,120 @@ pub(crate) fn inspect_worker_v2_raw_hsaco_with_launch_v1(
 
 fn required_workgroup_size_mismatch(
     launch: WorkerV2RawLaunchContractV1,
+    diagnostic_profile: WorkerV2RawLaunchDiagnosticProfileV1,
     kernel: &str,
     actual: Option<[u32; 3]>,
 ) -> WorkerV2RawHsacoInspectionError {
-    if launch == WorkerV2RawLaunchContractV1::GFX942_G1 {
-        WorkerV2RawHsacoInspectionError::RequiredWorkgroupSizeMismatch {
-            kernel: kernel.to_owned(),
-            actual,
+    match diagnostic_profile {
+        WorkerV2RawLaunchDiagnosticProfileV1::LegacyGfx942G1 => {
+            WorkerV2RawHsacoInspectionError::RequiredWorkgroupSizeMismatch {
+                kernel: kernel.to_owned(),
+                actual,
+            }
         }
-    } else {
-        WorkerV2RawHsacoInspectionError::TiledGemmV1RequiredWorkgroupSizeMismatch {
-            kernel: kernel.to_owned(),
-            actual,
-            expected: launch.required_workgroup_size(),
+        WorkerV2RawLaunchDiagnosticProfileV1::TiledGemmV1 => {
+            WorkerV2RawHsacoInspectionError::TiledGemmV1RequiredWorkgroupSizeMismatch {
+                kernel: kernel.to_owned(),
+                actual,
+                expected: launch.required_workgroup_size(),
+            }
+        }
+        WorkerV2RawLaunchDiagnosticProfileV1::RowSoftmaxV1 => {
+            WorkerV2RawHsacoInspectionError::RowSoftmaxV1RequiredWorkgroupSizeMismatch {
+                kernel: kernel.to_owned(),
+                actual,
+                expected: launch.required_workgroup_size(),
+            }
         }
     }
 }
 
 fn max_flat_workgroup_size_mismatch(
     launch: WorkerV2RawLaunchContractV1,
+    diagnostic_profile: WorkerV2RawLaunchDiagnosticProfileV1,
     kernel: &str,
     actual: u32,
 ) -> WorkerV2RawHsacoInspectionError {
-    if launch == WorkerV2RawLaunchContractV1::GFX942_G1 {
-        WorkerV2RawHsacoInspectionError::MaxFlatWorkgroupSizeMismatch {
-            kernel: kernel.to_owned(),
-            actual,
+    match diagnostic_profile {
+        WorkerV2RawLaunchDiagnosticProfileV1::LegacyGfx942G1 => {
+            WorkerV2RawHsacoInspectionError::MaxFlatWorkgroupSizeMismatch {
+                kernel: kernel.to_owned(),
+                actual,
+            }
         }
-    } else {
-        WorkerV2RawHsacoInspectionError::TiledGemmV1MaxFlatWorkgroupSizeMismatch {
-            kernel: kernel.to_owned(),
-            actual,
-            expected: launch.max_flat_workgroup_size(),
+        WorkerV2RawLaunchDiagnosticProfileV1::TiledGemmV1 => {
+            WorkerV2RawHsacoInspectionError::TiledGemmV1MaxFlatWorkgroupSizeMismatch {
+                kernel: kernel.to_owned(),
+                actual,
+                expected: launch.max_flat_workgroup_size(),
+            }
+        }
+        WorkerV2RawLaunchDiagnosticProfileV1::RowSoftmaxV1 => {
+            WorkerV2RawHsacoInspectionError::RowSoftmaxV1MaxFlatWorkgroupSizeMismatch {
+                kernel: kernel.to_owned(),
+                actual,
+                expected: launch.max_flat_workgroup_size(),
+            }
         }
     }
 }
 
 fn metadata_wavefront_size_mismatch(
     launch: WorkerV2RawLaunchContractV1,
+    diagnostic_profile: WorkerV2RawLaunchDiagnosticProfileV1,
     kernel: &str,
     actual: u32,
 ) -> WorkerV2RawHsacoInspectionError {
-    if launch == WorkerV2RawLaunchContractV1::GFX942_G1 {
-        WorkerV2RawHsacoInspectionError::MetadataWavefrontSizeMismatch {
-            kernel: kernel.to_owned(),
-            actual,
+    match diagnostic_profile {
+        WorkerV2RawLaunchDiagnosticProfileV1::LegacyGfx942G1 => {
+            WorkerV2RawHsacoInspectionError::MetadataWavefrontSizeMismatch {
+                kernel: kernel.to_owned(),
+                actual,
+            }
         }
-    } else {
-        WorkerV2RawHsacoInspectionError::TiledGemmV1MetadataWavefrontSizeMismatch {
-            kernel: kernel.to_owned(),
-            actual,
-            expected: launch.wavefront_size(),
+        WorkerV2RawLaunchDiagnosticProfileV1::TiledGemmV1 => {
+            WorkerV2RawHsacoInspectionError::TiledGemmV1MetadataWavefrontSizeMismatch {
+                kernel: kernel.to_owned(),
+                actual,
+                expected: launch.wavefront_size(),
+            }
+        }
+        WorkerV2RawLaunchDiagnosticProfileV1::RowSoftmaxV1 => {
+            WorkerV2RawHsacoInspectionError::RowSoftmaxV1MetadataWavefrontSizeMismatch {
+                kernel: kernel.to_owned(),
+                actual,
+                expected: launch.wavefront_size(),
+            }
         }
     }
 }
 
 fn descriptor_wavefront_size_mismatch(
     launch: WorkerV2RawLaunchContractV1,
+    diagnostic_profile: WorkerV2RawLaunchDiagnosticProfileV1,
     kernel: &str,
     actual: u32,
 ) -> WorkerV2RawHsacoInspectionError {
-    if launch == WorkerV2RawLaunchContractV1::GFX942_G1 {
-        WorkerV2RawHsacoInspectionError::DescriptorWavefrontSizeMismatch {
-            kernel: kernel.to_owned(),
-            actual,
+    match diagnostic_profile {
+        WorkerV2RawLaunchDiagnosticProfileV1::LegacyGfx942G1 => {
+            WorkerV2RawHsacoInspectionError::DescriptorWavefrontSizeMismatch {
+                kernel: kernel.to_owned(),
+                actual,
+            }
         }
-    } else {
-        WorkerV2RawHsacoInspectionError::TiledGemmV1DescriptorWavefrontSizeMismatch {
-            kernel: kernel.to_owned(),
-            actual,
-            expected: launch.wavefront_size(),
+        WorkerV2RawLaunchDiagnosticProfileV1::TiledGemmV1 => {
+            WorkerV2RawHsacoInspectionError::TiledGemmV1DescriptorWavefrontSizeMismatch {
+                kernel: kernel.to_owned(),
+                actual,
+                expected: launch.wavefront_size(),
+            }
+        }
+        WorkerV2RawLaunchDiagnosticProfileV1::RowSoftmaxV1 => {
+            WorkerV2RawHsacoInspectionError::RowSoftmaxV1DescriptorWavefrontSizeMismatch {
+                kernel: kernel.to_owned(),
+                actual,
+                expected: launch.wavefront_size(),
+            }
         }
     }
 }

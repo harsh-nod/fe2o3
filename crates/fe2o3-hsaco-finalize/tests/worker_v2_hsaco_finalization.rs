@@ -20,10 +20,13 @@ use fe2o3_compiler_ffi::{
 use fe2o3_hsaco_finalize::{
     CanonicalDescriptorSectionObservationV1, ContentIdentityV1,
     DescriptorSourceEvidenceRequirementV1, FinalizationError, LinkOptionV1, PinnedWorkerV1,
-    TiledGemmV1StructuralArtifactErrorV1, WorkerExecutionLimitsV1, WorkerMeasurementV1,
-    WorkerOutputConstraintsV1, WorkerV2HsacoFinalizationError, WorkerV2RawHsacoInspectionError,
+    RowSoftmaxV1StructuralArtifactErrorV1, TiledGemmV1StructuralArtifactErrorV1,
+    WorkerExecutionLimitsV1, WorkerMeasurementV1, WorkerOutputConstraintsV1,
+    WorkerV2HsacoFinalizationError, WorkerV2RawHsacoInspectionError,
     execute_reproducible_first_build_worker_v2, finalize_inspected_worker_v2_hsaco_v1,
+    finalize_row_softmax_v1_structural_worker_v2_hsaco_v1,
     finalize_tiled_gemm_v1_structural_worker_v2_hsaco_v1,
+    inspect_row_softmax_v1_structural_worker_v2_hsaco_v1,
     inspect_tiled_gemm_v1_structural_worker_v2_hsaco_v1, inspect_unfinalized,
     inspect_worker_v2_raw_hsaco_v1, verify_finalized,
 };
@@ -32,9 +35,10 @@ use fe2o3_kernel_descriptor::{
     CodeObjectVersion, CompilerIdentityV1, DeviceDescriptorTableV1, DeviceLayoutDescriptorV1,
     DeviceLayoutRecordV1, DeviceTargetV1, DimensionsV1, EvidenceDigest, EvidenceIdentity,
     KernelAbiLayoutV1, KernelDescriptorV1, KernelId, LaunchConstraintsV1, LogicalArgumentV1,
-    ProducerIdentityV1, ScalarTypeV1, SourceTypeDescriptorV1, SourceTypeRecordV1, Text,
-    TiledGemmV1StructuralDescriptorErrorV1, TiledGemmV1StructuralDescriptorExpectationV1,
-    ValidName, encode_device_descriptor_table_v1,
+    ProducerIdentityV1, RowSoftmaxV1StructuralDescriptorErrorV1,
+    RowSoftmaxV1StructuralDescriptorExpectationV1, ScalarTypeV1, SourceTypeDescriptorV1,
+    SourceTypeRecordV1, Text, TiledGemmV1StructuralDescriptorErrorV1,
+    TiledGemmV1StructuralDescriptorExpectationV1, ValidName, encode_device_descriptor_table_v1,
 };
 use reserved_fe2o3_symbols::{
     DEVICE_FFI_DIRECTION_EXPORT_V1, DeviceFfiContractFieldsV1, DeviceFfiDirectionV1,
@@ -526,6 +530,256 @@ fn tiled_gemm_rejects_capability_target_symbol_offset_and_lds_drift() {
     }
 }
 
+#[test]
+fn structural_row_softmax_v1_finalizes_as_two_f32_slices_and_288_bytes() {
+    let table = row_softmax_descriptor_table(row_softmax_capabilities());
+    let fixture = fixture_with_descriptor_table(row_softmax_options(), Some(&table));
+    let raw_bytes = fixture.bytes.clone();
+    let inspected = inspect_row_softmax_v1_structural_worker_v2_hsaco_v1(
+        evidence_for(
+            fixture.bytes,
+            "gfx942:xnack-",
+            0xa1,
+            0xb1,
+            "row_softmax_v1",
+            "row_softmax_v1.kd",
+        ),
+        row_softmax_expectation(),
+    )
+    .unwrap();
+
+    assert_eq!(inspected.target().to_string(), "gfx942:xnack-");
+    assert_eq!(inspected.code_object_version(), CodeObjectVersion::V6);
+    assert!(
+        inspected
+            .raw_inspection_identity()
+            .as_bytes()
+            .iter()
+            .any(|byte| *byte != 0)
+    );
+    assert_eq!(inspected.exact_bytes(), raw_bytes);
+    let admitted = inspected.descriptor_admission();
+    assert_eq!(admitted.declared_row_elements(), 64);
+    assert_eq!(admitted.workgroup_size(), [64, 1, 1]);
+    assert_eq!(admitted.max_grid_size(), [1, 1, 1]);
+    assert_eq!(admitted.explicit_kernarg_bytes(), 32);
+    assert_eq!(admitted.total_kernarg_bytes(), 288);
+    assert!(!inspected.authenticates_source_origin());
+    assert!(!inspected.authenticates_compiler_origin());
+    assert!(!inspected.validates_runtime_slice_lengths());
+    assert!(!inspected.validates_kernel_body());
+    assert!(!inspected.proves_functional_softmax());
+    assert!(!inspected.proves_exp_implementation());
+    assert!(!inspected.proves_numerical_contract());
+    assert!(!inspected.proves_race_freedom());
+    assert!(!inspected.proves_verus_verification());
+    assert!(!inspected.grants_publication_authority());
+    assert!(!inspected.grants_load_authority());
+    assert!(!inspected.grants_launch_authority());
+
+    let finalized = finalize_row_softmax_v1_structural_worker_v2_hsaco_v1(inspected).unwrap();
+    let verified = verify_finalized(finalized.exact_finalized_bytes()).unwrap();
+    let kernel = &verified.hsaco().kernels()[0];
+    assert_eq!(kernel.name(), "row_softmax_v1");
+    assert_eq!(kernel.symbol(), "row_softmax_v1.kd");
+    assert_eq!(kernel.required_workgroup_size(), Some([64, 1, 1]));
+    assert_eq!(kernel.max_workgroups(), [Some(1), Some(1), Some(1)]);
+    assert_eq!(kernel.max_flat_workgroup_size(), 64);
+    assert_eq!(kernel.group_segment_fixed_size(), 0);
+    assert_eq!(kernel.kernarg_segment_size(), 288);
+    assert_eq!(kernel.implicit_argument_offset(), Some(32));
+    assert_eq!(kernel.implicit_argument_size(), 256);
+    assert_eq!(kernel.explicit_arguments().len(), 4);
+    assert!(finalized.raw_output_identity().matches(&raw_bytes));
+    assert!(
+        finalized
+            .finalized_output_identity()
+            .matches(finalized.exact_finalized_bytes())
+    );
+    assert!(finalized.canonical_descriptor_finalization_ran());
+    assert!(!finalized.authenticates_source_origin());
+    assert!(!finalized.authenticates_compiler_origin());
+    assert!(!finalized.validates_runtime_slice_lengths());
+    assert!(!finalized.validates_kernel_body());
+    assert!(!finalized.proves_functional_softmax());
+    assert!(!finalized.proves_exp_implementation());
+    assert!(!finalized.proves_numerical_contract());
+    assert!(!finalized.proves_race_freedom());
+    assert!(!finalized.proves_verus_verification());
+    assert!(!finalized.grants_publication_authority());
+    assert!(!finalized.grants_load_authority());
+    assert!(!finalized.grants_launch_authority());
+}
+
+#[test]
+fn row_softmax_structural_admission_accepts_arbitrary_text_without_semantic_authority() {
+    let table = row_softmax_descriptor_table(row_softmax_capabilities());
+    for (fill, invocation, semantic) in [(0x00, 0xa2, 0xb2), (0xff, 0xa3, 0xb3)] {
+        let mut fixture = fixture_with_descriptor_table(row_softmax_options(), Some(&table));
+        fixture.bytes[fixture.text_offset..fixture.text_offset + 64].fill(fill);
+        let inspected = inspect_row_softmax_v1_structural_worker_v2_hsaco_v1(
+            evidence_for(
+                fixture.bytes,
+                "gfx942:xnack-",
+                invocation,
+                semantic,
+                "row_softmax_v1",
+                "row_softmax_v1.kd",
+            ),
+            row_softmax_expectation(),
+        )
+        .unwrap();
+
+        assert!(!inspected.validates_kernel_body());
+        assert!(!inspected.proves_functional_softmax());
+        assert!(!inspected.proves_exp_implementation());
+        assert!(!inspected.proves_numerical_contract());
+        assert!(!inspected.grants_launch_authority());
+    }
+}
+
+#[test]
+fn row_softmax_rejects_workgroup_wave_grid_and_tiled_abi_substitution() {
+    let table = row_softmax_descriptor_table(row_softmax_capabilities());
+    let wrong_required = fixture_with_descriptor_table(
+        FixtureOptions {
+            required_workgroup_size: [256, 1, 1],
+            max_flat_workgroup_size: 256,
+            ..row_softmax_options()
+        },
+        Some(&table),
+    );
+    let error = inspect_row_softmax_v1_structural_worker_v2_hsaco_v1(
+        evidence_for(
+            wrong_required.bytes,
+            "gfx942:xnack-",
+            0xa4,
+            0xb4,
+            "row_softmax_v1",
+            "row_softmax_v1.kd",
+        ),
+        row_softmax_expectation(),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        RowSoftmaxV1StructuralArtifactErrorV1::RawInspection(
+            WorkerV2RawHsacoInspectionError::RowSoftmaxV1RequiredWorkgroupSizeMismatch {
+                actual: Some([256, 1, 1]),
+                expected: [64, 1, 1],
+                ..
+            }
+        )
+    ));
+
+    for options in [
+        FixtureOptions {
+            wavefront_size: 32,
+            descriptor_wavefront_size: 32,
+            ..row_softmax_options()
+        },
+        FixtureOptions {
+            max_workgroups: [None; 3],
+            ..row_softmax_options()
+        },
+        FixtureOptions {
+            max_workgroups: [Some(2), Some(1), Some(1)],
+            ..row_softmax_options()
+        },
+        FixtureOptions {
+            kernarg_segment_size_override: Some(320),
+            ..row_softmax_options()
+        },
+        FixtureOptions {
+            row_softmax_first_argument_offset: 1,
+            ..row_softmax_options()
+        },
+        FixtureOptions {
+            group_segment_fixed_size: 256,
+            ..row_softmax_options()
+        },
+    ] {
+        let fixture = fixture_with_descriptor_table(options, Some(&table));
+        assert!(
+            inspect_row_softmax_v1_structural_worker_v2_hsaco_v1(
+                evidence_for(
+                    fixture.bytes,
+                    "gfx942:xnack-",
+                    0xa5,
+                    0xb5,
+                    "row_softmax_v1",
+                    "row_softmax_v1.kd",
+                ),
+                row_softmax_expectation(),
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn row_softmax_rejects_capability_target_symbol_and_descriptor_substitution() {
+    for capabilities in [
+        vec![CapabilityV1::AmdWave],
+        vec![
+            CapabilityV1::Subgroup,
+            CapabilityV1::Shuffle,
+            CapabilityV1::AmdWave,
+        ],
+    ] {
+        let table = row_softmax_descriptor_table(capabilities);
+        let fixture = fixture_with_descriptor_table(row_softmax_options(), Some(&table));
+        assert!(matches!(
+            inspect_row_softmax_v1_structural_worker_v2_hsaco_v1(
+                evidence_for(
+                    fixture.bytes,
+                    "gfx942:xnack-",
+                    0xa6,
+                    0xb6,
+                    "row_softmax_v1",
+                    "row_softmax_v1.kd",
+                ),
+                row_softmax_expectation(),
+            ),
+            Err(RowSoftmaxV1StructuralArtifactErrorV1::DescriptorPolicy(
+                RowSoftmaxV1StructuralDescriptorErrorV1::CapabilityProvenance
+            ))
+        ));
+    }
+
+    let table = row_softmax_descriptor_table(row_softmax_capabilities());
+    for (options, target, entry, descriptor) in [
+        (
+            FixtureOptions {
+                target: "gfx942",
+                ..row_softmax_options()
+            },
+            "gfx942",
+            "row_softmax_v1",
+            "row_softmax_v1.kd",
+        ),
+        (
+            FixtureOptions {
+                entry: "tiled_gemm_v1",
+                descriptor: "tiled_gemm_v1.kd",
+                ..row_softmax_options()
+            },
+            "gfx942:xnack-",
+            "tiled_gemm_v1",
+            "tiled_gemm_v1.kd",
+        ),
+    ] {
+        let fixture = fixture_with_descriptor_table(options, Some(&table));
+        assert!(
+            inspect_row_softmax_v1_structural_worker_v2_hsaco_v1(
+                evidence_for(fixture.bytes, target, 0xa7, 0xb7, entry, descriptor,),
+                row_softmax_expectation(),
+            )
+            .is_err()
+        );
+    }
+}
+
 fn tiled_options() -> FixtureOptions<'static> {
     FixtureOptions {
         target: "gfx942:xnack-",
@@ -614,6 +868,91 @@ fn tiled_descriptor_table(capabilities: Vec<CapabilityV1>) -> Vec<u8> {
         DeviceTargetV1::parse("gfx942:xnack-").unwrap(),
         vec![u16_source, f32_source, output_source],
         vec![u16_layout, f32_layout, output_layout],
+        vec![kernel],
+    )
+    .unwrap();
+    encode_device_descriptor_table_v1(&table).unwrap()
+}
+
+fn row_softmax_options() -> FixtureOptions<'static> {
+    FixtureOptions {
+        target: "gfx942:xnack-",
+        // ELF OSABI byte 4 encodes AMDGPU HSA code object V6.
+        code_object_version: 4,
+        entry: "row_softmax_v1",
+        descriptor: "row_softmax_v1.kd",
+        required_workgroup_size: [64, 1, 1],
+        max_flat_workgroup_size: 64,
+        include_explicit_argument_alignments: true,
+        max_workgroups: [Some(1), Some(1), Some(1)],
+        abi: FixtureAbi::RowSoftmaxV1,
+        ..FixtureOptions::valid()
+    }
+}
+
+fn row_softmax_capabilities() -> Vec<CapabilityV1> {
+    vec![CapabilityV1::Subgroup, CapabilityV1::AmdWave]
+}
+
+fn row_softmax_expectation() -> RowSoftmaxV1StructuralDescriptorExpectationV1 {
+    RowSoftmaxV1StructuralDescriptorExpectationV1::new(
+        KernelId::from_bytes([0x81; 32]),
+        build_evidence(0x82, 0x83),
+        build_evidence(0x84, 0x85),
+    )
+    .unwrap()
+}
+
+fn row_softmax_descriptor_table(capabilities: Vec<CapabilityV1>) -> Vec<u8> {
+    let input_source =
+        SourceTypeRecordV1::new(SourceTypeDescriptorV1::shared_slice(ScalarTypeV1::F32));
+    let input_layout =
+        DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::shared_slice(ScalarTypeV1::F32));
+    let output_source =
+        SourceTypeRecordV1::new(SourceTypeDescriptorV1::disjoint_slice(ScalarTypeV1::F32));
+    let output_layout =
+        DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::disjoint_slice(ScalarTypeV1::F32));
+    let kernel = KernelDescriptorV1::new(
+        KernelId::from_bytes([0x81; 32]),
+        name("row_softmax_v1"),
+        name("row_softmax_v1"),
+        name("row_softmax_v1.kd"),
+        build_evidence(0x82, 0x83),
+        build_evidence(0x84, 0x85),
+        capabilities,
+        KernelAbiLayoutV1::new(32, 288, 8).unwrap(),
+        LaunchConstraintsV1::new(
+            1,
+            BlockSizeV1::Exact(DimensionsV1::new(64, 1, 1).unwrap()),
+            DimensionsV1::new(1, 1, 1).unwrap(),
+            64,
+            0,
+            0,
+        )
+        .unwrap(),
+        vec![
+            LogicalArgumentV1::shared_slice(0, name("input"), &input_source, &input_layout, 0)
+                .unwrap(),
+            LogicalArgumentV1::disjoint_slice(
+                1,
+                name("output"),
+                &output_source,
+                &output_layout,
+                AccessMode::ReadWrite,
+                16,
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    let table = DeviceDescriptorTableV1::new(
+        CanonicalCodeObjectDigest::from_bytes([0; 32]),
+        CodeObjectVersion::V6,
+        CompilerIdentityV1::new(text("rustc-codegen-fe2o3"), text("test"), [0x86; 20]),
+        ProducerIdentityV1::new(text("rustc-codegen-fe2o3-worker-v2"), text("test")),
+        DeviceTargetV1::parse("gfx942:xnack-").unwrap(),
+        vec![input_source, output_source],
+        vec![input_layout, output_layout],
         vec![kernel],
     )
     .unwrap();

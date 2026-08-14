@@ -9,6 +9,7 @@ pub mod ffi_contract;
 mod launch_policy;
 mod model;
 mod requirements_v2;
+mod row_softmax_v1;
 mod tiled_gemm_v1;
 mod wire_v2;
 
@@ -43,6 +44,15 @@ pub use model::{
 pub use requirements_v2::{
     AtomicRequirementsV2, DeviceDescriptorTableV2, KernelTargetRequirementsV2, LdsRequirementsV2,
     RequiredWavefrontWidthV2, SynchronizationRequirementsV2,
+};
+pub use row_softmax_v1::{
+    AdmittedRowSoftmaxV1StructuralDescriptorV1, ROW_SOFTMAX_V1_DESCRIPTOR_SYMBOL,
+    ROW_SOFTMAX_V1_ENTRY_NAME, ROW_SOFTMAX_V1_EXPLICIT_KERNARG_BYTES,
+    ROW_SOFTMAX_V1_IMPLICIT_KERNARG_BYTES, ROW_SOFTMAX_V1_MAX_FLAT_WORKGROUP_SIZE,
+    ROW_SOFTMAX_V1_MAX_GRID_SIZE, ROW_SOFTMAX_V1_ROW_ELEMENTS, ROW_SOFTMAX_V1_TARGET,
+    ROW_SOFTMAX_V1_TOTAL_KERNARG_BYTES, ROW_SOFTMAX_V1_WORKGROUP_SIZE,
+    RowSoftmaxV1StructuralDescriptorErrorV1, RowSoftmaxV1StructuralDescriptorExpectationV1,
+    admit_row_softmax_v1_structural_descriptor_v1,
 };
 pub use tiled_gemm_v1::{
     AdmittedTiledGemmV1StructuralDescriptorV1,
