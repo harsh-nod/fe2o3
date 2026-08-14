@@ -22,6 +22,7 @@ mod persistent_freshness;
 mod plan;
 mod proof_capsule;
 mod result;
+mod scalar_gemm_hardware_evidence;
 mod scalar_gemm_v1;
 mod static_view_proof;
 
@@ -145,6 +146,23 @@ pub use proof_capsule::{
 };
 pub use result::{
     MAX_RESULT_BYTES, ProofResultV1, RecorderTermination, ResultError, parse_recorder_result,
+};
+pub use scalar_gemm_hardware_evidence::{
+    SCALAR_GEMM_COV6_IMPLICIT_KERNARG_BYTES_V1, SCALAR_GEMM_EXPLICIT_KERNARG_BYTES_V1,
+    SCALAR_GEMM_HARDWARE_EVIDENCE_DOMAIN_V1, SCALAR_GEMM_HARDWARE_EVIDENCE_VERSION_V1,
+    SCALAR_GEMM_HARDWARE_EXPECTATION_DOMAIN_V1, SCALAR_GEMM_HARDWARE_FORMAL_CLAIMS_V1,
+    SCALAR_GEMM_HARDWARE_MAX_CASE_NAME_BYTES_V1, SCALAR_GEMM_HARDWARE_MAX_CASES_V1,
+    SCALAR_GEMM_KERNARG_ALIGNMENT_V1, SCALAR_GEMM_TOTAL_KERNARG_BYTES_V1,
+    SCALAR_GEMM_WAVEFRONT_SIZE_V1, ScalarGemmAdjacentCanaryObservationV1,
+    ScalarGemmArtifactObservationV1, ScalarGemmDispatchObservationV1,
+    ScalarGemmFrontendObservationV1, ScalarGemmHardwareCaseExpectationV1,
+    ScalarGemmHardwareCaseObservationV1, ScalarGemmHardwareEvidenceErrorV1,
+    ScalarGemmHardwareEvidenceExpectationV1, ScalarGemmHardwareEvidenceRecorderV1,
+    ScalarGemmHardwareFormalClaimV1, ScalarGemmHardwareObservedFactsV1,
+    ScalarGemmHsaLoadObservationV1, ScalarGemmInputImmutabilityObservationV1,
+    ScalarGemmKernelAdmissionObservationV1, ScalarGemmOutputObservationV1,
+    ScalarGemmProtectedHardwareEvidenceV1, ScalarGemmUnloadObservationV1,
+    ScalarGemmWorkerExchangeObservationV1,
 };
 pub use scalar_gemm_v1::{
     SCALAR_GEMM_COVERAGE_PROFILE_V1, SCALAR_GEMM_F32_NUMERICAL_CONTRACT_V1,
