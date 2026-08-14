@@ -39,8 +39,8 @@ mod platform {
 
     use crate::application_sandbox::{
         AUDIT_ARCH_X86_64, cargo_exec_notification_filter, cloexec_pipe,
-        install_application_profile, respond_to_notification, stop_supervisor_without_blocking,
-        wait_for_listener, wait_for_notification,
+        install_application_profile, notification_is_valid, respond_to_notification,
+        stop_supervisor_without_blocking, wait_for_listener, wait_for_notification,
     };
     use crate::pinned_executable::PinnedExecutable;
 
@@ -48,6 +48,7 @@ mod platform {
     const INVOCATION_PERMIT_LIFETIME: Duration = Duration::from_secs(120);
     const MAX_EXEC_PATH_BYTES: usize = 4096;
     const MAX_PROC_STAT_BYTES: usize = 4096;
+    const MAX_PROC_STATUS_BYTES: usize = 64 * 1024;
     const MAX_PENDING_PERMITS: usize = 256;
 
     #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -88,11 +89,6 @@ mod platform {
             Self {
                 state: Arc::new(Mutex::new(BTreeMap::new())),
             }
-        }
-
-        fn authorize(&self, process: ProcessIdentityV1) -> Result<(), String> {
-            let process_fd = open_process_pidfd(process.pid)?;
-            self.authorize_with_process_fd(process, Some(process_fd))
         }
 
         fn authorize_with_process_fd(
@@ -152,6 +148,13 @@ mod platform {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .retain(|process, _| process.pid != pid);
+        }
+
+        fn revoke(&self, process: ProcessIdentityV1) {
+            self.state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove(&process);
         }
 
         fn clear(&self) {
@@ -362,6 +365,7 @@ mod platform {
                 return report_ready_error(&ready, &error);
             }
         };
+        notification_is_valid(listener.as_raw_fd(), initial.id)?;
         respond_to_notification(listener.as_raw_fd(), initial.id, true)?;
         ready
             .send(Ok(cargo_pid))
@@ -372,6 +376,7 @@ mod platform {
             wait_for_notification(listener.as_raw_fd(), shutdown.as_raw_fd())?
         {
             let outcome = authorize_notification(
+                listener.as_raw_fd(),
                 notification,
                 cargo_pid,
                 cargo_process,
@@ -380,7 +385,16 @@ mod platform {
                 &authorization,
             );
             match outcome {
-                Ok(()) => respond_to_notification(listener.as_raw_fd(), notification.id, true)?,
+                Ok(authorized) => {
+                    if let Err(error) =
+                        respond_to_notification(listener.as_raw_fd(), notification.id, true)
+                    {
+                        if let Some(process) = authorized {
+                            authorization.revoke(process);
+                        }
+                        return Err(error);
+                    }
+                }
                 Err(error) => {
                     let _ = respond_to_notification(listener.as_raw_fd(), notification.id, false);
                     return Err(error);
@@ -391,28 +405,30 @@ mod platform {
     }
 
     fn authorize_notification(
+        listener: i32,
         notification: libc::seccomp_notif,
         cargo_pid: u32,
         cargo_process: ProcessIdentityV1,
         cargo: ExecutableIdentityV1,
         wrapper: ExecutableIdentityV1,
         authorization: &InvocationAuthorizationRegistryV1,
-    ) -> Result<(), String> {
+    ) -> Result<Option<ProcessIdentityV1>, String> {
         validate_notification(&notification)?;
         // A permit belongs to exactly one successful transition into the wrapper image. Any
         // later exec by the same PID invalidates it before that new image can run, including a
         // pathname-swap adversary that first entered another image and then execs the wrapper.
-        authorization.revoke_pid(notification.pid);
+        let process_pid = thread_group_id(notification.pid)?;
+        authorization.revoke_pid(process_pid);
         if !requested_executable_matches(notification, wrapper)? {
-            return Ok(());
+            return Ok(None);
         }
 
-        let observation = process_observation(notification.pid)?;
+        let observation = process_observation(process_pid)?;
         let process = ProcessIdentityV1 {
-            pid: notification.pid,
+            pid: process_pid,
             start_time_ticks: observation.start_time_ticks,
         };
-        let current = process_executable_object(notification.pid)?;
+        let current = process_executable_object(process_pid)?;
         if !is_direct_pinned_cargo_child(
             observation.parent_pid,
             cargo_pid,
@@ -421,9 +437,13 @@ mod platform {
         ) {
             // The exec itself is allowed so the genuine wrapper can report a broker rejection, but
             // no authorization is minted for build-script/proc-macro descendants or replacements.
-            return Ok(());
+            return Ok(None);
         }
-        authorization.authorize(process)
+        let process_fd = open_process_pidfd(process.pid)?;
+        notification_is_valid(listener, notification.id)?;
+        process.require_current()?;
+        authorization.authorize_with_process_fd(process, Some(process_fd))?;
+        Ok(Some(process))
     }
 
     fn open_process_pidfd(pid: u32) -> Result<File, String> {
@@ -659,6 +679,27 @@ mod platform {
         })
     }
 
+    fn thread_group_id(tid: u32) -> Result<u32, String> {
+        let path = PathBuf::from(format!("/proc/{tid}/status"));
+        let bytes = fs::read(&path)
+            .map_err(|error| format!("cannot read thread status {}: {error}", path.display()))?;
+        if bytes.is_empty() || bytes.len() > MAX_PROC_STATUS_BYTES {
+            return Err(format!(
+                "thread status {} has invalid length",
+                path.display()
+            ));
+        }
+        let tgid = bytes
+            .split(|byte| *byte == b'\n')
+            .find_map(|line| line.strip_prefix(b"Tgid:"))
+            .and_then(|value| std::str::from_utf8(value).ok())
+            .map(str::trim)
+            .and_then(|value| value.parse::<u32>().ok())
+            .filter(|value| *value != 0)
+            .ok_or_else(|| format!("thread status {} has no valid TGID", path.display()))?;
+        Ok(tgid)
+    }
+
     fn process_executable_object(pid: u32) -> Result<LinuxObjectIdentityV3, String> {
         let path = PathBuf::from(format!("/proc/{pid}/exe"));
         let metadata = fs::metadata(&path).map_err(|error| {
@@ -720,6 +761,23 @@ mod platform {
         fn pidfd_pins_the_current_kernel_process_lifetime() {
             let process = open_process_pidfd(std::process::id()).unwrap();
             assert!(pidfd_is_live(&process));
+        }
+
+        #[test]
+        fn non_leader_thread_is_normalized_to_process_tgid() {
+            let (tid_sender, tid_receiver) = std::sync::mpsc::sync_channel(1);
+            let (release_sender, release_receiver) = std::sync::mpsc::sync_channel(1);
+            let worker = std::thread::spawn(move || {
+                // SAFETY: gettid has no arguments or memory effects.
+                let tid = unsafe { libc::syscall(libc::SYS_gettid) } as u32;
+                tid_sender.send(tid).unwrap();
+                release_receiver.recv().unwrap();
+            });
+            let tid = tid_receiver.recv().unwrap();
+            assert_ne!(tid, std::process::id());
+            assert_eq!(thread_group_id(tid).unwrap(), std::process::id());
+            release_sender.send(()).unwrap();
+            worker.join().unwrap();
         }
 
         #[test]

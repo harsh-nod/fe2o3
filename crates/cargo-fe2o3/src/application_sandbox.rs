@@ -485,6 +485,17 @@ pub(crate) fn respond_to_notification(
     Ok(())
 }
 
+pub(crate) fn notification_is_valid(listener: RawFd, id: u64) -> Result<(), String> {
+    // SAFETY: the ioctl only reads the live notification ID from this stack value.
+    if unsafe { libc::ioctl(listener, libc::_IOW::<u64>(b'!' as u32, 2), &id) } != 0 {
+        return Err(format!(
+            "seccomp notification expired while authorizing its process: {}",
+            io::Error::last_os_error()
+        ));
+    }
+    Ok(())
+}
+
 fn send_listener(socket: RawFd, listener: RawFd) -> io::Result<()> {
     let message = ListenerMessage {
         magic: LISTENER_MESSAGE_MAGIC,
