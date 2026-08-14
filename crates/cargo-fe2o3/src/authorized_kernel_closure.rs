@@ -1,7 +1,10 @@
 //! Pre-Cargo host-code policy for authority-bearing kernel compilations.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
+use std::fs::{self, Metadata, OpenOptions};
+use std::io::Read;
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
@@ -12,84 +15,91 @@ use crate::project::CargoProject;
 
 const MAX_METADATA_BYTES: usize = 32 * 1024 * 1024;
 const MAX_LOCK_BYTES: usize = 8 * 1024 * 1024;
+const MAX_SOURCE_FILE_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_SOURCE_TREE_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_SOURCE_TREE_FILES: usize = 100_000;
 const CRATES_IO_SOURCE: &str = "registry+https://github.com/rust-lang/crates.io-index";
-const TRUSTED_REGISTRY_BUILD_SCRIPTS: [(&str, &str); 15] = [
-    ("cap-primitives", "4.0.2"),
-    ("io-extras", "0.19.0"),
-    ("io-lifetimes", "2.0.4"),
-    ("io-lifetimes", "3.0.1"),
-    ("libc", "0.2.189"),
-    ("num-traits", "0.2.19"),
-    ("object", "0.39.1"),
-    ("proc-macro2", "1.0.106"),
-    ("proc-macro2", "1.0.107"),
-    ("quote", "1.0.45"),
-    ("quote", "1.0.47"),
-    ("rustix", "1.1.4"),
-    ("serde_core", "1.0.229"),
-    ("serde_json", "1.0.151"),
-    ("zmij", "1.0.23"),
+const TRUSTED_REGISTRY_BUILD_SCRIPTS: [(&str, &str, &str); 15] = [
+    (
+        "cap-primitives",
+        "4.0.2",
+        "9c5c6262db1c26d16dc7bc175a2785b15d8e5e0c02825ffd1be9e20a4bff50f1",
+    ),
+    (
+        "io-extras",
+        "0.19.0",
+        "41ca4460f88bdeb51e5236f79540483047e935c6386db8ee5242cde7572075d4",
+    ),
+    (
+        "io-lifetimes",
+        "2.0.4",
+        "41e3c9aefd8e587fce5aaa6b326b7f72babb8509fd97fec0b85923f46d244d7e",
+    ),
+    (
+        "io-lifetimes",
+        "3.0.1",
+        "f992fc3ac492e187e4a5c5b4d6501e6fcfee4a8ab3ee1983fb1291cdea4d4108",
+    ),
+    (
+        "libc",
+        "0.2.189",
+        "54f1477836437a81c25bfb0774a700a3043d80a3f20c395429f47f66db34ace3",
+    ),
+    (
+        "num-traits",
+        "0.2.19",
+        "a70b98cd31b6d7ed51cb8c0d25cbe86b0d61bccd3fcb8775b5369aaeb5f18a7e",
+    ),
+    (
+        "object",
+        "0.39.1",
+        "5007f85062b9881599bd080205a7bce0e2fffbcc024ea9d6cc2d35c5ab58dc4f",
+    ),
+    (
+        "proc-macro2",
+        "1.0.106",
+        "09dc7aa3070a182d1a247cb6876af476bcc0db2390908facd93edbf3ede8a03b",
+    ),
+    (
+        "proc-macro2",
+        "1.0.107",
+        "369ed937912de48187d2b6b9706b3c76128b3c9ca75b4404abf79306ac6db9f1",
+    ),
+    (
+        "quote",
+        "1.0.45",
+        "8d6c868c0e133b6a257d426993ff53ba648a8fa4cfc805fe480b6c0c89e56638",
+    ),
+    (
+        "quote",
+        "1.0.47",
+        "600f7d275e1f5f809dd2c6670acf7a4966733eb66983d8650c4d6b1d51184f29",
+    ),
+    (
+        "rustix",
+        "1.1.4",
+        "62dd547337499a696f957e605c76c0419a2d34d915fcf06554827f955b93994a",
+    ),
+    (
+        "serde_core",
+        "1.0.229",
+        "cfc95168c497e78cae0bf1dcb1c18302358c3b1831dcd5fbdda49fc51975def1",
+    ),
+    (
+        "serde_json",
+        "1.0.151",
+        "9fb6b972f5ef5eaf17be5c50854f9a328c5c0c8f9a7b462f51119ec92001f682",
+    ),
+    (
+        "zmij",
+        "1.0.23",
+        "ee4ed4bdafb98dc92c5a51095290212137f81ffc6cdfae77e9cb540373fb4c11",
+    ),
 ];
-const TRUSTED_FE2O3_MACROS_FILES: [(&str, &str); 3] = [
-    (
-        "Cargo.toml",
-        "8ea2a249a292e8d64d7ad01a2ea7e2d5d4c7fda1fdea1f247efc4e29caf0bfda",
-    ),
-    (
-        "src/control_flow_v1.rs",
-        "42d3140c6fa1b6353b3eb4806927c3c9d539e80d1635355509bf064866178528",
-    ),
-    (
-        "src/lib.rs",
-        "64496258d95f1971e5471b7855fbc93a1e8ecf5a0c041c1b6ef0f7f83a5884aa",
-    ),
-];
-const TRUSTED_FE2O3_HIP_SYS_FILES: [(&str, &str); 11] = [
-    (
-        "Cargo.toml",
-        "3cd753eed4ae6fb08908f6a848700bf5cd72d05af9251375b750d28e883ab49f",
-    ),
-    (
-        "build.rs",
-        "6716b1d5e20126371f532a6db7ad2ebde2d76fc697b1cf02a6eb589093f62901",
-    ),
-    (
-        "native/cooperative_peer_abi.c",
-        "1d926b137fc9fe24fb0f41d71c297049d80fca0a8b46b5b023ce793ccabd19a6",
-    ),
-    (
-        "native/device_properties.c",
-        "f53933a71a7f12c294249560762c4aaaedc069fab71b014a313e3638f1311b82",
-    ),
-    (
-        "native/device_properties.h",
-        "eb8fa417c9df9fb5772f9d32500fc23acb806b28b1d3869afe22e6d6fcf90238",
-    ),
-    (
-        "native/device_properties_test.c",
-        "dfa48a866840449d499b519208e5ce2804a8443ad5697fbfafd24e44804d6687",
-    ),
-    (
-        "native/memory_topology_abi.c",
-        "f48a2d2cee7049236fe12e9a08314ce856896c99b0c2083f1432fb4ffd08ab32",
-    ),
-    (
-        "src/cooperative_peer.rs",
-        "bdd7a5ee3e46a34ed1090531ea558491160caf05145d1ce40b8cc9938ca96623",
-    ),
-    (
-        "src/lib.rs",
-        "77810edeb4b346dd4d0c34cabb9d9527ebe1b9dfdff38d8667b63d4f1969b2b4",
-    ),
-    (
-        "src/memory_topology.rs",
-        "aa623132159837ad08cdfae32f276a6881b828f8b24690b1d6528d1d17d64559",
-    ),
-    (
-        "src/unavailable_runtime.rs",
-        "95cd2bc145e77c3f8c73741caa44b88feb3210541985af6ae938336d5c23c8c2",
-    ),
-];
+const TRUSTED_FE2O3_MACROS_TREE: &str =
+    "26c7df0dc0cc81890cd291c61c64d9d24a94adcbd3860d0f9a4fdc9ff2661fc3";
+const TRUSTED_FE2O3_HIP_SYS_TREE: &str =
+    "fc950a51041eeb74fd756624e3c981fe24d52a6e8b4868da613e5b9a8c499429";
 
 pub(crate) struct AuthorizedKernelClosureV1 {
     snapshot: Vec<u8>,
@@ -125,14 +135,18 @@ impl AuthorizedKernelClosureV1 {
         }
         let metadata: Value = serde_json::from_slice(&output.stdout)
             .map_err(|error| format!("failed to parse authoritative Cargo metadata: {error}"))?;
-        Self::from_metadata(&metadata, args)
+        Self::from_metadata(&metadata, args, cargo.sha256())
     }
 
     pub(crate) fn snapshot(&self) -> &[u8] {
         &self.snapshot
     }
 
-    fn from_metadata(metadata: &Value, args: &[std::ffi::OsString]) -> Result<Self, String> {
+    fn from_metadata(
+        metadata: &Value,
+        args: &[std::ffi::OsString],
+        cargo_digest: &[u8; 32],
+    ) -> Result<Self, String> {
         let packages = metadata
             .get("packages")
             .and_then(Value::as_array)
@@ -181,12 +195,25 @@ impl AuthorizedKernelClosureV1 {
             pending.extend(next.iter().cloned());
         }
 
-        let mut snapshot = b"fe2o3-authorized-kernel-closure-v1\0".to_vec();
+        let target_directory = metadata
+            .get("target_directory")
+            .and_then(Value::as_str)
+            .map(Path::new);
+        let mut snapshot = b"fe2o3-authorized-kernel-closure-content-v2\0".to_vec();
+        append_field(&mut snapshot, cargo_digest);
         for id in &closure {
             let package = package_by_id
                 .get(id)
                 .ok_or_else(|| format!("resolved package {id:?} has no metadata record"))?;
-            validate_host_code_package(package)?;
+            let manifest = PathBuf::from(required_string(package, "manifest_path")?);
+            let root = manifest.parent().ok_or_else(|| {
+                format!(
+                    "package {id:?} manifest has no parent: {}",
+                    manifest.display()
+                )
+            })?;
+            let tree_digest = canonical_tree_digest(root, target_directory)?;
+            validate_host_code_package(package, &tree_digest)?;
             append_field(&mut snapshot, id.as_bytes());
             for field in ["name", "version", "source", "checksum", "manifest_path"] {
                 append_field(
@@ -206,6 +233,7 @@ impl AuthorizedKernelClosureV1 {
             for dependency in next {
                 append_field(&mut snapshot, dependency.as_bytes());
             }
+            append_field(&mut snapshot, &tree_digest);
         }
 
         let workspace_root = metadata
@@ -294,9 +322,9 @@ fn selected_package_names(args: &[std::ffi::OsString]) -> Result<Vec<String>, St
     Ok(selected)
 }
 
-fn validate_host_code_package(package: &Value) -> Result<(), String> {
+fn validate_host_code_package(package: &Value, tree_digest: &[u8; 32]) -> Result<(), String> {
     let name = required_string(package, "name")?;
-    let reviewed_hip_sys = is_reviewed_fe2o3_hip_sys(package)?;
+    let reviewed_hip_sys = is_reviewed_fe2o3_hip_sys(package, tree_digest)?;
     if package.get("links").is_some_and(|value| !value.is_null()) && !reviewed_hip_sys {
         return Err(format!(
             "authoritative kernel closure rejects native links package {name:?}"
@@ -318,7 +346,7 @@ fn validate_host_code_package(package: &Value) -> Result<(), String> {
         })
         .collect::<BTreeSet<_>>();
     if kinds.contains("custom-build")
-        && !is_reviewed_registry_build_script(package)
+        && !is_reviewed_registry_build_script(package, tree_digest)?
         && !reviewed_hip_sys
     {
         return Err(format!(
@@ -326,12 +354,12 @@ fn validate_host_code_package(package: &Value) -> Result<(), String> {
         ));
     }
     if kinds.contains("proc-macro") {
-        validate_reviewed_fe2o3_macros(package)?;
+        validate_reviewed_fe2o3_macros(package, tree_digest)?;
     }
     Ok(())
 }
 
-fn is_reviewed_fe2o3_hip_sys(package: &Value) -> Result<bool, String> {
+fn is_reviewed_fe2o3_hip_sys(package: &Value, tree_digest: &[u8; 32]) -> Result<bool, String> {
     if package.get("name").and_then(Value::as_str) != Some("fe2o3-hip-sys") {
         return Ok(false);
     }
@@ -354,22 +382,55 @@ fn is_reviewed_fe2o3_hip_sys(package: &Value) -> Result<bool, String> {
             manifest.display()
         ));
     }
-    validate_reviewed_files(&expected, &TRUSTED_FE2O3_HIP_SYS_FILES, "native build")?;
+    validate_expected_tree(
+        tree_digest,
+        TRUSTED_FE2O3_HIP_SYS_TREE,
+        &expected,
+        "native build",
+    )?;
+    if std::env::var_os("FE2O3_HIP_SYS_DISABLE").is_none() {
+        return Err(
+            "authoritative native build requires FE2O3_HIP_SYS_DISABLE so unpinned C tools and ROCm headers cannot enter the trusted closure"
+                .to_owned(),
+        );
+    }
     Ok(true)
 }
 
-fn is_reviewed_registry_build_script(package: &Value) -> bool {
+fn is_reviewed_registry_build_script(
+    package: &Value,
+    tree_digest: &[u8; 32],
+) -> Result<bool, String> {
     let Some(name) = package.get("name").and_then(Value::as_str) else {
-        return false;
+        return Ok(false);
     };
     let Some(version) = package.get("version").and_then(Value::as_str) else {
-        return false;
+        return Ok(false);
     };
-    package.get("source").and_then(Value::as_str) == Some(CRATES_IO_SOURCE)
-        && TRUSTED_REGISTRY_BUILD_SCRIPTS.contains(&(name, version))
+    if package.get("source").and_then(Value::as_str) != Some(CRATES_IO_SOURCE) {
+        return Ok(false);
+    }
+    let Some((_, _, expected)) =
+        TRUSTED_REGISTRY_BUILD_SCRIPTS
+            .iter()
+            .find(|(trusted_name, trusted_version, _)| {
+                name == *trusted_name && version == *trusted_version
+            })
+    else {
+        return Ok(false);
+    };
+    validate_expected_tree(
+        tree_digest,
+        expected,
+        Path::new(required_string(package, "manifest_path")?)
+            .parent()
+            .expect("manifest path was already required"),
+        "registry build-script",
+    )?;
+    Ok(true)
 }
 
-fn validate_reviewed_fe2o3_macros(package: &Value) -> Result<(), String> {
+fn validate_reviewed_fe2o3_macros(package: &Value, tree_digest: &[u8; 32]) -> Result<(), String> {
     if package.get("name").and_then(Value::as_str) != Some("fe2o3-macros")
         || package.get("source").is_some_and(|value| !value.is_null())
     {
@@ -388,27 +449,248 @@ fn validate_reviewed_fe2o3_macros(package: &Value) -> Result<(), String> {
             manifest.display()
         ));
     }
-    validate_reviewed_files(&expected, &TRUSTED_FE2O3_MACROS_FILES, "proc-macro")
+    validate_expected_tree(
+        tree_digest,
+        TRUSTED_FE2O3_MACROS_TREE,
+        &expected,
+        "proc-macro",
+    )
 }
 
-fn validate_reviewed_files(root: &Path, files: &[(&str, &str)], kind: &str) -> Result<(), String> {
-    for (relative, expected_digest) in files {
-        let path = root.join(relative);
-        let bytes = fs::read(&path).map_err(|error| {
+fn validate_expected_tree(
+    observed: &[u8; 32],
+    expected: &str,
+    root: &Path,
+    kind: &str,
+) -> Result<(), String> {
+    if hex(observed) != expected {
+        return Err(format!(
+            "reviewed {kind} closure content changed under {}",
+            root.display()
+        ));
+    }
+    Ok(())
+}
+
+fn canonical_tree_digest(root: &Path, excluded: Option<&Path>) -> Result<[u8; 32], String> {
+    let mut files = Vec::new();
+    collect_tree_files(root, root, excluded, &mut files)?;
+    files.sort_by(|left, right| left.0.cmp(&right.0));
+    if files.len() > MAX_SOURCE_TREE_FILES {
+        return Err(format!(
+            "authoritative source tree {} contains more than {MAX_SOURCE_TREE_FILES} files",
+            root.display()
+        ));
+    }
+
+    let mut total = 0_u64;
+    let mut tree = Sha256::new();
+    tree.update(b"fe2o3-canonical-source-tree-v1\0");
+    for (relative, path) in files {
+        let (digest, size) = hash_regular_file(&path, MAX_SOURCE_FILE_BYTES)?;
+        total = total
+            .checked_add(size)
+            .ok_or_else(|| format!("authoritative source tree {} is too large", root.display()))?;
+        if total > MAX_SOURCE_TREE_BYTES {
+            return Err(format!(
+                "authoritative source tree {} exceeds {MAX_SOURCE_TREE_BYTES} bytes",
+                root.display()
+            ));
+        }
+        tree.update(hex(&digest).as_bytes());
+        tree.update(b"  ");
+        tree.update(relative.as_bytes());
+        tree.update(b"\n");
+    }
+    Ok(tree.finalize().into())
+}
+
+fn collect_tree_files(
+    root: &Path,
+    directory: &Path,
+    excluded: Option<&Path>,
+    files: &mut Vec<(String, PathBuf)>,
+) -> Result<(), String> {
+    if excluded.is_some_and(|excluded| directory == excluded || directory.starts_with(excluded)) {
+        return Ok(());
+    }
+    let initial = fs::symlink_metadata(directory).map_err(|error| {
+        format!(
+            "cannot inspect authoritative source directory {}: {error}",
+            directory.display()
+        )
+    })?;
+    if !initial.is_dir() || initial.file_type().is_symlink() {
+        return Err(format!(
+            "authoritative source directory must be a real directory: {}",
+            directory.display()
+        ));
+    }
+    let entries = fs::read_dir(directory).map_err(|error| {
+        format!(
+            "cannot enumerate authoritative source directory {}: {error}",
+            directory.display()
+        )
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|error| {
             format!(
-                "cannot read reviewed proc-macro source {}: {error}",
+                "cannot enumerate authoritative source directory {}: {error}",
+                directory.display()
+            )
+        })?;
+        let path = entry.path();
+        if excluded.is_some_and(|excluded| path == excluded || path.starts_with(excluded)) {
+            continue;
+        }
+        let metadata = fs::symlink_metadata(&path).map_err(|error| {
+            format!(
+                "cannot inspect authoritative source {}: {error}",
                 path.display()
             )
         })?;
-        let digest = hex(&Sha256::digest(&bytes));
-        if digest != *expected_digest {
+        if metadata.file_type().is_symlink() {
             return Err(format!(
-                "reviewed {kind} source digest changed for {}",
+                "authoritative source closure rejects symbolic link {}",
+                path.display()
+            ));
+        }
+        if metadata.is_dir() {
+            collect_tree_files(root, &path, excluded, files)?;
+        } else if metadata.is_file() {
+            let relative = path
+                .strip_prefix(root)
+                .expect("recursive source path remains under its root")
+                .to_str()
+                .ok_or_else(|| {
+                    format!("authoritative source path is not UTF-8: {}", path.display())
+                })?;
+            if relative.contains(['\n', '\r']) {
+                return Err(format!(
+                    "authoritative source path contains a line break: {}",
+                    path.display()
+                ));
+            }
+            files.push((relative.replace(std::path::MAIN_SEPARATOR, "/"), path));
+        } else {
+            return Err(format!(
+                "authoritative source closure rejects special file {}",
                 path.display()
             ));
         }
     }
+    let final_metadata = fs::symlink_metadata(directory).map_err(|error| {
+        format!(
+            "cannot re-inspect authoritative source directory {}: {error}",
+            directory.display()
+        )
+    })?;
+    if !same_observed_object(&initial, &final_metadata) {
+        return Err(format!(
+            "authoritative source directory changed while observed: {}",
+            directory.display()
+        ));
+    }
     Ok(())
+}
+
+fn hash_regular_file(path: &Path, limit: u64) -> Result<([u8; 32], u64), String> {
+    let initial = fs::symlink_metadata(path).map_err(|error| {
+        format!(
+            "cannot inspect authoritative input {}: {error}",
+            path.display()
+        )
+    })?;
+    if !initial.is_file() || initial.file_type().is_symlink() {
+        return Err(format!(
+            "authoritative input must be a regular file: {}",
+            path.display()
+        ));
+    }
+    if initial.len() > limit {
+        return Err(format!(
+            "authoritative input {} must contain at most {limit} bytes",
+            path.display()
+        ));
+    }
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+    let mut file = options.open(path).map_err(|error| {
+        format!(
+            "cannot open authoritative input {}: {error}",
+            path.display()
+        )
+    })?;
+    let opened = file.metadata().map_err(|error| {
+        format!(
+            "cannot inspect authoritative input {}: {error}",
+            path.display()
+        )
+    })?;
+    if !same_observed_object(&initial, &opened) {
+        return Err(format!(
+            "authoritative input changed before it was opened: {}",
+            path.display()
+        ));
+    }
+    let mut digest = Sha256::new();
+    let mut size = 0_u64;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer).map_err(|error| {
+            format!(
+                "cannot read authoritative input {}: {error}",
+                path.display()
+            )
+        })?;
+        if read == 0 {
+            break;
+        }
+        size = size
+            .checked_add(read as u64)
+            .ok_or_else(|| format!("authoritative input is too large: {}", path.display()))?;
+        if size > limit {
+            return Err(format!(
+                "authoritative input {} exceeds {limit} bytes",
+                path.display()
+            ));
+        }
+        digest.update(&buffer[..read]);
+    }
+    let final_metadata = file.metadata().map_err(|error| {
+        format!(
+            "cannot re-inspect authoritative input {}: {error}",
+            path.display()
+        )
+    })?;
+    if size != initial.len() || !same_observed_object(&initial, &final_metadata) {
+        return Err(format!(
+            "authoritative input changed while it was read: {}",
+            path.display()
+        ));
+    }
+    Ok((digest.finalize().into(), size))
+}
+
+#[cfg(unix)]
+fn same_observed_object(left: &Metadata, right: &Metadata) -> bool {
+    left.dev() == right.dev()
+        && left.ino() == right.ino()
+        && left.mode() == right.mode()
+        && left.len() == right.len()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+        && left.ctime() == right.ctime()
+        && left.ctime_nsec() == right.ctime_nsec()
+}
+
+#[cfg(not(unix))]
+fn same_observed_object(left: &Metadata, right: &Metadata) -> bool {
+    left.file_type() == right.file_type()
+        && left.len() == right.len()
+        && left.modified().ok() == right.modified().ok()
 }
 
 fn required_string<'a>(value: &'a Value, field: &str) -> Result<&'a str, String> {
@@ -451,6 +733,7 @@ fn hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pinned_executable_test_directory::TestDirectory;
 
     fn metadata(target_kind: &str, package_name: &str, links: Value) -> Value {
         serde_json::json!({
@@ -494,10 +777,77 @@ mod tests {
             let record = metadata(kind, name, links);
             let package = &record["packages"][0];
             assert!(
-                validate_host_code_package(package)
+                validate_host_code_package(package, &[0_u8; 32])
                     .unwrap_err()
                     .contains(expected)
             );
+        }
+    }
+
+    #[test]
+    fn tampered_registry_build_script_changes_the_reviewed_content_identity() {
+        let directory = TestDirectory::new();
+        fs::write(
+            directory.path().join("Cargo.toml"),
+            b"[package]\nname='reviewed-registry-crate'\nversion='1.0.0'\n",
+        )
+        .unwrap();
+        let build_script = directory.path().join("build.rs");
+        fs::write(&build_script, b"fn main() {}\n").unwrap();
+        let reviewed = canonical_tree_digest(directory.path(), None).unwrap();
+        let reviewed_hex = hex(&reviewed);
+        validate_expected_tree(
+            &reviewed,
+            &reviewed_hex,
+            directory.path(),
+            "registry build-script",
+        )
+        .unwrap();
+
+        fs::write(&build_script, b"fn main() { panic!(\"tampered\") }\n").unwrap();
+        let tampered = canonical_tree_digest(directory.path(), None).unwrap();
+        let error = validate_expected_tree(
+            &tampered,
+            &reviewed_hex,
+            directory.path(),
+            "registry build-script",
+        )
+        .unwrap_err();
+        assert!(error.contains("registry build-script closure content changed"));
+    }
+
+    #[test]
+    fn canonical_closure_identity_covers_manifests_and_nested_sources() {
+        let directory = TestDirectory::new();
+        let source = directory.path().join("src");
+        fs::create_dir(&source).unwrap();
+        let manifest = directory.path().join("Cargo.toml");
+        let library = source.join("lib.rs");
+        fs::write(&manifest, b"[package]\nname='fixture'\nversion='0.1.0'\n").unwrap();
+        fs::write(&library, b"pub fn reviewed() {}\n").unwrap();
+        let reviewed = canonical_tree_digest(directory.path(), None).unwrap();
+
+        fs::write(&manifest, b"[package]\nname='fixture'\nversion='0.1.1'\n").unwrap();
+        let manifest_drift = canonical_tree_digest(directory.path(), None).unwrap();
+        assert_ne!(manifest_drift, reviewed);
+
+        fs::write(&manifest, b"[package]\nname='fixture'\nversion='0.1.0'\n").unwrap();
+        fs::write(&library, b"pub fn substituted() {}\n").unwrap();
+        let source_drift = canonical_tree_digest(directory.path(), None).unwrap();
+        assert_ne!(source_drift, reviewed);
+    }
+
+    #[test]
+    fn reviewed_workspace_host_code_trees_match_their_complete_pins() {
+        let crates = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("cargo-fe2o3 has a workspace crates directory");
+        for (name, expected) in [
+            ("fe2o3-macros", TRUSTED_FE2O3_MACROS_TREE),
+            ("fe2o3-hip-sys", TRUSTED_FE2O3_HIP_SYS_TREE),
+        ] {
+            let root = crates.join(name);
+            assert_eq!(hex(&canonical_tree_digest(&root, None).unwrap()), expected);
         }
     }
 }
