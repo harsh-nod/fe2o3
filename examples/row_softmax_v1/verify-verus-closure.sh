@@ -28,7 +28,7 @@ root=$(CDPATH='' cd -- "$root_argument" 2>/dev/null && pwd) || {
 
 for tool in find sort stat wc sha256sum awk grep sed tr uname mktemp; do
     command -v "$tool" >/dev/null 2>&1 || {
-        printf 'FAIL: %s is required to authenticate the Verus closure\n' "$tool" >&2
+        printf 'FAIL: %s is required to measure the Verus closure\n' "$tool" >&2
         exit 1
     }
 done
@@ -162,5 +162,5 @@ fi
     exit 1
 }
 
-printf 'PASS: authenticated Verus release closure (%s files, %s bytes)\n' \
+printf 'PASS: pinned Verus release closure matched at this measurement (%s files, %s bytes)\n' \
     "$file_count" "$total_bytes"

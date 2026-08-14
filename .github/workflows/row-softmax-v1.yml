@@ -61,7 +61,7 @@ jobs:
         run: examples/row_softmax_v1/run-verus.sh
 
   host-contract:
-    name: Host contract and source authentication
+    name: Host contract and fail-closed source checks
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -86,3 +86,20 @@ jobs:
         run: >-
           cargo clippy --locked --manifest-path examples/row_softmax_v1/Cargo.toml
           --all-targets --all-features -- -D warnings
+
+  reviewed-host-prerequisite:
+    if: ${{ github.repository == 'harsh-nod/fe2o3' }}
+    name: Reviewed controller prerequisite and point-in-time row proof
+    runs-on: [self-hosted, linux, x64, fe2o3-verus-reviewed-host-v1]
+    timeout-minutes: 50
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Exercise authenticated Verus V2 controller
+        run: scripts/ci-authenticated-verus-reviewed-host.sh
+
+      - name: Run point-in-time row-softmax proof
+        env:
+          VERUS: /home/harsh/factory/.tools/verus-0.2026.08.02.b677dd5/verus-x86-linux/verus
+        run: examples/row_softmax_v1/run-verus.sh

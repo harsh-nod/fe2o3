@@ -8,6 +8,7 @@ const DUPLICATE_WRITER: &[u8] = include_bytes!("../verus/negative/duplicate_writ
 const LANE_PLUS_ONE: &[u8] = include_bytes!("../verus/negative/lane_plus_one_out_of_bounds.rs");
 const WRONG_NUMERATOR: &[u8] = include_bytes!("../verus/negative/wrong_numerator_index.rs");
 const VERUS_CLOSURE_MANIFEST: &[u8] = include_bytes!("../verus/VERUS_CLOSURE_MANIFEST");
+const SOURCE_SCANNER: &str = include_str!("../check-proof-source.py");
 const RUNNER: &str = include_str!("../run-verus.sh");
 const README: &str = include_str!("../README.md");
 
@@ -53,7 +54,7 @@ fn proof_and_negative_mutations_have_exact_source_pins() {
 }
 
 #[test]
-fn proof_names_all_layers_and_has_no_shortcuts() {
+fn proof_names_all_layers_and_the_exp_allowlist() {
     let proof = std::str::from_utf8(PROOF).unwrap();
     let theorem_markers = [
         "pub proof fn fixed_row_is_nonempty_v1",
@@ -88,18 +89,24 @@ fn proof_names_all_layers_and_has_no_shortcuts() {
     ] {
         assert!(proof.contains(marker), "missing contract marker {marker}");
     }
-    for source in [PROOF, DUPLICATE_WRITER, LANE_PLUS_ONE, WRONG_NUMERATOR] {
-        let source = std::str::from_utf8(source).unwrap();
-        let normalized: String = source
-            .chars()
-            .filter(|character| !character.is_whitespace())
-            .collect();
-        for shortcut in ["admit(", "assume(", "#[verifier::external_body]"] {
-            assert!(
-                !normalized.contains(shortcut),
-                "forbidden normalized construct {shortcut}"
-            );
-        }
+}
+
+#[test]
+fn source_scanner_is_token_aware_and_fail_closed() {
+    for marker in [
+        "unicodedata.normalize(\"NFKC\"",
+        "category.startswith(\"C\") or category.startswith(\"Z\")",
+        "source.startswith(\"/*\", cursor)",
+        "depth += 1",
+        "raw_string_end(source, cursor)",
+        "character_literal_end(source, cursor",
+        "FORBIDDEN_IDENTIFIERS",
+        "ALLOWED_UNINTERP_DECLARATION",
+    ] {
+        assert!(
+            SOURCE_SCANNER.contains(marker),
+            "missing scanner boundary {marker}"
+        );
     }
 }
 
@@ -129,6 +136,8 @@ fn documentation_states_the_numeric_and_artifact_boundaries() {
         "address-set facts only",
         "not compute or establish normalization.",
         "ISA, HSACO, loading, launch",
+        "same UID can modify and restore",
+        "not authenticated execution",
     ] {
         assert!(
             README.contains(statement),
@@ -164,7 +173,7 @@ fn pinned_verus_identity_and_release_closure_are_exact() {
 }
 
 #[test]
-fn runner_uses_the_authenticated_solver_under_a_minimal_environment() {
+fn runner_uses_the_pinned_solver_and_pre_post_closure_measurements() {
     for marker in [
         "verify-verus-closure.sh",
         "\"$env_path\" -i",
@@ -174,6 +183,11 @@ fn runner_uses_the_authenticated_solver_under_a_minimal_environment() {
     ] {
         assert!(RUNNER.contains(marker), "missing runner boundary {marker}");
     }
+    assert_eq!(
+        RUNNER.matches("\"$closure_checker\"").count(),
+        2,
+        "runner must measure the closure immediately before and after proof execution"
+    );
     assert!(!RUNNER.contains("VERUS_Z3_PATH=${VERUS_Z3_PATH"));
 }
 

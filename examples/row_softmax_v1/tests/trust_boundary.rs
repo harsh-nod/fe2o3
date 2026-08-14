@@ -33,15 +33,78 @@ fn copy_tree(source: &Path, destination: &Path) {
     }
 }
 
-#[test]
-fn whitespace_separated_assume_false_is_rejected() {
+fn run_source_checker(relative_fixture: &str) -> std::process::Output {
     let checker = manifest().join("check-proof-source.sh");
-    let fixture = manifest().join("tests/fixtures/forbidden-assume-whitespace.rs");
-    let output = Command::new(checker).arg(fixture).output().unwrap();
+    Command::new(checker)
+        .arg(manifest().join(relative_fixture))
+        .output()
+        .unwrap()
+}
 
-    assert_eq!(output.status.code(), Some(1));
-    let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("forbidden normalized construct assume("));
+#[test]
+fn scanner_accepts_forbidden_words_only_in_comments_and_strings() {
+    let output = run_source_checker("tests/fixtures/source-scanner/accept/strings-and-comments.rs");
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn scanner_rejects_split_tokens_unicode_format_controls_and_other_uninterp() {
+    let cases = [
+        (
+            "tests/fixtures/forbidden-assume-whitespace.rs",
+            "forbidden proof token 'assume'",
+        ),
+        (
+            "tests/fixtures/source-scanner/reject/assume-block-comment.rs",
+            "forbidden proof token 'assume'",
+        ),
+        (
+            "tests/fixtures/source-scanner/reject/assume-after-lifetime.rs",
+            "forbidden proof token 'assume'",
+        ),
+        (
+            "tests/fixtures/source-scanner/reject/admit-block-comment.rs",
+            "forbidden proof token 'admit'",
+        ),
+        (
+            "tests/fixtures/source-scanner/reject/assume-unicode-format.rs",
+            "forbidden Unicode Cf U+200E",
+        ),
+        (
+            "tests/fixtures/source-scanner/reject/external-body-block-comment.rs",
+            "forbidden proof token 'external_body'",
+        ),
+        (
+            "tests/fixtures/source-scanner/reject/external-type-specification.rs",
+            "forbidden proof token 'external_type_specification'",
+        ),
+        (
+            "tests/fixtures/source-scanner/reject/other-uninterp.rs",
+            "unapproved uninterpreted declaration",
+        ),
+    ];
+
+    let unicode_fixture = fs::read_to_string(
+        manifest().join("tests/fixtures/source-scanner/reject/assume-unicode-format.rs"),
+    )
+    .unwrap();
+    assert!(unicode_fixture.contains('\u{200e}'));
+
+    for (fixture, expected) in cases {
+        let output = run_source_checker(fixture);
+
+        assert_eq!(output.status.code(), Some(1), "accepted {fixture}");
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(
+            stderr.contains(expected),
+            "unexpected rejection for {fixture}: {stderr}"
+        );
+    }
 }
 
 #[test]

@@ -59,12 +59,13 @@ Three negative mutations must be rejected: `lane + 1` indexing, a duplicate
 lane-63/lane-0 output owner, and an actual stable-softmax specification mutation
 that substitutes lane zero's numerator for every output lane.
 
-## Authentication boundary
+## Measurement and trust boundary
 
 `run-verus.sh` fails closed unless the Verus version and complete extracted
-release closure match. The closure manifest binds all 190 regular files by
-relative path, mode, length, and SHA-256, including `verus`, `rust_verify`, `z3`,
-compiled support artifacts, and the complete 130-file `vstd` source subtree.
+release closure match when measured before and after proof execution. The
+closure manifest binds all 190 regular files by relative path, mode, length,
+and SHA-256, including `verus`, `rust_verify`, `z3`, compiled support artifacts,
+and the complete 130-file `vstd` source subtree.
 The launcher identity remains:
 
 ```text
@@ -72,16 +73,36 @@ Version: 0.2026.08.02.b677dd5
 SHA-256: ad2669f579d898ede53f2bf84e80a1daf4e3578739b0f5807ef209a0c9f382dd
 ```
 
-The source checker removes all whitespace before conservatively rejecting any
-`admit`, `assume`, or external-body construct; a regression fixture contains
-`assume ( false )`. Ordinary Rust tests pin every proof source and exercise both
-that rejection and replacement of `rust_verify`. These checks authenticate the
-named source and extracted Verus release closure. Proof execution clears the
-ambient environment and fixes `VERUS_Z3_PATH` to the authenticated sibling. The
-checks do **not** authenticate the host OS, shell utilities, dynamic libraries,
-or rustup toolchain, and they do **not** bind the proof to generated LLVM IR,
-ISA, HSACO, loading, launch, or observed GPU execution. The positive proof pin
-is 11,143 bytes with SHA-256
+The source checker is a small fail-closed Python lexer. It removes line comments,
+nested block comments, and ordinary/raw string and character literals before
+examining tokens; normalizes identifiers with Unicode NFKC; and rejects Unicode
+format, control, and separator categories. It rejects `admit`, `assume`, axiom,
+trusted, external-body, and external specification tokens even when comments
+split adjacent syntax. The only allowed `uninterp` declaration is exactly
+`pub uninterp spec fn exp_real_v1(value: real) -> real;`. Its regression corpus
+covers split block-comment tokens, U+200E, strings, nested comments, and a second
+uninterpreted declaration. Ordinary Rust tests pin every proof source and
+exercise both scanner rejection and replacement of `rust_verify`.
+
+These are point-in-time source and release-closure measurements, not an
+immutable or descriptor-bound Verus execution. Proof execution clears the
+ambient environment and fixes `VERUS_Z3_PATH` to the measured sibling. A
+malicious process with the same UID can modify and restore proof, checker, or
+closure files between measurements and use; that attack is explicitly outside
+this example's local trust model. The checks also do **not** authenticate the
+host OS, shell and Python utilities, dynamic libraries, or rustup toolchain, and
+they do **not** bind the proof to generated LLVM IR, ISA, HSACO, loading, launch,
+or observed GPU execution.
+
+The reviewed-host CI job first runs the repository's authenticated Verus V2
+controller tests, which use sealed executable snapshots and descriptor-bound
+inputs. Stock Verus and Z3 do not implement that controller's nonce protocol,
+so this row proof still runs through the point-in-time path afterward. The
+controller test is a deployment prerequisite. It is not authenticated execution
+of the row proof. It also makes no same-UID replacement-resistance claim for
+that proof.
+
+The positive proof pin is 11,143 bytes with SHA-256
 `61f1453d267a8e9183334dfe1ca37bcd69c92df4b55d56606907627c5691a9f9`;
 all three negative sources are pinned independently as well.
 

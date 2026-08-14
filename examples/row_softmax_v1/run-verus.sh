@@ -199,4 +199,5 @@ run_rejected duplicate_writer "$negative_dir/duplicate_writer.rs" \
 run_rejected wrong_numerator_index "$negative_dir/wrong_numerator_index.rs" \
     'mutated_stable_softmax_spec_preserves_lane_numerator_correspondence_v1'
 
+"$closure_checker" "$verus_root" "$closure_manifest"
 printf 'PASS: row-softmax V1 proof and 3 expected rejections\n'
