@@ -139,6 +139,23 @@ exact Verus release archive, verifies the pinned archive and extracted
 executable digests, and fails closed before proof execution if either artifact
 is unavailable or differs.
 
+## Observed direct-global tile
+
+The repository also contains an ignored, opt-in HSA harness for an externally
+supplied `gfx942:xnack-` COV6 artifact. On 2026-08-14 it accepted and executed
+one 6,672-byte artifact with SHA-256
+`681077be1108c57d9d887f94afdd0ec3700ed2c86d73e66d2b229d6b418d0c66` on
+MI300X. The exact test passed its bitwise 16x16 oracle, immutable-input,
+adjacent-canary, synchronous-completion, executable-identity, and terminal
+unload checks in 40.69 seconds. The complete command and boundary are recorded
+in [`docs/tiled-gemm-v1-mi300x-observation.md`](../../docs/tiled-gemm-v1-mi300x-observation.md).
+
+This is non-authoritative hardware observation for the direct-global one-tile
+profile. The artifact was supplied separately, uses no LDS, and is not joined
+to the Rust source by authenticated compiler evidence. It establishes neither
+a production tiled GEMM nor general shapes, multiple K phases, tails, protected
+launch authority, compiler refinement, memory safety, or race freedom.
+
 Run the host checks independently of the root workspace:
 
 ```text

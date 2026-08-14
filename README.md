@@ -42,10 +42,13 @@ The public [tiled GEMM V1 host scaffold](examples/tiled_gemm_v1/README.md)
 adds unforgeable shape, extent, launch-geometry, and exact parsed-target
 witnesses for one `16x16x16` BF16/F32 wave64 profile. Its bitwise host evidence
 is restricted to a pinned finite BF16 corpus and is checked independently in
-debug, release, doctest, Clippy, and dedicated CI lanes. Exact target and rustc
-physical-ABI-bound matrix lowering, LDS movement, full GEMM loops, HSACO,
-hardware execution, and proofs remain open. This scaffold does not promote a
-CUDA-Oxide parity row.
+debug, release, doctest, Clippy, and dedicated CI lanes. A separate guarded HSA
+harness has now run one exact digest-pinned, direct-global tile on MI300X; see
+the [non-authoritative observation](docs/tiled-gemm-v1-mi300x-observation.md).
+That result does not join the Rust source to the supplied HSACO. Source-derived
+final HSACO, protected load and launch, production LDS movement and full GEMM
+loops, compiler refinement, and machine memory, race, and numerical proofs
+remain open. This checkpoint does not promote a CUDA-Oxide parity row.
 
 The intended end state is:
 
