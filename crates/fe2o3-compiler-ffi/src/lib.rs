@@ -480,6 +480,24 @@ impl<'envelope> CompilerFfiDirectionalSymbolsV1<'envelope> {
         self.exports.iter().map(|contract| contract.symbol.as_str())
     }
 
+    /// Iterates the inert semantic identities bound to imports in canonical order.
+    pub fn import_semantic_identities(
+        &self,
+    ) -> impl Clone + DoubleEndedIterator<Item = &'envelope [u8; 32]> + ExactSizeIterator + '_ {
+        self.imports
+            .iter()
+            .map(|contract| &contract.semantic_identity)
+    }
+
+    /// Iterates the inert semantic identities bound to exports in canonical order.
+    pub fn export_semantic_identities(
+        &self,
+    ) -> impl Clone + DoubleEndedIterator<Item = &'envelope [u8; 32]> + ExactSizeIterator + '_ {
+        self.exports
+            .iter()
+            .map(|contract| &contract.semantic_identity)
+    }
+
     pub const fn import_count(&self) -> usize {
         self.imports.len()
     }
@@ -1199,6 +1217,14 @@ mod tests {
 
         assert_eq!(projection.imports().collect::<Vec<_>>(), ["external_add"]);
         assert_eq!(projection.exports().collect::<Vec<_>>(), ["rust_helper"]);
+        assert_eq!(
+            projection.import_semantic_identities().collect::<Vec<_>>(),
+            [&[0x11; 32]]
+        );
+        assert_eq!(
+            projection.export_semantic_identities().collect::<Vec<_>>(),
+            [&[0x22; 32]]
+        );
         assert_eq!(projection.import_count(), 1);
         assert_eq!(projection.export_count(), 1);
         assert_eq!(projection.total_count(), 2);
