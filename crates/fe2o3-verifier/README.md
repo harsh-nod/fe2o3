@@ -20,6 +20,132 @@ canonical request is also sealed. The result file is anonymous and is sealed
 immediately after the recorder exits. `execute_authenticated_verus` remains a
 deprecated compatibility name and has the same recorder-only behavior.
 
+`execute_authenticated_verus_v2` is a separate, narrowly executable Linux
+x86_64 controller. It launches digest-pinned immutable solver and
+Verus snapshots as two independent stages. Each stage must implement the V2
+`PIDFD-NONCE2` `READY/START/RESULT/SEALED/DONE/ACK` protocol; stock Verus and
+Z3 do not implement this protocol. The controller binds the canonical request,
+exact source and named dependency blobs, reviewed process policy, launch challenge,
+post-observation stage nonce, both executable images, bounded stdout/stderr,
+and strict opaque result envelopes.
+
+Each target is created with `clone3(CLONE_PIDFD)` behind an assembly child gate.
+While the child is blocked before `execve`, the parent atomically retains its
+pidfd, opens its procfs directory, and applies `PTRACE_SEIZE` with
+`PTRACE_O_EXITKILL|PTRACE_O_TRACEEXEC`. Only then does it release the gate and
+require the exact initial `PTRACE_EVENT_EXEC`. Each checkpoint uses
+`PTRACE_INTERRUPT`, consumes only the exact `PTRACE_EVENT_STOP|SIGTRAP` status
+through nonblocking `waitpid(__WALL)`, and confirms procfs state `t` and the exact
+calling-thread tracer TID before and after observation. A target cannot cancel
+this ptrace stop with `SIGCONT` or a timer; unexpected signal-delivery and later
+exec stops fail closed. The final authenticated checkpoint is the only normal
+detach point. The policy identity binds the exact ptrace requests, options,
+events, and wait flags.
+
+The pidfd remains the lifecycle identity and is used for signal preflight, kill,
+exit detection, and reaping. The raw PID is used only where Linux's ptrace and
+`waitpid(__WALL)` APIs require the pid of the still-unreaped pidfd-owned tracee;
+there is no raw-PID signaling, process-group signaling, or PID-reuse fallback.
+Pidfd events are typed: ptrace `CLD_TRAPPED` notifications are never accepted as
+exit or confirmed cleanup. One deadline is created before spawn. The nonblocking
+pre-exec status pipe, ptrace waits, protocol polling, observations, and target
+exit use it. Pidfd signal permission is preflighted with signal zero.
+
+Both checkpoints require one thread; exact UID, GID, supplementary-group, and
+capability-bounding state; no inheritable, permitted, effective, or ambient
+capabilities; `no_new_privs`; the expected seccomp mode and filter count; and
+exact soft/hard address-space, data, file-size, and core limits. Every
+file-backed mapping is measured while stopped using fixed 64 KiB streaming
+buffers and reviewed per-file and aggregate bounds. For every file-backed
+executable VMA, the controller reads the target's exact live bytes and compares
+them byte-for-byte with the pinned backing-object slice, including zero fill
+beyond EOF; a backing-file digest is not substituted for live text. The first
+stable executable baseline binds normalized path/class, permissions, file
+offset, mapping length, backing length/digest, live digest, and an explicit live
+vDSO digest, and must match reviewed policy. The unreadable, kernel-emulated
+x86_64 vsyscall VMA receives a typed exact-range marker. Every anonymous mapping's
+range, class, permissions, and size is included in the ASLR-dependent checkpoint
+identity. W+X mappings and process-visible shared-writable executable aliases are
+rejected. Anonymous executable mappings are rejected except for the bounded
+kernel vDSO and exact x86_64 vsyscall mappings encoded in policy. The complete
+mapping, baseline, live executable-page, and security observations must remain
+unchanged at `DONE`.
+
+The controller reads `/proc/thread-self/status` before cloning and rejects root,
+unequal real/effective/saved/filesystem UID or GID tuples, a root supplementary
+group, active permitted/effective/inheritable/ambient capabilities, inherited
+seccomp filters, nonzero securebits, and non-default or auto-reaping `SIGCHLD`
+policy. A fixed x86_64 assembly launcher issues `clone3`; its child branch jumps
+directly into the assembly trampoline, while only the parent branch returns to
+Rust. The launcher and trampoline use prebuilt POD/C-string state, scalar loads,
+branches, and direct Linux syscalls only. Debug and release disassembly tests
+reject child-side calls, PLT, memcpy/memmove, allocator, panic, bounds-check, and
+Rust runtime paths after `clone3`. The trampoline clears active and ambient
+capabilities and installs a classic
+BPF seccomp filter before `execve`. That filter kills x32 syscalls; x86_64
+`clone`, `clone3`, `fork`, and `vfork`; credential and capability mutation;
+namespace entry/creation; and later `prctl` calls. Verified single-thread state
+therefore closes process and thread creation for this direct-stage protocol.
+The policy identity includes canonical bytes of the complete BPF instruction
+sequence, architecture and x32 constants, denied syscall numbers, the exact
+linked launcher/trampoline bytes, live-page bounds, and bounded anonymous-executable
+exceptions. All non-protocol descriptors remain close-on-exec.
+
+Cleanup never performs a blocking wait after signal failure. It accepts only
+terminal `CLD_EXITED`, `CLD_KILLED`, or `CLD_DUMPED` pidfd events, and uses
+nonblocking `waitid(P_PIDFD)` plus pidfd `poll` under a separate 500 ms cleanup
+deadline. A kill failure or cleanup timeout returns `TerminationUnconfirmed`;
+`Drop` uses the same bounded procedure. `PTRACE_O_EXITKILL` also kills a tracee
+if its controller thread exits unexpectedly. These rules bound userspace waiting
+but cannot bound a kernel syscall that itself fails to return.
+
+`READY` carries the launch challenge. Only after the first frozen observation
+and an empty control queue does the controller generate the unpredictable
+stage nonce and send `START`. After nonce-bound `RESULT`, the target is stopped
+again, queued `DONE` is rejected, and the controller requires and reads the
+immutable result seal before sending `SEALED`. A nonce-bound `DONE` is accepted
+only afterward. The result is reread after `DONE`, so post-`DONE` mutation is
+prevented by the retained memfd seals rather than detected by a timing race.
+
+The non-`Clone` `AuthenticatedVerusExecutionReceiptV2` authenticates that both
+direct process occurrences completed this controller protocol at the frozen
+checkpoints and exposes each role's stable reviewed executable-baseline identity.
+It does not claim exclusive measured-image execution between checkpoints:
+executable bytes changed and restored, an RW-to-RX-to-RW transition, a mapping
+created then removed, or a writable alias opened then closed entirely while the
+target runs is outside the receipt. `PTRACE_O_TRACEEXEC` rejects a later exec that
+remains observable, but this is not a claim against every transient same-process
+substitution surface. The receipt also does not constrain protocol-descriptor
+delegation or unrestricted IPC, prove bounded kernel/filesystem I/O, establish
+that Verus invoked the solver, interpret either opaque result as a proof,
+authenticate the external policy reviewer, or grant proof, publication,
+module-load, or kernel-launch authority. A production increment still needs a
+reviewed adapter that faithfully drives pinned stock Verus and its solver while
+preserving these bindings.
+
+The V2 fixture tests use the checked-in
+`tests/fixtures/authenticated-verus-v2-closure-v1.txt` manifest. It pins the
+debug/release fixture image, exact runtime-library paths, lengths and SHA-256
+digests, exact solver/verus closure digests, normalized executable-baseline
+digests and counts, live executable-byte totals, and reviewed vDSO digest for the
+recorded x86_64 GNU host; tests do not derive policy by replaying a failed
+controller observation. A host whose loader, runtime closure, executable
+baseline, or vDSO differs must receive an explicitly reviewed manifest update
+rather than silently recalibrating.
+
+The workspace dev profile strips debuginfo only from `fe2o3-verifier`; independent
+checkout builds confirm that package scope is sufficient, without changing other
+workspace dev artifacts. The fixture regression parses raw ELF section metadata
+and rejects `SHF_COMPRESSED`, `.zdebug_*`, every name containing a debug/DWARF/GDB/
+STABS/CTF/BTF marker, legacy `.line`/`.mdebug`/`.pdr`, debug-link/alternate-link/
+mini-debug delegation, and embedded checkout-root bytes. The only exception is one
+`SHT_PROGBITS` `.debug_gdb_scripts` section with exact `ALLOC|MERGE|STRINGS` flags,
+alignment and entry size 1, and the path-independent
+`gdb_load_rust_pretty_printers.py` marker bytes. Actual GNU and gABI compressed
+DWARF mutations and a bounded two-root Cargo probe enforce this policy; the probe
+also compares an unrelated package against a no-profile control. Release profile
+bytes and their pinned closure/baseline records are unaffected by this rule.
+
 The authenticated recorder receives a fresh 256-bit challenge and canonical
 invocation, policy, request, claimed-verifier, claimed-solver, and recorder
 digests. Its strict legacy
@@ -248,6 +374,12 @@ model.
   recorder execution, not claimed verifier or solver execution, and has no
   proof, runtime, module-load, kernel-launch, or compiler-refinement capability.
   `AuthenticatedVerusExecutionEvidenceV1` is a deprecated compatibility alias.
+- `AuthenticatedVerusExecutionReceiptV2` has private construction and is not
+  `Clone`. It authenticates two direct process occurrences under the V2
+  protocol at frozen checkpoints, not exclusive measured-image execution,
+  Verus proof semantics, or a Verus-created solver child. Its runtime-closure
+  and stable executable-baseline allowlists and review digest are caller-provided,
+  and it grants no proof, publication, module-load, or kernel-launch authority.
 - `AuthenticatedProofExecutableBindingV1` is also evidence only. The legacy
   conversion and artifact-binding paths remain explicitly descriptive and
   cannot acquire authority by supplying unmeasured identities.
@@ -270,12 +402,16 @@ model.
 
 ## Current limitations
 
-There is no reviewed production Verus recorder, pinned execution-policy trust
-root, signature or remote-attestation scheme, dynamic-library closure
-measurement, compiler-refinement proof, or GPU runtime authority. Authentication
-is local and relative to caller-selected policy, and only the recorder is
-launched. The sealed execution path currently requires Linux `memfd_create`,
-`fcntl` seals, and `/proc/self/fd`.
+There is no reviewed production Verus adapter, pinned execution-policy trust
+root, signature or remote-attestation scheme, compiler-refinement proof, or GPU
+runtime authority. V1 authentication is local and relative to caller-selected
+policy, and only its recorder is launched. V2 additionally launches both
+protocol tools and measures their file-backed runtime closures, frozen anonymous
+mappings, live executable VMA bytes, backing-object agreement, and stable
+executable baselines at both checkpoints, but its review digest remains
+caller-provided and its two direct stages do not prove a real Verus-to-solver
+invocation relationship. Both sealed paths currently require Linux
+`memfd_create`, `fcntl` seals, ptrace/pidfd support, and `/proc`.
 
 The control-flow binding does not yet prove optimized MIR or machine CFG
 equivalence. It gives those later compiler-refinement checks a canonical exact
@@ -300,9 +436,27 @@ locking claim is made; a compromised kernel is also outside this local trust
 boundary. The V1 ledger is bounded to 65,536 consumed recorder-report identities and fails
 closed at capacity.
 
-A timeout kills and reaps the direct recorder child, but does not yet establish
-a process group or forcibly terminate arbitrary descendants. The existing
-legacy `build_invocation_plan` and `execute_recorder` APIs still accept
-caller-supplied tool identities and intentionally cannot construct
+A V1 timeout kills and reaps the direct recorder child, but does not establish
+a process group or forcibly terminate arbitrary descendants. V2 does not use
+process groups. Its pidfd identifies and reaps exactly the atomically created
+direct target, while pre-exec seccomp denial and verified single-thread state
+prevent that target from creating threads or descendants. V2 does not sandbox
+ordinary filesystem, network, or IPC syscalls or prove the meaning of opaque
+results. The target may use unrestricted IPC, delegate protocol descriptors to a
+pre-existing process, or arrange writable aliases outside its own visible map.
+The checkpoints do not detect RW-to-RX-to-RW transitions, executable-page changes
+that are restored, aliases opened and closed, mappings created and removed, or an
+`exec` and return occurring wholly between observations. Hashing mapped files,
+procfs records, and live executable pages uses synchronous kernel/filesystem I/O;
+deadline checks occur between operations, but a blocking syscall is not forcibly
+cancelled. Cleanup reports `TerminationUnconfirmed` after its userspace deadline,
+but cannot terminate a task stuck indefinitely in uninterruptible kernel work.
+The exact vsyscall mapping is unreadable and has only a typed marker, not a live
+content hash. V2 trusts the Linux kernel, procfs, pidfd/seccomp/memfd
+implementations, `/dev/urandom`, and the externally reviewed policy. Hostile
+kernel behavior and transient or external same-UID interference remain outside
+the claim.
+The existing legacy `build_invocation_plan` and `execute_recorder` APIs still
+accept caller-supplied tool identities and intentionally cannot construct
 `AuthenticatedRecorderOutputV1` (or its deprecated
 `AuthenticatedVerusExecutionEvidenceV1` alias).

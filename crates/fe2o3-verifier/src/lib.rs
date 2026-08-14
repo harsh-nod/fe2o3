@@ -1,18 +1,23 @@
 //! Bounded planning and result records for an external GPU-kernel verifier.
 //!
-//! This crate constructs canonical proof requests and executes an evidence
-//! recorder through a bounded, shell-free process boundary. The Linux path
-//! measures and seals recorder, claimed-verifier, and claimed-solver images,
-//! but launches only the recorder. Its challenge-bound output does not prove
-//! that the claimed verifier or solver ran. A recorder-reported `proved`
-//! outcome remains a report, not independently authenticated proof evidence.
-//! The legacy planning path retains caller-supplied identities for compatibility.
+//! V1 constructs canonical proof requests and executes an evidence recorder
+//! through a bounded, shell-free process boundary. It measures and seals
+//! recorder, claimed-verifier, and claimed-solver images, but launches only the
+//! recorder. On Linux x86_64, V2 separately launches pinned solver and Verus
+//! snapshots under a pidfd-owned, two-nonce, process-creation-denied controller
+//! protocol with ptrace-unresumable checkpoints. It records normalized executable
+//! baselines, anonymous mappings, live executable-page bytes, and runtime/security
+//! state. Those checkpoint identities do not imply exclusive measured-image
+//! execution between observations. Stock Verus/Z3 integration remains future
+//! work, and neither path grants proof or GPU authority. The legacy planning path
+//! retains caller-supplied identities for compatibility.
 
 mod alpha_zeta_manifest;
 mod alpha_zeta_proof;
 mod artifact_record;
 mod authenticated_execution;
 mod authenticated_proof_binding;
+mod authenticated_verus_execution_v2;
 mod control_flow_binding;
 mod executor;
 mod model;
@@ -60,6 +65,14 @@ pub use authenticated_execution::{
     AuthenticatedResultError, BoundExecutionPayloadV1, DataOperation, ExecutableMeasurementV1,
     ExecutableOperation, ExecutableRole, MAX_EXECUTABLE_BYTES, MeasuredRecorderInputsV1,
     execute_authenticated_recorder,
+};
+pub use authenticated_verus_execution_v2::{
+    AuthenticatedVerusExecutionDependencyV2, AuthenticatedVerusExecutionErrorKindV2,
+    AuthenticatedVerusExecutionErrorV2, AuthenticatedVerusExecutionInputsV2,
+    AuthenticatedVerusExecutionPolicyV2, AuthenticatedVerusExecutionReceiptV2,
+    AuthenticatedVerusProcessOccurrenceV2, AuthenticatedVerusToolExecutionV2,
+    BoundExecutionPayloadV2, ProcessFailureV2, RuntimeClosureMeasurementV2,
+    RuntimeExecutableBaselineV2, VerusExecutionRoleV2, execute_authenticated_verus_v2,
 };
 // Deprecated compatibility exports. Despite their Verus-oriented names, these
 // authenticate and execute only the recorder; they do not show that Verus or a
