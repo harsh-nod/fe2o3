@@ -185,6 +185,7 @@ struct MetadataFacts {
     sgpr_spill_count: u32,
     vgpr_spill_count: u32,
     uses_dynamic_stack: bool,
+    device_enqueue_symbol: Option<String>,
     arguments: Vec<ArgumentFact>,
     hidden_arguments: Vec<HiddenArgumentFact>,
     binding_count: usize,
@@ -223,6 +224,7 @@ impl MetadataFacts {
             sgpr_spill_count: 0,
             vgpr_spill_count: 0,
             uses_dynamic_stack: false,
+            device_enqueue_symbol: None,
             arguments: (0_u64..2)
                 .flat_map(|slice| {
                     let base = slice * 16;
@@ -300,6 +302,10 @@ fn validate_metadata(facts: &MetadataFacts, kernel_symbol: &str) -> Result<(), B
     require(
         matches!(facts.workgroup_processor_mode, None | Some(false)),
         "Row Softmax V1 must not enable WGP mode on gfx942",
+    )?;
+    require(
+        facts.device_enqueue_symbol.is_none(),
+        "Row Softmax V1 must not declare a device enqueue symbol",
     )?;
     let mut normalized = facts.clone();
     normalized.arguments = expected.arguments.clone();
@@ -446,6 +452,7 @@ fn inspect_metadata(bytes: &[u8], kernel_symbol: &str) -> Result<BoundKernelEntr
         sgpr_spill_count: kernel.sgpr_spill_count().unwrap_or(0),
         vgpr_spill_count: kernel.vgpr_spill_count().unwrap_or(0),
         uses_dynamic_stack: kernel.uses_dynamic_stack(),
+        device_enqueue_symbol: kernel.device_enqueue_symbol().map(str::to_owned),
         arguments: kernel
             .explicit_arguments()
             .iter()
@@ -2538,6 +2545,7 @@ mod tests {
             |facts| facts.normal_kernel = false,
             |facts| facts.sgpr_spill_count = 1,
             |facts| facts.vgpr_spill_count = 1,
+            |facts| facts.device_enqueue_symbol = Some("row_softmax_v1_enqueue".to_owned()),
             |facts| facts.arguments[3].kind = ExplicitValueKind::GlobalBuffer,
             |facts| facts.arguments[0].address_space = None,
             |facts| facts.binding_count = 0,
@@ -2614,6 +2622,20 @@ mod tests {
             let mut hostile = expected.clone();
             mutate(&mut hostile);
             assert!(validate_metadata(&hostile, ROW_SOFTMAX_V1_EXPORT).is_err());
+        }
+    }
+
+    #[test]
+    fn device_enqueue_metadata_is_rejected_before_runtime_boundary() {
+        for symbol in ["row_softmax_v1_enqueue", "alternate_enqueue"] {
+            let mut hostile = MetadataFacts::expected(ROW_SOFTMAX_V1_EXPORT);
+            hostile.device_enqueue_symbol = Some(symbol.to_owned());
+            let error = validate_metadata(&hostile, ROW_SOFTMAX_V1_EXPORT)
+                .expect_err("device enqueue metadata must fail closed");
+            assert_eq!(
+                error.to_string(),
+                "Row Softmax V1 must not declare a device enqueue symbol"
+            );
         }
     }
 
