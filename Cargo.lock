@@ -647,10 +647,12 @@ dependencies = [
 name = "fe2o3-hsaco-finalize"
 version = "0.1.0"
 dependencies = [
+ "dialect-amdgcn",
  "fe2o3-artifact-transaction",
  "fe2o3-compiler-ffi",
  "fe2o3-hsaco",
  "fe2o3-kernel-descriptor",
+ "fe2o3-kernel-ir",
  "object 0.39.1",
  "reserved-fe2o3-symbols",
  "rmpv",

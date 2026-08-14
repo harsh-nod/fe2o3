@@ -537,6 +537,45 @@ impl fmt::Debug for CompilerFfiEnvelopeV1 {
 }
 
 impl CompilerFfiEnvelopeV1 {
+    /// Constructs the canonical target/COV envelope for a compiler module with
+    /// no device-FFI imports or exports.
+    ///
+    /// This is intentionally separate from the count-first FFI builder, whose
+    /// empty input remains an error. The value is neutral handoff data and does
+    /// not authenticate compiler origin or grant link authority.
+    pub fn for_module_without_device_ffi(
+        target: DeviceTargetV1,
+        code_object_version: CodeObjectVersion,
+    ) -> Result<Self, CompilerFfiEnvelopeError> {
+        let target_text = target.to_string();
+        validate_text(
+            &target_text,
+            MAX_DEVICE_FFI_TARGET_BYTES_V1,
+            CompilerFfiTextFieldV1::Target,
+            true,
+        )?;
+        let exact_size = exact_envelope_size(target, &[])?;
+        let mut canonical_bytes = Vec::with_capacity(exact_size);
+        canonical_bytes.extend_from_slice(ENVELOPE_DOMAIN_V1);
+        push_text(&mut canonical_bytes, &target_text);
+        canonical_bytes.push(code_object_version_tag(code_object_version) as u8);
+        push_u32(&mut canonical_bytes, 0);
+        debug_assert_eq!(canonical_bytes.len(), exact_size);
+        let identity = CompilerFfiEnvelopeIdentityV1(Sha256::digest(&canonical_bytes).into());
+        Ok(Self {
+            target,
+            code_object_version,
+            contracts: Vec::new(),
+            canonical_bytes,
+            identity,
+            inspection: CompilerFfiEnvelopeInspectionV1 {
+                import_count: 0,
+                export_count: 0,
+                requires_compiler_module_definition_count: 0,
+            },
+        })
+    }
+
     pub const fn target(&self) -> DeviceTargetV1 {
         self.target
     }

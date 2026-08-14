@@ -674,6 +674,36 @@ mod tests {
         .unwrap()
     }
 
+    #[test]
+    fn ffi_free_compiler_module_handoff_round_trips_canonically() {
+        use CompilerModuleSymbolRoleV1 as Role;
+
+        let envelope =
+            CompilerFfiEnvelopeV1::for_module_without_device_ffi(target(), CodeObjectVersion::V5)
+                .unwrap();
+        let manifest = CompilerModuleSymbolManifestV1::new([
+            (Role::KernelEntry, "kernel"),
+            (Role::KernelDescriptor, "kernel.kd"),
+        ])
+        .unwrap();
+        let handoff = CompilerModuleHandoffV2::new(
+            CompilerModuleKindV1::LlvmTextIr,
+            target(),
+            CodeObjectVersion::V5,
+            envelope,
+            manifest,
+            LLVM_IR,
+        )
+        .unwrap();
+
+        let decoded = CompilerModuleHandoffV2::decode(handoff.canonical_bytes()).unwrap();
+        assert_eq!(decoded, handoff);
+        assert_eq!(decoded.envelope().inspection().import_count(), 0);
+        assert_eq!(decoded.envelope().inspection().export_count(), 0);
+        assert!(!decoded.envelope().authenticates_compiler_origin());
+        assert!(!decoded.envelope().grants_link_authority());
+    }
+
     #[derive(Clone, Copy)]
     struct Offsets {
         module_digest: usize,

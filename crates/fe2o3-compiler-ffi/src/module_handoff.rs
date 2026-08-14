@@ -574,9 +574,14 @@ pub(super) fn decode_envelope(
     let code_object_version = decode_code_object_version(cursor.byte()?)?;
     let count = cursor.u32_as_usize()?;
     if count == 0 {
-        return Err(CompilerModuleHandoffErrorV1::Envelope(
-            CompilerFfiEnvelopeError::EmptyEnvelope,
-        ));
+        cursor.finish()?;
+        let envelope =
+            CompilerFfiEnvelopeV1::for_module_without_device_ffi(target, code_object_version)
+                .map_err(CompilerModuleHandoffErrorV1::Envelope)?;
+        if envelope.canonical_bytes() != bytes {
+            return Err(CompilerModuleHandoffErrorV1::NonCanonicalEncoding);
+        }
+        return Ok(envelope);
     }
     if count > MAX_COMPILER_FFI_CONTRACTS_V1 {
         return Err(CompilerModuleHandoffErrorV1::Envelope(
