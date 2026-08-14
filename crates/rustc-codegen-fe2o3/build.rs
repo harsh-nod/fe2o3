@@ -2,6 +2,17 @@ use std::process::Command;
 
 fn main() {
     println!("cargo:rerun-if-env-changed=RUSTC");
+    println!("cargo:rerun-if-env-changed=FE2O3_BUILD_CARGO_FE2O3_EXECUTABLE_SHA256_V1");
+    if let Ok(value) = std::env::var("FE2O3_BUILD_CARGO_FE2O3_EXECUTABLE_SHA256_V1") {
+        assert!(
+            value.len() == 64
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+            "cargo-fe2o3 executable identity must be exactly 64 lowercase hexadecimal digits"
+        );
+        println!("cargo:rustc-env=FE2O3_BUILD_CARGO_FE2O3_EXECUTABLE_SHA256_V1={value}");
+    }
 
     let rustc = std::env::var("RUSTC").unwrap_or_else(|_| "rustc".to_string());
     let output = Command::new(rustc)

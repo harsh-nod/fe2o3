@@ -9,6 +9,7 @@
 
 use std::collections::BTreeSet;
 use std::error::Error;
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 
 use fe2o3_artifacts::{
@@ -63,6 +64,13 @@ const CARGO_METADATA_OBSERVATION_DOMAIN_V1: &[u8] =
 const CARGO_METADATA_BUILD_OBSERVATION_ENV_V2: &str = "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2";
 const CARGO_METADATA_BUILD_OBSERVATION_DOMAIN_V2: &[u8] =
     b"FE2O3/CARGO-METADATA-BUILD-OBSERVATION/V2\0";
+const ROW_SOFTMAX_EFFECTIVE_RUSTC_ARGV_DOMAIN_V1: &[u8] =
+    b"FE2O3/ROW-SOFTMAX/EFFECTIVE-RUSTC-ARGV/V1\0";
+const MANAGED_ARTIFACT_DIRECTORY: &str =
+    fe2o3_artifact_transaction::BROKERED_ARTIFACT_DIRECTORY_PATH_V1;
+const MANAGED_CODEGEN_BACKEND: &str = fe2o3_artifact_transaction::BROKERED_CODEGEN_BACKEND_PATH_V1;
+const MAX_MANAGED_RUSTC_ARGUMENTS: usize = 4096;
+const MAX_MANAGED_RUSTC_ARGUMENT_BYTES: usize = 1024 * 1024;
 const CARGO_GENERATED_METADATA_SHAPE_V1: &[u8] = b"one-16-byte-lowercase-hex-token";
 const COLLECTED_AUTHORITY_DOMAIN_V1: &[u8] = b"fe2o3.row-softmax.collected-authority.v1";
 const ABI_BINDING_DOMAIN_V1: &[u8] = b"fe2o3.row-softmax.abi-binding.v1";
@@ -184,6 +192,7 @@ struct ManagedBuildAuthorityV1 {
     session: [u8; 16],
     invocation: [u8; 32],
     cargo_metadata_transcript: [u8; 32],
+    broker_executable: [u8; 32],
 }
 
 impl ManagedBuildAuthorityV1 {
@@ -204,6 +213,7 @@ impl ManagedBuildAuthorityV1 {
             session: [0x11; 16],
             invocation: [0x22; 32],
             cargo_metadata_transcript: [0x03; 32],
+            broker_executable: [0x04; 32],
         }
     }
 }
@@ -991,13 +1001,23 @@ fn require_managed_build_authority(
 ) -> Result<ManagedBuildAuthorityV1, CollectedRowSoftmaxErrorV1> {
     let observed = decode_lower_sha256_environment(CARGO_METADATA_BUILD_OBSERVATION_ENV_V2)
         .map_err(|detail| CollectedRowSoftmaxErrorV1::CompilerSemantics { detail })?;
-    admit_managed_build_authority(attempt, metadata, observed)
+    let observed_invocation = observe_managed_wrapper_effective_rustc_argv()?;
+    let broker_executable = consume_brokered_invocation_authority(attempt, observed_invocation)?;
+    admit_managed_build_authority(
+        attempt,
+        metadata,
+        observed,
+        observed_invocation,
+        broker_executable,
+    )
 }
 
 fn admit_managed_build_authority(
     attempt: fe2o3_artifact_transaction::BuildAttempt,
     metadata: &CargoMetadataBuildObservationV1,
     observed_metadata_transcript: [u8; 32],
+    observed_invocation: [u8; 32],
+    broker_executable: [u8; 32],
 ) -> Result<ManagedBuildAuthorityV1, CollectedRowSoftmaxErrorV1> {
     let mut digest = Sha256::new();
     digest.update(CARGO_METADATA_BUILD_OBSERVATION_DOMAIN_V2);
@@ -1016,11 +1036,21 @@ fn admit_managed_build_authority(
             ),
         });
     }
+    if attempt.invocation().as_bytes() != &observed_invocation {
+        return Err(CollectedRowSoftmaxErrorV1::CompilerSemantics {
+            detail: format!(
+                "managed wrapper effective rustc argv does not match build attempt invocation: expected {}, found {}",
+                encode_hex(attempt.invocation().as_bytes()),
+                encode_hex(&observed_invocation)
+            ),
+        });
+    }
     let authority = ManagedBuildAuthorityV1 {
         generation: attempt.generation(),
         session: *attempt.session().as_bytes(),
-        invocation: *attempt.invocation().as_bytes(),
+        invocation: observed_invocation,
         cargo_metadata_transcript: observed_metadata_transcript,
+        broker_executable,
     };
     authority
         .validate()
@@ -1028,6 +1058,248 @@ fn admit_managed_build_authority(
             detail: detail.to_owned(),
         })?;
     Ok(authority)
+}
+
+fn observe_managed_wrapper_effective_rustc_argv() -> Result<[u8; 32], CollectedRowSoftmaxErrorV1> {
+    let argv = std::env::args_os().collect::<Vec<_>>();
+    validate_managed_wrapper_effective_rustc_argv(&argv)
+        .map_err(|detail| CollectedRowSoftmaxErrorV1::CompilerSemantics { detail })?;
+
+    let artifact_directory = std::fs::metadata(MANAGED_ARTIFACT_DIRECTORY).map_err(|error| {
+        CollectedRowSoftmaxErrorV1::CompilerSemantics {
+            detail: format!(
+                "managed wrapper brokered artifact-directory capability is unavailable: {error}"
+            ),
+        }
+    })?;
+    if !artifact_directory.is_dir()
+        || std::env::var_os("FE2O3_HSACO_DIR").as_deref()
+            != Some(OsStr::new(MANAGED_ARTIFACT_DIRECTORY))
+    {
+        return Err(CollectedRowSoftmaxErrorV1::CompilerSemantics {
+            detail:
+                "managed wrapper did not install the exact brokered artifact-directory capability"
+                    .to_owned(),
+        });
+    }
+    let backend = std::fs::metadata(MANAGED_CODEGEN_BACKEND).map_err(|error| {
+        CollectedRowSoftmaxErrorV1::CompilerSemantics {
+            detail: format!(
+                "managed wrapper brokered codegen-backend capability is unavailable: {error}"
+            ),
+        }
+    })?;
+    if !backend.is_file() {
+        return Err(CollectedRowSoftmaxErrorV1::CompilerSemantics {
+            detail: "managed wrapper codegen-backend capability is not a regular file".to_owned(),
+        });
+    }
+
+    Ok(effective_rustc_argv_identity(&argv))
+}
+
+fn validate_managed_wrapper_effective_rustc_argv(argv: &[OsString]) -> Result<(), String> {
+    if argv.len() < 5 || argv.len() > MAX_MANAGED_RUSTC_ARGUMENTS {
+        return Err("managed wrapper effective rustc argv has an invalid count".to_owned());
+    }
+    if argv.iter().any(|argument| {
+        os_bytes(argument).len() > MAX_MANAGED_RUSTC_ARGUMENT_BYTES
+            || os_bytes(argument).starts_with(b"@")
+    }) {
+        return Err(
+            "managed wrapper effective rustc argv contains an oversized argument or response file"
+                .to_owned(),
+        );
+    }
+
+    let tail = &argv[argv.len() - 4..];
+    let backend_selector = format!("-Zcodegen-backend={MANAGED_CODEGEN_BACKEND}");
+    if tail[0] != "-Zmir-enable-passes=-JumpThreading"
+        || tail[1] != "--cfg"
+        || tail[3] != backend_selector.as_str()
+    {
+        return Err(
+            "managed wrapper effective rustc argv omitted or changed its exact managed tail"
+                .to_owned(),
+        );
+    }
+    let generation = os_bytes(&tail[2]);
+    let prefix = b"fe2o3_codegen_generation=\"";
+    if generation.len() != prefix.len() + 32 + 1
+        || !generation.starts_with(prefix)
+        || generation.last() != Some(&b'"')
+        || generation[prefix.len()..generation.len() - 1]
+            .iter()
+            .any(|byte| !byte.is_ascii_digit() && !(b'a'..=b'f').contains(byte))
+    {
+        return Err(
+            "managed wrapper effective rustc argv has a malformed generation selector".to_owned(),
+        );
+    }
+    for (index, argument) in argv[..argv.len() - 4].iter().enumerate() {
+        let bytes = os_bytes(argument);
+        if bytes.starts_with(b"-Zcodegen-backend")
+            || (bytes == b"-Z"
+                && argv
+                    .get(index + 1)
+                    .is_some_and(|next| os_bytes(next).starts_with(b"codegen-backend")))
+        {
+            return Err(
+                "managed wrapper effective rustc argv contains a preexisting backend selector"
+                    .to_owned(),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn effective_rustc_argv_identity(argv: &[OsString]) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(ROW_SOFTMAX_EFFECTIVE_RUSTC_ARGV_DOMAIN_V1);
+    digest.update((argv.len() as u64).to_le_bytes());
+    for argument in argv {
+        hash_field(&mut digest, os_bytes(argument));
+    }
+    digest.finalize().into()
+}
+
+fn consume_brokered_invocation_authority(
+    attempt: fe2o3_artifact_transaction::BuildAttempt,
+    effective_argv_sha256: [u8; 32],
+) -> Result<[u8; 32], CollectedRowSoftmaxErrorV1> {
+    use std::io::{Read as _, Write as _};
+    use std::os::fd::{FromRawFd as _, RawFd};
+    use std::os::unix::net::UnixStream;
+    use std::path::Path;
+    use std::time::Duration;
+
+    const INVOCATION_AUTHORITY_FD: RawFd =
+        fe2o3_artifact_transaction::BROKERED_INVOCATION_AUTHORITY_CHILD_FD_V1;
+    let expected_broker = embedded_cargo_fe2o3_executable_identity()?;
+    let mut credentials = libc::ucred {
+        pid: 0,
+        uid: 0,
+        gid: 0,
+    };
+    let mut credentials_bytes = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    // SAFETY: the pointers name a correctly sized initialized `ucred`, and getsockopt only reads
+    // the process-local reserved descriptor without taking ownership of it.
+    if unsafe {
+        libc::getsockopt(
+            INVOCATION_AUTHORITY_FD,
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            std::ptr::addr_of_mut!(credentials).cast(),
+            &mut credentials_bytes,
+        )
+    } != 0
+        || credentials_bytes as usize != std::mem::size_of::<libc::ucred>()
+        || credentials.pid <= 0
+        || credentials.uid != unsafe { libc::geteuid() }
+    {
+        return Err(CollectedRowSoftmaxErrorV1::CompilerSemantics {
+            detail: "brokered managed-wrapper invocation capability has no authenticated peer"
+                .to_owned(),
+        });
+    }
+    let broker_path = format!("/proc/{}/exe", credentials.pid);
+    let observed_broker = fe2o3_process_identity::measure_executable_sha256_v3(Path::new(
+        &broker_path,
+    ))
+    .map_err(|error| CollectedRowSoftmaxErrorV1::CompilerSemantics {
+        detail: format!("cannot authenticate invocation-capability broker executable: {error}"),
+    })?;
+    if observed_broker != expected_broker {
+        return Err(CollectedRowSoftmaxErrorV1::CompilerSemantics {
+            detail: format!(
+                "invocation-capability peer is not the cargo-fe2o3 executable pinned into this backend: expected {}, found {}",
+                encode_hex(&expected_broker),
+                encode_hex(&observed_broker),
+            ),
+        });
+    }
+
+    let claim = fe2o3_artifact_transaction::BrokeredInvocationCapabilityClaimV1::new(
+        attempt,
+        effective_argv_sha256,
+    )
+    .map_err(|error| CollectedRowSoftmaxErrorV1::CompilerSemantics {
+        detail: format!("invalid brokered managed-wrapper invocation claim: {error}"),
+    })?;
+    // SAFETY: successful peer authentication above leaves this function as the unique consumer
+    // of the fixed descriptor installed by cargo-fe2o3 for this rustc process.
+    let mut stream = unsafe { UnixStream::from_raw_fd(INVOCATION_AUTHORITY_FD) };
+    let timeout = Some(Duration::from_secs(30));
+    stream.set_read_timeout(timeout).map_err(|error| {
+        CollectedRowSoftmaxErrorV1::CompilerSemantics {
+            detail: format!("cannot bound invocation-capability read: {error}"),
+        }
+    })?;
+    stream.set_write_timeout(timeout).map_err(|error| {
+        CollectedRowSoftmaxErrorV1::CompilerSemantics {
+            detail: format!("cannot bound invocation-capability write: {error}"),
+        }
+    })?;
+    stream
+        .write_all(
+            &fe2o3_artifact_transaction::BrokeredInvocationCapabilityRequestV1::Consume(claim)
+                .encode(),
+        )
+        .map_err(|error| CollectedRowSoftmaxErrorV1::CompilerSemantics {
+            detail: format!("cannot consume brokered managed-wrapper invocation: {error}"),
+        })?;
+    let mut response = [0_u8; 16];
+    stream.read_exact(&mut response).map_err(|error| {
+        CollectedRowSoftmaxErrorV1::CompilerSemantics {
+            detail: format!("broker did not admit the managed-wrapper invocation: {error}"),
+        }
+    })?;
+    if response != *fe2o3_artifact_transaction::BROKERED_INVOCATION_ADMITTED_V1 {
+        return Err(CollectedRowSoftmaxErrorV1::CompilerSemantics {
+            detail: "broker returned a malformed managed-wrapper invocation admission".to_owned(),
+        });
+    }
+    Ok(observed_broker)
+}
+
+fn embedded_cargo_fe2o3_executable_identity() -> Result<[u8; 32], CollectedRowSoftmaxErrorV1> {
+    let encoded = option_env!("FE2O3_BUILD_CARGO_FE2O3_EXECUTABLE_SHA256_V1").ok_or_else(|| {
+        CollectedRowSoftmaxErrorV1::CompilerSemantics {
+            detail: "backend has no cargo-fe2o3 executable identity for broker authentication"
+                .to_owned(),
+        }
+    })?;
+    decode_lower_sha256(encoded)
+        .map_err(|detail| CollectedRowSoftmaxErrorV1::CompilerSemantics { detail })
+}
+
+fn decode_lower_sha256(encoded: &str) -> Result<[u8; 32], String> {
+    if encoded.len() != 64
+        || !encoded
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err("embedded cargo-fe2o3 executable identity is malformed".to_owned());
+    }
+    let mut digest = [0; 32];
+    for (output, pair) in digest.iter_mut().zip(encoded.as_bytes().chunks_exact(2)) {
+        *output = (lower_hex_value(pair[0]) << 4) | lower_hex_value(pair[1]);
+    }
+    if digest == [0; 32] {
+        return Err("embedded cargo-fe2o3 executable identity is zero".to_owned());
+    }
+    Ok(digest)
+}
+
+#[cfg(unix)]
+fn os_bytes(value: &OsStr) -> &[u8] {
+    use std::os::unix::ffi::OsStrExt as _;
+    value.as_bytes()
+}
+
+#[cfg(not(unix))]
+fn os_bytes(value: &OsStr) -> &[u8] {
+    value.to_str().unwrap_or_default().as_bytes()
 }
 
 fn decode_lower_sha256_environment(name: &str) -> Result<[u8; 32], String> {
@@ -1585,6 +1857,10 @@ fn collected_authority_commitment(authority: &RowSoftmaxFrontendAuthorityV1) -> 
         &mut digest,
         &authority.managed_build_authority.cargo_metadata_transcript,
     );
+    hash_field(
+        &mut digest,
+        &authority.managed_build_authority.broker_executable,
+    );
     digest.finalize().into()
 }
 
@@ -1639,6 +1915,8 @@ fn validate_frontend_authority(
         Some("row-softmax trusted provider authority")
     } else if managed_build_authority_is_invalid {
         Some("managed wrapper build attempt")
+    } else if authority.managed_build_authority.broker_executable == [0; 32] {
+        Some("brokered managed-wrapper invocation authority")
     } else if authority.managed_build_authority.cargo_metadata_transcript
         != authority
             .provider_authority
@@ -1762,6 +2040,99 @@ fn encode_hex(bytes: &[u8; 32]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn managed_argv() -> Vec<OsString> {
+        [
+            "/toolchain/bin/rustc",
+            "src/lib.rs",
+            "--crate-name",
+            "row_softmax",
+            "-Cmetadata=0123456789abcdef",
+            "-Cmetadata=fe2o3-row-softmax-v1-reviewed",
+            "-Zmir-enable-passes=-JumpThreading",
+            "--cfg",
+            "fe2o3_codegen_generation=\"0123456789abcdef0123456789abcdef\"",
+            "-Zcodegen-backend=/proc/./self/fd/198",
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .collect()
+    }
+
+    #[test]
+    fn managed_argv_is_reconstructed_independently_and_rejects_malformed_shapes() {
+        let argv = managed_argv();
+        validate_managed_wrapper_effective_rustc_argv(&argv).expect("exact managed argv");
+
+        let mut oracle = Sha256::new();
+        oracle.update(ROW_SOFTMAX_EFFECTIVE_RUSTC_ARGV_DOMAIN_V1);
+        oracle.update((argv.len() as u64).to_le_bytes());
+        for argument in &argv {
+            let bytes = os_bytes(argument);
+            oracle.update((bytes.len() as u64).to_le_bytes());
+            oracle.update(bytes);
+        }
+        assert_eq!(
+            effective_rustc_argv_identity(&argv),
+            <[u8; 32]>::from(oracle.finalize())
+        );
+
+        let mut malformed_generation = argv.clone();
+        malformed_generation[argv.len() - 2] =
+            OsString::from("fe2o3_codegen_generation=\"ABCDEF\"");
+        assert!(validate_managed_wrapper_effective_rustc_argv(&malformed_generation).is_err());
+
+        let mut substituted_backend = argv.clone();
+        substituted_backend[argv.len() - 1] =
+            OsString::from("-Zcodegen-backend=/tmp/substitute.so");
+        assert!(validate_managed_wrapper_effective_rustc_argv(&substituted_backend).is_err());
+
+        let mut reordered_tail = argv.clone();
+        reordered_tail.swap(argv.len() - 4, argv.len() - 3);
+        assert!(validate_managed_wrapper_effective_rustc_argv(&reordered_tail).is_err());
+
+        let mut duplicate_backend = argv.clone();
+        duplicate_backend.insert(1, OsString::from("-Zcodegen-backend=/tmp/earlier.so"));
+        assert!(validate_managed_wrapper_effective_rustc_argv(&duplicate_backend).is_err());
+
+        let mut response_file = argv;
+        response_file.insert(1, OsString::from("@attacker.rsp"));
+        assert!(validate_managed_wrapper_effective_rustc_argv(&response_file).is_err());
+    }
+
+    #[test]
+    fn managed_authority_requires_the_attempt_to_name_the_observed_argv() {
+        let admitted = require_compiler_semantics(&reviewed_compiler_semantics("0123456789abcdef"))
+            .expect("reviewed compiler semantics");
+        let metadata = admitted.cargo_metadata_build_observation;
+        let mut transcript = Sha256::new();
+        transcript.update(CARGO_METADATA_BUILD_OBSERVATION_DOMAIN_V2);
+        transcript.update((metadata.ordered_tokens.len() as u64).to_le_bytes());
+        for token in &metadata.ordered_tokens {
+            transcript.update((token.len() as u64).to_le_bytes());
+            transcript.update(token.as_bytes());
+        }
+        let transcript: [u8; 32] = transcript.finalize().into();
+        let attempt = fe2o3_artifact_transaction::BuildAttempt::from_env_value(&format!(
+            "1:{}:{}",
+            "11".repeat(16),
+            "44".repeat(32)
+        ))
+        .expect("canonical test attempt");
+
+        assert!(
+            admit_managed_build_authority(attempt, &metadata, transcript, [0x44; 32], [0x66; 32],)
+                .is_ok()
+        );
+        let mismatch =
+            admit_managed_build_authority(attempt, &metadata, transcript, [0x55; 32], [0x66; 32])
+                .expect_err("substituted observed argv must fail");
+        assert!(matches!(
+            mismatch,
+            CollectedRowSoftmaxErrorV1::CompilerSemantics { detail }
+                if detail.contains("effective rustc argv does not match build attempt invocation")
+        ));
+    }
 
     #[derive(Debug, Eq, PartialEq)]
     enum ReviewedRowSoftmaxOperation {
@@ -2244,6 +2615,10 @@ mod tests {
             (
                 |value| value.managed_build_authority.cargo_metadata_transcript[0] ^= 1,
                 "wrapper Cargo metadata transcript",
+            ),
+            (
+                |value| value.managed_build_authority.broker_executable = [0; 32],
+                "brokered managed-wrapper invocation authority",
             ),
         ];
         for (mutate, expected_field) in mutations {

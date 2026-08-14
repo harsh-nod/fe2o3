@@ -31,16 +31,21 @@ mod platform {
     use std::io::{self, IoSlice, IoSliceMut, Read, Write};
     use std::mem::MaybeUninit;
     use std::net::Shutdown;
-    use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
+    use std::os::fd::{AsFd, AsRawFd, BorrowedFd, IntoRawFd, OwnedFd};
     use std::os::linux::net::SocketAddrExt;
     use std::os::unix::fs::MetadataExt;
     use std::os::unix::net::{SocketAddr, UnixListener, UnixStream};
     use std::path::PathBuf;
+    use std::process::Command;
     use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
     use std::thread::{self, JoinHandle};
     use std::time::{Duration, Instant};
 
-    use fe2o3_artifact_transaction::BuildSession;
+    use fe2o3_artifact_transaction::{
+        BROKERED_INVOCATION_ADMITTED_V1, BROKERED_INVOCATION_PREPARED_V1,
+        BROKERED_INVOCATION_REQUEST_BYTES_V1, BrokeredInvocationCapabilityClaimV1,
+        BrokeredInvocationCapabilityRequestV1, BuildSession,
+    };
     use fe2o3_process_identity::LinuxObjectIdentityV3;
     use rustix::net::{
         RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, ReturnFlags, SendAncillaryBuffer,
@@ -71,6 +76,8 @@ mod platform {
     const MAX_PROC_STAT_BYTES: usize = 4096;
     const EXECUTABLE_PIN_ATTEMPTS: usize = 8;
     const RECEIVED_DESCRIPTOR_FLOOR: i32 = 199;
+    pub(crate) const INVOCATION_AUTHORITY_CHILD_FD_V1: i32 =
+        fe2o3_artifact_transaction::BROKERED_INVOCATION_AUTHORITY_CHILD_FD_V1;
     const BROKER_IO_TIMEOUT: Duration = Duration::from_secs(30);
     const MAX_ACTIVE_CONNECTIONS: usize = 64;
 
@@ -889,6 +896,100 @@ mod platform {
         pub(crate) backend: PinnedCodegenBackend,
         pub(crate) artifact: PinnedDirectory,
         pub(crate) pinned_cargo_image: Option<PinnedExecutable>,
+        pub(crate) invocation_authority: Option<BrokeredInvocationAuthorityV1>,
+    }
+
+    pub(crate) struct BrokeredInvocationAuthorityV1 {
+        stream: UnixStream,
+    }
+
+    impl BrokeredInvocationAuthorityV1 {
+        fn from_authenticated_stream(stream: UnixStream) -> Result<Self, String> {
+            let normalized = rustix::io::fcntl_dupfd_cloexec(&stream, RECEIVED_DESCRIPTOR_FLOOR)
+                .map_err(|error| {
+                    format!("failed to retain authenticated invocation capability: {error}")
+                })?;
+            Ok(Self {
+                stream: UnixStream::from(normalized),
+            })
+        }
+
+        pub(crate) fn release(self) -> Result<(), String> {
+            self.exchange(
+                BrokeredInvocationCapabilityRequestV1::Release,
+                BROKERED_INVOCATION_PREPARED_V1,
+            )
+        }
+
+        pub(crate) fn prepare(
+            &self,
+            claim: BrokeredInvocationCapabilityClaimV1,
+        ) -> Result<(), String> {
+            self.exchange(
+                BrokeredInvocationCapabilityRequestV1::Prepare(claim),
+                BROKERED_INVOCATION_PREPARED_V1,
+            )
+        }
+
+        fn exchange(
+            &self,
+            request: BrokeredInvocationCapabilityRequestV1,
+            expected: &[u8; 16],
+        ) -> Result<(), String> {
+            let mut stream = &self.stream;
+            stream
+                .write_all(&request.encode())
+                .map_err(|error| format!("failed to write invocation capability: {error}"))?;
+            let mut response = [0_u8; 16];
+            stream
+                .read_exact(&mut response)
+                .map_err(|error| format!("failed to read invocation capability: {error}"))?;
+            if &response != expected {
+                return Err("invocation capability returned a malformed response".to_owned());
+            }
+            Ok(())
+        }
+
+        pub(crate) fn inherit_for_child(&self, command: &mut Command) -> Result<(), String> {
+            // SAFETY: this only probes the process-local reserved descriptor.
+            let target = unsafe { BorrowedFd::borrow_raw(INVOCATION_AUTHORITY_CHILD_FD_V1) };
+            match rustix::io::fcntl_getfd(target) {
+                Err(rustix::io::Errno::BADF) => {}
+                Err(error) => {
+                    return Err(format!(
+                        "cannot inspect reserved invocation-capability descriptor: {error}"
+                    ));
+                }
+                Ok(_) => {
+                    return Err(
+                        "reserved invocation-capability descriptor is already occupied".to_owned(),
+                    );
+                }
+            }
+            let source = self.stream.as_raw_fd();
+            // SAFETY: `self.stream` remains alive through the synchronous spawn. The callback
+            // duplicates only that authenticated connected socket onto the reserved child FD.
+            unsafe {
+                use std::os::unix::process::CommandExt as _;
+                command.pre_exec(move || {
+                    let installed = rustix::io::fcntl_dupfd_cloexec(
+                        BorrowedFd::borrow_raw(source),
+                        INVOCATION_AUTHORITY_CHILD_FD_V1,
+                    )
+                    .map_err(std::io::Error::from)?;
+                    if installed.as_raw_fd() != INVOCATION_AUTHORITY_CHILD_FD_V1 {
+                        return Err(std::io::Error::from_raw_os_error(
+                            rustix::io::Errno::BUSY.raw_os_error(),
+                        ));
+                    }
+                    rustix::io::fcntl_setfd(&installed, rustix::io::FdFlags::empty())
+                        .map_err(std::io::Error::from)?;
+                    let _ = installed.into_raw_fd();
+                    Ok(())
+                });
+            }
+            Ok(())
+        }
     }
 
     pub(crate) fn receive(
@@ -953,7 +1054,11 @@ mod platform {
                 descriptors.extend(received);
             }
         }
-        decode_received_descriptors(descriptors, binding.profile)
+        let mut capabilities = decode_received_descriptors(descriptors, binding.profile)?;
+        capabilities.invocation_authority = Some(
+            BrokeredInvocationAuthorityV1::from_authenticated_stream(stream)?,
+        );
+        Ok(capabilities)
     }
 
     fn decode_received_descriptors(
@@ -1000,6 +1105,7 @@ mod platform {
             backend,
             artifact,
             pinned_cargo_image,
+            invocation_authority: None,
         })
     }
 
@@ -1152,7 +1258,50 @@ mod platform {
             }
             let response = response_bytes(&self.secret, challenge, request_auth);
             self.shutdown
-                .send_response(stream, &response, &descriptors, deadline)
+                .send_response(stream, &response, &descriptors, deadline)?;
+            self.serve_invocation_authority(stream)
+        }
+
+        fn serve_invocation_authority(&self, stream: &UnixStream) -> io::Result<()> {
+            let deadline = BrokerDeadline::new(Instant::now(), self.io_timeout);
+            let mut encoded = [0_u8; BROKERED_INVOCATION_REQUEST_BYTES_V1];
+            deadline.read_exact(stream, &mut encoded)?;
+            let request = BrokeredInvocationCapabilityRequestV1::decode(&encoded)
+                .map_err(|error| io::Error::new(io::ErrorKind::PermissionDenied, error))?;
+            let claim = match request {
+                BrokeredInvocationCapabilityRequestV1::Release => {
+                    let mut stream = stream;
+                    stream.write_all(BROKERED_INVOCATION_PREPARED_V1)?;
+                    return Ok(());
+                }
+                BrokeredInvocationCapabilityRequestV1::Prepare(claim)
+                    if claim.attempt().session() == self.session =>
+                {
+                    claim
+                }
+                BrokeredInvocationCapabilityRequestV1::Prepare(_)
+                | BrokeredInvocationCapabilityRequestV1::Consume(_) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "invocation capability preparation is not bound to this build session",
+                    ));
+                }
+            };
+            let mut stream = stream;
+            stream.write_all(BROKERED_INVOCATION_PREPARED_V1)?;
+
+            let deadline = BrokerDeadline::new(Instant::now(), self.io_timeout);
+            let mut encoded = [0_u8; BROKERED_INVOCATION_REQUEST_BYTES_V1];
+            deadline.read_exact(stream, &mut encoded)?;
+            if BrokeredInvocationCapabilityRequestV1::decode(&encoded)
+                != Ok(BrokeredInvocationCapabilityRequestV1::Consume(claim))
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "rustc did not consume the exact wrapper-prepared invocation claim",
+                ));
+            }
+            stream.write_all(BROKERED_INVOCATION_ADMITTED_V1)
         }
     }
 
@@ -1433,7 +1582,9 @@ mod platform {
         use std::sync::{Arc, Barrier};
         use std::time::{Duration, Instant};
 
-        use fe2o3_artifact_transaction::{BuildInvocation, ProducerIdentity, begin_build_attempt};
+        use fe2o3_artifact_transaction::{
+            BuildAttempt, BuildInvocation, ProducerIdentity, begin_build_attempt,
+        };
 
         use super::*;
 
@@ -1744,6 +1895,57 @@ mod platform {
             let transferred = receive_from(&route, session, binding).unwrap();
             assert_eq!(transferred.backend.sha256(), &backend_sha);
             assert!(transferred.pinned_cargo_image.is_none());
+        }
+
+        #[test]
+        fn invocation_authority_admits_only_the_exact_prepared_claim() {
+            fn attempt(invocation: u8) -> BuildAttempt {
+                BuildAttempt::from_env_value(&format!(
+                    "1:{}:{}",
+                    "42".repeat(16),
+                    format!("{invocation:02x}").repeat(32)
+                ))
+                .unwrap()
+            }
+
+            let (_temp, backend, artifact, pinned_cargo_image, session) = fixture();
+            let binding = ordinary_binding();
+            let broker =
+                CapabilityBroker::start(session, binding, &backend, &artifact, &pinned_cargo_image)
+                    .unwrap();
+            let route = BrokerRouteV2::parse(broker.route()).unwrap();
+            let mut transferred = receive_from(&route, session, binding).unwrap();
+            let authority = transferred
+                .invocation_authority
+                .take()
+                .expect("authenticated invocation authority");
+            let exact =
+                BrokeredInvocationCapabilityClaimV1::new(attempt(0x22), [0x22; 32]).unwrap();
+            authority.prepare(exact).unwrap();
+            authority
+                .exchange(
+                    BrokeredInvocationCapabilityRequestV1::Consume(exact),
+                    BROKERED_INVOCATION_ADMITTED_V1,
+                )
+                .unwrap();
+
+            let mut transferred = receive_from(&route, session, binding).unwrap();
+            let authority = transferred
+                .invocation_authority
+                .take()
+                .expect("authenticated invocation authority");
+            authority.prepare(exact).unwrap();
+            let substituted =
+                BrokeredInvocationCapabilityClaimV1::new(attempt(0x23), [0x23; 32]).unwrap();
+            assert!(
+                authority
+                    .exchange(
+                        BrokeredInvocationCapabilityRequestV1::Consume(substituted),
+                        BROKERED_INVOCATION_ADMITTED_V1,
+                    )
+                    .is_err(),
+                "broker admitted an invocation other than its exact prepared claim"
+            );
         }
 
         fn raw_descriptor_set(

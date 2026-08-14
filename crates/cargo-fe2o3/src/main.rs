@@ -38,8 +38,10 @@ const MANAGED_RUSTC_ARGS_ENV: &str = "FE2O3_MANAGED_RUSTC_ARGS_V1";
 const BUILD_SESSION_ENV: &str = "FE2O3_BUILD_SESSION_V1";
 const INTERNAL_RUNNER_ARG: &str = "__fe2o3-runner-v1";
 const BACKEND_BUILD_CHILD_FD: std::os::fd::RawFd = 196;
-const ARTIFACT_CHILD_FD: std::os::fd::RawFd = 197;
-const BACKEND_CHILD_FD: std::os::fd::RawFd = 198;
+const ARTIFACT_CHILD_FD: std::os::fd::RawFd =
+    fe2o3_artifact_transaction::BROKERED_ARTIFACT_DIRECTORY_CHILD_FD_V1;
+const BACKEND_CHILD_FD: std::os::fd::RawFd =
+    fe2o3_artifact_transaction::BROKERED_CODEGEN_BACKEND_CHILD_FD_V1;
 
 fn main() -> ExitCode {
     let raw_args = env::args_os().skip(1).collect::<Vec<_>>();
@@ -1063,6 +1065,12 @@ fn find_or_build_backend(target_dir: &project::PinnedDirectory) -> Result<PathBu
     }
 
     let source_root = fe2o3_source_root()?;
+    let cargo_fe2o3_executable = env::current_exe()
+        .map_err(|error| format!("failed to locate running cargo-fe2o3 executable: {error}"))?;
+    let cargo_fe2o3_sha256 = fe2o3_process_identity::measure_executable_sha256_v3(
+        &cargo_fe2o3_executable,
+    )
+    .map_err(|error| format!("failed to measure running cargo-fe2o3 executable: {error}"))?;
     let backend_target = target_dir.open_or_create_child(
         ".fe2o3-backend-build-v1",
         "isolated codegen-backend build directory",
@@ -1082,7 +1090,14 @@ fn find_or_build_backend(target_dir: &project::PinnedDirectory) -> Result<PathBu
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTC_WRAPPER")
-        .env_remove("RUSTC_WORKSPACE_WRAPPER");
+        .env_remove("RUSTC_WORKSPACE_WRAPPER")
+        .env(
+            "FE2O3_BUILD_CARGO_FE2O3_EXECUTABLE_SHA256_V1",
+            cargo_fe2o3_sha256
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>(),
+        );
     for name in [
         TARGET_ENV,
         BACKEND_ENV,

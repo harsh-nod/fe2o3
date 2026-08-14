@@ -8,6 +8,16 @@ const RELEASE_TAG_V1: u8 = 0;
 const PREPARE_TAG_V1: u8 = 1;
 const CONSUME_TAG_V1: u8 = 2;
 const HEADER_BYTES_V1: usize = REQUEST_MAGIC_V1.len() + 1 + 7;
+/// Reserved child descriptor carrying the live brokered invocation authority.
+pub const BROKERED_INVOCATION_AUTHORITY_CHILD_FD_V1: i32 = 195;
+/// Reserved child descriptor carrying the brokered artifact directory.
+pub const BROKERED_ARTIFACT_DIRECTORY_CHILD_FD_V1: i32 = 197;
+/// Reserved child descriptor carrying the brokered codegen backend.
+pub const BROKERED_CODEGEN_BACKEND_CHILD_FD_V1: i32 = 198;
+/// Canonical artifact-directory path installed by the managed wrapper.
+pub const BROKERED_ARTIFACT_DIRECTORY_PATH_V1: &str = "/proc/self/fd/197";
+/// Canonical codegen-backend path installed by the managed wrapper.
+pub const BROKERED_CODEGEN_BACKEND_PATH_V1: &str = "/proc/./self/fd/198";
 /// Exact byte length of one brokered invocation-capability request.
 pub const BROKERED_INVOCATION_REQUEST_BYTES_V1: usize = HEADER_BYTES_V1 + 8 + 16 + 32 + 32;
 /// Exact response acknowledging that the authenticated wrapper prepared a claim.

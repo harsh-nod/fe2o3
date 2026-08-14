@@ -11,12 +11,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 
 use fe2o3_artifact_transaction::{
-    AttemptScopedHsacoPublicationErrorV1, BackendPublicationReceiptV1, BuildAttempt,
-    BuildInvocation, BuildSession, EmitError, PersistedBackendReceiptV1, ProducerIdentity,
-    RecoveredWorkerV2PublicationIntentV1, WorkerV2PublicationIntentErrorV1, begin_build_attempt,
-    clear_worker_v2_publication_intent_v1, consume_compiler_module_handoff_v1, fail_build_attempt,
-    finish_build_attempt, publish_exact_hsaco_evidence_for_attempt_v1,
-    read_backend_publication_receipt_v1, recover_published_hsaco_claim_for_attempt_v1,
+    AttemptScopedHsacoPublicationErrorV1, BackendPublicationReceiptV1,
+    BrokeredInvocationCapabilityClaimV1, BuildAttempt, BuildInvocation, BuildSession, EmitError,
+    PersistedBackendReceiptV1, ProducerIdentity, RecoveredWorkerV2PublicationIntentV1,
+    WorkerV2PublicationIntentErrorV1, begin_build_attempt, clear_worker_v2_publication_intent_v1,
+    consume_compiler_module_handoff_v1, fail_build_attempt, finish_build_attempt,
+    publish_exact_hsaco_evidence_for_attempt_v1, read_backend_publication_receipt_v1,
+    recover_published_hsaco_claim_for_attempt_v1,
 };
 use fe2o3_hsaco_finalize::inspect_worker_v2_raw_hsaco_v1;
 use fe2o3_process_identity::{
@@ -58,6 +59,7 @@ const HSACO_DIR_ENV: &str = "FE2O3_HSACO_DIR";
 const TARGET_ENV: &str = "FE2O3_TARGET";
 const VERIFY_KERNEL_IR_ENV: &str = "FE2O3_VERIFY_KERNEL_IR";
 const SCALAR_GEMM_V1_PIPELINE: &str = "collected-scalar-gemm-v1";
+const ROW_SOFTMAX_V1_PIPELINE: &str = "collected-row-softmax-v1";
 const NON_PRODUCTION_REPRODUCTION_RECORD_ENV: &str =
     "FE2O3_NON_PRODUCTION_COMPILER_REPRODUCTION_RECORD_V1";
 const BUILD_SESSION_ENV: &str = "FE2O3_BUILD_SESSION_V1";
@@ -84,6 +86,8 @@ const MAX_PROC_STAT_BYTES: usize = 4096;
 const PROCESS_CONSISTENCY_EXPECTATION_FD_V3: std::os::fd::RawFd =
     fe2o3_process_identity::S09_PROCESS_CONSISTENCY_EXPECTATION_FD_V3;
 const BUILD_ATTEMPT_INPUT_DOMAIN: &[u8] = b"FE2O3/BUILD-ATTEMPT-INPUT/V2\0";
+const ROW_SOFTMAX_EFFECTIVE_RUSTC_ARGV_DOMAIN_V1: &[u8] =
+    b"FE2O3/ROW-SOFTMAX/EFFECTIVE-RUSTC-ARGV/V1\0";
 const CARGO_METADATA_BUILD_OBSERVATION_DOMAIN_V2: &[u8] =
     b"FE2O3/CARGO-METADATA-BUILD-OBSERVATION/V2\0";
 const WORKER_V2_CONFIG_ID_DOMAIN: &[u8] = b"FE2O3/WORKER-V2-CONFIG-ID/V1\0";
@@ -371,6 +375,7 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
                     worker_v2,
                     &current_dir,
                     compiler_capabilities.output_dir(),
+                    &managed_rustc_args,
                 )?)
             };
             (
@@ -553,6 +558,30 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
             .as_mut()
             .expect("S09 process-consistency expectation exists")
             .finalize(observation.prepared_rustc_command_sha256)?;
+    }
+    if std::env::var_os("FE2O3_CODEGEN_PIPELINE").as_deref()
+        == Some(OsStr::new(ROW_SOFTMAX_V1_PIPELINE))
+        && let Some(managed) = managed_attempt.as_ref()
+    {
+        let mut effective_argv = Vec::with_capacity(command.as_command().get_args().len() + 1);
+        effective_argv.push(command.configured_argv0().to_owned());
+        effective_argv.extend(command.as_command().get_args().map(OsString::from));
+        let observed = row_softmax_effective_rustc_argv_identity(&effective_argv);
+        if managed.attempt.invocation() != observed {
+            return Err(BindingWrapperError::BuildObservation(
+                "row-softmax build attempt does not bind the exact prepared rustc argv".to_owned(),
+            ));
+        }
+        let claim = BrokeredInvocationCapabilityClaimV1::new(managed.attempt, *observed.as_bytes())
+            .map_err(|error| BindingWrapperError::CapabilityBroker(error.to_string()))?;
+        compiler_capabilities
+            .as_ref()
+            .ok_or_else(|| {
+                BindingWrapperError::CapabilityBroker(
+                    "row-softmax invocation has no brokered compiler capabilities".to_owned(),
+                )
+            })?
+            .prepare_invocation_authority(claim)?;
     }
     let status = command.status();
     // Keep the in-memory descriptor alive across the exact spawn it describes.
@@ -1557,6 +1586,7 @@ fn validate_expected_worker_v2_identity(
 struct CompilerCapabilities {
     backend: PinnedCodegenBackend,
     artifact: PinnedDirectory,
+    invocation_authority: Option<capability_broker::BrokeredInvocationAuthorityV1>,
     output_dir: PathBuf,
     pinned_cargo_image_sha256: Option<[u8; 32]>,
 }
@@ -1565,8 +1595,23 @@ impl CompilerCapabilities {
     fn from_environment(
         binding: capability_broker::CapabilityBindingV2,
     ) -> Result<Self, BindingWrapperError> {
-        let transferred = capability_broker::receive(managed_build_session()?, binding)
+        let mut transferred = capability_broker::receive(managed_build_session()?, binding)
             .map_err(BindingWrapperError::CapabilityBroker)?;
+        let invocation_authority = transferred.invocation_authority.take().ok_or_else(|| {
+            BindingWrapperError::CapabilityBroker(
+                "capability broker omitted invocation authority".to_owned(),
+            )
+        })?;
+        let invocation_authority = if std::env::var_os("FE2O3_CODEGEN_PIPELINE").as_deref()
+            == Some(OsStr::new(ROW_SOFTMAX_V1_PIPELINE))
+        {
+            Some(invocation_authority)
+        } else {
+            invocation_authority
+                .release()
+                .map_err(BindingWrapperError::CapabilityBroker)?;
+            None
+        };
         let pinned_cargo_image_sha256 = transferred
             .pinned_cargo_image
             .as_ref()
@@ -1575,6 +1620,7 @@ impl CompilerCapabilities {
         Ok(Self {
             backend: transferred.backend,
             artifact: transferred.artifact,
+            invocation_authority,
             output_dir,
             pinned_cargo_image_sha256,
         })
@@ -1640,7 +1686,27 @@ impl CompilerCapabilities {
             CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2,
             hex(&self.backend.sha256()[..]),
         );
+        if let Some(authority) = &self.invocation_authority {
+            authority
+                .inherit_for_child(command)
+                .map_err(BindingWrapperError::CapabilityBroker)?;
+        }
         Ok(())
+    }
+
+    fn prepare_invocation_authority(
+        &self,
+        claim: BrokeredInvocationCapabilityClaimV1,
+    ) -> Result<(), BindingWrapperError> {
+        self.invocation_authority
+            .as_ref()
+            .ok_or_else(|| {
+                BindingWrapperError::CapabilityBroker(
+                    "row-softmax invocation authority was not retained".to_owned(),
+                )
+            })?
+            .prepare(claim)
+            .map_err(BindingWrapperError::CapabilityBroker)
     }
 }
 
@@ -1737,6 +1803,7 @@ fn prepare_managed_attempt(
     worker_v2: Option<PreparedWorkerV2Config>,
     current_dir: &std::path::Path,
     output_dir: &Path,
+    managed_rustc_args: &[OsString],
 ) -> Result<ManagedAttempt, BindingWrapperError> {
     let compile_environment_profile = worker_v2.as_ref().and_then(|config| {
         config.compile_environment_profile(compile.crate_name(), compile.source_path(), current_dir)
@@ -1749,7 +1816,17 @@ fn prepare_managed_attempt(
     let producer =
         ProducerIdentity::from_codegen(compile.crate_name(), Some(compile.source_path()))
             .map_err(BindingWrapperError::Artifact)?;
-    let invocation = derive_build_attempt_input(compile.argv(), worker_v2.as_ref(), current_dir);
+    let invocation = if std::env::var_os("FE2O3_CODEGEN_PIPELINE").as_deref()
+        == Some(OsStr::new(ROW_SOFTMAX_V1_PIPELINE))
+    {
+        let mut effective_argv =
+            Vec::with_capacity(compile.argv().len() + managed_rustc_args.len());
+        effective_argv.extend_from_slice(compile.argv());
+        effective_argv.extend_from_slice(managed_rustc_args);
+        row_softmax_effective_rustc_argv_identity(&effective_argv)
+    } else {
+        derive_build_attempt_input(compile.argv(), worker_v2.as_ref(), current_dir)
+    };
     let (attempt, worker_v2) = if let Some(config) = worker_v2 {
         let resume = WorkerV2ResumeStoreV1::open(output_dir, &producer)
             .map_err(BindingWrapperError::WorkerV2Restart)?;
@@ -2348,6 +2425,16 @@ fn hash_bytes(digest: &mut Sha256, bytes: &[u8]) {
     digest.update(bytes);
 }
 
+fn row_softmax_effective_rustc_argv_identity(argv: &[OsString]) -> BuildInvocation {
+    let mut digest = Sha256::new();
+    digest.update(ROW_SOFTMAX_EFFECTIVE_RUSTC_ARGV_DOMAIN_V1);
+    digest.update((argv.len() as u64).to_le_bytes());
+    for argument in argv {
+        hash_bytes(&mut digest, os_bytes(argument));
+    }
+    BuildInvocation::from_bytes(digest.finalize().into())
+}
+
 fn is_cargo_stdin_probe(argv: &[OsString]) -> bool {
     argv.get(1).is_some_and(|argument| argument == "-")
         && argv.iter().skip(2).any(|argument| {
@@ -2454,16 +2541,17 @@ mod tests {
         LinuxObjectIdentityV3, OBSERVED_PARENT_PID_BUILD_OBSERVATION_ENV_V2,
         OBSERVED_PARENT_START_TIME_BUILD_OBSERVATION_ENV_V2,
         PINNED_CARGO_IMAGE_BUILD_OBSERVATION_ENV_V2, PreparedRustcConsistencyExpectation,
-        WORKER_BUILD_IDENTITY_OBSERVATION_ENV_V2, WORKER_CONFIG_BUILD_OBSERVATION_ENV_V2,
-        WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2, append_prepared_rustc_arguments,
-        canonicalize_rustc_metadata, configure_build_observation_environment,
-        configure_worker_build_observation_environment, decode_managed_rustc_args,
-        derive_build_attempt_input_with_config_identity, is_cargo_stdin_probe,
-        materialize_reviewed_child_environment, materialize_s09_child_environment,
-        materialize_scalar_gemm_v1_child_environment, measure_build_executable,
-        observe_pinned_cargo_image_and_parent, ordered_metadata_values, os_bytes,
-        prepared_rustc_command_sha256, process_start_time_ticks, reject_uninspectable_rustc_args,
-        resolve_command_executable_with_path,
+        ROW_SOFTMAX_EFFECTIVE_RUSTC_ARGV_DOMAIN_V1, WORKER_BUILD_IDENTITY_OBSERVATION_ENV_V2,
+        WORKER_CONFIG_BUILD_OBSERVATION_ENV_V2, WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2,
+        append_prepared_rustc_arguments, canonicalize_rustc_metadata,
+        configure_build_observation_environment, configure_worker_build_observation_environment,
+        decode_managed_rustc_args, derive_build_attempt_input_with_config_identity,
+        is_cargo_stdin_probe, materialize_reviewed_child_environment,
+        materialize_s09_child_environment, materialize_scalar_gemm_v1_child_environment,
+        measure_build_executable, observe_pinned_cargo_image_and_parent, ordered_metadata_values,
+        os_bytes, prepared_rustc_command_sha256, process_start_time_ticks,
+        reject_uninspectable_rustc_args, resolve_command_executable_with_path,
+        row_softmax_effective_rustc_argv_identity,
     };
     use crate::inert_rustc_invocation_capture::InertRustcInvocationCaptureV2;
     use crate::pinned_executable::PinnedExecutable;
@@ -2869,6 +2957,47 @@ mod tests {
         assert_ne!(
             derive_build_attempt_input_with_config_identity(&first, None, &current_dir),
             derive_build_attempt_input_with_config_identity(&second, None, &current_dir)
+        );
+    }
+
+    #[test]
+    fn row_softmax_attempt_identity_covers_the_exact_effective_rustc_argv() {
+        let argv = args(&[
+            "/toolchain/bin/rustc",
+            "src/lib.rs",
+            "--crate-name",
+            "row_softmax",
+            "-Zmir-enable-passes=-JumpThreading",
+            "--cfg",
+            "fe2o3_codegen_generation=\"0123456789abcdef0123456789abcdef\"",
+            "-Zcodegen-backend=/proc/./self/fd/198",
+        ]);
+        let identity = row_softmax_effective_rustc_argv_identity(&argv);
+
+        let mut oracle = sha2::Sha256::new();
+        oracle.update(ROW_SOFTMAX_EFFECTIVE_RUSTC_ARGV_DOMAIN_V1);
+        oracle.update((argv.len() as u64).to_le_bytes());
+        for argument in &argv {
+            let bytes = os_bytes(argument);
+            oracle.update((bytes.len() as u64).to_le_bytes());
+            oracle.update(bytes);
+        }
+        assert_eq!(identity.as_bytes(), &<[u8; 32]>::from(oracle.finalize()));
+
+        for index in 0..argv.len() {
+            let mut changed = argv.clone();
+            changed[index].push("-changed");
+            assert_ne!(
+                row_softmax_effective_rustc_argv_identity(&changed),
+                identity,
+                "argv[{index}] was not bound"
+            );
+        }
+        let mut reordered = argv.clone();
+        reordered.swap(1, 2);
+        assert_ne!(
+            row_softmax_effective_rustc_argv_identity(&reordered),
+            identity
         );
     }
 

@@ -7,7 +7,7 @@ use std::os::unix::ffi::OsStrExt as _;
 use std::os::unix::fs::{
     DirBuilderExt as _, FileExt as _, OpenOptionsExt as _, PermissionsExt as _,
 };
-use std::os::unix::net::UnixDatagram;
+use std::os::unix::net::{UnixDatagram, UnixStream};
 use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Output, Stdio};
@@ -21,14 +21,7 @@ use fe2o3_artifact_transaction::{
     BuildInvocation, BuildSession, ProducerIdentity, begin_build_attempt,
     consume_compiler_module_handoff_v1,
 };
-use fe2o3_compiler_ffi::{
-    CodeObjectVersion, CompilerDescriptorSourceV1, CompilerModuleHandoffV2,
-    CompilerModuleSymbolRoleV1,
-};
-use fe2o3_kernel_descriptor::{
-    AccessMode, AliasSemantics, BlockSizeV1, OwnershipSemantics, PhysicalAbiComponentKind,
-    ScalarTypeV1,
-};
+use fe2o3_compiler_ffi::CompilerModuleHandoffV2;
 use sha2::{Digest as _, Sha256};
 
 const PIPELINE: &str = "collected-executable-scalar-control-flow-v2";
@@ -39,12 +32,6 @@ const TILED_GEMM_PIPELINE: &str = "collected-tiled-gemm-v1";
 const TILED_GEMM_FIXTURE: &str = include_str!("fixtures/collected-tiled-gemm-v1/src/lib.rs");
 const ROW_SOFTMAX_PIPELINE: &str = "collected-row-softmax-v1";
 const ROW_SOFTMAX_FIXTURE: &str = include_str!("fixtures/collected-row-softmax-v1/src/lib.rs");
-// Reviewed direct-rustc fixture commitment, pinned independently from the
-// producer's private authority value and section writer.
-const EXPECTED_ROW_SOFTMAX_AUTHORITY_COMMITMENT: [u8; 32] = [
-    0x1d, 0x4e, 0x57, 0x48, 0x3e, 0x83, 0x20, 0xfa, 0x3f, 0xf0, 0xda, 0x85, 0xab, 0xbb, 0x1f, 0xea,
-    0x87, 0x47, 0x05, 0x1c, 0x25, 0x41, 0x8b, 0x35, 0x88, 0xbb, 0x40, 0xad, 0x7f, 0xeb, 0x74, 0xee,
-];
 const BUILD_HELPER_ENV: &str = "FE2O3_SCALAR_CF_ISOLATED_BUILD_HELPER";
 const BUILD_HELPER_SOCKET_ENV: &str = "FE2O3_SCALAR_CF_BUILD_SOCKET_FD";
 const BUILD_HELPER_WORKSPACE_ENV: &str = "FE2O3_SCALAR_CF_BUILD_WORKSPACE";
@@ -966,354 +953,27 @@ fn compile_tiled_gemm(
         .expect("compile tiled GEMM fixture within deadline")
 }
 
-fn compile_row_softmax(
+fn compile_row_softmax_direct(
     workspace: &Path,
     backend: &PinnedBackend,
     output: &TestOutputDir,
     source: &str,
-    target: &str,
-    extra_args: &[&str],
-) -> Output {
-    compile_row_softmax_with_attempt_mode(
-        workspace, backend, output, source, target, extra_args, true,
-    )
-}
-
-fn compile_row_softmax_with_test_attempt(
-    workspace: &Path,
-    backend: &PinnedBackend,
-    output: &TestOutputDir,
-    source: &str,
-    target: &str,
-    extra_args: &[&str],
-) -> Output {
-    compile_row_softmax_with_attempt_mode(
-        workspace, backend, output, source, target, extra_args, true,
-    )
-}
-
-fn compile_row_softmax_without_attempt(
-    workspace: &Path,
-    backend: &PinnedBackend,
-    output: &TestOutputDir,
-) -> Output {
-    compile_row_softmax_with_attempt_mode(
-        workspace,
-        backend,
-        output,
-        ROW_SOFTMAX_FIXTURE,
-        "gfx942:xnack-",
-        &[],
-        false,
-    )
-}
-
-fn decode_compiler_owned_module_section(
-    module: &str,
-    section_name: &str,
-) -> Result<Vec<u8>, String> {
-    let lines = module.lines().collect::<Vec<_>>();
-    let declarations = lines
-        .iter()
-        .enumerate()
-        .filter_map(|(index, line)| {
-            module_asm_section_name(line)
-                .filter(|name| *name == section_name)
-                .map(|_| index)
-        })
-        .collect::<Vec<_>>();
-    let [header_index] = declarations.as_slice() else {
-        return Err(format!(
-            "expected exactly one {section_name} module-assembly header, found {}",
-            declarations.len()
-        ));
-    };
-
-    let mut target_bytes = Vec::new();
-    let mut seen_sections = Vec::new();
-    let mut index = *header_index;
-    loop {
-        let line = lines[index];
-        let current_name = canonical_module_asm_section_name(line).ok_or_else(|| {
-            format!("{section_name} has a noncanonical module-assembly section header {line:?}")
-        })?;
-        if seen_sections.contains(&current_name) {
-            return Err(format!(
-                "{section_name} suffix repeats module-assembly section {current_name}"
-            ));
-        }
-        seen_sections.push(current_name);
-        if lines.get(index + 1) != Some(&"module asm \".balign 8\"") {
-            return Err(format!(
-                "module-assembly section {current_name} does not have exact alignment 8"
-            ));
-        }
-        index += 2;
-
-        let first_byte_line = index;
-        while let Some(line) = lines.get(index) {
-            let Some(values) = line
-                .strip_prefix("module asm \".byte ")
-                .and_then(|line| line.strip_suffix('"'))
-            else {
-                break;
-            };
-            for value in values.split(", ") {
-                let digits = value.strip_prefix("0x").ok_or_else(|| {
-                    format!("module-assembly section {current_name} byte lacks 0x prefix")
-                })?;
-                if digits.len() != 2
-                    || !digits
-                        .bytes()
-                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-                {
-                    return Err(format!(
-                        "module-assembly section {current_name} has noncanonical byte {value:?}"
-                    ));
-                }
-                if current_name == section_name {
-                    target_bytes.push(u8::from_str_radix(digits, 16).map_err(|error| {
-                        format!("decode module-assembly section {current_name} byte: {error}")
-                    })?);
-                }
-            }
-            index += 1;
-        }
-        if index == first_byte_line {
-            return Err(format!(
-                "module-assembly section {current_name} has no retained bytes"
-            ));
-        }
-        let Some(line) = lines.get(index) else {
-            break;
-        };
-        if canonical_module_asm_section_name(line).is_none() {
-            return Err(format!(
-                "module-assembly section {current_name} has unexpected trailing line {line:?}"
-            ));
-        }
-    }
-    if target_bytes.is_empty() {
-        return Err(format!("{section_name} has no retained bytes"));
-    }
-    Ok(target_bytes)
-}
-
-fn module_asm_section_name(line: &str) -> Option<&str> {
-    line.strip_prefix("module asm \".section ")?
-        .split_once(',')
-        .map(|(name, _)| name)
-}
-
-fn canonical_module_asm_section_name(line: &str) -> Option<&str> {
-    let suffix = line.strip_prefix("module asm \".section ")?;
-    let name = suffix.strip_suffix(",\\22\\22,@progbits\"")?;
-    (!name.is_empty()
-        && name
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_')))
-    .then_some(name)
-}
-
-fn independently_expected_row_exp_boundary() -> [u8; 32] {
-    const DOMAIN: &[u8] = b"fe2o3.row-softmax.exponential-boundary.v1";
-    const REVIEWED_BOUNDARY: &[u8] = b"canonical Kernel IR names its abstract f32 exp operation;no authenticated implementation, approximation/error contract, OCML bitcode, link request, LLVM lowering, or real-number softmax equivalence";
-    let mut digest = Sha256::new();
-    for field in [DOMAIN, REVIEWED_BOUNDARY] {
-        digest.update((field.len() as u64).to_le_bytes());
-        digest.update(field);
-    }
-    digest.finalize().into()
-}
-
-fn require_exact_row_descriptor_source(bytes: &[u8]) -> Result<(), String> {
-    let source = CompilerDescriptorSourceV1::decode(bytes)
-        .map_err(|error| format!("decode row descriptor source: {error}"))?;
-    let table = source.table();
-    if table.device_target().to_string() != "gfx942:xnack-"
-        || table.code_object_version() != CodeObjectVersion::V6
-        || table.kernels().len() != 1
-    {
-        return Err("row descriptor target, COV, or kernel cardinality differs".to_owned());
-    }
-    let kernel = &table.kernels()[0];
-    if kernel.logical_name().as_str() != "row_softmax_v1"
-        || kernel.entry_name().as_str() != "row_softmax_v1"
-        || kernel.descriptor_symbol().as_str() != "row_softmax_v1.kd"
-    {
-        return Err("row descriptor symbol closure differs".to_owned());
-    }
-    let abi = kernel.abi_layout();
-    if abi.explicit_argument_size() != 32
-        || abi.kernarg_segment_size() != 288
-        || abi.kernarg_segment_alignment() != 8
-    {
-        return Err("row descriptor kernarg sizes or alignment differ".to_owned());
-    }
-    let launch = kernel.launch();
-    let BlockSizeV1::Exact(block) = launch.block_size() else {
-        return Err("row descriptor does not require an exact block".to_owned());
-    };
-    let grid = launch.max_grid();
-    if launch.rank() != 1
-        || (block.x(), block.y(), block.z()) != (64, 1, 1)
-        || (grid.x(), grid.y(), grid.z()) != (1, 1, 1)
-        || launch.max_flat_workgroup_size() != 64
-        || launch.static_shared_memory_bytes() != 0
-        || launch.max_dynamic_shared_memory_bytes() != 0
-    {
-        return Err("row descriptor launch geometry differs from WG64/grid1".to_owned());
-    }
-    let [input, output] = kernel.arguments() else {
-        return Err("row descriptor does not contain exactly two slices".to_owned());
-    };
-    if input.source_index() != 0
-        || input.name().as_str() != "arg0"
-        || input.ownership() != OwnershipSemantics::SharedBorrow
-        || input.access() != AccessMode::ReadOnly
-        || input.alias() != AliasSemantics::SharedReadOnly
-        || output.source_index() != 1
-        || output.name().as_str() != "arg1"
-        || output.ownership() != OwnershipSemantics::UniqueBorrow
-        || output.access() != AccessMode::ReadWrite
-        || output.alias() != AliasSemantics::Exclusive
-    {
-        return Err(format!(
-            "row descriptor slice roles or effects differ: input=({}, {}, {:?}, {:?}, {:?}), output=({}, {}, {:?}, {:?}, {:?})",
-            input.source_index(),
-            input.name().as_str(),
-            input.ownership(),
-            input.access(),
-            input.alias(),
-            output.source_index(),
-            output.name().as_str(),
-            output.ownership(),
-            output.access(),
-            output.alias(),
-        ));
-    }
-    let input_type = table
-        .type_records()
-        .iter()
-        .find(|record| record.identity() == input.source_type())
-        .ok_or_else(|| "row input type record is missing".to_owned())?;
-    let output_type = table
-        .type_records()
-        .iter()
-        .find(|record| record.identity() == output.source_type())
-        .ok_or_else(|| "row output type record is missing".to_owned())?;
-    if !input_type.descriptor().is_shared_slice()
-        || input_type.descriptor().scalar_type() != ScalarTypeV1::F32
-        || !output_type.descriptor().is_disjoint_slice()
-        || output_type.descriptor().scalar_type() != ScalarTypeV1::F32
-    {
-        return Err("row descriptor arguments are not the exact two f32 slice types".to_owned());
-    }
-    let expected_input = [
-        (PhysicalAbiComponentKind::GlobalPointer, 0, 8, 8),
-        (PhysicalAbiComponentKind::SliceLengthU64, 8, 8, 8),
-    ];
-    let expected_output = [
-        (PhysicalAbiComponentKind::GlobalPointer, 16, 8, 8),
-        (PhysicalAbiComponentKind::SliceLengthU64, 24, 8, 8),
-    ];
-    if input.physical_components().collect::<Vec<_>>() != expected_input
-        || output.physical_components().collect::<Vec<_>>() != expected_output
-    {
-        return Err("row descriptor physical slice layout differs".to_owned());
-    }
-    Ok(())
-}
-
-#[test]
-fn compiler_owned_module_section_decoder_rejects_malformed_and_substituted_sections() {
-    let exact = concat!(
-        "module asm \".section .fe2o3.test.v1,\\22\\22,@progbits\"\n",
-        "module asm \".balign 8\"\n",
-        "module asm \".byte 0x00, 0x7f, 0xff\"\n",
-    );
-    assert_eq!(
-        decode_compiler_owned_module_section(exact, ".fe2o3.test.v1").unwrap(),
-        [0x00, 0x7f, 0xff]
-    );
-    let malformed = exact.replace("0x7f", "0x7F");
-    assert!(decode_compiler_owned_module_section(&malformed, ".fe2o3.test.v1").is_err());
-    let misaligned = exact.replace(".balign 8", ".balign 4");
-    assert!(decode_compiler_owned_module_section(&misaligned, ".fe2o3.test.v1").is_err());
-    let substituted = exact.replace(".fe2o3.test.v1", ".fe2o3.test.v2");
-    assert!(decode_compiler_owned_module_section(&substituted, ".fe2o3.test.v1").is_err());
-    let duplicate = format!("{exact}{exact}");
-    assert!(decode_compiler_owned_module_section(&duplicate, ".fe2o3.test.v1").is_err());
-
-    for directive in [".zero 1", ".long 0", ".p2align 3"] {
-        let trailing_directive = format!("{exact}module asm \"{directive}\"\n");
-        assert!(
-            decode_compiler_owned_module_section(&trailing_directive, ".fe2o3.test.v1").is_err(),
-            "accepted trailing assembler directive {directive}"
-        );
-    }
-    let ordinary_line = format!("{exact}define void @trailing() {{ ret void }}\n");
-    assert!(decode_compiler_owned_module_section(&ordinary_line, ".fe2o3.test.v1").is_err());
-    let empty_ambiguity = format!("{exact}\n");
-    assert!(decode_compiler_owned_module_section(&empty_ambiguity, ".fe2o3.test.v1").is_err());
-
-    let next_header = concat!(
-        "module asm \".section .fe2o3.next.v1,\\22\\22,@progbits\"\n",
-        "module asm \".balign 8\"\n",
-        "module asm \".byte 0x42\"\n",
-    );
-    let exact_with_next_section = format!("{exact}{next_header}");
-    assert_eq!(
-        decode_compiler_owned_module_section(&exact_with_next_section, ".fe2o3.test.v1").unwrap(),
-        [0x00, 0x7f, 0xff]
-    );
-    let extra_byte_after_boundary = format!(
-        "{exact}module asm \".section .fe2o3.next.v1,\\22\\22,@progbits\"\nmodule asm \".byte 0x42\"\n"
-    );
-    assert!(
-        decode_compiler_owned_module_section(&extra_byte_after_boundary, ".fe2o3.test.v1").is_err()
-    );
-    let reordered = exact.replace(
-        "module asm \".balign 8\"\nmodule asm \".byte 0x00, 0x7f, 0xff\"",
-        "module asm \".byte 0x00, 0x7f, 0xff\"\nmodule asm \".balign 8\"",
-    );
-    assert!(decode_compiler_owned_module_section(&reordered, ".fe2o3.test.v1").is_err());
-    let split_target = format!("{exact}{next_header}{exact}");
-    assert!(decode_compiler_owned_module_section(&split_target, ".fe2o3.test.v1").is_err());
-    let extra_byte_after_ordinary_boundary =
-        format!("{exact}define void @trailing() {{ ret void }}\nmodule asm \".byte 0x42\"\n");
-    assert!(
-        decode_compiler_owned_module_section(&extra_byte_after_ordinary_boundary, ".fe2o3.test.v1")
-            .is_err()
-    );
-}
-
-fn compile_row_softmax_with_attempt_mode(
-    workspace: &Path,
-    backend: &PinnedBackend,
-    output: &TestOutputDir,
-    source: &str,
-    target: &str,
-    extra_args: &[&str],
-    managed_attempt: bool,
 ) -> Output {
     build_frontend_dependencies(workspace).expect("build row-softmax frontend dependencies");
     let cargo_target = std::env::var_os("CARGO_TARGET_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| workspace.join("target"));
-    let device = cargo_target.join("debug/libfe2o3_device.rlib");
-    let host = cargo_target.join("debug/libfe2o3_host.rlib");
     compile_row_softmax_with_device(
         workspace,
         backend,
         output,
         source,
-        target,
+        "gfx942:xnack-",
         "3a4d867f29d87610",
-        extra_args,
-        &device,
-        &host,
-        managed_attempt,
+        &[],
+        &cargo_target.join("debug/libfe2o3_device.rlib"),
+        &cargo_target.join("debug/libfe2o3_host.rlib"),
+        false,
         "a59650cf8d1bfc6168915cb817dbab3a0fa6a8839291231bbf4149a749913937",
     )
 }
@@ -1344,23 +1004,19 @@ fn compile_row_softmax_with_device(
         workspace.join("crates/rustc-codegen-fe2o3/tests/fixtures/collected-row-softmax-v1");
     assert!(device.is_file(), "missing {}", device.display());
     assert!(host.is_file(), "missing {}", host.display());
-    let managed = managed_attempt.then(|| {
+    let attempt = managed_attempt.then(|| {
         let producer = ProducerIdentity::from_codegen(
             "fe2o3_collected_row_softmax_v1_fixture",
             Some(&source_path),
         )
         .expect("row-softmax fixture producer");
-        let attempt = begin_build_attempt(
+        begin_build_attempt(
             &output.0.join("artifacts"),
             &producer,
             BuildInvocation::from_bytes(Sha256::digest(source.as_bytes()).into()),
-            BuildSession::from_bytes([
-                0x52, 0x53, 0x56, 0x31, 0x52, 0x53, 0x56, 0x31, 0x52, 0x53, 0x56, 0x31, 0x52, 0x53,
-                0x56, 0x31,
-            ]),
+            BuildSession::from_bytes([0x52; 16]),
         )
-        .expect("begin row-softmax managed fixture attempt");
-        (producer, attempt)
+        .expect("begin row-softmax managed fixture attempt")
     });
 
     let mut command = Command::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()));
@@ -1397,9 +1053,7 @@ fn compile_row_softmax_with_device(
                 .display()
         ))
         .args(["-C", "overflow-checks=off"])
-        // This keeps the manually frozen fixture namespace internally
-        // consistent. Production admission validates only the token shape.
-        .arg("-Cmetadata=3a4d867f29d87610")
+        .arg(format!("-Cmetadata={cargo_metadata}"))
         .args([
             "-Cmetadata=fe2o3-row-softmax-v1-reviewed",
             "-Zmir-enable-passes=-JumpThreading",
@@ -1420,7 +1074,7 @@ fn compile_row_softmax_with_device(
         .env("FE2O3_TARGET", target)
         .env("FE2O3_CODEGEN_PIPELINE", ROW_SOFTMAX_PIPELINE)
         .env("FE2O3_HSACO_DIR", output.0.join("artifacts"));
-    if let Some((_, attempt)) = &managed {
+    if let Some(attempt) = attempt {
         command.env("FE2O3_BUILD_ATTEMPT_V1", attempt.to_env_value());
     } else {
         command.env_remove("FE2O3_BUILD_ATTEMPT_V1");
@@ -1429,105 +1083,154 @@ fn compile_row_softmax_with_device(
     unsafe {
         command.pre_exec(move || set_close_on_exec(backend_descriptor, false));
     }
-    let compiled = run_bounded(&mut command, COMPILER_TIMEOUT, "row-softmax rustc")
-        .expect("compile row-softmax fixture within deadline");
-    if compiled.status.success() {
-        let (producer, attempt) = managed
-            .as_ref()
-            .expect("successful row-softmax compile required a managed attempt");
-        let consumed =
-            consume_compiler_module_handoff_v1(&output.0.join("artifacts"), producer, *attempt)
-                .expect("consume exact row-softmax Worker V2 handoff");
-        let handoff = CompilerModuleHandoffV2::decode(consumed.bytes())
-            .expect("decode exact row-softmax Worker V2 handoff");
-        assert_eq!(handoff.canonical_bytes(), consumed.bytes());
-        assert_eq!(handoff.target().to_string(), "gfx942:xnack-");
-        assert_eq!(handoff.code_object_version(), CodeObjectVersion::V6);
-        assert_eq!(
-            handoff
-                .symbol_manifest()
-                .symbols(CompilerModuleSymbolRoleV1::KernelEntry)
-                .collect::<Vec<_>>(),
-            ["row_softmax_v1"]
-        );
-        assert_eq!(
-            handoff
-                .symbol_manifest()
-                .symbols(CompilerModuleSymbolRoleV1::KernelDescriptor)
-                .collect::<Vec<_>>(),
-            ["row_softmax_v1.kd"]
-        );
-        assert_eq!(
-            handoff
-                .symbol_manifest()
-                .symbols(CompilerModuleSymbolRoleV1::UnresolvedExternalImport)
-                .collect::<Vec<_>>(),
-            ["__ocml_exp_f32"]
-        );
-        let module = std::str::from_utf8(handoff.module_bytes())
-            .expect("row-softmax compiler module is textual LLVM");
-        assert!(module.contains("declare float @__ocml_exp_f32(float)"));
-        let descriptor_bytes = decode_compiler_owned_module_section(module, ".fe2o3.kd.v1")
-            .expect("decode retained row descriptor section");
-        require_exact_row_descriptor_source(&descriptor_bytes)
-            .expect("independently validate exact row descriptor source");
-        assert!(
-            require_exact_row_descriptor_source(
-                descriptor_bytes
-                    .get(..descriptor_bytes.len() - 1)
-                    .expect("nonempty descriptor source"),
-            )
-            .is_err(),
-            "truncated row descriptor source was accepted"
-        );
-        let mut symbol_substitution = descriptor_bytes.clone();
-        let symbol_offset = symbol_substitution
-            .windows(b"row_softmax_v1".len())
-            .position(|window| window == b"row_softmax_v1")
-            .expect("row descriptor contains its kernel symbol");
-        symbol_substitution[symbol_offset] = b's';
-        assert!(
-            require_exact_row_descriptor_source(&symbol_substitution).is_err(),
-            "same-length row descriptor symbol substitution was accepted"
-        );
-
-        let authority = decode_compiler_owned_module_section(module, ".fe2o3.row-softmax-auth.v1")
-            .expect("decode retained row-softmax authority section");
-        let exponential = decode_compiler_owned_module_section(module, ".fe2o3.row-exp.v1")
-            .expect("decode retained row exponential-boundary section");
-        assert_eq!(
-            authority.as_slice(),
-            &EXPECTED_ROW_SOFTMAX_AUTHORITY_COMMITMENT
-        );
-        assert_eq!(
-            exponential.as_slice(),
-            &independently_expected_row_exp_boundary()
-        );
-        let mut substituted_authority = authority.clone();
-        substituted_authority[0] ^= 1;
-        assert_ne!(
-            substituted_authority.as_slice(),
-            &EXPECTED_ROW_SOFTMAX_AUTHORITY_COMMITMENT
-        );
-        let mut substituted_exponential = exponential.clone();
-        substituted_exponential[31] ^= 1;
-        assert_ne!(
-            substituted_exponential,
-            independently_expected_row_exp_boundary()
-        );
-
-        let renamed_section =
-            module.replacen(".fe2o3.row-softmax-auth.v1", ".fe2o3.row-auth.v1", 1);
-        assert!(
-            decode_compiler_owned_module_section(&renamed_section, ".fe2o3.row-softmax-auth.v1")
-                .is_err(),
-            "legacy row authority section name was accepted"
-        );
-    }
-    compiled
+    run_bounded(&mut command, COMPILER_TIMEOUT, "row-softmax rustc")
+        .expect("compile row-softmax fixture within deadline")
 }
 
-fn assert_row_softmax_published_no_handoff(output: &TestOutputDir) {
+fn compile_row_softmax_with_forged_exact_argv_and_fixed_descriptors(
+    workspace: &Path,
+    backend: &PinnedBackend,
+    output: &TestOutputDir,
+) -> Output {
+    const EFFECTIVE_ARGV_DOMAIN: &[u8] = b"FE2O3/ROW-SOFTMAX/EFFECTIVE-RUSTC-ARGV/V1\0";
+    const ARTIFACT_FD: RawFd = fe2o3_artifact_transaction::BROKERED_ARTIFACT_DIRECTORY_CHILD_FD_V1;
+    const BACKEND_FD: RawFd = fe2o3_artifact_transaction::BROKERED_CODEGEN_BACKEND_CHILD_FD_V1;
+    const INVOCATION_AUTHORITY_FD: RawFd =
+        fe2o3_artifact_transaction::BROKERED_INVOCATION_AUTHORITY_CHILD_FD_V1;
+
+    backend
+        .verify()
+        .expect("sealed production backend before forged row-softmax rustc");
+    build_frontend_dependencies(workspace).expect("build row-softmax frontend dependencies");
+    let cargo_target = std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| workspace.join("target"));
+    let source_path = output.0.join("row-softmax-v1.rs");
+    std::fs::write(&source_path, ROW_SOFTMAX_FIXTURE).expect("write forged row-softmax source");
+    let device = cargo_target.join("debug/libfe2o3_device.rlib");
+    let host = cargo_target.join("debug/libfe2o3_host.rlib");
+    let manifest_directory =
+        workspace.join("crates/rustc-codegen-fe2o3/tests/fixtures/collected-row-softmax-v1");
+
+    let mut command = Command::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()));
+    command
+        .current_dir(workspace)
+        .arg(&source_path)
+        .arg(format!(
+            "--remap-path-prefix={}=/fe2o3-reviewed-workspace/row-softmax-v1.rs",
+            source_path.display()
+        ))
+        .args([
+            "--edition=2024",
+            "--crate-type",
+            "lib",
+            "--crate-name",
+            "fe2o3_collected_row_softmax_v1_fixture",
+            "--extern",
+        ])
+        .arg(format!("fe2o3_device={}", device.display()))
+        .arg("--extern")
+        .arg(format!("fe2o3_host={}", host.display()))
+        .arg("-L")
+        .arg(format!(
+            "dependency={}",
+            cargo_target.join("debug/deps").display()
+        ))
+        .args([
+            "-C",
+            "overflow-checks=off",
+            "-Cmetadata=3a4d867f29d87610",
+            "-Cmetadata=fe2o3-row-softmax-v1-reviewed",
+            "-o",
+        ])
+        .arg(output.0.join("row-softmax-v1"))
+        .args([
+            "-Zmir-enable-passes=-JumpThreading",
+            "--cfg",
+            "fe2o3_codegen_generation=\"0123456789abcdef0123456789abcdef\"",
+        ])
+        .arg(format!(
+            "-Zcodegen-backend={}",
+            fe2o3_artifact_transaction::BROKERED_CODEGEN_BACKEND_PATH_V1
+        ));
+
+    let argv = std::iter::once(command.get_program())
+        .chain(command.get_args())
+        .collect::<Vec<_>>();
+    let mut digest = Sha256::new();
+    digest.update(EFFECTIVE_ARGV_DOMAIN);
+    digest.update((argv.len() as u64).to_le_bytes());
+    for argument in argv {
+        let bytes = argument.as_bytes();
+        digest.update((bytes.len() as u64).to_le_bytes());
+        digest.update(bytes);
+    }
+    let invocation = BuildInvocation::from_bytes(digest.finalize().into());
+    let producer = ProducerIdentity::from_codegen(
+        "fe2o3_collected_row_softmax_v1_fixture",
+        Some(&source_path),
+    )
+    .expect("forged row-softmax producer");
+    let attempt = begin_build_attempt(
+        &output.0.join("artifacts"),
+        &producer,
+        invocation,
+        BuildSession::from_bytes([0x52; 16]),
+    )
+    .expect("begin forged exact-argv attempt");
+
+    command
+        .env("FE2O3_VERBOSE", "1")
+        .env("CARGO_MANIFEST_DIR", manifest_directory)
+        .env(
+            "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2",
+            "a59650cf8d1bfc6168915cb817dbab3a0fa6a8839291231bbf4149a749913937",
+        )
+        .env("FE2O3_TARGET", "gfx942:xnack-")
+        .env("FE2O3_CODEGEN_PIPELINE", ROW_SOFTMAX_PIPELINE)
+        .env(
+            "FE2O3_HSACO_DIR",
+            fe2o3_artifact_transaction::BROKERED_ARTIFACT_DIRECTORY_PATH_V1,
+        )
+        .env("FE2O3_BUILD_ATTEMPT_V1", attempt.to_env_value());
+
+    let artifact = File::open(output.0.join("artifacts"))
+        .expect("open attacker-controlled artifact directory");
+    let (attacker_child, _attacker_peer) =
+        UnixStream::pair().expect("create attacker invocation-authority socket");
+    let artifact_source = artifact.as_raw_fd();
+    let backend_source = backend.file.as_raw_fd();
+    let authority_source = attacker_child.as_raw_fd();
+    assert!(
+        [artifact_source, backend_source, authority_source]
+            .into_iter()
+            .all(|source| ![ARTIFACT_FD, BACKEND_FD, INVOCATION_AUTHORITY_FD].contains(&source)),
+        "test source descriptors unexpectedly occupied a reserved child FD"
+    );
+    unsafe {
+        command.pre_exec(move || {
+            for (source, target) in [
+                (artifact_source, ARTIFACT_FD),
+                (backend_source, BACKEND_FD),
+                (authority_source, INVOCATION_AUTHORITY_FD),
+            ] {
+                if libc::dup2(source, target) != target {
+                    return Err(std::io::Error::last_os_error());
+                }
+                set_close_on_exec(target, false)?;
+            }
+            Ok(())
+        });
+    }
+    run_bounded(
+        &mut command,
+        COMPILER_TIMEOUT,
+        "forged exact-argv row-softmax rustc",
+    )
+    .expect("run forged exact-argv row-softmax rustc within deadline")
+}
+
+fn assert_row_softmax_published_nothing(output: &TestOutputDir) {
     assert!(
         !output.0.join("row-softmax-v1").exists(),
         "row-softmax boundary emitted a linked output"
@@ -1556,32 +1259,44 @@ fn assert_row_softmax_published_no_handoff(output: &TestOutputDir) {
     );
 }
 
-fn compile_clean_external_row_softmax_crate(
+struct ExternalRowSoftmaxSpec<'a> {
+    package_name: &'a str,
+    source: &'a str,
+    target: &'a str,
+    extra_rustflags: &'a [&'a str],
+    device_root: &'a Path,
+    host_root: &'a Path,
+}
+
+fn compile_external_row_softmax_crate(
     workspace: &Path,
     cargo_target: &Path,
-    package_name: &str,
+    spec: ExternalRowSoftmaxSpec<'_>,
 ) -> (Output, TestOutputDir) {
     let output = TestOutputDir::new(workspace);
-    let crate_root = output.0.join(package_name);
+    let crate_root = output.0.join(spec.package_name);
     let source_directory = crate_root.join("src");
     std::fs::create_dir_all(&source_directory).expect("create external row-softmax source root");
     let source = source_directory.join("lib.rs");
-    std::fs::write(&source, ROW_SOFTMAX_FIXTURE).expect("write external row-softmax source");
+    std::fs::write(&source, spec.source).expect("write external row-softmax source");
     let manifest = crate_root.join("Cargo.toml");
     std::fs::write(
         &manifest,
         format!(
-            "[package]\nname = {package_name:?}\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\n\n[dependencies]\nfe2o3-device = {{ path = {:?} }}\nfe2o3-host = {{ path = {:?} }}\n\n[workspace]\n",
-            workspace.join("crates/fe2o3-device"),
-            workspace.join("crates/fe2o3-host"),
+            "[package]\nname = {:?}\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\n\n[dependencies]\nfe2o3-device = {{ path = {:?} }}\nfe2o3-host = {{ path = {:?} }}\n\n[workspace]\n",
+            spec.package_name, spec.device_root, spec.host_root,
         ),
     )
     .expect("write external row-softmax manifest");
 
-    let rustflags = format!(
+    let mut rustflags = format!(
         "-Coverflow-checks=off -Cmetadata=fe2o3-row-softmax-v1-reviewed --remap-path-prefix={}=/fe2o3-reviewed-workspace/row-softmax-v1.rs",
         source.display()
     );
+    for flag in spec.extra_rustflags {
+        rustflags.push(' ');
+        rustflags.push_str(flag);
+    }
     let mut command = Command::new(env!("CARGO"));
     command
         .current_dir(workspace)
@@ -1598,7 +1313,7 @@ fn compile_clean_external_row_softmax_crate(
         .env("CARGO_TARGET_DIR", cargo_target)
         .env_remove("CARGO_INCREMENTAL")
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
-        .env("FE2O3_TARGET", "gfx942:xnack-")
+        .env("FE2O3_TARGET", spec.target)
         .env("FE2O3_CODEGEN_PIPELINE", ROW_SOFTMAX_PIPELINE)
         .env("FE2O3_HSACO_DIR", output.0.join("artifacts"))
         .env("RUSTFLAGS", rustflags);
@@ -1609,6 +1324,25 @@ fn compile_clean_external_row_softmax_crate(
     )
     .expect("run clean external row-softmax crate within deadline");
     (compiled, output)
+}
+
+fn compile_clean_external_row_softmax_crate(
+    workspace: &Path,
+    cargo_target: &Path,
+    package_name: &str,
+) -> (Output, TestOutputDir) {
+    compile_external_row_softmax_crate(
+        workspace,
+        cargo_target,
+        ExternalRowSoftmaxSpec {
+            package_name,
+            source: ROW_SOFTMAX_FIXTURE,
+            target: "gfx942:xnack-",
+            extra_rustflags: &[],
+            device_root: &workspace.join("crates/fe2o3-device"),
+            host_root: &workspace.join("crates/fe2o3-host"),
+        },
+    )
 }
 
 fn admitted_row_softmax_root(stderr: &str) -> Option<&str> {
@@ -1630,7 +1364,7 @@ fn copy_source_tree(source: &Path, destination: &Path) {
     }
 }
 
-fn build_hostile_same_name_device_provider(
+fn prepare_hostile_same_name_device_provider(
     workspace: &Path,
     output: &TestOutputDir,
 ) -> (PathBuf, PathBuf) {
@@ -1708,30 +1442,7 @@ pub mod __generated {
         "[workspace]\nmembers = [\"hostile-fe2o3-device\", \"hostile-fe2o3-host\"]\nresolver = \"3\"\n",
     )
     .expect("write hostile provider workspace manifest");
-    let target = output.0.join("hostile-target");
-    let mut command = Command::new(env!("CARGO"));
-    command
-        .current_dir(workspace)
-        .args(["build", "--workspace", "--manifest-path"])
-        .arg(output.0.join("Cargo.toml"))
-        .arg("--target-dir")
-        .arg(&target)
-        .env("CARGO_INCREMENTAL", "0");
-    let built = run_bounded(
-        &mut command,
-        BACKEND_BUILD_TIMEOUT,
-        "hostile same-name provider workspace",
-    )
-    .expect("build hostile provider workspace within deadline");
-    assert!(
-        built.status.success(),
-        "hostile provider workspace failed to build:\n{}",
-        stderr(&built)
-    );
-    (
-        target.join("debug/libfe2o3_device.rlib"),
-        target.join("debug/libfe2o3_host.rlib"),
-    )
+    (crate_root, host_root)
 }
 
 fn assert_tiled_gemm_published_no_handoff(output: &TestOutputDir) {
@@ -2492,34 +2203,48 @@ fn tiled_gemm_v1_source_authentication_and_adversaries_fail_closed() {
 }
 
 #[test]
-fn row_softmax_v1_direct_rustc_adversaries_fail_closed() {
+fn row_softmax_v1_source_authentication_and_adversaries_stop_at_canonical_ir() {
     if isolated_backend_environment_is_unavailable() {
         return;
     }
     let workspace = workspace();
     let backend = build_backend(&workspace);
 
-    let missing_attempt_output = TestOutputDir::new(&workspace);
-    let missing_attempt =
-        compile_row_softmax_without_attempt(&workspace, backend, &missing_attempt_output);
-    let missing_attempt_stderr = stderr(&missing_attempt);
+    let exact_output = TestOutputDir::new(&workspace);
+    let exact = compile_row_softmax_direct(&workspace, backend, &exact_output, ROW_SOFTMAX_FIXTURE);
+    let exact_stderr = stderr(&exact);
     assert!(
-        !missing_attempt.status.success()
-            && missing_attempt_stderr
-                .contains("collected-row-softmax-v1 requires a managed FE2O3_BUILD_ATTEMPT_V1")
-            && !missing_attempt_stderr.contains("selected canonical Kernel IR module")
-            && !missing_attempt_stderr.contains("published row-softmax Worker V2 handoff"),
-        "row softmax compiled without a managed attempt:\n{missing_attempt_stderr}"
+        !exact.status.success()
+            && exact_stderr.contains("requires a managed FE2O3_BUILD_ATTEMPT_V1")
+            && !exact_stderr.contains("consumed its private single-use frontend receipt")
+            && !exact_stderr.contains("selected canonical Kernel IR module"),
+        "direct rustc minted row-softmax authority:\n{exact_stderr}"
     );
-    assert_row_softmax_published_no_handoff(&missing_attempt_output);
+    assert_row_softmax_published_nothing(&exact_output);
+
+    let cargo_output = TestOutputDir::new(&workspace);
+    let cargo_target = cargo_output.0.join("cargo-target");
+    let device_root = workspace.join("crates/fe2o3-device");
+    let host_root = workspace.join("crates/fe2o3-host");
+    let compile_managed = |package_name, source, target, extra_rustflags| {
+        compile_external_row_softmax_crate(
+            &workspace,
+            &cargo_target,
+            ExternalRowSoftmaxSpec {
+                package_name,
+                source,
+                target,
+                extra_rustflags,
+                device_root: &device_root,
+                host_root: &host_root,
+            },
+        )
+    };
 
     let arithmetic_source = ROW_SOFTMAX_FIXTURE.replace("value > maximum", "value >= maximum");
     assert_ne!(arithmetic_source, ROW_SOFTMAX_FIXTURE);
-    let arithmetic_output = TestOutputDir::new(&workspace);
-    let arithmetic = compile_row_softmax_with_test_attempt(
-        &workspace,
-        backend,
-        &arithmetic_output,
+    let (arithmetic, arithmetic_output) = compile_managed(
+        "fe2o3-row-softmax-arithmetic-adversary",
         &arithmetic_source,
         "gfx942:xnack-",
         &[],
@@ -2531,18 +2256,15 @@ fn row_softmax_v1_direct_rustc_adversaries_fail_closed() {
             && !arithmetic_stderr.contains("selected canonical Kernel IR module"),
         "same-name arithmetic mutation minted row-softmax authority:\n{arithmetic_stderr}"
     );
-    assert_row_softmax_published_no_handoff(&arithmetic_output);
+    assert_row_softmax_published_nothing(&arithmetic_output);
 
     let extent_source = ROW_SOFTMAX_FIXTURE.replace(
         "const ROW_ELEMENTS: usize = 64;",
         "const ROW_ELEMENTS: usize = 63;",
     );
     assert_ne!(extent_source, ROW_SOFTMAX_FIXTURE);
-    let extent_output = TestOutputDir::new(&workspace);
-    let extent = compile_row_softmax_with_test_attempt(
-        &workspace,
-        backend,
-        &extent_output,
+    let (extent, extent_output) = compile_managed(
+        "fe2o3-row-softmax-extent-adversary",
         &extent_source,
         "gfx942:xnack-",
         &[],
@@ -2554,7 +2276,7 @@ fn row_softmax_v1_direct_rustc_adversaries_fail_closed() {
             && !extent_stderr.contains("selected canonical Kernel IR module"),
         "63-element source mutation minted row-softmax authority:\n{extent_stderr}"
     );
-    assert_row_softmax_published_no_handoff(&extent_output);
+    assert_row_softmax_published_nothing(&extent_output);
 
     let helper_source = ROW_SOFTMAX_FIXTURE
         .replace("math.exp_f32(", "exp_lookalike(&math, ")
@@ -2564,11 +2286,8 @@ fn row_softmax_v1_direct_rustc_adversaries_fail_closed() {
             1,
         );
     assert_ne!(helper_source, ROW_SOFTMAX_FIXTURE);
-    let helper_output = TestOutputDir::new(&workspace);
-    let helper = compile_row_softmax_with_test_attempt(
-        &workspace,
-        backend,
-        &helper_output,
+    let (helper, helper_output) = compile_managed(
+        "fe2o3-row-softmax-helper-adversary",
         &helper_source,
         "gfx942:xnack-",
         &[],
@@ -2580,7 +2299,7 @@ fn row_softmax_v1_direct_rustc_adversaries_fail_closed() {
             && !helper_stderr.contains("selected canonical Kernel IR module"),
         "lookalike exp helper entered the reviewed closure:\n{helper_stderr}"
     );
-    assert_row_softmax_published_no_handoff(&helper_output);
+    assert_row_softmax_published_nothing(&helper_output);
 
     let abi_source = ROW_SOFTMAX_FIXTURE
         .replacen("input: &[f32]", "input: &mut [f32]", 1)
@@ -2589,11 +2308,8 @@ fn row_softmax_v1_direct_rustc_adversaries_fail_closed() {
             "fn(&mut [f32], DisjointSlice<f32>)",
         );
     assert_ne!(abi_source, ROW_SOFTMAX_FIXTURE);
-    let abi_output = TestOutputDir::new(&workspace);
-    let abi = compile_row_softmax_with_test_attempt(
-        &workspace,
-        backend,
-        &abi_output,
+    let (abi, abi_output) = compile_managed(
+        "fe2o3-row-softmax-abi-adversary",
         &abi_source,
         "gfx942:xnack-",
         &[],
@@ -2608,7 +2324,7 @@ fn row_softmax_v1_direct_rustc_adversaries_fail_closed() {
             && !abi_stderr.contains("selected canonical Kernel IR module"),
         "ABI adversary minted row-softmax authority:\n{abi_stderr}"
     );
-    assert_row_softmax_published_no_handoff(&abi_output);
+    assert_row_softmax_published_nothing(&abi_output);
 
     let contract_source = ROW_SOFTMAX_FIXTURE.replacen(
         "3, 0, 0, 0, 64, 0, 0,\n    0, 1",
@@ -2616,11 +2332,8 @@ fn row_softmax_v1_direct_rustc_adversaries_fail_closed() {
         1,
     );
     assert_ne!(contract_source, ROW_SOFTMAX_FIXTURE);
-    let contract_output = TestOutputDir::new(&workspace);
-    let contract = compile_row_softmax_with_test_attempt(
-        &workspace,
-        backend,
-        &contract_output,
+    let (contract, contract_output) = compile_managed(
+        "fe2o3-row-softmax-contract-adversary",
         &contract_source,
         "gfx942:xnack-",
         &[],
@@ -2632,13 +2345,10 @@ fn row_softmax_v1_direct_rustc_adversaries_fail_closed() {
             && !contract_stderr.contains("selected canonical Kernel IR module"),
         "frontend-contract adversary minted row-softmax authority:\n{contract_stderr}"
     );
-    assert_row_softmax_published_no_handoff(&contract_output);
+    assert_row_softmax_published_nothing(&contract_output);
 
-    let target_output = TestOutputDir::new(&workspace);
-    let target = compile_row_softmax_with_test_attempt(
-        &workspace,
-        backend,
-        &target_output,
+    let (target, target_output) = compile_managed(
+        "fe2o3-row-softmax-target-adversary",
         ROW_SOFTMAX_FIXTURE,
         "gfx942:xnack+",
         &[],
@@ -2650,13 +2360,10 @@ fn row_softmax_v1_direct_rustc_adversaries_fail_closed() {
             && !target_stderr.contains("selected canonical Kernel IR module"),
         "wrong target minted row-softmax authority:\n{target_stderr}"
     );
-    assert_row_softmax_published_no_handoff(&target_output);
+    assert_row_softmax_published_nothing(&target_output);
 
-    let semantics_output = TestOutputDir::new(&workspace);
-    let semantics = compile_row_softmax_with_test_attempt(
-        &workspace,
-        backend,
-        &semantics_output,
+    let (semantics, semantics_output) = compile_managed(
+        "fe2o3-row-softmax-semantics-adversary",
         ROW_SOFTMAX_FIXTURE,
         "gfx942:xnack-",
         &["-Copt-level=1"],
@@ -2669,11 +2376,131 @@ fn row_softmax_v1_direct_rustc_adversaries_fail_closed() {
             && !semantics_stderr.contains("selected canonical Kernel IR module"),
         "compiler-semantics adversary minted row-softmax authority:\n{semantics_stderr}"
     );
-    assert_row_softmax_published_no_handoff(&semantics_output);
+    assert_row_softmax_published_nothing(&semantics_output);
 }
 
 #[test]
-fn clean_external_cargo_fe2o3_produces_row_softmax_worker_v2_handoffs() {
+fn row_softmax_rejects_a_hostile_same_name_device_provider() {
+    if isolated_backend_environment_is_unavailable() {
+        return;
+    }
+    let workspace = workspace();
+    let provider_output = TestOutputDir::new(&workspace);
+    let (hostile_device, hostile_host) =
+        prepare_hostile_same_name_device_provider(&workspace, &provider_output);
+    let cargo_output = TestOutputDir::new(&workspace);
+    let (compiled, output) = compile_external_row_softmax_crate(
+        &workspace,
+        &cargo_output.0.join("cargo-target"),
+        ExternalRowSoftmaxSpec {
+            package_name: "fe2o3-row-softmax-hostile-provider",
+            source: ROW_SOFTMAX_FIXTURE,
+            target: "gfx942:xnack-",
+            extra_rustflags: &[],
+            device_root: &hostile_device,
+            host_root: &hostile_host,
+        },
+    );
+    let compiler_stderr = stderr(&compiled);
+    assert!(
+        !compiled.status.success()
+            && !compiler_stderr.contains("selected canonical Kernel IR module")
+            && (compiler_stderr.contains("trusted-provider marker")
+                || compiler_stderr.contains("genuine external `fe2o3_device::DisjointSlice` type")
+                || compiler_stderr.contains("expected exact argument order")
+                || compiler_stderr
+                    .contains("diagnostic item does not resolve to the trusted function")),
+        "hostile same-name provider minted row-softmax authority:\n{compiler_stderr}"
+    );
+    assert_row_softmax_published_nothing(&output);
+}
+
+#[test]
+fn row_softmax_requires_managed_wrapper_argv_and_exact_metadata_transcript() {
+    if isolated_backend_environment_is_unavailable() {
+        return;
+    }
+    let workspace = workspace();
+    let backend = build_backend(&workspace);
+    build_frontend_dependencies(&workspace).expect("build reviewed frontend dependencies");
+    let cargo_target = std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| workspace.join("target"));
+    let device = cargo_target.join("debug/libfe2o3_device.rlib");
+    let host = cargo_target.join("debug/libfe2o3_host.rlib");
+
+    let direct_output = TestOutputDir::new(&workspace);
+    let direct = compile_row_softmax_with_device(
+        &workspace,
+        backend,
+        &direct_output,
+        ROW_SOFTMAX_FIXTURE,
+        "gfx942:xnack-",
+        "3a4d867f29d87610",
+        &[],
+        &device,
+        &host,
+        false,
+        "a59650cf8d1bfc6168915cb817dbab3a0fa6a8839291231bbf4149a749913937",
+    );
+    let direct_stderr = stderr(&direct);
+    assert!(
+        !direct.status.success()
+            && direct_stderr.contains("requires a managed FE2O3_BUILD_ATTEMPT_V1")
+            && !direct_stderr.contains("selected canonical Kernel IR module"),
+        "direct rustc minted row-softmax authority:\n{direct_stderr}"
+    );
+
+    let fabricated_output = TestOutputDir::new(&workspace);
+    let fabricated = compile_row_softmax_with_device(
+        &workspace,
+        backend,
+        &fabricated_output,
+        ROW_SOFTMAX_FIXTURE,
+        "gfx942:xnack-",
+        "3a4d867f29d87610",
+        &[],
+        &device,
+        &host,
+        true,
+        "0000000000000000000000000000000000000000000000000000000000000000",
+    );
+    let fabricated_stderr = stderr(&fabricated);
+    assert!(
+        !fabricated.status.success()
+            && fabricated_stderr.contains("managed wrapper Cargo metadata transcript")
+            && fabricated_stderr.contains("does not match rustc's ordered -Cmetadata values")
+            && !fabricated_stderr.contains("selected canonical Kernel IR module"),
+        "fabricated wrapper observation minted row-softmax authority:\n{fabricated_stderr}"
+    );
+    assert_row_softmax_published_nothing(&fabricated_output);
+
+    let forged_attempt_output = TestOutputDir::new(&workspace);
+    let forged_attempt = compile_row_softmax_with_device(
+        &workspace,
+        backend,
+        &forged_attempt_output,
+        ROW_SOFTMAX_FIXTURE,
+        "gfx942:xnack-",
+        "3a4d867f29d87610",
+        &[],
+        &device,
+        &host,
+        true,
+        "a59650cf8d1bfc6168915cb817dbab3a0fa6a8839291231bbf4149a749913937",
+    );
+    let forged_attempt_stderr = stderr(&forged_attempt);
+    assert!(
+        !forged_attempt.status.success()
+            && forged_attempt_stderr.contains("managed wrapper effective rustc argv")
+            && !forged_attempt_stderr.contains("selected canonical Kernel IR module"),
+        "direct rustc with a valid-looking attempt and exact metadata minted row-softmax authority:\n{forged_attempt_stderr}"
+    );
+    assert_row_softmax_published_nothing(&forged_attempt_output);
+}
+
+#[test]
+fn row_softmax_managed_wrapper_accepts_variable_generated_roots() {
     let workspace = workspace();
     let cargo_output = TestOutputDir::new(&workspace);
     let cargo_target = cargo_output.0.join("cargo-target");
@@ -2690,17 +2517,12 @@ fn clean_external_cargo_fe2o3_produces_row_softmax_worker_v2_handoffs() {
                 && external_stderr.contains("consumed its private single-use frontend receipt")
                 && external_stderr
                     .contains("selected canonical Kernel IR module `fe2o3::row_softmax_v1`")
-                && external_stderr.contains("published an inert Worker V2 compiler-module handoff")
-                && external_stderr.contains("published row-softmax Worker V2 handoff")
-                && external_stderr.contains(
-                    "explicit kernarg 32 bytes and required COV6 complete kernarg 288 bytes"
-                )
-                && external_stderr.contains("`__ocml_exp_f32` unresolved-import bindings")
-                && external_stderr.contains("build completed without an authorized device backend")
+                && external_stderr
+                    .contains("stopped at the fail-closed source-authenticated boundary")
                 && !external_stderr.contains("root instance must have")
                 && !external_stderr.contains("portable MIR identity mismatch")
                 && !external_stderr.contains("rustc FnAbi identity mismatch"),
-            "clean external cargo-fe2o3 crate missed row-softmax handoff production:\n{external_stderr}"
+            "clean external cargo-fe2o3 crate missed the row-softmax boundary:\n{external_stderr}"
         );
         let root = admitted_row_softmax_root(&external_stderr).unwrap_or_else(|| {
             panic!("external admission omitted its generated root:\n{external_stderr}")
@@ -2716,10 +2538,30 @@ fn clean_external_cargo_fe2o3_produces_row_softmax_worker_v2_handoffs() {
             "external admission reported a noncanonical root: {root:?}"
         );
         roots.push(root.to_owned());
-        assert!(
-            !output.0.join("row-softmax-v1").exists(),
-            "external Cargo path must not fabricate a linked row-softmax output"
-        );
+        assert_row_softmax_published_nothing(&output);
+
+        if roots.len() == 1 {
+            let managed_backend = pin_backend(
+                &cargo_target.join(".fe2o3-backend-build-v1/debug/librustc_codegen_fe2o3.so"),
+            )
+            .expect("pin the backend built with cargo-fe2o3 broker identity");
+            let forged_output = TestOutputDir::new(&workspace);
+            let forged = compile_row_softmax_with_forged_exact_argv_and_fixed_descriptors(
+                &workspace,
+                &managed_backend,
+                &forged_output,
+            );
+            let forged_stderr = stderr(&forged);
+            assert!(
+                !forged.status.success()
+                    && forged_stderr.contains(
+                        "invocation-capability peer is not the cargo-fe2o3 executable pinned into this backend",
+                    )
+                    && !forged_stderr.contains("selected canonical Kernel IR module"),
+                "exact-argv direct rustc with attacker-populated reserved FDs minted row-softmax authority:\n{forged_stderr}"
+            );
+            assert_row_softmax_published_nothing(&forged_output);
+        }
     }
     assert_ne!(
         roots[0], roots[1],

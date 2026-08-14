@@ -83,9 +83,12 @@ pub use link_publication::{
     RecoveryOutcomeV1, TargetIdentityV1, ValidatedResponseIdentityV1,
 };
 pub use managed_invocation_capability::{
-    BROKERED_INVOCATION_ADMITTED_V1, BROKERED_INVOCATION_PREPARED_V1,
-    BROKERED_INVOCATION_REQUEST_BYTES_V1, BrokeredInvocationCapabilityClaimV1,
-    BrokeredInvocationCapabilityCodecErrorV1, BrokeredInvocationCapabilityRequestV1,
+    BROKERED_ARTIFACT_DIRECTORY_CHILD_FD_V1, BROKERED_ARTIFACT_DIRECTORY_PATH_V1,
+    BROKERED_CODEGEN_BACKEND_CHILD_FD_V1, BROKERED_CODEGEN_BACKEND_PATH_V1,
+    BROKERED_INVOCATION_ADMITTED_V1, BROKERED_INVOCATION_AUTHORITY_CHILD_FD_V1,
+    BROKERED_INVOCATION_PREPARED_V1, BROKERED_INVOCATION_REQUEST_BYTES_V1,
+    BrokeredInvocationCapabilityClaimV1, BrokeredInvocationCapabilityCodecErrorV1,
+    BrokeredInvocationCapabilityRequestV1,
 };
 use rustix::fd::{AsRawFd, FromRawFd, OwnedFd};
 use rustix::fs::{
