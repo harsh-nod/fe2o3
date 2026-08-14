@@ -929,13 +929,32 @@ fn kernel_abi_layout_bounds_sizes_alignment_and_components() {
         8
     );
 
+    let mut canonical_explicit_padding = fixture();
+    let scalar_type = canonical_explicit_padding
+        .type_records
+        .iter()
+        .find(|record| record.descriptor.kind == DescriptorKind::Scalar)
+        .unwrap();
+    let scalar_layout = canonical_explicit_padding
+        .layout_records
+        .iter()
+        .find(|record| record.descriptor.kind == DescriptorKind::Scalar)
+        .unwrap();
+    let trailing =
+        LogicalArgumentV1::scalar(3, name("tail"), scalar_type, scalar_layout, 40).unwrap();
+    canonical_explicit_padding.kernels[0]
+        .arguments
+        .push(trailing);
+    canonical_explicit_padding.kernels[0].abi_layout = KernelAbiLayoutV1::new(48, 80, 8).unwrap();
+    assert_eq!(canonical_explicit_padding.kernels[0].validate(), Ok(()));
+
     let mut noncanonical_explicit_padding = fixture();
     noncanonical_explicit_padding.kernels[0].abi_layout =
         KernelAbiLayoutV1::new(48, 80, 8).expect("locally valid sizes");
     assert!(matches!(
         noncanonical_explicit_padding.kernels[0].validate(),
         Err(ValidationError::InvalidPhysicalAbi(
-            "explicit argument size must equal the end of the final physical component"
+            "explicit argument size must equal the canonically aligned end of the final physical component"
         ))
     ));
 
@@ -975,7 +994,7 @@ fn kernel_abi_layout_bounds_sizes_alignment_and_components() {
     assert!(matches!(
         empty.validate(),
         Err(ValidationError::InvalidPhysicalAbi(
-            "explicit argument size must equal the end of the final physical component"
+            "explicit argument size must equal the canonically aligned end of the final physical component"
         ))
     ));
 }

@@ -1020,6 +1020,7 @@ impl KernelDescriptorV1 {
         let mut names = BTreeSet::new();
         let mut component_count = 0usize;
         let mut previous_end = None;
+        let mut maximum_component_alignment = 1_u64;
         for (expected_index, argument) in self.arguments.iter().enumerate() {
             if usize::from(argument.source_index) != expected_index {
                 return Err(ValidationError::InvalidArgument(
@@ -1048,6 +1049,8 @@ impl KernelDescriptorV1 {
                         "physical component alignment exceeds the kernarg segment alignment",
                     ));
                 }
+                maximum_component_alignment =
+                    maximum_component_alignment.max(u64::from(component.alignment));
                 if previous_end.is_some_and(|end| u64::from(component.offset) < end) {
                     return Err(ValidationError::InvalidPhysicalAbi(
                         "kernel components overlap or are out of source order",
@@ -1062,10 +1065,20 @@ impl KernelDescriptorV1 {
                 max: MAX_PHYSICAL_COMPONENTS_PER_KERNEL,
             });
         }
-        let canonical_explicit_size = previous_end.unwrap_or(0);
+        let component_end = previous_end.unwrap_or(0);
+        let canonical_explicit_size = if component_end == 0 {
+            0
+        } else {
+            component_end
+                .checked_add(maximum_component_alignment - 1)
+                .ok_or(ValidationError::Overflow {
+                    field: "explicit argument size",
+                })?
+                & !(maximum_component_alignment - 1)
+        };
         if u64::from(self.abi_layout.explicit_argument_size) != canonical_explicit_size {
             return Err(ValidationError::InvalidPhysicalAbi(
-                "explicit argument size must equal the end of the final physical component",
+                "explicit argument size must equal the canonically aligned end of the final physical component",
             ));
         }
         Ok(())
