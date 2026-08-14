@@ -136,8 +136,9 @@ fn exact_tiles_map_to_one_wave64_workgroup_each() {
         panic!("exact tiled shape did not dispatch");
     };
     assert_eq!(geometry.target(), admitted_target());
-    assert_eq!(geometry.workgroup(), [64, 1, 1]);
-    assert_eq!(geometry.grid(), [192, 2, 1]);
+    assert_eq!(geometry.block_counts(), [3, 2, 1]);
+    assert_eq!(geometry.workgroup_dimensions(), [64, 1, 1]);
+    assert_eq!(geometry.aql_grid_work_items(), [192, 2, 1]);
     assert_eq!(geometry.tile_rows(), 2);
     assert_eq!(geometry.tile_columns(), 3);
     assert_eq!(geometry.reduction_tiles(), 2);
@@ -155,6 +156,97 @@ fn exact_tiles_map_to_one_wave64_workgroup_each() {
     );
     assert_eq!(geometry.tile_origin(3, 0), None);
     assert_eq!(geometry.tile_origin(0, 2), None);
+}
+
+#[test]
+fn representative_shapes_pin_blocks_workgroups_and_aql_work_items() {
+    let cases = [
+        ((16, 16, 16), [1, 1, 1], [64, 1, 1], 1),
+        ((16, 48, 16), [3, 1, 1], [192, 1, 1], 1),
+        ((32, 48, 32), [3, 2, 1], [192, 2, 1], 2),
+    ];
+
+    for ((m, n, k), expected_blocks, expected_aql, expected_reduction_tiles) in cases {
+        let shape = ShapeV1::checked(m, n, k).unwrap();
+        let LaunchDecisionV1::Dispatch(geometry) = plan_v1(admitted_target(), shape).unwrap()
+        else {
+            panic!("exact tiled shape ({m},{n},{k}) did not dispatch");
+        };
+
+        assert_eq!(geometry.block_counts(), expected_blocks);
+        assert_eq!(geometry.workgroup_dimensions(), [64, 1, 1]);
+        assert_eq!(geometry.aql_grid_work_items(), expected_aql);
+        assert_eq!(geometry.reduction_tiles(), expected_reduction_tiles);
+        assert_eq!(
+            geometry.total_work_items(),
+            expected_aql.into_iter().map(u64::from).product::<u64>()
+        );
+    }
+}
+
+#[test]
+fn geometry_derivation_is_exhaustive_over_small_exact_tiles() {
+    for tile_rows in 1..=8 {
+        for tile_columns in 1..=8 {
+            for reduction_tiles in 1..=4 {
+                let m = tile_rows * TILE_M_V1;
+                let n = tile_columns * TILE_N_V1;
+                let k = reduction_tiles * TILE_K_V1;
+                let shape = ShapeV1::checked(m, n, k).unwrap();
+                let LaunchDecisionV1::Dispatch(geometry) =
+                    plan_v1(admitted_target(), shape).unwrap()
+                else {
+                    panic!("exact tiled shape ({m},{n},{k}) did not dispatch");
+                };
+
+                let blocks = geometry.block_counts();
+                let workgroup = geometry.workgroup_dimensions();
+                let aql = geometry.aql_grid_work_items();
+                assert_eq!(blocks, [tile_columns, tile_rows, 1]);
+                assert_eq!(workgroup, [WAVE_LANES_V1, 1, 1]);
+                assert_eq!(
+                    aql,
+                    [
+                        blocks[0] * workgroup[0],
+                        blocks[1] * workgroup[1],
+                        blocks[2] * workgroup[2],
+                    ]
+                );
+                assert_eq!(geometry.tile_columns(), blocks[0]);
+                assert_eq!(geometry.tile_rows(), blocks[1]);
+                assert_eq!(geometry.reduction_tiles(), reduction_tiles);
+            }
+        }
+    }
+}
+
+#[test]
+fn representative_shapes_reject_common_geometry_mutations() {
+    let cases = [(16, 16, 16), (16, 48, 16), (32, 48, 32)];
+    let mut caught_blocks_as_aql = false;
+    let mut caught_single_block_x = false;
+    let mut caught_wave_factor_on_y = false;
+    let mut caught_swapped_block_axes = false;
+
+    for (m, n, k) in cases {
+        let shape = ShapeV1::checked(m, n, k).unwrap();
+        let LaunchDecisionV1::Dispatch(geometry) = plan_v1(admitted_target(), shape).unwrap()
+        else {
+            panic!("exact tiled shape ({m},{n},{k}) did not dispatch");
+        };
+        let blocks = geometry.block_counts();
+        let actual = geometry.aql_grid_work_items();
+
+        caught_blocks_as_aql |= actual != blocks;
+        caught_single_block_x |= actual != [WAVE_LANES_V1, blocks[1], blocks[2]];
+        caught_wave_factor_on_y |= actual != [blocks[0], blocks[1] * WAVE_LANES_V1, blocks[2]];
+        caught_swapped_block_axes |= actual != [blocks[1] * WAVE_LANES_V1, blocks[0], blocks[2]];
+    }
+
+    assert!(caught_blocks_as_aql);
+    assert!(caught_single_block_x);
+    assert!(caught_wave_factor_on_y);
+    assert!(caught_swapped_block_axes);
 }
 
 #[test]
@@ -207,22 +299,24 @@ fn every_small_positive_shape_is_admitted_exactly_when_fully_tiled() {
 }
 
 #[test]
-fn checked_geometry_rejects_unrepresentable_grid_x() {
+fn checked_geometry_rejects_unrepresentable_aql_grid_x() {
     let shape = ShapeV1::checked(16, 0xffff_fff0, 16).unwrap();
     assert_eq!(
         plan_v1(admitted_target(), shape),
-        Err(PlanErrorV1::GridXOverflow)
+        Err(PlanErrorV1::AqlGridXOverflow)
     );
 }
 
 #[test]
-fn checked_geometry_covers_the_exact_grid_x_boundary() {
+fn checked_geometry_covers_the_exact_aql_grid_x_boundary() {
     let largest_n = 0x3fff_fff0;
     let accepted = ShapeV1::checked(16, largest_n, 16).unwrap();
     let LaunchDecisionV1::Dispatch(geometry) = plan_v1(admitted_target(), accepted).unwrap() else {
         panic!("largest representable x-grid did not dispatch");
     };
-    assert_eq!(geometry.grid(), [0xffff_ffc0, 1, 1]);
+    assert_eq!(geometry.block_counts(), [0x03ff_ffff, 1, 1]);
+    assert_eq!(geometry.workgroup_dimensions(), [64, 1, 1]);
+    assert_eq!(geometry.aql_grid_work_items(), [0xffff_ffc0, 1, 1]);
     assert_eq!(geometry.tile_columns(), 0x03ff_ffff);
     assert_eq!(geometry.total_work_items(), u64::from(0xffff_ffc0_u32));
     assert_eq!(
@@ -236,6 +330,6 @@ fn checked_geometry_covers_the_exact_grid_x_boundary() {
     let first_rejected = ShapeV1::checked(16, 0x4000_0000, 16).unwrap();
     assert_eq!(
         plan_v1(admitted_target(), first_rejected),
-        Err(PlanErrorV1::GridXOverflow)
+        Err(PlanErrorV1::AqlGridXOverflow)
     );
 }

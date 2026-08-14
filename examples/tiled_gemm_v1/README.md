@@ -19,6 +19,14 @@ including when unused dimensions are `u32::MAX`. Nonempty `K=0` is a
 no-dispatch host fill with FP32 positive zero. Other tails and unrepresentable
 launch geometry are rejected before geometry is produced.
 
+For a dispatched shape, the launch API keeps three related geometries
+distinct. `block_counts()` is `[N / 16, M / 16, 1]`, identifying one block per
+output tile. `workgroup_dimensions()` is `[64, 1, 1]`, identifying the one
+wave64 assigned to each block. `aql_grid_work_items()` is their component-wise
+product `[64 * (N / 16), M / 16, 1]`, the global work-item dimensions encoded
+in an HSA AQL dispatch packet. These checked host values do not establish that
+a kernel was compiled, loaded, or executed.
+
 Planning requires an `AdmittedTargetV1` obtained from the canonical
 `fe2o3_amd_target::AmdTargetId`. Generic `gfx942`, XNACK-enabled,
 SRAM-ECC-qualified, and other processor declarations fail closed. This token

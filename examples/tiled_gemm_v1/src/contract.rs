@@ -252,8 +252,8 @@ pub enum PlanErrorV1 {
     NNotMultipleOf16(u32),
     /// A positive reduction extent has a `K` tail.
     KNotMultipleOf16(u32),
-    /// The HSA x-grid dimension cannot be represented as `u32`.
-    GridXOverflow,
+    /// The AQL global-work-item x dimension cannot be represented as `u32`.
+    AqlGridXOverflow,
 }
 
 impl fmt::Display for PlanErrorV1 {
@@ -262,7 +262,9 @@ impl fmt::Display for PlanErrorV1 {
             Self::MNotMultipleOf16(value) => write!(formatter, "M={value} has a 16-row tail"),
             Self::NNotMultipleOf16(value) => write!(formatter, "N={value} has a 16-column tail"),
             Self::KNotMultipleOf16(value) => write!(formatter, "K={value} has a 16-value tail"),
-            Self::GridXOverflow => formatter.write_str("x-grid dimension overflows u32"),
+            Self::AqlGridXOverflow => {
+                formatter.write_str("AQL global-work-item x dimension overflows u32")
+            }
         }
     }
 }
@@ -284,8 +286,9 @@ pub struct TileOriginV1 {
 /// use fe2o3_tiled_gemm_v1::LaunchGeometryV1;
 /// let _forged = LaunchGeometryV1 {
 ///     target: panic!(),
-///     grid: [64, 1, 1],
+///     block_counts: [1, 1, 1],
 ///     workgroup: [64, 1, 1],
+///     aql_grid_work_items: [64, 1, 1],
 ///     tile_rows: 1,
 ///     tile_columns: 1,
 ///     reduction_tiles: 1,
@@ -295,8 +298,9 @@ pub struct TileOriginV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LaunchGeometryV1 {
     target: AdmittedTargetV1,
-    grid: [u32; 3],
+    block_counts: [u32; 3],
     workgroup: [u32; 3],
+    aql_grid_work_items: [u32; 3],
     tile_rows: u32,
     tile_columns: u32,
     reduction_tiles: u32,
@@ -309,14 +313,22 @@ impl LaunchGeometryV1 {
         self.target
     }
 
-    /// Returns global work-item dimensions.
-    pub const fn grid(self) -> [u32; 3] {
-        self.grid
+    /// Returns `[N / 16, M / 16, 1]`, the output-tile block counts.
+    pub const fn block_counts(self) -> [u32; 3] {
+        self.block_counts
     }
 
-    /// Returns workgroup dimensions, fixed to one wave64 by V1.
-    pub const fn workgroup(self) -> [u32; 3] {
+    /// Returns the per-block workgroup dimensions, fixed to one wave64 by V1.
+    pub const fn workgroup_dimensions(self) -> [u32; 3] {
         self.workgroup
+    }
+
+    /// Returns AQL global work-items, `block_counts * workgroup_dimensions`.
+    ///
+    /// HSA dispatch packets consume these global work-item dimensions, not the
+    /// block counts returned by [`Self::block_counts`].
+    pub const fn aql_grid_work_items(self) -> [u32; 3] {
+        self.aql_grid_work_items
     }
 
     /// Returns the number of output-tile rows.
@@ -394,15 +406,19 @@ pub fn plan_v1(target: AdmittedTargetV1, shape: ShapeV1) -> Result<LaunchDecisio
     let tile_rows = shape.m / TILE_M_V1;
     let tile_columns = shape.n / TILE_N_V1;
     let reduction_tiles = shape.k / TILE_K_V1;
-    let grid_x = tile_columns
+    let aql_grid_x = tile_columns
         .checked_mul(WAVE_LANES_V1)
-        .ok_or(PlanErrorV1::GridXOverflow)?;
-    let total_work_items = u64::from(grid_x) * u64::from(tile_rows);
+        .ok_or(PlanErrorV1::AqlGridXOverflow)?;
+    let block_counts = [tile_columns, tile_rows, 1];
+    let workgroup = [WAVE_LANES_V1, 1, 1];
+    let aql_grid_work_items = [aql_grid_x, tile_rows, 1];
+    let total_work_items = aql_grid_work_items.into_iter().map(u64::from).product();
 
     Ok(LaunchDecisionV1::Dispatch(LaunchGeometryV1 {
         target,
-        grid: [grid_x, tile_rows, 1],
-        workgroup: [WAVE_LANES_V1, 1, 1],
+        block_counts,
+        workgroup,
+        aql_grid_work_items,
         tile_rows,
         tile_columns,
         reduction_tiles,
