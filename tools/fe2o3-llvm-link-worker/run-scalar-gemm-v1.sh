@@ -28,9 +28,17 @@ if [[ -e $build_dir || -e $output_hsaco ]]; then
   printf 'error: build and output paths must be fresh\n' >&2
   exit 73
 fi
-for command in cmake cargo ctest grep sha256sum; do
+for command in cmake ctest grep sha256sum; do
   if ! command -v "$command" >/dev/null 2>&1; then
     printf 'error: required command is unavailable: %s\n' "$command" >&2
+    exit 69
+  fi
+done
+cargo_bin=${FE2O3_CARGO:-$(command -v cargo || true)}
+rustc_bin=${FE2O3_RUSTC:-$(command -v rustc || true)}
+for tool in "$cargo_bin" "$rustc_bin"; do
+  if [[ $tool != /* || ! -f $tool || ! -x $tool ]]; then
+    printf 'error: FE2O3_CARGO and FE2O3_RUSTC must resolve to absolute executables\n' >&2
     exit 69
   fi
 done
@@ -69,7 +77,8 @@ FE2O3_SCALAR_GEMM_V1_WORKER="$worker" \
 FE2O3_SCALAR_GEMM_V1_WORKER_BUILD_ID="$worker_build_id" \
 FE2O3_SCALAR_GEMM_V1_LLVM_BUILD_ID="$llvm_build_id" \
 FE2O3_SCALAR_GEMM_V1_OUTPUT="$output_hsaco" \
-  cargo test --manifest-path "$repo_root/Cargo.toml" --locked \
+RUSTC="$rustc_bin" \
+  "$cargo_bin" test --manifest-path "$repo_root/Cargo.toml" --locked \
     -p fe2o3-hsaco-finalize \
     --test scalar_gemm_v1_direct_llvm_worker \
     real_worker_produces_deterministic_inspected_scalar_gemm_v1_cov6_hsaco \

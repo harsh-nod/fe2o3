@@ -186,6 +186,10 @@ tools/fe2o3-llvm-link-worker/run-scalar-gemm-v1.sh \
   /tmp/scalar-gemm-v1-gfx942.hsaco
 ```
 
+`FE2O3_CARGO` and `FE2O3_RUSTC` may pin absolute toolchain executable paths for
+noninteractive environments whose default `PATH` does not select the repository
+toolchain.
+
 The successful request is constructed from a `MultiInputLinkPlanV1` whose
 expected output is the freshly generated deterministic native fixture. This is
 a two-stage test fixture arrangement: it exercises plan-bound execution and
