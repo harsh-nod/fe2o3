@@ -132,6 +132,14 @@ impl InspectedScalarGemmV1WorkerV2HsacoV1 {
         &self.raw
     }
 
+    /// Consumes exact scalar-profile inspection and transfers its retained raw-HSACO lineage.
+    ///
+    /// This is the only ownership bridge into generic Worker V2 finalization. It does not create
+    /// authority from bytes, and the consumed scalar capability cannot be reused.
+    pub fn into_raw(self) -> InspectedRawWorkerV2HsacoV1 {
+        self.raw
+    }
+
     pub const fn authenticates_frontend_origin(&self) -> bool {
         false
     }

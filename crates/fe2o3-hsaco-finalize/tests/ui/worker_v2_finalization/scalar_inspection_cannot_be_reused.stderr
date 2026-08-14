@@ -1,0 +1,15 @@
+error[E0382]: borrow of moved value: `inspected`
+ --> tests/ui/worker_v2_finalization/scalar_inspection_cannot_be_reused.rs:5:13
+  |
+3 | fn reuse(inspected: InspectedScalarGemmV1WorkerV2HsacoV1) {
+  |          --------- move occurs because `inspected` has type `InspectedScalarGemmV1WorkerV2HsacoV1`, which does not implement the `Copy` trait
+4 |     let raw = inspected.into_raw();
+  |                         ---------- `inspected` moved due to this method call
+5 |     let _ = inspected.exact_bytes();
+  |             ^^^^^^^^^ value borrowed here after move
+  |
+note: `InspectedScalarGemmV1WorkerV2HsacoV1::into_raw` takes ownership of the receiver `self`, which moves `inspected`
+ --> src/scalar_gemm_v1_worker.rs
+  |
+  |     pub fn into_raw(self) -> InspectedRawWorkerV2HsacoV1 {
+  |                     ^^^^
