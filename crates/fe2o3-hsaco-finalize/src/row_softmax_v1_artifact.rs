@@ -5,7 +5,7 @@ use std::{error::Error, fmt};
 use fe2o3_artifact_transaction::BuildAttempt;
 use fe2o3_hsaco::{
     ArgumentAddressSpace, CodeObjectVersion as InspectedCodeObjectVersion, ExplicitValueKind,
-    ExplicitValueType, InspectedHsaco,
+    ExplicitValueType, HiddenValueKind, InspectedHsaco, KernelKind,
 };
 use fe2o3_kernel_descriptor::{
     AdmittedRowSoftmaxV1StructuralDescriptorV1, CodeObjectVersion,
@@ -358,6 +358,24 @@ fn validate_exact_artifact_metadata(
             "descriptor symbol",
         ));
     }
+    if kernel.kind() != KernelKind::Normal {
+        return Err(RowSoftmaxV1StructuralArtifactErrorV1::ArtifactProfile(
+            "kernel kind",
+        ));
+    }
+    if kernel
+        .cluster_dims()
+        .is_some_and(|dimensions| dimensions != ROW_SOFTMAX_V1_MAX_GRID_SIZE)
+    {
+        return Err(RowSoftmaxV1StructuralArtifactErrorV1::ArtifactProfile(
+            "cluster dimensions",
+        ));
+    }
+    if kernel.uses_dynamic_stack() {
+        return Err(RowSoftmaxV1StructuralArtifactErrorV1::ArtifactProfile(
+            "dynamic stack",
+        ));
+    }
     if kernel.required_workgroup_size() != Some(ROW_SOFTMAX_V1_WORKGROUP_SIZE)
         || kernel.max_flat_workgroup_size() != ROW_SOFTMAX_V1_MAX_FLAT_WORKGROUP_SIZE
     {
@@ -395,6 +413,7 @@ fn validate_exact_artifact_metadata(
             "explicit argument count",
         ));
     }
+    validate_exact_hidden_arguments(kernel)?;
     for slice in 0..2_usize {
         let base = u64::try_from(slice).expect("bounded index") * 16;
         let pointer = &kernel.explicit_arguments()[slice * 2];
@@ -421,6 +440,43 @@ fn validate_exact_artifact_metadata(
         {
             return Err(RowSoftmaxV1StructuralArtifactErrorV1::ArtifactProfile(
                 "explicit slice argument layout",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_exact_hidden_arguments(
+    kernel: &fe2o3_hsaco::InspectedKernel,
+) -> Result<(), RowSoftmaxV1StructuralArtifactErrorV1> {
+    const REQUIRED: [(u64, u64, HiddenValueKind); 13] = [
+        (0, 4, HiddenValueKind::BlockCountX),
+        (4, 4, HiddenValueKind::BlockCountY),
+        (8, 4, HiddenValueKind::BlockCountZ),
+        (12, 2, HiddenValueKind::GroupSizeX),
+        (14, 2, HiddenValueKind::GroupSizeY),
+        (16, 2, HiddenValueKind::GroupSizeZ),
+        (18, 2, HiddenValueKind::RemainderX),
+        (20, 2, HiddenValueKind::RemainderY),
+        (22, 2, HiddenValueKind::RemainderZ),
+        (40, 8, HiddenValueKind::GlobalOffsetX),
+        (48, 8, HiddenValueKind::GlobalOffsetY),
+        (56, 8, HiddenValueKind::GlobalOffsetZ),
+        (64, 2, HiddenValueKind::GridDimensions),
+    ];
+    let hidden = kernel.hidden_arguments();
+    if hidden.len() != REQUIRED.len() {
+        return Err(RowSoftmaxV1StructuralArtifactErrorV1::ArtifactProfile(
+            "hidden argument profile",
+        ));
+    }
+    for (argument, (relative_offset, size, kind)) in hidden.iter().copied().zip(REQUIRED) {
+        if argument.offset() != u64::from(ROW_SOFTMAX_V1_EXPLICIT_KERNARG_BYTES) + relative_offset
+            || argument.size() != size
+            || argument.value_kind() != kind
+        {
+            return Err(RowSoftmaxV1StructuralArtifactErrorV1::ArtifactProfile(
+                "hidden argument profile",
             ));
         }
     }

@@ -76,6 +76,8 @@ implicit suffix is 256 bytes, producing a 288-byte kernarg segment.
 V1 slice descriptors encode the presence and physical location of each `u64`
 length, not its runtime value. The constant row length of 64 is therefore a
 host-profile requirement that this structural admission cannot validate.
+`ROW_SOFTMAX_V1_INTENDED_HOST_ROW_ELEMENTS` names that external requirement;
+admitted descriptor evidence deliberately has no row-length accessor.
 Likewise, unique output ownership is an unauthenticated descriptor declaration;
 it does not prove runtime non-aliasing or race freedom.
 

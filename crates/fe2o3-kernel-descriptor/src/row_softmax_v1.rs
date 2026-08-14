@@ -11,8 +11,11 @@ use crate::{
 pub const ROW_SOFTMAX_V1_TARGET: &str = "gfx942:xnack-";
 pub const ROW_SOFTMAX_V1_ENTRY_NAME: &str = "row_softmax_v1";
 pub const ROW_SOFTMAX_V1_DESCRIPTOR_SYMBOL: &str = "row_softmax_v1.kd";
-/// Intended host profile. V1 descriptor bytes do not encode runtime slice lengths.
-pub const ROW_SOFTMAX_V1_ROW_ELEMENTS: u64 = 64;
+/// Intended host-side row length, outside structural artifact evidence.
+///
+/// V1 descriptor bytes carry runtime length fields but not their values. No
+/// admitted descriptor accessor exposes this constant as an observed fact.
+pub const ROW_SOFTMAX_V1_INTENDED_HOST_ROW_ELEMENTS: u64 = 64;
 pub const ROW_SOFTMAX_V1_WORKGROUP_SIZE: [u32; 3] = [64, 1, 1];
 pub const ROW_SOFTMAX_V1_MAX_GRID_SIZE: [u32; 3] = [1, 1, 1];
 pub const ROW_SOFTMAX_V1_MAX_FLAT_WORKGROUP_SIZE: u32 = 64;
@@ -119,10 +122,6 @@ impl AdmittedRowSoftmaxV1StructuralDescriptorV1 {
 
     pub const fn executable_ir_evidence(self) -> BuildEvidenceV1 {
         self.executable_ir_evidence
-    }
-
-    pub const fn declared_row_elements(self) -> u64 {
-        ROW_SOFTMAX_V1_ROW_ELEMENTS
     }
 
     pub const fn workgroup_size(self) -> [u32; 3] {

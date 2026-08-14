@@ -1,0 +1,41 @@
+error[E0308]: mismatched types
+  --> tests/ui/worker_v2_finalization/row_softmax_cannot_upgrade_to_generic_authority.rs:13:43
+   |
+13 |     finalize_inspected_worker_v2_hsaco_v1(inspected)
+   |     ------------------------------------- ^^^^^^^^^ expected `InspectedRawWorkerV2HsacoV1`, found `InspectedRowSoftmaxV1StructuralWorkerV2HsacoV1`
+   |     |
+   |     arguments to this function are incorrect
+   |
+note: function defined here
+  --> src/worker_v2_hsaco_finalization.rs
+   |
+   | pub fn finalize_inspected_worker_v2_hsaco_v1(
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+  --> tests/ui/worker_v2_finalization/row_softmax_cannot_upgrade_to_generic_authority.rs:20:54
+   |
+20 |     prepare_worker_v2_hsaco_publication_v1(producer, inspected)
+   |     --------------------------------------           ^^^^^^^^^ expected `InspectedRawWorkerV2HsacoV1`, found `InspectedRowSoftmaxV1StructuralWorkerV2HsacoV1`
+   |     |
+   |     arguments to this function are incorrect
+   |
+note: function defined here
+  --> src/worker_v2_hsaco_publication.rs
+   |
+   | pub fn prepare_worker_v2_hsaco_publication_v1(
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+  --> tests/ui/worker_v2_finalization/row_softmax_cannot_upgrade_to_generic_authority.rs:27:64
+   |
+27 |     prepare_finalized_worker_v2_hsaco_publication_v1(producer, finalized)
+   |     ------------------------------------------------           ^^^^^^^^^ expected `PreparedFinalizedWorkerV2HsacoV1`, found `FinalizedRowSoftmaxV1StructuralHsacoV1`
+   |     |
+   |     arguments to this function are incorrect
+   |
+note: function defined here
+  --> src/worker_v2_hsaco_publication.rs
+   |
+   | pub fn prepare_finalized_worker_v2_hsaco_publication_v1(
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

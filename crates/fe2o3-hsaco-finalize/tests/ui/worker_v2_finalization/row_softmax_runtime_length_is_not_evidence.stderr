@@ -1,0 +1,5 @@
+error[E0599]: no method named `declared_row_elements` found for struct `AdmittedRowSoftmaxV1StructuralDescriptorV1` in the current scope
+ --> tests/ui/worker_v2_finalization/row_softmax_runtime_length_is_not_evidence.rs:4:22
+  |
+4 |     let _ = admitted.declared_row_elements();
+  |                      ^^^^^^^^^^^^^^^^^^^^^ method not found in `AdmittedRowSoftmaxV1StructuralDescriptorV1`

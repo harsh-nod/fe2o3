@@ -4,7 +4,7 @@ use fe2o3_kernel_descriptor::{
     DeviceLayoutDescriptorV1, DeviceLayoutRecordV1, DeviceTargetV1, DimensionsV1, EvidenceDigest,
     EvidenceIdentity, KernelAbiLayoutV1, KernelDescriptorV1, KernelId, LaunchConstraintsV1,
     LogicalArgumentV1, ProducerIdentityV1, ROW_SOFTMAX_V1_DESCRIPTOR_SYMBOL,
-    ROW_SOFTMAX_V1_ROW_ELEMENTS, RowSoftmaxV1StructuralDescriptorErrorV1,
+    ROW_SOFTMAX_V1_INTENDED_HOST_ROW_ELEMENTS, RowSoftmaxV1StructuralDescriptorErrorV1,
     RowSoftmaxV1StructuralDescriptorExpectationV1, ScalarTypeV1, SourceTypeDescriptorV1,
     SourceTypeRecordV1, Text, ValidName, admit_row_softmax_v1_structural_descriptor_v1,
     decode_device_descriptor_table_v1, encode_device_descriptor_table_v1,
@@ -176,10 +176,7 @@ fn fixed_row_profile_is_structurally_sealed_and_v1_round_trips() {
 
     assert_eq!(DEVICE_DESCRIPTOR_VERSION, 1);
     assert_eq!(reencoded, encoded);
-    assert_eq!(
-        admitted.declared_row_elements(),
-        ROW_SOFTMAX_V1_ROW_ELEMENTS
-    );
+    assert_eq!(ROW_SOFTMAX_V1_INTENDED_HOST_ROW_ELEMENTS, 64);
     assert_eq!(admitted.workgroup_size(), [64, 1, 1]);
     assert_eq!(admitted.max_grid_size(), [1, 1, 1]);
     assert_eq!(admitted.max_flat_workgroup_size(), 64);

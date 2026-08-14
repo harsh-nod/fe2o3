@@ -1,0 +1,9 @@
+error[E0382]: use of moved value: `inspected`
+ --> tests/ui/worker_v2_finalization/row_softmax_inspection_cannot_be_replayed.rs:8:73
+  |
+6 | fn replay(inspected: InspectedRowSoftmaxV1StructuralWorkerV2HsacoV1) {
+  |           --------- move occurs because `inspected` has type `InspectedRowSoftmaxV1StructuralWorkerV2HsacoV1`, which does not implement the `Copy` trait
+7 |     let _first = finalize_row_softmax_v1_structural_worker_v2_hsaco_v1(inspected);
+  |                                                                        --------- value moved here
+8 |     let _second = finalize_row_softmax_v1_structural_worker_v2_hsaco_v1(inspected);
+  |                                                                         ^^^^^^^^^ value used here after move

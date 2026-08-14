@@ -207,6 +207,14 @@ entry and descriptor symbols, and one unfinalized canonical descriptor table.
 The bound executable entry must be a real function symbol in an executable
 mapping, but its instruction bytes are not interpreted.
 
+The kernel kind must be Normal, dynamic stack use is forbidden, and COV6
+cluster dimensions must either be absent or exactly `[1, 1, 1]`, matching the
+fixed maximum grid. The hidden-argument list must be exactly the mandatory
+COV6 block-count, group-size, remainder, global-offset, and grid-dimension
+tuple. Optional hidden records fail closed, including dynamic-LDS size,
+multigrid synchronization, and queue-pointer records that would alter launch
+requirements.
+
 Metadata and the canonical descriptor must agree on two F32 slice pairs:
 `input: &[f32]` and `output: DisjointSlice<f32>`, with pointer/length fields at
 offsets `0, 8, 16, 24`. The explicit span is 32 bytes and the COV6 implicit
@@ -215,7 +223,9 @@ evidence remain unauthenticated declarations.
 
 The fixed row length of 64 is not present as a runtime value in descriptor or
 AMDHSA metadata, so artifact admission cannot validate either slice length or
-an actual host launch. Arbitrary `.text` remains structurally admissible. No
+an actual host launch. The value is only an intended host-profile requirement,
+not a property exposed by admitted artifact evidence. Arbitrary `.text`
+remains structurally admissible. No
 result proves functional softmax, an `exp` implementation, reduction order,
 NaN/infinity behavior, numerical error bounds, memory safety, non-aliasing,
 race freedom, or Verus verification. It authenticates neither source nor
@@ -225,3 +235,8 @@ compiler origin and grants no publication, HSA load, or launch authority.
 upstream LLVM/LLD Worker V2 lineage and canonical descriptor finalizer. It adds
 no COMGR path and independently repeats the exact structural checks after
 digest finalization.
+
+Both inspected and finalized profile values retain their generic Worker V2
+lineage privately. They cannot be converted into generic prepared-finalization
+or publication values, and profile finalization consumes inspected evidence so
+the same admission cannot be replayed.

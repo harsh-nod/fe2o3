@@ -559,7 +559,6 @@ fn structural_row_softmax_v1_finalizes_as_two_f32_slices_and_288_bytes() {
     );
     assert_eq!(inspected.exact_bytes(), raw_bytes);
     let admitted = inspected.descriptor_admission();
-    assert_eq!(admitted.declared_row_elements(), 64);
     assert_eq!(admitted.workgroup_size(), [64, 1, 1]);
     assert_eq!(admitted.max_grid_size(), [1, 1, 1]);
     assert_eq!(admitted.explicit_kernarg_bytes(), 32);
@@ -584,12 +583,22 @@ fn structural_row_softmax_v1_finalizes_as_two_f32_slices_and_288_bytes() {
     assert_eq!(kernel.symbol(), "row_softmax_v1.kd");
     assert_eq!(kernel.required_workgroup_size(), Some([64, 1, 1]));
     assert_eq!(kernel.max_workgroups(), [Some(1), Some(1), Some(1)]);
+    assert_eq!(kernel.cluster_dims(), None);
+    assert_eq!(kernel.kind(), fe2o3_hsaco::KernelKind::Normal);
+    assert!(!kernel.uses_dynamic_stack());
     assert_eq!(kernel.max_flat_workgroup_size(), 64);
     assert_eq!(kernel.group_segment_fixed_size(), 0);
     assert_eq!(kernel.kernarg_segment_size(), 288);
     assert_eq!(kernel.implicit_argument_offset(), Some(32));
     assert_eq!(kernel.implicit_argument_size(), 256);
     assert_eq!(kernel.explicit_arguments().len(), 4);
+    assert_eq!(kernel.hidden_arguments().len(), 13);
+    assert!(
+        kernel
+            .hidden_arguments()
+            .iter()
+            .all(|argument| argument.value_kind() != fe2o3_hsaco::HiddenValueKind::DynamicLdsSize)
+    );
     assert!(finalized.raw_output_identity().matches(&raw_bytes));
     assert!(
         finalized
@@ -776,6 +785,110 @@ fn row_softmax_rejects_capability_target_symbol_and_descriptor_substitution() {
                 row_softmax_expectation(),
             )
             .is_err()
+        );
+    }
+}
+
+#[test]
+fn row_softmax_accepts_only_absent_or_exact_unit_cluster_dimensions() {
+    let table = row_softmax_descriptor_table(row_softmax_capabilities());
+    for (cluster_dims, invocation, semantic) in [(None, 0xa8, 0xb8), (Some([1, 1, 1]), 0xa9, 0xb9)]
+    {
+        let fixture = fixture_with_descriptor_table(
+            FixtureOptions {
+                cluster_dims,
+                ..row_softmax_options()
+            },
+            Some(&table),
+        );
+        assert_eq!(
+            fe2o3_hsaco::inspect(&fixture.bytes).unwrap().kernels()[0].cluster_dims(),
+            cluster_dims
+        );
+        let inspected = inspect_row_softmax_v1_structural_worker_v2_hsaco_v1(
+            evidence_for(
+                fixture.bytes,
+                "gfx942:xnack-",
+                invocation,
+                semantic,
+                "row_softmax_v1",
+                "row_softmax_v1.kd",
+            ),
+            row_softmax_expectation(),
+        )
+        .unwrap();
+        finalize_row_softmax_v1_structural_worker_v2_hsaco_v1(inspected).unwrap();
+    }
+}
+
+#[test]
+fn row_softmax_rejects_lifecycle_cluster_stack_and_hidden_launch_substitutions() {
+    let table = row_softmax_descriptor_table(row_softmax_capabilities());
+    let substitutions = [
+        (
+            FixtureOptions {
+                kernel_kind: Some("init"),
+                ..row_softmax_options()
+            },
+            "kernel kind",
+        ),
+        (
+            FixtureOptions {
+                cluster_dims: Some([2, 1, 1]),
+                ..row_softmax_options()
+            },
+            "cluster dimensions",
+        ),
+        (
+            FixtureOptions {
+                uses_dynamic_stack: true,
+                ..row_softmax_options()
+            },
+            "dynamic stack",
+        ),
+        (
+            FixtureOptions {
+                include_dynamic_lds_size: true,
+                ..row_softmax_options()
+            },
+            "hidden argument profile",
+        ),
+        (
+            FixtureOptions {
+                optional_hidden_argument: Some((88, 8, "hidden_multigrid_sync_arg")),
+                ..row_softmax_options()
+            },
+            "hidden argument profile",
+        ),
+        (
+            FixtureOptions {
+                optional_hidden_argument: Some((200, 8, "hidden_queue_ptr")),
+                ..row_softmax_options()
+            },
+            "hidden argument profile",
+        ),
+    ];
+
+    for (index, (options, field)) in substitutions.into_iter().enumerate() {
+        let fixture = fixture_with_descriptor_table(options, Some(&table));
+        let error = inspect_row_softmax_v1_structural_worker_v2_hsaco_v1(
+            evidence_for(
+                fixture.bytes,
+                "gfx942:xnack-",
+                0xaa_u8.wrapping_add(u8::try_from(index).unwrap()),
+                0xba_u8.wrapping_add(u8::try_from(index).unwrap()),
+                "row_softmax_v1",
+                "row_softmax_v1.kd",
+            ),
+            row_softmax_expectation(),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                RowSoftmaxV1StructuralArtifactErrorV1::ArtifactProfile(actual) if *actual == field
+            ),
+            "substitution {index} expected {field}, found {error:?}"
         );
     }
 }

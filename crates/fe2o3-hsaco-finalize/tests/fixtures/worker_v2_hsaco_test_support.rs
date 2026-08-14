@@ -41,6 +41,9 @@ struct FixtureOptions<'a> {
     second_optional_hidden_argument: Option<(u64, u64, &'a str)>,
     include_required_workgroup_size: bool,
     max_workgroups: [Option<u32>; 3],
+    cluster_dims: Option<[u32; 3]>,
+    kernel_kind: Option<&'a str>,
+    uses_dynamic_stack: bool,
     include_dynamic_lds_size: bool,
     duplicate_max_workgroups_x: bool,
     malformed_max_workgroups_x: bool,
@@ -71,6 +74,9 @@ impl FixtureOptions<'static> {
             second_optional_hidden_argument: None,
             include_required_workgroup_size: true,
             max_workgroups: [None; 3],
+            cluster_dims: None,
+            kernel_kind: None,
+            uses_dynamic_stack: false,
             include_dynamic_lds_size: false,
             duplicate_max_workgroups_x: false,
             malformed_max_workgroups_x: false,
@@ -189,15 +195,22 @@ fn fixture_with_descriptor_table(
     );
     write_u32(&mut bytes, descriptor_offset + 44, 1);
     write_u32(&mut bytes, descriptor_offset + 48, 0x00af_0081);
-    write_u32(&mut bytes, descriptor_offset + 52, 0x1390);
+    write_u32(
+        &mut bytes,
+        descriptor_offset + 52,
+        0x1390 | u32::from(options.uses_dynamic_stack),
+    );
+    let mut kernel_code_properties = 0x001e;
+    if options.descriptor_wavefront_size == 32 {
+        kernel_code_properties |= 1 << 10;
+    }
+    if options.uses_dynamic_stack {
+        kernel_code_properties |= 1 << 11;
+    }
     write_u16(
         &mut bytes,
         descriptor_offset + 56,
-        if options.descriptor_wavefront_size == 32 {
-            0x041e
-        } else {
-            0x001e
-        },
+        kernel_code_properties,
     );
 
     let mut shstr = vec![0];
@@ -497,6 +510,18 @@ fn metadata(options: FixtureOptions<'_>) -> Vec<u8> {
         if let Some(maximum) = maximum {
             kernel.push((Value::from(field), Value::from(maximum)));
         }
+    }
+    if let Some(dimensions) = options.cluster_dims {
+        kernel.push((
+            Value::from(".cluster_dims"),
+            Value::Array(dimensions.into_iter().map(Value::from).collect()),
+        ));
+    }
+    if let Some(kind) = options.kernel_kind {
+        kernel.push((Value::from(".kind"), Value::from(kind)));
+    }
+    if options.uses_dynamic_stack {
+        kernel.push((Value::from(".uses_dynamic_stack"), Value::from(true)));
     }
     if options.duplicate_max_workgroups_x {
         kernel.push((Value::from(".max_num_workgroups_x"), Value::from(1)));
