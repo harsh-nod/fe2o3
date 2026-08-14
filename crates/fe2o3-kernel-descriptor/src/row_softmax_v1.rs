@@ -24,8 +24,7 @@ pub const ROW_SOFTMAX_V1_IMPLICIT_KERNARG_BYTES: u32 = 256;
 pub const ROW_SOFTMAX_V1_TOTAL_KERNARG_BYTES: u32 =
     ROW_SOFTMAX_V1_EXPLICIT_KERNARG_BYTES + ROW_SOFTMAX_V1_IMPLICIT_KERNARG_BYTES;
 
-const ROW_SOFTMAX_V1_CAPABILITIES: [CapabilityV1; 2] =
-    [CapabilityV1::Subgroup, CapabilityV1::AmdWave];
+const ROW_SOFTMAX_V1_CAPABILITIES: [CapabilityV1; 1] = [CapabilityV1::AmdWave];
 
 /// Exact declared provenance expected for one structural row-softmax profile.
 ///

@@ -46,7 +46,7 @@ impl Options {
             total_bytes: 288,
             static_lds: 0,
             dynamic_lds: 0,
-            capabilities: vec![CapabilityV1::Subgroup, CapabilityV1::AmdWave],
+            capabilities: vec![CapabilityV1::AmdWave],
             input_name: "input",
             input_scalar: ScalarTypeV1::F32,
             output_access: AccessMode::ReadWrite,
@@ -183,10 +183,7 @@ fn fixed_row_profile_is_structurally_sealed_and_v1_round_trips() {
     assert_eq!(admitted.explicit_kernarg_bytes(), 32);
     assert_eq!(admitted.implicit_kernarg_bytes(), 256);
     assert_eq!(admitted.total_kernarg_bytes(), 288);
-    assert_eq!(
-        decoded.kernels()[0].capabilities(),
-        [CapabilityV1::Subgroup, CapabilityV1::AmdWave]
-    );
+    assert_eq!(decoded.kernels()[0].capabilities(), [CapabilityV1::AmdWave]);
     assert!(!admitted.authenticates_evidence_origin());
     assert!(!admitted.validates_runtime_slice_lengths());
     assert!(!admitted.validates_kernel_body());
@@ -270,11 +267,7 @@ fn rejects_capability_type_ownership_access_and_evidence_drift() {
     for (mutated, expected) in [
         (
             Options {
-                capabilities: vec![
-                    CapabilityV1::Subgroup,
-                    CapabilityV1::Shuffle,
-                    CapabilityV1::AmdWave,
-                ],
+                capabilities: vec![CapabilityV1::Subgroup, CapabilityV1::AmdWave],
                 ..baseline.clone()
             },
             RowSoftmaxV1StructuralDescriptorErrorV1::CapabilityProvenance,
