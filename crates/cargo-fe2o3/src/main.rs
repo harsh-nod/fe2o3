@@ -463,6 +463,10 @@ fn run_cargo_with_backend(
         .env(BINDING_WRAPPER_MODE_ENV, "1")
         .env(MANAGED_RUSTC_ARGS_ENV, &context.managed_rustc_args)
         .env(BUILD_SESSION_ENV, context.build_session.to_hex());
+    if context.requires_locked_closure {
+        // Authority builds do not admit unpinned C tools, ROCm headers, or native libraries.
+        cargo.as_command_mut().env("FE2O3_HIP_SYS_DISABLE", "1");
+    }
     match context.worker_v2_identity {
         Some(identity) => {
             cargo

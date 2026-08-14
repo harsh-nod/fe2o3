@@ -654,12 +654,6 @@ fn is_reviewed_fe2o3_hip_sys(package: &Value, tree_digest: &[u8; 32]) -> Result<
         &expected,
         "native build",
     )?;
-    if std::env::var_os("FE2O3_HIP_SYS_DISABLE").is_none() {
-        return Err(
-            "authoritative native build requires FE2O3_HIP_SYS_DISABLE so unpinned C tools and ROCm headers cannot enter the trusted closure"
-                .to_owned(),
-        );
-    }
     Ok(true)
 }
 
