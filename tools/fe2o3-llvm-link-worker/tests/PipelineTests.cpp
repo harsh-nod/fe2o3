@@ -427,6 +427,7 @@ struct SyntheticOcmlOptions {
   bool WrongTriple = false;
   bool WrongAbi = false;
   bool UnresolvedDependency = false;
+  uint8_t CodeObjectVersion = 5;
 };
 
 std::vector<uint8_t>
@@ -440,7 +441,8 @@ makeSyntheticOcmlBitcode(const SyntheticOcmlOptions &Options = {}) {
     ModuleValue.setDataLayout(Machine->createDataLayout());
   else if (Options.Layout == LayoutMode::Incompatible)
     ModuleValue.setDataLayout("e-p:32:32");
-  ModuleValue.addModuleFlag(Module::Error, "amdhsa_code_object_version", 500);
+  ModuleValue.addModuleFlag(Module::Error, "amdhsa_code_object_version",
+                            Options.CodeObjectVersion * 100);
 
   Type *F32 = Type::getFloatTy(Context);
   FunctionType *F32Signature = FunctionType::get(F32, {F32}, false);
@@ -474,6 +476,14 @@ makeSyntheticOcmlBitcode(const SyntheticOcmlOptions &Options = {}) {
   } else {
     RootBuilder.CreateRet(RootBuilder.CreateCall(Helper, {Root->getArg(0)}));
   }
+
+  Function *ExpRoot =
+      Function::Create(F32Signature, GlobalValue::LinkOnceODRLinkage,
+                       "__ocml_exp_f32", ModuleValue);
+  ExpRoot->setVisibility(GlobalValue::HiddenVisibility);
+  BasicBlock *ExpBlock = BasicBlock::Create(Context, "entry", ExpRoot);
+  IRBuilder<> ExpBuilder(ExpBlock);
+  ExpBuilder.CreateRet(ExpBuilder.CreateCall(Helper, {ExpRoot->getArg(0)}));
 
   Function *UndeclaredRoot =
       Function::Create(F32Signature, GlobalValue::LinkOnceODRLinkage,
@@ -1257,6 +1267,22 @@ void testSyntheticOcmlPipeline() {
   requireFailureWithPolicy(MismatchedCodeObject, ValidPolicy,
                            Stage::BitcodeLink);
 
+  SyntheticDeviceLibraryDirectory Cov6ProviderDirectory;
+  SyntheticOcmlOptions Cov6ProviderOptions;
+  Cov6ProviderOptions.CodeObjectVersion = 6;
+  Gfx942DeviceLibraryPolicy Cov6ProviderPolicy = makeSyntheticPolicy(
+      Cov6ProviderDirectory, makeSyntheticOcmlBitcode(Cov6ProviderOptions));
+  runSuccessWithPolicy(Cov6Exp, Cov6ProviderPolicy,
+                       {"__ocml_exp_f32", "ocml_entry"});
+  requireFailureWithPolicy(Valid, Cov6ProviderPolicy, Stage::BitcodeLink);
+
+  SyntheticDeviceLibraryDirectory Cov4ProviderDirectory;
+  SyntheticOcmlOptions Cov4ProviderOptions;
+  Cov4ProviderOptions.CodeObjectVersion = 4;
+  Gfx942DeviceLibraryPolicy Cov4ProviderPolicy = makeSyntheticPolicy(
+      Cov4ProviderDirectory, makeSyntheticOcmlBitcode(Cov4ProviderOptions));
+  requireFailureWithPolicy(Cov6Exp, Cov4ProviderPolicy, Stage::BitcodeLink);
+
   Gfx942DeviceLibraryPolicy WrongDigest = ValidPolicy;
   WrongDigest.Files[0].Digest[0] ^= 0xff;
   requireFailureWithPolicy(Valid, WrongDigest, Stage::Toolchain);
@@ -1330,6 +1356,17 @@ std::optional<std::vector<uint8_t>> testMeasuredOcmlPipeline() {
                     "provider=gfx942-ocml-v1 roots=[__ocml_sin_f32] files=4");
   require(!hasObjectSymbol(Linked.LinkedOutput->Bytes, "__ocml_acos_f64"),
           "unrequested measured OCML definition escaped closure reduction");
+
+  Response Cov6Exp = runSuccess(makeOcmlRequest("__ocml_exp_f32", 6),
+                                {"__ocml_exp_f32", "ocml_entry"});
+  requireDiagnostic(Cov6Exp,
+                    "device_library.check=identity status=ok "
+                    "provider=gfx942-ocml-v1 roots=[__ocml_exp_f32] files=4");
+  require(Cov6Exp.DeviceLibraryProvider.has_value() &&
+              Cov6Exp.DeviceLibraryProvider->CodeObjectVersion == 6 &&
+              Cov6Exp.DeviceLibraryProvider->ImportSymbols ==
+                  std::vector<std::string>({"__ocml_exp_f32"}),
+          "measured COV6 OCML link omitted structured provider evidence");
 
   const std::array<StringRef, 7> AllSupported = {
       "__ocml_cos_f32",   "__ocml_exp2_f32", "__ocml_exp_f32",

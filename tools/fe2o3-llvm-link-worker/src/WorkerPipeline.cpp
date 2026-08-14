@@ -308,7 +308,8 @@ createMachine(const Request &RequestValue) {
 
 Error setAndCheckModuleContract(Module &ModuleValue,
                                 const Request &RequestValue,
-                                const TargetMachine &Machine) {
+                                const TargetMachine &Machine,
+                                bool MeasuredBuiltinProvider = false) {
   TargetParts Parts = parseTarget(RequestValue.Target);
   const Triple &ExistingTriple = ModuleValue.getTargetTriple();
   if (!ExistingTriple.getTriple().empty() &&
@@ -324,11 +325,20 @@ Error setAndCheckModuleContract(Module &ModuleValue,
       ModuleValue.getModuleFlag("amdhsa_code_object_version");
   if (ExistingCodeObject) {
     auto *Constant = mdconst::dyn_extract<ConstantInt>(ExistingCodeObject);
-    if (!Constant ||
-        Constant->getZExtValue() !=
-            static_cast<uint64_t>(RequestValue.CodeObjectVersion) * 100)
+    uint64_t Expected =
+        static_cast<uint64_t>(RequestValue.CodeObjectVersion) * 100;
+    if (!Constant)
       return pipelineError(
           "bitcode code-object version does not match request");
+    if (Constant->getZExtValue() != Expected) {
+      if (!MeasuredBuiltinProvider || RequestValue.CodeObjectVersion != 6 ||
+          Constant->getZExtValue() != 500)
+        return pipelineError(
+            "bitcode code-object version does not match request");
+      ModuleValue.setModuleFlag(
+          Module::Error, "amdhsa_code_object_version",
+          ConstantAsMetadata::get(ConstantInt::get(Constant->getType(), 600)));
+    }
   }
   ModuleValue.setTargetTriple(Triple(AmdGpuTriple));
   ModuleValue.setDataLayout(Machine.createDataLayout());
@@ -412,7 +422,8 @@ Error setAndCheckModuleContract(Module &ModuleValue,
 Expected<std::unique_ptr<Module>>
 parseModuleInput(const Input &InputValue, StringRef InputName,
                  const Request &RequestValue, LLVMContext &Context,
-                 const TargetMachine &Machine) {
+                 const TargetMachine &Machine,
+                 bool MeasuredBuiltinProvider = false) {
   if (InputValue.Kind != InputKind::LlvmBitcode &&
       InputValue.Kind != InputKind::LlvmTextIr)
     return pipelineError(Twine(InputName) + " is not an LLVM module");
@@ -460,7 +471,8 @@ parseModuleInput(const Input &InputValue, StringRef InputName,
   if (!AcceptedLayout)
     return pipelineError(
         "LLVM module data layout does not match target machine");
-  if (Error E = setAndCheckModuleContract(**Parsed, RequestValue, Machine))
+  if (Error E = setAndCheckModuleContract(**Parsed, RequestValue, Machine,
+                                          MeasuredBuiltinProvider))
     return E;
   if (RequestValue.LinkOptions.VerifyEach) {
     BoundedRawStream Stream(MaxDiagnosticBytes);
@@ -558,8 +570,8 @@ Expected<std::unique_ptr<Module>> linkBitcode(const Request &RequestValue,
     const Input &InputValue = BuiltinProviders[I];
     std::string InputName =
         (Twine("<measured-gfx942-device-library-") + Twine(I) + ">").str();
-    auto Parsed =
-        parseModuleInput(InputValue, InputName, RequestValue, Context, Machine);
+    auto Parsed = parseModuleInput(InputValue, InputName, RequestValue, Context,
+                                   Machine, true);
     if (!Parsed)
       return Parsed.takeError();
     for (const std::string &Import : RequestValue.ImportSymbols)
