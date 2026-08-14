@@ -2536,7 +2536,7 @@ mod tests {
         let baseline = collected_authority_commitment(
             baseline_receipt.authority.as_ref().expect("test authority"),
         );
-        let mutations: [ReceiptMutation; 22] = [
+        let mutations: [ReceiptMutation; 23] = [
             (
                 |value| value.portable_mir_semantic_commitment[0] ^= 1,
                 "portable MIR",
