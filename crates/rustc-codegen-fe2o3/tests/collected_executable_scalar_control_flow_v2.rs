@@ -953,7 +953,7 @@ fn compile_tiled_gemm(
         .expect("compile tiled GEMM fixture within deadline")
 }
 
-fn compile_row_softmax(
+fn compile_row_softmax_with_test_attempt(
     workspace: &Path,
     backend: &PinnedBackend,
     output: &TestOutputDir,
@@ -971,6 +971,31 @@ fn compile_row_softmax(
         // consistent. Production admission validates only the token shape.
         "3a4d867f29d87610",
         extra_args,
+    )
+}
+
+fn compile_row_softmax_direct(
+    workspace: &Path,
+    backend: &PinnedBackend,
+    output: &TestOutputDir,
+    source: &str,
+) -> Output {
+    build_frontend_dependencies(workspace).expect("build row-softmax frontend dependencies");
+    let cargo_target = std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| workspace.join("target"));
+    compile_row_softmax_with_device(
+        workspace,
+        backend,
+        output,
+        source,
+        "gfx942:xnack-",
+        "3a4d867f29d87610",
+        &[],
+        &cargo_target.join("debug/libfe2o3_device.rlib"),
+        &cargo_target.join("debug/libfe2o3_host.rlib"),
+        false,
+        "a59650cf8d1bfc6168915cb817dbab3a0fa6a8839291231bbf4149a749913937",
     )
 }
 
@@ -1118,7 +1143,11 @@ fn assert_row_softmax_published_nothing(output: &TestOutputDir) {
         !output.0.join("row-softmax-v1").exists(),
         "row-softmax boundary emitted a linked output"
     );
-    let artifacts = std::fs::read_dir(output.0.join("artifacts"))
+    let artifact_directory = output.0.join("artifacts");
+    if !artifact_directory.exists() {
+        return;
+    }
+    let artifacts = std::fs::read_dir(artifact_directory)
         .expect("read row-softmax artifact directory")
         .collect::<Result<Vec<_>, _>>()
         .expect("enumerate row-softmax artifacts");
@@ -2082,35 +2111,21 @@ fn row_softmax_v1_source_authentication_and_adversaries_stop_at_canonical_ir() {
     let backend = build_backend(&workspace);
 
     let exact_output = TestOutputDir::new(&workspace);
-    let exact = compile_row_softmax(
-        &workspace,
-        backend,
-        &exact_output,
-        ROW_SOFTMAX_FIXTURE,
-        "gfx942:xnack-",
-        &[],
-    );
+    let exact = compile_row_softmax_direct(&workspace, backend, &exact_output, ROW_SOFTMAX_FIXTURE);
     let exact_stderr = stderr(&exact);
     assert!(
         !exact.status.success()
-            && exact_stderr.contains("consumed its private single-use frontend receipt")
-            && exact_stderr.contains("exact ABI input:&[f32], output:DisjointSlice<f32>")
-            && exact_stderr.contains("fixed one-row 64-element profile")
-            && exact_stderr.contains("selected canonical Kernel IR module `fe2o3::row_softmax_v1`")
-            && exact_stderr.contains("stopped at the fail-closed source-authenticated boundary")
-            && exact_stderr.contains("exp implementation and approximation/error contract")
-            && exact_stderr.contains("OCML bitcode/linking")
-            && exact_stderr.contains("COMGR")
-            && !exact_stderr.contains("rejected the collected program without fallback")
-            && !exact_stderr.contains("__ocml_exp_f32"),
-        "reviewed row softmax missed its canonical boundary:\n{exact_stderr}"
+            && exact_stderr.contains("requires a managed FE2O3_BUILD_ATTEMPT_V1")
+            && !exact_stderr.contains("consumed its private single-use frontend receipt")
+            && !exact_stderr.contains("selected canonical Kernel IR module"),
+        "direct rustc minted row-softmax authority:\n{exact_stderr}"
     );
     assert_row_softmax_published_nothing(&exact_output);
 
     let arithmetic_source = ROW_SOFTMAX_FIXTURE.replace("value > maximum", "value >= maximum");
     assert_ne!(arithmetic_source, ROW_SOFTMAX_FIXTURE);
     let arithmetic_output = TestOutputDir::new(&workspace);
-    let arithmetic = compile_row_softmax(
+    let arithmetic = compile_row_softmax_with_test_attempt(
         &workspace,
         backend,
         &arithmetic_output,
@@ -2133,7 +2148,7 @@ fn row_softmax_v1_source_authentication_and_adversaries_stop_at_canonical_ir() {
     );
     assert_ne!(extent_source, ROW_SOFTMAX_FIXTURE);
     let extent_output = TestOutputDir::new(&workspace);
-    let extent = compile_row_softmax(
+    let extent = compile_row_softmax_with_test_attempt(
         &workspace,
         backend,
         &extent_output,
@@ -2159,7 +2174,7 @@ fn row_softmax_v1_source_authentication_and_adversaries_stop_at_canonical_ir() {
         );
     assert_ne!(helper_source, ROW_SOFTMAX_FIXTURE);
     let helper_output = TestOutputDir::new(&workspace);
-    let helper = compile_row_softmax(
+    let helper = compile_row_softmax_with_test_attempt(
         &workspace,
         backend,
         &helper_output,
@@ -2184,7 +2199,7 @@ fn row_softmax_v1_source_authentication_and_adversaries_stop_at_canonical_ir() {
         );
     assert_ne!(abi_source, ROW_SOFTMAX_FIXTURE);
     let abi_output = TestOutputDir::new(&workspace);
-    let abi = compile_row_softmax(
+    let abi = compile_row_softmax_with_test_attempt(
         &workspace,
         backend,
         &abi_output,
@@ -2211,7 +2226,7 @@ fn row_softmax_v1_source_authentication_and_adversaries_stop_at_canonical_ir() {
     );
     assert_ne!(contract_source, ROW_SOFTMAX_FIXTURE);
     let contract_output = TestOutputDir::new(&workspace);
-    let contract = compile_row_softmax(
+    let contract = compile_row_softmax_with_test_attempt(
         &workspace,
         backend,
         &contract_output,
@@ -2229,7 +2244,7 @@ fn row_softmax_v1_source_authentication_and_adversaries_stop_at_canonical_ir() {
     assert_row_softmax_published_nothing(&contract_output);
 
     let target_output = TestOutputDir::new(&workspace);
-    let target = compile_row_softmax(
+    let target = compile_row_softmax_with_test_attempt(
         &workspace,
         backend,
         &target_output,
@@ -2247,7 +2262,7 @@ fn row_softmax_v1_source_authentication_and_adversaries_stop_at_canonical_ir() {
     assert_row_softmax_published_nothing(&target_output);
 
     let semantics_output = TestOutputDir::new(&workspace);
-    let semantics = compile_row_softmax(
+    let semantics = compile_row_softmax_with_test_attempt(
         &workspace,
         backend,
         &semantics_output,
@@ -2366,7 +2381,7 @@ fn row_softmax_requires_managed_wrapper_attempt_and_exact_metadata_transcript() 
 }
 
 #[test]
-fn clean_external_cargo_fe2o3_accepts_variable_generated_row_softmax_roots() {
+fn row_softmax_managed_wrapper_accepts_variable_generated_roots() {
     let workspace = workspace();
     let cargo_output = TestOutputDir::new(&workspace);
     let cargo_target = cargo_output.0.join("cargo-target");
