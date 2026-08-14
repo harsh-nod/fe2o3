@@ -37,7 +37,7 @@ use sha2::{Digest, Sha256};
 
 const TARGET: &str = "gfx942:xnack-";
 const TARGET_TRIPLE: &str = "amdgcn-amd-amdhsa";
-const REQUIRED_KERNELS: [&str; 2] = ["alpha", "zeta"];
+const ALPHA_ZETA_KERNELS: [&str; 2] = ["alpha", "zeta"];
 const RUST_TYPE_DOMAIN: &[u8] = b"FE2O3/RUST-TYPE/V1\0";
 const DEVICE_LAYOUT_DOMAIN: &[u8] = b"FE2O3/DEVICE-LAYOUT/V1\0";
 
@@ -52,7 +52,8 @@ pub(crate) struct WorkerV2DescriptorKernelLineageV1 {
     executable_evidence_identity: [u8; 32],
 }
 
-/// Inert result of assembling the two-entry container from one finalized publication snapshot.
+/// Inert result of assembling one profile-checked container from one finalized publication
+/// snapshot.
 ///
 /// A bounded subset of publication and descriptor lineage is retained because
 /// `ArtifactContainerV1` has no slots for it. The complete plan, receipt, raw
@@ -71,7 +72,7 @@ pub(crate) struct PreparedWorkerV2ArtifactContainerV1 {
     upstream_evidence_identity: [u8; 32],
     producer_receipt_identity: [u8; 32],
     compiler_commit: [u8; 20],
-    descriptors: [WorkerV2DescriptorKernelLineageV1; 2],
+    descriptors: Vec<WorkerV2DescriptorKernelLineageV1>,
 }
 
 #[derive(Debug)]
@@ -112,10 +113,11 @@ impl fmt::Display for WorkerV2ArtifactContainerAssemblyErrorV1 {
                 "Worker V2 artifact assembly requires target {TARGET}"
             ),
             Self::KernelCount => {
-                formatter.write_str("Worker V2 artifact assembly requires exactly two kernels")
+                formatter.write_str("Worker V2 artifact assembly has no supported kernel count")
             }
-            Self::KernelSet => formatter
-                .write_str("Worker V2 artifact assembly requires exact alpha and zeta entries"),
+            Self::KernelSet => {
+                formatter.write_str("Worker V2 artifact assembly has no supported kernel profile")
+            }
             Self::DuplicateKernelField(field) => {
                 write!(formatter, "duplicate descriptor kernel {field}")
             }
@@ -193,7 +195,36 @@ struct CanonicalContainerAssemblyV1 {
     container: ArtifactContainerV1,
     canonical_code_object_digest: [u8; 32],
     compiler_commit: [u8; 20],
-    descriptors: [WorkerV2DescriptorKernelLineageV1; 2],
+    descriptors: Vec<WorkerV2DescriptorKernelLineageV1>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ArtifactAssemblyProfileV1 {
+    AlphaZeta,
+}
+
+impl ArtifactAssemblyProfileV1 {
+    const fn kernel_count(self) -> usize {
+        match self {
+            Self::AlphaZeta => 2,
+        }
+    }
+
+    fn fields(self, entry: &str) -> Option<&'static [FrozenFieldV1]> {
+        match (self, entry) {
+            (Self::AlphaZeta, "alpha") => Some(&ALPHA_FIELDS),
+            (Self::AlphaZeta, "zeta") => Some(&ZETA_FIELDS),
+            _ => None,
+        }
+    }
+
+    fn explicit_size(self, entry: &str) -> Option<u32> {
+        match (self, entry) {
+            (Self::AlphaZeta, "alpha") => Some(40),
+            (Self::AlphaZeta, "zeta") => Some(56),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -425,18 +456,29 @@ fn assemble_canonical_container_v1(
         return Err(WorkerV2ArtifactContainerAssemblyErrorV1::Target);
     }
     let table = inspection.descriptor_table();
-    if table.kernels().len() != 2 || hsaco.kernels().len() != 2 {
+    if table.code_object_version() != fe2o3_kernel_descriptor::CodeObjectVersion::V6
+        || table.device_target().to_string() != TARGET
+    {
+        return Err(WorkerV2ArtifactContainerAssemblyErrorV1::DescriptorModel(
+            "descriptor target or code-object version differs from the artifact",
+        ));
+    }
+    let profile = profile_for_names(
+        table
+            .kernels()
+            .iter()
+            .map(|kernel| kernel.entry_name().as_str()),
+    )?;
+    if hsaco.kernels().len() != profile.kernel_count() {
         return Err(WorkerV2ArtifactContainerAssemblyErrorV1::KernelCount);
     }
 
-    let mut kernels = Vec::with_capacity(2);
+    let mut kernels = Vec::with_capacity(profile.kernel_count());
     for descriptor in table.kernels() {
         let entry = descriptor.entry_name().as_str();
-        let fields: &[FrozenFieldV1] = match entry {
-            "alpha" => &ALPHA_FIELDS,
-            "zeta" => &ZETA_FIELDS,
-            _ => return Err(WorkerV2ArtifactContainerAssemblyErrorV1::KernelSet),
-        };
+        let fields = profile
+            .fields(entry)
+            .ok_or(WorkerV2ArtifactContainerAssemblyErrorV1::KernelSet)?;
         if descriptor.logical_name().as_str() != entry
             || descriptor.descriptor_symbol().as_str() != format!("{entry}.kd")
             || descriptor.capabilities() != [CapabilityV1::AmdWave]
@@ -451,7 +493,10 @@ fn assemble_canonical_container_v1(
             .iter()
             .find(|kernel| kernel.name() == entry)
             .ok_or(WorkerV2ArtifactContainerAssemblyErrorV1::KernelSet)?;
-        validate_physical_profile(metadata, fields)?;
+        let expected_explicit = profile
+            .explicit_size(entry)
+            .ok_or(WorkerV2ArtifactContainerAssemblyErrorV1::KernelSet)?;
+        validate_physical_profile(metadata, fields, expected_explicit)?;
 
         let mut converted_fields = Vec::with_capacity(fields.len());
         for (source_index, (argument, expected)) in
@@ -489,7 +534,6 @@ fn assemble_canonical_container_v1(
         }
 
         let layout = descriptor.abi_layout();
-        let expected_explicit = if entry == "alpha" { 40 } else { 56 };
         let expected_kernarg = expected_explicit + 256;
         if layout.explicit_argument_size() != expected_explicit
             || layout.kernarg_segment_size() != expected_kernarg
@@ -537,7 +581,7 @@ fn assemble_canonical_container_v1(
         producer_version: table.producer().version().as_str().to_owned(),
         kernels,
     };
-    validate_profile(&table)?;
+    validate_profile_for(&table, profile)?;
     let (container, descriptors) = build_container(&table, exact_finalized_hsaco.to_vec())?;
 
     Ok(CanonicalContainerAssemblyV1 {
@@ -726,17 +770,13 @@ fn expected_components(field: FrozenFieldV1) -> Vec<(u32, u16, u16)> {
 fn validate_physical_profile(
     kernel: &InspectedKernel,
     fields: &[FrozenFieldV1],
+    explicit_size: u32,
 ) -> Result<(), WorkerV2ArtifactContainerAssemblyErrorV1> {
-    let explicit_size = fields
-        .iter()
-        .map(|field| u64::from(field.offset) + u64::from(field.kind.size()))
-        .max()
-        .unwrap_or(0);
     if kernel.required_workgroup_size() != Some([256, 1, 1])
         || kernel.max_flat_workgroup_size() != 256
         || kernel.group_segment_fixed_size() != 0
         || kernel.private_segment_fixed_size() != 0
-        || kernel.kernarg_segment_size() != explicit_size + 256
+        || kernel.kernarg_segment_size() != u64::from(explicit_size) + 256
         || kernel.kernarg_segment_alignment() != 8
         || kernel.wavefront_size() != 64
         || kernel.uses_dynamic_stack()
@@ -807,36 +847,63 @@ fn validate_physical_profile(
 fn validate_profile(
     table: &DescriptorTableAssemblyV1,
 ) -> Result<(), WorkerV2ArtifactContainerAssemblyErrorV1> {
-    if table.kernels.len() != 2 {
+    let profile = profile_for_names(
+        table
+            .kernels
+            .iter()
+            .map(|kernel| kernel.entry_name.as_str()),
+    )?;
+    validate_profile_for(table, profile)
+}
+
+fn validate_profile_for(
+    table: &DescriptorTableAssemblyV1,
+    profile: ArtifactAssemblyProfileV1,
+) -> Result<(), WorkerV2ArtifactContainerAssemblyErrorV1> {
+    if table.kernels.len() != profile.kernel_count() {
         return Err(WorkerV2ArtifactContainerAssemblyErrorV1::KernelCount);
-    }
-    let mut names = table
-        .kernels
-        .iter()
-        .map(|kernel| kernel.entry_name.as_str())
-        .collect::<Vec<_>>();
-    names.sort_unstable();
-    if names != REQUIRED_KERNELS {
-        return Err(WorkerV2ArtifactContainerAssemblyErrorV1::KernelSet);
     }
     reject_duplicate_kernel_fields(&table.kernels)?;
     for kernel in &table.kernels {
-        validate_assembled_kernel_profile(kernel)?;
+        validate_assembled_kernel_profile(kernel, profile)?;
     }
     Ok(())
 }
 
+fn profile_for_names<'a>(
+    names: impl IntoIterator<Item = &'a str>,
+) -> Result<ArtifactAssemblyProfileV1, WorkerV2ArtifactContainerAssemblyErrorV1> {
+    let mut names = names.into_iter().collect::<Vec<_>>();
+    names.sort_unstable();
+    if names == ALPHA_ZETA_KERNELS {
+        Ok(ArtifactAssemblyProfileV1::AlphaZeta)
+    } else if names.len() == ALPHA_ZETA_KERNELS.len() {
+        Err(WorkerV2ArtifactContainerAssemblyErrorV1::KernelSet)
+    } else {
+        Err(WorkerV2ArtifactContainerAssemblyErrorV1::KernelCount)
+    }
+}
+
 fn validate_assembled_kernel_profile(
     kernel: &DescriptorKernelAssemblyV1,
+    profile: ArtifactAssemblyProfileV1,
 ) -> Result<(), WorkerV2ArtifactContainerAssemblyErrorV1> {
-    let expected = match kernel.entry_name.as_str() {
-        "alpha" => ALPHA_FIELDS.as_slice(),
-        "zeta" => ZETA_FIELDS.as_slice(),
-        _ => return Err(WorkerV2ArtifactContainerAssemblyErrorV1::KernelSet),
-    };
+    let expected = profile
+        .fields(&kernel.entry_name)
+        .ok_or(WorkerV2ArtifactContainerAssemblyErrorV1::KernelSet)?;
+    let expected_explicit = profile
+        .explicit_size(&kernel.entry_name)
+        .ok_or(WorkerV2ArtifactContainerAssemblyErrorV1::KernelSet)?;
     if kernel.logical_name != kernel.entry_name
         || kernel.descriptor_symbol != format!("{}.kd", kernel.entry_name)
         || kernel.capabilities != [Capability::AmdWave]
+        || kernel.explicit_size != expected_explicit
+        || kernel.kernarg_size != expected_explicit + 256
+        || kernel.kernarg_alignment != 8
+        || kernel.rank != 1
+        || kernel.max_grid != [u32::MAX, 1, 1]
+        || kernel.static_shared_memory_bytes != 0
+        || kernel.max_dynamic_shared_memory_bytes != 0
         || kernel.fields.len() != expected.len()
     {
         return Err(WorkerV2ArtifactContainerAssemblyErrorV1::DescriptorModel(
@@ -866,7 +933,7 @@ fn build_container(
     table: &DescriptorTableAssemblyV1,
     exact_finalized_hsaco: Vec<u8>,
 ) -> Result<
-    (ArtifactContainerV1, [WorkerV2DescriptorKernelLineageV1; 2]),
+    (ArtifactContainerV1, Vec<WorkerV2DescriptorKernelLineageV1>),
     WorkerV2ArtifactContainerAssemblyErrorV1,
 > {
     validate_profile(table)?;
@@ -915,9 +982,6 @@ fn build_container(
         .map(descriptor_lineage)
         .collect::<Vec<_>>();
     descriptors.sort_unstable_by_key(|descriptor| descriptor.kernel_id);
-    let descriptors = descriptors
-        .try_into()
-        .map_err(|_| WorkerV2ArtifactContainerAssemblyErrorV1::KernelCount)?;
     Ok((container, descriptors))
 }
 
