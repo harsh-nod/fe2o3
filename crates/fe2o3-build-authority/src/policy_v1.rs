@@ -82,7 +82,7 @@ impl PipelineV1 {
         }
     }
 
-    fn from_wire(value: u16) -> Result<Self, PolicyErrorV1> {
+    pub(crate) fn from_wire(value: u16) -> Result<Self, PolicyErrorV1> {
         match value {
             1 => Ok(Self::CollectedRowSoftmax),
             2 => Ok(Self::CollectedTiledGemm),
