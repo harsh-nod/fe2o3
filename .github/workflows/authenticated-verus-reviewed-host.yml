@@ -14,6 +14,7 @@ concurrency:
 
 jobs:
   reviewed-host:
+    if: ${{ github.repository == 'harsh-nod/fe2o3' }}
     name: Pinned closure debug and release
     runs-on: [self-hosted, linux, x64, fe2o3-verus-reviewed-host-v1]
     timeout-minutes: 45

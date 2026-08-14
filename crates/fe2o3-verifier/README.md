@@ -138,8 +138,10 @@ substitution, and fail-closed closure checks. The dedicated
 `Authenticated Verus reviewed host` workflow targets only the self-hosted runner
 label `fe2o3-verus-reviewed-host-v1` and runs
 `scripts/ci-authenticated-verus-reviewed-host.sh` after trusted `main` pushes or
-an explicit dispatch. The same script is the pre-push publication gate for
-changes to this controller, fixture, policy, or toolchain.
+an explicit dispatch in the canonical `harsh-nod/fe2o3` repository. The
+`powderluv/fe2o3` mirror must point to the identical commit and does not own a
+second reviewed-host runner. The same script is the pre-push publication gate
+for changes to this controller, fixture, policy, or toolchain.
 It runs all 14 debug tests and the 13 applicable release tests with
 `--include-ignored --test-threads=1`. Serial execution avoids cross-test
 ptrace/process-scheduling interference. A missing reviewed runner leaves the
