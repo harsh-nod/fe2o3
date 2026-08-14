@@ -49,6 +49,7 @@ Commands:
   workspace-test  Run every workspace test target; may require ROCm libraries
   backend         Build the rustc codegen backend dylib
   authority-launcher  Run bounded protected build-authority launcher tests
+  rustc-trampoline    Run non-integrated static rustc trampoline tests
   parity-evidence Run parity, signed-attestation, and queue shell tests
   parity-production-immutable  Run opt-in root ext4/XFS ingestion test
   verus           Run positive and negative Verus proof fixtures; requires Verus
@@ -220,6 +221,11 @@ run_authority_launcher_tests() {
     bash scripts/tests/cargo-fe2o3-authority-launcher.sh
 }
 
+run_rustc_trampoline_tests() {
+  run_step rustc-trampoline-tests \
+    bash scripts/tests/fe2o3-rustc-trampoline.sh
+}
+
 run_parity_matrix_checks() {
   run_step parity-matrix-check bash scripts/parity-matrix.sh check
   run_step parity-matrix-tests bash scripts/tests/parity-matrix.sh
@@ -229,6 +235,7 @@ run_parity_matrix_checks() {
   run_step parity-oci-operator-tests \
     bash scripts/tests/parity-oci-operator.sh
   run_authority_launcher_tests
+  run_rustc_trampoline_tests
   run_step parity-row-evidence-tests \
     bash scripts/tests/parity-row-evidence.sh
   run_step parity-publisher-client-tests \
@@ -424,6 +431,7 @@ main() {
     workspace-test) run_workspace_tests ;;
     backend) run_backend_build ;;
     authority-launcher) run_authority_launcher_tests ;;
+    rustc-trampoline) run_rustc_trampoline_tests ;;
     parity-evidence) run_parity_matrix_checks ;;
     parity-production-immutable) run_parity_production_immutable ;;
     verus) run_verus ;;
