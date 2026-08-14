@@ -17,7 +17,7 @@ use fe2o3_hsaco::MAX_HSACO_BYTES;
 use fe2o3_hsaco_finalize::{
     ContentIdentityV1, LinkOptionV1, PinnedWorkerV1, WorkerExecutionLimitsV1, WorkerMeasurementV1,
     WorkerOutputConstraintsV1, execute_reproducible_first_build_worker_v2,
-    inspect_scalar_gemm_v1_worker_v2_hsaco_v1,
+    finalize_inspected_worker_v2_hsaco_v1, inspect_scalar_gemm_v1_worker_v2_hsaco_v1,
 };
 use fe2o3_kernel_descriptor::CodeObjectVersion;
 use fe2o3_kernel_ir::SCALAR_GEMM_V1_KERNEL_ID;
@@ -136,8 +136,8 @@ fn produce_and_inspect(worker: &PinnedWorkerV1) -> Vec<u8> {
     assert!(!inspected.grants_load_authority());
     assert!(!inspected.grants_launch_authority());
 
-    let bytes = inspected.exact_bytes().to_vec();
-    let output_identity = ContentIdentityV1::calculate(&bytes);
+    let raw_bytes = inspected.exact_bytes().to_vec();
+    let output_identity = ContentIdentityV1::calculate(&raw_bytes);
     assert_eq!(
         inspected.exchange().linked_output_identity(),
         output_identity
@@ -148,7 +148,17 @@ fn produce_and_inspect(worker: &PinnedWorkerV1) -> Vec<u8> {
             .embedded_frontend_authority_commitment(),
         &[0; 32]
     );
-    assert!(output_identity.matches(&bytes));
+    assert!(output_identity.matches(&raw_bytes));
+    let finalized = finalize_inspected_worker_v2_hsaco_v1(inspected.into_raw())
+        .expect("canonical scalar GEMM descriptor finalization");
+    assert!(finalized.canonical_descriptor_finalization_ran());
+    assert_ne!(finalized.canonical_digest().as_bytes(), &[0; 32]);
+    assert_ne!(
+        finalized.raw_output_identity(),
+        finalized.finalized_output_identity()
+    );
+    let bytes = finalized.exact_finalized_bytes().to_vec();
+    assert!(finalized.finalized_output_identity().matches(&bytes));
     for forbidden in [b"amd_comgr".as_slice(), b"libamd_comgr".as_slice()] {
         assert!(
             !bytes
@@ -162,7 +172,7 @@ fn produce_and_inspect(worker: &PinnedWorkerV1) -> Vec<u8> {
 
 #[test]
 #[ignore = "requires the measured upstream LLVM/LLD worker built for gfx942"]
-fn real_worker_produces_deterministic_inspected_scalar_gemm_v1_cov6_hsaco() {
+fn real_worker_produces_deterministic_finalized_scalar_gemm_v1_cov6_hsaco() {
     let worker_path = PathBuf::from(required_env(WORKER_ENV));
     let worker_bytes = fs::read(&worker_path).expect("read scalar GEMM worker executable");
     let measurement = WorkerMeasurementV1::new(

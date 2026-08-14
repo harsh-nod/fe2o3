@@ -102,7 +102,7 @@ LD_LIBRARY_PATH="$toolchain_lib" \
   "$cargo_bin" test --manifest-path "$repo_root/Cargo.toml" --locked \
     -p fe2o3-hsaco-finalize \
     --test scalar_gemm_v1_direct_llvm_worker \
-    real_worker_produces_deterministic_inspected_scalar_gemm_v1_cov6_hsaco \
+    real_worker_produces_deterministic_finalized_scalar_gemm_v1_cov6_hsaco \
     -- --ignored --exact
 
 if [[ ! -s $output_hsaco || -L $output_hsaco ]]; then
