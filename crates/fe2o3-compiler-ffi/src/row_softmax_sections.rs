@@ -18,7 +18,6 @@ pub const ROW_SOFTMAX_EXPONENTIAL_BOUNDARY_SECTION_NAME_V1: &str = ".fe2o3.row-e
 /// Bytes in the row-softmax exponential-boundary commitment.
 pub const ROW_SOFTMAX_EXPONENTIAL_BOUNDARY_BYTES_V1: usize = 32;
 
-const COMPILER_SECTION_PREFIX: &[u8] = b"module asm \".section .fe2o3.";
 const SECTION_PREFIX: &[u8] = b"module asm \".section ";
 const ALIGNMENT: &[u8] = b"module asm \".balign 8\"\n";
 const BYTE_LINE_PREFIX: &[u8] = b"module asm \".byte ";
@@ -94,8 +93,9 @@ impl Error for RowSoftmaxCompilerSectionsErrorV1 {}
 /// Decodes the exact four-section compiler-owned row-softmax LLVM assembly suffix.
 ///
 /// The descriptor and transcript allocations are bounded before growth. The two
-/// commitments have exact fixed sizes. No `.fe2o3.*` module-assembly section may
-/// precede the suffix, and no bytes may follow it.
+/// commitments have exact fixed sizes. No module-assembly directive may precede
+/// the suffix, so an alternate LLVM spelling cannot smuggle another section into
+/// the module. No bytes may follow the suffix.
 pub fn decode_row_softmax_compiler_sections_v1(
     module: &[u8],
 ) -> Result<DecodedRowSoftmaxCompilerSectionsV1, RowSoftmaxCompilerSectionsErrorV1> {
@@ -115,10 +115,7 @@ pub fn decode_row_softmax_compiler_sections_v1(
     if descriptor_position == 0 || module[descriptor_position - 1] != b'\n' {
         return Err(RowSoftmaxCompilerSectionsErrorV1::SectionBoundary);
     }
-    if contains(
-        module.get(..descriptor_position).unwrap_or_default(),
-        COMPILER_SECTION_PREFIX,
-    ) {
+    if contains_module_assembly_directive(module.get(..descriptor_position).unwrap_or_default()) {
         return Err(RowSoftmaxCompilerSectionsErrorV1::SectionClosure);
     }
 
@@ -224,8 +221,54 @@ fn decode_section(
     Some(result)
 }
 
-fn contains(bytes: &[u8], needle: &[u8]) -> bool {
-    bytes.windows(needle.len()).any(|window| window == needle)
+fn contains_module_assembly_directive(module: &[u8]) -> bool {
+    let mut offset = 0_usize;
+    let mut previous_was_module = false;
+    while offset < module.len() {
+        match module[offset] {
+            byte if byte.is_ascii_whitespace() => offset += 1,
+            b';' => {
+                offset = module[offset..]
+                    .iter()
+                    .position(|byte| *byte == b'\n')
+                    .map_or(module.len(), |newline| offset + newline + 1);
+            }
+            b'"' => {
+                previous_was_module = false;
+                offset += 1;
+                while offset < module.len() {
+                    match module[offset] {
+                        b'\\' => offset = offset.saturating_add(3).min(module.len()),
+                        b'"' => {
+                            offset += 1;
+                            break;
+                        }
+                        _ => offset += 1,
+                    }
+                }
+            }
+            byte if is_llvm_identifier_byte(byte) => {
+                let start = offset;
+                while offset < module.len() && is_llvm_identifier_byte(module[offset]) {
+                    offset += 1;
+                }
+                let token = &module[start..offset];
+                if previous_was_module && token == b"asm" {
+                    return true;
+                }
+                previous_was_module = token == b"module";
+            }
+            _ => {
+                previous_was_module = false;
+                offset += 1;
+            }
+        }
+    }
+    false
+}
+
+const fn is_llvm_identifier_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'$' | b'.' | b'_')
 }
 
 fn consume_exact_bytes(input: &[u8], offset: &mut usize, expected: &[u8]) -> Option<()> {
@@ -289,6 +332,37 @@ mod tests {
         for module in [leading, duplicate, reordered, trailing] {
             assert!(decode_row_softmax_compiler_sections_v1(&module).is_err());
         }
+    }
+
+    #[test]
+    fn closure_rejects_every_preexisting_module_assembly_spelling() {
+        for directive in [
+            b"module asm \".section .fe2o3.unreviewed.v1,\\22\\22,@progbits\"\n".as_slice(),
+            b"module asm \".section\\09.fe2o3.unreviewed.v1,\\22\\22,@progbits\"\n",
+            b"\tmodule\tasm \".section\\09\\2efe2o3.unreviewed.v1,\\22\\22,@progbits\"\n",
+            b"module\nasm \".section .fe2o3.unreviewed.v1,\\22\\22,@progbits\"\n",
+            b"module ; ignored comment\nasm \".section .fe2o3.unreviewed.v1,\\22\\22,@progbits\"\n",
+            b"module  asm \".section .unrelated,\\22\\22,@progbits\"\n",
+        ] {
+            let mut module = module_prefix();
+            module.extend_from_slice(directive);
+            for (name, bytes) in exact_sections() {
+                append_section(&mut module, name, bytes);
+            }
+            assert_eq!(
+                decode_row_softmax_compiler_sections_v1(&module),
+                Err(RowSoftmaxCompilerSectionsErrorV1::SectionClosure)
+            );
+        }
+    }
+
+    #[test]
+    fn module_assembly_words_inside_other_lines_are_not_directives() {
+        let mut module = b"; module asm \"comment\"\nsource_filename = \"module asm\"\n".to_vec();
+        for (name, bytes) in exact_sections() {
+            append_section(&mut module, name, bytes);
+        }
+        assert!(decode_row_softmax_compiler_sections_v1(&module).is_ok());
     }
 
     #[test]
