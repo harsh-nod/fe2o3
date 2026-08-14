@@ -3,6 +3,8 @@
 use core::fmt;
 use core::mem::size_of;
 
+use fe2o3_amd_target::AmdTargetId;
+
 /// Exact gfx942 target admitted by this contract.
 pub const TARGET_V1: &str = "gfx942:xnack-";
 /// Output tile row count.
@@ -14,21 +16,101 @@ pub const TILE_K_V1: u32 = 16;
 /// One complete wave executes one output tile.
 pub const WAVE_LANES_V1: u32 = 64;
 
-/// A checked row-major GEMM shape and its required host extents.
+/// Unforgeable admission token for the exact V1 target declaration.
+///
+/// This token proves only that a parsed target declaration equals
+/// `gfx942:xnack-`. It does not attest an observed device or executable bytes.
+///
+/// ```compile_fail
+/// use fe2o3_amd_target::AmdTargetId;
+/// use fe2o3_tiled_gemm_v1::AdmittedTargetV1;
+/// let _forged = AdmittedTargetV1 {
+///     target: AmdTargetId::parse("gfx942:xnack+").unwrap(),
+/// };
+/// ```
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AdmittedTargetV1 {
+    target: AmdTargetId,
+}
+
+impl AdmittedTargetV1 {
+    /// Returns the exact parsed target declaration retained by this token.
+    pub const fn target_id(self) -> AmdTargetId {
+        self.target
+    }
+}
+
+/// A parsed target declaration did not exactly match the V1 target.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TargetAdmissionErrorV1 {
+    candidate: AmdTargetId,
+}
+
+impl TargetAdmissionErrorV1 {
+    /// Returns the rejected parsed target declaration.
+    pub const fn candidate(self) -> AmdTargetId {
+        self.candidate
+    }
+
+    /// Returns the exact target declaration required by V1.
+    pub fn required(&self) -> AmdTargetId {
+        exact_target_v1()
+    }
+}
+
+impl fmt::Display for TargetAdmissionErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "tiled GEMM V1 requires exact target `{TARGET_V1}`, found `{}`",
+            self.candidate
+        )
+    }
+}
+
+impl std::error::Error for TargetAdmissionErrorV1 {}
+
+/// Returns the repository's canonical parsed V1 target declaration.
+pub fn exact_target_v1() -> AmdTargetId {
+    AmdTargetId::parse(TARGET_V1).expect("fixed tiled GEMM V1 target must remain canonical")
+}
+
+/// Admits only the exact canonical `gfx942:xnack-` target declaration.
+///
+/// Generic `gfx942`, XNACK-enabled, SRAM-ECC-qualified, and other processor
+/// declarations fail closed even when they may describe related hardware.
+pub fn admit_target_v1(candidate: AmdTargetId) -> Result<AdmittedTargetV1, TargetAdmissionErrorV1> {
+    if candidate != exact_target_v1() {
+        return Err(TargetAdmissionErrorV1 { candidate });
+    }
+    Ok(AdmittedTargetV1 { target: candidate })
+}
+
+/// A checked row-major GEMM shape and the extents accessed by its host action.
+///
+/// Fields are private so every value passes through [`Self::checked`]. Empty
+/// output requires no operand or output storage, so all three accessed extents
+/// are zero even when an unused mathematical operand would have a large shape.
+///
+/// ```compile_fail
+/// use fe2o3_tiled_gemm_v1::ShapeV1;
+/// let _forged = ShapeV1 {
+///     m: 16,
+///     n: 16,
+///     k: 16,
+///     a_elements: 0,
+///     b_elements: 0,
+///     c_elements: 0,
+/// };
+/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ShapeV1 {
-    /// Number of output rows.
-    pub m: u32,
-    /// Number of output columns.
-    pub n: u32,
-    /// Reduction extent.
-    pub k: u32,
-    /// Required BF16 elements in `A`.
-    pub a_elements: usize,
-    /// Required BF16 elements in `B`.
-    pub b_elements: usize,
-    /// Required FP32 elements in `C`.
-    pub c_elements: usize,
+    m: u32,
+    n: u32,
+    k: u32,
+    a_elements: usize,
+    b_elements: usize,
+    c_elements: usize,
 }
 
 /// Shape construction failed before any allocation or launch decision.
@@ -56,7 +138,11 @@ impl fmt::Display for ShapeErrorV1 {
 impl std::error::Error for ShapeErrorV1 {}
 
 impl ShapeV1 {
-    /// Checks all row-major element and byte extents.
+    /// Checks all row-major element and byte extents that the action accesses.
+    ///
+    /// `M=0` or `N=0` returns an empty-output shape before unused input extent
+    /// arithmetic. Consequently every `u32` dimension tuple with empty output
+    /// is representable and requires no operand buffers.
     pub fn checked(m: u32, n: u32, k: u32) -> Result<Self, ShapeErrorV1> {
         fn extent(
             buffer: &'static str,
@@ -69,6 +155,17 @@ impl ShapeV1 {
                 .checked_mul(element_bytes as u64)
                 .ok_or(ShapeErrorV1::ByteCountOverflow(buffer))?;
             usize::try_from(elements).map_err(|_| ShapeErrorV1::HostLengthOverflow(buffer))
+        }
+
+        if m == 0 || n == 0 {
+            return Ok(Self {
+                m,
+                n,
+                k,
+                a_elements: 0,
+                b_elements: 0,
+                c_elements: 0,
+            });
         }
 
         Ok(Self {
@@ -86,23 +183,58 @@ impl ShapeV1 {
         [self.m, self.n, self.k]
     }
 
-    /// Returns the row-major index in `A[M,K]`, if the coordinate is valid.
+    /// Returns the output row count.
+    pub const fn m(self) -> u32 {
+        self.m
+    }
+
+    /// Returns the output column count.
+    pub const fn n(self) -> u32 {
+        self.n
+    }
+
+    /// Returns the reduction extent.
+    pub const fn k(self) -> u32 {
+        self.k
+    }
+
+    /// Returns whether the shape has no output elements.
+    pub const fn is_empty_output(self) -> bool {
+        self.m == 0 || self.n == 0
+    }
+
+    /// Returns the number of BF16 `A` elements accessed by the host action.
+    pub const fn a_elements(self) -> usize {
+        self.a_elements
+    }
+
+    /// Returns the number of BF16 `B` elements accessed by the host action.
+    pub const fn b_elements(self) -> usize {
+        self.b_elements
+    }
+
+    /// Returns the number of FP32 `C` elements produced by the host action.
+    pub const fn c_elements(self) -> usize {
+        self.c_elements
+    }
+
+    /// Returns the row-major index in accessed `A[M,K]` storage, if valid.
     pub fn a_index(self, row: u32, depth: u32) -> Option<usize> {
-        if row >= self.m || depth >= self.k {
+        if self.is_empty_output() || row >= self.m || depth >= self.k {
             return None;
         }
         Some((row as usize) * (self.k as usize) + depth as usize)
     }
 
-    /// Returns the row-major index in `B[K,N]`, if the coordinate is valid.
+    /// Returns the row-major index in accessed `B[K,N]` storage, if valid.
     pub fn b_index(self, depth: u32, column: u32) -> Option<usize> {
-        if depth >= self.k || column >= self.n {
+        if self.is_empty_output() || depth >= self.k || column >= self.n {
             return None;
         }
         Some((depth as usize) * (self.n as usize) + column as usize)
     }
 
-    /// Returns the row-major index in `C[M,N]`, if the coordinate is valid.
+    /// Returns the row-major index in produced `C[M,N]` storage, if valid.
     pub fn c_index(self, row: u32, column: u32) -> Option<usize> {
         if row >= self.m || column >= self.n {
             return None;
@@ -146,32 +278,75 @@ pub struct TileOriginV1 {
     pub column: u32,
 }
 
-/// Fully checked HSA geometry for one wave64 per output tile.
+/// Unforgeable checked HSA geometry for one wave64 per output tile.
+///
+/// ```compile_fail
+/// use fe2o3_tiled_gemm_v1::LaunchGeometryV1;
+/// let _forged = LaunchGeometryV1 {
+///     target: panic!(),
+///     grid: [64, 1, 1],
+///     workgroup: [64, 1, 1],
+///     tile_rows: 1,
+///     tile_columns: 1,
+///     reduction_tiles: 1,
+///     total_work_items: 64,
+/// };
+/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LaunchGeometryV1 {
-    /// Global work-item dimensions.
-    pub grid: [u32; 3],
-    /// Workgroup dimensions. V1 fixes this to one wave64.
-    pub workgroup: [u32; 3],
-    /// Number of output-tile rows.
-    pub tile_rows: u32,
-    /// Number of output-tile columns.
-    pub tile_columns: u32,
-    /// Number of `K=16` reduction steps per output tile.
-    pub reduction_tiles: u32,
-    /// Total work-items in the checked grid.
-    pub total_work_items: u64,
+    target: AdmittedTargetV1,
+    grid: [u32; 3],
+    workgroup: [u32; 3],
+    tile_rows: u32,
+    tile_columns: u32,
+    reduction_tiles: u32,
+    total_work_items: u64,
 }
 
 impl LaunchGeometryV1 {
+    /// Returns the exact target admission retained by this geometry.
+    pub const fn target(self) -> AdmittedTargetV1 {
+        self.target
+    }
+
+    /// Returns global work-item dimensions.
+    pub const fn grid(self) -> [u32; 3] {
+        self.grid
+    }
+
+    /// Returns workgroup dimensions, fixed to one wave64 by V1.
+    pub const fn workgroup(self) -> [u32; 3] {
+        self.workgroup
+    }
+
+    /// Returns the number of output-tile rows.
+    pub const fn tile_rows(self) -> u32 {
+        self.tile_rows
+    }
+
+    /// Returns the number of output-tile columns.
+    pub const fn tile_columns(self) -> u32 {
+        self.tile_columns
+    }
+
+    /// Returns the number of `K=16` reduction steps per output tile.
+    pub const fn reduction_tiles(self) -> u32 {
+        self.reduction_tiles
+    }
+
+    /// Returns the total work-items in the checked grid.
+    pub const fn total_work_items(self) -> u64 {
+        self.total_work_items
+    }
+
     /// Maps a workgroup coordinate to its output-tile origin.
     pub fn tile_origin(self, group_x: u32, group_y: u32) -> Option<TileOriginV1> {
         if group_x >= self.tile_columns || group_y >= self.tile_rows {
             return None;
         }
         Some(TileOriginV1 {
-            row: group_y * TILE_M_V1,
-            column: group_x * TILE_N_V1,
+            row: group_y.checked_mul(TILE_M_V1)?,
+            column: group_x.checked_mul(TILE_N_V1)?,
         })
     }
 }
@@ -195,8 +370,9 @@ pub enum LaunchDecisionV1 {
 /// Empty output takes precedence over tail checks because no input or output
 /// memory is accessed. For nonempty output, `M` and `N` are checked before the
 /// explicit `K=0` host-fill case; all positive dimensions dispatched to the
-/// GPU are therefore exact multiples of 16.
-pub fn plan_v1(shape: ShapeV1) -> Result<LaunchDecisionV1, PlanErrorV1> {
+/// GPU are therefore exact multiples of 16. Dispatch geometry retains
+/// `target`, preserving the exact typed target admission through planning.
+pub fn plan_v1(target: AdmittedTargetV1, shape: ShapeV1) -> Result<LaunchDecisionV1, PlanErrorV1> {
     if shape.m == 0 || shape.n == 0 {
         return Ok(LaunchDecisionV1::NoDispatchEmptyOutput);
     }
@@ -224,6 +400,7 @@ pub fn plan_v1(shape: ShapeV1) -> Result<LaunchDecisionV1, PlanErrorV1> {
     let total_work_items = u64::from(grid_x) * u64::from(tile_rows);
 
     Ok(LaunchDecisionV1::Dispatch(LaunchGeometryV1 {
+        target,
         grid: [grid_x, tile_rows, 1],
         workgroup: [WAVE_LANES_V1, 1, 1],
         tile_rows,

@@ -1,8 +1,13 @@
+use fe2o3_amd_target::AmdTargetId;
 use fe2o3_tiled_gemm_v1::contract::{TARGET_V1, TILE_K_V1, TILE_M_V1, TILE_N_V1, WAVE_LANES_V1};
 use fe2o3_tiled_gemm_v1::{
-    EDGE_CASES_V1, ExpectedDecisionV1, LaunchDecisionV1, PlanErrorV1, ShapeErrorV1, ShapeV1,
-    TileOriginV1, plan_v1,
+    AdmittedTargetV1, EDGE_CASES_V1, ExpectedDecisionV1, LaunchDecisionV1, PlanErrorV1,
+    ShapeErrorV1, ShapeV1, TileOriginV1, admit_target_v1, exact_target_v1, plan_v1,
 };
+
+fn admitted_target() -> AdmittedTargetV1 {
+    admit_target_v1(AmdTargetId::parse(TARGET_V1).unwrap()).unwrap()
+}
 
 #[test]
 fn exact_profile_is_gfx942_wave64_m16n16k16() {
@@ -12,12 +17,39 @@ fn exact_profile_is_gfx942_wave64_m16n16k16() {
 }
 
 #[test]
+fn target_admission_is_typed_exact_and_fails_closed() {
+    let exact = exact_target_v1();
+    assert_eq!(exact, AmdTargetId::parse(TARGET_V1).unwrap());
+    assert_eq!(exact.to_string(), TARGET_V1);
+
+    let admitted = admit_target_v1(exact).unwrap();
+    assert_eq!(admitted.target_id(), exact);
+
+    for different in [
+        "gfx942",
+        "gfx942:xnack+",
+        "gfx942:sramecc-:xnack-",
+        "gfx942:sramecc+:xnack-",
+        "gfx950:xnack-",
+    ] {
+        let candidate = AmdTargetId::parse(different).unwrap();
+        let error = admit_target_v1(candidate).unwrap_err();
+        assert_eq!(error.candidate(), candidate);
+        assert_eq!(error.required(), exact);
+        assert!(error.to_string().contains(TARGET_V1));
+        assert!(error.to_string().contains(different));
+    }
+}
+
+#[test]
 fn checked_shape_binds_row_major_extents_and_indices() {
     let shape = ShapeV1::checked(32, 48, 16).unwrap();
     assert_eq!(shape.dimensions(), [32, 48, 16]);
-    assert_eq!(shape.a_elements, 512);
-    assert_eq!(shape.b_elements, 768);
-    assert_eq!(shape.c_elements, 1_536);
+    assert_eq!((shape.m(), shape.n(), shape.k()), (32, 48, 16));
+    assert!(!shape.is_empty_output());
+    assert_eq!(shape.a_elements(), 512);
+    assert_eq!(shape.b_elements(), 768);
+    assert_eq!(shape.c_elements(), 1_536);
     assert_eq!(shape.a_index(31, 15), Some(511));
     assert_eq!(shape.b_index(15, 47), Some(767));
     assert_eq!(shape.c_index(31, 47), Some(1_535));
@@ -27,6 +59,29 @@ fn checked_shape_binds_row_major_extents_and_indices() {
     assert_eq!(shape.b_index(0, 48), None);
     assert_eq!(shape.c_index(32, 0), None);
     assert_eq!(shape.c_index(0, 48), None);
+}
+
+#[test]
+fn extreme_empty_outputs_precede_unused_extent_arithmetic() {
+    for &(m, n, k) in &[
+        (0, u32::MAX, u32::MAX),
+        (u32::MAX, 0, u32::MAX),
+        (0, 0, u32::MAX),
+    ] {
+        let shape = ShapeV1::checked(m, n, k).unwrap();
+        assert_eq!(shape.dimensions(), [m, n, k]);
+        assert!(shape.is_empty_output());
+        assert_eq!(shape.a_elements(), 0);
+        assert_eq!(shape.b_elements(), 0);
+        assert_eq!(shape.c_elements(), 0);
+        assert_eq!(shape.a_index(0, 0), None);
+        assert_eq!(shape.b_index(0, 0), None);
+        assert_eq!(shape.c_index(0, 0), None);
+        assert_eq!(
+            plan_v1(admitted_target(), shape),
+            Ok(LaunchDecisionV1::NoDispatchEmptyOutput)
+        );
+    }
 }
 
 #[test]
@@ -49,7 +104,7 @@ fn shape_byte_accounting_fails_before_impossible_host_extents() {
 fn required_edge_matrix_has_the_declared_outcome() {
     for case in EDGE_CASES_V1 {
         let shape = ShapeV1::checked(case.m, case.n, case.k).unwrap();
-        let actual = plan_v1(shape);
+        let actual = plan_v1(admitted_target(), shape);
         match case.expected {
             ExpectedDecisionV1::NoDispatch => assert_eq!(
                 actual,
@@ -77,15 +132,16 @@ fn required_edge_matrix_has_the_declared_outcome() {
 #[test]
 fn exact_tiles_map_to_one_wave64_workgroup_each() {
     let shape = ShapeV1::checked(32, 48, 32).unwrap();
-    let LaunchDecisionV1::Dispatch(geometry) = plan_v1(shape).unwrap() else {
+    let LaunchDecisionV1::Dispatch(geometry) = plan_v1(admitted_target(), shape).unwrap() else {
         panic!("exact tiled shape did not dispatch");
     };
-    assert_eq!(geometry.workgroup, [64, 1, 1]);
-    assert_eq!(geometry.grid, [192, 2, 1]);
-    assert_eq!(geometry.tile_rows, 2);
-    assert_eq!(geometry.tile_columns, 3);
-    assert_eq!(geometry.reduction_tiles, 2);
-    assert_eq!(geometry.total_work_items, 384);
+    assert_eq!(geometry.target(), admitted_target());
+    assert_eq!(geometry.workgroup(), [64, 1, 1]);
+    assert_eq!(geometry.grid(), [192, 2, 1]);
+    assert_eq!(geometry.tile_rows(), 2);
+    assert_eq!(geometry.tile_columns(), 3);
+    assert_eq!(geometry.reduction_tiles(), 2);
+    assert_eq!(geometry.total_work_items(), 384);
     assert_eq!(
         geometry.tile_origin(0, 0),
         Some(TileOriginV1 { row: 0, column: 0 })
@@ -105,7 +161,10 @@ fn exact_tiles_map_to_one_wave64_workgroup_each() {
 fn zero_dimension_precedence_never_constructs_a_launch() {
     for &(m, n, k) in &[(0, 1, 1), (1, 0, 1), (0, 17, 3), (31, 0, 17)] {
         let shape = ShapeV1::checked(m, n, k).unwrap();
-        assert_eq!(plan_v1(shape), Ok(LaunchDecisionV1::NoDispatchEmptyOutput));
+        assert_eq!(
+            plan_v1(admitted_target(), shape),
+            Ok(LaunchDecisionV1::NoDispatchEmptyOutput)
+        );
     }
 }
 
@@ -113,17 +172,17 @@ fn zero_dimension_precedence_never_constructs_a_launch() {
 fn nonempty_zero_k_is_positive_zero_host_fill_only_after_mn_validation() {
     let shape = ShapeV1::checked(16, 32, 0).unwrap();
     assert_eq!(
-        plan_v1(shape),
+        plan_v1(admitted_target(), shape),
         Ok(LaunchDecisionV1::HostFillPositiveZero {
             output_elements: 512
         })
     );
     assert_eq!(
-        plan_v1(ShapeV1::checked(17, 16, 0).unwrap()),
+        plan_v1(admitted_target(), ShapeV1::checked(17, 16, 0).unwrap()),
         Err(PlanErrorV1::MNotMultipleOf16(17))
     );
     assert_eq!(
-        plan_v1(ShapeV1::checked(16, 17, 0).unwrap()),
+        plan_v1(admitted_target(), ShapeV1::checked(16, 17, 0).unwrap()),
         Err(PlanErrorV1::NNotMultipleOf16(17))
     );
 }
@@ -134,7 +193,7 @@ fn every_small_positive_shape_is_admitted_exactly_when_fully_tiled() {
         for n in 1..=48 {
             for k in 1..=48 {
                 let shape = ShapeV1::checked(m, n, k).unwrap();
-                let result = plan_v1(shape);
+                let result = plan_v1(admitted_target(), shape);
                 let fully_tiled = m % 16 == 0 && n % 16 == 0 && k % 16 == 0;
                 assert_eq!(result.is_ok(), fully_tiled, "shape=({m},{n},{k})");
                 assert_eq!(
@@ -150,5 +209,33 @@ fn every_small_positive_shape_is_admitted_exactly_when_fully_tiled() {
 #[test]
 fn checked_geometry_rejects_unrepresentable_grid_x() {
     let shape = ShapeV1::checked(16, 0xffff_fff0, 16).unwrap();
-    assert_eq!(plan_v1(shape), Err(PlanErrorV1::GridXOverflow));
+    assert_eq!(
+        plan_v1(admitted_target(), shape),
+        Err(PlanErrorV1::GridXOverflow)
+    );
+}
+
+#[test]
+fn checked_geometry_covers_the_exact_grid_x_boundary() {
+    let largest_n = 0x3fff_fff0;
+    let accepted = ShapeV1::checked(16, largest_n, 16).unwrap();
+    let LaunchDecisionV1::Dispatch(geometry) = plan_v1(admitted_target(), accepted).unwrap() else {
+        panic!("largest representable x-grid did not dispatch");
+    };
+    assert_eq!(geometry.grid(), [0xffff_ffc0, 1, 1]);
+    assert_eq!(geometry.tile_columns(), 0x03ff_ffff);
+    assert_eq!(geometry.total_work_items(), u64::from(0xffff_ffc0_u32));
+    assert_eq!(
+        geometry.tile_origin(0x03ff_fffe, 0),
+        Some(TileOriginV1 {
+            row: 0,
+            column: 0x3fff_ffe0,
+        })
+    );
+
+    let first_rejected = ShapeV1::checked(16, 0x4000_0000, 16).unwrap();
+    assert_eq!(
+        plan_v1(admitted_target(), first_rejected),
+        Err(PlanErrorV1::GridXOverflow)
+    );
 }

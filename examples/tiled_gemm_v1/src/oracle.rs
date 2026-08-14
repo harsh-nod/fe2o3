@@ -10,14 +10,14 @@ use crate::contract::ShapeV1;
 /// Input validation failed before oracle evaluation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OracleErrorV1 {
-    /// `A` did not have exactly `M*K` BF16 elements.
+    /// For nonempty output, `A` did not have exactly `M*K` BF16 elements.
     WrongALength {
         /// Required element count.
         expected: usize,
         /// Supplied element count.
         actual: usize,
     },
-    /// `B` did not have exactly `K*N` BF16 elements.
+    /// For nonempty output, `B` did not have exactly `K*N` BF16 elements.
     WrongBLength {
         /// Required element count.
         expected: usize,
@@ -61,29 +61,34 @@ fn fp32_sum_v1(left: f32, right: f32) -> f32 {
 ///
 /// This defines host evidence only. It does not assert undocumented MFMA
 /// evaluation order or prove that a future lowering refines this recurrence.
+/// Empty output returns an empty vector without inspecting operand elements or
+/// requiring operand lengths because the corresponding plan is no-dispatch.
 pub fn tiled_gemm_oracle_v1(
     shape: ShapeV1,
     a: &[Bf16],
     b: &[Bf16],
 ) -> Result<Vec<f32>, OracleErrorV1> {
-    if a.len() != shape.a_elements {
+    if shape.is_empty_output() {
+        return Ok(Vec::new());
+    }
+    if a.len() != shape.a_elements() {
         return Err(OracleErrorV1::WrongALength {
-            expected: shape.a_elements,
+            expected: shape.a_elements(),
             actual: a.len(),
         });
     }
-    if b.len() != shape.b_elements {
+    if b.len() != shape.b_elements() {
         return Err(OracleErrorV1::WrongBLength {
-            expected: shape.b_elements,
+            expected: shape.b_elements(),
             actual: b.len(),
         });
     }
 
-    let mut output = vec![f32::from_bits(0); shape.c_elements];
-    for row in 0..shape.m {
-        for column in 0..shape.n {
+    let mut output = vec![f32::from_bits(0); shape.c_elements()];
+    for row in 0..shape.m() {
+        for column in 0..shape.n() {
             let mut accumulator = f32::from_bits(0);
-            for depth in 0..shape.k {
+            for depth in 0..shape.k() {
                 let left = a[shape.a_index(row, depth).expect("bounded A coordinate")].to_f32();
                 let right = b[shape.b_index(depth, column).expect("bounded B coordinate")].to_f32();
                 let product = fp32_product_v1(left, right);

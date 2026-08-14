@@ -59,9 +59,9 @@ fn mix64(mut value: u64) -> u64 {
 
 fn shape_identity(shape: ShapeV1) -> u64 {
     mix64(
-        u64::from(shape.m)
-            ^ u64::from(shape.n).rotate_left(21)
-            ^ u64::from(shape.k).rotate_left(42),
+        u64::from(shape.m())
+            ^ u64::from(shape.n()).rotate_left(21)
+            ^ u64::from(shape.k()).rotate_left(42),
     )
 }
 
@@ -77,10 +77,10 @@ fn generated_value(shape: ShapeV1, seed: u64, domain: u64, index: usize) -> Bf16
 /// The seed, complete shape, operand domain, and row-major linear index all
 /// participate in selection from [`BF16_INPUT_PATTERN_V1`].
 pub fn generate_inputs_v1(shape: ShapeV1, seed: u64) -> GeneratedInputsV1 {
-    let a = (0..shape.a_elements)
+    let a = (0..shape.a_elements())
         .map(|index| generated_value(shape, seed, A_DOMAIN_V1, index))
         .collect();
-    let b = (0..shape.b_elements)
+    let b = (0..shape.b_elements())
         .map(|index| generated_value(shape, seed, B_DOMAIN_V1, index))
         .collect();
     GeneratedInputsV1 { a, b }

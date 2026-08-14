@@ -12,6 +12,7 @@ publish = false
 [workspace]
 
 [dependencies]
+fe2o3-amd-target = { path = "../../crates/fe2o3-amd-target" }
 fe2o3-device = { path = "../../crates/fe2o3-device" }
 
 [lib]

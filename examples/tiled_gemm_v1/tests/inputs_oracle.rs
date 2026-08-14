@@ -24,6 +24,39 @@ fn generators_are_bitwise_deterministic_and_operand_separated() {
 }
 
 #[test]
+fn generator_v1_bytes_are_pinned_independently() {
+    let shape = ShapeV1::checked(2, 3, 2).unwrap();
+    let inputs = generate_inputs_v1(shape, 0x1234);
+
+    // These constants were derived from the documented SplitMix64-style V1
+    // recurrence independently of this Rust implementation. They are a
+    // V1-stable regression vector, not values recomputed by the code under test.
+    assert_eq!(inputs.a_bits(), [0x0000, 0x4080, 0xbd80, 0x4040]);
+    assert_eq!(
+        inputs.b_bits(),
+        [0xbe80, 0x4040, 0x4040, 0x3e80, 0x4080, 0x3e00]
+    );
+
+    // These FP32 bits were calculated independently from the exact dyadic
+    // values above and pin the row-major recurrence as well as the generator.
+    let output = tiled_gemm_oracle_v1(shape, &inputs.a, &inputs.b).unwrap();
+    assert_eq!(
+        output
+            .iter()
+            .map(|value| value.to_bits())
+            .collect::<Vec<_>>(),
+        [
+            0x3f80_0000,
+            0x4180_0000,
+            0x3f00_0000,
+            0x3f44_0000,
+            0x413d_0000,
+            0x3e40_0000,
+        ]
+    );
+}
+
+#[test]
 fn every_generated_value_is_an_exact_allowed_finite_bf16_pattern() {
     let allowed = BF16_INPUT_PATTERN_V1
         .iter()
@@ -68,8 +101,77 @@ fn zero_k_oracle_produces_only_fp32_positive_zero() {
     for &(m, n) in &[(1, 1), (16, 16), (17, 31), (0, 9), (9, 0)] {
         let shape = ShapeV1::checked(m, n, 0).unwrap();
         let output = tiled_gemm_oracle_v1(shape, &[], &[]).unwrap();
-        assert_eq!(output.len(), shape.c_elements);
+        assert_eq!(output.len(), shape.c_elements());
         assert!(output.iter().all(|value| value.to_bits() == 0));
+    }
+}
+
+#[test]
+fn extreme_empty_output_ignores_operand_storage() {
+    for shape in [
+        ShapeV1::checked(0, u32::MAX, u32::MAX).unwrap(),
+        ShapeV1::checked(u32::MAX, 0, u32::MAX).unwrap(),
+    ] {
+        let inputs = generate_inputs_v1(shape, u64::MAX);
+        assert!(inputs.a.is_empty());
+        assert!(inputs.b.is_empty());
+
+        let sentinel_a = [Bf16::ONE];
+        let sentinel_b = [Bf16::NEG_ZERO];
+        assert!(
+            tiled_gemm_oracle_v1(shape, &sentinel_a, &sentinel_b)
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+#[test]
+fn fp32_golden_vectors_pin_rounding_order_and_cancellation() {
+    let shape = ShapeV1::checked(1, 1, 3).unwrap();
+    let one = Bf16::ONE;
+    let positive_2_pow_24 = Bf16::from_bits(0x4b80);
+    let negative_2_pow_24 = Bf16::from_bits(0xcb80);
+    let a = [one; 3];
+
+    // roundTiesToEven loses the unit before cancellation:
+    // ((+0 + 2^24) + 1) + -2^24 = +0.
+    let rounded_then_cancelled = [positive_2_pow_24, one, negative_2_pow_24];
+    let first = tiled_gemm_oracle_v1(shape, &a, &rounded_then_cancelled).unwrap();
+    assert_eq!(
+        first
+            .iter()
+            .map(|value| value.to_bits())
+            .collect::<Vec<_>>(),
+        [0x0000_0000]
+    );
+
+    // Changing only recurrence order cancels first and preserves the unit:
+    // ((+0 + 2^24) + -2^24) + 1 = 1.
+    let cancelled_then_added = [positive_2_pow_24, negative_2_pow_24, one];
+    let second = tiled_gemm_oracle_v1(shape, &a, &cancelled_then_added).unwrap();
+    assert_eq!(
+        second
+            .iter()
+            .map(|value| value.to_bits())
+            .collect::<Vec<_>>(),
+        [0x3f80_0000]
+    );
+}
+
+#[test]
+fn fp32_golden_vectors_pin_signed_zero_accumulation() {
+    let shape = ShapeV1::checked(1, 1, 1).unwrap();
+    let negative_one = Bf16::from_bits(0xbf80);
+
+    // Both products are negative zero. The recurrence starts at positive zero,
+    // so roundTiesToEven addition must produce the pinned positive-zero output.
+    for (a, b) in [
+        ([Bf16::ZERO], [negative_one]),
+        ([Bf16::NEG_ZERO], [Bf16::ONE]),
+    ] {
+        let output = tiled_gemm_oracle_v1(shape, &a, &b).unwrap();
+        assert_eq!(output[0].to_bits(), 0x0000_0000);
     }
 }
 

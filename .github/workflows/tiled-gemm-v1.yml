@@ -1,0 +1,41 @@
+name: Tiled GEMM V1 host scaffold
+
+on:
+  merge_group:
+    types: [checks_requested]
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tiled-gemm-v1-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  host-contract:
+    name: Host contract and numerical oracle
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Install pinned Rust toolchain
+        run: rustup show active-toolchain
+
+      - name: Run debug tests and doctests
+        run: cargo test --locked --manifest-path examples/tiled_gemm_v1/Cargo.toml
+
+      - name: Run release tests and doctests
+        run: cargo test --release --locked --manifest-path examples/tiled_gemm_v1/Cargo.toml
+
+      - name: Run strict all-target Clippy
+        run: >-
+          cargo clippy --locked
+          --manifest-path examples/tiled_gemm_v1/Cargo.toml
+          --all-targets --all-features -- -D warnings
