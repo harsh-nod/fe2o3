@@ -1,0 +1,5 @@
+error[E0599]: no method named `clone` found for struct `fe2o3_host::RecoveredWorkerV2SynchronousHsaScalarGemmV1PreparedInvocationV1<'loaded, 'allocation, Root, Selected, Adapter, Arguments>` in the current scope
+  --> tests/ui/recovered_worker_v2_admission/scalar_gemm_prepared_cannot_clone.rs:18:22
+   |
+18 |     let _ = prepared.clone();
+   |                      ^^^^^ method not found in `fe2o3_host::RecoveredWorkerV2SynchronousHsaScalarGemmV1PreparedInvocationV1<'loaded, 'allocation, Root, Selected, Adapter, Arguments>`
