@@ -184,6 +184,7 @@ impl ProjectFixture {
                 "FE2O3_NON_PRODUCTION_UNPROTECTED_AUTHORITY_VALIDATION_V1",
                 "1",
             );
+        scrub_test_harness_dynamic_loader_environment(&mut command);
         command
     }
 
@@ -261,6 +262,11 @@ fn cargo_fe2o3_command() -> Command {
         .env_remove("CARGO_BUILD_RUSTC_WRAPPER")
         .env_remove("RUSTC_WORKSPACE_WRAPPER")
         .env_remove("CARGO_TARGET_DIR");
+    scrub_test_harness_dynamic_loader_environment(&mut command);
+    command
+}
+
+fn scrub_test_harness_dynamic_loader_environment(command: &mut Command) {
     for (name, _) in env::vars_os() {
         let name_bytes = os_bytes(&name);
         if name_bytes.starts_with(b"LD_")
@@ -270,7 +276,6 @@ fn cargo_fe2o3_command() -> Command {
             command.env_remove(name);
         }
     }
-    command
 }
 
 #[cfg(unix)]
@@ -801,6 +806,8 @@ fn substituted_multithreaded_image_cannot_replay_wrapper_from_non_leader_thread(
     fs::set_permissions(&substitute, permissions).expect("make hostile substitute executable");
 
     let mut command = Command::new(&staged_wrapper);
+    let harness_loader = env::var_os("LD_LIBRARY_PATH")
+        .expect("Cargo test harness must provide LD_LIBRARY_PATH for this regression");
     command
         .arg("build")
         .current_dir(&fixture.cwd)
@@ -824,7 +831,13 @@ fn substituted_multithreaded_image_cannot_replay_wrapper_from_non_leader_thread(
         .env("FE2O3_TEST_DISPLACED_WRAPPER", &displaced_wrapper)
         .env("FE2O3_TEST_WRAPPER_RACE_TRACE", &race_trace)
         .env("FE2O3_TEST_MULTITHREADED_TRACE", &thread_trace)
+        .env("LD_LIBRARY_PATH", harness_loader)
+        .env_remove("RUSTUP_HOME")
+        .env_remove("RUSTUP_TOOLCHAIN")
+        .env_remove("RUSTC")
+        .env_remove("CARGO_BUILD_RUSTC")
         .env_remove("RUSTC_WRAPPER")
+        .env_remove("CARGO_BUILD_RUSTC_WRAPPER")
         .env_remove("RUSTC_WORKSPACE_WRAPPER");
 
     let output = command

@@ -853,7 +853,17 @@ fn outer_command(directory: &TestDirectory, config: Option<&Path>, control: &Pat
     if directory.0.join("alpha-zeta-profile").exists() {
         command.env("FE2O3_TEST_WORKER_V2_ALPHA_ZETA", "1");
     }
+    scrub_test_harness_dynamic_loader_environment(&mut command);
     command
+}
+
+fn scrub_test_harness_dynamic_loader_environment(command: &mut Command) {
+    for (name, _) in env::vars_os() {
+        let bytes = name.as_os_str().as_bytes();
+        if bytes.starts_with(b"LD_") || bytes.starts_with(b"DYLD_") || bytes == b"GLIBC_TUNABLES" {
+            command.env_remove(name);
+        }
+    }
 }
 
 fn stderr(output: &Output) -> String {
