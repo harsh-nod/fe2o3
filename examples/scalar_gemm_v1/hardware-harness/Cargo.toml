@@ -11,3 +11,6 @@ fe2o3-core = { path = "../../../crates/fe2o3-core" }
 fe2o3-host = { path = "../../../crates/fe2o3-host" }
 fe2o3-hsa-runtime = { path = "../../../crates/fe2o3-hsa-runtime" }
 fe2o3-scalar-gemm-v1 = { path = ".." }
+
+[dev-dependencies]
+fe2o3-artifact-transaction = { path = "../../../crates/fe2o3-artifact-transaction" }

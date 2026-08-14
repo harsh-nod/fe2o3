@@ -2,7 +2,10 @@ use fe2o3_core::{DeviceBuffer, GpuContext};
 use fe2o3_host::__generated::{
     GeneratedScalarGemmV1ReadDeviceSlice, GeneratedScalarGemmV1ReadWriteDeviceSlice,
 };
-use fe2o3_host::{LoadedHsaExecutableV1, ObservedContext, WorkerV2PrerequisiteAuthenticatorV1};
+use fe2o3_host::{
+    ObservedContext, RecoveredWorkerV2SynchronousHsaDispatchError,
+    RecoveredWorkerV2SynchronousHsaHandoffV1, WorkerV2PrerequisiteAuthenticatorV1,
+};
 use fe2o3_hsa_runtime::ReviewedHsaRuntimeAdapterV1;
 use fe2o3_scalar_gemm_v1::harness::{
     HARDWARE_CASES, HardwareCase, SCALAR_GEMM_WORKGROUP_X, scalar_gemm_oracle,
@@ -52,16 +55,90 @@ pub fn fail_closed_without_authenticated_capability()
     Err(MissingAuthenticatedScalarGemmCapability)
 }
 
-/// Runnable Scalar GEMM hardware evidence with exact, linear HSA authority.
+/// Runnable Scalar GEMM hardware evidence with exact, linear recovered HSA authority.
 ///
-/// Construction has no bytes-or-path overload. The loaded value must already
+/// Construction has no bytes-or-path overload. The recovered value must already
 /// have passed Worker V2 admission, prerequisite authentication, reviewed HSA
-/// authorization, exact-byte loading, and exact-symbol resolution.
+/// authorization, exact-byte loading, exact-symbol resolution, and retained
+/// publication/application currentness admission.
+///
+/// A lower-level loaded executable cannot cross this boundary:
+///
+/// ```compile_fail
+/// use fe2o3_core::GpuContext;
+/// use fe2o3_host::{
+///     LoadedHsaExecutableV1, ObservedContext, WorkerV2PrerequisiteAuthenticatorV1,
+/// };
+/// use fe2o3_hsa_runtime::ReviewedHsaRuntimeAdapterV1;
+/// use fe2o3_scalar_gemm_v1::kernel::scalar_gemm_v1_gpu;
+/// use fe2o3_scalar_gemm_v1_hardware_harness::AuthenticatedScalarGemmHarness;
+/// use std::fmt::Debug;
+/// use std::sync::Arc;
+///
+/// fn cannot_downgrade<Authenticator>(
+///     loaded: LoadedHsaExecutableV1<
+///         scalar_gemm_v1_gpu::Marker,
+///         ReviewedHsaRuntimeAdapterV1,
+///     >,
+///     context: &Arc<GpuContext>,
+///     observed: &ObservedContext,
+///     authenticator: &mut Authenticator,
+/// ) where
+///     Authenticator: WorkerV2PrerequisiteAuthenticatorV1<scalar_gemm_v1_gpu::Marker>,
+///     Authenticator::Error: Debug,
+/// {
+///     let _ = AuthenticatedScalarGemmHarness::new(
+///         loaded,
+///         context,
+///         observed,
+///         authenticator,
+///     );
+/// }
+/// ```
+///
+/// Transferring recovered authority into the harness is linear:
+///
+/// ```compile_fail
+/// use fe2o3_core::GpuContext;
+/// use fe2o3_host::{
+///     ObservedContext, RecoveredWorkerV2SynchronousHsaHandoffV1,
+///     WorkerV2PrerequisiteAuthenticatorV1,
+/// };
+/// use fe2o3_hsa_runtime::ReviewedHsaRuntimeAdapterV1;
+/// use fe2o3_scalar_gemm_v1::kernel::scalar_gemm_v1_gpu;
+/// use fe2o3_scalar_gemm_v1_hardware_harness::AuthenticatedScalarGemmHarness;
+/// use std::fmt::Debug;
+/// use std::sync::Arc;
+///
+/// fn cannot_reuse<Authenticator>(
+///     authority: RecoveredWorkerV2SynchronousHsaHandoffV1<
+///         scalar_gemm_v1_gpu::Marker,
+///         ReviewedHsaRuntimeAdapterV1,
+///     >,
+///     context: &Arc<GpuContext>,
+///     observed: &ObservedContext,
+///     authenticator: &mut Authenticator,
+/// ) where
+///     Authenticator: WorkerV2PrerequisiteAuthenticatorV1<scalar_gemm_v1_gpu::Marker>,
+///     Authenticator::Error: Debug,
+/// {
+///     let _harness = AuthenticatedScalarGemmHarness::new(
+///         authority,
+///         context,
+///         observed,
+///         authenticator,
+///     );
+///     let _ = authority.load_observation();
+/// }
+/// ```
 pub struct AuthenticatedScalarGemmHarness<'context, 'authenticator, Authenticator>
 where
     Authenticator: WorkerV2PrerequisiteAuthenticatorV1<scalar_gemm_v1_gpu::Marker>,
 {
-    loaded: LoadedHsaExecutableV1<scalar_gemm_v1_gpu::Marker, ReviewedHsaRuntimeAdapterV1>,
+    authority: RecoveredWorkerV2SynchronousHsaHandoffV1<
+        scalar_gemm_v1_gpu::Marker,
+        ReviewedHsaRuntimeAdapterV1,
+    >,
     context: &'context Arc<GpuContext>,
     observed: &'context ObservedContext,
     authenticator: &'authenticator mut Authenticator,
@@ -74,7 +151,10 @@ where
     Authenticator::Error: Debug,
 {
     pub fn new(
-        loaded: LoadedHsaExecutableV1<scalar_gemm_v1_gpu::Marker, ReviewedHsaRuntimeAdapterV1>,
+        authority: RecoveredWorkerV2SynchronousHsaHandoffV1<
+            scalar_gemm_v1_gpu::Marker,
+            ReviewedHsaRuntimeAdapterV1,
+        >,
         context: &'context Arc<GpuContext>,
         observed: &'context ObservedContext,
         authenticator: &'authenticator mut Authenticator,
@@ -85,7 +165,7 @@ where
             ));
         }
         Ok(Self {
-            loaded,
+            authority,
             context,
             observed,
             authenticator,
@@ -98,9 +178,9 @@ where
             cases.push(self.run_case(*case)?);
         }
         let unloaded = self
-            .loaded
+            .authority
             .unload()
-            .map_err(|error| failure(format!("reviewed HSA unload failed: {error:?}")))?;
+            .map_err(|error| failure(format!("recovered HSA unload failed: {error:?}")))?;
         let executable_released = unloaded.unload_observation().released();
         if !executable_released {
             return Err(failure("reviewed HSA unload did not report release"));
@@ -133,9 +213,8 @@ where
             fe2o3_host::HsaLaunchGeometryV1::new([groups, 1, 1], [SCALAR_GEMM_WORKGROUP_X, 1, 1], 0)
         });
         let dispatched = {
-            let (_left_canary, c, _right_canary) = guarded.split_range_mut(
-                CANARY_ELEMENTS..CANARY_ELEMENTS + shape.c_len,
-            )?;
+            let (_left_canary, c, _right_canary) =
+                guarded.split_range_mut(CANARY_ELEMENTS..CANARY_ELEMENTS + shape.c_len)?;
             let arguments = scalar_gemm_v1_gpu::Arguments::new(
                 GeneratedScalarGemmV1ReadDeviceSlice::new(self.observed, &a)?,
                 GeneratedScalarGemmV1ReadDeviceSlice::new(self.observed, &b)?,
@@ -144,11 +223,15 @@ where
                 case.n,
                 case.k,
             );
-            let prepared = arguments
-                .prepare(&mut self.loaded, self.observed, self.authenticator)
+            let prepared = self
+                .authority
+                .prepare_generated_scalar_gemm_v1::<scalar_gemm_v1_gpu::Marker, Authenticator, _>(
+                    self.authenticator,
+                    arguments,
+                )
                 .map_err(|error| {
                     failure(format!(
-                        "{} generated Scalar GEMM preparation failed: {error:?}",
+                        "{} recovered Scalar GEMM preparation failed: {error:?}",
                         case.name
                     ))
                 })?;
@@ -158,9 +241,7 @@ where
                     case.name
                 )));
             }
-            let completion = prepared.dispatch().map_err(|error| {
-                failure(format!("{} HSA dispatch failed: {error:?}", case.name))
-            })?;
+            let completion = require_current_recovered_dispatch(case.name, prepared.dispatch())?;
             if completion.was_dispatched() != expected_groups.is_some() {
                 return Err(failure(format!(
                     "{} zero-output dispatch state changed",
@@ -216,6 +297,27 @@ where
     }
 }
 
+fn require_current_recovered_dispatch<Completion, AdapterError: Debug>(
+    case: &str,
+    result: Result<Completion, RecoveredWorkerV2SynchronousHsaDispatchError<AdapterError>>,
+) -> Result<Completion, BoxError> {
+    result.map_err(|error| match error {
+        RecoveredWorkerV2SynchronousHsaDispatchError::CurrentPublication(source) => failure(
+            format!("{case} stale Worker V2 publication prevented HSA dispatch: {source}"),
+        ),
+        #[cfg(target_os = "linux")]
+        RecoveredWorkerV2SynchronousHsaDispatchError::ApplicationDescriptors(source) => failure(
+            format!("{case} stale application descriptors prevented HSA dispatch: {source}"),
+        ),
+        RecoveredWorkerV2SynchronousHsaDispatchError::Dispatch(source) => {
+            failure(format!("{case} HSA dispatch failed: {source:?}"))
+        }
+        _ => failure(format!(
+            "{case} recovered authority rejected HSA dispatch: {error:?}"
+        )),
+    })
+}
+
 fn require_bits_equal(
     case: &str,
     role: &str,
@@ -249,8 +351,10 @@ fn failure(message: impl Into<String>) -> BoxError {
 mod tests {
     use super::{
         HARDWARE_CASES, MissingAuthenticatedScalarGemmCapability,
-        fail_closed_without_authenticated_capability,
+        fail_closed_without_authenticated_capability, require_current_recovered_dispatch,
     };
+    use fe2o3_artifact_transaction::DurableLinkPublicationError;
+    use fe2o3_host::RecoveredWorkerV2SynchronousHsaDispatchError;
 
     const SOURCE: &str = include_str!("lib.rs");
 
@@ -290,23 +394,63 @@ mod tests {
             .split("#[cfg(test)]")
             .next()
             .expect("hardware harness has production source");
+        let implementation = production
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("///"))
+            .collect::<String>();
         for forbidden in [
             "FE2O3_SCALAR_GEMM_HSACO",
             "std::env",
             "read_to_end",
             "from_raw_parts",
             "as_device_ptr",
+            "LoadedHsaExecutableV1",
+            ".prepare(&mut self.authority",
         ] {
-            assert!(!production.contains(forbidden), "found `{forbidden}`");
+            assert!(!implementation.contains(forbidden), "found `{forbidden}`");
         }
         for required in [
-            "LoadedHsaExecutableV1",
+            "RecoveredWorkerV2SynchronousHsaHandoffV1",
+            "prepare_generated_scalar_gemm_v1",
             "WorkerV2PrerequisiteAuthenticatorV1",
             "ReviewedHsaRuntimeAdapterV1",
             "GeneratedScalarGemmV1ReadDeviceSlice",
             "GeneratedScalarGemmV1ReadWriteDeviceSlice",
         ] {
-            assert!(production.contains(required), "missing `{required}`");
+            assert!(implementation.contains(required), "missing `{required}`");
         }
+    }
+
+    #[test]
+    fn stale_publication_binding_cannot_be_a_dispatch_success() {
+        let result = require_current_recovered_dispatch::<(), ()>(
+            "stale-publication",
+            Err(
+                RecoveredWorkerV2SynchronousHsaDispatchError::CurrentPublication(
+                    DurableLinkPublicationError::CurrentPublication {
+                        reason: "test generation changed".into(),
+                    },
+                ),
+            ),
+        );
+        let message = result.unwrap_err().to_string();
+        assert!(message.contains("stale Worker V2 publication prevented HSA dispatch"));
+        assert!(message.contains("test generation changed"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn stale_application_binding_cannot_be_a_dispatch_success() {
+        let result = require_current_recovered_dispatch::<(), ()>(
+            "stale-application",
+            Err(
+                RecoveredWorkerV2SynchronousHsaDispatchError::ApplicationDescriptors(
+                    fe2o3_host::WorkerV2ApplicationDescriptorHandoffErrorV1::EnvelopeChanged,
+                ),
+            ),
+        );
+        let message = result.unwrap_err().to_string();
+        assert!(message.contains("stale application descriptors prevented HSA dispatch"));
+        assert!(message.contains("inherited Worker V2 envelope changed"));
     }
 }

@@ -253,6 +253,7 @@ dependencies = [
 name = "fe2o3-scalar-gemm-v1-hardware-harness"
 version = "0.1.0"
 dependencies = [
+ "fe2o3-artifact-transaction",
  "fe2o3-core",
  "fe2o3-host",
  "fe2o3-hsa-runtime",
