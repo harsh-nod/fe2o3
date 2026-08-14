@@ -674,7 +674,7 @@ fn validate_handoff_profile(
     if table.canonical_code_object_digest() != CanonicalCodeObjectDigest::from_bytes([0; 32])
         || table.compiler().name().as_str() != "rustc-codegen-fe2o3"
         || table.producer().name().as_str() != "rustc-codegen-fe2o3-worker-v2"
-        || table.producer().version().as_str() != "typed-general-gfx942-cov6-v1"
+        || table.producer().version().as_str() != "typed-row-softmax-gfx942-cov6-v1"
     {
         return Err(profile_mismatch("compiler descriptor producer profile"));
     }
@@ -1483,7 +1483,7 @@ entry:
                 CompilerIdentityV1::new(text("rustc-codegen-fe2o3"), text("0.1.0"), [0; 20]),
                 ProducerIdentityV1::new(
                     text("rustc-codegen-fe2o3-worker-v2"),
-                    text("typed-general-gfx942-cov6-v1"),
+                    text("typed-row-softmax-gfx942-cov6-v1"),
                 ),
                 descriptor_target(),
                 vec![input_source, output_source],
