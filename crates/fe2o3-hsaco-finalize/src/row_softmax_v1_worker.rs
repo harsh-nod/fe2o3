@@ -736,9 +736,9 @@ fn validate_handoff_profile(
         .map_err(|_| profile_mismatch("compiler descriptor source"))?;
     if let Some(policy) = expected_authority_policy {
         validate_row_softmax_v1_authority_transcript(
-            &sections.authority_transcript,
+            sections.authority_transcript(),
             *source.identity().sha256(),
-            sections.exponential_boundary,
+            *sections.exponential_boundary(),
             policy,
         )
         .map_err(|_| profile_mismatch("frontend-authority policy"))?;
