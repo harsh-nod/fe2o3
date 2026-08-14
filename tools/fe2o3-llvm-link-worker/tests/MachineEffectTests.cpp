@@ -32,10 +32,13 @@
 #include <array>
 #include <cstddef>
 #include <cstdlib>
+#include <fstream>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -215,6 +218,8 @@ std::vector<uint8_t> finalize(std::vector<uint8_t> Bitcode,
 
 PhysicalMachineEffectBudget generousBudget() { return {64, 32, 16, 16, 8}; }
 
+PhysicalMachineEffectBudget scalarGemmBudget() { return {9, 8, 1, 1, 0}; }
+
 PhysicalMachineEffectRequest
 directRequest(std::vector<uint8_t> Payload,
               PhysicalMachineEffectBudget Budget = generousBudget()) {
@@ -226,6 +231,23 @@ directRequest(std::vector<uint8_t> Payload,
   Result.PayloadDigest = SHA256::hash(Payload);
   Result.PayloadBytes = Payload.size();
   Result.Entries = {{"alpha", Budget}, {"zeta", Budget}};
+  Result.Payload = std::move(Payload);
+  Result.RequestIdentity.fill(0x51);
+  Result.RequestBytes = 4096;
+  return Result;
+}
+
+PhysicalMachineEffectRequest directScalarGemmRequest(
+    std::vector<uint8_t> Payload,
+    PhysicalMachineEffectBudget Budget = scalarGemmBudget()) {
+  auto Identities = physicalMachineEffectIdentities();
+  PhysicalMachineEffectRequest Result;
+  Result.AnalyzerIdentity = Identities.Analyzer;
+  Result.ToolchainIdentity = Identities.Toolchain;
+  Result.ExecutionChallenge.fill(0x50);
+  Result.PayloadDigest = SHA256::hash(Payload);
+  Result.PayloadBytes = Payload.size();
+  Result.Entries = {{"scalar_gemm_v1", Budget}};
   Result.Payload = std::move(Payload);
   Result.RequestIdentity.fill(0x51);
   Result.RequestBytes = 4096;
@@ -393,6 +415,20 @@ void decoderBindsBytesSymbolsAndIdentities() {
   auto WrongIdentity = decodePhysicalMachineEffectRequest(Bytes);
   require(!WrongIdentity, "analyzer identity substitution was accepted");
   consumeError(WrongIdentity.takeError());
+
+  Bytes = encodeRequest(Payload, {{"scalar_gemm_v1", scalarGemmBudget()}});
+  auto Scalar = decodePhysicalMachineEffectRequest(Bytes);
+  if (!Scalar)
+    fail(takeError(Scalar.takeError()));
+  require(Scalar->Entries.size() == 1 &&
+              Scalar->Entries.front().Symbol == "scalar_gemm_v1",
+          "canonical scalar GEMM request was rejected");
+
+  Bytes = encodeRequest(Payload, {{"alpha", generousBudget()},
+                                  {"scalar_gemm_v1", scalarGemmBudget()}});
+  auto MixedProfile = decodePhysicalMachineEffectRequest(Bytes);
+  require(!MixedProfile, "mixed alpha/scalar profile was accepted");
+  consumeError(MixedProfile.takeError());
 }
 
 size_t symbolFileOffset(ArrayRef<uint8_t> Payload, StringRef Name) {
@@ -603,6 +639,220 @@ std::vector<DecodedSite> decodeSymbolSites(ArrayRef<uint8_t> Payload,
     Offset += InstructionSize;
   }
   return Result;
+}
+
+std::optional<std::vector<uint8_t>> scalarArtifactFromEnvironment() {
+  const char *Path = std::getenv("FE2O3_SCALAR_GEMM_V1_HSACO");
+  if (Path == nullptr)
+    return std::nullopt;
+  std::ifstream Input(Path, std::ios::binary);
+  require(Input.good(), "cannot open scalar GEMM artifact");
+  std::vector<uint8_t> Payload((std::istreambuf_iterator<char>(Input)),
+                               std::istreambuf_iterator<char>());
+  require(!Payload.empty(), "scalar GEMM artifact is empty");
+  return Payload;
+}
+
+std::string rejectedScalarDiagnostic(std::vector<uint8_t> Payload) {
+  auto Result = analyzeGfx942PhysicalMachineEffects(
+      directScalarGemmRequest(std::move(Payload)));
+  require(!Result, "scalar GEMM mutation was accepted");
+  return takeError(Result.takeError());
+}
+
+void requireScalarRejectedWith(std::vector<uint8_t> Payload,
+                               StringRef Fragment) {
+  std::string Diagnostic = rejectedScalarDiagnostic(std::move(Payload));
+  require(StringRef(Diagnostic).contains(Fragment),
+          (Twine("unexpected scalar rejection; wanted '") + Fragment +
+           "': " + Diagnostic)
+              .str());
+}
+
+void exactScalarGemmArtifactIsAccepted() {
+  auto MaybePayload = scalarArtifactFromEnvironment();
+  if (!MaybePayload)
+    return;
+  const std::vector<uint8_t> &Payload = *MaybePayload;
+  constexpr std::array<uint8_t, 32> ExpectedDigest = {
+      0xac, 0x1d, 0xa7, 0x0c, 0x69, 0xa5, 0x03, 0x8b, 0x88, 0x7b, 0x45,
+      0x9d, 0xec, 0xe4, 0x08, 0x02, 0x66, 0x8c, 0x41, 0xbc, 0xf9, 0x8f,
+      0x62, 0x1d, 0x7d, 0x12, 0x73, 0xd2, 0xf6, 0x1b, 0xa2, 0xc9,
+  };
+  require(Payload.size() == 10128, "scalar GEMM artifact length changed");
+  require(SHA256::hash(Payload) == ExpectedDigest,
+          "scalar GEMM artifact digest changed");
+
+  std::set<std::string> Opcodes;
+  for (const DecodedSite &Site : decodeSymbolSites(Payload, "scalar_gemm_v1"))
+    Opcodes.insert(Site.Name);
+  const std::set<std::string> ExpectedOpcodes = {
+      "GLOBAL_LOAD_DWORD_vi",
+      "GLOBAL_STORE_DWORD_vi",
+      "S_ADDC_U32_vi",
+      "S_ADD_I32_vi",
+      "S_ADD_U32_vi",
+      "S_AND_B64_vi",
+      "S_BRANCH_vi",
+      "S_CBRANCH_EXECZ_vi",
+      "S_CBRANCH_SCC1_vi",
+      "S_CBRANCH_VCCNZ_vi",
+      "S_CMP_GE_U32_vi",
+      "S_CMP_LG_U64_vi",
+      "S_CSELECT_B64_vi",
+      "S_ENDPGM_vi",
+      "S_LOAD_DWORDX2_IMM_vi",
+      "S_LOAD_DWORD_IMM_vi",
+      "S_LSHL_B64_vi",
+      "S_LSHR_B64_vi",
+      "S_MOV_B32_vi",
+      "S_MOV_B64_vi",
+      "S_MUL_HI_U32_vi",
+      "S_MUL_I32_vi",
+      "S_NOP_vi",
+      "S_OR_B64_vi",
+      "S_OR_SAVEEXEC_B64_vi",
+      "S_SUBB_U32_vi",
+      "S_SUB_U32_vi",
+      "S_WAITCNT_vi",
+      "V_ACCVGPR_READ_B32_vi",
+      "V_ACCVGPR_WRITE_B32_vi",
+      "V_ADD3_U32_vi",
+      "V_ADDC_CO_U32_e32_gfx9",
+      "V_ADD_CO_U32_e32_gfx9",
+      "V_ADD_F32_e64_vi",
+      "V_CMP_EQ_U32_e64_vi",
+      "V_CMP_GE_U32_e64_vi",
+      "V_CMP_LT_U64_e64_vi",
+      "V_CMP_NE_U32_e64_vi",
+      "V_CNDMASK_B32_e64_vi",
+      "V_CVT_F32_U32_e64_vi",
+      "V_CVT_U32_F32_e64_vi",
+      "V_FMAC_F32_e64_vi",
+      "V_LSHLREV_B64_vi",
+      "V_LSHL_ADD_U64_vi",
+      "V_LSHRREV_B64_vi",
+      "V_MAD_U64_U32_vi",
+      "V_MOV_B32_e32_vi",
+      "V_MOV_B64_e32_vi",
+      "V_MUL_F32_e64_vi",
+      "V_MUL_HI_U32_vi",
+      "V_MUL_LO_U32_vi",
+      "V_OR_B32_e64_vi",
+      "V_RCP_F32_e64_vi",
+      "V_READFIRSTLANE_B32_vi",
+      "V_READLANE_B32_vi",
+      "V_SUBB_CO_U32_e64_gfx9",
+      "V_SUB_CO_U32_e64_gfx9",
+      "V_SUB_U32_e64_gfx9",
+      "V_TRUNC_F32_e64_vi",
+      "V_WRITELANE_B32_vi",
+  };
+  require(Opcodes == ExpectedOpcodes,
+          "scalar GEMM LLVM MC opcode closure changed");
+
+  auto First =
+      analyzeGfx942PhysicalMachineEffects(directScalarGemmRequest(Payload));
+  if (!First)
+    fail(takeError(First.takeError()));
+  auto Second =
+      analyzeGfx942PhysicalMachineEffects(directScalarGemmRequest(Payload));
+  if (!Second)
+    fail(takeError(Second.takeError()));
+  auto FirstBytes = encodePhysicalMachineEffectEvidence(*First);
+  if (!FirstBytes)
+    fail(takeError(FirstBytes.takeError()));
+  auto SecondBytes = encodePhysicalMachineEffectEvidence(*Second);
+  if (!SecondBytes)
+    fail(takeError(SecondBytes.takeError()));
+  require(*FirstBytes == *SecondBytes,
+          "scalar GEMM evidence is not deterministic");
+  require(First->Entries.size() == 1 &&
+              First->Entries.front().Symbol == "scalar_gemm_v1" &&
+              First->Entries.front().CodeOffset == 0x1b00 &&
+              First->Entries.front().CodeSize == 0xad0,
+          "scalar GEMM entry closure changed");
+  require(First->Functions.size() == 1 &&
+              First->Functions.front().Symbol == "scalar_gemm_v1" &&
+              First->Functions.front().DirectCallees.empty(),
+          "scalar GEMM function closure changed");
+
+  size_t Addresses = 0;
+  size_t Reads = 0;
+  size_t Writes = 0;
+  size_t Returns = 0;
+  size_t FourByteReads = 0;
+  size_t EightByteReads = 0;
+  for (const PhysicalMachineEffect &Effect : First->Effects) {
+    require(Effect.EntrySymbol == "scalar_gemm_v1" &&
+                Effect.FunctionSymbol == "scalar_gemm_v1",
+            "scalar GEMM effect escaped its closed function");
+    switch (Effect.Kind) {
+    case PhysicalMachineEffectKind::GlobalAddress:
+      ++Addresses;
+      require(Effect.ByteWidth == 8, "scalar GEMM address width changed");
+      break;
+    case PhysicalMachineEffectKind::GlobalRead:
+      ++Reads;
+      FourByteReads += Effect.ByteWidth == 4;
+      EightByteReads += Effect.ByteWidth == 8;
+      break;
+    case PhysicalMachineEffectKind::GlobalWrite:
+      ++Writes;
+      require(Effect.ByteWidth == 4, "scalar GEMM write width changed");
+      break;
+    case PhysicalMachineEffectKind::Return:
+      ++Returns;
+      require(Effect.ByteWidth == 0, "scalar GEMM return width changed");
+      break;
+    }
+  }
+  require(Addresses == 9 && Reads == 8 && Writes == 1 && Returns == 1 &&
+              FourByteReads == 5 && EightByteReads == 3,
+          "scalar GEMM static effect counts changed");
+  outs() << "accepted scalar_gemm_v1: address=9 read=8 write=1 return=1 "
+            "call=0\n";
+
+  auto Sites = decodeSymbolSites(Payload, "scalar_gemm_v1");
+  auto Nop = llvm::find_if(Sites, [](const DecodedSite &Site) {
+    return Site.Name == "S_NOP_vi" && Site.Size == 4;
+  });
+  require(Nop != Sites.end(), "scalar GEMM lacks mutation NOP");
+  std::vector<uint8_t> Mutated = Payload;
+  support::endian::write32le(Mutated.data() + Nop->FileOffset, 0xbf8e0000);
+  requireScalarRejectedWith(std::move(Mutated),
+                            "unsupported instruction S_SLEEP_vi");
+
+  auto GlobalLoad = llvm::find_if(Sites, [](const DecodedSite &Site) {
+    return Site.Name == "GLOBAL_LOAD_DWORD_vi" && Site.Size == 8;
+  });
+  require(GlobalLoad != Sites.end(), "scalar GEMM lacks mutation load");
+  Mutated = Payload;
+  uint32_t Load =
+      support::endian::read32le(Payload.data() + GlobalLoad->FileOffset);
+  support::endian::write32le(Mutated.data() + GlobalLoad->FileOffset,
+                             Load + 0x00040000);
+  requireScalarRejectedWith(
+      std::move(Mutated),
+      "unsupported memory instruction GLOBAL_LOAD_DWORDX2_vi");
+
+  auto Backward = llvm::find_if(Sites, [](const DecodedSite &Site) {
+    return Site.Name == "S_CBRANCH_VCCNZ_vi" && Site.Size == 4;
+  });
+  require(Backward != Sites.end(), "scalar GEMM lacks inner loop latch");
+  uint32_t Branch =
+      support::endian::read32le(Payload.data() + Backward->FileOffset);
+  Mutated = Payload;
+  support::endian::write32le(Mutated.data() + Backward->FileOffset,
+                             0xbf850000 | (Branch & 0xffff));
+  requireScalarRejectedWith(std::move(Mutated),
+                            "unsupported scalar GEMM backward branch");
+
+  Mutated = Payload;
+  support::endian::write32le(Mutated.data() + Backward->FileOffset,
+                             (Branch & 0xffff0000) | ((Branch + 1) & 0xffff));
+  requireScalarRejectedWith(std::move(Mutated),
+                            "scalar GEMM branch profile mismatch");
 }
 
 void patchSwapCallToImmediate(std::vector<uint8_t> &Payload, StringRef Caller,
@@ -1185,5 +1435,6 @@ int main() {
   directCallEdgesAreResolvedExactly();
   everyCallEncodingUsesTheAbiReturnPair();
   scalarLoadWidthsUseExactMcEncodings();
+  exactScalarGemmArtifactIsAccepted();
   return 0;
 }
