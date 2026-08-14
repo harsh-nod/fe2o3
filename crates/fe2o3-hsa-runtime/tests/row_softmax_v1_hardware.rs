@@ -2,9 +2,12 @@
 //!
 //! The ignored hardware test executes only an exact SHA-256-pinned COV6 image
 //! after checking its physical metadata and digest-pinned, observed LLVM 22
-//! disassembly. The exact verified objdump ELF is copied into a sealed memfd and
-//! executed only through that descriptor under a no-descendant seccomp profile
-//! and pidfd supervision. The disassembly remains observational and does not
+//! disassembly. The exact verified objdump ELF is copied into a sealed memfd;
+//! its first exec is identity-checked at a ptrace exec stop and any second exec
+//! is rejected before replacement code runs. A no-descendant seccomp profile,
+//! pidfd supervision, and `PTRACE_O_EXITKILL` bound the process. The pinned HSACO
+//! reaches objdump only through a separate inherited, sealed, read-only memfd.
+//! The disassembly remains observational and does not
 //! authenticate the tool's provenance, dynamic loader, shared libraries, or
 //! host process environment.
 //! It deliberately bypasses production prerequisite authentication and cannot
@@ -13,7 +16,9 @@
 //! load or launch authority, exact real-number equivalence, or race freedom.
 
 use fe2o3_host::HsaLaunchGeometryV1;
-use fe2o3_hsaco::{ArgumentAccess, ArgumentAddressSpace, ExplicitValueKind, ExplicitValueType};
+use fe2o3_hsaco::{
+    ArgumentAccess, ArgumentAddressSpace, ExplicitValueKind, ExplicitValueType, HiddenValueKind,
+};
 use sha2::{Digest, Sha256};
 
 #[cfg(any(test, feature = "hardware-test-hooks"))]
@@ -61,6 +66,14 @@ const MAX_LLVM_OBJDUMP_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_LLVM_OBJDUMP_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
 #[cfg(any(test, feature = "hardware-test-hooks"))]
 const LLVM_OBJDUMP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
+#[cfg(any(test, feature = "hardware-test-hooks"))]
+const READY_DESCRIPTOR: RawFd = 197;
+#[cfg(any(test, feature = "hardware-test-hooks"))]
+const EXECUTABLE_DESCRIPTOR: RawFd = 198;
+#[cfg(any(test, feature = "hardware-test-hooks"))]
+const ARTIFACT_DESCRIPTOR: RawFd = 199;
+#[cfg(any(test, feature = "hardware-test-hooks"))]
+const RELOCATED_DESCRIPTOR_MINIMUM: RawFd = 256;
 
 const INPUT_PREFIX: f32 = f32::from_bits(0x7fc0_a001);
 const INPUT_SUFFIX: f32 = f32::from_bits(0x7fc0_a002);
@@ -140,6 +153,13 @@ struct ArgumentFact {
     is_pipe: Option<bool>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct HiddenArgumentFact {
+    offset: u64,
+    size: u64,
+    kind: HiddenValueKind,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct MetadataFacts {
     code_object_version: u8,
@@ -154,6 +174,10 @@ struct MetadataFacts {
     implicit_size: u64,
     required_workgroup: Option<[u32; 3]>,
     max_flat_workgroup: u32,
+    max_workgroups: [Option<u32>; 3],
+    cluster_dims: Option<[u32; 3]>,
+    uniform_workgroup: bool,
+    workgroup_processor_mode: Option<bool>,
     wavefront_size: u32,
     group_segment_size: u64,
     private_segment_size: u64,
@@ -162,6 +186,7 @@ struct MetadataFacts {
     vgpr_spill_count: u32,
     uses_dynamic_stack: bool,
     arguments: Vec<ArgumentFact>,
+    hidden_arguments: Vec<HiddenArgumentFact>,
     binding_count: usize,
     binding_kernel_index: usize,
     descriptor_kernarg_size: u32,
@@ -187,6 +212,10 @@ impl MetadataFacts {
             implicit_size: COV6_IMPLICIT_KERNARG_BYTES as u64,
             required_workgroup: Some([WORKGROUP_X, 1, 1]),
             max_flat_workgroup: WORKGROUP_X,
+            max_workgroups: [Some(1), Some(1), Some(1)],
+            cluster_dims: None,
+            uniform_workgroup: true,
+            workgroup_processor_mode: None,
             wavefront_size: 64,
             group_segment_size: 0,
             private_segment_size: 0,
@@ -235,6 +264,7 @@ impl MetadataFacts {
                     ]
                 })
                 .collect(),
+            hidden_arguments: expected_cov6_hidden_arguments(),
             binding_count: 1,
             binding_kernel_index: 0,
             descriptor_kernarg_size: COMPLETE_KERNARG_BYTES as u32,
@@ -256,8 +286,25 @@ fn validate_metadata(facts: &MetadataFacts, kernel_symbol: &str) -> Result<(), B
     for (index, argument) in facts.arguments.iter().enumerate() {
         validate_argument_fact(index, argument)?;
     }
+    require(
+        facts.hidden_arguments == expected.hidden_arguments,
+        format!(
+            "Row Softmax V1 must expose exactly the 13 mandatory COV6 hidden records: {:#?}",
+            facts.hidden_arguments
+        ),
+    )?;
+    require(
+        matches!(facts.cluster_dims, None | Some([1, 1, 1])),
+        "Row Softmax V1 cluster dimensions must be absent or exactly [1, 1, 1]",
+    )?;
+    require(
+        matches!(facts.workgroup_processor_mode, None | Some(false)),
+        "Row Softmax V1 must not enable WGP mode on gfx942",
+    )?;
     let mut normalized = facts.clone();
     normalized.arguments = expected.arguments.clone();
+    normalized.cluster_dims = expected.cluster_dims;
+    normalized.workgroup_processor_mode = expected.workgroup_processor_mode;
     require(
         normalized == expected,
         format!(
@@ -265,6 +312,27 @@ fn validate_metadata(facts: &MetadataFacts, kernel_symbol: &str) -> Result<(), B
              gfx942:xnack- COV6/WG64/288-byte two-slice profile: {facts:#?}"
         ),
     )
+}
+
+fn expected_cov6_hidden_arguments() -> Vec<HiddenArgumentFact> {
+    [
+        (32, 4, HiddenValueKind::BlockCountX),
+        (36, 4, HiddenValueKind::BlockCountY),
+        (40, 4, HiddenValueKind::BlockCountZ),
+        (44, 2, HiddenValueKind::GroupSizeX),
+        (46, 2, HiddenValueKind::GroupSizeY),
+        (48, 2, HiddenValueKind::GroupSizeZ),
+        (50, 2, HiddenValueKind::RemainderX),
+        (52, 2, HiddenValueKind::RemainderY),
+        (54, 2, HiddenValueKind::RemainderZ),
+        (72, 8, HiddenValueKind::GlobalOffsetX),
+        (80, 8, HiddenValueKind::GlobalOffsetY),
+        (88, 8, HiddenValueKind::GlobalOffsetZ),
+        (96, 2, HiddenValueKind::GridDimensions),
+    ]
+    .into_iter()
+    .map(|(offset, size, kind)| HiddenArgumentFact { offset, size, kind })
+    .collect()
 }
 
 fn validate_argument_fact(index: usize, argument: &ArgumentFact) -> Result<(), BoxError> {
@@ -367,6 +435,10 @@ fn inspect_metadata(bytes: &[u8], kernel_symbol: &str) -> Result<BoundKernelEntr
         implicit_size: kernel.implicit_argument_size(),
         required_workgroup: kernel.required_workgroup_size(),
         max_flat_workgroup: kernel.max_flat_workgroup_size(),
+        max_workgroups: kernel.max_workgroups(),
+        cluster_dims: kernel.cluster_dims(),
+        uniform_workgroup: kernel.uniform_work_group_size(),
+        workgroup_processor_mode: kernel.workgroup_processor_mode(),
         wavefront_size: kernel.wavefront_size(),
         group_segment_size: kernel.group_segment_fixed_size(),
         private_segment_size: kernel.private_segment_fixed_size(),
@@ -393,6 +465,15 @@ fn inspect_metadata(bytes: &[u8], kernel_symbol: &str) -> Result<BoundKernelEntr
                 is_restrict: argument.is_restrict(),
                 is_volatile: argument.is_volatile(),
                 is_pipe: argument.is_pipe(),
+            })
+            .collect(),
+        hidden_arguments: kernel
+            .hidden_arguments()
+            .iter()
+            .map(|argument| HiddenArgumentFact {
+                offset: argument.offset(),
+                size: argument.size(),
+                kind: argument.value_kind(),
             })
             .collect(),
         binding_count: bound.bindings().len(),
@@ -879,6 +960,23 @@ impl PinnedObjdump {
         Ok(output)
     }
 
+    fn output_with_artifact<I, S>(
+        &self,
+        artifact: &PrivateArtifactMaterialization,
+        arguments: I,
+    ) -> Result<std::process::Output, BoxError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<std::ffi::OsStr>,
+    {
+        self.verify_bytes()?;
+        let output = self
+            .executable
+            .output_with_artifact(&self.bytes, artifact, arguments)?;
+        self.verify_bytes()?;
+        Ok(output)
+    }
+
     fn observe_version(&self) -> Result<String, BoxError> {
         let output = self.output(["--version"])?;
         require(
@@ -920,9 +1018,8 @@ fn observed_llvm_22_version(stdout: &[u8]) -> Result<String, BoxError> {
 
 #[cfg(any(test, feature = "hardware-test-hooks"))]
 struct PrivateArtifactMaterialization {
-    directory: std::path::PathBuf,
-    path: std::path::PathBuf,
     file: std::fs::File,
+    byte_len: u64,
     device: u64,
     inode: u64,
     digest: [u8; 32],
@@ -931,95 +1028,99 @@ struct PrivateArtifactMaterialization {
 #[cfg(any(test, feature = "hardware-test-hooks"))]
 impl PrivateArtifactMaterialization {
     fn new(bytes: &[u8]) -> Result<Self, BoxError> {
-        let directory = create_private_directory("hsaco")?;
-        let path = directory.join("artifact.hsaco");
-        let result = (|| -> Result<Self, BoxError> {
-            let mut file = std::fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(&path)?;
-            file.write_all(bytes)?;
-            file.flush()?;
-            file.sync_all()?;
-            require(
-                file.metadata()?.len() == bytes.len() as u64,
-                "private HSACO materialization has the wrong written length",
-            )?;
-            let written_metadata = file.metadata()?;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o400))?;
-            std::fs::File::open(&directory)?.sync_all()?;
-            drop(file);
-            let file = std::fs::OpenOptions::new().read(true).open(&path)?;
-            let metadata = file.metadata()?;
-            require(
-                metadata.dev() == written_metadata.dev()
-                    && metadata.ino() == written_metadata.ino()
-                    && metadata.len() == written_metadata.len(),
-                "private HSACO identity changed while reopening it read-only",
-            )?;
-            let materialized = Self {
-                directory: directory.clone(),
-                path: path.clone(),
-                file,
-                device: metadata.dev(),
-                inode: metadata.ino(),
-                digest: sha256(bytes),
-            };
-            materialized.verify(bytes)?;
-            Ok(materialized)
-        })();
-        if result.is_err() {
-            let _ = std::fs::remove_file(&path);
-            let _ = std::fs::remove_dir(&directory);
+        require(
+            !bytes.is_empty() && bytes.len() <= fe2o3_hsaco::MAX_HSACO_BYTES,
+            "private HSACO materialization has an invalid bounded length",
+        )?;
+        // SAFETY: memfd_create returns a fresh descriptor or a negative error.
+        let descriptor = unsafe {
+            libc::syscall(
+                libc::SYS_memfd_create,
+                c"fe2o3-row-softmax-v1-hsaco".as_ptr(),
+                libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING,
+            )
+        } as libc::c_int;
+        if descriptor < 0 {
+            return Err(std::io::Error::last_os_error().into());
         }
-        result
-    }
-
-    fn path(&self) -> &std::path::Path {
-        &self.path
+        // SAFETY: memfd_create returned a fresh owned descriptor.
+        let mut writable = unsafe { std::fs::File::from_raw_fd(descriptor) };
+        writable.write_all(bytes)?;
+        writable.flush()?;
+        writable.sync_all()?;
+        // SAFETY: fchmod and fcntl operate on this live private descriptor.
+        if unsafe { libc::fchmod(writable.as_raw_fd(), 0o400) } != 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        let required_seals =
+            libc::F_SEAL_WRITE | libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL;
+        // SAFETY: F_ADD_SEALS accepts the integer seal mask for this memfd.
+        if unsafe { libc::fcntl(writable.as_raw_fd(), libc::F_ADD_SEALS, required_seals) } != 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        let written_metadata = writable.metadata()?;
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .open(format!("/proc/self/fd/{}", writable.as_raw_fd()))?;
+        let metadata = file.metadata()?;
+        require(
+            metadata.dev() == written_metadata.dev()
+                && metadata.ino() == written_metadata.ino()
+                && metadata.len() == written_metadata.len(),
+            "sealed HSACO identity changed while reopening it read-only",
+        )?;
+        drop(writable);
+        let materialized = Self {
+            file,
+            byte_len: bytes.len() as u64,
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            digest: sha256(bytes),
+        };
+        materialized.verify(bytes)?;
+        Ok(materialized)
     }
 
     fn verify(&self, expected: &[u8]) -> Result<(), BoxError> {
-        let retained_metadata = self.file.metadata()?;
-        let path_metadata = std::fs::symlink_metadata(&self.path)?;
+        self.verify_retained()?;
+        let mut retained = self.file.try_clone()?;
+        retained.seek(SeekFrom::Start(0))?;
+        let mut retained_bytes = Vec::new();
+        retained.read_to_end(&mut retained_bytes)?;
         require(
-            retained_metadata.dev() == self.device
+            retained_bytes == expected
+                && expected.len() as u64 == self.byte_len
+                && sha256(expected) == self.digest,
+            "sealed HSACO expected bytes changed",
+        )
+    }
+
+    fn verify_retained(&self) -> Result<(), BoxError> {
+        let retained_metadata = self.file.metadata()?;
+        // SAFETY: F_GET_SEALS and F_GETFL inspect this live retained descriptor.
+        let seals = unsafe { libc::fcntl(self.file.as_raw_fd(), libc::F_GET_SEALS) };
+        let status = unsafe { libc::fcntl(self.file.as_raw_fd(), libc::F_GETFL) };
+        let required_seals =
+            libc::F_SEAL_WRITE | libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL;
+        require(
+            seals >= 0
+                && seals & required_seals == required_seals
+                && status >= 0
+                && status & libc::O_ACCMODE == libc::O_RDONLY
+                && retained_metadata.dev() == self.device
                 && retained_metadata.ino() == self.inode
-                && path_metadata.dev() == self.device
-                && path_metadata.ino() == self.inode
-                && path_metadata.file_type().is_file()
-                && !path_metadata.file_type().is_symlink()
-                && path_metadata.nlink() == 1
-                && path_metadata.len() == expected.len() as u64
-                && path_metadata.permissions().mode() & 0o777 == 0o400,
-            "private HSACO materialization identity or permissions changed",
+                && retained_metadata.len() == self.byte_len
+                && retained_metadata.permissions().mode() & 0o777 == 0o400,
+            "sealed HSACO descriptor identity, seals, or permissions changed",
         )?;
         let mut retained = self.file.try_clone()?;
         retained.seek(SeekFrom::Start(0))?;
         let mut retained_bytes = Vec::new();
         retained.read_to_end(&mut retained_bytes)?;
-        let path_bytes = std::fs::read(&self.path)?;
         require(
-            retained_bytes == expected
-                && path_bytes == expected
-                && sha256(&retained_bytes) == self.digest
-                && sha256(&path_bytes) == self.digest
-                && sha256(expected) == self.digest,
-            "private HSACO materialization bytes changed",
+            retained_bytes.len() as u64 == self.byte_len && sha256(&retained_bytes) == self.digest,
+            "sealed HSACO descriptor bytes changed",
         )
-    }
-}
-
-#[cfg(any(test, feature = "hardware-test-hooks"))]
-impl Drop for PrivateArtifactMaterialization {
-    fn drop(&mut self) {
-        if std::fs::remove_file(&self.path).is_err()
-            || std::fs::remove_dir(&self.directory).is_err()
-        {
-            std::process::abort();
-        }
     }
 }
 
@@ -1105,18 +1206,21 @@ fn pidfd_open(pid: libc::pid_t) -> Result<OwnedFd, BoxError> {
 }
 
 #[cfg(any(test, feature = "hardware-test-hooks"))]
-fn pidfd_exited(pidfd: RawFd) -> Result<bool, BoxError> {
-    let mut pollfd = libc::pollfd {
-        fd: pidfd,
-        events: libc::POLLIN,
-        revents: 0,
+fn relocate_source_descriptor(descriptor: RawFd) -> Result<OwnedFd, BoxError> {
+    // SAFETY: F_DUPFD_CLOEXEC duplicates one live source at or above the
+    // collision-free child relocation floor.
+    let relocated = unsafe {
+        libc::fcntl(
+            descriptor,
+            libc::F_DUPFD_CLOEXEC,
+            RELOCATED_DESCRIPTOR_MINIMUM,
+        )
     };
-    // SAFETY: poll receives one live pollfd and a zero timeout.
-    let result = unsafe { libc::poll(&mut pollfd, 1, 0) };
-    if result < 0 {
+    if relocated < RELOCATED_DESCRIPTOR_MINIMUM {
         return Err(std::io::Error::last_os_error().into());
     }
-    Ok(result == 1 && pollfd.revents & (libc::POLLIN | libc::POLLHUP) != 0)
+    // SAFETY: fcntl returned one fresh owned descriptor.
+    Ok(unsafe { OwnedFd::from_raw_fd(relocated) })
 }
 
 #[cfg(any(test, feature = "hardware-test-hooks"))]
@@ -1127,9 +1231,12 @@ fn reap_pid_until(
     loop {
         let mut raw_status = 0;
         // SAFETY: waitpid observes only the exact child owned by this process.
-        let result = unsafe { libc::waitpid(pid, &mut raw_status, libc::WNOHANG) };
+        let result = unsafe { libc::waitpid(pid, &mut raw_status, libc::WNOHANG | libc::__WALL) };
         if result == pid {
-            return Ok(std::process::ExitStatus::from_raw(raw_status));
+            if libc::WIFEXITED(raw_status) || libc::WIFSIGNALED(raw_status) {
+                return Ok(std::process::ExitStatus::from_raw(raw_status));
+            }
+            continue;
         }
         if result < 0 {
             let error = std::io::Error::last_os_error();
@@ -1143,6 +1250,101 @@ fn reap_pid_until(
         )?;
         std::thread::sleep(std::time::Duration::from_millis(2));
     }
+}
+
+#[cfg(any(test, feature = "hardware-test-hooks"))]
+fn ptrace_request(request: libc::c_uint, pid: libc::pid_t, data: usize) -> Result<(), BoxError> {
+    // SAFETY: ptrace receives the exact unreaped tracee pid; requests used here
+    // take no address argument and an integer option/signal in `data`.
+    let result = unsafe {
+        libc::ptrace(
+            request,
+            pid,
+            std::ptr::null_mut::<libc::c_void>(),
+            data as *mut libc::c_void,
+        )
+    };
+    if result == -1 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    Ok(())
+}
+
+#[cfg(any(test, feature = "hardware-test-hooks"))]
+fn establish_one_shot_exec_trace(
+    pid: libc::pid_t,
+    deadline: std::time::Instant,
+    artifact: Option<&PrivateArtifactMaterialization>,
+) -> Result<Option<std::process::ExitStatus>, BoxError> {
+    loop {
+        let mut status = 0;
+        // SAFETY: waitpid observes only the exact fork child and includes ptrace stops.
+        let result = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG | libc::__WALL) };
+        if result == pid {
+            if libc::WIFEXITED(status) || libc::WIFSIGNALED(status) {
+                return Ok(Some(std::process::ExitStatus::from_raw(status)));
+            }
+            require(
+                libc::WIFSTOPPED(status) && libc::WSTOPSIG(status) == libc::SIGSTOP,
+                "objdump child did not enter its controlled pre-seccomp trace stop",
+            )?;
+            verify_child_artifact_descriptor(pid, artifact)?;
+            let options = (libc::PTRACE_O_TRACEEXEC | libc::PTRACE_O_EXITKILL) as usize;
+            ptrace_request(libc::PTRACE_SETOPTIONS, pid, options)?;
+            ptrace_request(libc::PTRACE_CONT, pid, 0)?;
+            return Ok(None);
+        }
+        if result < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() != std::io::ErrorKind::Interrupted {
+                return Err(error.into());
+            }
+        }
+        require(
+            std::time::Instant::now() < deadline,
+            "objdump child did not reach its controlled trace stop before the deadline",
+        )?;
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+}
+
+#[cfg(any(test, feature = "hardware-test-hooks"))]
+fn verify_child_artifact_descriptor(
+    pid: libc::pid_t,
+    expected: Option<&PrivateArtifactMaterialization>,
+) -> Result<(), BoxError> {
+    let path = format!("/proc/{pid}/fd/{ARTIFACT_DESCRIPTOR}");
+    let Some(expected) = expected else {
+        return match std::fs::File::open(path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+            Ok(_) => Err("objdump child retained an unauthorized artifact descriptor".into()),
+        };
+    };
+    let mut observed = std::fs::File::open(path)?;
+    let metadata = observed.metadata()?;
+    // SAFETY: F_GET_SEALS and F_GETFL inspect the stopped child's inherited memfd.
+    let seals = unsafe { libc::fcntl(observed.as_raw_fd(), libc::F_GET_SEALS) };
+    let status = unsafe { libc::fcntl(observed.as_raw_fd(), libc::F_GETFL) };
+    let required_seals =
+        libc::F_SEAL_WRITE | libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL;
+    let mut bytes = Vec::new();
+    std::io::Read::by_ref(&mut observed)
+        .take(fe2o3_hsaco::MAX_HSACO_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)?;
+    require(
+        seals >= 0
+            && seals & required_seals == required_seals
+            && status >= 0
+            && status & libc::O_ACCMODE == libc::O_RDONLY
+            && metadata.dev() == expected.device
+            && metadata.ino() == expected.inode
+            && metadata.len() == expected.byte_len
+            && metadata.permissions().mode() & 0o777 == 0o400
+            && bytes.len() as u64 == expected.byte_len
+            && sha256(&bytes) == expected.digest,
+        "objdump child did not retain the exact sealed HSACO descriptor",
+    )
 }
 
 #[cfg(any(test, feature = "hardware-test-hooks"))]
@@ -1173,6 +1375,79 @@ fn contain_or_abort(pid: libc::pid_t, pidfd: RawFd, already_reaped: bool) {
     if !already_reaped && terminate_and_reap(pid, pidfd).is_err() {
         std::process::abort();
     }
+}
+
+#[cfg(any(test, feature = "hardware-test-hooks"))]
+fn verify_traced_executable_identity(
+    pid: libc::pid_t,
+    expected: &PrivateExecutableMaterialization,
+    expected_bytes: &[u8],
+) -> Result<(), BoxError> {
+    let mut executed = std::fs::File::open(format!("/proc/{pid}/exe"))?;
+    let metadata = executed.metadata()?;
+    // SAFETY: F_GET_SEALS and F_GETFL inspect the ptrace-stopped executable object.
+    let seals = unsafe { libc::fcntl(executed.as_raw_fd(), libc::F_GET_SEALS) };
+    let status = unsafe { libc::fcntl(executed.as_raw_fd(), libc::F_GETFL) };
+    let required_seals =
+        libc::F_SEAL_WRITE | libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL;
+    let mut bytes = Vec::new();
+    std::io::Read::by_ref(&mut executed)
+        .take(MAX_LLVM_OBJDUMP_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    require(
+        seals >= 0
+            && seals & required_seals == required_seals
+            && status >= 0
+            && status & libc::O_ACCMODE == libc::O_RDONLY
+            && metadata.dev() == expected.device
+            && metadata.ino() == expected.inode
+            && metadata.len() == expected.byte_len
+            && metadata.permissions().mode() & 0o777 == 0o500
+            && bytes == expected_bytes
+            && sha256(&bytes) == expected.digest,
+        "first objdump exec event does not identify the exact sealed executable",
+    )
+}
+
+#[cfg(any(test, feature = "hardware-test-hooks"))]
+fn observe_traced_child(
+    pid: libc::pid_t,
+    expected: &PrivateExecutableMaterialization,
+    expected_bytes: &[u8],
+    artifact: Option<&PrivateArtifactMaterialization>,
+    exec_observed: &mut bool,
+) -> Result<Option<std::process::ExitStatus>, BoxError> {
+    let mut status = 0;
+    // SAFETY: waitpid observes only the exact ptrace child without blocking.
+    let result = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG | libc::__WALL) };
+    if result == 0 {
+        return Ok(None);
+    }
+    if result < 0 {
+        let error = std::io::Error::last_os_error();
+        if error.kind() == std::io::ErrorKind::Interrupted {
+            return Ok(None);
+        }
+        return Err(error.into());
+    }
+    if libc::WIFEXITED(status) || libc::WIFSIGNALED(status) {
+        return Ok(Some(std::process::ExitStatus::from_raw(status)));
+    }
+    require(
+        libc::WIFSTOPPED(status)
+            && libc::WSTOPSIG(status) == libc::SIGTRAP
+            && (status >> 16) as libc::c_uint == libc::PTRACE_EVENT_EXEC as libc::c_uint,
+        "objdump child entered an unexpected ptrace stop",
+    )?;
+    require(
+        !*exec_observed,
+        "objdump attempted a forbidden second executable replacement",
+    )?;
+    verify_traced_executable_identity(pid, expected, expected_bytes)?;
+    verify_child_artifact_descriptor(pid, artifact)?;
+    *exec_observed = true;
+    ptrace_request(libc::PTRACE_CONT, pid, 0)?;
+    Ok(None)
 }
 
 #[cfg(any(test, feature = "hardware-test-hooks"))]
@@ -1224,6 +1499,7 @@ fn seccomp_filter(executable_descriptor: RawFd) -> Vec<libc::sock_filter> {
         libc::SYS_setsid,
         libc::SYS_unshare,
         libc::SYS_setns,
+        libc::SYS_ptrace,
         libc::SYS_execve,
     ] {
         filter.push(jump(denied as u32, 0, 1));
@@ -1245,6 +1521,7 @@ fn seccomp_filter(executable_descriptor: RawFd) -> Vec<libc::sock_filter> {
 #[derive(Clone, Copy)]
 struct ChildExecPlan {
     executable: RawFd,
+    artifact: RawFd,
     stdout: RawFd,
     stderr: RawFd,
     ready: RawFd,
@@ -1257,31 +1534,35 @@ struct ChildExecPlan {
 
 #[cfg(any(test, feature = "hardware-test-hooks"))]
 unsafe fn child_exec_descriptor(plan: ChildExecPlan) -> ! {
-    const READY_DESCRIPTOR: RawFd = 197;
-    const EXECUTABLE_DESCRIPTOR: RawFd = 198;
-    let duplicate = |source: RawFd, destination: RawFd, flags: libc::c_int| {
-        if source == destination {
-            0
-        } else {
-            // SAFETY: child setup duplicates live descriptors before exec.
-            unsafe { libc::dup3(source, destination, flags) }
-        }
-    };
-    if duplicate(plan.devnull, libc::STDIN_FILENO, 0) < 0
-        || duplicate(plan.stdout, libc::STDOUT_FILENO, 0) < 0
-        || duplicate(plan.stderr, libc::STDERR_FILENO, 0) < 0
-        || duplicate(plan.ready, READY_DESCRIPTOR, libc::O_CLOEXEC) < 0
-        || duplicate(plan.executable, EXECUTABLE_DESCRIPTOR, libc::O_CLOEXEC) < 0
+    let sources_are_relocated = plan.executable >= RELOCATED_DESCRIPTOR_MINIMUM
+        && (plan.artifact < 0 || plan.artifact >= RELOCATED_DESCRIPTOR_MINIMUM)
+        && plan.stdout >= RELOCATED_DESCRIPTOR_MINIMUM
+        && plan.stderr >= RELOCATED_DESCRIPTOR_MINIMUM
+        && plan.ready >= RELOCATED_DESCRIPTOR_MINIMUM
+        && plan.devnull >= RELOCATED_DESCRIPTOR_MINIMUM;
+    // SAFETY: every source was independently relocated above all destinations,
+    // so these dup3 calls cannot overwrite a source needed by a later install.
+    if !sources_are_relocated
+        || unsafe { libc::dup3(plan.devnull, libc::STDIN_FILENO, 0) } < 0
+        || unsafe { libc::dup3(plan.stdout, libc::STDOUT_FILENO, 0) } < 0
+        || unsafe { libc::dup3(plan.stderr, libc::STDERR_FILENO, 0) } < 0
+        || unsafe { libc::dup3(plan.ready, READY_DESCRIPTOR, libc::O_CLOEXEC) } < 0
+        || unsafe { libc::dup3(plan.executable, EXECUTABLE_DESCRIPTOR, libc::O_CLOEXEC) } < 0
+        || (plan.artifact >= 0 && unsafe { libc::dup3(plan.artifact, ARTIFACT_DESCRIPTOR, 0) } < 0)
     {
         // SAFETY: terminal child failure avoids non-async-signal-safe cleanup.
         unsafe { libc::_exit(126) };
     }
-    // SAFETY: close_range leaves only stdio and the two fixed descriptors.
+    if plan.artifact < 0 {
+        // SAFETY: no artifact is authorized for this invocation; EBADF is benign.
+        unsafe { libc::close(ARTIFACT_DESCRIPTOR) };
+    }
+    // SAFETY: close_range leaves only stdio and the three fixed descriptors.
     if unsafe { libc::syscall(libc::SYS_close_range, 3_u32, 196_u32, 0_u32) } != 0
         || unsafe {
             libc::syscall(
                 libc::SYS_close_range,
-                199_u32,
+                200_u32,
                 u32::MAX,
                 libc::CLOSE_RANGE_UNSHARE,
             )
@@ -1298,6 +1579,22 @@ unsafe fn child_exec_descriptor(plan: ChildExecPlan) -> ! {
     if unsafe { libc::setrlimit(libc::RLIMIT_NPROC, &zero_limit) } != 0
         || unsafe { libc::setrlimit(libc::RLIMIT_CORE, &zero_limit) } != 0
         || unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) } != 0
+        || unsafe {
+            libc::ptrace(
+                libc::PTRACE_TRACEME,
+                0,
+                std::ptr::null_mut::<libc::c_void>(),
+                std::ptr::null_mut::<libc::c_void>(),
+            )
+        } == -1
+        || unsafe {
+            libc::syscall(
+                libc::SYS_tgkill,
+                libc::getpid(),
+                libc::syscall(libc::SYS_gettid),
+                libc::SIGSTOP,
+            )
+        } != 0
     {
         // SAFETY: terminal child failure avoids non-async-signal-safe cleanup.
         unsafe { libc::_exit(126) };
@@ -1335,7 +1632,9 @@ unsafe fn child_exec_descriptor(plan: ChildExecPlan) -> ! {
 
 #[cfg(any(test, feature = "hardware-test-hooks"))]
 fn bounded_descriptor_output<I, S>(
-    executable: &std::fs::File,
+    executable: &PrivateExecutableMaterialization,
+    expected_executable: &[u8],
+    artifact: Option<&PrivateArtifactMaterialization>,
     arguments: I,
     deadline: std::time::Duration,
     output_limit: usize,
@@ -1368,34 +1667,49 @@ where
     let (stderr_read, stderr_write) = pipe(libc::O_CLOEXEC)?;
     let (ready_read, ready_write) = pipe(libc::O_CLOEXEC | libc::O_NONBLOCK)?;
     let devnull = std::fs::OpenOptions::new().read(true).open("/dev/null")?;
-    let mut filter = seccomp_filter(198);
+    let relocated_executable = relocate_source_descriptor(executable.file.as_raw_fd())?;
+    let relocated_artifact = artifact
+        .map(|artifact| relocate_source_descriptor(artifact.file.as_raw_fd()))
+        .transpose()?;
+    let relocated_stdout = relocate_source_descriptor(stdout_write.as_raw_fd())?;
+    let relocated_stderr = relocate_source_descriptor(stderr_write.as_raw_fd())?;
+    let relocated_ready = relocate_source_descriptor(ready_write.as_raw_fd())?;
+    let relocated_devnull = relocate_source_descriptor(devnull.as_raw_fd())?;
+    let mut filter = seccomp_filter(EXECUTABLE_DESCRIPTOR);
     let filter_len = u16::try_from(filter.len()).map_err(|_| "seccomp filter is too large")?;
+    let child_plan = ChildExecPlan {
+        executable: relocated_executable.as_raw_fd(),
+        artifact: relocated_artifact.as_ref().map_or(-1, AsRawFd::as_raw_fd),
+        stdout: relocated_stdout.as_raw_fd(),
+        stderr: relocated_stderr.as_raw_fd(),
+        ready: relocated_ready.as_raw_fd(),
+        devnull: relocated_devnull.as_raw_fd(),
+        argv: argv_pointers.as_ptr(),
+        environment: environment.as_ptr(),
+        filter: filter.as_mut_ptr(),
+        filter_len,
+    };
 
     // SAFETY: all allocations and C vectors are complete before fork. The child
-    // performs only direct syscalls before descriptor-bound execveat or _exit.
+    // performs only direct syscalls before its trace stop, descriptor-bound
+    // execveat, or _exit.
     let pid = unsafe { libc::fork() };
     if pid < 0 {
         return Err(std::io::Error::last_os_error().into());
     }
     if pid == 0 {
         // SAFETY: this is the dedicated post-fork child path described above.
-        unsafe {
-            child_exec_descriptor(ChildExecPlan {
-                executable: executable.as_raw_fd(),
-                stdout: stdout_write.as_raw_fd(),
-                stderr: stderr_write.as_raw_fd(),
-                ready: ready_write.as_raw_fd(),
-                devnull: devnull.as_raw_fd(),
-                argv: argv_pointers.as_ptr(),
-                environment: environment.as_ptr(),
-                filter: filter.as_mut_ptr(),
-                filter_len,
-            })
-        }
+        unsafe { child_exec_descriptor(child_plan) }
     }
     drop(stdout_write);
     drop(stderr_write);
     drop(ready_write);
+    drop(relocated_executable);
+    drop(relocated_artifact);
+    drop(relocated_stdout);
+    drop(relocated_stderr);
+    drop(relocated_ready);
+    drop(relocated_devnull);
 
     let pidfd = match pidfd_open(pid) {
         Ok(pidfd) => pidfd,
@@ -1409,6 +1723,16 @@ where
             return Err(error);
         }
     };
+    match establish_one_shot_exec_trace(pid, expires, artifact) {
+        Ok(None) => {}
+        Ok(Some(_)) => {
+            return Err("objdump child exited before one-shot exec supervision was armed".into());
+        }
+        Err(error) => {
+            contain_or_abort(pid, pidfd.as_raw_fd(), false);
+            return Err(error);
+        }
+    }
     // SAFETY: ownership of each pipe read descriptor transfers to one File.
     let stdout = unsafe { std::fs::File::from_raw_fd(stdout_read.into_raw_fd()) };
     // SAFETY: ownership of each pipe read descriptor transfers to one File.
@@ -1419,6 +1743,7 @@ where
     let mut stderr_bytes = None;
     let mut status = None;
     let mut containment_ready = false;
+    let mut exec_observed = false;
 
     loop {
         if let Err(error) = collect_finished_reader(&mut stdout_thread, &mut stdout_bytes, "stdout")
@@ -1453,12 +1778,15 @@ where
             }
         }
         if status.is_none() {
-            match pidfd_exited(pidfd.as_raw_fd()) {
-                Ok(true) => match reap_pid_until(pid, expires) {
-                    Ok(observed) => status = Some(observed),
-                    Err(_) => std::process::abort(),
-                },
-                Ok(false) => {}
+            match observe_traced_child(
+                pid,
+                executable,
+                expected_executable,
+                artifact,
+                &mut exec_observed,
+            ) {
+                Ok(Some(observed)) => status = Some(observed),
+                Ok(None) => {}
                 Err(error) => {
                     contain_or_abort(pid, pidfd.as_raw_fd(), false);
                     return Err(error);
@@ -1468,9 +1796,16 @@ where
         if status.is_some() && !containment_ready {
             return Err("objdump exited before the containment handshake".into());
         }
-        if status.is_some() && containment_ready && stdout_bytes.is_some() && stderr_bytes.is_some()
+        if status.is_some()
+            && containment_ready
+            && exec_observed
+            && stdout_bytes.is_some()
+            && stderr_bytes.is_some()
         {
             break;
+        }
+        if status.is_some() && !exec_observed {
+            return Err("objdump exited without the exact one-shot exec event".into());
         }
         if std::time::Instant::now() >= expires {
             contain_or_abort(pid, pidfd.as_raw_fd(), status.is_some());
@@ -1490,6 +1825,8 @@ where
 struct PrivateExecutableMaterialization {
     file: std::fs::File,
     byte_len: u64,
+    device: u64,
+    inode: u64,
     digest: [u8; 32],
 }
 
@@ -1512,23 +1849,37 @@ impl PrivateExecutableMaterialization {
             return Err(std::io::Error::last_os_error().into());
         }
         // SAFETY: memfd_create returned a fresh owned descriptor.
-        let mut file = unsafe { std::fs::File::from_raw_fd(descriptor) };
-        file.write_all(bytes)?;
-        file.flush()?;
-        file.sync_all()?;
+        let mut writable = unsafe { std::fs::File::from_raw_fd(descriptor) };
+        writable.write_all(bytes)?;
+        writable.flush()?;
+        writable.sync_all()?;
         // SAFETY: fchmod and fcntl operate on this live private descriptor.
-        if unsafe { libc::fchmod(file.as_raw_fd(), 0o500) } != 0 {
+        if unsafe { libc::fchmod(writable.as_raw_fd(), 0o500) } != 0 {
             return Err(std::io::Error::last_os_error().into());
         }
         let required_seals =
             libc::F_SEAL_WRITE | libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL;
         // SAFETY: F_ADD_SEALS accepts the integer seal mask for this memfd.
-        if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_ADD_SEALS, required_seals) } != 0 {
+        if unsafe { libc::fcntl(writable.as_raw_fd(), libc::F_ADD_SEALS, required_seals) } != 0 {
             return Err(std::io::Error::last_os_error().into());
         }
+        let written_metadata = writable.metadata()?;
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .open(format!("/proc/self/fd/{}", writable.as_raw_fd()))?;
+        let metadata = file.metadata()?;
+        require(
+            metadata.dev() == written_metadata.dev()
+                && metadata.ino() == written_metadata.ino()
+                && metadata.len() == written_metadata.len(),
+            "sealed llvm-objdump identity changed while reopening it read-only",
+        )?;
+        drop(writable);
         let materialized = Self {
             file,
             byte_len: bytes.len() as u64,
+            device: metadata.dev(),
+            inode: metadata.ino(),
             digest: sha256(bytes),
         };
         materialized.verify(bytes)?;
@@ -1537,14 +1888,19 @@ impl PrivateExecutableMaterialization {
 
     fn verify(&self, expected: &[u8]) -> Result<(), BoxError> {
         let retained_metadata = self.file.metadata()?;
-        // SAFETY: F_GET_SEALS reads the immutable seal mask.
+        // SAFETY: F_GET_SEALS and F_GETFL inspect this live retained descriptor.
         let seals = unsafe { libc::fcntl(self.file.as_raw_fd(), libc::F_GET_SEALS) };
+        let status = unsafe { libc::fcntl(self.file.as_raw_fd(), libc::F_GETFL) };
         let required_seals =
             libc::F_SEAL_WRITE | libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL;
         require(
             seals >= 0
                 && seals & required_seals == required_seals
+                && status >= 0
+                && status & libc::O_ACCMODE == libc::O_RDONLY
                 && retained_metadata.len() == self.byte_len
+                && retained_metadata.dev() == self.device
+                && retained_metadata.ino() == self.inode
                 && retained_metadata.permissions().mode() & 0o777 == 0o500,
             "sealed llvm-objdump descriptor identity or permissions changed",
         )?;
@@ -1584,9 +1940,50 @@ impl PrivateExecutableMaterialization {
         I: IntoIterator<Item = S>,
         S: AsRef<std::ffi::OsStr>,
     {
+        self.output_with_artifact_and_limits(expected, None, arguments, deadline, output_limit)
+    }
+
+    fn output_with_artifact<I, S>(
+        &self,
+        expected: &[u8],
+        artifact: &PrivateArtifactMaterialization,
+        arguments: I,
+    ) -> Result<std::process::Output, BoxError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<std::ffi::OsStr>,
+    {
+        self.output_with_artifact_and_limits(
+            expected,
+            Some(artifact),
+            arguments,
+            LLVM_OBJDUMP_DEADLINE,
+            MAX_LLVM_OBJDUMP_OUTPUT_BYTES,
+        )
+    }
+
+    fn output_with_artifact_and_limits<I, S>(
+        &self,
+        expected: &[u8],
+        artifact: Option<&PrivateArtifactMaterialization>,
+        arguments: I,
+        deadline: std::time::Duration,
+        output_limit: usize,
+    ) -> Result<std::process::Output, BoxError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<std::ffi::OsStr>,
+    {
         self.verify(expected)?;
-        let output = bounded_descriptor_output(&self.file, arguments, deadline, output_limit)?;
+        if let Some(artifact) = artifact {
+            artifact.verify_retained()?;
+        }
+        let output =
+            bounded_descriptor_output(self, expected, artifact, arguments, deadline, output_limit)?;
         self.verify(expected)?;
+        if let Some(artifact) = artifact {
+            artifact.verify_retained()?;
+        }
         Ok(output)
     }
 }
@@ -1746,9 +2143,11 @@ fn inspect_observational_isa_shape(
         std::ffi::OsString::from(format!("--start-address=0x{:x}", entry.address)),
         std::ffi::OsString::from(format!("--stop-address=0x{:x}", entry.end()?)),
         std::ffi::OsString::from("--mcpu=gfx942"),
-        materialized.path().as_os_str().to_owned(),
+        std::ffi::OsString::from(format!("/proc/self/fd/{ARTIFACT_DESCRIPTOR}")),
     ];
-    let output = artifact.objdump.output(arguments)?;
+    let output = artifact
+        .objdump
+        .output_with_artifact(&materialized, arguments)?;
     require(
         output.status.success() && output.stderr.is_empty(),
         format!(
@@ -2024,6 +2423,8 @@ fn gfx942_row_softmax_v1_one_row_raw_hardware_evidence() -> Result<(), BoxError>
 mod tests {
     use super::*;
 
+    static DESCRIPTOR_EXECUTION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn valid_entry() -> BoundKernelEntry {
         BoundKernelEntry {
             address: 0x1000,
@@ -2093,6 +2494,17 @@ mod tests {
         }
         validate_metadata(&qualified, ROW_SOFTMAX_V1_EXPORT).unwrap();
 
+        for (cluster_dims, wgp_mode) in [
+            (Some([1, 1, 1]), None),
+            (None, Some(false)),
+            (Some([1, 1, 1]), Some(false)),
+        ] {
+            let mut equivalent = expected.clone();
+            equivalent.cluster_dims = cluster_dims;
+            equivalent.workgroup_processor_mode = wgp_mode;
+            validate_metadata(&equivalent, ROW_SOFTMAX_V1_EXPORT).unwrap();
+        }
+
         let mut expanded_four_slice = expected.clone();
         expanded_four_slice.kernarg_size = 320;
         expanded_four_slice.implicit_offset = Some(64);
@@ -2102,7 +2514,7 @@ mod tests {
         expanded_four_slice.descriptor_kernarg_size = 320;
         assert!(validate_metadata(&expanded_four_slice, ROW_SOFTMAX_V1_EXPORT).is_err());
 
-        let mutations: [fn(&mut MetadataFacts); 24] = [
+        let mutations: &[fn(&mut MetadataFacts)] = &[
             |facts| facts.code_object_version = 5,
             |facts| facts.target = "gfx942:xnack+".to_owned(),
             |facts| facts.has_printf_metadata = true,
@@ -2114,6 +2526,12 @@ mod tests {
             |facts| facts.implicit_size = 0,
             |facts| facts.required_workgroup = Some([1, 1, 1]),
             |facts| facts.max_flat_workgroup = 1024,
+            |facts| facts.max_workgroups[0] = Some(2),
+            |facts| facts.max_workgroups[1] = None,
+            |facts| facts.max_workgroups[2] = Some(u32::MAX),
+            |facts| facts.cluster_dims = Some([2, 1, 1]),
+            |facts| facts.uniform_workgroup = false,
+            |facts| facts.workgroup_processor_mode = Some(true),
             |facts| facts.wavefront_size = 32,
             |facts| facts.group_segment_size = 1024,
             |facts| facts.private_segment_size = 4,
@@ -2131,6 +2549,39 @@ mod tests {
         for mutate in mutations {
             let mut hostile = expected.clone();
             mutate(&mut hostile);
+            assert!(validate_metadata(&hostile, ROW_SOFTMAX_V1_EXPORT).is_err());
+        }
+
+        let mut shortened_hidden = expected.clone();
+        shortened_hidden.hidden_arguments.pop();
+        assert!(validate_metadata(&shortened_hidden, ROW_SOFTMAX_V1_EXPORT).is_err());
+        for extra_kind in [
+            HiddenValueKind::DynamicLdsSize,
+            HiddenValueKind::HostcallBuffer,
+        ] {
+            let mut extra = expected.clone();
+            extra.hidden_arguments.push(HiddenArgumentFact {
+                offset: if extra_kind == HiddenValueKind::DynamicLdsSize {
+                    152
+                } else {
+                    128
+                },
+                size: if extra_kind == HiddenValueKind::DynamicLdsSize {
+                    4
+                } else {
+                    8
+                },
+                kind: extra_kind,
+            });
+            assert!(validate_metadata(&extra, ROW_SOFTMAX_V1_EXPORT).is_err());
+        }
+        for mutate in [
+            |record: &mut HiddenArgumentFact| record.offset += 1,
+            |record: &mut HiddenArgumentFact| record.size *= 2,
+            |record: &mut HiddenArgumentFact| record.kind = HiddenValueKind::DynamicLdsSize,
+        ] {
+            let mut hostile = expected.clone();
+            mutate(&mut hostile.hidden_arguments[6]);
             assert!(validate_metadata(&hostile, ROW_SOFTMAX_V1_EXPORT).is_err());
         }
 
@@ -2219,7 +2670,8 @@ mod tests {
     }
 
     #[test]
-    fn private_materialization_ignores_a_substituted_caller_path() {
+    fn sealed_hsaco_handoff_ignores_same_uid_path_substitution() {
+        let _execution = DESCRIPTOR_EXECUTION_LOCK.lock().unwrap();
         let caller_directory = create_private_directory("caller").unwrap();
         let caller_path = caller_directory.join("caller.hsaco");
         let original = b"original digest-pinned HSACO bytes";
@@ -2240,7 +2692,18 @@ mod tests {
         std::fs::write(&caller_path, substituted).unwrap();
         assert_eq!(std::fs::read(&caller_path).unwrap(), substituted);
         materialized.verify(original).unwrap();
-        assert_eq!(std::fs::read(materialized.path()).unwrap(), original);
+        let cat = std::fs::read(std::fs::canonicalize("/bin/cat").unwrap()).unwrap();
+        let executable = PrivateExecutableMaterialization::new(&cat).unwrap();
+        let output = executable
+            .output_with_artifact(
+                &cat,
+                &materialized,
+                [format!("/proc/self/fd/{ARTIFACT_DESCRIPTOR}")],
+            )
+            .unwrap();
+        assert!(output.status.success() && output.stderr.is_empty());
+        assert_eq!(output.stdout, original);
+        materialized.verify(original).unwrap();
 
         std::fs::remove_file(caller_path).unwrap();
         std::fs::remove_dir(caller_directory).unwrap();
@@ -2248,6 +2711,7 @@ mod tests {
 
     #[test]
     fn private_objdump_execution_ignores_caller_path_substitution() {
+        let _execution = DESCRIPTOR_EXECUTION_LOCK.lock().unwrap();
         assert!(PrivateExecutableMaterialization::new(b"#!/bin/sh\nexit 0\n").is_err());
         let caller_directory = create_private_directory("caller-objdump").unwrap();
         let caller_path = caller_directory.join("llvm-objdump");
@@ -2285,6 +2749,7 @@ mod tests {
 
     #[test]
     fn private_objdump_execution_enforces_output_bound() {
+        let _execution = DESCRIPTOR_EXECUTION_LOCK.lock().unwrap();
         let shell = std::fs::read(std::fs::canonicalize("/bin/sh").unwrap()).unwrap();
         let noisy_executable = PrivateExecutableMaterialization::new(&shell).unwrap();
         let overflow = noisy_executable
@@ -2300,6 +2765,7 @@ mod tests {
 
     #[test]
     fn seccomp_contains_double_fork_setsid_pipe_holder() {
+        let _execution = DESCRIPTOR_EXECUTION_LOCK.lock().unwrap();
         let shell = std::fs::read(std::fs::canonicalize("/bin/sh").unwrap()).unwrap();
         let executable = PrivateExecutableMaterialization::new(&shell).unwrap();
         let directory = create_private_directory("escape-marker").unwrap();
@@ -2322,6 +2788,103 @@ mod tests {
         assert!(output.stdout.is_empty());
         assert!(!output.stderr.is_empty());
         std::fs::remove_dir(directory).unwrap();
+    }
+
+    #[test]
+    fn one_shot_exec_trace_rejects_rebind_and_second_execveat() {
+        let _execution = DESCRIPTOR_EXECUTION_LOCK.lock().unwrap();
+        let python_path = ["/usr/bin/python3", "/usr/local/bin/python3"]
+            .into_iter()
+            .find(|path| std::path::Path::new(path).is_file())
+            .expect("one-shot exec adversary requires python3");
+        let python = std::fs::read(std::fs::canonicalize(python_path).unwrap()).unwrap();
+        let executable = PrivateExecutableMaterialization::new(&python).unwrap();
+        let script = format!(
+            "import ctypes, os\n\
+             target = os.open('/bin/true', os.O_RDONLY)\n\
+             os.dup2(target, {EXECUTABLE_DESCRIPTOR})\n\
+             argv = (ctypes.c_char_p * 2)(b'true', None)\n\
+             envp = (ctypes.c_char_p * 1)(None)\n\
+             libc = ctypes.CDLL(None, use_errno=True)\n\
+             result = libc.syscall({}, {EXECUTABLE_DESCRIPTOR}, b'', argv, envp, {})\n\
+             raise OSError(ctypes.get_errno(), 'second execveat', result)\n",
+            libc::SYS_execveat,
+            libc::AT_EMPTY_PATH,
+        );
+        let error = executable
+            .output_with_limits(
+                &python,
+                ["-c", script.as_str()],
+                std::time::Duration::from_secs(10),
+                4096,
+            )
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("forbidden second executable replacement"),
+            "{error}"
+        );
+        executable.verify(&python).unwrap();
+    }
+
+    #[test]
+    fn relocated_sources_survive_reserved_descriptor_collisions_under_fd_pressure() {
+        let _execution = DESCRIPTOR_EXECUTION_LOCK.lock().unwrap();
+        let mut pressure = Vec::new();
+        loop {
+            let file = std::fs::File::open("/dev/null").unwrap();
+            let descriptor = file.as_raw_fd();
+            assert!(descriptor <= READY_DESCRIPTOR);
+            if descriptor == READY_DESCRIPTOR {
+                drop(file);
+                break;
+            }
+            pressure.push(file);
+        }
+
+        let cat = std::fs::read(std::fs::canonicalize("/bin/cat").unwrap()).unwrap();
+        let mut executable = PrivateExecutableMaterialization::new(&cat).unwrap();
+        let payload = b"reserved descriptor collision survived\n";
+        let mut artifact = PrivateArtifactMaterialization::new(payload).unwrap();
+        // SAFETY: the pressure guard owns every lower descriptor. Moving these
+        // two retained objects deliberately creates the historical cross-source
+        // collision without replacing an unrelated descriptor.
+        unsafe {
+            assert_eq!(
+                libc::dup3(
+                    executable.file.as_raw_fd(),
+                    READY_DESCRIPTOR,
+                    libc::O_CLOEXEC,
+                ),
+                READY_DESCRIPTOR
+            );
+            executable.file = std::fs::File::from_raw_fd(READY_DESCRIPTOR);
+            assert_eq!(
+                libc::dup3(
+                    artifact.file.as_raw_fd(),
+                    EXECUTABLE_DESCRIPTOR,
+                    libc::O_CLOEXEC,
+                ),
+                EXECUTABLE_DESCRIPTOR
+            );
+            artifact.file = std::fs::File::from_raw_fd(EXECUTABLE_DESCRIPTOR);
+        }
+        assert_eq!(executable.file.as_raw_fd(), READY_DESCRIPTOR);
+        assert_eq!(artifact.file.as_raw_fd(), EXECUTABLE_DESCRIPTOR);
+        executable.verify(&cat).unwrap();
+        artifact.verify(payload).unwrap();
+
+        let output = executable
+            .output_with_artifact(
+                &cat,
+                &artifact,
+                [format!("/proc/self/fd/{ARTIFACT_DESCRIPTOR}")],
+            )
+            .unwrap();
+        assert!(output.status.success() && output.stderr.is_empty());
+        assert_eq!(output.stdout, payload);
+        drop(pressure);
     }
 
     #[test]
