@@ -76,6 +76,9 @@ __attribute__((used, section(".rodata.fe2o3_test_marker"))) static const char
 __attribute__((used, section(".rodata.fe2o3_foundation_marker"))) static const
     char fe2o3_foundation_marker[] =
         "FE2O3_RUSTC_TRAMPOLINE_FOUNDATION_NON_AUTHORITATIVE";
+__attribute__((used, section(".rodata.fe2o3_replay_gate_marker"))) static const
+    char fe2o3_replay_gate_marker[] =
+        "FE2O3_RUSTC_TRAMPOLINE_REPLAY_GATE_POST_EXEC_REQUIRED";
 
 static const uint8_t fe2o3_broker_magic[8] = {'F', '2', 'A', 'U',
                                                'B', 'R', '3', 0};
@@ -797,7 +800,10 @@ static int validate_wrapper(int descriptor,
   return matches;
 }
 
-static int reject_queued_or_dead_peer(const struct ucred *expected_peer) {
+/* This closes only the pre-exec queue window. The post-exec Broker V3 state
+ * machine remains the authoritative replay and sequence gate. */
+static int reject_pre_exec_queued_frame_or_dead_peer(
+    const struct ucred *expected_peer) {
   struct pollfd descriptor = {.fd = FE2O3_BROKER_FD,
                               .events = POLLIN | POLLRDHUP,
                               .revents = 0};
@@ -887,9 +893,9 @@ int main(int argument_count, char *arguments[]) {
     (void)close(received_wrapper);
     return fail("invalid sealed cargo-fe2o3 wrapper executable");
   }
-  if (reject_queued_or_dead_peer(&broker_peer) != 0) {
+  if (reject_pre_exec_queued_frame_or_dead_peer(&broker_peer) != 0) {
     (void)close(received_wrapper);
-    return fail("Broker V3 peer changed, exited, or replayed a frame");
+    return fail("Broker V3 peer changed, exited, or queued a pre-exec frame");
   }
   if (dup3(received_wrapper, FE2O3_WRAPPER_FD, O_CLOEXEC) !=
       FE2O3_WRAPPER_FD) {

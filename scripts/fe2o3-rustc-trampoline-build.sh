@@ -236,6 +236,11 @@ verify_elf() {
       'FE2O3_RUSTC_TRAMPOLINE_FOUNDATION_NON_AUTHORITATIVE' >/dev/null; then
     fail 'rustc trampoline lacks the non-authoritative foundation marker'
   fi
+  if ! run_clean /usr/bin/strings --all -- "${executable}" |
+    run_clean /usr/bin/grep -Fx \
+      'FE2O3_RUSTC_TRAMPOLINE_REPLAY_GATE_POST_EXEC_REQUIRED' >/dev/null; then
+    fail 'rustc trampoline lacks the post-exec replay-gate marker'
+  fi
   if run_clean /usr/bin/strings --all -- "${executable}" |
     run_clean /usr/bin/grep -Fx \
       'FE2O3_RUSTC_TRAMPOLINE_TEST_ONLY_BUILD' >/dev/null; then

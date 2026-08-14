@@ -127,6 +127,10 @@ assert_test_elf() {
     /usr/bin/grep -Fx \
       'FE2O3_RUSTC_TRAMPOLINE_FOUNDATION_NON_AUTHORITATIVE' >/dev/null ||
     fail 'test trampoline lacks the foundation marker'
+  /usr/bin/strings --all -- "${executable}" |
+    /usr/bin/grep -Fx \
+      'FE2O3_RUSTC_TRAMPOLINE_REPLAY_GATE_POST_EXEC_REQUIRED' >/dev/null ||
+    fail 'test trampoline lacks the post-exec replay-gate marker'
 }
 
 compile_test_trampoline() {
@@ -145,14 +149,43 @@ cat >"${TEST_ROOT}/wrapper.c" <<'EOF'
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdio.h>
+#include <string.h>
 #include <sys/prctl.h>
 #include <sys/resource.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 extern char **environ;
 
 int main(int argc, char **argv) {
+  for (int index = 1; index < argc; ++index) {
+    if (strcmp(argv[index], "--fe2o3-test-post-exec-replay-gate") == 0) {
+      struct pollfd broker = {.fd = 190, .events = POLLIN, .revents = 0};
+      puts("POST_EXEC_BROKER_V3_GATE_READY");
+      if (fflush(stdout) != 0) {
+        return 92;
+      }
+      const int ready = poll(&broker, 1, 1000);
+      if (ready != 1 || (broker.revents & POLLIN) == 0) {
+        fputs("cargo-fe2o3-test-wrapper: delayed frame was not delivered\n",
+              stderr);
+        return 94;
+      }
+      unsigned char frame[512];
+      const ssize_t count = recv(190, frame, sizeof(frame), MSG_DONTWAIT);
+      if (count <= 0) {
+        fputs("cargo-fe2o3-test-wrapper: delayed frame could not be read\n",
+              stderr);
+        return 94;
+      }
+      fputs("cargo-fe2o3-test-wrapper: post-exec Broker V3 rejected delayed replay\n",
+            stderr);
+      return 125;
+    }
+  }
   printf("ARGC=%d\n", argc);
   for (int index = 0; index < argc; ++index) {
     printf("ARG[%d]=%s\n", index, argv[index]);
@@ -415,6 +448,8 @@ def run_scenario(scenario, trampoline_path, wrapper_path, alternate_path,
         arguments = ["attacker-controlled-trampoline-path", "@response-file"]
     elif scenario == "empty-argument":
         arguments = ["attacker-controlled-trampoline-path", ""]
+    elif scenario == "delayed-replayed-frame":
+        arguments.append("--fe2o3-test-post-exec-replay-gate")
     hostile_environment = {
         "LD_PRELOAD": preload_path,
         "LD_LIBRARY_PATH": "/attacker/library/path",
@@ -457,6 +492,7 @@ def run_scenario(scenario, trampoline_path, wrapper_path, alternate_path,
     os.close(leaked_descriptor)
 
     expected_failure = scenario not in {"success", "pathname-substitution"}
+    early_output = b""
     try:
         if scenario not in {
             "response-file",
@@ -544,15 +580,30 @@ def run_scenario(scenario, trampoline_path, wrapper_path, alternate_path,
                         broker_socket.sendmsg([bootstrap], rights)
                     except (BrokenPipeError, OSError):
                         pass
+                elif scenario == "delayed-replayed-frame":
+                    readable, _, _ = select.select([output_read], [], [], 1.0)
+                    assert readable, "post-exec replay gate did not become ready"
+                    early_output = os.read(output_read, 4096)
+                    assert early_output == b"POST_EXEC_BROKER_V3_GATE_READY\n", early_output
+                    broker_socket.sendmsg([bootstrap], rights)
             for descriptor in descriptors:
                 os.close(descriptor)
 
         exit_code = wait_child(pid)
-        output = os.read(output_read, 1 << 20).decode("utf-8", "replace")
+        output = (early_output + os.read(output_read, 1 << 20)).decode(
+            "utf-8", "replace"
+        )
         errors = os.read(error_read, 1 << 20).decode("utf-8", "replace")
         if expected_failure:
             assert exit_code == 125, (scenario, exit_code, output, errors)
-            assert "fe2o3-rustc-trampoline:" in errors, (scenario, errors)
+            if scenario == "delayed-replayed-frame":
+                assert output == "POST_EXEC_BROKER_V3_GATE_READY\n", output
+                assert errors == (
+                    "cargo-fe2o3-test-wrapper: post-exec Broker V3 "
+                    "rejected delayed replay\n"
+                ), errors
+            else:
+                assert "fe2o3-rustc-trampoline:" in errors, (scenario, errors)
             assert "ALTERNATE_WRAPPER_EXECUTED" not in output
         else:
             assert exit_code == 0, (scenario, exit_code, output, errors)
@@ -661,6 +712,7 @@ readonly SCENARIOS=(
   substituted-wrapper
   nonregular-descriptor
   replayed-frame
+  delayed-replayed-frame
   peer-death
   timeout
 )
