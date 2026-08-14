@@ -41,8 +41,9 @@ pub use compiler_transaction_recorder::{
     ExactCompilerToolV1, ExactSemanticLayoutWitnessV1, ExactWorkerToolV1, Gfx942CompilerTargetV1,
     MAX_COMPILER_TRANSACTION_SOURCE_BYTES_V1, MAX_COMPILER_TRANSACTION_SOURCE_FILE_BYTES_V1,
     MAX_SEALED_COMPILER_TRANSACTION_BYTES_V1, SEALED_COMPILER_TRANSACTION_MAGIC_V1,
-    SEALED_COMPILER_TRANSACTION_VERSION_V1, SealedCompilerTransactionDecodeErrorV1,
-    SealedCompilerTransactionIdentityV1, SealedCompilerTransactionV1,
+    SEALED_COMPILER_TRANSACTION_VERSION_V1, ScalarGemmV1SemanticLayoutWitnessV1,
+    SealedCompilerTransactionDecodeErrorV1, SealedCompilerTransactionIdentityV1,
+    SealedCompilerTransactionV1,
 };
 pub use error::{EnvelopeDecodeError, EnvelopeValidationError, PublicationClaimFieldV1};
 pub use inputs::{

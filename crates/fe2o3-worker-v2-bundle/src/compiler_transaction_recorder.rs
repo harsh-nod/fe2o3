@@ -13,9 +13,10 @@ use fe2o3_hsaco_finalize::{
     CompilerModuleHandoffV2, CompilerModuleKindV1, CompilerModuleSymbolRoleV1,
     GENERAL_TYPED_V3_SEMANTIC_WITNESS_DOMAIN_V1, GENERAL_TYPED_V3_SEMANTIC_WITNESS_HEADER_BYTES_V1,
     GENERAL_TYPED_V3_SEMANTIC_WITNESS_MAGIC_V1, GENERAL_TYPED_V3_SEMANTIC_WITNESS_VERSION_V1,
-    InertDecodedWorkerExchangeV2, MAX_GENERAL_TYPED_V3_SEMANTIC_WITNESS_BYTES_V1,
-    TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3, WorkerResponseV2, WorkerStageV1,
-    finalize_unfinalized, inspect_unfinalized,
+    InertDecodedWorkerExchangeV2, InertFirstBuildWorkerV2EvidenceV1,
+    MAX_GENERAL_TYPED_V3_SEMANTIC_WITNESS_BYTES_V1, TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3,
+    WorkerResponseV2, WorkerStageV1, finalize_unfinalized, inspect_unfinalized,
+    validate_scalar_gemm_v1_worker_exchange_v1,
 };
 use fe2o3_kernel_descriptor::{
     AccessMode, AliasSemantics, BlockSizeV1, CapabilityV1, CodeObjectVersion,
@@ -51,6 +52,8 @@ const TRANSACTION_DOMAIN: &[u8] = b"FE2O3/COMPILER-TRANSACTION-RECORDER/V1\0";
 const SOURCE_TREE_DOMAIN: &[u8] = b"FE2O3/EXACT-COMPILER-SOURCE-TREE/V1\0";
 const TARGET_DOMAIN: &[u8] = b"FE2O3/GFX942-XNACK-MINUS-COV6-COMPILER-TARGET/V1\0";
 const SEMANTIC_WITNESSES_DOMAIN: &[u8] = b"FE2O3/ALPHA-ZETA-SEMANTIC-LAYOUT-WITNESSES/V1\0";
+const SCALAR_GEMM_V1_SEMANTIC_WITNESS_DOMAIN: &[u8] =
+    b"FE2O3/SCALAR-GEMM-V1/SEMANTIC-LAYOUT-WITNESS/V1\0";
 const CHECKPOINT_DOMAIN: &[u8] = b"FE2O3/COMPILER-TRANSACTION-CHECKPOINT/V1\0";
 const RECORD_IDENTITY_DOMAIN: &[u8] = b"FE2O3/SEALED-COMPILER-TRANSACTION/V1\0";
 
@@ -59,6 +62,13 @@ const GFX942_AMD_TARGET: &str = "gfx942:xnack-";
 const GFX942_WAVEFRONT_SIZE: u8 = 64;
 const GFX942_CODE_OBJECT_VERSION: CodeObjectVersion = CodeObjectVersion::V6;
 const GFX942_ARTIFACT_CAPABILITIES: &[Capability] = &[Capability::AmdWave];
+const SCALAR_GEMM_V1_KERNEL: &str = "scalar_gemm_v1";
+const SCALAR_GEMM_V1_DESCRIPTOR: &str = "scalar_gemm_v1.kd";
+const SCALAR_GEMM_V1_KERNEL_BINDING: [u8; 32] = [
+    0x78, 0x9a, 0xde, 0xdf, 0xdc, 0x3b, 0xe1, 0xfb, 0x60, 0x51, 0x8d, 0xd2, 0xc7, 0x46, 0x0c, 0x3e,
+    0xf8, 0xe6, 0xb9, 0x00, 0x52, 0x7d, 0x1b, 0xcb, 0x22, 0x89, 0xba, 0xa1, 0xe0, 0x14, 0x69, 0x3e,
+];
+const SCALAR_GEMM_V1_ARGUMENT_NAMES: [&str; 6] = ["a", "b", "c", "m", "n", "k"];
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct CompilerTransactionContentIdentityV1([u8; 32]);
@@ -558,6 +568,87 @@ impl AlphaZetaSemanticLayoutWitnessesV1 {
     }
 }
 
+/// Exact semantic-layout witness admitted by the scalar GEMM V1 transaction profile.
+///
+/// This validates canonical witness structure and the fixed kernel name. It is inert layout
+/// lineage, not compiler-execution or frontend authority.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ScalarGemmV1SemanticLayoutWitnessV1 {
+    witness: ExactSemanticLayoutWitnessV1,
+    identity: CompilerTransactionContentIdentityV1,
+}
+
+impl ScalarGemmV1SemanticLayoutWitnessV1 {
+    pub fn new(
+        witness: ExactSemanticLayoutWitnessV1,
+    ) -> Result<Self, CompilerTransactionRecorderErrorV1> {
+        if witness.kernel().as_str() != SCALAR_GEMM_V1_KERNEL {
+            return Err(CompilerTransactionRecorderErrorV1::MissingScalarGemmV1Witness);
+        }
+        let identity = calculate_scalar_gemm_v1_semantic_witness_identity(&witness);
+        Ok(Self { witness, identity })
+    }
+
+    pub const fn witness(&self) -> &ExactSemanticLayoutWitnessV1 {
+        &self.witness
+    }
+
+    pub const fn identity(&self) -> CompilerTransactionContentIdentityV1 {
+        self.identity
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CompilerTransactionProfileV1 {
+    AlphaZeta,
+    ScalarGemmV1,
+}
+
+impl CompilerTransactionProfileV1 {
+    const fn expected_final_symbols(self) -> &'static [&'static str] {
+        match self {
+            Self::AlphaZeta => &["alpha", "alpha.kd", "compiler_helper", "zeta", "zeta.kd"],
+            Self::ScalarGemmV1 => &[SCALAR_GEMM_V1_KERNEL, SCALAR_GEMM_V1_DESCRIPTOR],
+        }
+    }
+
+    const fn kernel_count(self) -> usize {
+        match self {
+            Self::AlphaZeta => 2,
+            Self::ScalarGemmV1 => 1,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+enum SemanticLayoutWitnessesV1 {
+    AlphaZeta(AlphaZetaSemanticLayoutWitnessesV1),
+    ScalarGemmV1(ScalarGemmV1SemanticLayoutWitnessV1),
+}
+
+impl SemanticLayoutWitnessesV1 {
+    const fn profile(&self) -> CompilerTransactionProfileV1 {
+        match self {
+            Self::AlphaZeta(_) => CompilerTransactionProfileV1::AlphaZeta,
+            Self::ScalarGemmV1(_) => CompilerTransactionProfileV1::ScalarGemmV1,
+        }
+    }
+
+    const fn identity(&self) -> CompilerTransactionContentIdentityV1 {
+        match self {
+            Self::AlphaZeta(witnesses) => witnesses.identity(),
+            Self::ScalarGemmV1(witness) => witness.identity(),
+        }
+    }
+
+    fn witnesses(&self) -> &[ExactSemanticLayoutWitnessV1] {
+        match self {
+            Self::AlphaZeta(witnesses) => witnesses.witnesses(),
+            Self::ScalarGemmV1(witness) => std::slice::from_ref(witness.witness()),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum CompilerTransactionStageV1 {
@@ -594,7 +685,7 @@ pub struct CompilerTransactionRecorderV1 {
     source: ExactCompilerSourceClosureV1,
     invocation: Option<ExactCompilerInvocationV1>,
     target: Option<Gfx942CompilerTargetV1>,
-    semantic_layouts: Option<AlphaZetaSemanticLayoutWitnessesV1>,
+    semantic_layouts: Option<SemanticLayoutWitnessesV1>,
     kernel_ir: Option<ValidatedCompilerHandoffV2>,
     worker_exchange: Option<ValidatedWorkerExchangeV1>,
     raw_hsaco: Option<ValidatedRawHsacoV1>,
@@ -708,7 +799,22 @@ impl CompilerTransactionRecorderV1 {
     ) -> Result<CompilerTransactionCheckpointV1, CompilerTransactionRecorderErrorV1> {
         self.authorize(checkpoint, CompilerTransactionStageV1::Target)?;
         let identity = semantic_layouts.identity.into_bytes();
-        self.semantic_layouts = Some(semantic_layouts);
+        self.semantic_layouts = Some(SemanticLayoutWitnessesV1::AlphaZeta(semantic_layouts));
+        Ok(self.advance(CompilerTransactionStageV1::SemanticLayouts, &[identity]))
+    }
+
+    /// Selects the exact scalar GEMM V1 semantic-layout profile.
+    ///
+    /// The witness remains inert. Exact frontend commitment and Worker exchange validation are
+    /// required later through [`Self::record_scalar_gemm_v1_worker_exchange`].
+    pub fn record_scalar_gemm_v1_semantic_layout(
+        &mut self,
+        checkpoint: CompilerTransactionCheckpointV1,
+        semantic_layout: ScalarGemmV1SemanticLayoutWitnessV1,
+    ) -> Result<CompilerTransactionCheckpointV1, CompilerTransactionRecorderErrorV1> {
+        self.authorize(checkpoint, CompilerTransactionStageV1::Target)?;
+        let identity = semantic_layout.identity().into_bytes();
+        self.semantic_layouts = Some(SemanticLayoutWitnessesV1::ScalarGemmV1(semantic_layout));
         Ok(self.advance(CompilerTransactionStageV1::SemanticLayouts, &[identity]))
     }
 
@@ -726,7 +832,7 @@ impl CompilerTransactionRecorderV1 {
         if handoff.code_object_version() != GFX942_CODE_OBJECT_VERSION {
             return Err(CompilerTransactionRecorderErrorV1::WorkerCodeObjectVersionMismatch);
         }
-        validate_compiler_handoff_symbols(&handoff)?;
+        validate_compiler_handoff_symbols(&handoff, self.profile()?)?;
         let identity = CompilerTransactionContentIdentityV1::measure(handoff.module_bytes());
         self.kernel_ir = Some(ValidatedCompilerHandoffV2 {
             module: identity,
@@ -747,6 +853,53 @@ impl CompilerTransactionRecorderV1 {
         canonical_response: &[u8],
     ) -> Result<CompilerTransactionCheckpointV1, CompilerTransactionRecorderErrorV1> {
         self.authorize(checkpoint, CompilerTransactionStageV1::KernelIr)?;
+        if self.profile()? != CompilerTransactionProfileV1::AlphaZeta {
+            return Err(CompilerTransactionRecorderErrorV1::ScalarGemmV1WorkerEvidenceRequired);
+        }
+        self.record_worker_exchange_bytes(checkpoint, canonical_request, canonical_response)
+    }
+
+    /// Records an exact scalar GEMM V1 Worker exchange from retained first-build evidence.
+    ///
+    /// Byte-only callers cannot select this path. The upstream scalar validator reconstructs the
+    /// canonical lowering and descriptor, checks the nonzero embedded frontend commitment, and
+    /// checks the complete request/response profile before this recorder binds their identities.
+    /// The commitment remains lineage rather than authenticated frontend provenance.
+    pub fn record_scalar_gemm_v1_worker_exchange(
+        &mut self,
+        checkpoint: CompilerTransactionCheckpointV1,
+        evidence: &InertFirstBuildWorkerV2EvidenceV1,
+    ) -> Result<CompilerTransactionCheckpointV1, CompilerTransactionRecorderErrorV1> {
+        self.authorize(checkpoint, CompilerTransactionStageV1::KernelIr)?;
+        if self.profile()? != CompilerTransactionProfileV1::ScalarGemmV1 {
+            return Err(CompilerTransactionRecorderErrorV1::MixedCompilerProfile);
+        }
+        let validated = validate_scalar_gemm_v1_worker_exchange_v1(evidence)
+            .map_err(|_| CompilerTransactionRecorderErrorV1::InvalidScalarGemmV1WorkerEvidence)?;
+        let request = evidence.authorized_request_bytes();
+        let response = evidence.authorized().response().canonical_bytes();
+        let exchange = InertDecodedWorkerExchangeV2::decode(request, response)
+            .map_err(|_| CompilerTransactionRecorderErrorV1::InvalidWorkerResponse)?;
+        let output = exchange
+            .response()
+            .output()
+            .ok_or(CompilerTransactionRecorderErrorV1::WorkerResponseIncomplete)?;
+        if exchange.request().compiler_module().identity() != validated.compiler_module_identity()
+            || output.identity() != validated.linked_output_identity()
+            || validated.embedded_frontend_authority_commitment() == &[0; 32]
+        {
+            return Err(CompilerTransactionRecorderErrorV1::InvalidScalarGemmV1WorkerEvidence);
+        }
+        self.record_worker_exchange_bytes(checkpoint, request, response)
+    }
+
+    fn record_worker_exchange_bytes(
+        &mut self,
+        checkpoint: CompilerTransactionCheckpointV1,
+        canonical_request: &[u8],
+        canonical_response: &[u8],
+    ) -> Result<CompilerTransactionCheckpointV1, CompilerTransactionRecorderErrorV1> {
+        self.authorize(checkpoint, CompilerTransactionStageV1::KernelIr)?;
         let exchange = InertDecodedWorkerExchangeV2::decode(canonical_request, canonical_response)
             .map_err(|_| CompilerTransactionRecorderErrorV1::InvalidWorkerResponse)?;
         let request = exchange.request();
@@ -756,7 +909,7 @@ impl CompilerTransactionRecorderV1 {
         if request.code_object_version() != GFX942_CODE_OBJECT_VERSION {
             return Err(CompilerTransactionRecorderErrorV1::WorkerCodeObjectVersionMismatch);
         }
-        if request.final_symbols() != ["alpha", "alpha.kd", "compiler_helper", "zeta", "zeta.kd"] {
+        if request.final_symbols() != self.profile()?.expected_final_symbols() {
             return Err(CompilerTransactionRecorderErrorV1::WorkerKernelSetMismatch);
         }
         let handoff = self
@@ -830,7 +983,7 @@ impl CompilerTransactionRecorderV1 {
         }
         let inspection = inspect_unfinalized(raw_hsaco)
             .map_err(|_| CompilerTransactionRecorderErrorV1::InvalidRawHsaco)?;
-        validate_descriptor_profile(inspection.descriptor_table())?;
+        validate_descriptor_profile(inspection.descriptor_table(), self.profile()?)?;
         let descriptor_source = encode_device_descriptor_table_v1(inspection.descriptor_table())
             .map_err(|_| CompilerTransactionRecorderErrorV1::InvalidDescriptorSource)?;
         let identity = CompilerTransactionContentIdentityV1::measure(raw_hsaco);
@@ -866,7 +1019,8 @@ impl CompilerTransactionRecorderV1 {
             descriptor_source,
             CompilerTransactionRecorderErrorV1::InvalidDescriptorSource,
         )?;
-        validate_descriptor_profile(&decoded_source)?;
+        let profile = self.profile()?;
+        validate_descriptor_profile(&decoded_source, profile)?;
         if decoded_source.canonical_code_object_digest().as_bytes() != &[0; 32]
             || descriptor_source != raw.descriptor_source
         {
@@ -881,7 +1035,7 @@ impl CompilerTransactionRecorderV1 {
             finalized_descriptor,
             CompilerTransactionRecorderErrorV1::InvalidFinalizedDescriptor,
         )?;
-        validate_descriptor_profile(&decoded_final)?;
+        validate_descriptor_profile(&decoded_final, profile)?;
         let expected_descriptor =
             encode_device_descriptor_table_v1(expected.inspection().descriptor_table())
                 .map_err(|_| CompilerTransactionRecorderErrorV1::InvalidFinalizedDescriptor)?;
@@ -909,6 +1063,7 @@ impl CompilerTransactionRecorderV1 {
             expected.inspection().descriptor_table(),
             invocation,
             semantic_layouts,
+            profile,
         )?;
         let canonical_target =
             derive_manifest_claim_target_identity_v1(&container).descriptive_identity();
@@ -976,7 +1131,7 @@ impl CompilerTransactionRecorderV1 {
                 )
                 .map_err(CompilerTransactionRecorderErrorV1::Capsule)?,
                 semantic_witness: CallerMeasuredSemanticWitnessIdentityV2::try_from_sha256(
-                    semantic.identity.into_bytes(),
+                    semantic.identity().into_bytes(),
                 )
                 .map_err(CompilerTransactionRecorderErrorV1::Capsule)?,
                 kernel_ir: CallerMeasuredKernelIrIdentityV2::try_from_sha256(
@@ -1014,7 +1169,7 @@ impl CompilerTransactionRecorderV1 {
             backend_configuration: invocation.backend_tool.configuration,
             backend_invocation: invocation.backend_invocation,
             target_profile: target.measurement,
-            semantic_layouts: semantic.identity,
+            semantic_layouts: semantic.identity(),
             kernel_ir,
             worker_request: worker_exchange.request_measurement,
             worker_response: worker_exchange.response_measurement,
@@ -1041,6 +1196,13 @@ impl CompilerTransactionRecorderV1 {
             stage: self.stage,
             chain: self.chain,
         }
+    }
+
+    fn profile(&self) -> Result<CompilerTransactionProfileV1, CompilerTransactionRecorderErrorV1> {
+        self.semantic_layouts
+            .as_ref()
+            .map(SemanticLayoutWitnessesV1::profile)
+            .ok_or(CompilerTransactionRecorderErrorV1::MissingStage)
     }
 
     fn authorize(
@@ -1449,6 +1611,7 @@ pub enum CompilerTransactionRecorderErrorV1 {
     DuplicateFeature,
     DuplicateSemanticWitness,
     MissingAlphaZetaWitnesses,
+    MissingScalarGemmV1Witness,
     InvalidSemanticWitness,
     InvalidCompilerHandoff,
     InvalidRustcDescriptor,
@@ -1462,6 +1625,9 @@ pub enum CompilerTransactionRecorderErrorV1 {
     WorkerTargetMismatch,
     WorkerCodeObjectVersionMismatch,
     WorkerKernelSetMismatch,
+    MixedCompilerProfile,
+    ScalarGemmV1WorkerEvidenceRequired,
+    InvalidScalarGemmV1WorkerEvidence,
     WorkerInputMismatch,
     WorkerIdentityMismatch,
     WorkerResponseMismatch,
@@ -1537,6 +1703,9 @@ impl fmt::Display for CompilerTransactionRecorderErrorV1 {
             Self::MissingAlphaZetaWitnesses => {
                 formatter.write_str("semantic layout witnesses must contain exactly alpha and zeta")
             }
+            Self::MissingScalarGemmV1Witness => {
+                formatter.write_str("semantic layout witness must be exactly scalar_gemm_v1")
+            }
             Self::InvalidSemanticWitness => {
                 formatter.write_str("semantic layout witness is invalid or noncanonical")
             }
@@ -1570,8 +1739,16 @@ impl fmt::Display for CompilerTransactionRecorderErrorV1 {
                 formatter.write_str("Worker request does not require code object V6")
             }
             Self::WorkerKernelSetMismatch => {
-                formatter.write_str("Worker request does not define exactly alpha and zeta")
+                formatter.write_str("Worker request does not match the selected kernel profile")
             }
+            Self::MixedCompilerProfile => formatter
+                .write_str("compiler transaction mixes alpha/zeta and scalar GEMM profiles"),
+            Self::ScalarGemmV1WorkerEvidenceRequired => formatter.write_str(
+                "scalar GEMM recording requires exact retained first-build Worker V2 evidence",
+            ),
+            Self::InvalidScalarGemmV1WorkerEvidence => formatter.write_str(
+                "scalar GEMM first-build evidence does not satisfy the exact Worker V2 profile",
+            ),
             Self::WorkerInputMismatch => {
                 formatter.write_str("Worker request does not consume the recorded compiler handoff")
             }
@@ -1595,7 +1772,7 @@ impl fmt::Display for CompilerTransactionRecorderErrorV1 {
                 formatter.write_str("descriptor table target is not gfx942:xnack-")
             }
             Self::DescriptorKernelSetMismatch => {
-                formatter.write_str("descriptor table does not contain exactly alpha and zeta")
+                formatter.write_str("descriptor table does not match the selected kernel profile")
             }
             Self::DescriptorCapabilityMismatch => {
                 formatter.write_str("descriptor kernel capabilities do not match the fixed profile")
@@ -1628,7 +1805,7 @@ impl fmt::Display for CompilerTransactionRecorderErrorV1 {
                 formatter.write_str("artifact payload does not equal the finalized HSACO")
             }
             Self::ArtifactKernelSetMismatch => {
-                formatter.write_str("artifact kernels do not match the alpha/zeta descriptors")
+                formatter.write_str("artifact kernels do not match the selected descriptors")
             }
             Self::ArtifactCompilerMismatch => {
                 formatter.write_str("artifact compiler does not match the measured backend")
@@ -2064,6 +2241,17 @@ fn calculate_semantic_witnesses_identity(
     CompilerTransactionContentIdentityV1(digest.finalize().into())
 }
 
+fn calculate_scalar_gemm_v1_semantic_witness_identity(
+    witness: &ExactSemanticLayoutWitnessV1,
+) -> CompilerTransactionContentIdentityV1 {
+    let mut digest = Sha256::new();
+    digest.update(SCALAR_GEMM_V1_SEMANTIC_WITNESS_DOMAIN);
+    hash_text(&mut digest, witness.kernel.as_str());
+    digest.update(witness.byte_len.to_le_bytes());
+    digest.update(witness.content.as_bytes());
+    CompilerTransactionContentIdentityV1(digest.finalize().into())
+}
+
 fn calculate_transaction_identity(
     freshness: [u8; 32],
     source_tree: CompilerTransactionContentIdentityV1,
@@ -2152,6 +2340,7 @@ fn decode_canonical_descriptor(
 
 fn validate_descriptor_profile(
     table: &DeviceDescriptorTableV1,
+    profile: CompilerTransactionProfileV1,
 ) -> Result<(), CompilerTransactionRecorderErrorV1> {
     if table.code_object_version() != GFX942_CODE_OBJECT_VERSION {
         return Err(CompilerTransactionRecorderErrorV1::DescriptorCodeObjectVersionMismatch);
@@ -2161,11 +2350,15 @@ fn validate_descriptor_profile(
     }
     let mut kernels = table.kernels().iter().collect::<Vec<_>>();
     kernels.sort_unstable_by_key(|kernel| kernel.entry_name().as_str());
-    if kernels.len() != 2
-        || kernels[0].entry_name().as_str() != "alpha"
-        || kernels[1].entry_name().as_str() != "zeta"
-    {
-        return Err(CompilerTransactionRecorderErrorV1::DescriptorKernelSetMismatch);
+    match profile {
+        CompilerTransactionProfileV1::AlphaZeta
+            if kernels.len() == 2
+                && kernels[0].entry_name().as_str() == "alpha"
+                && kernels[1].entry_name().as_str() == "zeta" => {}
+        CompilerTransactionProfileV1::ScalarGemmV1
+            if kernels.len() == 1
+                && validate_scalar_gemm_v1_descriptor_kernel(kernels[0]).is_ok() => {}
+        _ => return Err(CompilerTransactionRecorderErrorV1::DescriptorKernelSetMismatch),
     }
     if kernels
         .iter()
@@ -2176,8 +2369,121 @@ fn validate_descriptor_profile(
     Ok(())
 }
 
+fn validate_scalar_gemm_v1_descriptor_kernel(
+    kernel: &KernelDescriptorV1,
+) -> Result<(), CompilerTransactionRecorderErrorV1> {
+    if kernel.kernel_id().as_bytes() != &SCALAR_GEMM_V1_KERNEL_BINDING
+        || kernel.logical_name().as_str() != SCALAR_GEMM_V1_KERNEL
+        || kernel.entry_name().as_str() != SCALAR_GEMM_V1_KERNEL
+        || kernel.descriptor_symbol().as_str() != SCALAR_GEMM_V1_DESCRIPTOR
+        || kernel.capabilities() != [CapabilityV1::AmdWave]
+    {
+        return Err(CompilerTransactionRecorderErrorV1::DescriptorKernelSetMismatch);
+    }
+    let abi = kernel.abi_layout();
+    if abi.explicit_argument_size() != 64
+        || abi.kernarg_segment_size() != 320
+        || abi.kernarg_segment_alignment() != 8
+    {
+        return Err(CompilerTransactionRecorderErrorV1::DescriptorKernelSetMismatch);
+    }
+    let BlockSizeV1::Exact(block) = kernel.launch().block_size() else {
+        return Err(CompilerTransactionRecorderErrorV1::DescriptorKernelSetMismatch);
+    };
+    let launch = kernel.launch();
+    let max_grid = launch.max_grid();
+    if launch.rank() != 1
+        || [block.x(), block.y(), block.z()] != [256, 1, 1]
+        || [max_grid.x(), max_grid.y(), max_grid.z()] != [u32::MAX, 1, 1]
+        || launch.max_flat_workgroup_size() != 256
+        || launch.static_shared_memory_bytes() != 0
+        || launch.max_dynamic_shared_memory_bytes() != 0
+    {
+        return Err(CompilerTransactionRecorderErrorV1::DescriptorKernelSetMismatch);
+    }
+    validate_scalar_gemm_v1_descriptor_arguments(kernel)
+}
+
+fn validate_scalar_gemm_v1_descriptor_arguments(
+    kernel: &KernelDescriptorV1,
+) -> Result<(), CompilerTransactionRecorderErrorV1> {
+    const OWNERSHIP: [OwnershipSemantics; 6] = [
+        OwnershipSemantics::SharedBorrow,
+        OwnershipSemantics::SharedBorrow,
+        OwnershipSemantics::UniqueBorrow,
+        OwnershipSemantics::ByValue,
+        OwnershipSemantics::ByValue,
+        OwnershipSemantics::ByValue,
+    ];
+    const ACCESS: [AccessMode; 6] = [
+        AccessMode::ReadOnly,
+        AccessMode::ReadOnly,
+        AccessMode::ReadWrite,
+        AccessMode::ByValue,
+        AccessMode::ByValue,
+        AccessMode::ByValue,
+    ];
+    const ALIAS: [AliasSemantics; 6] = [
+        AliasSemantics::SharedReadOnly,
+        AliasSemantics::SharedReadOnly,
+        AliasSemantics::Exclusive,
+        AliasSemantics::Value,
+        AliasSemantics::Value,
+        AliasSemantics::Value,
+    ];
+    const COMPONENTS: [&[(PhysicalAbiComponentKind, u32, u16, u16)]; 6] = [
+        &[
+            (PhysicalAbiComponentKind::GlobalPointer, 0, 8, 8),
+            (PhysicalAbiComponentKind::SliceLengthU64, 8, 8, 8),
+        ],
+        &[
+            (PhysicalAbiComponentKind::GlobalPointer, 16, 8, 8),
+            (PhysicalAbiComponentKind::SliceLengthU64, 24, 8, 8),
+        ],
+        &[
+            (PhysicalAbiComponentKind::GlobalPointer, 32, 8, 8),
+            (PhysicalAbiComponentKind::SliceLengthU64, 40, 8, 8),
+        ],
+        &[(
+            PhysicalAbiComponentKind::ScalarByValue(ScalarTypeV1::U32),
+            48,
+            4,
+            4,
+        )],
+        &[(
+            PhysicalAbiComponentKind::ScalarByValue(ScalarTypeV1::U32),
+            52,
+            4,
+            4,
+        )],
+        &[(
+            PhysicalAbiComponentKind::ScalarByValue(ScalarTypeV1::U32),
+            56,
+            4,
+            4,
+        )],
+    ];
+    let arguments = kernel.arguments();
+    if arguments.len() != SCALAR_GEMM_V1_ARGUMENT_NAMES.len() {
+        return Err(CompilerTransactionRecorderErrorV1::DescriptorKernelSetMismatch);
+    }
+    for (index, argument) in arguments.iter().enumerate() {
+        if usize::from(argument.source_index()) != index
+            || argument.name().as_str() != SCALAR_GEMM_V1_ARGUMENT_NAMES[index]
+            || argument.ownership() != OWNERSHIP[index]
+            || argument.access() != ACCESS[index]
+            || argument.alias() != ALIAS[index]
+            || argument.physical_components().collect::<Vec<_>>() != COMPONENTS[index]
+        {
+            return Err(CompilerTransactionRecorderErrorV1::DescriptorKernelSetMismatch);
+        }
+    }
+    Ok(())
+}
+
 fn validate_compiler_handoff_symbols(
     handoff: &CompilerModuleHandoffV2,
+    profile: CompilerTransactionProfileV1,
 ) -> Result<(), CompilerTransactionRecorderErrorV1> {
     let manifest = handoff.symbol_manifest();
     let entries = manifest
@@ -2186,12 +2492,22 @@ fn validate_compiler_handoff_symbols(
     let descriptors = manifest
         .symbols(CompilerModuleSymbolRoleV1::KernelDescriptor)
         .collect::<Vec<_>>();
-    if entries != ["alpha", "zeta"]
-        || descriptors != ["alpha.kd", "zeta.kd"]
-        || manifest
-            .symbols(CompilerModuleSymbolRoleV1::DeviceFfiExport)
-            .collect::<Vec<_>>()
-            != ["compiler_helper"]
+    let exports = manifest
+        .symbols(CompilerModuleSymbolRoleV1::DeviceFfiExport)
+        .collect::<Vec<_>>();
+    let symbols_match = match profile {
+        CompilerTransactionProfileV1::AlphaZeta => {
+            entries == ["alpha", "zeta"]
+                && descriptors == ["alpha.kd", "zeta.kd"]
+                && exports == ["compiler_helper"]
+        }
+        CompilerTransactionProfileV1::ScalarGemmV1 => {
+            entries == [SCALAR_GEMM_V1_KERNEL]
+                && descriptors == [SCALAR_GEMM_V1_DESCRIPTOR]
+                && exports.is_empty()
+        }
+    };
+    if !symbols_match
         || manifest
             .symbols(CompilerModuleSymbolRoleV1::UnresolvedExternalImport)
             .next()
@@ -2207,7 +2523,8 @@ fn validate_artifact_container(
     finalized_hsaco: &[u8],
     descriptor: &DeviceDescriptorTableV1,
     invocation: &ExactCompilerInvocationV1,
-    semantic_layouts: &AlphaZetaSemanticLayoutWitnessesV1,
+    semantic_layouts: &SemanticLayoutWitnessesV1,
+    profile: CompilerTransactionProfileV1,
 ) -> Result<(), CompilerTransactionRecorderErrorV1> {
     let target = container.manifest().target();
     if target.triple().as_str() != GFX942_TRIPLE
@@ -2249,7 +2566,7 @@ fn validate_artifact_container(
     }
 
     let kernels = container.manifest().kernels();
-    if kernels.len() != 2 {
+    if kernels.len() != profile.kernel_count() {
         return Err(CompilerTransactionRecorderErrorV1::ArtifactKernelSetMismatch);
     }
     for descriptor_kernel in descriptor.kernels() {
@@ -2556,3 +2873,135 @@ const _: () = {
     assert!(HEADER_BYTES + FIXED_BODY_BYTES < MAX_SEALED_COMPILER_TRANSACTION_BYTES_V1);
     assert!(mem::size_of::<CompilerTransactionMeasurementsV1>() == MEASUREMENT_COUNT * 32);
 };
+
+#[cfg(test)]
+mod profile_tests {
+    use super::*;
+    use fe2o3_kernel_descriptor::{
+        BuildEvidenceV1, CanonicalCodeObjectDigest, CompilerIdentityV1, DeviceLayoutDescriptorV1,
+        DeviceLayoutRecordV1, DeviceTargetV1, DimensionsV1, EvidenceDigest, EvidenceIdentity,
+        KernelAbiLayoutV1, KernelId, LaunchConstraintsV1, LogicalArgumentV1, ProducerIdentityV1,
+        SourceTypeDescriptorV1, SourceTypeRecordV1, Text, ValidName,
+    };
+
+    fn scalar_table(
+        digest: [u8; 32],
+        kernel_binding: [u8; 32],
+        kernarg_size: u32,
+    ) -> DeviceDescriptorTableV1 {
+        let shared_source =
+            SourceTypeRecordV1::new(SourceTypeDescriptorV1::shared_slice(ScalarTypeV1::F32));
+        let disjoint_source =
+            SourceTypeRecordV1::new(SourceTypeDescriptorV1::disjoint_slice(ScalarTypeV1::F32));
+        let scalar_source =
+            SourceTypeRecordV1::new(SourceTypeDescriptorV1::scalar(ScalarTypeV1::U32));
+        let shared_layout =
+            DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::shared_slice(ScalarTypeV1::F32));
+        let disjoint_layout =
+            DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::disjoint_slice(ScalarTypeV1::F32));
+        let scalar_layout =
+            DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::scalar(ScalarTypeV1::U32));
+        let arguments = vec![
+            LogicalArgumentV1::shared_slice(0, name("a"), &shared_source, &shared_layout, 0)
+                .unwrap(),
+            LogicalArgumentV1::shared_slice(1, name("b"), &shared_source, &shared_layout, 16)
+                .unwrap(),
+            LogicalArgumentV1::disjoint_slice(
+                2,
+                name("c"),
+                &disjoint_source,
+                &disjoint_layout,
+                AccessMode::ReadWrite,
+                32,
+            )
+            .unwrap(),
+            LogicalArgumentV1::scalar(3, name("m"), &scalar_source, &scalar_layout, 48).unwrap(),
+            LogicalArgumentV1::scalar(4, name("n"), &scalar_source, &scalar_layout, 52).unwrap(),
+            LogicalArgumentV1::scalar(5, name("k"), &scalar_source, &scalar_layout, 56).unwrap(),
+        ];
+        let kernel = KernelDescriptorV1::new(
+            KernelId::from_bytes(kernel_binding),
+            name(SCALAR_GEMM_V1_KERNEL),
+            name(SCALAR_GEMM_V1_KERNEL),
+            name(SCALAR_GEMM_V1_DESCRIPTOR),
+            evidence(0x11, 0x12),
+            evidence(0x13, 0x14),
+            vec![CapabilityV1::AmdWave],
+            KernelAbiLayoutV1::new(64, kernarg_size, 8).unwrap(),
+            LaunchConstraintsV1::new(
+                1,
+                BlockSizeV1::Exact(DimensionsV1::new(256, 1, 1).unwrap()),
+                DimensionsV1::new(u32::MAX, 1, 1).unwrap(),
+                256,
+                0,
+                0,
+            )
+            .unwrap(),
+            arguments,
+        )
+        .unwrap();
+        DeviceDescriptorTableV1::new(
+            CanonicalCodeObjectDigest::from_bytes(digest),
+            CodeObjectVersion::V6,
+            CompilerIdentityV1::new(text("rustc-codegen-fe2o3"), text("0.1.0"), [0; 20]),
+            ProducerIdentityV1::new(
+                text("rustc-codegen-fe2o3-worker-v2"),
+                text("typed-general-gfx942-cov6-v1"),
+            ),
+            DeviceTargetV1::parse(GFX942_AMD_TARGET).unwrap(),
+            vec![shared_source, disjoint_source, scalar_source],
+            vec![shared_layout, disjoint_layout, scalar_layout],
+            vec![kernel],
+        )
+        .unwrap()
+    }
+
+    fn evidence(identity: u8, digest: u8) -> BuildEvidenceV1 {
+        BuildEvidenceV1::new(
+            EvidenceIdentity::from_opaque_bytes([identity; 32]),
+            EvidenceDigest::from_sha256_bytes([digest; 32]),
+        )
+    }
+
+    fn name(value: &str) -> ValidName {
+        ValidName::new(value).unwrap()
+    }
+
+    fn text(value: &str) -> Text {
+        Text::new(value).unwrap()
+    }
+
+    #[test]
+    fn scalar_descriptor_profile_is_exact_and_canonically_decodable() {
+        let source = scalar_table([0; 32], SCALAR_GEMM_V1_KERNEL_BINDING, 320);
+        validate_descriptor_profile(&source, CompilerTransactionProfileV1::ScalarGemmV1).unwrap();
+        assert!(
+            validate_descriptor_profile(&source, CompilerTransactionProfileV1::AlphaZeta).is_err()
+        );
+
+        let finalized = scalar_table([0xa5; 32], SCALAR_GEMM_V1_KERNEL_BINDING, 320);
+        let bytes = encode_device_descriptor_table_v1(&finalized).unwrap();
+        let decoded = decode_canonical_descriptor(
+            &bytes,
+            CompilerTransactionRecorderErrorV1::InvalidFinalizedDescriptor,
+        )
+        .unwrap();
+        validate_descriptor_profile(&decoded, CompilerTransactionProfileV1::ScalarGemmV1).unwrap();
+        assert_eq!(
+            decoded.canonical_code_object_digest().as_bytes(),
+            &[0xa5; 32]
+        );
+    }
+
+    #[test]
+    fn scalar_descriptor_identity_and_kernarg_substitutions_fail_closed() {
+        let wrong_binding = scalar_table([0; 32], [0x44; 32], 320);
+        let wrong_kernarg = scalar_table([0; 32], SCALAR_GEMM_V1_KERNEL_BINDING, 576);
+        for table in [&wrong_binding, &wrong_kernarg] {
+            assert!(matches!(
+                validate_descriptor_profile(table, CompilerTransactionProfileV1::ScalarGemmV1),
+                Err(CompilerTransactionRecorderErrorV1::DescriptorKernelSetMismatch)
+            ));
+        }
+    }
+}

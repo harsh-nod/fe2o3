@@ -22,17 +22,17 @@ use fe2o3_artifacts::{
 };
 use fe2o3_hsaco_finalize::{
     CompilerFfiCodeObjectVersion, CompilerFfiContractV1, CompilerFfiDeviceTargetV1,
-    CompilerFfiEnvelopeBuilderV1, CompilerFfiLinkRoleV1, CompilerFfiSourceOwnerV1,
-    CompilerModuleHandoffV2, CompilerModuleKindV1, CompilerModuleSymbolManifestV1,
-    CompilerModuleSymbolRoleV1, ContentIdentityV1, DEVICE_FFI_DIRECTION_EXPORT_V1,
-    DeviceFfiContractFieldsV1, DeviceFfiDirectionV1, GENERAL_TYPED_V3_SEMANTIC_WITNESS_DOMAIN_V1,
-    GENERAL_TYPED_V3_SEMANTIC_WITNESS_HEADER_BYTES_V1, GENERAL_TYPED_V3_SEMANTIC_WITNESS_MAGIC_V1,
-    GENERAL_TYPED_V3_SEMANTIC_WITNESS_VERSION_V1, LinkInputKindClosureV1, LinkInputV1,
-    LinkOptionV1, LinkOutputV1, MultiInputLinkPlanV1, ProvenanceNodeV1,
-    TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3, WORKER_RESPONSE_MAGIC_V2, WorkerInputKindV1,
-    WorkerInputV1, WorkerMeasurementV1, WorkerOutputConstraintsV1, WorkerRequestV2,
-    construct_worker_request_v2_from_consumed_handoff, derive_device_ffi_contract_id_v1,
-    finalize_unfinalized, inspect_unfinalized,
+    CompilerFfiEnvelopeBuilderV1, CompilerFfiEnvelopeV1, CompilerFfiLinkRoleV1,
+    CompilerFfiSourceOwnerV1, CompilerModuleHandoffV2, CompilerModuleKindV1,
+    CompilerModuleSymbolManifestV1, CompilerModuleSymbolRoleV1, ContentIdentityV1,
+    DEVICE_FFI_DIRECTION_EXPORT_V1, DeviceFfiContractFieldsV1, DeviceFfiDirectionV1,
+    GENERAL_TYPED_V3_SEMANTIC_WITNESS_DOMAIN_V1, GENERAL_TYPED_V3_SEMANTIC_WITNESS_HEADER_BYTES_V1,
+    GENERAL_TYPED_V3_SEMANTIC_WITNESS_MAGIC_V1, GENERAL_TYPED_V3_SEMANTIC_WITNESS_VERSION_V1,
+    LinkInputKindClosureV1, LinkInputV1, LinkOptionV1, LinkOutputV1, MultiInputLinkPlanV1,
+    ProvenanceNodeV1, TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3, WORKER_RESPONSE_MAGIC_V2,
+    WorkerInputKindV1, WorkerInputV1, WorkerMeasurementV1, WorkerOutputConstraintsV1,
+    WorkerRequestV2, construct_worker_request_v2_from_consumed_handoff,
+    derive_device_ffi_contract_id_v1, finalize_unfinalized, inspect_unfinalized,
 };
 use fe2o3_kernel_descriptor::{
     AccessMode, AliasSemantics, BlockSizeV1, CodeObjectVersion, DeviceDescriptorTableV1,
@@ -48,8 +48,8 @@ use fe2o3_worker_v2_bundle::{
     ExactCompilerInvocationV1, ExactCompilerSourceClosureV1, ExactCompilerSourceFileV1,
     ExactCompilerToolV1, ExactSemanticLayoutWitnessV1, ExactWorkerToolV1, Gfx942CompilerTargetV1,
     MAX_SEALED_COMPILER_TRANSACTION_BYTES_V1, SEALED_COMPILER_TRANSACTION_MAGIC_V1,
-    SEALED_COMPILER_TRANSACTION_VERSION_V1, SealedCompilerTransactionDecodeErrorV1,
-    SealedCompilerTransactionV1,
+    SEALED_COMPILER_TRANSACTION_VERSION_V1, ScalarGemmV1SemanticLayoutWitnessV1,
+    SealedCompilerTransactionDecodeErrorV1, SealedCompilerTransactionV1,
 };
 use sha2::{Digest, Sha256};
 use support::{HsacoFixture, alpha_zeta_hsaco};
@@ -62,6 +62,7 @@ const LLVM_BUILD: &str = "llvm-gfx942-test-build";
 const PRODUCER_NAME: &str = "rustc-codegen-fe2o3-worker-v2";
 const PRODUCER_VERSION: &str = "typed-general-gfx942-cov6-v1";
 const MODULE: &[u8] = b"target triple = \"amdgcn-amd-amdhsa\"\ndefine amdgpu_kernel void @alpha() { ret void }\ndefine i32 @compiler_helper(i32 %value) { ret i32 %value }\ndefine amdgpu_kernel void @zeta() { ret void }\n";
+const SCALAR_MODULE: &[u8] = b"target triple = \"amdgcn-amd-amdhsa\"\ndefine amdgpu_kernel void @scalar_gemm_v1() { ret void }\n";
 const RECORD_IDENTITY_DOMAIN: &[u8] = b"FE2O3/SEALED-COMPILER-TRANSACTION/V1\0";
 const MEASUREMENTS_OFFSET: usize = 16 + 32;
 const FINAL_CHAIN_OFFSET: usize = MEASUREMENTS_OFFSET + (17 * 32);
@@ -229,6 +230,32 @@ fn compiler_handoff(
         envelope,
         manifest,
         module,
+    )
+    .unwrap()
+}
+
+fn scalar_compiler_handoff() -> CompilerModuleHandoffV2 {
+    let target = CompilerFfiDeviceTargetV1::parse("gfx942:xnack-").unwrap();
+    let envelope = CompilerFfiEnvelopeV1::for_module_without_device_ffi(
+        target,
+        CompilerFfiCodeObjectVersion::V6,
+    )
+    .unwrap();
+    let manifest = CompilerModuleSymbolManifestV1::new([
+        (CompilerModuleSymbolRoleV1::KernelEntry, "scalar_gemm_v1"),
+        (
+            CompilerModuleSymbolRoleV1::KernelDescriptor,
+            "scalar_gemm_v1.kd",
+        ),
+    ])
+    .unwrap();
+    CompilerModuleHandoffV2::new(
+        CompilerModuleKindV1::LlvmTextIr,
+        target,
+        CompilerFfiCodeObjectVersion::V6,
+        envelope,
+        manifest,
+        SCALAR_MODULE,
     )
     .unwrap()
 }
@@ -777,6 +804,91 @@ fn canonical_cov6_alpha_zeta_transaction_round_trips() {
     assert!(sealed.requires_authenticated_execution_receipt());
     assert!(!sealed.authenticates_producer());
     assert!(!sealed.grants_launch_authority());
+}
+
+#[test]
+fn scalar_gemm_v1_profile_requires_retained_exact_worker_evidence() {
+    let witness = ExactSemanticLayoutWitnessV1::decode(
+        text("scalar_gemm_v1"),
+        &encode_semantic_witness([0x78; 32], [0x55; 32]),
+    )
+    .unwrap();
+    let scalar = ScalarGemmV1SemanticLayoutWitnessV1::new(witness).unwrap();
+    let (mut recorder, source_checkpoint) =
+        CompilerTransactionRecorderV1::begin([0x7a; 32], source(0x7a)).unwrap();
+    let invocation = invocation_for("gfx942:xnack-").unwrap();
+    let target = Gfx942CompilerTargetV1::for_invocation(&invocation).unwrap();
+    let compiler = recorder
+        .record_compiler(source_checkpoint, invocation)
+        .unwrap();
+    let target = recorder.record_target(compiler, target).unwrap();
+    let semantic = recorder
+        .record_scalar_gemm_v1_semantic_layout(target, scalar)
+        .unwrap();
+    let ir = recorder
+        .record_kernel_ir(semantic, scalar_compiler_handoff().canonical_bytes())
+        .unwrap();
+
+    assert!(matches!(
+        recorder.record_worker_exchange(
+            ir,
+            b"caller-supplied-request",
+            b"caller-supplied-response"
+        ),
+        Err(CompilerTransactionRecorderErrorV1::ScalarGemmV1WorkerEvidenceRequired)
+    ));
+}
+
+#[test]
+fn scalar_gemm_v1_witness_is_exact_and_domain_separated() {
+    let bytes = encode_semantic_witness([0x78; 32], [0x55; 32]);
+    let scalar_witness =
+        ExactSemanticLayoutWitnessV1::decode(text("scalar_gemm_v1"), &bytes).unwrap();
+    let scalar = ScalarGemmV1SemanticLayoutWitnessV1::new(scalar_witness.clone()).unwrap();
+    let alpha = ExactSemanticLayoutWitnessV1::decode(text("alpha"), &bytes).unwrap();
+    let zeta = ExactSemanticLayoutWitnessV1::decode(
+        text("zeta"),
+        &encode_semantic_witness([0x79; 32], [0x56; 32]),
+    )
+    .unwrap();
+    let alpha_zeta = AlphaZetaSemanticLayoutWitnessesV1::new(vec![alpha.clone(), zeta]).unwrap();
+
+    assert_eq!(scalar.witness(), &scalar_witness);
+    assert_ne!(scalar.identity(), alpha_zeta.identity());
+    assert!(matches!(
+        ScalarGemmV1SemanticLayoutWitnessV1::new(alpha),
+        Err(CompilerTransactionRecorderErrorV1::MissingScalarGemmV1Witness)
+    ));
+}
+
+#[test]
+fn scalar_gemm_v1_profile_rejects_alpha_zeta_symbol_closure() {
+    let witness = ExactSemanticLayoutWitnessV1::decode(
+        text("scalar_gemm_v1"),
+        &encode_semantic_witness([0x78; 32], [0x55; 32]),
+    )
+    .unwrap();
+    let scalar = ScalarGemmV1SemanticLayoutWitnessV1::new(witness).unwrap();
+    let (mut recorder, source_checkpoint) =
+        CompilerTransactionRecorderV1::begin([0x7b; 32], source(0x7b)).unwrap();
+    let invocation = invocation_for("gfx942:xnack-").unwrap();
+    let target = Gfx942CompilerTargetV1::for_invocation(&invocation).unwrap();
+    let compiler = recorder
+        .record_compiler(source_checkpoint, invocation)
+        .unwrap();
+    let target = recorder.record_target(compiler, target).unwrap();
+    let semantic = recorder
+        .record_scalar_gemm_v1_semantic_layout(target, scalar)
+        .unwrap();
+
+    assert!(matches!(
+        recorder.record_kernel_ir(
+            semantic,
+            compiler_handoff(MODULE, "gfx942:xnack-", CompilerFfiCodeObjectVersion::V6,)
+                .canonical_bytes()
+        ),
+        Err(CompilerTransactionRecorderErrorV1::WorkerKernelSetMismatch)
+    ));
 }
 
 #[test]
