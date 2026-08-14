@@ -1,10 +1,10 @@
 use fe2o3_build_authority::{
     AUTHORITY_CARGO_ENVIRONMENT_ENTRY_COUNT_V1, AUTHORITY_CARGO_ENVIRONMENT_HEADER_LEN_V1,
     AUTHORITY_CARGO_ENVIRONMENT_IDENTITY_DOMAIN_V1, AUTHORITY_CARGO_ENVIRONMENT_MAGIC_V1,
-    AUTHORITY_CARGO_ENVIRONMENT_MAX_PATH_LEN_V1, AUTHORITY_CARGO_ENVIRONMENT_MAX_WIRE_LEN_V1,
-    AUTHORITY_CARGO_ENVIRONMENT_TARGET_V1, AUTHORITY_CARGO_ENVIRONMENT_VERSION_V1,
-    AUTHORITY_CARGO_MODE_ARGV_V1, AuthorityCargoEnvironmentErrorV1,
-    AuthorityCargoEnvironmentPathErrorV1,
+    AUTHORITY_CARGO_ENVIRONMENT_MAX_PATH_LEN_V1, AUTHORITY_CARGO_ENVIRONMENT_MAX_RAW_VALUE_LEN_V1,
+    AUTHORITY_CARGO_ENVIRONMENT_MAX_WIRE_LEN_V1, AUTHORITY_CARGO_ENVIRONMENT_TARGET_V1,
+    AUTHORITY_CARGO_ENVIRONMENT_VERSION_V1, AUTHORITY_CARGO_MODE_ARGV_V1,
+    AuthorityCargoEnvironmentErrorV1, AuthorityCargoEnvironmentPathErrorV1,
     AuthorityCargoEnvironmentV1, AuthorityCargoEnvironmentVariableV1, CapabilityBindingV3,
     ForbiddenCargoEnvironmentChannelV1, PipelineV1, authority_cargo_environment_identity_sha256_v1,
     decode_authority_cargo_environment_v1,
@@ -113,10 +113,7 @@ fn roundtrip_and_cross_implementation_golden_are_stable() {
     assert_eq!(environment.provisioned_cargo_cache_sha256(), CACHE_IDENTITY);
     assert!(environment.offline());
     assert!(environment.frozen());
-    assert_eq!(
-        environment.cargo_mode_argv(),
-        ["--offline", "--frozen"]
-    );
+    assert_eq!(environment.cargo_mode_argv(), ["--offline", "--frozen"]);
     assert_eq!(environment.cargo_mode_argv(), AUTHORITY_CARGO_MODE_ARGV_V1);
     assert_eq!(
         AUTHORITY_CARGO_ENVIRONMENT_IDENTITY_DOMAIN_V1,
@@ -264,12 +261,19 @@ fn duplicate_missing_unknown_and_non_utf8_inputs_fail_closed() {
     }
 
     let mut duplicate = entries.clone();
-    duplicate.push(entries[0].clone());
+    duplicate[1] = entries[0].clone();
     assert_eq!(
         from_entries(&duplicate, CACHE_IDENTITY),
         Err(AuthorityCargoEnvironmentErrorV1::DuplicateVariable {
             name: "CARGO_HOME".to_owned(),
         })
+    );
+
+    let mut too_many = entries.clone();
+    too_many.push((b"EXTRA".to_vec(), b"value".to_vec()));
+    assert_eq!(
+        from_entries(&too_many, CACHE_IDENTITY),
+        Err(AuthorityCargoEnvironmentErrorV1::TooManyVariables { actual: 10 })
     );
 
     let mut unknown = entries.clone();
@@ -304,6 +308,32 @@ fn duplicate_missing_unknown_and_non_utf8_inputs_fail_closed() {
 }
 
 #[test]
+fn oversized_raw_values_fail_before_utf8_and_channel_classification() {
+    let entries = golden_entries();
+    let oversized = vec![0xff; AUTHORITY_CARGO_ENVIRONMENT_MAX_RAW_VALUE_LEN_V1 + 1];
+
+    let mut invalid_utf8 = entries.clone();
+    invalid_utf8[0].1 = oversized.clone();
+    assert_eq!(
+        from_entries(&invalid_utf8, CACHE_IDENTITY),
+        Err(AuthorityCargoEnvironmentErrorV1::VariableValueTooLong {
+            name: "CARGO_HOME".to_owned(),
+            actual: AUTHORITY_CARGO_ENVIRONMENT_MAX_RAW_VALUE_LEN_V1 + 1,
+        })
+    );
+
+    let mut forbidden = entries;
+    forbidden[0] = (b"CARGO_ENCODED_RUSTFLAGS".to_vec(), oversized);
+    assert_eq!(
+        from_entries(&forbidden, CACHE_IDENTITY),
+        Err(AuthorityCargoEnvironmentErrorV1::VariableValueTooLong {
+            name: "CARGO_ENCODED_RUSTFLAGS".to_owned(),
+            actual: AUTHORITY_CARGO_ENVIRONMENT_MAX_RAW_VALUE_LEN_V1 + 1,
+        })
+    );
+}
+
+#[test]
 fn every_fixed_value_is_exact() {
     let entries = golden_entries();
     for (index, variable, replacement) in [
@@ -333,10 +363,17 @@ fn every_fixed_value_is_exact() {
 #[test]
 fn path_rejection_corpus_is_strict_and_bounded() {
     let entries = golden_entries();
+    let exact_maximum = format!(
+        "/{}",
+        "a".repeat(AUTHORITY_CARGO_ENVIRONMENT_MAX_PATH_LEN_V1 - 1)
+    );
     let long = format!(
         "/{}",
         "a".repeat(AUTHORITY_CARGO_ENVIRONMENT_MAX_PATH_LEN_V1)
     );
+    let mut exact = entries.clone();
+    exact[0].1 = exact_maximum.into_bytes();
+    assert!(from_entries(&exact, CACHE_IDENTITY).is_ok());
     let cases = [
         ("", AuthorityCargoEnvironmentPathErrorV1::Empty),
         (
@@ -444,6 +481,18 @@ fn forbidden_ambient_channel_corpus_is_classified() {
             ForbiddenCargoEnvironmentChannelV1::ToolOverride,
         ),
         (
+            "RUSTC_BOOTSTRAP",
+            ForbiddenCargoEnvironmentChannelV1::ToolOverride,
+        ),
+        (
+            "CARGO_ENCODED_RUSTFLAGS",
+            ForbiddenCargoEnvironmentChannelV1::ToolOverride,
+        ),
+        (
+            "CARGO_PROFILE_RELEASE_LTO",
+            ForbiddenCargoEnvironmentChannelV1::ToolOverride,
+        ),
+        (
             "CARGO_BUILD_RUSTC",
             ForbiddenCargoEnvironmentChannelV1::ToolOverride,
         ),
@@ -453,6 +502,27 @@ fn forbidden_ambient_channel_corpus_is_classified() {
         ),
         (
             "FE2O3_RUSTC",
+            ForbiddenCargoEnvironmentChannelV1::ToolOverride,
+        ),
+        (
+            "LIBRARY_PATH",
+            ForbiddenCargoEnvironmentChannelV1::ToolOverride,
+        ),
+        ("CPATH", ForbiddenCargoEnvironmentChannelV1::ToolOverride),
+        (
+            "CPLUS_INCLUDE_PATH",
+            ForbiddenCargoEnvironmentChannelV1::ToolOverride,
+        ),
+        (
+            "PKG_CONFIG_PATH",
+            ForbiddenCargoEnvironmentChannelV1::ToolOverride,
+        ),
+        (
+            "NIX_LDFLAGS",
+            ForbiddenCargoEnvironmentChannelV1::ToolOverride,
+        ),
+        (
+            "BINDGEN_EXTRA_CLANG_ARGS",
             ForbiddenCargoEnvironmentChannelV1::ToolOverride,
         ),
         ("PATH", ForbiddenCargoEnvironmentChannelV1::ToolOverride),
@@ -646,12 +716,16 @@ fn malformed_duplicate_and_reordered_wire_entries_fail_closed() {
     );
 
     let mut wire = raw_wire(&entries);
-    set_u16(&mut wire, 66, 256);
+    set_u16(
+        &mut wire,
+        66,
+        (AUTHORITY_CARGO_ENVIRONMENT_MAX_PATH_LEN_V1 + 1) as u16,
+    );
     assert_eq!(
         decode_authority_cargo_environment_v1(&wire),
         Err(AuthorityCargoEnvironmentErrorV1::InvalidWireValueLength {
             index: 0,
-            actual: 256,
+            actual: (AUTHORITY_CARGO_ENVIRONMENT_MAX_PATH_LEN_V1 + 1) as u16,
         })
     );
 

@@ -16,6 +16,8 @@ pub const AUTHORITY_CARGO_ENVIRONMENT_ENTRY_COUNT_V1: u16 = 9;
 pub const AUTHORITY_CARGO_ENVIRONMENT_MAX_WIRE_LEN_V1: usize = 3_072;
 /// Maximum byte length of one canonical Authority Cargo Environment V1 path.
 pub const AUTHORITY_CARGO_ENVIRONMENT_MAX_PATH_LEN_V1: usize = 255;
+/// Maximum raw byte length of any Authority Cargo Environment V1 value.
+pub const AUTHORITY_CARGO_ENVIRONMENT_MAX_RAW_VALUE_LEN_V1: usize = 1_024;
 /// The only GPU target accepted by Authority Cargo Environment V1.
 pub const AUTHORITY_CARGO_ENVIRONMENT_TARGET_V1: &str = "gfx942:xnack-";
 /// Exact canonical Cargo mode arguments required by Authority Cargo Environment V1.
@@ -212,6 +214,9 @@ impl AuthorityCargoEnvironmentV1 {
         let mut count = 0_usize;
         for (raw_name, raw_value) in entries {
             count += 1;
+            if count > usize::from(AUTHORITY_CARGO_ENVIRONMENT_ENTRY_COUNT_V1) {
+                return Err(AuthorityCargoEnvironmentErrorV1::TooManyVariables { actual: count });
+            }
             let name_bytes = raw_name.as_ref();
             let value_bytes = raw_value.as_ref();
             if name_bytes.len() > MAX_VARIABLE_NAME_LEN {
@@ -221,19 +226,22 @@ impl AuthorityCargoEnvironmentV1 {
             }
             let name = str::from_utf8(name_bytes)
                 .map_err(|_| AuthorityCargoEnvironmentErrorV1::NonUtf8VariableName)?;
+            validate_variable_name(name)?;
+            if value_bytes.len() > AUTHORITY_CARGO_ENVIRONMENT_MAX_RAW_VALUE_LEN_V1 {
+                return Err(AuthorityCargoEnvironmentErrorV1::VariableValueTooLong {
+                    name: name.to_owned(),
+                    actual: value_bytes.len(),
+                });
+            }
             let value = str::from_utf8(value_bytes).map_err(|_| {
                 AuthorityCargoEnvironmentErrorV1::NonUtf8VariableValue {
                     name: name.to_owned(),
                 }
             })?;
-            validate_variable_name(name)?;
             if !names.insert(name.to_owned()) {
                 return Err(AuthorityCargoEnvironmentErrorV1::DuplicateVariable {
                     name: name.to_owned(),
                 });
-            }
-            if count > usize::from(AUTHORITY_CARGO_ENVIRONMENT_ENTRY_COUNT_V1) {
-                return Err(AuthorityCargoEnvironmentErrorV1::TooManyVariables { actual: count });
             }
             let variable = match AuthorityCargoEnvironmentVariableV1::from_name(name) {
                 Some(variable) => variable,
@@ -344,6 +352,13 @@ pub enum AuthorityCargoEnvironmentErrorV1 {
     },
     /// A variable name exceeded the fixed input bound.
     VariableNameTooLong {
+        /// Observed byte length.
+        actual: usize,
+    },
+    /// A raw variable value exceeded the fixed input bound.
+    VariableValueTooLong {
+        /// Variable whose value was rejected.
+        name: String,
         /// Observed byte length.
         actual: usize,
     },
@@ -465,6 +480,10 @@ impl fmt::Display for AuthorityCargoEnvironmentErrorV1 {
             Self::VariableNameTooLong { actual } => {
                 write!(formatter, "environment variable name is {actual} bytes")
             }
+            Self::VariableValueTooLong { name, actual } => write!(
+                formatter,
+                "environment variable {name} value is {actual} bytes; maximum is {AUTHORITY_CARGO_ENVIRONMENT_MAX_RAW_VALUE_LEN_V1}"
+            ),
             Self::NonCanonicalVariableName { name } => {
                 write!(
                     formatter,
@@ -751,15 +770,38 @@ fn forbidden_channel(name: &str) -> Option<ForbiddenCargoEnvironmentChannelV1> {
             | "RUSTDOC"
             | "RUSTC_WRAPPER"
             | "RUSTC_WORKSPACE_WRAPPER"
+            | "RUSTC_BOOTSTRAP"
+            | "CARGO_ENCODED_RUSTFLAGS"
+            | "CARGO_INCREMENTAL"
+            | "CARGO_MAKEFLAGS"
             | "CARGO"
             | "CC"
             | "CXX"
             | "AR"
             | "LINKER"
             | "LLVM_CONFIG"
+            | "LIBRARY_PATH"
+            | "CPATH"
+            | "CPLUS_INCLUDE_PATH"
+            | "OBJC_INCLUDE_PATH"
+            | "COMPILER_PATH"
+            | "GCC_EXEC_PREFIX"
+            | "BINDGEN_EXTRA_CLANG_ARGS"
+            | "CFLAGS"
+            | "CXXFLAGS"
+            | "CPPFLAGS"
+            | "LDFLAGS"
+            | "MAKEFLAGS"
+            | "MFLAGS"
             | "PATH"
     ) || name.starts_with("CARGO_BUILD_")
         || name.starts_with("CARGO_TARGET_")
+        || name.starts_with("CARGO_PROFILE_")
+        || name == "PKG_CONFIG"
+        || name.starts_with("PKG_CONFIG_")
+        || name.starts_with("NIX_CFLAGS_")
+        || name.starts_with("NIX_LDFLAGS")
+        || name.starts_with("CMAKE_")
         || name.starts_with("FE2O3_")
     {
         return Some(ForbiddenCargoEnvironmentChannelV1::ToolOverride);
