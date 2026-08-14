@@ -1,0 +1,19 @@
+[package]
+name = "fe2o3-row-softmax-v1"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/fe2o3-gpu/fe2o3"
+rust-version = "1.94"
+publish = false
+
+# Keep this proof example independently testable until a row-softmax compiler
+# and runtime vertical slice exists.
+[workspace]
+
+[dev-dependencies]
+sha2 = "0.11.0"
+
+[lib]
+name = "fe2o3_row_softmax_v1"
+path = "src/lib.rs"
