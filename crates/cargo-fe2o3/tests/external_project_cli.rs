@@ -550,7 +550,9 @@ fn ordinary_build_accepts_caller_loader_state_but_scrubs_managed_children() {
         .env("LD_LIBRARY_PATH", "/ordinary/non-authoritative/runtime")
         .env("FE2O3_TEST_EXPECT_CALLER_LOADER_ENV_SCRUBBED_V1", "1");
 
-    let output = command.output().expect("run ordinary loader compatibility probe");
+    let output = command
+        .output()
+        .expect("run ordinary loader compatibility probe");
     assert!(
         output.status.success(),
         "{}",
@@ -1456,7 +1458,10 @@ fn authority_metadata_is_frozen_offline_and_has_no_host_helper_environment() {
             authority_rustc_runtime_sha256(&fixture.root),
         )
         .env("FE2O3_AUTHORITY_CARGO_SHA256_V1", authority_cargo_sha256())
-        .env("FE2O3_AUTHORITY_BACKEND_SHA256_V1", "01".repeat(32))
+        .env(
+            "FE2O3_AUTHORITY_BACKEND_SHA256_V1",
+            file_sha256(&fixture.backend),
+        )
         .env("FE2O3_TEST_AUTHORITY_PREFLIGHT_REPORT", &report)
         .env("HOME", "/tmp/attacker-home")
         .env("CARGO_HOME", "/tmp/attacker-cargo-home")
@@ -1614,7 +1619,48 @@ fn authority_build_requires_an_independent_exact_backend_digest() {
         String::from_utf8_lossy(&output.stderr)
     );
 
+    let missing_backend = ProjectFixture::standalone();
+    let mut command = missing_backend.authority_command(&[OsString::from("build")]);
+    command
+        .env("FE2O3_CODEGEN_PIPELINE", "collected-row-softmax-v1")
+        .env(
+            "FE2O3_AUTHORITY_RUSTC_SHA256_V1",
+            authority_rustc_sha256(&missing_backend.root),
+        )
+        .env(
+            "FE2O3_AUTHORITY_RUSTC_RUNTIME_SHA256_V1",
+            authority_rustc_runtime_sha256(&missing_backend.root),
+        )
+        .env("FE2O3_AUTHORITY_CARGO_SHA256_V1", authority_cargo_sha256())
+        .env(
+            "FE2O3_AUTHORITY_BACKEND_SHA256_V1",
+            file_sha256(&missing_backend.backend),
+        )
+        .env_remove("FE2O3_BACKEND");
+    let output = command
+        .output()
+        .expect("run missing prebuilt backend probe");
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("requires FE2O3_BACKEND to name an explicit prebuilt codegen backend"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !missing_backend.log.exists(),
+        "backend admission executed Cargo"
+    );
+    assert!(
+        !missing_backend
+            .target
+            .join(".fe2o3-backend-build-v1")
+            .exists()
+    );
+
     let wrong = ProjectFixture::standalone();
+    let substituted_backend = wrong.root.join("substituted-codegen-backend.so");
+    fs::write(&substituted_backend, b"substituted backend").expect("write backend substitute");
     let mut command = wrong.authority_command(&[OsString::from("build")]);
     command
         .env("FE2O3_CODEGEN_PIPELINE", "collected-row-softmax-v1")
@@ -1627,7 +1673,11 @@ fn authority_build_requires_an_independent_exact_backend_digest() {
             authority_rustc_runtime_sha256(&wrong.root),
         )
         .env("FE2O3_AUTHORITY_CARGO_SHA256_V1", authority_cargo_sha256())
-        .env("FE2O3_AUTHORITY_BACKEND_SHA256_V1", "01".repeat(32));
+        .env(
+            "FE2O3_AUTHORITY_BACKEND_SHA256_V1",
+            file_sha256(&wrong.backend),
+        )
+        .env("FE2O3_BACKEND", substituted_backend);
     let output = command.output().expect("run wrong backend pin probe");
     assert!(!output.status.success());
     assert!(
@@ -1635,6 +1685,7 @@ fn authority_build_requires_an_independent_exact_backend_digest() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    assert!(!wrong.log.exists(), "backend substitution executed Cargo");
     assert!(!wrong.target.join("fe2o3").exists());
 }
 

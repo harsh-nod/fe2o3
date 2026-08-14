@@ -320,6 +320,9 @@ fn cargo_with_backend_result(command: &str, args: &[OsString]) -> Result<(), Str
     let authority_backend_sha256 = requires_authorized_closure
         .then(authority_backend_sha256_from_environment)
         .transpose()?;
+    let authority_backend = authority_backend_sha256
+        .map(preflight_declared_authority_backend)
+        .transpose()?;
     let invocation_directory = env::current_dir()
         .map_err(|error| format!("failed to resolve Cargo invocation directory: {error}"))?;
     let cargo_declaration = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
@@ -380,9 +383,6 @@ fn cargo_with_backend_result(command: &str, args: &[OsString]) -> Result<(), Str
         None => pin_default_rustc(&project)?,
     };
     pinned_rustc.assert_lib_tree_unmutated()?;
-    if let Some(expected) = authority_backend_sha256 {
-        preflight_declared_authority_backend(expected)?;
-    }
     let authorized_closure = requires_authorized_closure
         .then(|| {
             authorized_kernel_closure::AuthorizedKernelClosureV1::observe(
@@ -399,7 +399,7 @@ fn cargo_with_backend_result(command: &str, args: &[OsString]) -> Result<(), Str
         worker_v2,
         pinned_cargo,
         pinned_rustc,
-        authority_backend_sha256,
+        authority_backend,
         authorized_closure,
     )?;
     run_cargo_with_backend(&mut context, command, args)
@@ -414,10 +414,21 @@ fn authority_sensitive_request_selected() -> bool {
         || env::var_os(worker_v2::WORKER_V2_CONFIG_ENV).is_some()
 }
 
-fn preflight_declared_authority_backend(expected: [u8; 32]) -> Result<(), String> {
-    let Some(path) = env::var_os(BACKEND_ENV).map(PathBuf::from) else {
-        return Ok(());
-    };
+fn preflight_declared_authority_backend(
+    expected: [u8; 32],
+) -> Result<(PathBuf, pinned_codegen_backend::PinnedCodegenBackend), String> {
+    let path = env::var_os(BACKEND_ENV)
+        .map(PathBuf::from)
+        .ok_or_else(|| {
+            format!(
+                "cargo fe2o3 authority build requires {BACKEND_ENV} to name an explicit prebuilt codegen backend"
+            )
+        })?;
+    if !path.is_absolute() {
+        return Err(format!(
+            "cargo fe2o3 authority build requires {BACKEND_ENV} to name an absolute prebuilt codegen backend path"
+        ));
+    }
     let backend = pinned_codegen_backend::PinnedCodegenBackend::open(&path)
         .map_err(|error| format!("failed to pin declared authority codegen backend: {error}"))?;
     if backend.sha256() != &expected {
@@ -425,7 +436,7 @@ fn preflight_declared_authority_backend(expected: [u8; 32]) -> Result<(), String
             "cargo fe2o3 authority backend does not match {AUTHORITY_BACKEND_SHA256_ENV}"
         ));
     }
-    Ok(())
+    Ok((path, backend))
 }
 
 struct BackendRunContext {
@@ -454,23 +465,23 @@ impl BackendRunContext {
         worker_v2: Option<worker_v2::PreparedWorkerV2Config>,
         pinned_cargo: pinned_executable::PinnedExecutable,
         pinned_rustc: PinnedRustc,
-        authority_backend_sha256: Option<[u8; 32]>,
+        authority_backend: Option<(PathBuf, pinned_codegen_backend::PinnedCodegenBackend)>,
         authorized_closure: Option<authorized_kernel_closure::AuthorizedKernelClosureV1>,
     ) -> Result<Self, String> {
         let target = amd_gpu_target();
         let target_dir = project.open_or_create_target()?;
         pinned_rustc.assert_lib_tree_unmutated()?;
-        let backend = find_or_build_backend(&target_dir, &pinned_cargo, &pinned_rustc)?;
+        let (backend, pinned_backend) = match authority_backend {
+            Some(prebuilt) => prebuilt,
+            None => {
+                let backend = find_or_build_backend(&target_dir, &pinned_cargo, &pinned_rustc)?;
+                let pinned_backend =
+                    pinned_codegen_backend::PinnedCodegenBackend::open(&backend)
+                        .map_err(|error| format!("failed to pin codegen backend: {error}"))?;
+                (backend, pinned_backend)
+            }
+        };
         pinned_rustc.assert_lib_tree_unmutated()?;
-        let pinned_backend = pinned_codegen_backend::PinnedCodegenBackend::open(&backend)
-            .map_err(|error| format!("failed to pin codegen backend: {error}"))?;
-        if let Some(expected) = authority_backend_sha256
-            && pinned_backend.sha256() != &expected
-        {
-            return Err(format!(
-                "cargo fe2o3 authority backend does not match {AUTHORITY_BACKEND_SHA256_ENV}"
-            ));
-        }
         let compiler_closure_sha256 = compiler_toolchain::compiler_closure_sha256_v1(
             pinned_cargo.sha256(),
             pinned_rustc.executable.sha256(),
