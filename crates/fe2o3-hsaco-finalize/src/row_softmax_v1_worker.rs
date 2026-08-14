@@ -211,6 +211,15 @@ impl RowSoftmaxV1DirectWorkerExpectationV1 {
         )
     }
 
+    #[cfg(test)]
+    fn with_authority_policy_for_test(
+        mut self,
+        authority_policy: RowSoftmaxV1AuthorityPolicyV1,
+    ) -> Self {
+        self.authority_policy = Some(authority_policy);
+        self
+    }
+
     pub const fn handoff_sha256(&self) -> &[u8; 32] {
         &self.handoff_sha256
     }
@@ -962,10 +971,11 @@ const fn profile_mismatch(field: &'static str) -> RowSoftmaxV1DirectWorkerErrorV
 mod tests {
     use super::*;
     use crate::{
-        WORKER_REQUEST_MAGIC_V1, WORKER_RESPONSE_MAGIC_V2, WORKER_RESPONSE_MAGIC_V3,
-        WorkerEvidenceClassV1, WorkerInputV1, WorkerOutputConstraintsV1, WorkerRequestV1,
-        worker_protocol_v2::SealedWorkerRequestV2Parts,
+        RowSoftmaxV1ProviderManifestV1, WORKER_REQUEST_MAGIC_V1, WORKER_RESPONSE_MAGIC_V2,
+        WORKER_RESPONSE_MAGIC_V3, WorkerEvidenceClassV1, WorkerInputV1, WorkerOutputConstraintsV1,
+        WorkerRequestV1, worker_protocol_v2::SealedWorkerRequestV2Parts,
     };
+    use fe2o3_artifact_transaction::BuildAttempt;
     use fe2o3_compiler_ffi::{
         CodeObjectVersion as CompilerCodeObjectVersion, CompilerFfiContractV1,
         CompilerFfiEnvelopeBuilderV1, CompilerFfiLinkRoleV1, CompilerFfiSourceOwnerV1,
@@ -1074,6 +1084,26 @@ entry:
             exact_worker_pins(),
         )
         .unwrap()
+    }
+
+    fn attempt(generation: u64, session: u8, invocation: u8) -> BuildAttempt {
+        BuildAttempt::from_env_value(&format!(
+            "{generation}:{}:{}",
+            format!("{session:02x}").repeat(16),
+            format!("{invocation:02x}").repeat(32),
+        ))
+        .unwrap()
+    }
+
+    fn authority_policy(attempt: BuildAttempt) -> RowSoftmaxV1AuthorityPolicyV1 {
+        let definitions = std::array::from_fn(|index| [u8::try_from(index + 1).unwrap(); 16]);
+        let sources = [
+            [0x31; 32], [0x32; 32], [0x32; 32], [0x32; 32], [0x31; 32], [0x33; 32], [0x33; 32],
+            [0x33; 32],
+        ];
+        let provider =
+            RowSoftmaxV1ProviderManifestV1::new(7, [0x41; 16], definitions, sources).unwrap();
+        RowSoftmaxV1AuthorityPolicyV1::new(provider, attempt, [0x42; 32]).unwrap()
     }
 
     fn exact_worker_pins() -> RowSoftmaxV1DirectWorkerPinsV1 {
@@ -1810,6 +1840,35 @@ entry:
         assert!(validated.no_comgr_requires_measured_worker_build_manifest());
     }
 
+    #[test]
+    fn exact_handoff_and_matching_evidence_attempt_are_admitted() {
+        let handoff = exact_handoff();
+        let attempt_a = attempt(7, 0x51, 0x52);
+        let expected =
+            exact_expectation(&handoff).with_authority_policy_for_test(authority_policy(attempt_a));
+
+        assert_eq!(expected.handoff_sha256(), handoff.identity().sha256());
+        validate_evidence_attempt_binding(attempt_a, expected).unwrap();
+    }
+
+    #[test]
+    fn exact_handoff_from_attempt_a_cannot_be_republished_with_evidence_attempt_b() {
+        let handoff = exact_handoff();
+        let canonical_handoff = handoff.canonical_bytes().to_vec();
+        let attempt_a = attempt(7, 0x51, 0x52);
+        let attempt_b = attempt(8, 0x61, 0x62);
+        let expected =
+            exact_expectation(&handoff).with_authority_policy_for_test(authority_policy(attempt_a));
+
+        assert_eq!(expected.handoff_sha256(), handoff.identity().sha256());
+        assert_eq!(canonical_handoff, handoff.canonical_bytes());
+        assert!(matches!(
+            validate_evidence_attempt_binding(attempt_b, expected),
+            Err(RowSoftmaxV1DirectWorkerErrorV1::ProfileMismatch(
+                "consumed Worker evidence build attempt"
+            ))
+        ));
+    }
 
     #[test]
     fn dual_v3_bootstrap_and_exact_replay_are_admitted_as_one_exchange() {
