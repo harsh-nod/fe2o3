@@ -14,6 +14,10 @@ publish = false
 [dependencies]
 fe2o3-amd-target = { path = "../../crates/fe2o3-amd-target" }
 fe2o3-device = { path = "../../crates/fe2o3-device" }
+fe2o3-host = { path = "../../crates/fe2o3-host" }
+
+[dev-dependencies]
+syn = { version = "2", features = ["full", "visit"] }
 
 [lib]
 name = "fe2o3_tiled_gemm_v1"

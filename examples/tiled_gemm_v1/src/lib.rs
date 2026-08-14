@@ -5,13 +5,15 @@
 //!
 //! Host planning, deterministic finite-corpus inputs, validated bitwise host
 //! evidence, a general scalar FP32 recurrence, and exact AMD-calculator-pinned
-//! register and XOR4 LDS staging maps are usable now. Exact target and
-//! physical-ABI-bound matrix lowering, binding those maps to compiler output,
-//! complete GEMM loops, output stores, production export, GPU execution, and
-//! machine-level proofs remain pending.
+//! register and XOR4 LDS staging maps are usable now. An ordinary attributed
+//! Rust kernel expresses one fixed LDS/MFMA phase and disjoint output stores,
+//! but fails closed at its unavailable compiler-issued LDS allocation. Exact
+//! source-to-LDS lowering, multi-phase GEMM loops, production export, GPU
+//! execution, and machine-level proofs remain pending.
 
 pub mod contract;
 pub mod inputs;
+pub mod kernel;
 pub mod kernel_face;
 pub mod layout;
 pub mod oracle;
@@ -22,6 +24,11 @@ pub use contract::{
     admit_target_v1, exact_target_v1, plan_v1,
 };
 pub use inputs::{BF16_INPUT_PATTERN_V1, GeneratedInputsV1, generate_inputs_v1};
+pub use kernel::{
+    LDS_SLICE1_OPERAND_BYTES_V1, LDS_SLICE1_OPERAND_ELEMENTS_V1, LDS_SLICE1_SOURCE_BLOCKER_V1,
+    LDS_SLICE1_SOURCE_BLOCKERS_V1, LDS_SLICE1_SOURCE_LOWERING_SUPPORTED_V1,
+    LDS_SLICE1_TOTAL_BYTES_V1, LDS_SLICE1_WORKGROUP_V1,
+};
 pub use layout::{
     AMD_MATRIX_CALCULATOR_A_CSV_SHA256_V1, AMD_MATRIX_CALCULATOR_ARCHITECTURE_V1,
     AMD_MATRIX_CALCULATOR_B_CSV_SHA256_V1, AMD_MATRIX_CALCULATOR_C_CSV_SHA256_V1,
