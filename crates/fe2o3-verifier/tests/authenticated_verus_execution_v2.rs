@@ -136,6 +136,22 @@ fn execution_policy(
     .unwrap()
 }
 
+fn preflight_policy(verifier_policy: VerifierPolicy) -> AuthenticatedVerusExecutionPolicyV2 {
+    let runtime_closure = RuntimeClosureMeasurementV2::from_parts(digest(91), 1, 1);
+    let executable_baseline = RuntimeExecutableBaselineV2::from_parts(digest(92), 1, 1, digest(93));
+    AuthenticatedVerusExecutionPolicyV2::new(
+        verifier_policy,
+        digest(90),
+        runtime_closure,
+        executable_baseline,
+        runtime_closure,
+        executable_baseline,
+        1,
+        ExecutionLimits::default(),
+    )
+    .unwrap()
+}
+
 fn baselines() -> (RuntimeExecutableBaselineV2, RuntimeExecutableBaselineV2) {
     *BASELINES.get_or_init(|| {
         (
@@ -1017,11 +1033,10 @@ fn fresh_challenges_make_separate_receipts_distinct() {
 fn source_dependency_and_executable_substitution_fail_before_receipt() {
     let dependencies = vec![dependency()];
     let wrong_source = request(b"success", &dependencies);
-    let (solver, verus) = closures();
     let error = execute_authenticated_verus_v2(
         wrong_source,
         inputs(b"different", dependencies.clone()),
-        &execution_policy(solver, verus, 1),
+        &preflight_policy(verifier_policy()),
     )
     .unwrap_err();
     assert!(matches!(
@@ -1032,7 +1047,7 @@ fn source_dependency_and_executable_substitution_fail_before_receipt() {
     let error = execute_authenticated_verus_v2(
         request(b"success", &dependencies),
         inputs(b"success", vec![]),
-        &execution_policy(solver, verus, 1),
+        &preflight_policy(verifier_policy()),
     )
     .unwrap_err();
     assert!(matches!(
@@ -1053,18 +1068,7 @@ fn source_dependency_and_executable_substitution_fail_before_receipt() {
         3,
     )
     .unwrap();
-    let (solver_baseline, verus_baseline) = baselines();
-    let policy = AuthenticatedVerusExecutionPolicyV2::new(
-        forged,
-        digest(90),
-        solver,
-        solver_baseline,
-        verus,
-        verus_baseline,
-        1,
-        ExecutionLimits::default(),
-    )
-    .unwrap();
+    let policy = preflight_policy(forged);
     let error = execute_authenticated_verus_v2(
         request(b"success", &dependencies),
         inputs(b"success", dependencies),
