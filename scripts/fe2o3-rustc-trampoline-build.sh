@@ -78,7 +78,14 @@ readonly OUTPUT_DIRECTORY_POLICY="${output_directory_policy}"
   fail 'candidate directory must be caller-owned mode 0700'
 
 require_output_directory_identity() {
-  local retained current
+  local retained current retained_policy current_canonical
+  [[ -d "${CANONICAL_PARENT}" && ! -L "${CANONICAL_PARENT}" ]] ||
+    fail 'candidate directory path became a symlink or non-directory'
+  current_canonical="$({
+    run_clean /usr/bin/readlink --canonicalize-existing -- "${CANONICAL_PARENT}"
+  } 2>/dev/null)" || fail 'cannot recanonicalize candidate directory path'
+  [[ "${current_canonical}" == "${CANONICAL_PARENT}" ]] ||
+    fail 'candidate directory path gained a symlink during the operation'
   retained="$({
     run_clean /usr/bin/stat --dereference --format='%d:%i' \
       -- "${OUTPUT_DIRECTORY_REF}"
@@ -91,6 +98,12 @@ require_output_directory_identity() {
     fail 'retained candidate directory identity changed'
   [[ "${current}" == "${OUTPUT_DIRECTORY_IDENTITY}" ]] ||
     fail 'candidate directory path was replaced during the operation'
+  retained_policy="$({
+    run_clean /usr/bin/stat --dereference --format='%u:%a:%F' \
+      -- "${OUTPUT_DIRECTORY_REF}"
+  } 2>/dev/null)" || fail 'cannot recheck retained candidate directory policy'
+  [[ "${retained_policy}" == "${EUID}:700:directory" ]] ||
+    fail 'retained candidate directory lost caller-owned mode 0700 policy'
 }
 
 require_header_value() {
@@ -280,6 +293,8 @@ if [[ "${MODE}" == verify ]]; then
   readonly CANDIDATE_REF="/proc/self/fd/${CANDIDATE_FD}"
   verify_elf "${CANDIDATE_REF}"
   require_output_directory_identity
+  [[ ! -L "${OUTPUT_DIRECTORY_REF}/${CANDIDATE_NAME}" ]] ||
+    fail 'verified rustc trampoline path became a symlink'
   installed_candidate_identity="$({
     run_clean /usr/bin/stat --dereference --format='%d:%i' \
       -- "${OUTPUT_DIRECTORY_REF}/${CANDIDATE_NAME}"
