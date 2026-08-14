@@ -1,6 +1,7 @@
 #![cfg(target_os = "linux")]
 
-use std::ffi::OsStr;
+use std::env;
+use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
 use std::io::Read;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
@@ -56,6 +57,18 @@ impl Drop for TestDirectory {
 
 fn worker_fixture() -> &'static Path {
     Path::new(env!("CARGO_BIN_EXE_cargo-fe2o3-worker-v2-fixture"))
+}
+
+fn worker_fixture_path(root: &Path) -> OsString {
+    let directory = root.join("pinned-worker-rustc-bin");
+    fs::create_dir_all(&directory).unwrap();
+    let rustc = directory.join("rustc");
+    if !rustc.exists() {
+        std::os::unix::fs::symlink(worker_fixture(), &rustc).unwrap();
+    }
+    let mut paths = vec![directory];
+    paths.extend(env::split_paths(&env::var_os("PATH").unwrap_or_default()));
+    env::join_paths(paths).unwrap()
 }
 
 fn envelope_input_fixture() -> &'static Path {
@@ -786,7 +799,7 @@ fn outer_command(directory: &TestDirectory, config: Option<&Path>, control: &Pat
         .env("FE2O3_TEST_CARGO_LOG", cargo_log)
         .env("FE2O3_TEST_TARGET_DIRECTORY", target)
         .env("FE2O3_TEST_VERTICAL_CONTROL_DIR", control)
-        .env("FE2O3_TEST_VERTICAL_RUSTC", worker_fixture())
+        .env("PATH", worker_fixture_path(&directory.0))
         .env("FE2O3_TEST_WORKSPACE_ROOT", &directory.0);
     if let Some(config) = config {
         command.env("FE2O3_WORKER_V2_CONFIG_V2", config);

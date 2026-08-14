@@ -67,9 +67,15 @@ mod platform {
     const SECRET_BYTES: usize = 32;
     const CHALLENGE_BYTES: usize = 32;
     const CONFIG_ID_BYTES: usize = 32;
+    const RUSTC_ID_BYTES: usize = 32;
     const REQUEST_AUTH_BYTES: usize = 32;
-    const REQUEST_BYTES: usize =
-        REQUEST_MAGIC.len() + 16 + 1 + CONFIG_ID_BYTES + CHALLENGE_BYTES + REQUEST_AUTH_BYTES;
+    const REQUEST_BYTES: usize = REQUEST_MAGIC.len()
+        + 16
+        + 1
+        + CONFIG_ID_BYTES
+        + RUSTC_ID_BYTES
+        + CHALLENGE_BYTES
+        + REQUEST_AUTH_BYTES;
     const RESPONSE_BYTES: usize = 1 + REQUEST_AUTH_BYTES;
     const REQUEST_AUTH_DOMAIN: &[u8] = b"FE2O3/CAPABILITY-BROKER/REQUEST-AUTH/V2\0";
     const RESPONSE_AUTH_DOMAIN: &[u8] = b"FE2O3/CAPABILITY-BROKER/RESPONSE-AUTH/V2\0";
@@ -154,12 +160,14 @@ mod platform {
     pub(crate) struct CapabilityBindingV2 {
         profile: CapabilityProfileV1,
         config_identity: Option<[u8; CONFIG_ID_BYTES]>,
+        rustc_executable_sha256: [u8; RUSTC_ID_BYTES],
     }
 
     impl CapabilityBindingV2 {
         pub(crate) fn new(
             profile: CapabilityProfileV1,
             config_identity: Option<[u8; CONFIG_ID_BYTES]>,
+            rustc_executable_sha256: [u8; RUSTC_ID_BYTES],
         ) -> Result<Self, String> {
             if profile == CapabilityProfileV1::S09 && config_identity.is_none() {
                 return Err("S09 capability binding requires a Worker V2 config identity".into());
@@ -167,6 +175,7 @@ mod platform {
             Ok(Self {
                 profile,
                 config_identity,
+                rustc_executable_sha256,
             })
         }
     }
@@ -340,7 +349,7 @@ mod platform {
     impl BrokerRouteV2 {
         fn encode(&self) -> String {
             format!(
-                "{ROUTE_PREFIX}:{}:{}:{}:{}:{}:{}:{}:{:x}:{:x}:{:x}:{}",
+                "{ROUTE_PREFIX}:{}:{}:{}:{}:{}:{}:{}:{}:{:x}:{:x}:{:x}:{}",
                 self.endpoint,
                 hex(&self.secret),
                 self.binding.profile.route_name(),
@@ -348,6 +357,7 @@ mod platform {
                     .config_identity
                     .map(|identity| hex(&identity))
                     .unwrap_or_else(|| "-".to_owned()),
+                hex(&self.binding.rustc_executable_sha256),
                 self.peer.uid,
                 self.peer.pid,
                 self.peer.start_time_ticks,
@@ -360,7 +370,7 @@ mod platform {
 
         fn parse(value: &str) -> Result<Self, String> {
             let fields = value.split(':').collect::<Vec<_>>();
-            if fields.len() != 12 || fields[0] != ROUTE_PREFIX {
+            if fields.len() != 13 || fields[0] != ROUTE_PREFIX {
                 return Err("capability broker route is not canonical V2".into());
             }
             let endpoint = fields[1].to_owned();
@@ -373,18 +383,20 @@ mod platform {
             } else {
                 Some(decode_fixed_hex(fields[4], "config identity")?)
             };
-            let binding = CapabilityBindingV2::new(profile, config_identity)?;
+            let rustc_executable_sha256 = decode_fixed_hex(fields[5], "rustc executable digest")?;
+            let binding =
+                CapabilityBindingV2::new(profile, config_identity, rustc_executable_sha256)?;
             let peer = BrokerPeerIdentityV2 {
-                uid: u32::try_from(parse_canonical_decimal(fields[5], "peer uid", true)?)
+                uid: u32::try_from(parse_canonical_decimal(fields[6], "peer uid", true)?)
                     .map_err(|_| "capability broker peer uid exceeds u32".to_owned())?,
-                pid: u32::try_from(parse_canonical_decimal(fields[6], "peer pid", false)?)
+                pid: u32::try_from(parse_canonical_decimal(fields[7], "peer pid", false)?)
                     .map_err(|_| "capability broker peer pid exceeds u32".to_owned())?,
-                start_time_ticks: parse_canonical_decimal(fields[7], "peer start time", false)?,
-                device: parse_canonical_hex(fields[8], "peer device")?,
-                inode: parse_canonical_hex(fields[9], "peer inode")?,
-                mode: u32::try_from(parse_canonical_hex(fields[10], "peer mode")?)
+                start_time_ticks: parse_canonical_decimal(fields[8], "peer start time", false)?,
+                device: parse_canonical_hex(fields[9], "peer device")?,
+                inode: parse_canonical_hex(fields[10], "peer inode")?,
+                mode: u32::try_from(parse_canonical_hex(fields[11], "peer mode")?)
                     .map_err(|_| "capability broker peer mode exceeds u32".to_owned())?,
-                executable_sha256: decode_fixed_hex(fields[11], "peer executable digest")?,
+                executable_sha256: decode_fixed_hex(fields[12], "peer executable digest")?,
             };
             let route = Self {
                 endpoint,
@@ -1070,7 +1082,7 @@ mod platform {
     ) -> Result<BrokeredCapabilities, String> {
         if route.binding != binding {
             return Err(
-                "capability broker route does not match the prepared profile/config identity"
+                "capability broker route does not match the prepared profile/config/rustc identity"
                     .into(),
             );
         }
@@ -1295,7 +1307,7 @@ mod platform {
                 .request_read_started
                 .store(true, std::sync::atomic::Ordering::Release);
             deadline.read_exact(stream, &mut request)?;
-            let challenge_start = REQUEST_MAGIC.len() + 16 + 1 + CONFIG_ID_BYTES;
+            let challenge_start = REQUEST_MAGIC.len() + 16 + 1 + CONFIG_ID_BYTES + RUSTC_ID_BYTES;
             let challenge: [u8; CHALLENGE_BYTES] = request
                 [challenge_start..challenge_start + CHALLENGE_BYTES]
                 .try_into()
@@ -1531,6 +1543,7 @@ mod platform {
                 request.extend_from_slice(&[0; CONFIG_ID_BYTES]);
             }
         }
+        request.extend_from_slice(&binding.rustc_executable_sha256);
         request.extend_from_slice(&challenge);
         let authentication = keyed_digest(REQUEST_AUTH_DOMAIN, secret, &[&request]);
         request.extend_from_slice(&authentication);
@@ -1904,11 +1917,12 @@ mod platform {
         }
 
         fn ordinary_binding() -> CapabilityBindingV2 {
-            CapabilityBindingV2::new(CapabilityProfileV1::Ordinary, None).unwrap()
+            CapabilityBindingV2::new(CapabilityProfileV1::Ordinary, None, [0x70; 32]).unwrap()
         }
 
         fn s09_binding() -> CapabilityBindingV2 {
-            CapabilityBindingV2::new(CapabilityProfileV1::S09, Some([0x91; 32])).unwrap()
+            CapabilityBindingV2::new(CapabilityProfileV1::S09, Some([0x91; 32]), [0x70; 32])
+                .unwrap()
         }
 
         fn wait_for_active_socket(broker: &CapabilityBroker) -> (u64, u64) {
@@ -2196,7 +2210,7 @@ mod platform {
         }
 
         #[test]
-        fn prepared_profile_config_and_peer_identity_reject_substitution() {
+        fn prepared_profile_config_rustc_and_peer_identity_reject_substitution() {
             let (_temp, backend, artifact, pinned_cargo_image, session) = fixture();
             let binding = s09_binding();
             let broker =
@@ -2206,10 +2220,20 @@ mod platform {
 
             let ordinary = ordinary_binding();
             assert!(receive_from(&route, session, ordinary).is_err());
-            let wrong_config =
-                CapabilityBindingV2::new(CapabilityProfileV1::S09, Some([0x92; CONFIG_ID_BYTES]))
-                    .unwrap();
+            let wrong_config = CapabilityBindingV2::new(
+                CapabilityProfileV1::S09,
+                Some([0x92; CONFIG_ID_BYTES]),
+                [0x70; RUSTC_ID_BYTES],
+            )
+            .unwrap();
             assert!(receive_from(&route, session, wrong_config).is_err());
+            let wrong_rustc = CapabilityBindingV2::new(
+                CapabilityProfileV1::S09,
+                Some([0x91; CONFIG_ID_BYTES]),
+                [0x71; RUSTC_ID_BYTES],
+            )
+            .unwrap();
+            assert!(receive_from(&route, session, wrong_rustc).is_err());
 
             let mut wrong_uid = route.clone();
             wrong_uid.peer.uid ^= 1;
@@ -2991,6 +3015,7 @@ mod unsupported {
         pub(crate) fn new(
             _profile: CapabilityProfileV1,
             _config_identity: Option<[u8; 32]>,
+            _rustc_executable_sha256: [u8; 32],
         ) -> Result<Self, String> {
             Ok(Self)
         }

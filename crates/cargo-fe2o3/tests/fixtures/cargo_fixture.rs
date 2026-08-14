@@ -120,6 +120,62 @@ fn build_or_run(args: &[OsString]) -> ExitCode {
     if env::var_os("FE2O3_TEST_VERTICAL_CONTROL_DIR").is_some() {
         return vertical_worker_v2_invocation();
     }
+    if let Some(loader) = env::var_os("FE2O3_TEST_WRAPPER_LD_PRELOAD") {
+        let wrapper = required_path("RUSTC_WORKSPACE_WRAPPER");
+        let rustc = required_path("RUSTC");
+        let source = required_path("FE2O3_TEST_WORKSPACE_ROOT").join("src/main.rs");
+        let output = match Command::new(wrapper)
+            .arg(rustc)
+            .args([
+                "--crate-name",
+                "loader_injection",
+                "-Cmetadata=loader-injection",
+            ])
+            .arg(source)
+            .env("LD_PRELOAD", loader)
+            .output()
+        {
+            Ok(output) => output,
+            Err(error) => {
+                eprintln!("fake Cargo could not launch loader injection probe: {error}");
+                return ExitCode::FAILURE;
+            }
+        };
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        eprint!("{stderr}");
+        if output.status.success() || !stderr.contains("rejects dynamic-loader injection variable")
+        {
+            eprintln!("fake Cargo loader injection was not rejected by the binding wrapper");
+        }
+        return ExitCode::from(38);
+    }
+    if let Some(attacker_rustc) = env::var_os("FE2O3_TEST_SUBSTITUTE_RUSTC") {
+        let wrapper = required_path("RUSTC_WORKSPACE_WRAPPER");
+        let source = required_path("FE2O3_TEST_WORKSPACE_ROOT").join("src/main.rs");
+        let output = match Command::new(wrapper)
+            .arg(attacker_rustc)
+            .args([
+                "--crate-name",
+                "substituted_rustc",
+                "-Cmetadata=substituted",
+            ])
+            .arg(source)
+            .output()
+        {
+            Ok(output) => output,
+            Err(error) => {
+                eprintln!("fake Cargo could not launch substituted rustc probe: {error}");
+                return ExitCode::FAILURE;
+            }
+        };
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        eprint!("{stderr}");
+        if output.status.success() || !stderr.contains("does not match the parent-pinned compiler")
+        {
+            eprintln!("fake Cargo rustc substitution was not rejected by compiler identity");
+        }
+        return ExitCode::from(37);
+    }
     if let Some(mode) = env::var_os("FE2O3_TEST_BUILD_SCRIPT_MODE") {
         let fixture = required_path("FE2O3_TEST_BUILD_SCRIPT_FIXTURE");
         let status = if mode == "multithreaded-substitute-wrapper" {
@@ -389,7 +445,7 @@ fn execute_vertical_request(control: &Path, id: u64) -> Result<(), String> {
     }
 
     let wrapper = required_path("RUSTC_WORKSPACE_WRAPPER");
-    let rustc = required_path("FE2O3_TEST_VERTICAL_RUSTC");
+    let rustc = required_path("RUSTC");
     let source = required_path("FE2O3_FIXTURE_SOURCE");
     let mode = fs::read_to_string(control.join("mode"))
         .map_err(|error| format!("read rustc mode: {error}"))?;

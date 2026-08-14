@@ -29,7 +29,11 @@ mod worker_v2_restart;
 
 use std::env;
 use std::ffi::{OsStr, OsString};
-use std::io::Read;
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
+use std::os::fd::{AsRawFd, BorrowedFd, IntoRawFd};
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
@@ -40,9 +44,11 @@ const DEFAULT_TARGET: &str = "gfx1100";
 const BINDING_WRAPPER_MODE_ENV: &str = "FE2O3_BINDING_WRAPPER_MODE_V1";
 const MANAGED_RUSTC_ARGS_ENV: &str = "FE2O3_MANAGED_RUSTC_ARGS_V1";
 const BUILD_SESSION_ENV: &str = "FE2O3_BUILD_SESSION_V1";
+const EXPECTED_RUSTC_SHA256_ENV: &str = "FE2O3_EXPECTED_RUSTC_SHA256_V1";
 const AUTHORITY_BEARING_ROW_PIPELINE: &str = "collected-row-softmax-v1";
 const INTERNAL_RUNNER_ARG: &str = "__fe2o3-runner-v1";
 const BACKEND_BUILD_CHILD_FD: std::os::fd::RawFd = 196;
+const RUSTC_CHILD_FD: std::os::fd::RawFd = 194;
 const ARTIFACT_CHILD_FD: std::os::fd::RawFd =
     fe2o3_artifact_transaction::BROKERED_ARTIFACT_DIRECTORY_CHILD_FD_V1;
 const BACKEND_CHILD_FD: std::os::fd::RawFd =
@@ -287,6 +293,7 @@ fn cargo_with_backend_result(command: &str, args: &[OsString]) -> Result<(), Str
     .map_err(|error| format!("failed to resolve Cargo executable: {error}"))?;
     let pinned_cargo = pinned_executable::PinnedExecutable::open(&cargo_path)
         .map_err(|error| format!("failed to pin Cargo executable: {error}"))?;
+    let pinned_rustc = pin_default_rustc(&project)?;
     let requires_authorized_closure = env::var("FE2O3_CODEGEN_PIPELINE").as_deref()
         == Ok(AUTHORITY_BEARING_ROW_PIPELINE)
         || worker_v2
@@ -302,8 +309,14 @@ fn cargo_with_backend_result(command: &str, args: &[OsString]) -> Result<(), Str
             )
         })
         .transpose()?;
-    let mut context =
-        BackendRunContext::prepare(project, args, worker_v2, pinned_cargo, authorized_closure)?;
+    let mut context = BackendRunContext::prepare(
+        project,
+        args,
+        worker_v2,
+        pinned_cargo,
+        pinned_rustc,
+        authorized_closure,
+    )?;
     run_cargo_with_backend(&mut context, command, args)
 }
 
@@ -313,6 +326,7 @@ struct BackendRunContext {
     backend: PathBuf,
     pinned_backend: pinned_codegen_backend::PinnedCodegenBackend,
     pinned_cargo: pinned_executable::PinnedExecutable,
+    pinned_rustc: pinned_executable::PinnedExecutable,
     _worker_v2: Option<worker_v2::PreparedWorkerV2Config>,
     worker_v2_identity: Option<worker_v2::WorkerV2ConfigIdentity>,
     target_dir: project::PinnedDirectory,
@@ -330,11 +344,12 @@ impl BackendRunContext {
         args: &[OsString],
         worker_v2: Option<worker_v2::PreparedWorkerV2Config>,
         pinned_cargo: pinned_executable::PinnedExecutable,
+        pinned_rustc: pinned_executable::PinnedExecutable,
         authorized_closure: Option<authorized_kernel_closure::AuthorizedKernelClosureV1>,
     ) -> Result<Self, String> {
         let target = amd_gpu_target();
         let target_dir = project.open_or_create_target()?;
-        let backend = find_or_build_backend(&target_dir)?;
+        let backend = find_or_build_backend(&target_dir, &pinned_cargo, &pinned_rustc)?;
         let pinned_backend = pinned_codegen_backend::PinnedCodegenBackend::open(&backend)
             .map_err(|error| format!("failed to pin codegen backend: {error}"))?;
         let worker_v2_identity = worker_v2.as_ref().map(|config| config.identity());
@@ -367,6 +382,7 @@ impl BackendRunContext {
             backend,
             pinned_backend,
             pinned_cargo,
+            pinned_rustc,
             _worker_v2: worker_v2,
             worker_v2_identity,
             target_dir,
@@ -440,6 +456,7 @@ fn run_cargo_with_backend(
         context
             .worker_v2_identity
             .map(|identity| *identity.as_bytes()),
+        *context.pinned_rustc.sha256(),
     )?;
     let capability_broker = capability_broker::CapabilityBroker::start(
         context.build_session,
@@ -472,12 +489,17 @@ fn run_cargo_with_backend(
         .env("RUSTC_WORKSPACE_WRAPPER", &context.binding_wrapper)
         .env(BINDING_WRAPPER_MODE_ENV, "1")
         .env(MANAGED_RUSTC_ARGS_ENV, &context.managed_rustc_args)
+        .env(
+            EXPECTED_RUSTC_SHA256_ENV,
+            hex_encode(context.pinned_rustc.sha256()),
+        )
         .env(BUILD_SESSION_ENV, context.build_session.to_hex());
     if context.requires_locked_closure {
         // Authority builds do not admit unpinned C tools, ROCm headers, or native libraries.
         cargo.as_command_mut().env("FE2O3_HIP_SYS_DISABLE", "1");
     }
     remove_dynamic_loader_environment(cargo.as_command_mut());
+    configure_pinned_rustc_child(cargo.as_command_mut(), &context.pinned_rustc)?;
     match context.worker_v2_identity {
         Some(identity) => {
             cargo
@@ -1184,7 +1206,7 @@ fn reject_dynamic_loader_environment() -> Result<(), String> {
     Ok(())
 }
 
-fn is_dynamic_loader_injection_environment_name(name: &OsStr) -> bool {
+pub(crate) fn is_dynamic_loader_injection_environment_name(name: &OsStr) -> bool {
     matches!(
         os_bytes(name),
         b"LD_PRELOAD" | b"LD_AUDIT" | b"GLIBC_TUNABLES"
@@ -1212,7 +1234,11 @@ pub(crate) fn remove_dynamic_loader_environment(command: &mut Command) {
     }
 }
 
-fn find_or_build_backend(target_dir: &project::PinnedDirectory) -> Result<PathBuf, String> {
+fn find_or_build_backend(
+    target_dir: &project::PinnedDirectory,
+    pinned_cargo: &pinned_executable::PinnedExecutable,
+    pinned_rustc: &pinned_executable::PinnedExecutable,
+) -> Result<PathBuf, String> {
     if let Some(path) = env::var_os(BACKEND_ENV) {
         let path = PathBuf::from(path);
         if path.is_file() {
@@ -1237,9 +1263,11 @@ fn find_or_build_backend(target_dir: &project::PinnedDirectory) -> Result<PathBu
     )?;
     let backend = dylib_path(backend_target.display_path());
     eprintln!("building rustc-codegen-fe2o3 backend...");
-    let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
-    let mut command = Command::new(cargo);
+    let mut command = pinned_cargo
+        .command()
+        .map_err(|error| format!("failed to prepare pinned Cargo executable: {error}"))?;
     command
+        .as_command_mut()
         .args(["build", "--manifest-path"])
         .arg(source_root.join("Cargo.toml"))
         .args(["--target-dir"])
@@ -1258,7 +1286,7 @@ fn find_or_build_backend(target_dir: &project::PinnedDirectory) -> Result<PathBu
                 .map(|byte| format!("{byte:02x}"))
                 .collect::<String>(),
         );
-    remove_dynamic_loader_environment(&mut command);
+    remove_dynamic_loader_environment(command.as_command_mut());
     for name in [
         TARGET_ENV,
         BACKEND_ENV,
@@ -1271,9 +1299,10 @@ fn find_or_build_backend(target_dir: &project::PinnedDirectory) -> Result<PathBu
         worker_v2::WORKER_V2_EXPECTED_ID_ENV,
         "FE2O3_HOST_PASSTHROUGH",
     ] {
-        command.env_remove(name);
+        command.as_command_mut().env_remove(name);
     }
-    backend_target.inherit_for_child_at(&mut command, BACKEND_BUILD_CHILD_FD)?;
+    configure_pinned_rustc_child(command.as_command_mut(), pinned_rustc)?;
+    backend_target.inherit_for_child_at(command.as_command_mut(), BACKEND_BUILD_CHILD_FD)?;
     let status = command
         .status()
         .map_err(|error| format!("failed to build rustc-codegen-fe2o3: {error}"))?;
@@ -1290,6 +1319,156 @@ fn find_or_build_backend(target_dir: &project::PinnedDirectory) -> Result<PathBu
             backend.display()
         ))
     }
+}
+
+fn pin_default_rustc(
+    project: &project::CargoProject,
+) -> Result<pinned_executable::PinnedExecutable, String> {
+    let declared = OsStr::new("rustc");
+    let resolved = binding_wrapper::resolve_command_executable(
+        declared,
+        &project.invocation_dir().child_path(),
+    )
+    .map_err(|error| format!("failed to resolve default rustc executable: {error}"))?;
+    let canonical = std::fs::canonicalize(&resolved)
+        .map_err(|error| format!("failed to inspect default rustc executable: {error}"))?;
+    let rustc_path = if canonical.file_name() == Some(OsStr::new("rustup")) {
+        resolve_rustup_toolchain_rustc(&canonical, project)?
+    } else {
+        canonical
+    };
+    pinned_executable::PinnedExecutable::open(&rustc_path)
+        .map_err(|error| format!("failed to pin default rustc executable: {error}"))
+}
+
+fn resolve_rustup_toolchain_rustc(
+    rustup_proxy: &Path,
+    project: &project::CargoProject,
+) -> Result<PathBuf, String> {
+    let pinned = pinned_executable::PinnedExecutable::open(rustup_proxy)
+        .map_err(|error| format!("failed to pin rustup proxy: {error}"))?;
+    let mut command = pinned
+        .command()
+        .map_err(|error| format!("failed to prepare pinned rustup proxy: {error}"))?;
+    command
+        .as_command_mut()
+        .arg0("rustup")
+        .args(["which", "rustc"])
+        .current_dir(project.invocation_dir().child_path());
+    remove_dynamic_loader_environment(command.as_command_mut());
+    let output = command
+        .output()
+        .map_err(|error| format!("failed to resolve rustup toolchain rustc: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "pinned rustup could not resolve the active rustc: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let mut path = output.stdout;
+    while matches!(path.last(), Some(b'\n' | b'\r')) {
+        path.pop();
+    }
+    if path.is_empty() || path.contains(&b'\n') || path.contains(&0) {
+        return Err("pinned rustup returned a noncanonical rustc path".to_owned());
+    }
+    let path = PathBuf::from(os_string(path)?);
+    if !path.is_absolute() {
+        return Err("pinned rustup returned a relative rustc path".to_owned());
+    }
+    Ok(path)
+}
+
+fn configure_pinned_rustc_child(
+    command: &mut Command,
+    rustc: &pinned_executable::PinnedExecutable,
+) -> Result<(), String> {
+    let descriptor_path = PathBuf::from(format!("/proc/self/fd/{RUSTC_CHILD_FD}"));
+    match std::fs::symlink_metadata(&descriptor_path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Ok(_) => {
+            return Err(format!(
+                "reserved rustc child descriptor {RUSTC_CHILD_FD} is already in use"
+            ));
+        }
+        Err(error) => {
+            return Err(format!(
+                "failed to inspect reserved rustc child descriptor {RUSTC_CHILD_FD}: {error}"
+            ));
+        }
+    }
+    let mut source = rustc
+        .try_clone_for_transfer()
+        .map_err(|error| format!("failed to retain pinned rustc executable: {error}"))?;
+    source
+        .seek(SeekFrom::Start(0))
+        .map_err(|error| format!("failed to rewind pinned rustc executable: {error}"))?;
+    let image = rustix::fs::memfd_create(
+        "fe2o3-pinned-rustc",
+        rustix::fs::MemfdFlags::CLOEXEC | rustix::fs::MemfdFlags::ALLOW_SEALING,
+    )
+    .map(File::from)
+    .map_err(|error| format!("failed to allocate sealed rustc image: {error}"))?;
+    let mut image = image;
+    let copied = std::io::copy(&mut source, &mut image)
+        .map_err(|error| format!("failed to snapshot pinned rustc executable: {error}"))?;
+    if copied != rustc.size() {
+        return Err(format!(
+            "pinned rustc snapshot copied {copied} bytes instead of {}",
+            rustc.size()
+        ));
+    }
+    image
+        .set_permissions(std::fs::Permissions::from_mode(0o500))
+        .map_err(|error| format!("failed to make sealed rustc image executable: {error}"))?;
+    rustix::fs::fcntl_add_seals(
+        &image,
+        rustix::fs::SealFlags::WRITE | rustix::fs::SealFlags::GROW | rustix::fs::SealFlags::SHRINK,
+    )
+    .and_then(|()| rustix::fs::fcntl_add_seals(&image, rustix::fs::SealFlags::SEAL))
+    .map_err(|error| format!("failed to seal pinned rustc image: {error}"))?;
+    image
+        .seek(SeekFrom::Start(0))
+        .map_err(|error| format!("failed to rewind sealed rustc image: {error}"))?;
+    let verified = pinned_executable::PinnedExecutable::from_transferred_file(
+        image
+            .try_clone()
+            .map_err(|error| format!("failed to verify sealed rustc image: {error}"))?,
+        PathBuf::from("<sealed parent-pinned rustc image>"),
+    )
+    .map_err(|error| format!("failed to verify sealed rustc image: {error}"))?;
+    if verified.sha256() != rustc.sha256() {
+        return Err("sealed rustc image differs from the parent-pinned compiler".to_owned());
+    }
+    let metadata = image
+        .metadata()
+        .map_err(|error| format!("failed to inspect sealed rustc image: {error}"))?;
+    let expected = (metadata.dev(), metadata.ino(), metadata.mode());
+    // SAFETY: the callback performs descriptor-only operations and owns `image` through exec.
+    unsafe {
+        command.pre_exec(move || {
+            let installed = rustix::io::fcntl_dupfd_cloexec(&image, RUSTC_CHILD_FD)
+                .map_err(std::io::Error::from)?;
+            if installed.as_raw_fd() != RUSTC_CHILD_FD {
+                return Err(std::io::Error::from_raw_os_error(
+                    rustix::io::Errno::BUSY.raw_os_error(),
+                ));
+            }
+            let descriptor = BorrowedFd::borrow_raw(RUSTC_CHILD_FD);
+            let stat = rustix::fs::fstat(descriptor).map_err(std::io::Error::from)?;
+            if (stat.st_dev, stat.st_ino, stat.st_mode) != expected {
+                return Err(std::io::Error::from_raw_os_error(
+                    rustix::io::Errno::STALE.raw_os_error(),
+                ));
+            }
+            rustix::io::fcntl_setfd(descriptor, rustix::io::FdFlags::empty())
+                .map_err(std::io::Error::from)?;
+            let _ = installed.into_raw_fd();
+            Ok(())
+        });
+    }
+    command.env("RUSTC", descriptor_path);
+    Ok(())
 }
 
 fn fe2o3_source_root() -> Result<PathBuf, String> {

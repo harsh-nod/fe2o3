@@ -314,6 +314,7 @@ impl From<PinExecutableError> for BindingWrapperError {
 
 pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperError> {
     reject_dynamic_loader_environment()?;
+    let expected_rustc_sha256 = expected_rustc_sha256()?;
     reject_uninspectable_rustc_args(&argv)?;
     if crate::non_production_reproduction::enabled() {
         canonicalize_rustc_metadata(&mut argv);
@@ -325,13 +326,21 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
                 std::env::current_dir().map_err(BindingWrapperError::CurrentDirectory)?;
             let executable = resolve_command_executable(&argv[0], &current_dir)?;
             let pinned = PinnedExecutable::open(&executable)?;
+            authenticate_pinned_rustc(&pinned, expected_rustc_sha256)?;
             let mut command = pinned.command()?;
+            crate::remove_dynamic_loader_environment(command.as_command_mut());
             command.args(&argv[1..]);
             configure_build_observation_environment(command.as_command_mut(), None);
             return command.status().map_err(BindingWrapperError::Spawn);
         }
         Err(error) => return Err(error.into()),
     };
+    let initial_working_directory =
+        std::env::current_dir().map_err(BindingWrapperError::CurrentDirectory)?;
+    let rustc_path =
+        resolve_command_executable(invocation.executable(), &initial_working_directory)?;
+    let pinned_rustc = PinnedExecutable::open(&rustc_path)?;
+    authenticate_pinned_rustc(&pinned_rustc, expected_rustc_sha256)?;
     let (
         build_observation,
         managed_attempt,
@@ -361,6 +370,7 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
                 worker_v2
                     .as_ref()
                     .map(|config| *config.identity().as_bytes()),
+                expected_rustc_sha256,
             )
             .map_err(BindingWrapperError::CapabilityBroker)?;
             let compiler_capabilities = CompilerCapabilities::from_environment(capability_binding)?;
@@ -410,8 +420,6 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
         .and_then(ManagedAttempt::compile_environment_profile);
     let pinned_execution_directory = PinnedWorkingDirectoryV3::open(&execution_directory)
         .map_err(|error| BindingWrapperError::BuildObservation(error.to_string()))?;
-    let rustc_path = resolve_command_executable(invocation.executable(), &execution_directory)?;
-    let pinned_rustc = PinnedExecutable::open(&rustc_path)?;
     let mut command = pinned_rustc.command()?;
     crate::remove_dynamic_loader_environment(command.as_command_mut());
     append_prepared_rustc_arguments(
@@ -654,11 +662,62 @@ fn configure_build_observation_environment(
 
 fn reject_dynamic_loader_environment() -> Result<(), BindingWrapperError> {
     for (name, value) in std::env::vars_os() {
-        if crate::is_dynamic_loader_environment_name(&name) {
+        if crate::is_dynamic_loader_injection_environment_name(&name) {
             return Err(BindingWrapperError::BuildObservation(format!(
                 "binding wrapper rejects dynamic-loader injection variable {name:?}={value:?}"
             )));
         }
+    }
+    Ok(())
+}
+
+fn expected_rustc_sha256() -> Result<[u8; 32], BindingWrapperError> {
+    let value = std::env::var_os(crate::EXPECTED_RUSTC_SHA256_ENV).ok_or_else(|| {
+        BindingWrapperError::BuildObservation(format!(
+            "binding wrapper is missing {}",
+            crate::EXPECTED_RUSTC_SHA256_ENV
+        ))
+    })?;
+    let encoded = os_bytes(&value);
+    if encoded.len() != 64 {
+        return Err(BindingWrapperError::BuildObservation(format!(
+            "{} is not a canonical SHA-256 digest",
+            crate::EXPECTED_RUSTC_SHA256_ENV
+        )));
+    }
+    let mut digest = [0_u8; 32];
+    for (output, pair) in digest.iter_mut().zip(encoded.chunks_exact(2)) {
+        let nibble = |byte: u8| match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            _ => None,
+        };
+        let high = nibble(pair[0]).ok_or_else(|| {
+            BindingWrapperError::BuildObservation(format!(
+                "{} is not a canonical SHA-256 digest",
+                crate::EXPECTED_RUSTC_SHA256_ENV
+            ))
+        })?;
+        let low = nibble(pair[1]).ok_or_else(|| {
+            BindingWrapperError::BuildObservation(format!(
+                "{} is not a canonical SHA-256 digest",
+                crate::EXPECTED_RUSTC_SHA256_ENV
+            ))
+        })?;
+        *output = (high << 4) | low;
+    }
+    Ok(digest)
+}
+
+fn authenticate_pinned_rustc(
+    rustc: &PinnedExecutable,
+    expected_sha256: [u8; 32],
+) -> Result<(), BindingWrapperError> {
+    if rustc.sha256() != &expected_sha256 {
+        return Err(BindingWrapperError::BuildObservation(
+            "Cargo selected a rustc executable that does not match the parent-pinned compiler"
+                .to_owned(),
+        ));
     }
     Ok(())
 }

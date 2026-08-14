@@ -230,6 +230,33 @@ fn temp_root() -> PathBuf {
     }
 }
 
+#[cfg(unix)]
+fn rustc_fixture_path(root: &Path) -> OsString {
+    let directory = root.join("pinned-rustc-fixture-bin");
+    fs::create_dir(&directory).expect("create pinned rustc fixture directory");
+    std::os::unix::fs::symlink(
+        env!("CARGO_BIN_EXE_cargo-fe2o3-rustc-fixture"),
+        directory.join("rustc"),
+    )
+    .expect("install pinned rustc fixture");
+    let mut paths = vec![directory];
+    paths.extend(env::split_paths(&env::var_os("PATH").unwrap_or_default()));
+    env::join_paths(paths).expect("construct rustc fixture PATH")
+}
+
+fn resolved_real_rustc() -> OsString {
+    if let Some(rustc) = env::var_os("RUSTC") {
+        return rustc;
+    }
+    for directory in env::split_paths(&env::var_os("PATH").unwrap_or_default()) {
+        let candidate = directory.join("rustc");
+        if candidate.is_file() {
+            return candidate.into_os_string();
+        }
+    }
+    panic!("test environment has no rustc executable")
+}
+
 fn take_u64(bytes: &mut &[u8]) -> u64 {
     let raw: [u8; 8] = bytes[..8].try_into().expect("u64 field");
     *bytes = &bytes[8..];
@@ -462,14 +489,16 @@ fn real_cargo_cooperatively_routes_capabilities_to_the_managed_rustc_child() {
             .expect("write parallel rustc fixture");
     }
     let report = fixture.root.join("rustc-capabilities.log");
-    let real_rustc = env::var_os("RUSTC").unwrap_or_else(|| OsString::from("rustc"));
+    let real_rustc = resolved_real_rustc();
+    let fixture_path = rustc_fixture_path(&fixture.root);
     let real_cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
     let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
     command
         .args(["build", "-j", "4"])
         .current_dir(&fixture.workspace)
         .env("CARGO", real_cargo)
-        .env("RUSTC", env!("CARGO_BIN_EXE_cargo-fe2o3-rustc-fixture"))
+        .env("PATH", fixture_path)
+        .env_remove("RUSTC")
         .env("FE2O3_TEST_REAL_RUSTC", real_rustc)
         .env("FE2O3_TEST_RUSTC_CAPABILITY_REPORT", &report)
         .env("FE2O3_BACKEND", &fixture.backend)
@@ -702,14 +731,16 @@ fn main() {
     let rustc_report = fixture
         .root
         .join("real-build-script-rustc-capabilities.log");
-    let real_rustc = env::var_os("RUSTC").unwrap_or_else(|| OsString::from("rustc"));
+    let real_rustc = resolved_real_rustc();
+    let fixture_path = rustc_fixture_path(&fixture.root);
     let real_cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
     let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
     command
         .arg("build")
         .current_dir(&fixture.workspace)
         .env("CARGO", real_cargo)
-        .env("RUSTC", env!("CARGO_BIN_EXE_cargo-fe2o3-rustc-fixture"))
+        .env("PATH", fixture_path)
+        .env_remove("RUSTC")
         .env("FE2O3_TEST_REAL_RUSTC", real_rustc)
         .env("FE2O3_TEST_RUSTC_CAPABILITY_REPORT", &rustc_report)
         .env("FE2O3_TEST_BUILD_SCRIPT_REPORT", &report)
@@ -736,7 +767,8 @@ fn main() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("failed to receive brokered capabilities")
+        stderr.contains("does not match the parent-pinned compiler")
+            || stderr.contains("failed to receive brokered capabilities")
             || stderr.contains("Connection reset by peer"),
         "{stderr}"
     );
@@ -900,14 +932,16 @@ pub fn probe(_attribute: TokenStream, item: TokenStream) -> TokenStream {
     let proc_macro_report = fixture.root.join("proc-macro-capabilities.log");
     let replay_report = fixture.root.join("proc-macro-replay-capabilities.log");
     let rustc_report = fixture.root.join("proc-macro-rustc-capabilities.log");
-    let real_rustc = env::var_os("RUSTC").unwrap_or_else(|| OsString::from("rustc"));
+    let real_rustc = resolved_real_rustc();
+    let fixture_path = rustc_fixture_path(&fixture.root);
     let real_cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
     let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
     command
         .arg("build")
         .current_dir(&fixture.workspace)
         .env("CARGO", real_cargo)
-        .env("RUSTC", env!("CARGO_BIN_EXE_cargo-fe2o3-rustc-fixture"))
+        .env("PATH", fixture_path)
+        .env_remove("RUSTC")
         .env("FE2O3_TEST_REAL_RUSTC", real_rustc)
         .env("FE2O3_TEST_RUSTC_CAPABILITY_REPORT", &rustc_report)
         .env("FE2O3_TEST_PROC_MACRO_REPORT", &proc_macro_report)
@@ -1084,6 +1118,63 @@ fn configured_loader_environment_is_rejected_before_artifact_authority() {
             .iter()
             .all(|invocation| invocation.args.get(1).is_none_or(|arg| arg != b"build")),
         "Cargo build ran after config rejection"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn cargo_cannot_substitute_the_parent_pinned_rustc_before_artifact_authority() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = ProjectFixture::standalone();
+    let marker = fixture.root.join("attacker-rustc-executed");
+    let attacker = fixture.root.join("attacker-rustc");
+    fs::write(
+        &attacker,
+        format!("#!/bin/sh\nprintf reached > '{}'\n", marker.display()),
+    )
+    .expect("write attacker rustc");
+    fs::set_permissions(&attacker, fs::Permissions::from_mode(0o700))
+        .expect("make attacker rustc executable");
+    let mut command = fixture.command(&[OsString::from("build")]);
+    command.env("FE2O3_TEST_SUBSTITUTE_RUSTC", &attacker);
+
+    let output = command.output().expect("run rustc substitution probe");
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("does not match the parent-pinned compiler"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!marker.exists(), "attacker-selected rustc executed");
+    assert!(
+        !fixture.target.join("fe2o3").exists(),
+        "failed rustc substitution committed an artifact generation"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn cargo_child_loader_injection_fails_before_artifact_authority() {
+    let fixture = ProjectFixture::standalone();
+    let mut command = fixture.command(&[OsString::from("build")]);
+    command.env(
+        "FE2O3_TEST_WRAPPER_LD_PRELOAD",
+        "/definitely/not/a/fe2o3-loader-object.so",
+    );
+
+    let output = command.output().expect("run child loader injection probe");
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("binding wrapper rejects dynamic-loader injection variable"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !fixture.target.join("fe2o3").exists(),
+        "loader-injected wrapper committed an artifact generation"
     );
 }
 
