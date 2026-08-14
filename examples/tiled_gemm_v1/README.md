@@ -25,18 +25,27 @@ SRAM-ECC-qualified, and other processor declarations fail closed. This token
 binds a declaration only: it does not attest installed hardware, executable
 metadata, or executable bytes.
 
-The CPU oracle widens each BF16 input exactly to FP32, evaluates products and
-sums as separate FP32 operations, and accumulates in increasing `k` order from
-positive zero. Its bit pattern is the V1 host reference. It is not yet a claim
-about undocumented MFMA evaluation order. Tests pin deterministic generator
-bytes and independently calculated FP32 output bits for rounding, recurrence
-order, cancellation, and signed-zero behavior.
+The bitwise evidence path first validates exact operand lengths and every BF16
+encoding. It admits only `BF16_INPUT_PATTERN_V1`, the finite pinned generator
+alphabet; NaNs, infinities, subnormals, negative zero, and every other encoding
+fail closed with operand, index, and bit-pattern diagnostics. Validated values
+widen exactly to FP32, products and sums are separate FP32 operations, and
+accumulation visits increasing `k` from positive zero. Tests pin deterministic
+generator bytes and independently calculated output bits.
 
-`src/kernel_face.rs` deliberately stops at the existing `fe2o3-device`
-`DeviceMatrix` and fragment API. GPU frontend lowering, lane-to-fragment load
-mapping, HSACO production, protected runtime admission, and hardware dispatch
-remain pending. This crate makes no hardware, compiler-refinement, memory-
-safety, or race-freedom claim.
+`tiled_gemm_arithmetic_oracle_v1` remains available for general BF16 arithmetic
+experiments, including out-of-corpus rounding, recurrence-order, cancellation,
+and signed-zero cases. Its results are not finite-corpus bitwise evidence.
+Neither oracle claims undocumented MFMA evaluation order or GPU equivalence.
+
+The combined tree includes a bounded primitive frontend slice: genuine
+`DeviceMatrix::from_compiler` and `DeviceMatrix::multiply_accumulate` calls in
+the exact gfx942 wave64 context lower to a verified Kernel IR matrix operation,
+while spoofed or wrong-target forms fail closed. Lane-to-fragment mapping, LDS
+data movement, full GEMM loops, output stores, production export and HSACO
+generation, protected runtime admission, hardware dispatch,
+compiler-to-machine refinement, memory-safety proof, and race-freedom proof
+remain pending.
 
 The dedicated `Tiled GEMM V1 host scaffold` workflow exercises this standalone
 manifest independently of the root workspace.
@@ -44,6 +53,8 @@ manifest independently of the root workspace.
 Run the host checks independently of the root workspace:
 
 ```text
+cargo fmt --manifest-path examples/tiled_gemm_v1/Cargo.toml \
+  --package fe2o3-tiled-gemm-v1 -- --check
 cargo test --manifest-path examples/tiled_gemm_v1/Cargo.toml
 cargo clippy --manifest-path examples/tiled_gemm_v1/Cargo.toml \
   --all-targets --all-features -- -D warnings

@@ -1,4 +1,8 @@
-//! Typed boundary for future authenticated gfx942 matrix lowering.
+//! Typed boundary for the exact primitive gfx942 matrix lowering.
+//!
+//! The genuine `DeviceMatrix` constructor and `multiply_accumulate` diagnostic
+//! items now lower in the exact gfx942 wave64 context to a verified Kernel IR
+//! matrix operation. This is one primitive operation, not a complete GEMM.
 //!
 //! No safe host code can construct the compiler-issued matrix capability:
 //!
@@ -47,9 +51,10 @@ const _: () = assert!(BF16_F32_MFMA_WAVE_LANES == WAVE_LANES_V1 as usize);
 /// Executes exactly one existing BF16/FP32 `16x16x16` device-matrix step.
 ///
 /// This function intentionally does not define lane-to-fragment mapping,
-/// synthesize an intrinsic, or emulate MFMA behavior. Authenticated frontend
-/// lowering must create `matrix` and provide fragments satisfying the existing
-/// `fe2o3-device` contract.
+/// LDS data movement, GEMM loops, or output stores. The exact frontend path
+/// recognizes compiler-created `matrix` authority and lowers this call to the
+/// verified Kernel IR matrix operation. Fragments must still satisfy the
+/// existing `fe2o3-device` contract.
 ///
 /// # Safety
 ///

@@ -28,6 +28,11 @@ jobs:
       - name: Install pinned Rust toolchain
         run: rustup show active-toolchain
 
+      - name: Check standalone formatting
+        run: >-
+          cargo fmt --manifest-path examples/tiled_gemm_v1/Cargo.toml
+          --package fe2o3-tiled-gemm-v1 -- --check
+
       - name: Run debug tests and doctests
         run: cargo test --locked --manifest-path examples/tiled_gemm_v1/Cargo.toml
 

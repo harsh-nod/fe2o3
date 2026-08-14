@@ -4,10 +4,11 @@ use fe2o3_device::Bf16;
 
 use crate::contract::ShapeV1;
 
-/// Closed finite-normal input alphabet plus positive zero.
+/// Closed finite-normal evidence alphabet plus positive zero.
 ///
 /// Values are encoded as BF16 bits directly. No host narrowing conversion is
-/// involved in input generation.
+/// involved in input generation. Bitwise V1 evidence admits exactly these
+/// encodings and rejects every other BF16 representation.
 pub const BF16_INPUT_PATTERN_V1: &[u16] = &[
     0x0000, // +0.0
     0x3d80, // +0.0625

@@ -2,7 +2,9 @@ use std::collections::BTreeSet;
 
 use fe2o3_device::Bf16;
 use fe2o3_tiled_gemm_v1::{
-    BF16_INPUT_PATTERN_V1, OracleErrorV1, ShapeV1, generate_inputs_v1, tiled_gemm_oracle_v1,
+    ArithmeticOracleErrorV1, BF16_INPUT_PATTERN_V1, EvidenceInputErrorV1, EvidenceOperandV1,
+    ShapeV1, generate_inputs_v1, tiled_gemm_arithmetic_oracle_v1, tiled_gemm_evidence_oracle_v1,
+    validate_evidence_inputs_v1,
 };
 
 #[test]
@@ -39,7 +41,8 @@ fn generator_v1_bytes_are_pinned_independently() {
 
     // These FP32 bits were calculated independently from the exact dyadic
     // values above and pin the row-major recurrence as well as the generator.
-    let output = tiled_gemm_oracle_v1(shape, &inputs.a, &inputs.b).unwrap();
+    let validated = validate_evidence_inputs_v1(shape, &inputs.a, &inputs.b).unwrap();
+    let output = tiled_gemm_evidence_oracle_v1(validated);
     assert_eq!(
         output
             .iter()
@@ -81,11 +84,151 @@ fn every_generated_value_is_an_exact_allowed_finite_bf16_pattern() {
 }
 
 #[test]
-fn oracle_matches_a_small_known_row_major_product_bitwise() {
+fn evidence_validation_rejects_hostile_bf16_classes() {
+    let shape = ShapeV1::checked(1, 1, 1).unwrap();
+    let cases = [
+        (
+            0x7fc1,
+            EvidenceInputErrorV1::NaNEncoding {
+                operand: EvidenceOperandV1::A,
+                index: 0,
+                bits: 0x7fc1,
+            },
+        ),
+        (
+            0xffc1,
+            EvidenceInputErrorV1::NaNEncoding {
+                operand: EvidenceOperandV1::A,
+                index: 0,
+                bits: 0xffc1,
+            },
+        ),
+        (
+            0x7f80,
+            EvidenceInputErrorV1::InfinityEncoding {
+                operand: EvidenceOperandV1::A,
+                index: 0,
+                bits: 0x7f80,
+            },
+        ),
+        (
+            0xff80,
+            EvidenceInputErrorV1::InfinityEncoding {
+                operand: EvidenceOperandV1::A,
+                index: 0,
+                bits: 0xff80,
+            },
+        ),
+        (
+            0x0001,
+            EvidenceInputErrorV1::SubnormalEncoding {
+                operand: EvidenceOperandV1::A,
+                index: 0,
+                bits: 0x0001,
+            },
+        ),
+        (
+            0x807f,
+            EvidenceInputErrorV1::SubnormalEncoding {
+                operand: EvidenceOperandV1::A,
+                index: 0,
+                bits: 0x807f,
+            },
+        ),
+        (
+            0x8000,
+            EvidenceInputErrorV1::OutsidePinnedAlphabet {
+                operand: EvidenceOperandV1::A,
+                index: 0,
+                bits: 0x8000,
+            },
+        ),
+        (
+            0x3f40,
+            EvidenceInputErrorV1::OutsidePinnedAlphabet {
+                operand: EvidenceOperandV1::A,
+                index: 0,
+                bits: 0x3f40,
+            },
+        ),
+    ];
+
+    for (bits, expected) in cases {
+        let a = [Bf16::from_bits(bits)];
+        assert_eq!(
+            validate_evidence_inputs_v1(shape, &a, &[Bf16::ONE]),
+            Err(expected),
+            "bits=0x{bits:04x}"
+        );
+    }
+}
+
+#[test]
+fn evidence_validation_admits_exactly_the_pinned_alphabet() {
+    let shape = ShapeV1::checked(1, 1, 1).unwrap();
+    for bits in 0..=u16::MAX {
+        let a = [Bf16::from_bits(bits)];
+        let admitted = validate_evidence_inputs_v1(shape, &a, &[Bf16::ONE]).is_ok();
+        assert_eq!(
+            admitted,
+            BF16_INPUT_PATTERN_V1.contains(&bits),
+            "bits=0x{bits:04x}"
+        );
+    }
+}
+
+#[test]
+fn evidence_validation_reports_operand_and_row_major_index() {
+    let shape = ShapeV1::checked(1, 2, 1).unwrap();
+    let b = [Bf16::ONE, Bf16::from_bits(0x3f40)];
+    assert_eq!(
+        validate_evidence_inputs_v1(shape, &[Bf16::ONE], &b),
+        Err(EvidenceInputErrorV1::OutsidePinnedAlphabet {
+            operand: EvidenceOperandV1::B,
+            index: 1,
+            bits: 0x3f40,
+        })
+    );
+}
+
+#[test]
+fn evidence_validation_rejects_wrong_lengths_before_evaluation() {
+    let shape = ShapeV1::checked(2, 3, 2).unwrap();
+    let inputs = generate_inputs_v1(shape, 9);
+    assert_eq!(
+        validate_evidence_inputs_v1(shape, &inputs.a[..3], &inputs.b),
+        Err(EvidenceInputErrorV1::WrongLength {
+            operand: EvidenceOperandV1::A,
+            expected: 4,
+            actual: 3,
+        })
+    );
+    assert_eq!(
+        validate_evidence_inputs_v1(shape, &inputs.a, &inputs.b[..5]),
+        Err(EvidenceInputErrorV1::WrongLength {
+            operand: EvidenceOperandV1::B,
+            expected: 6,
+            actual: 5,
+        })
+    );
+
+    let empty = ShapeV1::checked(0, u32::MAX, u32::MAX).unwrap();
+    assert_eq!(
+        validate_evidence_inputs_v1(empty, &[Bf16::NAN], &[]),
+        Err(EvidenceInputErrorV1::WrongLength {
+            operand: EvidenceOperandV1::A,
+            expected: 0,
+            actual: 1,
+        })
+    );
+}
+
+#[test]
+fn arithmetic_oracle_matches_a_small_known_row_major_product() {
     let shape = ShapeV1::checked(2, 3, 2).unwrap();
     let a = [1.0, 2.0, 3.0, 4.0].map(Bf16::from_f32);
     let b = [5.0, 6.0, 7.0, 8.0, 9.0, 10.0].map(Bf16::from_f32);
-    let output = tiled_gemm_oracle_v1(shape, &a, &b).unwrap();
+    let output = tiled_gemm_arithmetic_oracle_v1(shape, &a, &b).unwrap();
     let expected = [21.0_f32, 24.0, 27.0, 47.0, 54.0, 61.0];
     assert_eq!(
         output
@@ -97,17 +240,18 @@ fn oracle_matches_a_small_known_row_major_product_bitwise() {
 }
 
 #[test]
-fn zero_k_oracle_produces_only_fp32_positive_zero() {
+fn zero_k_evidence_produces_only_fp32_positive_zero() {
     for &(m, n) in &[(1, 1), (16, 16), (17, 31), (0, 9), (9, 0)] {
         let shape = ShapeV1::checked(m, n, 0).unwrap();
-        let output = tiled_gemm_oracle_v1(shape, &[], &[]).unwrap();
+        let validated = validate_evidence_inputs_v1(shape, &[], &[]).unwrap();
+        let output = tiled_gemm_evidence_oracle_v1(validated);
         assert_eq!(output.len(), shape.c_elements());
         assert!(output.iter().all(|value| value.to_bits() == 0));
     }
 }
 
 #[test]
-fn extreme_empty_output_ignores_operand_storage() {
+fn general_arithmetic_empty_output_ignores_operand_storage() {
     for shape in [
         ShapeV1::checked(0, u32::MAX, u32::MAX).unwrap(),
         ShapeV1::checked(u32::MAX, 0, u32::MAX).unwrap(),
@@ -119,7 +263,7 @@ fn extreme_empty_output_ignores_operand_storage() {
         let sentinel_a = [Bf16::ONE];
         let sentinel_b = [Bf16::NEG_ZERO];
         assert!(
-            tiled_gemm_oracle_v1(shape, &sentinel_a, &sentinel_b)
+            tiled_gemm_arithmetic_oracle_v1(shape, &sentinel_a, &sentinel_b)
                 .unwrap()
                 .is_empty()
         );
@@ -127,7 +271,7 @@ fn extreme_empty_output_ignores_operand_storage() {
 }
 
 #[test]
-fn fp32_golden_vectors_pin_rounding_order_and_cancellation() {
+fn general_arithmetic_vectors_pin_rounding_order_and_cancellation() {
     let shape = ShapeV1::checked(1, 1, 3).unwrap();
     let one = Bf16::ONE;
     let positive_2_pow_24 = Bf16::from_bits(0x4b80);
@@ -137,7 +281,7 @@ fn fp32_golden_vectors_pin_rounding_order_and_cancellation() {
     // roundTiesToEven loses the unit before cancellation:
     // ((+0 + 2^24) + 1) + -2^24 = +0.
     let rounded_then_cancelled = [positive_2_pow_24, one, negative_2_pow_24];
-    let first = tiled_gemm_oracle_v1(shape, &a, &rounded_then_cancelled).unwrap();
+    let first = tiled_gemm_arithmetic_oracle_v1(shape, &a, &rounded_then_cancelled).unwrap();
     assert_eq!(
         first
             .iter()
@@ -149,7 +293,7 @@ fn fp32_golden_vectors_pin_rounding_order_and_cancellation() {
     // Changing only recurrence order cancels first and preserves the unit:
     // ((+0 + 2^24) + -2^24) + 1 = 1.
     let cancelled_then_added = [positive_2_pow_24, negative_2_pow_24, one];
-    let second = tiled_gemm_oracle_v1(shape, &a, &cancelled_then_added).unwrap();
+    let second = tiled_gemm_arithmetic_oracle_v1(shape, &a, &cancelled_then_added).unwrap();
     assert_eq!(
         second
             .iter()
@@ -160,7 +304,7 @@ fn fp32_golden_vectors_pin_rounding_order_and_cancellation() {
 }
 
 #[test]
-fn fp32_golden_vectors_pin_signed_zero_accumulation() {
+fn general_arithmetic_vectors_pin_signed_zero_accumulation() {
     let shape = ShapeV1::checked(1, 1, 1).unwrap();
     let negative_one = Bf16::from_bits(0xbf80);
 
@@ -170,25 +314,25 @@ fn fp32_golden_vectors_pin_signed_zero_accumulation() {
         ([Bf16::ZERO], [negative_one]),
         ([Bf16::NEG_ZERO], [Bf16::ONE]),
     ] {
-        let output = tiled_gemm_oracle_v1(shape, &a, &b).unwrap();
+        let output = tiled_gemm_arithmetic_oracle_v1(shape, &a, &b).unwrap();
         assert_eq!(output[0].to_bits(), 0x0000_0000);
     }
 }
 
 #[test]
-fn oracle_rejects_every_one_element_length_substitution() {
+fn arithmetic_oracle_rejects_every_one_element_length_substitution() {
     let shape = ShapeV1::checked(2, 3, 4).unwrap();
     let inputs = generate_inputs_v1(shape, 7);
     assert_eq!(
-        tiled_gemm_oracle_v1(shape, &inputs.a[..inputs.a.len() - 1], &inputs.b),
-        Err(OracleErrorV1::WrongALength {
+        tiled_gemm_arithmetic_oracle_v1(shape, &inputs.a[..inputs.a.len() - 1], &inputs.b),
+        Err(ArithmeticOracleErrorV1::WrongALength {
             expected: 8,
             actual: 7
         })
     );
     assert_eq!(
-        tiled_gemm_oracle_v1(shape, &inputs.a, &inputs.b[..inputs.b.len() - 1]),
-        Err(OracleErrorV1::WrongBLength {
+        tiled_gemm_arithmetic_oracle_v1(shape, &inputs.a, &inputs.b[..inputs.b.len() - 1]),
+        Err(ArithmeticOracleErrorV1::WrongBLength {
             expected: 12,
             actual: 11
         })
@@ -197,8 +341,8 @@ fn oracle_rejects_every_one_element_length_substitution() {
     let mut longer_a = inputs.a.clone();
     longer_a.push(Bf16::ZERO);
     assert_eq!(
-        tiled_gemm_oracle_v1(shape, &longer_a, &inputs.b),
-        Err(OracleErrorV1::WrongALength {
+        tiled_gemm_arithmetic_oracle_v1(shape, &longer_a, &inputs.b),
+        Err(ArithmeticOracleErrorV1::WrongALength {
             expected: 8,
             actual: 9
         })
@@ -206,7 +350,7 @@ fn oracle_rejects_every_one_element_length_substitution() {
 }
 
 #[test]
-fn generated_oracle_is_reproducible_over_shape_and_seed_matrix() {
+fn validated_generated_evidence_is_reproducible_over_shape_and_seed_matrix() {
     for &(m, n, k) in &[
         (0, 16, 16),
         (16, 0, 16),
@@ -221,8 +365,12 @@ fn generated_oracle_is_reproducible_over_shape_and_seed_matrix() {
         for seed in 0..8 {
             let first_inputs = generate_inputs_v1(shape, seed);
             let second_inputs = generate_inputs_v1(shape, seed);
-            let first = tiled_gemm_oracle_v1(shape, &first_inputs.a, &first_inputs.b).unwrap();
-            let second = tiled_gemm_oracle_v1(shape, &second_inputs.a, &second_inputs.b).unwrap();
+            let first_validated =
+                validate_evidence_inputs_v1(shape, &first_inputs.a, &first_inputs.b).unwrap();
+            let second_validated =
+                validate_evidence_inputs_v1(shape, &second_inputs.a, &second_inputs.b).unwrap();
+            let first = tiled_gemm_evidence_oracle_v1(first_validated);
+            let second = tiled_gemm_evidence_oracle_v1(second_validated);
             assert_eq!(
                 first
                     .iter()

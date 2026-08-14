@@ -3,8 +3,11 @@
 
 //! Conservative host contract for the first gfx942 tiled BF16 GEMM slice.
 //!
-//! Host planning, deterministic inputs, and the scalar FP32 oracle are usable
-//! now. GPU compilation and dispatch remain pending frontend integration.
+//! Host planning, deterministic finite-corpus inputs, validated bitwise host
+//! evidence, and a general scalar FP32 recurrence are usable now. The exact
+//! primitive `DeviceMatrix` MFMA call lowers from genuine Rust frontend items
+//! to verified Kernel IR. Lane mapping, LDS movement, complete GEMM loops,
+//! output stores, production export, GPU execution, and proofs remain pending.
 
 pub mod contract;
 pub mod inputs;
@@ -17,4 +20,7 @@ pub use contract::{
     admit_target_v1, exact_target_v1, plan_v1,
 };
 pub use inputs::{BF16_INPUT_PATTERN_V1, GeneratedInputsV1, generate_inputs_v1};
-pub use oracle::{OracleErrorV1, tiled_gemm_oracle_v1};
+pub use oracle::{
+    ArithmeticOracleErrorV1, EvidenceInputErrorV1, EvidenceOperandV1, ValidatedEvidenceInputsV1,
+    tiled_gemm_arithmetic_oracle_v1, tiled_gemm_evidence_oracle_v1, validate_evidence_inputs_v1,
+};
