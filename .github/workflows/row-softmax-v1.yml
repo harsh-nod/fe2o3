@@ -27,7 +27,7 @@ jobs:
           rustup toolchain install 1.97.1-x86_64-unknown-linux-gnu
           --profile minimal --no-self-update
 
-      - name: Install exact pinned Verus artifact
+      - name: Install exact pinned Verus release closure
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -36,6 +36,8 @@ jobs:
           readonly release_url="https://github.com/verus-lang/verus/releases/download/release/0.2026.08.02.b677dd5/verus-0.2026.08.02.b677dd5-x86-linux.zip"
           readonly version_file="examples/row_softmax_v1/verus/VERUS_VERSION"
           readonly executable_sha256_file="examples/row_softmax_v1/verus/VERUS_SHA256"
+          readonly closure_manifest="examples/row_softmax_v1/verus/VERUS_CLOSURE_MANIFEST"
+          readonly closure_manifest_sha256="d28df3fb5e0d747637543933dfc38cff45576da9b920d755b4b7e919e47a6019"
           readonly archive="${RUNNER_TEMP}/verus-0.2026.08.02.b677dd5-x86-linux.zip"
           readonly install_dir="${RUNNER_TEMP}/pinned-verus"
 
@@ -50,6 +52,9 @@ jobs:
           readonly verus="${install_dir}/verus-x86-linux/verus"
           readonly expected_executable_sha256="$(<"${executable_sha256_file}")"
           [[ "$(sha256sum "${verus}" | awk '{print $1}')" == "${expected_executable_sha256}" ]]
+          [[ "$(sha256sum "${closure_manifest}" | awk '{print $1}')" == "${closure_manifest_sha256}" ]]
+          examples/row_softmax_v1/verify-verus-closure.sh \
+            "${install_dir}/verus-x86-linux" "${closure_manifest}"
           printf 'VERUS=%s\n' "${verus}" >> "${GITHUB_ENV}"
 
       - name: Verify proof and reject mutations

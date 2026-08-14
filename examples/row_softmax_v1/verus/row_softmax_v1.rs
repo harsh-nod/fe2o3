@@ -72,6 +72,23 @@ pub open spec fn stable_softmax_spec_v1(
         ==> output[index] * prefix_sum_v1(weights, row_elements_v1()) == weights[index]
 }
 
+/// Lane-specific correspondence projected directly from the mathematical
+/// stable-softmax specification. This proves no exponential law.
+pub proof fn stable_softmax_spec_preserves_lane_numerator_correspondence_v1(
+    input: Seq<real>,
+    maximum: real,
+    weights: Seq<real>,
+    output: Seq<real>,
+    lane: nat,
+)
+    requires
+        stable_softmax_spec_v1(input, maximum, weights, output),
+        lane < row_elements_v1(),
+    ensures output[lane as int] * prefix_sum_v1(weights, row_elements_v1())
+        == weights[lane as int],
+{
+}
+
 /// Finite sequential denominator-reduction state after `processed` weights.
 pub open spec fn denominator_state_v1(
     weights: Seq<real>,
@@ -83,10 +100,11 @@ pub open spec fn denominator_state_v1(
     &&& accumulator == prefix_sum_v1(weights, processed)
 }
 
-/// Exact finite normalization surrogate. Each positive integer weight is also
-/// the output numerator and all outputs share their total as denominator.
-/// This is not a refinement of real exponential or floating-point arithmetic.
-pub open spec fn finite_normalization_state_v1(
+/// Premises for a conditional exact-integer transport lemma. This predicate
+/// assumes, rather than computes or establishes, the denominator and every
+/// numerator correspondence. It is not normalization evidence and does not
+/// refine real exponential or floating-point arithmetic.
+pub open spec fn finite_numerator_premises_v1(
     weights: Seq<int>,
     output_numerators: Seq<int>,
     denominator: int,
@@ -172,7 +190,7 @@ pub proof fn separate_input_and_output_accesses_do_not_alias_v1(
     active_element_address_is_in_row_v1(output_base, writer);
 }
 
-pub proof fn distinct_output_writes_do_not_race_v1(base: int, left: nat, right: nat)
+pub proof fn distinct_output_element_addresses_v1(base: int, left: nat, right: nat)
     requires
         row_region_fits_u64_v1(base),
         left < row_elements_v1(),
@@ -184,7 +202,7 @@ pub proof fn distinct_output_writes_do_not_race_v1(base: int, left: nat, right: 
 {
 }
 
-pub proof fn distinct_scratch_writes_do_not_race_v1(base: int, left: nat, right: nat)
+pub proof fn distinct_scratch_element_addresses_v1(base: int, left: nat, right: nat)
     requires
         row_region_fits_u64_v1(base),
         left < row_elements_v1(),
@@ -239,7 +257,7 @@ pub proof fn positive_prefix_has_positive_sum_v1(weights: Seq<real>, end: nat)
     }
 }
 
-pub proof fn exp_contract_gives_positive_denominator_v1(
+pub proof fn positive_weight_premises_give_positive_denominator_v1(
     input: Seq<real>,
     maximum: real,
     weights: Seq<real>,
@@ -250,7 +268,9 @@ pub proof fn exp_contract_gives_positive_denominator_v1(
     positive_prefix_has_positive_sum_v1(weights, row_elements_v1());
 }
 
-proof fn equal_finite_prefixes_v1(
+/// Conditional bridge from pointwise assumed numerator equality to prefix-sum
+/// equality. It does not construct either sequence.
+proof fn pointwise_numerator_premise_transports_prefix_sum_v1(
     weights: Seq<int>,
     output_numerators: Seq<int>,
     end: nat,
@@ -265,35 +285,62 @@ proof fn equal_finite_prefixes_v1(
     decreases end,
 {
     if end > 0 {
-        equal_finite_prefixes_v1(weights, output_numerators, (end - 1) as nat);
+        pointwise_numerator_premise_transports_prefix_sum_v1(
+            weights,
+            output_numerators,
+            (end - 1) as nat,
+        );
         let output_element = output_numerators[(end - 1) as int];
         let weight_element = weights[(end - 1) as int];
         assert(output_element == weight_element);
     }
 }
 
-pub proof fn finite_normalization_output_numerator_is_positive_v1(
+/// Conditionally transports the assumed positive weight at one lane to its
+/// assumed-equal numerator.
+pub proof fn finite_numerator_premises_give_positive_lane_v1(
     weights: Seq<int>,
     output_numerators: Seq<int>,
     denominator: int,
     lane: nat,
 )
     requires
-        finite_normalization_state_v1(weights, output_numerators, denominator),
+        finite_numerator_premises_v1(weights, output_numerators, denominator),
         lane < row_elements_v1(),
     ensures output_numerators[lane as int] > 0,
 {
 }
 
-pub proof fn finite_normalization_numerators_sum_to_denominator_v1(
+/// Conditionally transports the pointwise and denominator premises to equality
+/// of the numerator sum and denominator. It is not computed normalization.
+pub proof fn finite_numerator_premises_transport_sum_to_denominator_v1(
     weights: Seq<int>,
     output_numerators: Seq<int>,
     denominator: int,
 )
-    requires finite_normalization_state_v1(weights, output_numerators, denominator),
+    requires finite_numerator_premises_v1(weights, output_numerators, denominator),
     ensures finite_prefix_sum_v1(output_numerators, row_elements_v1()) == denominator,
 {
-    equal_finite_prefixes_v1(weights, output_numerators, row_elements_v1());
+    pointwise_numerator_premise_transports_prefix_sum_v1(
+        weights,
+        output_numerators,
+        row_elements_v1(),
+    );
+}
+
+/// Positivity of the denominator follows conditionally from the positivity
+/// premise already embedded in `stable_softmax_spec_v1`; no exponential law is
+/// introduced by this theorem.
+pub proof fn stable_softmax_spec_premises_give_positive_denominator_v1(
+    input: Seq<real>,
+    maximum: real,
+    weights: Seq<real>,
+    output: Seq<real>,
+)
+    requires stable_softmax_spec_v1(input, maximum, weights, output),
+    ensures prefix_sum_v1(weights, row_elements_v1()) > 0real,
+{
+    positive_weight_premises_give_positive_denominator_v1(input, maximum, weights);
 }
 
 } // verus!

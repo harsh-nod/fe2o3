@@ -16,9 +16,12 @@ compiler/runtime slice.
    `sum(output) == 1` from it.
 2. **Finite algorithm state.**
    The Verus `denominator_state_v1` predicate models the fixed 64-step
-   sequential reduction and proves one-step invariant preservation. A separate
-   exact integer surrogate proves that positive output numerators equal the
-   weights and sum to their common denominator. The Rust
+   sequential reduction and proves one-step invariant preservation. The
+   separate `finite_numerator_premises_v1` predicate explicitly assumes
+   positive integer weights, pointwise-equal output numerators, and a denominator
+   equal to the weight sum. Its conditional lemmas only transport those premises
+   to lane positivity and equality of the numerator sum and denominator; they do
+   not compute or establish normalization. The Rust
    `FiniteAlgorithmStateV1` records the maximum, 64 weights, and denominator
    produced by the executable host reference. Neither finite model is claimed
    to refine `f32`.
@@ -37,39 +40,49 @@ compiler/runtime slice.
 - all active identity-mapped input, scratch, and output indices are in `0..64`;
 - distinct lanes own distinct scratch and output elements;
 - every active four-byte access lies inside a checked 256-byte row region;
-- separate input/output regions cannot alias for any reader/writer pair;
-- distinct output writes and distinct scratch writes do not race;
+- addresses selected in separate input/output regions are unequal;
+- distinct lanes select distinct output and scratch element addresses;
+- `stable_softmax_spec_v1` directly supplies each lane's matching numerator
+  equation, so substituting lane zero's numerator is rejected;
 - the maximum shift is nonpositive under the maximum contract;
 - the finite denominator recurrence preserves its prefix-sum invariant;
-- positive abstract real weights give a positive real denominator; and
-- in the exact finite integer surrogate, output numerators are positive and
-  sum to their shared denominator.
+- the positive-weight premise embedded in the real specification conditionally
+  gives a positive denominator; and
+- the explicit integer premises conditionally transport pointwise numerator
+  equality to equality of the numerator sum and assumed denominator.
 
-The race result is phase-conditional: each lane writes its private scratch slot,
-a synchronization boundary makes all 64 scratch writes visible, reduction reads
-occur after that boundary, and output writes use the proved injective ownership
-map. This proof does not model a concrete barrier instruction, wave execution,
-memory ordering, or machine scheduling.
+These are address-set facts only. The proof does not model memory operations,
+their temporal ordering, barriers, wave execution, memory visibility, or machine
+scheduling, so it establishes no source- or machine-level data-race result.
 
 Three negative mutations must be rejected: `lane + 1` indexing, a duplicate
-lane-63/lane-0 output owner, and reading lane zero's weight for every output.
+lane-63/lane-0 output owner, and an actual stable-softmax specification mutation
+that substitutes lane zero's numerator for every output lane.
 
 ## Authentication boundary
 
-`run-verus.sh` fails closed unless both the Verus version and executable bytes
-match:
+`run-verus.sh` fails closed unless the Verus version and complete extracted
+release closure match. The closure manifest binds all 190 regular files by
+relative path, mode, length, and SHA-256, including `verus`, `rust_verify`, `z3`,
+compiled support artifacts, and the complete 130-file `vstd` source subtree.
+The launcher identity remains:
 
 ```text
 Version: 0.2026.08.02.b677dd5
 SHA-256: ad2669f579d898ede53f2bf84e80a1daf4e3578739b0f5807ef209a0c9f382dd
 ```
 
-Ordinary Rust tests additionally pin the proof source digest and check that no
-`admit`, `assume`, or external-body shortcut appears. These checks authenticate
-the named source and local Verus executable only. They do **not** bind the proof
-to generated LLVM IR, ISA, HSACO, loading, launch, or observed GPU execution.
-The positive proof pin is 9,409 bytes with SHA-256
-`ec87f15d04a3ecb79e974b65923e24eb957a9e5d22714463c916cac6b738d7e0`;
+The source checker removes all whitespace before conservatively rejecting any
+`admit`, `assume`, or external-body construct; a regression fixture contains
+`assume ( false )`. Ordinary Rust tests pin every proof source and exercise both
+that rejection and replacement of `rust_verify`. These checks authenticate the
+named source and extracted Verus release closure. Proof execution clears the
+ambient environment and fixes `VERUS_Z3_PATH` to the authenticated sibling. The
+checks do **not** authenticate the host OS, shell utilities, dynamic libraries,
+or rustup toolchain, and they do **not** bind the proof to generated LLVM IR,
+ISA, HSACO, loading, launch, or observed GPU execution. The positive proof pin
+is 11,143 bytes with SHA-256
+`61f1453d267a8e9183334dfe1ca37bcd69c92df4b55d56606907627c5691a9f9`;
 all three negative sources are pinned independently as well.
 
 ## Commands
@@ -94,7 +107,8 @@ VERUS=/absolute/path/to/pinned/verus examples/row_softmax_v1/run-verus.sh
   bounds and exceptional-value policy;
 - refine finite `f32` max, exp, sum, and divide operations to an error-aware
   specification, including the exact parallel reduction order;
-- prove synchronization, memory-order, and race freedom for a concrete kernel;
+- model concrete memory operations, barriers, memory order, and conflicting
+  accesses before making any data-race claim;
 - bind the Rust kernel body through MIR/LLVM/AMDGPU lowering to emitted HSACO;
 - authenticate descriptor/finalizer/runtime admission and hardware results; and
 - add masking, all-masked rows, variable row widths, batches, and striding.

@@ -7,7 +7,7 @@
 //! finalizer, and runtime crates. It supplies a finite executable reference
 //! model for one unmasked row of 64 finite `f32` values and a separate output
 //! allocation. The accompanying Verus source proves a mathematical model's
-//! index, ownership, phase, and normalization invariants. It does not prove
+//! index, address-disjointness, and conditional arithmetic invariants. It does not prove
 //! IEEE-754 arithmetic, an exponential implementation, compiler refinement,
 //! or any property of an HSACO artifact.
 
@@ -53,7 +53,7 @@ pub struct LaneAccessV1 {
     pub lane: usize,
     /// Input element read by this lane.
     pub input_index: usize,
-    /// Private scratch element written by this lane before the phase boundary.
+    /// Private scratch element assigned to this lane in the address model.
     pub scratch_index: usize,
     /// Output element written by this lane after reduction.
     pub output_index: usize,
