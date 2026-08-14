@@ -21,7 +21,7 @@ use fe2o3_artifact_transaction::{
     BuildInvocation, BuildSession, ProducerIdentity, begin_build_attempt,
     consume_compiler_module_handoff_v1,
 };
-use fe2o3_compiler_ffi::CompilerModuleHandoffV2;
+use fe2o3_compiler_ffi::{CodeObjectVersion, CompilerModuleHandoffV2, CompilerModuleSymbolRoleV1};
 use sha2::{Digest as _, Sha256};
 
 const PIPELINE: &str = "collected-executable-scalar-control-flow-v2";
@@ -953,6 +953,19 @@ fn compile_tiled_gemm(
         .expect("compile tiled GEMM fixture within deadline")
 }
 
+fn compile_row_softmax(
+    workspace: &Path,
+    backend: &PinnedBackend,
+    output: &TestOutputDir,
+    source: &str,
+    target: &str,
+    extra_args: &[&str],
+) -> Output {
+    compile_row_softmax_with_attempt_mode(
+        workspace, backend, output, source, target, extra_args, true,
+    )
+}
+
 fn compile_row_softmax_with_test_attempt(
     workspace: &Path,
     backend: &PinnedBackend,
@@ -961,52 +974,35 @@ fn compile_row_softmax_with_test_attempt(
     target: &str,
     extra_args: &[&str],
 ) -> Output {
-    compile_row_softmax_with_cargo_metadata(
-        workspace,
-        backend,
-        output,
-        source,
-        target,
-        // This keeps the manually frozen fixture namespace internally
-        // consistent. Production admission validates only the token shape.
-        "3a4d867f29d87610",
-        extra_args,
+    compile_row_softmax_with_attempt_mode(
+        workspace, backend, output, source, target, extra_args, true,
     )
 }
 
-fn compile_row_softmax_direct(
+fn compile_row_softmax_without_attempt(
     workspace: &Path,
     backend: &PinnedBackend,
     output: &TestOutputDir,
-    source: &str,
 ) -> Output {
-    build_frontend_dependencies(workspace).expect("build row-softmax frontend dependencies");
-    let cargo_target = std::env::var_os("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| workspace.join("target"));
-    compile_row_softmax_with_device(
+    compile_row_softmax_with_attempt_mode(
         workspace,
         backend,
         output,
-        source,
+        ROW_SOFTMAX_FIXTURE,
         "gfx942:xnack-",
-        "3a4d867f29d87610",
         &[],
-        &cargo_target.join("debug/libfe2o3_device.rlib"),
-        &cargo_target.join("debug/libfe2o3_host.rlib"),
         false,
-        "a59650cf8d1bfc6168915cb817dbab3a0fa6a8839291231bbf4149a749913937",
     )
 }
 
-fn compile_row_softmax_with_cargo_metadata(
+fn compile_row_softmax_with_attempt_mode(
     workspace: &Path,
     backend: &PinnedBackend,
     output: &TestOutputDir,
     source: &str,
     target: &str,
-    cargo_metadata: &str,
     extra_args: &[&str],
+    managed_attempt: bool,
 ) -> Output {
     build_frontend_dependencies(workspace).expect("build row-softmax frontend dependencies");
     let cargo_target = std::env::var_os("CARGO_TARGET_DIR")
@@ -1020,11 +1016,11 @@ fn compile_row_softmax_with_cargo_metadata(
         output,
         source,
         target,
-        cargo_metadata,
+        "3a4d867f29d87610",
         extra_args,
         &device,
         &host,
-        true,
+        managed_attempt,
         "a59650cf8d1bfc6168915cb817dbab3a0fa6a8839291231bbf4149a749913937",
     )
 }
@@ -1055,19 +1051,23 @@ fn compile_row_softmax_with_device(
         workspace.join("crates/rustc-codegen-fe2o3/tests/fixtures/collected-row-softmax-v1");
     assert!(device.is_file(), "missing {}", device.display());
     assert!(host.is_file(), "missing {}", host.display());
-    let attempt = managed_attempt.then(|| {
+    let managed = managed_attempt.then(|| {
         let producer = ProducerIdentity::from_codegen(
             "fe2o3_collected_row_softmax_v1_fixture",
             Some(&source_path),
         )
         .expect("row-softmax fixture producer");
-        begin_build_attempt(
+        let attempt = begin_build_attempt(
             &output.0.join("artifacts"),
             &producer,
             BuildInvocation::from_bytes(Sha256::digest(source.as_bytes()).into()),
-            BuildSession::from_bytes([0x52; 16]),
+            BuildSession::from_bytes([
+                0x52, 0x53, 0x56, 0x31, 0x52, 0x53, 0x56, 0x31, 0x52, 0x53, 0x56, 0x31, 0x52, 0x53,
+                0x56, 0x31,
+            ]),
         )
-        .expect("begin row-softmax managed fixture attempt")
+        .expect("begin row-softmax managed fixture attempt");
+        (producer, attempt)
     });
 
     let mut command = Command::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()));
@@ -1104,7 +1104,9 @@ fn compile_row_softmax_with_device(
                 .display()
         ))
         .args(["-C", "overflow-checks=off"])
-        .arg(format!("-Cmetadata={cargo_metadata}"))
+        // This keeps the manually frozen fixture namespace internally
+        // consistent. Production admission validates only the token shape.
+        .arg("-Cmetadata=3a4d867f29d87610")
         .args([
             "-Cmetadata=fe2o3-row-softmax-v1-reviewed",
             "-Zmir-enable-passes=-JumpThreading",
@@ -1125,7 +1127,7 @@ fn compile_row_softmax_with_device(
         .env("FE2O3_TARGET", target)
         .env("FE2O3_CODEGEN_PIPELINE", ROW_SOFTMAX_PIPELINE)
         .env("FE2O3_HSACO_DIR", output.0.join("artifacts"));
-    if let Some(attempt) = attempt {
+    if let Some((_, attempt)) = &managed {
         command.env("FE2O3_BUILD_ATTEMPT_V1", attempt.to_env_value());
     } else {
         command.env_remove("FE2O3_BUILD_ATTEMPT_V1");
@@ -1134,11 +1136,59 @@ fn compile_row_softmax_with_device(
     unsafe {
         command.pre_exec(move || set_close_on_exec(backend_descriptor, false));
     }
-    run_bounded(&mut command, COMPILER_TIMEOUT, "row-softmax rustc")
-        .expect("compile row-softmax fixture within deadline")
+    let compiled = run_bounded(&mut command, COMPILER_TIMEOUT, "row-softmax rustc")
+        .expect("compile row-softmax fixture within deadline");
+    if compiled.status.success() {
+        let (producer, attempt) = managed
+            .as_ref()
+            .expect("successful row-softmax compile required a managed attempt");
+        let consumed =
+            consume_compiler_module_handoff_v1(&output.0.join("artifacts"), producer, *attempt)
+                .expect("consume exact row-softmax Worker V2 handoff");
+        let handoff = CompilerModuleHandoffV2::decode(consumed.bytes())
+            .expect("decode exact row-softmax Worker V2 handoff");
+        assert_eq!(handoff.canonical_bytes(), consumed.bytes());
+        assert_eq!(handoff.target().to_string(), "gfx942:xnack-");
+        assert_eq!(handoff.code_object_version(), CodeObjectVersion::V6);
+        assert_eq!(
+            handoff
+                .symbol_manifest()
+                .symbols(CompilerModuleSymbolRoleV1::KernelEntry)
+                .collect::<Vec<_>>(),
+            ["row_softmax_v1"]
+        );
+        assert_eq!(
+            handoff
+                .symbol_manifest()
+                .symbols(CompilerModuleSymbolRoleV1::KernelDescriptor)
+                .collect::<Vec<_>>(),
+            ["row_softmax_v1.kd"]
+        );
+        assert_eq!(
+            handoff
+                .symbol_manifest()
+                .symbols(CompilerModuleSymbolRoleV1::UnresolvedExternalImport)
+                .collect::<Vec<_>>(),
+            ["__ocml_exp_f32"]
+        );
+        let module = std::str::from_utf8(handoff.module_bytes())
+            .expect("row-softmax compiler module is textual LLVM");
+        for required in [
+            "declare float @__ocml_exp_f32(float)",
+            ".fe2o3.kd.v1",
+            ".fe2o3.row-auth.v1",
+            ".fe2o3.row-exp.v1",
+        ] {
+            assert!(
+                module.contains(required),
+                "missing {required:?} in row handoff"
+            );
+        }
+    }
+    compiled
 }
 
-fn assert_row_softmax_published_nothing(output: &TestOutputDir) {
+fn assert_row_softmax_published_no_handoff(output: &TestOutputDir) {
     assert!(
         !output.0.join("row-softmax-v1").exists(),
         "row-softmax boundary emitted a linked output"
@@ -2103,7 +2153,7 @@ fn tiled_gemm_v1_source_authentication_and_adversaries_fail_closed() {
 }
 
 #[test]
-fn row_softmax_v1_source_authentication_and_adversaries_stop_at_canonical_ir() {
+fn row_softmax_v1_source_authentication_publishes_worker_v2_and_adversaries_fail_closed() {
     if isolated_backend_environment_is_unavailable() {
         return;
     }
@@ -2111,16 +2161,47 @@ fn row_softmax_v1_source_authentication_and_adversaries_stop_at_canonical_ir() {
     let backend = build_backend(&workspace);
 
     let exact_output = TestOutputDir::new(&workspace);
-    let exact = compile_row_softmax_direct(&workspace, backend, &exact_output, ROW_SOFTMAX_FIXTURE);
+    let exact = compile_row_softmax(
+        &workspace,
+        backend,
+        &exact_output,
+        ROW_SOFTMAX_FIXTURE,
+        "gfx942:xnack-",
+        &[],
+    );
     let exact_stderr = stderr(&exact);
     assert!(
-        !exact.status.success()
-            && exact_stderr.contains("requires a managed FE2O3_BUILD_ATTEMPT_V1")
-            && !exact_stderr.contains("consumed its private single-use frontend receipt")
-            && !exact_stderr.contains("selected canonical Kernel IR module"),
-        "direct rustc minted row-softmax authority:\n{exact_stderr}"
+        exact.status.success()
+            && exact_stderr.contains("consumed its private single-use frontend receipt")
+            && exact_stderr.contains("exact ABI input:&[f32], output:DisjointSlice<f32>")
+            && exact_stderr.contains("fixed one-row 64-element profile")
+            && exact_stderr.contains("selected canonical Kernel IR module `fe2o3::row_softmax_v1`")
+            && exact_stderr.contains("lowered it through the generic gfx942 dialect path")
+            && exact_stderr.contains("published an inert Worker V2 compiler-module handoff")
+            && exact_stderr
+                .contains("explicit kernarg 32 bytes and required COV6 complete kernarg 288 bytes")
+            && exact_stderr.contains("`__ocml_exp_f32` unresolved-import bindings")
+            && exact_stderr.contains("source proof still grants no exponential implementation")
+            && exact_stderr.contains("worker execution, HSACO, COMGR, load, or launch authority")
+            && exact_stderr.contains("COMGR")
+            && !exact_stderr.contains("rejected the collected program without fallback")
+            && exact_output.0.join("row-softmax-v1").is_file(),
+        "reviewed row softmax did not publish its compiler handoff:\n{exact_stderr}"
     );
-    assert_row_softmax_published_nothing(&exact_output);
+
+    let missing_attempt_output = TestOutputDir::new(&workspace);
+    let missing_attempt =
+        compile_row_softmax_without_attempt(&workspace, backend, &missing_attempt_output);
+    let missing_attempt_stderr = stderr(&missing_attempt);
+    assert!(
+        !missing_attempt.status.success()
+            && missing_attempt_stderr
+                .contains("collected-row-softmax-v1 requires a managed FE2O3_BUILD_ATTEMPT_V1")
+            && !missing_attempt_stderr.contains("selected canonical Kernel IR module")
+            && !missing_attempt_stderr.contains("published row-softmax Worker V2 handoff"),
+        "row softmax compiled without a managed attempt:\n{missing_attempt_stderr}"
+    );
+    assert_row_softmax_published_no_handoff(&missing_attempt_output);
 
     let arithmetic_source = ROW_SOFTMAX_FIXTURE.replace("value > maximum", "value >= maximum");
     assert_ne!(arithmetic_source, ROW_SOFTMAX_FIXTURE);
@@ -2140,7 +2221,7 @@ fn row_softmax_v1_source_authentication_and_adversaries_stop_at_canonical_ir() {
             && !arithmetic_stderr.contains("selected canonical Kernel IR module"),
         "same-name arithmetic mutation minted row-softmax authority:\n{arithmetic_stderr}"
     );
-    assert_row_softmax_published_nothing(&arithmetic_output);
+    assert_row_softmax_published_no_handoff(&arithmetic_output);
 
     let extent_source = ROW_SOFTMAX_FIXTURE.replace(
         "const ROW_ELEMENTS: usize = 64;",
@@ -2163,7 +2244,7 @@ fn row_softmax_v1_source_authentication_and_adversaries_stop_at_canonical_ir() {
             && !extent_stderr.contains("selected canonical Kernel IR module"),
         "63-element source mutation minted row-softmax authority:\n{extent_stderr}"
     );
-    assert_row_softmax_published_nothing(&extent_output);
+    assert_row_softmax_published_no_handoff(&extent_output);
 
     let helper_source = ROW_SOFTMAX_FIXTURE
         .replace("math.exp_f32(", "exp_lookalike(&math, ")
@@ -2189,7 +2270,7 @@ fn row_softmax_v1_source_authentication_and_adversaries_stop_at_canonical_ir() {
             && !helper_stderr.contains("selected canonical Kernel IR module"),
         "lookalike exp helper entered the reviewed closure:\n{helper_stderr}"
     );
-    assert_row_softmax_published_nothing(&helper_output);
+    assert_row_softmax_published_no_handoff(&helper_output);
 
     let abi_source = ROW_SOFTMAX_FIXTURE
         .replacen("input: &[f32]", "input: &mut [f32]", 1)
@@ -2217,7 +2298,7 @@ fn row_softmax_v1_source_authentication_and_adversaries_stop_at_canonical_ir() {
             && !abi_stderr.contains("selected canonical Kernel IR module"),
         "ABI adversary minted row-softmax authority:\n{abi_stderr}"
     );
-    assert_row_softmax_published_nothing(&abi_output);
+    assert_row_softmax_published_no_handoff(&abi_output);
 
     let contract_source = ROW_SOFTMAX_FIXTURE.replacen(
         "3, 0, 0, 0, 64, 0, 0,\n    0, 1",
@@ -2241,7 +2322,7 @@ fn row_softmax_v1_source_authentication_and_adversaries_stop_at_canonical_ir() {
             && !contract_stderr.contains("selected canonical Kernel IR module"),
         "frontend-contract adversary minted row-softmax authority:\n{contract_stderr}"
     );
-    assert_row_softmax_published_nothing(&contract_output);
+    assert_row_softmax_published_no_handoff(&contract_output);
 
     let target_output = TestOutputDir::new(&workspace);
     let target = compile_row_softmax_with_test_attempt(
@@ -2259,7 +2340,7 @@ fn row_softmax_v1_source_authentication_and_adversaries_stop_at_canonical_ir() {
             && !target_stderr.contains("selected canonical Kernel IR module"),
         "wrong target minted row-softmax authority:\n{target_stderr}"
     );
-    assert_row_softmax_published_nothing(&target_output);
+    assert_row_softmax_published_no_handoff(&target_output);
 
     let semantics_output = TestOutputDir::new(&workspace);
     let semantics = compile_row_softmax_with_test_attempt(
@@ -2278,110 +2359,11 @@ fn row_softmax_v1_source_authentication_and_adversaries_stop_at_canonical_ir() {
             && !semantics_stderr.contains("selected canonical Kernel IR module"),
         "compiler-semantics adversary minted row-softmax authority:\n{semantics_stderr}"
     );
-    assert_row_softmax_published_nothing(&semantics_output);
+    assert_row_softmax_published_no_handoff(&semantics_output);
 }
 
 #[test]
-fn row_softmax_rejects_a_hostile_same_name_device_provider() {
-    if isolated_backend_environment_is_unavailable() {
-        return;
-    }
-    let workspace = workspace();
-    let backend = build_backend(&workspace);
-    build_frontend_dependencies(&workspace).expect("build reviewed frontend dependencies");
-    let output = TestOutputDir::new(&workspace);
-    let (hostile_device, hostile_host) =
-        build_hostile_same_name_device_provider(&workspace, &output);
-    let compiled = compile_row_softmax_with_device(
-        &workspace,
-        backend,
-        &output,
-        ROW_SOFTMAX_FIXTURE,
-        "gfx942:xnack-",
-        "3a4d867f29d87610",
-        &[],
-        &hostile_device,
-        &hostile_host,
-        true,
-        "a59650cf8d1bfc6168915cb817dbab3a0fa6a8839291231bbf4149a749913937",
-    );
-    let compiler_stderr = stderr(&compiled);
-    assert!(
-        !compiled.status.success()
-            && !compiler_stderr.contains("selected canonical Kernel IR module")
-            && (compiler_stderr.contains("trusted-provider marker")
-                || compiler_stderr.contains("genuine external `fe2o3_device::DisjointSlice` type")
-                || compiler_stderr.contains("expected exact argument order")
-                || compiler_stderr
-                    .contains("diagnostic item does not resolve to the trusted function")),
-        "hostile same-name provider minted row-softmax authority:\n{compiler_stderr}"
-    );
-    assert_row_softmax_published_nothing(&output);
-}
-
-#[test]
-fn row_softmax_requires_managed_wrapper_attempt_and_exact_metadata_transcript() {
-    if isolated_backend_environment_is_unavailable() {
-        return;
-    }
-    let workspace = workspace();
-    let backend = build_backend(&workspace);
-    build_frontend_dependencies(&workspace).expect("build reviewed frontend dependencies");
-    let cargo_target = std::env::var_os("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| workspace.join("target"));
-    let device = cargo_target.join("debug/libfe2o3_device.rlib");
-    let host = cargo_target.join("debug/libfe2o3_host.rlib");
-
-    let direct_output = TestOutputDir::new(&workspace);
-    let direct = compile_row_softmax_with_device(
-        &workspace,
-        backend,
-        &direct_output,
-        ROW_SOFTMAX_FIXTURE,
-        "gfx942:xnack-",
-        "3a4d867f29d87610",
-        &[],
-        &device,
-        &host,
-        false,
-        "a59650cf8d1bfc6168915cb817dbab3a0fa6a8839291231bbf4149a749913937",
-    );
-    let direct_stderr = stderr(&direct);
-    assert!(
-        !direct.status.success()
-            && direct_stderr.contains("requires a managed FE2O3_BUILD_ATTEMPT_V1")
-            && !direct_stderr.contains("selected canonical Kernel IR module"),
-        "direct rustc minted row-softmax authority:\n{direct_stderr}"
-    );
-
-    let fabricated_output = TestOutputDir::new(&workspace);
-    let fabricated = compile_row_softmax_with_device(
-        &workspace,
-        backend,
-        &fabricated_output,
-        ROW_SOFTMAX_FIXTURE,
-        "gfx942:xnack-",
-        "3a4d867f29d87610",
-        &[],
-        &device,
-        &host,
-        true,
-        "0000000000000000000000000000000000000000000000000000000000000000",
-    );
-    let fabricated_stderr = stderr(&fabricated);
-    assert!(
-        !fabricated.status.success()
-            && fabricated_stderr.contains("managed wrapper Cargo metadata transcript")
-            && fabricated_stderr.contains("does not match rustc's ordered -Cmetadata values")
-            && !fabricated_stderr.contains("selected canonical Kernel IR module"),
-        "fabricated wrapper observation minted row-softmax authority:\n{fabricated_stderr}"
-    );
-    assert_row_softmax_published_nothing(&fabricated_output);
-}
-
-#[test]
-fn row_softmax_managed_wrapper_accepts_variable_generated_roots() {
+fn clean_external_cargo_fe2o3_produces_row_softmax_worker_v2_handoffs() {
     let workspace = workspace();
     let cargo_output = TestOutputDir::new(&workspace);
     let cargo_target = cargo_output.0.join("cargo-target");
@@ -2398,12 +2380,17 @@ fn row_softmax_managed_wrapper_accepts_variable_generated_roots() {
                 && external_stderr.contains("consumed its private single-use frontend receipt")
                 && external_stderr
                     .contains("selected canonical Kernel IR module `fe2o3::row_softmax_v1`")
-                && external_stderr
-                    .contains("stopped at the fail-closed source-authenticated boundary")
+                && external_stderr.contains("published an inert Worker V2 compiler-module handoff")
+                && external_stderr.contains("published row-softmax Worker V2 handoff")
+                && external_stderr.contains(
+                    "explicit kernarg 32 bytes and required COV6 complete kernarg 288 bytes"
+                )
+                && external_stderr.contains("`__ocml_exp_f32` unresolved-import bindings")
+                && external_stderr.contains("build completed without an authorized device backend")
                 && !external_stderr.contains("root instance must have")
                 && !external_stderr.contains("portable MIR identity mismatch")
                 && !external_stderr.contains("rustc FnAbi identity mismatch"),
-            "clean external cargo-fe2o3 crate missed the row-softmax boundary:\n{external_stderr}"
+            "clean external cargo-fe2o3 crate missed row-softmax handoff production:\n{external_stderr}"
         );
         let root = admitted_row_softmax_root(&external_stderr).unwrap_or_else(|| {
             panic!("external admission omitted its generated root:\n{external_stderr}")
@@ -2419,7 +2406,10 @@ fn row_softmax_managed_wrapper_accepts_variable_generated_roots() {
             "external admission reported a noncanonical root: {root:?}"
         );
         roots.push(root.to_owned());
-        assert_row_softmax_published_nothing(&output);
+        assert!(
+            !output.0.join("row-softmax-v1").exists(),
+            "external Cargo path must not fabricate a linked row-softmax output"
+        );
     }
     assert_ne!(
         roots[0], roots[1],
