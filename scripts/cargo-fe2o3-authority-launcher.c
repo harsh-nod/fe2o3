@@ -957,6 +957,8 @@ static void authority_child(char **arguments, pid_t expected_parent,
     _exit(fail("cannot establish bounded child authority capabilities"));
   }
 
+  /* Linux may reset dumpability while installing the new image. A future
+   * post-exec cargo-fe2o3 integration must reassert that separate boundary. */
   (void)syscall(SYS_execveat, FE2O3_EXECUTABLE_FD, "", arguments,
                 environment, AT_EMPTY_PATH);
   _exit(fail("cannot execute retained cargo-fe2o3 object"));

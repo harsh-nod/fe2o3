@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 
 set -Eeuo pipefail
 umask 022
@@ -19,12 +19,27 @@ readonly EXECUTABLE="${EXECUTABLE_DIR}/cargo-fe2o3"
 readonly POLICY="${POLICY_DIR}/policy-v1"
 readonly PRELOAD="${PRELOAD_DIR}/ld.so.preload"
 readonly BASE_LAUNCHER="${LAUNCHER_DIR}/authority-launcher"
+readonly WATCHDOG_SECONDS=30
+readonly WATCHDOG_KILL_SECONDS=5
 CURRENT_UID="$(id -u)"
 readonly CURRENT_UID
 CURRENT_GID="$(id -g)"
 readonly CURRENT_GID
+BACKGROUND_WATCHDOGS=()
 
 cleanup() {
+  local process_id
+  for process_id in "${BACKGROUND_WATCHDOGS[@]}"; do
+    if kill -0 "${process_id}" 2>/dev/null; then
+      kill -TERM "${process_id}" 2>/dev/null || true
+      for _ in {1..100}; do
+        kill -0 "${process_id}" 2>/dev/null || break
+        sleep 0.01
+      done
+      kill -KILL "${process_id}" 2>/dev/null || true
+    fi
+    wait "${process_id}" 2>/dev/null || true
+  done
   chmod -R u+w -- "${TEST_ROOT}" 2>/dev/null || true
   rm -rf -- "${TEST_ROOT}"
 }
@@ -35,12 +50,28 @@ fail() {
   exit 1
 }
 
+# Without --foreground, GNU timeout owns a process group and escalates every
+# independently bounded adversarial command from TERM to KILL.
+run_watchdog() {
+  /usr/bin/timeout --signal=TERM \
+    --kill-after="${WATCHDOG_KILL_SECONDS}s" \
+    "${WATCHDOG_SECONDS}s" "$@"
+}
+
+start_watchdog() {
+  /usr/bin/timeout --signal=TERM \
+    --kill-after="${WATCHDOG_KILL_SECONDS}s" \
+    "${WATCHDOG_SECONDS}s" "$@" &
+  STARTED_WATCHDOG_PID=$!
+  BACKGROUND_WATCHDOGS+=("${STARTED_WATCHDOG_PID}")
+}
+
 expect_failure() {
   local name="$1"
   local expected="$2"
   shift 2
   local output
-  if output="$("$@" 2>&1)"; then
+  if output="$(run_watchdog "$@" 2>&1)"; then
     fail "expected ${name} to fail"
   fi
   if [[ "${output}" != *"${expected}"* ]]; then
@@ -95,7 +126,7 @@ compile_launcher() {
   local expected_uid="${9:-${CURRENT_UID}}"
   local expected_gid="${10:-${CURRENT_GID}}"
 
-  /usr/bin/cc \
+  run_watchdog /usr/bin/cc \
     -std=c11 -O2 -fPIE -static-pie \
     -Wall -Wextra -Werror -Wconversion -Wformat=2 -Wshadow \
     -Wstack-protector -fstack-protector-strong -D_FORTIFY_SOURCE=3 \
@@ -164,6 +195,7 @@ mkdir -m 0700 "${BUILD_DIR}"
 cat >"${FIXTURE_DIR}/cargo-fixture.c" <<'EOF'
 #define _GNU_SOURCE
 
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -172,6 +204,8 @@ cat >"${FIXTURE_DIR}/cargo-fixture.c" <<'EOF'
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/prctl.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -245,13 +279,89 @@ static bool valid_capabilities(void) {
   const int capability_flags = fcntl(CAPABILITY_FD, F_GETFD);
   int socket_type = 0;
   socklen_t socket_type_length = sizeof(socket_type);
+  errno = 0;
+  const bool executable_closed =
+      fcntl(242, F_GETFD) == -1 && errno == EBADF;
   return policy_status >= 0 && (policy_status & O_ACCMODE) == O_RDONLY &&
          policy_flags >= 0 && (policy_flags & FD_CLOEXEC) == 0 &&
          capability_flags >= 0 && (capability_flags & FD_CLOEXEC) == 0 &&
          getsockopt(CAPABILITY_FD, SOL_SOCKET, SO_TYPE, &socket_type,
                     &socket_type_length) == 0 &&
          socket_type_length == sizeof(socket_type) &&
-         socket_type == SOCK_SEQPACKET;
+         socket_type == SOCK_SEQPACKET && executable_closed;
+}
+
+static bool exact_descriptor_set(void) {
+  DIR *directory = opendir("/proc/self/fd");
+  if (directory == NULL) {
+    return false;
+  }
+  const int enumeration_fd = dirfd(directory);
+  bool standard[3] = {false, false, false};
+  bool policy = false;
+  bool capability = false;
+  bool enumeration = false;
+  size_t count = 0;
+  errno = 0;
+  for (;;) {
+    struct dirent *entry = readdir(directory);
+    if (entry == NULL) {
+      break;
+    }
+    if (strcmp(entry->d_name, ".") == 0 ||
+        strcmp(entry->d_name, "..") == 0) {
+      continue;
+    }
+    char *end = NULL;
+    errno = 0;
+    const long value = strtol(entry->d_name, &end, 10);
+    if (errno != 0 || end == entry->d_name || *end != '\0' || value < 0 ||
+        value > 1024) {
+      closedir(directory);
+      return false;
+    }
+    ++count;
+    if (value >= 0 && value <= 2) {
+      standard[value] = true;
+    } else if (value == POLICY_FD) {
+      policy = true;
+    } else if (value == CAPABILITY_FD) {
+      capability = true;
+    } else if (value == enumeration_fd) {
+      enumeration = true;
+    } else {
+      closedir(directory);
+      return false;
+    }
+  }
+  const bool read_succeeded = errno == 0;
+  const bool closed = closedir(directory) == 0;
+  return read_succeeded && closed && count == 6U && standard[0] &&
+         standard[1] && standard[2] && policy && capability && enumeration;
+}
+
+static bool normalized_process_state(void) {
+  static const int signals[] = {
+      SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGPIPE, SIGCHLD,
+  };
+  sigset_t mask;
+  struct rlimit core_limit;
+  if (sigprocmask(SIG_SETMASK, NULL, &mask) != 0 ||
+      getrlimit(RLIMIT_CORE, &core_limit) != 0 || core_limit.rlim_cur != 0 ||
+      core_limit.rlim_max != 0 ||
+      prctl(PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) != 1) {
+    return false;
+  }
+  for (size_t index = 0; index < sizeof(signals) / sizeof(signals[0]);
+       ++index) {
+    struct sigaction action;
+    if (sigismember(&mask, signals[index]) != 0 ||
+        sigaction(signals[index], NULL, &action) != 0 ||
+        action.sa_handler != SIG_DFL) {
+      return false;
+    }
+  }
+  return true;
 }
 
 static int append_pid(const char *path, pid_t process_id) {
@@ -334,8 +444,20 @@ static int create_descendants(const char *pid_file, bool retain_leader) {
 }
 
 int main(int argc, char **argv) {
-  if (argc < 2 || !clean_environment() || !valid_capabilities()) {
-    return fail("launcher environment or capability contract failed");
+  if (argc < 2) {
+    return fail("launcher argument contract failed");
+  }
+  if (!clean_environment()) {
+    return fail("launcher environment contract failed");
+  }
+  if (!valid_capabilities()) {
+    return fail("launcher capability contract failed");
+  }
+  if (!normalized_process_state()) {
+    return fail("launcher process-state contract failed");
+  }
+  if (!exact_descriptor_set()) {
+    return fail("launcher descriptor-set contract failed");
   }
   static const char executed[] = "fixture-executed";
   if (send(CAPABILITY_FD, executed, sizeof(executed), MSG_NOSIGNAL) !=
@@ -348,7 +470,8 @@ int main(int argc, char **argv) {
       return fail("probe arguments or policy descriptor are invalid");
     }
     (void)printf("version=%s\npolicy=%s\ntoken=%s\nenvironment=clean\n"
-                 "capabilities=fixed\n",
+                 "capabilities=fixed\nprocess-state=normalized\n"
+                 "descriptors=exact\nfd242=closed\n",
                  FIXTURE_VERSION, policy, argv[2]);
     return 0;
   }
@@ -362,32 +485,278 @@ int main(int argc, char **argv) {
 }
 EOF
 
-/usr/bin/cc \
+cat >"${FIXTURE_DIR}/process-state-shim.c" <<'EOF'
+#define _GNU_SOURCE
+
+#include <errno.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+static int fail(const char *message) {
+  (void)dprintf(STDERR_FILENO, "process state shim: %s\n", message);
+  return 4;
+}
+
+static int poison_state(void) {
+  sigset_t blocked;
+  if (signal(SIGCHLD, SIG_IGN) == SIG_ERR || sigemptyset(&blocked) != 0) {
+    return -1;
+  }
+  const int signals[] = {SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGCHLD};
+  for (size_t index = 0; index < sizeof(signals) / sizeof(signals[0]);
+       ++index) {
+    if (sigaddset(&blocked, signals[index]) != 0) {
+      return -1;
+    }
+  }
+  if (sigprocmask(SIG_BLOCK, &blocked, NULL) != 0) {
+    return -1;
+  }
+  int null_fd = open("/dev/null", O_RDWR | O_CLOEXEC);
+  if (null_fd < 0 || dup3(null_fd, 100, 0) < 0 || dup3(null_fd, 101, 0) < 0) {
+    return -1;
+  }
+  close(null_fd);
+  return 0;
+}
+
+static int close_standard_descriptors(void) {
+  for (int file_fd = STDIN_FILENO; file_fd <= STDERR_FILENO; ++file_fd) {
+    if (close(file_fd) != 0 && errno != EBADF) {
+      return -1;
+    }
+  }
+  return 0;
+}
+
+static int poison_environment(void) {
+  static const char *const variables[][2] = {
+      {"LD_PRELOAD", "/definitely/missing-preload.so"},
+      {"LD_AUDIT", "/definitely/missing-audit.so"},
+      {"RUSTUP_TOOLCHAIN", "malicious"},
+      {"RUSTC_WRAPPER", "/tmp/malicious-rustc-wrapper"},
+      {"CARGO_HOME", "/tmp/malicious-cargo-home"},
+      {"CARGO_TARGET_DIR", "/tmp/malicious-target"},
+      {"CARGO_NET_GIT_FETCH_WITH_CLI", "true"},
+      {"GIT_CONFIG_GLOBAL", "/tmp/malicious-gitconfig"},
+      {"GIT_SSH_COMMAND", "/tmp/malicious-ssh"},
+      {"SSH_ASKPASS", "/tmp/malicious-askpass"},
+      {"BROWSER", "/tmp/malicious-browser"},
+  };
+  for (size_t index = 0; index < sizeof(variables) / sizeof(variables[0]);
+       ++index) {
+    if (setenv(variables[index][0], variables[index][1], 1) != 0) {
+      return -1;
+    }
+  }
+  return 0;
+}
+
+static int install_invalid_stdout(void) {
+  int null_fd = open("/dev/null", O_RDONLY | O_CLOEXEC);
+  if (null_fd < 0 || dup2(null_fd, STDOUT_FILENO) < 0) {
+    return -1;
+  }
+  if (null_fd != STDOUT_FILENO) {
+    close(null_fd);
+  }
+  return 0;
+}
+
+int main(int argc, char **argv) {
+  if (argc < 4) {
+    return fail("expected MODE LAUNCHER ARGS...");
+  }
+  if (strcmp(argv[1], "poison") == 0) {
+    if (poison_state() != 0) {
+      return fail("cannot install inherited signal and descriptor state");
+    }
+  } else if (strcmp(argv[1], "closed-stdio") == 0) {
+    if (close_standard_descriptors() != 0) {
+      return fail("cannot close inherited standard descriptors");
+    }
+  } else if (strcmp(argv[1], "invalid-stdout") == 0) {
+    if (install_invalid_stdout() != 0) {
+      return fail("cannot install invalid standard output");
+    }
+  } else if (strcmp(argv[1], "environment") == 0) {
+    if (poison_environment() != 0) {
+      return fail("cannot install poisoned environment");
+    }
+  } else {
+    return fail("unknown shim mode");
+  }
+  execv(argv[2], &argv[2]);
+  return fail("cannot execute launcher");
+}
+EOF
+
+cat >"${FIXTURE_DIR}/mutate-elf.py" <<'PY'
+#!/usr/bin/python3
+
+import os
+from pathlib import Path
+import struct
+import sys
+
+source, destination, mutation = sys.argv[1:]
+image = bytearray(Path(source).read_bytes())
+if image[:6] != b"\x7fELF\x02\x01":
+    raise SystemExit("fixture is not little-endian ELF64")
+
+program_offset = struct.unpack_from("<Q", image, 32)[0]
+program_size = struct.unpack_from("<H", image, 54)[0]
+program_count = struct.unpack_from("<H", image, 56)[0]
+
+if mutation == "architecture":
+    struct.pack_into("<H", image, 18, 183)
+elif mutation in ("wx", "relro", "dynamic-tag", "now"):
+    dynamic = None
+    changed = False
+    for index in range(program_count):
+        offset = program_offset + index * program_size
+        program_type, flags = struct.unpack_from("<II", image, offset)
+        if mutation == "wx" and program_type == 1 and flags & 1:
+            struct.pack_into("<I", image, offset + 4, flags | 2)
+            changed = True
+            break
+        if mutation == "relro" and program_type == 0x6474E552:
+            struct.pack_into("<I", image, offset, 0)
+            changed = True
+            break
+        if program_type == 2:
+            dynamic = (
+                struct.unpack_from("<Q", image, offset + 8)[0],
+                struct.unpack_from("<Q", image, offset + 32)[0],
+            )
+    if mutation in ("dynamic-tag", "now"):
+        if dynamic is None:
+            raise SystemExit("fixture has no PT_DYNAMIC")
+        dynamic_offset, dynamic_size = dynamic
+        wanted = 21 if mutation == "dynamic-tag" else 30
+        for offset in range(dynamic_offset, dynamic_offset + dynamic_size, 16):
+            tag = struct.unpack_from("<q", image, offset)[0]
+            if tag == wanted:
+                if mutation == "dynamic-tag":
+                    struct.pack_into("<q", image, offset, 0x6FFFF000)
+                else:
+                    struct.pack_into("<Q", image, offset + 8, 0)
+                changed = True
+                break
+    if not changed:
+        raise SystemExit(f"cannot apply {mutation} mutation")
+elif mutation == "undefined-symbol":
+    section_offset = struct.unpack_from("<Q", image, 40)[0]
+    section_size = struct.unpack_from("<H", image, 58)[0]
+    section_count = struct.unpack_from("<H", image, 60)[0]
+    changed = False
+    for index in range(section_count):
+        offset = section_offset + index * section_size
+        section_type = struct.unpack_from("<I", image, offset + 4)[0]
+        if section_type == 11:
+            symbol_offset = struct.unpack_from("<Q", image, offset + 24)[0]
+            image[symbol_offset + 4] = 0x10
+            changed = True
+            break
+    if not changed:
+        raise SystemExit("fixture has no dynamic symbol table")
+else:
+    raise SystemExit(f"unknown mutation: {mutation}")
+
+Path(destination).write_bytes(image)
+os.chmod(destination, 0o555)
+PY
+chmod 0555 "${FIXTURE_DIR}/mutate-elf.py"
+
+run_watchdog /usr/bin/cc \
   -std=c11 -O2 -Wall -Wextra -Werror -Wconversion -Wformat=2 -Wshadow \
   -D_FORTIFY_SOURCE=3 -DFIXTURE_VERSION='"one"' \
   "${FIXTURE_DIR}/cargo-fixture.c" -o "${EXECUTABLE}"
-/usr/bin/cc \
+run_watchdog /usr/bin/cc \
   -std=c11 -O2 -Wall -Wextra -Werror -Wconversion -Wformat=2 -Wshadow \
   -D_FORTIFY_SOURCE=3 -DFIXTURE_VERSION='"two"' \
   "${FIXTURE_DIR}/cargo-fixture.c" -o "${FIXTURE_DIR}/cargo-fe2o3-v2"
-chmod 0555 "${EXECUTABLE}" "${FIXTURE_DIR}/cargo-fe2o3-v2"
+run_watchdog /usr/bin/cc \
+  -std=c11 -O2 -Wall -Wextra -Werror -Wconversion -Wformat=2 -Wshadow \
+  -D_FORTIFY_SOURCE=3 \
+  "${FIXTURE_DIR}/process-state-shim.c" -o "${FIXTURE_DIR}/process-state-shim"
+chmod 0555 \
+  "${EXECUTABLE}" "${FIXTURE_DIR}/cargo-fe2o3-v2" \
+  "${FIXTURE_DIR}/process-state-shim"
 printf '%s' 'policy-one' >"${POLICY}"
 chmod 0444 "${POLICY}"
 
 # The production builder admits no compile-time test settings and verifies the ELF.
 readonly PRODUCTION_LAUNCHER="${BUILD_DIR}/production-launcher"
-"${BUILD}" "${PRODUCTION_LAUNCHER}" >/dev/null
+run_watchdog "${BUILD}" "${PRODUCTION_LAUNCHER}" >/dev/null
+run_watchdog "${BUILD}" --verify "${PRODUCTION_LAUNCHER}" >/dev/null
 assert_static_pie "${PRODUCTION_LAUNCHER}"
 assert_no_test_marker "${PRODUCTION_LAUNCHER}"
 [[ "$(stat -c '%a:%h' "${PRODUCTION_LAUNCHER}")" == 555:1 ]] ||
   fail 'production build output mode or link count changed'
 expect_failure build_relative 'usage:' "${BUILD}" relative-output
 ln -s "${PRODUCTION_LAUNCHER}" "${BUILD_DIR}/output-link"
-expect_failure build_symlink_output 'output path must not be a symlink' \
+expect_failure build_symlink_output 'candidate path must not be a symlink' \
   "${BUILD}" "${BUILD_DIR}/output-link"
 rm "${BUILD_DIR}/output-link"
 
-if /usr/bin/cc -std=c11 -O2 -fPIE -static-pie -Werror \
+cat >"${FIXTURE_DIR}/poison-compiler" <<EOF
+#!/bin/sh
+printf '%s\n' invoked >"${BUILD_DIR}/poison-compiler-invoked"
+exit 99
+EOF
+chmod 0555 "${FIXTURE_DIR}/poison-compiler"
+readonly POISONED_LAUNCHER="${BUILD_DIR}/poisoned-environment-launcher"
+run_watchdog /usr/bin/env \
+  AR="${FIXTURE_DIR}/poison-compiler" \
+  CC="${FIXTURE_DIR}/poison-compiler" \
+  CFLAGS=-include=/definitely/missing-poison-header.h \
+  COMPILER_PATH="${FIXTURE_DIR}" \
+  CPATH=/definitely/missing-poison-include \
+  CPPFLAGS=-DPOISONED_BUILD=1 \
+  GCC_EXEC_PREFIX="${FIXTURE_DIR}/" \
+  HOME=/definitely/missing-poison-home \
+  LDFLAGS=-Wl,--definitely-invalid-poison-option \
+  LIBRARY_PATH=/definitely/missing-poison-library \
+  PATH=/definitely/missing-poison-path \
+  RUSTC="${FIXTURE_DIR}/poison-compiler" \
+  RUSTUP_TOOLCHAIN=poison-toolchain \
+  TMPDIR=/definitely/missing-poison-tmp \
+  "${BUILD}" "${POISONED_LAUNCHER}" >/dev/null
+[[ ! -e "${BUILD_DIR}/poison-compiler-invoked" ]] ||
+  fail 'poison compiler was executed by production builder'
+[[ "$(sha256sum <"${PRODUCTION_LAUNCHER}")" == \
+  "$(sha256sum <"${POISONED_LAUNCHER}")" ]] ||
+  fail 'compiler environment poison changed production launcher bytes'
+
+printf '%s\n' ':' >"${FIXTURE_DIR}/bash-env"
+expect_failure bash_env_boundary 'caller boundary variable must be absent: BASH_ENV' \
+  /usr/bin/env BASH_ENV="${FIXTURE_DIR}/bash-env" \
+  "${BUILD}" "${BUILD_DIR}/bash-env-launcher"
+expect_failure loader_boundary 'caller boundary variable must be absent: LD_PRELOAD' \
+  /usr/bin/env LD_PRELOAD=/definitely/missing-poison-library.so \
+  "${BUILD}" "${BUILD_DIR}/loader-poison-launcher"
+
+for mutation in architecture wx relro dynamic-tag now undefined-symbol; do
+  corrupted="${BUILD_DIR}/corrupted-${mutation}"
+  run_watchdog /usr/bin/python3 "${FIXTURE_DIR}/mutate-elf.py" \
+    "${PRODUCTION_LAUNCHER}" "${corrupted}" "${mutation}"
+  case "${mutation}" in
+    architecture) expected_failure='ELF Machine' ;;
+    wx | relro) expected_failure='program headers violate exact W^X' ;;
+    dynamic-tag) expected_failure='unexpected dynamic tag set' ;;
+    now) expected_failure='does not require RELRO-compatible immediate binding' ;;
+    undefined-symbol) expected_failure='unexpected undefined dynamic symbols' ;;
+  esac
+  expect_failure "elf_${mutation}" "${expected_failure}" \
+    "${BUILD}" --verify "${corrupted}"
+done
+
+if run_watchdog /usr/bin/cc -std=c11 -O2 -fPIE -static-pie -Werror \
   -DFE2O3_AUTHORITY_TEST_EXPECTED_UID="${CURRENT_UID}" \
   "${SOURCE}" -o "${BUILD_DIR}/forbidden-production-override" \
   >"${BUILD_DIR}/forbidden.out" 2>&1; then
@@ -396,26 +765,39 @@ fi
 
 compile_launcher "${BASE_LAUNCHER}"
 
-probe_output="$(
-  LD_PRELOAD=/definitely/not/a/library.so \
-  LD_AUDIT=/definitely/not/an/audit.so \
-  RUSTUP_TOOLCHAIN=malicious \
-  RUSTC_WRAPPER=/tmp/malicious-rustc-wrapper \
-  CARGO_HOME=/tmp/malicious-cargo-home \
-  CARGO_TARGET_DIR=/tmp/malicious-target \
-  CARGO_NET_GIT_FETCH_WITH_CLI=true \
-  GIT_CONFIG_GLOBAL=/tmp/malicious-gitconfig \
-  GIT_SSH_COMMAND=/tmp/malicious-ssh \
-  SSH_ASKPASS=/tmp/malicious-askpass \
-  BROWSER=/tmp/malicious-browser \
-  "${BASE_LAUNCHER}" -- probe baseline
-)"
+probe_output="$(run_watchdog "${BASE_LAUNCHER}" -- probe baseline)"
 for expected in \
   'version=one' 'policy=policy-one' 'token=baseline' \
-  'environment=clean' 'capabilities=fixed'; do
+  'environment=clean' 'capabilities=fixed' 'process-state=normalized' \
+  'descriptors=exact' 'fd242=closed'; do
   [[ "${probe_output}" == *"${expected}"* ]] ||
     fail "baseline probe omitted ${expected}"
 done
+
+environment_output="$(
+  run_watchdog "${FIXTURE_DIR}/process-state-shim" environment \
+    "${BASE_LAUNCHER}" -- probe poisoned-environment
+)"
+[[ "${environment_output}" == *'token=poisoned-environment'* ]] ||
+  fail 'poisoned environment shim did not reach the retained executable'
+[[ "${environment_output}" == *'environment=clean'* ]] ||
+  fail 'launcher did not scrub the poisoned environment shim state'
+
+shim_output="$(
+  run_watchdog "${FIXTURE_DIR}/process-state-shim" poison \
+    "${BASE_LAUNCHER}" -- probe inherited-state
+)"
+for expected in \
+  'token=inherited-state' 'process-state=normalized' \
+  'descriptors=exact' 'fd242=closed'; do
+  [[ "${shim_output}" == *"${expected}"* ]] ||
+    fail "inherited-state shim probe omitted ${expected}"
+done
+run_watchdog "${FIXTURE_DIR}/process-state-shim" closed-stdio \
+  "${BASE_LAUNCHER}" -- probe closed-stdio
+expect_failure invalid_standard_output 'cannot normalize inherited process state' \
+  "${FIXTURE_DIR}/process-state-shim" invalid-stdout \
+  "${BASE_LAUNCHER}" -- probe rejected
 
 # Malformed invocations are rejected before any child is created.
 expect_failure argv_empty 'expected -- followed' "${BASE_LAUNCHER}"
@@ -507,7 +889,15 @@ expect_failure noncanonical_policy 'fixed path, owner, mode, link' \
 # An absent or exact empty preload file is accepted; content and symlinks fail.
 : >"${PRELOAD}"
 chmod 0644 "${PRELOAD}"
-"${BASE_LAUNCHER}" -- probe empty-preload >/dev/null
+run_watchdog "${BASE_LAUNCHER}" -- probe empty-preload >/dev/null
+chmod 0600 "${PRELOAD}"
+expect_failure preload_mode 'ld.so.preload is nonempty' \
+  "${BASE_LAUNCHER}" -- probe rejected
+chmod 0644 "${PRELOAD}"
+ln "${PRELOAD}" "${PRELOAD}.hardlink"
+expect_failure preload_hardlink 'ld.so.preload is nonempty' \
+  "${BASE_LAUNCHER}" -- probe rejected
+rm "${PRELOAD}.hardlink"
 printf '%s\n' '/tmp/malicious.so' >"${PRELOAD}"
 expect_failure nonempty_preload 'ld.so.preload is nonempty' \
   "${BASE_LAUNCHER}" -- probe rejected
@@ -517,15 +907,34 @@ expect_failure preload_symlink 'ld.so.preload is nonempty' \
   "${BASE_LAUNCHER}" -- probe rejected
 rm "${PRELOAD}"
 
+mv "${PRELOAD_DIR}" "${PRELOAD_DIR}.real"
+ln -s "${PRELOAD_DIR}.real" "${PRELOAD_DIR}"
+expect_failure preload_parent_symlink 'ld.so.preload is nonempty' \
+  "${BASE_LAUNCHER}" -- probe rejected
+rm "${PRELOAD_DIR}"
+mv "${PRELOAD_DIR}.real" "${PRELOAD_DIR}"
+
+if ((CURRENT_UID != 0)) && [[ -f /etc/odbcinst.ini ]] &&
+  [[ "$(stat -c '%u:%g:%a:%h:%s' /etc/odbcinst.ini)" == 0:0:644:1:0 ]]; then
+  readonly PRELOAD_OWNER_LAUNCHER="${LAUNCHER_DIR}/preload-owner-launcher"
+  compile_launcher "${PRELOAD_OWNER_LAUNCHER}" \
+    "${EXECUTABLE}" "${POLICY}" /etc/odbcinst.ini
+  expect_failure preload_owner 'ld.so.preload is nonempty' \
+    "${PRELOAD_OWNER_LAUNCHER}" -- probe rejected
+fi
+
 # The child executes and reads the retained objects even after pathname swaps.
 readonly DELAYED_LAUNCHER="${LAUNCHER_DIR}/delayed-launcher"
 compile_launcher "${DELAYED_LAUNCHER}" \
   "${EXECUTABLE}" "${POLICY}" "${PRELOAD}" 2000 5000 0 1000
 substitution_output="${TEST_ROOT}/substitution.out"
 substitution_error="${TEST_ROOT}/substitution.err"
-"${DELAYED_LAUNCHER}" -- probe retained \
-  >"${substitution_output}" 2>"${substitution_error}" &
-substitution_launcher_pid=$!
+start_watchdog "${DELAYED_LAUNCHER}" -- probe retained \
+  >"${substitution_output}" 2>"${substitution_error}"
+substitution_watchdog_pid="${STARTED_WATCHDOG_PID}"
+wait_for_child "${substitution_watchdog_pid}" \
+  "${TEST_ROOT}/substitution-launcher.pid"
+substitution_launcher_pid="$(<"${TEST_ROOT}/substitution-launcher.pid")"
 wait_for_child "${substitution_launcher_pid}" "${TEST_ROOT}/substitution-child.pid"
 mv "${EXECUTABLE}" "${EXECUTABLE}.opened"
 cp "${FIXTURE_DIR}/cargo-fe2o3-v2" "${EXECUTABLE}"
@@ -534,7 +943,7 @@ mv "${POLICY}" "${POLICY}.opened"
 printf '%s' 'policy-two' >"${POLICY}"
 chmod 0444 "${POLICY}"
 substitution_status=0
-wait "${substitution_launcher_pid}" || substitution_status=$?
+wait "${substitution_watchdog_pid}" || substitution_status=$?
 if ((substitution_status != 0)); then
   printf 'substitution launcher failed:\n%s\n' \
     "$(<"${substitution_error}")" >&2
@@ -554,11 +963,15 @@ readonly HANDSHAKE_LAUNCHER="${LAUNCHER_DIR}/handshake-timeout-launcher"
 compile_launcher "${HANDSHAKE_LAUNCHER}" \
   "${EXECUTABLE}" "${POLICY}" "${PRELOAD}" 250 5000 1000 0
 handshake_output="${TEST_ROOT}/handshake.out"
-"${HANDSHAKE_LAUNCHER}" -- probe timeout >"${handshake_output}" 2>&1 &
-handshake_launcher_pid=$!
+start_watchdog "${HANDSHAKE_LAUNCHER}" -- probe timeout \
+  >"${handshake_output}" 2>&1
+handshake_watchdog_pid="${STARTED_WATCHDOG_PID}"
+wait_for_child "${handshake_watchdog_pid}" \
+  "${TEST_ROOT}/handshake-launcher.pid"
+handshake_launcher_pid="$(<"${TEST_ROOT}/handshake-launcher.pid")"
 wait_for_child "${handshake_launcher_pid}" "${TEST_ROOT}/handshake-child.pid"
 handshake_status=0
-wait "${handshake_launcher_pid}" || handshake_status=$?
+wait "${handshake_watchdog_pid}" || handshake_status=$?
 ((handshake_status != 0)) || fail 'delayed child handshake unexpectedly succeeded'
 [[ "$(<"${handshake_output}")" == *'handshake exceeded its bounded contract'* ]] ||
   fail 'handshake timeout failed for the wrong reason'
@@ -568,7 +981,7 @@ handshake_child_pid="$(<"${TEST_ROOT}/handshake-child.pid")"
 
 # Successful leaders and timed-out leaders cannot leave setsid descendants.
 descendant_pid_file="${TEST_ROOT}/descendants.pids"
-"${BASE_LAUNCHER}" -- descendants "${descendant_pid_file}"
+run_watchdog "${BASE_LAUNCHER}" -- descendants "${descendant_pid_file}"
 assert_recorded_processes_gone successful_descendants \
   "${descendant_pid_file}" 2
 
