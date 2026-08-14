@@ -121,77 +121,82 @@ where
 
         let a = DeviceBuffer::from_host(&stream, &a_host)?;
         let b = DeviceBuffer::from_host(&stream, &b_host)?;
-        let mut c = DeviceBuffer::from_host(&stream, &vec![OUTPUT_POISON; shape.c_len])?;
-
-        // Exact scalar capabilities currently cover whole DeviceBuffers. These
-        // sentinels remain device-resident across dispatch, but are not claimed
-        // to be physically adjacent to C.
         let left_canary_host = vec![LEFT_CANARY; CANARY_ELEMENTS];
         let right_canary_host = vec![RIGHT_CANARY; CANARY_ELEMENTS];
-        let left_canary = DeviceBuffer::from_host(&stream, &left_canary_host)?;
-        let right_canary = DeviceBuffer::from_host(&stream, &right_canary_host)?;
-
-        let arguments = scalar_gemm_v1_gpu::Arguments::new(
-            GeneratedScalarGemmV1ReadDeviceSlice::new(self.observed, &a)?,
-            GeneratedScalarGemmV1ReadDeviceSlice::new(self.observed, &b)?,
-            GeneratedScalarGemmV1ReadWriteDeviceSlice::new(self.observed, &mut c)?,
-            case.m,
-            case.n,
-            case.k,
-        );
-        let prepared = arguments
-            .prepare(&mut self.loaded, self.observed, self.authenticator)
-            .map_err(|error| {
-                failure(format!(
-                    "{} generated Scalar GEMM preparation failed: {error:?}",
-                    case.name
-                ))
-            })?;
+        let mut guarded_host = Vec::with_capacity(CANARY_ELEMENTS * 2 + shape.c_len);
+        guarded_host.extend_from_slice(&left_canary_host);
+        guarded_host.extend(std::iter::repeat_n(OUTPUT_POISON, shape.c_len));
+        guarded_host.extend_from_slice(&right_canary_host);
+        let mut guarded = DeviceBuffer::from_host(&stream, &guarded_host)?;
 
         let expected_geometry = expected_groups.map(|groups| {
             fe2o3_host::HsaLaunchGeometryV1::new([groups, 1, 1], [SCALAR_GEMM_WORKGROUP_X, 1, 1], 0)
         });
-        if prepared.geometry() != expected_geometry {
-            return Err(failure(format!(
-                "{} generated geometry did not use rounded WG256 launch",
-                case.name
-            )));
-        }
-        let completion = prepared
-            .dispatch()
-            .map_err(|error| failure(format!("{} HSA dispatch failed: {error:?}", case.name)))?;
-        if completion.was_dispatched() != expected_groups.is_some() {
-            return Err(failure(format!(
-                "{} zero-output dispatch state changed",
-                case.name
-            )));
-        }
-        if let Some(completed) = completion.completed_dispatch()
-            && (!completed.dispatch().completed()
-                || completed.geometry() != expected_geometry.expect("dispatch has geometry"))
-        {
-            return Err(failure(format!(
-                "{} did not return exact synchronous completion",
-                case.name
-            )));
-        }
+        let dispatched = {
+            let (_left_canary, c, _right_canary) = guarded.split_range_mut(
+                CANARY_ELEMENTS..CANARY_ELEMENTS + shape.c_len,
+            )?;
+            let arguments = scalar_gemm_v1_gpu::Arguments::new(
+                GeneratedScalarGemmV1ReadDeviceSlice::new(self.observed, &a)?,
+                GeneratedScalarGemmV1ReadDeviceSlice::new(self.observed, &b)?,
+                GeneratedScalarGemmV1ReadWriteDeviceSlice::from_view_mut(self.observed, c)?,
+                case.m,
+                case.n,
+                case.k,
+            );
+            let prepared = arguments
+                .prepare(&mut self.loaded, self.observed, self.authenticator)
+                .map_err(|error| {
+                    failure(format!(
+                        "{} generated Scalar GEMM preparation failed: {error:?}",
+                        case.name
+                    ))
+                })?;
+            if prepared.geometry() != expected_geometry {
+                return Err(failure(format!(
+                    "{} generated geometry did not use rounded WG256 launch",
+                    case.name
+                )));
+            }
+            let completion = prepared.dispatch().map_err(|error| {
+                failure(format!("{} HSA dispatch failed: {error:?}", case.name))
+            })?;
+            if completion.was_dispatched() != expected_groups.is_some() {
+                return Err(failure(format!(
+                    "{} zero-output dispatch state changed",
+                    case.name
+                )));
+            }
+            if let Some(completed) = completion.completed_dispatch()
+                && (!completed.dispatch().completed()
+                    || completed.geometry() != expected_geometry.expect("dispatch has geometry"))
+            {
+                return Err(failure(format!(
+                    "{} did not return exact synchronous completion",
+                    case.name
+                )));
+            }
+            completion.was_dispatched()
+        };
 
         let a_after = a.to_host_vec(&stream)?;
         let b_after = b.to_host_vec(&stream)?;
-        let c_after = c.to_host_vec(&stream)?;
+        let guarded_after = guarded.to_host_vec(&stream)?;
+        let (left_canary_after, remainder) = guarded_after.split_at(CANARY_ELEMENTS);
+        let (c_after, right_canary_after) = remainder.split_at(shape.c_len);
         require_bits_equal(case.name, "A input", &a_after, &a_host)?;
         require_bits_equal(case.name, "B input", &b_after, &b_host)?;
-        require_bits_equal(case.name, "C output", &c_after, &expected)?;
+        require_bits_equal(case.name, "C output", c_after, &expected)?;
         require_bits_equal(
             case.name,
             "left output canary",
-            &left_canary.to_host_vec(&stream)?,
+            left_canary_after,
             &left_canary_host,
         )?;
         require_bits_equal(
             case.name,
             "right output canary",
-            &right_canary.to_host_vec(&stream)?,
+            right_canary_after,
             &right_canary_host,
         )?;
         if case.k == 0 && c_after.iter().any(|value| value.to_bits() != 0) {
@@ -205,7 +210,7 @@ where
             name: case.name,
             dimensions,
             groups: expected_groups,
-            dispatched: completion.was_dispatched(),
+            dispatched,
             output_elements: shape.c_len,
         })
     }
