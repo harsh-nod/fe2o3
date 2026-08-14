@@ -4,10 +4,14 @@
 //! image starts. The parent observes every descendant `execve`/`execveat` while the caller is
 //! stopped in the kernel. A one-use broker permit is issued only when the pinned wrapper is the
 //! requested image, the caller still runs the pinned Cargo image, and the caller is a fresh direct
-//! child of the supervised Cargo process. Consequently a build script cannot gain a permit by
-//! replacing itself with, or spawning, the genuine wrapper; the same applies to a procedural macro
-//! descendant. Procedural macro code remains trusted inside its already-authorized rustc process,
-//! where compiler descriptors are necessarily visible.
+//! child of the supervised Cargo process. Every later exec notification for that PID revokes the
+//! permit before it can continue, while the broker separately authenticates the live wrapper image.
+//! Seccomp `CONTINUE` is not an atomic pathname pin: a pathname race may execute another image, but
+//! that image cannot consume the permit or retain it across a later exec into the genuine wrapper.
+//! Consequently a build script cannot gain a permit by replacing itself with, or spawning, the
+//! genuine wrapper; the same applies to a procedural macro descendant. Procedural macro code
+//! remains trusted inside its already-authorized rustc process, where compiler descriptors are
+//! necessarily visible.
 //!
 //! The boundary assumes the kernel, procfs, seccomp, and the supervising `cargo-fe2o3` process are
 //! trusted. Same-uid ptrace/process injection or mutation of a stopped child's memory is outside
@@ -19,7 +23,7 @@ mod platform {
     use std::ffi::OsString;
     use std::fs::{self, File};
     use std::io::{self, Write};
-    use std::os::fd::AsRawFd;
+    use std::os::fd::{AsRawFd, FromRawFd as _};
     use std::os::unix::ffi::OsStringExt;
     use std::os::unix::fs::MetadataExt;
     use std::os::unix::net::UnixDatagram;
@@ -71,7 +75,12 @@ mod platform {
 
     #[derive(Clone)]
     pub(crate) struct InvocationAuthorizationRegistryV1 {
-        state: Arc<Mutex<BTreeMap<ProcessIdentityV1, Instant>>>,
+        state: Arc<Mutex<BTreeMap<ProcessIdentityV1, InvocationPermitV1>>>,
+    }
+
+    struct InvocationPermitV1 {
+        expires_at: Instant,
+        process: Option<File>,
     }
 
     impl InvocationAuthorizationRegistryV1 {
@@ -82,17 +91,32 @@ mod platform {
         }
 
         fn authorize(&self, process: ProcessIdentityV1) -> Result<(), String> {
+            let process_fd = open_process_pidfd(process.pid)?;
+            self.authorize_with_process_fd(process, Some(process_fd))
+        }
+
+        fn authorize_with_process_fd(
+            &self,
+            process: ProcessIdentityV1,
+            process_fd: Option<File>,
+        ) -> Result<(), String> {
             let mut state = self
                 .state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             let now = Instant::now();
-            state.retain(|_, expires_at| *expires_at > now);
+            state.retain(|_, permit| permit.expires_at > now);
             if state.len() >= MAX_PENDING_PERMITS {
                 return Err("Cargo invocation authorization registry is full".to_owned());
             }
             if state
-                .insert(process, now + INVOCATION_PERMIT_LIFETIME)
+                .insert(
+                    process,
+                    InvocationPermitV1 {
+                        expires_at: now + INVOCATION_PERMIT_LIFETIME,
+                        process: process_fd,
+                    },
+                )
                 .is_some()
             {
                 return Err("Cargo invocation already has a pending authorization".to_owned());
@@ -101,7 +125,7 @@ mod platform {
         }
 
         pub(crate) fn consume(&self, process: ProcessIdentityV1) -> Result<(), String> {
-            let expires_at = self
+            let permit = self
                 .state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -110,10 +134,24 @@ mod platform {
                     "wrapper invocation was not independently authorized by the Cargo exec boundary"
                         .to_owned()
                 })?;
-            if expires_at <= Instant::now() {
+            if permit.expires_at <= Instant::now() {
                 return Err("Cargo wrapper invocation authorization expired".to_owned());
             }
+            if permit
+                .process
+                .as_ref()
+                .is_some_and(|process| !pidfd_is_live(process))
+            {
+                return Err("authorized Cargo wrapper process is no longer live".to_owned());
+            }
             Ok(())
+        }
+
+        fn revoke_pid(&self, pid: u32) {
+            self.state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .retain(|process, _| process.pid != pid);
         }
 
         fn clear(&self) {
@@ -128,7 +166,7 @@ mod platform {
             &self,
             process: ProcessIdentityV1,
         ) -> Result<(), String> {
-            self.authorize(process)
+            self.authorize_with_process_fd(process, None)
         }
     }
 
@@ -361,6 +399,10 @@ mod platform {
         authorization: &InvocationAuthorizationRegistryV1,
     ) -> Result<(), String> {
         validate_notification(&notification)?;
+        // A permit belongs to exactly one successful transition into the wrapper image. Any
+        // later exec by the same PID invalidates it before that new image can run, including a
+        // pathname-swap adversary that first entered another image and then execs the wrapper.
+        authorization.revoke_pid(notification.pid);
         if !requested_executable_matches(notification, wrapper)? {
             return Ok(());
         }
@@ -382,6 +424,33 @@ mod platform {
             return Ok(());
         }
         authorization.authorize(process)
+    }
+
+    fn open_process_pidfd(pid: u32) -> Result<File, String> {
+        // SAFETY: pidfd_open takes a scalar PID and zero flags and returns a new owned descriptor.
+        let descriptor = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+        if descriptor < 0 {
+            return Err(format!(
+                "cannot pin authorized wrapper PID {pid}: {}",
+                io::Error::last_os_error()
+            ));
+        }
+        // SAFETY: a nonnegative pidfd_open result is a newly owned descriptor.
+        Ok(unsafe { File::from_raw_fd(descriptor as i32) })
+    }
+
+    fn pidfd_is_live(process: &File) -> bool {
+        // SAFETY: pidfd_send_signal with signal zero performs existence/permission checking and
+        // does not deliver a signal. The siginfo pointer is unused for signal zero.
+        unsafe {
+            libc::syscall(
+                libc::SYS_pidfd_send_signal,
+                process.as_raw_fd(),
+                0,
+                std::ptr::null::<libc::siginfo_t>(),
+                0,
+            ) == 0
+        }
     }
 
     const fn is_direct_pinned_cargo_child(
@@ -629,10 +698,28 @@ mod platform {
                 pid: 10,
                 start_time_ticks: 21,
             };
-            registry.authorize(first).unwrap();
+            registry.authorize_test_process(first).unwrap();
             assert!(registry.consume(other).is_err());
             registry.consume(first).unwrap();
             assert!(registry.consume(first).is_err());
+        }
+
+        #[test]
+        fn any_later_exec_notification_revokes_the_old_process_permit() {
+            let registry = InvocationAuthorizationRegistryV1::new();
+            let process = ProcessIdentityV1 {
+                pid: 10,
+                start_time_ticks: 20,
+            };
+            registry.authorize_test_process(process).unwrap();
+            registry.revoke_pid(process.pid);
+            assert!(registry.consume(process).is_err());
+        }
+
+        #[test]
+        fn pidfd_pins_the_current_kernel_process_lifetime() {
+            let process = open_process_pidfd(std::process::id()).unwrap();
+            assert!(pidfd_is_live(&process));
         }
 
         #[test]
