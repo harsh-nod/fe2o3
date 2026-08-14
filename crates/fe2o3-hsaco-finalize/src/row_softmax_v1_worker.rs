@@ -1016,6 +1016,22 @@ mod tests {
         authority: &[u8],
         extra_text: &[u8],
     ) -> CompilerModuleHandoffV2 {
+        let mut module = row_module_prefix(extra_text);
+        append_module_assembly_section(
+            &mut module,
+            COMPILER_DESCRIPTOR_SECTION_NAME_V1,
+            descriptor,
+        );
+        append_module_assembly_section(&mut module, FRONTEND_AUTHORITY_SECTION, authority);
+        append_module_assembly_section(
+            &mut module,
+            EXPONENTIAL_BOUNDARY_SECTION,
+            &EXPONENTIAL_BOUNDARY,
+        );
+        handoff_from_module(&module)
+    }
+
+    fn row_module_prefix(extra_text: &[u8]) -> Vec<u8> {
         let mut module = br#"; ModuleID = 'row-softmax-v1-test'
 target triple = "amdgcn-amd-amdhsa"
 
@@ -1028,17 +1044,10 @@ entry:
 "#
         .to_vec();
         module.extend_from_slice(extra_text);
-        append_module_assembly_section(
-            &mut module,
-            COMPILER_DESCRIPTOR_SECTION_NAME_V1,
-            descriptor,
-        );
-        append_module_assembly_section(&mut module, FRONTEND_AUTHORITY_SECTION, authority);
-        append_module_assembly_section(
-            &mut module,
-            EXPONENTIAL_BOUNDARY_SECTION,
-            &EXPONENTIAL_BOUNDARY,
-        );
+        module
+    }
+
+    fn handoff_from_module(module: &[u8]) -> CompilerModuleHandoffV2 {
         let envelope = exact_envelope();
         CompilerModuleHandoffV2::new(
             CompilerModuleKindV1::LlvmTextIr,
@@ -1046,9 +1055,17 @@ entry:
             CompilerCodeObjectVersion::V6,
             envelope,
             exact_manifest(),
-            &module,
+            module,
         )
         .unwrap()
+    }
+
+    fn row_module_with_sections(sections: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut module = row_module_prefix(b"");
+        for (name, bytes) in sections {
+            append_module_assembly_section(&mut module, name, bytes);
+        }
+        module
     }
 
     fn exact_expectation(
@@ -1479,9 +1496,18 @@ entry:
     }
 
     fn append_module_assembly_section(module: &mut Vec<u8>, section: &str, bytes: &[u8]) {
+        append_module_assembly_section_with_chunk_width(module, section, bytes, 16);
+    }
+
+    fn append_module_assembly_section_with_chunk_width(
+        module: &mut Vec<u8>,
+        section: &str,
+        bytes: &[u8],
+        chunk_width: usize,
+    ) {
         module.extend_from_slice(module_assembly_section_header(section).as_bytes());
         module.extend_from_slice(b"module asm \".balign 8\"\n");
-        for chunk in bytes.chunks(16) {
+        for chunk in bytes.chunks(chunk_width) {
             module.extend_from_slice(b"module asm \".byte ");
             for (index, byte) in chunk.iter().copied().enumerate() {
                 if index != 0 {
@@ -1514,6 +1540,156 @@ entry:
 
     fn text(value: &str) -> Text {
         Text::new(value).unwrap()
+    }
+
+    #[test]
+    fn production_three_section_suffix_is_admitted() {
+        let handoff = exact_handoff();
+        let decoded = decode_bound_sections(handoff.module_bytes()).unwrap();
+
+        assert_eq!(
+            decoded.descriptor,
+            exact_descriptor_source().canonical_bytes()
+        );
+        assert_eq!(decoded.authority, AUTHORITY);
+    }
+
+    #[test]
+    fn row_section_closure_rejects_missing_reordered_duplicate_and_trailing_sections() {
+        let descriptor = exact_descriptor_source().canonical_bytes().to_vec();
+        let exact = [
+            (COMPILER_DESCRIPTOR_SECTION_NAME_V1, descriptor.as_slice()),
+            (FRONTEND_AUTHORITY_SECTION, AUTHORITY.as_slice()),
+            (
+                EXPONENTIAL_BOUNDARY_SECTION,
+                EXPONENTIAL_BOUNDARY.as_slice(),
+            ),
+        ];
+        assert!(decode_bound_sections(&row_module_with_sections(&exact)).is_ok());
+
+        let missing = row_module_with_sections(&exact[..2]);
+        let reordered = row_module_with_sections(&[exact[1], exact[0], exact[2]]);
+        let duplicate = row_module_with_sections(&[exact[0], exact[1], exact[1], exact[2]]);
+        let mut trailing_section = row_module_with_sections(&exact);
+        append_module_assembly_section(&mut trailing_section, ".fe2o3.unreviewed.v1", &[0x42]);
+        let mut trailing_text = row_module_with_sections(&exact);
+        trailing_text.extend_from_slice(b"define void @trailing() { ret void }\n");
+
+        for (name, module) in [
+            ("missing", missing),
+            ("reordered", reordered),
+            ("duplicate", duplicate),
+            ("trailing section", trailing_section),
+            ("trailing text", trailing_text),
+        ] {
+            assert!(
+                decode_bound_sections(&module).is_err(),
+                "accepted {name} row-softmax section closure"
+            );
+        }
+    }
+
+    #[test]
+    fn row_section_closure_rejects_noncanonical_chunks_and_commitment_sizes() {
+        let descriptor = exact_descriptor_source().canonical_bytes().to_vec();
+        for (name, authority, exponential) in [
+            (
+                "short authority",
+                AUTHORITY[..31].to_vec(),
+                EXPONENTIAL_BOUNDARY.to_vec(),
+            ),
+            (
+                "long authority",
+                [AUTHORITY.as_slice(), &[0x01]].concat(),
+                EXPONENTIAL_BOUNDARY.to_vec(),
+            ),
+            (
+                "short exponential",
+                AUTHORITY.to_vec(),
+                EXPONENTIAL_BOUNDARY[..31].to_vec(),
+            ),
+            (
+                "long exponential",
+                AUTHORITY.to_vec(),
+                [EXPONENTIAL_BOUNDARY.as_slice(), &[0x01]].concat(),
+            ),
+        ] {
+            let module = row_module_with_sections(&[
+                (COMPILER_DESCRIPTOR_SECTION_NAME_V1, descriptor.as_slice()),
+                (FRONTEND_AUTHORITY_SECTION, authority.as_slice()),
+                (EXPONENTIAL_BOUNDARY_SECTION, exponential.as_slice()),
+            ]);
+            assert!(
+                decode_bound_sections(&module).is_err(),
+                "accepted {name} commitment"
+            );
+        }
+
+        let mut short_chunks = row_module_prefix(b"");
+        append_module_assembly_section_with_chunk_width(
+            &mut short_chunks,
+            COMPILER_DESCRIPTOR_SECTION_NAME_V1,
+            &descriptor,
+            8,
+        );
+        append_module_assembly_section(&mut short_chunks, FRONTEND_AUTHORITY_SECTION, &AUTHORITY);
+        append_module_assembly_section(
+            &mut short_chunks,
+            EXPONENTIAL_BOUNDARY_SECTION,
+            &EXPONENTIAL_BOUNDARY,
+        );
+
+        let mut oversized_chunk = row_module_prefix(b"");
+        append_module_assembly_section_with_chunk_width(
+            &mut oversized_chunk,
+            COMPILER_DESCRIPTOR_SECTION_NAME_V1,
+            &descriptor,
+            17,
+        );
+        append_module_assembly_section(
+            &mut oversized_chunk,
+            FRONTEND_AUTHORITY_SECTION,
+            &AUTHORITY,
+        );
+        append_module_assembly_section(
+            &mut oversized_chunk,
+            EXPONENTIAL_BOUNDARY_SECTION,
+            &EXPONENTIAL_BOUNDARY,
+        );
+
+        let exact = row_module_with_sections(&[
+            (COMPILER_DESCRIPTOR_SECTION_NAME_V1, descriptor.as_slice()),
+            (FRONTEND_AUTHORITY_SECTION, AUTHORITY.as_slice()),
+            (
+                EXPONENTIAL_BOUNDARY_SECTION,
+                EXPONENTIAL_BOUNDARY.as_slice(),
+            ),
+        ]);
+        let mut uppercase_hex = exact.clone();
+        let authority_position = positions(
+            &uppercase_hex,
+            module_assembly_section_header(FRONTEND_AUTHORITY_SECTION).as_bytes(),
+        )[0];
+        let hexadecimal = uppercase_hex[authority_position..]
+            .windows(4)
+            .position(|window| window == b"0xa5")
+            .unwrap()
+            + authority_position;
+        uppercase_hex[hexadecimal + 2] = b'A';
+        let mut missing_final_newline = exact;
+        assert_eq!(missing_final_newline.pop(), Some(b'\n'));
+
+        for (name, module) in [
+            ("short chunks", short_chunks),
+            ("oversized chunk", oversized_chunk),
+            ("uppercase hexadecimal", uppercase_hex),
+            ("missing final newline", missing_final_newline),
+        ] {
+            assert!(
+                decode_bound_sections(&module).is_err(),
+                "accepted {name} encoding"
+            );
+        }
     }
 
     fn lower_hex(bytes: &[u8]) -> String {
