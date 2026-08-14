@@ -23,6 +23,7 @@ mod first_build_worker_v2;
 mod link_plan;
 mod request_construction;
 mod row_softmax_v1_artifact;
+mod row_softmax_v1_worker;
 mod scalar_gemm_v1_worker;
 mod tiled_gemm_v1_artifact;
 mod worker_executor;
@@ -92,6 +93,12 @@ pub use row_softmax_v1_artifact::{
     FinalizedRowSoftmaxV1StructuralHsacoV1, InspectedRowSoftmaxV1StructuralWorkerV2HsacoV1,
     RowSoftmaxV1StructuralArtifactErrorV1, finalize_row_softmax_v1_structural_worker_v2_hsaco_v1,
     inspect_row_softmax_v1_structural_worker_v2_hsaco_v1,
+};
+pub use row_softmax_v1_worker::{
+    InspectedRowSoftmaxV1DirectWorkerHsacoV1, RowSoftmaxV1DirectWorkerErrorV1,
+    RowSoftmaxV1DirectWorkerExchangeIdentityV1, RowSoftmaxV1DirectWorkerExpectationV1,
+    ValidatedRowSoftmaxV1DirectWorkerExchangeV1, inspect_row_softmax_v1_direct_worker_hsaco_v1,
+    validate_row_softmax_v1_direct_worker_exchange_v1,
 };
 pub use scalar_gemm_v1_worker::{
     InspectedScalarGemmV1WorkerV2HsacoV1, ScalarGemmV1WorkerExchangeIdentityV1,
