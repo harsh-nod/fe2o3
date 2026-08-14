@@ -553,9 +553,24 @@ pub(crate) fn bind_tiled_gemm_frontend_authority_v1(
 /// boundary into distinct compiler-owned, non-allocatable sections.
 pub(crate) fn bind_row_softmax_frontend_authority_v1(
     mut module: InertCompilerModuleTextV1,
+    authority_transcript: &[u8],
     authority: [u8; 32],
     exponential_boundary: [u8; 32],
 ) -> Result<InertCompilerModuleTextV1, CompilerModuleConstructionError> {
+    if authority_transcript.is_empty()
+        || authority_transcript.len()
+            > crate::collected_row_softmax_v1::MAX_ROW_SOFTMAX_AUTHORITY_TRANSCRIPT_BYTES_V1
+        || <[u8; 32]>::from(Sha256::digest(authority_transcript)) != authority
+    {
+        return Err(CompilerModuleConstructionError::RowSoftmaxLowering(
+            "authority transcript is empty, oversized, or differs from its commitment".to_owned(),
+        ));
+    }
+    append_commitment_section(
+        &mut module.llvm_ir,
+        ".fe2o3.row-softmax-authority-transcript.v1",
+        authority_transcript,
+    );
     append_commitment_section(
         &mut module.llvm_ir,
         ".fe2o3.row-softmax-auth.v1",
@@ -3048,6 +3063,49 @@ mod tests {
             construct_inert_row_softmax_v1_module_text(&renamed),
             Err(CompilerModuleConstructionError::RowSoftmaxLowering(_))
         ));
+    }
+
+    #[test]
+    fn row_softmax_authority_transcript_is_bounded_and_commitment_checked() {
+        let module = crate::collected_row_softmax_v1::canonical_row_softmax_v1_module();
+        let compiler_module = construct_inert_row_softmax_v1_module_text(&module).unwrap();
+        let transcript = b"canonical-test-authority-transcript";
+        let commitment = Sha256::digest(transcript).into();
+        let bound = bind_row_softmax_frontend_authority_v1(
+            compiler_module.clone(),
+            transcript,
+            commitment,
+            [0x55; 32],
+        )
+        .unwrap();
+        assert!(
+            bound
+                .llvm_ir()
+                .contains(".fe2o3.row-softmax-authority-transcript.v1")
+        );
+        assert!(
+            bind_row_softmax_frontend_authority_v1(
+                compiler_module.clone(),
+                transcript,
+                [0; 32],
+                [0x55; 32],
+            )
+            .is_err()
+        );
+        let oversized = vec![
+            0;
+            crate::collected_row_softmax_v1::MAX_ROW_SOFTMAX_AUTHORITY_TRANSCRIPT_BYTES_V1
+                + 1
+        ];
+        assert!(
+            bind_row_softmax_frontend_authority_v1(
+                compiler_module,
+                &oversized,
+                Sha256::digest(&oversized).into(),
+                [0x55; 32],
+            )
+            .is_err()
+        );
     }
 
     #[test]

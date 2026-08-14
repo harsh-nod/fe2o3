@@ -87,12 +87,18 @@ impl PreparedTiledGemmV1WorkerHandoffV1 {
 /// authority.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct PreparedRowSoftmaxV1WorkerHandoffV1 {
+    authority_transcript: Vec<u8>,
     frontend_authority_commitment: [u8; 32],
     exponential_boundary_commitment: [u8; 32],
     handoff: CompilerModuleHandoffV2,
 }
 
 impl PreparedRowSoftmaxV1WorkerHandoffV1 {
+    #[cfg(test)]
+    pub(crate) fn authority_transcript(&self) -> &[u8] {
+        &self.authority_transcript
+    }
+
     pub(crate) const fn frontend_authority_commitment(&self) -> &[u8; 32] {
         &self.frontend_authority_commitment
     }
@@ -185,6 +191,7 @@ pub(crate) fn publish_prepared_row_softmax_v1_worker_handoff(
     prepared: PreparedRowSoftmaxV1WorkerHandoffV1,
 ) -> Result<CompilerModuleHandoffReceiptV1, WorkerV2ProducerError> {
     let PreparedRowSoftmaxV1WorkerHandoffV1 {
+        authority_transcript,
         frontend_authority_commitment,
         exponential_boundary_commitment,
         handoff,
@@ -193,9 +200,16 @@ pub(crate) fn publish_prepared_row_softmax_v1_worker_handoff(
         .map_err(|_| WorkerV2ProducerError::MissingRowSoftmaxBindings)?;
     let authority_section =
         module_asm_commitment_section(".fe2o3.row-softmax-auth.v1", &frontend_authority_commitment);
+    let transcript_section = module_asm_commitment_section(
+        ".fe2o3.row-softmax-authority-transcript.v1",
+        &authority_transcript,
+    );
     let exponential_section =
         module_asm_commitment_section(".fe2o3.row-exp.v1", &exponential_boundary_commitment);
-    if !module.contains(&authority_section) || !module.contains(&exponential_section) {
+    if !module.contains(&transcript_section)
+        || !module.contains(&authority_section)
+        || !module.contains(&exponential_section)
+    {
         return Err(WorkerV2ProducerError::MissingRowSoftmaxBindings);
     }
     let receipt = publish_compiler_module_handoff_v1(
@@ -384,7 +398,7 @@ pub(crate) fn prepare_row_softmax_v1_worker_handoff(
 ) -> Result<PreparedRowSoftmaxV1WorkerHandoffV1, WorkerV2ProducerError> {
     let frontend_authority_commitment = *authenticated.authority_commitment();
     let exponential_boundary_commitment = *authenticated.exponential_boundary_commitment();
-    let (module, descriptor_source) = authenticated.into_parts();
+    let (module, descriptor_source, authority_transcript) = authenticated.into_parts();
     let compiler_module =
         crate::kernel_ir_codegen::construct_inert_row_softmax_v1_module_text(&module)
             .map_err(WorkerV2ProducerError::CompilerModule)?;
@@ -392,6 +406,7 @@ pub(crate) fn prepare_row_softmax_v1_worker_handoff(
         .map_err(WorkerV2ProducerError::CompilerModule)?;
     let compiler_module = crate::kernel_ir_codegen::bind_row_softmax_frontend_authority_v1(
         compiler_module,
+        &authority_transcript,
         frontend_authority_commitment,
         exponential_boundary_commitment,
     )
@@ -427,6 +442,7 @@ pub(crate) fn prepare_row_softmax_v1_worker_handoff(
     )
     .map_err(WorkerV2ProducerError::Handoff)?;
     Ok(PreparedRowSoftmaxV1WorkerHandoffV1 {
+        authority_transcript,
         frontend_authority_commitment,
         exponential_boundary_commitment,
         handoff,
@@ -1277,7 +1293,9 @@ mod tests {
         let mut rejected_receipt = exact_row_frontend_receipt_for_test();
         let rejected =
             prepare_row_softmax_v1_worker_handoff(rejected_receipt.consume().unwrap()).unwrap();
+        assert!(!rejected.authority_transcript().is_empty());
         let PreparedRowSoftmaxV1WorkerHandoffV1 {
+            authority_transcript,
             frontend_authority_commitment,
             exponential_boundary_commitment,
             handoff,
@@ -1295,6 +1313,7 @@ mod tests {
         )
         .unwrap();
         let rejected = PreparedRowSoftmaxV1WorkerHandoffV1 {
+            authority_transcript,
             frontend_authority_commitment,
             exponential_boundary_commitment,
             handoff: mutated_handoff,

@@ -73,6 +73,7 @@ const MAX_MANAGED_RUSTC_ARGUMENTS: usize = 4096;
 const MAX_MANAGED_RUSTC_ARGUMENT_BYTES: usize = 1024 * 1024;
 const CARGO_GENERATED_METADATA_SHAPE_V1: &[u8] = b"one-16-byte-lowercase-hex-token";
 const COLLECTED_AUTHORITY_DOMAIN_V1: &[u8] = b"fe2o3.row-softmax.collected-authority.v1";
+pub(crate) const MAX_ROW_SOFTMAX_AUTHORITY_TRANSCRIPT_BYTES_V1: usize = 4096;
 const ABI_BINDING_DOMAIN_V1: &[u8] = b"fe2o3.row-softmax.abi-binding.v1";
 const FN_ABI_BINDING_DOMAIN_V1: &[u8] = b"fe2o3.row-softmax.rustc-fn-abi.v1";
 const LAUNCH_BINDING_DOMAIN_V1: &[u8] = b"fe2o3.row-softmax.launch-binding.v1";
@@ -247,6 +248,7 @@ struct RowSoftmaxFrontendAuthorityV1 {
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct RowSoftmaxFrontendReceiptV1 {
     authority: Option<RowSoftmaxFrontendAuthorityV1>,
+    authority_transcript: Option<Vec<u8>>,
     descriptor_source: Option<CompilerDescriptorSourceV1>,
 }
 
@@ -291,6 +293,18 @@ impl RowSoftmaxFrontendReceiptV1 {
             .take()
             .ok_or(CollectedRowSoftmaxErrorV1::ReceiptAlreadyConsumed)?;
         validate_frontend_authority(&authority)?;
+        let authority_transcript = self
+            .authority_transcript
+            .take()
+            .ok_or(CollectedRowSoftmaxErrorV1::ReceiptAlreadyConsumed)?;
+        if authority_transcript != collected_authority_transcript(&authority)
+            || <[u8; 32]>::from(Sha256::digest(&authority_transcript))
+                != authority.authority_commitment
+        {
+            return Err(CollectedRowSoftmaxErrorV1::ReceiptBindingMismatch {
+                field: "authority transcript",
+            });
+        }
         if descriptor_source.identity().sha256() != &authority.descriptor_source_commitment {
             return Err(CollectedRowSoftmaxErrorV1::ReceiptBindingMismatch {
                 field: "descriptor source",
@@ -306,6 +320,7 @@ impl RowSoftmaxFrontendReceiptV1 {
         Ok(AuthenticatedRowSoftmaxModuleV1 {
             module,
             descriptor_source,
+            authority_transcript,
             authority_commitment: authority.authority_commitment,
             exponential_boundary_commitment: authority.exponential_boundary_commitment,
         })
@@ -323,6 +338,7 @@ impl RowSoftmaxFrontendReceiptV1 {
 pub(crate) struct AuthenticatedRowSoftmaxModuleV1 {
     module: Module,
     descriptor_source: CompilerDescriptorSourceV1,
+    authority_transcript: Vec<u8>,
     authority_commitment: [u8; 32],
     exponential_boundary_commitment: [u8; 32],
 }
@@ -336,8 +352,17 @@ impl AuthenticatedRowSoftmaxModuleV1 {
         &self.exponential_boundary_commitment
     }
 
-    pub(crate) fn into_parts(self) -> (Module, CompilerDescriptorSourceV1) {
-        (self.module, self.descriptor_source)
+    #[cfg(test)]
+    pub(crate) fn authority_transcript(&self) -> &[u8] {
+        &self.authority_transcript
+    }
+
+    pub(crate) fn into_parts(self) -> (Module, CompilerDescriptorSourceV1, Vec<u8>) {
+        (
+            self.module,
+            self.descriptor_source,
+            self.authority_transcript,
+        )
     }
 }
 
@@ -555,9 +580,11 @@ pub(crate) fn authenticate_collected_row_softmax_v1<'tcx>(
         descriptor_source_commitment,
         authority_commitment: [0; 32],
     };
-    authority.authority_commitment = collected_authority_commitment(&authority);
+    let authority_transcript = collected_authority_transcript(&authority);
+    authority.authority_commitment = Sha256::digest(&authority_transcript).into();
     Ok(RowSoftmaxFrontendReceiptV1 {
         authority: Some(authority),
+        authority_transcript: Some(authority_transcript),
         descriptor_source: Some(descriptor_source),
     })
 }
@@ -1786,82 +1813,107 @@ fn exp_operation(result: u32, argument: u32) -> Operation {
     .operation(ValueId(result))
 }
 
-fn collected_authority_commitment(authority: &RowSoftmaxFrontendAuthorityV1) -> [u8; 32] {
-    let mut digest = Sha256::new();
-    hash_field(&mut digest, COLLECTED_AUTHORITY_DOMAIN_V1);
-    hash_field(&mut digest, &authority.portable_mir_semantic_commitment);
-    hash_field(&mut digest, &authority.compiler_semantics_commitment);
-    hash_field(&mut digest, &authority.canonical_module_commitment);
-    hash_field(&mut digest, &authority.descriptor_source_commitment);
-    hash_field(&mut digest, authority.root_instance_identity.as_bytes());
-    hash_field(&mut digest, authority.kernel_export.as_bytes());
-    hash_field(&mut digest, authority.target.as_bytes());
-    hash_field(&mut digest, &authority.code_object_version.to_le_bytes());
-    hash_field(&mut digest, &authority.explicit_kernarg_bytes.to_le_bytes());
-    hash_field(&mut digest, &authority.complete_kernarg_bytes.to_le_bytes());
-    hash_field(&mut digest, &authority.row_elements.to_le_bytes());
-    hash_field(&mut digest, &authority.abi_binding_commitment);
-    hash_field(&mut digest, &authority.fn_abi_binding_commitment);
-    hash_field(&mut digest, &authority.launch_binding_commitment);
-    hash_field(&mut digest, &authority.correspondence_commitment);
-    hash_field(&mut digest, &authority.exponential_boundary_commitment);
-    hash_field(&mut digest, &authority.frontend_contract_commitment);
+fn collected_authority_transcript(authority: &RowSoftmaxFrontendAuthorityV1) -> Vec<u8> {
+    let mut transcript = Vec::with_capacity(1024);
+    push_transcript_field(&mut transcript, COLLECTED_AUTHORITY_DOMAIN_V1);
+    push_transcript_field(&mut transcript, &authority.portable_mir_semantic_commitment);
+    push_transcript_field(&mut transcript, &authority.compiler_semantics_commitment);
+    push_transcript_field(&mut transcript, &authority.canonical_module_commitment);
+    push_transcript_field(&mut transcript, &authority.descriptor_source_commitment);
+    push_transcript_field(&mut transcript, authority.root_instance_identity.as_bytes());
+    push_transcript_field(&mut transcript, authority.kernel_export.as_bytes());
+    push_transcript_field(&mut transcript, authority.target.as_bytes());
+    push_transcript_field(
+        &mut transcript,
+        &authority.code_object_version.to_le_bytes(),
+    );
+    push_transcript_field(
+        &mut transcript,
+        &authority.explicit_kernarg_bytes.to_le_bytes(),
+    );
+    push_transcript_field(
+        &mut transcript,
+        &authority.complete_kernarg_bytes.to_le_bytes(),
+    );
+    push_transcript_field(&mut transcript, &authority.row_elements.to_le_bytes());
+    push_transcript_field(&mut transcript, &authority.abi_binding_commitment);
+    push_transcript_field(&mut transcript, &authority.fn_abi_binding_commitment);
+    push_transcript_field(&mut transcript, &authority.launch_binding_commitment);
+    push_transcript_field(&mut transcript, &authority.correspondence_commitment);
+    push_transcript_field(&mut transcript, &authority.exponential_boundary_commitment);
+    push_transcript_field(&mut transcript, &authority.frontend_contract_commitment);
     for token in &authority.cargo_metadata_build_observation.ordered_tokens {
-        hash_field(&mut digest, token.as_bytes());
+        push_transcript_field(&mut transcript, token.as_bytes());
     }
-    hash_field(
-        &mut digest,
+    push_transcript_field(
+        &mut transcript,
         &authority.cargo_metadata_build_observation.commitment,
     );
-    hash_field(
-        &mut digest,
+    push_transcript_field(
+        &mut transcript,
         authority.provider_authority.provider.crate_name.as_bytes(),
     );
-    hash_field(
-        &mut digest,
+    push_transcript_field(
+        &mut transcript,
         &authority
             .provider_authority
             .provider
             .stable_crate_id
             .to_le_bytes(),
     );
-    hash_field(
-        &mut digest,
+    push_transcript_field(
+        &mut transcript,
         &authority.provider_authority.provider.crate_hash,
     );
-    hash_field(
-        &mut digest,
+    push_transcript_field(
+        &mut transcript,
         &authority
             .provider_authority
             .provider
             .cargo_metadata_build_observation,
     );
-    hash_field(
-        &mut digest,
+    push_transcript_field(
+        &mut transcript,
         &authority.provider_authority.provider.source_identity,
     );
     for identity in &authority.provider_authority.definition_identities {
-        hash_field(&mut digest, identity);
+        push_transcript_field(&mut transcript, identity);
     }
     for identity in &authority.provider_authority.source_identities {
-        hash_field(&mut digest, identity);
+        push_transcript_field(&mut transcript, identity);
     }
-    hash_field(&mut digest, &authority.provider_authority.commitment);
-    hash_field(
-        &mut digest,
+    push_transcript_field(&mut transcript, &authority.provider_authority.commitment);
+    push_transcript_field(
+        &mut transcript,
         &authority.managed_build_authority.generation.to_le_bytes(),
     );
-    hash_field(&mut digest, &authority.managed_build_authority.session);
-    hash_field(&mut digest, &authority.managed_build_authority.invocation);
-    hash_field(
-        &mut digest,
+    push_transcript_field(&mut transcript, &authority.managed_build_authority.session);
+    push_transcript_field(
+        &mut transcript,
+        &authority.managed_build_authority.invocation,
+    );
+    push_transcript_field(
+        &mut transcript,
         &authority.managed_build_authority.cargo_metadata_transcript,
     );
-    hash_field(
-        &mut digest,
+    push_transcript_field(
+        &mut transcript,
         &authority.managed_build_authority.broker_executable,
     );
-    digest.finalize().into()
+    assert!(
+        transcript.len() <= MAX_ROW_SOFTMAX_AUTHORITY_TRANSCRIPT_BYTES_V1,
+        "row-softmax authority transcript exceeds its fixed compiler bound"
+    );
+    transcript
+}
+
+fn collected_authority_commitment(authority: &RowSoftmaxFrontendAuthorityV1) -> [u8; 32] {
+    Sha256::digest(collected_authority_transcript(authority)).into()
+}
+
+fn push_transcript_field(transcript: &mut Vec<u8>, bytes: &[u8]) {
+    transcript.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+    transcript.extend_from_slice(bytes);
 }
 
 fn validate_frontend_authority(
@@ -1993,9 +2045,11 @@ pub(crate) fn exact_frontend_receipt_for_test() -> RowSoftmaxFrontendReceiptV1 {
         descriptor_source_commitment: *descriptor_source.identity().sha256(),
         authority_commitment: [0; 32],
     };
-    authority.authority_commitment = collected_authority_commitment(&authority);
+    let authority_transcript = collected_authority_transcript(&authority);
+    authority.authority_commitment = Sha256::digest(&authority_transcript).into();
     RowSoftmaxFrontendReceiptV1 {
         authority: Some(authority),
+        authority_transcript: Some(authority_transcript),
         descriptor_source: Some(descriptor_source),
     }
 }
@@ -2478,9 +2532,15 @@ mod tests {
             authenticated.exponential_boundary_commitment(),
             &exponential_boundary_commitment()
         );
-        let (module, descriptor_source) = authenticated.into_parts();
+        assert!(!authenticated.authority_transcript().is_empty());
+        let authority_commitment = *authenticated.authority_commitment();
+        let (module, descriptor_source, authority_transcript) = authenticated.into_parts();
         assert_eq!(module, canonical_row_softmax_v1_module());
         assert_eq!(descriptor_source.table().kernels().len(), 1);
+        assert_eq!(
+            <[u8; 32]>::from(Sha256::digest(authority_transcript)),
+            authority_commitment
+        );
         assert!(matches!(
             receipt.consume(),
             Err(CollectedRowSoftmaxErrorV1::ReceiptAlreadyConsumed)
@@ -2517,14 +2577,18 @@ mod tests {
             .expect("baseline authority")
             .authority_commitment;
         let mut alternate_receipt = exact_frontend_receipt_for_test();
-        let authority = alternate_receipt
-            .authority
-            .as_mut()
-            .expect("test authority");
-        authority.root_instance_identity = alternate.to_owned();
-        authority.authority_commitment = collected_authority_commitment(authority);
-        assert_ne!(authority.authority_commitment, baseline_commitment);
-        assert!(validate_frontend_authority(authority).is_ok());
+        let authority_transcript = {
+            let authority = alternate_receipt
+                .authority
+                .as_mut()
+                .expect("test authority");
+            authority.root_instance_identity = alternate.to_owned();
+            authority.authority_commitment = collected_authority_commitment(authority);
+            assert_ne!(authority.authority_commitment, baseline_commitment);
+            assert!(validate_frontend_authority(authority).is_ok());
+            collected_authority_transcript(authority)
+        };
+        alternate_receipt.authority_transcript = Some(authority_transcript);
         alternate_receipt
             .consume()
             .expect("alternate well-shaped generated root remains fully receipt-bound");
@@ -2623,10 +2687,14 @@ mod tests {
         ];
         for (mutate, expected_field) in mutations {
             let mut receipt = exact_frontend_receipt_for_test();
-            let authority = receipt.authority.as_mut().expect("test authority");
-            mutate(authority);
-            assert_ne!(baseline, collected_authority_commitment(authority));
-            authority.authority_commitment = collected_authority_commitment(authority);
+            let authority_transcript = {
+                let authority = receipt.authority.as_mut().expect("test authority");
+                mutate(authority);
+                assert_ne!(baseline, collected_authority_commitment(authority));
+                authority.authority_commitment = collected_authority_commitment(authority);
+                collected_authority_transcript(authority)
+            };
+            receipt.authority_transcript = Some(authority_transcript);
             match receipt.consume() {
                 Err(CollectedRowSoftmaxErrorV1::ReceiptBindingMismatch { field }) => {
                     assert_eq!(field, expected_field)
@@ -2650,6 +2718,21 @@ mod tests {
             receipt.consume(),
             Err(CollectedRowSoftmaxErrorV1::ReceiptBindingMismatch {
                 field: "authority commitment"
+            })
+        ));
+    }
+
+    #[test]
+    fn authority_transcript_bytes_are_commitment_bound() {
+        let mut receipt = exact_frontend_receipt_for_test();
+        receipt
+            .authority_transcript
+            .as_mut()
+            .expect("test transcript")[0] ^= 1;
+        assert!(matches!(
+            receipt.consume(),
+            Err(CollectedRowSoftmaxErrorV1::ReceiptBindingMismatch {
+                field: "authority transcript"
             })
         ));
     }
