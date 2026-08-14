@@ -1,4 +1,6 @@
-use crate::argument_alias::{InFlightRegionRegistration, admit_and_register};
+use crate::argument_alias::{
+    GeneratedDeviceSliceMetadata, InFlightRegionRegistration, admit_and_register,
+};
 use crate::generated_argument_plan::{
     GeneratedArgumentInputV1, GeneratedDeviceScalarV1, GeneratedPackedArgumentsV1,
     GeneratedPackingComponentKindV1,
@@ -8,8 +10,8 @@ use crate::hsa_executable_lifecycle::{
     ResolvedLoadedWorkerV2KernelSelectionV1, validate_launch_geometry_contract,
 };
 use crate::{
-    AliasAdmissionError, AllocationProvenance, ArgumentAccess, ArgumentAccessMode,
-    ArgumentAliasAdmission, ArtifactKernelIdentityV1, CompilerGeneratedArgumentLayoutV1,
+    AliasAdmissionError, ArgumentAccess, ArgumentAccessMode, ArgumentAliasAdmission,
+    ArtifactKernelIdentityV1, CompilerGeneratedArgumentLayoutV1,
     CompilerGeneratedKernelExpectationV1, CompilerGeneratedKernelProfileV1,
     GeneratedArgumentLayoutError, GeneratedArgumentPackError, GeneratedArgumentPackingError,
     GeneratedArgumentPackingPlanV1, HsaCompletedDispatchV1, HsaExecutableLoadError,
@@ -23,7 +25,9 @@ use fe2o3_artifacts::{
     AbiField, AbiKind, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize, Mutability,
     PointerWidth, ScalarType, TargetIdentity,
 };
-use fe2o3_core::{DeviceBuffer, DevicePtr};
+use fe2o3_core::{
+    DeviceBuffer, DeviceBufferRegion, DeviceBufferView, DeviceBufferViewMut, DevicePtr,
+};
 use std::alloc::{Layout, alloc_zeroed, dealloc, handle_alloc_error};
 use std::fmt;
 use std::marker::PhantomData;
@@ -46,7 +50,8 @@ const HSA_MINIMUM_KERNARG_ALIGNMENT: u64 = 16;
 pub struct GeneratedScalarGemmV1ReadDeviceSlice<'allocation> {
     pointer: DevicePtr<f32>,
     len: usize,
-    provenance: AllocationProvenance<'allocation>,
+    metadata: GeneratedDeviceSliceMetadata,
+    retained: PhantomData<&'allocation f32>,
 }
 
 impl<'allocation> GeneratedScalarGemmV1ReadDeviceSlice<'allocation> {
@@ -54,11 +59,26 @@ impl<'allocation> GeneratedScalarGemmV1ReadDeviceSlice<'allocation> {
         observed: &ObservedContext,
         buffer: &'allocation DeviceBuffer<f32>,
     ) -> Result<Self, RegionError> {
-        let provenance = AllocationProvenance::from_device_buffer(observed, buffer)?;
+        let metadata = GeneratedDeviceSliceMetadata::from_region_allow_empty(observed, buffer)?;
         Ok(Self {
-            pointer: buffer.as_device_ptr(),
-            len: buffer.len(),
-            provenance,
+            pointer: buffer.region_device_ptr(),
+            len: buffer.region_len(),
+            metadata,
+            retained: PhantomData,
+        })
+    }
+
+    /// Consumes one checked shared subregion as the exact Scalar GEMM slice.
+    pub fn from_view(
+        observed: &ObservedContext,
+        view: DeviceBufferView<'allocation, f32>,
+    ) -> Result<Self, RegionError> {
+        let metadata = GeneratedDeviceSliceMetadata::from_region_allow_empty(observed, &view)?;
+        Ok(Self {
+            pointer: view.region_device_ptr(),
+            len: view.region_len(),
+            metadata,
+            retained: PhantomData,
         })
     }
 
@@ -100,11 +120,10 @@ impl<'allocation> GeneratedScalarGemmV1ReadDeviceSlice<'allocation> {
 
     #[doc(hidden)]
     pub fn argument_access_v1(&self) -> ArgumentAccess<'allocation> {
-        let region = self
-            .provenance
-            .region(0, self.provenance.byte_length())
-            .expect("whole generated allocation region was checked at construction");
-        ArgumentAccess::new(region, ArgumentAccessMode::SharedRead)
+        ArgumentAccess::new(
+            self.metadata.checked_region(),
+            ArgumentAccessMode::SharedRead,
+        )
     }
 }
 
@@ -114,8 +133,8 @@ impl<'allocation> GeneratedScalarGemmV1ReadDeviceSlice<'allocation> {
 pub struct GeneratedScalarGemmV1ReadWriteDeviceSlice<'allocation> {
     pointer: DevicePtr<f32>,
     len: usize,
-    provenance: AllocationProvenance<'allocation>,
-    exclusive: PhantomData<&'allocation mut DeviceBuffer<f32>>,
+    metadata: GeneratedDeviceSliceMetadata,
+    exclusive: PhantomData<&'allocation mut f32>,
 }
 
 impl<'allocation> GeneratedScalarGemmV1ReadWriteDeviceSlice<'allocation> {
@@ -123,13 +142,26 @@ impl<'allocation> GeneratedScalarGemmV1ReadWriteDeviceSlice<'allocation> {
         observed: &ObservedContext,
         buffer: &'allocation mut DeviceBuffer<f32>,
     ) -> Result<Self, RegionError> {
-        let pointer = buffer.as_device_ptr();
-        let len = buffer.len();
-        let provenance = AllocationProvenance::from_device_buffer(observed, &*buffer)?;
+        let metadata = GeneratedDeviceSliceMetadata::from_region_allow_empty(observed, buffer)?;
         Ok(Self {
-            pointer,
-            len,
-            provenance,
+            pointer: buffer.region_device_ptr(),
+            len: buffer.region_len(),
+            metadata,
+            exclusive: PhantomData,
+        })
+    }
+
+    /// Consumes one checked exclusive subregion as the exact initialized
+    /// Scalar GEMM output slice.
+    pub fn from_view_mut(
+        observed: &ObservedContext,
+        view: DeviceBufferViewMut<'allocation, f32>,
+    ) -> Result<Self, RegionError> {
+        let metadata = GeneratedDeviceSliceMetadata::from_region_allow_empty(observed, &view)?;
+        Ok(Self {
+            pointer: view.region_device_ptr(),
+            len: view.region_len(),
+            metadata,
             exclusive: PhantomData,
         })
     }
@@ -172,11 +204,10 @@ impl<'allocation> GeneratedScalarGemmV1ReadWriteDeviceSlice<'allocation> {
 
     #[doc(hidden)]
     pub fn argument_access_v1(&self) -> ArgumentAccess<'allocation> {
-        let region = self
-            .provenance
-            .region(0, self.provenance.byte_length())
-            .expect("whole generated allocation region was checked at construction");
-        ArgumentAccess::new(region, ArgumentAccessMode::ExclusiveReadWrite)
+        ArgumentAccess::new(
+            self.metadata.checked_region(),
+            ArgumentAccessMode::ExclusiveReadWrite,
+        )
     }
 }
 
@@ -357,6 +388,9 @@ where
     }
 }
 
+// Keep dispatch completion inline so returning from a completed GPU dispatch
+// does not introduce a new fallible allocation boundary.
+#[allow(clippy::large_enum_variant)]
 enum ScalarGemmCompletionState<K> {
     NoDispatch {
         artifact: ArtifactKernelIdentityV1,
@@ -1075,8 +1109,8 @@ impl std::error::Error for ScalarGemmV1PhysicalKernargError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::KernelId;
     use crate::generated_argument_plan::validate_argument_packing;
+    use crate::{AllocationProvenance, KernelId};
     use fe2o3_artifacts::{AbiLayout, Dimensions, Endianness, IdentityText, LaunchContract, Name};
 
     fn scalar_u32(name: &str, offset: u64) -> AbiField {

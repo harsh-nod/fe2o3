@@ -194,7 +194,7 @@ impl CheckedByteRegion<'_> {
     }
 }
 
-struct GeneratedDeviceSliceMetadata {
+pub(super) struct GeneratedDeviceSliceMetadata {
     identity: AllocationIdentity,
     _device_buffer_identity: DeviceBufferIdentity,
     context: ObservedContext,
@@ -222,16 +222,46 @@ impl GeneratedDeviceSliceMetadata {
         observed: &ObservedContext,
         region: &R,
     ) -> Result<Self, RegionError> {
+        Self::from_region_with_empty_policy(observed, region, false)
+    }
+
+    /// Retains metadata for profiles whose checked contract permits an empty
+    /// selected region.
+    pub(super) fn from_region_allow_empty<T: DeviceCopy, R: DeviceBufferRegion<T> + ?Sized>(
+        observed: &ObservedContext,
+        region: &R,
+    ) -> Result<Self, RegionError> {
+        Self::from_region_with_empty_policy(observed, region, true)
+    }
+
+    fn from_region_with_empty_policy<T: DeviceCopy, R: DeviceBufferRegion<T> + ?Sized>(
+        observed: &ObservedContext,
+        region: &R,
+        allow_empty: bool,
+    ) -> Result<Self, RegionError> {
         if !observed.is_for_context(region.context()) {
             return Err(RegionError::WrongContext);
         }
 
-        let checked = checked_device_region::<T>(
-            region.allocation_device_ptr().as_raw().addr(),
-            region.allocation_len(),
-            region.region_device_ptr().as_raw().addr(),
-            region.region_len(),
-        )?;
+        let allocation_address = region.allocation_device_ptr().as_raw().addr();
+        let allocation_len = region.allocation_len();
+        let region_address = region.region_device_ptr().as_raw().addr();
+        let region_len = region.region_len();
+        let checked = if allow_empty {
+            checked_device_region_allow_empty::<T>(
+                allocation_address,
+                allocation_len,
+                region_address,
+                region_len,
+            )
+        } else {
+            checked_device_region::<T>(
+                allocation_address,
+                allocation_len,
+                region_address,
+                region_len,
+            )
+        }?;
 
         Ok(Self {
             identity: AllocationIdentity {
@@ -245,7 +275,7 @@ impl GeneratedDeviceSliceMetadata {
         })
     }
 
-    fn checked_region<'allocation>(&self) -> CheckedByteRegion<'allocation> {
+    pub(super) fn checked_region<'allocation>(&self) -> CheckedByteRegion<'allocation> {
         let byte_end = self
             .byte_offset
             .checked_add(self.byte_length)
@@ -273,10 +303,41 @@ fn checked_device_region<T>(
     region_address: usize,
     region_len: usize,
 ) -> Result<CheckedDeviceRegion, RegionError> {
+    checked_device_region_impl::<T>(
+        allocation_address,
+        allocation_len,
+        region_address,
+        region_len,
+        false,
+    )
+}
+
+fn checked_device_region_allow_empty<T>(
+    allocation_address: usize,
+    allocation_len: usize,
+    region_address: usize,
+    region_len: usize,
+) -> Result<CheckedDeviceRegion, RegionError> {
+    checked_device_region_impl::<T>(
+        allocation_address,
+        allocation_len,
+        region_address,
+        region_len,
+        true,
+    )
+}
+
+fn checked_device_region_impl<T>(
+    allocation_address: usize,
+    allocation_len: usize,
+    region_address: usize,
+    region_len: usize,
+    allow_empty: bool,
+) -> Result<CheckedDeviceRegion, RegionError> {
     if size_of::<T>() == 0 {
         return Err(RegionError::ZeroSizedElement);
     }
-    if region_len == 0 {
+    if region_len == 0 && !allow_empty {
         return Err(RegionError::EmptyRegion);
     }
 
@@ -1352,6 +1413,25 @@ mod tests {
         assert_eq!(
             checked_device_region::<[u8; 0]>(0, usize::MAX, 0, 1).unwrap_err(),
             RegionError::ZeroSizedElement
+        );
+    }
+
+    #[test]
+    fn profile_specific_generated_regions_admit_checked_empty_boundaries() {
+        assert_eq!(
+            checked_device_region_allow_empty::<u32>(0x1000, 4, 0x1010, 0).unwrap(),
+            CheckedDeviceRegion {
+                byte_offset: 16,
+                byte_length: 0,
+            }
+        );
+        assert_eq!(
+            checked_device_region_allow_empty::<u32>(0x1000, 4, 0x1011, 0).unwrap_err(),
+            RegionError::OutOfBounds {
+                allocation_length: 16,
+                byte_offset: 17,
+                byte_length: 0,
+            }
         );
     }
 

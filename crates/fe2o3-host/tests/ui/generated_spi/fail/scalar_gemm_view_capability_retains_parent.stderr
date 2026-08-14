@@ -1,0 +1,10 @@
+error[E0502]: cannot borrow `guarded` as immutable because it is also borrowed as mutable
+ --> tests/ui/generated_spi/fail/scalar_gemm_view_capability_retains_parent.rs:8:18
+  |
+5 |     let (_left, output, _right) = guarded.split_range_mut(1..3).unwrap();
+  |                                   ------- mutable borrow occurs here
+...
+8 |     let _reuse = guarded.len();
+  |                  ^^^^^^^ immutable borrow occurs here
+9 |     drop(capability);
+  |          ---------- mutable borrow later used here

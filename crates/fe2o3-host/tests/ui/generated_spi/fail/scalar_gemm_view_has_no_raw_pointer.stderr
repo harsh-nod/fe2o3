@@ -1,0 +1,5 @@
+error[E0599]: no method named `as_device_ptr` found for struct `fe2o3_host::GeneratedScalarGemmV1ReadWriteDeviceSlice<'allocation>` in the current scope
+ --> tests/ui/generated_spi/fail/scalar_gemm_view_has_no_raw_pointer.rs:4:27
+  |
+4 |     let _raw = capability.as_device_ptr();
+  |                           ^^^^^^^^^^^^^ method not found in `fe2o3_host::GeneratedScalarGemmV1ReadWriteDeviceSlice<'_>`
