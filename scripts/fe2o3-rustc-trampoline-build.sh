@@ -59,6 +59,40 @@ readonly CANONICAL_PARENT="${canonical_parent}"
 [[ "${CANONICAL_PARENT}" == "${CANDIDATE_PARENT}" ]] ||
   fail 'candidate directory path must be canonical and contain no symlinks'
 
+output_directory_fd=
+exec {output_directory_fd}<"${CANONICAL_PARENT}" ||
+  fail 'cannot retain candidate directory'
+readonly OUTPUT_DIRECTORY_FD="${output_directory_fd}"
+readonly OUTPUT_DIRECTORY_REF="/proc/self/fd/${OUTPUT_DIRECTORY_FD}"
+output_directory_identity="$({
+  run_clean /usr/bin/stat --dereference --format='%d:%i' \
+    -- "${OUTPUT_DIRECTORY_REF}"
+} 2>/dev/null)" || fail 'cannot identify retained candidate directory'
+readonly OUTPUT_DIRECTORY_IDENTITY="${output_directory_identity}"
+output_directory_policy="$({
+  run_clean /usr/bin/stat --dereference --format='%u:%a:%F' \
+    -- "${OUTPUT_DIRECTORY_REF}"
+} 2>/dev/null)" || fail 'cannot inspect retained candidate directory'
+readonly OUTPUT_DIRECTORY_POLICY="${output_directory_policy}"
+[[ "${OUTPUT_DIRECTORY_POLICY}" == "${EUID}:700:directory" ]] ||
+  fail 'candidate directory must be caller-owned mode 0700'
+
+require_output_directory_identity() {
+  local retained current
+  retained="$({
+    run_clean /usr/bin/stat --dereference --format='%d:%i' \
+      -- "${OUTPUT_DIRECTORY_REF}"
+  } 2>/dev/null)" || fail 'retained candidate directory became unavailable'
+  current="$({
+    run_clean /usr/bin/stat --dereference --format='%d:%i' \
+      -- "${CANONICAL_PARENT}"
+  } 2>/dev/null)" || fail 'candidate directory path became unavailable'
+  [[ "${retained}" == "${OUTPUT_DIRECTORY_IDENTITY}" ]] ||
+    fail 'retained candidate directory identity changed'
+  [[ "${current}" == "${OUTPUT_DIRECTORY_IDENTITY}" ]] ||
+    fail 'candidate directory path was replaced during the operation'
+}
+
 require_header_value() {
   local header="$1"
   local label="$2"
@@ -76,10 +110,13 @@ require_header_value() {
 
 verify_elf() {
   local executable="$1"
-  local header program_headers dynamic_tags mode_and_links
-  if [[ ! -f "${executable}" || -L "${executable}" ]]; then
-    fail 'rustc trampoline verification requires a regular non-symlink file'
-  fi
+  local header program_headers dynamic_tags mode_and_links initial_identity final_identity
+  initial_identity="$({
+    run_clean /usr/bin/stat --dereference \
+      --format='%d:%i:%u:%a:%h:%s:%F' -- "${executable}"
+  } 2>/dev/null)" || fail 'cannot identify retained rustc trampoline object'
+  [[ "${initial_identity}" == *":${EUID}:555:1:"*':regular file' ]] ||
+    fail 'rustc trampoline must be one caller-owned mode 0555 regular object'
   header="$(run_clean /usr/bin/readelf --file-header --wide -- "${executable}")"
   program_headers="$(
     run_clean /usr/bin/readelf --program-headers --wide -- "${executable}"
@@ -144,23 +181,63 @@ verify_elf() {
       'FE2O3_RUSTC_TRAMPOLINE_TEST_ONLY_BUILD' >/dev/null; then
     fail 'production rustc trampoline contains the test-only ELF marker'
   fi
-  mode_and_links="$(run_clean /usr/bin/stat --format='%a:%h' -- "${executable}")"
+  mode_and_links="$(
+    run_clean /usr/bin/stat --dereference --format='%a:%h' -- "${executable}"
+  )"
   [[ "${mode_and_links}" == 555:1 ]] ||
     fail "rustc trampoline mode/link count is ${mode_and_links}, expected 555:1"
+  final_identity="$({
+    run_clean /usr/bin/stat --dereference \
+      --format='%d:%i:%u:%a:%h:%s:%F' -- "${executable}"
+  } 2>/dev/null)" || fail 'cannot reidentify retained rustc trampoline object'
+  [[ "${final_identity}" == "${initial_identity}" ]] ||
+    fail 'retained rustc trampoline object identity changed during verification'
 }
 
 if [[ "${MODE}" == verify ]]; then
-  verify_elf "${CANDIDATE}"
+  require_output_directory_identity
+  [[ ! -L "${OUTPUT_DIRECTORY_REF}/${CANDIDATE_NAME}" ]] ||
+    fail 'rustc trampoline verification rejects symlinks'
+  candidate_fd=
+  exec {candidate_fd}<"${OUTPUT_DIRECTORY_REF}/${CANDIDATE_NAME}" ||
+    fail 'cannot retain rustc trampoline candidate'
+  readonly CANDIDATE_FD="${candidate_fd}"
+  readonly CANDIDATE_REF="/proc/self/fd/${CANDIDATE_FD}"
+  verify_elf "${CANDIDATE_REF}"
+  require_output_directory_identity
+  installed_candidate_identity="$({
+    run_clean /usr/bin/stat --dereference --format='%d:%i' \
+      -- "${OUTPUT_DIRECTORY_REF}/${CANDIDATE_NAME}"
+  } 2>/dev/null)" || fail 'verified rustc trampoline path became unavailable'
+  readonly INSTALLED_CANDIDATE_IDENTITY="${installed_candidate_identity}"
+  retained_candidate_identity="$({
+    run_clean /usr/bin/stat --dereference --format='%d:%i' \
+      -- "${CANDIDATE_REF}"
+  } 2>/dev/null)" || fail 'verified rustc trampoline object became unavailable'
+  readonly RETAINED_CANDIDATE_IDENTITY="${retained_candidate_identity}"
+  [[ "${INSTALLED_CANDIDATE_IDENTITY}" == "${RETAINED_CANDIDATE_IDENTITY}" ]] ||
+    fail 'verified rustc trampoline path no longer names the retained object'
   exit 0
 fi
 
 [[ -f "${SOURCE}" && ! -L "${SOURCE}" ]] || fail 'trampoline source is unavailable'
-temporary="${CANDIDATE_PARENT}/.${CANDIDATE_NAME}.tmp.$$"
-readonly TEMPORARY="${temporary}"
+require_output_directory_identity
+staging_directory="$({
+  run_clean /usr/bin/mktemp --directory \
+    "${OUTPUT_DIRECTORY_REF}/.fe2o3-rustc-trampoline.XXXXXXXXXX"
+} 2>/dev/null)" || fail 'cannot create private rustc trampoline staging directory'
+readonly STAGING_DIRECTORY="${staging_directory}"
+readonly TEMPORARY="${STAGING_DIRECTORY}/trampoline"
 cleanup() {
-  rm -f -- "${TEMPORARY}"
+  run_clean /usr/bin/rm -rf -- "${STAGING_DIRECTORY}" 2>/dev/null || true
 }
 trap cleanup EXIT
+staging_policy="$({
+  run_clean /usr/bin/stat --format='%u:%a:%F' -- "${STAGING_DIRECTORY}"
+} 2>/dev/null)" || fail 'cannot inspect private rustc trampoline staging directory'
+readonly STAGING_POLICY="${staging_policy}"
+[[ "${STAGING_POLICY}" == "${EUID}:700:directory" ]] ||
+  fail 'rustc trampoline staging directory is not caller-owned mode 0700'
 
 run_clean /usr/bin/cc \
   -std=c11 -O2 -fPIE -static-pie -march=x86-64 -mtune=generic \
@@ -171,9 +248,29 @@ run_clean /usr/bin/cc \
   -Wl,-z,relro,-z,now,-z,noexecstack,--fatal-warnings,--build-id=none \
   "${SOURCE}" -o "${TEMPORARY}"
 run_clean /usr/bin/chmod 0555 "${TEMPORARY}"
-verify_elf "${TEMPORARY}"
-run_clean /usr/bin/mv -- "${TEMPORARY}" "${CANDIDATE}"
-verify_elf "${CANDIDATE}"
-run_clean /usr/bin/sha256sum -- "${CANDIDATE}"
+[[ ! -L "${TEMPORARY}" ]] || fail 'compiler produced a symlink instead of an ELF object'
+artifact_fd=
+exec {artifact_fd}<"${TEMPORARY}" || fail 'cannot retain compiled rustc trampoline'
+readonly ARTIFACT_FD="${artifact_fd}"
+readonly ARTIFACT_REF="/proc/self/fd/${ARTIFACT_FD}"
+artifact_identity="$({
+  run_clean /usr/bin/stat --dereference --format='%d:%i' -- "${ARTIFACT_REF}"
+} 2>/dev/null)" || fail 'cannot identify compiled rustc trampoline'
+readonly ARTIFACT_IDENTITY="${artifact_identity}"
+verify_elf "${ARTIFACT_REF}"
+require_output_directory_identity
+run_clean /usr/bin/mv -T -- "${TEMPORARY}" \
+  "${OUTPUT_DIRECTORY_REF}/${CANDIDATE_NAME}"
+require_output_directory_identity
+[[ ! -L "${OUTPUT_DIRECTORY_REF}/${CANDIDATE_NAME}" ]] ||
+  fail 'installed rustc trampoline unexpectedly became a symlink'
+installed_identity="$({
+  run_clean /usr/bin/stat --dereference --format='%d:%i' \
+    -- "${OUTPUT_DIRECTORY_REF}/${CANDIDATE_NAME}"
+} 2>/dev/null)" || fail 'installed rustc trampoline became unavailable'
+readonly INSTALLED_IDENTITY="${installed_identity}"
+[[ "${INSTALLED_IDENTITY}" == "${ARTIFACT_IDENTITY}" ]] ||
+  fail 'installed rustc trampoline is not the retained verified object'
+run_clean /usr/bin/sha256sum -- "${ARTIFACT_REF}"
 printf '%s\n' \
   'non-authoritative foundation: Rust broker, seccomp, and policy integration remain required' >&2

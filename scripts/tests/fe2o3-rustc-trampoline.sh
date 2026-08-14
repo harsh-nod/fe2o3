@@ -11,6 +11,10 @@ TEST_ROOT="$(mktemp -d "${HOME}/.fe2o3-rustc-trampoline-test.XXXXXX")"
 readonly TEST_ROOT
 readonly PRODUCTION_ONE="${TEST_ROOT}/production-one"
 readonly PRODUCTION_TWO="${TEST_ROOT}/production-two"
+readonly REPLACED_SYMLINK="${TEST_ROOT}/replaced-symlink"
+readonly SYMLINK_VICTIM="${TEST_ROOT}/symlink-victim"
+readonly VERIFY_SYMLINK="${TEST_ROOT}/verify-symlink"
+readonly PUBLIC_OUTPUT_DIRECTORY="${TEST_ROOT}/public-output"
 readonly TEST_TRAMPOLINE="${TEST_ROOT}/test-trampoline"
 readonly WRAPPER="${TEST_ROOT}/cargo-fe2o3-wrapper"
 readonly ALTERNATE_WRAPPER="${TEST_ROOT}/alternate-wrapper"
@@ -34,6 +38,19 @@ fail() {
 run_watchdog() {
   /usr/bin/timeout --signal=TERM --kill-after="${WATCHDOG_KILL_SECONDS}s" \
     "${WATCHDOG_SECONDS}s" "$@"
+}
+
+expect_build_failure() {
+  local expected="$1"
+  shift
+  local output="${TEST_ROOT}/expected-build-failure.out"
+  if run_watchdog "$@" >"${output}" 2>&1; then
+    fail "build command unexpectedly succeeded: $*"
+  fi
+  /usr/bin/grep -F -- "${expected}" "${output}" >/dev/null || {
+    /usr/bin/sed -n '1,120p' "${output}" >&2
+    fail "build failure did not contain: ${expected}"
+  }
 }
 
 assert_test_elf() {
@@ -529,6 +546,30 @@ run_watchdog "${BUILD}" "${PRODUCTION_TWO}"
 cmp --silent -- "${PRODUCTION_ONE}" "${PRODUCTION_TWO}" ||
   fail 'production trampoline build is not reproducible across output names'
 run_watchdog "${BUILD}" --verify "${PRODUCTION_ONE}"
+
+mkdir -- "${PUBLIC_OUTPUT_DIRECTORY}"
+chmod 0755 "${PUBLIC_OUTPUT_DIRECTORY}"
+expect_build_failure 'candidate directory must be caller-owned mode 0700' \
+  "${BUILD}" "${PUBLIC_OUTPUT_DIRECTORY}/trampoline"
+
+printf '%s\n' 'SYMLINK_VICTIM_MUST_NOT_CHANGE' >"${SYMLINK_VICTIM}"
+chmod 0600 "${SYMLINK_VICTIM}"
+ln -s -- "${SYMLINK_VICTIM}" "${REPLACED_SYMLINK}"
+run_watchdog "${BUILD}" "${REPLACED_SYMLINK}"
+[[ ! -L "${REPLACED_SYMLINK}" ]] ||
+  fail 'atomic trampoline installation retained an attacker symlink'
+[[ "$(<"${SYMLINK_VICTIM}")" == 'SYMLINK_VICTIM_MUST_NOT_CHANGE' ]] ||
+  fail 'atomic trampoline installation followed and modified a symlink victim'
+cmp --silent -- "${PRODUCTION_ONE}" "${REPLACED_SYMLINK}" ||
+  fail 'atomic trampoline installation did not install the verified object'
+
+ln -s -- "${PRODUCTION_ONE}" "${VERIFY_SYMLINK}"
+expect_build_failure 'rustc trampoline verification rejects symlinks' \
+  "${BUILD}" --verify "${VERIFY_SYMLINK}"
+
+if compgen -G "${TEST_ROOT}/.fe2o3-rustc-trampoline.*" >/dev/null; then
+  fail 'private trampoline staging directory survived successful installation'
+fi
 compile_test_trampoline
 
 run_watchdog /usr/bin/cc \
