@@ -744,6 +744,7 @@ fn execute_vertical_request(control: &Path, id: u64) -> Result<(), String> {
             command.env_remove(name);
         }
     }
+    scrub_test_harness_dynamic_loader_environment(&mut command);
 
     let child = command
         .spawn()
@@ -761,6 +762,15 @@ fn execute_vertical_request(control: &Path, id: u64) -> Result<(), String> {
     #[cfg(not(unix))]
     let status = output.status.code().unwrap_or(-1).to_le_bytes();
     write_vertical_result(control, id, status, &output.stdout, &output.stderr)
+}
+
+fn scrub_test_harness_dynamic_loader_environment(command: &mut Command) {
+    for (name, _) in env::vars_os() {
+        let bytes = name.as_os_str().as_encoded_bytes();
+        if bytes.starts_with(b"LD_") || bytes.starts_with(b"DYLD_") || bytes == b"GLIBC_TUNABLES" {
+            command.env_remove(name);
+        }
+    }
 }
 
 fn write_vertical_result(
