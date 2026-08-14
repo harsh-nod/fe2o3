@@ -2200,11 +2200,37 @@ mod platform {
             }
             if let Err(error) = validate_process_executable(child, image) {
                 if error.io_kind() == Some(io::ErrorKind::NotFound)
-                    && let Some(status) = child.try_reap()?
+                    && let Some(status) =
+                        wait_for_terminal_after_executable_disappeared(child, deadline)?
                 {
                     return Ok(status);
                 }
                 return Err(error);
+            }
+            thread::sleep(POLL_INTERVAL);
+        }
+    }
+
+    fn wait_for_terminal_after_executable_disappeared(
+        child: &mut ChildGuard,
+        deadline: Instant,
+    ) -> Result<Option<ProcessExit>, AuthenticatedVerusExecutionErrorV2> {
+        loop {
+            if let Some(status) = child.try_reap()? {
+                return Ok(Some(status));
+            }
+            match std::fs::read_link(child.proc_path("exe")) {
+                Ok(_) => return Ok(None),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(AuthenticatedVerusExecutionErrorV2::io(
+                        process_error(child.role, ProcessFailureV2::ExecutableSubstitution),
+                        error,
+                    ));
+                }
+            }
+            if Instant::now() >= deadline {
+                return Ok(None);
             }
             thread::sleep(POLL_INTERVAL);
         }

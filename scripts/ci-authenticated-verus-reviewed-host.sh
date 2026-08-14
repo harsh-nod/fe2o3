@@ -18,9 +18,9 @@ rustup show active-toolchain
 rustc -Vv
 cargo -V
 
-cargo test -p fe2o3-verifier \
+cargo test --locked -p fe2o3-verifier \
   --test authenticated_verus_execution_v2 \
   -- --include-ignored --test-threads=1
-cargo test --release -p fe2o3-verifier \
+cargo test --locked --release -p fe2o3-verifier \
   --test authenticated_verus_execution_v2 \
   -- --include-ignored --test-threads=1
