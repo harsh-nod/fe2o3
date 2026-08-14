@@ -20,10 +20,17 @@ constexpr uint8_t RequestMagicV1[] = {'F', '3', 'L', 'R', 'E', 'Q', '0', '1'};
 constexpr uint8_t ResponseMagicV1[] = {'F', '3', 'L', 'R', 'S', 'P', '0', '1'};
 constexpr uint8_t RequestMagicV2[] = {'F', '3', 'L', 'R', 'E', 'Q', '0', '2'};
 constexpr uint8_t ResponseMagicV2[] = {'F', '3', 'L', 'R', 'S', 'P', '0', '2'};
+constexpr uint8_t ResponseMagicV3[] = {'F', '3', 'L', 'R', 'S', 'P', '0', '3'};
 constexpr char RequestDomainV1[] = "FE2O3/DIRECT-LLVM-WORKER-REQUEST/V1\0";
 constexpr char RequestDomainV2[] = "FE2O3/DIRECT-LLVM-WORKER-REQUEST/V2\0";
+constexpr char ProviderManifestDomainV1[] =
+    "FE2O3/DEVICE-LIBRARY-PROVIDER-MANIFEST/V1\0";
+constexpr char ResponseDomainV3[] = "FE2O3/DIRECT-LLVM-WORKER-RESPONSE/V3\0";
 constexpr size_t MaxBuildIdentityBytes = 160;
 constexpr size_t MaxTargetBytes = 128;
+constexpr size_t MaxProviderIdentityBytes = 128;
+constexpr size_t MaxProviderFiles = 16;
+constexpr size_t MaxProviderBasenameBytes = 128;
 
 Error protocolError(const Twine &Message) {
   return createStringError(inconvertibleErrorCode(), Message);
@@ -375,7 +382,71 @@ std::vector<uint8_t> encodeStrings(ArrayRef<std::string> Values) {
   return Result;
 }
 
+Expected<std::vector<uint8_t>>
+encodeProviderManifestPreimage(const DeviceLibraryProviderEvidence &Evidence) {
+  auto Provider =
+      text(ArrayRef<uint8_t>(reinterpret_cast<const uint8_t *>(
+                                 Evidence.ProviderIdentity.data()),
+                             Evidence.ProviderIdentity.size()),
+           MaxProviderIdentityBytes, "device-library provider identity");
+  if (!Provider)
+    return Provider.takeError();
+  if (Error E = validateTarget(Evidence.Target))
+    return E;
+  if (Evidence.CodeObjectVersion != 4 && Evidence.CodeObjectVersion != 5 &&
+      Evidence.CodeObjectVersion != 6)
+    return protocolError("invalid provider code-object version");
+  if (Error E = validateSymbols(Evidence.ImportSymbols))
+    return E;
+  if (Evidence.ImportSymbols.empty())
+    return protocolError("device-library provider has no imports");
+  if (Evidence.Files.empty() || Evidence.Files.size() > MaxProviderFiles)
+    return protocolError("invalid device-library provider file count");
+
+  std::vector<uint8_t> Encoded;
+  appendU32(Encoded, static_cast<uint32_t>(Evidence.ProviderIdentity.size()));
+  Encoded.insert(Encoded.end(), Evidence.ProviderIdentity.begin(),
+                 Evidence.ProviderIdentity.end());
+  appendU32(Encoded, static_cast<uint32_t>(Evidence.Target.size()));
+  Encoded.insert(Encoded.end(), Evidence.Target.begin(), Evidence.Target.end());
+  Encoded.push_back(Evidence.CodeObjectVersion);
+  std::vector<uint8_t> Imports = encodeStrings(Evidence.ImportSymbols);
+  Encoded.insert(Encoded.end(), Imports.begin(), Imports.end());
+  appendU32(Encoded, static_cast<uint32_t>(Evidence.Files.size()));
+  for (const DeviceLibraryProviderFileEvidence &File : Evidence.Files) {
+    auto Basename =
+        text(ArrayRef<uint8_t>(
+                 reinterpret_cast<const uint8_t *>(File.Basename.data()),
+                 File.Basename.size()),
+             MaxProviderBasenameBytes, "device-library provider basename");
+    if (!Basename)
+      return Basename.takeError();
+    if (StringRef(File.Basename).contains('/') ||
+        StringRef(File.Basename).contains('\\'))
+      return protocolError("invalid device-library provider basename");
+    appendU32(Encoded, static_cast<uint32_t>(File.Basename.size()));
+    Encoded.insert(Encoded.end(), File.Basename.begin(), File.Basename.end());
+    Encoded.insert(Encoded.end(), File.Digest.begin(), File.Digest.end());
+  }
+  return Encoded;
+}
+
 } // namespace
+
+Expected<std::array<uint8_t, 32>> calculateProviderManifestIdentity(
+    const DeviceLibraryProviderEvidence &Evidence) {
+  auto Preimage = encodeProviderManifestPreimage(Evidence);
+  if (!Preimage)
+    return Preimage.takeError();
+  SHA256 Hasher;
+  Hasher.update(StringRef(ProviderManifestDomainV1,
+                          sizeof(ProviderManifestDomainV1) - 1));
+  uint8_t LengthBytes[8];
+  support::endian::write64le(LengthBytes, Preimage->size());
+  Hasher.update(ArrayRef<uint8_t>(LengthBytes));
+  Hasher.update(*Preimage);
+  return Hasher.final();
+}
 
 Expected<Request> decodeRequest(ArrayRef<uint8_t> Bytes) {
   if (Bytes.size() > MaxRequestBytes)
@@ -746,12 +817,26 @@ Expected<std::vector<uint8_t>> encodeResponse(Response Value) {
       llvm::all_of(Value.CompilerEnvelopeIdentity,
                    [](uint8_t Byte) { return Byte == 0; }))
     return protocolError("V2 response has no compiler envelope identity");
+  if (Value.DeviceLibraryProvider) {
+    if (Value.Protocol != ProtocolVersion::V2 || !Success)
+      return protocolError(
+          "provider evidence requires a successful V2 response");
+    auto ManifestIdentity =
+        calculateProviderManifestIdentity(*Value.DeviceLibraryProvider);
+    if (!ManifestIdentity)
+      return ManifestIdentity.takeError();
+    if (*ManifestIdentity != Value.DeviceLibraryProvider->ManifestIdentity)
+      return protocolError("provider manifest identity mismatch");
+  }
 
   std::vector<uint8_t> Encoded;
   if (Value.Protocol == ProtocolVersion::V1)
     Encoded.assign(std::begin(ResponseMagicV1), std::end(ResponseMagicV1));
   else if (Value.Protocol == ProtocolVersion::V2)
-    Encoded.assign(std::begin(ResponseMagicV2), std::end(ResponseMagicV2));
+    Encoded.assign(Value.DeviceLibraryProvider ? std::begin(ResponseMagicV3)
+                                               : std::begin(ResponseMagicV2),
+                   Value.DeviceLibraryProvider ? std::end(ResponseMagicV3)
+                                               : std::end(ResponseMagicV2));
   else
     return protocolError("unsupported response protocol version");
   if (Error E = appendField(Encoded, 1, Value.RequestId))
@@ -791,6 +876,27 @@ Expected<std::vector<uint8_t>> encodeResponse(Response Value) {
   }
   if (Error E = appendField(Encoded, 6 + Offset, OutputBytes))
     return E;
+  if (Value.DeviceLibraryProvider) {
+    auto ProviderBytes =
+        encodeProviderManifestPreimage(*Value.DeviceLibraryProvider);
+    if (!ProviderBytes)
+      return ProviderBytes.takeError();
+    ProviderBytes->insert(ProviderBytes->end(),
+                          Value.DeviceLibraryProvider->ManifestIdentity.begin(),
+                          Value.DeviceLibraryProvider->ManifestIdentity.end());
+    if (Error E = appendField(Encoded, 8, *ProviderBytes))
+      return E;
+
+    SHA256 Hasher;
+    Hasher.update(StringRef(ResponseDomainV3, sizeof(ResponseDomainV3) - 1));
+    uint8_t LengthBytes[8];
+    support::endian::write64le(LengthBytes, Encoded.size());
+    Hasher.update(ArrayRef<uint8_t>(LengthBytes));
+    Hasher.update(Encoded);
+    std::array<uint8_t, 32> ResponseIdentity = Hasher.final();
+    if (Error E = appendField(Encoded, 9, ResponseIdentity))
+      return E;
+  }
   return Encoded;
 }
 

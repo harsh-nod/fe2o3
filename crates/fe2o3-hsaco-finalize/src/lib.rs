@@ -127,8 +127,9 @@ pub use worker_protocol::{
 };
 pub use worker_protocol_v2::{
     InertDecodedWorkerExchangeV2, WORKER_REQUEST_MAGIC_V2, WORKER_RESPONSE_MAGIC_V2,
-    WorkerCompilerFfiEnvelopeIdentityV2, WorkerEvidenceClassV2, WorkerOutputV2, WorkerRequestV2,
-    WorkerResponseV2,
+    WORKER_RESPONSE_MAGIC_V3, WorkerCompilerFfiEnvelopeIdentityV2,
+    WorkerDeviceLibraryProviderEvidenceV1, WorkerDeviceLibraryProviderFileEvidenceV1,
+    WorkerEvidenceClassV2, WorkerOutputV2, WorkerRequestV2, WorkerResponseV2,
 };
 pub use worker_v2_hsaco_admission::{
     CanonicalDescriptorSectionObservationV1, InspectedRawWorkerV2HsacoIdentityV1,

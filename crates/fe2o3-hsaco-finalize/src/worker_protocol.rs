@@ -606,6 +606,9 @@ pub enum WorkerProtocolError {
     RequiredSymbolNotExpected,
     InvalidOutputBound,
     RequestIdentityMismatch,
+    ProviderEvidenceMismatch,
+    ProviderManifestIdentityMismatch,
+    ResponseIdentityMismatch,
     TooManyDiagnostics,
     DiagnosticsTooLarge,
     InvalidDiagnostic,
@@ -658,6 +661,15 @@ impl fmt::Display for WorkerProtocolError {
             }
             Self::InvalidOutputBound => formatter.write_str("invalid worker output bound"),
             Self::RequestIdentityMismatch => formatter.write_str("request identity mismatch"),
+            Self::ProviderEvidenceMismatch => {
+                formatter.write_str("device-library provider evidence does not match request")
+            }
+            Self::ProviderManifestIdentityMismatch => {
+                formatter.write_str("device-library provider manifest identity mismatch")
+            }
+            Self::ResponseIdentityMismatch => {
+                formatter.write_str("worker response identity mismatch")
+            }
             Self::TooManyDiagnostics => formatter.write_str("too many worker diagnostics"),
             Self::DiagnosticsTooLarge => formatter.write_str("worker diagnostics exceed the bound"),
             Self::InvalidDiagnostic => formatter.write_str("invalid worker diagnostic"),

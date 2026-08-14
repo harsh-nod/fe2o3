@@ -12,7 +12,8 @@
 #include <vector>
 
 #ifndef FE2O3_PINNED_LLVM_VERSION_MAJOR
-#error "FE2O3_PINNED_LLVM_VERSION_MAJOR must be provided by the pinned worker build"
+#error                                                                         \
+    "FE2O3_PINNED_LLVM_VERSION_MAJOR must be provided by the pinned worker build"
 #endif
 
 static_assert(LLVM_VERSION_MAJOR == FE2O3_PINNED_LLVM_VERSION_MAJOR,
@@ -90,6 +91,20 @@ struct Output {
   std::vector<uint8_t> Bytes;
 };
 
+struct DeviceLibraryProviderFileEvidence {
+  std::string Basename;
+  std::array<uint8_t, 32> Digest{};
+};
+
+struct DeviceLibraryProviderEvidence {
+  std::string ProviderIdentity;
+  std::string Target;
+  uint8_t CodeObjectVersion = 0;
+  std::vector<std::string> ImportSymbols;
+  std::vector<DeviceLibraryProviderFileEvidence> Files;
+  std::array<uint8_t, 32> ManifestIdentity{};
+};
+
 struct Response {
   std::array<uint8_t, 32> RequestId{};
   std::array<uint8_t, 32> RequestIdentity{};
@@ -99,6 +114,8 @@ struct Response {
   std::optional<Output> LinkedOutput;
   ProtocolVersion Protocol = ProtocolVersion::V1;
   std::array<uint8_t, 32> CompilerEnvelopeIdentity{};
+  std::optional<DeviceLibraryProviderEvidence> DeviceLibraryProvider =
+      std::nullopt;
 };
 
 llvm::Expected<Request> decodeRequest(llvm::ArrayRef<uint8_t> Bytes);
@@ -107,6 +124,8 @@ llvm::Expected<Request> decodeAnyRequest(llvm::ArrayRef<uint8_t> Bytes);
 llvm::Expected<ProtocolVersion>
 detectRequestProtocol(llvm::ArrayRef<uint8_t> Bytes);
 llvm::Expected<std::vector<uint8_t>> encodeResponse(Response ResponseValue);
+llvm::Expected<std::array<uint8_t, 32>> calculateProviderManifestIdentity(
+    const DeviceLibraryProviderEvidence &Evidence);
 
 std::vector<std::string>
 canonicalDiagnostics(llvm::ArrayRef<std::string> Diagnostics,

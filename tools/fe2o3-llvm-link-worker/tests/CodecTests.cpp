@@ -1,6 +1,7 @@
 #include "WorkerProtocol.h"
 
 #include "llvm/Support/Error.h"
+#include "llvm/Support/SHA256.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
@@ -131,6 +132,39 @@ int main() {
   if (!std::equal(ResponseMagicV2.begin(), ResponseMagicV2.end(),
                   EncodedV2Response->begin()))
     return fail("V2 response used the wrong wire version");
+
+  DeviceLibraryProviderEvidence Provider;
+  Provider.ProviderIdentity = "gfx942-ocml-v1";
+  Provider.Target = "gfx942:xnack-";
+  Provider.CodeObjectVersion = 6;
+  Provider.ImportSymbols = {"__ocml_exp_f32"};
+  Provider.Files = {{"ocml.bc", {}}};
+  auto ManifestIdentity = calculateProviderManifestIdentity(Provider);
+  if (!ManifestIdentity)
+    return fail("provider manifest identity could not be calculated");
+  Provider.ManifestIdentity = *ManifestIdentity;
+  Response ProviderSuccess{V2Request->RequestId,  V2Request->Identity,
+                           FE2O3_WORKER_BUILD_ID, Stage::Complete,
+                           {"provider success"},  Output{{}, {'o', 'k'}}};
+  ProviderSuccess.LinkedOutput->Digest =
+      llvm::SHA256::hash(ProviderSuccess.LinkedOutput->Bytes);
+  ProviderSuccess.Protocol = ProtocolVersion::V2;
+  ProviderSuccess.CompilerEnvelopeIdentity =
+      V2Request->CompilerEnvelopeIdentity;
+  ProviderSuccess.DeviceLibraryProvider = Provider;
+  auto EncodedProviderResponse = encodeResponse(ProviderSuccess);
+  if (!EncodedProviderResponse)
+    return fail("provider response could not be encoded");
+  const std::array<uint8_t, 8> ResponseMagicV3 = {'F', '3', 'L', 'R',
+                                                  'S', 'P', '0', '3'};
+  if (!std::equal(ResponseMagicV3.begin(), ResponseMagicV3.end(),
+                  EncodedProviderResponse->begin()))
+    return fail("provider response omitted the authenticated extension");
+  ProviderSuccess.DeviceLibraryProvider->ManifestIdentity[0] ^= 0xff;
+  auto WrongProviderIdentity = encodeResponse(std::move(ProviderSuccess));
+  if (WrongProviderIdentity)
+    return fail("provider response accepted a false manifest identity");
+  llvm::consumeError(WrongProviderIdentity.takeError());
 
   std::vector<uint8_t> UnknownTag{'F', '3',  'L',  'R', 'E', 'Q', '0',
                                   '1', 0xff, 0xff, 0,   0,   0,   0};

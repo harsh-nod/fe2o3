@@ -27,12 +27,24 @@ use crate::{
 
 pub const WORKER_REQUEST_MAGIC_V2: &[u8; 8] = b"F3LREQ02";
 pub const WORKER_RESPONSE_MAGIC_V2: &[u8; 8] = b"F3LRSP02";
+pub const WORKER_RESPONSE_MAGIC_V3: &[u8; 8] = b"F3LRSP03";
 
 const REQUEST_DOMAIN_V2: &[u8] = b"FE2O3/DIRECT-LLVM-WORKER-REQUEST/V2\0";
+const PROVIDER_MANIFEST_DOMAIN_V1: &[u8] = b"FE2O3/DEVICE-LIBRARY-PROVIDER-MANIFEST/V1\0";
+const RESPONSE_DOMAIN_V3: &[u8] = b"FE2O3/DIRECT-LLVM-WORKER-RESPONSE/V3\0";
 const REQUEST_FIELD_COUNT_V2: u16 = 15;
 const RESPONSE_FIELD_COUNT_V2: u16 = 7;
+const RESPONSE_FIELD_COUNT_V3: u16 = 9;
 const INPUT_OVERHEAD_BYTES: usize = 1 + 32 + 8;
 const CONTENT_IDENTITY_BYTES: usize = 32 + 8;
+const MAX_PROVIDER_IDENTITY_BYTES: usize = 128;
+const MAX_PROVIDER_FILES: usize = 16;
+const MAX_PROVIDER_BASENAME_BYTES: usize = 128;
+const MAX_PROVIDER_EVIDENCE_BYTES: usize = MAX_PROVIDER_IDENTITY_BYTES
+    + MAX_WORKER_TARGET_BYTES
+    + MAX_WORKER_SYMBOLS * (MAX_WORKER_SYMBOL_BYTES + 4)
+    + MAX_PROVIDER_FILES * (MAX_PROVIDER_BASENAME_BYTES + 36)
+    + 49;
 
 /// Evidence available only from the sealed compiler-envelope V2 path.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -256,6 +268,60 @@ impl WorkerOutputV2 {
     }
 }
 
+/// One ordered, content-addressed file in a worker-owned device-library closure.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorkerDeviceLibraryProviderFileEvidenceV1 {
+    basename: String,
+    sha256: [u8; 32],
+}
+
+impl WorkerDeviceLibraryProviderFileEvidenceV1 {
+    pub fn basename(&self) -> &str {
+        &self.basename
+    }
+
+    pub const fn sha256(&self) -> &[u8; 32] {
+        &self.sha256
+    }
+}
+
+/// Structured provider closure emitted by the measured worker.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorkerDeviceLibraryProviderEvidenceV1 {
+    provider_identity: String,
+    target: DeviceTargetV1,
+    code_object_version: CodeObjectVersion,
+    import_symbols: Vec<String>,
+    files: Vec<WorkerDeviceLibraryProviderFileEvidenceV1>,
+    manifest_identity: [u8; 32],
+}
+
+impl WorkerDeviceLibraryProviderEvidenceV1 {
+    pub fn provider_identity(&self) -> &str {
+        &self.provider_identity
+    }
+
+    pub const fn target(&self) -> DeviceTargetV1 {
+        self.target
+    }
+
+    pub const fn code_object_version(&self) -> CodeObjectVersion {
+        self.code_object_version
+    }
+
+    pub fn import_symbols(&self) -> &[String] {
+        &self.import_symbols
+    }
+
+    pub fn files(&self) -> &[WorkerDeviceLibraryProviderFileEvidenceV1] {
+        &self.files
+    }
+
+    pub const fn manifest_identity(&self) -> &[u8; 32] {
+        &self.manifest_identity
+    }
+}
+
 /// Canonical worker response decoded only in the context of one sealed V2 request.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkerResponseV2 {
@@ -266,6 +332,8 @@ pub struct WorkerResponseV2 {
     stage: WorkerStageV1,
     diagnostics: Vec<String>,
     output: Option<WorkerOutputV2>,
+    device_library_provider: Option<WorkerDeviceLibraryProviderEvidenceV1>,
+    response_identity: Option<[u8; 32]>,
     canonical_bytes: Vec<u8>,
 }
 
@@ -277,7 +345,13 @@ impl WorkerResponseV2 {
         if bytes.len() > MAX_WORKER_RESPONSE_BYTES {
             return Err(WorkerProtocolError::ResponseTooLarge);
         }
-        let mut decoder = Decoder::new(bytes, WORKER_RESPONSE_MAGIC_V2, RESPONSE_FIELD_COUNT_V2)?;
+        let has_provider_extension = bytes.starts_with(WORKER_RESPONSE_MAGIC_V3);
+        let (magic, field_count) = if has_provider_extension {
+            (WORKER_RESPONSE_MAGIC_V3, RESPONSE_FIELD_COUNT_V3)
+        } else {
+            (WORKER_RESPONSE_MAGIC_V2, RESPONSE_FIELD_COUNT_V2)
+        };
+        let mut decoder = Decoder::new(bytes, magic, field_count)?;
         let request_id = fixed::<32>(decoder.field(1, 32)?)?;
         let request_identity = fixed::<32>(decoder.field(2, 32)?)?;
         let compiler_envelope =
@@ -299,13 +373,36 @@ impl WorkerResponseV2 {
             true,
         )?;
         let raw_output = decode_output(decoder.field(7, MAX_WORKER_OUTPUT_BYTES + 45)?)?;
-        decoder.finish(RESPONSE_FIELD_COUNT_V2)?;
+        let (device_library_provider, response_identity) = if has_provider_extension {
+            let provider =
+                decode_provider_evidence(decoder.field(8, MAX_PROVIDER_EVIDENCE_BYTES)?)?;
+            let identity_field_offset = decoder.position();
+            let declared_identity = fixed::<32>(decoder.field(9, 32)?)?;
+            decoder.finish(RESPONSE_FIELD_COUNT_V3)?;
+            if calculate_response_identity(&bytes[..identity_field_offset]) != declared_identity {
+                return Err(WorkerProtocolError::ResponseIdentityMismatch);
+            }
+            (Some(provider), Some(declared_identity))
+        } else {
+            decoder.finish(RESPONSE_FIELD_COUNT_V2)?;
+            (None, None)
+        };
 
         if request_id != request.request_id
             || request_identity != request.identity
             || compiler_envelope != request.compiler_envelope
         {
             return Err(WorkerProtocolError::RequestIdentityMismatch);
+        }
+        if device_library_provider.as_ref().is_some_and(|provider| {
+            provider.target != request.target
+                || provider.code_object_version != request.code_object_version
+                || provider
+                    .import_symbols
+                    .iter()
+                    .any(|symbol| request.import_symbols.binary_search(symbol).is_err())
+        }) {
+            return Err(WorkerProtocolError::ProviderEvidenceMismatch);
         }
         if (stage == WorkerStageV1::Complete) != raw_output.is_some() {
             return Err(WorkerProtocolError::InvalidResponseState);
@@ -330,6 +427,8 @@ impl WorkerResponseV2 {
             stage,
             diagnostics,
             output,
+            device_library_provider,
+            response_identity,
             canonical_bytes: bytes.to_vec(),
         })
     }
@@ -364,6 +463,14 @@ impl WorkerResponseV2 {
 
     pub const fn output(&self) -> Option<&WorkerOutputV2> {
         self.output.as_ref()
+    }
+
+    pub const fn device_library_provider(&self) -> Option<&WorkerDeviceLibraryProviderEvidenceV1> {
+        self.device_library_provider.as_ref()
+    }
+
+    pub const fn response_identity(&self) -> Option<&[u8; 32]> {
+        self.response_identity.as_ref()
     }
 
     pub fn binds_request(&self, request: &WorkerRequestV2) -> bool {
@@ -901,6 +1008,116 @@ fn validate_diagnostics(values: &[String]) -> Result<(), WorkerProtocolError> {
     Ok(())
 }
 
+fn decode_provider_evidence(
+    bytes: &[u8],
+) -> Result<WorkerDeviceLibraryProviderEvidenceV1, WorkerProtocolError> {
+    let preimage_len = bytes
+        .len()
+        .checked_sub(32)
+        .ok_or(WorkerProtocolError::Truncated)?;
+    let mut cursor = Cursor::new(bytes);
+    let provider_len = cursor.u32()? as usize;
+    let provider_identity = text(
+        cursor.take(provider_len)?,
+        MAX_PROVIDER_IDENTITY_BYTES,
+        "device-library provider identity",
+    )?;
+    let target_len = cursor.u32()? as usize;
+    let target_text = text(
+        cursor.take(target_len)?,
+        MAX_WORKER_TARGET_BYTES,
+        "device-library provider target",
+    )?;
+    let target =
+        DeviceTargetV1::parse(&target_text).map_err(|_| WorkerProtocolError::InvalidTarget)?;
+    let code_object_version = decode_code_object(cursor.byte()?)?;
+
+    let import_count = cursor.u32()? as usize;
+    if import_count == 0 || import_count > MAX_WORKER_SYMBOLS {
+        return Err(WorkerProtocolError::TooManySymbols);
+    }
+    let mut import_symbols = Vec::with_capacity(import_count);
+    let mut total_import_bytes = 0_usize;
+    for _ in 0..import_count {
+        let len = cursor.u32()? as usize;
+        if len > MAX_WORKER_SYMBOL_BYTES {
+            return Err(WorkerProtocolError::InvalidSymbol);
+        }
+        total_import_bytes = total_import_bytes
+            .checked_add(len)
+            .ok_or(WorkerProtocolError::IntegerOverflow)?;
+        if total_import_bytes > MAX_WORKER_SYMBOLS * MAX_WORKER_SYMBOL_BYTES {
+            return Err(WorkerProtocolError::TooManySymbols);
+        }
+        import_symbols.push(
+            str::from_utf8(cursor.take(len)?)
+                .map_err(|_| WorkerProtocolError::InvalidUtf8)?
+                .to_owned(),
+        );
+    }
+    validate_symbols(&import_symbols)?;
+
+    let file_count = cursor.u32()? as usize;
+    if file_count == 0 || file_count > MAX_PROVIDER_FILES {
+        return Err(WorkerProtocolError::InvalidFieldLength(8));
+    }
+    let mut files = Vec::with_capacity(file_count);
+    for _ in 0..file_count {
+        let len = cursor.u32()? as usize;
+        let basename = text(
+            cursor.take(len)?,
+            MAX_PROVIDER_BASENAME_BYTES,
+            "device-library provider basename",
+        )?;
+        if basename.contains('/')
+            || basename.contains('\\')
+            || files
+                .iter()
+                .any(|file: &WorkerDeviceLibraryProviderFileEvidenceV1| file.basename == basename)
+        {
+            return Err(WorkerProtocolError::InvalidText(
+                "device-library provider basename",
+            ));
+        }
+        files.push(WorkerDeviceLibraryProviderFileEvidenceV1 {
+            basename,
+            sha256: cursor.fixed::<32>()?,
+        });
+    }
+    if cursor.position != preimage_len {
+        return Err(WorkerProtocolError::NonCanonicalEncoding);
+    }
+    let manifest_identity = cursor.fixed::<32>()?;
+    cursor.finish()?;
+    if calculate_provider_manifest_identity(&bytes[..preimage_len]) != manifest_identity {
+        return Err(WorkerProtocolError::ProviderManifestIdentityMismatch);
+    }
+    Ok(WorkerDeviceLibraryProviderEvidenceV1 {
+        provider_identity,
+        target,
+        code_object_version,
+        import_symbols,
+        files,
+        manifest_identity,
+    })
+}
+
+fn calculate_provider_manifest_identity(preimage: &[u8]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(PROVIDER_MANIFEST_DOMAIN_V1);
+    hasher.update((preimage.len() as u64).to_le_bytes());
+    hasher.update(preimage);
+    hasher.finalize().into()
+}
+
+fn calculate_response_identity(encoded_without_identity: &[u8]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(RESPONSE_DOMAIN_V3);
+    hasher.update((encoded_without_identity.len() as u64).to_le_bytes());
+    hasher.update(encoded_without_identity);
+    hasher.finalize().into()
+}
+
 fn decode_output(
     bytes: &[u8],
 ) -> Result<Option<(ContentIdentityV1, Vec<u8>)>, WorkerProtocolError> {
@@ -1186,6 +1403,33 @@ mod tests {
         encoded
     }
 
+    fn provider_response(request: &WorkerRequestV2, output: &[u8]) -> Vec<u8> {
+        let mut encoded = success_response(request, output);
+        encoded[..8].copy_from_slice(WORKER_RESPONSE_MAGIC_V3);
+
+        let mut provider = Vec::new();
+        for value in ["gfx942-ocml-v1", "gfx942:xnack-"] {
+            push_u32(&mut provider, value.len()).unwrap();
+            provider.extend_from_slice(value.as_bytes());
+        }
+        provider.push(5);
+        push_u32(&mut provider, 1).unwrap();
+        push_u32(&mut provider, "external_helper".len()).unwrap();
+        provider.extend_from_slice(b"external_helper");
+        push_u32(&mut provider, 2).unwrap();
+        for (basename, digest) in [("ocml.bc", [0x41; 32]), ("isa.bc", [0x42; 32])] {
+            push_u32(&mut provider, basename.len()).unwrap();
+            provider.extend_from_slice(basename.as_bytes());
+            provider.extend_from_slice(&digest);
+        }
+        let manifest_identity = calculate_provider_manifest_identity(&provider);
+        provider.extend_from_slice(&manifest_identity);
+        push_field(&mut encoded, 8, &provider).unwrap();
+        let response_identity = calculate_response_identity(&encoded);
+        push_field(&mut encoded, 9, &response_identity).unwrap();
+        encoded
+    }
+
     fn request() -> WorkerRequestV2 {
         WorkerRequestV2::from_sealed_parts(SealedWorkerRequestV2Parts {
             request_id: [0x11; 32],
@@ -1269,6 +1513,45 @@ mod tests {
         mixed[14] ^= 1;
         assert!(
             InertDecodedWorkerExchangeV2::decode(request_value.canonical_bytes(), &mixed).is_err()
+        );
+    }
+
+    #[test]
+    fn provider_extension_binds_manifest_and_complete_response() {
+        let request_value = request();
+        let response = provider_response(&request_value, b"linked-with-provider");
+        let exchange =
+            InertDecodedWorkerExchangeV2::decode(request_value.canonical_bytes(), &response)
+                .unwrap();
+        let provider = exchange.response().device_library_provider().unwrap();
+        assert_eq!(provider.provider_identity(), "gfx942-ocml-v1");
+        assert_eq!(provider.target(), request_value.target());
+        assert_eq!(
+            provider.code_object_version(),
+            request_value.code_object_version()
+        );
+        assert_eq!(provider.import_symbols(), ["external_helper"]);
+        assert_eq!(provider.files().len(), 2);
+        assert_eq!(provider.files()[0].basename(), "ocml.bc");
+        assert_eq!(provider.files()[0].sha256(), &[0x41; 32]);
+        assert!(exchange.response().response_identity().is_some());
+
+        let mut false_manifest = response.clone();
+        let manifest = false_manifest.len() - (6 + 32) - 32;
+        false_manifest[manifest] ^= 1;
+        assert_eq!(
+            InertDecodedWorkerExchangeV2::decode(request_value.canonical_bytes(), &false_manifest),
+            Err(WorkerProtocolError::ProviderManifestIdentityMismatch)
+        );
+
+        let mut false_response_identity = response;
+        *false_response_identity.last_mut().unwrap() ^= 1;
+        assert_eq!(
+            InertDecodedWorkerExchangeV2::decode(
+                request_value.canonical_bytes(),
+                &false_response_identity
+            ),
+            Err(WorkerProtocolError::ResponseIdentityMismatch)
         );
     }
 }

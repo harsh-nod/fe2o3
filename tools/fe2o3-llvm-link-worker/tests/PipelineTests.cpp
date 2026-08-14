@@ -783,6 +783,25 @@ Response runSuccessWithPolicy(const Request &RequestValue,
   require(Result.WorkerBuildIdentity ==
               "fe2o3-unauthenticated-test-device-library-policy",
           "synthetic provider result claimed the measured worker identity");
+  require(Result.DeviceLibraryProvider.has_value(),
+          "synthetic OCML success omitted structured provider evidence");
+  const DeviceLibraryProviderEvidence &Evidence = *Result.DeviceLibraryProvider;
+  require(Evidence.ProviderIdentity == "gfx942-ocml-v1" &&
+              Evidence.Target == RequestValue.Target &&
+              Evidence.CodeObjectVersion == RequestValue.CodeObjectVersion,
+          "synthetic OCML provider evidence changed its target profile");
+  require(Evidence.ImportSymbols == RequestValue.ImportSymbols,
+          "synthetic OCML provider evidence changed its import closure");
+  require(Evidence.Files.size() == Policy.Files.size(),
+          "synthetic OCML provider evidence changed its file count");
+  for (size_t I = 0; I < Policy.Files.size(); ++I)
+    require(Evidence.Files[I].Basename == Policy.Files[I].Basename &&
+                Evidence.Files[I].Digest == Policy.Files[I].Digest,
+            "synthetic OCML provider evidence changed an ordered file pin");
+  auto ManifestIdentity = calculateProviderManifestIdentity(Evidence);
+  require(static_cast<bool>(ManifestIdentity) &&
+              *ManifestIdentity == Evidence.ManifestIdentity,
+          "synthetic OCML provider evidence has the wrong identity");
   return Result;
 }
 

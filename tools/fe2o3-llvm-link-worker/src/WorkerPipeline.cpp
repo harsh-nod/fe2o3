@@ -1525,6 +1525,7 @@ Response executeImpl(const Request &RequestValue,
   }
 
   std::vector<Input> BuiltinProviders;
+  std::optional<DeviceLibraryProviderEvidence> ProviderEvidence;
   if (!BuiltinOcmlImports.empty()) {
     TargetParts Parts = parseTarget(RequestValue.Target);
     if (RequestValue.Protocol != ProtocolVersion::V2 || Parts.Cpu != "gfx942" ||
@@ -1543,6 +1544,21 @@ Response executeImpl(const Request &RequestValue,
     if (!Loaded)
       return failure(RequestValue, Stage::Toolchain, Loaded.takeError());
     BuiltinProviders = std::move(*Loaded);
+
+    DeviceLibraryProviderEvidence Evidence;
+    Evidence.ProviderIdentity = "gfx942-ocml-v1";
+    Evidence.Target = RequestValue.Target;
+    Evidence.CodeObjectVersion = RequestValue.CodeObjectVersion;
+    Evidence.ImportSymbols.assign(BuiltinOcmlImports.begin(),
+                                  BuiltinOcmlImports.end());
+    for (const PinnedDeviceLibraryFile &File : Measured->Files)
+      Evidence.Files.push_back({File.Basename, File.Digest});
+    auto ManifestIdentity = calculateProviderManifestIdentity(Evidence);
+    if (!ManifestIdentity)
+      return failure(RequestValue, Stage::Toolchain,
+                     ManifestIdentity.takeError());
+    Evidence.ManifestIdentity = *ManifestIdentity;
+    ProviderEvidence = std::move(Evidence);
   }
 
   if (RequestValue.Protocol == ProtocolVersion::V2)
@@ -1647,6 +1663,7 @@ Response executeImpl(const Request &RequestValue,
       std::move(ResultOutput)};
   Result.Protocol = RequestValue.Protocol;
   Result.CompilerEnvelopeIdentity = RequestValue.CompilerEnvelopeIdentity;
+  Result.DeviceLibraryProvider = std::move(ProviderEvidence);
   return Result;
 }
 
