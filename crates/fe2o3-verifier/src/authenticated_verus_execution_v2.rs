@@ -2216,6 +2216,7 @@ mod platform {
         deadline: Instant,
     ) -> Result<Option<ProcessExit>, AuthenticatedVerusExecutionErrorV2> {
         loop {
+            ensure_deadline(child.role, deadline)?;
             if let Some(status) = child.try_reap()? {
                 return Ok(Some(status));
             }
@@ -2228,9 +2229,6 @@ mod platform {
                         error,
                     ));
                 }
-            }
-            if Instant::now() >= deadline {
-                return Ok(None);
             }
             thread::sleep(POLL_INTERVAL);
         }
