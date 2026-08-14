@@ -7,16 +7,25 @@
 
 use std::{error::Error, fmt};
 
+#[cfg(test)]
 use fe2o3_compiler_ffi::{
-    COMPILER_DESCRIPTOR_SECTION_NAME_V1, CompilerDescriptorSourceV1, CompilerFfiEnvelopeV1,
-    CompilerModuleHandoffErrorV2, CompilerModuleHandoffV2, CompilerModuleKindV1,
-    CompilerModuleSymbolManifestV1, CompilerModuleSymbolRoleV1,
+    COMPILER_DESCRIPTOR_SECTION_NAME_V1,
+    MAX_ROW_SOFTMAX_AUTHORITY_TRANSCRIPT_BYTES_V1 as MAX_FRONTEND_AUTHORITY_TRANSCRIPT_BYTES,
+    ROW_SOFTMAX_AUTHORITY_SECTION_NAME_V1 as FRONTEND_AUTHORITY_SECTION,
+    ROW_SOFTMAX_AUTHORITY_TRANSCRIPT_SECTION_NAME_V1 as FRONTEND_AUTHORITY_TRANSCRIPT_SECTION,
+    ROW_SOFTMAX_EXPONENTIAL_BOUNDARY_BYTES_V1 as EXPONENTIAL_BOUNDARY_BYTES,
+    ROW_SOFTMAX_EXPONENTIAL_BOUNDARY_SECTION_NAME_V1 as EXPONENTIAL_BOUNDARY_SECTION,
+};
+use fe2o3_compiler_ffi::{
+    CompilerDescriptorSourceV1, CompilerFfiEnvelopeV1, CompilerModuleHandoffErrorV2,
+    CompilerModuleHandoffV2, CompilerModuleKindV1, CompilerModuleSymbolManifestV1,
+    CompilerModuleSymbolRoleV1, ROW_SOFTMAX_AUTHORITY_BYTES_V1 as FRONTEND_AUTHORITY_BYTES,
+    decode_row_softmax_compiler_sections_v1,
 };
 use fe2o3_kernel_descriptor::{
-    CanonicalCodeObjectDigest, CodeObjectVersion, MAX_DESCRIPTOR_TABLE_BYTES,
-    ROW_SOFTMAX_V1_DESCRIPTOR_SYMBOL, ROW_SOFTMAX_V1_ENTRY_NAME,
-    RowSoftmaxV1StructuralDescriptorErrorV1, RowSoftmaxV1StructuralDescriptorExpectationV1,
-    admit_row_softmax_v1_structural_descriptor_v1,
+    CanonicalCodeObjectDigest, CodeObjectVersion, ROW_SOFTMAX_V1_DESCRIPTOR_SYMBOL,
+    ROW_SOFTMAX_V1_ENTRY_NAME, RowSoftmaxV1StructuralDescriptorErrorV1,
+    RowSoftmaxV1StructuralDescriptorExpectationV1, admit_row_softmax_v1_structural_descriptor_v1,
 };
 use sha2::{Digest, Sha256};
 
@@ -33,12 +42,6 @@ use crate::{
 
 const TARGET: &str = "gfx942:xnack-";
 const OCML_EXP_F32: &str = "__ocml_exp_f32";
-const FRONTEND_AUTHORITY_TRANSCRIPT_SECTION: &str = ".fe2o3.row-softmax-authority-transcript.v1";
-const MAX_FRONTEND_AUTHORITY_TRANSCRIPT_BYTES: usize = 4096;
-const FRONTEND_AUTHORITY_SECTION: &str = ".fe2o3.row-softmax-auth.v1";
-const FRONTEND_AUTHORITY_BYTES: usize = 32;
-const EXPONENTIAL_BOUNDARY_SECTION: &str = ".fe2o3.row-exp.v1";
-const EXPONENTIAL_BOUNDARY_BYTES: usize = 32;
 const MEASURED_OCML_PROVIDER_FILE_COUNT: usize = 4;
 const OCML_PROVIDER_IDENTITY: &str = "gfx942-ocml-v1";
 const OCML_PROVIDER_BASENAMES: [&str; MEASURED_OCML_PROVIDER_FILE_COUNT] = [
@@ -715,21 +718,21 @@ fn validate_handoff_profile(
     validate_envelope(handoff.envelope())?;
     validate_manifest(handoff.symbol_manifest())?;
 
-    let sections = decode_bound_sections(handoff.module_bytes())?;
-    let descriptor_bytes = sections.descriptor;
-    let authority = sections.authority;
+    let sections = decode_row_softmax_compiler_sections_v1(handoff.module_bytes())
+        .map_err(|error| profile_mismatch(error.profile_field()))?;
+    let authority = *sections.authority();
     if authority.as_slice() != expected_frontend_authority
-        || <[u8; 32]>::from(Sha256::digest(&sections.authority_transcript)) != authority
+        || <[u8; 32]>::from(Sha256::digest(sections.authority_transcript())) != authority
     {
         return Err(profile_mismatch("frontend-authority commitment"));
     }
     let directional = handoff.envelope().directional_symbols();
     if directional.import_semantic_identities().collect::<Vec<_>>()
-        != [&sections.exponential_boundary]
+        != [sections.exponential_boundary()]
     {
         return Err(profile_mismatch("exponential-boundary semantic identity"));
     }
-    let source = CompilerDescriptorSourceV1::decode(&descriptor_bytes)
+    let source = CompilerDescriptorSourceV1::decode(sections.descriptor())
         .map_err(|_| profile_mismatch("compiler descriptor source"))?;
     if let Some(policy) = expected_authority_policy {
         validate_row_softmax_v1_authority_transcript(
@@ -885,74 +888,17 @@ fn validate_build_identity_pin(
     Ok(())
 }
 
-struct DecodedBoundSectionsV1 {
-    descriptor: Vec<u8>,
-    authority_transcript: Vec<u8>,
-    authority: [u8; FRONTEND_AUTHORITY_BYTES],
-    exponential_boundary: [u8; EXPONENTIAL_BOUNDARY_BYTES],
-}
-
+#[cfg(test)]
 fn decode_bound_sections(
     module: &[u8],
-) -> Result<DecodedBoundSectionsV1, RowSoftmaxV1DirectWorkerErrorV1> {
-    let sections = [
-        COMPILER_DESCRIPTOR_SECTION_NAME_V1,
-        FRONTEND_AUTHORITY_TRANSCRIPT_SECTION,
-        FRONTEND_AUTHORITY_SECTION,
-        EXPONENTIAL_BOUNDARY_SECTION,
-    ];
-    let headers = sections.map(module_assembly_section_header);
-    let positions = headers
-        .each_ref()
-        .map(|header| positions(module, header.as_bytes()));
-    let [[descriptor_position], [_], [_], [_]] = positions.each_ref().map(Vec::as_slice) else {
-        return Err(profile_mismatch("bound compiler section closure"));
-    };
-    if *descriptor_position == 0 || module[descriptor_position - 1] != b'\n' {
-        return Err(profile_mismatch("bound compiler section boundary"));
-    }
-
-    let mut offset = *descriptor_position;
-    let descriptor = decode_module_assembly_section(
-        module,
-        &mut offset,
-        &headers[0],
-        MAX_DESCRIPTOR_TABLE_BYTES,
-    )
-    .ok_or_else(|| profile_mismatch("compiler descriptor section encoding"))?;
-    let authority_transcript = decode_module_assembly_section(
-        module,
-        &mut offset,
-        &headers[1],
-        MAX_FRONTEND_AUTHORITY_TRANSCRIPT_BYTES,
-    )
-    .filter(|transcript| !transcript.is_empty())
-    .ok_or_else(|| profile_mismatch("frontend-authority transcript encoding"))?;
-    let authority =
-        decode_module_assembly_section(module, &mut offset, &headers[2], FRONTEND_AUTHORITY_BYTES)
-            .ok_or_else(|| profile_mismatch("frontend-authority section encoding"))?
-            .try_into()
-            .map_err(|_| profile_mismatch("frontend-authority commitment size"))?;
-    let exponential_boundary: [u8; EXPONENTIAL_BOUNDARY_BYTES] = decode_module_assembly_section(
-        module,
-        &mut offset,
-        &headers[3],
-        EXPONENTIAL_BOUNDARY_BYTES,
-    )
-    .ok_or_else(|| profile_mismatch("exponential-boundary section encoding"))?
-    .try_into()
-    .map_err(|_| profile_mismatch("exponential-boundary commitment size"))?;
-    if offset != module.len() {
-        return Err(profile_mismatch("bound compiler section trailing bytes"));
-    }
-    Ok(DecodedBoundSectionsV1 {
-        descriptor,
-        authority_transcript,
-        authority,
-        exponential_boundary,
-    })
+) -> Result<
+    fe2o3_compiler_ffi::DecodedRowSoftmaxCompilerSectionsV1,
+    fe2o3_compiler_ffi::RowSoftmaxCompilerSectionsErrorV1,
+> {
+    decode_row_softmax_compiler_sections_v1(module)
 }
 
+#[cfg(test)]
 fn positions(bytes: &[u8], needle: &[u8]) -> Vec<usize> {
     bytes
         .windows(needle.len())
@@ -961,79 +907,9 @@ fn positions(bytes: &[u8], needle: &[u8]) -> Vec<usize> {
         .collect()
 }
 
+#[cfg(test)]
 fn module_assembly_section_header(section: &str) -> String {
     format!("module asm \".section {section},\\22\\22,@progbits\"\n")
-}
-
-fn decode_module_assembly_section(
-    module: &[u8],
-    offset: &mut usize,
-    header: &str,
-    max_bytes: usize,
-) -> Option<Vec<u8>> {
-    const ALIGNMENT: &[u8] = b"module asm \".balign 8\"\n";
-    const SECTION_PREFIX: &[u8] = b"module asm \".section ";
-    const PREFIX: &[u8] = b"module asm \".byte ";
-    const SUFFIX: &[u8] = b"\"\n";
-
-    consume_exact_bytes(module, offset, header.as_bytes())?;
-    consume_exact_bytes(module, offset, ALIGNMENT)?;
-
-    let mut result = Vec::new();
-    let mut chunk_lengths = Vec::new();
-    while *offset < module.len() && !module[*offset..].starts_with(SECTION_PREFIX) {
-        let remaining = &module[*offset..];
-        let end = remaining
-            .windows(SUFFIX.len())
-            .position(|window| window == SUFFIX)?;
-        let line_end = end.checked_add(SUFFIX.len())?;
-        let values = remaining[..line_end]
-            .strip_prefix(PREFIX)?
-            .strip_suffix(SUFFIX)?;
-        let mut count = 0usize;
-        for value in values.split(|byte| *byte == b',') {
-            if result.len() == max_bytes {
-                return None;
-            }
-            let value = if count == 0 {
-                value
-            } else {
-                value.strip_prefix(b" ")?
-            };
-            let [b'0', b'x', high, low] = value else {
-                return None;
-            };
-            result.push((decode_hex_nibble(*high)? << 4) | decode_hex_nibble(*low)?);
-            count += 1;
-        }
-        if count == 0 || count > 16 {
-            return None;
-        }
-        chunk_lengths.push(count);
-        *offset = offset.checked_add(line_end)?;
-    }
-    let (last, preceding) = chunk_lengths.split_last()?;
-    if preceding.iter().any(|count| *count != 16) || !(1..=16).contains(last) {
-        return None;
-    }
-    Some(result)
-}
-
-fn consume_exact_bytes(input: &[u8], offset: &mut usize, expected: &[u8]) -> Option<()> {
-    let remaining = input.get(*offset..)?;
-    if !remaining.starts_with(expected) {
-        return None;
-    }
-    *offset = offset.checked_add(expected.len())?;
-    Some(())
-}
-
-const fn decode_hex_nibble(value: u8) -> Option<u8> {
-    match value {
-        b'0'..=b'9' => Some(value - b'0'),
-        b'a'..=b'f' => Some(value - b'a' + 10),
-        _ => None,
-    }
 }
 
 #[cfg(test)]
@@ -1655,12 +1531,12 @@ entry:
         let decoded = decode_bound_sections(handoff.module_bytes()).unwrap();
 
         assert_eq!(
-            decoded.descriptor,
+            decoded.descriptor(),
             exact_descriptor_source().canonical_bytes()
         );
-        assert_eq!(decoded.authority_transcript, AUTHORITY_TRANSCRIPT);
-        assert_eq!(decoded.authority, AUTHORITY);
-        assert_eq!(decoded.exponential_boundary, EXPONENTIAL_BOUNDARY);
+        assert_eq!(decoded.authority_transcript(), AUTHORITY_TRANSCRIPT);
+        assert_eq!(decoded.authority(), &AUTHORITY);
+        assert_eq!(decoded.exponential_boundary(), &EXPONENTIAL_BOUNDARY);
     }
 
     #[test]
