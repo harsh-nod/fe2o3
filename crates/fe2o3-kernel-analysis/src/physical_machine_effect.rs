@@ -59,12 +59,27 @@ pub struct PhysicalMachinePayloadIdentityV1 {
 }
 
 impl PhysicalMachinePayloadIdentityV1 {
+    pub fn calculate(bytes: &[u8]) -> Self {
+        Self {
+            sha256: Sha256::digest(bytes).into(),
+            byte_len: bytes.len() as u64,
+        }
+    }
+
+    pub const fn from_parts(sha256: [u8; 32], byte_len: u64) -> Self {
+        Self { sha256, byte_len }
+    }
+
     pub const fn sha256(self) -> [u8; 32] {
         self.sha256
     }
 
     pub const fn byte_len(self) -> u64 {
         self.byte_len
+    }
+
+    pub fn matches(self, bytes: &[u8]) -> bool {
+        self == Self::calculate(bytes)
     }
 }
 
@@ -127,7 +142,7 @@ impl PhysicalMachineEffectEntryRequestV1 {
         budget: PhysicalMachineEffectBudgetV1,
     ) -> Result<Self, PhysicalMachineEffectRequestErrorV1> {
         let symbol = symbol.into();
-        if !matches!(symbol.as_str(), "alpha" | "zeta") {
+        if !matches!(symbol.as_str(), "alpha" | "scalar_gemm_v1" | "zeta") {
             return Err(PhysicalMachineEffectRequestErrorV1::UnsupportedEntry(
                 symbol,
             ));
@@ -213,10 +228,7 @@ impl PhysicalMachineEffectRequestV1 {
             return Err(PhysicalMachineEffectRequestErrorV1::DuplicateEntry);
         }
 
-        let payload_identity = PhysicalMachinePayloadIdentityV1 {
-            sha256: Sha256::digest(&payload).into(),
-            byte_len: payload.len() as u64,
-        };
+        let payload_identity = PhysicalMachinePayloadIdentityV1::calculate(&payload);
         let mut result = Self {
             execution_challenge,
             analyzer_identity,

@@ -434,16 +434,56 @@ fn evidence(request: &Request) -> Vec<u8> {
         push_u64(&mut output, 0x40);
         push_u16(&mut output, 0);
     }
-    push_u32(&mut output, request.entries.len() as u32);
+    let effect_count = request
+        .entries
+        .iter()
+        .map(|entry| {
+            if entry.symbol == "scalar_gemm_v1" {
+                19_u32
+            } else {
+                1_u32
+            }
+        })
+        .sum();
+    push_u32(&mut output, effect_count);
     for (index, entry) in request.entries.iter().enumerate() {
-        push_text(&mut output, &entry.symbol);
-        push_text(&mut output, &entry.symbol);
-        push_u64(&mut output, 0x100 + index as u64 * 0x100);
-        output.push(4);
-        push_u16(&mut output, 0);
+        let base = 0x100 + index as u64 * 0x100;
+        if entry.symbol == "scalar_gemm_v1" {
+            for (site, width, kind) in [
+                (0, 8, 2),
+                (4, 8, 2),
+                (8, 8, 2),
+                (12, 4, 2),
+                (16, 4, 2),
+                (20, 4, 2),
+                (24, 4, 2),
+                (28, 4, 2),
+                (32, 4, 3),
+            ] {
+                push_effect(&mut output, &entry.symbol, base + site, 1, 8);
+                push_effect(&mut output, &entry.symbol, base + site, kind, width);
+            }
+            push_effect(&mut output, &entry.symbol, base + 36, 4, 0);
+        } else {
+            push_effect(&mut output, &entry.symbol, base, 4, 0);
+        }
     }
     set_length(&mut output, EVIDENCE_DOMAIN.len());
     output
+}
+
+fn push_effect(
+    output: &mut Vec<u8>,
+    symbol: &str,
+    instruction_offset: u64,
+    kind: u8,
+    width: u16,
+) {
+    push_text(output, symbol);
+    push_text(output, symbol);
+    push_u64(output, instruction_offset);
+    output.push(kind);
+    push_u16(output, width);
 }
 
 fn take_u16(bytes: &[u8], position: &mut usize) -> Option<u16> {

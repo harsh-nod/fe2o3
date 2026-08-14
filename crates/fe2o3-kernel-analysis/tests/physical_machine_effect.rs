@@ -324,7 +324,7 @@ fn open_call_edge_and_effect_expansion_fail_closed() {
 }
 
 #[test]
-fn slice_rejects_non_alpha_zeta_entries_and_reserved_identities() {
+fn slice_rejects_unprofiled_entries_and_reserved_identities() {
     assert_eq!(
         PhysicalMachineEffectEntryRequestV1::new("other", budget()),
         Err(PhysicalMachineEffectRequestErrorV1::UnsupportedEntry(
