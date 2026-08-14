@@ -43,6 +43,12 @@ const TILED_GEMM_PIPELINE: &str = "collected-tiled-gemm-v1";
 const TILED_GEMM_FIXTURE: &str = include_str!("fixtures/collected-tiled-gemm-v1/src/lib.rs");
 const ROW_SOFTMAX_PIPELINE: &str = "collected-row-softmax-v1";
 const ROW_SOFTMAX_FIXTURE: &str = include_str!("fixtures/collected-row-softmax-v1/src/lib.rs");
+// Reviewed independently from the handoff identity and section payloads. This
+// binds every byte of the canonical LLVM lowering before compiler-owned data.
+const EXPECTED_ROW_LLVM_BODY_SHA256: [u8; 32] = [
+    0x0a, 0x33, 0x13, 0x67, 0x53, 0x44, 0x43, 0x7b, 0xc7, 0xb8, 0x94, 0xad, 0x2f, 0x4d, 0xad, 0xb3,
+    0x81, 0x07, 0xd9, 0x02, 0x96, 0xa9, 0x66, 0x5b, 0x76, 0x32, 0x34, 0xac, 0xd2, 0x40, 0x5a, 0xcc,
+];
 const EXPECTED_ROW_PORTABLE_MIR_COMMITMENT: [u8; 32] = [
     0xcb, 0x10, 0xb6, 0xfa, 0xc6, 0x47, 0x54, 0x35, 0xe4, 0x5a, 0x6f, 0x91, 0x66, 0x73, 0x9c, 0x9e,
     0x26, 0xba, 0xe1, 0x70, 0x31, 0x10, 0x57, 0x91, 0xab, 0xf3, 0xf4, 0x40, 0xb0, 0x04, 0xd4, 0xdd,
@@ -1136,6 +1142,202 @@ fn canonical_module_asm_section_name(line: &str) -> Option<&str> {
     .then_some(name)
 }
 
+struct ExactRowCompilerModule<'a> {
+    llvm_body: &'a str,
+    descriptor: Vec<u8>,
+    authority: Vec<u8>,
+    exponential: Vec<u8>,
+}
+
+fn decode_exact_row_compiler_module(module: &str) -> Result<ExactRowCompilerModule<'_>, String> {
+    const DESCRIPTOR: &str = ".fe2o3.kd.v1";
+    const AUTHORITY: &str = ".fe2o3.row-softmax-auth.v1";
+    const EXPONENTIAL: &str = ".fe2o3.row-exp.v1";
+
+    if !module.ends_with('\n') {
+        return Err("row-softmax LLVM module lacks its exact final newline".to_owned());
+    }
+    let descriptor_header = canonical_section_header(DESCRIPTOR);
+    let boundary = format!("\n{descriptor_header}");
+    let boundary_index = module
+        .find(&boundary)
+        .ok_or_else(|| "row-softmax LLVM module lacks its exact descriptor boundary".to_owned())?;
+    if module.rfind(&boundary) != Some(boundary_index) {
+        return Err("row-softmax LLVM module repeats its descriptor boundary".to_owned());
+    }
+    let llvm_body = &module[..boundary_index];
+    if <[u8; 32]>::from(Sha256::digest(llvm_body.as_bytes())) != EXPECTED_ROW_LLVM_BODY_SHA256 {
+        return Err(
+            "row-softmax complete LLVM instruction body differs from its reviewed digest"
+                .to_owned(),
+        );
+    }
+    let sections = decode_exact_compiler_owned_suffix(
+        &module[boundary_index + 1..],
+        &[DESCRIPTOR, AUTHORITY, EXPONENTIAL],
+    )?;
+    let [descriptor, authority, exponential] = sections.try_into().map_err(|_| {
+        "row-softmax compiler-owned section cardinality differs from exactly three".to_owned()
+    })?;
+    Ok(ExactRowCompilerModule {
+        llvm_body,
+        descriptor,
+        authority,
+        exponential,
+    })
+}
+
+fn decode_exact_compiler_owned_suffix(
+    suffix: &str,
+    expected_sections: &[&str],
+) -> Result<Vec<Vec<u8>>, String> {
+    if suffix.is_empty() || !suffix.ends_with('\n') {
+        return Err("compiler-owned section suffix lacks its exact final newline".to_owned());
+    }
+    let mut offset = 0;
+    let mut sections = Vec::with_capacity(expected_sections.len());
+    for expected_name in expected_sections {
+        consume_exact_text(
+            suffix,
+            &mut offset,
+            &canonical_section_header(expected_name),
+        )?;
+        consume_exact_text(suffix, &mut offset, "module asm \".balign 8\"\n")?;
+
+        let mut bytes = Vec::new();
+        let mut chunk_lengths = Vec::new();
+        while offset < suffix.len() && !suffix[offset..].starts_with("module asm \".section ") {
+            let relative_end = suffix[offset..].find('\n').ok_or_else(|| {
+                format!("compiler-owned section {expected_name} has an unterminated byte line")
+            })?;
+            let line_end = offset + relative_end;
+            let line = &suffix[offset..line_end];
+            offset = line_end + 1;
+            let values = line
+                .strip_prefix("module asm \".byte ")
+                .and_then(|line| line.strip_suffix('"'))
+                .ok_or_else(|| {
+                    format!("compiler-owned section {expected_name} has unexpected line {line:?}")
+                })?;
+            let mut chunk_length = 0;
+            for value in values.split(", ") {
+                let digits = value.strip_prefix("0x").ok_or_else(|| {
+                    format!("compiler-owned section {expected_name} byte lacks 0x prefix")
+                })?;
+                if digits.len() != 2
+                    || !digits
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                {
+                    return Err(format!(
+                        "compiler-owned section {expected_name} has noncanonical byte {value:?}"
+                    ));
+                }
+                bytes.push(u8::from_str_radix(digits, 16).map_err(|error| {
+                    format!("decode compiler-owned section {expected_name} byte: {error}")
+                })?);
+                chunk_length += 1;
+            }
+            if chunk_length == 0 || chunk_length > 16 {
+                return Err(format!(
+                    "compiler-owned section {expected_name} has a noncanonical byte chunk"
+                ));
+            }
+            chunk_lengths.push(chunk_length);
+        }
+        let Some((last, preceding)) = chunk_lengths.split_last() else {
+            return Err(format!(
+                "compiler-owned section {expected_name} has no retained bytes"
+            ));
+        };
+        if preceding.iter().any(|length| *length != 16) || !(1..=16).contains(last) {
+            return Err(format!(
+                "compiler-owned section {expected_name} does not use exact 16-byte chunking"
+            ));
+        }
+        sections.push(bytes);
+    }
+    if offset != suffix.len() {
+        return Err(format!(
+            "compiler-owned section suffix has unreviewed trailing bytes at offset {offset}"
+        ));
+    }
+    Ok(sections)
+}
+
+fn canonical_section_header(section: &str) -> String {
+    format!("module asm \".section {section},\\22\\22,@progbits\"\n")
+}
+
+fn consume_exact_text(input: &str, offset: &mut usize, expected: &str) -> Result<(), String> {
+    if !input[*offset..].starts_with(expected) {
+        return Err(format!(
+            "compiler-owned section suffix differs at offset {offset}; expected {expected:?}"
+        ));
+    }
+    *offset += expected.len();
+    Ok(())
+}
+
+fn require_same_length_instruction_substitution_rejected(
+    handoff: &CompilerModuleHandoffV2,
+    exact: &ExactRowCompilerModule<'_>,
+) -> Result<(), String> {
+    const ORIGINAL: &[u8] = b"fdiv float";
+    const SUBSTITUTE: &[u8] = b"fmul float";
+    let positions = exact
+        .llvm_body
+        .as_bytes()
+        .windows(ORIGINAL.len())
+        .enumerate()
+        .filter_map(|(index, window)| (window == ORIGINAL).then_some(index))
+        .collect::<Vec<_>>();
+    let [position] = positions.as_slice() else {
+        return Err(format!(
+            "reviewed row LLVM contains {} fdiv instruction sites, expected one",
+            positions.len()
+        ));
+    };
+    let mut substituted_module = handoff.module_bytes().to_vec();
+    substituted_module[*position..*position + ORIGINAL.len()].copy_from_slice(SUBSTITUTE);
+    let rebuilt = CompilerModuleHandoffV2::new(
+        handoff.kind(),
+        handoff.target(),
+        handoff.code_object_version(),
+        handoff.envelope().clone(),
+        handoff.symbol_manifest().clone(),
+        &substituted_module,
+    )
+    .map_err(|error| format!("rebuild same-length instruction adversary: {error}"))?;
+    let self_consistent = CompilerModuleHandoffV2::decode(rebuilt.canonical_bytes())
+        .map_err(|error| format!("decode self-consistent instruction adversary: {error}"))?;
+    let substituted_text = std::str::from_utf8(self_consistent.module_bytes())
+        .map_err(|_| "same-length instruction adversary is not textual LLVM".to_owned())?;
+    if decode_exact_row_compiler_module(substituted_text).is_ok() {
+        return Err(
+            "self-consistent same-length fdiv-to-fmul instruction substitution was accepted"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
+fn encode_test_compiler_owned_section(section: &str, bytes: &[u8], chunk_width: usize) -> String {
+    let mut encoded = canonical_section_header(section);
+    encoded.push_str("module asm \".balign 8\"\n");
+    for chunk in bytes.chunks(chunk_width) {
+        encoded.push_str("module asm \".byte ");
+        for (index, byte) in chunk.iter().enumerate() {
+            if index != 0 {
+                encoded.push_str(", ");
+            }
+            encoded.push_str(&format!("0x{byte:02x}"));
+        }
+        encoded.push_str("\"\n");
+    }
+    encoded
+}
+
 fn independently_expected_row_exp_boundary() -> [u8; 32] {
     const DOMAIN: &[u8] = b"fe2o3.row-softmax.exponential-boundary.v1";
     const REVIEWED_BOUNDARY: &[u8] = b"canonical Kernel IR names its abstract f32 exp operation;no authenticated implementation, approximation/error contract, OCML bitcode, link request, LLVM lowering, or real-number softmax equivalence";
@@ -1364,19 +1566,26 @@ where
 
     let module = std::str::from_utf8(handoff.module_bytes())
         .map_err(|_| "row-softmax compiler module is not textual LLVM".to_owned())?;
-    if module
+    let exact_module = decode_exact_row_compiler_module(module)?;
+    if exact_module
+        .llvm_body
         .matches("declare float @__ocml_exp_f32(float)")
         .count()
         != 1
-        || module.matches("call float @__ocml_exp_f32(float ").count() != 2
+        || exact_module
+            .llvm_body
+            .matches("call float @__ocml_exp_f32(float ")
+            .count()
+            != 2
     {
         return Err(
             "row-softmax LLVM does not contain its exact one-declaration/two-call OCML closure"
                 .to_owned(),
         );
     }
+    require_same_length_instruction_substitution_rejected(&handoff, &exact_module)?;
 
-    let descriptor_bytes = decode_compiler_owned_module_section(module, ".fe2o3.kd.v1")?;
+    let descriptor_bytes = exact_module.descriptor;
     require_exact_row_descriptor_source(&descriptor_bytes)?;
     if require_exact_row_descriptor_source(
         descriptor_bytes
@@ -1397,11 +1606,11 @@ where
         return Err("same-length row descriptor symbol substitution was accepted".to_owned());
     }
 
-    let authority = decode_compiler_owned_module_section(module, ".fe2o3.row-softmax-auth.v1")?;
-    let exponential = decode_compiler_owned_module_section(module, ".fe2o3.row-exp.v1")?;
+    let authority = exact_module.authority;
+    let exponential = exact_module.exponential;
     if authority.as_slice() != expected_authority(&descriptor_bytes)? {
         return Err(format!(
-            "row-softmax authority commitment differs from the independent pin: actual {}",
+            "row-softmax authority commitment differs from the independent expectation: actual {}",
             encode_lower_hex(&authority)
         ));
     }
@@ -1481,6 +1690,67 @@ fn compiler_owned_module_section_decoder_rejects_malformed_and_substituted_secti
         decode_compiler_owned_module_section(&extra_byte_after_ordinary_boundary, ".fe2o3.test.v1")
             .is_err()
     );
+
+    let descriptor = (0_u8..17).collect::<Vec<_>>();
+    let authority = [0xa5; 32];
+    let exponential = [0x5a; 32];
+    let descriptor_section = encode_test_compiler_owned_section(".fe2o3.kd.v1", &descriptor, 16);
+    let authority_section =
+        encode_test_compiler_owned_section(".fe2o3.row-softmax-auth.v1", &authority, 16);
+    let exponential_section =
+        encode_test_compiler_owned_section(".fe2o3.row-exp.v1", &exponential, 16);
+    let exact_suffix = format!("{descriptor_section}{authority_section}{exponential_section}");
+    assert_eq!(
+        decode_exact_compiler_owned_suffix(
+            &exact_suffix,
+            &[
+                ".fe2o3.kd.v1",
+                ".fe2o3.row-softmax-auth.v1",
+                ".fe2o3.row-exp.v1",
+            ],
+        )
+        .unwrap(),
+        [descriptor.clone(), authority.to_vec(), exponential.to_vec()]
+    );
+
+    let unreviewed = encode_test_compiler_owned_section(".fe2o3.unreviewed.v1", &[0x42], 16);
+    assert!(
+        decode_exact_compiler_owned_suffix(
+            &format!("{exact_suffix}{unreviewed}"),
+            &[
+                ".fe2o3.kd.v1",
+                ".fe2o3.row-softmax-auth.v1",
+                ".fe2o3.row-exp.v1",
+            ],
+        )
+        .is_err(),
+        "accepted an appended canonical unreviewed section"
+    );
+    for malformed_suffix in [
+        format!("{authority_section}{descriptor_section}{exponential_section}"),
+        format!("{descriptor_section}{descriptor_section}{authority_section}{exponential_section}"),
+        format!("{descriptor_section}{authority_section}"),
+        format!(
+            "{}{}{}",
+            encode_test_compiler_owned_section(".fe2o3.kd.v1", &descriptor, 8),
+            authority_section,
+            exponential_section,
+        ),
+        exact_suffix.trim_end_matches('\n').to_owned(),
+    ] {
+        assert!(
+            decode_exact_compiler_owned_suffix(
+                &malformed_suffix,
+                &[
+                    ".fe2o3.kd.v1",
+                    ".fe2o3.row-softmax-auth.v1",
+                    ".fe2o3.row-exp.v1",
+                ],
+            )
+            .is_err(),
+            "accepted malformed exact compiler-owned suffix"
+        );
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2143,9 +2413,10 @@ fn compile_clean_external_row_softmax_crate(
 fn compile_clean_external_row_softmax_crate_with_handoff(
     workspace: &Path,
     cargo_target: &Path,
+    package_name: &str,
 ) -> (Output, TestOutputDir) {
     let output = TestOutputDir::new(workspace);
-    let crate_root = output.0.join("fe2o3-row-softmax-external");
+    let crate_root = output.0.join(package_name);
     let source_directory = crate_root.join("src");
     std::fs::create_dir_all(&source_directory).expect("create external row-softmax source root");
     let source = source_directory.join("lib.rs");
@@ -2154,7 +2425,7 @@ fn compile_clean_external_row_softmax_crate_with_handoff(
     std::fs::write(
         &manifest,
         format!(
-            "[package]\nname = \"fe2o3-row-softmax-external\"\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\n\n[dependencies]\nfe2o3-device = {{ path = {:?} }}\nfe2o3-host = {{ path = {:?} }}\n\n[workspace]\n",
+            "[package]\nname = {package_name:?}\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\n\n[dependencies]\nfe2o3-device = {{ path = {:?} }}\nfe2o3-host = {{ path = {:?} }}\n\n[workspace]\n",
             workspace.join("crates/fe2o3-device"),
             workspace.join("crates/fe2o3-host"),
         ),
@@ -2166,7 +2437,7 @@ fn compile_clean_external_row_softmax_crate_with_handoff(
     observation_builder
         .create(&observation_directory)
         .expect("create private wrapper handoff observation directory");
-    let expected_crate_name = "fe2o3_row_softmax_external".to_owned();
+    let expected_crate_name = package_name.replace('-', "_");
     let (cancel_sender, cancel_receiver) = std::sync::mpsc::channel();
     let observer_directory = observation_directory.clone();
     let observer_crate = expected_crate_name.clone();
@@ -3389,41 +3660,56 @@ fn clean_external_cargo_fe2o3_produces_row_softmax_worker_v2_handoffs() {
     let workspace = workspace();
     let cargo_output = TestOutputDir::new(&workspace);
     let cargo_target = cargo_output.0.join("cargo-target");
-    let (external, output) =
-        compile_clean_external_row_softmax_crate_with_handoff(&workspace, &cargo_target);
-    let external_stderr = stderr(&external);
-    assert!(
-        !external.status.success()
-            && external_stderr.contains("consumed its private single-use frontend receipt")
-            && external_stderr
-                .contains("selected canonical Kernel IR module `fe2o3::row_softmax_v1`")
-            && external_stderr.contains("published an inert Worker V2 compiler-module handoff")
-            && external_stderr.contains("published row-softmax Worker V2 handoff")
-            && external_stderr
-                .contains("explicit kernarg 32 bytes and required COV6 complete kernarg 288 bytes")
-            && external_stderr.contains("`__ocml_exp_f32` unresolved-import bindings")
-            && external_stderr.contains("build completed without an authorized device backend")
-            && !external_stderr.contains("root instance must have")
-            && !external_stderr.contains("portable MIR identity mismatch")
-            && !external_stderr.contains("rustc FnAbi identity mismatch"),
-        "clean external cargo-fe2o3 crate missed row-softmax handoff production:\n{external_stderr}"
-    );
-    let root = admitted_row_softmax_root(&external_stderr).unwrap_or_else(|| {
-        panic!("external admission omitted its generated root:\n{external_stderr}")
-    });
-    let suffix = root
-        .strip_prefix("__fe2o3_host_kernel_v1_")
-        .unwrap_or_else(|| panic!("external admission reported a malformed root: {root:?}"));
-    assert_eq!(suffix.len(), 64);
-    assert!(
-        suffix
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
-        "external admission reported a noncanonical root: {root:?}"
-    );
-    assert!(
-        !output.0.join("row-softmax-v1").exists(),
-        "external Cargo path must not fabricate a linked row-softmax output"
+    let mut roots = Vec::new();
+    for package_name in [
+        "fe2o3-row-softmax-external-a",
+        "fe2o3-row-softmax-external-b",
+    ] {
+        let (external, output) = compile_clean_external_row_softmax_crate_with_handoff(
+            &workspace,
+            &cargo_target,
+            package_name,
+        );
+        let external_stderr = stderr(&external);
+        assert!(
+            !external.status.success()
+                && external_stderr.contains("consumed its private single-use frontend receipt")
+                && external_stderr
+                    .contains("selected canonical Kernel IR module `fe2o3::row_softmax_v1`")
+                && external_stderr.contains("published an inert Worker V2 compiler-module handoff")
+                && external_stderr.contains("published row-softmax Worker V2 handoff")
+                && external_stderr.contains(
+                    "explicit kernarg 32 bytes and required COV6 complete kernarg 288 bytes"
+                )
+                && external_stderr.contains("`__ocml_exp_f32` unresolved-import bindings")
+                && external_stderr.contains("build completed without an authorized device backend")
+                && !external_stderr.contains("root instance must have")
+                && !external_stderr.contains("portable MIR identity mismatch")
+                && !external_stderr.contains("rustc FnAbi identity mismatch"),
+            "clean external cargo-fe2o3 crate missed row-softmax handoff production:\n{external_stderr}"
+        );
+        let root = admitted_row_softmax_root(&external_stderr).unwrap_or_else(|| {
+            panic!("external admission omitted its generated root:\n{external_stderr}")
+        });
+        let suffix = root
+            .strip_prefix("__fe2o3_host_kernel_v1_")
+            .unwrap_or_else(|| panic!("external admission reported a malformed root: {root:?}"));
+        assert_eq!(suffix.len(), 64);
+        assert!(
+            suffix
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+            "external admission reported a noncanonical root: {root:?}"
+        );
+        roots.push(root.to_owned());
+        assert!(
+            !output.0.join("row-softmax-v1").exists(),
+            "external Cargo path must not fabricate a linked row-softmax output"
+        );
+    }
+    assert_ne!(
+        roots[0], roots[1],
+        "distinct Cargo crate identities must exercise variable generated roots"
     );
 }
 
