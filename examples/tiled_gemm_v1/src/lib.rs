@@ -4,14 +4,16 @@
 //! Conservative host contract for the first gfx942 tiled BF16 GEMM slice.
 //!
 //! Host planning, deterministic finite-corpus inputs, validated bitwise host
-//! evidence, and a general scalar FP32 recurrence are usable now. Exact target
-//! and physical-ABI-bound matrix lowering, lane mapping, LDS movement, complete
-//! GEMM loops, output stores, production export, GPU execution, and proofs
-//! remain pending.
+//! evidence, a general scalar FP32 recurrence, and exact AMD-calculator-pinned
+//! register and XOR4 LDS staging maps are usable now. Exact target and
+//! physical-ABI-bound matrix lowering, binding those maps to compiler output,
+//! complete GEMM loops, output stores, production export, GPU execution, and
+//! machine-level proofs remain pending.
 
 pub mod contract;
 pub mod inputs;
 pub mod kernel_face;
+pub mod layout;
 pub mod oracle;
 
 pub use contract::{
@@ -20,6 +22,15 @@ pub use contract::{
     admit_target_v1, exact_target_v1, plan_v1,
 };
 pub use inputs::{BF16_INPUT_PATTERN_V1, GeneratedInputsV1, generate_inputs_v1};
+pub use layout::{
+    AMD_MATRIX_CALCULATOR_A_CSV_SHA256_V1, AMD_MATRIX_CALCULATOR_ARCHITECTURE_V1,
+    AMD_MATRIX_CALCULATOR_B_CSV_SHA256_V1, AMD_MATRIX_CALCULATOR_C_CSV_SHA256_V1,
+    AMD_MATRIX_CALCULATOR_COMMIT_V1, AMD_MATRIX_CALCULATOR_D_CSV_SHA256_V1,
+    AMD_MATRIX_CALCULATOR_INSTRUCTION_V1, AMD_MATRIX_CALCULATOR_REPOSITORY_V1,
+    ARegisterCoordinateV1, ARegisterLayoutV1, AccumulatorCoordinateV1, AccumulatorRegisterLayoutV1,
+    BRegisterCoordinateV1, BRegisterLayoutV1, LdsLogicalCoordinateV1, LdsPhysicalCoordinateV1,
+    MFMA_LAYOUT_COMPONENTS_V1, MFMA_LAYOUT_EXTENT_V1, MFMA_LAYOUT_LANES_V1, RowMajorXor4StagingV1,
+};
 pub use oracle::{
     ArithmeticOracleErrorV1, EvidenceInputErrorV1, EvidenceOperandV1, ValidatedEvidenceInputsV1,
     tiled_gemm_arithmetic_oracle_v1, tiled_gemm_evidence_oracle_v1, validate_evidence_inputs_v1,
