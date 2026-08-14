@@ -76,13 +76,32 @@ SHA-256: ad2669f579d898ede53f2bf84e80a1daf4e3578739b0f5807ef209a0c9f382dd
 The source checker is a small fail-closed Python lexer. It removes line comments,
 nested block comments, and ordinary/raw string and character literals before
 examining tokens; normalizes identifiers with Unicode NFKC; and rejects Unicode
-format, control, and separator categories. It rejects `admit`, `assume`, axiom,
-trusted, external-body, and external specification tokens even when comments
-split adjacent syntax. The only allowed `uninterp` declaration is exactly
-`pub uninterp spec fn exp_real_v1(value: real) -> real;`. Its regression corpus
-covers split block-comment tokens, U+200E, strings, nested comments, and a second
-uninterpreted declaration. Ordinary Rust tests pin every proof source and
-exercise both scanner rejection and replacement of `rust_verify`.
+format, control, and separator categories. This proof uses a closed single-file
+policy: the exact `vstd::prelude::*` import must be followed by one balanced
+`verus!` block that ends the file. All source attributes, external modules,
+additional imports, `include!` forms, declarative macros, and macro invocations
+other than that enclosing `verus!` are rejected.
+
+`verus/VERUS_TRUST_VOCABULARY` binds the exact Verus release, upstream commit,
+audited `rust_verify` attribute-parser source identity, bundled macro/builtin
+source identities, the conservative parser vocabulary, and every reviewed
+trust-bearing token. The runner re-derives the verifier-attribute vocabulary
+present in the pinned release sources and fails on unknown entries. GitHub-hosted
+CI also fetches the parser source by exact upstream commit, verifies its pinned
+size and SHA-256, and re-derives its complete verifier attribute-name decision
+vocabulary. All proof-source attributes are denied independently of those lists.
+Tokens including `admit`, `assume`, `assume_termination`, axiom and external
+specification forms are rejected even when comments split adjacent syntax. The
+sole exception is one active, unadorned direct declaration in the outer
+`verus!` block with exactly these tokens: `pub uninterp spec fn
+exp_real_v1(value: real) -> real;`.
+
+The regression corpus covers split comments, U+200E, strings, nested comments,
+all audited trust tokens, `#[path] mod`, external modules, `include!`,
+`include_str!`, `include_bytes!`, code-generating macros, and configured,
+adorned, nested, duplicate, renamed, or ordinary-definition substitutions of
+`exp_real_v1`. Ordinary Rust tests pin every proof source and exercise both
+scanner rejection and replacement of `rust_verify`.
 
 These are point-in-time source and release-closure measurements, not an
 immutable or descriptor-bound Verus execution. Proof execution clears the
@@ -94,13 +113,19 @@ host OS, shell and Python utilities, dynamic libraries, or rustup toolchain, and
 they do **not** bind the proof to generated LLVM IR, ISA, HSACO, loading, launch,
 or observed GPU execution.
 
-The reviewed-host CI job first runs the repository's authenticated Verus V2
-controller tests, which use sealed executable snapshots and descriptor-bound
-inputs. Stock Verus and Z3 do not implement that controller's nonce protocol,
-so this row proof still runs through the point-in-time path afterward. The
-controller test is a deployment prerequisite. It is not authenticated execution
-of the row proof. It also makes no same-UID replacement-resistance claim for
-that proof.
+PR, merge-group, and untrusted branch checks run only on GitHub-hosted runners.
+The persistent reviewed-host job is in a separate workflow restricted to the
+exact `harsh-nod/fe2o3` repository, `refs/heads/main`, and either a main push or
+manual dispatch. Mutation tests reject weakened repository, ref, event, branch,
+or runner policies.
+
+On that trusted workflow, the reviewed-host job first runs the repository's
+authenticated Verus V2 controller tests, which use sealed executable snapshots
+and descriptor-bound inputs. Stock Verus and Z3 do not implement that
+controller's nonce protocol, so this row proof still runs through the
+point-in-time path afterward. The controller test is a deployment prerequisite.
+It is not authenticated execution of the row proof. It also makes no same-UID
+replacement-resistance claim for that proof.
 
 The positive proof pin is 11,143 bytes with SHA-256
 `61f1453d267a8e9183334dfe1ca37bcd69c92df4b55d56606907627c5691a9f9`;

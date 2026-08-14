@@ -8,6 +8,7 @@ const DUPLICATE_WRITER: &[u8] = include_bytes!("../verus/negative/duplicate_writ
 const LANE_PLUS_ONE: &[u8] = include_bytes!("../verus/negative/lane_plus_one_out_of_bounds.rs");
 const WRONG_NUMERATOR: &[u8] = include_bytes!("../verus/negative/wrong_numerator_index.rs");
 const VERUS_CLOSURE_MANIFEST: &[u8] = include_bytes!("../verus/VERUS_CLOSURE_MANIFEST");
+const VERUS_TRUST_VOCABULARY: &[u8] = include_bytes!("../verus/VERUS_TRUST_VOCABULARY");
 const SOURCE_SCANNER: &str = include_str!("../check-proof-source.py");
 const RUNNER: &str = include_str!("../run-verus.sh");
 const README: &str = include_str!("../README.md");
@@ -100,8 +101,11 @@ fn source_scanner_is_token_aware_and_fail_closed() {
         "depth += 1",
         "raw_string_end(source, cursor)",
         "character_literal_end(source, cursor",
-        "FORBIDDEN_IDENTIFIERS",
-        "ALLOWED_UNINTERP_DECLARATION",
+        "REQUIRED_TRUST_TOKENS",
+        "SOURCE_INJECTION_IDENTIFIERS",
+        "APPROVED_EXP_DECLARATION",
+        "validate_balanced_closed_source",
+        "audit_verus_root",
     ] {
         assert!(
             SOURCE_SCANNER.contains(marker),
@@ -160,6 +164,10 @@ fn pinned_verus_identity_and_release_closure_are_exact() {
         sha256(VERUS_CLOSURE_MANIFEST),
         "d28df3fb5e0d747637543933dfc38cff45576da9b920d755b4b7e919e47a6019"
     );
+    assert_eq!(
+        sha256(VERUS_TRUST_VOCABULARY),
+        "faff55d0c38ca0fe70a96680ac1e8d624e3320e46c5a78ac8624407e0b4a4d4b"
+    );
     let closure = std::str::from_utf8(VERUS_CLOSURE_MANIFEST).unwrap();
     for marker in [
         "file-count=190",
@@ -170,6 +178,22 @@ fn pinned_verus_identity_and_release_closure_are_exact() {
     ] {
         assert!(closure.contains(marker), "missing closure marker {marker}");
     }
+    let vocabulary = std::str::from_utf8(VERUS_TRUST_VOCABULARY).unwrap();
+    for marker in [
+        "upstream-commit=b677dd5a766f25f56e9aa1e32621aa4e53304b47",
+        "source/rust_verify/src/attributes.rs|70318|88029e464e4a24ee",
+        "trust-token=assume_termination",
+        "trust-token=external_fn_specification",
+        "trust-token=externals_available_without_declaration",
+        "trust-token=uninterp",
+    ] {
+        assert!(
+            vocabulary.contains(marker),
+            "missing trust vocabulary marker {marker}"
+        );
+    }
+    assert_eq!(vocabulary.matches("parser-decision=").count(), 70);
+    assert_eq!(vocabulary.matches("trust-token=").count(), 18);
 }
 
 #[test]
@@ -180,6 +204,9 @@ fn runner_uses_the_pinned_solver_and_pre_post_closure_measurements() {
         "VERUS_Z3_PATH=$verus_root/z3",
         "RUSTUP_HOME=$runner_rustup_home",
         "CARGO_HOME=$runner_cargo_home",
+        "--audit-verus-root",
+        "--require-exp-real",
+        "--forbid-uninterp",
     ] {
         assert!(RUNNER.contains(marker), "missing runner boundary {marker}");
     }

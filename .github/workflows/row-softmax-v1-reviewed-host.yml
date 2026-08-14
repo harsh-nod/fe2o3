@@ -1,0 +1,34 @@
+name: Row softmax V1 reviewed host
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: row-softmax-v1-reviewed-host-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  reviewed-host:
+    if: >-
+      github.repository == 'harsh-nod/fe2o3' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    name: Reviewed controller prerequisite and point-in-time row proof
+    runs-on: [self-hosted, linux, x64, fe2o3-verus-reviewed-host-v1]
+    timeout-minutes: 50
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Exercise authenticated Verus V2 controller
+        run: scripts/ci-authenticated-verus-reviewed-host.sh
+
+      - name: Run point-in-time row-softmax proof
+        env:
+          VERUS: /home/harsh/factory/.tools/verus-0.2026.08.02.b677dd5/verus-x86-linux/verus
+        run: examples/row_softmax_v1/run-verus.sh

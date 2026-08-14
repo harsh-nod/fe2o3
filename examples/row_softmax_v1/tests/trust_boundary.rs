@@ -6,6 +6,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+const TRUST_VOCABULARY: &str = include_str!("../verus/VERUS_TRUST_VOCABULARY");
 
 fn manifest() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -53,7 +54,7 @@ fn scanner_accepts_forbidden_words_only_in_comments_and_strings() {
 }
 
 #[test]
-fn scanner_rejects_split_tokens_unicode_format_controls_and_other_uninterp() {
+fn scanner_rejects_trust_tokens_split_tokens_and_unicode_controls() {
     let cases = [
         (
             "tests/fixtures/forbidden-assume-whitespace.rs",
@@ -74,6 +75,18 @@ fn scanner_rejects_split_tokens_unicode_format_controls_and_other_uninterp() {
         (
             "tests/fixtures/source-scanner/reject/assume-unicode-format.rs",
             "forbidden Unicode Cf U+200E",
+        ),
+        (
+            "tests/fixtures/source-scanner/reject/assume-termination.rs",
+            "forbidden proof token 'assume_termination'",
+        ),
+        (
+            "tests/fixtures/source-scanner/reject/assume-specification.rs",
+            "forbidden proof token 'assume_specification'",
+        ),
+        (
+            "tests/fixtures/source-scanner/reject/axiom.rs",
+            "forbidden proof token 'axiom'",
         ),
         (
             "tests/fixtures/source-scanner/reject/external-body-block-comment.rs",
@@ -103,6 +116,125 @@ fn scanner_rejects_split_tokens_unicode_format_controls_and_other_uninterp() {
         assert!(
             stderr.contains(expected),
             "unexpected rejection for {fixture}: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn every_pinned_trust_token_except_the_one_exp_declaration_is_rejected() {
+    let checker = manifest().join("check-proof-source.sh");
+    let tokens: Vec<_> = TRUST_VOCABULARY
+        .lines()
+        .filter_map(|line| line.strip_prefix("trust-token="))
+        .collect();
+    assert_eq!(tokens.len(), 18);
+
+    for token in tokens.into_iter().filter(|token| *token != "uninterp") {
+        let temporary = unique_temp_dir(&format!("trust-token-{token}"));
+        fs::create_dir(&temporary).unwrap();
+        let proof = temporary.join("mutation.rs");
+        fs::write(
+            &proof,
+            format!(
+                "use vstd::prelude::*;\nverus! {{\n\
+                 pub uninterp spec fn exp_real_v1(value: real) -> real;\n\
+                 proof fn rejected() {{ {token}(); }}\n}} // verus!\n"
+            ),
+        )
+        .unwrap();
+        let output = Command::new(&checker).arg(&proof).output().unwrap();
+        fs::remove_dir_all(&temporary).unwrap();
+
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "accepted trust token {token}"
+        );
+        assert!(
+            String::from_utf8(output.stderr)
+                .unwrap()
+                .contains(&format!("forbidden proof token '{token}'")),
+            "unexpected diagnostic for trust token {token}"
+        );
+    }
+}
+
+#[test]
+fn scanner_rejects_transitive_source_and_macro_injection() {
+    let cases = [
+        (
+            "tests/fixtures/source-scanner/reject/path-module.rs",
+            "source attributes are forbidden",
+        ),
+        (
+            "tests/fixtures/source-scanner/reject/external-module.rs",
+            "source-injection token 'mod'",
+        ),
+        (
+            "tests/fixtures/source-scanner/reject/include-code.rs",
+            "source-injection token 'include'",
+        ),
+        (
+            "tests/fixtures/source-scanner/reject/include-string.rs",
+            "source-injection token 'include_str'",
+        ),
+        (
+            "tests/fixtures/source-scanner/reject/include-bytes.rs",
+            "source-injection token 'include_bytes'",
+        ),
+        (
+            "tests/fixtures/source-scanner/reject/macro-rules.rs",
+            "source-injection token 'macro_rules'",
+        ),
+        (
+            "tests/fixtures/source-scanner/reject/codegen-macro.rs",
+            "the only allowed code-generating macro",
+        ),
+    ];
+    for (fixture, expected) in cases {
+        let output = run_source_checker(fixture);
+        assert_eq!(output.status.code(), Some(1), "accepted {fixture}");
+        assert!(
+            String::from_utf8(output.stderr).unwrap().contains(expected),
+            "unexpected rejection for {fixture}"
+        );
+    }
+}
+
+#[test]
+fn scanner_requires_one_active_unadorned_exp_declaration() {
+    let cases = [
+        (
+            "tests/fixtures/source-scanner/reject/exp-cfg.rs",
+            "source attributes are forbidden",
+        ),
+        (
+            "tests/fixtures/source-scanner/reject/exp-adorned.rs",
+            "source attributes are forbidden",
+        ),
+        (
+            "tests/fixtures/source-scanner/reject/exp-duplicate.rs",
+            "exactly one approved exp_real_v1",
+        ),
+        (
+            "tests/fixtures/source-scanner/reject/exp-ordinary-definition.rs",
+            "exactly one approved exp_real_v1",
+        ),
+        (
+            "tests/fixtures/source-scanner/reject/exp-nested.rs",
+            "direct item in the enclosing verus! block",
+        ),
+        (
+            "tests/fixtures/source-scanner/reject/other-uninterp.rs",
+            "unapproved uninterpreted declaration",
+        ),
+    ];
+    for (fixture, expected) in cases {
+        let output = run_source_checker(fixture);
+        assert_eq!(output.status.code(), Some(1), "accepted {fixture}");
+        assert!(
+            String::from_utf8(output.stderr).unwrap().contains(expected),
+            "unexpected rejection for {fixture}"
         );
     }
 }

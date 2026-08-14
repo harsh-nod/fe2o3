@@ -49,7 +49,11 @@ require_source "$negative_dir/duplicate_writer.rs" \
 require_source "$negative_dir/wrong_numerator_index.rs" \
     'mutated_stable_softmax_spec_preserves_lane_numerator_correspondence_v1'
 
-"$source_checker" "$proof" "$negative_dir"/*.rs
+"$source_checker" --require-exp-real \
+    "$proof" "$negative_dir/wrong_numerator_index.rs"
+"$source_checker" --forbid-uninterp \
+    "$negative_dir/duplicate_writer.rs" \
+    "$negative_dir/lane_plus_one_out_of_bounds.rs"
 
 expected_version=$(sed -n '1p' "$version_file")
 expected_sha256=$(sed -n '1p' "$sha256_file")
@@ -98,6 +102,7 @@ if [ "$(basename "$verus_path")" != verus ]; then
 fi
 verus_root=$(CDPATH='' cd -- "$(dirname -- "$verus_path")" && pwd)
 "$closure_checker" "$verus_root" "$closure_manifest"
+"$source_checker" --audit-verus-root "$verus_root"
 
 env_path=$(command -v env 2>/dev/null || true)
 if [ -z "$env_path" ]; then
