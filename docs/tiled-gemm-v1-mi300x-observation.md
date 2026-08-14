@@ -13,14 +13,14 @@ The run used:
 | UTC date | `2026-08-14` |
 | SSH host label | `mi300x` |
 | physical target required by the harness | `gfx942:xnack-` |
-| repository commit under test | `9a5d65d5929b9cabcf73d423957b06f5070f5137` |
-| repository tree | `7fecff1b045bdb08e363d969af448c8edfd27f96` |
+| repository commit under test | `6d35aea57b13ac24cdb05147da3b34bc410b16f4` |
+| repository tree | `ee865d36a5de4eb0264e3a69c5fd48af427ee3bf` |
 | artifact size | `6672` bytes |
 | artifact SHA-256 | `681077be1108c57d9d887f94afdd0ec3700ed2c86d73e66d2b229d6b418d0c66` |
 | artifact export | `tiled_gemm_v1` |
 | observed LLVM tool | `AMD LLVM version 22.0.0git` |
 | `llvm-objdump` SHA-256 | `e5bf27bb6ba178b4de94ac0d5da760b628672cd00d2ffeb40a4372fa6ad25140` |
-| test executable SHA-256 | `cd0f64964182c2308ace68b7207ddda36b81a07af345432156c18fb6bf7869eb` |
+| test executable SHA-256 | `cffd8cafcd8ee4bcfd361f26dc7b5f297c85e6d52caed07420cc70f2313e986a` |
 
 The canonical LLVM tool path during the run was
 `/opt/rocm-7.2.4/lib/llvm/bin/llvm-objdump`. The test first required exact COV6,
@@ -53,7 +53,7 @@ Result:
 
 ```text
 test gfx942_tiled_gemm_v1_one_tile_raw_hardware_evidence ... ok
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 40.69s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 40.92s
 ```
 
 The test compared all 256 output elements bitwise with an independent dyadic
@@ -61,6 +61,9 @@ host oracle. It also checked that A, B, and C remained bitwise unchanged, that
 prefix and suffix canaries around all four allocations remained intact, that
 the dispatch completed synchronously, and that the exact executable was
 unloaded.
+
+The compact, non-authoritative console receipt is committed at
+[`docs/receipts/tiled-gemm-v1-mi300x-2026-08-14.txt`](receipts/tiled-gemm-v1-mi300x-2026-08-14.txt).
 
 ## Exclusions
 

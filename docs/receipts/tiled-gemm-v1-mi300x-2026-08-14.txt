@@ -1,0 +1,25 @@
+FE2O3 Tiled GEMM V1 non-authoritative hardware observation
+UTC date: 2026-08-14
+SSH host label: mi300x
+Physical target required by harness: gfx942:xnack-
+Repository commit: 6d35aea57b13ac24cdb05147da3b34bc410b16f4
+Repository tree: ee865d36a5de4eb0264e3a69c5fd48af427ee3bf
+Artifact path: /home/harsh/fe2o3-tiled-gemm-f494.hsaco
+Artifact size: 6672 bytes
+Artifact SHA-256: 681077be1108c57d9d887f94afdd0ec3700ed2c86d73e66d2b229d6b418d0c66
+LLVM objdump path: /opt/rocm-7.2.4/lib/llvm/bin/llvm-objdump
+LLVM objdump SHA-256: e5bf27bb6ba178b4de94ac0d5da760b628672cd00d2ffeb40a4372fa6ad25140
+Test executable SHA-256: cffd8cafcd8ee4bcfd361f26dc7b5f297c85e6d52caed07420cc70f2313e986a
+
+Command payload:
+env FE2O3_RUN_GFX942_TILED_GEMM_V1_HARDWARE=1 FE2O3_GFX942_TILED_GEMM_V1_HSACO=/home/harsh/fe2o3-tiled-gemm-f494.hsaco FE2O3_GFX942_TILED_GEMM_V1_SHA256=681077be1108c57d9d887f94afdd0ec3700ed2c86d73e66d2b229d6b418d0c66 FE2O3_GFX942_TILED_GEMM_V1_KERNEL_SYMBOL=tiled_gemm_v1 FE2O3_LLVM_OBJDUMP=/opt/rocm-7.2.4/lib/llvm/bin/llvm-objdump FE2O3_LLVM_OBJDUMP_SHA256=e5bf27bb6ba178b4de94ac0d5da760b628672cd00d2ffeb40a4372fa6ad25140 cargo test --locked -p fe2o3-hsa-runtime --features hardware-test-hooks --target-dir /home/harsh/target-fe2o3-tiled-isa-6d35 --test tiled_gemm_v1_hardware gfx942_tiled_gemm_v1_one_tile_raw_hardware_evidence -- --ignored --exact --nocapture
+
+Observed console result:
+running 1 test
+test gfx942_tiled_gemm_v1_one_tile_raw_hardware_evidence ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 40.92s
+
+Boundary: this text is a committed observation, not a signed or protected
+receipt. It does not authenticate the host, artifact producer, compiler,
+dynamic loader, shared libraries, or source-to-HSACO relationship.

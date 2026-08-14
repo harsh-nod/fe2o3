@@ -1352,7 +1352,7 @@ fn run_non_authoritative_hardware_evidence(artifact: PinnedArtifact) -> Result<(
 /// FE2O3_GFX942_TILED_GEMM_V1_KERNEL_SYMBOL=tiled_gemm_v1 \
 /// FE2O3_LLVM_OBJDUMP=/absolute/canonical/llvm-objdump \
 /// FE2O3_LLVM_OBJDUMP_SHA256=<64-lowercase-hex-digits> \
-/// cargo test -p fe2o3-hsa-runtime --features hardware-test-hooks \
+/// cargo test --locked -p fe2o3-hsa-runtime --features hardware-test-hooks \
 ///   --test tiled_gemm_v1_hardware \
 ///   gfx942_tiled_gemm_v1_one_tile_raw_hardware_evidence \
 ///   -- --ignored --exact --nocapture

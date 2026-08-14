@@ -147,7 +147,7 @@ one 6,672-byte artifact with SHA-256
 `681077be1108c57d9d887f94afdd0ec3700ed2c86d73e66d2b229d6b418d0c66` on
 MI300X. The exact test passed its bitwise 16x16 oracle, A/B/C unchanged-value,
 adjacent-canary, synchronous-completion, executable-identity, and terminal
-unload checks in 40.69 seconds. The complete command and boundary are recorded
+unload checks in 40.92 seconds. The complete command and boundary are recorded
 in [`docs/tiled-gemm-v1-mi300x-observation.md`](../../docs/tiled-gemm-v1-mi300x-observation.md).
 
 This is non-authoritative hardware observation for the direct-global one-tile
