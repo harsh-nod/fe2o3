@@ -928,6 +928,10 @@ mod tests {
         CodeObjectVersion, CompilerFfiContractV1, CompilerFfiEnvelopeBuilderV1,
         CompilerFfiLinkRoleV1, CompilerFfiSourceOwnerV1, CompilerModuleHandoffV2, DeviceTargetV1,
     };
+    use fe2o3_hsaco_finalize::{
+        ContentIdentityV1, RowSoftmaxV1DirectWorkerExpectationV1, RowSoftmaxV1DirectWorkerPinsV1,
+        RowSoftmaxV1OcmlProviderPinsV1,
+    };
     use fe2o3_kernel_ir::ScalarGemmTargetRequirementsV1;
     use fe2o3_kernel_ir::{
         BasicBlock, BlockId, Function, Kernel, LaunchDomain, LaunchExtent, Signature,
@@ -1190,6 +1194,26 @@ mod tests {
         assert!(!handoff.grants_link_authority());
         assert!(!handoff.grants_load_authority());
         assert!(!handoff.grants_launch_authority());
+
+        let provider = RowSoftmaxV1OcmlProviderPinsV1::new(
+            [[0x41; 32], [0x42; 32], [0x43; 32], [0x44; 32]],
+            [0x45; 32],
+        )
+        .unwrap();
+        let worker = RowSoftmaxV1DirectWorkerPinsV1::new(
+            ContentIdentityV1::from_parts([0x46; 32], 1),
+            "row-softmax-production-compatibility-test-worker",
+            "upstream-llvm-production-compatibility-test",
+            provider,
+        )
+        .unwrap();
+        RowSoftmaxV1DirectWorkerExpectationV1::from_pinned_rustc_handoff(
+            handoff,
+            *handoff.identity().sha256(),
+            expected_authority,
+            worker,
+        )
+        .expect("production rustc row handoff is admitted by the direct worker profile");
     }
 
     #[test]

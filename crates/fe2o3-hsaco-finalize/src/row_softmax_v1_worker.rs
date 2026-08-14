@@ -29,6 +29,8 @@ use crate::{
 
 const TARGET: &str = "gfx942:xnack-";
 const OCML_EXP_F32: &str = "__ocml_exp_f32";
+const FRONTEND_AUTHORITY_TRANSCRIPT_SECTION: &str = ".fe2o3.row-softmax-authority-transcript.v1";
+const MAX_FRONTEND_AUTHORITY_TRANSCRIPT_BYTES: usize = 4096;
 const FRONTEND_AUTHORITY_SECTION: &str = ".fe2o3.row-softmax-auth.v1";
 const FRONTEND_AUTHORITY_BYTES: usize = 32;
 const EXPONENTIAL_BOUNDARY_SECTION: &str = ".fe2o3.row-exp.v1";
@@ -665,8 +667,16 @@ fn validate_handoff_profile(
     let sections = decode_bound_sections(handoff.module_bytes())?;
     let descriptor_bytes = sections.descriptor;
     let authority = sections.authority;
-    if authority.as_slice() != expected_frontend_authority {
+    if authority.as_slice() != expected_frontend_authority
+        || <[u8; 32]>::from(Sha256::digest(&sections.authority_transcript)) != authority
+    {
         return Err(profile_mismatch("frontend-authority commitment"));
+    }
+    let directional = handoff.envelope().directional_symbols();
+    if directional.import_semantic_identities().collect::<Vec<_>>()
+        != [&sections.exponential_boundary]
+    {
+        return Err(profile_mismatch("exponential-boundary semantic identity"));
     }
     let source = CompilerDescriptorSourceV1::decode(&descriptor_bytes)
         .map_err(|_| profile_mismatch("compiler descriptor source"))?;
@@ -817,7 +827,9 @@ fn validate_build_identity_pin(
 
 struct DecodedBoundSectionsV1 {
     descriptor: Vec<u8>,
+    authority_transcript: Vec<u8>,
     authority: [u8; FRONTEND_AUTHORITY_BYTES],
+    exponential_boundary: [u8; EXPONENTIAL_BOUNDARY_BYTES],
 }
 
 fn decode_bound_sections(
@@ -825,6 +837,7 @@ fn decode_bound_sections(
 ) -> Result<DecodedBoundSectionsV1, RowSoftmaxV1DirectWorkerErrorV1> {
     let sections = [
         COMPILER_DESCRIPTOR_SECTION_NAME_V1,
+        FRONTEND_AUTHORITY_TRANSCRIPT_SECTION,
         FRONTEND_AUTHORITY_SECTION,
         EXPONENTIAL_BOUNDARY_SECTION,
     ];
@@ -832,7 +845,7 @@ fn decode_bound_sections(
     let positions = headers
         .each_ref()
         .map(|header| positions(module, header.as_bytes()));
-    let [[descriptor_position], [_], [_]] = positions.each_ref().map(Vec::as_slice) else {
+    let [[descriptor_position], [_], [_], [_]] = positions.each_ref().map(Vec::as_slice) else {
         return Err(profile_mismatch("bound compiler section closure"));
     };
     if *descriptor_position == 0 || module[descriptor_position - 1] != b'\n' {
@@ -842,12 +855,17 @@ fn decode_bound_sections(
     let mut offset = *descriptor_position;
     let descriptor = decode_module_assembly_section(module, &mut offset, &headers[0])
         .ok_or_else(|| profile_mismatch("compiler descriptor section encoding"))?;
-    let authority = decode_module_assembly_section(module, &mut offset, &headers[1])
+    let authority_transcript = decode_module_assembly_section(module, &mut offset, &headers[1])
+        .filter(|transcript| {
+            !transcript.is_empty() && transcript.len() <= MAX_FRONTEND_AUTHORITY_TRANSCRIPT_BYTES
+        })
+        .ok_or_else(|| profile_mismatch("frontend-authority transcript encoding"))?;
+    let authority = decode_module_assembly_section(module, &mut offset, &headers[2])
         .ok_or_else(|| profile_mismatch("frontend-authority section encoding"))?
         .try_into()
         .map_err(|_| profile_mismatch("frontend-authority commitment size"))?;
-    let _exponential: [u8; EXPONENTIAL_BOUNDARY_BYTES] =
-        decode_module_assembly_section(module, &mut offset, &headers[2])
+    let exponential_boundary: [u8; EXPONENTIAL_BOUNDARY_BYTES] =
+        decode_module_assembly_section(module, &mut offset, &headers[3])
             .ok_or_else(|| profile_mismatch("exponential-boundary section encoding"))?
             .try_into()
             .map_err(|_| profile_mismatch("exponential-boundary commitment size"))?;
@@ -856,7 +874,9 @@ fn decode_bound_sections(
     }
     Ok(DecodedBoundSectionsV1 {
         descriptor,
+        authority_transcript,
         authority,
+        exponential_boundary,
     })
 }
 
@@ -998,7 +1018,12 @@ mod tests {
     };
 
     const OUTPUT: &[u8] = b"linked-row";
-    const AUTHORITY: [u8; FRONTEND_AUTHORITY_BYTES] = [0xa5; FRONTEND_AUTHORITY_BYTES];
+    const AUTHORITY_TRANSCRIPT: &[u8] = b"row-softmax-authority-transcript-test-v1";
+    const AUTHORITY: [u8; FRONTEND_AUTHORITY_BYTES] = [
+        0xd9, 0x8f, 0xe9, 0xd4, 0xe6, 0xd1, 0xa2, 0x4b, 0x12, 0xf1, 0x08, 0x61, 0xc3, 0x19, 0xb5,
+        0xf1, 0x0c, 0xb1, 0x5b, 0x31, 0x63, 0xb4, 0x97, 0x92, 0xce, 0xf7, 0xee, 0x92, 0xbe, 0xae,
+        0x86, 0x8f,
+    ];
     const EXPONENTIAL_BOUNDARY: [u8; EXPONENTIAL_BOUNDARY_BYTES] =
         [0x91; EXPONENTIAL_BOUNDARY_BYTES];
     const OCML_ABI: &str = "C(f32[size=4,align=4])->f32[size=4,align=4]";
@@ -1021,6 +1046,11 @@ mod tests {
             &mut module,
             COMPILER_DESCRIPTOR_SECTION_NAME_V1,
             descriptor,
+        );
+        append_module_assembly_section(
+            &mut module,
+            FRONTEND_AUTHORITY_TRANSCRIPT_SECTION,
+            AUTHORITY_TRANSCRIPT,
         );
         append_module_assembly_section(&mut module, FRONTEND_AUTHORITY_SECTION, authority);
         append_module_assembly_section(
@@ -1450,7 +1480,7 @@ entry:
             name(ROW_SOFTMAX_V1_DESCRIPTOR_SYMBOL),
             evidence(0x82, 0x83),
             evidence(0x84, 0x85),
-            vec![CapabilityV1::Subgroup, CapabilityV1::AmdWave],
+            vec![CapabilityV1::AmdWave],
             KernelAbiLayoutV1::new(32, 288, 8).unwrap(),
             LaunchConstraintsV1::new(
                 1,
@@ -1543,7 +1573,7 @@ entry:
     }
 
     #[test]
-    fn production_three_section_suffix_is_admitted() {
+    fn production_four_section_suffix_is_admitted() {
         let handoff = exact_handoff();
         let decoded = decode_bound_sections(handoff.module_bytes()).unwrap();
 
@@ -1551,7 +1581,68 @@ entry:
             decoded.descriptor,
             exact_descriptor_source().canonical_bytes()
         );
+        assert_eq!(decoded.authority_transcript, AUTHORITY_TRANSCRIPT);
         assert_eq!(decoded.authority, AUTHORITY);
+        assert_eq!(decoded.exponential_boundary, EXPONENTIAL_BOUNDARY);
+    }
+
+    #[test]
+    fn authority_transcript_and_exponential_commitments_are_cross_checked() {
+        let descriptor = exact_descriptor_source().canonical_bytes().to_vec();
+        let changed_transcript = b"row-softmax-authority-transcript-test-v2";
+        let transcript_mismatch = handoff_from_module(&row_module_with_sections(&[
+            (COMPILER_DESCRIPTOR_SECTION_NAME_V1, descriptor.as_slice()),
+            (FRONTEND_AUTHORITY_TRANSCRIPT_SECTION, changed_transcript),
+            (FRONTEND_AUTHORITY_SECTION, AUTHORITY.as_slice()),
+            (
+                EXPONENTIAL_BOUNDARY_SECTION,
+                EXPONENTIAL_BOUNDARY.as_slice(),
+            ),
+        ]));
+        assert!(matches!(
+            RowSoftmaxV1DirectWorkerExpectationV1::from_pinned_rustc_handoff(
+                &transcript_mismatch,
+                *transcript_mismatch.identity().sha256(),
+                AUTHORITY,
+                exact_worker_pins(),
+            ),
+            Err(RowSoftmaxV1DirectWorkerErrorV1::ProfileMismatch(
+                "frontend-authority commitment"
+            ))
+        ));
+
+        let changed_exponential = [0x92; EXPONENTIAL_BOUNDARY_BYTES];
+        let exponential_mismatch = handoff_from_module(&row_module_with_sections(&[
+            (COMPILER_DESCRIPTOR_SECTION_NAME_V1, descriptor.as_slice()),
+            (FRONTEND_AUTHORITY_TRANSCRIPT_SECTION, AUTHORITY_TRANSCRIPT),
+            (FRONTEND_AUTHORITY_SECTION, AUTHORITY.as_slice()),
+            (EXPONENTIAL_BOUNDARY_SECTION, changed_exponential.as_slice()),
+        ]));
+        assert!(matches!(
+            RowSoftmaxV1DirectWorkerExpectationV1::from_pinned_rustc_handoff(
+                &exponential_mismatch,
+                *exponential_mismatch.identity().sha256(),
+                AUTHORITY,
+                exact_worker_pins(),
+            ),
+            Err(RowSoftmaxV1DirectWorkerErrorV1::ProfileMismatch(
+                "exponential-boundary semantic identity"
+            ))
+        ));
+
+        let oversized = vec![0x55; MAX_FRONTEND_AUTHORITY_TRANSCRIPT_BYTES + 1];
+        assert!(
+            decode_bound_sections(&row_module_with_sections(&[
+                (COMPILER_DESCRIPTOR_SECTION_NAME_V1, descriptor.as_slice()),
+                (FRONTEND_AUTHORITY_TRANSCRIPT_SECTION, oversized.as_slice(),),
+                (FRONTEND_AUTHORITY_SECTION, AUTHORITY.as_slice()),
+                (
+                    EXPONENTIAL_BOUNDARY_SECTION,
+                    EXPONENTIAL_BOUNDARY.as_slice(),
+                ),
+            ]))
+            .is_err()
+        );
     }
 
     #[test]
@@ -1559,6 +1650,7 @@ entry:
         let descriptor = exact_descriptor_source().canonical_bytes().to_vec();
         let exact = [
             (COMPILER_DESCRIPTOR_SECTION_NAME_V1, descriptor.as_slice()),
+            (FRONTEND_AUTHORITY_TRANSCRIPT_SECTION, AUTHORITY_TRANSCRIPT),
             (FRONTEND_AUTHORITY_SECTION, AUTHORITY.as_slice()),
             (
                 EXPONENTIAL_BOUNDARY_SECTION,
@@ -1567,9 +1659,10 @@ entry:
         ];
         assert!(decode_bound_sections(&row_module_with_sections(&exact)).is_ok());
 
-        let missing = row_module_with_sections(&exact[..2]);
-        let reordered = row_module_with_sections(&[exact[1], exact[0], exact[2]]);
-        let duplicate = row_module_with_sections(&[exact[0], exact[1], exact[1], exact[2]]);
+        let missing = row_module_with_sections(&exact[..3]);
+        let reordered = row_module_with_sections(&[exact[1], exact[0], exact[2], exact[3]]);
+        let duplicate =
+            row_module_with_sections(&[exact[0], exact[1], exact[1], exact[2], exact[3]]);
         let mut trailing_section = row_module_with_sections(&exact);
         append_module_assembly_section(&mut trailing_section, ".fe2o3.unreviewed.v1", &[0x42]);
         let mut trailing_text = row_module_with_sections(&exact);
@@ -1616,6 +1709,7 @@ entry:
         ] {
             let module = row_module_with_sections(&[
                 (COMPILER_DESCRIPTOR_SECTION_NAME_V1, descriptor.as_slice()),
+                (FRONTEND_AUTHORITY_TRANSCRIPT_SECTION, AUTHORITY_TRANSCRIPT),
                 (FRONTEND_AUTHORITY_SECTION, authority.as_slice()),
                 (EXPONENTIAL_BOUNDARY_SECTION, exponential.as_slice()),
             ]);
@@ -1631,6 +1725,11 @@ entry:
             COMPILER_DESCRIPTOR_SECTION_NAME_V1,
             &descriptor,
             8,
+        );
+        append_module_assembly_section(
+            &mut short_chunks,
+            FRONTEND_AUTHORITY_TRANSCRIPT_SECTION,
+            AUTHORITY_TRANSCRIPT,
         );
         append_module_assembly_section(&mut short_chunks, FRONTEND_AUTHORITY_SECTION, &AUTHORITY);
         append_module_assembly_section(
@@ -1648,6 +1747,11 @@ entry:
         );
         append_module_assembly_section(
             &mut oversized_chunk,
+            FRONTEND_AUTHORITY_TRANSCRIPT_SECTION,
+            AUTHORITY_TRANSCRIPT,
+        );
+        append_module_assembly_section(
+            &mut oversized_chunk,
             FRONTEND_AUTHORITY_SECTION,
             &AUTHORITY,
         );
@@ -1659,6 +1763,7 @@ entry:
 
         let exact = row_module_with_sections(&[
             (COMPILER_DESCRIPTOR_SECTION_NAME_V1, descriptor.as_slice()),
+            (FRONTEND_AUTHORITY_TRANSCRIPT_SECTION, AUTHORITY_TRANSCRIPT),
             (FRONTEND_AUTHORITY_SECTION, AUTHORITY.as_slice()),
             (
                 EXPONENTIAL_BOUNDARY_SECTION,
@@ -1672,10 +1777,10 @@ entry:
         )[0];
         let hexadecimal = uppercase_hex[authority_position..]
             .windows(4)
-            .position(|window| window == b"0xa5")
+            .position(|window| window == b"0xd9")
             .unwrap()
             + authority_position;
-        uppercase_hex[hexadecimal + 2] = b'A';
+        uppercase_hex[hexadecimal + 2] = b'D';
         let mut missing_final_newline = exact;
         assert_eq!(missing_final_newline.pop(), Some(b'\n'));
 
