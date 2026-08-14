@@ -97,6 +97,7 @@ pub use row_softmax_v1_artifact::{
 pub use row_softmax_v1_worker::{
     InspectedRowSoftmaxV1DirectWorkerHsacoV1, RowSoftmaxV1DirectWorkerErrorV1,
     RowSoftmaxV1DirectWorkerExchangeIdentityV1, RowSoftmaxV1DirectWorkerExpectationV1,
+    RowSoftmaxV1DirectWorkerPinsV1, RowSoftmaxV1OcmlProviderPinsV1,
     ValidatedRowSoftmaxV1DirectWorkerExchangeV1, inspect_row_softmax_v1_direct_worker_hsaco_v1,
     validate_row_softmax_v1_direct_worker_exchange_v1,
 };

@@ -22,8 +22,8 @@ use sha2::{Digest, Sha256};
 use crate::{
     ContentIdentityV1, InertDecodedWorkerExchangeV2, InertFirstBuildWorkerV2EvidenceV1,
     InspectedRowSoftmaxV1StructuralWorkerV2HsacoV1, WorkerCompilerFfiEnvelopeIdentityV2,
-    WorkerInputKindV1, WorkerOptimizationLevelV1, WorkerOptionsV1, WorkerProtocolError,
-    WorkerRequestV2, WorkerResponseV2, WorkerStageV1,
+    WorkerDeviceLibraryProviderEvidenceV1, WorkerInputKindV1, WorkerOptimizationLevelV1,
+    WorkerOptionsV1, WorkerProtocolError, WorkerRequestV2, WorkerResponseV2, WorkerStageV1,
     inspect_row_softmax_v1_structural_worker_v2_hsaco_v1,
 };
 
@@ -32,6 +32,13 @@ const OCML_EXP_F32: &str = "__ocml_exp_f32";
 const FRONTEND_AUTHORITY_SECTION: &str = ".fe2o3.row-softmax-auth.v1";
 const FRONTEND_AUTHORITY_BYTES: usize = 32;
 const MEASURED_OCML_PROVIDER_FILE_COUNT: usize = 4;
+const OCML_PROVIDER_IDENTITY: &str = "gfx942-ocml-v1";
+const OCML_PROVIDER_BASENAMES: [&str; MEASURED_OCML_PROVIDER_FILE_COUNT] = [
+    "ocml.bc",
+    "oclc_isa_version_942.bc",
+    "oclc_unsafe_math_off.bc",
+    "oclc_finite_only_off.bc",
+];
 const SUCCESS_DIAGNOSTICS: [&str; 6] = [
     "device_library.check=identity status=ok provider=gfx942-ocml-v1 roots=[__ocml_exp_f32] files=4",
     "post_link.check=exports status=ok symbols=[__ocml_exp_f32,row_softmax_v1,row_softmax_v1.kd]",
@@ -41,6 +48,77 @@ const SUCCESS_DIAGNOSTICS: [&str; 6] = [
     "post_link.kernel name=row_softmax_v1 symbol=row_softmax_v1.kd kernarg_size=288 group_size=0 private_size=0 kernarg_align=8 wavefront_size=64 max_workgroup_size=64 reqd_workgroup_size=[64,1,1]",
 ];
 const EXCHANGE_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/ROW-SOFTMAX-V1/DIRECT-WORKER-EXCHANGE/V1\0";
+
+/// Independent pins for the worker-owned gfx942 OCML provider closure.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RowSoftmaxV1OcmlProviderPinsV1 {
+    file_sha256: [[u8; 32]; MEASURED_OCML_PROVIDER_FILE_COUNT],
+    manifest_identity: [u8; 32],
+}
+
+impl RowSoftmaxV1OcmlProviderPinsV1 {
+    pub fn new(
+        file_sha256: [[u8; 32]; MEASURED_OCML_PROVIDER_FILE_COUNT],
+        manifest_identity: [u8; 32],
+    ) -> Result<Self, RowSoftmaxV1DirectWorkerErrorV1> {
+        if file_sha256.iter().any(|digest| digest == &[0; 32]) {
+            return Err(profile_mismatch("OCML provider file pins"));
+        }
+        if manifest_identity == [0; 32] {
+            return Err(profile_mismatch("OCML provider manifest pin"));
+        }
+        Ok(Self {
+            file_sha256,
+            manifest_identity,
+        })
+    }
+
+    pub const fn file_sha256(&self) -> &[[u8; 32]; MEASURED_OCML_PROVIDER_FILE_COUNT] {
+        &self.file_sha256
+    }
+
+    pub const fn manifest_identity(&self) -> &[u8; 32] {
+        &self.manifest_identity
+    }
+}
+
+/// Independent pins for the executable, build identities, and provider closure.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RowSoftmaxV1DirectWorkerPinsV1 {
+    executable: ContentIdentityV1,
+    worker_build_identity_sha256: [u8; 32],
+    llvm_build_identity_sha256: [u8; 32],
+    provider: RowSoftmaxV1OcmlProviderPinsV1,
+}
+
+impl RowSoftmaxV1DirectWorkerPinsV1 {
+    pub fn new(
+        executable: ContentIdentityV1,
+        worker_build_identity: &str,
+        llvm_build_identity: &str,
+        provider: RowSoftmaxV1OcmlProviderPinsV1,
+    ) -> Result<Self, RowSoftmaxV1DirectWorkerErrorV1> {
+        if executable.byte_len() == 0 || executable.sha256() == &[0; 32] {
+            return Err(profile_mismatch("worker executable pin"));
+        }
+        validate_build_identity_pin(worker_build_identity, "worker build identity pin")?;
+        validate_build_identity_pin(llvm_build_identity, "LLVM build identity pin")?;
+        Ok(Self {
+            executable,
+            worker_build_identity_sha256: Sha256::digest(worker_build_identity.as_bytes()).into(),
+            llvm_build_identity_sha256: Sha256::digest(llvm_build_identity.as_bytes()).into(),
+            provider,
+        })
+    }
+
+    pub const fn executable(&self) -> ContentIdentityV1 {
+        self.executable
+    }
+
+    pub const fn provider(&self) -> RowSoftmaxV1OcmlProviderPinsV1 {
+        self.provider
+    }
+}
 
 /// Exact out-of-band pins needed to admit the row-softmax direct-worker path.
 ///
@@ -52,6 +130,7 @@ pub struct RowSoftmaxV1DirectWorkerExpectationV1 {
     handoff_sha256: [u8; 32],
     frontend_authority_commitment: [u8; FRONTEND_AUTHORITY_BYTES],
     descriptor: RowSoftmaxV1StructuralDescriptorExpectationV1,
+    worker: RowSoftmaxV1DirectWorkerPinsV1,
 }
 
 impl RowSoftmaxV1DirectWorkerExpectationV1 {
@@ -60,6 +139,7 @@ impl RowSoftmaxV1DirectWorkerExpectationV1 {
         handoff: &CompilerModuleHandoffV2,
         expected_handoff_sha256: [u8; 32],
         expected_frontend_authority_commitment: [u8; FRONTEND_AUTHORITY_BYTES],
+        expected_worker: RowSoftmaxV1DirectWorkerPinsV1,
     ) -> Result<Self, RowSoftmaxV1DirectWorkerErrorV1> {
         if expected_handoff_sha256 == [0; 32]
             || handoff.identity().sha256() != &expected_handoff_sha256
@@ -75,6 +155,7 @@ impl RowSoftmaxV1DirectWorkerExpectationV1 {
             handoff_sha256: expected_handoff_sha256,
             frontend_authority_commitment: expected_frontend_authority_commitment,
             descriptor,
+            worker: expected_worker,
         })
     }
 
@@ -88,6 +169,10 @@ impl RowSoftmaxV1DirectWorkerExpectationV1 {
 
     pub const fn descriptor_expectation(self) -> RowSoftmaxV1StructuralDescriptorExpectationV1 {
         self.descriptor
+    }
+
+    pub const fn worker_pins(self) -> RowSoftmaxV1DirectWorkerPinsV1 {
+        self.worker
     }
 
     pub const fn authenticates_pin_origin(&self) -> bool {
@@ -104,6 +189,14 @@ impl RowSoftmaxV1DirectWorkerExpectationV1 {
 
     pub const fn grants_launch_authority(&self) -> bool {
         false
+    }
+
+    pub const fn proves_no_comgr_linkage(&self) -> bool {
+        false
+    }
+
+    pub const fn no_comgr_requires_measured_worker_build_manifest(&self) -> bool {
+        true
     }
 }
 
@@ -124,6 +217,7 @@ pub struct ValidatedRowSoftmaxV1DirectWorkerExchangeV1 {
     compiler_module: ContentIdentityV1,
     linked_output: ContentIdentityV1,
     frontend_authority_commitment: [u8; FRONTEND_AUTHORITY_BYTES],
+    provider_manifest_identity: [u8; 32],
 }
 
 impl ValidatedRowSoftmaxV1DirectWorkerExchangeV1 {
@@ -145,6 +239,10 @@ impl ValidatedRowSoftmaxV1DirectWorkerExchangeV1 {
 
     pub const fn measured_gfx942_ocml_provider_closure_was_checked(&self) -> bool {
         true
+    }
+
+    pub const fn measured_ocml_provider_manifest_identity(&self) -> &[u8; 32] {
+        &self.provider_manifest_identity
     }
 
     pub const fn measured_ocml_provider_file_count(&self) -> usize {
@@ -177,6 +275,14 @@ impl ValidatedRowSoftmaxV1DirectWorkerExchangeV1 {
 
     pub const fn grants_launch_authority(&self) -> bool {
         false
+    }
+
+    pub const fn proves_no_comgr_linkage(&self) -> bool {
+        false
+    }
+
+    pub const fn no_comgr_requires_measured_worker_build_manifest(&self) -> bool {
+        true
     }
 }
 
@@ -337,7 +443,7 @@ fn validate_exchange_parts(
 ) -> Result<ValidatedRowSoftmaxV1DirectWorkerExchangeV1, RowSoftmaxV1DirectWorkerErrorV1> {
     let request = exchange.request();
     validate_request(request, envelope, manifest, expected)?;
-    validate_response(request, exchange.response())?;
+    validate_response(request, exchange.response(), expected)?;
     let output = exchange
         .response()
         .output()
@@ -347,6 +453,7 @@ fn validate_exchange_parts(
         compiler_module: request.compiler_module().identity(),
         linked_output: output.identity(),
         frontend_authority_commitment: expected.frontend_authority_commitment,
+        provider_manifest_identity: *expected.worker.provider.manifest_identity(),
     })
 }
 
@@ -364,6 +471,16 @@ fn validate_request(
     }
     if request.options() != WorkerOptionsV1::new(WorkerOptimizationLevelV1::O0, true, true) {
         return Err(profile_mismatch("worker options"));
+    }
+    let worker_build_identity_sha256: [u8; 32] =
+        Sha256::digest(request.worker_build_identity().as_bytes()).into();
+    let llvm_build_identity_sha256: [u8; 32] =
+        Sha256::digest(request.llvm_build_identity().as_bytes()).into();
+    if request.worker_executable() != expected.worker.executable
+        || worker_build_identity_sha256 != expected.worker.worker_build_identity_sha256
+        || llvm_build_identity_sha256 != expected.worker.llvm_build_identity_sha256
+    {
+        return Err(profile_mismatch("independently pinned worker identity"));
     }
     if request.compiler_envelope_identity()
         != WorkerCompilerFfiEnvelopeIdentityV2::from_compiler_identity(envelope.identity())
@@ -497,6 +614,7 @@ fn validate_manifest(
 fn validate_response(
     request: &WorkerRequestV2,
     response: &WorkerResponseV2,
+    expected: RowSoftmaxV1DirectWorkerExpectationV1,
 ) -> Result<(), RowSoftmaxV1DirectWorkerErrorV1> {
     if !response.binds_request(request) {
         return Err(profile_mismatch("response request binding"));
@@ -506,6 +624,13 @@ fn validate_response(
     }
     if response.stage() != WorkerStageV1::Complete {
         return Err(profile_mismatch("response completion stage"));
+    }
+    let provider = response
+        .device_library_provider()
+        .ok_or_else(|| profile_mismatch("structured OCML provider evidence"))?;
+    validate_provider_evidence(provider, expected.worker.provider)?;
+    if response.response_identity().is_none() {
+        return Err(profile_mismatch("authenticated provider response identity"));
     }
     if response.diagnostics().len() != SUCCESS_DIAGNOSTICS.len()
         || response
@@ -525,6 +650,43 @@ fn validate_response(
         || output.identity().byte_len() != request.output_constraints().max_bytes()
     {
         return Err(profile_mismatch("response output binding"));
+    }
+    Ok(())
+}
+
+fn validate_provider_evidence(
+    evidence: &WorkerDeviceLibraryProviderEvidenceV1,
+    expected: RowSoftmaxV1OcmlProviderPinsV1,
+) -> Result<(), RowSoftmaxV1DirectWorkerErrorV1> {
+    if evidence.provider_identity() != OCML_PROVIDER_IDENTITY
+        || evidence.target().to_string() != TARGET
+        || evidence.code_object_version() != CodeObjectVersion::V6
+        || evidence.import_symbols() != [OCML_EXP_F32]
+        || evidence.manifest_identity() != expected.manifest_identity()
+        || evidence.files().len() != MEASURED_OCML_PROVIDER_FILE_COUNT
+    {
+        return Err(profile_mismatch("structured OCML provider closure"));
+    }
+    for (index, file) in evidence.files().iter().enumerate() {
+        if file.basename() != OCML_PROVIDER_BASENAMES[index]
+            || file.sha256() != &expected.file_sha256[index]
+        {
+            return Err(profile_mismatch("ordered OCML provider file pins"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_build_identity_pin(
+    value: &str,
+    field: &'static str,
+) -> Result<(), RowSoftmaxV1DirectWorkerErrorV1> {
+    if value.is_empty()
+        || value.len() > crate::MAX_WORKER_TOOLCHAIN_ID_BYTES
+        || !value.is_ascii()
+        || value.bytes().any(|byte| byte.is_ascii_control())
+    {
+        return Err(profile_mismatch(field));
     }
     Ok(())
 }
@@ -638,8 +800,8 @@ const fn profile_mismatch(field: &'static str) -> RowSoftmaxV1DirectWorkerErrorV
 mod tests {
     use super::*;
     use crate::{
-        WORKER_RESPONSE_MAGIC_V2, WorkerInputV1, WorkerOutputConstraintsV1,
-        worker_protocol_v2::SealedWorkerRequestV2Parts,
+        WORKER_RESPONSE_MAGIC_V2, WORKER_RESPONSE_MAGIC_V3, WorkerInputV1,
+        WorkerOutputConstraintsV1, worker_protocol_v2::SealedWorkerRequestV2Parts,
     };
     use fe2o3_compiler_ffi::{
         CodeObjectVersion as CompilerCodeObjectVersion, CompilerFfiContractV1,
@@ -661,6 +823,10 @@ mod tests {
     const OUTPUT: &[u8] = b"linked-row";
     const AUTHORITY: [u8; FRONTEND_AUTHORITY_BYTES] = [0xa5; FRONTEND_AUTHORITY_BYTES];
     const OCML_ABI: &str = "C(f32[size=4,align=4])->f32[size=4,align=4]";
+    const PROVIDER_DIGESTS: [[u8; 32]; MEASURED_OCML_PROVIDER_FILE_COUNT] =
+        [[0x41; 32], [0x42; 32], [0x43; 32], [0x44; 32]];
+    const PROVIDER_MANIFEST_DOMAIN: &[u8] = b"FE2O3/DEVICE-LIBRARY-PROVIDER-MANIFEST/V1\0";
+    const RESPONSE_DOMAIN: &[u8] = b"FE2O3/DIRECT-LLVM-WORKER-RESPONSE/V3\0";
 
     fn exact_handoff() -> CompilerModuleHandoffV2 {
         handoff_with(exact_descriptor_source().canonical_bytes(), &AUTHORITY, b"")
@@ -708,8 +874,36 @@ entry:
             handoff,
             *handoff.identity().sha256(),
             AUTHORITY,
+            exact_worker_pins(),
         )
         .unwrap()
+    }
+
+    fn exact_worker_pins() -> RowSoftmaxV1DirectWorkerPinsV1 {
+        let provider = provider_preimage(
+            TARGET,
+            CodeObjectVersion::V6,
+            &[OCML_EXP_F32],
+            &exact_provider_files(),
+        );
+        RowSoftmaxV1DirectWorkerPinsV1::new(
+            ContentIdentityV1::from_parts([0x22; 32], 4096),
+            "fe2o3-direct-llvm-lld-worker-v2-row",
+            "upstream-llvm-22-row",
+            RowSoftmaxV1OcmlProviderPinsV1::new(
+                PROVIDER_DIGESTS,
+                calculate_test_identity(PROVIDER_MANIFEST_DOMAIN, &provider),
+            )
+            .unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn exact_provider_files() -> Vec<(&'static str, [u8; 32])> {
+        OCML_PROVIDER_BASENAMES
+            .into_iter()
+            .zip(PROVIDER_DIGESTS)
+            .collect()
     }
 
     fn exact_envelope() -> CompilerFfiEnvelopeV1 {
@@ -826,7 +1020,34 @@ entry:
     }
 
     fn response(request: &WorkerRequestV2, diagnostics: &[&str]) -> Vec<u8> {
-        let mut encoded = WORKER_RESPONSE_MAGIC_V2.to_vec();
+        response_with_provider_files(request, diagnostics, &exact_provider_files())
+    }
+
+    fn response_without_provider(request: &WorkerRequestV2, diagnostics: &[&str]) -> Vec<u8> {
+        response_prefix(request, diagnostics, WORKER_RESPONSE_MAGIC_V2)
+    }
+
+    fn response_with_provider_files(
+        request: &WorkerRequestV2,
+        diagnostics: &[&str],
+        files: &[(&str, [u8; 32])],
+    ) -> Vec<u8> {
+        let mut encoded = response_prefix(request, diagnostics, WORKER_RESPONSE_MAGIC_V3);
+        let mut provider = provider_preimage(TARGET, CodeObjectVersion::V6, &[OCML_EXP_F32], files);
+        let manifest_identity = calculate_test_identity(PROVIDER_MANIFEST_DOMAIN, &provider);
+        provider.extend_from_slice(&manifest_identity);
+        push_field(&mut encoded, 8, &provider);
+        let response_identity = calculate_test_identity(RESPONSE_DOMAIN, &encoded);
+        push_field(&mut encoded, 9, &response_identity);
+        encoded
+    }
+
+    fn response_prefix(
+        request: &WorkerRequestV2,
+        diagnostics: &[&str],
+        magic: &[u8; 8],
+    ) -> Vec<u8> {
+        let mut encoded = magic.to_vec();
         push_field(&mut encoded, 1, request.request_id());
         push_field(&mut encoded, 2, request.identity());
         push_field(
@@ -852,12 +1073,42 @@ entry:
         encoded
     }
 
-    fn exchange(request: &WorkerRequestV2, diagnostics: &[&str]) -> InertDecodedWorkerExchangeV2 {
-        InertDecodedWorkerExchangeV2::decode(
-            request.canonical_bytes(),
-            &response(request, diagnostics),
-        )
-        .unwrap()
+    fn provider_preimage(
+        target: &str,
+        code_object_version: CodeObjectVersion,
+        imports: &[&str],
+        files: &[(&str, [u8; 32])],
+    ) -> Vec<u8> {
+        let mut encoded = Vec::new();
+        for value in [OCML_PROVIDER_IDENTITY, target] {
+            encoded.extend_from_slice(&(value.len() as u32).to_le_bytes());
+            encoded.extend_from_slice(value.as_bytes());
+        }
+        encoded.push(match code_object_version {
+            CodeObjectVersion::V4 => 4,
+            CodeObjectVersion::V5 => 5,
+            CodeObjectVersion::V6 => 6,
+        });
+        encoded.extend_from_slice(&(imports.len() as u32).to_le_bytes());
+        for import in imports {
+            encoded.extend_from_slice(&(import.len() as u32).to_le_bytes());
+            encoded.extend_from_slice(import.as_bytes());
+        }
+        encoded.extend_from_slice(&(files.len() as u32).to_le_bytes());
+        for (basename, digest) in files {
+            encoded.extend_from_slice(&(basename.len() as u32).to_le_bytes());
+            encoded.extend_from_slice(basename.as_bytes());
+            encoded.extend_from_slice(digest);
+        }
+        encoded
+    }
+
+    fn calculate_test_identity(domain: &[u8], preimage: &[u8]) -> [u8; 32] {
+        let mut digest = Sha256::new();
+        digest.update(domain);
+        digest.update((preimage.len() as u64).to_le_bytes());
+        digest.update(preimage);
+        digest.finalize().into()
     }
 
     fn validate(
@@ -866,8 +1117,13 @@ entry:
         expected: RowSoftmaxV1DirectWorkerExpectationV1,
         diagnostics: &[&str],
     ) -> Result<ValidatedRowSoftmaxV1DirectWorkerExchangeV1, RowSoftmaxV1DirectWorkerErrorV1> {
+        let exchange = InertDecodedWorkerExchangeV2::decode(
+            request.canonical_bytes(),
+            &response(request, diagnostics),
+        )
+        .map_err(RowSoftmaxV1DirectWorkerErrorV1::WorkerProtocol)?;
         validate_exchange_parts(
-            &exchange(request, diagnostics),
+            &exchange,
             handoff.envelope(),
             handoff.symbol_manifest(),
             expected,
@@ -1012,6 +1268,10 @@ entry:
         );
         assert!(validated.measured_gfx942_ocml_provider_closure_was_checked());
         assert_eq!(validated.measured_ocml_provider_file_count(), 4);
+        assert_eq!(
+            validated.measured_ocml_provider_manifest_identity(),
+            exact_worker_pins().provider().manifest_identity()
+        );
         assert_eq!(validated.requested_ocml_import(), OCML_EXP_F32);
         assert!(!validated.authenticates_frontend_origin());
         assert!(!validated.proves_exp_math_accuracy());
@@ -1019,6 +1279,8 @@ entry:
         assert!(!validated.grants_publication_authority());
         assert!(!validated.grants_load_authority());
         assert!(!validated.grants_launch_authority());
+        assert!(!validated.proves_no_comgr_linkage());
+        assert!(validated.no_comgr_requires_measured_worker_build_manifest());
     }
 
     #[test]
@@ -1124,6 +1386,101 @@ entry:
     }
 
     #[test]
+    fn structured_provider_order_substitution_and_diagnostics_only_fail_closed() {
+        let handoff = exact_handoff();
+        let expected = exact_expectation(&handoff);
+        let request = exact_request(&handoff, 0x35);
+
+        let diagnostics_only = response_without_provider(&request, &success_diagnostics());
+        let diagnostics_only_exchange =
+            InertDecodedWorkerExchangeV2::decode(request.canonical_bytes(), &diagnostics_only)
+                .unwrap();
+        assert!(
+            validate_exchange_parts(
+                &diagnostics_only_exchange,
+                handoff.envelope(),
+                handoff.symbol_manifest(),
+                expected,
+            )
+            .is_err()
+        );
+
+        let mut reordered = exact_provider_files();
+        reordered.swap(0, 1);
+        let reordered_response =
+            response_with_provider_files(&request, &success_diagnostics(), &reordered);
+        let reordered_exchange =
+            InertDecodedWorkerExchangeV2::decode(request.canonical_bytes(), &reordered_response)
+                .unwrap();
+        assert!(
+            validate_exchange_parts(
+                &reordered_exchange,
+                handoff.envelope(),
+                handoff.symbol_manifest(),
+                expected,
+            )
+            .is_err()
+        );
+
+        let mut substituted = exact_provider_files();
+        substituted[2].1[0] ^= 1;
+        let substituted_response =
+            response_with_provider_files(&request, &success_diagnostics(), &substituted);
+        let substituted_exchange =
+            InertDecodedWorkerExchangeV2::decode(request.canonical_bytes(), &substituted_response)
+                .unwrap();
+        assert!(
+            validate_exchange_parts(
+                &substituted_exchange,
+                handoff.envelope(),
+                handoff.symbol_manifest(),
+                expected,
+            )
+            .is_err()
+        );
+
+        let mut missing = exact_provider_files();
+        missing.pop();
+        let mut extra = exact_provider_files();
+        extra.push(("unmeasured-extra.bc", [0x66; 32]));
+        for files in [missing, extra] {
+            let response = response_with_provider_files(&request, &success_diagnostics(), &files);
+            let exchange =
+                InertDecodedWorkerExchangeV2::decode(request.canonical_bytes(), &response).unwrap();
+            assert!(
+                validate_exchange_parts(
+                    &exchange,
+                    handoff.envelope(),
+                    handoff.symbol_manifest(),
+                    expected,
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn protocol_compatible_fake_worker_cannot_replace_independent_pins() {
+        let handoff = exact_handoff();
+        let request = exact_request(&handoff, 0x36);
+        let fake_worker = RowSoftmaxV1DirectWorkerPinsV1::new(
+            ContentIdentityV1::from_parts([0x77; 32], 4096),
+            "untrusted-protocol-compatible-worker",
+            "untrusted-llvm-build",
+            exact_worker_pins().provider(),
+        )
+        .unwrap();
+        let expected = RowSoftmaxV1DirectWorkerExpectationV1::from_pinned_rustc_handoff(
+            &handoff,
+            *handoff.identity().sha256(),
+            AUTHORITY,
+            fake_worker,
+        )
+        .unwrap();
+        assert!(validate(&handoff, &request, expected, &success_diagnostics()).is_err());
+    }
+
+    #[test]
     fn descriptor_authority_and_arbitrary_semantic_text_cannot_replace_the_pin() {
         let exact = exact_handoff();
         let expected = exact_expectation(&exact);
@@ -1140,6 +1497,7 @@ entry:
                 &wrong_descriptor,
                 *wrong_descriptor.identity().sha256(),
                 AUTHORITY,
+                exact_worker_pins(),
             )
             .is_err()
         );
@@ -1154,6 +1512,7 @@ entry:
                 &wrong_authority,
                 *wrong_authority.identity().sha256(),
                 AUTHORITY,
+                exact_worker_pins(),
             )
             .is_err()
         );
@@ -1183,7 +1542,10 @@ entry:
         let handoff = exact_handoff();
         assert!(
             RowSoftmaxV1DirectWorkerExpectationV1::from_pinned_rustc_handoff(
-                &handoff, [0; 32], AUTHORITY,
+                &handoff,
+                [0; 32],
+                AUTHORITY,
+                exact_worker_pins(),
             )
             .is_err()
         );
@@ -1192,6 +1554,7 @@ entry:
                 &handoff,
                 *handoff.identity().sha256(),
                 [0; FRONTEND_AUTHORITY_BYTES],
+                exact_worker_pins(),
             )
             .is_err()
         );
@@ -1199,7 +1562,45 @@ entry:
         wrong[0] ^= 1;
         assert!(
             RowSoftmaxV1DirectWorkerExpectationV1::from_pinned_rustc_handoff(
-                &handoff, wrong, AUTHORITY,
+                &handoff,
+                wrong,
+                AUTHORITY,
+                exact_worker_pins(),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn worker_and_provider_pins_must_be_independent_nonzero_values() {
+        assert!(RowSoftmaxV1OcmlProviderPinsV1::new([[0; 32]; 4], [0x55; 32]).is_err());
+        assert!(RowSoftmaxV1OcmlProviderPinsV1::new(PROVIDER_DIGESTS, [0; 32]).is_err());
+
+        let provider = exact_worker_pins().provider();
+        assert!(
+            RowSoftmaxV1DirectWorkerPinsV1::new(
+                ContentIdentityV1::from_parts([0; 32], 4096),
+                "worker",
+                "llvm",
+                provider,
+            )
+            .is_err()
+        );
+        assert!(
+            RowSoftmaxV1DirectWorkerPinsV1::new(
+                ContentIdentityV1::from_parts([0x22; 32], 4096),
+                "",
+                "llvm",
+                provider,
+            )
+            .is_err()
+        );
+        assert!(
+            RowSoftmaxV1DirectWorkerPinsV1::new(
+                ContentIdentityV1::from_parts([0x22; 32], 4096),
+                "worker",
+                "llvm\nforged",
+                provider,
             )
             .is_err()
         );
