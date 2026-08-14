@@ -38,14 +38,14 @@ experiments, including out-of-corpus rounding, recurrence-order, cancellation,
 and signed-zero cases. Its results are not finite-corpus bitwise evidence.
 Neither oracle claims undocumented MFMA evaluation order or GPU equivalence.
 
-The combined tree includes a bounded primitive frontend slice: genuine
-`DeviceMatrix::from_compiler` and `DeviceMatrix::multiply_accumulate` calls in
-the exact gfx942 wave64 context lower to a verified Kernel IR matrix operation,
-while spoofed or wrong-target forms fail closed. Lane-to-fragment mapping, LDS
-data movement, full GEMM loops, output stores, production export and HSACO
+`src/kernel_face.rs` binds this scaffold to the existing `DeviceMatrix` and
+fragment types, but this public increment does not admit their Rust calls for
+GPU lowering. Exact target retention and rustc physical-ABI validation must be
+bound before that frontend path can land. Lane-to-fragment mapping, LDS data
+movement, full GEMM loops, output stores, production export and HSACO
 generation, protected runtime admission, hardware dispatch,
 compiler-to-machine refinement, memory-safety proof, and race-freedom proof
-remain pending.
+also remain pending.
 
 The dedicated `Tiled GEMM V1 host scaffold` workflow exercises this standalone
 manifest independently of the root workspace.

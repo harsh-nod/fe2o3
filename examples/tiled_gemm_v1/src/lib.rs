@@ -4,10 +4,10 @@
 //! Conservative host contract for the first gfx942 tiled BF16 GEMM slice.
 //!
 //! Host planning, deterministic finite-corpus inputs, validated bitwise host
-//! evidence, and a general scalar FP32 recurrence are usable now. The exact
-//! primitive `DeviceMatrix` MFMA call lowers from genuine Rust frontend items
-//! to verified Kernel IR. Lane mapping, LDS movement, complete GEMM loops,
-//! output stores, production export, GPU execution, and proofs remain pending.
+//! evidence, and a general scalar FP32 recurrence are usable now. Exact target
+//! and physical-ABI-bound matrix lowering, lane mapping, LDS movement, complete
+//! GEMM loops, output stores, production export, GPU execution, and proofs
+//! remain pending.
 
 pub mod contract;
 pub mod inputs;
