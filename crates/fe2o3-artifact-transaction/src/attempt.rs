@@ -203,7 +203,7 @@ impl BackendPublicationReceiptV1 {
 }
 
 impl BuildAttempt {
-    fn new(
+    pub(crate) fn new(
         generation: u64,
         session: BuildSession,
         invocation: BuildInvocation,

@@ -38,6 +38,7 @@ mod compiler_module_handoff;
 mod durable_link_publication;
 mod durable_published_claim;
 mod link_publication;
+mod managed_invocation_capability;
 mod worker_v2_publication_intent;
 
 pub use attempt::{
@@ -80,6 +81,11 @@ pub use link_publication::{
     LinkedOutputIdentityV1, MAX_LINK_PUBLICATION_RECORD_BYTES, MAX_LINK_PUBLICATION_SCOPES,
     PackageIdentityV1, PinnedWorkerIdentityV1, PublicationOutcomeV1, PublishedLinkArtifactV1,
     RecoveryOutcomeV1, TargetIdentityV1, ValidatedResponseIdentityV1,
+};
+pub use managed_invocation_capability::{
+    BROKERED_INVOCATION_ADMITTED_V1, BROKERED_INVOCATION_PREPARED_V1,
+    BROKERED_INVOCATION_REQUEST_BYTES_V1, BrokeredInvocationCapabilityClaimV1,
+    BrokeredInvocationCapabilityCodecErrorV1, BrokeredInvocationCapabilityRequestV1,
 };
 use rustix::fd::{AsRawFd, FromRawFd, OwnedFd};
 use rustix::fs::{
