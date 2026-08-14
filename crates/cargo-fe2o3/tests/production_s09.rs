@@ -469,7 +469,6 @@ fn production_s09_compile_captures_and_publishes_worker_output() {
     let cargo = required_canonical_file("FE2O3_TEST_UPSTREAM_CARGO");
     let backend = required_canonical_file("FE2O3_TEST_CODEGEN_BACKEND");
     let cargo_home = required_canonical_directory("FE2O3_TEST_CARGO_HOME");
-    let rustc_library_path = required_canonical_directory("FE2O3_TEST_RUSTC_LIBRARY_PATH");
     let worker = required_canonical_file("FE2O3_LLVM_LINK_WORKER");
     let worker_build_identity = std::env::var("FE2O3_LLVM_LINK_WORKER_BUILD_ID")
         .expect("required test input FE2O3_LLVM_LINK_WORKER_BUILD_ID");
@@ -484,6 +483,11 @@ fn production_s09_compile_captures_and_publishes_worker_output() {
         &llvm_build_identity,
     );
     let target = directory.path.join("cargo-target");
+    let rustc_bin = directory.path.join("pinned-rustc-bin");
+    fs::create_dir(&rustc_bin).expect("create pinned rustc bin directory");
+    symlink(&rustc, rustc_bin.join("rustc")).expect("install pinned rustc path entry");
+    let rustc_sha256 = sha256(&rustc);
+    let backend_sha256 = sha256(&backend);
 
     let output = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"))
         .env_clear()
@@ -503,10 +507,10 @@ fn production_s09_compile_captures_and_publishes_worker_output() {
         .env("CARGO_HOME", &cargo_home)
         .env("HOME", directory.path.join("home"))
         .env("LANG", "C.UTF-8")
-        .env("LD_LIBRARY_PATH", &rustc_library_path)
-        .env("PATH", "/usr/bin:/bin")
-        .env("RUSTC", &rustc)
+        .env("PATH", format!("{}:/usr/bin:/bin", rustc_bin.display()))
         .env("FE2O3_BACKEND", &backend)
+        .env("FE2O3_AUTHORITY_RUSTC_SHA256_V1", &rustc_sha256)
+        .env("FE2O3_AUTHORITY_BACKEND_SHA256_V1", &backend_sha256)
         .env("FE2O3_CODEGEN_PIPELINE", "kernel-ir-worker-v2")
         .env("FE2O3_TARGET", "gfx942:xnack-")
         .env("FE2O3_VERBOSE", "1")
@@ -536,8 +540,8 @@ fn production_s09_compile_captures_and_publishes_worker_output() {
     let published = published_s09_hsaco(&target.join("fe2o3"));
     println!(
         "FE2O3_S09_PRODUCTION_OBSERVATION_V1 capture_sha256={capture} rustc_sha256={} backend_sha256={} cargo_sha256={cargo_sha256} worker_sha256={} hsaco_sha256={} publication_record_sha256={} publication_kernel_set_identity={} publication_target_identity={} publication_request_identity={} publication_worker_identity={} publication_identity={} target={}; observation only, no execution or authority claim",
-        sha256(&rustc),
-        sha256(&backend),
+        rustc_sha256,
+        backend_sha256,
         sha256(&worker),
         published.hsaco_sha256,
         published.record_sha256,

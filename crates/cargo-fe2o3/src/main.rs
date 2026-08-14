@@ -45,9 +45,12 @@ const BINDING_WRAPPER_MODE_ENV: &str = "FE2O3_BINDING_WRAPPER_MODE_V1";
 const MANAGED_RUSTC_ARGS_ENV: &str = "FE2O3_MANAGED_RUSTC_ARGS_V1";
 const BUILD_SESSION_ENV: &str = "FE2O3_BUILD_SESSION_V1";
 const EXPECTED_RUSTC_SHA256_ENV: &str = "FE2O3_EXPECTED_RUSTC_SHA256_V1";
+const AUTHORITY_RUSTC_SHA256_ENV: &str = "FE2O3_AUTHORITY_RUSTC_SHA256_V1";
+const AUTHORITY_BACKEND_SHA256_ENV: &str = "FE2O3_AUTHORITY_BACKEND_SHA256_V1";
 const AUTHORITY_BEARING_ROW_PIPELINE: &str = "collected-row-softmax-v1";
 const INTERNAL_RUNNER_ARG: &str = "__fe2o3-runner-v1";
 const BACKEND_BUILD_CHILD_FD: std::os::fd::RawFd = 196;
+const RUSTC_LIBRARY_CHILD_FD: std::os::fd::RawFd = 193;
 const RUSTC_CHILD_FD: std::os::fd::RawFd = 194;
 const ARTIFACT_CHILD_FD: std::os::fd::RawFd =
     fe2o3_artifact_transaction::BROKERED_ARTIFACT_DIRECTORY_CHILD_FD_V1;
@@ -294,6 +297,12 @@ fn cargo_with_backend_result(command: &str, args: &[OsString]) -> Result<(), Str
     if requires_authorized_closure {
         reject_authority_build_overrides(&project, args)?;
     }
+    let authority_rustc_sha256 = requires_authorized_closure
+        .then(authority_rustc_sha256_from_environment)
+        .transpose()?;
+    let authority_backend_sha256 = requires_authorized_closure
+        .then(authority_backend_sha256_from_environment)
+        .transpose()?;
     let cargo_declaration = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
     let cargo_path = binding_wrapper::resolve_command_executable(
         &cargo_declaration,
@@ -303,6 +312,16 @@ fn cargo_with_backend_result(command: &str, args: &[OsString]) -> Result<(), Str
     let pinned_cargo = pinned_executable::PinnedExecutable::open(&cargo_path)
         .map_err(|error| format!("failed to pin Cargo executable: {error}"))?;
     let pinned_rustc = pin_default_rustc(&project)?;
+    if let Some(expected) = authority_rustc_sha256
+        && pinned_rustc.executable.sha256() != &expected
+    {
+        return Err(format!(
+            "cargo fe2o3 authority rustc does not match {AUTHORITY_RUSTC_SHA256_ENV}"
+        ));
+    }
+    if let Some(expected) = authority_backend_sha256 {
+        preflight_declared_authority_backend(expected)?;
+    }
     let authorized_closure = requires_authorized_closure
         .then(|| {
             authorized_kernel_closure::AuthorizedKernelClosureV1::observe(
@@ -318,9 +337,24 @@ fn cargo_with_backend_result(command: &str, args: &[OsString]) -> Result<(), Str
         worker_v2,
         pinned_cargo,
         pinned_rustc,
+        authority_backend_sha256,
         authorized_closure,
     )?;
     run_cargo_with_backend(&mut context, command, args)
+}
+
+fn preflight_declared_authority_backend(expected: [u8; 32]) -> Result<(), String> {
+    let Some(path) = env::var_os(BACKEND_ENV).map(PathBuf::from) else {
+        return Ok(());
+    };
+    let backend = pinned_codegen_backend::PinnedCodegenBackend::open(&path)
+        .map_err(|error| format!("failed to pin declared authority codegen backend: {error}"))?;
+    if backend.sha256() != &expected {
+        return Err(format!(
+            "cargo fe2o3 authority backend does not match {AUTHORITY_BACKEND_SHA256_ENV}"
+        ));
+    }
+    Ok(())
 }
 
 struct BackendRunContext {
@@ -329,7 +363,7 @@ struct BackendRunContext {
     backend: PathBuf,
     pinned_backend: pinned_codegen_backend::PinnedCodegenBackend,
     pinned_cargo: pinned_executable::PinnedExecutable,
-    pinned_rustc: pinned_executable::PinnedExecutable,
+    pinned_rustc: PinnedRustc,
     _worker_v2: Option<worker_v2::PreparedWorkerV2Config>,
     worker_v2_identity: Option<worker_v2::WorkerV2ConfigIdentity>,
     target_dir: project::PinnedDirectory,
@@ -347,7 +381,8 @@ impl BackendRunContext {
         args: &[OsString],
         worker_v2: Option<worker_v2::PreparedWorkerV2Config>,
         pinned_cargo: pinned_executable::PinnedExecutable,
-        pinned_rustc: pinned_executable::PinnedExecutable,
+        pinned_rustc: PinnedRustc,
+        authority_backend_sha256: Option<[u8; 32]>,
         authorized_closure: Option<authorized_kernel_closure::AuthorizedKernelClosureV1>,
     ) -> Result<Self, String> {
         let target = amd_gpu_target();
@@ -355,6 +390,13 @@ impl BackendRunContext {
         let backend = find_or_build_backend(&target_dir, &pinned_cargo, &pinned_rustc)?;
         let pinned_backend = pinned_codegen_backend::PinnedCodegenBackend::open(&backend)
             .map_err(|error| format!("failed to pin codegen backend: {error}"))?;
+        if let Some(expected) = authority_backend_sha256
+            && pinned_backend.sha256() != &expected
+        {
+            return Err(format!(
+                "cargo fe2o3 authority backend does not match {AUTHORITY_BACKEND_SHA256_ENV}"
+            ));
+        }
         let worker_v2_identity = worker_v2.as_ref().map(|config| config.identity());
         let mut cargo_configuration = project.semantic_configuration(args)?;
         if let Some(authorized_closure) = authorized_closure.as_ref() {
@@ -366,6 +408,7 @@ impl BackendRunContext {
         let semantic = generation::semantic_identity(
             &target,
             pinned_backend.sha256(),
+            pinned_rustc.executable.sha256(),
             worker_v2_identity,
             &cargo_configuration,
         )?;
@@ -459,7 +502,7 @@ fn run_cargo_with_backend(
         context
             .worker_v2_identity
             .map(|identity| *identity.as_bytes()),
-        *context.pinned_rustc.sha256(),
+        *context.pinned_rustc.executable.sha256(),
     )?;
     let capability_broker = capability_broker::CapabilityBroker::start(
         context.build_session,
@@ -494,13 +537,17 @@ fn run_cargo_with_backend(
         .env(MANAGED_RUSTC_ARGS_ENV, &context.managed_rustc_args)
         .env(
             EXPECTED_RUSTC_SHA256_ENV,
-            hex_encode(context.pinned_rustc.sha256()),
+            hex_encode(context.pinned_rustc.executable.sha256()),
         )
         .env(BUILD_SESSION_ENV, context.build_session.to_hex());
     if context.requires_locked_closure {
         // Authority builds do not admit unpinned C tools, ROCm headers, or native libraries.
         cargo.as_command_mut().env("FE2O3_HIP_SYS_DISABLE", "1");
     }
+    cargo
+        .as_command_mut()
+        .env_remove(AUTHORITY_RUSTC_SHA256_ENV)
+        .env_remove(AUTHORITY_BACKEND_SHA256_ENV);
     remove_dynamic_loader_environment(cargo.as_command_mut());
     configure_pinned_rustc_child(cargo.as_command_mut(), &context.pinned_rustc)?;
     match context.worker_v2_identity {
@@ -1203,16 +1250,16 @@ fn reject_authority_build_overrides(
     args: &[OsString],
 ) -> Result<(), String> {
     for (name, value) in env::vars_os() {
+        if matches!(os_bytes(&name), b"RUSTUP_TOOLCHAIN" | b"RUSTUP_HOME") {
+            return Err(format!(
+                "cargo fe2o3 authority build rejects rustup selection channel {name:?}={value:?}"
+            ));
+        }
         if is_authority_tool_override_environment_name(&name) {
             return Err(format!(
                 "cargo fe2o3 authority build rejects tool override {name:?}={value:?}"
             ));
         }
-    }
-    if let Some(value) = project.cargo_config_value(args, "build.rustflags")? {
-        return Err(format!(
-            "cargo fe2o3 authority build rejects configured build.rustflags={value}"
-        ));
     }
     match project.cargo_config_value(args, "target")? {
         Some(serde_json::Value::Object(targets)) => {
@@ -1222,7 +1269,7 @@ fn reject_authority_build_overrides(
                         "cargo fe2o3 authority build cannot inspect configured target.{target}"
                     ));
                 };
-                for key in ["linker", "runner", "rustflags"] {
+                for key in ["linker", "runner"] {
                     if let Some(value) = configuration.get(key) {
                         return Err(format!(
                             "cargo fe2o3 authority build rejects configured target.{target}.{key}={value}"
@@ -1241,15 +1288,54 @@ fn reject_authority_build_overrides(
     Ok(())
 }
 
+fn authority_rustc_sha256_from_environment() -> Result<[u8; 32], String> {
+    authority_sha256_from_environment(AUTHORITY_RUSTC_SHA256_ENV)
+}
+
+fn authority_backend_sha256_from_environment() -> Result<[u8; 32], String> {
+    authority_sha256_from_environment(AUTHORITY_BACKEND_SHA256_ENV)
+}
+
+fn authority_sha256_from_environment(name: &'static str) -> Result<[u8; 32], String> {
+    let value =
+        env::var_os(name).ok_or_else(|| format!("cargo fe2o3 authority build requires {name}"))?;
+    let encoded = os_bytes(&value);
+    if encoded.len() != 64 {
+        return Err(format!(
+            "{name} must be exactly 64 lowercase hexadecimal bytes"
+        ));
+    }
+    let mut digest = [0_u8; 32];
+    for (output, pair) in digest.iter_mut().zip(encoded.chunks_exact(2)) {
+        let decode = |byte| match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            _ => None,
+        };
+        let Some(high) = decode(pair[0]) else {
+            return Err(format!(
+                "{name} must be exactly 64 lowercase hexadecimal bytes"
+            ));
+        };
+        let Some(low) = decode(pair[1]) else {
+            return Err(format!(
+                "{name} must be exactly 64 lowercase hexadecimal bytes"
+            ));
+        };
+        *output = (high << 4) | low;
+    }
+    if digest == [0; 32] {
+        return Err(format!("{name} may not be zero"));
+    }
+    Ok(digest)
+}
+
 fn is_authority_tool_override_environment_name(name: &OsStr) -> bool {
     let name = os_bytes(name);
-    matches!(
-        name,
-        b"RUSTFLAGS" | b"CARGO_ENCODED_RUSTFLAGS" | b"CARGO_BUILD_RUSTFLAGS"
-    ) || (name.starts_with(b"CARGO_TARGET_")
-        && [b"_LINKER".as_slice(), b"_RUNNER", b"_RUSTFLAGS"]
+    name.starts_with(b"CARGO_TARGET_")
+        && [b"_LINKER".as_slice(), b"_RUNNER"]
             .iter()
-            .any(|suffix| name.ends_with(suffix)))
+            .any(|suffix| name.ends_with(suffix))
 }
 
 fn reject_dynamic_loader_environment() -> Result<(), String> {
@@ -1291,7 +1377,7 @@ pub(crate) fn remove_dynamic_loader_environment(command: &mut Command) {
 fn find_or_build_backend(
     target_dir: &project::PinnedDirectory,
     pinned_cargo: &pinned_executable::PinnedExecutable,
-    pinned_rustc: &pinned_executable::PinnedExecutable,
+    pinned_rustc: &PinnedRustc,
 ) -> Result<PathBuf, String> {
     if let Some(path) = env::var_os(BACKEND_ENV) {
         let path = PathBuf::from(path);
@@ -1351,11 +1437,17 @@ fn find_or_build_backend(
         worker_v2::CODEGEN_PIPELINE_ENV,
         worker_v2::WORKER_V2_CONFIG_ENV,
         worker_v2::WORKER_V2_EXPECTED_ID_ENV,
+        AUTHORITY_RUSTC_SHA256_ENV,
+        AUTHORITY_BACKEND_SHA256_ENV,
         "FE2O3_HOST_PASSTHROUGH",
     ] {
         command.as_command_mut().env_remove(name);
     }
     configure_pinned_rustc_child(command.as_command_mut(), pinned_rustc)?;
+    command.as_command_mut().env(
+        "LD_LIBRARY_PATH",
+        format!("/proc/self/fd/{RUSTC_LIBRARY_CHILD_FD}"),
+    );
     backend_target.inherit_for_child_at(command.as_command_mut(), BACKEND_BUILD_CHILD_FD)?;
     let status = command
         .status()
@@ -1375,9 +1467,12 @@ fn find_or_build_backend(
     }
 }
 
-fn pin_default_rustc(
-    project: &project::CargoProject,
-) -> Result<pinned_executable::PinnedExecutable, String> {
+struct PinnedRustc {
+    executable: pinned_executable::PinnedExecutable,
+    library: project::PinnedDirectory,
+}
+
+fn pin_default_rustc(project: &project::CargoProject) -> Result<PinnedRustc, String> {
     let declared = OsStr::new("rustc");
     let resolved = binding_wrapper::resolve_command_executable(
         declared,
@@ -1391,8 +1486,24 @@ fn pin_default_rustc(
     } else {
         canonical
     };
-    pinned_executable::PinnedExecutable::open(&rustc_path)
-        .map_err(|error| format!("failed to pin default rustc executable: {error}"))
+    let executable = pinned_executable::PinnedExecutable::open(&rustc_path)
+        .map_err(|error| format!("failed to pin default rustc executable: {error}"))?;
+    let executable_directory = rustc_path
+        .parent()
+        .ok_or_else(|| "default rustc executable has no parent directory".to_owned())?;
+    let toolchain_library = executable_directory
+        .parent()
+        .map(|parent| parent.join("lib"))
+        .filter(|path| path.is_dir())
+        .unwrap_or_else(|| executable_directory.to_path_buf());
+    let library = project::PinnedDirectory::open_existing(
+        toolchain_library,
+        "pinned rustc runtime library directory",
+    )?;
+    Ok(PinnedRustc {
+        executable,
+        library,
+    })
 }
 
 fn resolve_rustup_toolchain_rustc(
@@ -1433,10 +1544,7 @@ fn resolve_rustup_toolchain_rustc(
     Ok(path)
 }
 
-fn configure_pinned_rustc_child(
-    command: &mut Command,
-    rustc: &pinned_executable::PinnedExecutable,
-) -> Result<(), String> {
+fn configure_pinned_rustc_child(command: &mut Command, rustc: &PinnedRustc) -> Result<(), String> {
     let descriptor_path = PathBuf::from(format!("/proc/self/fd/{RUSTC_CHILD_FD}"));
     match std::fs::symlink_metadata(&descriptor_path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -1452,6 +1560,7 @@ fn configure_pinned_rustc_child(
         }
     }
     let mut source = rustc
+        .executable
         .try_clone_for_transfer()
         .map_err(|error| format!("failed to retain pinned rustc executable: {error}"))?;
     source
@@ -1466,10 +1575,10 @@ fn configure_pinned_rustc_child(
     let mut image = image;
     let copied = std::io::copy(&mut source, &mut image)
         .map_err(|error| format!("failed to snapshot pinned rustc executable: {error}"))?;
-    if copied != rustc.size() {
+    if copied != rustc.executable.size() {
         return Err(format!(
             "pinned rustc snapshot copied {copied} bytes instead of {}",
-            rustc.size()
+            rustc.executable.size()
         ));
     }
     image
@@ -1491,7 +1600,7 @@ fn configure_pinned_rustc_child(
         PathBuf::from("<sealed parent-pinned rustc image>"),
     )
     .map_err(|error| format!("failed to verify sealed rustc image: {error}"))?;
-    if verified.sha256() != rustc.sha256() {
+    if verified.sha256() != rustc.executable.sha256() {
         return Err("sealed rustc image differs from the parent-pinned compiler".to_owned());
     }
     let metadata = image
@@ -1521,6 +1630,9 @@ fn configure_pinned_rustc_child(
             Ok(())
         });
     }
+    rustc
+        .library
+        .inherit_for_child_at(command, RUSTC_LIBRARY_CHILD_FD)?;
     command.env("RUSTC", descriptor_path);
     Ok(())
 }

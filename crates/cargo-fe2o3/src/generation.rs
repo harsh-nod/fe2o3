@@ -324,13 +324,15 @@ impl Drop for PreparedGeneration {
 pub(crate) fn semantic_identity(
     target: &str,
     backend_sha256: &[u8; 32],
+    rustc_sha256: &[u8; 32],
     worker_v2: Option<WorkerV2ConfigIdentity>,
     cargo_configuration: &[u8],
 ) -> Result<[u8; 32], String> {
     let mut hash = Sha256::new();
-    update_hash(&mut hash, b"fe2o3-cargo-codegen-semantics-v1");
+    update_hash(&mut hash, b"fe2o3-cargo-codegen-semantics-v2");
     update_hash(&mut hash, target.as_bytes());
     update_hash(&mut hash, backend_sha256);
+    update_hash(&mut hash, rustc_sha256);
     match worker_v2 {
         Some(identity) => {
             update_hash(&mut hash, b"worker-v2");

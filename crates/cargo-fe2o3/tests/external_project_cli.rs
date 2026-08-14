@@ -21,6 +21,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use rustix::fs::{FlockOperation, flock};
 #[cfg(unix)]
 use rustix::io::Errno;
+use sha2::{Digest, Sha256};
 
 static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -232,6 +233,9 @@ fn temp_root() -> PathBuf {
 
 fn cargo_fe2o3_command() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
+    command
+        .env_remove("RUSTUP_HOME")
+        .env_remove("RUSTUP_TOOLCHAIN");
     for (name, _) in env::vars_os() {
         let name_bytes = os_bytes(&name);
         if name_bytes.starts_with(b"LD_")
@@ -269,6 +273,41 @@ fn resolved_real_rustc() -> OsString {
         }
     }
     panic!("test environment has no rustc executable")
+}
+
+fn resolved_pinned_rustc(working_directory: &Path) -> PathBuf {
+    let selected = PathBuf::from(resolved_real_rustc());
+    let canonical = fs::canonicalize(&selected).expect("resolve selected rustc");
+    if canonical.file_name() != Some(OsStr::new("rustup")) {
+        return canonical;
+    }
+    let output = Command::new(&canonical)
+        .args(["which", "rustc"])
+        .current_dir(working_directory)
+        .env_remove("RUSTUP_HOME")
+        .env_remove("RUSTUP_TOOLCHAIN")
+        .output()
+        .expect("resolve active rustup rustc");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let path = String::from_utf8(output.stdout)
+        .expect("rustup rustc path is UTF-8")
+        .trim()
+        .to_owned();
+    fs::canonicalize(path).expect("canonicalize active rustup rustc")
+}
+
+fn authority_rustc_sha256(working_directory: &Path) -> String {
+    file_sha256(&resolved_pinned_rustc(working_directory))
+}
+
+fn file_sha256(path: &Path) -> String {
+    let bytes = fs::read(path).expect("read provisioned executable image");
+    let digest: [u8; 32] = Sha256::digest(bytes).into();
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn take_u64(bytes: &mut &[u8]) -> u64 {
@@ -815,6 +854,14 @@ fn authoritative_kernel_preflight_rejects_a_hostile_custom_build() {
         .env("FE2O3_BACKEND", &fixture.backend)
         .env("FE2O3_TARGET", "gfx942")
         .env("FE2O3_CODEGEN_PIPELINE", "collected-row-softmax-v1")
+        .env(
+            "FE2O3_AUTHORITY_RUSTC_SHA256_V1",
+            authority_rustc_sha256(&fixture.workspace),
+        )
+        .env(
+            "FE2O3_AUTHORITY_BACKEND_SHA256_V1",
+            file_sha256(&fixture.backend),
+        )
         .env_remove("RUSTC_WRAPPER")
         .env_remove("RUSTC_WORKSPACE_WRAPPER")
         .output()
@@ -862,6 +909,14 @@ fn authoritative_kernel_preflight_rejects_a_hostile_proc_macro() {
         .env("FE2O3_BACKEND", &fixture.backend)
         .env("FE2O3_TARGET", "gfx942")
         .env("FE2O3_CODEGEN_PIPELINE", "collected-row-softmax-v1")
+        .env(
+            "FE2O3_AUTHORITY_RUSTC_SHA256_V1",
+            authority_rustc_sha256(&fixture.workspace),
+        )
+        .env(
+            "FE2O3_AUTHORITY_BACKEND_SHA256_V1",
+            file_sha256(&fixture.backend),
+        )
         .env_remove("RUSTC_WRAPPER")
         .env_remove("RUSTC_WORKSPACE_WRAPPER")
         .output()
@@ -1143,12 +1198,108 @@ fn configured_loader_environment_is_rejected_before_artifact_authority() {
 }
 
 #[test]
-fn authority_build_rejects_linker_runner_and_rustflags_environment() {
+fn authority_build_requires_an_independent_exact_rustc_digest() {
+    let missing = ProjectFixture::standalone();
+    let mut command = missing.command(&[OsString::from("build")]);
+    command.env("FE2O3_CODEGEN_PIPELINE", "collected-row-softmax-v1");
+    let output = command.output().expect("run missing rustc pin probe");
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("requires FE2O3_AUTHORITY_RUSTC_SHA256_V1"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!missing.target.join(".fe2o3-backend-build-v1").exists());
+
+    for digest in ["01".repeat(32), "00".repeat(32), "A1".repeat(32)] {
+        let fixture = ProjectFixture::standalone();
+        let mut command = fixture.command(&[OsString::from("build")]);
+        command
+            .env("FE2O3_CODEGEN_PIPELINE", "collected-row-softmax-v1")
+            .env("FE2O3_AUTHORITY_RUSTC_SHA256_V1", digest)
+            .env(
+                "FE2O3_AUTHORITY_BACKEND_SHA256_V1",
+                file_sha256(&fixture.backend),
+            );
+        let output = command.output().expect("run invalid rustc pin probe");
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("FE2O3_AUTHORITY_RUSTC_SHA256_V1"),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!fixture.target.join(".fe2o3-backend-build-v1").exists());
+    }
+}
+
+#[test]
+fn authority_build_requires_an_independent_exact_backend_digest() {
+    let missing = ProjectFixture::standalone();
+    let mut command = missing.command(&[OsString::from("build")]);
+    command
+        .env("FE2O3_CODEGEN_PIPELINE", "collected-row-softmax-v1")
+        .env(
+            "FE2O3_AUTHORITY_RUSTC_SHA256_V1",
+            authority_rustc_sha256(&missing.cwd),
+        );
+    let output = command.output().expect("run missing backend pin probe");
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("requires FE2O3_AUTHORITY_BACKEND_SHA256_V1"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let wrong = ProjectFixture::standalone();
+    let mut command = wrong.command(&[OsString::from("build")]);
+    command
+        .env("FE2O3_CODEGEN_PIPELINE", "collected-row-softmax-v1")
+        .env(
+            "FE2O3_AUTHORITY_RUSTC_SHA256_V1",
+            authority_rustc_sha256(&wrong.cwd),
+        )
+        .env("FE2O3_AUTHORITY_BACKEND_SHA256_V1", "01".repeat(32));
+    let output = command.output().expect("run wrong backend pin probe");
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("authority backend does not match"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!wrong.target.join("fe2o3").exists());
+}
+
+#[test]
+fn authority_build_rejects_rustup_selection_substitution() {
+    for (variable, value) in [
+        ("RUSTUP_TOOLCHAIN", "attacker-toolchain"),
+        ("RUSTUP_HOME", "/tmp/attacker-rustup-home"),
+    ] {
+        let fixture = ProjectFixture::standalone();
+        let mut command = fixture.command(&[OsString::from("build")]);
+        command
+            .env("FE2O3_CODEGEN_PIPELINE", "collected-row-softmax-v1")
+            .env(
+                "FE2O3_AUTHORITY_RUSTC_SHA256_V1",
+                authority_rustc_sha256(&fixture.cwd),
+            )
+            .env(variable, value);
+        let output = command.output().expect("run rustup substitution probe");
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("rejects rustup selection channel"),
+            "{variable}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!fixture.target.join(".fe2o3-backend-build-v1").exists());
+    }
+}
+
+#[test]
+fn authority_build_rejects_linker_and_runner_environment() {
     for variable in [
-        "RUSTFLAGS",
-        "CARGO_ENCODED_RUSTFLAGS",
-        "CARGO_BUILD_RUSTFLAGS",
-        "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS",
         "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER",
         "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER",
     ] {
@@ -1170,13 +1321,8 @@ fn authority_build_rejects_linker_runner_and_rustflags_environment() {
 }
 
 #[test]
-fn authority_build_rejects_configured_linker_runner_and_rustflags() {
+fn authority_build_rejects_configured_linker_and_runner() {
     for (variable, value, diagnostic) in [
-        (
-            "FE2O3_TEST_BUILD_RUSTFLAGS_JSON",
-            r#"["-Clinker=/tmp/attacker"]"#,
-            "configured build.rustflags",
-        ),
         (
             "FE2O3_TEST_TARGET_TABLE_JSON",
             r#"{"x86_64-unknown-linux-gnu":{"linker":"/tmp/attacker"}}"#,
@@ -1186,11 +1332,6 @@ fn authority_build_rejects_configured_linker_runner_and_rustflags() {
             "FE2O3_TEST_TARGET_TABLE_JSON",
             r#"{"cfg(unix)":{"runner":["/tmp/attacker"]}}"#,
             "configured target.cfg(unix).runner",
-        ),
-        (
-            "FE2O3_TEST_TARGET_TABLE_JSON",
-            r#"{"x86_64-unknown-linux-gnu":{"rustflags":["-Clink-arg=-fplugin"]}}"#,
-            "configured target.x86_64-unknown-linux-gnu.rustflags",
         ),
     ] {
         let fixture = ProjectFixture::standalone();
@@ -1242,6 +1383,99 @@ fn cargo_cannot_substitute_the_parent_pinned_rustc_before_artifact_authority() {
         !fixture.target.join("fe2o3").exists(),
         "failed rustc substitution committed an artifact generation"
     );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn cargo_cannot_replace_the_inherited_rustc_descriptor() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = ProjectFixture::standalone();
+    let marker = fixture.root.join("descriptor-attacker-executed");
+    let attacker = fixture.root.join("descriptor-attacker-rustc");
+    fs::write(
+        &attacker,
+        format!("#!/bin/sh\nprintf reached > '{}'\n", marker.display()),
+    )
+    .expect("write descriptor attacker rustc");
+    fs::set_permissions(&attacker, fs::Permissions::from_mode(0o700))
+        .expect("make descriptor attacker rustc executable");
+    let mut command = fixture.command(&[OsString::from("build")]);
+    command.env("FE2O3_TEST_SUBSTITUTE_RUSTC_DESCRIPTOR", &attacker);
+
+    let output = command
+        .output()
+        .expect("run rustc descriptor substitution probe");
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("failed to pin rustc executable"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!marker.exists(), "descriptor-substituted rustc executed");
+    assert!(!fixture.target.join("fe2o3").exists());
+}
+
+#[test]
+fn pinned_real_rustc_image_executes_without_loader_environment() {
+    let fixture = ProjectFixture::standalone();
+    let report = fixture.root.join("pinned-rustc-version");
+    let mut command = fixture.command(&[OsString::from("build")]);
+    command.env("FE2O3_TEST_PINNED_RUSTC_REPORT", &report);
+
+    let output = command.output().expect("run pinned real rustc probe");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        fs::read(report)
+            .expect("read pinned rustc version")
+            .starts_with(b"rustc ")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn rustc_image_digest_changes_generation_identity() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = ProjectFixture::standalone();
+    let mut managed_arguments = Vec::new();
+    for (name, body) in [
+        ("first", "#!/bin/sh\nexit 0\n"),
+        ("second", "#!/bin/sh\n# distinct exact image\nexit 0\n"),
+    ] {
+        let directory = fixture.root.join(format!("rustc-{name}"));
+        fs::create_dir(&directory).expect("create rustc image directory");
+        let rustc = directory.join("rustc");
+        fs::write(&rustc, body).expect("write rustc image");
+        fs::set_permissions(&rustc, fs::Permissions::from_mode(0o700))
+            .expect("make rustc image executable");
+        let mut paths = vec![directory];
+        paths.extend(env::split_paths(&env::var_os("PATH").unwrap_or_default()));
+        let mut command = fixture.command(&[OsString::from("build")]);
+        command.env(
+            "PATH",
+            env::join_paths(paths).expect("construct rustc image PATH"),
+        );
+        let output = command.output().expect("run rustc identity build");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        managed_arguments.push(
+            fixture
+                .invocations()
+                .last()
+                .expect("record rustc identity build")
+                .managed_rustc_args
+                .clone(),
+        );
+    }
+    assert_ne!(managed_arguments[0], managed_arguments[1]);
 }
 
 #[cfg(target_os = "linux")]

@@ -53,7 +53,10 @@ use crate::worker_v2_restart::{
     persist_admitted_worker_v2_intent_v1, recover_worker_v2_intent_v1,
     restart_admission_commitment_with_inputs_v1,
 };
-use crate::{ARTIFACT_CHILD_FD, BACKEND_CHILD_FD, MANAGED_RUSTC_ARGS_ENV};
+use crate::{
+    ARTIFACT_CHILD_FD, BACKEND_CHILD_FD, MANAGED_RUSTC_ARGS_ENV, RUSTC_CHILD_FD,
+    RUSTC_LIBRARY_CHILD_FD,
+};
 
 const HSACO_DIR_ENV: &str = "FE2O3_HSACO_DIR";
 const TARGET_ENV: &str = "FE2O3_TARGET";
@@ -160,6 +163,9 @@ pub(crate) enum BindingWrapperError {
     PreexistingCodegenBackend {
         argument_index: usize,
     },
+    AuthorityLinkerOverride {
+        argument_index: usize,
+    },
     OptionTerminatorBeforeManagedArguments {
         argument_index: usize,
     },
@@ -223,6 +229,10 @@ impl fmt::Display for BindingWrapperError {
             Self::PreexistingCodegenBackend { argument_index } => write!(
                 formatter,
                 "managed rustc argv[{argument_index}] contains a preexisting codegen-backend selector"
+            ),
+            Self::AuthorityLinkerOverride { argument_index } => write!(
+                formatter,
+                "authority rustc argv[{argument_index}] contains an unmanaged linker option"
             ),
             Self::OptionTerminatorBeforeManagedArguments { argument_index } => write!(
                 formatter,
@@ -293,6 +303,7 @@ impl Error for BindingWrapperError {
             | Self::ChildCapability(_)
             | Self::UninspectableRustcResponseFile { .. }
             | Self::PreexistingCodegenBackend { .. }
+            | Self::AuthorityLinkerOverride { .. }
             | Self::OptionTerminatorBeforeManagedArguments { .. }
             | Self::UnsupportedInvocation => None,
             Self::BuildObservation(_) => None,
@@ -322,25 +333,16 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
     let invocation = match classify_rustc_invocation_v2(&argv) {
         Ok(invocation) => invocation,
         Err(_) if is_cargo_stdin_probe(&argv) => {
-            let current_dir =
-                std::env::current_dir().map_err(BindingWrapperError::CurrentDirectory)?;
-            let executable = resolve_command_executable(&argv[0], &current_dir)?;
-            let pinned = PinnedExecutable::open(&executable)?;
-            authenticate_pinned_rustc(&pinned, expected_rustc_sha256)?;
+            let pinned = pin_parent_rustc_descriptor(&argv[0], expected_rustc_sha256)?;
             let mut command = pinned.command()?;
-            crate::remove_dynamic_loader_environment(command.as_command_mut());
+            configure_managed_rustc_loader(command.as_command_mut());
             command.args(&argv[1..]);
             configure_build_observation_environment(command.as_command_mut(), None);
             return command.status().map_err(BindingWrapperError::Spawn);
         }
         Err(error) => return Err(error.into()),
     };
-    let initial_working_directory =
-        std::env::current_dir().map_err(BindingWrapperError::CurrentDirectory)?;
-    let rustc_path =
-        resolve_command_executable(invocation.executable(), &initial_working_directory)?;
-    let pinned_rustc = PinnedExecutable::open(&rustc_path)?;
-    authenticate_pinned_rustc(&pinned_rustc, expected_rustc_sha256)?;
+    let pinned_rustc = pin_parent_rustc_descriptor(invocation.executable(), expected_rustc_sha256)?;
     let (
         build_observation,
         managed_attempt,
@@ -365,6 +367,12 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
             } else {
                 capability_broker::CapabilityProfileV1::Ordinary
             };
+            if capability_profile == capability_broker::CapabilityProfileV1::S09
+                || std::env::var_os("FE2O3_CODEGEN_PIPELINE").as_deref()
+                    == Some(OsStr::new(ROW_SOFTMAX_V1_PIPELINE))
+            {
+                reject_authority_linker_arguments(compile.argv())?;
+            }
             let capability_binding = capability_broker::CapabilityBindingV2::new(
                 capability_profile,
                 worker_v2
@@ -421,7 +429,7 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
     let pinned_execution_directory = PinnedWorkingDirectoryV3::open(&execution_directory)
         .map_err(|error| BindingWrapperError::BuildObservation(error.to_string()))?;
     let mut command = pinned_rustc.command()?;
-    crate::remove_dynamic_loader_environment(command.as_command_mut());
+    configure_managed_rustc_loader(command.as_command_mut());
     append_prepared_rustc_arguments(
         command.as_command_mut(),
         invocation.forwarded_args(),
@@ -671,6 +679,14 @@ fn reject_dynamic_loader_environment() -> Result<(), BindingWrapperError> {
     Ok(())
 }
 
+fn configure_managed_rustc_loader(command: &mut Command) {
+    crate::remove_dynamic_loader_environment(command);
+    command.env(
+        "LD_LIBRARY_PATH",
+        format!("/proc/self/fd/{RUSTC_LIBRARY_CHILD_FD}"),
+    );
+}
+
 fn expected_rustc_sha256() -> Result<[u8; 32], BindingWrapperError> {
     let value = std::env::var_os(crate::EXPECTED_RUSTC_SHA256_ENV).ok_or_else(|| {
         BindingWrapperError::BuildObservation(format!(
@@ -720,6 +736,22 @@ fn authenticate_pinned_rustc(
         ));
     }
     Ok(())
+}
+
+fn pin_parent_rustc_descriptor(
+    declared: &OsStr,
+    expected_sha256: [u8; 32],
+) -> Result<PinnedExecutable, BindingWrapperError> {
+    let descriptor_path = PathBuf::from(format!("/proc/self/fd/{RUSTC_CHILD_FD}"));
+    if declared != descriptor_path.as_os_str() {
+        return Err(BindingWrapperError::BuildObservation(
+            "Cargo selected a rustc executable that does not match the parent-pinned compiler descriptor"
+                .to_owned(),
+        ));
+    }
+    let pinned = PinnedExecutable::open(&descriptor_path)?;
+    authenticate_pinned_rustc(&pinned, expected_sha256)?;
+    Ok(pinned)
 }
 
 fn configure_worker_build_observation_environment(
@@ -1118,6 +1150,9 @@ fn materialize_s09_child_environment(
         .map(|(name, value)| (name.to_owned(), value.map(OsString::from)))
         .collect::<Vec<_>>();
     for (name, value) in explicit {
+        if apply_managed_loader_environment(&mut final_environment, &name, value.as_deref())? {
+            continue;
+        }
         if !managed_s09_child_environment(&name) {
             return Err(BindingWrapperError::BuildObservation(format!(
                 "S09 command has unreviewed explicit environment mutation {name:?}"
@@ -1216,6 +1251,9 @@ fn materialize_scalar_gemm_v1_child_environment(
         .map(|(name, value)| (name.to_owned(), value.map(OsString::from)))
         .collect::<Vec<_>>();
     for (name, value) in explicit {
+        if apply_managed_loader_environment(&mut final_environment, &name, value.as_deref())? {
+            continue;
+        }
         if !managed_s09_child_environment(&name) {
             return Err(BindingWrapperError::BuildObservation(format!(
                 "scalar GEMM command has unreviewed explicit environment mutation {name:?}"
@@ -1241,6 +1279,30 @@ fn materialize_scalar_gemm_v1_child_environment(
     Ok(CompleteReviewedChildEnvironmentV2 {
         entries: final_environment.into_iter().collect(),
     })
+}
+
+fn apply_managed_loader_environment(
+    environment: &mut BTreeMap<OsString, OsString>,
+    name: &OsStr,
+    value: Option<&OsStr>,
+) -> Result<bool, BindingWrapperError> {
+    if !crate::is_dynamic_loader_environment_name(name) {
+        return Ok(false);
+    }
+    match (os_bytes(name), value) {
+        (b"LD_LIBRARY_PATH", Some(value)) if value == OsStr::new("/proc/self/fd/193") => {
+            environment.insert(name.to_owned(), value.to_owned());
+        }
+        (_, None) => {
+            environment.remove(name);
+        }
+        _ => {
+            return Err(BindingWrapperError::BuildObservation(format!(
+                "reviewed rustc environment rejects unmanaged loader variable {name:?}"
+            )));
+        }
+    }
+    Ok(true)
 }
 
 fn reviewed_scalar_inherited_environment(name: &OsStr) -> bool {
@@ -1323,8 +1385,7 @@ fn validate_scalar_gemm_v1_final_environment(
 fn rejected_s09_inherited_environment(name: &OsStr) -> bool {
     let bytes = os_bytes(name);
     bytes == b"RUSTC_BOOTSTRAP"
-        || bytes == b"LD_PRELOAD"
-        || bytes.starts_with(b"DYLD_")
+        || crate::is_dynamic_loader_environment_name(name)
         || credential_like_environment_name(bytes)
 }
 
@@ -1613,6 +1674,34 @@ fn reject_uninspectable_rustc_args(argv: &[OsString]) -> Result<(), BindingWrapp
                 argument_index: index,
             });
         }
+    }
+    Ok(())
+}
+
+fn reject_authority_linker_arguments(argv: &[OsString]) -> Result<(), BindingWrapperError> {
+    let mut index = 0;
+    while index < argv.len() {
+        let bytes = os_bytes(&argv[index]);
+        let option = if matches!(bytes, b"-C" | b"-Z") {
+            argv.get(index + 1)
+                .map(|value| (index + 1, os_bytes(value)))
+        } else if bytes.starts_with(b"-C") || bytes.starts_with(b"-Z") {
+            Some((index, &bytes[2..]))
+        } else {
+            None
+        };
+        if let Some((argument_index, option)) = option {
+            let key = option.split(|byte| *byte == b'=').next().unwrap_or(option);
+            if key == b"linker"
+                || key == b"dlltool"
+                || key == b"gcc-ld"
+                || key.starts_with(b"link-")
+                || key.starts_with(b"linker-")
+            {
+                return Err(BindingWrapperError::AuthorityLinkerOverride { argument_index });
+            }
+        }
+        index += 1;
     }
     Ok(())
 }
@@ -2658,8 +2747,8 @@ mod tests {
         materialize_s09_child_environment, materialize_scalar_gemm_v1_child_environment,
         measure_build_executable, observe_pinned_cargo_image_and_parent, ordered_metadata_values,
         os_bytes, prepared_rustc_command_sha256, process_start_time_ticks,
-        reject_uninspectable_rustc_args, resolve_command_executable_with_path,
-        row_softmax_effective_rustc_argv_identity,
+        reject_authority_linker_arguments, reject_uninspectable_rustc_args,
+        resolve_command_executable_with_path, row_softmax_effective_rustc_argv_identity,
     };
     use crate::inert_rustc_invocation_capture::InertRustcInvocationCaptureV2;
     use crate::pinned_executable::PinnedExecutable;
@@ -3342,8 +3431,6 @@ mod tests {
             ("CARGO_MANIFEST_DIR", "/workspace"),
             ("FE2O3_CODEGEN_PIPELINE", "kernel-ir-worker-v2"),
             ("FE2O3_TARGET", "gfx942:xnack-"),
-            ("LD_LIBRARY_PATH", "/writable/build/dirs"),
-            ("LD_AUDIT", "/unreviewed/audit.so"),
             ("CARGO_PKG_NAME", "unit"),
             ("CUSTOM_BUILD_INPUT", "first"),
             ("FE2O3_S09_COMPILE_ENV_ALLOWLIST_V2", "CUSTOM_BUILD_INPUT"),
@@ -3719,7 +3806,11 @@ mod tests {
     fn s09_environment_rejects_loader_and_bootstrap_controls() {
         for name in [
             "LD_PRELOAD",
+            "LD_AUDIT",
+            "LD_LIBRARY_PATH",
+            "LD_DEBUG",
             "DYLD_INSERT_LIBRARIES",
+            "GLIBC_TUNABLES",
             "RUSTC_BOOTSTRAP",
             "PRIVATE_TOKEN",
             "AWS_SECRET_ACCESS_KEY",
@@ -3887,6 +3978,31 @@ mod tests {
                 "unit.rs",
                 "--cfg",
                 "from_cargo_config"
+            ]))
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn authority_rustflags_cannot_select_or_program_a_linker() {
+        for argv in [
+            args(&["rustc", "unit.rs", "-Clinker=/tmp/evil"]),
+            args(&["rustc", "unit.rs", "-C", "link-arg=-fplugin=/tmp/evil"]),
+            args(&["rustc", "unit.rs", "-Zgcc-ld=/tmp/evil"]),
+            args(&["rustc", "unit.rs", "-Z", "linker-features=+lld"]),
+        ] {
+            assert!(matches!(
+                reject_authority_linker_arguments(&argv),
+                Err(BindingWrapperError::AuthorityLinkerOverride { .. })
+            ));
+        }
+        assert!(
+            reject_authority_linker_arguments(&args(&[
+                "rustc",
+                "unit.rs",
+                "-Coverflow-checks=off",
+                "--cfg",
+                "reviewed"
             ]))
             .is_ok()
         );

@@ -782,6 +782,7 @@ fn outer_command(directory: &TestDirectory, config: Option<&Path>, control: &Pat
     .unwrap();
     let backend = directory.0.join("librustc_codegen_fe2o3.so");
     fs::write(&backend, b"worker-v2 vertical backend").unwrap();
+    let backend_sha256 = hex(&Sha256::digest(fs::read(&backend).unwrap()));
     let target = directory.0.join("target");
     let cargo_log = directory.0.join("cargo.log");
 
@@ -792,6 +793,11 @@ fn outer_command(directory: &TestDirectory, config: Option<&Path>, control: &Pat
         .current_dir(&directory.0)
         .env("CARGO", env!("CARGO_BIN_EXE_cargo-fe2o3-cargo-fixture"))
         .env("FE2O3_BACKEND", backend)
+        .env(
+            "FE2O3_AUTHORITY_RUSTC_SHA256_V1",
+            hex(&Sha256::digest(fs::read(worker_fixture()).unwrap())),
+        )
+        .env("FE2O3_AUTHORITY_BACKEND_SHA256_V1", backend_sha256)
         .env("FE2O3_CODEGEN_PIPELINE", "kernel-ir-worker-v2")
         .env("FE2O3_FIXTURE_RUSTC_MARKER", directory.0.join("spawned"))
         .env("FE2O3_FIXTURE_SOURCE", &source)

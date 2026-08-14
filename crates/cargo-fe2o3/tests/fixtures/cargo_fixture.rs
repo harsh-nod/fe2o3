@@ -1,11 +1,15 @@
 use std::env;
 use std::ffi::{OsStr, OsString};
+#[cfg(target_os = "linux")]
+use std::fs::File;
 use std::fs::{self, OpenOptions};
 #[cfg(unix)]
 use std::io::Read;
 use std::io::Write;
 #[cfg(target_os = "linux")]
 use std::os::unix::fs::MetadataExt;
+#[cfg(target_os = "linux")]
+use std::os::fd::AsRawFd;
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
@@ -122,6 +126,31 @@ fn build_or_run(args: &[OsString]) -> ExitCode {
     if env::var_os("FE2O3_TEST_VERTICAL_CONTROL_DIR").is_some() {
         return vertical_worker_v2_invocation();
     }
+    if let Some(report) = env::var_os("FE2O3_TEST_PINNED_RUSTC_REPORT") {
+        let output = match Command::new(required_path("RUSTC_WORKSPACE_WRAPPER"))
+            .arg(required_path("RUSTC"))
+            .arg("--version")
+            .output()
+        {
+            Ok(output) => output,
+            Err(error) => {
+                eprintln!("fake Cargo could not launch pinned rustc probe: {error}");
+                return ExitCode::FAILURE;
+            }
+        };
+        if !output.status.success() {
+            eprintln!(
+                "pinned rustc probe failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return ExitCode::FAILURE;
+        }
+        if let Err(error) = fs::write(report, output.stdout) {
+            eprintln!("fake Cargo could not record pinned rustc probe: {error}");
+            return ExitCode::FAILURE;
+        }
+        return ExitCode::SUCCESS;
+    }
     if let Some(loader_name) = env::var_os("FE2O3_TEST_WRAPPER_LOADER_NAME") {
         let loader_value = env::var_os("FE2O3_TEST_WRAPPER_LOADER_VALUE")
             .expect("loader injection fixture has a value");
@@ -179,6 +208,62 @@ fn build_or_run(args: &[OsString]) -> ExitCode {
             eprintln!("fake Cargo rustc substitution was not rejected by compiler identity");
         }
         return ExitCode::from(37);
+    }
+    #[cfg(target_os = "linux")]
+    if let Some(attacker_rustc) = env::var_os("FE2O3_TEST_SUBSTITUTE_RUSTC_DESCRIPTOR") {
+        let attacker = match fs::read(attacker_rustc) {
+            Ok(attacker) => attacker,
+            Err(error) => {
+                eprintln!("fake Cargo could not read descriptor substitute: {error}");
+                return ExitCode::FAILURE;
+            }
+        };
+        let image = match rustix::fs::memfd_create(
+            "fe2o3-attacker-rustc",
+            rustix::fs::MemfdFlags::ALLOW_SEALING,
+        ) {
+            Ok(image) => File::from(image),
+            Err(error) => {
+                eprintln!("fake Cargo could not create descriptor substitute: {error}");
+                return ExitCode::FAILURE;
+            }
+        };
+        if let Err(error) = rustix::fs::fchmod(
+            &image,
+            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR | rustix::fs::Mode::XUSR,
+        ) {
+            eprintln!("fake Cargo could not populate descriptor substitute: {error}");
+            return ExitCode::FAILURE;
+        }
+        if let Err(error) = (&image).write_all(&attacker) {
+            eprintln!("fake Cargo could not write descriptor substitute: {error}");
+            return ExitCode::FAILURE;
+        }
+        // SAFETY: both descriptors are valid in this single-threaded hostile fixture process.
+        if unsafe { libc::dup2(image.as_raw_fd(), 194) } != 194 {
+            eprintln!("fake Cargo could not replace inherited rustc descriptor");
+            return ExitCode::FAILURE;
+        }
+        let wrapper = required_path("RUSTC_WORKSPACE_WRAPPER");
+        let source = required_path("FE2O3_TEST_WORKSPACE_ROOT").join("src/main.rs");
+        let output = match Command::new(wrapper)
+            .arg("/proc/self/fd/194")
+            .args([
+                "--crate-name",
+                "substituted_rustc_descriptor",
+                "-Cmetadata=substituted-descriptor",
+            ])
+            .arg(source)
+            .output()
+        {
+            Ok(output) => output,
+            Err(error) => {
+                eprintln!("fake Cargo could not launch descriptor substitution probe: {error}");
+                return ExitCode::FAILURE;
+            }
+        };
+        eprint!("{}", String::from_utf8_lossy(&output.stderr));
+        return ExitCode::from(39);
     }
     if let Some(mode) = env::var_os("FE2O3_TEST_BUILD_SCRIPT_MODE") {
         let fixture = required_path("FE2O3_TEST_BUILD_SCRIPT_FIXTURE");
