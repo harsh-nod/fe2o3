@@ -10,6 +10,7 @@ standalone foundation profile, and it carries no publication rights.
 "#]
 
 mod broker_v3;
+mod cargo_environment_v1;
 mod compiler_closure;
 mod policy_v1;
 mod protocol_v1;
@@ -24,6 +25,16 @@ pub use broker_v3::{
     POST_EXEC_V3_PAYLOAD_LEN, PREPARE_V3_PAYLOAD_LEN, PROCESS_IDENTITY_V3_WIRE_LEN, PostExecV3,
     PrepareV3, ProcessIdentityV3, decode_broker_frame_v3, decode_capability_binding_v3,
     encode_broker_frame_v3,
+};
+pub use cargo_environment_v1::{
+    AUTHORITY_CARGO_ENVIRONMENT_ENTRY_COUNT_V1, AUTHORITY_CARGO_ENVIRONMENT_HEADER_LEN_V1,
+    AUTHORITY_CARGO_ENVIRONMENT_IDENTITY_DOMAIN_V1, AUTHORITY_CARGO_ENVIRONMENT_MAGIC_V1,
+    AUTHORITY_CARGO_ENVIRONMENT_MAX_PATH_LEN_V1, AUTHORITY_CARGO_ENVIRONMENT_MAX_WIRE_LEN_V1,
+    AUTHORITY_CARGO_ENVIRONMENT_TARGET_V1, AUTHORITY_CARGO_ENVIRONMENT_VERSION_V1,
+    AuthorityCargoEnvironmentErrorV1, AuthorityCargoEnvironmentPathErrorV1,
+    AuthorityCargoEnvironmentV1, AuthorityCargoEnvironmentVariableV1,
+    ForbiddenCargoEnvironmentChannelV1, authority_cargo_environment_identity_sha256_v1,
+    decode_authority_cargo_environment_v1, encode_authority_cargo_environment_v1,
 };
 pub use compiler_closure::{
     COMPILER_CLOSURE_IDENTITY_DOMAIN_V1, CompilerClosureDigestFieldV1, CompilerClosureErrorV1,
