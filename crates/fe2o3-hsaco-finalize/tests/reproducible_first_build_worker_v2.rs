@@ -19,8 +19,8 @@ use fe2o3_compiler_ffi::{
     CompilerModuleSymbolRoleV1, DeviceTargetV1 as CompilerDeviceTargetV1,
 };
 use fe2o3_hsaco_finalize::{
-    ContentIdentityV1, FirstBuildWorkerV2Error, LinkOptionV1, LinkPlanError, PinnedWorkerV1,
-    WorkerEvidenceClassV1, WorkerEvidenceClassV2, WorkerExecutionErrorKind,
+    ContentIdentityV1, FirstBuildWorkerV2Error, InertDecodedWorkerExchangeV2, LinkOptionV1,
+    LinkPlanError, PinnedWorkerV1, WorkerEvidenceClassV2, WorkerExecutionErrorKind,
     WorkerExecutionLimitsV1, WorkerInputKindV1, WorkerInputV1, WorkerMeasurementV1,
     WorkerOutputConstraintsV1, WorkerProtocolError, WorkerRequestConstructionError, WorkerStageV1,
     execute_reproducible_first_build_worker_v2,
@@ -264,7 +264,7 @@ fn derives_exact_plan_and_returns_only_inert_dual_execution_evidence() {
     );
     assert_eq!(
         evidence.candidate().evidence_class(),
-        WorkerEvidenceClassV1::GenericLink
+        WorkerEvidenceClassV2::CompilerFfiLink
     );
     assert_eq!(
         evidence.authorized().evidence_class(),
@@ -294,6 +294,98 @@ fn derives_exact_plan_and_returns_only_inert_dual_execution_evidence() {
     assert!(!evidence.grants_publication_authority());
     assert!(!evidence.grants_load_authority());
     assert!(!evidence.grants_launch_authority());
+}
+
+#[test]
+fn compiler_aware_v2_bootstrap_precedes_the_exact_v2_replay() {
+    let directory = TestDirectory::new();
+    let (_, _, consumed) = consumed_handoff_with_extra(&directory, &["workflow_phase_trace"]);
+    let evidence = execute_reproducible_first_build_worker_v2(
+        consumed,
+        &pinned(),
+        vec![provider()],
+        options(),
+        WorkerOutputConstraintsV1::new(4096).unwrap(),
+        limits(),
+    )
+    .unwrap();
+
+    assert!(evidence.bootstrap_request_bytes().starts_with(b"F3LREQ02"));
+    assert!(evidence.authorized_request_bytes().starts_with(b"F3LREQ02"));
+    let bootstrap = InertDecodedWorkerExchangeV2::decode(
+        evidence.bootstrap_request_bytes(),
+        evidence.bootstrap().response().canonical_bytes(),
+    )
+    .unwrap();
+    let replay = InertDecodedWorkerExchangeV2::decode(
+        evidence.authorized_request_bytes(),
+        evidence.exact_replay().response().canonical_bytes(),
+    )
+    .unwrap();
+
+    assert_eq!(bootstrap.request().output_constraints().max_bytes(), 4096);
+    assert_eq!(
+        replay.request().output_constraints().max_bytes(),
+        OUTPUT.len() as u64
+    );
+    assert_eq!(
+        bootstrap.response().diagnostics(),
+        ["fixture.phase=v2-bootstrap"]
+    );
+    assert_eq!(
+        replay.response().diagnostics(),
+        ["fixture.phase=v2-exact-replay"]
+    );
+    assert_eq!(
+        bootstrap.request().compiler_module(),
+        replay.request().compiler_module()
+    );
+    assert_eq!(bootstrap.request().target(), replay.request().target());
+    assert_eq!(
+        bootstrap.request().code_object_version(),
+        replay.request().code_object_version()
+    );
+    assert_eq!(bootstrap.request().options(), replay.request().options());
+    assert_eq!(
+        bootstrap.request().compiler_envelope_identity(),
+        replay.request().compiler_envelope_identity()
+    );
+    assert_eq!(
+        bootstrap.request().worker_executable(),
+        replay.request().worker_executable()
+    );
+    assert_eq!(
+        bootstrap.request().worker_build_identity(),
+        replay.request().worker_build_identity()
+    );
+    assert_eq!(
+        bootstrap.request().llvm_build_identity(),
+        replay.request().llvm_build_identity()
+    );
+    assert_eq!(
+        bootstrap.request().external_providers(),
+        replay.request().external_providers()
+    );
+    assert_eq!(
+        bootstrap.request().import_symbols(),
+        replay.request().import_symbols()
+    );
+    assert_eq!(
+        bootstrap.request().export_symbols(),
+        replay.request().export_symbols()
+    );
+    assert_eq!(
+        bootstrap.request().final_symbols(),
+        replay.request().final_symbols()
+    );
+    assert_ne!(
+        bootstrap.request().request_id(),
+        replay.request().request_id()
+    );
+    assert_eq!(
+        bootstrap.response().output().unwrap().bytes(),
+        replay.response().output().unwrap().bytes()
+    );
 }
 
 #[test]
@@ -434,7 +526,10 @@ fn candidate_and_v2_identity_corruption_are_distinguished() {
     assert!(matches!(
         candidate_error,
         FirstBuildWorkerV2Error::CandidateExecution(ref error)
-            if error.kind() == &WorkerExecutionErrorKind::RequestIdentityMismatch
+            if error.kind()
+                == &WorkerExecutionErrorKind::DecodeResponse(
+                    WorkerProtocolError::RequestIdentityMismatch
+                )
     ));
 
     let v2_directory = TestDirectory::new();
@@ -509,7 +604,10 @@ fn caller_output_bound_is_enforced_on_the_candidate() {
     let is_output_limit = matches!(
         &error,
         FirstBuildWorkerV2Error::CandidateExecution(execution)
-            if execution.kind() == &WorkerExecutionErrorKind::OutputLimitExceeded
+            if execution.kind()
+                == &WorkerExecutionErrorKind::DecodeResponse(
+                    WorkerProtocolError::InvalidOutputBound
+                )
     );
     assert!(
         is_output_limit,

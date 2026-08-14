@@ -16,8 +16,8 @@ use fe2o3_hsaco::MAX_HSACO_BYTES;
 use fe2o3_hsaco_finalize::{
     ContentIdentityV1, FinalizedWorkerV2HsacoIdentityV1, LinkOptionV1, PinnedWorkerV1,
     RowSoftmaxV1DirectWorkerExpectationV1, RowSoftmaxV1DirectWorkerPinsV1,
-    RowSoftmaxV1OcmlProviderPinsV1, WorkerExecutionLimitsV1, WorkerMeasurementV1,
-    WorkerOutputConstraintsV1, execute_reproducible_first_build_worker_v2,
+    RowSoftmaxV1OcmlProviderPinsV1, WorkerDeviceLibraryProviderEvidenceV1, WorkerExecutionLimitsV1,
+    WorkerMeasurementV1, WorkerOutputConstraintsV1, execute_reproducible_first_build_worker_v2,
     finalize_row_softmax_v1_structural_worker_v2_hsaco_v1,
     inspect_row_softmax_v1_direct_worker_hsaco_v1,
 };
@@ -44,6 +44,12 @@ const OCML_SHA256_ENVS: [&str; 4] = [
 const PROVIDER_MANIFEST_ENV: &str = "FE2O3_ROW_SOFTMAX_V1_PROVIDER_MANIFEST_SHA256";
 const OUTPUT_ENV: &str = "FE2O3_ROW_SOFTMAX_V1_OUTPUT";
 const TARGET: &str = "gfx942:xnack-";
+const OCML_PROVIDER_BASENAMES: [&str; 4] = [
+    "ocml.bc",
+    "oclc_isa_version_942.bc",
+    "oclc_unsafe_math_off.bc",
+    "oclc_finite_only_off.bc",
+];
 
 const REQUIRED_ENVIRONMENT: [&str; 17] = [
     WORKER_ENV,
@@ -203,6 +209,13 @@ fn produce_inspect_and_finalize(
         WorkerExecutionLimitsV1::default(),
     )
     .expect("direct upstream LLVM/LLD row-softmax production");
+    for execution in [evidence.bootstrap(), evidence.exact_replay()] {
+        let provider = execution
+            .response()
+            .device_library_provider()
+            .expect("structured measured OCML provider evidence on both V2 executions");
+        assert_measured_ocml_provider(provider, expectation.worker_pins().provider());
+    }
     let diagnostics = evidence.authorized().response().diagnostics().to_vec();
     let inspected = inspect_row_softmax_v1_direct_worker_hsaco_v1(evidence, expectation)
         .unwrap_or_else(|error| {
@@ -280,6 +293,22 @@ fn produce_inspect_and_finalize(
         bytes,
         finalized_identity: finalized.identity(),
         finalized_output_identity: finalized.finalized_output_identity(),
+    }
+}
+
+fn assert_measured_ocml_provider(
+    actual: &WorkerDeviceLibraryProviderEvidenceV1,
+    expected: RowSoftmaxV1OcmlProviderPinsV1,
+) {
+    assert_eq!(actual.provider_identity(), "gfx942-ocml-v1");
+    assert_eq!(actual.target().to_string(), TARGET);
+    assert_eq!(actual.code_object_version(), CodeObjectVersion::V6);
+    assert_eq!(actual.import_symbols(), ["__ocml_exp_f32"]);
+    assert_eq!(actual.manifest_identity(), expected.manifest_identity());
+    assert_eq!(actual.files().len(), OCML_PROVIDER_BASENAMES.len());
+    for (index, file) in actual.files().iter().enumerate() {
+        assert_eq!(file.basename(), OCML_PROVIDER_BASENAMES[index]);
+        assert_eq!(file.sha256(), &expected.file_sha256()[index]);
     }
 }
 

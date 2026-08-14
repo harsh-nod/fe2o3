@@ -39,25 +39,37 @@ fn main() {
     let mode = if is_v2 || is_workflow { 1 } else { legacy_mode };
 
     if is_workflow {
-        let with_output = if is_v2 {
+        let exact_replay = is_v2 && output_bound(&request) == OUTPUT.len() as u64;
+        let with_output = if exact_replay {
             !contains(&request, b"workflow_v2_failure")
         } else {
             !contains(&request, b"workflow_candidate_failure")
         };
-        let wrong_request = (!is_v2 && contains(&request, b"workflow_candidate_bad_response"))
-            || (is_v2 && contains(&request, b"workflow_v2_bad_response"));
-        let output = if is_v2 && contains(&request, b"workflow_mismatch") {
+        let wrong_request = (!exact_replay
+            && contains(&request, b"workflow_candidate_bad_response"))
+            || (exact_replay && contains(&request, b"workflow_v2_bad_response"));
+        let output = if exact_replay && contains(&request, b"workflow_mismatch") {
             MISMATCH_OUTPUT
         } else {
             OUTPUT
         };
+        let diagnostics = if is_v2 && contains(&request, b"workflow_phase_trace") {
+            if exact_replay {
+                &["fixture.phase=v2-exact-replay"][..]
+            } else {
+                &["fixture.phase=v2-bootstrap"][..]
+            }
+        } else {
+            &[]
+        };
         io::stdout()
-            .write_all(&response(
+            .write_all(&response_with_diagnostics(
                 &request,
                 WORKER_ID,
                 with_output,
                 wrong_request,
                 output,
+                diagnostics,
             ))
             .unwrap();
         return;
@@ -139,6 +151,24 @@ fn response(
     wrong_request: bool,
     output_bytes: &[u8],
 ) -> Vec<u8> {
+    response_with_diagnostics(
+        request,
+        worker,
+        with_output,
+        wrong_request,
+        output_bytes,
+        &[],
+    )
+}
+
+fn response_with_diagnostics(
+    request: &[u8],
+    worker: &str,
+    with_output: bool,
+    wrong_request: bool,
+    output_bytes: &[u8],
+    diagnostics: &[&str],
+) -> Vec<u8> {
     let request_id: [u8; 32] = request[14..46].try_into().unwrap();
     let is_v2 = &request[..8] == b"F3LREQ02";
     let mut request_identity: [u8; 32] = field(request, if is_v2 { 15 } else { 10 })
@@ -162,7 +192,13 @@ fn response(
     };
     push_field(&mut bytes, 3 + offset, worker.as_bytes());
     push_field(&mut bytes, 4 + offset, &[if with_output { 9 } else { 6 }]);
-    push_field(&mut bytes, 5 + offset, &0_u32.to_le_bytes());
+    let mut diagnostic_bytes = Vec::new();
+    diagnostic_bytes.extend_from_slice(&(diagnostics.len() as u32).to_le_bytes());
+    for diagnostic in diagnostics {
+        diagnostic_bytes.extend_from_slice(&(diagnostic.len() as u32).to_le_bytes());
+        diagnostic_bytes.extend_from_slice(diagnostic.as_bytes());
+    }
+    push_field(&mut bytes, 5 + offset, &diagnostic_bytes);
     if with_output {
         let output_identity: [u8; 32] = Sha256::digest(output_bytes).into();
         let mut output = vec![1];
@@ -174,6 +210,10 @@ fn response(
         push_field(&mut bytes, 6 + offset, &[0]);
     }
     bytes
+}
+
+fn output_bound(request: &[u8]) -> u64 {
+    u64::from_le_bytes(field(request, 14).try_into().unwrap())
 }
 
 fn contains(bytes: &[u8], needle: &[u8]) -> bool {

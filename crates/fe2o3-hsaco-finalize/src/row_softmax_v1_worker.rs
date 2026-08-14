@@ -800,8 +800,9 @@ const fn profile_mismatch(field: &'static str) -> RowSoftmaxV1DirectWorkerErrorV
 mod tests {
     use super::*;
     use crate::{
-        WORKER_RESPONSE_MAGIC_V2, WORKER_RESPONSE_MAGIC_V3, WorkerInputV1,
-        WorkerOutputConstraintsV1, worker_protocol_v2::SealedWorkerRequestV2Parts,
+        WORKER_REQUEST_MAGIC_V1, WORKER_RESPONSE_MAGIC_V2, WORKER_RESPONSE_MAGIC_V3,
+        WorkerEvidenceClassV1, WorkerInputV1, WorkerOutputConstraintsV1, WorkerRequestV1,
+        worker_protocol_v2::SealedWorkerRequestV2Parts,
     };
     use fe2o3_compiler_ffi::{
         CodeObjectVersion as CompilerCodeObjectVersion, CompilerFfiContractV1,
@@ -1007,6 +1008,40 @@ entry:
             Vec::new(),
             exact_final_symbols(),
         )
+    }
+
+    #[test]
+    fn legacy_v1_first_build_request_cannot_enter_row_softmax_v2_admission() {
+        let handoff = exact_handoff();
+        let legacy = WorkerRequestV1::new(
+            [0x6a; 32],
+            "upstream-llvm-22-row",
+            descriptor_target(),
+            CodeObjectVersion::V6,
+            WorkerOptionsV1::new(WorkerOptimizationLevelV1::O0, true, true),
+            vec![
+                WorkerInputV1::new(
+                    WorkerInputKindV1::LlvmTextIr,
+                    handoff.module_bytes().to_vec(),
+                )
+                .unwrap(),
+            ],
+            exact_final_symbols(),
+            exact_final_symbols(),
+            WorkerOutputConstraintsV1::new(4096).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(legacy.evidence_class(), WorkerEvidenceClassV1::GenericLink);
+        assert!(
+            legacy
+                .canonical_bytes()
+                .starts_with(WORKER_REQUEST_MAGIC_V1)
+        );
+        assert!(matches!(
+            InertDecodedWorkerExchangeV2::decode(legacy.canonical_bytes(), b""),
+            Err(WorkerProtocolError::BadMagic)
+        ));
     }
 
     fn exact_final_symbols() -> Vec<String> {

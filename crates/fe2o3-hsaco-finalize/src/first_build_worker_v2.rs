@@ -13,22 +13,19 @@ use fe2o3_compiler_ffi::{
 use sha2::{Digest, Sha256};
 
 use crate::{
-    ContentIdentityV1, InertCompilerHandoffExecutionV2, InertWorkerExecutionV1,
-    LinkInputKindClosureV1, LinkInputV1, LinkOptionV1, LinkOutputV1, LinkPlanError,
-    MultiInputLinkPlanV1, PinnedWorkerV1, ProvenanceNodeV1, WorkerExecutionError,
-    WorkerExecutionLimitsV1, WorkerInputKindV1, WorkerInputV1, WorkerMeasurementV1,
-    WorkerOutputConstraintsV1, WorkerProtocolError, WorkerRequestConstructionError,
-    WorkerRequestV1,
+    ContentIdentityV1, InertCompilerHandoffExecutionV2, LinkInputKindClosureV1, LinkInputV1,
+    LinkOptionV1, LinkOutputV1, LinkPlanError, MultiInputLinkPlanV1, PinnedWorkerV1,
+    ProvenanceNodeV1, WorkerExecutionError, WorkerExecutionLimitsV1, WorkerInputKindV1,
+    WorkerInputV1, WorkerMeasurementV1, WorkerOutputConstraintsV1, WorkerProtocolError,
+    WorkerRequestConstructionError,
     request_construction::{
-        LinkSymbolClosureV1, construct_worker_request_v2_from_consumed_handoff,
-        decode_link_options, derive_manifest_symbol_closure,
+        construct_first_build_worker_request_v2_from_consumed_handoff,
+        construct_worker_request_v2_from_consumed_handoff, decode_link_options,
     },
 };
 
-const CANDIDATE_REQUEST_ID_DOMAIN_V1: &[u8] =
-    b"FE2O3/FIRST-BUILD-GENERIC-LINK-CANDIDATE-REQUEST-ID/V1\0";
 const FIRST_BUILD_EVIDENCE_DOMAIN_V1: &[u8] =
-    b"FE2O3/REPRODUCIBLE-FIRST-BUILD-WORKER-V2-EVIDENCE/V1\0";
+    b"FE2O3/REPRODUCIBLE-FIRST-BUILD-V2-REPLAY-EVIDENCE/V1\0";
 
 /// Stable identity of one successful reproducible first-build workflow.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -40,7 +37,7 @@ impl FirstBuildWorkerV2IdentityV1 {
     }
 }
 
-/// Inert evidence that GenericLink V1 and compiler-FFI-aware V2 produced identical bytes.
+/// Inert evidence that a compiler-aware V2 bootstrap and exact V2 replay produced identical bytes.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InertFirstBuildWorkerV2EvidenceV1 {
     identity: FirstBuildWorkerV2IdentityV1,
@@ -50,7 +47,8 @@ pub struct InertFirstBuildWorkerV2EvidenceV1 {
     symbol_manifest: CompilerModuleSymbolManifestV1,
     worker: WorkerMeasurementV1,
     plan: MultiInputLinkPlanV1,
-    candidate: InertWorkerExecutionV1,
+    candidate_request_bytes: Vec<u8>,
+    candidate: InertCompilerHandoffExecutionV2,
     authorized_request_bytes: Vec<u8>,
     authorized: InertCompilerHandoffExecutionV2,
 }
@@ -97,15 +95,31 @@ impl InertFirstBuildWorkerV2EvidenceV1 {
         self.plan.identity()
     }
 
-    pub const fn candidate(&self) -> &InertWorkerExecutionV1 {
+    /// First compiler-aware V2 execution under the caller's output ceiling.
+    pub const fn bootstrap(&self) -> &InertCompilerHandoffExecutionV2 {
         &self.candidate
     }
 
-    pub const fn authorized(&self) -> &InertCompilerHandoffExecutionV2 {
+    /// Exact canonical Worker V2 request bytes used by the bootstrap execution.
+    pub fn bootstrap_request_bytes(&self) -> &[u8] {
+        &self.candidate_request_bytes
+    }
+
+    /// Compatibility name for the first compiler-aware V2 execution.
+    pub const fn candidate(&self) -> &InertCompilerHandoffExecutionV2 {
+        self.bootstrap()
+    }
+
+    /// Second compiler-aware V2 execution bound to the first execution's exact output.
+    pub const fn exact_replay(&self) -> &InertCompilerHandoffExecutionV2 {
         &self.authorized
     }
 
-    /// Exact canonical Worker V2 request bytes used by the authorized execution.
+    pub const fn authorized(&self) -> &InertCompilerHandoffExecutionV2 {
+        self.exact_replay()
+    }
+
+    /// Exact canonical Worker V2 request bytes used by the exact replay.
     pub fn authorized_request_bytes(&self) -> &[u8] {
         &self.authorized_request_bytes
     }
@@ -152,14 +166,14 @@ pub enum FirstBuildWorkerV2Error {
     RequestConstruction(WorkerRequestConstructionError),
     CandidateRequest(WorkerProtocolError),
     CandidateExecution(WorkerExecutionError),
-    CandidateDidNotProduceOutput(Box<InertWorkerExecutionV1>),
+    CandidateDidNotProduceOutput(Box<InertCompilerHandoffExecutionV2>),
     AuthorizedExecution(WorkerExecutionError),
     AuthorizedDidNotProduceOutput {
-        candidate: Box<InertWorkerExecutionV1>,
+        candidate: Box<InertCompilerHandoffExecutionV2>,
         authorized: Box<InertCompilerHandoffExecutionV2>,
     },
     OutputMismatch {
-        candidate: Box<InertWorkerExecutionV1>,
+        candidate: Box<InertCompilerHandoffExecutionV2>,
         authorized: Box<InertCompilerHandoffExecutionV2>,
     },
 }
@@ -181,38 +195,37 @@ impl fmt::Display for FirstBuildWorkerV2Error {
                 )
             }
             Self::CandidateRequest(error) => {
-                write!(
-                    formatter,
-                    "GenericLink candidate request is invalid: {error}"
-                )
+                write!(formatter, "bootstrap Worker V2 request is invalid: {error}")
             }
             Self::CandidateExecution(error) => {
-                write!(formatter, "GenericLink candidate execution failed: {error}")
+                write!(formatter, "bootstrap Worker V2 execution failed: {error}")
             }
             Self::CandidateDidNotProduceOutput(candidate) => {
                 let response = candidate.response();
                 write!(
                     formatter,
-                    "GenericLink candidate did not produce output at {:?}: {:?}",
+                    "bootstrap Worker V2 did not produce output at {:?}: {:?}",
                     response.stage(),
                     response.diagnostics()
                 )
             }
             Self::AuthorizedExecution(error) => {
-                write!(formatter, "Worker V2 execution failed: {error}")
+                write!(
+                    formatter,
+                    "exact-replay Worker V2 execution failed: {error}"
+                )
             }
             Self::AuthorizedDidNotProduceOutput { authorized, .. } => {
                 let response = authorized.response();
                 write!(
                     formatter,
-                    "Worker V2 did not produce output at {:?}: {:?}",
+                    "exact-replay Worker V2 did not produce output at {:?}: {:?}",
                     response.stage(),
                     response.diagnostics()
                 )
             }
-            Self::OutputMismatch { .. } => formatter.write_str(
-                "GenericLink candidate and compiler-FFI-aware Worker V2 output bytes differ",
-            ),
+            Self::OutputMismatch { .. } => formatter
+                .write_str("bootstrap Worker V2 and exact-replay Worker V2 output bytes differ"),
         }
     }
 }
@@ -232,12 +245,12 @@ impl Error for FirstBuildWorkerV2Error {
     }
 }
 
-/// Bootstraps an exact-output V2 plan with an independently classified GenericLink candidate.
+/// Bootstraps an exact-output V2 plan through two compiler-aware Worker V2 executions.
 ///
-/// The consumed handoff is decoded before either request is built. The candidate and V2 request
-/// use the same exact compiler-module and external-provider bytes. The candidate output is inert
-/// GenericLink evidence; its identity becomes the expected plan output. Success requires V2 to
-/// reproduce the candidate bytes exactly and grants no publication, loading, or launch authority.
+/// The consumed handoff is decoded before either request is built. The bootstrap and exact replay
+/// use the same exact compiler-module and external-provider bytes. The bootstrap output is inert;
+/// its identity becomes the expected plan output. Success requires a second V2 execution to
+/// reproduce those bytes exactly and grants no publication, loading, or launch authority.
 pub fn execute_reproducible_first_build_worker_v2(
     consumed: ConsumedCompilerModuleHandoffV1,
     worker: &PinnedWorkerV1,
@@ -254,15 +267,7 @@ pub fn execute_reproducible_first_build_worker_v2(
     let target = parts.target();
     let code_object_version = parts.code_object_version();
     let (envelope, symbol_manifest, module) = parts.into_envelope_manifest_and_module();
-    let compiler_envelope_identity = envelope.identity();
     let manifest_identity = symbol_manifest.identity();
-    let directional_symbols = envelope.directional_symbols();
-    let symbols = derive_manifest_symbol_closure(
-        &symbol_manifest,
-        directional_symbols.imports().map(str::to_owned).collect(),
-        directional_symbols.exports().map(str::to_owned).collect(),
-    )
-    .map_err(FirstBuildWorkerV2Error::RequestConstruction)?;
 
     canonicalize_options(&mut link_options)?;
     let (planned_code_object_version, options) =
@@ -288,34 +293,20 @@ pub fn execute_reproducible_first_build_worker_v2(
     all_inputs.sort_by_key(|input| (input.identity(), input.kind()));
     reject_duplicate_content_identities(&all_inputs)?;
 
-    let candidate_request_id = calculate_candidate_request_id(
-        attempt,
-        handoff_identity,
-        compiler_envelope_identity,
-        manifest_identity,
+    let candidate_request = construct_first_build_worker_request_v2_from_consumed_handoff(
         worker.measurement(),
-        target,
-        code_object_version,
+        consumed.clone(),
+        external_providers.clone(),
         options,
-        &all_inputs,
-        &symbols,
-        &link_options,
-        &candidate_output_bound,
-    );
-    let candidate_request = WorkerRequestV1::new(
-        candidate_request_id,
-        worker.measurement().llvm_build_identity(),
-        target,
-        code_object_version,
-        options,
-        all_inputs.clone(),
-        symbols.required_symbols().to_vec(),
-        symbols.required_symbols().to_vec(),
         candidate_output_bound,
     )
-    .map_err(FirstBuildWorkerV2Error::CandidateRequest)?;
+    .map_err(FirstBuildWorkerV2Error::RequestConstruction)?;
+    let candidate_request_bytes = candidate_request
+        .sealed_request()
+        .canonical_bytes()
+        .to_vec();
     let candidate = worker
-        .execute(&candidate_request, limits)
+        .execute_compiler_handoff_v2(&candidate_request, limits)
         .map_err(FirstBuildWorkerV2Error::CandidateExecution)?;
     let Some(candidate_output) = candidate.response().output() else {
         return Err(FirstBuildWorkerV2Error::CandidateDidNotProduceOutput(
@@ -380,6 +371,7 @@ pub fn execute_reproducible_first_build_worker_v2(
         symbol_manifest,
         worker: worker.measurement().clone(),
         plan,
+        candidate_request_bytes,
         candidate,
         authorized_request_bytes,
         authorized,
@@ -446,61 +438,13 @@ fn derive_plan(
     .map_err(FirstBuildWorkerV2Error::LinkPlan)
 }
 
-#[allow(clippy::too_many_arguments)]
-fn calculate_candidate_request_id(
-    attempt: BuildAttempt,
-    handoff_identity: CompilerModuleHandoffIdentityV1,
-    compiler_envelope_identity: CompilerFfiEnvelopeIdentityV1,
-    manifest_identity: CompilerModuleSymbolManifestIdentityV1,
-    worker: &WorkerMeasurementV1,
-    target: fe2o3_kernel_descriptor::DeviceTargetV1,
-    code_object_version: fe2o3_kernel_descriptor::CodeObjectVersion,
-    options: crate::WorkerOptionsV1,
-    inputs: &[WorkerInputV1],
-    symbols: &LinkSymbolClosureV1,
-    link_options: &[LinkOptionV1],
-    output: &WorkerOutputConstraintsV1,
-) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(CANDIDATE_REQUEST_ID_DOMAIN_V1);
-    hash_attempt(&mut hasher, attempt);
-    hasher.update(handoff_identity.as_bytes());
-    hasher.update(compiler_envelope_identity.as_bytes());
-    hash_manifest(&mut hasher, manifest_identity);
-    hash_content(&mut hasher, worker.executable());
-    hash_text(&mut hasher, worker.worker_build_identity());
-    hash_text(&mut hasher, worker.llvm_build_identity());
-    hash_text(&mut hasher, &target.to_string());
-    hasher.update([code_object_version_byte(code_object_version)]);
-    hasher.update([
-        options.optimization() as u8,
-        u8::from(options.strip_debug()),
-        u8::from(options.verify_each()),
-    ]);
-    hasher.update((inputs.len() as u64).to_le_bytes());
-    for input in inputs {
-        hasher.update([input.kind() as u8]);
-        hash_content(&mut hasher, input.identity());
-    }
-    hash_strings(&mut hasher, symbols.required_symbols());
-    hash_strings(&mut hasher, symbols.import_symbols());
-    hash_strings(&mut hasher, symbols.export_symbols());
-    hasher.update((link_options.len() as u64).to_le_bytes());
-    for option in link_options {
-        hash_text(&mut hasher, option.name());
-        hash_text(&mut hasher, option.value());
-    }
-    hasher.update(output.max_bytes().to_le_bytes());
-    hasher.finalize().into()
-}
-
 fn calculate_evidence_identity(
     attempt: BuildAttempt,
     handoff_identity: CompilerModuleHandoffIdentityV1,
     manifest_identity: CompilerModuleSymbolManifestIdentityV1,
     worker: &WorkerMeasurementV1,
     plan: &MultiInputLinkPlanV1,
-    candidate: &InertWorkerExecutionV1,
+    candidate: &InertCompilerHandoffExecutionV2,
     authorized: &InertCompilerHandoffExecutionV2,
 ) -> FirstBuildWorkerV2IdentityV1 {
     let mut hasher = Sha256::new();
@@ -542,22 +486,7 @@ fn hash_manifest(hasher: &mut Sha256, identity: CompilerModuleSymbolManifestIden
     hasher.update(identity.byte_len().to_le_bytes());
 }
 
-fn hash_strings(hasher: &mut Sha256, strings: &[String]) {
-    hasher.update((strings.len() as u64).to_le_bytes());
-    for string in strings {
-        hash_text(hasher, string);
-    }
-}
-
 fn hash_text(hasher: &mut Sha256, text: &str) {
     hasher.update((text.len() as u64).to_le_bytes());
     hasher.update(text.as_bytes());
-}
-
-const fn code_object_version_byte(version: fe2o3_kernel_descriptor::CodeObjectVersion) -> u8 {
-    match version {
-        fe2o3_kernel_descriptor::CodeObjectVersion::V4 => 4,
-        fe2o3_kernel_descriptor::CodeObjectVersion::V5 => 5,
-        fe2o3_kernel_descriptor::CodeObjectVersion::V6 => 6,
-    }
 }

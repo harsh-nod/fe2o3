@@ -1588,7 +1588,7 @@ entry:
         assert_eq!(evidence.handoff_identity(), receipt.identity());
         assert_eq!(
             evidence.candidate().evidence_class(),
-            WorkerEvidenceClassV1::GenericLink
+            WorkerEvidenceClassV2::CompilerFfiLink
         );
         assert_eq!(
             evidence.authorized().evidence_class(),
