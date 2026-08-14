@@ -1,10 +1,13 @@
 use std::cmp::Ordering;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::process::Command;
 
 use fe2o3_amd_target::AmdTargetId;
 
-use crate::ValidationError;
+use crate::{
+    ValidationError, is_rustc_codegen_backend_option_value_v2,
+    is_rustc_codegen_backend_selector_v2, is_rustc_option_terminator_v2,
+};
 
 /// Maximum size of one complete encoded V2 descriptor.
 pub const MAX_DESCRIPTOR_BYTES_V2: usize = 256 * 1024;
@@ -20,6 +23,8 @@ pub const MAX_ENVIRONMENT_VALUE_BYTES_V2: usize = 4096;
 pub const MAX_RUSTC_ARGUMENTS_V2: usize = 4096;
 /// Maximum number of compile-environment entries in V2.
 pub const MAX_COMPILE_ENVIRONMENT_ENTRIES_V2: usize = 1024;
+
+const CODEGEN_BACKEND_PROC_FD_CAPABILITY_V2: &str = "/proc/./self/fd/198";
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) struct Name(String);
@@ -87,6 +92,21 @@ impl AbsolutePath {
     }
 
     pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+struct CodegenBackendPath(String);
+
+impl CodegenBackendPath {
+    fn new(value: impl Into<String>) -> Result<Self, ValidationError> {
+        let value = value.into();
+        validate_codegen_backend_path(&value)?;
+        Ok(Self(value))
+    }
+
+    fn as_str(&self) -> &str {
         &self.0
     }
 }
@@ -292,8 +312,10 @@ impl RustcInvocationDescriptorV2 {
     /// Constructs and structurally validates one exact V2 rustc invocation.
     ///
     /// The wrapper-assigned backend argument must be the final argv entry in
-    /// canonical joined form. Query-versus-compile policy is deliberately not
-    /// part of this frozen wire-schema validator.
+    /// joined form. Its value is either a canonical absolute path or the exact
+    /// rustc-compatible procfd capability spelling `/proc/./self/fd/198`.
+    /// Query-versus-compile policy is deliberately not part of this frozen
+    /// wire-schema validator.
     pub fn new(
         rustc_executable_sha256: [u8; 32],
         codegen_backend_sha256: [u8; 32],
@@ -368,7 +390,18 @@ fn validate_compile_invocation(
     let backend = assigned_codegen_backend(&rustc.argv).ok_or(ValidationError::Empty {
         field: "rustc codegen backend",
     })?;
-    AbsolutePath::new(backend, "codegen backend path")?;
+    let backend_path = CodegenBackendPath::new(backend)?;
+    debug_assert_eq!(backend_path.as_str(), backend);
+    if environment.entries.iter().any(|entry| {
+        entry
+            .value
+            .as_str()
+            .contains(CODEGEN_BACKEND_PROC_FD_CAPABILITY_V2)
+    }) {
+        return Err(ValidationError::InvalidPath {
+            field: "codegen backend path",
+        });
+    }
 
     let target = environment_value(environment, "FE2O3_TARGET").ok_or(ValidationError::Empty {
         field: "FE2O3_TARGET",
@@ -394,13 +427,25 @@ fn validate_compile_invocation(
 fn assigned_codegen_backend(argv: &[Argument]) -> Option<&str> {
     let (last, preceding) = argv.split_last()?;
     let backend = last.as_str().strip_prefix("-Zcodegen-backend=")?;
-    if backend.is_empty()
-        || preceding.iter().any(|argument| {
-            argument.as_str().starts_with("-Zcodegen-backend=")
-                || argument.as_str().starts_with("codegen-backend=")
-        })
-    {
+    if backend.is_empty() {
         return None;
+    }
+    for (index, argument) in preceding.iter().enumerate() {
+        let argument = OsStr::new(argument.as_str());
+        let following = preceding
+            .get(index + 1)
+            .map(Argument::as_str)
+            .map(OsStr::new);
+        if is_rustc_codegen_backend_selector_v2(argument, following)
+            || is_rustc_codegen_backend_option_value_v2(argument)
+            || is_rustc_option_terminator_v2(argument)
+            || argument
+                .as_encoded_bytes()
+                .windows(CODEGEN_BACKEND_PROC_FD_CAPABILITY_V2.len())
+                .any(|window| window == CODEGEN_BACKEND_PROC_FD_CAPABILITY_V2.as_bytes())
+        {
+            return None;
+        }
     }
     Some(backend)
 }
@@ -461,6 +506,33 @@ fn validate_absolute_path(value: &str, field: &'static str) -> Result<(), Valida
         return Err(ValidationError::InvalidPath { field });
     }
     Ok(())
+}
+
+fn validate_codegen_backend_path(value: &str) -> Result<(), ValidationError> {
+    const FIELD: &str = "codegen backend path";
+
+    if value == CODEGEN_BACKEND_PROC_FD_CAPABILITY_V2 {
+        return Ok(());
+    }
+    if is_proc_like_backend_path(value) || is_dev_fd_alias_backend_path(value) {
+        return Err(ValidationError::InvalidPath { field: FIELD });
+    }
+    validate_absolute_path(value, FIELD)
+}
+
+fn is_proc_like_backend_path(value: &str) -> bool {
+    value == "/proc" || value.starts_with("/proc/")
+}
+
+fn is_dev_fd_alias_backend_path(value: &str) -> bool {
+    ["/dev/fd", "/dev/stdin", "/dev/stdout", "/dev/stderr"]
+        .iter()
+        .any(|alias| {
+            value == *alias
+                || value
+                    .strip_prefix(alias)
+                    .is_some_and(|rest| rest.starts_with('/'))
+        })
 }
 
 fn validate_environment_sorted(

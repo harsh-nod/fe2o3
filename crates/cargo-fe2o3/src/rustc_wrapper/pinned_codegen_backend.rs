@@ -133,6 +133,9 @@ pub(crate) enum PinCodegenBackendError {
     UninspectableResponseFile {
         argument: OsString,
     },
+    OptionTerminator {
+        argument: OsString,
+    },
 }
 
 impl fmt::Display for PinCodegenBackendError {
@@ -248,6 +251,11 @@ impl fmt::Display for PinCodegenBackendError {
                 "refusing rustc response-file argument while preparing the codegen backend: {}",
                 argument.to_string_lossy()
             ),
+            Self::OptionTerminator { argument } => write!(
+                formatter,
+                "refusing rustc option terminator before the managed codegen-backend selector: {}",
+                argument.to_string_lossy()
+            ),
         }
     }
 }
@@ -277,6 +285,7 @@ impl Error for PinCodegenBackendError {
             | Self::DescriptorNotReadOnly { .. }
             | Self::PreexistingCodegenBackendSelector { .. }
             | Self::UninspectableResponseFile { .. } => None,
+            Self::OptionTerminator { .. } => None,
         }
     }
 }
@@ -298,6 +307,9 @@ mod platform {
     use std::os::unix::process::CommandExt;
 
     use super::{Command, ExitStatus, OsStr, OsString, Output};
+    use fe2o3_rustc_invocation::{
+        is_rustc_codegen_backend_selector_v2, is_rustc_option_terminator_v2,
+    };
 
     const HASH_CHUNK_BYTES: usize = 64 * 1024;
 
@@ -791,31 +803,18 @@ mod platform {
                     argument: (*argument).to_os_string(),
                 });
             }
-            let joined = bytes.strip_prefix(b"-Z").is_some_and(|value| {
-                backend_selector_value(value.strip_prefix(b"=").unwrap_or(value))
-            });
-            let split = bytes == b"-Z"
-                && arguments
-                    .get(index + 1)
-                    .is_some_and(|next| backend_selector_value(next.as_bytes()));
-            if joined || split {
+            if is_rustc_option_terminator_v2(argument) {
+                return Err(PinCodegenBackendError::OptionTerminator {
+                    argument: (*argument).to_os_string(),
+                });
+            }
+            if is_rustc_codegen_backend_selector_v2(argument, arguments.get(index + 1).copied()) {
                 return Err(PinCodegenBackendError::PreexistingCodegenBackendSelector {
                     argument: (*argument).to_os_string(),
                 });
             }
         }
         Ok(())
-    }
-
-    fn backend_selector_value(value: &[u8]) -> bool {
-        [b"codegen-backend".as_slice(), b"codegen_backend".as_slice()]
-            .iter()
-            .any(|name| {
-                value == *name
-                    || value
-                        .strip_prefix(*name)
-                        .is_some_and(|rest| rest.starts_with(b"="))
-            })
     }
 
     fn capture_source(
@@ -1688,6 +1687,21 @@ mod platform {
             assert!(matches!(
                 pinned.prepare_command(command),
                 Err(PinCodegenBackendError::UninspectableResponseFile { .. })
+            ));
+        }
+
+        #[test]
+        fn option_terminator_cannot_hide_the_managed_backend_selector() {
+            let root = TestDirectory::new();
+            let selected = root.path().join("backend.so");
+            fs::write(&selected, b"backend bytes").unwrap();
+            let pinned = PinnedCodegenBackend::open(&selected).unwrap();
+            let mut command = Command::new("/bin/true");
+            command.args(["--crate-name", "kernel", "--"]);
+
+            assert!(matches!(
+                pinned.prepare_command(command),
+                Err(PinCodegenBackendError::OptionTerminator { .. })
             ));
         }
 

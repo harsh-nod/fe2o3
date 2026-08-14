@@ -120,6 +120,7 @@ struct ConfiguredUnit {
 
 pub(crate) struct PreparedWorkerV2Config {
     identity: WorkerV2ConfigIdentity,
+    pipeline: WorkerV2PipelineV1,
     envelope_mode: WorkerV2EnvelopeModeV1,
     envelope_inputs: Option<ConfiguredEnvelopeInputs>,
     worker: PinnedWorkerV1,
@@ -148,6 +149,37 @@ pub(crate) struct WorkerV2BuildObservation<'a> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorkerV2SourceDebugProfileV1 {
     S09AlphaGfx942O0,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WorkerV2PipelineV1 {
+    General,
+    ScalarGemmV1,
+}
+
+impl WorkerV2PipelineV1 {
+    fn from_environment_value(value: &OsStr) -> Option<Self> {
+        if value == WORKER_V2_PIPELINE {
+            Some(Self::General)
+        } else if value == SCALAR_GEMM_V1_PIPELINE {
+            Some(Self::ScalarGemmV1)
+        } else {
+            None
+        }
+    }
+
+    const fn environment_value(self) -> &'static str {
+        match self {
+            Self::General => WORKER_V2_PIPELINE,
+            Self::ScalarGemmV1 => SCALAR_GEMM_V1_PIPELINE,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorkerV2CompileEnvironmentProfileV1 {
+    S09AlphaGfx942O0,
+    ScalarGemmV1Gfx942,
 }
 
 impl WorkerV2SourceDebugProfileV1 {
@@ -185,20 +217,29 @@ impl PreparedWorkerV2Config {
         pipeline: Option<&OsStr>,
         config_path: Option<&OsStr>,
     ) -> Result<Option<Self>, WorkerV2ConfigError> {
-        let selected = pipeline.is_some_and(|pipeline| {
-            pipeline == OsStr::new(WORKER_V2_PIPELINE)
-                || pipeline == OsStr::new(SCALAR_GEMM_V1_PIPELINE)
-        });
+        let selected = pipeline.and_then(WorkerV2PipelineV1::from_environment_value);
         match (selected, config_path) {
-            (false, None) => Ok(None),
-            (false, Some(_)) => Err(WorkerV2ConfigError::UnexpectedConfiguration),
-            (true, None) => Err(WorkerV2ConfigError::MissingConfiguration),
-            (true, Some(path)) if path.is_empty() => Err(WorkerV2ConfigError::MissingConfiguration),
-            (true, Some(path)) => Self::from_manifest(Path::new(path)).map(Some),
+            (None, None) => Ok(None),
+            (None, Some(_)) => Err(WorkerV2ConfigError::UnexpectedConfiguration),
+            (Some(_), None) => Err(WorkerV2ConfigError::MissingConfiguration),
+            (Some(_), Some(path)) if path.is_empty() => {
+                Err(WorkerV2ConfigError::MissingConfiguration)
+            }
+            (Some(pipeline), Some(path)) => {
+                Self::from_manifest_for_pipeline(Path::new(path), pipeline).map(Some)
+            }
         }
     }
 
+    #[cfg(test)]
     fn from_manifest(path: &Path) -> Result<Self, WorkerV2ConfigError> {
+        Self::from_manifest_for_pipeline(path, WorkerV2PipelineV1::General)
+    }
+
+    fn from_manifest_for_pipeline(
+        path: &Path,
+        pipeline: WorkerV2PipelineV1,
+    ) -> Result<Self, WorkerV2ConfigError> {
         require_absolute_path(path, "configuration")?;
         let bytes = read_bounded(path, MAX_CONFIG_BYTES, "configuration")?;
         let value: Value = serde_json::from_slice(&bytes)
@@ -234,9 +275,16 @@ impl PreparedWorkerV2Config {
         let units = parse_units(required_value(root, "units", "configuration")?)?;
         let (envelope_mode, envelope_inputs) = parse_envelope_inputs(root)?;
 
-        let identity = transitive_identity(&bytes, &worker, &providers, envelope_inputs.as_ref());
+        let identity = transitive_identity(
+            pipeline,
+            &bytes,
+            &worker,
+            &providers,
+            envelope_inputs.as_ref(),
+        );
         Ok(Self {
             identity,
+            pipeline,
             envelope_mode,
             envelope_inputs,
             worker,
@@ -259,6 +307,29 @@ impl PreparedWorkerV2Config {
 
     pub(crate) const fn source_debug_profile(&self) -> Option<WorkerV2SourceDebugProfileV1> {
         self.source_debug_profile
+    }
+
+    pub(crate) const fn requires_expected_identity(&self) -> bool {
+        self.source_debug_profile.is_some()
+            || matches!(self.pipeline, WorkerV2PipelineV1::ScalarGemmV1)
+    }
+
+    pub(crate) fn compile_environment_profile(
+        &self,
+        crate_name: &str,
+        source: &Path,
+        working_directory: &Path,
+    ) -> Option<WorkerV2CompileEnvironmentProfileV1> {
+        if !self.selects(crate_name, source, working_directory) {
+            return None;
+        }
+        if self.source_debug_profile.is_some() {
+            Some(WorkerV2CompileEnvironmentProfileV1::S09AlphaGfx942O0)
+        } else if self.pipeline == WorkerV2PipelineV1::ScalarGemmV1 {
+            Some(WorkerV2CompileEnvironmentProfileV1::ScalarGemmV1Gfx942)
+        } else {
+            None
+        }
     }
 
     pub(crate) fn build_observation(
@@ -425,13 +496,15 @@ impl ConfiguredEnvelopeInputs {
 }
 
 fn transitive_identity(
+    pipeline: WorkerV2PipelineV1,
     manifest: &[u8],
     worker: &PinnedWorkerV1,
     providers: &[WorkerInputV1],
     envelope_inputs: Option<&ConfiguredEnvelopeInputs>,
 ) -> WorkerV2ConfigIdentity {
     let mut hash = Sha256::new();
-    update_identity(&mut hash, b"fe2o3-worker-v2-transitive-config-v1");
+    update_identity(&mut hash, b"fe2o3-worker-v2-transitive-config-v2");
+    update_identity(&mut hash, pipeline.environment_value().as_bytes());
     update_identity(&mut hash, manifest);
     let measurement = worker.measurement();
     update_identity(&mut hash, measurement.executable().sha256());
@@ -1052,6 +1125,46 @@ mod tests {
     }
 
     #[test]
+    fn scalar_environment_profile_requires_pipeline_and_exact_unit_selection() {
+        let directory = TestDirectory::new();
+        let path = manifest(&directory);
+        let general = PreparedWorkerV2Config::from_selection(
+            Some(OsStr::new(WORKER_V2_PIPELINE)),
+            Some(path.as_os_str()),
+        )
+        .unwrap()
+        .unwrap();
+        let scalar = PreparedWorkerV2Config::from_selection(
+            Some(OsStr::new(SCALAR_GEMM_V1_PIPELINE)),
+            Some(path.as_os_str()),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_ne!(general.identity(), scalar.identity());
+        assert!(!general.requires_expected_identity());
+        assert!(scalar.requires_expected_identity());
+        assert_eq!(
+            general.compile_environment_profile("kernel", Path::new("src/lib.rs"), &directory.0),
+            None
+        );
+        assert_eq!(
+            scalar.compile_environment_profile("kernel", Path::new("src/lib.rs"), &directory.0),
+            Some(WorkerV2CompileEnvironmentProfileV1::ScalarGemmV1Gfx942)
+        );
+        for (crate_name, source, working_directory) in [
+            ("host", Path::new("src/lib.rs"), directory.0.as_path()),
+            ("kernel", Path::new("src/other.rs"), directory.0.as_path()),
+            ("kernel", Path::new("src/lib.rs"), Path::new("/other")),
+        ] {
+            assert_eq!(
+                scalar.compile_environment_profile(crate_name, source, working_directory),
+                None
+            );
+        }
+    }
+
+    #[test]
     fn admits_only_the_exact_s09_o0_debug_profile() {
         let directory = TestDirectory::new();
         let path = manifest(&directory);
@@ -1065,6 +1178,11 @@ mod tests {
         assert_eq!(
             prepared.source_debug_profile(),
             Some(WorkerV2SourceDebugProfileV1::S09AlphaGfx942O0)
+        );
+        assert!(prepared.requires_expected_identity());
+        assert_eq!(
+            prepared.compile_environment_profile("kernel", Path::new("src/lib.rs"), &directory.0),
+            Some(WorkerV2CompileEnvironmentProfileV1::S09AlphaGfx942O0)
         );
 
         value["link_options"][1]["value"] = Value::String("1".to_owned());

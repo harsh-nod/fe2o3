@@ -41,6 +41,8 @@ pub use model_v2::{
 pub use rustc_args_v2::{
     RUSTC_SEPARATE_VALUE_OPTIONS_V2, RustcArgsErrorV2, RustcCompileInvocationV2, RustcInvocationV2,
     RustcPassthroughInvocationV2, classify_rustc_invocation_v2,
+    is_rustc_codegen_backend_option_value_v2, is_rustc_codegen_backend_selector_v2,
+    is_rustc_option_terminator_v2,
 };
 
 #[cfg(test)]

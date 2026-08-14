@@ -25,6 +25,7 @@ use fe2o3_process_identity::{
 };
 use fe2o3_rustc_invocation::{
     RustcArgsErrorV2, RustcCompileInvocationV2, RustcInvocationV2, classify_rustc_invocation_v2,
+    is_rustc_codegen_backend_selector_v2, is_rustc_option_terminator_v2,
 };
 use fe2o3_worker_v2_bundle::WorkerV2EnvelopeInputsV1;
 use reserved_fe2o3_symbols::{
@@ -39,8 +40,8 @@ use crate::pinned_executable::{PinExecutableError, PinnedExecutable};
 use crate::project::PinnedDirectory;
 use crate::worker_v2::{
     PreparedWorkerV2Config, WORKER_V2_EXPECTED_ID_ENV, WORKER_V2_SOURCE_DEBUG_PROFILE_ENV,
-    WorkerV2BuildObservation, WorkerV2ConfigError, WorkerV2ConfigIdentity,
-    WorkerV2SourceDebugProfileV1,
+    WorkerV2BuildObservation, WorkerV2CompileEnvironmentProfileV1, WorkerV2ConfigError,
+    WorkerV2ConfigIdentity, WorkerV2SourceDebugProfileV1,
 };
 use crate::worker_v2_artifact_container::assemble_recovered_worker_v2_load_envelope_v1;
 #[cfg(feature = "worker-v2-fault-injection-test-only")]
@@ -55,6 +56,8 @@ use crate::{ARTIFACT_CHILD_FD, BACKEND_CHILD_FD, MANAGED_RUSTC_ARGS_ENV};
 
 const HSACO_DIR_ENV: &str = "FE2O3_HSACO_DIR";
 const TARGET_ENV: &str = "FE2O3_TARGET";
+const VERIFY_KERNEL_IR_ENV: &str = "FE2O3_VERIFY_KERNEL_IR";
+const SCALAR_GEMM_V1_PIPELINE: &str = "collected-scalar-gemm-v1";
 const NON_PRODUCTION_REPRODUCTION_RECORD_ENV: &str =
     "FE2O3_NON_PRODUCTION_COMPILER_REPRODUCTION_RECORD_V1";
 const BUILD_SESSION_ENV: &str = "FE2O3_BUILD_SESSION_V1";
@@ -153,6 +156,9 @@ pub(crate) enum BindingWrapperError {
     PreexistingCodegenBackend {
         argument_index: usize,
     },
+    OptionTerminatorBeforeManagedArguments {
+        argument_index: usize,
+    },
     CurrentDirectory(std::io::Error),
     BuildObservation(String),
     WorkerV2Configuration(WorkerV2ConfigError),
@@ -213,6 +219,10 @@ impl fmt::Display for BindingWrapperError {
             Self::PreexistingCodegenBackend { argument_index } => write!(
                 formatter,
                 "managed rustc argv[{argument_index}] contains a preexisting codegen-backend selector"
+            ),
+            Self::OptionTerminatorBeforeManagedArguments { argument_index } => write!(
+                formatter,
+                "managed rustc argv[{argument_index}] is an option terminator; appended compiler options would be positional inputs"
             ),
             Self::CurrentDirectory(error) => {
                 write!(
@@ -279,6 +289,7 @@ impl Error for BindingWrapperError {
             | Self::ChildCapability(_)
             | Self::UninspectableRustcResponseFile { .. }
             | Self::PreexistingCodegenBackend { .. }
+            | Self::OptionTerminatorBeforeManagedArguments { .. }
             | Self::UnsupportedInvocation => None,
             Self::BuildObservation(_) => None,
         }
@@ -388,13 +399,19 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
         Some(directory) => directory.clone(),
         None => std::env::current_dir().map_err(BindingWrapperError::CurrentDirectory)?,
     };
+    let compile_environment_profile = managed_attempt
+        .as_ref()
+        .and_then(ManagedAttempt::compile_environment_profile);
     let pinned_execution_directory = PinnedWorkingDirectoryV3::open(&execution_directory)
         .map_err(|error| BindingWrapperError::BuildObservation(error.to_string()))?;
     let rustc_path = resolve_command_executable(invocation.executable(), &execution_directory)?;
     let pinned_rustc = PinnedExecutable::open(&rustc_path)?;
     let mut command = pinned_rustc.command()?;
-    command.args(invocation.forwarded_args());
-    command.args(managed_rustc_args);
+    append_prepared_rustc_arguments(
+        command.as_command_mut(),
+        invocation.forwarded_args(),
+        &managed_rustc_args,
+    )?;
     pinned_execution_directory.configure_child_fchdir(command.as_command_mut());
     if let Some(capabilities) = &compiler_capabilities {
         capabilities.prepare_command(command.as_command_mut())?;
@@ -436,18 +453,18 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
         }
         Some(_) | None => None,
     };
-    if worker_build_observation.is_some() {
+    if compile_environment_profile.is_some() {
         let managed = managed_attempt.as_ref().ok_or_else(|| {
             BindingWrapperError::BuildObservation(
-                "S09 build observation has no managed build attempt".to_owned(),
+                "reviewed compile environment has no managed build attempt".to_owned(),
             )
         })?;
         let capabilities = compiler_capabilities.as_ref().ok_or_else(|| {
             BindingWrapperError::BuildObservation(
-                "S09 build observation has no compiler capabilities".to_owned(),
+                "reviewed compile environment has no compiler capabilities".to_owned(),
             )
         })?;
-        let private_tmpdir = capabilities.create_s09_private_tmpdir(managed.attempt)?;
+        let private_tmpdir = capabilities.create_reviewed_private_tmpdir(managed.attempt)?;
         command
             .as_command_mut()
             .env("LANG", "C.UTF-8")
@@ -458,16 +475,17 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
         command.as_command_mut(),
         worker_build_observation,
     );
-    let complete_s09_environment = worker_build_observation
-        .is_some()
-        .then(|| materialize_s09_child_environment(command.as_command_mut(), std::env::vars_os()))
-        .transpose()?;
-    let inert_rustc_invocation = complete_s09_environment
+    let complete_reviewed_environment = materialize_reviewed_child_environment(
+        compile_environment_profile,
+        command.as_command_mut(),
+        std::env::vars_os(),
+    )?;
+    let inert_rustc_invocation = complete_reviewed_environment
         .as_ref()
         .map(|environment| {
             let capabilities = compiler_capabilities.as_ref().ok_or_else(|| {
                 BindingWrapperError::BuildObservation(
-                    "S09 invocation capture has no compiler capabilities".to_owned(),
+                    "reviewed invocation capture has no compiler capabilities".to_owned(),
                 )
             })?;
             let capture = InertRustcInvocationCaptureV2::capture(
@@ -487,6 +505,13 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
             Ok::<_, BindingWrapperError>((capture.digest(), capture))
         })
         .transpose()?;
+    if let Some((digest, _)) = inert_rustc_invocation.as_ref()
+        && std::env::var_os("FE2O3_VERBOSE").as_deref() == Some(OsStr::new("1"))
+    {
+        eprintln!(
+            "[cargo-fe2o3] inert prepared RustcInvocationDescriptorV2 observation sha256={digest}; no execution or authority claim"
+        );
+    }
     let protected_source_tree_sha256 = if worker_build_observation.is_some() {
         let source = managed_attempt
             .as_ref()
@@ -520,7 +545,7 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
             *pinned_rustc.sha256(),
             pinned_execution_directory.object_identity(),
             protected_source_tree_sha256.expect("S09 protected source-tree observation exists"),
-            complete_s09_environment
+            complete_reviewed_environment
                 .as_ref()
                 .expect("S09 complete child environment exists"),
         )?;
@@ -875,7 +900,7 @@ fn process_start_time_ticks(pid: u64) -> Result<u64, BindingWrapperError> {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct CompleteS09ChildEnvironmentV2 {
+struct CompleteReviewedChildEnvironmentV2 {
     entries: Vec<(OsString, OsString)>,
 }
 
@@ -909,7 +934,7 @@ impl FixedS09InheritedInputV2 {
     }
 }
 
-impl CompleteS09ChildEnvironmentV2 {
+impl CompleteReviewedChildEnvironmentV2 {
     #[cfg(test)]
     fn from_command(command: &Command) -> Self {
         let mut entries = command
@@ -921,10 +946,26 @@ impl CompleteS09ChildEnvironmentV2 {
     }
 }
 
+fn materialize_reviewed_child_environment(
+    profile: Option<WorkerV2CompileEnvironmentProfileV1>,
+    command: &mut Command,
+    inherited: impl IntoIterator<Item = (OsString, OsString)>,
+) -> Result<Option<CompleteReviewedChildEnvironmentV2>, BindingWrapperError> {
+    match profile {
+        Some(WorkerV2CompileEnvironmentProfileV1::S09AlphaGfx942O0) => {
+            materialize_s09_child_environment(command, inherited).map(Some)
+        }
+        Some(WorkerV2CompileEnvironmentProfileV1::ScalarGemmV1Gfx942) => {
+            materialize_scalar_gemm_v1_child_environment(command, inherited).map(Some)
+        }
+        None => Ok(None),
+    }
+}
+
 fn materialize_s09_child_environment(
     command: &mut Command,
     inherited: impl IntoIterator<Item = (OsString, OsString)>,
-) -> Result<CompleteS09ChildEnvironmentV2, BindingWrapperError> {
+) -> Result<CompleteReviewedChildEnvironmentV2, BindingWrapperError> {
     let inherited = inherited.into_iter().collect::<BTreeMap<_, _>>();
     for name in inherited.keys() {
         if rejected_s09_inherited_environment(name) {
@@ -970,9 +1011,190 @@ fn materialize_s09_child_environment(
     }
     command.env_clear();
     command.envs(&final_environment);
-    Ok(CompleteS09ChildEnvironmentV2 {
+    Ok(CompleteReviewedChildEnvironmentV2 {
         entries: final_environment.into_iter().collect(),
     })
+}
+
+fn materialize_scalar_gemm_v1_child_environment(
+    command: &mut Command,
+    inherited: impl IntoIterator<Item = (OsString, OsString)>,
+) -> Result<CompleteReviewedChildEnvironmentV2, BindingWrapperError> {
+    let inherited = inherited.into_iter().collect::<BTreeMap<_, _>>();
+    for (name, value) in &inherited {
+        let Some(name_text) = name.to_str() else {
+            return Err(BindingWrapperError::BuildObservation(
+                "scalar GEMM child environment contains a non-UTF-8 variable name".to_owned(),
+            ));
+        };
+        if value.to_str().is_none() {
+            return Err(BindingWrapperError::BuildObservation(format!(
+                "scalar GEMM child environment variable {name_text} has a non-UTF-8 value"
+            )));
+        }
+        if rejected_s09_inherited_environment(name) {
+            return Err(BindingWrapperError::BuildObservation(format!(
+                "scalar GEMM child environment rejects inherited variable {name_text}"
+            )));
+        }
+        if name_text.starts_with("FE2O3_") && !reviewed_scalar_inherited_environment(name) {
+            return Err(BindingWrapperError::BuildObservation(format!(
+                "scalar GEMM child environment rejects unreviewed inherited variable {name_text}"
+            )));
+        }
+    }
+
+    let required = |name: &'static str| {
+        inherited.get(OsStr::new(name)).ok_or_else(|| {
+            BindingWrapperError::BuildObservation(format!(
+                "scalar GEMM child environment is missing required {name}"
+            ))
+        })
+    };
+    let manifest_dir = required("CARGO_MANIFEST_DIR")?;
+    if !canonical_absolute_utf8_path(manifest_dir) {
+        return Err(BindingWrapperError::BuildObservation(
+            "scalar GEMM child environment has invalid CARGO_MANIFEST_DIR".to_owned(),
+        ));
+    }
+    if required("FE2O3_CODEGEN_PIPELINE")? != SCALAR_GEMM_V1_PIPELINE {
+        return Err(BindingWrapperError::BuildObservation(
+            "scalar GEMM child environment has changed FE2O3_CODEGEN_PIPELINE".to_owned(),
+        ));
+    }
+    if required(TARGET_ENV)? != "gfx942:xnack-" {
+        return Err(BindingWrapperError::BuildObservation(
+            "scalar GEMM child environment has missing or changed FE2O3_TARGET".to_owned(),
+        ));
+    }
+    let verification = inherited
+        .get(OsStr::new(VERIFY_KERNEL_IR_ENV))
+        .map_or(OsStr::new("0"), OsString::as_os_str);
+    if !matches!(verification.to_str(), Some("0" | "1")) {
+        return Err(BindingWrapperError::BuildObservation(format!(
+            "scalar GEMM child environment has invalid {VERIFY_KERNEL_IR_ENV}"
+        )));
+    }
+
+    let mut final_environment = BTreeMap::from([
+        (OsString::from("CARGO_MANIFEST_DIR"), manifest_dir.clone()),
+        (
+            OsString::from("FE2O3_CODEGEN_PIPELINE"),
+            OsString::from(SCALAR_GEMM_V1_PIPELINE),
+        ),
+        (OsString::from(TARGET_ENV), OsString::from("gfx942:xnack-")),
+        (
+            OsString::from(VERIFY_KERNEL_IR_ENV),
+            verification.to_owned(),
+        ),
+    ]);
+    let explicit = command
+        .get_envs()
+        .map(|(name, value)| (name.to_owned(), value.map(OsString::from)))
+        .collect::<Vec<_>>();
+    for (name, value) in explicit {
+        if !managed_s09_child_environment(&name) {
+            return Err(BindingWrapperError::BuildObservation(format!(
+                "scalar GEMM command has unreviewed explicit environment mutation {name:?}"
+            )));
+        }
+        if name == WORKER_V2_SOURCE_DEBUG_PROFILE_ENV && value.is_some() {
+            return Err(BindingWrapperError::BuildObservation(
+                "scalar GEMM command cannot select an S09 source-debug profile".to_owned(),
+            ));
+        }
+        match value {
+            Some(value) => {
+                final_environment.insert(name, value);
+            }
+            None => {
+                final_environment.remove(&name);
+            }
+        }
+    }
+    validate_scalar_gemm_v1_final_environment(&final_environment)?;
+    command.env_clear();
+    command.envs(&final_environment);
+    Ok(CompleteReviewedChildEnvironmentV2 {
+        entries: final_environment.into_iter().collect(),
+    })
+}
+
+fn reviewed_scalar_inherited_environment(name: &OsStr) -> bool {
+    matches!(
+        os_bytes(name),
+        b"FE2O3_CODEGEN_PIPELINE"
+            | b"FE2O3_TARGET"
+            | b"FE2O3_VERIFY_KERNEL_IR"
+            | b"FE2O3_BACKEND"
+            | b"FE2O3_BINDING_WRAPPER_MODE_V1"
+            | b"FE2O3_MANAGED_RUSTC_ARGS_V1"
+            | b"FE2O3_BUILD_SESSION_V1"
+            | b"FE2O3_CAPABILITY_BROKER_V1"
+            | b"FE2O3_HOST_PASSTHROUGH"
+            | b"FE2O3_WORKER_V2_CONFIG_V2"
+            | b"FE2O3_WORKER_V2_EXPECTED_ID_V1"
+    )
+}
+
+fn canonical_absolute_utf8_path(value: &OsStr) -> bool {
+    let Some(value) = value.to_str() else {
+        return false;
+    };
+    if value.is_empty()
+        || value.len() > 4096
+        || !value.starts_with('/')
+        || value.contains(['\0', '\\'])
+    {
+        return false;
+    }
+    value == "/"
+        || !value[1..]
+            .split('/')
+            .any(|component| component.is_empty() || matches!(component, "." | ".."))
+}
+
+fn validate_scalar_gemm_v1_final_environment(
+    environment: &BTreeMap<OsString, OsString>,
+) -> Result<(), BindingWrapperError> {
+    let required = |name: &'static str| {
+        environment
+            .get(OsStr::new(name))
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| {
+                BindingWrapperError::BuildObservation(format!(
+                    "scalar GEMM final environment is missing valid {name}"
+                ))
+            })
+    };
+    if required(HSACO_DIR_ENV)? != format!("/proc/self/fd/{ARTIFACT_CHILD_FD}") {
+        return Err(BindingWrapperError::BuildObservation(
+            "scalar GEMM final environment has changed FE2O3_HSACO_DIR".to_owned(),
+        ));
+    }
+    let attempt = required(BUILD_ATTEMPT_ENV)?;
+    let attempt = BuildAttempt::from_env_value(attempt).map_err(|_| {
+        BindingWrapperError::BuildObservation(
+            "scalar GEMM final environment has invalid FE2O3_BUILD_ATTEMPT_V1".to_owned(),
+        )
+    })?;
+    if attempt.session() == BuildSession::DIRECT {
+        return Err(BindingWrapperError::BuildObservation(
+            "scalar GEMM final environment has invalid FE2O3_BUILD_ATTEMPT_V1".to_owned(),
+        ));
+    }
+    let backend = required(CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2)?;
+    if backend.len() != 64
+        || backend.bytes().all(|byte| byte == b'0')
+        || !backend
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(BindingWrapperError::BuildObservation(
+            "scalar GEMM final environment has invalid backend observation".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 fn rejected_s09_inherited_environment(name: &OsStr) -> bool {
@@ -1033,7 +1255,7 @@ fn prepared_rustc_command_sha256(
     executable_sha256: [u8; 32],
     current_dir_object: LinuxObjectIdentityV3,
     protected_source_tree_sha256: [u8; 32],
-    environment: &CompleteS09ChildEnvironmentV2,
+    environment: &CompleteReviewedChildEnvironmentV2,
 ) -> Result<[u8; 32], BindingWrapperError> {
     let mut argv = Vec::with_capacity(command.get_args().len() + 1);
     argv.push(configured_argv0.to_owned());
@@ -1191,6 +1413,27 @@ fn managed_rustc_args_from_environment() -> Result<Vec<OsString>, BindingWrapper
     decode_managed_rustc_args(&value)
 }
 
+fn append_prepared_rustc_arguments(
+    command: &mut Command,
+    forwarded_args: &[OsString],
+    managed_rustc_args: &[OsString],
+) -> Result<(), BindingWrapperError> {
+    if !managed_rustc_args.is_empty()
+        && let Some(argument_index) = forwarded_args
+            .iter()
+            .position(|argument| is_rustc_option_terminator_v2(argument))
+    {
+        return Err(
+            BindingWrapperError::OptionTerminatorBeforeManagedArguments {
+                argument_index: argument_index + 1,
+            },
+        );
+    }
+    command.args(forwarded_args);
+    command.args(managed_rustc_args);
+    Ok(())
+}
+
 fn decode_managed_rustc_args(value: &OsStr) -> Result<Vec<OsString>, BindingWrapperError> {
     let fields = os_bytes(value)
         .split(|byte| *byte == 0x1f)
@@ -1204,18 +1447,12 @@ fn decode_managed_rustc_args(value: &OsStr) -> Result<Vec<OsString>, BindingWrap
             "expected exactly four non-empty arguments",
         ));
     }
-    let expected_backend = format!("-Zcodegen-backend=/proc/./self/fd/{BACKEND_CHILD_FD}");
-    if fields[0] != OsStr::new(&expected_backend) {
-        return Err(BindingWrapperError::InvalidManagedRustcArguments(
-            "backend selector is not a fixed procfs descriptor",
-        ));
-    }
-    if fields[1] != "-Zmir-enable-passes=-JumpThreading" || fields[2] != "--cfg" {
+    if fields[0] != "-Zmir-enable-passes=-JumpThreading" || fields[1] != "--cfg" {
         return Err(BindingWrapperError::InvalidManagedRustcArguments(
             "managed compiler options changed",
         ));
     }
-    let generation = os_bytes(&fields[3]);
+    let generation = os_bytes(&fields[2]);
     let prefix = b"fe2o3_codegen_generation=\"";
     if generation.len() != prefix.len() + 32 + 1
         || !generation.starts_with(prefix)
@@ -1226,6 +1463,12 @@ fn decode_managed_rustc_args(value: &OsStr) -> Result<Vec<OsString>, BindingWrap
     {
         return Err(BindingWrapperError::InvalidManagedRustcArguments(
             "generation cfg is noncanonical",
+        ));
+    }
+    let expected_backend = format!("-Zcodegen-backend=/proc/./self/fd/{BACKEND_CHILD_FD}");
+    if fields[3] != OsStr::new(&expected_backend) {
+        return Err(BindingWrapperError::InvalidManagedRustcArguments(
+            "final backend selector is not the fixed brokered procfs descriptor",
         ));
     }
     Ok(fields)
@@ -1239,31 +1482,16 @@ fn reject_uninspectable_rustc_args(argv: &[OsString]) -> Result<(), BindingWrapp
                 argument_index: index,
             });
         }
-        let joined = bytes
-            .strip_prefix(b"-Z")
-            .is_some_and(|value| backend_selector_value(value.strip_prefix(b"=").unwrap_or(value)));
-        let split = bytes == b"-Z"
-            && argv
-                .get(index + 1)
-                .is_some_and(|next| backend_selector_value(os_bytes(next)));
-        if joined || split {
+        if is_rustc_codegen_backend_selector_v2(
+            argument,
+            argv.get(index + 1).map(OsString::as_os_str),
+        ) {
             return Err(BindingWrapperError::PreexistingCodegenBackend {
                 argument_index: index,
             });
         }
     }
     Ok(())
-}
-
-fn backend_selector_value(value: &[u8]) -> bool {
-    [b"codegen-backend".as_slice(), b"codegen_backend".as_slice()]
-        .iter()
-        .any(|name| {
-            value == *name
-                || value
-                    .strip_prefix(*name)
-                    .is_some_and(|rest| rest.starts_with(b"="))
-        })
 }
 
 #[cfg(unix)]
@@ -1295,13 +1523,15 @@ fn validate_expected_worker_v2_identity(
     config: Option<&PreparedWorkerV2Config>,
 ) -> Result<(), BindingWrapperError> {
     let Some(expected) = std::env::var_os(WORKER_V2_EXPECTED_ID_ENV) else {
-        if config
-            .and_then(PreparedWorkerV2Config::source_debug_profile)
-            .is_some()
-        {
+        if let Some(config) = config.filter(|config| config.requires_expected_identity()) {
+            let profile = if config.source_debug_profile().is_some() {
+                "S09"
+            } else {
+                "scalar GEMM"
+            };
             return Err(BindingWrapperError::WorkerV2Configuration(
                 WorkerV2ConfigError::Invalid(format!(
-                    "S09 Worker V2 configuration requires {WORKER_V2_EXPECTED_ID_ENV}"
+                    "{profile} Worker V2 configuration requires {WORKER_V2_EXPECTED_ID_ENV}"
                 )),
             ));
         }
@@ -1362,7 +1592,7 @@ impl CompilerCapabilities {
         *self.backend.sha256()
     }
 
-    fn create_s09_private_tmpdir(
+    fn create_reviewed_private_tmpdir(
         &self,
         attempt: BuildAttempt,
     ) -> Result<PathBuf, BindingWrapperError> {
@@ -1427,6 +1657,7 @@ struct ManagedAttempt {
     producer: ProducerIdentity,
     attempt: BuildAttempt,
     protected_source_path: Option<PathBuf>,
+    compile_environment_profile: Option<WorkerV2CompileEnvironmentProfileV1>,
     worker_v2: Option<ManagedWorkerV2>,
 }
 
@@ -1457,6 +1688,10 @@ impl ManagedAttempt {
             Some(ManagedWorkerV2::Fresh { config, .. }) => config.source_debug_profile(),
             Some(ManagedWorkerV2::Recovery { .. }) | None => None,
         }
+    }
+
+    const fn compile_environment_profile(&self) -> Option<WorkerV2CompileEnvironmentProfileV1> {
+        self.compile_environment_profile
     }
 
     fn protected_source_path(&self) -> Option<&Path> {
@@ -1503,6 +1738,9 @@ fn prepare_managed_attempt(
     current_dir: &std::path::Path,
     output_dir: &Path,
 ) -> Result<ManagedAttempt, BindingWrapperError> {
+    let compile_environment_profile = worker_v2.as_ref().and_then(|config| {
+        config.compile_environment_profile(compile.crate_name(), compile.source_path(), current_dir)
+    });
     let protected_source_path = worker_v2
         .as_ref()
         .and_then(PreparedWorkerV2Config::source_debug_profile)
@@ -1551,6 +1789,7 @@ fn prepare_managed_attempt(
         producer,
         attempt,
         protected_source_path,
+        compile_environment_profile,
         worker_v2,
     })
 }
@@ -2210,22 +2449,27 @@ mod tests {
     use super::{
         BindingWrapperError, BuildExecutableSnapshot,
         CARGO_FE2O3_EXECUTABLE_BUILD_OBSERVATION_ENV_V2, CARGO_METADATA_BUILD_OBSERVATION_ENV_V2,
-        CompileBuildObservationV2, CompleteS09ChildEnvironmentV2,
+        CompileBuildObservationV2, CompleteReviewedChildEnvironmentV2,
         DECLARED_CARGO_EXECUTABLE_BUILD_OBSERVATION_ENV_V2, LLVM_BUILD_IDENTITY_OBSERVATION_ENV_V2,
         LinuxObjectIdentityV3, OBSERVED_PARENT_PID_BUILD_OBSERVATION_ENV_V2,
         OBSERVED_PARENT_START_TIME_BUILD_OBSERVATION_ENV_V2,
         PINNED_CARGO_IMAGE_BUILD_OBSERVATION_ENV_V2, PreparedRustcConsistencyExpectation,
         WORKER_BUILD_IDENTITY_OBSERVATION_ENV_V2, WORKER_CONFIG_BUILD_OBSERVATION_ENV_V2,
-        WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2, canonicalize_rustc_metadata,
-        configure_build_observation_environment, configure_worker_build_observation_environment,
-        decode_managed_rustc_args, derive_build_attempt_input_with_config_identity,
-        is_cargo_stdin_probe, materialize_s09_child_environment, measure_build_executable,
-        observe_pinned_cargo_image_and_parent, ordered_metadata_values,
+        WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2, append_prepared_rustc_arguments,
+        canonicalize_rustc_metadata, configure_build_observation_environment,
+        configure_worker_build_observation_environment, decode_managed_rustc_args,
+        derive_build_attempt_input_with_config_identity, is_cargo_stdin_probe,
+        materialize_reviewed_child_environment, materialize_s09_child_environment,
+        materialize_scalar_gemm_v1_child_environment, measure_build_executable,
+        observe_pinned_cargo_image_and_parent, ordered_metadata_values, os_bytes,
         prepared_rustc_command_sha256, process_start_time_ticks, reject_uninspectable_rustc_args,
         resolve_command_executable_with_path,
     };
+    use crate::inert_rustc_invocation_capture::InertRustcInvocationCaptureV2;
     use crate::pinned_executable::PinnedExecutable;
-    use crate::worker_v2::{WorkerV2BuildObservation, WorkerV2ConfigIdentity};
+    use crate::worker_v2::{
+        WorkerV2BuildObservation, WorkerV2CompileEnvironmentProfileV1, WorkerV2ConfigIdentity,
+    };
     use crate::worker_v2_restart::{
         WorkerV2PublicationKindV1, WorkerV2ResumeStoreV1,
         restart_admission_commitment_with_inputs_v1,
@@ -2249,6 +2493,16 @@ mod tests {
 
     fn args(values: &[&str]) -> Vec<OsString> {
         values.iter().map(OsString::from).collect()
+    }
+
+    fn command_with_production_managed_arguments(forwarded: &[&str]) -> Command {
+        let encoded =
+            crate::generation::managed_rustc_args(Path::new("/proc/./self/fd/198"), [0x12; 16])
+                .unwrap();
+        let managed = decode_managed_rustc_args(&encoded).unwrap();
+        let mut command = Command::new("/proc/self/fd/9");
+        append_prepared_rustc_arguments(&mut command, &args(forwarded), &managed).unwrap();
+        command
     }
 
     #[test]
@@ -2653,7 +2907,7 @@ mod tests {
                     }
                 }
             }
-            let complete_environment = CompleteS09ChildEnvironmentV2::from_command(&command);
+            let complete_environment = CompleteReviewedChildEnvironmentV2::from_command(&command);
             prepared_rustc_command_sha256(
                 &command,
                 OsStr::new(argv0),
@@ -2670,10 +2924,10 @@ mod tests {
             "--crate-name",
             "unit",
             "unit.rs",
-            "-Zcodegen-backend=/proc/./self/fd/198",
             "-Zmir-enable-passes=-JumpThreading",
             "--cfg",
             "fe2o3_codegen_generation=\"0123456789abcdef0123456789abcdef\"",
+            "-Zcodegen-backend=/proc/./self/fd/198",
         ]
         .map(String::from);
         let environment = [
@@ -2900,7 +3154,7 @@ mod tests {
 
         let mut removed = Command::new("/toolchain/rustc");
         removed.current_dir("/workspace").env_remove("OPTIONAL");
-        let removed_environment = CompleteS09ChildEnvironmentV2::from_command(&removed);
+        let removed_environment = CompleteReviewedChildEnvironmentV2::from_command(&removed);
         let removed = prepared_rustc_command_sha256(
             &removed,
             OsStr::new("/toolchain/rustc"),
@@ -2913,7 +3167,7 @@ mod tests {
         .unwrap();
         let mut empty = Command::new("/toolchain/rustc");
         empty.current_dir("/workspace").env("OPTIONAL", "");
-        let empty_environment = CompleteS09ChildEnvironmentV2::from_command(&empty);
+        let empty_environment = CompleteReviewedChildEnvironmentV2::from_command(&empty);
         let empty = prepared_rustc_command_sha256(
             &empty,
             OsStr::new("/toolchain/rustc"),
@@ -2928,6 +3182,300 @@ mod tests {
             removed, empty,
             "removed and empty environments were conflated"
         );
+    }
+
+    #[test]
+    fn fresh_s09_command_capture_uses_production_argument_order_and_path() {
+        let mut command = command_with_production_managed_arguments(&[
+            "--crate-name",
+            "s09_alpha",
+            "/workspace/src/lib.rs",
+        ]);
+        command
+            .env("LANG", "C.UTF-8")
+            .env("PATH", "/usr/bin")
+            .env("TMPDIR", "/proc/self/fd/197/private")
+            .env("FE2O3_HSACO_DIR", "/proc/self/fd/197")
+            .env("FE2O3_BUILD_ATTEMPT_V1", "attempt")
+            .env(
+                "FE2O3_CODEGEN_BACKEND_BUILD_OBSERVATION_V2",
+                "44".repeat(32),
+            );
+        let inherited = [
+            ("CARGO_MANIFEST_DIR", "/workspace"),
+            ("FE2O3_CODEGEN_PIPELINE", "kernel-ir-worker-v2"),
+            ("FE2O3_TARGET", "gfx942:xnack-"),
+        ]
+        .map(|(name, value)| (OsString::from(name), OsString::from(value)));
+        let complete = materialize_reviewed_child_environment(
+            Some(WorkerV2CompileEnvironmentProfileV1::S09AlphaGfx942O0),
+            &mut command,
+            inherited,
+        )
+        .unwrap()
+        .unwrap();
+        let capture = InertRustcInvocationCaptureV2::capture(
+            &command,
+            OsStr::new("/toolchains/rustc"),
+            Path::new("/workspace"),
+            &complete.entries,
+            [0x33; 32],
+            [0x44; 32],
+        )
+        .unwrap();
+        let argv = capture.descriptor().rustc().argv().collect::<Vec<_>>();
+
+        assert_eq!(
+            argv.last().copied(),
+            Some("-Zcodegen-backend=/proc/./self/fd/198")
+        );
+        assert_eq!(
+            argv.iter()
+                .filter(|argument| argument.starts_with("-Zcodegen-backend="))
+                .count(),
+            1
+        );
+        assert_eq!(
+            capture.descriptor().codegen_backend_path(),
+            "/proc/./self/fd/198"
+        );
+    }
+
+    #[test]
+    fn ordinary_command_keeps_the_rustc_compatible_brokered_selector() {
+        let command = command_with_production_managed_arguments(&[
+            "--crate-name",
+            "ordinary",
+            "/workspace/src/lib.rs",
+        ]);
+        let arguments = command.get_args().collect::<Vec<_>>();
+
+        assert_eq!(
+            arguments.last().copied(),
+            Some(OsStr::new("-Zcodegen-backend=/proc/./self/fd/198"))
+        );
+        assert_eq!(
+            arguments
+                .iter()
+                .filter(|argument| os_bytes(argument).starts_with(b"-Zcodegen-backend="))
+                .count(),
+            1
+        );
+    }
+
+    fn scalar_environment() -> Vec<(OsString, OsString)> {
+        [
+            ("CARGO_MANIFEST_DIR", "/workspace/scalar"),
+            ("FE2O3_CODEGEN_PIPELINE", "collected-scalar-gemm-v1"),
+            ("FE2O3_TARGET", "gfx942:xnack-"),
+            ("FE2O3_VERIFY_KERNEL_IR", "1"),
+            ("FE2O3_BACKEND", "/outer/backend.so"),
+            ("FE2O3_BINDING_WRAPPER_MODE_V1", "1"),
+            ("FE2O3_MANAGED_RUSTC_ARGS_V1", "consumed"),
+            ("FE2O3_BUILD_SESSION_V1", "consumed"),
+            ("FE2O3_CAPABILITY_BROKER_V1", "consumed"),
+            ("FE2O3_HOST_PASSTHROUGH", "0"),
+            ("FE2O3_WORKER_V2_CONFIG_V2", "/outer/config.json"),
+            ("FE2O3_WORKER_V2_EXPECTED_ID_V1", "consumed"),
+            ("HOME", "/discarded/home"),
+            ("CARGO_PKG_NAME", "discarded-package"),
+        ]
+        .map(|(name, value)| (OsString::from(name), OsString::from(value)))
+        .into()
+    }
+
+    fn scalar_command() -> Command {
+        let attempt = format!("1:{}:{}", "11".repeat(16), "22".repeat(32));
+        let mut command = command_with_production_managed_arguments(&[
+            "--crate-name",
+            "fe2o3_scalar_gemm_v1",
+            "/workspace/scalar/src/lib.rs",
+        ]);
+        command
+            .env("LANG", "C.UTF-8")
+            .env("PATH", "/usr/bin")
+            .env("TMPDIR", "/proc/self/fd/197/private")
+            .env("FE2O3_HSACO_DIR", "/proc/self/fd/197")
+            .env("FE2O3_BUILD_ATTEMPT_V1", attempt)
+            .env("FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2", "33".repeat(32))
+            .env(
+                "FE2O3_CODEGEN_BACKEND_BUILD_OBSERVATION_V2",
+                "44".repeat(32),
+            )
+            .env("FE2O3_CRATE_BINDING_ID_V1", "55".repeat(32))
+            .env_remove("FE2O3_WORKER_V2_SOURCE_DEBUG_PROFILE_V1");
+        command
+    }
+
+    #[test]
+    fn scalar_environment_is_closed_and_available_to_inert_capture() {
+        let mut command = scalar_command();
+        let complete =
+            materialize_scalar_gemm_v1_child_environment(&mut command, scalar_environment())
+                .unwrap();
+        let effective = command
+            .get_envs()
+            .filter_map(|(name, value)| value.map(|value| (name, value)))
+            .collect::<std::collections::BTreeMap<_, _>>();
+
+        assert_eq!(
+            effective.get(OsStr::new("FE2O3_CODEGEN_PIPELINE")),
+            Some(&OsStr::new("collected-scalar-gemm-v1"))
+        );
+        assert_eq!(
+            effective.get(OsStr::new("FE2O3_TARGET")),
+            Some(&OsStr::new("gfx942:xnack-"))
+        );
+        assert_eq!(
+            effective.get(OsStr::new("FE2O3_VERIFY_KERNEL_IR")),
+            Some(&OsStr::new("1"))
+        );
+        assert_eq!(
+            effective.get(OsStr::new("FE2O3_HSACO_DIR")),
+            Some(&OsStr::new("/proc/self/fd/197"))
+        );
+        assert!(effective.contains_key(OsStr::new("FE2O3_BUILD_ATTEMPT_V1")));
+        assert!(effective.contains_key(OsStr::new("FE2O3_CODEGEN_BACKEND_BUILD_OBSERVATION_V2")));
+        for discarded in [
+            "HOME",
+            "CARGO_PKG_NAME",
+            "FE2O3_BACKEND",
+            "FE2O3_CAPABILITY_BROKER_V1",
+            "FE2O3_WORKER_V2_CONFIG_V2",
+        ] {
+            assert!(!effective.contains_key(OsStr::new(discarded)));
+        }
+
+        let capture = InertRustcInvocationCaptureV2::capture(
+            &command,
+            OsStr::new("/toolchains/rustc"),
+            Path::new("/workspace/scalar"),
+            &complete.entries,
+            [0x66; 32],
+            [0x44; 32],
+        )
+        .unwrap();
+        assert_eq!(capture.descriptor().amd_target(), "gfx942:xnack-");
+        assert_eq!(
+            capture.descriptor().artifact_output_directory(),
+            "/proc/self/fd/197"
+        );
+        assert!(capture.descriptor().verification_required());
+        let argv = capture.descriptor().rustc().argv().collect::<Vec<_>>();
+        assert_eq!(
+            argv.last().copied(),
+            Some("-Zcodegen-backend=/proc/./self/fd/198")
+        );
+        assert_eq!(
+            argv.iter()
+                .filter(|argument| argument.starts_with("-Zcodegen-backend="))
+                .count(),
+            1
+        );
+
+        let mut disabled = scalar_environment();
+        disabled.retain(|(name, _)| name != "FE2O3_VERIFY_KERNEL_IR");
+        let mut disabled_command = scalar_command();
+        materialize_scalar_gemm_v1_child_environment(&mut disabled_command, disabled).unwrap();
+        assert_eq!(
+            disabled_command
+                .get_envs()
+                .find(|(name, _)| *name == OsStr::new("FE2O3_VERIFY_KERNEL_IR"))
+                .and_then(|(_, value)| value),
+            Some(OsStr::new("0"))
+        );
+    }
+
+    #[test]
+    fn scalar_environment_rejects_secrets_and_unreviewed_fe2o3_controls() {
+        for name in [
+            "AWS_SECRET_ACCESS_KEY",
+            "PRIVATE_TOKEN",
+            "FE2O3_VERBOSE",
+            "FE2O3_UNREVIEWED_COMPILER_CONTROL",
+        ] {
+            let mut inherited = scalar_environment();
+            inherited.push((OsString::from(name), OsString::from("not-forwarded")));
+            let error =
+                materialize_scalar_gemm_v1_child_environment(&mut scalar_command(), inherited)
+                    .unwrap_err();
+            assert!(error.to_string().contains(name));
+        }
+    }
+
+    #[test]
+    fn scalar_environment_rejects_missing_and_changed_target() {
+        let mut missing = scalar_environment();
+        missing.retain(|(name, _)| name != "FE2O3_TARGET");
+        assert!(
+            materialize_scalar_gemm_v1_child_environment(&mut scalar_command(), missing).is_err()
+        );
+
+        let mut changed = scalar_environment();
+        changed
+            .iter_mut()
+            .find(|(name, _)| name == "FE2O3_TARGET")
+            .unwrap()
+            .1 = OsString::from("gfx942:xnack+");
+        assert!(
+            materialize_scalar_gemm_v1_child_environment(&mut scalar_command(), changed).is_err()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scalar_environment_rejects_non_utf8_names_and_values() {
+        use std::os::unix::ffi::OsStringExt as _;
+
+        let mut name = scalar_environment();
+        name.push((OsString::from_vec(vec![0xff]), OsString::from("value")));
+        assert!(materialize_scalar_gemm_v1_child_environment(&mut scalar_command(), name).is_err());
+
+        let mut value = scalar_environment();
+        value.push((OsString::from("IGNORED"), OsString::from_vec(vec![0xff])));
+        assert!(
+            materialize_scalar_gemm_v1_child_environment(&mut scalar_command(), value).is_err()
+        );
+    }
+
+    #[test]
+    fn scalar_environment_rejects_explicit_mutation() {
+        for (name, value) in [
+            ("CUSTOM_ENV_MACRO_INPUT", "unsupported"),
+            ("FE2O3_TARGET", "gfx1100"),
+            ("FE2O3_WORKER_V2_SOURCE_DEBUG_PROFILE_V1", "s09"),
+        ] {
+            let mut command = scalar_command();
+            command.env(name, value);
+            let error =
+                materialize_scalar_gemm_v1_child_environment(&mut command, scalar_environment())
+                    .unwrap_err();
+            assert!(error.to_string().contains(name) || error.to_string().contains("S09"));
+        }
+    }
+
+    #[test]
+    fn ordinary_compile_environment_is_not_inspected_or_changed() {
+        let mut command = Command::new("/toolchains/rustc");
+        command
+            .arg("--crate-name=ordinary")
+            .env("ORDINARY_EXPLICIT_INPUT", "preserved");
+        let before = format!("{command:?}");
+        let result = materialize_reviewed_child_environment(
+            None,
+            &mut command,
+            [
+                (OsString::from("PRIVATE_TOKEN"), OsString::from("ignored")),
+                (
+                    OsString::from("FE2O3_UNREVIEWED_COMPILER_CONTROL"),
+                    OsString::from("ignored"),
+                ),
+            ],
+        )
+        .unwrap();
+
+        assert!(result.is_none());
+        assert_eq!(format!("{command:?}"), before);
     }
 
     #[test]
@@ -3006,7 +3554,7 @@ mod tests {
             .env("PATH", "/reviewed/bin");
         let mut expectation = PreparedRustcConsistencyExpectation::attach(&mut command).unwrap();
         let before = format!("{command:?}");
-        let complete_environment = CompleteS09ChildEnvironmentV2::from_command(&command);
+        let complete_environment = CompleteReviewedChildEnvironmentV2::from_command(&command);
         let digest = prepared_rustc_command_sha256(
             &command,
             OsStr::new("/toolchain/rustc"),
@@ -3038,20 +3586,30 @@ mod tests {
     }
 
     #[test]
-    fn managed_rustc_arguments_are_exact_and_canonical() {
+    fn managed_rustc_arguments_are_exact_and_brokered() {
         let value = OsString::from(
-            "-Zcodegen-backend=/proc/./self/fd/198\x1f-Zmir-enable-passes=-JumpThreading\x1f--cfg\x1ffe2o3_codegen_generation=\"0123456789abcdef0123456789abcdef\"",
+            "-Zmir-enable-passes=-JumpThreading\x1f--cfg\x1ffe2o3_codegen_generation=\"0123456789abcdef0123456789abcdef\"\x1f-Zcodegen-backend=/proc/./self/fd/198",
         );
         let decoded = decode_managed_rustc_args(&value).unwrap();
         assert_eq!(decoded.len(), 4);
+        assert_eq!(
+            decoded.last().map(OsString::as_os_str),
+            Some(OsStr::new("-Zcodegen-backend=/proc/./self/fd/198"))
+        );
 
         for invalid in [
             OsString::from(""),
             OsString::from(
-                "-Zcodegen-backend=/tmp/backend\x1f-Zmir-enable-passes=-JumpThreading\x1f--cfg\x1ffe2o3_codegen_generation=\"0123456789abcdef0123456789abcdef\"",
+                "-Zmir-enable-passes=-JumpThreading\x1f--cfg\x1ffe2o3_codegen_generation=\"0123456789abcdef0123456789abcdef\"\x1f-Zcodegen-backend=/tmp/backend",
             ),
             OsString::from(
-                "-Zcodegen-backend=/proc/./self/fd/198\x1f-Zmir-enable-passes=-JumpThreading\x1f--cfg\x1ffe2o3_codegen_generation=\"ABCDEF0123456789abcdef0123456789\"",
+                "-Zmir-enable-passes=-JumpThreading\x1f--cfg\x1ffe2o3_codegen_generation=\"ABCDEF0123456789abcdef0123456789\"\x1f-Zcodegen-backend=/proc/self/fd/198",
+            ),
+            OsString::from(
+                "-Zcodegen-backend=/proc/./self/fd/198\x1f-Zmir-enable-passes=-JumpThreading\x1f--cfg\x1ffe2o3_codegen_generation=\"0123456789abcdef0123456789abcdef\"",
+            ),
+            OsString::from(
+                "-Zmir-enable-passes=-JumpThreading\x1f--cfg\x1ffe2o3_codegen_generation=\"0123456789abcdef0123456789abcdef\"\x1f-Zcodegen-backend=/proc/self/fd/198",
             ),
         ] {
             assert!(decode_managed_rustc_args(&invalid).is_err());
@@ -3059,10 +3617,29 @@ mod tests {
     }
 
     #[test]
+    fn managed_rustc_arguments_reject_an_option_terminator_before_mutation() {
+        let mut command = Command::new("/toolchain/rustc");
+        let forwarded = args(&["--crate-name", "unit", "unit.rs", "--"]);
+        let managed = args(&["-Zcodegen-backend=/proc/./self/fd/198"]);
+
+        assert!(matches!(
+            append_prepared_rustc_arguments(&mut command, &forwarded, &managed),
+            Err(BindingWrapperError::OptionTerminatorBeforeManagedArguments { argument_index: 4 })
+        ));
+        assert_eq!(command.get_args().count(), 0);
+    }
+
+    #[test]
     fn cargo_rustflags_cannot_select_a_backend_or_hide_in_response_files() {
         for argv in [
             args(&["rustc", "unit.rs", "-Zcodegen-backend=/tmp/evil.so"]),
+            args(&["rustc", "unit.rs", "-Zcodegen_backend=/tmp/evil.so"]),
+            args(&["rustc", "unit.rs", "-Z=codegen-backend=/tmp/evil.so"]),
+            args(&["rustc", "unit.rs", "-Z=codegen_backend=/tmp/evil.so"]),
+            args(&["rustc", "unit.rs", "-Z", "codegen-backend=/tmp/evil.so"]),
             args(&["rustc", "unit.rs", "-Z", "codegen_backend=/tmp/evil.so"]),
+            args(&["rustc", "unit.rs", "-Z", "codegen-backend", "/tmp/evil.so"]),
+            args(&["rustc", "unit.rs", "-Zcodegen-backend", "/tmp/evil.so"]),
             args(&["rustc", "unit.rs", "@response"]),
         ] {
             assert!(reject_uninspectable_rustc_args(&argv).is_err());

@@ -72,6 +72,55 @@ const PASSTHROUGH_PRINT_KINDS_V2: &[&[u8]] = &[
     b"sysroot",
 ];
 
+/// Reports whether one rustc argument begins a codegen-backend selector.
+///
+/// This recognizes the joined and split hyphen/underscore spellings accepted
+/// by rustc's `-Z` option grammar, plus the fail-closed `-Z=...` spelling used
+/// by the wrappers' rejection policy. It is a syntax recognizer, not an
+/// authority or an assertion that rustc will accept the complete invocation.
+#[must_use]
+pub fn is_rustc_codegen_backend_selector_v2(argument: &OsStr, following: Option<&OsStr>) -> bool {
+    let bytes = argument.as_encoded_bytes();
+    if bytes == b"-Z" {
+        return following.is_some_and(is_rustc_codegen_backend_option_value_v2);
+    }
+
+    bytes.strip_prefix(b"-Z").is_some_and(|value| {
+        is_rustc_codegen_backend_option_value_bytes_v2(value.strip_prefix(b"=").unwrap_or(value))
+    })
+}
+
+/// Reports whether one value names rustc's codegen-backend unstable option.
+///
+/// Both rustc spellings are recognized, with or without an assigned value.
+/// Callers use this together with [`is_rustc_codegen_backend_selector_v2`] to
+/// reject ambiguous or duplicate backend selection without decoding paths.
+#[must_use]
+pub fn is_rustc_codegen_backend_option_value_v2(value: &OsStr) -> bool {
+    is_rustc_codegen_backend_option_value_bytes_v2(value.as_encoded_bytes())
+}
+
+/// Reports whether one argument is rustc's option terminator.
+///
+/// Rustc treats every following token as an input path, including tokens that
+/// otherwise spell options. A wrapper that appends managed options must reject
+/// this token instead of recording those options as semantically effective.
+#[must_use]
+pub fn is_rustc_option_terminator_v2(argument: &OsStr) -> bool {
+    argument == "--"
+}
+
+fn is_rustc_codegen_backend_option_value_bytes_v2(value: &[u8]) -> bool {
+    [b"codegen-backend".as_slice(), b"codegen_backend".as_slice()]
+        .iter()
+        .any(|name| {
+            value == *name
+                || value
+                    .strip_prefix(*name)
+                    .is_some_and(|rest| rest.starts_with(b"="))
+        })
+}
+
 /// The lossless classification of one rustc argument vector.
 ///
 /// Terminal and query invocations are passthrough forms. Their arguments may
@@ -848,6 +897,46 @@ mod tests {
 
     fn args(values: &[&str]) -> Vec<OsString> {
         values.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn codegen_backend_selector_grammar_covers_rustc_spellings() {
+        for (argument, following) in [
+            ("-Zcodegen-backend=/backend.so", None),
+            ("-Zcodegen_backend=/backend.so", None),
+            ("-Z=codegen-backend=/backend.so", None),
+            ("-Z=codegen_backend=/backend.so", None),
+            ("-Zcodegen-backend", None),
+            ("-Zcodegen_backend", None),
+            ("-Z", Some("codegen-backend=/backend.so")),
+            ("-Z", Some("codegen_backend=/backend.so")),
+            ("-Z", Some("codegen-backend")),
+            ("-Z", Some("codegen_backend")),
+        ] {
+            assert!(
+                is_rustc_codegen_backend_selector_v2(
+                    OsStr::new(argument),
+                    following.map(OsStr::new),
+                ),
+                "missed {argument:?} {following:?}"
+            );
+        }
+
+        for (argument, following) in [
+            ("-Ccodegen-units=1", None),
+            ("-Zunstable-options", None),
+            ("-Z", Some("mir-opt-level=2")),
+            ("codegen-backend=/backend.so", None),
+            ("--codegen-backend=/backend.so", None),
+        ] {
+            assert!(
+                !is_rustc_codegen_backend_selector_v2(
+                    OsStr::new(argument),
+                    following.map(OsStr::new),
+                ),
+                "misclassified {argument:?} {following:?}"
+            );
+        }
     }
 
     fn expect_terminal(argv: &[OsString]) -> RustcPassthroughInvocationV2<'_> {

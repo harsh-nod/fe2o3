@@ -29,11 +29,39 @@ fn fixture() -> RustcInvocationDescriptorV2 {
         .expect("valid descriptor")
 }
 
+fn procfd_fixture() -> RustcInvocationDescriptorV2 {
+    let mut descriptor = fixture();
+    *descriptor.rustc.argv.last_mut().unwrap() =
+        crate::model_v2::Argument::new("-Zcodegen-backend=/proc/./self/fd/198").unwrap();
+    revalidate(&descriptor).expect("valid procfd codegen backend capability")
+}
+
 fn find(bytes: &[u8], needle: &[u8]) -> usize {
     bytes
         .windows(needle.len())
         .position(|window| window == needle)
         .expect("needle occurs in fixture")
+}
+
+fn replace_encoded_argument(bytes: &[u8], original: &str, replacement: &str) -> Vec<u8> {
+    let offset = find(bytes, original.as_bytes());
+    let length_offset = offset.checked_sub(4).expect("argument length prefix");
+    assert_eq!(
+        u32::from_le_bytes(bytes[length_offset..offset].try_into().unwrap()) as usize,
+        original.len()
+    );
+
+    let mut replaced = bytes.to_vec();
+    replaced.splice(
+        length_offset..offset + original.len(),
+        (replacement.len() as u32)
+            .to_le_bytes()
+            .into_iter()
+            .chain(replacement.bytes()),
+    );
+    let replaced_len = replaced.len() as u32;
+    replaced[12..16].copy_from_slice(&replaced_len.to_le_bytes());
+    replaced
 }
 
 fn decode_error(bytes: &[u8]) -> DecodeError {
@@ -78,6 +106,148 @@ fn full_round_trip_reencodes_byte_identically() {
     );
     assert!(decoded.verification_required());
     assert_eq!(decoded.compile_environment().entries().len(), 5);
+}
+
+#[test]
+fn procfd_codegen_backend_round_trip_preserves_exact_canonical_wire_bytes() {
+    let descriptor = procfd_fixture();
+    let encoded = encode_descriptor_v2(&descriptor).expect("encode procfd descriptor");
+    let decoded = decode_descriptor_v2(&encoded).expect("decode procfd descriptor");
+
+    assert_eq!(decoded, descriptor);
+    assert_eq!(decoded.codegen_backend_path(), "/proc/./self/fd/198");
+    assert_eq!(encode_descriptor_v2(&decoded).unwrap(), encoded);
+}
+
+#[test]
+fn procfd_codegen_backend_codec_mutations_fail_closed() {
+    const ORIGINAL: &str = "-Zcodegen-backend=/proc/./self/fd/198";
+    let encoded = encode_descriptor_v2(&procfd_fixture()).expect("encode procfd descriptor");
+
+    for path in [
+        "/proc/./self/fd/",
+        "/proc/./self/fd/0",
+        "/proc/./self/fd/1",
+        "/proc/./self/fd/2",
+        "/proc/./self/fd/3",
+        "/proc/./self/fd/197",
+        "/proc/./self/fd/199",
+        "/proc/./self/fd/00",
+        "/proc/./self/fd/0198",
+        "/proc/./self/fd/+198",
+        "/proc/./self/fd/-1",
+        "/proc/./self/fd/not-a-fd",
+        "/proc/./self/fd/198.so",
+        "/proc/./self/fd/198/extra",
+        "/proc/./self/fd//198",
+        "/proc/../self/fd/198",
+        "/proc/././self/fd/198",
+        "/proc/../../self/fd/198",
+        "/proc/self/fd/198",
+        "/proc/self/fd/0",
+        "/proc/self/fd/1",
+        "/proc/self/fd/2",
+        "/proc/thread-self/fd/198",
+        "/proc/thread-self/fd/0",
+        "/proc/thread-self/fd/1",
+        "/proc/thread-self/fd/2",
+        "/proc/1/fd/198",
+        "/proc/self/fd/../fd/198",
+        "/proc//self/fd/198",
+        "/proc/./self//fd/198",
+        "/proc/./self/fd/198/",
+        "/dev/fd/198",
+        "/dev/fd/0",
+        "/dev/fd/1",
+        "/dev/fd/2",
+        "/dev/fd/198/extra",
+        "/dev/fd",
+        "/dev/stdin",
+        "/dev/stdout",
+        "/dev/stderr",
+        "/dev/stdin/0",
+        "/dev/stdout/1",
+        "/dev/stderr/2",
+        "/dev/./fd/198",
+        "/./proc/./self/fd/198",
+        "//proc/./self/fd/198",
+        "/proc/./self/fd/2147483648",
+        "/proc/./self/fd/18446744073709551616",
+    ] {
+        let replacement = format!("-Zcodegen-backend={path}");
+        let mutated = replace_encoded_argument(&encoded, ORIGINAL, &replacement);
+        assert!(
+            matches!(
+                decode_error(&mutated),
+                DecodeError::Validation(ValidationError::InvalidPath {
+                    field: "codegen backend path"
+                })
+            ),
+            "accepted malformed procfd capability {path}"
+        );
+    }
+}
+
+#[test]
+fn ordinary_non_proc_backend_pathnames_remain_distinct_from_fd_aliases() {
+    for path in [
+        "/opt/fe2o3/backend.so",
+        "/dev/stdin-backend.so",
+        "/dev/stdout-backend.so",
+        "/dev/stderr-backend.so",
+        "/dev/fd-backend.so",
+        "/proc-backend.so",
+    ] {
+        let mut descriptor = fixture();
+        *descriptor.rustc.argv.last_mut().unwrap() =
+            crate::model_v2::Argument::new(format!("-Zcodegen-backend={path}")).unwrap();
+        assert!(
+            revalidate(&descriptor).is_ok(),
+            "rejected ordinary backend pathname {path}"
+        );
+    }
+}
+
+#[test]
+fn procfd_capability_spelling_is_backend_selector_only() {
+    assert!(RustcUnitV2::new("/proc/./self/fd/198", vec!["/rustc".into()]).is_err());
+
+    let base = procfd_fixture();
+    let mut argv_zero = base.clone();
+    argv_zero.rustc.argv[0] = crate::model_v2::Argument::new("/proc/./self/fd/198").unwrap();
+    assert!(revalidate(&argv_zero).is_err());
+
+    let mut output = base;
+    output
+        .compile_environment
+        .entries
+        .iter_mut()
+        .find(|entry| entry.key.as_str() == "FE2O3_HSACO_DIR")
+        .unwrap()
+        .value = crate::model_v2::EnvironmentValue::new("/proc/./self/fd/198").unwrap();
+    assert!(revalidate(&output).is_err());
+
+    let base = procfd_fixture();
+    for argument in [
+        "/proc/./self/fd/198",
+        "--extern=backend=/proc/./self/fd/198",
+        "--cfg=path=\"/proc/./self/fd/198\"",
+    ] {
+        let mut outside_selector = base.clone();
+        outside_selector
+            .rustc
+            .argv
+            .insert(1, crate::model_v2::Argument::new(argument).unwrap());
+        assert!(
+            revalidate(&outside_selector).is_err(),
+            "accepted procfd capability outside the backend selector: {argument}"
+        );
+    }
+
+    let mut environment = base;
+    environment.compile_environment.entries[0].value =
+        crate::model_v2::EnvironmentValue::new("/proc/./self/fd/198").unwrap();
+    assert!(revalidate(&environment).is_err());
 }
 
 #[test]
@@ -233,12 +403,29 @@ fn backend_assignment_is_a_unique_canonical_final_argument() {
     missing.rustc.argv.pop();
     assert!(revalidate(&missing).is_err());
 
-    let mut duplicate = base.clone();
-    duplicate.rustc.argv.insert(
-        1,
-        crate::model_v2::Argument::new("-Zcodegen-backend=/opt/other.so").unwrap(),
-    );
-    assert!(revalidate(&duplicate).is_err());
+    for duplicate in [
+        vec!["-Zcodegen-backend=/opt/other.so"],
+        vec!["-Zcodegen_backend=/opt/other.so"],
+        vec!["-Z=codegen-backend=/opt/other.so"],
+        vec!["-Z=codegen_backend=/opt/other.so"],
+        vec!["-Z", "codegen-backend=/opt/other.so"],
+        vec!["-Z", "codegen_backend=/opt/other.so"],
+        vec!["-Z", "codegen-backend", "/opt/other.so"],
+        vec!["-Z", "codegen_backend", "/opt/other.so"],
+        vec!["-Zcodegen-backend", "/opt/other.so"],
+        vec!["-Zcodegen_backend", "/opt/other.so"],
+        vec!["codegen-backend=/opt/other.so"],
+        vec!["codegen_backend=/opt/other.so"],
+    ] {
+        let mut changed = base.clone();
+        for argument in duplicate.into_iter().rev() {
+            changed
+                .rustc
+                .argv
+                .insert(1, crate::model_v2::Argument::new(argument).unwrap());
+        }
+        assert!(revalidate(&changed).is_err());
+    }
 
     let mut separate = base.clone();
     separate.rustc.argv.pop();
@@ -251,6 +438,73 @@ fn backend_assignment_is_a_unique_canonical_final_argument() {
         .argv
         .push(crate::model_v2::Argument::new("codegen-backend=/opt/fe2o3/backend.so").unwrap());
     assert!(revalidate(&separate).is_err());
+
+    for replacement in [
+        "-Zcodegen_backend=/opt/fe2o3/backend.so",
+        "-Z=codegen-backend=/opt/fe2o3/backend.so",
+        "-Z=codegen_backend=/opt/fe2o3/backend.so",
+        "codegen-backend=/opt/fe2o3/backend.so",
+    ] {
+        let mut changed = base.clone();
+        *changed.rustc.argv.last_mut().unwrap() =
+            crate::model_v2::Argument::new(replacement).unwrap();
+        assert!(revalidate(&changed).is_err(), "accepted {replacement}");
+    }
+}
+
+#[test]
+fn option_terminator_before_managed_backend_is_rejected() {
+    let mut changed = fixture();
+    changed
+        .rustc
+        .argv
+        .insert(7, crate::model_v2::Argument::new("--").unwrap());
+    assert!(revalidate(&changed).is_err());
+
+    const FINAL: &str = "-Zcodegen-backend=/opt/fe2o3/librustc_codegen_fe2o3.so";
+    let encoded = encode_descriptor_v2(&fixture()).unwrap();
+    let mutated = replace_encoded_argument(&encoded, "-Cmetadata=0123", "--");
+    assert!(matches!(decode_error(&mutated), DecodeError::Validation(_)));
+
+    let replaced = replace_encoded_argument(&encoded, FINAL, "--");
+    assert!(matches!(
+        decode_error(&replaced),
+        DecodeError::Validation(_)
+    ));
+}
+
+#[test]
+fn backend_selector_codec_mutations_fail_closed() {
+    const FINAL: &str = "-Zcodegen-backend=/opt/fe2o3/librustc_codegen_fe2o3.so";
+    let encoded = encode_descriptor_v2(&fixture()).unwrap();
+
+    for replacement in [
+        "-Zcodegen_backend=/opt/other.so",
+        "-Z=codegen-backend=/opt/other.so",
+        "-Z=codegen_backend=/opt/other.so",
+        "codegen-backend=/opt/other.so",
+    ] {
+        let mutated = replace_encoded_argument(&encoded, FINAL, replacement);
+        assert!(
+            matches!(decode_error(&mutated), DecodeError::Validation(_)),
+            "decoded final selector mutation {replacement}"
+        );
+    }
+
+    for duplicate in [
+        "-Zcodegen-backend=/opt/other.so",
+        "-Zcodegen_backend=/opt/other.so",
+        "-Z=codegen-backend=/opt/other.so",
+        "-Z=codegen_backend=/opt/other.so",
+        "codegen-backend=/opt/other.so",
+        "codegen_backend=/opt/other.so",
+    ] {
+        let mutated = replace_encoded_argument(&encoded, "-Cmetadata=0123", duplicate);
+        assert!(
+            matches!(decode_error(&mutated), DecodeError::Validation(_)),
+            "decoded duplicate selector mutation {duplicate}"
+        );
+    }
 }
 
 #[test]

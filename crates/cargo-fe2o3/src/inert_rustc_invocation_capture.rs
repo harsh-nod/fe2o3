@@ -24,7 +24,10 @@ impl InertRustcInvocationCaptureV2 {
     /// The caller must supply digests from the pinned executable objects and
     /// the complete environment that will replace the child's inherited
     /// environment. This capture does not persist the descriptor or plaintext
-    /// environment to durable storage.
+    /// environment to durable storage. The descriptor binds only the canonical
+    /// working-directory pathname. S09 process consistency separately binds the
+    /// pinned directory object; this inert capture does not claim an identity
+    /// join between that object and the pathname.
     pub(crate) fn capture(
         command: &Command,
         configured_argv0: &OsStr,
@@ -187,7 +190,7 @@ mod tests {
             "scalar_gemm_v1",
             "--crate-type",
             "cdylib",
-            "-Zcodegen-backend=/proc/self/fd/198",
+            "-Zcodegen-backend=/proc/./self/fd/198",
         ])
     }
 
@@ -213,11 +216,11 @@ mod tests {
                 "scalar_gemm_v1",
                 "--crate-type",
                 "cdylib",
-                "-Zcodegen-backend=/proc/self/fd/198",
+                "-Zcodegen-backend=/proc/./self/fd/198",
             ]
         );
         assert_eq!(descriptor.rustc().working_directory(), "/workspace/scalar");
-        assert_eq!(descriptor.codegen_backend_path(), "/proc/self/fd/198");
+        assert_eq!(descriptor.codegen_backend_path(), "/proc/./self/fd/198");
         assert_eq!(descriptor.amd_target(), "gfx942:xnack-");
         assert_eq!(descriptor.artifact_output_directory(), "/proc/self/fd/197");
         assert!(!descriptor.verification_required());
@@ -277,14 +280,14 @@ mod tests {
             "cdylib",
             "--crate-name",
             "scalar_gemm_v1",
-            "-Zcodegen-backend=/proc/self/fd/198",
+            "-Zcodegen-backend=/proc/./self/fd/198",
         ]);
         let different_backend_path = command(&[
             "--crate-name",
             "scalar_gemm_v1",
             "--crate-type",
             "cdylib",
-            "-Zcodegen-backend=/proc/self/fd/199",
+            "-Zcodegen-backend=/opt/reviewed/backend.so",
         ]);
 
         assert_ne!(

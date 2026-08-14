@@ -320,6 +320,11 @@ record from the actual process and consumes a sealed parent expectation. The
 aggregate canonical encoding is limited to 8 MiB. The separate
 `fe2o3-rustc-wrapper` compile path remains disabled.
 
+The inert `RustcInvocationDescriptorV2` capture has a narrower cwd statement:
+it binds the canonical cwd pathname supplied to rustc. The process-consistency
+record above separately binds the pinned cwd object. No object-identity join
+between that object and the descriptor pathname is claimed.
+
 ## Pinned codegen-backend object
 
 The wrapper also contains a Linux primitive for the codegen-backend
@@ -337,6 +342,71 @@ clearing `FD_CLOEXEC`. The prepared command borrows the pin and exposes no
 argument mutation, so the selector cannot be replaced after preparation. The
 external Cargo path actively uses the same primitive with a reserved stable
 descriptor; the separate `fe2o3-rustc-wrapper` compile path remains disabled.
+
+## Production S09 compile regression
+
+The ignored `production_s09_compile_captures_and_publishes_worker_output`
+integration test invokes the built `cargo-fe2o3` binary against the real
+`fe2o3-typed-alias-spoof` S09 fixture. It therefore traverses project
+discovery, pinned Cargo execution, the S09 capability broker, brokered backend
+and artifact descriptors, `binding_wrapper::run`, closed-environment
+materialization, inert descriptor capture, pinned rustc spawn, Worker V2
+selection, and durable HSACO publication. It is not a `--print` query.
+
+The test clears its outer environment and requires these explicit inputs:
+
+- `FE2O3_TEST_UPSTREAM_CARGO`: canonical native Cargo executable;
+- `FE2O3_TEST_UPSTREAM_RUSTC`: canonical compatible nightly rustc executable;
+- `FE2O3_TEST_RUSTC_LIBRARY_PATH`: canonical rustc library directory needed by
+  Cargo build-script probes in the outer harness;
+- `FE2O3_TEST_CODEGEN_BACKEND`: compatible built backend dynamic library;
+- `FE2O3_TEST_CARGO_HOME`: populated Cargo cache for `--offline` resolution;
+- `FE2O3_LLVM_LINK_WORKER`, `FE2O3_LLVM_LINK_WORKER_BUILD_ID`, and
+  `FE2O3_LLVM_BUILD_ID`: matching measured native Worker inputs.
+
+Run it with:
+
+```text
+FE2O3_TEST_UPSTREAM_CARGO=/absolute/toolchain/bin/cargo \
+FE2O3_TEST_UPSTREAM_RUSTC=/absolute/toolchain/bin/rustc \
+FE2O3_TEST_RUSTC_LIBRARY_PATH=/absolute/toolchain/lib \
+FE2O3_TEST_CODEGEN_BACKEND=/absolute/librustc_codegen_fe2o3.so \
+FE2O3_TEST_CARGO_HOME=/absolute/cargo-home \
+FE2O3_LLVM_LINK_WORKER=/absolute/fe2o3-llvm-link-worker \
+FE2O3_LLVM_LINK_WORKER_BUILD_ID=<measured-worker-id> \
+FE2O3_LLVM_BUILD_ID=<measured-llvm-id> \
+cargo test --locked -p cargo-fe2o3 --test production_s09 \
+  production_s09_compile_captures_and_publishes_worker_output \
+  -- --ignored --exact --nocapture
+```
+
+`FE2O3_TEST_RUSTC_LIBRARY_PATH` configures only the outer Cargo harness. The
+selected S09 rustc still receives the production closed child environment.
+`FE2O3_TEST_S09_RETAIN_DIR` may select a pre-created, empty, canonical absolute
+directory whose basename is `cargo-fe2o3-s09-retain-` followed by exactly 32
+lowercase hexadecimal characters that are not all zero. The test rejects
+symlinks, aliases, nonempty paths, repositories, and home directories. It
+creates a versioned sentinel and never removes a caller-selected directory; a
+repeated run must use a new empty leaf. Without the variable, the test creates
+and owns a unique temporary directory.
+
+After compilation, the test decodes the exact canonical durable publication
+envelope and nested link-publication record. It validates the envelope checksum,
+scope-derived record name, published state, complete identity chain, and the
+finalized-output digest and content-addressed artifact name against the exact
+bytes passed to HSACO inspection. The printed target is the admitted metadata
+value from those bytes, including `xnack-`; the same bytes must contain COV6
+metadata and exactly the `alpha` kernel. The test emits only SHA-256 and typed
+identity observations; it does not persist the descriptor or plaintext
+environment and the decoded record grants no authority.
+
+The printed descriptor digest is an inert pre-spawn observation. Successful
+test completion and the separate process-consistency checks establish the
+tested path's behavior, but the digest is not an execution receipt,
+authenticator, artifact authority, or protected-attestation claim. The scalar
+GEMM profile remains limited to an exact configured crate/source/cwd unit. Its
+descriptor does not authenticate source contents or establish an output-object
+association; those limits are unchanged by this test and capture diagnostic.
 
 ## Platform and trust limits
 

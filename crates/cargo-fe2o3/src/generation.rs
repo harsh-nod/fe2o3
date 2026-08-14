@@ -372,12 +372,12 @@ pub(crate) fn semantic_identity(
 
 pub(crate) fn managed_rustc_args(backend: &Path, generation: [u8; 16]) -> Result<OsString, String> {
     let mut flags = Vec::<Vec<u8>>::new();
-    let mut backend_flag = b"-Zcodegen-backend=".to_vec();
-    backend_flag.extend_from_slice(os_bytes(backend.as_os_str()));
-    flags.push(backend_flag);
     flags.push(b"-Zmir-enable-passes=-JumpThreading".to_vec());
     flags.push(b"--cfg".to_vec());
     flags.push(format!("fe2o3_codegen_generation=\"{}\"", hex(&generation)).into_bytes());
+    let mut backend_flag = b"-Zcodegen-backend=".to_vec();
+    backend_flag.extend_from_slice(os_bytes(backend.as_os_str()));
+    flags.push(backend_flag);
     if flags.iter().any(|flag| flag.contains(&0x1f)) {
         return Err("managed rustc arguments contain the separator byte".to_string());
     }

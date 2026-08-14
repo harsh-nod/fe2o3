@@ -43,6 +43,34 @@ fn real_cargo_probe_shape_passes_through_wrapper_mode() {
     assert!(!output.stdout.is_empty());
 }
 
+#[test]
+fn real_rustc_treats_managed_options_after_terminator_as_input_paths() {
+    let root = env::temp_dir().join(format!(
+        "cargo-fe2o3-rustc-terminator-{}-{}",
+        std::process::id(),
+        unique_id()
+    ));
+    fs::create_dir(&root).expect("create rustc terminator fixture");
+    let source = root.join("main.rs");
+    fs::write(&source, "fn main() {}\n").expect("write rustc terminator fixture");
+
+    let output = Command::new(rustc_path())
+        .arg("--")
+        .arg(&source)
+        .arg("-Zcodegen-backend=/tmp/fe2o3-terminator-probe.so")
+        .output()
+        .expect("run real rustc terminator probe");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(!output.status.success());
+    assert!(
+        stderr.contains("multiple input filenames provided")
+            && stderr.contains("-Zcodegen-backend=/tmp/fe2o3-terminator-probe.so"),
+        "real rustc no longer demonstrated terminator semantics: {stderr}"
+    );
+    fs::remove_dir_all(root).expect("remove rustc terminator fixture");
+}
+
 #[cfg(unix)]
 #[test]
 fn compile_shapes_fail_before_the_rustc_process_is_spawned() {

@@ -32,9 +32,19 @@ versions and distinct digest domains; each decoder rejects the other version.
 - the complete intended rustc process environment, sorted by key.
 
 The rustc path appears only in `argv[0]`. The backend path appears only in the
-wrapper-injected `-Zcodegen-backend` argument. Crate name, source, crate types,
-edition, features, target options, and all other compiler-visible unit
-properties remain in argv or the environment. `FE2O3_TARGET`,
+wrapper-injected final `-Zcodegen-backend=<path>` argument. V2 rejects every
+other hyphen/underscore and joined/split `-Z` backend-selector spelling
+anywhere in argv. The one Linux capability spelling admitted by the backend
+path type is exactly `/proc/./self/fd/198`; canonical `/proc/self/fd/198`, all
+other descriptor numbers, and procfs/devfd aliases are rejected. Ordinary
+lexically canonical non-proc absolute backend paths remain valid as pathname
+identities, not descriptor capabilities. `/dev/fd`, `/dev/stdin`,
+`/dev/stdout`, `/dev/stderr`, and all `/proc` spellings other than the exact
+capability are rejected. V2 also rejects an option terminator before the final
+managed selector because rustc would interpret that selector as an input path.
+Crate name,
+source, crate types, edition, features, target options, and all other
+compiler-visible unit properties remain in argv or the environment. `FE2O3_TARGET`,
 `FE2O3_HSACO_DIR`, and `FE2O3_VERIFY_KERNEL_IR` are validated in place and
 exposed as derived views; they are not copied into parallel fields.
 
