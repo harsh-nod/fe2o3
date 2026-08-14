@@ -2176,7 +2176,9 @@ fn row_softmax_v1_source_authentication_publishes_worker_v2_and_adversaries_fail
             && exact_stderr.contains("exact ABI input:&[f32], output:DisjointSlice<f32>")
             && exact_stderr.contains("fixed one-row 64-element profile")
             && exact_stderr.contains("selected canonical Kernel IR module `fe2o3::row_softmax_v1`")
-            && exact_stderr.contains("lowered it through the generic gfx942 dialect path")
+            && exact_stderr.contains(
+                "lowered it through the commitment-gated gfx942 row-softmax dialect profile"
+            )
             && exact_stderr.contains("published an inert Worker V2 compiler-module handoff")
             && exact_stderr
                 .contains("explicit kernarg 32 bytes and required COV6 complete kernarg 288 bytes")

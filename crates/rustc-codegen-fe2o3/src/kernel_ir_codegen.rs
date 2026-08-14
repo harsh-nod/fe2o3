@@ -377,7 +377,7 @@ pub(crate) fn construct_inert_tiled_gemm_v1_module_text(
 }
 
 /// Lowers only the source-authenticated canonical row-softmax graph through
-/// the existing generic gfx942 dialect path.
+/// the commitment-gated gfx942 row-softmax dialect profile.
 ///
 /// The result retains exactly one unresolved OCML import. This function does
 /// not locate OCML bitcode, invoke a worker, link, or construct an artifact.
@@ -390,11 +390,18 @@ pub(crate) fn construct_inert_row_softmax_v1_module_text(
             "module differs from the reviewed canonical row_softmax_v1 graph".to_owned(),
         ));
     }
-    let llvm_ir = dialect_amdgcn::lower_device_module_to_gfx942_xnack_minus_llvm_ir(module)
+    let row_profile =
+        dialect_amdgcn::authenticate_gfx942_row_softmax_lowering_profile_v1(module)
+            .map_err(CompilerModuleConstructionError::Lowering)?;
+    let llvm_ir =
+        dialect_amdgcn::lower_authenticated_row_softmax_module_to_gfx942_xnack_minus_llvm_ir_v1(
+            module,
+            &row_profile,
+        )
         .map_err(CompilerModuleConstructionError::Lowering)?;
     if <[u8; 32]>::from(Sha256::digest(llvm_ir.as_bytes())) != REVIEWED_ROW_SOFTMAX_V1_LLVM_SHA256 {
         return Err(CompilerModuleConstructionError::RowSoftmaxLowering(
-            "generic gfx942 LLVM digest differs from the reviewed row_softmax_v1 lowering"
+            "authenticated gfx942 LLVM digest differs from the reviewed row_softmax_v1 lowering"
                 .to_owned(),
         ));
     }
@@ -405,7 +412,7 @@ pub(crate) fn construct_inert_row_softmax_v1_module_text(
         || llvm_ir.contains("__fe2o3_ir_float_v1_exp_f32")
     {
         return Err(CompilerModuleConstructionError::RowSoftmaxLowering(
-            "generic gfx942 lowering did not preserve the exact two-call OCML exp closure"
+            "authenticated gfx942 lowering did not preserve the exact two-call OCML exp closure"
                 .to_owned(),
         ));
     }
@@ -2959,10 +2966,23 @@ mod tests {
     }
 
     #[test]
-    fn exact_row_softmax_uses_only_the_generic_gfx942_ocml_exp_lowering() {
+    fn exact_row_softmax_uses_only_the_authenticated_gfx942_ocml_exp_lowering() {
         let module = crate::collected_row_softmax_v1::canonical_row_softmax_v1_module();
+        assert!(
+            dialect_amdgcn::lower_device_module_to_gfx942_xnack_minus_llvm_ir(&module).is_err(),
+            "generic gfx942 lowering admitted row-only f32 operations"
+        );
+        let profile =
+            dialect_amdgcn::authenticate_gfx942_row_softmax_lowering_profile_v1(&module).unwrap();
+        let dedicated =
+            dialect_amdgcn::lower_authenticated_row_softmax_module_to_gfx942_xnack_minus_llvm_ir_v1(
+                &module,
+                &profile,
+            )
+            .unwrap();
         let first = construct_inert_row_softmax_v1_module_text(&module).unwrap();
         let second = construct_inert_row_softmax_v1_module_text(&module).unwrap();
+        assert_eq!(dedicated, first.llvm_ir());
         assert_eq!(
             <[u8; 32]>::from(Sha256::digest(first.llvm_ir().as_bytes())),
             REVIEWED_ROW_SOFTMAX_V1_LLVM_SHA256,
@@ -2985,6 +3005,42 @@ mod tests {
                 .matches("call float @__ocml_exp_f32(float ")
                 .count(),
             2
+        );
+        assert_eq!(first.llvm_ir().matches("fcmp ogt float ").count(), 1);
+        assert_eq!(first.llvm_ir().matches("fcmp ").count(), 1);
+        assert_eq!(first.llvm_ir().matches("fdiv float ").count(), 1);
+        assert!(!first.llvm_ir().contains("fcmp une float "));
+        assert!(!first.llvm_ir().contains("fdiv fast "));
+
+        let mut substituted_predicate = module.clone();
+        let predicate = substituted_predicate
+            .functions
+            .iter_mut()
+            .filter_map(|function| function.body.as_mut())
+            .flat_map(|body| &mut body.blocks)
+            .flat_map(|block| &mut block.operations)
+            .find_map(|operation| match &mut operation.kind {
+                OperationKind::Compare { predicate, .. }
+                    if *predicate == ComparePredicate::GreaterThan =>
+                {
+                    Some(predicate)
+                }
+                _ => None,
+            })
+            .expect("canonical row comparison");
+        *predicate = ComparePredicate::NotEqual;
+        assert!(
+            dialect_amdgcn::authenticate_gfx942_row_softmax_lowering_profile_v1(
+                &substituted_predicate
+            )
+            .is_err()
+        );
+        assert!(
+            dialect_amdgcn::lower_authenticated_row_softmax_module_to_gfx942_xnack_minus_llvm_ir_v1(
+                &substituted_predicate,
+                &profile,
+            )
+            .is_err()
         );
 
         let mut renamed = module;
