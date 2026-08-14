@@ -145,13 +145,41 @@ fn metadata(args: &[OsString]) -> ExitCode {
     }
     let workspace_root = required_path("FE2O3_TEST_WORKSPACE_ROOT");
     let target_directory = required_path("FE2O3_TEST_TARGET_DIRECTORY");
-    let record = serde_json::json!({
-        "packages": [],
-        "target_directory": target_directory,
-        "version": 1,
-        "workspace_members": [],
-        "workspace_root": workspace_root,
-    });
+    let record = if env::var_os("FE2O3_TEST_AUTHORITY_METADATA_V1").is_some() {
+        let package_id = format!(
+            "path+file://{}#external-standalone@0.1.0",
+            workspace_root.display()
+        );
+        serde_json::json!({
+            "packages": [{
+                "checksum": null,
+                "id": package_id,
+                "links": null,
+                "manifest_path": workspace_root.join("Cargo.toml"),
+                "name": "external-standalone",
+                "source": null,
+                "targets": [{"kind": ["bin"]}],
+                "version": "0.1.0",
+            }],
+            "resolve": {
+                "nodes": [{"dependencies": [], "id": package_id}],
+                "root": package_id,
+            },
+            "target_directory": target_directory,
+            "version": 1,
+            "workspace_default_members": [package_id],
+            "workspace_members": [package_id],
+            "workspace_root": workspace_root,
+        })
+    } else {
+        serde_json::json!({
+            "packages": [],
+            "target_directory": target_directory,
+            "version": 1,
+            "workspace_members": [],
+            "workspace_root": workspace_root,
+        })
+    };
     println!("{record}");
     ExitCode::SUCCESS
 }
@@ -166,6 +194,22 @@ fn build_or_run(args: &[OsString]) -> ExitCode {
     }
     if env::var_os("FE2O3_TEST_VERTICAL_CONTROL_DIR").is_some() {
         return vertical_worker_v2_invocation();
+    }
+    let mut mutated_post_spawn_input = false;
+    for variable in [
+        "FE2O3_TEST_MUTATE_RUSTC_RUNTIME_V1",
+        "FE2O3_TEST_MUTATE_AUTHORITY_SOURCE_V1",
+    ] {
+        if let Some(path) = env::var_os(variable) {
+            if let Err(error) = fs::write(&path, format!("mutated by {variable}\n")) {
+                eprintln!("fake Cargo could not mutate {variable} input: {error}");
+                return ExitCode::FAILURE;
+            }
+            mutated_post_spawn_input = true;
+        }
+    }
+    if mutated_post_spawn_input {
+        return ExitCode::from(23);
     }
     #[cfg(target_os = "linux")]
     if let Some(substitute) = env::var_os("FE2O3_TEST_SUBSTITUTE_RUSTC_LIB_TREE") {

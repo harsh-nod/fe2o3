@@ -2293,6 +2293,52 @@ fn failed_owned_generation_is_cleaned_before_retry() {
     assert!(fixture.target.join("fe2o3/fixture.hsaco").is_file());
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn cargo_failure_aggregates_runtime_and_authority_closure_revalidation() {
+    let fixture = ProjectFixture::standalone();
+    fs::write(fixture.workspace.join("Cargo.lock"), "version = 4\n")
+        .expect("write authority lockfile");
+    let runtime = fixture
+        .root
+        .join("pinned-rustc-fixture-toolchain/lib/runtime-marker");
+    let source = fixture.workspace.join("src/main.rs");
+    let mut command = fixture.authority_command(&[OsString::from("build")]);
+    command
+        .env("FE2O3_CODEGEN_PIPELINE", "collected-row-softmax-v1")
+        .env(
+            "FE2O3_AUTHORITY_RUSTC_SHA256_V1",
+            authority_rustc_sha256(&fixture.root),
+        )
+        .env(
+            "FE2O3_AUTHORITY_RUSTC_RUNTIME_SHA256_V1",
+            authority_rustc_runtime_sha256(&fixture.root),
+        )
+        .env("FE2O3_AUTHORITY_CARGO_SHA256_V1", authority_cargo_sha256())
+        .env(
+            "FE2O3_AUTHORITY_BACKEND_SHA256_V1",
+            file_sha256(&fixture.backend),
+        )
+        .env("FE2O3_TEST_AUTHORITY_METADATA_V1", "1")
+        .env("FE2O3_TEST_MUTATE_RUSTC_RUNTIME_V1", runtime)
+        .env("FE2O3_TEST_MUTATE_AUTHORITY_SOURCE_V1", source);
+
+    let output = command.output().expect("run post-spawn aggregation probe");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let cargo = stderr
+        .find("cargo build failed with status exit status: 23")
+        .unwrap_or_else(|| panic!("missing Cargo primary failure in {stderr}"));
+    let runtime = stderr
+        .find("rustc runtime-tree revalidation also failed")
+        .unwrap_or_else(|| panic!("missing runtime revalidation failure in {stderr}"));
+    let closure = stderr
+        .find("authorized kernel-closure revalidation also failed")
+        .unwrap_or_else(|| panic!("missing closure revalidation failure in {stderr}"));
+    assert!(cargo < runtime && runtime < closure, "{stderr}");
+    assert!(!fixture.target.join("fe2o3").exists());
+}
+
 #[cfg(unix)]
 #[test]
 fn artifact_path_substitution_is_rejected_without_redirecting_writes() {

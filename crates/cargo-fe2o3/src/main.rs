@@ -689,37 +689,68 @@ fn run_cargo_with_backend(
             Ok(boundary) => boundary,
             Err(error) => {
                 let _ = cargo_child.kill();
-                let _ = cargo_child.wait();
-                context
-                    .pinned_rustc
-                    .revalidate_lib_tree()
-                    .map_err(|lib_tree| {
-                        format!("{error}; rustc lib-tree post-validation also failed: {lib_tree}")
-                    })?;
-                return Err(error);
+                let cleanup_result = cargo_child
+                    .wait()
+                    .map(|_| ())
+                    .map_err(|cleanup| format!("failed to reap rejected Cargo child: {cleanup}"));
+                drop(capability_broker);
+                let lib_tree_result = context.pinned_rustc.revalidate_lib_tree();
+                let closure_result = context
+                    .authorized_closure
+                    .as_ref()
+                    .map_or(Ok(()), |closure| closure.revalidate());
+                return aggregate_post_spawn_results(
+                    Err(error),
+                    [
+                        ("Cargo child cleanup", cleanup_result),
+                        ("rustc runtime-tree revalidation", lib_tree_result),
+                        ("authorized kernel-closure revalidation", closure_result),
+                    ],
+                );
             }
         };
     let status = cargo_child.wait();
     let boundary_result = invocation_boundary.finish();
     drop(capability_broker);
     let lib_tree_result = context.pinned_rustc.revalidate_lib_tree();
-
-    boundary_result?;
-    lib_tree_result?;
-    if let Some(authorized_closure) = context.authorized_closure.as_ref() {
-        authorized_closure.revalidate()?;
-    }
-
-    match status {
-        Ok(status) if status.success() => {
-            context.project.validate_paths()?;
-            context.target_dir.validate_path("Cargo target directory")?;
-            context.generation.reject_if_substituted()?;
-            context.generation.commit()
-        }
+    let closure_result = context
+        .authorized_closure
+        .as_ref()
+        .map_or(Ok(()), |closure| closure.revalidate());
+    let cargo_result = match status {
+        Ok(status) if status.success() => Ok(()),
         Ok(status) => Err(format!("cargo {command} failed with status {status}")),
         Err(error) => Err(format!("failed to run cargo: {error}")),
+    };
+    aggregate_post_spawn_results(
+        cargo_result,
+        [
+            ("Cargo invocation-boundary finish", boundary_result),
+            ("rustc runtime-tree revalidation", lib_tree_result),
+            ("authorized kernel-closure revalidation", closure_result),
+        ],
+    )?;
+
+    context.project.validate_paths()?;
+    context.target_dir.validate_path("Cargo target directory")?;
+    context.generation.reject_if_substituted()?;
+    context.generation.commit()
+}
+
+fn aggregate_post_spawn_results<const N: usize>(
+    primary: Result<(), String>,
+    checks: [(&str, Result<(), String>); N],
+) -> Result<(), String> {
+    let mut failure = primary.err();
+    for (label, result) in checks {
+        if let Err(error) = result {
+            match failure.as_mut() {
+                Some(primary) => primary.push_str(&format!("; {label} also failed: {error}")),
+                None => failure = Some(error),
+            }
+        }
     }
+    failure.map_or(Ok(()), Err)
 }
 
 fn inject_application_runner(
@@ -2187,8 +2218,8 @@ fn print_help() {
 #[cfg(test)]
 mod tests {
     use super::{
-        inject_application_runner_config, normalize_invocation, parse_rocminfo_target,
-        selected_run_target,
+        aggregate_post_spawn_results, inject_application_runner_config, normalize_invocation,
+        parse_rocminfo_target, selected_run_target,
     };
     use crate::project::PinnedDirectory;
     use std::ffi::OsString;
@@ -2284,5 +2315,38 @@ Agent 2
         );
         let duplicate = ["--target", "gfx942", "--target=gfx1100"].map(OsString::from);
         assert!(selected_run_target(&duplicate).is_err());
+    }
+
+    #[test]
+    fn post_spawn_failures_preserve_primary_and_append_checks_in_order() {
+        let error = aggregate_post_spawn_results(
+            Err("cargo failed".to_owned()),
+            [
+                ("boundary", Err("boundary failed".to_owned())),
+                ("runtime", Err("runtime changed".to_owned())),
+                ("closure", Err("source changed".to_owned())),
+            ],
+        )
+        .expect_err("post-spawn failures must fail");
+        assert_eq!(
+            error,
+            "cargo failed; boundary also failed: boundary failed; runtime also failed: runtime changed; closure also failed: source changed"
+        );
+    }
+
+    #[test]
+    fn first_post_spawn_check_becomes_primary_after_cargo_success() {
+        let error = aggregate_post_spawn_results(
+            Ok(()),
+            [
+                ("boundary", Err("boundary failed".to_owned())),
+                ("runtime", Err("runtime changed".to_owned())),
+            ],
+        )
+        .expect_err("post-spawn validation failure must fail");
+        assert_eq!(
+            error,
+            "boundary failed; runtime also failed: runtime changed"
+        );
     }
 }
