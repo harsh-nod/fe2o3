@@ -1535,6 +1535,14 @@ mod tests {
         Store(u32, u32, MemoryAccess),
     }
 
+    type ReviewedRowSoftmaxBlock = (
+        u32,
+        Vec<(u32, Type)>,
+        Vec<(Option<u32>, ReviewedRowSoftmaxOperation)>,
+        Terminator,
+    );
+    type ReceiptMutation = (fn(&mut RowSoftmaxFrontendAuthorityV1), &'static str);
+
     fn reviewed_operation(operation: &Operation) -> (Option<u32>, ReviewedRowSoftmaxOperation) {
         let result = match operation.results.as_slice() {
             [] => None,
@@ -1680,12 +1688,7 @@ mod tests {
         let body = function.body.as_ref().expect("defined row-softmax entry");
         assert_eq!(body.parameters, [ValueId(0), ValueId(1)]);
         let global_f32 = MemoryAccess::new(AddressSpace::Global, 4);
-        let expected: Vec<(
-            u32,
-            Vec<(u32, Type)>,
-            Vec<(Option<u32>, ReviewedRowSoftmaxOperation)>,
-            Terminator,
-        )> = vec![
+        let expected: Vec<ReviewedRowSoftmaxBlock> = vec![
             (
                 0,
                 vec![],
@@ -1916,7 +1919,7 @@ mod tests {
         let baseline = collected_authority_commitment(
             baseline_receipt.authority.as_ref().expect("test authority"),
         );
-        let mutations: [(fn(&mut RowSoftmaxFrontendAuthorityV1), &'static str); 18] = [
+        let mutations: [ReceiptMutation; 18] = [
             (
                 |value| value.portable_mir_semantic_commitment[0] ^= 1,
                 "portable MIR",
