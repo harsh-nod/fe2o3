@@ -913,6 +913,309 @@ pub enum BrokerFrameV3 {
     Consume(ConsumeV3),
 }
 
+/// A phase in the inert Broker V3 transcript validator.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BrokerPhaseV3 {
+    /// No trampoline greeting has been accepted.
+    AwaitHello,
+    /// A matching trampoline greeting was accepted.
+    AwaitBootstrap,
+    /// The exact wrapper bootstrap was accepted.
+    AwaitPostExec,
+    /// The matching post-exec wrapper greeting was accepted.
+    AwaitCapabilities,
+    /// The exact compiler-capability transfer was accepted.
+    AwaitPrepare,
+    /// The matching wrapper preparation was accepted.
+    AwaitConsume,
+    /// The matching rustc consumption completed the inert transcript.
+    Complete,
+}
+
+/// A field that did not remain continuous across a Broker V3 transcript.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum BrokerTranscriptFieldV3 {
+    /// Complete canonical CapabilityBinding V3 value.
+    CapabilityBinding,
+    /// Stable PID and process start time.
+    ProcessIdentity,
+    /// Static trampoline executable identity.
+    TrampolineExecutableIdentity,
+    /// Canonical CapabilityBinding V3 identity.
+    CapabilityBindingIdentity,
+    /// One-shot bootstrap transfer identity.
+    BootstrapIdentity,
+    /// Dynamic `cargo-fe2o3` executable identity.
+    CargoFe2o3ExecutableIdentity,
+    /// Bootstrap descriptor manifest.
+    BootstrapDescriptorManifest,
+    /// One-shot compiler-capability transfer identity.
+    CapabilityIdentity,
+    /// Compiler-capabilities descriptor manifest.
+    CapabilitiesDescriptorManifest,
+    /// Canonical compiler-closure identity.
+    CompilerClosureIdentity,
+    /// Retained runtime-object identity.
+    RuntimeObjectIdentity,
+    /// Codegen-backend image identity.
+    CodegenBackendIdentity,
+}
+
+impl fmt::Display for BrokerTranscriptFieldV3 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let name = match self {
+            Self::CapabilityBinding => "capability binding",
+            Self::ProcessIdentity => "process identity",
+            Self::TrampolineExecutableIdentity => "trampoline executable identity",
+            Self::CapabilityBindingIdentity => "capability-binding identity",
+            Self::BootstrapIdentity => "bootstrap identity",
+            Self::CargoFe2o3ExecutableIdentity => "cargo-fe2o3 executable identity",
+            Self::BootstrapDescriptorManifest => "bootstrap descriptor manifest",
+            Self::CapabilityIdentity => "capability identity",
+            Self::CapabilitiesDescriptorManifest => "capabilities descriptor manifest",
+            Self::CompilerClosureIdentity => "compiler-closure identity",
+            Self::RuntimeObjectIdentity => "runtime-object identity",
+            Self::CodegenBackendIdentity => "codegen-backend identity",
+        };
+        formatter.write_str(name)
+    }
+}
+
+/// Why the pure Broker V3 state machine rejected a typed frame.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum BrokerStateErrorV3 {
+    /// The frame type was not valid in the current phase.
+    UnexpectedFrame {
+        /// Phase before the rejected transition.
+        phase: BrokerPhaseV3,
+        /// Rejected frame type.
+        actual: BrokerFrameKindV3,
+    },
+    /// A frame was supplied after the transcript completed.
+    TerminalState,
+    /// A field did not match the expected binding or preceding frame.
+    TranscriptMismatch {
+        /// Field whose continuity check failed.
+        field: BrokerTranscriptFieldV3,
+    },
+}
+
+impl fmt::Display for BrokerStateErrorV3 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnexpectedFrame { phase, actual } => {
+                write!(formatter, "unexpected {actual:?} frame in {phase:?}")
+            }
+            Self::TerminalState => formatter.write_str("Broker V3 transcript is already complete"),
+            Self::TranscriptMismatch { field } => {
+                write!(formatter, "Broker V3 transcript {field} mismatch")
+            }
+        }
+    }
+}
+
+impl std::error::Error for BrokerStateErrorV3 {}
+
+/// Pure validation state for one two-stage protected rustc transcript.
+///
+/// This type checks canonical order and continuity only. It performs no socket,
+/// descriptor, peer, PID, executable, or freshness observation. Completion is
+/// inert and grants no publication authority. Broker V2 is intentionally not
+/// modeled or changed by this crate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BrokerStateV3 {
+    expected_binding: CapabilityBindingV3,
+    phase: BrokerPhaseV3,
+    process: Option<ProcessIdentityV3>,
+    bootstrap_identity: Option<[u8; 32]>,
+    capability_identity: Option<[u8; 32]>,
+}
+
+impl BrokerStateV3 {
+    /// Creates an inert state machine bound to one zero-rights binding.
+    pub const fn new(expected_binding: CapabilityBindingV3) -> Self {
+        Self {
+            expected_binding,
+            phase: BrokerPhaseV3::AwaitHello,
+            process: None,
+            bootstrap_identity: None,
+            capability_identity: None,
+        }
+    }
+
+    /// Returns the current transcript phase.
+    pub const fn phase(self) -> BrokerPhaseV3 {
+        self.phase
+    }
+
+    /// Returns the retained process identity after Hello is accepted.
+    pub const fn process(self) -> Option<ProcessIdentityV3> {
+        self.process
+    }
+
+    /// Returns the completed binding identity only after Consume succeeds.
+    pub fn completed_binding_identity(self) -> Option<[u8; 32]> {
+        matches!(self.phase, BrokerPhaseV3::Complete)
+            .then(|| self.expected_binding.identity_sha256())
+    }
+
+    /// Validates and applies one frame without changing state on failure.
+    pub fn advance(&mut self, frame: BrokerFrameV3) -> Result<(), BrokerStateErrorV3> {
+        match self.phase {
+            BrokerPhaseV3::AwaitHello => {
+                let BrokerFrameV3::Hello(value) = frame else {
+                    return Err(self.unexpected(frame));
+                };
+                self.validate_hello(value)?;
+                self.process = Some(value.process());
+                self.phase = BrokerPhaseV3::AwaitBootstrap;
+            }
+            BrokerPhaseV3::AwaitBootstrap => {
+                let BrokerFrameV3::Bootstrap(value) = frame else {
+                    return Err(self.unexpected(frame));
+                };
+                self.validate_bootstrap(value)?;
+                self.bootstrap_identity = Some(value.bootstrap_identity());
+                self.phase = BrokerPhaseV3::AwaitPostExec;
+            }
+            BrokerPhaseV3::AwaitPostExec => {
+                let BrokerFrameV3::PostExec(value) = frame else {
+                    return Err(self.unexpected(frame));
+                };
+                self.validate_post_exec(value)?;
+                self.phase = BrokerPhaseV3::AwaitCapabilities;
+            }
+            BrokerPhaseV3::AwaitCapabilities => {
+                let BrokerFrameV3::Capabilities(value) = frame else {
+                    return Err(self.unexpected(frame));
+                };
+                self.validate_capabilities(value)?;
+                self.capability_identity = Some(value.capability_identity());
+                self.phase = BrokerPhaseV3::AwaitPrepare;
+            }
+            BrokerPhaseV3::AwaitPrepare => {
+                let BrokerFrameV3::Prepare(value) = frame else {
+                    return Err(self.unexpected(frame));
+                };
+                self.validate_compiler_observation(value)?;
+                self.phase = BrokerPhaseV3::AwaitConsume;
+            }
+            BrokerPhaseV3::AwaitConsume => {
+                let BrokerFrameV3::Consume(value) = frame else {
+                    return Err(self.unexpected(frame));
+                };
+                self.validate_compiler_observation(value)?;
+                self.phase = BrokerPhaseV3::Complete;
+            }
+            BrokerPhaseV3::Complete => return Err(BrokerStateErrorV3::TerminalState),
+        }
+        Ok(())
+    }
+
+    fn unexpected(self, frame: BrokerFrameV3) -> BrokerStateErrorV3 {
+        BrokerStateErrorV3::UnexpectedFrame {
+            phase: self.phase,
+            actual: frame.kind(),
+        }
+    }
+
+    fn validate_hello(self, value: HelloV3) -> Result<(), BrokerStateErrorV3> {
+        ensure_broker_transcript(
+            value.binding() == self.expected_binding,
+            BrokerTranscriptFieldV3::CapabilityBinding,
+        )?;
+        ensure_broker_transcript(
+            value.observed_trampoline_identity()
+                == self.expected_binding.trampoline_executable_identity(),
+            BrokerTranscriptFieldV3::TrampolineExecutableIdentity,
+        )
+    }
+
+    fn validate_bootstrap(self, value: BootstrapV3) -> Result<(), BrokerStateErrorV3> {
+        self.validate_process_and_binding(value.process(), value.binding_identity())?;
+        ensure_broker_transcript(
+            value.descriptor_manifest() == BrokerDescriptorManifestV3::Bootstrap,
+            BrokerTranscriptFieldV3::BootstrapDescriptorManifest,
+        )
+    }
+
+    fn validate_post_exec(self, value: PostExecV3) -> Result<(), BrokerStateErrorV3> {
+        self.validate_process_and_binding(value.process(), value.binding_identity())?;
+        ensure_broker_transcript(
+            Some(value.bootstrap_identity()) == self.bootstrap_identity,
+            BrokerTranscriptFieldV3::BootstrapIdentity,
+        )?;
+        ensure_broker_transcript(
+            value.observed_cargo_fe2o3_identity()
+                == self.expected_binding.cargo_fe2o3_executable_identity(),
+            BrokerTranscriptFieldV3::CargoFe2o3ExecutableIdentity,
+        )
+    }
+
+    fn validate_capabilities(self, value: CapabilitiesV3) -> Result<(), BrokerStateErrorV3> {
+        self.validate_process_and_binding(value.process(), value.binding_identity())?;
+        ensure_broker_transcript(
+            Some(value.bootstrap_identity()) == self.bootstrap_identity,
+            BrokerTranscriptFieldV3::BootstrapIdentity,
+        )?;
+        ensure_broker_transcript(
+            value.descriptor_manifest() == BrokerDescriptorManifestV3::CompilerCapabilities,
+            BrokerTranscriptFieldV3::CapabilitiesDescriptorManifest,
+        )
+    }
+
+    fn validate_compiler_observation<T: CompilerObservationV3>(
+        self,
+        value: T,
+    ) -> Result<(), BrokerStateErrorV3> {
+        self.validate_process_and_binding(value.process(), value.binding_identity())?;
+        ensure_broker_transcript(
+            Some(value.capability_identity()) == self.capability_identity,
+            BrokerTranscriptFieldV3::CapabilityIdentity,
+        )?;
+        ensure_broker_transcript(
+            value.compiler_closure_identity() == self.expected_binding.compiler_closure_identity(),
+            BrokerTranscriptFieldV3::CompilerClosureIdentity,
+        )?;
+        ensure_broker_transcript(
+            value.runtime_object_identity() == self.expected_binding.runtime_object_identity(),
+            BrokerTranscriptFieldV3::RuntimeObjectIdentity,
+        )?;
+        ensure_broker_transcript(
+            value.codegen_backend_identity() == self.expected_binding.codegen_backend_identity(),
+            BrokerTranscriptFieldV3::CodegenBackendIdentity,
+        )
+    }
+
+    fn validate_process_and_binding(
+        self,
+        process: ProcessIdentityV3,
+        binding_identity: [u8; 32],
+    ) -> Result<(), BrokerStateErrorV3> {
+        ensure_broker_transcript(
+            Some(process) == self.process,
+            BrokerTranscriptFieldV3::ProcessIdentity,
+        )?;
+        ensure_broker_transcript(
+            binding_identity == self.expected_binding.identity_sha256(),
+            BrokerTranscriptFieldV3::CapabilityBindingIdentity,
+        )
+    }
+}
+
+fn ensure_broker_transcript(
+    condition: bool,
+    field: BrokerTranscriptFieldV3,
+) -> Result<(), BrokerStateErrorV3> {
+    if condition {
+        Ok(())
+    } else {
+        Err(BrokerStateErrorV3::TranscriptMismatch { field })
+    }
+}
+
 impl BrokerFrameV3 {
     /// Returns the assigned message type.
     pub const fn kind(self) -> BrokerFrameKindV3 {

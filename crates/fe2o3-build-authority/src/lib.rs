@@ -18,11 +18,12 @@ pub use broker_v3::{
     BOOTSTRAP_V3_PAYLOAD_LEN, BROKER_V3_BINDING_IDENTITY_DOMAIN, BROKER_V3_BINDING_WIRE_LEN,
     BROKER_V3_HEADER_LEN, BROKER_V3_MAGIC, BROKER_V3_VERSION, BootstrapV3, BrokerDescriptorKindV3,
     BrokerDescriptorManifestV3, BrokerFrameKindV3, BrokerFrameV3, BrokerIdentityFieldV3,
-    BrokerProtocolErrorV3, BrokerTargetV3, CAPABILITIES_V3_PAYLOAD_LEN, CONSUME_V3_PAYLOAD_LEN,
-    CapabilitiesV3, CapabilityBindingV3, ConsumeV3, DESCRIPTOR_MANIFEST_V3_WIRE_LEN,
-    HELLO_V3_PAYLOAD_LEN, HelloV3, POST_EXEC_V3_PAYLOAD_LEN, PREPARE_V3_PAYLOAD_LEN,
-    PROCESS_IDENTITY_V3_WIRE_LEN, PostExecV3, PrepareV3, ProcessIdentityV3, decode_broker_frame_v3,
-    decode_capability_binding_v3, encode_broker_frame_v3,
+    BrokerPhaseV3, BrokerProtocolErrorV3, BrokerStateErrorV3, BrokerStateV3, BrokerTargetV3,
+    BrokerTranscriptFieldV3, CAPABILITIES_V3_PAYLOAD_LEN, CONSUME_V3_PAYLOAD_LEN, CapabilitiesV3,
+    CapabilityBindingV3, ConsumeV3, DESCRIPTOR_MANIFEST_V3_WIRE_LEN, HELLO_V3_PAYLOAD_LEN, HelloV3,
+    POST_EXEC_V3_PAYLOAD_LEN, PREPARE_V3_PAYLOAD_LEN, PROCESS_IDENTITY_V3_WIRE_LEN, PostExecV3,
+    PrepareV3, ProcessIdentityV3, decode_broker_frame_v3, decode_capability_binding_v3,
+    encode_broker_frame_v3,
 };
 pub use compiler_closure::{
     COMPILER_CLOSURE_IDENTITY_DOMAIN_V1, CompilerClosureDigestFieldV1, CompilerClosureErrorV1,
