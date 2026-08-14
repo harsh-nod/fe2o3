@@ -16,6 +16,7 @@ DEFAULT_VOCABULARY = pathlib.Path(__file__).parent / "verus/VERUS_TRUST_VOCABULA
 REQUIRED_TRUST_TOKENS = {
     "admit",
     "assume",
+    "assume_",
     "assume_specification",
     "assume_termination",
     "axiom",
@@ -30,8 +31,16 @@ REQUIRED_TRUST_TOKENS = {
     "external_trait_specification",
     "external_type_specification",
     "externals_available_without_declaration",
+    "inline_air_stmt",
+    "no_method_body",
     "trusted",
     "uninterp",
+}
+REQUIRED_BUILTIN_TRUST_PRIMITIVES = {
+    ("verus::verus_builtin::admit", "admit", "proof"),
+    ("verus::verus_builtin::assume_", "assume_", "proof"),
+    ("verus::verus_builtin::inline_air_stmt", "inline_air_stmt", "proof"),
+    ("verus::verus_builtin::no_method_body", "no_method_body", "proof"),
 }
 CLOSED_SOURCE_PREFIX = [
     "use",
@@ -53,6 +62,7 @@ SOURCE_INJECTION_IDENTIFIERS = {
     "macro",
     "macro_rules",
     "mod",
+    "verus_builtin",
 }
 APPROVED_EXP_DECLARATION = [
     "pub",
@@ -93,6 +103,10 @@ class Vocabulary:
     release_roots: tuple[str, ...]
     release_sources: tuple[tuple[str, int, str], ...]
     upstream_source: tuple[str, int, str]
+    upstream_builtin_source: tuple[str, int, str]
+    builtin_diagnostic_count: int
+    builtin_diagnostic_sha256: str
+    builtin_trust_primitives: frozenset[tuple[str, str, str]]
 
 
 def one_value(fields: dict[str, list[str]], name: str) -> str:
@@ -149,7 +163,15 @@ def load_vocabulary(path: pathlib.Path = DEFAULT_VOCABULARY) -> Vocabulary:
         raise ScanError("trust vocabulary does not match the reviewed trust-token set")
     if defensive_tokens & trust_tokens:
         raise ScanError("defensive and trust-token vocabularies must be disjoint")
-    non_parser_trust_tokens = {"admit", "assume_specification", "axiom", "uninterp"}
+    non_parser_trust_tokens = {
+        "admit",
+        "assume_",
+        "assume_specification",
+        "axiom",
+        "inline_air_stmt",
+        "no_method_body",
+        "uninterp",
+    }
     if not trust_tokens <= parser_tokens | non_parser_trust_tokens:
         raise ScanError("trust vocabulary contains a token outside the audited parser vocabulary")
 
@@ -181,6 +203,9 @@ def load_vocabulary(path: pathlib.Path = DEFAULT_VOCABULARY) -> Vocabulary:
 
     allowed_fields = {
         "defensive-token",
+        "builtin-diagnostic-count",
+        "builtin-diagnostic-sha256",
+        "builtin-trust-primitive",
         "format",
         "parser-token",
         "parser-decision",
@@ -188,12 +213,38 @@ def load_vocabulary(path: pathlib.Path = DEFAULT_VOCABULARY) -> Vocabulary:
         "release-source",
         "trust-token",
         "upstream-commit",
+        "upstream-builtin-source",
         "upstream-source",
         "version",
     }
     unexpected = set(fields) - allowed_fields
     if unexpected:
         raise ScanError(f"unknown trust vocabulary fields: {sorted(unexpected)!r}")
+
+    builtin_count = one_value(fields, "builtin-diagnostic-count")
+    builtin_digest = one_value(fields, "builtin-diagnostic-sha256")
+    if not builtin_count.isdigit() or int(builtin_count) <= 0:
+        raise ScanError("invalid builtin diagnostic count")
+    if len(builtin_digest) != 64 or any(
+        character not in "0123456789abcdef" for character in builtin_digest
+    ):
+        raise ScanError("invalid builtin diagnostic inventory SHA-256")
+    builtin_trust_primitives = set()
+    for record in sorted_unique_values(fields, "builtin-trust-primitive"):
+        parts = record.split("|")
+        if (
+            len(parts) != 3
+            or not parts[0].startswith("verus::verus_builtin::")
+            or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", parts[1]) is None
+            or parts[2] != "proof"
+        ):
+            raise ScanError("invalid builtin trust-primitive record")
+        builtin_trust_primitives.add((parts[0], parts[1], parts[2]))
+    if builtin_trust_primitives != REQUIRED_BUILTIN_TRUST_PRIMITIVES:
+        raise ScanError("builtin trust primitives do not match the reviewed set")
+    if {name for _, name, _ in builtin_trust_primitives} - trust_tokens:
+        raise ScanError("builtin trust primitives must also be forbidden proof tokens")
+
     upstream_source = one_value(fields, "upstream-source").split("|")
     if (
         len(upstream_source) != 3
@@ -203,6 +254,17 @@ def load_vocabulary(path: pathlib.Path = DEFAULT_VOCABULARY) -> Vocabulary:
         or any(character not in "0123456789abcdef" for character in upstream_source[2])
     ):
         raise ScanError("invalid audited upstream attribute-parser source record")
+    upstream_builtin_source = one_value(fields, "upstream-builtin-source").split("|")
+    if (
+        len(upstream_builtin_source) != 3
+        or upstream_builtin_source[0] != "source/builtin/src/lib.rs"
+        or not upstream_builtin_source[1].isdigit()
+        or len(upstream_builtin_source[2]) != 64
+        or any(
+            character not in "0123456789abcdef" for character in upstream_builtin_source[2]
+        )
+    ):
+        raise ScanError("invalid audited upstream builtin source record")
     return Vocabulary(
         version,
         upstream_commit,
@@ -213,6 +275,14 @@ def load_vocabulary(path: pathlib.Path = DEFAULT_VOCABULARY) -> Vocabulary:
         release_roots,
         tuple(release_sources),
         (upstream_source[0], int(upstream_source[1]), upstream_source[2]),
+        (
+            upstream_builtin_source[0],
+            int(upstream_builtin_source[1]),
+            upstream_builtin_source[2],
+        ),
+        int(builtin_count),
+        builtin_digest,
+        frozenset(builtin_trust_primitives),
     )
 
 
@@ -515,6 +585,82 @@ def sha256(path: pathlib.Path) -> str:
     return digest.hexdigest()
 
 
+def read_utf8_regular_file(path: pathlib.Path, description: str) -> str:
+    if path.is_symlink() or not path.is_file():
+        raise ScanError(f"{description} is not a direct regular file")
+    try:
+        return path.read_text(encoding="utf-8", errors="strict")
+    except (OSError, UnicodeError) as error:
+        raise ScanError(f"cannot read {description}: {error}") from error
+
+
+def validate_builtin_structure(source: str, vocabulary: Vocabulary) -> None:
+    diagnostics = re.findall(r'rustc_diagnostic_item\s*=\s*"([^"]+)"', source)
+    unique_diagnostics = frozenset(diagnostics)
+    if len(diagnostics) != len(unique_diagnostics):
+        raise ScanError("pinned builtin source has duplicate diagnostic items")
+    inventory = ("\n".join(sorted(unique_diagnostics)) + "\n").encode("utf-8")
+    if len(unique_diagnostics) != vocabulary.builtin_diagnostic_count:
+        raise ScanError("pinned builtin diagnostic-item count drifted")
+    if hashlib.sha256(inventory).hexdigest() != vocabulary.builtin_diagnostic_sha256:
+        raise ScanError("pinned builtin diagnostic-item inventory drifted")
+
+    observed_primitives = set()
+    for marker, _, _ in vocabulary.builtin_trust_primitives:
+        needle = f'rustc_diagnostic_item = "{marker}"'
+        if source.count(needle) != 1:
+            raise ScanError(f"builtin trust diagnostic binding drifted: {marker}")
+        start = source.index(needle)
+        next_item = source.find("rustc_diagnostic_item", start + len(needle))
+        block = source[start : len(source) if next_item < 0 else next_item]
+        function = re.search(r"\bpub\s+(?:const\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)", block)
+        modes = sorted(set(re.findall(r"#\[verifier::([a-z_][a-z0-9_]*)\]", block)))
+        if function is None or modes != ["proof"]:
+            raise ScanError(f"builtin trust primitive shape drifted: {marker}")
+        observed_primitives.add((marker, function.group(1), modes[0]))
+    if observed_primitives != vocabulary.builtin_trust_primitives:
+        raise ScanError("builtin trust primitive bindings drifted")
+
+
+def audit_builtin_source(path: pathlib.Path, vocabulary: Vocabulary) -> str:
+    relative, byte_length, expected_digest = vocabulary.upstream_builtin_source
+    source = read_utf8_regular_file(path, "audited upstream Verus builtin source")
+    if path.stat().st_size != byte_length or sha256(path) != expected_digest:
+        raise ScanError(f"audited upstream Verus builtin source drifted: {relative}")
+    validate_builtin_structure(source, vocabulary)
+    return source
+
+
+def test_builtin_drift_rejection(path: pathlib.Path, vocabulary: Vocabulary) -> None:
+    source = audit_builtin_source(path, vocabulary)
+    mutations = {
+        "diagnostic rename": source.replace(
+            'rustc_diagnostic_item = "verus::verus_builtin::assume_"',
+            'rustc_diagnostic_item = "verus::verus_builtin::assume_hidden"',
+            1,
+        ),
+        "function rename": source.replace(
+            "pub fn assume_(_: bool)", "pub fn assume_hidden(_: bool)", 1
+        ),
+        "proof-mode removal": source.replace(
+            '#[verifier::proof]\npub fn assume_(_: bool)',
+            '#[verifier::spec]\npub fn assume_(_: bool)',
+            1,
+        ),
+        "new diagnostic": source
+        + '\n#[rustc_diagnostic_item = "verus::verus_builtin::new_trust_primitive"]\n'
+        + "#[verifier::proof]\npub fn new_trust_primitive() {}\n",
+    }
+    for name, mutation in mutations.items():
+        if mutation == source:
+            raise ScanError(f"builtin drift self-test did not apply: {name}")
+        try:
+            validate_builtin_structure(mutation, vocabulary)
+        except ScanError:
+            continue
+        raise ScanError(f"builtin drift mutation was accepted: {name}")
+
+
 def audit_verus_root(root: pathlib.Path, vocabulary: Vocabulary) -> None:
     if root.is_symlink() or not root.is_dir():
         raise ScanError("Verus audit root is not a direct directory")
@@ -532,6 +678,11 @@ def audit_verus_root(root: pathlib.Path, vocabulary: Vocabulary) -> None:
             raise ScanError(f"audited Verus source is not a direct regular file: {relative}")
         if path.stat().st_size != byte_length or sha256(path) != expected_digest:
             raise ScanError(f"audited Verus source drifted: {relative}")
+
+    builtin_source = read_utf8_regular_file(
+        root / "builtin/src/lib.rs", "audited Verus builtin source"
+    )
+    validate_builtin_structure(builtin_source, vocabulary)
 
     identifiers = set()
     observed_attributes = set()
@@ -617,7 +768,9 @@ def main(arguments: list[str]) -> int:
         f"usage: {pathlib.Path(sys.argv[0]).name} "
         "[--require-exp-real|--forbid-uninterp] PROOF [PROOF ...]\n"
         f"       {pathlib.Path(sys.argv[0]).name} --audit-verus-root ROOT\n"
-        f"       {pathlib.Path(sys.argv[0]).name} --audit-parser-source SOURCE"
+        f"       {pathlib.Path(sys.argv[0]).name} --audit-parser-source SOURCE\n"
+        f"       {pathlib.Path(sys.argv[0]).name} --audit-builtin-source SOURCE\n"
+        f"       {pathlib.Path(sys.argv[0]).name} --test-builtin-drift SOURCE"
     )
     try:
         vocabulary = load_vocabulary()
@@ -634,6 +787,20 @@ def main(arguments: list[str]) -> int:
     if len(arguments) == 2 and arguments[0] == "--audit-parser-source":
         try:
             audit_parser_source(pathlib.Path(arguments[1]), vocabulary)
+        except ScanError as error:
+            print(f"FAIL: {error}", file=sys.stderr)
+            return 1
+        return 0
+    if len(arguments) == 2 and arguments[0] == "--audit-builtin-source":
+        try:
+            audit_builtin_source(pathlib.Path(arguments[1]), vocabulary)
+        except ScanError as error:
+            print(f"FAIL: {error}", file=sys.stderr)
+            return 1
+        return 0
+    if len(arguments) == 2 and arguments[0] == "--test-builtin-drift":
+        try:
+            test_builtin_drift_rejection(pathlib.Path(arguments[1]), vocabulary)
         except ScanError as error:
             print(f"FAIL: {error}", file=sys.stderr)
             return 1

@@ -86,22 +86,30 @@ other than that enclosing `verus!` are rejected.
 audited `rust_verify` attribute-parser source identity, bundled macro/builtin
 source identities, the conservative parser vocabulary, and every reviewed
 trust-bearing token. The runner re-derives the verifier-attribute vocabulary
-present in the pinned release sources and fails on unknown entries. GitHub-hosted
-CI also fetches the parser source by exact upstream commit, verifies its pinned
-size and SHA-256, and re-derives its complete verifier attribute-name decision
-vocabulary. All proof-source attributes are denied independently of those lists.
-Tokens including `admit`, `assume`, `assume_termination`, axiom and external
-specification forms are rejected even when comments split adjacent syntax. The
+present in the pinned release sources and fails on unknown entries. It also
+derives all 177 `rustc_diagnostic_item` names from the pinned
+`builtin/src/lib.rs`, checks their sorted inventory digest, and binds each
+reviewed trust primitive's diagnostic name, Rust function name, and proof mode.
+Drift tests mutate a diagnostic name, function binding, proof mode, and inventory.
+
+GitHub-hosted CI fetches both upstream source files by exact commit, verifies
+their pinned sizes and SHA-256 values, and re-runs those structural audits. All
+proof-source attributes are denied independently of those lists. Tokens including
+`admit`, `assume`, `assume_`, `assume_termination`, `inline_air_stmt`, axiom and
+external specification forms are rejected even when comments split adjacent
+syntax. Direct access to the `verus_builtin` namespace is also forbidden. The
 sole exception is one active, unadorned direct declaration in the outer
 `verus!` block with exactly these tokens: `pub uninterp spec fn
 exp_real_v1(value: real) -> real;`.
 
-The regression corpus covers split comments, U+200E, strings, nested comments,
-all audited trust tokens, `#[path] mod`, external modules, `include!`,
-`include_str!`, `include_bytes!`, code-generating macros, and configured,
-adorned, nested, duplicate, renamed, or ordinary-definition substitutions of
-`exp_real_v1`. Ordinary Rust tests pin every proof source and exercise both
-scanner rejection and replacement of `rust_verify`.
+The regression corpus covers split comments, U+200E, NFKC-confusable identifiers,
+raw identifiers, qualified builtin calls, strings, nested comments, all audited
+trust tokens, `#[path] mod`, external modules, `include!`, `include_str!`,
+`include_bytes!`, code-generating macros, and configured, adorned, nested,
+duplicate, renamed, or ordinary-definition substitutions of `exp_real_v1`.
+Five pinned exploit fixtures are rejected by the scanner and then, only as a
+controlled bypass test, passed directly to pinned Verus; each otherwise verifies
+a postcondition of `false`. This demonstrates why scanner admission is required.
 
 These are point-in-time source and release-closure measurements, not an
 immutable or descriptor-bound Verus execution. Proof execution clears the
@@ -129,7 +137,8 @@ replacement-resistance claim for that proof.
 
 The positive proof pin is 11,143 bytes with SHA-256
 `61f1453d267a8e9183334dfe1ca37bcd69c92df4b55d56606907627c5691a9f9`;
-all three negative sources are pinned independently as well.
+all three semantic-negative and five trust-exploit sources are pinned
+independently as well.
 
 ## Commands
 

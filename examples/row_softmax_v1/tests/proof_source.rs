@@ -7,6 +7,14 @@ const PROOF: &[u8] = include_bytes!("../verus/row_softmax_v1.rs");
 const DUPLICATE_WRITER: &[u8] = include_bytes!("../verus/negative/duplicate_writer.rs");
 const LANE_PLUS_ONE: &[u8] = include_bytes!("../verus/negative/lane_plus_one_out_of_bounds.rs");
 const WRONG_NUMERATOR: &[u8] = include_bytes!("../verus/negative/wrong_numerator_index.rs");
+const ASSUME_DIRECT: &[u8] = include_bytes!("../verus/trust_exploits/assume_direct.rs");
+const ASSUME_QUALIFIED: &[u8] = include_bytes!("../verus/trust_exploits/assume_qualified.rs");
+const ASSUME_QUALIFIED_COMMENT: &[u8] =
+    include_bytes!("../verus/trust_exploits/assume_qualified_comment.rs");
+const ASSUME_QUALIFIED_UNICODE_COMMENT: &[u8] =
+    include_bytes!("../verus/trust_exploits/assume_qualified_unicode_comment.rs");
+const ASSUME_RAW_IDENTIFIER: &[u8] =
+    include_bytes!("../verus/trust_exploits/assume_raw_identifier.rs");
 const VERUS_CLOSURE_MANIFEST: &[u8] = include_bytes!("../verus/VERUS_CLOSURE_MANIFEST");
 const VERUS_TRUST_VOCABULARY: &[u8] = include_bytes!("../verus/VERUS_TRUST_VOCABULARY");
 const SOURCE_SCANNER: &str = include_str!("../check-proof-source.py");
@@ -46,6 +54,36 @@ fn proof_and_negative_mutations_have_exact_source_pins() {
             WRONG_NUMERATOR,
             2_145,
             "fd06e5e50e655c738583f8901889a9bc9e9cc8803594e1ff7f8450ae00e00c7e",
+        ),
+        (
+            "direct assume_ exploit",
+            ASSUME_DIRECT,
+            146,
+            "ad02653ab24cc7029dcfeab6d2f4cb73839e226abb286bd5b2049477deaef4da",
+        ),
+        (
+            "qualified assume_ exploit",
+            ASSUME_QUALIFIED,
+            164,
+            "0a8688b1552c64c2980dad4d077922cafc278f4a0eecffbc8088ec812752ab51",
+        ),
+        (
+            "comment-split qualified assume_ exploit",
+            ASSUME_QUALIFIED_COMMENT,
+            193,
+            "6f85c444d611918c11c7e27fe2eb0e5ca811187b13960bf1ddef8575ec85b2bb",
+        ),
+        (
+            "raw-identifier assume_ exploit",
+            ASSUME_RAW_IDENTIFIER,
+            145,
+            "e01cdc8390aa46d05303673cc3ad492f1304f58ce21b5de6d1cf316dbbbb2ec3",
+        ),
+        (
+            "Unicode-comment qualified assume_ exploit",
+            ASSUME_QUALIFIED_UNICODE_COMMENT,
+            179,
+            "8efe80ccce9b1511bee892177296e36175958073572bf565f97e3d5c2a0fd42d",
         ),
     ];
     for (name, source, bytes, digest) in pins {
@@ -106,6 +144,12 @@ fn source_scanner_is_token_aware_and_fail_closed() {
         "APPROVED_EXP_DECLARATION",
         "validate_balanced_closed_source",
         "audit_verus_root",
+        "validate_builtin_structure",
+        "test_builtin_drift_rejection",
+        "diagnostic rename",
+        "function rename",
+        "proof-mode removal",
+        "new diagnostic",
     ] {
         assert!(
             SOURCE_SCANNER.contains(marker),
@@ -166,7 +210,7 @@ fn pinned_verus_identity_and_release_closure_are_exact() {
     );
     assert_eq!(
         sha256(VERUS_TRUST_VOCABULARY),
-        "faff55d0c38ca0fe70a96680ac1e8d624e3320e46c5a78ac8624407e0b4a4d4b"
+        "54457b1030c88f7598a0a948563a0abd551a431e0f97b7ff33242f56f194ad7d"
     );
     let closure = std::str::from_utf8(VERUS_CLOSURE_MANIFEST).unwrap();
     for marker in [
@@ -182,6 +226,11 @@ fn pinned_verus_identity_and_release_closure_are_exact() {
     for marker in [
         "upstream-commit=b677dd5a766f25f56e9aa1e32621aa4e53304b47",
         "source/rust_verify/src/attributes.rs|70318|88029e464e4a24ee",
+        "source/builtin/src/lib.rs|72928|2d73e0e561507c7f",
+        "builtin-diagnostic-count=177",
+        "builtin-diagnostic-sha256=25601d4b64eacc5a",
+        "builtin-trust-primitive=verus::verus_builtin::assume_|assume_|proof",
+        "trust-token=assume_",
         "trust-token=assume_termination",
         "trust-token=external_fn_specification",
         "trust-token=externals_available_without_declaration",
@@ -193,7 +242,8 @@ fn pinned_verus_identity_and_release_closure_are_exact() {
         );
     }
     assert_eq!(vocabulary.matches("parser-decision=").count(), 70);
-    assert_eq!(vocabulary.matches("trust-token=").count(), 18);
+    assert_eq!(vocabulary.matches("builtin-trust-primitive=").count(), 4);
+    assert_eq!(vocabulary.matches("trust-token=").count(), 21);
 }
 
 #[test]
@@ -205,8 +255,12 @@ fn runner_uses_the_pinned_solver_and_pre_post_closure_measurements() {
         "RUSTUP_HOME=$runner_rustup_home",
         "CARGO_HOME=$runner_cargo_home",
         "--audit-verus-root",
+        "--audit-builtin-source",
+        "--test-builtin-drift",
         "--require-exp-real",
         "--forbid-uninterp",
+        "bypassed pinned Verus verified false",
+        "assume_qualified_unicode_comment",
     ] {
         assert!(RUNNER.contains(marker), "missing runner boundary {marker}");
     }

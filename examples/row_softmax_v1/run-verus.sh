@@ -4,6 +4,7 @@ set -eu
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 proof="$script_dir/verus/row_softmax_v1.rs"
 negative_dir="$script_dir/verus/negative"
+trust_exploit_dir="$script_dir/verus/trust_exploits"
 version_file="$script_dir/verus/VERUS_VERSION"
 sha256_file="$script_dir/verus/VERUS_SHA256"
 closure_manifest="$script_dir/verus/VERUS_CLOSURE_MANIFEST"
@@ -48,6 +49,37 @@ require_source "$negative_dir/duplicate_writer.rs" \
     'mutated_output_ownership_is_injective_v1'
 require_source "$negative_dir/wrong_numerator_index.rs" \
     'mutated_stable_softmax_spec_preserves_lane_numerator_correspondence_v1'
+
+require_blocked_exploit() {
+    file=$1
+    marker=$2
+    expected_rejection=$3
+    require_source "$file" "$marker"
+    if output=$("$source_checker" --forbid-uninterp "$file" 2>&1); then
+        printf 'FAIL: source checker accepted trust exploit %s\n' "$file" >&2
+        exit 1
+    fi
+    case "$output" in
+        *"$expected_rejection"*) ;;
+        *) printf 'FAIL: trust exploit had unexpected rejection: %s\n' "$output" >&2; exit 1 ;;
+    esac
+}
+
+require_blocked_exploit "$trust_exploit_dir/assume_direct.rs" \
+    'scanner_bypass_direct_assume_verifies_false' \
+    "forbidden proof token 'assume_'"
+require_blocked_exploit "$trust_exploit_dir/assume_qualified.rs" \
+    'scanner_bypass_qualified_assume_verifies_false' \
+    "forbidden proof token 'assume_'"
+require_blocked_exploit "$trust_exploit_dir/assume_raw_identifier.rs" \
+    'scanner_bypass_raw_assume_verifies_false' \
+    "forbidden proof token 'assume_'"
+require_blocked_exploit "$trust_exploit_dir/assume_qualified_comment.rs" \
+    'scanner_bypass_comment_split_assume_verifies_false' \
+    "forbidden proof token 'assume_'"
+require_blocked_exploit "$trust_exploit_dir/assume_qualified_unicode_comment.rs" \
+    'scanner_bypass_unicode_comment_assume_verifies_false' \
+    'forbidden Unicode Cf U+200E'
 
 "$source_checker" --require-exp-real \
     "$proof" "$negative_dir/wrong_numerator_index.rs"
@@ -103,6 +135,8 @@ fi
 verus_root=$(CDPATH='' cd -- "$(dirname -- "$verus_path")" && pwd)
 "$closure_checker" "$verus_root" "$closure_manifest"
 "$source_checker" --audit-verus-root "$verus_root"
+"$source_checker" --audit-builtin-source "$verus_root/builtin/src/lib.rs"
+"$source_checker" --test-builtin-drift "$verus_root/builtin/src/lib.rs"
 
 env_path=$(command -v env 2>/dev/null || true)
 if [ -z "$env_path" ]; then
@@ -170,6 +204,32 @@ if ! grep -Fq 'verification results:: 18 verified, 0 errors' "$positive_log"; th
 fi
 cat "$positive_log"
 
+run_scanner_blocked_exploit() {
+    name=$1
+    file=$2
+    log="$tmp_dir/$name.log"
+    if ! run_verus "$file" >"$log" 2>&1; then
+        printf 'FAIL: pinned Verus did not accept scanner-blocked exploit %s\n' "$name" >&2
+        cat "$log" >&2
+        exit 1
+    fi
+    if ! grep -Fq 'verification results:: 1 verified, 0 errors' "$log"; then
+        printf 'FAIL: scanner-blocked exploit %s had an unexpected result\n' "$name" >&2
+        cat "$log" >&2
+        exit 1
+    fi
+    printf 'BLOCKED: scanner rejected %s; bypassed pinned Verus verified false\n' "$name"
+}
+
+run_scanner_blocked_exploit assume_direct "$trust_exploit_dir/assume_direct.rs"
+run_scanner_blocked_exploit assume_qualified "$trust_exploit_dir/assume_qualified.rs"
+run_scanner_blocked_exploit assume_raw_identifier \
+    "$trust_exploit_dir/assume_raw_identifier.rs"
+run_scanner_blocked_exploit assume_qualified_comment \
+    "$trust_exploit_dir/assume_qualified_comment.rs"
+run_scanner_blocked_exploit assume_qualified_unicode_comment \
+    "$trust_exploit_dir/assume_qualified_unicode_comment.rs"
+
 run_rejected() {
     name=$1
     file=$2
@@ -205,4 +265,4 @@ run_rejected wrong_numerator_index "$negative_dir/wrong_numerator_index.rs" \
     'mutated_stable_softmax_spec_preserves_lane_numerator_correspondence_v1'
 
 "$closure_checker" "$verus_root" "$closure_manifest"
-printf 'PASS: row-softmax V1 proof and 3 expected rejections\n'
+printf 'PASS: row-softmax V1 proof, 3 expected rejections, and 5 blocked trust exploits\n'

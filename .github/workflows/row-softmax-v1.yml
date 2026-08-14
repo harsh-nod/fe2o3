@@ -42,6 +42,8 @@ jobs:
           readonly install_dir="${RUNNER_TEMP}/pinned-verus"
           readonly parser_source="${RUNNER_TEMP}/verus-attributes.rs"
           readonly parser_source_url="https://raw.githubusercontent.com/verus-lang/verus/b677dd5a766f25f56e9aa1e32621aa4e53304b47/source/rust_verify/src/attributes.rs"
+          readonly builtin_source="${RUNNER_TEMP}/verus-builtin-lib.rs"
+          readonly builtin_source_url="https://raw.githubusercontent.com/verus-lang/verus/b677dd5a766f25f56e9aa1e32621aa4e53304b47/source/builtin/src/lib.rs"
 
           [[ "$(<"${version_file}")" == "${expected_version}" ]]
           curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
@@ -61,6 +63,12 @@ jobs:
             --output "${parser_source}" "${parser_source_url}"
           examples/row_softmax_v1/check-proof-source.sh \
             --audit-parser-source "${parser_source}"
+          curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
+            --output "${builtin_source}" "${builtin_source_url}"
+          examples/row_softmax_v1/check-proof-source.sh \
+            --audit-builtin-source "${builtin_source}"
+          examples/row_softmax_v1/check-proof-source.sh \
+            --test-builtin-drift "${builtin_source}"
           printf 'VERUS=%s\n' "${verus}" >> "${GITHUB_ENV}"
 
       - name: Verify proof and reject mutations

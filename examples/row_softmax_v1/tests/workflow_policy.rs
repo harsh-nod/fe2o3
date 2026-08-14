@@ -30,6 +30,12 @@ fn untrusted_events_have_only_github_hosted_jobs() {
 b677dd5a766f25f56e9aa1e32621aa4e53304b47/source/rust_verify/src/attributes.rs"
     ));
     assert!(GENERIC_WORKFLOW.contains("--audit-parser-source"));
+    assert!(GENERIC_WORKFLOW.contains(
+        "raw.githubusercontent.com/verus-lang/verus/\
+b677dd5a766f25f56e9aa1e32621aa4e53304b47/source/builtin/src/lib.rs"
+    ));
+    assert!(GENERIC_WORKFLOW.contains("--audit-builtin-source"));
+    assert!(GENERIC_WORKFLOW.contains("--test-builtin-drift"));
 }
 
 #[test]

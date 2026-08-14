@@ -77,6 +77,10 @@ fn scanner_rejects_trust_tokens_split_tokens_and_unicode_controls() {
             "forbidden Unicode Cf U+200E",
         ),
         (
+            "tests/fixtures/source-scanner/reject/assume-unicode-nfkc.rs",
+            "forbidden proof token 'assume_'",
+        ),
+        (
             "tests/fixtures/source-scanner/reject/assume-termination.rs",
             "forbidden proof token 'assume_termination'",
         ),
@@ -107,6 +111,11 @@ fn scanner_rejects_trust_tokens_split_tokens_and_unicode_controls() {
     )
     .unwrap();
     assert!(unicode_fixture.contains('\u{200e}'));
+    let nfkc_fixture = fs::read_to_string(
+        manifest().join("tests/fixtures/source-scanner/reject/assume-unicode-nfkc.rs"),
+    )
+    .unwrap();
+    assert!(nfkc_fixture.contains('𝕒'));
 
     for (fixture, expected) in cases {
         let output = run_source_checker(fixture);
@@ -127,7 +136,7 @@ fn every_pinned_trust_token_except_the_one_exp_declaration_is_rejected() {
         .lines()
         .filter_map(|line| line.strip_prefix("trust-token="))
         .collect();
-    assert_eq!(tokens.len(), 18);
+    assert_eq!(tokens.len(), 21);
 
     for token in tokens.into_iter().filter(|token| *token != "uninterp") {
         let temporary = unique_temp_dir(&format!("trust-token-{token}"));
@@ -155,6 +164,57 @@ fn every_pinned_trust_token_except_the_one_exp_declaration_is_rejected() {
                 .unwrap()
                 .contains(&format!("forbidden proof token '{token}'")),
             "unexpected diagnostic for trust token {token}"
+        );
+    }
+}
+
+#[test]
+fn scanner_blocks_assume_builtin_false_proof_exploits() {
+    let checker = manifest().join("check-proof-source.sh");
+    let cases = [
+        (
+            "verus/trust_exploits/assume_direct.rs",
+            "assume_(false)",
+            "forbidden proof token 'assume_'",
+        ),
+        (
+            "verus/trust_exploits/assume_qualified.rs",
+            "verus_builtin::assume_(false)",
+            "forbidden proof token 'assume_'",
+        ),
+        (
+            "verus/trust_exploits/assume_raw_identifier.rs",
+            "r#assume_(false)",
+            "forbidden proof token 'assume_'",
+        ),
+        (
+            "verus/trust_exploits/assume_qualified_comment.rs",
+            "verus_builtin/* split qualification */::assume_(false)",
+            "forbidden proof token 'assume_'",
+        ),
+        (
+            "verus/trust_exploits/assume_qualified_unicode_comment.rs",
+            "verus_builtin/* ‎ */::assume_(false)",
+            "forbidden Unicode Cf U+200E",
+        ),
+    ];
+
+    for (relative, exploit_syntax, expected_rejection) in cases {
+        let path = manifest().join(relative);
+        let source = fs::read_to_string(&path).unwrap();
+        assert!(source.contains("ensures false"));
+        assert!(source.contains(exploit_syntax));
+        let output = Command::new(&checker)
+            .arg("--forbid-uninterp")
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "accepted {relative}");
+        assert!(
+            String::from_utf8(output.stderr)
+                .unwrap()
+                .contains(expected_rejection),
+            "unexpected rejection for {relative}"
         );
     }
 }
@@ -189,6 +249,10 @@ fn scanner_rejects_transitive_source_and_macro_injection() {
         (
             "tests/fixtures/source-scanner/reject/codegen-macro.rs",
             "the only allowed code-generating macro",
+        ),
+        (
+            "tests/fixtures/source-scanner/reject/verus-builtin-namespace.rs",
+            "source-injection token 'verus_builtin'",
         ),
     ];
     for (fixture, expected) in cases {
