@@ -28,7 +28,7 @@ if [[ -e $build_dir || -e $output_hsaco ]]; then
   printf 'error: build and output paths must be fresh\n' >&2
   exit 73
 fi
-for command in cmake ctest grep sha256sum; do
+for command in cmake ctest grep realpath sha256sum; do
   if ! command -v "$command" >/dev/null 2>&1; then
     printf 'error: required command is unavailable: %s\n' "$command" >&2
     exit 69
@@ -42,6 +42,11 @@ for tool in "$cargo_bin" "$rustc_bin"; do
     exit 69
   fi
 done
+if [[ ${cargo_bin%/*} != "${rustc_bin%/*}" ]]; then
+  printf 'error: FE2O3_CARGO and FE2O3_RUSTC must come from one toolchain\n' >&2
+  exit 70
+fi
+toolchain_lib=$(realpath -e -- "${rustc_bin%/*}/../lib")
 
 llvm_build_id=$(<"$llvm_build_id_file")
 cmake -S "$repo_root/tools/fe2o3-llvm-link-worker" -B "$build_dir" \
@@ -78,6 +83,7 @@ FE2O3_SCALAR_GEMM_V1_WORKER_BUILD_ID="$worker_build_id" \
 FE2O3_SCALAR_GEMM_V1_LLVM_BUILD_ID="$llvm_build_id" \
 FE2O3_SCALAR_GEMM_V1_OUTPUT="$output_hsaco" \
 RUSTC="$rustc_bin" \
+LD_LIBRARY_PATH="$toolchain_lib" \
   "$cargo_bin" test --manifest-path "$repo_root/Cargo.toml" --locked \
     -p fe2o3-hsaco-finalize \
     --test scalar_gemm_v1_direct_llvm_worker \
