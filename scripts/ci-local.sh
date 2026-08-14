@@ -48,6 +48,7 @@ Commands:
   test            Run unit tests that do not link or load the HIP runtime
   workspace-test  Run every workspace test target; may require ROCm libraries
   backend         Build the rustc codegen backend dylib
+  authority-launcher  Run bounded protected build-authority launcher tests
   parity-evidence Run parity, signed-attestation, and queue shell tests
   parity-production-immutable  Run opt-in root ext4/XFS ingestion test
   verus           Run positive and negative Verus proof fixtures; requires Verus
@@ -214,6 +215,11 @@ run_verus() {
     "${REPO_ROOT}/examples/scalar_gemm_v1/run-verus.sh" --require
 }
 
+run_authority_launcher_tests() {
+  run_step authority-launcher-tests \
+    bash scripts/tests/cargo-fe2o3-authority-launcher.sh
+}
+
 run_parity_matrix_checks() {
   run_step parity-matrix-check bash scripts/parity-matrix.sh check
   run_step parity-matrix-tests bash scripts/tests/parity-matrix.sh
@@ -222,6 +228,7 @@ run_parity_matrix_checks() {
     bash scripts/tests/parity-oci-executor.sh
   run_step parity-oci-operator-tests \
     bash scripts/tests/parity-oci-operator.sh
+  run_authority_launcher_tests
   run_step parity-row-evidence-tests \
     bash scripts/tests/parity-row-evidence.sh
   run_step parity-publisher-client-tests \
@@ -416,6 +423,7 @@ main() {
     test) run_tests ;;
     workspace-test) run_workspace_tests ;;
     backend) run_backend_build ;;
+    authority-launcher) run_authority_launcher_tests ;;
     parity-evidence) run_parity_matrix_checks ;;
     parity-production-immutable) run_parity_production_immutable ;;
     verus) run_verus ;;
