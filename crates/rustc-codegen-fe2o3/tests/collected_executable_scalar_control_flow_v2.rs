@@ -22,7 +22,7 @@ use sha2::{Digest as _, Sha256};
 const PIPELINE: &str = "collected-executable-scalar-control-flow-v2";
 const FIXTURE: &str = include_str!("fixtures/executable-scalar-control-flow-v1.rs");
 const SCALAR_GEMM_PIPELINE: &str = "collected-scalar-gemm-v1";
-const SCALAR_GEMM_FIXTURE: &str = include_str!("fixtures/scalar-gemm-v1/src/kernel.rs");
+const SCALAR_GEMM_FIXTURE: &str = include_str!("../../../examples/scalar_gemm_v1/src/kernel.rs");
 const BUILD_HELPER_ENV: &str = "FE2O3_SCALAR_CF_ISOLATED_BUILD_HELPER";
 const BUILD_HELPER_SOCKET_ENV: &str = "FE2O3_SCALAR_CF_BUILD_SOCKET_FD";
 const BUILD_HELPER_WORKSPACE_ENV: &str = "FE2O3_SCALAR_CF_BUILD_WORKSPACE";
@@ -727,6 +727,8 @@ fn compile_scalar_gemm(
         ))
         .args([
             "--edition=2024",
+            "--crate-type",
+            "lib",
             "--crate-name",
             "fe2o3_scalar_gemm_v1_fixture",
             "--extern",
