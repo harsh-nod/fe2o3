@@ -66,6 +66,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "dialect-amdgcn"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-kernel-descriptor",
+ "fe2o3-kernel-ir",
+]
+
+[[package]]
 name = "digest"
 version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -185,10 +193,12 @@ dependencies = [
 name = "fe2o3-hsaco-finalize"
 version = "0.1.0"
 dependencies = [
+ "dialect-amdgcn",
  "fe2o3-artifact-transaction",
  "fe2o3-compiler-ffi",
  "fe2o3-hsaco",
  "fe2o3-kernel-descriptor",
+ "fe2o3-kernel-ir",
  "object",
  "reserved-fe2o3-symbols",
  "rustix",
