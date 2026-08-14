@@ -12,8 +12,8 @@ use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::ptr;
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -123,6 +123,102 @@ struct PinnedBackend {
     file: File,
     len: usize,
     sha256: [u8; 32],
+}
+
+struct PinnedBrokerExecutable {
+    file: File,
+    device: u64,
+    inode: u64,
+    mode: u32,
+    len: u64,
+    sha256: [u8; 32],
+}
+
+impl PinnedBrokerExecutable {
+    fn open(path: &Path) -> Result<Self, String> {
+        let file = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(path)
+            .map_err(|error| {
+                format!("open built cargo-fe2o3 without following symlinks: {error}")
+            })?;
+        let metadata = file
+            .metadata()
+            .map_err(|error| format!("inspect pinned cargo-fe2o3: {error}"))?;
+        if !metadata.is_file()
+            || metadata.uid() != unsafe { libc::geteuid() }
+            || metadata.mode() & 0o111 == 0
+            || metadata.mode() & 0o022 != 0
+            || metadata.len() == 0
+        {
+            return Err(
+                "built cargo-fe2o3 is not an owned non-writable executable regular file".to_owned(),
+            );
+        }
+        let len = metadata.len();
+        let sha256 = sha256_file_description(&file, len)?;
+        Ok(Self {
+            file,
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            mode: metadata.mode(),
+            len,
+            sha256,
+        })
+    }
+
+    fn command(&self) -> Result<Command, String> {
+        self.verify()?;
+        Ok(Command::new(format!(
+            "/proc/self/fd/./{}",
+            self.file.as_raw_fd()
+        )))
+    }
+
+    fn verify(&self) -> Result<(), String> {
+        let metadata = self
+            .file
+            .metadata()
+            .map_err(|error| format!("inspect retained cargo-fe2o3: {error}"))?;
+        if metadata.dev() != self.device
+            || metadata.ino() != self.inode
+            || metadata.mode() != self.mode
+            || metadata.len() != self.len
+        {
+            return Err("retained cargo-fe2o3 object identity changed".to_owned());
+        }
+        if sha256_file_description(&self.file, self.len)? != self.sha256 {
+            return Err("retained cargo-fe2o3 bytes changed".to_owned());
+        }
+        Ok(())
+    }
+
+    fn sha256(&self) -> Result<[u8; 32], String> {
+        self.verify()?;
+        Ok(self.sha256)
+    }
+}
+
+fn sha256_file_description(file: &File, len: u64) -> Result<[u8; 32], String> {
+    let mut digest = Sha256::new();
+    let mut offset = 0_u64;
+    let mut buffer = [0_u8; 64 * 1024];
+    while offset < len {
+        let remaining = usize::try_from((len - offset).min(buffer.len() as u64))
+            .expect("bounded broker digest chunk fits usize");
+        let count = file
+            .read_at(&mut buffer[..remaining], offset)
+            .map_err(|error| format!("read pinned cargo-fe2o3: {error}"))?;
+        if count == 0 {
+            return Err("pinned cargo-fe2o3 was truncated while hashing".to_owned());
+        }
+        digest.update(&buffer[..count]);
+        offset = offset
+            .checked_add(count as u64)
+            .ok_or_else(|| "pinned cargo-fe2o3 digest offset overflow".to_owned())?;
+    }
+    Ok(digest.finalize().into())
 }
 
 impl PinnedBackend {
@@ -1373,7 +1469,7 @@ fn independently_expected_cargo_row_authority(
     transcript: &[u8],
     attempt: &BuildAttempt,
     workspace: &Path,
-    cargo_target: &Path,
+    broker: &PinnedBrokerExecutable,
 ) -> Result<[u8; 32], String> {
     let [generated_metadata, reviewed_metadata] = ordered_metadata else {
         return Err("wrapper did not observe exactly two ordered Cargo metadata values".to_owned());
@@ -1482,9 +1578,7 @@ fn independently_expected_cargo_row_authority(
     decoder.expect(attempt.session().as_bytes())?;
     decoder.expect(attempt.invocation().as_bytes())?;
     decoder.expect(&expected_metadata_transcript)?;
-    let broker = std::fs::read(cargo_target.join("debug/cargo-fe2o3"))
-        .map_err(|error| format!("read independently built cargo-fe2o3 broker: {error}"))?;
-    decoder.expect(&Sha256::digest(broker))?;
+    decoder.expect(&broker.sha256()?)?;
     if !decoder.finished() {
         return Err("authority transcript has trailing fields".to_owned());
     }
@@ -2368,6 +2462,7 @@ fn observe_and_validate_external_row_handoff(
     crate_root: &Path,
     workspace: &Path,
     cargo_target: &Path,
+    broker: &PinnedBrokerExecutable,
     cancelled: &std::sync::mpsc::Receiver<()>,
 ) -> Result<(), String> {
     let observation_path = observation_directory.join("observation");
@@ -2449,7 +2544,7 @@ fn observe_and_validate_external_row_handoff(
                 transcript,
                 &observation.attempt,
                 workspace,
-                &cargo_target,
+                broker,
             )
         });
     if !matches!(
@@ -2607,9 +2702,49 @@ fn compile_clean_external_row_softmax_crate(
     )
 }
 
+fn build_and_pin_handoff_broker(
+    workspace: &Path,
+    cargo_target: &Path,
+) -> Arc<PinnedBrokerExecutable> {
+    let mut command = Command::new(env!("CARGO"));
+    command
+        .current_dir(workspace)
+        .args([
+            "build",
+            "--locked",
+            "-p",
+            "cargo-fe2o3",
+            "--features",
+            "compiler-handoff-observation-test-only",
+            "--bin",
+            "cargo-fe2o3",
+        ])
+        .env("CARGO_TARGET_DIR", cargo_target)
+        .env_remove("CARGO_INCREMENTAL")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .env_remove("RUSTFLAGS");
+    let built = run_bounded(
+        &mut command,
+        BACKEND_BUILD_TIMEOUT,
+        "build cargo-fe2o3 before pinning its test oracle",
+    )
+    .expect("build cargo-fe2o3 before pinning within deadline");
+    assert!(
+        built.status.success(),
+        "failed to build cargo-fe2o3 before pinning:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&built.stdout),
+        String::from_utf8_lossy(&built.stderr),
+    );
+    Arc::new(
+        PinnedBrokerExecutable::open(&cargo_target.join("debug/cargo-fe2o3"))
+            .expect("pin the exact built cargo-fe2o3 object"),
+    )
+}
+
 fn compile_clean_external_row_softmax_crate_with_handoff(
     workspace: &Path,
     cargo_target: &Path,
+    broker: &Arc<PinnedBrokerExecutable>,
     package_name: &str,
 ) -> (Output, TestOutputDir) {
     let output = TestOutputDir::new(workspace);
@@ -2641,6 +2776,7 @@ fn compile_clean_external_row_softmax_crate_with_handoff(
     let observer_root = crate_root.clone();
     let observer_workspace = workspace.to_path_buf();
     let observer_target = cargo_target.to_path_buf();
+    let observer_broker = Arc::clone(broker);
     let observer = thread::spawn(move || {
         observe_and_validate_external_row_handoff(
             &observer_directory,
@@ -2648,6 +2784,7 @@ fn compile_clean_external_row_softmax_crate_with_handoff(
             &observer_root,
             &observer_workspace,
             &observer_target,
+            &observer_broker,
             &cancel_receiver,
         )
     });
@@ -2656,20 +2793,12 @@ fn compile_clean_external_row_softmax_crate_with_handoff(
         "-Coverflow-checks=off -Cmetadata=fe2o3-row-softmax-v1-reviewed --remap-path-prefix={}=/fe2o3-reviewed-workspace/row-softmax-v1.rs",
         source.display()
     );
-    let mut command = Command::new(env!("CARGO"));
+    let mut command = broker
+        .command()
+        .expect("verify pinned cargo-fe2o3 before launch");
     command
         .current_dir(workspace)
-        .args([
-            "run",
-            "--locked",
-            "-p",
-            "cargo-fe2o3",
-            "--features",
-            "compiler-handoff-observation-test-only",
-            "--",
-            "build",
-            "--manifest-path",
-        ])
+        .args(["build", "--manifest-path"])
         .arg(&manifest)
         .env("CARGO_TARGET_DIR", cargo_target)
         .env_remove("CARGO_INCREMENTAL")
@@ -3859,6 +3988,7 @@ fn clean_external_cargo_fe2o3_produces_row_softmax_worker_v2_handoffs() {
     let workspace = workspace();
     let cargo_output = TestOutputDir::new(&workspace);
     let cargo_target = cargo_output.0.join("cargo-target");
+    let broker = build_and_pin_handoff_broker(&workspace, &cargo_target);
     let mut roots = Vec::new();
     for package_name in [
         "fe2o3-row-softmax-external-a",
@@ -3867,6 +3997,7 @@ fn clean_external_cargo_fe2o3_produces_row_softmax_worker_v2_handoffs() {
         let (external, output) = compile_clean_external_row_softmax_crate_with_handoff(
             &workspace,
             &cargo_target,
+            &broker,
             package_name,
         );
         let external_stderr = stderr(&external);
