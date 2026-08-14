@@ -131,7 +131,15 @@ digests and counts, live executable-byte totals, and reviewed vDSO digest for th
 recorded x86_64 GNU host; tests do not derive policy by replaying a failed
 controller observation. A host whose loader, runtime closure, executable
 baseline, or vDSO differs must receive an explicitly reviewed manifest update
-rather than silently recalibrating.
+rather than silently recalibrating. Generic test runs leave the seven tests that
+execute this pinned closure ignored and continue to run the portable ELF,
+debug-section, reproducibility, disassembly, and fail-closed closure checks. On
+the reviewed host, `cargo test -p fe2o3-verifier --test
+authenticated_verus_execution_v2 -- --include-ignored --test-threads=1` runs
+all 14 debug tests; the same command with `--release` runs the 13 applicable
+release tests. Serial execution avoids cross-test ptrace/process-scheduling
+interference. A pinned host that drifts still fails those explicit commands
+rather than skipping or recalibrating.
 
 The workspace dev profile strips debuginfo only from `fe2o3-verifier`; independent
 checkout builds confirm that package scope is sufficient, without changing other

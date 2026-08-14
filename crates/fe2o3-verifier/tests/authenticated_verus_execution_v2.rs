@@ -933,6 +933,7 @@ fn execute_mode(
 }
 
 #[test]
+#[ignore = "requires the exact reviewed fixture, runtime closure, executable baseline, and vDSO host"]
 fn receipt_binds_real_process_occurrences_inputs_outputs_and_opaque_results() {
     let receipt = execute_mode("success").unwrap();
     assert!(receipt.challenge().as_bytes().iter().any(|byte| *byte != 0));
@@ -1000,6 +1001,7 @@ fn receipt_binds_real_process_occurrences_inputs_outputs_and_opaque_results() {
 }
 
 #[test]
+#[ignore = "requires the exact reviewed fixture, runtime closure, executable baseline, and vDSO host"]
 fn fresh_challenges_make_separate_receipts_distinct() {
     let first = execute_mode("success").unwrap();
     let second = execute_mode("success").unwrap();
@@ -1012,6 +1014,7 @@ fn fresh_challenges_make_separate_receipts_distinct() {
 }
 
 #[test]
+#[ignore = "requires the exact reviewed fixture, runtime closure, executable baseline, and vDSO host"]
 fn source_dependency_and_executable_substitution_fail_before_receipt() {
     let dependencies = vec![dependency()];
     let wrong_source = request(b"success", &dependencies);
@@ -1102,6 +1105,7 @@ fn policy_must_pin_the_observed_runtime_closure() {
 }
 
 #[test]
+#[ignore = "requires the exact reviewed fixture, runtime closure, executable baseline, and vDSO host"]
 fn policy_must_pin_the_initial_executable_baseline() {
     let dependencies = vec![dependency()];
     let (solver, verus) = closures();
@@ -1134,6 +1138,7 @@ fn policy_must_pin_the_initial_executable_baseline() {
 }
 
 #[test]
+#[ignore = "requires the exact reviewed fixture, runtime closure, executable baseline, and vDSO host"]
 fn process_creation_timeout_substitution_and_malformed_protocol_all_fail() {
     for (mode, expected) in [
         ("timeout", ProcessFailureV2::Timeout),
@@ -1169,6 +1174,7 @@ fn process_creation_timeout_substitution_and_malformed_protocol_all_fail() {
 }
 
 #[test]
+#[ignore = "requires the exact reviewed fixture, runtime closure, executable baseline, and vDSO host"]
 fn live_executable_page_and_alias_mutations_fail_closed() {
     for (mode, expected) in [
         (
@@ -1207,6 +1213,7 @@ fn live_executable_page_and_alias_mutations_fail_closed() {
 }
 
 #[test]
+#[ignore = "requires the exact reviewed fixture, runtime closure, executable baseline, and vDSO host"]
 fn immutable_result_rejects_mutation_after_done() {
     let receipt = execute_mode("post-done-mutation").unwrap();
     assert_eq!(
