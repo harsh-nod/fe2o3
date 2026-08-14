@@ -21,7 +21,14 @@ use fe2o3_artifact_transaction::{
     BuildInvocation, BuildSession, ProducerIdentity, begin_build_attempt,
     consume_compiler_module_handoff_v1,
 };
-use fe2o3_compiler_ffi::{CodeObjectVersion, CompilerModuleHandoffV2, CompilerModuleSymbolRoleV1};
+use fe2o3_compiler_ffi::{
+    CodeObjectVersion, CompilerDescriptorSourceV1, CompilerModuleHandoffV2,
+    CompilerModuleSymbolRoleV1,
+};
+use fe2o3_kernel_descriptor::{
+    AccessMode, AliasSemantics, BlockSizeV1, OwnershipSemantics, PhysicalAbiComponentKind,
+    ScalarTypeV1,
+};
 use sha2::{Digest as _, Sha256};
 
 const PIPELINE: &str = "collected-executable-scalar-control-flow-v2";
@@ -32,6 +39,12 @@ const TILED_GEMM_PIPELINE: &str = "collected-tiled-gemm-v1";
 const TILED_GEMM_FIXTURE: &str = include_str!("fixtures/collected-tiled-gemm-v1/src/lib.rs");
 const ROW_SOFTMAX_PIPELINE: &str = "collected-row-softmax-v1";
 const ROW_SOFTMAX_FIXTURE: &str = include_str!("fixtures/collected-row-softmax-v1/src/lib.rs");
+// Reviewed direct-rustc fixture commitment, pinned independently from the
+// producer's private authority value and section writer.
+const EXPECTED_ROW_SOFTMAX_AUTHORITY_COMMITMENT: [u8; 32] = [
+    0x1d, 0x4e, 0x57, 0x48, 0x3e, 0x83, 0x20, 0xfa, 0x3f, 0xf0, 0xda, 0x85, 0xab, 0xbb, 0x1f, 0xea,
+    0x87, 0x47, 0x05, 0x1c, 0x25, 0x41, 0x8b, 0x35, 0x88, 0xbb, 0x40, 0xad, 0x7f, 0xeb, 0x74, 0xee,
+];
 const BUILD_HELPER_ENV: &str = "FE2O3_SCALAR_CF_ISOLATED_BUILD_HELPER";
 const BUILD_HELPER_SOCKET_ENV: &str = "FE2O3_SCALAR_CF_BUILD_SOCKET_FD";
 const BUILD_HELPER_WORKSPACE_ENV: &str = "FE2O3_SCALAR_CF_BUILD_WORKSPACE";
@@ -995,6 +1008,189 @@ fn compile_row_softmax_without_attempt(
     )
 }
 
+fn decode_compiler_owned_module_section(
+    module: &str,
+    section_name: &str,
+) -> Result<Vec<u8>, String> {
+    let header = format!("module asm \".section {section_name},\\22\\22,@progbits\"");
+    let lines = module.lines().collect::<Vec<_>>();
+    let matches = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| (*line == header).then_some(index))
+        .collect::<Vec<_>>();
+    let [header_index] = matches.as_slice() else {
+        return Err(format!(
+            "expected exactly one {section_name} module-assembly header, found {}",
+            matches.len()
+        ));
+    };
+    if lines.get(header_index + 1) != Some(&"module asm \".balign 8\"") {
+        return Err(format!("{section_name} does not have exact alignment 8"));
+    }
+
+    let mut bytes = Vec::new();
+    for line in lines.iter().skip(header_index + 2) {
+        let Some(values) = line
+            .strip_prefix("module asm \".byte ")
+            .and_then(|line| line.strip_suffix('"'))
+        else {
+            break;
+        };
+        for value in values.split(", ") {
+            let digits = value
+                .strip_prefix("0x")
+                .ok_or_else(|| format!("{section_name} byte lacks 0x prefix"))?;
+            if digits.len() != 2
+                || !digits
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            {
+                return Err(format!("{section_name} has noncanonical byte {value:?}"));
+            }
+            bytes.push(
+                u8::from_str_radix(digits, 16)
+                    .map_err(|error| format!("decode {section_name} byte: {error}"))?,
+            );
+        }
+    }
+    if bytes.is_empty() {
+        return Err(format!("{section_name} has no retained bytes"));
+    }
+    Ok(bytes)
+}
+
+fn independently_expected_row_exp_boundary() -> [u8; 32] {
+    const DOMAIN: &[u8] = b"fe2o3.row-softmax.exponential-boundary.v1";
+    const REVIEWED_BOUNDARY: &[u8] = b"canonical Kernel IR names its abstract f32 exp operation;no authenticated implementation, approximation/error contract, OCML bitcode, link request, LLVM lowering, or real-number softmax equivalence";
+    let mut digest = Sha256::new();
+    for field in [DOMAIN, REVIEWED_BOUNDARY] {
+        digest.update((field.len() as u64).to_le_bytes());
+        digest.update(field);
+    }
+    digest.finalize().into()
+}
+
+fn require_exact_row_descriptor_source(bytes: &[u8]) -> Result<(), String> {
+    let source = CompilerDescriptorSourceV1::decode(bytes)
+        .map_err(|error| format!("decode row descriptor source: {error}"))?;
+    let table = source.table();
+    if table.device_target().to_string() != "gfx942:xnack-"
+        || table.code_object_version() != CodeObjectVersion::V6
+        || table.kernels().len() != 1
+    {
+        return Err("row descriptor target, COV, or kernel cardinality differs".to_owned());
+    }
+    let kernel = &table.kernels()[0];
+    if kernel.logical_name().as_str() != "row_softmax_v1"
+        || kernel.entry_name().as_str() != "row_softmax_v1"
+        || kernel.descriptor_symbol().as_str() != "row_softmax_v1.kd"
+    {
+        return Err("row descriptor symbol closure differs".to_owned());
+    }
+    let abi = kernel.abi_layout();
+    if abi.explicit_argument_size() != 32
+        || abi.kernarg_segment_size() != 288
+        || abi.kernarg_segment_alignment() != 8
+    {
+        return Err("row descriptor kernarg sizes or alignment differ".to_owned());
+    }
+    let launch = kernel.launch();
+    let BlockSizeV1::Exact(block) = launch.block_size() else {
+        return Err("row descriptor does not require an exact block".to_owned());
+    };
+    let grid = launch.max_grid();
+    if launch.rank() != 1
+        || (block.x(), block.y(), block.z()) != (64, 1, 1)
+        || (grid.x(), grid.y(), grid.z()) != (1, 1, 1)
+        || launch.max_flat_workgroup_size() != 64
+        || launch.static_shared_memory_bytes() != 0
+        || launch.max_dynamic_shared_memory_bytes() != 0
+    {
+        return Err("row descriptor launch geometry differs from WG64/grid1".to_owned());
+    }
+    let [input, output] = kernel.arguments() else {
+        return Err("row descriptor does not contain exactly two slices".to_owned());
+    };
+    if input.source_index() != 0
+        || input.name().as_str() != "arg0"
+        || input.ownership() != OwnershipSemantics::SharedBorrow
+        || input.access() != AccessMode::ReadOnly
+        || input.alias() != AliasSemantics::SharedReadOnly
+        || output.source_index() != 1
+        || output.name().as_str() != "arg1"
+        || output.ownership() != OwnershipSemantics::UniqueBorrow
+        || output.access() != AccessMode::ReadWrite
+        || output.alias() != AliasSemantics::Exclusive
+    {
+        return Err(format!(
+            "row descriptor slice roles or effects differ: input=({}, {}, {:?}, {:?}, {:?}), output=({}, {}, {:?}, {:?}, {:?})",
+            input.source_index(),
+            input.name().as_str(),
+            input.ownership(),
+            input.access(),
+            input.alias(),
+            output.source_index(),
+            output.name().as_str(),
+            output.ownership(),
+            output.access(),
+            output.alias(),
+        ));
+    }
+    let input_type = table
+        .type_records()
+        .iter()
+        .find(|record| record.identity() == input.source_type())
+        .ok_or_else(|| "row input type record is missing".to_owned())?;
+    let output_type = table
+        .type_records()
+        .iter()
+        .find(|record| record.identity() == output.source_type())
+        .ok_or_else(|| "row output type record is missing".to_owned())?;
+    if !input_type.descriptor().is_shared_slice()
+        || input_type.descriptor().scalar_type() != ScalarTypeV1::F32
+        || !output_type.descriptor().is_disjoint_slice()
+        || output_type.descriptor().scalar_type() != ScalarTypeV1::F32
+    {
+        return Err("row descriptor arguments are not the exact two f32 slice types".to_owned());
+    }
+    let expected_input = [
+        (PhysicalAbiComponentKind::GlobalPointer, 0, 8, 8),
+        (PhysicalAbiComponentKind::SliceLengthU64, 8, 8, 8),
+    ];
+    let expected_output = [
+        (PhysicalAbiComponentKind::GlobalPointer, 16, 8, 8),
+        (PhysicalAbiComponentKind::SliceLengthU64, 24, 8, 8),
+    ];
+    if input.physical_components().collect::<Vec<_>>() != expected_input
+        || output.physical_components().collect::<Vec<_>>() != expected_output
+    {
+        return Err("row descriptor physical slice layout differs".to_owned());
+    }
+    Ok(())
+}
+
+#[test]
+fn compiler_owned_module_section_decoder_rejects_malformed_and_substituted_sections() {
+    let exact = concat!(
+        "module asm \".section .fe2o3.test.v1,\\22\\22,@progbits\"\n",
+        "module asm \".balign 8\"\n",
+        "module asm \".byte 0x00, 0x7f, 0xff\"\n",
+    );
+    assert_eq!(
+        decode_compiler_owned_module_section(exact, ".fe2o3.test.v1").unwrap(),
+        [0x00, 0x7f, 0xff]
+    );
+    let malformed = exact.replace("0x7f", "0x7F");
+    assert!(decode_compiler_owned_module_section(&malformed, ".fe2o3.test.v1").is_err());
+    let misaligned = exact.replace(".balign 8", ".balign 4");
+    assert!(decode_compiler_owned_module_section(&misaligned, ".fe2o3.test.v1").is_err());
+    let substituted = exact.replace(".fe2o3.test.v1", ".fe2o3.test.v2");
+    assert!(decode_compiler_owned_module_section(&substituted, ".fe2o3.test.v1").is_err());
+    let duplicate = format!("{exact}{exact}");
+    assert!(decode_compiler_owned_module_section(&duplicate, ".fe2o3.test.v1").is_err());
+}
+
 fn compile_row_softmax_with_attempt_mode(
     workspace: &Path,
     backend: &PinnedBackend,
@@ -1173,17 +1369,72 @@ fn compile_row_softmax_with_device(
         );
         let module = std::str::from_utf8(handoff.module_bytes())
             .expect("row-softmax compiler module is textual LLVM");
-        for required in [
-            "declare float @__ocml_exp_f32(float)",
-            ".fe2o3.kd.v1",
+        assert!(module.contains("declare float @__ocml_exp_f32(float)"));
+        let descriptor_bytes = decode_compiler_owned_module_section(module, ".fe2o3.kd.v1")
+            .expect("decode retained row descriptor section");
+        require_exact_row_descriptor_source(&descriptor_bytes)
+            .expect("independently validate exact row descriptor source");
+        assert!(
+            require_exact_row_descriptor_source(
+                descriptor_bytes
+                    .get(..descriptor_bytes.len() - 1)
+                    .expect("nonempty descriptor source"),
+            )
+            .is_err(),
+            "truncated row descriptor source was accepted"
+        );
+        let mut symbol_substitution = descriptor_bytes.clone();
+        let symbol_offset = symbol_substitution
+            .windows(b"row_softmax_v1".len())
+            .position(|window| window == b"row_softmax_v1")
+            .expect("row descriptor contains its kernel symbol");
+        symbol_substitution[symbol_offset] = b's';
+        assert!(
+            require_exact_row_descriptor_source(&symbol_substitution).is_err(),
+            "same-length row descriptor symbol substitution was accepted"
+        );
+
+        let authority = decode_compiler_owned_module_section(
+            module,
             ".fe2o3.row-softmax-auth.v1",
-            ".fe2o3.row-exp.v1",
-        ] {
-            assert!(
-                module.contains(required),
-                "missing {required:?} in row handoff"
-            );
-        }
+        )
+        .expect("decode retained row-softmax authority section");
+        let exponential = decode_compiler_owned_module_section(module, ".fe2o3.row-exp.v1")
+            .expect("decode retained row exponential-boundary section");
+        assert_eq!(
+            authority.as_slice(),
+            &EXPECTED_ROW_SOFTMAX_AUTHORITY_COMMITMENT
+        );
+        assert_eq!(
+            exponential.as_slice(),
+            &independently_expected_row_exp_boundary()
+        );
+        let mut substituted_authority = authority.clone();
+        substituted_authority[0] ^= 1;
+        assert_ne!(
+            substituted_authority.as_slice(),
+            &EXPECTED_ROW_SOFTMAX_AUTHORITY_COMMITMENT
+        );
+        let mut substituted_exponential = exponential.clone();
+        substituted_exponential[31] ^= 1;
+        assert_ne!(
+            substituted_exponential,
+            independently_expected_row_exp_boundary()
+        );
+
+        let renamed_section = module.replacen(
+            ".fe2o3.row-softmax-auth.v1",
+            ".fe2o3.row-auth.v1",
+            1,
+        );
+        assert!(
+            decode_compiler_owned_module_section(
+                &renamed_section,
+                ".fe2o3.row-softmax-auth.v1"
+            )
+            .is_err(),
+            "legacy row authority section name was accepted"
+        );
     }
     compiled
 }
