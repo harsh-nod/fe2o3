@@ -38,6 +38,14 @@ use sha2::{Digest, Sha256};
 const TARGET: &str = "gfx942:xnack-";
 const TARGET_TRIPLE: &str = "amdgcn-amd-amdhsa";
 const ALPHA_ZETA_KERNELS: [&str; 2] = ["alpha", "zeta"];
+const SCALAR_GEMM_V1_KERNEL: &str = "scalar_gemm_v1";
+const SCALAR_GEMM_V1_KERNEL_ID: [u8; 32] = [
+    0x78, 0x9a, 0xde, 0xdf, 0xdc, 0x3b, 0xe1, 0xfb, 0x60, 0x51, 0x8d, 0xd2, 0xc7, 0x46, 0x0c, 0x3e,
+    0xf8, 0xe6, 0xb9, 0x00, 0x52, 0x7d, 0x1b, 0xcb, 0x22, 0x89, 0xba, 0xa1, 0xe0, 0x14, 0x69, 0x3e,
+];
+const SCALAR_GEMM_V1_COMPILER: &str = "rustc-codegen-fe2o3";
+const SCALAR_GEMM_V1_PRODUCER: &str = "rustc-codegen-fe2o3-worker-v2";
+const SCALAR_GEMM_V1_PRODUCER_VERSION: &str = "typed-general-gfx942-cov6-v1";
 const RUST_TYPE_DOMAIN: &[u8] = b"FE2O3/RUST-TYPE/V1\0";
 const DEVICE_LAYOUT_DOMAIN: &[u8] = b"FE2O3/DEVICE-LAYOUT/V1\0";
 
@@ -172,7 +180,9 @@ struct DescriptorKernelAssemblyV1 {
     kernarg_size: u32,
     kernarg_alignment: u32,
     rank: u8,
+    block_size: [u32; 3],
     max_grid: [u32; 3],
+    max_flat_workgroup_size: u32,
     static_shared_memory_bytes: u32,
     max_dynamic_shared_memory_bytes: u32,
     fields: Vec<DescriptorFieldAssemblyV1>,
@@ -201,12 +211,14 @@ struct CanonicalContainerAssemblyV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ArtifactAssemblyProfileV1 {
     AlphaZeta,
+    ScalarGemmV1,
 }
 
 impl ArtifactAssemblyProfileV1 {
     const fn kernel_count(self) -> usize {
         match self {
             Self::AlphaZeta => 2,
+            Self::ScalarGemmV1 => 1,
         }
     }
 
@@ -214,6 +226,7 @@ impl ArtifactAssemblyProfileV1 {
         match (self, entry) {
             (Self::AlphaZeta, "alpha") => Some(&ALPHA_FIELDS),
             (Self::AlphaZeta, "zeta") => Some(&ZETA_FIELDS),
+            (Self::ScalarGemmV1, SCALAR_GEMM_V1_KERNEL) => Some(&SCALAR_GEMM_V1_FIELDS),
             _ => None,
         }
     }
@@ -222,6 +235,7 @@ impl ArtifactAssemblyProfileV1 {
         match (self, entry) {
             (Self::AlphaZeta, "alpha") => Some(40),
             (Self::AlphaZeta, "zeta") => Some(56),
+            (Self::ScalarGemmV1, SCALAR_GEMM_V1_KERNEL) => Some(64),
             _ => None,
         }
     }
@@ -230,6 +244,7 @@ impl ArtifactAssemblyProfileV1 {
 #[derive(Clone, Copy)]
 enum FrozenFieldKindV1 {
     F32,
+    U32,
     SharedF32,
     ReadWriteDisjointF32,
 }
@@ -237,7 +252,7 @@ enum FrozenFieldKindV1 {
 impl FrozenFieldKindV1 {
     const fn descriptor_kind_tag(self) -> u8 {
         match self {
-            Self::F32 => 1,
+            Self::F32 | Self::U32 => 1,
             Self::SharedF32 => 2,
             Self::ReadWriteDisjointF32 => 3,
         }
@@ -245,14 +260,14 @@ impl FrozenFieldKindV1 {
 
     const fn size(self) -> u16 {
         match self {
-            Self::F32 => 4,
+            Self::F32 | Self::U32 => 4,
             Self::SharedF32 | Self::ReadWriteDisjointF32 => 16,
         }
     }
 
     const fn alignment(self) -> u16 {
         match self {
-            Self::F32 => 4,
+            Self::F32 | Self::U32 => 4,
             Self::SharedF32 | Self::ReadWriteDisjointF32 => 8,
         }
     }
@@ -260,6 +275,7 @@ impl FrozenFieldKindV1 {
     const fn kind(self) -> AbiKind {
         match self {
             Self::F32 => AbiKind::Scalar(ScalarType::F32),
+            Self::U32 => AbiKind::Scalar(ScalarType::U32),
             Self::SharedF32 | Self::ReadWriteDisjointF32 => AbiKind::Slice {
                 element_size: 4,
                 element_alignment: 4,
@@ -269,7 +285,7 @@ impl FrozenFieldKindV1 {
 
     const fn access(self) -> Access {
         match self {
-            Self::F32 => Access::ByValue,
+            Self::F32 | Self::U32 => Access::ByValue,
             Self::SharedF32 => Access::ReadOnly,
             Self::ReadWriteDisjointF32 => Access::ReadWrite,
         }
@@ -278,13 +294,13 @@ impl FrozenFieldKindV1 {
     const fn mutability(self) -> Mutability {
         match self {
             Self::ReadWriteDisjointF32 => Mutability::Mutable,
-            Self::F32 | Self::SharedF32 => Mutability::Immutable,
+            Self::F32 | Self::U32 | Self::SharedF32 => Mutability::Immutable,
         }
     }
 
     const fn ownership(self) -> ArgumentOwnership {
         match self {
-            Self::F32 => ArgumentOwnership::ByValue,
+            Self::F32 | Self::U32 => ArgumentOwnership::ByValue,
             Self::SharedF32 => ArgumentOwnership::SharedBorrow,
             Self::ReadWriteDisjointF32 => ArgumentOwnership::UniqueBorrow,
         }
@@ -292,7 +308,7 @@ impl FrozenFieldKindV1 {
 
     const fn alias(self) -> AliasClass {
         match self {
-            Self::F32 => AliasClass::Value,
+            Self::F32 | Self::U32 => AliasClass::Value,
             Self::SharedF32 => AliasClass::SharedReadOnly,
             Self::ReadWriteDisjointF32 => AliasClass::Exclusive,
         }
@@ -300,7 +316,7 @@ impl FrozenFieldKindV1 {
 
     const fn descriptor_ownership(self) -> OwnershipSemantics {
         match self {
-            Self::F32 => OwnershipSemantics::ByValue,
+            Self::F32 | Self::U32 => OwnershipSemantics::ByValue,
             Self::SharedF32 => OwnershipSemantics::SharedBorrow,
             Self::ReadWriteDisjointF32 => OwnershipSemantics::UniqueBorrow,
         }
@@ -308,7 +324,7 @@ impl FrozenFieldKindV1 {
 
     const fn descriptor_access(self) -> AccessMode {
         match self {
-            Self::F32 => AccessMode::ByValue,
+            Self::F32 | Self::U32 => AccessMode::ByValue,
             Self::SharedF32 => AccessMode::ReadOnly,
             Self::ReadWriteDisjointF32 => AccessMode::ReadWrite,
         }
@@ -316,28 +332,38 @@ impl FrozenFieldKindV1 {
 
     const fn descriptor_alias(self) -> AliasSemantics {
         match self {
-            Self::F32 => AliasSemantics::Value,
+            Self::F32 | Self::U32 => AliasSemantics::Value,
             Self::SharedF32 => AliasSemantics::SharedReadOnly,
             Self::ReadWriteDisjointF32 => AliasSemantics::Exclusive,
         }
     }
 
     fn rust_type_identity(self) -> [u8; 32] {
-        descriptor_identity(RUST_TYPE_DOMAIN, &[self.descriptor_kind_tag(), 10, 0, 0])
+        descriptor_identity(
+            RUST_TYPE_DOMAIN,
+            &[self.descriptor_kind_tag(), self.scalar_tag(), 0, 0],
+        )
     }
 
     fn layout_identity(self) -> [u8; 32] {
         let mut descriptor = Vec::with_capacity(12);
         descriptor.push(self.descriptor_kind_tag());
-        descriptor.push(10);
+        descriptor.push(self.scalar_tag());
         descriptor.extend_from_slice(&self.size().to_le_bytes());
         descriptor.extend_from_slice(&self.alignment().to_le_bytes());
-        let reference = !matches!(self, Self::F32);
+        let reference = !matches!(self, Self::F32 | Self::U32);
         descriptor.push(u8::from(reference) * 8);
         descriptor.push(u8::from(reference) * 8);
         descriptor.extend_from_slice(&0_u16.to_le_bytes());
         descriptor.extend_from_slice(&0_u16.to_le_bytes());
         descriptor_identity(DEVICE_LAYOUT_DOMAIN, &descriptor)
+    }
+
+    const fn scalar_tag(self) -> u8 {
+        match self {
+            Self::U32 => 6,
+            Self::F32 | Self::SharedF32 | Self::ReadWriteDisjointF32 => 10,
+        }
     }
 }
 
@@ -386,6 +412,39 @@ const ZETA_FIELDS: [FrozenFieldV1; 4] = [
         name: "output",
         offset: 40,
         kind: FrozenFieldKindV1::ReadWriteDisjointF32,
+    },
+];
+
+const SCALAR_GEMM_V1_FIELDS: [FrozenFieldV1; 6] = [
+    FrozenFieldV1 {
+        name: "a",
+        offset: 0,
+        kind: FrozenFieldKindV1::SharedF32,
+    },
+    FrozenFieldV1 {
+        name: "b",
+        offset: 16,
+        kind: FrozenFieldKindV1::SharedF32,
+    },
+    FrozenFieldV1 {
+        name: "c",
+        offset: 32,
+        kind: FrozenFieldKindV1::ReadWriteDisjointF32,
+    },
+    FrozenFieldV1 {
+        name: "m",
+        offset: 48,
+        kind: FrozenFieldKindV1::U32,
+    },
+    FrozenFieldV1 {
+        name: "n",
+        offset: 52,
+        kind: FrozenFieldKindV1::U32,
+    },
+    FrozenFieldV1 {
+        name: "k",
+        offset: 56,
+        kind: FrozenFieldKindV1::U32,
     },
 ];
 
@@ -496,7 +555,7 @@ fn assemble_canonical_container_v1(
         let expected_explicit = profile
             .explicit_size(entry)
             .ok_or(WorkerV2ArtifactContainerAssemblyErrorV1::KernelSet)?;
-        validate_physical_profile(metadata, fields, expected_explicit)?;
+        validate_physical_profile(metadata, fields, expected_explicit, profile)?;
 
         let mut converted_fields = Vec::with_capacity(fields.len());
         for (source_index, (argument, expected)) in
@@ -544,6 +603,16 @@ fn assemble_canonical_container_v1(
             ));
         }
         let launch = descriptor.launch();
+        let block_size = match launch.block_size() {
+            fe2o3_kernel_descriptor::BlockSizeV1::Exact(dimensions) => {
+                [dimensions.x(), dimensions.y(), dimensions.z()]
+            }
+            _ => {
+                return Err(WorkerV2ArtifactContainerAssemblyErrorV1::DescriptorModel(
+                    "descriptor block-size constraint differs from the frozen profile",
+                ));
+            }
+        };
         let max_grid = launch.max_grid();
         kernels.push(DescriptorKernelAssemblyV1 {
             kernel_id: *descriptor.kernel_id().as_bytes(),
@@ -567,7 +636,9 @@ fn assemble_canonical_container_v1(
             kernarg_size: layout.kernarg_segment_size(),
             kernarg_alignment: layout.kernarg_segment_alignment(),
             rank: launch.rank(),
+            block_size,
             max_grid: [max_grid.x(), max_grid.y(), max_grid.z()],
+            max_flat_workgroup_size: launch.max_flat_workgroup_size(),
             static_shared_memory_bytes: launch.static_shared_memory_bytes(),
             max_dynamic_shared_memory_bytes: launch.max_dynamic_shared_memory_bytes(),
             fields: converted_fields,
@@ -760,7 +831,7 @@ pub(crate) fn assemble_recovered_worker_v2_load_envelope_v1(
 
 fn expected_components(field: FrozenFieldV1) -> Vec<(u32, u16, u16)> {
     match field.kind {
-        FrozenFieldKindV1::F32 => vec![(field.offset, 4, 4)],
+        FrozenFieldKindV1::F32 | FrozenFieldKindV1::U32 => vec![(field.offset, 4, 4)],
         FrozenFieldKindV1::SharedF32 | FrozenFieldKindV1::ReadWriteDisjointF32 => {
             vec![(field.offset, 8, 8), (field.offset + 8, 8, 8)]
         }
@@ -771,6 +842,7 @@ fn validate_physical_profile(
     kernel: &InspectedKernel,
     fields: &[FrozenFieldV1],
     explicit_size: u32,
+    profile: ArtifactAssemblyProfileV1,
 ) -> Result<(), WorkerV2ArtifactContainerAssemblyErrorV1> {
     if kernel.required_workgroup_size() != Some([256, 1, 1])
         || kernel.max_flat_workgroup_size() != 256
@@ -788,7 +860,7 @@ fn validate_physical_profile(
     let expected = fields
         .iter()
         .flat_map(|field| match field.kind {
-            FrozenFieldKindV1::F32 => vec![(
+            FrozenFieldKindV1::F32 | FrozenFieldKindV1::U32 => vec![(
                 u64::from(field.offset),
                 4,
                 ExplicitValueKind::ByValue,
@@ -804,7 +876,7 @@ fn validate_physical_profile(
                     Some(match field.kind {
                         FrozenFieldKindV1::SharedF32 => ArgumentAccess::ReadOnly,
                         FrozenFieldKindV1::ReadWriteDisjointF32 => ArgumentAccess::ReadWrite,
-                        FrozenFieldKindV1::F32 => unreachable!(),
+                        FrozenFieldKindV1::F32 | FrozenFieldKindV1::U32 => unreachable!(),
                     }),
                 ),
                 (
@@ -830,6 +902,9 @@ fn validate_physical_profile(
             || argument.value_kind() != kind
             || argument.address_space() != address_space
             || argument.access() != access
+            || (profile == ArtifactAssemblyProfileV1::ScalarGemmV1
+                && access.is_some()
+                && argument.actual_access() != access)
             || access.is_some_and(|expected| {
                 argument
                     .actual_access()
@@ -863,6 +938,17 @@ fn validate_profile_for(
     if table.kernels.len() != profile.kernel_count() {
         return Err(WorkerV2ArtifactContainerAssemblyErrorV1::KernelCount);
     }
+    if profile == ArtifactAssemblyProfileV1::ScalarGemmV1
+        && (table.compiler_name != SCALAR_GEMM_V1_COMPILER
+            || table.compiler_release != env!("CARGO_PKG_VERSION")
+            || table.compiler_commit != [0; 20]
+            || table.producer_name != SCALAR_GEMM_V1_PRODUCER
+            || table.producer_version != SCALAR_GEMM_V1_PRODUCER_VERSION)
+    {
+        return Err(WorkerV2ArtifactContainerAssemblyErrorV1::DescriptorModel(
+            "scalar GEMM compiler or producer identity differs from the frozen profile",
+        ));
+    }
     reject_duplicate_kernel_fields(&table.kernels)?;
     for kernel in &table.kernels {
         validate_assembled_kernel_profile(kernel, profile)?;
@@ -877,7 +963,9 @@ fn profile_for_names<'a>(
     names.sort_unstable();
     if names == ALPHA_ZETA_KERNELS {
         Ok(ArtifactAssemblyProfileV1::AlphaZeta)
-    } else if names.len() == ALPHA_ZETA_KERNELS.len() {
+    } else if names == [SCALAR_GEMM_V1_KERNEL] {
+        Ok(ArtifactAssemblyProfileV1::ScalarGemmV1)
+    } else if matches!(names.len(), 1 | 2) {
         Err(WorkerV2ArtifactContainerAssemblyErrorV1::KernelSet)
     } else {
         Err(WorkerV2ArtifactContainerAssemblyErrorV1::KernelCount)
@@ -894,6 +982,17 @@ fn validate_assembled_kernel_profile(
     let expected_explicit = profile
         .explicit_size(&kernel.entry_name)
         .ok_or(WorkerV2ArtifactContainerAssemblyErrorV1::KernelSet)?;
+    if profile == ArtifactAssemblyProfileV1::ScalarGemmV1
+        && (table_identity_is_not_scalar_gemm(kernel)
+            || kernel.source_digest == [0; 32]
+            || kernel.source_evidence_identity == [0; 32]
+            || kernel.executable_digest == [0; 32]
+            || kernel.executable_evidence_identity == [0; 32])
+    {
+        return Err(WorkerV2ArtifactContainerAssemblyErrorV1::DescriptorModel(
+            "scalar GEMM identity or evidence lineage differs from the frozen profile",
+        ));
+    }
     if kernel.logical_name != kernel.entry_name
         || kernel.descriptor_symbol != format!("{}.kd", kernel.entry_name)
         || kernel.capabilities != [Capability::AmdWave]
@@ -901,7 +1000,9 @@ fn validate_assembled_kernel_profile(
         || kernel.kernarg_size != expected_explicit + 256
         || kernel.kernarg_alignment != 8
         || kernel.rank != 1
+        || kernel.block_size != [256, 1, 1]
         || kernel.max_grid != [u32::MAX, 1, 1]
+        || kernel.max_flat_workgroup_size != 256
         || kernel.static_shared_memory_bytes != 0
         || kernel.max_dynamic_shared_memory_bytes != 0
         || kernel.fields.len() != expected.len()
@@ -927,6 +1028,13 @@ fn validate_assembled_kernel_profile(
         }
     }
     Ok(())
+}
+
+fn table_identity_is_not_scalar_gemm(kernel: &DescriptorKernelAssemblyV1) -> bool {
+    kernel.kernel_id != SCALAR_GEMM_V1_KERNEL_ID
+        || kernel.logical_name != SCALAR_GEMM_V1_KERNEL
+        || kernel.entry_name != SCALAR_GEMM_V1_KERNEL
+        || kernel.descriptor_symbol != "scalar_gemm_v1.kd"
 }
 
 fn build_container(
@@ -1081,7 +1189,7 @@ fn abi_field(
     field: &DescriptorFieldAssemblyV1,
 ) -> Result<AbiField, WorkerV2ArtifactContainerAssemblyErrorV1> {
     let size = match field.kind {
-        AbiKind::Scalar(ScalarType::F32) => 4,
+        AbiKind::Scalar(ScalarType::F32 | ScalarType::U32) => 4,
         AbiKind::Slice {
             element_size: 4,
             element_alignment: 4,
@@ -1165,7 +1273,9 @@ mod test_fixture;
 
 #[cfg(test)]
 mod tests {
-    use super::test_fixture::{ProfileMutation, alpha_zeta_fixture};
+    use super::test_fixture::{
+        ProfileMutation, ScalarProfileMutation, alpha_zeta_fixture, scalar_gemm_v1_fixture,
+    };
     use super::*;
     use crate::worker_v2_restart::{
         ResumeMarkerStateV1, WorkerV2EnvelopePublicationOutcomeV1, WorkerV2PublicationKindV1,
@@ -1401,9 +1511,22 @@ mod tests {
         fe2o3_artifact_transaction::BackendPublicationReceiptV1,
     ) {
         let fixture = alpha_zeta_fixture(ProfileMutation::None);
+        canonical_envelope_fixture_for_bytes(directory, producer_name, source, fixture.bytes)
+    }
+
+    fn canonical_envelope_fixture_for_bytes(
+        directory: &TestDirectory,
+        producer_name: &str,
+        source: &str,
+        fixture_bytes: Vec<u8>,
+    ) -> (
+        ProducerIdentity,
+        WorkerV2LoadEnvelopeV1,
+        fe2o3_artifact_transaction::BackendPublicationReceiptV1,
+    ) {
         let publisher = producer(producer_name, source);
         let first_attempt = begin(directory, &publisher, 0x11);
-        let finalized: [u8; 32] = Sha256::digest(&fixture.bytes).into();
+        let finalized: [u8; 32] = Sha256::digest(&fixture_bytes).into();
         let first_plan = plan(first_attempt, finalized, 0x21);
         let first_upstream = UpstreamCodeObjectEvidenceIdentityV1::from_bytes([0x31; 32]);
         let first_publication = publish_exact_hsaco_evidence_for_attempt_v1(
@@ -1412,7 +1535,7 @@ mod tests {
             first_attempt,
             first_plan,
             first_upstream,
-            &fixture.bytes,
+            &fixture_bytes,
         )
         .unwrap();
         let container = prepare_worker_v2_artifact_container_v1(
@@ -1428,7 +1551,7 @@ mod tests {
         finish_build_attempt(&directory.0, &publisher, first_attempt).unwrap();
 
         let bundle = BundleIndexV1::from_containers(std::slice::from_ref(&container)).unwrap();
-        let identity = DigestAlgorithm::Sha256.calculate(&fixture.bytes);
+        let identity = DigestAlgorithm::Sha256.calculate(&fixture_bytes);
         let tagged = |seed| payload_digest([seed; 32]);
         let expectation = DirectLinkBindingExpectationV1::new(
             DirectLinkRequestIdentityV1::new(tagged(0x71)),
@@ -1503,7 +1626,7 @@ mod tests {
             attempt,
             plan,
             upstream,
-            &fixture.bytes,
+            &fixture_bytes,
         )
         .unwrap();
         let publication = publish_exact_hsaco_evidence_for_attempt_v1(
@@ -1512,7 +1635,7 @@ mod tests {
             attempt,
             plan,
             upstream,
-            &fixture.bytes,
+            &fixture_bytes,
         )
         .unwrap();
         let proofs = container
@@ -1528,7 +1651,7 @@ mod tests {
             &publication,
             direct_link,
             proofs,
-            ExactRawHsacoV1::from_bytes(fixture.bytes).unwrap(),
+            ExactRawHsacoV1::from_bytes(fixture_bytes).unwrap(),
         )
         .unwrap();
         assert_eq!(envelope.published_claim().receipt(), publication.receipt());
@@ -1654,10 +1777,36 @@ mod tests {
             kernarg_size: explicit_size + 256,
             kernarg_alignment: 8,
             rank: 1,
+            block_size: [256, 1, 1],
             max_grid: [u32::MAX, 1, 1],
+            max_flat_workgroup_size: 256,
             static_shared_memory_bytes: 0,
             max_dynamic_shared_memory_bytes: 0,
             fields,
+        }
+    }
+
+    fn scalar_gemm_kernel() -> DescriptorKernelAssemblyV1 {
+        DescriptorKernelAssemblyV1 {
+            kernel_id: SCALAR_GEMM_V1_KERNEL_ID,
+            logical_name: SCALAR_GEMM_V1_KERNEL.to_owned(),
+            entry_name: SCALAR_GEMM_V1_KERNEL.to_owned(),
+            descriptor_symbol: "scalar_gemm_v1.kd".to_owned(),
+            source_digest: [0x91; 32],
+            source_evidence_identity: [0x92; 32],
+            executable_digest: [0x93; 32],
+            executable_evidence_identity: [0x94; 32],
+            capabilities: vec![Capability::AmdWave],
+            explicit_size: 64,
+            kernarg_size: 320,
+            kernarg_alignment: 8,
+            rank: 1,
+            block_size: [256, 1, 1],
+            max_grid: [u32::MAX, 1, 1],
+            max_flat_workgroup_size: 256,
+            static_shared_memory_bytes: 0,
+            max_dynamic_shared_memory_bytes: 0,
+            fields: SCALAR_GEMM_V1_FIELDS.iter().copied().map(field).collect(),
         }
     }
 
@@ -1669,6 +1818,17 @@ mod tests {
             producer_name: "rustc-codegen-fe2o3".to_owned(),
             producer_version: "test".to_owned(),
             kernels,
+        }
+    }
+
+    fn scalar_gemm_table() -> DescriptorTableAssemblyV1 {
+        DescriptorTableAssemblyV1 {
+            compiler_name: SCALAR_GEMM_V1_COMPILER.to_owned(),
+            compiler_release: env!("CARGO_PKG_VERSION").to_owned(),
+            compiler_commit: [0; 20],
+            producer_name: SCALAR_GEMM_V1_PRODUCER.to_owned(),
+            producer_version: SCALAR_GEMM_V1_PRODUCER_VERSION.to_owned(),
+            kernels: vec![scalar_gemm_kernel()],
         }
     }
 
@@ -1900,6 +2060,75 @@ mod tests {
     }
 
     #[test]
+    fn finalized_scalar_gemm_publication_assembles_one_kernel_container_and_envelope() {
+        let fixture = scalar_gemm_v1_fixture(ScalarProfileMutation::None);
+        assert!(fixture.is_finalized);
+        let directory = TestDirectory::new();
+        let (_publisher, envelope, stale_receipt) = canonical_envelope_fixture_for_bytes(
+            &directory,
+            "scalar_gemm_v1",
+            "/workspace/scalar_gemm_v1.rs",
+            fixture.bytes.clone(),
+        );
+        let manifest = envelope.container().manifest();
+        assert_eq!(manifest.target().triple().as_str(), TARGET_TRIPLE);
+        assert_eq!(manifest.target().architecture().as_str(), TARGET);
+        assert_eq!(manifest.target().capabilities(), &[Capability::AmdWave]);
+        let [kernel] = manifest.kernels() else {
+            panic!("scalar GEMM profile must assemble exactly one kernel");
+        };
+        assert_eq!(kernel.kernel_id().as_bytes(), &SCALAR_GEMM_V1_KERNEL_ID);
+        assert_eq!(kernel.name().as_str(), SCALAR_GEMM_V1_KERNEL);
+        assert_eq!(kernel.symbol().as_str(), SCALAR_GEMM_V1_KERNEL);
+        assert_eq!(kernel.abi().size(), 64);
+        assert_eq!(kernel.abi().alignment(), 8);
+        assert_eq!(kernel.abi().fields().len(), 6);
+        assert_eq!(
+            kernel
+                .abi()
+                .fields()
+                .iter()
+                .map(|field| field.name().as_str())
+                .collect::<Vec<_>>(),
+            ["a", "b", "c", "m", "n", "k"]
+        );
+        assert_eq!(kernel.abi().fields()[2].access(), Access::ReadWrite);
+        assert_eq!(
+            kernel.abi().fields()[2].alias_class(),
+            AliasClass::Exclusive
+        );
+        assert_eq!(kernel.launch().rank(), 1);
+        assert_eq!(
+            kernel.launch().block_size(),
+            BlockSize::Exact(Dimensions::new(256, 1, 1).unwrap())
+        );
+        assert_eq!(
+            kernel.launch().max_grid(),
+            Dimensions::new(u32::MAX, 1, 1).unwrap()
+        );
+        assert_eq!(envelope.finalized_payload(), fixture.bytes);
+        let claim = envelope.published_claim();
+        assert_eq!(
+            DurablePublishedHsacoClaimV1::decode_canonical(&claim.encode_canonical().unwrap())
+                .unwrap(),
+            *claim
+        );
+        assert_ne!(envelope.published_claim().receipt(), stale_receipt);
+        assert_eq!(
+            claim.receipt().publication_identity(),
+            *claim.plan().publication().as_bytes()
+        );
+        assert_eq!(
+            claim.receipt().finalized_output_identity(),
+            *claim.plan().finalized_output().as_bytes()
+        );
+        assert_eq!(
+            claim.receipt().upstream_evidence_identity(),
+            claim.upstream_evidence().as_bytes()
+        );
+    }
+
+    #[test]
     fn published_profile_mutations_fail_closed_at_the_public_assembly_boundary() {
         for (index, mutation) in [
             ProfileMutation::MissingCapability,
@@ -1943,6 +2172,199 @@ mod tests {
                     WorkerV2ArtifactContainerAssemblyErrorV1::FinalizedHsaco(_)
                 ));
             }
+        }
+    }
+
+    #[test]
+    fn published_scalar_gemm_physical_profile_mutations_fail_closed() {
+        for (index, mutation) in [
+            ScalarProfileMutation::PhysicalKernargSize,
+            ScalarProfileMutation::PhysicalOutputAccess,
+            ScalarProfileMutation::PhysicalWorkgroup,
+            ScalarProfileMutation::HsacoTarget,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let fixture = scalar_gemm_v1_fixture(mutation);
+            let directory = TestDirectory::new();
+            let seed = 0xb1_u8.wrapping_add(index as u8 * 8);
+            let publisher = producer("scalar_gemm_v1", "/workspace/scalar_gemm_v1_mutated.rs");
+            let attempt = begin(&directory, &publisher, seed);
+            let finalized: [u8; 32] = Sha256::digest(&fixture.bytes).into();
+            let plan = plan(attempt, finalized, seed.wrapping_add(2));
+            let upstream =
+                UpstreamCodeObjectEvidenceIdentityV1::from_bytes([seed.wrapping_add(3); 32]);
+            let publication = publish_exact_hsaco_evidence_for_attempt_v1(
+                &directory.0,
+                &publisher,
+                attempt,
+                plan,
+                upstream,
+                &fixture.bytes,
+            )
+            .unwrap();
+            let error =
+                prepare_worker_v2_artifact_container_v1(&publisher, plan, upstream, &publication)
+                    .unwrap_err();
+            assert!(
+                matches!(
+                    error,
+                    WorkerV2ArtifactContainerAssemblyErrorV1::FinalizedHsaco(_)
+                        | WorkerV2ArtifactContainerAssemblyErrorV1::DescriptorModel(_)
+                        | WorkerV2ArtifactContainerAssemblyErrorV1::Target
+                ),
+                "scalar physical mutation {mutation:?} unexpectedly produced {error:?}; finalized={}",
+                fixture.is_finalized
+            );
+        }
+    }
+
+    #[test]
+    fn scalar_gemm_descriptor_abi_launch_and_lineage_mutations_fail_closed() {
+        let baseline = scalar_gemm_table();
+        validate_profile(&baseline).unwrap();
+        let mut mutations = Vec::new();
+
+        macro_rules! mutate {
+            ($label:literal, $body:expr) => {{
+                let mut table = baseline.clone();
+                $body(&mut table);
+                mutations.push(($label, table));
+            }};
+        }
+
+        mutate!("compiler name", |table: &mut DescriptorTableAssemblyV1| {
+            table.compiler_name.push_str("-other")
+        });
+        mutate!(
+            "compiler release",
+            |table: &mut DescriptorTableAssemblyV1| table.compiler_release.push_str("-other")
+        );
+        mutate!(
+            "compiler commit",
+            |table: &mut DescriptorTableAssemblyV1| table.compiler_commit[0] = 1
+        );
+        mutate!("producer name", |table: &mut DescriptorTableAssemblyV1| {
+            table.producer_name.push_str("-other")
+        });
+        mutate!(
+            "producer version",
+            |table: &mut DescriptorTableAssemblyV1| table.producer_version.push_str("-other")
+        );
+        mutate!("kernel ID", |table: &mut DescriptorTableAssemblyV1| {
+            table.kernels[0].kernel_id[0] ^= 1
+        });
+        mutate!("logical name", |table: &mut DescriptorTableAssemblyV1| {
+            table.kernels[0].logical_name.push_str("_other")
+        });
+        mutate!(
+            "descriptor symbol",
+            |table: &mut DescriptorTableAssemblyV1| table.kernels[0]
+                .descriptor_symbol
+                .push_str("_other")
+        );
+        mutate!("source digest", |table: &mut DescriptorTableAssemblyV1| {
+            table.kernels[0].source_digest = [0; 32]
+        });
+        mutate!(
+            "source identity",
+            |table: &mut DescriptorTableAssemblyV1| table.kernels[0].source_evidence_identity =
+                [0; 32]
+        );
+        mutate!(
+            "executable digest",
+            |table: &mut DescriptorTableAssemblyV1| table.kernels[0].executable_digest = [0; 32]
+        );
+        mutate!(
+            "executable identity",
+            |table: &mut DescriptorTableAssemblyV1| table.kernels[0].executable_evidence_identity =
+                [0; 32]
+        );
+        mutate!("capability", |table: &mut DescriptorTableAssemblyV1| table
+            .kernels[0]
+            .capabilities
+            .clear());
+        mutate!("explicit size", |table: &mut DescriptorTableAssemblyV1| {
+            table.kernels[0].explicit_size = 60
+        });
+        mutate!(
+            "total kernarg size",
+            |table: &mut DescriptorTableAssemblyV1| table.kernels[0].kernarg_size = 316
+        );
+        mutate!(
+            "kernarg alignment",
+            |table: &mut DescriptorTableAssemblyV1| table.kernels[0].kernarg_alignment = 16
+        );
+        mutate!("launch rank", |table: &mut DescriptorTableAssemblyV1| {
+            table.kernels[0].rank = 2
+        });
+        mutate!(
+            "launch block size",
+            |table: &mut DescriptorTableAssemblyV1| table.kernels[0].block_size = [128, 1, 1]
+        );
+        mutate!("launch grid", |table: &mut DescriptorTableAssemblyV1| {
+            table.kernels[0].max_grid = [u32::MAX, 2, 1]
+        });
+        mutate!(
+            "max flat workgroup size",
+            |table: &mut DescriptorTableAssemblyV1| table.kernels[0].max_flat_workgroup_size = 128
+        );
+        mutate!(
+            "static shared memory",
+            |table: &mut DescriptorTableAssemblyV1| table.kernels[0].static_shared_memory_bytes = 4
+        );
+        mutate!(
+            "dynamic shared memory",
+            |table: &mut DescriptorTableAssemblyV1| table.kernels[0]
+                .max_dynamic_shared_memory_bytes = 4
+        );
+        mutate!("argument name", |table: &mut DescriptorTableAssemblyV1| {
+            table.kernels[0].fields[2].name = "output".to_owned()
+        });
+        mutate!(
+            "argument offset",
+            |table: &mut DescriptorTableAssemblyV1| table.kernels[0].fields[5].offset = 60
+        );
+        mutate!("argument kind", |table: &mut DescriptorTableAssemblyV1| {
+            table.kernels[0].fields[3].kind = AbiKind::Scalar(ScalarType::F32)
+        });
+        mutate!(
+            "argument access",
+            |table: &mut DescriptorTableAssemblyV1| table.kernels[0].fields[2].access =
+                Access::WriteOnly
+        );
+        mutate!(
+            "argument mutability",
+            |table: &mut DescriptorTableAssemblyV1| table.kernels[0].fields[2].mutability =
+                Mutability::Immutable
+        );
+        mutate!(
+            "argument ownership",
+            |table: &mut DescriptorTableAssemblyV1| table.kernels[0].fields[2].ownership =
+                ArgumentOwnership::SharedBorrow
+        );
+        mutate!("argument alias", |table: &mut DescriptorTableAssemblyV1| {
+            table.kernels[0].fields[2].alias = AliasClass::SharedReadOnly
+        });
+        mutate!(
+            "rust type identity",
+            |table: &mut DescriptorTableAssemblyV1| table.kernels[0].fields[3].rust_type[0] ^= 1
+        );
+        mutate!(
+            "layout identity",
+            |table: &mut DescriptorTableAssemblyV1| table.kernels[0].fields[3].layout[0] ^= 1
+        );
+
+        for (label, mutation) in mutations {
+            assert!(
+                matches!(
+                    validate_profile(&mutation),
+                    Err(WorkerV2ArtifactContainerAssemblyErrorV1::DescriptorModel(_))
+                        | Err(WorkerV2ArtifactContainerAssemblyErrorV1::KernelSet)
+                ),
+                "scalar descriptor mutation `{label}` was accepted"
+            );
         }
     }
 

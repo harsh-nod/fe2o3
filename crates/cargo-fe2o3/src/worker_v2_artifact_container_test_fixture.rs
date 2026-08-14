@@ -36,6 +36,42 @@ pub(super) struct AlphaZetaFixture {
     pub(super) is_finalized: bool,
 }
 
+#[derive(Clone, Copy)]
+enum FixtureProfile {
+    AlphaZeta { disjoint_access: AccessMode },
+    ScalarGemmV1(ScalarProfileMutation),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) enum ScalarProfileMutation {
+    None,
+    PhysicalKernargSize,
+    PhysicalOutputAccess,
+    PhysicalWorkgroup,
+    HsacoTarget,
+}
+
+pub(super) struct ScalarGemmFixture {
+    pub(super) bytes: Vec<u8>,
+    pub(super) is_finalized: bool,
+}
+
+pub(super) fn scalar_gemm_v1_fixture(mutation: ScalarProfileMutation) -> ScalarGemmFixture {
+    let table = encode_device_descriptor_table_v1(&scalar_gemm_v1_descriptor_table())
+        .expect("encode scalar GEMM V1 descriptor table");
+    let bytes = build_hsaco(&table, FixtureProfile::ScalarGemmV1(mutation), false);
+    match finalize_unfinalized(&bytes) {
+        Ok(finalized) => ScalarGemmFixture {
+            bytes: finalized.into_bytes(),
+            is_finalized: true,
+        },
+        Err(_) => ScalarGemmFixture {
+            bytes,
+            is_finalized: false,
+        },
+    }
+}
+
 pub(super) fn alpha_zeta_fixture(mutation: ProfileMutation) -> AlphaZetaFixture {
     let access = if matches!(mutation, ProfileMutation::WriteOnlyAccess) {
         AccessMode::WriteOnly
@@ -54,7 +90,13 @@ pub(super) fn alpha_zeta_fixture(mutation: ProfileMutation) -> AlphaZetaFixture 
         ProfileMutation::SharedAlias => mutate_output_semantic(&mut table, 2, 2),
         _ => {}
     }
-    let bytes = build_hsaco(&table, access, false);
+    let bytes = build_hsaco(
+        &table,
+        FixtureProfile::AlphaZeta {
+            disjoint_access: access,
+        },
+        false,
+    );
     if matches!(
         mutation,
         ProfileMutation::SharedOwnership | ProfileMutation::SharedAlias
@@ -80,7 +122,13 @@ pub(super) fn canonical_alpha_zeta_unfinalized_fixture() -> Vec<u8> {
         vec![CapabilityV1::AmdWave],
     ))
     .expect("encode canonical alpha/zeta descriptor table");
-    build_hsaco(&table, AccessMode::ReadWrite, true)
+    build_hsaco(
+        &table,
+        FixtureProfile::AlphaZeta {
+            disjoint_access: AccessMode::ReadWrite,
+        },
+        true,
+    )
 }
 
 fn descriptor_table(
@@ -167,6 +215,71 @@ fn descriptor_table(
     .unwrap()
 }
 
+fn scalar_gemm_v1_descriptor_table() -> DeviceDescriptorTableV1 {
+    let u32_source = SourceTypeRecordV1::new(SourceTypeDescriptorV1::scalar(ScalarTypeV1::U32));
+    let shared_source =
+        SourceTypeRecordV1::new(SourceTypeDescriptorV1::shared_slice(ScalarTypeV1::F32));
+    let disjoint_source =
+        SourceTypeRecordV1::new(SourceTypeDescriptorV1::disjoint_slice(ScalarTypeV1::F32));
+    let u32_layout = DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::scalar(ScalarTypeV1::U32));
+    let shared_layout =
+        DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::shared_slice(ScalarTypeV1::F32));
+    let disjoint_layout =
+        DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::disjoint_slice(ScalarTypeV1::F32));
+    let kernel = KernelDescriptorV1::new(
+        KernelId::from_bytes([
+            0x78, 0x9a, 0xde, 0xdf, 0xdc, 0x3b, 0xe1, 0xfb, 0x60, 0x51, 0x8d, 0xd2, 0xc7, 0x46,
+            0x0c, 0x3e, 0xf8, 0xe6, 0xb9, 0x00, 0x52, 0x7d, 0x1b, 0xcb, 0x22, 0x89, 0xba, 0xa1,
+            0xe0, 0x14, 0x69, 0x3e,
+        ]),
+        name("scalar_gemm_v1"),
+        name("scalar_gemm_v1"),
+        name("scalar_gemm_v1.kd"),
+        evidence(0x91, 0x92),
+        evidence(0x93, 0x94),
+        vec![CapabilityV1::AmdWave],
+        KernelAbiLayoutV1::new(64, 320, 8).unwrap(),
+        launch(),
+        vec![
+            LogicalArgumentV1::shared_slice(0, name("a"), &shared_source, &shared_layout, 0)
+                .unwrap(),
+            LogicalArgumentV1::shared_slice(1, name("b"), &shared_source, &shared_layout, 16)
+                .unwrap(),
+            LogicalArgumentV1::disjoint_slice(
+                2,
+                name("c"),
+                &disjoint_source,
+                &disjoint_layout,
+                AccessMode::ReadWrite,
+                32,
+            )
+            .unwrap(),
+            LogicalArgumentV1::scalar(3, name("m"), &u32_source, &u32_layout, 48).unwrap(),
+            LogicalArgumentV1::scalar(4, name("n"), &u32_source, &u32_layout, 52).unwrap(),
+            LogicalArgumentV1::scalar(5, name("k"), &u32_source, &u32_layout, 56).unwrap(),
+        ],
+    )
+    .unwrap();
+    DeviceDescriptorTableV1::new(
+        CanonicalCodeObjectDigest::from_bytes([0; 32]),
+        CodeObjectVersion::V6,
+        CompilerIdentityV1::new(
+            text("rustc-codegen-fe2o3"),
+            text(env!("CARGO_PKG_VERSION")),
+            [0; 20],
+        ),
+        ProducerIdentityV1::new(
+            text("rustc-codegen-fe2o3-worker-v2"),
+            text("typed-general-gfx942-cov6-v1"),
+        ),
+        DeviceTargetV1::parse("gfx942:xnack-").unwrap(),
+        vec![u32_source, shared_source, disjoint_source],
+        vec![u32_layout, shared_layout, disjoint_layout],
+        vec![kernel],
+    )
+    .unwrap()
+}
+
 fn launch() -> LaunchConstraintsV1 {
     LaunchConstraintsV1::new(
         1,
@@ -204,9 +317,21 @@ fn mutate_output_semantic(table: &mut [u8], semantic_offset: usize, replacement:
     table[semantics + semantic_offset] = replacement;
 }
 
-fn build_hsaco(table: &[u8], disjoint_access: AccessMode, include_ffi_export: bool) -> Vec<u8> {
-    const KERNELS: [(&str, &str, u32); 2] = [("alpha", "alpha.kd", 296), ("zeta", "zeta.kd", 312)];
-    let note = metadata_note(&metadata(disjoint_access));
+fn build_hsaco(table: &[u8], profile: FixtureProfile, include_ffi_export: bool) -> Vec<u8> {
+    let kernels = match profile {
+        FixtureProfile::AlphaZeta { .. } => {
+            vec![("alpha", "alpha.kd", 296), ("zeta", "zeta.kd", 312)]
+        }
+        FixtureProfile::ScalarGemmV1(mutation) => {
+            let kernarg_size = if matches!(mutation, ScalarProfileMutation::PhysicalKernargSize) {
+                316
+            } else {
+                320
+            };
+            vec![("scalar_gemm_v1", "scalar_gemm_v1.kd", kernarg_size)]
+        }
+    };
+    let note = metadata_note(&metadata(profile));
     let mut bytes = vec![0; ELF_HEADER_BYTES + 2 * PROGRAM_HEADER_BYTES];
 
     align(&mut bytes, 64);
@@ -216,7 +341,7 @@ fn build_hsaco(table: &[u8], disjoint_access: AccessMode, include_ffi_export: bo
     align(&mut bytes, 64);
     let rodata_offset = bytes.len();
     let mut descriptor_offsets = Vec::new();
-    for _ in KERNELS {
+    for _ in &kernels {
         align(&mut bytes, 64);
         descriptor_offsets.push(bytes.len());
         bytes.resize(bytes.len() + 64, 0);
@@ -224,7 +349,7 @@ fn build_hsaco(table: &[u8], disjoint_access: AccessMode, include_ffi_export: bo
     let rodata_end = bytes.len();
 
     let mut entry_offsets = Vec::new();
-    for _ in KERNELS {
+    for _ in &kernels {
         align(&mut bytes, 256);
         entry_offsets.push(bytes.len());
         bytes.resize(bytes.len() + 64, 0xbf);
@@ -239,7 +364,7 @@ fn build_hsaco(table: &[u8], disjoint_access: AccessMode, include_ffi_export: bo
     let text_end = bytes.len();
 
     let mut strtab = vec![0];
-    let symbol_names = KERNELS
+    let symbol_names = kernels
         .iter()
         .map(|(entry, descriptor, _)| {
             (
@@ -253,7 +378,7 @@ fn build_hsaco(table: &[u8], disjoint_access: AccessMode, include_ffi_export: bo
     bytes.extend_from_slice(&strtab);
     align(&mut bytes, 8);
     let symtab_offset = bytes.len();
-    let symbol_count = 1 + KERNELS.len() * 2 + usize::from(include_ffi_export);
+    let symbol_count = 1 + kernels.len() * 2 + usize::from(include_ffi_export);
     bytes.resize(symtab_offset + symbol_count * 24, 0);
 
     for (index, ((entry_name, descriptor_name), descriptor_offset)) in
@@ -279,7 +404,7 @@ fn build_hsaco(table: &[u8], disjoint_access: AccessMode, include_ffi_export: bo
         write_u64(&mut bytes, descriptor_symbol + 8, *descriptor_offset as u64);
         write_u64(&mut bytes, descriptor_symbol + 16, 64);
 
-        write_u32(&mut bytes, *descriptor_offset + 8, KERNELS[index].2);
+        write_u32(&mut bytes, *descriptor_offset + 8, kernels[index].2);
         write_i64(
             &mut bytes,
             *descriptor_offset + 16,
@@ -291,7 +416,7 @@ fn build_hsaco(table: &[u8], disjoint_access: AccessMode, include_ffi_export: bo
         write_u16(&mut bytes, *descriptor_offset + 56, 0x001e);
     }
     if let (Some(name), Some(offset)) = (ffi_export_name, ffi_export_offset) {
-        let export_symbol = symtab_offset + (1 + KERNELS.len() * 2) * 24;
+        let export_symbol = symtab_offset + (1 + kernels.len() * 2) * 24;
         write_u32(&mut bytes, export_symbol, name);
         bytes[export_symbol + 4] = 0x12;
         bytes[export_symbol + 5] = 3;
@@ -452,51 +577,97 @@ fn build_hsaco(table: &[u8], disjoint_access: AccessMode, include_ffi_export: bo
     bytes
 }
 
-fn metadata(disjoint_access: AccessMode) -> Vec<u8> {
-    let access = match disjoint_access {
-        AccessMode::WriteOnly => "write_only",
-        AccessMode::ReadWrite => "read_write",
-        _ => unreachable!("fixture uses a writable disjoint access mode"),
+fn metadata(profile: FixtureProfile) -> Vec<u8> {
+    let kernels = match profile {
+        FixtureProfile::AlphaZeta { disjoint_access } => {
+            let access = match disjoint_access {
+                AccessMode::WriteOnly => "write_only",
+                AccessMode::ReadWrite => "read_write",
+                _ => unreachable!("fixture uses a writable disjoint access mode"),
+            };
+            vec![
+                metadata_kernel(
+                    "alpha",
+                    "alpha.kd",
+                    296,
+                    vec![
+                        scalar_argument(0, 4),
+                        pointer_argument(8, "read_only"),
+                        scalar_argument(16, 8),
+                        pointer_argument(24, access),
+                        scalar_argument(32, 8),
+                    ],
+                    40,
+                    256,
+                ),
+                metadata_kernel(
+                    "zeta",
+                    "zeta.kd",
+                    312,
+                    vec![
+                        pointer_argument(0, "read_only"),
+                        scalar_argument(8, 8),
+                        pointer_argument(16, "read_only"),
+                        scalar_argument(24, 8),
+                        scalar_argument(32, 4),
+                        pointer_argument(40, access),
+                        scalar_argument(48, 8),
+                    ],
+                    56,
+                    256,
+                ),
+            ]
+        }
+        FixtureProfile::ScalarGemmV1(mutation) => {
+            let kernarg_size = if matches!(mutation, ScalarProfileMutation::PhysicalKernargSize) {
+                316
+            } else {
+                320
+            };
+            let output_access = if matches!(mutation, ScalarProfileMutation::PhysicalOutputAccess) {
+                "write_only"
+            } else {
+                "read_write"
+            };
+            let workgroup = if matches!(mutation, ScalarProfileMutation::PhysicalWorkgroup) {
+                128
+            } else {
+                256
+            };
+            vec![metadata_kernel(
+                "scalar_gemm_v1",
+                "scalar_gemm_v1.kd",
+                kernarg_size,
+                vec![
+                    pointer_argument(0, "read_only"),
+                    scalar_argument(8, 8),
+                    pointer_argument(16, "read_only"),
+                    scalar_argument(24, 8),
+                    pointer_argument(32, output_access),
+                    scalar_argument(40, 8),
+                    scalar_argument(48, 4),
+                    scalar_argument(52, 4),
+                    scalar_argument(56, 4),
+                ],
+                64,
+                workgroup,
+            )]
+        }
     };
-    let kernels = vec![
-        metadata_kernel(
-            "alpha",
-            "alpha.kd",
-            296,
-            vec![
-                scalar_argument(0, 4),
-                pointer_argument(8, "read_only"),
-                scalar_argument(16, 8),
-                pointer_argument(24, access),
-                scalar_argument(32, 8),
-            ],
-            40,
-        ),
-        metadata_kernel(
-            "zeta",
-            "zeta.kd",
-            312,
-            vec![
-                pointer_argument(0, "read_only"),
-                scalar_argument(8, 8),
-                pointer_argument(16, "read_only"),
-                scalar_argument(24, 8),
-                scalar_argument(32, 4),
-                pointer_argument(40, access),
-                scalar_argument(48, 8),
-            ],
-            56,
-        ),
-    ];
+    let target = if matches!(
+        profile,
+        FixtureProfile::ScalarGemmV1(ScalarProfileMutation::HsacoTarget)
+    ) {
+        "amdgcn-amd-amdhsa--gfx90a:xnack-"
+    } else {
+        "amdgcn-amd-amdhsa--gfx942:xnack-"
+    };
     let root = Value::Map(vec![
         (
             Value::from("amdhsa.version"),
             Value::Array(vec![Value::from(1), Value::from(2)]),
         ),
-        (
-            Value::from("amdhsa.target"),
-            Value::from("amdgcn-amd-amdhsa--gfx942:xnack-"),
-        ),
+        (Value::from("amdhsa.target"), Value::from(target)),
         (Value::from("amdhsa.kernels"), Value::Array(kernels)),
     ]);
     let mut encoded = Vec::new();
@@ -510,6 +681,7 @@ fn metadata_kernel(
     kernarg_size: u32,
     mut arguments: Vec<Value>,
     implicit_base: u64,
+    workgroup: u32,
 ) -> Value {
     arguments.extend(hidden_arguments(implicit_base));
     Value::Map(vec![
@@ -527,10 +699,13 @@ fn metadata_kernel(
         (Value::from(".sgpr_count"), Value::from(14)),
         (Value::from(".vgpr_count"), Value::from(11)),
         (Value::from(".agpr_count"), Value::from(3)),
-        (Value::from(".max_flat_workgroup_size"), Value::from(256)),
+        (
+            Value::from(".max_flat_workgroup_size"),
+            Value::from(workgroup),
+        ),
         (
             Value::from(".reqd_workgroup_size"),
-            Value::Array(vec![Value::from(256), Value::from(1), Value::from(1)]),
+            Value::Array(vec![Value::from(workgroup), Value::from(1), Value::from(1)]),
         ),
     ])
 }
