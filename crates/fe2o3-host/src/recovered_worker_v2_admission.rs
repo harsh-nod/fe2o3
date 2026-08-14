@@ -5,9 +5,10 @@ use crate::application_descriptor_handoff::{
 use crate::{
     AdmittedFinalizedWorkerV2BundleV1, ArtifactKernelIdentityV1, AuthenticatedWorkerV2ExecutableV1,
     CompilerGeneratedAlphaZetaCov6ArgumentsV1, CompilerGeneratedKernelExpectationV1,
-    CurrentFinalizedWorkerV2BundleAdmissionV1, DeviceIdentity,
-    FinalizedWorkerV2BundleAdmissionError, GeneratedAlphaZetaCov6PrepareError,
-    GeneratedAlphaZetaCov6PreparedInvocationV1, HsaExecutableLoadError, HsaGeneratedDispatchError,
+    CompilerGeneratedScalarGemmV1Arguments, CurrentFinalizedWorkerV2BundleAdmissionV1,
+    DeviceIdentity, FinalizedWorkerV2BundleAdmissionError, GeneratedAlphaZetaCov6PrepareError,
+    GeneratedAlphaZetaCov6PreparedInvocationV1, GeneratedScalarGemmV1PrepareError,
+    GeneratedScalarGemmV1PreparedInvocation, HsaExecutableLoadError, HsaGeneratedDispatchError,
     HsaLaunchGeometryV1, HsaLoadAuthorizationError, LoadedHsaExecutableV1,
     MissingFinalizedWorkerV2LoadPrerequisiteV1, ObservedContext, PhysicalMetadataValueV1,
     PublishedKernelPhysicalLayoutV1, ReviewedHsaImplicitKernargAdapterV1, UnloadedHsaExecutableV1,
@@ -307,6 +308,108 @@ pub struct RecoveredWorkerV2SynchronousHsaPreparedInvocationV1<
     application_descriptors: Option<&'loaded RetainedWorkerV2ApplicationDescriptorsV1>,
 }
 
+/// Result of preparing one Scalar GEMM V1 invocation through recovered authority.
+#[doc(hidden)]
+pub type RecoveredWorkerV2SynchronousHsaScalarGemmV1PrepareResultV1<
+    'loaded,
+    'allocation,
+    Root,
+    Selected,
+    Adapter,
+    Arguments,
+    PrerequisiteError,
+> = Result<
+    RecoveredWorkerV2SynchronousHsaScalarGemmV1PreparedInvocationV1<
+        'loaded,
+        'allocation,
+        Root,
+        Selected,
+        Adapter,
+        Arguments,
+    >,
+    RecoveredWorkerV2SynchronousHsaScalarGemmV1PrepareError<
+        PrerequisiteError,
+        <Adapter as crate::ReviewedHsaExecutableLifecycleAdapterV1>::Error,
+    >,
+>;
+
+/// Prepared Scalar GEMM V1 invocation borrowing retained recovered authority.
+///
+/// The publication token, loaded executable, observed context, application descriptors, and every
+/// generated allocation capability remain borrowed until synchronous dispatch or no-dispatch
+/// completion consumes this value.
+#[must_use = "a prepared recovered Scalar GEMM V1 invocation does no work until dispatched"]
+#[doc(hidden)]
+pub struct RecoveredWorkerV2SynchronousHsaScalarGemmV1PreparedInvocationV1<
+    'loaded,
+    'allocation,
+    Root,
+    Selected,
+    Adapter: ReviewedHsaImplicitKernargAdapterV1,
+    Arguments,
+> {
+    prepared: GeneratedScalarGemmV1PreparedInvocation<
+        'loaded,
+        'allocation,
+        Root,
+        Selected,
+        Adapter,
+        Arguments,
+    >,
+    currentness: &'loaded DurableCurrentLinkPublicationTokenV1,
+    #[cfg(target_os = "linux")]
+    application_descriptors: Option<&'loaded RetainedWorkerV2ApplicationDescriptorsV1>,
+}
+
+impl<Root, Selected, Adapter, Arguments>
+    RecoveredWorkerV2SynchronousHsaScalarGemmV1PreparedInvocationV1<
+        '_,
+        '_,
+        Root,
+        Selected,
+        Adapter,
+        Arguments,
+    >
+where
+    Adapter: ReviewedHsaImplicitKernargAdapterV1,
+{
+    pub const fn geometry(&self) -> Option<HsaLaunchGeometryV1> {
+        self.prepared.geometry()
+    }
+
+    pub const fn explicit_byte_len(&self) -> usize {
+        self.prepared.explicit_byte_len()
+    }
+
+    pub fn physical_kernarg_byte_len(&self) -> usize {
+        self.prepared.physical_kernarg_byte_len()
+    }
+
+    pub fn physical_kernarg_alignment(&self) -> usize {
+        self.prepared.physical_kernarg_alignment()
+    }
+
+    pub fn dispatch(
+        self,
+    ) -> Result<
+        crate::GeneratedScalarGemmV1Completion<Selected>,
+        RecoveredWorkerV2SynchronousHsaDispatchError<Adapter::Error>,
+    > {
+        self.currentness
+            .revalidate_locked_currentness()
+            .map_err(RecoveredWorkerV2SynchronousHsaDispatchError::CurrentPublication)?;
+        #[cfg(target_os = "linux")]
+        if let Some(descriptors) = self.application_descriptors {
+            descriptors
+                .revalidate()
+                .map_err(RecoveredWorkerV2SynchronousHsaDispatchError::ApplicationDescriptors)?;
+        }
+        self.prepared
+            .dispatch()
+            .map_err(RecoveredWorkerV2SynchronousHsaDispatchError::Dispatch)
+    }
+}
+
 impl<Root, Selected, Adapter, Arguments>
     RecoveredWorkerV2SynchronousHsaPreparedInvocationV1<'_, '_, Root, Selected, Adapter, Arguments>
 where
@@ -433,6 +536,63 @@ impl<K, A: ReviewedHsaImplicitKernargAdapterV1> RecoveredWorkerV2SynchronousHsaH
         })
     }
 
+    /// Prepares exactly one generated Scalar GEMM V1 invocation for synchronous HSA dispatch.
+    ///
+    /// Retained publication and application-descriptor identities are revalidated before the
+    /// generated Scalar GEMM profile authenticates, resolves, and packs the invocation. The
+    /// returned value keeps those authorities borrowed through synchronous completion.
+    #[doc(hidden)]
+    pub fn prepare_generated_scalar_gemm_v1<
+        'loaded,
+        'allocation,
+        Selected,
+        Authenticator,
+        Arguments,
+    >(
+        &'loaded mut self,
+        authenticator: &mut Authenticator,
+        arguments: Arguments,
+    ) -> RecoveredWorkerV2SynchronousHsaScalarGemmV1PrepareResultV1<
+        'loaded,
+        'allocation,
+        K,
+        Selected,
+        A,
+        Arguments,
+        Authenticator::Error,
+    >
+    where
+        Selected: CompilerGeneratedKernelExpectationV1,
+        Authenticator: WorkerV2PrerequisiteAuthenticatorV1<Selected>,
+        Arguments: CompilerGeneratedScalarGemmV1Arguments<'allocation, Selected>,
+    {
+        #[cfg(target_os = "linux")]
+        if let Some(descriptors) = &self.application_descriptors {
+            descriptors.revalidate().map_err(
+                RecoveredWorkerV2SynchronousHsaScalarGemmV1PrepareError::ApplicationDescriptors,
+            )?;
+        }
+        self.currentness
+            .revalidate_locked_currentness()
+            .map_err(RecoveredWorkerV2SynchronousHsaScalarGemmV1PrepareError::CurrentPublication)?;
+        let prepared = self
+            .loaded
+            .prepare_generated_scalar_gemm_v1::<Selected, Authenticator, Arguments>(
+                &self.observed,
+                authenticator,
+                arguments,
+            )
+            .map_err(RecoveredWorkerV2SynchronousHsaScalarGemmV1PrepareError::Prepare)?;
+        Ok(
+            RecoveredWorkerV2SynchronousHsaScalarGemmV1PreparedInvocationV1 {
+                prepared,
+                currentness: &self.currentness,
+                #[cfg(target_os = "linux")]
+                application_descriptors: self.application_descriptors.as_ref(),
+            },
+        )
+    }
+
     pub fn unload(
         self,
     ) -> Result<UnloadedHsaExecutableV1, RecoveredWorkerV2SynchronousHsaUnloadError<A::Error>> {
@@ -444,19 +604,34 @@ impl<K, A: ReviewedHsaImplicitKernargAdapterV1> RecoveredWorkerV2SynchronousHsaH
             application_descriptors,
         } = self;
         let current = currentness.revalidate_locked_currentness();
+        #[cfg(target_os = "linux")]
+        let descriptors = application_descriptors
+            .as_ref()
+            .map_or(Ok(()), RetainedWorkerV2ApplicationDescriptorsV1::revalidate);
         let unloaded = loaded.unload();
         #[cfg(target_os = "linux")]
         let _lifetime_guard = (currentness, observed, application_descriptors);
         #[cfg(not(target_os = "linux"))]
         let _lifetime_guard = (currentness, observed);
         match current {
-            Ok(()) => unloaded.map_err(RecoveredWorkerV2SynchronousHsaUnloadError::Unload),
             Err(source) => Err(
                 RecoveredWorkerV2SynchronousHsaUnloadError::CurrentPublication {
                     source,
                     unload: unloaded.err(),
                 },
             ),
+            #[cfg(target_os = "linux")]
+            Ok(()) => match descriptors {
+                Err(source) => Err(
+                    RecoveredWorkerV2SynchronousHsaUnloadError::ApplicationDescriptors {
+                        source,
+                        unload: unloaded.err(),
+                    },
+                ),
+                Ok(()) => unloaded.map_err(RecoveredWorkerV2SynchronousHsaUnloadError::Unload),
+            },
+            #[cfg(not(target_os = "linux"))]
+            Ok(()) => unloaded.map_err(RecoveredWorkerV2SynchronousHsaUnloadError::Unload),
         }
     }
 }
@@ -484,6 +659,16 @@ pub enum RecoveredWorkerV2SynchronousHsaPrepareError<PrerequisiteError, AdapterE
     Prepare(GeneratedAlphaZetaCov6PrepareError<PrerequisiteError, AdapterError>),
 }
 
+/// Failure while preparing Scalar GEMM V1 through recovered synchronous HSA authority.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum RecoveredWorkerV2SynchronousHsaScalarGemmV1PrepareError<PrerequisiteError, AdapterError> {
+    #[cfg(target_os = "linux")]
+    ApplicationDescriptors(WorkerV2ApplicationDescriptorHandoffErrorV1),
+    CurrentPublication(DurableLinkPublicationError),
+    Prepare(GeneratedScalarGemmV1PrepareError<PrerequisiteError, AdapterError>),
+}
+
 /// Failure while dispatching a recovered prepared invocation.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -500,6 +685,11 @@ pub enum RecoveredWorkerV2SynchronousHsaDispatchError<AdapterError> {
 pub enum RecoveredWorkerV2SynchronousHsaUnloadError<AdapterError> {
     CurrentPublication {
         source: DurableLinkPublicationError,
+        unload: Option<crate::HsaExecutableUnloadError<AdapterError>>,
+    },
+    #[cfg(target_os = "linux")]
+    ApplicationDescriptors {
+        source: WorkerV2ApplicationDescriptorHandoffErrorV1,
         unload: Option<crate::HsaExecutableUnloadError<AdapterError>>,
     },
     Unload(crate::HsaExecutableUnloadError<AdapterError>),
@@ -1548,6 +1738,228 @@ mod tests {
         bytes
     }
 
+    const SCALAR_GEMM_TEST_BINDING: [u8; 32] = [0x71; 32];
+    const SCALAR_GEMM_TEST_CONTRACT: [u8; 32] = [
+        113, 231, 84, 17, 114, 188, 255, 227, 152, 233, 232, 176, 233, 8, 229, 208, 175, 152, 252,
+        161, 92, 93, 182, 255, 100, 123, 16, 135, 44, 28, 196, 27,
+    ];
+
+    struct ScalarGemmTestKernel;
+
+    unsafe impl KernelMarkerV1 for ScalarGemmTestKernel {
+        type Function = fn();
+        type Registration = ();
+
+        const LOGICAL_NAME: &'static str = "scalar_gemm_v1";
+        const EXPORT_NAME: &'static str = "scalar_gemm_v1";
+        const FUNCTION: Self::Function = handoff_kernel;
+        const REGISTRATION: &'static Self::Registration = &();
+    }
+
+    unsafe impl CompilerGeneratedKernelExpectationV1 for ScalarGemmTestKernel {
+        const PROFILE: crate::CompilerGeneratedKernelProfileV1 =
+            crate::CompilerGeneratedKernelProfileV1::ManifestDerivedScalarSliceV1 {
+                generated_host_contract_identity: SCALAR_GEMM_TEST_CONTRACT,
+            };
+        const KERNEL_BINDING_ID_V1: [u8; 32] = SCALAR_GEMM_TEST_BINDING;
+
+        fn semantic_witness_v1() -> Result<
+            crate::ValidatedCompilerGeneratedSemanticWitnessV1,
+            crate::CompilerGeneratedSemanticWitnessErrorV1,
+        > {
+            let bytes = scalar_gemm_semantic_witness_bytes();
+            // SAFETY: this immutable test witness remains live for the complete parser call and
+            // repeats the exact marker and generated-host identities declared above.
+            unsafe {
+                crate::semantic_witness_from_backend_v1(
+                    bytes.as_ptr(),
+                    bytes.len(),
+                    SCALAR_GEMM_TEST_BINDING,
+                    SCALAR_GEMM_TEST_CONTRACT,
+                )
+            }
+        }
+    }
+
+    fn scalar_gemm_semantic_witness_bytes() -> Vec<u8> {
+        let profile = TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3.as_bytes();
+        let length = reserved_fe2o3_symbols::GENERAL_TYPED_V3_SEMANTIC_WITNESS_HEADER_BYTES_V1
+            + profile.len();
+        let mut bytes = Vec::with_capacity(length);
+        bytes.extend_from_slice(
+            &reserved_fe2o3_symbols::GENERAL_TYPED_V3_SEMANTIC_WITNESS_MAGIC_V1.to_le_bytes(),
+        );
+        bytes.extend_from_slice(
+            &reserved_fe2o3_symbols::GENERAL_TYPED_V3_SEMANTIC_WITNESS_VERSION_V1.to_le_bytes(),
+        );
+        bytes.extend_from_slice(
+            &reserved_fe2o3_symbols::GENERAL_TYPED_V3_SEMANTIC_WITNESS_DOMAIN_V1.to_le_bytes(),
+        );
+        bytes.extend_from_slice(&u32::try_from(length).unwrap().to_le_bytes());
+        bytes.extend_from_slice(&SCALAR_GEMM_TEST_BINDING);
+        bytes.extend_from_slice(&SCALAR_GEMM_TEST_CONTRACT);
+        bytes.extend_from_slice(&u16::try_from(profile.len()).unwrap().to_le_bytes());
+        bytes.extend_from_slice(profile);
+        bytes
+    }
+
+    #[test]
+    fn scalar_gemm_test_contract_identity_is_exact() {
+        let abi = crate::generated_scalar_gemm_v1::scalar_gemm_v1_test_abi();
+        let launch = crate::generated_scalar_gemm_v1::scalar_gemm_v1_test_launch();
+        assert_eq!(
+            derive_generated_host_contract_identity_v1(
+                MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+                SCALAR_GEMM_TEST_BINDING,
+                "scalar_gemm_v1",
+                "scalar_gemm_v1",
+                &abi,
+                &launch,
+            )
+            .as_bytes(),
+            &SCALAR_GEMM_TEST_CONTRACT,
+        );
+    }
+
+    struct ScalarGemmTestArguments {
+        observed: ObservedContext,
+        dimensions: [u32; 3],
+        lengths: [usize; 3],
+        addresses: [usize; 3],
+        owners: [&'static (); 3],
+        bound: std::cell::Cell<bool>,
+        drops: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl Drop for ScalarGemmTestArguments {
+        fn drop(&mut self) {
+            self.drops.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    fn scalar_gemm_test_arguments(
+        observed: &ObservedContext,
+        dimensions: [u32; 3],
+    ) -> (
+        ScalarGemmTestArguments,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        let [m, n, k] = dimensions.map(|value| usize::try_from(value).unwrap());
+        let drops = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        (
+            ScalarGemmTestArguments {
+                observed: observed.clone(),
+                dimensions,
+                lengths: [
+                    m.checked_mul(k).unwrap(),
+                    k.checked_mul(n).unwrap(),
+                    m.checked_mul(n).unwrap(),
+                ],
+                addresses: [0x10_000, 0x20_000, 0x30_000],
+                owners: std::array::from_fn(|_| Box::leak(Box::new(())) as &'static ()),
+                bound: std::cell::Cell::new(false),
+                drops: drops.clone(),
+            },
+            drops,
+        )
+    }
+
+    unsafe impl CompilerGeneratedScalarGemmV1Arguments<'static, ScalarGemmTestKernel>
+        for ScalarGemmTestArguments
+    {
+        fn dispatch_identity_v1() -> crate::ScalarGemmV1DispatchIdentity {
+            crate::ScalarGemmV1DispatchIdentity::new(
+                SCALAR_GEMM_TEST_BINDING,
+                SCALAR_GEMM_TEST_CONTRACT,
+            )
+        }
+
+        fn generated_argument_layout_v1()
+        -> Result<crate::CompilerGeneratedArgumentLayoutV1, crate::GeneratedArgumentLayoutError>
+        {
+            let abi = crate::generated_scalar_gemm_v1::scalar_gemm_v1_test_abi();
+            crate::CompilerGeneratedArgumentLayoutV1::new(
+                abi.size(),
+                abi.alignment(),
+                abi.pointer_width(),
+                abi.fields().to_vec(),
+            )
+        }
+
+        fn bind_arguments_v1(
+            &self,
+            plan: &crate::GeneratedArgumentPackingPlanV1,
+        ) -> Result<
+            crate::GeneratedScalarGemmV1ArgumentBinding<'static>,
+            crate::GeneratedArgumentPackError,
+        > {
+            assert!(
+                !self.bound.replace(true),
+                "test arguments bound more than once"
+            );
+            let mut inputs = Vec::with_capacity(6);
+            let mut accesses = Vec::with_capacity(3);
+            for (index, (((length, address), owner), mode)) in self
+                .lengths
+                .into_iter()
+                .zip(self.addresses)
+                .zip(self.owners)
+                .zip([
+                    crate::ArgumentAccessMode::SharedRead,
+                    crate::ArgumentAccessMode::SharedRead,
+                    crate::ArgumentAccessMode::ExclusiveReadWrite,
+                ])
+                .enumerate()
+            {
+                let byte_length = length.checked_mul(size_of::<f32>()).unwrap();
+                // SAFETY: each inert test range has a distinct leaked owner and fake address; the
+                // reviewed test adapter records dispatch but never dereferences device pointers.
+                let provenance = unsafe {
+                    crate::AllocationProvenance::from_raw_parts(
+                        &self.observed,
+                        owner,
+                        address as *mut u8,
+                        byte_length,
+                    )
+                }
+                .unwrap();
+                let access = if index == 2 {
+                    Access::ReadWrite
+                } else {
+                    Access::ReadOnly
+                };
+                // SAFETY: the packed pointer and length exactly match the retained provenance
+                // record assembled immediately above.
+                inputs.push(unsafe {
+                    plan.slice(
+                        index,
+                        address as *const (),
+                        u64::try_from(length).unwrap(),
+                        PointerWidth::Bits64,
+                        AddressSpace::Global,
+                        access,
+                    )?
+                });
+                accesses.push(crate::ArgumentAccess::new(
+                    provenance.region(0, byte_length).unwrap(),
+                    mode,
+                ));
+            }
+            inputs.push(plan.scalar_u32(3, self.dimensions[0])?);
+            inputs.push(plan.scalar_u32(4, self.dimensions[1])?);
+            inputs.push(plan.scalar_u32(5, self.dimensions[2])?);
+            // SAFETY: this test implementation binds the exact generated six-field layout, with
+            // access records and scalar dimensions derived from the same retained value.
+            Ok(unsafe {
+                crate::GeneratedScalarGemmV1ArgumentBinding::from_compiler_generated_parts_v1(
+                    inputs,
+                    accesses,
+                    self.dimensions,
+                )
+            })
+        }
+    }
+
     fn assert_handoff_contract_identity() {
         assert_eq!(
             derive_generated_host_contract_identity_v1(
@@ -1637,18 +2049,42 @@ mod tests {
 
     struct ExactHsaAdapter {
         unloads: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        dispatches: std::sync::Arc<std::sync::atomic::AtomicUsize>,
         turnover_completed: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+        target: &'static str,
     }
 
     impl ExactHsaAdapter {
         fn new() -> (Self, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
             let unloads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let dispatches = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
             (
                 Self {
                     unloads: unloads.clone(),
+                    dispatches,
                     turnover_completed: None,
+                    target: "gfx942:sramecc+:xnack-",
                 },
                 unloads,
+            )
+        }
+
+        fn for_scalar_gemm() -> (
+            Self,
+            std::sync::Arc<std::sync::atomic::AtomicUsize>,
+            std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        ) {
+            let unloads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let dispatches = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            (
+                Self {
+                    unloads: unloads.clone(),
+                    dispatches: dispatches.clone(),
+                    turnover_completed: None,
+                    target: REQUIRED_GFX942_TEST_TARGET,
+                },
+                unloads,
+                dispatches,
             )
         }
 
@@ -1660,8 +2096,8 @@ mod tests {
             (adapter, unloads)
         }
 
-        fn environment() -> crate::HsaEnvironmentObservationV1 {
-            let target = fe2o3_amd_target::AmdTargetId::parse("gfx942:sramecc+:xnack-").unwrap();
+        fn environment(&self) -> crate::HsaEnvironmentObservationV1 {
+            let target = fe2o3_amd_target::AmdTargetId::parse(self.target).unwrap();
             let runtime =
                 crate::HsaRuntimeIdentityV1::new("ROCr", "test", tagged(0xc1), [0xc2; 16]).unwrap();
             let device = crate::HsaPhysicalDeviceIdentityV1::new([0xc3; 16], 7, 0, target).unwrap();
@@ -1697,7 +2133,7 @@ mod tests {
         unsafe fn observe_environment(
             &mut self,
         ) -> Result<crate::HsaEnvironmentObservationV1, Self::Error> {
-            Ok(Self::environment())
+            Ok(self.environment())
         }
 
         unsafe fn load_executable(
@@ -1706,7 +2142,7 @@ mod tests {
             finalized_digest: PayloadDigest,
         ) -> Result<(Self::Executable, crate::HsaCodeObjectLoadObservationV1), Self::Error>
         {
-            let environment = Self::environment();
+            let environment = self.environment();
             Ok((
                 TestExecutable,
                 crate::HsaCodeObjectLoadObservationV1::new(
@@ -1724,7 +2160,11 @@ mod tests {
             _executable: &Self::Executable,
             export_symbol: &str,
         ) -> Result<(Self::Kernel, crate::HsaKernelResolutionObservationV1), Self::Error> {
-            let kernarg_segment_size = if export_symbol == "alpha" { 296 } else { 272 };
+            let kernarg_segment_size = match export_symbol {
+                "alpha" => 296,
+                "scalar_gemm_v1" => 320,
+                _ => 272,
+            };
             Ok((
                 TestKernel,
                 crate::HsaKernelResolutionObservationV1::new(
@@ -1746,6 +2186,7 @@ mod tests {
             _kernarg: &mut [u8],
         ) -> Result<crate::HsaDispatchObservationV1, Self::Error> {
             self.assert_turnover_pending("synchronous dispatch completed");
+            self.dispatches.fetch_add(1, Ordering::SeqCst);
             crate::HsaDispatchObservationV1::new(
                 [0xc7; 16],
                 Self::executable_object(),
@@ -1763,7 +2204,7 @@ mod tests {
             self.assert_turnover_pending("recovered executable unload completed");
             self.unloads
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let environment = Self::environment();
+            let environment = self.environment();
             Ok(crate::HsaUnloadObservationV1::new(
                 Self::executable_object(),
                 environment.runtime().instance(),
@@ -1796,6 +2237,367 @@ mod tests {
                 true,
             ))
         }
+    }
+
+    type ScalarGemmRecoveredAuthority =
+        RecoveredWorkerV2SynchronousHsaHandoffV1<ScalarGemmTestKernel, ExactHsaAdapter>;
+    type ScalarGemmRecoveredFixture = (
+        ScalarGemmRecoveredAuthority,
+        crate::worker_v2_bundle_admission::tests::TestDirectory,
+        ObservedContext,
+        ExactPrerequisiteAuthenticator,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    );
+    #[cfg(target_os = "linux")]
+    type ScalarGemmRecoveredApplicationFixture = (
+        ScalarGemmRecoveredAuthority,
+        crate::worker_v2_bundle_admission::tests::TestDirectory,
+        ObservedContext,
+        ExactPrerequisiteAuthenticator,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        std::path::PathBuf,
+        RecoveryFixture,
+    );
+
+    fn scalar_gemm_recovered_authority(seed: u8) -> ScalarGemmRecoveredFixture {
+        let (admission, directory) =
+            crate::worker_v2_bundle_admission::tests::admitted_scalar_gemm_v1_for_lifecycle_test(
+                seed,
+            );
+        let observed = make_observed_for(seed.into(), REQUIRED_GFX942_TEST_TARGET);
+        let (mut authenticator, authentication_calls) = ExactPrerequisiteAuthenticator::new();
+        let (adapter, unloads, dispatches) = ExactHsaAdapter::for_scalar_gemm();
+        let authenticated =
+            AuthenticatedWorkerV2ExecutableV1::<ScalarGemmTestKernel>::authenticate(
+                admission,
+                &mut authenticator,
+            )
+            .unwrap();
+        let currentness = authenticated.acquire_retained_currentness_token().unwrap();
+        let authorized = authenticated.authorize_hsa_load(adapter).unwrap();
+        let loaded = authorized
+            .load_with_retained_currentness(&currentness)
+            .unwrap();
+        (
+            RecoveredWorkerV2SynchronousHsaHandoffV1 {
+                loaded,
+                currentness,
+                observed: observed.clone(),
+                #[cfg(target_os = "linux")]
+                application_descriptors: None,
+            },
+            directory,
+            observed,
+            authenticator,
+            authentication_calls,
+            unloads,
+            dispatches,
+        )
+    }
+
+    fn scalar_gemm_managed_artifact(
+        directory: &crate::worker_v2_bundle_admission::tests::TestDirectory,
+    ) -> std::path::PathBuf {
+        let mut matches = fs::read_dir(directory.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                let name = path.file_name().unwrap().to_string_lossy();
+                name.starts_with(ARTIFACT_PREFIX) && name.ends_with(ARTIFACT_SUFFIX)
+            });
+        let path = matches.next().unwrap();
+        assert!(matches.next().is_none());
+        path
+    }
+
+    fn mutate_file(path: &Path) {
+        let mut bytes = fs::read(path).unwrap();
+        bytes[0] ^= 0x80;
+        fs::write(path, bytes).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    fn scalar_gemm_recovered_authority_with_application_descriptors(
+        seed: u8,
+    ) -> ScalarGemmRecoveredApplicationFixture {
+        let descriptor_fixture = recovery_fixture(seed, "gfx942", "vecadd");
+        let descriptors = application_descriptor_fixture(&descriptor_fixture, seed.wrapping_add(1));
+        let envelope_path = descriptors.envelope_path.clone();
+        let mut recovered = consume_worker_v2_application_handoff_descriptors_v1(
+            descriptors.envelope,
+            descriptors.artifact_directory,
+            descriptors.acknowledgment_write,
+            descriptors.expectation.commitment(),
+            descriptors.challenge,
+            descriptor_fixture.compiler_transaction.clone(),
+            descriptor_fixture.kernel_id,
+            &descriptor_fixture.observed,
+        )
+        .unwrap();
+        let acknowledgment = read_acknowledgment(descriptors.acknowledgment_read);
+        WorkerV2ApplicationHandoffAckV1::decode_canonical(&acknowledgment)
+            .unwrap()
+            .validate(descriptors.expectation, descriptors.challenge)
+            .unwrap();
+        let application_descriptors = recovered.application_descriptors.take().unwrap();
+        drop(recovered);
+
+        let (
+            mut authority,
+            directory,
+            observed,
+            authenticator,
+            authentication_calls,
+            unloads,
+            dispatches,
+        ) = scalar_gemm_recovered_authority(seed.wrapping_add(2));
+        authority.application_descriptors = Some(application_descriptors);
+        (
+            authority,
+            directory,
+            observed,
+            authenticator,
+            authentication_calls,
+            unloads,
+            dispatches,
+            envelope_path,
+            descriptor_fixture,
+        )
+    }
+
+    #[test]
+    fn recovered_scalar_gemm_prepare_dispatch_and_unload_are_end_to_end() {
+        let (
+            mut authority,
+            _directory,
+            observed,
+            mut authenticator,
+            authentication_calls,
+            unloads,
+            dispatches,
+        ) = scalar_gemm_recovered_authority(0xb0);
+        let (arguments, drops) = scalar_gemm_test_arguments(&observed, [1, 257, 1]);
+
+        let prepared = authority
+            .prepare_generated_scalar_gemm_v1::<
+                ScalarGemmTestKernel,
+                ExactPrerequisiteAuthenticator,
+                _,
+            >(&mut authenticator, arguments)
+            .unwrap();
+        assert_eq!(prepared.geometry().unwrap().grid(), [2, 1, 1]);
+        assert_eq!(prepared.explicit_byte_len(), 64);
+        assert_eq!(prepared.physical_kernarg_byte_len(), 320);
+        assert_eq!(prepared.physical_kernarg_alignment(), 16);
+        let completion = prepared.dispatch().unwrap();
+        assert!(completion.was_dispatched());
+        assert!(completion.completed_dispatch().is_some());
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+        assert_eq!(dispatches.load(Ordering::SeqCst), 1);
+        assert_eq!(authentication_calls.load(Ordering::SeqCst), 1);
+
+        authority.unload().unwrap();
+        assert_eq!(unloads.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn scalar_gemm_prepare_rejects_current_publication_mutation() {
+        let (mut authority, directory, observed, mut authenticator, _, unloads, dispatches) =
+            scalar_gemm_recovered_authority(0xb1);
+        mutate_file(&scalar_gemm_managed_artifact(&directory));
+        let (arguments, drops) = scalar_gemm_test_arguments(&observed, [1, 1, 1]);
+
+        let error = match authority
+            .prepare_generated_scalar_gemm_v1::<
+                ScalarGemmTestKernel,
+                ExactPrerequisiteAuthenticator,
+                _,
+            >(&mut authenticator, arguments)
+        {
+            Ok(_) => panic!("mutated current publication must prevent preparation"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            RecoveredWorkerV2SynchronousHsaScalarGemmV1PrepareError::CurrentPublication(_)
+        ));
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+        assert_eq!(dispatches.load(Ordering::SeqCst), 0);
+        assert!(matches!(
+            authority.unload(),
+            Err(RecoveredWorkerV2SynchronousHsaUnloadError::CurrentPublication { .. })
+        ));
+        assert_eq!(unloads.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn scalar_gemm_dispatch_rejects_current_publication_mutation() {
+        let (mut authority, directory, observed, mut authenticator, _, unloads, dispatches) =
+            scalar_gemm_recovered_authority(0xb2);
+        let (arguments, drops) = scalar_gemm_test_arguments(&observed, [1, 1, 1]);
+        let prepared = authority
+            .prepare_generated_scalar_gemm_v1::<
+                ScalarGemmTestKernel,
+                ExactPrerequisiteAuthenticator,
+                _,
+            >(&mut authenticator, arguments)
+            .unwrap();
+        mutate_file(&scalar_gemm_managed_artifact(&directory));
+
+        let error = match prepared.dispatch() {
+            Ok(_) => panic!("mutated current publication must prevent dispatch"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            RecoveredWorkerV2SynchronousHsaDispatchError::CurrentPublication(_)
+        ));
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+        assert_eq!(dispatches.load(Ordering::SeqCst), 0);
+        assert!(authority.unload().is_err());
+        assert_eq!(unloads.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn scalar_gemm_unload_rejects_current_publication_mutation_after_dispatch() {
+        let (mut authority, directory, observed, mut authenticator, _, unloads, dispatches) =
+            scalar_gemm_recovered_authority(0xb3);
+        let (arguments, drops) = scalar_gemm_test_arguments(&observed, [1, 1, 1]);
+        authority
+            .prepare_generated_scalar_gemm_v1::<
+                ScalarGemmTestKernel,
+                ExactPrerequisiteAuthenticator,
+                _,
+            >(&mut authenticator, arguments)
+            .unwrap()
+            .dispatch()
+            .unwrap();
+        mutate_file(&scalar_gemm_managed_artifact(&directory));
+
+        assert!(matches!(
+            authority.unload(),
+            Err(RecoveredWorkerV2SynchronousHsaUnloadError::CurrentPublication { .. })
+        ));
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+        assert_eq!(dispatches.load(Ordering::SeqCst), 1);
+        assert_eq!(unloads.load(Ordering::SeqCst), 1);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn scalar_gemm_prepare_rejects_application_descriptor_mutation() {
+        let (
+            mut authority,
+            _directory,
+            observed,
+            mut authenticator,
+            _,
+            unloads,
+            dispatches,
+            envelope_path,
+            _descriptor_fixture,
+        ) = scalar_gemm_recovered_authority_with_application_descriptors(0xb4);
+        mutate_file(&envelope_path);
+        let (arguments, drops) = scalar_gemm_test_arguments(&observed, [1, 1, 1]);
+
+        let error = match authority
+            .prepare_generated_scalar_gemm_v1::<
+                ScalarGemmTestKernel,
+                ExactPrerequisiteAuthenticator,
+                _,
+            >(&mut authenticator, arguments)
+        {
+            Ok(_) => panic!("mutated application descriptor must prevent preparation"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            RecoveredWorkerV2SynchronousHsaScalarGemmV1PrepareError::ApplicationDescriptors(_)
+        ));
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+        assert_eq!(dispatches.load(Ordering::SeqCst), 0);
+        assert!(matches!(
+            authority.unload(),
+            Err(RecoveredWorkerV2SynchronousHsaUnloadError::ApplicationDescriptors { .. })
+        ));
+        assert_eq!(unloads.load(Ordering::SeqCst), 1);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn scalar_gemm_dispatch_rejects_application_descriptor_mutation() {
+        let (
+            mut authority,
+            _directory,
+            observed,
+            mut authenticator,
+            _,
+            unloads,
+            dispatches,
+            envelope_path,
+            _descriptor_fixture,
+        ) = scalar_gemm_recovered_authority_with_application_descriptors(0xb5);
+        let (arguments, drops) = scalar_gemm_test_arguments(&observed, [1, 1, 1]);
+        let prepared = authority
+            .prepare_generated_scalar_gemm_v1::<
+                ScalarGemmTestKernel,
+                ExactPrerequisiteAuthenticator,
+                _,
+            >(&mut authenticator, arguments)
+            .unwrap();
+        mutate_file(&envelope_path);
+
+        let error = match prepared.dispatch() {
+            Ok(_) => panic!("mutated application descriptor must prevent dispatch"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            RecoveredWorkerV2SynchronousHsaDispatchError::ApplicationDescriptors(_)
+        ));
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+        assert_eq!(dispatches.load(Ordering::SeqCst), 0);
+        assert!(authority.unload().is_err());
+        assert_eq!(unloads.load(Ordering::SeqCst), 1);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn scalar_gemm_unload_rejects_application_descriptor_mutation_after_dispatch() {
+        let (
+            mut authority,
+            _directory,
+            observed,
+            mut authenticator,
+            _,
+            unloads,
+            dispatches,
+            envelope_path,
+            _descriptor_fixture,
+        ) = scalar_gemm_recovered_authority_with_application_descriptors(0xb6);
+        let (arguments, drops) = scalar_gemm_test_arguments(&observed, [1, 1, 1]);
+        authority
+            .prepare_generated_scalar_gemm_v1::<
+                ScalarGemmTestKernel,
+                ExactPrerequisiteAuthenticator,
+                _,
+            >(&mut authenticator, arguments)
+            .unwrap()
+            .dispatch()
+            .unwrap();
+        mutate_file(&envelope_path);
+
+        assert!(matches!(
+            authority.unload(),
+            Err(RecoveredWorkerV2SynchronousHsaUnloadError::ApplicationDescriptors { .. })
+        ));
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+        assert_eq!(dispatches.load(Ordering::SeqCst), 1);
+        assert_eq!(unloads.load(Ordering::SeqCst), 1);
     }
 
     fn managed_artifact(output: &Path) -> std::path::PathBuf {
@@ -2538,7 +3340,10 @@ mod tests {
             RecoveredWorkerV2SynchronousHsaDispatchError::ApplicationDescriptors(_)
         ));
         assert_eq!(drops.load(Ordering::SeqCst), 1);
-        authority.unload().unwrap();
+        assert!(matches!(
+            authority.unload(),
+            Err(RecoveredWorkerV2SynchronousHsaUnloadError::ApplicationDescriptors { .. })
+        ));
         assert_eq!(unloads.load(Ordering::SeqCst), 1);
     }
 

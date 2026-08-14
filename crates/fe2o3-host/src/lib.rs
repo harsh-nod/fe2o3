@@ -188,6 +188,9 @@ pub use recovered_worker_v2_admission::{
     RecoveredWorkerV2SynchronousHsaHandoffV1, RecoveredWorkerV2SynchronousHsaPrepareError,
     RecoveredWorkerV2SynchronousHsaPrepareResultV1,
     RecoveredWorkerV2SynchronousHsaPreparedInvocationV1,
+    RecoveredWorkerV2SynchronousHsaScalarGemmV1PrepareError,
+    RecoveredWorkerV2SynchronousHsaScalarGemmV1PrepareResultV1,
+    RecoveredWorkerV2SynchronousHsaScalarGemmV1PreparedInvocationV1,
     RecoveredWorkerV2SynchronousHsaUnloadError,
 };
 

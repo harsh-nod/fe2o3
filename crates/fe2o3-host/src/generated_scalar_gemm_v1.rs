@@ -25,6 +25,8 @@ use fe2o3_artifacts::{
     AbiField, AbiKind, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize, Mutability,
     PointerWidth, ScalarType, TargetIdentity,
 };
+#[cfg(any(test, feature = "hardware-test-hooks"))]
+use fe2o3_artifacts::{AbiLayout, Dimensions, LaunchContract, Name};
 use fe2o3_core::{
     DeviceBuffer, DeviceBufferRegion, DeviceBufferView, DeviceBufferViewMut, DevicePtr,
 };
@@ -1106,6 +1108,91 @@ impl std::error::Error for ScalarGemmV1ArgumentError {}
 impl std::error::Error for ScalarGemmV1GeometryError {}
 impl std::error::Error for ScalarGemmV1PhysicalKernargError {}
 
+#[cfg(any(test, feature = "hardware-test-hooks"))]
+pub(crate) fn scalar_gemm_v1_test_abi() -> AbiLayout {
+    let scalar_u32 = |name: &str, offset: u64| {
+        AbiField::new(
+            Name::new(name).unwrap(),
+            offset,
+            4,
+            4,
+            AbiKind::Scalar(ScalarType::U32),
+            Mutability::Immutable,
+            Access::ByValue,
+            AddressSpace::Value,
+            u32::scalar_type_identity_v1(PointerWidth::Bits64),
+            ArgumentOwnership::ByValue,
+            AliasClass::Value,
+        )
+        .unwrap()
+    };
+    let slice = |name: &str, offset: u64, read_write: bool| {
+        AbiField::new(
+            Name::new(name).unwrap(),
+            offset,
+            16,
+            8,
+            AbiKind::Slice {
+                element_size: 4,
+                element_alignment: 4,
+            },
+            if read_write {
+                Mutability::Mutable
+            } else {
+                Mutability::Immutable
+            },
+            if read_write {
+                Access::ReadWrite
+            } else {
+                Access::ReadOnly
+            },
+            AddressSpace::Global,
+            if read_write {
+                f32::disjoint_slice_type_identity_v1(PointerWidth::Bits64)
+            } else {
+                f32::shared_slice_type_identity_v1(PointerWidth::Bits64)
+            },
+            if read_write {
+                ArgumentOwnership::UniqueBorrow
+            } else {
+                ArgumentOwnership::SharedBorrow
+            },
+            if read_write {
+                AliasClass::Exclusive
+            } else {
+                AliasClass::SharedReadOnly
+            },
+        )
+        .unwrap()
+    };
+    AbiLayout::new(
+        64,
+        8,
+        PointerWidth::Bits64,
+        vec![
+            slice("a", 0, false),
+            slice("b", 16, false),
+            slice("c", 32, true),
+            scalar_u32("m", 48),
+            scalar_u32("n", 52),
+            scalar_u32("k", 56),
+        ],
+    )
+    .unwrap()
+}
+
+#[cfg(any(test, feature = "hardware-test-hooks"))]
+pub(crate) fn scalar_gemm_v1_test_launch() -> LaunchContract {
+    LaunchContract::new(
+        1,
+        BlockSize::Exact(Dimensions::new(SCALAR_GEMM_V1_BLOCK_X, 1, 1).unwrap()),
+        Dimensions::new(u32::MAX, 1, 1).unwrap(),
+        0,
+        0,
+    )
+    .unwrap()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1182,7 +1269,7 @@ mod tests {
     }
 
     fn abi() -> AbiLayout {
-        AbiLayout::new(64, 8, PointerWidth::Bits64, fields()).unwrap()
+        super::scalar_gemm_v1_test_abi()
     }
 
     fn plan(seed: u8) -> GeneratedArgumentPackingPlanV1 {
@@ -1248,14 +1335,7 @@ mod tests {
     }
 
     fn launch() -> LaunchContract {
-        LaunchContract::new(
-            1,
-            BlockSize::Exact(Dimensions::new(256, 1, 1).unwrap()),
-            Dimensions::new(u32::MAX, 1, 1).unwrap(),
-            0,
-            0,
-        )
-        .unwrap()
+        super::scalar_gemm_v1_test_launch()
     }
 
     fn physical_facts() -> ScalarGemmPhysicalFacts {

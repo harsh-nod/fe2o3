@@ -1199,7 +1199,8 @@ pub(crate) mod tests {
         make_single_hsaco_fixture, make_single_hsaco_fixture_with_kernel_id,
         make_single_hsaco_fixture_with_names_and_kernel_id, make_two_hsaco_fixture_with_kernel_ids,
         make_two_hsaco_fixture_with_kernel_ids_and_abis, physical_test_abi,
-        typed_vecadd_hsaco_for_target, typed_vecadd_two_kernel_hsaco_for_target,
+        scalar_gemm_v1_hsaco_for_target, typed_vecadd_hsaco_for_target,
+        typed_vecadd_two_kernel_hsaco_for_target,
     };
     use fe2o3_artifact_transaction::{
         AtomicPublicationIdentityV1, BuildInvocation, BuildSession, CanonicalLinkRequestIdentityV1,
@@ -1513,6 +1514,34 @@ pub(crate) mod tests {
         finish_admission_fixture(seed, 0, fixture, hsaco.bytes.clone(), hsaco.bytes)
     }
 
+    fn scalar_gemm_v1_admission_fixture(seed: u8) -> AdmissionFixture {
+        let hsaco = scalar_gemm_v1_hsaco_for_target(REQUIRED_GFX942_TEST_TARGET);
+        let abi = crate::generated_scalar_gemm_v1::scalar_gemm_v1_test_abi();
+        let launch = crate::generated_scalar_gemm_v1::scalar_gemm_v1_test_launch();
+        let kernel_binding = [0x71; 32];
+        let kernel_id = derive_generated_kernel_identity_v2(
+            MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+            kernel_binding,
+            "scalar_gemm_v1",
+            "scalar_gemm_v1",
+            repeated_digest(seed.wrapping_add(0x40)),
+            repeated_digest(seed.wrapping_add(0x50)),
+            &abi,
+            &launch,
+        );
+        let fixture = make_single_hsaco_fixture_with_names_and_kernel_id(
+            seed,
+            hsaco.bytes.clone(),
+            REQUIRED_GFX942_TEST_TARGET,
+            "scalar_gemm_v1",
+            "scalar_gemm_v1",
+            abi,
+            launch,
+            kernel_id,
+        );
+        finish_admission_fixture(seed, 0, fixture, hsaco.bytes.clone(), hsaco.bytes)
+    }
+
     fn renamed_abi_field(template: &AbiField, name: &str, offset: u64) -> AbiField {
         AbiField::new(
             Name::new(name).unwrap(),
@@ -1736,6 +1765,49 @@ pub(crate) mod tests {
         seed: u8,
     ) -> (AdmittedFinalizedWorkerV2BundleV1, TestDirectory) {
         let input = alpha_cov6_admission_fixture(seed);
+        let validated = input.fixture.validated();
+        let selected_kernel = selected(&input.fixture);
+        let observed = make_observed_for(seed.into(), REQUIRED_GFX942_TEST_TARGET);
+        let parts = admit_parts(
+            input.attempt,
+            &input.exact_bytes,
+            input.publication,
+            &validated,
+            &input.fixture.container,
+            selected_kernel,
+            &observed,
+        )
+        .unwrap();
+        let admission = AdmittedFinalizedWorkerV2BundleV1 {
+            prepared: RetainedWorkerV2PreparationV1::Test {
+                attempt: input.attempt,
+                exact_bytes: input.exact_bytes.into_boxed_slice(),
+            },
+            current_lease: parts.current_lease,
+            receipt: parts.receipt,
+            published: parts.published,
+            bundle_index_identity: parts.bundle_index_identity,
+            bundle_evidence_identity: parts.bundle_evidence_identity,
+            binding_index: parts.binding_index,
+            container_identity: parts.container_identity,
+            linked_output_identity: parts.linked_output_identity,
+            finalization_identity: parts.finalization_identity,
+            finalized_payload_identity: parts.finalized_payload_identity,
+            artifact_identity: parts.artifact_identity,
+            kernel_identities: parts.kernel_identities,
+            device: parts.device,
+            inspected: parts.inspected,
+            kernels: parts.kernels,
+            selected_kernel_index: parts.selected_kernel_index,
+            full_lineage: Some(test_full_lineage(&input.fixture, seed)),
+        };
+        (admission, input._directory)
+    }
+
+    pub(crate) fn admitted_scalar_gemm_v1_for_lifecycle_test(
+        seed: u8,
+    ) -> (AdmittedFinalizedWorkerV2BundleV1, TestDirectory) {
+        let input = scalar_gemm_v1_admission_fixture(seed);
         let validated = input.fixture.validated();
         let selected_kernel = selected(&input.fixture);
         let observed = make_observed_for(seed.into(), REQUIRED_GFX942_TEST_TARGET);
