@@ -4,6 +4,8 @@ use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
 use std::io::Read;
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::MetadataExt;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Output, Stdio};
@@ -60,15 +62,38 @@ fn worker_fixture() -> &'static Path {
 }
 
 fn worker_fixture_path(root: &Path) -> OsString {
-    let directory = root.join("pinned-worker-rustc-bin");
+    let toolchain = root.join("pinned-worker-rustc-toolchain");
+    let directory = toolchain.join("bin");
+    let library = toolchain.join("lib");
     fs::create_dir_all(&directory).unwrap();
+    fs::create_dir_all(&library).unwrap();
     let rustc = directory.join("rustc");
     if !rustc.exists() {
-        std::os::unix::fs::symlink(worker_fixture(), &rustc).unwrap();
+        fs::copy(worker_fixture(), &rustc).unwrap();
+        fs::write(library.join("runtime-marker"), b"fixture-runtime-v1").unwrap();
     }
     let mut paths = vec![directory];
     paths.extend(env::split_paths(&env::var_os("PATH").unwrap_or_default()));
     env::join_paths(paths).unwrap()
+}
+
+fn worker_runtime_sha256(root: &Path) -> String {
+    let library = root.join("pinned-worker-rustc-toolchain/lib");
+    let marker = library.join("runtime-marker");
+    let metadata = fs::metadata(&marker).unwrap();
+    let bytes = fs::read(&marker).unwrap();
+    let name = marker.file_name().unwrap().as_bytes();
+    let mut hash = Sha256::new();
+    hash.update(b"fe2o3-rustc-runtime-tree-v1\0");
+    hash.update(b"directory\0");
+    hash.update((name.len() as u64).to_le_bytes());
+    hash.update(name);
+    hash.update(b"file\0");
+    hash.update((metadata.mode() & 0o7777).to_le_bytes());
+    hash.update((bytes.len() as u64).to_le_bytes());
+    hash.update(bytes);
+    hash.update(b"end-directory\0");
+    hex(&hash.finalize())
 }
 
 fn envelope_input_fixture() -> &'static Path {
@@ -783,6 +808,14 @@ fn outer_command(directory: &TestDirectory, config: Option<&Path>, control: &Pat
     let backend = directory.0.join("librustc_codegen_fe2o3.so");
     fs::write(&backend, b"worker-v2 vertical backend").unwrap();
     let backend_sha256 = hex(&Sha256::digest(fs::read(&backend).unwrap()));
+    let rustc_path = worker_fixture_path(&directory.0);
+    let rustc_sha256 = hex(&Sha256::digest(
+        fs::read(directory.0.join("pinned-worker-rustc-toolchain/bin/rustc")).unwrap(),
+    ));
+    let runtime_sha256 = worker_runtime_sha256(&directory.0);
+    let cargo_sha256 = hex(&Sha256::digest(
+        fs::read(env!("CARGO_BIN_EXE_cargo-fe2o3-cargo-fixture")).unwrap(),
+    ));
     let target = directory.0.join("target");
     let cargo_log = directory.0.join("cargo.log");
 
@@ -793,19 +826,26 @@ fn outer_command(directory: &TestDirectory, config: Option<&Path>, control: &Pat
         .current_dir(&directory.0)
         .env("CARGO", env!("CARGO_BIN_EXE_cargo-fe2o3-cargo-fixture"))
         .env("FE2O3_BACKEND", backend)
+        .env("FE2O3_AUTHORITY_RUSTC_SHA256_V1", rustc_sha256)
         .env(
-            "FE2O3_AUTHORITY_RUSTC_SHA256_V1",
-            hex(&Sha256::digest(fs::read(worker_fixture()).unwrap())),
+            "FE2O3_AUTHORITY_RUSTC_PATH_V1",
+            directory.0.join("pinned-worker-rustc-toolchain/bin/rustc"),
         )
+        .env("FE2O3_AUTHORITY_RUSTC_RUNTIME_SHA256_V1", runtime_sha256)
+        .env("FE2O3_AUTHORITY_CARGO_SHA256_V1", cargo_sha256)
         .env("FE2O3_AUTHORITY_BACKEND_SHA256_V1", backend_sha256)
         .env("FE2O3_CODEGEN_PIPELINE", "kernel-ir-worker-v2")
+        .env(
+            "FE2O3_NON_PRODUCTION_UNPROTECTED_AUTHORITY_VALIDATION_V1",
+            "1",
+        )
         .env("FE2O3_FIXTURE_RUSTC_MARKER", directory.0.join("spawned"))
         .env("FE2O3_FIXTURE_SOURCE", &source)
         .env("FE2O3_TARGET", "gfx942:xnack-")
         .env("FE2O3_TEST_CARGO_LOG", cargo_log)
         .env("FE2O3_TEST_TARGET_DIRECTORY", target)
         .env("FE2O3_TEST_VERTICAL_CONTROL_DIR", control)
-        .env("PATH", worker_fixture_path(&directory.0))
+        .env("PATH", rustc_path)
         .env("FE2O3_TEST_WORKSPACE_ROOT", &directory.0);
     if let Some(config) = config {
         command.env("FE2O3_WORKER_V2_CONFIG_V2", config);

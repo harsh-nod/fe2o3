@@ -177,6 +177,19 @@ fn sha256(path: &Path) -> String {
     })))
 }
 
+fn required_sha256(name: &str) -> String {
+    let value = std::env::var(name).unwrap_or_else(|_| panic!("required test input {name}"));
+    assert!(
+        value.len() == 64
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            && !value.bytes().all(|byte| byte == b'0'),
+        "{name} is not a nonzero canonical SHA-256 digest"
+    );
+    value
+}
+
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
@@ -487,6 +500,8 @@ fn production_s09_compile_captures_and_publishes_worker_output() {
     fs::create_dir(&rustc_bin).expect("create pinned rustc bin directory");
     symlink(&rustc, rustc_bin.join("rustc")).expect("install pinned rustc path entry");
     let rustc_sha256 = sha256(&rustc);
+    let rustc_runtime_sha256 = required_sha256("FE2O3_TEST_RUSTC_RUNTIME_SHA256_V1");
+    let cargo_sha256 = sha256(&cargo);
     let backend_sha256 = sha256(&backend);
 
     let output = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"))
@@ -509,9 +524,19 @@ fn production_s09_compile_captures_and_publishes_worker_output() {
         .env("LANG", "C.UTF-8")
         .env("PATH", format!("{}:/usr/bin:/bin", rustc_bin.display()))
         .env("FE2O3_BACKEND", &backend)
+        .env("FE2O3_AUTHORITY_CARGO_SHA256_V1", &cargo_sha256)
         .env("FE2O3_AUTHORITY_RUSTC_SHA256_V1", &rustc_sha256)
+        .env("FE2O3_AUTHORITY_RUSTC_PATH_V1", &rustc)
+        .env(
+            "FE2O3_AUTHORITY_RUSTC_RUNTIME_SHA256_V1",
+            &rustc_runtime_sha256,
+        )
         .env("FE2O3_AUTHORITY_BACKEND_SHA256_V1", &backend_sha256)
         .env("FE2O3_CODEGEN_PIPELINE", "kernel-ir-worker-v2")
+        .env(
+            "FE2O3_NON_PRODUCTION_UNPROTECTED_AUTHORITY_VALIDATION_V1",
+            "1",
+        )
         .env("FE2O3_TARGET", "gfx942:xnack-")
         .env("FE2O3_VERBOSE", "1")
         .env("FE2O3_WORKER_V2_CONFIG_V2", &config)
@@ -531,7 +556,6 @@ fn production_s09_compile_captures_and_publishes_worker_output() {
         stderr.contains("published inert Worker V2 compiler-module handoff"),
         "production backend did not publish its inert Worker handoff:\n{stderr}"
     );
-    let cargo_sha256 = sha256(&cargo);
     assert!(
         stderr.contains(&format!("pinned_cargo_image_sha256={cargo_sha256}")),
         "S09 build claim did not bind the brokered pinned Cargo image:\n{stderr}"

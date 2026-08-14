@@ -2,6 +2,8 @@ use std::env;
 use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
 use std::process::{Command, ExitCode};
 
@@ -31,12 +33,33 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<std::process::ExitStatus, String> {
+    let filtered = filtered_args(env::args_os().collect());
+    if filtered.len() == 2 && filtered[1] == "-vV" {
+        println!(
+            "rustc 1.93.0-nightly (fe2o3-fixture 2026-04-03)\n\
+             binary: rustc\n\
+             commit-hash: fe2o3fixture0000000000000000000000000000\n\
+             commit-date: 2026-04-03\n\
+             host: x86_64-unknown-linux-gnu\n\
+             release: 1.93.0-nightly\n\
+             LLVM version: 22.0.0"
+        );
+        #[cfg(unix)]
+        return Ok(std::process::ExitStatus::from_raw(0));
+    }
     let real_rustc = env::var_os("FE2O3_TEST_REAL_RUSTC")
         .ok_or_else(|| "missing FE2O3_TEST_REAL_RUSTC".to_string())?;
-    let filtered = filtered_args(env::args_os().collect());
     match classify_rustc_invocation_v2(&filtered) {
         Ok(RustcInvocationV2::Compile(compile)) => {
             publish_probe(compile.crate_name(), compile.source_path())?;
+            if let Some(report) = env::var_os("FE2O3_TEST_COMPILER_CLOSURE_RUSTC_REPORT") {
+                let closure =
+                    env::var("FE2O3_EXPECTED_COMPILER_CLOSURE_SHA256_V1").map_err(|_| {
+                        "rustc fixture has no authenticated compiler closure".to_owned()
+                    })?;
+                fs::write(report, closure)
+                    .map_err(|error| format!("write compiler closure report: {error}"))?;
+            }
         }
         Ok(_) => {}
         Err(_) if env::var_os(BUILD_ATTEMPT_ENV).is_none() => {}

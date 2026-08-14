@@ -25,7 +25,7 @@ fn main() -> ExitCode {
     }
 
     match args.get(1).and_then(|argument| argument.to_str()) {
-        Some("metadata") => metadata(),
+        Some("metadata") => metadata(&args),
         Some("config") => config_get(&args),
         Some("build") if is_backend_build(&args) => backend_build(&args),
         Some("build" | "run") => build_or_run(&args),
@@ -101,7 +101,35 @@ fn backend_build(args: &[OsString]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn metadata() -> ExitCode {
+fn metadata(args: &[OsString]) -> ExitCode {
+    if let Some(report) = env::var_os("FE2O3_TEST_AUTHORITY_PREFLIGHT_REPORT") {
+        let mut observation = format!(
+            "frozen={}\noffline={}\nrustc={}\n",
+            args.iter().any(|argument| argument == "--frozen"),
+            args.iter().any(|argument| argument == "--offline"),
+            env::var_os("RUSTC").unwrap_or_default().to_string_lossy()
+        );
+        for name in [
+            "PATH",
+            "HOME",
+            "CARGO_HOME",
+            "GIT_CONFIG_GLOBAL",
+            "SSH_AUTH_SOCK",
+            "CARGO_REGISTRIES_CRATES_IO_TOKEN",
+        ] {
+            observation.push_str(&format!("{name}={:?}\n", env::var_os(name)));
+        }
+        #[cfg(target_os = "linux")]
+        observation.push_str(&format!(
+            "rustc_fd={}\nlib_tree_fd={}\n",
+            fs::symlink_metadata("/proc/self/fd/194").is_ok(),
+            fs::symlink_metadata("/proc/self/fd/193").is_ok(),
+        ));
+        if let Err(error) = fs::write(report, observation) {
+            eprintln!("fake Cargo could not record authority preflight: {error}");
+            return ExitCode::FAILURE;
+        }
+    }
     let workspace_root = required_path("FE2O3_TEST_WORKSPACE_ROOT");
     let target_directory = required_path("FE2O3_TEST_TARGET_DIRECTORY");
     let record = serde_json::json!({
@@ -125,6 +153,30 @@ fn build_or_run(args: &[OsString]) -> ExitCode {
     }
     if env::var_os("FE2O3_TEST_VERTICAL_CONTROL_DIR").is_some() {
         return vertical_worker_v2_invocation();
+    }
+    #[cfg(target_os = "linux")]
+    if let Some(substitute) = env::var_os("FE2O3_TEST_SUBSTITUTE_RUSTC_LIB_TREE") {
+        let substitute = match File::open(substitute) {
+            Ok(directory) => directory,
+            Err(error) => {
+                eprintln!("fake Cargo could not open rustc lib-tree substitute: {error}");
+                return ExitCode::FAILURE;
+            }
+        };
+        // SAFETY: this single-threaded hostile fixture intentionally replaces its inherited fd.
+        if unsafe { libc::dup2(substitute.as_raw_fd(), 193) } != 193 {
+            eprintln!("fake Cargo could not replace inherited rustc lib-tree descriptor");
+            return ExitCode::FAILURE;
+        }
+        return invoke_compile_wrapper("substituted_lib_tree", "substituted-lib-tree");
+    }
+    if env::var_os("FE2O3_TEST_COMPILER_CLOSURE_RUSTC_REPORT").is_some() {
+        return invoke_compile_wrapper_with_environment(
+            "compiler_closure",
+            "compiler-closure",
+            "FE2O3_EXPECTED_COMPILER_CLOSURE_SHA256_V1",
+            "01".repeat(32),
+        );
     }
     if let Some(report) = env::var_os("FE2O3_TEST_PINNED_RUSTC_REPORT") {
         let output = match Command::new(required_path("RUSTC_WORKSPACE_WRAPPER"))
@@ -480,6 +532,62 @@ fn multithreaded_substitute_wrapper(
     _attacker_compiler: &Path,
 ) -> Result<std::process::ExitStatus, String> {
     Err("multithreaded wrapper substitution requires Linux".to_string())
+}
+
+fn invoke_compile_wrapper(crate_name: &str, metadata: &str) -> ExitCode {
+    let wrapper = required_path("RUSTC_WORKSPACE_WRAPPER");
+    let rustc = required_path("RUSTC");
+    let source = required_path("FE2O3_TEST_WORKSPACE_ROOT").join("src/main.rs");
+    match Command::new(wrapper)
+        .arg(rustc)
+        .args(["--crate-name", crate_name])
+        .arg(format!("-Cmetadata={metadata}"))
+        .arg(source)
+        .status()
+    {
+        Ok(status) if status.success() => ExitCode::SUCCESS,
+        Ok(status) => ExitCode::from(
+            status
+                .code()
+                .and_then(|code| u8::try_from(code).ok())
+                .unwrap_or(1),
+        ),
+        Err(error) => {
+            eprintln!("fake Cargo could not launch compile wrapper: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn invoke_compile_wrapper_with_environment(
+    crate_name: &str,
+    metadata: &str,
+    name: &str,
+    value: String,
+) -> ExitCode {
+    let wrapper = required_path("RUSTC_WORKSPACE_WRAPPER");
+    let rustc = required_path("RUSTC");
+    let source = required_path("FE2O3_TEST_WORKSPACE_ROOT").join("src/main.rs");
+    match Command::new(wrapper)
+        .arg(rustc)
+        .args(["--crate-name", crate_name])
+        .arg(format!("-Cmetadata={metadata}"))
+        .arg(source)
+        .env(name, value)
+        .status()
+    {
+        Ok(status) if status.success() => ExitCode::SUCCESS,
+        Ok(status) => ExitCode::from(
+            status
+                .code()
+                .and_then(|code| u8::try_from(code).ok())
+                .unwrap_or(1),
+        ),
+        Err(error) => {
+            eprintln!("fake Cargo could not launch compile wrapper: {error}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 fn vertical_worker_v2_invocation() -> ExitCode {
