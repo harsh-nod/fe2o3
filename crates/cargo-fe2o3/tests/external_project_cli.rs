@@ -152,7 +152,7 @@ impl ProjectFixture {
     }
 
     fn command(&self, args: &[OsString]) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
+        let mut command = cargo_fe2o3_command();
         command
             .args(args)
             .current_dir(&self.cwd)
@@ -228,6 +228,20 @@ fn temp_root() -> PathBuf {
             Err(error) => panic!("failed to create temporary project: {error}"),
         }
     }
+}
+
+fn cargo_fe2o3_command() -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
+    for (name, _) in env::vars_os() {
+        let name_bytes = os_bytes(&name);
+        if name_bytes.starts_with(b"LD_")
+            || name_bytes.starts_with(b"DYLD_")
+            || name_bytes == b"GLIBC_TUNABLES"
+        {
+            command.env_remove(name);
+        }
+    }
+    command
 }
 
 #[cfg(unix)]
@@ -492,7 +506,7 @@ fn real_cargo_cooperatively_routes_capabilities_to_the_managed_rustc_child() {
     let real_rustc = resolved_real_rustc();
     let fixture_path = rustc_fixture_path(&fixture.root);
     let real_cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
-    let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
+    let mut command = cargo_fe2o3_command();
     command
         .args(["build", "-j", "4"])
         .current_dir(&fixture.workspace)
@@ -734,7 +748,7 @@ fn main() {
     let real_rustc = resolved_real_rustc();
     let fixture_path = rustc_fixture_path(&fixture.root);
     let real_cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
-    let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
+    let mut command = cargo_fe2o3_command();
     command
         .arg("build")
         .current_dir(&fixture.workspace)
@@ -794,7 +808,7 @@ fn authoritative_kernel_preflight_rejects_a_hostile_custom_build() {
     )
     .expect("write hostile build script");
     let real_cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
-    let output = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"))
+    let output = cargo_fe2o3_command()
         .arg("build")
         .current_dir(&fixture.workspace)
         .env("CARGO", real_cargo)
@@ -841,7 +855,7 @@ fn authoritative_kernel_preflight_rejects_a_hostile_proc_macro() {
     )
     .expect("write hostile proc-macro source");
     let real_cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
-    let output = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"))
+    let output = cargo_fe2o3_command()
         .arg("build")
         .current_dir(&fixture.workspace)
         .env("CARGO", real_cargo)
@@ -935,7 +949,7 @@ pub fn probe(_attribute: TokenStream, item: TokenStream) -> TokenStream {
     let real_rustc = resolved_real_rustc();
     let fixture_path = rustc_fixture_path(&fixture.root);
     let real_cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
-    let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
+    let mut command = cargo_fe2o3_command();
     command
         .arg("build")
         .current_dir(&fixture.workspace)
@@ -1073,7 +1087,14 @@ fn configured_arbitrary_rustc_is_rejected_before_artifact_authority() {
 #[cfg(target_os = "linux")]
 #[test]
 fn loader_injection_environment_is_rejected_before_artifact_authority() {
-    for variable in ["LD_PRELOAD", "LD_AUDIT"] {
+    for variable in [
+        "LD_PRELOAD",
+        "LD_AUDIT",
+        "LD_LIBRARY_PATH",
+        "LD_DEBUG",
+        "DYLD_INSERT_LIBRARIES",
+        "GLIBC_TUNABLES",
+    ] {
         let fixture = ProjectFixture::standalone();
         let mut command = fixture.command(&[OsString::from("build")]);
         command.env(variable, "/definitely/not/a/fe2o3-loader-object.so");
@@ -1121,6 +1142,75 @@ fn configured_loader_environment_is_rejected_before_artifact_authority() {
     );
 }
 
+#[test]
+fn authority_build_rejects_linker_runner_and_rustflags_environment() {
+    for variable in [
+        "RUSTFLAGS",
+        "CARGO_ENCODED_RUSTFLAGS",
+        "CARGO_BUILD_RUSTFLAGS",
+        "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS",
+        "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER",
+        "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER",
+    ] {
+        let fixture = ProjectFixture::standalone();
+        let mut command = fixture.command(&[OsString::from("build")]);
+        command
+            .env("FE2O3_CODEGEN_PIPELINE", "collected-row-softmax-v1")
+            .env(variable, "attacker-selected-tool");
+        let output = command.output().expect("run authority override probe");
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("authority build rejects tool override"),
+            "{variable}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!fixture.target.join("fe2o3").exists());
+    }
+}
+
+#[test]
+fn authority_build_rejects_configured_linker_runner_and_rustflags() {
+    for (variable, value, diagnostic) in [
+        (
+            "FE2O3_TEST_BUILD_RUSTFLAGS_JSON",
+            r#"["-Clinker=/tmp/attacker"]"#,
+            "configured build.rustflags",
+        ),
+        (
+            "FE2O3_TEST_TARGET_TABLE_JSON",
+            r#"{"x86_64-unknown-linux-gnu":{"linker":"/tmp/attacker"}}"#,
+            "configured target.x86_64-unknown-linux-gnu.linker",
+        ),
+        (
+            "FE2O3_TEST_TARGET_TABLE_JSON",
+            r#"{"cfg(unix)":{"runner":["/tmp/attacker"]}}"#,
+            "configured target.cfg(unix).runner",
+        ),
+        (
+            "FE2O3_TEST_TARGET_TABLE_JSON",
+            r#"{"x86_64-unknown-linux-gnu":{"rustflags":["-Clink-arg=-fplugin"]}}"#,
+            "configured target.x86_64-unknown-linux-gnu.rustflags",
+        ),
+    ] {
+        let fixture = ProjectFixture::standalone();
+        let mut command = fixture.command(&[OsString::from("build")]);
+        command
+            .env("FE2O3_CODEGEN_PIPELINE", "collected-row-softmax-v1")
+            .env(variable, value);
+        let output = command
+            .output()
+            .expect("run configured authority override probe");
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(diagnostic),
+            "{diagnostic}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!fixture.target.join("fe2o3").exists());
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn cargo_cannot_substitute_the_parent_pinned_rustc_before_artifact_authority() {
@@ -1157,25 +1247,34 @@ fn cargo_cannot_substitute_the_parent_pinned_rustc_before_artifact_authority() {
 #[cfg(target_os = "linux")]
 #[test]
 fn cargo_child_loader_injection_fails_before_artifact_authority() {
-    let fixture = ProjectFixture::standalone();
-    let mut command = fixture.command(&[OsString::from("build")]);
-    command.env(
-        "FE2O3_TEST_WRAPPER_LD_PRELOAD",
-        "/definitely/not/a/fe2o3-loader-object.so",
-    );
+    for variable in [
+        "LD_PRELOAD",
+        "LD_AUDIT",
+        "LD_LIBRARY_PATH",
+        "LD_DEBUG",
+        "DYLD_INSERT_LIBRARIES",
+        "GLIBC_TUNABLES",
+    ] {
+        let fixture = ProjectFixture::standalone();
+        let mut command = fixture.command(&[OsString::from("build")]);
+        command.env("FE2O3_TEST_WRAPPER_LOADER_NAME", variable).env(
+            "FE2O3_TEST_WRAPPER_LOADER_VALUE",
+            "/definitely/not/a/fe2o3-loader-object.so",
+        );
 
-    let output = command.output().expect("run child loader injection probe");
-    assert!(!output.status.success());
-    assert!(
-        String::from_utf8_lossy(&output.stderr)
-            .contains("binding wrapper rejects dynamic-loader injection variable"),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(
-        !fixture.target.join("fe2o3").exists(),
-        "loader-injected wrapper committed an artifact generation"
-    );
+        let output = command.output().expect("run child loader injection probe");
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("binding wrapper rejects dynamic-loader injection variable"),
+            "{variable}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            !fixture.target.join("fe2o3").exists(),
+            "loader-injected wrapper committed an artifact generation"
+        );
+    }
 }
 
 #[cfg(unix)]
@@ -1497,7 +1596,7 @@ fn application_runner_scrubs_build_environment_and_preserves_non_utf8_argv() {
     let root = temp_root();
     let report = root.join("runner-report.json");
     let payload = OsString::from_vec(b"application-\xff".to_vec());
-    let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
+    let mut command = cargo_fe2o3_command();
     command
         .args(internal_runner_args(
             &root,
@@ -1560,7 +1659,7 @@ fn hostile_orphan_descendants_cannot_retain_supervisor_slots() {
             );
             arguments.push(OsString::from("--fe2o3-test-fork-fd-holder"));
             arguments.push(marker.as_os_str().to_owned());
-            let output = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"))
+            let output = cargo_fe2o3_command()
                 .args(arguments)
                 .output()
                 .expect("launch hostile no-envelope application");
@@ -1585,7 +1684,7 @@ fn hostile_orphan_descendants_cannot_retain_supervisor_slots() {
 
         let root = temp_root();
         let report = root.join("report.json");
-        let thirty_third = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"))
+        let thirty_third = cargo_fe2o3_command()
             .args(internal_runner_args(
                 &root,
                 Path::new(env!("CARGO_BIN_EXE_cargo-fe2o3-runner-app-fixture")),
@@ -1624,7 +1723,7 @@ fn hostile_application_cannot_forge_pending_supervisor_success() {
     arguments.push(OsString::from("--fe2o3-test-forge-supervisor-result"));
     arguments.push(marker.as_os_str().to_owned());
     let started = Instant::now();
-    let output = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"))
+    let output = cargo_fe2o3_command()
         .args(arguments)
         .output()
         .expect("launch supervisor forgery probe");
@@ -1668,7 +1767,7 @@ fn hostile_application_cannot_unlock_supervisor_admission() {
         OsString::from("probe"),
     );
     arguments.push(OsString::from("--fe2o3-test-unlock-supervisor-slot"));
-    let output = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"))
+    let output = cargo_fe2o3_command()
         .args(arguments)
         .output()
         .expect("launch slot unlock probe");
@@ -1692,7 +1791,7 @@ fn hidden_supervisor_rejects_malformed_descriptors_without_abort() {
     use std::time::{Duration, Instant};
 
     fn invoke(channel: i32, slot: i32, inherited: &[i32]) -> Output {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
+        let mut command = cargo_fe2o3_command();
         command.args([
             OsString::from("__fe2o3-application-supervisor-v1"),
             OsString::from(channel.to_string()),

@@ -285,6 +285,15 @@ fn cargo_with_backend_result(command: &str, args: &[OsString]) -> Result<(), Str
     reject_configured_compiler_selection(&project, args)?;
     let worker_v2 = worker_v2::PreparedWorkerV2Config::from_environment_for_cargo_setup()
         .map_err(|error| format!("Worker V2 setup failed: {error}"))?;
+    let requires_authorized_closure = env::var("FE2O3_CODEGEN_PIPELINE").as_deref()
+        == Ok(AUTHORITY_BEARING_ROW_PIPELINE)
+        || worker_v2
+            .as_ref()
+            .and_then(worker_v2::PreparedWorkerV2Config::source_debug_profile)
+            .is_some();
+    if requires_authorized_closure {
+        reject_authority_build_overrides(&project, args)?;
+    }
     let cargo_declaration = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
     let cargo_path = binding_wrapper::resolve_command_executable(
         &cargo_declaration,
@@ -294,12 +303,6 @@ fn cargo_with_backend_result(command: &str, args: &[OsString]) -> Result<(), Str
     let pinned_cargo = pinned_executable::PinnedExecutable::open(&cargo_path)
         .map_err(|error| format!("failed to pin Cargo executable: {error}"))?;
     let pinned_rustc = pin_default_rustc(&project)?;
-    let requires_authorized_closure = env::var("FE2O3_CODEGEN_PIPELINE").as_deref()
-        == Ok(AUTHORITY_BEARING_ROW_PIPELINE)
-        || worker_v2
-            .as_ref()
-            .and_then(worker_v2::PreparedWorkerV2Config::source_debug_profile)
-            .is_some();
     let authorized_closure = requires_authorized_closure
         .then(|| {
             authorized_kernel_closure::AuthorizedKernelClosureV1::observe(
@@ -1195,9 +1198,63 @@ fn reject_configured_compiler_selection(
     Ok(())
 }
 
+fn reject_authority_build_overrides(
+    project: &project::CargoProject,
+    args: &[OsString],
+) -> Result<(), String> {
+    for (name, value) in env::vars_os() {
+        if is_authority_tool_override_environment_name(&name) {
+            return Err(format!(
+                "cargo fe2o3 authority build rejects tool override {name:?}={value:?}"
+            ));
+        }
+    }
+    if let Some(value) = project.cargo_config_value(args, "build.rustflags")? {
+        return Err(format!(
+            "cargo fe2o3 authority build rejects configured build.rustflags={value}"
+        ));
+    }
+    match project.cargo_config_value(args, "target")? {
+        Some(serde_json::Value::Object(targets)) => {
+            for (target, configuration) in targets {
+                let serde_json::Value::Object(configuration) = configuration else {
+                    return Err(format!(
+                        "cargo fe2o3 authority build cannot inspect configured target.{target}"
+                    ));
+                };
+                for key in ["linker", "runner", "rustflags"] {
+                    if let Some(value) = configuration.get(key) {
+                        return Err(format!(
+                            "cargo fe2o3 authority build rejects configured target.{target}.{key}={value}"
+                        ));
+                    }
+                }
+            }
+        }
+        Some(_) => {
+            return Err(
+                "cargo fe2o3 authority build cannot inspect configured target table".to_owned(),
+            );
+        }
+        None => {}
+    }
+    Ok(())
+}
+
+fn is_authority_tool_override_environment_name(name: &OsStr) -> bool {
+    let name = os_bytes(name);
+    matches!(
+        name,
+        b"RUSTFLAGS" | b"CARGO_ENCODED_RUSTFLAGS" | b"CARGO_BUILD_RUSTFLAGS"
+    ) || (name.starts_with(b"CARGO_TARGET_")
+        && [b"_LINKER".as_slice(), b"_RUNNER", b"_RUSTFLAGS"]
+            .iter()
+            .any(|suffix| name.ends_with(suffix)))
+}
+
 fn reject_dynamic_loader_environment() -> Result<(), String> {
     for (name, value) in env::vars_os() {
-        if is_dynamic_loader_injection_environment_name(&name) {
+        if is_dynamic_loader_environment_name(&name) {
             return Err(format!(
                 "cargo fe2o3 rejects dynamic-loader injection variable {name:?}={value:?}"
             ));
@@ -1207,10 +1264,7 @@ fn reject_dynamic_loader_environment() -> Result<(), String> {
 }
 
 pub(crate) fn is_dynamic_loader_injection_environment_name(name: &OsStr) -> bool {
-    matches!(
-        os_bytes(name),
-        b"LD_PRELOAD" | b"LD_AUDIT" | b"GLIBC_TUNABLES"
-    )
+    is_dynamic_loader_environment_name(name)
 }
 
 pub(crate) fn is_dynamic_loader_environment_name(name: &OsStr) -> bool {

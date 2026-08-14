@@ -49,6 +49,8 @@ fn config_get(args: &[OsString]) -> ExitCode {
         env::var_os("FE2O3_TEST_RUSTC_WORKSPACE_WRAPPER_JSON")
     } else if key == "build.rustc" {
         env::var_os("FE2O3_TEST_RUSTC_JSON")
+    } else if key == "build.rustflags" {
+        env::var_os("FE2O3_TEST_BUILD_RUSTFLAGS_JSON")
     } else if key == "env" {
         env::var_os("FE2O3_TEST_ENV_CONFIG_JSON")
     } else if key == "build" {
@@ -120,7 +122,9 @@ fn build_or_run(args: &[OsString]) -> ExitCode {
     if env::var_os("FE2O3_TEST_VERTICAL_CONTROL_DIR").is_some() {
         return vertical_worker_v2_invocation();
     }
-    if let Some(loader) = env::var_os("FE2O3_TEST_WRAPPER_LD_PRELOAD") {
+    if let Some(loader_name) = env::var_os("FE2O3_TEST_WRAPPER_LOADER_NAME") {
+        let loader_value = env::var_os("FE2O3_TEST_WRAPPER_LOADER_VALUE")
+            .expect("loader injection fixture has a value");
         let wrapper = required_path("RUSTC_WORKSPACE_WRAPPER");
         let rustc = required_path("RUSTC");
         let source = required_path("FE2O3_TEST_WORKSPACE_ROOT").join("src/main.rs");
@@ -132,7 +136,7 @@ fn build_or_run(args: &[OsString]) -> ExitCode {
                 "-Cmetadata=loader-injection",
             ])
             .arg(source)
-            .env("LD_PRELOAD", loader)
+            .env(loader_name, loader_value)
             .output()
         {
             Ok(output) => output,
