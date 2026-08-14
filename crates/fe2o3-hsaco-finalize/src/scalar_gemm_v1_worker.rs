@@ -25,6 +25,15 @@ use crate::{
 
 const SCALAR_GEMM_V1_TARGET: &str = "gfx942:xnack-";
 const SCALAR_GEMM_V1_DESCRIPTOR: &str = "scalar_gemm_v1.kd";
+const SCALAR_GEMM_V1_EXPLICIT_KERNARG_BYTES: u64 = 64;
+const SCALAR_GEMM_V1_TOTAL_KERNARG_BYTES: u64 = 320;
+const SCALAR_GEMM_V1_SUCCESS_DIAGNOSTICS: [&str; 5] = [
+    "post_link.check=exports status=ok symbols=[scalar_gemm_v1,scalar_gemm_v1.kd]",
+    "post_link.check=metadata status=ok kernels=1 target=amdgcn-amd-amdhsa--gfx942:xnack-",
+    "post_link.check=target status=ok arch=gfx942 code_object_version=6 e_flags=0x64c",
+    "post_link.check=unresolved status=ok symbols=[]",
+    "post_link.kernel name=scalar_gemm_v1 symbol=scalar_gemm_v1.kd kernarg_size=320 group_size=0 private_size=0 kernarg_align=8 wavefront_size=64 max_workgroup_size=256 reqd_workgroup_size=[256,1,1]",
+];
 const EXCHANGE_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/SCALAR-GEMM-V1/WORKER-EXCHANGE/V1\0";
 
 /// Identity of one exact request/response exchange admitted by the scalar GEMM V1 worker profile.
@@ -256,7 +265,47 @@ pub fn inspect_scalar_gemm_v1_worker_v2_hsaco_v1(
     {
         return Err(profile_mismatch("inspected kernel symbol pair"));
     }
+    validate_scalar_gemm_v1_kernarg_layout(raw.exact_bytes())?;
     Ok(InspectedScalarGemmV1WorkerV2HsacoV1 { exchange, raw })
+}
+
+fn validate_scalar_gemm_v1_kernarg_layout(
+    bytes: &[u8],
+) -> Result<(), ScalarGemmV1WorkerValidationErrorV1> {
+    let inspected = fe2o3_hsaco::inspect(bytes)
+        .map_err(|_| profile_mismatch("inspected scalar GEMM metadata"))?;
+    let [kernel] = inspected.kernels() else {
+        return Err(profile_mismatch("inspected scalar GEMM kernel count"));
+    };
+    if kernel.kernarg_segment_size() != SCALAR_GEMM_V1_TOTAL_KERNARG_BYTES
+        || kernel.kernarg_segment_alignment() != 8
+        || kernel.implicit_argument_offset() != Some(SCALAR_GEMM_V1_EXPLICIT_KERNARG_BYTES)
+        || kernel.implicit_argument_size()
+            != SCALAR_GEMM_V1_TOTAL_KERNARG_BYTES - SCALAR_GEMM_V1_EXPLICIT_KERNARG_BYTES
+    {
+        return Err(profile_mismatch("inspected scalar GEMM kernarg span"));
+    }
+
+    const EXPLICIT_FIELDS: [(u64, u64); 9] = [
+        (0, 8),
+        (8, 8),
+        (16, 8),
+        (24, 8),
+        (32, 8),
+        (40, 8),
+        (48, 4),
+        (52, 4),
+        (56, 4),
+    ];
+    let actual_fields = kernel
+        .explicit_arguments()
+        .iter()
+        .map(|argument| (argument.offset(), argument.size()))
+        .collect::<Vec<_>>();
+    if actual_fields != EXPLICIT_FIELDS {
+        return Err(profile_mismatch("inspected scalar GEMM explicit ABI"));
+    }
+    Ok(())
 }
 
 fn validate_exchange_parts(
@@ -334,8 +383,14 @@ fn validate_response(
     if response.stage() != WorkerStageV1::Complete {
         return Err(profile_mismatch("response completion stage"));
     }
-    if !response.diagnostics().is_empty() {
-        return Err(profile_mismatch("completed response diagnostics"));
+    if response.diagnostics().len() != SCALAR_GEMM_V1_SUCCESS_DIAGNOSTICS.len()
+        || response
+            .diagnostics()
+            .iter()
+            .zip(SCALAR_GEMM_V1_SUCCESS_DIAGNOSTICS)
+            .any(|(actual, expected)| actual != expected)
+    {
+        return Err(profile_mismatch("completed response post-link diagnostics"));
     }
     let output = response
         .output()
@@ -484,6 +539,10 @@ mod tests {
         .unwrap()
     }
 
+    fn success_diagnostics() -> Vec<&'static str> {
+        SCALAR_GEMM_V1_SUCCESS_DIAGNOSTICS.to_vec()
+    }
+
     fn push_field(encoded: &mut Vec<u8>, tag: u16, bytes: &[u8]) {
         encoded.extend_from_slice(&tag.to_le_bytes());
         encoded.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
@@ -493,7 +552,7 @@ mod tests {
     #[test]
     fn exact_canonical_request_and_bound_response_are_admitted_inertly() {
         let request = exact_request();
-        let exchange = exchange(&request, &[]);
+        let exchange = exchange(&request, &success_diagnostics());
         let validated = validate_exchange_parts(
             &exchange,
             &exact_compiler_envelope().unwrap(),
@@ -526,7 +585,7 @@ mod tests {
             exact.final_symbols().to_vec(),
             exact.compiler_envelope_identity(),
         );
-        let exchange = exchange(&request, &[]);
+        let exchange = exchange(&request, &success_diagnostics());
         assert!(matches!(
             validate_exchange_parts(
                 &exchange,
@@ -614,7 +673,7 @@ mod tests {
             ),
         ];
         for request in cases {
-            let exchange = exchange(&request, &[]);
+            let exchange = exchange(&request, &success_diagnostics());
             assert!(
                 validate_exchange_parts(&exchange, &expected_envelope, &expected_manifest).is_err(),
                 "accepted substituted request: {request:?}"
@@ -633,11 +692,11 @@ mod tests {
                 &exact_symbol_manifest().unwrap(),
             ),
             Err(ScalarGemmV1WorkerValidationErrorV1::ProfileMismatch(
-                "completed response diagnostics"
+                "completed response post-link diagnostics"
             ))
         ));
 
-        let mut replay = response(&request, &[]);
+        let mut replay = response(&request, &success_diagnostics());
         replay[14] ^= 1;
         assert!(InertDecodedWorkerExchangeV2::decode(request.canonical_bytes(), &replay).is_err());
     }

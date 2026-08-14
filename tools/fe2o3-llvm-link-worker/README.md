@@ -168,6 +168,24 @@ scripts/test-direct-llvm-worker.sh /tmp/fe2o3-llvm-link-worker-fresh \
   "$(git rev-parse HEAD)"
 ```
 
+The narrower scalar GEMM V1 runner builds this same worker, rejects a COMGR
+dynamic dependency, constructs the canonical scalar Kernel IR and LLVM module
+inside the Rust integration test, and performs two complete Worker V2
+first-build workflows. It requires byte-identical `gfx942:xnack-` COV6 output
+and validates the sole `scalar_gemm_v1` entry and descriptor, 320-byte kernarg
+(64 explicit plus the 256-byte COV6 suffix), workgroup 256, wave64, exact target,
+and closed defined/undefined symbol sets. It produces and inspects an HSACO but
+does not load or dispatch it:
+
+```sh
+tools/fe2o3-llvm-link-worker/run-scalar-gemm-v1.sh \
+  /tmp/fe2o3-scalar-gemm-worker-build \
+  /opt/rocm/llvm/lib/cmake/llvm \
+  /opt/rocm/llvm/lib/cmake/lld \
+  22.0.0git /opt/rocm/.info/version \
+  /tmp/scalar-gemm-v1-gfx942.hsaco
+```
+
 The successful request is constructed from a `MultiInputLinkPlanV1` whose
 expected output is the freshly generated deterministic native fixture. This is
 a two-stage test fixture arrangement: it exercises plan-bound execution and
