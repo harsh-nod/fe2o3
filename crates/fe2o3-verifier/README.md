@@ -131,15 +131,20 @@ digests and counts, live executable-byte totals, and reviewed vDSO digest for th
 recorded x86_64 GNU host; tests do not derive policy by replaying a failed
 controller observation. A host whose loader, runtime closure, executable
 baseline, or vDSO differs must receive an explicitly reviewed manifest update
-rather than silently recalibrating. Generic test runs leave the seven tests that
+rather than silently recalibrating. Generic test runs leave the six tests that
 execute this pinned closure ignored and continue to run the portable ELF,
-debug-section, reproducibility, disassembly, and fail-closed closure checks. On
-the reviewed host, `cargo test -p fe2o3-verifier --test
-authenticated_verus_execution_v2 -- --include-ignored --test-threads=1` runs
-all 14 debug tests; the same command with `--release` runs the 13 applicable
-release tests. Serial execution avoids cross-test ptrace/process-scheduling
-interference. A pinned host that drifts still fails those explicit commands
-rather than skipping or recalibrating.
+debug-section, reproducibility, disassembly, source/dependency/executable
+substitution, and fail-closed closure checks. The dedicated
+`Authenticated Verus reviewed host` workflow targets only the self-hosted runner
+label `fe2o3-verus-reviewed-host-v1` and runs
+`scripts/ci-authenticated-verus-reviewed-host.sh` after trusted `main` pushes or
+an explicit dispatch. The same script is the pre-push publication gate for
+changes to this controller, fixture, policy, or toolchain.
+It runs all 14 debug tests and the 13 applicable release tests with
+`--include-ignored --test-threads=1`. Serial execution avoids cross-test
+ptrace/process-scheduling interference. A missing reviewed runner leaves the
+gate pending, and a pinned host that drifts fails rather than skipping or
+recalibrating.
 
 The workspace dev profile strips debuginfo only from `fe2o3-verifier`; independent
 checkout builds confirm that package scope is sufficient, without changing other

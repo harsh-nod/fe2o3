@@ -1014,7 +1014,6 @@ fn fresh_challenges_make_separate_receipts_distinct() {
 }
 
 #[test]
-#[ignore = "requires the exact reviewed fixture, runtime closure, executable baseline, and vDSO host"]
 fn source_dependency_and_executable_substitution_fail_before_receipt() {
     let dependencies = vec![dependency()];
     let wrong_source = request(b"success", &dependencies);

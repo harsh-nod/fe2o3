@@ -1,0 +1,26 @@
+name: Authenticated Verus reviewed host
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: authenticated-verus-reviewed-host-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  reviewed-host:
+    name: Pinned closure debug and release
+    runs-on: [self-hosted, linux, x64, fe2o3-verus-reviewed-host-v1]
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Run pinned-host authenticated Verus tests
+        run: scripts/ci-authenticated-verus-reviewed-host.sh
