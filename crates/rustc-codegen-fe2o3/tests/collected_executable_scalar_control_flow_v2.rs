@@ -1072,6 +1072,65 @@ fn assert_row_softmax_published_nothing(output: &TestOutputDir) {
     );
 }
 
+fn compile_clean_external_row_softmax_crate(
+    workspace: &Path,
+    package_name: &str,
+) -> (Output, TestOutputDir) {
+    let output = TestOutputDir::new(workspace);
+    let crate_root = output.0.join(package_name);
+    let source_directory = crate_root.join("src");
+    std::fs::create_dir_all(&source_directory).expect("create external row-softmax source root");
+    let source = source_directory.join("lib.rs");
+    std::fs::write(&source, ROW_SOFTMAX_FIXTURE).expect("write external row-softmax source");
+    let manifest = crate_root.join("Cargo.toml");
+    std::fs::write(
+        &manifest,
+        format!(
+            "[package]\nname = {package_name:?}\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\n\n[dependencies]\nfe2o3-device = {{ path = {:?} }}\nfe2o3-host = {{ path = {:?} }}\n\n[workspace]\n",
+            workspace.join("crates/fe2o3-device"),
+            workspace.join("crates/fe2o3-host"),
+        ),
+    )
+    .expect("write external row-softmax manifest");
+
+    let rustflags = format!(
+        "-Coverflow-checks=off -Cmetadata=fe2o3-row-softmax-v1-reviewed --remap-path-prefix={}=/fe2o3-reviewed-workspace/row-softmax-v1.rs",
+        source.display()
+    );
+    let mut command = Command::new(env!("CARGO"));
+    command
+        .current_dir(workspace)
+        .args([
+            "run",
+            "--locked",
+            "-p",
+            "cargo-fe2o3",
+            "--",
+            "build",
+            "--manifest-path",
+        ])
+        .arg(&manifest)
+        .env_remove("CARGO_INCREMENTAL")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .env("FE2O3_TARGET", "gfx942:xnack-")
+        .env("FE2O3_CODEGEN_PIPELINE", ROW_SOFTMAX_PIPELINE)
+        .env("FE2O3_HSACO_DIR", output.0.join("artifacts"))
+        .env("RUSTFLAGS", rustflags);
+    let compiled = run_bounded(
+        &mut command,
+        BACKEND_BUILD_TIMEOUT,
+        "clean external cargo-fe2o3 row-softmax crate",
+    )
+    .expect("run clean external row-softmax crate within deadline");
+    (compiled, output)
+}
+
+fn admitted_row_softmax_root(stderr: &str) -> Option<&str> {
+    let marker = "exact collected KernelEntry `";
+    let tail = stderr.rsplit_once(marker)?.1;
+    tail.split_once('`').map(|(root, _)| root)
+}
+
 fn assert_tiled_gemm_published_no_handoff(output: &TestOutputDir) {
     let artifacts = std::fs::read_dir(output.0.join("artifacts"))
         .expect("read tiled GEMM artifact directory")
@@ -2020,6 +2079,50 @@ fn row_softmax_v1_source_authentication_and_adversaries_stop_at_canonical_ir() {
         "compiler-semantics adversary minted row-softmax authority:\n{semantics_stderr}"
     );
     assert_row_softmax_published_nothing(&semantics_output);
+}
+
+#[test]
+fn clean_external_cargo_fe2o3_accepts_variable_generated_row_softmax_roots() {
+    let workspace = workspace();
+    let mut roots = Vec::new();
+    for package_name in [
+        "fe2o3-row-softmax-external-a",
+        "fe2o3-row-softmax-external-b",
+    ] {
+        let (external, output) = compile_clean_external_row_softmax_crate(&workspace, package_name);
+        let external_stderr = stderr(&external);
+        assert!(
+            !external.status.success()
+                && external_stderr.contains("consumed its private single-use frontend receipt")
+                && external_stderr
+                    .contains("selected canonical Kernel IR module `fe2o3::row_softmax_v1`")
+                && external_stderr
+                    .contains("stopped at the fail-closed source-authenticated boundary")
+                && !external_stderr.contains("root instance must have")
+                && !external_stderr.contains("portable MIR identity mismatch")
+                && !external_stderr.contains("rustc FnAbi identity mismatch"),
+            "clean external cargo-fe2o3 crate missed the row-softmax boundary:\n{external_stderr}"
+        );
+        let root = admitted_row_softmax_root(&external_stderr).unwrap_or_else(|| {
+            panic!("external admission omitted its generated root:\n{external_stderr}")
+        });
+        let suffix = root
+            .strip_prefix("__fe2o3_host_kernel_v1_")
+            .unwrap_or_else(|| panic!("external admission reported a malformed root: {root:?}"));
+        assert_eq!(suffix.len(), 64);
+        assert!(
+            suffix
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+            "external admission reported a noncanonical root: {root:?}"
+        );
+        roots.push(root.to_owned());
+        assert_row_softmax_published_nothing(&output);
+    }
+    assert_ne!(
+        roots[0], roots[1],
+        "distinct Cargo crate identities must exercise variable generated roots"
+    );
 }
 
 #[test]

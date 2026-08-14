@@ -47,8 +47,10 @@ const CANONICAL_MODULE_ID: &str = "fe2o3::row_softmax_v1";
 const CANONICAL_FUNCTION_ID: &str = "__fe2o3_row_softmax_v1_impl";
 const FIXED_KERNEL_EXPORT: &str = ROW_SOFTMAX_KERNEL_SYMBOL_V1;
 const FIXED_LOGICAL_NAME: &str = ROW_SOFTMAX_KERNEL_SYMBOL_V1;
-const REVIEWED_ROOT_INSTANCE_IDENTITY: &str =
-    "__fe2o3_host_kernel_v1_fb3c5857a55066c483e6777719ae5972e44f2128e5fd7146cd6078f502de2b46";
+const KERNEL_ROOT_BUILD_IDENTITY_PREFIX: &str = "__fe2o3_host_kernel_v1_";
+#[cfg(test)]
+const REPRESENTATIVE_ROOT_INSTANCE_IDENTITY: &str =
+    "__fe2o3_host_kernel_v1_0000000000000000000000000000000000000000000000000000000000000000";
 const REVIEWED_RUSTC_RELEASE: &str = "1.96.0-nightly";
 const REVIEWED_RUSTC_COMMIT: &str = "55e86c996809902e8bbad512cfb4d2c18be446d9";
 const REVIEWED_RUSTC_LLVM: &str = "22.1.2";
@@ -400,9 +402,9 @@ pub(crate) fn authenticate_collected_row_softmax_v1<'tcx>(
     }
 
     let root_instance_identity = tcx.def_path_str(root.instance.def_id());
-    if root_instance_identity != REVIEWED_ROOT_INSTANCE_IDENTITY {
+    if !is_kernel_root_build_identity(&root_instance_identity) {
         return Err(unsupported_collection(format!(
-            "root instance must be exactly `{REVIEWED_ROOT_INSTANCE_IDENTITY}`, found `{root_instance_identity}`"
+            "root instance must have the exact reviewed kernel-root prefix followed by 64 lowercase ASCII hexadecimal build-identity digits, found `{root_instance_identity}`"
         )));
     }
 
@@ -936,6 +938,19 @@ fn reviewed_compiler_semantics(generated_cargo_metadata: &str) -> CompilerSemant
     }
 }
 
+fn is_kernel_root_build_identity(value: &str) -> bool {
+    value
+        .strip_prefix(KERNEL_ROOT_BUILD_IDENTITY_PREFIX)
+        .is_some_and(|suffix| is_lowercase_ascii_hex(suffix, 64))
+}
+
+fn is_lowercase_ascii_hex(value: &str, width: usize) -> bool {
+    value.len() == width
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
 fn row_softmax_target_identity() -> Result<TargetIdentity, CollectedRowSoftmaxErrorV1> {
     TargetIdentity::new(
         IdentityText::new(dialect_amdgcn::AMDGPU_TRIPLE)
@@ -1369,7 +1384,7 @@ fn validate_frontend_authority(
         Some("canonical module")
     } else if authority.kernel_export != FIXED_KERNEL_EXPORT {
         Some("kernel export")
-    } else if authority.root_instance_identity != REVIEWED_ROOT_INSTANCE_IDENTITY {
+    } else if !is_kernel_root_build_identity(&authority.root_instance_identity) {
         Some("root instance")
     } else if authority.portable_mir_semantic_commitment != PORTABLE_MIR_SEMANTIC_IDENTITY {
         Some("portable MIR")
@@ -1437,7 +1452,7 @@ fn exact_frontend_receipt_for_test() -> RowSoftmaxFrontendReceiptV1 {
         canonical_module_commitment: canonical_module_commitment(&module)
             .expect("canonical test module"),
         kernel_export: FIXED_KERNEL_EXPORT.to_owned(),
-        root_instance_identity: REVIEWED_ROOT_INSTANCE_IDENTITY.to_owned(),
+        root_instance_identity: REPRESENTATIVE_ROOT_INSTANCE_IDENTITY.to_owned(),
         portable_mir_semantic_commitment: PORTABLE_MIR_SEMANTIC_IDENTITY,
         compiler_semantics_commitment: admitted_compiler_semantics.normalized_commitment,
         cargo_metadata_build_observation: admitted_compiler_semantics
@@ -1565,6 +1580,49 @@ mod tests {
             receipt.consume(),
             Err(CollectedRowSoftmaxErrorV1::ReceiptAlreadyConsumed)
         ));
+    }
+
+    #[test]
+    fn kernel_root_build_identity_is_shape_checked_and_fully_receipt_bound() {
+        let alternate = "__fe2o3_host_kernel_v1_87e4e114a09ea2b2153fa733dc5925596413c32908cb28f2cc773ff0b3f5102a";
+        for identity in [
+            REPRESENTATIVE_ROOT_INSTANCE_IDENTITY,
+            alternate,
+            "__fe2o3_host_kernel_v1_fb3c5857a55066c483e6777719ae5972e44f2128e5fd7146cd6078f502de2b46",
+        ] {
+            assert!(is_kernel_root_build_identity(identity));
+        }
+        for identity in [
+            "__fe2o3_host_kernel_v1_",
+            "__fe2o3_host_kernel_v1_87e4e114a09ea2b2153fa733dc5925596413c32908cb28f2cc773ff0b3f5102",
+            "__fe2o3_host_kernel_v1_87e4e114a09ea2b2153fa733dc5925596413c32908cb28f2cc773ff0b3f5102aa",
+            "__fe2o3_host_kernel_v1_87E4E114A09EA2B2153FA733DC5925596413C32908CB28F2CC773FF0B3F5102A",
+            "__fe2o3_host_kernel_v1_87e4e114a09ea2b2153fa733dc5925596413c32908cb28f2cc773ff0b3f5102g",
+            "module::__fe2o3_host_kernel_v1_87e4e114a09ea2b2153fa733dc5925596413c32908cb28f2cc773ff0b3f5102a",
+            "__fe2o3_host_kernel_v2_87e4e114a09ea2b2153fa733dc5925596413c32908cb28f2cc773ff0b3f5102a",
+            "__fe2o3_host_kernel_v1_87e4e114a09ea2b2153fa733dc5925596413c32908cb28f2cc773ff0b3f5102a\u{200e}",
+        ] {
+            assert!(!is_kernel_root_build_identity(identity), "{identity:?}");
+        }
+
+        let baseline = exact_frontend_receipt_for_test();
+        let baseline_commitment = baseline
+            .authority
+            .as_ref()
+            .expect("baseline authority")
+            .authority_commitment;
+        let mut alternate_receipt = exact_frontend_receipt_for_test();
+        let authority = alternate_receipt
+            .authority
+            .as_mut()
+            .expect("test authority");
+        authority.root_instance_identity = alternate.to_owned();
+        authority.authority_commitment = collected_authority_commitment(authority);
+        assert_ne!(authority.authority_commitment, baseline_commitment);
+        assert!(validate_frontend_authority(authority).is_ok());
+        alternate_receipt
+            .consume()
+            .expect("alternate well-shaped generated root remains fully receipt-bound");
     }
 
     #[test]
