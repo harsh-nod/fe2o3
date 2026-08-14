@@ -667,6 +667,14 @@ fn is_reviewed_registry_build_script(
     package: &Value,
     tree_digest: &[u8; 32],
 ) -> Result<bool, String> {
+    validate_registry_build_script_against(package, tree_digest, &TRUSTED_REGISTRY_BUILD_SCRIPTS)
+}
+
+fn validate_registry_build_script_against(
+    package: &Value,
+    tree_digest: &[u8; 32],
+    trusted: &[(&str, &str, &str)],
+) -> Result<bool, String> {
     let Some(name) = package.get("name").and_then(Value::as_str) else {
         return Ok(false);
     };
@@ -676,13 +684,9 @@ fn is_reviewed_registry_build_script(
     if package.get("source").and_then(Value::as_str) != Some(CRATES_IO_SOURCE) {
         return Ok(false);
     }
-    let Some((_, _, expected)) =
-        TRUSTED_REGISTRY_BUILD_SCRIPTS
-            .iter()
-            .find(|(trusted_name, trusted_version, _)| {
-                name == *trusted_name && version == *trusted_version
-            })
-    else {
+    let Some((_, _, expected)) = trusted.iter().find(|(trusted_name, trusted_version, _)| {
+        name == *trusted_name && version == *trusted_version
+    }) else {
         return Ok(false);
     };
     validate_expected_tree(
@@ -1074,23 +1078,19 @@ mod tests {
         fs::write(&build_script, b"fn main() {}\n").unwrap();
         let reviewed = canonical_tree_digest(directory.path(), None).unwrap();
         let reviewed_hex = hex(&reviewed);
-        validate_expected_tree(
-            &reviewed,
-            &reviewed_hex,
-            directory.path(),
-            "registry build-script",
-        )
-        .unwrap();
+        let package = serde_json::json!({
+            "name": "reviewed-registry-crate",
+            "version": "1.0.0",
+            "source": CRATES_IO_SOURCE,
+            "manifest_path": directory.path().join("Cargo.toml"),
+        });
+        let trusted = [("reviewed-registry-crate", "1.0.0", reviewed_hex.as_str())];
+        assert!(validate_registry_build_script_against(&package, &reviewed, &trusted,).unwrap());
 
         fs::write(&build_script, b"fn main() { panic!(\"tampered\") }\n").unwrap();
         let tampered = canonical_tree_digest(directory.path(), None).unwrap();
-        let error = validate_expected_tree(
-            &tampered,
-            &reviewed_hex,
-            directory.path(),
-            "registry build-script",
-        )
-        .unwrap_err();
+        let error =
+            validate_registry_build_script_against(&package, &tampered, &trusted).unwrap_err();
         assert!(error.contains("registry build-script closure content changed"));
     }
 
