@@ -39,8 +39,9 @@ mod platform {
 
     use crate::application_sandbox::{
         AUDIT_ARCH_X86_64, cargo_exec_notification_filter, cloexec_pipe,
-        install_application_profile, notification_is_valid, respond_to_notification,
-        stop_supervisor_without_blocking, wait_for_listener, wait_for_notification,
+        install_application_profile, notification_is_live, notification_is_valid,
+        respond_to_notification, stop_supervisor_without_blocking, wait_for_listener,
+        wait_for_notification,
     };
     use crate::pinned_executable::PinnedExecutable;
 
@@ -392,10 +393,16 @@ mod platform {
                         if let Some(process) = authorized {
                             authorization.revoke(process);
                         }
+                        if !notification_is_live(listener.as_raw_fd(), notification.id)? {
+                            continue;
+                        }
                         return Err(error);
                     }
                 }
                 Err(error) => {
+                    if !notification_is_live(listener.as_raw_fd(), notification.id)? {
+                        continue;
+                    }
                     let _ = respond_to_notification(listener.as_raw_fd(), notification.id, false);
                     return Err(error);
                 }
