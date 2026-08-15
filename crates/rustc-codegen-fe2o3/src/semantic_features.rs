@@ -20,6 +20,7 @@ pub(crate) enum SessionRecognizedSemanticItem {
     FlashAttentionCompilerIntrinsic(
         crate::collected_flash_attention_v1::FlashAttentionCompilerIntrinsicV1,
     ),
+    MoeTop2CompilerIntrinsic(crate::collected_moe_top2_v1::MoeTop2CompilerIntrinsicV1),
     WorkgroupSyncCompilerIntrinsic(WorkgroupSyncCompilerIntrinsicV1),
 }
 
@@ -71,6 +72,7 @@ impl SessionRecognizedSemanticItem {
         match self {
             Self::TrustedDevice(item) => item.canonical_path(),
             Self::FlashAttentionCompilerIntrinsic(item) => item.canonical_path(),
+            Self::MoeTop2CompilerIntrinsic(item) => item.canonical_path(),
             Self::WorkgroupSyncCompilerIntrinsic(item) => item.canonical_path(),
         }
     }
@@ -80,6 +82,9 @@ impl SessionRecognizedSemanticItem {
             Self::TrustedDevice(item) => item,
             Self::FlashAttentionCompilerIntrinsic(_) => {
                 unreachable!("compiler-only FlashAttention terminals never enter generic lowering")
+            }
+            Self::MoeTop2CompilerIntrinsic(_) => {
+                unreachable!("compiler-only MoE top-2 terminals never enter generic lowering")
             }
             Self::WorkgroupSyncCompilerIntrinsic(_) => {
                 unreachable!("compiler-only workgroup-sync terminals never enter generic lowering")
@@ -101,6 +106,10 @@ pub(crate) fn classify(tcx: TyCtxt<'_>, def_id: DefId) -> Option<SessionRecogniz
                 tcx, def_id,
             )
             .map(SessionRecognizedSemanticItem::FlashAttentionCompilerIntrinsic)
+        })
+        .or_else(|| {
+            crate::collected_moe_top2_v1::classify_exact_moe_top2_compiler_intrinsic(tcx, def_id)
+                .map(SessionRecognizedSemanticItem::MoeTop2CompilerIntrinsic)
         })
         .or_else(|| {
             crate::collected_workgroup_sync_v1::classify_exact_workgroup_sync_compiler_intrinsic(

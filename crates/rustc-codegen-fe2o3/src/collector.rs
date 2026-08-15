@@ -2440,32 +2440,39 @@ impl<'tcx> DeviceCollector<'tcx> {
             ),
             TerminatorKind::Assert { unwind, .. }
                 if (is_kernel_root
-                    || std::env::var_os(crate::CODEGEN_PIPELINE_ENV).as_deref()
-                        == Some(
-                            std::ffi::OsStr::new(
+                    || matches!(
+                        std::env::var_os(crate::CODEGEN_PIPELINE_ENV).as_deref(),
+                        Some(value)
+                            if value == std::ffi::OsStr::new(
                                 crate::collected_flash_attention_v1::COLLECTED_FLASH_ATTENTION_PIPELINE_V1,
-                            ),
-                        ))
+                            ) || value == std::ffi::OsStr::new(
+                                crate::collected_moe_top2_v1::COLLECTED_MOE_TOP2_PIPELINE_V1,
+                            )
+                    ))
                     && matches!(unwind, UnwindAction::Continue | UnwindAction::Unreachable) =>
             {
-                // The exact FlashAttention profile authenticates helper bounds
-                // assertions in its complete portable-MIR closure. Other
+                // Exact FlashAttention and MoE profiles authenticate helper
+                // assertions in their complete portable-MIR closures. Other
                 // profiles retain the narrower root-only traversal policy.
                 Ok(())
             }
             TerminatorKind::Drop { place, unwind, .. }
-                if std::env::var_os(crate::CODEGEN_PIPELINE_ENV).as_deref()
-                    == Some(std::ffi::OsStr::new(
-                        crate::collected_flash_attention_v1::COLLECTED_FLASH_ATTENTION_PIPELINE_V1,
-                    ))
-                    && !self
-                        .tcx
-                        .instantiate_and_normalize_erasing_regions(
-                            caller.args,
-                            TypingEnv::fully_monomorphized(),
-                            EarlyBinder::bind(place.ty(body, self.tcx).ty),
+                if matches!(
+                    std::env::var_os(crate::CODEGEN_PIPELINE_ENV).as_deref(),
+                    Some(value)
+                        if value == std::ffi::OsStr::new(
+                            crate::collected_flash_attention_v1::COLLECTED_FLASH_ATTENTION_PIPELINE_V1,
+                        ) || value == std::ffi::OsStr::new(
+                            crate::collected_moe_top2_v1::COLLECTED_MOE_TOP2_PIPELINE_V1,
                         )
-                        .needs_drop(self.tcx, TypingEnv::fully_monomorphized())
+                ) && !self
+                    .tcx
+                    .instantiate_and_normalize_erasing_regions(
+                        caller.args,
+                        TypingEnv::fully_monomorphized(),
+                        EarlyBinder::bind(place.ty(body, self.tcx).ty),
+                    )
+                    .needs_drop(self.tcx, TypingEnv::fully_monomorphized())
                     && matches!(unwind, UnwindAction::Continue | UnwindAction::Unreachable) =>
             {
                 // `bool::then_some` introduces a drop edge for its Copy payload.
@@ -2884,6 +2891,14 @@ impl<'tcx> DeviceCollector<'tcx> {
             return Ok(());
         }
         if crate::collected_flash_attention_v1::classify_exact_flash_attention_compiler_intrinsic(
+            self.tcx,
+            resolved.def_id(),
+        )
+        .is_some()
+        {
+            return Ok(());
+        }
+        if crate::collected_moe_top2_v1::classify_exact_moe_top2_compiler_intrinsic(
             self.tcx,
             resolved.def_id(),
         )
