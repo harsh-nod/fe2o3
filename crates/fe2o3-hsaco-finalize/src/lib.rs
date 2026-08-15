@@ -20,6 +20,7 @@ use fe2o3_kernel_descriptor::{
 mod compiler_ffi_bridge;
 mod compiler_ffi_observation;
 mod first_build_worker_v2;
+mod lds_gemm_finalizer;
 mod lds_gemm_profile_registry;
 mod link_plan;
 mod request_construction;
@@ -73,6 +74,10 @@ pub use fe2o3_compiler_ffi::{
 pub use first_build_worker_v2::{
     FirstBuildWorkerV2Error, FirstBuildWorkerV2IdentityV1, InertFirstBuildWorkerV2EvidenceV1,
     execute_reproducible_first_build_worker_v2,
+};
+pub use lds_gemm_finalizer::{
+    ExactLdsGemmFinalizationErrorV1, FinalizedExactLdsGemmHsacoIdentityV1,
+    FinalizedExactLdsGemmHsacoV1, finalize_exact_lds_gemm_compiler_import_v1,
 };
 pub use lds_gemm_profile_registry::{
     ExactLdsGemmBufferContractV1, ExactLdsGemmBufferRoleV1, ExactLdsGemmCompilerImportPinsV1,

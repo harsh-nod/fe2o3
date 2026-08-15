@@ -431,24 +431,45 @@ fn validate_worker_lineage(
     )
     .map_err(ExactLdsGemmFinalizationErrorV1::WorkerExchange)?;
     let request = exchange.request();
-    if request.target().to_string() != EXACT_TARGET
-        || request.code_object_version() != CodeObjectVersion::V6
-        || request.options() != WorkerOptionsV1::new(WorkerOptimizationLevelV1::O2, true, true)
-        || request.llvm_build_identity() != worker.measurement().llvm_build_identity()
-        || request.worker_build_identity() != worker.measurement().worker_build_identity()
-        || request.worker_executable() != worker.measurement().executable()
-        || request.compiler_module().kind() != WorkerInputKindV1::LlvmTextIr
-        || request.compiler_module().bytes() != import.handoff().module_bytes()
-        || !request.external_providers().is_empty()
-        || !request.import_symbols().is_empty()
-        || !request.export_symbols().is_empty()
-        || request.final_symbols() != [TILED_GEMM_LDS_V1_KERNEL_ID, EXACT_DESCRIPTOR_SYMBOL]
-        || exchange.response().response_identity().is_none()
-        || exchange.response().device_library_provider().is_some()
-    {
-        return Err(ExactLdsGemmFinalizationErrorV1::WorkerLineage(
-            "sealed request/response",
-        ));
+    let mismatch = |field| ExactLdsGemmFinalizationErrorV1::WorkerLineage(field);
+    if request.target().to_string() != EXACT_TARGET {
+        return Err(mismatch("request target"));
+    }
+    if request.code_object_version() != CodeObjectVersion::V6 {
+        return Err(mismatch("request code-object version"));
+    }
+    if request.options() != WorkerOptionsV1::new(WorkerOptimizationLevelV1::O2, true, true) {
+        return Err(mismatch("request options"));
+    }
+    if request.llvm_build_identity() != worker.measurement().llvm_build_identity() {
+        return Err(mismatch("request LLVM build identity"));
+    }
+    if request.worker_build_identity() != worker.measurement().worker_build_identity() {
+        return Err(mismatch("request Worker build identity"));
+    }
+    if request.worker_executable() != worker.measurement().executable() {
+        return Err(mismatch("request Worker executable"));
+    }
+    if request.compiler_module().kind() != WorkerInputKindV1::LlvmTextIr {
+        return Err(mismatch("request compiler-module kind"));
+    }
+    if request.compiler_module().bytes() != import.handoff().module_bytes() {
+        return Err(mismatch("request compiler-module bytes"));
+    }
+    if !request.external_providers().is_empty() {
+        return Err(mismatch("request external providers"));
+    }
+    if !request.import_symbols().is_empty() {
+        return Err(mismatch("request imports"));
+    }
+    if !request.export_symbols().is_empty() {
+        return Err(mismatch("request exports"));
+    }
+    if request.final_symbols() != [TILED_GEMM_LDS_V1_KERNEL_ID, EXACT_DESCRIPTOR_SYMBOL] {
+        return Err(mismatch("request final symbols"));
+    }
+    if exchange.response().device_library_provider().is_some() {
+        return Err(mismatch("response device-library provider"));
     }
     Ok(exchange)
 }
@@ -954,6 +975,7 @@ fn read_u64(bytes: &[u8], offset: usize) -> Result<u64, ExactLdsGemmFinalization
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 pub(crate) fn exact_observed_artifact_shape_for_test() -> ObservedArtifactShapeV1 {
     let mut arguments = Vec::new();
     for role in 0..3 {
@@ -1015,6 +1037,7 @@ pub(crate) fn exact_observed_artifact_shape_for_test() -> ObservedArtifactShapeV
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 pub(crate) fn validate_elf_safety_for_test(
     bytes: &[u8],
 ) -> Result<(), ExactLdsGemmFinalizationErrorV1> {
@@ -1022,6 +1045,7 @@ pub(crate) fn validate_elf_safety_for_test(
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 pub(crate) fn validate_exact_symbol_closure_for_test(
     bytes: &[u8],
 ) -> Result<(), ExactLdsGemmFinalizationErrorV1> {
@@ -1029,6 +1053,7 @@ pub(crate) fn validate_exact_symbol_closure_for_test(
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 pub(crate) fn validate_transactional_handoff_for_test(
     import: &InspectedExactLdsGemmCompilerImportV1,
     consumed: &ConsumedCompilerModuleHandoffV1,

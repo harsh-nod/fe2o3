@@ -87,10 +87,11 @@ use fe2o3_artifact_transaction::{
 };
 use fe2o3_hsaco::CodeObjectVersion as InspectedCodeObjectVersion;
 use lds_gemm_finalizer::{
-    ExactLdsGemmFinalizationErrorV1, exact_observed_artifact_shape_for_test,
-    finalize_exact_lds_gemm_compiler_import_v1, validate_elf_safety_for_test,
-    validate_exact_symbol_closure_for_test, validate_observed_artifact_shape,
-    validate_transactional_handoff_for_test,
+    ExactLdsGemmFinalizationErrorV1 as LocalFinalizationError,
+    exact_observed_artifact_shape_for_test,
+    finalize_exact_lds_gemm_compiler_import_v1 as finalize_local_import,
+    validate_elf_safety_for_test, validate_exact_symbol_closure_for_test,
+    validate_observed_artifact_shape, validate_transactional_handoff_for_test,
 };
 
 fn minimal_elf(section_type: u32, dynamic_tag: Option<u64>) -> Vec<u8> {
@@ -183,7 +184,7 @@ fn exact_slice1_artifact_shape_is_the_only_admitted_shape() {
     for mutation in mutations {
         assert!(matches!(
             validate_observed_artifact_shape(&mutation),
-            Err(ExactLdsGemmFinalizationErrorV1::ArtifactShape(_))
+            Err(LocalFinalizationError::ArtifactShape(_))
         ));
     }
 }
@@ -194,16 +195,14 @@ fn linked_elf_rejects_rel_rela_and_needed_dependencies() {
     for section_type in [4, 9] {
         assert!(matches!(
             validate_elf_safety_for_test(&minimal_elf(section_type, None)),
-            Err(ExactLdsGemmFinalizationErrorV1::ElfPolicy(
+            Err(LocalFinalizationError::ElfPolicy(
                 "a residual relocation section"
             ))
         ));
     }
     assert!(matches!(
         validate_elf_safety_for_test(&minimal_elf(6, Some(1))),
-        Err(ExactLdsGemmFinalizationErrorV1::ElfPolicy(
-            "a DT_NEEDED dependency"
-        ))
+        Err(LocalFinalizationError::ElfPolicy("a DT_NEEDED dependency"))
     ));
     validate_elf_safety_for_test(&minimal_elf(6, Some(0)))
         .expect("terminated dependency-free dynamic table");
@@ -220,7 +219,7 @@ fn exact_symbol_closure_includes_static_and_dynamic_tables() {
     ] {
         assert!(matches!(
             validate_exact_symbol_closure_for_test(&hostile),
-            Err(ExactLdsGemmFinalizationErrorV1::ElfPolicy(_))
+            Err(LocalFinalizationError::ElfPolicy(_))
         ));
     }
 }
@@ -233,7 +232,7 @@ fn transactional_handoff_substitution_is_rejected_before_worker_execution() {
     let consumed = consumed_handoff(&directory, &hostile);
     assert!(matches!(
         validate_transactional_handoff_for_test(&import, &consumed),
-        Err(ExactLdsGemmFinalizationErrorV1::TransactionalHandoffMismatch)
+        Err(LocalFinalizationError::TransactionalHandoffMismatch)
     ));
 }
 
@@ -299,7 +298,7 @@ fn measured_worker_produces_a_deterministic_inert_slice1_cov6_receipt() {
     for _ in 0..2 {
         let directory = TestDirectory::new();
         let (import, handoff) = registry_fixture::exact_import_and_handoff();
-        let receipt = finalize_exact_lds_gemm_compiler_import_v1(
+        let receipt = finalize_local_import(
             import,
             consumed_handoff(&directory, &handoff),
             &worker,
