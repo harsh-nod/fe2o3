@@ -21,11 +21,13 @@ use fe2o3_kernel_ir::{
     MemoryIntrinsicOperation, MemoryOrdering, Module, ModuleId, NarrowFloatFormat, Operation,
     OperationKind, PointerDistanceContract, PointerDistanceKind, PointerDistanceUnit,
     ScalarGemmTargetRequirementsV1, ScalarGemmV1Error, ScalarType, Signature, SynchronizationScope,
-    TargetCapability, Terminator, TiledGemmLdsK32V2Error, TiledGemmLdsK32V2Profile,
-    TiledGemmLdsV1Error, TiledGemmLdsV1Profile, TiledGemmV1Error, TiledGemmV1Profile, Type,
-    ValueId, VerificationErrors, WaveOperation, WaveOperationKind, WaveWidth, WidenedFloatBinaryOp,
-    WorkgroupMemoryExtent, WorkgroupSize, analyze_control_flow, encode_module_v4,
-    gfx942_xnack_minus_target_capability, verify_module, verify_scalar_gemm_v1_module,
+    TILED_GEMM_LDS_GRID_V1_LAUNCH_EXTENT_X, TILED_GEMM_LDS_GRID_V1_LAUNCH_EXTENT_Y,
+    TargetCapability, Terminator, TiledGemmLdsGridV1Error, TiledGemmLdsGridV1Profile,
+    TiledGemmLdsK32V2Error, TiledGemmLdsK32V2Profile, TiledGemmLdsV1Error, TiledGemmLdsV1Profile,
+    TiledGemmV1Error, TiledGemmV1Profile, Type, ValueId, VerificationErrors, WaveOperation,
+    WaveOperationKind, WaveWidth, WidenedFloatBinaryOp, WorkgroupMemoryExtent, WorkgroupSize,
+    analyze_control_flow, encode_module_v4, gfx942_xnack_minus_target_capability, verify_module,
+    verify_scalar_gemm_v1_module, verify_tiled_gemm_lds_grid_v1_module,
     verify_tiled_gemm_lds_k32_v2_module, verify_tiled_gemm_lds_v1_module,
     verify_tiled_gemm_v1_module,
 };
@@ -59,13 +61,16 @@ enum LoweringTarget {
     Gfx942TiledGemmV1,
     Gfx942TiledGemmLdsV1,
     Gfx942TiledGemmLdsK32V2,
+    Gfx942TiledGemmLdsGridV1,
 }
 
 impl LoweringTarget {
     const fn uses_physical_tiled_gemm_barrier(self) -> bool {
         matches!(
             self,
-            Self::Gfx942TiledGemmLdsV1 | Self::Gfx942TiledGemmLdsK32V2
+            Self::Gfx942TiledGemmLdsV1
+                | Self::Gfx942TiledGemmLdsK32V2
+                | Self::Gfx942TiledGemmLdsGridV1
         )
     }
 
@@ -94,6 +99,7 @@ impl LoweringTarget {
                 | Self::Gfx942TiledGemmV1
                 | Self::Gfx942TiledGemmLdsV1
                 | Self::Gfx942TiledGemmLdsK32V2
+                | Self::Gfx942TiledGemmLdsGridV1
         )
     }
 
@@ -108,7 +114,8 @@ impl LoweringTarget {
             | Self::Gfx942ScalarGemmV1
             | Self::Gfx942TiledGemmV1
             | Self::Gfx942TiledGemmLdsV1
-            | Self::Gfx942TiledGemmLdsK32V2 => {
+            | Self::Gfx942TiledGemmLdsK32V2
+            | Self::Gfx942TiledGemmLdsGridV1 => {
                 " \"target-cpu\"=\"gfx942\" \"denormal-fp-math-f32\"=\"ieee,ieee\" \"unsafe-fp-math\"=\"false\" \"no-infs-fp-math\"=\"false\" \"no-nans-fp-math\"=\"false\" \"no-signed-zeros-fp-math\"=\"false\" \"approx-func-fp-math\"=\"false\" \"fp-contract\"=\"off\""
             }
         }
@@ -121,7 +128,8 @@ impl LoweringTarget {
             | Self::Gfx942ScalarGemmV1
             | Self::Gfx942TiledGemmV1
             | Self::Gfx942TiledGemmLdsV1
-            | Self::Gfx942TiledGemmLdsK32V2 => Some(GFX942_XNACK_MINUS_DATA_LAYOUT),
+            | Self::Gfx942TiledGemmLdsK32V2
+            | Self::Gfx942TiledGemmLdsGridV1 => Some(GFX942_XNACK_MINUS_DATA_LAYOUT),
             Self::Baseline | Self::Gfx942StrictFloatV1 => None,
         }
     }
@@ -134,7 +142,8 @@ impl LoweringTarget {
                 | Self::Gfx942ScalarGemmV1
                 | Self::Gfx942TiledGemmV1
                 | Self::Gfx942TiledGemmLdsV1
-                | Self::Gfx942TiledGemmLdsK32V2,
+                | Self::Gfx942TiledGemmLdsK32V2
+                | Self::Gfx942TiledGemmLdsGridV1,
                 WaveWidth::Wave32,
             ) => " \"target-features\"=\"+wavefrontsize32,-wavefrontsize64,-xnack\"",
             (
@@ -143,7 +152,8 @@ impl LoweringTarget {
                 | Self::Gfx942ScalarGemmV1
                 | Self::Gfx942TiledGemmV1
                 | Self::Gfx942TiledGemmLdsV1
-                | Self::Gfx942TiledGemmLdsK32V2,
+                | Self::Gfx942TiledGemmLdsK32V2
+                | Self::Gfx942TiledGemmLdsGridV1,
                 WaveWidth::Wave64,
             ) => " \"target-features\"=\"-wavefrontsize32,+wavefrontsize64,-xnack\"",
             (_, WaveWidth::Wave32) => " \"target-features\"=\"+wavefrontsize32,-wavefrontsize64\"",
@@ -505,7 +515,7 @@ fn lower_kernel_to_llvm_ir_for_target(
         target,
     )?;
 
-    let workgroup_size = validate_launch(module, kernel)?;
+    let workgroup_size = validate_launch(module, kernel, target)?;
     let entry = module
         .functions
         .iter()
@@ -1064,6 +1074,7 @@ fn audit_tiled_gemm_lds_v1_llvm(llvm: &str) -> Result<(), TiledGemmLdsLoweringEr
     let exact_counts = [
         ("target triple =", 1, "target triple cardinality"),
         ("target datalayout =", 1, "target data-layout cardinality"),
+        ("define ", 1, "definition cardinality"),
         ("define amdgpu_kernel", 1, "kernel definition cardinality"),
         ("udiv i64", 1, "lane division cardinality"),
         ("urem i64", 1, "lane remainder cardinality"),
@@ -1448,6 +1459,321 @@ fn audit_tiled_gemm_lds_k32_v2_llvm(llvm: &str) -> Result<(), TiledGemmLdsK32Low
     Ok(())
 }
 
+/// Exact target-bound padded-stride LDS grid GEMM Slice 3 LLVM output.
+///
+/// This value authenticates only the reviewed textual LLVM lowering and
+/// retains the exact COV6 profile for downstream construction and inspection.
+/// It grants no source, artifact, runtime, or execution authority.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TiledGemmLdsGridGfx942LlvmV1 {
+    llvm_ir: String,
+    profile: TiledGemmLdsGridV1Profile,
+}
+
+impl TiledGemmLdsGridGfx942LlvmV1 {
+    pub fn as_str(&self) -> &str {
+        &self.llvm_ir
+    }
+
+    pub fn into_string(self) -> String {
+        self.llvm_ir
+    }
+
+    /// Profile retained for downstream COV6 construction and inspection.
+    pub const fn profile(&self) -> &TiledGemmLdsGridV1Profile {
+        &self.profile
+    }
+}
+
+#[derive(Debug)]
+pub enum TiledGemmLdsGridLoweringErrorV1 {
+    Profile(TiledGemmLdsGridV1Error),
+    Lowering(LoweringErrors),
+    NonCanonicalOutput(&'static str),
+}
+
+impl fmt::Display for TiledGemmLdsGridLoweringErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Profile(error) => error.fmt(formatter),
+            Self::Lowering(error) => error.fmt(formatter),
+            Self::NonCanonicalOutput(reason) => write!(
+                formatter,
+                "tiled GEMM LDS grid V1 LLVM output failed closed: {reason}"
+            ),
+        }
+    }
+}
+
+impl Error for TiledGemmLdsGridLoweringErrorV1 {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Profile(error) => Some(error),
+            Self::Lowering(error) => Some(error),
+            Self::NonCanonicalOutput(_) => None,
+        }
+    }
+}
+
+/// Verifies and lowers only the canonical M64/N48/K16 padded-stride 3x4 LDS
+/// grid graph for gfx942:xnack-/COV6.
+///
+/// The emitted upstream-LLVM input derives both tile origins from workgroup
+/// IDs, preserves lda=33/ldb=79/ldc=96 address arithmetic, uses two distinct
+/// 512-byte XOR4 LDS tiles and one physical barrier, executes one BF16 MFMA,
+/// and writes four C elements per lane. It performs no COMGR operation,
+/// optimization, linking, loading, or launching.
+pub fn lower_tiled_gemm_lds_grid_v1_to_gfx942_llvm_ir(
+    module: &Module,
+    profile: TiledGemmLdsGridV1Profile,
+) -> Result<TiledGemmLdsGridGfx942LlvmV1, TiledGemmLdsGridLoweringErrorV1> {
+    verify_tiled_gemm_lds_grid_v1_module(module, &profile)
+        .map_err(TiledGemmLdsGridLoweringErrorV1::Profile)?;
+    let llvm_ir = lower_compiler_module_to_llvm_ir_for_target(
+        module,
+        LoweringTarget::Gfx942TiledGemmLdsGridV1,
+        None,
+        true,
+    )
+    .map_err(TiledGemmLdsGridLoweringErrorV1::Lowering)?;
+    audit_tiled_gemm_lds_grid_v1_llvm(&llvm_ir)?;
+    Ok(TiledGemmLdsGridGfx942LlvmV1 { llvm_ir, profile })
+}
+
+fn audit_tiled_gemm_lds_grid_v1_llvm(llvm: &str) -> Result<(), TiledGemmLdsGridLoweringErrorV1> {
+    let required = [
+        (
+            "target triple = \"amdgcn-amd-amdhsa\"",
+            "missing AMDGPU HSA target triple",
+        ),
+        (
+            "target datalayout = \"e-p:64:64-p1:64:64",
+            "missing exact gfx942 data layout",
+        ),
+        (
+            concat!(
+                "define amdgpu_kernel void @tiled_gemm_lds_grid_v1(",
+                "ptr addrspace(1) %arg0.data, i64 %arg0.len, ",
+                "ptr addrspace(1) %arg1.data, i64 %arg1.len, ",
+                "ptr addrspace(1) %arg2.data, i64 %arg2.len)"
+            ),
+            "missing exact three-slice kernel ABI",
+        ),
+        (
+            "\"target-cpu\"=\"gfx942\"",
+            "missing gfx942 processor binding",
+        ),
+        (
+            "\"target-features\"=\"-wavefrontsize32,+wavefrontsize64,-xnack\"",
+            "missing exact wave64/xnack- feature binding",
+        ),
+        (
+            "\"amdgpu-flat-work-group-size\"=\"64,64\"",
+            "missing exact one-wave workgroup attribute",
+        ),
+        (
+            "!0 = !{i32 64, i32 1, i32 1}",
+            "missing exact workgroup metadata",
+        ),
+        (
+            "\"denormal-fp-math-f32\"=\"ieee,ieee\"",
+            "missing IEEE f32 denormal behavior",
+        ),
+        ("\"unsafe-fp-math\"=\"false\"", "missing strict FP mode"),
+        ("\"no-infs-fp-math\"=\"false\"", "missing Inf preservation"),
+        ("\"no-nans-fp-math\"=\"false\"", "missing NaN preservation"),
+        (
+            "\"no-signed-zeros-fp-math\"=\"false\"",
+            "missing signed-zero preservation",
+        ),
+        (
+            "\"approx-func-fp-math\"=\"false\"",
+            "missing approximate-function prohibition",
+        ),
+        ("\"fp-contract\"=\"off\"", "missing disabled FP contraction"),
+        (
+            "%v16 = mul i64 %v9, 16",
+            "missing workgroup-X tile-column origin",
+        ),
+        (
+            "%v17 = mul i64 %v10, 16",
+            "missing workgroup-Y tile-row origin",
+        ),
+    ];
+    for (needle, reason) in required {
+        if !llvm.contains(needle) {
+            return Err(TiledGemmLdsGridLoweringErrorV1::NonCanonicalOutput(reason));
+        }
+    }
+
+    let lds_declarations = llvm
+        .lines()
+        .filter(|line| {
+            line.starts_with('@')
+                && line.contains("internal addrspace(3) global [256 x i16] undef, align 16")
+        })
+        .collect::<Vec<_>>();
+    if lds_declarations.len() != 2 || lds_declarations[0] == lds_declarations[1] {
+        return Err(TiledGemmLdsGridLoweringErrorV1::NonCanonicalOutput(
+            "LLVM does not contain exactly two distinct aligned 512-byte BF16 LDS tiles",
+        ));
+    }
+
+    let mfma = format!(
+        "call <4 x float> @{}(",
+        AmdgcnIntrinsic::MfmaF32M16N16K16Bf16.llvm_name()
+    );
+    let exact_counts = [
+        ("target triple =", 1, "target triple cardinality"),
+        ("target datalayout =", 1, "target data-layout cardinality"),
+        ("define amdgpu_kernel", 1, "kernel definition cardinality"),
+        (
+            "call i32 @llvm.amdgcn.workitem.id.x()",
+            1,
+            "local lane-ID cardinality",
+        ),
+        (
+            "call i32 @llvm.amdgcn.workgroup.id.x()",
+            1,
+            "workgroup-X cardinality",
+        ),
+        (
+            "call i32 @llvm.amdgcn.workgroup.id.y()",
+            1,
+            "workgroup-Y cardinality",
+        ),
+        ("udiv i64", 1, "lane division cardinality"),
+        ("urem i64", 1, "lane remainder cardinality"),
+        (
+            " = load i16, ptr addrspace(1)",
+            8,
+            "global BF16 load cardinality",
+        ),
+        ("store i16 ", 8, "cooperative LDS BF16 store cardinality"),
+        (
+            " = load i16, ptr addrspace(3)",
+            8,
+            "cooperative LDS BF16 load cardinality",
+        ),
+        ("store float ", 4, "global F32 store cardinality"),
+        (
+            "call void asm sideeffect \"s_barrier\", \"\"()",
+            1,
+            "physical workgroup barrier cardinality",
+        ),
+        (
+            "call i32 @llvm.amdgcn.mbcnt.lo",
+            4,
+            "cooperative lane-low cardinality",
+        ),
+        (
+            "call i32 @llvm.amdgcn.mbcnt.hi",
+            4,
+            "cooperative lane-high cardinality",
+        ),
+        (" = xor i32 ", 16, "XOR4 LDS address cardinality"),
+        (&mfma, 1, "BF16 MFMA cardinality"),
+    ];
+    for (needle, expected, reason) in exact_counts {
+        if llvm.matches(needle).count() != expected {
+            return Err(TiledGemmLdsGridLoweringErrorV1::NonCanonicalOutput(reason));
+        }
+    }
+
+    for (stride, expected, reason) in [
+        (33, 1, "lda=33 address arithmetic cardinality"),
+        (79, 4, "ldb=79 address arithmetic cardinality"),
+        (96, 4, "ldc=96 address arithmetic cardinality"),
+    ] {
+        let suffix = format!(", {stride}");
+        let count = llvm
+            .lines()
+            .filter(|line| line.contains(" = mul i64 ") && line.ends_with(&suffix))
+            .count();
+        if count != expected {
+            return Err(TiledGemmLdsGridLoweringErrorV1::NonCanonicalOutput(reason));
+        }
+    }
+
+    let first_lds_store = llvm
+        .find("store i16 ")
+        .expect("required by exact cardinality");
+    let barrier = llvm
+        .find("call void asm sideeffect \"s_barrier\", \"\"()")
+        .expect("required by exact cardinality");
+    let first_lds_load = llvm
+        .find(" = load i16, ptr addrspace(3)")
+        .expect("required by exact cardinality");
+    let mfma_call = llvm.find(&mfma).expect("required by exact cardinality");
+    let first_output_store = llvm
+        .find("store float ")
+        .expect("required by exact cardinality");
+    if !(first_lds_store < barrier
+        && barrier < first_lds_load
+        && first_lds_load < mfma_call
+        && mfma_call < first_output_store)
+    {
+        return Err(TiledGemmLdsGridLoweringErrorV1::NonCanonicalOutput(
+            "LDS store/barrier/load/MFMA/output ordering is not exact",
+        ));
+    }
+
+    let allowed_intrinsic_calls = [
+        AmdgcnIntrinsic::WorkItemId(Dim::X).llvm_name(),
+        AmdgcnIntrinsic::WorkGroupId(Dim::X).llvm_name(),
+        AmdgcnIntrinsic::WorkGroupId(Dim::Y).llvm_name(),
+        AmdgcnIntrinsic::MbcntLo.llvm_name(),
+        AmdgcnIntrinsic::MbcntHi.llvm_name(),
+        AmdgcnIntrinsic::MfmaF32M16N16K16Bf16.llvm_name(),
+    ];
+    let physical_barrier = "call void asm sideeffect \"s_barrier\", \"\"()";
+    if llvm
+        .lines()
+        .filter(|line| line.contains(" call "))
+        .any(|line| {
+            !line.contains(physical_barrier)
+                && !allowed_intrinsic_calls
+                    .iter()
+                    .any(|intrinsic| line.contains(&format!("@{intrinsic}(")))
+        })
+    {
+        return Err(TiledGemmLdsGridLoweringErrorV1::NonCanonicalOutput(
+            "LLVM contains a non-reviewed call",
+        ));
+    }
+
+    for forbidden in [
+        "call fast ",
+        " fadd ",
+        " fsub ",
+        " fmul ",
+        " fdiv ",
+        " frem ",
+        " reassoc ",
+        " nnan ",
+        " ninf ",
+        " nsz ",
+        " arcp ",
+        " contract ",
+        " afn ",
+        "atomicrmw",
+        "cmpxchg",
+        "alloca",
+        "addrspace(5)",
+        "@__ocml_",
+        "@__ockl_",
+        "COMGR",
+        "comgr",
+    ] {
+        if llvm.contains(forbidden) {
+            return Err(TiledGemmLdsGridLoweringErrorV1::NonCanonicalOutput(
+                "forbidden fast FP, atomic, scratch, external-call, or COMGR marker",
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Lowers a verified helper-only module for the strict gfx942 profile.
 ///
 /// Every defined function must carry an exact wave-width capability. This API
@@ -1757,7 +2083,7 @@ fn lower_compiler_module_to_llvm_ir_for_target(
 
     let mut kernel_lowerers = Vec::with_capacity(kernels.len());
     for kernel in &kernels {
-        let workgroup_size = validate_launch(module, kernel)?;
+        let workgroup_size = validate_launch(module, kernel, target)?;
         let launch_bounds = launch_policy_map
             .as_ref()
             .map(|policies| policies[&kernel.id]);
@@ -3249,6 +3575,32 @@ fn collect_intrinsic_declarations<'a>(
         let body = lowerer.function.body.as_ref().expect("definition required");
         for operation in body.blocks.iter().flat_map(|block| &block.operations) {
             match &operation.kind {
+                OperationKind::Intrinsic(intrinsic)
+                    if lowerer.target == LoweringTarget::Gfx942TiledGemmLdsGridV1 =>
+                {
+                    let (intrinsic, result) = match intrinsic.kind {
+                        IntrinsicKind::InvocationIndex {
+                            kind: IndexKind::Local,
+                            axis: Axis::X,
+                        } => (AmdgcnIntrinsic::WorkItemId(Dim::X), "i32"),
+                        IntrinsicKind::InvocationIndex {
+                            kind: IndexKind::Workgroup,
+                            axis: Axis::X,
+                        } => (AmdgcnIntrinsic::WorkGroupId(Dim::X), "i32"),
+                        IntrinsicKind::InvocationIndex {
+                            kind: IndexKind::Workgroup,
+                            axis: Axis::Y,
+                        } => (AmdgcnIntrinsic::WorkGroupId(Dim::Y), "i32"),
+                        _ => continue,
+                    };
+                    insert_intrinsic(
+                        &mut declarations,
+                        intrinsic,
+                        result,
+                        "",
+                        IntrinsicAttribute::ReadNone,
+                    );
+                }
                 OperationKind::Intrinsic(_) => {
                     insert_intrinsic(
                         &mut declarations,
@@ -3606,16 +3958,26 @@ fn validate_matrix_frontend_abi_binding(
     Ok(())
 }
 
-fn validate_launch(module: &Module, kernel: &Kernel) -> Result<WorkgroupSize, LoweringErrors> {
+fn validate_launch(
+    module: &Module,
+    kernel: &Kernel,
+    target: LoweringTarget,
+) -> Result<WorkgroupSize, LoweringErrors> {
     match kernel.domain {
         LaunchDomain::D1 {
             x: LaunchExtent::Static(_) | LaunchExtent::Dynamic,
         } => {}
+        LaunchDomain::D2 {
+            x: LaunchExtent::Static(x),
+            y: LaunchExtent::Static(y),
+        } if target == LoweringTarget::Gfx942TiledGemmLdsGridV1
+            && x == TILED_GEMM_LDS_GRID_V1_LAUNCH_EXTENT_X
+            && y == TILED_GEMM_LDS_GRID_V1_LAUNCH_EXTENT_Y => {}
         LaunchDomain::D2 { .. } | LaunchDomain::D3 { .. } => {
             return Err(LoweringErrors::one(
                 LoweringLocation::kernel(module, kernel),
                 LoweringDiagnosticCode::UnsupportedLaunchDomain,
-                "G1 supports only a 1D launch domain",
+                "G1 supports only a 1D launch domain outside the authenticated tiled GEMM LDS grid V1 target",
             ));
         }
     }
@@ -4273,7 +4635,7 @@ impl<'a> FunctionLowerer<'a> {
             }
             OperationKind::Intrinsic(intrinsic)
                 if self.kernel.is_some()
-                    && matches!(
+                    && (matches!(
                         intrinsic.kind,
                         IntrinsicKind::InvocationIndex {
                             kind: IndexKind::Global,
@@ -4282,7 +4644,14 @@ impl<'a> FunctionLowerer<'a> {
                             kind: IndexKind::Local,
                             axis: Axis::X,
                         }
-                    ) => {}
+                    ) || (self.target == LoweringTarget::Gfx942TiledGemmLdsGridV1
+                        && matches!(
+                            intrinsic.kind,
+                            IntrinsicKind::InvocationIndex {
+                                kind: IndexKind::Workgroup,
+                                axis: Axis::X | Axis::Y,
+                            }
+                        ))) => {}
             OperationKind::MemoryIntrinsic(intrinsic) => {
                 validate_memory_intrinsic(intrinsic, &location, self.target)?;
             }
@@ -5365,6 +5734,37 @@ impl<'a> FunctionLowerer<'a> {
             }
             OperationKind::Intrinsic(intrinsic) => {
                 let result = result_name.expect("validated result");
+                if self.target == LoweringTarget::Gfx942TiledGemmLdsGridV1
+                    && let IntrinsicKind::InvocationIndex {
+                        kind: IndexKind::Workgroup,
+                        axis: Axis::X | Axis::Y,
+                    } = intrinsic.kind
+                {
+                    let dim = match intrinsic.kind {
+                        IntrinsicKind::InvocationIndex {
+                            kind: IndexKind::Workgroup,
+                            axis: Axis::X,
+                        } => Dim::X,
+                        IntrinsicKind::InvocationIndex {
+                            kind: IndexKind::Workgroup,
+                            axis: Axis::Y,
+                        } => Dim::Y,
+                        _ => unreachable!(),
+                    };
+                    writeln!(
+                        output,
+                        "  {result}.group.i32 = call i32 @{}()",
+                        AmdgcnIntrinsic::WorkGroupId(dim).llvm_name()
+                    )
+                    .unwrap();
+                    writeln!(
+                        output,
+                        "  {result}.group = zext i32 {result}.group.i32 to i64"
+                    )
+                    .unwrap();
+                    writeln!(output, "  {result} = add i64 {result}.group, 0").unwrap();
+                    return Ok(());
+                }
                 writeln!(
                     output,
                     "  {result}.local.i32 = call i32 @{}()",
@@ -6718,6 +7118,7 @@ fn supported_binary(op: BinaryOp, ty: &Type, target: LoweringTarget) -> bool {
                     | LoweringTarget::Gfx942TiledGemmV1
                     | LoweringTarget::Gfx942TiledGemmLdsV1
                     | LoweringTarget::Gfx942TiledGemmLdsK32V2
+                    | LoweringTarget::Gfx942TiledGemmLdsGridV1
             ) && supported_integer(scalar)
         }
         BinaryOp::BitXor => supported_integer(scalar),
