@@ -21,15 +21,17 @@ use fe2o3_kernel_ir::{
     MemoryIntrinsicOperation, MemoryOrdering, Module, ModuleId, NarrowFloatFormat, Operation,
     OperationKind, PointerDistanceContract, PointerDistanceKind, PointerDistanceUnit,
     ScalarGemmTargetRequirementsV1, ScalarGemmV1Error, ScalarType, Signature, SynchronizationScope,
+    TILED_GEMM_LDS_EDGES_V1_LAUNCH_EXTENT_X, TILED_GEMM_LDS_EDGES_V1_LAUNCH_EXTENT_Y,
     TILED_GEMM_LDS_GRID_V1_LAUNCH_EXTENT_X, TILED_GEMM_LDS_GRID_V1_LAUNCH_EXTENT_Y,
-    TargetCapability, Terminator, TiledGemmLdsGridV1Error, TiledGemmLdsGridV1Profile,
-    TiledGemmLdsK32V2Error, TiledGemmLdsK32V2Profile, TiledGemmLdsV1Error, TiledGemmLdsV1Profile,
-    TiledGemmV1Error, TiledGemmV1Profile, Type, ValueId, VerificationErrors, WaveOperation,
-    WaveOperationKind, WaveWidth, WidenedFloatBinaryOp, WorkgroupMemoryExtent, WorkgroupSize,
-    analyze_control_flow, encode_module_v4, gfx942_xnack_minus_target_capability, verify_module,
-    verify_scalar_gemm_v1_module, verify_tiled_gemm_lds_grid_v1_module,
-    verify_tiled_gemm_lds_k32_v2_module, verify_tiled_gemm_lds_v1_module,
-    verify_tiled_gemm_v1_module,
+    TargetCapability, Terminator, TiledGemmLdsEdgesV1Error, TiledGemmLdsEdgesV1Profile,
+    TiledGemmLdsGridV1Error, TiledGemmLdsGridV1Profile, TiledGemmLdsK32V2Error,
+    TiledGemmLdsK32V2Profile, TiledGemmLdsV1Error, TiledGemmLdsV1Profile, TiledGemmV1Error,
+    TiledGemmV1Profile, Type, ValueId, VerificationErrors, WaveOperation, WaveOperationKind,
+    WaveWidth, WidenedFloatBinaryOp, WorkgroupMemoryExtent, WorkgroupSize, analyze_control_flow,
+    encode_module_v4, gfx942_xnack_minus_target_capability, verify_module,
+    verify_scalar_gemm_v1_module, verify_tiled_gemm_lds_edges_v1_module,
+    verify_tiled_gemm_lds_grid_v1_module, verify_tiled_gemm_lds_k32_v2_module,
+    verify_tiled_gemm_lds_v1_module, verify_tiled_gemm_v1_module,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -62,6 +64,7 @@ enum LoweringTarget {
     Gfx942TiledGemmLdsV1,
     Gfx942TiledGemmLdsK32V2,
     Gfx942TiledGemmLdsGridV1,
+    Gfx942TiledGemmLdsEdgesV1,
 }
 
 impl LoweringTarget {
@@ -71,6 +74,7 @@ impl LoweringTarget {
             Self::Gfx942TiledGemmLdsV1
                 | Self::Gfx942TiledGemmLdsK32V2
                 | Self::Gfx942TiledGemmLdsGridV1
+                | Self::Gfx942TiledGemmLdsEdgesV1
         )
     }
 
@@ -100,6 +104,7 @@ impl LoweringTarget {
                 | Self::Gfx942TiledGemmLdsV1
                 | Self::Gfx942TiledGemmLdsK32V2
                 | Self::Gfx942TiledGemmLdsGridV1
+                | Self::Gfx942TiledGemmLdsEdgesV1
         )
     }
 
@@ -115,7 +120,8 @@ impl LoweringTarget {
             | Self::Gfx942TiledGemmV1
             | Self::Gfx942TiledGemmLdsV1
             | Self::Gfx942TiledGemmLdsK32V2
-            | Self::Gfx942TiledGemmLdsGridV1 => {
+            | Self::Gfx942TiledGemmLdsGridV1
+            | Self::Gfx942TiledGemmLdsEdgesV1 => {
                 " \"target-cpu\"=\"gfx942\" \"denormal-fp-math-f32\"=\"ieee,ieee\" \"unsafe-fp-math\"=\"false\" \"no-infs-fp-math\"=\"false\" \"no-nans-fp-math\"=\"false\" \"no-signed-zeros-fp-math\"=\"false\" \"approx-func-fp-math\"=\"false\" \"fp-contract\"=\"off\""
             }
         }
@@ -129,7 +135,8 @@ impl LoweringTarget {
             | Self::Gfx942TiledGemmV1
             | Self::Gfx942TiledGemmLdsV1
             | Self::Gfx942TiledGemmLdsK32V2
-            | Self::Gfx942TiledGemmLdsGridV1 => Some(GFX942_XNACK_MINUS_DATA_LAYOUT),
+            | Self::Gfx942TiledGemmLdsGridV1
+            | Self::Gfx942TiledGemmLdsEdgesV1 => Some(GFX942_XNACK_MINUS_DATA_LAYOUT),
             Self::Baseline | Self::Gfx942StrictFloatV1 => None,
         }
     }
@@ -143,7 +150,8 @@ impl LoweringTarget {
                 | Self::Gfx942TiledGemmV1
                 | Self::Gfx942TiledGemmLdsV1
                 | Self::Gfx942TiledGemmLdsK32V2
-                | Self::Gfx942TiledGemmLdsGridV1,
+                | Self::Gfx942TiledGemmLdsGridV1
+                | Self::Gfx942TiledGemmLdsEdgesV1,
                 WaveWidth::Wave32,
             ) => " \"target-features\"=\"+wavefrontsize32,-wavefrontsize64,-xnack\"",
             (
@@ -153,7 +161,8 @@ impl LoweringTarget {
                 | Self::Gfx942TiledGemmV1
                 | Self::Gfx942TiledGemmLdsV1
                 | Self::Gfx942TiledGemmLdsK32V2
-                | Self::Gfx942TiledGemmLdsGridV1,
+                | Self::Gfx942TiledGemmLdsGridV1
+                | Self::Gfx942TiledGemmLdsEdgesV1,
                 WaveWidth::Wave64,
             ) => " \"target-features\"=\"-wavefrontsize32,+wavefrontsize64,-xnack\"",
             (_, WaveWidth::Wave32) => " \"target-features\"=\"+wavefrontsize32,-wavefrontsize64\"",
@@ -1774,6 +1783,358 @@ fn audit_tiled_gemm_lds_grid_v1_llvm(llvm: &str) -> Result<(), TiledGemmLdsGridL
     Ok(())
 }
 
+/// Exact target-bound edge/tail/alpha-beta LDS GEMM Slice 4 LLVM output.
+///
+/// This value authenticates only the reviewed textual LLVM lowering and
+/// retains the exact COV6 profile for downstream construction and inspection.
+/// It grants no source, artifact, runtime, or execution authority.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TiledGemmLdsEdgesGfx942LlvmV1 {
+    llvm_ir: String,
+    profile: TiledGemmLdsEdgesV1Profile,
+}
+
+impl TiledGemmLdsEdgesGfx942LlvmV1 {
+    pub fn as_str(&self) -> &str {
+        &self.llvm_ir
+    }
+
+    pub fn into_string(self) -> String {
+        self.llvm_ir
+    }
+
+    /// Profile retained for downstream COV6 construction and inspection.
+    pub const fn profile(&self) -> &TiledGemmLdsEdgesV1Profile {
+        &self.profile
+    }
+}
+
+#[derive(Debug)]
+pub enum TiledGemmLdsEdgesLoweringErrorV1 {
+    Profile(TiledGemmLdsEdgesV1Error),
+    Lowering(LoweringErrors),
+    NonCanonicalOutput(&'static str),
+}
+
+impl fmt::Display for TiledGemmLdsEdgesLoweringErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Profile(error) => error.fmt(formatter),
+            Self::Lowering(error) => error.fmt(formatter),
+            Self::NonCanonicalOutput(reason) => write!(
+                formatter,
+                "tiled GEMM LDS edges V1 LLVM output failed closed: {reason}"
+            ),
+        }
+    }
+}
+
+impl Error for TiledGemmLdsEdgesLoweringErrorV1 {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Profile(error) => Some(error),
+            Self::Lowering(error) => Some(error),
+            Self::NonCanonicalOutput(_) => None,
+        }
+    }
+}
+
+/// Verifies and lowers only the canonical M17/N19/K18 edge-safe 2x2 LDS grid
+/// graph for gfx942:xnack-/COV6.
+///
+/// The emitted upstream-LLVM input has eight predicated BF16 load diamonds
+/// with exact zero fill, a uniform two-trip K loop with carried FP32
+/// accumulators, two physical barriers around reused LDS, four predicated C
+/// read/modify/write blocks, and the exact `2.0 * product + -1.0 * C`
+/// epilogue. This function performs no COMGR operation, optimization, linking,
+/// loading, or launching.
+pub fn lower_tiled_gemm_lds_edges_v1_to_gfx942_llvm_ir(
+    module: &Module,
+    profile: TiledGemmLdsEdgesV1Profile,
+) -> Result<TiledGemmLdsEdgesGfx942LlvmV1, TiledGemmLdsEdgesLoweringErrorV1> {
+    verify_tiled_gemm_lds_edges_v1_module(module, &profile)
+        .map_err(TiledGemmLdsEdgesLoweringErrorV1::Profile)?;
+    let llvm_ir = lower_compiler_module_to_llvm_ir_for_target(
+        module,
+        LoweringTarget::Gfx942TiledGemmLdsEdgesV1,
+        None,
+        true,
+    )
+    .map_err(TiledGemmLdsEdgesLoweringErrorV1::Lowering)?;
+    audit_tiled_gemm_lds_edges_v1_llvm(&llvm_ir)?;
+    Ok(TiledGemmLdsEdgesGfx942LlvmV1 { llvm_ir, profile })
+}
+
+fn audit_tiled_gemm_lds_edges_v1_llvm(llvm: &str) -> Result<(), TiledGemmLdsEdgesLoweringErrorV1> {
+    let required = [
+        (
+            "target triple = \"amdgcn-amd-amdhsa\"",
+            "missing AMDGPU HSA target triple",
+        ),
+        (
+            "target datalayout = \"e-p:64:64-p1:64:64",
+            "missing exact gfx942 data layout",
+        ),
+        (
+            concat!(
+                "define amdgpu_kernel void @tiled_gemm_lds_edges_v1(",
+                "ptr addrspace(1) %arg0.data, i64 %arg0.len, ",
+                "ptr addrspace(1) %arg1.data, i64 %arg1.len, ",
+                "ptr addrspace(1) %arg2.data, i64 %arg2.len)"
+            ),
+            "missing exact three-slice kernel ABI",
+        ),
+        (
+            "\"target-cpu\"=\"gfx942\"",
+            "missing gfx942 processor binding",
+        ),
+        (
+            "\"target-features\"=\"-wavefrontsize32,+wavefrontsize64,-xnack\"",
+            "missing exact wave64/xnack- feature binding",
+        ),
+        (
+            "\"amdgpu-flat-work-group-size\"=\"64,64\"",
+            "missing exact one-wave workgroup attribute",
+        ),
+        (
+            "!0 = !{i32 64, i32 1, i32 1}",
+            "missing exact workgroup metadata",
+        ),
+        (
+            "\"denormal-fp-math-f32\"=\"ieee,ieee\"",
+            "missing IEEE f32 denormal behavior",
+        ),
+        ("\"unsafe-fp-math\"=\"false\"", "missing strict FP mode"),
+        ("\"no-infs-fp-math\"=\"false\"", "missing Inf preservation"),
+        ("\"no-nans-fp-math\"=\"false\"", "missing NaN preservation"),
+        (
+            "\"no-signed-zeros-fp-math\"=\"false\"",
+            "missing signed-zero preservation",
+        ),
+        (
+            "\"approx-func-fp-math\"=\"false\"",
+            "missing approximate-function prohibition",
+        ),
+        ("\"fp-contract\"=\"off\"", "missing disabled FP contraction"),
+        ("icmp ult i64", "missing exact unsigned edge predicates"),
+        ("br i1", "missing predicated edge control flow"),
+        (
+            "fence syncscope(\"workgroup\") release",
+            "missing LDS release fence",
+        ),
+        (
+            "fence syncscope(\"workgroup\") acquire",
+            "missing LDS acquire fence",
+        ),
+        (
+            "fmul float 0x4000000000000000",
+            "missing exact alpha=2.0 scaling",
+        ),
+        (
+            "fmul float 0xBFF0000000000000",
+            "missing exact beta=-1.0 scaling",
+        ),
+    ];
+    for (needle, reason) in required {
+        if !llvm.contains(needle) {
+            return Err(TiledGemmLdsEdgesLoweringErrorV1::NonCanonicalOutput(reason));
+        }
+    }
+
+    let lds_declarations = llvm
+        .lines()
+        .filter(|line| {
+            line.starts_with('@')
+                && line.contains("internal addrspace(3) global [256 x i16] undef, align 16")
+        })
+        .collect::<Vec<_>>();
+    if lds_declarations.len() != 2 || lds_declarations[0] == lds_declarations[1] {
+        return Err(TiledGemmLdsEdgesLoweringErrorV1::NonCanonicalOutput(
+            "LLVM does not contain exactly two distinct reused aligned BF16 LDS tiles",
+        ));
+    }
+
+    let mfma = format!(
+        "call <4 x float> @{}(",
+        AmdgcnIntrinsic::MfmaF32M16N16K16Bf16.llvm_name()
+    );
+    let exact_counts = [
+        ("target triple =", 1, "target triple cardinality"),
+        ("target datalayout =", 1, "target data-layout cardinality"),
+        ("define amdgpu_kernel", 1, "kernel definition cardinality"),
+        (
+            "call i32 @llvm.amdgcn.workitem.id.x()",
+            1,
+            "local lane-ID cardinality",
+        ),
+        (
+            "call i32 @llvm.amdgcn.workgroup.id.x()",
+            1,
+            "workgroup-X cardinality",
+        ),
+        (
+            "call i32 @llvm.amdgcn.workgroup.id.y()",
+            1,
+            "workgroup-Y cardinality",
+        ),
+        ("udiv i64", 1, "lane division cardinality"),
+        ("urem i64", 1, "lane remainder cardinality"),
+        (" = phi i64 ", 1, "phase PHI cardinality"),
+        (" = phi i16 ", 8, "zero-fill merge PHI cardinality"),
+        (" = phi float ", 8, "accumulator and output PHI cardinality"),
+        ("icmp ult i64", 11, "edge predicate cardinality"),
+        (" = and i1 ", 12, "combined predicate cardinality"),
+        ("br i1", 13, "conditional branch cardinality"),
+        (
+            " = load i16, ptr addrspace(1)",
+            8,
+            "predicated global BF16 load cardinality",
+        ),
+        (
+            " = load float, ptr addrspace(1)",
+            4,
+            "predicated C load cardinality",
+        ),
+        ("store i16 ", 8, "cooperative LDS BF16 store cardinality"),
+        (
+            " = load i16, ptr addrspace(3)",
+            8,
+            "cooperative LDS BF16 load cardinality",
+        ),
+        ("store float ", 4, "predicated global F32 store cardinality"),
+        (
+            " = fmul float ",
+            8,
+            "strict alpha/beta multiply cardinality",
+        ),
+        (" = fadd float ", 4, "strict epilogue add cardinality"),
+        ("fmul float 0x4000000000000000", 4, "alpha=2.0 cardinality"),
+        ("fmul float 0xBFF0000000000000", 4, "beta=-1.0 cardinality"),
+        (
+            "call void asm sideeffect \"s_barrier\", \"\"()",
+            2,
+            "publish and reuse barrier cardinality",
+        ),
+        (
+            "call i32 @llvm.amdgcn.mbcnt.lo",
+            4,
+            "cooperative lane-low cardinality",
+        ),
+        (
+            "call i32 @llvm.amdgcn.mbcnt.hi",
+            4,
+            "cooperative lane-high cardinality",
+        ),
+        (" = xor i32 ", 16, "XOR4 LDS address cardinality"),
+        (&mfma, 1, "BF16 MFMA loop-body cardinality"),
+    ];
+    for (needle, expected, reason) in exact_counts {
+        if llvm.matches(needle).count() != expected {
+            return Err(TiledGemmLdsEdgesLoweringErrorV1::NonCanonicalOutput(reason));
+        }
+    }
+
+    let zero_fill_phis = llvm
+        .lines()
+        .filter(|line| line.contains(" = phi i16 "))
+        .filter(|line| line.contains("[ 0, "))
+        .count();
+    if zero_fill_phis != 8 {
+        return Err(TiledGemmLdsEdgesLoweringErrorV1::NonCanonicalOutput(
+            "predicated BF16 load merges do not all retain exact zero fill",
+        ));
+    }
+
+    let first_lds_store = llvm
+        .find("store i16 ")
+        .expect("required by exact cardinality");
+    let mut barriers = llvm
+        .match_indices("call void asm sideeffect \"s_barrier\", \"\"()")
+        .map(|(offset, _)| offset);
+    let publish_barrier = barriers.next().expect("required by exact cardinality");
+    let reuse_barrier = barriers.next().expect("required by exact cardinality");
+    let first_lds_load = llvm
+        .find(" = load i16, ptr addrspace(3)")
+        .expect("required by exact cardinality");
+    let mfma_call = llvm.find(&mfma).expect("required by exact cardinality");
+    let phase_increment = llvm
+        .rfind(" = add i64 ")
+        .expect("canonical loop contains a phase increment");
+    let first_c_load = llvm
+        .find(" = load float, ptr addrspace(1)")
+        .expect("required by exact cardinality");
+    let first_output_store = llvm
+        .find("store float ")
+        .expect("required by exact cardinality");
+    if !(first_lds_store < publish_barrier
+        && publish_barrier < first_lds_load
+        && first_lds_load < mfma_call
+        && mfma_call < reuse_barrier
+        && reuse_barrier < phase_increment
+        && phase_increment < first_c_load
+        && first_c_load < first_output_store)
+    {
+        return Err(TiledGemmLdsEdgesLoweringErrorV1::NonCanonicalOutput(
+            "edge LDS stage/barrier/MFMA/reuse/epilogue ordering is not exact",
+        ));
+    }
+
+    let allowed_intrinsic_calls = [
+        AmdgcnIntrinsic::WorkItemId(Dim::X).llvm_name(),
+        AmdgcnIntrinsic::WorkGroupId(Dim::X).llvm_name(),
+        AmdgcnIntrinsic::WorkGroupId(Dim::Y).llvm_name(),
+        AmdgcnIntrinsic::MbcntLo.llvm_name(),
+        AmdgcnIntrinsic::MbcntHi.llvm_name(),
+        AmdgcnIntrinsic::MfmaF32M16N16K16Bf16.llvm_name(),
+    ];
+    let physical_barrier = "call void asm sideeffect \"s_barrier\", \"\"()";
+    if llvm
+        .lines()
+        .filter(|line| line.contains(" call "))
+        .any(|line| {
+            !line.contains(physical_barrier)
+                && !allowed_intrinsic_calls
+                    .iter()
+                    .any(|intrinsic| line.contains(&format!("@{intrinsic}(")))
+        })
+    {
+        return Err(TiledGemmLdsEdgesLoweringErrorV1::NonCanonicalOutput(
+            "LLVM contains a non-reviewed call",
+        ));
+    }
+
+    for forbidden in [
+        "call fast ",
+        " fmul fast ",
+        " fadd fast ",
+        " fsub ",
+        " fdiv ",
+        " frem ",
+        " reassoc ",
+        " nnan ",
+        " ninf ",
+        " nsz ",
+        " arcp ",
+        " contract ",
+        " afn ",
+        "atomicrmw",
+        "cmpxchg",
+        "alloca",
+        "addrspace(5)",
+        "@__ocml_",
+        "@__ockl_",
+        "COMGR",
+        "comgr",
+    ] {
+        if llvm.contains(forbidden) {
+            return Err(TiledGemmLdsEdgesLoweringErrorV1::NonCanonicalOutput(
+                "forbidden fast FP, atomic, scratch, external-call, or COMGR marker",
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Lowers a verified helper-only module for the strict gfx942 profile.
 ///
 /// Every defined function must carry an exact wave-width capability. This API
@@ -2708,10 +3069,14 @@ fn validate_convergent_cfg(lowerer: &FunctionLowerer<'_>) -> Result<(), Lowering
         ));
     }
 
-    if lowerer.target == LoweringTarget::Gfx942TiledGemmLdsK32V2 {
-        // This private target is reachable only after exact K32 V2 graph and
-        // profile authentication. That sealed graph has one uniform two-trip
-        // loop, with every convergent operation in its unconditional body.
+    if matches!(
+        lowerer.target,
+        LoweringTarget::Gfx942TiledGemmLdsK32V2 | LoweringTarget::Gfx942TiledGemmLdsEdgesV1
+    ) {
+        // These private targets are reachable only after exact graph and
+        // profile authentication. Their sealed graphs have one uniform
+        // two-trip loop, with every convergent operation in its unconditional
+        // reconverged body.
         return Ok(());
     }
 
@@ -3576,7 +3941,11 @@ fn collect_intrinsic_declarations<'a>(
         for operation in body.blocks.iter().flat_map(|block| &block.operations) {
             match &operation.kind {
                 OperationKind::Intrinsic(intrinsic)
-                    if lowerer.target == LoweringTarget::Gfx942TiledGemmLdsGridV1 =>
+                    if matches!(
+                        lowerer.target,
+                        LoweringTarget::Gfx942TiledGemmLdsGridV1
+                            | LoweringTarget::Gfx942TiledGemmLdsEdgesV1
+                    ) =>
                 {
                     let (intrinsic, result) = match intrinsic.kind {
                         IntrinsicKind::InvocationIndex {
@@ -3973,6 +4342,12 @@ fn validate_launch(
         } if target == LoweringTarget::Gfx942TiledGemmLdsGridV1
             && x == TILED_GEMM_LDS_GRID_V1_LAUNCH_EXTENT_X
             && y == TILED_GEMM_LDS_GRID_V1_LAUNCH_EXTENT_Y => {}
+        LaunchDomain::D2 {
+            x: LaunchExtent::Static(x),
+            y: LaunchExtent::Static(y),
+        } if target == LoweringTarget::Gfx942TiledGemmLdsEdgesV1
+            && x == TILED_GEMM_LDS_EDGES_V1_LAUNCH_EXTENT_X
+            && y == TILED_GEMM_LDS_EDGES_V1_LAUNCH_EXTENT_Y => {}
         LaunchDomain::D2 { .. } | LaunchDomain::D3 { .. } => {
             return Err(LoweringErrors::one(
                 LoweringLocation::kernel(module, kernel),
@@ -4644,14 +5019,17 @@ impl<'a> FunctionLowerer<'a> {
                             kind: IndexKind::Local,
                             axis: Axis::X,
                         }
-                    ) || (self.target == LoweringTarget::Gfx942TiledGemmLdsGridV1
-                        && matches!(
-                            intrinsic.kind,
-                            IntrinsicKind::InvocationIndex {
-                                kind: IndexKind::Workgroup,
-                                axis: Axis::X | Axis::Y,
-                            }
-                        ))) => {}
+                    ) || (matches!(
+                        self.target,
+                        LoweringTarget::Gfx942TiledGemmLdsGridV1
+                            | LoweringTarget::Gfx942TiledGemmLdsEdgesV1
+                    ) && matches!(
+                        intrinsic.kind,
+                        IntrinsicKind::InvocationIndex {
+                            kind: IndexKind::Workgroup,
+                            axis: Axis::X | Axis::Y,
+                        }
+                    ))) => {}
             OperationKind::MemoryIntrinsic(intrinsic) => {
                 validate_memory_intrinsic(intrinsic, &location, self.target)?;
             }
@@ -5734,11 +6112,14 @@ impl<'a> FunctionLowerer<'a> {
             }
             OperationKind::Intrinsic(intrinsic) => {
                 let result = result_name.expect("validated result");
-                if self.target == LoweringTarget::Gfx942TiledGemmLdsGridV1
-                    && let IntrinsicKind::InvocationIndex {
-                        kind: IndexKind::Workgroup,
-                        axis: Axis::X | Axis::Y,
-                    } = intrinsic.kind
+                if matches!(
+                    self.target,
+                    LoweringTarget::Gfx942TiledGemmLdsGridV1
+                        | LoweringTarget::Gfx942TiledGemmLdsEdgesV1
+                ) && let IntrinsicKind::InvocationIndex {
+                    kind: IndexKind::Workgroup,
+                    axis: Axis::X | Axis::Y,
+                } = intrinsic.kind
                 {
                     let dim = match intrinsic.kind {
                         IntrinsicKind::InvocationIndex {
@@ -7119,7 +7500,11 @@ fn supported_binary(op: BinaryOp, ty: &Type, target: LoweringTarget) -> bool {
                     | LoweringTarget::Gfx942TiledGemmLdsV1
                     | LoweringTarget::Gfx942TiledGemmLdsK32V2
                     | LoweringTarget::Gfx942TiledGemmLdsGridV1
+                    | LoweringTarget::Gfx942TiledGemmLdsEdgesV1
             ) && supported_integer(scalar)
+        }
+        BinaryOp::BitAnd => {
+            scalar == ScalarType::Bool && target == LoweringTarget::Gfx942TiledGemmLdsEdgesV1
         }
         BinaryOp::BitXor => supported_integer(scalar),
         _ => false,
@@ -7504,6 +7889,7 @@ fn binary_opcode(op: BinaryOp, ty: &Type) -> &'static str {
             "srem"
         }
         (BinaryOp::Remainder, false) => "urem",
+        (BinaryOp::BitAnd, false) => "and",
         (BinaryOp::BitXor, false) => "xor",
         (BinaryOp::Add, true) => "fadd",
         (BinaryOp::Subtract, true) => "fsub",
