@@ -131,11 +131,43 @@ enum class PostLinkProfile { LegacyGfx942G1, ExactLdsGemmSlice1 };
 
 constexpr StringLiteral ExactLdsGemmSlice1Entry = "tiled_gemm_lds_v1";
 constexpr StringLiteral ExactLdsGemmSlice1Descriptor = "tiled_gemm_lds_v1.kd";
+constexpr StringLiteral ExactLdsGemmSlice1ProducerDataLayout =
+    "e-p:64:64-p1:64:64-p2:32:32-p3:32:32-p4:64:64-p5:32:32-p6:32:32-"
+    "p7:160:256:256:32-p8:128:128:128:48-p9:192:256:256:32-i64:64-v16:16-"
+    "v24:32-v32:32-v48:64-v96:128-v192:256-v256:256-v512:512-v1024:1024-"
+    "v2048:2048-n32:64-S32-A5-G1-ni:7:8:9";
 
 bool isExactLdsGemmSlice1SymbolSet(ArrayRef<std::string> Symbols) {
   return std::set<std::string>(Symbols.begin(), Symbols.end()) ==
          std::set<std::string>{ExactLdsGemmSlice1Entry.str(),
                                ExactLdsGemmSlice1Descriptor.str()};
+}
+
+bool isExactLdsGemmSlice1RequestCandidate(const Request &RequestValue) {
+  bool CompilerInputMatches =
+      RequestValue.Inputs.size() == 1 &&
+      RequestValue.CompilerModule.Kind == InputKind::LlvmTextIr &&
+      RequestValue.Inputs.front().Kind == RequestValue.CompilerModule.Kind &&
+      RequestValue.Inputs.front().Digest ==
+          RequestValue.CompilerModule.Digest &&
+      RequestValue.Inputs.front().Bytes.size() ==
+          RequestValue.CompilerModule.Bytes.size();
+  return RequestValue.Protocol == ProtocolVersion::V2 &&
+         RequestValue.Target == "gfx942:xnack-" &&
+         RequestValue.CodeObjectVersion == 6 && CompilerInputMatches &&
+         RequestValue.ExternalProviders.empty() &&
+         RequestValue.ImportSymbols.empty() &&
+         RequestValue.ExportSymbols.empty() &&
+         isExactLdsGemmSlice1SymbolSet(RequestValue.RequiredSymbols) &&
+         isExactLdsGemmSlice1SymbolSet(RequestValue.ExpectedDefinedSymbols) &&
+         isExactLdsGemmSlice1SymbolSet(RequestValue.FinalSymbols);
+}
+
+bool isClosedExactLdsGemmSlice1Request(const Request &RequestValue) {
+  return isExactLdsGemmSlice1RequestCandidate(RequestValue) &&
+         RequestValue.LinkOptions.Optimization == OptimizationLevel::O2 &&
+         RequestValue.LinkOptions.StripDebug &&
+         RequestValue.LinkOptions.VerifyEach;
 }
 
 Expected<PostLinkProfile>
@@ -146,26 +178,7 @@ selectPostLinkProfile(const Request &RequestValue,
   if (ExpectedSymbols != ExactSymbols)
     return PostLinkProfile::LegacyGfx942G1;
 
-  bool CompilerInputMatches =
-      RequestValue.Inputs.size() == 1 &&
-      RequestValue.CompilerModule.Kind == InputKind::LlvmTextIr &&
-      RequestValue.Inputs.front().Kind == RequestValue.CompilerModule.Kind &&
-      RequestValue.Inputs.front().Digest ==
-          RequestValue.CompilerModule.Digest &&
-      RequestValue.Inputs.front().Bytes.size() ==
-          RequestValue.CompilerModule.Bytes.size();
-  if (RequestValue.Protocol != ProtocolVersion::V2 ||
-      RequestValue.Target != "gfx942:xnack-" ||
-      RequestValue.CodeObjectVersion != 6 ||
-      RequestValue.LinkOptions.Optimization != OptimizationLevel::O2 ||
-      !RequestValue.LinkOptions.StripDebug ||
-      !RequestValue.LinkOptions.VerifyEach || !CompilerInputMatches ||
-      !RequestValue.ExternalProviders.empty() ||
-      !RequestValue.ImportSymbols.empty() ||
-      !RequestValue.ExportSymbols.empty() ||
-      !isExactLdsGemmSlice1SymbolSet(RequestValue.RequiredSymbols) ||
-      !isExactLdsGemmSlice1SymbolSet(RequestValue.ExpectedDefinedSymbols) ||
-      !isExactLdsGemmSlice1SymbolSet(RequestValue.FinalSymbols))
+  if (!isClosedExactLdsGemmSlice1Request(RequestValue))
     return pipelineError(
         "exact LDS GEMM Slice1 symbols require the closed Worker V2 profile");
   return PostLinkProfile::ExactLdsGemmSlice1;
@@ -359,8 +372,12 @@ Error setAndCheckModuleContract(Module &ModuleValue,
   if (!ExistingTriple.getTriple().empty() &&
       Triple::normalize(ExistingTriple.getTriple()) != AmdGpuTriple)
     return pipelineError("bitcode target triple does not match AMDHSA");
+  bool ExactProducerLayout =
+      isExactLdsGemmSlice1RequestCandidate(RequestValue) &&
+      ModuleValue.getDataLayoutStr() == ExactLdsGemmSlice1ProducerDataLayout;
   if (!ModuleValue.getDataLayoutStr().empty() &&
-      ModuleValue.getDataLayout() != Machine.createDataLayout())
+      ModuleValue.getDataLayout() != Machine.createDataLayout() &&
+      !ExactProducerLayout)
     return pipelineError(
         Twine("bitcode data layout does not match target machine: '") +
         ModuleValue.getDataLayoutStr() + "' != '" +
@@ -505,8 +522,11 @@ parseModuleInput(const Input &InputValue, StringRef InputName,
       return pipelineError(Twine("textual LLVM IR input ") + InputName + ": " +
                            Message);
     }
-    AcceptedLayout = TextModule->getDataLayoutStr().empty() ||
-                     TextModule->getDataLayout() == ExpectedLayout;
+    StringRef ObservedLayout = TextModule->getDataLayoutStr();
+    AcceptedLayout = ObservedLayout.empty() ||
+                     TextModule->getDataLayout() == ExpectedLayout ||
+                     (isExactLdsGemmSlice1RequestCandidate(RequestValue) &&
+                      ObservedLayout == ExactLdsGemmSlice1ProducerDataLayout);
     return TextModule;
   }();
   if (!Parsed)
@@ -999,6 +1019,24 @@ Error validateV2SymbolRoles(const Request &RequestValue,
   return Error::success();
 }
 
+struct KernelArgumentContract {
+  std::optional<std::string> Name;
+  std::optional<std::string> TypeName;
+  uint64_t Offset;
+  uint64_t Size;
+  std::optional<uint64_t> Align;
+  std::string ValueKind;
+  std::optional<std::string> ValueType;
+  std::optional<std::string> AddressSpace;
+  std::optional<std::string> Access;
+  std::optional<std::string> ActualAccess;
+  std::optional<uint64_t> PointeeAlign;
+  std::optional<bool> IsConst;
+  std::optional<bool> IsRestrict;
+  std::optional<bool> IsVolatile;
+  std::optional<bool> IsPipe;
+};
+
 struct KernelLaunchContract {
   std::string Name;
   std::string Symbol;
@@ -1012,6 +1050,7 @@ struct KernelLaunchContract {
   std::optional<uint64_t> SgprSpillCount;
   std::optional<uint64_t> VgprSpillCount;
   std::optional<bool> UsesDynamicStack;
+  std::optional<std::vector<KernelArgumentContract>> Arguments;
 };
 
 struct MetadataContract {
@@ -1082,6 +1121,100 @@ Expected<std::optional<bool>> metadataOptionalBoolean(msgpack::MapDocNode &Map,
   return std::optional<bool>(Field->second.getBool());
 }
 
+Expected<std::optional<std::string>>
+metadataOptionalString(msgpack::MapDocNode &Map, StringRef Name) {
+  auto Field = Map.find(Name);
+  if (Field == Map.end())
+    return std::optional<std::string>{};
+  if (!Field->second.isString())
+    return pipelineError(Twine("AMDGPU metadata field ") + Name +
+                         " is not a string");
+  return std::optional<std::string>(Field->second.getString().str());
+}
+
+Expected<std::optional<std::vector<KernelArgumentContract>>>
+metadataArguments(msgpack::MapDocNode &Kernel, uint64_t KernargSegmentSize) {
+  auto Field = Kernel.find(".args");
+  if (Field == Kernel.end())
+    return std::optional<std::vector<KernelArgumentContract>>{};
+  if (!Field->second.isArray())
+    return pipelineError("AMDGPU metadata .args is not an array");
+
+  std::vector<KernelArgumentContract> Result;
+  uint64_t PreviousEnd = 0;
+  for (msgpack::DocNode &Node : Field->second.getArray()) {
+    if (!Node.isMap())
+      return pipelineError("AMDGPU metadata argument is not a map");
+    auto &Argument = Node.getMap();
+    auto Name = metadataOptionalString(Argument, ".name");
+    if (!Name)
+      return Name.takeError();
+    auto TypeName = metadataOptionalString(Argument, ".type_name");
+    if (!TypeName)
+      return TypeName.takeError();
+    auto Offset = metadataUnsigned(Argument, ".offset");
+    if (!Offset)
+      return Offset.takeError();
+    auto Size = metadataUnsigned(Argument, ".size");
+    if (!Size)
+      return Size.takeError();
+    auto Align = metadataOptionalUnsigned(Argument, ".align");
+    if (!Align)
+      return Align.takeError();
+    auto ValueKind = metadataString(Argument, ".value_kind");
+    if (!ValueKind)
+      return ValueKind.takeError();
+    auto ValueType = metadataOptionalString(Argument, ".value_type");
+    if (!ValueType)
+      return ValueType.takeError();
+    auto AddressSpace = metadataOptionalString(Argument, ".address_space");
+    if (!AddressSpace)
+      return AddressSpace.takeError();
+    auto Access = metadataOptionalString(Argument, ".access");
+    if (!Access)
+      return Access.takeError();
+    auto ActualAccess = metadataOptionalString(Argument, ".actual_access");
+    if (!ActualAccess)
+      return ActualAccess.takeError();
+    auto PointeeAlign = metadataOptionalUnsigned(Argument, ".pointee_align");
+    if (!PointeeAlign)
+      return PointeeAlign.takeError();
+    auto IsConst = metadataOptionalBoolean(Argument, ".is_const");
+    if (!IsConst)
+      return IsConst.takeError();
+    auto IsRestrict = metadataOptionalBoolean(Argument, ".is_restrict");
+    if (!IsRestrict)
+      return IsRestrict.takeError();
+    auto IsVolatile = metadataOptionalBoolean(Argument, ".is_volatile");
+    if (!IsVolatile)
+      return IsVolatile.takeError();
+    auto IsPipe = metadataOptionalBoolean(Argument, ".is_pipe");
+    if (!IsPipe)
+      return IsPipe.takeError();
+
+    if (*Size == 0 || *Offset > std::numeric_limits<uint64_t>::max() - *Size ||
+        *Offset + *Size > KernargSegmentSize)
+      return pipelineError("AMDGPU metadata argument range is invalid");
+    if (*Offset < PreviousEnd)
+      return pipelineError(
+          "AMDGPU metadata arguments overlap or are unordered");
+    if (*Align &&
+        (**Align == 0 || !isPowerOf2_64(**Align) || *Offset % **Align != 0))
+      return pipelineError("AMDGPU metadata argument alignment is invalid");
+    if (*PointeeAlign &&
+        (**PointeeAlign == 0 || !isPowerOf2_64(**PointeeAlign)))
+      return pipelineError(
+          "AMDGPU metadata argument pointee alignment is invalid");
+    PreviousEnd = *Offset + *Size;
+    Result.push_back({std::move(*Name), std::move(*TypeName), *Offset, *Size,
+                      *Align, ValueKind->str(), std::move(*ValueType),
+                      std::move(*AddressSpace), std::move(*Access),
+                      std::move(*ActualAccess), *PointeeAlign, *IsConst,
+                      *IsRestrict, *IsVolatile, *IsPipe});
+  }
+  return std::optional<std::vector<KernelArgumentContract>>(std::move(Result));
+}
+
 Expected<std::optional<std::array<uint64_t, 3>>>
 metadataWorkgroupSize(msgpack::MapDocNode &Map) {
   auto Field = Map.find(".reqd_workgroup_size");
@@ -1105,6 +1238,110 @@ metadataWorkgroupSize(msgpack::MapDocNode &Map) {
     ++I;
   }
   return std::optional<std::array<uint64_t, 3>>(Result);
+}
+
+Error appendMetadataBlob(StringRef MetadataBlob, MetadataContract &Result,
+                         std::set<std::string> &Names,
+                         std::set<std::string> &Symbols) {
+  if (MetadataBlob.empty())
+    return pipelineError("linked output has an empty AMDGPU metadata note");
+  msgpack::Document Document;
+  if (!Document.readFromBlob(MetadataBlob, false))
+    return pipelineError("linked output has malformed AMDGPU metadata");
+  AMDGPU::HSAMD::V3::MetadataVerifier Verifier(true);
+  if (!Verifier.verify(Document.getRoot()))
+    return pipelineError("linked output has invalid AMDGPU metadata schema");
+
+  auto &Root = Document.getRoot().getMap();
+  auto Target = metadataString(Root, "amdhsa.target");
+  if (!Target)
+    return Target.takeError();
+  if (Result.Target && *Result.Target != *Target)
+    return pipelineError(
+        "linked output has conflicting AMDGPU metadata targets");
+  Result.Target = Target->str();
+  auto KernelsField = requiredMetadataField(Root, "amdhsa.kernels");
+  if (!KernelsField)
+    return KernelsField.takeError();
+  if (!(**KernelsField).isArray())
+    return pipelineError("AMDGPU metadata kernels field is not an array");
+
+  for (msgpack::DocNode &KernelNode : (**KernelsField).getArray()) {
+    if (!KernelNode.isMap())
+      return pipelineError("AMDGPU metadata kernel is not a map");
+    auto &Kernel = KernelNode.getMap();
+    auto Name = metadataString(Kernel, ".name");
+    if (!Name)
+      return Name.takeError();
+    auto Symbol = metadataString(Kernel, ".symbol");
+    if (!Symbol)
+      return Symbol.takeError();
+    auto KernargSize = metadataUnsigned(Kernel, ".kernarg_segment_size");
+    if (!KernargSize)
+      return KernargSize.takeError();
+    auto GroupSize = metadataUnsigned(Kernel, ".group_segment_fixed_size");
+    if (!GroupSize)
+      return GroupSize.takeError();
+    auto PrivateSize = metadataUnsigned(Kernel, ".private_segment_fixed_size");
+    if (!PrivateSize)
+      return PrivateSize.takeError();
+    auto KernargAlign = metadataUnsigned(Kernel, ".kernarg_segment_align");
+    if (!KernargAlign)
+      return KernargAlign.takeError();
+    auto Wavefront = metadataUnsigned(Kernel, ".wavefront_size");
+    if (!Wavefront)
+      return Wavefront.takeError();
+    auto MaxWorkgroup = metadataUnsigned(Kernel, ".max_flat_workgroup_size");
+    if (!MaxWorkgroup)
+      return MaxWorkgroup.takeError();
+    auto RequiredWorkgroup = metadataWorkgroupSize(Kernel);
+    if (!RequiredWorkgroup)
+      return RequiredWorkgroup.takeError();
+    auto SgprSpillCount = metadataOptionalUnsigned(Kernel, ".sgpr_spill_count");
+    if (!SgprSpillCount)
+      return SgprSpillCount.takeError();
+    auto VgprSpillCount = metadataOptionalUnsigned(Kernel, ".vgpr_spill_count");
+    if (!VgprSpillCount)
+      return VgprSpillCount.takeError();
+    auto UsesDynamicStack =
+        metadataOptionalBoolean(Kernel, ".uses_dynamic_stack");
+    if (!UsesDynamicStack)
+      return UsesDynamicStack.takeError();
+    auto Arguments = metadataArguments(Kernel, *KernargSize);
+    if (!Arguments)
+      return Arguments.takeError();
+
+    if (!Names.insert(Name->str()).second)
+      return pipelineError("AMDGPU metadata repeats a kernel name");
+    if (!Symbols.insert(Symbol->str()).second)
+      return pipelineError("AMDGPU metadata repeats a kernel symbol");
+    if (*Symbol != (Twine(*Name) + ".kd").str())
+      return pipelineError(
+          "AMDGPU metadata kernel descriptor does not match its entry name");
+    if (*KernargAlign == 0 || !isPowerOf2_64(*KernargAlign))
+      return pipelineError("AMDGPU metadata kernarg alignment is invalid");
+    if (*Wavefront != 32 && *Wavefront != 64)
+      return pipelineError("AMDGPU metadata wavefront size is invalid");
+    if (*MaxWorkgroup == 0)
+      return pipelineError("AMDGPU metadata maximum workgroup size is zero");
+    if (*RequiredWorkgroup) {
+      uint64_t Product = 1;
+      for (uint64_t Dimension : **RequiredWorkgroup) {
+        if (Product > std::numeric_limits<uint64_t>::max() / Dimension)
+          return pipelineError("AMDGPU metadata workgroup size overflows");
+        Product *= Dimension;
+      }
+      if (Product > *MaxWorkgroup)
+        return pipelineError(
+            "AMDGPU metadata required workgroup size exceeds its maximum");
+    }
+    Result.Kernels.push_back({Name->str(), Symbol->str(), *KernargSize,
+                              *GroupSize, *PrivateSize, *KernargAlign,
+                              *Wavefront, *MaxWorkgroup, *RequiredWorkgroup,
+                              *SgprSpillCount, *VgprSpillCount,
+                              *UsesDynamicStack, std::move(*Arguments)});
+  }
+  return Error::success();
 }
 
 Expected<MetadataContract>
@@ -1138,105 +1375,9 @@ inspectMetadata(const ELFObjectFile<ELF64LE> &ObjectValue) {
   Result.Present = true;
   std::set<std::string> Names;
   std::set<std::string> Symbols;
-  for (StringRef MetadataBlob : MetadataBlobs) {
-    if (MetadataBlob.empty())
-      return pipelineError("linked output has an empty AMDGPU metadata note");
-    msgpack::Document Document;
-    if (!Document.readFromBlob(MetadataBlob, false))
-      return pipelineError("linked output has malformed AMDGPU metadata");
-    AMDGPU::HSAMD::V3::MetadataVerifier Verifier(true);
-    if (!Verifier.verify(Document.getRoot()))
-      return pipelineError("linked output has invalid AMDGPU metadata schema");
-
-    auto &Root = Document.getRoot().getMap();
-    auto Target = metadataString(Root, "amdhsa.target");
-    if (!Target)
-      return Target.takeError();
-    if (Result.Target && *Result.Target != *Target)
-      return pipelineError(
-          "linked output has conflicting AMDGPU metadata targets");
-    Result.Target = Target->str();
-    auto KernelsField = requiredMetadataField(Root, "amdhsa.kernels");
-    if (!KernelsField)
-      return KernelsField.takeError();
-    if (!(**KernelsField).isArray())
-      return pipelineError("AMDGPU metadata kernels field is not an array");
-
-    for (msgpack::DocNode &KernelNode : (**KernelsField).getArray()) {
-      if (!KernelNode.isMap())
-        return pipelineError("AMDGPU metadata kernel is not a map");
-      auto &Kernel = KernelNode.getMap();
-      auto Name = metadataString(Kernel, ".name");
-      if (!Name)
-        return Name.takeError();
-      auto Symbol = metadataString(Kernel, ".symbol");
-      if (!Symbol)
-        return Symbol.takeError();
-      auto KernargSize = metadataUnsigned(Kernel, ".kernarg_segment_size");
-      if (!KernargSize)
-        return KernargSize.takeError();
-      auto GroupSize = metadataUnsigned(Kernel, ".group_segment_fixed_size");
-      if (!GroupSize)
-        return GroupSize.takeError();
-      auto PrivateSize =
-          metadataUnsigned(Kernel, ".private_segment_fixed_size");
-      if (!PrivateSize)
-        return PrivateSize.takeError();
-      auto KernargAlign = metadataUnsigned(Kernel, ".kernarg_segment_align");
-      if (!KernargAlign)
-        return KernargAlign.takeError();
-      auto Wavefront = metadataUnsigned(Kernel, ".wavefront_size");
-      if (!Wavefront)
-        return Wavefront.takeError();
-      auto MaxWorkgroup = metadataUnsigned(Kernel, ".max_flat_workgroup_size");
-      if (!MaxWorkgroup)
-        return MaxWorkgroup.takeError();
-      auto RequiredWorkgroup = metadataWorkgroupSize(Kernel);
-      if (!RequiredWorkgroup)
-        return RequiredWorkgroup.takeError();
-      auto SgprSpillCount =
-          metadataOptionalUnsigned(Kernel, ".sgpr_spill_count");
-      if (!SgprSpillCount)
-        return SgprSpillCount.takeError();
-      auto VgprSpillCount =
-          metadataOptionalUnsigned(Kernel, ".vgpr_spill_count");
-      if (!VgprSpillCount)
-        return VgprSpillCount.takeError();
-      auto UsesDynamicStack =
-          metadataOptionalBoolean(Kernel, ".uses_dynamic_stack");
-      if (!UsesDynamicStack)
-        return UsesDynamicStack.takeError();
-
-      if (!Names.insert(Name->str()).second)
-        return pipelineError("AMDGPU metadata repeats a kernel name");
-      if (!Symbols.insert(Symbol->str()).second)
-        return pipelineError("AMDGPU metadata repeats a kernel symbol");
-      if (*Symbol != (Twine(*Name) + ".kd").str())
-        return pipelineError(
-            "AMDGPU metadata kernel descriptor does not match its entry name");
-      if (*KernargAlign == 0 || !isPowerOf2_64(*KernargAlign))
-        return pipelineError("AMDGPU metadata kernarg alignment is invalid");
-      if (*Wavefront != 32 && *Wavefront != 64)
-        return pipelineError("AMDGPU metadata wavefront size is invalid");
-      if (*MaxWorkgroup == 0)
-        return pipelineError("AMDGPU metadata maximum workgroup size is zero");
-      if (*RequiredWorkgroup) {
-        uint64_t Product = 1;
-        for (uint64_t Dimension : **RequiredWorkgroup) {
-          if (Product > std::numeric_limits<uint64_t>::max() / Dimension)
-            return pipelineError("AMDGPU metadata workgroup size overflows");
-          Product *= Dimension;
-        }
-        if (Product > *MaxWorkgroup)
-          return pipelineError(
-              "AMDGPU metadata required workgroup size exceeds its maximum");
-      }
-      Result.Kernels.push_back(
-          {Name->str(), Symbol->str(), *KernargSize, *GroupSize, *PrivateSize,
-           *KernargAlign, *Wavefront, *MaxWorkgroup, *RequiredWorkgroup,
-           *SgprSpillCount, *VgprSpillCount, *UsesDynamicStack});
-    }
-  }
+  for (StringRef MetadataBlob : MetadataBlobs)
+    if (Error E = appendMetadataBlob(MetadataBlob, Result, Names, Symbols))
+      return E;
   llvm::sort(Result.Kernels, [](const KernelLaunchContract &Left,
                                 const KernelLaunchContract &Right) {
     return std::tie(Left.Name, Left.Symbol) <
@@ -1305,6 +1446,38 @@ Error validateExactLdsGemmSlice1ElfClosure(
 
 Error validateExactLdsGemmSlice1Metadata(const MetadataContract &Metadata) {
   static constexpr std::array<uint64_t, 3> Workgroup = {64, 1, 1};
+  struct HiddenArgumentShape {
+    uint64_t Offset;
+    uint64_t Size;
+    StringLiteral ValueKind;
+  };
+  static constexpr std::array<HiddenArgumentShape, 13> RequiredHidden = {{
+      {0, 4, "hidden_block_count_x"},
+      {4, 4, "hidden_block_count_y"},
+      {8, 4, "hidden_block_count_z"},
+      {12, 2, "hidden_group_size_x"},
+      {14, 2, "hidden_group_size_y"},
+      {16, 2, "hidden_group_size_z"},
+      {18, 2, "hidden_remainder_x"},
+      {20, 2, "hidden_remainder_y"},
+      {22, 2, "hidden_remainder_z"},
+      {40, 8, "hidden_global_offset_x"},
+      {48, 8, "hidden_global_offset_y"},
+      {56, 8, "hidden_global_offset_z"},
+      {64, 2, "hidden_grid_dims"},
+  }};
+  static constexpr std::array<HiddenArgumentShape, 10> OptionalHidden = {{
+      {72, 8, "hidden_printf_buffer"},
+      {80, 8, "hidden_hostcall_buffer"},
+      {88, 8, "hidden_multigrid_sync_arg"},
+      {96, 8, "hidden_heap_v1"},
+      {104, 8, "hidden_default_queue"},
+      {112, 8, "hidden_completion_action"},
+      {120, 4, "hidden_dynamic_lds_size"},
+      {192, 4, "hidden_private_base"},
+      {196, 4, "hidden_shared_base"},
+      {200, 8, "hidden_queue_ptr"},
+  }};
   if (Metadata.Kernels.size() != 1)
     return postLinkError("lds_gemm_slice1_profile", "kernel_cardinality");
   const KernelLaunchContract &Kernel = Metadata.Kernels.front();
@@ -1330,12 +1503,144 @@ Error validateExactLdsGemmSlice1Metadata(const MetadataContract &Metadata) {
     return Mismatch("group_segment_fixed_size");
   if (Kernel.PrivateSegmentFixedSize != 0)
     return Mismatch("private_segment_fixed_size");
-  if (Kernel.SgprSpillCount.value_or(0) != 0)
+  if (!Kernel.SgprSpillCount)
+    return Mismatch("sgpr_spill_count_missing");
+  if (*Kernel.SgprSpillCount != 0)
     return Mismatch("sgpr_spill_count");
-  if (Kernel.VgprSpillCount.value_or(0) != 0)
+  if (!Kernel.VgprSpillCount)
+    return Mismatch("vgpr_spill_count_missing");
+  if (*Kernel.VgprSpillCount != 0)
     return Mismatch("vgpr_spill_count");
-  if (Kernel.UsesDynamicStack.value_or(false))
+  if (!Kernel.UsesDynamicStack)
+    return Mismatch("uses_dynamic_stack_missing");
+  if (*Kernel.UsesDynamicStack)
     return Mismatch("uses_dynamic_stack");
+
+  if (!Kernel.Arguments)
+    return Mismatch("args_missing");
+  const std::vector<KernelArgumentContract> &Arguments = *Kernel.Arguments;
+  if (Arguments.size() < 6 + RequiredHidden.size())
+    return Mismatch("args_cardinality");
+
+  auto ArgumentFailure = [&](size_t Role, StringRef Part, StringRef Field,
+                             bool Missing = false) {
+    return Mismatch((Twine("arg") + Twine(Role) + "_" + Part + "_" +
+                     (Missing ? "missing_" : "") + Field)
+                        .str());
+  };
+  for (size_t Role = 0; Role != 3; ++Role) {
+    const KernelArgumentContract &Pointer = Arguments[Role * 2];
+    const std::string PointerName =
+        (Twine("arg") + Twine(Role) + ".data").str();
+    const StringRef PointerTypeName = Role < 2 ? "ushort*" : "float*";
+    const StringRef PointerValueType = Role < 2 ? "u16" : "f32";
+    const StringRef PointerAccess = Role < 2 ? "read_only" : "read_write";
+    const uint64_t PointeeAlign = Role < 2 ? 2 : 4;
+    if (!Pointer.Name)
+      return ArgumentFailure(Role, "data", "name", true);
+    if (*Pointer.Name != PointerName)
+      return ArgumentFailure(Role, "data", "name");
+    if (Pointer.Offset != Role * 16)
+      return ArgumentFailure(Role, "data", "offset");
+    if (Pointer.Size != 8)
+      return ArgumentFailure(Role, "data", "size");
+    if (!Pointer.TypeName)
+      return ArgumentFailure(Role, "data", "type_name", true);
+    if (*Pointer.TypeName != PointerTypeName)
+      return ArgumentFailure(Role, "data", "type_name");
+    if (Pointer.Align && *Pointer.Align != 8)
+      return ArgumentFailure(Role, "data", "align");
+    if (Pointer.ValueKind != "global_buffer")
+      return ArgumentFailure(Role, "data", "value_kind");
+    if (Pointer.ValueType && *Pointer.ValueType != PointerValueType)
+      return ArgumentFailure(Role, "data", "value_type");
+    if (!Pointer.AddressSpace)
+      return ArgumentFailure(Role, "data", "address_space", true);
+    if (*Pointer.AddressSpace != "global")
+      return ArgumentFailure(Role, "data", "address_space");
+    if (!Pointer.Access)
+      return ArgumentFailure(Role, "data", "access", true);
+    if (*Pointer.Access != PointerAccess)
+      return ArgumentFailure(Role, "data", "access");
+    if (Role < 2 && !Pointer.ActualAccess)
+      return ArgumentFailure(Role, "data", "actual_access", true);
+    if (Pointer.ActualAccess &&
+        (Role < 2 ? *Pointer.ActualAccess != "read_only"
+                  : *Pointer.ActualAccess != "read_only" &&
+                        *Pointer.ActualAccess != "write_only" &&
+                        *Pointer.ActualAccess != "read_write"))
+      return ArgumentFailure(Role, "data", "actual_access");
+    if (Pointer.PointeeAlign && *Pointer.PointeeAlign != PointeeAlign)
+      return ArgumentFailure(Role, "data", "pointee_align");
+    if (Role < 2 && !Pointer.IsConst)
+      return ArgumentFailure(Role, "data", "is_const", true);
+    if (Pointer.IsConst && *Pointer.IsConst != (Role < 2))
+      return ArgumentFailure(Role, "data", "is_const");
+    if (Role == 2 && !Pointer.IsRestrict)
+      return ArgumentFailure(Role, "data", "is_restrict", true);
+    if (Pointer.IsRestrict && *Pointer.IsRestrict != (Role == 2))
+      return ArgumentFailure(Role, "data", "is_restrict");
+    if (Pointer.IsVolatile && *Pointer.IsVolatile)
+      return ArgumentFailure(Role, "data", "is_volatile");
+    if (Pointer.IsPipe && *Pointer.IsPipe)
+      return ArgumentFailure(Role, "data", "is_pipe");
+
+    const KernelArgumentContract &Length = Arguments[Role * 2 + 1];
+    const std::string LengthName = (Twine("arg") + Twine(Role) + ".len").str();
+    if (!Length.Name)
+      return ArgumentFailure(Role, "len", "name", true);
+    if (*Length.Name != LengthName)
+      return ArgumentFailure(Role, "len", "name");
+    if (Length.Offset != Role * 16 + 8)
+      return ArgumentFailure(Role, "len", "offset");
+    if (Length.Size != 8)
+      return ArgumentFailure(Role, "len", "size");
+    if (!Length.TypeName)
+      return ArgumentFailure(Role, "len", "type_name", true);
+    if (*Length.TypeName != "ulong")
+      return ArgumentFailure(Role, "len", "type_name");
+    if (Length.Align && *Length.Align != 8)
+      return ArgumentFailure(Role, "len", "align");
+    if (Length.ValueKind != "by_value")
+      return ArgumentFailure(Role, "len", "value_kind");
+    if (Length.ValueType && *Length.ValueType != "u64")
+      return ArgumentFailure(Role, "len", "value_type");
+    if (Length.AddressSpace || Length.Access || Length.ActualAccess ||
+        Length.PointeeAlign || (Length.IsConst && *Length.IsConst) ||
+        (Length.IsRestrict && *Length.IsRestrict) ||
+        (Length.IsVolatile && *Length.IsVolatile) ||
+        (Length.IsPipe && *Length.IsPipe))
+      return ArgumentFailure(Role, "len", "pointer_qualifier");
+  }
+
+  const size_t HiddenBaseIndex = 6;
+  const uint64_t HiddenBase = 48;
+  auto ValidateHidden = [&](const KernelArgumentContract &Argument,
+                            const HiddenArgumentShape &Expected) {
+    return !Argument.Name && !Argument.TypeName &&
+           Argument.Offset == HiddenBase + Expected.Offset &&
+           Argument.Size == Expected.Size &&
+           Argument.ValueKind == Expected.ValueKind && !Argument.Align &&
+           !Argument.ValueType && !Argument.AddressSpace && !Argument.Access &&
+           !Argument.ActualAccess && !Argument.PointeeAlign &&
+           !Argument.IsConst && !Argument.IsRestrict && !Argument.IsVolatile &&
+           !Argument.IsPipe;
+  };
+  for (size_t Index = 0; Index != RequiredHidden.size(); ++Index)
+    if (!ValidateHidden(Arguments[HiddenBaseIndex + Index],
+                        RequiredHidden[Index]))
+      return Mismatch((Twine("hidden_arg") + Twine(Index)).str());
+  for (size_t Index = HiddenBaseIndex + RequiredHidden.size();
+       Index != Arguments.size(); ++Index) {
+    const KernelArgumentContract &Argument = Arguments[Index];
+    auto Expected = llvm::find_if(OptionalHidden, [&](const auto &Shape) {
+      return Argument.Offset == HiddenBase + Shape.Offset;
+    });
+    if (Expected == OptionalHidden.end() ||
+        !ValidateHidden(Argument, *Expected))
+      return Mismatch(
+          (Twine("hidden_arg") + Twine(Index - HiddenBaseIndex)).str());
+  }
   return Error::success();
 }
 
@@ -1669,6 +1974,37 @@ nativeLink(ArrayRef<std::vector<uint8_t>> Objects, const Request &RequestValue,
 }
 
 } // namespace
+
+Error validateExactLdsGemmSlice1MetadataForTesting(StringRef MetadataBlob) {
+  MetadataContract Metadata;
+  Metadata.Present = true;
+  std::set<std::string> Names;
+  std::set<std::string> Symbols;
+  if (Error E = appendMetadataBlob(MetadataBlob, Metadata, Names, Symbols))
+    return E;
+  if (!Metadata.Target ||
+      *Metadata.Target != "amdgcn-amd-amdhsa--gfx942:xnack-")
+    return postLinkError("lds_gemm_slice1_profile",
+                         "kernel_contract_metadata_target");
+  llvm::sort(Metadata.Kernels, [](const KernelLaunchContract &Left,
+                                  const KernelLaunchContract &Right) {
+    return std::tie(Left.Name, Left.Symbol) <
+           std::tie(Right.Name, Right.Symbol);
+  });
+  return validateExactLdsGemmSlice1Metadata(Metadata);
+}
+
+Error validateExactLdsGemmSlice1ElfClosureForTesting(ArrayRef<uint8_t> Bytes) {
+  StringRef Data(reinterpret_cast<const char *>(Bytes.data()), Bytes.size());
+  auto ObjectOrError =
+      ObjectFile::createObjectFile(MemoryBufferRef(Data, "<test-output>"));
+  if (!ObjectOrError)
+    return ObjectOrError.takeError();
+  auto *Elf = dyn_cast<ELF64LEObjectFile>(ObjectOrError->get());
+  if (!Elf)
+    return pipelineError("test output is not ELF64LE");
+  return validateExactLdsGemmSlice1ElfClosure(*Elf);
+}
 
 Expected<std::vector<std::string>>
 inspectLinkedOutputForPublication(ArrayRef<uint8_t> Bytes,

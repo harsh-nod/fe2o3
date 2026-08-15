@@ -10,6 +10,12 @@ llvm::Expected<std::vector<std::string>>
 inspectLinkedOutputForPublication(llvm::ArrayRef<uint8_t> Bytes,
                                   const Request &RequestValue);
 
+llvm::Error
+validateExactLdsGemmSlice1MetadataForTesting(llvm::StringRef MetadataBlob);
+
+llvm::Error
+validateExactLdsGemmSlice1ElfClosureForTesting(llvm::ArrayRef<uint8_t> Bytes);
+
 Response execute(const Request &RequestValue);
 
 Response executeWithUnauthenticatedGfx942DeviceLibraryPolicyForTesting(

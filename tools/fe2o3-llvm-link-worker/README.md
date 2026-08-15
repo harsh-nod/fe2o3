@@ -110,6 +110,29 @@ by that module and defined by an external provider. LLVM verification, stable
 post-link diagnostics, and LLD diagnostics are bounded before they enter the
 response.
 
+The closed `tiled_gemm_lds_v1` Slice1 profile additionally requires the sole
+kernel metadata record to contain explicit zero SGPR/VGPR spill counts,
+physically emitted `uses_dynamic_stack: false`, and the complete `.args` ABI.
+Its three pointer/length pairs must declare exact names, source type names,
+offsets, sizes, and value kinds. Pointers also require global address spaces and
+declared access; the producer-guaranteed A/B read-only actual access and const
+qualifiers and C restrict qualifier must be present. C actual access may be
+absent or any valid subset of its read-write contract, while C const and A/B
+restrict may be absent or false. LLVM-schema annotations that upstream LLVM 22
+does not consistently emit (`.align`, deprecated `.value_type`, and global
+`.pointee_align`) are optional, but every present value must agree with the
+canonical ABI. The six-argument explicit span ends at byte 48, the COV6 hidden
+span follows the upstream layout through the exact 304-byte kernarg segment,
+and missing producer-guaranteed fields receive field-specific diagnostics. The
+worker only decodes and validates emitted MsgPack; it never synthesizes, fills,
+or rewrites HSACO metadata.
+
+The exact producer data layout is also allowlisted literally for this closed
+profile. Upstream LLVM 22.1.8 adds the equivalent ELF mangling component
+`m:e`; after accepting only the known producer spelling, the worker installs
+its measured target-machine layout before code generation and validates the
+final ELF symbol closure. Other explicit layout spellings remain rejected.
+
 `fe2o3-worker-pipeline-tests` builds real fixtures through the configured LLVM
 libraries and covers bitcode plus bitcode, bitcode plus AMDGPU relocatable, and
 multiple AMDGPU relocatables. It also checks deterministic output and rejects

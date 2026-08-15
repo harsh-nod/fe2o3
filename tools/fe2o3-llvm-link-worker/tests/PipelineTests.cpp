@@ -4,6 +4,7 @@
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/BinaryFormat/ELF.h"
+#include "llvm/BinaryFormat/MsgPackDocument.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
@@ -52,6 +53,11 @@ using namespace llvm::object;
 namespace {
 
 constexpr StringLiteral AmdGpuTriple = "amdgcn-amd-amdhsa";
+constexpr StringLiteral ExactLdsGemmSlice1ProducerDataLayout =
+    "e-p:64:64-p1:64:64-p2:32:32-p3:32:32-p4:64:64-p5:32:32-p6:32:32-"
+    "p7:160:256:256:32-p8:128:128:128:48-p9:192:256:256:32-i64:64-v16:16-"
+    "v24:32-v32:32-v48:64-v96:128-v192:256-v256:256-v512:512-v1024:1024-"
+    "v2048:2048-n32:64-S32-A5-G1-ni:7:8:9";
 
 enum class LayoutMode { Exact, Absent, Incompatible };
 
@@ -575,14 +581,15 @@ makeKernelBitcode(StringRef Name,
   return std::vector<uint8_t>(Buffer.begin(), Buffer.end());
 }
 
-std::vector<uint8_t> makeExactLdsGemmSlice1TextIr(uint32_t Workgroup = 64,
-                                                  uint32_t MaxWorkgroup = 64,
-                                                  uint32_t StaticLdsTiles = 2) {
+std::vector<uint8_t> makeExactLdsGemmSlice1TextIr(
+    uint32_t Workgroup = 64, uint32_t MaxWorkgroup = 64,
+    uint32_t StaticLdsTiles = 2,
+    StringRef DataLayout = ExactLdsGemmSlice1ProducerDataLayout) {
   LLVMContext Context;
   Module ModuleValue("exact-lds-gemm-slice1", Context);
   std::unique_ptr<TargetMachine> Machine = createMachine("gfx942");
   ModuleValue.setTargetTriple(Triple(AmdGpuTriple));
-  ModuleValue.setDataLayout(Machine->createDataLayout());
+  ModuleValue.setDataLayout(DataLayout);
   ModuleValue.addModuleFlag(Module::Error, "amdhsa_code_object_version", 600);
 
   Type *I16 = Type::getInt16Ty(Context);
@@ -620,13 +627,50 @@ std::vector<uint8_t> makeExactLdsGemmSlice1TextIr(uint32_t Workgroup = 64,
   GlobalVariable *TileB =
       StaticLdsTiles == 2 ? MakeTile("tiled_gemm_lds_v1.b.tile") : TileA;
 
-  auto Argument = Kernel->arg_begin();
-  Value *A = &*Argument++;
-  Value *ALength = &*Argument++;
-  Value *B = &*Argument++;
-  Value *BLength = &*Argument++;
-  Value *C = &*Argument++;
-  Value *CLength = &*Argument;
+  auto ArgumentIt = Kernel->arg_begin();
+  Argument *A = &*ArgumentIt++;
+  Argument *ALength = &*ArgumentIt++;
+  Argument *B = &*ArgumentIt++;
+  Argument *BLength = &*ArgumentIt++;
+  Argument *C = &*ArgumentIt++;
+  Argument *CLength = &*ArgumentIt;
+  A->setName("arg0.data");
+  ALength->setName("arg0.len");
+  B->setName("arg1.data");
+  BLength->setName("arg1.len");
+  C->setName("arg2.data");
+  CLength->setName("arg2.len");
+  for (Argument *Pointer : {A, B, C}) {
+    Pointer->addAttr(Attribute::NoAlias);
+    Pointer->addAttr(
+        Attribute::getWithCaptureInfo(Context, CaptureInfo::none()));
+  }
+  A->addAttr(Attribute::ReadOnly);
+  B->addAttr(Attribute::ReadOnly);
+  A->addAttr(Attribute::getWithAlignment(Context, Align(2)));
+  B->addAttr(Attribute::getWithAlignment(Context, Align(2)));
+  C->addAttr(Attribute::getWithAlignment(Context, Align(4)));
+
+  Metadata *AccessQualifiers[] = {
+      MDString::get(Context, "read_only"),  MDString::get(Context, "none"),
+      MDString::get(Context, "read_only"),  MDString::get(Context, "none"),
+      MDString::get(Context, "read_write"), MDString::get(Context, "none")};
+  Metadata *TypeNames[] = {
+      MDString::get(Context, "ushort*"), MDString::get(Context, "ulong"),
+      MDString::get(Context, "ushort*"), MDString::get(Context, "ulong"),
+      MDString::get(Context, "float*"),  MDString::get(Context, "ulong")};
+  Metadata *TypeQualifiers[] = {
+      MDString::get(Context, "const"),    MDString::get(Context, ""),
+      MDString::get(Context, "const"),    MDString::get(Context, ""),
+      MDString::get(Context, "restrict"), MDString::get(Context, "")};
+  Kernel->setMetadata("kernel_arg_access_qual",
+                      MDNode::get(Context, AccessQualifiers));
+  MDNode *Types = MDNode::get(Context, TypeNames);
+  Kernel->setMetadata("kernel_arg_type", Types);
+  Kernel->setMetadata("kernel_arg_base_type", Types);
+  Kernel->setMetadata("kernel_arg_type_qual",
+                      MDNode::get(Context, TypeQualifiers));
+
   BasicBlock *Entry = BasicBlock::Create(Context, "entry", Kernel);
   IRBuilder<> Builder(Entry);
   Value *Zero32 = ConstantInt::get(I32, 0);
@@ -1153,6 +1197,198 @@ void replaceMetadataByte(std::vector<uint8_t> &Bytes, StringRef Key,
   Value = std::find(Value, End, Expected);
   require(Value != End, "fixture metadata value has an unexpected encoding");
   *Value = Replacement;
+}
+
+struct ArgumentMetadataOverride {
+  std::optional<size_t> Index;
+  StringRef Field;
+  std::optional<StringRef> StringValue;
+  std::optional<uint64_t> UnsignedValue;
+  std::optional<bool> BooleanValue;
+};
+
+ArgumentMetadataOverride stringOverride(size_t Index, StringRef Field,
+                                        StringRef Value) {
+  return {Index, Field, Value, std::nullopt, std::nullopt};
+}
+
+ArgumentMetadataOverride unsignedOverride(size_t Index, StringRef Field,
+                                          uint64_t Value) {
+  return {Index, Field, std::nullopt, Value, std::nullopt};
+}
+
+ArgumentMetadataOverride booleanOverride(size_t Index, StringRef Field,
+                                         bool Value) {
+  return {Index, Field, std::nullopt, std::nullopt, Value};
+}
+
+std::string makeExactLdsGemmSlice1MetadataBlob(
+    StringRef OmittedKernelField = {},
+    std::optional<size_t> OmittedArgument = std::nullopt,
+    StringRef OmittedArgumentField = {},
+    const ArgumentMetadataOverride &Override = {}) {
+  msgpack::Document Document;
+  auto StringNode = [&](StringRef Value) {
+    return Document.getNode(Value, /*Copy=*/true);
+  };
+  auto Root = Document.getRoot().getMap(/*Convert=*/true);
+  auto Version = Document.getArrayNode();
+  Version.push_back(Document.getNode(uint64_t(1)));
+  Version.push_back(Document.getNode(uint64_t(2)));
+  Root["amdhsa.version"] = Version;
+  Root["amdhsa.target"] = StringNode("amdgcn-amd-amdhsa--gfx942:xnack-");
+
+  auto Kernels = Document.getArrayNode();
+  auto Kernel = Document.getMapNode();
+  auto KernelUnsigned = [&](StringRef Name, uint64_t Value) {
+    if (OmittedKernelField != Name)
+      Kernel[Name] = Document.getNode(Value);
+  };
+  auto KernelString = [&](StringRef Name, StringRef Value) {
+    if (OmittedKernelField != Name)
+      Kernel[Name] = StringNode(Value);
+  };
+  KernelString(".name", "tiled_gemm_lds_v1");
+  KernelString(".symbol", "tiled_gemm_lds_v1.kd");
+  KernelUnsigned(".kernarg_segment_size", 304);
+  KernelUnsigned(".kernarg_segment_align", 8);
+  KernelUnsigned(".group_segment_fixed_size", 1024);
+  KernelUnsigned(".private_segment_fixed_size", 0);
+  KernelUnsigned(".wavefront_size", 64);
+  KernelUnsigned(".sgpr_count", 16);
+  KernelUnsigned(".vgpr_count", 16);
+  KernelUnsigned(".max_flat_workgroup_size", 64);
+  KernelUnsigned(".sgpr_spill_count", 0);
+  KernelUnsigned(".vgpr_spill_count", 0);
+  if (OmittedKernelField != ".uses_dynamic_stack")
+    Kernel[".uses_dynamic_stack"] = Document.getNode(false);
+  if (OmittedKernelField != ".reqd_workgroup_size") {
+    auto Workgroup = Document.getArrayNode();
+    Workgroup.push_back(Document.getNode(uint64_t(64)));
+    Workgroup.push_back(Document.getNode(uint64_t(1)));
+    Workgroup.push_back(Document.getNode(uint64_t(1)));
+    Kernel[".reqd_workgroup_size"] = Workgroup;
+  }
+
+  if (OmittedKernelField != ".args") {
+    auto Arguments = Document.getArrayNode();
+    auto AddString = [&](msgpack::MapDocNode &Map, size_t Index, StringRef Name,
+                         StringRef Value) {
+      if (OmittedArgument != Index || OmittedArgumentField != Name)
+        Map[Name] = StringNode(Value);
+    };
+    auto AddUnsigned = [&](msgpack::MapDocNode &Map, size_t Index,
+                           StringRef Name, uint64_t Value) {
+      if (OmittedArgument != Index || OmittedArgumentField != Name)
+        Map[Name] = Document.getNode(Value);
+    };
+    auto AddBoolean = [&](msgpack::MapDocNode &Map, size_t Index,
+                          StringRef Name, bool Value) {
+      if (OmittedArgument != Index || OmittedArgumentField != Name)
+        Map[Name] = Document.getNode(Value);
+    };
+    auto ApplyOverride = [&](msgpack::MapDocNode &Map, size_t Index) {
+      if (Override.Index != Index)
+        return;
+      if (Override.StringValue)
+        Map[Override.Field] = StringNode(*Override.StringValue);
+      else if (Override.UnsignedValue)
+        Map[Override.Field] = Document.getNode(*Override.UnsignedValue);
+      else if (Override.BooleanValue)
+        Map[Override.Field] = Document.getNode(*Override.BooleanValue);
+      else
+        fail("argument metadata override has no value");
+    };
+    for (size_t Role = 0; Role != 3; ++Role) {
+      const size_t PointerIndex = Role * 2;
+      auto Pointer = Document.getMapNode();
+      AddString(Pointer, PointerIndex, ".name",
+                (Twine("arg") + Twine(Role) + ".data").str());
+      AddString(Pointer, PointerIndex, ".type_name",
+                Role < 2 ? "ushort*" : "float*");
+      AddUnsigned(Pointer, PointerIndex, ".offset", Role * 16);
+      AddUnsigned(Pointer, PointerIndex, ".size", 8);
+      AddString(Pointer, PointerIndex, ".value_kind", "global_buffer");
+      AddString(Pointer, PointerIndex, ".address_space", "global");
+      AddString(Pointer, PointerIndex, ".access",
+                Role < 2 ? "read_only" : "read_write");
+      if (Role < 2) {
+        AddString(Pointer, PointerIndex, ".actual_access", "read_only");
+        AddBoolean(Pointer, PointerIndex, ".is_const", true);
+      } else {
+        AddBoolean(Pointer, PointerIndex, ".is_restrict", true);
+      }
+      ApplyOverride(Pointer, PointerIndex);
+      Arguments.push_back(Pointer);
+
+      const size_t LengthIndex = PointerIndex + 1;
+      auto Length = Document.getMapNode();
+      AddString(Length, LengthIndex, ".name",
+                (Twine("arg") + Twine(Role) + ".len").str());
+      AddString(Length, LengthIndex, ".type_name", "ulong");
+      AddUnsigned(Length, LengthIndex, ".offset", Role * 16 + 8);
+      AddUnsigned(Length, LengthIndex, ".size", 8);
+      AddString(Length, LengthIndex, ".value_kind", "by_value");
+      ApplyOverride(Length, LengthIndex);
+      Arguments.push_back(Length);
+    }
+
+    struct HiddenArgument {
+      uint64_t Offset;
+      uint64_t Size;
+      StringLiteral Kind;
+    };
+    static constexpr std::array<HiddenArgument, 13> Hidden = {{
+        {48, 4, "hidden_block_count_x"},
+        {52, 4, "hidden_block_count_y"},
+        {56, 4, "hidden_block_count_z"},
+        {60, 2, "hidden_group_size_x"},
+        {62, 2, "hidden_group_size_y"},
+        {64, 2, "hidden_group_size_z"},
+        {66, 2, "hidden_remainder_x"},
+        {68, 2, "hidden_remainder_y"},
+        {70, 2, "hidden_remainder_z"},
+        {88, 8, "hidden_global_offset_x"},
+        {96, 8, "hidden_global_offset_y"},
+        {104, 8, "hidden_global_offset_z"},
+        {112, 2, "hidden_grid_dims"},
+    }};
+    for (size_t HiddenIndex = 0; HiddenIndex != Hidden.size(); ++HiddenIndex) {
+      const size_t Index = 6 + HiddenIndex;
+      if (OmittedArgument == Index && OmittedArgumentField.empty())
+        continue;
+      auto Argument = Document.getMapNode();
+      AddUnsigned(Argument, Index, ".offset", Hidden[HiddenIndex].Offset);
+      AddUnsigned(Argument, Index, ".size", Hidden[HiddenIndex].Size);
+      AddString(Argument, Index, ".value_kind", Hidden[HiddenIndex].Kind);
+      ApplyOverride(Argument, Index);
+      Arguments.push_back(Argument);
+    }
+    Kernel[".args"] = Arguments;
+  }
+  Kernels.push_back(Kernel);
+  Root["amdhsa.kernels"] = Kernels;
+
+  std::string Blob;
+  Document.writeToBlob(Blob);
+  return Blob;
+}
+
+void requireExactMetadataFailure(StringRef Blob, StringRef Diagnostic) {
+  Error Failure = validateExactLdsGemmSlice1MetadataForTesting(Blob);
+  require(static_cast<bool>(Failure), "hostile exact metadata was accepted");
+  std::string Message = toString(std::move(Failure));
+  require(StringRef(Message).contains(Diagnostic),
+          (Twine("exact metadata diagnostic did not contain ") + Diagnostic +
+           ": " + Message)
+              .str());
+}
+
+void requireExactMetadataSuccess(StringRef Blob, StringRef Label) {
+  if (Error Failure = validateExactLdsGemmSlice1MetadataForTesting(Blob))
+    fail((Twine("compatible exact metadata was rejected (") + Label +
+          "): " + toString(std::move(Failure)))
+             .str());
 }
 
 void writeOutput(StringRef Path, ArrayRef<uint8_t> Bytes) {
@@ -1688,29 +1924,190 @@ int main(int ArgumentCount, char **Arguments) {
   requireDiagnostic(PublicationResponse, "max_workgroup_size=256");
   requireDiagnostic(PublicationResponse, "reqd_workgroup_size=[256,1,1]");
 
-  auto MakeExactLdsGemmSlice1Request = [](uint32_t Workgroup = 64,
-                                          uint32_t MaxWorkgroup = 64,
-                                          uint32_t StaticLdsTiles = 2) {
-    Request Result = makeV2Request(
-        makeInput(InputKind::LlvmTextIr,
-                  makeExactLdsGemmSlice1TextIr(Workgroup, MaxWorkgroup,
-                                               StaticLdsTiles)),
-        {}, {}, {}, {"tiled_gemm_lds_v1", "tiled_gemm_lds_v1.kd"}, 6);
-    Result.Target = "gfx942:xnack-";
-    Result.LinkOptions = {OptimizationLevel::O2, true, true};
-    return Result;
+  auto MakeExactLdsGemmSlice1Request =
+      [](uint32_t Workgroup = 64, uint32_t MaxWorkgroup = 64,
+         uint32_t StaticLdsTiles = 2,
+         StringRef DataLayout = ExactLdsGemmSlice1ProducerDataLayout) {
+        Request Result = makeV2Request(
+            makeInput(InputKind::LlvmTextIr,
+                      makeExactLdsGemmSlice1TextIr(Workgroup, MaxWorkgroup,
+                                                   StaticLdsTiles, DataLayout)),
+            {}, {}, {}, {"tiled_gemm_lds_v1", "tiled_gemm_lds_v1.kd"}, 6);
+        Result.Target = "gfx942:xnack-";
+        Result.LinkOptions = {OptimizationLevel::O2, true, true};
+        return Result;
+      };
+
+  std::string ExactMetadata = makeExactLdsGemmSlice1MetadataBlob();
+  requireExactMetadataSuccess(ExactMetadata, "upstream LLVM 22 shape");
+  auto WithOverride = [](ArgumentMetadataOverride Override) {
+    return makeExactLdsGemmSlice1MetadataBlob({}, std::nullopt, {}, Override);
   };
+  for (const auto &[Field, Diagnostic] :
+       std::array<std::pair<StringRef, StringRef>, 4>{
+           {{".sgpr_spill_count", "kernel_contract_sgpr_spill_count_missing"},
+            {".vgpr_spill_count", "kernel_contract_vgpr_spill_count_missing"},
+            {".uses_dynamic_stack",
+             "kernel_contract_uses_dynamic_stack_missing"},
+            {".args", "kernel_contract_args_missing"}}})
+    requireExactMetadataFailure(makeExactLdsGemmSlice1MetadataBlob(Field),
+                                Diagnostic);
+  for (size_t Role = 0; Role != 3; ++Role) {
+    const size_t Pointer = Role * 2;
+    const size_t Length = Pointer + 1;
+    for (StringRef Field :
+         {StringRef(".name"), StringRef(".type_name"),
+          StringRef(".address_space"), StringRef(".access")}) {
+      std::string Diagnostic = (Twine("kernel_contract_arg") + Twine(Role) +
+                                "_data_missing_" + Field.drop_front())
+                                   .str();
+      requireExactMetadataFailure(
+          makeExactLdsGemmSlice1MetadataBlob({}, Pointer, Field), Diagnostic);
+    }
+    for (StringRef Field :
+         {StringRef(".offset"), StringRef(".size"), StringRef(".value_kind")})
+      requireExactMetadataFailure(
+          makeExactLdsGemmSlice1MetadataBlob({}, Pointer, Field),
+          "invalid AMDGPU metadata schema");
+    if (Role < 2) {
+      for (StringRef Field :
+           {StringRef(".actual_access"), StringRef(".is_const")}) {
+        std::string Diagnostic = (Twine("kernel_contract_arg") + Twine(Role) +
+                                  "_data_missing_" + Field.drop_front())
+                                     .str();
+        requireExactMetadataFailure(
+            makeExactLdsGemmSlice1MetadataBlob({}, Pointer, Field), Diagnostic);
+      }
+    } else {
+      requireExactMetadataFailure(
+          makeExactLdsGemmSlice1MetadataBlob({}, Pointer, ".is_restrict"),
+          "kernel_contract_arg2_data_missing_is_restrict");
+    }
+
+    for (StringRef Field : {StringRef(".name"), StringRef(".type_name")}) {
+      std::string Diagnostic = (Twine("kernel_contract_arg") + Twine(Role) +
+                                "_len_missing_" + Field.drop_front())
+                                   .str();
+      requireExactMetadataFailure(
+          makeExactLdsGemmSlice1MetadataBlob({}, Length, Field), Diagnostic);
+    }
+    for (StringRef Field :
+         {StringRef(".offset"), StringRef(".size"), StringRef(".value_kind")})
+      requireExactMetadataFailure(
+          makeExactLdsGemmSlice1MetadataBlob({}, Length, Field),
+          "invalid AMDGPU metadata schema");
+
+    requireExactMetadataSuccess(
+        WithOverride(unsignedOverride(Pointer, ".align", 8)),
+        "canonical optional pointer alignment");
+    requireExactMetadataSuccess(
+        WithOverride(
+            stringOverride(Pointer, ".value_type", Role < 2 ? "u16" : "f32")),
+        "canonical optional pointer value type");
+    requireExactMetadataSuccess(
+        WithOverride(
+            unsignedOverride(Pointer, ".pointee_align", Role < 2 ? 2 : 4)),
+        "canonical optional pointee alignment");
+    requireExactMetadataSuccess(
+        WithOverride(unsignedOverride(Length, ".align", 8)),
+        "canonical optional length alignment");
+    requireExactMetadataSuccess(
+        WithOverride(stringOverride(Length, ".value_type", "u64")),
+        "canonical optional length value type");
+    requireExactMetadataSuccess(
+        WithOverride(booleanOverride(Length, ".is_const", false)),
+        "canonical absent-or-false length const qualifier");
+    requireExactMetadataSuccess(
+        WithOverride(booleanOverride(Length, ".is_restrict", false)),
+        "canonical absent-or-false length restrict qualifier");
+
+    requireExactMetadataFailure(
+        WithOverride(stringOverride(Pointer, ".type_name", "uint*")),
+        (Twine("kernel_contract_arg") + Twine(Role) + "_data_type_name").str());
+    requireExactMetadataFailure(
+        WithOverride(unsignedOverride(Pointer, ".align", 16)),
+        (Twine("kernel_contract_arg") + Twine(Role) + "_data_align").str());
+    requireExactMetadataFailure(
+        WithOverride(
+            stringOverride(Pointer, ".value_type", Role < 2 ? "f32" : "u16")),
+        (Twine("kernel_contract_arg") + Twine(Role) + "_data_value_type")
+            .str());
+    requireExactMetadataFailure(
+        WithOverride(stringOverride(Pointer, ".address_space", "local")),
+        (Twine("kernel_contract_arg") + Twine(Role) + "_data_address_space")
+            .str());
+    requireExactMetadataFailure(
+        WithOverride(stringOverride(Pointer, ".access", "write_only")),
+        (Twine("kernel_contract_arg") + Twine(Role) + "_data_access").str());
+    requireExactMetadataFailure(
+        WithOverride(
+            unsignedOverride(Pointer, ".pointee_align", Role < 2 ? 4 : 2)),
+        (Twine("kernel_contract_arg") + Twine(Role) + "_data_pointee_align")
+            .str());
+    requireExactMetadataFailure(
+        WithOverride(stringOverride(Length, ".type_name", "uint")),
+        (Twine("kernel_contract_arg") + Twine(Role) + "_len_type_name").str());
+    requireExactMetadataFailure(
+        WithOverride(unsignedOverride(Length, ".align", 4)),
+        (Twine("kernel_contract_arg") + Twine(Role) + "_len_align").str());
+    requireExactMetadataFailure(
+        WithOverride(stringOverride(Length, ".value_type", "i64")),
+        (Twine("kernel_contract_arg") + Twine(Role) + "_len_value_type").str());
+    requireExactMetadataFailure(
+        WithOverride(booleanOverride(Length, ".is_const", true)),
+        (Twine("kernel_contract_arg") + Twine(Role) + "_len_pointer_qualifier")
+            .str());
+
+    if (Role < 2) {
+      requireExactMetadataSuccess(
+          WithOverride(booleanOverride(Pointer, ".is_restrict", false)),
+          "canonical absent-or-false input restrict qualifier");
+      requireExactMetadataFailure(
+          WithOverride(stringOverride(Pointer, ".actual_access", "read_write")),
+          (Twine("kernel_contract_arg") + Twine(Role) + "_data_actual_access")
+              .str());
+      requireExactMetadataFailure(
+          WithOverride(booleanOverride(Pointer, ".is_const", false)),
+          (Twine("kernel_contract_arg") + Twine(Role) + "_data_is_const")
+              .str());
+      requireExactMetadataFailure(
+          WithOverride(booleanOverride(Pointer, ".is_restrict", true)),
+          (Twine("kernel_contract_arg") + Twine(Role) + "_data_is_restrict")
+              .str());
+    } else {
+      for (StringRef ActualAccess :
+           {StringRef("read_only"), StringRef("write_only"),
+            StringRef("read_write")})
+        requireExactMetadataSuccess(
+            WithOverride(
+                stringOverride(Pointer, ".actual_access", ActualAccess)),
+            "C actual access subset");
+      requireExactMetadataSuccess(
+          WithOverride(booleanOverride(Pointer, ".is_const", false)),
+          "canonical absent-or-false output const qualifier");
+      requireExactMetadataFailure(
+          WithOverride(booleanOverride(Pointer, ".is_const", true)),
+          "kernel_contract_arg2_data_is_const");
+      requireExactMetadataFailure(
+          WithOverride(booleanOverride(Pointer, ".is_restrict", false)),
+          "kernel_contract_arg2_data_is_restrict");
+    }
+  }
+  requireExactMetadataFailure(makeExactLdsGemmSlice1MetadataBlob({}, 6),
+                              "kernel_contract_args_cardinality");
+
   Request ExactLdsGemmSlice1 = MakeExactLdsGemmSlice1Request();
   Response ExactLdsGemmSlice1Response = runSuccess(
       ExactLdsGemmSlice1, {"tiled_gemm_lds_v1", "tiled_gemm_lds_v1.kd"});
   requireDiagnostic(ExactLdsGemmSlice1Response,
-                    "post_link.check=lds_gemm_slice1_profile status=ok ");
-  requireDiagnostic(ExactLdsGemmSlice1Response,
-                    "post_link.kernel name=tiled_gemm_lds_v1 "
-                    "symbol=tiled_gemm_lds_v1.kd kernarg_size=304 "
-                    "group_size=1024 private_size=0 kernarg_align=8 "
-                    "wavefront_size=64 max_workgroup_size=64 "
-                    "reqd_workgroup_size=[64,1,1]");
+                    "post_link.check=lds_gemm_slice1_profile status=ok "
+                    "workgroup=[64,1,1] kernarg_size=304");
+
+  Response WrongExactLayout =
+      requireFailure(MakeExactLdsGemmSlice1Request(64, 64, 2, "e-p:32:32"),
+                     Stage::InputValidation);
+  requireDiagnostic(WrongExactLayout,
+                    "LLVM module data layout does not match target machine");
 
   Response WrongExactWorkgroup = requireFailure(
       MakeExactLdsGemmSlice1Request(128, 128), Stage::OutputInspection);
@@ -1733,27 +2130,33 @@ int main(int ArgumentCount, char **Arguments) {
                     "closed%20Worker%20V2%20profile");
 
   std::vector<uint8_t> ExactLdsGemmRelocation =
-      ExactLdsGemmSlice1Response.LinkedOutput->Bytes;
+      PublicationResponse.LinkedOutput->Bytes;
   makeStaticSymbolTableRelocationSection(ExactLdsGemmRelocation);
-  requireInspectionFailure(
-      ExactLdsGemmRelocation, ExactLdsGemmSlice1,
-      "post_link.check=lds_gemm_slice1_profile status=failed "
-      "reason=residual_relocation_section");
+  Error RelocationFailure =
+      validateExactLdsGemmSlice1ElfClosureForTesting(ExactLdsGemmRelocation);
+  require(static_cast<bool>(RelocationFailure),
+          "exact profile accepted a residual relocation section");
+  require(StringRef(toString(std::move(RelocationFailure)))
+              .contains("reason=residual_relocation_section"),
+          "exact profile relocation diagnostic is missing");
 
   std::vector<uint8_t> ExactLdsGemmDependency =
-      ExactLdsGemmSlice1Response.LinkedOutput->Bytes;
+      PublicationResponse.LinkedOutput->Bytes;
   makeDynamicDependency(ExactLdsGemmDependency);
-  requireInspectionFailure(
-      ExactLdsGemmDependency, ExactLdsGemmSlice1,
-      "post_link.check=lds_gemm_slice1_profile status=failed "
-      "reason=dynamic_dependency");
+  Error DependencyFailure =
+      validateExactLdsGemmSlice1ElfClosureForTesting(ExactLdsGemmDependency);
+  require(static_cast<bool>(DependencyFailure),
+          "exact profile accepted a dynamic dependency");
+  require(StringRef(toString(std::move(DependencyFailure)))
+              .contains("reason=dynamic_dependency"),
+          "exact profile dependency diagnostic is missing");
 
   std::vector<uint8_t> ExactLdsGemmUndefined =
-      ExactLdsGemmSlice1Response.LinkedOutput->Bytes;
-  makeDynamicSymbolUndefined(ExactLdsGemmUndefined, "tiled_gemm_lds_v1");
-  requireInspectionFailure(ExactLdsGemmUndefined, ExactLdsGemmSlice1,
+      PublicationResponse.LinkedOutput->Bytes;
+  makeDynamicSymbolUndefined(ExactLdsGemmUndefined, "publication_kernel");
+  requireInspectionFailure(ExactLdsGemmUndefined, PublicationKernel,
                            "post_link.check=unresolved status=failed "
-                           "symbols=[tiled_gemm_lds_v1]");
+                           "symbols=[publication_kernel]");
 
   Input Cov6Compiler =
       makeInput(InputKind::LlvmBitcode, makeCov6TwoKernelBitcode());
