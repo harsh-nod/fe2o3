@@ -8,12 +8,9 @@ use fe2o3_artifact_transaction::{
     BuildInvocation, BuildSession, ProducerIdentity, begin_build_attempt,
     consume_compiler_module_handoff_v1, publish_compiler_module_handoff_v1,
 };
-use fe2o3_artifacts::DigestAlgorithm;
 use fe2o3_core::{DeviceBuffer, GpuContext};
 use fe2o3_host::{
-    GeneratedLdsGemmSlice1HostAdapterErrorV1, GeneratedLdsGemmSlice1HostAdapterV1,
-    HsaLaunchGeometryV1, ObservedContext, ReviewedHsaExecutableLifecycleAdapterV1,
-    ReviewedHsaImplicitKernargAdapterV1, join_exact_lds_gemm_slice1_v1,
+    GeneratedLdsGemmSlice1HostAdapterV1, ObservedContext, join_exact_lds_gemm_slice1_v1,
 };
 use fe2o3_hsa_runtime::ReviewedHsaRuntimeAdapterV1;
 use fe2o3_hsaco_finalize::{
@@ -32,10 +29,6 @@ const C_PREFIX: f32 = f32::from_bits(0x7fc0_c001);
 const C_SUFFIX: f32 = f32::from_bits(0x7fc0_c002);
 const C_POISON: f32 = f32::from_bits(0x7fc0_c0ff);
 const SUCCESS_MARKER: &str = "FE2O3_PROTECTED_SLICE1_WORKER_V2_OK";
-const BLOCKER_MARKER: &str = "FE2O3_PROTECTED_SLICE1_WORKER_V2_BLOCKED";
-const EXPLICIT_KERNARG_BYTES: usize = 48;
-const COMPLETE_KERNARG_BYTES: usize = 304;
-const IMPLICIT_KERNARG_BYTES: usize = COMPLETE_KERNARG_BYTES - EXPLICIT_KERNARG_BYTES;
 
 type BoxError = Box<dyn std::error::Error>;
 
@@ -248,107 +241,6 @@ fn verify_f32_allocation(actual: &[f32], expected: &[f32]) -> Result<f32, BoxErr
     Ok(max_abs_error)
 }
 
-#[repr(C, align(16))]
-struct ObservationalKernarg([u8; COMPLETE_KERNARG_BYTES]);
-
-fn write_u64(bytes: &mut [u8], offset: usize, value: u64) {
-    bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
-}
-
-fn device_address<T>(buffer: &DeviceBuffer<T>, element_offset: usize) -> Result<u64, BoxError>
-where
-    T: fe2o3_core::DeviceCopy,
-{
-    let base = buffer.as_device_ptr().as_raw() as usize;
-    let byte_offset = element_offset
-        .checked_mul(std::mem::size_of::<T>())
-        .ok_or("device-buffer offset overflow")?;
-    Ok(u64::try_from(
-        base.checked_add(byte_offset)
-            .ok_or("device-buffer address overflow")?,
-    )?)
-}
-
-fn execute_observational_fallback(
-    artifact: &fe2o3_hsaco_finalize::FinalizedExactLdsGemmHsacoV1,
-    context: &std::sync::Arc<GpuContext>,
-    a: &DeviceBuffer<u16>,
-    b: &DeviceBuffer<u16>,
-    c: &DeviceBuffer<f32>,
-) -> Result<(), BoxError> {
-    let bytes = artifact.exact_finalized_bytes();
-    let digest = DigestAlgorithm::Sha256.calculate(bytes);
-    let mut adapter = ReviewedHsaRuntimeAdapterV1::new(context.clone())?;
-    // SAFETY: the #97 finalizer retains the exact bytes and validates their
-    // single-symbol closure. This fallback is intentionally observational and
-    // does not claim the #99/#100 protected join that the target gate blocked.
-    let (executable, load) = unsafe { adapter.load_executable(bytes, digest) }?;
-    require(
-        load.finalized_digest() == digest && load.byte_len() == bytes.len() as u64,
-        "observational fallback loaded substituted bytes",
-    )?;
-    // SAFETY: the #97 receipt admits exactly this export and executable.
-    let (kernel, resolution) = unsafe { adapter.resolve_kernel(&executable, "tiled_gemm_lds_v1") }?;
-    require(
-        resolution.executable_object() == load.executable_object()
-            && resolution.export_symbol() == "tiled_gemm_lds_v1"
-            && resolution.kernarg_segment_size() == COMPLETE_KERNARG_BYTES as u64
-            && resolution.kernarg_segment_alignment() == 16,
-        "observational fallback resolved a substituted kernel ABI",
-    )?;
-
-    let mut kernarg = ObservationalKernarg([0; COMPLETE_KERNARG_BYTES]);
-    for (index, address) in [
-        device_address(a, GUARD_ELEMENTS)?,
-        device_address(b, GUARD_ELEMENTS)?,
-        device_address(c, GUARD_ELEMENTS)?,
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        write_u64(&mut kernarg.0, index * 16, address);
-        write_u64(&mut kernarg.0, index * 16 + 8, ELEMENTS as u64);
-    }
-    let geometry = HsaLaunchGeometryV1::new([1, 1, 1], [64, 1, 1], 0);
-    // SAFETY: storage is 304 bytes at 16-byte alignment; the explicit prefix
-    // holds three live guarded HIP allocations and the reviewed adapter owns
-    // all COV6 hidden-byte initialization and synchronous completion.
-    let implicit = unsafe {
-        adapter.initialize_implicit_kernarg(
-            &executable,
-            &kernel,
-            geometry,
-            EXPLICIT_KERNARG_BYTES,
-            EXPLICIT_KERNARG_BYTES,
-            IMPLICIT_KERNARG_BYTES,
-            &mut kernarg.0,
-        )
-    }?;
-    require(
-        implicit.initialized(),
-        "observational fallback did not initialize the complete implicit kernarg",
-    )?;
-    // SAFETY: the reviewed adapter returns only after this exact dispatch is
-    // quiescent, so the three allocations may be read after this call.
-    let dispatch =
-        unsafe { adapter.launch_and_wait(&executable, &kernel, geometry, &mut kernarg.0) }?;
-    require(
-        dispatch.executable_object() == load.executable_object()
-            && dispatch.kernel_object() == resolution.kernel_object()
-            && dispatch.geometry() == geometry
-            && dispatch.completed(),
-        "observational fallback dispatch observation drifted",
-    )?;
-    drop(kernel);
-    // SAFETY: the only dispatch completed synchronously and its kernel token
-    // was dropped before the exact executable is consumed.
-    let unload = unsafe { adapter.unload_executable(executable) }?;
-    require(
-        unload.released() && unload.executable_object() == load.executable_object(),
-        "observational fallback did not unload the exact executable",
-    )
-}
-
 fn run() -> Result<(), BoxError> {
     let worker = measured_worker()?;
     let transaction = TestDirectory::new()?;
@@ -367,13 +259,13 @@ fn run() -> Result<(), BoxError> {
     let mut c = DeviceBuffer::from_host(&stream, &c_initial)?;
 
     let body = GUARD_ELEMENTS..GUARD_ELEMENTS + ELEMENTS;
-    let prepared = GeneratedLdsGemmSlice1HostAdapterV1::prepare(
+    let host = GeneratedLdsGemmSlice1HostAdapterV1::prepare(
         &observed,
         &compiler_import,
         a.view(body.clone())?,
         b.view(body.clone())?,
         c.view_mut(body.clone())?,
-    );
+    )?;
     let artifact = finalize_exact_lds_gemm_compiler_import_v1(
         compiler_import,
         consumed_handoff(&transaction, &handoff)?,
@@ -384,48 +276,29 @@ fn run() -> Result<(), BoxError> {
     let import_identity = artifact.import_identity();
     let profile_identity = artifact.profile_identity();
 
-    let protected_unload = match prepared {
-        Ok(host) => {
-            let joined = join_exact_lds_gemm_slice1_v1(artifact, host)?;
-            require(
-                joined.finalizer_identity() == finalizer_identity
-                    && joined.import_identity() == import_identity
-                    && joined.profile_identity() == profile_identity,
-                "protected join receipt identities changed",
-            )?;
-            let adapter = ReviewedHsaRuntimeAdapterV1::new(context.clone())?;
-            let completed = joined.load(adapter)?.dispatch_and_wait()?;
-            require(
-                completed.finalizer_identity() == finalizer_identity
-                    && completed.import_identity() == import_identity
-                    && completed.profile_identity() == profile_identity,
-                "protected completion receipt identities changed",
-            )?;
-            let unloaded = completed.unload();
-            require(
-                unloaded.finalizer_identity() == finalizer_identity
-                    && unloaded.import_identity() == import_identity
-                    && unloaded.profile_identity() == profile_identity
-                    && unloaded.unload_identity().as_bytes() != &[0; 32],
-                "protected unload receipt identities changed",
-            )?;
-            Some(*unloaded.unload_identity().as_bytes())
-        }
-        Err(error) => {
-            require(
-                matches!(
-                    &error,
-                    GeneratedLdsGemmSlice1HostAdapterErrorV1::ObservedTargetMismatch
-                ) && observed.device().target() == "gfx942:sramecc+:xnack-",
-                format!(
-                    "expected the exact MI300X sramecc target blocker, observed target={} result={error:?}",
-                    observed.device().target()
-                ),
-            )?;
-            execute_observational_fallback(&artifact, &context, &a, &b, &c)?;
-            None
-        }
-    };
+    let joined = join_exact_lds_gemm_slice1_v1(artifact, host)?;
+    require(
+        joined.finalizer_identity() == finalizer_identity
+            && joined.import_identity() == import_identity
+            && joined.profile_identity() == profile_identity,
+        "protected join receipt identities changed",
+    )?;
+    let adapter = ReviewedHsaRuntimeAdapterV1::new(context.clone())?;
+    let completed = joined.load(adapter)?.dispatch_and_wait()?;
+    require(
+        completed.finalizer_identity() == finalizer_identity
+            && completed.import_identity() == import_identity
+            && completed.profile_identity() == profile_identity,
+        "protected completion receipt identities changed",
+    )?;
+    let unloaded = completed.unload();
+    require(
+        unloaded.finalizer_identity() == finalizer_identity
+            && unloaded.import_identity() == import_identity
+            && unloaded.profile_identity() == profile_identity
+            && unloaded.unload_identity().as_bytes() != &[0; 32],
+        "protected unload receipt identities changed",
+    )?;
 
     let a_after = a.to_host_vec(&stream)?;
     let b_after = b.to_host_vec(&stream)?;
@@ -433,21 +306,11 @@ fn run() -> Result<(), BoxError> {
     verify_u16_allocation("A", &a_after, &a_body, A_PREFIX, A_SUFFIX)?;
     verify_u16_allocation("B", &b_after, &b_body, B_PREFIX, B_SUFFIX)?;
     let max_abs_error = verify_f32_allocation(&c_after, &expected)?;
-    if let Some(unload_identity) = protected_unload {
-        println!(
-            "{SUCCESS_MARKER} outputs={ELEMENTS} max_abs_error={max_abs_error} finalizer={} unload={}",
-            hex(finalizer_identity.as_bytes()),
-            hex(&unload_identity)
-        );
-    } else {
-        println!(
-            "{BLOCKER_MARKER} observed_target={} required_target=gfx942:xnack- outputs={ELEMENTS} \
-             max_abs_error={max_abs_error} worker_v2_artifact_and_observational_dispatch=passed \
-             protected_join_and_lifecycle=not_executed finalizer={}",
-            observed.device().target(),
-            hex(finalizer_identity.as_bytes())
-        );
-    }
+    println!(
+        "{SUCCESS_MARKER} outputs={ELEMENTS} max_abs_error={max_abs_error} finalizer={} unload={}",
+        hex(finalizer_identity.as_bytes()),
+        hex(unloaded.unload_identity().as_bytes())
+    );
     Ok(())
 }
 

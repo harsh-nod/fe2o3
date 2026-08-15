@@ -20,8 +20,6 @@ use std::{
 const OPT_IN: &str = "FE2O3_RUN_GFX942_TILED_GEMM_LDS_SLICE1_WORKER_V2_HARDWARE";
 #[cfg(feature = "hardware-test-hooks")]
 const SUCCESS_MARKER: &str = "FE2O3_PROTECTED_SLICE1_WORKER_V2_OK";
-#[cfg(feature = "hardware-test-hooks")]
-const BLOCKER_MARKER: &str = "FE2O3_PROTECTED_SLICE1_WORKER_V2_BLOCKED";
 
 #[cfg(feature = "hardware-test-hooks")]
 struct TestDirectory(PathBuf);
@@ -106,15 +104,13 @@ fn require_environment() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Attempts the complete protected Slice1 route on gfx942:xnack-.
+/// Executes the complete protected Slice1 route on gfx942:xnack-.
 ///
 /// The outer package lacks direct test dependencies on the sealed compiler and
 /// finalizer APIs. Its isolated runner has those dependencies without changing
 /// this crate's production or test manifest. The runner uses #97's measured
 /// direct upstream-LLVM API worker; it does not invoke COMGR, `llc`, or
-/// `ld.lld` as a shell linker. If #99 rejects MI300X's observed orthogonal
-/// `sramecc+` feature, the runner reports that exact blocker and executes the
-/// Worker V2 artifact only through a clearly labeled observational fallback.
+/// `ld.lld` as a shell linker.
 ///
 /// ```text
 /// FE2O3_RUN_GFX942_TILED_GEMM_LDS_SLICE1_WORKER_V2_HARDWARE=1 \
@@ -175,12 +171,9 @@ fn gfx942_tiled_gemm_lds_slice1_worker_v2_protected_hardware()
         )
         .into());
     }
-    if !stdout
-        .lines()
-        .any(|line| line.starts_with(SUCCESS_MARKER) || line.starts_with(BLOCKER_MARKER))
-    {
+    if !stdout.lines().any(|line| line.starts_with(SUCCESS_MARKER)) {
         return Err(format!(
-            "protected Slice1 runner omitted outcome marker\nstdout:\n{}\nstderr:\n{}",
+            "protected Slice1 runner omitted success marker\nstdout:\n{}\nstderr:\n{}",
             stdout, stderr
         )
         .into());
