@@ -20,6 +20,7 @@ use fe2o3_kernel_descriptor::{
 mod compiler_ffi_bridge;
 mod compiler_ffi_observation;
 mod first_build_worker_v2;
+mod lds_gemm_profile_registry;
 mod link_plan;
 mod request_construction;
 mod row_softmax_authority;
@@ -72,6 +73,14 @@ pub use fe2o3_compiler_ffi::{
 pub use first_build_worker_v2::{
     FirstBuildWorkerV2Error, FirstBuildWorkerV2IdentityV1, InertFirstBuildWorkerV2EvidenceV1,
     execute_reproducible_first_build_worker_v2,
+};
+pub use lds_gemm_profile_registry::{
+    ExactLdsGemmBufferContractV1, ExactLdsGemmBufferRoleV1, ExactLdsGemmCompilerImportPinsV1,
+    ExactLdsGemmContentIdentityV1, ExactLdsGemmContractV1, ExactLdsGemmElementV1,
+    ExactLdsGemmLengthIdentityV1, ExactLdsGemmProfileAdmissionErrorV1,
+    ExactLdsGemmProfileAvailabilityV1, ExactLdsGemmProfileIdV1, ExactLdsGemmProfileIdentityV1,
+    InspectedExactLdsGemmCompilerImportIdentityV1, InspectedExactLdsGemmCompilerImportV1,
+    exact_lds_gemm_profile_availability_v1, inspect_exact_lds_gemm_compiler_import_v1,
 };
 pub use link_plan::{
     ContentIdentityV1, LinkInputV1, LinkOptionV1, LinkOutputV1, LinkPlanError, LinkPlanIdentityV1,
