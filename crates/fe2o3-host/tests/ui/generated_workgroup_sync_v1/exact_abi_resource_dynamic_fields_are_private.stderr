@@ -1,0 +1,43 @@
+error[E0616]: field `explicit_kernarg` of struct `GeneratedWorkgroupLdsReductionV1HostAdapterV1` is private
+ --> tests/ui/generated_workgroup_sync_v1/exact_abi_resource_dynamic_fields_are_private.rs:7:11
+  |
+7 |     value.explicit_kernarg = [0; 40];
+  |           ^^^^^^^^^^^^^^^^ private field
+
+error[E0615]: attempted to take value of method `dynamic_lds_bytes` on type `&mut GeneratedWorkgroupLdsReductionV1HostAdapterV1<'_, '_>`
+ --> tests/ui/generated_workgroup_sync_v1/exact_abi_resource_dynamic_fields_are_private.rs:8:11
+  |
+8 |     value.dynamic_lds_bytes = 0;
+  |           ^^^^^^^^^^^^^^^^^ method, not a field
+  |
+  = help: methods are immutable and cannot be assigned to
+
+error[E0616]: field `static_group_segment_bytes` of struct `WorkgroupSyncKernelResourceObservationV1` is private
+  --> tests/ui/generated_workgroup_sync_v1/exact_abi_resource_dynamic_fields_are_private.rs:12:11
+   |
+12 |     value.static_group_segment_bytes = 1;
+   |           ^^^^^^^^^^^^^^^^^^^^^^^^^^ private field
+
+error[E0616]: field `private_segment_bytes` of struct `WorkgroupSyncKernelResourceObservationV1` is private
+  --> tests/ui/generated_workgroup_sync_v1/exact_abi_resource_dynamic_fields_are_private.rs:13:11
+   |
+13 |     value.private_segment_bytes = 1;
+   |           ^^^^^^^^^^^^^^^^^^^^^ private field
+
+error[E0616]: field `hidden_dynamic_lds_offset` of struct `WorkgroupSyncImplicitKernargObservationV1` is private
+  --> tests/ui/generated_workgroup_sync_v1/exact_abi_resource_dynamic_fields_are_private.rs:17:11
+   |
+17 |     value.hidden_dynamic_lds_offset = None;
+   |           ^^^^^^^^^^^^^^^^^^^^^^^^^ private field
+
+error[E0616]: field `hidden_dynamic_lds_value` of struct `WorkgroupSyncImplicitKernargObservationV1` is private
+  --> tests/ui/generated_workgroup_sync_v1/exact_abi_resource_dynamic_fields_are_private.rs:18:11
+   |
+18 |     value.hidden_dynamic_lds_value = 0;
+   |           ^^^^^^^^^^^^^^^^^^^^^^^^ private field
+
+error[E0616]: field `aql_group_segment_bytes` of struct `WorkgroupSyncImplicitKernargObservationV1` is private
+  --> tests/ui/generated_workgroup_sync_v1/exact_abi_resource_dynamic_fields_are_private.rs:19:11
+   |
+19 |     value.aql_group_segment_bytes = 0;
+   |           ^^^^^^^^^^^^^^^^^^^^^^^ private field

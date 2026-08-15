@@ -1,0 +1,35 @@
+error[E0599]: no method named `with_context` found for struct `GeneratedWorkgroupScopedAtomicV1HostAdapterV1<'values, 'eligible, 'target>` in the current scope
+ --> tests/ui/generated_workgroup_sync_v1/environment_rebinding_is_unavailable.rs:8:19
+  |
+8 |     let _ = value.with_context(context);
+  |                   ^^^^^^^^^^^^ method not found in `GeneratedWorkgroupScopedAtomicV1HostAdapterV1<'_, '_, '_>`
+
+error[E0599]: no method named `with_device` found for struct `GeneratedWorkgroupScopedAtomicV1HostAdapterV1<'values, 'eligible, 'target>` in the current scope
+ --> tests/ui/generated_workgroup_sync_v1/environment_rebinding_is_unavailable.rs:9:19
+  |
+9 |     let _ = value.with_device(1);
+  |                   ^^^^^^^^^^^ method not found in `GeneratedWorkgroupScopedAtomicV1HostAdapterV1<'_, '_, '_>`
+
+error[E0599]: no method named `with_runtime` found for struct `GeneratedWorkgroupScopedAtomicV1HostAdapterV1<'values, 'eligible, 'target>` in the current scope
+  --> tests/ui/generated_workgroup_sync_v1/environment_rebinding_is_unavailable.rs:10:19
+   |
+10 |     let _ = value.with_runtime([7; 16]);
+   |                   ^^^^^^^^^^^^ method not found in `GeneratedWorkgroupScopedAtomicV1HostAdapterV1<'_, '_, '_>`
+
+error[E0599]: no method named `with_context` found for struct `fe2o3_host::generated_workgroup_sync_v1_lifecycle::JoinedWorkgroupSyncV1<'first, 'second, 'third, P>` in the current scope
+  --> tests/ui/generated_workgroup_sync_v1/environment_rebinding_is_unavailable.rs:14:19
+   |
+14 |     let _ = value.with_context([1; 16]);
+   |                   ^^^^^^^^^^^^ method not found in `fe2o3_host::generated_workgroup_sync_v1_lifecycle::JoinedWorkgroupSyncV1<'_, '_, '_, fe2o3_host::generated_workgroup_sync_v1_lifecycle::WorkgroupScopedAtomicProfileV1>`
+
+error[E0599]: no method named `with_device` found for struct `fe2o3_host::generated_workgroup_sync_v1_lifecycle::JoinedWorkgroupSyncV1<'first, 'second, 'third, P>` in the current scope
+  --> tests/ui/generated_workgroup_sync_v1/environment_rebinding_is_unavailable.rs:15:19
+   |
+15 |     let _ = value.with_device(1);
+   |                   ^^^^^^^^^^^ method not found in `fe2o3_host::generated_workgroup_sync_v1_lifecycle::JoinedWorkgroupSyncV1<'_, '_, '_, fe2o3_host::generated_workgroup_sync_v1_lifecycle::WorkgroupScopedAtomicProfileV1>`
+
+error[E0599]: no method named `with_runtime` found for struct `fe2o3_host::generated_workgroup_sync_v1_lifecycle::JoinedWorkgroupSyncV1<'first, 'second, 'third, P>` in the current scope
+  --> tests/ui/generated_workgroup_sync_v1/environment_rebinding_is_unavailable.rs:16:19
+   |
+16 |     let _ = value.with_runtime([2; 16]);
+   |                   ^^^^^^^^^^^^ method not found in `fe2o3_host::generated_workgroup_sync_v1_lifecycle::JoinedWorkgroupSyncV1<'_, '_, '_, fe2o3_host::generated_workgroup_sync_v1_lifecycle::WorkgroupScopedAtomicProfileV1>`

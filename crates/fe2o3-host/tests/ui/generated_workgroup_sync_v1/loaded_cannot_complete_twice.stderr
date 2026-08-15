@@ -1,0 +1,16 @@
+error[E0382]: use of moved value: `value`
+ --> tests/ui/generated_workgroup_sync_v1/loaded_cannot_complete_twice.rs:7:13
+  |
+4 |     value: LoadedWorkgroupLdsReductionV1<'_, '_, A>,
+  |     ----- move occurs because `value` has type `fe2o3_host::generated_workgroup_sync_v1_lifecycle::LoadedWorkgroupSyncV1<fe2o3_host::generated_workgroup_sync_v1_lifecycle::JoinedWorkgroupSyncV1<'_, '_, '_, fe2o3_host::generated_workgroup_sync_v1_lifecycle::WorkgroupLdsReductionProfileV1>, fe2o3_host::generated_workgroup_sync_v1_lifecycle::WorkgroupLdsReductionProfileV1, A>`, which does not implement the `Copy` trait
+5 | ) {
+6 |     let _ = value.dispatch_and_wait();
+  |                   ------------------- `value` moved due to this method call
+7 |     let _ = value.dispatch_and_wait();
+  |             ^^^^^ value used here after move
+  |
+note: `fe2o3_host::generated_workgroup_sync_v1_lifecycle::LoadedWorkgroupSyncV1::<R, P, A>::dispatch_and_wait` takes ownership of the receiver `self`, which moves `value`
+ --> src/generated_workgroup_sync_v1_lifecycle.rs
+  |
+  |         self,
+  |         ^^^^

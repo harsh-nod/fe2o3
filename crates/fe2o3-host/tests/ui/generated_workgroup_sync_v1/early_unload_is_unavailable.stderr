@@ -1,0 +1,5 @@
+error[E0599]: no method named `unload` found for struct `fe2o3_host::generated_workgroup_sync_v1_lifecycle::LoadedWorkgroupSyncV1<R, P, A>` in the current scope
+ --> tests/ui/generated_workgroup_sync_v1/early_unload_is_unavailable.rs:6:19
+  |
+6 |     let _ = value.unload();
+  |                   ^^^^^^ method not found in `fe2o3_host::generated_workgroup_sync_v1_lifecycle::LoadedWorkgroupSyncV1<fe2o3_host::generated_workgroup_sync_v1_lifecycle::JoinedWorkgroupSyncV1<'_, '_, '_, fe2o3_host::generated_workgroup_sync_v1_lifecycle::WorkgroupScopedAtomicProfileV1>, fe2o3_host::generated_workgroup_sync_v1_lifecycle::WorkgroupScopedAtomicProfileV1, A>`
