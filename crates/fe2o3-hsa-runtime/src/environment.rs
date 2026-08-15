@@ -91,6 +91,11 @@ impl ReviewedHsaRuntimeAdapterV1 {
     pub const fn environment(&self) -> &HsaEnvironmentObservationV1 {
         &self.core.environment
     }
+
+    /// Production synchronous-completion deadline used by protected dispatch.
+    pub const fn completion_timeout_v1(&self) -> std::time::Duration {
+        self.core.completion_timeout
+    }
 }
 
 impl Drop for ReviewedHsaRuntimeAdapterV1 {
