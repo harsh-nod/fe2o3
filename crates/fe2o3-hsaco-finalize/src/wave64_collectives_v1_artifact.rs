@@ -70,6 +70,25 @@ impl PreparedFinalizedWave64CollectivesV1HsacoV1 {
         self.finalized.canonical_digest()
     }
 
+    /// Borrows the exact finalized bytes for the reviewed Wave64 lifecycle.
+    ///
+    /// This is a doc-hidden runtime SPI, not artifact extraction authority.
+    /// Safe code cannot call it, and the returned borrow remains tied to this
+    /// linear admission.
+    ///
+    /// # Safety
+    ///
+    /// The caller must be the exact typed Wave64 publication/load lifecycle.
+    /// It must use this borrow only for one identity-checked HSA load, must not
+    /// retain or copy the bytes outside that lifecycle, and must not expose the
+    /// bytes or derive generic publication, load, or launch authority from
+    /// them.
+    #[doc(hidden)]
+    #[allow(unsafe_code)]
+    pub unsafe fn exact_finalized_bytes_for_reviewed_wave64_runtime_v1(&self) -> &[u8] {
+        self.finalized.exact_finalized_bytes()
+    }
+
     pub const fn exact_profile_descriptor_source_was_checked(&self) -> bool {
         true
     }
