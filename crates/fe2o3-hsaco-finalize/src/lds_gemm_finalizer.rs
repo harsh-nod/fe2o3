@@ -484,6 +484,7 @@ fn validate_exact_artifact_shape(
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ObservedArgumentShapeV1 {
     pub(crate) name: Option<String>,
+    pub(crate) type_name: Option<String>,
     pub(crate) offset: u64,
     pub(crate) size: u64,
     pub(crate) alignment: Option<u64>,
@@ -501,6 +502,7 @@ impl From<&ExplicitArgument> for ObservedArgumentShapeV1 {
     fn from(argument: &ExplicitArgument) -> Self {
         Self {
             name: argument.name().map(str::to_owned),
+            type_name: argument.type_name().map(str::to_owned),
             offset: argument.offset(),
             size: argument.size(),
             alignment: argument.alignment(),
@@ -650,42 +652,50 @@ fn validate_pointer_argument(
     } else {
         ArgumentAccess::ReadWrite
     };
+    let expected_type_name = if role < 2 { "ushort*" } else { "float*" };
     let expected_pointee_alignment = if role < 2 { 2 } else { 4 };
-    let expected_restrict = role == 2;
     if argument.name.as_deref() != Some(&format!("arg{role}.data"))
+        || argument.type_name.as_deref() != Some(expected_type_name)
         || argument.offset != (role as u64) * 16
         || argument.size != 8
         || argument.value_kind != ExplicitValueKind::GlobalBuffer
         || argument.address_space != Some(ArgumentAddressSpace::Global)
+        || argument.access != Some(expected_access)
     {
         return Err(ExactLdsGemmFinalizationErrorV1::ArtifactShape(
             "explicit pointer ABI",
         ));
     }
-    // Upstream LLVM may omit these schema-level annotations. Source type,
-    // access, alignment, and alias facts remain bound by the exact canonical
-    // LLVM body and descriptor; emitted metadata may agree or narrow access,
-    // but it may not contradict those sources.
+    // Upstream LLVM does not reliably emit these physical/deprecated fields.
+    // Source type, access, and alignment facts remain bound by the exact
+    // canonical LLVM body and descriptor; optional metadata may agree but may
+    // not contradict those sources.
     if argument.alignment.is_some_and(|value| value != 8)
         || argument
             .value_type
             .is_some_and(|value| value != expected_type)
         || argument
-            .access
-            .is_some_and(|value| value != expected_access)
-        || argument
-            .actual_access
-            .is_some_and(|value| !actual_access_is_subset(expected_access, value))
-        || argument
             .pointee_alignment
             .is_some_and(|value| value != expected_pointee_alignment)
-        || argument.is_const.is_some_and(|value| value != (role < 2))
-        || argument
-            .is_restrict
-            .is_some_and(|value| value != expected_restrict)
     {
         return Err(ExactLdsGemmFinalizationErrorV1::ArtifactShape(
             "explicit pointer annotations",
+        ));
+    }
+    let source_qualifiers_match = if role < 2 {
+        argument.actual_access == Some(ArgumentAccess::ReadOnly)
+            && argument.is_const == Some(true)
+            && argument.is_restrict != Some(true)
+    } else {
+        argument
+            .actual_access
+            .is_none_or(|value| actual_access_is_subset(expected_access, value))
+            && argument.is_const != Some(true)
+            && argument.is_restrict == Some(true)
+    };
+    if !source_qualifiers_match {
+        return Err(ExactLdsGemmFinalizationErrorV1::ArtifactShape(
+            "explicit pointer source qualifiers",
         ));
     }
     Ok(())
@@ -696,6 +706,7 @@ fn validate_length_argument(
     role: usize,
 ) -> Result<(), ExactLdsGemmFinalizationErrorV1> {
     if argument.name.as_deref() != Some(&format!("arg{role}.len"))
+        || argument.type_name.as_deref() != Some("ulong")
         || argument.offset != (role as u64) * 16 + 8
         || argument.size != 8
         || argument.value_kind != ExplicitValueKind::ByValue
@@ -1018,6 +1029,7 @@ pub(crate) fn exact_observed_artifact_shape_for_test() -> ObservedArtifactShapeV
         };
         arguments.push(ObservedArgumentShapeV1 {
             name: Some(format!("arg{role}.data")),
+            type_name: Some(if role < 2 { "ushort*" } else { "float*" }.to_owned()),
             offset: role * 16,
             size: 8,
             alignment: Some(8),
@@ -1032,6 +1044,7 @@ pub(crate) fn exact_observed_artifact_shape_for_test() -> ObservedArtifactShapeV
         });
         arguments.push(ObservedArgumentShapeV1 {
             name: Some(format!("arg{role}.len")),
+            type_name: Some("ulong".to_owned()),
             offset: role * 16 + 8,
             size: 8,
             alignment: Some(8),
