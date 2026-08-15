@@ -13,16 +13,22 @@ debug-only non-production validation escape is explicitly enabled. The
 production release command rejects that escape.
 
 The outer release process requires descriptors 0, 1, and 2 to be the only
-inherited descriptors. It pins its running executable object and bytes, copies
-the same bytes into a fully sealed memfd, pins the exact cwd object, measures
+inherited descriptors; exactly one additional descriptor may be the live
+`/proc/<pid>/fd` enumeration directory opened by that check. It pins its
+running executable object and bytes, copies the same bytes into a fully sealed
+memfd, pins the exact cwd object, measures
 the declared Cargo, rustc, rustc runtime tree, backend, and compiler-closure
 identities, and snapshots the complete raw argument vector and environment. It
 then executes the sealed image with fixed contract, control, launcher-image,
 and cwd descriptors. The child independently checks its own image, its live
 parent's PID/start time/uid/image, the retained backing objects, exact argv,
 environment, cwd, descriptor manifest, and compiler closure before completing
-a fresh two-way one-shot grant. The launcher remains the child's parent until
-the request exits.
+a fresh two-way one-shot grant. Before exec, the child arms `PR_SET_PDEATHSIG`
+with `SIGKILL` and immediately verifies the expected parent PID to close the
+setup race; after exec it verifies both that setting and the launcher's exact
+PID/start identity. The protected child applies the same race-free boundary to
+its pinned Cargo subprocess. Therefore the admitted child and that Cargo
+process cannot continue when their respective admitted parent dies.
 
 Release starts from a cleared environment. The complete V1 allowlist is
 `CARGO`, the five `FE2O3_AUTHORITY_*_V1` tool/path pins,
@@ -36,7 +42,10 @@ inputs and are remeasured; no machine-specific digest is compiled in.
 `cargo fe2o3 authority release probe` exercises this exact launcher/handoff
 boundary and exits before Cargo, artifact generation, HSA loading, or GPU
 dispatch. A successful probe grants no compiler-origin, proof, artifact-safety,
-runtime, or GPU authority. The release contract makes no such claims either.
+runtime, or GPU authority. A separate integration fixture crosses the admitted
+boundary into pinned Cargo and the existing transactional test backend, but
+its publication evidence carries only that fixture's existing downstream test
+authority. The release contract makes no stronger claims.
 
 ## External Cargo projects
 
