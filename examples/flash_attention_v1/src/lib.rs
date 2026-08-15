@@ -11,7 +11,9 @@
 
 pub mod contract;
 pub mod kernel;
+pub mod oracle;
 pub mod source_identity;
+pub mod vectors;
 
 pub use contract::{
     ACCUMULATION_POLICY_V1, CAUSAL_POLICY_V1, DTYPE_POLICY_V1, EXACT_PROFILE_V1,
@@ -22,8 +24,13 @@ pub use contract::{
     ProfileMismatchV1, TensorV1, exact_launch_v1, key_participates_v1, lane_outputs_v1,
     qkv_index_v1, validate_profile_v1,
 };
+pub use oracle::{
+    ArithmeticStageV1, FlashAttentionOracleErrorV1, FlashAttentionOracleStateV1,
+    flash_attention_oracle_v1,
+};
 pub use source_identity::{
     FLASH_ATTENTION_KERNEL_NAMESPACE_V1, FLASH_ATTENTION_KERNEL_SOURCE_SHA256_V1,
     FLASH_ATTENTION_PROFILE_IDENTITY_V1, SourceIdentityMismatchV1,
     validate_kernel_source_identity_v1,
 };
+pub use vectors::{DeterministicVectorV1, deterministic_vectors_v1};

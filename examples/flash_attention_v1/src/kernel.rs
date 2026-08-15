@@ -83,11 +83,7 @@ fn output_pair_v1(
             };
             let previous_weight = math.exp_f32(running_max - next_max);
             let current_weight = math.exp_f32(score - next_max);
-            if !previous_weight.is_finite()
-                || !current_weight.is_finite()
-                || previous_weight <= 0.0
-                || current_weight <= 0.0
-            {
+            if !previous_weight.is_finite() || !current_weight.is_finite() {
                 return None;
             }
 
