@@ -127,6 +127,50 @@ struct TargetParts {
   std::optional<bool> Xnack;
 };
 
+enum class PostLinkProfile { LegacyGfx942G1, ExactLdsGemmSlice1 };
+
+constexpr StringLiteral ExactLdsGemmSlice1Entry = "tiled_gemm_lds_v1";
+constexpr StringLiteral ExactLdsGemmSlice1Descriptor = "tiled_gemm_lds_v1.kd";
+
+bool isExactLdsGemmSlice1SymbolSet(ArrayRef<std::string> Symbols) {
+  return std::set<std::string>(Symbols.begin(), Symbols.end()) ==
+         std::set<std::string>{ExactLdsGemmSlice1Entry.str(),
+                               ExactLdsGemmSlice1Descriptor.str()};
+}
+
+Expected<PostLinkProfile>
+selectPostLinkProfile(const Request &RequestValue,
+                      const std::set<std::string> &ExpectedSymbols) {
+  const std::set<std::string> ExactSymbols = {
+      ExactLdsGemmSlice1Entry.str(), ExactLdsGemmSlice1Descriptor.str()};
+  if (ExpectedSymbols != ExactSymbols)
+    return PostLinkProfile::LegacyGfx942G1;
+
+  bool CompilerInputMatches =
+      RequestValue.Inputs.size() == 1 &&
+      RequestValue.CompilerModule.Kind == InputKind::LlvmTextIr &&
+      RequestValue.Inputs.front().Kind == RequestValue.CompilerModule.Kind &&
+      RequestValue.Inputs.front().Digest ==
+          RequestValue.CompilerModule.Digest &&
+      RequestValue.Inputs.front().Bytes.size() ==
+          RequestValue.CompilerModule.Bytes.size();
+  if (RequestValue.Protocol != ProtocolVersion::V2 ||
+      RequestValue.Target != "gfx942:xnack-" ||
+      RequestValue.CodeObjectVersion != 6 ||
+      RequestValue.LinkOptions.Optimization != OptimizationLevel::O2 ||
+      !RequestValue.LinkOptions.StripDebug ||
+      !RequestValue.LinkOptions.VerifyEach || !CompilerInputMatches ||
+      !RequestValue.ExternalProviders.empty() ||
+      !RequestValue.ImportSymbols.empty() ||
+      !RequestValue.ExportSymbols.empty() ||
+      !isExactLdsGemmSlice1SymbolSet(RequestValue.RequiredSymbols) ||
+      !isExactLdsGemmSlice1SymbolSet(RequestValue.ExpectedDefinedSymbols) ||
+      !isExactLdsGemmSlice1SymbolSet(RequestValue.FinalSymbols))
+    return pipelineError(
+        "exact LDS GEMM Slice1 symbols require the closed Worker V2 profile");
+  return PostLinkProfile::ExactLdsGemmSlice1;
+}
+
 TargetParts parseTarget(StringRef Target) {
   SmallVector<StringRef, 3> Components;
   Target.split(Components, ':', -1, false);
@@ -965,6 +1009,9 @@ struct KernelLaunchContract {
   uint64_t WavefrontSize;
   uint64_t MaxFlatWorkgroupSize;
   std::optional<std::array<uint64_t, 3>> RequiredWorkgroupSize;
+  std::optional<uint64_t> SgprSpillCount;
+  std::optional<uint64_t> VgprSpillCount;
+  std::optional<bool> UsesDynamicStack;
 };
 
 struct MetadataContract {
@@ -1012,6 +1059,27 @@ Expected<uint64_t> metadataUnsigned(msgpack::MapDocNode &Map, StringRef Name) {
     return static_cast<uint64_t>((**Field).getInt());
   return pipelineError(Twine("AMDGPU metadata field ") + Name +
                        " is not a nonnegative integer");
+}
+
+Expected<std::optional<uint64_t>>
+metadataOptionalUnsigned(msgpack::MapDocNode &Map, StringRef Name) {
+  if (Map.find(Name) == Map.end())
+    return std::optional<uint64_t>{};
+  auto Value = metadataUnsigned(Map, Name);
+  if (!Value)
+    return Value.takeError();
+  return std::optional<uint64_t>(*Value);
+}
+
+Expected<std::optional<bool>> metadataOptionalBoolean(msgpack::MapDocNode &Map,
+                                                      StringRef Name) {
+  auto Field = Map.find(Name);
+  if (Field == Map.end())
+    return std::optional<bool>{};
+  if (Field->second.getKind() != msgpack::Type::Boolean)
+    return pipelineError(Twine("AMDGPU metadata field ") + Name +
+                         " is not a boolean");
+  return std::optional<bool>(Field->second.getBool());
 }
 
 Expected<std::optional<std::array<uint64_t, 3>>>
@@ -1126,6 +1194,18 @@ inspectMetadata(const ELFObjectFile<ELF64LE> &ObjectValue) {
       auto RequiredWorkgroup = metadataWorkgroupSize(Kernel);
       if (!RequiredWorkgroup)
         return RequiredWorkgroup.takeError();
+      auto SgprSpillCount =
+          metadataOptionalUnsigned(Kernel, ".sgpr_spill_count");
+      if (!SgprSpillCount)
+        return SgprSpillCount.takeError();
+      auto VgprSpillCount =
+          metadataOptionalUnsigned(Kernel, ".vgpr_spill_count");
+      if (!VgprSpillCount)
+        return VgprSpillCount.takeError();
+      auto UsesDynamicStack =
+          metadataOptionalBoolean(Kernel, ".uses_dynamic_stack");
+      if (!UsesDynamicStack)
+        return UsesDynamicStack.takeError();
 
       if (!Names.insert(Name->str()).second)
         return pipelineError("AMDGPU metadata repeats a kernel name");
@@ -1151,9 +1231,10 @@ inspectMetadata(const ELFObjectFile<ELF64LE> &ObjectValue) {
           return pipelineError(
               "AMDGPU metadata required workgroup size exceeds its maximum");
       }
-      Result.Kernels.push_back({Name->str(), Symbol->str(), *KernargSize,
-                                *GroupSize, *PrivateSize, *KernargAlign,
-                                *Wavefront, *MaxWorkgroup, *RequiredWorkgroup});
+      Result.Kernels.push_back(
+          {Name->str(), Symbol->str(), *KernargSize, *GroupSize, *PrivateSize,
+           *KernargAlign, *Wavefront, *MaxWorkgroup, *RequiredWorkgroup,
+           *SgprSpillCount, *VgprSpillCount, *UsesDynamicStack});
     }
   }
   llvm::sort(Result.Kernels, [](const KernelLaunchContract &Left,
@@ -1162,6 +1243,100 @@ inspectMetadata(const ELFObjectFile<ELF64LE> &ObjectValue) {
            std::tie(Right.Name, Right.Symbol);
   });
   return Result;
+}
+
+bool isPostLinkRelocationSection(uint32_t Type) {
+  return Type == ELF::SHT_REL || Type == ELF::SHT_RELA ||
+         Type == ELF::SHT_RELR || Type == ELF::SHT_CREL ||
+         Type == ELF::SHT_ANDROID_REL || Type == ELF::SHT_ANDROID_RELA ||
+         Type == ELF::SHT_ANDROID_RELR;
+}
+
+bool isPostLinkRelocationDynamicTag(int64_t Tag) {
+  switch (Tag) {
+  case 2:          // DT_PLTRELSZ
+  case 7:          // DT_RELA
+  case 8:          // DT_RELASZ
+  case 9:          // DT_RELAENT
+  case 17:         // DT_REL
+  case 18:         // DT_RELSZ
+  case 19:         // DT_RELENT
+  case 20:         // DT_PLTREL
+  case 23:         // DT_JMPREL
+  case 35:         // DT_RELRSZ
+  case 36:         // DT_RELR
+  case 37:         // DT_RELRENT
+  case 0x6000000f: // DT_ANDROID_REL
+  case 0x60000010: // DT_ANDROID_RELSZ
+  case 0x60000011: // DT_ANDROID_RELA
+  case 0x60000012: // DT_ANDROID_RELASZ
+    return true;
+  default:
+    return false;
+  }
+}
+
+Error validateExactLdsGemmSlice1ElfClosure(
+    const ELFObjectFile<ELF64LE> &ObjectValue) {
+  const ELFFile<ELF64LE> &File = ObjectValue.getELFFile();
+  auto Sections = File.sections();
+  if (!Sections)
+    return Sections.takeError();
+  for (const ELF64LE::Shdr &Section : *Sections) {
+    if (isPostLinkRelocationSection(Section.sh_type) && Section.sh_size != 0)
+      return postLinkError("lds_gemm_slice1_profile",
+                           "residual_relocation_section");
+    if (Section.sh_type != ELF::SHT_DYNAMIC)
+      continue;
+    auto Entries = File.getSectionContentsAsArray<ELF64LE::Dyn>(Section);
+    if (!Entries)
+      return Entries.takeError();
+    for (const ELF64LE::Dyn &Entry : *Entries) {
+      int64_t Tag = Entry.getTag();
+      if (Tag == ELF::DT_NEEDED)
+        return postLinkError("lds_gemm_slice1_profile", "dynamic_dependency");
+      if (isPostLinkRelocationDynamicTag(Tag))
+        return postLinkError("lds_gemm_slice1_profile",
+                             "dynamic_relocation_table");
+    }
+  }
+  return Error::success();
+}
+
+Error validateExactLdsGemmSlice1Metadata(const MetadataContract &Metadata) {
+  static constexpr std::array<uint64_t, 3> Workgroup = {64, 1, 1};
+  if (Metadata.Kernels.size() != 1)
+    return postLinkError("lds_gemm_slice1_profile", "kernel_cardinality");
+  const KernelLaunchContract &Kernel = Metadata.Kernels.front();
+  auto Mismatch = [&](StringRef Field) {
+    return postLinkError("lds_gemm_slice1_profile",
+                         (Twine("kernel_contract_") + Field).str());
+  };
+  if (Kernel.Name != ExactLdsGemmSlice1Entry ||
+      Kernel.Symbol != ExactLdsGemmSlice1Descriptor)
+    return Mismatch("symbols");
+  if (!Kernel.RequiredWorkgroupSize ||
+      *Kernel.RequiredWorkgroupSize != Workgroup)
+    return Mismatch("reqd_workgroup_size");
+  if (Kernel.MaxFlatWorkgroupSize != 64)
+    return Mismatch("max_flat_workgroup_size");
+  if (Kernel.WavefrontSize != 64)
+    return Mismatch("wavefront_size");
+  if (Kernel.KernargSegmentSize != 304)
+    return Mismatch("kernarg_segment_size");
+  if (Kernel.KernargSegmentAlign != 8)
+    return Mismatch("kernarg_segment_align");
+  if (Kernel.GroupSegmentFixedSize != 1024)
+    return Mismatch("group_segment_fixed_size");
+  if (Kernel.PrivateSegmentFixedSize != 0)
+    return Mismatch("private_segment_fixed_size");
+  if (Kernel.SgprSpillCount.value_or(0) != 0)
+    return Mismatch("sgpr_spill_count");
+  if (Kernel.VgprSpillCount.value_or(0) != 0)
+    return Mismatch("vgpr_spill_count");
+  if (Kernel.UsesDynamicStack.value_or(false))
+    return Mismatch("uses_dynamic_stack");
+  return Error::success();
 }
 
 Expected<std::vector<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
@@ -1201,6 +1376,7 @@ Expected<std::vector<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
     return postLinkError("target", "target_or_code_object_mismatch");
 
   std::set<std::string> Defined;
+  std::set<std::string> StaticPublicDefinitions;
   std::set<std::string> UndefinedSymbols;
   auto InspectSymbol = [&](SymbolRef Symbol, bool Dynamic) -> Error {
     auto FlagsOrError = Symbol.getFlags();
@@ -1221,6 +1397,8 @@ Expected<std::vector<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
       return Error::success();
     if ((Flags & (SymbolRef::SF_Global | SymbolRef::SF_Weak)) == 0)
       return Error::success();
+    if (!Dynamic)
+      StaticPublicDefinitions.insert(Name);
     if (Dynamic && (Flags & SymbolRef::SF_Hidden) == 0)
       Defined.insert(std::move(Name));
     return Error::success();
@@ -1248,6 +1426,19 @@ Expected<std::vector<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
   auto *ConcreteElf = dyn_cast<ELF64LEObjectFile>(ObjectOrError->get());
   if (!ConcreteElf)
     return postLinkError("elf", "not_elf64le");
+  auto Profile = selectPostLinkProfile(RequestValue, ExpectedSymbols);
+  if (!Profile)
+    return postLinkError("profile", errorToDiagnostic(Profile.takeError()));
+  if (*Profile == PostLinkProfile::ExactLdsGemmSlice1) {
+    if (Error E = validateExactLdsGemmSlice1ElfClosure(*ConcreteElf))
+      return E;
+    if (StaticPublicDefinitions != ExpectedSymbols)
+      return pipelineError(
+          Twine("post_link.check=lds_gemm_slice1_profile status=failed ") +
+          "reason=static_symbol_closure expected=" +
+          diagnosticList(ExpectedSymbols) +
+          " actual=" + diagnosticList(StaticPublicDefinitions));
+  }
   auto Metadata = inspectMetadata(*ConcreteElf);
   if (!Metadata)
     return postLinkError("metadata", errorToDiagnostic(Metadata.takeError()));
@@ -1281,7 +1472,8 @@ Expected<std::vector<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
         diagnosticList(ExpectedDescriptors) +
         " actual=" + diagnosticList(MetadataDescriptors));
 
-  if (RequestedTarget.Cpu == "gfx942" && !ExpectedDescriptors.empty()) {
+  if (RequestedTarget.Cpu == "gfx942" && !ExpectedDescriptors.empty() &&
+      *Profile == PostLinkProfile::LegacyGfx942G1) {
     static constexpr std::array<uint64_t, 3> G1Workgroup = {256, 1, 1};
     for (const KernelLaunchContract &Kernel : Metadata->Kernels) {
       if (!Kernel.RequiredWorkgroupSize ||
@@ -1304,6 +1496,9 @@ Expected<std::vector<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
             Twine(Kernel.WavefrontSize));
     }
   }
+  if (*Profile == PostLinkProfile::ExactLdsGemmSlice1)
+    if (Error E = validateExactLdsGemmSlice1Metadata(*Metadata))
+      return E;
 
   std::vector<std::string> Diagnostics;
   Diagnostics.push_back(
@@ -1323,6 +1518,12 @@ Expected<std::vector<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
        diagnosticAtom(Metadata->Target ? StringRef(*Metadata->Target)
                                        : StringRef("absent")))
           .str());
+  if (*Profile == PostLinkProfile::ExactLdsGemmSlice1)
+    Diagnostics.push_back(
+        "post_link.check=lds_gemm_slice1_profile status=ok "
+        "workgroup=[64,1,1] kernarg_size=304 kernarg_align=8 "
+        "group_size=1024 private_size=0 wavefront_size=64 spills=0 "
+        "dynamic_stack=false");
   for (const KernelLaunchContract &Kernel : Metadata->Kernels) {
     std::string Required = "absent";
     if (Kernel.RequiredWorkgroupSize)

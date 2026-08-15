@@ -575,6 +575,92 @@ makeKernelBitcode(StringRef Name,
   return std::vector<uint8_t>(Buffer.begin(), Buffer.end());
 }
 
+std::vector<uint8_t> makeExactLdsGemmSlice1TextIr(uint32_t Workgroup = 64,
+                                                  uint32_t MaxWorkgroup = 64,
+                                                  uint32_t StaticLdsTiles = 2) {
+  LLVMContext Context;
+  Module ModuleValue("exact-lds-gemm-slice1", Context);
+  std::unique_ptr<TargetMachine> Machine = createMachine("gfx942");
+  ModuleValue.setTargetTriple(Triple(AmdGpuTriple));
+  ModuleValue.setDataLayout(Machine->createDataLayout());
+  ModuleValue.addModuleFlag(Module::Error, "amdhsa_code_object_version", 600);
+
+  Type *I16 = Type::getInt16Ty(Context);
+  Type *I32 = Type::getInt32Ty(Context);
+  Type *I64 = Type::getInt64Ty(Context);
+  Type *F32 = Type::getFloatTy(Context);
+  Type *GlobalPointer = PointerType::get(Context, 1);
+  FunctionType *Signature = FunctionType::get(
+      Type::getVoidTy(Context),
+      {GlobalPointer, I64, GlobalPointer, I64, GlobalPointer, I64}, false);
+  Function *Kernel = Function::Create(Signature, GlobalValue::ExternalLinkage,
+                                      "tiled_gemm_lds_v1", ModuleValue);
+  Kernel->setCallingConv(CallingConv::AMDGPU_KERNEL);
+  Kernel->addFnAttr("target-cpu", "gfx942");
+  Kernel->addFnAttr("target-features",
+                    "-wavefrontsize32,+wavefrontsize64,-xnack");
+  Kernel->addFnAttr("amdgpu-flat-work-group-size",
+                    (Twine(MaxWorkgroup) + "," + Twine(MaxWorkgroup)).str());
+  Metadata *Required[] = {
+      ConstantAsMetadata::get(ConstantInt::get(I32, Workgroup)),
+      ConstantAsMetadata::get(ConstantInt::get(I32, 1)),
+      ConstantAsMetadata::get(ConstantInt::get(I32, 1))};
+  Kernel->setMetadata("reqd_work_group_size", MDNode::get(Context, Required));
+
+  ArrayType *TileType = ArrayType::get(I16, 256);
+  auto MakeTile = [&](StringRef Name) {
+    auto *Tile = new GlobalVariable(ModuleValue, TileType, false,
+                                    GlobalValue::InternalLinkage,
+                                    UndefValue::get(TileType), Name, nullptr,
+                                    GlobalVariable::NotThreadLocal, 3);
+    Tile->setAlignment(Align(16));
+    return Tile;
+  };
+  GlobalVariable *TileA = MakeTile("tiled_gemm_lds_v1.a.tile");
+  GlobalVariable *TileB =
+      StaticLdsTiles == 2 ? MakeTile("tiled_gemm_lds_v1.b.tile") : TileA;
+
+  auto Argument = Kernel->arg_begin();
+  Value *A = &*Argument++;
+  Value *ALength = &*Argument++;
+  Value *B = &*Argument++;
+  Value *BLength = &*Argument++;
+  Value *C = &*Argument++;
+  Value *CLength = &*Argument;
+  BasicBlock *Entry = BasicBlock::Create(Context, "entry", Kernel);
+  IRBuilder<> Builder(Entry);
+  Value *Zero32 = ConstantInt::get(I32, 0);
+  Value *Zero64 = ConstantInt::get(I64, 0);
+  Value *AValue =
+      Builder.CreateLoad(I16, Builder.CreateInBoundsGEP(I16, A, Zero64));
+  Value *BValue =
+      Builder.CreateLoad(I16, Builder.CreateInBoundsGEP(I16, B, Zero64));
+  Value *TileAElement =
+      Builder.CreateInBoundsGEP(TileType, TileA, {Zero32, Zero32});
+  Value *TileBElement =
+      Builder.CreateInBoundsGEP(TileType, TileB, {Zero32, Zero32});
+  Builder.CreateStore(AValue, TileAElement)->setVolatile(true);
+  Builder.CreateStore(BValue, TileBElement)->setVolatile(true);
+  auto *LoadedA = Builder.CreateLoad(I16, TileAElement);
+  LoadedA->setVolatile(true);
+  auto *LoadedB = Builder.CreateLoad(I16, TileBElement);
+  LoadedB->setVolatile(true);
+  Value *Sum = Builder.CreateAdd(LoadedA, LoadedB);
+  Value *Lengths =
+      Builder.CreateAdd(Builder.CreateAdd(ALength, BLength), CLength);
+  Value *LengthBit = Builder.CreateTrunc(Lengths, I16);
+  Value *Observed = Builder.CreateAdd(Sum, LengthBit);
+  Builder.CreateStore(Builder.CreateUIToFP(Observed, F32),
+                      Builder.CreateInBoundsGEP(F32, C, Zero64));
+  Builder.CreateRetVoid();
+
+  std::string Text;
+  raw_string_ostream Stream(Text);
+  ModuleValue.print(Stream, nullptr);
+  Stream.flush();
+  return std::vector<uint8_t>(Text.begin(), Text.end());
+}
+
 std::vector<uint8_t> makeCov6TwoKernelBitcode() {
   LLVMContext Context;
   Module ModuleValue("cov6-two-kernel", Context);
@@ -904,6 +990,12 @@ void write32(MutableArrayRef<uint8_t> Bytes, size_t Offset, uint32_t Value) {
   support::endian::write32le(Bytes.data() + Offset, Value);
 }
 
+void write64(MutableArrayRef<uint8_t> Bytes, size_t Offset, uint64_t Value) {
+  require(Offset <= Bytes.size() && Bytes.size() - Offset >= 8,
+          "fixture ELF write is out of bounds");
+  support::endian::write64le(Bytes.data() + Offset, Value);
+}
+
 void write16(MutableArrayRef<uint8_t> Bytes, size_t Offset, uint16_t Value) {
   require(Offset <= Bytes.size() && Bytes.size() - Offset >= 2,
           "fixture ELF write is out of bounds");
@@ -965,6 +1057,50 @@ void makeDynamicSymbolUndefined(
     }
   }
   fail("fixture did not contain the requested dynamic symbol");
+}
+
+void makeStaticSymbolTableRelocationSection(std::vector<uint8_t> &Bytes) {
+  constexpr size_t Elf64SectionTypeOffset = 4;
+  uint64_t SectionTable = read64(Bytes, 40);
+  uint16_t SectionEntrySize = read16(Bytes, 58);
+  uint16_t SectionCount = read16(Bytes, 60);
+  require(SectionEntrySize >= 64, "fixture has a short section header");
+  for (uint16_t I = 0; I < SectionCount; ++I) {
+    size_t Section = SectionTable + static_cast<uint64_t>(I) * SectionEntrySize;
+    if (read32(Bytes, Section + Elf64SectionTypeOffset) != ELF::SHT_SYMTAB)
+      continue;
+    write32(Bytes, Section + Elf64SectionTypeOffset, ELF::SHT_RELA);
+    return;
+  }
+  fail("fixture did not contain a static symbol table");
+}
+
+void makeDynamicDependency(std::vector<uint8_t> &Bytes) {
+  constexpr size_t Elf64SectionTypeOffset = 4;
+  constexpr size_t Elf64SectionOffsetOffset = 24;
+  constexpr size_t Elf64SectionSizeOffset = 32;
+  constexpr size_t Elf64SectionEntrySizeOffset = 56;
+  uint64_t SectionTable = read64(Bytes, 40);
+  uint16_t SectionEntrySize = read16(Bytes, 58);
+  uint16_t SectionCount = read16(Bytes, 60);
+  require(SectionEntrySize >= 64, "fixture has a short section header");
+  for (uint16_t I = 0; I < SectionCount; ++I) {
+    size_t Section = SectionTable + static_cast<uint64_t>(I) * SectionEntrySize;
+    if (read32(Bytes, Section + Elf64SectionTypeOffset) != ELF::SHT_DYNAMIC)
+      continue;
+    uint64_t Entries = read64(Bytes, Section + Elf64SectionOffsetOffset);
+    uint64_t EntryBytes = read64(Bytes, Section + Elf64SectionSizeOffset);
+    uint64_t EntrySize = read64(Bytes, Section + Elf64SectionEntrySizeOffset);
+    require(EntrySize >= sizeof(ELF64LE::Dyn) && EntryBytes >= EntrySize,
+            "fixture has an invalid dynamic section");
+    for (uint64_t Offset = 0; Offset < EntryBytes; Offset += EntrySize) {
+      if (read64(Bytes, Entries + Offset) != ELF::DT_NULL)
+        continue;
+      write64(Bytes, Entries + Offset, ELF::DT_NEEDED);
+      return;
+    }
+  }
+  fail("fixture did not contain a dynamic terminator");
 }
 
 void corruptMetadataKey(std::vector<uint8_t> &Bytes, StringRef Key) {
@@ -1265,7 +1401,7 @@ void testSyntheticOcmlPipeline() {
   Request MismatchedCodeObject = Cov6Exp;
   MismatchedCodeObject.CodeObjectVersion = 5;
   requireFailureWithPolicy(MismatchedCodeObject, ValidPolicy,
-                           Stage::BitcodeLink);
+                           Stage::InputValidation);
 
   SyntheticDeviceLibraryDirectory Cov6ProviderDirectory;
   SyntheticOcmlOptions Cov6ProviderOptions;
@@ -1551,6 +1687,73 @@ int main(int ArgumentCount, char **Arguments) {
   requireDiagnostic(PublicationResponse, "wavefront_size=64");
   requireDiagnostic(PublicationResponse, "max_workgroup_size=256");
   requireDiagnostic(PublicationResponse, "reqd_workgroup_size=[256,1,1]");
+
+  auto MakeExactLdsGemmSlice1Request = [](uint32_t Workgroup = 64,
+                                          uint32_t MaxWorkgroup = 64,
+                                          uint32_t StaticLdsTiles = 2) {
+    Request Result = makeV2Request(
+        makeInput(InputKind::LlvmTextIr,
+                  makeExactLdsGemmSlice1TextIr(Workgroup, MaxWorkgroup,
+                                               StaticLdsTiles)),
+        {}, {}, {}, {"tiled_gemm_lds_v1", "tiled_gemm_lds_v1.kd"}, 6);
+    Result.Target = "gfx942:xnack-";
+    Result.LinkOptions = {OptimizationLevel::O2, true, true};
+    return Result;
+  };
+  Request ExactLdsGemmSlice1 = MakeExactLdsGemmSlice1Request();
+  Response ExactLdsGemmSlice1Response = runSuccess(
+      ExactLdsGemmSlice1, {"tiled_gemm_lds_v1", "tiled_gemm_lds_v1.kd"});
+  requireDiagnostic(ExactLdsGemmSlice1Response,
+                    "post_link.check=lds_gemm_slice1_profile status=ok ");
+  requireDiagnostic(ExactLdsGemmSlice1Response,
+                    "post_link.kernel name=tiled_gemm_lds_v1 "
+                    "symbol=tiled_gemm_lds_v1.kd kernarg_size=304 "
+                    "group_size=1024 private_size=0 kernarg_align=8 "
+                    "wavefront_size=64 max_workgroup_size=64 "
+                    "reqd_workgroup_size=[64,1,1]");
+
+  Response WrongExactWorkgroup = requireFailure(
+      MakeExactLdsGemmSlice1Request(128, 128), Stage::OutputInspection);
+  requireDiagnostic(WrongExactWorkgroup,
+                    "post_link.check=lds_gemm_slice1_profile status=failed "
+                    "reason=kernel_contract_reqd_workgroup_size");
+
+  Response WrongExactLds = requireFailure(
+      MakeExactLdsGemmSlice1Request(64, 64, 1), Stage::OutputInspection);
+  requireDiagnostic(WrongExactLds,
+                    "post_link.check=lds_gemm_slice1_profile status=failed "
+                    "reason=kernel_contract_group_segment_fixed_size");
+
+  Request WrongExactOptions = ExactLdsGemmSlice1;
+  WrongExactOptions.LinkOptions.Optimization = OptimizationLevel::O0;
+  Response WrongExactOptionsResponse =
+      requireFailure(WrongExactOptions, Stage::OutputInspection);
+  requireDiagnostic(WrongExactOptionsResponse,
+                    "exact%20LDS%20GEMM%20Slice1%20symbols%20require%20the%20"
+                    "closed%20Worker%20V2%20profile");
+
+  std::vector<uint8_t> ExactLdsGemmRelocation =
+      ExactLdsGemmSlice1Response.LinkedOutput->Bytes;
+  makeStaticSymbolTableRelocationSection(ExactLdsGemmRelocation);
+  requireInspectionFailure(
+      ExactLdsGemmRelocation, ExactLdsGemmSlice1,
+      "post_link.check=lds_gemm_slice1_profile status=failed "
+      "reason=residual_relocation_section");
+
+  std::vector<uint8_t> ExactLdsGemmDependency =
+      ExactLdsGemmSlice1Response.LinkedOutput->Bytes;
+  makeDynamicDependency(ExactLdsGemmDependency);
+  requireInspectionFailure(
+      ExactLdsGemmDependency, ExactLdsGemmSlice1,
+      "post_link.check=lds_gemm_slice1_profile status=failed "
+      "reason=dynamic_dependency");
+
+  std::vector<uint8_t> ExactLdsGemmUndefined =
+      ExactLdsGemmSlice1Response.LinkedOutput->Bytes;
+  makeDynamicSymbolUndefined(ExactLdsGemmUndefined, "tiled_gemm_lds_v1");
+  requireInspectionFailure(ExactLdsGemmUndefined, ExactLdsGemmSlice1,
+                           "post_link.check=unresolved status=failed "
+                           "symbols=[tiled_gemm_lds_v1]");
 
   Input Cov6Compiler =
       makeInput(InputKind::LlvmBitcode, makeCov6TwoKernelBitcode());
