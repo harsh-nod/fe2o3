@@ -5,6 +5,7 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 proof="$script_dir/verus/tiled_gemm_host_contract.rs"
 lds_proof="$script_dir/verus/lds_tiled_slice1.rs"
 kphase_proof="$script_dir/verus/lds_tiled_kphase.rs"
+grid_proof="$script_dir/verus/lds_tiled_grid_stride.rs"
 a_wrong="$script_dir/verus/negative/a_register_wrong.rs"
 b_wrong="$script_dir/verus/negative/b_register_wrong.rs"
 accumulator_wrong="$script_dir/verus/negative/accumulator_register_wrong.rs"
@@ -14,6 +15,9 @@ lds_epoch_wrong="$script_dir/verus/negative/lds_epoch_wrong.rs"
 lds_product_wrong="$script_dir/verus/negative/lds_product_wrong.rs"
 kphase_reuse_wrong="$script_dir/verus/negative/lds_kphase_reuse_wrong.rs"
 kphase_accumulator_reset_wrong="$script_dir/verus/negative/lds_kphase_accumulator_reset_wrong.rs"
+grid_tile_mapping_wrong="$script_dir/verus/negative/lds_grid_tile_mapping_wrong.rs"
+grid_stride_wrong="$script_dir/verus/negative/lds_grid_stride_wrong.rs"
+grid_c_ownership_wrong="$script_dir/verus/negative/lds_grid_c_ownership_wrong.rs"
 version_file="$script_dir/verus/VERUS_VERSION"
 sha256_file="$script_dir/verus/VERUS_SHA256"
 
@@ -89,11 +93,32 @@ require_source "$kphase_reuse_wrong" \
     'mutated_missing_reuse_epoch_protects_prior_reads_v1'
 require_source "$kphase_accumulator_reset_wrong" \
     'mutated_accumulator_reset_preserves_k_product_v1'
+for marker in \
+    'pub open spec fn checked_grid_problem_v1' \
+    'pub open spec fn grid_a_index_v1' \
+    'pub open spec fn grid_b_index_v1' \
+    'pub open spec fn grid_c_index_v1' \
+    'pub proof fn checked_grid_derivation_is_exact_v1' \
+    'pub proof fn workgroup_to_tile_mapping_is_injective_v1' \
+    'pub proof fn all_grid_global_a_b_loads_are_in_bounds_v1' \
+    'pub proof fn each_grid_lane_four_c_stores_are_in_bounds_v1' \
+    'pub proof fn distinct_grid_invocations_own_disjoint_c_v1' \
+    'pub proof fn grid_slice1_barrier_converges_for_one_workgroup_v1'
+do
+    require_source "$grid_proof" "$marker"
+done
+require_source "$grid_tile_mapping_wrong" \
+    'mutated_grid_mapping_is_injective_v1'
+require_source "$grid_stride_wrong" \
+    'mutated_undersized_lda_keeps_a_load_in_bounds_v1'
+require_source "$grid_c_ownership_wrong" \
+    'mutated_distinct_grid_owners_have_disjoint_c_v1'
 
 for file in \
     "$proof" "$a_wrong" "$b_wrong" "$accumulator_wrong" "$xor4_wrong" \
     "$xor2_permutation_wrong" "$kphase_proof" "$kphase_reuse_wrong" \
-    "$kphase_accumulator_reset_wrong"
+    "$kphase_accumulator_reset_wrong" "$grid_proof" \
+    "$grid_tile_mapping_wrong" "$grid_stride_wrong" "$grid_c_ownership_wrong"
 do
     for shortcut in 'admit(' 'assume(' '#[verifier::external_body]'; do
         forbid_source "$file" "$shortcut"
@@ -242,6 +267,26 @@ then
 fi
 printf 'PASS: Slice 2 LDS K-phase model verified (196 verified, 0 errors)\n'
 
+grid_positive_log="$tmp_dir/grid-positive.log"
+if run_verus "$grid_proof" >"$grid_positive_log" 2>&1; then
+    :
+else
+    status=$?
+    printf 'FAIL: Slice 3 LDS grid-stride proof did not verify (status %s)\n' \
+        "$status" >&2
+    cat "$grid_positive_log" >&2
+    exit 1
+fi
+if ! grep -Fq 'verification results:: 101 verified, 0 errors' \
+    "$grid_positive_log"
+then
+    printf 'FAIL: Slice 3 LDS grid-stride proof emitted an unexpected verification summary\n' \
+        >&2
+    cat "$grid_positive_log" >&2
+    exit 1
+fi
+printf 'PASS: Slice 3 LDS grid-stride model verified (101 verified, 0 errors)\n'
+
 run_rejected() {
     name=$1
     file=$2
@@ -300,5 +345,14 @@ run_rejected lds_kphase_reuse_wrong \
 run_rejected lds_kphase_accumulator_reset_wrong \
     "$kphase_accumulator_reset_wrong" \
     'mutated_accumulator_reset_preserves_k_product_v1'
+run_rejected lds_grid_tile_mapping_wrong \
+    "$grid_tile_mapping_wrong" \
+    'mutated_grid_mapping_is_injective_v1'
+run_rejected lds_grid_stride_wrong \
+    "$grid_stride_wrong" \
+    'mutated_undersized_lda_keeps_a_load_in_bounds_v1'
+run_rejected lds_grid_c_ownership_wrong \
+    "$grid_c_ownership_wrong" \
+    'mutated_distinct_grid_owners_have_disjoint_c_v1'
 
-printf 'Verus fixture run passed: host and LDS models, 9 expected rejections\n'
+printf 'Verus fixture run passed: host and LDS models, 12 expected rejections\n'
