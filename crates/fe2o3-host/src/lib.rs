@@ -12,6 +12,10 @@ mod generated_lds_gemm_lifecycle_tests;
 mod generated_row_softmax_v1;
 mod generated_scalar_gemm_v1;
 mod generated_vecadd;
+mod generated_wave64_collectives_v1;
+mod generated_wave64_collectives_v1_lifecycle;
+#[cfg(test)]
+mod generated_wave64_collectives_v1_lifecycle_tests;
 mod generated_worker_v2_vecadd;
 mod gfx942_ocml;
 mod hsa_executable_lifecycle;
@@ -143,6 +147,17 @@ pub use generated_scalar_gemm_v1::{
 pub use generated_vecadd::{
     GeneratedVecAddKernelV1, GeneratedVecAddLoadError, GeneratedVecAddPrepareError,
     GeneratedVecAddPreparedV1, GeneratedVecAddProfileError,
+};
+pub use generated_wave64_collectives_v1::{
+    GeneratedWave64CollectivesV1HostAdapterErrorV1, GeneratedWave64CollectivesV1HostAdapterV1,
+    Wave64CollectivesBufferRoleV1,
+};
+pub use generated_wave64_collectives_v1_lifecycle::{
+    CompletedWave64CollectivesV1, JoinedWave64CollectivesV1, LoadedWave64CollectivesV1,
+    ReviewedWave64CollectivesRuntimeAdapterV1, UnloadedWave64CollectivesV1,
+    Wave64CollectivesDispatchErrorV1, Wave64CollectivesJoinErrorV1,
+    Wave64CollectivesKernelResourceObservationV1, Wave64CollectivesLifecycleIdentityV1,
+    Wave64CollectivesLoadErrorV1, Wave64CollectivesUnloadIdentityV1, join_wave64_collectives_v1,
 };
 #[doc(hidden)]
 pub use generated_worker_v2_vecadd::{

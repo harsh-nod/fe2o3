@@ -1,0 +1,11 @@
+error[E0599]: no method named `native_executable_handle` found for reference `&LoadedWave64CollectivesV1<'_, '_, '_, '_, A>` in the current scope
+ --> tests/ui/generated_wave64_collectives_v1/native_handles_are_unavailable.rs:6:19
+  |
+6 |     let _ = value.native_executable_handle();
+  |                   ^^^^^^^^^^^^^^^^^^^^^^^^ method not found in `&LoadedWave64CollectivesV1<'_, '_, '_, '_, A>`
+
+error[E0599]: no method named `native_kernel_handle` found for reference `&LoadedWave64CollectivesV1<'_, '_, '_, '_, A>` in the current scope
+ --> tests/ui/generated_wave64_collectives_v1/native_handles_are_unavailable.rs:7:19
+  |
+7 |     let _ = value.native_kernel_handle();
+  |                   ^^^^^^^^^^^^^^^^^^^^ method not found in `&LoadedWave64CollectivesV1<'_, '_, '_, '_, A>`

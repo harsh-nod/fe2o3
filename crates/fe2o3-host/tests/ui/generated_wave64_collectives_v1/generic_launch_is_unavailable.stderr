@@ -1,0 +1,5 @@
+error[E0599]: no method named `launch` found for struct `LoadedWave64CollectivesV1<'input, 'reduction, 'inclusive, 'exclusive, A>` in the current scope
+ --> tests/ui/generated_wave64_collectives_v1/generic_launch_is_unavailable.rs:6:11
+  |
+6 |     value.launch();
+  |           ^^^^^^ method not found in `LoadedWave64CollectivesV1<'_, '_, '_, '_, A>`

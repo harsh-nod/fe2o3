@@ -149,6 +149,14 @@ impl Wave64CollectivesV1DirectWorkerPinsV1 {
     pub const fn executable(self) -> ContentIdentityV1 {
         self.executable
     }
+
+    pub const fn worker_build_identity_sha256(self) -> [u8; 32] {
+        self.worker_build_identity_sha256
+    }
+
+    pub const fn llvm_build_identity_sha256(self) -> [u8; 32] {
+        self.llvm_build_identity_sha256
+    }
 }
 
 /// Exact out-of-band expectation for one Wave64 compiler handoff and worker.
@@ -225,6 +233,7 @@ pub struct ValidatedWave64CollectivesV1WorkerExchangeV1 {
     compiler_module: ContentIdentityV1,
     linked_output: ContentIdentityV1,
     compiler: Wave64CollectivesV1CompilerPinsV1,
+    worker: Wave64CollectivesV1DirectWorkerPinsV1,
 }
 
 impl ValidatedWave64CollectivesV1WorkerExchangeV1 {
@@ -242,6 +251,10 @@ impl ValidatedWave64CollectivesV1WorkerExchangeV1 {
 
     pub const fn compiler_pins(&self) -> Wave64CollectivesV1CompilerPinsV1 {
         self.compiler
+    }
+
+    pub const fn worker_pins(&self) -> Wave64CollectivesV1DirectWorkerPinsV1 {
+        self.worker
     }
 
     pub const fn code_object_version_was_inspected(&self) -> bool {
@@ -452,6 +465,7 @@ pub fn validate_wave64_collectives_v1_worker_exchange_v1(
         compiler_module: replay.request().compiler_module().identity(),
         linked_output: output.identity(),
         compiler: expected.compiler,
+        worker: expected.worker,
     })
 }
 
