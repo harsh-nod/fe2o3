@@ -56,7 +56,7 @@ shape, and a bounded Verus model for one through four K phases. Slice 3 adds an
 exact `M=64,N=48,K=16` padded-stride IR and lowering with workgroup-X/Y machine
 inspection. Slice 4 adds an exact `M=17,N=19,K=18` tail-safe, two-phase IR with
 predicated accesses, unconditional barriers, and `alpha=2,beta=-1`, alongside
-its bounded Verus edge model.
+its bounded Verus edge model and inspected upstream-LLVM COV6 lowering.
 
 The attributed Slice 1 path deliberately stops before descriptor construction,
 Worker V2 publication, LLVM lowering, HSACO, load, or launch. The independently

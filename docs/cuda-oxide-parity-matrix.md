@@ -406,14 +406,14 @@ The detailed dependencies and exit criteria are in
   WG64 `16x16x16` BF16/FP32 Kernel IR path with upstream-LLVM finalization and
   six-case MI300X execution, K32 loop IR with inspected upstream-LLVM lowering,
   bounded multi-phase Verus evidence, an exact padded-stride Slice 3 IR and
-  inspected grid lowering, and exact tail/alpha/beta Slice 4 proof and IR. The
-  collector now authenticates the exact attributed Slice 1 root, reviewed MIR
-  operation sequence, ABI, geometry, and compiler-derived LDS resources before
-  selecting the canonical verified IR. That bounded correspondence stops before
-  descriptor construction, Worker V2, LLVM, HSACO, load, or launch and is not a
-  compiler-refinement proof. The separately executed artifact is therefore not
-  joined to the source receipt, so these additions do not change the Partial
-  classifications.
+  inspected grid lowering, and exact tail/alpha/beta Slice 4 proof, IR, and
+  inspected upstream-LLVM/COV6 lowering. The collector now authenticates the
+  exact attributed Slice 1 root, reviewed MIR operation sequence, ABI, geometry,
+  and compiler-derived LDS resources before selecting the canonical verified
+  IR. That bounded correspondence stops before descriptor construction, Worker
+  V2, LLVM, HSACO, load, or launch and is not a compiler-refinement proof. The
+  separately executed artifact is therefore not joined to the source receipt,
+  so these additions do not change the Partial classifications.
 - Rows 65, 72, and 73: the gfx942 wave/LDS V2 slice lowers a logically masked
   `u32` wave64 sum through one ballot and six XOR shuffles and lowers the same
   activity contract to an exact 256-thread static-LDS reduction with 18

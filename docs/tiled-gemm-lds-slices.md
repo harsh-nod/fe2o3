@@ -52,13 +52,16 @@ first four slices, but not the artifact-identity join required for promotion:
   `M=17,N=19,K=18` Kernel IR. The IR represents a `2x2` grid, two predicated
   K16 phases, BF16 zero-fill tails, carried FP32 accumulators, unconditional
   publish/reuse barriers, predicated C reads/writes, and `alpha=2,beta=-1`.
+  Dedicated upstream-LLVM lowering and COV6 inspection pin workgroup-X/Y,
+  1,024 LDS bytes, predicated memory, two barriers, one loop-body BF16 MFMA,
+  zero private segment/spills, and no COMGR, calls, scratch, or atomics.
 
 The Slice 1 source receipt deliberately stops before descriptor construction,
 Worker V2 publication, LLVM lowering, linking, HSACO, load, or launch. Thus the
 separately lowered and observed Slice 1 artifact is still not the authenticated
-output of that receipt. Slice 3 lacks protected execution; Slice 4 still lacks
-lowering and protected execution. No slice yet proves compiler refinement or
-machine-level memory/race freedom. All four slices remain Partial.
+output of that receipt. Slices 3 and 4 lack protected execution. No slice yet
+proves compiler refinement or machine-level memory/race freedom. All four
+slices remain Partial.
 
 The active dependency graph is tracked in
 [#85](https://github.com/harsh-nod/fe2o3/issues/85) through
@@ -126,9 +129,9 @@ without allowing any lane to skip a required workgroup barrier. Define and
 test the BF16-input/FP32-accumulation numerical contract separately from exact
 finite-corpus bitwise evidence.
 
-The bounded representative now has exact proof and Kernel IR. Upstream-LLVM
-lowering is tracked in [#86](https://github.com/harsh-nod/fe2o3/issues/86),
-protected MI300X execution in
+The bounded representative now has exact proof, Kernel IR, upstream-LLVM
+lowering, and final machine-shape inspection. Protected MI300X execution is
+tracked in
 [#89](https://github.com/harsh-nod/fe2o3/issues/89), and general attributed
 source in [#90](https://github.com/harsh-nod/fe2o3/issues/90).
 

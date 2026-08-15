@@ -190,7 +190,10 @@ with four expected-rejection mutations. Its exact
 `M=17,N=19,K=18`, `alpha=2,beta=-1` canonical Kernel IR represents a `2x2`
 grid, two predicated K16 phases, BF16 zero-fill tails, reusable XOR4 LDS,
 carried FP32 accumulators, unconditional publish/reuse barriers, and predicated
-C reads/writes. Backend lowering, attributed general source, and protected
+C reads/writes. Dedicated upstream-LLVM lowering and final COV6 inspection pin
+workgroup-X/Y, WG64/wave64, 1,024 LDS bytes, predicated global memory, two
+barriers, one static loop-body BF16 MFMA, zero spills/private segment, and no
+COMGR, calls, scratch, or atomics. Attributed general source and protected
 MI300X numerical execution remain pending.
 
 Implementation claims and dependencies are coordinated in fe2o3 issues
