@@ -137,8 +137,14 @@ fn compile(
     }
 
     let contract = workspace.join("examples/flash_attention_v1/src/contract.rs");
-    let kernel = output.path.join(format!("{label}-kernel.rs"));
-    std::fs::write(&kernel, source).expect("write exact or hostile FlashAttention source");
+    let exact_kernel = workspace.join("examples/flash_attention_v1/src/kernel.rs");
+    let kernel = if source == SOURCE {
+        exact_kernel
+    } else {
+        let path = output.path.join(format!("{label}-kernel.rs"));
+        std::fs::write(&path, source).expect("write hostile FlashAttention source");
+        path
+    };
     let crate_root = output.path.join(format!("{label}.rs"));
     std::fs::write(
         &crate_root,
@@ -158,7 +164,7 @@ fn compile(
         .arg(&crate_root)
         .arg(format!(
             "--remap-path-prefix={}={SOURCE_REMAP}",
-            output.path.display()
+            kernel.display()
         ))
         .arg(format!(
             "--remap-path-prefix={}={WORKSPACE_REMAP}",
