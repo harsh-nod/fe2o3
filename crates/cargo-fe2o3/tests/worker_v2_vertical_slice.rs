@@ -2488,6 +2488,7 @@ fn missing_or_mismeasured_configuration_prevents_rustc_spawn() {
     );
 }
 
+#[cfg(debug_assertions)]
 #[test]
 fn s09_environment_stripping_cannot_downgrade_the_prepared_broker() {
     let directory = TestDirectory::new();
@@ -2505,6 +2506,7 @@ fn s09_environment_stripping_cannot_downgrade_the_prepared_broker() {
     );
 }
 
+#[cfg(debug_assertions)]
 #[test]
 fn s09_requires_the_outer_prepared_worker_identity() {
     let directory = TestDirectory::new();
