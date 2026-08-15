@@ -24,6 +24,7 @@ mod collected_scalar_gemm_v1;
 mod collected_tiled_gemm_lds_slice1_v1;
 mod collected_tiled_gemm_v1;
 mod collected_wave64_collectives_v1;
+mod collected_workgroup_sync_v1;
 mod collector;
 mod compiler_descriptor;
 mod compiler_ffi_adapter;
@@ -198,6 +199,8 @@ enum CodegenPipeline {
     CollectedScalarGemmV1,
     CollectedTiledGemmV1,
     CollectedWave64CollectivesV1,
+    CollectedLdsReductionV1,
+    CollectedScopedAtomicV1,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -279,13 +282,25 @@ impl PipelineSelection {
             {
                 Self::Valid(CodegenPipeline::CollectedWave64CollectivesV1)
             }
+            Some(value)
+                if value == collected_workgroup_sync_v1::COLLECTED_LDS_REDUCTION_PIPELINE_V1 =>
+            {
+                Self::Valid(CodegenPipeline::CollectedLdsReductionV1)
+            }
+            Some(value)
+                if value == collected_workgroup_sync_v1::COLLECTED_SCOPED_ATOMIC_PIPELINE_V1 =>
+            {
+                Self::Valid(CodegenPipeline::CollectedScopedAtomicV1)
+            }
             Some(value) => Self::Invalid(format!(
-                "{CODEGEN_PIPELINE_ENV} must be unset or exactly `legacy-v1`, `kernel-ir-v1`, `kernel-ir-worker-v2`, `{}`, `{}`, `{}`, `{}`, or `{}`; found {value:?}",
+                "{CODEGEN_PIPELINE_ENV} must be unset or exactly `legacy-v1`, `kernel-ir-v1`, `kernel-ir-worker-v2`, `{}`, `{}`, `{}`, `{}`, `{}`, `{}`, or `{}`; found {value:?}",
                 collected_executable_scalar_control_flow_v2::COLLECTED_SCALAR_CONTROL_FLOW_PIPELINE_V2,
                 collected_scalar_gemm_v1::COLLECTED_SCALAR_GEMM_PIPELINE_V1,
                 collected_tiled_gemm_v1::COLLECTED_TILED_GEMM_PIPELINE_V1,
                 collected_row_softmax_v1::COLLECTED_ROW_SOFTMAX_PIPELINE_V1,
                 collected_wave64_collectives_v1::COLLECTED_WAVE64_COLLECTIVES_PIPELINE_V1,
+                collected_workgroup_sync_v1::COLLECTED_LDS_REDUCTION_PIPELINE_V1,
+                collected_workgroup_sync_v1::COLLECTED_SCOPED_ATOMIC_PIPELINE_V1,
             )),
         }
     }
@@ -498,6 +513,76 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                         Err(error) => tcx.dcx().fatal(format!(
                             "[rustc-codegen-fe2o3] {} rejected the collected program without fallback: {error}",
                             collected_executable_scalar_control_flow_v2::COLLECTED_SCALAR_CONTROL_FLOW_PIPELINE_V2,
+                        )),
+                    }
+                } else if matches!(
+                    codegen_pipeline,
+                    PipelineSelection::Valid(
+                        CodegenPipeline::CollectedLdsReductionV1
+                            | CodegenPipeline::CollectedScopedAtomicV1
+                    )
+                ) {
+                    let kind = match codegen_pipeline {
+                        PipelineSelection::Valid(CodegenPipeline::CollectedLdsReductionV1) => {
+                            collected_workgroup_sync_v1::WorkgroupSyncProfileKindV1::LdsReduction
+                        }
+                        PipelineSelection::Valid(CodegenPipeline::CollectedScopedAtomicV1) => {
+                            collected_workgroup_sync_v1::WorkgroupSyncProfileKindV1::ScopedAtomic
+                        }
+                        _ => unreachable!(),
+                    };
+                    let pipeline = match kind {
+                        collected_workgroup_sync_v1::WorkgroupSyncProfileKindV1::LdsReduction => {
+                            collected_workgroup_sync_v1::COLLECTED_LDS_REDUCTION_PIPELINE_V1
+                        }
+                        collected_workgroup_sync_v1::WorkgroupSyncProfileKindV1::ScopedAtomic => {
+                            collected_workgroup_sync_v1::COLLECTED_SCOPED_ATOMIC_PIPELINE_V1
+                        }
+                    };
+                    let admission = (|| -> Result<_, String> {
+                        let collection = collector::collect_device_functions(
+                            tcx,
+                            mono_partitions.codegen_units,
+                            self.config.verbose,
+                        )
+                        .map_err(|error| error.to_string())?;
+                        frontend_record_bridge::extract_frontend_record_v1(tcx, &collection)
+                            .map_err(|error| {
+                                format!("frontend record extraction failed: {error}")
+                            })?;
+                        collector::dump_device_functions(tcx, &collection.functions);
+                        let custom_llvm_pipeline = !tcx.sess.opts.cg.llvm_args.is_empty()
+                            || !tcx.sess.opts.cg.passes.is_empty();
+                        let mut receipt =
+                            collected_workgroup_sync_v1::authenticate_collected_workgroup_sync_v1(
+                                tcx,
+                                &collection,
+                                &self.config.target,
+                                custom_llvm_pipeline,
+                                kind,
+                            )
+                            .map_err(|error| error.to_string())?;
+                        let root = receipt.root_instance_identity().to_owned();
+                        let portable_mir = receipt.portable_mir_hex();
+                        let authority = receipt.authority_hex();
+                        let authenticated = receipt.consume().map_err(|error| error.to_string())?;
+                        Ok((
+                            root,
+                            portable_mir,
+                            authority,
+                            authenticated.source_authority_hex(),
+                            authenticated.descriptor_hex(),
+                            authenticated.kind(),
+                        ))
+                    })();
+                    match admission {
+                        Ok((root, portable_mir, authority, consumed, descriptor, admitted_kind)) => {
+                            tcx.dcx().fatal(format!(
+                                "[rustc-codegen-fe2o3] {pipeline} authenticated exact source bytes, fallback namespace, wrapper/session-derived ordinary #[kernel(typed)] root `{root}`, exact rustc FnAbi, frozen trusted definitions and reviewed semantic-terminal manifest, and complete reachable portable-MIR closure modulo those identity-bound terminals {portable_mir}; consumed sealed authority {authority} (bound value {consumed}) to select closed {admitted_kind:?} semantic KIR with descriptor/resource identity {descriptor}; reviewed source-to-profile and source-to-terminal correspondence only; no generic lowering, terminal-body refinement, compiler-refinement proof, LLVM lowering, Worker V2, finalizer, link, host, runtime, artifact, load, launch, or hardware authority was entered"
+                            ))
+                        }
+                        Err(error) => tcx.dcx().fatal(format!(
+                            "[rustc-codegen-fe2o3] {pipeline} rejected the collected program without fallback: {error}"
                         )),
                     }
                 } else if matches!(
@@ -1271,6 +1356,13 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             CodegenPipeline::CollectedWave64CollectivesV1 => {
                                 Err(amdgpu_llvm::EmitError::Preflight {
                                     reason: "internal error: collected Wave64 collectives V1 entered the legacy artifact transaction"
+                                        .to_owned(),
+                                })
+                            }
+                            CodegenPipeline::CollectedLdsReductionV1
+                            | CodegenPipeline::CollectedScopedAtomicV1 => {
+                                Err(amdgpu_llvm::EmitError::Preflight {
+                                    reason: "internal error: collected workgroup synchronization V1 entered the legacy artifact transaction"
                                         .to_owned(),
                                 })
                             }

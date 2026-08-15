@@ -1687,6 +1687,8 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 }
                 Some(
                     TrustedDeviceItem::DisjointSlice
+                    | TrustedDeviceItem::DeviceGlobalMutPtr
+                    | TrustedDeviceItem::WorkgroupLdsScope
                     | TrustedDeviceItem::ThreadIndex
                     | TrustedDeviceItem::Gfx942CollectivesContext
                     | TrustedDeviceItem::Gfx942StaticLdsU32x256Type
@@ -1713,6 +1715,7 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     | TrustedDeviceItem::LdsTile16x16WriteMfmaBf16
                     | TrustedDeviceItem::LdsTile16x16ReadMfmaBf16
                     | TrustedDeviceItem::WorkgroupSyncthreads
+                    | TrustedDeviceItem::DynamicLdsExactFromCompiler
                     | TrustedDeviceItem::DisjointSliceLen,
                 ) => {
                     return Err(diagnostic(

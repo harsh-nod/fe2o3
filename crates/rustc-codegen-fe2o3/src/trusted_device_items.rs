@@ -90,6 +90,9 @@ pub(crate) enum TrustedAmdGpuDiagnosticOperation {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TrustedDeviceItem {
     DisjointSlice,
+    DeviceGlobalMutPtr,
+    WorkgroupLdsScope,
+    DynamicLdsExactFromCompiler,
     ThreadIndex,
     ThreadIndex1d,
     ThreadIndexGet,
@@ -144,6 +147,21 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         TrustedDeviceItem::DisjointSlice,
         "fe2o3_device_disjoint_slice",
         "fe2o3_device::DisjointSlice",
+    ),
+    (
+        TrustedDeviceItem::DeviceGlobalMutPtr,
+        "fe2o3_device_ffi_global_mut_ptr_v1",
+        "fe2o3_device::DeviceGlobalMutPtr",
+    ),
+    (
+        TrustedDeviceItem::WorkgroupLdsScope,
+        "fe2o3_device_workgroup_lds_scope",
+        "fe2o3_device::WorkgroupLdsScope",
+    ),
+    (
+        TrustedDeviceItem::DynamicLdsExactFromCompiler,
+        "fe2o3_device_dynamic_lds_exact_from_compiler_v1",
+        "fe2o3_device::DynamicLds::<T>::exact_from_compiler",
     ),
     (
         TrustedDeviceItem::ThreadIndex,

@@ -657,6 +657,14 @@ fn kernel_roots<'tcx>(
             Some(TypedKernelProfile::GeneralScalarSliceRustcLayoutV3 {
                 generated_host_contract_identity,
             }) => {
+                if crate::collected_workgroup_sync_v1::quarantine_scoped_atomic_general_contract(
+                    &root.logical_name,
+                    &root.export_name,
+                ) {
+                    root.typed_layout_identities = None;
+                    root.general_typed_contract = None;
+                    continue;
+                }
                 let launch =
                     general_typed_launch_v3(root.frontend_contract.as_ref(), &registration_path)?;
                 let contract = crate::rust_type_layout_v3::extract_general_typed_kernel_v3(
@@ -2845,6 +2853,13 @@ impl<'tcx> DeviceCollector<'tcx> {
             ));
         }
 
+        if crate::collected_workgroup_sync_v1::is_exact_workgroup_sync_rustc_intrinsic(
+            self.tcx,
+            resolved.def_id(),
+        ) {
+            return Ok(());
+        }
+
         if !matches!(resolved.def, InstanceKind::Item(_)) {
             return Err(self.reachable_error(
                 caller,
@@ -2864,6 +2879,18 @@ impl<'tcx> DeviceCollector<'tcx> {
             if self.verbose {
                 eprintln!(
                     "[collector] stopping at resolved trusted device item {}",
+                    self.tcx.def_path_str(resolved.def_id())
+                );
+            }
+            return Ok(());
+        }
+        if crate::collected_workgroup_sync_v1::is_exact_workgroup_sync_compiler_intrinsic(
+            self.tcx,
+            resolved.def_id(),
+        ) {
+            if self.verbose {
+                eprintln!(
+                    "[collector] stopping at exact workgroup-sync compiler intrinsic {}",
                     self.tcx.def_path_str(resolved.def_id())
                 );
             }
