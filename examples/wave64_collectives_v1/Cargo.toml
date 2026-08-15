@@ -7,8 +7,8 @@ repository = "https://github.com/fe2o3-gpu/fe2o3"
 rust-version = "1.94"
 publish = false
 
-# Phase A is intentionally standalone. Compiler authentication, artifact
-# admission, and runtime execution belong to later vertical-slice phases.
+# The package remains standalone so its protected hardware test can pin every
+# compiler/Worker/finalizer input without widening the root workspace graph.
 [workspace]
 
 [dependencies]
@@ -16,6 +16,13 @@ fe2o3-device = { path = "../../crates/fe2o3-device" }
 fe2o3-host = { path = "../../crates/fe2o3-host" }
 
 [dev-dependencies]
+fe2o3-artifact-transaction = { path = "../../crates/fe2o3-artifact-transaction" }
+fe2o3-compiler-ffi = { path = "../../crates/fe2o3-compiler-ffi" }
+fe2o3-core = { path = "../../crates/fe2o3-core" }
+fe2o3-hsa-runtime = { path = "../../crates/fe2o3-hsa-runtime" }
+fe2o3-hsaco = { path = "../../crates/fe2o3-hsaco" }
+fe2o3-hsaco-finalize = { path = "../../crates/fe2o3-hsaco-finalize" }
+fe2o3-kernel-descriptor = { path = "../../crates/fe2o3-kernel-descriptor" }
 syn = { version = "2", features = ["full", "visit"] }
 
 [lib]

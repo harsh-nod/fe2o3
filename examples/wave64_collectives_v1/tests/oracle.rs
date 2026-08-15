@@ -64,6 +64,11 @@ fn sparse_mask_has_exact_physical_lane_order() {
 }
 
 #[test]
+fn alternating_mask_has_exact_physical_lane_order() {
+    assert_exact_mask_semantics(0xaaaa_aaaa_aaaa_aaaa);
+}
+
+#[test]
 fn full_wave_has_exact_reduction_and_scans() {
     assert_exact_mask_semantics(u64::MAX);
 }

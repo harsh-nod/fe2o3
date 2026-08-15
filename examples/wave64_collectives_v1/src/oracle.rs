@@ -137,26 +137,62 @@ fn validate_lengths_and_inputs(
 }
 
 fn compute_outputs(input: &[f32], active_mask: u64) -> (f32, [f32; 64], [f32; 64], [f32; 64]) {
-    let mut reduction_value = 0.0_f32;
-    for (lane, value) in input.iter().copied().enumerate() {
+    let contribution: [f32; WAVE64_LANES_V1] = core::array::from_fn(|lane| {
         if lane_is_active_v1(active_mask, lane) {
-            reduction_value += value;
+            input[lane]
+        } else {
+            0.0
+        }
+    });
+
+    // Match the canonical lowering exactly: six convergent XOR exchanges,
+    // with every round reading the previous round's complete lane vector.
+    let mut reduction_tree = contribution;
+    for distance in [1, 2, 4, 8, 16, 32] {
+        let previous = reduction_tree;
+        for lane in 0..WAVE64_LANES_V1 {
+            reduction_tree[lane] = previous[lane] + previous[lane ^ distance];
         }
     }
 
-    let mut reductions = [0.0_f32; WAVE64_LANES_V1];
-    let mut inclusive = [0.0_f32; WAVE64_LANES_V1];
-    let mut exclusive = [0.0_f32; WAVE64_LANES_V1];
-    let mut prefix = 0.0_f32;
-    for (lane, value) in input.iter().copied().enumerate() {
-        if lane_is_active_v1(active_mask, lane) {
-            reductions[lane] = reduction_value;
-            exclusive[lane] = prefix;
-            prefix += value;
-            inclusive[lane] = prefix;
+    // Match the six ordered bpermute scan rounds in the canonical lowering.
+    let mut inclusive_tree = contribution;
+    for distance in [1, 2, 4, 8, 16, 32] {
+        let previous = inclusive_tree;
+        for lane in distance..WAVE64_LANES_V1 {
+            inclusive_tree[lane] = previous[lane] + previous[lane - distance];
         }
     }
-    (reduction_value, reductions, inclusive, exclusive)
+    let exclusive_tree: [f32; WAVE64_LANES_V1] = core::array::from_fn(|lane| {
+        if lane == 0 {
+            0.0
+        } else {
+            inclusive_tree[lane - 1]
+        }
+    });
+
+    let reductions = core::array::from_fn(|lane| {
+        if lane_is_active_v1(active_mask, lane) {
+            reduction_tree[lane]
+        } else {
+            0.0
+        }
+    });
+    let inclusive = core::array::from_fn(|lane| {
+        if lane_is_active_v1(active_mask, lane) {
+            inclusive_tree[lane]
+        } else {
+            0.0
+        }
+    });
+    let exclusive = core::array::from_fn(|lane| {
+        if lane_is_active_v1(active_mask, lane) {
+            exclusive_tree[lane]
+        } else {
+            0.0
+        }
+    });
+    (reduction_tree[0], reductions, inclusive, exclusive)
 }
 
 /// Computes the exact masked reduction and scans into three distinct outputs.
