@@ -1,0 +1,16 @@
+[package]
+name = "fe2o3-collected-moe-top2-v1-fixture"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# The focused rustc test constructs a path-only crate root over these exact
+# public source files. The admitted kernel body is never copied or rewritten.
+[lib]
+path = "../../../../../examples/moe_top2_v1/src/lib.rs"
+
+[dependencies]
+fe2o3-device = { path = "../../../../fe2o3-device" }
+fe2o3-host = { path = "../../../../fe2o3-host" }
+
+[workspace]
