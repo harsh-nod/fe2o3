@@ -1,0 +1,13 @@
+error[E0505]: cannot move out of `a` because it is borrowed
+  --> tests/ui/generated_lds_gemm/input_buffers_remain_borrowed.rs:20:10
+   |
+ 8 |     a: DeviceBuffer<u16>,
+   |     - binding `a` declared here
+...
+15 |         a.view(..).unwrap(),
+   |         - borrow of `a` occurs here
+...
+20 |     drop(a);
+   |          ^ move out of `a` occurs here
+21 |     let _still_live = prepared;
+   |                       -------- borrow later used here

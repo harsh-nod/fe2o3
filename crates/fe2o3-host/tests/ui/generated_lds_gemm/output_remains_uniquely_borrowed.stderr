@@ -1,0 +1,10 @@
+error[E0502]: cannot borrow `c` as immutable because it is also borrowed as mutable
+  --> tests/ui/generated_lds_gemm/output_remains_uniquely_borrowed.rs:20:18
+   |
+17 |         c.view_mut(..).unwrap(),
+   |         - mutable borrow occurs here
+...
+20 |     let _reuse = c.len();
+   |                  ^ immutable borrow occurs here
+21 |     let _still_live = prepared;
+   |                       -------- mutable borrow later used here

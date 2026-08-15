@@ -5,6 +5,7 @@ mod artifact_binding;
 mod cooperative_launch;
 mod generated_alpha_zeta_cov6;
 mod generated_argument_plan;
+mod generated_lds_gemm;
 mod generated_scalar_gemm_v1;
 mod generated_vecadd;
 mod generated_worker_v2_vecadd;
@@ -106,6 +107,10 @@ pub use generated_argument_plan::{
     GeneratedArgumentLayoutError, GeneratedArgumentPackError, GeneratedArgumentPackingError,
     GeneratedArgumentPackingPlanV1, GeneratedDeviceScalarV1, GeneratedPackingComponentKindV1,
     GeneratedPackingComponentV1,
+};
+#[doc(hidden)]
+pub use generated_lds_gemm::{
+    GeneratedLdsGemmSlice1HostAdapterErrorV1, GeneratedLdsGemmSlice1HostAdapterV1,
 };
 #[doc(hidden)]
 pub use generated_scalar_gemm_v1::{
@@ -226,6 +231,7 @@ pub mod __generated {
         GeneratedArgumentLayoutError, GeneratedArgumentPackError, GeneratedArgumentPackingError,
         GeneratedArgumentPackingPlanV1, GeneratedArtifactAuthenticationError,
         GeneratedDeviceScalarV1, GeneratedKernelBindingV1, GeneratedKernelProfileError,
+        GeneratedLdsGemmSlice1HostAdapterErrorV1, GeneratedLdsGemmSlice1HostAdapterV1,
         GeneratedMarkerBindingError, GeneratedPackingComponentKindV1, GeneratedPackingComponentV1,
         GeneratedReadDeviceSlice, GeneratedReadWriteDeviceSlice,
         GeneratedScalarGemmV1ArgumentBinding, GeneratedScalarGemmV1Completion,
