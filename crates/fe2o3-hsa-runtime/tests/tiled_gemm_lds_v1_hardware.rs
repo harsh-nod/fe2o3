@@ -6,13 +6,16 @@
 //! and hardware results are observations only: this test does not bind the IR
 //! to Rust source, Verus proofs, Worker V2, or publisher authority.
 
+#[cfg(feature = "hardware-test-hooks")]
 use dialect_amdgcn::lower_tiled_gemm_lds_v1_to_gfx942_llvm_ir;
 use fe2o3_host::HsaLaunchGeometryV1;
 use fe2o3_hsaco::{ArgumentAddressSpace, ExplicitValueKind};
+use fe2o3_kernel_ir::TILED_GEMM_LDS_V1_KERNEL_ID;
+#[cfg(feature = "hardware-test-hooks")]
 use fe2o3_kernel_ir::{
-    TILED_GEMM_LDS_V1_KERNEL_ID, TILED_GEMM_LDS_V1_STATIC_LDS_BYTES, TiledGemmLdsV1Profile,
-    tiled_gemm_lds_v1_module,
+    TILED_GEMM_LDS_V1_STATIC_LDS_BYTES, TiledGemmLdsV1Profile, tiled_gemm_lds_v1_module,
 };
+#[cfg(feature = "hardware-test-hooks")]
 use sha2::{Digest, Sha256};
 
 #[cfg(feature = "hardware-test-hooks")]
@@ -53,6 +56,7 @@ const B_PREFIX: u16 = 0x7fd1;
 const B_SUFFIX: u16 = 0x7fd2;
 const C_PREFIX: f32 = f32::from_bits(0x7fc0_c001);
 const C_SUFFIX: f32 = f32::from_bits(0x7fc0_c002);
+#[cfg(feature = "hardware-test-hooks")]
 const C_POISON: f32 = f32::from_bits(0x7fc0_c0ff);
 
 type BoxError = Box<dyn std::error::Error>;
@@ -65,6 +69,7 @@ fn require(condition: bool, message: impl Into<String>) -> Result<(), BoxError> 
     }
 }
 
+#[cfg(feature = "hardware-test-hooks")]
 fn sha256(bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(bytes).into()
 }
