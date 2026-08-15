@@ -30,6 +30,7 @@ mod ir;
 #[path = "launch_kernel_v2.rs"]
 mod launch_kernel_contract_v2;
 mod matrix;
+mod moe_top2_v1;
 mod region_effects;
 mod scalar_gemm_v1;
 pub mod scalar_ops_v2;
@@ -65,6 +66,7 @@ pub use launch_kernel_contract_v2::{
     canonical_occupancy_subject_identity_v2, canonical_variant_tuple_identity_v2,
 };
 pub use matrix::*;
+pub use moe_top2_v1::*;
 pub use region_effects::*;
 pub use scalar_gemm_v1::*;
 pub use semantic_operations::*;
