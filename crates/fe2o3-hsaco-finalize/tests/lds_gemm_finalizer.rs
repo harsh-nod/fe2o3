@@ -87,7 +87,7 @@ use fe2o3_artifact_transaction::{
 };
 use fe2o3_hsaco::CodeObjectVersion as InspectedCodeObjectVersion;
 use lds_gemm_finalizer::{
-    ExactLdsGemmFinalizationErrorV1 as LocalFinalizationError,
+    ExactLdsGemmFinalizationErrorV1 as LocalFinalizationError, ObservedArtifactShapeV1,
     exact_observed_artifact_shape_for_test,
     finalize_exact_lds_gemm_compiler_import_v1 as finalize_local_import,
     validate_elf_safety_for_test, validate_exact_symbol_closure_for_test,
@@ -186,6 +186,79 @@ fn exact_slice1_artifact_shape_is_the_only_admitted_shape() {
             validate_observed_artifact_shape(&mutation),
             Err(LocalFinalizationError::ArtifactShape(_))
         ));
+    }
+}
+
+fn assert_required_optional_none_is_rejected(
+    label: &str,
+    mutate: impl FnOnce(&mut ObservedArtifactShapeV1),
+) {
+    let mut observed = exact_observed_artifact_shape_for_test();
+    mutate(&mut observed);
+    assert!(
+        matches!(
+            validate_observed_artifact_shape(&observed),
+            Err(LocalFinalizationError::ArtifactShape(_))
+        ),
+        "missing required exact-profile field was admitted: {label}"
+    );
+}
+
+#[test]
+fn exact_slice1_artifact_shape_rejects_every_missing_required_optional_field() {
+    assert_required_optional_none_is_rejected("required workgroup size", |observed| {
+        observed.required_workgroup_size = None;
+    });
+    assert_required_optional_none_is_rejected("implicit argument offset", |observed| {
+        observed.implicit_argument_offset = None;
+    });
+    assert_required_optional_none_is_rejected("SGPR spill count", |observed| {
+        observed.sgpr_spill_count = None;
+    });
+    assert_required_optional_none_is_rejected("VGPR spill count", |observed| {
+        observed.vgpr_spill_count = None;
+    });
+
+    for role in 0..3 {
+        let pointer = role * 2;
+        assert_required_optional_none_is_rejected("pointer name", |observed| {
+            observed.explicit_arguments[pointer].name = None;
+        });
+        assert_required_optional_none_is_rejected("pointer alignment", |observed| {
+            observed.explicit_arguments[pointer].alignment = None;
+        });
+        assert_required_optional_none_is_rejected("pointer value type", |observed| {
+            observed.explicit_arguments[pointer].value_type = None;
+        });
+        assert_required_optional_none_is_rejected("pointer address space", |observed| {
+            observed.explicit_arguments[pointer].address_space = None;
+        });
+        assert_required_optional_none_is_rejected("pointer access", |observed| {
+            observed.explicit_arguments[pointer].access = None;
+        });
+        assert_required_optional_none_is_rejected("pointer actual access", |observed| {
+            observed.explicit_arguments[pointer].actual_access = None;
+        });
+        assert_required_optional_none_is_rejected("pointer pointee alignment", |observed| {
+            observed.explicit_arguments[pointer].pointee_alignment = None;
+        });
+        assert_required_optional_none_is_rejected("pointer const qualifier", |observed| {
+            observed.explicit_arguments[pointer].is_const = None;
+        });
+        assert_required_optional_none_is_rejected("pointer restrict qualifier", |observed| {
+            observed.explicit_arguments[pointer].is_restrict = None;
+        });
+
+        let length = pointer + 1;
+        assert_required_optional_none_is_rejected("length name", |observed| {
+            observed.explicit_arguments[length].name = None;
+        });
+        assert_required_optional_none_is_rejected("length alignment", |observed| {
+            observed.explicit_arguments[length].alignment = None;
+        });
+        assert_required_optional_none_is_rejected("length value type", |observed| {
+            observed.explicit_arguments[length].value_type = None;
+        });
     }
 }
 

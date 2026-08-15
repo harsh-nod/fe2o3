@@ -608,8 +608,8 @@ pub(crate) fn validate_observed_artifact_shape(
     if observed.group_segment_fixed_size != u64::from(TILED_GEMM_LDS_V1_STATIC_LDS_BYTES)
         || observed.private_segment_fixed_size != 0
         || observed.uses_dynamic_stack
-        || observed.sgpr_spill_count.is_some_and(|count| count != 0)
-        || observed.vgpr_spill_count.is_some_and(|count| count != 0)
+        || observed.sgpr_spill_count != Some(0)
+        || observed.vgpr_spill_count != Some(0)
     {
         return Err(ExactLdsGemmFinalizationErrorV1::ArtifactShape(
             "LDS/private/spill resources",
@@ -654,23 +654,15 @@ fn validate_pointer_argument(
     if argument.name.as_deref() != Some(&format!("arg{role}.data"))
         || argument.offset != (role as u64) * 16
         || argument.size != 8
-        || argument.alignment.is_some_and(|value| value != 8)
+        || argument.alignment != Some(8)
         || argument.value_kind != ExplicitValueKind::GlobalBuffer
-        || argument
-            .value_type
-            .is_some_and(|value| value != expected_type)
+        || argument.value_type != Some(expected_type)
         || argument.address_space != Some(ArgumentAddressSpace::Global)
-        || argument
-            .access
-            .is_some_and(|value| value != expected_access)
-        || argument
-            .actual_access
-            .is_some_and(|value| value != expected_access)
-        || argument
-            .pointee_alignment
-            .is_some_and(|value| value != expected_pointee_alignment)
-        || argument.is_const.is_some_and(|value| value != (role < 2))
-        || argument.is_restrict.is_some_and(|value| !value)
+        || argument.access != Some(expected_access)
+        || argument.actual_access != Some(expected_access)
+        || argument.pointee_alignment != Some(expected_pointee_alignment)
+        || argument.is_const != Some(role < 2)
+        || argument.is_restrict != Some(true)
     {
         return Err(ExactLdsGemmFinalizationErrorV1::ArtifactShape(
             "explicit pointer ABI",
@@ -686,11 +678,9 @@ fn validate_length_argument(
     if argument.name.as_deref() != Some(&format!("arg{role}.len"))
         || argument.offset != (role as u64) * 16 + 8
         || argument.size != 8
-        || argument.alignment.is_some_and(|value| value != 8)
+        || argument.alignment != Some(8)
         || argument.value_kind != ExplicitValueKind::ByValue
-        || argument
-            .value_type
-            .is_some_and(|value| value != ExplicitValueType::U64)
+        || argument.value_type != Some(ExplicitValueType::U64)
         || argument.address_space.is_some()
         || argument.access.is_some()
         || argument.actual_access.is_some()
