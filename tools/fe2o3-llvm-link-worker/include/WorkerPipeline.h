@@ -13,6 +13,8 @@ inspectLinkedOutputForPublication(llvm::ArrayRef<uint8_t> Bytes,
 llvm::Error
 validateExactLdsGemmSlice1MetadataForTesting(llvm::StringRef MetadataBlob);
 
+llvm::Error validateGenericMetadataForTesting(llvm::StringRef MetadataBlob);
+
 llvm::Error
 validateExactLdsGemmSlice1ElfClosureForTesting(llvm::ArrayRef<uint8_t> Bytes);
 

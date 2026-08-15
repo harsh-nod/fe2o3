@@ -29,6 +29,7 @@
 #include <array>
 #include <cerrno>
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -1222,11 +1223,22 @@ ArgumentMetadataOverride booleanOverride(size_t Index, StringRef Field,
   return {Index, Field, std::nullopt, std::nullopt, Value};
 }
 
-std::string makeExactLdsGemmSlice1MetadataBlob(
-    StringRef OmittedKernelField = {},
-    std::optional<size_t> OmittedArgument = std::nullopt,
-    StringRef OmittedArgumentField = {},
-    const ArgumentMetadataOverride &Override = {}) {
+struct ExactMetadataFixtureOptions {
+  StringRef OmittedKernelField;
+  std::optional<size_t> OmittedArgument;
+  StringRef OmittedArgumentField;
+  ArgumentMetadataOverride Override;
+  uint16_t OptionalHiddenMask = 0;
+  std::optional<std::pair<size_t, size_t>> SwappedArguments;
+  std::array<uint64_t, 3> RequiredWorkgroup = {64, 1, 1};
+  StringRef UnknownRootKey;
+  StringRef UnknownKernelKey;
+  std::optional<size_t> UnknownArgument;
+  StringRef UnknownArgumentKey;
+};
+
+std::string makeExactLdsGemmSlice1MetadataBlobWithOptions(
+    const ExactMetadataFixtureOptions &Options) {
   msgpack::Document Document;
   auto StringNode = [&](StringRef Value) {
     return Document.getNode(Value, /*Copy=*/true);
@@ -1237,15 +1249,17 @@ std::string makeExactLdsGemmSlice1MetadataBlob(
   Version.push_back(Document.getNode(uint64_t(2)));
   Root["amdhsa.version"] = Version;
   Root["amdhsa.target"] = StringNode("amdgcn-amd-amdhsa--gfx942:xnack-");
+  if (!Options.UnknownRootKey.empty())
+    Root[Options.UnknownRootKey] = Document.getNode(uint64_t(1));
 
   auto Kernels = Document.getArrayNode();
   auto Kernel = Document.getMapNode();
   auto KernelUnsigned = [&](StringRef Name, uint64_t Value) {
-    if (OmittedKernelField != Name)
+    if (Options.OmittedKernelField != Name)
       Kernel[Name] = Document.getNode(Value);
   };
   auto KernelString = [&](StringRef Name, StringRef Value) {
-    if (OmittedKernelField != Name)
+    if (Options.OmittedKernelField != Name)
       Kernel[Name] = StringNode(Value);
   };
   KernelString(".name", "tiled_gemm_lds_v1");
@@ -1260,44 +1274,55 @@ std::string makeExactLdsGemmSlice1MetadataBlob(
   KernelUnsigned(".max_flat_workgroup_size", 64);
   KernelUnsigned(".sgpr_spill_count", 0);
   KernelUnsigned(".vgpr_spill_count", 0);
-  if (OmittedKernelField != ".uses_dynamic_stack")
+  if (Options.OmittedKernelField != ".uses_dynamic_stack")
     Kernel[".uses_dynamic_stack"] = Document.getNode(false);
-  if (OmittedKernelField != ".reqd_workgroup_size") {
+  if (Options.OmittedKernelField != ".reqd_workgroup_size") {
     auto Workgroup = Document.getArrayNode();
-    Workgroup.push_back(Document.getNode(uint64_t(64)));
-    Workgroup.push_back(Document.getNode(uint64_t(1)));
-    Workgroup.push_back(Document.getNode(uint64_t(1)));
+    for (uint64_t Dimension : Options.RequiredWorkgroup)
+      Workgroup.push_back(Document.getNode(Dimension));
     Kernel[".reqd_workgroup_size"] = Workgroup;
   }
+  if (!Options.UnknownKernelKey.empty())
+    Kernel[Options.UnknownKernelKey] = Document.getNode(uint64_t(1));
 
-  if (OmittedKernelField != ".args") {
+  if (Options.OmittedKernelField != ".args") {
     auto Arguments = Document.getArrayNode();
+    std::vector<msgpack::DocNode> ArgumentNodes;
     auto AddString = [&](msgpack::MapDocNode &Map, size_t Index, StringRef Name,
                          StringRef Value) {
-      if (OmittedArgument != Index || OmittedArgumentField != Name)
+      if (Options.OmittedArgument != Index ||
+          Options.OmittedArgumentField != Name)
         Map[Name] = StringNode(Value);
     };
     auto AddUnsigned = [&](msgpack::MapDocNode &Map, size_t Index,
                            StringRef Name, uint64_t Value) {
-      if (OmittedArgument != Index || OmittedArgumentField != Name)
+      if (Options.OmittedArgument != Index ||
+          Options.OmittedArgumentField != Name)
         Map[Name] = Document.getNode(Value);
     };
     auto AddBoolean = [&](msgpack::MapDocNode &Map, size_t Index,
                           StringRef Name, bool Value) {
-      if (OmittedArgument != Index || OmittedArgumentField != Name)
+      if (Options.OmittedArgument != Index ||
+          Options.OmittedArgumentField != Name)
         Map[Name] = Document.getNode(Value);
     };
     auto ApplyOverride = [&](msgpack::MapDocNode &Map, size_t Index) {
-      if (Override.Index != Index)
-        return;
-      if (Override.StringValue)
-        Map[Override.Field] = StringNode(*Override.StringValue);
-      else if (Override.UnsignedValue)
-        Map[Override.Field] = Document.getNode(*Override.UnsignedValue);
-      else if (Override.BooleanValue)
-        Map[Override.Field] = Document.getNode(*Override.BooleanValue);
-      else
-        fail("argument metadata override has no value");
+      if (Options.Override.Index == Index) {
+        if (Options.Override.StringValue)
+          Map[Options.Override.Field] =
+              StringNode(*Options.Override.StringValue);
+        else if (Options.Override.UnsignedValue)
+          Map[Options.Override.Field] =
+              Document.getNode(*Options.Override.UnsignedValue);
+        else if (Options.Override.BooleanValue)
+          Map[Options.Override.Field] =
+              Document.getNode(*Options.Override.BooleanValue);
+        else
+          fail("argument metadata override has no value");
+      }
+      if (Options.UnknownArgument == Index &&
+          !Options.UnknownArgumentKey.empty())
+        Map[Options.UnknownArgumentKey] = Document.getNode(uint64_t(1));
     };
     for (size_t Role = 0; Role != 3; ++Role) {
       const size_t PointerIndex = Role * 2;
@@ -1319,7 +1344,7 @@ std::string makeExactLdsGemmSlice1MetadataBlob(
         AddBoolean(Pointer, PointerIndex, ".is_restrict", true);
       }
       ApplyOverride(Pointer, PointerIndex);
-      Arguments.push_back(Pointer);
+      ArgumentNodes.push_back(Pointer);
 
       const size_t LengthIndex = PointerIndex + 1;
       auto Length = Document.getMapNode();
@@ -1330,7 +1355,7 @@ std::string makeExactLdsGemmSlice1MetadataBlob(
       AddUnsigned(Length, LengthIndex, ".size", 8);
       AddString(Length, LengthIndex, ".value_kind", "by_value");
       ApplyOverride(Length, LengthIndex);
-      Arguments.push_back(Length);
+      ArgumentNodes.push_back(Length);
     }
 
     struct HiddenArgument {
@@ -1355,15 +1380,54 @@ std::string makeExactLdsGemmSlice1MetadataBlob(
     }};
     for (size_t HiddenIndex = 0; HiddenIndex != Hidden.size(); ++HiddenIndex) {
       const size_t Index = 6 + HiddenIndex;
-      if (OmittedArgument == Index && OmittedArgumentField.empty())
+      if (Options.OmittedArgument == Index &&
+          Options.OmittedArgumentField.empty())
         continue;
       auto Argument = Document.getMapNode();
       AddUnsigned(Argument, Index, ".offset", Hidden[HiddenIndex].Offset);
       AddUnsigned(Argument, Index, ".size", Hidden[HiddenIndex].Size);
       AddString(Argument, Index, ".value_kind", Hidden[HiddenIndex].Kind);
       ApplyOverride(Argument, Index);
-      Arguments.push_back(Argument);
+      ArgumentNodes.push_back(Argument);
     }
+
+    static constexpr std::array<HiddenArgument, 10> OptionalHidden = {{
+        {120, 8, "hidden_printf_buffer"},
+        {128, 8, "hidden_hostcall_buffer"},
+        {136, 8, "hidden_multigrid_sync_arg"},
+        {144, 8, "hidden_heap_v1"},
+        {152, 8, "hidden_default_queue"},
+        {160, 8, "hidden_completion_action"},
+        {168, 4, "hidden_dynamic_lds_size"},
+        {240, 4, "hidden_private_base"},
+        {244, 4, "hidden_shared_base"},
+        {248, 8, "hidden_queue_ptr"},
+    }};
+    for (size_t OptionalIndex = 0; OptionalIndex != OptionalHidden.size();
+         ++OptionalIndex) {
+      if ((Options.OptionalHiddenMask & (uint16_t(1) << OptionalIndex)) == 0)
+        continue;
+      const size_t Index = 6 + Hidden.size() + OptionalIndex;
+      if (Options.OmittedArgument == Index &&
+          Options.OmittedArgumentField.empty())
+        continue;
+      auto Argument = Document.getMapNode();
+      AddUnsigned(Argument, Index, ".offset",
+                  OptionalHidden[OptionalIndex].Offset);
+      AddUnsigned(Argument, Index, ".size", OptionalHidden[OptionalIndex].Size);
+      AddString(Argument, Index, ".value_kind",
+                OptionalHidden[OptionalIndex].Kind);
+      ApplyOverride(Argument, Index);
+      ArgumentNodes.push_back(Argument);
+    }
+    if (Options.SwappedArguments) {
+      const auto [Left, Right] = *Options.SwappedArguments;
+      require(Left < ArgumentNodes.size() && Right < ArgumentNodes.size(),
+              "metadata fixture swap index is out of range");
+      std::swap(ArgumentNodes[Left], ArgumentNodes[Right]);
+    }
+    for (msgpack::DocNode Argument : ArgumentNodes)
+      Arguments.push_back(Argument);
     Kernel[".args"] = Arguments;
   }
   Kernels.push_back(Kernel);
@@ -1372,6 +1436,19 @@ std::string makeExactLdsGemmSlice1MetadataBlob(
   std::string Blob;
   Document.writeToBlob(Blob);
   return Blob;
+}
+
+std::string makeExactLdsGemmSlice1MetadataBlob(
+    StringRef OmittedKernelField = {},
+    std::optional<size_t> OmittedArgument = std::nullopt,
+    StringRef OmittedArgumentField = {},
+    const ArgumentMetadataOverride &Override = {}) {
+  ExactMetadataFixtureOptions Options;
+  Options.OmittedKernelField = OmittedKernelField;
+  Options.OmittedArgument = OmittedArgument;
+  Options.OmittedArgumentField = OmittedArgumentField;
+  Options.Override = Override;
+  return makeExactLdsGemmSlice1MetadataBlobWithOptions(Options);
 }
 
 void requireExactMetadataFailure(StringRef Blob, StringRef Diagnostic) {
@@ -1384,9 +1461,22 @@ void requireExactMetadataFailure(StringRef Blob, StringRef Diagnostic) {
               .str());
 }
 
+void requireExactMetadataFailure(StringRef Blob) {
+  Error Failure = validateExactLdsGemmSlice1MetadataForTesting(Blob);
+  require(static_cast<bool>(Failure), "hostile exact metadata was accepted");
+  consumeError(std::move(Failure));
+}
+
 void requireExactMetadataSuccess(StringRef Blob, StringRef Label) {
   if (Error Failure = validateExactLdsGemmSlice1MetadataForTesting(Blob))
     fail((Twine("compatible exact metadata was rejected (") + Label +
+          "): " + toString(std::move(Failure)))
+             .str());
+}
+
+void requireGenericMetadataSuccess(StringRef Blob, StringRef Label) {
+  if (Error Failure = validateGenericMetadataForTesting(Blob))
+    fail((Twine("compatible generic metadata was rejected (") + Label +
           "): " + toString(std::move(Failure)))
              .str());
 }
@@ -1944,14 +2034,149 @@ int main(int ArgumentCount, char **Arguments) {
     return makeExactLdsGemmSlice1MetadataBlob({}, std::nullopt, {}, Override);
   };
   for (const auto &[Field, Diagnostic] :
-       std::array<std::pair<StringRef, StringRef>, 4>{
+       std::array<std::pair<StringRef, StringRef>, 5>{
            {{".sgpr_spill_count", "kernel_contract_sgpr_spill_count_missing"},
             {".vgpr_spill_count", "kernel_contract_vgpr_spill_count_missing"},
             {".uses_dynamic_stack",
              "kernel_contract_uses_dynamic_stack_missing"},
-            {".args", "kernel_contract_args_missing"}}})
+            {".args", "kernel_contract_args_missing"},
+            {".reqd_workgroup_size", "kernel_contract_reqd_workgroup_size"}}})
     requireExactMetadataFailure(makeExactLdsGemmSlice1MetadataBlob(Field),
                                 Diagnostic);
+
+  for (size_t Dimension = 0; Dimension != 3; ++Dimension) {
+    ExactMetadataFixtureOptions Options;
+    Options.RequiredWorkgroup[Dimension] += 1;
+    requireExactMetadataFailure(
+        makeExactLdsGemmSlice1MetadataBlobWithOptions(Options));
+  }
+
+  for (StringRef Scope :
+       {StringRef("root"), StringRef("kernel"), StringRef("argument")}) {
+    ExactMetadataFixtureOptions Options;
+    if (Scope == "root")
+      Options.UnknownRootKey = "amdhsa.fe2o3_unknown";
+    else if (Scope == "kernel")
+      Options.UnknownKernelKey = ".fe2o3_unknown";
+    else {
+      Options.UnknownArgument = 0;
+      Options.UnknownArgumentKey = ".fe2o3_unknown";
+    }
+    const std::string Blob =
+        makeExactLdsGemmSlice1MetadataBlobWithOptions(Options);
+    requireGenericMetadataSuccess(Blob,
+                                  (Twine("unknown ") + Scope + " key").str());
+    requireExactMetadataFailure(
+        Blob, (Twine("kernel_contract_unknown_") + Scope + "_key").str());
+  }
+
+  for (const ArgumentMetadataOverride &Override :
+       {unsignedOverride(1, ".offset", 0), unsignedOverride(1, ".align", 16),
+        unsignedOverride(0, ".pointee_align", 3),
+        unsignedOverride(18, ".offset", 304)}) {
+    ExactMetadataFixtureOptions Options;
+    Options.Override = Override;
+    const std::string Blob =
+        makeExactLdsGemmSlice1MetadataBlobWithOptions(Options);
+    requireGenericMetadataSuccess(Blob, "noncanonical argument layout");
+    requireExactMetadataFailure(Blob);
+  }
+
+  struct HiddenArgumentShape {
+    uint64_t Offset;
+    uint64_t Size;
+    StringLiteral ValueKind;
+  };
+  static constexpr std::array<HiddenArgumentShape, 13> RequiredHidden = {{
+      {48, 4, "hidden_block_count_x"},
+      {52, 4, "hidden_block_count_y"},
+      {56, 4, "hidden_block_count_z"},
+      {60, 2, "hidden_group_size_x"},
+      {62, 2, "hidden_group_size_y"},
+      {64, 2, "hidden_group_size_z"},
+      {66, 2, "hidden_remainder_x"},
+      {68, 2, "hidden_remainder_y"},
+      {70, 2, "hidden_remainder_z"},
+      {88, 8, "hidden_global_offset_x"},
+      {96, 8, "hidden_global_offset_y"},
+      {104, 8, "hidden_global_offset_z"},
+      {112, 2, "hidden_grid_dims"},
+  }};
+  static constexpr std::array<HiddenArgumentShape, 10> OptionalHidden = {{
+      {120, 8, "hidden_printf_buffer"},
+      {128, 8, "hidden_hostcall_buffer"},
+      {136, 8, "hidden_multigrid_sync_arg"},
+      {144, 8, "hidden_heap_v1"},
+      {152, 8, "hidden_default_queue"},
+      {160, 8, "hidden_completion_action"},
+      {168, 4, "hidden_dynamic_lds_size"},
+      {240, 4, "hidden_private_base"},
+      {244, 4, "hidden_shared_base"},
+      {248, 8, "hidden_queue_ptr"},
+  }};
+
+  for (size_t HiddenIndex = 0; HiddenIndex != RequiredHidden.size();
+       ++HiddenIndex) {
+    const size_t ArgumentIndex = 6 + HiddenIndex;
+    const HiddenArgumentShape &Expected = RequiredHidden[HiddenIndex];
+    for (const ArgumentMetadataOverride &Override :
+         {unsignedOverride(ArgumentIndex, ".offset", Expected.Offset + 1),
+          unsignedOverride(ArgumentIndex, ".size", Expected.Size + 1),
+          stringOverride(ArgumentIndex, ".value_kind", "by_value")}) {
+      ExactMetadataFixtureOptions Options;
+      Options.Override = Override;
+      requireExactMetadataFailure(
+          makeExactLdsGemmSlice1MetadataBlobWithOptions(Options));
+    }
+    requireExactMetadataFailure(
+        makeExactLdsGemmSlice1MetadataBlob({}, ArgumentIndex));
+
+    ExactMetadataFixtureOptions OrderOptions;
+    const size_t OtherHiddenIndex = HiddenIndex + 1 == RequiredHidden.size()
+                                        ? HiddenIndex - 1
+                                        : HiddenIndex + 1;
+    OrderOptions.SwappedArguments =
+        std::pair<size_t, size_t>{ArgumentIndex, 6 + OtherHiddenIndex};
+    requireExactMetadataFailure(
+        makeExactLdsGemmSlice1MetadataBlobWithOptions(OrderOptions));
+  }
+
+  constexpr uint16_t AllOptionalHidden =
+      (uint16_t(1) << OptionalHidden.size()) - 1;
+  for (uint16_t Mask = 0; Mask <= AllOptionalHidden; ++Mask) {
+    ExactMetadataFixtureOptions Options;
+    Options.OptionalHiddenMask = Mask;
+    requireExactMetadataSuccess(
+        makeExactLdsGemmSlice1MetadataBlobWithOptions(Options),
+        (Twine("optional hidden mask ") + Twine(Mask)).str());
+  }
+  for (size_t HiddenIndex = 0; HiddenIndex != OptionalHidden.size();
+       ++HiddenIndex) {
+    const size_t ConceptualIndex = 6 + RequiredHidden.size() + HiddenIndex;
+    const HiddenArgumentShape &Expected = OptionalHidden[HiddenIndex];
+    for (const ArgumentMetadataOverride &Override :
+         {unsignedOverride(ConceptualIndex, ".offset", Expected.Offset + 1),
+          unsignedOverride(ConceptualIndex, ".size", Expected.Size + 1),
+          stringOverride(ConceptualIndex, ".value_kind", "by_value")}) {
+      ExactMetadataFixtureOptions Options;
+      Options.OptionalHiddenMask = uint16_t(1) << HiddenIndex;
+      Options.Override = Override;
+      requireExactMetadataFailure(
+          makeExactLdsGemmSlice1MetadataBlobWithOptions(Options));
+    }
+
+    ExactMetadataFixtureOptions OrderOptions;
+    OrderOptions.OptionalHiddenMask = AllOptionalHidden;
+    const size_t ActualIndex = 6 + RequiredHidden.size() + HiddenIndex;
+    const size_t OtherHiddenIndex = HiddenIndex + 1 == OptionalHidden.size()
+                                        ? HiddenIndex - 1
+                                        : HiddenIndex + 1;
+    OrderOptions.SwappedArguments = std::pair<size_t, size_t>{
+        ActualIndex, 6 + RequiredHidden.size() + OtherHiddenIndex};
+    requireExactMetadataFailure(
+        makeExactLdsGemmSlice1MetadataBlobWithOptions(OrderOptions));
+  }
+
   for (size_t Role = 0; Role != 3; ++Role) {
     const size_t Pointer = Role * 2;
     const size_t Length = Pointer + 1;

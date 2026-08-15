@@ -129,6 +129,8 @@ struct TargetParts {
 
 enum class PostLinkProfile { LegacyGfx942G1, ExactLdsGemmSlice1 };
 
+enum class MetadataValidationPolicy { Generic, ExactLdsGemmSlice1 };
+
 constexpr StringLiteral ExactLdsGemmSlice1Entry = "tiled_gemm_lds_v1";
 constexpr StringLiteral ExactLdsGemmSlice1Descriptor = "tiled_gemm_lds_v1.kd";
 constexpr StringLiteral ExactLdsGemmSlice1ProducerDataLayout =
@@ -1132,8 +1134,83 @@ metadataOptionalString(msgpack::MapDocNode &Map, StringRef Name) {
   return std::optional<std::string>(Field->second.getString().str());
 }
 
+template <size_t Size>
+Error rejectUnknownExactMetadataKeys(
+    msgpack::MapDocNode &Map,
+    const std::array<StringLiteral, Size> &AllowedKeys, StringRef Scope) {
+  for (const auto &Entry : Map) {
+    if (!Entry.first.isString() ||
+        !llvm::any_of(AllowedKeys, [&](StringRef Allowed) {
+          return Entry.first.getString() == Allowed;
+        }))
+      return postLinkError(
+          "lds_gemm_slice1_profile",
+          (Twine("kernel_contract_unknown_") + Scope + "_key").str());
+  }
+  return Error::success();
+}
+
+Error validateExactLdsGemmSlice1MetadataKeys(msgpack::MapDocNode &Root) {
+  static constexpr std::array RootKeys = {StringLiteral("amdhsa.version"),
+                                          StringLiteral("amdhsa.target"),
+                                          StringLiteral("amdhsa.kernels")};
+  static constexpr std::array KernelKeys = {
+      StringLiteral(".name"),
+      StringLiteral(".symbol"),
+      StringLiteral(".args"),
+      StringLiteral(".reqd_workgroup_size"),
+      StringLiteral(".kernarg_segment_size"),
+      StringLiteral(".group_segment_fixed_size"),
+      StringLiteral(".private_segment_fixed_size"),
+      StringLiteral(".uses_dynamic_stack"),
+      StringLiteral(".workgroup_processor_mode"),
+      StringLiteral(".kernarg_segment_align"),
+      StringLiteral(".wavefront_size"),
+      StringLiteral(".sgpr_count"),
+      StringLiteral(".vgpr_count"),
+      StringLiteral(".agpr_count"),
+      StringLiteral(".max_flat_workgroup_size"),
+      StringLiteral(".sgpr_spill_count"),
+      StringLiteral(".vgpr_spill_count"),
+      StringLiteral(".uniform_work_group_size")};
+  static constexpr std::array ArgumentKeys = {
+      StringLiteral(".name"),          StringLiteral(".type_name"),
+      StringLiteral(".offset"),        StringLiteral(".size"),
+      StringLiteral(".align"),         StringLiteral(".value_kind"),
+      StringLiteral(".value_type"),    StringLiteral(".address_space"),
+      StringLiteral(".access"),        StringLiteral(".actual_access"),
+      StringLiteral(".pointee_align"), StringLiteral(".is_const"),
+      StringLiteral(".is_restrict"),   StringLiteral(".is_volatile"),
+      StringLiteral(".is_pipe")};
+
+  if (Error E = rejectUnknownExactMetadataKeys(Root, RootKeys, "root"))
+    return E;
+  auto Kernels = Root.find("amdhsa.kernels");
+  if (Kernels == Root.end() || !Kernels->second.isArray())
+    return Error::success();
+  for (msgpack::DocNode &KernelNode : Kernels->second.getArray()) {
+    if (!KernelNode.isMap())
+      continue;
+    auto &Kernel = KernelNode.getMap();
+    if (Error E = rejectUnknownExactMetadataKeys(Kernel, KernelKeys, "kernel"))
+      return E;
+    auto Arguments = Kernel.find(".args");
+    if (Arguments == Kernel.end() || !Arguments->second.isArray())
+      continue;
+    for (msgpack::DocNode &ArgumentNode : Arguments->second.getArray()) {
+      if (!ArgumentNode.isMap())
+        continue;
+      if (Error E = rejectUnknownExactMetadataKeys(ArgumentNode.getMap(),
+                                                   ArgumentKeys, "argument"))
+        return E;
+    }
+  }
+  return Error::success();
+}
+
 Expected<std::optional<std::vector<KernelArgumentContract>>>
-metadataArguments(msgpack::MapDocNode &Kernel, uint64_t KernargSegmentSize) {
+metadataArguments(msgpack::MapDocNode &Kernel, uint64_t KernargSegmentSize,
+                  MetadataValidationPolicy Policy) {
   auto Field = Kernel.find(".args");
   if (Field == Kernel.end())
     return std::optional<std::vector<KernelArgumentContract>>{};
@@ -1192,19 +1269,22 @@ metadataArguments(msgpack::MapDocNode &Kernel, uint64_t KernargSegmentSize) {
     if (!IsPipe)
       return IsPipe.takeError();
 
-    if (*Size == 0 || *Offset > std::numeric_limits<uint64_t>::max() - *Size ||
-        *Offset + *Size > KernargSegmentSize)
-      return pipelineError("AMDGPU metadata argument range is invalid");
-    if (*Offset < PreviousEnd)
-      return pipelineError(
-          "AMDGPU metadata arguments overlap or are unordered");
-    if (*Align &&
-        (**Align == 0 || !isPowerOf2_64(**Align) || *Offset % **Align != 0))
-      return pipelineError("AMDGPU metadata argument alignment is invalid");
-    if (*PointeeAlign &&
-        (**PointeeAlign == 0 || !isPowerOf2_64(**PointeeAlign)))
-      return pipelineError(
-          "AMDGPU metadata argument pointee alignment is invalid");
+    if (Policy == MetadataValidationPolicy::ExactLdsGemmSlice1) {
+      if (*Size == 0 ||
+          *Offset > std::numeric_limits<uint64_t>::max() - *Size ||
+          *Offset + *Size > KernargSegmentSize)
+        return pipelineError("AMDGPU metadata argument range is invalid");
+      if (*Offset < PreviousEnd)
+        return pipelineError(
+            "AMDGPU metadata arguments overlap or are unordered");
+      if (*Align &&
+          (**Align == 0 || !isPowerOf2_64(**Align) || *Offset % **Align != 0))
+        return pipelineError("AMDGPU metadata argument alignment is invalid");
+      if (*PointeeAlign &&
+          (**PointeeAlign == 0 || !isPowerOf2_64(**PointeeAlign)))
+        return pipelineError(
+            "AMDGPU metadata argument pointee alignment is invalid");
+    }
     PreviousEnd = *Offset + *Size;
     Result.push_back({std::move(*Name), std::move(*TypeName), *Offset, *Size,
                       *Align, ValueKind->str(), std::move(*ValueType),
@@ -1242,7 +1322,8 @@ metadataWorkgroupSize(msgpack::MapDocNode &Map) {
 
 Error appendMetadataBlob(StringRef MetadataBlob, MetadataContract &Result,
                          std::set<std::string> &Names,
-                         std::set<std::string> &Symbols) {
+                         std::set<std::string> &Symbols,
+                         MetadataValidationPolicy Policy) {
   if (MetadataBlob.empty())
     return pipelineError("linked output has an empty AMDGPU metadata note");
   msgpack::Document Document;
@@ -1253,6 +1334,9 @@ Error appendMetadataBlob(StringRef MetadataBlob, MetadataContract &Result,
     return pipelineError("linked output has invalid AMDGPU metadata schema");
 
   auto &Root = Document.getRoot().getMap();
+  if (Policy == MetadataValidationPolicy::ExactLdsGemmSlice1)
+    if (Error E = validateExactLdsGemmSlice1MetadataKeys(Root))
+      return E;
   auto Target = metadataString(Root, "amdhsa.target");
   if (!Target)
     return Target.takeError();
@@ -1307,7 +1391,7 @@ Error appendMetadataBlob(StringRef MetadataBlob, MetadataContract &Result,
         metadataOptionalBoolean(Kernel, ".uses_dynamic_stack");
     if (!UsesDynamicStack)
       return UsesDynamicStack.takeError();
-    auto Arguments = metadataArguments(Kernel, *KernargSize);
+    auto Arguments = metadataArguments(Kernel, *KernargSize, Policy);
     if (!Arguments)
       return Arguments.takeError();
 
@@ -1345,7 +1429,8 @@ Error appendMetadataBlob(StringRef MetadataBlob, MetadataContract &Result,
 }
 
 Expected<MetadataContract>
-inspectMetadata(const ELFObjectFile<ELF64LE> &ObjectValue) {
+inspectMetadata(const ELFObjectFile<ELF64LE> &ObjectValue,
+                MetadataValidationPolicy Policy) {
   const ELFFile<ELF64LE> &File = ObjectValue.getELFFile();
   auto Sections = File.sections();
   if (!Sections)
@@ -1376,7 +1461,8 @@ inspectMetadata(const ELFObjectFile<ELF64LE> &ObjectValue) {
   std::set<std::string> Names;
   std::set<std::string> Symbols;
   for (StringRef MetadataBlob : MetadataBlobs)
-    if (Error E = appendMetadataBlob(MetadataBlob, Result, Names, Symbols))
+    if (Error E =
+            appendMetadataBlob(MetadataBlob, Result, Names, Symbols, Policy))
       return E;
   llvm::sort(Result.Kernels, [](const KernelLaunchContract &Left,
                                 const KernelLaunchContract &Right) {
@@ -1744,7 +1830,11 @@ Expected<std::vector<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
           diagnosticList(ExpectedSymbols) +
           " actual=" + diagnosticList(StaticPublicDefinitions));
   }
-  auto Metadata = inspectMetadata(*ConcreteElf);
+  const MetadataValidationPolicy MetadataPolicy =
+      *Profile == PostLinkProfile::ExactLdsGemmSlice1
+          ? MetadataValidationPolicy::ExactLdsGemmSlice1
+          : MetadataValidationPolicy::Generic;
+  auto Metadata = inspectMetadata(*ConcreteElf, MetadataPolicy);
   if (!Metadata)
     return postLinkError("metadata", errorToDiagnostic(Metadata.takeError()));
   if (Metadata->Present) {
@@ -1980,7 +2070,9 @@ Error validateExactLdsGemmSlice1MetadataForTesting(StringRef MetadataBlob) {
   Metadata.Present = true;
   std::set<std::string> Names;
   std::set<std::string> Symbols;
-  if (Error E = appendMetadataBlob(MetadataBlob, Metadata, Names, Symbols))
+  if (Error E =
+          appendMetadataBlob(MetadataBlob, Metadata, Names, Symbols,
+                             MetadataValidationPolicy::ExactLdsGemmSlice1))
     return E;
   if (!Metadata.Target ||
       *Metadata.Target != "amdgcn-amd-amdhsa--gfx942:xnack-")
@@ -1992,6 +2084,15 @@ Error validateExactLdsGemmSlice1MetadataForTesting(StringRef MetadataBlob) {
            std::tie(Right.Name, Right.Symbol);
   });
   return validateExactLdsGemmSlice1Metadata(Metadata);
+}
+
+Error validateGenericMetadataForTesting(StringRef MetadataBlob) {
+  MetadataContract Metadata;
+  Metadata.Present = true;
+  std::set<std::string> Names;
+  std::set<std::string> Symbols;
+  return appendMetadataBlob(MetadataBlob, Metadata, Names, Symbols,
+                            MetadataValidationPolicy::Generic);
 }
 
 Error validateExactLdsGemmSlice1ElfClosureForTesting(ArrayRef<uint8_t> Bytes) {
