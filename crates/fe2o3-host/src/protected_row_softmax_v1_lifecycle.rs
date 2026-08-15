@@ -82,8 +82,21 @@ impl ProtectedRowSoftmaxV1KernelResourceObservationV1 {
 pub unsafe trait ReviewedProtectedRowSoftmaxV1RuntimeAdapterV1:
     ReviewedHsaImplicitKernargAdapterV1
 {
+    /// Returns the identity of this adapter's retained `GpuContext`.
+    ///
+    /// # Safety
+    ///
+    /// The identity must describe the exact live context retained by this
+    /// adapter, and the implementation must not unwind.
     unsafe fn context_identity_v1(&mut self) -> ContextIdentity;
 
+    /// Observes exact resources for the retained executable and kernel.
+    ///
+    /// # Safety
+    ///
+    /// Both arguments must belong to this adapter. The returned observation
+    /// must describe exactly those objects, and the implementation must not
+    /// unwind or expose either object's native handle.
     unsafe fn observe_protected_row_softmax_v1_kernel_resources(
         &mut self,
         executable: &Self::Executable,
