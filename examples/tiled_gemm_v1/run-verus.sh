@@ -6,6 +6,7 @@ proof="$script_dir/verus/tiled_gemm_host_contract.rs"
 lds_proof="$script_dir/verus/lds_tiled_slice1.rs"
 kphase_proof="$script_dir/verus/lds_tiled_kphase.rs"
 grid_proof="$script_dir/verus/lds_tiled_grid_stride.rs"
+edges_proof="$script_dir/verus/lds_tiled_edges_alpha_beta.rs"
 a_wrong="$script_dir/verus/negative/a_register_wrong.rs"
 b_wrong="$script_dir/verus/negative/b_register_wrong.rs"
 accumulator_wrong="$script_dir/verus/negative/accumulator_register_wrong.rs"
@@ -18,6 +19,11 @@ kphase_accumulator_reset_wrong="$script_dir/verus/negative/lds_kphase_accumulato
 grid_tile_mapping_wrong="$script_dir/verus/negative/lds_grid_tile_mapping_wrong.rs"
 grid_stride_wrong="$script_dir/verus/negative/lds_grid_stride_wrong.rs"
 grid_c_ownership_wrong="$script_dir/verus/negative/lds_grid_c_ownership_wrong.rs"
+edges_lane_skips_barrier_wrong="$script_dir/verus/negative/lds_edges_lane_skips_barrier_wrong.rs"
+edges_unguarded_tail_load_wrong="$script_dir/verus/negative/lds_edges_unguarded_tail_load_wrong.rs"
+edges_unguarded_tail_store_wrong="$script_dir/verus/negative/lds_edges_unguarded_tail_store_wrong.rs"
+edges_alpha_beta_wrong="$script_dir/verus/negative/lds_edges_alpha_beta_wrong.rs"
+edges_k_tail_coverage_wrong="$script_dir/verus/negative/lds_edges_k_tail_coverage_wrong.rs"
 version_file="$script_dir/verus/VERUS_VERSION"
 sha256_file="$script_dir/verus/VERUS_SHA256"
 
@@ -113,12 +119,42 @@ require_source "$grid_stride_wrong" \
     'mutated_undersized_lda_keeps_a_load_in_bounds_v1'
 require_source "$grid_c_ownership_wrong" \
     'mutated_distinct_grid_owners_have_disjoint_c_v1'
+for marker in \
+    'pub open spec fn bounded_positive_edges_problem_v1' \
+    'pub open spec fn edges_a_load_enabled_v1' \
+    'pub open spec fn edges_b_load_enabled_v1' \
+    'pub open spec fn edges_c_store_enabled_v1' \
+    'pub proof fn each_lane_predicated_global_load_is_bounded_or_zero_filled_v1' \
+    'pub proof fn each_lane_predicated_c_access_has_no_oob_store_v1' \
+    'pub proof fn distinct_valid_edge_output_owners_are_disjoint_v1' \
+    'pub proof fn each_valid_k_depth_has_exactly_one_tiled_position_v1' \
+    'pub proof fn valid_k_depth_tiled_position_is_unique_v1' \
+    'pub proof fn every_oob_tile_element_is_zero_filled_v1' \
+    'pub proof fn barrier_convergence_is_independent_of_predicates_v1' \
+    'pub proof fn k_tail_contributes_every_valid_depth_exactly_once_v1' \
+    'pub proof fn each_valid_edge_output_has_exact_alpha_beta_v1'
+do
+    require_source "$edges_proof" "$marker"
+done
+require_source "$edges_lane_skips_barrier_wrong" \
+    'mutated_predicate_off_lane_still_reaches_barrier_v1'
+require_source "$edges_unguarded_tail_load_wrong" \
+    'mutated_unguarded_tail_load_is_in_bounds_v1'
+require_source "$edges_unguarded_tail_store_wrong" \
+    'mutated_unguarded_tail_store_is_in_bounds_v1'
+require_source "$edges_alpha_beta_wrong" \
+    'mutated_wrong_alpha_beta_matches_exact_contract_v1'
+require_source "$edges_k_tail_coverage_wrong" \
+    'mutated_floor_phases_cover_k_tail_v1'
 
 for file in \
     "$proof" "$a_wrong" "$b_wrong" "$accumulator_wrong" "$xor4_wrong" \
     "$xor2_permutation_wrong" "$kphase_proof" "$kphase_reuse_wrong" \
     "$kphase_accumulator_reset_wrong" "$grid_proof" \
-    "$grid_tile_mapping_wrong" "$grid_stride_wrong" "$grid_c_ownership_wrong"
+    "$grid_tile_mapping_wrong" "$grid_stride_wrong" "$grid_c_ownership_wrong" \
+    "$edges_proof" "$edges_lane_skips_barrier_wrong" \
+    "$edges_unguarded_tail_load_wrong" "$edges_unguarded_tail_store_wrong" \
+    "$edges_alpha_beta_wrong" "$edges_k_tail_coverage_wrong"
 do
     for shortcut in 'admit(' 'assume(' '#[verifier::external_body]'; do
         forbid_source "$file" "$shortcut"
@@ -287,10 +323,31 @@ then
 fi
 printf 'PASS: Slice 3 LDS grid-stride model verified (101 verified, 0 errors)\n'
 
+edges_positive_log="$tmp_dir/edges-positive.log"
+if run_verus "$edges_proof" >"$edges_positive_log" 2>&1; then
+    :
+else
+    status=$?
+    printf 'FAIL: Slice 4 LDS edge alpha/beta proof did not verify (status %s)\n' \
+        "$status" >&2
+    cat "$edges_positive_log" >&2
+    exit 1
+fi
+if ! grep -Fq 'verification results:: 101 verified, 0 errors' \
+    "$edges_positive_log"
+then
+    printf 'FAIL: Slice 4 LDS edge proof emitted an unexpected verification summary\n' \
+        >&2
+    cat "$edges_positive_log" >&2
+    exit 1
+fi
+printf 'PASS: Slice 4 LDS edge alpha/beta model verified (101 verified, 0 errors)\n'
+
 run_rejected() {
     name=$1
     file=$2
     marker=$3
+    expected_verified=${4:-}
     log="$tmp_dir/$name.log"
     if run_verus "$file" >"$log" 2>&1; then
         printf 'FAIL: %s unexpectedly verified\n' "$name" >&2
@@ -315,7 +372,17 @@ run_rejected() {
         cat "$log" >&2
         exit 1
     fi
-    if ! grep -Eq '^verification results:: [0-9]+ verified, 1 errors$' "$log"; then
+    if [ -n "$expected_verified" ] \
+        && ! grep -Fq "verification results:: $expected_verified verified, 1 errors" "$log"
+    then
+        printf 'FAIL: %s emitted an unexpected verification summary\n' \
+            "$name" >&2
+        cat "$log" >&2
+        exit 1
+    fi
+    if [ -z "$expected_verified" ] \
+        && ! grep -Eq '^verification results:: [0-9]+ verified, 1 errors$' "$log"
+    then
         printf 'FAIL: %s did not report exactly one rejected function\n' \
             "$name" >&2
         cat "$log" >&2
@@ -354,5 +421,25 @@ run_rejected lds_grid_stride_wrong \
 run_rejected lds_grid_c_ownership_wrong \
     "$grid_c_ownership_wrong" \
     'mutated_distinct_grid_owners_have_disjoint_c_v1'
+run_rejected lds_edges_lane_skips_barrier_wrong \
+    "$edges_lane_skips_barrier_wrong" \
+    'mutated_predicate_off_lane_still_reaches_barrier_v1' \
+    101
+run_rejected lds_edges_unguarded_tail_load_wrong \
+    "$edges_unguarded_tail_load_wrong" \
+    'mutated_unguarded_tail_load_is_in_bounds_v1' \
+    101
+run_rejected lds_edges_unguarded_tail_store_wrong \
+    "$edges_unguarded_tail_store_wrong" \
+    'mutated_unguarded_tail_store_is_in_bounds_v1' \
+    101
+run_rejected lds_edges_alpha_beta_wrong \
+    "$edges_alpha_beta_wrong" \
+    'mutated_wrong_alpha_beta_matches_exact_contract_v1' \
+    101
+run_rejected lds_edges_k_tail_coverage_wrong \
+    "$edges_k_tail_coverage_wrong" \
+    'mutated_floor_phases_cover_k_tail_v1' \
+    101
 
-printf 'Verus fixture run passed: host and LDS models, 12 expected rejections\n'
+printf 'Verus fixture run passed: host and LDS models, 17 expected rejections\n'
