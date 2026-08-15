@@ -71,6 +71,36 @@ complete 256-byte implicit-argument contract after optimization and reconciles
 the authenticated descriptor's complete size with AMDHSA metadata's explicit
 prefix; unrelated size/profile mismatches remain rejected.
 
+At implementation commit `c4fcb4d980cf979c0527dfa135a7b9f4fe72a811`, the tiled-GEMM
+Slice 1 path has a separate exact vertical slice. Source/IR groundwork from
+[#85](https://github.com/harsh-nod/fe2o3/issues/85),
+[#86](https://github.com/harsh-nod/fe2o3/issues/86), and
+[#93](https://github.com/harsh-nod/fe2o3/issues/93) enters the sealed
+[#96](https://github.com/harsh-nod/fe2o3/issues/96) profile.
+[#97](https://github.com/harsh-nod/fe2o3/issues/97) performs direct upstream
+LLVM target-machine emission and in-process LLD finalization with no COMGR or
+command-line tools; [#99](https://github.com/harsh-nod/fe2o3/issues/99)
+generates the borrowed A/B/C host adapter; and
+[#100](https://github.com/harsh-nod/fe2o3/issues/100) joins both sides in
+private, non-`Clone`, one-shot `Joined -> Loaded -> Completed -> Unloaded`
+states. Integration [#94](https://github.com/harsh-nod/fe2o3/issues/94) and
+children #96/#97/#99/#100 are closed. The path fixes artifact target
+`gfx942:xnack-`, requires a compatible observed target, and rechecks grid
+`[1,1,1]`, workgroup `[64,1,1]`, 1,024 static LDS bytes, zero private/dynamic
+bytes, and a 48-byte explicit plus 256-byte hidden COV6 kernarg.
+
+One exact MI300X `gfx942` run passed all 256 output bits against the CPU
+reference, immutable A/B checks, prefix/suffix guard canaries, and terminal
+unload. Its measured worker was
+`fe2o3-worker-v1-sha256-6c3dfd5f784b3babe140006aba57a214a897b171860928440184fa201b6f96db`
+with upstream LLVM 22.1.8 build
+`upstream-llvmorg-22.1.8-ca7933e47d3a3451d81e72ac174dcb5aa28b59d1`; the marker
+bound finalizer
+`078e9b523164b679ff7af3b4e819ad041713c53c6841399ac7cea95090f09774`
+and unload
+`df2f77ee798444a9e1fe5e27f219bdf720386eb8603a9a74fccc0df8efb3921c`.
+The older six-case observational LDS run remains separate evidence.
+
 At `daf0b459`, the ignored real-Cargo MI300X Worker V2 integration builds both
 source kernels, validates both backend witnesses, independently inspects and
 canonically finalizes one two-entry `gfx942:xnack-` COV6 artifact, and exports
@@ -106,9 +136,15 @@ durable single-use enforcement nor compiler refinement. The bounded `gfx942`
 machine-effect model analyzes caller-supplied straight-line mechanics rather
 than extracting LLVM IR or HSACO behavior. Rust borrowing enforces
 `split_at_mut` exclusivity, without a mechanical Verus split proof. The
-generated-safe hardware result covers only MI300X `gfx942:xnack-` and uses an
-explicitly fake prerequisite authenticator. These gaps keep every Complete
-count at zero and prevent any cuda-oxide parity claim.
+alpha/zeta generated-safe hardware result covers only MI300X `gfx942:xnack-`
+and uses an explicitly fake prerequisite authenticator. The exact Slice 1
+lifecycle above does not use that fake path, but it also does not authenticate
+compiler origin, consume production Verus certificates
+([#91](https://github.com/harsh-nod/fe2o3/issues/91)), or prove MIR/KIR/LLVM/ISA
+refinement ([#106](https://github.com/harsh-nod/fe2o3/issues/106) and
+[#107](https://github.com/harsh-nod/fe2o3/issues/107)). General
+illegal-memory/race proofs, shapes, and protected Slice 3/4 remain open. These
+gaps keep every Complete count at zero and prevent any cuda-oxide parity claim.
 
 The [monomorphization-dead V1 foundation](monomorphization-dead-v1.md) defines
 one fixed-width, fail-closed folding policy and compiler-private MIR
@@ -403,20 +439,20 @@ The detailed dependencies and exit criteria are in
   IR. V2 also binds the full canonical `gfx942:xnack-` identity through Kernel
   IR and Worker V2. It does not join genuine Rust source to the executed HSACO.
   The separate [LDS-tiled GEMM slices](tiled-gemm-lds-slices.md) add one exact
-  WG64 `16x16x16` BF16/FP32 Kernel IR path with upstream-LLVM finalization and
-  six-case MI300X execution, K32 loop IR with inspected upstream-LLVM lowering,
-  bounded multi-phase Verus evidence, an exact padded-stride Slice 3 IR and
-  inspected grid lowering, and exact tail/alpha/beta Slice 4 proof, IR, and
-  inspected upstream-LLVM/COV6 lowering. The collector now authenticates the
-  exact attributed Slice 1 root, reviewed MIR operation sequence, ABI, geometry,
-  and compiler-derived LDS resources before selecting the canonical verified
-  IR. An identity-bound Verus model adds 96 checked obligations for exact
-  extents, same-epoch LDS initialization, publish ordering, unique output
-  ownership, and source/IR identities, with four expected-rejection mutations.
-  That bounded correspondence stops before descriptor construction, Worker V2,
-  LLVM, HSACO, load, or launch and is not a compiler-refinement proof. The
-  separately executed artifact is therefore not joined to the source receipt,
-  so these additions do not change the Partial classifications.
+  WG64 `16x16x16` BF16/FP32 path. The collector authenticates the exact
+  attributed Slice 1 root, reviewed MIR sequence, ABI, geometry, and
+  compiler-derived LDS resources before selecting canonical verified IR. A
+  sealed profile then carries those identities through a metadata-strict direct
+  LLVM/LLD finalizer, generated borrowed host adapter, and one-shot protected
+  load/dispatch/wait/unload lifecycle. The exact MI300X run checked every one of
+  256 result bits plus A/B immutability and allocation canaries. An older
+  six-case run remains separate numerical evidence. The identity-bound Verus
+  model adds 96 checked source/IR obligations, but no production Verus result is
+  consumed and no compiler or machine-code refinement is proved. K32 loop IR,
+  bounded multi-phase Verus evidence, padded-stride Slice 3 IR/lowering, and
+  tail/alpha/beta Slice 4 proof/IR/lowering remain independent; Slice 3/4 lack
+  protected execution. These additions therefore do not change the Partial
+  classifications.
 - Rows 65, 72, and 73: the gfx942 wave/LDS V2 slice lowers a logically masked
   `u32` wave64 sum through one ballot and six XOR shuffles and lowers the same
   activity contract to an exact 256-thread static-LDS reduction with 18

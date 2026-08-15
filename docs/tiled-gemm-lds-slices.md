@@ -22,8 +22,8 @@ wave64, and upstream LLVM/LLD. COMGR is outside this path.
 
 ## Current implementation boundary
 
-The repository currently has independent evidence for important parts of the
-first four slices, but not the artifact-identity join required for promotion:
+The repository now has one exact, identity-joined Slice 1 vertical slice plus
+independent evidence for later slices:
 
 - the Slice 1 algorithm is ordinary Rust inside `#[kernel(typed, ...)]`. Its
   compiler-only typed LDS acquisition, lane identity, stage operations,
@@ -38,8 +38,21 @@ first four slices, but not the artifact-identity join required for promotion:
   ownership, and the portable-MIR/correspondence/canonical-module identities.
   Four hostile source-model mutations fail at their intended obligations;
 - canonical Slice 1 Kernel IR has hostile verifier tests, a 93-obligation Verus
-  model, dedicated upstream-LLVM lowering, final HSACO inspection, and an
+  model, dedicated upstream-LLVM lowering, final HSACO inspection, and an older
   observational six-case MI300X run with allocation canaries;
+- a sealed Slice 1 profile continues that source/IR groundwork through direct
+  upstream LLVM target-machine emission and the in-process LLD library API in
+  Worker V2, exact COV6 finalization, a generated borrowed A/B/C host adapter,
+  and the private, non-`Clone` one-shot
+  `Joined -> Loaded -> Completed -> Unloaded` lifecycle, with no COMGR or
+  command-line linker;
+- the exact protected path binds artifact target `gfx942:xnack-` to a compatible
+  observed target and rechecks grid `[1,1,1]`, workgroup `[64,1,1]`, 1,024
+  static LDS bytes, zero private/dynamic bytes, and 48 explicit plus 256 hidden
+  COV6 kernarg bytes before its single synchronous dispatch;
+- an MI300X `gfx942` run of that path matched all 256 output bits against the CPU
+  reference, left A/B immutable, preserved prefix/suffix guard canaries, and
+  validated terminal unload;
 - exact K32 Kernel IR carries accumulators across two K16 phases and lowers to
   inspected gfx942 machine code with two static barriers and one loop-body
   MFMA;
@@ -60,24 +73,43 @@ first four slices, but not the artifact-identity join required for promotion:
   1,024 LDS bytes, predicated memory, two barriers, one loop-body BF16 MFMA,
   zero private segment/spills, and no COMGR, calls, scratch, or atomics.
 
-The Slice 1 source receipt deliberately stops before descriptor construction,
-Worker V2 publication, LLVM lowering, linking, HSACO, load, or launch. Thus the
-separately lowered and observed Slice 1 artifact is still not the authenticated
-output of that receipt. Slices 3 and 4 lack protected execution. No slice yet
-proves compiler refinement or machine-level memory/race freedom. All four
-slices remain Partial.
+Slice 1 is therefore functional and measured for this exact bounded profile.
+The executed HSACO is identity-joined through the closed profile and canonical
+re-lowering, but the chain does not authenticate compiler origin or prove that
+the machine code refines the Rust source, MIR, Kernel IR, or Verus model. It is
+not production proof authority and does not establish general illegal-memory
+or race freedom. General shapes and protected Slice 3/4 execution remain open,
+so all four slices and every affected parity row remain Partial.
 
-The active dependency graph is tracked in
-[#85](https://github.com/harsh-nod/fe2o3/issues/85) through
-[#90](https://github.com/harsh-nod/fe2o3/issues/90). Contributors must claim an
-issue and its write set before editing; evidence-site synchronization belongs
-to [fe2o3-kernels #1](https://github.com/harsh-nod/fe2o3-kernels/issues/1).
+The source/IR groundwork is recorded in
+[#85](https://github.com/harsh-nod/fe2o3/issues/85),
+[#86](https://github.com/harsh-nod/fe2o3/issues/86), and
+[#93](https://github.com/harsh-nod/fe2o3/issues/93). Shared integration
+[#94](https://github.com/harsh-nod/fe2o3/issues/94) and children
+[#96](https://github.com/harsh-nod/fe2o3/issues/96),
+[#97](https://github.com/harsh-nod/fe2o3/issues/97),
+[#99](https://github.com/harsh-nod/fe2o3/issues/99), and
+[#100](https://github.com/harsh-nod/fe2o3/issues/100) are closed. Production
+Verus certificate consumption [#91](https://github.com/harsh-nod/fe2o3/issues/91)
+and refinement [#106](https://github.com/harsh-nod/fe2o3/issues/106) and
+[#107](https://github.com/harsh-nod/fe2o3/issues/107) remain open with the other
+Slice 2-4 work.
 
 ## Slice 1: one LDS tile
 
 The fixed operation is one `16x16x16` BF16-by-BF16 product with FP32 output,
 launched as one 64-thread workgroup. It has no M, N, or K tails and no alpha or
 beta operands.
+
+The implemented exact path uses upstream LLVM 22.1.8 build
+`upstream-llvmorg-22.1.8-ca7933e47d3a3451d81e72ac174dcb5aa28b59d1` and measured
+worker
+`fe2o3-worker-v1-sha256-6c3dfd5f784b3babe140006aba57a214a897b171860928440184fa201b6f96db`.
+Its protected MI300X marker was:
+
+```text
+FE2O3_PROTECTED_SLICE1_WORKER_V2_OK outputs=256 max_abs_error=0 finalizer=078e9b523164b679ff7af3b4e819ad041713c53c6841399ac7cea95090f09774 unload=df2f77ee798444a9e1fe5e27f219bdf720386eb8603a9a74fccc0df8efb3921c
+```
 
 Promotion requires all of the following:
 
@@ -100,7 +132,8 @@ Promotion requires all of the following:
 - MI300X tests covering every output element, input immutability, surrounding
   canaries, and zero, identity, dyadic, randomized, and adversarial BF16 data.
 
-Until every item is joined by artifact identity, Slice 1 remains partial.
+The functional lifecycle items above are identity-joined. The source-derived
+proof-authority and general-safety items are not, so Slice 1 remains Partial.
 
 ## Slice 2: multiple K phases
 

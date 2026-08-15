@@ -96,12 +96,13 @@ resource binding. It consumes a single-use correspondence receipt to select
 the canonical Slice 1 Kernel IR. Hostile removed-barrier, shifted-index, and
 same-spelling-helper fixtures cannot select that IR.
 
-That source path stops immediately after canonical IR selection. It does not
-construct a descriptor, publish to Worker V2, lower through LLVM, create or
-load HSACO, or launch. The correspondence is a reviewed exact profile, not a
-compiler-refinement proof or protected authority. The separately lowered and
-observed Slice 1 artifact below is therefore not yet joined to this source
-receipt.
+The exact Slice 1 vertical slice continues from that selection through the
+sealed profile registry, direct upstream LLVM target-machine and LLD library
+APIs, canonical COV6 finalization, and a generated borrowed host adapter. The
+adapter and finalized artifact enter a private, non-`Clone`, one-shot
+`Joined -> Loaded -> Completed -> Unloaded` lifecycle. The join authenticates
+the exact profile identities after canonical Worker V2 re-lowering, but it is
+not a compiler-refinement proof or compiler-origin authentication.
 
 `verus/lds_tiled_slice1_source_refinement.rs` is a bounded, identity-bound
 source/model correspondence for this exact profile. Its 96 verified obligations
@@ -159,19 +160,44 @@ is unavailable or differs.
 ## LDS execution slices
 
 Slice 1 has a canonical bounded Kernel IR for one `16x16x16` tile. Dedicated
-lowering produces AMDGPU LLVM IR and final COV6 HSACO using upstream LLVM 22
-`llc` and `ld.lld`, without COMGR. Final inspection requires the exact
-`gfx942:xnack-` target, WG64/wave64, 1,024 static LDS bytes, zero unexpected
-private segment or spills, LDS reads and writes, one converged barrier, one
-BF16 MFMA, and no calls or atomics.
+lowering produces AMDGPU LLVM IR and final COV6 HSACO with upstream LLVM 22
+target-machine emission and the in-process LLD library API, without COMGR or
+shelling out to `llc` or `ld.lld`. Final inspection requires the exact artifact
+target `gfx942:xnack-`, WG64/wave64, 1,024 static LDS bytes, zero private or
+dynamic segment bytes, LDS reads and writes, one converged barrier, one BF16
+MFMA, and no calls or atomics. The launch contract is one `[64,1,1]` workgroup
+over grid `[1,1,1]`, with 48 explicit plus 256 hidden COV6 kernarg bytes.
+
+The exact protected hardware test at
+`crates/fe2o3-hsa-runtime/tests/tiled_gemm_lds_slice1_worker_v2_hardware.rs`
+ran the public one-shot lifecycle on MI300X `gfx942`, accepting the compatible
+observed target while retaining the exact `gfx942:xnack-` artifact identity. It
+matched all 256 output bits against the CPU reference, preserved immutable A/B,
+and preserved prefix/suffix guard canaries. The measured inputs were upstream
+LLVM 22.1.8 build
+`upstream-llvmorg-22.1.8-ca7933e47d3a3451d81e72ac174dcb5aa28b59d1` and worker
+`fe2o3-worker-v1-sha256-6c3dfd5f784b3babe140006aba57a214a897b171860928440184fa201b6f96db`.
+The terminal marker was:
+
+```text
+FE2O3_PROTECTED_SLICE1_WORKER_V2_OK outputs=256 max_abs_error=0 finalizer=078e9b523164b679ff7af3b4e819ad041713c53c6841399ac7cea95090f09774 unload=df2f77ee798444a9e1fe5e27f219bdf720386eb8603a9a74fccc0df8efb3921c
+```
 
 The ignored opt-in runtime test at
 `crates/fe2o3-hsa-runtime/tests/tiled_gemm_lds_v1_hardware.rs` regenerates that
-observational artifact with SHA-pinned upstream LLVM tools. On MI300X it passed
-zero, identity, dyadic, deterministic-random, signed-cancellation, and
-adversarial finite-BF16 cases: 1,536 output values plus immutable A/B checks
-and prefix/suffix canaries around all three allocations. This is IR-derived
-hardware evidence, not source correspondence or protected launch authority.
+older observational artifact with SHA-pinned upstream LLVM tools. On MI300X it
+passed zero, identity, dyadic, deterministic-random, signed-cancellation, and
+adversarial finite-BF16 cases: 1,536 output values plus immutable A/B checks and
+prefix/suffix canaries around all three allocations. It remains useful
+multi-input numerical evidence, but it is separate from and weaker lifecycle
+evidence than the exact protected path above.
+
+The exact protected execution is functional evidence, not production proof
+authority. It does not authenticate compiler origin, consume a production Verus
+certificate, prove MIR/KIR/LLVM/ISA refinement, or establish general
+illegal-memory or race freedom. It also does not cover general shapes or
+protected Slice 3/4 execution.
+No cuda-oxide parity row or aggregate count changes from this bounded result.
 
 Slice 2 currently has exact K32 Kernel IR with two K16 phases, carried FP32
 accumulators, and barriers before reads and before LDS reuse. Its Verus model
@@ -205,11 +231,19 @@ barriers, one static loop-body BF16 MFMA, zero spills/private segment, and no
 COMGR, calls, scratch, or atomics. Attributed general source and protected
 MI300X numerical execution remain pending.
 
-Implementation claims and dependencies are coordinated in fe2o3 issues
-[#85](https://github.com/harsh-nod/fe2o3/issues/85) through
-[#90](https://github.com/harsh-nod/fe2o3/issues/90). The public tutorial and
-evidence update is tracked in
-[fe2o3-kernels #1](https://github.com/harsh-nod/fe2o3-kernels/issues/1).
+Source/IR groundwork is recorded in
+[#85](https://github.com/harsh-nod/fe2o3/issues/85),
+[#86](https://github.com/harsh-nod/fe2o3/issues/86), and
+[#93](https://github.com/harsh-nod/fe2o3/issues/93). Integration
+[#94](https://github.com/harsh-nod/fe2o3/issues/94) and children
+[#96](https://github.com/harsh-nod/fe2o3/issues/96),
+[#97](https://github.com/harsh-nod/fe2o3/issues/97),
+[#99](https://github.com/harsh-nod/fe2o3/issues/99), and
+[#100](https://github.com/harsh-nod/fe2o3/issues/100) are closed. Production
+certificate consumption [#91](https://github.com/harsh-nod/fe2o3/issues/91),
+refinement [#106](https://github.com/harsh-nod/fe2o3/issues/106) and
+[#107](https://github.com/harsh-nod/fe2o3/issues/107), and the remaining Slice
+2-4 issue graph stay open.
 
 ## Observed direct-global tile
 

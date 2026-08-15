@@ -50,35 +50,58 @@ Verus source model discharges 96 obligations for exact lengths, LDS
 initialization, publish ordering, and unique output ownership; four hostile
 length, barrier, ownership, and portable-MIR identity mutations are rejected.
 
-The canonical Slice 1 IR separately lowers through pinned upstream LLVM/LLD to
-a COV6 `gfx942:xnack-` WG64/wave64 HSACO with 1,024 bytes of static LDS, LDS
-traffic, a converged barrier, and BF16 MFMA. An observational MI300X harness
-generated and executed those bytes over six numerical cases and 1,536 checked
-outputs. The K32 follow-on has two-phase IR, inspected upstream-LLVM machine
-shape, and a bounded Verus model for one through four K phases. Slice 3 adds an
-exact `M=64,N=48,K=16` padded-stride IR and lowering with workgroup-X/Y machine
+The exact Slice 1 profile now continues through a sealed registry and direct
+upstream LLVM finalizer, without COMGR or shelling out to `llc` or `ld.lld`.
+The worker uses the LLVM target-machine and LLD library APIs, and the finalizer
+admits only the canonical COV6 descriptor and metadata. A generated borrowed
+host adapter then joins the exact finalized artifact to typed A/B/C regions.
+The public one-shot lifecycle has private, non-`Clone` states
+`Joined -> Loaded -> Completed -> Unloaded`; it exposes no finalized bytes,
+native handles, raw kernarg, or generic launch bypass.
+
+That path fixes the artifact target at `gfx942:xnack-`, accepts only a
+compatible observed target, and rechecks grid `[1,1,1]`, workgroup `[64,1,1]`,
+1,024 static LDS bytes, zero private and dynamic bytes, and a COV6 kernarg of 48
+explicit plus 256 hidden bytes. An exact MI300X `gfx942` run passed all 256
+output bits against the CPU reference, preserved A and B, and preserved every
+prefix/suffix guard canary. It used upstream LLVM 22.1.8 build
+`upstream-llvmorg-22.1.8-ca7933e47d3a3451d81e72ac174dcb5aa28b59d1` and worker
+`fe2o3-worker-v1-sha256-6c3dfd5f784b3babe140006aba57a214a897b171860928440184fa201b6f96db`;
+the success receipt reported finalizer
+`078e9b523164b679ff7af3b4e819ad041713c53c6841399ac7cea95090f09774`
+and unload
+`df2f77ee798444a9e1fe5e27f219bdf720386eb8603a9a74fccc0df8efb3921c`.
+
+The K32 follow-on has two-phase IR, inspected upstream-LLVM machine shape, and
+a bounded Verus model for one through four K phases. Slice 3 adds an exact
+`M=64,N=48,K=16` padded-stride IR and lowering with workgroup-X/Y machine
 inspection. Slice 4 adds an exact `M=17,N=19,K=18` tail-safe, two-phase IR with
 predicated accesses, unconditional barriers, and `alpha=2,beta=-1`, alongside
 its bounded Verus edge model and inspected upstream-LLVM COV6 lowering.
 
-The attributed Slice 1 path deliberately stops before descriptor construction,
-Worker V2 publication, LLVM lowering, HSACO, load, or launch. The independently
-lowered and observed artifact therefore is not yet the authenticated output of
-that source receipt. Protected grid/edge execution, general shapes, compiler
-refinement, and machine memory, race, and numerical proofs remain open. The
-older
-[direct-global observation](docs/tiled-gemm-v1-mi300x-observation.md) remains a
-separate non-authoritative profile. This checkpoint does not promote a
-CUDA-Oxide parity row.
+This makes the exact bounded Slice 1 functional and measured, but it is not
+production proof authority. The HSACO is identity-joined through the closed
+profile and canonical re-lowering; compiler-origin authentication, production
+Verus certificate consumption, and MIR/KIR/LLVM/ISA refinement are absent.
+General illegal-memory and race proofs, general shapes, and protected Slice 3/4
+execution also remain open. The older six-case LDS observation and
+[direct-global observation](docs/tiled-gemm-v1-mi300x-observation.md) remain
+separate evidence. No CUDA-Oxide parity row or count changes from this slice.
 
-The active, non-overlapping work is tracked in issues
-[#85](https://github.com/harsh-nod/fe2o3/issues/85) through
-[#90](https://github.com/harsh-nod/fe2o3/issues/90); tutorial and evidence-site
-updates are tracked in
-[fe2o3-kernels #1](https://github.com/harsh-nod/fe2o3-kernels/issues/1).
-The bounded Verus groundwork is in
-[#87](https://github.com/harsh-nod/fe2o3/issues/87); certificate consumption
-and extension to the later slices remain open there.
+The source/IR groundwork landed under
+[#85](https://github.com/harsh-nod/fe2o3/issues/85),
+[#86](https://github.com/harsh-nod/fe2o3/issues/86), and
+[#93](https://github.com/harsh-nod/fe2o3/issues/93). The shared integration
+epic [#94](https://github.com/harsh-nod/fe2o3/issues/94) and its exact-profile,
+finalizer, host-adapter, and lifecycle children
+[#96](https://github.com/harsh-nod/fe2o3/issues/96),
+[#97](https://github.com/harsh-nod/fe2o3/issues/97),
+[#99](https://github.com/harsh-nod/fe2o3/issues/99), and
+[#100](https://github.com/harsh-nod/fe2o3/issues/100) are closed. Production
+certificate consumption [#91](https://github.com/harsh-nod/fe2o3/issues/91),
+refinement [#106](https://github.com/harsh-nod/fe2o3/issues/106) and
+[#107](https://github.com/harsh-nod/fe2o3/issues/107), and the other Slice 2-4
+issues remain open.
 
 The intended end state is:
 
