@@ -1028,8 +1028,8 @@ fn audit_tiled_gemm_lds_v1_llvm(llvm: &str) -> Result<(), TiledGemmLdsLoweringEr
             "missing exact gfx942 data layout",
         ),
         (
-            "define amdgpu_kernel void @tiled_gemm_lds_v1(",
-            "missing canonical LDS kernel definition",
+            "define amdgpu_kernel void @tiled_gemm_lds_v1(ptr addrspace(1) noalias nocapture readonly align 2 %arg0.data, i64 %arg0.len, ptr addrspace(1) noalias nocapture readonly align 2 %arg1.data, i64 %arg1.len, ptr addrspace(1) noalias nocapture align 4 %arg2.data, i64 %arg2.len) #0 !reqd_work_group_size !0 !kernel_arg_access_qual !1 !kernel_arg_type !2 !kernel_arg_base_type !2 !kernel_arg_type_qual !3 {",
+            "missing canonical LDS kernel definition and parameter attributes",
         ),
         (
             "\"target-cpu\"=\"gfx942\"",
@@ -1055,6 +1055,18 @@ fn audit_tiled_gemm_lds_v1_llvm(llvm: &str) -> Result<(), TiledGemmLdsLoweringEr
         (
             "\"denormal-fp-math-f32\"=\"ieee,ieee\"",
             "missing IEEE f32 denormal behavior",
+        ),
+        (
+            "!1 = !{!\"read_only\", !\"none\", !\"read_only\", !\"none\", !\"read_write\", !\"none\"}",
+            "missing exact Slice1 source access qualifiers",
+        ),
+        (
+            "!2 = !{!\"ushort*\", !\"ulong\", !\"ushort*\", !\"ulong\", !\"float*\", !\"ulong\"}",
+            "missing exact Slice1 source type metadata",
+        ),
+        (
+            "!3 = !{!\"const\", !\"\", !\"const\", !\"\", !\"restrict\", !\"\"}",
+            "missing exact Slice1 source type qualifiers",
         ),
     ];
     for (needle, reason) in required {
@@ -3855,6 +3867,24 @@ fn emit_compiler_module(
             .expect("compiler-module kernel requires a workgroup size");
         writeln!(output, "!{index} = !{{i32 {workgroup_x}, i32 1, i32 1}}").unwrap();
     }
+    if target == LoweringTarget::Gfx942TiledGemmLdsV1 {
+        debug_assert_eq!(kernels.len(), 1, "the exact Slice1 profile has one kernel");
+        writeln!(
+            output,
+            "!1 = !{{!\"read_only\", !\"none\", !\"read_only\", !\"none\", !\"read_write\", !\"none\"}}"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "!2 = !{{!\"ushort*\", !\"ulong\", !\"ushort*\", !\"ulong\", !\"float*\", !\"ulong\"}}"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "!3 = !{{!\"const\", !\"\", !\"const\", !\"\", !\"restrict\", !\"\"}}"
+        )
+        .unwrap();
+    }
     output.finish(module)
 }
 
@@ -5843,9 +5873,14 @@ impl<'a> FunctionLowerer<'a> {
     ) -> Result<(), LoweringErrors> {
         let parameters = self.llvm_parameters()?.join(", ");
         if self.kernel.is_some() {
+            let argument_metadata = if self.target == LoweringTarget::Gfx942TiledGemmLdsV1 {
+                " !kernel_arg_access_qual !1 !kernel_arg_type !2 !kernel_arg_base_type !2 !kernel_arg_type_qual !3"
+            } else {
+                ""
+            };
             writeln!(
                 output,
-                "define amdgpu_kernel void @{}({parameters}) #{} !reqd_work_group_size !{} {{",
+                "define amdgpu_kernel void @{}({parameters}) #{} !reqd_work_group_size !{}{argument_metadata} {{",
                 self.symbol,
                 kernel_attribute.expect("kernel attribute index"),
                 kernel_metadata.expect("kernel metadata index"),
@@ -6056,6 +6091,16 @@ impl<'a> FunctionLowerer<'a> {
                 Type::Scalar(scalar) => Ok(format!("{} %arg{index}", llvm_scalar(*scalar))),
                 Type::Pointer(_) if self.kernel.is_none() => {
                     Ok(format!("{} %arg{index}", llvm_type(ty)))
+                }
+                Type::Slice(_) if self.target == LoweringTarget::Gfx942TiledGemmLdsV1 => {
+                    let attributes = match index {
+                        0 | 1 => "noalias nocapture readonly align 2",
+                        2 => "noalias nocapture align 4",
+                        _ => unreachable!("verified Slice1 has exactly three slice parameters"),
+                    };
+                    Ok(format!(
+                        "ptr addrspace(1) {attributes} %arg{index}.data, i64 %arg{index}.len"
+                    ))
                 }
                 Type::Slice(_) => Ok(format!(
                     "ptr addrspace(1) %arg{index}.data, i64 %arg{index}.len"

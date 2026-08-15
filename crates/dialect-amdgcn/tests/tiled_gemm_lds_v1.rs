@@ -23,16 +23,24 @@ fn lowers_only_the_canonical_lds_graph_to_exact_gfx942_llvm() {
     let llvm = output.as_str();
 
     assert!(llvm.contains(GFX942_XNACK_MINUS_DATA_LAYOUT), "{llvm}");
+    let definition = llvm
+        .lines()
+        .find(|line| line.starts_with("define amdgpu_kernel"))
+        .expect("canonical Slice1 definition");
+    assert_eq!(
+        definition,
+        "define amdgpu_kernel void @tiled_gemm_lds_v1(ptr addrspace(1) noalias nocapture readonly align 2 %arg0.data, i64 %arg0.len, ptr addrspace(1) noalias nocapture readonly align 2 %arg1.data, i64 %arg1.len, ptr addrspace(1) noalias nocapture align 4 %arg2.data, i64 %arg2.len) #0 !reqd_work_group_size !0 !kernel_arg_access_qual !1 !kernel_arg_type !2 !kernel_arg_base_type !2 !kernel_arg_type_qual !3 {",
+        "{llvm}"
+    );
     for required in [
         "target triple = \"amdgcn-amd-amdhsa\"",
-        "define amdgpu_kernel void @tiled_gemm_lds_v1(",
-        "ptr addrspace(1) %arg0.data, i64 %arg0.len",
-        "ptr addrspace(1) %arg1.data, i64 %arg1.len",
-        "ptr addrspace(1) %arg2.data, i64 %arg2.len",
         "\"target-cpu\"=\"gfx942\"",
         "\"target-features\"=\"-wavefrontsize32,+wavefrontsize64,-xnack\"",
         "\"amdgpu-flat-work-group-size\"=\"64,64\"",
         "!0 = !{i32 64, i32 1, i32 1}",
+        "!1 = !{!\"read_only\", !\"none\", !\"read_only\", !\"none\", !\"read_write\", !\"none\"}",
+        "!2 = !{!\"ushort*\", !\"ulong\", !\"ushort*\", !\"ulong\", !\"float*\", !\"ulong\"}",
+        "!3 = !{!\"const\", !\"\", !\"const\", !\"\", !\"restrict\", !\"\"}",
         "fence syncscope(\"workgroup\") release",
         "call void asm sideeffect \"s_barrier\", \"\"()",
         "fence syncscope(\"workgroup\") acquire",
@@ -77,8 +85,21 @@ fn lowers_only_the_canonical_lds_graph_to_exact_gfx942_llvm() {
         "@__ockl_",
         "comgr",
         "COMGR",
+        "writeonly align 4 %arg2.data",
     ] {
         assert!(!llvm.contains(forbidden), "found {forbidden:?}\n{llvm}");
+    }
+
+    assert_eq!(definition.matches("noalias nocapture").count(), 3);
+    assert_eq!(definition.matches("readonly align 2").count(), 2);
+    assert_eq!(definition.matches("align 4 %arg2.data").count(), 1);
+    for attachment in [
+        "!kernel_arg_access_qual !1",
+        "!kernel_arg_type !2",
+        "!kernel_arg_base_type !2",
+        "!kernel_arg_type_qual !3",
+    ] {
+        assert_eq!(llvm.matches(attachment).count(), 1, "{attachment}\n{llvm}");
     }
 }
 
