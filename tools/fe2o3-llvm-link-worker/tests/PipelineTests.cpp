@@ -18,6 +18,7 @@
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/SHA256.h"
 #include "llvm/Support/TargetSelect.h"
@@ -770,6 +771,87 @@ std::vector<uint8_t> makeObject(StringRef ModuleName, StringRef Definition,
   return std::vector<uint8_t>(Buffer.begin(), Buffer.end());
 }
 
+std::string loadIntegratedWave64CollectivesV1Body() {
+  SmallString<256> SourcePath(__FILE__);
+  sys::path::remove_filename(SourcePath);
+  sys::path::append(SourcePath, "..", "..", "..");
+  sys::path::append(SourcePath, "crates", "fe2o3-hsaco-finalize", "src");
+  sys::path::append(SourcePath, "wave64_collectives_v1_worker.rs");
+  auto Source = MemoryBuffer::getFile(SourcePath);
+  if (!Source)
+    fail((Twine("cannot read integrated Wave64 source: ") +
+          Source.getError().message())
+             .str());
+  StringRef Rust = (*Source)->getBuffer();
+  constexpr StringLiteral Prefix = "const CANONICAL_LLVM_BODY: &str = r#\"";
+  size_t Begin = Rust.find(Prefix);
+  require(Begin != StringRef::npos,
+          "integrated Wave64 source has no canonical LLVM body");
+  Begin += Prefix.size();
+  size_t End = Rust.find("\"#;", Begin);
+  require(End != StringRef::npos,
+          "integrated Wave64 source has an unterminated LLVM body");
+  return Rust.slice(Begin, End).str();
+}
+
+void appendWave64CompilerSection(std::vector<uint8_t> &Module, StringRef Name,
+                                 ArrayRef<uint8_t> Bytes) {
+  std::string Header = (Twine("\nmodule asm \".section ") + Name +
+                        ",\\22\\22,@progbits\"\nmodule asm \".balign 8\"\n")
+                           .str();
+  llvm::append_range(Module, arrayRefFromStringRef(Header));
+  for (size_t Offset = 0; Offset != Bytes.size(); Offset += 16) {
+    std::string Line = "module asm \".byte ";
+    raw_string_ostream Stream(Line);
+    size_t End = std::min(Bytes.size(), Offset + 16);
+    for (size_t Index = Offset; Index != End; ++Index) {
+      if (Index != Offset)
+        Stream << ", ";
+      Stream << "0x" << format_hex_no_prefix(Bytes[Index], 2);
+    }
+    Stream << "\"\n";
+    Stream.flush();
+    llvm::append_range(Module, arrayRefFromStringRef(Line));
+  }
+}
+
+constexpr std::array<uint8_t, 32> ExactWave64MirSha256 = {
+    0x9b, 0xfb, 0x30, 0x50, 0x89, 0x75, 0x1c, 0xe7, 0x59, 0x32, 0x27,
+    0x06, 0x97, 0x68, 0xd5, 0xe7, 0xa9, 0x83, 0x60, 0xb7, 0xde, 0xd8,
+    0x90, 0xf8, 0xb2, 0x13, 0xa0, 0xd9, 0x5d, 0x15, 0x8e, 0x7a};
+constexpr std::array<uint8_t, 32> ExactWave64KirSha256 = {
+    0x7d, 0x88, 0x09, 0x25, 0xf5, 0xb3, 0xee, 0x4f, 0xcb, 0xb5, 0xd6,
+    0xbe, 0x34, 0xa4, 0xbe, 0x63, 0xfd, 0xe6, 0x99, 0x14, 0x69, 0x3a,
+    0x66, 0xb6, 0x35, 0xb7, 0x19, 0xae, 0x41, 0xf7, 0xba, 0x96};
+constexpr std::array<uint8_t, 32> ExactWave64ProfileSha256 = {
+    0xcd, 0x6f, 0x6c, 0x45, 0xf3, 0x78, 0x3b, 0xf9, 0x44, 0xf6, 0xa4,
+    0xe0, 0xc4, 0x01, 0xf2, 0xaa, 0xda, 0x7c, 0x7d, 0x5d, 0x40, 0xbe,
+    0xa7, 0xac, 0xee, 0x6a, 0xe7, 0xcf, 0xf4, 0x0f, 0x77, 0x68};
+
+std::vector<uint8_t> makeExactWave64CollectivesV1TextIr(
+    ArrayRef<uint8_t> Descriptor = ArrayRef<uint8_t>(),
+    ArrayRef<uint8_t> Authority = ArrayRef<uint8_t>(),
+    ArrayRef<uint8_t> Mir = ExactWave64MirSha256,
+    ArrayRef<uint8_t> Kir = ExactWave64KirSha256,
+    ArrayRef<uint8_t> Profile = ExactWave64ProfileSha256) {
+  std::array<uint8_t, 64> DefaultDescriptor{};
+  DefaultDescriptor.fill(0xd3);
+  std::array<uint8_t, 32> DefaultAuthority{};
+  DefaultAuthority.fill(0xa5);
+  if (Descriptor.empty())
+    Descriptor = DefaultDescriptor;
+  if (Authority.empty())
+    Authority = DefaultAuthority;
+  std::string Body = loadIntegratedWave64CollectivesV1Body();
+  std::vector<uint8_t> Result(Body.begin(), Body.end());
+  appendWave64CompilerSection(Result, ".fe2o3.kd.v1", Descriptor);
+  appendWave64CompilerSection(Result, ".fe2o3.wave64-auth.v1", Authority);
+  appendWave64CompilerSection(Result, ".fe2o3.wave64-mir.v1", Mir);
+  appendWave64CompilerSection(Result, ".fe2o3.wave64-kir.v1", Kir);
+  appendWave64CompilerSection(Result, ".fe2o3.wave64-descriptor.v1", Profile);
+  return Result;
+}
+
 Input makeInput(InputKind Kind, std::vector<uint8_t> Bytes) {
   std::array<uint8_t, 32> Digest = SHA256::hash(Bytes);
   return {Kind, Digest, std::move(Bytes)};
@@ -1104,6 +1186,78 @@ void makeDynamicSymbolUndefined(
   fail("fixture did not contain the requested dynamic symbol");
 }
 
+void overwriteStaticSymbolPrefix(std::vector<uint8_t> &Bytes,
+                                 StringRef SymbolName,
+                                 ArrayRef<uint8_t> Prefix) {
+  constexpr size_t Elf64SectionTypeOffset = 4;
+  constexpr size_t Elf64SectionAddressOffset = 16;
+  constexpr size_t Elf64SectionOffsetOffset = 24;
+  constexpr size_t Elf64SectionSizeOffset = 32;
+  constexpr size_t Elf64SectionLinkOffset = 40;
+  constexpr size_t Elf64SectionEntrySizeOffset = 56;
+  constexpr size_t Elf64SymbolNameOffset = 0;
+  constexpr size_t Elf64SymbolSectionIndexOffset = 6;
+  constexpr size_t Elf64SymbolValueOffset = 8;
+  constexpr size_t Elf64SymbolSizeOffset = 16;
+  uint64_t SectionTable = read64(Bytes, 40);
+  uint16_t SectionEntrySize = read16(Bytes, 58);
+  uint16_t SectionCount = read16(Bytes, 60);
+  require(SectionEntrySize >= 64, "fixture has a short section header");
+
+  for (uint16_t I = 0; I < SectionCount; ++I) {
+    size_t Section = SectionTable + static_cast<uint64_t>(I) * SectionEntrySize;
+    if (read32(Bytes, Section + Elf64SectionTypeOffset) != ELF::SHT_SYMTAB)
+      continue;
+    uint64_t Symbols = read64(Bytes, Section + Elf64SectionOffsetOffset);
+    uint64_t SymbolBytes = read64(Bytes, Section + Elf64SectionSizeOffset);
+    uint64_t SymbolSize = read64(Bytes, Section + Elf64SectionEntrySizeOffset);
+    uint32_t StringsIndex = read32(Bytes, Section + Elf64SectionLinkOffset);
+    require(StringsIndex < SectionCount && SymbolSize >= 24,
+            "fixture has an invalid static symbol section");
+    size_t StringsSection =
+        SectionTable + static_cast<uint64_t>(StringsIndex) * SectionEntrySize;
+    uint64_t Strings = read64(Bytes, StringsSection + Elf64SectionOffsetOffset);
+    uint64_t StringBytes =
+        read64(Bytes, StringsSection + Elf64SectionSizeOffset);
+    for (uint64_t Offset = 0; Offset < SymbolBytes; Offset += SymbolSize) {
+      uint32_t NameOffset =
+          read32(Bytes, Symbols + Offset + Elf64SymbolNameOffset);
+      require(NameOffset < StringBytes,
+              "fixture static symbol has an invalid name");
+      const char *Name =
+          reinterpret_cast<const char *>(Bytes.data() + Strings + NameOffset);
+      size_t Remaining = StringBytes - NameOffset;
+      size_t Length = strnlen(Name, Remaining);
+      require(Length < Remaining, "fixture static symbol is unterminated");
+      if (StringRef(Name, Length) != SymbolName)
+        continue;
+      uint16_t CodeSectionIndex =
+          read16(Bytes, Symbols + Offset + Elf64SymbolSectionIndexOffset);
+      require(CodeSectionIndex < SectionCount,
+              "fixture code symbol has an invalid section");
+      uint64_t Value = read64(Bytes, Symbols + Offset + Elf64SymbolValueOffset);
+      uint64_t Size = read64(Bytes, Symbols + Offset + Elf64SymbolSizeOffset);
+      require(Prefix.size() <= Size, "fixture code symbol is too short");
+      size_t CodeSection =
+          SectionTable +
+          static_cast<uint64_t>(CodeSectionIndex) * SectionEntrySize;
+      uint64_t SectionAddress =
+          read64(Bytes, CodeSection + Elf64SectionAddressOffset);
+      uint64_t SectionOffset =
+          read64(Bytes, CodeSection + Elf64SectionOffsetOffset);
+      require(Value >= SectionAddress,
+              "fixture code symbol precedes its section");
+      uint64_t FileOffset = SectionOffset + Value - SectionAddress;
+      require(FileOffset <= Bytes.size() &&
+                  Prefix.size() <= Bytes.size() - FileOffset,
+              "fixture code symbol is outside file bytes");
+      llvm::copy(Prefix, Bytes.begin() + FileOffset);
+      return;
+    }
+  }
+  fail("fixture did not contain the requested static symbol");
+}
+
 void makeStaticSymbolTableRelocationSection(std::vector<uint8_t> &Bytes) {
   constexpr size_t Elf64SectionTypeOffset = 4;
   uint64_t SectionTable = read64(Bytes, 40);
@@ -1146,6 +1300,34 @@ void makeDynamicDependency(std::vector<uint8_t> &Bytes) {
     }
   }
   fail("fixture did not contain a dynamic terminator");
+}
+
+void mutateNamedSectionByte(std::vector<uint8_t> &Bytes,
+                            StringRef SectionName) {
+  StringRef Data(reinterpret_cast<const char *>(Bytes.data()), Bytes.size());
+  auto ObjectOrError =
+      ObjectFile::createObjectFile(MemoryBufferRef(Data, "<mutation>"));
+  if (!ObjectOrError)
+    fail(toString(ObjectOrError.takeError()));
+  auto *Object = dyn_cast<ELF64LEObjectFile>(ObjectOrError->get());
+  require(Object != nullptr, "mutation fixture is not ELF64LE");
+  const ELFFile<ELF64LE> &File = Object->getELFFile();
+  auto Sections = File.sections();
+  if (!Sections)
+    fail(toString(Sections.takeError()));
+  for (const ELF64LE::Shdr &Section : *Sections) {
+    auto Name = File.getSectionName(Section);
+    if (!Name)
+      fail(toString(Name.takeError()));
+    if (*Name != SectionName)
+      continue;
+    require(Section.sh_size != 0 && Section.sh_offset < Bytes.size() &&
+                Section.sh_size <= Bytes.size() - Section.sh_offset,
+            "mutation section range is invalid");
+    Bytes[Section.sh_offset] ^= 1;
+    return;
+  }
+  fail("mutation fixture omitted the requested section");
 }
 
 void corruptMetadataKey(std::vector<uint8_t> &Bytes, StringRef Key) {
@@ -2375,6 +2557,262 @@ int main(int ArgumentCount, char **Arguments) {
   require(StringRef(toString(std::move(DependencyFailure)))
               .contains("reason=dynamic_dependency"),
           "exact profile dependency diagnostic is missing");
+
+  auto MakeExactWave64CollectivesV1Request = [] {
+    Request Result = makeV2Request(
+        makeInput(InputKind::LlvmTextIr, makeExactWave64CollectivesV1TextIr()),
+        {}, {}, {}, {"wave64_collectives_v1", "wave64_collectives_v1.kd"}, 6);
+    Result.Target = "gfx942:xnack-";
+    Result.LinkOptions = {OptimizationLevel::O2, true, true};
+    return Result;
+  };
+  auto RequireWave64InputFailure = [](ArrayRef<uint8_t> Bytes,
+                                      StringRef Expected) {
+    Error Failure =
+        validateExactWave64CollectivesV1CompilerInputForTesting(Bytes);
+    require(static_cast<bool>(Failure),
+            "hostile exact Wave64 compiler input was accepted");
+    std::string Diagnostic = toString(std::move(Failure));
+    require(StringRef(Diagnostic).contains(Expected),
+            "hostile exact Wave64 input failed for the wrong reason");
+  };
+
+  std::vector<uint8_t> ExactWave64Compiler =
+      makeExactWave64CollectivesV1TextIr();
+  if (Error Failure = validateExactWave64CollectivesV1CompilerInputForTesting(
+          ExactWave64Compiler))
+    fail(toString(std::move(Failure)));
+  const size_t ExactWave64BodyBytes =
+      loadIntegratedWave64CollectivesV1Body().size();
+  for (size_t Index = 0; Index != ExactWave64BodyBytes; ++Index) {
+    ExactWave64Compiler[Index] ^= 1;
+    RequireWave64InputFailure(ExactWave64Compiler, "body identity");
+    ExactWave64Compiler[Index] ^= 1;
+  }
+  for (size_t Index = 0; Index != ExactWave64MirSha256.size(); ++Index) {
+    std::array<uint8_t, 32> WrongMir = ExactWave64MirSha256;
+    WrongMir[Index] ^= 1;
+    RequireWave64InputFailure(
+        makeExactWave64CollectivesV1TextIr({}, {}, WrongMir),
+        "compiler/KIR profile identity");
+    std::array<uint8_t, 32> WrongKir = ExactWave64KirSha256;
+    WrongKir[Index] ^= 1;
+    RequireWave64InputFailure(makeExactWave64CollectivesV1TextIr(
+                                  {}, {}, ExactWave64MirSha256, WrongKir),
+                              "compiler/KIR profile identity");
+    std::array<uint8_t, 32> WrongProfile = ExactWave64ProfileSha256;
+    WrongProfile[Index] ^= 1;
+    RequireWave64InputFailure(
+        makeExactWave64CollectivesV1TextIr({}, {}, ExactWave64MirSha256,
+                                           ExactWave64KirSha256, WrongProfile),
+        "compiler/KIR profile identity");
+  }
+  std::array<uint8_t, 32> ZeroAuthority{};
+  RequireWave64InputFailure(
+      makeExactWave64CollectivesV1TextIr({}, ZeroAuthority),
+      "authority identity");
+
+  // The worker binds descriptor transport byte-for-byte. The Rust pinned
+  // handoff expectation/finalizer is intentionally the sole semantic parser.
+  std::array<uint8_t, 64> AlternateDescriptor{};
+  AlternateDescriptor.fill(0x4d);
+  if (Error Failure = validateExactWave64CollectivesV1CompilerInputForTesting(
+          makeExactWave64CollectivesV1TextIr(AlternateDescriptor)))
+    fail(toString(std::move(Failure)));
+
+  Request ExactWave64CollectivesV1 = MakeExactWave64CollectivesV1Request();
+  Response ExactWave64Response =
+      runSuccess(ExactWave64CollectivesV1,
+                 {"wave64_collectives_v1", "wave64_collectives_v1.kd"});
+  requireDiagnostic(ExactWave64Response,
+                    "post_link.check=wave64_collectives_v1_profile status=ok ");
+  requireDiagnostic(ExactWave64Response, "explicit_kernarg_size=72");
+  requireDiagnostic(ExactWave64Response, "kernarg_size=328");
+  requireDiagnostic(ExactWave64Response, "calls=0");
+  requireDiagnostic(ExactWave64Response, "descriptor_binding=byte_exact");
+  Response ExactWave64Replay =
+      runSuccess(ExactWave64CollectivesV1,
+                 {"wave64_collectives_v1", "wave64_collectives_v1.kd"});
+  require(ExactWave64Response.LinkedOutput->Bytes ==
+              ExactWave64Replay.LinkedOutput->Bytes,
+          "exact Wave64 direct LLVM/LLD pipeline is not reproducible");
+
+  Request WrongWave64Options = ExactWave64CollectivesV1;
+  WrongWave64Options.LinkOptions.Optimization = OptimizationLevel::O1;
+  Response WrongWave64OptionsResponse =
+      requireFailure(WrongWave64Options, Stage::InputValidation);
+  requireDiagnostic(WrongWave64OptionsResponse,
+                    "exact Wave64 collectives symbols require the closed "
+                    "Worker V2 profile");
+
+  std::vector<uint8_t> WrongWave64Descriptor =
+      ExactWave64Response.LinkedOutput->Bytes;
+  mutateNamedSectionByte(WrongWave64Descriptor, ".fe2o3.kd.v1");
+  requireInspectionFailure(
+      WrongWave64Descriptor, ExactWave64CollectivesV1,
+      "post_link.check=wave64_collectives_v1_profile status=failed "
+      "reason=descriptor_section_identity");
+
+  std::vector<uint8_t> WrongWave64Call =
+      ExactWave64Response.LinkedOutput->Bytes;
+  static constexpr std::array<uint8_t, 4> SwapPcCall = {0x02, 0x1e, 0x80, 0xbe};
+  overwriteStaticSymbolPrefix(WrongWave64Call, "wave64_collectives_v1",
+                              SwapPcCall);
+  requireInspectionFailure(
+      WrongWave64Call, ExactWave64CollectivesV1,
+      "post_link.check=wave64_collectives_v1_profile status=failed "
+      "reason=machine_call");
+
+  std::vector<uint8_t> WrongWave64Wavefront =
+      ExactWave64Response.LinkedOutput->Bytes;
+  replaceMetadataByte(WrongWave64Wavefront, ".wavefront_size", 64, 32);
+  requireInspectionFailure(
+      WrongWave64Wavefront, ExactWave64CollectivesV1,
+      "post_link.check=wave64_collectives_v1_profile status=failed "
+      "reason=kernel_contract_wavefront_size");
+
+  std::vector<uint8_t> WrongWave64Workgroup =
+      ExactWave64Response.LinkedOutput->Bytes;
+  replaceMetadataByte(WrongWave64Workgroup, ".reqd_workgroup_size", 64, 32);
+  requireInspectionFailure(
+      WrongWave64Workgroup, ExactWave64CollectivesV1,
+      "post_link.check=wave64_collectives_v1_profile status=failed "
+      "reason=kernel_contract_reqd_workgroup_size");
+
+  std::vector<uint8_t> WrongWave64MaxWorkgroup =
+      ExactWave64Response.LinkedOutput->Bytes;
+  replaceMetadataByte(WrongWave64MaxWorkgroup, ".max_flat_workgroup_size", 64,
+                      32);
+  requireInspectionFailure(WrongWave64MaxWorkgroup, ExactWave64CollectivesV1,
+                           "post_link.check=metadata status=failed "
+                           "reason=AMDGPU%20metadata%20required%20workgroup%"
+                           "20size%20exceeds%20its%20"
+                           "maximum");
+
+  std::vector<uint8_t> WrongWave64KernargSize =
+      ExactWave64Response.LinkedOutput->Bytes;
+  replaceMetadataByte(WrongWave64KernargSize, ".kernarg_segment_size", 0x48,
+                      0x49);
+  requireInspectionFailure(
+      WrongWave64KernargSize, ExactWave64CollectivesV1,
+      "post_link.check=wave64_collectives_v1_profile status=failed "
+      "reason=kernel_contract_kernarg_segment_size");
+
+  std::vector<uint8_t> WrongWave64KernargAlign =
+      ExactWave64Response.LinkedOutput->Bytes;
+  replaceMetadataByte(WrongWave64KernargAlign, ".kernarg_segment_align", 8, 16);
+  requireInspectionFailure(
+      WrongWave64KernargAlign, ExactWave64CollectivesV1,
+      "post_link.check=wave64_collectives_v1_profile status=failed "
+      "reason=kernel_contract_kernarg_segment_align");
+
+  std::vector<uint8_t> WrongWave64GroupResource =
+      ExactWave64Response.LinkedOutput->Bytes;
+  replaceMetadataByte(WrongWave64GroupResource, ".group_segment_fixed_size", 0,
+                      1);
+  requireInspectionFailure(
+      WrongWave64GroupResource, ExactWave64CollectivesV1,
+      "post_link.check=wave64_collectives_v1_profile status=failed "
+      "reason=kernel_contract_group_segment_fixed_size");
+
+  std::vector<uint8_t> WrongWave64PrivateResource =
+      ExactWave64Response.LinkedOutput->Bytes;
+  replaceMetadataByte(WrongWave64PrivateResource, ".private_segment_fixed_size",
+                      0, 1);
+  requireInspectionFailure(
+      WrongWave64PrivateResource, ExactWave64CollectivesV1,
+      "post_link.check=wave64_collectives_v1_profile status=failed "
+      "reason=kernel_contract_private_segment_fixed_size");
+
+  std::vector<uint8_t> WrongWave64Spill =
+      ExactWave64Response.LinkedOutput->Bytes;
+  replaceMetadataByte(WrongWave64Spill, ".sgpr_spill_count", 0, 1);
+  requireInspectionFailure(
+      WrongWave64Spill, ExactWave64CollectivesV1,
+      "post_link.check=wave64_collectives_v1_profile status=failed "
+      "reason=kernel_contract_sgpr_spill_count");
+
+  std::vector<uint8_t> WrongWave64VgprSpill =
+      ExactWave64Response.LinkedOutput->Bytes;
+  replaceMetadataByte(WrongWave64VgprSpill, ".vgpr_spill_count", 0, 1);
+  requireInspectionFailure(
+      WrongWave64VgprSpill, ExactWave64CollectivesV1,
+      "post_link.check=wave64_collectives_v1_profile status=failed "
+      "reason=kernel_contract_vgpr_spill_count");
+
+  std::vector<uint8_t> WrongWave64DynamicStack =
+      ExactWave64Response.LinkedOutput->Bytes;
+  replaceMetadataByte(WrongWave64DynamicStack, ".uses_dynamic_stack", 0xc2,
+                      0xc3);
+  requireInspectionFailure(
+      WrongWave64DynamicStack, ExactWave64CollectivesV1,
+      "post_link.check=wave64_collectives_v1_profile status=failed "
+      "reason=kernel_contract_uses_dynamic_stack");
+
+  std::vector<uint8_t> WrongWave64Argument =
+      ExactWave64Response.LinkedOutput->Bytes;
+  replaceMetadataByte(WrongWave64Argument, ".offset", 0, 1);
+  requireInspectionFailure(
+      WrongWave64Argument, ExactWave64CollectivesV1,
+      "post_link.check=metadata status=failed "
+      "reason=AMDGPU%20metadata%20arguments%20overlap%20or%20are%20unordered");
+
+  std::vector<uint8_t> WrongWave64MetadataTarget =
+      ExactWave64Response.LinkedOutput->Bytes;
+  replaceMetadataText(WrongWave64MetadataTarget,
+                      "amdgcn-amd-amdhsa--gfx942:xnack-",
+                      "amdgcn-amd-amdhsa--gfx942:xnack+");
+  requireInspectionFailure(WrongWave64MetadataTarget, ExactWave64CollectivesV1,
+                           "post_link.check=metadata_target status=failed");
+
+  std::vector<uint8_t> WrongWave64MetadataSymbol =
+      ExactWave64Response.LinkedOutput->Bytes;
+  replaceMetadataFieldText(WrongWave64MetadataSymbol, ".symbol",
+                           "wave64_collectives_v1.kd",
+                           "wave64_collectives_v1.xx");
+  requireInspectionFailure(
+      WrongWave64MetadataSymbol, ExactWave64CollectivesV1,
+      "post_link.check=metadata status=failed "
+      "reason=AMDGPU%20metadata%20kernel%20descriptor%20does%20not%20match%20"
+      "its%20entry%20name");
+
+  std::vector<uint8_t> WrongWave64Flags =
+      ExactWave64Response.LinkedOutput->Bytes;
+  constexpr size_t Wave64Elf64FlagsOffset = 48;
+  uint32_t Wave64Flags = read32(WrongWave64Flags, Wave64Elf64FlagsOffset);
+  write32(WrongWave64Flags, Wave64Elf64FlagsOffset,
+          Wave64Flags & ~ELF::EF_AMDGPU_MACH);
+  requireInspectionFailure(WrongWave64Flags, ExactWave64CollectivesV1,
+                           "post_link.check=target status=failed");
+
+  std::vector<uint8_t> WrongWave64Undefined =
+      ExactWave64Response.LinkedOutput->Bytes;
+  makeDynamicSymbolUndefined(WrongWave64Undefined, "wave64_collectives_v1");
+  requireInspectionFailure(WrongWave64Undefined, ExactWave64CollectivesV1,
+                           "post_link.check=unresolved status=failed "
+                           "symbols=[wave64_collectives_v1]");
+
+  std::vector<uint8_t> Wave64Relocation =
+      ExactWave64Response.LinkedOutput->Bytes;
+  makeStaticSymbolTableRelocationSection(Wave64Relocation);
+  Error Wave64RelocationFailure =
+      validateExactWave64CollectivesV1ElfClosureForTesting(Wave64Relocation);
+  require(static_cast<bool>(Wave64RelocationFailure),
+          "Wave64 exact profile accepted a residual relocation");
+  require(StringRef(toString(std::move(Wave64RelocationFailure)))
+              .contains("reason=residual_relocation_section"),
+          "Wave64 exact profile relocation diagnostic is missing");
+
+  std::vector<uint8_t> Wave64Dependency =
+      ExactWave64Response.LinkedOutput->Bytes;
+  makeDynamicDependency(Wave64Dependency);
+  Error Wave64DependencyFailure =
+      validateExactWave64CollectivesV1ElfClosureForTesting(Wave64Dependency);
+  require(static_cast<bool>(Wave64DependencyFailure),
+          "Wave64 exact profile accepted a dynamic dependency");
+  require(StringRef(toString(std::move(Wave64DependencyFailure)))
+              .contains("reason=dynamic_dependency"),
+          "Wave64 exact profile dependency diagnostic is missing");
 
   std::vector<uint8_t> ExactLdsGemmUndefined =
       PublicationResponse.LinkedOutput->Bytes;

@@ -114,11 +114,21 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-llvm_map_components_to_libnames(FE2O3_LLVM_LIBS
-  Core BitReader Linker Passes Target CodeGen Object Support TransformUtils
-  MC MCDisassembler AMDGPUCodeGen AMDGPUAsmParser AMDGPUDesc AMDGPUInfo
-  AMDGPUUtils)
-llvm_map_components_to_libnames(FE2O3_LLVM_TEST_LIBS BitWriter)
+if(TARGET LLVM)
+  # A package built with LLVM_LINK_LLVM_DYLIB exposes LLD against the monolithic
+  # LLVM target. Mixing component archives into that graph registers LLVM
+  # command-line options twice and aborts before main().
+  set(FE2O3_LLVM_LIBS LLVM)
+  set(FE2O3_LLVM_PROTOCOL_LIBS LLVM)
+  set(FE2O3_LLVM_TEST_LIBS LLVM)
+else()
+  llvm_map_components_to_libnames(FE2O3_LLVM_LIBS
+    Core BitReader Linker Passes Target CodeGen Object Support TransformUtils
+    MC MCDisassembler AMDGPUCodeGen AMDGPUAsmParser AMDGPUDesc AMDGPUInfo
+    AMDGPUUtils)
+  llvm_map_components_to_libnames(FE2O3_LLVM_PROTOCOL_LIBS Support)
+  llvm_map_components_to_libnames(FE2O3_LLVM_TEST_LIBS BitWriter)
+endif()
 
 set(FE2O3_WORKER_MEASUREMENT_PREIMAGE
   "llvm=${FE2O3_MEASURED_LLVM_BUILD_ID}|version=${LLVM_PACKAGE_VERSION}"
@@ -171,7 +181,8 @@ target_compile_definitions(fe2o3_worker_protocol PRIVATE
   FE2O3_WORKER_BUILD_ID="${FE2O3_WORKER_MEASUREMENT}")
 target_compile_options(fe2o3_worker_protocol PRIVATE -Wall -Wextra -Wpedantic
   -Werror -Wno-unused-parameter -fno-exceptions -fno-rtti)
-target_link_libraries(fe2o3_worker_protocol PUBLIC LLVMSupport)
+target_link_libraries(fe2o3_worker_protocol PUBLIC
+  ${FE2O3_LLVM_PROTOCOL_LIBS})
 
 add_library(fe2o3_worker_pipeline STATIC src/WorkerPipeline.cpp
   src/WorkerDeviceLibraryPolicy.cpp src/WorkerMachineEffect.cpp)

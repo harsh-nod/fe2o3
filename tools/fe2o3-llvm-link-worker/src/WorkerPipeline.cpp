@@ -16,12 +16,22 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/InstIterator.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/Operator.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Linker/Linker.h"
+#include "llvm/MC/MCAsmInfo.h"
+#include "llvm/MC/MCContext.h"
+#include "llvm/MC/MCDisassembler/MCDisassembler.h"
+#include "llvm/MC/MCInstrDesc.h"
+#include "llvm/MC/MCInstrInfo.h"
+#include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCSubtargetInfo.h"
+#include "llvm/MC/MCTargetOptions.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Object/ObjectFile.h"
@@ -127,22 +137,62 @@ struct TargetParts {
   std::optional<bool> Xnack;
 };
 
-enum class PostLinkProfile { LegacyGfx942G1, ExactLdsGemmSlice1 };
+enum class PostLinkProfile {
+  LegacyGfx942G1,
+  ExactLdsGemmSlice1,
+  ExactWave64CollectivesV1
+};
 
-enum class MetadataValidationPolicy { Generic, ExactLdsGemmSlice1 };
+enum class MetadataValidationPolicy {
+  Generic,
+  ExactLdsGemmSlice1,
+  ExactWave64CollectivesV1
+};
 
 constexpr StringLiteral ExactLdsGemmSlice1Entry = "tiled_gemm_lds_v1";
 constexpr StringLiteral ExactLdsGemmSlice1Descriptor = "tiled_gemm_lds_v1.kd";
+constexpr StringLiteral ExactWave64CollectivesV1Entry = "wave64_collectives_v1";
+constexpr StringLiteral ExactWave64CollectivesV1Descriptor =
+    "wave64_collectives_v1.kd";
 constexpr StringLiteral ExactLdsGemmSlice1ProducerDataLayout =
     "e-p:64:64-p1:64:64-p2:32:32-p3:32:32-p4:64:64-p5:32:32-p6:32:32-"
     "p7:160:256:256:32-p8:128:128:128:48-p9:192:256:256:32-i64:64-v16:16-"
     "v24:32-v32:32-v48:64-v96:128-v192:256-v256:256-v512:512-v1024:1024-"
     "v2048:2048-n32:64-S32-A5-G1-ni:7:8:9";
 
+constexpr StringLiteral ExactWave64DescriptorSection = ".fe2o3.kd.v1";
+constexpr StringLiteral ExactWave64AuthoritySection = ".fe2o3.wave64-auth.v1";
+constexpr StringLiteral ExactWave64MirSection = ".fe2o3.wave64-mir.v1";
+constexpr StringLiteral ExactWave64KirSection = ".fe2o3.wave64-kir.v1";
+constexpr StringLiteral ExactWave64ProfileSection =
+    ".fe2o3.wave64-descriptor.v1";
+constexpr std::array<uint8_t, 32> ExactWave64BodySha256 = {
+    0xe3, 0x90, 0x1d, 0x41, 0xc7, 0x20, 0xcf, 0x9d, 0xdd, 0x7e, 0xd0,
+    0x1f, 0xbc, 0x48, 0x77, 0x93, 0x1d, 0x42, 0x08, 0x08, 0x11, 0x44,
+    0xe0, 0xea, 0x1f, 0x0a, 0x40, 0x32, 0xd0, 0x83, 0xb0, 0x13};
+constexpr std::array<uint8_t, 32> ExactWave64MirSha256 = {
+    0x9b, 0xfb, 0x30, 0x50, 0x89, 0x75, 0x1c, 0xe7, 0x59, 0x32, 0x27,
+    0x06, 0x97, 0x68, 0xd5, 0xe7, 0xa9, 0x83, 0x60, 0xb7, 0xde, 0xd8,
+    0x90, 0xf8, 0xb2, 0x13, 0xa0, 0xd9, 0x5d, 0x15, 0x8e, 0x7a};
+constexpr std::array<uint8_t, 32> ExactWave64KirSha256 = {
+    0x7d, 0x88, 0x09, 0x25, 0xf5, 0xb3, 0xee, 0x4f, 0xcb, 0xb5, 0xd6,
+    0xbe, 0x34, 0xa4, 0xbe, 0x63, 0xfd, 0xe6, 0x99, 0x14, 0x69, 0x3a,
+    0x66, 0xb6, 0x35, 0xb7, 0x19, 0xae, 0x41, 0xf7, 0xba, 0x96};
+constexpr std::array<uint8_t, 32> ExactWave64ProfileSha256 = {
+    0xcd, 0x6f, 0x6c, 0x45, 0xf3, 0x78, 0x3b, 0xf9, 0x44, 0xf6, 0xa4,
+    0xe0, 0xc4, 0x01, 0xf2, 0xaa, 0xda, 0x7c, 0x7d, 0x5d, 0x40, 0xbe,
+    0xa7, 0xac, 0xee, 0x6a, 0xe7, 0xcf, 0xf4, 0x0f, 0x77, 0x68};
+
 bool isExactLdsGemmSlice1SymbolSet(ArrayRef<std::string> Symbols) {
   return std::set<std::string>(Symbols.begin(), Symbols.end()) ==
          std::set<std::string>{ExactLdsGemmSlice1Entry.str(),
                                ExactLdsGemmSlice1Descriptor.str()};
+}
+
+bool isExactWave64CollectivesV1SymbolSet(ArrayRef<std::string> Symbols) {
+  return std::set<std::string>(Symbols.begin(), Symbols.end()) ==
+         std::set<std::string>{ExactWave64CollectivesV1Entry.str(),
+                               ExactWave64CollectivesV1Descriptor.str()};
 }
 
 bool isExactLdsGemmSlice1RequestCandidate(const Request &RequestValue) {
@@ -172,18 +222,69 @@ bool isClosedExactLdsGemmSlice1Request(const Request &RequestValue) {
          RequestValue.LinkOptions.VerifyEach;
 }
 
+bool isExactWave64CollectivesV1RequestCandidate(const Request &RequestValue) {
+  bool CompilerInputMatches =
+      RequestValue.Inputs.size() == 1 &&
+      RequestValue.CompilerModule.Kind == InputKind::LlvmTextIr &&
+      RequestValue.Inputs.front().Kind == RequestValue.CompilerModule.Kind &&
+      RequestValue.Inputs.front().Digest ==
+          RequestValue.CompilerModule.Digest &&
+      RequestValue.Inputs.front().Bytes == RequestValue.CompilerModule.Bytes;
+  return RequestValue.Protocol == ProtocolVersion::V2 &&
+         RequestValue.Target == "gfx942:xnack-" &&
+         RequestValue.CodeObjectVersion == 6 && CompilerInputMatches &&
+         RequestValue.ExternalProviders.empty() &&
+         RequestValue.ImportSymbols.empty() &&
+         RequestValue.ExportSymbols.empty() &&
+         isExactWave64CollectivesV1SymbolSet(RequestValue.RequiredSymbols) &&
+         isExactWave64CollectivesV1SymbolSet(
+             RequestValue.ExpectedDefinedSymbols) &&
+         isExactWave64CollectivesV1SymbolSet(RequestValue.FinalSymbols);
+}
+
+bool isClosedExactWave64CollectivesV1Request(const Request &RequestValue) {
+  return isExactWave64CollectivesV1RequestCandidate(RequestValue) &&
+         RequestValue.LinkOptions.Optimization == OptimizationLevel::O2 &&
+         RequestValue.LinkOptions.StripDebug &&
+         RequestValue.LinkOptions.VerifyEach;
+}
+
+bool namesExactWave64CollectivesV1(ArrayRef<std::string> Symbols) {
+  return llvm::any_of(Symbols, [](StringRef Symbol) {
+    return Symbol == ExactWave64CollectivesV1Entry ||
+           Symbol == ExactWave64CollectivesV1Descriptor;
+  });
+}
+
+bool mentionsExactWave64CollectivesV1(const Request &RequestValue) {
+  return namesExactWave64CollectivesV1(RequestValue.RequiredSymbols) ||
+         namesExactWave64CollectivesV1(RequestValue.ExpectedDefinedSymbols) ||
+         namesExactWave64CollectivesV1(RequestValue.ImportSymbols) ||
+         namesExactWave64CollectivesV1(RequestValue.ExportSymbols) ||
+         namesExactWave64CollectivesV1(RequestValue.FinalSymbols);
+}
+
 Expected<PostLinkProfile>
 selectPostLinkProfile(const Request &RequestValue,
                       const std::set<std::string> &ExpectedSymbols) {
-  const std::set<std::string> ExactSymbols = {
+  const std::set<std::string> ExactLdsSymbols = {
       ExactLdsGemmSlice1Entry.str(), ExactLdsGemmSlice1Descriptor.str()};
-  if (ExpectedSymbols != ExactSymbols)
-    return PostLinkProfile::LegacyGfx942G1;
-
-  if (!isClosedExactLdsGemmSlice1Request(RequestValue))
-    return pipelineError(
-        "exact LDS GEMM Slice1 symbols require the closed Worker V2 profile");
-  return PostLinkProfile::ExactLdsGemmSlice1;
+  if (ExpectedSymbols == ExactLdsSymbols) {
+    if (!isClosedExactLdsGemmSlice1Request(RequestValue))
+      return pipelineError(
+          "exact LDS GEMM Slice1 symbols require the closed Worker V2 profile");
+    return PostLinkProfile::ExactLdsGemmSlice1;
+  }
+  const std::set<std::string> ExactWave64Symbols = {
+      ExactWave64CollectivesV1Entry.str(),
+      ExactWave64CollectivesV1Descriptor.str()};
+  if (ExpectedSymbols == ExactWave64Symbols) {
+    if (!isClosedExactWave64CollectivesV1Request(RequestValue))
+      return pipelineError("exact Wave64 collectives symbols require the "
+                           "closed Worker V2 profile");
+    return PostLinkProfile::ExactWave64CollectivesV1;
+  }
+  return PostLinkProfile::LegacyGfx942G1;
 }
 
 TargetParts parseTarget(StringRef Target) {
@@ -214,6 +315,220 @@ std::string targetMachineFeatures(const TargetParts &Parts) {
   Append("sramecc", Parts.SramEcc);
   Append("xnack", Parts.Xnack);
   return Features.str().str();
+}
+
+Expected<std::array<std::vector<uint8_t>, 5>>
+parseExactWave64CompilerSections(StringRef Text) {
+  constexpr StringLiteral Marker = "\nmodule asm \".section ";
+  size_t BodyEnd = Text.find(Marker);
+  if (BodyEnd == StringRef::npos)
+    return pipelineError(
+        "exact Wave64 compiler module is missing identity sections");
+  if (SHA256::hash(arrayRefFromStringRef(Text.take_front(BodyEnd))) !=
+      ExactWave64BodySha256)
+    return pipelineError(
+        "exact Wave64 compiler module body identity does not match");
+
+  SmallVector<StringRef, 128> Lines;
+  Text.drop_front(BodyEnd + 1).split(Lines, '\n', -1, true);
+  static constexpr std::array Sections = {
+      ExactWave64DescriptorSection, ExactWave64AuthoritySection,
+      ExactWave64MirSection, ExactWave64KirSection, ExactWave64ProfileSection};
+  std::array<std::vector<uint8_t>, Sections.size()> Result;
+  size_t LineIndex = 0;
+  for (size_t SectionIndex = 0; SectionIndex != Sections.size();
+       ++SectionIndex) {
+    if (SectionIndex != 0 && LineIndex != Lines.size() &&
+        Lines[LineIndex].empty())
+      ++LineIndex;
+    std::string ExpectedHeader =
+        (Twine("module asm \".section ") + Sections[SectionIndex] +
+         ",\\22\\22,@progbits\"")
+            .str();
+    if (LineIndex == Lines.size() || Lines[LineIndex] != ExpectedHeader)
+      return pipelineError(
+          Twine(
+              "exact Wave64 compiler module section order does not match at ") +
+          Twine(SectionIndex) + " observed=" +
+          (LineIndex == Lines.size() ? StringRef("<end>") : Lines[LineIndex]));
+    ++LineIndex;
+    if (LineIndex == Lines.size() ||
+        Lines[LineIndex] != "module asm \".balign 8\"")
+      return pipelineError(
+          "exact Wave64 compiler module section alignment does not match");
+    ++LineIndex;
+
+    constexpr StringLiteral BytePrefix = "module asm \".byte ";
+    while (LineIndex != Lines.size() &&
+           Lines[LineIndex].starts_with(BytePrefix)) {
+      StringRef Line = Lines[LineIndex++];
+      if (!Line.ends_with("\""))
+        return pipelineError(
+            "exact Wave64 compiler module byte record is malformed");
+      SmallVector<StringRef, 16> ByteAtoms;
+      Line.drop_front(BytePrefix.size())
+          .drop_back()
+          .split(ByteAtoms, ',', -1, false);
+      if (ByteAtoms.empty() || ByteAtoms.size() > 16)
+        return pipelineError(
+            "exact Wave64 compiler module byte record is noncanonical");
+      for (StringRef Atom : ByteAtoms) {
+        Atom = Atom.trim();
+        if (!Atom.consume_front("0x") || Atom.size() != 2)
+          return pipelineError(
+              "exact Wave64 compiler module byte atom is malformed");
+        uint8_t Byte = 0;
+        if (Atom.getAsInteger(16, Byte))
+          return pipelineError(
+              "exact Wave64 compiler module byte atom is malformed");
+        Result[SectionIndex].push_back(Byte);
+      }
+    }
+    if (Result[SectionIndex].empty())
+      return pipelineError("exact Wave64 compiler module section is empty");
+  }
+  if (LineIndex != Lines.size() &&
+      !(LineIndex + 1 == Lines.size() && Lines[LineIndex].empty()))
+    return pipelineError("exact Wave64 compiler module has trailing assembly");
+  return Result;
+}
+
+Error validateExactWave64CompilerInput(StringRef Text) {
+  auto Sections = parseExactWave64CompilerSections(Text);
+  if (!Sections)
+    return Sections.takeError();
+  if ((*Sections)[0].size() > 64 * 1024)
+    return pipelineError(
+        "exact Wave64 compiler descriptor section is too large");
+  if ((*Sections)[1].size() != 32 ||
+      llvm::all_of((*Sections)[1], [](uint8_t Byte) { return Byte == 0; }))
+    return pipelineError(
+        "exact Wave64 compiler authority identity does not match");
+  const std::array ExpectedIdentities = {
+      ExactWave64MirSha256, ExactWave64KirSha256, ExactWave64ProfileSha256};
+  for (size_t Index = 0; Index != ExpectedIdentities.size(); ++Index)
+    if (ArrayRef((*Sections)[Index + 2]) != ArrayRef(ExpectedIdentities[Index]))
+      return pipelineError(
+          "exact Wave64 compiler/KIR profile identity does not match");
+  return Error::success();
+}
+
+Error validateExactWave64CollectivesModule(const Module &ModuleValue) {
+  if (ModuleValue.getTargetTriple().getTriple() != AmdGpuTriple ||
+      ModuleValue.getDataLayoutStr() != ExactLdsGemmSlice1ProducerDataLayout ||
+      ModuleValue.global_begin() != ModuleValue.global_end())
+    return pipelineError("exact Wave64 LLVM module envelope does not match");
+
+  const Function *Kernel = nullptr;
+  std::set<std::string> Declarations;
+  for (const Function &FunctionValue : ModuleValue) {
+    if (FunctionValue.isDeclaration()) {
+      Declarations.insert(FunctionValue.getName().str());
+      continue;
+    }
+    if (Kernel)
+      return pipelineError("exact Wave64 LLVM module has multiple definitions");
+    Kernel = &FunctionValue;
+  }
+  const std::set<std::string> ExpectedDeclarations = {
+      "llvm.amdgcn.workitem.id.x", "llvm.amdgcn.ds.bpermute", "llvm.trap"};
+  if (!Kernel || Kernel->getName() != ExactWave64CollectivesV1Entry ||
+      Kernel->getCallingConv() != CallingConv::AMDGPU_KERNEL ||
+      Kernel->getReturnType() != Type::getVoidTy(ModuleValue.getContext()) ||
+      Kernel->isVarArg() || Kernel->arg_size() != 9 ||
+      Declarations != ExpectedDeclarations)
+    return pipelineError("exact Wave64 LLVM function closure does not match");
+
+  static constexpr std::array<unsigned, 9> AddressSpaces = {1, 0, 0, 1, 0,
+                                                            1, 0, 1, 0};
+  static constexpr std::array<StringLiteral, 9> ArgumentNames = {
+      "input.data",           "input.len",
+      "active_mask",          "reduction_output.data",
+      "reduction_output.len", "inclusive_output.data",
+      "inclusive_output.len", "exclusive_output.data",
+      "exclusive_output.len"};
+  size_t ArgumentIndex = 0;
+  for (const Argument &ArgumentValue : Kernel->args()) {
+    Type *ArgumentType = ArgumentValue.getType();
+    if (ArgumentValue.getName() != ArgumentNames[ArgumentIndex] ||
+        (AddressSpaces[ArgumentIndex] == 0
+             ? !ArgumentType->isIntegerTy(64)
+             : !ArgumentType->isPointerTy() ||
+                   ArgumentType->getPointerAddressSpace() !=
+                       AddressSpaces[ArgumentIndex]))
+      return pipelineError("exact Wave64 LLVM argument ABI does not match");
+    ++ArgumentIndex;
+  }
+
+  if (Kernel->getFnAttribute("target-cpu").getValueAsString() != "gfx942" ||
+      Kernel->getFnAttribute("target-features").getValueAsString() !=
+          "-wavefrontsize32,+wavefrontsize64,-xnack" ||
+      Kernel->getFnAttribute("amdgpu-flat-work-group-size")
+              .getValueAsString() != "64,64" ||
+      Kernel->getFnAttribute("fp-contract").getValueAsString() != "off")
+    return pipelineError("exact Wave64 LLVM target attributes do not match");
+  MDNode *Workgroup = Kernel->getMetadata("reqd_work_group_size");
+  if (!Workgroup || Workgroup->getNumOperands() != 3)
+    return pipelineError("exact Wave64 LLVM workgroup metadata does not match");
+  static constexpr std::array<uint64_t, 3> WorkgroupShape = {64, 1, 1};
+  for (size_t Index = 0; Index != WorkgroupShape.size(); ++Index) {
+    auto *Value =
+        mdconst::dyn_extract<ConstantInt>(Workgroup->getOperand(Index));
+    if (!Value || Value->getZExtValue() != WorkgroupShape[Index])
+      return pipelineError(
+          "exact Wave64 LLVM workgroup metadata does not match");
+  }
+
+  size_t FAdds = 0;
+  size_t Loads = 0;
+  size_t Stores = 0;
+  size_t BPermutes = 0;
+  size_t WorkitemIds = 0;
+  size_t Traps = 0;
+  for (const Instruction &InstructionValue : instructions(*Kernel)) {
+    if (InstructionValue.getOpcode() == Instruction::FAdd) {
+      ++FAdds;
+      if (cast<BinaryOperator>(InstructionValue).getFastMathFlags().any())
+        return pipelineError(
+            "exact Wave64 LLVM floating-point policy does not match");
+    }
+    if (const auto *Load = dyn_cast<LoadInst>(&InstructionValue)) {
+      ++Loads;
+      if (!Load->getType()->isFloatTy() || Load->getAlign() != Align(4) ||
+          Load->getPointerAddressSpace() != 1 || Load->isAtomic())
+        return pipelineError("exact Wave64 LLVM load effect does not match");
+    }
+    if (const auto *Store = dyn_cast<StoreInst>(&InstructionValue)) {
+      ++Stores;
+      if (!Store->getValueOperand()->getType()->isFloatTy() ||
+          Store->getAlign() != Align(4) ||
+          Store->getPointerAddressSpace() != 1 || Store->isAtomic())
+        return pipelineError("exact Wave64 LLVM store effect does not match");
+    }
+    if (isa<AtomicRMWInst, AtomicCmpXchgInst, FenceInst, AllocaInst>(
+            InstructionValue))
+      return pipelineError(
+          "exact Wave64 LLVM module contains a forbidden memory effect");
+    const auto *Call = dyn_cast<CallBase>(&InstructionValue);
+    if (!Call)
+      continue;
+    const Function *Callee = Call->getCalledFunction();
+    if (!Callee)
+      return pipelineError("exact Wave64 LLVM module has an indirect call");
+    if (Callee->getName() == "llvm.amdgcn.ds.bpermute")
+      ++BPermutes;
+    else if (Callee->getName() == "llvm.amdgcn.workitem.id.x")
+      ++WorkitemIds;
+    else if (Callee->getName() == "llvm.trap")
+      ++Traps;
+    else
+      return pipelineError("exact Wave64 LLVM call closure does not match");
+  }
+  if (FAdds != 12 || Loads != 1 || Stores != 3 || BPermutes != 13 ||
+      WorkitemIds != 1 || Traps != 1)
+    return pipelineError(
+        "exact Wave64 LLVM collective operation closure does not match");
+  return Error::success();
 }
 
 uint32_t expectedGfx942Flags(const TargetParts &Parts) {
@@ -375,7 +690,8 @@ Error setAndCheckModuleContract(Module &ModuleValue,
       Triple::normalize(ExistingTriple.getTriple()) != AmdGpuTriple)
     return pipelineError("bitcode target triple does not match AMDHSA");
   bool ExactProducerLayout =
-      isExactLdsGemmSlice1RequestCandidate(RequestValue) &&
+      (isExactLdsGemmSlice1RequestCandidate(RequestValue) ||
+       isExactWave64CollectivesV1RequestCandidate(RequestValue)) &&
       ModuleValue.getDataLayoutStr() == ExactLdsGemmSlice1ProducerDataLayout;
   if (!ModuleValue.getDataLayoutStr().empty() &&
       ModuleValue.getDataLayout() != Machine.createDataLayout() &&
@@ -492,6 +808,9 @@ parseModuleInput(const Input &InputValue, StringRef InputName,
     return pipelineError(Twine(InputName) + " is not an LLVM module");
   StringRef Bytes(reinterpret_cast<const char *>(InputValue.Bytes.data()),
                   InputValue.Bytes.size());
+  if (isClosedExactWave64CollectivesV1Request(RequestValue))
+    if (Error E = validateExactWave64CompilerInput(Bytes))
+      return E;
   DataLayout ExpectedLayout = Machine.createDataLayout();
   bool AcceptedLayout = false;
   ParserCallbacks Callbacks([&](StringRef TripleValue, StringRef Layout) {
@@ -525,10 +844,12 @@ parseModuleInput(const Input &InputValue, StringRef InputName,
                            Message);
     }
     StringRef ObservedLayout = TextModule->getDataLayoutStr();
-    AcceptedLayout = ObservedLayout.empty() ||
-                     TextModule->getDataLayout() == ExpectedLayout ||
-                     (isExactLdsGemmSlice1RequestCandidate(RequestValue) &&
-                      ObservedLayout == ExactLdsGemmSlice1ProducerDataLayout);
+    AcceptedLayout =
+        ObservedLayout.empty() ||
+        TextModule->getDataLayout() == ExpectedLayout ||
+        ((isExactLdsGemmSlice1RequestCandidate(RequestValue) ||
+          isExactWave64CollectivesV1RequestCandidate(RequestValue)) &&
+         ObservedLayout == ExactLdsGemmSlice1ProducerDataLayout);
     return TextModule;
   }();
   if (!Parsed)
@@ -537,6 +858,9 @@ parseModuleInput(const Input &InputValue, StringRef InputName,
   if (!AcceptedLayout)
     return pipelineError(
         "LLVM module data layout does not match target machine");
+  if (isClosedExactWave64CollectivesV1Request(RequestValue))
+    if (Error E = validateExactWave64CollectivesModule(**Parsed))
+      return E;
   if (Error E = setAndCheckModuleContract(**Parsed, RequestValue, Machine,
                                           MeasuredBuiltinProvider))
     return E;
@@ -1052,6 +1376,7 @@ struct KernelLaunchContract {
   std::optional<uint64_t> SgprSpillCount;
   std::optional<uint64_t> VgprSpillCount;
   std::optional<bool> UsesDynamicStack;
+  std::optional<bool> UniformWorkgroupSize;
   std::optional<std::vector<KernelArgumentContract>> Arguments;
 };
 
@@ -1137,20 +1462,20 @@ metadataOptionalString(msgpack::MapDocNode &Map, StringRef Name) {
 template <size_t Size>
 Error rejectUnknownExactMetadataKeys(
     msgpack::MapDocNode &Map,
-    const std::array<StringLiteral, Size> &AllowedKeys, StringRef Scope) {
+    const std::array<StringLiteral, Size> &AllowedKeys, StringRef Scope,
+    StringRef Check) {
   for (const auto &Entry : Map) {
     if (!Entry.first.isString() ||
         !llvm::any_of(AllowedKeys, [&](StringRef Allowed) {
           return Entry.first.getString() == Allowed;
         }))
       return postLinkError(
-          "lds_gemm_slice1_profile",
-          (Twine("kernel_contract_unknown_") + Scope + "_key").str());
+          Check, (Twine("kernel_contract_unknown_") + Scope + "_key").str());
   }
   return Error::success();
 }
 
-Error validateExactLdsGemmSlice1MetadataKeys(msgpack::MapDocNode &Root) {
+Error validateExactMetadataKeys(msgpack::MapDocNode &Root, StringRef Check) {
   static constexpr std::array RootKeys = {StringLiteral("amdhsa.version"),
                                           StringLiteral("amdhsa.target"),
                                           StringLiteral("amdhsa.kernels")};
@@ -1183,7 +1508,7 @@ Error validateExactLdsGemmSlice1MetadataKeys(msgpack::MapDocNode &Root) {
       StringLiteral(".is_restrict"),   StringLiteral(".is_volatile"),
       StringLiteral(".is_pipe")};
 
-  if (Error E = rejectUnknownExactMetadataKeys(Root, RootKeys, "root"))
+  if (Error E = rejectUnknownExactMetadataKeys(Root, RootKeys, "root", Check))
     return E;
   auto Kernels = Root.find("amdhsa.kernels");
   if (Kernels == Root.end() || !Kernels->second.isArray())
@@ -1192,7 +1517,8 @@ Error validateExactLdsGemmSlice1MetadataKeys(msgpack::MapDocNode &Root) {
     if (!KernelNode.isMap())
       continue;
     auto &Kernel = KernelNode.getMap();
-    if (Error E = rejectUnknownExactMetadataKeys(Kernel, KernelKeys, "kernel"))
+    if (Error E =
+            rejectUnknownExactMetadataKeys(Kernel, KernelKeys, "kernel", Check))
       return E;
     auto Arguments = Kernel.find(".args");
     if (Arguments == Kernel.end() || !Arguments->second.isArray())
@@ -1200,8 +1526,8 @@ Error validateExactLdsGemmSlice1MetadataKeys(msgpack::MapDocNode &Root) {
     for (msgpack::DocNode &ArgumentNode : Arguments->second.getArray()) {
       if (!ArgumentNode.isMap())
         continue;
-      if (Error E = rejectUnknownExactMetadataKeys(ArgumentNode.getMap(),
-                                                   ArgumentKeys, "argument"))
+      if (Error E = rejectUnknownExactMetadataKeys(
+              ArgumentNode.getMap(), ArgumentKeys, "argument", Check))
         return E;
     }
   }
@@ -1269,7 +1595,7 @@ metadataArguments(msgpack::MapDocNode &Kernel, uint64_t KernargSegmentSize,
     if (!IsPipe)
       return IsPipe.takeError();
 
-    if (Policy == MetadataValidationPolicy::ExactLdsGemmSlice1) {
+    if (Policy != MetadataValidationPolicy::Generic) {
       if (*Size == 0 ||
           *Offset > std::numeric_limits<uint64_t>::max() - *Size ||
           *Offset + *Size > KernargSegmentSize)
@@ -1334,9 +1660,13 @@ Error appendMetadataBlob(StringRef MetadataBlob, MetadataContract &Result,
     return pipelineError("linked output has invalid AMDGPU metadata schema");
 
   auto &Root = Document.getRoot().getMap();
-  if (Policy == MetadataValidationPolicy::ExactLdsGemmSlice1)
-    if (Error E = validateExactLdsGemmSlice1MetadataKeys(Root))
+  if (Policy != MetadataValidationPolicy::Generic) {
+    StringRef Check = Policy == MetadataValidationPolicy::ExactLdsGemmSlice1
+                          ? "lds_gemm_slice1_profile"
+                          : "wave64_collectives_v1_profile";
+    if (Error E = validateExactMetadataKeys(Root, Check))
       return E;
+  }
   auto Target = metadataString(Root, "amdhsa.target");
   if (!Target)
     return Target.takeError();
@@ -1391,6 +1721,10 @@ Error appendMetadataBlob(StringRef MetadataBlob, MetadataContract &Result,
         metadataOptionalBoolean(Kernel, ".uses_dynamic_stack");
     if (!UsesDynamicStack)
       return UsesDynamicStack.takeError();
+    auto UniformWorkgroupSize =
+        metadataOptionalBoolean(Kernel, ".uniform_work_group_size");
+    if (!UniformWorkgroupSize)
+      return UniformWorkgroupSize.takeError();
     auto Arguments = metadataArguments(Kernel, *KernargSize, Policy);
     if (!Arguments)
       return Arguments.takeError();
@@ -1419,11 +1753,11 @@ Error appendMetadataBlob(StringRef MetadataBlob, MetadataContract &Result,
         return pipelineError(
             "AMDGPU metadata required workgroup size exceeds its maximum");
     }
-    Result.Kernels.push_back({Name->str(), Symbol->str(), *KernargSize,
-                              *GroupSize, *PrivateSize, *KernargAlign,
-                              *Wavefront, *MaxWorkgroup, *RequiredWorkgroup,
-                              *SgprSpillCount, *VgprSpillCount,
-                              *UsesDynamicStack, std::move(*Arguments)});
+    Result.Kernels.push_back(
+        {Name->str(), Symbol->str(), *KernargSize, *GroupSize, *PrivateSize,
+         *KernargAlign, *Wavefront, *MaxWorkgroup, *RequiredWorkgroup,
+         *SgprSpillCount, *VgprSpillCount, *UsesDynamicStack,
+         *UniformWorkgroupSize, std::move(*Arguments)});
   }
   return Error::success();
 }
@@ -1503,16 +1837,15 @@ bool isPostLinkRelocationDynamicTag(int64_t Tag) {
   }
 }
 
-Error validateExactLdsGemmSlice1ElfClosure(
-    const ELFObjectFile<ELF64LE> &ObjectValue) {
+Error validateExactElfClosure(const ELFObjectFile<ELF64LE> &ObjectValue,
+                              StringRef Check) {
   const ELFFile<ELF64LE> &File = ObjectValue.getELFFile();
   auto Sections = File.sections();
   if (!Sections)
     return Sections.takeError();
   for (const ELF64LE::Shdr &Section : *Sections) {
     if (isPostLinkRelocationSection(Section.sh_type) && Section.sh_size != 0)
-      return postLinkError("lds_gemm_slice1_profile",
-                           "residual_relocation_section");
+      return postLinkError(Check, "residual_relocation_section");
     if (Section.sh_type != ELF::SHT_DYNAMIC)
       continue;
     auto Entries = File.getSectionContentsAsArray<ELF64LE::Dyn>(Section);
@@ -1521,12 +1854,193 @@ Error validateExactLdsGemmSlice1ElfClosure(
     for (const ELF64LE::Dyn &Entry : *Entries) {
       int64_t Tag = Entry.getTag();
       if (Tag == ELF::DT_NEEDED)
-        return postLinkError("lds_gemm_slice1_profile", "dynamic_dependency");
+        return postLinkError(Check, "dynamic_dependency");
       if (isPostLinkRelocationDynamicTag(Tag))
-        return postLinkError("lds_gemm_slice1_profile",
-                             "dynamic_relocation_table");
+        return postLinkError(Check, "dynamic_relocation_table");
     }
   }
+  return Error::success();
+}
+
+Error validateExactLdsGemmSlice1ElfClosure(
+    const ELFObjectFile<ELF64LE> &ObjectValue) {
+  return validateExactElfClosure(ObjectValue, "lds_gemm_slice1_profile");
+}
+
+Error validateExactWave64CollectivesV1ElfClosure(
+    const ELFObjectFile<ELF64LE> &ObjectValue) {
+  return validateExactElfClosure(ObjectValue, "wave64_collectives_v1_profile");
+}
+
+struct Wave64CallScanner {
+  std::unique_ptr<MCRegisterInfo> Registers;
+  std::unique_ptr<MCAsmInfo> AsmInfo;
+  std::unique_ptr<MCSubtargetInfo> Subtarget;
+  std::unique_ptr<MCInstrInfo> Instructions;
+  std::unique_ptr<MCContext> Context;
+  std::unique_ptr<MCDisassembler> Disassembler;
+};
+
+Expected<Wave64CallScanner> createWave64CallScanner() {
+  static bool Initialized = [] {
+    LLVMInitializeAMDGPUTargetInfo();
+    LLVMInitializeAMDGPUTarget();
+    LLVMInitializeAMDGPUTargetMC();
+    LLVMInitializeAMDGPUDisassembler();
+    return true;
+  }();
+  (void)Initialized;
+
+  Triple TripleValue(AmdGpuTriple);
+  std::string LookupError;
+  const Target *TargetValue =
+      TargetRegistry::lookupTarget("amdgcn", TripleValue, LookupError);
+  if (!TargetValue)
+    return pipelineError(Twine("AMDGPU target unavailable: ") + LookupError);
+  Wave64CallScanner Result;
+  Result.Registers.reset(TargetValue->createMCRegInfo(TripleValue));
+  Result.Instructions.reset(TargetValue->createMCInstrInfo());
+  Result.Subtarget.reset(
+      TargetValue->createMCSubtargetInfo(TripleValue, "gfx942", "-xnack"));
+  if (!Result.Registers || !Result.Instructions || !Result.Subtarget)
+    return pipelineError("AMDGPU MC tables are unavailable");
+  MCTargetOptions Options;
+  Result.AsmInfo.reset(
+      TargetValue->createMCAsmInfo(*Result.Registers, TripleValue, Options));
+  if (!Result.AsmInfo)
+    return pipelineError("AMDGPU MC assembly info is unavailable");
+  Result.Context = std::make_unique<MCContext>(
+      TripleValue, Result.AsmInfo.get(), Result.Registers.get(),
+      Result.Subtarget.get(), nullptr, &Options);
+  Result.Disassembler.reset(
+      TargetValue->createMCDisassembler(*Result.Subtarget, *Result.Context));
+  if (!Result.Disassembler)
+    return pipelineError("AMDGPU MC disassembler is unavailable");
+  return Result;
+}
+
+Error validateExactWave64NoMachineCalls(
+    const ELFObjectFile<ELF64LE> &ObjectValue) {
+  const ELFFile<ELF64LE> &File = ObjectValue.getELFFile();
+  auto SectionsOrError = File.sections();
+  if (!SectionsOrError)
+    return SectionsOrError.takeError();
+  ArrayRef<ELF64LE::Shdr> Sections = *SectionsOrError;
+  ArrayRef<uint8_t> KernelBytes;
+  uint64_t KernelAddress = 0;
+  size_t Matches = 0;
+  for (const ELF64LE::Shdr &Table : Sections) {
+    if (Table.sh_type != ELF::SHT_SYMTAB)
+      continue;
+    auto Symbols = File.symbols(&Table);
+    if (!Symbols)
+      return Symbols.takeError();
+    auto Strings = File.getStringTableForSymtab(Table, Sections);
+    if (!Strings)
+      return Strings.takeError();
+    for (const ELF64LE::Sym &Symbol : *Symbols) {
+      auto Name = Symbol.getName(*Strings);
+      if (!Name)
+        return Name.takeError();
+      if (*Name != ExactWave64CollectivesV1Entry)
+        continue;
+      ++Matches;
+      if (Symbol.getType() != ELF::STT_FUNC || Symbol.st_size == 0 ||
+          Symbol.st_shndx == ELF::SHN_XINDEX ||
+          Symbol.st_shndx >= Sections.size())
+        return postLinkError("wave64_collectives_v1_profile",
+                             "machine_entry_symbol");
+      const ELF64LE::Shdr &Section = Sections[Symbol.st_shndx];
+      if ((Section.sh_flags & (ELF::SHF_ALLOC | ELF::SHF_EXECINSTR)) !=
+              (ELF::SHF_ALLOC | ELF::SHF_EXECINSTR) ||
+          Symbol.st_value < Section.sh_addr)
+        return postLinkError("wave64_collectives_v1_profile",
+                             "machine_entry_section");
+      uint64_t Offset = Symbol.st_value - Section.sh_addr;
+      if (Offset > Section.sh_size || Symbol.st_size > Section.sh_size - Offset)
+        return postLinkError("wave64_collectives_v1_profile",
+                             "machine_entry_range");
+      auto Contents = File.getSectionContents(Section);
+      if (!Contents)
+        return Contents.takeError();
+      KernelBytes = Contents->slice(Offset, Symbol.st_size);
+      KernelAddress = Symbol.st_value;
+    }
+  }
+  if (Matches != 1)
+    return postLinkError("wave64_collectives_v1_profile",
+                         "machine_entry_cardinality");
+
+  auto Scanner = createWave64CallScanner();
+  if (!Scanner)
+    return postLinkError("wave64_collectives_v1_profile",
+                         errorToDiagnostic(Scanner.takeError()));
+  uint64_t Offset = 0;
+  size_t InstructionCount = 0;
+  while (Offset < KernelBytes.size()) {
+    if (llvm::all_of(KernelBytes.drop_front(Offset),
+                     [](uint8_t Byte) { return Byte == 0; }))
+      break;
+    MCInst Instruction;
+    uint64_t Size = 0;
+    auto Status = Scanner->Disassembler->getInstruction(
+        Instruction, Size, KernelBytes.drop_front(Offset),
+        KernelAddress + Offset, nulls());
+    if (Status != MCDisassembler::Success || Size == 0 ||
+        Size > KernelBytes.size() - Offset)
+      return postLinkError("wave64_collectives_v1_profile",
+                           "machine_instruction_decode");
+    const MCInstrDesc &Descriptor =
+        Scanner->Instructions->get(Instruction.getOpcode());
+    if (Descriptor.isCall())
+      return postLinkError("wave64_collectives_v1_profile", "machine_call");
+    Offset += Size;
+    if (++InstructionCount > 1024 * 1024)
+      return postLinkError("wave64_collectives_v1_profile",
+                           "machine_instruction_bound");
+  }
+  if (InstructionCount == 0)
+    return postLinkError("wave64_collectives_v1_profile",
+                         "machine_instruction_empty");
+  return Error::success();
+}
+
+Error validateExactWave64DescriptorBinding(
+    const ELFObjectFile<ELF64LE> &ObjectValue, const Request &RequestValue) {
+  StringRef CompilerBytes(
+      reinterpret_cast<const char *>(RequestValue.CompilerModule.Bytes.data()),
+      RequestValue.CompilerModule.Bytes.size());
+  auto InputSections = parseExactWave64CompilerSections(CompilerBytes);
+  if (!InputSections)
+    return postLinkError("wave64_collectives_v1_profile",
+                         errorToDiagnostic(InputSections.takeError()));
+  ArrayRef<uint8_t> ExpectedDescriptor = (*InputSections)[0];
+
+  const ELFFile<ELF64LE> &File = ObjectValue.getELFFile();
+  auto Sections = File.sections();
+  if (!Sections)
+    return Sections.takeError();
+  size_t Matches = 0;
+  for (const ELF64LE::Shdr &Section : *Sections) {
+    auto Name = File.getSectionName(Section);
+    if (!Name)
+      return Name.takeError();
+    if (*Name != ExactWave64DescriptorSection)
+      continue;
+    ++Matches;
+    if (Section.sh_type != ELF::SHT_PROGBITS || Section.sh_addralign != 8)
+      return postLinkError("wave64_collectives_v1_profile",
+                           "descriptor_section_envelope");
+    auto Contents = File.getSectionContents(Section);
+    if (!Contents)
+      return Contents.takeError();
+    if (*Contents != ExpectedDescriptor)
+      return postLinkError("wave64_collectives_v1_profile",
+                           "descriptor_section_identity");
+  }
+  if (Matches != 1)
+    return postLinkError("wave64_collectives_v1_profile",
+                         "descriptor_section_cardinality");
   return Error::success();
 }
 
@@ -1601,7 +2115,6 @@ Error validateExactLdsGemmSlice1Metadata(const MetadataContract &Metadata) {
     return Mismatch("uses_dynamic_stack_missing");
   if (*Kernel.UsesDynamicStack)
     return Mismatch("uses_dynamic_stack");
-
   if (!Kernel.Arguments)
     return Mismatch("args_missing");
   const std::vector<KernelArgumentContract> &Arguments = *Kernel.Arguments;
@@ -1730,6 +2243,195 @@ Error validateExactLdsGemmSlice1Metadata(const MetadataContract &Metadata) {
   return Error::success();
 }
 
+Error validateExactWave64CollectivesV1Metadata(
+    const MetadataContract &Metadata) {
+  constexpr StringLiteral Check = "wave64_collectives_v1_profile";
+  static constexpr std::array<uint64_t, 3> Workgroup = {64, 1, 1};
+  struct HiddenArgumentShape {
+    uint64_t Offset;
+    uint64_t Size;
+    StringLiteral ValueKind;
+  };
+  static constexpr std::array<HiddenArgumentShape, 13> RequiredHidden = {{
+      {0, 4, "hidden_block_count_x"},
+      {4, 4, "hidden_block_count_y"},
+      {8, 4, "hidden_block_count_z"},
+      {12, 2, "hidden_group_size_x"},
+      {14, 2, "hidden_group_size_y"},
+      {16, 2, "hidden_group_size_z"},
+      {18, 2, "hidden_remainder_x"},
+      {20, 2, "hidden_remainder_y"},
+      {22, 2, "hidden_remainder_z"},
+      {40, 8, "hidden_global_offset_x"},
+      {48, 8, "hidden_global_offset_y"},
+      {56, 8, "hidden_global_offset_z"},
+      {64, 2, "hidden_grid_dims"},
+  }};
+  static constexpr std::array<HiddenArgumentShape, 10> OptionalHidden = {{
+      {72, 8, "hidden_printf_buffer"},
+      {80, 8, "hidden_hostcall_buffer"},
+      {88, 8, "hidden_multigrid_sync_arg"},
+      {96, 8, "hidden_heap_v1"},
+      {104, 8, "hidden_default_queue"},
+      {112, 8, "hidden_completion_action"},
+      {120, 4, "hidden_dynamic_lds_size"},
+      {192, 4, "hidden_private_base"},
+      {196, 4, "hidden_shared_base"},
+      {200, 8, "hidden_queue_ptr"},
+  }};
+  auto Mismatch = [&](StringRef Field) {
+    return postLinkError(Check, (Twine("kernel_contract_") + Field).str());
+  };
+  if (Metadata.Kernels.size() != 1)
+    return postLinkError(Check, "kernel_cardinality");
+  const KernelLaunchContract &Kernel = Metadata.Kernels.front();
+  if (Kernel.Name != ExactWave64CollectivesV1Entry ||
+      Kernel.Symbol != ExactWave64CollectivesV1Descriptor)
+    return Mismatch("symbols");
+  if (!Kernel.RequiredWorkgroupSize ||
+      *Kernel.RequiredWorkgroupSize != Workgroup)
+    return Mismatch("reqd_workgroup_size");
+  if (Kernel.MaxFlatWorkgroupSize != 64)
+    return Mismatch("max_flat_workgroup_size");
+  if (Kernel.WavefrontSize != 64)
+    return Mismatch("wavefront_size");
+  if (Kernel.KernargSegmentSize != 328)
+    return Mismatch("kernarg_segment_size");
+  if (Kernel.KernargSegmentAlign != 8)
+    return Mismatch("kernarg_segment_align");
+  if (Kernel.GroupSegmentFixedSize != 0)
+    return Mismatch("group_segment_fixed_size");
+  if (Kernel.PrivateSegmentFixedSize != 0)
+    return Mismatch("private_segment_fixed_size");
+  if (!Kernel.SgprSpillCount)
+    return Mismatch("sgpr_spill_count_missing");
+  if (*Kernel.SgprSpillCount != 0)
+    return Mismatch("sgpr_spill_count");
+  if (!Kernel.VgprSpillCount)
+    return Mismatch("vgpr_spill_count_missing");
+  if (*Kernel.VgprSpillCount != 0)
+    return Mismatch("vgpr_spill_count");
+  if (!Kernel.UsesDynamicStack)
+    return Mismatch("uses_dynamic_stack_missing");
+  if (*Kernel.UsesDynamicStack)
+    return Mismatch("uses_dynamic_stack");
+  if (Kernel.UniformWorkgroupSize && *Kernel.UniformWorkgroupSize)
+    return Mismatch("uniform_work_group_size");
+  if (!Kernel.Arguments)
+    return Mismatch("args_missing");
+  const std::vector<KernelArgumentContract> &Arguments = *Kernel.Arguments;
+  if (Arguments.size() < 9 + RequiredHidden.size())
+    return Mismatch("args_cardinality");
+
+  static constexpr std::array<StringLiteral, 9> Names = {
+      "input.data",           "input.len",
+      "active_mask",          "reduction_output.data",
+      "reduction_output.len", "inclusive_output.data",
+      "inclusive_output.len", "exclusive_output.data",
+      "exclusive_output.len"};
+  static constexpr std::array<uint64_t, 9> Offsets = {0,  8,  16, 24, 32,
+                                                      40, 48, 56, 64};
+  for (size_t Index = 0; Index != Names.size(); ++Index) {
+    const KernelArgumentContract &Argument = Arguments[Index];
+    auto ArgumentFailure = [&](StringRef Field, bool Missing = false) {
+      return Mismatch((Twine("arg") + Twine(Index) + "_" +
+                       (Missing ? "missing_" : "") + Field)
+                          .str());
+    };
+    if (!Argument.Name)
+      return ArgumentFailure("name", true);
+    if (*Argument.Name != Names[Index])
+      return ArgumentFailure("name");
+    if (Argument.Offset != Offsets[Index])
+      return ArgumentFailure("offset");
+    if (Argument.Size != 8)
+      return ArgumentFailure("size");
+    if (!Argument.TypeName)
+      return ArgumentFailure("type_name", true);
+    if (Argument.Align && *Argument.Align != 8)
+      return ArgumentFailure("align");
+
+    bool IsPointer = Index == 0 || Index == 3 || Index == 5 || Index == 7;
+    if (!IsPointer) {
+      if (*Argument.TypeName != "ulong")
+        return ArgumentFailure("type_name");
+      if (Argument.ValueKind != "by_value")
+        return ArgumentFailure("value_kind");
+      if (Argument.ValueType && *Argument.ValueType != "u64")
+        return ArgumentFailure("value_type");
+      if (Argument.AddressSpace || Argument.Access || Argument.ActualAccess ||
+          Argument.PointeeAlign || (Argument.IsConst && *Argument.IsConst) ||
+          (Argument.IsRestrict && *Argument.IsRestrict) ||
+          (Argument.IsVolatile && *Argument.IsVolatile) ||
+          (Argument.IsPipe && *Argument.IsPipe))
+        return ArgumentFailure("pointer_qualifier");
+      continue;
+    }
+
+    bool IsInput = Index == 0;
+    StringRef Access = IsInput ? "read_only" : "write_only";
+    if (*Argument.TypeName != "float*")
+      return ArgumentFailure("type_name");
+    if (Argument.ValueKind != "global_buffer")
+      return ArgumentFailure("value_kind");
+    if (Argument.ValueType && *Argument.ValueType != "f32")
+      return ArgumentFailure("value_type");
+    if (!Argument.AddressSpace)
+      return ArgumentFailure("address_space", true);
+    if (*Argument.AddressSpace != "global")
+      return ArgumentFailure("address_space");
+    if (!Argument.Access)
+      return ArgumentFailure("access", true);
+    if (*Argument.Access != Access)
+      return ArgumentFailure("access");
+    if (Argument.ActualAccess && *Argument.ActualAccess != Access)
+      return ArgumentFailure("actual_access");
+    if (Argument.PointeeAlign && *Argument.PointeeAlign != 4)
+      return ArgumentFailure("pointee_align");
+    if (IsInput && !Argument.IsConst)
+      return ArgumentFailure("is_const", true);
+    if (Argument.IsConst && *Argument.IsConst != IsInput)
+      return ArgumentFailure("is_const");
+    if (!IsInput && !Argument.IsRestrict)
+      return ArgumentFailure("is_restrict", true);
+    if (Argument.IsRestrict && *Argument.IsRestrict == IsInput)
+      return ArgumentFailure("is_restrict");
+    if ((Argument.IsVolatile && *Argument.IsVolatile) ||
+        (Argument.IsPipe && *Argument.IsPipe))
+      return ArgumentFailure("qualifier");
+  }
+
+  constexpr size_t HiddenBaseIndex = 9;
+  constexpr uint64_t HiddenBase = 72;
+  auto ValidateHidden = [&](const KernelArgumentContract &Argument,
+                            const HiddenArgumentShape &Expected) {
+    return !Argument.Name && !Argument.TypeName &&
+           Argument.Offset == HiddenBase + Expected.Offset &&
+           Argument.Size == Expected.Size &&
+           Argument.ValueKind == Expected.ValueKind && !Argument.Align &&
+           !Argument.ValueType && !Argument.AddressSpace && !Argument.Access &&
+           !Argument.ActualAccess && !Argument.PointeeAlign &&
+           !Argument.IsConst && !Argument.IsRestrict && !Argument.IsVolatile &&
+           !Argument.IsPipe;
+  };
+  for (size_t Index = 0; Index != RequiredHidden.size(); ++Index)
+    if (!ValidateHidden(Arguments[HiddenBaseIndex + Index],
+                        RequiredHidden[Index]))
+      return Mismatch((Twine("hidden_arg") + Twine(Index)).str());
+  for (size_t Index = HiddenBaseIndex + RequiredHidden.size();
+       Index != Arguments.size(); ++Index) {
+    const KernelArgumentContract &Argument = Arguments[Index];
+    auto Expected = llvm::find_if(OptionalHidden, [&](const auto &Shape) {
+      return Argument.Offset == HiddenBase + Shape.Offset;
+    });
+    if (Expected == OptionalHidden.end() ||
+        !ValidateHidden(Argument, *Expected))
+      return Mismatch(
+          (Twine("hidden_arg") + Twine(Index - HiddenBaseIndex)).str());
+  }
+  return Error::success();
+}
+
 Expected<std::vector<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
                                                  const ElfContract &Expected,
                                                  const Request &RequestValue) {
@@ -1820,20 +2522,35 @@ Expected<std::vector<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
   auto Profile = selectPostLinkProfile(RequestValue, ExpectedSymbols);
   if (!Profile)
     return postLinkError("profile", errorToDiagnostic(Profile.takeError()));
-  if (*Profile == PostLinkProfile::ExactLdsGemmSlice1) {
-    if (Error E = validateExactLdsGemmSlice1ElfClosure(*ConcreteElf))
-      return E;
+  if (*Profile == PostLinkProfile::ExactLdsGemmSlice1 ||
+      *Profile == PostLinkProfile::ExactWave64CollectivesV1) {
+    const bool IsWave64 = *Profile == PostLinkProfile::ExactWave64CollectivesV1;
+    Error Closure =
+        IsWave64 ? validateExactWave64CollectivesV1ElfClosure(*ConcreteElf)
+                 : validateExactLdsGemmSlice1ElfClosure(*ConcreteElf);
+    if (Closure)
+      return Closure;
+    if (IsWave64) {
+      if (Error E = validateExactWave64NoMachineCalls(*ConcreteElf))
+        return E;
+      if (Error E =
+              validateExactWave64DescriptorBinding(*ConcreteElf, RequestValue))
+        return E;
+    }
+    StringRef Check =
+        IsWave64 ? "wave64_collectives_v1_profile" : "lds_gemm_slice1_profile";
     if (StaticPublicDefinitions != ExpectedSymbols)
       return pipelineError(
-          Twine("post_link.check=lds_gemm_slice1_profile status=failed ") +
+          Twine("post_link.check=") + Check + " status=failed " +
           "reason=static_symbol_closure expected=" +
           diagnosticList(ExpectedSymbols) +
           " actual=" + diagnosticList(StaticPublicDefinitions));
   }
-  const MetadataValidationPolicy MetadataPolicy =
-      *Profile == PostLinkProfile::ExactLdsGemmSlice1
-          ? MetadataValidationPolicy::ExactLdsGemmSlice1
-          : MetadataValidationPolicy::Generic;
+  MetadataValidationPolicy MetadataPolicy = MetadataValidationPolicy::Generic;
+  if (*Profile == PostLinkProfile::ExactLdsGemmSlice1)
+    MetadataPolicy = MetadataValidationPolicy::ExactLdsGemmSlice1;
+  else if (*Profile == PostLinkProfile::ExactWave64CollectivesV1)
+    MetadataPolicy = MetadataValidationPolicy::ExactWave64CollectivesV1;
   auto Metadata = inspectMetadata(*ConcreteElf, MetadataPolicy);
   if (!Metadata)
     return postLinkError("metadata", errorToDiagnostic(Metadata.takeError()));
@@ -1894,6 +2611,9 @@ Expected<std::vector<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
   if (*Profile == PostLinkProfile::ExactLdsGemmSlice1)
     if (Error E = validateExactLdsGemmSlice1Metadata(*Metadata))
       return E;
+  if (*Profile == PostLinkProfile::ExactWave64CollectivesV1)
+    if (Error E = validateExactWave64CollectivesV1Metadata(*Metadata))
+      return E;
 
   std::vector<std::string> Diagnostics;
   Diagnostics.push_back(
@@ -1919,6 +2639,13 @@ Expected<std::vector<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
         "workgroup=[64,1,1] kernarg_size=304 kernarg_align=8 "
         "group_size=1024 private_size=0 wavefront_size=64 spills=0 "
         "dynamic_stack=false");
+  if (*Profile == PostLinkProfile::ExactWave64CollectivesV1)
+    Diagnostics.push_back(
+        "post_link.check=wave64_collectives_v1_profile status=ok "
+        "workgroup=[64,1,1] retained_grid=[1,1,1] explicit_kernarg_size=72 "
+        "kernarg_size=328 kernarg_align=8 group_size=0 private_size=0 "
+        "wavefront_size=64 calls=0 spills=0 dynamic_stack=false "
+        "descriptor_binding=byte_exact rust_descriptor_admission=required");
   for (const KernelLaunchContract &Kernel : Metadata->Kernels) {
     std::string Required = "absent";
     if (Kernel.RequiredWorkgroupSize)
@@ -2065,6 +2792,12 @@ nativeLink(ArrayRef<std::vector<uint8_t>> Objects, const Request &RequestValue,
 
 } // namespace
 
+Error validateExactWave64CollectivesV1CompilerInputForTesting(
+    ArrayRef<uint8_t> Bytes) {
+  return validateExactWave64CompilerInput(
+      StringRef(reinterpret_cast<const char *>(Bytes.data()), Bytes.size()));
+}
+
 Error validateExactLdsGemmSlice1MetadataForTesting(StringRef MetadataBlob) {
   MetadataContract Metadata;
   Metadata.Present = true;
@@ -2086,6 +2819,28 @@ Error validateExactLdsGemmSlice1MetadataForTesting(StringRef MetadataBlob) {
   return validateExactLdsGemmSlice1Metadata(Metadata);
 }
 
+Error validateExactWave64CollectivesV1MetadataForTesting(
+    StringRef MetadataBlob) {
+  MetadataContract Metadata;
+  Metadata.Present = true;
+  std::set<std::string> Names;
+  std::set<std::string> Symbols;
+  if (Error E = appendMetadataBlob(
+          MetadataBlob, Metadata, Names, Symbols,
+          MetadataValidationPolicy::ExactWave64CollectivesV1))
+    return E;
+  if (!Metadata.Target ||
+      *Metadata.Target != "amdgcn-amd-amdhsa--gfx942:xnack-")
+    return postLinkError("wave64_collectives_v1_profile",
+                         "kernel_contract_metadata_target");
+  llvm::sort(Metadata.Kernels, [](const KernelLaunchContract &Left,
+                                  const KernelLaunchContract &Right) {
+    return std::tie(Left.Name, Left.Symbol) <
+           std::tie(Right.Name, Right.Symbol);
+  });
+  return validateExactWave64CollectivesV1Metadata(Metadata);
+}
+
 Error validateGenericMetadataForTesting(StringRef MetadataBlob) {
   MetadataContract Metadata;
   Metadata.Present = true;
@@ -2105,6 +2860,19 @@ Error validateExactLdsGemmSlice1ElfClosureForTesting(ArrayRef<uint8_t> Bytes) {
   if (!Elf)
     return pipelineError("test output is not ELF64LE");
   return validateExactLdsGemmSlice1ElfClosure(*Elf);
+}
+
+Error validateExactWave64CollectivesV1ElfClosureForTesting(
+    ArrayRef<uint8_t> Bytes) {
+  StringRef Data(reinterpret_cast<const char *>(Bytes.data()), Bytes.size());
+  auto ObjectOrError =
+      ObjectFile::createObjectFile(MemoryBufferRef(Data, "<test-output>"));
+  if (!ObjectOrError)
+    return ObjectOrError.takeError();
+  auto *Elf = dyn_cast<ELF64LEObjectFile>(ObjectOrError->get());
+  if (!Elf)
+    return pipelineError("test output is not ELF64LE");
+  return validateExactWave64CollectivesV1ElfClosure(*Elf);
 }
 
 Expected<std::vector<std::string>>
@@ -2145,6 +2913,11 @@ Response executeImpl(const Request &RequestValue,
         {"request worker identity does not match worker measurement"});
   if (Error E = validateRequest(RequestValue))
     return failure(RequestValue, Stage::InputValidation, std::move(E));
+  if (mentionsExactWave64CollectivesV1(RequestValue) &&
+      !isClosedExactWave64CollectivesV1Request(RequestValue))
+    return failure(RequestValue, Stage::InputValidation,
+                   {"exact Wave64 collectives symbols require the closed "
+                    "Worker V2 profile"});
 
   auto MachineOrError = createMachine(RequestValue);
   if (!MachineOrError)

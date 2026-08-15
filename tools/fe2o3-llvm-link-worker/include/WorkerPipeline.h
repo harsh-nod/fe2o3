@@ -13,10 +13,19 @@ inspectLinkedOutputForPublication(llvm::ArrayRef<uint8_t> Bytes,
 llvm::Error
 validateExactLdsGemmSlice1MetadataForTesting(llvm::StringRef MetadataBlob);
 
+llvm::Error validateExactWave64CollectivesV1CompilerInputForTesting(
+    llvm::ArrayRef<uint8_t> Bytes);
+
+llvm::Error validateExactWave64CollectivesV1MetadataForTesting(
+    llvm::StringRef MetadataBlob);
+
 llvm::Error validateGenericMetadataForTesting(llvm::StringRef MetadataBlob);
 
 llvm::Error
 validateExactLdsGemmSlice1ElfClosureForTesting(llvm::ArrayRef<uint8_t> Bytes);
+
+llvm::Error validateExactWave64CollectivesV1ElfClosureForTesting(
+    llvm::ArrayRef<uint8_t> Bytes);
 
 Response execute(const Request &RequestValue);
 

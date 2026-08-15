@@ -258,6 +258,23 @@ transaction durably publishes the exact admitted raw or finalized bytes plus
 the provenance receipt for the same managed build attempt. The worker response
 and the intermediate evidence remain non-authoritative by themselves.
 
+The closed `wave64_collectives_v1` Worker V2 profile is narrower still. It
+accepts only the exact `gfx942:xnack-` COV6 compiler input, O2/strip/verify
+options, fixed kernel/descriptor symbol pair, canonical masked collective LLVM
+body, and pinned MIR/KIR/profile identity sections. The worker audits that
+module before target-machine emission and independently closes the resulting
+WG64/Wave64 72-byte explicit and 328-byte complete ABI, resources, symbols,
+metadata, relocations, and dynamic dependencies after in-process LLD.
+The post-link check also disassembles the exact emitted kernel symbol through
+the in-process gfx942 LLVM MC tables and rejects every machine call opcode.
+
+For `.fe2o3.kd.v1`, this worker proves only transport identity: the output
+section must be byte-identical to the compiler-input section. The Rust pinned
+handoff expectation and canonical finalizer are the sole semantic descriptor
+parser and exact descriptor-admission boundary. A successful worker diagnostic
+therefore includes `rust_descriptor_admission=required`; it is not publication,
+load, launch, compiler-origin, or functional-correctness authority.
+
 This flow does not authenticate the compiler or its origin, authenticate or
 bind Verus verification, construct an `ArtifactContainerV1`, or grant HSA load
 or kernel-launch authority. Cargo owns canonical `.fe2o3.kd.v1` finalization for
