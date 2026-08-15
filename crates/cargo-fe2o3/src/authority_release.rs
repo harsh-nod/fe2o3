@@ -372,6 +372,14 @@ impl ProtectedReleaseAdmission {
     pub(crate) const fn contract_identity(&self) -> &[u8; 32] {
         &self.contract_identity
     }
+
+    pub(crate) fn configure_descendant(&self, command: &mut Command) {
+        let expected_parent = std::process::id();
+        // SAFETY: the callback invokes only async-signal-safe scalar process operations.
+        unsafe {
+            command.pre_exec(move || install_parent_death_signal(expected_parent));
+        }
+    }
 }
 
 impl Drop for ProtectedReleaseAdmission {
@@ -553,6 +561,7 @@ fn launch(args: &[OsString]) -> Result<ExitStatus, String> {
         &launcher_file,
         &cwd_file,
         &contract.descriptors[3..],
+        contract.parent_pid,
     )?;
     let mut child = command
         .as_command_mut()
@@ -672,6 +681,7 @@ fn parent_handshake(
 
 fn validate_child_state(contract: &ReleaseContract, args: &[OsString]) -> Result<(), String> {
     validate_release_environment()?;
+    verify_parent_death_signal()?;
     let parent_pid = u32::try_from(unsafe { libc::getppid() })
         .map_err(|_| "release child parent PID is negative".to_owned())?;
     let (_, launcher) = pin_process_image(parent_pid)?;
@@ -990,6 +1000,7 @@ fn install_child_boundary(
     launcher: &File,
     cwd: &File,
     expected: &[ObjectIdentity],
+    expected_parent: u32,
 ) -> Result<(), String> {
     for fd in [CONTRACT_FD, CONTROL_FD, LAUNCHER_IMAGE_FD, CWD_FD] {
         if fs::metadata(format!("/proc/self/fd/{fd}")).is_ok() {
@@ -1021,9 +1032,10 @@ fn install_child_boundary(
         }
     }
     // SAFETY: all source files remain borrowed through spawn; the callback performs only
-    // descriptor operations and fchdir before exec.
+    // scalar process, descriptor, and fchdir operations before exec.
     unsafe {
         command.pre_exec(move || {
+            install_parent_death_signal(expected_parent)?;
             for ((source, target), identity) in sources
                 .into_iter()
                 .zip([CONTRACT_FD, CONTROL_FD, LAUNCHER_IMAGE_FD, CWD_FD])
@@ -1054,6 +1066,33 @@ fn install_child_boundary(
             }
             Ok(())
         });
+    }
+    Ok(())
+}
+
+fn install_parent_death_signal(expected_parent: u32) -> std::io::Result<()> {
+    // SAFETY: prctl and getppid receive only documented scalar process arguments.
+    if unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let observed_parent = unsafe { libc::getppid() };
+    if u32::try_from(observed_parent).ok() != Some(expected_parent) {
+        return Err(std::io::Error::from_raw_os_error(libc::ESRCH));
+    }
+    Ok(())
+}
+
+fn verify_parent_death_signal() -> Result<(), String> {
+    let mut signal = 0;
+    // SAFETY: PR_GET_PDEATHSIG writes one signal number to the supplied live pointer.
+    if unsafe { libc::prctl(libc::PR_GET_PDEATHSIG, &mut signal, 0, 0, 0) } != 0 {
+        return Err(format!(
+            "cannot inspect release parent-death boundary: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    if signal != libc::SIGKILL {
+        return Err("release child parent-death boundary differs".to_owned());
     }
     Ok(())
 }

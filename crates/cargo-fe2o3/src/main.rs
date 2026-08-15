@@ -435,7 +435,7 @@ fn cargo_with_backend_result(
         authority_backend,
         authorized_closure,
     )?;
-    run_cargo_with_backend(&mut context, command, args)
+    run_cargo_with_backend(&mut context, command, args, protected_release)
 }
 
 fn authority_sensitive_request_selected() -> bool {
@@ -574,6 +574,7 @@ fn run_cargo_with_backend(
     context: &mut BackendRunContext,
     command: &str,
     args: &[OsString],
+    protected_release: Option<&authority_release::ProtectedReleaseAdmission>,
 ) -> Result<(), String> {
     context.project.validate_paths()?;
     context.target_dir.validate_path("Cargo target directory")?;
@@ -712,6 +713,9 @@ fn run_cargo_with_backend(
                 .as_command_mut()
                 .env_remove(worker_v2::WORKER_V2_EXPECTED_ID_ENV);
         }
+    }
+    if let Some(admission) = protected_release {
+        admission.configure_descendant(cargo.as_command_mut());
     }
     pending_invocation_boundary.configure_child(cargo.as_command_mut());
     let mut cargo_child = cargo
