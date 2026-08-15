@@ -33,6 +33,7 @@ pub(crate) const TILED_GEMM_LDS_SLICE1_AUTHORITY_SECTION_V1: &str =
     ".fe2o3.tiled-lds-slice1-auth.v1";
 pub(crate) const TILED_GEMM_LDS_SLICE1_RESOURCE_SECTION_V1: &str =
     ".fe2o3.tiled-lds-slice1-resources.v1";
+pub(crate) const MOE_TOP2_SECTION_PREFIX_V1: &str = ".fe2o3.moe";
 const REVIEWED_ROW_SOFTMAX_V1_LLVM_SHA256: [u8; 32] = [
     0x0a, 0x33, 0x13, 0x67, 0x53, 0x44, 0x43, 0x7b, 0xc7, 0xb8, 0x94, 0xad, 0x2f, 0x4d, 0xad, 0xb3,
     0x81, 0x07, 0xd9, 0x02, 0x96, 0xa9, 0x66, 0x5b, 0x76, 0x32, 0x34, 0xac, 0xd2, 0x40, 0x5a, 0xcc,
@@ -139,6 +140,7 @@ pub(crate) enum CompilerModuleConstructionError {
     TiledGemmLowering(String),
     TiledGemmLdsSlice1Lowering(String),
     RowSoftmaxLowering(String),
+    MoeTop2Lowering(String),
     FlashAttentionLowering(String),
     Lowering(dialect_amdgcn::LoweringErrors),
 }
@@ -179,6 +181,9 @@ impl fmt::Display for CompilerModuleConstructionError {
             }
             Self::RowSoftmaxLowering(error) => {
                 write!(formatter, "exact row-softmax lowering rejected: {error}")
+            }
+            Self::MoeTop2Lowering(error) => {
+                write!(formatter, "exact MoE top-2 lowering rejected: {error}")
             }
             Self::FlashAttentionLowering(error) => {
                 write!(formatter, "exact FlashAttention lowering rejected: {error}")
@@ -521,6 +526,36 @@ pub(crate) fn construct_inert_flash_attention_v1_module_text(
         internal_helpers: Vec::new(),
         device_ffi_exports: Vec::new(),
         external_declarations: vec!["__ocml_exp_f32".to_owned()],
+        descriptor_source_identity: None,
+        unbound_target_properties: [
+            UnboundCompilerModuleTargetPropertyV1::DataLayout,
+            UnboundCompilerModuleTargetPropertyV1::TargetProcessor,
+            UnboundCompilerModuleTargetPropertyV1::CodeObjectVersion,
+        ],
+    })
+}
+
+/// Lowers only the source-authenticated exact T8/E4/K2/C4 MoE sidecar.
+pub(crate) fn construct_inert_moe_top2_v1_module_text(
+    ir: &fe2o3_kernel_ir::MoeTop2KernelIrV1,
+    profile: &fe2o3_kernel_ir::MoeTop2ProfileV1,
+) -> Result<InertCompilerModuleTextV1, CompilerModuleConstructionError> {
+    let llvm_ir = crate::moe_top2_v1_codegen::lower_exact_moe_top2_v1(ir, profile)
+        .map_err(|error| CompilerModuleConstructionError::MoeTop2Lowering(error.to_owned()))?;
+    enforce_source_debug_text_bound(&llvm_ir)?;
+    Ok(InertCompilerModuleTextV1 {
+        llvm_ir,
+        kernel_entries: vec![fe2o3_kernel_ir::MOE_TOP2_V1_KERNEL_ID.to_owned()],
+        device_definitions: Vec::new(),
+        internal_helpers: vec![
+            "__fe2o3_moe_select_expert_v1".to_owned(),
+            "__fe2o3_moe_requested_count_v1".to_owned(),
+            "__fe2o3_moe_admitted_count_v1".to_owned(),
+            "__fe2o3_moe_expert_offset_v1".to_owned(),
+            "__fe2o3_moe_route_slot_v1".to_owned(),
+        ],
+        device_ffi_exports: Vec::new(),
+        external_declarations: Vec::new(),
         descriptor_source_identity: None,
         unbound_target_properties: [
             UnboundCompilerModuleTargetPropertyV1::DataLayout,
@@ -977,6 +1012,46 @@ pub(crate) fn bind_flash_attention_v1_authority(
         FLASH_ATTENTION_OCML_BOUNDARY_SECTION_V1,
         &ocml_boundary,
     );
+    enforce_source_debug_text_bound(&module.llvm_ir)?;
+    Ok(module)
+}
+
+/// Binds every identity retained by the consumed exact MoE receipt to the
+/// compiler-owned module. The provider section commits an empty closure.
+pub(crate) fn bind_moe_top2_v1_identities(
+    mut module: InertCompilerModuleTextV1,
+    parts: &crate::collected_moe_top2_v1::AuthenticatedMoeTop2WorkerPartsV1,
+) -> Result<InertCompilerModuleTextV1, CompilerModuleConstructionError> {
+    let provider = Sha256::digest(crate::moe_top2_v1_codegen::EMPTY_PROVIDER_CLOSURE_V1);
+    let layout =
+        Sha256::digest(crate::moe_top2_v1_codegen::EXACT_MOE_TOP2_GFX942_DATA_LAYOUT_V1.as_bytes());
+    for (suffix, bytes) in [
+        ("source.v1", parts.source_identity.as_slice()),
+        ("namespace.v1", parts.source_namespace.as_slice()),
+        ("crate.v1", parts.compiler_crate_binding.as_slice()),
+        ("authority.v1", parts.source_authority_identity.as_slice()),
+        ("mir.v1", parts.portable_mir_identity.as_slice()),
+        ("fnabi.v1", parts.fn_abi_identity.as_slice()),
+        ("compiler.v1", parts.compiler_semantics_identity.as_slice()),
+        (
+            "terminals.v3",
+            parts.trusted_definitions_identity.as_slice(),
+        ),
+        ("abi.v1", parts.abi_identity.as_slice()),
+        ("effects.v1", parts.effects_identity.as_slice()),
+        ("profile.v1", parts.profile_launch_identity.as_slice()),
+        ("routing.v1", parts.routing_identity.as_slice()),
+        ("kir.v1", parts.canonical_ir_identity.as_slice()),
+        ("descriptor.v1", parts.descriptor_identity.as_slice()),
+        ("provider.v1", provider.as_slice()),
+        ("layout.v1", layout.as_slice()),
+    ] {
+        append_commitment_section(
+            &mut module.llvm_ir,
+            &format!("{MOE_TOP2_SECTION_PREFIX_V1}.{suffix}"),
+            bytes,
+        );
+    }
     enforce_source_debug_text_bound(&module.llvm_ir)?;
     Ok(module)
 }

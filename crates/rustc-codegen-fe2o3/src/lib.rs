@@ -39,6 +39,7 @@ mod kernel_ir_lowering;
 mod mir_import;
 #[allow(dead_code)]
 mod mir_import_v2;
+mod moe_top2_v1_codegen;
 mod monomorphization_dead;
 mod record_lowering;
 #[allow(dead_code)]
@@ -634,7 +635,13 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                     codegen_pipeline,
                     PipelineSelection::Valid(CodegenPipeline::CollectedMoeTop2V1)
                 ) {
-                    let admission = (|| -> Result<_, String> {
+                    let preparation = (|| -> Result<_, String> {
+                        let attempt = build_attempt.ok_or_else(|| {
+                            format!(
+                                "{} requires a managed {BUILD_ATTEMPT_ENV}",
+                                collected_moe_top2_v1::COLLECTED_MOE_TOP2_PIPELINE_V1,
+                            )
+                        })?;
                         let collection = collector::collect_device_functions(
                             tcx,
                             mono_partitions.codegen_units,
@@ -660,29 +667,52 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                         let portable_mir = receipt.portable_mir_hex();
                         let authority = receipt.authority_hex();
                         let authenticated = receipt.consume().map_err(|error| error.to_string())?;
-                        Ok((
-                            root,
-                            portable_mir,
-                            authority,
-                            authenticated.source_authority_hex(),
-                            authenticated.descriptor_hex(),
-                            authenticated.profile().grid,
-                            authenticated.semantic_summary(),
-                        ))
-                    })();
-                    match admission {
+                        let grid = authenticated.profile().grid;
+                        let semantic_summary = authenticated.semantic_summary();
+                        let prepared =
+                            worker_v2_producer::prepare_moe_top2_v1_worker_handoff(authenticated)
+                                .map_err(|error| error.to_string())?;
+                        let consumed_authority = encode_hex(prepared.source_authority_identity());
+                        let descriptor = encode_hex(prepared.descriptor_profile_identity());
+                        let kir = encode_hex(prepared.canonical_ir_identity());
+                        let canonical_handoff_bytes = prepared.handoff().canonical_bytes().len();
+                        let llvm_bytes = prepared.handoff().module_bytes().len();
+                        let publication =
+                            worker_v2_producer::publish_prepared_moe_top2_v1_worker_handoff(
+                                output_dir, &producer, attempt, prepared,
+                            )
+                            .map_err(|error| error.to_string())?;
                         Ok((
                             root,
                             portable_mir,
                             authority,
                             consumed_authority,
                             descriptor,
+                            kir,
+                            grid,
+                            semantic_summary,
+                            canonical_handoff_bytes,
+                            llvm_bytes,
+                            publication.length(),
+                        ))
+                    })();
+                    match preparation {
+                        Ok((
+                            root,
+                            portable_mir,
+                            authority,
+                            consumed_authority,
+                            descriptor,
+                            kir,
                             grid,
                             (tokens, experts, top_k, capacity, routing_steps),
-                        )) => tcx.dcx().fatal(format!(
-                            "[rustc-codegen-fe2o3] {} authenticated exact attributed source bytes and fallback namespace, distinct wrapper/session-derived ordinary #[kernel(typed)] root `{root}`, exact rustc FnAbi, location-independent V3 trusted definitions and reviewed semantic-terminal manifest, and complete reachable portable-MIR closure modulo those identity-bound terminals {portable_mir}; consumed sealed source authority {authority} (bound value {consumed_authority}) to select closed deterministic finite-input MoE top-2 T{tokens}/E{experts}/K{top_k}/C{capacity} semantic KIR with {routing_steps} ordered routing steps, exact grid {grid:?}, lane-zero exclusive output ownership, stable-prefix capacity dropping, permutation/inverse and sentinel-tail semantics, and descriptor/resource identity {descriptor}; reviewed source-to-profile correspondence only; no generic lowering, IEEE FP32 refinement, terminal-body refinement, compiler-refinement proof, source-to-Verus/model refinement, LLVM lowering, Worker V2, finalizer, link, host, runtime, artifact, load, launch, GPU, or hardware authority was entered",
+                            canonical_handoff_bytes,
+                            llvm_bytes,
+                            publication_bytes,
+                        )) => eprintln!(
+                            "[rustc-codegen-fe2o3] {} authenticated exact attributed source bytes and fallback namespace, distinct wrapper/session-derived ordinary #[kernel(typed)] root `{root}`, exact rustc FnAbi, location-independent V3 trusted definitions and reviewed semantic-terminal manifest, and complete reachable portable-MIR closure modulo those identity-bound terminals {portable_mir}; consumed sealed source authority {authority} (bound value {consumed_authority}) to select closed deterministic finite-input MoE top-2 T{tokens}/E{experts}/K{top_k}/C{capacity} semantic KIR {kir} with {routing_steps} ordered routing steps, exact grid {grid:?}, lane-zero exclusive output ownership, stable-prefix capacity dropping, permutation/inverse and sentinel-tail semantics, and descriptor/resource identity {descriptor}; published an inert Worker V2 compiler-module handoff ({canonical_handoff_bytes} canonical bytes, {llvm_bytes} LLVM bytes, {publication_bytes} receipt bytes) for one explicit kernel, five private helpers, no providers/imports, canonical target-machine layout identity, exact COV6 ABI/resources/effects, and no COMGR or subprocess linker; reviewed source-to-profile correspondence only; no generic lowering, IEEE FP32 refinement, terminal-body refinement, compiler-refinement proof, source-to-Verus/model refinement, worker execution, finalizer, link result, artifact, host, runtime, load, launch, GPU, or hardware authority was entered",
                             collected_moe_top2_v1::COLLECTED_MOE_TOP2_PIPELINE_V1,
-                        )),
+                        ),
                         Err(error) => tcx.dcx().fatal(format!(
                             "[rustc-codegen-fe2o3] {} rejected the collected program without fallback: {error}",
                             collected_moe_top2_v1::COLLECTED_MOE_TOP2_PIPELINE_V1,

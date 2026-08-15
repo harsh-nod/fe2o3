@@ -25,7 +25,10 @@ use fe2o3_kernel_ir::{
     LaunchExtent, MATRIX_CAPABILITY_NAMESPACE, Module, Signature, TargetCapability, Terminator,
     WaveWidth, WorkgroupSize,
 };
-use reserved_fe2o3_symbols::{KernelBindingIdV1, MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1};
+use reserved_fe2o3_symbols::{
+    CrateBindingIdV1, KernelBindingIdV1, MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+    derive_kernel_binding_id_v1,
+};
 use rustc_middle::ty::TyCtxt;
 use sha2::{Digest, Sha256};
 use std::{
@@ -540,6 +543,123 @@ fn flash_attention_descriptor_module_v1() -> Module {
     module.functions.push(entry);
     module.kernels.push(kernel);
     module
+}
+
+/// Builds the descriptor only for the consumed exact T8/E4/K2/C4 MoE profile.
+pub(crate) fn construct_moe_top2_v1_compiler_descriptor_source_v1(
+    parts: &crate::collected_moe_top2_v1::AuthenticatedMoeTop2WorkerPartsV1,
+    envelope: &CompilerFfiEnvelopeV1,
+    compiler_module: &InertCompilerModuleTextV1,
+) -> Result<CompilerDescriptorSourceV1, CompilerDescriptorError> {
+    fe2o3_kernel_ir::verify_moe_top2_v1(&parts.ir, &parts.profile)
+        .map_err(|_| CompilerDescriptorError::NonCanonicalMoeTop2Module)?;
+    if envelope.target().to_string() != crate::collected_moe_top2_v1::EXACT_MOE_TOP2_TARGET_V1
+        || envelope.code_object_version() != CodeObjectVersion::V6
+        || compiler_module.kernel_entries() != [fe2o3_kernel_ir::MOE_TOP2_V1_KERNEL_ID]
+        || !compiler_module.device_definitions().is_empty()
+        || !compiler_module.device_ffi_exports().is_empty()
+        || !compiler_module.external_declarations().is_empty()
+        || compiler_module.descriptor_source_identity().is_some()
+    {
+        return Err(CompilerDescriptorError::NonCanonicalMoeTop2Module);
+    }
+
+    let shared_f32 =
+        SourceTypeRecordV1::new(SourceTypeDescriptorV1::shared_slice(ScalarTypeV1::F32));
+    let disjoint_u32 =
+        SourceTypeRecordV1::new(SourceTypeDescriptorV1::disjoint_slice(ScalarTypeV1::U32));
+    let shared_f32_layout =
+        DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::shared_slice(ScalarTypeV1::F32));
+    let disjoint_u32_layout =
+        DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::disjoint_slice(ScalarTypeV1::U32));
+    let names = [
+        "logits",
+        "top2_experts",
+        "requested_counts",
+        "admitted_counts",
+        "expert_offsets",
+        "route_slots",
+        "permutation",
+        "inverse",
+    ];
+    let mut arguments = Vec::with_capacity(names.len());
+    arguments.push(LogicalArgumentV1::shared_slice(
+        0,
+        ValidName::new(names[0])?,
+        &shared_f32,
+        &shared_f32_layout,
+        0,
+    )?);
+    for (index, name) in names.iter().enumerate().skip(1) {
+        arguments.push(LogicalArgumentV1::disjoint_slice(
+            u16::try_from(index).expect("eight MoE arguments fit u16"),
+            ValidName::new(*name)?,
+            &disjoint_u32,
+            &disjoint_u32_layout,
+            AccessMode::ReadWrite,
+            u32::try_from(index * 16).expect("fixed MoE offset fits u32"),
+        )?);
+    }
+
+    let compiler_binding = CrateBindingIdV1::from_bytes(parts.compiler_crate_binding);
+    let kernel_binding = derive_kernel_binding_id_v1(
+        compiler_binding,
+        MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+        fe2o3_kernel_ir::MOE_TOP2_V1_KERNEL_ID,
+        fe2o3_kernel_ir::MOE_TOP2_V1_KERNEL_ID,
+    );
+    let kernel = KernelDescriptorV1::new(
+        KernelId::from_bytes(kernel_binding.as_bytes()),
+        ValidName::new(fe2o3_kernel_ir::MOE_TOP2_V1_KERNEL_ID)?,
+        ValidName::new(fe2o3_kernel_ir::MOE_TOP2_V1_KERNEL_ID)?,
+        ValidName::new(fe2o3_kernel_ir::MOE_TOP2_V1_DESCRIPTOR_SYMBOL)?,
+        BuildEvidenceV1::new(
+            EvidenceIdentity::from_opaque_bytes(parts.source_identity),
+            EvidenceDigest::from_sha256_bytes(parts.source_authority_identity),
+        ),
+        BuildEvidenceV1::new(
+            EvidenceIdentity::from_opaque_bytes(parts.canonical_ir_identity),
+            EvidenceDigest::from_sha256_bytes(
+                Sha256::digest(compiler_module.llvm_ir().as_bytes()).into(),
+            ),
+        ),
+        vec![CapabilityV1::AmdWave],
+        KernelAbiLayoutV1::new(
+            fe2o3_kernel_ir::MOE_TOP2_V1_EXPLICIT_KERNARG_BYTES,
+            fe2o3_kernel_ir::MOE_TOP2_V1_COMPLETE_COV6_KERNARG_BYTES,
+            8,
+        )?,
+        LaunchConstraintsV1::new(
+            1,
+            BlockSizeV1::Exact(DimensionsV1::new(64, 1, 1)?),
+            DimensionsV1::new(1, 1, 1)?,
+            64,
+            0,
+            0,
+        )?,
+        arguments,
+    )?;
+    let table = DeviceDescriptorTableV1::new(
+        CanonicalCodeObjectDigest::from_bytes([0; 32]),
+        CodeObjectVersion::V6,
+        CompilerIdentityV1::new(
+            Text::new("rustc-codegen-fe2o3")?,
+            Text::new("1.96.0-nightly")?,
+            [
+                0x55, 0xe8, 0x6c, 0x99, 0x68, 0x09, 0x90, 0x2e, 0x8b, 0xba, 0xd5, 0x12, 0xcf, 0xb4,
+                0xd2, 0xc1, 0x8b, 0xe4, 0x46, 0xd9,
+            ],
+        ),
+        ProducerIdentityV1::new(
+            Text::new("rustc-codegen-fe2o3-worker-v2")?,
+            Text::new("typed-moe-top2-t8-e4-k2-c4-gfx942-cov6-v1")?,
+        ),
+        envelope.target(),
+        vec![shared_f32, disjoint_u32],
+        vec![shared_f32_layout, disjoint_u32_layout],
+        vec![kernel],
+    )?;
+    CompilerDescriptorSourceV1::new(table).map_err(CompilerDescriptorError::Source)
 }
 
 #[derive(Clone, Copy)]
@@ -1285,6 +1405,7 @@ pub(crate) enum CompilerDescriptorError {
     NonCanonicalRowSoftmaxModule,
     NonCanonicalFlashAttentionProfile,
     FlashAttentionDescriptorMismatch(&'static str),
+    NonCanonicalMoeTop2Module,
     UnsupportedCapability(String),
     Validation(ValidationError),
     Source(CompilerDescriptorSourceErrorV1),
@@ -1412,6 +1533,9 @@ impl fmt::Display for CompilerDescriptorError {
             Self::FlashAttentionDescriptorMismatch(field) => write!(
                 formatter,
                 "FlashAttention compiler descriptor has an internal {field} mismatch"
+            ),
+            Self::NonCanonicalMoeTop2Module => formatter.write_str(
+                "MoE descriptor construction requires the exact authenticated T8/E4/K2/C4 module",
             ),
             Self::UnsupportedCapability(capability) => write!(
                 formatter,

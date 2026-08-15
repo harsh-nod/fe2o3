@@ -1,6 +1,7 @@
 //! Preparation and attempt-scoped publication of inert Worker V2 compiler modules.
 
 use crate::collected_flash_attention_v1::FlashAttentionFinalizationInputsV1;
+use crate::collected_moe_top2_v1::AuthenticatedMoeTop2V1;
 use crate::collected_row_softmax_v1::AuthenticatedRowSoftmaxModuleV1;
 use crate::collected_scalar_gemm_v1::AuthenticatedScalarGemmModuleV1;
 use crate::collected_tiled_gemm_lds_slice1_v1::AuthenticatedLdsSlice1ModuleV1;
@@ -50,6 +51,7 @@ pub(crate) const ROW_SOFTMAX_OCML_EXP_SYMBOL_V1: &str = "__ocml_exp_f32";
 const ROW_SOFTMAX_OCML_EXP_ABI_V1: &str = "C(f32[size=4,align=4])->f32[size=4,align=4]";
 const ROW_SOFTMAX_OCML_EXP_EFFECTS_V1: &str = "none";
 const FLASH_ATTENTION_V1_DESCRIPTOR: &str = fe2o3_kernel_ir::FLASH_ATTENTION_V1_DESCRIPTOR_SYMBOL;
+const MOE_TOP2_V1_DESCRIPTOR: &str = fe2o3_kernel_ir::MOE_TOP2_V1_DESCRIPTOR_SYMBOL;
 pub(crate) const FLASH_ATTENTION_OCML_EXP_SYMBOL_V1: &str = "__ocml_exp_f32";
 const FLASH_ATTENTION_OCML_EXP_ABI_V1: &str = "C(f32[size=4,align=4])->f32[size=4,align=4]";
 const FLASH_ATTENTION_OCML_EXP_EFFECTS_V1: &str = "none";
@@ -159,6 +161,34 @@ impl PreparedFlashAttentionV1WorkerHandoffV1 {
 
     pub(crate) fn ocml_boundary_hex(&self) -> String {
         hex(&self.ocml_boundary_commitment)
+    }
+
+    pub(crate) const fn handoff(&self) -> &CompilerModuleHandoffV2 {
+        &self.handoff
+    }
+}
+
+/// Linear inert handoff derived only from the consumed exact MoE receipt.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct PreparedMoeTop2V1WorkerHandoffV1 {
+    source_authority_identity: [u8; 32],
+    canonical_ir_identity: [u8; 32],
+    descriptor_profile_identity: [u8; 32],
+    expected_handoff_identity: CompilerModuleHandoffIdentityV2,
+    handoff: CompilerModuleHandoffV2,
+}
+
+impl PreparedMoeTop2V1WorkerHandoffV1 {
+    pub(crate) const fn source_authority_identity(&self) -> &[u8; 32] {
+        &self.source_authority_identity
+    }
+
+    pub(crate) const fn canonical_ir_identity(&self) -> &[u8; 32] {
+        &self.canonical_ir_identity
+    }
+
+    pub(crate) const fn descriptor_profile_identity(&self) -> &[u8; 32] {
+        &self.descriptor_profile_identity
     }
 
     pub(crate) const fn handoff(&self) -> &CompilerModuleHandoffV2 {
@@ -464,6 +494,116 @@ pub(crate) fn publish_prepared_flash_attention_v1_worker_handoff(
         hex(&prepared.ocml_boundary_commitment),
     );
     Ok(receipt)
+}
+
+pub(crate) fn publish_prepared_moe_top2_v1_worker_handoff(
+    output_dir: &Path,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    prepared: PreparedMoeTop2V1WorkerHandoffV1,
+) -> Result<CompilerModuleHandoffReceiptV1, WorkerV2ProducerError> {
+    let sections = decode_moe_top2_v1_sections(prepared.handoff.module_bytes())
+        .ok_or(WorkerV2ProducerError::MissingMoeTop2Bindings)?;
+    if sections.len() != 17
+        || sections[4] != prepared.source_authority_identity
+        || sections[13] != prepared.canonical_ir_identity
+        || sections[14] != prepared.descriptor_profile_identity
+        || prepared.handoff.identity() != prepared.expected_handoff_identity
+        || prepared.handoff.target().to_string() != AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME
+        || prepared.handoff.code_object_version() != CodeObjectVersion::V6
+    {
+        return Err(WorkerV2ProducerError::MissingMoeTop2Bindings);
+    }
+    let receipt = publish_compiler_module_handoff_v1(
+        output_dir,
+        producer,
+        attempt,
+        prepared.handoff.canonical_bytes(),
+    )
+    .map_err(WorkerV2ProducerError::Publication)?;
+    eprintln!(
+        "[rustc-codegen-fe2o3] published exact MoE Worker V2 handoff bound to source authority {}, canonical Kernel IR {}, and descriptor profile {}",
+        hex(&prepared.source_authority_identity),
+        hex(&prepared.canonical_ir_identity),
+        hex(&prepared.descriptor_profile_identity),
+    );
+    Ok(receipt)
+}
+
+fn decode_moe_top2_v1_sections(module: &[u8]) -> Option<Vec<Vec<u8>>> {
+    let module = std::str::from_utf8(module).ok()?;
+    let suffixes = [
+        "source.v1",
+        "namespace.v1",
+        "crate.v1",
+        "authority.v1",
+        "mir.v1",
+        "fnabi.v1",
+        "compiler.v1",
+        "terminals.v3",
+        "abi.v1",
+        "effects.v1",
+        "profile.v1",
+        "routing.v1",
+        "kir.v1",
+        "descriptor.v1",
+        "provider.v1",
+        "layout.v1",
+    ];
+    let mut expected = Vec::with_capacity(1 + suffixes.len());
+    expected.push(fe2o3_compiler_ffi::COMPILER_DESCRIPTOR_SECTION_NAME_V1.to_owned());
+    expected.extend(suffixes.map(|suffix| {
+        format!(
+            "{}.{}",
+            crate::kernel_ir_codegen::MOE_TOP2_SECTION_PREFIX_V1,
+            suffix
+        )
+    }));
+    let lines = module.lines().collect::<Vec<_>>();
+    let declarations = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            canonical_module_assembly_section_name(line).map(|name| (index, name))
+        })
+        .collect::<Vec<_>>();
+    if declarations.len() != expected.len()
+        || declarations
+            .iter()
+            .zip(&expected)
+            .any(|((_, actual), expected)| *actual != expected)
+    {
+        return None;
+    }
+    let mut decoded = vec![Vec::new(); declarations.len()];
+    for (section, (start, _)) in declarations.iter().enumerate() {
+        if lines.get(start + 1) != Some(&"module asm \".balign 8\"") {
+            return None;
+        }
+        let end = declarations
+            .get(section + 1)
+            .map_or(lines.len(), |(index, _)| *index);
+        for line in lines.get(start + 2..end)? {
+            let values = line
+                .strip_prefix("module asm \".byte ")?
+                .strip_suffix('"')?;
+            for value in values.split(", ") {
+                let digits = value.strip_prefix("0x")?;
+                if digits.len() != 2
+                    || !digits
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                {
+                    return None;
+                }
+                decoded[section].push(u8::from_str_radix(digits, 16).ok()?);
+            }
+        }
+        if decoded[section].is_empty() {
+            return None;
+        }
+    }
+    Some(decoded)
 }
 
 fn module_asm_byte_line(bytes: &[u8]) -> String {
@@ -915,6 +1055,76 @@ pub(crate) fn prepare_flash_attention_v1_worker_handoff(
     })
 }
 
+/// Consumes the authenticated exact MoE source/KIR receipt and prepares its
+/// one-kernel, provider-free upstream-LLVM Worker V2 handoff.
+pub(crate) fn prepare_moe_top2_v1_worker_handoff(
+    authenticated: AuthenticatedMoeTop2V1,
+) -> Result<PreparedMoeTop2V1WorkerHandoffV1, WorkerV2ProducerError> {
+    let parts = authenticated.into_worker_parts();
+    let source_authority_identity = parts.source_authority_identity;
+    let canonical_ir_identity = parts.canonical_ir_identity;
+    let descriptor_profile_identity = parts.descriptor_identity;
+    let compiler_module = crate::kernel_ir_codegen::construct_inert_moe_top2_v1_module_text(
+        &parts.ir,
+        &parts.profile,
+    )
+    .map_err(WorkerV2ProducerError::CompilerModule)?;
+    let target = DeviceTargetV1::parse(AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME)
+        .expect("fixed MoE target is valid");
+    let envelope =
+        CompilerFfiEnvelopeV1::for_module_without_device_ffi(target, CodeObjectVersion::V6)
+            .map_err(WorkerV2ProducerError::CompilerEnvelope)?;
+    let descriptor =
+        crate::compiler_descriptor::construct_moe_top2_v1_compiler_descriptor_source_v1(
+            &parts,
+            &envelope,
+            &compiler_module,
+        )
+        .map_err(WorkerV2ProducerError::CompilerDescriptor)?;
+    let compiler_module = bind_compiler_descriptor_source_v1(compiler_module, &descriptor)
+        .map_err(WorkerV2ProducerError::CompilerModule)?;
+    let compiler_module =
+        crate::kernel_ir_codegen::bind_moe_top2_v1_identities(compiler_module, &parts)
+            .map_err(WorkerV2ProducerError::CompilerModule)?;
+    if compiler_module.kernel_entries() != [fe2o3_kernel_ir::MOE_TOP2_V1_KERNEL_ID]
+        || compiler_module.internal_helpers().len() != 5
+        || !compiler_module.device_definitions().is_empty()
+        || !compiler_module.device_ffi_exports().is_empty()
+        || !compiler_module.external_declarations().is_empty()
+        || compiler_module.descriptor_source_identity() != Some(descriptor.identity())
+    {
+        return Err(WorkerV2ProducerError::MoeTop2ClosureMismatch);
+    }
+    let symbol_manifest = CompilerModuleSymbolManifestV1::new([
+        (
+            CompilerModuleSymbolRoleV1::KernelEntry,
+            fe2o3_kernel_ir::MOE_TOP2_V1_KERNEL_ID,
+        ),
+        (
+            CompilerModuleSymbolRoleV1::KernelDescriptor,
+            MOE_TOP2_V1_DESCRIPTOR,
+        ),
+    ])
+    .map_err(WorkerV2ProducerError::SymbolManifest)?;
+    let handoff = CompilerModuleHandoffV2::new(
+        CompilerModuleKindV1::LlvmTextIr,
+        target,
+        CodeObjectVersion::V6,
+        envelope,
+        symbol_manifest,
+        compiler_module.llvm_ir().as_bytes(),
+    )
+    .map_err(WorkerV2ProducerError::Handoff)?;
+    let expected_handoff_identity = handoff.identity();
+    Ok(PreparedMoeTop2V1WorkerHandoffV1 {
+        source_authority_identity,
+        canonical_ir_identity,
+        descriptor_profile_identity,
+        expected_handoff_identity,
+        handoff,
+    })
+}
+
 fn validate_exact_flash_attention_module_closure(
     module: &InertCompilerModuleTextV1,
 ) -> Result<(), WorkerV2ProducerError> {
@@ -1241,6 +1451,8 @@ pub(crate) enum WorkerV2ProducerError {
     RowSoftmaxClosureMismatch,
     MissingFlashAttentionBindings,
     FlashAttentionClosureMismatch,
+    MissingMoeTop2Bindings,
+    MoeTop2ClosureMismatch,
     MissingExternalDeclaration(String),
     MissingCompilerDefinition(String),
     TargetCapabilities(CapabilityDerivationError),
@@ -1294,6 +1506,12 @@ impl fmt::Display for WorkerV2ProducerError {
             ),
             Self::FlashAttentionClosureMismatch => formatter.write_str(
                 "FlashAttention compiler-module symbol closure is not exactly one kernel, one descriptor, and the OCML exp import",
+            ),
+            Self::MissingMoeTop2Bindings => formatter.write_str(
+                "MoE compiler-module handoff lost an authenticated source/KIR/compiler/profile/provider/layout binding",
+            ),
+            Self::MoeTop2ClosureMismatch => formatter.write_str(
+                "MoE compiler-module closure is not exactly one kernel, five private helpers, one descriptor, and no providers",
             ),
             Self::MissingExternalDeclaration(symbol) => write!(
                 formatter,
@@ -1385,6 +1603,8 @@ impl Error for WorkerV2ProducerError {
             | Self::RowSoftmaxClosureMismatch
             | Self::MissingFlashAttentionBindings
             | Self::FlashAttentionClosureMismatch
+            | Self::MissingMoeTop2Bindings
+            | Self::MoeTop2ClosureMismatch
             | Self::MissingExternalDeclaration(_)
             | Self::MissingCompilerDefinition(_)
             | Self::UnsupportedWaveMode { .. }
@@ -1397,6 +1617,7 @@ impl Error for WorkerV2ProducerError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::collected_moe_top2_v1::exact_frontend_receipt_for_test as exact_moe_frontend_receipt_for_test;
     use crate::collected_row_softmax_v1::{
         exact_authority_policy_for_test,
         exact_frontend_receipt_for_test as exact_row_frontend_receipt_for_test,
@@ -1404,6 +1625,47 @@ mod tests {
     use crate::collected_scalar_gemm_v1::exact_frontend_receipt_for_test;
     use crate::collected_tiled_gemm_lds_slice1_v1::exact_lds_slice1_frontend_receipt_for_test;
     use crate::collected_tiled_gemm_v1::exact_frontend_receipt_for_test as exact_tiled_frontend_receipt_for_test;
+
+    #[test]
+    fn consumed_moe_receipt_prepares_only_the_exact_closed_handoff() {
+        let mut receipt = exact_moe_frontend_receipt_for_test();
+        let prepared = prepare_moe_top2_v1_worker_handoff(receipt.consume().unwrap()).unwrap();
+        let handoff = prepared.handoff();
+        assert_eq!(handoff.kind(), CompilerModuleKindV1::LlvmTextIr);
+        assert_eq!(
+            handoff.target().to_string(),
+            AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME
+        );
+        assert_eq!(handoff.code_object_version(), CodeObjectVersion::V6);
+        assert_eq!(handoff.envelope().directional_symbols().total_count(), 0);
+        assert_eq!(
+            handoff.symbol_manifest().entries().collect::<Vec<_>>(),
+            vec![
+                (
+                    CompilerModuleSymbolRoleV1::KernelEntry,
+                    fe2o3_kernel_ir::MOE_TOP2_V1_KERNEL_ID,
+                ),
+                (
+                    CompilerModuleSymbolRoleV1::KernelDescriptor,
+                    fe2o3_kernel_ir::MOE_TOP2_V1_DESCRIPTOR_SYMBOL,
+                ),
+            ]
+        );
+        let text = std::str::from_utf8(handoff.module_bytes()).unwrap();
+        assert!(text.contains(crate::moe_top2_v1_codegen::EXACT_MOE_TOP2_GFX942_DATA_LAYOUT_V1));
+        assert_eq!(text.matches("define amdgpu_kernel").count(), 1);
+        assert_eq!(text.matches("define internal").count(), 5);
+        assert!(!text.contains("COMGR"));
+        let sections = decode_moe_top2_v1_sections(handoff.module_bytes()).unwrap();
+        assert_eq!(sections.len(), 17);
+        assert_eq!(sections[4], prepared.source_authority_identity);
+        assert_eq!(sections[13], prepared.canonical_ir_identity);
+        assert_eq!(sections[14], prepared.descriptor_profile_identity);
+        assert_eq!(
+            sections[15],
+            Sha256::digest(crate::moe_top2_v1_codegen::EMPTY_PROVIDER_CLOSURE_V1).as_slice()
+        );
+    }
     use fe2o3_artifact_transaction::{
         BuildInvocation, BuildSession, CompilerModuleHandoffErrorV1 as PublicationError,
         begin_build_attempt, consume_compiler_module_handoff_v1,

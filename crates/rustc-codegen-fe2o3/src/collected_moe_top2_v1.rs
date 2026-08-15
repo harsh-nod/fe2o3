@@ -238,8 +238,20 @@ impl MoeTop2FrontendReceiptV1 {
         Ok(AuthenticatedMoeTop2V1 {
             ir,
             profile,
+            source_identity: authority.source_identity,
+            source_namespace: authority.source_namespace,
+            compiler_crate_binding: authority.compiler_crate_binding,
             source_authority_identity: authority.authority_identity,
+            portable_mir_identity: authority.portable_mir_identity,
+            compiler_semantics_identity: authority.compiler_semantics_identity,
+            fn_abi_identity: authority.fn_abi_identity,
+            trusted_definitions_identity: authority.trusted_definitions_identity,
+            abi_identity: authority.abi_identity,
+            effects_identity: authority.effects_identity,
+            profile_launch_identity: authority.profile_launch_identity,
+            routing_identity: authority.routing_identity,
             descriptor_identity: authority.descriptor_identity,
+            canonical_ir_identity: authority.canonical_ir_identity,
         })
     }
 }
@@ -248,8 +260,20 @@ impl MoeTop2FrontendReceiptV1 {
 pub(crate) struct AuthenticatedMoeTop2V1 {
     ir: MoeTop2KernelIrV1,
     profile: MoeTop2ProfileV1,
+    source_identity: [u8; 32],
+    source_namespace: [u8; 32],
+    compiler_crate_binding: [u8; 32],
     source_authority_identity: [u8; 32],
+    portable_mir_identity: [u8; 32],
+    compiler_semantics_identity: [u8; 32],
+    fn_abi_identity: [u8; 32],
+    trusted_definitions_identity: [u8; 32],
+    abi_identity: [u8; 32],
+    effects_identity: [u8; 32],
+    profile_launch_identity: [u8; 32],
+    routing_identity: [u8; 32],
     descriptor_identity: [u8; 32],
+    canonical_ir_identity: [u8; 32],
 }
 
 impl AuthenticatedMoeTop2V1 {
@@ -267,13 +291,48 @@ impl AuthenticatedMoeTop2V1 {
         &self.profile
     }
 
-    pub(crate) fn source_authority_hex(&self) -> String {
-        encode_hex(&self.source_authority_identity)
+    pub(crate) fn into_worker_parts(self) -> AuthenticatedMoeTop2WorkerPartsV1 {
+        AuthenticatedMoeTop2WorkerPartsV1 {
+            ir: self.ir,
+            profile: self.profile,
+            source_identity: self.source_identity,
+            source_namespace: self.source_namespace,
+            compiler_crate_binding: self.compiler_crate_binding,
+            source_authority_identity: self.source_authority_identity,
+            portable_mir_identity: self.portable_mir_identity,
+            compiler_semantics_identity: self.compiler_semantics_identity,
+            fn_abi_identity: self.fn_abi_identity,
+            trusted_definitions_identity: self.trusted_definitions_identity,
+            abi_identity: self.abi_identity,
+            effects_identity: self.effects_identity,
+            profile_launch_identity: self.profile_launch_identity,
+            routing_identity: self.routing_identity,
+            descriptor_identity: self.descriptor_identity,
+            canonical_ir_identity: self.canonical_ir_identity,
+        }
     }
+}
 
-    pub(crate) fn descriptor_hex(&self) -> String {
-        encode_hex(&self.descriptor_identity)
-    }
+/// Private linear bridge from the authenticated source/KIR receipt to the
+/// exact MoE Worker V2 producer. It is intentionally not cloneable.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedMoeTop2WorkerPartsV1 {
+    pub(crate) ir: MoeTop2KernelIrV1,
+    pub(crate) profile: MoeTop2ProfileV1,
+    pub(crate) source_identity: [u8; 32],
+    pub(crate) source_namespace: [u8; 32],
+    pub(crate) compiler_crate_binding: [u8; 32],
+    pub(crate) source_authority_identity: [u8; 32],
+    pub(crate) portable_mir_identity: [u8; 32],
+    pub(crate) compiler_semantics_identity: [u8; 32],
+    pub(crate) fn_abi_identity: [u8; 32],
+    pub(crate) trusted_definitions_identity: [u8; 32],
+    pub(crate) abi_identity: [u8; 32],
+    pub(crate) effects_identity: [u8; 32],
+    pub(crate) profile_launch_identity: [u8; 32],
+    pub(crate) routing_identity: [u8; 32],
+    pub(crate) descriptor_identity: [u8; 32],
+    pub(crate) canonical_ir_identity: [u8; 32],
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -1327,39 +1386,44 @@ fn encode_hex(bytes: &[u8]) -> String {
 }
 
 #[cfg(test)]
+pub(crate) fn exact_frontend_receipt_for_test() -> MoeTop2FrontendReceiptV1 {
+    let mut authority = MoeTop2AuthorityV1 {
+        source_identity: MOE_TOP2_V1_SOURCE_SHA256,
+        source_namespace: MOE_TOP2_V1_NAMESPACE,
+        compiler_crate_binding: compiler_crate_binding().as_bytes(),
+        target: EXACT_MOE_TOP2_TARGET_V1.into(),
+        code_object_version: 6,
+        kernel_export: MOE_TOP2_V1_KERNEL_ID.into(),
+        root_instance_identity: REVIEWED_ROOT_INSTANCE_IDENTITY.into(),
+        portable_mir_identity: PORTABLE_MIR_CLOSURE_IDENTITY_V1,
+        compiler_semantics_identity: COMPILER_SEMANTICS_IDENTITY_V1,
+        fn_abi_identity: RUSTC_FN_ABI_IDENTITY_V1,
+        trusted_definitions_identity: TRUSTED_TERMINAL_IDENTITY_V3,
+        frontend_contract_identity: sha256(EXACT_FRONTEND_CONTRACT_V1),
+        abi_identity: sha256(ABI_BINDING_V1),
+        effects_identity: sha256(EFFECT_BINDING_V1),
+        source_launch_identity: sha256(SOURCE_LAUNCH_BINDING_V1),
+        profile_launch_identity: sha256(PROFILE_LAUNCH_BINDING_V1),
+        routing_identity: sha256(ROUTING_BINDING_V1),
+        descriptor_identity: sha256(DESCRIPTOR_BINDING_V1),
+        canonical_ir_identity: sha256(CANONICAL_IR_BINDING_V1),
+        correspondence_identity: sha256(CORRESPONDENCE_BINDING_V1),
+        authority_identity: [0; 32],
+    };
+    authority.authority_identity = authority_identity(&authority);
+    MoeTop2FrontendReceiptV1 {
+        authority: Some(authority),
+        ir: Some(moe_top2_v1_kernel_ir()),
+        profile: Some(MoeTop2ProfileV1::exact_gfx942_xnack_minus_cov6()),
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
     fn receipt() -> MoeTop2FrontendReceiptV1 {
-        let mut authority = MoeTop2AuthorityV1 {
-            source_identity: MOE_TOP2_V1_SOURCE_SHA256,
-            source_namespace: MOE_TOP2_V1_NAMESPACE,
-            compiler_crate_binding: compiler_crate_binding().as_bytes(),
-            target: EXACT_MOE_TOP2_TARGET_V1.into(),
-            code_object_version: 6,
-            kernel_export: MOE_TOP2_V1_KERNEL_ID.into(),
-            root_instance_identity: REVIEWED_ROOT_INSTANCE_IDENTITY.into(),
-            portable_mir_identity: PORTABLE_MIR_CLOSURE_IDENTITY_V1,
-            compiler_semantics_identity: COMPILER_SEMANTICS_IDENTITY_V1,
-            fn_abi_identity: RUSTC_FN_ABI_IDENTITY_V1,
-            trusted_definitions_identity: TRUSTED_TERMINAL_IDENTITY_V3,
-            frontend_contract_identity: sha256(EXACT_FRONTEND_CONTRACT_V1),
-            abi_identity: sha256(ABI_BINDING_V1),
-            effects_identity: sha256(EFFECT_BINDING_V1),
-            source_launch_identity: sha256(SOURCE_LAUNCH_BINDING_V1),
-            profile_launch_identity: sha256(PROFILE_LAUNCH_BINDING_V1),
-            routing_identity: sha256(ROUTING_BINDING_V1),
-            descriptor_identity: sha256(DESCRIPTOR_BINDING_V1),
-            canonical_ir_identity: sha256(CANONICAL_IR_BINDING_V1),
-            correspondence_identity: sha256(CORRESPONDENCE_BINDING_V1),
-            authority_identity: [0; 32],
-        };
-        authority.authority_identity = authority_identity(&authority);
-        MoeTop2FrontendReceiptV1 {
-            authority: Some(authority),
-            ir: Some(moe_top2_v1_kernel_ir()),
-            profile: Some(MoeTop2ProfileV1::exact_gfx942_xnack_minus_cov6()),
-        }
+        exact_frontend_receipt_for_test()
     }
 
     #[test]
