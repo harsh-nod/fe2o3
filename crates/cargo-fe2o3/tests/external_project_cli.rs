@@ -192,6 +192,44 @@ impl ProjectFixture {
         command
     }
 
+    fn protected_release_command(&self, action: &str) -> Command {
+        let args = [
+            OsString::from("authority"),
+            OsString::from("release"),
+            OsString::from(action),
+        ];
+        let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
+        command
+            .env_clear()
+            .args(args)
+            .current_dir(&self.cwd)
+            .env("LANG", "C")
+            .env("LC_ALL", "C")
+            .env("TZ", "UTC")
+            .env("CARGO", env!("CARGO_BIN_EXE_cargo-fe2o3-cargo-fixture"))
+            .env("FE2O3_BACKEND", &self.backend)
+            .env("FE2O3_TARGET", "gfx942")
+            .env(
+                "FE2O3_AUTHORITY_RUSTC_PATH_V1",
+                rustc_fixture_executable(&self.root),
+            )
+            .env("FE2O3_CODEGEN_PIPELINE", "collected-row-softmax-v1")
+            .env(
+                "FE2O3_AUTHORITY_RUSTC_SHA256_V1",
+                authority_rustc_sha256(&self.root),
+            )
+            .env(
+                "FE2O3_AUTHORITY_RUSTC_RUNTIME_SHA256_V1",
+                authority_rustc_runtime_sha256(&self.root),
+            )
+            .env("FE2O3_AUTHORITY_CARGO_SHA256_V1", authority_cargo_sha256())
+            .env(
+                "FE2O3_AUTHORITY_BACKEND_SHA256_V1",
+                file_sha256(&self.backend),
+            );
+        command
+    }
+
     fn invocations(&self) -> Vec<Invocation> {
         let bytes = fs::read(&self.log).expect("read fake Cargo log");
         Invocation::decode_all(&bytes)
@@ -1452,6 +1490,155 @@ fn authority_release_fails_before_executing_cargo_without_a_protected_launcher()
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(!fixture.log.exists(), "authority gate executed Cargo");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn protected_release_probe_mints_only_a_real_launcher_handoff() {
+    let fixture = ProjectFixture::standalone();
+    let output = fixture
+        .protected_release_command("probe")
+        .output()
+        .expect("run protected release handoff probe");
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("probe output is UTF-8");
+    assert!(
+        stdout.contains("FE2O3_PROTECTED_AUTHORITY_RELEASE_V1_OK"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("runtime_authority=none"), "{stdout}");
+    assert!(stdout.contains("gpu_authority=none"), "{stdout}");
+    assert!(!fixture.log.exists(), "release probe executed Cargo");
+    assert!(
+        !fixture.target.join("fe2o3").exists(),
+        "release probe created an artifact generation"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn protected_release_child_rejects_release_without_launcher_descriptors() {
+    let fixture = ProjectFixture::standalone();
+    let output = fixture
+        .command(&[
+            OsString::from("__fe2o3-authority-release-child-v1"),
+            OsString::from("probe"),
+        ])
+        .output()
+        .expect("run launcher-free release child");
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("release contract descriptor"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!fixture.log.exists(), "launcher-free child executed Cargo");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn protected_release_rejects_unexpected_inherited_descriptor() {
+    let fixture = ProjectFixture::standalone();
+    let inherited = OpenOptions::new()
+        .read(true)
+        .open("/dev/null")
+        .expect("open hostile inherited descriptor");
+    let source = inherited.as_raw_fd();
+    let mut command = fixture.protected_release_command("probe");
+    // SAFETY: the retained source descriptor outlives spawn and dup3 is async-signal-safe.
+    unsafe {
+        command.pre_exec(move || {
+            if libc::dup3(source, 42, 0) != 42 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let output = command.output().expect("run inherited descriptor probe");
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("rejects unexpected inherited descriptors [42]"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!fixture.log.exists(), "descriptor rejection executed Cargo");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn protected_release_rejects_preloads_and_selector_injection() {
+    for (name, value, expected) in [
+        (
+            "LD_PRELOAD",
+            "/definitely/not/a/fe2o3-loader-object.so",
+            "rejects dynamic-loader injection variable",
+        ),
+        ("RUSTC", "/tmp/hostile-rustc", "compiler selection RUSTC"),
+        (
+            "CARGO_TARGET_GFX942_LINKER",
+            "/tmp/hostile-linker",
+            "rejects tool override",
+        ),
+    ] {
+        let fixture = ProjectFixture::standalone();
+        let mut command = fixture.protected_release_command("probe");
+        command.env(name, value);
+        let output = command.output().expect("run release injection probe");
+        assert!(!output.status.success(), "{name}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(expected),
+            "{name}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!fixture.log.exists(), "{name} rejection executed Cargo");
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn protected_release_rejects_unexpected_inherited_environment() {
+    let fixture = ProjectFixture::standalone();
+    let mut command = fixture.protected_release_command("probe");
+    command.env("UNEXPECTED_RELEASE_STATE", "hostile");
+    let output = command.output().expect("run inherited environment probe");
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("rejects unexpected inherited environment"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !fixture.log.exists(),
+        "environment rejection executed Cargo"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn protected_release_rejects_path_aliases() {
+    use std::os::unix::fs::symlink;
+
+    let path_alias = ProjectFixture::standalone();
+    let alias = path_alias.root.join("cargo-alias");
+    symlink(env!("CARGO_BIN_EXE_cargo-fe2o3-cargo-fixture"), &alias)
+        .expect("create Cargo path alias");
+    let mut command = path_alias.protected_release_command("probe");
+    command.env("CARGO", alias);
+    let output = command.output().expect("run path alias probe");
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("rejects aliased CARGO path"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!path_alias.log.exists(), "alias rejection executed Cargo");
 }
 
 #[test]

@@ -56,6 +56,21 @@ const REQUIRED_SEALS: rustix::fs::SealFlags = rustix::fs::SealFlags::WRITE
     .union(rustix::fs::SealFlags::GROW)
     .union(rustix::fs::SealFlags::SHRINK)
     .union(rustix::fs::SealFlags::SEAL);
+const RELEASE_ENVIRONMENT_ALLOWLIST: &[&str] = &[
+    "CARGO",
+    "FE2O3_AUTHORITY_BACKEND_SHA256_V1",
+    "FE2O3_AUTHORITY_CARGO_SHA256_V1",
+    "FE2O3_AUTHORITY_RUSTC_PATH_V1",
+    "FE2O3_AUTHORITY_RUSTC_RUNTIME_SHA256_V1",
+    "FE2O3_AUTHORITY_RUSTC_SHA256_V1",
+    "FE2O3_BACKEND",
+    "FE2O3_CODEGEN_PIPELINE",
+    "FE2O3_TARGET",
+    "FE2O3_WORKER_V2_CONFIG_V1",
+    "LANG",
+    "LC_ALL",
+    "TZ",
+];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ObjectIdentity {
@@ -190,6 +205,20 @@ impl CompilerClosureObservation {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ReleaseContract {
     attempt: [u8; 32],
+    parent_uid: u32,
+    parent_pid: u32,
+    parent_start_ticks: u64,
+    launcher: ImageIdentity,
+    child: ImageIdentity,
+    cwd: ObjectIdentity,
+    descriptors: [ObjectIdentity; 7],
+    compiler: CompilerClosureObservation,
+    argv: Vec<Vec<u8>>,
+    environment: Vec<(Vec<u8>, Vec<u8>)>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ChildObservation {
     parent_uid: u32,
     parent_pid: u32,
     parent_start_ticks: u64,
@@ -377,6 +406,10 @@ pub(crate) fn command(args: &[OsString]) -> ExitCode {
         );
         return ExitCode::FAILURE;
     }
+    if let Err(error) = validate_release_environment() {
+        eprintln!("cargo fe2o3 authority release: {error}");
+        return ExitCode::FAILURE;
+    }
     match launch(child_args) {
         Ok(status) => ExitCode::from(exit_code(status)),
         Err(error) => {
@@ -519,7 +552,7 @@ fn launch(args: &[OsString]) -> Result<ExitStatus, String> {
         &child_control,
         &launcher_file,
         &cwd_file,
-        &descriptors[3..],
+        &contract.descriptors[3..],
     )?;
     let mut child = command
         .as_command_mut()
@@ -638,55 +671,75 @@ fn parent_handshake(
 }
 
 fn validate_child_state(contract: &ReleaseContract, args: &[OsString]) -> Result<(), String> {
-    if unsafe { libc::geteuid() } != contract.parent_uid {
-        return Err("release child uid differs from launcher".to_owned());
+    validate_release_environment()?;
+    let parent_pid = u32::try_from(unsafe { libc::getppid() })
+        .map_err(|_| "release child parent PID is negative".to_owned())?;
+    let (_, launcher) = pin_process_image(parent_pid)?;
+    let (_, child) = pin_process_image(std::process::id())?;
+    let cwd = ObjectIdentity::from_metadata(
+        &fs::metadata(".").map_err(|error| format!("cannot inspect release child cwd: {error}"))?,
+    );
+    reject_reserved_descriptors(&[0, 1, 2, CONTRACT_FD, CONTROL_FD, LAUNCHER_IMAGE_FD, CWD_FD])?;
+    let descriptors = [
+        ObjectIdentity::from_fd(0, "release stdin")?,
+        ObjectIdentity::from_fd(1, "release stdout")?,
+        ObjectIdentity::from_fd(2, "release stderr")?,
+        ObjectIdentity::from_fd(CONTRACT_FD, "release contract")?,
+        ObjectIdentity::from_fd(CONTROL_FD, "release control")?,
+        ObjectIdentity::from_fd(LAUNCHER_IMAGE_FD, "release launcher image")?,
+        ObjectIdentity::from_fd(CWD_FD, "release cwd")?,
+    ];
+    let launcher_file = clone_fd(LAUNCHER_IMAGE_FD, "launcher image")?;
+    if image_identity(&launcher_file, contract.launcher.sha256)? != launcher {
+        return Err("retained launcher image differs from the sealed contract".to_owned());
     }
-    if std::process::id() == contract.parent_pid
-        || unsafe { libc::getppid() } != contract.parent_pid as libc::pid_t
-        || process_start_time_ticks(contract.parent_pid)? != contract.parent_start_ticks
+    validate_child_observation(
+        contract,
+        &ChildObservation {
+            parent_uid: unsafe { libc::geteuid() },
+            parent_pid,
+            parent_start_ticks: process_start_time_ticks(parent_pid)?,
+            launcher,
+            child,
+            cwd,
+            descriptors,
+            compiler: observe_compiler_closure()?,
+            argv: child_argv(args)?,
+            environment: environment_bytes(&current_environment()?),
+        },
+    )
+}
+
+fn validate_child_observation(
+    contract: &ReleaseContract,
+    observed: &ChildObservation,
+) -> Result<(), String> {
+    if observed.parent_uid != contract.parent_uid
+        || observed.parent_pid != contract.parent_pid
+        || observed.parent_start_ticks != contract.parent_start_ticks
     {
         return Err("release child does not have the exact admitted launcher parent".to_owned());
     }
-    let observed_argv = child_argv(args)?;
-    if observed_argv != contract.argv {
-        return Err("release child argv differs from the sealed contract".to_owned());
+    if observed.launcher != contract.launcher {
+        return Err("release launcher executable image/backing object differs".to_owned());
     }
-    if environment_bytes(&current_environment()?) != contract.environment {
-        return Err("release child environment differs from the sealed contract".to_owned());
+    if observed.child != contract.child {
+        return Err("release child executable image/backing object differs".to_owned());
     }
-    if ObjectIdentity::from_metadata(
-        &fs::metadata(".").map_err(|error| format!("cannot inspect release child cwd: {error}"))?,
-    ) != contract.cwd
-    {
+    if observed.cwd != contract.cwd {
         return Err("release child cwd differs from the retained object".to_owned());
     }
-    reject_reserved_descriptors(&[0, 1, 2, CONTRACT_FD, CONTROL_FD, LAUNCHER_IMAGE_FD, CWD_FD])?;
-    for (fd, expected) in [
-        (0, contract.descriptors[0]),
-        (1, contract.descriptors[1]),
-        (2, contract.descriptors[2]),
-        (CONTRACT_FD, contract.descriptors[3]),
-        (CONTROL_FD, contract.descriptors[4]),
-        (LAUNCHER_IMAGE_FD, contract.descriptors[5]),
-        (CWD_FD, contract.descriptors[6]),
-    ] {
-        if ObjectIdentity::from_fd(fd, "release manifest")? != expected {
-            return Err(format!(
-                "release descriptor {fd} differs from the sealed manifest"
-            ));
-        }
+    if observed.descriptors != contract.descriptors {
+        return Err("release child descriptor manifest differs".to_owned());
     }
-    let (_, current) = pin_process_image(std::process::id())?;
-    if current != contract.child {
-        return Err("release child current image differs from sealed child image".to_owned());
-    }
-    let launcher_file = clone_fd(LAUNCHER_IMAGE_FD, "launcher image")?;
-    if image_identity(&launcher_file, contract.launcher.sha256)? != contract.launcher {
-        return Err("retained launcher image differs from the sealed contract".to_owned());
-    }
-    let compiler = observe_compiler_closure()?;
-    if compiler != contract.compiler {
+    if observed.compiler != contract.compiler {
         return Err("release compiler closure/runtime tree drifted across exec".to_owned());
+    }
+    if observed.argv != contract.argv {
+        return Err("release child argv differs from the sealed contract".to_owned());
+    }
+    if observed.environment != contract.environment {
+        return Err("release child environment differs from the sealed contract".to_owned());
     }
     Ok(())
 }
@@ -698,10 +751,6 @@ fn authenticate_parent(contract: &ReleaseContract, control: &UnixStream) -> Resu
         || u32::try_from(credentials.pid.as_raw_nonzero().get()).ok() != Some(contract.parent_pid)
     {
         return Err("release control peer does not match the admitted launcher".to_owned());
-    }
-    let (_, observed) = pin_process_image(contract.parent_pid)?;
-    if observed != contract.launcher {
-        return Err("release launcher process image/backing object differs".to_owned());
     }
     Ok(())
 }
@@ -830,6 +879,27 @@ fn current_environment() -> Result<Vec<(OsString, OsString)>, String> {
     Ok(values)
 }
 
+fn validate_release_environment() -> Result<(), String> {
+    for (name, value) in env::vars_os() {
+        let Some(name_text) = name.to_str() else {
+            return Err("authority release rejects a non-UTF-8 environment name".to_owned());
+        };
+        if !RELEASE_ENVIRONMENT_ALLOWLIST.contains(&name_text) {
+            return Err(format!(
+                "authority release rejects unexpected inherited environment {name:?}={value:?}"
+            ));
+        }
+    }
+    for (name, expected) in [("LANG", "C"), ("LC_ALL", "C"), ("TZ", "UTC")] {
+        if env::var_os(name).as_deref() != Some(OsStr::new(expected)) {
+            return Err(format!(
+                "authority release requires exact environment {name}={expected}"
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn environment_bytes(values: &[(OsString, OsString)]) -> Vec<(Vec<u8>, Vec<u8>)> {
     values
         .iter()
@@ -923,6 +993,19 @@ fn install_child_boundary(
     let expected: [ObjectIdentity; 4] = expected
         .try_into()
         .map_err(|_| "release descriptor manifest has the wrong count".to_owned())?;
+    for ((source, identity), label) in
+        sources
+            .into_iter()
+            .zip(expected)
+            .zip(["contract", "control", "launcher image", "cwd"])
+    {
+        let observed = ObjectIdentity::from_fd(source, label)?;
+        if observed != identity {
+            return Err(format!(
+                "release {label} source descriptor differs from its manifest: expected {identity:?}, observed {observed:?}"
+            ));
+        }
+    }
     // SAFETY: all source files remain borrowed through spawn; the callback performs only
     // descriptor operations and fchdir before exec.
     unsafe {
@@ -1378,6 +1461,21 @@ mod tests {
         }
     }
 
+    fn observation(contract: &ReleaseContract) -> ChildObservation {
+        ChildObservation {
+            parent_uid: contract.parent_uid,
+            parent_pid: contract.parent_pid,
+            parent_start_ticks: contract.parent_start_ticks,
+            launcher: contract.launcher,
+            child: contract.child,
+            cwd: contract.cwd,
+            descriptors: contract.descriptors,
+            compiler: contract.compiler,
+            argv: contract.argv.clone(),
+            environment: contract.environment.clone(),
+        }
+    }
+
     #[test]
     fn contract_round_trips_canonically() {
         let expected = contract();
@@ -1433,6 +1531,90 @@ mod tests {
         assert_ne!(
             accept_identity(&contract.attempt, &grant),
             accept_identity(&replay.attempt, &grant)
+        );
+    }
+
+    #[test]
+    fn launcher_substitution_and_backing_replacement_are_rejected() {
+        let contract = contract();
+        let mut substitute = observation(&contract);
+        substitute.launcher.sha256[0] ^= 1;
+        assert!(
+            validate_child_observation(&contract, &substitute)
+                .unwrap_err()
+                .contains("launcher executable image")
+        );
+
+        let mut replacement = observation(&contract);
+        replacement.launcher.object.inode += 1;
+        assert!(
+            validate_child_observation(&contract, &replacement)
+                .unwrap_err()
+                .contains("backing object")
+        );
+
+        let mut child_replacement = observation(&contract);
+        child_replacement.child.object.inode += 1;
+        assert!(
+            validate_child_observation(&contract, &child_replacement)
+                .unwrap_err()
+                .contains("child executable image")
+        );
+    }
+
+    #[test]
+    fn descriptor_substitution_reuse_and_cwd_drift_are_rejected() {
+        let contract = contract();
+        let mut descriptor = observation(&contract);
+        descriptor.descriptors[4].inode += 1;
+        assert!(
+            validate_child_observation(&contract, &descriptor)
+                .unwrap_err()
+                .contains("descriptor manifest")
+        );
+
+        let mut reused_pid = observation(&contract);
+        reused_pid.parent_start_ticks += 1;
+        assert!(
+            validate_child_observation(&contract, &reused_pid)
+                .unwrap_err()
+                .contains("exact admitted launcher parent")
+        );
+
+        let mut cwd = observation(&contract);
+        cwd.cwd.inode += 1;
+        assert!(
+            validate_child_observation(&contract, &cwd)
+                .unwrap_err()
+                .contains("cwd")
+        );
+    }
+
+    #[test]
+    fn argv_environment_and_closure_drift_are_rejected() {
+        let contract = contract();
+        let mut argv = observation(&contract);
+        argv.argv.push(b"--hostile".to_vec());
+        assert!(
+            validate_child_observation(&contract, &argv)
+                .unwrap_err()
+                .contains("argv")
+        );
+
+        let mut environment = observation(&contract);
+        environment.environment[0].1 = b"hostile".to_vec();
+        assert!(
+            validate_child_observation(&contract, &environment)
+                .unwrap_err()
+                .contains("environment")
+        );
+
+        let mut closure = observation(&contract);
+        closure.compiler.runtime_object.inode += 1;
+        assert!(
+            validate_child_observation(&contract, &closure)
+                .unwrap_err()
+                .contains("closure/runtime tree")
         );
     }
 }
