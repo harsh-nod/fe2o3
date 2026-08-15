@@ -165,8 +165,20 @@ impl Wave64CollectivesKernelResourceObservationV1 {
 pub unsafe trait ReviewedWave64CollectivesRuntimeAdapterV1:
     ReviewedHsaImplicitKernargAdapterV1
 {
+    /// Returns the identity of the exact retained host context.
+    ///
+    /// # Safety
+    ///
+    /// The identity must come from the context retained by this adapter and
+    /// the method must not unwind.
     unsafe fn context_identity_v1(&mut self) -> ContextIdentity;
 
+    /// Observes resources for the supplied private executable/kernel pair.
+    ///
+    /// # Safety
+    ///
+    /// The observation must be derived only from these exact objects, must
+    /// not expose their native handles, and the method must not unwind.
     unsafe fn observe_wave64_collectives_resources_v1(
         &mut self,
         executable: &Self::Executable,
