@@ -214,9 +214,9 @@ constexpr ExactWorkgroupSyncProfile ExactWorkgroupLdsReductionV1 = {
     ExactWorkgroupLdsReductionV1Entry,
     ExactWorkgroupLdsReductionV1Descriptor,
     ".fe2o3.wg-lds",
-    {0x3e, 0x7f, 0xc2, 0x71, 0xc2, 0xce, 0xc1, 0x83, 0x10, 0x34, 0x1b,
-     0x60, 0xac, 0x44, 0x7c, 0xb4, 0xff, 0x91, 0x0f, 0x3e, 0xef, 0x50,
-     0x35, 0x17, 0x5d, 0x8b, 0x48, 0xb8, 0xa0, 0xd6, 0x56, 0x89},
+    {0xf8, 0xfd, 0x67, 0x3b, 0x19, 0x6c, 0x6b, 0xd2, 0x3e, 0xc3, 0x15,
+     0xba, 0xc0, 0x19, 0x5e, 0x80, 0x54, 0xaf, 0xb4, 0xac, 0xcc, 0xc1,
+     0xca, 0xea, 0x5a, 0x77, 0xb9, 0x30, 0x71, 0x91, 0x60, 0x21},
     {{{0x3e, 0x7e, 0xc0, 0x81, 0xc7, 0x95, 0x82, 0x88, 0xf9, 0xd9, 0x97,
        0xd4, 0x0e, 0x6f, 0x41, 0xa7, 0xfa, 0xab, 0xc5, 0x6a, 0x3a, 0xdd,
        0x73, 0x40, 0x99, 0xcd, 0x17, 0x77, 0x44, 0x3b, 0x29, 0x83},
@@ -260,9 +260,9 @@ constexpr ExactWorkgroupSyncProfile ExactScopedAtomicV1 = {
     ExactScopedAtomicV1Entry,
     ExactScopedAtomicV1Descriptor,
     ".fe2o3.wg-atomic",
-    {0x3e, 0xaa, 0x73, 0x33, 0x7b, 0xfc, 0x6c, 0x4a, 0x57, 0xea, 0xf2,
-     0x7b, 0x37, 0xb7, 0x37, 0x29, 0x3c, 0x97, 0xa9, 0xbc, 0x70, 0x4b,
-     0x95, 0x29, 0x27, 0x69, 0xc6, 0x89, 0x44, 0xe6, 0xf2, 0x3e},
+    {0xdf, 0xf0, 0x69, 0x33, 0x72, 0x35, 0xe4, 0xf5, 0x0f, 0x8d, 0x09,
+     0x81, 0x2e, 0x85, 0x4f, 0x3f, 0x42, 0x75, 0xda, 0x38, 0xc2, 0xab,
+     0x04, 0xf7, 0xac, 0xcb, 0x44, 0xbc, 0x18, 0x00, 0xeb, 0x5c},
     {{{0xc0, 0xf0, 0x0a, 0x14, 0xc5, 0x94, 0x1f, 0x34, 0x74, 0x1f, 0xc1,
        0x0c, 0xa7, 0x79, 0x8c, 0xe9, 0xcf, 0x47, 0x28, 0x82, 0x94, 0xb0,
        0xbc, 0xc4, 0x3c, 0xdd, 0xb7, 0xd2, 0x2b, 0xbf, 0xe9, 0x7e},
@@ -614,7 +614,7 @@ Error validateExactWave64CompilerInput(StringRef Text) {
   return Error::success();
 }
 
-Expected<std::array<std::vector<uint8_t>, 12>>
+Expected<std::array<std::vector<uint8_t>, 13>>
 parseExactWorkgroupSyncCompilerSections(
     StringRef Text, const ExactWorkgroupSyncProfile &Profile) {
   constexpr StringLiteral Marker = "\nmodule asm \".section ";
@@ -627,7 +627,7 @@ parseExactWorkgroupSyncCompilerSections(
     return pipelineError(
         "exact workgroup-sync compiler module body identity does not match");
 
-  const std::array<std::string, 12> Sections = {
+  const std::array<std::string, 13> Sections = {
       ExactWave64DescriptorSection.str(),
       (Twine(Profile.SectionPrefix) + ".source.v1").str(),
       (Twine(Profile.SectionPrefix) + ".namespace.v1").str(),
@@ -639,7 +639,8 @@ parseExactWorkgroupSyncCompilerSections(
       (Twine(Profile.SectionPrefix) + ".abi.v1").str(),
       (Twine(Profile.SectionPrefix) + ".effects.v1").str(),
       (Twine(Profile.SectionPrefix) + ".resources.v1").str(),
-      (Twine(Profile.SectionPrefix) + ".kir.v1").str()};
+      (Twine(Profile.SectionPrefix) + ".kir.v1").str(),
+      (Twine(Profile.SectionPrefix) + ".layout.v1").str()};
   SmallVector<StringRef, 160> Lines;
   Text.drop_front(BodyEnd + 1).split(Lines, '\n', -1, true);
   std::array<std::vector<uint8_t>, Sections.size()> Result;
@@ -705,7 +706,8 @@ parseExactWorkgroupSyncCompilerSections(
 }
 
 Error validateExactWorkgroupSyncCompilerInput(
-    StringRef Text, const ExactWorkgroupSyncProfile &Profile) {
+    StringRef Text, const ExactWorkgroupSyncProfile &Profile,
+    const DataLayout &ExpectedLayout) {
   auto Sections = parseExactWorkgroupSyncCompilerSections(Text, Profile);
   if (!Sections)
     return Sections.takeError();
@@ -717,13 +719,21 @@ Error validateExactWorkgroupSyncCompilerInput(
         ArrayRef(Profile.SectionIdentities[Index]))
       return pipelineError(
           "exact workgroup-sync source/KIR/profile identity does not match");
+  std::array<uint8_t, 32> ExpectedLayoutIdentity = SHA256::hash(
+      arrayRefFromStringRef(ExpectedLayout.getStringRepresentation()));
+  if (ArrayRef((*Sections).back()) != ArrayRef(ExpectedLayoutIdentity))
+    return pipelineError(
+        "exact workgroup-sync target-machine data-layout identity does not "
+        "match");
   return Error::success();
 }
 
 Error validateExactWorkgroupSyncModule(
-    const Module &ModuleValue, const ExactWorkgroupSyncProfile &Profile) {
+    const Module &ModuleValue, const ExactWorkgroupSyncProfile &Profile,
+    const DataLayout &ExpectedLayout) {
   if (ModuleValue.getTargetTriple().getTriple() != AmdGpuTriple ||
-      ModuleValue.getDataLayoutStr() != ExactLdsGemmSlice1ProducerDataLayout)
+      ModuleValue.getDataLayoutStr() !=
+          ExpectedLayout.getStringRepresentation())
     return pipelineError(
         "exact workgroup-sync LLVM module envelope does not match");
 
@@ -1197,8 +1207,7 @@ Error setAndCheckModuleContract(Module &ModuleValue,
     return pipelineError("bitcode target triple does not match AMDHSA");
   bool ExactProducerLayout =
       (isExactLdsGemmSlice1RequestCandidate(RequestValue) ||
-       isExactWave64CollectivesV1RequestCandidate(RequestValue) ||
-       exactWorkgroupSyncProfile(RequestValue) != nullptr) &&
+       isExactWave64CollectivesV1RequestCandidate(RequestValue)) &&
       ModuleValue.getDataLayoutStr() == ExactLdsGemmSlice1ProducerDataLayout;
   if (!ModuleValue.getDataLayoutStr().empty() &&
       ModuleValue.getDataLayout() != Machine.createDataLayout() &&
@@ -1320,7 +1329,8 @@ parseModuleInput(const Input &InputValue, StringRef InputName,
       return E;
   if (const ExactWorkgroupSyncProfile *Profile =
           exactWorkgroupSyncProfile(RequestValue))
-    if (Error E = validateExactWorkgroupSyncCompilerInput(Bytes, *Profile))
+    if (Error E = validateExactWorkgroupSyncCompilerInput(
+            Bytes, *Profile, Machine.createDataLayout()))
       return E;
   DataLayout ExpectedLayout = Machine.createDataLayout();
   bool AcceptedLayout = false;
@@ -1359,8 +1369,7 @@ parseModuleInput(const Input &InputValue, StringRef InputName,
         ObservedLayout.empty() ||
         TextModule->getDataLayout() == ExpectedLayout ||
         ((isExactLdsGemmSlice1RequestCandidate(RequestValue) ||
-          isExactWave64CollectivesV1RequestCandidate(RequestValue) ||
-          exactWorkgroupSyncProfile(RequestValue) != nullptr) &&
+          isExactWave64CollectivesV1RequestCandidate(RequestValue)) &&
          ObservedLayout == ExactLdsGemmSlice1ProducerDataLayout);
     return TextModule;
   }();
@@ -1375,7 +1384,8 @@ parseModuleInput(const Input &InputValue, StringRef InputName,
       return E;
   if (const ExactWorkgroupSyncProfile *Profile =
           exactWorkgroupSyncProfile(RequestValue))
-    if (Error E = validateExactWorkgroupSyncModule(**Parsed, *Profile))
+    if (Error E = validateExactWorkgroupSyncModule(
+            **Parsed, *Profile, ExpectedLayout))
       return E;
   if (Error E = setAndCheckModuleContract(**Parsed, RequestValue, Machine,
                                           MeasuredBuiltinProvider))
@@ -3756,6 +3766,16 @@ Error validateExactWave64CollectivesV1CompilerInputForTesting(
       StringRef(reinterpret_cast<const char *>(Bytes.data()), Bytes.size()));
 }
 
+Expected<std::string> exactWorkgroupSyncDataLayoutForTesting() {
+  Request RequestValue;
+  RequestValue.Target = "gfx942:xnack-";
+  RequestValue.LinkOptions = {OptimizationLevel::O2, true, true};
+  auto Machine = createMachine(RequestValue);
+  if (!Machine)
+    return Machine.takeError();
+  return (*Machine)->createDataLayout().getStringRepresentation();
+}
+
 Expected<std::vector<uint8_t>>
 makeExactWorkgroupSyncCompilerInputForTesting(
     StringRef CanonicalBody, ArrayRef<uint8_t> Descriptor,
@@ -3770,7 +3790,7 @@ makeExactWorkgroupSyncCompilerInputForTesting(
   if (Descriptor.empty() || Descriptor.size() > 64 * 1024)
     return pipelineError("test fixture workgroup-sync descriptor is invalid");
 
-  const std::array<std::string, 12> Sections = {
+  const std::array<std::string, 13> Sections = {
       ExactWave64DescriptorSection.str(),
       (Twine(Profile.SectionPrefix) + ".source.v1").str(),
       (Twine(Profile.SectionPrefix) + ".namespace.v1").str(),
@@ -3782,7 +3802,8 @@ makeExactWorkgroupSyncCompilerInputForTesting(
       (Twine(Profile.SectionPrefix) + ".abi.v1").str(),
       (Twine(Profile.SectionPrefix) + ".effects.v1").str(),
       (Twine(Profile.SectionPrefix) + ".resources.v1").str(),
-      (Twine(Profile.SectionPrefix) + ".kir.v1").str()};
+      (Twine(Profile.SectionPrefix) + ".kir.v1").str(),
+      (Twine(Profile.SectionPrefix) + ".layout.v1").str()};
   std::vector<uint8_t> Result(CanonicalBody.bytes_begin(),
                               CanonicalBody.bytes_end());
   auto AppendSection = [&](StringRef Name, ArrayRef<uint8_t> Bytes) {
@@ -3809,10 +3830,19 @@ makeExactWorkgroupSyncCompilerInputForTesting(
   AppendSection(Sections[0], Descriptor);
   for (size_t Index = 0; Index != Profile.SectionIdentities.size(); ++Index)
     AppendSection(Sections[Index + 1], Profile.SectionIdentities[Index]);
+  auto DataLayout = exactWorkgroupSyncDataLayoutForTesting();
+  if (!DataLayout)
+    return DataLayout.takeError();
+  std::array<uint8_t, 32> LayoutIdentity =
+      SHA256::hash(arrayRefFromStringRef(*DataLayout));
+  AppendSection(Sections.back(), LayoutIdentity);
+  auto ParsedLayout = llvm::DataLayout::parse(*DataLayout);
+  if (!ParsedLayout)
+    return ParsedLayout.takeError();
   if (Error E = validateExactWorkgroupSyncCompilerInput(
           StringRef(reinterpret_cast<const char *>(Result.data()),
                     Result.size()),
-          Profile))
+          Profile, *ParsedLayout))
     return E;
   return Result;
 }
@@ -3824,9 +3854,15 @@ Error validateExactWorkgroupSyncCompilerInputForTesting(
       ProfileKind == ExactWorkgroupSyncProfileForTesting::LdsReduction
           ? ExactWorkgroupLdsReductionV1
           : ExactScopedAtomicV1;
+  auto DataLayout = exactWorkgroupSyncDataLayoutForTesting();
+  if (!DataLayout)
+    return DataLayout.takeError();
+  auto ParsedLayout = llvm::DataLayout::parse(*DataLayout);
+  if (!ParsedLayout)
+    return ParsedLayout.takeError();
   return validateExactWorkgroupSyncCompilerInput(
       StringRef(reinterpret_cast<const char *>(Bytes.data()), Bytes.size()),
-      Profile);
+      Profile, *ParsedLayout);
 }
 
 Error validateExactWorkgroupSyncModuleForTesting(
@@ -3849,7 +3885,14 @@ Error validateExactWorkgroupSyncModuleForTesting(
   }
   if (verifyModule(*ModuleValue))
     return pipelineError("test workgroup-sync module verification failed");
-  return validateExactWorkgroupSyncModule(*ModuleValue, Profile);
+  auto DataLayout = exactWorkgroupSyncDataLayoutForTesting();
+  if (!DataLayout)
+    return DataLayout.takeError();
+  auto ParsedLayout = llvm::DataLayout::parse(*DataLayout);
+  if (!ParsedLayout)
+    return ParsedLayout.takeError();
+  return validateExactWorkgroupSyncModule(*ModuleValue, Profile,
+                                          *ParsedLayout);
 }
 
 Error validateExactLdsGemmSlice1MetadataForTesting(StringRef MetadataBlob) {

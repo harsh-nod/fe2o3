@@ -46,6 +46,12 @@ use crate::{
 };
 
 const TARGET: &str = "gfx942:xnack-";
+pub(crate) const EXACT_WORKGROUP_SYNC_GFX942_DATA_LAYOUT_V1: &str = concat!(
+    "e-m:e-p:64:64-p1:64:64-p2:32:32-p3:32:32-p4:64:64-p5:32:32-p6:32:32-",
+    "p7:160:256:256:32-p8:128:128:128:48-p9:192:256:256:32-i64:64-v16:16-v24:32-",
+    "v32:32-v48:64-v96:128-v192:256-v256:256-v512:512-v1024:1024-v2048:2048-",
+    "n32:64-S32-A5-G1-ni:7:8:9",
+);
 const RUSTC_RELEASE: &str = "1.96.0-nightly";
 const RUSTC_COMMIT: [u8; 20] = [
     0x55, 0xe8, 0x6c, 0x99, 0x68, 0x09, 0x90, 0x2e, 0x8b, 0xba, 0xd5, 0x12, 0xcf, 0xb4, 0xd2, 0xc1,
@@ -93,7 +99,7 @@ pub(crate) struct ExactWorkgroupSyncProfileV1 {
     pub(crate) resource_binding: &'static [u8],
     pub(crate) canonical_ir_binding: &'static [u8],
     pub(crate) producer_version: &'static str,
-    pub(crate) llvm_body: &'static str,
+    pub(crate) llvm_body_tail: &'static str,
 }
 
 impl ExactWorkgroupSyncProfileV1 {
@@ -438,6 +444,10 @@ pub fn construct_inert_workgroup_sync_v1_compiler_handoff_v1(
         ("effects.v1", spec.effects_identity().as_slice()),
         ("resources.v1", spec.resources_identity().as_slice()),
         ("kir.v1", spec.kernel_ir_identity().as_slice()),
+        (
+            "layout.v1",
+            sha256(EXACT_WORKGROUP_SYNC_GFX942_DATA_LAYOUT_V1.as_bytes()).as_slice(),
+        ),
     ] {
         append_module_assembly_section(
             &mut module,
@@ -767,15 +777,18 @@ fn canonical_llvm_body(
     }
     .map_err(|_| profile_mismatch("canonical semantic Kernel IR"))?;
     audit_canonical_llvm(spec)?;
-    Ok(spec.llvm_body.to_owned())
+    Ok(canonical_llvm_body_unchecked(spec))
 }
 
 fn audit_canonical_llvm(
     spec: &ExactWorkgroupSyncProfileV1,
 ) -> Result<(), WorkgroupSyncWorkerErrorV1> {
-    let llvm = spec.llvm_body;
+    let llvm = canonical_llvm_body_unchecked(spec);
+    let layout_line =
+        format!("target datalayout = \"{EXACT_WORKGROUP_SYNC_GFX942_DATA_LAYOUT_V1}\"");
     let common = [
         "target triple = \"amdgcn-amd-amdhsa\"",
+        layout_line.as_str(),
         "call i32 @llvm.amdgcn.workitem.id.x()",
         "call void @llvm.trap()",
         "\"amdgpu-flat-work-group-size\"=\"64,64\"",
@@ -822,6 +835,14 @@ fn audit_canonical_llvm(
         }
     }
     Ok(())
+}
+
+fn canonical_llvm_body_unchecked(spec: &ExactWorkgroupSyncProfileV1) -> String {
+    format!(
+        "target triple = \"amdgcn-amd-amdhsa\"\n\
+target datalayout = \"{EXACT_WORKGROUP_SYNC_GFX942_DATA_LAYOUT_V1}\"\n\n{}",
+        spec.llvm_body_tail
+    )
 }
 
 fn exact_descriptor_source(

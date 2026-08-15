@@ -11,6 +11,8 @@ enum class ExactWorkgroupSyncProfileForTesting {
   ScopedAtomic
 };
 
+llvm::Expected<std::string> exactWorkgroupSyncDataLayoutForTesting();
+
 llvm::Expected<std::vector<std::string>>
 inspectLinkedOutputForPublication(llvm::ArrayRef<uint8_t> Bytes,
                                   const Request &RequestValue);

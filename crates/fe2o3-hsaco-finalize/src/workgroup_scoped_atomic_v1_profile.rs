@@ -43,13 +43,10 @@ pub(crate) const PROFILE: ExactWorkgroupSyncProfileV1 = ExactWorkgroupSyncProfil
     resource_binding: b"target=gfx942:xnack-;cov=6;wave=64;block=64,1,1;grid=1,1,1;static-lds=0;required-dynamic-lds=0;maximum-dynamic-lds=0;cov6-hidden-dynamic-lds-size=absent;capability=atomics",
     canonical_ir_binding: b"fe2o3::scoped_atomic_add_v1;conditional-nonzero-eligibility;fetch-add-u32-relaxed-system-global;unique-host-borrow;lanes-alias-one-atomic",
     producer_version: "typed-scoped-atomic-gfx942-cov6-v1",
-    llvm_body: LLVM_BODY,
+    llvm_body_tail: LLVM_BODY_TAIL,
 };
 
-const LLVM_BODY: &str = r#"target triple = "amdgcn-amd-amdhsa"
-target datalayout = "e-p:64:64-p1:64:64-p2:32:32-p3:32:32-p4:64:64-p5:32:32-p6:32:32-p7:160:256:256:32-p8:128:128:128:48-p9:192:256:256:32-i64:64-v16:16-v24:32-v32:32-v48:64-v96:128-v192:256-v256:256-v512:512-v1024:1024-v2048:2048-n32:64-S32-A5-G1-ni:7:8:9"
-
-declare i32 @llvm.amdgcn.workitem.id.x() #1
+const LLVM_BODY_TAIL: &str = r#"declare i32 @llvm.amdgcn.workitem.id.x() #1
 declare void @llvm.trap() #2
 
 define amdgpu_kernel void @scoped_atomic_add_u32_v1(ptr addrspace(1) noalias nocapture readonly align 4 %values.data, i64 %values.len, ptr addrspace(1) noalias nocapture readonly align 4 %eligible.data, i64 %eligible.len, i64 %target.address) #0 !reqd_work_group_size !0 !kernel_arg_access_qual !1 !kernel_arg_type !2 !kernel_arg_base_type !2 !kernel_arg_type_qual !3 {

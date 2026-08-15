@@ -864,7 +864,7 @@ std::string loadIntegratedWorkgroupSyncBody(StringRef Filename) {
           Source.getError().message())
              .str());
   StringRef Rust = (*Source)->getBuffer();
-  constexpr StringLiteral Prefix = "const LLVM_BODY: &str = r#\"";
+  constexpr StringLiteral Prefix = "const LLVM_BODY_TAIL: &str = r#\"";
   size_t Begin = Rust.find(Prefix);
   require(Begin != StringRef::npos,
           "integrated workgroup-sync source has no LLVM body");
@@ -872,7 +872,13 @@ std::string loadIntegratedWorkgroupSyncBody(StringRef Filename) {
   size_t End = Rust.find("\"#;", Begin);
   require(End != StringRef::npos,
           "integrated workgroup-sync source has an unterminated LLVM body");
-  return Rust.slice(Begin, End).str();
+  auto DataLayout = exactWorkgroupSyncDataLayoutForTesting();
+  if (!DataLayout)
+    fail(toString(DataLayout.takeError()));
+  return (Twine("target triple = \"amdgcn-amd-amdhsa\"\n"
+                "target datalayout = \"") +
+          *DataLayout + "\"\n\n" + Rust.slice(Begin, End))
+      .str();
 }
 
 std::vector<uint8_t> makeExactWorkgroupSyncTextIr(

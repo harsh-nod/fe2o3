@@ -43,13 +43,10 @@ pub(crate) const PROFILE: ExactWorkgroupSyncProfileV1 = ExactWorkgroupSyncProfil
     resource_binding: b"target=gfx942:xnack-;cov=6;wave=64;block=64,1,1;grid=1,1,1;static-lds=0;required-dynamic-lds=256;maximum-dynamic-lds=256;cov6-hidden-dynamic-lds-size@relative120:field4:required-value256;allocation-count=1",
     canonical_ir_binding: b"fe2o3::workgroup_lds_reduction_v1;exact-i32x64-scratch;epochs=uninitialized,lane-initialized,published,read,reusable;barriers=publish-read,read-reuse;output=lane0",
     producer_version: "typed-workgroup-lds-reduction-gfx942-cov6-v1",
-    llvm_body: LLVM_BODY,
+    llvm_body_tail: LLVM_BODY_TAIL,
 };
 
-const LLVM_BODY: &str = r#"target triple = "amdgcn-amd-amdhsa"
-target datalayout = "e-p:64:64-p1:64:64-p2:32:32-p3:32:32-p4:64:64-p5:32:32-p6:32:32-p7:160:256:256:32-p8:128:128:128:48-p9:192:256:256:32-i64:64-v16:16-v24:32-v32:32-v48:64-v96:128-v192:256-v256:256-v512:512-v1024:1024-v2048:2048-n32:64-S32-A5-G1-ni:7:8:9"
-
-@__fe2o3_lds_reduction_v1_scratch = external addrspace(3) global [0 x i32], align 4
+const LLVM_BODY_TAIL: &str = r#"@__fe2o3_lds_reduction_v1_scratch = external addrspace(3) global [0 x i32], align 4
 
 declare i32 @llvm.amdgcn.workitem.id.x() #1
 declare void @llvm.amdgcn.s.barrier() #2
