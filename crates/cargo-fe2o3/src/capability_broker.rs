@@ -469,6 +469,44 @@ mod platform {
         invocation_authorization: InvocationAuthorizationRegistryV1,
         shutdown: Arc<BrokerShutdown>,
         worker: Option<JoinHandle<()>>,
+        #[cfg(test)]
+        _test_permit: TestBrokerPermit,
+    }
+
+    #[cfg(test)]
+    static TEST_BROKER_ACTIVE: Mutex<bool> = Mutex::new(false);
+    #[cfg(test)]
+    static TEST_BROKER_AVAILABLE: Condvar = Condvar::new();
+
+    #[cfg(test)]
+    struct TestBrokerPermit;
+
+    #[cfg(test)]
+    impl TestBrokerPermit {
+        fn acquire() -> Self {
+            let mut active = TEST_BROKER_ACTIVE
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            while *active {
+                active = TEST_BROKER_AVAILABLE
+                    .wait(active)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+            }
+            *active = true;
+            Self
+        }
+    }
+
+    #[cfg(test)]
+    impl Drop for TestBrokerPermit {
+        fn drop(&mut self) {
+            let mut active = TEST_BROKER_ACTIVE
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            *active = false;
+            drop(active);
+            TEST_BROKER_AVAILABLE.notify_one();
+        }
     }
 
     #[derive(Default)]
@@ -932,6 +970,8 @@ mod platform {
             {
                 return Err("capability broker limits must be nonzero".to_owned());
             }
+            #[cfg(test)]
+            let test_permit = TestBrokerPermit::acquire();
             let endpoint = random_endpoint().map_err(|error| {
                 format!("failed to allocate capability broker endpoint: {error}")
             })?;
@@ -997,6 +1037,8 @@ mod platform {
                 invocation_authorization,
                 shutdown,
                 worker: Some(worker),
+                #[cfg(test)]
+                _test_permit: test_permit,
             })
         }
 
