@@ -30,44 +30,96 @@ include!("../../fe2o3-hsaco-finalize/tests/fixtures/worker_v2_hsaco_test_support
 const WORKER_ID: &str = "cargo-fe2o3-fixture-worker-v1";
 const MAX_PARALLEL_VERTICAL_FIXTURES: usize = 4;
 static NEXT_TEST: AtomicU64 = AtomicU64::new(1);
-static VERTICAL_FIXTURES: OnceLock<(Mutex<usize>, Condvar)> = OnceLock::new();
+static VERTICAL_FIXTURES: OnceLock<(Mutex<VerticalFixtureState>, Condvar)> = OnceLock::new();
 
-struct VerticalFixturePermit;
+#[derive(Default)]
+struct VerticalFixtureState {
+    shared: usize,
+    exclusive: bool,
+}
+
+#[derive(Clone, Copy)]
+enum VerticalFixturePermitKind {
+    Shared,
+    Exclusive,
+}
+
+struct VerticalFixturePermit(VerticalFixturePermitKind);
 
 impl VerticalFixturePermit {
     fn acquire() -> Self {
-        let (active, available) = VERTICAL_FIXTURES.get_or_init(|| (Mutex::new(0), Condvar::new()));
-        let mut active = active
+        let (state, available) = VERTICAL_FIXTURES
+            .get_or_init(|| (Mutex::new(VerticalFixtureState::default()), Condvar::new()));
+        let mut state = state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        while *active >= MAX_PARALLEL_VERTICAL_FIXTURES {
-            active = available
-                .wait(active)
+        while state.exclusive || state.shared >= MAX_PARALLEL_VERTICAL_FIXTURES {
+            state = available
+                .wait(state)
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
-        *active += 1;
-        Self
+        state.shared += 1;
+        Self(VerticalFixturePermitKind::Shared)
+    }
+
+    fn acquire_exclusive() -> Self {
+        let (state, available) = VERTICAL_FIXTURES
+            .get_or_init(|| (Mutex::new(VerticalFixtureState::default()), Condvar::new()));
+        let mut state = state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        while state.exclusive || state.shared != 0 {
+            state = available
+                .wait(state)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+        state.exclusive = true;
+        Self(VerticalFixturePermitKind::Exclusive)
     }
 }
 
 impl Drop for VerticalFixturePermit {
     fn drop(&mut self) {
-        let (active, available) = VERTICAL_FIXTURES.get_or_init(|| (Mutex::new(0), Condvar::new()));
-        let mut active = active
+        let (state, available) = VERTICAL_FIXTURES
+            .get_or_init(|| (Mutex::new(VerticalFixtureState::default()), Condvar::new()));
+        let mut state = state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *active = active
-            .checked_sub(1)
-            .expect("vertical fixture permit underflow");
-        available.notify_one();
+        match self.0 {
+            VerticalFixturePermitKind::Shared => {
+                state.shared = state
+                    .shared
+                    .checked_sub(1)
+                    .expect("vertical fixture permit underflow");
+            }
+            VerticalFixturePermitKind::Exclusive => {
+                assert!(
+                    state.exclusive,
+                    "vertical fixture exclusive permit underflow"
+                );
+                state.exclusive = false;
+            }
+        }
+        available.notify_all();
     }
 }
 
-struct TestDirectory(PathBuf, Mutex<Option<OuterHarness>>, VerticalFixturePermit);
+struct TestDirectory(
+    PathBuf,
+    Mutex<Option<OuterHarness>>,
+    #[allow(dead_code)] VerticalFixturePermit,
+);
 
 impl TestDirectory {
     fn new() -> Self {
-        let permit = VerticalFixturePermit::acquire();
+        Self::with_permit(VerticalFixturePermit::acquire())
+    }
+
+    fn new_exclusive() -> Self {
+        Self::with_permit(VerticalFixturePermit::acquire_exclusive())
+    }
+
+    fn with_permit(permit: VerticalFixturePermit) -> Self {
         let path = std::env::temp_dir().join(format!(
             "cargo-fe2o3-worker-v2-flow-{}-{}",
             std::process::id(),
@@ -1508,7 +1560,9 @@ fn real_host_consumer_rejects_substituted_commitment() {
 }
 
 fn published_host_consumer_fixture() -> TestDirectory {
-    let directory = TestDirectory::new();
+    // These paths exercise the production handoff deadline and must not compete with other
+    // process-tree fixtures on low-core hosted runners.
+    let directory = TestDirectory::new_exclusive();
     let fixture = required_alpha_zeta_publication_fixture(&directory);
     let published = run_wrapper_with_options(
         &directory,
