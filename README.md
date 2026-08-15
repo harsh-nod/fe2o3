@@ -38,6 +38,27 @@ source path still stops before an authenticated HSACO. The
 dashboard records the exact commits, tests, target lanes, evidence strengths,
 and limitations for each Partial row.
 
+The next Wave64 and workgroup-synchronization slices now start from ordinary
+`#[kernel(typed)]` Rust sources rather than explanatory pseudocode. They include
+deterministic CPU oracles, hostile source tests, and bounded Verus models for a
+masked Wave64 reduction/scan and an LDS/barrier/scoped-atomic profile. The typed
+device ABI preserves mutable global address-space pointers and exposes a linear,
+compiler-only exact-LDS capability. These slices do not yet grant artifact or
+launch authority: authenticated rustc collection, Kernel IR selection,
+finalization, Worker V2 admission, and `gfx942` execution are tracked in
+[#117](https://github.com/harsh-nod/fe2o3/issues/117) and
+[#118](https://github.com/harsh-nod/fe2o3/issues/118).
+
+The fixed 64-element row-softmax slice uses one shared numerical oracle and an
+inert deterministic certificate that binds its exact Rust source, reviewed MIR
+profile, Kernel IR and LLVM identities, numerical policy, and Verus/Z3 closure.
+The certificate is evidence, not authority: protected admission and exact
+MI300X execution remain open under
+[#120](https://github.com/harsh-nod/fe2o3/issues/120). The subsequent fixed
+FlashAttention and top-2 MoE vertical slices are tracked by
+[#122](https://github.com/harsh-nod/fe2o3/issues/122) through
+[#125](https://github.com/harsh-nod/fe2o3/issues/125).
+
 The public [tiled GEMM V1 work](examples/tiled_gemm_v1/README.md) now combines
 the checked host contract with bounded production-directed LDS slices. An
 ordinary `#[kernel(typed, ...)]` Rust function contains the fixed `16x16x16`
