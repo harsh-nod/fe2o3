@@ -4,6 +4,7 @@ set -eu
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 proof="$script_dir/verus/tiled_gemm_host_contract.rs"
 lds_proof="$script_dir/verus/lds_tiled_slice1.rs"
+kphase_proof="$script_dir/verus/lds_tiled_kphase.rs"
 a_wrong="$script_dir/verus/negative/a_register_wrong.rs"
 b_wrong="$script_dir/verus/negative/b_register_wrong.rs"
 accumulator_wrong="$script_dir/verus/negative/accumulator_register_wrong.rs"
@@ -11,6 +12,8 @@ xor4_wrong="$script_dir/verus/negative/xor4_wrong.rs"
 xor2_permutation_wrong="$script_dir/verus/negative/xor2_permutation_wrong.rs"
 lds_epoch_wrong="$script_dir/verus/negative/lds_epoch_wrong.rs"
 lds_product_wrong="$script_dir/verus/negative/lds_product_wrong.rs"
+kphase_reuse_wrong="$script_dir/verus/negative/lds_kphase_reuse_wrong.rs"
+kphase_accumulator_reset_wrong="$script_dir/verus/negative/lds_kphase_accumulator_reset_wrong.rs"
 version_file="$script_dir/verus/VERUS_VERSION"
 sha256_file="$script_dir/verus/VERUS_SHA256"
 
@@ -65,10 +68,32 @@ require_source "$accumulator_wrong" 'mutated_accumulator_matches_official_table_
 require_source "$xor4_wrong" 'mutated_xor4_matches_official_storage_v1'
 require_source "$xor2_permutation_wrong" \
     'mutated_two_bit_permutation_matches_official_xor2_v1'
+for marker in \
+    'pub open spec fn kphase_write_epoch_v1' \
+    'pub open spec fn kphase_read_epoch_v1' \
+    'pub open spec fn kphase_reuse_epoch_v1' \
+    'pub proof fn bounded_kphase_global_loads_v1' \
+    'pub proof fn bounded_k_phases_partition_depth_v1' \
+    'pub proof fn every_kphase_a_read_is_initialized_v1' \
+    'pub proof fn every_kphase_b_read_is_initialized_v1' \
+    'pub proof fn kphase_publish_and_reuse_barriers_converge_v1' \
+    'pub proof fn no_kphase_overwrite_before_prior_reads_v1' \
+    'pub proof fn kphase_inner_accumulator_invariant_v1' \
+    'pub proof fn kphase_accumulator_invariant_preserved_v1' \
+    'pub proof fn kphase_final_c_stores_are_disjoint_v1' \
+    'pub proof fn bounded_kphase_lds_result_is_matrix_product_v1'
+do
+    require_source "$kphase_proof" "$marker"
+done
+require_source "$kphase_reuse_wrong" \
+    'mutated_missing_reuse_epoch_protects_prior_reads_v1'
+require_source "$kphase_accumulator_reset_wrong" \
+    'mutated_accumulator_reset_preserves_k_product_v1'
 
 for file in \
     "$proof" "$a_wrong" "$b_wrong" "$accumulator_wrong" "$xor4_wrong" \
-    "$xor2_permutation_wrong"
+    "$xor2_permutation_wrong" "$kphase_proof" "$kphase_reuse_wrong" \
+    "$kphase_accumulator_reset_wrong"
 do
     for shortcut in 'admit(' 'assume(' '#[verifier::external_body]'; do
         forbid_source "$file" "$shortcut"
@@ -197,6 +222,26 @@ if ! grep -Fq 'verification results:: 93 verified, 0 errors' "$lds_positive_log"
 fi
 printf 'PASS: Slice 1 LDS tiled GEMM model verified (93 verified, 0 errors)\n'
 
+kphase_positive_log="$tmp_dir/kphase-positive.log"
+if run_verus "$kphase_proof" >"$kphase_positive_log" 2>&1; then
+    :
+else
+    status=$?
+    printf 'FAIL: Slice 2 LDS K-phase proof did not verify (status %s)\n' \
+        "$status" >&2
+    cat "$kphase_positive_log" >&2
+    exit 1
+fi
+if ! grep -Fq 'verification results:: 196 verified, 0 errors' \
+    "$kphase_positive_log"
+then
+    printf 'FAIL: Slice 2 LDS K-phase proof emitted an unexpected verification summary\n' \
+        >&2
+    cat "$kphase_positive_log" >&2
+    exit 1
+fi
+printf 'PASS: Slice 2 LDS K-phase model verified (196 verified, 0 errors)\n'
+
 run_rejected() {
     name=$1
     file=$2
@@ -249,5 +294,11 @@ run_rejected lds_epoch_wrong \
 run_rejected lds_product_wrong \
     "$lds_product_wrong" \
     'mutated_lds_result_has_extra_unit_v1'
+run_rejected lds_kphase_reuse_wrong \
+    "$kphase_reuse_wrong" \
+    'mutated_missing_reuse_epoch_protects_prior_reads_v1'
+run_rejected lds_kphase_accumulator_reset_wrong \
+    "$kphase_accumulator_reset_wrong" \
+    'mutated_accumulator_reset_preserves_k_product_v1'
 
-printf 'Verus fixture run passed: host and LDS models, 7 expected rejections\n'
+printf 'Verus fixture run passed: host and LDS models, 9 expected rejections\n'
