@@ -17,6 +17,8 @@ mod generated_wave64_collectives_v1_lifecycle;
 #[cfg(test)]
 mod generated_wave64_collectives_v1_lifecycle_tests;
 mod generated_worker_v2_vecadd;
+mod generated_workgroup_lds_reduction_v1;
+mod generated_workgroup_scoped_atomic_v1;
 mod gfx942_ocml;
 mod hsa_executable_lifecycle;
 mod launch_kernel_v2_bridge;
@@ -164,6 +166,15 @@ pub use generated_worker_v2_vecadd::{
     GeneratedWorkerV2VecAddBindError, GeneratedWorkerV2VecAddCompletionV1,
     GeneratedWorkerV2VecAddExecutorV1, GeneratedWorkerV2VecAddPrepareError,
     GeneratedWorkerV2VecAddPreparedV1,
+};
+pub use generated_workgroup_lds_reduction_v1::{
+    GeneratedWorkgroupLdsReductionV1HostAdapterErrorV1,
+    GeneratedWorkgroupLdsReductionV1HostAdapterV1, WorkgroupLdsReductionBufferRoleV1,
+};
+pub use generated_workgroup_scoped_atomic_v1::{
+    GeneratedWorkgroupScopedAtomicV1HostAdapterErrorV1,
+    GeneratedWorkgroupScopedAtomicV1HostAdapterV1, WorkgroupScopedAtomicBufferRoleV1,
+    WorkgroupScopedAtomicEffectV1,
 };
 pub use gfx942_ocml::{
     GFX942_OCML_SIN_F32_CODE_OBJECT_VERSION_V1, GFX942_OCML_SIN_F32_DEVICE_ABI_V1,
