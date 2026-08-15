@@ -1,0 +1,14 @@
+[package]
+name = "fe2o3-collected-scoped-atomic-v1-fixture"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+path = "../../../../../examples/workgroup_sync_v1/src/scoped_atomic.rs"
+
+[dependencies]
+fe2o3-device = { path = "../../../../fe2o3-device" }
+fe2o3-host = { path = "../../../../fe2o3-host" }
+
+[workspace]
