@@ -151,3 +151,50 @@ fn row_softmax_launch_errors_are_distinct_without_changing_legacy_wording() {
         "row-softmax V1 kernel row_softmax_v1 descriptor wavefront is 32, expected 64"
     );
 }
+
+#[test]
+fn wave64_collectives_launch_errors_are_exact_and_distinct() {
+    let required =
+        WorkerV2RawHsacoInspectionError::Wave64CollectivesV1RequiredWorkgroupSizeMismatch {
+            kernel: "wave64_collectives_v1".to_owned(),
+            actual: Some([256, 1, 1]),
+            expected: [64, 1, 1],
+        };
+    assert_eq!(
+        required.to_string(),
+        "Wave64 collectives V1 kernel wave64_collectives_v1 requires Some([256, 1, 1]), expected [64, 1, 1]"
+    );
+
+    let max_flat =
+        WorkerV2RawHsacoInspectionError::Wave64CollectivesV1MaxFlatWorkgroupSizeMismatch {
+            kernel: "wave64_collectives_v1".to_owned(),
+            actual: 256,
+            expected: 64,
+        };
+    assert_eq!(
+        max_flat.to_string(),
+        "Wave64 collectives V1 kernel wave64_collectives_v1 max flat workgroup is 256, expected 64"
+    );
+
+    let metadata =
+        WorkerV2RawHsacoInspectionError::Wave64CollectivesV1MetadataWavefrontSizeMismatch {
+            kernel: "wave64_collectives_v1".to_owned(),
+            actual: 32,
+            expected: 64,
+        };
+    assert_eq!(
+        metadata.to_string(),
+        "Wave64 collectives V1 kernel wave64_collectives_v1 metadata wavefront is 32, expected 64"
+    );
+
+    let descriptor =
+        WorkerV2RawHsacoInspectionError::Wave64CollectivesV1DescriptorWavefrontSizeMismatch {
+            kernel: "wave64_collectives_v1".to_owned(),
+            actual: 32,
+            expected: 64,
+        };
+    assert_eq!(
+        descriptor.to_string(),
+        "Wave64 collectives V1 kernel wave64_collectives_v1 descriptor wavefront is 32, expected 64"
+    );
+}

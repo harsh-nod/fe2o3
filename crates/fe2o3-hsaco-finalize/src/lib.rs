@@ -30,6 +30,8 @@ mod row_softmax_v1_artifact;
 mod row_softmax_v1_worker;
 mod scalar_gemm_v1_worker;
 mod tiled_gemm_v1_artifact;
+mod wave64_collectives_v1_artifact;
+mod wave64_collectives_v1_worker;
 mod worker_executor;
 mod worker_protocol;
 mod worker_protocol_v2;
@@ -137,6 +139,19 @@ pub use tiled_gemm_v1_artifact::{
     FinalizedTiledGemmV1StructuralHsacoV1, InspectedTiledGemmV1StructuralWorkerV2HsacoV1,
     TiledGemmV1StructuralArtifactErrorV1, finalize_tiled_gemm_v1_structural_worker_v2_hsaco_v1,
     inspect_tiled_gemm_v1_structural_worker_v2_hsaco_v1,
+};
+pub use wave64_collectives_v1_artifact::{
+    FinalizedWave64CollectivesV1HsacoIdentityV1, PreparedFinalizedWave64CollectivesV1HsacoV1,
+    Wave64CollectivesV1FinalizationErrorV1, finalize_wave64_collectives_v1_worker_v2_hsaco_v1,
+};
+pub use wave64_collectives_v1_worker::{
+    InspectedWave64CollectivesV1WorkerV2HsacoV1, ValidatedWave64CollectivesV1WorkerExchangeV1,
+    Wave64CollectivesV1CompilerPinsV1, Wave64CollectivesV1DirectWorkerExpectationV1,
+    Wave64CollectivesV1DirectWorkerPinsV1, Wave64CollectivesV1WorkerErrorV1,
+    Wave64CollectivesV1WorkerExchangeIdentityV1,
+    construct_inert_wave64_collectives_v1_compiler_handoff_v1,
+    inspect_wave64_collectives_v1_worker_v2_hsaco_v1,
+    validate_wave64_collectives_v1_worker_exchange_v1,
 };
 pub use worker_executor::{
     DEFAULT_WORKER_STDERR_BYTES, DEFAULT_WORKER_TIMEOUT, InertCompilerHandoffExecutionV2,
