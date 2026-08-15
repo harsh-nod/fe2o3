@@ -11,6 +11,14 @@
 //! IEEE-754 arithmetic, an exponential implementation, compiler refinement,
 //! or any property of an HSACO artifact.
 
+mod numerical_contract;
+
+pub use numerical_contract::{
+    GFX942_OCML_COMPARISON_POLICY_V1, HOST_ORACLE_EXPONENTIAL_V1, MAX_ROW_ELEMENTS_V1,
+    RowSoftmaxOracleStateV1, SoftmaxComparisonErrorV1, SoftmaxComparisonPolicyV1,
+    SoftmaxContractErrorV1, SoftmaxExponentialV1, compare_row_softmax_v1, row_softmax_oracle_v1,
+};
+
 /// Number of conceptual input and output elements in row-softmax V1.
 pub const ROW_ELEMENTS_V1: usize = 64;
 
