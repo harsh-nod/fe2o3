@@ -1208,7 +1208,7 @@ fn reject_reserved_descriptors(allowed: &[RawFd]) -> Result<(), String> {
         }
         let target = fs::read_link(entry.path())
             .map_err(|error| format!("cannot resolve release descriptor {fd}: {error}"))?;
-        if target == PathBuf::from(format!("/proc/{}/fd", std::process::id())) {
+        if target == format!("/proc/{}/fd", std::process::id()) {
             continue;
         }
         unexpected.push(fd);
