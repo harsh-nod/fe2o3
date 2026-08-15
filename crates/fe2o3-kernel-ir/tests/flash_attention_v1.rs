@@ -1,5 +1,8 @@
 use fe2o3_kernel_ir::*;
 
+type ProfileMutation = Box<dyn Fn(&mut FlashAttentionProfileV1)>;
+type KernelIrMutation = Box<dyn Fn(&mut FlashAttentionKernelIrV1)>;
+
 fn exact() -> (FlashAttentionKernelIrV1, FlashAttentionProfileV1) {
     (
         flash_attention_v1_kernel_ir(),
@@ -30,7 +33,7 @@ fn exact_profile_and_closed_sidecar_verify() {
 #[test]
 fn profile_mutations_fail_closed() {
     let (ir, profile) = exact();
-    let mutations: Vec<Box<dyn Fn(&mut FlashAttentionProfileV1)>> = vec![
+    let mutations: Vec<ProfileMutation> = vec![
         Box::new(|p| p.source_sha256[0] ^= 1),
         Box::new(|p| p.namespace[0] ^= 1),
         Box::new(|p| p.target = TargetCapability::Subgroups),
@@ -57,7 +60,7 @@ fn profile_mutations_fail_closed() {
 #[test]
 fn semantic_mutations_fail_closed() {
     let (ir, profile) = exact();
-    let mutations: Vec<Box<dyn Fn(&mut FlashAttentionKernelIrV1)>> = vec![
+    let mutations: Vec<KernelIrMutation> = vec![
         Box::new(|m| m.module_id.push_str("_mutated")),
         Box::new(|m| m.arguments.swap(0, 1)),
         Box::new(|m| m.arguments[3].offset = 40),
