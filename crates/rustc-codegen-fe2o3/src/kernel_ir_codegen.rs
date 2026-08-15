@@ -686,7 +686,7 @@ fn canonical_flash_attention_v1_llvm() -> String {
          !0 = !{i32 64, i32 1, i32 1}\n\
          !1 = !{!\"read_only\", !\"none\", !\"read_only\", !\"none\", !\"read_only\", !\"none\", !\"write_only\", !\"none\"}\n\
          !2 = !{!\"float*\", !\"ulong\", !\"float*\", !\"ulong\", !\"float*\", !\"ulong\", !\"float*\", !\"ulong\"}\n\
-         !3 = !{!\"const restrict\", !\"\", !\"const restrict\", !\"\", !\"const restrict\", !\"\", !\"restrict\", !\"\"}\n",
+         !3 = !{!\"const\", !\"\", !\"const\", !\"\", !\"const\", !\"\", !\"restrict\", !\"\"}\n",
     );
     output
 }
