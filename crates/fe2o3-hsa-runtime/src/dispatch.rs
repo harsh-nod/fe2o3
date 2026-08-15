@@ -896,7 +896,7 @@ mod tests {
         }
 
         fn reader_destroy(&mut self, _reader: u64) -> Result<(), ApiError> {
-            unreachable!()
+            self.call("reader_destroy")
         }
 
         fn executable_create(&mut self, _profile: u32) -> Result<u64, ApiError> {
@@ -917,7 +917,7 @@ mod tests {
         }
 
         fn executable_destroy(&mut self, _executable: u64) -> Result<(), ApiError> {
-            unreachable!()
+            self.call("executable_destroy")
         }
 
         fn resolve_symbol(
@@ -1296,6 +1296,57 @@ mod tests {
         destroy_pending_dispatch(&mut core.api, &mut pending);
         assert!(pending.is_none());
         assert!(core.api.log.ends_with(&["queue_destroy"]));
+    }
+
+    #[test]
+    fn unload_cancels_prepublication_dispatch_before_executable_destruction() {
+        let (executable, kernel) = handles();
+        let mut core = make_core(MockApi::default());
+        let mut pending = None;
+        let mut bytes = kernarg();
+        prepare_implicit_kernarg(
+            &mut core,
+            &mut pending,
+            &executable,
+            &kernel,
+            geometry(),
+            EXPLICIT_BYTES,
+            IMPLICIT_OFFSET,
+            IMPLICIT_BYTES,
+            &mut bytes,
+        )
+        .unwrap();
+        drop(kernel);
+
+        let observation = crate::lifecycle::unload_executable_after_pending_dispatch(
+            &mut core,
+            &mut pending,
+            executable,
+        )
+        .unwrap();
+
+        assert!(observation.released());
+        assert!(pending.is_none());
+        assert!(!core.api.log.contains(&"publish"));
+        destroy_pending_dispatch(&mut core.api, &mut pending);
+        assert_eq!(
+            core.api.log,
+            [
+                "queue_create",
+                "queue_async_error",
+                "queue_destroy",
+                "executable_destroy",
+                "reader_destroy",
+            ]
+        );
+        assert_eq!(
+            core.api
+                .log
+                .iter()
+                .filter(|operation| **operation == "queue_destroy")
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -1829,13 +1880,50 @@ mod tests {
                         &mut bytes,
                     );
                 }
+                "pending-unload-queue" | "pending-unload-executable" | "pending-unload-reader" => {
+                    let mut core = make_core(api);
+                    let mut pending = None;
+                    let mut bytes = kernarg();
+                    prepare_implicit_kernarg(
+                        &mut core,
+                        &mut pending,
+                        &executable,
+                        &kernel,
+                        geometry(),
+                        EXPLICIT_BYTES,
+                        IMPLICIT_OFFSET,
+                        IMPLICIT_BYTES,
+                        &mut bytes,
+                    )
+                    .unwrap();
+                    let failure = match case.as_str() {
+                        "pending-unload-queue" => "queue_destroy",
+                        "pending-unload-executable" => "executable_destroy",
+                        "pending-unload-reader" => "reader_destroy",
+                        _ => unreachable!(),
+                    };
+                    core.api.failures.insert(failure, 76);
+                    drop(kernel);
+                    let _ = crate::lifecycle::unload_executable_after_pending_dispatch(
+                        &mut core,
+                        &mut pending,
+                        executable,
+                    );
+                }
                 _ => panic!("unknown dispatch cleanup case"),
             }
             std::process::exit(91);
         }
 
         use std::os::unix::process::ExitStatusExt;
-        for case in ["implicit-queue", "presubmit-signal", "quiesced-signal"] {
+        for case in [
+            "implicit-queue",
+            "presubmit-signal",
+            "quiesced-signal",
+            "pending-unload-queue",
+            "pending-unload-executable",
+            "pending-unload-reader",
+        ] {
             let status = std::process::Command::new(std::env::current_exe().unwrap())
                 .arg("--exact")
                 .arg("dispatch::tests::ambiguous_dispatch_cleanup_is_terminal")

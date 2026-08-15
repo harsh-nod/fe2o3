@@ -1,4 +1,5 @@
-use crate::api::{ApiError, ExecutableApi, SymbolFacts};
+use crate::api::{ApiError, DispatchApi, ExecutableApi, SymbolFacts};
+use crate::dispatch::PendingDispatch;
 use crate::environment::{AdapterCore, HsaRuntimeAdapterError, ReviewedHsaRuntimeAdapterV1};
 use fe2o3_artifacts::PayloadDigest;
 use fe2o3_host::{
@@ -149,7 +150,11 @@ unsafe impl ReviewedHsaExecutableLifecycleAdapterV1 for ReviewedHsaRuntimeAdapte
         &mut self,
         executable: Self::Executable,
     ) -> Result<HsaUnloadObservationV1, Self::Error> {
-        unload_executable(&mut self.core, executable)
+        unload_executable_after_pending_dispatch(
+            &mut self.core,
+            &mut self.pending_dispatch,
+            executable,
+        )
     }
 }
 
@@ -386,6 +391,17 @@ fn unload_executable<A: ExecutableApi>(
         core.agent,
         true,
     ))
+}
+
+pub(crate) fn unload_executable_after_pending_dispatch<A: DispatchApi>(
+    core: &mut AdapterCore<A>,
+    pending: &mut Option<PendingDispatch>,
+    executable: ReviewedHsaExecutableV1,
+) -> Result<HsaUnloadObservationV1, HsaRuntimeAdapterError> {
+    // Implicit initialization owns a queue before publication. End that
+    // authority conclusively before destroying anything it can reference.
+    crate::dispatch::destroy_pending_dispatch(&mut core.api, pending);
+    unload_executable(core, executable)
 }
 
 fn validate_symbol(
