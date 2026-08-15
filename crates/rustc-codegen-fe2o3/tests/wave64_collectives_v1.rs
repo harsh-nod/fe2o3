@@ -217,7 +217,7 @@ fn exact_phase_a_source_authenticates_complete_wave64_profile() {
     for marker in [
         "authenticated exact source bytes",
         "Phase A fallback namespace, distinct wrapper/session-derived ordinary #[kernel(typed)] root",
-        "complete reachable portable-MIR closure d516554e752db151f783bc369db4af6c6f3f1bbb3054b71636457e8564ee8ebc",
+        "complete reachable portable-MIR closure 9bfb305089751ce7593227069768d5e7a98360b7ded890f8b213a0d95d158e7a",
         "3 ordered collectives, 3 lane-owned outputs",
         "exact grid [1, 1, 1]",
         "reviewed source-to-profile correspondence only",
