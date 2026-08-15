@@ -362,6 +362,7 @@ pub(crate) struct ProtectedReleaseAdmission {
     attempt: [u8; 32],
     contract_identity: [u8; 32],
     control: UnixStream,
+    child_image: File,
 }
 
 impl ProtectedReleaseAdmission {
@@ -379,6 +380,24 @@ impl ProtectedReleaseAdmission {
         unsafe {
             command.pre_exec(move || install_parent_death_signal(expected_parent));
         }
+    }
+
+    pub(crate) fn binding_wrapper_path(&self) -> PathBuf {
+        PathBuf::from(format!(
+            "/proc/{}/fd/{}",
+            std::process::id(),
+            self.child_image.as_raw_fd()
+        ))
+    }
+
+    pub(crate) fn pin_binding_wrapper(&self) -> Result<PinnedExecutable, String> {
+        let path = self.binding_wrapper_path();
+        let file = self
+            .child_image
+            .try_clone()
+            .map_err(|error| format!("cannot clone admitted release wrapper image: {error}"))?;
+        PinnedExecutable::from_transferred_file(file, path)
+            .map_err(|error| format!("failed to pin admitted cargo-fe2o3 wrapper: {error}"))
     }
 }
 
@@ -592,7 +611,7 @@ fn launch(args: &[OsString]) -> Result<ExitStatus, String> {
 fn admit_child(args: &[OsString]) -> Result<ProtectedReleaseAdmission, String> {
     let encoded = read_sealed_contract(CONTRACT_FD)?;
     let (contract, contract_identity) = ReleaseContract::decode(&encoded)?;
-    validate_child_state(&contract, args)?;
+    let child_image = validate_child_state(&contract, args)?;
     let mut control = take_control_socket(CONTROL_FD)?;
     configure_timeouts(&control)?;
     authenticate_parent(&contract, &control)?;
@@ -633,6 +652,7 @@ fn admit_child(args: &[OsString]) -> Result<ProtectedReleaseAdmission, String> {
         attempt: contract.attempt,
         contract_identity,
         control,
+        child_image,
     })
 }
 
@@ -679,7 +699,7 @@ fn parent_handshake(
     Ok(())
 }
 
-fn validate_child_state(contract: &ReleaseContract, args: &[OsString]) -> Result<(), String> {
+fn validate_child_state(contract: &ReleaseContract, args: &[OsString]) -> Result<File, String> {
     validate_release_environment()?;
     verify_parent_death_signal()?;
     let parent_pid = u32::try_from(unsafe { libc::getppid() })
@@ -717,7 +737,12 @@ fn validate_child_state(contract: &ReleaseContract, args: &[OsString]) -> Result
             argv: observed_child_argv(args)?,
             environment: environment_bytes(&current_environment()?),
         },
-    )
+    )?;
+    let (child_image, retained_child) = pin_process_image(std::process::id())?;
+    if retained_child != child {
+        return Err("release child changed before retaining its wrapper image".to_owned());
+    }
+    Ok(child_image)
 }
 
 fn validate_child_observation(

@@ -435,6 +435,9 @@ fn cargo_with_backend_result(
         authority_backend,
         authorized_closure,
     )?;
+    if let Some(admission) = protected_release {
+        context.binding_wrapper = admission.binding_wrapper_path();
+    }
     run_cargo_with_backend(&mut context, command, args, protected_release)
 }
 
@@ -585,8 +588,11 @@ fn run_cargo_with_backend(
         context.target
     );
 
-    let pinned_wrapper = pinned_executable::PinnedExecutable::open(&context.binding_wrapper)
-        .map_err(|error| format!("failed to pin cargo-fe2o3 wrapper: {error}"))?;
+    let pinned_wrapper = match protected_release {
+        Some(admission) => admission.pin_binding_wrapper()?,
+        None => pinned_executable::PinnedExecutable::open(&context.binding_wrapper)
+            .map_err(|error| format!("failed to pin cargo-fe2o3 wrapper: {error}"))?,
+    };
     let mut cargo = context
         .pinned_cargo
         .command()
