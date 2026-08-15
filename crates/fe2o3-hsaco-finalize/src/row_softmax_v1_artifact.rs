@@ -398,6 +398,11 @@ fn validate_exact_artifact_metadata(
             "static LDS",
         ));
     }
+    if kernel.private_segment_fixed_size() != 0 {
+        return Err(RowSoftmaxV1StructuralArtifactErrorV1::ArtifactProfile(
+            "private segment",
+        ));
+    }
     if kernel.kernarg_segment_size() != u64::from(ROW_SOFTMAX_V1_TOTAL_KERNARG_BYTES)
         || kernel.kernarg_segment_alignment() != 8
         || kernel.implicit_argument_offset()

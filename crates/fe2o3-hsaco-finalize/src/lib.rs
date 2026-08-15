@@ -25,6 +25,7 @@ mod lds_gemm_profile_registry;
 mod link_plan;
 mod request_construction;
 mod row_softmax_authority;
+mod row_softmax_certificate_join;
 mod row_softmax_v1_artifact;
 mod row_softmax_v1_worker;
 mod scalar_gemm_v1_worker;
@@ -110,6 +111,10 @@ pub use row_softmax_authority::{
     RowSoftmaxV1AuthorityPolicyErrorV1, RowSoftmaxV1AuthorityPolicyV1,
     RowSoftmaxV1CompilerClosurePolicyV1, RowSoftmaxV1ProviderItemV1,
     RowSoftmaxV1ProviderManifestV1, derive_row_softmax_v1_provider_source_identity_v1,
+};
+pub use row_softmax_certificate_join::{
+    PreparedProtectedRowSoftmaxV1AdmissionV1, ProtectedRowSoftmaxV1AdmissionErrorV1,
+    ProtectedRowSoftmaxV1AdmissionIdentityV1, prepare_protected_row_softmax_v1_admission_v1,
 };
 pub use row_softmax_v1_artifact::{
     FinalizedRowSoftmaxV1StructuralHsacoV1, InspectedRowSoftmaxV1StructuralWorkerV2HsacoV1,
