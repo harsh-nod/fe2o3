@@ -26,6 +26,8 @@
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod platform {
     use std::collections::BTreeMap;
+    #[cfg(test)]
+    use std::fs::OpenOptions;
     use std::fs::{self, File};
     use std::io::{self, IoSlice, IoSliceMut, Read, Write};
     use std::mem::MaybeUninit;
@@ -479,7 +481,9 @@ mod platform {
     static TEST_BROKER_AVAILABLE: Condvar = Condvar::new();
 
     #[cfg(test)]
-    struct TestBrokerPermit;
+    struct TestBrokerPermit {
+        process_lock: File,
+    }
 
     #[cfg(test)]
     impl TestBrokerPermit {
@@ -493,13 +497,35 @@ mod platform {
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
             }
             *active = true;
-            Self
+            drop(active);
+
+            let process_lock = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open("/tmp/fe2o3-capability-broker-tests.lock")
+                .unwrap_or_else(|error| panic!("cannot open broker test process lock: {error}"));
+            if unsafe { libc::flock(process_lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
+                let error = io::Error::last_os_error();
+                let mut active = TEST_BROKER_ACTIVE
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                *active = false;
+                drop(active);
+                TEST_BROKER_AVAILABLE.notify_one();
+                panic!("cannot acquire broker test process lock: {error}");
+            }
+            Self { process_lock }
         }
     }
 
     #[cfg(test)]
     impl Drop for TestBrokerPermit {
         fn drop(&mut self) {
+            if unsafe { libc::flock(self.process_lock.as_raw_fd(), libc::LOCK_UN) } != 0 {
+                std::process::abort();
+            }
             let mut active = TEST_BROKER_ACTIVE
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
