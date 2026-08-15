@@ -34,7 +34,10 @@ fn lds_profile_identity_is_closed() {
         |value| value.wave_width = WaveWidth::Wave32,
         |value| value.workgroup_size = WorkgroupSize::new(256, 1, 1),
         |value| value.grid = [2, 1, 1],
-        |value| value.descriptor.static_lds_bytes = 1024,
+        |value| value.descriptor.static_lds_bytes = 256,
+        |value| value.descriptor.required_dynamic_lds_bytes = 0,
+        |value| value.descriptor.required_dynamic_lds_bytes = 252,
+        |value| value.descriptor.maximum_dynamic_lds_bytes = 1024,
         |value| value.descriptor.explicit_kernarg_bytes = 32,
         |value| value.descriptor.complete_kernarg_bytes = 40,
         |value| value.descriptor.export_name.push_str("_substitution"),
@@ -47,6 +50,30 @@ fn lds_profile_identity_is_closed() {
             Err(WorkgroupSyncV1Error::UnsupportedProfile)
         );
     }
+}
+
+#[test]
+fn lds_descriptor_distinguishes_static_and_exact_dynamic_storage() {
+    let profile = LdsReductionProfileV1::exact_gfx942_xnack_minus_cov6();
+    assert_eq!(profile.descriptor.static_lds_bytes, 0);
+    assert_eq!(profile.descriptor.required_dynamic_lds_bytes, 256);
+    assert_eq!(profile.descriptor.maximum_dynamic_lds_bytes, 256);
+
+    let mut static_substitution = profile.clone();
+    static_substitution.descriptor.static_lds_bytes = 256;
+    static_substitution.descriptor.required_dynamic_lds_bytes = 0;
+    assert_eq!(
+        verify_lds_reduction_v1(&lds_reduction_v1_kernel_ir(), &static_substitution),
+        Err(WorkgroupSyncV1Error::UnsupportedProfile)
+    );
+
+    let mut wrong_launch_bytes = profile;
+    wrong_launch_bytes.descriptor.required_dynamic_lds_bytes = 512;
+    wrong_launch_bytes.descriptor.maximum_dynamic_lds_bytes = 512;
+    assert_eq!(
+        verify_lds_reduction_v1(&lds_reduction_v1_kernel_ir(), &wrong_launch_bytes),
+        Err(WorkgroupSyncV1Error::UnsupportedProfile)
+    );
 }
 
 #[test]

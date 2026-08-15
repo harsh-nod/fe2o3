@@ -186,6 +186,8 @@ pub struct WorkgroupSyncDescriptorV1 {
     pub workgroup_size: WorkgroupSize,
     pub wave_width: WaveWidth,
     pub static_lds_bytes: u32,
+    pub required_dynamic_lds_bytes: u32,
+    pub maximum_dynamic_lds_bytes: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -223,6 +225,7 @@ impl LdsReductionProfileV1 {
             LDS_REDUCTION_V1_DESCRIPTOR_SYMBOL,
             LDS_REDUCTION_V1_EXPLICIT_KERNARG_BYTES,
             LDS_REDUCTION_V1_COMPLETE_COV6_KERNARG_BYTES,
+            0,
             256,
         )
     }
@@ -241,6 +244,7 @@ impl ScopedAtomicProfileV1 {
             SCOPED_ATOMIC_V1_DESCRIPTOR_SYMBOL,
             SCOPED_ATOMIC_V1_EXPLICIT_KERNARG_BYTES,
             SCOPED_ATOMIC_V1_COMPLETE_COV6_KERNARG_BYTES,
+            0,
             0,
         );
         Self {
@@ -434,6 +438,7 @@ fn profile(
     explicit_kernarg_bytes: u32,
     complete_kernarg_bytes: u32,
     static_lds_bytes: u32,
+    required_dynamic_lds_bytes: u32,
 ) -> LdsReductionProfileV1 {
     let workgroup_size = WorkgroupSize::new(64, 1, 1);
     LdsReductionProfileV1 {
@@ -456,6 +461,8 @@ fn profile(
             workgroup_size,
             wave_width: WaveWidth::Wave64,
             static_lds_bytes,
+            required_dynamic_lds_bytes,
+            maximum_dynamic_lds_bytes: required_dynamic_lds_bytes,
         },
     }
 }
