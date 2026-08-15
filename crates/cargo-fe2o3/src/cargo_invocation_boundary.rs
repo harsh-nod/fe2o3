@@ -366,12 +366,14 @@ mod platform {
                 return report_ready_error(&ready, &error);
             }
         };
+        // Capture the PID generation while its initial exec is still stopped in the kernel. A
+        // short-lived Cargo image may otherwise exit between CONTINUE and this observation.
+        let cargo_process = ProcessIdentityV1::observe(cargo_pid)?;
         notification_is_valid(listener.as_raw_fd(), initial.id)?;
         respond_to_notification(listener.as_raw_fd(), initial.id, true)?;
         ready
             .send(Ok(cargo_pid))
             .map_err(|_| "Cargo exec-boundary owner disappeared".to_owned())?;
-        let cargo_process = ProcessIdentityV1::observe(cargo_pid)?;
 
         while let Some(notification) =
             wait_for_notification(listener.as_raw_fd(), shutdown.as_raw_fd())?
