@@ -402,6 +402,12 @@ The detailed dependencies and exit criteria are in
   ownership/participation proof, and numerical MI300X run from verified Kernel
   IR. V2 also binds the full canonical `gfx942:xnack-` identity through Kernel
   IR and Worker V2. It does not join genuine Rust source to the executed HSACO.
+  The separate [LDS-tiled GEMM slices](tiled-gemm-lds-slices.md) add one exact
+  WG64 `16x16x16` BF16/FP32 Kernel IR path with upstream-LLVM finalization and
+  six-case MI300X execution, plus K32 loop IR and bounded multi-phase Verus
+  evidence. Its ordinary attributed Rust body still stops at compiler-issued
+  LDS acquisition and is not joined to the executed IR, so these additions do
+  not change the Partial classifications.
 - Rows 65, 72, and 73: the gfx942 wave/LDS V2 slice lowers a logically masked
   `u32` wave64 sum through one ballot and six XOR shuffles and lowers the same
   activity contract to an exact 256-thread static-LDS reduction with 18

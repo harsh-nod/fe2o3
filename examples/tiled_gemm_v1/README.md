@@ -1,7 +1,7 @@
 # Tiled GEMM V1
 
-This directory implements the host-only scaffold for one conservative gfx942
-GEMM:
+This directory implements the checked host contract and production-directed
+bounded slices for one conservative gfx942 GEMM:
 
 - row-major `A[M,K]` and `B[K,N]` stored as BF16;
 - row-major `C[M,N]` stored as FP32;
@@ -85,14 +85,13 @@ coordinate remains `B[depth][column]`. Exhaustive tests compare both staging
 maps to `fe2o3_device::RowMajorXor4` and check by enumeration that each maps
 the 256 logical elements bijectively onto physical indices `0..256`.
 
-`src/kernel_face.rs` binds this scaffold to the existing `DeviceMatrix` and
-fragment types, but this public increment does not admit their Rust calls for
-GPU lowering. Exact target retention, rustc physical-ABI validation, and
-binding the executable register and LDS maps above to generated code remain
-pending. LDS data movement, full GEMM loops, output stores, production export
-and HSACO generation, protected runtime admission, hardware dispatch,
-compiler-to-machine refinement, machine memory-safety proof, and machine
-race-freedom proof also remain pending.
+`src/kernel_face.rs` binds the host contract to the existing `DeviceMatrix` and
+fragment types. `src/kernel.rs` contains the fixed Slice 1 algorithm directly
+inside an ordinary `#[kernel(typed, ...)]` function; it is not hidden in a
+`macro_rules!` expansion or maintained as a second explanatory body. The
+function currently fails closed at compiler-issued LDS acquisition. The rustc
+collector still admits only the older direct-global graph, so the attributed
+source is not yet authenticated as the source of the LDS Kernel IR or HSACO.
 
 `verus/tiled_gemm_host_contract.rs` is an independent mathematical proof of
 the public contract on the repository's 64-bit host profile. Its 23 public
@@ -112,10 +111,9 @@ the parsed outer `xor4_lds_col_v1` through that parsed inner expression for all
 256 logical LDS coordinates. It does not substitute Rust's XOR operator. This
 is source-level correspondence only, not compiler refinement.
 
-Five negative fixtures mutate A, B, C, row-major XOR4, and the inner two-bit
-permutation. The last mutation is bounded, involutive, and non-row-major but
-wrong; it must fail its exact AMD-XOR correspondence theorem. Every mutation
-must fail only its intended pinned correspondence theorem.
+Nine negative fixtures cover the five host-map mutations plus wrong Slice 1
+LDS epochs/products and wrong Slice 2 reuse/accumulator behavior. Each mutation
+must fail only its intended pinned proof obligation.
 
 The fail-closed runner pins both Verus version `0.2026.08.02.b677dd5` and the
 exact executable-byte SHA-256
@@ -125,8 +123,8 @@ exact executable-byte SHA-256
 examples/tiled_gemm_v1/run-verus.sh
 ```
 
-The positive proof source is pinned by an ordinary Rust test at 34,733 bytes
-and SHA-256
+The original host-contract proof source is pinned by an ordinary Rust test at
+34,733 bytes and SHA-256
 `fcb0bb8d86430fce8dafcd8a049864111952e49b13e0a68997aa424729db336c`.
 This pin detects source changes; it is not authenticated execution and grants
 no publication, loading, or launch authority. The proof does not establish
@@ -138,6 +136,29 @@ manifest independently of the root workspace. Its proof job downloads one
 exact Verus release archive, verifies the pinned archive and extracted
 executable digests, and fails closed before proof execution if either artifact
 is unavailable or differs.
+
+## LDS execution slices
+
+Slice 1 has a canonical bounded Kernel IR for one `16x16x16` tile. Dedicated
+lowering produces AMDGPU LLVM IR and final COV6 HSACO using upstream LLVM 22
+`llc` and `ld.lld`, without COMGR. Final inspection requires the exact
+`gfx942:xnack-` target, WG64/wave64, 1,024 static LDS bytes, zero unexpected
+private segment or spills, LDS reads and writes, one converged barrier, one
+BF16 MFMA, and no calls or atomics.
+
+The ignored opt-in runtime test at
+`crates/fe2o3-hsa-runtime/tests/tiled_gemm_lds_v1_hardware.rs` regenerates that
+observational artifact with SHA-pinned upstream LLVM tools. On MI300X it passed
+zero, identity, dyadic, deterministic-random, signed-cancellation, and
+adversarial finite-BF16 cases: 1,536 output values plus immutable A/B checks
+and prefix/suffix canaries around all three allocations. This is IR-derived
+hardware evidence, not source correspondence or protected launch authority.
+
+Slice 2 currently has exact K32 Kernel IR with two K16 phases, carried FP32
+accumulators, and barriers before reads and before LDS reuse. Its Verus model
+covers one through four bounded phases with 196 verified obligations; the
+executable event model exhausts phase counts 1, 2, and 4. K32 backend lowering,
+ordinary-source collection, and hardware execution remain pending.
 
 ## Observed direct-global tile
 

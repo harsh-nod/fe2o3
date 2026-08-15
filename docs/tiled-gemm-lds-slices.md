@@ -20,6 +20,29 @@ function body and its collected MIR.
 All initial slices are restricted to `gfx942:xnack-`, code object version 6,
 wave64, and upstream LLVM/LLD. COMGR is outside this path.
 
+## Current implementation boundary
+
+The repository currently has independent evidence for important parts of the
+first two slices, but not the artifact-identity join required for promotion:
+
+- the Slice 1 algorithm is ordinary Rust inside `#[kernel(typed, ...)]`; it
+  fails closed at the unavailable compiler-issued LDS capability rather than
+  substituting host memory or a second algorithm body;
+- canonical Slice 1 Kernel IR has hostile verifier tests, a 93-obligation Verus
+  model, dedicated upstream-LLVM lowering, final HSACO inspection, and an
+  observational six-case MI300X run with allocation canaries;
+- exact K32 Kernel IR carries accumulators across two K16 phases and models the
+  reuse barrier before the second LDS overwrite; and
+- the Slice 2 proof model covers one through four phases with 196 verified
+  obligations and expected-rejection mutations for missing reuse and reset
+  accumulators.
+
+The collector cannot yet derive the LDS operations from the attributed Rust
+body. Therefore the IR-derived HSACO and hardware result are not evidence of
+source correspondence, Worker V2 admission, protected publication, compiler
+refinement, or machine-level memory/race freedom. Slice 1 and Slice 2 both
+remain partial.
+
 ## Slice 1: one LDS tile
 
 The fixed operation is one `16x16x16` BF16-by-BF16 product with FP32 output,

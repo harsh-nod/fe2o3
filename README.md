@@ -38,17 +38,25 @@ source path still stops before an authenticated HSACO. The
 dashboard records the exact commits, tests, target lanes, evidence strengths,
 and limitations for each Partial row.
 
-The public [tiled GEMM V1 host scaffold](examples/tiled_gemm_v1/README.md)
-adds unforgeable shape, extent, launch-geometry, and exact parsed-target
-witnesses for one `16x16x16` BF16/F32 wave64 profile. Its bitwise host evidence
-is restricted to a pinned finite BF16 corpus and is checked independently in
-debug, release, doctest, Clippy, and dedicated CI lanes. A separate guarded HSA
-harness has now run one exact digest-pinned, direct-global tile on MI300X; see
-the [non-authoritative observation](docs/tiled-gemm-v1-mi300x-observation.md).
-That result does not join the Rust source to the supplied HSACO. Source-derived
-final HSACO, protected load and launch, production LDS movement and full GEMM
-loops, compiler refinement, and machine memory, race, and numerical proofs
-remain open. This checkpoint does not promote a CUDA-Oxide parity row.
+The public [tiled GEMM V1 work](examples/tiled_gemm_v1/README.md) now combines
+the checked host contract with bounded production-directed LDS slices. An
+ordinary `#[kernel(typed, ...)]` Rust function contains the fixed `16x16x16`
+BF16/F32 algorithm and fails closed where compiler-issued LDS capabilities are
+still unavailable. Separately, canonical Kernel IR lowers through pinned
+upstream LLVM/LLD to a COV6 `gfx942:xnack-` WG64/wave64 HSACO with 1,024 bytes
+of static LDS, LDS traffic, a converged barrier, and BF16 MFMA. An observational
+MI300X harness generated and executed those bytes over six numerical cases and
+1,536 checked outputs. The K32 follow-on has a two-phase loop IR and a bounded
+Verus model for one through four K phases, including negative reuse-barrier and
+accumulator-reset mutations.
+
+These results do not yet authenticate the attributed Rust MIR as the source of
+the executed LDS Kernel IR or join either path to protected publication and
+launch authority. General shapes, tails, alpha/beta, compiler refinement, and
+machine memory, race, and numerical proofs remain open. The older
+[direct-global observation](docs/tiled-gemm-v1-mi300x-observation.md) remains a
+separate non-authoritative profile. This checkpoint does not promote a
+CUDA-Oxide parity row.
 
 The intended end state is:
 
