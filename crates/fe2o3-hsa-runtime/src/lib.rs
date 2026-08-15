@@ -8,6 +8,7 @@ mod lifecycle;
 mod row_softmax_resource_observation;
 mod sys;
 mod wave64_collectives_resource_observation;
+mod workgroup_sync_resource_observation;
 
 #[cfg(feature = "hardware-test-hooks")]
 pub use dispatch::ReviewedHsaHardwareTestBufferV1;

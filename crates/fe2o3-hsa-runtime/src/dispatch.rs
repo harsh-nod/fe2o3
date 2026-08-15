@@ -4,7 +4,8 @@ use crate::lifecycle::{ReviewedHsaExecutableV1, ReviewedHsaKernelV1};
 use fe2o3_artifacts::MAX_ABI_BYTES;
 use fe2o3_host::{
     HsaDispatchObservationV1, HsaImplicitKernargInitializationObservationV1, HsaLaunchGeometryV1,
-    ReviewedHsaImplicitKernargAdapterV1,
+    ReviewedHsaImplicitKernargAdapterV1, WorkgroupSyncImplicitKernargObservationV1,
+    WorkgroupSyncProfileKindV1,
 };
 use sha2::{Digest, Sha256};
 use std::time::{Duration, Instant};
@@ -34,6 +35,7 @@ const MULTIGRID_SYNC_ARG: usize = 88;
 const HEAP_V1_PTR: usize = 96;
 const DEFAULT_QUEUE_PTR: usize = 104;
 const COMPLETION_ACTION: usize = 112;
+const DYNAMIC_LDS_SIZE: usize = 120;
 const QUEUE_PTR: usize = 200;
 pub(crate) const COMPLETION_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -176,6 +178,49 @@ enum CompletionTransition {
     Unquiesced(UnquiescedDispatch),
 }
 
+#[derive(Clone, Copy)]
+enum ImplicitKernargProfileV1 {
+    GenericZeroDynamicLds,
+    ExactWorkgroupSync(WorkgroupSyncProfileKindV1),
+}
+
+impl ImplicitKernargProfileV1 {
+    const fn dynamic_lds_bytes(self) -> u32 {
+        match self {
+            Self::GenericZeroDynamicLds
+            | Self::ExactWorkgroupSync(WorkgroupSyncProfileKindV1::ScopedAtomic) => 0,
+            Self::ExactWorkgroupSync(WorkgroupSyncProfileKindV1::LdsReduction) => 256,
+        }
+    }
+
+    const fn hidden_dynamic_lds_offset(self, explicit_byte_len: usize) -> Option<usize> {
+        match self {
+            Self::ExactWorkgroupSync(WorkgroupSyncProfileKindV1::LdsReduction) => {
+                Some(explicit_byte_len + DYNAMIC_LDS_SIZE)
+            }
+            Self::GenericZeroDynamicLds
+            | Self::ExactWorkgroupSync(WorkgroupSyncProfileKindV1::ScopedAtomic) => None,
+        }
+    }
+
+    const fn requires_exact_zero_static_resources(self) -> bool {
+        matches!(self, Self::ExactWorkgroupSync(_))
+    }
+}
+
+struct PreparedImplicitKernargObservationV1 {
+    base: HsaImplicitKernargInitializationObservationV1,
+    executable: fe2o3_host::HsaExecutableObjectIdentityV1,
+    kernel: fe2o3_host::HsaKernelObjectIdentityV1,
+    geometry: HsaLaunchGeometryV1,
+    explicit_byte_len: u64,
+    implicit_byte_offset: u64,
+    implicit_byte_len: u64,
+    hidden_dynamic_lds_offset: Option<usize>,
+    hidden_dynamic_lds_value: u32,
+    aql_group_segment_bytes: u32,
+}
+
 // SAFETY: the bounded explicit prefix is supplied by the reviewed host
 // lifecycle and preserved byte-for-byte. The exact 256-byte COV6 hidden span
 // is initialized from reviewed geometry and the exact private HSA queue
@@ -207,7 +252,7 @@ unsafe impl ReviewedHsaImplicitKernargAdapterV1 for ReviewedHsaRuntimeAdapterV1 
 }
 
 #[allow(clippy::too_many_arguments)]
-fn validate_implicit_kernarg(
+fn validate_implicit_kernarg_with_profile(
     executable: &ReviewedHsaExecutableV1,
     kernel: &ReviewedHsaKernelV1,
     geometry: HsaLaunchGeometryV1,
@@ -215,6 +260,7 @@ fn validate_implicit_kernarg(
     implicit_byte_offset: usize,
     implicit_byte_len: usize,
     kernarg: &[u8],
+    profile: ImplicitKernargProfileV1,
 ) -> Result<ReviewedImplicitKernargLayout, HsaRuntimeAdapterError> {
     let executable =
         executable
@@ -256,9 +302,16 @@ fn validate_implicit_kernarg(
             "launch geometry",
         ));
     }
-    if geometry.dynamic_shared_memory_bytes() != 0 {
+    if geometry.dynamic_shared_memory_bytes() != profile.dynamic_lds_bytes() {
         return Err(HsaRuntimeAdapterError::InvalidImplicitKernarg(
-            "the reviewed COV6 vecadd profile requires zero dynamic LDS",
+            "the reviewed COV6 profile requires its exact dynamic LDS value",
+        ));
+    }
+    if profile.requires_exact_zero_static_resources()
+        && (kernel.group_segment_size != 0 || kernel.private_segment_size != 0)
+    {
+        return Err(HsaRuntimeAdapterError::InvalidImplicitKernarg(
+            "the exact workgroup-sync profile requires zero static group and private segments",
         ));
     }
     Ok(ReviewedImplicitKernargLayout {
@@ -268,8 +321,30 @@ fn validate_implicit_kernarg(
     })
 }
 
+#[cfg(test)]
+fn validate_implicit_kernarg(
+    executable: &ReviewedHsaExecutableV1,
+    kernel: &ReviewedHsaKernelV1,
+    geometry: HsaLaunchGeometryV1,
+    explicit_byte_len: usize,
+    implicit_byte_offset: usize,
+    implicit_byte_len: usize,
+    kernarg: &[u8],
+) -> Result<ReviewedImplicitKernargLayout, HsaRuntimeAdapterError> {
+    validate_implicit_kernarg_with_profile(
+        executable,
+        kernel,
+        geometry,
+        explicit_byte_len,
+        implicit_byte_offset,
+        implicit_byte_len,
+        kernarg,
+        ImplicitKernargProfileV1::GenericZeroDynamicLds,
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
-fn prepare_implicit_kernarg<A: DispatchApi>(
+fn prepare_implicit_kernarg_with_profile<A: DispatchApi>(
     core: &mut AdapterCore<A>,
     pending: &mut Option<PendingDispatch>,
     executable: &ReviewedHsaExecutableV1,
@@ -279,13 +354,14 @@ fn prepare_implicit_kernarg<A: DispatchApi>(
     implicit_byte_offset: usize,
     implicit_byte_len: usize,
     kernarg: &mut [u8],
-) -> Result<HsaImplicitKernargInitializationObservationV1, HsaRuntimeAdapterError> {
+    profile: ImplicitKernargProfileV1,
+) -> Result<PreparedImplicitKernargObservationV1, HsaRuntimeAdapterError> {
     if pending.is_some() {
         return Err(HsaRuntimeAdapterError::InvalidImplicitKernarg(
             "one unconsumed queue binding already exists",
         ));
     }
-    let layout = validate_implicit_kernarg(
+    let layout = validate_implicit_kernarg_with_profile(
         executable,
         kernel,
         geometry,
@@ -293,6 +369,7 @@ fn prepare_implicit_kernarg<A: DispatchApi>(
         implicit_byte_offset,
         implicit_byte_len,
         kernarg,
+        profile,
     )?;
     let state = executable
         .state
@@ -359,6 +436,10 @@ fn prepare_implicit_kernarg<A: DispatchApi>(
     put_u64(kernarg, implicit_offset + HEAP_V1_PTR, 0);
     put_u64(kernarg, implicit_offset + DEFAULT_QUEUE_PTR, 0);
     put_u64(kernarg, implicit_offset + COMPLETION_ACTION, 0);
+    let hidden_dynamic_lds_offset = profile.hidden_dynamic_lds_offset(layout.explicit_byte_len);
+    if let Some(offset) = hidden_dynamic_lds_offset {
+        put_u32(kernarg, offset, profile.dynamic_lds_bytes());
+    }
     put_u64(kernarg, implicit_offset + QUEUE_PTR, queue_pointer);
     if kernarg[..layout.explicit_byte_len] != explicit {
         std::process::abort();
@@ -374,14 +455,105 @@ fn prepare_implicit_kernarg<A: DispatchApi>(
         layout,
         kernarg_digest,
     });
-    Ok(HsaImplicitKernargInitializationObservationV1::new(
-        state.identity,
-        kernel.identity,
+    let aql_group_segment_bytes = kernel
+        .group_segment_size
+        .checked_add(profile.dynamic_lds_bytes())
+        .ok_or(HsaRuntimeAdapterError::InvalidImplicitKernarg(
+            "exact AQL group segment size overflow",
+        ))?;
+    let explicit_byte_len =
+        u64::try_from(layout.explicit_byte_len).expect("validated explicit length fits u64");
+    let implicit_byte_offset =
+        u64::try_from(layout.implicit_byte_offset).expect("validated implicit offset fits u64");
+    let implicit_byte_len = IMPLICIT_BYTES as u64;
+    Ok(PreparedImplicitKernargObservationV1 {
+        base: HsaImplicitKernargInitializationObservationV1::new(
+            state.identity,
+            kernel.identity,
+            geometry,
+            explicit_byte_len,
+            implicit_byte_offset,
+            implicit_byte_len,
+            true,
+        ),
+        executable: state.identity,
+        kernel: kernel.identity,
         geometry,
-        u64::try_from(layout.explicit_byte_len).expect("validated explicit length fits u64"),
-        u64::try_from(layout.implicit_byte_offset).expect("validated implicit offset fits u64"),
-        IMPLICIT_BYTES as u64,
-        true,
+        explicit_byte_len,
+        implicit_byte_offset,
+        implicit_byte_len,
+        hidden_dynamic_lds_offset,
+        hidden_dynamic_lds_value: profile.dynamic_lds_bytes(),
+        aql_group_segment_bytes,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_implicit_kernarg<A: DispatchApi>(
+    core: &mut AdapterCore<A>,
+    pending: &mut Option<PendingDispatch>,
+    executable: &ReviewedHsaExecutableV1,
+    kernel: &ReviewedHsaKernelV1,
+    geometry: HsaLaunchGeometryV1,
+    explicit_byte_len: usize,
+    implicit_byte_offset: usize,
+    implicit_byte_len: usize,
+    kernarg: &mut [u8],
+) -> Result<HsaImplicitKernargInitializationObservationV1, HsaRuntimeAdapterError> {
+    prepare_implicit_kernarg_with_profile(
+        core,
+        pending,
+        executable,
+        kernel,
+        geometry,
+        explicit_byte_len,
+        implicit_byte_offset,
+        implicit_byte_len,
+        kernarg,
+        ImplicitKernargProfileV1::GenericZeroDynamicLds,
+    )
+    .map(|prepared| prepared.base)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn prepare_workgroup_sync_implicit_kernarg<A: DispatchApi>(
+    core: &mut AdapterCore<A>,
+    pending: &mut Option<PendingDispatch>,
+    profile: WorkgroupSyncProfileKindV1,
+    executable: &ReviewedHsaExecutableV1,
+    kernel: &ReviewedHsaKernelV1,
+    geometry: HsaLaunchGeometryV1,
+    explicit_byte_len: usize,
+    implicit_byte_offset: usize,
+    implicit_byte_len: usize,
+    kernarg: &mut [u8],
+) -> Result<WorkgroupSyncImplicitKernargObservationV1, HsaRuntimeAdapterError> {
+    let prepared = prepare_implicit_kernarg_with_profile(
+        core,
+        pending,
+        executable,
+        kernel,
+        geometry,
+        explicit_byte_len,
+        implicit_byte_offset,
+        implicit_byte_len,
+        kernarg,
+        ImplicitKernargProfileV1::ExactWorkgroupSync(profile),
+    )?;
+    Ok(WorkgroupSyncImplicitKernargObservationV1::new(
+        profile,
+        prepared.executable,
+        prepared.kernel,
+        prepared.geometry,
+        prepared.explicit_byte_len,
+        prepared.implicit_byte_offset,
+        prepared.implicit_byte_len,
+        prepared
+            .hidden_dynamic_lds_offset
+            .map(|offset| u64::try_from(offset).expect("bounded COV6 hidden offset")),
+        prepared.hidden_dynamic_lds_value,
+        prepared.aql_group_segment_bytes,
+        prepared.base.initialized(),
     ))
 }
 
@@ -853,6 +1025,7 @@ mod tests {
         completion_sequence: VecDeque<i64>,
         written: Vec<u8>,
         published_grid: Option<[u32; 3]>,
+        published_group_segment_bytes: Option<u32>,
     }
 
     impl MockApi {
@@ -1000,13 +1173,14 @@ mod tests {
             grid: [u32; 3],
             _workgroup: [u32; 3],
             _private_segment_size: u32,
-            _group_segment_size: u32,
+            group_segment_size: u32,
             _kernel_object: u64,
             _kernarg: usize,
             _completion_signal: u64,
         ) -> Result<u64, ApiError> {
             self.call("publish")?;
             self.published_grid = Some(grid);
+            self.published_group_segment_bytes = Some(group_segment_size);
             Ok(61)
         }
     }
@@ -1098,6 +1272,113 @@ mod tests {
             *byte = index.wrapping_mul(17).wrapping_add(3) as u8;
         }
         bytes
+    }
+
+    #[test]
+    fn exact_workgroup_sync_profiles_bind_hidden_and_aql_dynamic_lds() {
+        for (profile, dynamic_lds, hidden_offset) in [
+            (WorkgroupSyncProfileKindV1::LdsReduction, 256, Some(160)),
+            (WorkgroupSyncProfileKindV1::ScopedAtomic, 0, None),
+        ] {
+            let (executable, mut kernel) = handles_for_explicit_prefix(40);
+            kernel.group_segment_size = 0;
+            kernel.private_segment_size = 0;
+            kernel.kernarg_segment_alignment = 16;
+            let geometry = HsaLaunchGeometryV1::new([1, 1, 1], [64, 1, 1], dynamic_lds);
+            let mut bytes = kernarg_for_explicit_prefix(40);
+            let explicit = bytes[..40].to_vec();
+            let mut core = make_core(MockApi::default());
+            let mut pending = None;
+
+            let observation = prepare_workgroup_sync_implicit_kernarg(
+                &mut core,
+                &mut pending,
+                profile,
+                &executable,
+                &kernel,
+                geometry,
+                40,
+                40,
+                256,
+                &mut bytes,
+            )
+            .unwrap();
+            assert_eq!(observation.profile(), profile);
+            assert_eq!(observation.geometry(), geometry);
+            assert_eq!(observation.hidden_dynamic_lds_offset(), hidden_offset);
+            assert_eq!(observation.hidden_dynamic_lds_value(), dynamic_lds);
+            assert_eq!(observation.aql_group_segment_bytes(), dynamic_lds);
+            assert_eq!(&bytes[..40], explicit);
+            match hidden_offset {
+                Some(offset) => assert_eq!(
+                    u32::from_le_bytes(
+                        bytes[offset as usize..offset as usize + 4]
+                            .try_into()
+                            .unwrap()
+                    ),
+                    256
+                ),
+                None => assert_eq!(u32::from_le_bytes(bytes[160..164].try_into().unwrap()), 0),
+            }
+
+            launch_and_wait(
+                &mut core,
+                &mut pending,
+                &executable,
+                &kernel,
+                geometry,
+                &mut bytes,
+            )
+            .unwrap();
+            assert_eq!(core.api.published_group_segment_bytes, Some(dynamic_lds));
+        }
+    }
+
+    #[test]
+    fn exact_workgroup_sync_dynamic_or_static_resource_substitution_fails_before_queue() {
+        let (executable, mut kernel) = handles_for_explicit_prefix(40);
+        kernel.group_segment_size = 0;
+        kernel.private_segment_size = 0;
+        let mut bytes = kernarg_for_explicit_prefix(40);
+        let mut core = make_core(MockApi::default());
+        let mut pending = None;
+        let wrong_dynamic = HsaLaunchGeometryV1::new([1, 1, 1], [64, 1, 1], 0);
+        assert!(
+            prepare_workgroup_sync_implicit_kernarg(
+                &mut core,
+                &mut pending,
+                WorkgroupSyncProfileKindV1::LdsReduction,
+                &executable,
+                &kernel,
+                wrong_dynamic,
+                40,
+                40,
+                256,
+                &mut bytes,
+            )
+            .is_err()
+        );
+        assert!(core.api.log.is_empty());
+        assert!(pending.is_none());
+
+        kernel.group_segment_size = 1;
+        assert!(
+            prepare_workgroup_sync_implicit_kernarg(
+                &mut core,
+                &mut pending,
+                WorkgroupSyncProfileKindV1::ScopedAtomic,
+                &executable,
+                &kernel,
+                wrong_dynamic,
+                40,
+                40,
+                256,
+                &mut bytes,
+            )
+            .is_err()
+        );
+        assert!(core.api.log.is_empty());
+        assert!(pending.is_none());
     }
 
     #[test]
