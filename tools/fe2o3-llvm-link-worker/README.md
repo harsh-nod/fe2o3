@@ -127,6 +127,14 @@ and missing producer-guaranteed fields receive field-specific diagnostics. The
 worker only decodes and validates emitted MsgPack; it never synthesizes, fills,
 or rewrites HSACO metadata.
 
+Argument range, ordering, ABI alignment, and pointee-alignment closure is
+profile-specific. The generic metadata path retains LLVM's strict metadata
+schema checks but does not impose Slice1's canonical argument geometry on
+other kernels. The exact Slice1 path applies a closed root, kernel, and
+argument-key allowlist matching the pinned producer and the optional fields
+its contract recognizes; unknown keys fail closed. This policy does not alter
+the metadata note or broaden the accepted Slice1 values.
+
 The exact producer data layout is also allowlisted literally for this closed
 profile. Upstream LLVM 22.1.8 adds the equivalent ELF mangling component
 `m:e`; after accepting only the known producer spelling, the worker installs
@@ -141,6 +149,13 @@ runtime-name, metadata, and G1 launch-profile mismatches while retaining a
 descriptor-free generic path. Supplying an optional path writes the successful
 mixed-input HSACO for independent inspection. Two additional paths also export
 the exact bitcode and relocatable inputs used for that link:
+
+The Slice1 metadata matrix independently mutates the offset, size, value kind,
+and order of every required and optional COV6 hidden argument. It checks every
+one of the 1,024 optional-hidden presence masks, required-workgroup omission
+and mismatch, and unknown keys at each metadata map level. Companion generic
+fixtures prove that noncanonical but LLVM-schema-valid argument layouts and
+unknown extension keys do not inherit Slice1-only policy.
 
 At this boundary, `COV6` means request code-object version `6`, LLVM module flag
 `amdhsa_code_object_version = 600`, and AMDHSA ELF ABI version `4`. The pipeline
