@@ -178,7 +178,19 @@ impl ObservedContext {
     /// Returns whether this observation names this exact `GpuContext` wrapper.
     pub fn is_for_context(&self, context: &Arc<GpuContext>) -> bool {
         self.identity == ContextIdentity(Arc::as_ptr(context) as usize)
-            && self.retained_context.is_some()
+            && self.matches_core_context_identity_v1(context.identity())
+    }
+
+    pub(crate) fn matches_core_context_identity_v1(
+        &self,
+        expected: fe2o3_core::ContextIdentity,
+    ) -> bool {
+        retained_identity_matches_v1(
+            self.retained_context
+                .as_ref()
+                .map(|context| context.identity()),
+            expected,
+        )
     }
 
     pub(crate) fn same_context(&self, other: &Self) -> bool {
@@ -251,6 +263,10 @@ impl ObservedContext {
         self.hip_capabilities.warp_ballot = !self.hip_capabilities.warp_ballot;
         self
     }
+}
+
+fn retained_identity_matches_v1<T: Eq>(retained: Option<T>, expected: T) -> bool {
+    retained.is_some_and(|actual| actual == expected)
 }
 
 /// Caller-supplied kernel metadata that carries no validation authority.
@@ -1407,6 +1423,29 @@ mod tests {
             request(VECADD, 1, [1, 1, 1], [1, 1, 1], 0),
             PrepareLaunchError::DeviceCapabilitiesChanged,
         );
+    }
+
+    #[test]
+    fn retained_core_context_identity_comparison_fails_closed() {
+        assert!(retained_identity_matches_v1(Some(17_u64), 17));
+        assert!(!retained_identity_matches_v1(Some(18_u64), 17));
+        assert!(!retained_identity_matches_v1(None::<u64>, 17));
+
+        let synthetic = context(11, 0, "gfx942");
+        assert!(synthetic.retained_context.is_none());
+    }
+
+    #[test]
+    #[ignore = "requires a working HIP device"]
+    fn observed_context_matches_only_its_retained_core_context_identity() {
+        let context = GpuContext::new(0).unwrap();
+        let other = GpuContext::new(0).unwrap();
+        let observed = ObservedContext::observe(&context).unwrap();
+        let synthetic = self::context(11, 0, observed.device().target());
+
+        assert!(observed.matches_core_context_identity_v1(context.identity()));
+        assert!(!observed.matches_core_context_identity_v1(other.identity()));
+        assert!(!synthetic.matches_core_context_identity_v1(context.identity()));
     }
 
     #[test]

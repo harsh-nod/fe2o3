@@ -747,6 +747,14 @@ impl HsaCodeObjectLoadObservationV1 {
         self.byte_len
     }
 
+    pub const fn runtime_instance(&self) -> [u8; 16] {
+        self.runtime_instance
+    }
+
+    pub const fn agent_handle(&self) -> u64 {
+        self.agent_handle
+    }
+
     pub const fn executable_object(&self) -> HsaExecutableObjectIdentityV1 {
         self.executable_object
     }
@@ -876,6 +884,18 @@ impl HsaDispatchObservationV1 {
         self.dispatch_identity
     }
 
+    pub const fn executable_object(&self) -> HsaExecutableObjectIdentityV1 {
+        self.executable_object
+    }
+
+    pub const fn kernel_object(&self) -> HsaKernelObjectIdentityV1 {
+        self.kernel_object
+    }
+
+    pub const fn geometry(&self) -> HsaLaunchGeometryV1 {
+        self.geometry
+    }
+
     pub const fn completed(&self) -> bool {
         self.completed
     }
@@ -907,6 +927,14 @@ impl HsaUnloadObservationV1 {
 
     pub const fn executable_object(&self) -> HsaExecutableObjectIdentityV1 {
         self.executable_object
+    }
+
+    pub const fn runtime_instance(&self) -> [u8; 16] {
+        self.runtime_instance
+    }
+
+    pub const fn agent_handle(&self) -> u64 {
+        self.agent_handle
     }
 
     pub const fn released(&self) -> bool {
@@ -4768,5 +4796,34 @@ pub(crate) mod tests {
             HsaEnvironmentObservationV1::new(runtime, device, crossed_agent),
             Err(HsaObservationError::IdentityMismatch("runtime instance"))
         ));
+    }
+
+    #[test]
+    fn lifecycle_observation_getters_return_typed_descriptive_evidence() {
+        let executable = HsaExecutableObjectIdentityV1::new([0x31; 32]).unwrap();
+        let kernel = HsaKernelObjectIdentityV1::new([0x32; 32]).unwrap();
+        let runtime_instance = [0x33; 16];
+        let agent_handle = 0x3434;
+        let geometry = HsaLaunchGeometryV1::new([7, 1, 1], [64, 1, 1], 1_024);
+
+        let load = HsaCodeObjectLoadObservationV1::new(
+            digest(0x35),
+            4_096,
+            runtime_instance,
+            agent_handle,
+            executable,
+        );
+        assert_eq!(load.runtime_instance(), runtime_instance);
+        assert_eq!(load.agent_handle(), agent_handle);
+
+        let dispatch =
+            HsaDispatchObservationV1::new([0x36; 16], executable, kernel, geometry, true).unwrap();
+        assert_eq!(dispatch.executable_object(), executable);
+        assert_eq!(dispatch.kernel_object(), kernel);
+        assert_eq!(dispatch.geometry(), geometry);
+
+        let unload = HsaUnloadObservationV1::new(executable, runtime_instance, agent_handle, true);
+        assert_eq!(unload.runtime_instance(), runtime_instance);
+        assert_eq!(unload.agent_handle(), agent_handle);
     }
 }
