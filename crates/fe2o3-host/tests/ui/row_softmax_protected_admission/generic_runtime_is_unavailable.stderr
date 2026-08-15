@@ -1,0 +1,5 @@
+error[E0599]: no method named `load_executable` found for struct `ProtectedRowSoftmaxV1HostTokenV1` in the current scope
+ --> tests/ui/row_softmax_protected_admission/generic_runtime_is_unavailable.rs:4:24
+  |
+4 |     let loaded = token.load_executable();
+  |                        ^^^^^^^^^^^^^^^ method not found in `ProtectedRowSoftmaxV1HostTokenV1`

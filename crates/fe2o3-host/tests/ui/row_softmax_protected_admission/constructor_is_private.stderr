@@ -1,0 +1,5 @@
+error[E0599]: no associated function or constant named `new` found for struct `ProtectedRowSoftmaxV1HostTokenV1` in the current scope
+ --> tests/ui/row_softmax_protected_admission/constructor_is_private.rs:4:47
+  |
+4 |     let _ = ProtectedRowSoftmaxV1HostTokenV1::new();
+  |                                               ^^^ associated function or constant not found in `ProtectedRowSoftmaxV1HostTokenV1`

@@ -20,6 +20,7 @@ mod prepared_launch;
 mod published_direct_link;
 mod published_hsaco_inspection;
 mod recovered_worker_v2_admission;
+mod row_softmax_protected_admission;
 mod tile_interop;
 mod worker_v2_bundle_admission;
 
@@ -207,6 +208,10 @@ pub use recovered_worker_v2_admission::{
     RecoveredWorkerV2SynchronousHsaScalarGemmV1PrepareResultV1,
     RecoveredWorkerV2SynchronousHsaScalarGemmV1PreparedInvocationV1,
     RecoveredWorkerV2SynchronousHsaUnloadError,
+};
+pub use row_softmax_protected_admission::{
+    ProtectedRowSoftmaxV1HostAdmissionErrorV1, ProtectedRowSoftmaxV1HostTokenIdentityV1,
+    ProtectedRowSoftmaxV1HostTokenV1, prepare_protected_row_softmax_v1_host_token_v1,
 };
 
 pub use tile_interop::{

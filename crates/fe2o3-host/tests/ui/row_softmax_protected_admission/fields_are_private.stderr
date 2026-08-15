@@ -1,0 +1,9 @@
+error[E0451]: fields `identity` and `admission` of struct `ProtectedRowSoftmaxV1HostTokenV1` are private
+ --> tests/ui/row_softmax_protected_admission/fields_are_private.rs:5:9
+  |
+4 |     let ProtectedRowSoftmaxV1HostTokenV1 {
+  |         -------------------------------- in this type
+5 |         identity,
+  |         ^^^^^^^^ private field
+6 |         admission,
+  |         ^^^^^^^^^ private field
