@@ -2249,7 +2249,7 @@ fn is_gfx_target(candidate: &str) -> bool {
 
 fn print_help() {
     eprintln!(
-        "usage: cargo fe2o3 <command>\n\ncommands:\n  doctor              check ROCm/HIP toolchain discovery\n  build               build with the fe2o3 rustc backend\n  run                 run with the fe2o3 rustc backend\n  smoke               run manifest-selected GPU examples\n  examples            validate or query the example regression manifest\n  clean [--dry-run]   remove guarded fe2o3-owned target artifacts\n  inspect             inspect bounded artifact or HSACO metadata without execution\n  sanitize            plan or execute bounded ROCgdb precise-memory diagnostics\n  debug               plan or execute bounded batch/interactive ROCgdb sessions"
+        "usage: cargo fe2o3 <command>\n\ncommands:\n  authority release   run an authority build through the protected self-launch boundary\n  doctor              check ROCm/HIP toolchain discovery\n  build               build with the fe2o3 rustc backend\n  run                 run with the fe2o3 rustc backend\n  smoke               run manifest-selected GPU examples\n  examples            validate or query the example regression manifest\n  clean [--dry-run]   remove guarded fe2o3-owned target artifacts\n  inspect             inspect bounded artifact or HSACO metadata without execution\n  sanitize            plan or execute bounded ROCgdb precise-memory diagnostics\n  debug               plan or execute bounded batch/interactive ROCgdb sessions"
     );
 }
 
@@ -2265,7 +2265,16 @@ mod tests {
     #[test]
     fn normalizes_direct_and_cargo_subcommand_invocations() {
         for command in [
-            "doctor", "build", "run", "smoke", "examples", "clean", "inspect", "sanitize", "debug",
+            "authority",
+            "doctor",
+            "build",
+            "run",
+            "smoke",
+            "examples",
+            "clean",
+            "inspect",
+            "sanitize",
+            "debug",
         ] {
             let direct = vec![OsString::from(command), OsString::from("argument")];
             let cargo = vec![

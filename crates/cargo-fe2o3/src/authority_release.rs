@@ -66,7 +66,7 @@ const RELEASE_ENVIRONMENT_ALLOWLIST: &[&str] = &[
     "FE2O3_BACKEND",
     "FE2O3_CODEGEN_PIPELINE",
     "FE2O3_TARGET",
-    "FE2O3_WORKER_V2_CONFIG_V1",
+    "FE2O3_WORKER_V2_CONFIG_V2",
     "LANG",
     "LC_ALL",
     "TZ",
@@ -447,7 +447,7 @@ fn launch(args: &[OsString]) -> Result<ExitStatus, String> {
     reject_reserved_descriptors(&[0, 1, 2])?;
     let compiler = observe_compiler_closure()?;
     let environment = current_environment()?;
-    let argv = child_argv(args)?;
+    let argv = planned_child_argv(args)?;
     let attempt = random_identity()?;
     let parent_pid = std::process::id();
     let parent_uid = unsafe { libc::geteuid() };
@@ -704,7 +704,7 @@ fn validate_child_state(contract: &ReleaseContract, args: &[OsString]) -> Result
             cwd,
             descriptors,
             compiler: observe_compiler_closure()?,
-            argv: child_argv(args)?,
+            argv: observed_child_argv(args)?,
             environment: environment_bytes(&current_environment()?),
         },
     )
@@ -907,9 +907,23 @@ fn environment_bytes(values: &[(OsString, OsString)]) -> Vec<(Vec<u8>, Vec<u8>)>
         .collect()
 }
 
-fn child_argv(args: &[OsString]) -> Result<Vec<Vec<u8>>, String> {
+fn planned_child_argv(args: &[OsString]) -> Result<Vec<Vec<u8>>, String> {
+    child_argv_with(
+        OsStr::from_bytes(fe2o3_build_authority::PROTECTED_AUTHORITY_ARGV0_V1),
+        args,
+    )
+}
+
+fn observed_child_argv(args: &[OsString]) -> Result<Vec<Vec<u8>>, String> {
+    let argv0 = env::args_os()
+        .next()
+        .ok_or_else(|| "release child has no argv[0]".to_owned())?;
+    child_argv_with(&argv0, args)
+}
+
+fn child_argv_with(argv0: &OsStr, args: &[OsString]) -> Result<Vec<Vec<u8>>, String> {
     let mut argv = Vec::with_capacity(args.len() + 2);
-    argv.push(fe2o3_build_authority::PROTECTED_AUTHORITY_ARGV0_V1.to_vec());
+    argv.push(argv0.as_bytes().to_vec());
     argv.push(INTERNAL_CHILD_ARG.as_bytes().to_vec());
     argv.extend(args.iter().map(|value| value.as_bytes().to_vec()));
     if argv.len() > MAX_ARGUMENTS || argv.iter().any(|value| value.is_empty()) {
@@ -1597,6 +1611,14 @@ mod tests {
         argv.argv.push(b"--hostile".to_vec());
         assert!(
             validate_child_observation(&contract, &argv)
+                .unwrap_err()
+                .contains("argv")
+        );
+
+        let mut argv0 = observation(&contract);
+        argv0.argv[0] = b"/tmp/cargo-fe2o3-alias".to_vec();
+        assert!(
+            validate_child_observation(&contract, &argv0)
                 .unwrap_err()
                 .contains("argv")
         );

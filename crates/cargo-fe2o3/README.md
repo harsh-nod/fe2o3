@@ -4,6 +4,40 @@
 The adjacent `fe2o3-rustc-wrapper` is fail closed for compile invocations while
 its trusted execution boundary is built incrementally.
 
+## Protected authority release
+
+Authority-bearing builds must enter through
+`cargo fe2o3 authority release <build|run> [args]`. Direct `build` or `run`
+requests that select an authority profile still fail before Cargo unless a
+debug-only non-production validation escape is explicitly enabled. The
+production release command rejects that escape.
+
+The outer release process requires descriptors 0, 1, and 2 to be the only
+inherited descriptors. It pins its running executable object and bytes, copies
+the same bytes into a fully sealed memfd, pins the exact cwd object, measures
+the declared Cargo, rustc, rustc runtime tree, backend, and compiler-closure
+identities, and snapshots the complete raw argument vector and environment. It
+then executes the sealed image with fixed contract, control, launcher-image,
+and cwd descriptors. The child independently checks its own image, its live
+parent's PID/start time/uid/image, the retained backing objects, exact argv,
+environment, cwd, descriptor manifest, and compiler closure before completing
+a fresh two-way one-shot grant. The launcher remains the child's parent until
+the request exits.
+
+Release starts from a cleared environment. The complete V1 allowlist is
+`CARGO`, the five `FE2O3_AUTHORITY_*_V1` tool/path pins,
+`FE2O3_BACKEND`, `FE2O3_CODEGEN_PIPELINE`, `FE2O3_TARGET`, optional
+`FE2O3_WORKER_V2_CONFIG_V2`, `LANG=C`, `LC_ALL=C`, and `TZ=UTC`.
+Aliases, extra variables or descriptors, loader variables, rustup/tool
+selectors, noncanonical paths, changed backing objects, replayed attempts, and
+closure/runtime-tree drift fail closed. Tool digests are operator-provisioned
+inputs and are remeasured; no machine-specific digest is compiled in.
+
+`cargo fe2o3 authority release probe` exercises this exact launcher/handoff
+boundary and exits before Cargo, artifact generation, HSA loading, or GPU
+dispatch. A successful probe grants no compiler-origin, proof, artifact-safety,
+runtime, or GPU authority. The release contract makes no such claims either.
+
 ## External Cargo projects
 
 `cargo fe2o3 build` and `cargo fe2o3 run` operate from standalone Cargo
