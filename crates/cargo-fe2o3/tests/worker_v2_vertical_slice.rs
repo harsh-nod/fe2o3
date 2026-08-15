@@ -9,10 +9,9 @@ use std::os::unix::fs::MetadataExt;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Output, Stdio};
-use std::sync::Mutex;
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, sync_channel};
+use std::sync::{Condvar, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -29,19 +28,53 @@ mod alpha_zeta_support;
 include!("../../fe2o3-hsaco-finalize/tests/fixtures/worker_v2_hsaco_test_support.rs");
 
 const WORKER_ID: &str = "cargo-fe2o3-fixture-worker-v1";
+const MAX_PARALLEL_VERTICAL_FIXTURES: usize = 4;
 static NEXT_TEST: AtomicU64 = AtomicU64::new(1);
+static VERTICAL_FIXTURES: OnceLock<(Mutex<usize>, Condvar)> = OnceLock::new();
 
-struct TestDirectory(PathBuf, Mutex<Option<OuterHarness>>);
+struct VerticalFixturePermit;
+
+impl VerticalFixturePermit {
+    fn acquire() -> Self {
+        let (active, available) = VERTICAL_FIXTURES.get_or_init(|| (Mutex::new(0), Condvar::new()));
+        let mut active = active
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        while *active >= MAX_PARALLEL_VERTICAL_FIXTURES {
+            active = available
+                .wait(active)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+        *active += 1;
+        Self
+    }
+}
+
+impl Drop for VerticalFixturePermit {
+    fn drop(&mut self) {
+        let (active, available) = VERTICAL_FIXTURES.get_or_init(|| (Mutex::new(0), Condvar::new()));
+        let mut active = active
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *active = active
+            .checked_sub(1)
+            .expect("vertical fixture permit underflow");
+        available.notify_one();
+    }
+}
+
+struct TestDirectory(PathBuf, Mutex<Option<OuterHarness>>, VerticalFixturePermit);
 
 impl TestDirectory {
     fn new() -> Self {
+        let permit = VerticalFixturePermit::acquire();
         let path = std::env::temp_dir().join(format!(
             "cargo-fe2o3-worker-v2-flow-{}-{}",
             std::process::id(),
             NEXT_TEST.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir(&path).unwrap();
-        Self(path, Mutex::new(None))
+        Self(path, Mutex::new(None), permit)
     }
 }
 

@@ -115,3 +115,6 @@ syn = { version = "2", features = ["full"] }
 
 [profile.dev.package.fe2o3-verifier]
 strip = "debuginfo"
+
+[profile.test.package.cargo-fe2o3]
+strip = "debuginfo"
