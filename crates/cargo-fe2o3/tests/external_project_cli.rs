@@ -1572,6 +1572,42 @@ fn protected_release_rejects_unexpected_inherited_descriptor() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn protected_release_rejects_inherited_descriptor_enumeration_directory() {
+    let fixture = ProjectFixture::standalone();
+    let mut command = fixture.protected_release_command("probe");
+    // SAFETY: open, dup3, and close are async-signal-safe; the static path is NUL-terminated.
+    unsafe {
+        command.pre_exec(|| {
+            let source = libc::open(
+                b"/proc/self/fd\0".as_ptr().cast(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
+            );
+            if source < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::dup3(source, 42, 0) != 42 {
+                libc::close(source);
+                return Err(std::io::Error::last_os_error());
+            }
+            libc::close(source);
+            Ok(())
+        });
+    }
+    let output = command
+        .output()
+        .expect("run inherited descriptor-enumeration directory probe");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("requires exactly one descriptor-enumeration directory")
+            && stderr.contains("42"),
+        "{stderr}"
+    );
+    assert!(!fixture.log.exists(), "descriptor rejection executed Cargo");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn protected_release_rejects_preloads_and_selector_injection() {
     for (name, value, expected) in [
         (
