@@ -30,6 +30,11 @@ pub open spec fn b_global_index_v1(depth: nat, column: nat) -> nat {
     depth * 16 + column
 }
 
+/// Row-major C index owned by one Slice 1 lane/component pair.
+pub open spec fn c_global_index_v1(lane: nat, component: nat) -> nat {
+    base::global_c_index_v1(0, 0, lane, component, 16)
+}
+
 pub open spec fn a_lds_address_v1(row: nat, depth: nat) -> nat {
     slice1_a_lds_base_v1() + base::xor4_lds_index_v1(row, depth)
 }
@@ -446,8 +451,8 @@ pub proof fn fixed_tile_c_stores_are_disjoint_v1(
         right_component < 4,
         left_lane != right_lane || left_component != right_component,
     ensures
-        base::global_c_index_v1(0, 0, left_lane, left_component, 16)
-            != base::global_c_index_v1(0, 0, right_lane, right_component, 16),
+        c_global_index_v1(left_lane, left_component)
+            != c_global_index_v1(right_lane, right_component),
 {
     assert(base::exact_dispatch_v1(16, 16, 16));
     assert(base::checked_group_v1(0, 0, 16, 16));

@@ -27,6 +27,12 @@ fn authenticated_runner_mechanically_checks_slice1_lds_proofs_and_mutations() {
 
     let stdout = String::from_utf8(output.stdout).expect("runner stdout is UTF-8");
     assert!(stdout.contains("PASS: Slice 1 LDS tiled GEMM model verified (93 verified, 0 errors)"));
+    assert!(stdout.contains(
+        "PASS: attributed Slice 1 source-refinement evidence verified (96 verified, 0 errors)"
+    ));
     assert!(stdout.contains("XFAIL: lds_epoch_wrong rejected at the expected proof obligation"));
     assert!(stdout.contains("XFAIL: lds_product_wrong rejected at the expected proof obligation"));
+    assert!(stdout.contains(
+        "XFAIL: lds_source_correspondence_identity_wrong rejected at the expected proof obligation"
+    ));
 }

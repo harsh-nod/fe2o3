@@ -4,6 +4,7 @@ set -eu
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 proof="$script_dir/verus/tiled_gemm_host_contract.rs"
 lds_proof="$script_dir/verus/lds_tiled_slice1.rs"
+source_refinement_proof="$script_dir/verus/lds_tiled_slice1_source_refinement.rs"
 kphase_proof="$script_dir/verus/lds_tiled_kphase.rs"
 grid_proof="$script_dir/verus/lds_tiled_grid_stride.rs"
 edges_proof="$script_dir/verus/lds_tiled_edges_alpha_beta.rs"
@@ -14,6 +15,10 @@ xor4_wrong="$script_dir/verus/negative/xor4_wrong.rs"
 xor2_permutation_wrong="$script_dir/verus/negative/xor2_permutation_wrong.rs"
 lds_epoch_wrong="$script_dir/verus/negative/lds_epoch_wrong.rs"
 lds_product_wrong="$script_dir/verus/negative/lds_product_wrong.rs"
+source_length_wrong="$script_dir/verus/negative/lds_source_length_wrong.rs"
+source_publish_barrier_wrong="$script_dir/verus/negative/lds_source_publish_barrier_wrong.rs"
+source_output_owner_wrong="$script_dir/verus/negative/lds_source_output_owner_wrong.rs"
+source_correspondence_identity_wrong="$script_dir/verus/negative/lds_source_correspondence_identity_wrong.rs"
 kphase_reuse_wrong="$script_dir/verus/negative/lds_kphase_reuse_wrong.rs"
 kphase_accumulator_reset_wrong="$script_dir/verus/negative/lds_kphase_accumulator_reset_wrong.rs"
 grid_tile_mapping_wrong="$script_dir/verus/negative/lds_grid_tile_mapping_wrong.rs"
@@ -78,6 +83,23 @@ require_source "$accumulator_wrong" 'mutated_accumulator_matches_official_table_
 require_source "$xor4_wrong" 'mutated_xor4_matches_official_storage_v1'
 require_source "$xor2_permutation_wrong" \
     'mutated_two_bit_permutation_matches_official_xor2_v1'
+for marker in \
+    'pub open spec fn source_guard_accepts_v1' \
+    'pub open spec fn source_to_canonical_ir_correspondence_v1' \
+    'pub proof fn exact_source_guard_requires_exact_lengths_v1' \
+    'pub proof fn exact_attributed_source_selects_canonical_identity_v1' \
+    'pub proof fn attributed_slice1_source_obligations_refine_canonical_ir_v1'
+do
+    require_source "$source_refinement_proof" "$marker"
+done
+require_source "$source_length_wrong" \
+    'mutated_short_a_is_admitted_by_exact_source_guard_v1'
+require_source "$source_publish_barrier_wrong" \
+    'mutated_read_at_publish_event_refines_canonical_ir_v1'
+require_source "$source_output_owner_wrong" \
+    'mutated_distinct_source_owners_may_alias_v1'
+require_source "$source_correspondence_identity_wrong" \
+    'mutated_portable_mir_identity_refines_canonical_ir_v1'
 for marker in \
     'pub open spec fn kphase_write_epoch_v1' \
     'pub open spec fn kphase_read_epoch_v1' \
@@ -149,7 +171,10 @@ require_source "$edges_k_tail_coverage_wrong" \
 
 for file in \
     "$proof" "$a_wrong" "$b_wrong" "$accumulator_wrong" "$xor4_wrong" \
-    "$xor2_permutation_wrong" "$kphase_proof" "$kphase_reuse_wrong" \
+    "$xor2_permutation_wrong" "$source_refinement_proof" \
+    "$source_length_wrong" "$source_publish_barrier_wrong" \
+    "$source_output_owner_wrong" "$source_correspondence_identity_wrong" \
+    "$kphase_proof" "$kphase_reuse_wrong" \
     "$kphase_accumulator_reset_wrong" "$grid_proof" \
     "$grid_tile_mapping_wrong" "$grid_stride_wrong" "$grid_c_ownership_wrong" \
     "$edges_proof" "$edges_lane_skips_barrier_wrong" \
@@ -283,6 +308,26 @@ if ! grep -Fq 'verification results:: 93 verified, 0 errors' "$lds_positive_log"
 fi
 printf 'PASS: Slice 1 LDS tiled GEMM model verified (93 verified, 0 errors)\n'
 
+source_refinement_positive_log="$tmp_dir/source-refinement-positive.log"
+if run_verus "$source_refinement_proof" >"$source_refinement_positive_log" 2>&1; then
+    :
+else
+    status=$?
+    printf 'FAIL: attributed Slice 1 source-refinement proof did not verify (status %s)\n' \
+        "$status" >&2
+    cat "$source_refinement_positive_log" >&2
+    exit 1
+fi
+if ! grep -Fq 'verification results:: 96 verified, 0 errors' \
+    "$source_refinement_positive_log"
+then
+    printf 'FAIL: attributed Slice 1 source-refinement proof emitted an unexpected verification summary\n' \
+        >&2
+    cat "$source_refinement_positive_log" >&2
+    exit 1
+fi
+printf 'PASS: attributed Slice 1 source-refinement evidence verified (96 verified, 0 errors)\n'
+
 kphase_positive_log="$tmp_dir/kphase-positive.log"
 if run_verus "$kphase_proof" >"$kphase_positive_log" 2>&1; then
     :
@@ -406,6 +451,22 @@ run_rejected lds_epoch_wrong \
 run_rejected lds_product_wrong \
     "$lds_product_wrong" \
     'mutated_lds_result_has_extra_unit_v1'
+run_rejected lds_source_length_wrong \
+    "$source_length_wrong" \
+    'mutated_short_a_is_admitted_by_exact_source_guard_v1' \
+    96
+run_rejected lds_source_publish_barrier_wrong \
+    "$source_publish_barrier_wrong" \
+    'mutated_read_at_publish_event_refines_canonical_ir_v1' \
+    96
+run_rejected lds_source_output_owner_wrong \
+    "$source_output_owner_wrong" \
+    'mutated_distinct_source_owners_may_alias_v1' \
+    93
+run_rejected lds_source_correspondence_identity_wrong \
+    "$source_correspondence_identity_wrong" \
+    'mutated_portable_mir_identity_refines_canonical_ir_v1' \
+    96
 run_rejected lds_kphase_reuse_wrong \
     "$kphase_reuse_wrong" \
     'mutated_missing_reuse_epoch_protects_prior_reads_v1'
@@ -442,4 +503,4 @@ run_rejected lds_edges_k_tail_coverage_wrong \
     'mutated_floor_phases_cover_k_tail_v1' \
     101
 
-printf 'Verus fixture run passed: host and LDS models, 17 expected rejections\n'
+printf 'Verus fixture run passed: host and LDS models, 21 expected rejections\n'
