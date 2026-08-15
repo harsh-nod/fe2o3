@@ -7,6 +7,8 @@ mod generated_alpha_zeta_cov6;
 mod generated_argument_plan;
 mod generated_lds_gemm;
 mod generated_lds_gemm_lifecycle;
+#[cfg(test)]
+mod generated_lds_gemm_lifecycle_tests;
 mod generated_scalar_gemm_v1;
 mod generated_vecadd;
 mod generated_worker_v2_vecadd;

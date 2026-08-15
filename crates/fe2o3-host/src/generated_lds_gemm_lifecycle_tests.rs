@@ -1,147 +1,32 @@
+use crate::{
+    HsaAgentIdentityV1, HsaCodeObjectLoadObservationV1, HsaDispatchObservationV1,
+    HsaEnvironmentObservationV1, HsaExecutableObjectIdentityV1,
+    HsaImplicitKernargInitializationObservationV1, HsaKernelObjectIdentityV1,
+    HsaKernelResolutionObservationV1, HsaLaunchGeometryV1, HsaPhysicalDeviceIdentityV1,
+    HsaRuntimeIdentityV1, HsaUnloadObservationV1, ReviewedHsaExecutableLifecycleAdapterV1,
+    ReviewedHsaImplicitKernargAdapterV1,
+    generated_lds_gemm_lifecycle::{
+        CompletedExactLdsGemmSlice1V1, ExactLdsGemmKernelResourceObservationV1,
+        ExactLdsGemmSlice1DispatchErrorV1, ExactLdsGemmSlice1LoadErrorV1,
+        ReviewedExactLdsGemmRuntimeAdapterV1,
+        test_support::{
+            TestJoinMutationV1, exact_test_complete_bytes_v1, exact_test_explicit_bytes_v1,
+            exact_test_hsa_alignment_v1, exact_test_implicit_bytes_v1, exact_test_static_lds_v1,
+            load_test_lifecycle_v1, validate_join_mutation_v1,
+        },
+    },
+};
 use fe2o3_amd_target::AmdTargetId;
 use fe2o3_artifacts::DigestAlgorithm;
 use fe2o3_core::ContextIdentity;
-use fe2o3_host::{HsaAgentIdentityV1, HsaPhysicalDeviceIdentityV1, HsaRuntimeIdentityV1};
-use fe2o3_hsaco_finalize::{
-    ExactLdsGemmContractV1, ExactLdsGemmLengthIdentityV1, ExactLdsGemmProfileIdV1,
-    ExactLdsGemmProfileIdentityV1, InspectedExactLdsGemmCompilerImportIdentityV1,
-};
 use std::{
     error::Error,
     fmt,
-    marker::PhantomData,
     process::Command,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
-};
-
-// The production module is intentionally not wired through lib.rs in this
-// agent-owned commit. These inert host stand-ins let this integration test
-// compile that exact source while the parent integrates its two promised
-// crate-private support APIs.
-#[derive(Debug)]
-pub struct TestObservedDevice {
-    ordinal: i32,
-}
-
-impl TestObservedDevice {
-    pub const fn ordinal(&self) -> i32 {
-        self.ordinal
-    }
-}
-
-#[derive(Debug)]
-pub struct ObservedContext {
-    device: TestObservedDevice,
-}
-
-impl ObservedContext {
-    pub const fn matches_core_context_identity_v1(&self, _identity: ContextIdentity) -> bool {
-        true
-    }
-
-    pub const fn device(&self) -> &TestObservedDevice {
-        &self.device
-    }
-}
-
-pub mod generated_lds_gemm {
-    use super::*;
-
-    pub struct GeneratedLdsGemmSlice1HostAdapterV1<'a, 'b, 'c> {
-        observed: ObservedContext,
-        _marker: PhantomData<(&'a (), &'b (), &'c mut ())>,
-    }
-
-    impl GeneratedLdsGemmSlice1HostAdapterV1<'_, '_, '_> {
-        pub const fn compiler_import_identity_v1(
-            &self,
-        ) -> InspectedExactLdsGemmCompilerImportIdentityV1 {
-            unreachable!()
-        }
-
-        pub const fn profile_identity(&self) -> ExactLdsGemmProfileIdentityV1 {
-            unreachable!()
-        }
-
-        pub const fn contract_v1(&self) -> ExactLdsGemmContractV1 {
-            unreachable!()
-        }
-
-        pub const fn target(&self) -> &'static str {
-            "gfx942:xnack-"
-        }
-
-        pub const fn profile(&self) -> ExactLdsGemmProfileIdV1 {
-            ExactLdsGemmProfileIdV1::Slice1M16N16K16
-        }
-
-        pub const fn grid(&self) -> [u32; 3] {
-            [1, 1, 1]
-        }
-
-        pub const fn workgroup(&self) -> [u32; 3] {
-            [64, 1, 1]
-        }
-
-        pub const fn static_lds_bytes(&self) -> u32 {
-            1_024
-        }
-
-        pub const fn dynamic_lds_bytes(&self) -> u32 {
-            0
-        }
-
-        pub const fn explicit_kernarg_byte_len(&self) -> usize {
-            48
-        }
-
-        pub const fn complete_kernarg_byte_len(&self) -> u32 {
-            304
-        }
-
-        pub const fn kernarg_alignment(&self) -> u32 {
-            8
-        }
-
-        pub const fn length_identities_v1(&self) -> [ExactLdsGemmLengthIdentityV1; 3] {
-            unreachable!()
-        }
-
-        pub const fn observed_context_v1(&self) -> &ObservedContext {
-            &self.observed
-        }
-
-        pub const fn explicit_kernarg_bytes_v1(&self) -> &[u8; 48] {
-            unreachable!()
-        }
-    }
-}
-
-// Names expected at crate root by the production source.
-pub use fe2o3_host::{
-    HsaCodeObjectLoadObservationV1, HsaDispatchObservationV1, HsaEnvironmentObservationV1,
-    HsaExecutableObjectIdentityV1, HsaImplicitKernargInitializationObservationV1,
-    HsaKernelObjectIdentityV1, HsaKernelResolutionObservationV1, HsaLaunchGeometryV1,
-    HsaUnloadObservationV1, ReviewedHsaExecutableLifecycleAdapterV1,
-    ReviewedHsaImplicitKernargAdapterV1,
-};
-
-#[path = "../src/generated_lds_gemm_lifecycle.rs"]
-#[allow(dead_code)]
-mod generated_lds_gemm_lifecycle;
-
-use generated_lds_gemm_lifecycle::test_support::{
-    TestJoinMutationV1, exact_test_complete_bytes_v1, exact_test_explicit_bytes_v1,
-    exact_test_hsa_alignment_v1, exact_test_implicit_bytes_v1, exact_test_static_lds_v1,
-    load_test_lifecycle_v1, validate_join_mutation_v1,
-};
-use generated_lds_gemm_lifecycle::{
-    CompletedExactLdsGemmSlice1V1, ExactLdsGemmKernelResourceObservationV1,
-    ExactLdsGemmSlice1DispatchErrorV1, ExactLdsGemmSlice1LoadErrorV1,
-    ReviewedExactLdsGemmRuntimeAdapterV1,
 };
 
 #[allow(dead_code)]
@@ -840,7 +725,10 @@ fn adapter_panic_and_unload_ambiguity_are_process_terminal() {
     for mode in ["panic", "unload"] {
         let status = Command::new(std::env::current_exe().unwrap())
             .arg("--exact")
-            .arg("adapter_panic_and_unload_ambiguity_are_process_terminal")
+            .arg(
+                "generated_lds_gemm_lifecycle_tests::\
+                 adapter_panic_and_unload_ambiguity_are_process_terminal",
+            )
             .arg("--nocapture")
             .env(CHILD, mode)
             .status()
