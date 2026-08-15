@@ -59,7 +59,8 @@ entry:
   %values.ok = icmp eq i64 %values.len, 64
   %eligible.ok = icmp eq i64 %eligible.len, 64
   %lengths.ok = and i1 %values.ok, %eligible.ok
-  %target.aligned = icmp eq i64 (and i64 %target.address, 3), 0
+  %target.low-bits = and i64 %target.address, 3
+  %target.aligned = icmp eq i64 %target.low-bits, 0
   %target.nonnull = icmp ne i64 %target.address, 0
   %target.ok = and i1 %target.aligned, %target.nonnull
   %shape.ok = and i1 %lane.ok, %lengths.ok
@@ -81,7 +82,7 @@ atomic:
   %value.ptr = getelementptr inbounds i32, ptr addrspace(1) %values.data, i64 %lane64
   %value = load i32, ptr addrspace(1) %value.ptr, align 4
   %target.ptr = inttoptr i64 %target.address to ptr addrspace(1)
-  %old = atomicrmw add ptr addrspace(1) %target.ptr, i32 %value syncscope("system") monotonic, align 4
+  %old = atomicrmw add ptr addrspace(1) %target.ptr, i32 %value monotonic, align 4
   br label %return
 
 return:

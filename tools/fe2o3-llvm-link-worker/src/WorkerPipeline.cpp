@@ -140,13 +140,17 @@ struct TargetParts {
 enum class PostLinkProfile {
   LegacyGfx942G1,
   ExactLdsGemmSlice1,
-  ExactWave64CollectivesV1
+  ExactWave64CollectivesV1,
+  ExactWorkgroupLdsReductionV1,
+  ExactScopedAtomicV1
 };
 
 enum class MetadataValidationPolicy {
   Generic,
   ExactLdsGemmSlice1,
-  ExactWave64CollectivesV1
+  ExactWave64CollectivesV1,
+  ExactWorkgroupLdsReductionV1,
+  ExactScopedAtomicV1
 };
 
 constexpr StringLiteral ExactLdsGemmSlice1Entry = "tiled_gemm_lds_v1";
@@ -154,6 +158,15 @@ constexpr StringLiteral ExactLdsGemmSlice1Descriptor = "tiled_gemm_lds_v1.kd";
 constexpr StringLiteral ExactWave64CollectivesV1Entry = "wave64_collectives_v1";
 constexpr StringLiteral ExactWave64CollectivesV1Descriptor =
     "wave64_collectives_v1.kd";
+constexpr StringLiteral ExactWorkgroupLdsReductionV1Entry =
+    "lds_publish_read_reduce_i32_v1";
+constexpr StringLiteral ExactWorkgroupLdsReductionV1Descriptor =
+    "lds_publish_read_reduce_i32_v1.kd";
+constexpr StringLiteral ExactWorkgroupLdsReductionV1Scratch =
+    "__fe2o3_lds_reduction_v1_scratch";
+constexpr StringLiteral ExactScopedAtomicV1Entry = "scoped_atomic_add_u32_v1";
+constexpr StringLiteral ExactScopedAtomicV1Descriptor =
+    "scoped_atomic_add_u32_v1.kd";
 constexpr StringLiteral ExactLdsGemmSlice1ProducerDataLayout =
     "e-p:64:64-p1:64:64-p2:32:32-p3:32:32-p4:64:64-p5:32:32-p6:32:32-"
     "p7:160:256:256:32-p8:128:128:128:48-p9:192:256:256:32-i64:64-v16:16-"
@@ -183,6 +196,111 @@ constexpr std::array<uint8_t, 32> ExactWave64ProfileSha256 = {
     0xe0, 0xc4, 0x01, 0xf2, 0xaa, 0xda, 0x7c, 0x7d, 0x5d, 0x40, 0xbe,
     0xa7, 0xac, 0xee, 0x6a, 0xe7, 0xcf, 0xf4, 0x0f, 0x77, 0x68};
 
+enum class ExactWorkgroupSyncKind { LdsReduction, ScopedAtomic };
+
+struct ExactWorkgroupSyncProfile {
+  ExactWorkgroupSyncKind Kind;
+  StringLiteral Entry;
+  StringLiteral Descriptor;
+  StringLiteral SectionPrefix;
+  std::array<uint8_t, 32> BodySha256;
+  std::array<std::array<uint8_t, 32>, 11> SectionIdentities;
+  std::array<uint8_t, 32> MachineSha256;
+  StringLiteral Check;
+};
+
+constexpr ExactWorkgroupSyncProfile ExactWorkgroupLdsReductionV1 = {
+    ExactWorkgroupSyncKind::LdsReduction,
+    ExactWorkgroupLdsReductionV1Entry,
+    ExactWorkgroupLdsReductionV1Descriptor,
+    ".fe2o3.wg-lds",
+    {0x3e, 0x7f, 0xc2, 0x71, 0xc2, 0xce, 0xc1, 0x83, 0x10, 0x34, 0x1b,
+     0x60, 0xac, 0x44, 0x7c, 0xb4, 0xff, 0x91, 0x0f, 0x3e, 0xef, 0x50,
+     0x35, 0x17, 0x5d, 0x8b, 0x48, 0xb8, 0xa0, 0xd6, 0x56, 0x89},
+    {{{0x3e, 0x7e, 0xc0, 0x81, 0xc7, 0x95, 0x82, 0x88, 0xf9, 0xd9, 0x97,
+       0xd4, 0x0e, 0x6f, 0x41, 0xa7, 0xfa, 0xab, 0xc5, 0x6a, 0x3a, 0xdd,
+       0x73, 0x40, 0x99, 0xcd, 0x17, 0x77, 0x44, 0x3b, 0x29, 0x83},
+      {0x6b, 0xc8, 0xf4, 0x49, 0xf4, 0x58, 0xcf, 0x8f, 0x31, 0xb4, 0x62,
+       0x5b, 0x38, 0xb7, 0x20, 0x4d, 0xd3, 0x4f, 0x20, 0xbe, 0xea, 0xbb,
+       0x80, 0xb5, 0x54, 0x54, 0xa5, 0x66, 0x6b, 0xe7, 0x49, 0xb5},
+      {0xbb, 0x05, 0xd2, 0xed, 0xce, 0x90, 0x93, 0xf5, 0x3e, 0x68, 0xb6,
+       0x37, 0xe8, 0xa4, 0x6f, 0x70, 0x9a, 0x34, 0x1c, 0x29, 0x5a, 0x14,
+       0xfd, 0xee, 0xd7, 0x44, 0xfd, 0xa4, 0x7c, 0x3f, 0xdf, 0x3a},
+      {0x20, 0xd5, 0x49, 0x5b, 0x23, 0x66, 0x24, 0xc5, 0x1a, 0x67, 0x87,
+       0xd9, 0x95, 0x56, 0x94, 0x56, 0xb1, 0xa6, 0xbb, 0xfc, 0x7c, 0x70,
+       0xe5, 0x43, 0x69, 0x4d, 0xeb, 0xc6, 0x2b, 0xeb, 0x46, 0xb1},
+      {0xb3, 0x84, 0x04, 0x57, 0xdb, 0x66, 0x5f, 0x11, 0x4c, 0xae, 0xff,
+       0x92, 0xa4, 0xc7, 0xdd, 0xbe, 0x63, 0x88, 0xac, 0x14, 0xbe, 0xc4,
+       0x8c, 0x29, 0x77, 0xc9, 0xa6, 0x21, 0x16, 0x81, 0x40, 0xc6},
+      {0x1c, 0x9f, 0xfd, 0xb9, 0x49, 0xc2, 0x18, 0xc2, 0xca, 0xd9, 0x87,
+       0x55, 0x89, 0x57, 0xa2, 0x71, 0x9a, 0xf4, 0x92, 0x34, 0x91, 0x98,
+       0xbe, 0x95, 0xa9, 0x43, 0xf8, 0x46, 0x91, 0x05, 0xfd, 0xf2},
+      {0x50, 0x97, 0xff, 0x92, 0xf4, 0x88, 0x1d, 0x71, 0x17, 0x18, 0x29,
+       0x30, 0x84, 0x8d, 0x55, 0xab, 0x78, 0x1e, 0xe6, 0x82, 0x24, 0xe1,
+       0xac, 0x78, 0x9e, 0xbf, 0x85, 0xf8, 0xbd, 0x41, 0x98, 0xcf},
+      {0x28, 0x01, 0x83, 0x42, 0x9d, 0x4e, 0xcd, 0xc3, 0x28, 0x2f, 0xa0,
+       0xa7, 0x72, 0x74, 0xe2, 0x22, 0x26, 0xde, 0xc7, 0xda, 0xce, 0xb9,
+       0x1e, 0xb4, 0x21, 0xa3, 0x3c, 0x8d, 0xc6, 0x8b, 0x0f, 0x2b},
+      {0x20, 0x8a, 0x56, 0x97, 0xf3, 0x78, 0x9f, 0x56, 0x81, 0xfe, 0xf0,
+       0xdd, 0x59, 0x25, 0xfb, 0x46, 0xea, 0x72, 0x14, 0x72, 0x9f, 0x9f,
+       0xdd, 0xfa, 0xbc, 0x35, 0x7f, 0xfb, 0xdf, 0xff, 0x80, 0xd0},
+      {0xba, 0x37, 0xb8, 0x71, 0x05, 0xee, 0x1e, 0xb2, 0x6d, 0x8a, 0x36,
+       0x52, 0x3b, 0x15, 0xa6, 0xe4, 0xfe, 0x78, 0x19, 0x98, 0xe5, 0x42,
+       0x5e, 0xb2, 0x36, 0xdd, 0x46, 0xbc, 0xf8, 0x05, 0xce, 0x7f},
+      {0x82, 0xde, 0x81, 0x98, 0xaf, 0xd7, 0xbc, 0xd5, 0x08, 0x2d, 0x08,
+       0x95, 0xb8, 0xf6, 0x2a, 0xba, 0xef, 0x1d, 0x31, 0xfb, 0x7b, 0x0c,
+       0x0d, 0xe7, 0xd6, 0xb6, 0xb5, 0x20, 0x1a, 0x75, 0x94, 0xa7}}},
+    {0xcf, 0x07, 0x6a, 0xdc, 0xb1, 0x44, 0xf1, 0x44, 0x79, 0x89, 0x8c,
+     0xc6, 0x20, 0xd4, 0x9d, 0x1a, 0x5e, 0x0c, 0x1c, 0xcd, 0xb0, 0x9d,
+     0x17, 0xa8, 0x99, 0xca, 0x97, 0xfc, 0x21, 0xbe, 0xfc, 0x45},
+    "workgroup_lds_reduction_v1_profile"};
+
+constexpr ExactWorkgroupSyncProfile ExactScopedAtomicV1 = {
+    ExactWorkgroupSyncKind::ScopedAtomic,
+    ExactScopedAtomicV1Entry,
+    ExactScopedAtomicV1Descriptor,
+    ".fe2o3.wg-atomic",
+    {0x3e, 0xaa, 0x73, 0x33, 0x7b, 0xfc, 0x6c, 0x4a, 0x57, 0xea, 0xf2,
+     0x7b, 0x37, 0xb7, 0x37, 0x29, 0x3c, 0x97, 0xa9, 0xbc, 0x70, 0x4b,
+     0x95, 0x29, 0x27, 0x69, 0xc6, 0x89, 0x44, 0xe6, 0xf2, 0x3e},
+    {{{0xc0, 0xf0, 0x0a, 0x14, 0xc5, 0x94, 0x1f, 0x34, 0x74, 0x1f, 0xc1,
+       0x0c, 0xa7, 0x79, 0x8c, 0xe9, 0xcf, 0x47, 0x28, 0x82, 0x94, 0xb0,
+       0xbc, 0xc4, 0x3c, 0xdd, 0xb7, 0xd2, 0x2b, 0xbf, 0xe9, 0x7e},
+      {0x40, 0x93, 0x57, 0xef, 0x99, 0xd9, 0xec, 0x78, 0xc9, 0x60, 0xcc,
+       0xa0, 0xe2, 0x1a, 0x4e, 0x15, 0x3c, 0x60, 0xaf, 0x52, 0x2c, 0x1c,
+       0x4d, 0x72, 0x6a, 0x9f, 0x23, 0xb5, 0xc7, 0x27, 0x1b, 0x91},
+      {0xcb, 0xe0, 0x12, 0xbd, 0xe7, 0x63, 0x22, 0x7f, 0xcf, 0x4e, 0x22,
+       0x35, 0x75, 0xf8, 0x93, 0x5f, 0xd8, 0x6b, 0xfa, 0xf2, 0xc9, 0x81,
+       0x72, 0xb0, 0x9d, 0xe1, 0x1f, 0xf0, 0x79, 0xb1, 0x34, 0x86},
+      {0x52, 0x1d, 0xec, 0x6e, 0x8e, 0x00, 0xb3, 0x8a, 0x4c, 0x47, 0x9c,
+       0xf3, 0xb9, 0x3d, 0x51, 0x54, 0x43, 0x18, 0xcd, 0x2b, 0xac, 0xe9,
+       0xb0, 0x8c, 0x56, 0xe2, 0xd6, 0xaf, 0x57, 0xab, 0x37, 0xf5},
+      {0xfa, 0xd7, 0x32, 0x25, 0x2d, 0xa6, 0x44, 0xac, 0xb7, 0xa3, 0x8f,
+       0x09, 0x13, 0xe0, 0x62, 0x46, 0x12, 0x09, 0x3a, 0x7d, 0x98, 0x29,
+       0x42, 0x49, 0x7c, 0x3d, 0xe4, 0xda, 0x4f, 0x4b, 0xc8, 0x2f},
+      {0xbc, 0xf7, 0xe8, 0x74, 0xdb, 0x23, 0x61, 0x57, 0xdd, 0x6a, 0x8d,
+       0x8d, 0x76, 0xc6, 0x9b, 0x69, 0x04, 0x17, 0x3e, 0xfe, 0xb5, 0x4f,
+       0x89, 0x05, 0xb9, 0xae, 0x1d, 0x48, 0x10, 0xca, 0x7b, 0x76},
+      {0x20, 0xa0, 0x07, 0x6e, 0x0e, 0xe9, 0xeb, 0x4e, 0x8d, 0xd9, 0x0e,
+       0x60, 0x1b, 0x36, 0x8f, 0xf3, 0x95, 0x78, 0x5d, 0xfe, 0xf1, 0xfd,
+       0x5c, 0x80, 0x6d, 0x13, 0x18, 0x74, 0x16, 0x75, 0xe8, 0x14},
+      {0x3c, 0x40, 0x36, 0xa3, 0x27, 0xf8, 0x60, 0xf7, 0x90, 0x47, 0x93,
+       0x87, 0x98, 0xf2, 0x98, 0x33, 0xe7, 0x43, 0x94, 0xdf, 0x76, 0xff,
+       0xce, 0x7b, 0x40, 0x48, 0xb0, 0x0b, 0x6b, 0x59, 0xb6, 0x21},
+      {0xfd, 0xe8, 0x3d, 0x5b, 0x84, 0x2a, 0x55, 0xde, 0x02, 0x38, 0x37,
+       0xac, 0xcd, 0x46, 0xe1, 0x56, 0xcb, 0x9c, 0x77, 0xfe, 0xd9, 0x7b,
+       0xc0, 0xdf, 0x55, 0x93, 0x61, 0x02, 0x84, 0x3c, 0xee, 0xa3},
+      {0x99, 0x84, 0xf9, 0x51, 0x79, 0xcd, 0xc2, 0x5b, 0x14, 0x55, 0x0e,
+       0x06, 0xb0, 0x4c, 0x2f, 0x91, 0x8b, 0xcd, 0xa9, 0xcb, 0x9b, 0x4e,
+       0xbb, 0xef, 0x26, 0xb7, 0xcc, 0xa7, 0x02, 0x21, 0x05, 0x0f},
+      {0x44, 0x38, 0x0e, 0xb9, 0x88, 0xca, 0x81, 0x46, 0x4d, 0x38, 0x2d,
+       0xa6, 0xd2, 0xec, 0x08, 0x4b, 0xdf, 0x64, 0xb4, 0xac, 0x76, 0xc3,
+       0xc7, 0x25, 0xb6, 0x92, 0xca, 0x53, 0xdc, 0x1c, 0x42, 0x00}}},
+    {0xda, 0xb7, 0x5d, 0x4a, 0xf4, 0x69, 0x8f, 0x71, 0x36, 0x91, 0xa3,
+     0x5f, 0x43, 0xf5, 0x0c, 0x5b, 0xeb, 0xd2, 0x0f, 0x79, 0x6b, 0x08,
+     0xb1, 0xb6, 0xb1, 0xb9, 0xc3, 0xde, 0x10, 0x11, 0x47, 0x51},
+    "scoped_atomic_v1_profile"};
+
 bool isExactLdsGemmSlice1SymbolSet(ArrayRef<std::string> Symbols) {
   return std::set<std::string>(Symbols.begin(), Symbols.end()) ==
          std::set<std::string>{ExactLdsGemmSlice1Entry.str(),
@@ -193,6 +311,13 @@ bool isExactWave64CollectivesV1SymbolSet(ArrayRef<std::string> Symbols) {
   return std::set<std::string>(Symbols.begin(), Symbols.end()) ==
          std::set<std::string>{ExactWave64CollectivesV1Entry.str(),
                                ExactWave64CollectivesV1Descriptor.str()};
+}
+
+bool isExactWorkgroupSyncSymbolSet(
+    ArrayRef<std::string> Symbols,
+    const ExactWorkgroupSyncProfile &Profile) {
+  return std::set<std::string>(Symbols.begin(), Symbols.end()) ==
+         std::set<std::string>{Profile.Entry.str(), Profile.Descriptor.str()};
 }
 
 bool isExactLdsGemmSlice1RequestCandidate(const Request &RequestValue) {
@@ -249,6 +374,43 @@ bool isClosedExactWave64CollectivesV1Request(const Request &RequestValue) {
          RequestValue.LinkOptions.VerifyEach;
 }
 
+bool isExactWorkgroupSyncRequestCandidate(
+    const Request &RequestValue, const ExactWorkgroupSyncProfile &Profile) {
+  bool CompilerInputMatches =
+      RequestValue.Inputs.size() == 1 &&
+      RequestValue.CompilerModule.Kind == InputKind::LlvmTextIr &&
+      RequestValue.Inputs.front().Kind == RequestValue.CompilerModule.Kind &&
+      RequestValue.Inputs.front().Digest == RequestValue.CompilerModule.Digest &&
+      RequestValue.Inputs.front().Bytes == RequestValue.CompilerModule.Bytes;
+  return RequestValue.Protocol == ProtocolVersion::V2 &&
+         RequestValue.Target == "gfx942:xnack-" &&
+         RequestValue.CodeObjectVersion == 6 && CompilerInputMatches &&
+         RequestValue.ExternalProviders.empty() &&
+         RequestValue.ImportSymbols.empty() &&
+         RequestValue.ExportSymbols.empty() &&
+         isExactWorkgroupSyncSymbolSet(RequestValue.RequiredSymbols, Profile) &&
+         isExactWorkgroupSyncSymbolSet(RequestValue.ExpectedDefinedSymbols,
+                                       Profile) &&
+         isExactWorkgroupSyncSymbolSet(RequestValue.FinalSymbols, Profile);
+}
+
+bool isClosedExactWorkgroupSyncRequest(
+    const Request &RequestValue, const ExactWorkgroupSyncProfile &Profile) {
+  return isExactWorkgroupSyncRequestCandidate(RequestValue, Profile) &&
+         RequestValue.LinkOptions.Optimization == OptimizationLevel::O2 &&
+         RequestValue.LinkOptions.StripDebug &&
+         RequestValue.LinkOptions.VerifyEach;
+}
+
+const ExactWorkgroupSyncProfile *
+exactWorkgroupSyncProfile(const Request &RequestValue) {
+  for (const ExactWorkgroupSyncProfile *Profile :
+       {&ExactWorkgroupLdsReductionV1, &ExactScopedAtomicV1})
+    if (isExactWorkgroupSyncRequestCandidate(RequestValue, *Profile))
+      return Profile;
+  return nullptr;
+}
+
 bool namesExactWave64CollectivesV1(ArrayRef<std::string> Symbols) {
   return llvm::any_of(Symbols, [](StringRef Symbol) {
     return Symbol == ExactWave64CollectivesV1Entry ||
@@ -262,6 +424,22 @@ bool mentionsExactWave64CollectivesV1(const Request &RequestValue) {
          namesExactWave64CollectivesV1(RequestValue.ImportSymbols) ||
          namesExactWave64CollectivesV1(RequestValue.ExportSymbols) ||
          namesExactWave64CollectivesV1(RequestValue.FinalSymbols);
+}
+
+bool mentionsExactWorkgroupSync(const Request &RequestValue) {
+  auto Mentions = [&](ArrayRef<std::string> Symbols) {
+    return llvm::any_of(Symbols, [](StringRef Symbol) {
+      return Symbol == ExactWorkgroupLdsReductionV1Entry ||
+             Symbol == ExactWorkgroupLdsReductionV1Descriptor ||
+             Symbol == ExactScopedAtomicV1Entry ||
+             Symbol == ExactScopedAtomicV1Descriptor;
+    });
+  };
+  return Mentions(RequestValue.RequiredSymbols) ||
+         Mentions(RequestValue.ExpectedDefinedSymbols) ||
+         Mentions(RequestValue.ImportSymbols) ||
+         Mentions(RequestValue.ExportSymbols) ||
+         Mentions(RequestValue.FinalSymbols);
 }
 
 Expected<PostLinkProfile>
@@ -284,7 +462,30 @@ selectPostLinkProfile(const Request &RequestValue,
                            "closed Worker V2 profile");
     return PostLinkProfile::ExactWave64CollectivesV1;
   }
+  for (const auto &[Profile, Kind] :
+       {std::pair{&ExactWorkgroupLdsReductionV1,
+                  PostLinkProfile::ExactWorkgroupLdsReductionV1},
+        std::pair{&ExactScopedAtomicV1,
+                  PostLinkProfile::ExactScopedAtomicV1}}) {
+    const std::set<std::string> Symbols = {Profile->Entry.str(),
+                                           Profile->Descriptor.str()};
+    if (ExpectedSymbols != Symbols)
+      continue;
+    if (!isClosedExactWorkgroupSyncRequest(RequestValue, *Profile))
+      return pipelineError(Twine("exact ") + Profile->Check +
+                           " symbols require the closed Worker V2 profile");
+    return Kind;
+  }
   return PostLinkProfile::LegacyGfx942G1;
+}
+
+const ExactWorkgroupSyncProfile *
+postLinkWorkgroupSyncProfile(PostLinkProfile Profile) {
+  if (Profile == PostLinkProfile::ExactWorkgroupLdsReductionV1)
+    return &ExactWorkgroupLdsReductionV1;
+  if (Profile == PostLinkProfile::ExactScopedAtomicV1)
+    return &ExactScopedAtomicV1;
+  return nullptr;
 }
 
 TargetParts parseTarget(StringRef Target) {
@@ -410,6 +611,311 @@ Error validateExactWave64CompilerInput(StringRef Text) {
     if (ArrayRef((*Sections)[Index + 2]) != ArrayRef(ExpectedIdentities[Index]))
       return pipelineError(
           "exact Wave64 compiler/KIR profile identity does not match");
+  return Error::success();
+}
+
+Expected<std::array<std::vector<uint8_t>, 12>>
+parseExactWorkgroupSyncCompilerSections(
+    StringRef Text, const ExactWorkgroupSyncProfile &Profile) {
+  constexpr StringLiteral Marker = "\nmodule asm \".section ";
+  size_t BodyEnd = Text.find(Marker);
+  if (BodyEnd == StringRef::npos)
+    return pipelineError("exact workgroup-sync compiler module is missing "
+                         "identity sections");
+  if (SHA256::hash(arrayRefFromStringRef(Text.take_front(BodyEnd))) !=
+      Profile.BodySha256)
+    return pipelineError(
+        "exact workgroup-sync compiler module body identity does not match");
+
+  const std::array<std::string, 12> Sections = {
+      ExactWave64DescriptorSection.str(),
+      (Twine(Profile.SectionPrefix) + ".source.v1").str(),
+      (Twine(Profile.SectionPrefix) + ".namespace.v1").str(),
+      (Twine(Profile.SectionPrefix) + ".authority.v1").str(),
+      (Twine(Profile.SectionPrefix) + ".mir.v1").str(),
+      (Twine(Profile.SectionPrefix) + ".fnabi.v1").str(),
+      (Twine(Profile.SectionPrefix) + ".semantics.v1").str(),
+      (Twine(Profile.SectionPrefix) + ".terminals.v3").str(),
+      (Twine(Profile.SectionPrefix) + ".abi.v1").str(),
+      (Twine(Profile.SectionPrefix) + ".effects.v1").str(),
+      (Twine(Profile.SectionPrefix) + ".resources.v1").str(),
+      (Twine(Profile.SectionPrefix) + ".kir.v1").str()};
+  SmallVector<StringRef, 160> Lines;
+  Text.drop_front(BodyEnd + 1).split(Lines, '\n', -1, true);
+  std::array<std::vector<uint8_t>, Sections.size()> Result;
+  size_t LineIndex = 0;
+  for (size_t SectionIndex = 0; SectionIndex != Sections.size();
+       ++SectionIndex) {
+    if (SectionIndex != 0 && LineIndex != Lines.size() &&
+        Lines[LineIndex].empty())
+      ++LineIndex;
+    std::string ExpectedHeader =
+        (Twine("module asm \".section ") + Sections[SectionIndex] +
+         ",\\22\\22,@progbits\"")
+            .str();
+    if (LineIndex == Lines.size() || Lines[LineIndex] != ExpectedHeader)
+      return pipelineError(
+          Twine("exact workgroup-sync compiler module section order does "
+                "not match at ") +
+          Twine(SectionIndex));
+    ++LineIndex;
+    if (LineIndex == Lines.size() ||
+        Lines[LineIndex] != "module asm \".balign 8\"")
+      return pipelineError(
+          "exact workgroup-sync compiler module section alignment does not "
+          "match");
+    ++LineIndex;
+
+    constexpr StringLiteral BytePrefix = "module asm \".byte ";
+    while (LineIndex != Lines.size() &&
+           Lines[LineIndex].starts_with(BytePrefix)) {
+      StringRef Line = Lines[LineIndex++];
+      if (!Line.ends_with("\""))
+        return pipelineError(
+            "exact workgroup-sync compiler module byte record is malformed");
+      SmallVector<StringRef, 16> ByteAtoms;
+      Line.drop_front(BytePrefix.size())
+          .drop_back()
+          .split(ByteAtoms, ',', -1, false);
+      if (ByteAtoms.empty() || ByteAtoms.size() > 16)
+        return pipelineError(
+            "exact workgroup-sync compiler module byte record is "
+            "noncanonical");
+      for (StringRef Atom : ByteAtoms) {
+        Atom = Atom.trim();
+        if (!Atom.consume_front("0x") || Atom.size() != 2)
+          return pipelineError(
+              "exact workgroup-sync compiler module byte atom is malformed");
+        uint8_t Byte = 0;
+        if (Atom.getAsInteger(16, Byte))
+          return pipelineError(
+              "exact workgroup-sync compiler module byte atom is malformed");
+        Result[SectionIndex].push_back(Byte);
+      }
+    }
+    if (Result[SectionIndex].empty())
+      return pipelineError(
+          "exact workgroup-sync compiler module section is empty");
+  }
+  if (LineIndex != Lines.size() &&
+      !(LineIndex + 1 == Lines.size() && Lines[LineIndex].empty()))
+    return pipelineError(
+        "exact workgroup-sync compiler module has trailing assembly");
+  return Result;
+}
+
+Error validateExactWorkgroupSyncCompilerInput(
+    StringRef Text, const ExactWorkgroupSyncProfile &Profile) {
+  auto Sections = parseExactWorkgroupSyncCompilerSections(Text, Profile);
+  if (!Sections)
+    return Sections.takeError();
+  if ((*Sections)[0].size() > 64 * 1024)
+    return pipelineError(
+        "exact workgroup-sync compiler descriptor section is too large");
+  for (size_t Index = 0; Index != Profile.SectionIdentities.size(); ++Index)
+    if (ArrayRef((*Sections)[Index + 1]) !=
+        ArrayRef(Profile.SectionIdentities[Index]))
+      return pipelineError(
+          "exact workgroup-sync source/KIR/profile identity does not match");
+  return Error::success();
+}
+
+Error validateExactWorkgroupSyncModule(
+    const Module &ModuleValue, const ExactWorkgroupSyncProfile &Profile) {
+  if (ModuleValue.getTargetTriple().getTriple() != AmdGpuTriple ||
+      ModuleValue.getDataLayoutStr() != ExactLdsGemmSlice1ProducerDataLayout)
+    return pipelineError(
+        "exact workgroup-sync LLVM module envelope does not match");
+
+  const Function *Kernel = nullptr;
+  std::set<std::string> Declarations;
+  for (const Function &FunctionValue : ModuleValue) {
+    if (FunctionValue.isDeclaration()) {
+      Declarations.insert(FunctionValue.getName().str());
+      continue;
+    }
+    if (Kernel)
+      return pipelineError(
+          "exact workgroup-sync LLVM module has multiple definitions");
+    Kernel = &FunctionValue;
+  }
+  const std::set<std::string> ExpectedDeclarations =
+      Profile.Kind == ExactWorkgroupSyncKind::LdsReduction
+          ? std::set<std::string>{"llvm.amdgcn.workitem.id.x",
+                                  "llvm.amdgcn.s.barrier", "llvm.trap"}
+          : std::set<std::string>{"llvm.amdgcn.workitem.id.x", "llvm.trap"};
+  if (!Kernel || Kernel->getName() != Profile.Entry ||
+      Kernel->getCallingConv() != CallingConv::AMDGPU_KERNEL ||
+      !Kernel->getReturnType()->isVoidTy() || Kernel->isVarArg() ||
+      Kernel->arg_size() != 5 || Declarations != ExpectedDeclarations)
+    return pipelineError(
+        "exact workgroup-sync LLVM function closure does not match");
+
+  const std::array<unsigned, 5> AddressSpaces =
+      Profile.Kind == ExactWorkgroupSyncKind::LdsReduction
+          ? std::array<unsigned, 5>{1, 0, 0, 1, 0}
+          : std::array<unsigned, 5>{1, 0, 1, 0, 0};
+  const std::array<StringRef, 5> Names =
+      Profile.Kind == ExactWorkgroupSyncKind::LdsReduction
+          ? std::array<StringRef, 5>{"values.data", "values.len", "epoch",
+                                     "output.data", "output.len"}
+          : std::array<StringRef, 5>{"values.data", "values.len",
+                                     "eligible.data", "eligible.len",
+                                     "target.address"};
+  size_t ArgumentIndex = 0;
+  for (const Argument &ArgumentValue : Kernel->args()) {
+    Type *TypeValue = ArgumentValue.getType();
+    const bool IsLdsEpoch =
+        Profile.Kind == ExactWorkgroupSyncKind::LdsReduction &&
+        ArgumentIndex == 2;
+    if (ArgumentValue.getName() != Names[ArgumentIndex] ||
+        (AddressSpaces[ArgumentIndex] == 1
+             ? !TypeValue->isPointerTy() ||
+                   TypeValue->getPointerAddressSpace() != 1
+             : IsLdsEpoch ? !TypeValue->isIntegerTy(32)
+                          : !TypeValue->isIntegerTy(64)))
+      return pipelineError(
+          "exact workgroup-sync LLVM argument ABI does not match");
+    ++ArgumentIndex;
+  }
+
+  if (Kernel->getFnAttribute("target-cpu").getValueAsString() != "gfx942" ||
+      Kernel->getFnAttribute("target-features").getValueAsString() !=
+          "-wavefrontsize32,+wavefrontsize64,-xnack" ||
+      Kernel->getFnAttribute("amdgpu-flat-work-group-size")
+              .getValueAsString() != "64,64")
+    return pipelineError(
+        "exact workgroup-sync LLVM target attributes do not match");
+  MDNode *Workgroup = Kernel->getMetadata("reqd_work_group_size");
+  if (!Workgroup || Workgroup->getNumOperands() != 3)
+    return pipelineError(
+        "exact workgroup-sync LLVM workgroup metadata does not match");
+  static constexpr std::array<uint64_t, 3> WorkgroupShape = {64, 1, 1};
+  for (size_t Index = 0; Index != WorkgroupShape.size(); ++Index) {
+    auto *Value =
+        mdconst::dyn_extract<ConstantInt>(Workgroup->getOperand(Index));
+    if (!Value || Value->getZExtValue() != WorkgroupShape[Index])
+      return pipelineError(
+          "exact workgroup-sync LLVM workgroup metadata does not match");
+  }
+
+  size_t WorkitemIds = 0;
+  size_t Traps = 0;
+  size_t Barriers = 0;
+  size_t GlobalLoads = 0;
+  size_t GlobalStores = 0;
+  size_t LdsLoads = 0;
+  size_t LdsStores = 0;
+  size_t WorkgroupReleaseFences = 0;
+  size_t WorkgroupAcquireFences = 0;
+  size_t AtomicAdds = 0;
+  size_t GlobalIntToPointers = 0;
+  SyncScope::ID WorkgroupScope =
+      ModuleValue.getContext().getOrInsertSyncScopeID("workgroup");
+  for (const Instruction &InstructionValue : instructions(*Kernel)) {
+    if (const auto *Load = dyn_cast<LoadInst>(&InstructionValue)) {
+      if (!Load->getType()->isIntegerTy(32) || Load->getAlign() != Align(4) ||
+          Load->isAtomic())
+        return pipelineError(
+            "exact workgroup-sync LLVM load effect does not match");
+      if (Load->getPointerAddressSpace() == 1)
+        ++GlobalLoads;
+      else if (Load->getPointerAddressSpace() == 3)
+        ++LdsLoads;
+      else
+        return pipelineError(
+            "exact workgroup-sync LLVM load address space does not match");
+    }
+    if (const auto *Store = dyn_cast<StoreInst>(&InstructionValue)) {
+      if (!Store->getValueOperand()->getType()->isIntegerTy(32) ||
+          Store->getAlign() != Align(4) || Store->isAtomic())
+        return pipelineError(
+            "exact workgroup-sync LLVM store effect does not match");
+      if (Store->getPointerAddressSpace() == 1)
+        ++GlobalStores;
+      else if (Store->getPointerAddressSpace() == 3)
+        ++LdsStores;
+      else
+        return pipelineError(
+            "exact workgroup-sync LLVM store address space does not match");
+    }
+    if (const auto *Fence = dyn_cast<FenceInst>(&InstructionValue)) {
+      if (Fence->getSyncScopeID() != WorkgroupScope)
+        return pipelineError(
+            "exact workgroup-sync LLVM fence scope does not match");
+      if (Fence->getOrdering() == AtomicOrdering::Release)
+        ++WorkgroupReleaseFences;
+      else if (Fence->getOrdering() == AtomicOrdering::Acquire)
+        ++WorkgroupAcquireFences;
+      else
+        return pipelineError(
+            "exact workgroup-sync LLVM fence ordering does not match");
+    }
+    if (const auto *Atomic = dyn_cast<AtomicRMWInst>(&InstructionValue)) {
+      if (Atomic->getOperation() != AtomicRMWInst::Add ||
+          !Atomic->getValOperand()->getType()->isIntegerTy(32) ||
+          Atomic->getPointerAddressSpace() != 1 ||
+          Atomic->getAlign() != Align(4) ||
+          Atomic->getOrdering() != AtomicOrdering::Monotonic ||
+          Atomic->getSyncScopeID() != SyncScope::System)
+        return pipelineError(
+            "exact scoped-atomic operation/order/scope/address space does "
+            "not match");
+      ++AtomicAdds;
+    }
+    if (const auto *Cast = dyn_cast<IntToPtrInst>(&InstructionValue)) {
+      if (!Cast->getOperand(0)->getType()->isIntegerTy(64) ||
+          !Cast->getType()->isPointerTy() ||
+          Cast->getType()->getPointerAddressSpace() != 1)
+        return pipelineError(
+            "exact scoped-atomic pointer conversion does not match");
+      ++GlobalIntToPointers;
+    }
+    const auto *Call = dyn_cast<CallBase>(&InstructionValue);
+    if (!Call)
+      continue;
+    const Function *Callee = Call->getCalledFunction();
+    if (!Callee)
+      return pipelineError(
+          "exact workgroup-sync LLVM module has an indirect call");
+    if (Callee->getName() == "llvm.amdgcn.workitem.id.x")
+      ++WorkitemIds;
+    else if (Callee->getName() == "llvm.trap")
+      ++Traps;
+    else if (Callee->getName() == "llvm.amdgcn.s.barrier")
+      ++Barriers;
+    else
+      return pipelineError(
+          "exact workgroup-sync LLVM call closure does not match");
+  }
+
+  if (Profile.Kind == ExactWorkgroupSyncKind::LdsReduction) {
+    const GlobalVariable *Scratch =
+        ModuleValue.getNamedGlobal(ExactWorkgroupLdsReductionV1Scratch);
+    const auto *Array =
+        Scratch ? dyn_cast<ArrayType>(Scratch->getValueType()) : nullptr;
+    if (!Scratch || Scratch->getAddressSpace() != 3 ||
+        !Scratch->isDeclaration() || !Array || Array->getNumElements() != 0 ||
+        !Array->getElementType()->isIntegerTy(32) ||
+        Scratch->getAlign() != Align(4) ||
+        std::distance(ModuleValue.global_begin(), ModuleValue.global_end()) !=
+            1 ||
+        WorkitemIds != 1 || Traps != 1 || Barriers != 2 || GlobalLoads != 1 ||
+        GlobalStores != 1 || LdsLoads != 1 || LdsStores != 1 ||
+        WorkgroupReleaseFences != 2 || WorkgroupAcquireFences != 2 ||
+        AtomicAdds != 0 || GlobalIntToPointers != 0)
+      return pipelineError(
+          "exact LDS allocation/epoch/barrier operation closure does not "
+          "match");
+  } else if (ModuleValue.global_begin() != ModuleValue.global_end() ||
+             WorkitemIds != 1 || Traps != 1 || Barriers != 0 ||
+             GlobalLoads != 2 || GlobalStores != 0 || LdsLoads != 0 ||
+             LdsStores != 0 || WorkgroupReleaseFences != 0 ||
+             WorkgroupAcquireFences != 0 || AtomicAdds != 1 ||
+             GlobalIntToPointers != 1) {
+    return pipelineError(
+        "exact scoped-atomic effect closure does not match");
+  }
   return Error::success();
 }
 
@@ -691,7 +1197,8 @@ Error setAndCheckModuleContract(Module &ModuleValue,
     return pipelineError("bitcode target triple does not match AMDHSA");
   bool ExactProducerLayout =
       (isExactLdsGemmSlice1RequestCandidate(RequestValue) ||
-       isExactWave64CollectivesV1RequestCandidate(RequestValue)) &&
+       isExactWave64CollectivesV1RequestCandidate(RequestValue) ||
+       exactWorkgroupSyncProfile(RequestValue) != nullptr) &&
       ModuleValue.getDataLayoutStr() == ExactLdsGemmSlice1ProducerDataLayout;
   if (!ModuleValue.getDataLayoutStr().empty() &&
       ModuleValue.getDataLayout() != Machine.createDataLayout() &&
@@ -811,6 +1318,10 @@ parseModuleInput(const Input &InputValue, StringRef InputName,
   if (isClosedExactWave64CollectivesV1Request(RequestValue))
     if (Error E = validateExactWave64CompilerInput(Bytes))
       return E;
+  if (const ExactWorkgroupSyncProfile *Profile =
+          exactWorkgroupSyncProfile(RequestValue))
+    if (Error E = validateExactWorkgroupSyncCompilerInput(Bytes, *Profile))
+      return E;
   DataLayout ExpectedLayout = Machine.createDataLayout();
   bool AcceptedLayout = false;
   ParserCallbacks Callbacks([&](StringRef TripleValue, StringRef Layout) {
@@ -848,7 +1359,8 @@ parseModuleInput(const Input &InputValue, StringRef InputName,
         ObservedLayout.empty() ||
         TextModule->getDataLayout() == ExpectedLayout ||
         ((isExactLdsGemmSlice1RequestCandidate(RequestValue) ||
-          isExactWave64CollectivesV1RequestCandidate(RequestValue)) &&
+          isExactWave64CollectivesV1RequestCandidate(RequestValue) ||
+          exactWorkgroupSyncProfile(RequestValue) != nullptr) &&
          ObservedLayout == ExactLdsGemmSlice1ProducerDataLayout);
     return TextModule;
   }();
@@ -860,6 +1372,10 @@ parseModuleInput(const Input &InputValue, StringRef InputName,
         "LLVM module data layout does not match target machine");
   if (isClosedExactWave64CollectivesV1Request(RequestValue))
     if (Error E = validateExactWave64CollectivesModule(**Parsed))
+      return E;
+  if (const ExactWorkgroupSyncProfile *Profile =
+          exactWorkgroupSyncProfile(RequestValue))
+    if (Error E = validateExactWorkgroupSyncModule(**Parsed, *Profile))
       return E;
   if (Error E = setAndCheckModuleContract(**Parsed, RequestValue, Machine,
                                           MeasuredBuiltinProvider))
@@ -1089,6 +1605,17 @@ std::string diagnosticAtom(StringRef Value) {
   return Result;
 }
 
+std::string digestHex(ArrayRef<uint8_t> Digest) {
+  static constexpr char Hex[] = "0123456789abcdef";
+  std::string Result;
+  Result.reserve(Digest.size() * 2);
+  for (uint8_t Byte : Digest) {
+    Result.push_back(Hex[Byte >> 4]);
+    Result.push_back(Hex[Byte & 0x0f]);
+  }
+  return Result;
+}
+
 std::string diagnosticList(const std::set<std::string> &Values) {
   std::string Result = "[";
   for (const std::string &Value : Values) {
@@ -1233,6 +1760,24 @@ Error requireExactCompilerImports(const Request &RequestValue,
   return Error::success();
 }
 
+Error validateExactDynamicLdsPseudoImport(const Request &RequestValue,
+                                          std::set<std::string> &Imports,
+                                          StringRef Source,
+                                          bool MustBePresent) {
+  const ExactWorkgroupSyncProfile *Profile =
+      exactWorkgroupSyncProfile(RequestValue);
+  if (!Profile || Profile->Kind != ExactWorkgroupSyncKind::LdsReduction)
+    return Error::success();
+  bool Present = Imports.erase(ExactWorkgroupLdsReductionV1Scratch.str()) == 1;
+  if (Present != MustBePresent)
+    return pipelineError(
+        Twine("exact LDS reduction ") + Source +
+        (MustBePresent
+             ? " does not contain its single dynamic-LDS pseudo-import"
+             : " retained its dynamic-LDS pseudo-import after codegen"));
+  return Error::success();
+}
+
 Expected<SymbolContract>
 inspectNormalizedCompilerModule(const Request &RequestValue,
                                 TargetMachine &Machine) {
@@ -1260,6 +1805,14 @@ inspectNormalizedCompilerModule(const Request &RequestValue,
   SymbolContract EmittedSymbols{std::move(ObjectSymbols->Definitions),
                                 std::move(ObjectSymbols->PublicDefinitions),
                                 std::move(ObjectSymbols->RequiredImports)};
+
+  if (Error E = validateExactDynamicLdsPseudoImport(
+          RequestValue, IrSymbols.RequiredImports, "LLVM module", true))
+    return E;
+  if (Error E = validateExactDynamicLdsPseudoImport(
+          RequestValue, EmittedSymbols.RequiredImports, "relocatable object",
+          false))
+    return E;
 
   if (Error E = requireExactCompilerImports(RequestValue, IrSymbols, ""))
     return E;
@@ -1534,6 +2087,22 @@ Error validateExactMetadataKeys(msgpack::MapDocNode &Root, StringRef Check) {
   return Error::success();
 }
 
+StringRef exactMetadataCheck(MetadataValidationPolicy Policy) {
+  switch (Policy) {
+  case MetadataValidationPolicy::ExactLdsGemmSlice1:
+    return "lds_gemm_slice1_profile";
+  case MetadataValidationPolicy::ExactWave64CollectivesV1:
+    return "wave64_collectives_v1_profile";
+  case MetadataValidationPolicy::ExactWorkgroupLdsReductionV1:
+    return ExactWorkgroupLdsReductionV1.Check;
+  case MetadataValidationPolicy::ExactScopedAtomicV1:
+    return ExactScopedAtomicV1.Check;
+  case MetadataValidationPolicy::Generic:
+    break;
+  }
+  llvm_unreachable("generic metadata has no exact check name");
+}
+
 Expected<std::optional<std::vector<KernelArgumentContract>>>
 metadataArguments(msgpack::MapDocNode &Kernel, uint64_t KernargSegmentSize,
                   MetadataValidationPolicy Policy) {
@@ -1661,10 +2230,7 @@ Error appendMetadataBlob(StringRef MetadataBlob, MetadataContract &Result,
 
   auto &Root = Document.getRoot().getMap();
   if (Policy != MetadataValidationPolicy::Generic) {
-    StringRef Check = Policy == MetadataValidationPolicy::ExactLdsGemmSlice1
-                          ? "lds_gemm_slice1_profile"
-                          : "wave64_collectives_v1_profile";
-    if (Error E = validateExactMetadataKeys(Root, Check))
+    if (Error E = validateExactMetadataKeys(Root, exactMetadataCheck(Policy)))
       return E;
   }
   auto Target = metadataString(Root, "amdhsa.target");
@@ -1872,6 +2438,12 @@ Error validateExactWave64CollectivesV1ElfClosure(
   return validateExactElfClosure(ObjectValue, "wave64_collectives_v1_profile");
 }
 
+Error validateExactWorkgroupSyncElfClosure(
+    const ELFObjectFile<ELF64LE> &ObjectValue,
+    const ExactWorkgroupSyncProfile &Profile) {
+  return validateExactElfClosure(ObjectValue, Profile.Check);
+}
+
 struct Wave64CallScanner {
   std::unique_ptr<MCRegisterInfo> Registers;
   std::unique_ptr<MCAsmInfo> AsmInfo;
@@ -2005,6 +2577,115 @@ Error validateExactWave64NoMachineCalls(
   return Error::success();
 }
 
+Error validateExactWorkgroupSyncMachine(
+    const ELFObjectFile<ELF64LE> &ObjectValue,
+    const ExactWorkgroupSyncProfile &Profile) {
+  const ELFFile<ELF64LE> &File = ObjectValue.getELFFile();
+  auto SectionsOrError = File.sections();
+  if (!SectionsOrError)
+    return SectionsOrError.takeError();
+  ArrayRef<ELF64LE::Shdr> Sections = *SectionsOrError;
+  ArrayRef<uint8_t> KernelBytes;
+  uint64_t KernelAddress = 0;
+  size_t Matches = 0;
+  for (const ELF64LE::Shdr &Table : Sections) {
+    if (Table.sh_type != ELF::SHT_SYMTAB)
+      continue;
+    auto Symbols = File.symbols(&Table);
+    if (!Symbols)
+      return Symbols.takeError();
+    auto Strings = File.getStringTableForSymtab(Table, Sections);
+    if (!Strings)
+      return Strings.takeError();
+    for (const ELF64LE::Sym &Symbol : *Symbols) {
+      auto Name = Symbol.getName(*Strings);
+      if (!Name)
+        return Name.takeError();
+      if (*Name != Profile.Entry)
+        continue;
+      ++Matches;
+      if (Symbol.getType() != ELF::STT_FUNC || Symbol.st_size == 0 ||
+          Symbol.st_shndx == ELF::SHN_XINDEX ||
+          Symbol.st_shndx >= Sections.size())
+        return postLinkError(Profile.Check, "machine_entry_symbol");
+      const ELF64LE::Shdr &Section = Sections[Symbol.st_shndx];
+      if ((Section.sh_flags & (ELF::SHF_ALLOC | ELF::SHF_EXECINSTR)) !=
+              (ELF::SHF_ALLOC | ELF::SHF_EXECINSTR) ||
+          Symbol.st_value < Section.sh_addr)
+        return postLinkError(Profile.Check, "machine_entry_section");
+      uint64_t Offset = Symbol.st_value - Section.sh_addr;
+      if (Offset > Section.sh_size || Symbol.st_size > Section.sh_size - Offset)
+        return postLinkError(Profile.Check, "machine_entry_range");
+      auto Contents = File.getSectionContents(Section);
+      if (!Contents)
+        return Contents.takeError();
+      KernelBytes = Contents->slice(Offset, Symbol.st_size);
+      KernelAddress = Symbol.st_value;
+    }
+  }
+  if (Matches != 1)
+    return postLinkError(Profile.Check, "machine_entry_cardinality");
+
+  auto Scanner = createWave64CallScanner();
+  if (!Scanner)
+    return postLinkError(Profile.Check,
+                         errorToDiagnostic(Scanner.takeError()));
+  uint64_t Offset = 0;
+  size_t InstructionCount = 0;
+  size_t BarrierCount = 0;
+  size_t LdsReadCount = 0;
+  size_t LdsWriteCount = 0;
+  size_t AtomicAddCount = 0;
+  while (Offset < KernelBytes.size()) {
+    if (llvm::all_of(KernelBytes.drop_front(Offset),
+                     [](uint8_t Byte) { return Byte == 0; }))
+      break;
+    MCInst Instruction;
+    uint64_t Size = 0;
+    auto Status = Scanner->Disassembler->getInstruction(
+        Instruction, Size, KernelBytes.drop_front(Offset),
+        KernelAddress + Offset, nulls());
+    if (Status != MCDisassembler::Success || Size == 0 ||
+        Size > KernelBytes.size() - Offset)
+      return postLinkError(Profile.Check, "machine_instruction_decode");
+    const MCInstrDesc &Descriptor =
+        Scanner->Instructions->get(Instruction.getOpcode());
+    if (Descriptor.isCall())
+      return postLinkError(Profile.Check, "machine_call");
+    StringRef Opcode = Scanner->Instructions->getName(Instruction.getOpcode());
+    BarrierCount += Opcode.contains("S_BARRIER");
+    LdsReadCount += Opcode.contains("DS_READ");
+    LdsWriteCount += Opcode.contains("DS_WRITE");
+    AtomicAddCount += Opcode.contains("ATOMIC_ADD");
+    Offset += Size;
+    if (++InstructionCount > 1024 * 1024)
+      return postLinkError(Profile.Check, "machine_instruction_bound");
+  }
+  if (InstructionCount == 0)
+    return postLinkError(Profile.Check, "machine_instruction_empty");
+  std::array<uint8_t, 32> MachineIdentity = SHA256::hash(KernelBytes);
+  if (MachineIdentity != Profile.MachineSha256)
+    return postLinkError(
+        Profile.Check,
+        (Twine("machine_identity_") + digestHex(MachineIdentity)).str());
+  if (Profile.Kind == ExactWorkgroupSyncKind::LdsReduction) {
+    if (BarrierCount != 0 || LdsReadCount != 32 || LdsWriteCount != 1 ||
+        AtomicAddCount != 0) {
+      std::string Reason =
+          (Twine("machine_lds_barrier_effect_barriers_") +
+           Twine(BarrierCount) + "_reads_" + Twine(LdsReadCount) +
+           "_writes_" + Twine(LdsWriteCount) + "_atomics_" +
+           Twine(AtomicAddCount))
+              .str();
+      return postLinkError(Profile.Check, Reason);
+    }
+  } else if (BarrierCount != 0 || LdsReadCount != 0 || LdsWriteCount != 0 ||
+             AtomicAddCount != 1) {
+    return postLinkError(Profile.Check, "machine_atomic_effect");
+  }
+  return Error::success();
+}
+
 Error validateExactWave64DescriptorBinding(
     const ELFObjectFile<ELF64LE> &ObjectValue, const Request &RequestValue) {
   StringRef CompilerBytes(
@@ -2041,6 +2722,44 @@ Error validateExactWave64DescriptorBinding(
   if (Matches != 1)
     return postLinkError("wave64_collectives_v1_profile",
                          "descriptor_section_cardinality");
+  return Error::success();
+}
+
+Error validateExactWorkgroupSyncDescriptorBinding(
+    const ELFObjectFile<ELF64LE> &ObjectValue, const Request &RequestValue,
+    const ExactWorkgroupSyncProfile &Profile) {
+  StringRef CompilerBytes(
+      reinterpret_cast<const char *>(RequestValue.CompilerModule.Bytes.data()),
+      RequestValue.CompilerModule.Bytes.size());
+  auto InputSections =
+      parseExactWorkgroupSyncCompilerSections(CompilerBytes, Profile);
+  if (!InputSections)
+    return postLinkError(Profile.Check,
+                         errorToDiagnostic(InputSections.takeError()));
+  ArrayRef<uint8_t> ExpectedDescriptor = (*InputSections)[0];
+
+  const ELFFile<ELF64LE> &File = ObjectValue.getELFFile();
+  auto Sections = File.sections();
+  if (!Sections)
+    return Sections.takeError();
+  size_t Matches = 0;
+  for (const ELF64LE::Shdr &Section : *Sections) {
+    auto Name = File.getSectionName(Section);
+    if (!Name)
+      return Name.takeError();
+    if (*Name != ExactWave64DescriptorSection)
+      continue;
+    ++Matches;
+    if (Section.sh_type != ELF::SHT_PROGBITS || Section.sh_addralign != 8)
+      return postLinkError(Profile.Check, "descriptor_section_envelope");
+    auto Contents = File.getSectionContents(Section);
+    if (!Contents)
+      return Contents.takeError();
+    if (*Contents != ExpectedDescriptor)
+      return postLinkError(Profile.Check, "descriptor_section_identity");
+  }
+  if (Matches != 1)
+    return postLinkError(Profile.Check, "descriptor_section_cardinality");
   return Error::success();
 }
 
@@ -2432,6 +3151,198 @@ Error validateExactWave64CollectivesV1Metadata(
   return Error::success();
 }
 
+Error validateExactWorkgroupSyncMetadata(
+    const MetadataContract &Metadata,
+    const ExactWorkgroupSyncProfile &Profile) {
+  static constexpr std::array<uint64_t, 3> Workgroup = {64, 1, 1};
+  struct HiddenArgumentShape {
+    uint64_t Offset;
+    uint64_t Size;
+    StringLiteral ValueKind;
+  };
+  static constexpr std::array<HiddenArgumentShape, 13> RequiredHidden = {{
+      {0, 4, "hidden_block_count_x"},
+      {4, 4, "hidden_block_count_y"},
+      {8, 4, "hidden_block_count_z"},
+      {12, 2, "hidden_group_size_x"},
+      {14, 2, "hidden_group_size_y"},
+      {16, 2, "hidden_group_size_z"},
+      {18, 2, "hidden_remainder_x"},
+      {20, 2, "hidden_remainder_y"},
+      {22, 2, "hidden_remainder_z"},
+      {40, 8, "hidden_global_offset_x"},
+      {48, 8, "hidden_global_offset_y"},
+      {56, 8, "hidden_global_offset_z"},
+      {64, 2, "hidden_grid_dims"},
+  }};
+  static constexpr std::array<HiddenArgumentShape, 10> OptionalHidden = {{
+      {72, 8, "hidden_printf_buffer"},
+      {80, 8, "hidden_hostcall_buffer"},
+      {88, 8, "hidden_multigrid_sync_arg"},
+      {96, 8, "hidden_heap_v1"},
+      {104, 8, "hidden_default_queue"},
+      {112, 8, "hidden_completion_action"},
+      {120, 4, "hidden_dynamic_lds_size"},
+      {192, 4, "hidden_private_base"},
+      {196, 4, "hidden_shared_base"},
+      {200, 8, "hidden_queue_ptr"},
+  }};
+  auto Mismatch = [&](StringRef Field) {
+    return postLinkError(
+        Profile.Check, (Twine("kernel_contract_") + Field).str());
+  };
+  if (Metadata.Kernels.size() != 1)
+    return postLinkError(Profile.Check, "kernel_cardinality");
+  const KernelLaunchContract &Kernel = Metadata.Kernels.front();
+  if (Kernel.Name != Profile.Entry || Kernel.Symbol != Profile.Descriptor)
+    return Mismatch("symbols");
+  if (!Kernel.RequiredWorkgroupSize ||
+      *Kernel.RequiredWorkgroupSize != Workgroup)
+    return Mismatch("reqd_workgroup_size");
+  if (Kernel.MaxFlatWorkgroupSize != 64)
+    return Mismatch("max_flat_workgroup_size");
+  if (Kernel.WavefrontSize != 64)
+    return Mismatch("wavefront_size");
+  if (Kernel.KernargSegmentSize != 296)
+    return Mismatch("kernarg_segment_size");
+  if (Kernel.KernargSegmentAlign != 8)
+    return Mismatch("kernarg_segment_align");
+  if (Kernel.GroupSegmentFixedSize != 0)
+    return Mismatch("group_segment_fixed_size");
+  if (Kernel.PrivateSegmentFixedSize != 0)
+    return Mismatch("private_segment_fixed_size");
+  if (!Kernel.SgprSpillCount || *Kernel.SgprSpillCount != 0)
+    return Mismatch("sgpr_spill_count");
+  if (!Kernel.VgprSpillCount || *Kernel.VgprSpillCount != 0)
+    return Mismatch("vgpr_spill_count");
+  if (!Kernel.UsesDynamicStack || *Kernel.UsesDynamicStack)
+    return Mismatch("uses_dynamic_stack");
+  if (Kernel.UniformWorkgroupSize && *Kernel.UniformWorkgroupSize)
+    return Mismatch("uniform_work_group_size");
+  if (!Kernel.Arguments)
+    return Mismatch("args_missing");
+  const std::vector<KernelArgumentContract> &Arguments = *Kernel.Arguments;
+  if (Arguments.size() < 5 + RequiredHidden.size())
+    return Mismatch("args_cardinality");
+
+  auto ValidatePointer = [&](size_t Index, StringRef Name, uint64_t Offset,
+                             StringRef TypeName, StringRef ValueType,
+                             StringRef Access, bool Restrict) -> Error {
+    const KernelArgumentContract &Argument = Arguments[Index];
+    if (!Argument.Name || *Argument.Name != Name ||
+        Argument.Offset != Offset || Argument.Size != 8 ||
+        !Argument.TypeName || *Argument.TypeName != TypeName ||
+        (Argument.Align && *Argument.Align != 8) ||
+        Argument.ValueKind != "global_buffer" ||
+        (Argument.ValueType && *Argument.ValueType != ValueType) ||
+        !Argument.AddressSpace || *Argument.AddressSpace != "global" ||
+        !Argument.Access || *Argument.Access != Access ||
+        (Argument.ActualAccess &&
+         (Access == "read_write"
+              ? *Argument.ActualAccess != "read_write" &&
+                    *Argument.ActualAccess != "write_only"
+              : *Argument.ActualAccess != Access)) ||
+        (Argument.PointeeAlign && *Argument.PointeeAlign != 4) ||
+        (Access == "read_only"
+             ? !Argument.IsConst || !*Argument.IsConst
+             : Argument.IsConst && *Argument.IsConst) ||
+        (Restrict ? !Argument.IsRestrict || !*Argument.IsRestrict
+                  : Argument.IsRestrict && *Argument.IsRestrict) ||
+        (Argument.IsVolatile && *Argument.IsVolatile) ||
+        (Argument.IsPipe && *Argument.IsPipe))
+      return Mismatch((Twine("arg") + Twine(Index) + "_pointer").str());
+    return Error::success();
+  };
+  auto ValidateScalar = [&](size_t Index, StringRef Name, uint64_t Offset,
+                            uint64_t Size, StringRef TypeName,
+                            StringRef ValueType) -> Error {
+    const KernelArgumentContract &Argument = Arguments[Index];
+    if (!Argument.Name || *Argument.Name != Name ||
+        Argument.Offset != Offset || Argument.Size != Size ||
+        !Argument.TypeName || *Argument.TypeName != TypeName ||
+        (Argument.Align && *Argument.Align != Size) ||
+        Argument.ValueKind != "by_value" ||
+        (Argument.ValueType && *Argument.ValueType != ValueType) ||
+        Argument.AddressSpace || Argument.Access || Argument.ActualAccess ||
+        Argument.PointeeAlign || (Argument.IsConst && *Argument.IsConst) ||
+        (Argument.IsRestrict && *Argument.IsRestrict) ||
+        (Argument.IsVolatile && *Argument.IsVolatile) ||
+        (Argument.IsPipe && *Argument.IsPipe))
+      return Mismatch((Twine("arg") + Twine(Index) + "_scalar").str());
+    return Error::success();
+  };
+
+  if (Error E = ValidatePointer(0, "values.data", 0,
+                                Profile.Kind ==
+                                        ExactWorkgroupSyncKind::LdsReduction
+                                    ? "int*"
+                                    : "uint*",
+                                Profile.Kind ==
+                                        ExactWorkgroupSyncKind::LdsReduction
+                                    ? "i32"
+                                    : "u32",
+                                "read_only", false))
+    return E;
+  if (Error E = ValidateScalar(1, "values.len", 8, 8, "ulong", "u64"))
+    return E;
+  if (Profile.Kind == ExactWorkgroupSyncKind::LdsReduction) {
+    if (Error E = ValidateScalar(2, "epoch", 16, 4, "uint", "u32"))
+      return E;
+    if (Error E = ValidatePointer(3, "output.data", 24, "int*", "i32",
+                                  "read_write", true))
+      return E;
+    if (Error E = ValidateScalar(4, "output.len", 32, 8, "ulong", "u64"))
+      return E;
+  } else {
+    if (Error E = ValidatePointer(2, "eligible.data", 16, "uint*", "u32",
+                                  "read_only", false))
+      return E;
+    if (Error E =
+            ValidateScalar(3, "eligible.len", 24, 8, "ulong", "u64"))
+      return E;
+    if (Error E = ValidateScalar(4, "target.address", 32, 8, "ulong",
+                                 "u64"))
+      return E;
+  }
+
+  constexpr size_t HiddenBaseIndex = 5;
+  constexpr uint64_t HiddenBase = 40;
+  auto ValidateHidden = [&](const KernelArgumentContract &Argument,
+                            const HiddenArgumentShape &Expected) {
+    return !Argument.Name && !Argument.TypeName &&
+           Argument.Offset == HiddenBase + Expected.Offset &&
+           Argument.Size == Expected.Size &&
+           Argument.ValueKind == Expected.ValueKind && !Argument.Align &&
+           !Argument.ValueType && !Argument.AddressSpace && !Argument.Access &&
+           !Argument.ActualAccess && !Argument.PointeeAlign &&
+           !Argument.IsConst && !Argument.IsRestrict && !Argument.IsVolatile &&
+           !Argument.IsPipe;
+  };
+  for (size_t Index = 0; Index != RequiredHidden.size(); ++Index)
+    if (!ValidateHidden(Arguments[HiddenBaseIndex + Index],
+                        RequiredHidden[Index]))
+      return Mismatch((Twine("hidden_arg") + Twine(Index)).str());
+
+  size_t DynamicLdsArguments = 0;
+  for (size_t Index = HiddenBaseIndex + RequiredHidden.size();
+       Index != Arguments.size(); ++Index) {
+    const KernelArgumentContract &Argument = Arguments[Index];
+    auto Expected = llvm::find_if(OptionalHidden, [&](const auto &Shape) {
+      return Argument.Offset == HiddenBase + Shape.Offset;
+    });
+    if (Expected == OptionalHidden.end() ||
+        !ValidateHidden(Argument, *Expected))
+      return Mismatch(
+          (Twine("hidden_arg") + Twine(Index - HiddenBaseIndex)).str());
+    DynamicLdsArguments += Expected->ValueKind == "hidden_dynamic_lds_size";
+  }
+  if (Profile.Kind == ExactWorkgroupSyncKind::LdsReduction
+          ? DynamicLdsArguments != 1
+          : DynamicLdsArguments != 0)
+    return Mismatch("hidden_dynamic_lds_size");
+  return Error::success();
+}
+
 Expected<std::vector<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
                                                  const ElfContract &Expected,
                                                  const Request &RequestValue) {
@@ -2546,11 +3457,34 @@ Expected<std::vector<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
           diagnosticList(ExpectedSymbols) +
           " actual=" + diagnosticList(StaticPublicDefinitions));
   }
+  if (const ExactWorkgroupSyncProfile *WorkgroupProfile =
+          postLinkWorkgroupSyncProfile(*Profile)) {
+    if (Error E =
+            validateExactWorkgroupSyncElfClosure(*ConcreteElf,
+                                                 *WorkgroupProfile))
+      return E;
+    if (Error E =
+            validateExactWorkgroupSyncMachine(*ConcreteElf, *WorkgroupProfile))
+      return E;
+    if (Error E = validateExactWorkgroupSyncDescriptorBinding(
+            *ConcreteElf, RequestValue, *WorkgroupProfile))
+      return E;
+    if (StaticPublicDefinitions != ExpectedSymbols)
+      return pipelineError(
+          Twine("post_link.check=") + WorkgroupProfile->Check +
+          " status=failed reason=static_symbol_closure expected=" +
+          diagnosticList(ExpectedSymbols) +
+          " actual=" + diagnosticList(StaticPublicDefinitions));
+  }
   MetadataValidationPolicy MetadataPolicy = MetadataValidationPolicy::Generic;
   if (*Profile == PostLinkProfile::ExactLdsGemmSlice1)
     MetadataPolicy = MetadataValidationPolicy::ExactLdsGemmSlice1;
   else if (*Profile == PostLinkProfile::ExactWave64CollectivesV1)
     MetadataPolicy = MetadataValidationPolicy::ExactWave64CollectivesV1;
+  else if (*Profile == PostLinkProfile::ExactWorkgroupLdsReductionV1)
+    MetadataPolicy = MetadataValidationPolicy::ExactWorkgroupLdsReductionV1;
+  else if (*Profile == PostLinkProfile::ExactScopedAtomicV1)
+    MetadataPolicy = MetadataValidationPolicy::ExactScopedAtomicV1;
   auto Metadata = inspectMetadata(*ConcreteElf, MetadataPolicy);
   if (!Metadata)
     return postLinkError("metadata", errorToDiagnostic(Metadata.takeError()));
@@ -2614,6 +3548,11 @@ Expected<std::vector<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
   if (*Profile == PostLinkProfile::ExactWave64CollectivesV1)
     if (Error E = validateExactWave64CollectivesV1Metadata(*Metadata))
       return E;
+  if (const ExactWorkgroupSyncProfile *WorkgroupProfile =
+          postLinkWorkgroupSyncProfile(*Profile))
+    if (Error E =
+            validateExactWorkgroupSyncMetadata(*Metadata, *WorkgroupProfile))
+      return E;
 
   std::vector<std::string> Diagnostics;
   Diagnostics.push_back(
@@ -2646,6 +3585,25 @@ Expected<std::vector<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
         "kernarg_size=328 kernarg_align=8 group_size=0 private_size=0 "
         "wavefront_size=64 calls=0 spills=0 dynamic_stack=false "
         "descriptor_binding=byte_exact rust_descriptor_admission=required");
+  if (*Profile == PostLinkProfile::ExactWorkgroupLdsReductionV1)
+    Diagnostics.push_back(
+        "post_link.check=workgroup_lds_reduction_v1_profile status=ok "
+        "workgroup=[64,1,1] retained_grid=[1,1,1] "
+        "explicit_kernarg_size=40 kernarg_size=296 kernarg_align=8 "
+        "group_size=0 required_dynamic_lds=256 "
+        "hidden_dynamic_lds_offset=160 hidden_dynamic_lds_value=256 "
+        "private_size=0 wavefront_size=64 barriers=2 lds_bytes=256 "
+        "calls=0 spills=0 dynamic_stack=false "
+        "descriptor_binding=byte_exact rust_descriptor_admission=required");
+  if (*Profile == PostLinkProfile::ExactScopedAtomicV1)
+    Diagnostics.push_back(
+        "post_link.check=scoped_atomic_v1_profile status=ok "
+        "workgroup=[64,1,1] retained_grid=[1,1,1] "
+        "explicit_kernarg_size=40 kernarg_size=296 kernarg_align=8 "
+        "group_size=0 private_size=0 wavefront_size=64 atomic=add "
+        "ordering=relaxed scope=system address_space=global calls=0 "
+        "spills=0 dynamic_stack=false descriptor_binding=byte_exact "
+        "rust_descriptor_admission=required");
   for (const KernelLaunchContract &Kernel : Metadata->Kernels) {
     std::string Required = "absent";
     if (Kernel.RequiredWorkgroupSize)
@@ -2798,6 +3756,102 @@ Error validateExactWave64CollectivesV1CompilerInputForTesting(
       StringRef(reinterpret_cast<const char *>(Bytes.data()), Bytes.size()));
 }
 
+Expected<std::vector<uint8_t>>
+makeExactWorkgroupSyncCompilerInputForTesting(
+    StringRef CanonicalBody, ArrayRef<uint8_t> Descriptor,
+    ExactWorkgroupSyncProfileForTesting ProfileKind) {
+  const ExactWorkgroupSyncProfile &Profile =
+      ProfileKind == ExactWorkgroupSyncProfileForTesting::LdsReduction
+          ? ExactWorkgroupLdsReductionV1
+          : ExactScopedAtomicV1;
+  if (SHA256::hash(arrayRefFromStringRef(CanonicalBody)) !=
+      Profile.BodySha256)
+    return pipelineError("test fixture workgroup-sync body identity mismatch");
+  if (Descriptor.empty() || Descriptor.size() > 64 * 1024)
+    return pipelineError("test fixture workgroup-sync descriptor is invalid");
+
+  const std::array<std::string, 12> Sections = {
+      ExactWave64DescriptorSection.str(),
+      (Twine(Profile.SectionPrefix) + ".source.v1").str(),
+      (Twine(Profile.SectionPrefix) + ".namespace.v1").str(),
+      (Twine(Profile.SectionPrefix) + ".authority.v1").str(),
+      (Twine(Profile.SectionPrefix) + ".mir.v1").str(),
+      (Twine(Profile.SectionPrefix) + ".fnabi.v1").str(),
+      (Twine(Profile.SectionPrefix) + ".semantics.v1").str(),
+      (Twine(Profile.SectionPrefix) + ".terminals.v3").str(),
+      (Twine(Profile.SectionPrefix) + ".abi.v1").str(),
+      (Twine(Profile.SectionPrefix) + ".effects.v1").str(),
+      (Twine(Profile.SectionPrefix) + ".resources.v1").str(),
+      (Twine(Profile.SectionPrefix) + ".kir.v1").str()};
+  std::vector<uint8_t> Result(CanonicalBody.bytes_begin(),
+                              CanonicalBody.bytes_end());
+  auto AppendSection = [&](StringRef Name, ArrayRef<uint8_t> Bytes) {
+    std::string Header = (Twine("\nmodule asm \".section ") + Name +
+                          ",\\22\\22,@progbits\"\n"
+                          "module asm \".balign 8\"\n")
+                             .str();
+    llvm::append_range(Result, arrayRefFromStringRef(Header));
+    static constexpr char Hex[] = "0123456789abcdef";
+    for (size_t Offset = 0; Offset != Bytes.size(); Offset += 16) {
+      std::string Line = "module asm \".byte ";
+      size_t End = std::min(Bytes.size(), Offset + 16);
+      for (size_t Index = Offset; Index != End; ++Index) {
+        if (Index != Offset)
+          Line.append(", ");
+        Line.append("0x");
+        Line.push_back(Hex[Bytes[Index] >> 4]);
+        Line.push_back(Hex[Bytes[Index] & 0x0f]);
+      }
+      Line.append("\"\n");
+      llvm::append_range(Result, arrayRefFromStringRef(Line));
+    }
+  };
+  AppendSection(Sections[0], Descriptor);
+  for (size_t Index = 0; Index != Profile.SectionIdentities.size(); ++Index)
+    AppendSection(Sections[Index + 1], Profile.SectionIdentities[Index]);
+  if (Error E = validateExactWorkgroupSyncCompilerInput(
+          StringRef(reinterpret_cast<const char *>(Result.data()),
+                    Result.size()),
+          Profile))
+    return E;
+  return Result;
+}
+
+Error validateExactWorkgroupSyncCompilerInputForTesting(
+    ArrayRef<uint8_t> Bytes,
+    ExactWorkgroupSyncProfileForTesting ProfileKind) {
+  const ExactWorkgroupSyncProfile &Profile =
+      ProfileKind == ExactWorkgroupSyncProfileForTesting::LdsReduction
+          ? ExactWorkgroupLdsReductionV1
+          : ExactScopedAtomicV1;
+  return validateExactWorkgroupSyncCompilerInput(
+      StringRef(reinterpret_cast<const char *>(Bytes.data()), Bytes.size()),
+      Profile);
+}
+
+Error validateExactWorkgroupSyncModuleForTesting(
+    StringRef Text, ExactWorkgroupSyncProfileForTesting ProfileKind) {
+  const ExactWorkgroupSyncProfile &Profile =
+      ProfileKind == ExactWorkgroupSyncProfileForTesting::LdsReduction
+          ? ExactWorkgroupLdsReductionV1
+          : ExactScopedAtomicV1;
+  LLVMContext Context;
+  SMDiagnostic Diagnostic;
+  auto Buffer = MemoryBuffer::getMemBufferCopy(Text, "<test-module>");
+  std::unique_ptr<Module> ModuleValue =
+      parseAssembly(Buffer->getMemBufferRef(), Diagnostic, Context);
+  if (!ModuleValue) {
+    std::string Message;
+    raw_string_ostream Stream(Message);
+    Diagnostic.print("fe2o3-workgroup-test", Stream, false, false);
+    Stream.flush();
+    return pipelineError(Message);
+  }
+  if (verifyModule(*ModuleValue))
+    return pipelineError("test workgroup-sync module verification failed");
+  return validateExactWorkgroupSyncModule(*ModuleValue, Profile);
+}
+
 Error validateExactLdsGemmSlice1MetadataForTesting(StringRef MetadataBlob) {
   MetadataContract Metadata;
   Metadata.Present = true;
@@ -2875,6 +3929,24 @@ Error validateExactWave64CollectivesV1ElfClosureForTesting(
   return validateExactWave64CollectivesV1ElfClosure(*Elf);
 }
 
+Error validateExactWorkgroupSyncElfClosureForTesting(
+    ArrayRef<uint8_t> Bytes,
+    ExactWorkgroupSyncProfileForTesting ProfileKind) {
+  StringRef Data(reinterpret_cast<const char *>(Bytes.data()), Bytes.size());
+  auto ObjectOrError =
+      ObjectFile::createObjectFile(MemoryBufferRef(Data, "<test-output>"));
+  if (!ObjectOrError)
+    return ObjectOrError.takeError();
+  auto *Elf = dyn_cast<ELF64LEObjectFile>(ObjectOrError->get());
+  if (!Elf)
+    return pipelineError("test output is not ELF64LE");
+  const ExactWorkgroupSyncProfile &Profile =
+      ProfileKind == ExactWorkgroupSyncProfileForTesting::LdsReduction
+          ? ExactWorkgroupLdsReductionV1
+          : ExactScopedAtomicV1;
+  return validateExactWorkgroupSyncElfClosure(*Elf, Profile);
+}
+
 Expected<std::vector<std::string>>
 inspectLinkedOutputForPublication(ArrayRef<uint8_t> Bytes,
                                   const Request &RequestValue) {
@@ -2918,6 +3990,14 @@ Response executeImpl(const Request &RequestValue,
     return failure(RequestValue, Stage::InputValidation,
                    {"exact Wave64 collectives symbols require the closed "
                     "Worker V2 profile"});
+  if (mentionsExactWorkgroupSync(RequestValue)) {
+    const ExactWorkgroupSyncProfile *Profile =
+        exactWorkgroupSyncProfile(RequestValue);
+    if (!Profile || !isClosedExactWorkgroupSyncRequest(RequestValue, *Profile))
+      return failure(RequestValue, Stage::InputValidation,
+                     {"exact workgroup-sync symbols require one closed Worker "
+                      "V2 profile"});
+  }
 
   auto MachineOrError = createMachine(RequestValue);
   if (!MachineOrError)
@@ -3038,6 +4118,10 @@ Response executeImpl(const Request &RequestValue,
     if (!matches(*Contract, *ExpectedElf))
       return failure(RequestValue, Stage::Codegen,
                      {"generated object target contract mismatch"});
+    if (Error E = validateExactDynamicLdsPseudoImport(
+            RequestValue, Contract->RequiredImports,
+            "optimized relocatable object", false))
+      return failure(RequestValue, Stage::Codegen, std::move(E));
     Objects.push_back(std::move(*GeneratedObject));
     ObjectContracts.push_back(std::move(*Contract));
   }

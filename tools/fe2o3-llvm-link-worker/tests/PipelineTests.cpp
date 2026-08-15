@@ -852,6 +852,70 @@ std::vector<uint8_t> makeExactWave64CollectivesV1TextIr(
   return Result;
 }
 
+std::string loadIntegratedWorkgroupSyncBody(StringRef Filename) {
+  SmallString<256> SourcePath(__FILE__);
+  sys::path::remove_filename(SourcePath);
+  sys::path::append(SourcePath, "..", "..", "..");
+  sys::path::append(SourcePath, "crates", "fe2o3-hsaco-finalize", "src");
+  sys::path::append(SourcePath, Filename);
+  auto Source = MemoryBuffer::getFile(SourcePath);
+  if (!Source)
+    fail((Twine("cannot read integrated workgroup-sync source: ") +
+          Source.getError().message())
+             .str());
+  StringRef Rust = (*Source)->getBuffer();
+  constexpr StringLiteral Prefix = "const LLVM_BODY: &str = r#\"";
+  size_t Begin = Rust.find(Prefix);
+  require(Begin != StringRef::npos,
+          "integrated workgroup-sync source has no LLVM body");
+  Begin += Prefix.size();
+  size_t End = Rust.find("\"#;", Begin);
+  require(End != StringRef::npos,
+          "integrated workgroup-sync source has an unterminated LLVM body");
+  return Rust.slice(Begin, End).str();
+}
+
+std::vector<uint8_t> makeExactWorkgroupSyncTextIr(
+    ExactWorkgroupSyncProfileForTesting Profile) {
+  StringRef Filename =
+      Profile == ExactWorkgroupSyncProfileForTesting::LdsReduction
+          ? "workgroup_lds_reduction_v1_profile.rs"
+          : "workgroup_scoped_atomic_v1_profile.rs";
+  std::string Body = loadIntegratedWorkgroupSyncBody(Filename);
+  std::array<uint8_t, 64> Descriptor{};
+  Descriptor.fill(Profile ==
+                          ExactWorkgroupSyncProfileForTesting::LdsReduction
+                      ? 0xd1
+                      : 0xa7);
+  auto Result = makeExactWorkgroupSyncCompilerInputForTesting(
+      Body, Descriptor, Profile);
+  if (!Result)
+    fail(toString(Result.takeError()));
+  return std::move(*Result);
+}
+
+std::string replaceExactText(StringRef Source, StringRef Expected,
+                             StringRef Replacement) {
+  size_t Position = Source.find(Expected);
+  require(Position != StringRef::npos,
+          (Twine("workgroup-sync fixture omitted ") + Expected).str());
+  std::string Result = Source.str();
+  Result.replace(Position, Expected.size(), Replacement.str());
+  return Result;
+}
+
+void mutateExactCompilerSectionIdentity(std::vector<uint8_t> &Bytes,
+                                        StringRef Section) {
+  StringRef Text(reinterpret_cast<const char *>(Bytes.data()), Bytes.size());
+  size_t Position = Text.find(Section);
+  require(Position != StringRef::npos,
+          "workgroup-sync fixture omitted an identity section");
+  Position = Text.find("0x", Position);
+  require(Position != StringRef::npos && Position + 2 < Bytes.size(),
+          "workgroup-sync identity section omitted its bytes");
+  Bytes[Position + 2] = Bytes[Position + 2] == '0' ? '1' : '0';
+}
+
 Input makeInput(InputKind Kind, std::vector<uint8_t> Bytes) {
   std::array<uint8_t, 32> Digest = SHA256::hash(Bytes);
   return {Kind, Digest, std::move(Bytes)};
@@ -2039,6 +2103,236 @@ std::optional<std::vector<uint8_t>> testMeasuredOcmlPipeline() {
   return KernelLinked.LinkedOutput->Bytes;
 }
 
+void testExactWorkgroupSyncProfiles() {
+  using Profile = ExactWorkgroupSyncProfileForTesting;
+  const std::array Profiles = {Profile::LdsReduction, Profile::ScopedAtomic};
+
+  auto BodyFor = [](Profile ProfileValue) {
+    return loadIntegratedWorkgroupSyncBody(
+        ProfileValue == Profile::LdsReduction
+            ? "workgroup_lds_reduction_v1_profile.rs"
+            : "workgroup_scoped_atomic_v1_profile.rs");
+  };
+  auto SymbolsFor = [](Profile ProfileValue) {
+    return ProfileValue == Profile::LdsReduction
+               ? std::vector<std::string>{
+                     "lds_publish_read_reduce_i32_v1",
+                     "lds_publish_read_reduce_i32_v1.kd"}
+               : std::vector<std::string>{"scoped_atomic_add_u32_v1",
+                                          "scoped_atomic_add_u32_v1.kd"};
+  };
+  auto MakeRequest = [&](Profile ProfileValue) {
+    std::vector<std::string> Symbols = SymbolsFor(ProfileValue);
+    Request Result = makeV2Request(
+        makeInput(InputKind::LlvmTextIr,
+                  makeExactWorkgroupSyncTextIr(ProfileValue)),
+        {}, {}, {}, Symbols, 6);
+    Result.Target = "gfx942:xnack-";
+    Result.LinkOptions = {OptimizationLevel::O2, true, true};
+    return Result;
+  };
+  auto RequireCompilerFailure = [](ArrayRef<uint8_t> Bytes,
+                                   Profile ProfileValue,
+                                   StringRef Diagnostic) {
+    Error Failure =
+        validateExactWorkgroupSyncCompilerInputForTesting(Bytes, ProfileValue);
+    require(static_cast<bool>(Failure),
+            "hostile exact workgroup-sync compiler input was accepted");
+    std::string Message = toString(std::move(Failure));
+    require(StringRef(Message).contains(Diagnostic),
+            "workgroup-sync compiler input failed for the wrong reason");
+  };
+  auto RequireModuleFailure = [](StringRef Text, Profile ProfileValue,
+                                 StringRef Diagnostic) {
+    Error Failure =
+        validateExactWorkgroupSyncModuleForTesting(Text, ProfileValue);
+    require(static_cast<bool>(Failure),
+            "hostile exact workgroup-sync LLVM module was accepted");
+    std::string Message = toString(std::move(Failure));
+    if (!StringRef(Message).contains(Diagnostic)) {
+      errs() << "unexpected workgroup-sync module diagnostic: " << Message
+             << '\n';
+      fail("workgroup-sync LLVM module failed for the wrong reason");
+    }
+  };
+
+  for (Profile ProfileValue : Profiles) {
+    std::string Body = BodyFor(ProfileValue);
+    if (Error Failure =
+            validateExactWorkgroupSyncModuleForTesting(Body, ProfileValue))
+      fail(toString(std::move(Failure)));
+    std::vector<uint8_t> Compiler =
+        makeExactWorkgroupSyncTextIr(ProfileValue);
+    if (Error Failure = validateExactWorkgroupSyncCompilerInputForTesting(
+            Compiler, ProfileValue))
+      fail(toString(std::move(Failure)));
+
+    std::vector<uint8_t> WrongBody = Compiler;
+    WrongBody.front() ^= 1;
+    RequireCompilerFailure(WrongBody, ProfileValue, "body identity");
+
+    StringRef Prefix = ProfileValue == Profile::LdsReduction
+                           ? ".fe2o3.wg-lds"
+                           : ".fe2o3.wg-atomic";
+    for (StringRef Suffix :
+         {".source.v1", ".namespace.v1", ".authority.v1", ".mir.v1",
+          ".fnabi.v1", ".semantics.v1", ".terminals.v3", ".abi.v1",
+          ".effects.v1", ".resources.v1", ".kir.v1"}) {
+      std::vector<uint8_t> WrongIdentity = Compiler;
+      mutateExactCompilerSectionIdentity(
+          WrongIdentity, (Twine(Prefix) + Suffix).str());
+      RequireCompilerFailure(WrongIdentity, ProfileValue,
+                             "source/KIR/profile identity");
+    }
+
+    Request Exact = MakeRequest(ProfileValue);
+    std::vector<std::string> SymbolList = SymbolsFor(ProfileValue);
+    std::set<std::string> Symbols(SymbolList.begin(), SymbolList.end());
+    Response First = runSuccess(Exact, Symbols);
+    Response Replay = runSuccess(Exact, Symbols);
+    require(First.LinkedOutput->Bytes == Replay.LinkedOutput->Bytes,
+            "exact workgroup-sync LLVM/LLD output is not reproducible");
+    requireDiagnostic(First,
+                      ProfileValue == Profile::LdsReduction
+                          ? "workgroup_lds_reduction_v1_profile status=ok"
+                          : "scoped_atomic_v1_profile status=ok");
+
+    Request WrongTarget = Exact;
+    WrongTarget.Target = "gfx942:xnack+";
+    requireFailure(WrongTarget, Stage::InputValidation);
+    Request WrongCov = Exact;
+    WrongCov.CodeObjectVersion = 5;
+    requireFailure(WrongCov, Stage::InputValidation);
+    Request WrongOptions = Exact;
+    WrongOptions.LinkOptions.Optimization = OptimizationLevel::O1;
+    requireFailure(WrongOptions, Stage::InputValidation);
+    Request WrongImports = Exact;
+    WrongImports.ImportSymbols = {"host_dependency"};
+    requireFailure(WrongImports, Stage::InputValidation);
+    Request WrongExports = Exact;
+    WrongExports.ExportSymbols = {SymbolList.front()};
+    requireFailure(WrongExports, Stage::InputValidation);
+    Request WrongFinalSymbols = Exact;
+    WrongFinalSymbols.FinalSymbols.pop_back();
+    requireFailure(WrongFinalSymbols, Stage::InputValidation);
+
+    std::vector<uint8_t> WrongDescriptor = First.LinkedOutput->Bytes;
+    mutateNamedSectionByte(WrongDescriptor, ".fe2o3.kd.v1");
+    requireInspectionFailure(WrongDescriptor, Exact,
+                             "reason=descriptor_section_identity");
+
+    std::vector<uint8_t> WrongCall = First.LinkedOutput->Bytes;
+    static constexpr std::array<uint8_t, 4> SwapPcCall = {0x02, 0x1e, 0x80,
+                                                          0xbe};
+    overwriteStaticSymbolPrefix(WrongCall, SymbolList.front(), SwapPcCall);
+    requireInspectionFailure(WrongCall, Exact, "reason=machine_call");
+
+    std::vector<uint8_t> WrongOpcode = First.LinkedOutput->Bytes;
+    static constexpr std::array<uint8_t, 4> SNopZero = {0x00, 0xbf, 0x80,
+                                                        0xbf};
+    overwriteStaticSymbolPrefix(WrongOpcode, SymbolList.front(), SNopZero);
+    requireInspectionFailure(WrongOpcode, Exact, "reason=machine_");
+
+    std::vector<uint8_t> WrongWorkgroup = First.LinkedOutput->Bytes;
+    replaceMetadataByte(WrongWorkgroup, ".reqd_workgroup_size", 64, 32);
+    requireInspectionFailure(WrongWorkgroup, Exact,
+                             "kernel_contract_reqd_workgroup_size");
+    std::vector<uint8_t> WrongKernarg = First.LinkedOutput->Bytes;
+    replaceMetadataByte(WrongKernarg, ".kernarg_segment_size", 0x28, 0x29);
+    requireInspectionFailure(WrongKernarg, Exact,
+                             "kernel_contract_kernarg_segment_size");
+    std::vector<uint8_t> WrongWave = First.LinkedOutput->Bytes;
+    replaceMetadataByte(WrongWave, ".wavefront_size", 64, 32);
+    requireInspectionFailure(WrongWave, Exact,
+                             "kernel_contract_wavefront_size");
+    std::vector<uint8_t> WrongGroup = First.LinkedOutput->Bytes;
+    replaceMetadataByte(WrongGroup, ".group_segment_fixed_size", 0, 1);
+    requireInspectionFailure(WrongGroup, Exact,
+                             "kernel_contract_group_segment_fixed_size");
+
+    std::vector<uint8_t> WrongUndefined = First.LinkedOutput->Bytes;
+    makeDynamicSymbolUndefined(WrongUndefined, SymbolList.front());
+    requireInspectionFailure(WrongUndefined, Exact,
+                             "post_link.check=unresolved status=failed");
+
+    std::vector<uint8_t> Relocation = First.LinkedOutput->Bytes;
+    makeStaticSymbolTableRelocationSection(Relocation);
+    Error RelocationFailure = validateExactWorkgroupSyncElfClosureForTesting(
+        Relocation, ProfileValue);
+    require(static_cast<bool>(RelocationFailure),
+            "exact workgroup-sync profile accepted a relocation");
+    require(StringRef(toString(std::move(RelocationFailure)))
+                .contains("residual_relocation_section"),
+            "workgroup-sync relocation diagnostic is missing");
+
+    std::vector<uint8_t> Dependency = First.LinkedOutput->Bytes;
+    makeDynamicDependency(Dependency);
+    Error DependencyFailure = validateExactWorkgroupSyncElfClosureForTesting(
+        Dependency, ProfileValue);
+    require(static_cast<bool>(DependencyFailure),
+            "exact workgroup-sync profile accepted a dependency");
+    require(StringRef(toString(std::move(DependencyFailure)))
+                .contains("dynamic_dependency"),
+            "workgroup-sync dependency diagnostic is missing");
+
+    if (ProfileValue == Profile::LdsReduction) {
+      std::vector<uint8_t> WrongDynamicLds = First.LinkedOutput->Bytes;
+      replaceMetadataText(WrongDynamicLds, "hidden_dynamic_lds_size",
+                          "hidden_dynamic_lds_sizx");
+      requireInspectionFailure(WrongDynamicLds, Exact,
+                               "post_link.check=metadata status=failed");
+    }
+  }
+
+  std::string LdsBody = BodyFor(Profile::LdsReduction);
+  RequireModuleFailure(
+      replaceExactText(LdsBody, "fence syncscope(\"workgroup\") release",
+                       "fence syncscope(\"workgroup\") seq_cst"),
+      Profile::LdsReduction, "fence ordering");
+  RequireModuleFailure(
+      replaceExactText(LdsBody, "  call void @llvm.amdgcn.s.barrier()\n",
+                       ""),
+      Profile::LdsReduction, "allocation/epoch/barrier");
+  std::string WrongExtent =
+      replaceExactText(LdsBody, "[0 x i32]", "[64 x i32]");
+  WrongExtent = replaceExactText(WrongExtent, "[0 x i32]", "[64 x i32]");
+  WrongExtent = replaceExactText(WrongExtent, "[0 x i32]", "[64 x i32]");
+  RequireModuleFailure(WrongExtent, Profile::LdsReduction,
+                       "allocation/epoch/barrier");
+  RequireModuleFailure(
+      replaceExactText(
+          LdsBody,
+          "@__fe2o3_lds_reduction_v1_scratch = external addrspace(3) global "
+          "[0 x i32], align 4",
+          "@__fe2o3_lds_reduction_v1_scratch = external addrspace(3) global "
+          "[0 x i32], align 8"),
+      Profile::LdsReduction, "allocation/epoch/barrier");
+
+  std::string AtomicBody = BodyFor(Profile::ScopedAtomic);
+  RequireModuleFailure(
+      replaceExactText(AtomicBody, "atomicrmw add", "atomicrmw xor"),
+      Profile::ScopedAtomic, "operation/order/scope/address space");
+  RequireModuleFailure(
+      replaceExactText(AtomicBody, "%value monotonic, align 4",
+                       "%value acquire, align 4"),
+      Profile::ScopedAtomic, "operation/order/scope/address space");
+  RequireModuleFailure(
+      replaceExactText(AtomicBody, "%value monotonic, align 4",
+                       "%value syncscope(\"agent\") monotonic, align 4"),
+      Profile::ScopedAtomic, "operation/order/scope/address space");
+  std::string WrongAtomicSpace = replaceExactText(
+      AtomicBody, "to ptr addrspace(1)", "to ptr addrspace(3)");
+  WrongAtomicSpace = replaceExactText(
+      WrongAtomicSpace, "atomicrmw add ptr addrspace(1)",
+      "atomicrmw add ptr addrspace(3)");
+  RequireModuleFailure(WrongAtomicSpace, Profile::ScopedAtomic,
+                       "pointer conversion");
+  RequireModuleFailure(
+      replaceExactText(AtomicBody, "%value monotonic, align 4",
+                       "%value monotonic, align 8"),
+      Profile::ScopedAtomic, "operation/order/scope/address space");
+}
+
 void testLldExitPolicy(int ExitCode) {
   pid_t Child = fork();
   require(Child >= 0, "could not fork LLD contract test");
@@ -2069,6 +2363,7 @@ int main(int ArgumentCount, char **Arguments) {
   testLldExitPolicy(0);
   testLldExitPolicy(1);
   testSyntheticOcmlPipeline();
+  testExactWorkgroupSyncProfiles();
   std::optional<std::vector<uint8_t>> MeasuredOcmlOutput =
       testMeasuredOcmlPipeline();
 

@@ -144,6 +144,7 @@ impl ExactWorkgroupSyncProfileV1 {
             "post_link.kernel name={} symbol={} kernarg_size=296 group_size=0 private_size=0 kernarg_align=8 wavefront_size=64 max_workgroup_size=64 reqd_workgroup_size=[64,1,1]",
             self.kernel, self.descriptor
         ));
+        diagnostics.sort();
         diagnostics
     }
 }
@@ -810,7 +811,8 @@ fn audit_canonical_llvm(
         }
         WorkgroupSyncProfileKindV1::ScopedAtomic => {
             if llvm.matches("atomicrmw add").count() != 1
-                || !llvm.contains("syncscope(\"system\") monotonic, align 4")
+                || !llvm.contains(", i32 %value monotonic, align 4")
+                || llvm.contains("syncscope(")
                 || !llvm.contains("inttoptr i64 %target.address to ptr addrspace(1)")
                 || llvm.contains("addrspace(3)")
                 || llvm.contains("llvm.amdgcn.s.barrier")
