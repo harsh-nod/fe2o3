@@ -10,6 +10,9 @@
 //! package authentication. A publisher signature or transparency-log identity
 //! must be checked before the managed build when that stronger claim is needed.
 
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+
 use rustc_hir::def_id::{DefId, LOCAL_CRATE};
 use rustc_hir::lang_items::LangItem;
 use rustc_middle::ty::{TyCtxt, TyKind};
@@ -27,8 +30,16 @@ const MATRIX_PROVIDER_SOURCE_IDENTITY_DOMAIN_V2: &[u8] =
     b"FE2O3/MATRIX-PROVIDER-SOURCE-IDENTITY/V2\0";
 const ROW_SOFTMAX_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
     b"FE2O3/ROW-SOFTMAX-PROVIDER-SOURCE-IDENTITY/V1\0";
+const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
+    b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-IDENTITY/V1\0";
+const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
+    b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-CLOSURE/V1\0";
+const REVIEWED_FE2O3_DEVICE_PACKAGE_ROOT: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../fe2o3-device");
 const REVIEWED_FE2O3_DEVICE_SOURCE_ROOT: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../fe2o3-device/src");
+
+static WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE: OnceLock<Result<[u8; 32], String>> = OnceLock::new();
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ReviewedMatrixProviderObservationV2 {
@@ -46,6 +57,18 @@ pub(crate) struct ReviewedRowSoftmaxProviderDefinitionV1 {
     pub(crate) crate_hash: [u8; 16],
     pub(crate) cargo_metadata_build_observation: [u8; 32],
     pub(crate) source_identity: [u8; 32],
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ReviewedWorkgroupSyncProviderDefinitionV1 {
+    pub(crate) crate_name: String,
+    pub(crate) stable_crate_id: u64,
+    /// Retained only to prove that all definitions came from one compilation
+    /// unit. Rustc's path-source crate hash is not a portable authority field.
+    pub(crate) crate_hash_observation: [u8; 16],
+    pub(crate) cargo_metadata_build_observation: [u8; 32],
+    pub(crate) source_closure_identity: [u8; 32],
+    pub(crate) definition_source_identity: [u8; 32],
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -701,6 +724,119 @@ pub(crate) fn reviewed_row_softmax_provider_definition(
         cargo_metadata_build_observation,
         source_identity,
     })
+}
+
+pub(crate) fn reviewed_workgroup_sync_provider_definition(
+    tcx: TyCtxt<'_>,
+    provider_definition: DefId,
+) -> Result<ReviewedWorkgroupSyncProviderDefinitionV1, String> {
+    let crate_num = provider_definition.krate;
+    let crate_name = named_external_provider(tcx, crate_num)?;
+    let definition_source_identity = reviewed_provider_source_identity(
+        tcx,
+        provider_definition,
+        WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1,
+    )?;
+    let source_closure_identity = WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE
+        .get_or_init(workgroup_sync_provider_source_closure_identity)
+        .clone()?;
+    Ok(ReviewedWorkgroupSyncProviderDefinitionV1 {
+        crate_name,
+        stable_crate_id: tcx.stable_crate_id(crate_num).as_u64(),
+        crate_hash_observation: tcx.crate_hash(crate_num).as_u128().to_le_bytes(),
+        cargo_metadata_build_observation: decode_sha256_environment(
+            CARGO_METADATA_BUILD_OBSERVATION_ENV_V2,
+        )?,
+        source_closure_identity,
+        definition_source_identity,
+    })
+}
+
+fn workgroup_sync_provider_source_closure_identity() -> Result<[u8; 32], String> {
+    let package_root =
+        std::fs::canonicalize(REVIEWED_FE2O3_DEVICE_PACKAGE_ROOT).map_err(|error| {
+            format!(
+                "reviewed fe2o3-device package root is unavailable to the managed build: {error}"
+            )
+        })?;
+    let mut files = vec![package_root.join("Cargo.toml")];
+    let build_script = package_root.join("build.rs");
+    if build_script.exists() {
+        files.push(build_script);
+    }
+    collect_reviewed_source_files(&package_root.join("src"), &mut files)?;
+    files.sort();
+
+    let mut hasher = Sha256::new();
+    hasher.update(WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1);
+    for file in files {
+        let canonical = std::fs::canonicalize(&file).map_err(|error| {
+            format!(
+                "reviewed fe2o3-device source `{}` is unavailable: {error}",
+                file.display()
+            )
+        })?;
+        let relative = canonical.strip_prefix(&package_root).map_err(|_| {
+            format!(
+                "reviewed fe2o3-device source `{}` escaped its package root",
+                canonical.display()
+            )
+        })?;
+        let relative = relative.to_str().ok_or_else(|| {
+            format!(
+                "reviewed fe2o3-device source path `{}` is not UTF-8",
+                relative.display()
+            )
+        })?;
+        let bytes = std::fs::read(&canonical).map_err(|error| {
+            format!(
+                "reviewed fe2o3-device source `{}` cannot be observed: {error}",
+                canonical.display()
+            )
+        })?;
+        hash_source_identity_field(&mut hasher, relative.as_bytes());
+        hash_source_identity_field(&mut hasher, &bytes);
+    }
+    Ok(hasher.finalize().into())
+}
+
+fn collect_reviewed_source_files(root: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
+    let entries = std::fs::read_dir(root).map_err(|error| {
+        format!(
+            "reviewed fe2o3-device source directory `{}` is unavailable: {error}",
+            root.display()
+        )
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            format!(
+                "reviewed fe2o3-device source directory `{}` cannot be read: {error}",
+                root.display()
+            )
+        })?;
+        let file_type = entry.file_type().map_err(|error| {
+            format!(
+                "reviewed fe2o3-device source `{}` cannot be inspected: {error}",
+                entry.path().display()
+            )
+        })?;
+        if file_type.is_dir() {
+            collect_reviewed_source_files(&entry.path(), files)?;
+        } else if file_type.is_file() {
+            files.push(entry.path());
+        } else {
+            return Err(format!(
+                "reviewed fe2o3-device source `{}` is not a regular file",
+                entry.path().display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn hash_source_identity_field(hasher: &mut Sha256, bytes: &[u8]) {
+    hasher.update((bytes.len() as u64).to_le_bytes());
+    hasher.update(bytes);
 }
 
 fn reviewed_matrix_source_identity(tcx: TyCtxt<'_>, def_id: DefId) -> Result<[u8; 32], String> {

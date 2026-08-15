@@ -6,9 +6,10 @@
 //! portable-MIR closure before selecting a closed semantic sidecar. Selection
 //! is reviewed correspondence, not generic lowering or a refinement proof.
 //! Reviewed semantic terminals deliberately replace a small set of provider
-//! bodies in that closure. Their exact role, compiler path, DefPathHash, and
-//! provider identity are frozen here; this authenticates the review boundary
-//! but does not prove source-to-terminal refinement.
+//! bodies in that closure. Their exact role, compiler path, crate-local
+//! definition hash, reviewed provider source, and build observation are frozen
+//! here; this authenticates the review boundary but does not prove
+//! source-to-terminal refinement.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -33,7 +34,7 @@ use reserved_fe2o3_symbols::{
     derive_kernel_binding_id_v1,
 };
 use rustc_abi::{CanonAbi, ExternAbi};
-use rustc_hir::{Mutability, Safety};
+use rustc_hir::{LangItem, Mutability, Safety};
 use rustc_middle::mir::{Operand, TerminatorKind};
 use rustc_middle::ty::{InstanceKind, IntTy, Ty, TyCtxt, TyKind, TypingEnv, UintTy};
 use rustc_target::callconv::{ArgAttributes, ArgExtension, PassMode};
@@ -76,8 +77,8 @@ const ATOMIC_ROOT_INSTANCE_IDENTITY: &str =
 
 const AUTHORITY_DOMAIN_V1: &[u8] = b"fe2o3.workgroup-sync.source-authority.v1";
 const FN_ABI_DOMAIN_V1: &[u8] = b"fe2o3.workgroup-sync.rustc-fn-abi.v1";
-const TRUSTED_DEFINITIONS_DOMAIN_V2: &[u8] =
-    b"fe2o3.workgroup-sync.trusted-definitions-and-semantic-terminals.v2";
+const TRUSTED_DEFINITIONS_DOMAIN_V3: &[u8] =
+    b"fe2o3.workgroup-sync.trusted-definitions-and-semantic-terminals.v3";
 const COMPILER_SEMANTICS_DOMAIN_V1: &[u8] = b"fe2o3.workgroup-sync.compiler-semantics.v1";
 const LDS_ABI_BINDING_V1: &[u8] = b"ptr64;size=40;align=8;values@0:16:8:slice-i32:shared-readonly;epoch@16:4:4:u32:value;output@24:16:8:slice-i32:unique-readwrite";
 const LDS_EFFECT_BINDING_V1: &[u8] = b"one-linear-lds-allocation:i32x64:256-bytes:align4:no-escape;all-64-threads-convergent;lane-publish;publish-read-barrier;read;read-reuse-barrier;lane0-only-output";
@@ -115,15 +116,16 @@ const ATOMIC_COMPILER_SEMANTICS_IDENTITY_V1: [u8; 32] = [
     0x04, 0x17, 0x3e, 0xfe, 0xb5, 0x4f, 0x89, 0x05, 0xb9, 0xae, 0x1d, 0x48, 0x10, 0xca, 0x7b, 0x76,
 ];
 
-// Frozen after observing the pinned fixture dependency graph. These values bind
-// every trusted definition and reviewed semantic terminal to its provider.
-const LDS_TRUSTED_TERMINAL_IDENTITY_V2: [u8; 32] = [
-    0x87, 0x0b, 0x89, 0x54, 0xf1, 0xcf, 0xa2, 0x32, 0xad, 0x23, 0x81, 0x09, 0x10, 0xc2, 0xf0, 0x82,
-    0x97, 0x11, 0x23, 0xf6, 0x8e, 0x50, 0xd7, 0xcf, 0x65, 0xbb, 0x73, 0x9c, 0xa3, 0xb2, 0xc2, 0x07,
+// Frozen after observing the pinned fixture dependency graph in independent
+// canonical workspaces. These values bind every trusted definition and
+// reviewed semantic terminal without rustc's path-source crate hash.
+const LDS_TRUSTED_TERMINAL_IDENTITY_V3: [u8; 32] = [
+    0x50, 0x97, 0xff, 0x92, 0xf4, 0x88, 0x1d, 0x71, 0x17, 0x18, 0x29, 0x30, 0x84, 0x8d, 0x55, 0xab,
+    0x78, 0x1e, 0xe6, 0x82, 0x24, 0xe1, 0xac, 0x78, 0x9e, 0xbf, 0x85, 0xf8, 0xbd, 0x41, 0x98, 0xcf,
 ];
-const ATOMIC_TRUSTED_TERMINAL_IDENTITY_V2: [u8; 32] = [
-    0x33, 0x17, 0x11, 0x08, 0xc9, 0xbc, 0xa7, 0x1f, 0x84, 0x63, 0xf9, 0xc3, 0x48, 0xfb, 0x7c, 0x1b,
-    0xd6, 0x6a, 0xb3, 0x0e, 0xbe, 0xaf, 0x6c, 0xef, 0x50, 0x05, 0xa3, 0x57, 0x23, 0x9c, 0x11, 0xf1,
+const ATOMIC_TRUSTED_TERMINAL_IDENTITY_V3: [u8; 32] = [
+    0x20, 0xa0, 0x07, 0x6e, 0x0e, 0xe9, 0xeb, 0x4e, 0x8d, 0xd9, 0x0e, 0x60, 0x1b, 0x36, 0x8f, 0xf3,
+    0x95, 0x78, 0x5d, 0xfe, 0xf1, 0xfd, 0x5c, 0x80, 0x6d, 0x13, 0x18, 0x74, 0x16, 0x75, 0xe8, 0x14,
 ];
 
 const LDS_ARGUMENT_KINDS_V1: [GeneralTypedArgumentKindV3; 3] = [
@@ -262,8 +264,8 @@ impl WorkgroupSyncProfileKindV1 {
 
     const fn trusted_terminal_identity(self) -> [u8; 32] {
         match self {
-            Self::LdsReduction => LDS_TRUSTED_TERMINAL_IDENTITY_V2,
-            Self::ScopedAtomic => ATOMIC_TRUSTED_TERMINAL_IDENTITY_V2,
+            Self::LdsReduction => LDS_TRUSTED_TERMINAL_IDENTITY_V3,
+            Self::ScopedAtomic => ATOMIC_TRUSTED_TERMINAL_IDENTITY_V3,
         }
     }
 
@@ -1151,13 +1153,21 @@ struct CompilerProviderIdentityV1 {
     crate_hash: [u8; 16],
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ReviewedDeviceDefinitionIdentityV3 {
+    provider: CompilerProviderIdentityV1,
+    cargo_metadata_build_observation: [u8; 32],
+    source_closure_identity: [u8; 32],
+    definition_source_identity: [u8; 32],
+}
+
 fn trusted_definitions_and_terminals_identity<'tcx>(
     tcx: TyCtxt<'tcx>,
     collection: &CollectionResult<'tcx>,
     kind: WorkgroupSyncProfileKindV1,
 ) -> Result<[u8; 32], CollectedWorkgroupSyncErrorV1> {
     let mut digest = Sha256::new();
-    hash_field(&mut digest, TRUSTED_DEFINITIONS_DOMAIN_V2);
+    hash_field(&mut digest, TRUSTED_DEFINITIONS_DOMAIN_V3);
     hash_field(&mut digest, kind.pipeline().as_bytes());
     let mut provider = None;
     for item in kind.trusted_items() {
@@ -1174,9 +1184,14 @@ fn trusted_definitions_and_terminals_identity<'tcx>(
             )));
         }
         provider.get_or_insert(definition.krate);
-        hash_field(&mut digest, item.canonical_path().as_bytes());
-        hash_field(&mut digest, &tcx.def_path_hash(definition).0.to_le_bytes());
-        hash_compiler_provider(&mut digest, &compiler_provider(tcx, definition.krate));
+        let identity = reviewed_device_definition_identity(tcx, definition)?;
+        hash_device_definition(
+            &mut digest,
+            item.canonical_path(),
+            &tcx.def_path_str(definition),
+            tcx.def_path_hash(definition).local_hash().as_u64(),
+            &identity,
+        );
     }
     let device_provider = provider.ok_or_else(|| {
         CollectedWorkgroupSyncErrorV1::TrustedDefinitions(
@@ -1184,6 +1199,24 @@ fn trusted_definitions_and_terminals_identity<'tcx>(
         )
     })?;
     let device_provider_identity = compiler_provider(tcx, device_provider);
+    let core_provider = tcx
+        .lang_items()
+        .get(LangItem::Sized)
+        .ok_or_else(|| {
+            CollectedWorkgroupSyncErrorV1::TrustedDefinitions(
+                "pinned compiler omitted the core Sized lang item".into(),
+            )
+        })?
+        .krate;
+    let core_provider_identity = compiler_provider(tcx, core_provider);
+    if core_provider_identity.crate_name != "core"
+        || core_provider_identity.stable_crate_id == 0
+        || core_provider_identity.crate_hash == [0; 16]
+    {
+        return Err(CollectedWorkgroupSyncErrorV1::TrustedDefinitions(
+            "pinned core provider identity is incomplete".into(),
+        ));
+    }
     let mut terminals = BTreeMap::new();
     for function in &collection.functions {
         let body = tcx.instance_mir(function.instance.def);
@@ -1249,14 +1282,32 @@ fn trusted_definitions_and_terminals_identity<'tcx>(
             ))
         })?;
         let terminal_provider = compiler_provider(tcx, definition.krate);
-        require_terminal_provider(*role, &terminal_provider, &device_provider_identity)?;
-        hash_terminal_definition(
-            &mut digest,
+        require_terminal_provider(
             *role,
-            &tcx.def_path_str(definition),
-            tcx.def_path_hash(definition).0.to_le_bytes(),
             &terminal_provider,
-        );
+            &device_provider_identity,
+            &core_provider_identity,
+        )?;
+        let compiler_path = tcx.def_path_str(definition);
+        let local_def_path_hash = tcx.def_path_hash(definition).local_hash().as_u64();
+        if role.is_rustc_intrinsic() {
+            hash_core_terminal(
+                &mut digest,
+                *role,
+                &compiler_path,
+                local_def_path_hash,
+                &terminal_provider,
+            );
+        } else {
+            let identity = reviewed_device_definition_identity(tcx, definition)?;
+            hash_device_definition(
+                &mut digest,
+                role.canonical_path(),
+                &compiler_path,
+                local_def_path_hash,
+                &identity,
+            );
+        }
     }
     let actual: [u8; 32] = digest.finalize().into();
     if actual != kind.trusted_terminal_identity() {
@@ -1284,9 +1335,10 @@ fn require_terminal_provider(
     role: WorkgroupSyncCompilerIntrinsicV1,
     actual: &CompilerProviderIdentityV1,
     device: &CompilerProviderIdentityV1,
+    core: &CompilerProviderIdentityV1,
 ) -> Result<(), CollectedWorkgroupSyncErrorV1> {
     let accepted = if role.is_rustc_intrinsic() {
-        actual.crate_name == "core" && actual.stable_crate_id != 0 && actual.crate_hash != [0; 16]
+        actual == core
     } else {
         actual == device
     };
@@ -1301,23 +1353,65 @@ fn require_terminal_provider(
     }
 }
 
-fn hash_compiler_provider(digest: &mut Sha256, provider: &CompilerProviderIdentityV1) {
-    hash_field(digest, provider.crate_name.as_bytes());
-    hash_field(digest, &provider.stable_crate_id.to_le_bytes());
-    hash_field(digest, &provider.crate_hash);
+fn reviewed_device_definition_identity(
+    tcx: TyCtxt<'_>,
+    definition: rustc_hir::def_id::DefId,
+) -> Result<ReviewedDeviceDefinitionIdentityV3, CollectedWorkgroupSyncErrorV1> {
+    let observed =
+        trusted_device_items::reviewed_workgroup_sync_provider_definition(tcx, definition)
+            .map_err(CollectedWorkgroupSyncErrorV1::TrustedDefinitions)?;
+    let provider = compiler_provider(tcx, definition.krate);
+    if observed.crate_name != provider.crate_name
+        || observed.stable_crate_id != provider.stable_crate_id
+        || observed.crate_hash_observation != provider.crate_hash
+        || observed.cargo_metadata_build_observation == [0; 32]
+        || observed.source_closure_identity == [0; 32]
+        || observed.definition_source_identity == [0; 32]
+    {
+        return Err(CollectedWorkgroupSyncErrorV1::TrustedDefinitions(
+            "reviewed device provider observation is incomplete".into(),
+        ));
+    }
+    Ok(ReviewedDeviceDefinitionIdentityV3 {
+        provider,
+        cargo_metadata_build_observation: observed.cargo_metadata_build_observation,
+        source_closure_identity: observed.source_closure_identity,
+        definition_source_identity: observed.definition_source_identity,
+    })
 }
 
-fn hash_terminal_definition(
+fn hash_device_definition(
+    digest: &mut Sha256,
+    role: &str,
+    compiler_path: &str,
+    local_def_path_hash: u64,
+    identity: &ReviewedDeviceDefinitionIdentityV3,
+) {
+    hash_field(digest, b"reviewed-fe2o3-device-definition-v1");
+    hash_field(digest, role.as_bytes());
+    hash_field(digest, compiler_path.as_bytes());
+    hash_field(digest, &local_def_path_hash.to_le_bytes());
+    hash_field(digest, identity.provider.crate_name.as_bytes());
+    hash_field(digest, &identity.provider.stable_crate_id.to_le_bytes());
+    hash_field(digest, &identity.cargo_metadata_build_observation);
+    hash_field(digest, &identity.source_closure_identity);
+    hash_field(digest, &identity.definition_source_identity);
+}
+
+fn hash_core_terminal(
     digest: &mut Sha256,
     role: WorkgroupSyncCompilerIntrinsicV1,
     compiler_path: &str,
-    def_path_hash: [u8; 16],
+    local_def_path_hash: u64,
     provider: &CompilerProviderIdentityV1,
 ) {
+    hash_field(digest, b"pinned-rustc-core-terminal-v1");
     hash_field(digest, role.canonical_path().as_bytes());
     hash_field(digest, compiler_path.as_bytes());
-    hash_field(digest, &def_path_hash);
-    hash_compiler_provider(digest, provider);
+    hash_field(digest, &local_def_path_hash.to_le_bytes());
+    hash_field(digest, provider.crate_name.as_bytes());
+    hash_field(digest, &provider.stable_crate_id.to_le_bytes());
+    hash_field(digest, &provider.crate_hash);
 }
 
 fn observe_compiler_semantics(tcx: TyCtxt<'_>) -> CompilerSemanticsV1 {
@@ -1692,17 +1786,17 @@ mod tests {
     }
 
     #[test]
-    fn terminal_role_path_definition_and_provider_mutations_change_identity() {
+    fn device_definition_identity_is_portable_but_fail_closed() {
         use WorkgroupSyncCompilerIntrinsicV1 as Terminal;
 
         fn identity(
-            role: WorkgroupSyncCompilerIntrinsicV1,
+            role: &str,
             path: &str,
-            def_path_hash: [u8; 16],
-            provider: &CompilerProviderIdentityV1,
+            local_def_path_hash: u64,
+            definition: &ReviewedDeviceDefinitionIdentityV3,
         ) -> [u8; 32] {
             let mut digest = Sha256::new();
-            hash_terminal_definition(&mut digest, role, path, def_path_hash, provider);
+            hash_device_definition(&mut digest, role, path, local_def_path_hash, definition);
             digest.finalize().into()
         }
 
@@ -1711,61 +1805,113 @@ mod tests {
             stable_crate_id: 7,
             crate_hash: [3; 16],
         };
-        let exact = identity(
-            Terminal::ScratchFromDynamicLds,
-            "_::__fe2o3_kernel_device::WorkgroupCollectiveScratch::from_dynamic_lds",
-            [5; 16],
-            &device,
-        );
-        assert_ne!(
-            exact,
-            identity(
-                Terminal::ThreadIdxX,
-                "_::__fe2o3_kernel_device::WorkgroupCollectiveScratch::from_dynamic_lds",
-                [5; 16],
-                &device,
-            )
-        );
-        assert_ne!(
-            exact,
-            identity(
-                Terminal::ScratchFromDynamicLds,
-                "_::__fe2o3_kernel_device::fake::from_dynamic_lds",
-                [5; 16],
-                &device,
-            )
-        );
-        assert_ne!(
-            exact,
-            identity(
-                Terminal::ScratchFromDynamicLds,
-                "_::__fe2o3_kernel_device::WorkgroupCollectiveScratch::from_dynamic_lds",
-                [6; 16],
-                &device,
-            )
-        );
-        let drifted_provider = CompilerProviderIdentityV1 {
-            crate_hash: [4; 16],
-            ..device.clone()
+        let definition = ReviewedDeviceDefinitionIdentityV3 {
+            provider: device.clone(),
+            cargo_metadata_build_observation: [4; 32],
+            source_closure_identity: [5; 32],
+            definition_source_identity: [6; 32],
         };
+        let role = Terminal::ScratchFromDynamicLds.canonical_path();
+        let path = "_::__fe2o3_kernel_device::WorkgroupCollectiveScratch::from_dynamic_lds";
+        let exact = identity(role, path, 11, &definition);
+        assert_ne!(
+            exact,
+            identity(Terminal::ThreadIdxX.canonical_path(), path, 11, &definition,)
+        );
         assert_ne!(
             exact,
             identity(
-                Terminal::ScratchFromDynamicLds,
-                "_::__fe2o3_kernel_device::WorkgroupCollectiveScratch::from_dynamic_lds",
-                [5; 16],
-                &drifted_provider,
+                role,
+                "_::__fe2o3_kernel_device::fake::from_dynamic_lds",
+                11,
+                &definition,
             )
         );
-        assert!(require_terminal_provider(Terminal::ThreadIdxX, &device, &device).is_ok());
-        assert!(
-            require_terminal_provider(Terminal::ThreadIdxX, &drifted_provider, &device).is_err()
-        );
-        let impostor_core = CompilerProviderIdentityV1 {
-            crate_name: "impostor_core".into(),
+        assert_ne!(exact, identity(role, path, 12, &definition));
+
+        let mut mutation = definition.clone();
+        mutation.provider.crate_name = "fake_fe2o3_device".into();
+        assert_ne!(exact, identity(role, path, 11, &mutation));
+        mutation = definition.clone();
+        mutation.provider.stable_crate_id ^= 1;
+        assert_ne!(exact, identity(role, path, 11, &mutation));
+        mutation = definition.clone();
+        mutation.cargo_metadata_build_observation[0] ^= 1;
+        assert_ne!(exact, identity(role, path, 11, &mutation));
+        mutation = definition.clone();
+        mutation.source_closure_identity[0] ^= 1;
+        assert_ne!(exact, identity(role, path, 11, &mutation));
+        mutation = definition.clone();
+        mutation.definition_source_identity[0] ^= 1;
+        assert_ne!(exact, identity(role, path, 11, &mutation));
+
+        // Rustc's full crate hash contains Cargo path-source disambiguation.
+        // It remains a same-session provider check but is deliberately absent
+        // from the portable identity preimage.
+        mutation = definition.clone();
+        mutation.provider.crate_hash[0] ^= 1;
+        assert_eq!(exact, identity(role, path, 11, &mutation));
+
+        let core = CompilerProviderIdentityV1 {
+            crate_name: "core".into(),
             stable_crate_id: 9,
             crate_hash: [8; 16],
         };
-        assert!(require_terminal_provider(Terminal::AtomicXadd, &impostor_core, &device).is_err());
+        assert!(require_terminal_provider(Terminal::ThreadIdxX, &device, &device, &core).is_ok());
+        assert!(
+            require_terminal_provider(Terminal::ThreadIdxX, &mutation.provider, &device, &core)
+                .is_err()
+        );
+        assert!(require_terminal_provider(Terminal::AtomicXadd, &core, &device, &core).is_ok());
+        let impostor_core = CompilerProviderIdentityV1 {
+            crate_name: "impostor_core".into(),
+            ..core.clone()
+        };
+        assert!(
+            require_terminal_provider(Terminal::AtomicXadd, &impostor_core, &device, &core)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn core_terminal_identity_binds_pinned_provider_and_local_definition() {
+        use WorkgroupSyncCompilerIntrinsicV1 as Terminal;
+
+        fn identity(
+            path: &str,
+            local_def_path_hash: u64,
+            provider: &CompilerProviderIdentityV1,
+        ) -> [u8; 32] {
+            let mut digest = Sha256::new();
+            hash_core_terminal(
+                &mut digest,
+                Terminal::AtomicXadd,
+                path,
+                local_def_path_hash,
+                provider,
+            );
+            digest.finalize().into()
+        }
+
+        let core = CompilerProviderIdentityV1 {
+            crate_name: "core".into(),
+            stable_crate_id: 9,
+            crate_hash: [8; 16],
+        };
+        let exact = identity("std::intrinsics::atomic_xadd", 17, &core);
+        assert_ne!(exact, identity("std::intrinsics::atomic_xsub", 17, &core));
+        assert_ne!(exact, identity("std::intrinsics::atomic_xadd", 18, &core));
+        let mut mutation = core.clone();
+        mutation.stable_crate_id ^= 1;
+        assert_ne!(
+            exact,
+            identity("std::intrinsics::atomic_xadd", 17, &mutation)
+        );
+        mutation = core;
+        mutation.crate_hash[0] ^= 1;
+        assert_ne!(
+            exact,
+            identity("std::intrinsics::atomic_xadd", 17, &mutation)
+        );
     }
 }
