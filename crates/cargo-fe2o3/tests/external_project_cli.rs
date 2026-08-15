@@ -1821,11 +1821,11 @@ fn protected_release_rejects_unexpected_inherited_descriptor() {
 fn protected_release_rejects_inherited_descriptor_enumeration_directory() {
     let fixture = ProjectFixture::standalone();
     let mut command = fixture.protected_release_command("probe");
-    // SAFETY: open, dup3, and close are async-signal-safe; the static path is NUL-terminated.
+    // SAFETY: open, dup3, and close are async-signal-safe.
     unsafe {
         command.pre_exec(|| {
             let source = libc::open(
-                b"/proc/self/fd\0".as_ptr().cast(),
+                c"/proc/self/fd".as_ptr(),
                 libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
             );
             if source < 0 {
