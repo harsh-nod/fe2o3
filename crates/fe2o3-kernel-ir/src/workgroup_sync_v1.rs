@@ -235,13 +235,15 @@ impl LdsReductionProfileV1 {
             LDS_REDUCTION_V1_DESCRIPTOR_SYMBOL,
             LDS_REDUCTION_V1_EXPLICIT_KERNARG_BYTES,
             LDS_REDUCTION_V1_COMPLETE_COV6_KERNARG_BYTES,
-            0,
-            256,
-            Some(Cov6HiddenDynamicLdsSizeV1 {
-                relative_offset: 120,
-                field_size: 4,
-                required_launch_value: 256,
-            }),
+            ExactDescriptorResourcesV1 {
+                static_lds_bytes: 0,
+                required_dynamic_lds_bytes: 256,
+                hidden_dynamic_lds_size: Some(Cov6HiddenDynamicLdsSizeV1 {
+                    relative_offset: 120,
+                    field_size: 4,
+                    required_launch_value: 256,
+                }),
+            },
         )
     }
 
@@ -259,9 +261,11 @@ impl ScopedAtomicProfileV1 {
             SCOPED_ATOMIC_V1_DESCRIPTOR_SYMBOL,
             SCOPED_ATOMIC_V1_EXPLICIT_KERNARG_BYTES,
             SCOPED_ATOMIC_V1_COMPLETE_COV6_KERNARG_BYTES,
-            0,
-            0,
-            None,
+            ExactDescriptorResourcesV1 {
+                static_lds_bytes: 0,
+                required_dynamic_lds_bytes: 0,
+                hidden_dynamic_lds_size: None,
+            },
         );
         Self {
             source_sha256: exact.source_sha256,
@@ -453,9 +457,7 @@ fn profile(
     descriptor_symbol: &str,
     explicit_kernarg_bytes: u32,
     complete_kernarg_bytes: u32,
-    static_lds_bytes: u32,
-    required_dynamic_lds_bytes: u32,
-    hidden_dynamic_lds_size: Option<Cov6HiddenDynamicLdsSizeV1>,
+    resources: ExactDescriptorResourcesV1,
 ) -> LdsReductionProfileV1 {
     let workgroup_size = WorkgroupSize::new(64, 1, 1);
     LdsReductionProfileV1 {
@@ -477,10 +479,17 @@ fn profile(
             complete_kernarg_bytes,
             workgroup_size,
             wave_width: WaveWidth::Wave64,
-            static_lds_bytes,
-            required_dynamic_lds_bytes,
-            maximum_dynamic_lds_bytes: required_dynamic_lds_bytes,
-            hidden_dynamic_lds_size,
+            static_lds_bytes: resources.static_lds_bytes,
+            required_dynamic_lds_bytes: resources.required_dynamic_lds_bytes,
+            maximum_dynamic_lds_bytes: resources.required_dynamic_lds_bytes,
+            hidden_dynamic_lds_size: resources.hidden_dynamic_lds_size,
         },
     }
+}
+
+#[derive(Clone, Copy)]
+struct ExactDescriptorResourcesV1 {
+    static_lds_bytes: u32,
+    required_dynamic_lds_bytes: u32,
+    hidden_dynamic_lds_size: Option<Cov6HiddenDynamicLdsSizeV1>,
 }
