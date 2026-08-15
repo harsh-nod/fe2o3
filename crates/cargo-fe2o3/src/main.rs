@@ -2,6 +2,7 @@ mod application_exec;
 mod application_handoff;
 mod application_sandbox;
 mod application_supervisor;
+mod authority_release;
 mod authorized_kernel_closure;
 mod binding_wrapper;
 mod capability_broker;
@@ -78,6 +79,12 @@ fn main() -> ExitCode {
     let raw_args = env::args_os().skip(1).collect::<Vec<_>>();
     if raw_args
         .first()
+        .is_some_and(|argument| argument == authority_release::INTERNAL_CHILD_ARG)
+    {
+        return authority_release::run_child(&raw_args[1..]);
+    }
+    if raw_args
+        .first()
         .is_some_and(|argument| argument == application_supervisor::INTERNAL_SUPERVISOR_ARG)
     {
         return run_application_supervisor(&raw_args[1..]);
@@ -104,6 +111,7 @@ fn main() -> ExitCode {
     let rest: Vec<OsString> = args.collect();
 
     match command.to_str() {
+        Some("authority") => authority_release::command(&rest),
         Some("doctor") => doctor(),
         Some("build") => cargo_with_backend("build", &rest),
         Some("run") => cargo_with_backend("run", &rest),
@@ -249,7 +257,28 @@ fn doctor() -> ExitCode {
 }
 
 fn cargo_with_backend(command: &str, args: &[OsString]) -> ExitCode {
-    match cargo_with_backend_result(command, args) {
+    match cargo_with_backend_result(command, args, None) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn cargo_with_protected_release(
+    args: &[OsString],
+    admission: authority_release::ProtectedReleaseAdmission,
+) -> ExitCode {
+    let Some(command) = args.first().and_then(|value| value.to_str()) else {
+        eprintln!("protected authority release has no UTF-8 Cargo command");
+        return ExitCode::FAILURE;
+    };
+    if !matches!(command, "build" | "run") {
+        eprintln!("protected authority release child requires build or run");
+        return ExitCode::FAILURE;
+    }
+    match cargo_with_backend_result(command, &args[1..], Some(&admission)) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("{error}");
@@ -281,7 +310,7 @@ fn smoke(args: &[String]) -> ExitCode {
     for package in packages {
         eprintln!("cargo fe2o3 smoke: running {package}");
         let args = [OsString::from("-p"), OsString::from(package)];
-        if let Err(error) = cargo_with_backend_result("run", &args) {
+        if let Err(error) = cargo_with_backend_result("run", &args, None) {
             eprintln!("{error}");
             return ExitCode::FAILURE;
         }
@@ -290,7 +319,11 @@ fn smoke(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn cargo_with_backend_result(command: &str, args: &[OsString]) -> Result<(), String> {
+fn cargo_with_backend_result(
+    command: &str,
+    args: &[OsString],
+    protected_release: Option<&authority_release::ProtectedReleaseAdmission>,
+) -> Result<(), String> {
     if authority_sensitive_request_selected() {
         reject_dynamic_loader_environment()?;
     }
@@ -305,7 +338,7 @@ fn cargo_with_backend_result(command: &str, args: &[OsString]) -> Result<(), Str
             .and_then(worker_v2::PreparedWorkerV2Config::source_debug_profile)
             .is_some();
     if requires_authorized_closure {
-        require_protected_authority_launch()?;
+        require_protected_authority_launch(protected_release)?;
         reject_authority_environment_overrides(args)?;
     }
     let authority_rustc_sha256 = requires_authorized_closure
@@ -1445,7 +1478,12 @@ fn reject_configured_compiler_selection(
     Ok(())
 }
 
-fn require_protected_authority_launch() -> Result<(), String> {
+fn require_protected_authority_launch(
+    protected_release: Option<&authority_release::ProtectedReleaseAdmission>,
+) -> Result<(), String> {
+    if protected_release.is_some() {
+        return Ok(());
+    }
     if cfg!(debug_assertions)
         && env::var_os(NON_PRODUCTION_AUTHORITY_VALIDATION_ENV).as_deref() == Some(OsStr::new("1"))
     {

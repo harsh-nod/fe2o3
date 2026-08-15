@@ -17,6 +17,7 @@ host-consumer-fixture = ["dep:fe2o3-host"]
 cap-primitives = "=4.0.2"
 fe2o3-artifacts.workspace = true
 fe2o3-artifact-transaction.workspace = true
+fe2o3-build-authority.workspace = true
 fe2o3-compiler-ffi.workspace = true
 fe2o3-hsaco.workspace = true
 fe2o3-hsaco-finalize.workspace = true
