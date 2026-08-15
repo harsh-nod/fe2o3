@@ -60,6 +60,51 @@ fn generated_arguments_retain_source_borrows() {
 }
 
 #[test]
+fn generated_global_mut_arguments_reject_forgery_and_substitution() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let manifest = manifest_dir.join("tests/fixtures/renamed-typed-host/Cargo.toml");
+    let target_dir = manifest_dir.join("../../target/renamed-typed-host-test");
+    let cases: &[(&str, &[&str])] = &[
+        (
+            "global_mut_alias",
+            &["cannot borrow `*target` as mutable more than once"],
+        ),
+        ("global_mut_forgery", &["field `region`", "is private"]),
+        (
+            "global_mut_wrong_type",
+            &[
+                "expected `GlobalMut<'_, u32>`",
+                "found `GlobalMut<'_, f32>`",
+            ],
+        ),
+        (
+            "global_mut_wrong_mutability",
+            &[
+                "expected `GeneratedReadWriteDeviceSlice",
+                "found `GeneratedReadDeviceSlice",
+            ],
+        ),
+        ("global_mut_raw_escape", &["no method named `as_raw`"]),
+        (
+            "global_mut_wrong_address_space",
+            &["requires `pub fn(&[f32], &[f32], DisjointSlice<f32>)`"],
+        ),
+    ];
+
+    for (bin, expected_diagnostics) in cases {
+        let output = cargo_check(&manifest, &target_dir, Some(bin));
+        assert!(!output.status.success(), "{bin} unexpectedly compiled");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        for expected_diagnostic in *expected_diagnostics {
+            assert!(
+                stderr.contains(expected_diagnostic),
+                "{bin} omitted diagnostic `{expected_diagnostic}`:\n{stderr}"
+            );
+        }
+    }
+}
+
+#[test]
 fn exact_alpha_zeta_generated_adapter_compiles_downstream() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let manifest = manifest_dir.join("tests/fixtures/alpha-zeta-adapter/Cargo.toml");

@@ -60,6 +60,11 @@ pub mod __generated {
     #[derive(Debug)]
     pub struct RegionError;
 
+    pub trait GeneratedDeviceScalarV1 {}
+
+    impl GeneratedDeviceScalarV1 for u32 {}
+    impl GeneratedDeviceScalarV1 for f32 {}
+
     pub struct GeneratedReadDeviceSlice<'allocation, T> {
         _buffer: &'allocation DeviceBuffer<T>,
     }
@@ -83,6 +88,10 @@ pub mod __generated {
             buffer: &'allocation mut DeviceBuffer<T>,
         ) -> Result<Self, RegionError> {
             Ok(Self { _buffer: buffer })
+        }
+
+        pub fn len(&self) -> usize {
+            1
         }
     }
 

@@ -13,7 +13,7 @@ use core::fmt;
 use core::marker::PhantomData;
 use core::mem::align_of;
 
-use crate::{Group, SubgroupTile, Workgroup};
+use crate::{DynamicLds, Group, LdsUninitialized, SubgroupTile, Workgroup};
 
 /// Version of the bounded gfx942 collective contract.
 pub const GFX942_COLLECTIVE_CONTRACT_VERSION_V1: u16 = 1;
@@ -42,7 +42,7 @@ mod sealed {
 /// This trait is sealed. Integer addition wraps modulo 2^32; floating-point
 /// addition follows the compiler-authenticated strict gfx942 policy. The
 /// reduction tree is deterministic but is not a sequential left fold.
-pub trait Gfx942CollectiveElement: sealed::CollectiveElement + Copy {
+pub trait Gfx942CollectiveElement: sealed::CollectiveElement + crate::LdsElement + Copy {
     #[doc(hidden)]
     const ZERO: Self;
 
@@ -307,6 +307,37 @@ pub struct WorkgroupCollectiveScratch<'group, T: Gfx942CollectiveElement> {
 }
 
 impl<'group, T: Gfx942CollectiveElement> WorkgroupCollectiveScratch<'group, T> {
+    /// Consumes one typed LDS root capability as collective scratch.
+    ///
+    /// The dynamic allocation must contain exactly one slot per invocation in
+    /// `group`. Consuming it prevents ordinary typed LDS access while the
+    /// collective owns the shared region; no pointer is exposed to callers.
+    pub fn from_dynamic_lds(
+        group: &'group Workgroup<'group>,
+        lds: DynamicLds<'group, T, LdsUninitialized>,
+    ) -> Result<Self, WorkgroupCollectiveScratchError> {
+        let size = group.size();
+        if size == 0
+            || size > u64::from(MAX_GFX942_WORKGROUP_COLLECTIVE_SIZE)
+            || !size.is_power_of_two()
+        {
+            return Err(WorkgroupCollectiveScratchError::UnsupportedWorkgroupSize { size });
+        }
+        let required = size as u32;
+        let provided = u32::try_from(lds.len()).unwrap_or(u32::MAX);
+        if provided != required || lds.len() != required as usize {
+            return Err(WorkgroupCollectiveScratchError::SlotCountMismatch { required, provided });
+        }
+        let (base, slots) = lds.into_collective_raw_parts();
+        debug_assert_eq!(slots, required as usize);
+        Ok(Self {
+            base,
+            slots: required,
+            _group: PhantomData,
+            _not_send_sync: PhantomData,
+        })
+    }
+
     /// Binds a raw workgroup-address-space allocation to a group snapshot.
     ///
     /// # Safety

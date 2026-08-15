@@ -5,10 +5,10 @@ use super::{
     MAX_GFX942_WORKGROUP_COLLECTIVE_SIZE, WorkgroupCollectiveScratch,
     WorkgroupCollectiveScratchError,
 };
-use crate::Workgroup;
 use crate::group::SubgroupTile;
 use crate::thread::{GridSize, Invocation3D, WorkgroupId, WorkgroupSize, WorkitemId};
 use crate::wave::{Wave64, WaveLane};
+use crate::{DynamicLds, Workgroup, WorkgroupLdsScope};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::vec::Vec;
 
@@ -237,6 +237,42 @@ fn scratch_binding_accepts_only_the_bounded_power_of_two_profile() {
             }
         );
     }
+}
+
+#[test]
+fn typed_lds_capability_is_consumed_by_collective_scratch() {
+    let invocation_snapshot = invocation(8, 3);
+    let group = Workgroup::from_invocation_snapshot(&invocation_snapshot).unwrap();
+    let mut slots = [core::mem::MaybeUninit::<i32>::uninit(); 8];
+    let mut scope = WorkgroupLdsScope::for_host_test();
+    let lds = unsafe {
+        DynamicLds::<i32>::from_host_parts_for_test(
+            &mut scope,
+            slots.as_mut_ptr().cast::<u8>(),
+            core::mem::size_of_val(&slots),
+        )
+    }
+    .unwrap();
+    let scratch = WorkgroupCollectiveScratch::from_dynamic_lds(&group, lds).unwrap();
+    assert_eq!(scratch.slots(), 8);
+
+    let mut short_slots = [core::mem::MaybeUninit::<i32>::uninit(); 4];
+    let mut short_scope = WorkgroupLdsScope::for_host_test();
+    let short_lds = unsafe {
+        DynamicLds::<i32>::from_host_parts_for_test(
+            &mut short_scope,
+            short_slots.as_mut_ptr().cast::<u8>(),
+            core::mem::size_of_val(&short_slots),
+        )
+    }
+    .unwrap();
+    assert_eq!(
+        WorkgroupCollectiveScratch::from_dynamic_lds(&group, short_lds).unwrap_err(),
+        WorkgroupCollectiveScratchError::SlotCountMismatch {
+            required: 8,
+            provided: 4,
+        }
+    );
 }
 
 #[test]

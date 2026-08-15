@@ -1,0 +1,9 @@
+error[E0499]: cannot borrow `*scope` as mutable more than once at a time
+ --> tests/ui/fail/exact_dynamic_lds_scope_cannot_alias.rs:5:72
+  |
+4 |     let first = unsafe { DynamicLds::<i32>::exact_from_compiler::<64>(scope, 0) };
+  |                                                                       ----- first mutable borrow occurs here
+5 |     let second = unsafe { DynamicLds::<i32>::exact_from_compiler::<64>(scope, 0) };
+  |                                                                        ^^^^^ second mutable borrow occurs here
+6 |     let _ = (first, second);
+  |              ----- first borrow later used here

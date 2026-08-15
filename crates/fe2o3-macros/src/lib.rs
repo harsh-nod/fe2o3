@@ -4,11 +4,11 @@ mod control_flow_v1;
 
 use fe2o3_artifacts::{
     AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize,
-    DigestBytes, Dimensions, LaunchContract, Mutability, Name, PointerWidth,
-    RustDisjointIndexSpaceV1, RustLayoutEvidenceV1, RustPhysicalComponentKindV1,
-    RustPhysicalComponentV1, RustPointerMutabilityV1, RustScalarElementTypeV1,
-    RustSourceTypeShapeV1, RustTypeEvidenceV1, RustcAbiClassV1, ScalarType, TypeIdentity,
-    derive_generated_host_contract_identity_v1,
+    DeclaredRustLayoutIdentity, DeclaredRustTypeIdentity, DigestAlgorithm, DigestBytes, Dimensions,
+    LaunchContract, Mutability, Name, PointerWidth, RustDisjointIndexSpaceV1, RustLayoutEvidenceV1,
+    RustPhysicalComponentKindV1, RustPhysicalComponentV1, RustPointerMutabilityV1,
+    RustScalarElementTypeV1, RustSourceTypeShapeV1, RustTypeEvidenceV1, RustcAbiClassV1,
+    ScalarType, TypeIdentity, derive_generated_host_contract_identity_v1,
 };
 use proc_macro::TokenStream;
 use proc_macro_crate::{FoundCrate, crate_name};
@@ -359,6 +359,10 @@ const GENERAL_TYPED_WAVE64_BLOCK_V1: [u32; 3] = [64, 1, 1];
 const GENERAL_TYPED_POINTER_SIZE_V1: u64 = 8;
 const GENERAL_TYPED_POINTER_ALIGNMENT_V1: u32 = 8;
 const GENERAL_TYPED_SLICE_SIZE_V1: u64 = 16;
+const GENERAL_TYPED_GLOBAL_MUT_POINTER_TYPE_DOMAIN_V1: &[u8] =
+    b"FE2O3/RUST-TYPE-EVIDENCE/DEVICE-GLOBAL-MUT-PTR/V1\0";
+const GENERAL_TYPED_GLOBAL_MUT_POINTER_LAYOUT_DOMAIN_V1: &[u8] =
+    b"FE2O3/RUST-LAYOUT-EVIDENCE/DEVICE-GLOBAL-MUT-PTR/V1\0";
 const KERNEL_FRONTEND_REGISTRATION_PREFIX_V1: &str = "__fe2o3_kernel_frontend_contract_v1_";
 const KERNEL_FRONTEND_REGISTRATION_MAGIC_V1: u64 = u64::from_le_bytes(*b"FE2O3KFA");
 const KERNEL_FRONTEND_REGISTRATION_VERSION_V1: u16 = 1;
@@ -1726,6 +1730,7 @@ enum GeneralTypedArgumentKindV1 {
     Scalar(GeneralTypedScalarV1),
     SharedSlice(GeneralTypedScalarV1),
     ExclusiveSlice(GeneralTypedScalarV1),
+    GlobalMutPointer(GeneralTypedScalarV1),
 }
 
 #[allow(dead_code)]
@@ -1798,6 +1803,10 @@ fn generated_general_typed_arguments_v1(
                     >
                 )
             }
+            GeneralTypedArgumentKindV1::GlobalMutPointer(scalar) => {
+                let scalar = scalar.rust_type_tokens();
+                quote!(GlobalMut<'allocation, #scalar>)
+            }
         })
         .collect::<Vec<_>>();
     let retains_borrows = arguments.iter().any(|argument| {
@@ -1805,11 +1814,81 @@ fn generated_general_typed_arguments_v1(
             argument,
             GeneralTypedArgumentKindV1::SharedSlice(_)
                 | GeneralTypedArgumentKindV1::ExclusiveSlice(_)
+                | GeneralTypedArgumentKindV1::GlobalMutPointer(_)
         )
     });
+    let global_mut_pointer_support = arguments
+        .iter()
+        .any(|argument| matches!(argument, GeneralTypedArgumentKindV1::GlobalMutPointer(_)))
+        .then(|| {
+            quote! {
+                /// A generated global-mutable pointer argument must name one
+                /// initialized object held under an exclusive host borrow.
+                #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+                pub struct GlobalMutArgumentError {
+                    actual_elements: usize,
+                }
+
+                impl GlobalMutArgumentError {
+                    /// Number of elements in the rejected device region.
+                    pub const fn actual_elements(self) -> usize {
+                        self.actual_elements
+                    }
+                }
+
+                /// Opaque host authority for one global mutable device object.
+                ///
+                /// Construction consumes an exclusive, type-checked device
+                /// region and rejects every extent except one element. The
+                /// pointer is not exposed and this capability is not cloneable.
+                #[must_use = "a global mutable argument only retains an exclusive device-buffer borrow"]
+                #[allow(dead_code)]
+                pub struct GlobalMut<
+                    'allocation,
+                    T: __fe2o3_kernel_host::__generated::GeneratedDeviceScalarV1,
+                > {
+                    region: __fe2o3_kernel_host::__generated::GeneratedReadWriteDeviceSlice<
+                        'allocation,
+                        T,
+                    >,
+                }
+
+                impl<
+                    'allocation,
+                    T: __fe2o3_kernel_host::__generated::GeneratedDeviceScalarV1,
+                > GlobalMut<'allocation, T> {
+                    /// Checks and retains one exact global mutable object.
+                    pub fn new(
+                        region: __fe2o3_kernel_host::__generated::GeneratedReadWriteDeviceSlice<
+                            'allocation,
+                            T,
+                        >,
+                    ) -> Result<Self, GlobalMutArgumentError> {
+                        if region.len() != 1 {
+                            return Err(GlobalMutArgumentError {
+                                actual_elements: region.len(),
+                            });
+                        }
+                        Ok(Self { region })
+                    }
+
+                    /// The admitted region always contains exactly one object.
+                    pub const fn len(&self) -> usize {
+                        1
+                    }
+
+                    /// Global pointer arguments are never empty after admission.
+                    pub const fn is_empty(&self) -> bool {
+                        false
+                    }
+                }
+            }
+        });
 
     if retains_borrows {
         quote! {
+            #global_mut_pointer_support
+
             /// Opaque host arguments for this exact kernel signature.
             ///
             /// This value only retains typed values and device-buffer borrows;
@@ -2473,7 +2552,7 @@ fn parse_general_typed_argument_v1(
         syn::Error::new_spanned(
             &argument.ty,
             format!(
-                "general typed V1 argument {position} must be a supported scalar, `&[T]`, or `fe2o3_device::DisjointSlice<T, Index1D>`"
+                "general typed V1 argument {position} must be a supported scalar, `&[T]`, `fe2o3_device::DisjointSlice<T, Index1D>`, or `fe2o3_device::DeviceGlobalMutPtr<T>`"
             ),
         )
     })
@@ -2502,36 +2581,65 @@ fn parse_general_typed_argument_type_v1(ty: &Type) -> Result<GeneralTypedArgumen
         return Err(());
     }
     let segments = path.path.segments.iter().collect::<Vec<_>>();
-    let segment = match segments.as_slice() {
-        [segment] if segment.ident == "DisjointSlice" => *segment,
+    let (segment, kind) = match segments.as_slice() {
+        [segment] if segment.ident == "DisjointSlice" => {
+            (*segment, GeneralTypedPointerPathV1::DisjointSlice)
+        }
+        [segment] if segment.ident == "DeviceGlobalMutPtr" => {
+            (*segment, GeneralTypedPointerPathV1::DeviceGlobalMutPointer)
+        }
         [namespace, segment]
             if namespace.ident == "fe2o3_device"
                 && matches!(namespace.arguments, PathArguments::None)
                 && segment.ident == "DisjointSlice" =>
         {
-            *segment
+            (*segment, GeneralTypedPointerPathV1::DisjointSlice)
+        }
+        [namespace, segment]
+            if namespace.ident == "fe2o3_device"
+                && matches!(namespace.arguments, PathArguments::None)
+                && segment.ident == "DeviceGlobalMutPtr" =>
+        {
+            (*segment, GeneralTypedPointerPathV1::DeviceGlobalMutPointer)
         }
         _ => return Err(()),
     };
     let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
         return Err(());
     };
-    if arguments.colon2_token.is_some() || !(1..=2).contains(&arguments.args.len()) {
+    let valid_arity = match kind {
+        GeneralTypedPointerPathV1::DisjointSlice => (1..=2).contains(&arguments.args.len()),
+        GeneralTypedPointerPathV1::DeviceGlobalMutPointer => arguments.args.len() == 1,
+    };
+    if arguments.colon2_token.is_some() || !valid_arity {
         return Err(());
     }
     let Some(GenericArgument::Type(element)) = arguments.args.first() else {
         return Err(());
     };
     let scalar = parse_general_typed_scalar_v1(element).ok_or(())?;
-    if let Some(index_space) = arguments.args.iter().nth(1) {
-        let GenericArgument::Type(index_space) = index_space else {
-            return Err(());
-        };
-        if !is_index_1d_v1(index_space) {
-            return Err(());
+    match kind {
+        GeneralTypedPointerPathV1::DisjointSlice => {
+            if let Some(index_space) = arguments.args.iter().nth(1) {
+                let GenericArgument::Type(index_space) = index_space else {
+                    return Err(());
+                };
+                if !is_index_1d_v1(index_space) {
+                    return Err(());
+                }
+            }
+            Ok(GeneralTypedArgumentKindV1::ExclusiveSlice(scalar))
+        }
+        GeneralTypedPointerPathV1::DeviceGlobalMutPointer => {
+            Ok(GeneralTypedArgumentKindV1::GlobalMutPointer(scalar))
         }
     }
-    Ok(GeneralTypedArgumentKindV1::ExclusiveSlice(scalar))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GeneralTypedPointerPathV1 {
+    DisjointSlice,
+    DeviceGlobalMutPointer,
 }
 
 fn parse_general_typed_scalar_v1(ty: &Type) -> Option<GeneralTypedScalarV1> {
@@ -2594,6 +2702,10 @@ fn general_typed_abi_v1(
             GeneralTypedArgumentKindV1::SharedSlice(_)
             | GeneralTypedArgumentKindV1::ExclusiveSlice(_) => (
                 GENERAL_TYPED_SLICE_SIZE_V1,
+                GENERAL_TYPED_POINTER_ALIGNMENT_V1,
+            ),
+            GeneralTypedArgumentKindV1::GlobalMutPointer(_) => (
+                GENERAL_TYPED_POINTER_SIZE_V1,
                 GENERAL_TYPED_POINTER_ALIGNMENT_V1,
             ),
         };
@@ -2667,6 +2779,22 @@ fn general_typed_abi_field_v1(
                 ArgumentOwnership::UniqueBorrow,
                 AliasClass::Exclusive,
             ),
+            GeneralTypedArgumentKindV1::GlobalMutPointer(scalar) => {
+                let (pointee_size, pointee_alignment) = scalar.size_alignment();
+                (
+                    GENERAL_TYPED_POINTER_SIZE_V1,
+                    GENERAL_TYPED_POINTER_ALIGNMENT_V1,
+                    AbiKind::Pointer {
+                        pointee_size,
+                        pointee_alignment,
+                    },
+                    Mutability::Mutable,
+                    Access::ReadWrite,
+                    AddressSpace::Global,
+                    ArgumentOwnership::UniqueBorrow,
+                    AliasClass::Exclusive,
+                )
+            }
         };
     AbiField::new(
         name,
@@ -2700,6 +2828,48 @@ fn general_typed_type_identity_v1(argument: GeneralTypedArgumentKindV1) -> TypeI
         GeneralTypedArgumentKindV1::ExclusiveSlice(scalar) => {
             general_typed_slice_type_identity_v1(scalar, true)
         }
+        GeneralTypedArgumentKindV1::GlobalMutPointer(scalar) => {
+            general_typed_global_mut_pointer_type_identity_v1(scalar)
+        }
+    }
+}
+
+fn general_typed_global_mut_pointer_type_identity_v1(scalar: GeneralTypedScalarV1) -> TypeIdentity {
+    let scalar_tag = general_typed_scalar_identity_tag_v1(scalar);
+    let mut type_preimage = Vec::from(GENERAL_TYPED_GLOBAL_MUT_POINTER_TYPE_DOMAIN_V1);
+    type_preimage.extend_from_slice(&1_u16.to_le_bytes());
+    type_preimage.push(scalar_tag);
+    let rust_type_digest = DigestAlgorithm::Sha256.calculate(&type_preimage).bytes();
+    let rust_type = DeclaredRustTypeIdentity::from_untrusted_bytes(rust_type_digest);
+
+    let mut layout_preimage = Vec::from(GENERAL_TYPED_GLOBAL_MUT_POINTER_LAYOUT_DOMAIN_V1);
+    layout_preimage.extend_from_slice(&1_u16.to_le_bytes());
+    layout_preimage.extend_from_slice(rust_type_digest.as_bytes());
+    layout_preimage.push(2); // 64-bit pointer width.
+    layout_preimage.extend_from_slice(&GENERAL_TYPED_POINTER_SIZE_V1.to_le_bytes());
+    layout_preimage.extend_from_slice(&GENERAL_TYPED_POINTER_ALIGNMENT_V1.to_le_bytes());
+    layout_preimage.push(2); // Mutable physical pointer.
+    layout_preimage.push(scalar_tag);
+    let layout = DigestAlgorithm::Sha256.calculate(&layout_preimage).bytes();
+
+    TypeIdentity::new(
+        rust_type,
+        DeclaredRustLayoutIdentity::from_untrusted_bytes(layout),
+    )
+}
+
+const fn general_typed_scalar_identity_tag_v1(scalar: GeneralTypedScalarV1) -> u8 {
+    match scalar {
+        GeneralTypedScalarV1::I8 => 1,
+        GeneralTypedScalarV1::U8 => 2,
+        GeneralTypedScalarV1::I16 => 3,
+        GeneralTypedScalarV1::U16 => 4,
+        GeneralTypedScalarV1::I32 => 5,
+        GeneralTypedScalarV1::U32 => 6,
+        GeneralTypedScalarV1::I64 => 7,
+        GeneralTypedScalarV1::U64 => 8,
+        GeneralTypedScalarV1::F32 => 10,
+        GeneralTypedScalarV1::F64 => 11,
     }
 }
 
@@ -3696,11 +3866,11 @@ mod tests {
         device_import_for, expand_device_copy_with_core_import, expand_device_export_with_import,
         expand_device_import_with_import, expand_kernel_with_device_import,
         expand_kernel_with_imports, expand_legacy_kernel_with_imports,
-        generated_general_typed_arguments_v1, host_import_for, model_general_typed_signature_v1,
-        parse_device_ffi_options, parse_kernel_options,
-        validate_generated_device_ffi_contract_grammar, validate_kernel_assembly_boundary,
-        validate_typed_kernel_profile_v1, validate_typed_kernel_signature,
-        validate_typed_kernel_symbol_stem,
+        general_typed_global_mut_pointer_type_identity_v1, generated_general_typed_arguments_v1,
+        host_import_for, model_general_typed_signature_v1, parse_device_ffi_options,
+        parse_kernel_options, validate_generated_device_ffi_contract_grammar,
+        validate_kernel_assembly_boundary, validate_typed_kernel_profile_v1,
+        validate_typed_kernel_signature, validate_typed_kernel_symbol_stem,
     };
     use fe2o3_artifacts::{
         AbiKind, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize, Mutability,
@@ -5427,6 +5597,58 @@ mod tests {
                 .iter()
                 .all(|argument| matches!(argument, GeneralTypedArgumentKindV1::Scalar(_)))
         );
+    }
+
+    #[test]
+    fn general_typed_global_mut_pointer_binds_source_abi_and_host_authority() {
+        let input: ItemFn = syn::parse_quote! {
+            pub fn atomic(target: fe2o3_device::DeviceGlobalMutPtr<u32>) {
+                let _ = target;
+            }
+        };
+        let options = parse_kernel_options(quote!(
+            typed,
+            launch(required = [64, 1, 1], max = [64, 1, 1])
+        ))
+        .unwrap();
+        let model = model_general_typed_signature_v1(&input, &options, [0xa3; 32]).unwrap();
+        assert_eq!(
+            model.arguments,
+            vec![GeneralTypedArgumentKindV1::GlobalMutPointer(
+                GeneralTypedScalarV1::U32
+            )]
+        );
+        let field = &model.abi.fields()[0];
+        assert_eq!(
+            field.kind(),
+            AbiKind::Pointer {
+                pointee_size: 4,
+                pointee_alignment: 4,
+            }
+        );
+        assert_eq!(field.mutability(), Mutability::Mutable);
+        assert_eq!(field.access(), Access::ReadWrite);
+        assert_eq!(field.address_space(), AddressSpace::Global);
+        assert_eq!(field.ownership(), ArgumentOwnership::UniqueBorrow);
+        assert_eq!(field.alias_class(), AliasClass::Exclusive);
+
+        let generated = generated_general_typed_arguments_v1(&input, &model.arguments).to_string();
+        for marker in [
+            "pub struct GlobalMut",
+            "GeneratedReadWriteDeviceSlice",
+            "region . len () != 1",
+            "GlobalMut < 'allocation , u32 >",
+        ] {
+            assert!(
+                generated.contains(marker),
+                "missing generated marker {marker}"
+            );
+        }
+        assert!(!generated.contains("as_raw"));
+
+        let f32_identity =
+            general_typed_global_mut_pointer_type_identity_v1(GeneralTypedScalarV1::F32);
+        assert_ne!(field.type_identity(), f32_identity);
     }
 
     #[test]

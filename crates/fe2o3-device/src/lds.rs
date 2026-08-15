@@ -162,6 +162,47 @@ pub struct DynamicLds<'workgroup, T: LdsElement, State = LdsUninitialized> {
 }
 
 impl<'workgroup, T: LdsElement> DynamicLds<'workgroup, T, LdsUninitialized> {
+    /// Creates one exact compiler-owned workgroup allocation.
+    ///
+    /// `ELEMENTS` is part of the compiler-recognized source contract. The
+    /// authenticated lowering supplies one allocation of
+    /// `ELEMENTS * size_of::<T>()` bytes aligned for `T`, shared by every
+    /// convergent invocation in the workgroup. No global or generic pointer is
+    /// accepted by this API.
+    ///
+    /// # Safety
+    ///
+    /// This call must be replaced by authenticated device lowering. Every
+    /// invocation in the workgroup must call it convergently with the same
+    /// `epoch`, `T`, and `ELEMENTS`. `scope` must be the compiler-created scope
+    /// for that workgroup and epoch. The resulting root capability is unique
+    /// for the scope and must not overlap any other LDS capability.
+    #[doc(hidden)]
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_dynamic_lds_exact_from_compiler_v1"]
+    pub unsafe fn exact_from_compiler<const ELEMENTS: usize>(
+        _scope: &'workgroup mut WorkgroupLdsScope<'workgroup>,
+        epoch: u32,
+    ) -> Self {
+        const {
+            assert!(ELEMENTS > 0, "compiler-created dynamic LDS cannot be empty");
+            assert!(
+                size_of::<T>() > 0,
+                "dynamic LDS elements cannot be zero-sized"
+            );
+            assert!(
+                align_of::<T>() <= MAX_DYNAMIC_LDS_ALIGNMENT,
+                "dynamic LDS element alignment exceeds the compiler contract"
+            );
+            assert!(
+                ELEMENTS.checked_mul(size_of::<T>()).is_some(),
+                "compiler-created dynamic LDS extent overflows"
+            );
+        }
+        let _ = epoch;
+        unreachable!("exact dynamic LDS must be created by authenticated lowering")
+    }
+
     /// Constructs a typed view from the launch's dynamic LDS allocation.
     ///
     /// Validation rejects null or misaligned bases, zero-sized or over-aligned
@@ -214,6 +255,10 @@ impl<'workgroup, T: LdsElement> DynamicLds<'workgroup, T, LdsUninitialized> {
             _state: PhantomData,
             _not_send_sync: PhantomData,
         })
+    }
+
+    pub(crate) fn into_collective_raw_parts(self) -> (*mut T, usize) {
+        (self.ptr.as_ptr().cast::<T>(), self.len)
     }
 
     #[cfg(test)]
