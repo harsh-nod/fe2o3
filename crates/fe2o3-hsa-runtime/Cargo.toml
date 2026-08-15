@@ -21,8 +21,10 @@ sha2.workspace = true
 cc = "1"
 
 [dev-dependencies]
+dialect-amdgcn.workspace = true
 fe2o3-device.workspace = true
 fe2o3-hsaco.workspace = true
+fe2o3-kernel-ir.workspace = true
 libc.workspace = true
 object = { version = "0.39.1", default-features = false, features = ["elf", "read_core"] }
 reserved-fe2o3-symbols.workspace = true

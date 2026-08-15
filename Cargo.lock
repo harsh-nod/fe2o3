@@ -627,12 +627,14 @@ name = "fe2o3-hsa-runtime"
 version = "0.1.0"
 dependencies = [
  "cc",
+ "dialect-amdgcn",
  "fe2o3-amd-target",
  "fe2o3-artifacts",
  "fe2o3-core",
  "fe2o3-device",
  "fe2o3-host",
  "fe2o3-hsaco",
+ "fe2o3-kernel-ir",
  "libc",
  "object 0.39.1",
  "reserved-fe2o3-symbols",
