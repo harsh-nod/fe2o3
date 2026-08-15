@@ -898,6 +898,9 @@ mod tests {
     fn semantic_registry_is_complete_and_unique() {
         let items = [
             TrustedDeviceItem::DisjointSlice,
+            TrustedDeviceItem::DeviceGlobalMutPtr,
+            TrustedDeviceItem::WorkgroupLdsScope,
+            TrustedDeviceItem::DynamicLdsExactFromCompiler,
             TrustedDeviceItem::ThreadIndex,
             TrustedDeviceItem::ThreadIndex1d,
             TrustedDeviceItem::ThreadIndexGet,
