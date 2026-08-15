@@ -1303,6 +1303,7 @@ fn expected_length_identity_bytes(
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 pub mod test_support {
     use super::*;
     use std::sync::{
