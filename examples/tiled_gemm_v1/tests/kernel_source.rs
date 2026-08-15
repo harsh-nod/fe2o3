@@ -2,7 +2,8 @@ use fe2o3_device::{DisjointSlice, KernelMarkerV1};
 use fe2o3_tiled_gemm_v1::kernel::{
     __fe2o3_kernel_marker_tiled_gemm_lds_slice1, LDS_SLICE1_OPERAND_BYTES_V1,
     LDS_SLICE1_OPERAND_ELEMENTS_V1, LDS_SLICE1_SOURCE_BLOCKER_V1, LDS_SLICE1_SOURCE_BLOCKERS_V1,
-    LDS_SLICE1_SOURCE_LOWERING_SUPPORTED_V1, LDS_SLICE1_TOTAL_BYTES_V1, LDS_SLICE1_WORKGROUP_V1,
+    LDS_SLICE1_SOURCE_LOWERING_SUPPORTED_V1, LDS_SLICE1_SOURCE_TO_IR_SUPPORTED_V1,
+    LDS_SLICE1_TOTAL_BYTES_V1, LDS_SLICE1_WORKGROUP_V1,
 };
 use syn::visit::Visit;
 
@@ -90,25 +91,28 @@ fn ordinary_host_invocation_panics_before_mutating_output() {
 }
 
 #[test]
-fn fixed_source_contract_is_exact_and_still_fails_closed() {
+fn fixed_source_contract_reaches_ir_and_still_fails_closed_before_llvm() {
     assert_eq!(LDS_SLICE1_WORKGROUP_V1, [64, 1, 1]);
     assert_eq!(LDS_SLICE1_OPERAND_ELEMENTS_V1, 256);
     assert_eq!(LDS_SLICE1_OPERAND_BYTES_V1, 512);
     assert_eq!(LDS_SLICE1_TOTAL_BYTES_V1, 1024);
+    assert!(std::hint::black_box(
+        LDS_SLICE1_SOURCE_TO_IR_SUPPORTED_V1
+    ));
     assert!(!std::hint::black_box(
         LDS_SLICE1_SOURCE_LOWERING_SUPPORTED_V1
     ));
     assert_eq!(
         LDS_SLICE1_SOURCE_BLOCKER_V1,
-        "the frontend does not lower compiler-issued BF16 LdsTile16x16 allocations"
+        "the source-to-IR receipt stops before compiler descriptor construction"
     );
     assert_eq!(
         LDS_SLICE1_SOURCE_BLOCKERS_V1,
         [
             LDS_SLICE1_SOURCE_BLOCKER_V1,
-            "the frontend does not authenticate WaveLane::from_raw as the current gfx942 wave64 lane",
-            "the frontend does not lower sync::syncthreads to a convergent workgroup barrier",
-            "the collected tiled GEMM path admits only the direct-global no-LDS canonical graph",
+            "the authenticated source path is not joined to the dedicated upstream-LLVM LDS lowering",
+            "the reviewed source-to-IR correspondence is not a compiler-refinement proof",
+            "protected Worker V2 publication, HSACO load, and launch remain fail-closed",
         ]
     );
 }
@@ -129,7 +133,7 @@ fn executable_function_body_contains_the_slice1_algorithm() {
     };
     let attribute = attribute.tokens.to_string();
     assert!(attribute.contains("typed"));
-    assert!(attribute.contains("67100a64733dabbac624aac230d3ca79ccea4cc307c45ee64d41f3362bc16bbb"));
+    assert!(attribute.contains("c09558e16157fec495e78bc32a23b082213fa4a6ddabe48445a54cb3de591295"));
     assert!(attribute.contains("launch"));
     assert!(attribute.contains("required = [64 , 1 , 1]"));
     assert!(attribute.contains("max = [64 , 1 , 1]"));
@@ -139,7 +143,7 @@ fn executable_function_body_contains_the_slice1_algorithm() {
         "index_1d",
         "from_bits",
         "from_raw",
-        "acquire_bf16_lds_tiles_v1",
+        "gfx942_lds_bf16_tile_pair_m16x16_v1",
         "syncthreads",
         "from_compiler",
     ] {
@@ -188,17 +192,21 @@ fn wg64_frontend_contract_is_macro_owned_without_a_handwritten_sidecar() {
 }
 
 #[test]
-fn source_has_no_declarative_kernel_body_and_blocker_is_executable_code() {
+fn source_has_no_declarative_or_lookalike_kernel_body() {
     let syntax = syn::parse_file(SOURCE).expect("kernel source parses as Rust");
     assert!(!syntax.items.iter().any(|item| {
         matches!(item, syn::Item::Macro(item) if item.mac.path.is_ident("macro_rules"))
     }));
 
-    let blocker = function(&syntax, "acquire_bf16_lds_tiles_v1");
-    let blocker_calls = calls(blocker);
-    assert_eq!(blocker_calls.macros, ["panic"]);
-    assert!(blocker_calls.functions.is_empty());
-    assert!(blocker_calls.methods.is_empty());
+    assert_eq!(
+        syntax
+            .items
+            .iter()
+            .filter(|item| matches!(item, syn::Item::Fn(_)))
+            .count(),
+        1,
+        "the attributed kernel body must not delegate to a source lookalike"
+    );
 
     let comment_only =
         syn::parse_file("fn fake() { /* lds.write_mfma_fragment(); sync::syncthreads(); */ }")

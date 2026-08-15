@@ -346,6 +346,7 @@ pub unsafe fn gfx942_barrier_wait() {
 /// Calling this function without compiler recognition that preserves those
 /// properties does not synchronize a device program.
 #[inline(never)]
+#[rustc_diagnostic_item = "fe2o3_device_workgroup_syncthreads_v1"]
 pub unsafe fn syncthreads() {
     unreachable!("syncthreads must be lowered by the fe2o3 backend")
 }

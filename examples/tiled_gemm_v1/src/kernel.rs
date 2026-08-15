@@ -1,17 +1,15 @@
 //! Ordinary Rust source for the fixed Slice 1 LDS tiled GEMM.
 //!
 //! The kernel algorithm below is real attributed Rust source, not explanatory
-//! pseudocode and not a `macro_rules!` expansion. The current frontend cannot
-//! yet issue the two BF16 LDS allocations consumed by the algorithm, so the
-//! private acquisition boundary panics. This keeps ordinary Cargo builds and
-//! unsupported device compilation fail-closed until that compiler operation is
-//! implemented and authenticated.
+//! pseudocode and not a `macro_rules!` expansion. The two BF16 LDS tiles are
+//! issued through a compiler-only intrinsic. Host execution and every
+//! unsupported compiler path remain fail-closed.
 
 #![allow(missing_docs)] // Generated typed-kernel modules lack rustdoc in V1.
 
 use fe2o3_device::{
-    Bf16, Bf16MfmaFragment, DeviceMatrix, DisjointSlice, F32AccumulatorFragment, LdsTile16x16,
-    Wave64, WaveLane, kernel, sync, thread,
+    Bf16MfmaFragment, DeviceMatrix, DisjointSlice, F32AccumulatorFragment, Wave64, WaveLane,
+    gfx942_lds_bf16_tile_pair_m16x16_v1, kernel, sync, thread,
 };
 
 /// Exact workgroup dimensions required by the Slice 1 source contract.
@@ -23,22 +21,25 @@ pub const LDS_SLICE1_OPERAND_BYTES_V1: usize = LDS_SLICE1_OPERAND_ELEMENTS_V1 * 
 /// Total LDS bytes required for the separate A and transposed-B tiles.
 pub const LDS_SLICE1_TOTAL_BYTES_V1: usize = 2 * LDS_SLICE1_OPERAND_BYTES_V1;
 
-/// Whether the current source frontend can lower this kernel through LDS.
+/// Whether the attributed Rust source reaches the verified canonical LDS IR.
+pub const LDS_SLICE1_SOURCE_TO_IR_SUPPORTED_V1: bool = true;
+
+/// Whether the current source frontend lowers this kernel through LLVM/HSACO.
 ///
-/// This remains false until authenticated lowering can issue two independent
-/// `LdsTile16x16<Bf16>` capabilities for one `gfx942:xnack-` WG64 execution.
+/// Source authentication and the source-to-IR correspondence are implemented,
+/// but descriptor publication and dedicated LLVM lowering are not joined yet.
 pub const LDS_SLICE1_SOURCE_LOWERING_SUPPORTED_V1: bool = false;
 
 /// Current fail-closed reason for the Slice 1 source lowering boundary.
 pub const LDS_SLICE1_SOURCE_BLOCKER_V1: &str =
-    "the frontend does not lower compiler-issued BF16 LdsTile16x16 allocations";
+    "the source-to-IR receipt stops before compiler descriptor construction";
 
 /// Complete current compiler worklist before this source can become executable.
 pub const LDS_SLICE1_SOURCE_BLOCKERS_V1: [&str; 4] = [
     LDS_SLICE1_SOURCE_BLOCKER_V1,
-    "the frontend does not authenticate WaveLane::from_raw as the current gfx942 wave64 lane",
-    "the frontend does not lower sync::syncthreads to a convergent workgroup barrier",
-    "the collected tiled GEMM path admits only the direct-global no-LDS canonical graph",
+    "the authenticated source path is not joined to the dedicated upstream-LLVM LDS lowering",
+    "the reviewed source-to-IR correspondence is not a compiler-refinement proof",
+    "protected Worker V2 publication, HSACO load, and launch remain fail-closed",
 ];
 
 /// Computes one fixed `16x16x16` BF16 GEMM tile through XOR4-staged LDS.
@@ -49,13 +50,13 @@ pub const LDS_SLICE1_SOURCE_BLOCKERS_V1: [&str; 4] = [
 /// `V_MFMA_F32_16X16X16_BF16` from a zero accumulator, and gives each lane
 /// exclusive ownership of four output elements.
 ///
-/// The function is compiler-facing source today, but is not executable GPU
-/// authority: [`LDS_SLICE1_SOURCE_LOWERING_SUPPORTED_V1`] is false and the
-/// missing compiler-issued LDS allocation traps at the private acquisition
-/// boundary before any output is written.
+/// The attributed source is authenticated and selects the verified canonical
+/// Kernel IR. It is not executable GPU authority:
+/// [`LDS_SLICE1_SOURCE_LOWERING_SUPPORTED_V1`] remains false and compilation
+/// stops before descriptor publication or LLVM lowering.
 #[kernel(
     typed,
-    namespace = "67100a64733dabbac624aac230d3ca79ccea4cc307c45ee64d41f3362bc16bbb",
+    namespace = "c09558e16157fec495e78bc32a23b082213fa4a6ddabe48445a54cb3de591295",
     launch(required = [64, 1, 1], max = [64, 1, 1])
 )]
 pub fn tiled_gemm_lds_slice1(a: &[u16], b: &[u16], mut c: DisjointSlice<f32>) {
@@ -84,12 +85,15 @@ pub fn tiled_gemm_lds_slice1(a: &[u16], b: &[u16], mut c: DisjointSlice<f32>) {
 
     // SAFETY: the exact source contract fixes one gfx942 wave64 workgroup, and
     // lane_index is checked above. Backend authentication remains required.
-    let lane = unsafe { WaveLane::<Wave64>::from_raw(lane_index as u32) }
-        .expect("the checked Slice 1 lane is in wave64");
+    let Some(lane) = (unsafe { WaveLane::<Wave64>::from_raw(lane_index as u32) }) else {
+        fe2o3_device::trap();
+        return;
+    };
 
-    // This is the first fail-closed unsupported operation. It panics before
-    // any C write until the frontend can issue two disjoint 512-byte LDS tiles.
-    let (mut a_lds, mut b_lds) = acquire_bf16_lds_tiles_v1();
+    // SAFETY: this exact call is admitted only for the authenticated Slice 1
+    // source profile. It issues separate aligned 512-byte A and B LDS tiles.
+    let (mut a_lds, mut b_lds) =
+        unsafe { gfx942_lds_bf16_tile_pair_m16x16_v1() };
 
     // SAFETY: every lane owns four distinct XOR4 locations in each separate
     // tile. B's lane fragment is staged transposed as (column, depth).
@@ -108,12 +112,14 @@ pub fn tiled_gemm_lds_slice1(a: &[u16], b: &[u16], mut c: DisjointSlice<f32>) {
     // initialization of all 256 elements in both tiles.
     let a_lds = unsafe { a_lds.assume_init() };
     let b_lds = unsafe { b_lds.assume_init() };
-    let lhs = a_lds
-        .read_mfma_fragment(lane_index)
-        .expect("the checked wave64 lane has one A fragment");
-    let rhs = b_lds
-        .read_mfma_fragment(lane_index)
-        .expect("the checked wave64 lane has one B fragment");
+    let Some(lhs) = a_lds.read_mfma_fragment(lane_index) else {
+        fe2o3_device::trap();
+        return;
+    };
+    let Some(rhs) = b_lds.read_mfma_fragment(lane_index) else {
+        fe2o3_device::trap();
+        return;
+    };
 
     // SAFETY: the compiler must issue this capability only for the exact
     // gfx942:xnack- wave64 profile, and every lane calls the MFMA uniformly.
@@ -134,11 +140,4 @@ pub fn tiled_gemm_lds_slice1(a: &[u16], b: &[u16], mut c: DisjointSlice<f32>) {
     if let Some(output) = unsafe { c.get_mut_at((depth_base + 3) * 16 + lane_column) } {
         *output = result[3];
     }
-}
-
-fn acquire_bf16_lds_tiles_v1<'workgroup>() -> (
-    LdsTile16x16<'workgroup, Bf16>,
-    LdsTile16x16<'workgroup, Bf16>,
-) {
-    panic!("{LDS_SLICE1_SOURCE_BLOCKER_V1}")
 }

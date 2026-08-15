@@ -1706,7 +1706,14 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 Some(
                     TrustedDeviceItem::Bf16MfmaFragmentFromBits
                     | TrustedDeviceItem::F32AccumulatorFragmentFromValues
-                    | TrustedDeviceItem::F32AccumulatorFragmentIntoValues,
+                    | TrustedDeviceItem::F32AccumulatorFragmentIntoValues
+                    | TrustedDeviceItem::WaveLaneFromRaw
+                    | TrustedDeviceItem::Gfx942LdsBf16TilePairM16x16
+                    | TrustedDeviceItem::LdsTile16x16AssumeInit
+                    | TrustedDeviceItem::LdsTile16x16WriteMfmaBf16
+                    | TrustedDeviceItem::LdsTile16x16ReadMfmaBf16
+                    | TrustedDeviceItem::WorkgroupSyncthreads
+                    | TrustedDeviceItem::DisjointSliceLen,
                 ) => {
                     return Err(diagnostic(
                         TranslationDiagnosticCode::UnsupportedCall,

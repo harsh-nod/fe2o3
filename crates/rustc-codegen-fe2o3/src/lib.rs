@@ -21,6 +21,7 @@ mod closure_profile_v1;
 mod collected_executable_scalar_control_flow_v2;
 mod collected_row_softmax_v1;
 mod collected_scalar_gemm_v1;
+mod collected_tiled_gemm_lds_slice1_v1;
 mod collected_tiled_gemm_v1;
 mod collector;
 mod compiler_descriptor;
@@ -625,6 +626,41 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                         collector::dump_device_functions(tcx, &collection.functions);
                         let custom_llvm_pipeline = !tcx.sess.opts.cg.llvm_args.is_empty()
                             || !tcx.sess.opts.cg.passes.is_empty();
+                        if collected_tiled_gemm_lds_slice1_v1::is_lds_slice1_collection(&collection)
+                        {
+                            let mut receipt = collected_tiled_gemm_lds_slice1_v1::authenticate_collected_lds_slice1_v1(
+                                tcx,
+                                &collection,
+                                &self.config.target,
+                                custom_llvm_pipeline,
+                            )
+                            .map_err(|error| error.to_string())?;
+                            let root_instance_identity =
+                                receipt.root_instance_identity().to_owned();
+                            let portable_mir = receipt.portable_mir_semantic_hex();
+                            let correspondence = receipt.authority_hex();
+                            let authenticated =
+                                receipt.consume().map_err(|error| error.to_string())?;
+                            if authenticated.module()
+                                != &fe2o3_kernel_ir::tiled_gemm_lds_v1_module()
+                            {
+                                return Err(
+                                    "LDS Slice 1 source correspondence lost its canonical module binding"
+                                    .to_owned(),
+                                );
+                            }
+                            let source_static_shared =
+                                authenticated.source_static_shared_memory_bytes();
+                            let compiler_static_shared =
+                                authenticated.compiler_static_shared_memory_bytes();
+                            let lds_allocations = authenticated.lds_allocations();
+                            let lds_bytes_per_allocation = authenticated.lds_bytes_per_allocation();
+                            let lds_alignment = authenticated.lds_alignment();
+                            return Err(format!(
+                                "authenticated attributed KernelEntry `{root_instance_identity}` export `{}` with measured portable MIR {portable_mir}, exact A:&[u16], B:&[u16], C:DisjointSlice<f32> ABI (48 explicit/304 complete COV6 kernarg bytes), exact WG64 source geometry with {source_static_shared} user-supplied static shared-memory bytes, and distinct typed compiler-final resource metadata requiring {lds_allocations} aligned {lds_bytes_per_allocation}-byte LDS allocations ({compiler_static_shared} static LDS bytes, alignment {lds_alignment}); consumed single-use source-correspondence receipt {correspondence} and selected verified canonical Kernel IR `fe2o3::tiled_gemm_lds_v1`; stopped at the source-correspondence boundary before descriptor construction, Worker V2 publication, LLVM lowering, linking, HSACO, load, or launch; this is bounded reviewed correspondence, not a compiler-refinement or protected-authority proof",
+                                collected_tiled_gemm_lds_slice1_v1::LDS_SLICE1_KERNEL_EXPORT_V1,
+                            ));
+                        }
                         let mut receipt =
                             collected_tiled_gemm_v1::authenticate_collected_tiled_gemm_v1(
                                 tcx,

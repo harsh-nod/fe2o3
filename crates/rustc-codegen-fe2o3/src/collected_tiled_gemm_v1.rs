@@ -83,7 +83,7 @@ const ARGUMENT_KINDS: [GeneralTypedArgumentKindV3; 4] = [
 ];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct CompilerSemanticsV1 {
+pub(super) struct CompilerSemanticsV1 {
     rustc_release: &'static str,
     rustc_commit: &'static str,
     llvm_version: &'static str,
@@ -432,7 +432,7 @@ pub(crate) fn authenticate_collected_tiled_gemm_v1<'tcx>(
     })
 }
 
-fn admit_execution_context(
+pub(super) fn admit_execution_context(
     target: &str,
     custom_llvm_pipeline: bool,
 ) -> Result<(), CollectedTiledGemmErrorV1> {
@@ -447,7 +447,7 @@ fn admit_execution_context(
     Ok(())
 }
 
-fn exact_collected_root<'a, 'tcx>(
+pub(super) fn exact_collected_root<'a, 'tcx>(
     functions: &'a [CollectedFunction<'tcx>],
 ) -> Result<&'a CollectedFunction<'tcx>, CollectedTiledGemmErrorV1> {
     if functions.len() != 1 {
@@ -811,7 +811,7 @@ fn hash_arg_attributes(digest: &mut Sha256, attributes: ArgAttributes) {
     hash_field(digest, &alignment.to_le_bytes());
 }
 
-fn observe_compiler_semantics(tcx: TyCtxt<'_>) -> CompilerSemanticsV1 {
+pub(super) fn observe_compiler_semantics(tcx: TyCtxt<'_>) -> CompilerSemanticsV1 {
     CompilerSemanticsV1 {
         rustc_release: env!("FE2O3_BUILD_RUSTC_RELEASE"),
         rustc_commit: env!("FE2O3_BUILD_RUSTC_COMMIT"),
@@ -838,7 +838,7 @@ fn observe_compiler_semantics(tcx: TyCtxt<'_>) -> CompilerSemanticsV1 {
     }
 }
 
-fn require_compiler_semantics(
+pub(super) fn require_compiler_semantics(
     observed: &CompilerSemanticsV1,
 ) -> Result<[u8; 32], CollectedTiledGemmErrorV1> {
     let expected_mir_passes = [("JumpThreading".to_owned(), false)];
@@ -981,11 +981,15 @@ fn reviewed_compiler_semantics() -> CompilerSemanticsV1 {
     }
 }
 
+pub(super) fn reviewed_compiler_semantics_identity() -> [u8; 32] {
+    compiler_semantics_commitment(&reviewed_compiler_semantics())
+}
+
 fn is_cargo_crate_metadata(value: &str) -> bool {
     is_lowercase_hex(value, 16)
 }
 
-fn is_kernel_root_build_identity(value: &str) -> bool {
+pub(super) fn is_kernel_root_build_identity(value: &str) -> bool {
     value
         .strip_prefix(KERNEL_ROOT_BUILD_IDENTITY_PREFIX)
         .is_some_and(|suffix| is_lowercase_hex(suffix, 64))

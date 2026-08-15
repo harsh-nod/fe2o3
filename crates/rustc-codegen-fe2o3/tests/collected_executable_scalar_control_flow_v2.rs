@@ -41,6 +41,8 @@ const SCALAR_GEMM_PIPELINE: &str = "collected-scalar-gemm-v1";
 const SCALAR_GEMM_FIXTURE: &str = include_str!("../../../examples/scalar_gemm_v1/src/kernel.rs");
 const TILED_GEMM_PIPELINE: &str = "collected-tiled-gemm-v1";
 const TILED_GEMM_FIXTURE: &str = include_str!("fixtures/collected-tiled-gemm-v1/src/lib.rs");
+const TILED_GEMM_LDS_SLICE1_FIXTURE: &str =
+    include_str!("../../../examples/tiled_gemm_v1/src/kernel.rs");
 const ROW_SOFTMAX_PIPELINE: &str = "collected-row-softmax-v1";
 const ROW_SOFTMAX_FIXTURE: &str = include_str!("fixtures/collected-row-softmax-v1/src/lib.rs");
 // Reviewed independently from the handoff identity and section payloads. This
@@ -114,6 +116,7 @@ const TERMINATION_GRACE: Duration = Duration::from_secs(2);
 const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(20);
 static NEXT_OUTPUT: AtomicU64 = AtomicU64::new(0);
 static BACKEND: OnceLock<PinnedBackend> = OnceLock::new();
+static COLLECTION_BACKEND: OnceLock<PinnedBackend> = OnceLock::new();
 static FRONTEND_DEPENDENCIES: OnceLock<Result<(), String>> = OnceLock::new();
 static USER_MOUNT_NAMESPACE: OnceLock<Result<(), String>> = OnceLock::new();
 
@@ -611,6 +614,35 @@ fn build_backend(workspace: &Path) -> &'static PinnedBackend {
     })
 }
 
+fn build_collection_backend(workspace: &Path) -> &'static PinnedBackend {
+    COLLECTION_BACKEND.get_or_init(|| {
+        let target_dir = std::env::var_os("CARGO_TARGET_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| workspace.join("target"));
+        let mut command = Command::new(env!("CARGO"));
+        command
+            .current_dir(workspace)
+            .args(["build", "--locked", "-p", "rustc-codegen-fe2o3"])
+            .env("CARGO_INCREMENTAL", "0");
+        let output = run_bounded(
+            &mut command,
+            BACKEND_BUILD_TIMEOUT,
+            "source-correspondence backend cargo build",
+        )
+        .expect("build source-correspondence backend within deadline");
+        assert!(
+            output.status.success(),
+            "source-correspondence backend build failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        // This lane measures exact source correspondence. It deliberately makes
+        // no protected-build or protected-authority claim.
+        pin_backend(&target_dir.join("debug/librustc_codegen_fe2o3.so"))
+            .expect("pin source-correspondence backend in a sealed memfd")
+    })
+}
+
 fn pin_backend(path: &Path) -> Result<PinnedBackend, String> {
     let mut source = OpenOptions::new()
         .read(true)
@@ -1037,21 +1069,32 @@ fn compile_tiled_gemm(
     target: &str,
     extra_args: &[&str],
 ) -> Output {
+    let is_lds_slice1 = source.contains("pub fn tiled_gemm_lds_slice1");
     build_frontend_dependencies(workspace).expect("build tiled GEMM frontend dependencies");
     backend
         .verify()
         .expect("sealed backend identity before tiled GEMM rustc");
     let source_path = output.0.join("tiled-gemm-v1.rs");
     std::fs::write(&source_path, source).expect("write tiled GEMM fixture");
-    let device = workspace.join("target/debug/libfe2o3_device.rlib");
-    let host = workspace.join("target/debug/libfe2o3_host.rlib");
-    let manifest_directory =
-        workspace.join("crates/rustc-codegen-fe2o3/tests/fixtures/collected-tiled-gemm-v1");
+    let cargo_target = std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| workspace.join("target"));
+    let device = cargo_target.join("debug/libfe2o3_device.rlib");
+    let host = cargo_target.join("debug/libfe2o3_host.rlib");
+    let manifest_directory = if is_lds_slice1 {
+        workspace.join("crates/rustc-codegen-fe2o3/tests/fixtures/collected-tiled-gemm-lds-slice1")
+    } else {
+        workspace.join("crates/rustc-codegen-fe2o3/tests/fixtures/collected-tiled-gemm-v1")
+    };
     assert!(device.is_file(), "missing {}", device.display());
     assert!(host.is_file(), "missing {}", host.display());
-    let producer =
-        ProducerIdentity::from_codegen("fe2o3_collected_tiled_gemm_v1_fixture", Some(&source_path))
-            .expect("tiled GEMM fixture producer");
+    let crate_name = if is_lds_slice1 {
+        "fe2o3_collected_tiled_gemm_lds_slice1_fixture"
+    } else {
+        "fe2o3_collected_tiled_gemm_v1_fixture"
+    };
+    let producer = ProducerIdentity::from_codegen(crate_name, Some(&source_path))
+        .expect("tiled GEMM fixture producer");
     let attempt = begin_build_attempt(
         &output.0.join("artifacts"),
         &producer,
@@ -1071,26 +1114,25 @@ fn compile_tiled_gemm(
             "--remap-path-prefix={}=/fe2o3-reviewed-workspace/tiled-gemm-v1.rs",
             source_path.display()
         ))
-        .args([
-            "--edition=2024",
-            "--crate-type",
-            "lib",
-            "--crate-name",
-            "fe2o3_collected_tiled_gemm_v1_fixture",
-            "--extern",
-        ])
+        .args(["--edition=2024", "--crate-type", "lib", "--crate-name"])
+        .arg(crate_name)
+        .arg("--extern")
         .arg(format!("fe2o3_device={}", device.display()))
         .arg("--extern")
         .arg(format!("fe2o3_host={}", host.display()))
         .arg("-L")
         .arg(format!(
             "dependency={}",
-            workspace.join("target/debug/deps").display()
+            cargo_target.join("debug/deps").display()
         ))
+        .args(["-C", "overflow-checks=off"]);
+    if is_lds_slice1 {
+        command.arg("-Cmetadata=e1f4d566b68639ae");
+    } else {
+        command.arg("-Cmetadata=4ceb166423714bdc");
+    }
+    command
         .args([
-            "-C",
-            "overflow-checks=off",
-            "-Cmetadata=4ceb166423714bdc",
             "-Cmetadata=fe2o3-tiled-gemm-v1-reviewed",
             "-Zmir-enable-passes=-JumpThreading",
         ])
@@ -3749,6 +3791,105 @@ fn tiled_gemm_v1_source_authentication_and_adversaries_fail_closed() {
 }
 
 #[test]
+fn tiled_gemm_lds_slice1_attributed_source_selects_only_verified_lds_ir() {
+    let workspace = workspace();
+    let backend = build_collection_backend(&workspace);
+    assert!(TILED_GEMM_LDS_SLICE1_FIXTURE.contains("pub fn tiled_gemm_lds_slice1"));
+    assert!(TILED_GEMM_LDS_SLICE1_FIXTURE.contains("gfx942_lds_bf16_tile_pair_m16x16_v1"));
+    assert!(TILED_GEMM_LDS_SLICE1_FIXTURE.contains("sync::syncthreads"));
+    assert!(!TILED_GEMM_LDS_SLICE1_FIXTURE.contains("\nmacro_rules!"));
+
+    let exact_output = TestOutputDir::new(&workspace);
+    let exact = compile_tiled_gemm(
+        &workspace,
+        backend,
+        &exact_output,
+        TILED_GEMM_LDS_SLICE1_FIXTURE,
+        "gfx942:xnack-",
+        &[],
+    );
+    let exact_stderr = stderr(&exact);
+    assert!(
+        !exact.status.success()
+            && exact_stderr
+                .contains("selected verified canonical Kernel IR `fe2o3::tiled_gemm_lds_v1`")
+            && exact_stderr.contains("1024 static LDS bytes")
+            && exact_stderr.contains("stopped at the source-correspondence boundary")
+            && exact_stderr.contains("not a compiler-refinement or protected-authority proof")
+            && !exact_stderr.contains("published tiled GEMM Worker V2 handoff"),
+        "attributed LDS source missed the exact source-correspondence boundary:\n{exact_stderr}"
+    );
+    assert_tiled_gemm_published_no_handoff(&exact_output);
+}
+
+#[test]
+fn tiled_gemm_lds_slice1_source_mutations_cannot_select_canonical_ir() {
+    let workspace = workspace();
+    let backend = build_collection_backend(&workspace);
+    let mutations = [
+        (
+            "missing-barrier",
+            TILED_GEMM_LDS_SLICE1_FIXTURE.replace(
+                "unsafe { sync::syncthreads() };",
+                "{ /* deliberately omitted */ }",
+            ),
+        ),
+        (
+            "index-drift",
+            TILED_GEMM_LDS_SLICE1_FIXTURE.replace(
+                "a[a_row_base + depth_base + 3]",
+                "a[a_row_base + depth_base + 2]",
+            ),
+        ),
+    ];
+    for (name, source) in mutations {
+        assert_ne!(source, TILED_GEMM_LDS_SLICE1_FIXTURE);
+        let output = TestOutputDir::new(&workspace);
+        let compilation =
+            compile_tiled_gemm(&workspace, backend, &output, &source, "gfx942:xnack-", &[]);
+        let stderr = stderr(&compilation);
+        assert!(
+            !compilation.status.success()
+                && stderr.contains("portable MIR identity mismatch")
+                && !stderr.contains("selected verified canonical Kernel IR")
+                && !stderr.contains("published tiled GEMM Worker V2 handoff"),
+            "{name} mutation selected LDS authority:\n{stderr}"
+        );
+        assert_tiled_gemm_published_no_handoff(&output);
+    }
+
+    let lookalike = TILED_GEMM_LDS_SLICE1_FIXTURE.replace(
+        "gfx942_lds_bf16_tile_pair_m16x16_v1()",
+        "lookalike_lds_pair_v1()",
+    ) + r#"
+fn lookalike_lds_pair_v1<'workgroup>() -> (
+    fe2o3_device::LdsTile16x16<'workgroup, fe2o3_device::Bf16>,
+    fe2o3_device::LdsTile16x16<'workgroup, fe2o3_device::Bf16>,
+) {
+    unsafe { gfx942_lds_bf16_tile_pair_m16x16_v1() }
+}
+"#;
+    let output = TestOutputDir::new(&workspace);
+    let compilation = compile_tiled_gemm(
+        &workspace,
+        backend,
+        &output,
+        &lookalike,
+        "gfx942:xnack-",
+        &[],
+    );
+    let stderr = stderr(&compilation);
+    assert!(
+        !compilation.status.success()
+            && stderr.contains("requires exactly one collected function and no helpers")
+            && !stderr.contains("selected verified canonical Kernel IR")
+            && !stderr.contains("published tiled GEMM Worker V2 handoff"),
+        "lookalike helper selected LDS authority:\n{stderr}"
+    );
+    assert_tiled_gemm_published_no_handoff(&output);
+}
+
+#[test]
 fn row_softmax_v1_source_authentication_and_adversaries_stop_at_canonical_ir() {
     if isolated_backend_environment_is_unavailable() {
         return;
@@ -4228,6 +4369,59 @@ fn external_cargo_fe2o3_reaches_the_typed_tiled_handoff_boundary() {
             && !external_stderr.contains("portable MIR identity mismatch")
             && !external_stderr.contains("rustc FnAbi identity mismatch"),
         "external cargo-fe2o3 fixture missed the typed downstream boundary:\n{external_stderr}"
+    );
+}
+
+#[test]
+fn managed_cargo_fe2o3_collects_the_exact_attributed_lds_slice1_source() {
+    let workspace = workspace();
+    let manifest = workspace.join(
+        "crates/rustc-codegen-fe2o3/tests/fixtures/collected-tiled-gemm-lds-slice1/Cargo.toml",
+    );
+    let source = workspace.join("examples/tiled_gemm_v1/src/kernel.rs");
+    let fixture_target = manifest.parent().unwrap().join("target");
+    if fixture_target.exists() {
+        std::fs::remove_dir_all(&fixture_target).expect("clear external LDS fixture target");
+    }
+    let rustflags = format!(
+        "-Coverflow-checks=off -Cmetadata=fe2o3-tiled-gemm-v1-reviewed --remap-path-prefix={}=/fe2o3-reviewed-workspace/tiled-gemm-v1.rs",
+        source.display()
+    );
+    let mut command = Command::new(env!("CARGO"));
+    command
+        .current_dir(&workspace)
+        .args([
+            "run",
+            "--locked",
+            "-p",
+            "cargo-fe2o3",
+            "--",
+            "build",
+            "--locked",
+            "--manifest-path",
+        ])
+        .arg(&manifest)
+        .env_remove("CARGO_INCREMENTAL")
+        .env("FE2O3_TARGET", "gfx942:xnack-")
+        .env("FE2O3_CODEGEN_PIPELINE", TILED_GEMM_PIPELINE)
+        .env("RUSTFLAGS", rustflags)
+        .env_remove("CARGO_ENCODED_RUSTFLAGS");
+    let external = run_bounded(
+        &mut command,
+        BACKEND_BUILD_TIMEOUT,
+        "managed cargo-fe2o3 LDS Slice 1 fixture",
+    )
+    .expect("run managed LDS Slice 1 fixture within deadline");
+    let external_stderr = stderr(&external);
+    assert!(
+        !external.status.success()
+            && external_stderr
+                .contains("selected verified canonical Kernel IR `fe2o3::tiled_gemm_lds_v1`")
+            && external_stderr.contains("1024 static LDS bytes")
+            && external_stderr.contains("stopped at the source-correspondence boundary")
+            && external_stderr.contains("not a compiler-refinement or protected-authority proof")
+            && !external_stderr.contains("published tiled GEMM Worker V2 handoff"),
+        "managed cargo-fe2o3 missed the attributed LDS source-correspondence boundary:\n{external_stderr}"
     );
 }
 

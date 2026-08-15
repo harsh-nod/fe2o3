@@ -196,6 +196,29 @@ pub struct LdsTile16x16<'workgroup, T: LdsElement, State = LdsUninitialized> {
     lds: DynamicLds<'workgroup, T, State>,
 }
 
+/// Issues the exact pair of static BF16 LDS tiles used by the bounded gfx942
+/// tiled-GEMM Slice 1 profile.
+///
+/// This is a compiler intrinsic, not a general allocator. The fe2o3 compiler
+/// may recognize it only in the authenticated `gfx942:xnack-`, WG64 Slice 1
+/// source profile. Recognition creates two distinct 512-byte, 16-byte-aligned
+/// workgroup allocations. Unsupported compilation and host execution trap.
+///
+/// # Safety
+///
+/// The caller must be the exact compiler-authenticated Slice 1 kernel. The
+/// returned lifetime is the active workgroup lifetime and the two linear
+/// capabilities must not escape, alias one another, or be duplicated.
+#[doc(hidden)]
+#[inline(never)]
+#[rustc_diagnostic_item = "fe2o3_device_gfx942_lds_bf16_tile_pair_m16x16_v1"]
+pub unsafe fn gfx942_lds_bf16_tile_pair_m16x16_v1<'workgroup>() -> (
+    LdsTile16x16<'workgroup, Bf16>,
+    LdsTile16x16<'workgroup, Bf16>,
+) {
+    unreachable!("static BF16 LDS tile pairs must be issued by the fe2o3 compiler")
+}
+
 impl<'workgroup, T: LdsElement, State> LdsTile16x16<'workgroup, T, State> {
     /// On failure the linear LDS capability is returned.
     pub fn try_from_dynamic(
@@ -249,6 +272,7 @@ impl<'workgroup, T: LdsElement> LdsTile16x16<'workgroup, T, LdsUninitialized> {
     ///
     /// All 256 elements must be initialized and cooperative writes must happen
     /// before subsequent reads.
+    #[rustc_diagnostic_item = "fe2o3_device_lds_tile16x16_assume_init_v1"]
     pub unsafe fn assume_init(self) -> LdsTile16x16<'workgroup, T, LdsInitialized> {
         LdsTile16x16 {
             lds: unsafe { self.lds.assume_init() },
@@ -268,6 +292,7 @@ impl LdsTile16x16<'_, Bf16, LdsUninitialized> {
     ///
     /// The lane and cooperative aliasing requirements of
     /// [`Self::write_wave_fragment`] must hold.
+    #[rustc_diagnostic_item = "fe2o3_device_lds_tile16x16_write_mfma_bf16_v1"]
     pub unsafe fn write_mfma_fragment(
         &mut self,
         lane: &WaveLane<Wave64>,
@@ -279,6 +304,7 @@ impl LdsTile16x16<'_, Bf16, LdsUninitialized> {
 }
 
 impl LdsTile16x16<'_, Bf16, LdsInitialized> {
+    #[rustc_diagnostic_item = "fe2o3_device_lds_tile16x16_read_mfma_bf16_v1"]
     pub fn read_mfma_fragment(&self, lane: usize) -> Option<Bf16MfmaFragment> {
         self.read_wave_fragment(lane).map(Bf16MfmaFragment::new)
     }

@@ -72,6 +72,7 @@ pub use tensor::{
     BF16_F32_MFMA_M, BF16_F32_MFMA_N, BF16_F32_MFMA_REDUCTION, BF16_F32_MFMA_WAVE_LANES,
     Bf16F32M16N16K16, Bf16MfmaFragment, DeviceMatrix, F32AccumulatorFragment, LdsTile16x16,
     LdsTileShapeError, MATRIX_CONTRACT_VERSION_V1, RowMajorXor4,
+    gfx942_lds_bf16_tile_pair_m16x16_v1,
 };
 pub use thread::{
     GlobalGridSize, GlobalWorkitemId, GridSize, Index1D, Index2D, Invocation3D, ThreadIndex,
@@ -292,6 +293,7 @@ impl<T, IndexSpace> DisjointSlice<T, IndexSpace> {
         }
     }
 
+    #[rustc_diagnostic_item = "fe2o3_device_disjoint_slice_len"]
     pub fn len(&self) -> usize {
         self.len
     }
