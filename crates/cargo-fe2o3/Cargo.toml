@@ -63,8 +63,20 @@ test = false
 bench = false
 
 [[bin]]
+name = "cargo-fe2o3-release-cargo-fixture"
+path = "tests/fixtures/release_cargo_fixture.rs"
+test = false
+bench = false
+
+[[bin]]
 name = "cargo-fe2o3-rustc-fixture"
 path = "tests/fixtures/rustc_fixture.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "cargo-fe2o3-release-rustc-fixture"
+path = "tests/fixtures/release_rustc_fixture.rs"
 test = false
 bench = false
 
