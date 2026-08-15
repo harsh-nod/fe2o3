@@ -2112,6 +2112,10 @@ std::optional<std::vector<uint8_t>> testMeasuredOcmlPipeline() {
 void testExactWorkgroupSyncProfiles() {
   using Profile = ExactWorkgroupSyncProfileForTesting;
   const std::array Profiles = {Profile::LdsReduction, Profile::ScopedAtomic};
+  auto CanonicalLayoutOrError = exactWorkgroupSyncDataLayoutForTesting();
+  if (!CanonicalLayoutOrError)
+    fail(toString(CanonicalLayoutOrError.takeError()));
+  const std::string CanonicalLayout = std::move(*CanonicalLayoutOrError);
 
   auto BodyFor = [](Profile ProfileValue) {
     return loadIntegratedWorkgroupSyncBody(
@@ -2167,6 +2171,30 @@ void testExactWorkgroupSyncProfiles() {
     if (Error Failure =
             validateExactWorkgroupSyncModuleForTesting(Body, ProfileValue))
       fail(toString(std::move(Failure)));
+    const std::string LayoutLine =
+        (Twine("target datalayout = \"") + CanonicalLayout + "\"").str();
+    RequireModuleFailure(
+        replaceExactText(Body, (Twine(LayoutLine) + "\n").str(), ""),
+        ProfileValue, "module envelope");
+    RequireModuleFailure(
+        replaceExactText(
+            Body, CanonicalLayout,
+            "e-m:e-p:64:64-i64:64-f80:128-n8:16:32:64-S128"),
+        ProfileValue, "module envelope");
+    RequireModuleFailure(
+        replaceExactText(Body, "p7:160:256:256:32",
+                         "p7:160:256:256:64"),
+        ProfileValue, "module envelope");
+    StringRef ReorderedTail(CanonicalLayout);
+    require(ReorderedTail.consume_front("e-m:e-"),
+            "canonical workgroup-sync data layout prefix drifted");
+    std::string ReorderedLayout =
+        (Twine("e-") + ReorderedTail + "-m:e").str();
+    RequireModuleFailure(
+        replaceExactText(Body, CanonicalLayout, ReorderedLayout),
+        ProfileValue, "module envelope");
+    RequireModuleFailure(replaceExactText(Body, "-G1-", "-G2-"),
+                         ProfileValue, "module envelope");
     std::vector<uint8_t> Compiler =
         makeExactWorkgroupSyncTextIr(ProfileValue);
     if (Error Failure = validateExactWorkgroupSyncCompilerInputForTesting(
@@ -2190,6 +2218,11 @@ void testExactWorkgroupSyncProfiles() {
       RequireCompilerFailure(WrongIdentity, ProfileValue,
                              "source/KIR/profile identity");
     }
+    std::vector<uint8_t> WrongLayoutIdentity = Compiler;
+    mutateExactCompilerSectionIdentity(
+        WrongLayoutIdentity, (Twine(Prefix) + ".layout.v1").str());
+    RequireCompilerFailure(WrongLayoutIdentity, ProfileValue,
+                           "target-machine data-layout identity");
 
     Request Exact = MakeRequest(ProfileValue);
     std::vector<std::string> SymbolList = SymbolsFor(ProfileValue);
@@ -2198,6 +2231,8 @@ void testExactWorkgroupSyncProfiles() {
     Response Replay = runSuccess(Exact, Symbols);
     require(First.LinkedOutput->Bytes == Replay.LinkedOutput->Bytes,
             "exact workgroup-sync LLVM/LLD output is not reproducible");
+    require(First.LinkedOutput->Digest == Replay.LinkedOutput->Digest,
+            "exact workgroup-sync output identity is not reproducible");
     requireDiagnostic(First,
                       ProfileValue == Profile::LdsReduction
                           ? "workgroup_lds_reduction_v1_profile status=ok"
@@ -2215,6 +2250,10 @@ void testExactWorkgroupSyncProfiles() {
     Request WrongImports = Exact;
     WrongImports.ImportSymbols = {"host_dependency"};
     requireFailure(WrongImports, Stage::InputValidation);
+    Request WrongProvider = Exact;
+    WrongProvider.ExternalProviders.push_back(Exact.CompilerModule);
+    WrongProvider.Inputs.push_back(Exact.CompilerModule);
+    requireFailure(WrongProvider, Stage::InputValidation);
     Request WrongExports = Exact;
     WrongExports.ExportSymbols = {SymbolList.front()};
     requireFailure(WrongExports, Stage::InputValidation);
