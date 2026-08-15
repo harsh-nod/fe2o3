@@ -12,9 +12,12 @@ deterministic reduction barriers, and final reuse barrier. Lane zero is the
 only global output writer. Admission rejects mathematical sums outside `i32`,
 so the device's wrapping tree computes the exact mathematical sum.
 
-The source compiles now, but `workgroup64_lds_i32_base_v1` traps closed. A later
-compiler phase must authenticate the exact kernel and supply one aligned,
-epoch-branded workgroup allocation to all lanes.
+The source now requests `DynamicLds::<i32>::exact_from_compiler::<64>` and
+consumes that linear capability directly into collective scratch. It cannot
+substitute a host/global raw pointer or expose the LDS pointer. A later compiler
+phase must authenticate this exact source profile and lower the recognized
+constructor to one aligned, epoch-branded workgroup allocation shared by all
+lanes.
 
 ## Scoped atomic add
 
@@ -23,12 +26,13 @@ ordering, system scope, and exactly 64 eligibility declarations. Eligible
 lanes add once; ineligible lanes do not touch the object. Overflow is rejected
 by host admission so the final value is an exact mathematical sum.
 
-Its ordinary `#[kernel(typed, ...)]` source is quarantined under
-`src/quarantined/`. The correct signature uses `DeviceGlobalMutPtr<u32>` to
-state global address space without pretending the concurrently shared object
-is a Rust exclusive slice. The current typed kernel ABI accepts scalars and
-slices only, so profile registration must add this explicit pointer shape
-before the source can be compiled as a kernel.
+Its ordinary attributed Rust source is compiled from `src/scoped_atomic.rs`.
+The signature uses `DeviceGlobalMutPtr<u32>` to state global address space
+without pretending the concurrently shared object is a Rust slice. Generated
+host bindings accept only a one-element initialized `u32` device region held
+under an exclusive borrow; they expose neither a raw pointer nor a launch path.
+The macro registration binds global address space, mutability, pointee type,
+physical pointer layout, and exclusive alias admission.
 
 ## Evidence boundary
 
@@ -39,10 +43,11 @@ address space, ordering, scope, target, eligibility, overflow, and substituted
 outputs. Verus models initialization, convergence, epoch reuse, ownership,
 exact integer sums, and atomic eligibility, with expected-negative mutations.
 
-This phase does **not** provide compiler profile authentication, source-to-IR
-or IR-to-machine correspondence, artifact admission, protected loading, or
-MI300X execution evidence. Those are later phases. The package uses no COMGR
-and no shell linker.
+Both kernels are now ordinary attributed Rust modules with source-level typed
+ABI and LDS capabilities. This phase does **not** provide compiler profile authentication
+for either exact profile, source-to-IR, IR-to-machine correspondence, artifact admission,
+protected loading, or MI300X execution evidence. Those are later phases. The
+package uses no COMGR and no shell linker.
 
 ## Validation
 

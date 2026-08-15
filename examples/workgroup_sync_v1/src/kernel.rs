@@ -3,18 +3,17 @@
 #![allow(missing_docs)] // Generated typed-kernel modules do not carry rustdoc in V1.
 
 use fe2o3_device::{
-    DisjointSlice, Gfx942Collectives, GridSize, Invocation3D, Workgroup,
-    WorkgroupCollectiveScratch, WorkgroupId, WorkgroupSize, WorkitemId, kernel, thread,
+    DisjointSlice, DynamicLds, Gfx942Collectives, GridSize, Invocation3D, Workgroup,
+    WorkgroupCollectiveScratch, WorkgroupId, WorkgroupLdsScope, WorkgroupSize, WorkitemId, kernel,
+    thread,
 };
 
 /// Exact workgroup dimensions for both synchronization profiles.
 pub const LDS_REDUCTION_WORKGROUP_V1: [u32; 3] = [64, 1, 1];
-/// The source is type-checked, but its compiler-supplied LDS base is not registered.
+/// The source is type-checked, but its exact LDS compiler profile is not registered.
 pub const LDS_REDUCTION_COMPILER_PROFILE_REGISTERED_V1: bool = false;
-/// The typed ABI cannot yet represent the atomic profile's explicit global pointer.
+/// The source ABI is typed, but its atomic compiler profile is not registered.
 pub const SCOPED_ATOMIC_COMPILER_PROFILE_REGISTERED_V1: bool = false;
-/// Exact quarantined attributed source for the scoped atomic-add profile.
-pub const SCOPED_ATOMIC_SOURCE_V1: &str = include_str!("quarantined/scoped_atomic_add_v1.rs");
 
 /// Reduces one exact 64-element `i32` row through LDS and writes from lane zero.
 ///
@@ -73,12 +72,13 @@ pub fn lds_publish_read_reduce_i32_v1(values: &[i32], epoch: u32, mut output: Di
         return;
     };
 
-    // SAFETY: registration must bind one aligned 64-slot LDS allocation to
-    // this workgroup and epoch. The unregistered helper traps closed today.
-    let scratch_base = unsafe { workgroup64_lds_i32_base_v1(epoch) };
-    let Ok(mut scratch) =
-        (unsafe { WorkgroupCollectiveScratch::from_raw_parts(&group, scratch_base, 64) })
-    else {
+    // SAFETY: authenticated lowering must bind this exact uniform call to one
+    // aligned 64-slot i32 LDS allocation for the workgroup and epoch.
+    let mut lds_scope = unsafe { WorkgroupLdsScope::from_compiler() };
+    // SAFETY: every lane has checked the exact 64x1x1 launch and reaches this
+    // call in uniform control flow with the same admitted epoch.
+    let lds = unsafe { DynamicLds::<i32>::exact_from_compiler::<64>(&mut lds_scope, epoch) };
+    let Ok(mut scratch) = WorkgroupCollectiveScratch::from_dynamic_lds(&group, lds) else {
         fe2o3_device::trap();
         return;
     };
@@ -98,16 +98,4 @@ pub fn lds_publish_read_reduce_i32_v1(values: &[i32], epoch: u32, mut output: Di
             fe2o3_device::trap();
         }
     }
-}
-
-/// Future compiler intrinsic for one epoch-branded 64-slot LDS allocation.
-///
-/// # Safety
-///
-/// Registered lowering must return the same live, aligned workgroup-address-
-/// space allocation to all 64 lanes, isolate workgroups and epochs, and retain
-/// it through the collective's final reuse barrier.
-#[inline(never)]
-unsafe fn workgroup64_lds_i32_base_v1(_epoch: u32) -> *mut i32 {
-    unreachable!("workgroup64 LDS base requires authenticated compiler profile registration")
 }

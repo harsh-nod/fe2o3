@@ -3,13 +3,13 @@
 
 //! Source, oracle, and formal contracts for two fixed wave64 synchronization profiles.
 //!
-//! The LDS reduction source is type-checked as an ordinary attributed Rust
-//! kernel. Its compiler-provided LDS base remains fail-closed. The scoped
-//! atomic source is retained as a syntax-checked profile fixture until the
-//! typed kernel ABI accepts explicit address-space pointers.
+//! Both profiles are type-checked as ordinary attributed Rust kernels. Their
+//! exact compiler profiles, artifacts, and protected runtime paths remain
+//! separate evidence phases.
 
 pub mod contract;
 pub mod kernel;
+pub mod scoped_atomic;
 pub mod vectors;
 
 pub use contract::{
@@ -22,6 +22,6 @@ pub use contract::{
 };
 pub use kernel::{
     LDS_REDUCTION_COMPILER_PROFILE_REGISTERED_V1, LDS_REDUCTION_WORKGROUP_V1,
-    SCOPED_ATOMIC_COMPILER_PROFILE_REGISTERED_V1, SCOPED_ATOMIC_SOURCE_V1,
+    SCOPED_ATOMIC_COMPILER_PROFILE_REGISTERED_V1,
 };
 pub use vectors::{AtomicVectorV1, ReductionVectorV1, atomic_vectors_v1, reduction_vectors_v1};

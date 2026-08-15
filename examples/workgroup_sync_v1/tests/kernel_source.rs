@@ -1,9 +1,10 @@
 use fe2o3_workgroup_sync_v1::{
     LDS_REDUCTION_COMPILER_PROFILE_REGISTERED_V1, LDS_REDUCTION_WORKGROUP_V1,
-    SCOPED_ATOMIC_COMPILER_PROFILE_REGISTERED_V1, SCOPED_ATOMIC_SOURCE_V1,
+    SCOPED_ATOMIC_COMPILER_PROFILE_REGISTERED_V1,
 };
 
 const REDUCTION_SOURCE: &str = include_str!("../src/kernel.rs");
+const ATOMIC_SOURCE: &str = include_str!("../src/scoped_atomic.rs");
 const README: &str = include_str!("../README.md");
 const _: () = assert!(!LDS_REDUCTION_COMPILER_PROFILE_REGISTERED_V1);
 const _: () = assert!(!SCOPED_ATOMIC_COMPILER_PROFILE_REGISTERED_V1);
@@ -17,19 +18,21 @@ fn reduction_is_ordinary_attributed_rust_with_fixed_wave64_contract() {
         "typed,",
         "launch(required = [64, 1, 1], max = [64, 1, 1])",
         "pub fn lds_publish_read_reduce_i32_v1",
-        "WorkgroupCollectiveScratch::from_raw_parts",
+        "DynamicLds::<i32>::exact_from_compiler::<64>",
+        "WorkgroupCollectiveScratch::from_dynamic_lds",
         "group.reduce_sum",
         "if lane == 0",
-        "workgroup64_lds_i32_base_v1",
     ] {
         assert!(REDUCTION_SOURCE.contains(marker), "missing {marker}");
     }
     assert!(!REDUCTION_SOURCE.contains("macro_rules!"));
+    assert!(!REDUCTION_SOURCE.contains("from_raw_parts(&group"));
+    assert!(!REDUCTION_SOURCE.contains("*mut i32"));
 }
 
 #[test]
 fn atomic_source_states_address_space_order_scope_and_eligibility() {
-    syn::parse_file(SCOPED_ATOMIC_SOURCE_V1).expect("atomic source parses as Rust");
+    syn::parse_file(ATOMIC_SOURCE).expect("atomic source parses as Rust");
     for marker in [
         "#[kernel(",
         "typed,",
@@ -42,15 +45,17 @@ fn atomic_source_states_address_space_order_scope_and_eligibility() {
         "fetch_add(values[lane], Ordering::Relaxed)",
         "if eligible[lane] != 0",
     ] {
-        assert!(SCOPED_ATOMIC_SOURCE_V1.contains(marker), "missing {marker}");
+        assert!(ATOMIC_SOURCE.contains(marker), "missing {marker}");
     }
-    assert!(!SCOPED_ATOMIC_SOURCE_V1.contains("macro_rules!"));
+    assert!(!ATOMIC_SOURCE.contains("macro_rules!"));
+    assert!(!ATOMIC_SOURCE.contains("include_str!"));
 }
 
 #[test]
 fn documentation_is_explicit_about_later_evidence_phases() {
     for marker in [
         "compiler profile authentication",
+        "ordinary attributed Rust",
         "source-to-IR",
         "IR-to-machine correspondence",
         "artifact admission",

@@ -1,4 +1,6 @@
-//! Quarantined until `#[kernel(typed)]` accepts explicit global pointer arguments.
+//! Ordinary attributed source for the fixed scoped atomic-add profile.
+
+#![allow(missing_docs)] // Generated typed-kernel modules do not carry rustdoc in V1.
 
 use fe2o3_device::atomic::{
     AtomicU32, CORE_ATOMIC_DEFAULT_SCOPE, CoreAtomicDefaultScope, Ordering,
@@ -18,11 +20,7 @@ const _: CoreAtomicDefaultScope = CORE_ATOMIC_DEFAULT_SCOPE;
     namespace = "409357ef99d9ec78c960cca0e21a4e153c60af522c1c4d726a9f23b5c7271b91",
     launch(required = [64, 1, 1], max = [64, 1, 1])
 )]
-pub fn scoped_atomic_add_u32_v1(
-    values: &[u32],
-    eligible: &[u32],
-    target: DeviceGlobalMutPtr<u32>,
-) {
+pub fn scoped_atomic_add_u32_v1(values: &[u32], eligible: &[u32], target: DeviceGlobalMutPtr<u32>) {
     let lane = thread::thread_idx_x() as usize;
     if values.len() != 64 || eligible.len() != 64 || lane >= 64 {
         fe2o3_device::trap();
