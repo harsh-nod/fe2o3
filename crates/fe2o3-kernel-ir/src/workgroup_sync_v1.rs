@@ -188,6 +188,14 @@ pub struct WorkgroupSyncDescriptorV1 {
     pub static_lds_bytes: u32,
     pub required_dynamic_lds_bytes: u32,
     pub maximum_dynamic_lds_bytes: u32,
+    pub hidden_dynamic_lds_size: Option<Cov6HiddenDynamicLdsSizeV1>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Cov6HiddenDynamicLdsSizeV1 {
+    pub relative_offset: u32,
+    pub field_size: u32,
+    pub required_launch_value: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -227,6 +235,11 @@ impl LdsReductionProfileV1 {
             LDS_REDUCTION_V1_COMPLETE_COV6_KERNARG_BYTES,
             0,
             256,
+            Some(Cov6HiddenDynamicLdsSizeV1 {
+                relative_offset: 120,
+                field_size: 4,
+                required_launch_value: 256,
+            }),
         )
     }
 
@@ -246,6 +259,7 @@ impl ScopedAtomicProfileV1 {
             SCOPED_ATOMIC_V1_COMPLETE_COV6_KERNARG_BYTES,
             0,
             0,
+            None,
         );
         Self {
             source_sha256: exact.source_sha256,
@@ -439,6 +453,7 @@ fn profile(
     complete_kernarg_bytes: u32,
     static_lds_bytes: u32,
     required_dynamic_lds_bytes: u32,
+    hidden_dynamic_lds_size: Option<Cov6HiddenDynamicLdsSizeV1>,
 ) -> LdsReductionProfileV1 {
     let workgroup_size = WorkgroupSize::new(64, 1, 1);
     LdsReductionProfileV1 {
@@ -463,6 +478,7 @@ fn profile(
             static_lds_bytes,
             required_dynamic_lds_bytes,
             maximum_dynamic_lds_bytes: required_dynamic_lds_bytes,
+            hidden_dynamic_lds_size,
         },
     }
 }

@@ -1,8 +1,9 @@
 use fe2o3_kernel_ir::{
     AtomicAddressSpaceV1, AtomicOperationV1, AtomicOrderingV1, AtomicScopeV1,
-    LdsReductionProfileV1, OutputOwnershipV1, ScopedAtomicProfileV1, TargetCapability, WaveWidth,
-    WorkgroupSize, WorkgroupSyncArgumentRoleV1, WorkgroupSyncV1Error, lds_reduction_v1_kernel_ir,
-    scoped_atomic_v1_kernel_ir, verify_lds_reduction_v1, verify_scoped_atomic_v1,
+    Cov6HiddenDynamicLdsSizeV1, LdsReductionProfileV1, OutputOwnershipV1, ScopedAtomicProfileV1,
+    TargetCapability, WaveWidth, WorkgroupSize, WorkgroupSyncArgumentRoleV1, WorkgroupSyncV1Error,
+    lds_reduction_v1_kernel_ir, scoped_atomic_v1_kernel_ir, verify_lds_reduction_v1,
+    verify_scoped_atomic_v1,
 };
 
 #[test]
@@ -38,6 +39,31 @@ fn lds_profile_identity_is_closed() {
         |value| value.descriptor.required_dynamic_lds_bytes = 0,
         |value| value.descriptor.required_dynamic_lds_bytes = 252,
         |value| value.descriptor.maximum_dynamic_lds_bytes = 1024,
+        |value| value.descriptor.hidden_dynamic_lds_size = None,
+        |value| {
+            value
+                .descriptor
+                .hidden_dynamic_lds_size
+                .as_mut()
+                .unwrap()
+                .relative_offset = 124
+        },
+        |value| {
+            value
+                .descriptor
+                .hidden_dynamic_lds_size
+                .as_mut()
+                .unwrap()
+                .field_size = 8
+        },
+        |value| {
+            value
+                .descriptor
+                .hidden_dynamic_lds_size
+                .as_mut()
+                .unwrap()
+                .required_launch_value = 252
+        },
         |value| value.descriptor.explicit_kernarg_bytes = 32,
         |value| value.descriptor.complete_kernarg_bytes = 40,
         |value| value.descriptor.export_name.push_str("_substitution"),
@@ -58,6 +84,14 @@ fn lds_descriptor_distinguishes_static_and_exact_dynamic_storage() {
     assert_eq!(profile.descriptor.static_lds_bytes, 0);
     assert_eq!(profile.descriptor.required_dynamic_lds_bytes, 256);
     assert_eq!(profile.descriptor.maximum_dynamic_lds_bytes, 256);
+    assert_eq!(
+        profile.descriptor.hidden_dynamic_lds_size,
+        Some(Cov6HiddenDynamicLdsSizeV1 {
+            relative_offset: 120,
+            field_size: 4,
+            required_launch_value: 256,
+        })
+    );
 
     let mut static_substitution = profile.clone();
     static_substitution.descriptor.static_lds_bytes = 256;
@@ -118,9 +152,21 @@ fn lds_capability_barriers_epochs_and_ownership_are_closed() {
 #[test]
 fn atomic_profile_and_exact_semantics_are_closed() {
     let mut profile = ScopedAtomicProfileV1::exact_gfx942_xnack_minus_cov6();
+    assert_eq!(profile.descriptor.hidden_dynamic_lds_size, None);
     profile.namespace[31] ^= 1;
     assert_eq!(
         verify_scoped_atomic_v1(&scoped_atomic_v1_kernel_ir(), &profile),
+        Err(WorkgroupSyncV1Error::UnsupportedProfile)
+    );
+
+    let mut hidden_dynamic_lds = ScopedAtomicProfileV1::exact_gfx942_xnack_minus_cov6();
+    hidden_dynamic_lds.descriptor.hidden_dynamic_lds_size = Some(Cov6HiddenDynamicLdsSizeV1 {
+        relative_offset: 120,
+        field_size: 4,
+        required_launch_value: 256,
+    });
+    assert_eq!(
+        verify_scoped_atomic_v1(&scoped_atomic_v1_kernel_ir(), &hidden_dynamic_lds),
         Err(WorkgroupSyncV1Error::UnsupportedProfile)
     );
 
