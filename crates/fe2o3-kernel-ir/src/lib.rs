@@ -43,6 +43,7 @@ mod types;
 mod verify;
 mod wave64_collectives_v1;
 mod wire;
+mod workgroup_sync_v1;
 
 pub use control_flow::*;
 pub use effect_extraction::*;
@@ -75,3 +76,4 @@ pub use types::*;
 pub use verify::*;
 pub use wave64_collectives_v1::*;
 pub use wire::*;
+pub use workgroup_sync_v1::*;
