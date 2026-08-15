@@ -41,22 +41,38 @@ and limitations for each Partial row.
 The public [tiled GEMM V1 work](examples/tiled_gemm_v1/README.md) now combines
 the checked host contract with bounded production-directed LDS slices. An
 ordinary `#[kernel(typed, ...)]` Rust function contains the fixed `16x16x16`
-BF16/F32 algorithm and fails closed where compiler-issued LDS capabilities are
-still unavailable. Separately, canonical Kernel IR lowers through pinned
-upstream LLVM/LLD to a COV6 `gfx942:xnack-` WG64/wave64 HSACO with 1,024 bytes
-of static LDS, LDS traffic, a converged barrier, and BF16 MFMA. An observational
-MI300X harness generated and executed those bytes over six numerical cases and
-1,536 checked outputs. The K32 follow-on has a two-phase loop IR and a bounded
-Verus model for one through four K phases, including negative reuse-barrier and
-accumulator-reset mutations.
+BF16/F32 algorithm. The compiler collector authenticates the exact attributed
+root, reviewed portable MIR operations and ABI, derives two distinct aligned
+512-byte LDS allocations, and consumes a single-use receipt to select the
+verified canonical Slice 1 Kernel IR. This is bounded source correspondence,
+not a general lowering or compiler-refinement proof.
 
-These results do not yet authenticate the attributed Rust MIR as the source of
-the executed LDS Kernel IR or join either path to protected publication and
-launch authority. General shapes, tails, alpha/beta, compiler refinement, and
-machine memory, race, and numerical proofs remain open. The older
+The canonical Slice 1 IR separately lowers through pinned upstream LLVM/LLD to
+a COV6 `gfx942:xnack-` WG64/wave64 HSACO with 1,024 bytes of static LDS, LDS
+traffic, a converged barrier, and BF16 MFMA. An observational MI300X harness
+generated and executed those bytes over six numerical cases and 1,536 checked
+outputs. The K32 follow-on has two-phase IR, inspected upstream-LLVM machine
+shape, and a bounded Verus model for one through four K phases. Slice 3 adds an
+exact `M=64,N=48,K=16` padded-stride IR and lowering with workgroup-X/Y machine
+inspection. Slice 4 adds an exact `M=17,N=19,K=18` tail-safe, two-phase IR with
+predicated accesses, unconditional barriers, and `alpha=2,beta=-1`, alongside
+its bounded Verus edge model.
+
+The attributed Slice 1 path deliberately stops before descriptor construction,
+Worker V2 publication, LLVM lowering, HSACO, load, or launch. The independently
+lowered and observed artifact therefore is not yet the authenticated output of
+that source receipt. Protected grid/edge execution, general shapes, compiler
+refinement, and machine memory, race, and numerical proofs remain open. The
+older
 [direct-global observation](docs/tiled-gemm-v1-mi300x-observation.md) remains a
 separate non-authoritative profile. This checkpoint does not promote a
 CUDA-Oxide parity row.
+
+The active, non-overlapping work is tracked in issues
+[#85](https://github.com/harsh-nod/fe2o3/issues/85) through
+[#90](https://github.com/harsh-nod/fe2o3/issues/90); tutorial and evidence-site
+updates are tracked in
+[fe2o3-kernels #1](https://github.com/harsh-nod/fe2o3-kernels/issues/1).
 
 The intended end state is:
 

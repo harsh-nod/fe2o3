@@ -88,10 +88,20 @@ the 256 logical elements bijectively onto physical indices `0..256`.
 `src/kernel_face.rs` binds the host contract to the existing `DeviceMatrix` and
 fragment types. `src/kernel.rs` contains the fixed Slice 1 algorithm directly
 inside an ordinary `#[kernel(typed, ...)]` function; it is not hidden in a
-`macro_rules!` expansion or maintained as a second explanatory body. The
-function currently fails closed at compiler-issued LDS acquisition. The rustc
-collector still admits only the older direct-global graph, so the attributed
-source is not yet authenticated as the source of the LDS Kernel IR or HSACO.
+`macro_rules!` expansion or maintained as a second explanatory body. It uses a
+compiler-only typed intrinsic for two distinct LDS tiles. The rustc collector
+authenticates the exact attributed root, reviewed lane/LDS/barrier/MFMA/store
+MIR sequence and FnAbi, WG64 geometry, and compiler-derived 1,024-byte LDS
+resource binding. It consumes a single-use correspondence receipt to select
+the canonical Slice 1 Kernel IR. Hostile removed-barrier, shifted-index, and
+same-spelling-helper fixtures cannot select that IR.
+
+That source path stops immediately after canonical IR selection. It does not
+construct a descriptor, publish to Worker V2, lower through LLVM, create or
+load HSACO, or launch. The correspondence is a reviewed exact profile, not a
+compiler-refinement proof or protected authority. The separately lowered and
+observed Slice 1 artifact below is therefore not yet joined to this source
+receipt.
 
 `verus/tiled_gemm_host_contract.rs` is an independent mathematical proof of
 the public contract on the repository's 64-bit host profile. Its 23 public
@@ -157,8 +167,37 @@ hardware evidence, not source correspondence or protected launch authority.
 Slice 2 currently has exact K32 Kernel IR with two K16 phases, carried FP32
 accumulators, and barriers before reads and before LDS reuse. Its Verus model
 covers one through four bounded phases with 196 verified obligations; the
-executable event model exhausts phase counts 1, 2, and 4. K32 backend lowering,
-ordinary-source collection, and hardware execution remain pending.
+executable event model exhausts phase counts 1, 2, and 4. Dedicated lowering
+produces a real SSA loop and an upstream-LLVM final-artifact test pins two
+machine barriers, one static loop-body MFMA, 1,024 LDS bytes, and zero spills,
+calls, atomics, or COMGR markers. Ordinary multi-phase source collection and
+K32 hardware execution remain pending.
+
+Slice 3 has a fixed-K16 grid/stride proof and executable model. It proves
+checked grid derivation, workgroup-to-tile injectivity, padded
+`lda`/`ldb`/`ldc` bounds, four stores per lane, and disjoint global C ownership
+for positive fully tiled M/N shapes. The proof reports 101 verified obligations
+and three expected-rejection mutations. The exact
+`M=64,N=48,K=16`, `lda=33,ldb=79,ldc=96` representative also has canonical
+Kernel IR and dedicated upstream-LLVM lowering. Final inspection pins its
+`3x4` grid, workgroup-X/Y reads, WG64/wave64, 1,024 LDS bytes, one barrier, one
+BF16 MFMA, zero spills/scratch/calls/atomics, and no COMGR. Grid-aware
+attributed source and protected MI300X numerical execution remain pending.
+
+Slice 4 has a bounded 101-obligation Verus model for M/N/K tails, unconditional
+barrier participation, exact-real alpha/beta semantics, and output ownership,
+with four expected-rejection mutations. Its exact
+`M=17,N=19,K=18`, `alpha=2,beta=-1` canonical Kernel IR represents a `2x2`
+grid, two predicated K16 phases, BF16 zero-fill tails, reusable XOR4 LDS,
+carried FP32 accumulators, unconditional publish/reuse barriers, and predicated
+C reads/writes. Backend lowering, attributed general source, and protected
+MI300X numerical execution remain pending.
+
+Implementation claims and dependencies are coordinated in fe2o3 issues
+[#85](https://github.com/harsh-nod/fe2o3/issues/85) through
+[#90](https://github.com/harsh-nod/fe2o3/issues/90). The public tutorial and
+evidence update is tracked in
+[fe2o3-kernels #1](https://github.com/harsh-nod/fe2o3-kernels/issues/1).
 
 ## Observed direct-global tile
 
