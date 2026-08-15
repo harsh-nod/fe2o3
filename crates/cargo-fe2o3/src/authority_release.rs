@@ -1193,6 +1193,8 @@ fn process_start_time_ticks(pid: u32) -> Result<u64, String> {
 fn reject_reserved_descriptors(allowed: &[RawFd]) -> Result<(), String> {
     let directory = fs::read_dir("/proc/self/fd")
         .map_err(|error| format!("cannot enumerate release descriptors: {error}"))?;
+    let enumeration_target = format!("/proc/{}/fd", std::process::id());
+    let mut enumeration_descriptors = Vec::new();
     let mut unexpected = Vec::new();
     for entry in directory {
         let entry = entry.map_err(|error| format!("cannot inspect release descriptor: {error}"))?;
@@ -1208,10 +1210,16 @@ fn reject_reserved_descriptors(allowed: &[RawFd]) -> Result<(), String> {
         }
         let target = fs::read_link(entry.path())
             .map_err(|error| format!("cannot resolve release descriptor {fd}: {error}"))?;
-        if target == format!("/proc/{}/fd", std::process::id()) {
+        if target == enumeration_target {
+            enumeration_descriptors.push(fd);
             continue;
         }
         unexpected.push(fd);
+    }
+    if enumeration_descriptors.len() != 1 {
+        return Err(format!(
+            "authority release requires exactly one descriptor-enumeration directory, observed {enumeration_descriptors:?}"
+        ));
     }
     if unexpected.is_empty() {
         Ok(())
